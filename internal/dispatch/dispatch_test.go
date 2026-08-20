@@ -69,6 +69,34 @@ func TestPaseoBranchOffForIssue(t *testing.T) {
 	}
 }
 
+func TestLocalCommandWorkDir(t *testing.T) {
+	dir := t.TempDir()
+	d := &Dispatcher{DefaultBackends: map[string]string{"command": "local"}} // real exec (not dry-run)
+	req := Request{
+		Trigger: core.Trigger{Kind: "cron", Target: core.Target{}},
+		Action:  config.Action{Type: "command", Backend: "local", WorkDir: dir, Command: []string{"pwd"}},
+	}
+	ref, err := d.Dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(ref.Output); got != dir {
+		t.Fatalf("command ran in %q, want workdir %q", got, dir)
+	}
+}
+
+func TestPaseoWorkDirFlag(t *testing.T) {
+	d := newDispatcher() // dry-run
+	req := Request{
+		Trigger: core.Trigger{Kind: "issue_assigned", Target: core.Target{Repo: "a/w", Issue: 1, Number: 1}},
+		Action:  config.Action{Type: "agent", Agent: "fixer", Checkout: "none", WorkDir: "/tmp/ws", Prompt: "go"},
+	}
+	ref, _ := d.Dispatch(context.Background(), req)
+	if !strings.Contains(joined(ref.Argv), "--cwd /tmp/ws") {
+		t.Fatalf("expected --cwd flag, got: %s", joined(ref.Argv))
+	}
+}
+
 func TestLocalCommandArgv(t *testing.T) {
 	d := newDispatcher()
 	req := Request{

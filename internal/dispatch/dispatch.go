@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"text/template"
 
@@ -120,6 +121,19 @@ func render(s string, data map[string]any) (string, error) {
 		return "", err
 	}
 	return b.String(), nil
+}
+
+// expandTilde expands a leading ~/ to the user's home directory.
+func expandTilde(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if h, err := os.UserHomeDir(); err == nil {
+			if p == "~" {
+				return h
+			}
+			return h + p[1:]
+		}
+	}
+	return p
 }
 
 func renderAll(in []string, data map[string]any) ([]string, error) {

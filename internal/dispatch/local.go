@@ -27,6 +27,13 @@ func (d *Dispatcher) local(ctx context.Context, req Request) (RunRef, error) {
 	}
 
 	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
+	if req.Action.WorkDir != "" {
+		wd, err := render(req.Action.WorkDir, data)
+		if err != nil {
+			return ref, err
+		}
+		c.Dir = expandTilde(wd)
+	}
 	c.Env = os.Environ()
 	for k, v := range req.Action.Env {
 		rv, err := render(v, data)

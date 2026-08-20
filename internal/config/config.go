@@ -145,6 +145,7 @@ type Action struct {
 	Backend  string            `yaml:"backend"` // override default backend for the type
 	Shadow   *bool             `yaml:"shadow"`  // per-action shadow override
 	Checkout string            `yaml:"checkout"`
+	WorkDir  string            `yaml:"workdir"` // working directory (command: cwd; agent: paseo --cwd)
 	Env      map[string]string `yaml:"env"`
 
 	// agent-type fields

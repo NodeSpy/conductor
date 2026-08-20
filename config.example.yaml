@@ -130,14 +130,14 @@ integrations:
           type: command
           backend: local
           command: ["gh", "api", "rate_limit"]
-      - name: weekly-digest
-        cron: "0 8 * * MON"           # standard 5-field cron (also supports @daily/@hourly)
+      - name: tidy-cache
+        cron: "0 4 * * *"             # standard 5-field cron (also supports @daily/@hourly)
         run_on_start: false
         action:
-          type: agent                 # agent actions with no repo run in the base workspace (checkout: none)
-          agent: fixer
-          checkout: none
-          prompt: "Summarize what paseo-conductor did this week from ~/.local/state/paseo-conductor/audit.jsonl."
+          type: command
+          backend: local
+          workdir: ~/Projects/myrepo   # run the command here ('~' and {{.repo}}-style templates allowed)
+          command: ["make", "clean"]
 
 control:
   enabled: true

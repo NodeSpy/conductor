@@ -39,6 +39,13 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	if req.Workspace != "" {
 		argv = append(argv, "--workspace", req.Workspace)
 	}
+	if req.Action.WorkDir != "" {
+		wd, err := render(req.Action.WorkDir, data)
+		if err != nil {
+			return RunRef{}, err
+		}
+		argv = append(argv, "--cwd", expandTilde(wd))
+	}
 	argv = append(argv, checkoutArgs(req)...)
 
 	// Reads on the App token; write token exposed for posting as you.

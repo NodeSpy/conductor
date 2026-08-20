@@ -200,6 +200,9 @@ func mergeAction(base, over config.Action) config.Action {
 	if over.Checkout != "" {
 		base.Checkout = over.Checkout
 	}
+	if over.WorkDir != "" {
+		base.WorkDir = over.WorkDir
+	}
 	if len(over.Command) > 0 {
 		base.Command = over.Command
 	}
