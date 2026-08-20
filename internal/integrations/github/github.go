@@ -209,6 +209,18 @@ func mergeAction(base, over config.Action) config.Action {
 	if len(over.Command) > 0 {
 		base.Command = over.Command
 	}
+	if len(over.Steps) > 0 {
+		base.Steps = over.Steps
+	}
+	if over.ID != "" {
+		base.ID = over.ID
+	}
+	if over.If != "" {
+		base.If = over.If
+	}
+	if len(over.OutputSchema) > 0 {
+		base.OutputSchema = over.OutputSchema
+	}
 	if len(over.Env) > 0 {
 		base.Env = over.Env
 	}

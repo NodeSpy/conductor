@@ -35,8 +35,10 @@ type Request struct {
 	Profile   config.AgentProfile // populated for agent actions
 	Tokens    Tokens
 	Author    Author
-	Workspace string // base workspace id/path to worktree from (optional)
-	Shadow    bool   // skip the terminal side effect, just log what would run
+	Workspace string         // base workspace id/path to worktree from (optional)
+	Shadow    bool           // skip the terminal side effect, just log what would run
+	Wait      bool           // run foreground and capture output (for workflow steps)
+	Data      map[string]any // extra template vars (e.g. prior step outputs)
 }
 
 // RunRef is the outcome of a dispatch.
@@ -104,6 +106,9 @@ func templateData(req Request) map[string]any {
 		if _, exists := data[k]; !exists {
 			data[k] = v
 		}
+	}
+	for k, v := range req.Data { // step outputs etc. win over context
+		data[k] = v
 	}
 	return data
 }

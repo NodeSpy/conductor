@@ -92,12 +92,43 @@ integrations:
           prompt: |
             Issue {{.repo}}#{{.issue}} was assigned to you. Start work: create a branch,
             implement a fix, and open a draft PR.
+        # A MULTI-STEP workflow: plan with a cheap model, then branch on its output.
+        #   1) evaluate the issue for enough context (planner model, structured output)
+        #   2) if enough  -> implement it (stronger model)
+        #   3) if not     -> comment asking the reporter for more detail
         issue_ready:
-          type: agent
-          agent: fixer
-          checkout: branch-off
-          labels_any: ["Ready"]
-          prompt: "Issue {{.repo}}#{{.issue}} is Ready. Start work on a fresh branch."
+          labels_any: ["Ready"]         # gate: only issues labeled "Ready"
+          steps:
+            - id: evaluate
+              type: agent
+              agent: planner            # cheap model just to assess
+              checkout: none            # assessing only — no branch/worktree
+              output_schema:
+                type: object
+                additionalProperties: false
+                required: [has_context, summary]
+                properties:
+                  has_context: { type: boolean }
+                  summary: { type: string }
+              prompt: |
+                Assess issue {{.repo}}#{{.issue}}. Is there enough detail (repro,
+                expected behavior, scope) to implement it? Return has_context (bool)
+                and a one-line summary.
+            - id: work
+              if: "steps.evaluate.outputs.has_context == true"
+              type: agent
+              agent: fixer              # stronger model to do the work
+              checkout: branch-off
+              prompt: |
+                Implement issue {{.repo}}#{{.issue}} — {{.steps.evaluate.outputs.summary}}.
+                Create a branch, implement it, and open a draft PR.
+            - id: ask
+              if: "steps.evaluate.outputs.has_context == false"
+              type: command
+              backend: local
+              command: ["gh", "issue", "comment", "{{.repo}}#{{.issue}}", "--body",
+                        "Thanks for the issue! Could you add repro steps, expected behavior, and scope so it can be picked up?"]
+              env: { GH_TOKEN: "{{.gh_token}}" }
         issue_project_moved:
           type: agent
           agent: fixer
@@ -162,6 +193,11 @@ agents:
     wait_timeout: 30m
     archive_when_done: true
     labels: { team: autopilot }
+  planner:                            # cheaper/faster model for planning/triage steps
+    provider: claude
+    model: claude-haiku-4-5-20251001
+    workspace: local
+    archive_when_done: true
 
 dispatch:
   default_backends: { agent: paseo, command: local }

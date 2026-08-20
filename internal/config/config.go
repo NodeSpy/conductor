@@ -155,6 +155,13 @@ type Action struct {
 	// command-type fields
 	Command []string `yaml:"command"`
 
+	// workflow (multi-step) fields. When Steps is non-empty the action runs as
+	// an ordered workflow; each step is itself an Action plus ID/If/OutputSchema.
+	Steps        []Action       `yaml:"steps"`
+	ID           string         `yaml:"id"`            // step id (for steps.<id>.outputs.*)
+	If           string         `yaml:"if"`            // step condition (see internal/expr)
+	OutputSchema map[string]any `yaml:"output_schema"` // agent step: JSON schema for structured output
+
 	// kind-specific options
 	MaxAttemptsPerHead int            `yaml:"max_attempts_per_head"`
 	IgnoreChecks       []string       `yaml:"ignore_checks"`

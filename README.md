@@ -63,6 +63,45 @@ are disabled by default.
 
 Plus scheduled jobs via the [cron integration](#scheduled-jobs-cron-integration).
 
+## Multi-step workflows
+
+An action can be a single run, or a **`steps:`** list — an ordered workflow where each step can use
+a different agent/model, produce structured **output**, and gate on an **`if:`** condition over
+earlier outputs. This lets you plan with a cheap model, then act with a stronger one, and branch on
+what the plan found.
+
+```yaml
+issue_ready:
+  labels_any: ["Ready"]
+  steps:
+    - id: evaluate                       # cheap model assesses the issue
+      type: agent
+      agent: planner
+      output_schema:                     # agent returns JSON matching this
+        type: object
+        properties: { has_context: { type: boolean }, summary: { type: string } }
+      prompt: "Is there enough detail to implement {{.repo}}#{{.issue}}? Return has_context + summary."
+    - id: work                           # only if there's enough context
+      if: "steps.evaluate.outputs.has_context == true"
+      type: agent
+      agent: fixer
+      checkout: branch-off
+      prompt: "Implement {{.repo}}#{{.issue}} — {{.steps.evaluate.outputs.summary}}. Open a draft PR."
+    - id: ask                            # otherwise, ask the reporter
+      if: "steps.evaluate.outputs.has_context == false"
+      type: command
+      command: ["gh","issue","comment","{{.repo}}#{{.issue}}","--body","Please add repro/scope."]
+      env: { GH_TOKEN: "{{.gh_token}}" }
+```
+
+- **Outputs**: agent steps set `output_schema` (JSON schema) and emit a matching object; command
+  steps expose their stdout as JSON (or `.text`). Reference them with
+  `{{ .steps.<id>.outputs.<key> }}` in later prompts/commands.
+- **Conditions** (`if:`): dotted paths, `==` / `!=` against literals (`true`, `"question"`, `7`),
+  truthiness (`x` / `!x`), and `&&` / `||` — e.g. `steps.evaluate.outputs.kind == "question"`.
+- Steps run in order, fail-fast, and the whole workflow runs off the main loop so long steps don't
+  block other events.
+
 ## Scheduled jobs (cron integration)
 
 A second built-in integration, `cron`, runs actions on a schedule — the same `command`/`agent`

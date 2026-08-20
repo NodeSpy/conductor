@@ -190,6 +190,16 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 	shadow := e.cfg.Control.Shadow || (act.Shadow != nil && *act.Shadow)
 
+	// Multi-step workflow: record now (so it doesn't re-fire) and run the steps
+	// in their own goroutine so long agent steps don't block the engine loop.
+	if len(act.Steps) > 0 {
+		_ = e.store.Record(key, t.Kind, t.Dedup, head)
+		e.notif.Emit(ctx, notify.EventDispatch, t, "workflow")
+		e.log("engine: workflow %s %s (%d steps)", t.Kind, key, len(act.Steps))
+		go e.runSteps(ctx, t, act, appTok, userTok, shadow)
+		return
+	}
+
 	req := dispatch.Request{
 		Trigger: t, Action: act, Profile: profile,
 		Tokens: dispatch.Tokens{App: appTok, User: userTok},

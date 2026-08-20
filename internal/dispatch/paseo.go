@@ -78,7 +78,17 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	if p.WaitTimeout > 0 {
 		argv = append(argv, "--wait-timeout", p.WaitTimeout.String())
 	}
-	argv = append(argv, "--background", "--json")
+	if req.Wait {
+		// Workflow step: run foreground so we can capture structured output.
+		if len(req.Action.OutputSchema) > 0 {
+			if b, err := json.Marshal(req.Action.OutputSchema); err == nil {
+				argv = append(argv, "--output-schema", string(b))
+			}
+		}
+		argv = append(argv, "--json")
+	} else {
+		argv = append(argv, "--background", "--json")
+	}
 
 	ref := RunRef{Backend: "paseo", Kind: req.Trigger.Kind, Argv: append([]string{d.PaseoBin}, argv...)}
 
@@ -87,10 +97,13 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		return ref, nil
 	}
 
-	// Running-agent guard: skip if an agent for this PR+kind is already active.
-	if active, _ := d.agentActive(ctx, req.Trigger); active {
-		ref.Output = "skipped: agent already running for this pr+kind"
-		return ref, nil
+	// Running-agent guard (background autopilot only): skip if an agent for this
+	// PR+kind is already active. Workflow steps run to completion in order.
+	if !req.Wait {
+		if active, _ := d.agentActive(ctx, req.Trigger); active {
+			ref.Output = "skipped: agent already running for this pr+kind"
+			return ref, nil
+		}
 	}
 
 	out, err := exec.CommandContext(ctx, d.PaseoBin, argv...).Output()

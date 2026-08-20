@@ -279,18 +279,40 @@ func cmdSweep(args []string) error {
 // printTrigger renders what a trigger would dispatch (dry-run).
 func printTrigger(cfg *config.Config, disp *dispatch.Dispatcher, t core.Trigger) {
 	act, _ := t.Action.(config.Action)
+
+	if len(act.Steps) > 0 {
+		fmt.Printf("• %s %s#%d [workflow: %d steps]\n", t.Kind, t.Target.Repo, t.Target.Number, len(act.Steps))
+		for i, step := range act.Steps {
+			id := step.ID
+			if id == "" {
+				id = fmt.Sprintf("step%d", i+1)
+			}
+			if step.If != "" {
+				fmt.Printf("    - %s (if: %s) [%s]\n", id, step.If, step.Type)
+			} else {
+				fmt.Printf("    - %s [%s]\n", id, step.Type)
+			}
+			printOneDispatch(cfg, disp, t, step, "        ")
+		}
+		return
+	}
+
+	fmt.Printf("• %s %s#%d [%s]\n", t.Kind, t.Target.Repo, t.Target.Number, act.Type)
+	printOneDispatch(cfg, disp, t, act, "    ")
+}
+
+func printOneDispatch(cfg *config.Config, disp *dispatch.Dispatcher, t core.Trigger, act config.Action, indent string) {
 	var profile config.AgentProfile
 	if act.Type == "agent" {
 		profile = cfg.Agents[act.Agent]
 	}
-	req := dispatch.Request{Trigger: t, Action: act, Profile: profile, Author: gitAuthor(), Shadow: true}
+	req := dispatch.Request{Trigger: t, Action: act, Profile: profile, Author: gitAuthor(), Shadow: true, Wait: true}
 	ref, err := disp.Dispatch(context.Background(), req)
-	fmt.Printf("• %s %s#%d [%s]\n", t.Kind, t.Target.Repo, t.Target.Number, act.Type)
 	if err != nil {
-		fmt.Printf("    error: %v\n", err)
+		fmt.Printf("%serror: %v\n", indent, err)
 		return
 	}
-	fmt.Printf("    %s\n", strings.Join(ref.Argv, " "))
+	fmt.Printf("%s%s\n", indent, strings.Join(ref.Argv, " "))
 }
 
 // userToken returns your `gh auth token`, memoized.
