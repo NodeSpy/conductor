@@ -305,11 +305,32 @@ integrations:
           checkout: branch-off                            # start work on a fresh branch (no PR yet)
           prompt: "Issue {{.repo}}#{{.issue}} assigned to you — start work; open a draft PR."
         issue_ready:                                      # M3: issue labeled "Ready"
-          type: agent
-          agent: fixer
-          checkout: branch-off
-          labels_any: ["Ready"]
-          prompt: "Issue {{.repo}}#{{.issue}} is Ready — start work on a fresh branch."
+          # A MULTI-STEP workflow: plan cheaply, then branch on the result.
+          labels_any: ["Ready"]                           # gate: only "Ready"-labeled issues
+          steps:
+            - id: evaluate                                # cheap model assesses the issue
+              type: agent
+              agent: planner
+              checkout: none                              # assessing only — no branch/worktree
+              output_schema:
+                type: object
+                required: [has_context, summary]
+                properties:
+                  has_context: { type: boolean }
+                  summary: { type: string }
+              prompt: "Is there enough detail to implement {{.repo}}#{{.issue}}? Return has_context + summary."
+            - id: work                                    # only if there's enough context
+              if: "steps.evaluate.outputs.has_context == true"
+              type: agent
+              agent: fixer                                # stronger model to do the work
+              checkout: branch-off
+              prompt: "Implement {{.repo}}#{{.issue}} — {{.steps.evaluate.outputs.summary}}. Open a draft PR."
+            - id: ask                                     # otherwise, ask the reporter for detail
+              if: "steps.evaluate.outputs.has_context == false"
+              type: command
+              backend: local
+              command: ["gh", "issue", "comment", "{{.repo}}#{{.issue}}", "--body", "Please add repro steps and scope."]
+              env: { GH_TOKEN: "{{.gh_token}}" }
         issue_project_moved:                              # M3: Projects v2 status change (opt-in)
           type: agent
           agent: fixer
@@ -375,6 +396,11 @@ agents:                               # reusable named agent profiles, reference
     wait_timeout: 30m                 # -> --wait-timeout
     archive_when_done: true           # reaper archives the agent+worktree once idle
     labels: { team: autopilot }       # extra --label pairs
+  planner:                            # cheaper/faster model for planning/triage steps
+    provider: claude
+    model: claude-haiku-4-5-20251001
+    workspace: local
+    archive_when_done: true
 
 dispatch:
   default_backends: { agent: paseo, command: local }   # backend per action type when unset
