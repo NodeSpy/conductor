@@ -249,8 +249,15 @@ Secrets live in `~/.config/paseo-conductor/conductor.env`; the daemon loads them
      (e.g. <https://github.com/organizations/NodeSpy/settings/apps/new>)
 
    ([GitHub's guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app).)
-   Set the **Webhook URL** to your smee channel (create one at <https://smee.io>) and set a
-   **webhook secret**.
+
+   Suggested field values:
+   - **GitHub App name** — must be globally unique, so personalize it, e.g.
+     `paseo-conductor-<your-handle>` or `<your-org>-paseo-conductor` (this becomes the bot login).
+   - **Homepage URL** — anything valid; use the repo (<https://github.com/NodeSpy/paseo-conductor>)
+     or <https://paseo.sh>.
+   - **Webhook URL** — your smee channel (create one at <https://smee.io>).
+   - **Webhook secret** — generate a random string (e.g. `openssl rand -hex 32`) and put it in
+     `conductor.env` as `GH_WEBHOOK_SECRET`.
 2. **Permissions:** Contents (RW), Pull requests (RW), Issues (RW), Checks (R), Metadata (R).
    For auto-merge add Administration/merge as needed; for the Projects trigger add Projects (R).
 3. **Subscribe to events:** pull_request, pull_request_review, pull_request_review_comment,
