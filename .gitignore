@@ -1,0 +1,7 @@
+.env
+conductor.env
+/paseo-conductor
+dist/
+*.pem
+state.json
+audit.jsonl

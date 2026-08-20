@@ -1,0 +1,157 @@
+# paseo-conductor configuration.
+# Copy to ~/.config/paseo-conductor/config.yaml and edit.
+# ${ENV} references are expanded from the environment (see conductor.env).
+
+integrations:
+  # A LIST of typed instances. List `github` more than once for separate
+  # Apps/orgs (each App has its own webhook secret).
+  - type: github
+    name: ednition
+    enabled: true
+    # The App carries webhooks + ALL API reads/enrichment (its own rate pool).
+    # Writes/posts use your gh token; commits/pushes go over SSH as you.
+    app:
+      app_id: 0
+      private_key_path: ~/.config/paseo-conductor/ednition-app.pem
+      webhook_secret: ${EDN_WEBHOOK_SECRET}
+      # NOTE: smee re-serializes the JSON body, so HMAC often won't match.
+      # Leave false while using smee (channel URL is the shared secret);
+      # flip true only with a transport that preserves the raw body.
+      verify_signature: false
+    webhook:
+      smee_url: ${EDN_SMEE_URL}       # https://smee.io/<channel>
+    sweep:
+      enabled: false                  # off by default; catch-up only
+      interval: 1h
+      repos: ["EdnitionCode/RosterStream"]
+
+    # OPTIONAL shared defaults; every rule merges over these.
+    defaults:
+      reviewer: { logins: [danielcbaldwin], teams: [] }
+      assignee: { logins: [danielcbaldwin] }
+      actions:
+        merge_conflict:
+          type: agent
+          agent: fixer
+          max_attempts_per_head: 2
+          prompt: |
+            This PR conflicts with base {{.base}}. Merge/rebase base, resolve the
+            conflicts, make sure it builds, commit, and push to the PR branch.
+        pr_behind:
+          type: command
+          backend: local
+          command: ["gh", "pr", "update-branch", "{{.repo}}#{{.pr}}"]
+          env: { GH_TOKEN: "{{.gh_token}}" }
+        failing_checks:
+          type: agent
+          agent: fixer
+          flaky_rerun: { enabled: true, max: 1 }
+          prompt: |
+            Checks are failing on {{.repo}}#{{.pr}}. Use `gh pr checks` and
+            `gh run view --log-failed` to diagnose, fix, verify locally, commit, and push.
+        changes_requested:
+          type: agent
+          agent: fixer
+          prompt: |
+            A reviewer requested changes on {{.repo}}#{{.pr}}. Read the review with
+            `gh pr view --comments`, address each point, commit, push, and reply to threads.
+        new_comment:
+          type: agent
+          agent: fixer
+          from_users: []              # empty = any author; e.g. ["coderabbitai[bot]"]
+          prompt: |
+            New comment on {{.repo}}#{{.pr}} by {{.author}}: {{.comment_body}}
+            If actionable, make the change, commit, push, and reply.
+        # --- M2: critique auto-review (others' PRs where you're requested) ---
+        review_requested:
+          type: command
+          backend: local
+          command: ["critique", "--review", "{{.repo}}#{{.pr}}", "--post"]
+          env:
+            CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"   # reads on App pool
+            CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}"    # submits review as YOU
+        # --- M2: self-review your own PRs (opt-in) ---
+        self_review:
+          type: command
+          backend: local
+          enabled: false
+          checkout: none
+          command: ["critique", "--review", "{{.repo}}#{{.pr}}"]
+          env:
+            CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"
+            CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}"
+        # --- M3: issues ---
+        issue_assigned:
+          type: agent
+          agent: fixer
+          checkout: branch-off
+          prompt: |
+            Issue {{.repo}}#{{.issue}} was assigned to you. Start work: create a branch,
+            implement a fix, and open a draft PR.
+        issue_ready:
+          type: agent
+          agent: fixer
+          checkout: branch-off
+          labels_any: ["Ready"]
+          prompt: "Issue {{.repo}}#{{.issue}} is Ready. Start work on a fresh branch."
+        issue_project_moved:
+          type: agent
+          agent: fixer
+          enabled: false              # opt-in; costs one GraphQL node lookup per event
+          checkout: branch-off
+          project: { field: Status, to: Ready }
+          prompt: "Issue moved to Ready in the project. Start work on a fresh branch."
+        # --- M4: auto-merge (opt-in, higher-stakes) ---
+        merge_ready:
+          type: command
+          backend: local
+          enabled: false
+          require_label: automerge
+          method: squash
+          gates: { merge_state: clean, review_decision: approved, non_author_approval: true, threads_resolved: true, not_draft: true }
+          command: ["gh", "pr", "merge", "{{.repo}}#{{.pr}}", "--squash"]
+          env: { GH_TOKEN: "{{.gh_token}}" }
+
+    # RULES: primary structure. FIRST rule whose `match` applies wins; it merges
+    # over `defaults`. `match` may combine repo globs and/or Project(v2) criteria.
+    rules:
+      - match: { repos: ["EdnitionCode/*", "TapResearch/*"] }
+      - match: { repos: ["EdnitionCode/RosterStream"] }
+        actions:
+          failing_checks: { agent: fixer, prompt: "RosterStream checks failing — diagnose, fix, push." }
+
+control:
+  enabled: true
+  pause_label: conductor:off          # (label-based pause is a follow-up; enabled/shadow work today)
+  shadow: false                       # run everything but skip the final push/merge/post
+notify:
+  push: true
+  comment_on_escalate: true
+  on: [dispatch, escalate]
+
+agents:
+  fixer:
+    provider: claude
+    model: ""                         # optional
+    thinking: ""                      # optional
+    mode: ""                          # optional
+    workspace: worktree               # local | worktree
+    wait_timeout: 30m
+    archive_when_done: true
+    labels: { team: autopilot }
+
+dispatch:
+  default_backends: { agent: paseo, command: local }
+  backends:
+    paseo: { bin: paseo }
+    local: {}
+  identity: { read_token: app, write_token: gh_auth, commit_author: self }
+
+store:
+  state_file: ~/.local/state/paseo-conductor/state.json
+  audit_log: ~/.local/state/paseo-conductor/audit.jsonl
+  state_ttl: 720h
+  max_tracked_prs: 5000
+  audit_max_size: 50MB
+
+dry_run: false
