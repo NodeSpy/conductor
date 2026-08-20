@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -225,6 +226,27 @@ func TestParseWorktreeWorkspaces(t *testing.T) {
 	}
 	if len(m) != 1 {
 		t.Errorf("only the valid worktree should be kept: %v", m)
+	}
+}
+
+func TestIsGitRepoAndMainWorkTree(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if isGitRepo(ctx, dir) {
+		t.Fatal("plain temp dir must not be a git repo")
+	}
+	if isGitRepo(ctx, filepath.Join(dir, "missing")) {
+		t.Fatal("missing dir must not be a git repo")
+	}
+	if out, err := exec.Command("git", "-C", dir, "init").CombinedOutput(); err != nil {
+		t.Skipf("git unavailable: %s", out)
+	}
+	if !isGitRepo(ctx, dir) {
+		t.Fatal("git-init dir should be a repo")
+	}
+	// The main working tree of a repo root resolves to a valid git repo.
+	if !isGitRepo(ctx, mainWorkTree(ctx, dir)) {
+		t.Fatal("mainWorkTree should return a git repo")
 	}
 }
 

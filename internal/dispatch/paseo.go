@@ -306,16 +306,23 @@ func (d *Dispatcher) resolveCheckoutDir(ctx context.Context, repo string) (strin
 	if d.CheckoutDir != nil {
 		return d.CheckoutDir(ctx, repo)
 	}
+	// Cache, but validate it still resolves to a git repo — a cached worktree can
+	// be archived out from under us (by the reaper or by hand), which would leave
+	// paseo with "Create worktree requires a git repository". Evict + re-resolve.
 	d.mu.Lock()
 	if p, ok := d.repoDirs[repo]; ok {
 		d.mu.Unlock()
-		return p, nil
+		if isGitRepo(ctx, p) {
+			return p, nil
+		}
+		d.mu.Lock()
+		delete(d.repoDirs, repo)
 	}
 	d.mu.Unlock()
 
 	dir := d.findWorkspaceDir(ctx, repo)
 	if dir == "" {
-		// No existing workspace for this repo — clone a base checkout once.
+		// No existing checkout for this repo — clone a base checkout once.
 		if err := d.cloneRepo(ctx, repo); err != nil {
 			return "", err
 		}
@@ -329,8 +336,10 @@ func (d *Dispatcher) resolveCheckoutDir(ctx context.Context, repo string) (strin
 	return dir, nil
 }
 
-// findWorkspaceDir returns the cwd of an existing paseo workspace for repo,
-// preferring a base (local) checkout over a worktree. "" if none.
+// findWorkspaceDir returns a stable local checkout dir for repo — the repo's
+// primary (main) working tree, derived from any workspace that belongs to it, so
+// paseo can create PR/branch worktrees from something that won't be archived out
+// from under it. Prefers a local checkout; validates it's a real git repo. "".
 func (d *Dispatcher) findWorkspaceDir(ctx context.Context, repo string) string {
 	out, err := exec.CommandContext(ctx, d.PaseoBin, "workspace", "ls", "--json").Output()
 	if err != nil {
@@ -346,20 +355,47 @@ func (d *Dispatcher) findWorkspaceDir(ctx context.Context, repo string) string {
 	}
 	fallback := ""
 	for _, w := range wl {
-		if w.Project != repo || w.Cwd == "" {
+		if w.Project != repo || w.Cwd == "" || !isGitRepo(ctx, w.Cwd) {
 			continue
 		}
-		if fi, err := os.Stat(w.Cwd); err != nil || !fi.IsDir() {
-			continue
-		}
+		base := mainWorkTree(ctx, w.Cwd) // the stable primary checkout, not a worktree
 		if w.Isolation == "local" {
-			return w.Cwd // prefer a base checkout
+			return base
 		}
 		if fallback == "" {
-			fallback = w.Cwd
+			fallback = base
 		}
 	}
 	return fallback
+}
+
+// isGitRepo reports whether dir exists and is inside a git working tree.
+func isGitRepo(ctx context.Context, dir string) bool {
+	if dir == "" {
+		return false
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return false
+	}
+	return exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--git-dir").Run() == nil
+}
+
+// mainWorkTree returns the repo's primary working tree for a path inside it.
+// Linked worktrees are ephemeral (the reaper archives them); the main checkout
+// is stable. Falls back to dir if it can't be derived or isn't a working tree.
+func mainWorkTree(ctx context.Context, dir string) string {
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse",
+		"--path-format=absolute", "--git-common-dir").Output()
+	if err != nil {
+		return dir
+	}
+	common := strings.TrimSpace(string(out))
+	if strings.HasSuffix(common, "/.git") {
+		if main := strings.TrimSuffix(common, "/.git"); isGitRepo(ctx, main) {
+			return main
+		}
+	}
+	return dir
 }
 
 // cloneRepo clones repo (owner/name) and registers it as a paseo workspace.
