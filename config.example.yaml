@@ -29,6 +29,22 @@ integrations:
       interval: 1h
       repos: ["your-org/*"]           # concrete owner/name, or an owner glob (owner/*) → expands to installed repos
 
+    # OPTIONAL. Remap a repo (owner/name) to the paseo project name of an existing
+    # workspace, so worktree checkouts reuse it instead of cloning a fresh one.
+    # Handy when the forge repo and the registered paseo project differ in org or
+    # casing. Keys are case-insensitive; only affects checkout (not forge ops).
+    project_map:
+      EdnitionCode/RosterStream: ednition/rosterstream
+
+    # OPTIONAL org-wide shortcut, applied to every repo WITHOUT an explicit
+    # project_map entry above. Instead of listing each repo, rewrite the project
+    # name: `org` replaces the owner segment, `lowercase` normalizes casing.
+    # Example: EdnitionCode/AnyRepo -> ednition/anyrepo (matches paseo's lowercased
+    # projects). project_map always wins over this.
+    project_rewrite:
+      org: ednition
+      lowercase: true
+
     # OPTIONAL shared defaults; every rule merges over these.
     defaults:
       me: { logins: [your-login] }                    # your GitHub login(s) — defines "you"

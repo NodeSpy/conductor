@@ -26,7 +26,32 @@ type Config struct {
 	Sweep    SweepConfig   `yaml:"sweep"`
 	Defaults Rule          `yaml:"defaults"`
 	Rules    []Rule        `yaml:"rules"`
+
+	// ProjectMap remaps a repo (owner/name) to the paseo project name of an
+	// existing workspace, so checkouts reuse it instead of cloning a fresh one.
+	// Useful when the forge repo and the registered paseo project differ in org
+	// or casing (e.g. EdnitionCode/RosterStream -> ednition/rosterstream). Keys
+	// are matched case-insensitively; only affects checkout resolution.
+	ProjectMap map[string]string `yaml:"project_map"`
+
+	// ProjectRewrite is a blanket fallback applied to every repo in this instance
+	// that has no explicit ProjectMap entry — the shortcut for a whole org whose
+	// paseo projects share a naming convention. See ProjectRewrite.
+	ProjectRewrite ProjectRewrite `yaml:"project_rewrite"`
 }
+
+// ProjectRewrite derives a paseo project name from a repo (owner/name) without
+// listing each repo. Org, when set, replaces the owner segment (e.g. a webhook's
+// EdnitionCode -> the registered ednition); Lowercase normalizes the whole name
+// to lowercase (paseo projects are lowercased). It applies to every repo in the
+// integration; ProjectMap entries take precedence. Only affects checkout.
+type ProjectRewrite struct {
+	Org       string `yaml:"org"`       // override the owner/org segment
+	Lowercase bool   `yaml:"lowercase"` // lowercase the resulting owner/name
+}
+
+// active reports whether the rewrite changes anything.
+func (r ProjectRewrite) active() bool { return r.Org != "" || r.Lowercase }
 
 // AppConfig holds the GitHub App credentials.
 type AppConfig struct {
@@ -81,6 +106,8 @@ type Integration struct {
 	// own PRs (self_review), and filter authored PRs during sweep. Built from
 	// `me:` if set anywhere, else falls back to reviewer/assignee logins.
 	self map[string]bool
+	// projectMap is cfg.ProjectMap keyed lowercase for case-insensitive lookup.
+	projectMap map[string]string
 }
 
 func newIntegration(name string, decode func(any) error) (core.Integration, error) {
@@ -88,7 +115,11 @@ func newIntegration(name string, decode func(any) error) (core.Integration, erro
 	if err := decode(&cfg); err != nil {
 		return nil, fmt.Errorf("github[%s]: decode config: %w", name, err)
 	}
-	g := &Integration{name: name, cfg: cfg, self: map[string]bool{}}
+	g := &Integration{name: name, cfg: cfg, self: map[string]bool{},
+		projectMap: map[string]string{}}
+	for k, v := range cfg.ProjectMap {
+		g.projectMap[strings.ToLower(k)] = v
+	}
 	rules := append([]Rule{cfg.Defaults}, cfg.Rules...)
 
 	// Prefer an explicit `me:`; only fall back to reviewer/assignee if none set.

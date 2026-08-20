@@ -518,8 +518,15 @@ dry_run: false                        # build+log every action but never execute
 | `dry_run` | Global dry run — build and log actions but never execute. |
 
 **github instance** — `app` (App id / key path / webhook secret / `verify_signature`), `webhook`
-(`smee_url` and/or `listen`+`path`), optional `sweep`, optional shared `defaults`, and the `rules`
-list. A rule's `match.repos` takes **glob patterns** (Go `path.Match`): `owner/*`, `*/*`,
+(`smee_url` and/or `listen`+`path`), optional `sweep`, optional `project_map` / `project_rewrite`,
+optional shared `defaults`, and the `rules` list. **`project_map`** remaps a repo (`owner/name`) to
+the paseo project name of an existing workspace so worktree checkouts reuse it instead of cloning a
+fresh one (handy when the forge repo and the registered paseo project differ in org or casing, e.g.
+`EdnitionCode/RosterStream: ednition/rosterstream`); keys are case-insensitive. **`project_rewrite`**
+is an org-wide shortcut applied to every repo without an explicit `project_map` entry — `org`
+replaces the owner segment and `lowercase` normalizes casing (e.g. `org: ednition` + `lowercase: true`
+turns any `EdnitionCode/AnyRepo` into `ednition/anyrepo`); `project_map` wins over it. Both only
+affect checkout, not forge operations. A rule's `match.repos` takes **glob patterns** (Go `path.Match`): `owner/*`, `*/*`,
 `owner/svc-*`, `owner/[a-z]*`. Note `*` does **not** cross `/`, so a bare `*` won't match `owner/name`
 — use `owner/*` or `*/*`. `me`/`actions`/`workspace` on the matched rule merge over `defaults`.
 **`me`** (rule/`defaults` level) is your GitHub login(s) — it defines "you" for ignoring your own

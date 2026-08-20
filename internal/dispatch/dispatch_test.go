@@ -132,6 +132,33 @@ func TestPaseoCheckoutPRUsesResolvedCwd(t *testing.T) {
 	}
 }
 
+func TestCheckoutUsesTargetProject(t *testing.T) {
+	// When Target.Project is set (an integration remapped the repo to an existing
+	// paseo project), checkout resolution uses it instead of the forge Repo.
+	d := newDispatcher()
+	var got string
+	d.CheckoutDir = func(_ context.Context, repo string) (string, error) {
+		got = repo
+		return "/checkouts/rosterstream", nil
+	}
+	req := Request{
+		Trigger: core.Trigger{Kind: "merge_conflict",
+			Target: core.Target{Repo: "EdnitionCode/RosterStream", Project: "ednition/rosterstream", PR: 5, Number: 5}},
+		Action:  config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"},
+		Profile: config.AgentProfile{Workspace: "worktree"},
+	}
+	ref, err := d.Dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "ednition/rosterstream" {
+		t.Fatalf("resolver should receive mapped project, got %q", got)
+	}
+	if !strings.Contains(joined(ref.Argv), "--cwd /checkouts/rosterstream") {
+		t.Fatalf("expected mapped checkout cwd, got: %s", joined(ref.Argv))
+	}
+}
+
 func TestPaseoNoneUsesScratchWorkspace(t *testing.T) {
 	// checkout:none with no pinned workspace reuses the shared scratch workspace
 	// instead of letting paseo spawn (and leak) a throwaway one.
