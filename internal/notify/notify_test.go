@@ -2,11 +2,24 @@ package notify
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 )
+
+func TestGhCommentArgs(t *testing.T) {
+	// "owner/name#n" must become an explicit --repo + number, never a positional
+	// (gh rejects "owner/name#n" and then guesses the repo from the cwd).
+	got := strings.Join(ghCommentArgs("pr", "acme/w#5", "hi"), " ")
+	if got != "pr comment 5 --repo acme/w --body hi" {
+		t.Fatalf("owner/name#n form: got %q", got)
+	}
+	if got := strings.Join(ghCommentArgs("issue", "9", "hi"), " "); got != "issue comment 9 --body hi" {
+		t.Fatalf("bare number form: got %q", got)
+	}
+}
 
 type postCall struct {
 	sub, ref, body, token string

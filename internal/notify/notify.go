@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
@@ -97,12 +98,27 @@ func (n *Notifier) comment(ctx context.Context, t core.Trigger, detail string) e
 	return n.post(ctx, sub, ref, body, tok)
 }
 
-// ghComment is the default poster: `gh <sub> comment <ref> --body ...` as you.
+// ghComment is the default poster: `gh <sub> comment <number> --repo <owner/name>`
+// as you. gh does not accept an "owner/name#n" positional, so we split it into an
+// explicit --repo + number; otherwise gh tries to infer the repo from the working
+// directory and fails with "not a git repository".
 func ghComment(ctx context.Context, sub, ref, body, token string) error {
-	c := exec.CommandContext(ctx, "gh", sub, "comment", ref, "--body", body)
+	c := exec.CommandContext(ctx, "gh", ghCommentArgs(sub, ref, body)...)
 	c.Env = append(os.Environ(), "GH_TOKEN="+token)
 	if out, err := c.CombinedOutput(); err != nil {
 		return fmt.Errorf("%w: %s", err, out)
 	}
 	return nil
+}
+
+// ghCommentArgs builds the gh argv for a comment, splitting an "owner/name#n" ref
+// into a number plus an explicit --repo.
+func ghCommentArgs(sub, ref, body string) []string {
+	args := []string{sub, "comment"}
+	if repo, num, ok := strings.Cut(ref, "#"); ok && repo != "" && num != "" {
+		args = append(args, num, "--repo", repo)
+	} else {
+		args = append(args, ref)
+	}
+	return append(args, "--body", body)
 }

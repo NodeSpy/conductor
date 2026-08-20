@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"text/template"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
@@ -56,6 +57,15 @@ type Dispatcher struct {
 	PaseoBin        string
 	DefaultBackends map[string]string
 	DryRun          bool
+
+	// CheckoutDir resolves a local checkout path for a repo (owner/name) that
+	// paseo can derive the forge repo from when creating a PR/branch worktree.
+	// nil uses the built-in resolver (reuse an existing workspace, else clone).
+	// Injectable for tests.
+	CheckoutDir func(ctx context.Context, repo string) (string, error)
+
+	mu       sync.Mutex
+	repoDirs map[string]string // repo -> resolved checkout cwd (memoized)
 }
 
 // New builds a Dispatcher from dispatch config.
@@ -64,7 +74,8 @@ func New(d config.Dispatch, dryRun bool) *Dispatcher {
 	if b, ok := d.Backends["paseo"]; ok && b.Bin != "" {
 		bin = b.Bin
 	}
-	return &Dispatcher{PaseoBin: bin, DefaultBackends: d.DefaultBackends, DryRun: dryRun}
+	return &Dispatcher{PaseoBin: bin, DefaultBackends: d.DefaultBackends, DryRun: dryRun,
+		repoDirs: map[string]string{}}
 }
 
 // Dispatch selects the backend for the action and runs it.

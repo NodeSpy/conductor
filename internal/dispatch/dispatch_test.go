@@ -97,6 +97,70 @@ func TestPaseoWorkDirFlag(t *testing.T) {
 	}
 }
 
+func TestPaseoCheckoutPRUsesResolvedCwd(t *testing.T) {
+	d := newDispatcher()
+	d.CheckoutDir = func(_ context.Context, repo string) (string, error) {
+		if repo != "acme/w" {
+			t.Fatalf("resolver got repo %q", repo)
+		}
+		return "/checkouts/acme-w", nil
+	}
+	req := Request{
+		Trigger: core.Trigger{Kind: "merge_conflict",
+			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}},
+		Action:    config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"},
+		Profile:   config.AgentProfile{Workspace: "worktree"},
+		Workspace: "wks_should_be_ignored", // must NOT combine with --new-workspace
+	}
+	ref, err := d.Dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := joined(ref.Argv)
+	if !strings.Contains(s, "--cwd /checkouts/acme-w") {
+		t.Errorf("expected resolved --cwd, got: %s", s)
+	}
+	if strings.Contains(s, "--workspace ") {
+		t.Errorf("--workspace must not be combined with a worktree checkout: %s", s)
+	}
+	if !strings.Contains(s, "--worktree-mode checkout-pr") {
+		t.Errorf("expected checkout-pr worktree, got: %s", s)
+	}
+}
+
+func TestPaseoNoneUsesExistingWorkspace(t *testing.T) {
+	d := newDispatcher()
+	d.CheckoutDir = func(context.Context, string) (string, error) {
+		t.Fatal("resolver must not run for checkout=none")
+		return "", nil
+	}
+	req := Request{
+		Trigger:   core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
+		Action:    config.Action{Type: "agent", Agent: "assess", Checkout: "none", Prompt: "assess"},
+		Workspace: "wks_base",
+	}
+	ref, _ := d.Dispatch(context.Background(), req)
+	s := joined(ref.Argv)
+	if !strings.Contains(s, "--workspace wks_base") {
+		t.Errorf("checkout=none should run in the pinned workspace, got: %s", s)
+	}
+	if strings.Contains(s, "--cwd ") || strings.Contains(s, "--new-workspace") {
+		t.Errorf("checkout=none should not create a worktree, got: %s", s)
+	}
+}
+
+func TestPaseoErrDetail(t *testing.T) {
+	// paseo --json prints its error object to stdout.
+	got := paseoErrDetail([]byte(`{"error":{"code":"WORKSPACE_CREATE_FAILED","message":"boom"}}`), nil)
+	if got != "WORKSPACE_CREATE_FAILED: boom" {
+		t.Errorf("stdout json: got %q", got)
+	}
+	// Otherwise fall back to stderr text.
+	if got := paseoErrDetail([]byte("not json"), []byte("stderr detail\n")); got != "stderr detail" {
+		t.Errorf("stderr fallback: got %q", got)
+	}
+}
+
 func TestLocalCommandArgv(t *testing.T) {
 	d := newDispatcher()
 	req := Request{

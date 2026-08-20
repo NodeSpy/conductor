@@ -1,9 +1,11 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -36,15 +38,39 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	if p.Mode != "" {
 		argv = append(argv, "--mode", p.Mode)
 	}
-	if req.Workspace != "" {
-		argv = append(argv, "--workspace", req.Workspace)
-	}
+	strat := effectiveStrategy(req)
+
+	// Working directory. An explicit WorkDir always wins. Otherwise a worktree
+	// checkout (checkout-pr / branch-off) needs --cwd pointed at a local checkout
+	// of the target repo, because paseo derives the forge owner/repo from the
+	// working directory — not from a flag. Without it, paseo resolves the wrong
+	// repo and fails with WORKSPACE_CREATE_FAILED.
+	cwd := ""
 	if req.Action.WorkDir != "" {
 		wd, err := render(req.Action.WorkDir, data)
 		if err != nil {
 			return RunRef{}, err
 		}
-		argv = append(argv, "--cwd", expandTilde(wd))
+		cwd = expandTilde(wd)
+	} else if strat == "checkout-pr" || strat == "branch-off" {
+		// The default resolver may clone (a side effect) and needs a live daemon,
+		// so skip it during a preview. An injected resolver is pure — always use it.
+		if d.CheckoutDir != nil || (!d.DryRun && !req.Shadow) {
+			dir, err := d.resolveCheckoutDir(ctx, req.Trigger.Target.Repo)
+			if err != nil {
+				return RunRef{}, fmt.Errorf("resolve checkout dir for %s: %w", req.Trigger.Target.Repo, err)
+			}
+			cwd = dir
+		}
+	}
+	if cwd != "" {
+		argv = append(argv, "--cwd", cwd)
+	}
+
+	// Existing-workspace mode only applies when NOT creating a worktree: paseo
+	// forbids --workspace together with --new-workspace.
+	if req.Workspace != "" && strat == "none" {
+		argv = append(argv, "--workspace", req.Workspace)
 	}
 	argv = append(argv, checkoutArgs(req)...)
 
@@ -106,29 +132,69 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		}
 	}
 
-	out, err := exec.CommandContext(ctx, d.PaseoBin, argv...).Output()
+	cmd := exec.CommandContext(ctx, d.PaseoBin, argv...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	ref.Output = string(out)
 	if err != nil {
+		if detail := paseoErrDetail(out, stderr.Bytes()); detail != "" {
+			return ref, fmt.Errorf("paseo run: %w: %s", err, detail)
+		}
 		return ref, fmt.Errorf("paseo run: %w", err)
 	}
 	ref.AgentID = parseAgentID(out)
 	return ref, nil
 }
 
+// paseoErrDetail extracts a human-readable reason from a failed `paseo run`.
+// With --json paseo prints its error object to stdout ({"error":{code,message}});
+// non-JSON diagnostics land on stderr. Prefer whichever carries signal.
+func paseoErrDetail(stdout, stderr []byte) string {
+	var e struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(stdout, &e) == nil && e.Error.Message != "" {
+		if e.Error.Code != "" {
+			return e.Error.Code + ": " + e.Error.Message
+		}
+		return e.Error.Message
+	}
+	if s := strings.TrimSpace(string(stderr)); s != "" {
+		return truncate(s, 500)
+	}
+	return truncate(strings.TrimSpace(string(stdout)), 500)
+}
+
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
+}
+
+// effectiveStrategy resolves the action's checkout strategy, defaulting from the
+// trigger target when unset: a PR → checkout-pr, any repo → branch-off, else none.
+func effectiveStrategy(req Request) string {
+	if s := req.Action.Checkout; s != "" {
+		return s
+	}
+	switch {
+	case req.Trigger.Target.PR > 0:
+		return "checkout-pr"
+	case req.Trigger.Target.Repo != "":
+		return "branch-off"
+	default:
+		return "none" // no repo/PR context (e.g. cron): run in the base workspace
+	}
+}
+
 // checkoutArgs maps an action's checkout strategy to paseo worktree flags.
 func checkoutArgs(req Request) []string {
-	strat := req.Action.Checkout
-	if strat == "" {
-		switch {
-		case req.Trigger.Target.PR > 0:
-			strat = "checkout-pr"
-		case req.Trigger.Target.Repo != "":
-			strat = "branch-off"
-		default:
-			strat = "none" // no repo/PR context (e.g. cron): run in the base workspace
-		}
-	}
-	switch strat {
+	switch effectiveStrategy(req) {
 	case "checkout-pr":
 		return []string{"--new-workspace", workspaceMode(req), "--worktree-mode", "checkout-pr",
 			"--pr-number", itoa(req.Trigger.Target.PR), "--forge", "github"}
@@ -149,6 +215,81 @@ func workspaceMode(req Request) string {
 		return req.Profile.Workspace
 	}
 	return "worktree"
+}
+
+// resolveCheckoutDir returns a local checkout path for repo (owner/name) that
+// paseo can run in so its worktree checkout derives the correct forge repo. It
+// reuses an existing paseo workspace for the repo, else clones one. Results are
+// memoized per repo. An injected CheckoutDir overrides this (tests).
+func (d *Dispatcher) resolveCheckoutDir(ctx context.Context, repo string) (string, error) {
+	if repo == "" {
+		return "", fmt.Errorf("no repo in trigger; cannot create a worktree checkout")
+	}
+	if d.CheckoutDir != nil {
+		return d.CheckoutDir(ctx, repo)
+	}
+	d.mu.Lock()
+	if p, ok := d.repoDirs[repo]; ok {
+		d.mu.Unlock()
+		return p, nil
+	}
+	d.mu.Unlock()
+
+	dir := d.findWorkspaceDir(ctx, repo)
+	if dir == "" {
+		// No existing workspace for this repo — clone a base checkout once.
+		if err := d.cloneRepo(ctx, repo); err != nil {
+			return "", err
+		}
+		if dir = d.findWorkspaceDir(ctx, repo); dir == "" {
+			return "", fmt.Errorf("cloned %s but could not locate its workspace", repo)
+		}
+	}
+	d.mu.Lock()
+	d.repoDirs[repo] = dir
+	d.mu.Unlock()
+	return dir, nil
+}
+
+// findWorkspaceDir returns the cwd of an existing paseo workspace for repo,
+// preferring a base (local) checkout over a worktree. "" if none.
+func (d *Dispatcher) findWorkspaceDir(ctx context.Context, repo string) string {
+	out, err := exec.CommandContext(ctx, d.PaseoBin, "workspace", "ls", "--json").Output()
+	if err != nil {
+		return ""
+	}
+	var wl []struct {
+		Project   string `json:"project"`
+		Cwd       string `json:"cwd"`
+		Isolation string `json:"isolation"`
+	}
+	if json.Unmarshal(out, &wl) != nil {
+		return ""
+	}
+	fallback := ""
+	for _, w := range wl {
+		if w.Project != repo || w.Cwd == "" {
+			continue
+		}
+		if fi, err := os.Stat(w.Cwd); err != nil || !fi.IsDir() {
+			continue
+		}
+		if w.Isolation == "local" {
+			return w.Cwd // prefer a base checkout
+		}
+		if fallback == "" {
+			fallback = w.Cwd
+		}
+	}
+	return fallback
+}
+
+// cloneRepo clones repo (owner/name) and registers it as a paseo workspace.
+func (d *Dispatcher) cloneRepo(ctx context.Context, repo string) error {
+	if out, err := exec.CommandContext(ctx, d.PaseoBin, "clone", repo, "--json").CombinedOutput(); err != nil {
+		return fmt.Errorf("paseo clone %s: %w: %s", repo, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func labelArgs(req Request) []string {
