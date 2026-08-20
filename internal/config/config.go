@@ -10,6 +10,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -195,6 +196,8 @@ type Action struct {
 	// RerequestReview: after the agent addresses feedback and pushes, re-request
 	// review from the reviewer(s) who requested changes (closes the review loop).
 	RerequestReview bool `yaml:"rerequest_review"`
+	// Exclude skips PRs matching these criteria (e.g. release PRs).
+	Exclude Exclude `yaml:"exclude"`
 
 	// command-type fields
 	Command []string `yaml:"command"`
@@ -226,6 +229,42 @@ type Action struct {
 
 // IsEnabled reports whether the action is enabled (default true).
 func (a Action) IsEnabled() bool { return a.Enabled == nil || *a.Enabled }
+
+// Exclude filters out PRs an action shouldn't act on (e.g. release PRs), by head
+// branch glob, label, or a case-insensitive title substring.
+type Exclude struct {
+	Branches []string `yaml:"branches"` // head-branch globs, e.g. "release/*"
+	Labels   []string `yaml:"labels"`   // PR labels (case-insensitive)
+	Title    []string `yaml:"title"`    // case-insensitive substrings of the PR title
+}
+
+// Empty reports whether no exclusion is configured.
+func (e Exclude) Empty() bool {
+	return len(e.Branches) == 0 && len(e.Labels) == 0 && len(e.Title) == 0
+}
+
+// Matches reports whether a PR (head branch, title, labels) hits any exclusion.
+func (e Exclude) Matches(branch, title string, labels []string) bool {
+	for _, p := range e.Branches {
+		if ok, _ := path.Match(p, branch); ok {
+			return true
+		}
+	}
+	for _, want := range e.Labels {
+		for _, l := range labels {
+			if strings.EqualFold(want, l) {
+				return true
+			}
+		}
+	}
+	lt := strings.ToLower(title)
+	for _, s := range e.Title {
+		if s != "" && strings.Contains(lt, strings.ToLower(s)) {
+			return true
+		}
+	}
+	return false
+}
 
 // FlakyRerun controls one-shot re-runs of failed checks before dispatching.
 type FlakyRerun struct {

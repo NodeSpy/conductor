@@ -95,6 +95,9 @@ type prPayload struct {
 	RequestedTeams []struct {
 		Slug string `json:"slug"`
 	} `json:"requested_teams"`
+	Labels []struct {
+		Name string `json:"name"`
+	} `json:"labels"`
 }
 
 type checkPayload struct {
@@ -258,6 +261,9 @@ func (g *Integration) pullRequestTriggers(ctx context.Context, repo string, p gh
 		}
 		if g.draftGated(repo, "review_requested", pr.Draft) {
 			return nil // opt-in not_draft guard: wait until it's marked ready
+		}
+		if g.excluded(repo, "review_requested", pr.Head.Ref, pr.Title, prLabelNames(pr)) {
+			return nil // e.g. release PRs
 		}
 		t := g.prTarget(repo, pr)
 		return g.single(repo, "review_requested", t,
@@ -580,9 +586,35 @@ func (g *Integration) readyReviewTriggers(repo string, pr *prPayload) []core.Tri
 	if !g.reviewerInList(rev, logins, slugs) {
 		return nil
 	}
+	if g.excluded(repo, "review_requested", pr.Head.Ref, pr.Title, prLabelNames(pr)) {
+		return nil
+	}
 	t := g.prTarget(repo, pr)
 	return g.single(repo, "review_requested", t,
 		fmt.Sprintf("ready for review on %s#%d", repo, pr.Number), "reviewreq@"+pr.Head.SHA, nil)
+}
+
+// excluded reports whether the action for kind is configured to skip this PR
+// (e.g. release PRs) by head branch / label / title.
+func (g *Integration) excluded(repo, kind, branch, title string, labels []string) bool {
+	r, ok := g.resolve(repo)
+	if !ok {
+		return false
+	}
+	ex := r.Actions[kind].Exclude
+	if ex.Empty() {
+		return false
+	}
+	return ex.Matches(branch, title, labels)
+}
+
+// labelNames flattens a PR payload's labels to names.
+func prLabelNames(pr *prPayload) []string {
+	out := make([]string, 0, len(pr.Labels))
+	for _, l := range pr.Labels {
+		out = append(out, l.Name)
+	}
+	return out
 }
 
 // gateEnabled reads an opt-in boolean gate (absent → false, i.e. not enforced).

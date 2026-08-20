@@ -81,3 +81,20 @@ func TestMergeAction(t *testing.T) {
 		t.Fatal("override Enabled=false should win")
 	}
 }
+
+func TestMergeActionKeepsExcludeAndRerequest(t *testing.T) {
+	// Regression: mergeAction must carry newer fields, or they silently vanish
+	// whenever a rule is resolved.
+	over := config.Action{
+		Type:            "agent",
+		RerequestReview: true,
+		Exclude:         config.Exclude{Branches: []string{"release/*"}},
+	}
+	got := mergeAction(config.Action{}, over)
+	if !got.RerequestReview {
+		t.Error("rerequest_review dropped by merge")
+	}
+	if got.Exclude.Empty() || !got.Exclude.Matches("release/1.0", "", nil) {
+		t.Error("exclude dropped by merge")
+	}
+}

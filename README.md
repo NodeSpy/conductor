@@ -531,7 +531,10 @@ options: `enabled`, `checkout` (`checkout-pr`|`branch-off`|`none`), `shadow`, `w
 kind-specific ones (`max_attempts_per_head`, `flaky_rerun`, `from_users`, `labels_any`,
 `require_label`, `method`, `gates`, `project`, `rerequest_review`).
 `rerequest_review: true` (agent actions) tells the fixer to re-request review from the reviewer(s)
-who requested changes once it has addressed the feedback and pushed — closing the review loop. `gates` are conditions that must hold before the
+who requested changes once it has addressed the feedback and pushed — closing the review loop.
+`exclude` skips PRs the action shouldn't touch (e.g. release PRs) by head-branch glob, label, or a
+case-insensitive title substring: `exclude: { branches: ["release/*"], labels: ["release"] }`
+(currently applied to `review_requested`). `gates` are conditions that must hold before the
 action fires: `merge_ready`'s gates (`merge_state`, `review_decision`, `non_author_approval`,
 `threads_resolved`, `not_draft`) default **on**; `review_requested` supports an **opt-in**
 `not_draft` gate (`gates: { not_draft: true }`) to skip drafts until they're marked ready.

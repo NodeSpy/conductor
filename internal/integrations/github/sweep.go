@@ -171,6 +171,13 @@ func (g *Integration) sweepReviewRequested(repo string, pr prListItem) []core.Tr
 	if g.draftGated(repo, "review_requested", pr.Draft) {
 		return nil // opt-in not_draft guard: skip drafts in the sweep too
 	}
+	labels := make([]string, 0, len(pr.Labels))
+	for _, l := range pr.Labels {
+		labels = append(labels, l.Name)
+	}
+	if g.excluded(repo, "review_requested", pr.Head.Ref, pr.Title, labels) {
+		return nil // e.g. release PRs
+	}
 	t := g.target(repo, pr.Number, pr.Head.SHA, pr.Base.Ref, pr.HTMLURL)
 	return g.single(repo, "review_requested", t,
 		fmt.Sprintf("sweep: review requested on %s#%d", repo, pr.Number),

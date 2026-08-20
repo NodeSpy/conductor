@@ -283,6 +283,12 @@ func mergeAction(base, over config.Action) config.Action {
 	if len(over.Project) > 0 {
 		base.Project = over.Project
 	}
+	if !over.Exclude.Empty() {
+		base.Exclude = over.Exclude
+	}
+	if over.RerequestReview {
+		base.RerequestReview = over.RerequestReview
+	}
 	return base
 }
 

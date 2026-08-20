@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
@@ -99,6 +100,60 @@ func gatedReviewConfig() Config {
 	rr.Gates = map[string]any{"not_draft": true}
 	c.Rules[0].Actions["review_requested"] = rr
 	return c
+}
+
+func excludeReviewConfig() Config {
+	c := richConfig()
+	rr := c.Rules[0].Actions["review_requested"]
+	rr.Exclude = config.Exclude{Branches: []string{"release/*"}, Labels: []string{"release"}, Title: []string{"[skip review]"}}
+	c.Rules[0].Actions["review_requested"] = rr
+	return c
+}
+
+func TestReviewRequestedExcludesReleasePRs(t *testing.T) {
+	g := newTestIntegration(t, excludeReviewConfig())
+	base := `{"action":"review_requested","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"requested_reviewer":{"login":"me"},"pull_request":%s}`
+
+	// A normal PR still fires.
+	normal := `{"number":6,"head":{"sha":"h","ref":"feat/x"},"title":"add feature"}`
+	if k := do(t, g, "pull_request", fmt.Sprintf(base, normal)); len(k) != 1 || k[0] != "review_requested" {
+		t.Fatalf("normal PR should fire, got %v", k)
+	}
+	// Release branch is excluded.
+	rel := `{"number":7,"head":{"sha":"h","ref":"release/1.2.0"},"title":"Release 1.2.0"}`
+	if k := do(t, g, "pull_request", fmt.Sprintf(base, rel)); len(k) != 0 {
+		t.Fatalf("release-branch PR must be excluded, got %v", k)
+	}
+	// Release label is excluded.
+	lbl := `{"number":8,"head":{"sha":"h","ref":"main"},"title":"cut","labels":[{"name":"release"}]}`
+	if k := do(t, g, "pull_request", fmt.Sprintf(base, lbl)); len(k) != 0 {
+		t.Fatalf("release-labeled PR must be excluded, got %v", k)
+	}
+	// Title marker is excluded.
+	ttl := `{"number":9,"head":{"sha":"h","ref":"chore"},"title":"chore: bump [skip review]"}`
+	if k := do(t, g, "pull_request", fmt.Sprintf(base, ttl)); len(k) != 0 {
+		t.Fatalf("title-marked PR must be excluded, got %v", k)
+	}
+}
+
+func TestExcludeMatches(t *testing.T) {
+	e := config.Exclude{Branches: []string{"release/*"}, Labels: []string{"Release"}, Title: []string{"skip"}}
+	if !e.Matches("release/1.0", "x", nil) {
+		t.Error("branch glob should match")
+	}
+	if !e.Matches("feat", "x", []string{"release"}) {
+		t.Error("label should match case-insensitively")
+	}
+	if !e.Matches("feat", "please SKIP this", nil) {
+		t.Error("title substring should match case-insensitively")
+	}
+	if e.Matches("feat/x", "normal", []string{"bug"}) {
+		t.Error("non-matching PR should not be excluded")
+	}
+	if (config.Exclude{}).Matches("release/1.0", "release", []string{"release"}) {
+		t.Error("empty exclude must never match")
+	}
 }
 
 func TestReviewRequestedDraftGate(t *testing.T) {

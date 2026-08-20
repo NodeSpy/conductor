@@ -76,6 +76,10 @@ integrations:
           #   reviewer: { logins: [teammate], teams: [platform] }
           gates: { not_draft: true }   # opt-in guard: ignore while the PR is a draft;
                                        #   fires once it's marked ready-for-review
+          exclude:                     # skip PRs matching any of these (e.g. release PRs)
+            branches: ["release/*", "release-please--*"]
+            labels: ["release", "autorelease: pending"]
+            # title: ["[skip review]"]   # case-insensitive substrings
           command: ["critique", "--review", "{{.repo}}#{{.pr}}", "--post"]
           env:
             CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"   # reads on App pool
