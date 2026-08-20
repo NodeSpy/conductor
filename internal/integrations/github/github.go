@@ -57,8 +57,9 @@ type SweepConfig struct {
 // Rule is one entry in the instance's `rules` list (or the `defaults` block).
 type Rule struct {
 	Match     Match                    `yaml:"match"`
-	Reviewer  config.Actors            `yaml:"reviewer"`
-	Assignee  config.Actors            `yaml:"assignee"`
+	Me        config.Actors            `yaml:"me"`       // your GitHub login(s) — defines "you"
+	Reviewer  config.Actors            `yaml:"reviewer"` // whose requested review triggers review_requested
+	Assignee  config.Actors            `yaml:"assignee"` // whose assignment triggers issue_assigned
 	Workspace string                   `yaml:"workspace"`
 	Actions   map[string]config.Action `yaml:"actions"`
 }
@@ -76,7 +77,10 @@ type Integration struct {
 	cfg  Config
 	app  *appAuth
 	rest *restClient
-	self map[string]bool // logins treated as "you" (for self-comment filtering)
+	// self = your GitHub login(s), used to ignore your own comments, detect your
+	// own PRs (self_review), and filter authored PRs during sweep. Built from
+	// `me:` if set anywhere, else falls back to reviewer/assignee logins.
+	self map[string]bool
 }
 
 func newIntegration(name string, decode func(any) error) (core.Integration, error) {
@@ -85,12 +89,22 @@ func newIntegration(name string, decode func(any) error) (core.Integration, erro
 		return nil, fmt.Errorf("github[%s]: decode config: %w", name, err)
 	}
 	g := &Integration{name: name, cfg: cfg, self: map[string]bool{}}
-	for _, r := range append([]Rule{cfg.Defaults}, cfg.Rules...) {
-		for _, l := range r.Reviewer.Logins {
+	rules := append([]Rule{cfg.Defaults}, cfg.Rules...)
+
+	// Prefer an explicit `me:`; only fall back to reviewer/assignee if none set.
+	for _, r := range rules {
+		for _, l := range r.Me.Logins {
 			g.self[strings.ToLower(l)] = true
 		}
-		for _, l := range r.Assignee.Logins {
-			g.self[strings.ToLower(l)] = true
+	}
+	if len(g.self) == 0 {
+		for _, r := range rules {
+			for _, l := range r.Reviewer.Logins {
+				g.self[strings.ToLower(l)] = true
+			}
+			for _, l := range r.Assignee.Logins {
+				g.self[strings.ToLower(l)] = true
+			}
 		}
 	}
 	return g, nil

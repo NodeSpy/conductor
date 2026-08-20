@@ -324,8 +324,9 @@ integrations:
 
     # OPTIONAL shared defaults; every rule merges over these.
     defaults:
-      reviewer: { logins: [your-login], teams: [] }   # who "review_requested" must name
-      assignee: { logins: [your-login] }              # who "issue_assigned" must name
+      me:       { logins: [your-login] }              # your GitHub login(s) — defines "you"
+      reviewer: { logins: [your-login], teams: [] }   # whose requested review triggers review_requested
+      assignee: { logins: [your-login] }              # whose assignment triggers issue_assigned
       actions:
         merge_conflict:                                   # your PR conflicts with base
           type: agent
@@ -508,8 +509,11 @@ dry_run: false                        # build+log every action but never execute
 (`smee_url` and/or `listen`+`path`), optional `sweep`, optional shared `defaults`, and the `rules`
 list. A rule's `match.repos` takes **glob patterns** (Go `path.Match`): `owner/*`, `*/*`,
 `owner/svc-*`, `owner/[a-z]*`. Note `*` does **not** cross `/`, so a bare `*` won't match `owner/name`
-— use `owner/*` or `*/*`. `reviewer`/`assignee`/`actions`/`workspace` on the matched rule merge over
-`defaults`. `sweep.repos` accepts concrete `owner/name` or an **owner glob** (`owner/*`,
+— use `owner/*` or `*/*`. `me`/`reviewer`/`assignee`/`actions`/`workspace` on the matched rule merge
+over `defaults`. **`me`** is your GitHub login(s) — it defines "you" for ignoring your own comments,
+detecting your own PRs (`self_review`), and picking your authored PRs during sweep; it falls back to
+`reviewer`+`assignee` logins if unset. `reviewer` gates `review_requested`; `assignee` gates
+`issue_assigned`. `sweep.repos` accepts concrete `owner/name` or an **owner glob** (`owner/*`,
 `owner/svc-*`) — a glob is expanded to the repos the App installation can access (so an owner
 segment is required there; `*/*` isn't supported).
 

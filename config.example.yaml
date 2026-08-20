@@ -31,8 +31,12 @@ integrations:
 
     # OPTIONAL shared defaults; every rule merges over these.
     defaults:
-      reviewer: { logins: [your-login], teams: [] }
-      assignee: { logins: [your-login] }
+      me:       { logins: [your-login] }              # your GitHub login(s) — defines "you"
+                                                      #   (used to ignore your own comments, detect
+                                                      #   your own PRs for self_review, and pick
+                                                      #   your authored PRs during sweep)
+      reviewer: { logins: [your-login], teams: [] }   # whose requested review triggers review_requested
+      assignee: { logins: [your-login] }              # whose assignment triggers issue_assigned
       actions:
         merge_conflict:
           type: agent

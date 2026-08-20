@@ -20,8 +20,9 @@ integrations:
     webhook:
       smee_url: ${GH_SMEE_URL}        # https://smee.io/<channel>   (or use `listen:` for direct HTTP)
     defaults:
-      reviewer: { logins: [] }        # <- your GitHub login(s), e.g. [octocat]
-      assignee: { logins: [] }
+      me:       { logins: [] }        # <- your GitHub login(s), e.g. [octocat] — defines "you"
+      reviewer: { logins: [] }        # whose requested review triggers review_requested
+      assignee: { logins: [] }        # whose assignment triggers issue_assigned
       actions:
         merge_conflict:
           type: agent
