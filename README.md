@@ -21,7 +21,9 @@ curl -fsSL https://gist.githubusercontent.com/danielcbaldwin/3504ed91ac1014b3f07
 
 Then:
 
-1. Create a GitHub App + smee channel — see [GitHub App setup](#github-app-setup).
+1. Create a GitHub App + a smee channel — see [GitHub App setup](#github-app-setup).
+   (smee.io is just a webhook relay — there's **nothing to install**; the conductor connects to the
+   channel itself.)
 2. Fill in `~/.config/paseo-conductor/config.yaml` (app id, repos, your login) and
    `~/.config/paseo-conductor/conductor.env` (secrets), then set the github integration
    `enabled: true` — see [Configuration](#configuration). (The seeded starter is valid but disabled.)
@@ -255,7 +257,12 @@ Secrets live in `~/.config/paseo-conductor/conductor.env`; the daemon loads them
      `paseo-conductor-<your-handle>` or `<your-org>-paseo-conductor` (this becomes the bot login).
    - **Homepage URL** — anything valid; use the repo (<https://github.com/NodeSpy/paseo-conductor>)
      or <https://paseo.sh>.
-   - **Webhook URL** — your smee channel (create one at <https://smee.io>).
+   - **Webhook URL** — a smee.io channel. Open <https://smee.io/new>, copy the URL it shows
+     (e.g. `https://smee.io/AbC123`), and paste it here. Put the **same URL** in `conductor.env` as
+     `GH_SMEE_URL`.
+
+     > **You do NOT install or run the smee client.** smee.io is just a public relay; paseo-conductor
+     > connects to your channel itself and receives the forwarded webhooks. Nothing else to start.
    - **Webhook secret** — generate a random string (e.g. `openssl rand -hex 32`) and put it in
      `conductor.env` as `GH_WEBHOOK_SECRET`.
 2. **Permissions:** Contents (RW), Pull requests (RW), Issues (RW), Checks (R), Metadata (R).
