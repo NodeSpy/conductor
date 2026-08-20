@@ -319,9 +319,9 @@ integrations:
       # listen: 127.0.0.1:8787        # direct receiver (point the App webhook / your tunnel here)
       # path: /webhook                # default
     sweep:
-      enabled: false                  # off by default; REST catch-up for missed events
-      interval: 1h
-      repos: ["your-org/your-repo"]
+      enabled: false                  # off by default; REST catch-up for missed events. Runs once on
+      interval: 1h                     #   start, then every interval. Recovers pending review_requested
+      repos: ["your-org/your-repo"]    #   (your review requested) + conflict/behind on PRs you authored.
 
     # OPTIONAL shared defaults; every rule merges over these.
     defaults:

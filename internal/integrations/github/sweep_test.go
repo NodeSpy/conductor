@@ -46,6 +46,54 @@ func sweepStub(t *testing.T) *appAuth {
 	return &appAuth{appID: 1, key: key, httpc: http.DefaultClient, apiBase: srv.URL, now: time.Now, cache: map[int64]cachedToken{}}
 }
 
+func TestSweepReviewRequested(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/77/access_tokens", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"token":"t","expires_at":%q}`, time.Now().Add(time.Hour).Format(time.RFC3339))
+	})
+	mux.HandleFunc("/repos/acme/widget/installation", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"id":77}`)
+	})
+	// Two open PRs by a teammate: #7 requests your review, #8 requests someone else.
+	// Neither is authored by you, so no conflict/behind fetch happens.
+	mux.HandleFunc("/repos/acme/widget/pulls", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `[
+			{"number":7,"user":{"login":"teammate"},"head":{"sha":"h7","ref":"feat"},"base":{"ref":"main"},
+			 "html_url":"u7","requested_reviewers":[{"login":"me"}]},
+			{"number":8,"user":{"login":"teammate"},"head":{"sha":"h8"},"base":{"ref":"main"},
+			 "requested_reviewers":[{"login":"someoneelse"}]}]`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	key, _ := rsa.GenerateKey(rand.Reader, 1024)
+
+	cfg := Config{
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		Sweep:   SweepConfig{Enabled: true, Repos: []string{"acme/widget"}},
+		Rules: []Rule{{
+			Match:    Match{Repos: []string{"acme/widget"}},
+			Reviewer: config.Actors{Logins: []string{"me"}},
+			Actions:  map[string]config.Action{"review_requested": {Type: "command", Command: []string{"critique"}}},
+		}},
+	}
+	g := newTestIntegration(t, cfg)
+	g.app = &appAuth{appID: 1, key: key, httpc: http.DefaultClient, apiBase: srv.URL, now: time.Now, cache: map[int64]cachedToken{}}
+	g.rest = newRESTClient(g.app)
+
+	var got []core.Trigger
+	if err := g.sweep(context.Background(), func(_ context.Context, tr core.Trigger) { got = append(got, tr) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Kind != "review_requested" || got[0].Target.Number != 7 {
+		t.Fatalf("want one review_requested on #7, got %+v", got)
+	}
+	// Dedup must match the webhook path so a request already handled live isn't re-fired.
+	if got[0].Dedup != "reviewreq@h7" {
+		t.Fatalf("dedup mismatch, got %q", got[0].Dedup)
+	}
+}
+
 func TestSweepOrgGlob(t *testing.T) {
 	cfg := Config{
 		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},

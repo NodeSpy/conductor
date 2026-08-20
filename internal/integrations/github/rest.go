@@ -65,6 +65,20 @@ type prListItem struct {
 	User   struct {
 		Login string `json:"login"`
 	} `json:"user"`
+	Head struct {
+		SHA string `json:"sha"`
+		Ref string `json:"ref"`
+	} `json:"head"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+	HTMLURL            string `json:"html_url"`
+	RequestedReviewers []struct {
+		Login string `json:"login"`
+	} `json:"requested_reviewers"`
+	RequestedTeams []struct {
+		Slug string `json:"slug"`
+	} `json:"requested_teams"`
 }
 
 // listOpenPRs lists open PRs for a repo (first page; sweep is a coarse catch-up).

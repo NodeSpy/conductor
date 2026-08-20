@@ -2,11 +2,13 @@ package github
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"path"
 	"strings"
 	"time"
 
+	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 )
 
@@ -41,8 +43,9 @@ func (g *Integration) sweepLoop(ctx context.Context, emit core.EmitFunc) {
 
 // sweep reconciles the configured repos. Entries may be concrete (`owner/name`)
 // or an owner glob (`owner/*`, `owner/svc-*`), which is expanded to the repos
-// the App installation can access. For PRs you authored it re-checks merge
-// state (conflict/behind) and emits triggers.
+// the App installation can access. It emits `review_requested` for PRs where
+// your review is pending (recovering missed review-request webhooks) and
+// re-checks merge state (conflict/behind) for PRs you authored.
 func (g *Integration) sweep(ctx context.Context, emit core.EmitFunc) error {
 	for _, entry := range g.cfg.Sweep.Repos {
 		owner, _ := splitRepo(entry)
@@ -81,7 +84,9 @@ func (g *Integration) sweep(ctx context.Context, emit core.EmitFunc) error {
 	return nil
 }
 
-// sweepRepo checks one repo's open PRs (authored by you) for conflict/behind.
+// sweepRepo reconciles one repo's open PRs: review_requested for PRs where your
+// review is pending (recovers missed review-request webhooks), and conflict/behind
+// for PRs you authored.
 func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID int64, owner, name, repo string) {
 	prs, err := g.rest.listOpenPRs(ctx, instID, owner, name)
 	if err != nil {
@@ -89,8 +94,14 @@ func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID 
 		return
 	}
 	for _, pr := range prs {
+		// review_requested applies to *others'* PRs where your review is pending;
+		// the list payload already carries requested reviewers (no extra fetch).
+		for _, tr := range g.sweepReviewRequested(repo, pr) {
+			emit(ctx, tr)
+		}
+
 		if !g.self[strings.ToLower(pr.User.Login)] {
-			continue // autopilot is for PRs you authored
+			continue // conflict/behind autopilot is for PRs you authored
 		}
 		info, err := g.rest.pull(ctx, instID, owner, name, pr.Number)
 		if err != nil {
@@ -110,4 +121,45 @@ func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID 
 			emit(ctx, tr)
 		}
 	}
+}
+
+// sweepReviewRequested emits a review_requested trigger when your review is a
+// pending requested reviewer on pr. The dedup signature matches the webhook path
+// ("reviewreq@<head>"), so a request already handled live isn't re-fired.
+func (g *Integration) sweepReviewRequested(repo string, pr prListItem) []core.Trigger {
+	r, ok := g.resolve(repo)
+	if !ok {
+		return nil
+	}
+	rev := actorsOr(r.Actions["review_requested"].Reviewer, r.Reviewer)
+	if !g.prReviewerMatches(rev, pr) {
+		return nil
+	}
+	t := g.target(repo, pr.Number, pr.Head.SHA, pr.Base.Ref, pr.HTMLURL)
+	return g.single(repo, "review_requested", t,
+		fmt.Sprintf("sweep: review requested on %s#%d", repo, pr.Number),
+		"reviewreq@"+pr.Head.SHA, nil)
+}
+
+// prReviewerMatches reports whether the configured reviewer (defaulting to the
+// `me` identity when unset) is among the PR's pending requested reviewers/teams.
+func (g *Integration) prReviewerMatches(rev config.Actors, pr prListItem) bool {
+	byDefault := len(rev.Logins) == 0 && len(rev.Teams) == 0
+	for _, rr := range pr.RequestedReviewers {
+		if byDefault {
+			if g.self[strings.ToLower(rr.Login)] {
+				return true
+			}
+		} else if rev.HasLogin(rr.Login) {
+			return true
+		}
+	}
+	for _, tm := range pr.RequestedTeams {
+		for _, want := range rev.Teams {
+			if strings.EqualFold(want, tm.Slug) {
+				return true
+			}
+		}
+	}
+	return false
 }
