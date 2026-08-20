@@ -162,6 +162,10 @@ type Action struct {
 	If           string         `yaml:"if"`            // step condition (see internal/expr)
 	OutputSchema map[string]any `yaml:"output_schema"` // agent step: JSON schema for structured output
 
+	// gating actors (live on the check they gate)
+	Reviewer Actors `yaml:"reviewer"` // review_requested: whose requested review triggers it
+	Assignee Actors `yaml:"assignee"` // issue_assigned: whose assignment triggers it
+
 	// kind-specific options
 	MaxAttemptsPerHead int            `yaml:"max_attempts_per_head"`
 	IgnoreChecks       []string       `yaml:"ignore_checks"`

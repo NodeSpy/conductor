@@ -67,9 +67,9 @@ configurable action — enable, disable, and tune it per repo in [config](#confi
 
 ## Reacting to issues
 
-Issue triggers are configured like any other kind — under a github rule's `actions`. Assignee
-matching uses the rule's `assignee: { logins: [...] }`, and the App must subscribe to the `issues`
-event.
+Issue triggers are configured like any other kind — under a github rule's `actions`. The
+`issue_assigned` action names who counts via its own `assignee: { logins: [...] }`, and the App
+must subscribe to the `issues` event.
 
 ```yaml
 integrations:
@@ -82,11 +82,12 @@ integrations:
     webhook:
       smee_url: ${GH_SMEE_URL}
     defaults:
-      assignee: { logins: [octocat] }     # who "issue_assigned" must name
+      me: { logins: [octocat] }          # your GitHub login(s)
       actions:
         issue_assigned:                    # an issue is assigned to you
           type: agent
           agent: fixer
+          assignee: { logins: [octocat] } # whose assignment triggers this
           checkout: branch-off             # start on a fresh branch (no PR yet)
           prompt: "Issue {{.repo}}#{{.issue}} was assigned to you — implement it and open a draft PR."
         issue_ready:                       # an issue gets a "Ready" label
@@ -324,9 +325,7 @@ integrations:
 
     # OPTIONAL shared defaults; every rule merges over these.
     defaults:
-      me:       { logins: [your-login] }              # your GitHub login(s) — defines "you"
-      reviewer: { logins: [your-login], teams: [] }   # whose requested review triggers review_requested
-      assignee: { logins: [your-login] }              # whose assignment triggers issue_assigned
+      me: { logins: [your-login] }                    # your GitHub login(s) — defines "you"
       actions:
         merge_conflict:                                   # your PR conflicts with base
           type: agent
@@ -357,6 +356,7 @@ integrations:
         review_requested:                                 # your review requested on someone's PR
           type: command
           backend: local
+          reviewer: { logins: [your-login], teams: [] }   # whose requested review triggers this
           command: ["critique", "--review", "{{.repo}}#{{.pr}}", "--post"]
           env:
             CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"       # reads on the App pool
@@ -371,6 +371,7 @@ integrations:
         issue_assigned:                                   # issue assigned to you
           type: agent
           agent: fixer
+          assignee: { logins: [your-login] }              # whose assignment triggers this
           checkout: branch-off                            # start work on a fresh branch (no PR yet)
           prompt: "Issue {{.repo}}#{{.issue}} assigned to you — start work; open a draft PR."
         issue_ready:                                      # issue labeled "Ready"
@@ -509,11 +510,12 @@ dry_run: false                        # build+log every action but never execute
 (`smee_url` and/or `listen`+`path`), optional `sweep`, optional shared `defaults`, and the `rules`
 list. A rule's `match.repos` takes **glob patterns** (Go `path.Match`): `owner/*`, `*/*`,
 `owner/svc-*`, `owner/[a-z]*`. Note `*` does **not** cross `/`, so a bare `*` won't match `owner/name`
-— use `owner/*` or `*/*`. `me`/`reviewer`/`assignee`/`actions`/`workspace` on the matched rule merge
-over `defaults`. **`me`** is your GitHub login(s) — it defines "you" for ignoring your own comments,
-detecting your own PRs (`self_review`), and picking your authored PRs during sweep; it falls back to
-`reviewer`+`assignee` logins if unset. `reviewer` gates `review_requested`; `assignee` gates
-`issue_assigned`. `sweep.repos` accepts concrete `owner/name` or an **owner glob** (`owner/*`,
+— use `owner/*` or `*/*`. `me`/`actions`/`workspace` on the matched rule merge over `defaults`.
+**`me`** (rule/`defaults` level) is your GitHub login(s) — it defines "you" for ignoring your own
+comments, detecting your own PRs (`self_review`), and picking your authored PRs during sweep. The
+gating actors live on their checks: **`reviewer`** on the `review_requested` action, **`assignee`**
+on the `issue_assigned` action. (`me` falls back to those actors if unset; rule-level
+`reviewer`/`assignee` still work as a fallback for the action-level ones.) `sweep.repos` accepts concrete `owner/name` or an **owner glob** (`owner/*`,
 `owner/svc-*`) — a glob is expanded to the repos the App installation can access (so an owner
 segment is required there; `*/*` isn't supported).
 

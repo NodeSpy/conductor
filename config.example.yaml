@@ -31,12 +31,9 @@ integrations:
 
     # OPTIONAL shared defaults; every rule merges over these.
     defaults:
-      me:       { logins: [your-login] }              # your GitHub login(s) — defines "you"
-                                                      #   (used to ignore your own comments, detect
-                                                      #   your own PRs for self_review, and pick
-                                                      #   your authored PRs during sweep)
-      reviewer: { logins: [your-login], teams: [] }   # whose requested review triggers review_requested
-      assignee: { logins: [your-login] }              # whose assignment triggers issue_assigned
+      me: { logins: [your-login] }                    # your GitHub login(s) — defines "you"
+                                                      #   (ignore your own comments, detect your own
+                                                      #   PRs for self_review, pick authored PRs in sweep)
       actions:
         merge_conflict:
           type: agent
@@ -74,6 +71,7 @@ integrations:
         review_requested:
           type: command
           backend: local
+          reviewer: { logins: [your-login], teams: [] }   # whose requested review triggers this
           command: ["critique", "--review", "{{.repo}}#{{.pr}}", "--post"]
           env:
             CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"   # reads on App pool
@@ -92,6 +90,7 @@ integrations:
         issue_assigned:
           type: agent
           agent: fixer
+          assignee: { logins: [your-login] }    # whose assignment triggers this
           checkout: branch-off
           prompt: |
             Issue {{.repo}}#{{.issue}} was assigned to you. Start work: create a branch,

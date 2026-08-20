@@ -64,6 +64,46 @@ func TestIdentityFallsBackToReviewer(t *testing.T) {
 	}
 }
 
+func TestActionLevelActors(t *testing.T) {
+	// reviewer lives on review_requested; assignee on issue_assigned. No rule-level actors.
+	cfg := Config{
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		Rules: []Rule{{
+			Match: Match{Repos: []string{"acme/*"}},
+			Actions: map[string]config.Action{
+				"review_requested": {Type: "command", Command: []string{"critique"},
+					Reviewer: config.Actors{Logins: []string{"me"}}},
+				"issue_assigned": {Type: "agent", Agent: "fixer",
+					Assignee: config.Actors{Logins: []string{"me"}}},
+			},
+		}},
+	}
+	g := newTestIntegration(t, cfg)
+
+	rr := func(login string) string {
+		return `{"action":"review_requested","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+			"pull_request":{"number":6,"head":{"sha":"h"}},"requested_reviewer":{"login":"` + login + `"}}`
+	}
+	if k := do(t, g, "pull_request", rr("me")); !has(k, "review_requested") {
+		t.Fatalf("action-level reviewer should match, got %v", k)
+	}
+	if k := do(t, g, "pull_request", rr("other")); has(k, "review_requested") {
+		t.Fatalf("non-matching reviewer should not fire, got %v", k)
+	}
+
+	ia := func(login string) string {
+		return `{"action":"assigned","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+			"issue":{"number":9},"assignee":{"login":"` + login + `"}}`
+	}
+	if k := do(t, g, "issues", ia("me")); !has(k, "issue_assigned") {
+		t.Fatalf("action-level assignee should match, got %v", k)
+	}
+	if k := do(t, g, "issues", ia("other")); has(k, "issue_assigned") {
+		t.Fatalf("non-matching assignee should not fire, got %v", k)
+	}
+}
+
 func has(xs []string, want string) bool {
 	for _, x := range xs {
 		if x == want {

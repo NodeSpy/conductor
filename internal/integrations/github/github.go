@@ -98,12 +98,17 @@ func newIntegration(name string, decode func(any) error) (core.Integration, erro
 		}
 	}
 	if len(g.self) == 0 {
-		for _, r := range rules {
-			for _, l := range r.Reviewer.Logins {
+		add := func(a config.Actors) {
+			for _, l := range a.Logins {
 				g.self[strings.ToLower(l)] = true
 			}
-			for _, l := range r.Assignee.Logins {
-				g.self[strings.ToLower(l)] = true
+		}
+		for _, r := range rules {
+			add(r.Reviewer) // rule-level fallback
+			add(r.Assignee)
+			for _, a := range r.Actions { // action-level reviewer/assignee
+				add(a.Reviewer)
+				add(a.Assignee)
 			}
 		}
 	}
@@ -259,6 +264,12 @@ func mergeAction(base, over config.Action) config.Action {
 	}
 	if len(over.LabelsAny) > 0 {
 		base.LabelsAny = over.LabelsAny
+	}
+	if len(over.Reviewer.Logins) > 0 || len(over.Reviewer.Teams) > 0 {
+		base.Reviewer = over.Reviewer
+	}
+	if len(over.Assignee.Logins) > 0 {
+		base.Assignee = over.Assignee
 	}
 	if over.RequireLabel != "" {
 		base.RequireLabel = over.RequireLabel

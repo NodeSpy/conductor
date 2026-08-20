@@ -479,11 +479,12 @@ func (g *Integration) reviewerMatches(repo string, p ghPayload) bool {
 	if !ok {
 		return false
 	}
-	if p.RequestedReviewer != nil && r.Reviewer.HasLogin(p.RequestedReviewer.Login) {
+	rev := actorsOr(r.Actions["review_requested"].Reviewer, r.Reviewer) // action-level, rule fallback
+	if p.RequestedReviewer != nil && rev.HasLogin(p.RequestedReviewer.Login) {
 		return true
 	}
 	if p.RequestedTeam != nil {
-		for _, tm := range r.Reviewer.Teams {
+		for _, tm := range rev.Teams {
 			if strings.EqualFold(tm, p.RequestedTeam.Slug) {
 				return true
 			}
@@ -494,7 +495,19 @@ func (g *Integration) reviewerMatches(repo string, p ghPayload) bool {
 
 func (g *Integration) assigneeMatches(repo, login string) bool {
 	r, ok := g.resolve(repo)
-	return ok && r.Assignee.HasLogin(login)
+	if !ok {
+		return false
+	}
+	asg := actorsOr(r.Actions["issue_assigned"].Assignee, r.Assignee) // action-level, rule fallback
+	return asg.HasLogin(login)
+}
+
+// actorsOr returns a if it has any logins/teams, else the fallback.
+func actorsOr(a, fallback config.Actors) config.Actors {
+	if len(a.Logins) > 0 || len(a.Teams) > 0 {
+		return a
+	}
+	return fallback
 }
 
 // actionFor returns the resolved action for a repo+kind.
