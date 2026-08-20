@@ -63,6 +63,52 @@ are disabled by default.
 
 Plus scheduled jobs via the [cron integration](#scheduled-jobs-cron-integration).
 
+## Reacting to issues
+
+Issue triggers are configured like any other kind — under a github rule's `actions`. Assignee
+matching uses the rule's `assignee: { logins: [...] }`, and the App must subscribe to the `issues`
+event (and `projects_v2_item` for the opt-in project trigger).
+
+```yaml
+integrations:
+  - type: github
+    name: default
+    app:
+      app_id: 123
+      private_key_path: ~/.config/paseo-conductor/github-app.pem
+      webhook_secret: ${GH_WEBHOOK_SECRET}
+    webhook:
+      smee_url: ${GH_SMEE_URL}
+    defaults:
+      assignee: { logins: [octocat] }     # who "issue_assigned" must name
+      actions:
+        issue_assigned:                    # an issue is assigned to you
+          type: agent
+          agent: fixer
+          checkout: branch-off             # start on a fresh branch (no PR yet)
+          prompt: "Issue {{.repo}}#{{.issue}} was assigned to you — implement it and open a draft PR."
+        issue_ready:                       # an issue gets a "Ready" label
+          type: agent
+          agent: fixer
+          checkout: branch-off
+          labels_any: ["Ready"]
+          prompt: "Issue {{.repo}}#{{.issue}} is Ready — start work on a fresh branch."
+        issue_project_moved:               # opt-in: a Projects v2 Status field → "Ready"
+          type: agent
+          agent: fixer
+          enabled: false                   # one GraphQL node lookup per event
+          checkout: branch-off
+          project: { field: Status, to: Ready }
+          prompt: "Issue moved to Ready in the project — start work."
+    rules:
+      - match: { repos: ["octocat/*"] }
+agents:
+  fixer: { provider: claude, workspace: worktree }
+```
+
+For a smarter flow — assess the issue, then implement it *or* ask the reporter for more detail —
+make `issue_ready` a [multi-step workflow](#multi-step-workflows).
+
 ## Multi-step workflows
 
 An action can be a single run, or a **`steps:`** list — an ordered workflow where each step can use
