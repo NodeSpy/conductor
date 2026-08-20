@@ -21,10 +21,15 @@ const (
 	EventEscalate = "escalate"
 )
 
+// PostFunc posts a comment on a PR/issue. sub is "pr" or "issue". Injectable
+// so tests can avoid shelling out to gh.
+type PostFunc func(ctx context.Context, sub, ref, body, token string) error
+
 // Notifier emits notifications per the configured policy.
 type Notifier struct {
 	cfg       config.Notify
 	userToken func() (string, error) // for posting a comment as you
+	post      PostFunc
 	log       func(string, ...any)
 }
 
@@ -34,8 +39,11 @@ func New(cfg config.Notify, userToken func() (string, error), log func(string, .
 	if log == nil {
 		log = func(string, ...any) {}
 	}
-	return &Notifier{cfg: cfg, userToken: userToken, log: log}
+	return &Notifier{cfg: cfg, userToken: userToken, post: ghComment, log: log}
 }
+
+// SetPoster overrides how comments are posted (tests inject a spy).
+func (n *Notifier) SetPoster(p PostFunc) { n.post = p }
 
 // Emit sends a notification for the given event if enabled by policy.
 func (n *Notifier) Emit(ctx context.Context, event string, t core.Trigger, msg string) {
@@ -61,7 +69,7 @@ func (n *Notifier) Emit(ctx context.Context, event string, t core.Trigger, msg s
 
 // comment posts a one-line summary on the PR/issue, as you (user token).
 func (n *Notifier) comment(ctx context.Context, t core.Trigger, msg string) error {
-	if n.userToken == nil || t.Target.Repo == "" || t.Target.Number == 0 {
+	if n.userToken == nil || n.post == nil || t.Target.Repo == "" || t.Target.Number == 0 {
 		return nil
 	}
 	tok, err := n.userToken()
@@ -72,12 +80,16 @@ func (n *Notifier) comment(ctx context.Context, t core.Trigger, msg string) erro
 	if t.Target.PR == 0 && t.Target.Issue > 0 {
 		sub = "issue"
 	}
-	body := fmt.Sprintf("paseo-conductor: %s (%s) — %s", t.Kind, "gave up after retries", msg)
-	c := exec.CommandContext(ctx, "gh", sub, "comment",
-		fmt.Sprintf("%s#%d", t.Target.Repo, t.Target.Number), "--body", body)
-	c.Env = append(os.Environ(), "GH_TOKEN="+tok)
-	out, err := c.CombinedOutput()
-	if err != nil {
+	body := fmt.Sprintf("paseo-conductor: %s gave up after retries — %s", t.Kind, msg)
+	ref := fmt.Sprintf("%s#%d", t.Target.Repo, t.Target.Number)
+	return n.post(ctx, sub, ref, body, tok)
+}
+
+// ghComment is the default poster: `gh <sub> comment <ref> --body ...` as you.
+func ghComment(ctx context.Context, sub, ref, body, token string) error {
+	c := exec.CommandContext(ctx, "gh", sub, "comment", ref, "--body", body)
+	c.Env = append(os.Environ(), "GH_TOKEN="+token)
+	if out, err := c.CombinedOutput(); err != nil {
 		return fmt.Errorf("%w: %s", err, out)
 	}
 	return nil

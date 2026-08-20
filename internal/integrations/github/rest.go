@@ -35,7 +35,7 @@ type pullInfo struct {
 
 // pull fetches a PR, retrying briefly while GitHub computes mergeable state.
 func (c *restClient) pull(ctx context.Context, instID int64, owner, repo string, num int) (*pullInfo, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%d", owner, repo, num)
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.app.apiBase, owner, repo, num)
 	for attempt := 0; attempt < 3; attempt++ {
 		var pi pullInfo
 		if err := c.get(ctx, instID, url, &pi); err != nil {
@@ -68,7 +68,7 @@ type prListItem struct {
 
 // listOpenPRs lists open PRs for a repo (first page; sweep is a coarse catch-up).
 func (c *restClient) listOpenPRs(ctx context.Context, instID int64, owner, repo string) ([]prListItem, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls?state=open&per_page=100", owner, repo)
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls?state=open&per_page=100", c.app.apiBase, owner, repo)
 	var out []prListItem
 	if err := c.get(ctx, instID, url, &out); err != nil {
 		return nil, err

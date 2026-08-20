@@ -13,17 +13,39 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
 	"github.com/NodeSpy/paseo-conductor/internal/notify"
-	"github.com/NodeSpy/paseo-conductor/internal/store"
 )
+
+// Dispatcher runs a resolved request against a backend. *dispatch.Dispatcher
+// satisfies it; tests inject fakes.
+type Dispatcher interface {
+	Dispatch(context.Context, dispatch.Request) (dispatch.RunRef, error)
+}
+
+// Notifier emits notifications. *notify.Notifier satisfies it.
+type Notifier interface {
+	Emit(context.Context, string, core.Trigger, string)
+}
+
+// Store is the persistence surface the engine needs. *store.Store satisfies it.
+type Store interface {
+	GC() (int, error)
+	Touch(key string)
+	Delete(key string) error
+	LastSignature(key, kind string) string
+	Attempts(key, kind, head string) int
+	Record(key, kind, sig, head string) error
+	Audit(entry map[string]any)
+}
 
 // Engine is the central work loop.
 type Engine struct {
 	cfg     *config.Config
-	store   *store.Store
-	disp    *dispatch.Dispatcher
-	notif   *notify.Notifier
+	store   Store
+	disp    Dispatcher
+	notif   Notifier
 	author  dispatch.Author
 	userTok func() (string, error)
+	rerun   func(context.Context, core.Trigger, int64)
 	log     func(string, ...any)
 	ch      chan core.Trigger
 }
@@ -31,12 +53,14 @@ type Engine struct {
 // Options configure an Engine.
 type Options struct {
 	Config    *config.Config
-	Store     *store.Store
-	Dispatch  *dispatch.Dispatcher
-	Notifier  *notify.Notifier
+	Store     Store
+	Dispatch  Dispatcher
+	Notifier  Notifier
 	Author    dispatch.Author
 	UserToken func() (string, error)
-	Log       func(string, ...any)
+	// Rerun, if set, overrides the flaky-CI rerun step (tests inject a spy).
+	Rerun func(context.Context, core.Trigger, int64)
+	Log   func(string, ...any)
 }
 
 // New builds an Engine.
@@ -45,11 +69,16 @@ func New(o Options) *Engine {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
-	return &Engine{
+	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, notif: o.Notifier,
 		author: o.Author, userTok: o.UserToken, log: log,
 		ch: make(chan core.Trigger, 256),
 	}
+	e.rerun = o.Rerun
+	if e.rerun == nil {
+		e.rerun = e.rerunFailed
+	}
+	return e
 }
 
 // Emit enqueues a trigger for processing (non-blocking; drops if the queue is
@@ -123,7 +152,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 		if e.store.Attempts(key, "failing_checks_rerun", head) < maxRerun {
 			if runID := toInt64(t.Context["run_id"]); runID > 0 {
-				e.rerunFailed(ctx, t, runID)
+				e.rerun(ctx, t, runID)
 				_ = e.store.Record(key, "failing_checks_rerun", head, head)
 				e.store.Audit(map[string]any{"event": "flaky_rerun", "repo": t.Target.Repo,
 					"number": t.Target.Number, "run_id": runID})

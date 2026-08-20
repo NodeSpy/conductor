@@ -17,10 +17,11 @@ import (
 // Installation tokens are used for the conductor's own reads/enrichment, on the
 // App's rate pool (not your personal gh budget).
 type appAuth struct {
-	appID int64
-	key   *rsa.PrivateKey
-	httpc *http.Client
-	now   func() time.Time
+	appID   int64
+	key     *rsa.PrivateKey
+	httpc   *http.Client
+	apiBase string // overridable in tests
+	now     func() time.Time
 
 	mu    sync.Mutex
 	cache map[int64]cachedToken
@@ -41,11 +42,12 @@ func newAppAuth(appID int64, keyPath string) (*appAuth, error) {
 		return nil, fmt.Errorf("parse app key: %w", err)
 	}
 	return &appAuth{
-		appID: appID,
-		key:   key,
-		httpc: &http.Client{Timeout: 20 * time.Second},
-		now:   time.Now,
-		cache: map[int64]cachedToken{},
+		appID:   appID,
+		key:     key,
+		httpc:   &http.Client{Timeout: 20 * time.Second},
+		apiBase: "https://api.github.com",
+		now:     time.Now,
+		cache:   map[int64]cachedToken{},
 	}, nil
 }
 
@@ -67,7 +69,7 @@ func (a *appAuth) repoInstallationID(ctx context.Context, owner, repo string) (i
 	if err != nil {
 		return 0, err
 	}
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/installation", owner, repo)
+	url := fmt.Sprintf("%s/repos/%s/%s/installation", a.apiBase, owner, repo)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	req.Header.Set("Authorization", "Bearer "+jwtStr)
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -103,7 +105,7 @@ func (a *appAuth) installationToken(ctx context.Context, instID int64) (string, 
 	if err != nil {
 		return "", err
 	}
-	url := fmt.Sprintf("https://api.github.com/app/installations/%d/access_tokens", instID)
+	url := fmt.Sprintf("%s/app/installations/%d/access_tokens", a.apiBase, instID)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	req.Header.Set("Authorization", "Bearer "+jwtStr)
 	req.Header.Set("Accept", "application/vnd.github+json")

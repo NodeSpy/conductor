@@ -212,6 +212,34 @@ func mergeAction(base, over config.Action) config.Action {
 	if over.Shadow != nil {
 		base.Shadow = over.Shadow
 	}
+	// Kind-specific options.
+	if over.MaxAttemptsPerHead != 0 {
+		base.MaxAttemptsPerHead = over.MaxAttemptsPerHead
+	}
+	if len(over.IgnoreChecks) > 0 {
+		base.IgnoreChecks = over.IgnoreChecks
+	}
+	if over.FlakyRerun.Enabled || over.FlakyRerun.Max != 0 {
+		base.FlakyRerun = over.FlakyRerun
+	}
+	if len(over.FromUsers) > 0 {
+		base.FromUsers = over.FromUsers
+	}
+	if len(over.LabelsAny) > 0 {
+		base.LabelsAny = over.LabelsAny
+	}
+	if over.RequireLabel != "" {
+		base.RequireLabel = over.RequireLabel
+	}
+	if over.Method != "" {
+		base.Method = over.Method
+	}
+	if len(over.Gates) > 0 {
+		base.Gates = over.Gates
+	}
+	if len(over.Project) > 0 {
+		base.Project = over.Project
+	}
 	return base
 }
 
