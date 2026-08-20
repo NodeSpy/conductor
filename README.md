@@ -506,8 +506,11 @@ dry_run: false                        # build+log every action but never execute
 
 **github instance** — `app` (App id / key path / webhook secret / `verify_signature`), `webhook`
 (`smee_url` and/or `listen`+`path`), optional `sweep`, optional shared `defaults`, and the `rules`
-list. A rule's `match` takes repo globs (`owner/*`, `*/*`); `reviewer`/`assignee`/`actions`/`workspace`
-on the matched rule merge over `defaults`.
+list. A rule's `match.repos` takes **glob patterns** (Go `path.Match`): `owner/*`, `*/*`,
+`owner/svc-*`, `owner/[a-z]*`. Note `*` does **not** cross `/`, so a bare `*` won't match `owner/name`
+— use `owner/*` or `*/*`. `reviewer`/`assignee`/`actions`/`workspace` on the matched rule merge over
+`defaults`. (`sweep.repos` is the exception: it hits the REST list endpoint per repo, so those must
+be concrete `owner/name`, not globs.)
 
 **Actions** — keyed by kind. `type: agent` references an `agents:` profile + a `prompt` and runs a
 Paseo agent; `type: command` runs a subprocess (`command`, `env`, `workdir`, `backend`). Common
