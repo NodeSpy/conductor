@@ -301,31 +301,31 @@ integrations:
   # A LIST of typed instances. List `github` more than once for separate
   # Apps/orgs (each App has its own webhook secret).
   - type: github
-    name: ednition
+    name: github
     enabled: true
     # The App carries webhooks + ALL API reads/enrichment (its own rate pool).
     # Writes/posts use your gh token; commits/pushes go over SSH as you.
     app:
       app_id: 0
-      private_key_path: ~/.config/paseo-conductor/ednition-app.pem
-      webhook_secret: ${EDN_WEBHOOK_SECRET}
+      private_key_path: ~/.config/paseo-conductor/github-app.pem
+      webhook_secret: ${GH_WEBHOOK_SECRET}
       # smee re-serializes the body so HMAC often won't match — keep false with
       # smee; with a DIRECT `listen` receiver the raw body is intact, so set true.
       verify_signature: false
     webhook:
       # Use smee.io (no inbound port) and/or a direct HTTP listener — either or both.
-      smee_url: ${EDN_SMEE_URL}       # https://smee.io/<channel>
+      smee_url: ${GH_SMEE_URL}       # https://smee.io/<channel>
       # listen: 127.0.0.1:8787        # direct receiver (point the App webhook / your tunnel here)
       # path: /webhook                # default
     sweep:
       enabled: false                  # off by default; REST catch-up for missed events
       interval: 1h
-      repos: ["EdnitionCode/RosterStream"]
+      repos: ["your-org/your-repo"]
 
     # OPTIONAL shared defaults; every rule merges over these.
     defaults:
-      reviewer: { logins: [danielcbaldwin], teams: [] }   # who "review_requested" must name
-      assignee: { logins: [danielcbaldwin] }              # who "issue_assigned" must name
+      reviewer: { logins: [your-login], teams: [] }   # who "review_requested" must name
+      assignee: { logins: [your-login] }              # who "issue_assigned" must name
       actions:
         merge_conflict:                                   # your PR conflicts with base
           type: agent
@@ -420,10 +420,10 @@ integrations:
     # RULES: the primary structure. The FIRST rule whose `match` applies wins,
     # merged over `defaults`. `match` takes repo globs (`owner/*`, `*/*`).
     rules:
-      - match: { repos: ["EdnitionCode/*", "TapResearch/*"] }        # inherits defaults
-      - match: { repos: ["EdnitionCode/RosterStream"] }              # override one kind for one repo
+      - match: { repos: ["your-org/*"] }        # inherits defaults
+      - match: { repos: ["your-org/your-repo"] }              # override one kind for one repo
         actions:
-          failing_checks: { agent: fixer, prompt: "RosterStream checks failing — fix and push." }
+          failing_checks: { agent: fixer, prompt: "checks failing on {{.repo}}#{{.pr}} — fix and push." }
 
   # A schedule-driven integration: run commands/agents on a cron or interval.
   - type: cron

@@ -6,14 +6,14 @@ integrations:
   # A LIST of typed instances. List `github` more than once for separate
   # Apps/orgs (each App has its own webhook secret).
   - type: github
-    name: ednition
+    name: github
     enabled: true
     # The App carries webhooks + ALL API reads/enrichment (its own rate pool).
     # Writes/posts use your gh token; commits/pushes go over SSH as you.
     app:
       app_id: 0
-      private_key_path: ~/.config/paseo-conductor/ednition-app.pem
-      webhook_secret: ${EDN_WEBHOOK_SECRET}
+      private_key_path: ~/.config/paseo-conductor/github-app.pem
+      webhook_secret: ${GH_WEBHOOK_SECRET}
       # smee re-serializes the JSON body, so HMAC often won't match — leave this
       # false with smee. With a DIRECT `listen` receiver the raw body is intact,
       # so set it true there.
@@ -21,18 +21,18 @@ integrations:
     webhook:
       # Use smee.io (no inbound port) and/or a direct HTTP listener — set either
       # or both. A direct listener is ideal behind your own tunnel (e.g. pangolin).
-      smee_url: ${EDN_SMEE_URL}       # https://smee.io/<channel>
+      smee_url: ${GH_SMEE_URL}       # https://smee.io/<channel>
       # listen: 127.0.0.1:8787        # direct receiver; point the App webhook (or your tunnel) here
       # path: /webhook                # default
     sweep:
       enabled: false                  # off by default; catch-up only
       interval: 1h
-      repos: ["EdnitionCode/RosterStream"]
+      repos: ["your-org/your-repo"]
 
     # OPTIONAL shared defaults; every rule merges over these.
     defaults:
-      reviewer: { logins: [danielcbaldwin], teams: [] }
-      assignee: { logins: [danielcbaldwin] }
+      reviewer: { logins: [your-login], teams: [] }
+      assignee: { logins: [your-login] }
       actions:
         merge_conflict:
           type: agent
@@ -151,10 +151,10 @@ integrations:
     # RULES: primary structure. FIRST rule whose `match` applies wins; it merges
     # over `defaults`. `match` selects repos by glob (e.g. owner/*, */*).
     rules:
-      - match: { repos: ["EdnitionCode/*", "TapResearch/*"] }
-      - match: { repos: ["EdnitionCode/RosterStream"] }
+      - match: { repos: ["your-org/*"] }
+      - match: { repos: ["your-org/your-repo"] }
         actions:
-          failing_checks: { agent: fixer, prompt: "RosterStream checks failing — diagnose, fix, push." }
+          failing_checks: { agent: fixer, prompt: "checks failing on {{.repo}}#{{.pr}} — diagnose, fix, push." }
 
   # A schedule-driven integration: run commands or agents on a cron/interval.
   - type: cron
