@@ -217,22 +217,22 @@ Requires the local `paseo` CLI (authenticated to your daemon) and `gh` on PATH.
 
 ### Running as a service
 
-`scripts/install.sh` (and the one-liner) offer this for you; you can also run `scripts/service.sh`
-directly, or set it up by hand:
+The installer offers this; you can also manage it directly with the binary (it generates the right
+unit for your OS — a `systemd --user` unit on Linux, a `launchd` LaunchAgent on macOS):
 
-**Linux (systemd --user):**
 ```sh
-systemctl --user daemon-reload
-systemctl --user enable --now paseo-conductor
-loginctl enable-linger "$USER"                 # keep running across logout/reboot
-journalctl --user -u paseo-conductor -f
+paseo-conductor service install      # write the unit and start it (if the config validates)
+paseo-conductor service sync         # rewrite the unit if its template changed, and reload
+paseo-conductor service uninstall    # stop and remove it
 ```
 
-**macOS (launchd):**
-```sh
-launchctl load -w ~/Library/LaunchAgents/sh.paseo-conductor.plist
-tail -f ~/Library/Logs/paseo-conductor.log
-```
+Logs: `journalctl --user -u paseo-conductor -f` (Linux) / `tail -f ~/Library/Logs/paseo-conductor.log`
+(macOS). On Linux, `loginctl enable-linger "$USER"` keeps it running across logout/reboot (the
+installer does this).
+
+**Updates keep the unit current.** `paseo-conductor update` and the auto-updater regenerate the
+installed unit and reload it if a new release changed the template — so you don't have to
+reinstall the service after an upgrade. (They only touch a unit that's already installed.)
 
 Secrets live in `~/.config/paseo-conductor/conductor.env`; the daemon loads them itself at startup
 (so both systemd and launchd work without extra env wiring).

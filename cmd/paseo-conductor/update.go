@@ -40,6 +40,12 @@ func cmdUpdate(args []string) error {
 		return nil
 	}
 	fmt.Printf("updated %s → %s\n", version, tag)
+	// Refresh the service unit if the new release changed its template.
+	if changed, err := syncServiceUnit(true); err != nil {
+		logf("update: service unit sync failed: %v", err)
+	} else if changed {
+		fmt.Println("service unit updated and reloaded")
+	}
 	return nil
 }
 
@@ -122,6 +128,11 @@ func autoUpdateLoop(ctx context.Context, u config.Update) {
 				continue
 			}
 			logf("auto-update: installed %s (was %s)", tag, version)
+			// Refresh the unit file (no restart here — the re-exec below applies
+			// the new binary; daemon-reload just loads the new unit for later).
+			if _, err := syncServiceUnit(false); err != nil {
+				logf("auto-update: service unit sync failed: %v", err)
+			}
 			if u.ShouldApply() {
 				applySelf()
 			} else {
