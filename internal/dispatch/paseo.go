@@ -99,10 +99,13 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 func checkoutArgs(req Request) []string {
 	strat := req.Action.Checkout
 	if strat == "" {
-		if req.Trigger.Target.PR > 0 {
+		switch {
+		case req.Trigger.Target.PR > 0:
 			strat = "checkout-pr"
-		} else {
+		case req.Trigger.Target.Repo != "":
 			strat = "branch-off"
+		default:
+			strat = "none" // no repo/PR context (e.g. cron): run in the base workspace
 		}
 	}
 	switch strat {

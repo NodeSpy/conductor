@@ -120,6 +120,25 @@ integrations:
         actions:
           failing_checks: { agent: fixer, prompt: "RosterStream checks failing — diagnose, fix, push." }
 
+  # A schedule-driven integration: run commands or agents on a cron/interval.
+  - type: cron
+    name: chores
+    schedules:
+      - name: rate-limit-check
+        every: 6h                     # or `cron: "0 */6 * * *"` / "@every 6h"
+        action:
+          type: command
+          backend: local
+          command: ["gh", "api", "rate_limit"]
+      - name: weekly-digest
+        cron: "0 8 * * MON"           # standard 5-field cron (also supports @daily/@hourly)
+        run_on_start: false
+        action:
+          type: agent                 # agent actions with no repo run in the base workspace (checkout: none)
+          agent: fixer
+          checkout: none
+          prompt: "Summarize what paseo-conductor did this week from ~/.local/state/paseo-conductor/audit.jsonl."
+
 control:
   enabled: true
   pause_label: conductor:off          # (label-based pause is a follow-up; enabled/shadow work today)

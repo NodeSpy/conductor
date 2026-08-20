@@ -26,6 +26,24 @@ Plus: **`review_requested`** (M2) runs [critique](https://github.com/EdnitionCod
 where your review is requested; **`self_review`** (M2, opt-in) critiques your own PRs; and issue
 kinds **`issue_assigned` / `issue_ready` / `issue_project_moved`** (M3) start work on a fresh branch.
 
+## Scheduled jobs (cron integration)
+
+A second built-in integration, `cron`, runs actions on a schedule — the same `command`/`agent`
+actions the GitHub integration uses. Each schedule takes a `cron` spec (standard 5-field, or
+`@daily`/`@every 6h`) or an `every: <duration>`, plus an `action`:
+
+```yaml
+integrations:
+  - type: cron
+    name: chores
+    schedules:
+      - name: rate-limit-check
+        every: 6h
+        action: { type: command, backend: local, command: ["gh", "api", "rate_limit"] }
+```
+
+Agent actions with no repo context run in the base workspace (`checkout: none`).
+
 ## Identity & rate limits
 
 The rate-limit pain came from doing reads on your personal `gh` token. paseo-conductor separates
