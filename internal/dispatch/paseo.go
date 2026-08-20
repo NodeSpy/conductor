@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -412,11 +413,33 @@ func mainWorkTree(ctx context.Context, dir string) string {
 }
 
 // cloneRepo clones repo (owner/name) and registers it as a paseo workspace.
+// paseo clones into <dir>/<name>; --dir is required by the CLI, so it's passed
+// explicitly (a conductor-managed parent under $HOME) rather than relying on a
+// server-side default.
 func (d *Dispatcher) cloneRepo(ctx context.Context, repo string) error {
-	if out, err := exec.CommandContext(ctx, d.PaseoBin, "clone", repo, "--json").CombinedOutput(); err != nil {
+	dir, err := d.cloneParentDir()
+	if err != nil {
+		return fmt.Errorf("paseo clone %s: %w", repo, err)
+	}
+	if out, err := exec.CommandContext(ctx, d.PaseoBin, "clone", repo, "--dir", dir, "--json").CombinedOutput(); err != nil {
 		return fmt.Errorf("paseo clone %s: %w: %s", repo, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// cloneParentDir returns the parent directory conductor clones base checkouts
+// into, creating it if needed. Clones are grouped under ~/.paseo-conductor/checkouts
+// so they don't clutter $HOME; each repo lands in its own <name> subdir.
+func (d *Dispatcher) cloneParentDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir for clone: %w", err)
+	}
+	dir := filepath.Join(home, ".paseo-conductor", "checkouts")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create clone dir %s: %w", dir, err)
+	}
+	return dir, nil
 }
 
 // scratchWorkspaceTitle marks the single shared workspace reused by checkout:none
