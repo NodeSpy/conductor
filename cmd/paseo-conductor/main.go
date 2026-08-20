@@ -175,6 +175,11 @@ func cmdRun(args []string) error {
 		go r.Run(ctx)
 	}
 
+	// Periodic self-update.
+	if cfg.Update.Auto {
+		go autoUpdateLoop(ctx, cfg.Update)
+	}
+
 	// Start integrations.
 	for _, ig := range igs {
 		ig := ig

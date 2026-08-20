@@ -166,6 +166,11 @@ dispatch:
     local: {}
   identity: { read_token: app, write_token: gh_auth, commit_author: self }
 
+update:
+  auto: false                          # periodically self-update to the latest release
+  interval: 8h                         # check cadence (a few times a day)
+  apply: true                          # re-exec into the new binary after updating
+
 store:
   state_file: ~/.local/state/paseo-conductor/state.json
   audit_log: ~/.local/state/paseo-conductor/audit.jsonl

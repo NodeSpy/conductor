@@ -26,8 +26,19 @@ type Config struct {
 	Agents       map[string]AgentProfile `yaml:"agents"`
 	Dispatch     Dispatch                `yaml:"dispatch"`
 	Store        Store                   `yaml:"store"`
+	Update       Update                  `yaml:"update"`
 	DryRun       bool                    `yaml:"dry_run"`
 }
+
+// Update configures periodic self-update checks.
+type Update struct {
+	Auto     bool     `yaml:"auto"`     // check for and install new releases periodically
+	Interval Duration `yaml:"interval"` // how often to check (default 8h)
+	Apply    *bool    `yaml:"apply"`    // re-exec into the new binary after updating (default true)
+}
+
+// ShouldApply reports whether to re-exec after a successful update (default true).
+func (u Update) ShouldApply() bool { return u.Apply == nil || *u.Apply }
 
 // IntegrationRef is one entry in the `integrations:` list. It captures the
 // common header and retains the raw node so the concrete integration can decode
@@ -248,6 +259,9 @@ func (c *Config) applyDefaults() {
 	}
 	if len(c.Notify.On) == 0 {
 		c.Notify.On = []string{"escalate"}
+	}
+	if c.Update.Auto && c.Update.Interval == 0 {
+		c.Update.Interval = Duration(8 * time.Hour)
 	}
 }
 

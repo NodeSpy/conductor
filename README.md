@@ -74,6 +74,16 @@ paseo-conductor update            # self-update to the latest release (uses gh)
 paseo-conductor update --tag v0.2.0   # or pin a version; --force to reinstall
 ```
 
+Or let it update itself — enable `update.auto` in config and the running daemon checks a few times a
+day, installs any new release, and re-execs into it:
+
+```yaml
+update:
+  auto: true
+  interval: 8h        # default; check cadence
+  apply: true         # re-exec into the new binary after updating
+```
+
 ## Install from source
 
 ```sh

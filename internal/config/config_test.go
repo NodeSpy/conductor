@@ -76,6 +76,30 @@ func TestLoadAndExpand(t *testing.T) {
 	}
 }
 
+func TestUpdateDefaults(t *testing.T) {
+	c := &Config{}
+	c.Update.Auto = true
+	c.applyDefaults()
+	if c.Update.Interval.D() != 8*time.Hour {
+		t.Fatalf("auto-update interval default = %v, want 8h", c.Update.Interval.D())
+	}
+	if !c.Update.ShouldApply() {
+		t.Fatal("apply should default to true")
+	}
+	// Explicit apply:false is honored.
+	no := false
+	c.Update.Apply = &no
+	if c.Update.ShouldApply() {
+		t.Fatal("apply:false should be honored")
+	}
+	// No default interval when auto is off.
+	c2 := &Config{}
+	c2.applyDefaults()
+	if c2.Update.Interval != 0 {
+		t.Fatal("interval should stay 0 when auto is off")
+	}
+}
+
 func TestValidateRejectsNoIntegrations(t *testing.T) {
 	c := &Config{}
 	c.applyDefaults()
