@@ -144,10 +144,15 @@ func TestShadowPropagates(t *testing.T) {
 	cfg := baseCfg()
 	cfg.Control.Shadow = true
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
-	e, _ := newEng(t, cfg, d, n, nil)
+	e, st := newEng(t, cfg, d, n, nil)
 	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 5, "h", "s", config.Action{Type: "agent", Agent: "fixer"}))
 	if len(d.reqs) != 1 || !d.reqs[0].Shadow {
 		t.Fatalf("shadow not propagated: %+v", d.reqs)
+	}
+	// Shadow is a preview: it must NOT consume the dedup signature, so a later
+	// live run still acts.
+	if st.LastSignature("a/w#5", "merge_conflict") != "" {
+		t.Fatal("shadow should not record dedup")
 	}
 }
 

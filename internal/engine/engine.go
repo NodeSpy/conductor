@@ -193,9 +193,11 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// Multi-step workflow: record now (so it doesn't re-fire) and run the steps
 	// in their own goroutine so long agent steps don't block the engine loop.
 	if len(act.Steps) > 0 {
-		_ = e.store.Record(key, t.Kind, t.Dedup, head)
+		if !shadow { // shadow is a true preview: don't consume dedup
+			_ = e.store.Record(key, t.Kind, t.Dedup, head)
+		}
 		e.notif.Emit(ctx, notify.EventDispatch, t, "workflow")
-		e.log("engine: workflow %s %s (%d steps)", t.Kind, key, len(act.Steps))
+		e.log("engine: workflow %s %s (%d steps%s)", t.Kind, key, len(act.Steps), shadowNote(shadow))
 		go e.runSteps(ctx, t, act, appTok, userTok, shadow)
 		return
 	}
@@ -221,7 +223,9 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		e.log("engine: dispatched %s %s (backend=%s shadow=%v)", t.Kind, key, ref.Backend, ref.Shadowed)
 	}
 	e.store.Audit(entry)
-	_ = e.store.Record(key, t.Kind, t.Dedup, head)
+	if !shadow { // shadow is a true preview: don't consume dedup/attempts
+		_ = e.store.Record(key, t.Kind, t.Dedup, head)
+	}
 
 	if err == nil {
 		e.notif.Emit(ctx, notify.EventComplete, t, ref.Backend)
@@ -254,6 +258,13 @@ func toInt64(v any) int64 {
 		return int64(n)
 	}
 	return 0
+}
+
+func shadowNote(shadow bool) string {
+	if shadow {
+		return ", shadow"
+	}
+	return ""
 }
 
 func short(sha string) string {
