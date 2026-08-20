@@ -93,6 +93,77 @@ func TestReviewRequestedMatch(t *testing.T) {
 	}
 }
 
+func gatedReviewConfig() Config {
+	c := richConfig()
+	rr := c.Rules[0].Actions["review_requested"]
+	rr.Gates = map[string]any{"not_draft": true}
+	c.Rules[0].Actions["review_requested"] = rr
+	return c
+}
+
+func TestReviewRequestedDraftGate(t *testing.T) {
+	draft := `{"action":"review_requested","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"pull_request":{"number":6,"head":{"sha":"h"},"draft":true},"requested_reviewer":{"login":"me"}}`
+	ready := `{"action":"review_requested","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"pull_request":{"number":6,"head":{"sha":"h"},"draft":false},"requested_reviewer":{"login":"me"}}`
+
+	// Opt-in default: no gate → drafts still fire.
+	if k := do(t, newTestIntegration(t, richConfig()), "pull_request", draft); len(k) != 1 || k[0] != "review_requested" {
+		t.Fatalf("without gate, draft should fire, got %v", k)
+	}
+	// not_draft gate on → drafts skipped, ready still fires.
+	g := newTestIntegration(t, gatedReviewConfig())
+	if k := do(t, g, "pull_request", draft); len(k) != 0 {
+		t.Fatalf("not_draft gate should skip draft, got %v", k)
+	}
+	if k := do(t, g, "pull_request", ready); len(k) != 1 || k[0] != "review_requested" {
+		t.Fatalf("non-draft should fire even with gate, got %v", k)
+	}
+}
+
+func TestReadyForReviewFiresPendingReview(t *testing.T) {
+	// A review requested while draft (skipped by the gate) fires when marked ready.
+	g := newTestIntegration(t, gatedReviewConfig())
+	body := `{"action":"ready_for_review","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"pull_request":{"number":6,"head":{"sha":"h"},"draft":false,"user":{"login":"teammate"},
+		"requested_reviewers":[{"login":"me"}]}}`
+	found := false
+	for _, k := range do(t, g, "pull_request", body) {
+		if k == "review_requested" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ready_for_review should fire review_requested for a pending reviewer")
+	}
+}
+
+func TestGateEnabledOptIn(t *testing.T) {
+	if gateEnabled(nil, "not_draft") {
+		t.Fatal("absent gate must be off (opt-in)")
+	}
+	if !gateEnabled(map[string]any{"not_draft": true}, "not_draft") {
+		t.Fatal("true gate must be on")
+	}
+	if gateEnabled(map[string]any{"not_draft": false}, "not_draft") {
+		t.Fatal("false gate must be off")
+	}
+	if !gateEnabled(map[string]any{"not_draft": "yes"}, "not_draft") {
+		t.Fatal("string yes must be on")
+	}
+	// draftGated only blocks when the gate is set AND the PR is a draft.
+	g := newTestIntegration(t, gatedReviewConfig())
+	if !g.draftGated("acme/w", "review_requested", true) {
+		t.Fatal("gated + draft should block")
+	}
+	if g.draftGated("acme/w", "review_requested", false) {
+		t.Fatal("non-draft should not block")
+	}
+	if newTestIntegration(t, richConfig()).draftGated("acme/w", "review_requested", true) {
+		t.Fatal("no gate should not block even a draft")
+	}
+}
+
 func TestPullRequestClosedEmitsKindClosed(t *testing.T) {
 	g := newTestIntegration(t, richConfig())
 	body := `{"action":"closed","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},

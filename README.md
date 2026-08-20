@@ -357,6 +357,7 @@ integrations:
           type: command
           backend: local
           # reviewer defaults to `me`; set it here to broaden (e.g. a team)
+          gates: { not_draft: true }                      # opt-in: skip while draft, fire when ready
           command: ["critique", "--review", "{{.repo}}#{{.pr}}", "--post"]
           env:
             CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"       # reads on the App pool
@@ -527,7 +528,11 @@ segment is required there; `*/*` isn't supported).
 Paseo agent; `type: command` runs a subprocess (`command`, `env`, `workdir`, `backend`). Common
 options: `enabled`, `checkout` (`checkout-pr`|`branch-off`|`none`), `shadow`, `workdir`, plus
 kind-specific ones (`max_attempts_per_head`, `flaky_rerun`, `from_users`, `labels_any`,
-`require_label`, `method`, `gates`, `project`). Templates (`{{.repo}}`, `{{.pr}}`, `{{.base}}`,
+`require_label`, `method`, `gates`, `project`). `gates` are conditions that must hold before the
+action fires: `merge_ready`'s gates (`merge_state`, `review_decision`, `non_author_approval`,
+`threads_resolved`, `not_draft`) default **on**; `review_requested` supports an **opt-in**
+`not_draft` gate (`gates: { not_draft: true }`) to skip drafts until they're marked ready.
+Templates (`{{.repo}}`, `{{.pr}}`, `{{.base}}`,
 `{{.head}}`, `{{.author}}`, `{{.app_token}}`, `{{.gh_token}}`, …) are filled per event.
 
 **cron instance** — a `schedules` list; each has a `name`, a `cron` spec or `every` interval,

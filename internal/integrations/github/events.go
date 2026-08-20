@@ -89,6 +89,12 @@ type prPayload struct {
 	User struct {
 		Login string `json:"login"`
 	} `json:"user"`
+	RequestedReviewers []struct {
+		Login string `json:"login"`
+	} `json:"requested_reviewers"`
+	RequestedTeams []struct {
+		Slug string `json:"slug"`
+	} `json:"requested_teams"`
 }
 
 type checkPayload struct {
@@ -250,6 +256,9 @@ func (g *Integration) pullRequestTriggers(ctx context.Context, repo string, p gh
 		if !g.reviewerMatches(repo, p) {
 			return nil
 		}
+		if g.draftGated(repo, "review_requested", pr.Draft) {
+			return nil // opt-in not_draft guard: wait until it's marked ready
+		}
 		t := g.prTarget(repo, pr)
 		return g.single(repo, "review_requested", t,
 			fmt.Sprintf("review requested on %s#%d", repo, pr.Number),
@@ -258,6 +267,10 @@ func (g *Integration) pullRequestTriggers(ctx context.Context, repo string, p gh
 		trs := g.mergeStateTriggers(ctx, repo, p, pr)
 		trs = append(trs, g.selfReviewTriggers(repo, pr)...)
 		trs = append(trs, g.mergeReadyTriggers(ctx, repo, pr.Number, p)...)
+		if p.Action == "ready_for_review" {
+			// A review requested while draft (and skipped by not_draft) fires now.
+			trs = append(trs, g.readyReviewTriggers(repo, pr)...)
+		}
 		return trs
 	}
 	return nil
@@ -507,6 +520,81 @@ func (g *Integration) assigneeMatches(repo, login string) bool {
 		return g.self[strings.ToLower(login)] // unset → default to "you"
 	}
 	return asg.HasLogin(login)
+}
+
+// draftGated reports whether the action for kind has an opt-in `not_draft` guard
+// that should suppress this trigger because the PR is still a draft. Unlike the
+// merge_ready gates (which default on), this guard is off unless configured.
+func (g *Integration) draftGated(repo, kind string, isDraft bool) bool {
+	if !isDraft {
+		return false
+	}
+	r, ok := g.resolve(repo)
+	if !ok {
+		return false
+	}
+	return gateEnabled(r.Actions[kind].Gates, "not_draft")
+}
+
+// reviewerInList reports whether the configured reviewer (defaulting to the `me`
+// identity when unset) is among the given requested-reviewer logins / team slugs.
+func (g *Integration) reviewerInList(rev config.Actors, logins, teamSlugs []string) bool {
+	byDefault := len(rev.Logins) == 0 && len(rev.Teams) == 0
+	for _, l := range logins {
+		if byDefault {
+			if g.self[strings.ToLower(l)] {
+				return true
+			}
+		} else if rev.HasLogin(l) {
+			return true
+		}
+	}
+	for _, s := range teamSlugs {
+		for _, want := range rev.Teams {
+			if strings.EqualFold(want, s) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// readyReviewTriggers fires review_requested when a PR is marked ready-for-review
+// and your review is still pending. This is what makes the opt-in not_draft guard
+// coherent: a review requested while the PR was a draft is skipped, then picked up
+// promptly here once it's ready (rather than only on the next sweep).
+func (g *Integration) readyReviewTriggers(repo string, pr *prPayload) []core.Trigger {
+	r, ok := g.resolve(repo)
+	if !ok {
+		return nil
+	}
+	rev := actorsOr(r.Actions["review_requested"].Reviewer, r.Reviewer)
+	logins := make([]string, 0, len(pr.RequestedReviewers))
+	for _, rr := range pr.RequestedReviewers {
+		logins = append(logins, rr.Login)
+	}
+	slugs := make([]string, 0, len(pr.RequestedTeams))
+	for _, tm := range pr.RequestedTeams {
+		slugs = append(slugs, tm.Slug)
+	}
+	if !g.reviewerInList(rev, logins, slugs) {
+		return nil
+	}
+	t := g.prTarget(repo, pr)
+	return g.single(repo, "review_requested", t,
+		fmt.Sprintf("ready for review on %s#%d", repo, pr.Number), "reviewreq@"+pr.Head.SHA, nil)
+}
+
+// gateEnabled reads an opt-in boolean gate (absent → false, i.e. not enforced).
+func gateEnabled(gates map[string]any, key string) bool {
+	switch x := gates[key].(type) {
+	case bool:
+		return x
+	case string:
+		return x != "" && x != "false" && x != "no"
+	default:
+		return false
+	}
 }
 
 // actorsOr returns a if it has any logins/teams, else the fallback.

@@ -73,6 +73,8 @@ integrations:
           backend: local
           # reviewer defaults to `me`; set it here only to broaden (e.g. a team):
           #   reviewer: { logins: [teammate], teams: [platform] }
+          gates: { not_draft: true }   # opt-in guard: ignore while the PR is a draft;
+                                       #   fires once it's marked ready-for-review
           command: ["critique", "--review", "{{.repo}}#{{.pr}}", "--post"]
           env:
             CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"   # reads on App pool

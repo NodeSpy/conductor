@@ -135,6 +135,9 @@ func (g *Integration) sweepReviewRequested(repo string, pr prListItem) []core.Tr
 	if !g.prReviewerMatches(rev, pr) {
 		return nil
 	}
+	if g.draftGated(repo, "review_requested", pr.Draft) {
+		return nil // opt-in not_draft guard: skip drafts in the sweep too
+	}
 	t := g.target(repo, pr.Number, pr.Head.SHA, pr.Base.Ref, pr.HTMLURL)
 	return g.single(repo, "review_requested", t,
 		fmt.Sprintf("sweep: review requested on %s#%d", repo, pr.Number),
@@ -144,22 +147,13 @@ func (g *Integration) sweepReviewRequested(repo string, pr prListItem) []core.Tr
 // prReviewerMatches reports whether the configured reviewer (defaulting to the
 // `me` identity when unset) is among the PR's pending requested reviewers/teams.
 func (g *Integration) prReviewerMatches(rev config.Actors, pr prListItem) bool {
-	byDefault := len(rev.Logins) == 0 && len(rev.Teams) == 0
+	logins := make([]string, 0, len(pr.RequestedReviewers))
 	for _, rr := range pr.RequestedReviewers {
-		if byDefault {
-			if g.self[strings.ToLower(rr.Login)] {
-				return true
-			}
-		} else if rev.HasLogin(rr.Login) {
-			return true
-		}
+		logins = append(logins, rr.Login)
 	}
+	slugs := make([]string, 0, len(pr.RequestedTeams))
 	for _, tm := range pr.RequestedTeams {
-		for _, want := range rev.Teams {
-			if strings.EqualFold(want, tm.Slug) {
-				return true
-			}
-		}
+		slugs = append(slugs, tm.Slug)
 	}
-	return false
+	return g.reviewerInList(rev, logins, slugs)
 }
