@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"path"
 	"strings"
@@ -44,8 +45,9 @@ func (g *Integration) sweepLoop(ctx context.Context, emit core.EmitFunc) {
 // sweep reconciles the configured repos. Entries may be concrete (`owner/name`)
 // or an owner glob (`owner/*`, `owner/svc-*`), which is expanded to the repos
 // the App installation can access. It emits `review_requested` for PRs where
-// your review is pending (recovering missed review-request webhooks) and
-// re-checks merge state (conflict/behind) for PRs you authored.
+// your review is pending, and for PRs you authored re-checks merge state
+// (conflict/behind) and outstanding review-comment threads (changes_requested) —
+// recovering feedback that no live webhook picked up.
 func (g *Integration) sweep(ctx context.Context, emit core.EmitFunc) error {
 	for _, entry := range g.cfg.Sweep.Repos {
 		owner, _ := splitRepo(entry)
@@ -117,10 +119,41 @@ func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID 
 			trs = g.single(repo, "pr_behind", t, "sweep: behind base",
 				"behind:"+info.Base.Ref+"/"+info.Head.SHA, nil)
 		}
+		trs = append(trs, g.sweepUnresolvedComments(ctx, instID, owner, name, repo, t)...)
 		for _, tr := range trs {
 			emit(ctx, tr)
 		}
 	}
+}
+
+// sweepUnresolvedComments reconciles outstanding review-comment threads on your
+// PR — recovering feedback no live webhook picked up — by emitting changes_requested
+// for the fixer to address. The dedup signature includes the set of unresolved
+// thread ids, so it re-fires when new threads appear and stops once they're
+// resolved (acted per state). Only runs when changes_requested is configured, to
+// avoid the extra GraphQL call otherwise.
+func (g *Integration) sweepUnresolvedComments(ctx context.Context, instID int64, owner, name, repo string, t core.Target) []core.Trigger {
+	act, ok := g.actionFor(repo, "changes_requested")
+	if !ok || !act.IsEnabled() {
+		return nil
+	}
+	ids, err := g.rest.unresolvedThreadIDs(ctx, instID, owner, name, t.Number)
+	if err != nil || len(ids) == 0 {
+		return nil
+	}
+	sig := "threads:" + t.HeadSHA + ":" + threadSig(ids)
+	return g.single(repo, "changes_requested", t,
+		fmt.Sprintf("sweep: %d unresolved comment thread(s) on %s#%d", len(ids), repo, t.Number), sig, nil)
+}
+
+// threadSig is a compact, stable signature for a set of unresolved thread ids.
+func threadSig(ids []string) string {
+	h := fnv.New64a()
+	for _, id := range ids { // ids arrive sorted
+		_, _ = h.Write([]byte(id))
+		_, _ = h.Write([]byte{0})
+	}
+	return fmt.Sprintf("%d:%x", len(ids), h.Sum64())
 }
 
 // sweepReviewRequested emits a review_requested trigger when your review is a

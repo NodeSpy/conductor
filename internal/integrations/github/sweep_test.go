@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +92,56 @@ func TestSweepReviewRequested(t *testing.T) {
 	// Dedup must match the webhook path so a request already handled live isn't re-fired.
 	if got[0].Dedup != "reviewreq@h7" {
 		t.Fatalf("dedup mismatch, got %q", got[0].Dedup)
+	}
+}
+
+func TestSweepUnresolvedComments(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/77/access_tokens", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"token":"t","expires_at":%q}`, time.Now().Add(time.Hour).Format(time.RFC3339))
+	})
+	mux.HandleFunc("/repos/acme/widget/installation", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"id":77}`)
+	})
+	mux.HandleFunc("/repos/acme/widget/pulls", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `[{"number":9,"user":{"login":"me"},"head":{"sha":"h9","ref":"feat"},"base":{"ref":"main"},"html_url":"u"}]`)
+	})
+	mux.HandleFunc("/repos/acme/widget/pulls/9", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"mergeable_state":"clean","head":{"sha":"h9"},"base":{"ref":"main"},"html_url":"u"}`)
+	})
+	mux.HandleFunc("/graphql", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
+			{"id":"t1","isResolved":false},{"id":"t2","isResolved":true},{"id":"t3","isResolved":false}]}}}}}`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	key, _ := rsa.GenerateKey(rand.Reader, 1024)
+
+	cfg := Config{
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		Sweep:   SweepConfig{Enabled: true, Repos: []string{"acme/widget"}},
+		Rules: []Rule{{
+			Match:   Match{Repos: []string{"acme/widget"}},
+			Me:      config.Actors{Logins: []string{"me"}},
+			Actions: map[string]config.Action{"changes_requested": {Type: "agent", Agent: "fixer"}},
+		}},
+	}
+	g := newTestIntegration(t, cfg)
+	g.app = &appAuth{appID: 1, key: key, httpc: http.DefaultClient, apiBase: srv.URL, now: time.Now, cache: map[int64]cachedToken{}}
+	g.rest = newRESTClient(g.app)
+
+	var got []core.Trigger
+	if err := g.sweep(context.Background(), func(_ context.Context, tr core.Trigger) { got = append(got, tr) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Kind != "changes_requested" || got[0].Target.Number != 9 {
+		t.Fatalf("want one changes_requested on #9 for unresolved threads, got %+v", got)
+	}
+	// Signature carries the head + 2 unresolved threads, so it re-fires on change
+	// and stops once resolved.
+	if !strings.HasPrefix(got[0].Dedup, "threads:h9:2:") {
+		t.Fatalf("unexpected dedup signature: %q", got[0].Dedup)
 	}
 }
 

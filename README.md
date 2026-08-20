@@ -320,8 +320,8 @@ integrations:
       # path: /webhook                # default
     sweep:
       enabled: false                  # off by default; REST catch-up for missed events. Runs once on
-      interval: 1h                     #   start, then every interval. Recovers pending review_requested
-      repos: ["your-org/your-repo"]    #   (your review requested) + conflict/behind on PRs you authored.
+      interval: 1h                     #   start, then every interval. Recovers: pending review_requested,
+      repos: ["your-org/your-repo"]    #   and on your PRs conflict/behind + unresolved review comments.
 
     # OPTIONAL shared defaults; every rule merges over these.
     defaults:

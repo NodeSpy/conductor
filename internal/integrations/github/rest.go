@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 )
 
@@ -206,6 +207,39 @@ type mergeGate struct {
 	ThreadsResolved  bool
 	NonAuthorApprove bool
 	Labels           []string
+}
+
+// unresolvedThreadIDs returns the node ids of the PR's unresolved review threads
+// (on App creds), sorted. Used by the sweep to reconcile outstanding review
+// comments that no live webhook recovered.
+func (c *restClient) unresolvedThreadIDs(ctx context.Context, instID int64, owner, name string, number int) ([]string, error) {
+	const q = `query($o:String!,$n:String!,$num:Int!){
+	  repository(owner:$o,name:$n){ pullRequest(number:$num){
+	    reviewThreads(first:100){nodes{id isResolved}}
+	  }}}`
+	var data struct {
+		Repository struct {
+			PullRequest struct {
+				ReviewThreads struct {
+					Nodes []struct {
+						ID         string `json:"id"`
+						IsResolved bool   `json:"isResolved"`
+					} `json:"nodes"`
+				} `json:"reviewThreads"`
+			} `json:"pullRequest"`
+		} `json:"repository"`
+	}
+	if err := c.graphql(ctx, instID, q, map[string]any{"o": owner, "n": name, "num": number}, &data); err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, t := range data.Repository.PullRequest.ReviewThreads.Nodes {
+		if !t.IsResolved {
+			ids = append(ids, t.ID)
+		}
+	}
+	sort.Strings(ids)
+	return ids, nil
 }
 
 // prGate fetches the merge-readiness gate for a PR.
