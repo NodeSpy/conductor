@@ -120,6 +120,7 @@ func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID 
 		// review_requested applies to *others'* PRs where your review is pending;
 		// the list payload already carries requested reviewers (no extra fetch).
 		for _, tr := range g.sweepReviewRequested(repo, pr, st) {
+			tr.CatchUp = true
 			emit(ctx, tr)
 		}
 
@@ -146,6 +147,7 @@ func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID 
 		st.comments += len(ct)
 		trs = append(trs, ct...)
 		for _, tr := range trs {
+			tr.CatchUp = true
 			emit(ctx, tr)
 		}
 	}

@@ -37,6 +37,11 @@ type Trigger struct {
 	Dedup    string            // dedup signature; empty => always act
 	Labels   map[string]string // extra labels to attach to dispatched work
 	Action   any               // integration-resolved action (engine asserts to config.Action)
+	// CatchUp marks a trigger emitted by the periodic sweep (re-derived state)
+	// rather than a fresh webhook event. When an agent is already working the PR,
+	// catch-up triggers are skipped (don't re-nudge) while fresh events are queued
+	// to that agent.
+	CatchUp bool
 }
 
 // Key returns the stable per-object key used by the dedup store.

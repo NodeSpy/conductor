@@ -41,6 +41,7 @@ type Request struct {
 	Workspace string         // base workspace id/path to worktree from (optional)
 	Shadow    bool           // skip the terminal side effect, just log what would run
 	Wait      bool           // run foreground and capture output (for workflow steps)
+	CatchUp   bool           // sweep re-derivation (skip if an agent is already on the PR)
 	Data      map[string]any // extra template vars (e.g. prior step outputs)
 }
 
@@ -51,6 +52,8 @@ type RunRef struct {
 	Argv     []string `json:"argv"`
 	AgentID  string   `json:"agent_id,omitempty"`
 	Shadowed bool     `json:"shadowed,omitempty"`
+	Skipped  bool     `json:"skipped,omitempty"` // no work dispatched (e.g. catch-up while an agent is on the PR)
+	Queued   bool     `json:"queued,omitempty"`  // handed to an agent already on the PR (no new agent spawned)
 	Output   string   `json:"-"`
 }
 

@@ -135,11 +135,24 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		return ref, nil
 	}
 
-	// Running-agent guard (background autopilot only): skip if an agent for this
-	// PR+kind is already active. Workflow steps run to completion in order.
+	// One worker per PR (background autopilot only): if an agent is already working
+	// this PR, hand the new work to it (`paseo send`) so it drains a burst of
+	// feedback instead of spawning a duplicate. A sweep re-derivation (CatchUp) is
+	// skipped — the live agent is already on it; don't re-nudge. Workflow steps
+	// (Wait) run in order and aren't queued.
 	if !req.Wait {
-		if active, _ := d.agentActive(ctx, req.Trigger); active {
-			ref.Output = "skipped: agent already running for this pr+kind"
+		if id := d.liveAgentForPR(ctx, req.Trigger.Key()); id != "" {
+			if req.CatchUp {
+				ref.Skipped = true
+				ref.Output = "skipped: agent " + id + " already working this PR"
+				return ref, nil
+			}
+			if err := d.sendToAgent(ctx, id, prompt); err != nil {
+				return ref, fmt.Errorf("queue to agent %s: %w", id, err)
+			}
+			ref.AgentID = id
+			ref.Queued = true
+			ref.Output = "queued to live agent " + id
 			return ref, nil
 		}
 	}
@@ -507,29 +520,6 @@ func branchSlug(t core.Trigger) string {
 	return strings.ReplaceAll(s, " ", "-")
 }
 
-// agentActive reports whether a conductor agent for this PR+kind is running.
-func (d *Dispatcher) agentActive(ctx context.Context, t core.Trigger) (bool, error) {
-	out, err := exec.CommandContext(ctx, d.PaseoBin, "ls", "--json",
-		"--label", "conductor=1", "--label", "pr="+t.Key(), "--label", "kind="+t.Kind).Output()
-	if err != nil {
-		return false, err
-	}
-	var agents []struct {
-		Status string `json:"status"`
-	}
-	if err := json.Unmarshal(out, &agents); err != nil {
-		return false, nil
-	}
-	for _, a := range agents {
-		switch strings.ToLower(a.Status) {
-		case "idle", "archived", "completed", "done", "":
-		default:
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // HasLiveAgent reports whether any non-archived conductor agent exists for this
 // PR+kind — running OR idle-but-open (e.g. an interactive review agent parked for
 // you). `paseo ls` excludes archived agents, so any match means one is still in
@@ -545,6 +535,43 @@ func (d *Dispatcher) HasLiveAgent(ctx context.Context, prKey, kind string) bool 
 		return false
 	}
 	return len(agents) > 0
+}
+
+// liveAgentForPR returns the id of a non-archived conductor agent already working
+// this PR (any kind), or "" if none — the "one worker per PR" target for queuing
+// new feedback via `paseo send`.
+func (d *Dispatcher) liveAgentForPR(ctx context.Context, prKey string) string {
+	out, err := exec.CommandContext(ctx, d.PaseoBin, "ls", "--json",
+		"--label", "conductor=1", "--label", "pr="+prKey).Output()
+	if err != nil {
+		return ""
+	}
+	var agents []struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(out, &agents) != nil {
+		return ""
+	}
+	for _, a := range agents {
+		if a.ID != "" {
+			return a.ID
+		}
+	}
+	return ""
+}
+
+// sendToAgent queues a follow-up task to an existing agent.
+func (d *Dispatcher) sendToAgent(ctx context.Context, id, prompt string) error {
+	cmd := exec.CommandContext(ctx, d.PaseoBin, "send", id, prompt)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if s := strings.TrimSpace(stderr.String()); s != "" {
+			return fmt.Errorf("%w: %s", err, truncate(s, 300))
+		}
+		return err
+	}
+	return nil
 }
 
 // parseAgentID best-effort extracts an agent id from `paseo run --json` output.

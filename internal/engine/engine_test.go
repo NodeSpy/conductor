@@ -137,16 +137,20 @@ func TestAttemptCapEscalates(t *testing.T) {
 	}
 }
 
+func TestReviewWorkflowSkippedWhenAgentParked(t *testing.T) {
+	// The review workflow shouldn't re-run while its interactive agent is parked.
+	dLive := &fakeDispatcher{liveAgent: true}
+	e, _ := newEng(t, baseCfg(), dLive, &fakeNotifier{}, nil)
+	wf := config.Action{Steps: []config.Action{{ID: "assess", Type: "agent", Agent: "fixer", Prompt: "x"}}}
+	e.process(context.Background(), agentTrigger("review_requested", "a/w", 10, "h", "reviewreq@h", wf))
+	time.Sleep(30 * time.Millisecond) // the workflow would spawn async; assert it didn't
+	if len(dLive.reqs) != 0 {
+		t.Fatalf("review workflow must not run while an agent is parked, got %d", len(dLive.reqs))
+	}
+}
+
 func TestReviewRequestedLivenessGate(t *testing.T) {
 	act := config.Action{Type: "command", Command: []string{"critique"}}
-
-	// A review agent is already parked/working for this PR → don't spawn another.
-	dLive := &fakeDispatcher{liveAgent: true}
-	eLive, _ := newEng(t, baseCfg(), dLive, &fakeNotifier{}, nil)
-	eLive.process(context.Background(), agentTrigger("review_requested", "a/w", 10, "h", "reviewreq@h", act))
-	if len(dLive.reqs) != 0 {
-		t.Fatalf("live review agent should suppress re-dispatch, got %d", len(dLive.reqs))
-	}
 
 	// No live agent → dispatch, and (unlike other kinds) it must NOT record a
 	// permanent dedup, so a still-pending review keeps coming back until done.
@@ -250,12 +254,18 @@ func TestLiveGatedKindNotAbandonedOnDispatch(t *testing.T) {
 		t.Fatalf("should retry (work not abandoned), got %d dispatches", len(d.reqs))
 	}
 
-	// While an agent is already working it, skip (no duplicate).
-	dLive := &fakeDispatcher{liveAgent: true}
-	e2, _ := newEng(t, baseCfg(), dLive, &fakeNotifier{}, nil)
-	e2.process(context.Background(), agentTrigger("changes_requested", "a/w", 51, "h", "threads:h:2:abc", act))
-	if len(dLive.reqs) != 0 {
-		t.Fatal("should skip while an agent is working it")
+	// A catch-up whose PR already has a working agent: the dispatcher reports
+	// Skipped, and the engine must NOT count it as an attempt (toward the cap).
+	dSkip := &fakeDispatcher{ref: dispatch.RunRef{Skipped: true, Output: "skipped: agent on PR"}}
+	e2, st2 := newEng(t, baseCfg(), dSkip, &fakeNotifier{}, nil)
+	ctr := agentTrigger("changes_requested", "a/w", 51, "h", "threads:h:2:abc", act)
+	ctr.CatchUp = true
+	e2.process(context.Background(), ctr)
+	if st2.Attempts("a/w#51", "changes_requested", "h") != 0 {
+		t.Fatal("a skipped catch-up must not count as an attempt")
+	}
+	if dSkip.reqs[0].CatchUp != true {
+		t.Fatal("CatchUp should propagate to the dispatch request")
 	}
 }
 

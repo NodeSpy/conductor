@@ -191,9 +191,12 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// dedup flag, so a still-pending review keeps coming back until you do it.
 	liveGate := livenessGated(t.Kind)
 	if liveGate {
-		if e.disp.HasLiveAgent(ctx, key, t.Kind) {
+		// A review workflow shouldn't re-run while its agent is parked for you.
+		// Single-action fixers instead fall through to dispatch, which queues new
+		// work to the agent already on this PR (or spawns one) — see paseo.go.
+		if len(act.Steps) > 0 && e.disp.HasLiveAgent(ctx, key, t.Kind) {
 			e.log("engine: %s %s skipped — an agent is already working/parked for it", t.Kind, key)
-			return // already in progress / parked for you
+			return
 		}
 		// A live-gated kind never records "done" on dispatch — the sweep re-derives
 		// reality (still dirty? threads still unresolved? review still pending?) each
@@ -264,7 +267,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	req := dispatch.Request{
 		Trigger: t, Action: act, Profile: profile,
 		Tokens: dispatch.Tokens{App: appTok, User: userTok},
-		Author: e.author, Shadow: shadow,
+		Author: e.author, Shadow: shadow, CatchUp: t.CatchUp,
 	}
 
 	// Coding agents are heavy and contend on a shared repo. Acquire a slot first
@@ -281,6 +284,17 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	e.notif.Emit(ctx, notify.EventDispatch, t, act.Type)
 	ref, err := e.disp.Dispatch(ctx, req)
 	e.auditDispatch(t, ref, err)
+	gated := act.Type == "agent" && !shadow
+
+	// A catch-up whose PR already has a working agent did nothing — don't record it
+	// (it isn't an attempt) and free the slot.
+	if ref.Skipped {
+		e.log("engine: %s %s — %s", t.Kind, key, ref.Output)
+		if gated {
+			e.release()
+		}
+		return
+	}
 	if !shadow {
 		switch {
 		case liveGate:
@@ -296,9 +310,17 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 	}
 
-	gated := act.Type == "agent" && !shadow
 	if err != nil {
 		e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("dispatch failed: %v", err))
+		if gated {
+			e.release()
+		}
+		return
+	}
+	if ref.Queued {
+		// Work was handed to an agent already on the PR — no new agent, no slot to
+		// hold; it'll drain the queue on its own.
+		e.log("engine: %s %s queued to agent %s", t.Kind, key, ref.AgentID)
 		if gated {
 			e.release()
 		}

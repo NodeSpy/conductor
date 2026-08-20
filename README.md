@@ -622,6 +622,10 @@ paseo-conductor version
   outputs) to `runs.json`, so if the conductor restarts or crashes mid-flight it resumes on startup —
   completed steps are not re-run; the one step that was in progress re-runs (at-least-once). The App
   token is re-minted on resume (never persisted).
+- **One worker per PR (queue, don't drop)**: when feedback arrives for a PR that already has a live
+  conductor agent — a burst of comments, or a change-request landing mid-fix — the new work is handed
+  to that agent (`paseo send`) so it drains the queue, instead of spawning a duplicate or dropping it.
+  Sweep re-derivations skip while an agent is live (no re-nudging); only fresh webhook events queue.
 - **Won't cull an agent that needs you**: an `archive_when_done` agent that pauses to ask you
   something isn't reaped — the reaper skips agents blocked on a permission, and an agent can keep
   itself alive by creating a `.paseo-hold` marker in its worktree (guidance for this is added to its
