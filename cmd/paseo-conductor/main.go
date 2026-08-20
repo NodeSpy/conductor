@@ -95,6 +95,10 @@ func configPath(args []string) (string, []string) {
 
 func loadConfig(args []string) (*config.Config, []string, error) {
 	path, rest := configPath(args)
+	// Load secrets from the sibling conductor.env so ${...} refs resolve for
+	// every subcommand (validate/replay/sweep/run) — matching how the daemon
+	// loads them at runtime, without needing to export anything by hand.
+	loadEnvFile(filepath.Join(filepath.Dir(path), "conductor.env"))
 	cfg, err := config.Load(path)
 	return cfg, rest, err
 }
@@ -135,12 +139,8 @@ func cmdValidate(args []string) error {
 }
 
 func cmdRun(args []string) error {
-	// Load secrets from conductor.env (sibling of the config) into the
-	// environment before config expansion. This lets launchd — which has no
-	// EnvironmentFile — pick up secrets the same way systemd does.
-	cfgPath, _ := configPath(args)
-	loadEnvFile(filepath.Join(filepath.Dir(cfgPath), "conductor.env"))
-
+	// loadConfig loads the sibling conductor.env first, so ${...} refs resolve
+	// (this is also how launchd — which has no EnvironmentFile — gets secrets).
 	cfg, _, err := loadConfig(args)
 	if err != nil {
 		return err
