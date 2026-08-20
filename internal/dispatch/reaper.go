@@ -3,7 +3,9 @@ package dispatch
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -67,7 +69,7 @@ func (r *Reaper) reap(ctx context.Context) {
 	// workspaces are archivable — never a shared/base checkout.
 	worktrees := r.worktreeWorkspaces(ctx)
 	for _, a := range idle {
-		if wksID := worktrees[a.cwd]; wksID != "" {
+		if wksID := worktrees[normCwd(a.cwd)]; wksID != "" {
 			if err := exec.CommandContext(ctx, r.PaseoBin, "workspace", "archive", wksID).Run(); err == nil && r.Log != nil {
 				r.Log("reaper: archived idle agent %s + worktree %s", a.id, wksID)
 			}
@@ -105,8 +107,25 @@ func parseWorktreeWorkspaces(data []byte) map[string]string {
 	m := map[string]string{}
 	for _, w := range wl {
 		if w.Isolation == "worktree" && w.Cwd != "" && w.WorkspaceID != "" {
-			m[w.Cwd] = w.WorkspaceID
+			m[normCwd(w.Cwd)] = w.WorkspaceID
 		}
 	}
 	return m
+}
+
+// normCwd canonicalizes a workspace/agent path so they compare equal regardless
+// of source: `paseo ls` reports agent cwd as `~/…` while `paseo workspace ls`
+// reports it absolute. Expand a leading `~` to $HOME, then clean.
+func normCwd(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			if p == "~" {
+				p = home
+			} else {
+				p = filepath.Join(home, p[2:])
+			}
+		}
+	}
+	return filepath.Clean(p)
 }

@@ -2,6 +2,9 @@ package dispatch
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -222,6 +225,20 @@ func TestParseWorktreeWorkspaces(t *testing.T) {
 	}
 	if len(m) != 1 {
 		t.Errorf("only the valid worktree should be kept: %v", m)
+	}
+}
+
+func TestNormCwdMatchesTildeAndAbsolute(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	// `paseo workspace ls` gives absolute; `paseo ls` gives `~/…`. They must match.
+	abs := filepath.Join(home, ".paseo/worktrees/x/branch")
+	data := []byte(`[{"workspaceId":"wks_wt","isolation":"worktree","cwd":` + strconv.Quote(abs) + `}]`)
+	m := parseWorktreeWorkspaces(data)
+	if m[normCwd("~/.paseo/worktrees/x/branch")] != "wks_wt" {
+		t.Fatalf("tilde agent cwd must map to the absolute workspace: %v", m)
 	}
 }
 
