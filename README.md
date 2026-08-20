@@ -34,8 +34,7 @@ Details and other install paths are under [Install](#install-released-binary-one
 
 ## What it does (GitHub)
 
-Every kind below is a configurable `action` (see [Configuration](#configuration)). *(opt-in)* kinds
-are disabled by default.
+Every kind below is a configurable `action` (see [Configuration](#configuration)).
 
 **Your authored PRs**
 
@@ -46,14 +45,12 @@ are disabled by default.
 | `failing_checks` | CI fails | flake-rerun once, then agent: fix + push |
 | `changes_requested` | a review requests changes | agent: address + push |
 | `new_comment` | a comment / bugbot review | agent: act + reply |
-| `merge_ready` *(opt-in)* | fully green + approved + threads resolved | `gh pr merge` |
 
 **Reviews**
 
 | Kind | Trigger | Action |
 | --- | --- | --- |
 | `review_requested` | your review is requested on a PR | run [critique](https://github.com/EdnitionCode/critique), post as you |
-| `self_review` *(opt-in)* | you open/update your own PR | critique your own PR (draft or post) |
 
 **Issues**
 
@@ -61,15 +58,17 @@ are disabled by default.
 | --- | --- | --- |
 | `issue_assigned` | an issue is assigned to you | agent: start work on a fresh branch |
 | `issue_ready` | an issue gets a "Ready" label | agent: start work on a fresh branch |
-| `issue_project_moved` *(opt-in)* | a Projects v2 status → "Ready" | agent: start work on a fresh branch |
 
 Plus scheduled jobs via the [cron integration](#scheduled-jobs-cron-integration).
+
+**Not yet implemented** (planned; the config keys are reserved but no trigger fires them):
+`self_review`, `merge_ready` (auto-merge), and `issue_project_moved` (GitHub Projects v2).
 
 ## Reacting to issues
 
 Issue triggers are configured like any other kind — under a github rule's `actions`. Assignee
 matching uses the rule's `assignee: { logins: [...] }`, and the App must subscribe to the `issues`
-event (and `projects_v2_item` for the opt-in project trigger).
+event.
 
 ```yaml
 integrations:
@@ -95,13 +94,6 @@ integrations:
           checkout: branch-off
           labels_any: ["Ready"]
           prompt: "Issue {{.repo}}#{{.issue}} is Ready — start work on a fresh branch."
-        issue_project_moved:               # opt-in: a Projects v2 Status field → "Ready"
-          type: agent
-          agent: fixer
-          enabled: false                   # one GraphQL node lookup per event
-          checkout: branch-off
-          project: { field: Status, to: Ready }
-          prompt: "Issue moved to Ready in the project — start work."
     rules:
       - match: { repos: ["octocat/*"] }
 agents:
@@ -173,7 +165,7 @@ Agent actions with no repo context run in the base workspace (`checkout: none`).
 The rate-limit pain came from doing reads on your personal `gh` token. paseo-conductor separates
 duties:
 
-- **Reads/enrichment** (PR state, checks, Projects v2) use the **GitHub App installation token** —
+- **Reads/enrichment** (PR state, checks) use the **GitHub App installation token** —
   its own generous rate pool. The API is used freely (REST or GraphQL).
 - **API writes/posts** (review replies, critique's submitted review) use **your `gh` token**, so
   they're authored **as you**, never a bot.
@@ -266,10 +258,8 @@ Secrets live in `~/.config/paseo-conductor/conductor.env`; the daemon loads them
    - **Webhook secret** — generate a random string (e.g. `openssl rand -hex 32`) and put it in
      `conductor.env` as `GH_WEBHOOK_SECRET`.
 2. **Permissions:** Contents (RW), Pull requests (RW), Issues (RW), Checks (R), Metadata (R).
-   For auto-merge add Administration/merge as needed; for the Projects trigger add Projects (R).
 3. **Subscribe to events:** pull_request, pull_request_review, pull_request_review_comment,
-   issue_comment, check_run, check_suite, workflow_run, push, issues. Add
-   `pull_request_review_thread` for M4 auto-merge and `projects_v2_item` for the M3 project trigger.
+   issue_comment, check_run, check_suite, workflow_run, push, issues.
 4. **Generate a private key** and save it at the `private_key_path` in your config.
 5. **Install the App** on the repos/orgs you want covered.
 6. Put the App id, key path, and webhook secret in `config.yaml` / `conductor.env`.
@@ -354,26 +344,19 @@ integrations:
           agent: fixer
           from_users: []                                  # empty = any; e.g. ["coderabbitai[bot]"]
           prompt: "New comment by {{.author}} on {{.repo}}#{{.pr}}: {{.comment_body}} — act if needed."
-        review_requested:                                 # M2: your review requested on someone's PR
+        review_requested:                                 # your review requested on someone's PR
           type: command
           backend: local
           command: ["critique", "--review", "{{.repo}}#{{.pr}}", "--post"]
           env:
             CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"       # reads on the App pool
             CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}"        # submits the review as YOU
-        self_review:                                      # M2: critique your own PRs (opt-in)
-          type: command
-          backend: local
-          enabled: false
-          checkout: none
-          command: ["critique", "--review", "{{.repo}}#{{.pr}}"]
-          env: { CRITIQUE_GITHUB_TOKEN: "{{.app_token}}", CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}" }
-        issue_assigned:                                   # M3: issue assigned to you
+        issue_assigned:                                   # issue assigned to you
           type: agent
           agent: fixer
           checkout: branch-off                            # start work on a fresh branch (no PR yet)
           prompt: "Issue {{.repo}}#{{.issue}} assigned to you — start work; open a draft PR."
-        issue_ready:                                      # M3: issue labeled "Ready"
+        issue_ready:                                      # issue labeled "Ready"
           # A MULTI-STEP workflow: plan cheaply, then branch on the result.
           labels_any: ["Ready"]                           # gate: only "Ready"-labeled issues
           steps:
@@ -400,34 +383,14 @@ integrations:
               backend: local
               command: ["gh", "issue", "comment", "{{.repo}}#{{.issue}}", "--body", "Please add repro steps and scope."]
               env: { GH_TOKEN: "{{.gh_token}}" }
-        issue_project_moved:                              # M3: Projects v2 status change (opt-in)
-          type: agent
-          agent: fixer
-          enabled: false                                  # costs one GraphQL node lookup per event
-          checkout: branch-off
-          project: { field: Status, to: Ready }
-          prompt: "Issue moved to Ready in the project — start work."
-        merge_ready:                                      # M4: auto-merge when fully green (opt-in)
-          type: command
-          backend: local
-          enabled: false
-          require_label: automerge                        # PR must carry this label to opt in
-          method: squash                                  # squash | merge | rebase
-          gates: { merge_state: clean, review_decision: approved, non_author_approval: true,
-                   threads_resolved: true, not_draft: true }
-          command: ["gh", "pr", "merge", "{{.repo}}#{{.pr}}", "--squash"]
-          env: { GH_TOKEN: "{{.gh_token}}" }
 
     # RULES: the primary structure. The FIRST rule whose `match` applies wins,
-    # merged over `defaults`. `match` may combine repo globs and/or Project(v2).
+    # merged over `defaults`. `match` takes repo globs (Project v2 matching is planned).
     rules:
       - match: { repos: ["EdnitionCode/*", "TapResearch/*"] }        # inherits defaults
       - match: { repos: ["EdnitionCode/RosterStream"] }              # override one kind for one repo
         actions:
           failing_checks: { agent: fixer, prompt: "RosterStream checks failing — fix and push." }
-      # - match: { project: "Roadmap", status: Ready }               # match by Project(v2) too
-      #   assignee: { logins: [danielcbaldwin] }
-      #   actions: { issue_ready: { agent: fixer } }
 
   # A schedule-driven integration: run commands/agents on a cron or interval.
   - type: cron
@@ -510,8 +473,8 @@ dry_run: false                        # build+log every action but never execute
 
 **github instance** — `app` (App id / key path / webhook secret / `verify_signature`), `webhook`
 (`smee_url` and/or `listen`+`path`), optional `sweep`, optional shared `defaults`, and the `rules`
-list. A rule's `match` takes repo globs (`owner/*`, `*/*`) and/or Project(v2) `project`+`status`;
-`reviewer`/`assignee`/`actions`/`workspace` on the matched rule merge over `defaults`.
+list. A rule's `match` takes repo globs (`owner/*`, `*/*`); `reviewer`/`assignee`/`actions`/`workspace`
+on the matched rule merge over `defaults`.
 
 **Actions** — keyed by kind. `type: agent` references an `agents:` profile + a `prompt` and runs a
 Paseo agent; `type: command` runs a subprocess (`command`, `env`, `workdir`, `backend`). Common
@@ -542,7 +505,8 @@ paseo-conductor version
   (`control.shadow: true`) runs everything but skips the final push/merge/post.
 - **Loop-safety**: per-`(pr,kind,head)` attempt caps; on the cap it **escalates** (notifies you)
   instead of looping. A running-agent guard avoids double-dispatch.
-- **Auto-merge is opt-in** (`merge_ready`, disabled by default, label-gated).
+- **Nothing acts on an invalid config**: `validate` gates the service start, and disabled
+  integrations/actions never fire.
 
 ## License
 

@@ -66,7 +66,7 @@ integrations:
           prompt: |
             New comment on {{.repo}}#{{.pr}} by {{.author}}: {{.comment_body}}
             If actionable, make the change, commit, push, and reply.
-        # --- M2: critique auto-review (others' PRs where you're requested) ---
+        # critique auto-review (others' PRs where your review is requested)
         review_requested:
           type: command
           backend: local
@@ -74,17 +74,7 @@ integrations:
           env:
             CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"   # reads on App pool
             CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}"    # submits review as YOU
-        # --- M2: self-review your own PRs (opt-in) ---
-        self_review:
-          type: command
-          backend: local
-          enabled: false
-          checkout: none
-          command: ["critique", "--review", "{{.repo}}#{{.pr}}"]
-          env:
-            CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"
-            CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}"
-        # --- M3: issues ---
+        # issues
         issue_assigned:
           type: agent
           agent: fixer
@@ -129,23 +119,6 @@ integrations:
               command: ["gh", "issue", "comment", "{{.repo}}#{{.issue}}", "--body",
                         "Thanks for the issue! Could you add repro steps, expected behavior, and scope so it can be picked up?"]
               env: { GH_TOKEN: "{{.gh_token}}" }
-        issue_project_moved:
-          type: agent
-          agent: fixer
-          enabled: false              # opt-in; costs one GraphQL node lookup per event
-          checkout: branch-off
-          project: { field: Status, to: Ready }
-          prompt: "Issue moved to Ready in the project. Start work on a fresh branch."
-        # --- M4: auto-merge (opt-in, higher-stakes) ---
-        merge_ready:
-          type: command
-          backend: local
-          enabled: false
-          require_label: automerge
-          method: squash
-          gates: { merge_state: clean, review_decision: approved, non_author_approval: true, threads_resolved: true, not_draft: true }
-          command: ["gh", "pr", "merge", "{{.repo}}#{{.pr}}", "--squash"]
-          env: { GH_TOKEN: "{{.gh_token}}" }
 
     # RULES: primary structure. FIRST rule whose `match` applies wins; it merges
     # over `defaults`. `match` may combine repo globs and/or Project(v2) criteria.
