@@ -16,8 +16,7 @@ the binary in `~/.local/bin`, seeds a starter config, and **asks whether to inst
 service** (systemd on Linux, launchd on macOS):
 
 ```sh
-gh api repos/NodeSpy/paseo-conductor/contents/scripts/install-release.sh \
-  -H "Accept: application/vnd.github.raw" | bash
+curl -fsSL https://gist.githubusercontent.com/danielcbaldwin/3504ed91ac1014b3f073f44916e443a7/raw/install-release.sh | bash
 ```
 
 Then:
@@ -82,11 +81,10 @@ The repo is private, so the installer uses the authenticated `gh` CLI to fetch t
 for your OS/arch (mac amd64/arm64, linux amd64/arm64/386):
 
 ```sh
-gh api repos/NodeSpy/paseo-conductor/contents/scripts/install-release.sh \
-  -H "Accept: application/vnd.github.raw" | bash
+curl -fsSL https://gist.githubusercontent.com/danielcbaldwin/3504ed91ac1014b3f073f44916e443a7/raw/install-release.sh | bash
 ```
 
-Pin a version with `... | bash -s v0.2.0`. Installs to `~/.local/bin/paseo-conductor`, seeds a
+Pin a version with `... | bash -s -- v0.2.1`. Installs to `~/.local/bin/paseo-conductor`, seeds a
 starter config, and then **asks whether to install it as a background service** — a `systemd --user`
 unit on Linux or a `launchd` LaunchAgent on macOS. Answer no to skip (set
 `PASEO_CONDUCTOR_INSTALL_SERVICE=yes|no` to answer non-interactively).

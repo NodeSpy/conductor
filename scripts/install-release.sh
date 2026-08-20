@@ -2,11 +2,12 @@
 # Install a released paseo-conductor binary for this OS/arch.
 #
 # The repo is private, so this uses the authenticated `gh` CLI to fetch release
-# assets. One-liner:
-#   gh api repos/NodeSpy/paseo-conductor/contents/scripts/install-release.sh \
-#     -H "Accept: application/vnd.github.raw" | bash
+# assets. This script is mirrored to a public gist so it can be curl'd:
 #
-# Optional: pass a tag to pin a version, e.g. `... | bash -s v0.2.0`.
+#   curl -fsSL https://gist.githubusercontent.com/danielcbaldwin/3504ed91ac1014b3f073f44916e443a7/raw/install-release.sh | bash
+#
+# Optional: pin a version, e.g. `... | bash -s -- v0.2.1`.
+# NOTE: after editing this file, re-publish the gist: scripts/publish-installer-gist.sh
 set -euo pipefail
 
 REPO="${PASEO_CONDUCTOR_REPO:-NodeSpy/paseo-conductor}"
