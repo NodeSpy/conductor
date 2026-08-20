@@ -32,7 +32,10 @@ Details and other install paths are under [Install](#install-released-binary-one
 
 ## What it does (GitHub)
 
-On **your authored PRs**, it autonomously reacts to:
+Every kind below is a configurable `action` (see [Configuration](#configuration)). *(opt-in)* kinds
+are disabled by default.
+
+**Your authored PRs**
 
 | Kind | Trigger | Action |
 | --- | --- | --- |
@@ -40,12 +43,25 @@ On **your authored PRs**, it autonomously reacts to:
 | `pr_behind` | PR is behind base | `gh pr update-branch` |
 | `failing_checks` | CI fails | flake-rerun once, then agent: fix + push |
 | `changes_requested` | a review requests changes | agent: address + push |
-| `new_comment` | a comment/bugbot review | agent: act + reply |
-| `merge_ready` *(opt-in, M4)* | fully green + approved + threads resolved | `gh pr merge` |
+| `new_comment` | a comment / bugbot review | agent: act + reply |
+| `merge_ready` *(opt-in)* | fully green + approved + threads resolved | `gh pr merge` |
 
-Plus: **`review_requested`** (M2) runs [critique](https://github.com/EdnitionCode/critique) on PRs
-where your review is requested; **`self_review`** (M2, opt-in) critiques your own PRs; and issue
-kinds **`issue_assigned` / `issue_ready` / `issue_project_moved`** (M3) start work on a fresh branch.
+**Reviews**
+
+| Kind | Trigger | Action |
+| --- | --- | --- |
+| `review_requested` | your review is requested on a PR | run [critique](https://github.com/EdnitionCode/critique), post as you |
+| `self_review` *(opt-in)* | you open/update your own PR | critique your own PR (draft or post) |
+
+**Issues**
+
+| Kind | Trigger | Action |
+| --- | --- | --- |
+| `issue_assigned` | an issue is assigned to you | agent: start work on a fresh branch |
+| `issue_ready` | an issue gets a "Ready" label | agent: start work on a fresh branch |
+| `issue_project_moved` *(opt-in)* | a Projects v2 status → "Ready" | agent: start work on a fresh branch |
+
+Plus scheduled jobs via the [cron integration](#scheduled-jobs-cron-integration).
 
 ## Scheduled jobs (cron integration)
 
