@@ -308,17 +308,18 @@ func (c *restClient) prGate(ctx context.Context, instID int64, owner, name strin
 
 // projectItem is a Projects v2 item resolved to its issue + a field value.
 type projectItem struct {
-	Repo   string // owner/name
-	Number int
-	Title  string
-	Value  string // the named single-select field's current option name
+	Repo      string // owner/name
+	Number    int
+	Title     string
+	Value     string   // the named single-select field's current option name
+	Assignees []string // issue assignee logins (for the assignee gate)
 }
 
 // projectItem resolves a projects_v2_item node to its issue content and the
 // current value of a single-select field (e.g. "Status").
 func (c *restClient) projectItem(ctx context.Context, instID int64, itemNodeID, field string) (*projectItem, error) {
 	const q = `query($id:ID!,$field:String!){ node(id:$id){ ... on ProjectV2Item {
-	  content{ ... on Issue { number title repository{nameWithOwner} } }
+	  content{ ... on Issue { number title repository{nameWithOwner} assignees(first:20){nodes{login}} } }
 	  fieldValueByName(name:$field){ ... on ProjectV2ItemFieldSingleSelectValue { name } }
 	}}}`
 	var data struct {
@@ -329,6 +330,11 @@ func (c *restClient) projectItem(ctx context.Context, instID int64, itemNodeID, 
 				Repository struct {
 					NameWithOwner string `json:"nameWithOwner"`
 				} `json:"repository"`
+				Assignees struct {
+					Nodes []struct {
+						Login string `json:"login"`
+					} `json:"nodes"`
+				} `json:"assignees"`
 			} `json:"content"`
 			FieldValueByName struct {
 				Name string `json:"name"`
@@ -342,8 +348,12 @@ func (c *restClient) projectItem(ctx context.Context, instID int64, itemNodeID, 
 	if n.Content.Repository.NameWithOwner == "" || n.Content.Number == 0 {
 		return nil, fmt.Errorf("project item has no issue content")
 	}
+	assignees := make([]string, 0, len(n.Content.Assignees.Nodes))
+	for _, a := range n.Content.Assignees.Nodes {
+		assignees = append(assignees, a.Login)
+	}
 	return &projectItem{Repo: n.Content.Repository.NameWithOwner, Number: n.Content.Number,
-		Title: n.Content.Title, Value: n.FieldValueByName.Name}, nil
+		Title: n.Content.Title, Value: n.FieldValueByName.Name, Assignees: assignees}, nil
 }
 
 // rateLimitWait derives a backoff from Retry-After / X-RateLimit-Reset.

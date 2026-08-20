@@ -124,6 +124,7 @@ func projectConfig() Config {
 		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
 		Rules: []Rule{{
 			Match: Match{Repos: []string{"acme/*"}},
+			Me:    config.Actors{Logins: []string{"me"}}, // only start work on issues assigned to you
 			Actions: map[string]config.Action{
 				"issue_project_moved": {Type: "agent", Agent: "fixer", Checkout: "branch-off",
 					Project: map[string]any{"field": "Status", "to": "Ready"}},
@@ -133,7 +134,7 @@ func projectConfig() Config {
 }
 
 func TestIssueProjectMoved(t *testing.T) {
-	ready := `{"data":{"node":{"content":{"number":42,"title":"Do it","repository":{"nameWithOwner":"acme/w"}},"fieldValueByName":{"name":"Ready"}}}}`
+	ready := `{"data":{"node":{"content":{"number":42,"title":"Do it","repository":{"nameWithOwner":"acme/w"},"assignees":{"nodes":[{"login":"me"}]}},"fieldValueByName":{"name":"Ready"}}}}`
 	g := newTestIntegration(t, projectConfig())
 	g.app = graphqlStub(t, ready)
 	g.rest = newRESTClient(g.app)
@@ -144,6 +145,20 @@ func TestIssueProjectMoved(t *testing.T) {
 	trs := g.triggersFor(context.Background(), "projects_v2_item", []byte(body))
 	if len(trs) != 1 || trs[0].Kind != "issue_project_moved" || trs[0].Target.Issue != 42 {
 		t.Fatalf("expected issue_project_moved for #42, got %+v", trs)
+	}
+}
+
+func TestIssueProjectMovedNotMine(t *testing.T) {
+	// Moved to Ready but assigned to someone else → no trigger (assignee gate).
+	ready := `{"data":{"node":{"content":{"number":42,"title":"Do it","repository":{"nameWithOwner":"acme/w"},"assignees":{"nodes":[{"login":"teammate"}]}},"fieldValueByName":{"name":"Ready"}}}}`
+	g := newTestIntegration(t, projectConfig())
+	g.app = graphqlStub(t, ready)
+	g.rest = newRESTClient(g.app)
+	body := `{"action":"edited","installation":{"id":42},
+		"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"projects_v2_item":{"node_id":"PVTI_x","content_type":"Issue"}}`
+	if trs := g.triggersFor(context.Background(), "projects_v2_item", []byte(body)); len(trs) != 0 {
+		t.Fatalf("Ready on a teammate's issue should not trigger, got %+v", trs)
 	}
 }
 

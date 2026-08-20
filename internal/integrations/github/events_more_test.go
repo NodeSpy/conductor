@@ -244,14 +244,20 @@ func TestPullRequestClosedEmitsKindClosed(t *testing.T) {
 func TestIssueReadyLabelFilter(t *testing.T) {
 	g := newTestIntegration(t, richConfig())
 	ready := `{"action":"labeled","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
-		"issue":{"number":10},"label":{"name":"Ready"}}`
+		"issue":{"number":10,"assignees":[{"login":"me"}]},"label":{"name":"Ready"}}`
 	if k := do(t, g, "issues", ready); len(k) != 1 || k[0] != "issue_ready" {
 		t.Fatalf("want issue_ready, got %v", k)
 	}
 	other := `{"action":"labeled","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
-		"issue":{"number":10},"label":{"name":"wontfix"}}`
+		"issue":{"number":10,"assignees":[{"login":"me"}]},"label":{"name":"wontfix"}}`
 	if k := do(t, g, "issues", other); len(k) != 0 {
 		t.Fatalf("non-Ready label should not trigger, got %v", k)
+	}
+	// Ready label but assigned to someone else → no trigger (assignee gate).
+	notMine := `{"action":"labeled","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"issue":{"number":10,"assignees":[{"login":"teammate"}]},"label":{"name":"Ready"}}`
+	if k := do(t, g, "issues", notMine); len(k) != 0 {
+		t.Fatalf("Ready label on a teammate's issue should not trigger, got %v", k)
 	}
 }
 

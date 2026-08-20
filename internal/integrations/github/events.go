@@ -39,6 +39,9 @@ type ghPayload struct {
 		User        struct {
 			Login string `json:"login"`
 		} `json:"user"` // the PR/issue author
+		Assignees []struct {
+			Login string `json:"login"`
+		} `json:"assignees"` // issue assignees (for issue_ready's assignee gate)
 	} `json:"issue"`
 	Review *struct {
 		State string `json:"state"`
@@ -437,6 +440,9 @@ func (g *Integration) projectTriggers(ctx context.Context, p ghPayload) []core.T
 	if !strings.EqualFold(value, want) {
 		return nil
 	}
+	if !g.assignedToSelf(repo, item.Assignees) {
+		return nil // only start work on issues assigned to you
+	}
 	t := g.target(repo, item.Number, "", "", "")
 	t.PR = 0
 	t.Issue = item.Number
@@ -493,6 +499,13 @@ func (g *Integration) issueTriggers(repo string, p ghPayload) []core.Trigger {
 		act, ok := g.actionFor(repo, "issue_ready")
 		if !ok || !containsFold(act.LabelsAny, p.Label.Name) {
 			return nil
+		}
+		logins := make([]string, 0, len(p.Issue.Assignees))
+		for _, a := range p.Issue.Assignees {
+			logins = append(logins, a.Login)
+		}
+		if !g.assignedToSelf(repo, logins) {
+			return nil // only start work on issues assigned to you
 		}
 		return g.single(repo, "issue_ready", t,
 			fmt.Sprintf("issue %s#%d labeled %s", repo, p.Issue.Number, p.Label.Name),
@@ -577,6 +590,18 @@ func (g *Integration) reviewerMatches(repo string, p ghPayload) bool {
 			if strings.EqualFold(tm, p.RequestedTeam.Slug) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// assignedToSelf reports whether any of the issue's assignee logins matches the
+// configured assignee (defaulting to the `me` identity). Gates issue_ready and
+// issue_project_moved so we only start work on issues assigned to you.
+func (g *Integration) assignedToSelf(repo string, logins []string) bool {
+	for _, l := range logins {
+		if g.assigneeMatches(repo, l) {
+			return true
 		}
 	}
 	return false

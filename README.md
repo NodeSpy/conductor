@@ -59,8 +59,8 @@ Every kind below is a configurable `action` (see [Configuration](#configuration)
 | Kind | Trigger | Action |
 | --- | --- | --- |
 | `issue_assigned` | an issue is assigned to you | agent: start work on a fresh branch |
-| `issue_ready` | an issue gets a "Ready" label | agent: start work on a fresh branch |
-| `issue_project_moved` | a Projects v2 status field → "Ready" | agent: start work on a fresh branch |
+| `issue_ready` | an issue **assigned to you** gets a "Ready" label | agent: start work on a fresh branch |
+| `issue_project_moved` | an issue **assigned to you** moves to a Projects v2 status → "Ready" | agent: start work on a fresh branch |
 
 Plus scheduled jobs via the [cron integration](#scheduled-jobs-cron-integration). Each kind is a
 configurable action — enable, disable, and tune it per repo in [config](#configuration).
@@ -89,7 +89,7 @@ integrations:
           agent: fixer
           checkout: branch-off             # start on a fresh branch (no PR yet)
           prompt: "Issue {{.repo}}#{{.issue}} was assigned to you — implement it and open a draft PR."
-        issue_ready:                       # an issue gets a "Ready" label
+        issue_ready:                       # an issue assigned to you gets a "Ready" label
           type: agent
           agent: fixer
           checkout: branch-off
