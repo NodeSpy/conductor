@@ -36,6 +36,9 @@ type ghPayload struct {
 		Title       string      `json:"title"`
 		HTMLURL     string      `json:"html_url"`
 		PullRequest interface{} `json:"pull_request"` // non-nil => the issue is a PR
+		User        struct {
+			Login string `json:"login"`
+		} `json:"user"` // the PR/issue author
 	} `json:"issue"`
 	Review *struct {
 		State string `json:"state"`
@@ -162,7 +165,7 @@ func (g *Integration) reviewTriggers(ctx context.Context, repo string, p ghPaylo
 		return nil
 	}
 	var trs []core.Trigger
-	if p.Review.State == "changes_requested" {
+	if p.Review.State == "changes_requested" && g.ownPR(p.PullRequest.User.Login) {
 		t := g.prTarget(repo, p.PullRequest)
 		trs = append(trs, g.single(repo, "changes_requested", t,
 			fmt.Sprintf("changes requested on %s#%d", repo, p.PullRequest.Number),
@@ -173,21 +176,50 @@ func (g *Integration) reviewTriggers(ctx context.Context, repo string, p ghPaylo
 	return trs
 }
 
+// ownPR reports whether login is one of the `me` identities (case-insensitive).
+// Autopilot kinds (new_comment, changes_requested, failing_checks, merge_conflict,
+// pr_behind) push fixes to the PR branch, so they must only fire on PRs you authored.
+func (g *Integration) ownPR(login string) bool {
+	if login == "" {
+		return false
+	}
+	return g.self[strings.ToLower(login)]
+}
+
+// checkOwnPR resolves the PR author for a check event (whose payload omits it) via a
+// single REST read on App creds, and reports whether you authored it. Fails closed:
+// if the author can't be determined, don't act.
+func (g *Integration) checkOwnPR(ctx context.Context, p ghPayload, num int) bool {
+	if g.rest == nil || p.Installation.ID == 0 {
+		return false
+	}
+	info, err := g.rest.pull(ctx, p.Installation.ID, p.Repository.Owner.Login, p.Repository.Name, num)
+	if err != nil {
+		return false
+	}
+	return g.ownPR(info.User.Login)
+}
+
 func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []core.Trigger {
 	if p.Action != "created" || p.Comment == nil {
 		return nil
 	}
 	var num int
-	var head, base, url string
+	var head, base, url, prAuthor string
 	switch {
 	case p.PullRequest != nil:
 		num = p.PullRequest.Number
 		head, base, url = p.PullRequest.Head.SHA, p.PullRequest.Base.Ref, p.PullRequest.HTMLURL
+		prAuthor = p.PullRequest.User.Login
 	case eventType == "issue_comment" && p.Issue != nil && p.Issue.PullRequest != nil:
 		num = p.Issue.Number
 		url = p.Issue.HTMLURL
+		prAuthor = p.Issue.User.Login
 	default:
 		return nil // comment on a plain issue, not a PR
+	}
+	if !g.ownPR(prAuthor) {
+		return nil // new_comment autopilot is for PRs you authored (we push fixes)
 	}
 	author := strings.ToLower(p.Comment.User.Login)
 	if g.self[author] {
@@ -238,7 +270,7 @@ func (g *Integration) checkTriggers(ctx context.Context, repo string, p ghPayloa
 	}
 	num := c.PullRequests[0].Number
 	var trs []core.Trigger
-	if failureConclusions[c.Conclusion] {
+	if failureConclusions[c.Conclusion] && g.checkOwnPR(ctx, p, num) {
 		t := g.target(repo, num, c.HeadSHA, "", "")
 		extra := map[string]any{"failing_check": c.Name, "run_id": c.ID}
 		trs = append(trs, g.single(repo, "failing_checks", t,
@@ -311,6 +343,9 @@ func (g *Integration) mergeReadyTriggers(ctx context.Context, repo string, numbe
 	gate, err := g.rest.prGate(ctx, p.Installation.ID, owner, name, number)
 	if err != nil {
 		return nil
+	}
+	if !g.ownPR(gate.Author) {
+		return nil // auto-merge only merges PRs you authored
 	}
 	if act.RequireLabel != "" && !containsFold(gate.Labels, act.RequireLabel) {
 		return nil
@@ -418,6 +453,9 @@ func (g *Integration) mergeStateTriggers(ctx context.Context, repo string, p ghP
 	info, err := g.rest.pull(ctx, p.Installation.ID, p.Repository.Owner.Login, p.Repository.Name, pr.Number)
 	if err != nil {
 		return nil
+	}
+	if !g.ownPR(info.User.Login) {
+		return nil // conflict/behind autopilot is for PRs you authored
 	}
 	t := g.target(repo, pr.Number, info.Head.SHA, info.Base.Ref, info.HTMLURL)
 	switch info.MergeableState {

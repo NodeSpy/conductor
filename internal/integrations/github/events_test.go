@@ -42,7 +42,7 @@ func TestChangesRequested(t *testing.T) {
 	body := []byte(`{
 		"action":"submitted",
 		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
-		"pull_request":{"number":7,"head":{"sha":"abc123"},"base":{"ref":"main"}},
+		"pull_request":{"number":7,"head":{"sha":"abc123"},"base":{"ref":"main"},"user":{"login":"me"}},
 		"review":{"state":"changes_requested","id":99,"user":{"login":"reviewer"}}
 	}`)
 	trs := g.triggersFor(context.Background(), "pull_request_review", body)
@@ -65,7 +65,7 @@ func TestProjectMapStampsTarget(t *testing.T) {
 	body := []byte(`{
 		"action":"submitted",
 		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
-		"pull_request":{"number":7,"head":{"sha":"abc123"},"base":{"ref":"main"}},
+		"pull_request":{"number":7,"head":{"sha":"abc123"},"base":{"ref":"main"},"user":{"login":"me"}},
 		"review":{"state":"changes_requested","id":99,"user":{"login":"reviewer"}}
 	}`)
 	trs := g.triggersFor(context.Background(), "pull_request_review", body)
@@ -153,7 +153,7 @@ func TestNewCommentIgnoresSelf(t *testing.T) {
 	self := []byte(`{
 		"action":"created",
 		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
-		"issue":{"number":3,"pull_request":{}},
+		"issue":{"number":3,"pull_request":{},"user":{"login":"me"}},
 		"comment":{"id":11,"user":{"login":"me"},"body":"hi"}
 	}`)
 	if trs := g.triggersFor(context.Background(), "issue_comment", self); len(trs) != 0 {
@@ -163,7 +163,7 @@ func TestNewCommentIgnoresSelf(t *testing.T) {
 	other := []byte(`{
 		"action":"created",
 		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
-		"issue":{"number":3,"pull_request":{}},
+		"issue":{"number":3,"pull_request":{},"user":{"login":"me"}},
 		"comment":{"id":12,"user":{"login":"bot"},"body":"please fix"}
 	}`)
 	trs := g.triggersFor(context.Background(), "issue_comment", other)

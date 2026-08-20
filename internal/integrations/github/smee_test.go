@@ -40,7 +40,7 @@ func smeeData(t *testing.T, event, sig string, body string) string {
 
 func changesRequestedBody() string {
 	return `{"action":"submitted","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},` +
-		`"pull_request":{"number":6,"head":{"sha":"h"}},"review":{"state":"changes_requested","id":1,"user":{"login":"r"}}}`
+		`"pull_request":{"number":6,"head":{"sha":"h"},"user":{"login":"me"}},"review":{"state":"changes_requested","id":1,"user":{"login":"r"}}}`
 }
 
 func TestHandleSmeeData(t *testing.T) {

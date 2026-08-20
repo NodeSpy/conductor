@@ -22,9 +22,11 @@ func identityConfig(me, reviewer []string) Config {
 	}
 }
 
+// comment models a comment by `login` on a PR you authored (issue.user = "me"), so
+// the me-authored gate on new_comment passes and only the commenter identity varies.
 func comment(login string) string {
 	return `{"action":"created","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
-		"issue":{"number":3,"pull_request":{}},"comment":{"id":1,"user":{"login":"` + login + `"}}}`
+		"issue":{"number":3,"pull_request":{},"user":{"login":"me"}},"comment":{"id":1,"user":{"login":"` + login + `"}}}`
 }
 
 func prOpenedBy(login string) string {
@@ -140,6 +142,43 @@ func TestActorsDefaultToMe(t *testing.T) {
 	}
 	if k := do(t, g, "issues", ia("someone")); has(k, "issue_assigned") {
 		t.Fatalf("issue_assigned should not fire for someone else, got %v", k)
+	}
+}
+
+// TestAutopilotOnlyOwnPRs pins the fix for the live bug where new_comment (and the
+// other fix-and-push kinds) fired on PRs authored by someone else — the handlers
+// ignored our own *comments* but never checked we authored the *PR*. Autopilot pushes
+// to the PR branch, so it must only act on PRs the `me` identity authored, regardless
+// of who left the comment / requested changes.
+func TestAutopilotOnlyOwnPRs(t *testing.T) {
+	g := newTestIntegration(t, richConfig()) // self = "me"
+
+	// issue_comment on someone else's PR (issue.user = "teammate") → no new_comment,
+	// even though the commenter ("bot") isn't us.
+	otherIssue := `{"action":"created","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"issue":{"number":3,"pull_request":{},"user":{"login":"teammate"}},"comment":{"id":1,"user":{"login":"bot"},"body":"fix"}}`
+	if k := do(t, g, "issue_comment", otherIssue); len(k) != 0 {
+		t.Fatalf("new_comment must not fire on a teammate's PR, got %v", k)
+	}
+	// Same comment on our own PR → fires.
+	ownIssue := `{"action":"created","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"issue":{"number":3,"pull_request":{},"user":{"login":"me"}},"comment":{"id":1,"user":{"login":"bot"},"body":"fix"}}`
+	if k := do(t, g, "issue_comment", ownIssue); len(k) != 1 || k[0] != "new_comment" {
+		t.Fatalf("new_comment should fire on our own PR, got %v", k)
+	}
+
+	// review-comment on someone else's PR → no new_comment.
+	otherReview := `{"action":"created","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"pull_request":{"number":6,"head":{"sha":"h"},"user":{"login":"teammate"}},"comment":{"id":2,"user":{"login":"bot"},"body":"nit"}}`
+	if k := do(t, g, "pull_request_review_comment", otherReview); len(k) != 0 {
+		t.Fatalf("new_comment must not fire on a teammate's PR review comment, got %v", k)
+	}
+
+	// changes_requested on someone else's PR → no trigger.
+	otherCR := `{"action":"submitted","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"pull_request":{"number":6,"head":{"sha":"h"},"user":{"login":"teammate"}},"review":{"state":"changes_requested","id":9,"user":{"login":"bot"}}}`
+	if k := do(t, g, "pull_request_review", otherCR); has(k, "changes_requested") {
+		t.Fatalf("changes_requested must not fire on a teammate's PR, got %v", k)
 	}
 }
 

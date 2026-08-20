@@ -19,8 +19,10 @@ func stubAPI(t *testing.T, mergeableState string) (*httptest.Server, *appAuth) {
 	mux.HandleFunc("/app/installations/42/access_tokens", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, `{"token":"inst-tok","expires_at":%q}`, time.Now().Add(time.Hour).Format(time.RFC3339))
 	})
-	mux.HandleFunc("/repos/acme/w/pulls/6", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintf(w, `{"mergeable_state":%q,"head":{"sha":"h6"},"base":{"ref":"main"},"html_url":"http://x/6"}`, mergeableState)
+	// Any PR number resolves; author is "me" (the self identity in test configs) so the
+	// me-authored gate on autopilot kinds passes.
+	mux.HandleFunc("/repos/acme/w/pulls/{num}", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"mergeable_state":%q,"head":{"sha":"h6"},"base":{"ref":"main"},"html_url":"http://x/6","user":{"login":"me"}}`, mergeableState)
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -64,6 +66,36 @@ func TestMergeStateBehind(t *testing.T) {
 	trs := g.triggersFor(context.Background(), "pull_request", []byte(body))
 	if len(trs) != 1 || trs[0].Kind != "pr_behind" {
 		t.Fatalf("want pr_behind, got %+v", trs)
+	}
+}
+
+// TestMergeStateNotOwnPR: a dirty PR authored by someone else must not fire
+// merge_conflict — autopilot pushes fixes, so it only acts on your authored PRs.
+func TestMergeStateNotOwnPR(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/42/access_tokens", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"token":"inst-tok","expires_at":%q}`, time.Now().Add(time.Hour).Format(time.RFC3339))
+	})
+	mux.HandleFunc("/repos/acme/w/pulls/{num}", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"mergeable_state":"dirty","head":{"sha":"h6"},"base":{"ref":"main"},"html_url":"http://x/6","user":{"login":"teammate"}}`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &appAuth{appID: 1, key: key, httpc: http.DefaultClient, apiBase: srv.URL, now: time.Now, cache: map[int64]cachedToken{}}
+
+	g := newTestIntegration(t, richConfig())
+	g.app = app
+	g.rest = newRESTClient(app)
+
+	body := `{"action":"opened","installation":{"id":42},
+		"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"pull_request":{"number":6,"head":{"sha":"h6"},"base":{"ref":"main"}}}`
+	if trs := g.triggersFor(context.Background(), "pull_request", []byte(body)); len(trs) != 0 {
+		t.Fatalf("merge_conflict must not fire on a teammate's PR, got %+v", trs)
 	}
 }
 

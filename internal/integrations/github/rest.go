@@ -26,7 +26,10 @@ type pullInfo struct {
 	MergeableState string `json:"mergeable_state"` // clean|dirty|behind|blocked|unstable|draft|unknown
 	Mergeable      *bool  `json:"mergeable"`
 	Draft          bool   `json:"draft"`
-	Head           struct {
+	User           struct {
+		Login string `json:"login"`
+	} `json:"user"` // PR author
+	Head struct {
 		SHA string `json:"sha"`
 	} `json:"head"`
 	Base struct {

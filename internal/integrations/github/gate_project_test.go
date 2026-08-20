@@ -63,6 +63,7 @@ func mergeReadyConfig() Config {
 		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
 		Rules: []Rule{{
 			Match: Match{Repos: []string{"acme/*"}},
+			Me:    config.Actors{Logins: []string{"me"}}, // auto-merge only acts on your authored PRs
 			Actions: map[string]config.Action{
 				"merge_ready": {Type: "command", Command: []string{"gh", "pr", "merge"}, RequireLabel: "automerge"},
 			},

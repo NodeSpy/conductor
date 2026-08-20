@@ -42,9 +42,21 @@ func do(t *testing.T, g *Integration, event, body string) []string {
 	return kinds
 }
 
-func TestCheckRunFailing(t *testing.T) {
+// richWithREST is richConfig plus a stubbed REST/app so kinds that resolve the PR
+// author via a fetch (failing_checks) can pass the me-authored gate. The stub reports
+// author "me" for every PR.
+func richWithREST(t *testing.T) *Integration {
+	t.Helper()
+	_, app := stubAPI(t, "clean")
 	g := newTestIntegration(t, richConfig())
-	body := `{"action":"completed","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+	g.app = app
+	g.rest = newRESTClient(app)
+	return g
+}
+
+func TestCheckRunFailing(t *testing.T) {
+	g := richWithREST(t)
+	body := `{"action":"completed","installation":{"id":42},"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
 		"check_run":{"conclusion":"failure","name":"build","head_sha":"h9","id":321,"pull_requests":[{"number":4}]}}`
 	trs := g.triggersFor(context.Background(), "check_run", []byte(body))
 	if len(trs) != 1 || trs[0].Kind != "failing_checks" {
@@ -54,7 +66,7 @@ func TestCheckRunFailing(t *testing.T) {
 		t.Fatalf("run_id/dedup wrong: %+v", trs[0].Context)
 	}
 	// A successful check produces nothing.
-	ok := `{"action":"completed","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+	ok := `{"action":"completed","installation":{"id":42},"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
 		"check_run":{"conclusion":"success","head_sha":"h","pull_requests":[{"number":4}]}}`
 	if k := do(t, g, "check_run", ok); len(k) != 0 {
 		t.Fatalf("success check should not trigger, got %v", k)
@@ -62,8 +74,8 @@ func TestCheckRunFailing(t *testing.T) {
 }
 
 func TestWorkflowRunFailing(t *testing.T) {
-	g := newTestIntegration(t, richConfig())
-	body := `{"action":"completed","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+	g := richWithREST(t)
+	body := `{"action":"completed","installation":{"id":42},"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
 		"workflow_run":{"conclusion":"timed_out","head_sha":"hh","id":9,"pull_requests":[{"number":2}]}}`
 	if k := do(t, g, "workflow_run", body); len(k) != 1 || k[0] != "failing_checks" {
 		t.Fatalf("want failing_checks, got %v", k)
@@ -73,7 +85,7 @@ func TestWorkflowRunFailing(t *testing.T) {
 func TestReviewCommentTriggers(t *testing.T) {
 	g := newTestIntegration(t, richConfig())
 	body := `{"action":"created","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
-		"pull_request":{"number":6,"head":{"sha":"h"},"base":{"ref":"main"}},
+		"pull_request":{"number":6,"head":{"sha":"h"},"base":{"ref":"main"},"user":{"login":"me"}},
 		"comment":{"id":7,"user":{"login":"bot"},"body":"nit"}}`
 	if k := do(t, g, "pull_request_review_comment", body); len(k) != 1 || k[0] != "new_comment" {
 		t.Fatalf("want new_comment, got %v", k)
@@ -249,12 +261,12 @@ func TestNewCommentFromUsersFilter(t *testing.T) {
 	g := newTestIntegration(t, cfg)
 
 	match := `{"action":"created","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
-		"issue":{"number":3,"pull_request":{}},"comment":{"id":1,"user":{"login":"coderabbitai[bot]"},"body":"x"}}`
+		"issue":{"number":3,"pull_request":{},"user":{"login":"me"}},"comment":{"id":1,"user":{"login":"coderabbitai[bot]"},"body":"x"}}`
 	if k := do(t, g, "issue_comment", match); len(k) != 1 {
 		t.Fatalf("allowed bot should trigger, got %v", k)
 	}
 	skip := `{"action":"created","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
-		"issue":{"number":3,"pull_request":{}},"comment":{"id":2,"user":{"login":"randomuser"},"body":"x"}}`
+		"issue":{"number":3,"pull_request":{},"user":{"login":"me"}},"comment":{"id":2,"user":{"login":"randomuser"},"body":"x"}}`
 	if k := do(t, g, "issue_comment", skip); len(k) != 0 {
 		t.Fatalf("non-listed user should be filtered, got %v", k)
 	}
