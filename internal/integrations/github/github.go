@@ -205,7 +205,33 @@ func (g *Integration) Validate() error {
 	if g.cfg.Webhook.SmeeURL == "" && g.cfg.Webhook.Listen == "" {
 		return fmt.Errorf("github[%s]: set webhook.smee_url and/or webhook.listen", g.name)
 	}
+	// Action maps are keyed by kind; a typo or a renamed kind (e.g. the old
+	// issue_ready) would otherwise sit in config doing nothing. Reject unknown keys.
+	check := func(where string, actions map[string]config.Action) error {
+		for k := range actions {
+			if !knownKinds[k] {
+				return fmt.Errorf("github[%s]: unknown action kind %q in %s", g.name, k, where)
+			}
+		}
+		return nil
+	}
+	if err := check("defaults.actions", g.cfg.Defaults.Actions); err != nil {
+		return err
+	}
+	for i, r := range g.cfg.Rules {
+		if err := check(fmt.Sprintf("rules[%d].actions", i), r.Actions); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// knownKinds is the set of GitHub trigger kinds an action map may configure.
+var knownKinds = map[string]bool{
+	"merge_conflict": true, "pr_behind": true, "failing_checks": true,
+	"changes_requested": true, "new_comment": true, "review_requested": true,
+	"self_review": true, "merge_ready": true, "issue_assigned": true,
+	"issue_labeled": true, "issue_project_moved": true,
 }
 
 // resolve returns the effective rule (reviewer/assignee/actions merged over

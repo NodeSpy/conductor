@@ -24,7 +24,7 @@ func richConfig() Config {
 				"failing_checks":    act(),
 				"merge_conflict":    act(),
 				"pr_behind":         {Type: "command", Command: []string{"gh", "pr", "update-branch"}},
-				"issue_ready":       {Type: "agent", Agent: "fixer", Checkout: "branch-off", LabelsAny: []string{"Ready"}},
+				"issue_labeled":     {Type: "agent", Agent: "fixer", Checkout: "branch-off", LabelsAny: []string{"Ready"}},
 				"review_requested":  {Type: "command", Command: []string{"critique"}},
 				"self_review":       {Type: "command", Command: []string{"critique", "--review", "{{.repo}}#{{.pr}}"}},
 			},
@@ -245,8 +245,8 @@ func TestIssueReadyLabelFilter(t *testing.T) {
 	g := newTestIntegration(t, richConfig())
 	ready := `{"action":"labeled","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
 		"issue":{"number":10,"assignees":[{"login":"me"}]},"label":{"name":"Ready"}}`
-	if k := do(t, g, "issues", ready); len(k) != 1 || k[0] != "issue_ready" {
-		t.Fatalf("want issue_ready, got %v", k)
+	if k := do(t, g, "issues", ready); len(k) != 1 || k[0] != "issue_labeled" {
+		t.Fatalf("want issue_labeled, got %v", k)
 	}
 	other := `{"action":"labeled","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
 		"issue":{"number":10,"assignees":[{"login":"me"}]},"label":{"name":"wontfix"}}`

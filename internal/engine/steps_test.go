@@ -92,7 +92,7 @@ func stepEngine(t *testing.T, d *stepFake) *Engine {
 }
 
 func issueTrigger() core.Trigger {
-	return core.Trigger{Source: "github", Instance: "i", Kind: "issue_ready",
+	return core.Trigger{Source: "github", Instance: "i", Kind: "issue_labeled",
 		Target: core.Target{Repo: "acme/w", Issue: 42, Number: 42}}
 }
 

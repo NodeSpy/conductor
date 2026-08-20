@@ -123,7 +123,7 @@ integrations:
         #   1) evaluate the issue for enough context (planner model, structured output)
         #   2) if enough  -> implement it (stronger model)
         #   3) if not     -> comment asking the reporter for more detail
-        issue_ready:
+        issue_labeled:
           labels_any: ["Ready"]         # gate: only issues labeled "Ready"
           steps:
             - id: evaluate

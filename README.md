@@ -59,7 +59,7 @@ Every kind below is a configurable `action` (see [Configuration](#configuration)
 | Kind | Trigger | Action |
 | --- | --- | --- |
 | `issue_assigned` | an issue is assigned to you | agent: start work on a fresh branch |
-| `issue_ready` | an issue **assigned to you** gets a "Ready" label | agent: start work on a fresh branch |
+| `issue_labeled` | an issue **assigned to you** gets a label in `labels_any` (e.g. "Ready") | agent: start work on a fresh branch |
 | `issue_project_moved` | an issue **assigned to you** moves to a Projects v2 status → "Ready" | agent: start work on a fresh branch |
 
 Plus scheduled jobs via the [cron integration](#scheduled-jobs-cron-integration). Each kind is a
@@ -89,11 +89,11 @@ integrations:
           agent: fixer
           checkout: branch-off             # start on a fresh branch (no PR yet)
           prompt: "Issue {{.repo}}#{{.issue}} was assigned to you — implement it and open a draft PR."
-        issue_ready:                       # an issue assigned to you gets a "Ready" label
+        issue_labeled:                       # an issue assigned to you gets a label in labels_any
           type: agent
           agent: fixer
           checkout: branch-off
-          labels_any: ["Ready"]
+          labels_any: ["Ready"]              # which label(s) are the go-signal (e.g. Ready, "To Do")
           prompt: "Issue {{.repo}}#{{.issue}} is Ready — start work on a fresh branch."
     rules:
       - match: { repos: ["octocat/*"] }
@@ -102,7 +102,7 @@ agents:
 ```
 
 For a smarter flow — assess the issue, then implement it *or* ask the reporter for more detail —
-make `issue_ready` a [multi-step workflow](#multi-step-workflows).
+make `issue_labeled` a [multi-step workflow](#multi-step-workflows).
 
 ## Multi-step workflows
 
@@ -112,7 +112,7 @@ earlier outputs. This lets you plan with a cheap model, then act with a stronger
 what the plan found.
 
 ```yaml
-issue_ready:
+issue_labeled:
   labels_any: ["Ready"]
   steps:
     - id: evaluate                       # cheap model assesses the issue
@@ -382,7 +382,7 @@ integrations:
           # assignee defaults to `me`; set it here only to override
           checkout: branch-off                            # start work on a fresh branch (no PR yet)
           prompt: "Issue {{.repo}}#{{.issue}} assigned to you — start work; open a draft PR."
-        issue_ready:                                      # issue labeled "Ready"
+        issue_labeled:                                      # issue labeled "Ready"
           # A MULTI-STEP workflow: plan cheaply, then branch on the result.
           labels_any: ["Ready"]                           # gate: only "Ready"-labeled issues
           steps:
