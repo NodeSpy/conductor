@@ -258,11 +258,15 @@ Secrets live in `~/.config/paseo-conductor/conductor.env`; the daemon loads them
      > connects to your channel itself and receives the forwarded webhooks. Nothing else to start.
    - **Webhook secret** — generate a random string (e.g. `openssl rand -hex 32`) and put it in
      `conductor.env` as `GH_WEBHOOK_SECRET`.
-2. **Permissions:** Contents (RW), Pull requests (RW), Issues (RW), Checks (R), Metadata (R).
-   For the opt-in `issue_project_moved` trigger also add Projects (R).
+2. **Permissions** (set these *first* — GitHub only shows events for permissions you've granted):
+   - Repository: Contents (RW), Pull requests (RW), Issues (RW), Checks (R), Metadata (R).
+   - For the opt-in `issue_project_moved` trigger: **Organization → Projects (Read)**. This is an
+     *organization* permission — without it the `projects_v2_item` event won't appear in step 3.
 3. **Subscribe to events:** pull_request, pull_request_review, pull_request_review_comment,
-   issue_comment, check_run, check_suite, workflow_run, push, issues. For the opt-in kinds also add
-   `pull_request_review_thread` (auto-merge gate) and `projects_v2_item` (Projects v2).
+   issue_comment, check_run, check_suite, workflow_run, push, issues. Opt-in kinds:
+   `pull_request_review_thread` (auto-merge gate); and **`projects_v2_item`** (Projects v2) —
+   which only shows up here *after* you add Organization → Projects (Read) above, and is
+   delivered for **organization** Projects v2 boards (install the App on the org).
 4. **Generate a private key** and save it at the `private_key_path` in your config.
 5. **Install the App** on the repos/orgs you want covered.
 6. Put the App id, key path, and webhook secret in `config.yaml` / `conductor.env`.
