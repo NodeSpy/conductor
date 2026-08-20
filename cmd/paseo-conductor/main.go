@@ -309,7 +309,7 @@ func printOneDispatch(cfg *config.Config, disp *dispatch.Dispatcher, t core.Trig
 	if act.Type == "agent" {
 		profile = cfg.Agents[act.Agent]
 	}
-	req := dispatch.Request{Trigger: t, Action: act, Profile: profile, Author: gitAuthor(), Shadow: true, Wait: true}
+	req := dispatch.Request{Trigger: t, Action: act, Profile: profile, Author: gitAuthor(), Shadow: true, Wait: !act.Background}
 	ref, err := disp.Dispatch(context.Background(), req)
 	if err != nil {
 		fmt.Printf("%serror: %v\n", indent, err)

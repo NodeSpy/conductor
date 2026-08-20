@@ -56,10 +56,15 @@ func (e *Engine) runSteps(ctx context.Context, t core.Trigger, act config.Action
 		req := dispatch.Request{
 			Trigger: t, Action: s, Profile: profile,
 			Tokens: dispatch.Tokens{App: appTok, User: userTok},
-			Author: e.author, Shadow: shadow, Wait: true, Data: data,
+			Author: e.author, Shadow: shadow, Wait: !s.Background, Data: data,
 		}
 		ref, err := e.disp.Dispatch(ctx, req)
-		outputs := extractOutputs(ref)
+		// A background step launches a live agent and returns immediately; there's
+		// no captured output to fold into later steps.
+		outputs := map[string]any{}
+		if !s.Background {
+			outputs = extractOutputs(ref)
+		}
 		stepsOut[id] = map[string]any{"outputs": outputs}
 
 		entry := map[string]any{"event": "step", "repo": t.Target.Repo, "number": t.Target.Number,
@@ -72,6 +77,13 @@ func (e *Engine) runSteps(ctx context.Context, t core.Trigger, act config.Action
 			return // fail-fast
 		}
 		e.store.Audit(entry)
+		if s.Background {
+			// Handed off to a live agent — tell the user it's waiting for them.
+			e.log("engine: step %s launched in background (agent %s)", id, ref.AgentID)
+			e.notif.Emit(ctx, notify.EventNeedsInput, t,
+				fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
+			continue
+		}
 		e.log("engine: step %s done (%s)", id, ref.Backend)
 	}
 	e.notif.Emit(ctx, notify.EventComplete, t, "workflow")

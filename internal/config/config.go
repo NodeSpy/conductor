@@ -161,6 +161,8 @@ type Action struct {
 	ID           string         `yaml:"id"`            // step id (for steps.<id>.outputs.*)
 	If           string         `yaml:"if"`            // step condition (see internal/expr)
 	OutputSchema map[string]any `yaml:"output_schema"` // agent step: JSON schema for structured output
+	Background   bool           `yaml:"background"`    // workflow step: dispatch `paseo run --background` and don't
+	//                                                    wait/capture — launch a live agent to drive interactively
 
 	// gating actors (live on the check they gate)
 	Reviewer Actors `yaml:"reviewer"` // review_requested: whose requested review triggers it

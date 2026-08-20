@@ -16,9 +16,10 @@ import (
 
 // Events.
 const (
-	EventDispatch = "dispatch"
-	EventComplete = "complete"
-	EventEscalate = "escalate"
+	EventDispatch   = "dispatch"
+	EventComplete   = "complete"
+	EventEscalate   = "escalate"
+	EventNeedsInput = "needs_input" // a workflow handed a PR to a live agent; you need to weigh in
 )
 
 // PostFunc posts a comment on a PR/issue. sub is "pr" or "issue". Injectable
@@ -60,15 +61,26 @@ func (n *Notifier) Emit(ctx context.Context, event string, t core.Trigger, msg s
 		n.log("push: %s", line)
 	}
 
-	if event == EventEscalate && n.cfg.CommentOnEscalate {
-		if err := n.comment(ctx, t, msg); err != nil {
-			n.log("notify: escalation comment failed: %v", err)
+	// Both escalate ("gave up") and needs_input ("waiting on you") post a PR
+	// comment as you, gated by the same CommentOnEscalate switch — only the
+	// wording differs.
+	if n.cfg.CommentOnEscalate {
+		switch event {
+		case EventEscalate:
+			if err := n.comment(ctx, t, fmt.Sprintf("gave up after retries — %s", msg)); err != nil {
+				n.log("notify: escalation comment failed: %v", err)
+			}
+		case EventNeedsInput:
+			if err := n.comment(ctx, t, msg); err != nil {
+				n.log("notify: needs-input comment failed: %v", err)
+			}
 		}
 	}
 }
 
-// comment posts a one-line summary on the PR/issue, as you (user token).
-func (n *Notifier) comment(ctx context.Context, t core.Trigger, msg string) error {
+// comment posts a one-line summary on the PR/issue, as you (user token). detail
+// is the trailing text after the "paseo-conductor: <kind>" prefix.
+func (n *Notifier) comment(ctx context.Context, t core.Trigger, detail string) error {
 	if n.userToken == nil || n.post == nil || t.Target.Repo == "" || t.Target.Number == 0 {
 		return nil
 	}
@@ -80,7 +92,7 @@ func (n *Notifier) comment(ctx context.Context, t core.Trigger, msg string) erro
 	if t.Target.PR == 0 && t.Target.Issue > 0 {
 		sub = "issue"
 	}
-	body := fmt.Sprintf("paseo-conductor: %s gave up after retries — %s", t.Kind, msg)
+	body := fmt.Sprintf("paseo-conductor: %s %s", t.Kind, detail)
 	ref := fmt.Sprintf("%s#%d", t.Target.Repo, t.Target.Number)
 	return n.post(ctx, sub, ref, body, tok)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/paseo-conductor/internal/notify"
 )
 
 func waitFor(t *testing.T, cond func() bool) {
@@ -123,6 +124,35 @@ func TestWorkflowBranchNoContext(t *testing.T) {
 
 	if got := d.ran; len(got) != 2 || got[0] != "evaluate" || got[1] != "ask" {
 		t.Fatalf("expected evaluate→ask, got %v", got)
+	}
+}
+
+func TestWorkflowBackgroundStepHandsOff(t *testing.T) {
+	d := newStepFake()
+	n := &fakeNotifier{}
+	cfg := &config.Config{Agents: map[string]config.AgentProfile{
+		"interactive": {Provider: "claude-sonnet"},
+	}}
+	cfg.Control.Enabled = ptrBool(true)
+	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n,
+		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+
+	act := config.Action{Steps: []config.Action{
+		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true,
+			Prompt: "draft and hand off {{.issue}}"},
+	}}
+	e.runSteps(context.Background(), issueTrigger(), act, "app", "usr", false)
+
+	if got := d.ran; len(got) != 1 || got[0] != "handoff" {
+		t.Fatalf("expected handoff to run, got %v", got)
+	}
+	// A background step launches a live agent instead of blocking on it.
+	if d.waited["handoff"] {
+		t.Fatalf("background step should dispatch with Wait=false")
+	}
+	// ...and tells the user it's waiting for them.
+	if !n.has(notify.EventNeedsInput) {
+		t.Fatalf("background step should emit needs_input, got %v", n.events)
 	}
 }
 
