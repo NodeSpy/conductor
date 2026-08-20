@@ -94,11 +94,11 @@ func (c Control) AgentCap() int {
 	return *c.MaxConcurrentAgents
 }
 
-// Notify configures notifications.
+// Notify configures notifications. All channels are private to you (the daemon
+// journal today; a push endpoint later) — the conductor never comments on PRs.
 type Notify struct {
-	Push              bool     `yaml:"push"`
-	CommentOnEscalate bool     `yaml:"comment_on_escalate"`
-	On                []string `yaml:"on"` // subset of: dispatch, complete, escalate
+	Push bool     `yaml:"push"`
+	On   []string `yaml:"on"` // subset of: dispatch, complete, escalate, needs_input
 }
 
 // Wants reports whether the given notify event is enabled.

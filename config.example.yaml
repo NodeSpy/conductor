@@ -186,9 +186,8 @@ control:
   max_concurrent_agents: 3            # cap running coding agents (protects the box and avoids
                                       #   git-lock contention when a sweep fans out). 0 = unlimited.
 notify:
-  push: true
-  comment_on_escalate: true
-  on: [dispatch, escalate]
+  push: true                          # private to you (journal today); never a PR comment
+  on: [dispatch, escalate, needs_input]
 
 agents:
   fixer:

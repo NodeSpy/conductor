@@ -171,7 +171,7 @@ func cmdRun(args []string) error {
 	defer st.Close()
 
 	disp := dispatch.New(cfg.Dispatch, cfg.DryRun)
-	notifier := notify.New(cfg.Notify, userToken, logf)
+	notifier := notify.New(cfg.Notify, logf)
 	eng := engine.New(engine.Options{
 		Config: cfg, Store: st, Dispatch: disp, Notifier: notifier,
 		Author: gitAuthor(), UserToken: userToken, Log: logf,

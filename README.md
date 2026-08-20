@@ -451,8 +451,9 @@ control:
 
 notify:
   push: true                          # Paseo push (surfaced via the service log today)
-  comment_on_escalate: true           # post a one-line summary comment (as you) on escalation
-  on: [dispatch, escalate]            # which events to notify on: dispatch|complete|escalate
+  on: [dispatch, escalate, needs_input]  # events to notify on: dispatch|complete|escalate|needs_input
+  # Notifications are private to you (journal + paseo's attention flag). The
+  # conductor never posts comments on PRs.
 
 agents:                               # reusable named agent profiles, referenced by actions
   fixer:
@@ -503,7 +504,7 @@ dry_run: false                        # build+log every action but never execute
 | `agents` | Reusable named agent profiles referenced by `agent` actions. |
 | `dispatch` | Backends (`paseo`, `local`), the default backend per action type, the read/write identity split, and `retry` for transient `paseo run` failures. |
 | `control` | Kill switch (`enabled`), `pause_label`, global `shadow`, and `max_concurrent_agents` (cap on simultaneously running coding agents; 0 = unlimited). |
-| `notify` | Notifications: `push`, `comment_on_escalate`, and `on` (which events). |
+| `notify` | Private notifications (journal + paseo attention flag; never a PR comment): `push` and `on` (which events). |
 | `update` | Auto-update: `auto`, `interval`, `apply`. |
 | `store` | Dedup-state + audit paths and their TTL/LRU/rotation bounds. |
 | `dry_run` | Global dry run — build and log actions but never execute. |
