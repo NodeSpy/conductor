@@ -271,9 +271,11 @@ Secrets live in `~/.config/paseo-conductor/conductor.env`; the daemon loads them
 
 Set `webhook.smee_url`, `webhook.listen`, or both:
 
-- **smee.io** — no inbound port; the daemon subscribes to an SSE channel. Easiest to start. Caveat:
-  smee re-serializes the JSON body, so HMAC verification usually won't match — keep
-  `verify_signature: false` (the channel URL is the shared secret).
+- **smee.io** — no inbound port. Get a channel at <https://smee.io/new> and use that URL as **both**
+  the App's Webhook URL and `GH_SMEE_URL`. **You don't run the `smee` client** — the conductor
+  subscribes to the channel itself (auto-reconnecting). Caveat: smee re-serializes the JSON body, so
+  HMAC verification usually won't match — keep `verify_signature: false` (the channel URL is the
+  shared secret).
 - **Direct HTTP** — `listen: 127.0.0.1:8787` (optional `path: /webhook`) runs a plain webhook
   receiver. Point the GitHub App's webhook URL at it (typically via your own tunnel, e.g. pangolin).
   The raw body is intact here, so **set `verify_signature: true`**.
