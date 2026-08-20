@@ -7,7 +7,28 @@ deterministic tools) on your machine in response. **GitHub is the first integrat
 integration-agnostic so more can be added.
 
 It is **webhook-primary** (GitHub App → [smee.io](https://smee.io) → conductor) and **single-user**:
-no database, no web UI, no accounts — one Go binary run as a `systemd --user` service.
+no database, no web UI, no accounts — one Go binary run as a per-user service.
+
+## Quick start
+
+Install the latest release (the repo is private, so this uses the authenticated `gh` CLI). It drops
+the binary in `~/.local/bin`, seeds a starter config, and **asks whether to install the background
+service** (systemd on Linux, launchd on macOS):
+
+```sh
+gh api repos/NodeSpy/paseo-conductor/contents/scripts/install-release.sh \
+  -H "Accept: application/vnd.github.raw" | bash
+```
+
+Then:
+
+1. Create a GitHub App + smee channel — see [GitHub App setup](#github-app-setup).
+2. Fill in `~/.config/paseo-conductor/config.yaml` and `~/.config/paseo-conductor/conductor.env`
+   (secrets) — see [Configuration](#configuration).
+3. `paseo-conductor validate` → start the service (the installer offers this).
+
+Details and other install paths are under [Install](#install-released-binary-one-liner). Later:
+`paseo-conductor update` (or `update.auto`) keeps it current.
 
 ## What it does (GitHub)
 
@@ -145,18 +166,213 @@ Set `webhook.smee_url`, `webhook.listen`, or both:
 
 ## Configuration
 
-See [`config.example.yaml`](config.example.yaml). The shape:
+Config lives at `~/.config/paseo-conductor/config.yaml`; secrets referenced via `${VAR}` come from
+the sibling `conductor.env`, which the daemon loads at startup (so systemd and launchd both work).
+The installer seeds both files. `paseo-conductor validate` checks everything before you start.
 
-- `integrations:` — a list of typed instances. Each github instance has an `app`, a `webhook`
-  (smee), an optional `sweep`, optional shared `defaults`, and a **`rules`** list.
-- **rules** — the first rule whose `match` (repo globs and/or Project v2 criteria) applies wins,
-  merged over `defaults`. Each rule carries its own `reviewer`, `assignee`, and `actions`.
-- **actions** — `(kind → action)`. `type: agent` runs a Paseo agent (references an `agents:`
-  profile + a prompt); `type: command` runs a subprocess (default backend `local`).
-- `agents:` — reusable named profiles (`provider`, `model`, `workspace`, `archive_when_done`, …).
-- `control:` — kill switch (`enabled`), pause label, global `shadow`.
-- `notify:` — Paseo push + escalation comment.
-- `store:` — dedup state + audit log, with TTL/LRU/rotation bounds.
+### Full example
+
+This is the complete annotated config (mirrors [`config.example.yaml`](config.example.yaml)):
+
+```yaml
+integrations:
+  # A LIST of typed instances. List `github` more than once for separate
+  # Apps/orgs (each App has its own webhook secret).
+  - type: github
+    name: ednition
+    enabled: true
+    # The App carries webhooks + ALL API reads/enrichment (its own rate pool).
+    # Writes/posts use your gh token; commits/pushes go over SSH as you.
+    app:
+      app_id: 0
+      private_key_path: ~/.config/paseo-conductor/ednition-app.pem
+      webhook_secret: ${EDN_WEBHOOK_SECRET}
+      # smee re-serializes the body so HMAC often won't match — keep false with
+      # smee; with a DIRECT `listen` receiver the raw body is intact, so set true.
+      verify_signature: false
+    webhook:
+      # Use smee.io (no inbound port) and/or a direct HTTP listener — either or both.
+      smee_url: ${EDN_SMEE_URL}       # https://smee.io/<channel>
+      # listen: 127.0.0.1:8787        # direct receiver (point the App webhook / your tunnel here)
+      # path: /webhook                # default
+    sweep:
+      enabled: false                  # off by default; REST catch-up for missed events
+      interval: 1h
+      repos: ["EdnitionCode/RosterStream"]
+
+    # OPTIONAL shared defaults; every rule merges over these.
+    defaults:
+      reviewer: { logins: [danielcbaldwin], teams: [] }   # who "review_requested" must name
+      assignee: { logins: [danielcbaldwin] }              # who "issue_assigned" must name
+      actions:
+        merge_conflict:                                   # your PR conflicts with base
+          type: agent
+          agent: fixer
+          max_attempts_per_head: 2                        # cap → then escalate (notify), no looping
+          prompt: |
+            This PR conflicts with base {{.base}}. Merge/rebase base, resolve the
+            conflicts, make sure it builds, commit, and push to the PR branch.
+        pr_behind:                                        # behind base but not conflicting
+          type: command
+          backend: local
+          command: ["gh", "pr", "update-branch", "{{.repo}}#{{.pr}}"]
+          env: { GH_TOKEN: "{{.gh_token}}" }
+        failing_checks:                                   # CI failed
+          type: agent
+          agent: fixer
+          flaky_rerun: { enabled: true, max: 1 }          # rerun failed checks once before fixing
+          prompt: "Checks failing on {{.repo}}#{{.pr}} — diagnose, fix, verify, commit, push."
+        changes_requested:                                # a review requested changes
+          type: agent
+          agent: fixer
+          prompt: "Address the requested changes on {{.repo}}#{{.pr}}, commit, push, reply."
+        new_comment:                                      # a comment / bugbot review
+          type: agent
+          agent: fixer
+          from_users: []                                  # empty = any; e.g. ["coderabbitai[bot]"]
+          prompt: "New comment by {{.author}} on {{.repo}}#{{.pr}}: {{.comment_body}} — act if needed."
+        review_requested:                                 # M2: your review requested on someone's PR
+          type: command
+          backend: local
+          command: ["critique", "--review", "{{.repo}}#{{.pr}}", "--post"]
+          env:
+            CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"       # reads on the App pool
+            CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}"        # submits the review as YOU
+        self_review:                                      # M2: critique your own PRs (opt-in)
+          type: command
+          backend: local
+          enabled: false
+          checkout: none
+          command: ["critique", "--review", "{{.repo}}#{{.pr}}"]
+          env: { CRITIQUE_GITHUB_TOKEN: "{{.app_token}}", CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}" }
+        issue_assigned:                                   # M3: issue assigned to you
+          type: agent
+          agent: fixer
+          checkout: branch-off                            # start work on a fresh branch (no PR yet)
+          prompt: "Issue {{.repo}}#{{.issue}} assigned to you — start work; open a draft PR."
+        issue_ready:                                      # M3: issue labeled "Ready"
+          type: agent
+          agent: fixer
+          checkout: branch-off
+          labels_any: ["Ready"]
+          prompt: "Issue {{.repo}}#{{.issue}} is Ready — start work on a fresh branch."
+        issue_project_moved:                              # M3: Projects v2 status change (opt-in)
+          type: agent
+          agent: fixer
+          enabled: false                                  # costs one GraphQL node lookup per event
+          checkout: branch-off
+          project: { field: Status, to: Ready }
+          prompt: "Issue moved to Ready in the project — start work."
+        merge_ready:                                      # M4: auto-merge when fully green (opt-in)
+          type: command
+          backend: local
+          enabled: false
+          require_label: automerge                        # PR must carry this label to opt in
+          method: squash                                  # squash | merge | rebase
+          gates: { merge_state: clean, review_decision: approved, non_author_approval: true,
+                   threads_resolved: true, not_draft: true }
+          command: ["gh", "pr", "merge", "{{.repo}}#{{.pr}}", "--squash"]
+          env: { GH_TOKEN: "{{.gh_token}}" }
+
+    # RULES: the primary structure. The FIRST rule whose `match` applies wins,
+    # merged over `defaults`. `match` may combine repo globs and/or Project(v2).
+    rules:
+      - match: { repos: ["EdnitionCode/*", "TapResearch/*"] }        # inherits defaults
+      - match: { repos: ["EdnitionCode/RosterStream"] }              # override one kind for one repo
+        actions:
+          failing_checks: { agent: fixer, prompt: "RosterStream checks failing — fix and push." }
+      # - match: { project: "Roadmap", status: Ready }               # match by Project(v2) too
+      #   assignee: { logins: [danielcbaldwin] }
+      #   actions: { issue_ready: { agent: fixer } }
+
+  # A schedule-driven integration: run commands/agents on a cron or interval.
+  - type: cron
+    name: chores
+    schedules:
+      - name: rate-limit-check
+        every: 6h                     # or `cron: "0 */6 * * *"` / "@daily" / "@every 6h"
+        action: { type: command, backend: local, command: ["gh", "api", "rate_limit"] }
+      - name: tidy-cache
+        cron: "0 4 * * *"
+        run_on_start: false           # also fire once at startup when true
+        action:
+          type: command
+          backend: local
+          workdir: ~/Projects/myrepo  # cwd for the command ('~' and {{.repo}}-style templates ok)
+          command: ["make", "clean"]
+
+control:
+  enabled: true                       # master kill switch
+  pause_label: conductor:off          # (label-based pause is a follow-up; enabled/shadow work today)
+  shadow: false                       # run the whole pipeline but skip the final push/merge/post
+
+notify:
+  push: true                          # Paseo push (surfaced via the service log today)
+  comment_on_escalate: true           # post a one-line summary comment (as you) on escalation
+  on: [dispatch, escalate]            # which events to notify on: dispatch|complete|escalate
+
+agents:                               # reusable named agent profiles, referenced by actions
+  fixer:
+    provider: claude                  # -> paseo run --provider  (or provider/model form)
+    model: ""                         # -> --model     (optional)
+    thinking: ""                      # -> --thinking  (optional)
+    mode: ""                          # -> --mode      (optional)
+    workspace: worktree               # local | worktree  -> --new-workspace
+    wait_timeout: 30m                 # -> --wait-timeout
+    archive_when_done: true           # reaper archives the agent+worktree once idle
+    labels: { team: autopilot }       # extra --label pairs
+
+dispatch:
+  default_backends: { agent: paseo, command: local }   # backend per action type when unset
+  backends:
+    paseo: { bin: paseo }             # path to the paseo CLI
+    local: {}                         # direct subprocess exec
+  identity: { read_token: app, write_token: gh_auth, commit_author: self }  # reads=App, posts/commits=YOU
+
+update:
+  auto: false                         # periodically self-update to the latest release
+  interval: 8h                        # check cadence (a few times a day)
+  apply: true                         # re-exec into the new binary after updating
+
+store:
+  state_file: ~/.local/state/paseo-conductor/state.json
+  audit_log: ~/.local/state/paseo-conductor/audit.jsonl
+  state_ttl: 720h                     # evict PR records untouched this long (default 30d)
+  max_tracked_prs: 5000               # LRU backstop
+  audit_max_size: 50MB                # rotate the audit log at this size
+
+dry_run: false                        # build+log every action but never execute it
+```
+
+### Field reference
+
+**Top level**
+
+| Key | Meaning |
+| --- | --- |
+| `integrations` | List of typed instances (`type: github` / `type: cron`). List a type more than once for separate setups. |
+| `agents` | Reusable named agent profiles referenced by `agent` actions. |
+| `dispatch` | Backends (`paseo`, `local`), the default backend per action type, and the read/write identity split. |
+| `control` | Kill switch (`enabled`), `pause_label`, global `shadow`. |
+| `notify` | Notifications: `push`, `comment_on_escalate`, and `on` (which events). |
+| `update` | Auto-update: `auto`, `interval`, `apply`. |
+| `store` | Dedup-state + audit paths and their TTL/LRU/rotation bounds. |
+| `dry_run` | Global dry run — build and log actions but never execute. |
+
+**github instance** — `app` (App id / key path / webhook secret / `verify_signature`), `webhook`
+(`smee_url` and/or `listen`+`path`), optional `sweep`, optional shared `defaults`, and the `rules`
+list. A rule's `match` takes repo globs (`owner/*`, `*/*`) and/or Project(v2) `project`+`status`;
+`reviewer`/`assignee`/`actions`/`workspace` on the matched rule merge over `defaults`.
+
+**Actions** — keyed by kind. `type: agent` references an `agents:` profile + a `prompt` and runs a
+Paseo agent; `type: command` runs a subprocess (`command`, `env`, `workdir`, `backend`). Common
+options: `enabled`, `checkout` (`checkout-pr`|`branch-off`|`none`), `shadow`, `workdir`, plus
+kind-specific ones (`max_attempts_per_head`, `flaky_rerun`, `from_users`, `labels_any`,
+`require_label`, `method`, `gates`, `project`). Templates (`{{.repo}}`, `{{.pr}}`, `{{.base}}`,
+`{{.head}}`, `{{.author}}`, `{{.app_token}}`, `{{.gh_token}}`, …) are filled per event.
+
+**cron instance** — a `schedules` list; each has a `name`, a `cron` spec or `every` interval,
+optional `run_on_start`, and an `action` (same action shape as above).
 
 ## Commands
 
