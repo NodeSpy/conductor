@@ -76,10 +76,23 @@ type Control struct {
 	Enabled    *bool  `yaml:"enabled"`     // default true
 	PauseLabel string `yaml:"pause_label"` // e.g. "conductor:off"
 	Shadow     bool   `yaml:"shadow"`      // global shadow mode
+	// MaxConcurrentAgents caps how many conductor coding agents run at once
+	// (protects the machine and avoids git-lock contention on a shared repo when
+	// a sweep fans out). Absent → default 3; explicit 0 (or negative) → unlimited.
+	MaxConcurrentAgents *int `yaml:"max_concurrent_agents"`
 }
 
 // IsEnabled reports the master on/off (default true).
 func (c Control) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
+
+// AgentCap returns the concurrent-agent cap: default 3 when unset, or the
+// configured value (<=0 means unlimited).
+func (c Control) AgentCap() int {
+	if c.MaxConcurrentAgents == nil {
+		return 3
+	}
+	return *c.MaxConcurrentAgents
+}
 
 // Notify configures notifications.
 type Notify struct {
@@ -103,6 +116,34 @@ type Dispatch struct {
 	DefaultBackends map[string]string        `yaml:"default_backends"` // agent->paseo, command->local
 	Backends        map[string]BackendConfig `yaml:"backends"`
 	Identity        Identity                 `yaml:"identity"`
+	Retry           Retry                    `yaml:"retry"`
+}
+
+// Retry controls re-attempts of a `paseo run` that fails with a transient error
+// (a git lock/timeout while creating the worktree — common under a sweep
+// fan-out). Only transient failures are retried; real errors surface at once.
+type Retry struct {
+	Max     int      `yaml:"max"`     // extra attempts (default 3); <=0 disables
+	Backoff Duration `yaml:"backoff"` // delay between attempts (default 10s)
+}
+
+// Attempts returns the configured retry count, defaulting to 3 when unset.
+func (r Retry) Attempts() int {
+	if r.Max == 0 {
+		return 3
+	}
+	if r.Max < 0 {
+		return 0
+	}
+	return r.Max
+}
+
+// BackoffDur returns the configured backoff, defaulting to 10s when unset.
+func (r Retry) BackoffDur() time.Duration {
+	if d := r.Backoff.D(); d > 0 {
+		return d
+	}
+	return 10 * time.Second
 }
 
 // BackendConfig holds per-backend settings (e.g. paseo bin path).

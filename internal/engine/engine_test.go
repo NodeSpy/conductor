@@ -3,7 +3,9 @@ package engine
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
@@ -21,6 +23,8 @@ func (f *fakeDispatcher) Dispatch(_ context.Context, r dispatch.Request) (dispat
 	f.reqs = append(f.reqs, r)
 	return f.ref, f.err
 }
+
+func (f *fakeDispatcher) WaitForAgent(context.Context, string, time.Duration) {}
 
 type fakeNotifier struct{ events []string }
 
@@ -177,6 +181,68 @@ func TestDisabledActionSkipped(t *testing.T) {
 	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 7, "h", "s", act))
 	if len(d.reqs) != 0 {
 		t.Fatal("disabled action should not dispatch")
+	}
+}
+
+// gateFake blocks in WaitForAgent so a launched agent keeps holding its slot,
+// letting a test observe the concurrency cap.
+type gateFake struct {
+	mu     sync.Mutex
+	reqs   []dispatch.Request
+	waitCh chan struct{}
+}
+
+func (g *gateFake) Dispatch(_ context.Context, r dispatch.Request) (dispatch.RunRef, error) {
+	g.mu.Lock()
+	g.reqs = append(g.reqs, r)
+	g.mu.Unlock()
+	return dispatch.RunRef{Backend: "paseo", AgentID: "a-" + r.Trigger.Target.HeadSHA}, nil
+}
+
+func (g *gateFake) WaitForAgent(ctx context.Context, _ string, _ time.Duration) {
+	select {
+	case <-g.waitCh:
+	case <-ctx.Done():
+	}
+}
+
+func (g *gateFake) count() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.reqs)
+}
+
+func TestConcurrencyCapBlocksSecondAgent(t *testing.T) {
+	cfg := baseCfg()
+	one := 1
+	cfg.Control.MaxConcurrentAgents = &one // only one agent at a time
+	g := &gateFake{waitCh: make(chan struct{})}
+	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: g, Notifier: &fakeNotifier{},
+		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+	act := config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"}
+
+	// First agent takes the only slot; its WaitForAgent blocks, holding it.
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 1, "h1", "s1", act))
+	if g.count() != 1 {
+		t.Fatalf("first agent should dispatch, got %d", g.count())
+	}
+
+	// A second agent for a different PR must block on the cap, not dispatch.
+	done := make(chan struct{})
+	go func() {
+		e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 2, "h2", "s2", act))
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if g.count() != 1 {
+		t.Fatalf("second agent should be blocked by the cap, got %d dispatches", g.count())
+	}
+
+	// Freeing the first agent's slot lets the second proceed.
+	close(g.waitCh)
+	<-done
+	if g.count() != 2 {
+		t.Fatalf("second agent should dispatch once a slot frees, got %d", g.count())
 	}
 }
 

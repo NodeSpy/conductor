@@ -447,6 +447,7 @@ control:
   enabled: true                       # master kill switch
   pause_label: conductor:off          # (label-based pause is a follow-up; enabled/shadow work today)
   shadow: false                       # run the whole pipeline but skip the final push/merge/post
+  max_concurrent_agents: 3            # cap running coding agents (0 = unlimited); extra work waits
 
 notify:
   push: true                          # Paseo push (surfaced via the service log today)
@@ -475,6 +476,7 @@ dispatch:
     paseo: { bin: paseo }             # path to the paseo CLI
     local: {}                         # direct subprocess exec
   identity: { read_token: app, write_token: gh_auth, commit_author: self }  # reads=App, posts/commits=YOU
+  retry: { max: 3, backoff: 10s }     # re-attempt a paseo run that hits a transient git lock/timeout
 
 update:
   auto: false                         # periodically self-update to the latest release
@@ -499,8 +501,8 @@ dry_run: false                        # build+log every action but never execute
 | --- | --- |
 | `integrations` | List of typed instances (`type: github` / `type: cron`). List a type more than once for separate setups. |
 | `agents` | Reusable named agent profiles referenced by `agent` actions. |
-| `dispatch` | Backends (`paseo`, `local`), the default backend per action type, and the read/write identity split. |
-| `control` | Kill switch (`enabled`), `pause_label`, global `shadow`. |
+| `dispatch` | Backends (`paseo`, `local`), the default backend per action type, the read/write identity split, and `retry` for transient `paseo run` failures. |
+| `control` | Kill switch (`enabled`), `pause_label`, global `shadow`, and `max_concurrent_agents` (cap on simultaneously running coding agents; 0 = unlimited). |
 | `notify` | Notifications: `push`, `comment_on_escalate`, and `on` (which events). |
 | `update` | Auto-update: `auto`, `interval`, `apply`. |
 | `store` | Dedup-state + audit paths and their TTL/LRU/rotation bounds. |
@@ -585,6 +587,10 @@ paseo-conductor version
   (`control.shadow: true`) runs everything but skips the final push/merge/post.
 - **Loop-safety**: per-`(pr,kind,head)` attempt caps; on the cap it **escalates** (notifies you)
   instead of looping. A running-agent guard avoids double-dispatch.
+- **Bounded fan-out**: `control.max_concurrent_agents` (default 3) caps how many coding agents run
+  at once, so a catch-up sweep can't swamp the machine or collide on a repo's git locks; excess
+  work waits for a slot. Transient worktree-creation failures (git lock/timeout) are retried
+  (`dispatch.retry`).
 - **Nothing acts on an invalid config**: `validate` gates the service start, and disabled
   integrations/actions never fire.
 - **Auto-merge is deliberate**: `merge_ready` ships disabled in the example and is label-gated, and

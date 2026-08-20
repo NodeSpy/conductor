@@ -19,6 +19,9 @@ import (
 // satisfies it; tests inject fakes.
 type Dispatcher interface {
 	Dispatch(context.Context, dispatch.Request) (dispatch.RunRef, error)
+	// WaitForAgent blocks until a launched background agent goes idle (or the
+	// timeout fires), so a concurrency slot frees only when its work is done.
+	WaitForAgent(ctx context.Context, id string, timeout time.Duration)
 }
 
 // Notifier emits notifications. *notify.Notifier satisfies it.
@@ -48,6 +51,7 @@ type Engine struct {
 	rerun   func(context.Context, core.Trigger, int64)
 	log     func(string, ...any)
 	ch      chan core.Trigger
+	sem     chan struct{} // concurrent-agent cap; nil = unlimited
 }
 
 // Options configure an Engine.
@@ -73,6 +77,9 @@ func New(o Options) *Engine {
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, notif: o.Notifier,
 		author: o.Author, userTok: o.UserToken, log: log,
 		ch: make(chan core.Trigger, 256),
+	}
+	if cap := o.Config.Control.AgentCap(); cap > 0 {
+		e.sem = make(chan struct{}, cap)
 	}
 	e.rerun = o.Rerun
 	if e.rerun == nil {
@@ -190,15 +197,24 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 	shadow := e.cfg.Control.Shadow || (act.Shadow != nil && *act.Shadow)
 
-	// Multi-step workflow: record now (so it doesn't re-fire) and run the steps
-	// in their own goroutine so long agent steps don't block the engine loop.
+	// Multi-step workflow: record now (so it doesn't re-fire), take a slot as
+	// backpressure, and run the steps in their own goroutine (releasing the slot
+	// when the foreground steps finish) so the engine loop isn't blocked by them.
 	if len(act.Steps) > 0 {
 		if !shadow { // shadow is a true preview: don't consume dedup
 			_ = e.store.Record(key, t.Kind, t.Dedup, head)
 		}
 		e.notif.Emit(ctx, notify.EventDispatch, t, "workflow")
 		e.log("engine: workflow %s %s (%d steps%s)", t.Kind, key, len(act.Steps), shadowNote(shadow))
-		go e.runSteps(ctx, t, act, appTok, userTok, shadow)
+		if !shadow && !e.acquire(ctx) {
+			return
+		}
+		go func() {
+			if !shadow {
+				defer e.release()
+			}
+			e.runSteps(ctx, t, act, appTok, userTok, shadow)
+		}()
 		return
 	}
 
@@ -208,9 +224,66 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		Author: e.author, Shadow: shadow,
 	}
 
+	// Coding agents are heavy and contend on a shared repo. Acquire a slot first
+	// (this blocks the loop as backpressure when the cap is full), then hold it in
+	// the background until the launched agent goes idle — so the cap bounds the
+	// number of *running* agents. Commands (gh merge/update-branch, critique) are
+	// cheap and ungated. Checks/record/notify stay synchronous either way.
+	if act.Type == "agent" && !shadow {
+		if !e.acquire(ctx) {
+			return
+		}
+	}
+
 	e.notif.Emit(ctx, notify.EventDispatch, t, act.Type)
 	ref, err := e.disp.Dispatch(ctx, req)
+	e.auditDispatch(t, ref, err)
+	if !shadow { // shadow is a true preview: don't consume dedup/attempts
+		_ = e.store.Record(key, t.Kind, t.Dedup, head)
+	}
 
+	gated := act.Type == "agent" && !shadow
+	if err != nil {
+		e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("dispatch failed: %v", err))
+		if gated {
+			e.release()
+		}
+		return
+	}
+	e.notif.Emit(ctx, notify.EventComplete, t, ref.Backend)
+	if gated && !ref.Shadowed && ref.AgentID != "" {
+		go func() {
+			e.disp.WaitForAgent(ctx, ref.AgentID, agentWaitTimeout(profile))
+			e.release()
+		}()
+	} else if gated {
+		e.release()
+	}
+}
+
+// acquire takes a concurrency slot, blocking until one is free (backpressure).
+// Returns false if the context is cancelled first. No-op (true) when uncapped.
+func (e *Engine) acquire(ctx context.Context) bool {
+	if e.sem == nil {
+		return true
+	}
+	select {
+	case e.sem <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// release returns a concurrency slot.
+func (e *Engine) release() {
+	if e.sem != nil {
+		<-e.sem
+	}
+}
+
+// auditDispatch writes the dispatch audit entry and logs the outcome.
+func (e *Engine) auditDispatch(t core.Trigger, ref dispatch.RunRef, err error) {
 	entry := map[string]any{
 		"event": "dispatch", "repo": t.Target.Repo, "number": t.Target.Number,
 		"kind": t.Kind, "backend": ref.Backend, "argv": ref.Argv,
@@ -218,18 +291,21 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 	if err != nil {
 		entry["error"] = err.Error()
-		e.log("engine: dispatch %s %s: %v", t.Kind, key, err)
+		e.log("engine: dispatch %s %s: %v", t.Kind, t.Key(), err)
 	} else {
-		e.log("engine: dispatched %s %s (backend=%s shadow=%v)", t.Kind, key, ref.Backend, ref.Shadowed)
+		e.log("engine: dispatched %s %s (backend=%s shadow=%v)", t.Kind, t.Key(), ref.Backend, ref.Shadowed)
 	}
 	e.store.Audit(entry)
-	if !shadow { // shadow is a true preview: don't consume dedup/attempts
-		_ = e.store.Record(key, t.Kind, t.Dedup, head)
-	}
+}
 
-	if err == nil {
-		e.notif.Emit(ctx, notify.EventComplete, t, ref.Backend)
+// agentWaitTimeout bounds how long a slot is held waiting for an agent to idle,
+// so a stuck agent eventually frees its slot. Derived from the profile's
+// wait_timeout (plus grace), else a one-hour backstop.
+func agentWaitTimeout(p config.AgentProfile) time.Duration {
+	if d := p.WaitTimeout.D(); d > 0 {
+		return d + 5*time.Minute
 	}
+	return time.Hour
 }
 
 // rerunFailed re-runs the failed jobs of a workflow run, as you.

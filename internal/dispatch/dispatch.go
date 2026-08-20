@@ -9,9 +9,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"text/template"
+	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
@@ -64,6 +66,10 @@ type Dispatcher struct {
 	// Injectable for tests.
 	CheckoutDir func(ctx context.Context, repo string) (string, error)
 
+	// Retry policy for transient `paseo run` failures (git lock/timeout).
+	RetryMax     int
+	RetryBackoff time.Duration
+
 	mu       sync.Mutex
 	repoDirs map[string]string // repo -> resolved checkout cwd (memoized)
 }
@@ -75,7 +81,23 @@ func New(d config.Dispatch, dryRun bool) *Dispatcher {
 		bin = b.Bin
 	}
 	return &Dispatcher{PaseoBin: bin, DefaultBackends: d.DefaultBackends, DryRun: dryRun,
+		RetryMax: d.Retry.Attempts(), RetryBackoff: d.Retry.BackoffDur(),
 		repoDirs: map[string]string{}}
+}
+
+// WaitForAgent blocks until the given background agent goes idle (or ctx/timeout
+// fires), so a concurrency slot frees only once the agent's work is done. A
+// non-positive timeout means wait indefinitely (bounded only by ctx).
+func (d *Dispatcher) WaitForAgent(ctx context.Context, id string, timeout time.Duration) {
+	if id == "" {
+		return
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	_ = exec.CommandContext(ctx, d.PaseoBin, "wait", id).Run()
 }
 
 // Dispatch selects the backend for the action and runs it.

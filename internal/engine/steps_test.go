@@ -54,6 +54,8 @@ func (f *stepFake) Dispatch(_ context.Context, req dispatch.Request) (dispatch.R
 	return dispatch.RunRef{Backend: "test", Kind: req.Trigger.Kind, Output: out}, nil
 }
 
+func (f *stepFake) WaitForAgent(context.Context, string, time.Duration) {}
+
 func (f *stepFake) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

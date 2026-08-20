@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 )
@@ -132,19 +133,85 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, d.PaseoBin, argv...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	ref.Output = string(out)
-	if err != nil {
-		if detail := paseoErrDetail(out, stderr.Bytes()); detail != "" {
-			return ref, fmt.Errorf("paseo run: %w: %s", err, detail)
+	// Run with bounded retries on transient git-lock/timeout failures — common
+	// when a sweep fans out worktree creations onto one shared repo.
+	var out []byte
+	var detail string
+	for attempt := 0; ; attempt++ {
+		cmd := exec.CommandContext(ctx, d.PaseoBin, argv...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err = cmd.Output()
+		ref.Output = string(out)
+		if err == nil {
+			ref.AgentID = parseAgentID(out)
+			return ref, nil
 		}
-		return ref, fmt.Errorf("paseo run: %w", err)
+		detail = paseoErrDetail(out, stderr.Bytes())
+		if attempt >= d.RetryMax || !isTransientPaseoErr(detail) {
+			break
+		}
+		// A timed-out git op can strand a config.lock that poisons every later
+		// creation; clear a clearly-stale one before retrying.
+		clearStaleGitLock(ctx, d.PaseoBin, cwd)
+		select {
+		case <-ctx.Done():
+			return ref, ctx.Err()
+		case <-time.After(d.RetryBackoff):
+		}
 	}
-	ref.AgentID = parseAgentID(out)
-	return ref, nil
+	if detail != "" {
+		return ref, fmt.Errorf("paseo run: %w: %s", err, detail)
+	}
+	return ref, fmt.Errorf("paseo run: %w", err)
+}
+
+// isTransientPaseoErr reports whether a failed paseo run is worth retrying: a git
+// lock collision or timeout while creating the worktree, not a real config error.
+func isTransientPaseoErr(detail string) bool {
+	d := strings.ToLower(detail)
+	for _, sig := range []string{
+		"could not lock config file",
+		"index.lock",
+		"file exists",
+		"timed out",
+		"timeout",
+		"resource temporarily unavailable",
+	} {
+		if strings.Contains(d, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// clearStaleGitLock removes a stale <common-git-dir>/config.lock under cwd if it
+// is old enough to be abandoned (git config writes are sub-second, so a lock
+// older than a minute is a leftover from a killed/timed-out process). Best-effort.
+func clearStaleGitLock(ctx context.Context, paseoBin, cwd string) {
+	if cwd == "" {
+		return
+	}
+	c := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--git-common-dir")
+	outb, err := c.Output()
+	if err != nil {
+		return
+	}
+	common := strings.TrimSpace(string(outb))
+	if common == "" {
+		return
+	}
+	if !strings.HasPrefix(common, "/") {
+		common = cwd + "/" + common
+	}
+	lock := common + "/config.lock"
+	fi, err := os.Stat(lock)
+	if err != nil {
+		return
+	}
+	if time.Since(fi.ModTime()) > time.Minute {
+		_ = os.Remove(lock)
+	}
 }
 
 // paseoErrDetail extracts a human-readable reason from a failed `paseo run`.

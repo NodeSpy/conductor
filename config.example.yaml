@@ -183,6 +183,8 @@ control:
   enabled: true
   pause_label: conductor:off          # (label-based pause is a follow-up; enabled/shadow work today)
   shadow: false                       # run everything but skip the final push/merge/post
+  max_concurrent_agents: 3            # cap running coding agents (protects the box and avoids
+                                      #   git-lock contention when a sweep fans out). 0 = unlimited.
 notify:
   push: true
   comment_on_escalate: true
@@ -210,6 +212,9 @@ dispatch:
     paseo: { bin: paseo }
     local: {}
   identity: { read_token: app, write_token: gh_auth, commit_author: self }
+  retry:                               # re-attempt a `paseo run` that fails with a transient
+    max: 3                             #   git lock/timeout while creating the worktree
+    backoff: 10s
 
 update:
   auto: false                          # periodically self-update to the latest release

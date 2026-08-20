@@ -149,6 +149,29 @@ func TestPaseoNoneUsesExistingWorkspace(t *testing.T) {
 	}
 }
 
+func TestIsTransientPaseoErr(t *testing.T) {
+	transient := []string{
+		"WORKSPACE_CREATE_FAILED: could not lock config file .git/config: File exists",
+		"Git command timed out after 30000ms: git branch --set-upstream-to ...",
+		"fatal: Unable to create '.git/index.lock': File exists",
+	}
+	for _, d := range transient {
+		if !isTransientPaseoErr(d) {
+			t.Errorf("should be transient: %q", d)
+		}
+	}
+	permanent := []string{
+		"INVALID_OPTIONS: --new-workspace and --workspace cannot be combined",
+		"authentication failed",
+		"",
+	}
+	for _, d := range permanent {
+		if isTransientPaseoErr(d) {
+			t.Errorf("should NOT be transient: %q", d)
+		}
+	}
+}
+
 func TestPaseoErrDetail(t *testing.T) {
 	// paseo --json prints its error object to stdout.
 	got := paseoErrDetail([]byte(`{"error":{"code":"WORKSPACE_CREATE_FAILED","message":"boom"}}`), nil)
