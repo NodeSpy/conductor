@@ -57,6 +57,84 @@ func TestChangesRequested(t *testing.T) {
 	}
 }
 
+func TestProjectMapStampsTarget(t *testing.T) {
+	cfg := baseConfig()
+	// Key casing differs from the incoming repo to exercise case-insensitivity.
+	cfg.ProjectMap = map[string]string{"Acme/Widget": "acme-internal/widget"}
+	g := newTestIntegration(t, cfg)
+	body := []byte(`{
+		"action":"submitted",
+		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+		"pull_request":{"number":7,"head":{"sha":"abc123"},"base":{"ref":"main"}},
+		"review":{"state":"changes_requested","id":99,"user":{"login":"reviewer"}}
+	}`)
+	trs := g.triggersFor(context.Background(), "pull_request_review", body)
+	if len(trs) != 1 {
+		t.Fatalf("want 1 trigger, got %d", len(trs))
+	}
+	tgt := trs[0].Target
+	if tgt.Repo != "acme/widget" {
+		t.Fatalf("forge repo must be preserved, got %q", tgt.Repo)
+	}
+	if tgt.Project != "acme-internal/widget" {
+		t.Fatalf("Project should be remapped, got %q", tgt.Project)
+	}
+	if got := tgt.CheckoutRepo(); got != "acme-internal/widget" {
+		t.Fatalf("CheckoutRepo should use Project, got %q", got)
+	}
+}
+
+func TestProjectMapUnsetLeavesTargetRepo(t *testing.T) {
+	g := newTestIntegration(t, baseConfig())
+	tgt := g.target("acme/widget", 7, "abc", "main", "")
+	if tgt.Project != "" {
+		t.Fatalf("unmapped repo should leave Project empty, got %q", tgt.Project)
+	}
+	if tgt.CheckoutRepo() != "acme/widget" {
+		t.Fatalf("CheckoutRepo should fall back to Repo, got %q", tgt.CheckoutRepo())
+	}
+}
+
+func TestProjectRewrite(t *testing.T) {
+	cases := []struct {
+		name    string
+		rewrite ProjectRewrite
+		repo    string
+		want    string // expected Target.Project ("" = falls back to Repo)
+	}{
+		{"org+lowercase", ProjectRewrite{Org: "ednition", Lowercase: true}, "EdnitionCode/RosterStream", "ednition/rosterstream"},
+		{"org only", ProjectRewrite{Org: "ednition"}, "EdnitionCode/RosterStream", "ednition/RosterStream"},
+		{"lowercase only", ProjectRewrite{Lowercase: true}, "EdnitionCode/RosterStream", "ednitioncode/rosterstream"},
+		{"noop when already normalized", ProjectRewrite{Org: "acme", Lowercase: true}, "acme/widget", ""},
+		{"inactive rewrite", ProjectRewrite{}, "EdnitionCode/RosterStream", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseConfig()
+			cfg.ProjectRewrite = tc.rewrite
+			g := newTestIntegration(t, cfg)
+			if got := g.mapProject(tc.repo); got != tc.want {
+				t.Fatalf("mapProject(%q) = %q, want %q", tc.repo, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestProjectMapWinsOverRewrite(t *testing.T) {
+	// An explicit per-repo mapping takes precedence over the org-wide rewrite.
+	cfg := baseConfig()
+	cfg.ProjectMap = map[string]string{"EdnitionCode/Special": "custom/project"}
+	cfg.ProjectRewrite = ProjectRewrite{Org: "ednition", Lowercase: true}
+	g := newTestIntegration(t, cfg)
+	if got := g.mapProject("EdnitionCode/Special"); got != "custom/project" {
+		t.Fatalf("explicit map should win, got %q", got)
+	}
+	// A repo without an explicit entry still gets the rewrite.
+	if got := g.mapProject("EdnitionCode/Other"); got != "ednition/other" {
+		t.Fatalf("rewrite should apply to unlisted repos, got %q", got)
+	}
+}
+
 func TestReviewApprovedIgnored(t *testing.T) {
 	g := newTestIntegration(t, baseConfig())
 	body := []byte(`{

@@ -58,9 +58,12 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		// The default resolver may clone (a side effect) and needs a live daemon,
 		// so skip it during a preview. An injected resolver is pure — always use it.
 		if d.CheckoutDir != nil || (!d.DryRun && !req.Shadow) {
-			dir, err := d.resolveCheckoutDir(ctx, req.Trigger.Target.Repo)
+			// Checkout resolution uses the (possibly remapped) paseo project, so an
+			// existing workspace is reused; forge ops still use the real Repo.
+			proj := req.Trigger.Target.CheckoutRepo()
+			dir, err := d.resolveCheckoutDir(ctx, proj)
 			if err != nil {
-				return RunRef{}, fmt.Errorf("resolve checkout dir for %s: %w", req.Trigger.Target.Repo, err)
+				return RunRef{}, fmt.Errorf("resolve checkout dir for %s: %w", proj, err)
 			}
 			cwd = dir
 		}

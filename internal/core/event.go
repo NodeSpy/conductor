@@ -23,6 +23,20 @@ type Target struct {
 	HeadSHA string
 	BaseRef string
 	HTMLURL string
+	// Project is the paseo project/workspace to check out, when it differs from
+	// Repo (e.g. the forge repo and the registered paseo project differ in org or
+	// casing). Set by an integration's project_map; empty means "use Repo".
+	// Only affects checkout resolution — forge operations still use Repo.
+	Project string
+}
+
+// CheckoutRepo returns the paseo project to check out: Project when set, else
+// Repo. Forge operations should use Repo directly, not this.
+func (t Target) CheckoutRepo() string {
+	if t.Project != "" {
+		return t.Project
+	}
+	return t.Repo
 }
 
 // Trigger is the normalized unit of work. Integrations translate raw provider

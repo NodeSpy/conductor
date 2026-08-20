@@ -492,9 +492,35 @@ func (g *Integration) prTarget(repo string, pr *prPayload) core.Target {
 func (g *Integration) target(repo string, num int, head, base, url string) core.Target {
 	owner, name := splitRepo(repo)
 	return core.Target{
-		Repo: repo, Owner: owner, Name: name,
+		Repo: repo, Owner: owner, Name: name, Project: g.mapProject(repo),
 		PR: num, Number: num, HeadSHA: head, BaseRef: base, HTMLURL: url,
 	}
+}
+
+// mapProject remaps repo (owner/name) to a configured paseo project name so an
+// existing workspace is reused instead of cloning. An explicit project_map entry
+// wins (case-insensitive); otherwise the org-wide project_rewrite applies. Returns
+// "" when nothing changes the name (Target.Repo is then used for checkout).
+func (g *Integration) mapProject(repo string) string {
+	if p, ok := g.projectMap[strings.ToLower(repo)]; ok {
+		return p
+	}
+	rw := g.cfg.ProjectRewrite
+	if !rw.active() {
+		return ""
+	}
+	owner, name := splitRepo(repo)
+	if rw.Org != "" {
+		owner = rw.Org
+	}
+	project := owner + "/" + name
+	if rw.Lowercase {
+		project = strings.ToLower(project)
+	}
+	if project == repo {
+		return "" // rewrite is a no-op for this repo
+	}
+	return project
 }
 
 func (g *Integration) reviewerMatches(repo string, p ghPayload) bool {
