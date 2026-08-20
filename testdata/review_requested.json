@@ -1,0 +1,24 @@
+{
+  "event": "pull_request",
+  "body": {
+    "action": "review_requested",
+    "installation": { "id": 0 },
+    "repository": {
+      "full_name": "EdnitionCode/RosterStream",
+      "name": "RosterStream",
+      "default_branch": "main",
+      "owner": { "login": "EdnitionCode" }
+    },
+    "pull_request": {
+      "number": 5300,
+      "state": "open",
+      "draft": false,
+      "title": "auth: rework session refresh",
+      "html_url": "https://github.com/EdnitionCode/RosterStream/pull/5300",
+      "head": { "sha": "cafebabe1234", "ref": "feature/auth-refresh" },
+      "base": { "ref": "main" },
+      "user": { "login": "someone-else" }
+    },
+    "requested_reviewer": { "login": "danielcbaldwin" }
+  }
+}
