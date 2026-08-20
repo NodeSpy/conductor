@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -133,6 +134,12 @@ func cmdValidate(args []string) error {
 }
 
 func cmdRun(args []string) error {
+	// Load secrets from conductor.env (sibling of the config) into the
+	// environment before config expansion. This lets launchd — which has no
+	// EnvironmentFile — pick up secrets the same way systemd does.
+	cfgPath, _ := configPath(args)
+	loadEnvFile(filepath.Join(filepath.Dir(cfgPath), "conductor.env"))
+
 	cfg, _, err := loadConfig(args)
 	if err != nil {
 		return err
@@ -330,6 +337,32 @@ func anyArchive(cfg *config.Config) bool {
 
 func logf(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", a...)
+}
+
+// loadEnvFile loads simple KEY=VALUE lines from path into the environment
+// (best-effort; missing file is fine). Existing env vars are not overridden.
+func loadEnvFile(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		v = strings.Trim(strings.TrimSpace(v), `"'`)
+		if _, exists := os.LookupEnv(k); !exists {
+			os.Setenv(k, v)
+		}
+	}
 }
 
 func expandHome(p string) string {

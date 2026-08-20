@@ -41,3 +41,22 @@ case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) echo "note: add $BIN_DIR to your PATH" ;;
 esac
+
+# Seed config + secrets if missing.
+CFG_DIR="${PASEO_CONDUCTOR_CFG_DIR:-$HOME/.config/paseo-conductor}"
+mkdir -p "$CFG_DIR" "$HOME/.local/state/paseo-conductor"
+if [ ! -f "$CFG_DIR/config.yaml" ]; then
+  gh api "repos/$REPO/contents/config.example.yaml" -H "Accept: application/vnd.github.raw" >"$CFG_DIR/config.yaml" 2>/dev/null \
+    && echo "==> wrote starter config to $CFG_DIR/config.yaml" || true
+fi
+if [ ! -f "$CFG_DIR/conductor.env" ]; then
+  printf '%s\n' '# Secrets referenced by config.yaml via ${...}. Keep private (chmod 600).' \
+    'EDN_WEBHOOK_SECRET=' 'EDN_SMEE_URL=https://smee.io/CHANGE_ME' >"$CFG_DIR/conductor.env"
+  chmod 600 "$CFG_DIR/conductor.env"
+  echo "==> wrote $CFG_DIR/conductor.env (fill in the secrets)"
+fi
+
+echo "Edit $CFG_DIR/config.yaml + conductor.env, then optionally install the service:"
+# Offer to install the background service (systemd/launchd), prompting first.
+gh api "repos/$REPO/contents/scripts/service.sh" -H "Accept: application/vnd.github.raw" 2>/dev/null \
+  | bash -s -- "$dest" "$CFG_DIR" || echo "(run the installer's service step later: scripts/service.sh)"

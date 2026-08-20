@@ -65,7 +65,10 @@ gh api repos/NodeSpy/paseo-conductor/contents/scripts/install-release.sh \
   -H "Accept: application/vnd.github.raw" | bash
 ```
 
-Pin a version with `... | bash -s v0.2.0`. Installs to `~/.local/bin/paseo-conductor`.
+Pin a version with `... | bash -s v0.2.0`. Installs to `~/.local/bin/paseo-conductor`, seeds a
+starter config, and then **asks whether to install it as a background service** — a `systemd --user`
+unit on Linux or a `launchd` LaunchAgent on macOS. Answer no to skip (set
+`PASEO_CONDUCTOR_INSTALL_SERVICE=yes|no` to answer non-interactively).
 
 ### Updating
 
@@ -89,20 +92,32 @@ update:
 ```sh
 git clone https://github.com/NodeSpy/paseo-conductor.git
 cd paseo-conductor
-./scripts/install.sh          # builds the binary, installs the systemd --user unit, seeds config
-```
-
-Then:
-
-```sh
-paseo-conductor validate
-systemctl --user daemon-reload
-systemctl --user enable --now paseo-conductor
-loginctl enable-linger "$USER"       # keep running across logout/reboot
-journalctl --user -u paseo-conductor -f
+./scripts/install.sh          # builds, seeds config, then prompts to install the service
 ```
 
 Requires the local `paseo` CLI (authenticated to your daemon) and `gh` on PATH.
+
+### Running as a service
+
+`scripts/install.sh` (and the one-liner) offer this for you; you can also run `scripts/service.sh`
+directly, or set it up by hand:
+
+**Linux (systemd --user):**
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now paseo-conductor
+loginctl enable-linger "$USER"                 # keep running across logout/reboot
+journalctl --user -u paseo-conductor -f
+```
+
+**macOS (launchd):**
+```sh
+launchctl load -w ~/Library/LaunchAgents/sh.paseo-conductor.plist
+tail -f ~/Library/Logs/paseo-conductor.log
+```
+
+Secrets live in `~/.config/paseo-conductor/conductor.env`; the daemon loads them itself at startup
+(so both systemd and launchd work without extra env wiring).
 
 ## GitHub App setup
 
