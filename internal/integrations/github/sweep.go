@@ -18,6 +18,13 @@ func (g *Integration) sweepLoop(ctx context.Context, emit core.EmitFunc) {
 	if iv <= 0 {
 		iv = time.Hour
 	}
+	// Sweep once on start to reconcile anything missed while offline, then every
+	// iv thereafter (start at T0 → next at T0+iv → T0+2·iv → …).
+	if ctx.Err() == nil {
+		if err := g.sweep(ctx, emit); err != nil {
+			log.Printf("github[%s]: sweep error: %v", g.name, err)
+		}
+	}
 	t := time.NewTicker(iv)
 	defer t.Stop()
 	for {
