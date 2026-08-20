@@ -19,3 +19,13 @@ const WriteWrapperGuidance = "\n\n---\n" +
 	"  GH_TOKEN=$" + envGHWriteToken + " gh pr comment/review ...\n" +
 	"Reads (gh pr diff, gh run view, gh pr checks) use the ambient GH_TOKEN. " +
 	"Commit and `git push` normally — pushes go over SSH as you."
+
+// RerequestReviewGuidance is appended (when rerequest_review is set) so the agent
+// closes the review loop after addressing feedback.
+const RerequestReviewGuidance = "\n\n---\n" +
+	"After you have addressed the feedback and pushed, RE-REQUEST review so the " +
+	"loop continues. Identify the human reviewer(s) who requested changes " +
+	"(`gh pr view {{.repo}}#{{.pr}} --json reviewRequests,reviews`) and re-request " +
+	"each of them as yourself (skip bots):\n" +
+	"  GH_TOKEN=$" + envGHWriteToken + " gh pr edit {{.repo}}#{{.pr}} --add-reviewer <login>\n" +
+	"Only do this once your push has succeeded."

@@ -51,6 +51,9 @@ func (e *Engine) runSteps(ctx context.Context, t core.Trigger, act config.Action
 			profile = e.cfg.Agents[s.Agent]
 			if s.Prompt != "" {
 				s.Prompt += dispatch.WriteWrapperGuidance
+				if s.RerequestReview {
+					s.Prompt += dispatch.RerequestReviewGuidance
+				}
 			}
 		}
 		req := dispatch.Request{

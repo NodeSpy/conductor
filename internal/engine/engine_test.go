@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -183,6 +184,26 @@ func TestFailedDispatchRetriesUntilCap(t *testing.T) {
 	}
 	if !n.has("escalate") {
 		t.Fatal("should escalate at the cap")
+	}
+}
+
+func TestRerequestReviewGuidance(t *testing.T) {
+	// Off by default: no re-request guidance in the prompt.
+	d := &fakeDispatcher{}
+	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
+	e.process(context.Background(), agentTrigger("changes_requested", "a/w", 30, "h", "s",
+		config.Action{Type: "agent", Agent: "fixer", Prompt: "fix it"}))
+	if strings.Contains(d.reqs[0].Action.Prompt, "RE-REQUEST review") {
+		t.Fatal("re-request guidance must be opt-in")
+	}
+
+	// With rerequest_review: guidance appended so the agent closes the loop.
+	d2 := &fakeDispatcher{}
+	e2, _ := newEng(t, baseCfg(), d2, &fakeNotifier{}, nil)
+	e2.process(context.Background(), agentTrigger("changes_requested", "a/w", 31, "h", "s",
+		config.Action{Type: "agent", Agent: "fixer", Prompt: "fix it", RerequestReview: true}))
+	if !strings.Contains(d2.reqs[0].Action.Prompt, "RE-REQUEST review") {
+		t.Fatalf("expected re-request guidance, got: %q", d2.reqs[0].Action.Prompt)
 	}
 }
 

@@ -57,6 +57,7 @@ integrations:
         changes_requested:
           type: agent
           agent: fixer
+          rerequest_review: true          # after addressing + pushing, re-request the reviewer(s)
           prompt: |
             A reviewer requested changes on {{.repo}}#{{.pr}}. Read the review with
             `gh pr view --comments`, address each point, commit, push, and reply to threads.

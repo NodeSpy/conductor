@@ -201,6 +201,9 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		profile = e.cfg.Agents[act.Agent]
 		if act.Prompt != "" {
 			act.Prompt += dispatch.WriteWrapperGuidance
+			if act.RerequestReview {
+				act.Prompt += dispatch.RerequestReviewGuidance
+			}
 		}
 	}
 	appTok, _ := t.Context["app_token"].(string)

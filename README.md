@@ -347,6 +347,7 @@ integrations:
         changes_requested:                                # a review requested changes
           type: agent
           agent: fixer
+          rerequest_review: true                          # re-request the reviewer(s) after pushing
           prompt: "Address the requested changes on {{.repo}}#{{.pr}}, commit, push, reply."
         new_comment:                                      # a comment / bugbot review
           type: agent
@@ -528,7 +529,9 @@ segment is required there; `*/*` isn't supported).
 Paseo agent; `type: command` runs a subprocess (`command`, `env`, `workdir`, `backend`). Common
 options: `enabled`, `checkout` (`checkout-pr`|`branch-off`|`none`), `shadow`, `workdir`, plus
 kind-specific ones (`max_attempts_per_head`, `flaky_rerun`, `from_users`, `labels_any`,
-`require_label`, `method`, `gates`, `project`). `gates` are conditions that must hold before the
+`require_label`, `method`, `gates`, `project`, `rerequest_review`).
+`rerequest_review: true` (agent actions) tells the fixer to re-request review from the reviewer(s)
+who requested changes once it has addressed the feedback and pushed — closing the review loop. `gates` are conditions that must hold before the
 action fires: `merge_ready`'s gates (`merge_state`, `review_decision`, `non_author_approval`,
 `threads_resolved`, `not_draft`) default **on**; `review_requested` supports an **opt-in**
 `not_draft` gate (`gates: { not_draft: true }`) to skip drafts until they're marked ready.
