@@ -25,6 +25,7 @@ func richConfig() Config {
 				"pr_behind":         {Type: "command", Command: []string{"gh", "pr", "update-branch"}},
 				"issue_ready":       {Type: "agent", Agent: "fixer", Checkout: "branch-off", LabelsAny: []string{"Ready"}},
 				"review_requested":  {Type: "command", Command: []string{"critique"}},
+				"self_review":       {Type: "command", Command: []string{"critique", "--review", "{{.repo}}#{{.pr}}"}},
 			},
 		}},
 	}

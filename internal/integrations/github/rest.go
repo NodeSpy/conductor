@@ -1,6 +1,7 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -109,6 +110,164 @@ func (c *restClient) get(ctx context.Context, instID int64, url string, out any)
 		return json.NewDecoder(resp.Body).Decode(out)
 	}
 	return fmt.Errorf("GET %s: rate-limited after retries", url)
+}
+
+// graphql runs a GraphQL query with the installation token and decodes the
+// `data` field into out. GitHub's GraphQL is the only source for review-thread
+// resolution and Projects v2.
+func (c *restClient) graphql(ctx context.Context, instID int64, query string, vars map[string]any, out any) error {
+	tok, err := c.app.installationToken(ctx, instID)
+	if err != nil {
+		return err
+	}
+	body, _ := json.Marshal(map[string]any{"query": query, "variables": vars})
+	url := c.app.apiBase + "/graphql"
+	for attempt := 0; attempt < 4; attempt++ {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := c.httpc.Do(req)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+			wait := rateLimitWait(resp)
+			resp.Body.Close()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(wait):
+			}
+			continue
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode/100 != 2 {
+			return fmt.Errorf("graphql: HTTP %d", resp.StatusCode)
+		}
+		var env struct {
+			Data   json.RawMessage `json:"data"`
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+			return err
+		}
+		if len(env.Errors) > 0 {
+			return fmt.Errorf("graphql: %s", env.Errors[0].Message)
+		}
+		return json.Unmarshal(env.Data, out)
+	}
+	return fmt.Errorf("graphql: rate-limited after retries")
+}
+
+// mergeGate is the composite merge-readiness of a PR (all from one GraphQL query).
+type mergeGate struct {
+	HeadSHA          string
+	MergeStateStatus string // CLEAN, BLOCKED, BEHIND, DIRTY, DRAFT, UNSTABLE, …
+	ReviewDecision   string // APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED
+	IsDraft          bool
+	Author           string
+	ThreadsResolved  bool
+	NonAuthorApprove bool
+	Labels           []string
+}
+
+// prGate fetches the merge-readiness gate for a PR.
+func (c *restClient) prGate(ctx context.Context, instID int64, owner, name string, number int) (*mergeGate, error) {
+	const q = `query($o:String!,$n:String!,$num:Int!){
+	  repository(owner:$o,name:$n){ pullRequest(number:$num){
+	    headRefOid mergeStateStatus reviewDecision isDraft
+	    author{login}
+	    labels(first:50){nodes{name}}
+	    reviewThreads(first:100){nodes{isResolved}}
+	    approvals:reviews(first:50,states:[APPROVED]){nodes{author{login}}}
+	  }}}`
+	var data struct {
+		Repository struct {
+			PullRequest struct {
+				HeadRefOid       string                 `json:"headRefOid"`
+				MergeStateStatus string                 `json:"mergeStateStatus"`
+				ReviewDecision   string                 `json:"reviewDecision"`
+				IsDraft          bool                   `json:"isDraft"`
+				Author           struct{ Login string } `json:"author"`
+				Labels           struct {
+					Nodes []struct{ Name string } `json:"nodes"`
+				} `json:"labels"`
+				ReviewThreads struct {
+					Nodes []struct{ IsResolved bool } `json:"nodes"`
+				} `json:"reviewThreads"`
+				Approvals struct {
+					Nodes []struct {
+						Author struct{ Login string } `json:"author"`
+					} `json:"nodes"`
+				} `json:"approvals"`
+			} `json:"pullRequest"`
+		} `json:"repository"`
+	}
+	if err := c.graphql(ctx, instID, q, map[string]any{"o": owner, "n": name, "num": number}, &data); err != nil {
+		return nil, err
+	}
+	pr := data.Repository.PullRequest
+	g := &mergeGate{
+		HeadSHA: pr.HeadRefOid, MergeStateStatus: pr.MergeStateStatus,
+		ReviewDecision: pr.ReviewDecision, IsDraft: pr.IsDraft, Author: pr.Author.Login,
+		ThreadsResolved: true,
+	}
+	for _, t := range pr.ReviewThreads.Nodes {
+		if !t.IsResolved {
+			g.ThreadsResolved = false
+		}
+	}
+	for _, a := range pr.Approvals.Nodes {
+		if a.Author.Login != "" && a.Author.Login != pr.Author.Login {
+			g.NonAuthorApprove = true
+		}
+	}
+	for _, l := range pr.Labels.Nodes {
+		g.Labels = append(g.Labels, l.Name)
+	}
+	return g, nil
+}
+
+// projectItem is a Projects v2 item resolved to its issue + a field value.
+type projectItem struct {
+	Repo   string // owner/name
+	Number int
+	Title  string
+	Value  string // the named single-select field's current option name
+}
+
+// projectItem resolves a projects_v2_item node to its issue content and the
+// current value of a single-select field (e.g. "Status").
+func (c *restClient) projectItem(ctx context.Context, instID int64, itemNodeID, field string) (*projectItem, error) {
+	const q = `query($id:ID!,$field:String!){ node(id:$id){ ... on ProjectV2Item {
+	  content{ ... on Issue { number title repository{nameWithOwner} } }
+	  fieldValueByName(name:$field){ ... on ProjectV2ItemFieldSingleSelectValue { name } }
+	}}}`
+	var data struct {
+		Node struct {
+			Content struct {
+				Number     int    `json:"number"`
+				Title      string `json:"title"`
+				Repository struct {
+					NameWithOwner string `json:"nameWithOwner"`
+				} `json:"repository"`
+			} `json:"content"`
+			FieldValueByName struct {
+				Name string `json:"name"`
+			} `json:"fieldValueByName"`
+		} `json:"node"`
+	}
+	if err := c.graphql(ctx, instID, q, map[string]any{"id": itemNodeID, "field": field}, &data); err != nil {
+		return nil, err
+	}
+	n := data.Node
+	if n.Content.Repository.NameWithOwner == "" || n.Content.Number == 0 {
+		return nil, fmt.Errorf("project item has no issue content")
+	}
+	return &projectItem{Repo: n.Content.Repository.NameWithOwner, Number: n.Content.Number,
+		Title: n.Content.Title, Value: n.FieldValueByName.Name}, nil
 }
 
 // rateLimitWait derives a backoff from Retry-After / X-RateLimit-Reset.

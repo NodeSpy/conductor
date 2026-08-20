@@ -63,9 +63,14 @@ type ghPayload struct {
 	RequestedTeam *struct {
 		Slug string `json:"slug"`
 	} `json:"requested_team"`
-	CheckRun    *checkPayload `json:"check_run"`
-	CheckSuite  *checkPayload `json:"check_suite"`
-	WorkflowRun *checkPayload `json:"workflow_run"`
+	CheckRun       *checkPayload `json:"check_run"`
+	CheckSuite     *checkPayload `json:"check_suite"`
+	WorkflowRun    *checkPayload `json:"workflow_run"`
+	ProjectsV2Item *struct {
+		NodeID        string `json:"node_id"`
+		ContentNodeID string `json:"content_node_id"`
+		ContentType   string `json:"content_type"`
+	} `json:"projects_v2_item"`
 }
 
 type prPayload struct {
@@ -110,15 +115,19 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 	var trs []core.Trigger
 	switch eventType {
 	case "pull_request_review":
-		trs = g.reviewTriggers(repo, p)
+		trs = g.reviewTriggers(ctx, repo, p)
+	case "pull_request_review_thread":
+		trs = g.mergeReadyTriggers(ctx, repo, threadPR(p), p) // resolved threads may unblock merge
 	case "issue_comment", "pull_request_review_comment":
 		trs = g.commentTriggers(repo, eventType, p)
 	case "check_run", "check_suite", "workflow_run":
-		trs = g.checkTriggers(repo, p)
+		trs = g.checkTriggers(ctx, repo, p)
 	case "pull_request":
 		trs = g.pullRequestTriggers(ctx, repo, p)
 	case "issues":
 		trs = g.issueTriggers(repo, p)
+	case "projects_v2_item":
+		trs = g.projectTriggers(ctx, p)
 	}
 
 	// Inject the App installation token so dispatch can use it for reads.
@@ -135,17 +144,20 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 	return trs
 }
 
-func (g *Integration) reviewTriggers(repo string, p ghPayload) []core.Trigger {
+func (g *Integration) reviewTriggers(ctx context.Context, repo string, p ghPayload) []core.Trigger {
 	if p.Action != "submitted" || p.Review == nil || p.PullRequest == nil {
 		return nil
 	}
-	if p.Review.State != "changes_requested" {
-		return nil
+	var trs []core.Trigger
+	if p.Review.State == "changes_requested" {
+		t := g.prTarget(repo, p.PullRequest)
+		trs = append(trs, g.single(repo, "changes_requested", t,
+			fmt.Sprintf("changes requested on %s#%d", repo, p.PullRequest.Number),
+			fmt.Sprintf("review:%d@%s", p.Review.ID, p.PullRequest.Head.SHA), nil)...)
 	}
-	t := g.prTarget(repo, p.PullRequest)
-	return g.single(repo, "changes_requested", t,
-		fmt.Sprintf("changes requested on %s#%d", repo, p.PullRequest.Number),
-		fmt.Sprintf("review:%d@%s", p.Review.ID, p.PullRequest.Head.SHA), nil)
+	// Any submitted review may have made the PR merge-ready.
+	trs = append(trs, g.mergeReadyTriggers(ctx, repo, p.PullRequest.Number, p)...)
+	return trs
 }
 
 func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []core.Trigger {
@@ -197,7 +209,7 @@ func (g *Integration) filterCommentByUsers(trs []core.Trigger, author string) []
 	return out
 }
 
-func (g *Integration) checkTriggers(repo string, p ghPayload) []core.Trigger {
+func (g *Integration) checkTriggers(ctx context.Context, repo string, p ghPayload) []core.Trigger {
 	if p.Action != "completed" {
 		return nil
 	}
@@ -208,15 +220,20 @@ func (g *Integration) checkTriggers(repo string, p ghPayload) []core.Trigger {
 	if c == nil {
 		c = p.WorkflowRun
 	}
-	if c == nil || !failureConclusions[c.Conclusion] || len(c.PullRequests) == 0 {
+	if c == nil || len(c.PullRequests) == 0 {
 		return nil
 	}
 	num := c.PullRequests[0].Number
-	t := g.target(repo, num, c.HeadSHA, "", "")
-	extra := map[string]any{"failing_check": c.Name, "run_id": c.ID}
-	return g.single(repo, "failing_checks", t,
-		fmt.Sprintf("failing checks on %s#%d", repo, num),
-		"fail@"+c.HeadSHA, extra)
+	var trs []core.Trigger
+	if failureConclusions[c.Conclusion] {
+		t := g.target(repo, num, c.HeadSHA, "", "")
+		extra := map[string]any{"failing_check": c.Name, "run_id": c.ID}
+		trs = append(trs, g.single(repo, "failing_checks", t,
+			fmt.Sprintf("failing checks on %s#%d", repo, num), "fail@"+c.HeadSHA, extra)...)
+	}
+	// A completed check (pass or fail) may have made the PR merge-ready.
+	trs = append(trs, g.mergeReadyTriggers(ctx, repo, num, p)...)
+	return trs
 }
 
 func (g *Integration) pullRequestTriggers(ctx context.Context, repo string, p ghPayload) []core.Trigger {
@@ -238,9 +255,136 @@ func (g *Integration) pullRequestTriggers(ctx context.Context, repo string, p gh
 			fmt.Sprintf("review requested on %s#%d", repo, pr.Number),
 			"reviewreq@"+pr.Head.SHA, nil)
 	case "opened", "reopened", "synchronize", "ready_for_review":
-		return g.mergeStateTriggers(ctx, repo, p, pr)
+		trs := g.mergeStateTriggers(ctx, repo, p, pr)
+		trs = append(trs, g.selfReviewTriggers(repo, pr)...)
+		trs = append(trs, g.mergeReadyTriggers(ctx, repo, pr.Number, p)...)
+		return trs
 	}
 	return nil
+}
+
+// selfReviewTriggers fires when you open/update your own PR (critique it).
+func (g *Integration) selfReviewTriggers(repo string, pr *prPayload) []core.Trigger {
+	if !g.self[strings.ToLower(pr.User.Login)] {
+		return nil // only your own PRs
+	}
+	t := g.prTarget(repo, pr)
+	return g.single(repo, "self_review", t,
+		fmt.Sprintf("self-review %s#%d", repo, pr.Number), "selfreview@"+pr.Head.SHA, nil)
+}
+
+// mergeReadyTriggers evaluates the composite merge gate (one GraphQL query, on
+// App creds) and fires `merge_ready` when everything's green and the PR opts in.
+// It short-circuits before any fetch when the action is absent/disabled.
+func (g *Integration) mergeReadyTriggers(ctx context.Context, repo string, number int, p ghPayload) []core.Trigger {
+	if number == 0 || g.rest == nil || p.Installation.ID == 0 {
+		return nil
+	}
+	act, ok := g.actionFor(repo, "merge_ready")
+	if !ok || !act.IsEnabled() {
+		return nil
+	}
+	owner, name := splitRepo(repo)
+	gate, err := g.rest.prGate(ctx, p.Installation.ID, owner, name, number)
+	if err != nil {
+		return nil
+	}
+	if act.RequireLabel != "" && !containsFold(gate.Labels, act.RequireLabel) {
+		return nil
+	}
+	if !mergeGatePasses(gate, act.Gates) {
+		return nil
+	}
+	t := g.target(repo, number, gate.HeadSHA, "", "")
+	return g.single(repo, "merge_ready", t,
+		fmt.Sprintf("merge-ready %s#%d", repo, number), "mergeready@"+gate.HeadSHA, nil)
+}
+
+// mergeGatePasses applies the standard gate, honoring explicit `false` toggles
+// in the action's `gates` map to relax individual checks (default: all on).
+func mergeGatePasses(g *mergeGate, gates map[string]any) bool {
+	on := func(key string) bool {
+		v, ok := gates[key]
+		if !ok {
+			return true
+		}
+		switch x := v.(type) {
+		case bool:
+			return x
+		case string:
+			return x != "" && x != "false" && x != "no"
+		default:
+			return true
+		}
+	}
+	if on("not_draft") && g.IsDraft {
+		return false
+	}
+	if on("merge_state") && g.MergeStateStatus != "CLEAN" {
+		return false
+	}
+	if on("review_decision") && g.ReviewDecision != "APPROVED" {
+		return false
+	}
+	if on("non_author_approval") && !g.NonAuthorApprove {
+		return false
+	}
+	if on("threads_resolved") && !g.ThreadsResolved {
+		return false
+	}
+	return true
+}
+
+// threadPR extracts the PR number from a pull_request_review_thread event.
+func threadPR(p ghPayload) int {
+	if p.PullRequest != nil {
+		return p.PullRequest.Number
+	}
+	return 0
+}
+
+// projectTriggers handles Projects v2 item moves (e.g. Status → "Ready"). The
+// webhook is thin, so it resolves the issue + field value via GraphQL.
+func (g *Integration) projectTriggers(ctx context.Context, p ghPayload) []core.Trigger {
+	if p.Action != "edited" || p.ProjectsV2Item == nil || p.Installation.ID == 0 || g.rest == nil {
+		return nil
+	}
+	if !strings.EqualFold(p.ProjectsV2Item.ContentType, "Issue") {
+		return nil
+	}
+	item, err := g.rest.projectItem(ctx, p.Installation.ID, p.ProjectsV2Item.NodeID, "Status")
+	if err != nil {
+		return nil
+	}
+	repo := item.Repo
+	act, ok := g.actionFor(repo, "issue_project_moved")
+	if !ok || !act.IsEnabled() {
+		return nil
+	}
+	field, want := "Status", "Ready"
+	if act.Project != nil {
+		if f, ok := act.Project["field"].(string); ok && f != "" {
+			field = f
+		}
+		if to, ok := act.Project["to"].(string); ok && to != "" {
+			want = to
+		}
+	}
+	value := item.Value
+	if field != "Status" { // re-query with the configured field
+		if it2, err := g.rest.projectItem(ctx, p.Installation.ID, p.ProjectsV2Item.NodeID, field); err == nil {
+			value = it2.Value
+		}
+	}
+	if !strings.EqualFold(value, want) {
+		return nil
+	}
+	t := g.target(repo, item.Number, "", "", "")
+	t.PR = 0
+	t.Issue = item.Number
+	return g.single(repo, "issue_project_moved", t,
+		fmt.Sprintf("issue %s#%d moved to %s", repo, item.Number, want),
+		fmt.Sprintf("project:%s=%s@%d", field, want, item.Number), nil)
 }
 
 // mergeStateTriggers enriches a PR via REST to detect conflict/behind state.
