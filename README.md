@@ -519,6 +519,42 @@ kind-specific ones (`max_attempts_per_head`, `flaky_rerun`, `from_users`, `label
 **cron instance** — a `schedules` list; each has a `name`, a `cron` spec or `every` interval,
 optional `run_on_start`, and an `action` (same action shape as above).
 
+### Agent providers & models
+
+An `agents:` profile's `provider`, `model`, and `mode` come straight from your **Paseo daemon** — so
+list the valid values with the `paseo` CLI:
+
+```sh
+paseo provider ls                    # providers + status (available/enabled) + available modes
+paseo provider models claude         # model IDs for a provider (use the ID column as `model:`)
+paseo provider diagnostic claude     # troubleshoot a provider's install/auth/availability
+```
+
+Example — `paseo provider models claude`:
+
+```
+ID                     MODEL          DESCRIPTION
+claude-opus-5          Opus 5         Opus 5 · Latest release
+claude-sonnet-5        Sonnet 5       Sonnet 5 · Best for everyday tasks
+claude-haiku-4-5       Haiku 4.5      Haiku 4.5 · Fastest for quick answers
+claude-opus-4-8[1m]    Opus 4.8 1M    Opus 4.8 with 1M context window
+```
+
+Put the **ID** in a profile's `model:` and the provider name in `provider:`:
+
+```yaml
+agents:
+  fixer:   { provider: claude, model: claude-opus-5 }        # strong model for doing work
+  planner: { provider: claude, model: claude-haiku-4-5 }     # cheap/fast model for triage steps
+```
+
+Notes:
+- `provider:` also accepts the `provider/model` shorthand (e.g. `codex/gpt-5.5`).
+- `mode:` takes one of the provider's modes from the `paseo provider ls` "MODES" column (e.g.
+  `plan`, `default`, `bypass`). Only **available/enabled** providers work — run `agent-login` /
+  enable them in Paseo first.
+- Omit `model:` to use the provider's default.
+
 ## Commands
 
 ```
