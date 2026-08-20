@@ -77,6 +77,27 @@ func (c *restClient) listOpenPRs(ctx context.Context, instID int64, owner, repo 
 	return out, nil
 }
 
+type repoRef struct {
+	FullName string `json:"full_name"`
+	Name     string `json:"name"`
+	Owner    struct {
+		Login string `json:"login"`
+	} `json:"owner"`
+}
+
+// listInstallationRepos lists repositories the installation can access (first
+// page; used to expand `owner/*` sweep globs).
+func (c *restClient) listInstallationRepos(ctx context.Context, instID int64) ([]repoRef, error) {
+	url := c.app.apiBase + "/installation/repositories?per_page=100"
+	var data struct {
+		Repositories []repoRef `json:"repositories"`
+	}
+	if err := c.get(ctx, instID, url, &data); err != nil {
+		return nil, err
+	}
+	return data.Repositories, nil
+}
+
 // get performs a GET with the installation token, honoring rate-limit backoff.
 func (c *restClient) get(ctx context.Context, instID int64, url string, out any) error {
 	tok, err := c.app.installationToken(ctx, instID)

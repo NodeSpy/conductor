@@ -509,8 +509,9 @@ dry_run: false                        # build+log every action but never execute
 list. A rule's `match.repos` takes **glob patterns** (Go `path.Match`): `owner/*`, `*/*`,
 `owner/svc-*`, `owner/[a-z]*`. Note `*` does **not** cross `/`, so a bare `*` won't match `owner/name`
 — use `owner/*` or `*/*`. `reviewer`/`assignee`/`actions`/`workspace` on the matched rule merge over
-`defaults`. (`sweep.repos` is the exception: it hits the REST list endpoint per repo, so those must
-be concrete `owner/name`, not globs.)
+`defaults`. `sweep.repos` accepts concrete `owner/name` or an **owner glob** (`owner/*`,
+`owner/svc-*`) — a glob is expanded to the repos the App installation can access (so an owner
+segment is required there; `*/*` isn't supported).
 
 **Actions** — keyed by kind. `type: agent` references an `agents:` profile + a `prompt` and runs a
 Paseo agent; `type: command` runs a subprocess (`command`, `env`, `workdir`, `backend`). Common

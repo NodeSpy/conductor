@@ -27,7 +27,7 @@ integrations:
     sweep:
       enabled: false                  # off by default; catch-up only
       interval: 1h
-      repos: ["your-org/your-repo"]
+      repos: ["your-org/*"]           # concrete owner/name, or an owner glob (owner/*) → expands to installed repos
 
     # OPTIONAL shared defaults; every rule merges over these.
     defaults:

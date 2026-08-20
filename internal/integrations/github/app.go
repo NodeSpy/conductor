@@ -65,11 +65,24 @@ func (a *appAuth) appJWT() (string, error) {
 // repoInstallationID resolves the App installation id covering a repository
 // (used by the sweep, which has no webhook payload to read it from).
 func (a *appAuth) repoInstallationID(ctx context.Context, owner, repo string) (int64, error) {
+	return a.installationIDByURL(ctx, fmt.Sprintf("%s/repos/%s/%s/installation", a.apiBase, owner, repo))
+}
+
+// accountInstallationID resolves the installation id for an org or user account
+// (used to expand `owner/*` sweep globs). Tries the org endpoint, then user.
+func (a *appAuth) accountInstallationID(ctx context.Context, account string) (int64, error) {
+	id, err := a.installationIDByURL(ctx, fmt.Sprintf("%s/orgs/%s/installation", a.apiBase, account))
+	if err == nil {
+		return id, nil
+	}
+	return a.installationIDByURL(ctx, fmt.Sprintf("%s/users/%s/installation", a.apiBase, account))
+}
+
+func (a *appAuth) installationIDByURL(ctx context.Context, url string) (int64, error) {
 	jwtStr, err := a.appJWT()
 	if err != nil {
 		return 0, err
 	}
-	url := fmt.Sprintf("%s/repos/%s/%s/installation", a.apiBase, owner, repo)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	req.Header.Set("Authorization", "Bearer "+jwtStr)
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -80,7 +93,7 @@ func (a *appAuth) repoInstallationID(ctx context.Context, owner, repo string) (i
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return 0, fmt.Errorf("repo installation: HTTP %d", resp.StatusCode)
+		return 0, fmt.Errorf("installation lookup %s: HTTP %d", url, resp.StatusCode)
 	}
 	var out struct {
 		ID int64 `json:"id"`
