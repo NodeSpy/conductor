@@ -38,12 +38,12 @@ integrations:
 
     # OPTIONAL org-wide shortcut, applied to every repo WITHOUT an explicit
     # project_map entry above. Instead of listing each repo, rewrite the project
-    # name: `org` replaces the owner segment, `lowercase` normalizes casing.
-    # Example: EdnitionCode/AnyRepo -> ednition/anyrepo (matches paseo's lowercased
-    # projects). project_map always wins over this.
+    # name: `org` replaces the owner segment. Casing is handled automatically —
+    # the result is normalized to lowercase and matched case-insensitively, since
+    # paseo project names are lowercased.
+    # Example: EdnitionCode/AnyRepo -> ednition/anyrepo. project_map wins over this.
     project_rewrite:
       org: ednition
-      lowercase: true
 
     # OPTIONAL shared defaults; every rule merges over these.
     defaults:
