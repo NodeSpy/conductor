@@ -605,11 +605,15 @@ paseo-conductor version
   (`control.shadow: true`) runs everything but skips the final push/merge/post.
 - **Loop-safety**: per-`(pr,kind,head)` attempt caps; on the cap it **escalates** (notifies you)
   instead of looping. A running-agent guard avoids double-dispatch.
-- **Reviews persist until done**: autopilot kinds dedup per `(pr,kind,head)` — acted once, done.
-  But `review_requested` is gated on a live conductor agent instead: the sweep keeps re-surfacing a
-  review while you're still a requested reviewer, skipping only if an agent for it is already working
-  or parked for you. It stops when you submit (you drop off the reviewers), so a review you never got
-  to isn't lost after one attempt.
+- **Work persists until actually done, not "dispatched once"**: kinds whose completion is external
+  and re-checkable — `review_requested` (you're still a requested reviewer), `merge_conflict` (PR
+  still dirty), `changes_requested` (threads still unresolved) — are **not** marked done on dispatch.
+  The sweep re-derives reality each run and re-fires until the condition clears, skipping only while
+  an agent is already working/parked for it (and, for kinds with `max_attempts_per_head`, giving up
+  after the cap). So an agent that fails, is culled, or finishes without resolving doesn't leave the
+  work silently abandoned. (Event-specific kinds like `new_comment` still dedup per comment id.)
+  Every sweep logs a summary — repos/PRs scanned, what it emitted, and *why* it skipped candidates
+  (draft-gated, excluded) — so it's never a black box.
 - **Bounded fan-out**: `control.max_concurrent_agents` (default 3) caps how many coding agents run
   at once, so a catch-up sweep can't swamp the machine or collide on a repo's git locks; excess
   work waits for a slot. Transient worktree-creation failures (git lock/timeout) are retried

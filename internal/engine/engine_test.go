@@ -91,14 +91,14 @@ func TestDispatchAndRecord(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, baseCfg(), d, n, nil)
 	act := config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"}
-	tr := agentTrigger("changes_requested", "a/w", 1, "h1", "sig1", act)
+	tr := agentTrigger("new_comment", "a/w", 1, "h1", "sig1", act)
 
 	e.process(context.Background(), tr)
 
 	if len(d.reqs) != 1 {
 		t.Fatalf("want 1 dispatch, got %d", len(d.reqs))
 	}
-	if st.LastSignature("a/w#1", "changes_requested") != "sig1" {
+	if st.LastSignature("a/w#1", "new_comment") != "sig1" {
 		t.Fatal("signature not recorded")
 	}
 	if !n.has("dispatch") || !n.has("complete") {
@@ -114,7 +114,7 @@ func TestDedupSkipsRepeat(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, baseCfg(), d, n, nil)
 	act := config.Action{Type: "agent", Agent: "fixer"}
-	tr := agentTrigger("merge_conflict", "a/w", 2, "h", "same", act)
+	tr := agentTrigger("new_comment", "a/w", 2, "h", "same", act)
 	e.process(context.Background(), tr)
 	e.process(context.Background(), tr)
 	if len(d.reqs) != 1 {
@@ -232,6 +232,33 @@ func TestHoldGuidanceForArchiveAgents(t *testing.T) {
 	}
 }
 
+func TestLiveGatedKindNotAbandonedOnDispatch(t *testing.T) {
+	// changes_requested is live-gated: a "successful" dispatch (agent launched)
+	// must NOT record a done/dedup flag — otherwise a culled/incomplete agent
+	// leaves the work marked done and the sweep never retries it. It should
+	// re-fire until the underlying condition clears (or an agent is working it).
+	act := config.Action{Type: "agent", Agent: "fixer"}
+	d := &fakeDispatcher{} // dispatch succeeds, no lingering agent
+	e, st := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
+	tr := agentTrigger("changes_requested", "a/w", 50, "h", "threads:h:2:abc", act)
+	e.process(context.Background(), tr)
+	if st.LastSignature("a/w#50", "changes_requested") != "" {
+		t.Fatal("changes_requested must not mark 'done' on dispatch")
+	}
+	e.process(context.Background(), tr) // same unresolved state, no live agent → retry
+	if len(d.reqs) != 2 {
+		t.Fatalf("should retry (work not abandoned), got %d dispatches", len(d.reqs))
+	}
+
+	// While an agent is already working it, skip (no duplicate).
+	dLive := &fakeDispatcher{liveAgent: true}
+	e2, _ := newEng(t, baseCfg(), dLive, &fakeNotifier{}, nil)
+	e2.process(context.Background(), agentTrigger("changes_requested", "a/w", 51, "h", "threads:h:2:abc", act))
+	if len(dLive.reqs) != 0 {
+		t.Fatal("should skip while an agent is working it")
+	}
+}
+
 func TestKillSwitch(t *testing.T) {
 	cfg := baseCfg()
 	cfg.Control.Enabled = ptrBool(false)
@@ -262,13 +289,13 @@ func TestShadowPropagates(t *testing.T) {
 func TestClosedDeletesState(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, baseCfg(), d, n, nil)
-	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 6, "h", "s", config.Action{Type: "agent", Agent: "fixer"}))
-	if st.LastSignature("a/w#6", "merge_conflict") == "" {
+	e.process(context.Background(), agentTrigger("new_comment", "a/w", 6, "h", "s", config.Action{Type: "agent", Agent: "fixer"}))
+	if st.LastSignature("a/w#6", "new_comment") == "" {
 		t.Fatal("precondition: expected recorded state")
 	}
 	e.process(context.Background(), core.Trigger{Source: "github", Kind: core.KindClosed,
 		Target: core.Target{Repo: "a/w", PR: 6, Number: 6}})
-	if st.LastSignature("a/w#6", "merge_conflict") != "" {
+	if st.LastSignature("a/w#6", "new_comment") != "" {
 		t.Fatal("closed trigger should delete state")
 	}
 }

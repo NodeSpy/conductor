@@ -49,6 +49,8 @@ func (g *Integration) sweepLoop(ctx context.Context, emit core.EmitFunc) {
 // (conflict/behind) and outstanding review-comment threads (changes_requested) —
 // recovering feedback that no live webhook picked up.
 func (g *Integration) sweep(ctx context.Context, emit core.EmitFunc) error {
+	st := &sweepStats{}
+	log.Printf("github[%s]: sweep starting (%d repo entr%s)", g.name, len(g.cfg.Sweep.Repos), plural(len(g.cfg.Sweep.Repos)))
 	for _, entry := range g.cfg.Sweep.Repos {
 		owner, _ := splitRepo(entry)
 		if owner == "" {
@@ -67,7 +69,7 @@ func (g *Integration) sweep(ctx context.Context, emit core.EmitFunc) error {
 			}
 			for _, r := range repos {
 				if ok, _ := path.Match(entry, r.FullName); ok {
-					g.sweepRepo(ctx, emit, instID, r.Owner.Login, r.Name, r.FullName)
+					g.sweepRepo(ctx, emit, instID, r.Owner.Login, r.Name, r.FullName, st)
 				}
 			}
 			continue
@@ -81,24 +83,43 @@ func (g *Integration) sweep(ctx context.Context, emit core.EmitFunc) error {
 			log.Printf("github[%s]: sweep %s: %v", g.name, entry, err)
 			continue
 		}
-		g.sweepRepo(ctx, emit, instID, owner, name, entry)
+		g.sweepRepo(ctx, emit, instID, owner, name, entry, st)
 	}
+	log.Printf("github[%s]: sweep done — repos=%d prs=%d review_requested=%d (skipped draft=%d, excluded=%d) merge_conflict=%d pr_behind=%d changes_requested=%d",
+		g.name, st.repos, st.prs, st.review, st.reviewDraft, st.reviewExcluded, st.conflict, st.behind, st.comments)
 	return nil
+}
+
+// sweepStats is a per-run tally so a sweep is never a black box: it says what it
+// scanned and, crucially, WHY review candidates were skipped (draft/excluded).
+type sweepStats struct {
+	repos, prs                          int
+	review, reviewDraft, reviewExcluded int
+	conflict, behind, comments          int
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
 }
 
 // sweepRepo reconciles one repo's open PRs: review_requested for PRs where your
 // review is pending (recovers missed review-request webhooks), and conflict/behind
 // for PRs you authored.
-func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID int64, owner, name, repo string) {
+func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID int64, owner, name, repo string, st *sweepStats) {
 	prs, err := g.rest.listOpenPRs(ctx, instID, owner, name)
 	if err != nil {
 		log.Printf("github[%s]: sweep %s: %v", g.name, repo, err)
 		return
 	}
+	st.repos++
 	for _, pr := range prs {
+		st.prs++
 		// review_requested applies to *others'* PRs where your review is pending;
 		// the list payload already carries requested reviewers (no extra fetch).
-		for _, tr := range g.sweepReviewRequested(repo, pr) {
+		for _, tr := range g.sweepReviewRequested(repo, pr, st) {
 			emit(ctx, tr)
 		}
 
@@ -115,11 +136,15 @@ func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID 
 		case "dirty":
 			trs = g.single(repo, "merge_conflict", t, "sweep: merge conflict",
 				"conflict:"+info.Base.Ref+"/"+info.Head.SHA, nil)
+			st.conflict += len(trs)
 		case "behind":
 			trs = g.single(repo, "pr_behind", t, "sweep: behind base",
 				"behind:"+info.Base.Ref+"/"+info.Head.SHA, nil)
+			st.behind += len(trs)
 		}
-		trs = append(trs, g.sweepUnresolvedComments(ctx, instID, owner, name, repo, t)...)
+		ct := g.sweepUnresolvedComments(ctx, instID, owner, name, repo, t)
+		st.comments += len(ct)
+		trs = append(trs, ct...)
 		for _, tr := range trs {
 			emit(ctx, tr)
 		}
@@ -159,29 +184,39 @@ func threadSig(ids []string) string {
 // sweepReviewRequested emits a review_requested trigger when your review is a
 // pending requested reviewer on pr. The dedup signature matches the webhook path
 // ("reviewreq@<head>"), so a request already handled live isn't re-fired.
-func (g *Integration) sweepReviewRequested(repo string, pr prListItem) []core.Trigger {
+func (g *Integration) sweepReviewRequested(repo string, pr prListItem, st *sweepStats) []core.Trigger {
 	r, ok := g.resolve(repo)
 	if !ok {
 		return nil
 	}
 	rev := actorsOr(r.Actions["review_requested"].Reviewer, r.Reviewer)
 	if !g.prReviewerMatches(rev, pr) {
-		return nil
+		return nil // not a review pending on you — not a candidate
 	}
+	// From here it's a genuine pending review for you; account for what happens.
 	if g.draftGated(repo, "review_requested", pr.Draft) {
-		return nil // opt-in not_draft guard: skip drafts in the sweep too
+		st.reviewDraft++
+		log.Printf("github[%s]: sweep %s#%d review pending but skipped (draft)", g.name, repo, pr.Number)
+		return nil
 	}
 	labels := make([]string, 0, len(pr.Labels))
 	for _, l := range pr.Labels {
 		labels = append(labels, l.Name)
 	}
 	if g.excluded(repo, "review_requested", pr.Head.Ref, pr.Title, labels) {
-		return nil // e.g. release PRs
+		st.reviewExcluded++
+		log.Printf("github[%s]: sweep %s#%d review pending but skipped (exclude)", g.name, repo, pr.Number)
+		return nil
 	}
 	t := g.target(repo, pr.Number, pr.Head.SHA, pr.Base.Ref, pr.HTMLURL)
-	return g.single(repo, "review_requested", t,
+	trs := g.single(repo, "review_requested", t,
 		fmt.Sprintf("sweep: review requested on %s#%d", repo, pr.Number),
 		"reviewreq@"+pr.Head.SHA, nil)
+	st.review += len(trs)
+	if len(trs) > 0 {
+		log.Printf("github[%s]: sweep %s#%d review pending -> emitting review_requested", g.name, repo, pr.Number)
+	}
+	return trs
 }
 
 // prReviewerMatches reports whether the configured reviewer (defaulting to the

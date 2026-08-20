@@ -192,7 +192,18 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	liveGate := livenessGated(t.Kind)
 	if liveGate {
 		if e.disp.HasLiveAgent(ctx, key, t.Kind) {
+			e.log("engine: %s %s skipped — an agent is already working/parked for it", t.Kind, key)
 			return // already in progress / parked for you
+		}
+		// A live-gated kind never records "done" on dispatch — the sweep re-derives
+		// reality (still dirty? threads still unresolved? review still pending?) each
+		// run, so culled/failed work isn't abandoned. The one exception: once it has
+		// hit the attempt cap for this exact state, stay quiet until the state
+		// changes, so an unfixable PR isn't re-escalated every sweep.
+		if cap := act.MaxAttemptsPerHead; cap > 0 &&
+			e.store.Attempts(key, t.Kind, head) >= cap &&
+			e.store.LastSignature(key, t.Kind) == t.Dedup {
+			return
 		}
 	} else if t.Dedup != "" && e.store.LastSignature(key, t.Kind) == t.Dedup {
 		return
@@ -270,13 +281,17 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	e.notif.Emit(ctx, notify.EventDispatch, t, act.Type)
 	ref, err := e.disp.Dispatch(ctx, req)
 	e.auditDispatch(t, ref, err)
-	if !shadow && !liveGate { // shadow previews and live-gated kinds don't consume dedup
-		if err != nil {
-			// Count the try (bounded by the attempt cap) but DON'T consume the dedup
-			// signature, so a failed dispatch retries next time instead of being
-			// suppressed forever.
+	if !shadow {
+		switch {
+		case liveGate:
+			// Never mark "done" on dispatch — the sweep re-derives completion. Just
+			// count the attempt so the per-head cap can escalate an unfixable state.
 			_ = e.store.RecordAttempt(key, t.Kind, head)
-		} else {
+		case err != nil:
+			// A failed dispatch: count the try but don't consume the dedup signature,
+			// so it retries next time instead of being suppressed forever.
+			_ = e.store.RecordAttempt(key, t.Kind, head)
+		default:
 			_ = e.store.Record(key, t.Kind, t.Dedup, head)
 		}
 	}
@@ -401,13 +416,20 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 	}
 }
 
-// livenessGated reports whether a kind should be gated on a live conductor agent
-// rather than a permanent dedup flag — true for reviews, whose completion is
-// external state (you submitted → no longer a requested reviewer). The sweep only
-// re-emits these while they're genuinely still pending, and this gate stops a
-// duplicate spawn while one is already working or parked for you.
+// livenessGated reports whether a kind's completion is EXTERNAL state the sweep
+// re-derives each run (review still pending? PR still dirty? threads still
+// unresolved?) rather than a one-shot "we dispatched once" flag. For these we
+// never record "done" on dispatch — a culled/failed/incomplete agent would
+// otherwise mark the work done and it'd be abandoned. Instead we gate on whether
+// an agent is already working/parked for it, and let the sweep retry until the
+// underlying condition clears. new_comment stays dedup-gated (keyed per comment
+// id — each distinct comment must be handled, not collapsed to "an agent ran").
 func livenessGated(kind string) bool {
-	return kind == "review_requested"
+	switch kind {
+	case "review_requested", "merge_conflict", "changes_requested":
+		return true
+	}
+	return false
 }
 
 // acquire takes a concurrency slot, blocking until one is free (backpressure).
