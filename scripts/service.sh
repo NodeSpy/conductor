@@ -16,13 +16,12 @@ ask() {
   local ans="${PASEO_CONDUCTOR_INSTALL_SERVICE:-}"
   if [ -z "$ans" ]; then
     if [ -r /dev/tty ]; then
-      printf 'Install the paseo-conductor background service now? [y/N] ' >/dev/tty
+      printf 'Install the paseo-conductor background service now? [Y/n] ' >/dev/tty
       read -r ans </dev/tty || ans=""
-    else
-      ans="no"
     fi
+    [ -z "$ans" ] && ans="yes" # default: yes (just press Enter, or non-interactive)
   fi
-  case "$ans" in y | Y | yes | YES) return 0 ;; *) return 1 ;; esac
+  case "$ans" in n | N | no | NO) return 1 ;; *) return 0 ;; esac
 }
 
 SYSTEMD_UNIT="$HOME/.config/systemd/user/paseo-conductor.service"

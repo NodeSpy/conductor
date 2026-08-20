@@ -187,9 +187,10 @@ curl -fsSL https://gist.githubusercontent.com/danielcbaldwin/3504ed91ac1014b3f07
 ```
 
 Pin a version with `... | bash -s -- v0.2.1`. Installs to `~/.local/bin/paseo-conductor`, seeds a
-starter config, and then **asks whether to install it as a background service** — a `systemd --user`
-unit on Linux or a `launchd` LaunchAgent on macOS. Answer no to skip (set
-`PASEO_CONDUCTOR_INSTALL_SERVICE=yes|no` to answer non-interactively).
+starter config, and then **installs the background service by default** (press Enter to confirm) —
+a `systemd --user` unit on Linux or a `launchd` LaunchAgent on macOS. Answer `n` to skip (set
+`PASEO_CONDUCTOR_INSTALL_SERVICE=yes|no` to answer non-interactively). It only *starts* the service
+once your config validates, so a fresh install won't crash-loop.
 
 ### Updating
 
