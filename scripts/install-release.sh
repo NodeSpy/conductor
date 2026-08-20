@@ -43,16 +43,18 @@ case ":$PATH:" in
   *) echo "note: add $BIN_DIR to your PATH" ;;
 esac
 
-# Seed config + secrets if missing.
+# Seed a valid starter config + secrets if missing; drop the full example as reference.
 CFG_DIR="${PASEO_CONDUCTOR_CFG_DIR:-$HOME/.config/paseo-conductor}"
 mkdir -p "$CFG_DIR" "$HOME/.local/state/paseo-conductor"
+gh api "repos/$REPO/contents/config.example.yaml" -H "Accept: application/vnd.github.raw" \
+  >"$CFG_DIR/config.example.yaml" 2>/dev/null || true
 if [ ! -f "$CFG_DIR/config.yaml" ]; then
-  gh api "repos/$REPO/contents/config.example.yaml" -H "Accept: application/vnd.github.raw" >"$CFG_DIR/config.yaml" 2>/dev/null \
-    && echo "==> wrote starter config to $CFG_DIR/config.yaml" || true
+  gh api "repos/$REPO/contents/config.starter.yaml" -H "Accept: application/vnd.github.raw" >"$CFG_DIR/config.yaml" 2>/dev/null \
+    && echo "==> wrote starter config to $CFG_DIR/config.yaml (github integration is disabled until you configure it)" || true
 fi
 if [ ! -f "$CFG_DIR/conductor.env" ]; then
   printf '%s\n' '# Secrets referenced by config.yaml via ${...}. Keep private (chmod 600).' \
-    'EDN_WEBHOOK_SECRET=' 'EDN_SMEE_URL=https://smee.io/CHANGE_ME' >"$CFG_DIR/conductor.env"
+    'GH_WEBHOOK_SECRET=' 'GH_SMEE_URL=https://smee.io/CHANGE_ME' >"$CFG_DIR/conductor.env"
   chmod 600 "$CFG_DIR/conductor.env"
   echo "==> wrote $CFG_DIR/conductor.env (fill in the secrets)"
 fi

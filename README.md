@@ -22,8 +22,9 @@ curl -fsSL https://gist.githubusercontent.com/danielcbaldwin/3504ed91ac1014b3f07
 Then:
 
 1. Create a GitHub App + smee channel — see [GitHub App setup](#github-app-setup).
-2. Fill in `~/.config/paseo-conductor/config.yaml` and `~/.config/paseo-conductor/conductor.env`
-   (secrets) — see [Configuration](#configuration).
+2. Fill in `~/.config/paseo-conductor/config.yaml` (app id, repos, your login) and
+   `~/.config/paseo-conductor/conductor.env` (secrets), then set the github integration
+   `enabled: true` — see [Configuration](#configuration). (The seeded starter is valid but disabled.)
 3. `paseo-conductor validate` → start the service (the installer offers this).
 
 Details and other install paths are under [Install](#install-released-binary-one-liner). Later:

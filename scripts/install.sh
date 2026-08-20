@@ -13,16 +13,17 @@ mkdir -p "$BIN_DIR" "$CFG_DIR" "$STATE_DIR"
 echo "==> building paseo-conductor"
 (cd "$here" && CGO_ENABLED=0 go build -o "$BIN_DIR/paseo-conductor" ./cmd/paseo-conductor)
 
+install -m 0644 "$here/config.example.yaml" "$CFG_DIR/config.example.yaml"
 if [ ! -f "$CFG_DIR/config.yaml" ]; then
-  echo "==> writing starter config to $CFG_DIR/config.yaml"
-  install -m 0644 "$here/config.example.yaml" "$CFG_DIR/config.yaml"
+  echo "==> writing starter config to $CFG_DIR/config.yaml (github integration disabled until configured)"
+  install -m 0644 "$here/config.starter.yaml" "$CFG_DIR/config.yaml"
 fi
 
 if [ ! -f "$CFG_DIR/conductor.env" ]; then
   cat >"$CFG_DIR/conductor.env" <<'EOF'
 # Secrets referenced by config.yaml via ${...}. Keep this file private (chmod 600).
-EDN_WEBHOOK_SECRET=
-EDN_SMEE_URL=https://smee.io/CHANGE_ME
+GH_WEBHOOK_SECRET=
+GH_SMEE_URL=https://smee.io/CHANGE_ME
 EOF
   chmod 600 "$CFG_DIR/conductor.env"
   echo "==> wrote $CFG_DIR/conductor.env (fill in the secrets)"

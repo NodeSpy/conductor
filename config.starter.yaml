@@ -1,0 +1,50 @@
+# paseo-conductor — starter config (valid out of the box; does nothing until you enable it).
+#
+# To go live:
+#   1. Create a GitHub App + a smee channel (see README → "GitHub App setup").
+#   2. Put the App id + private key path here, and the secrets in conductor.env.
+#   3. Set your GitHub login(s) and repo glob(s) below.
+#   4. Flip `enabled: true`, run `paseo-conductor validate`, then start the service.
+#
+# Full annotated reference: config.example.yaml (copied next to this file).
+
+integrations:
+  - type: github
+    name: default
+    enabled: false                    # <- set true once the App + webhook below are configured
+    app:
+      app_id: 0                       # <- your GitHub App id
+      private_key_path: ~/.config/paseo-conductor/github-app.pem
+      webhook_secret: ${GH_WEBHOOK_SECRET}
+      verify_signature: false         # keep false with smee; true with a direct `listen` receiver
+    webhook:
+      smee_url: ${GH_SMEE_URL}        # https://smee.io/<channel>   (or use `listen:` for direct HTTP)
+    defaults:
+      reviewer: { logins: [] }        # <- your GitHub login(s), e.g. [octocat]
+      assignee: { logins: [] }
+      actions:
+        merge_conflict:
+          type: agent
+          agent: fixer
+          prompt: "Resolve the conflict on {{.repo}}#{{.pr}} against {{.base}}, verify it builds, commit, and push."
+        failing_checks:
+          type: agent
+          agent: fixer
+          flaky_rerun: { enabled: true, max: 1 }
+          prompt: "Fix the failing checks on {{.repo}}#{{.pr}} — diagnose, fix, verify, commit, and push."
+        changes_requested:
+          type: agent
+          agent: fixer
+          prompt: "Address the requested changes on {{.repo}}#{{.pr}}, commit, push, and reply to threads."
+    rules:
+      - match: { repos: ["OWNER/*"] }  # <- your org/user, e.g. ["octocat/*"]
+
+agents:
+  fixer:
+    provider: claude
+    workspace: worktree
+    archive_when_done: true
+
+update:
+  auto: false                          # set true to self-update a few times a day
+  interval: 8h

@@ -129,7 +129,8 @@ func cmdValidate(args []string) error {
 			return err
 		}
 	}
-	fmt.Printf("ok: %d integration(s) configured, %d agent profile(s)\n", len(igs), len(cfg.Agents))
+	fmt.Printf("ok: %d integration(s) configured (%d enabled), %d agent profile(s)\n",
+		len(cfg.Integrations), len(igs), len(cfg.Agents))
 	return nil
 }
 
