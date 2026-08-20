@@ -184,6 +184,24 @@ func TestPaseoErrDetail(t *testing.T) {
 	}
 }
 
+func TestParseWorktreeWorkspaces(t *testing.T) {
+	data := []byte(`[
+	  {"workspaceId":"wks_wt","project":"a/w","isolation":"worktree","cwd":"/wt/one"},
+	  {"workspaceId":"wks_base","project":"a/w","isolation":"local","cwd":"/home/me/w"},
+	  {"workspaceId":"wks_nocwd","isolation":"worktree","cwd":""}
+	]`)
+	m := parseWorktreeWorkspaces(data)
+	if m["/wt/one"] != "wks_wt" {
+		t.Errorf("worktree should map: %v", m)
+	}
+	if _, ok := m["/home/me/w"]; ok {
+		t.Errorf("base (local) checkout must not be archivable: %v", m)
+	}
+	if len(m) != 1 {
+		t.Errorf("only the valid worktree should be kept: %v", m)
+	}
+}
+
 func TestLocalCommandArgv(t *testing.T) {
 	d := newDispatcher()
 	req := Request{
