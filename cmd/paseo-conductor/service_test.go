@@ -2,10 +2,42 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestServicePATHAndUnit(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("PATH", "/custom/tool/bin:/usr/bin")
+
+	p := servicePATH()
+	parts := strings.Split(p, ":")
+	if parts[0] != filepath.Join(tmp, ".local/bin") {
+		t.Fatalf("~/.local/bin must be first: %q", p)
+	}
+	if !strings.Contains(p, "/custom/tool/bin") {
+		t.Fatalf("install-time PATH entries should carry over: %q", p)
+	}
+	seen := map[string]bool{}
+	for _, x := range parts {
+		if seen[x] {
+			t.Fatalf("PATH has a duplicate %q: %q", x, p)
+		}
+		seen[x] = true
+	}
+
+	// The rendered unit must set PATH so the service can find paseo/gh/etc.
+	if serviceKind() == "" {
+		t.Skip("no service manager on this OS")
+	}
+	_, content := unitPathAndContent()
+	if !strings.Contains(content, "PATH="+p) && !strings.Contains(content, p) {
+		t.Fatalf("unit should embed the service PATH:\n%s", content)
+	}
+}
 
 func TestUnitContentAndSync(t *testing.T) {
 	if serviceKind() == "" {

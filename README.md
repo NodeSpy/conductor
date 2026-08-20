@@ -237,6 +237,12 @@ reinstall the service after an upgrade. (They only touch a unit that's already i
 Secrets live in `~/.config/paseo-conductor/conductor.env`; the daemon loads them itself at startup
 (so both systemd and launchd work without extra env wiring).
 
+**PATH is baked into the unit.** A `--user` service otherwise inherits a minimal PATH and can't find
+`paseo`/`gh`/`go`/`claude` in `~/.local/bin`. The generated unit sets `PATH` to `~/.local/bin` +
+the standard bin dirs (incl. Homebrew and Go) + your install-time PATH, so the tools resolve with no
+manual drop-in. Tools in an unusual location? Add a systemd drop-in (`Environment=PATH=…`) or set
+`PATH` in `conductor.env`.
+
 ## GitHub App setup
 
 1. **Create a GitHub App** — register a new one at:

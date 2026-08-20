@@ -44,6 +44,34 @@ func home() string {
 
 func launchdLog() string { return filepath.Join(home(), "Library/Logs/paseo-conductor.log") }
 
+// servicePATH builds the PATH the service should run with. A --user service
+// otherwise inherits systemd/launchd's minimal PATH, so `paseo`, `gh`, `go`, and
+// `claude` in ~/.local/bin aren't found. Guarantee ~/.local/bin + the standard
+// dirs, then append the install-time PATH (deduped) so wherever the user keeps
+// those tools comes along too.
+func servicePATH() string {
+	seen := map[string]bool{}
+	var parts []string
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			parts = append(parts, p)
+		}
+	}
+	add(filepath.Join(home(), ".local/bin"))
+	for _, p := range []string{
+		"/opt/homebrew/bin", "/opt/homebrew/sbin", // macOS (Apple silicon)
+		"/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+		"/usr/local/go/bin", "/usr/lib/go/bin", filepath.Join(home(), "go/bin"),
+	} {
+		add(p)
+	}
+	for _, p := range strings.Split(os.Getenv("PATH"), string(os.PathListSeparator)) {
+		add(p)
+	}
+	return strings.Join(parts, ":")
+}
+
 // unitPathAndContent returns the install path and rendered content of the
 // service unit for the current OS. Empty path => unsupported OS.
 func unitPathAndContent() (path, content string) {
@@ -61,11 +89,12 @@ Wants=network-online.target
 ExecStart=%s run
 Restart=always
 RestartSec=5
+Environment=PATH=%s
 EnvironmentFile=-%s/conductor.env
 
 [Install]
 WantedBy=default.target
-`, exe, cfg)
+`, exe, servicePATH(), cfg)
 	case "launchd":
 		path = filepath.Join(home(), "Library/LaunchAgents/sh.paseo-conductor.plist")
 		log := launchdLog()
@@ -79,13 +108,15 @@ WantedBy=default.target
         <string>%s</string>
         <string>run</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict><key>PATH</key><string>%s</string></dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>StandardOutPath</key><string>%s</string>
     <key>StandardErrorPath</key><string>%s</string>
 </dict>
 </plist>
-`, exe, log, log)
+`, exe, servicePATH(), log, log)
 	}
 	return path, content
 }
