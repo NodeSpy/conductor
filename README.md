@@ -608,6 +608,10 @@ paseo-conductor version
   at once, so a catch-up sweep can't swamp the machine or collide on a repo's git locks; excess
   work waits for a slot. Transient worktree-creation failures (git lock/timeout) are retried
   (`dispatch.retry`).
+- **Resumable workflows**: a multi-step workflow persists its progress (completed steps + their
+  outputs) to `runs.json`, so if the conductor restarts or crashes mid-flight it resumes on startup —
+  completed steps are not re-run; the one step that was in progress re-runs (at-least-once). The App
+  token is re-minted on resume (never persisted).
 - **Nothing acts on an invalid config**: `validate` gates the service start, and disabled
   integrations/actions never fire.
 - **Auto-merge is deliberate**: `merge_ready` ships disabled in the example and is label-gated, and

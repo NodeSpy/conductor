@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
 	"github.com/NodeSpy/paseo-conductor/internal/notify"
+	"github.com/NodeSpy/paseo-conductor/internal/store"
 )
 
 func waitFor(t *testing.T, cond func() bool) {
@@ -99,7 +101,7 @@ func TestWorkflowBranchHasContext(t *testing.T) {
 	d.outputs["evaluate"] = `{"has_context": true, "summary": "clear repro"}`
 	e := stepEngine(t, d)
 
-	e.runSteps(context.Background(), issueTrigger(), triageAction(), "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), triageAction(), "app", "usr", false)
 
 	if got := d.ran; len(got) != 2 || got[0] != "evaluate" || got[1] != "work" {
 		t.Fatalf("expected evaluate→work, got %v", got)
@@ -123,7 +125,7 @@ func TestWorkflowBranchNoContext(t *testing.T) {
 	d.outputs["evaluate"] = `{"has_context": false}`
 	e := stepEngine(t, d)
 
-	e.runSteps(context.Background(), issueTrigger(), triageAction(), "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), triageAction(), "app", "usr", false)
 
 	if got := d.ran; len(got) != 2 || got[0] != "evaluate" || got[1] != "ask" {
 		t.Fatalf("expected evaluate→ask, got %v", got)
@@ -144,7 +146,7 @@ func TestWorkflowBackgroundStepHandsOff(t *testing.T) {
 		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true,
 			Prompt: "draft and hand off {{.issue}}"},
 	}}
-	e.runSteps(context.Background(), issueTrigger(), act, "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, "app", "usr", false)
 
 	if got := d.ran; len(got) != 1 || got[0] != "handoff" {
 		t.Fatalf("expected handoff to run, got %v", got)
@@ -157,6 +159,38 @@ func TestWorkflowBackgroundStepHandsOff(t *testing.T) {
 	if !n.has(notify.EventNeedsInput) {
 		t.Fatalf("background step should emit needs_input, got %v", n.events)
 	}
+}
+
+func TestWorkflowResumesFromCheckpoint(t *testing.T) {
+	d := newStepFake()
+	st := tempStore(t)
+	cfg := &config.Config{Agents: map[string]config.AgentProfile{
+		"planner": {Provider: "claude-haiku"}, "worker": {Provider: "claude-opus"}}}
+	cfg.Control.Enabled = ptrBool(true)
+	e := New(Options{Config: cfg, Store: st, Dispatch: d, Notifier: &fakeNotifier{},
+		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil },
+		RefreshAppToken: func(core.Trigger) (string, error) { return "app", nil }})
+
+	// Persist a run checkpointed AFTER step 0 (evaluate) with has_context=true.
+	tr := issueTrigger()
+	tr.Instance = "i"
+	tp := tr
+	tp.Action = nil
+	trigJSON, _ := json.Marshal(tp)
+	actJSON, _ := json.Marshal(triageAction())
+	_ = st.PutRun(store.WorkflowRun{ID: "run1", Instance: "i",
+		Trigger: trigJSON, Action: actJSON, StepIndex: 1,
+		Outputs: map[string]map[string]any{"evaluate": {"has_context": true}}})
+
+	e.ResumeWorkflows(context.Background())
+	waitFor(t, func() bool { return d.count() >= 1 })
+
+	// evaluate (step 0) must NOT re-run; only "work" (step 1) does.
+	if got := d.ran; len(got) != 1 || got[0] != "work" {
+		t.Fatalf("resume should run only 'work' from the checkpoint, got %v", got)
+	}
+	// The run is cleared once it completes.
+	waitFor(t, func() bool { return len(st.PendingRuns()) == 0 })
 }
 
 func TestWorkflowViaProcess(t *testing.T) {

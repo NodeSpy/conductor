@@ -11,6 +11,7 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
 	"github.com/NodeSpy/paseo-conductor/internal/expr"
 	"github.com/NodeSpy/paseo-conductor/internal/notify"
+	"github.com/NodeSpy/paseo-conductor/internal/store"
 )
 
 // runSteps executes a multi-step workflow: each step may use a different
@@ -19,12 +20,17 @@ import (
 // {{ .steps.<id>.outputs.<key> }} and `if` conditions like
 // `steps.<id>.outputs.<key> == true`. Steps run to completion in order; the
 // whole workflow runs in its own goroutine so the engine loop isn't blocked.
-func (e *Engine) runSteps(ctx context.Context, t core.Trigger, act config.Action, appTok, userTok string, shadow bool) {
+func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Trigger, act config.Action, appTok, userTok string, shadow bool) {
 	data := e.stepBaseData(t)
 	stepsOut := map[string]any{}
+	// Restore completed steps' outputs (resume) so `if:`/templating see them.
+	for id, out := range run.Outputs {
+		stepsOut[id] = map[string]any{"outputs": out}
+	}
 	data["steps"] = stepsOut
 
-	for i, step := range act.Steps {
+	for i := run.StepIndex; i < len(act.Steps); i++ {
+		step := act.Steps[i]
 		id := step.ID
 		if id == "" {
 			id = fmt.Sprintf("step%d", i+1)
@@ -36,11 +42,14 @@ func (e *Engine) runSteps(ctx context.Context, t core.Trigger, act config.Action
 				e.log("engine: step %s if-error: %v", id, err)
 				e.store.Audit(map[string]any{"event": "step_error", "repo": t.Target.Repo,
 					"number": t.Target.Number, "kind": t.Kind, "step": id, "error": err.Error()})
+				e.finishRun(run)
 				return
 			}
 			if !ok {
 				e.store.Audit(map[string]any{"event": "step_skipped", "repo": t.Target.Repo,
 					"number": t.Target.Number, "kind": t.Kind, "step": id, "if": step.If})
+				run.StepIndex = i + 1
+				e.saveRun(run)
 				continue
 			}
 		}
@@ -77,9 +86,17 @@ func (e *Engine) runSteps(ctx context.Context, t core.Trigger, act config.Action
 			e.store.Audit(entry)
 			e.log("engine: step %s failed: %v", id, err)
 			e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("workflow step %q failed: %v", id, err))
+			e.finishRun(run)
 			return // fail-fast
 		}
 		e.store.Audit(entry)
+		// Checkpoint: this step is done — advance past it and record its outputs so
+		// a restart resumes at the NEXT step (the interrupted one re-runs).
+		run.StepIndex = i + 1
+		if !s.Background {
+			run.Outputs[id] = outputs
+		}
+		e.saveRun(run)
 		if s.Background {
 			// Handed off to a live agent — tell the user it's waiting for them.
 			e.log("engine: step %s launched in background (agent %s)", id, ref.AgentID)
@@ -90,6 +107,7 @@ func (e *Engine) runSteps(ctx context.Context, t core.Trigger, act config.Action
 		e.log("engine: step %s done (%s)", id, ref.Backend)
 	}
 	e.notif.Emit(ctx, notify.EventComplete, t, "workflow")
+	e.finishRun(run)
 }
 
 // stepBaseData builds the template/condition data (trigger fields + context).

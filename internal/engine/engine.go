@@ -4,6 +4,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
 	"github.com/NodeSpy/paseo-conductor/internal/notify"
+	"github.com/NodeSpy/paseo-conductor/internal/store"
 )
 
 // Dispatcher runs a resolved request against a backend. *dispatch.Dispatcher
@@ -42,20 +44,25 @@ type Store interface {
 	Record(key, kind, sig, head string) error
 	RecordAttempt(key, kind, head string) error
 	Audit(entry map[string]any)
+	// Workflow-run persistence, so multi-step workflows resume across restarts.
+	PutRun(r store.WorkflowRun) error
+	DeleteRun(id string) error
+	PendingRuns() []store.WorkflowRun
 }
 
 // Engine is the central work loop.
 type Engine struct {
-	cfg     *config.Config
-	store   Store
-	disp    Dispatcher
-	notif   Notifier
-	author  dispatch.Author
-	userTok func() (string, error)
-	rerun   func(context.Context, core.Trigger, int64)
-	log     func(string, ...any)
-	ch      chan core.Trigger
-	sem     chan struct{} // concurrent-agent cap; nil = unlimited
+	cfg        *config.Config
+	store      Store
+	disp       Dispatcher
+	notif      Notifier
+	author     dispatch.Author
+	userTok    func() (string, error)
+	rerun      func(context.Context, core.Trigger, int64)
+	refreshTok func(core.Trigger) (string, error) // re-mint the App token on resume
+	log        func(string, ...any)
+	ch         chan core.Trigger
+	sem        chan struct{} // concurrent-agent cap; nil = unlimited
 }
 
 // Options configure an Engine.
@@ -68,7 +75,11 @@ type Options struct {
 	UserToken func() (string, error)
 	// Rerun, if set, overrides the flaky-CI rerun step (tests inject a spy).
 	Rerun func(context.Context, core.Trigger, int64)
-	Log   func(string, ...any)
+	// RefreshAppToken re-mints the App installation token for a persisted trigger
+	// on resume (the persisted one is expired). Given the trigger's instance +
+	// installation_id. nil disables workflow resume.
+	RefreshAppToken func(core.Trigger) (string, error)
+	Log             func(string, ...any)
 }
 
 // New builds an Engine.
@@ -89,6 +100,7 @@ func New(o Options) *Engine {
 	if e.rerun == nil {
 		e.rerun = e.rerunFailed
 	}
+	e.refreshTok = o.RefreshAppToken
 	return e
 }
 
@@ -225,11 +237,12 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		if !shadow && !e.acquire(ctx) {
 			return
 		}
+		run := e.newRun(t, act, shadow)
 		go func() {
 			if !shadow {
 				defer e.release()
 			}
-			e.runSteps(ctx, t, act, appTok, userTok, shadow)
+			e.runSteps(ctx, run, t, act, appTok, userTok, shadow)
 		}()
 		return
 	}
@@ -281,6 +294,107 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}()
 	} else if gated {
 		e.release()
+	}
+}
+
+// newRun builds (and, unless shadow, persists) a WorkflowRun so a multi-step
+// workflow can resume across a restart. The persisted trigger has its tokens
+// stripped (they're re-minted on resume) and its Action detached (stored raw).
+func (e *Engine) newRun(t core.Trigger, act config.Action, shadow bool) store.WorkflowRun {
+	run := store.WorkflowRun{
+		ID:       t.Kind + ":" + t.Key(),
+		Source:   t.Source,
+		Instance: t.Instance,
+		Kind:     t.Kind,
+		Repo:     t.Target.Repo,
+		Number:   t.Target.Number,
+		Outputs:  map[string]map[string]any{},
+	}
+	tp := t
+	tp.Action = nil
+	tp.Context = sanitizeContext(t.Context)
+	run.Trigger, _ = json.Marshal(tp)
+	run.Action, _ = json.Marshal(act)
+	if shadow || e.store == nil {
+		run.ID = "" // shadow previews aren't tracked/persisted
+		return run
+	}
+	_ = e.store.PutRun(run)
+	return run
+}
+
+// saveRun persists an updated run (no-op for untracked/shadow runs).
+func (e *Engine) saveRun(run store.WorkflowRun) {
+	if run.ID != "" {
+		_ = e.store.PutRun(run)
+	}
+}
+
+// finishRun removes a completed/failed run from persistence.
+func (e *Engine) finishRun(run store.WorkflowRun) {
+	if run.ID != "" {
+		_ = e.store.DeleteRun(run.ID)
+	}
+}
+
+// sanitizeContext copies a trigger context minus secrets (re-minted on resume).
+func sanitizeContext(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		if k == "app_token" || k == "gh_token" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// ResumeWorkflows re-runs any workflow that was in-flight when the conductor last
+// stopped. Prior steps' outputs are restored; the interrupted step re-runs
+// (at-least-once). Tokens are re-minted. Disabled if RefreshAppToken is unset.
+func (e *Engine) ResumeWorkflows(ctx context.Context) {
+	if e.refreshTok == nil {
+		return
+	}
+	for _, r := range e.store.PendingRuns() {
+		var t core.Trigger
+		var act config.Action
+		if json.Unmarshal(r.Trigger, &t) != nil || json.Unmarshal(r.Action, &act) != nil {
+			e.log("engine: resume %s: unreadable, dropping", r.ID)
+			_ = e.store.DeleteRun(r.ID)
+			continue
+		}
+		t.Action = act
+		appTok, err := e.refreshTok(t)
+		if err != nil {
+			e.log("engine: resume %s: app token: %v (leaving for next start)", r.ID, err)
+			continue
+		}
+		userTok := ""
+		if e.userTok != nil {
+			userTok, _ = e.userTok()
+		}
+		if t.Context == nil {
+			t.Context = map[string]any{}
+		}
+		t.Context["app_token"] = appTok
+		run := r
+		if run.Outputs == nil {
+			run.Outputs = map[string]map[string]any{}
+		}
+		e.log("engine: resuming workflow %s from step %d", r.ID, r.StepIndex)
+		e.store.Audit(map[string]any{"event": "resume", "repo": t.Target.Repo,
+			"number": t.Target.Number, "kind": t.Kind, "step_index": r.StepIndex})
+		if !e.acquire(ctx) {
+			return
+		}
+		go func() {
+			defer e.release()
+			e.runSteps(ctx, run, t, act, appTok, userTok, false)
+		}()
 	}
 }
 

@@ -175,6 +175,7 @@ func cmdRun(args []string) error {
 	eng := engine.New(engine.Options{
 		Config: cfg, Store: st, Dispatch: disp, Notifier: notifier,
 		Author: gitAuthor(), UserToken: userToken, Log: logf,
+		RefreshAppToken: refreshAppToken(igs),
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -201,11 +202,55 @@ func cmdRun(args []string) error {
 		}()
 	}
 
+	// Resume any workflow that was mid-flight when we last stopped.
+	go eng.ResumeWorkflows(ctx)
+
 	logf("paseo-conductor %s running (%d integration(s))", version, len(igs))
 	if err := eng.Run(ctx); err != nil && ctx.Err() == nil {
 		return err
 	}
 	return nil
+}
+
+// appTokener is implemented by integrations that can mint an App installation
+// token (the github integration), used to re-mint on workflow resume.
+type appTokener interface {
+	AppToken(context.Context, int64) (string, error)
+}
+
+// refreshAppToken builds the engine's token-refresh provider: given a persisted
+// trigger, find its integration and re-mint the App token from installation_id.
+func refreshAppToken(igs []core.Integration) func(core.Trigger) (string, error) {
+	return func(t core.Trigger) (string, error) {
+		for _, ig := range igs {
+			if ig.Name() != t.Instance {
+				continue
+			}
+			at, ok := ig.(appTokener)
+			if !ok {
+				return "", fmt.Errorf("integration %q cannot mint app tokens", t.Instance)
+			}
+			instID := toInt64Any(t.Context["installation_id"])
+			if instID == 0 {
+				return "", fmt.Errorf("resume %s: no installation_id", t.Key())
+			}
+			return at.AppToken(context.Background(), instID)
+		}
+		return "", fmt.Errorf("no integration named %q", t.Instance)
+	}
+}
+
+// toInt64Any coerces a JSON-decoded number (float64/int/int64) to int64.
+func toInt64Any(v any) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	}
+	return 0
 }
 
 func cmdReplay(args []string) error {

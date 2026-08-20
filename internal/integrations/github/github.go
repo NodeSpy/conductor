@@ -147,6 +147,15 @@ func (g *Integration) SweepOnce(ctx context.Context, emit core.EmitFunc) error {
 	return g.sweep(ctx, emit)
 }
 
+// AppToken mints a fresh App installation token for the given installation id.
+// Used to re-mint the (short-lived) token when a persisted workflow resumes.
+func (g *Integration) AppToken(ctx context.Context, instID int64) (string, error) {
+	if err := g.ensureClients(); err != nil {
+		return "", err
+	}
+	return g.app.installationToken(ctx, instID)
+}
+
 // Validate checks the instance configuration.
 func (g *Integration) Validate() error {
 	if g.cfg.App.AppID == 0 {

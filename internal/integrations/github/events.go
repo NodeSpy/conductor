@@ -139,13 +139,17 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 		trs = g.projectTriggers(ctx, p)
 	}
 
-	// Inject the App installation token so dispatch can use it for reads.
+	// Inject the App installation token so dispatch can use it for reads, plus the
+	// installation id so a persisted workflow can re-mint the (short-lived) token
+	// on resume.
 	if len(trs) > 0 && p.Installation.ID > 0 && g.app != nil {
-		if tok, err := g.app.installationToken(ctx, p.Installation.ID); err == nil {
-			for i := range trs {
-				if trs[i].Context == nil {
-					trs[i].Context = map[string]any{}
-				}
+		tok, err := g.app.installationToken(ctx, p.Installation.ID)
+		for i := range trs {
+			if trs[i].Context == nil {
+				trs[i].Context = map[string]any{}
+			}
+			trs[i].Context["installation_id"] = p.Installation.ID
+			if err == nil {
 				trs[i].Context["app_token"] = tok
 			}
 		}
