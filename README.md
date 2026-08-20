@@ -593,6 +593,11 @@ paseo-conductor version
   (`control.shadow: true`) runs everything but skips the final push/merge/post.
 - **Loop-safety**: per-`(pr,kind,head)` attempt caps; on the cap it **escalates** (notifies you)
   instead of looping. A running-agent guard avoids double-dispatch.
+- **Reviews persist until done**: autopilot kinds dedup per `(pr,kind,head)` — acted once, done.
+  But `review_requested` is gated on a live conductor agent instead: the sweep keeps re-surfacing a
+  review while you're still a requested reviewer, skipping only if an agent for it is already working
+  or parked for you. It stops when you submit (you drop off the reviewers), so a review you never got
+  to isn't lost after one attempt.
 - **Bounded fan-out**: `control.max_concurrent_agents` (default 3) caps how many coding agents run
   at once, so a catch-up sweep can't swamp the machine or collide on a repo's git locks; excess
   work waits for a slot. Transient worktree-creation failures (git lock/timeout) are retried

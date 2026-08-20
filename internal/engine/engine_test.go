@@ -14,9 +14,10 @@ import (
 )
 
 type fakeDispatcher struct {
-	reqs []dispatch.Request
-	ref  dispatch.RunRef
-	err  error
+	reqs      []dispatch.Request
+	ref       dispatch.RunRef
+	err       error
+	liveAgent bool // HasLiveAgent return value
 }
 
 func (f *fakeDispatcher) Dispatch(_ context.Context, r dispatch.Request) (dispatch.RunRef, error) {
@@ -25,6 +26,7 @@ func (f *fakeDispatcher) Dispatch(_ context.Context, r dispatch.Request) (dispat
 }
 
 func (f *fakeDispatcher) WaitForAgent(context.Context, string, time.Duration) {}
+func (f *fakeDispatcher) HasLiveAgent(context.Context, string, string) bool   { return f.liveAgent }
 
 type fakeNotifier struct{ events []string }
 
@@ -133,6 +135,32 @@ func TestAttemptCapEscalates(t *testing.T) {
 	}
 }
 
+func TestReviewRequestedLivenessGate(t *testing.T) {
+	act := config.Action{Type: "command", Command: []string{"critique"}}
+
+	// A review agent is already parked/working for this PR → don't spawn another.
+	dLive := &fakeDispatcher{liveAgent: true}
+	eLive, _ := newEng(t, baseCfg(), dLive, &fakeNotifier{}, nil)
+	eLive.process(context.Background(), agentTrigger("review_requested", "a/w", 10, "h", "reviewreq@h", act))
+	if len(dLive.reqs) != 0 {
+		t.Fatalf("live review agent should suppress re-dispatch, got %d", len(dLive.reqs))
+	}
+
+	// No live agent → dispatch, and (unlike other kinds) it must NOT record a
+	// permanent dedup, so a still-pending review keeps coming back until done.
+	d := &fakeDispatcher{}
+	e, st := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
+	tr := agentTrigger("review_requested", "a/w", 11, "h", "reviewreq@h", act)
+	e.process(context.Background(), tr)
+	e.process(context.Background(), tr) // still pending → still dispatches
+	if len(d.reqs) != 2 {
+		t.Fatalf("review_requested should re-dispatch while pending, got %d", len(d.reqs))
+	}
+	if st.LastSignature("a/w#11", "review_requested") != "" {
+		t.Fatal("review_requested must not consume permanent dedup")
+	}
+}
+
 func TestKillSwitch(t *testing.T) {
 	cfg := baseCfg()
 	cfg.Control.Enabled = ptrBool(false)
@@ -205,6 +233,8 @@ func (g *gateFake) WaitForAgent(ctx context.Context, _ string, _ time.Duration) 
 	case <-ctx.Done():
 	}
 }
+
+func (g *gateFake) HasLiveAgent(context.Context, string, string) bool { return false }
 
 func (g *gateFake) count() int {
 	g.mu.Lock()

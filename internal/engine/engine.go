@@ -22,6 +22,9 @@ type Dispatcher interface {
 	// WaitForAgent blocks until a launched background agent goes idle (or the
 	// timeout fires), so a concurrency slot frees only when its work is done.
 	WaitForAgent(ctx context.Context, id string, timeout time.Duration)
+	// HasLiveAgent reports whether any non-archived conductor agent is already
+	// working or parked for this PR+kind (gates re-dispatch of live-gated kinds).
+	HasLiveAgent(ctx context.Context, prKey, kind string) bool
 }
 
 // Notifier emits notifications. *notify.Notifier satisfies it.
@@ -168,8 +171,17 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 	}
 
-	// Dedup: already acted on this exact state.
-	if t.Dedup != "" && e.store.LastSignature(key, t.Kind) == t.Dedup {
+	// Gate. Most kinds dedup on the acted signature (act once per state). But a
+	// review's "done" is external — you submitted, so you're no longer a requested
+	// reviewer — not "we launched something once." For those, gate on whether a
+	// conductor agent for this PR is already working/parked instead of a permanent
+	// dedup flag, so a still-pending review keeps coming back until you do it.
+	liveGate := livenessGated(t.Kind)
+	if liveGate {
+		if e.disp.HasLiveAgent(ctx, key, t.Kind) {
+			return // already in progress / parked for you
+		}
+	} else if t.Dedup != "" && e.store.LastSignature(key, t.Kind) == t.Dedup {
 		return
 	}
 
@@ -201,7 +213,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// backpressure, and run the steps in their own goroutine (releasing the slot
 	// when the foreground steps finish) so the engine loop isn't blocked by them.
 	if len(act.Steps) > 0 {
-		if !shadow { // shadow is a true preview: don't consume dedup
+		if !shadow && !liveGate { // shadow previews and live-gated kinds don't consume dedup
 			_ = e.store.Record(key, t.Kind, t.Dedup, head)
 		}
 		e.notif.Emit(ctx, notify.EventDispatch, t, "workflow")
@@ -238,7 +250,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	e.notif.Emit(ctx, notify.EventDispatch, t, act.Type)
 	ref, err := e.disp.Dispatch(ctx, req)
 	e.auditDispatch(t, ref, err)
-	if !shadow { // shadow is a true preview: don't consume dedup/attempts
+	if !shadow && !liveGate { // shadow previews and live-gated kinds don't consume dedup
 		_ = e.store.Record(key, t.Kind, t.Dedup, head)
 	}
 
@@ -259,6 +271,15 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	} else if gated {
 		e.release()
 	}
+}
+
+// livenessGated reports whether a kind should be gated on a live conductor agent
+// rather than a permanent dedup flag — true for reviews, whose completion is
+// external state (you submitted → no longer a requested reviewer). The sweep only
+// re-emits these while they're genuinely still pending, and this gate stops a
+// duplicate spawn while one is already working or parked for you.
+func livenessGated(kind string) bool {
+	return kind == "review_requested"
 }
 
 // acquire takes a concurrency slot, blocking until one is free (backpressure).

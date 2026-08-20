@@ -409,6 +409,23 @@ func (d *Dispatcher) agentActive(ctx context.Context, t core.Trigger) (bool, err
 	return false, nil
 }
 
+// HasLiveAgent reports whether any non-archived conductor agent exists for this
+// PR+kind — running OR idle-but-open (e.g. an interactive review agent parked for
+// you). `paseo ls` excludes archived agents, so any match means one is still in
+// play. Used to gate re-dispatch of live-gated kinds (reviews).
+func (d *Dispatcher) HasLiveAgent(ctx context.Context, prKey, kind string) bool {
+	out, err := exec.CommandContext(ctx, d.PaseoBin, "ls", "--json",
+		"--label", "conductor=1", "--label", "pr="+prKey, "--label", "kind="+kind).Output()
+	if err != nil {
+		return false
+	}
+	var agents []json.RawMessage
+	if json.Unmarshal(out, &agents) != nil {
+		return false
+	}
+	return len(agents) > 0
+}
+
 // parseAgentID best-effort extracts an agent id from `paseo run --json` output.
 func parseAgentID(out []byte) string {
 	var obj map[string]any
