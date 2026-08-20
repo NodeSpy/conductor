@@ -67,9 +67,9 @@ configurable action — enable, disable, and tune it per repo in [config](#confi
 
 ## Reacting to issues
 
-Issue triggers are configured like any other kind — under a github rule's `actions`. The
-`issue_assigned` action names who counts via its own `assignee: { logins: [...] }`, and the App
-must subscribe to the `issues` event.
+Issue triggers are configured like any other kind — under a github rule's `actions`.
+`issue_assigned` matches when the assignee is **you** (`me`) by default; set the action's own
+`assignee: { logins: [...] }` only to override. The App must subscribe to the `issues` event.
 
 ```yaml
 integrations:
@@ -82,12 +82,11 @@ integrations:
     webhook:
       smee_url: ${GH_SMEE_URL}
     defaults:
-      me: { logins: [octocat] }          # your GitHub login(s)
+      me: { logins: [octocat] }          # your GitHub login(s) — also the default assignee/reviewer
       actions:
-        issue_assigned:                    # an issue is assigned to you
+        issue_assigned:                    # an issue is assigned to you (defaults to matching `me`)
           type: agent
           agent: fixer
-          assignee: { logins: [octocat] } # whose assignment triggers this
           checkout: branch-off             # start on a fresh branch (no PR yet)
           prompt: "Issue {{.repo}}#{{.issue}} was assigned to you — implement it and open a draft PR."
         issue_ready:                       # an issue gets a "Ready" label
@@ -356,7 +355,7 @@ integrations:
         review_requested:                                 # your review requested on someone's PR
           type: command
           backend: local
-          reviewer: { logins: [your-login], teams: [] }   # whose requested review triggers this
+          # reviewer defaults to `me`; set it here to broaden (e.g. a team)
           command: ["critique", "--review", "{{.repo}}#{{.pr}}", "--post"]
           env:
             CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"       # reads on the App pool
@@ -371,7 +370,7 @@ integrations:
         issue_assigned:                                   # issue assigned to you
           type: agent
           agent: fixer
-          assignee: { logins: [your-login] }              # whose assignment triggers this
+          # assignee defaults to `me`; set it here only to override
           checkout: branch-off                            # start work on a fresh branch (no PR yet)
           prompt: "Issue {{.repo}}#{{.issue}} assigned to you — start work; open a draft PR."
         issue_ready:                                      # issue labeled "Ready"
@@ -513,9 +512,10 @@ list. A rule's `match.repos` takes **glob patterns** (Go `path.Match`): `owner/*
 — use `owner/*` or `*/*`. `me`/`actions`/`workspace` on the matched rule merge over `defaults`.
 **`me`** (rule/`defaults` level) is your GitHub login(s) — it defines "you" for ignoring your own
 comments, detecting your own PRs (`self_review`), and picking your authored PRs during sweep. The
-gating actors live on their checks: **`reviewer`** on the `review_requested` action, **`assignee`**
-on the `issue_assigned` action. (`me` falls back to those actors if unset; rule-level
-`reviewer`/`assignee` still work as a fallback for the action-level ones.) `sweep.repos` accepts concrete `owner/name` or an **owner glob** (`owner/*`,
+gating actors live on their checks: **`reviewer`** on `review_requested`, **`assignee`** on
+`issue_assigned` — but both **default to `me`**, so you usually don't set them; specify one only to
+broaden (e.g. a team, or a different login). (Rule-level `reviewer`/`assignee` still work as a
+fallback ahead of the `me` default.) `sweep.repos` accepts concrete `owner/name` or an **owner glob** (`owner/*`,
 `owner/svc-*`) — a glob is expanded to the repos the App installation can access (so an owner
 segment is required there; `*/*` isn't supported).
 

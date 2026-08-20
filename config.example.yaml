@@ -71,7 +71,8 @@ integrations:
         review_requested:
           type: command
           backend: local
-          reviewer: { logins: [your-login], teams: [] }   # whose requested review triggers this
+          # reviewer defaults to `me`; set it here only to broaden (e.g. a team):
+          #   reviewer: { logins: [teammate], teams: [platform] }
           command: ["critique", "--review", "{{.repo}}#{{.pr}}", "--post"]
           env:
             CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"   # reads on App pool
@@ -90,7 +91,7 @@ integrations:
         issue_assigned:
           type: agent
           agent: fixer
-          assignee: { logins: [your-login] }    # whose assignment triggers this
+          # assignee defaults to `me`; set it here only to override
           checkout: branch-off
           prompt: |
             Issue {{.repo}}#{{.issue}} was assigned to you. Start work: create a branch,

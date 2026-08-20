@@ -104,6 +104,45 @@ func TestActionLevelActors(t *testing.T) {
 	}
 }
 
+func TestActorsDefaultToMe(t *testing.T) {
+	// Only `me` is set — reviewer/assignee are NOT specified on the actions.
+	cfg := Config{
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		Rules: []Rule{{
+			Match: Match{Repos: []string{"acme/*"}},
+			Me:    config.Actors{Logins: []string{"me"}},
+			Actions: map[string]config.Action{
+				"review_requested": {Type: "command", Command: []string{"critique"}},
+				"issue_assigned":   {Type: "agent", Agent: "fixer"},
+			},
+		}},
+	}
+	g := newTestIntegration(t, cfg)
+
+	rr := func(login string) string {
+		return `{"action":"review_requested","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+			"pull_request":{"number":6,"head":{"sha":"h"}},"requested_reviewer":{"login":"` + login + `"}}`
+	}
+	if k := do(t, g, "pull_request", rr("me")); !has(k, "review_requested") {
+		t.Fatalf("review_requested should default to matching you, got %v", k)
+	}
+	if k := do(t, g, "pull_request", rr("someone")); has(k, "review_requested") {
+		t.Fatalf("review_requested should not fire for someone else, got %v", k)
+	}
+
+	ia := func(login string) string {
+		return `{"action":"assigned","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+			"issue":{"number":9},"assignee":{"login":"` + login + `"}}`
+	}
+	if k := do(t, g, "issues", ia("me")); !has(k, "issue_assigned") {
+		t.Fatalf("issue_assigned should default to matching you, got %v", k)
+	}
+	if k := do(t, g, "issues", ia("someone")); has(k, "issue_assigned") {
+		t.Fatalf("issue_assigned should not fire for someone else, got %v", k)
+	}
+}
+
 func has(xs []string, want string) bool {
 	for _, x := range xs {
 		if x == want {

@@ -480,6 +480,10 @@ func (g *Integration) reviewerMatches(repo string, p ghPayload) bool {
 		return false
 	}
 	rev := actorsOr(r.Actions["review_requested"].Reviewer, r.Reviewer) // action-level, rule fallback
+	if len(rev.Logins) == 0 && len(rev.Teams) == 0 {
+		// Unset → default to "you" (the `me` identity).
+		return p.RequestedReviewer != nil && g.self[strings.ToLower(p.RequestedReviewer.Login)]
+	}
 	if p.RequestedReviewer != nil && rev.HasLogin(p.RequestedReviewer.Login) {
 		return true
 	}
@@ -499,6 +503,9 @@ func (g *Integration) assigneeMatches(repo, login string) bool {
 		return false
 	}
 	asg := actorsOr(r.Actions["issue_assigned"].Assignee, r.Assignee) // action-level, rule fallback
+	if len(asg.Logins) == 0 && len(asg.Teams) == 0 {
+		return g.self[strings.ToLower(login)] // unset → default to "you"
+	}
 	return asg.HasLogin(login)
 }
 
