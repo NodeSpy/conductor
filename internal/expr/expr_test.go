@@ -34,6 +34,16 @@ func TestEval(t *testing.T) {
 		{`steps.evaluate.outputs.kind != "change"`, true},
 		{"steps.evaluate.outputs.score == 7", true},
 		{"steps.evaluate.outputs.score == 8", false},
+		{"steps.evaluate.outputs.score > 5", true},
+		{"steps.evaluate.outputs.score > 7", false},
+		{"steps.evaluate.outputs.score >= 7", true},
+		{"steps.evaluate.outputs.score < 10", true},
+		{"steps.evaluate.outputs.score < 7", false},
+		{"steps.evaluate.outputs.score <= 7", true},
+		{"steps.evaluate.outputs.score>=8", false}, // no spaces
+		{"steps.evaluate.outputs.kind > 3", false}, // non-numeric value → false
+		{"steps.evaluate.outputs.score >= 5 && steps.evaluate.outputs.score <= 9", true},
+		{"steps.evaluate.outputs.score > 9 || steps.evaluate.outputs.has_context", true},
 		{"steps.missing.outputs.x", false},         // missing path is falsey
 		{"steps.missing.outputs.x == true", false}, // missing != true
 		{`repo == "acme/w"`, true},

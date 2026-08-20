@@ -138,8 +138,9 @@ issue_ready:
 - **Outputs**: agent steps set `output_schema` (JSON schema) and emit a matching object; command
   steps expose their stdout as JSON (or `.text`). Reference them with
   `{{ .steps.<id>.outputs.<key> }}` in later prompts/commands.
-- **Conditions** (`if:`): dotted paths, `==` / `!=` against literals (`true`, `"question"`, `7`),
-  truthiness (`x` / `!x`), and `&&` / `||` — e.g. `steps.evaluate.outputs.kind == "question"`.
+- **Conditions** (`if:`): dotted paths; `==` / `!=` against literals (`true`, `"question"`, `7`);
+  numeric ordering `>` / `<` / `>=` / `<=` (e.g. `steps.evaluate.outputs.score >= 8` for scoring);
+  truthiness (`x` / `!x`); and `&&` / `||`.
 - Steps run in order, fail-fast, and the whole workflow runs off the main loop so long steps don't
   block other events.
 

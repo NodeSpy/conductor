@@ -4,10 +4,11 @@
 // Supported:
 //   - dotted paths resolved against the data map: steps.evaluate.outputs.has_context
 //   - equality/inequality against literals:       x == true, x != "question"
+//   - numeric ordering against literals:          score > 7, score <= 3.5
 //   - truthiness of a bare path (and negation):   x   /   !x
 //   - boolean combinators (no parentheses):       a && b || c
 //
-// Precedence: ! > == / != > && > ||.
+// Precedence: ! / comparison > && > ||.
 package expr
 
 import (
@@ -42,22 +43,50 @@ func Eval(cond string, data map[string]any) (bool, error) {
 	return false, nil
 }
 
+// comparison operators, longest first so ">=" wins over ">".
+var comparators = []string{"==", "!=", ">=", "<=", ">", "<"}
+
 func atom(a string, data map[string]any) (bool, error) {
 	if a == "" {
 		return false, fmt.Errorf("empty condition term")
 	}
-	switch {
-	case strings.Contains(a, "=="):
-		l, r, _ := cut(a, "==")
-		return equal(resolve(l, data), literal(r)), nil
-	case strings.Contains(a, "!="):
-		l, r, _ := cut(a, "!=")
-		return !equal(resolve(l, data), literal(r)), nil
+	for _, op := range comparators {
+		if i := strings.Index(a, op); i >= 0 {
+			l := strings.TrimSpace(a[:i])
+			r := strings.TrimSpace(a[i+len(op):])
+			return compare(resolve(l, data), literal(r), op), nil
+		}
 	}
 	if strings.HasPrefix(a, "!") {
 		return !truthy(resolve(strings.TrimSpace(a[1:]), data)), nil
 	}
 	return truthy(resolve(a, data)), nil
+}
+
+// compare applies an operator between a resolved value and a literal. Ordering
+// operators (>, <, >=, <=) require both sides to be numeric, else false.
+func compare(v any, l lit, op string) bool {
+	switch op {
+	case "==":
+		return equal(v, l)
+	case "!=":
+		return !equal(v, l)
+	}
+	fv, ok := asFloat(v)
+	if !ok || !l.isNum {
+		return false
+	}
+	switch op {
+	case ">":
+		return fv > l.f
+	case "<":
+		return fv < l.f
+	case ">=":
+		return fv >= l.f
+	case "<=":
+		return fv <= l.f
+	}
+	return false
 }
 
 // splitTop splits on sep at the top level (no nesting/quotes in conditions).
@@ -67,14 +96,6 @@ func splitTop(s, sep string) []string {
 		parts[i] = strings.TrimSpace(parts[i])
 	}
 	return parts
-}
-
-func cut(s, sep string) (string, string, bool) {
-	i := strings.Index(s, sep)
-	if i < 0 {
-		return s, "", false
-	}
-	return strings.TrimSpace(s[:i]), strings.TrimSpace(s[i+len(sep):]), true
 }
 
 // resolve walks a dotted path through nested maps.
