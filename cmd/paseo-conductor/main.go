@@ -171,6 +171,7 @@ func cmdRun(args []string) error {
 	defer st.Close()
 
 	disp := dispatch.New(cfg.Dispatch, cfg.DryRun)
+	preflightPATH(disp.PaseoBin)
 	notifier := notify.New(cfg.Notify, logf)
 	eng := engine.New(engine.Options{
 		Config: cfg, Store: st, Dispatch: disp, Notifier: notifier,
@@ -237,6 +238,19 @@ func refreshAppToken(igs []core.Integration) func(core.Trigger) (string, error) 
 			return at.AppToken(context.Background(), instID)
 		}
 		return "", fmt.Errorf("no integration named %q", t.Instance)
+	}
+}
+
+// preflightPATH warns loudly if the tools dispatch needs aren't on PATH — a
+// missing `paseo`/`gh` otherwise fails every dispatch silently (the common
+// systemd --user "minimal PATH" trap). Non-fatal: the daemon still runs.
+func preflightPATH(paseoBin string) {
+	for _, bin := range []string{paseoBin, "gh"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			logf("WARNING: %q not found on PATH — dispatches will fail until it's resolvable "+
+				"(PATH=%s). If running as a service, reinstall/update the unit so PATH includes "+
+				"~/.local/bin, or set PATH in conductor.env.", bin, os.Getenv("PATH"))
+		}
 	}
 }
 
