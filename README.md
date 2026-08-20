@@ -243,8 +243,14 @@ Secrets live in `~/.config/paseo-conductor/conductor.env`; the daemon loads them
 
 ## GitHub App setup
 
-1. Create a GitHub App (org or personal). **Webhook URL = your smee channel** (create one at
-   https://smee.io). Set a **webhook secret**.
+1. **Create a GitHub App** — register a new one at:
+   - Personal account: <https://github.com/settings/apps/new>
+   - Organization: `https://github.com/organizations/<ORG>/settings/apps/new`
+     (e.g. <https://github.com/organizations/NodeSpy/settings/apps/new>)
+
+   ([GitHub's guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app).)
+   Set the **Webhook URL** to your smee channel (create one at <https://smee.io>) and set a
+   **webhook secret**.
 2. **Permissions:** Contents (RW), Pull requests (RW), Issues (RW), Checks (R), Metadata (R).
    For auto-merge add Administration/merge as needed; for the Projects trigger add Projects (R).
 3. **Subscribe to events:** pull_request, pull_request_review, pull_request_review_comment,
