@@ -69,9 +69,20 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	}
 
 	// Existing-workspace mode only applies when NOT creating a worktree: paseo
-	// forbids --workspace together with --new-workspace.
-	if req.Workspace != "" && strat == "none" {
-		argv = append(argv, "--workspace", req.Workspace)
+	// forbids --workspace together with --new-workspace. For checkout:none we
+	// always pin a workspace — an explicit one if configured, else a shared
+	// scratch workspace — otherwise paseo spins up a throwaway workspace per run
+	// (e.g. review triage) that never gets reclaimed.
+	if strat == "none" {
+		if req.Workspace != "" {
+			argv = append(argv, "--workspace", req.Workspace)
+		} else if cwd == "" && (d.ScratchWorkspace != nil || (!d.DryRun && !req.Shadow)) {
+			// The built-in resolver may create a workspace and needs a live daemon,
+			// so skip it during a preview; an injected resolver is pure.
+			if id, err := d.resolveScratchWorkspace(ctx); err == nil && id != "" {
+				argv = append(argv, "--workspace", id)
+			}
+		}
 	}
 	argv = append(argv, checkoutArgs(req)...)
 
@@ -357,6 +368,80 @@ func (d *Dispatcher) cloneRepo(ctx context.Context, repo string) error {
 		return fmt.Errorf("paseo clone %s: %w: %s", repo, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// scratchWorkspaceTitle marks the single shared workspace reused by checkout:none
+// agents, so they don't each leak a throwaway home workspace.
+const scratchWorkspaceTitle = "paseo-conductor-scratch"
+
+// resolveScratchWorkspace returns a reusable local workspace id for checkout:none
+// agents: an injected resolver, else a memoized find-by-title, else create one.
+func (d *Dispatcher) resolveScratchWorkspace(ctx context.Context) (string, error) {
+	if d.ScratchWorkspace != nil {
+		return d.ScratchWorkspace(ctx)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock() // held across resolve so concurrent callers don't each create one
+	if d.scratchWS != "" {
+		return d.scratchWS, nil
+	}
+	if id := d.findWorkspaceByTitle(ctx, scratchWorkspaceTitle); id != "" {
+		d.scratchWS = id
+		return id, nil
+	}
+	id, err := d.createScratchWorkspace(ctx)
+	if err != nil {
+		return "", err
+	}
+	d.scratchWS = id
+	return id, nil
+}
+
+// findWorkspaceByTitle returns the id of a local workspace whose name matches
+// title, or "" if none.
+func (d *Dispatcher) findWorkspaceByTitle(ctx context.Context, title string) string {
+	out, err := exec.CommandContext(ctx, d.PaseoBin, "workspace", "ls", "--json").Output()
+	if err != nil {
+		return ""
+	}
+	var wl []struct {
+		WorkspaceID string `json:"workspaceId"`
+		Name        string `json:"name"`
+		Isolation   string `json:"isolation"`
+	}
+	if json.Unmarshal(out, &wl) != nil {
+		return ""
+	}
+	for _, w := range wl {
+		if w.Isolation == "local" && w.Name == title && w.WorkspaceID != "" {
+			return w.WorkspaceID
+		}
+	}
+	return ""
+}
+
+// createScratchWorkspace makes the shared local scratch workspace at $HOME.
+func (d *Dispatcher) createScratchWorkspace(ctx context.Context) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	out, err := exec.CommandContext(ctx, d.PaseoBin, "workspace", "create",
+		"--isolation", "local", "--path", home, "--title", scratchWorkspaceTitle, "--json").Output()
+	if err != nil {
+		return "", fmt.Errorf("paseo workspace create scratch: %w", err)
+	}
+	var w struct {
+		WorkspaceID string `json:"workspaceId"`
+		ID          string `json:"id"`
+	}
+	if json.Unmarshal(out, &w) != nil {
+		return "", fmt.Errorf("scratch workspace: unparseable create output")
+	}
+	if w.WorkspaceID != "" {
+		return w.WorkspaceID, nil
+	}
+	return w.ID, nil
 }
 
 func labelArgs(req Request) []string {

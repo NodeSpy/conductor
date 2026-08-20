@@ -66,12 +66,18 @@ type Dispatcher struct {
 	// Injectable for tests.
 	CheckoutDir func(ctx context.Context, repo string) (string, error)
 
+	// ScratchWorkspace resolves a single reusable workspace id for checkout:none
+	// agents (so triage agents don't each leak a throwaway workspace). nil uses
+	// the built-in resolver (find-by-title, else create). Injectable for tests.
+	ScratchWorkspace func(ctx context.Context) (string, error)
+
 	// Retry policy for transient `paseo run` failures (git lock/timeout).
 	RetryMax     int
 	RetryBackoff time.Duration
 
-	mu       sync.Mutex
-	repoDirs map[string]string // repo -> resolved checkout cwd (memoized)
+	mu        sync.Mutex
+	repoDirs  map[string]string // repo -> resolved checkout cwd (memoized)
+	scratchWS string            // memoized scratch workspace id
 }
 
 // New builds a Dispatcher from dispatch config.

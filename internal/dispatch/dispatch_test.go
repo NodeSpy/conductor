@@ -128,6 +128,29 @@ func TestPaseoCheckoutPRUsesResolvedCwd(t *testing.T) {
 	}
 }
 
+func TestPaseoNoneUsesScratchWorkspace(t *testing.T) {
+	// checkout:none with no pinned workspace reuses the shared scratch workspace
+	// instead of letting paseo spawn (and leak) a throwaway one.
+	d := newDispatcher()
+	called := 0
+	d.ScratchWorkspace = func(context.Context) (string, error) { called++; return "wks_scratch", nil }
+	req := Request{
+		Trigger: core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "acme/w", PR: 6, Number: 6}},
+		Action:  config.Action{Type: "agent", Agent: "assess", Checkout: "none", Prompt: "assess"},
+	}
+	ref, _ := d.Dispatch(context.Background(), req)
+	s := joined(ref.Argv)
+	if !strings.Contains(s, "--workspace wks_scratch") {
+		t.Fatalf("checkout:none should reuse the scratch workspace, got: %s", s)
+	}
+	if strings.Contains(s, "--new-workspace") {
+		t.Fatalf("checkout:none must not create a worktree: %s", s)
+	}
+	if called != 1 {
+		t.Fatalf("scratch resolver should be consulted once, got %d", called)
+	}
+}
+
 func TestPaseoNoneUsesExistingWorkspace(t *testing.T) {
 	d := newDispatcher()
 	d.CheckoutDir = func(context.Context, string) (string, error) {
