@@ -45,14 +45,14 @@ Every kind below is a configurable `action` (see [Configuration](#configuration)
 | `failing_checks` | CI fails | flake-rerun once, then agent: fix + push |
 | `changes_requested` | a review requests changes | agent: address + push |
 | `new_comment` | a comment / bugbot review | agent: act + reply |
-| `merge_ready` *(opt-in)* | fully green: mergeable, approved by another reviewer, all threads resolved, not draft | `gh pr merge` |
+| `merge_ready` | fully green: mergeable, approved by another reviewer, all threads resolved, not draft | `gh pr merge` |
 
 **Reviews**
 
 | Kind | Trigger | Action |
 | --- | --- | --- |
 | `review_requested` | your review is requested on a PR | run [critique](https://github.com/EdnitionCode/critique), post as you |
-| `self_review` *(opt-in)* | you open/update your own PR | critique your own PR |
+| `self_review` | you open/update your own PR | critique your own PR |
 
 **Issues**
 
@@ -60,10 +60,10 @@ Every kind below is a configurable `action` (see [Configuration](#configuration)
 | --- | --- | --- |
 | `issue_assigned` | an issue is assigned to you | agent: start work on a fresh branch |
 | `issue_ready` | an issue gets a "Ready" label | agent: start work on a fresh branch |
-| `issue_project_moved` *(opt-in)* | a Projects v2 status field → "Ready" | agent: start work on a fresh branch |
+| `issue_project_moved` | a Projects v2 status field → "Ready" | agent: start work on a fresh branch |
 
-Plus scheduled jobs via the [cron integration](#scheduled-jobs-cron-integration). *(opt-in)* kinds
-are disabled by default.
+Plus scheduled jobs via the [cron integration](#scheduled-jobs-cron-integration). Each kind is a
+configurable action — enable, disable, and tune it per repo in [config](#configuration).
 
 ## Reacting to issues
 
@@ -258,15 +258,17 @@ Secrets live in `~/.config/paseo-conductor/conductor.env`; the daemon loads them
      > connects to your channel itself and receives the forwarded webhooks. Nothing else to start.
    - **Webhook secret** — generate a random string (e.g. `openssl rand -hex 32`) and put it in
      `conductor.env` as `GH_WEBHOOK_SECRET`.
-2. **Permissions** (set these *first* — GitHub only shows events for permissions you've granted):
-   - Repository: Contents (RW), Pull requests (RW), Issues (RW), Checks (R), Metadata (R).
-   - For the opt-in `issue_project_moved` trigger: **Organization → Projects (Read)**. This is an
-     *organization* permission — without it the `projects_v2_item` event won't appear in step 3.
-3. **Subscribe to events:** pull_request, pull_request_review, pull_request_review_comment,
-   issue_comment, check_run, check_suite, workflow_run, push, issues. Opt-in kinds:
-   `pull_request_review_thread` (auto-merge gate); and **`projects_v2_item`** (Projects v2) —
-   which only shows up here *after* you add Organization → Projects (Read) above, and is
-   delivered for **organization** Projects v2 boards (install the App on the org).
+2. **Permissions** (set these *first* — GitHub only lists events for permissions you've granted).
+   Grant the full set so every feature works:
+   - **Repository:** Contents (Read & write), Pull requests (Read & write), Issues (Read & write),
+     Checks (Read-only), Metadata (Read-only).
+   - **Organization:** Projects (Read-only).  *(An org permission — required for `projects_v2_item`
+     to appear as an event, and only delivered for org-installed Apps.)*
+3. **Subscribe to events** — check all of these:
+   `pull_request`, `pull_request_review`, `pull_request_review_comment`, `pull_request_review_thread`,
+   `issue_comment`, `check_run`, `check_suite`, `workflow_run`, `push`, `issues`, `projects_v2_item`.
+
+   (`projects_v2_item` only appears once you've granted Organization → Projects above.)
 4. **Generate a private key** and save it at the `private_key_path` in your config.
 5. **Install the App** on the repos/orgs you want covered.
 6. Put the App id, key path, and webhook secret in `config.yaml` / `conductor.env`.
@@ -358,7 +360,7 @@ integrations:
           env:
             CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"       # reads on the App pool
             CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}"        # submits the review as YOU
-        self_review:                                      # critique your own PRs (opt-in)
+        self_review:                                      # critique your own PRs
           type: command
           backend: local
           enabled: false
@@ -397,18 +399,18 @@ integrations:
               backend: local
               command: ["gh", "issue", "comment", "{{.repo}}#{{.issue}}", "--body", "Please add repro steps and scope."]
               env: { GH_TOKEN: "{{.gh_token}}" }
-        issue_project_moved:                              # Projects v2 Status → "Ready" (opt-in)
+        issue_project_moved:                              # Projects v2 Status field → "Ready"
           type: agent
           agent: fixer
           enabled: false
           checkout: branch-off
           project: { field: Status, to: Ready }           # one GraphQL lookup per event
           prompt: "Issue moved to Ready in the project — start work."
-        merge_ready:                                      # auto-merge when fully green (opt-in)
+        merge_ready:                                      # auto-merge when fully green
           type: command
           backend: local
           enabled: false
-          require_label: automerge                        # PR must carry this label to opt in
+          require_label: automerge                        # PR must carry this label to be eligible
           method: squash                                  # squash | merge | rebase
           gates: { merge_state: clean, review_decision: approved, non_author_approval: true,
                    threads_resolved: true, not_draft: true }
@@ -538,8 +540,8 @@ paseo-conductor version
   instead of looping. A running-agent guard avoids double-dispatch.
 - **Nothing acts on an invalid config**: `validate` gates the service start, and disabled
   integrations/actions never fire.
-- **Auto-merge is opt-in** (`merge_ready`, disabled by default, label-gated, and only when every
-  gate is green).
+- **Auto-merge is deliberate**: `merge_ready` ships disabled in the example and is label-gated, and
+  it acts only when every gate is green. Turn it on when you're ready.
 
 ## License
 

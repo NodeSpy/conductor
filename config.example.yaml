@@ -74,7 +74,7 @@ integrations:
           env:
             CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"   # reads on App pool
             CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}"    # submits review as YOU
-        # critique your own PRs when you open/update them (opt-in)
+        # critique your own PRs when you open/update them (set enabled: true to use)
         self_review:
           type: command
           backend: local
@@ -129,7 +129,7 @@ integrations:
               command: ["gh", "issue", "comment", "{{.repo}}#{{.issue}}", "--body",
                         "Thanks for the issue! Could you add repro steps, expected behavior, and scope so it can be picked up?"]
               env: { GH_TOKEN: "{{.gh_token}}" }
-        # a Projects v2 Status field moving to "Ready" (opt-in; one GraphQL lookup per event)
+        # a Projects v2 Status field moving to "Ready" (one GraphQL lookup per event; set enabled: true)
         issue_project_moved:
           type: agent
           agent: fixer
@@ -137,19 +137,19 @@ integrations:
           checkout: branch-off
           project: { field: Status, to: Ready }
           prompt: "Issue {{.repo}}#{{.issue}} moved to Ready in the project — start work."
-        # auto-merge a PR once it's fully green (opt-in, higher-stakes)
+        # auto-merge a PR once it's fully green (higher-stakes; set enabled: true to turn on)
         merge_ready:
           type: command
           backend: local
           enabled: false
-          require_label: automerge       # PR must carry this label to opt in
+          require_label: automerge       # PR must carry this label to be eligible
           method: squash                 # squash | merge | rebase
           gates: { merge_state: clean, review_decision: approved, non_author_approval: true, threads_resolved: true, not_draft: true }
           command: ["gh", "pr", "merge", "{{.repo}}#{{.pr}}", "--squash"]
           env: { GH_TOKEN: "{{.gh_token}}" }
 
     # RULES: primary structure. FIRST rule whose `match` applies wins; it merges
-    # over `defaults`. `match` may combine repo globs and/or Project(v2) criteria.
+    # over `defaults`. `match` selects repos by glob (e.g. owner/*, */*).
     rules:
       - match: { repos: ["EdnitionCode/*", "TapResearch/*"] }
       - match: { repos: ["EdnitionCode/RosterStream"] }
