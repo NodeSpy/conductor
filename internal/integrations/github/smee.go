@@ -14,23 +14,46 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 )
 
-// Start builds the App auth + REST client and streams webhook deliveries from
-// the smee channel, translating each into Triggers.
+// Start builds the App auth + REST client and runs the configured webhook
+// transports (smee channel and/or a direct HTTP listener), plus the optional
+// sweep, until ctx is cancelled. Both transports share one delivery-dedup set.
 func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 	if err := g.ensureClients(); err != nil {
 		return err
 	}
-
-	if g.cfg.App.Verify() {
+	if g.cfg.App.Verify() && g.cfg.Webhook.SmeeURL != "" {
 		log.Printf("github[%s]: signature verification ON — note the smee re-serialization caveat; "+
 			"set verify_signature:false if valid deliveries are being dropped", g.name)
 	}
-
 	if g.cfg.Sweep.Enabled {
 		go g.sweepLoop(ctx, emit)
 	}
 
 	seen := newDeliveryDedup(2048)
+	errc := make(chan error, 2)
+	started := 0
+	if g.cfg.Webhook.SmeeURL != "" {
+		started++
+		go func() { errc <- g.runSmee(ctx, emit, seen) }()
+	}
+	if g.cfg.Webhook.Listen != "" {
+		started++
+		go func() { errc <- g.serveHTTP(ctx, emit, seen) }()
+	}
+	if started == 0 {
+		return fmt.Errorf("github[%s]: no webhook transport configured", g.name)
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errc:
+		return err
+	}
+}
+
+// runSmee streams the smee channel, reconnecting with backoff.
+func (g *Integration) runSmee(ctx context.Context, emit core.EmitFunc, seen *deliveryDedup) error {
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
@@ -49,6 +72,26 @@ func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 		if backoff < 30*time.Second {
 			backoff *= 2
 		}
+	}
+}
+
+// deliver is the shared path for both transports: dedup by delivery id, verify
+// the signature over the exact received body, translate to Triggers, and emit.
+func (g *Integration) deliver(ctx context.Context, emit core.EmitFunc, seen *deliveryDedup, event, delivery, sig string, body []byte) {
+	if event == "" || len(body) == 0 {
+		return
+	}
+	if delivery != "" && !seen.add(delivery) {
+		return // duplicate (smee reconnect redelivery, or a retried POST)
+	}
+	if g.cfg.App.Verify() {
+		if !verifySignature(g.cfg.App.WebhookSecret, body, sig) {
+			log.Printf("github[%s]: signature mismatch for delivery %s (dropped)", g.name, delivery)
+			return
+		}
+	}
+	for _, t := range g.triggersFor(ctx, event, body) {
+		emit(ctx, t)
 	}
 }
 
@@ -103,22 +146,7 @@ func (g *Integration) handleSmeeData(ctx context.Context, emit core.EmitFunc, se
 	if err := json.Unmarshal([]byte(data), &p); err != nil {
 		return // control frame ("ready", ping, etc.)
 	}
-	if p.Event == "" || len(p.Body) == 0 {
-		return
-	}
-	if p.Delivery != "" && !seen.add(p.Delivery) {
-		return // duplicate redelivery on reconnect
-	}
-	if g.cfg.App.Verify() {
-		if !verifySignature(g.cfg.App.WebhookSecret, p.Body, p.Sig) {
-			log.Printf("github[%s]: signature mismatch for delivery %s (dropped) — "+
-				"if this repeats over smee, set verify_signature:false", g.name, p.Delivery)
-			return
-		}
-	}
-	for _, t := range g.triggersFor(ctx, p.Event, p.Body) {
-		emit(ctx, t)
-	}
+	g.deliver(ctx, emit, seen, p.Event, p.Delivery, p.Sig, p.Body)
 }
 
 // deliveryDedup is a bounded set of recently-seen delivery ids.

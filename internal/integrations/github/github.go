@@ -39,9 +39,12 @@ type AppConfig struct {
 // Verify reports whether HMAC signature verification is on (default true).
 func (a AppConfig) Verify() bool { return a.VerifySig == nil || *a.VerifySig }
 
-// WebhookConfig configures the smee transport.
+// WebhookConfig configures how webhooks arrive: via a smee.io channel, a direct
+// HTTP listener, or both.
 type WebhookConfig struct {
-	SmeeURL string `yaml:"smee_url"`
+	SmeeURL string `yaml:"smee_url"` // subscribe to a smee.io SSE channel
+	Listen  string `yaml:"listen"`   // bind a direct HTTP receiver, e.g. "127.0.0.1:8787"
+	Path    string `yaml:"path"`     // HTTP path (default "/webhook")
 }
 
 // SweepConfig configures the optional catch-up sweep.
@@ -139,8 +142,8 @@ func (g *Integration) Validate() error {
 	if g.cfg.App.Verify() && g.cfg.App.WebhookSecret == "" {
 		return fmt.Errorf("github[%s]: webhook_secret required when verify_signature is on", g.name)
 	}
-	if g.cfg.Webhook.SmeeURL == "" {
-		return fmt.Errorf("github[%s]: webhook.smee_url is required", g.name)
+	if g.cfg.Webhook.SmeeURL == "" && g.cfg.Webhook.Listen == "" {
+		return fmt.Errorf("github[%s]: set webhook.smee_url and/or webhook.listen", g.name)
 	}
 	return nil
 }

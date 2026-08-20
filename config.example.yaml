@@ -14,12 +14,16 @@ integrations:
       app_id: 0
       private_key_path: ~/.config/paseo-conductor/ednition-app.pem
       webhook_secret: ${EDN_WEBHOOK_SECRET}
-      # NOTE: smee re-serializes the JSON body, so HMAC often won't match.
-      # Leave false while using smee (channel URL is the shared secret);
-      # flip true only with a transport that preserves the raw body.
+      # smee re-serializes the JSON body, so HMAC often won't match — leave this
+      # false with smee. With a DIRECT `listen` receiver the raw body is intact,
+      # so set it true there.
       verify_signature: false
     webhook:
+      # Use smee.io (no inbound port) and/or a direct HTTP listener — set either
+      # or both. A direct listener is ideal behind your own tunnel (e.g. pangolin).
       smee_url: ${EDN_SMEE_URL}       # https://smee.io/<channel>
+      # listen: 127.0.0.1:8787        # direct receiver; point the App webhook (or your tunnel) here
+      # path: /webhook                # default
     sweep:
       enabled: false                  # off by default; catch-up only
       interval: 1h

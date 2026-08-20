@@ -117,11 +117,16 @@ Requires the local `paseo` CLI (authenticated to your daemon) and `gh` on PATH.
 5. **Install the App** on the repos/orgs you want covered.
 6. Put the App id, key path, and webhook secret in `config.yaml` / `conductor.env`.
 
-### smee note
+### Transports: smee and/or direct HTTP
 
-smee re-serializes the JSON body, so HMAC verification (`X-Hub-Signature-256`) usually won't match.
-Keep `verify_signature: false` while using smee — the channel URL is the shared secret. Flip it to
-`true` only with a transport that preserves the raw body.
+Set `webhook.smee_url`, `webhook.listen`, or both:
+
+- **smee.io** — no inbound port; the daemon subscribes to an SSE channel. Easiest to start. Caveat:
+  smee re-serializes the JSON body, so HMAC verification usually won't match — keep
+  `verify_signature: false` (the channel URL is the shared secret).
+- **Direct HTTP** — `listen: 127.0.0.1:8787` (optional `path: /webhook`) runs a plain webhook
+  receiver. Point the GitHub App's webhook URL at it (typically via your own tunnel, e.g. pangolin).
+  The raw body is intact here, so **set `verify_signature: true`**.
 
 ## Configuration
 
