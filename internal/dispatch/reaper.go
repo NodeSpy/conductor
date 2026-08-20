@@ -69,6 +69,14 @@ func (r *Reaper) reap(ctx context.Context) {
 	// workspaces are archivable — never a shared/base checkout.
 	worktrees := r.worktreeWorkspaces(ctx)
 	for _, a := range idle {
+		// Don't cull an agent that still needs the user — it set a hold marker in
+		// its worktree, or it's blocked on a permission decision.
+		if r.needsUser(ctx, a.id, a.cwd) {
+			if r.Log != nil {
+				r.Log("reaper: keeping agent %s — waiting on you (hold marker / pending permission)", a.id)
+			}
+			continue
+		}
 		if wksID := worktrees[normCwd(a.cwd)]; wksID != "" {
 			if err := exec.CommandContext(ctx, r.PaseoBin, "workspace", "archive", wksID).Run(); err == nil && r.Log != nil {
 				r.Log("reaper: archived idle agent %s + worktree %s", a.id, wksID)
@@ -81,6 +89,35 @@ func (r *Reaper) reap(ctx context.Context) {
 			r.Log("reaper: archived idle agent %s", a.id)
 		}
 	}
+}
+
+// needsUser reports whether an idle agent should be spared from reaping because
+// it's waiting on the user: either it created a hold marker in its worktree, or
+// it's blocked on a pending permission decision.
+func (r *Reaper) needsUser(ctx context.Context, id, cwd string) bool {
+	if holdMarkerPresent(cwd) {
+		return true
+	}
+	out, err := exec.CommandContext(ctx, r.PaseoBin, "inspect", id, "--json").Output()
+	if err != nil {
+		return false
+	}
+	var d struct {
+		PendingPermissions []json.RawMessage `json:"PendingPermissions"`
+	}
+	if json.Unmarshal(out, &d) != nil {
+		return false
+	}
+	return len(d.PendingPermissions) > 0
+}
+
+// holdMarkerPresent reports whether the agent set a .paseo-hold marker in cwd.
+func holdMarkerPresent(cwd string) bool {
+	if cwd == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(normCwd(cwd), HoldMarker))
+	return err == nil
 }
 
 // worktreeWorkspaces maps workspace cwd -> id for worktree-isolation workspaces

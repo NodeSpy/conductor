@@ -216,6 +216,9 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			if act.RerequestReview {
 				act.Prompt += dispatch.RerequestReviewGuidance
 			}
+			if profile.ArchiveWhenDone {
+				act.Prompt += dispatch.HoldGuidance
+			}
 		}
 	}
 	appTok, _ := t.Context["app_token"].(string)

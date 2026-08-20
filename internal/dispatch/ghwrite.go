@@ -20,6 +20,18 @@ const WriteWrapperGuidance = "\n\n---\n" +
 	"Reads (gh pr diff, gh run view, gh pr checks) use the ambient GH_TOKEN. " +
 	"Commit and `git push` normally — pushes go over SSH as you."
 
+// HoldMarker is the filename an agent creates in its working directory to signal
+// it still needs the user, so the reaper won't archive it while it waits.
+const HoldMarker = ".paseo-hold"
+
+// HoldGuidance is appended to archive-when-done agent prompts so an agent that
+// needs the user can keep itself alive instead of being culled when it goes idle.
+const HoldGuidance = "\n\n---\n" +
+	"You are auto-archived when you go idle. If you still need input or a decision " +
+	"from me before you can finish, keep yourself alive by creating a hold marker in " +
+	"your working directory: `touch " + HoldMarker + "` (do NOT commit it). " +
+	"Remove it (`rm -f " + HoldMarker + "`) once you no longer need me and are done."
+
 // RerequestReviewGuidance is appended (when rerequest_review is set) so the agent
 // closes the review loop after addressing feedback.
 const RerequestReviewGuidance = "\n\n---\n" +

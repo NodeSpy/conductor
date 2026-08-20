@@ -63,6 +63,9 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				if s.RerequestReview {
 					s.Prompt += dispatch.RerequestReviewGuidance
 				}
+				if profile.ArchiveWhenDone {
+					s.Prompt += dispatch.HoldGuidance
+				}
 			}
 		}
 		req := dispatch.Request{

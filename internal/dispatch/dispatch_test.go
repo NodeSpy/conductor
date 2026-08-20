@@ -229,6 +229,22 @@ func TestParseWorktreeWorkspaces(t *testing.T) {
 	}
 }
 
+func TestHoldMarkerPresent(t *testing.T) {
+	dir := t.TempDir()
+	if holdMarkerPresent(dir) {
+		t.Fatal("no marker yet")
+	}
+	if err := os.WriteFile(filepath.Join(dir, HoldMarker), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !holdMarkerPresent(dir) {
+		t.Fatal("marker should be detected")
+	}
+	if holdMarkerPresent("") {
+		t.Fatal("empty cwd is not held")
+	}
+}
+
 func TestIsGitRepoAndMainWorkTree(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

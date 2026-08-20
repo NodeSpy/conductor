@@ -612,6 +612,10 @@ paseo-conductor version
   outputs) to `runs.json`, so if the conductor restarts or crashes mid-flight it resumes on startup —
   completed steps are not re-run; the one step that was in progress re-runs (at-least-once). The App
   token is re-minted on resume (never persisted).
+- **Won't cull an agent that needs you**: an `archive_when_done` agent that pauses to ask you
+  something isn't reaped — the reaper skips agents blocked on a permission, and an agent can keep
+  itself alive by creating a `.paseo-hold` marker in its worktree (guidance for this is added to its
+  prompt automatically); it removes the marker when it no longer needs you.
 - **Nothing acts on an invalid config**: `validate` gates the service start, and disabled
   integrations/actions never fire.
 - **Auto-merge is deliberate**: `merge_ready` ships disabled in the example and is label-gated, and
