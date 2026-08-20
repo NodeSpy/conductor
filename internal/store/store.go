@@ -108,10 +108,25 @@ func (s *Store) Attempts(key, kind, head string) int {
 
 // Record marks (key, kind) as acted on for signature sig at head, incrementing
 // the per-head attempt counter and touching the record. Persists immediately.
+// Use this only on a SUCCESSFUL dispatch — it consumes the dedup signature so
+// the same state won't fire again.
 func (s *Store) Record(key, kind, sig, head string) error {
 	s.mu.Lock()
 	r := s.rec(key)
 	r.Acted[kind] = sig
+	r.HeadSHA = head
+	r.Attempts[kind+"@"+head]++
+	r.UpdatedAt = s.now()
+	s.mu.Unlock()
+	return s.save()
+}
+
+// RecordAttempt counts a dispatch attempt at head WITHOUT consuming the dedup
+// signature — for a FAILED dispatch, so the same state retries next time (bounded
+// by the per-head attempt cap → escalation) instead of being suppressed forever.
+func (s *Store) RecordAttempt(key, kind, head string) error {
+	s.mu.Lock()
+	r := s.rec(key)
 	r.HeadSHA = head
 	r.Attempts[kind+"@"+head]++
 	r.UpdatedAt = s.now()

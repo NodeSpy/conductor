@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -158,6 +159,30 @@ func TestReviewRequestedLivenessGate(t *testing.T) {
 	}
 	if st.LastSignature("a/w#11", "review_requested") != "" {
 		t.Fatal("review_requested must not consume permanent dedup")
+	}
+}
+
+func TestFailedDispatchRetriesUntilCap(t *testing.T) {
+	d := &fakeDispatcher{err: fmt.Errorf("WORKSPACE_CREATE_FAILED")}
+	n := &fakeNotifier{}
+	e, st := newEng(t, baseCfg(), d, n, nil)
+	act := config.Action{Type: "agent", Agent: "fixer", MaxAttemptsPerHead: 2}
+	tr := agentTrigger("merge_conflict", "a/w", 20, "h", "sig", act)
+
+	e.process(context.Background(), tr) // attempt 1 fails
+	if st.LastSignature("a/w#20", "merge_conflict") != "" {
+		t.Fatal("a failed dispatch must NOT consume the dedup signature")
+	}
+	e.process(context.Background(), tr) // attempt 2 fails (retried, not suppressed)
+	if len(d.reqs) != 2 {
+		t.Fatalf("failed dispatch should retry, got %d dispatches", len(d.reqs))
+	}
+	e.process(context.Background(), tr) // at cap now → escalate, no dispatch
+	if len(d.reqs) != 2 {
+		t.Fatalf("should stop dispatching at the attempt cap, got %d", len(d.reqs))
+	}
+	if !n.has("escalate") {
+		t.Fatal("should escalate at the cap")
 	}
 }
 

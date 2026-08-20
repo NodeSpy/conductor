@@ -40,6 +40,7 @@ type Store interface {
 	LastSignature(key, kind string) string
 	Attempts(key, kind, head string) int
 	Record(key, kind, sig, head string) error
+	RecordAttempt(key, kind, head string) error
 	Audit(entry map[string]any)
 }
 
@@ -251,7 +252,14 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	ref, err := e.disp.Dispatch(ctx, req)
 	e.auditDispatch(t, ref, err)
 	if !shadow && !liveGate { // shadow previews and live-gated kinds don't consume dedup
-		_ = e.store.Record(key, t.Kind, t.Dedup, head)
+		if err != nil {
+			// Count the try (bounded by the attempt cap) but DON'T consume the dedup
+			// signature, so a failed dispatch retries next time instead of being
+			// suppressed forever.
+			_ = e.store.RecordAttempt(key, t.Kind, head)
+		} else {
+			_ = e.store.Record(key, t.Kind, t.Dedup, head)
+		}
 	}
 
 	gated := act.Type == "agent" && !shadow
