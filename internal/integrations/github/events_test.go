@@ -102,10 +102,9 @@ func TestProjectRewrite(t *testing.T) {
 		repo    string
 		want    string // expected Target.Project ("" = falls back to Repo)
 	}{
-		{"org+lowercase", ProjectRewrite{Org: "ednition", Lowercase: true}, "EdnitionCode/RosterStream", "ednition/rosterstream"},
-		{"org only", ProjectRewrite{Org: "ednition"}, "EdnitionCode/RosterStream", "ednition/RosterStream"},
-		{"lowercase only", ProjectRewrite{Lowercase: true}, "EdnitionCode/RosterStream", "ednitioncode/rosterstream"},
-		{"noop when already normalized", ProjectRewrite{Org: "acme", Lowercase: true}, "acme/widget", ""},
+		{"org remap normalizes case", ProjectRewrite{Org: "ednition"}, "EdnitionCode/RosterStream", "ednition/rosterstream"},
+		{"noop when already normalized", ProjectRewrite{Org: "acme"}, "acme/widget", ""},
+		{"noop is case-insensitive", ProjectRewrite{Org: "acme"}, "Acme/Widget", ""},
 		{"inactive rewrite", ProjectRewrite{}, "EdnitionCode/RosterStream", ""},
 	}
 	for _, tc := range cases {
@@ -124,7 +123,7 @@ func TestProjectMapWinsOverRewrite(t *testing.T) {
 	// An explicit per-repo mapping takes precedence over the org-wide rewrite.
 	cfg := baseConfig()
 	cfg.ProjectMap = map[string]string{"EdnitionCode/Special": "custom/project"}
-	cfg.ProjectRewrite = ProjectRewrite{Org: "ednition", Lowercase: true}
+	cfg.ProjectRewrite = ProjectRewrite{Org: "ednition"}
 	g := newTestIntegration(t, cfg)
 	if got := g.mapProject("EdnitionCode/Special"); got != "custom/project" {
 		t.Fatalf("explicit map should win, got %q", got)

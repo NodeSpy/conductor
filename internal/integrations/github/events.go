@@ -513,12 +513,10 @@ func (g *Integration) mapProject(repo string) string {
 	if rw.Org != "" {
 		owner = rw.Org
 	}
-	project := owner + "/" + name
-	if rw.Lowercase {
-		project = strings.ToLower(project)
-	}
-	if project == repo {
-		return "" // rewrite is a no-op for this repo
+	// paseo project names are lowercased, so normalize case-insensitively.
+	project := strings.ToLower(owner + "/" + name)
+	if strings.EqualFold(project, repo) {
+		return "" // rewrite is a no-op for this repo (casing aside)
 	}
 	return project
 }

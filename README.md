@@ -524,9 +524,10 @@ the paseo project name of an existing workspace so worktree checkouts reuse it i
 fresh one (handy when the forge repo and the registered paseo project differ in org or casing, e.g.
 `EdnitionCode/RosterStream: ednition/rosterstream`); keys are case-insensitive. **`project_rewrite`**
 is an org-wide shortcut applied to every repo without an explicit `project_map` entry — `org`
-replaces the owner segment and `lowercase` normalizes casing (e.g. `org: ednition` + `lowercase: true`
-turns any `EdnitionCode/AnyRepo` into `ednition/anyrepo`); `project_map` wins over it. Both only
-affect checkout, not forge operations. A rule's `match.repos` takes **glob patterns** (Go `path.Match`): `owner/*`, `*/*`,
+replaces the owner segment (e.g. `org: ednition` turns any `EdnitionCode/AnyRepo` into
+`ednition/anyrepo`); `project_map` wins over it. Casing is handled automatically for both — the
+rewrite normalizes to lowercase and workspace matching is case-insensitive, since paseo project
+names are lowercased. Both only affect checkout, not forge operations. A rule's `match.repos` takes **glob patterns** (Go `path.Match`): `owner/*`, `*/*`,
 `owner/svc-*`, `owner/[a-z]*`. Note `*` does **not** cross `/`, so a bare `*` won't match `owner/name`
 — use `owner/*` or `*/*`. `me`/`actions`/`workspace` on the matched rule merge over `defaults`.
 **`me`** (rule/`defaults` level) is your GitHub login(s) — it defines "you" for ignoring your own

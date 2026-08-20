@@ -372,7 +372,9 @@ func (d *Dispatcher) findWorkspaceDir(ctx context.Context, repo string) string {
 	}
 	fallback := ""
 	for _, w := range wl {
-		if w.Project != repo || w.Cwd == "" || !isGitRepo(ctx, w.Cwd) {
+		// paseo project names are lowercased; match case-insensitively so a repo
+		// whose casing differs from the registered project still reuses it.
+		if !strings.EqualFold(w.Project, repo) || w.Cwd == "" || !isGitRepo(ctx, w.Cwd) {
 			continue
 		}
 		base := mainWorkTree(ctx, w.Cwd) // the stable primary checkout, not a worktree

@@ -42,16 +42,17 @@ type Config struct {
 
 // ProjectRewrite derives a paseo project name from a repo (owner/name) without
 // listing each repo. Org, when set, replaces the owner segment (e.g. a webhook's
-// EdnitionCode -> the registered ednition); Lowercase normalizes the whole name
-// to lowercase (paseo projects are lowercased). It applies to every repo in the
-// integration; ProjectMap entries take precedence. Only affects checkout.
+// EdnitionCode -> the registered ednition). The result is always matched
+// case-insensitively and normalized to lowercase, since paseo project names are
+// lowercased — so casing differences between the forge repo and the registered
+// project never force a fresh clone. It applies to every repo in the integration;
+// ProjectMap entries take precedence. Only affects checkout.
 type ProjectRewrite struct {
-	Org       string `yaml:"org"`       // override the owner/org segment
-	Lowercase bool   `yaml:"lowercase"` // lowercase the resulting owner/name
+	Org string `yaml:"org"` // override the owner/org segment
 }
 
 // active reports whether the rewrite changes anything.
-func (r ProjectRewrite) active() bool { return r.Org != "" || r.Lowercase }
+func (r ProjectRewrite) active() bool { return r.Org != "" }
 
 // AppConfig holds the GitHub App credentials.
 type AppConfig struct {
