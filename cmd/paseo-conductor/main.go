@@ -47,6 +47,8 @@ func main() {
 		err = cmdReplay(args)
 	case "sweep":
 		err = cmdSweep(args)
+	case "update":
+		err = cmdUpdate(args)
 	case "version", "-v", "--version":
 		fmt.Println("paseo-conductor", version)
 	case "help", "-h", "--help":
@@ -70,6 +72,7 @@ usage:
   paseo-conductor validate [--config PATH]    load & validate config, then exit
   paseo-conductor replay <event.json> [--config PATH]  run a saved webhook through the pipeline (dry-run)
   paseo-conductor sweep [--config PATH]       one catch-up sweep (dry-run print)
+  paseo-conductor update [--force] [--tag vX]  self-update to the latest release (uses gh)
   paseo-conductor version
 `)
 }

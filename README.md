@@ -55,7 +55,26 @@ duties:
   they're authored **as you**, never a bot.
 - **Commits & pushes** go over **SSH** with your git identity — no token, no API cost.
 
-## Install
+## Install (released binary, one-liner)
+
+The repo is private, so the installer uses the authenticated `gh` CLI to fetch the release asset
+for your OS/arch (mac amd64/arm64, linux amd64/arm64/386):
+
+```sh
+gh api repos/NodeSpy/paseo-conductor/contents/scripts/install-release.sh \
+  -H "Accept: application/vnd.github.raw" | bash
+```
+
+Pin a version with `... | bash -s v0.2.0`. Installs to `~/.local/bin/paseo-conductor`.
+
+### Updating
+
+```sh
+paseo-conductor update            # self-update to the latest release (uses gh)
+paseo-conductor update --tag v0.2.0   # or pin a version; --force to reinstall
+```
+
+## Install from source
 
 ```sh
 git clone https://github.com/NodeSpy/paseo-conductor.git
