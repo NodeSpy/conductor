@@ -58,6 +58,14 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		var profile config.AgentProfile
 		if s.Type == "agent" {
 			profile = e.cfg.Agents[s.Agent]
+			if s.Background {
+				// A background step hands off a live agent for you to drive and
+				// close yourself; it sits idle *because* it's waiting for you, so
+				// the reaper must never archive it. Force this regardless of the
+				// profile — a stale-on-disk or mistaken archive_when_done: true
+				// must not be able to reap an interactive hand-off out from under you.
+				profile.ArchiveWhenDone = false
+			}
 			if s.Prompt != "" {
 				s.Prompt += dispatch.WriteWrapperGuidance
 				if s.RerequestReview {
@@ -92,6 +100,11 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			e.finishRun(run)
 			return // fail-fast
 		}
+		// Record the step's decision/outputs so a misroute is diagnosable after the
+		// fact (the audit only logged that a step ran, never what it decided).
+		if !s.Background && len(outputs) > 0 {
+			entry["outputs"] = outputs
+		}
 		e.store.Audit(entry)
 		// Checkpoint: this step is done — advance past it and record its outputs so
 		// a restart resumes at the NEXT step (the interrupted one re-runs).
@@ -107,10 +120,28 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
 			continue
 		}
-		e.log("engine: step %s done (%s)", id, ref.Backend)
+		e.log("engine: step %s done (%s)%s", id, ref.Backend, logOutputs(outputs))
 	}
 	e.notif.Emit(ctx, notify.EventComplete, t, "workflow")
 	e.finishRun(run)
+}
+
+// logOutputs renders a step's outputs compactly for the journal (e.g. the assess
+// step's {decision, reason}), so a misroute is visible in `journalctl` without
+// digging through the audit log. Returns "" when there's nothing to show.
+func logOutputs(outputs map[string]any) string {
+	if len(outputs) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(outputs)
+	if err != nil {
+		return ""
+	}
+	s := string(b)
+	if len(s) > 300 {
+		s = s[:300] + "…"
+	}
+	return " → " + s
 }
 
 // stepBaseData builds the template/condition data (trigger fields + context).

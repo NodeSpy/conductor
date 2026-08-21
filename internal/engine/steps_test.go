@@ -35,6 +35,7 @@ type stepFake struct {
 	provider  map[string]string   // step id -> agent provider used
 	seenSteps map[string][]string // step id -> which prior step outputs were visible
 	waited    map[string]bool     // step id -> req.Wait
+	archive   map[string]bool     // step id -> req.Profile.ArchiveWhenDone (→ archive=1 label)
 }
 
 func (f *stepFake) Dispatch(_ context.Context, req dispatch.Request) (dispatch.RunRef, error) {
@@ -43,6 +44,7 @@ func (f *stepFake) Dispatch(_ context.Context, req dispatch.Request) (dispatch.R
 	f.ran = append(f.ran, id)
 	f.provider[id] = req.Profile.Provider
 	f.waited[id] = req.Wait
+	f.archive[id] = req.Profile.ArchiveWhenDone
 	if s, ok := req.Data["steps"].(map[string]any); ok {
 		keys := []string{}
 		for k := range s {
@@ -67,7 +69,7 @@ func (f *stepFake) count() int {
 
 func newStepFake() *stepFake {
 	return &stepFake{outputs: map[string]string{}, provider: map[string]string{},
-		seenSteps: map[string][]string{}, waited: map[string]bool{}}
+		seenSteps: map[string][]string{}, waited: map[string]bool{}, archive: map[string]bool{}}
 }
 
 func triageAction() config.Action {
@@ -158,6 +160,40 @@ func TestWorkflowBackgroundStepHandsOff(t *testing.T) {
 	// ...and tells the user it's waiting for them.
 	if !n.has(notify.EventNeedsInput) {
 		t.Fatalf("background step should emit needs_input, got %v", n.events)
+	}
+}
+
+// TestWorkflowBackgroundStepNotReapable pins the fix for the review handoff that
+// got reaped 53s after launch: a background step is handed to the user to drive, so
+// it must be forced non-archivable (no archive=1 label → the reaper never touches
+// it), even when its profile opts into archive_when_done.
+func TestWorkflowBackgroundStepNotReapable(t *testing.T) {
+	d := newStepFake()
+	cfg := &config.Config{Agents: map[string]config.AgentProfile{
+		// Profile mistakenly (or staleley) opts into archiving.
+		"interactive": {Provider: "claude-sonnet", ArchiveWhenDone: true},
+	}}
+	cfg.Control.Enabled = ptrBool(true)
+	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: &fakeNotifier{},
+		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+
+	act := config.Action{Steps: []config.Action{
+		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true, Prompt: "hand off {{.issue}}"},
+	}}
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, "app", "usr", false)
+
+	if d.archive["handoff"] {
+		t.Fatal("background hand-off must dispatch with ArchiveWhenDone=false so the reaper can't cull it")
+	}
+}
+
+func TestLogOutputs(t *testing.T) {
+	if got := logOutputs(nil); got != "" {
+		t.Fatalf("empty outputs should render nothing, got %q", got)
+	}
+	got := logOutputs(map[string]any{"decision": "manual"})
+	if got != ` → {"decision":"manual"}` {
+		t.Fatalf("unexpected render: %q", got)
 	}
 }
 

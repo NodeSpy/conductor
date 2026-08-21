@@ -36,8 +36,13 @@ func (r *Reaper) Run(ctx context.Context) {
 }
 
 func (r *Reaper) reap(ctx context.Context) {
+	// Filter on archive=1 only. `paseo ls` treats repeated --label as LAST-WINS
+	// (not AND), so a second --label would just override the first — and archive=1
+	// is set exclusively by the conductor, and only for archive_when_done agents,
+	// so it already implies conductor=1 and is exactly the reap set. Interactive
+	// hand-off (background) agents never get this label, so they're never reaped.
 	out, err := exec.CommandContext(ctx, r.PaseoBin, "ls", "--json",
-		"--label", "conductor=1", "--label", "archive=1").Output()
+		"--label", "archive=1").Output()
 	if err != nil {
 		return
 	}
