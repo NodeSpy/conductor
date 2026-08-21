@@ -175,6 +175,16 @@ integrations:
           gates: { merge_state: clean, review_decision: approved, non_author_approval: true, threads_resolved: true, not_draft: true }
           command: ["gh", "pr", "merge", "{{.repo}}#{{.pr}}", "--squash"]
           env: { GH_TOKEN: "{{.gh_token}}" }
+        # a release was PUBLISHED (prereleases skipped unless include_prereleases: true;
+        # draft publishes ignored). {{.tag_name}} / {{.prerelease}} / {{.url}} are available.
+        release:
+          type: command
+          backend: local
+          enabled: false
+          checkout: none
+          # include_prereleases: true
+          command: ["gh", "release", "view", "{{.tag_name}}", "--repo", "{{.repo}}", "--web"]
+          env: { GH_TOKEN: "{{.gh_token}}" }
 
     # RULES: primary structure. MOST-SPECIFIC matching rule wins (order-independent):
     # exact owner/repo > owner/* > */*; ties keep the earlier rule. The winner merges

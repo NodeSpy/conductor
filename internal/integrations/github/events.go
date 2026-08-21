@@ -80,6 +80,17 @@ type ghPayload struct {
 		ContentNodeID string `json:"content_node_id"`
 		ContentType   string `json:"content_type"`
 	} `json:"projects_v2_item"`
+	Release *struct {
+		TagName         string `json:"tag_name"`
+		Name            string `json:"name"`
+		HTMLURL         string `json:"html_url"`
+		TargetCommitish string `json:"target_commitish"` // branch/SHA the tag points at
+		Draft           bool   `json:"draft"`
+		Prerelease      bool   `json:"prerelease"`
+		Author          struct {
+			Login string `json:"login"`
+		} `json:"author"`
+	} `json:"release"`
 }
 
 type prPayload struct {
@@ -146,6 +157,8 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 		trs = g.issueTriggers(ctx, repo, p)
 	case "projects_v2_item":
 		trs = g.projectTriggers(ctx, p)
+	case "release":
+		trs = g.releaseTriggers(repo, p)
 	}
 
 	// Inject the App installation token so dispatch can use it for reads, plus the
@@ -458,6 +471,29 @@ func (g *Integration) mergeStateTriggers(ctx context.Context, repo string, p ghP
 			"behind:"+info.Base.Ref+"/"+info.Head.SHA, nil)
 	}
 	return nil
+}
+
+// releaseTriggers fires the `release` kind when a release is published. By
+// default prereleases are skipped (they're usually RCs, not ship-worthy); a
+// variant opts in with `include_prereleases: true`. Draft publishes are ignored.
+// The tag drives dedup (releases aren't tied to a head SHA the way PR checks are);
+// tag_name/prerelease/draft are exposed to templates via Context.
+func (g *Integration) releaseTriggers(repo string, p ghPayload) []core.Trigger {
+	if p.Release == nil || p.Action != "published" || p.Release.Draft {
+		return nil
+	}
+	t := g.target(repo, 0, "", p.Release.TargetCommitish, p.Release.HTMLURL)
+	t.PR, t.Number = 0, 0
+	extra := map[string]any{
+		"tag_name":   p.Release.TagName,
+		"prerelease": p.Release.Prerelease,
+		"draft":      p.Release.Draft,
+	}
+	return g.emit(repo, "release", t,
+		fmt.Sprintf("release %s published on %s", p.Release.TagName, repo),
+		"release:"+p.Release.TagName, extra, func(act config.Action) bool {
+			return act.IncludePrereleases || !p.Release.Prerelease
+		})
 }
 
 func (g *Integration) issueTriggers(ctx context.Context, repo string, p ghPayload) []core.Trigger {

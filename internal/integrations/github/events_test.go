@@ -42,6 +42,7 @@ func baseConfig() Config {
 				"changes_requested": {Type: "agent", Agent: "fixer"},
 				"new_comment":       {Type: "agent", Agent: "fixer"},
 				"issue_matched":     {Type: "agent", Agent: "fixer", Checkout: "branch-off"},
+				"release":           {Type: "agent", Agent: "fixer", Checkout: "none"},
 			}),
 		}},
 	}
@@ -193,6 +194,66 @@ func TestRepoNotMatchedNoTrigger(t *testing.T) {
 	if trs := g.triggersFor(context.Background(), "pull_request_review", body); len(trs) != 0 {
 		t.Fatalf("unmatched repo should not trigger, got %d", len(trs))
 	}
+}
+
+func TestReleasePublished(t *testing.T) {
+	g := newTestIntegration(t, baseConfig()) // release action, no include_prereleases
+	body := func(action string, pre, draft bool) []byte {
+		return []byte(`{
+			"action":"` + action + `",
+			"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+			"release":{"tag_name":"v1.2.3","name":"1.2.3","html_url":"https://x/releases/v1.2.3",
+				"target_commitish":"main","prerelease":` + b2s(pre) + `,"draft":` + b2s(draft) + `}
+		}`)
+	}
+
+	// A published, non-prerelease, non-draft release fires and exposes tag_name.
+	trs := g.triggersFor(context.Background(), "release", body("published", false, false))
+	if len(trs) != 1 || trs[0].Kind != "release" {
+		t.Fatalf("want 1 release trigger, got %+v", trs)
+	}
+	if trs[0].Dedup != "release:v1.2.3" {
+		t.Fatalf("dedup should be tag-based, got %q", trs[0].Dedup)
+	}
+	if trs[0].Context["tag_name"] != "v1.2.3" {
+		t.Fatalf("tag_name not in context: %+v", trs[0].Context)
+	}
+
+	// Prereleases are skipped by default.
+	if trs := g.triggersFor(context.Background(), "release", body("published", true, false)); len(trs) != 0 {
+		t.Fatalf("prerelease should be skipped by default, got %d", len(trs))
+	}
+	// Draft publishes and non-published actions never fire.
+	if trs := g.triggersFor(context.Background(), "release", body("published", false, true)); len(trs) != 0 {
+		t.Fatalf("draft release should not fire, got %d", len(trs))
+	}
+	if trs := g.triggersFor(context.Background(), "release", body("created", false, false)); len(trs) != 0 {
+		t.Fatalf("only published should fire, got %d", len(trs))
+	}
+}
+
+func TestReleaseIncludePrereleases(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Rules[0].Actions["release"] = config.ActionSet{
+		{Type: "agent", Agent: "fixer", Checkout: "none", IncludePrereleases: true},
+	}
+	g := newTestIntegration(t, cfg)
+	body := []byte(`{
+		"action":"published",
+		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+		"release":{"tag_name":"v2.0.0-rc1","target_commitish":"main","prerelease":true}
+	}`)
+	if trs := g.triggersFor(context.Background(), "release", body); len(trs) != 1 {
+		t.Fatalf("include_prereleases should fire on a prerelease, got %d", len(trs))
+	}
+}
+
+// b2s renders a Go bool as a JSON literal for inline test payloads.
+func b2s(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 func TestIssueMatchedOnAssign(t *testing.T) {

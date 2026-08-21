@@ -277,6 +277,7 @@ var knownKinds = map[string]bool{
 	"merge_conflict": true, "pr_behind": true, "failing_checks": true,
 	"changes_requested": true, "new_comment": true, "review_requested": true,
 	"self_review": true, "merge_ready": true, "issue_matched": true,
+	"release": true,
 	// issue_assigned + issue_project_moved were merged into issue_matched (v0.4.48).
 }
 
@@ -446,6 +447,9 @@ func mergeAction(base, over config.Action) config.Action {
 	}
 	if over.RequireLabel != "" {
 		base.RequireLabel = over.RequireLabel
+	}
+	if over.IncludePrereleases {
+		base.IncludePrereleases = over.IncludePrereleases
 	}
 	if over.Method != "" {
 		base.Method = over.Method

@@ -206,6 +206,7 @@ type Action struct {
 	Authors            []string       `yaml:"authors"`       // ...and was opened by one of these logins
 	SoleAssignee       bool           `yaml:"sole_assignee"` // ...and you are the ONLY assignee
 	RequireLabel       string         `yaml:"require_label"`
+	IncludePrereleases bool           `yaml:"include_prereleases"` // release: also fire on prereleases (default: skip them)
 	Method             string         `yaml:"method"`
 	Gates              map[string]any `yaml:"gates"`
 	Project            map[string]any `yaml:"project"`

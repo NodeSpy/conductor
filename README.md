@@ -65,6 +65,17 @@ and on `projects_v2_item` moves, re-checking the issue's *current* state each ti
 assignment, a label change, or a drag to a "Ready" column all funnel through the same matcher. With no
 filters it's just "assigned to me"; add `labels_all`/`authors`/`sole_assignee`/`gates` to narrow it.
 
+**Releases**
+
+| Kind | Trigger | Action |
+| --- | --- | --- |
+| `release` | a release is **published** in a matched repo | anything: cut docs, post an announcement, kick a downstream job |
+
+`release` fires on the `release` event's `published` action. Prereleases are **skipped by default**
+(set `include_prereleases: true` to opt in); draft publishes are ignored. `{{.tag_name}}`,
+`{{.prerelease}}` and the release URL (`{{.url}}`) are available to the action's prompt/command.
+Dedup is per tag. Subscribe the App to the `releases` event.
+
 Plus scheduled jobs via the [cron integration](#scheduled-jobs-cron-integration). Each kind is a
 configurable action — enable, disable, and tune it per repo in [config](#configuration).
 
