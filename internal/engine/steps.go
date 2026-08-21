@@ -40,7 +40,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		if step.If != "" {
 			ok, err := expr.Eval(step.If, data)
 			if err != nil {
-				e.log("engine: step %s if-error: %v", id, err)
+				e.log("%s step %s if-error: %v", tag(t), id, err)
 				e.store.Audit(map[string]any{"event": "step_error", "repo": t.Target.Repo,
 					"number": t.Target.Number, "kind": t.Kind, "step": id, "error": err.Error()})
 				e.finishRun(run)
@@ -82,7 +82,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			Tokens: dispatch.Tokens{App: appTok, User: userTok},
 			Author: e.author, Shadow: shadow, Wait: !s.Background, Data: data,
 		}
-		e.log("engine: step %s running (%s)", id, actionDesc(s))
+		e.log("%s step %s running (%s)", tag(t), id, actionDesc(s))
 		start := time.Now()
 		ref, err := e.disp.Dispatch(ctx, req)
 		took := time.Since(start).Round(time.Second)
@@ -103,7 +103,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			if tail := tailOutput(ref.Output); tail != "" {
 				failMsg = "\n" + tail
 			}
-			e.log("engine: step %s failed after %s: %v%s", id, took, err, failMsg)
+			e.log("%s step %s failed after %s: %v%s", tag(t), id, took, err, failMsg)
 			e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("workflow step %q failed: %v", id, err))
 			e.finishRun(run)
 			return // fail-fast
@@ -123,7 +123,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		e.saveRun(run)
 		if s.Background {
 			// Handed off to a live agent — tell the user it's waiting for them.
-			e.log("engine: step %s launched in background after %s (agent %s)", id, took, ref.AgentID)
+			e.log("%s step %s launched in background after %s (agent %s)", tag(t), id, took, ref.AgentID)
 			e.notif.Emit(ctx, notify.EventNeedsInput, t,
 				fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
 			continue
@@ -136,7 +136,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		} else if tail := tailOutput(ref.Output); tail != "" {
 			summary = "\n" + tail
 		}
-		e.log("engine: step %s done (%s) in %s%s", id, ref.Backend, took, summary)
+		e.log("%s step %s done (%s) in %s%s", tag(t), id, ref.Backend, took, summary)
 	}
 	e.notif.Emit(ctx, notify.EventComplete, t, "workflow")
 	e.finishRun(run)

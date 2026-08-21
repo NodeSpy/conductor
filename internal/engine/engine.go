@@ -116,7 +116,7 @@ func (e *Engine) Emit(ctx context.Context, t core.Trigger) {
 	select {
 	case e.ch <- t:
 	default:
-		e.log("engine: queue full, dropping %s %s", t.Kind, t.Key())
+		e.log("%s queue full, dropping", tag(t))
 	}
 }
 
@@ -157,7 +157,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// Terminal state: drop dedup record, no dispatch.
 	if t.Kind == core.KindClosed {
 		_ = e.store.Delete(key)
-		e.log("engine: %s closed; dropped state", key)
+		e.log("%s closed; dropped state", tag(t))
 		return
 	}
 
@@ -208,7 +208,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		// Single-action fixers instead fall through to dispatch, which queues new
 		// work to the agent already on this PR (or spawns one) — see paseo.go.
 		if len(act.Steps) > 0 && e.disp.HasLiveAgent(ctx, key, t.Kind) {
-			e.log("engine: %s %s skipped — an agent is already working/parked for it", t.Kind, key)
+			e.log("%s skipped — an agent is already working/parked for it", tag(t))
 			return
 		}
 		// A live-gated kind never records "done" on dispatch — the sweep re-derives
@@ -229,8 +229,8 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if soft > 0 {
 		if n := e.store.Attempts(key, dkind, head); n >= soft {
 			if ready, wait := e.store.RetryReady(key, dkind, head, soft, retryBackoffBase, retryBackoffFactor, retryBackoffMax); !ready {
-				e.log("engine: %s%s %s in backoff — %d attempts at %s, next retry in ~%s",
-					t.Kind, variantSuffix(t.Variant), key, n, short(head), wait.Round(time.Minute))
+				e.log("%s in backoff — %d attempts at %s, next retry in ~%s",
+					tag(t), n, short(head), wait.Round(time.Minute))
 				return
 			}
 			if n == soft { // first time past the threshold and now eligible — say so, once
@@ -276,7 +276,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			_ = e.store.Record(key, dkind, t.Dedup, head)
 		}
 		e.notif.Emit(ctx, notify.EventDispatch, t, "workflow")
-		e.log("engine: workflow %s %s (%d steps%s)", t.Kind, key, len(act.Steps), shadowNote(shadow))
+		e.log("%s workflow (%d steps%s)", tag(t), len(act.Steps), shadowNote(shadow))
 		if !shadow && !e.acquire(ctx) {
 			return
 		}
@@ -309,7 +309,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 
 	e.notif.Emit(ctx, notify.EventDispatch, t, act.Type)
 	if act.Type == "command" {
-		e.log("engine: %s %s running (%s)", t.Kind, key, actionDesc(act))
+		e.log("%s running (%s)", tag(t), actionDesc(act))
 	}
 	start := time.Now()
 	ref, err := e.disp.Dispatch(ctx, req)
@@ -319,7 +319,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		if tl := tailOutput(ref.Output); tl != "" {
 			tail = "\n" + tl
 		}
-		e.log("engine: %s %s command done (%s) in %s%s", t.Kind, key, ref.Backend, took, tail)
+		e.log("%s command done (%s) in %s%s", tag(t), ref.Backend, took, tail)
 	}
 	e.auditDispatch(t, ref, err)
 	gated := act.Type == "agent" && !shadow
@@ -327,7 +327,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// A catch-up whose PR already has a working agent did nothing — don't record it
 	// (it isn't an attempt) and free the slot.
 	if ref.Skipped {
-		e.log("engine: %s %s — %s", t.Kind, key, ref.Output)
+		e.log("%s %s", tag(t), ref.Output)
 		if gated {
 			e.release()
 		}
@@ -337,7 +337,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// isn't a real attempt — don't count it toward backoff or escalate; the sweep
 	// re-derives it cleanly on restart.
 	if err != nil && interruptedByShutdown(ctx, err) {
-		e.log("engine: %s %s interrupted by shutdown — not counting an attempt", t.Kind, key)
+		e.log("%s interrupted by shutdown — not counting an attempt", tag(t))
 		if gated {
 			e.release()
 		}
@@ -360,7 +360,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 
 	if err != nil {
 		if tl := tailOutput(ref.Output); tl != "" {
-			e.log("engine: %s %s command output (tail):\n%s", t.Kind, key, tl)
+			e.log("%s command output (tail):\n%s", tag(t), tl)
 		}
 		e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("dispatch failed: %v", err))
 		if gated {
@@ -371,7 +371,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if ref.Queued {
 		// Work was handed to an agent already on the PR — no new agent, no slot to
 		// hold; it'll drain the queue on its own.
-		e.log("engine: %s %s queued to agent %s", t.Kind, key, ref.AgentID)
+		e.log("%s queued to agent %s", tag(t), ref.AgentID)
 		if gated {
 			e.release()
 		}
@@ -481,7 +481,7 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 		if run.Outputs == nil {
 			run.Outputs = map[string]map[string]any{}
 		}
-		e.log("engine: resuming workflow %s from step %d", r.ID, r.StepIndex)
+		e.log("%s resuming workflow from step %d", tag(t), r.StepIndex)
 		e.store.Audit(map[string]any{"event": "resume", "repo": t.Target.Repo,
 			"number": t.Target.Number, "kind": t.Kind, "step_index": r.StepIndex})
 		if !e.acquire(ctx) {
@@ -506,6 +506,18 @@ const (
 	// comments share a kind@head attempt key, so a cap there would throttle real work.
 	defaultMaxAttempts = 3
 )
+
+// tag is a stable log prefix tying a line to its integration + target + kind, so
+// all work for one PR/issue is greppable: engine[<instance> <repo>#<num> <kind>#<variant>].
+func tag(t core.Trigger) string {
+	id := t.Target.Repo
+	if t.Target.PR > 0 {
+		id = fmt.Sprintf("%s#%d", id, t.Target.PR)
+	} else if t.Target.Issue > 0 {
+		id = fmt.Sprintf("%s#%d", id, t.Target.Issue)
+	}
+	return fmt.Sprintf("engine[%s %s %s]", t.Instance, id, t.Kind+variantSuffix(t.Variant))
+}
 
 // variantSuffix renders "#name" for logs when a trigger is a named variant.
 func variantSuffix(v string) string {
@@ -577,9 +589,9 @@ func (e *Engine) auditDispatch(t core.Trigger, ref dispatch.RunRef, err error) {
 	}
 	if err != nil {
 		entry["error"] = err.Error()
-		e.log("engine: dispatch %s %s: %v", t.Kind, t.Key(), err)
+		e.log("%s dispatch failed: %v", tag(t), err)
 	} else {
-		e.log("engine: dispatched %s %s (backend=%s shadow=%v)", t.Kind, t.Key(), ref.Backend, ref.Shadowed)
+		e.log("%s dispatched (backend=%s shadow=%v)", tag(t), ref.Backend, ref.Shadowed)
 	}
 	e.store.Audit(entry)
 }
@@ -604,9 +616,9 @@ func (e *Engine) rerunFailed(ctx context.Context, t core.Trigger, runID int64) {
 		"--failed", "--repo", t.Target.Repo)
 	c.Env = append(os.Environ(), "GH_TOKEN="+tok)
 	if out, err := c.CombinedOutput(); err != nil {
-		e.log("engine: flaky rerun %s run %d: %v: %s", t.Target.Repo, runID, err, out)
+		e.log("%s flaky rerun run %d: %v: %s", tag(t), runID, err, out)
 	} else {
-		e.log("engine: flaky rerun triggered for %s run %d", t.Target.Repo, runID)
+		e.log("%s flaky rerun triggered (run %d)", tag(t), runID)
 	}
 }
 
