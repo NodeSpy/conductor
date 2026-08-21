@@ -16,6 +16,30 @@ type Reaper struct {
 	PaseoBin string
 	Interval time.Duration
 	Log      func(string, ...any)
+
+	// held remembers agents that have entered a back-and-forth with the user (asked
+	// a question / set a hold marker). Once an agent interacts it becomes the user's
+	// to drive and close, so the reaper leaves it alone for the rest of its life —
+	// even after the question is answered and the pending permission clears. Pruned
+	// when the agent is no longer listed (the user archived it).
+	held map[string]bool
+}
+
+// markAndSpare records whether an agent has entered user interaction and reports
+// whether it should be spared. Once held, it stays held regardless of holdingNow.
+// firstHold is true only on the poll where it transitions into the held set.
+func (r *Reaper) markAndSpare(id string, holdingNow bool) (spared, firstHold bool) {
+	if r.held == nil {
+		r.held = map[string]bool{}
+	}
+	if r.held[id] {
+		return true, false
+	}
+	if holdingNow {
+		r.held[id] = true
+		return true, true
+	}
+	return false, false
 }
 
 // Run reaps on an interval until ctx is cancelled.
@@ -65,33 +89,53 @@ func (r *Reaper) reap(ctx context.Context) {
 			idle = append(idle, idleAgent{a.ID, a.Cwd})
 		}
 	}
-	if len(idle) == 0 {
-		return
+	// Track everything currently listed so we can forget held agents you've closed.
+	present := make(map[string]bool, len(agents))
+	for _, a := range agents {
+		if a.ID != "" {
+			present[a.ID] = true
+		}
 	}
 
-	// Map agent cwd -> its worktree workspace so we can archive the *workspace*
-	// (which reclaims the worktree AND the agent it owns). Only worktree-isolation
-	// workspaces are archivable — never a shared/base checkout.
-	worktrees := r.worktreeWorkspaces(ctx)
-	for _, a := range idle {
-		// Don't cull an agent that still needs the user — it set a hold marker in
-		// its worktree, or it's blocked on a permission decision.
-		if r.needsUser(ctx, a.id, a.cwd) {
-			if r.Log != nil {
-				r.Log("reaper: keeping agent %s — waiting on you (hold marker / pending permission)", a.id)
+	if len(idle) > 0 {
+		// Map agent cwd -> its worktree workspace so we can archive the *workspace*
+		// (which reclaims the worktree AND the agent it owns). Only worktree-isolation
+		// workspaces are archivable — never a shared/base checkout.
+		worktrees := r.worktreeWorkspaces(ctx)
+		for _, a := range idle {
+			// Once an agent has entered a back-and-forth with you (asked a question,
+			// pending permission, or a hold marker), it's yours to drive and close —
+			// the reaper leaves it AND its workspace alone for the rest of its life,
+			// even after you answer and the pending permission clears. Skip the
+			// inspect call once it's already held.
+			holdingNow := false
+			if !r.held[a.id] {
+				holdingNow = r.needsUser(ctx, a.id, a.cwd)
 			}
-			continue
-		}
-		if wksID := worktrees[normCwd(a.cwd)]; wksID != "" {
-			if err := exec.CommandContext(ctx, r.PaseoBin, "workspace", "archive", wksID).Run(); err == nil && r.Log != nil {
-				r.Log("reaper: archived idle agent %s + worktree %s", a.id, wksID)
+			if spared, first := r.markAndSpare(a.id, holdingNow); spared {
+				if first && r.Log != nil {
+					r.Log("reaper: agent %s asked for you — keeping it + its workspace; archive it yourself when done", a.id)
+				}
+				continue
 			}
-			continue
+			if wksID := worktrees[normCwd(a.cwd)]; wksID != "" {
+				if err := exec.CommandContext(ctx, r.PaseoBin, "workspace", "archive", wksID).Run(); err == nil && r.Log != nil {
+					r.Log("reaper: archived idle agent %s + worktree %s", a.id, wksID)
+				}
+				continue
+			}
+			// No isolated worktree (e.g. checkout: none in a shared workspace): the
+			// agent has nothing to reclaim beyond itself.
+			if err := exec.CommandContext(ctx, r.PaseoBin, "archive", a.id).Run(); err == nil && r.Log != nil {
+				r.Log("reaper: archived idle agent %s", a.id)
+			}
 		}
-		// No isolated worktree (e.g. checkout: none in a shared workspace): the
-		// agent has nothing to reclaim beyond itself.
-		if err := exec.CommandContext(ctx, r.PaseoBin, "archive", a.id).Run(); err == nil && r.Log != nil {
-			r.Log("reaper: archived idle agent %s", a.id)
+	}
+
+	// Forget held agents no longer listed (you archived them), keeping the set bounded.
+	for id := range r.held {
+		if !present[id] {
+			delete(r.held, id)
 		}
 	}
 }

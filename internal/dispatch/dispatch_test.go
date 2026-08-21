@@ -272,6 +272,27 @@ func TestHoldMarkerPresent(t *testing.T) {
 	}
 }
 
+func TestReaperMarkAndSpareStaysHeld(t *testing.T) {
+	r := &Reaper{}
+	// Not holding, never held → not spared.
+	if spared, _ := r.markAndSpare("a", false); spared {
+		t.Fatal("agent that never interacted should not be spared")
+	}
+	// First time it holds → spared, firstHold=true.
+	if spared, first := r.markAndSpare("a", true); !spared || !first {
+		t.Fatalf("first hold should spare with firstHold=true, got spared=%v first=%v", spared, first)
+	}
+	// Once held, it stays spared even when the question is answered (holdingNow=false),
+	// and firstHold is false on subsequent polls.
+	if spared, first := r.markAndSpare("a", false); !spared || first {
+		t.Fatalf("held agent must stay spared after answering, got spared=%v first=%v", spared, first)
+	}
+	// A different agent is independent.
+	if spared, _ := r.markAndSpare("b", false); spared {
+		t.Fatal("unrelated agent should not be spared")
+	}
+}
+
 func TestIsGitRepoAndMainWorkTree(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
