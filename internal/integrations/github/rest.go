@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -354,6 +355,119 @@ func (c *restClient) projectItem(ctx context.Context, instID int64, itemNodeID, 
 	}
 	return &projectItem{Repo: n.Content.Repository.NameWithOwner, Number: n.Content.Number,
 		Title: n.Content.Title, Value: n.FieldValueByName.Name, Assignees: assignees}, nil
+}
+
+// issueFacts is the enrichment issue_matched gates need: whether the issue has a
+// linked dev branch or a closing PR, and its Projects v2 field values (field name
+// → value, both lower-cased for case-insensitive comparison).
+type issueFacts struct {
+	HasBranch bool
+	HasPR     bool
+	Fields    map[string]string
+}
+
+// issueEnrich fetches issueFacts in one GraphQL call (App creds).
+func (c *restClient) issueEnrich(ctx context.Context, instID int64, owner, name string, number int) (*issueFacts, error) {
+	const q = `query($owner:String!,$name:String!,$num:Int!){
+	  repository(owner:$owner,name:$name){ issue(number:$num){
+	    linkedBranches(first:1){ totalCount }
+	    closedByPullRequestsReferences(first:1){ totalCount }
+	    projectItems(first:10){ nodes{ fieldValues(first:20){ nodes{
+	      ... on ProjectV2ItemFieldSingleSelectValue{ name field{ ... on ProjectV2FieldCommon{ name } } }
+	      ... on ProjectV2ItemFieldTextValue{ text field{ ... on ProjectV2FieldCommon{ name } } }
+	    }}}}
+	  }}}`
+	var data struct {
+		Repository struct {
+			Issue struct {
+				LinkedBranches struct {
+					TotalCount int `json:"totalCount"`
+				} `json:"linkedBranches"`
+				ClosedByPRs struct {
+					TotalCount int `json:"totalCount"`
+				} `json:"closedByPullRequestsReferences"`
+				ProjectItems struct {
+					Nodes []struct {
+						FieldValues struct {
+							Nodes []struct {
+								Name  string `json:"name"`
+								Text  string `json:"text"`
+								Field struct {
+									Name string `json:"name"`
+								} `json:"field"`
+							} `json:"nodes"`
+						} `json:"fieldValues"`
+					} `json:"nodes"`
+				} `json:"projectItems"`
+			} `json:"issue"`
+		} `json:"repository"`
+	}
+	if err := c.graphql(ctx, instID, q, map[string]any{"owner": owner, "name": name, "num": number}, &data); err != nil {
+		return nil, err
+	}
+	iss := data.Repository.Issue
+	f := &issueFacts{
+		HasBranch: iss.LinkedBranches.TotalCount > 0,
+		HasPR:     iss.ClosedByPRs.TotalCount > 0,
+		Fields:    map[string]string{},
+	}
+	for _, item := range iss.ProjectItems.Nodes {
+		for _, fv := range item.FieldValues.Nodes {
+			if fv.Field.Name == "" {
+				continue
+			}
+			val := fv.Name
+			if val == "" {
+				val = fv.Text
+			}
+			if val != "" {
+				f.Fields[strings.ToLower(fv.Field.Name)] = strings.ToLower(val)
+			}
+		}
+	}
+	return f, nil
+}
+
+// issueGatePasses evaluates issue_matched gates against enrichment facts:
+//   - no_branch: true  → skip if the issue has a linked dev branch OR closing PR
+//   - project: {Field: value|[values]} → each field must equal / be in the set
+func issueGatePasses(f *issueFacts, gates map[string]any) bool {
+	for k, v := range gates {
+		switch strings.ToLower(k) {
+		case "no_branch":
+			if b, _ := v.(bool); b && (f.HasBranch || f.HasPR) {
+				return false
+			}
+		case "project":
+			m, ok := v.(map[string]any)
+			if !ok {
+				return false
+			}
+			for field, want := range m {
+				if !fieldValueMatches(f.Fields[strings.ToLower(field)], want) {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+// fieldValueMatches reports whether a project field value equals want (string) or
+// is a member of want ([]any of strings), case-insensitively.
+func fieldValueMatches(got string, want any) bool {
+	got = strings.ToLower(strings.TrimSpace(got))
+	switch w := want.(type) {
+	case string:
+		return got == strings.ToLower(strings.TrimSpace(w))
+	case []any:
+		for _, e := range w {
+			if s, ok := e.(string); ok && got == strings.ToLower(strings.TrimSpace(s)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // rateLimitWait derives a backoff from Retry-After / X-RateLimit-Reset.

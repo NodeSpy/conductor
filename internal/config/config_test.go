@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const sample = `
@@ -105,5 +107,27 @@ func TestValidateRejectsNoIntegrations(t *testing.T) {
 	c.applyDefaults()
 	if err := c.Validate(); err == nil {
 		t.Fatal("empty config should fail validation")
+	}
+}
+
+func TestActionSetUnmarshal(t *testing.T) {
+	var m struct {
+		Actions map[string]ActionSet `yaml:"actions"`
+	}
+	y := []byte("actions:\n" +
+		"  merge_conflict: { type: agent, agent: opus }\n" +
+		"  issue_matched:\n" +
+		"    - { name: a, agent: x }\n" +
+		"    - { name: b, agent: y }\n")
+	if err := yaml.Unmarshal(y, &m); err != nil {
+		t.Fatal(err)
+	}
+	// A single mapping parses to a 1-element set (backward compatible).
+	if s := m.Actions["merge_conflict"]; len(s) != 1 || s[0].Agent != "opus" {
+		t.Fatalf("single object should be a 1-element set: %+v", s)
+	}
+	// A sequence parses to N named variants.
+	if s := m.Actions["issue_matched"]; len(s) != 2 || s[0].Name != "a" || s[1].Name != "b" || s[1].Agent != "y" {
+		t.Fatalf("list should parse to named variants: %+v", s)
 	}
 }

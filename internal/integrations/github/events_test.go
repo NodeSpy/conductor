@@ -7,6 +7,16 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 )
 
+// as1 wraps single actions into one-variant ActionSets, keeping the many
+// single-action test configs terse after the multi-variant (ActionSet) change.
+func as1(m map[string]config.Action) map[string]config.ActionSet {
+	out := make(map[string]config.ActionSet, len(m))
+	for k, v := range m {
+		out[k] = config.ActionSet{v}
+	}
+	return out
+}
+
 // newTestIntegration builds an Integration from an in-memory Config.
 func newTestIntegration(t *testing.T, cfg Config) *Integration {
 	t.Helper()
@@ -28,11 +38,11 @@ func baseConfig() Config {
 			Match:    Match{Repos: []string{"acme/*"}},
 			Reviewer: config.Actors{Logins: []string{"me"}},
 			Assignee: config.Actors{Logins: []string{"me"}},
-			Actions: map[string]config.Action{
+			Actions: as1(map[string]config.Action{
 				"changes_requested": {Type: "agent", Agent: "fixer"},
 				"new_comment":       {Type: "agent", Agent: "fixer"},
 				"issue_assigned":    {Type: "agent", Agent: "fixer", Checkout: "branch-off"},
-			},
+			}),
 		}},
 	}
 }

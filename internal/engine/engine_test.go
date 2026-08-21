@@ -427,3 +427,30 @@ func TestFlakyRerunBeforeDispatch(t *testing.T) {
 		t.Fatalf("expected dispatch after rerun, got %d", len(d.reqs))
 	}
 }
+
+func TestVariantDedupIsolation(t *testing.T) {
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, st := newEng(t, baseCfg(), d, n, nil)
+	act := config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"}
+
+	// Variant "a" acts on a comment; its dedup is keyed new_comment#a.
+	ta := agentTrigger("new_comment", "a/w", 5, "h", "sig", act)
+	ta.Variant = "a"
+	e.process(context.Background(), ta)
+	// Variant "b" with the SAME dedup sig still dispatches — separate key, no collision.
+	tb := agentTrigger("new_comment", "a/w", 5, "h", "sig", act)
+	tb.Variant = "b"
+	e.process(context.Background(), tb)
+	if len(d.reqs) != 2 {
+		t.Fatalf("two variants should each dispatch, got %d", len(d.reqs))
+	}
+	if st.LastSignature("a/w#5", "new_comment#a") != "sig" || st.LastSignature("a/w#5", "new_comment#b") != "sig" {
+		t.Fatal("each variant should record under its own kind#variant key")
+	}
+	// Regression: an UNNAMED action keys on bare kind (existing state honored).
+	tu := agentTrigger("new_comment", "a/w", 6, "h", "sig2", act)
+	e.process(context.Background(), tu)
+	if st.LastSignature("a/w#6", "new_comment") != "sig2" {
+		t.Fatal("unnamed action must key on bare kind")
+	}
+}

@@ -59,7 +59,7 @@ Every kind below is a configurable `action` (see [Configuration](#configuration)
 | Kind | Trigger | Action |
 | --- | --- | --- |
 | `issue_assigned` | an issue is assigned to you | agent: start work on a fresh branch |
-| `issue_labeled` | an issue **assigned to you** gets a label in `labels_any` (e.g. "Ready") | agent: start work on a fresh branch |
+| `issue_matched` | an issue **assigned to you** matches your filters (labels/author/gates) — re-evaluated on any change | agent: start work on a fresh branch |
 | `issue_project_moved` | an issue **assigned to you** moves to a Projects v2 status → "Ready" | agent: start work on a fresh branch |
 
 Plus scheduled jobs via the [cron integration](#scheduled-jobs-cron-integration). Each kind is a
@@ -89,20 +89,29 @@ integrations:
           agent: fixer
           checkout: branch-off             # start on a fresh branch (no PR yet)
           prompt: "Issue {{.repo}}#{{.issue}} was assigned to you — implement it and open a draft PR."
-        issue_labeled:                       # an issue assigned to you gets a label in labels_any
-          type: agent
-          agent: fixer
+        issue_matched:                       # STATE-BASED: fires when an issue assigned to you
+          type: agent                        #   matches these filters — re-evaluated on any issue
+          agent: fixer                       #   change (labeled/assigned/edited/…), once per issue.
           checkout: branch-off
-          labels_any: ["Ready"]              # which label(s) are the go-signal (e.g. Ready, "To Do")
-          prompt: "Issue {{.repo}}#{{.issue}} is Ready — start work on a fresh branch."
+          labels_all: ["Ready", "backend"]   # require ALL of these labels (labels_any = ANY)
+          exclude: { labels: ["blocked"] }   # ...and NONE of these (also exclude.title)
+          authors: [octocat]                 # ...opened by one of these (optional)
+          sole_assignee: true                # ...and you're the only assignee (optional)
+          gates:                             # GraphQL-backed, checked only if the above matched:
+            no_branch: true                  #   skip if a branch/PR already exists for the issue
+            project: { Priority: [High, Urgent] }  #   Projects v2 field must match
+          prompt: "Issue {{.repo}}#{{.issue}} is ready — start work on a fresh branch."
     rules:
       - match: { repos: ["octocat/*"] }
 agents:
   fixer: { provider: claude, workspace: worktree }
 ```
 
-For a smarter flow — assess the issue, then implement it *or* ask the reporter for more detail —
-make `issue_labeled` a [multi-step workflow](#multi-step-workflows).
+`issue_matched` can be a **list** of named variants (different labels → different agents); see
+[Named action variants](#named-action-variants). For a smarter single flow — assess the issue, then
+implement it *or* ask the reporter for more detail — make it a
+[multi-step workflow](#multi-step-workflows). (`issue_assigned` vs `issue_matched`: use one — the
+former is a plain assign trigger, the latter a rich state match.)
 
 ## Multi-step workflows
 
@@ -112,7 +121,7 @@ earlier outputs. This lets you plan with a cheap model, then act with a stronger
 what the plan found.
 
 ```yaml
-issue_labeled:
+issue_matched:
   labels_any: ["Ready"]
   steps:
     - id: evaluate                       # cheap model assesses the issue
@@ -143,6 +152,29 @@ issue_labeled:
   truthiness (`x` / `!x`); and `&&` / `||`.
 - Steps run in order, fail-fast, and the whole workflow runs off the main loop so long steps don't
   block other events.
+
+## Named action variants
+
+Any kind's action can be a **single mapping** (the common case) **or a list of named variants** —
+same repo, same kind, different routes. On a matching event every variant is evaluated
+independently; each one that applies dispatches its own agent with its own dedup/attempt state
+(keyed `kind#name`). An unnamed single action keeps the bare `kind` key (nothing changes for
+existing configs).
+
+```yaml
+actions:
+  merge_conflict: { type: agent, agent: opus }     # single, unnamed — unchanged
+
+  issue_matched:                                    # a list → named variants
+    - name: backend
+      agent: backend-fixer
+      labels_all: [Ready, backend]
+    - name: frontend
+      agent: frontend-fixer
+      labels_all: [Ready, frontend]
+```
+
+The variant name also appears as a `variant=<name>` label on the dispatched agent and in the logs.
 
 ## Scheduled jobs (cron integration)
 
@@ -387,7 +419,7 @@ integrations:
           # assignee defaults to `me`; set it here only to override
           checkout: branch-off                            # start work on a fresh branch (no PR yet)
           prompt: "Issue {{.repo}}#{{.issue}} assigned to you — start work; open a draft PR."
-        issue_labeled:                                      # issue labeled "Ready"
+        issue_matched:                                      # issue labeled "Ready"
           # A MULTI-STEP workflow: plan cheaply, then branch on the result.
           labels_any: ["Ready"]                           # gate: only "Ready"-labeled issues
           steps:
@@ -542,9 +574,10 @@ segment is required there; `*/*` isn't supported).
 
 **Actions** — keyed by kind. `type: agent` references an `agents:` profile + a `prompt` and runs a
 Paseo agent; `type: command` runs a subprocess (`command`, `env`, `workdir`, `backend`). Common
-options: `enabled`, `checkout` (`checkout-pr`|`branch-off`|`none`), `shadow`, `workdir`, plus
-kind-specific ones (`max_attempts_per_head`, `flaky_rerun`, `from_users`, `labels_any`,
-`require_label`, `method`, `gates`, `project`, `rerequest_review`).
+options: `name` (for named variants), `enabled`, `checkout` (`checkout-pr`|`branch-off`|`none`),
+`shadow`, `workdir`, plus kind-specific ones (`max_attempts_per_head`, `flaky_rerun`, `from_users`,
+`labels_any`, `labels_all`, `authors`, `sole_assignee`, `exclude`, `require_label`, `method`,
+`gates`, `project`, `rerequest_review`).
 `rerequest_review: true` (agent actions) tells the fixer to re-request review from the reviewer(s)
 who requested changes once it has addressed the feedback and pushed — closing the review loop.
 `exclude` skips PRs the action shouldn't touch (e.g. release PRs) by head-branch glob, label, or a

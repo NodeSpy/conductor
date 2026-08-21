@@ -20,7 +20,7 @@ func validatableConfig(t *testing.T, actions map[string]config.Action) Config {
 	return Config{
 		App:     AppConfig{AppID: 1, PrivateKeyPath: keyPath, WebhookSecret: "s"},
 		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
-		Rules:   []Rule{{Match: Match{Repos: []string{"acme/*"}}, Actions: actions}},
+		Rules:   []Rule{{Match: Match{Repos: []string{"acme/*"}}, Actions: as1(actions)}},
 	}
 }
 
@@ -37,7 +37,7 @@ func TestValidateRejectsUnknownKind(t *testing.T) {
 
 func TestValidateAcceptsKnownKinds(t *testing.T) {
 	g := newTestIntegration(t, validatableConfig(t, map[string]config.Action{
-		"issue_labeled":     {Type: "agent", Agent: "fixer"},
+		"issue_matched":     {Type: "agent", Agent: "fixer"},
 		"changes_requested": {Type: "agent", Agent: "fixer"},
 		"review_requested":  {Type: "command", Command: []string{"critique"}},
 	}))

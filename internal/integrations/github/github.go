@@ -105,12 +105,12 @@ type SweepConfig struct {
 
 // Rule is one entry in the instance's `rules` list (or the `defaults` block).
 type Rule struct {
-	Match     Match                    `yaml:"match"`
-	Me        config.Actors            `yaml:"me"`       // your GitHub login(s) — defines "you"
-	Reviewer  config.Actors            `yaml:"reviewer"` // whose requested review triggers review_requested
-	Assignee  config.Actors            `yaml:"assignee"` // whose assignment triggers issue_assigned
-	Workspace string                   `yaml:"workspace"`
-	Actions   map[string]config.Action `yaml:"actions"`
+	Match     Match                       `yaml:"match"`
+	Me        config.Actors               `yaml:"me"`       // your GitHub login(s) — defines "you"
+	Reviewer  config.Actors               `yaml:"reviewer"` // whose requested review triggers review_requested
+	Assignee  config.Actors               `yaml:"assignee"` // whose assignment triggers issue_assigned
+	Workspace string                      `yaml:"workspace"`
+	Actions   map[string]config.ActionSet `yaml:"actions"` // kind -> one or more named variants
 }
 
 // Match selects which events a rule applies to.
@@ -170,9 +170,11 @@ func newIntegration(name string, decode func(any) error) (core.Integration, erro
 		for _, r := range rules {
 			add(r.Reviewer) // rule-level fallback
 			add(r.Assignee)
-			for _, a := range r.Actions { // action-level reviewer/assignee
-				add(a.Reviewer)
-				add(a.Assignee)
+			for _, set := range r.Actions { // action-level reviewer/assignee (per variant)
+				for _, a := range set {
+					add(a.Reviewer)
+					add(a.Assignee)
+				}
 			}
 		}
 	}
@@ -250,8 +252,8 @@ func (g *Integration) Validate() error {
 		return fmt.Errorf("github[%s]: set webhook.smee_url and/or webhook.listen", g.name)
 	}
 	// Action maps are keyed by kind; a typo or a renamed kind (e.g. the old
-	// issue_ready) would otherwise sit in config doing nothing. Reject unknown keys.
-	check := func(where string, actions map[string]config.Action) error {
+	// issue_labeled) would otherwise sit in config doing nothing. Reject unknown keys.
+	check := func(where string, actions map[string]config.ActionSet) error {
 		for k := range actions {
 			if !knownKinds[k] {
 				return fmt.Errorf("github[%s]: unknown action kind %q in %s", g.name, k, where)
@@ -275,7 +277,7 @@ var knownKinds = map[string]bool{
 	"merge_conflict": true, "pr_behind": true, "failing_checks": true,
 	"changes_requested": true, "new_comment": true, "review_requested": true,
 	"self_review": true, "merge_ready": true, "issue_assigned": true,
-	"issue_labeled": true, "issue_project_moved": true,
+	"issue_matched": true, "issue_project_moved": true,
 }
 
 // resolve returns the effective rule (reviewer/assignee/actions merged over
@@ -333,7 +335,7 @@ func (g *Integration) merge(r Rule) Rule {
 		Reviewer:  g.cfg.Defaults.Reviewer,
 		Assignee:  g.cfg.Defaults.Assignee,
 		Workspace: g.cfg.Defaults.Workspace,
-		Actions:   map[string]config.Action{},
+		Actions:   map[string]config.ActionSet{},
 	}
 	for k, v := range g.cfg.Defaults.Actions {
 		out.Actions[k] = v
@@ -347,8 +349,18 @@ func (g *Integration) merge(r Rule) Rule {
 	if r.Workspace != "" {
 		out.Workspace = r.Workspace
 	}
-	for k, v := range r.Actions {
-		out.Actions[k] = mergeAction(out.Actions[k], v)
+	// A rule's set for a kind replaces the defaults' set; each variant is merged
+	// over the default base (the first default variant) for that kind.
+	for k, set := range r.Actions {
+		var base config.Action
+		if d := g.cfg.Defaults.Actions[k]; len(d) > 0 {
+			base = d[0]
+		}
+		merged := make(config.ActionSet, len(set))
+		for i, v := range set {
+			merged[i] = mergeAction(base, v)
+		}
+		out.Actions[k] = merged
 	}
 	return out
 }
@@ -356,6 +368,9 @@ func (g *Integration) merge(r Rule) Rule {
 // mergeAction overlays override fields onto a base action (only non-zero
 // override fields win). This lets a rule tweak just an agent/prompt.
 func mergeAction(base, over config.Action) config.Action {
+	if over.Name != "" {
+		base.Name = over.Name
+	}
 	if over.Type != "" {
 		base.Type = over.Type
 	}
@@ -413,6 +428,15 @@ func mergeAction(base, over config.Action) config.Action {
 	}
 	if len(over.LabelsAny) > 0 {
 		base.LabelsAny = over.LabelsAny
+	}
+	if len(over.LabelsAll) > 0 {
+		base.LabelsAll = over.LabelsAll
+	}
+	if len(over.Authors) > 0 {
+		base.Authors = over.Authors
+	}
+	if over.SoleAssignee {
+		base.SoleAssignee = over.SoleAssignee
 	}
 	if len(over.Reviewer.Logins) > 0 || len(over.Reviewer.Teams) > 0 {
 		base.Reviewer = over.Reviewer

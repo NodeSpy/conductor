@@ -172,6 +172,13 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		return
 	}
 	head := t.Target.HeadSHA
+	// Dedup/attempt state is keyed per action variant so two variants of a kind on
+	// the same PR/head don't collide. An unnamed (single) action keeps the bare
+	// `kind` key, so existing state.json is honored with no migration.
+	dkind := t.Kind
+	if t.Variant != "" {
+		dkind = t.Kind + "#" + t.Variant
+	}
 
 	// Flaky-CI: rerun failed checks once before spawning a fix agent.
 	if t.Kind == "failing_checks" && act.FlakyRerun.Enabled {
@@ -207,7 +214,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		// A live-gated kind never records "done" on dispatch — the sweep re-derives
 		// reality (still dirty? threads unresolved? review pending?) each run, so
 		// culled/failed work isn't abandoned. The backoff below bounds the retries.
-	} else if t.Dedup != "" && e.store.LastSignature(key, t.Kind) == t.Dedup {
+	} else if t.Dedup != "" && e.store.LastSignature(key, dkind) == t.Dedup {
 		return
 	}
 
@@ -220,17 +227,17 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		soft = defaultMaxAttempts
 	}
 	if soft > 0 {
-		if n := e.store.Attempts(key, t.Kind, head); n >= soft {
-			if ready, wait := e.store.RetryReady(key, t.Kind, head, soft, retryBackoffBase, retryBackoffFactor, retryBackoffMax); !ready {
-				e.log("engine: %s %s in backoff — %d attempts at %s, next retry in ~%s",
-					t.Kind, key, n, short(head), wait.Round(time.Minute))
+		if n := e.store.Attempts(key, dkind, head); n >= soft {
+			if ready, wait := e.store.RetryReady(key, dkind, head, soft, retryBackoffBase, retryBackoffFactor, retryBackoffMax); !ready {
+				e.log("engine: %s%s %s in backoff — %d attempts at %s, next retry in ~%s",
+					t.Kind, variantSuffix(t.Variant), key, n, short(head), wait.Round(time.Minute))
 				return
 			}
 			if n == soft { // first time past the threshold and now eligible — say so, once
 				e.notif.Emit(ctx, notify.EventEscalate, t,
 					fmt.Sprintf("still failing after %d tries at %s — backing off, will keep retrying periodically", soft, short(head)))
 				e.store.Audit(map[string]any{"event": "escalate", "repo": t.Target.Repo,
-					"number": t.Target.Number, "kind": t.Kind, "head": head, "attempts": n})
+					"number": t.Target.Number, "kind": t.Kind, "variant": t.Variant, "head": head, "attempts": n})
 			}
 		}
 	}
@@ -266,7 +273,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// when the foreground steps finish) so the engine loop isn't blocked by them.
 	if len(act.Steps) > 0 {
 		if !shadow && !liveGate { // shadow previews and live-gated kinds don't consume dedup
-			_ = e.store.Record(key, t.Kind, t.Dedup, head)
+			_ = e.store.Record(key, dkind, t.Dedup, head)
 		}
 		e.notif.Emit(ctx, notify.EventDispatch, t, "workflow")
 		e.log("engine: workflow %s %s (%d steps%s)", t.Kind, key, len(act.Steps), shadowNote(shadow))
@@ -341,13 +348,13 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		case liveGate:
 			// Never mark "done" on dispatch — the sweep re-derives completion. Just
 			// count the attempt; backoff bounds retries of an unfixable state.
-			_ = e.store.RecordAttempt(key, t.Kind, head)
+			_ = e.store.RecordAttempt(key, dkind, head)
 		case err != nil:
 			// A failed dispatch: count the try but don't consume the dedup signature,
 			// so it retries next time instead of being suppressed forever.
-			_ = e.store.RecordAttempt(key, t.Kind, head)
+			_ = e.store.RecordAttempt(key, dkind, head)
 		default:
-			_ = e.store.Record(key, t.Kind, t.Dedup, head)
+			_ = e.store.Record(key, dkind, t.Dedup, head)
 		}
 	}
 
@@ -499,6 +506,14 @@ const (
 	// comments share a kind@head attempt key, so a cap there would throttle real work.
 	defaultMaxAttempts = 3
 )
+
+// variantSuffix renders "#name" for logs when a trigger is a named variant.
+func variantSuffix(v string) string {
+	if v == "" {
+		return ""
+	}
+	return "#" + v
+}
 
 // interruptedByShutdown reports whether a dispatch error is just the daemon going
 // down (ctx cancelled, or the `paseo run` child killed by our SIGTERM) rather than

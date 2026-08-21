@@ -33,13 +33,13 @@ func TestResolveMostSpecificWinsAndMerge(t *testing.T) {
 		Defaults: Rule{
 			Reviewer: config.Actors{Logins: []string{"me"}},
 			Assignee: config.Actors{Logins: []string{"me"}},
-			Actions: map[string]config.Action{
+			Actions: as1(map[string]config.Action{
 				"failing_checks": {Type: "agent", Agent: "fixer", Prompt: "base"},
-			},
+			}),
 		},
 		Rules: []Rule{
 			{Match: Match{Repos: []string{"acme/special"}},
-				Actions: map[string]config.Action{"failing_checks": {Agent: "special-fixer"}}},
+				Actions: as1(map[string]config.Action{"failing_checks": {Agent: "special-fixer"}})},
 			{Match: Match{Repos: []string{"acme/*"}}},
 		},
 	}
@@ -50,7 +50,7 @@ func TestResolveMostSpecificWinsAndMerge(t *testing.T) {
 	if !ok {
 		t.Fatal("expected match")
 	}
-	fc := r.Actions["failing_checks"]
+	fc := r.Actions["failing_checks"][0]
 	if fc.Agent != "special-fixer" || fc.Prompt != "base" || fc.Type != "agent" {
 		t.Fatalf("merge wrong: %+v", fc)
 	}
@@ -60,8 +60,8 @@ func TestResolveMostSpecificWinsAndMerge(t *testing.T) {
 
 	// Generic repo falls to the second rule (defaults only).
 	r2, _ := g.resolve("acme/other")
-	if r2.Actions["failing_checks"].Agent != "fixer" {
-		t.Fatalf("generic repo should use default agent, got %q", r2.Actions["failing_checks"].Agent)
+	if r2.Actions["failing_checks"][0].Agent != "fixer" {
+		t.Fatalf("generic repo should use default agent, got %q", r2.Actions["failing_checks"][0].Agent)
 	}
 
 	// Unmatched repo.
@@ -81,23 +81,23 @@ func TestResolveMostSpecificIgnoresOrder(t *testing.T) {
 		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
 		Rules: []Rule{
 			{Match: Match{Repos: []string{"EdnitionCode/*"}}, // general FIRST
-				Actions: map[string]config.Action{"new_comment": {Type: "agent", Agent: "general"}}},
+				Actions: as1(map[string]config.Action{"new_comment": {Type: "agent", Agent: "general"}})},
 			{Match: Match{Repos: []string{"EdnitionCode/RosterStream"}}, // specific SECOND
-				Actions: map[string]config.Action{"new_comment": {Type: "agent", Agent: "specific"}}},
+				Actions: as1(map[string]config.Action{"new_comment": {Type: "agent", Agent: "specific"}})},
 			{Match: Match{Repos: []string{"*/*"}}, // catch-all, least specific
-				Actions: map[string]config.Action{"new_comment": {Type: "agent", Agent: "catchall"}}},
+				Actions: as1(map[string]config.Action{"new_comment": {Type: "agent", Agent: "catchall"}})},
 		},
 	}
 	g := newTestIntegration(t, cfg)
 
-	if r, _ := g.resolve("EdnitionCode/RosterStream"); r.Actions["new_comment"].Agent != "specific" {
-		t.Fatalf("exact match should win over org-wildcard, got %q", r.Actions["new_comment"].Agent)
+	if r, _ := g.resolve("EdnitionCode/RosterStream"); r.Actions["new_comment"][0].Agent != "specific" {
+		t.Fatalf("exact match should win over org-wildcard, got %q", r.Actions["new_comment"][0].Agent)
 	}
-	if r, _ := g.resolve("EdnitionCode/infra"); r.Actions["new_comment"].Agent != "general" {
-		t.Fatalf("org-wildcard should win over */*, got %q", r.Actions["new_comment"].Agent)
+	if r, _ := g.resolve("EdnitionCode/infra"); r.Actions["new_comment"][0].Agent != "general" {
+		t.Fatalf("org-wildcard should win over */*, got %q", r.Actions["new_comment"][0].Agent)
 	}
-	if r, _ := g.resolve("other/repo"); r.Actions["new_comment"].Agent != "catchall" {
-		t.Fatalf("*/* should match everything else, got %q", r.Actions["new_comment"].Agent)
+	if r, _ := g.resolve("other/repo"); r.Actions["new_comment"][0].Agent != "catchall" {
+		t.Fatalf("*/* should match everything else, got %q", r.Actions["new_comment"][0].Agent)
 	}
 }
 

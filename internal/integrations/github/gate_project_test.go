@@ -64,9 +64,9 @@ func mergeReadyConfig() Config {
 		Rules: []Rule{{
 			Match: Match{Repos: []string{"acme/*"}},
 			Me:    config.Actors{Logins: []string{"me"}}, // auto-merge only acts on your authored PRs
-			Actions: map[string]config.Action{
+			Actions: as1(map[string]config.Action{
 				"merge_ready": {Type: "command", Command: []string{"gh", "pr", "merge"}, RequireLabel: "automerge"},
-			},
+			}),
 		}},
 	}
 }
@@ -125,10 +125,10 @@ func projectConfig() Config {
 		Rules: []Rule{{
 			Match: Match{Repos: []string{"acme/*"}},
 			Me:    config.Actors{Logins: []string{"me"}}, // only start work on issues assigned to you
-			Actions: map[string]config.Action{
+			Actions: as1(map[string]config.Action{
 				"issue_project_moved": {Type: "agent", Agent: "fixer", Checkout: "branch-off",
 					Project: map[string]any{"field": "Status", "to": "Ready"}},
-			},
+			}),
 		}},
 	}
 }

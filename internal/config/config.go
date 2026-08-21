@@ -162,6 +162,7 @@ type AgentProfile struct {
 
 // Action is one (source,kind)→action mapping. Type is "agent" or "command".
 type Action struct {
+	Name     string            `yaml:"name"` // variant name when a kind has multiple actions; "" = the sole/unnamed action
 	Type     string            `yaml:"type"`
 	Enabled  *bool             `yaml:"enabled"` // default true
 	Backend  string            `yaml:"backend"` // override default backend for the type
@@ -200,7 +201,10 @@ type Action struct {
 	IgnoreChecks       []string       `yaml:"ignore_checks"`
 	FlakyRerun         FlakyRerun     `yaml:"flaky_rerun"`
 	FromUsers          []string       `yaml:"from_users"`
-	LabelsAny          []string       `yaml:"labels_any"`
+	LabelsAny          []string       `yaml:"labels_any"`    // issue matches if it has ANY of these labels
+	LabelsAll          []string       `yaml:"labels_all"`    // ...and ALL of these labels
+	Authors            []string       `yaml:"authors"`       // ...and was opened by one of these logins
+	SoleAssignee       bool           `yaml:"sole_assignee"` // ...and you are the ONLY assignee
 	RequireLabel       string         `yaml:"require_label"`
 	Method             string         `yaml:"method"`
 	Gates              map[string]any `yaml:"gates"`
@@ -209,6 +213,30 @@ type Action struct {
 
 // IsEnabled reports whether the action is enabled (default true).
 func (a Action) IsEnabled() bool { return a.Enabled == nil || *a.Enabled }
+
+// ActionSet is one-or-more actions for a kind. In YAML it accepts either a single
+// mapping (`merge_conflict: { agent: opus }` → one unnamed action, the common case)
+// or a sequence of named variants (`issue_matched: [ {name: a, …}, {name: b, …} ]`).
+// This keeps every existing single-object config valid while enabling variants.
+type ActionSet []Action
+
+// UnmarshalYAML accepts a single mapping or a sequence of actions.
+func (s *ActionSet) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.SequenceNode {
+		var list []Action
+		if err := node.Decode(&list); err != nil {
+			return err
+		}
+		*s = list
+		return nil
+	}
+	var one Action
+	if err := node.Decode(&one); err != nil {
+		return err
+	}
+	*s = ActionSet{one}
+	return nil
+}
 
 // Exclude filters out PRs an action shouldn't act on (e.g. release PRs), by head
 // branch glob, label, or a case-insensitive title substring.

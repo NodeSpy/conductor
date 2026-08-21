@@ -42,6 +42,9 @@ type ghPayload struct {
 		Assignees []struct {
 			Login string `json:"login"`
 		} `json:"assignees"` // issue assignees (for issue_labeled's assignee gate)
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"` // the issue's CURRENT label set (for state-based matching)
 	} `json:"issue"`
 	Review *struct {
 		State string `json:"state"`
@@ -140,7 +143,7 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 	case "pull_request":
 		trs = g.pullRequestTriggers(ctx, repo, p)
 	case "issues":
-		trs = g.issueTriggers(repo, p)
+		trs = g.issueTriggers(ctx, repo, p)
 	case "projects_v2_item":
 		trs = g.projectTriggers(ctx, p)
 	}
@@ -230,31 +233,26 @@ func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []cor
 	}
 	t := g.target(repo, num, head, base, url)
 	extra := map[string]any{"author": p.Comment.User.Login, "comment_body": p.Comment.Body}
-	trs := g.single(repo, "new_comment", t,
+	// Each variant may set its own from_users filter (empty = any commenter).
+	return g.emit(repo, "new_comment", t,
 		fmt.Sprintf("new comment by %s on %s#%d", p.Comment.User.Login, repo, num),
-		fmt.Sprintf("comment:%d", p.Comment.ID), extra)
-	// Apply the action's from_users filter, if any.
-	return g.filterCommentByUsers(trs, author)
+		fmt.Sprintf("comment:%d", p.Comment.ID), extra, func(act config.Action) bool {
+			return fromUsersMatch(act.FromUsers, author)
+		})
 }
 
-func (g *Integration) filterCommentByUsers(trs []core.Trigger, author string) []core.Trigger {
-	out := trs[:0]
-	for _, t := range trs {
-		if act, ok := g.actionFor(t.Target.Repo, "new_comment"); ok && len(act.FromUsers) > 0 {
-			match := false
-			for _, u := range act.FromUsers {
-				if strings.EqualFold(u, author) {
-					match = true
-					break
-				}
-			}
-			if !match {
-				continue
-			}
-		}
-		out = append(out, t)
+// fromUsersMatch reports whether the commenter is allowed by a from_users filter
+// (an empty filter allows any author). Case-insensitive.
+func fromUsersMatch(fromUsers []string, author string) bool {
+	if len(fromUsers) == 0 {
+		return true
 	}
-	return out
+	for _, u := range fromUsers {
+		if strings.EqualFold(u, author) {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *Integration) checkTriggers(ctx context.Context, repo string, p ghPayload) []core.Trigger {
@@ -295,19 +293,15 @@ func (g *Integration) pullRequestTriggers(ctx context.Context, repo string, p gh
 		return []core.Trigger{{Source: "github", Instance: g.name, Kind: core.KindClosed,
 			Target: g.prTarget(repo, pr)}}
 	case "review_requested":
-		if !g.reviewerMatches(repo, p) {
-			return nil
-		}
-		if g.draftGated(repo, "review_requested", pr.Draft) {
-			return nil // opt-in not_draft guard: wait until it's marked ready
-		}
-		if g.excluded(repo, "review_requested", pr.Head.Ref, pr.Title, prLabelNames(pr)) {
-			return nil // e.g. release PRs
-		}
 		t := g.prTarget(repo, pr)
-		return g.single(repo, "review_requested", t,
+		labels := prLabelNames(pr)
+		return g.emit(repo, "review_requested", t,
 			fmt.Sprintf("review requested on %s#%d", repo, pr.Number),
-			"reviewreq@"+pr.Head.SHA, nil)
+			"reviewreq@"+pr.Head.SHA, nil, func(act config.Action) bool {
+				return g.reviewerRequestedMatches(repo, act, p) &&
+					!draftGate(act, pr.Draft) &&
+					!act.Exclude.Matches(pr.Head.Ref, pr.Title, labels)
+			})
 	case "opened", "reopened", "synchronize", "ready_for_review":
 		trs := g.mergeStateTriggers(ctx, repo, p, pr)
 		trs = append(trs, g.selfReviewTriggers(repo, pr)...)
@@ -338,9 +332,9 @@ func (g *Integration) mergeReadyTriggers(ctx context.Context, repo string, numbe
 	if number == 0 || g.rest == nil || p.Installation.ID == 0 {
 		return nil
 	}
-	act, ok := g.actionFor(repo, "merge_ready")
-	if !ok || !act.IsEnabled() {
-		return nil
+	set := g.actionsFor(repo, "merge_ready")
+	if len(set) == 0 {
+		return nil // not configured — no GraphQL cost
 	}
 	owner, name := splitRepo(repo)
 	gate, err := g.rest.prGate(ctx, p.Installation.ID, owner, name, number)
@@ -350,15 +344,15 @@ func (g *Integration) mergeReadyTriggers(ctx context.Context, repo string, numbe
 	if !g.ownPR(gate.Author) {
 		return nil // auto-merge only merges PRs you authored
 	}
-	if act.RequireLabel != "" && !containsFold(gate.Labels, act.RequireLabel) {
-		return nil
-	}
-	if !mergeGatePasses(gate, act.Gates) {
-		return nil
-	}
 	t := g.target(repo, number, gate.HeadSHA, "", "")
-	return g.single(repo, "merge_ready", t,
-		fmt.Sprintf("merge-ready %s#%d", repo, number), "mergeready@"+gate.HeadSHA, nil)
+	return g.emit(repo, "merge_ready", t,
+		fmt.Sprintf("merge-ready %s#%d", repo, number), "mergeready@"+gate.HeadSHA, nil,
+		func(act config.Action) bool {
+			if act.RequireLabel != "" && !containsFold(gate.Labels, act.RequireLabel) {
+				return false
+			}
+			return mergeGatePasses(gate, act.Gates)
+		})
 }
 
 // mergeGatePasses applies the standard gate, honoring explicit `false` toggles
@@ -418,26 +412,7 @@ func (g *Integration) projectTriggers(ctx context.Context, p ghPayload) []core.T
 		return nil
 	}
 	repo := item.Repo
-	act, ok := g.actionFor(repo, "issue_project_moved")
-	if !ok || !act.IsEnabled() {
-		return nil
-	}
-	field, want := "Status", "Ready"
-	if act.Project != nil {
-		if f, ok := act.Project["field"].(string); ok && f != "" {
-			field = f
-		}
-		if to, ok := act.Project["to"].(string); ok && to != "" {
-			want = to
-		}
-	}
-	value := item.Value
-	if field != "Status" { // re-query with the configured field
-		if it2, err := g.rest.projectItem(ctx, p.Installation.ID, p.ProjectsV2Item.NodeID, field); err == nil {
-			value = it2.Value
-		}
-	}
-	if !strings.EqualFold(value, want) {
+	if len(g.actionsFor(repo, "issue_project_moved")) == 0 {
 		return nil
 	}
 	if !g.assignedToSelf(repo, item.Assignees) {
@@ -446,9 +421,30 @@ func (g *Integration) projectTriggers(ctx context.Context, p ghPayload) []core.T
 	t := g.target(repo, item.Number, "", "", "")
 	t.PR = 0
 	t.Issue = item.Number
-	return g.single(repo, "issue_project_moved", t,
-		fmt.Sprintf("issue %s#%d moved to %s", repo, item.Number, want),
-		fmt.Sprintf("project:%s=%s@%d", field, want, item.Number), nil)
+	// Each variant may watch a different field/value; cache field lookups (Status
+	// is already fetched) so multiple variants don't re-query the same field.
+	fieldVal := map[string]string{"Status": item.Value}
+	return g.emit(repo, "issue_project_moved", t,
+		fmt.Sprintf("issue %s#%d project field changed", repo, item.Number),
+		fmt.Sprintf("project@%d", item.Number), nil, func(act config.Action) bool {
+			field, want := "Status", "Ready"
+			if act.Project != nil {
+				if f, ok := act.Project["field"].(string); ok && f != "" {
+					field = f
+				}
+				if to, ok := act.Project["to"].(string); ok && to != "" {
+					want = to
+				}
+			}
+			v, ok := fieldVal[field]
+			if !ok {
+				if it2, err := g.rest.projectItem(ctx, p.Installation.ID, p.ProjectsV2Item.NodeID, field); err == nil {
+					v = it2.Value
+					fieldVal[field] = v
+				}
+			}
+			return strings.EqualFold(v, want)
+		})
 }
 
 // mergeStateTriggers enriches a PR via REST to detect conflict/behind state.
@@ -477,62 +473,149 @@ func (g *Integration) mergeStateTriggers(ctx context.Context, repo string, p ghP
 	return nil
 }
 
-func (g *Integration) issueTriggers(repo string, p ghPayload) []core.Trigger {
+func (g *Integration) issueTriggers(ctx context.Context, repo string, p ghPayload) []core.Trigger {
 	if p.Issue == nil {
 		return nil
 	}
 	t := g.target(repo, p.Issue.Number, "", p.Repository.DefaultBranch, p.Issue.HTMLURL)
 	t.PR = 0
 	t.Issue = p.Issue.Number
-	switch p.Action {
-	case "assigned":
-		if p.Assignee == nil || !g.assigneeMatches(repo, p.Assignee.Login) {
-			return nil
-		}
-		return g.single(repo, "issue_assigned", t,
+
+	var trs []core.Trigger
+	// issue_assigned: the simple assignee-only trigger, on the assign event.
+	if p.Action == "assigned" && p.Assignee != nil && g.assigneeMatches(repo, p.Assignee.Login) {
+		trs = append(trs, g.single(repo, "issue_assigned", t,
 			fmt.Sprintf("issue %s#%d assigned to you", repo, p.Issue.Number),
-			"assigned:"+p.Assignee.Login+"@"+itoa(p.Issue.Number), nil)
-	case "labeled":
-		if p.Label == nil {
-			return nil
-		}
-		act, ok := g.actionFor(repo, "issue_labeled")
-		if !ok || !containsFold(act.LabelsAny, p.Label.Name) {
-			return nil // labels_any is the filter for which label is the go-signal
-		}
-		logins := make([]string, 0, len(p.Issue.Assignees))
-		for _, a := range p.Issue.Assignees {
-			logins = append(logins, a.Login)
-		}
-		if !g.assignedToSelf(repo, logins) {
-			return nil // only start work on issues assigned to you
-		}
-		return g.single(repo, "issue_labeled", t,
-			fmt.Sprintf("issue %s#%d labeled %s", repo, p.Issue.Number, p.Label.Name),
-			"label:"+p.Label.Name+"@"+itoa(p.Issue.Number), nil)
+			"assigned:"+p.Assignee.Login+"@"+itoa(p.Issue.Number), nil)...)
 	}
-	return nil
+	// issue_matched: state-based match, re-evaluated on any change that could flip it.
+	switch p.Action {
+	case "opened", "edited", "labeled", "unlabeled", "assigned", "unassigned", "reopened":
+		trs = append(trs, g.emit(repo, "issue_matched", t,
+			fmt.Sprintf("issue %s#%d matched your criteria", repo, p.Issue.Number),
+			fmt.Sprintf("issuematch@%d", p.Issue.Number), nil, func(act config.Action) bool {
+				return g.issueMatches(ctx, repo, p, act)
+			})...)
+	}
+	return trs
 }
 
-// single builds a one-element trigger slice iff a rule matches the repo and has
-// an enabled action for the kind. The resolved action is attached for the engine.
+// issueMatches evaluates one issue_matched variant against the issue's CURRENT
+// state: cheap payload filters first, then (only if configured and those passed)
+// the GraphQL-backed gates. Fail-closed on enrichment errors.
+func (g *Integration) issueMatches(ctx context.Context, repo string, p ghPayload, act config.Action) bool {
+	iss := p.Issue
+	labels := make([]string, 0, len(iss.Labels))
+	for _, l := range iss.Labels {
+		labels = append(labels, l.Name)
+	}
+	assignees := make([]string, 0, len(iss.Assignees))
+	for _, a := range iss.Assignees {
+		assignees = append(assignees, a.Login)
+	}
+	if !g.anySelf(assignees) {
+		return false // me-assignee gate: only issues assigned to you
+	}
+	if act.SoleAssignee && !g.soleSelf(assignees) {
+		return false
+	}
+	if len(act.LabelsAny) > 0 && !anyFold(labels, act.LabelsAny) {
+		return false
+	}
+	if len(act.LabelsAll) > 0 && !allFold(labels, act.LabelsAll) {
+		return false
+	}
+	if act.Exclude.Matches("", iss.Title, labels) { // none-of + title exclude
+		return false
+	}
+	if len(act.Authors) > 0 && !containsFold(act.Authors, iss.User.Login) {
+		return false
+	}
+	if len(act.Gates) > 0 {
+		if g.rest == nil || p.Installation.ID == 0 {
+			return false // gates need enrichment — fail closed
+		}
+		facts, err := g.rest.issueEnrich(ctx, p.Installation.ID, p.Repository.Owner.Login, p.Repository.Name, iss.Number)
+		if err != nil || !issueGatePasses(facts, act.Gates) {
+			return false
+		}
+	}
+	return true
+}
+
+// anySelf reports whether any login is a `me` identity.
+func (g *Integration) anySelf(logins []string) bool {
+	for _, l := range logins {
+		if g.self[strings.ToLower(l)] {
+			return true
+		}
+	}
+	return false
+}
+
+// soleSelf reports whether you are the ONLY assignee (every assignee is a `me`
+// identity, and there is at least one).
+func (g *Integration) soleSelf(logins []string) bool {
+	if len(logins) == 0 {
+		return false
+	}
+	for _, l := range logins {
+		if !g.self[strings.ToLower(l)] {
+			return false
+		}
+	}
+	return true
+}
+
+// anyFold reports whether have contains ANY of want (case-insensitive).
+func anyFold(have, want []string) bool {
+	for _, w := range want {
+		if containsFold(have, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// allFold reports whether have contains ALL of want (case-insensitive).
+func allFold(have, want []string) bool {
+	for _, w := range want {
+		if !containsFold(have, w) {
+			return false
+		}
+	}
+	return true
+}
+
+// emit builds one trigger per ENABLED variant of the kind for which keep(act)
+// returns true (keep==nil ⇒ every enabled variant). Each trigger carries that
+// variant's action + name; the engine keys dedup/attempts on kind#variant so
+// variants never collide. The resolved action is attached for the engine.
+func (g *Integration) emit(repo, kind string, t core.Target, title, dedup string, extra map[string]any, keep func(config.Action) bool) []core.Trigger {
+	var out []core.Trigger
+	for _, act := range g.actionsFor(repo, kind) {
+		if !act.IsEnabled() {
+			continue
+		}
+		if keep != nil && !keep(act) {
+			continue
+		}
+		ctxMap := map[string]any{}
+		for k, v := range extra {
+			ctxMap[k] = v
+		}
+		out = append(out, core.Trigger{
+			Source: "github", Instance: g.name, Kind: kind, Variant: act.Name, Target: t,
+			Title: title, Dedup: dedup, Context: ctxMap, Action: act,
+		})
+	}
+	return out
+}
+
+// single emits every enabled variant of the kind (no per-variant applicability
+// filter) — for kinds that fire on the event/state, not on per-variant criteria.
 func (g *Integration) single(repo, kind string, t core.Target, title, dedup string, extra map[string]any) []core.Trigger {
-	r, ok := g.resolve(repo)
-	if !ok {
-		return nil
-	}
-	act, ok := r.Actions[kind]
-	if !ok || !act.IsEnabled() {
-		return nil
-	}
-	ctxMap := map[string]any{}
-	for k, v := range extra {
-		ctxMap[k] = v
-	}
-	return []core.Trigger{{
-		Source: "github", Instance: g.name, Kind: kind, Target: t,
-		Title: title, Dedup: dedup, Context: ctxMap, Action: act,
-	}}
+	return g.emit(repo, kind, t, title, dedup, extra, nil)
 }
 
 func (g *Integration) prTarget(repo string, pr *prPayload) core.Target {
@@ -572,32 +655,29 @@ func (g *Integration) mapProject(repo string) string {
 	return project
 }
 
-func (g *Integration) reviewerMatches(repo string, p ghPayload) bool {
-	r, ok := g.resolve(repo)
-	if !ok {
-		return false
-	}
-	rev := actorsOr(r.Actions["review_requested"].Reviewer, r.Reviewer) // action-level, rule fallback
-	if len(rev.Logins) == 0 && len(rev.Teams) == 0 {
-		// Unset → default to "you" (the `me` identity).
-		return p.RequestedReviewer != nil && g.self[strings.ToLower(p.RequestedReviewer.Login)]
-	}
-	if p.RequestedReviewer != nil && rev.HasLogin(p.RequestedReviewer.Login) {
-		return true
+// reviewerFor is a variant's effective reviewer: its own `reviewer`, else the
+// rule-level `reviewer` (an empty result means "default to the me identity").
+func (g *Integration) reviewerFor(repo string, act config.Action) config.Actors {
+	r, _ := g.resolve(repo)
+	return actorsOr(act.Reviewer, r.Reviewer)
+}
+
+// reviewerRequestedMatches reports whether this variant's reviewer is the one the
+// webhook just requested (single reviewer/team), via reviewerInList.
+func (g *Integration) reviewerRequestedMatches(repo string, act config.Action, p ghPayload) bool {
+	var logins, slugs []string
+	if p.RequestedReviewer != nil {
+		logins = []string{p.RequestedReviewer.Login}
 	}
 	if p.RequestedTeam != nil {
-		for _, tm := range rev.Teams {
-			if strings.EqualFold(tm, p.RequestedTeam.Slug) {
-				return true
-			}
-		}
+		slugs = []string{p.RequestedTeam.Slug}
 	}
-	return false
+	return g.reviewerInList(g.reviewerFor(repo, act), logins, slugs)
 }
 
 // assignedToSelf reports whether any of the issue's assignee logins matches the
-// configured assignee (defaulting to the `me` identity). Gates issue_labeled and
-// issue_project_moved so we only start work on issues assigned to you.
+// configured assignee (defaulting to the `me` identity). Gates issue_assigned/
+// issue_matched/issue_project_moved so we only start work on issues assigned to you.
 func (g *Integration) assignedToSelf(repo string, logins []string) bool {
 	for _, l := range logins {
 		if g.assigneeMatches(repo, l) {
@@ -612,25 +692,18 @@ func (g *Integration) assigneeMatches(repo, login string) bool {
 	if !ok {
 		return false
 	}
-	asg := actorsOr(r.Actions["issue_assigned"].Assignee, r.Assignee) // action-level, rule fallback
+	a, _ := g.actionFor(repo, "issue_assigned")
+	asg := actorsOr(a.Assignee, r.Assignee) // action-level, rule fallback
 	if len(asg.Logins) == 0 && len(asg.Teams) == 0 {
 		return g.self[strings.ToLower(login)] // unset → default to "you"
 	}
 	return asg.HasLogin(login)
 }
 
-// draftGated reports whether the action for kind has an opt-in `not_draft` guard
-// that should suppress this trigger because the PR is still a draft. Unlike the
-// merge_ready gates (which default on), this guard is off unless configured.
-func (g *Integration) draftGated(repo, kind string, isDraft bool) bool {
-	if !isDraft {
-		return false
-	}
-	r, ok := g.resolve(repo)
-	if !ok {
-		return false
-	}
-	return gateEnabled(r.Actions[kind].Gates, "not_draft")
+// draftGate reports whether a variant's opt-in `not_draft` gate should suppress it
+// because the PR is still a draft (off unless configured).
+func draftGate(act config.Action, isDraft bool) bool {
+	return isDraft && gateEnabled(act.Gates, "not_draft")
 }
 
 // reviewerInList reports whether the configured reviewer (defaulting to the `me`
@@ -661,11 +734,6 @@ func (g *Integration) reviewerInList(rev config.Actors, logins, teamSlugs []stri
 // coherent: a review requested while the PR was a draft is skipped, then picked up
 // promptly here once it's ready (rather than only on the next sweep).
 func (g *Integration) readyReviewTriggers(repo string, pr *prPayload) []core.Trigger {
-	r, ok := g.resolve(repo)
-	if !ok {
-		return nil
-	}
-	rev := actorsOr(r.Actions["review_requested"].Reviewer, r.Reviewer)
 	logins := make([]string, 0, len(pr.RequestedReviewers))
 	for _, rr := range pr.RequestedReviewers {
 		logins = append(logins, rr.Login)
@@ -674,29 +742,14 @@ func (g *Integration) readyReviewTriggers(repo string, pr *prPayload) []core.Tri
 	for _, tm := range pr.RequestedTeams {
 		slugs = append(slugs, tm.Slug)
 	}
-	if !g.reviewerInList(rev, logins, slugs) {
-		return nil
-	}
-	if g.excluded(repo, "review_requested", pr.Head.Ref, pr.Title, prLabelNames(pr)) {
-		return nil
-	}
+	labels := prLabelNames(pr)
 	t := g.prTarget(repo, pr)
-	return g.single(repo, "review_requested", t,
-		fmt.Sprintf("ready for review on %s#%d", repo, pr.Number), "reviewreq@"+pr.Head.SHA, nil)
-}
-
-// excluded reports whether the action for kind is configured to skip this PR
-// (e.g. release PRs) by head branch / label / title.
-func (g *Integration) excluded(repo, kind, branch, title string, labels []string) bool {
-	r, ok := g.resolve(repo)
-	if !ok {
-		return false
-	}
-	ex := r.Actions[kind].Exclude
-	if ex.Empty() {
-		return false
-	}
-	return ex.Matches(branch, title, labels)
+	return g.emit(repo, "review_requested", t,
+		fmt.Sprintf("ready for review on %s#%d", repo, pr.Number), "reviewreq@"+pr.Head.SHA, nil,
+		func(act config.Action) bool {
+			return g.reviewerInList(g.reviewerFor(repo, act), logins, slugs) &&
+				!act.Exclude.Matches(pr.Head.Ref, pr.Title, labels)
+		})
 }
 
 // labelNames flattens a PR payload's labels to names.
@@ -729,13 +782,23 @@ func actorsOr(a, fallback config.Actors) config.Actors {
 }
 
 // actionFor returns the resolved action for a repo+kind.
+// actionFor returns the FIRST configured variant for a kind — for callers that
+// only read config (gate/label checks, existence) rather than emit per variant.
 func (g *Integration) actionFor(repo, kind string) (config.Action, bool) {
-	r, ok := g.resolve(repo)
-	if !ok {
+	set := g.actionsFor(repo, kind)
+	if len(set) == 0 {
 		return config.Action{}, false
 	}
-	a, ok := r.Actions[kind]
-	return a, ok
+	return set[0], true
+}
+
+// actionsFor returns all configured variants for a kind (nil if the repo/kind has none).
+func (g *Integration) actionsFor(repo, kind string) config.ActionSet {
+	r, ok := g.resolve(repo)
+	if !ok {
+		return nil
+	}
+	return r.Actions[kind]
 }
 
 func splitRepo(full string) (owner, name string) {

@@ -18,16 +18,16 @@ func richConfig() Config {
 			Match:    Match{Repos: []string{"acme/*"}},
 			Reviewer: config.Actors{Logins: []string{"me"}},
 			Assignee: config.Actors{Logins: []string{"me"}},
-			Actions: map[string]config.Action{
+			Actions: as1(map[string]config.Action{
 				"changes_requested": act(),
 				"new_comment":       act(),
 				"failing_checks":    act(),
 				"merge_conflict":    act(),
 				"pr_behind":         {Type: "command", Command: []string{"gh", "pr", "update-branch"}},
-				"issue_labeled":     {Type: "agent", Agent: "fixer", Checkout: "branch-off", LabelsAny: []string{"Ready"}},
+				"issue_matched":     {Type: "agent", Agent: "fixer", Checkout: "branch-off", LabelsAny: []string{"Ready"}},
 				"review_requested":  {Type: "command", Command: []string{"critique"}},
 				"self_review":       {Type: "command", Command: []string{"critique", "--review", "{{.repo}}#{{.pr}}"}},
-			},
+			}),
 		}},
 	}
 }
@@ -108,17 +108,17 @@ func TestReviewRequestedMatch(t *testing.T) {
 
 func gatedReviewConfig() Config {
 	c := richConfig()
-	rr := c.Rules[0].Actions["review_requested"]
+	rr := c.Rules[0].Actions["review_requested"][0]
 	rr.Gates = map[string]any{"not_draft": true}
-	c.Rules[0].Actions["review_requested"] = rr
+	c.Rules[0].Actions["review_requested"] = config.ActionSet{rr}
 	return c
 }
 
 func excludeReviewConfig() Config {
 	c := richConfig()
-	rr := c.Rules[0].Actions["review_requested"]
+	rr := c.Rules[0].Actions["review_requested"][0]
 	rr.Exclude = config.Exclude{Branches: []string{"release/*"}, Labels: []string{"release"}, Title: []string{"[skip review]"}}
-	c.Rules[0].Actions["review_requested"] = rr
+	c.Rules[0].Actions["review_requested"] = config.ActionSet{rr}
 	return c
 }
 
@@ -218,15 +218,16 @@ func TestGateEnabledOptIn(t *testing.T) {
 	if !gateEnabled(map[string]any{"not_draft": "yes"}, "not_draft") {
 		t.Fatal("string yes must be on")
 	}
-	// draftGated only blocks when the gate is set AND the PR is a draft.
-	g := newTestIntegration(t, gatedReviewConfig())
-	if !g.draftGated("acme/w", "review_requested", true) {
+	// draftGate only blocks when the gate is set AND the PR is a draft.
+	gated := gatedReviewConfig().Rules[0].Actions["review_requested"][0]
+	if !draftGate(gated, true) {
 		t.Fatal("gated + draft should block")
 	}
-	if g.draftGated("acme/w", "review_requested", false) {
+	if draftGate(gated, false) {
 		t.Fatal("non-draft should not block")
 	}
-	if newTestIntegration(t, richConfig()).draftGated("acme/w", "review_requested", true) {
+	ungated := richConfig().Rules[0].Actions["review_requested"][0]
+	if draftGate(ungated, true) {
 		t.Fatal("no gate should not block even a draft")
 	}
 }
@@ -241,29 +242,38 @@ func TestPullRequestClosedEmitsKindClosed(t *testing.T) {
 	}
 }
 
-func TestIssueReadyLabelFilter(t *testing.T) {
-	g := newTestIntegration(t, richConfig())
+func TestIssueMatchedStateBased(t *testing.T) {
+	g := newTestIntegration(t, richConfig()) // issue_matched: labels_any [Ready]
+	// Current state has the Ready label + assigned to me → matches.
 	ready := `{"action":"labeled","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
-		"issue":{"number":10,"assignees":[{"login":"me"}]},"label":{"name":"Ready"}}`
-	if k := do(t, g, "issues", ready); len(k) != 1 || k[0] != "issue_labeled" {
-		t.Fatalf("want issue_labeled, got %v", k)
+		"issue":{"number":10,"assignees":[{"login":"me"}],"labels":[{"name":"Ready"}]},"label":{"name":"Ready"}}`
+	if k := do(t, g, "issues", ready); len(k) != 1 || k[0] != "issue_matched" {
+		t.Fatalf("want issue_matched, got %v", k)
 	}
+	// No matching label in the current set → no trigger.
 	other := `{"action":"labeled","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
-		"issue":{"number":10,"assignees":[{"login":"me"}]},"label":{"name":"wontfix"}}`
+		"issue":{"number":10,"assignees":[{"login":"me"}],"labels":[{"name":"wontfix"}]},"label":{"name":"wontfix"}}`
 	if k := do(t, g, "issues", other); len(k) != 0 {
-		t.Fatalf("non-Ready label should not trigger, got %v", k)
+		t.Fatalf("no Ready label should not trigger, got %v", k)
 	}
-	// Ready label but assigned to someone else → no trigger (assignee gate).
+	// Assigned to someone else → no trigger (me-assignee gate).
 	notMine := `{"action":"labeled","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
-		"issue":{"number":10,"assignees":[{"login":"teammate"}]},"label":{"name":"Ready"}}`
+		"issue":{"number":10,"assignees":[{"login":"teammate"}],"labels":[{"name":"Ready"}]},"label":{"name":"Ready"}}`
 	if k := do(t, g, "issues", notMine); len(k) != 0 {
 		t.Fatalf("Ready label on a teammate's issue should not trigger, got %v", k)
+	}
+	// State-based: the Ready label was already there, and an ASSIGNED event (not a
+	// label event) flips it into matching — the old label-event trigger missed this.
+	nowAssigned := `{"action":"assigned","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"issue":{"number":10,"assignees":[{"login":"me"}],"labels":[{"name":"Ready"}]},"assignee":{"login":"me"}}`
+	if k := do(t, g, "issues", nowAssigned); !has(k, "issue_matched") {
+		t.Fatalf("assigning a Ready issue to me should now match, got %v", k)
 	}
 }
 
 func TestNewCommentFromUsersFilter(t *testing.T) {
 	cfg := richConfig()
-	cfg.Rules[0].Actions["new_comment"] = config.Action{Type: "agent", Agent: "fixer", FromUsers: []string{"coderabbitai[bot]"}}
+	cfg.Rules[0].Actions["new_comment"] = config.ActionSet{{Type: "agent", Agent: "fixer", FromUsers: []string{"coderabbitai[bot]"}}}
 	g := newTestIntegration(t, cfg)
 
 	match := `{"action":"created","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
@@ -281,9 +291,9 @@ func TestNewCommentFromUsersFilter(t *testing.T) {
 func TestDisabledActionNoTrigger(t *testing.T) {
 	cfg := richConfig()
 	dis := false
-	a := cfg.Rules[0].Actions["changes_requested"]
+	a := cfg.Rules[0].Actions["changes_requested"][0]
 	a.Enabled = &dis
-	cfg.Rules[0].Actions["changes_requested"] = a
+	cfg.Rules[0].Actions["changes_requested"] = config.ActionSet{a}
 	g := newTestIntegration(t, cfg)
 	body := `{"action":"submitted","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
 		"pull_request":{"number":6,"head":{"sha":"h"}},"review":{"state":"changes_requested","id":1,"user":{"login":"r"}}}`

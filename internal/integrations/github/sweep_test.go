@@ -75,7 +75,7 @@ func TestSweepReviewRequested(t *testing.T) {
 		Rules: []Rule{{
 			Match:    Match{Repos: []string{"acme/widget"}},
 			Reviewer: config.Actors{Logins: []string{"me"}},
-			Actions:  map[string]config.Action{"review_requested": {Type: "command", Command: []string{"critique"}}},
+			Actions:  as1(map[string]config.Action{"review_requested": {Type: "command", Command: []string{"critique"}}}),
 		}},
 	}
 	g := newTestIntegration(t, cfg)
@@ -124,7 +124,7 @@ func TestSweepUnresolvedComments(t *testing.T) {
 		Rules: []Rule{{
 			Match:   Match{Repos: []string{"acme/widget"}},
 			Me:      config.Actors{Logins: []string{"me"}},
-			Actions: map[string]config.Action{"changes_requested": {Type: "agent", Agent: "fixer"}},
+			Actions: as1(map[string]config.Action{"changes_requested": {Type: "agent", Agent: "fixer"}}),
 		}},
 	}
 	g := newTestIntegration(t, cfg)
@@ -153,7 +153,7 @@ func TestSweepOrgGlob(t *testing.T) {
 		Rules: []Rule{{
 			Match:    Match{Repos: []string{"acme/*"}},
 			Reviewer: config.Actors{Logins: []string{"me"}}, // makes "me" a self login
-			Actions:  map[string]config.Action{"merge_conflict": {Type: "agent", Agent: "fixer"}},
+			Actions:  as1(map[string]config.Action{"merge_conflict": {Type: "agent", Agent: "fixer"}}),
 		}},
 	}
 	g := newTestIntegration(t, cfg)

@@ -45,6 +45,7 @@ type Trigger struct {
 	Source   string            // e.g. "github"
 	Instance string            // integration instance name (for labels/logs)
 	Kind     string            // e.g. "merge_conflict", "review_requested"
+	Variant  string            // action-variant name when a kind has multiple; "" for the sole action
 	Target   Target            //
 	Title    string            // human-readable summary for titles/logs
 	Context  map[string]any    // template data for prompts/commands

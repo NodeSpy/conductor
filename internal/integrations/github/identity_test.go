@@ -14,10 +14,10 @@ func identityConfig(me, reviewer []string) Config {
 			Match:    Match{Repos: []string{"acme/*"}},
 			Me:       config.Actors{Logins: me},
 			Reviewer: config.Actors{Logins: reviewer},
-			Actions: map[string]config.Action{
+			Actions: as1(map[string]config.Action{
 				"new_comment": {Type: "agent", Agent: "fixer"},
 				"self_review": {Type: "command", Command: []string{"critique"}},
-			},
+			}),
 		}},
 	}
 }
@@ -73,12 +73,12 @@ func TestActionLevelActors(t *testing.T) {
 		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
 		Rules: []Rule{{
 			Match: Match{Repos: []string{"acme/*"}},
-			Actions: map[string]config.Action{
+			Actions: as1(map[string]config.Action{
 				"review_requested": {Type: "command", Command: []string{"critique"},
 					Reviewer: config.Actors{Logins: []string{"me"}}},
 				"issue_assigned": {Type: "agent", Agent: "fixer",
 					Assignee: config.Actors{Logins: []string{"me"}}},
-			},
+			}),
 		}},
 	}
 	g := newTestIntegration(t, cfg)
@@ -114,10 +114,10 @@ func TestActorsDefaultToMe(t *testing.T) {
 		Rules: []Rule{{
 			Match: Match{Repos: []string{"acme/*"}},
 			Me:    config.Actors{Logins: []string{"me"}},
-			Actions: map[string]config.Action{
+			Actions: as1(map[string]config.Action{
 				"review_requested": {Type: "command", Command: []string{"critique"}},
 				"issue_assigned":   {Type: "agent", Agent: "fixer"},
-			},
+			}),
 		}},
 	}
 	g := newTestIntegration(t, cfg)

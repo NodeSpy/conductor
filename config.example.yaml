@@ -130,12 +130,16 @@ integrations:
           prompt: |
             Issue {{.repo}}#{{.issue}} was assigned to you. Start work: create a branch,
             implement a fix, and open a draft PR.
-        # A MULTI-STEP workflow: plan with a cheap model, then branch on its output.
-        #   1) evaluate the issue for enough context (planner model, structured output)
-        #   2) if enough  -> implement it (stronger model)
-        #   3) if not     -> comment asking the reporter for more detail
-        issue_labeled:
-          labels_any: ["Ready"]         # gate: only issues labeled "Ready"
+        # STATE-BASED: fires when an issue assigned to you matches the filters below,
+        # re-evaluated on ANY issue change (labeled/assigned/edited/…), once per issue.
+        # Payload filters: labels_any / labels_all / authors / sole_assignee / exclude
+        # {labels,title}. Optional GraphQL gates (checked only if the payload matched):
+        #   gates: { no_branch: true, project: { Priority: [High, Urgent] } }
+        # Can also be a LIST of named variants (different labels → different agents).
+        # Here it's a MULTI-STEP workflow: plan cheaply, then branch on the result:
+        #   1) evaluate for enough context  2) if enough -> implement  3) else -> ask
+        issue_matched:
+          labels_any: ["Ready"]         # only issues currently labeled "Ready"
           steps:
             - id: evaluate
               type: agent

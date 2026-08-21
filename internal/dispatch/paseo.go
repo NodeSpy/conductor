@@ -531,6 +531,9 @@ func labelArgs(req Request) []string {
 		"kind=" + req.Trigger.Kind,
 		"head=" + req.Trigger.Target.HeadSHA,
 	}
+	if req.Trigger.Variant != "" {
+		labels = append(labels, "variant="+req.Trigger.Variant)
+	}
 	if req.Profile.ArchiveWhenDone {
 		labels = append(labels, "archive=1")
 	}

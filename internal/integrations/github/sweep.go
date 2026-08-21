@@ -187,37 +187,40 @@ func threadSig(ids []string) string {
 // pending requested reviewer on pr. The dedup signature matches the webhook path
 // ("reviewreq@<head>"), so a request already handled live isn't re-fired.
 func (g *Integration) sweepReviewRequested(repo string, pr prListItem, st *sweepStats) []core.Trigger {
-	r, ok := g.resolve(repo)
-	if !ok {
-		return nil
-	}
-	rev := actorsOr(r.Actions["review_requested"].Reviewer, r.Reviewer)
-	if !g.prReviewerMatches(rev, pr) {
-		return nil // not a review pending on you — not a candidate
-	}
-	// From here it's a genuine pending review for you; account for what happens.
-	if g.draftGated(repo, "review_requested", pr.Draft) {
-		st.reviewDraft++
-		log.Printf("github[%s]: sweep %s#%d review pending but skipped (draft)", g.name, repo, pr.Number)
-		return nil
-	}
 	labels := make([]string, 0, len(pr.Labels))
 	for _, l := range pr.Labels {
 		labels = append(labels, l.Name)
 	}
-	if g.excluded(repo, "review_requested", pr.Head.Ref, pr.Title, labels) {
-		st.reviewExcluded++
-		log.Printf("github[%s]: sweep %s#%d review pending but skipped (exclude)", g.name, repo, pr.Number)
-		return nil
+	// Is your review pending on this PR for ANY configured review_requested variant?
+	pending := false
+	for _, act := range g.actionsFor(repo, "review_requested") {
+		if act.IsEnabled() && g.prReviewerMatches(g.reviewerFor(repo, act), pr) {
+			pending = true
+			break
+		}
+	}
+	if !pending {
+		return nil // not a review pending on you — not a candidate
 	}
 	t := g.target(repo, pr.Number, pr.Head.SHA, pr.Base.Ref, pr.HTMLURL)
-	trs := g.single(repo, "review_requested", t,
+	trs := g.emit(repo, "review_requested", t,
 		fmt.Sprintf("sweep: review requested on %s#%d", repo, pr.Number),
-		"reviewreq@"+pr.Head.SHA, nil)
-	st.review += len(trs)
-	if len(trs) > 0 {
-		log.Printf("github[%s]: sweep %s#%d review pending -> emitting review_requested", g.name, repo, pr.Number)
+		"reviewreq@"+pr.Head.SHA, nil, func(act config.Action) bool {
+			return g.prReviewerMatches(g.reviewerFor(repo, act), pr) &&
+				!draftGate(act, pr.Draft) && !act.Exclude.Matches(pr.Head.Ref, pr.Title, labels)
+		})
+	if len(trs) == 0 { // pending, but every matching variant is gated out
+		if pr.Draft {
+			st.reviewDraft++
+			log.Printf("github[%s]: sweep %s#%d review pending but skipped (draft)", g.name, repo, pr.Number)
+		} else {
+			st.reviewExcluded++
+			log.Printf("github[%s]: sweep %s#%d review pending but skipped (exclude)", g.name, repo, pr.Number)
+		}
+		return nil
 	}
+	st.review += len(trs)
+	log.Printf("github[%s]: sweep %s#%d review pending -> emitting review_requested", g.name, repo, pr.Number)
 	return trs
 }
 
