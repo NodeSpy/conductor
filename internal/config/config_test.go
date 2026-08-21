@@ -65,8 +65,8 @@ func TestLoadAndExpand(t *testing.T) {
 		t.Fatalf("audit_max_size parse: %d", cfg.Store.AuditMaxSize.Bytes())
 	}
 	// Defaults applied.
-	if cfg.Dispatch.DefaultBackends["agent"] != "paseo" || cfg.Dispatch.DefaultBackends["command"] != "local" {
-		t.Fatalf("default backends not applied: %+v", cfg.Dispatch.DefaultBackends)
+	if cfg.PaseoBin != "paseo" {
+		t.Fatalf("paseo_bin default not applied: %q", cfg.PaseoBin)
 	}
 	if !cfg.Control.IsEnabled() {
 		t.Fatal("control should default enabled")

@@ -170,12 +170,13 @@ func cmdRun(args []string) error {
 	}
 	defer st.Close()
 
-	disp := dispatch.New(cfg.Dispatch, cfg.DryRun)
+	retry, writeTok, readTok := dispatchTuning(igs)
+	disp := dispatch.New(cfg.PaseoBin, retry, cfg.DryRun)
 	preflightPATH(disp.PaseoBin)
 	notifier := notify.New(cfg.Notify, logf)
 	eng := engine.New(engine.Options{
 		Config: cfg, Store: st, Dispatch: disp, Notifier: notifier,
-		Author: gitAuthor(), UserToken: userToken, Log: logf,
+		Author: gitAuthor(), UserToken: writeTok, ReadToken: readTok, Log: logf,
 		RefreshAppToken: refreshAppToken(igs),
 	})
 
@@ -241,6 +242,46 @@ func refreshAppToken(igs []core.Integration) func(core.Trigger) (string, error) 
 	}
 }
 
+// dispatchTuner is implemented by an integration that carries dispatch-level
+// credential + retry policy (the github integration). The first one found tunes
+// the shared Dispatcher and the engine's read/write token resolvers.
+type dispatchTuner interface {
+	RetryPolicy() config.Retry
+	IdentityTokens() (read, write, commitAuthor string)
+}
+
+// dispatchTuning derives the shared dispatch settings from the first integration
+// that provides them. Token keyword resolution (values are already ${ENV}-expanded):
+// write "gh_auth" (default) → `gh auth token`, else a literal token (a PAT); read
+// "app" (default) → nil so reads use the per-trigger App token, "gh_auth" → `gh
+// auth token`, else a literal token.
+func dispatchTuning(igs []core.Integration) (retry config.Retry, write, read func() (string, error)) {
+	write = userToken // default: `gh auth token`
+	for _, ig := range igs {
+		t, ok := ig.(dispatchTuner)
+		if !ok {
+			continue
+		}
+		retry = t.RetryPolicy()
+		rd, wr, _ := t.IdentityTokens()
+		if wr != "" && wr != "gh_auth" {
+			lit := wr
+			write = func() (string, error) { return lit, nil }
+		}
+		switch {
+		case rd == "" || rd == "app":
+			read = nil
+		case rd == "gh_auth":
+			read = userToken
+		default:
+			lit := rd
+			read = func() (string, error) { return lit, nil }
+		}
+		break
+	}
+	return
+}
+
 // preflightPATH warns loudly if the tools dispatch needs aren't on PATH — a
 // missing `paseo`/`gh` otherwise fails every dispatch silently (the common
 // systemd --user "minimal PATH" trap). Non-fatal: the daemon still runs.
@@ -293,7 +334,7 @@ func cmdReplay(args []string) error {
 	type translator interface {
 		Translate(context.Context, string, []byte) []core.Trigger
 	}
-	disp := dispatch.New(cfg.Dispatch, true) // dry-run
+	disp := dispatch.New(cfg.PaseoBin, config.Retry{}, true) // dry-run
 	found := 0
 	for _, ig := range igs {
 		tr, ok := ig.(translator)
@@ -323,7 +364,7 @@ func cmdSweep(args []string) error {
 	type sweeper interface {
 		SweepOnce(context.Context, core.EmitFunc) error
 	}
-	disp := dispatch.New(cfg.Dispatch, true) // dry-run print
+	disp := dispatch.New(cfg.PaseoBin, config.Retry{}, true) // dry-run print
 	ctx := context.Background()
 	for _, ig := range igs {
 		sw, ok := ig.(sweeper)

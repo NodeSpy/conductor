@@ -14,11 +14,7 @@ import (
 )
 
 func newDispatcher() *Dispatcher {
-	return &Dispatcher{
-		PaseoBin:        "paseo",
-		DefaultBackends: map[string]string{"agent": "paseo", "command": "local"},
-		DryRun:          true,
-	}
+	return &Dispatcher{PaseoBin: "paseo", DryRun: true}
 }
 
 func joined(argv []string) string { return strings.Join(argv, " ") }
@@ -75,7 +71,7 @@ func TestPaseoBranchOffForIssue(t *testing.T) {
 
 func TestLocalCommandWorkDir(t *testing.T) {
 	dir := t.TempDir()
-	d := &Dispatcher{DefaultBackends: map[string]string{"command": "local"}} // real exec (not dry-run)
+	d := &Dispatcher{} // real exec (not dry-run); command routes to local by default
 	req := Request{
 		Trigger: core.Trigger{Kind: "cron", Target: core.Target{}},
 		Action:  config.Action{Type: "command", Backend: "local", WorkDir: dir, Command: []string{"pwd"}},
@@ -344,5 +340,30 @@ func TestLocalCommandArgv(t *testing.T) {
 	}
 	if got := joined(ref.Argv); got != "gh pr merge acme/w#5 --squash" {
 		t.Fatalf("unexpected command argv: %s", got)
+	}
+}
+
+func TestBackendRouting(t *testing.T) {
+	d := &Dispatcher{PaseoBin: "paseo", DryRun: true} // dry-run: no real exec
+	// agent with no backend → paseo
+	if ref, _ := d.Dispatch(context.Background(), Request{
+		Trigger: core.Trigger{Kind: "changes_requested"},
+		Action:  config.Action{Type: "agent", Agent: "fixer"},
+	}); ref.Backend != "paseo" {
+		t.Fatalf("agent should route to paseo, got %q", ref.Backend)
+	}
+	// command with no backend → local
+	if ref, _ := d.Dispatch(context.Background(), Request{
+		Trigger: core.Trigger{Kind: "pr_behind"},
+		Action:  config.Action{Type: "command", Command: []string{"true"}},
+	}); ref.Backend != "local" {
+		t.Fatalf("command should route to local, got %q", ref.Backend)
+	}
+	// per-action backend override still works (command forced onto paseo)
+	if ref, _ := d.Dispatch(context.Background(), Request{
+		Trigger: core.Trigger{Kind: "review_requested"},
+		Action:  config.Action{Type: "command", Backend: "paseo", Command: []string{"critique"}},
+	}); ref.Backend != "paseo" {
+		t.Fatalf("per-action backend override should win, got %q", ref.Backend)
 	}
 }

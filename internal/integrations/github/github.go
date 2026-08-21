@@ -38,6 +38,29 @@ type Config struct {
 	// that has no explicit ProjectMap entry — the shortcut for a whole org whose
 	// paseo projects share a naming convention. See ProjectRewrite.
 	ProjectRewrite ProjectRewrite `yaml:"project_rewrite"`
+
+	// Identity is this integration's credential policy: which token reads vs
+	// writes, and commit authorship. Wired via the dispatchTuner seam in main.
+	Identity Identity `yaml:"identity"`
+
+	// Retry tunes re-attempts of a transient `paseo run` failure (git-lock/timeout
+	// under a sweep fan-out). Dispatch-level, but declared here since it's this
+	// integration's agents that contend.
+	Retry config.Retry `yaml:"retry"`
+}
+
+// Identity controls which credential reads vs writes, and commit authorship.
+// Values are inline: a known keyword, or (after ${ENV} expansion) a literal token.
+//   - ReadToken:  "app" (default) — the App installation token; "gh_auth" — `gh
+//     auth token`; anything else — a literal token used verbatim for reads.
+//   - WriteToken: "gh_auth" (default) — `gh auth token`; anything else — a literal
+//     token (e.g. a PAT via ${GH_PAT}) used verbatim for posts. Writes are always
+//     you, never the bot, so "app" is not a write option.
+//   - CommitAuthor: "self" (default) — commits/pushes carry your git identity.
+type Identity struct {
+	ReadToken    string `yaml:"read_token"`
+	WriteToken   string `yaml:"write_token"`
+	CommitAuthor string `yaml:"commit_author"`
 }
 
 // ProjectRewrite derives a paseo project name from a repo (owner/name) without
@@ -116,6 +139,15 @@ func newIntegration(name string, decode func(any) error) (core.Integration, erro
 	if err := decode(&cfg); err != nil {
 		return nil, fmt.Errorf("github[%s]: decode config: %w", name, err)
 	}
+	if cfg.Identity.ReadToken == "" {
+		cfg.Identity.ReadToken = "app"
+	}
+	if cfg.Identity.WriteToken == "" {
+		cfg.Identity.WriteToken = "gh_auth"
+	}
+	if cfg.Identity.CommitAuthor == "" {
+		cfg.Identity.CommitAuthor = "self"
+	}
 	g := &Integration{name: name, cfg: cfg, self: map[string]bool{},
 		projectMap: map[string]string{}}
 	for k, v := range cfg.ProjectMap {
@@ -186,6 +218,18 @@ func (g *Integration) AppToken(ctx context.Context, instID int64) (string, error
 		return "", err
 	}
 	return g.app.installationToken(ctx, instID)
+}
+
+// RetryPolicy exposes this integration's dispatch retry tuning (the dispatchTuner
+// seam in main uses it to build the shared Dispatcher).
+func (g *Integration) RetryPolicy() config.Retry { return g.cfg.Retry }
+
+// IdentityTokens exposes this integration's credential policy (raw values, already
+// ${ENV}-expanded by the loader). main resolves the "app"/"gh_auth" keywords
+// against its App-token and `gh auth token` sources; any other value is a literal.
+func (g *Integration) IdentityTokens() (read, write, commitAuthor string) {
+	id := g.cfg.Identity
+	return id.ReadToken, id.WriteToken, id.CommitAuthor
 }
 
 // Validate checks the instance configuration.

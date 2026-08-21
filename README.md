@@ -173,6 +173,11 @@ duties:
   they're authored **as you**, never a bot.
 - **Commits & pushes** go over **SSH** with your git identity — no token, no API cost.
 
+This split is configurable per github integration via `identity:` (`read_token` / `write_token` /
+`commit_author`). Defaults are the above (`read_token: app`, `write_token: gh_auth`). If you don't
+have `gh` installed, point writes at a **PAT** instead: `write_token: ${GH_PAT}` — any value that
+isn't the `gh_auth`/`app` keyword is used as a literal token.
+
 ## Install (released binary, one-liner)
 
 The repo is private, so the installer uses the authenticated `gh` CLI to fetch the release asset
@@ -480,13 +485,8 @@ agents:                               # reusable named agent profiles, reference
     workspace: local
     archive_when_done: true
 
-dispatch:
-  default_backends: { agent: paseo, command: local }   # backend per action type when unset
-  backends:
-    paseo: { bin: paseo }             # path to the paseo CLI
-    local: {}                         # direct subprocess exec
-  identity: { read_token: app, write_token: gh_auth, commit_author: self }  # reads=App, posts/commits=YOU
-  retry: { max: 3, backoff: 10s }     # re-attempt a paseo run that hits a transient git lock/timeout
+paseo_bin: paseo                      # path to the paseo CLI (default "paseo"); set only if not on PATH
+# Credential policy + retry live under the github integration (see `identity:` / `retry:` there).
 
 update:
   auto: false                         # periodically self-update to the latest release
@@ -511,7 +511,7 @@ dry_run: false                        # build+log every action but never execute
 | --- | --- |
 | `integrations` | List of typed instances (`type: github` / `type: cron`). List a type more than once for separate setups. |
 | `agents` | Reusable named agent profiles referenced by `agent` actions. |
-| `dispatch` | Backends (`paseo`, `local`), the default backend per action type, the read/write identity split, and `retry` for transient `paseo run` failures. |
+| `paseo_bin` | Path to the paseo CLI (default `paseo`). Agents always run via paseo; commands run as a local subprocess. |
 | `control` | Kill switch (`enabled`), `pause_label`, global `shadow`, and `max_concurrent_agents` (cap on simultaneously running coding agents; 0 = unlimited). |
 | `notify` | Private notifications (journal + paseo attention flag; never a PR comment): `push` and `on` (which events). |
 | `update` | Auto-update: `auto`, `interval`, `apply`. |

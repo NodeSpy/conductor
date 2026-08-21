@@ -25,7 +25,7 @@ type Config struct {
 	Control      Control                 `yaml:"control"`
 	Notify       Notify                  `yaml:"notify"`
 	Agents       map[string]AgentProfile `yaml:"agents"`
-	Dispatch     Dispatch                `yaml:"dispatch"`
+	PaseoBin     string                  `yaml:"paseo_bin"` // path to the paseo CLI (default "paseo")
 	Store        Store                   `yaml:"store"`
 	Update       Update                  `yaml:"update"`
 	DryRun       bool                    `yaml:"dry_run"`
@@ -112,14 +112,6 @@ func (n Notify) Wants(event string) bool {
 	return false
 }
 
-// Dispatch configures backends and identity.
-type Dispatch struct {
-	DefaultBackends map[string]string        `yaml:"default_backends"` // agent->paseo, command->local
-	Backends        map[string]BackendConfig `yaml:"backends"`
-	Identity        Identity                 `yaml:"identity"`
-	Retry           Retry                    `yaml:"retry"`
-}
-
 // Retry controls re-attempts of a `paseo run` that fails with a transient error
 // (a git lock/timeout while creating the worktree — common under a sweep
 // fan-out). Only transient failures are retried; real errors surface at once.
@@ -145,18 +137,6 @@ func (r Retry) BackoffDur() time.Duration {
 		return d
 	}
 	return 10 * time.Second
-}
-
-// BackendConfig holds per-backend settings (e.g. paseo bin path).
-type BackendConfig struct {
-	Bin string `yaml:"bin"`
-}
-
-// Identity controls which credentials read vs write, and commit authorship.
-type Identity struct {
-	ReadToken    string `yaml:"read_token"`    // "app" | "gh_auth"
-	WriteToken   string `yaml:"write_token"`   // "app" | "gh_auth"
-	CommitAuthor string `yaml:"commit_author"` // "self"
 }
 
 // Store configures the dedup state + audit log.
@@ -318,24 +298,8 @@ func expandEnv(b []byte) []byte {
 }
 
 func (c *Config) applyDefaults() {
-	if c.Dispatch.DefaultBackends == nil {
-		c.Dispatch.DefaultBackends = map[string]string{"agent": "paseo", "command": "local"}
-	}
-	if c.Dispatch.Backends == nil {
-		c.Dispatch.Backends = map[string]BackendConfig{"paseo": {Bin: "paseo"}, "local": {}}
-	}
-	if b, ok := c.Dispatch.Backends["paseo"]; ok && b.Bin == "" {
-		b.Bin = "paseo"
-		c.Dispatch.Backends["paseo"] = b
-	}
-	if c.Dispatch.Identity.ReadToken == "" {
-		c.Dispatch.Identity.ReadToken = "app"
-	}
-	if c.Dispatch.Identity.WriteToken == "" {
-		c.Dispatch.Identity.WriteToken = "gh_auth"
-	}
-	if c.Dispatch.Identity.CommitAuthor == "" {
-		c.Dispatch.Identity.CommitAuthor = "self"
+	if c.PaseoBin == "" {
+		c.PaseoBin = "paseo"
 	}
 	if c.Store.StateFile == "" {
 		c.Store.StateFile = expandHome("~/.local/state/paseo-conductor/state.json")

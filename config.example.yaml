@@ -29,6 +29,16 @@ integrations:
       interval: 1h
       repos: ["your-org/*"]           # concrete owner/name, or an owner glob (owner/*) → expands to installed repos
 
+    # Credential policy (optional — defaults shown). Values are inline: a keyword,
+    # or (after ${ENV} expansion) a literal token.
+    identity:
+      read_token: app                 # app (default) = App installation token | gh_auth | <literal>
+      write_token: gh_auth            # gh_auth (default) = `gh auth token` | <literal PAT, e.g. ${GH_PAT}>
+      commit_author: self             # self (default): commits/pushes carry your git identity
+    retry:                            # re-attempt a `paseo run` that fails with a transient
+      max: 3                          #   git lock/timeout (common under a sweep fan-out)
+      backoff: 10s
+
     # OPTIONAL. Remap a repo (owner/name) to the paseo project name of an existing
     # workspace, so worktree checkouts reuse it instead of cloning a fresh one.
     # Handy when the forge repo and the registered paseo project differ in org or
@@ -229,15 +239,7 @@ agents:
     workspace: local
     archive_when_done: true
 
-dispatch:
-  default_backends: { agent: paseo, command: local }
-  backends:
-    paseo: { bin: paseo }
-    local: {}
-  identity: { read_token: app, write_token: gh_auth, commit_author: self }
-  retry:                               # re-attempt a `paseo run` that fails with a transient
-    max: 3                             #   git lock/timeout while creating the worktree
-    backoff: 10s
+# paseo_bin: paseo   # path to the paseo CLI (default "paseo"); set only if not resolvable by name on PATH
 
 update:
   auto: false                          # periodically self-update to the latest release

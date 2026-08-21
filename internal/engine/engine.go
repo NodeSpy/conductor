@@ -58,6 +58,7 @@ type Engine struct {
 	notif      Notifier
 	author     dispatch.Author
 	userTok    func() (string, error)
+	readTok    func() (string, error) // read-token override (nil = use the per-trigger App token)
 	rerun      func(context.Context, core.Trigger, int64)
 	refreshTok func(core.Trigger) (string, error) // re-mint the App token on resume
 	log        func(string, ...any)
@@ -73,6 +74,9 @@ type Options struct {
 	Notifier  Notifier
 	Author    dispatch.Author
 	UserToken func() (string, error)
+	// ReadToken, if set, overrides the token used for API reads (GH_TOKEN) instead
+	// of the per-trigger App installation token — for identity.read_token != "app".
+	ReadToken func() (string, error)
 	// Rerun, if set, overrides the flaky-CI rerun step (tests inject a spy).
 	Rerun func(context.Context, core.Trigger, int64)
 	// RefreshAppToken re-mints the App installation token for a persisted trigger
@@ -90,7 +94,7 @@ func New(o Options) *Engine {
 	}
 	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, notif: o.Notifier,
-		author: o.Author, userTok: o.UserToken, log: log,
+		author: o.Author, userTok: o.UserToken, readTok: o.ReadToken, log: log,
 		ch: make(chan core.Trigger, 256),
 	}
 	if cap := o.Config.Control.AgentCap(); cap > 0 {
@@ -236,6 +240,11 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 	}
 	appTok, _ := t.Context["app_token"].(string)
+	if e.readTok != nil { // identity.read_token override → reads use it, not the App token
+		if tok, err := e.readTok(); err == nil && tok != "" {
+			appTok = tok
+		}
+	}
 	userTok := ""
 	if e.userTok != nil {
 		userTok, _ = e.userTok()
@@ -427,6 +436,11 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 		if err != nil {
 			e.log("engine: resume %s: app token: %v (leaving for next start)", r.ID, err)
 			continue
+		}
+		if e.readTok != nil { // identity.read_token override
+			if tok, terr := e.readTok(); terr == nil && tok != "" {
+				appTok = tok
+			}
 		}
 		userTok := ""
 		if e.userTok != nil {

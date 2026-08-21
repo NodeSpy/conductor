@@ -59,9 +59,8 @@ type RunRef struct {
 
 // Dispatcher routes requests to a backend.
 type Dispatcher struct {
-	PaseoBin        string
-	DefaultBackends map[string]string
-	DryRun          bool
+	PaseoBin string
+	DryRun   bool
 
 	// CheckoutDir resolves a local checkout path for a repo (owner/name) that
 	// paseo can derive the forge repo from when creating a PR/branch worktree.
@@ -83,14 +82,14 @@ type Dispatcher struct {
 	scratchWS string            // memoized scratch workspace id
 }
 
-// New builds a Dispatcher from dispatch config.
-func New(d config.Dispatch, dryRun bool) *Dispatcher {
-	bin := "paseo"
-	if b, ok := d.Backends["paseo"]; ok && b.Bin != "" {
-		bin = b.Bin
+// New builds a Dispatcher. paseoBin defaults to "paseo"; retry tunes transient
+// `paseo run` re-attempts (git lock/timeout under a sweep fan-out).
+func New(paseoBin string, retry config.Retry, dryRun bool) *Dispatcher {
+	if paseoBin == "" {
+		paseoBin = "paseo"
 	}
-	return &Dispatcher{PaseoBin: bin, DefaultBackends: d.DefaultBackends, DryRun: dryRun,
-		RetryMax: d.Retry.Attempts(), RetryBackoff: d.Retry.BackoffDur(),
+	return &Dispatcher{PaseoBin: paseoBin, DryRun: dryRun,
+		RetryMax: retry.Attempts(), RetryBackoff: retry.BackoffDur(),
 		repoDirs: map[string]string{}}
 }
 
@@ -111,14 +110,21 @@ func (d *Dispatcher) WaitForAgent(ctx context.Context, id string, timeout time.D
 
 // Dispatch selects the backend for the action and runs it.
 func (d *Dispatcher) Dispatch(ctx context.Context, req Request) (RunRef, error) {
+	// Routing is fixed: agents run via paseo (the only agent runner), commands run
+	// as a local subprocess. A per-action `backend:` may still override (e.g. run a
+	// command inside a paseo worktree). Agents without an override always use paseo.
 	backend := req.Action.Backend
 	if backend == "" {
-		backend = d.DefaultBackends[req.Action.Type]
+		if req.Action.Type == "agent" {
+			backend = "paseo"
+		} else {
+			backend = "local"
+		}
 	}
 	switch backend {
 	case "paseo":
 		return d.paseo(ctx, req)
-	case "local", "":
+	case "local":
 		return d.local(ctx, req)
 	default:
 		return RunRef{}, fmt.Errorf("unknown backend %q", backend)
