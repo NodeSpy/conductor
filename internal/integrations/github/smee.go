@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,6 +14,27 @@ import (
 
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 )
+
+// smeeClient streams the smee channel with tuned TCP keep-alive. smee sends no
+// application heartbeat, so on a half-open connection (a network blip with no clean
+// close) a plain reader blocks until the kernel's default retransmit timeout gives
+// up — ~15 min of blindness. Keep-alive probes (idle 20s, every 15s, ×4) surface a
+// dead peer in ~80s so the reconnect loop kicks in fast; because probes only error
+// when they actually fail, a healthy-but-quiet channel is never reconnected (no
+// event-drop window). No Client.Timeout — this is a long-lived stream.
+var smeeClient = newStreamClient()
+
+func newStreamClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DialContext = (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 20 * time.Second, // legacy fallback; KeepAliveConfig governs on Go ≥1.23
+		KeepAliveConfig: net.KeepAliveConfig{
+			Enable: true, Idle: 20 * time.Second, Interval: 15 * time.Second, Count: 4,
+		},
+	}).DialContext
+	return &http.Client{Transport: tr}
+}
 
 // Start builds the App auth + REST client and runs the configured webhook
 // transports (smee channel and/or a direct HTTP listener), plus the optional
@@ -109,7 +131,7 @@ func (g *Integration) streamSmee(ctx context.Context, emit core.EmitFunc, seen *
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := smeeClient.Do(req)
 	if err != nil {
 		return err
 	}

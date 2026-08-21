@@ -5,10 +5,29 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 )
+
+// smeeClient streams a smee channel with tuned TCP keep-alive, so a half-open
+// connection (a network blip with no clean close) is surfaced in ~80s instead of
+// waiting ~15 min for the kernel's default retransmit timeout. Keep-alive probes
+// only error when they actually fail, so a healthy-but-quiet channel is never
+// reconnected. No Client.Timeout — this is a long-lived stream. Mirrors the github
+// integration's streaming client.
+var smeeClient = func() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DialContext = (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 20 * time.Second,
+		KeepAliveConfig: net.KeepAliveConfig{
+			Enable: true, Idle: 20 * time.Second, Interval: 15 * time.Second, Count: 4,
+		},
+	}).DialContext
+	return &http.Client{Transport: tr}
+}()
 
 // Frame is one delivery pulled off a smee channel or received over HTTP: the raw
 // body bytes plus the request headers (lower-cased keys). smee.io re-serializes
@@ -58,7 +77,7 @@ func streamSmee(ctx context.Context, url string, onFrame func(Frame)) error {
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := smeeClient.Do(req)
 	if err != nil {
 		return err
 	}

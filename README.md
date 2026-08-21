@@ -487,6 +487,15 @@ Set `webhook.smee_url`, `webhook.listen`, or both:
   receiver. Point the GitHub App's webhook URL at it (typically via your own tunnel, e.g. pangolin).
   The raw body is intact here, so **set `verify_signature: true`**.
 
+**Recovery.** The smee stream auto-reconnects with backoff; tuned TCP keep-alive surfaces a half-open
+connection (a network blip with no clean close) in ~80s rather than the kernel's ~15-min default, so
+a silent drop is short. smee.io does **not** buffer, so any webhook delivered while you're
+disconnected is lost — the [sweep](#full-example) (`sweep.enabled`) is the catch-up net: it
+re-derives `review_requested`/`merge_conflict`/`pr_behind`/`changes_requested` from live PR state on
+its interval, so those recover on the next sweep after connectivity returns. Comment/issue events
+aren't re-derivable, so lower `sweep.interval` (e.g. `20m`) if you want tighter recovery of the
+sweepable kinds.
+
 ## Configuration
 
 Config lives at `~/.config/paseo-conductor/config.yaml`; secrets referenced via `${VAR}` come from
