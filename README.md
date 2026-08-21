@@ -341,7 +341,7 @@ integrations:
         merge_conflict:                                   # your PR conflicts with base
           type: agent
           agent: fixer
-          max_attempts_per_head: 2                        # cap → then escalate (notify), no looping
+          max_attempts_per_head: 3                        # soft threshold (default 3) → growing backoff, not a hard stop
           prompt: |
             This PR conflicts with base {{.base}}. Merge/rebase base, resolve the
             conflicts, make sure it builds, commit, and push to the PR branch.
@@ -618,9 +618,11 @@ paseo-conductor version
   and re-checkable — `review_requested` (you're still a requested reviewer), `merge_conflict` (PR
   still dirty), `changes_requested` (threads still unresolved) — are **not** marked done on dispatch.
   The sweep re-derives reality each run and re-fires until the condition clears, skipping only while
-  an agent is already working/parked for it (and, for kinds with `max_attempts_per_head`, giving up
-  after the cap). So an agent that fails, is culled, or finishes without resolving doesn't leave the
-  work silently abandoned. (Event-specific kinds like `new_comment` still dedup per comment id.)
+  an agent is already working/parked for it. Past `max_attempts_per_head` (default 3) retries don't
+  stop — they switch to a **growing backoff** (10m→30m→90m→…→24h), so a struggling PR keeps getting
+  periodic attempts (with a one-time "backing off" notification) rather than being abandoned. So an
+  agent that fails, is culled, or finishes without resolving doesn't leave the work silently
+  dropped. (Event-specific kinds like `new_comment` still dedup per comment id and stay uncapped.)
   Every sweep logs a summary — repos/PRs scanned, what it emitted, and *why* it skipped candidates
   (draft-gated, excluded) — so it's never a black box.
 - **Bounded fan-out**: `control.max_concurrent_agents` (default 3) caps how many coding agents run

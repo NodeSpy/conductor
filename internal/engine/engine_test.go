@@ -122,18 +122,37 @@ func TestDedupSkipsRepeat(t *testing.T) {
 	}
 }
 
-func TestAttemptCapEscalates(t *testing.T) {
+func TestBackoffThenRetry(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
-	e, _ := newEng(t, baseCfg(), d, n, nil)
+	st := tempStore(t)
+	clock := time.Unix(1_700_000_000, 0)
+	st.SetNow(func() time.Time { return clock })
+	e := New(Options{Config: baseCfg(), Store: st, Dispatch: d, Notifier: n,
+		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+
 	act := config.Action{Type: "agent", Agent: "fixer", MaxAttemptsPerHead: 1}
+	// 1st: below soft → dispatches, records an attempt (attemptAt = clock).
 	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s1", act))
-	// Second distinct signature at same head → over the cap → escalate, no dispatch.
+	if len(d.reqs) != 1 {
+		t.Fatalf("want 1 dispatch, got %d", len(d.reqs))
+	}
+	// 2nd, only 5m later: n>=soft and within the 10m cooldown → backoff skip, no escalate.
+	clock = clock.Add(5 * time.Minute)
 	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s2", act))
 	if len(d.reqs) != 1 {
-		t.Fatalf("want 1 dispatch (2nd escalated), got %d", len(d.reqs))
+		t.Fatalf("2nd within cooldown should be skipped, got %d dispatches", len(d.reqs))
+	}
+	if n.has("escalate") {
+		t.Fatalf("no escalation while still in backoff, events=%v", n.events)
+	}
+	// After the 10m cooldown elapses → eligible again: escalates once (n==soft) and dispatches.
+	clock = clock.Add(10 * time.Minute)
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s3", act))
+	if len(d.reqs) != 2 {
+		t.Fatalf("want a retry after the cooldown, got %d dispatches", len(d.reqs))
 	}
 	if !n.has("escalate") {
-		t.Fatalf("expected escalation, events=%v", n.events)
+		t.Fatalf("expected a one-time escalation crossing the threshold, events=%v", n.events)
 	}
 }
 

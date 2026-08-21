@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
@@ -41,6 +42,7 @@ type Store interface {
 	Delete(key string) error
 	LastSignature(key, kind string) string
 	Attempts(key, kind, head string) int
+	RetryReady(key, kind, head string, soft int, base time.Duration, factor int, max time.Duration) (bool, time.Duration)
 	Record(key, kind, sig, head string) error
 	RecordAttempt(key, kind, head string) error
 	Audit(entry map[string]any)
@@ -203,26 +205,34 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			return
 		}
 		// A live-gated kind never records "done" on dispatch — the sweep re-derives
-		// reality (still dirty? threads still unresolved? review still pending?) each
-		// run, so culled/failed work isn't abandoned. The one exception: once it has
-		// hit the attempt cap for this exact state, stay quiet until the state
-		// changes, so an unfixable PR isn't re-escalated every sweep.
-		if cap := act.MaxAttemptsPerHead; cap > 0 &&
-			e.store.Attempts(key, t.Kind, head) >= cap &&
-			e.store.LastSignature(key, t.Kind) == t.Dedup {
-			return
-		}
+		// reality (still dirty? threads unresolved? review pending?) each run, so
+		// culled/failed work isn't abandoned. The backoff below bounds the retries.
 	} else if t.Dedup != "" && e.store.LastSignature(key, t.Kind) == t.Dedup {
 		return
 	}
 
-	// Attempt cap → escalate (notify) instead of looping.
-	if cap := act.MaxAttemptsPerHead; cap > 0 && e.store.Attempts(key, t.Kind, head) >= cap {
-		e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("attempt cap (%d) reached at %s", cap, short(head)))
-		e.store.Audit(map[string]any{"event": "escalate", "repo": t.Target.Repo,
-			"number": t.Target.Number, "kind": t.Kind, "head": head})
-		_ = e.store.Record(key, t.Kind, t.Dedup, head)
-		return
+	// Past the soft threshold (max_attempts_per_head), gate retries behind a GROWING
+	// backoff instead of a hard cap — a struggling (pr,kind,head) keeps getting
+	// periodic retries with widening gaps (10m→30m→…→24h) rather than being abandoned
+	// forever. Escalate once, when it first crosses the threshold.
+	soft := act.MaxAttemptsPerHead
+	if soft == 0 && t.Kind != "new_comment" {
+		soft = defaultMaxAttempts
+	}
+	if soft > 0 {
+		if n := e.store.Attempts(key, t.Kind, head); n >= soft {
+			if ready, wait := e.store.RetryReady(key, t.Kind, head, soft, retryBackoffBase, retryBackoffFactor, retryBackoffMax); !ready {
+				e.log("engine: %s %s in backoff — %d attempts at %s, next retry in ~%s",
+					t.Kind, key, n, short(head), wait.Round(time.Minute))
+				return
+			}
+			if n == soft { // first time past the threshold and now eligible — say so, once
+				e.notif.Emit(ctx, notify.EventEscalate, t,
+					fmt.Sprintf("still failing after %d tries at %s — backing off, will keep retrying periodically", soft, short(head)))
+				e.store.Audit(map[string]any{"event": "escalate", "repo": t.Target.Repo,
+					"number": t.Target.Number, "kind": t.Kind, "head": head, "attempts": n})
+			}
+		}
 	}
 
 	// Resolve profile, tokens, shadow.
@@ -316,11 +326,21 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 		return
 	}
+	// A dispatch killed by our own shutdown (ctx cancelled / `paseo run` SIGTERM'd)
+	// isn't a real attempt — don't count it toward backoff or escalate; the sweep
+	// re-derives it cleanly on restart.
+	if err != nil && interruptedByShutdown(ctx, err) {
+		e.log("engine: %s %s interrupted by shutdown — not counting an attempt", t.Kind, key)
+		if gated {
+			e.release()
+		}
+		return
+	}
 	if !shadow {
 		switch {
 		case liveGate:
 			// Never mark "done" on dispatch — the sweep re-derives completion. Just
-			// count the attempt so the per-head cap can escalate an unfixable state.
+			// count the attempt; backoff bounds retries of an unfixable state.
 			_ = e.store.RecordAttempt(key, t.Kind, head)
 		case err != nil:
 			// A failed dispatch: count the try but don't consume the dedup signature,
@@ -465,6 +485,35 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 			e.runSteps(ctx, run, t, act, appTok, userTok, false)
 		}()
 	}
+}
+
+// Backoff schedule for retries past max_attempts_per_head: 10m, 30m, 90m, … ×3
+// each step, capped at 24h. Never a permanent give-up — a struggling PR just
+// retries with widening gaps (longer elapsed ⇒ less likely recoverable).
+const (
+	retryBackoffBase   = 10 * time.Minute
+	retryBackoffFactor = 3
+	retryBackoffMax    = 24 * time.Hour
+	// defaultMaxAttempts is the soft threshold (retries before backoff begins) when
+	// an action doesn't set max_attempts_per_head. new_comment is exempt — distinct
+	// comments share a kind@head attempt key, so a cap there would throttle real work.
+	defaultMaxAttempts = 3
+)
+
+// interruptedByShutdown reports whether a dispatch error is just the daemon going
+// down (ctx cancelled, or the `paseo run` child killed by our SIGTERM) rather than
+// a real failure — so we don't burn an attempt or escalate on a clean shutdown.
+func interruptedByShutdown(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "signal: terminated") ||
+		strings.Contains(s, "signal: killed") ||
+		strings.Contains(s, "context canceled")
 }
 
 // livenessGated reports whether a kind's completion is EXTERNAL state the sweep

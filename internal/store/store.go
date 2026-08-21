@@ -16,11 +16,12 @@ import (
 
 // Record is the per-PR/issue dedup state.
 type Record struct {
-	HeadSHA   string            `json:"head_sha,omitempty"`
-	Acted     map[string]string `json:"acted,omitempty"`    // kind -> last acted dedup signature
-	Attempts  map[string]int    `json:"attempts,omitempty"` // "kind@head" -> count
-	LastComID int64             `json:"last_comment_id,omitempty"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	HeadSHA   string               `json:"head_sha,omitempty"`
+	Acted     map[string]string    `json:"acted,omitempty"`      // kind -> last acted dedup signature
+	Attempts  map[string]int       `json:"attempts,omitempty"`   // "kind@head" -> count
+	AttemptAt map[string]time.Time `json:"attempt_at,omitempty"` // "kind@head" -> last attempt time (for backoff)
+	LastComID int64                `json:"last_comment_id,omitempty"`
+	UpdatedAt time.Time            `json:"updated_at"`
 }
 
 // Store is the concurrency-safe state + audit store.
@@ -95,6 +96,9 @@ func (s *Store) rec(key string) *Record {
 	if r.Attempts == nil {
 		r.Attempts = map[string]int{}
 	}
+	if r.AttemptAt == nil {
+		r.AttemptAt = map[string]time.Time{}
+	}
 	return r
 }
 
@@ -118,6 +122,42 @@ func (s *Store) Attempts(key, kind, head string) int {
 	return 0
 }
 
+// RetryReady reports whether a live-gated (key, kind, head) is eligible to retry,
+// and if not, how long until it is. Below the soft threshold it's always ready
+// (the sweep paces it). At or past soft it enters a growing backoff since its last
+// attempt: cooldown = base * factor^(attempts-soft), capped at max. A missing/zero
+// last-attempt time (e.g. state written before backoff existed) is treated as
+// ready — so a previously hard-capped PR self-heals on the next sweep.
+func (s *Store) RetryReady(key, kind, head string, soft int, base time.Duration, factor int, max time.Duration) (ready bool, wait time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.recs[key]
+	if r == nil {
+		return true, 0
+	}
+	k := kind + "@" + head
+	n := r.Attempts[k]
+	if n < soft {
+		return true, 0
+	}
+	last := r.AttemptAt[k]
+	if last.IsZero() {
+		return true, 0
+	}
+	cd := base
+	for i := 0; i < n-soft && cd < max; i++ {
+		cd *= time.Duration(factor)
+	}
+	if cd > max {
+		cd = max
+	}
+	elapsed := s.now().Sub(last)
+	if elapsed >= cd {
+		return true, 0
+	}
+	return false, cd - elapsed
+}
+
 // Record marks (key, kind) as acted on for signature sig at head, incrementing
 // the per-head attempt counter and touching the record. Persists immediately.
 // Use this only on a SUCCESSFUL dispatch — it consumes the dedup signature so
@@ -128,6 +168,7 @@ func (s *Store) Record(key, kind, sig, head string) error {
 	r.Acted[kind] = sig
 	r.HeadSHA = head
 	r.Attempts[kind+"@"+head]++
+	r.AttemptAt[kind+"@"+head] = s.now()
 	r.UpdatedAt = s.now()
 	s.mu.Unlock()
 	return s.save()
@@ -141,9 +182,18 @@ func (s *Store) RecordAttempt(key, kind, head string) error {
 	r := s.rec(key)
 	r.HeadSHA = head
 	r.Attempts[kind+"@"+head]++
+	r.AttemptAt[kind+"@"+head] = s.now()
 	r.UpdatedAt = s.now()
 	s.mu.Unlock()
 	return s.save()
+}
+
+// SetNow overrides the clock — for tests exercising time-dependent behavior
+// (retry backoff, TTL). Not used in production.
+func (s *Store) SetNow(fn func() time.Time) {
+	s.mu.Lock()
+	s.now = fn
+	s.mu.Unlock()
 }
 
 // Touch updates the record's last-seen time (keeps it alive against TTL).

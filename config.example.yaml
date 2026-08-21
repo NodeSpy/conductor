@@ -64,7 +64,8 @@ integrations:
         merge_conflict:
           type: agent
           agent: fixer
-          max_attempts_per_head: 2
+          # max_attempts_per_head defaults to 3: the soft threshold after which retries
+          # switch to a growing backoff (10m→30m→90m→…→24h), never a permanent give-up.
           prompt: |
             This PR conflicts with base {{.base}}. Merge/rebase base, resolve the
             conflicts, make sure it builds, commit, and push to the PR branch.
