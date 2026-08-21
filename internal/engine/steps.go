@@ -99,7 +99,11 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		if err != nil {
 			entry["error"] = err.Error()
 			e.store.Audit(entry)
-			e.log("engine: step %s failed after %s: %v", id, took, err)
+			failMsg := ""
+			if tail := tailOutput(ref.Output); tail != "" {
+				failMsg = "\n" + tail
+			}
+			e.log("engine: step %s failed after %s: %v%s", id, took, err, failMsg)
 			e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("workflow step %q failed: %v", id, err))
 			e.finishRun(run)
 			return // fail-fast
@@ -124,16 +128,38 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
 			continue
 		}
-		// Agent steps log their structured decision; command output is large (and in
-		// the audit), so for commands we log just the timing, not the raw stdout.
+		// Agent steps log their structured decision; command steps get a tail of their
+		// stdout (the result is at the end; the go-build/download preamble is dropped).
 		summary := ""
 		if s.Type == "agent" {
 			summary = logOutputs(outputs)
+		} else if tail := tailOutput(ref.Output); tail != "" {
+			summary = "\n" + tail
 		}
 		e.log("engine: step %s done (%s) in %s%s", id, ref.Backend, took, summary)
 	}
 	e.notif.Emit(ctx, notify.EventComplete, t, "workflow")
 	e.finishRun(run)
+}
+
+// tailOutput returns the last few non-blank lines of a command's captured output
+// for the journal — the result (critique's verdict, a gh message, an error) is at
+// the end, while the go-build/download preamble is at the start and gets dropped.
+// The full output is always in the audit log. Returns "" when there's nothing.
+func tailOutput(s string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	var kept []string
+	for i := len(lines) - 1; i >= 0 && len(kept) < 8; i-- {
+		if strings.TrimSpace(lines[i]) == "" {
+			continue
+		}
+		kept = append([]string{strings.TrimRight(lines[i], " \t")}, kept...)
+	}
+	out := strings.Join(kept, "\n")
+	if len(out) > 800 {
+		out = "…" + out[len(out)-800:]
+	}
+	return out
 }
 
 // actionDesc is a short, journal-friendly label for what a step/action runs: the

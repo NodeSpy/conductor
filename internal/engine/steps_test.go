@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -243,5 +244,22 @@ func TestWorkflowViaProcess(t *testing.T) {
 	waitFor(t, func() bool { return d.count() == 2 })
 	if e.store.LastSignature(tr.Key(), tr.Kind) != "sig-1" {
 		t.Fatal("workflow should record its dedup signature")
+	}
+}
+
+func TestTailOutput(t *testing.T) {
+	// Drops the (long) go-download preamble, keeps the meaningful tail (last 8 lines).
+	in := "go: downloading a\ngo: downloading b\ngo: downloading c\ngo: downloading d\n" +
+		"go: downloading e\ngo: downloading f\ngo: downloading g\ngo: downloading h\n" +
+		"reviewing X#1 (post=true)\nstatus: done\nposted: true\n"
+	got := tailOutput(in)
+	if !strings.Contains(got, "status: done") || !strings.Contains(got, "posted: true") {
+		t.Fatalf("tail should keep the result lines, got: %q", got)
+	}
+	if strings.Contains(got, "downloading a") {
+		t.Fatalf("tail should drop the download preamble, got: %q", got)
+	}
+	if tailOutput("") != "" || tailOutput("\n\n  \n") != "" {
+		t.Fatal("blank output should yield empty tail")
 	}
 }

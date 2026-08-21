@@ -289,7 +289,11 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	ref, err := e.disp.Dispatch(ctx, req)
 	took := time.Since(start).Round(time.Second)
 	if act.Type == "command" && err == nil && !ref.Skipped {
-		e.log("engine: %s %s command done (%s) in %s", t.Kind, key, ref.Backend, took)
+		tail := ""
+		if tl := tailOutput(ref.Output); tl != "" {
+			tail = "\n" + tl
+		}
+		e.log("engine: %s %s command done (%s) in %s%s", t.Kind, key, ref.Backend, took, tail)
 	}
 	e.auditDispatch(t, ref, err)
 	gated := act.Type == "agent" && !shadow
@@ -319,6 +323,9 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 
 	if err != nil {
+		if tl := tailOutput(ref.Output); tl != "" {
+			e.log("engine: %s %s command output (tail):\n%s", t.Kind, key, tl)
+		}
 		e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("dispatch failed: %v", err))
 		if gated {
 			e.release()
