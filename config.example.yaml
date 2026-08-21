@@ -265,6 +265,28 @@ integrations:
           checkout: none
           prompt: "Canvas changelog: {{.item.title}} ({{.url}}). Does this affect RosterStream? File a heads-up issue if so."
 
+  # Slack control plane over Socket Mode (outbound WebSocket — no public URL).
+  # Mention / react / slash → dispatch an agent; the bot token is exposed to
+  # command actions as {{.slack_bot_token}} so they can reply in-thread.
+  - type: slack
+    name: ops
+    app_token: ${SLACK_APP_TOKEN}      # xapp-… (Socket Mode; connections:write)
+    bot_token: ${SLACK_BOT_TOKEN}      # xoxb-… (chat:write)
+    ack: "on it 👀"                     # optional: posted to the thread when a trigger fires
+    triggers:
+      - on: app_mention                # "@conductor <task>"
+        actions:
+          type: agent
+          agent: fixer
+          checkout: none
+          prompt: "Slack request from <@{{.slack.user}}>: {{.slack.text}}. Do it and report back."
+      - on: reaction_added             # react with :eyes: to trigger
+        reaction: eyes
+        actions: { type: agent, agent: fixer, checkout: none, prompt: "Look into: {{.slack.text}}" }
+      # - on: slash_command
+      #   command: /conductor
+      #   actions: { type: agent, agent: fixer, checkout: none, prompt: "{{.slack.text}}" }
+
 control:
   enabled: true
   pause_label: conductor:off          # (label-based pause is a follow-up; enabled/shadow work today)
@@ -272,8 +294,9 @@ control:
   max_concurrent_agents: 3            # cap running coding agents (protects the box and avoids
                                       #   git-lock contention when a sweep fans out). 0 = unlimited.
 notify:
-  push: true                          # private to you (journal today); never a PR comment
+  push: true                          # private to you (journal); never a PR comment
   on: [dispatch, escalate, needs_input]
+  # slack_webhook_url: ${SLACK_WEBHOOK_URL}   # optional: also post the `on` events to a Slack channel
 
 agents:
   fixer:

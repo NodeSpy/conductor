@@ -298,6 +298,45 @@ integrations:
 back-emitted; later polls emit only new items. Each item carries a stable dedup (its GUID/id), so the
 engine store also suppresses re-acting across restarts. A feed with no `repo` runs `checkout: none`.
 
+## Slack control plane (slack integration)
+
+The `slack` integration is a control plane: an @-mention, an emoji reaction, or a slash command
+dispatches an agent, and you steer it from the thread. It connects over **Socket Mode** (an outbound
+WebSocket), so it needs **no public URL** — the right fit for a self-hosted box.
+
+`triggers` route by `on` (`app_mention` / `reaction_added` / `slash_command`), with an optional
+`reaction` emoji or `command` filter, to [actions](#named-action-variants). The event exposes
+`{{.slack.text}}`, `{{.slack.channel}}`, `{{.slack.user}}`, `{{.slack.thread_ts}}` and the bot token
+(`{{.slack_bot_token}}`) so a command action can post a threaded reply. An optional `ack` message is
+posted to the thread when a rule fires.
+
+```yaml
+integrations:
+  - type: slack
+    name: ops
+    app_token: ${SLACK_APP_TOKEN}      # xapp-… (Socket Mode; needs connections:write)
+    bot_token: ${SLACK_BOT_TOKEN}      # xoxb-… (posting)
+    ack: "on it 👀"
+    triggers:
+      - on: app_mention                # "@conductor <task>" in any channel the bot is in
+        actions:
+          type: agent
+          agent: fixer
+          checkout: none
+          prompt: "Slack request from <@{{.slack.user}}>: {{.slack.text}}. Do it and report back."
+      - on: reaction_added             # react :eyes: on a message to trigger
+        reaction: eyes
+        actions: { type: agent, agent: fixer, checkout: none, prompt: "Look into: {{.slack.text}}" }
+```
+
+Create a Slack app with **Socket Mode enabled**, an app-level token (`connections:write`), event
+subscriptions (`app_mention`, `reaction_added`), and a bot token with `chat:write`. No inbound URL to
+expose.
+
+**Slack notifications** are separate: set `notify.slack_webhook_url` (an incoming-webhook URL) and the
+enabled `notify.on` events (escalations, hand-offs, completions) also post to that channel — no Socket
+Mode needed for that half.
+
 ## Identity & rate limits
 
 The rate-limit pain came from doing reads on your personal `gh` token. paseo-conductor separates
