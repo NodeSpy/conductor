@@ -203,6 +203,39 @@ integrations:
 
 Agent actions with no repo context run in the base workspace (`checkout: none`).
 
+## Generic webhooks (webhook integration)
+
+The `webhook` integration is a force-multiplier: any service that can POST JSON — CloudWatch/SNS,
+Statuspage, a vendor, a form — becomes a trigger with no bespoke Go. One instance hosts many named
+**sources**; each maps body fields into the trigger via templates (`{{.body.<...>}}`), optionally
+verifies an HMAC signature, and carries one or more [actions](#named-action-variants).
+
+Delivery is either a direct HTTP `listen:` address or a `smee_url:` channel (no public ingress — the
+same trick the GitHub integration uses). The parsed body is exposed to the action's own
+prompt/command as `{{.body.<...>}}`.
+
+```yaml
+integrations:
+  - type: webhook
+    name: inbound
+    smee_url: ${WEBHOOK_SMEE_URL}      # and/or  listen: ":8099"
+    sources:
+      - name: cloudwatch               # becomes the trigger Kind
+        path: /hooks/cloudwatch        # required with a listener; smee routes by `match`
+        sign: { header: X-Amz-Signature, secret: ${CW_SECRET}, scheme: hex }   # optional HMAC
+        match: '{{if eq .body.detail.state "ALARM"}}true{{end}}'  # optional: only fire when true
+        title: "{{.body.detail.alarmName}} → {{.body.detail.state}}"
+        dedup: "{{.body.detail.alarmName}}-{{.body.time}}"        # "" = fire on every delivery
+        repo: EdnitionCode/infra       # optional: a real repo enables checkout; omit → runs in scratch
+        actions:
+          type: agent
+          agent: fixer
+          prompt: "CloudWatch alarm {{.body.detail.alarmName}} fired — investigate {{.repo}}."
+```
+
+A source with no `repo` runs `checkout: none` automatically (its synthetic id isn't clonable). With a
+`smee_url` and more than one source, each source needs a `match` predicate to route the shared channel.
+
 ## Identity & rate limits
 
 The rate-limit pain came from doing reads on your personal `gh` token. paseo-conductor separates

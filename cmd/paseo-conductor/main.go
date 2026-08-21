@@ -25,8 +25,9 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/notify"
 	"github.com/NodeSpy/paseo-conductor/internal/store"
 
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/cron"   // register "cron"
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/github" // register "github"
+	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/cron"    // register "cron"
+	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/github"  // register "github"
+	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/webhook" // register "webhook"
 )
 
 var version = "dev"

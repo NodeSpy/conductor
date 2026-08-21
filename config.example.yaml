@@ -214,6 +214,25 @@ integrations:
           workdir: ~/Projects/myrepo   # run the command here ('~' and {{.repo}}-style templates allowed)
           command: ["make", "clean"]
 
+  # Force-multiplier: any service that can POST JSON becomes a trigger. One instance
+  # hosts many named `sources`; each maps body fields via {{.body.<...>}} templates.
+  - type: webhook
+    name: inbound
+    # smee_url: ${WEBHOOK_SMEE_URL}    # no public ingress needed (like the github smee transport)
+    listen: ":8099"                    # ...or receive directly on a port
+    sources:
+      - name: cloudwatch               # becomes the trigger Kind
+        path: /hooks/cloudwatch        # required with a listener; smee routes multiple sources by `match`
+        sign: { header: X-Signature-256, secret: ${CW_SECRET}, scheme: sha256 }  # optional HMAC verify
+        match: '{{if eq .body.detail.state "ALARM"}}true{{end}}'   # optional: fire only when it renders "true"
+        title: "{{.body.detail.alarmName}} → {{.body.detail.state}}"
+        dedup: "{{.body.detail.alarmName}}-{{.body.time}}"         # "" = fire on every delivery
+        repo: EdnitionCode/infra       # optional real repo → enables checkout; omit → runs in scratch (checkout none)
+        actions:
+          type: agent
+          agent: fixer
+          prompt: "CloudWatch alarm {{.body.detail.alarmName}} fired — investigate {{.repo}}."
+
 control:
   enabled: true
   pause_label: conductor:off          # (label-based pause is a follow-up; enabled/shadow work today)
