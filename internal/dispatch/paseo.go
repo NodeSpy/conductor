@@ -194,6 +194,9 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		ref.Output = string(out)
 		if err == nil {
 			ref.AgentID = parseAgentID(out)
+			if verr := d.verifyWorktree(ctx, req, &ref); verr != nil {
+				return ref, verr
+			}
 			return ref, nil
 		}
 		detail = paseoErrDetail(out, stderr.Bytes())
@@ -306,6 +309,60 @@ func effectiveStrategy(req Request) string {
 	default:
 		return "none" // no repo/PR context (e.g. cron): run in the base workspace
 	}
+}
+
+// requestedWorktree reports whether the dispatch asked paseo to create an isolated
+// worktree (checkout-pr / branch-off), so a fresh PR/branch checkout is expected.
+func requestedWorktree(req Request) bool {
+	s := effectiveStrategy(req)
+	return s == "checkout-pr" || s == "branch-off"
+}
+
+// verifyWorktree guards against a silent checkout failure: paseo can return a
+// launched agent even when `--worktree-mode checkout-pr` couldn't create the
+// worktree (e.g. a flaky-network git fetch), falling the agent back to the base/
+// home workspace — so an interactive review hand-off (or a fix agent) ends up with
+// no PR checked out. We detect it by the agent's cwd landing in $HOME (the scratch
+// fallback; the `Worktree` inspect field is unreliable — null even for real worktree
+// agents). On detection we archive the broken agent and return an error, so the
+// engine escalates and re-derives the work (sweep/backoff) once the network is
+// healthy, rather than silently handing off a checkout-less agent.
+//
+// Only background dispatches are checked: a foreground workflow step (checkout:none)
+// needs no worktree, and inspecting it after it has run to completion is unreliable.
+func (d *Dispatcher) verifyWorktree(ctx context.Context, req Request, ref *RunRef) error {
+	if req.Wait || ref.AgentID == "" || !requestedWorktree(req) {
+		return nil
+	}
+	if !d.agentInHome(ctx, ref.AgentID) {
+		return nil // landed in a worktree (cwd isn't the home fallback)
+	}
+	id := ref.AgentID
+	_ = exec.CommandContext(ctx, d.PaseoBin, "archive", id).Run()
+	ref.AgentID = ""
+	return fmt.Errorf("%s checkout produced no worktree — agent %s fell back to the base workspace (checkout likely failed; archived it)",
+		effectiveStrategy(req), id)
+}
+
+// agentInHome reports whether an agent's cwd is the home/scratch fallback (i.e. it
+// did not get an isolated worktree). Returns false when it can't tell, so a flaky
+// inspect never wrongly fails a good dispatch.
+func (d *Dispatcher) agentInHome(ctx context.Context, id string) bool {
+	out, err := exec.CommandContext(ctx, d.PaseoBin, "inspect", id, "--json").Output()
+	if err != nil {
+		return false
+	}
+	var m struct {
+		Cwd string `json:"Cwd"`
+	}
+	if json.Unmarshal(out, &m) != nil || m.Cwd == "" {
+		return false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	return normCwd(m.Cwd) == normCwd(home)
 }
 
 // checkoutArgs maps an action's checkout strategy to paseo worktree flags.
