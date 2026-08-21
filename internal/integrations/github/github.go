@@ -237,12 +237,50 @@ var knownKinds = map[string]bool{
 // resolve returns the effective rule (reviewer/assignee/actions merged over
 // defaults) for a repo, or ok=false if no rule matches.
 func (g *Integration) resolve(repo string) (Rule, bool) {
-	for _, r := range g.cfg.Rules {
-		if matchRepo(r.Match.Repos, repo) {
-			return g.merge(r), true
+	// MOST-SPECIFIC match wins (not first-listed), so rule order doesn't matter:
+	// an exact "EdnitionCode/RosterStream" beats "EdnitionCode/*" beats "*/*".
+	// Ties (equally-specific matches) keep the earliest rule for determinism.
+	bestIdx, bestScore := -1, -1
+	for i, r := range g.cfg.Rules {
+		score := ruleSpecificity(r.Match.Repos, repo)
+		if score > bestScore {
+			bestScore, bestIdx = score, i
 		}
 	}
-	return Rule{}, false
+	if bestIdx < 0 {
+		return Rule{}, false
+	}
+	return g.merge(g.cfg.Rules[bestIdx]), true
+}
+
+// ruleSpecificity returns the highest match specificity of any repo pattern in
+// the rule that matches repo, or -1 if none match.
+func ruleSpecificity(patterns []string, repo string) int {
+	best := -1
+	for _, p := range patterns {
+		if p != repo {
+			if ok, _ := path.Match(p, repo); !ok {
+				continue
+			}
+		}
+		if s := patternSpecificity(p); s > best {
+			best = s
+		}
+	}
+	return best
+}
+
+// patternSpecificity scores a repo glob: an exact (wildcard-free) pattern beats
+// any wildcard pattern; among wildcard patterns, more literal (non-glob) chars
+// wins, so "EdnitionCode/*" (13 literal) outranks "*/*" (1). Kept simple: `*`,
+// `?`, and `[` are treated as glob metacharacters.
+func patternSpecificity(p string) int {
+	glob := strings.Count(p, "*") + strings.Count(p, "?") + strings.Count(p, "[")
+	literal := len(p) - glob
+	if glob == 0 {
+		return 100000 + literal // exact match dominates any wildcard
+	}
+	return literal
 }
 
 // merge overlays a rule onto the instance defaults.

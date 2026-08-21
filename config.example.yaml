@@ -175,7 +175,8 @@ integrations:
           command: ["gh", "pr", "merge", "{{.repo}}#{{.pr}}", "--squash"]
           env: { GH_TOKEN: "{{.gh_token}}" }
 
-    # RULES: primary structure. FIRST rule whose `match` applies wins; it merges
+    # RULES: primary structure. MOST-SPECIFIC matching rule wins (order-independent):
+    # exact owner/repo > owner/* > */*; ties keep the earlier rule. The winner merges
     # over `defaults`. `match` selects repos by glob (e.g. owner/*, */*).
     rules:
       - match: { repos: ["your-org/*"] }

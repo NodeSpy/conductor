@@ -26,7 +26,7 @@ func TestMatchRepo(t *testing.T) {
 	}
 }
 
-func TestResolveFirstMatchWinsAndMerge(t *testing.T) {
+func TestResolveMostSpecificWinsAndMerge(t *testing.T) {
 	cfg := Config{
 		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
 		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
@@ -67,6 +67,37 @@ func TestResolveFirstMatchWinsAndMerge(t *testing.T) {
 	// Unmatched repo.
 	if _, ok := g.resolve("nope/repo"); ok {
 		t.Fatal("unmatched repo should not resolve")
+	}
+}
+
+// TestResolveMostSpecificIgnoresOrder pins the key property: the most-specific
+// matching rule wins regardless of config order. Here the general "EdnitionCode/*"
+// rule is listed BEFORE the specific "EdnitionCode/RosterStream" rule; RosterStream
+// must still resolve to the specific one (under the old first-match-wins it would
+// have wrongly picked the general rule).
+func TestResolveMostSpecificIgnoresOrder(t *testing.T) {
+	cfg := Config{
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		Rules: []Rule{
+			{Match: Match{Repos: []string{"EdnitionCode/*"}}, // general FIRST
+				Actions: map[string]config.Action{"new_comment": {Type: "agent", Agent: "general"}}},
+			{Match: Match{Repos: []string{"EdnitionCode/RosterStream"}}, // specific SECOND
+				Actions: map[string]config.Action{"new_comment": {Type: "agent", Agent: "specific"}}},
+			{Match: Match{Repos: []string{"*/*"}}, // catch-all, least specific
+				Actions: map[string]config.Action{"new_comment": {Type: "agent", Agent: "catchall"}}},
+		},
+	}
+	g := newTestIntegration(t, cfg)
+
+	if r, _ := g.resolve("EdnitionCode/RosterStream"); r.Actions["new_comment"].Agent != "specific" {
+		t.Fatalf("exact match should win over org-wildcard, got %q", r.Actions["new_comment"].Agent)
+	}
+	if r, _ := g.resolve("EdnitionCode/infra"); r.Actions["new_comment"].Agent != "general" {
+		t.Fatalf("org-wildcard should win over */*, got %q", r.Actions["new_comment"].Agent)
+	}
+	if r, _ := g.resolve("other/repo"); r.Actions["new_comment"].Agent != "catchall" {
+		t.Fatalf("*/* should match everything else, got %q", r.Actions["new_comment"].Agent)
 	}
 }
 
