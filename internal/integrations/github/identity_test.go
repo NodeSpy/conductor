@@ -67,7 +67,7 @@ func TestIdentityFallsBackToReviewer(t *testing.T) {
 }
 
 func TestActionLevelActors(t *testing.T) {
-	// reviewer lives on review_requested; assignee on issue_assigned. No rule-level actors.
+	// reviewer lives on review_requested; assignee on issue_matched. No rule-level actors.
 	cfg := Config{
 		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
 		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
@@ -76,7 +76,7 @@ func TestActionLevelActors(t *testing.T) {
 			Actions: as1(map[string]config.Action{
 				"review_requested": {Type: "command", Command: []string{"critique"},
 					Reviewer: config.Actors{Logins: []string{"me"}}},
-				"issue_assigned": {Type: "agent", Agent: "fixer",
+				"issue_matched": {Type: "agent", Agent: "fixer",
 					Assignee: config.Actors{Logins: []string{"me"}}},
 			}),
 		}},
@@ -96,12 +96,12 @@ func TestActionLevelActors(t *testing.T) {
 
 	ia := func(login string) string {
 		return `{"action":"assigned","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
-			"issue":{"number":9},"assignee":{"login":"` + login + `"}}`
+			"issue":{"number":9,"assignees":[{"login":"` + login + `"}]}}`
 	}
-	if k := do(t, g, "issues", ia("me")); !has(k, "issue_assigned") {
+	if k := do(t, g, "issues", ia("me")); !has(k, "issue_matched") {
 		t.Fatalf("action-level assignee should match, got %v", k)
 	}
-	if k := do(t, g, "issues", ia("other")); has(k, "issue_assigned") {
+	if k := do(t, g, "issues", ia("other")); has(k, "issue_matched") {
 		t.Fatalf("non-matching assignee should not fire, got %v", k)
 	}
 }
@@ -116,7 +116,7 @@ func TestActorsDefaultToMe(t *testing.T) {
 			Me:    config.Actors{Logins: []string{"me"}},
 			Actions: as1(map[string]config.Action{
 				"review_requested": {Type: "command", Command: []string{"critique"}},
-				"issue_assigned":   {Type: "agent", Agent: "fixer"},
+				"issue_matched":    {Type: "agent", Agent: "fixer"},
 			}),
 		}},
 	}
@@ -135,13 +135,13 @@ func TestActorsDefaultToMe(t *testing.T) {
 
 	ia := func(login string) string {
 		return `{"action":"assigned","repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
-			"issue":{"number":9},"assignee":{"login":"` + login + `"}}`
+			"issue":{"number":9,"assignees":[{"login":"` + login + `"}]}}`
 	}
-	if k := do(t, g, "issues", ia("me")); !has(k, "issue_assigned") {
-		t.Fatalf("issue_assigned should default to matching you, got %v", k)
+	if k := do(t, g, "issues", ia("me")); !has(k, "issue_matched") {
+		t.Fatalf("issue_matched should default to matching you, got %v", k)
 	}
-	if k := do(t, g, "issues", ia("someone")); has(k, "issue_assigned") {
-		t.Fatalf("issue_assigned should not fire for someone else, got %v", k)
+	if k := do(t, g, "issues", ia("someone")); has(k, "issue_matched") {
+		t.Fatalf("issue_matched should not fire for someone else, got %v", k)
 	}
 }
 

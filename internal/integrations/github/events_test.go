@@ -41,7 +41,7 @@ func baseConfig() Config {
 			Actions: as1(map[string]config.Action{
 				"changes_requested": {Type: "agent", Agent: "fixer"},
 				"new_comment":       {Type: "agent", Agent: "fixer"},
-				"issue_assigned":    {Type: "agent", Agent: "fixer", Checkout: "branch-off"},
+				"issue_matched":     {Type: "agent", Agent: "fixer", Checkout: "branch-off"},
 			}),
 		}},
 	}
@@ -195,23 +195,24 @@ func TestRepoNotMatchedNoTrigger(t *testing.T) {
 	}
 }
 
-func TestIssueAssignedMatch(t *testing.T) {
-	g := newTestIntegration(t, baseConfig())
+func TestIssueMatchedOnAssign(t *testing.T) {
+	g := newTestIntegration(t, baseConfig()) // issue_matched, no filters → me-assignee gate only
+	// Assigned to me (issue.assignees carries the current set) → fires.
 	body := []byte(`{
 		"action":"assigned",
 		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
-		"issue":{"number":42},
+		"issue":{"number":42,"assignees":[{"login":"me"}]},
 		"assignee":{"login":"me"}
 	}`)
 	trs := g.triggersFor(context.Background(), "issues", body)
-	if len(trs) != 1 || trs[0].Kind != "issue_assigned" || trs[0].Target.Issue != 42 {
-		t.Fatalf("want issue_assigned for #42, got %+v", trs)
+	if len(trs) != 1 || trs[0].Kind != "issue_matched" || trs[0].Target.Issue != 42 {
+		t.Fatalf("want issue_matched for #42, got %+v", trs)
 	}
-	// Assigned to someone else → no trigger.
+	// Assigned to someone else → no trigger (me-assignee gate).
 	body2 := []byte(`{
 		"action":"assigned",
 		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
-		"issue":{"number":42},
+		"issue":{"number":42,"assignees":[{"login":"stranger"}]},
 		"assignee":{"login":"stranger"}
 	}`)
 	if trs := g.triggersFor(context.Background(), "issues", body2); len(trs) != 0 {

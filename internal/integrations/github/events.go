@@ -398,8 +398,11 @@ func threadPR(p ghPayload) int {
 	return 0
 }
 
-// projectTriggers handles Projects v2 item moves (e.g. Status → "Ready"). The
-// webhook is thin, so it resolves the issue + field value via GraphQL.
+// projectTriggers re-evaluates issue_matched when a Projects v2 field changes.
+// The webhook only carries the item node id, so it resolves the issue's repo +
+// number, then fetches the issue's full state (labels/assignees/author/title +
+// gate facts) so the same matcher used for `issues` events applies here too —
+// this is what lets an issue that becomes matching via a board move fire.
 func (g *Integration) projectTriggers(ctx context.Context, p ghPayload) []core.Trigger {
 	if p.Action != "edited" || p.ProjectsV2Item == nil || p.Installation.ID == 0 || g.rest == nil {
 		return nil
@@ -412,38 +415,22 @@ func (g *Integration) projectTriggers(ctx context.Context, p ghPayload) []core.T
 		return nil
 	}
 	repo := item.Repo
-	if len(g.actionsFor(repo, "issue_project_moved")) == 0 {
+	if len(g.actionsFor(repo, "issue_matched")) == 0 {
 		return nil
 	}
-	if !g.assignedToSelf(repo, item.Assignees) {
-		return nil // only start work on issues assigned to you
+	owner, name := splitRepo(repo)
+	facts, err := g.rest.issueEnrich(ctx, p.Installation.ID, owner, name, item.Number)
+	if err != nil {
+		return nil // fail closed — no issue state to match on
 	}
+	st := issueMatchState{title: facts.Title, author: facts.Author, labels: facts.Labels, assignees: facts.Assignees}
 	t := g.target(repo, item.Number, "", "", "")
 	t.PR = 0
 	t.Issue = item.Number
-	// Each variant may watch a different field/value; cache field lookups (Status
-	// is already fetched) so multiple variants don't re-query the same field.
-	fieldVal := map[string]string{"Status": item.Value}
-	return g.emit(repo, "issue_project_moved", t,
-		fmt.Sprintf("issue %s#%d project field changed", repo, item.Number),
-		fmt.Sprintf("project@%d", item.Number), nil, func(act config.Action) bool {
-			field, want := "Status", "Ready"
-			if act.Project != nil {
-				if f, ok := act.Project["field"].(string); ok && f != "" {
-					field = f
-				}
-				if to, ok := act.Project["to"].(string); ok && to != "" {
-					want = to
-				}
-			}
-			v, ok := fieldVal[field]
-			if !ok {
-				if it2, err := g.rest.projectItem(ctx, p.Installation.ID, p.ProjectsV2Item.NodeID, field); err == nil {
-					v = it2.Value
-					fieldVal[field] = v
-				}
-			}
-			return strings.EqualFold(v, want)
+	return g.emit(repo, "issue_matched", t,
+		fmt.Sprintf("issue %s#%d matched your criteria", repo, item.Number),
+		fmt.Sprintf("issuematch@%d", item.Number), nil, func(act config.Action) bool {
+			return g.cheapMatch(repo, act, st) && (len(act.Gates) == 0 || issueGatePasses(facts, act.Gates))
 		})
 }
 
@@ -481,66 +468,89 @@ func (g *Integration) issueTriggers(ctx context.Context, repo string, p ghPayloa
 	t.PR = 0
 	t.Issue = p.Issue.Number
 
-	var trs []core.Trigger
-	// issue_assigned: the simple assignee-only trigger, on the assign event.
-	if p.Action == "assigned" && p.Assignee != nil && g.assigneeMatches(repo, p.Assignee.Login) {
-		trs = append(trs, g.single(repo, "issue_assigned", t,
-			fmt.Sprintf("issue %s#%d assigned to you", repo, p.Issue.Number),
-			"assigned:"+p.Assignee.Login+"@"+itoa(p.Issue.Number), nil)...)
-	}
 	// issue_matched: state-based match, re-evaluated on any change that could flip it.
 	switch p.Action {
 	case "opened", "edited", "labeled", "unlabeled", "assigned", "unassigned", "reopened":
-		trs = append(trs, g.emit(repo, "issue_matched", t,
+		labels := make([]string, 0, len(p.Issue.Labels))
+		for _, l := range p.Issue.Labels {
+			labels = append(labels, l.Name)
+		}
+		assignees := make([]string, 0, len(p.Issue.Assignees))
+		for _, a := range p.Issue.Assignees {
+			assignees = append(assignees, a.Login)
+		}
+		st := issueMatchState{title: p.Issue.Title, author: p.Issue.User.Login, labels: labels, assignees: assignees}
+		return g.emit(repo, "issue_matched", t,
 			fmt.Sprintf("issue %s#%d matched your criteria", repo, p.Issue.Number),
 			fmt.Sprintf("issuematch@%d", p.Issue.Number), nil, func(act config.Action) bool {
-				return g.issueMatches(ctx, repo, p, act)
-			})...)
+				// Cheap payload match first; enrich for gates only if those pass.
+				if !g.cheapMatch(repo, act, st) {
+					return false
+				}
+				return g.gatesPass(ctx, p.Installation.ID, p.Repository.Owner.Login, p.Repository.Name, p.Issue.Number, act)
+			})
 	}
-	return trs
+	return nil
 }
 
-// issueMatches evaluates one issue_matched variant against the issue's CURRENT
-// state: cheap payload filters first, then (only if configured and those passed)
-// the GraphQL-backed gates. Fail-closed on enrichment errors.
-func (g *Integration) issueMatches(ctx context.Context, repo string, p ghPayload, act config.Action) bool {
-	iss := p.Issue
-	labels := make([]string, 0, len(iss.Labels))
-	for _, l := range iss.Labels {
-		labels = append(labels, l.Name)
-	}
-	assignees := make([]string, 0, len(iss.Assignees))
-	for _, a := range iss.Assignees {
-		assignees = append(assignees, a.Login)
-	}
-	if !g.anySelf(assignees) {
-		return false // me-assignee gate: only issues assigned to you
-	}
-	if act.SoleAssignee && !g.soleSelf(assignees) {
+// issueMatchState is an issue's current state for matching — sourced from a webhook
+// payload (issues events) or from issueEnrich (projects_v2_item events).
+type issueMatchState struct {
+	title, author     string
+	labels, assignees []string
+}
+
+// cheapMatch evaluates one issue_matched variant's payload filters (no API):
+// assignee (default: assigned to you), sole-assignee, labels any/all, none-of +
+// title exclude, and author allowlist.
+func (g *Integration) cheapMatch(repo string, act config.Action, st issueMatchState) bool {
+	if !g.issueAssigneeMatch(repo, act, st.assignees) {
 		return false
 	}
-	if len(act.LabelsAny) > 0 && !anyFold(labels, act.LabelsAny) {
+	if act.SoleAssignee && !g.soleSelf(st.assignees) {
 		return false
 	}
-	if len(act.LabelsAll) > 0 && !allFold(labels, act.LabelsAll) {
+	if len(act.LabelsAny) > 0 && !anyFold(st.labels, act.LabelsAny) {
 		return false
 	}
-	if act.Exclude.Matches("", iss.Title, labels) { // none-of + title exclude
+	if len(act.LabelsAll) > 0 && !allFold(st.labels, act.LabelsAll) {
 		return false
 	}
-	if len(act.Authors) > 0 && !containsFold(act.Authors, iss.User.Login) {
+	if act.Exclude.Matches("", st.title, st.labels) { // none-of + title exclude
 		return false
 	}
-	if len(act.Gates) > 0 {
-		if g.rest == nil || p.Installation.ID == 0 {
-			return false // gates need enrichment — fail closed
-		}
-		facts, err := g.rest.issueEnrich(ctx, p.Installation.ID, p.Repository.Owner.Login, p.Repository.Name, iss.Number)
-		if err != nil || !issueGatePasses(facts, act.Gates) {
-			return false
-		}
+	if len(act.Authors) > 0 && !containsFold(act.Authors, st.author) {
+		return false
 	}
 	return true
+}
+
+// gatesPass runs the GraphQL-backed gates (no_branch, project) if any are set;
+// fail-closed on a missing client or fetch error. No gates → true (no API call).
+func (g *Integration) gatesPass(ctx context.Context, instID int64, owner, name string, num int, act config.Action) bool {
+	if len(act.Gates) == 0 {
+		return true
+	}
+	if g.rest == nil || instID == 0 {
+		return false
+	}
+	facts, err := g.rest.issueEnrich(ctx, instID, owner, name, num)
+	return err == nil && issueGatePasses(facts, act.Gates)
+}
+
+// issueAssigneeMatch reports whether the issue's assignees satisfy the variant's
+// `assignee` filter — defaulting to "assigned to the me identity" when unset.
+func (g *Integration) issueAssigneeMatch(repo string, act config.Action, assignees []string) bool {
+	asg := act.Assignee
+	if len(asg.Logins) == 0 && len(asg.Teams) == 0 {
+		return g.anySelf(assignees)
+	}
+	for _, l := range assignees {
+		if asg.HasLogin(l) {
+			return true
+		}
+	}
+	return false
 }
 
 // anySelf reports whether any login is a `me` identity.
@@ -675,31 +685,6 @@ func (g *Integration) reviewerRequestedMatches(repo string, act config.Action, p
 	return g.reviewerInList(g.reviewerFor(repo, act), logins, slugs)
 }
 
-// assignedToSelf reports whether any of the issue's assignee logins matches the
-// configured assignee (defaulting to the `me` identity). Gates issue_assigned/
-// issue_matched/issue_project_moved so we only start work on issues assigned to you.
-func (g *Integration) assignedToSelf(repo string, logins []string) bool {
-	for _, l := range logins {
-		if g.assigneeMatches(repo, l) {
-			return true
-		}
-	}
-	return false
-}
-
-func (g *Integration) assigneeMatches(repo, login string) bool {
-	r, ok := g.resolve(repo)
-	if !ok {
-		return false
-	}
-	a, _ := g.actionFor(repo, "issue_assigned")
-	asg := actorsOr(a.Assignee, r.Assignee) // action-level, rule fallback
-	if len(asg.Logins) == 0 && len(asg.Teams) == 0 {
-		return g.self[strings.ToLower(login)] // unset → default to "you"
-	}
-	return asg.HasLogin(login)
-}
-
 // draftGate reports whether a variant's opt-in `not_draft` gate should suppress it
 // because the PR is still a draft (off unless configured).
 func draftGate(act config.Action, isDraft bool) bool {
@@ -816,5 +801,3 @@ func containsFold(list []string, s string) bool {
 	}
 	return false
 }
-
-func itoa(n int) string { return fmt.Sprintf("%d", n) }

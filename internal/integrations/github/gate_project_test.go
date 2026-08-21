@@ -126,33 +126,51 @@ func projectConfig() Config {
 			Match: Match{Repos: []string{"acme/*"}},
 			Me:    config.Actors{Logins: []string{"me"}}, // only start work on issues assigned to you
 			Actions: as1(map[string]config.Action{
-				"issue_project_moved": {Type: "agent", Agent: "fixer", Checkout: "branch-off",
-					Project: map[string]any{"field": "Status", "to": "Ready"}},
+				"issue_matched": {Type: "agent", Agent: "fixer", Checkout: "branch-off",
+					Gates: map[string]any{"project": map[string]any{"Status": "Ready"}}},
 			}),
 		}},
 	}
 }
 
-func TestIssueProjectMoved(t *testing.T) {
-	ready := `{"data":{"node":{"content":{"number":42,"title":"Do it","repository":{"nameWithOwner":"acme/w"},"assignees":{"nodes":[{"login":"me"}]}},"fieldValueByName":{"name":"Ready"}}}}`
+// projectResp builds a combined GraphQL response that satisfies both the
+// projectItem lookup (data.node.content → repo+number) and the issueEnrich
+// fetch (data.repository.issue → facts + project field values) that a
+// projects_v2_item → issue_matched flow issues back-to-back.
+func projectResp(assignee, status string) string {
+	return `{"data":{
+		"node":{"content":{"number":42,"repository":{"nameWithOwner":"acme/w"}}},
+		"repository":{"issue":{
+			"title":"Do it","author":{"login":"boss"},
+			"labels":{"nodes":[]},
+			"assignees":{"nodes":[{"login":"` + assignee + `"}]},
+			"linkedBranches":{"totalCount":0},
+			"closedByPullRequestsReferences":{"totalCount":0},
+			"projectItems":{"nodes":[{"fieldValues":{"nodes":[
+				{"name":"` + status + `","field":{"name":"Status"}}
+			]}}]}
+		}}
+	}}`
+}
+
+func TestIssueMatchedOnProjectMove(t *testing.T) {
 	g := newTestIntegration(t, projectConfig())
-	g.app = graphqlStub(t, ready)
+	g.app = graphqlStub(t, projectResp("me", "Ready"))
 	g.rest = newRESTClient(g.app)
 
 	body := `{"action":"edited","installation":{"id":42},
 		"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
 		"projects_v2_item":{"node_id":"PVTI_x","content_type":"Issue"}}`
 	trs := g.triggersFor(context.Background(), "projects_v2_item", []byte(body))
-	if len(trs) != 1 || trs[0].Kind != "issue_project_moved" || trs[0].Target.Issue != 42 {
-		t.Fatalf("expected issue_project_moved for #42, got %+v", trs)
+	if len(trs) != 1 || trs[0].Kind != "issue_matched" || trs[0].Target.Issue != 42 {
+		t.Fatalf("expected issue_matched for #42, got %+v", trs)
 	}
 }
 
-func TestIssueProjectMovedNotMine(t *testing.T) {
-	// Moved to Ready but assigned to someone else → no trigger (assignee gate).
-	ready := `{"data":{"node":{"content":{"number":42,"title":"Do it","repository":{"nameWithOwner":"acme/w"},"assignees":{"nodes":[{"login":"teammate"}]}},"fieldValueByName":{"name":"Ready"}}}}`
+func TestIssueMatchedProjectNotMine(t *testing.T) {
+	// Moved to Ready but assigned to someone else → no trigger (me-assignee gate).
 	g := newTestIntegration(t, projectConfig())
-	g.app = graphqlStub(t, ready)
+	g.app = graphqlStub(t, projectResp("teammate", "Ready"))
 	g.rest = newRESTClient(g.app)
 	body := `{"action":"edited","installation":{"id":42},
 		"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
@@ -162,10 +180,9 @@ func TestIssueProjectMovedNotMine(t *testing.T) {
 	}
 }
 
-func TestIssueProjectMovedWrongStatus(t *testing.T) {
-	backlog := `{"data":{"node":{"content":{"number":42,"title":"x","repository":{"nameWithOwner":"acme/w"}},"fieldValueByName":{"name":"Backlog"}}}}`
+func TestIssueMatchedProjectWrongStatus(t *testing.T) {
 	g := newTestIntegration(t, projectConfig())
-	g.app = graphqlStub(t, backlog)
+	g.app = graphqlStub(t, projectResp("me", "Backlog"))
 	g.rest = newRESTClient(g.app)
 	body := `{"action":"edited","installation":{"id":42},
 		"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},

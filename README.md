@@ -58,9 +58,12 @@ Every kind below is a configurable `action` (see [Configuration](#configuration)
 
 | Kind | Trigger | Action |
 | --- | --- | --- |
-| `issue_assigned` | an issue is assigned to you | agent: start work on a fresh branch |
-| `issue_matched` | an issue **assigned to you** matches your filters (labels/author/gates) — re-evaluated on any change | agent: start work on a fresh branch |
-| `issue_project_moved` | an issue **assigned to you** moves to a Projects v2 status → "Ready" | agent: start work on a fresh branch |
+| `issue_matched` | an issue **assigned to you** matches your filters (labels/author/assignees/gates) — re-evaluated on any issue change *or* Projects v2 move | agent: start work on a fresh branch |
+
+`issue_matched` is the one issue trigger: it fires on `issues` events (opened/edited/labeled/assigned/…)
+and on `projects_v2_item` moves, re-checking the issue's *current* state each time — so a plain
+assignment, a label change, or a drag to a "Ready" column all funnel through the same matcher. With no
+filters it's just "assigned to me"; add `labels_all`/`authors`/`sole_assignee`/`gates` to narrow it.
 
 Plus scheduled jobs via the [cron integration](#scheduled-jobs-cron-integration). Each kind is a
 configurable action — enable, disable, and tune it per repo in [config](#configuration).
@@ -68,8 +71,9 @@ configurable action — enable, disable, and tune it per repo in [config](#confi
 ## Reacting to issues
 
 Issue triggers are configured like any other kind — under a github rule's `actions`.
-`issue_assigned` matches when the assignee is **you** (`me`) by default; set the action's own
-`assignee: { logins: [...] }` only to override. The App must subscribe to the `issues` event.
+`issue_matched` matches when the assignee is **you** (`me`) by default; set the action's own
+`assignee: { logins: [...] }` only to override. Subscribe the App to the `issues` event (assign/label/
+edit changes) and, if you match on board columns, `projects_v2_item` (Projects v2 moves).
 
 ```yaml
 integrations:
@@ -84,16 +88,11 @@ integrations:
     defaults:
       me: { logins: [octocat] }          # your GitHub login(s) — also the default assignee/reviewer
       actions:
-        issue_assigned:                    # an issue is assigned to you (defaults to matching `me`)
-          type: agent
-          agent: fixer
-          checkout: branch-off             # start on a fresh branch (no PR yet)
-          prompt: "Issue {{.repo}}#{{.issue}} was assigned to you — implement it and open a draft PR."
         issue_matched:                       # STATE-BASED: fires when an issue assigned to you
           type: agent                        #   matches these filters — re-evaluated on any issue
-          agent: fixer                       #   change (labeled/assigned/edited/…), once per issue.
-          checkout: branch-off
-          labels_all: ["Ready", "backend"]   # require ALL of these labels (labels_any = ANY)
+          agent: fixer                       #   change (labeled/assigned/edited/…) or Projects v2 move,
+          checkout: branch-off               #   once per issue. With no filters below it's just
+          labels_all: ["Ready", "backend"]   #   "assigned to me". require ALL of these labels
           exclude: { labels: ["blocked"] }   # ...and NONE of these (also exclude.title)
           authors: [octocat]                 # ...opened by one of these (optional)
           sole_assignee: true                # ...and you're the only assignee (optional)
@@ -110,8 +109,7 @@ agents:
 `issue_matched` can be a **list** of named variants (different labels → different agents); see
 [Named action variants](#named-action-variants). For a smarter single flow — assess the issue, then
 implement it *or* ask the reporter for more detail — make it a
-[multi-step workflow](#multi-step-workflows). (`issue_assigned` vs `issue_matched`: use one — the
-former is a plain assign trigger, the latter a rich state match.)
+[multi-step workflow](#multi-step-workflows).
 
 ## Multi-step workflows
 
@@ -413,15 +411,12 @@ integrations:
           checkout: none
           command: ["critique", "--review", "{{.repo}}#{{.pr}}"]
           env: { CRITIQUE_GITHUB_TOKEN: "{{.app_token}}", CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}" }
-        issue_assigned:                                   # issue assigned to you
-          type: agent
-          agent: fixer
-          # assignee defaults to `me`; set it here only to override
-          checkout: branch-off                            # start work on a fresh branch (no PR yet)
-          prompt: "Issue {{.repo}}#{{.issue}} assigned to you — start work; open a draft PR."
-        issue_matched:                                      # issue labeled "Ready"
+        issue_matched:                                      # issue assigned to you + labeled "Ready"
+          # Fires on `issues` changes AND `projects_v2_item` moves; assignee defaults to `me`.
           # A MULTI-STEP workflow: plan cheaply, then branch on the result.
-          labels_any: ["Ready"]                           # gate: only "Ready"-labeled issues
+          labels_any: ["Ready"]                           # payload filter: only "Ready"-labeled issues
+          gates:                                          # optional GraphQL gate — e.g. a board column:
+            project: { Status: Ready }                    #   Projects v2 Status field must be "Ready"
           steps:
             - id: evaluate                                # cheap model assesses the issue
               type: agent
@@ -446,13 +441,6 @@ integrations:
               backend: local
               command: ["gh", "issue", "comment", "{{.repo}}#{{.issue}}", "--body", "Please add repro steps and scope."]
               env: { GH_TOKEN: "{{.gh_token}}" }
-        issue_project_moved:                              # Projects v2 Status field → "Ready"
-          type: agent
-          agent: fixer
-          enabled: false
-          checkout: branch-off
-          project: { field: Status, to: Ready }           # one GraphQL lookup per event
-          prompt: "Issue moved to Ready in the project — start work."
         merge_ready:                                      # auto-merge when fully green
           type: command
           backend: local
@@ -566,7 +554,7 @@ names are lowercased. Both only affect checkout, not forge operations. A rule's 
 **`me`** (rule/`defaults` level) is your GitHub login(s) — it defines "you" for ignoring your own
 comments, detecting your own PRs (`self_review`), and picking your authored PRs during sweep. The
 gating actors live on their checks: **`reviewer`** on `review_requested`, **`assignee`** on
-`issue_assigned` — but both **default to `me`**, so you usually don't set them; specify one only to
+`issue_matched` — but both **default to `me`**, so you usually don't set them; specify one only to
 broaden (e.g. a team, or a different login). (Rule-level `reviewer`/`assignee` still work as a
 fallback ahead of the `me` default.) `sweep.repos` accepts concrete `owner/name` or an **owner glob** (`owner/*`,
 `owner/svc-*`) — a glob is expanded to the repos the App installation can access (so an owner

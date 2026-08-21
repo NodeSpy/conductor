@@ -357,10 +357,15 @@ func (c *restClient) projectItem(ctx context.Context, instID int64, itemNodeID, 
 		Title: n.Content.Title, Value: n.FieldValueByName.Name, Assignees: assignees}, nil
 }
 
-// issueFacts is the enrichment issue_matched gates need: whether the issue has a
-// linked dev branch or a closing PR, and its Projects v2 field values (field name
-// → value, both lower-cased for case-insensitive comparison).
+// issueFacts is the full state of an issue for matching: the payload fields (so a
+// projects_v2_item event, which carries no issue body, can still be matched) plus
+// the gate enrichment — linked dev branch / closing PR presence and Projects v2
+// field values (field name → value, lower-cased for case-insensitive comparison).
 type issueFacts struct {
+	Title     string
+	Author    string
+	Labels    []string
+	Assignees []string
 	HasBranch bool
 	HasPR     bool
 	Fields    map[string]string
@@ -370,6 +375,10 @@ type issueFacts struct {
 func (c *restClient) issueEnrich(ctx context.Context, instID int64, owner, name string, number int) (*issueFacts, error) {
 	const q = `query($owner:String!,$name:String!,$num:Int!){
 	  repository(owner:$owner,name:$name){ issue(number:$num){
+	    title
+	    author{ login }
+	    labels(first:50){ nodes{ name } }
+	    assignees(first:20){ nodes{ login } }
 	    linkedBranches(first:1){ totalCount }
 	    closedByPullRequestsReferences(first:1){ totalCount }
 	    projectItems(first:10){ nodes{ fieldValues(first:20){ nodes{
@@ -380,6 +389,20 @@ func (c *restClient) issueEnrich(ctx context.Context, instID int64, owner, name 
 	var data struct {
 		Repository struct {
 			Issue struct {
+				Title  string `json:"title"`
+				Author struct {
+					Login string `json:"login"`
+				} `json:"author"`
+				Labels struct {
+					Nodes []struct {
+						Name string `json:"name"`
+					} `json:"nodes"`
+				} `json:"labels"`
+				Assignees struct {
+					Nodes []struct {
+						Login string `json:"login"`
+					} `json:"nodes"`
+				} `json:"assignees"`
 				LinkedBranches struct {
 					TotalCount int `json:"totalCount"`
 				} `json:"linkedBranches"`
@@ -407,9 +430,17 @@ func (c *restClient) issueEnrich(ctx context.Context, instID int64, owner, name 
 	}
 	iss := data.Repository.Issue
 	f := &issueFacts{
+		Title:     iss.Title,
+		Author:    iss.Author.Login,
 		HasBranch: iss.LinkedBranches.TotalCount > 0,
 		HasPR:     iss.ClosedByPRs.TotalCount > 0,
 		Fields:    map[string]string{},
+	}
+	for _, l := range iss.Labels.Nodes {
+		f.Labels = append(f.Labels, l.Name)
+	}
+	for _, a := range iss.Assignees.Nodes {
+		f.Assignees = append(f.Assignees, a.Login)
 	}
 	for _, item := range iss.ProjectItems.Nodes {
 		for _, fv := range item.FieldValues.Nodes {

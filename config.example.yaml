@@ -121,25 +121,19 @@ integrations:
           env:
             CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"
             CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}"
-        # issues
-        issue_assigned:
-          type: agent
-          agent: fixer
-          # assignee defaults to `me`; set it here only to override
-          checkout: branch-off
-          prompt: |
-            Issue {{.repo}}#{{.issue}} was assigned to you. Start work: create a branch,
-            implement a fix, and open a draft PR.
-        # STATE-BASED: fires when an issue assigned to you matches the filters below,
-        # re-evaluated on ANY issue change (labeled/assigned/edited/…), once per issue.
+        # issues — ONE state-based trigger. Fires on `issues` changes (opened/edited/
+        # labeled/assigned/…) AND `projects_v2_item` moves, re-evaluating the issue's
+        # CURRENT state each time, once per issue. Assignee defaults to `me`; with no
+        # filters below it's simply "an issue assigned to you".
         # Payload filters: labels_any / labels_all / authors / sole_assignee / exclude
         # {labels,title}. Optional GraphQL gates (checked only if the payload matched):
-        #   gates: { no_branch: true, project: { Priority: [High, Urgent] } }
+        #   gates: { no_branch: true, project: { Status: Ready, Priority: [High, Urgent] } }
         # Can also be a LIST of named variants (different labels → different agents).
         # Here it's a MULTI-STEP workflow: plan cheaply, then branch on the result:
         #   1) evaluate for enough context  2) if enough -> implement  3) else -> ask
         issue_matched:
           labels_any: ["Ready"]         # only issues currently labeled "Ready"
+          # gates: { project: { Status: Ready } }   # or gate on a Projects v2 board column
           steps:
             - id: evaluate
               type: agent
@@ -171,14 +165,6 @@ integrations:
               command: ["gh", "issue", "comment", "{{.repo}}#{{.issue}}", "--body",
                         "Thanks for the issue! Could you add repro steps, expected behavior, and scope so it can be picked up?"]
               env: { GH_TOKEN: "{{.gh_token}}" }
-        # a Projects v2 Status field moving to "Ready" (one GraphQL lookup per event; set enabled: true)
-        issue_project_moved:
-          type: agent
-          agent: fixer
-          enabled: false
-          checkout: branch-off
-          project: { field: Status, to: Ready }
-          prompt: "Issue {{.repo}}#{{.issue}} moved to Ready in the project — start work."
         # auto-merge a PR once it's fully green (higher-stakes; set enabled: true to turn on)
         merge_ready:
           type: command
