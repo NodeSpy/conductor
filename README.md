@@ -278,6 +278,38 @@ integrations:
 Set it up as an **Internal Integration** in Sentry (Settings → Developer Settings), subscribe to the
 `issue`/`error` webhooks, and point the webhook URL at your `listen` address or a smee channel.
 
+## PagerDuty incidents (pagerduty integration)
+
+The `pagerduty` integration turns a page into an agent that starts triage against the affected repo.
+It consumes PagerDuty **V3 webhook subscriptions** over a direct `listen:` or a `smee_url:` channel, and
+verifies the `X-PagerDuty-Signature` HMAC (it accepts the multiple `v1=` signatures PagerDuty sends
+during secret rotation).
+
+`rules` route by `event_types` (`incident.triggered`, `incident.escalated`, …), `services` (summary or
+id), `urgencies` (`high`/`low`) and `priorities` (`P1`, …) — empty = match-any; the **first** matching
+rule names the repo to triage. The incident's `{{.pagerduty.title}}`, `{{.pagerduty.urgency}}`,
+`{{.pagerduty.priority}}`, `{{.pagerduty.service}}` and `{{.url}}` (the incident page) are available to
+the action. Dedup is per incident id + event type.
+
+```yaml
+integrations:
+  - type: pagerduty
+    name: oncall
+    smee_url: ${PAGERDUTY_SMEE_URL}    # and/or  listen: ":8097"
+    signing_secret: ${PAGERDUTY_SIGNING_SECRET}
+    rules:
+      - match: { event_types: [incident.triggered, incident.escalated], urgencies: [high], services: [RosterStream API] }
+        repo: EdnitionCode/RosterStream          # triaged + checked out
+        actions:
+          type: agent
+          agent: fixer
+          checkout: branch-off
+          prompt: "PagerDuty {{.pagerduty.title}} ({{.pagerduty.priority}}/{{.pagerduty.urgency}}) on {{.pagerduty.service}} — {{.url}}. Start triage in {{.repo}}: find the likely cause, propose a mitigation."
+```
+
+Create a **V3 webhook subscription** in PagerDuty (Integrations → Generic Webhooks) for the incident
+events you care about, and point it at your `listen` address or a smee channel.
+
 ## Upstream feeds (rss integration)
 
 The `rss` integration polls RSS/Atom feeds and turns new items into triggers — watch the Canvas API

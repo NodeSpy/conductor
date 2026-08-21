@@ -25,12 +25,13 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/notify"
 	"github.com/NodeSpy/paseo-conductor/internal/store"
 
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/cron"    // register "cron"
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/github"  // register "github"
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/rss"     // register "rss"
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/sentry"  // register "sentry"
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/slack"   // register "slack"
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/webhook" // register "webhook"
+	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/cron"      // register "cron"
+	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/github"    // register "github"
+	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/pagerduty" // register "pagerduty"
+	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/rss"       // register "rss"
+	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/sentry"    // register "sentry"
+	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/slack"     // register "slack"
+	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/webhook"   // register "webhook"
 )
 
 var version = "dev"

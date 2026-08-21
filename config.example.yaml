@@ -249,6 +249,22 @@ integrations:
           checkout: branch-off
           prompt: "Sentry {{.sentry.short_id}}: {{.sentry.title}} ({{.sentry.culprit}}). Root-cause in {{.repo}} — see {{.url}}."
 
+  # PagerDuty incidents → an agent starts triage. Consumes V3 webhook subscriptions;
+  # verifies the X-PagerDuty-Signature HMAC (accepts multiple v1= during rotation).
+  - type: pagerduty
+    name: oncall
+    # smee_url: ${PAGERDUTY_SMEE_URL}
+    listen: ":8097"
+    signing_secret: ${PAGERDUTY_SIGNING_SECRET}
+    rules:                             # first matching rule wins; empty filter = match-any
+      - match: { event_types: [incident.triggered, incident.escalated], urgencies: [high], services: [RosterStream API] }
+        repo: EdnitionCode/RosterStream          # triaged + checked out
+        actions:
+          type: agent
+          agent: fixer
+          checkout: branch-off
+          prompt: "PagerDuty {{.pagerduty.title}} ({{.pagerduty.priority}}/{{.pagerduty.urgency}}) on {{.pagerduty.service}} — {{.url}}. Start triage in {{.repo}}."
+
   # Poll RSS/Atom feeds; new items → an agent assesses impact. Stdlib parsing.
   # First poll seeds silently (no backlog flood); later polls emit new items only.
   - type: rss
