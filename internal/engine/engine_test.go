@@ -223,15 +223,15 @@ func TestHoldGuidanceForArchiveAgents(t *testing.T) {
 	e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
 	e.process(context.Background(), agentTrigger("changes_requested", "a/w", 40, "h", "s",
 		config.Action{Type: "agent", Agent: "reaped", Prompt: "fix"}))
-	if !strings.Contains(d.reqs[0].Action.Prompt, ".paseo-hold") {
-		t.Fatalf("archive_when_done agent should get hold guidance, got: %q", d.reqs[0].Action.Prompt)
+	if !strings.Contains(d.reqs[0].Action.Prompt, "AskUserQuestion") {
+		t.Fatalf("archive_when_done agent should get hold guidance (ask via interactive question), got: %q", d.reqs[0].Action.Prompt)
 	}
 
 	d2 := &fakeDispatcher{}
 	e2, _ := newEng(t, cfg, d2, &fakeNotifier{}, nil)
 	e2.process(context.Background(), agentTrigger("changes_requested", "a/w", 41, "h", "s",
 		config.Action{Type: "agent", Agent: "kept", Prompt: "fix"}))
-	if strings.Contains(d2.reqs[0].Action.Prompt, ".paseo-hold") {
+	if strings.Contains(d2.reqs[0].Action.Prompt, "AskUserQuestion") {
 		t.Fatal("non-archive agent should not get hold guidance")
 	}
 }
