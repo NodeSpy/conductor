@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
@@ -365,5 +366,22 @@ func TestBackendRouting(t *testing.T) {
 		Action:  config.Action{Type: "command", Backend: "paseo", Command: []string{"critique"}},
 	}); ref.Backend != "paseo" {
 		t.Fatalf("per-action backend override should win, got %q", ref.Backend)
+	}
+}
+
+func TestReaperMinAge(t *testing.T) {
+	if got := (&Reaper{}).minAge(); got != reaperGraceDefault {
+		t.Fatalf("default grace should be %v, got %v", reaperGraceDefault, got)
+	}
+	if got := (&Reaper{MinAge: 30 * time.Second}).minAge(); got != 30*time.Second {
+		t.Fatalf("MinAge override not honored, got %v", got)
+	}
+	// A just-created agent is inside the grace window; an old one is not.
+	r := &Reaper{}
+	if time.Since(time.Now()) >= r.minAge() {
+		t.Fatal("a fresh timestamp must be within the grace window")
+	}
+	if time.Since(time.Now().Add(-10*time.Minute)) < r.minAge() {
+		t.Fatal("a 10-min-old timestamp must be past the grace window")
 	}
 }

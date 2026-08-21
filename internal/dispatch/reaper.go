@@ -12,9 +12,15 @@ import (
 
 // Reaper archives conductor agents that requested archive-when-done once they
 // go idle. It polls the local daemon only (`paseo ls`) — no GitHub API.
+// reaperGraceDefault is the startup grace: an agent younger than this is never
+// reaped. A freshly launched agent reports "idle" before the model engages, so a
+// reaper tick landing in that window would kill it before it does any work.
+const reaperGraceDefault = 3 * time.Minute
+
 type Reaper struct {
 	PaseoBin string
 	Interval time.Duration
+	MinAge   time.Duration // don't reap agents younger than this (default reaperGraceDefault)
 	Log      func(string, ...any)
 
 	// held remembers agents that have entered a back-and-forth with the user (asked
@@ -105,17 +111,24 @@ func (r *Reaper) reap(ctx context.Context) {
 		for _, a := range idle {
 			// Once an agent has entered a back-and-forth with you (asked a question,
 			// pending permission, or a hold marker), it's yours to drive and close —
-			// the reaper leaves it AND its workspace alone for the rest of its life,
-			// even after you answer and the pending permission clears. Skip the
-			// inspect call once it's already held.
-			holdingNow := false
-			if !r.held[a.id] {
-				holdingNow = r.needsUser(ctx, a.id, a.cwd)
+			// the reaper leaves it AND its workspace alone for life. Already-held
+			// agents skip the inspect entirely.
+			if r.held[a.id] {
+				continue
 			}
-			if spared, first := r.markAndSpare(a.id, holdingNow); spared {
+			needsUser, created := r.idleState(ctx, a.id, a.cwd)
+			// Record an interaction first (keeps the sticky-hold correct even if the
+			// Q&A happened during the startup grace below).
+			if spared, first := r.markAndSpare(a.id, needsUser); spared {
 				if first && r.Log != nil {
 					r.Log("reaper: agent %s asked for you — keeping it + its workspace; archive it yourself when done", a.id)
 				}
+				continue
+			}
+			// Startup grace: never reap an agent still in its spin-up window (it
+			// launches "idle" before the model engages; a tick there would kill it
+			// before any work — see #4795, reaped 7s after launch with no usage).
+			if !created.IsZero() && time.Since(created) < r.minAge() {
 				continue
 			}
 			if wksID := worktrees[normCwd(a.cwd)]; wksID != "" {
@@ -205,24 +218,37 @@ func (r *Reaper) activeAgentCwds(ctx context.Context) []string {
 	return cwds
 }
 
-// needsUser reports whether an idle agent should be spared from reaping because
-// it's waiting on the user: either it created a hold marker in its worktree, or
-// it's blocked on a pending permission decision.
-func (r *Reaper) needsUser(ctx context.Context, id, cwd string) bool {
+// minAge is the startup grace, defaulting to reaperGraceDefault.
+func (r *Reaper) minAge() time.Duration {
+	if r.MinAge > 0 {
+		return r.MinAge
+	}
+	return reaperGraceDefault
+}
+
+// idleState inspects an idle agent once: whether it's waiting on the user (a hold
+// marker or a pending permission), and when it was created (for the startup
+// grace). A zero created time means the age is unknown — the grace is skipped.
+func (r *Reaper) idleState(ctx context.Context, id, cwd string) (needsUser bool, created time.Time) {
 	if holdMarkerPresent(cwd) {
-		return true
+		needsUser = true
 	}
 	out, err := exec.CommandContext(ctx, r.PaseoBin, "inspect", id, "--json").Output()
 	if err != nil {
-		return false
+		return needsUser, time.Time{}
 	}
 	var d struct {
 		PendingPermissions []json.RawMessage `json:"PendingPermissions"`
+		CreatedAt          string            `json:"CreatedAt"`
 	}
 	if json.Unmarshal(out, &d) != nil {
-		return false
+		return needsUser, time.Time{}
 	}
-	return len(d.PendingPermissions) > 0
+	if len(d.PendingPermissions) > 0 {
+		needsUser = true
+	}
+	created, _ = time.Parse(time.RFC3339, d.CreatedAt)
+	return needsUser, created
 }
 
 // holdMarkerPresent reports whether the agent set a .paseo-hold marker in cwd.
