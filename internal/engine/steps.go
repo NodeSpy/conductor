@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
@@ -81,7 +82,10 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			Tokens: dispatch.Tokens{App: appTok, User: userTok},
 			Author: e.author, Shadow: shadow, Wait: !s.Background, Data: data,
 		}
+		e.log("engine: step %s running (%s)", id, actionDesc(s))
+		start := time.Now()
 		ref, err := e.disp.Dispatch(ctx, req)
+		took := time.Since(start).Round(time.Second)
 		// A background step launches a live agent and returns immediately; there's
 		// no captured output to fold into later steps.
 		outputs := map[string]any{}
@@ -95,7 +99,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		if err != nil {
 			entry["error"] = err.Error()
 			e.store.Audit(entry)
-			e.log("engine: step %s failed: %v", id, err)
+			e.log("engine: step %s failed after %s: %v", id, took, err)
 			e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("workflow step %q failed: %v", id, err))
 			e.finishRun(run)
 			return // fail-fast
@@ -115,15 +119,40 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		e.saveRun(run)
 		if s.Background {
 			// Handed off to a live agent — tell the user it's waiting for them.
-			e.log("engine: step %s launched in background (agent %s)", id, ref.AgentID)
+			e.log("engine: step %s launched in background after %s (agent %s)", id, took, ref.AgentID)
 			e.notif.Emit(ctx, notify.EventNeedsInput, t,
 				fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
 			continue
 		}
-		e.log("engine: step %s done (%s)%s", id, ref.Backend, logOutputs(outputs))
+		// Agent steps log their structured decision; command output is large (and in
+		// the audit), so for commands we log just the timing, not the raw stdout.
+		summary := ""
+		if s.Type == "agent" {
+			summary = logOutputs(outputs)
+		}
+		e.log("engine: step %s done (%s) in %s%s", id, ref.Backend, took, summary)
 	}
 	e.notif.Emit(ctx, notify.EventComplete, t, "workflow")
 	e.finishRun(run)
+}
+
+// actionDesc is a short, journal-friendly label for what a step/action runs: the
+// agent name for agent steps, or the (rendered-at-dispatch) command for commands.
+func actionDesc(a config.Action) string {
+	if len(a.Command) > 0 {
+		s := strings.Join(a.Command, " ")
+		if len(s) > 120 {
+			s = s[:120] + "…"
+		}
+		return "command: " + s
+	}
+	if a.Agent != "" {
+		return "agent: " + a.Agent
+	}
+	if a.Type != "" {
+		return a.Type
+	}
+	return "action"
 }
 
 // logOutputs renders a step's outputs compactly for the journal (e.g. the assess

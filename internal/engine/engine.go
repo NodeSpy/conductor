@@ -282,7 +282,15 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 
 	e.notif.Emit(ctx, notify.EventDispatch, t, act.Type)
+	if act.Type == "command" {
+		e.log("engine: %s %s running (%s)", t.Kind, key, actionDesc(act))
+	}
+	start := time.Now()
 	ref, err := e.disp.Dispatch(ctx, req)
+	took := time.Since(start).Round(time.Second)
+	if act.Type == "command" && err == nil && !ref.Skipped {
+		e.log("engine: %s %s command done (%s) in %s", t.Kind, key, ref.Backend, took)
+	}
 	e.auditDispatch(t, ref, err)
 	gated := act.Type == "agent" && !shadow
 
