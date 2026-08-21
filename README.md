@@ -236,6 +236,38 @@ integrations:
 A source with no `repo` runs `checkout: none` automatically (its synthetic id isn't clonable). With a
 `smee_url` and more than one source, each source needs a `match` predicate to route the shared channel.
 
+## Sentry alerts (sentry integration)
+
+The `sentry` integration turns a production error/regression/spike into an agent that root-causes it
+against the affected repo. It consumes Sentry's Integration-Platform webhooks (resources `issue`,
+`error`, `event_alert`) — no field mapping needed, it knows the payload shape — and verifies the
+`Sentry-Hook-Signature` HMAC with your integration's client secret. Delivery is a direct `listen:` or
+a `smee_url:` channel.
+
+`rules` route by `project` / `level` / `environment` (empty = match-any, case-insensitive); the
+**first** matching rule wins and names the repo to investigate. The alert's `{{.sentry.title}}`,
+`{{.sentry.level}}`, `{{.sentry.culprit}}`, `{{.sentry.short_id}}` and `{{.url}}` (permalink) are
+available to the action. Dedup is per Sentry short-id, so repeated alerts on the same issue don't pile up.
+
+```yaml
+integrations:
+  - type: sentry
+    name: prod
+    smee_url: ${SENTRY_SMEE_URL}       # and/or  listen: ":8098"
+    client_secret: ${SENTRY_CLIENT_SECRET}
+    rules:
+      - match: { projects: [rosterstream], levels: [error, fatal], environments: [production] }
+        repo: EdnitionCode/RosterStream          # investigated + checked out
+        actions:
+          type: agent
+          agent: fixer
+          checkout: branch-off
+          prompt: "Sentry {{.sentry.short_id}}: {{.sentry.title}} ({{.sentry.culprit}}). Root-cause in {{.repo}} — see {{.url}}. Open a draft PR or a findings issue."
+```
+
+Set it up as an **Internal Integration** in Sentry (Settings → Developer Settings), subscribe to the
+`issue`/`error` webhooks, and point the webhook URL at your `listen` address or a smee channel.
+
 ## Identity & rate limits
 
 The rate-limit pain came from doing reads on your personal `gh` token. paseo-conductor separates

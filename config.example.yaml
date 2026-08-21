@@ -233,6 +233,22 @@ integrations:
           agent: fixer
           prompt: "CloudWatch alarm {{.body.detail.alarmName}} fired — investigate {{.repo}}."
 
+  # Sentry alerts → an agent root-causes against the affected repo. Knows Sentry's
+  # payload shape (no field mapping); verifies the Sentry-Hook-Signature HMAC.
+  - type: sentry
+    name: prod
+    # smee_url: ${SENTRY_SMEE_URL}
+    listen: ":8098"
+    client_secret: ${SENTRY_CLIENT_SECRET}
+    rules:                             # first matching rule wins; empty filter = match-any
+      - match: { projects: [rosterstream], levels: [error, fatal], environments: [production] }
+        repo: EdnitionCode/RosterStream          # investigated + checked out
+        actions:
+          type: agent
+          agent: fixer
+          checkout: branch-off
+          prompt: "Sentry {{.sentry.short_id}}: {{.sentry.title}} ({{.sentry.culprit}}). Root-cause in {{.repo}} — see {{.url}}."
+
 control:
   enabled: true
   pause_label: conductor:off          # (label-based pause is a follow-up; enabled/shadow work today)
