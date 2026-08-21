@@ -166,6 +166,7 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 	// on resume.
 	if len(trs) > 0 && p.Installation.ID > 0 && g.app != nil {
 		tok, err := g.app.installationToken(ctx, p.Installation.ID)
+		headRef := "" // resolved lazily, once, if a feedback trigger needs it
 		for i := range trs {
 			if trs[i].Context == nil {
 				trs[i].Context = map[string]any{}
@@ -173,6 +174,20 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 			trs[i].Context["installation_id"] = p.Installation.ID
 			if err == nil {
 				trs[i].Context["app_token"] = tok
+			}
+			// Feedback kinds carry the PR head branch so dispatch can adopt an open
+			// workspace already on it. Filled for free above where the payload had it
+			// (review / review-comment events); for issue_comment we look it up once.
+			if feedbackKind(trs[i].Kind) && emptyStr(trs[i].Context["head_ref"]) && g.rest != nil && trs[i].Target.Number > 0 {
+				if headRef == "" {
+					owner, name := splitRepo(repo)
+					if hr, herr := g.rest.pullHeadRef(ctx, p.Installation.ID, owner, name, trs[i].Target.Number); herr == nil {
+						headRef = hr
+					}
+				}
+				if headRef != "" {
+					trs[i].Context["head_ref"] = headRef
+				}
 			}
 		}
 	}
@@ -186,9 +201,10 @@ func (g *Integration) reviewTriggers(ctx context.Context, repo string, p ghPaylo
 	var trs []core.Trigger
 	if p.Review.State == "changes_requested" && g.ownPR(p.PullRequest.User.Login) {
 		t := g.prTarget(repo, p.PullRequest)
-		trs = append(trs, g.single(repo, "changes_requested", t,
+		trs = append(trs, g.emit(repo, "changes_requested", t,
 			fmt.Sprintf("changes requested on %s#%d", repo, p.PullRequest.Number),
-			fmt.Sprintf("review:%d@%s", p.Review.ID, p.PullRequest.Head.SHA), nil)...)
+			fmt.Sprintf("review:%d@%s", p.Review.ID, p.PullRequest.Head.SHA),
+			map[string]any{"head_ref": p.PullRequest.Head.Ref}, nil)...)
 	}
 	// Any submitted review may have made the PR merge-ready.
 	trs = append(trs, g.mergeReadyTriggers(ctx, repo, p.PullRequest.Number, p)...)
@@ -224,11 +240,12 @@ func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []cor
 		return nil
 	}
 	var num int
-	var head, base, url, prAuthor string
+	var head, base, url, prAuthor, headRef string
 	switch {
 	case p.PullRequest != nil:
 		num = p.PullRequest.Number
 		head, base, url = p.PullRequest.Head.SHA, p.PullRequest.Base.Ref, p.PullRequest.HTMLURL
+		headRef = p.PullRequest.Head.Ref
 		prAuthor = p.PullRequest.User.Login
 	case eventType == "issue_comment" && p.Issue != nil && p.Issue.PullRequest != nil:
 		num = p.Issue.Number
@@ -245,7 +262,7 @@ func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []cor
 		return nil // ignore our own comments
 	}
 	t := g.target(repo, num, head, base, url)
-	extra := map[string]any{"author": p.Comment.User.Login, "comment_body": p.Comment.Body}
+	extra := map[string]any{"author": p.Comment.User.Login, "comment_body": p.Comment.Body, "head_ref": headRef}
 	// Each variant may set its own from_users filter (empty = any commenter).
 	return g.emit(repo, "new_comment", t,
 		fmt.Sprintf("new comment by %s on %s#%d", p.Comment.User.Login, repo, num),
@@ -668,6 +685,13 @@ func (g *Integration) prTarget(repo string, pr *prPayload) core.Target {
 	t := g.target(repo, pr.Number, pr.Head.SHA, pr.Base.Ref, pr.HTMLURL)
 	return t
 }
+
+// feedbackKind reports whether a kind is PR feedback that dispatch may route to an
+// agent already checked out on the PR's head branch (see AdoptOpenWorkspaces).
+func feedbackKind(k string) bool { return k == "new_comment" || k == "changes_requested" }
+
+// emptyStr reports whether a Context value is absent or an empty string.
+func emptyStr(v any) bool { s, _ := v.(string); return s == "" }
 
 func (g *Integration) target(repo string, num int, head, base, url string) core.Target {
 	owner, name := splitRepo(repo)

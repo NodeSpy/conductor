@@ -22,7 +22,7 @@ func stubAPI(t *testing.T, mergeableState string) (*httptest.Server, *appAuth) {
 	// Any PR number resolves; author is "me" (the self identity in test configs) so the
 	// me-authored gate on autopilot kinds passes.
 	mux.HandleFunc("/repos/acme/w/pulls/{num}", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintf(w, `{"mergeable_state":%q,"head":{"sha":"h6"},"base":{"ref":"main"},"html_url":"http://x/6","user":{"login":"me"}}`, mergeableState)
+		fmt.Fprintf(w, `{"mergeable_state":%q,"head":{"sha":"h6","ref":"feature/x"},"base":{"ref":"main"},"html_url":"http://x/6","user":{"login":"me"}}`, mergeableState)
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

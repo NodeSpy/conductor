@@ -32,11 +32,23 @@ type pullInfo struct {
 	} `json:"user"` // PR author
 	Head struct {
 		SHA string `json:"sha"`
+		Ref string `json:"ref"`
 	} `json:"head"`
 	Base struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
 	HTMLURL string `json:"html_url"`
+}
+
+// pullHeadRef fetches just a PR's head branch name (a single GET, no mergeable-state
+// wait). Used to enrich feedback triggers so dispatch can match an open workspace.
+func (c *restClient) pullHeadRef(ctx context.Context, instID int64, owner, repo string, num int) (string, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.app.apiBase, owner, repo, num)
+	var pi pullInfo
+	if err := c.get(ctx, instID, url, &pi); err != nil {
+		return "", err
+	}
+	return pi.Head.Ref, nil
 }
 
 // pull fetches a PR, retrying briefly while GitHub computes mergeable state.

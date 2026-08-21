@@ -371,7 +371,11 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if ref.Queued {
 		// Work was handed to an agent already on the PR — no new agent, no slot to
 		// hold; it'll drain the queue on its own.
-		e.log("%s queued to agent %s", tag(t), ref.AgentID)
+		if ref.Adopted {
+			e.log("%s adopted your open workspace agent %s", tag(t), ref.AgentID)
+		} else {
+			e.log("%s queued to agent %s", tag(t), ref.AgentID)
+		}
 		if gated {
 			e.release()
 		}

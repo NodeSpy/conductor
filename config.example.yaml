@@ -316,6 +316,12 @@ agents:
 
 # paseo_bin: paseo   # path to the paseo CLI (default "paseo"); set only if not resolvable by name on PATH
 
+# Opt-in: route PR feedback (new_comment/changes_requested) to an agent already
+# checked out on the PR's head branch — e.g. a workspace you opened yourself —
+# instead of spawning a fresh worktree. Picks the most-recently-active match, else
+# starts fresh. Adopted agents are yours (never relabeled or reaped).
+adopt_open_workspaces: false
+
 update:
   auto: false                          # periodically self-update to the latest release
   interval: 8h                         # check cadence (a few times a day)

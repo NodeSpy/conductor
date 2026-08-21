@@ -122,6 +122,16 @@ agents:
 implement it *or* ask the reporter for more detail — make it a
 [multi-step workflow](#multi-step-workflows).
 
+### Adopting an open workspace
+
+By default, PR feedback (`new_comment`, `changes_requested`) that isn't already owned by a conductor
+agent spawns a fresh worktree. If you often start work on a PR yourself and keep that workspace open,
+set top-level **`adopt_open_workspaces: true`**: conductor then looks for an agent whose checkout is
+already on the PR's head branch — the one you opened — and routes the feedback *there* (`paseo send`)
+instead of duplicating a worktree. If several agents sit on that branch it picks the most-recently
+active; if none, it starts fresh as usual. An adopted agent is yours — conductor never relabels or
+reaps it.
+
 ## Multi-step workflows
 
 An action can be a single run, or a **`steps:`** list — an ordered workflow where each step can use

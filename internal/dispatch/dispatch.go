@@ -54,6 +54,7 @@ type RunRef struct {
 	Shadowed bool     `json:"shadowed,omitempty"`
 	Skipped  bool     `json:"skipped,omitempty"` // no work dispatched (e.g. catch-up while an agent is on the PR)
 	Queued   bool     `json:"queued,omitempty"`  // handed to an agent already on the PR (no new agent spawned)
+	Adopted  bool     `json:"adopted,omitempty"` // queued to an open workspace you already had on this branch
 	Output   string   `json:"-"`
 }
 
@@ -76,6 +77,11 @@ type Dispatcher struct {
 	// Retry policy for transient `paseo run` failures (git lock/timeout).
 	RetryMax     int
 	RetryBackoff time.Duration
+
+	// AdoptOpenWorkspaces routes PR feedback to an agent already checked out on the
+	// PR's head branch (e.g. a workspace you opened yourself) instead of spawning a
+	// fresh worktree. Opt-in; set from top-level config.
+	AdoptOpenWorkspaces bool
 
 	mu        sync.Mutex
 	repoDirs  map[string]string // repo -> resolved checkout cwd (memoized)

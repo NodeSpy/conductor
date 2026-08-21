@@ -54,6 +54,24 @@ func richWithREST(t *testing.T) *Integration {
 	return g
 }
 
+func TestNewCommentHeadRefEnriched(t *testing.T) {
+	g := richWithREST(t) // stub PR author "me", head ref "feature/x"
+	// An issue_comment on your own PR by someone else → new_comment, and dispatch
+	// needs the PR head branch to adopt an open workspace. issue_comment carries no
+	// head ref, so it's looked up via REST and stamped into Context.
+	body := `{"action":"created","installation":{"id":42},
+		"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"issue":{"number":6,"pull_request":{},"user":{"login":"me"}},
+		"comment":{"id":12,"user":{"login":"bot"},"body":"please fix"}}`
+	trs := g.triggersFor(context.Background(), "issue_comment", []byte(body))
+	if len(trs) != 1 || trs[0].Kind != "new_comment" {
+		t.Fatalf("want new_comment, got %+v", trs)
+	}
+	if trs[0].Context["head_ref"] != "feature/x" {
+		t.Fatalf("head_ref should be enriched via REST, got %v", trs[0].Context["head_ref"])
+	}
+}
+
 func TestCheckRunFailing(t *testing.T) {
 	g := richWithREST(t)
 	body := `{"action":"completed","installation":{"id":42},"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},

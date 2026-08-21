@@ -176,6 +176,7 @@ func cmdRun(args []string) error {
 
 	retry, writeTok, readTok := dispatchTuning(igs)
 	disp := dispatch.New(cfg.PaseoBin, retry, cfg.DryRun)
+	disp.AdoptOpenWorkspaces = cfg.AdoptOpenWorkspaces
 	preflightPATH(disp.PaseoBin)
 	notifier := notify.New(cfg.Notify, logf)
 	eng := engine.New(engine.Options{

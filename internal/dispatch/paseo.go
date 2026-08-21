@@ -159,6 +159,27 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 			ref.Output = "queued to live agent " + id
 			return ref, nil
 		}
+		// Opt-in: no conductor agent on this PR, but you may have a workspace open on
+		// its branch (where you started the work). Route feedback there instead of
+		// spawning a duplicate worktree. Adopted agents are yours — never relabeled,
+		// never reaped.
+		if d.AdoptOpenWorkspaces && isFeedbackKind(req.Trigger.Kind) {
+			if id := d.adoptAgentForBranch(ctx, req); id != "" {
+				if req.CatchUp {
+					ref.Skipped = true
+					ref.Output = "skipped: your open agent " + id + " is on this branch"
+					return ref, nil
+				}
+				if err := d.sendToAgent(ctx, id, prompt); err != nil {
+					return ref, fmt.Errorf("queue to open agent %s: %w", id, err)
+				}
+				ref.AgentID = id
+				ref.Queued = true
+				ref.Adopted = true
+				ref.Output = "adopted your open agent " + id
+				return ref, nil
+			}
+		}
 	}
 
 	// Run with bounded retries on transient git-lock/timeout failures — common
@@ -589,6 +610,119 @@ func (d *Dispatcher) liveAgentForPR(ctx context.Context, prKey string) string {
 		}
 	}
 	return ""
+}
+
+// isFeedbackKind reports whether a kind is PR feedback eligible for open-workspace
+// adoption (mirrors the github integration's feedbackKind).
+func isFeedbackKind(k string) bool { return k == "new_comment" || k == "changes_requested" }
+
+// agentInfo is the subset of `paseo ls --json` adoption needs.
+type agentInfo struct {
+	ID     string `json:"id"`
+	Cwd    string `json:"cwd"`
+	Status string `json:"status"`
+}
+
+// adoptCand is a candidate open agent whose checkout is on the PR's head branch.
+type adoptCand struct {
+	id     string
+	active string // RFC3339 last-active timestamp (lexically sortable); "" if unknown
+}
+
+// adoptAgentForBranch finds an agent whose checkout is already on this PR's head
+// branch — e.g. a workspace you opened by hand — so feedback is routed to it instead
+// of spawning a duplicate worktree. Returns the most-recently-active match, or "".
+func (d *Dispatcher) adoptAgentForBranch(ctx context.Context, req Request) string {
+	headRef, _ := req.Trigger.Context["head_ref"].(string)
+	if headRef == "" {
+		return "" // no branch to match on (dispatch stays repo-agnostic; the github side supplies it)
+	}
+	repo := req.Trigger.Target.Repo
+	var cands []adoptCand
+	for _, a := range d.listAgents(ctx) {
+		dir := expandTilde(a.Cwd)
+		if a.ID == "" || dir == "" || !isGitRepo(ctx, dir) {
+			continue
+		}
+		if d.gitBranch(ctx, dir) != headRef || !gitRepoMatches(ctx, dir, repo) {
+			continue
+		}
+		cands = append(cands, adoptCand{id: a.ID, active: d.agentLastActive(ctx, a.ID)})
+	}
+	return pickAdoptTarget(cands)
+}
+
+// pickAdoptTarget returns the id of the most-recently-active candidate (RFC3339
+// timestamps sort lexically), or "" if there are none. Ties keep the first seen.
+func pickAdoptTarget(cands []adoptCand) string {
+	best := ""
+	bestActive := ""
+	for _, c := range cands {
+		if best == "" || c.active > bestActive {
+			best, bestActive = c.id, c.active
+		}
+	}
+	return best
+}
+
+// listAgents lists non-archived agents via `paseo ls --json`.
+func (d *Dispatcher) listAgents(ctx context.Context) []agentInfo {
+	out, err := exec.CommandContext(ctx, d.PaseoBin, "ls", "--json").Output()
+	if err != nil {
+		return nil
+	}
+	var agents []agentInfo
+	if json.Unmarshal(out, &agents) != nil {
+		return nil
+	}
+	return agents
+}
+
+// gitBranch returns the current branch of a checkout (empty on detached/err).
+func (d *Dispatcher) gitBranch(ctx context.Context, dir string) string {
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// gitRepoMatches reports whether dir's origin remote points at repo (owner/name),
+// so a head branch that collides across repos can't cause a wrong adoption.
+func gitRepoMatches(ctx context.Context, dir, repo string) bool {
+	if repo == "" {
+		return false
+	}
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "config", "--get", "remote.origin.url").Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(string(out)), strings.ToLower(repo))
+}
+
+// agentLastActive returns an agent's last-active timestamp (LastUsage, else
+// UpdatedAt, else CreatedAt) via `paseo inspect --json`, for recency ranking.
+func (d *Dispatcher) agentLastActive(ctx context.Context, id string) string {
+	out, err := exec.CommandContext(ctx, d.PaseoBin, "inspect", "--json", id).Output()
+	if err != nil {
+		return ""
+	}
+	var m struct {
+		LastUsage string `json:"LastUsage"`
+		UpdatedAt string `json:"UpdatedAt"`
+		CreatedAt string `json:"CreatedAt"`
+	}
+	if json.Unmarshal(out, &m) != nil {
+		return ""
+	}
+	switch {
+	case m.LastUsage != "":
+		return m.LastUsage
+	case m.UpdatedAt != "":
+		return m.UpdatedAt
+	default:
+		return m.CreatedAt
+	}
 }
 
 // sendToAgent queues a follow-up task to an existing agent.

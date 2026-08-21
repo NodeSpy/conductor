@@ -29,6 +29,10 @@ type Config struct {
 	Store        Store                   `yaml:"store"`
 	Update       Update                  `yaml:"update"`
 	DryRun       bool                    `yaml:"dry_run"`
+	// AdoptOpenWorkspaces routes PR feedback (new_comment/changes_requested) to an
+	// agent whose checkout is already on the PR's head branch — e.g. a workspace you
+	// opened by hand — instead of spawning a fresh worktree. Opt-in.
+	AdoptOpenWorkspaces bool `yaml:"adopt_open_workspaces"`
 }
 
 // Update configures periodic self-update checks.
