@@ -138,6 +138,71 @@ func (r *Reaper) reap(ctx context.Context) {
 			delete(r.held, id)
 		}
 	}
+
+	// Tidy the shared checkout:none scratch workspace when nothing is running in it.
+	r.cullScratch(ctx)
+}
+
+// cullScratch archives the shared checkout:none scratch workspace when no agent is
+// running in it. It's recreated on demand (resolveScratchWorkspace re-resolves by
+// title), so culling just keeps an idle conductor tidy. Skipped when any active
+// agent's cwd matches the scratch cwd — archiving the workspace would take a
+// running assess agent down with it.
+func (r *Reaper) cullScratch(ctx context.Context) {
+	id, cwd := r.findScratch(ctx)
+	if id == "" {
+		return
+	}
+	for _, ac := range r.activeAgentCwds(ctx) {
+		if normCwd(ac) == normCwd(cwd) {
+			return // in use — leave it
+		}
+	}
+	if err := exec.CommandContext(ctx, r.PaseoBin, "workspace", "archive", id).Run(); err == nil && r.Log != nil {
+		r.Log("reaper: archived idle scratch workspace %s (recreated on demand)", id)
+	}
+}
+
+// findScratch returns the shared scratch workspace's id and cwd, or ""s if absent.
+func (r *Reaper) findScratch(ctx context.Context) (id, cwd string) {
+	out, err := exec.CommandContext(ctx, r.PaseoBin, "workspace", "ls", "--json").Output()
+	if err != nil {
+		return "", ""
+	}
+	var wl []struct {
+		WorkspaceID string `json:"workspaceId"`
+		Name        string `json:"name"`
+		Isolation   string `json:"isolation"`
+		Cwd         string `json:"cwd"`
+	}
+	if json.Unmarshal(out, &wl) != nil {
+		return "", ""
+	}
+	for _, w := range wl {
+		if w.Isolation == "local" && w.Name == scratchWorkspaceTitle && w.WorkspaceID != "" {
+			return w.WorkspaceID, w.Cwd
+		}
+	}
+	return "", ""
+}
+
+// activeAgentCwds lists the cwds of non-archived agents on the local daemon.
+func (r *Reaper) activeAgentCwds(ctx context.Context) []string {
+	out, err := exec.CommandContext(ctx, r.PaseoBin, "ls", "--json").Output()
+	if err != nil {
+		return nil
+	}
+	var a []struct {
+		Cwd string `json:"cwd"`
+	}
+	if json.Unmarshal(out, &a) != nil {
+		return nil
+	}
+	cwds := make([]string, 0, len(a))
+	for _, x := range a {
+		cwds = append(cwds, x.Cwd)
+	}
+	return cwds
 }
 
 // needsUser reports whether an idle agent should be spared from reaping because

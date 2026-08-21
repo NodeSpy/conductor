@@ -459,9 +459,9 @@ func (d *Dispatcher) resolveScratchWorkspace(ctx context.Context) (string, error
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock() // held across resolve so concurrent callers don't each create one
-	if d.scratchWS != "" {
-		return d.scratchWS, nil
-	}
+	// Re-resolve by title every time (don't trust a memoized id): the reaper may
+	// have archived an idle scratch, so a stale memo would point at a dead
+	// workspace. findWorkspaceByTitle returns the current one, or "" → recreate.
 	if id := d.findWorkspaceByTitle(ctx, scratchWorkspaceTitle); id != "" {
 		d.scratchWS = id
 		return id, nil
