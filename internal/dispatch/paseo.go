@@ -73,14 +73,19 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	}
 
 	// Existing-workspace mode only applies when NOT creating a worktree: paseo
-	// forbids --workspace together with --new-workspace. For checkout:none we
-	// always pin a workspace — an explicit one if configured, else a shared
-	// scratch workspace — otherwise paseo spins up a throwaway workspace per run
-	// (e.g. review triage) that never gets reclaimed.
+	// forbids --workspace together with --new-workspace. For checkout:none we pin a
+	// workspace — an explicit one if configured, else the shared scratch workspace —
+	// otherwise paseo spins up a throwaway workspace per run that never gets
+	// reclaimed. The shared scratch is for AUTO, NON-INTERACTIVE triage (e.g. the
+	// assess step); an interactive hand-off is never pinned to it — it gets its own
+	// dedicated workspace (and the reaper's hold-set keeps that from being culled).
 	if strat == "none" {
-		if req.Workspace != "" {
+		switch {
+		case req.Workspace != "":
 			argv = append(argv, "--workspace", req.Workspace)
-		} else if cwd == "" && (d.ScratchWorkspace != nil || (!d.DryRun && !req.Shadow)) {
+		case req.Interactive:
+			// no shared-scratch pin — paseo gives this hand-off its own workspace
+		case cwd == "" && (d.ScratchWorkspace != nil || (!d.DryRun && !req.Shadow)):
 			// The built-in resolver may create a workspace and needs a live daemon,
 			// so skip it during a preview; an injected resolver is pure.
 			if id, err := d.resolveScratchWorkspace(ctx); err == nil && id != "" {
@@ -298,9 +303,21 @@ func truncate(s string, n int) string {
 // effectiveStrategy resolves the action's checkout strategy, defaulting from the
 // trigger target when unset: a PR → checkout-pr, any repo → branch-off, else none.
 func effectiveStrategy(req Request) string {
+	// An interactive hand-off must never share the auto scratch workspace. When it
+	// has repo context, give it a PR/branch worktree (PR-centric) even if the step
+	// was configured checkout:none — the scratch is for non-interactive triage only.
+	// With no repo context it still avoids the shared scratch (see the pin below).
+	if req.Interactive && (req.Action.Checkout == "" || req.Action.Checkout == "none") {
+		return repoStrategy(req)
+	}
 	if s := req.Action.Checkout; s != "" {
 		return s
 	}
+	return repoStrategy(req)
+}
+
+// repoStrategy picks the worktree strategy from the trigger's repo/PR context.
+func repoStrategy(req Request) string {
 	switch {
 	case req.Trigger.Target.PR > 0:
 		return "checkout-pr"

@@ -4,11 +4,66 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 )
+
+func TestEffectiveStrategyInteractive(t *testing.T) {
+	pr := core.Target{Repo: "a/w", PR: 7, Number: 7}
+	repoOnly := core.Target{Repo: "a/w"}
+	bare := core.Target{}
+	cases := []struct {
+		name string
+		req  Request
+		want string
+	}{
+		{"interactive+PR+none → checkout-pr", Request{Interactive: true, Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{Target: pr}}, "checkout-pr"},
+		{"interactive+repo+none → branch-off", Request{Interactive: true, Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{Target: repoOnly}}, "branch-off"},
+		{"interactive+PR+unset → checkout-pr", Request{Interactive: true, Trigger: core.Trigger{Target: pr}}, "checkout-pr"},
+		{"interactive+no-repo+none → none", Request{Interactive: true, Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{Target: bare}}, "none"},
+		{"non-interactive+none stays none", Request{Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{Target: pr}}, "none"},
+		{"interactive+explicit checkout-pr unchanged", Request{Interactive: true, Action: config.Action{Checkout: "checkout-pr"}, Trigger: core.Trigger{Target: pr}}, "checkout-pr"},
+	}
+	for _, c := range cases {
+		if got := effectiveStrategy(c.req); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestInteractiveNeverPinsScratch(t *testing.T) {
+	mk := func() *Dispatcher {
+		d := newDispatcher() // DryRun: builds argv, no exec
+		d.ScratchWorkspace = func(context.Context) (string, error) { return "scratch-1", nil }
+		return d
+	}
+	// Non-interactive checkout:none with no repo → pinned to the shared scratch.
+	nreq := Request{Action: config.Action{Type: "agent", Agent: "a", Checkout: "none", Prompt: "x"},
+		Trigger: core.Trigger{Kind: "cron", Target: core.Target{}}}
+	nref, _ := mk().Dispatch(context.Background(), nreq)
+	if !strings.Contains(strings.Join(nref.Argv, " "), "--workspace scratch-1") {
+		t.Fatalf("non-interactive checkout:none should pin the shared scratch; got: %s", strings.Join(nref.Argv, " "))
+	}
+	// Interactive checkout:none with no repo → its OWN workspace, never the scratch.
+	ireq := Request{Interactive: true, Action: config.Action{Type: "agent", Agent: "a", Checkout: "none", Prompt: "x"},
+		Trigger: core.Trigger{Kind: "handoff", Target: core.Target{}}}
+	iref, _ := mk().Dispatch(context.Background(), ireq)
+	if strings.Contains(strings.Join(iref.Argv, " "), "--workspace scratch-1") {
+		t.Fatalf("interactive hand-off must NOT use the shared scratch; got: %s", strings.Join(iref.Argv, " "))
+	}
+	// Interactive + PR + checkout:none → upgraded to a PR worktree (PR-centric).
+	preq := Request{Interactive: true, Action: config.Action{Type: "agent", Agent: "a", Checkout: "none", Prompt: "x"},
+		Trigger: core.Trigger{Kind: "handoff", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
+		Profile: config.AgentProfile{Workspace: "worktree"}}
+	pref, _ := mk().Dispatch(context.Background(), preq)
+	ps := strings.Join(pref.Argv, " ")
+	if !strings.Contains(ps, "--worktree-mode checkout-pr") || strings.Contains(ps, "--workspace scratch-1") {
+		t.Fatalf("interactive PR hand-off should get a PR worktree, not scratch; got: %s", ps)
+	}
+}
 
 func TestRequestedWorktree(t *testing.T) {
 	pr := Request{Trigger: core.Trigger{Target: core.Target{Repo: "a/b", PR: 7, Number: 7}}}

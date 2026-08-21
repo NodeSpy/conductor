@@ -171,6 +171,11 @@ issue_matched:
   truthiness (`x` / `!x`); and `&&` / `||`.
 - Steps run in order, fail-fast, and the whole workflow runs off the main loop so long steps don't
   block other events.
+- **`background: true`** on a step hands off a live agent for *you* to drive and close (e.g. a manual
+  review). The reaper never archives a hand-off, and it never shares the auto scratch workspace: with
+  a PR/repo it gets its own PR/branch worktree (PR-centric, even if `checkout: none` was set),
+  otherwise its own dedicated workspace. The shared scratch is reserved for auto, non-interactive
+  `checkout: none` steps (like a triage/assess step).
 
 ## Named action variants
 

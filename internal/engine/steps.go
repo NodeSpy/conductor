@@ -80,7 +80,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		req := dispatch.Request{
 			Trigger: t, Action: s, Profile: profile,
 			Tokens: dispatch.Tokens{App: appTok, User: userTok},
-			Author: e.author, Shadow: shadow, Wait: !s.Background, Data: data,
+			Author: e.author, Shadow: shadow, Wait: !s.Background, Interactive: s.Background, Data: data,
 		}
 		e.log("%s step %s running (%s)", tag(t), id, actionDesc(s))
 		start := time.Now()

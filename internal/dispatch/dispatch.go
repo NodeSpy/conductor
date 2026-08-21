@@ -38,11 +38,16 @@ type Request struct {
 	Profile   config.AgentProfile // populated for agent actions
 	Tokens    Tokens
 	Author    Author
-	Workspace string         // base workspace id/path to worktree from (optional)
-	Shadow    bool           // skip the terminal side effect, just log what would run
-	Wait      bool           // run foreground and capture output (for workflow steps)
-	CatchUp   bool           // sweep re-derivation (skip if an agent is already on the PR)
-	Data      map[string]any // extra template vars (e.g. prior step outputs)
+	Workspace string // base workspace id/path to worktree from (optional)
+	Shadow    bool   // skip the terminal side effect, just log what would run
+	Wait      bool   // run foreground and capture output (for workflow steps)
+	CatchUp   bool   // sweep re-derivation (skip if an agent is already on the PR)
+	// Interactive marks a hand-off dispatch — a background workflow step you drive
+	// and close yourself. Such an agent never shares the auto scratch workspace: it
+	// gets a PR/branch worktree when there's repo context (PR-centric), else its own
+	// dedicated workspace.
+	Interactive bool
+	Data        map[string]any // extra template vars (e.g. prior step outputs)
 }
 
 // RunRef is the outcome of a dispatch.
