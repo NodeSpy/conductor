@@ -249,6 +249,22 @@ integrations:
           checkout: branch-off
           prompt: "Sentry {{.sentry.short_id}}: {{.sentry.title}} ({{.sentry.culprit}}). Root-cause in {{.repo}} — see {{.url}}."
 
+  # Poll RSS/Atom feeds; new items → an agent assesses impact. Stdlib parsing.
+  # First poll seeds silently (no backlog flood); later polls emit new items only.
+  - type: rss
+    name: upstream
+    feeds:
+      - name: canvas-changelog
+        url: https://example.instructure.com/doc/api/file.changelog.html
+        interval: 1h                   # default 30m
+        match: "deprecat|breaking|remov|LTI|roster"   # optional case-insensitive regex (title+summary)
+        # repo: EdnitionCode/RosterStream            # optional; omit → runs in scratch (checkout none)
+        actions:
+          type: agent
+          agent: planner
+          checkout: none
+          prompt: "Canvas changelog: {{.item.title}} ({{.url}}). Does this affect RosterStream? File a heads-up issue if so."
+
 control:
   enabled: true
   pause_label: conductor:off          # (label-based pause is a follow-up; enabled/shadow work today)

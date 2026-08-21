@@ -268,6 +268,36 @@ integrations:
 Set it up as an **Internal Integration** in Sentry (Settings → Developer Settings), subscribe to the
 `issue`/`error` webhooks, and point the webhook URL at your `listen` address or a smee channel.
 
+## Upstream feeds (rss integration)
+
+The `rss` integration polls RSS/Atom feeds and turns new items into triggers — watch the Canvas API
+changelog, an LTI spec feed, or a key dependency's releases and have an agent assess "does this
+affect RosterStream?" Feed parsing is stdlib-only (no new dependency).
+
+Each `feed` has a `url`, an `interval` (default 30m), an optional case-insensitive `match` regex (over
+title+summary), an optional `repo`, and [actions](#named-action-variants). New items expose
+`{{.item.title}}`, `{{.item.link}}` (`{{.url}}`), `{{.item.summary}}`, `{{.item.published}}`.
+
+```yaml
+integrations:
+  - type: rss
+    name: upstream
+    feeds:
+      - name: canvas-changelog
+        url: https://example.instructure.com/doc/api/file.changelog.html   # any RSS/Atom URL
+        interval: 1h
+        match: "deprecat|breaking|remov|LTI|roster"   # only items worth a look
+        actions:
+          type: agent
+          agent: planner
+          checkout: none
+          prompt: "Canvas changelog: {{.item.title}} ({{.url}}). Does this affect RosterStream's adapters? File a heads-up issue if so."
+```
+
+**Cold-start:** the first poll of each feed silently seeds a seen-set so an existing backlog isn't
+back-emitted; later polls emit only new items. Each item carries a stable dedup (its GUID/id), so the
+engine store also suppresses re-acting across restarts. A feed with no `repo` runs `checkout: none`.
+
 ## Identity & rate limits
 
 The rate-limit pain came from doing reads on your personal `gh` token. paseo-conductor separates
