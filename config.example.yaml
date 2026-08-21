@@ -235,7 +235,9 @@ agents:
 update:
   auto: false                          # periodically self-update to the latest release
   interval: 8h                         # check cadence (a few times a day)
-  apply: true                          # re-exec into the new binary after updating
+  apply: true                          # restart into the new binary after updating (default true):
+                                       #   under systemd/launchd the manager relaunches it (a clean
+                                       #   restart with the unit's env); foreground runs re-exec
 
 store:
   state_file: ~/.local/state/paseo-conductor/state.json

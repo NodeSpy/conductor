@@ -231,13 +231,15 @@ paseo-conductor update --tag v0.2.0   # or pin a version; --force to reinstall
 ```
 
 Or let it update itself — enable `update.auto` in config and the running daemon checks a few times a
-day, installs any new release, and re-execs into it:
+day, installs any new release, and **restarts into it**. Under a service manager it exits cleanly so
+systemd (`Restart=always`) / launchd (`KeepAlive`) relaunch the new binary — a real restart that
+re-reads the unit's environment. Run in the foreground, it re-execs in place instead.
 
 ```yaml
 update:
   auto: true
   interval: 8h        # default; check cadence
-  apply: true         # re-exec into the new binary after updating
+  apply: true         # restart into the new binary after updating (default true)
 ```
 
 ## Install from source
@@ -265,9 +267,11 @@ Logs: `journalctl --user -u paseo-conductor -f` (Linux) / `tail -f ~/Library/Log
 (macOS). On Linux, `loginctl enable-linger "$USER"` keeps it running across logout/reboot (the
 installer does this).
 
-**Updates keep the unit current.** `paseo-conductor update` and the auto-updater regenerate the
-installed unit and reload it if a new release changed the template — so you don't have to
-reinstall the service after an upgrade. (They only touch a unit that's already installed.)
+**Updates keep the unit current and restart the service.** `paseo-conductor update` and the
+auto-updater regenerate the installed unit and reload it if a new release changed the template — so
+you don't have to reinstall the service after an upgrade. `paseo-conductor update` also restarts an
+already-running service into the new binary; the auto-updater restarts itself the same way (by
+exiting for the manager to relaunch). (Both only touch a unit that's already installed.)
 
 Secrets live in `~/.config/paseo-conductor/conductor.env`; the daemon loads them itself at startup
 (so both systemd and launchd work without extra env wiring).

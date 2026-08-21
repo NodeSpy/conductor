@@ -189,9 +189,10 @@ func cmdRun(args []string) error {
 		go r.Run(ctx)
 	}
 
-	// Periodic self-update.
+	// Periodic self-update. `stop` lets it trigger a graceful shutdown so the
+	// service manager relaunches into the new binary.
 	if cfg.Update.Auto {
-		go autoUpdateLoop(ctx, cfg.Update)
+		go autoUpdateLoop(ctx, cfg.Update, stop)
 	}
 
 	// Start integrations.

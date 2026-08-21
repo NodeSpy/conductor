@@ -41,10 +41,16 @@ func cmdUpdate(args []string) error {
 	}
 	fmt.Printf("updated %s → %s\n", version, tag)
 	// Refresh the service unit if the new release changed its template.
-	if changed, err := syncServiceUnit(true); err != nil {
+	if changed, err := syncServiceUnit(false); err != nil {
 		logf("update: service unit sync failed: %v", err)
 	} else if changed {
-		fmt.Println("service unit updated and reloaded")
+		fmt.Println("service unit updated")
+	}
+	// Cycle a running service so the new binary takes over now — syncServiceUnit
+	// only reloads on a template change, so a binary-only update otherwise leaves
+	// the running daemon on the old version until the next restart.
+	if restartInstalledService() {
+		fmt.Println("restarted the running service into the new version")
 	}
 	return nil
 }
@@ -105,8 +111,9 @@ func doUpdate(force bool, pinTag string) (updated bool, tag string, err error) {
 }
 
 // autoUpdateLoop periodically checks for and installs updates, then applies
-// them by re-execing into the new binary.
-func autoUpdateLoop(ctx context.Context, u config.Update) {
+// them by restarting into the new binary. `stop` cancels the daemon's context to
+// trigger a graceful shutdown when the restart is handed to the service manager.
+func autoUpdateLoop(ctx context.Context, u config.Update, stop func()) {
 	iv := u.Interval.D()
 	if iv <= 0 {
 		iv = 8 * time.Hour
@@ -128,24 +135,45 @@ func autoUpdateLoop(ctx context.Context, u config.Update) {
 				continue
 			}
 			logf("auto-update: installed %s (was %s)", tag, version)
-			// Refresh the unit file (no restart here — the re-exec below applies
-			// the new binary; daemon-reload just loads the new unit for later).
+			// Refresh the unit so the restart below comes up with the new template
+			// (daemon-reload on systemd). Never starts a service that wasn't there.
 			if _, err := syncServiceUnit(false); err != nil {
 				logf("auto-update: service unit sync failed: %v", err)
 			}
-			if u.ShouldApply() {
-				applySelf()
-			} else {
+			if !u.ShouldApply() {
 				logf("auto-update: restart to apply (apply: false)")
+				continue
 			}
+			applyUpdate(stop)
+			return // applied — shutting down for a manager restart, or re-exec'd
 		}
 	}
 }
 
-// applySelf re-execs the (now-replaced) binary in place, so the new version
-// takes over without needing a service-manager restart. If exec fails, exit so
-// a Restart=always unit respawns the new binary.
-func applySelf() {
+// applyUpdate puts the freshly-downloaded binary into service. When this process
+// was started by the per-user service manager, it hands the restart to that
+// manager: exit cleanly (via stop → graceful shutdown) and let systemd
+// (Restart=always) / launchd (KeepAlive) relaunch, so the new version starts with
+// the unit's fresh environment (PATH, conductor.env) rather than inheriting our
+// stale one. Run manually (no manager), it re-execs in place so a foreground run
+// still self-updates.
+func applyUpdate(stop func()) {
+	if launchedByServiceManager() {
+		logf("auto-update: exiting for %s to relaunch the new binary", serviceKind())
+		if stop != nil {
+			stop() // cancel ctx → graceful shutdown → clean exit → manager restarts us
+			return
+		}
+		os.Exit(0)
+	}
+	reExecInPlace()
+}
+
+// reExecInPlace replaces the running process image with the (already-replaced)
+// binary. Used only for unsupervised/foreground runs — supervised runs restart
+// via the service manager instead (see applyUpdate). If exec fails, exit so any
+// wrapping supervisor respawns the new binary.
+func reExecInPlace() {
 	exe, err := os.Executable()
 	if err == nil {
 		if resolved, e := filepath.EvalSymlinks(exe); e == nil {
@@ -154,7 +182,7 @@ func applySelf() {
 	}
 	logf("auto-update: re-exec %s", exe)
 	if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
-		logf("auto-update: re-exec failed (%v); exiting for the service manager to restart", err)
+		logf("auto-update: re-exec failed (%v); exiting for a supervisor to restart", err)
 		os.Exit(0)
 	}
 }

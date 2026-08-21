@@ -26,6 +26,27 @@ func serviceKind() string {
 	}
 }
 
+// launchedByServiceManager reports whether THIS process was started by the
+// per-user service manager (vs. a manual `paseo-conductor run` in a shell). When
+// true, an auto-update applies by exiting cleanly so the manager relaunches the
+// new binary with the unit's fresh environment — a re-exec would instead inherit
+// our stale env and never pick up a regenerated unit.
+func launchedByServiceManager() bool {
+	switch serviceKind() {
+	case "systemd":
+		// systemd sets INVOCATION_ID in the environment of every unit it starts.
+		return os.Getenv("INVOCATION_ID") != ""
+	case "launchd":
+		// launchd exports the job label as XPC_SERVICE_NAME for managed agents,
+		// and is PID 1 (the parent of its LaunchAgents).
+		if n := os.Getenv("XPC_SERVICE_NAME"); n != "" && n != "0" {
+			return true
+		}
+		return os.Getppid() == 1
+	}
+	return false
+}
+
 func selfExe() string {
 	p, err := os.Executable()
 	if err != nil {
@@ -176,6 +197,36 @@ func reloadService(restart bool) {
 			_ = sh("launchctl", "load", "-w", p)
 		}
 	}
+}
+
+// restartInstalledService restarts an already-installed & currently-running unit
+// so a freshly-downloaded binary takes over now. It never starts a service that
+// isn't installed or isn't already running. Returns whether it restarted one —
+// used by the manual `update` CLI (the daemon's own auto-update restarts itself
+// by exiting for the manager to relaunch; see applyUpdate).
+func restartInstalledService() bool {
+	path, _ := unitPathAndContent()
+	if path == "" {
+		return false
+	}
+	if _, err := os.Stat(path); err != nil {
+		return false // no unit installed → nothing to restart
+	}
+	switch serviceKind() {
+	case "systemd":
+		// try-restart is a no-op on a stopped unit, so gate on is-active to only
+		// claim a restart when one actually happened.
+		if exec.Command("systemctl", "--user", "is-active", "--quiet", "paseo-conductor").Run() != nil {
+			return false
+		}
+		_ = sh("systemctl", "--user", "daemon-reload")
+		return sh("systemctl", "--user", "restart", "paseo-conductor") == nil
+	case "launchd":
+		// kickstart -k restarts the running agent (error ⇒ not loaded ⇒ false).
+		return sh("launchctl", "kickstart", "-k",
+			fmt.Sprintf("gui/%d/sh.paseo-conductor", os.Getuid())) == nil
+	}
+	return false
 }
 
 func startHint() string {
