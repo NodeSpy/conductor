@@ -180,18 +180,22 @@ func cmdRun(args []string) error {
 	disp.AdoptOpenWorkspaces = cfg.AdoptOpenWorkspaces
 	preflightPATH(disp.PaseoBin)
 	notifier := notify.New(cfg.Notify, logf)
+	// Shared "never reap" set for interactive hand-off agents: the engine registers
+	// a background step's agent at launch; the reaper skips anything in it.
+	hold := dispatch.NewHoldSet()
 	eng := engine.New(engine.Options{
 		Config: cfg, Store: st, Dispatch: disp, Notifier: notifier,
 		Author: gitAuthor(), UserToken: writeTok, ReadToken: readTok, Log: logf,
-		RefreshAppToken: refreshAppToken(igs),
+		RefreshAppToken: refreshAppToken(igs), Hold: hold,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Reaper for archive-when-done agents.
+	// Reaper for archive-when-done agents. It shares the hand-off hold-set so it
+	// never archives an agent the engine handed off for you to drive.
 	if anyArchive(cfg) {
-		r := &dispatch.Reaper{PaseoBin: disp.PaseoBin, Log: logf}
+		r := &dispatch.Reaper{PaseoBin: disp.PaseoBin, Log: logf, Held: hold}
 		go r.Run(ctx)
 	}
 

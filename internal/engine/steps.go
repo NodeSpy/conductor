@@ -122,7 +122,10 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		}
 		e.saveRun(run)
 		if s.Background {
-			// Handed off to a live agent — tell the user it's waiting for them.
+			// Handed off to a live agent — tell the reaper never to touch it (this is
+			// the authoritative keep-signal; a hand-off carries no pending permission
+			// or hold marker for the reaper to observe), then tell the user.
+			e.hold.Add(ref.AgentID)
 			e.log("%s step %s launched in background after %s (agent %s)", tag(t), id, took, ref.AgentID)
 			e.notif.Emit(ctx, notify.EventNeedsInput, t,
 				fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))

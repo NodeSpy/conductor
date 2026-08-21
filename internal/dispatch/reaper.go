@@ -23,6 +23,12 @@ type Reaper struct {
 	MinAge   time.Duration // don't reap agents younger than this (default reaperGraceDefault)
 	Log      func(string, ...any)
 
+	// Held is the conductor's explicit "never reap" set — agent ids handed off for
+	// you to drive (background workflow steps). The engine populates it at launch.
+	// This is the authoritative keep-signal for hand-offs, independent of labels or
+	// markers (which the reaper can't reliably observe for a background agent).
+	Held *HoldSet
+
 	// held remembers agents that have entered a back-and-forth with the user (asked
 	// a question / set a hold marker). Once an agent interacts it becomes the user's
 	// to drive and close, so the reaper leaves it alone for the rest of its life —
@@ -70,7 +76,9 @@ func (r *Reaper) reap(ctx context.Context) {
 	// (not AND), so a second --label would just override the first — and archive=1
 	// is set exclusively by the conductor, and only for archive_when_done agents,
 	// so it already implies conductor=1 and is exactly the reap set. Interactive
-	// hand-off (background) agents never get this label, so they're never reaped.
+	// hand-off agents shouldn't carry this label — but that's protection by absence;
+	// the authoritative guard is the engine-registered Held set, checked per agent
+	// below, so a hand-off survives even if it somehow lands in this list.
 	out, err := exec.CommandContext(ctx, r.PaseoBin, "ls", "--json",
 		"--label", "archive=1").Output()
 	if err != nil {
@@ -109,6 +117,12 @@ func (r *Reaper) reap(ctx context.Context) {
 		// workspaces are archivable — never a shared/base checkout.
 		worktrees := r.worktreeWorkspaces(ctx)
 		for _, a := range idle {
+			// Explicit hand-off hold (engine-registered at launch): never reap,
+			// regardless of labels/markers. This is the deterministic protection for
+			// interactive hand-off agents that carry no other "needs you" signal.
+			if r.Held.Has(a.id) {
+				continue
+			}
 			// Once an agent has entered a back-and-forth with you (asked a question,
 			// pending permission, or a hold marker), it's yours to drive and close —
 			// the reaper leaves it AND its workspace alone for life. Already-held
@@ -151,9 +165,34 @@ func (r *Reaper) reap(ctx context.Context) {
 			delete(r.held, id)
 		}
 	}
+	// Prune the explicit hand-off hold-set against the FULL agent list (a held
+	// hand-off carries no archive=1, so it's absent from `present` above — pruning
+	// against that would wrongly drop it). It's forgotten only once you archive it.
+	r.Held.keepOnly(r.presentIDs(ctx))
 
 	// Tidy the shared checkout:none scratch workspace when nothing is running in it.
 	r.cullScratch(ctx)
+}
+
+// presentIDs is the set of all non-archived agent ids on the local daemon.
+func (r *Reaper) presentIDs(ctx context.Context) map[string]bool {
+	out, err := exec.CommandContext(ctx, r.PaseoBin, "ls", "--json").Output()
+	if err != nil {
+		return nil
+	}
+	var a []struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(out, &a) != nil {
+		return nil
+	}
+	ids := make(map[string]bool, len(a))
+	for _, x := range a {
+		if x.ID != "" {
+			ids[x.ID] = true
+		}
+	}
+	return ids
 }
 
 // cullScratch archives the shared checkout:none scratch workspace when no agent is

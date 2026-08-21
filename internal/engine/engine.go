@@ -64,6 +64,7 @@ type Engine struct {
 	rerun      func(context.Context, core.Trigger, int64)
 	refreshTok func(core.Trigger) (string, error) // re-mint the App token on resume
 	log        func(string, ...any)
+	hold       *dispatch.HoldSet // agent ids handed off to the user; the reaper never touches these
 	ch         chan core.Trigger
 	sem        chan struct{} // concurrent-agent cap; nil = unlimited
 }
@@ -85,7 +86,11 @@ type Options struct {
 	// on resume (the persisted one is expired). Given the trigger's instance +
 	// installation_id. nil disables workflow resume.
 	RefreshAppToken func(core.Trigger) (string, error)
-	Log             func(string, ...any)
+	// Hold is the shared "never reap" set for interactive hand-off agents; the
+	// engine registers a background step's agent id here at launch and the reaper
+	// skips it. nil disables the explicit hold (falls back to label/marker signals).
+	Hold *dispatch.HoldSet
+	Log  func(string, ...any)
 }
 
 // New builds an Engine.
@@ -97,7 +102,8 @@ func New(o Options) *Engine {
 	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, notif: o.Notifier,
 		author: o.Author, userTok: o.UserToken, readTok: o.ReadToken, log: log,
-		ch: make(chan core.Trigger, 256),
+		hold: o.Hold,
+		ch:   make(chan core.Trigger, 256),
 	}
 	if cap := o.Config.Control.AgentCap(); cap > 0 {
 		e.sem = make(chan struct{}, cap)
