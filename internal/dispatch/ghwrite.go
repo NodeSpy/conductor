@@ -38,6 +38,23 @@ const HoldGuidance = "\n\n---\n" +
 	"and WAIT for my answer: that pauses you and keeps your workspace alive until I " +
 	"respond. Only finish when you are genuinely done and need nothing from me."
 
+// HandoffGuidance is appended to every background (hand-off) step. Unlike a plain
+// archive-when-done agent — which asks only IF it needs something (HoldGuidance) —
+// a hand-off exists to bring a decision to the user, so it must ALWAYS finish by
+// asking rather than going idle. Ending idle shows up in paseo as merely "ready"
+// and is easy to miss; asking surfaces as "needs your input" (and pauses the agent,
+// keeping its workspace alive).
+const HandoffGuidance = "\n\n---\n" +
+	"HAND-OFF — this run is for ME to decide on. You do the work, then bring it to me " +
+	"as a decision; I'll drive you interactively in paseo. When you finish the work " +
+	"(e.g. you've drafted the review), do NOT stop or \"wait\" with your result written " +
+	"as plain text — that shows up only as \"ready\" and I may miss it. You MUST conclude " +
+	"by ASKING me with your interactive multiple-choice question tool (AskUserQuestion): " +
+	"briefly summarize what you produced and offer clear next-step choices (for a review, " +
+	"e.g. post as-is / revise / discard), then WAIT for my answer. Do this every time you " +
+	"need me — including after each revision — so I'm always alerted. Never end your turn " +
+	"idle while you still need a decision from me."
+
 // RerequestReviewGuidance is appended (when rerequest_review is set) so the agent
 // closes the review loop after addressing feedback.
 const RerequestReviewGuidance = "\n\n---\n" +

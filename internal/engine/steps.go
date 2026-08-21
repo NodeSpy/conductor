@@ -72,7 +72,13 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				if s.RerequestReview {
 					s.Prompt += dispatch.RerequestReviewGuidance
 				}
-				if profile.ArchiveWhenDone {
+				switch {
+				case s.Background:
+					// A hand-off is interactive by definition — it must ALWAYS end by
+					// asking me (so paseo shows "needs your input", not just "ready").
+					s.Prompt += dispatch.HandoffGuidance
+				case profile.ArchiveWhenDone:
+					// A non-interactive archive-when-done agent asks only if it needs me.
 					s.Prompt += dispatch.HoldGuidance
 				}
 			}

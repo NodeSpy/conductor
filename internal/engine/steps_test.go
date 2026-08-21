@@ -37,6 +37,7 @@ type stepFake struct {
 	seenSteps map[string][]string // step id -> which prior step outputs were visible
 	waited    map[string]bool     // step id -> req.Wait
 	archive   map[string]bool     // step id -> req.Profile.ArchiveWhenDone (→ archive=1 label)
+	prompts   map[string]string   // step id -> dispatched prompt (with guidance appended)
 }
 
 func (f *stepFake) Dispatch(_ context.Context, req dispatch.Request) (dispatch.RunRef, error) {
@@ -46,6 +47,7 @@ func (f *stepFake) Dispatch(_ context.Context, req dispatch.Request) (dispatch.R
 	f.provider[id] = req.Profile.Provider
 	f.waited[id] = req.Wait
 	f.archive[id] = req.Profile.ArchiveWhenDone
+	f.prompts[id] = req.Action.Prompt
 	if s, ok := req.Data["steps"].(map[string]any); ok {
 		keys := []string{}
 		for k := range s {
@@ -70,7 +72,8 @@ func (f *stepFake) count() int {
 
 func newStepFake() *stepFake {
 	return &stepFake{outputs: map[string]string{}, provider: map[string]string{},
-		seenSteps: map[string][]string{}, waited: map[string]bool{}, archive: map[string]bool{}}
+		seenSteps: map[string][]string{}, waited: map[string]bool{}, archive: map[string]bool{},
+		prompts: map[string]string{}}
 }
 
 func triageAction() config.Action {
@@ -161,6 +164,11 @@ func TestWorkflowBackgroundStepHandsOff(t *testing.T) {
 	// ...and tells the user it's waiting for them.
 	if !n.has(notify.EventNeedsInput) {
 		t.Fatalf("background step should emit needs_input, got %v", n.events)
+	}
+	// ...and is instructed to conclude by ASKING (so paseo shows "needs your input",
+	// not just "ready"): the hand-off guidance must be appended to its prompt.
+	if !strings.Contains(d.prompts["handoff"], "AskUserQuestion") {
+		t.Fatalf("hand-off prompt should carry HandoffGuidance (ask via AskUserQuestion); got: %q", d.prompts["handoff"])
 	}
 }
 
