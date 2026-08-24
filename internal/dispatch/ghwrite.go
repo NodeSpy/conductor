@@ -56,11 +56,18 @@ const HandoffGuidance = "\n\n---\n" +
 	"idle while you still need a decision from me."
 
 // RerequestReviewGuidance is appended (when rerequest_review is set) so the agent
-// closes the review loop after addressing feedback.
+// closes the review loop after addressing feedback — but ONLY when there's an
+// actual changes-requested review to re-request. It must never dismiss a standing
+// approval (re-requesting a reviewer who approved wipes their approval), and must
+// not ask what to do when there's simply no target.
 const RerequestReviewGuidance = "\n\n---\n" +
-	"After you have addressed the feedback and pushed, RE-REQUEST review so the " +
-	"loop continues. Identify the human reviewer(s) who requested changes " +
-	"(`gh pr view {{.repo}}#{{.pr}} --json reviewRequests,reviews`) and re-request " +
-	"each of them as yourself (skip bots):\n" +
+	"AFTER you have addressed the feedback and pushed, close the review loop — but " +
+	"carefully. Check current review state:\n" +
+	"  GH_TOKEN=$" + envGHWriteToken + " gh pr view {{.repo}}#{{.pr}} --json reviews,reviewRequests\n" +
+	"Re-request review ONLY from human reviewer(s) whose LATEST review state is " +
+	"CHANGES_REQUESTED and who are not already a pending requested reviewer:\n" +
 	"  GH_TOKEN=$" + envGHWriteToken + " gh pr edit {{.repo}}#{{.pr}} --add-reviewer <login>\n" +
-	"Only do this once your push has succeeded."
+	"Do NOT re-request anyone whose latest review is APPROVED (even approve-with-nits) — " +
+	"that would dismiss their approval. If NO reviewer currently has changes-requested " +
+	"outstanding, do nothing here and do not ask me about it; the loop is already closed. " +
+	"Only re-request once your push has succeeded, and skip bots."
