@@ -262,6 +262,36 @@ func (c *restClient) unresolvedThreadIDs(ctx context.Context, instID int64, owne
 	return ids, nil
 }
 
+// prComment is a PR comment (issue-level or review-level) as the sweep needs it.
+type prComment struct {
+	ID   int64  `json:"id"`
+	Body string `json:"body"`
+	User struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	HTMLURL string `json:"html_url"`
+}
+
+// recentComments returns a PR's most-recent comments — both conversation (issue)
+// comments and inline review comments — merged, for the sweep's missed-comment
+// recovery. Each endpoint returns its first page newest-first; the engine's
+// comment high-water mark filters out ones already handled, so a small page is
+// enough to recover a short offline gap without an unbounded walk.
+func (c *restClient) recentComments(ctx context.Context, instID int64, owner, name string, number int) ([]prComment, error) {
+	issueURL := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments?per_page=30&sort=created&direction=desc",
+		c.app.apiBase, owner, name, number)
+	reviewURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/comments?per_page=30&sort=created&direction=desc",
+		c.app.apiBase, owner, name, number)
+	var issue, review []prComment
+	if err := c.get(ctx, instID, issueURL, &issue); err != nil {
+		return nil, err
+	}
+	if err := c.get(ctx, instID, reviewURL, &review); err != nil {
+		return nil, err
+	}
+	return append(issue, review...), nil
+}
+
 // prGate fetches the merge-readiness gate for a PR.
 func (c *restClient) prGate(ctx context.Context, instID int64, owner, name string, number int) (*mergeGate, error) {
 	const q = `query($o:String!,$n:String!,$num:Int!){

@@ -31,7 +31,10 @@ integrations:
       # listen: 127.0.0.1:8787        # direct receiver; point the App webhook (or your tunnel) here
       # path: /webhook                # default
     sweep:
-      enabled: false                  # off by default; catch-up only
+      enabled: false                  # off by default; catch-up only. Recovers
+                                      # review_requested + your PRs' conflict/behind/
+                                      # unresolved-threads AND missed new_comment (via a
+                                      # per-PR comment high-water mark, replayed once).
       # Adaptive cadence: starts tight at min_interval after startup (and whenever
       # smee reconnects after a drop), then backs off ×2 toward interval (the ceiling
       # a quiet, connected daemon settles at). So gaps are caught fast without

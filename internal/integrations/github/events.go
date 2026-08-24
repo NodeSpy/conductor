@@ -308,7 +308,7 @@ func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []cor
 		return nil // ignore our own comments
 	}
 	t := g.target(repo, num, head, base, url)
-	extra := map[string]any{"author": p.Comment.User.Login, "comment_body": p.Comment.Body, "head_ref": headRef}
+	extra := map[string]any{"author": p.Comment.User.Login, "comment_body": p.Comment.Body, "head_ref": headRef, "comment_id": p.Comment.ID}
 	// Each variant may set its own from_users filter (empty = any commenter).
 	return g.emit(repo, "new_comment", t,
 		fmt.Sprintf("new comment by %s on %s#%d", p.Comment.User.Login, repo, num),

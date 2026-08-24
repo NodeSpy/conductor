@@ -46,6 +46,8 @@ type Store interface {
 	RetryReady(key, kind, head string, soft int, base time.Duration, factor int, max time.Duration) (bool, time.Duration)
 	Record(key, kind, sig, head string) error
 	RecordAttempt(key, kind, head string) error
+	LastCommentID(key string) int64
+	AdvanceCommentID(key string, id int64) error
 	Audit(entry map[string]any)
 	// Workflow-run persistence, so multi-step workflows resume across restarts.
 	PutRun(r store.WorkflowRun) error
@@ -255,6 +257,18 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		return
 	}
 	head := t.Target.HeadSHA
+
+	// Comment high-water mark: a new_comment for a comment id at or below the mark
+	// was already handled (webhook or a prior sweep) — skip it. This is what lets the
+	// sweep re-list recent comments to recover missed ones without re-dispatching
+	// old ones (the single-slot dedup can't distinguish them). The mark advances on
+	// a successful new_comment dispatch below.
+	if t.Kind == "new_comment" {
+		if id := commentID(t); id > 0 && id <= e.store.LastCommentID(key) {
+			return
+		}
+	}
+
 	// Dedup/attempt state is keyed per action variant so two variants of a kind on
 	// the same PR/head don't collide. An unnamed (single) action keeps the bare
 	// `kind` key, so existing state.json is honored with no migration.
@@ -460,6 +474,14 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 		return
 	}
+	// A comment was handled (fresh agent, queued, or adopted) — raise the high-water
+	// mark so the sweep's re-listing of recent comments won't re-dispatch this one.
+	if t.Kind == "new_comment" {
+		if id := commentID(t); id > 0 {
+			_ = e.store.AdvanceCommentID(key, id)
+		}
+	}
+
 	if ref.Queued {
 		// Work was handed to an agent already on the PR — no new agent, no slot to
 		// hold; it'll drain the queue on its own.
@@ -741,6 +763,15 @@ func toInt64(v any) int64 {
 		return int64(n)
 	}
 	return 0
+}
+
+// commentID reads a new_comment trigger's source comment id from Context (0 if
+// absent — e.g. an older trigger without the field, which then can't be gated).
+func commentID(t core.Trigger) int64 {
+	if t.Context == nil {
+		return 0
+	}
+	return toInt64(t.Context["comment_id"])
 }
 
 func shadowNote(shadow bool) string {

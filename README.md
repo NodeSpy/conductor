@@ -540,8 +540,12 @@ Set `webhook.smee_url`, `webhook.listen`, or both:
 connection (a network blip with no clean close) in ~80s rather than the kernel's ~15-min default, so
 a silent drop is short. smee.io does **not** buffer, so any webhook delivered while you're
 disconnected is lost — the [sweep](#full-example) (`sweep.enabled`) is the catch-up net: it
-re-derives `review_requested`/`merge_conflict`/`pr_behind`/`changes_requested` from live PR state
-(comment/issue events aren't re-derivable).
+re-derives `review_requested`/`merge_conflict`/`pr_behind`/`changes_requested`/`new_comment` from live
+PR state (plain-issue events aren't re-derivable). For `new_comment` the sweep re-lists each of your
+PRs' recent comments (conversation + inline review) and replays any it hasn't seen; a per-PR **comment
+high-water mark** (advanced whenever a `new_comment` dispatches) drops the ones already handled, so a
+recovered comment fires once, not on every sweep. A comment older than one already handled on the same
+PR isn't recovered — the mark only moves forward — which the prompt reconnect sweep keeps rare.
 
 The sweep runs on an **adaptive cadence**: it sweeps immediately on startup and on a reconnect, then
 follows up starting at `sweep.min_interval` (default `10m`) and backs off ×2 toward the ceiling

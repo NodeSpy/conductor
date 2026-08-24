@@ -102,6 +102,32 @@ func (s *Store) rec(key string) *Record {
 	return r
 }
 
+// LastCommentID returns the high-water mark of the newest PR comment already acted
+// on for key (0 if none). The sweep's comment recovery uses it (via the engine) to
+// skip comments already handled and only re-emit genuinely-missed newer ones.
+func (s *Store) LastCommentID(key string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r := s.recs[key]; r != nil {
+		return r.LastComID
+	}
+	return 0
+}
+
+// AdvanceCommentID raises key's comment high-water mark to id (never lowers it).
+func (s *Store) AdvanceCommentID(key string, id int64) error {
+	s.mu.Lock()
+	r := s.rec(key)
+	if id <= r.LastComID {
+		s.mu.Unlock()
+		return nil
+	}
+	r.LastComID = id
+	r.UpdatedAt = s.now()
+	s.mu.Unlock()
+	return s.save()
+}
+
 // LastSignature returns the last dedup signature acted on for (key, kind).
 func (s *Store) LastSignature(key, kind string) string {
 	s.mu.Lock()

@@ -190,6 +190,53 @@ func TestDedupSkipsRepeat(t *testing.T) {
 	}
 }
 
+// commentTrigger is a new_comment trigger carrying a source comment id — the
+// signal the sweep's missed-comment recovery leans on.
+func commentTrigger(repo string, num int, id int64, sig string, act config.Action) core.Trigger {
+	tr := agentTrigger("new_comment", repo, num, "h", sig, act)
+	tr.Context["comment_id"] = id
+	return tr
+}
+
+func TestCommentHWMAdvancesOnDispatch(t *testing.T) {
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, st := newEng(t, baseCfg(), d, n, nil)
+	act := config.Action{Type: "agent", Agent: "fixer"}
+
+	// A fresh comment dispatches and raises the high-water mark to its id.
+	e.process(context.Background(), commentTrigger("a/w", 1, 100, "c100", act))
+	if len(d.reqs) != 1 {
+		t.Fatalf("want 1 dispatch, got %d", len(d.reqs))
+	}
+	if got := st.LastCommentID("a/w#1"); got != 100 {
+		t.Fatalf("HWM should be 100, got %d", got)
+	}
+}
+
+func TestCommentHWMSkipsAlreadyHandled(t *testing.T) {
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, st := newEng(t, baseCfg(), d, n, nil)
+	act := config.Action{Type: "agent", Agent: "fixer"}
+	if err := st.AdvanceCommentID("a/w#1", 200); err != nil {
+		t.Fatal(err)
+	}
+
+	// A re-listed older comment (id <= mark) is dropped by the engine gate...
+	e.process(context.Background(), commentTrigger("a/w", 1, 150, "c150", act))
+	e.process(context.Background(), commentTrigger("a/w", 1, 200, "c200", act))
+	if len(d.reqs) != 0 {
+		t.Fatalf("comments at/under the HWM should be skipped, got %d dispatches", len(d.reqs))
+	}
+	// ...but a genuinely-newer one dispatches and advances the mark.
+	e.process(context.Background(), commentTrigger("a/w", 1, 250, "c250", act))
+	if len(d.reqs) != 1 {
+		t.Fatalf("newer comment should dispatch, got %d", len(d.reqs))
+	}
+	if got := st.LastCommentID("a/w#1"); got != 250 {
+		t.Fatalf("HWM should advance to 250, got %d", got)
+	}
+}
+
 func TestBackoffThenRetry(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	st := tempStore(t)

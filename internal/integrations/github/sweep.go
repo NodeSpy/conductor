@@ -137,8 +137,8 @@ func (g *Integration) sweep(ctx context.Context, emit core.EmitFunc) error {
 		}
 		g.sweepRepo(ctx, emit, instID, owner, name, entry, st)
 	}
-	log.Printf("github[%s]: sweep done — repos=%d prs=%d review_requested=%d (skipped draft=%d, excluded=%d) merge_conflict=%d pr_behind=%d changes_requested=%d",
-		g.name, st.repos, st.prs, st.review, st.reviewDraft, st.reviewExcluded, st.conflict, st.behind, st.comments)
+	log.Printf("github[%s]: sweep done — repos=%d prs=%d review_requested=%d (skipped draft=%d, excluded=%d) merge_conflict=%d pr_behind=%d changes_requested=%d new_comment=%d",
+		g.name, st.repos, st.prs, st.review, st.reviewDraft, st.reviewExcluded, st.conflict, st.behind, st.comments, st.newComments)
 	return nil
 }
 
@@ -148,6 +148,7 @@ type sweepStats struct {
 	repos, prs                          int
 	review, reviewDraft, reviewExcluded int
 	conflict, behind, comments          int
+	newComments                         int
 }
 
 func plural(n int) string {
@@ -198,6 +199,9 @@ func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID 
 		ct := g.sweepUnresolvedComments(ctx, instID, owner, name, repo, t)
 		st.comments += len(ct)
 		trs = append(trs, ct...)
+		nc := g.sweepMissedComments(ctx, instID, owner, name, repo, t, info.Head.Ref)
+		st.newComments += len(nc)
+		trs = append(trs, nc...)
 		for _, tr := range trs {
 			tr.CatchUp = true
 			emit(ctx, tr)
@@ -223,6 +227,39 @@ func (g *Integration) sweepUnresolvedComments(ctx context.Context, instID int64,
 	sig := "threads:" + t.HeadSHA + ":" + threadSig(ids)
 	return g.single(repo, "changes_requested", t,
 		fmt.Sprintf("sweep: %d unresolved comment thread(s) on %s#%d", len(ids), repo, t.Number), sig, nil)
+}
+
+// sweepMissedComments recovers PR comments (issue + review) whose live webhook the
+// daemon missed while offline. It re-lists recent comments and emits new_comment for
+// each non-self one; the engine's per-PR comment high-water mark (advanced on a
+// successful new_comment dispatch) drops any already handled, so only genuinely-newer
+// comments dispatch. Only runs when new_comment is configured (avoids the extra
+// fetch), and only on your own PRs (new_comment autopilot pushes fixes to PRs you
+// authored — matching the webhook gate in commentTriggers).
+func (g *Integration) sweepMissedComments(ctx context.Context, instID int64, owner, name, repo string, t core.Target, headRef string) []core.Trigger {
+	act, ok := g.actionFor(repo, "new_comment")
+	if !ok || !act.IsEnabled() {
+		return nil
+	}
+	comments, err := g.rest.recentComments(ctx, instID, owner, name, t.Number)
+	if err != nil || len(comments) == 0 {
+		return nil
+	}
+	var out []core.Trigger
+	for _, c := range comments {
+		author := strings.ToLower(c.User.Login)
+		if g.self[author] {
+			continue // our own comments never drive a fix
+		}
+		extra := map[string]any{"author": c.User.Login, "comment_body": c.Body, "head_ref": headRef, "comment_id": c.ID}
+		trs := g.emit(repo, "new_comment", t,
+			fmt.Sprintf("sweep: comment by %s on %s#%d", c.User.Login, repo, t.Number),
+			fmt.Sprintf("comment:%d", c.ID), extra, func(act config.Action) bool {
+				return fromUsersMatch(act.FromUsers, author)
+			})
+		out = append(out, trs...)
+	}
+	return out
 }
 
 // threadSig is a compact, stable signature for a set of unresolved thread ids.

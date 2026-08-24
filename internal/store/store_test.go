@@ -68,6 +68,26 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCommentHighWaterMark(t *testing.T) {
+	s := newTestStore(t, time.Hour, 100)
+	if got := s.LastCommentID("acme/w#1"); got != 0 {
+		t.Fatalf("unset mark should be 0, got %d", got)
+	}
+	if err := s.AdvanceCommentID("acme/w#1", 100); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.LastCommentID("acme/w#1"); got != 100 {
+		t.Fatalf("mark should be 100, got %d", got)
+	}
+	// Never lowers: an older id is a no-op.
+	if err := s.AdvanceCommentID("acme/w#1", 50); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.LastCommentID("acme/w#1"); got != 100 {
+		t.Fatalf("mark should not lower, got %d", got)
+	}
+}
+
 func TestDeleteAndGC(t *testing.T) {
 	s := newTestStore(t, time.Hour, 100)
 	s.Record("acme/w#1", "k", "sig", "h")

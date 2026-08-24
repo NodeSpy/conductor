@@ -184,6 +184,11 @@ func TestNewCommentIgnoresSelf(t *testing.T) {
 	if len(trs) != 1 || trs[0].Kind != "new_comment" {
 		t.Fatalf("want 1 new_comment, got %+v", trs)
 	}
+	// The source comment id must be stamped so the engine's high-water mark (and
+	// the sweep's missed-comment recovery) can gate on it.
+	if got, _ := trs[0].Context["comment_id"].(int64); got != 12 {
+		t.Fatalf("comment_id not stamped, got %v", trs[0].Context["comment_id"])
+	}
 }
 
 func TestRepoNotMatchedNoTrigger(t *testing.T) {
