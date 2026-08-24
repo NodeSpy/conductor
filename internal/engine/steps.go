@@ -69,7 +69,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			}
 			if s.Prompt != "" {
 				s.Prompt += dispatch.WriteWrapperGuidance
-				s.Prompt += e.agentGuidance()
+				s.Prompt += e.agentGuidance(profile)
 				if s.RerequestReview {
 					s.Prompt += dispatch.RerequestReviewGuidance
 				}

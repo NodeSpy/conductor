@@ -428,6 +428,41 @@ func TestAgentGuidanceConfigOverride(t *testing.T) {
 	}
 }
 
+func TestPerAgentGuidancePrecedence(t *testing.T) {
+	global := "GLOBAL house style."
+	perAgent := "FIXER-only style."
+	empty := ""
+
+	run := func(profile config.AgentProfile, globalGuidance *string) string {
+		cfg := &config.Config{AgentGuidance: globalGuidance,
+			Agents: map[string]config.AgentProfile{"fixer": profile}}
+		cfg.Control.Enabled = ptrBool(true)
+		d := &fakeDispatcher{}
+		e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
+		e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h", "s",
+			config.Action{Type: "agent", Agent: "fixer", Prompt: "do it"}))
+		return d.reqs[0].Action.Prompt
+	}
+	base := config.AgentProfile{Provider: "claude"}
+
+	// Per-agent guidance wins over the global.
+	if p := run(config.AgentProfile{Provider: "claude", Guidance: &perAgent}, &global); !strings.Contains(p, perAgent) || strings.Contains(p, global) {
+		t.Fatalf("per-agent guidance should override global, got: %q", p)
+	}
+	// No per-agent → falls through to global.
+	if p := run(base, &global); !strings.Contains(p, global) {
+		t.Fatalf("no per-agent guidance should fall through to global, got: %q", p)
+	}
+	// No per-agent, no global → built-in default.
+	if p := run(base, nil); !strings.Contains(p, "be concise and human") {
+		t.Fatalf("no guidance anywhere should use the built-in default, got: %q", p)
+	}
+	// Per-agent "" disables even when a global is set.
+	if p := run(config.AgentProfile{Provider: "claude", Guidance: &empty}, &global); strings.Contains(p, global) || strings.Contains(p, "be concise and human") {
+		t.Fatalf("per-agent empty should disable guidance for that agent, got: %q", p)
+	}
+}
+
 func TestLiveGatedKindNotAbandonedOnDispatch(t *testing.T) {
 	// changes_requested is live-gated: a "successful" dispatch (agent launched)
 	// must NOT record a done/dedup flag — otherwise a culled/incomplete agent

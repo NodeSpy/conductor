@@ -183,6 +183,10 @@ type AgentProfile struct {
 	WaitTimeout     Duration          `yaml:"wait_timeout"`
 	ArchiveWhenDone bool              `yaml:"archive_when_done"`
 	Labels          map[string]string `yaml:"labels"`
+	// Guidance overrides the top-level agent_guidance for THIS agent (house tone/
+	// format rules appended to its prompt). Unset (nil) → fall through to the
+	// top-level agent_guidance (then the built-in default); "" → none; text → that.
+	Guidance *string `yaml:"guidance"`
 }
 
 // Action is one (source,kind)→action mapping. Type is "agent" or "command".

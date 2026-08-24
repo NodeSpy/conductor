@@ -344,6 +344,9 @@ agents:
     wait_timeout: 30m
     archive_when_done: true
     labels: { team: autopilot }
+    # guidance: |                     # per-agent tone/format; overrides top-level
+    #   One or two sentences, plain and direct.  #   agent_guidance (unset → that,
+    #                                             #   "" → none, text → this).
   planner:                            # cheaper/faster model for planning/triage steps
     provider: claude
     model: claude-haiku-4-5-20251001

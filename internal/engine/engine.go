@@ -191,16 +191,25 @@ func (e *Engine) gcLoop(ctx context.Context) {
 	}
 }
 
-// agentGuidance returns the house tone/format guidance appended to every agent
-// prompt. Config `agent_guidance` overrides the built-in default: unset → the
-// built-in concise/human default; "" → none; custom text → that text (wrapped in
-// the standard separator so it reads as its own block).
-func (e *Engine) agentGuidance() string {
-	if e.cfg.AgentGuidance == nil {
+// agentGuidance returns the house tone/format guidance appended to a dispatched
+// agent's prompt. Precedence, most specific first: the profile's own `guidance`,
+// then the top-level `agent_guidance`, then the built-in concise/human default.
+// At each level nil falls through, "" disables, and text (wrapped in the standard
+// separator) is used.
+func (e *Engine) agentGuidance(profile config.AgentProfile) string {
+	switch {
+	case profile.Guidance != nil:
+		return wrapGuidance(*profile.Guidance)
+	case e.cfg.AgentGuidance != nil:
+		return wrapGuidance(*e.cfg.AgentGuidance)
+	default:
 		return dispatch.ConcisionGuidance
 	}
-	t := strings.TrimSpace(*e.cfg.AgentGuidance)
-	if t == "" {
+}
+
+// wrapGuidance renders guidance text as its own prompt block, or "" if empty.
+func wrapGuidance(t string) string {
+	if t = strings.TrimSpace(t); t == "" {
 		return ""
 	}
 	return "\n\n---\n" + t
@@ -369,7 +378,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		profile = e.cfg.Agents[act.Agent]
 		if act.Prompt != "" {
 			act.Prompt += dispatch.WriteWrapperGuidance
-			act.Prompt += e.agentGuidance()
+			act.Prompt += e.agentGuidance(profile)
 			if act.RerequestReview {
 				act.Prompt += dispatch.RerequestReviewGuidance
 			}
