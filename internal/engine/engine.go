@@ -65,6 +65,7 @@ type Engine struct {
 	refreshTok func(core.Trigger) (string, error) // re-mint the App token on resume
 	log        func(string, ...any)
 	hold       *dispatch.HoldSet // agent ids handed off to the user; the reaper never touches these
+	pausePath  string            // control file; present = paused (toggled by pause/resume, no restart)
 	ch         chan core.Trigger
 	sem        chan struct{} // concurrent-agent cap; nil = unlimited
 }
@@ -90,7 +91,10 @@ type Options struct {
 	// engine registers a background step's agent id here at launch and the reaper
 	// skips it. nil disables the explicit hold (falls back to label/marker signals).
 	Hold *dispatch.HoldSet
-	Log  func(string, ...any)
+	// PausePath is a control file whose presence pauses dispatch (toggled by the
+	// pause/resume commands without a restart). Empty disables the runtime pause.
+	PausePath string
+	Log       func(string, ...any)
 }
 
 // New builds an Engine.
@@ -102,8 +106,9 @@ func New(o Options) *Engine {
 	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, notif: o.Notifier,
 		author: o.Author, userTok: o.UserToken, readTok: o.ReadToken, log: log,
-		hold: o.Hold,
-		ch:   make(chan core.Trigger, 256),
+		hold:      o.Hold,
+		pausePath: o.PausePath,
+		ch:        make(chan core.Trigger, 256),
 	}
 	if cap := o.Config.Control.AgentCap(); cap > 0 {
 		e.sem = make(chan struct{}, cap)
@@ -157,6 +162,41 @@ func (e *Engine) gcLoop(ctx context.Context) {
 	}
 }
 
+// isPaused reports whether the runtime pause control file is present.
+func (e *Engine) isPaused() bool {
+	if e.pausePath == "" {
+		return false
+	}
+	_, err := os.Stat(e.pausePath)
+	return err == nil
+}
+
+// triggerHasLabel reports whether the object's labels (stamped into Context by the
+// integration where available) include label, case-insensitively.
+func triggerHasLabel(t core.Trigger, label string) bool {
+	raw, ok := t.Context["labels"]
+	if !ok {
+		return false
+	}
+	var labels []string
+	switch v := raw.(type) {
+	case []string:
+		labels = v
+	case []any:
+		for _, e := range v {
+			if s, ok := e.(string); ok {
+				labels = append(labels, s)
+			}
+		}
+	}
+	for _, l := range labels {
+		if strings.EqualFold(l, label) {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	key := t.Key()
 
@@ -167,8 +207,18 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		return
 	}
 
-	// Kill switch.
+	// Kill switch (config) + runtime pause (a control file toggled by `pause`/
+	// `resume` without a restart).
 	if !e.cfg.Control.IsEnabled() {
+		return
+	}
+	if e.isPaused() {
+		e.log("%s skipped — conductor is paused", tag(t))
+		return
+	}
+	// Per-PR/issue opt-out: a label on the object (e.g. `conductor:off`) parks it.
+	if pl := e.cfg.Control.PauseLabel; pl != "" && triggerHasLabel(t, pl) {
+		e.log("%s skipped — carries pause label %q", tag(t), pl)
 		return
 	}
 	e.store.Touch(key)

@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/NodeSpy/paseo-conductor/internal/config"
 )
 
 // cmdStatus prints a snapshot of what conductor is doing — read entirely from the
@@ -62,6 +64,37 @@ func cmdStatus(args []string) error {
 	}
 	for _, e := range ev {
 		fmt.Printf("  %s  [%s] %s#%v %v\n", e.ts, e.event, e.repo, e.number, e.kind)
+	}
+	return nil
+}
+
+// pausePath is the runtime-pause control file (a sibling of the state file). Its
+// presence makes the running daemon skip all dispatch until removed.
+func pausePath(cfg *config.Config) string {
+	return filepath.Join(filepath.Dir(cfg.Store.StateFile), "paused")
+}
+
+// cmdPause creates (pause) or removes (resume) the pause control file. The running
+// daemon checks it per trigger, so it takes effect without a restart.
+func cmdPause(args []string, pause bool) error {
+	cfg, _, err := loadConfig(args)
+	if err != nil {
+		return err
+	}
+	p := pausePath(cfg)
+	if pause {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(p, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644); err != nil {
+			return err
+		}
+		fmt.Println("paused — the daemon will skip dispatch until `resume` (no restart needed)")
+	} else {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		fmt.Println("resumed")
 	}
 	return nil
 }

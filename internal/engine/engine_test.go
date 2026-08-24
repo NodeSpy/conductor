@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -84,6 +85,51 @@ func agentTrigger(kind, repo string, num int, head, sig string, act config.Actio
 		Target:  core.Target{Repo: repo, PR: num, Number: num, HeadSHA: head},
 		Context: map[string]any{"app_token": "atok"},
 		Action:  act,
+	}
+}
+
+func TestRuntimePauseSkips(t *testing.T) {
+	dir := t.TempDir()
+	pauseFile := filepath.Join(dir, "paused")
+	if err := os.WriteFile(pauseFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e := New(Options{Config: baseCfg(), Store: tempStore(t), Dispatch: d, Notifier: n,
+		UserToken: func() (string, error) { return "u", nil }, PausePath: pauseFile})
+	tr := agentTrigger("merge_conflict", "a/w", 1, "h", "sig", config.Action{Type: "agent", Agent: "fixer"})
+
+	e.process(context.Background(), tr)
+	if len(d.reqs) != 0 {
+		t.Fatalf("paused: expected 0 dispatches, got %d", len(d.reqs))
+	}
+	if err := os.Remove(pauseFile); err != nil {
+		t.Fatal(err)
+	}
+	e.process(context.Background(), tr)
+	if len(d.reqs) != 1 {
+		t.Fatalf("after resume: expected 1 dispatch, got %d", len(d.reqs))
+	}
+}
+
+func TestPauseLabelSkips(t *testing.T) {
+	cfg := baseCfg()
+	cfg.Control.PauseLabel = "conductor:off"
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, _ := newEng(t, cfg, d, n, nil)
+
+	off := agentTrigger("merge_conflict", "a/w", 1, "h", "sig", config.Action{Type: "agent", Agent: "fixer"})
+	off.Context["labels"] = []string{"needs-work", "conductor:off"}
+	e.process(context.Background(), off)
+	if len(d.reqs) != 0 {
+		t.Fatalf("a pause-labeled object should be skipped, got %d", len(d.reqs))
+	}
+
+	on := agentTrigger("merge_conflict", "a/w", 2, "h2", "sig2", config.Action{Type: "agent", Agent: "fixer"})
+	on.Context["labels"] = []string{"needs-work"}
+	e.process(context.Background(), on)
+	if len(d.reqs) != 1 {
+		t.Fatalf("no pause label should dispatch, got %d", len(d.reqs))
 	}
 }
 

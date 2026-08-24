@@ -57,6 +57,10 @@ func main() {
 		err = cmdStatus(args)
 	case "report":
 		err = cmdReport(args)
+	case "pause":
+		err = cmdPause(args, true)
+	case "resume":
+		err = cmdPause(args, false)
 	case "update":
 		err = cmdUpdate(args)
 	case "service":
@@ -86,6 +90,7 @@ usage:
   paseo-conductor sweep [--config PATH]       one catch-up sweep (dry-run print)
   paseo-conductor status [--config PATH]      snapshot: live agents, in-flight workflows, stuck/attention
   paseo-conductor report [--days N]           activity summary: dispatches by kind/outcome + attention
+  paseo-conductor pause | resume              stop / resume dispatch at runtime (no restart)
   paseo-conductor update [--force] [--tag vX]  self-update to the latest release (uses gh)
   paseo-conductor service install|sync|uninstall  manage the background service unit
   paseo-conductor version
@@ -192,7 +197,7 @@ func cmdRun(args []string) error {
 	eng := engine.New(engine.Options{
 		Config: cfg, Store: st, Dispatch: disp, Notifier: notifier,
 		Author: gitAuthor(), UserToken: writeTok, ReadToken: readTok, Log: logf,
-		RefreshAppToken: refreshAppToken(igs), Hold: hold,
+		RefreshAppToken: refreshAppToken(igs), Hold: hold, PausePath: pausePath(cfg),
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

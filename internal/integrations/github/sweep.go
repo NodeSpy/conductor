@@ -257,7 +257,7 @@ func (g *Integration) sweepReviewRequested(repo string, pr prListItem, st *sweep
 	t := g.target(repo, pr.Number, pr.Head.SHA, pr.Base.Ref, pr.HTMLURL)
 	trs := g.emit(repo, "review_requested", t,
 		fmt.Sprintf("sweep: review requested on %s#%d", repo, pr.Number),
-		"reviewreq@"+pr.Head.SHA, nil, func(act config.Action) bool {
+		"reviewreq@"+pr.Head.SHA, map[string]any{"labels": labels}, func(act config.Action) bool {
 			return g.prReviewerMatches(g.reviewerFor(repo, act), pr) &&
 				!draftGate(act, pr.Draft) && !act.Exclude.Matches(pr.Head.Ref, pr.Title, labels)
 		})

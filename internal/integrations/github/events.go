@@ -161,6 +161,18 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 		trs = g.releaseTriggers(repo, p)
 	}
 
+	// Stamp the object's current labels so the engine can honor control.pause_label
+	// (a per-PR/issue opt-out). Available on pull_request / issues events; a comment
+	// or review event carries none, which is fine — pause_label just won't catch it.
+	if labels := payloadLabels(p); len(labels) > 0 {
+		for i := range trs {
+			if trs[i].Context == nil {
+				trs[i].Context = map[string]any{}
+			}
+			trs[i].Context["labels"] = labels
+		}
+	}
+
 	// Inject the App installation token so dispatch can use it for reads, plus the
 	// installation id so a persisted workflow can re-mint the (short-lived) token
 	// on resume.
@@ -684,6 +696,23 @@ func (g *Integration) single(repo, kind string, t core.Target, title, dedup stri
 func (g *Integration) prTarget(repo string, pr *prPayload) core.Target {
 	t := g.target(repo, pr.Number, pr.Head.SHA, pr.Base.Ref, pr.HTMLURL)
 	return t
+}
+
+// payloadLabels returns the current label names on the PR or issue in the payload
+// (for control.pause_label). Empty when the event carries no object labels.
+func payloadLabels(p ghPayload) []string {
+	var out []string
+	switch {
+	case p.PullRequest != nil:
+		for _, l := range p.PullRequest.Labels {
+			out = append(out, l.Name)
+		}
+	case p.Issue != nil:
+		for _, l := range p.Issue.Labels {
+			out = append(out, l.Name)
+		}
+	}
+	return out
 }
 
 // feedbackKind reports whether a kind is PR feedback that dispatch may route to an

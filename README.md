@@ -722,7 +722,7 @@ integrations:
 
 control:
   enabled: true                       # master kill switch
-  pause_label: conductor:off          # (label-based pause is a follow-up; enabled/shadow work today)
+  pause_label: conductor:off          # per-PR/issue opt-out: an object with this label is left alone
   shadow: false                       # run the whole pipeline but skip the final push/merge/post
   max_concurrent_agents: 3            # cap running coding agents (0 = unlimited); extra work waits
 
@@ -868,6 +868,8 @@ paseo-conductor replay <event.json>    # run a saved webhook through the pipelin
 paseo-conductor sweep                  # one catch-up sweep (dry-run print)
 paseo-conductor status                 # snapshot: live agents, in-flight workflows, stuck work, attention
 paseo-conductor report [--days N]      # activity summary: dispatches by kind/outcome + attention (default 7d)
+paseo-conductor pause                  # stop dispatch now (writes a control file; no restart)
+paseo-conductor resume                 # resume dispatch
 paseo-conductor version
 ```
 

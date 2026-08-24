@@ -316,7 +316,7 @@ integrations:
 
 control:
   enabled: true
-  pause_label: conductor:off          # (label-based pause is a follow-up; enabled/shadow work today)
+  pause_label: conductor:off          # per-PR/issue opt-out: an object with this label is left alone
   shadow: false                       # run everything but skip the final push/merge/post
   max_concurrent_agents: 3            # cap running coding agents (protects the box and avoids
                                       #   git-lock contention when a sweep fans out). 0 = unlimited.
