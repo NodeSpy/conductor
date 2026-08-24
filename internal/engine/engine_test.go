@@ -395,6 +395,9 @@ func TestFixersDoNotGetAskGuidance(t *testing.T) {
 		if !strings.Contains(d.reqs[0].Action.Prompt, "act as ME") {
 			t.Fatalf("fixer (agent=%s) should still get the identity/write wrapper", agent)
 		}
+		if !strings.Contains(d.reqs[0].Action.Prompt, "be concise and human") {
+			t.Fatalf("fixer (agent=%s) should get the concision guidance", agent)
+		}
 	}
 }
 

@@ -25,6 +25,17 @@ const WriteWrapperGuidance = "\n\n---\n" +
 	"App/bot token. If a large read would burn my rate limit you MAY read (only) with the " +
 	"App token via `GH_TOKEN=$" + envGHAppToken + " gh ...`, but never write with it."
 
+// ConcisionGuidance is appended to every dispatched agent prompt so the text it
+// posts to GitHub (and its own wrap-up) reads like a person, not an essay. Kept
+// short on purpose.
+const ConcisionGuidance = "\n\n---\n" +
+	"TONE: be concise and human. Anything you post to GitHub — comments, replies, " +
+	"review notes — should read like a busy engineer dashed it off: a sentence or " +
+	"two, plain and direct. No preamble, no restating the question, no summarizing " +
+	"what you did, no headers or bullet dumps unless they genuinely earn their place. " +
+	"Say only what's needed and stop. If nothing needs saying, post nothing. Keep " +
+	"your final wrap-up short too — a line, not an essay."
+
 // HoldMarker is a legacy fallback: a file an agent may create in its working
 // directory to signal it still needs the user. The primary mechanism is now an
 // interactive question (see HoldGuidance); the reaper still honors the marker if

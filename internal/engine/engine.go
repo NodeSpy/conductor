@@ -354,6 +354,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		profile = e.cfg.Agents[act.Agent]
 		if act.Prompt != "" {
 			act.Prompt += dispatch.WriteWrapperGuidance
+			act.Prompt += dispatch.ConcisionGuidance
 			if act.RerequestReview {
 				act.Prompt += dispatch.RerequestReviewGuidance
 			}
