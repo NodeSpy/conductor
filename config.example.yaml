@@ -357,10 +357,14 @@ adopt_open_workspaces: false
 
 update:
   auto: false                          # periodically self-update to the latest release
-  interval: 8h                         # check cadence (a few times a day)
+  interval: 10m                        # check cadence (default 10m). Each check is a cheap CONDITIONAL
+                                       #   request (ETag → 304 Not Modified when nothing's new, un-billed
+                                       #   against the rate limit), so a tight interval is effectively free
+                                       #   and a new release is picked up within minutes, not hours.
   apply: true                          # restart into the new binary after updating (default true):
                                        #   under systemd/launchd the manager relaunches it (a clean
-                                       #   restart with the unit's env); foreground runs re-exec
+                                       #   restart with the unit's env); foreground runs re-exec.
+                                       #   apply:false stages the new binary + logs "restart to apply"
 
 store:
   state_file: ~/.local/state/paseo-conductor/state.json

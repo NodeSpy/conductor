@@ -82,8 +82,8 @@ func TestUpdateDefaults(t *testing.T) {
 	c := &Config{}
 	c.Update.Auto = true
 	c.applyDefaults()
-	if c.Update.Interval.D() != 8*time.Hour {
-		t.Fatalf("auto-update interval default = %v, want 8h", c.Update.Interval.D())
+	if c.Update.Interval.D() != 10*time.Minute {
+		t.Fatalf("auto-update interval default = %v, want 10m", c.Update.Interval.D())
 	}
 	if !c.Update.ShouldApply() {
 		t.Fatal("apply should default to true")

@@ -442,9 +442,17 @@ re-reads the unit's environment. Run in the foreground, it re-execs in place ins
 ```yaml
 update:
   auto: true
-  interval: 8h        # default; check cadence
+  interval: 10m       # default; check cadence
   apply: true         # restart into the new binary after updating (default true)
 ```
+
+Each check is a **cheap conditional request** — conductor remembers the release repo's `ETag` and
+sends `If-None-Match`, so an unchanged repo answers `304 Not Modified` (a tiny reply GitHub doesn't
+bill against your rate limit). That makes a tight interval effectively free, so a newly-published
+release is installed within one interval (minutes) rather than hours — no webhook or per-operator
+setup, the same for anyone running conductor. GitHub exposes no release *push* a non-admin can
+subscribe to, so a near-free conditional poll is the portable stand-in. With `apply: false` the new
+binary is downloaded and staged and the daemon logs `restart to apply` instead of restarting itself.
 
 ## Install from source
 
@@ -769,7 +777,7 @@ paseo_bin: paseo                      # path to the paseo CLI (default "paseo");
 
 update:
   auto: false                         # periodically self-update to the latest release
-  interval: 8h                        # check cadence (a few times a day)
+  interval: 10m                       # check cadence (cheap conditional request → 304 when nothing new)
   apply: true                         # re-exec into the new binary after updating
 
 store:
