@@ -130,7 +130,7 @@ func (r *Reaper) reap(ctx context.Context) {
 			if r.held[a.id] {
 				continue
 			}
-			needsUser, created := r.idleState(ctx, a.id, a.cwd)
+			needsUser, created, engaged := r.idleState(ctx, a.id, a.cwd)
 			// Record an interaction first (keeps the sticky-hold correct even if the
 			// Q&A happened during the startup grace below).
 			if spared, first := r.markAndSpare(a.id, needsUser); spared {
@@ -141,8 +141,11 @@ func (r *Reaper) reap(ctx context.Context) {
 			}
 			// Startup grace: never reap an agent still in its spin-up window (it
 			// launches "idle" before the model engages; a tick there would kill it
-			// before any work — see #4795, reaped 7s after launch with no usage).
-			if !created.IsZero() && time.Since(created) < r.minAge() {
+			// before any work — see #4795, reaped 7s after launch with no usage). The
+			// grace applies ONLY to agents that haven't engaged yet — one that has done
+			// work and gone idle is finished and reaped now, not held for the full age
+			// grace (which made a quick fixer sit around as "done" for minutes).
+			if withinStartupGrace(engaged, created, time.Now(), r.minAge()) {
 				continue
 			}
 			if wksID := worktrees[normCwd(a.cwd)]; wksID != "" {
@@ -266,28 +269,43 @@ func (r *Reaper) minAge() time.Duration {
 }
 
 // idleState inspects an idle agent once: whether it's waiting on the user (a hold
-// marker or a pending permission), and when it was created (for the startup
-// grace). A zero created time means the age is unknown — the grace is skipped.
-func (r *Reaper) idleState(ctx context.Context, id, cwd string) (needsUser bool, created time.Time) {
+// marker or a pending permission), when it was created (for the startup grace),
+// and whether it has ENGAGED (done any model work — LastUsage set). A zero created
+// time means the age is unknown — the grace is skipped.
+func (r *Reaper) idleState(ctx context.Context, id, cwd string) (needsUser bool, created time.Time, engaged bool) {
 	if holdMarkerPresent(cwd) {
 		needsUser = true
 	}
 	out, err := exec.CommandContext(ctx, r.PaseoBin, "inspect", id, "--json").Output()
 	if err != nil {
-		return needsUser, time.Time{}
+		return needsUser, time.Time{}, false
 	}
 	var d struct {
 		PendingPermissions []json.RawMessage `json:"PendingPermissions"`
 		CreatedAt          string            `json:"CreatedAt"`
+		LastUsage          string            `json:"LastUsage"`
 	}
 	if json.Unmarshal(out, &d) != nil {
-		return needsUser, time.Time{}
+		return needsUser, time.Time{}, false
 	}
 	if len(d.PendingPermissions) > 0 {
 		needsUser = true
 	}
 	created, _ = time.Parse(time.RFC3339, d.CreatedAt)
-	return needsUser, created
+	// LastUsage is set once the model has actually run — i.e. the agent got past
+	// its "idle before it engages" spin-up phase and did work. An engaged agent
+	// that's now idle is genuinely finished, not spinning up.
+	engaged = d.LastUsage != ""
+	return needsUser, created, engaged
+}
+
+// withinStartupGrace reports whether an idle agent should be spared this tick
+// because it may still be spinning up: it hasn't engaged yet (no usage) AND is
+// younger than the grace window. Once an agent has engaged it's never in spin-up,
+// so a finished agent is reaped without waiting out the age grace — a quick fixer
+// that had nothing to do doesn't linger as "done".
+func withinStartupGrace(engaged bool, created, now time.Time, grace time.Duration) bool {
+	return !engaged && !created.IsZero() && now.Sub(created) < grace
 }
 
 // holdMarkerPresent reports whether the agent set a .paseo-hold marker in cwd.
