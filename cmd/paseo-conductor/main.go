@@ -53,6 +53,8 @@ func main() {
 		err = cmdReplay(args)
 	case "sweep":
 		err = cmdSweep(args)
+	case "status":
+		err = cmdStatus(args)
 	case "update":
 		err = cmdUpdate(args)
 	case "service":
@@ -80,6 +82,7 @@ usage:
   paseo-conductor validate [--config PATH]    load & validate config, then exit
   paseo-conductor replay <event.json> [--config PATH]  run a saved webhook through the pipeline (dry-run)
   paseo-conductor sweep [--config PATH]       one catch-up sweep (dry-run print)
+  paseo-conductor status [--config PATH]      snapshot: live agents, in-flight workflows, stuck/attention
   paseo-conductor update [--force] [--tag vX]  self-update to the latest release (uses gh)
   paseo-conductor service install|sync|uninstall  manage the background service unit
   paseo-conductor version

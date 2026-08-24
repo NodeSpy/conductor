@@ -866,8 +866,15 @@ paseo-conductor run                    # start the daemon (the systemd unit runs
 paseo-conductor validate               # load & validate config, then exit
 paseo-conductor replay <event.json>    # run a saved webhook through the pipeline (dry-run)
 paseo-conductor sweep                  # one catch-up sweep (dry-run print)
+paseo-conductor status                 # snapshot: live agents, in-flight workflows, stuck work, attention
 paseo-conductor version
 ```
+
+`status` reads the on-disk state/runs/audit files and `paseo ls` (never opening the store, so it's
+safe to run against a live daemon). It shows the service state, conductor's live agents, in-flight
+multi-step workflows (e.g. a review awaiting you), tracked objects sitting in retry backoff, and the
+most recent escalate / needs-input events — the "what's it doing / what's stuck / what needs me" view
+without digging through `journalctl`.
 
 `replay` fixtures are `{"event": "<x-github-event>", "body": { ...payload... }}` — see
 [`testdata/`](testdata/).
