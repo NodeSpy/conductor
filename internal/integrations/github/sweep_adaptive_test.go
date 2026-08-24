@@ -14,9 +14,9 @@ import (
 )
 
 func TestSweepBounds(t *testing.T) {
-	// Defaults when unset: 2m floor, 1h ceiling.
+	// Defaults when unset: 10m floor, 6h ceiling.
 	min, max := sweepBounds(SweepConfig{})
-	if min != 2*time.Minute || max != time.Hour {
+	if min != 10*time.Minute || max != 6*time.Hour {
 		t.Fatalf("defaults wrong: min=%s max=%s", min, max)
 	}
 	// Configured values honored.

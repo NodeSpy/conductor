@@ -55,16 +55,18 @@ func (g *Integration) sweepLoop(ctx context.Context, emit core.EmitFunc, renew <
 	}
 }
 
-// sweepBounds resolves the tight floor and the ceiling from config (defaults: 2m
-// floor, 1h ceiling; the floor is clamped to never exceed the ceiling).
+// sweepBounds resolves the tight floor and the ceiling from config (defaults: 10m
+// floor, 6h ceiling; the floor is clamped to never exceed the ceiling). Note the
+// sweep runs immediately on startup and on a reconnect renewal regardless of the
+// floor — the floor only sets the follow-up rhythm.
 func sweepBounds(s SweepConfig) (min, max time.Duration) {
 	max = s.Interval.D()
 	if max <= 0 {
-		max = time.Hour
+		max = 6 * time.Hour
 	}
 	min = s.MinInterval.D()
 	if min <= 0 {
-		min = 2 * time.Minute
+		min = 10 * time.Minute
 	}
 	if min > max {
 		min = max

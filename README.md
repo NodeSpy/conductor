@@ -531,12 +531,13 @@ disconnected is lost — the [sweep](#full-example) (`sweep.enabled`) is the cat
 re-derives `review_requested`/`merge_conflict`/`pr_behind`/`changes_requested` from live PR state
 (comment/issue events aren't re-derivable).
 
-The sweep runs on an **adaptive cadence**: it starts tight at `sweep.min_interval` (default `2m`)
-after startup and backs off ×2 toward the ceiling `sweep.interval` (default `1h`) while nothing
-disrupts it — so a quiet, connected daemon settles at the ceiling and doesn't sweep for nothing. When
-smee **reconnects after a drop** (the exact moment a webhook may have been lost), the cadence resets
-to the tight floor and sweeps promptly, so a gap is caught in a minute or two instead of waiting up
-to a full `interval`. You don't need to hand-tune the interval down for recovery anymore.
+The sweep runs on an **adaptive cadence**: it sweeps immediately on startup and on a reconnect, then
+follows up starting at `sweep.min_interval` (default `10m`) and backs off ×2 toward the ceiling
+`sweep.interval` (default `6h`) while nothing disrupts it — so a quiet, connected daemon settles at
+the ceiling and doesn't sweep for nothing. When smee **reconnects after a drop** (the exact moment a
+webhook may have been lost), it sweeps right away and resets to the tight follow-up, so a gap is
+caught promptly instead of waiting up to a full `interval`. You don't need to hand-tune the interval
+down for recovery anymore.
 
 ## Configuration
 
@@ -602,8 +603,8 @@ integrations:
       # path: /webhook                # default
     sweep:
       enabled: false                  # off by default; REST catch-up for missed events. Adaptive cadence:
-      interval: 1h                     #   tight at min_interval after start / smee-reconnect, backing off
-      min_interval: 2m                 #   ×2 toward interval (the quiet-system ceiling). Recovers pending
+      interval: 6h                     #   tight at min_interval after start / smee-reconnect, backing off
+      min_interval: 10m                #   ×2 toward interval (the quiet-system ceiling). Recovers pending
       repos: ["your-org/your-repo"]    #   review_requested + on your PRs conflict/behind/unresolved-threads.
 
     # OPTIONAL shared defaults; every rule merges over these.
