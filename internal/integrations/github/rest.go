@@ -38,17 +38,25 @@ type pullInfo struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
 	HTMLURL string `json:"html_url"`
+	Labels  []struct {
+		Name string `json:"name"`
+	} `json:"labels"`
 }
 
-// pullHeadRef fetches just a PR's head branch name (a single GET, no mergeable-state
-// wait). Used to enrich feedback triggers so dispatch can match an open workspace.
-func (c *restClient) pullHeadRef(ctx context.Context, instID int64, owner, repo string, num int) (string, error) {
+// pullHeadRefAndLabels fetches a PR's head branch name and current label names in a
+// single GET (no mergeable-state wait). Used to enrich feedback triggers (comment /
+// review events, whose payloads carry neither): head_ref lets dispatch adopt an open
+// workspace, and labels let the engine honor control.pause_label on those triggers.
+func (c *restClient) pullHeadRefAndLabels(ctx context.Context, instID int64, owner, repo string, num int) (headRef string, labels []string, err error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.app.apiBase, owner, repo, num)
 	var pi pullInfo
 	if err := c.get(ctx, instID, url, &pi); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return pi.Head.Ref, nil
+	for _, l := range pi.Labels {
+		labels = append(labels, l.Name)
+	}
+	return pi.Head.Ref, labels, nil
 }
 
 // pull fetches a PR, retrying briefly while GitHub computes mergeable state.

@@ -72,6 +72,31 @@ func TestNewCommentHeadRefEnriched(t *testing.T) {
 	}
 }
 
+func TestNewCommentLabelsEnriched(t *testing.T) {
+	g := richWithREST(t) // stub PR returns label "conductor:off"
+	// A comment event carries no PR labels, so control.pause_label can't catch it
+	// unless we enrich. The REST enrichment must stamp the PR's labels into Context
+	// so the engine's pause-label check works on comment triggers too.
+	body := `{"action":"created","installation":{"id":42},
+		"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"issue":{"number":6,"pull_request":{},"user":{"login":"me"}},
+		"comment":{"id":13,"user":{"login":"bot"},"body":"please fix"}}`
+	trs := g.triggersFor(context.Background(), "issue_comment", []byte(body))
+	if len(trs) != 1 {
+		t.Fatalf("want 1 new_comment, got %d", len(trs))
+	}
+	lbls, _ := trs[0].Context["labels"].([]string)
+	found := false
+	for _, l := range lbls {
+		if l == "conductor:off" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("PR labels should be enriched into Context for pause_label, got %v", trs[0].Context["labels"])
+	}
+}
+
 func TestCheckRunFailing(t *testing.T) {
 	g := richWithREST(t)
 	body := `{"action":"completed","installation":{"id":42},"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},

@@ -212,7 +212,9 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 	// on resume.
 	if len(trs) > 0 && p.Installation.ID > 0 && g.app != nil {
 		tok, err := g.app.installationToken(ctx, p.Installation.ID)
-		headRef := "" // resolved lazily, once, if a feedback trigger needs it
+		var headRef string
+		var prLabels []string
+		fetched := false // resolve head_ref + labels once, lazily, if a feedback trigger needs it
 		for i := range trs {
 			if trs[i].Context == nil {
 				trs[i].Context = map[string]any{}
@@ -221,18 +223,25 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 			if err == nil {
 				trs[i].Context["app_token"] = tok
 			}
-			// Feedback kinds carry the PR head branch so dispatch can adopt an open
-			// workspace already on it. Filled for free above where the payload had it
-			// (review / review-comment events); for issue_comment we look it up once.
-			if feedbackKind(trs[i].Kind) && emptyStr(trs[i].Context["head_ref"]) && g.rest != nil && trs[i].Target.Number > 0 {
-				if headRef == "" {
+			// Feedback kinds (comment / review events) carry neither the PR head branch
+			// nor its labels in the payload. Fetch both once: head_ref lets dispatch
+			// adopt an open workspace already on it, and labels let the engine honor
+			// control.pause_label on comment/review triggers (otherwise a `conductor:off`
+			// label can't park a PR's comment autopilot — it isn't in the payload).
+			if feedbackKind(trs[i].Kind) && g.rest != nil && trs[i].Target.Number > 0 {
+				if !fetched {
 					owner, name := splitRepo(repo)
-					if hr, herr := g.rest.pullHeadRef(ctx, p.Installation.ID, owner, name, trs[i].Target.Number); herr == nil {
-						headRef = hr
+					if hr, lbls, herr := g.rest.pullHeadRefAndLabels(ctx, p.Installation.ID, owner, name, trs[i].Target.Number); herr == nil {
+						headRef, prLabels, fetched = hr, lbls, true
 					}
 				}
-				if headRef != "" {
+				if headRef != "" && emptyStr(trs[i].Context["head_ref"]) {
 					trs[i].Context["head_ref"] = headRef
+				}
+				if len(prLabels) > 0 {
+					if _, ok := trs[i].Context["labels"]; !ok {
+						trs[i].Context["labels"] = prLabels
+					}
 				}
 			}
 		}
