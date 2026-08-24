@@ -262,7 +262,7 @@ func TestRerequestReviewGuidance(t *testing.T) {
 	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
 	e.process(context.Background(), agentTrigger("changes_requested", "a/w", 30, "h", "s",
 		config.Action{Type: "agent", Agent: "fixer", Prompt: "fix it"}))
-	if strings.Contains(d.reqs[0].Action.Prompt, "RE-REQUEST review") {
+	if strings.Contains(d.reqs[0].Action.Prompt, "Re-request review ONLY") {
 		t.Fatal("re-request guidance must be opt-in")
 	}
 
@@ -271,7 +271,7 @@ func TestRerequestReviewGuidance(t *testing.T) {
 	e2, _ := newEng(t, baseCfg(), d2, &fakeNotifier{}, nil)
 	e2.process(context.Background(), agentTrigger("changes_requested", "a/w", 31, "h", "s",
 		config.Action{Type: "agent", Agent: "fixer", Prompt: "fix it", RerequestReview: true}))
-	if !strings.Contains(d2.reqs[0].Action.Prompt, "RE-REQUEST review") {
+	if !strings.Contains(d2.reqs[0].Action.Prompt, "Re-request review ONLY") {
 		t.Fatalf("expected re-request guidance, got: %q", d2.reqs[0].Action.Prompt)
 	}
 }
