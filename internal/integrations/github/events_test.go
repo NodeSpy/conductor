@@ -39,10 +39,13 @@ func baseConfig() Config {
 			Reviewer: config.Actors{Logins: []string{"me"}},
 			Assignee: config.Actors{Logins: []string{"me"}},
 			Actions: as1(map[string]config.Action{
-				"changes_requested": {Type: "agent", Agent: "fixer"},
-				"new_comment":       {Type: "agent", Agent: "fixer"},
-				"issue_matched":     {Type: "agent", Agent: "fixer", Checkout: "branch-off"},
-				"release":           {Type: "agent", Agent: "fixer", Checkout: "none"},
+				"changes_requested":     {Type: "agent", Agent: "fixer"},
+				"new_comment":           {Type: "agent", Agent: "fixer"},
+				"issue_matched":         {Type: "agent", Agent: "fixer", Checkout: "branch-off"},
+				"release":               {Type: "agent", Agent: "fixer", Checkout: "none"},
+				"deployment_status":     {Type: "agent", Agent: "fixer", Checkout: "none"},
+				"dependabot_alert":      {Type: "agent", Agent: "fixer", Checkout: "branch-off"},
+				"secret_scanning_alert": {Type: "command", Command: []string{"echo"}},
 			}),
 		}},
 	}
@@ -193,6 +196,52 @@ func TestRepoNotMatchedNoTrigger(t *testing.T) {
 	}`)
 	if trs := g.triggersFor(context.Background(), "pull_request_review", body); len(trs) != 0 {
 		t.Fatalf("unmatched repo should not trigger, got %d", len(trs))
+	}
+}
+
+func TestDeploymentStatusFailure(t *testing.T) {
+	g := newTestIntegration(t, baseConfig())
+	body := func(state string) []byte {
+		return []byte(`{"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+			"deployment":{"sha":"dsha","ref":"main"},
+			"deployment_status":{"state":"` + state + `","environment":"production","target_url":"https://x/deploy"}}`)
+	}
+	trs := g.triggersFor(context.Background(), "deployment_status", body("failure"))
+	if len(trs) != 1 || trs[0].Kind != "deployment_status" {
+		t.Fatalf("want deployment_status on failure, got %+v", trs)
+	}
+	if trs[0].Context["environment"] != "production" || trs[0].Target.HeadSHA != "dsha" {
+		t.Fatalf("unexpected context/target: %+v", trs[0])
+	}
+	// success is ignored.
+	if trs := g.triggersFor(context.Background(), "deployment_status", body("success")); len(trs) != 0 {
+		t.Fatalf("success deployment should not fire, got %d", len(trs))
+	}
+}
+
+func TestDependabotAndSecretAlerts(t *testing.T) {
+	g := newTestIntegration(t, baseConfig())
+	dep := []byte(`{"action":"created","repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+		"alert":{"number":7,"html_url":"https://x/da/7","dependency":{"package":{"name":"golang.org/x/net"}},
+			"security_advisory":{"severity":"high","summary":"DoS"}}}`)
+	trs := g.triggersFor(context.Background(), "dependabot_alert", dep)
+	if len(trs) != 1 || trs[0].Kind != "dependabot_alert" || trs[0].Dedup != "dependabot:7" {
+		t.Fatalf("want dependabot_alert #7, got %+v", trs)
+	}
+	if trs[0].Context["severity"] != "high" || trs[0].Context["package"] != "golang.org/x/net" {
+		t.Fatalf("dependabot context wrong: %+v", trs[0].Context)
+	}
+	// A non-created action (e.g. dismissed) does not fire.
+	dismissed := []byte(`{"action":"dismissed","repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},"alert":{"number":7}}`)
+	if trs := g.triggersFor(context.Background(), "dependabot_alert", dismissed); len(trs) != 0 {
+		t.Fatalf("dismissed dependabot alert should not fire, got %d", len(trs))
+	}
+
+	sec := []byte(`{"action":"created","repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+		"alert":{"number":3,"secret_type_display_name":"AWS Access Key","html_url":"https://x/ss/3"}}`)
+	trs = g.triggersFor(context.Background(), "secret_scanning_alert", sec)
+	if len(trs) != 1 || trs[0].Kind != "secret_scanning_alert" || trs[0].Context["secret_type"] != "AWS Access Key" {
+		t.Fatalf("want secret_scanning_alert with type, got %+v", trs)
 	}
 }
 

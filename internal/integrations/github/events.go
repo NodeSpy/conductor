@@ -91,6 +91,34 @@ type ghPayload struct {
 			Login string `json:"login"`
 		} `json:"author"`
 	} `json:"release"`
+	DeploymentStatus *struct {
+		State       string `json:"state"`
+		Environment string `json:"environment"`
+		Description string `json:"description"`
+		TargetURL   string `json:"target_url"`
+	} `json:"deployment_status"`
+	Deployment *struct {
+		SHA string `json:"sha"`
+		Ref string `json:"ref"`
+	} `json:"deployment"`
+	// Alert serves both dependabot_alert and secret_scanning_alert (different
+	// subfields populated per event).
+	Alert *struct {
+		Number         int    `json:"number"`
+		State          string `json:"state"`
+		HTMLURL        string `json:"html_url"`
+		SecretType     string `json:"secret_type"`
+		SecretTypeName string `json:"secret_type_display_name"`
+		Dependency     *struct {
+			Package struct {
+				Name string `json:"name"`
+			} `json:"package"`
+		} `json:"dependency"`
+		SecurityAdvisory *struct {
+			Severity string `json:"severity"`
+			Summary  string `json:"summary"`
+		} `json:"security_advisory"`
+	} `json:"alert"`
 }
 
 type prPayload struct {
@@ -159,6 +187,12 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 		trs = g.projectTriggers(ctx, p)
 	case "release":
 		trs = g.releaseTriggers(repo, p)
+	case "deployment_status":
+		trs = g.deploymentStatusTriggers(repo, p)
+	case "dependabot_alert":
+		trs = g.dependabotAlertTriggers(repo, p)
+	case "secret_scanning_alert":
+		trs = g.secretScanningAlertTriggers(repo, p)
 	}
 
 	// Stamp the object's current labels so the engine can honor control.pause_label
@@ -523,6 +557,71 @@ func (g *Integration) releaseTriggers(repo string, p ghPayload) []core.Trigger {
 		"release:"+p.Release.TagName, extra, func(act config.Action) bool {
 			return act.IncludePrereleases || !p.Release.Prerelease
 		})
+}
+
+// deploymentStatusTriggers fires when a deployment reports failure/error (the
+// actionable states) — e.g. to have an agent start triage. success/pending/etc.
+// are ignored. {{.state}} / {{.environment}} / {{.url}} are exposed.
+func (g *Integration) deploymentStatusTriggers(repo string, p ghPayload) []core.Trigger {
+	if p.DeploymentStatus == nil {
+		return nil
+	}
+	st := strings.ToLower(p.DeploymentStatus.State)
+	if st != "failure" && st != "error" {
+		return nil
+	}
+	sha, ref := "", p.Repository.DefaultBranch
+	if p.Deployment != nil {
+		sha = p.Deployment.SHA
+		if p.Deployment.Ref != "" {
+			ref = p.Deployment.Ref
+		}
+	}
+	t := g.target(repo, 0, sha, ref, p.DeploymentStatus.TargetURL)
+	t.PR, t.Number = 0, 0
+	extra := map[string]any{"state": st, "environment": p.DeploymentStatus.Environment, "description": p.DeploymentStatus.Description}
+	return g.single(repo, "deployment_status", t,
+		fmt.Sprintf("deployment %s on %s (%s)", st, repo, p.DeploymentStatus.Environment),
+		fmt.Sprintf("deploy:%s:%s:%s", p.DeploymentStatus.Environment, sha, st), extra)
+}
+
+// dependabotAlertTriggers fires when a Dependabot alert is created. {{.severity}} /
+// {{.package}} / {{.summary}} / {{.url}} are exposed; dedup is per alert number.
+func (g *Integration) dependabotAlertTriggers(repo string, p ghPayload) []core.Trigger {
+	if p.Alert == nil || p.Action != "created" {
+		return nil
+	}
+	pkg, sev, summary := "", "", ""
+	if p.Alert.Dependency != nil {
+		pkg = p.Alert.Dependency.Package.Name
+	}
+	if p.Alert.SecurityAdvisory != nil {
+		sev, summary = p.Alert.SecurityAdvisory.Severity, p.Alert.SecurityAdvisory.Summary
+	}
+	t := g.target(repo, 0, "", p.Repository.DefaultBranch, p.Alert.HTMLURL)
+	t.PR, t.Number = 0, 0
+	extra := map[string]any{"severity": sev, "package": pkg, "summary": summary, "number": p.Alert.Number}
+	return g.single(repo, "dependabot_alert", t,
+		fmt.Sprintf("dependabot %s alert on %s: %s", sev, repo, pkg),
+		fmt.Sprintf("dependabot:%d", p.Alert.Number), extra)
+}
+
+// secretScanningAlertTriggers fires when a secret-scanning alert is created.
+// {{.secret_type}} / {{.url}} are exposed; dedup is per alert number.
+func (g *Integration) secretScanningAlertTriggers(repo string, p ghPayload) []core.Trigger {
+	if p.Alert == nil || p.Action != "created" {
+		return nil
+	}
+	stype := p.Alert.SecretTypeName
+	if stype == "" {
+		stype = p.Alert.SecretType
+	}
+	t := g.target(repo, 0, "", p.Repository.DefaultBranch, p.Alert.HTMLURL)
+	t.PR, t.Number = 0, 0
+	extra := map[string]any{"secret_type": stype, "number": p.Alert.Number}
+	return g.single(repo, "secret_scanning_alert", t,
+		fmt.Sprintf("secret scanning alert on %s: %s", repo, stype),
+		fmt.Sprintf("secretscan:%d", p.Alert.Number), extra)
 }
 
 func (g *Integration) issueTriggers(ctx context.Context, repo string, p ghPayload) []core.Trigger {

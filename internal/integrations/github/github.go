@@ -282,7 +282,8 @@ var knownKinds = map[string]bool{
 	"merge_conflict": true, "pr_behind": true, "failing_checks": true,
 	"changes_requested": true, "new_comment": true, "review_requested": true,
 	"self_review": true, "merge_ready": true, "issue_matched": true,
-	"release": true,
+	"release": true, "deployment_status": true, "dependabot_alert": true,
+	"secret_scanning_alert": true,
 	// issue_assigned + issue_project_moved were merged into issue_matched (v0.4.48).
 }
 

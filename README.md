@@ -76,6 +76,18 @@ filters it's just "assigned to me"; add `labels_all`/`authors`/`sole_assignee`/`
 `{{.prerelease}}` and the release URL (`{{.url}}`) are available to the action's prompt/command.
 Dedup is per tag. Subscribe the App to the `releases` event.
 
+**CI/CD & security**
+
+| Kind | Trigger | Action |
+| --- | --- | --- |
+| `deployment_status` | a deployment reports **failure/error** | agent: start triage (`{{.environment}}`/`{{.state}}`/`{{.url}}`) |
+| `dependabot_alert` | a Dependabot alert is **created** | agent: assess/bump (`{{.severity}}`/`{{.package}}`/`{{.summary}}`) |
+| `secret_scanning_alert` | a secret-scanning alert is **created** | rotate/investigate (`{{.secret_type}}`/`{{.url}}`) |
+
+Deployment fires only on `failure`/`error` (success/pending ignored); the two alert kinds fire on the
+`created` action and dedup per alert number. Subscribe the App to `deployment_status`,
+`dependabot_alert`, and/or `secret_scanning_alert`.
+
 Plus scheduled jobs via the [cron integration](#scheduled-jobs-cron-integration). Each kind is a
 configurable action — enable, disable, and tune it per repo in [config](#configuration).
 
