@@ -95,11 +95,16 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	}
 	argv = append(argv, checkoutArgs(req)...)
 
-	// Reads on the App token; write token exposed for posting as you.
+	// Identity: the agent acts as YOU. GH_TOKEN is your write token, so every
+	// GitHub write (comment/review/API) is attributed to you — never the App bot
+	// (commits/pushes already go over SSH as you). The App token is exposed only as
+	// PC_GH_APP_TOKEN for optional rate-limited reads; PC_GH_WRITE_TOKEN is kept as
+	// an alias of your token for backward compatibility.
 	argv = append(argv,
-		"--env", "GH_TOKEN="+req.Tokens.App,
-		"--env", "GITHUB_TOKEN="+req.Tokens.App,
+		"--env", "GH_TOKEN="+req.Tokens.User,
+		"--env", "GITHUB_TOKEN="+req.Tokens.User,
 		"--env", envGHWriteToken+"="+req.Tokens.User,
+		"--env", envGHAppToken+"="+req.Tokens.App,
 	)
 	if req.Author.Name != "" {
 		argv = append(argv,

@@ -44,7 +44,10 @@ func TestPaseoAgentArgv(t *testing.T) {
 		"paseo run", "fix acme/w#5 on main",
 		"--provider claude", "--model claude-opus",
 		"--worktree-mode checkout-pr", "--pr-number 5", "--forge github",
-		"--env GH_TOKEN=APPTOK", "--env " + envGHWriteToken + "=USERTOK",
+		// Agent acts as YOU: GH_TOKEN is the user token (writes post as you), App
+		// token is reads-only under PC_GH_APP_TOKEN.
+		"--env GH_TOKEN=USERTOK", "--env GITHUB_TOKEN=USERTOK",
+		"--env " + envGHWriteToken + "=USERTOK", "--env " + envGHAppToken + "=APPTOK",
 		"--env GIT_AUTHOR_NAME=Me", "--env GIT_AUTHOR_EMAIL=me@example.com",
 		"--label kind=merge_conflict", "--label pr=acme/w#5", "--label head=deadbeef",
 		"--background", "--json",
@@ -52,6 +55,11 @@ func TestPaseoAgentArgv(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("argv missing %q\n got: %s", want, s)
 		}
+	}
+	// Invariant: the App token must NEVER be the agent's default GH_TOKEN — writes
+	// would post as the bot. It's only ever the reads-only PC_GH_APP_TOKEN.
+	if strings.Contains(s, "GH_TOKEN=APPTOK") {
+		t.Errorf("App token leaked as GH_TOKEN — writes would post as the bot\n got: %s", s)
 	}
 }
 

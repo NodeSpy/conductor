@@ -392,8 +392,8 @@ func TestFixersDoNotGetAskGuidance(t *testing.T) {
 		if strings.Contains(d.reqs[0].Action.Prompt, "AskUserQuestion") {
 			t.Fatalf("autonomous fixer (agent=%s) must not get ask/hold guidance, got: %q", agent, d.reqs[0].Action.Prompt)
 		}
-		if !strings.Contains(d.reqs[0].Action.Prompt, "PC_GH_WRITE_TOKEN") {
-			t.Fatalf("fixer (agent=%s) should still get the write-token wrapper", agent)
+		if !strings.Contains(d.reqs[0].Action.Prompt, "act as ME") {
+			t.Fatalf("fixer (agent=%s) should still get the identity/write wrapper", agent)
 		}
 	}
 }

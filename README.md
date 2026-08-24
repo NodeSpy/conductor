@@ -401,10 +401,13 @@ Mode needed for that half.
 The rate-limit pain came from doing reads on your personal `gh` token. paseo-conductor separates
 duties:
 
-- **Reads/enrichment** (PR state, checks) use the **GitHub App installation token** —
-  its own generous rate pool. The API is used freely (REST or GraphQL).
-- **API writes/posts** (review replies, critique's submitted review) use **your `gh` token**, so
-  they're authored **as you**, never a bot.
+- **Conductor's own reads/enrichment** (PR state, checks, labels) use the **GitHub App
+  installation token** — its own generous rate pool. The API is used freely (REST or GraphQL).
+- **Everything a dispatched agent or command does is attributed to YOU.** Their `GH_TOKEN`/
+  `GITHUB_TOKEN` is **your** write token, so every comment, review, reply, and `gh`/API write posts
+  **as you, never the App bot**. The App token is handed to them only as **`PC_GH_APP_TOKEN`** for
+  optional rate-limited *reads* — it is never the default and is never used to write. (This is
+  structural: the agent's default identity is you, so a stray `gh pr review` can't post as the bot.)
 - **Commits & pushes** go over **SSH** with your git identity — no token, no API cost.
 
 This split is configurable per github integration via `identity:` (`read_token` / `write_token` /

@@ -1,24 +1,29 @@
 package dispatch
 
-// envGHWriteToken is the environment variable a dispatched agent uses to post
-// to GitHub *as you* (comments, review replies), while its default GH_TOKEN
-// (the App installation token) handles reads on the App's rate pool.
+// Token identity model for dispatched work:
 //
-// A single GH_TOKEN can't be both, so the split is a convention the agent
-// prompt references: reads use the ambient `gh`; to post, run
+//	GH_TOKEN / GITHUB_TOKEN = YOUR token → the default for everything an agent or
+//	command does, so all writes (comments, reviews, replies, any gh/API call) are
+//	attributed to YOU, never the App/bot. Commits and `git push` go over SSH as you.
 //
-//	GH_TOKEN=$PC_GH_WRITE_TOKEN gh pr comment ...
+//	PC_GH_APP_TOKEN = the App installation token, exposed ONLY for optional
+//	rate-limited READS — it must never be used to post/submit anything.
 //
-// git push needs no token at all (it goes over SSH as you).
-const envGHWriteToken = "PC_GH_WRITE_TOKEN"
+// envGHWriteToken is kept as an alias of your token for backward compatibility with
+// any prompt still referencing it; GH_TOKEN is now the same token, so it's redundant.
+const (
+	envGHWriteToken = "PC_GH_WRITE_TOKEN"
+	envGHAppToken   = "PC_GH_APP_TOKEN"
+)
 
-// WriteWrapperGuidance is appended to agent prompts so the agent knows how to
-// post as you rather than as the App bot.
+// WriteWrapperGuidance is appended to agent prompts so the agent knows its GitHub
+// identity IS you — writing as the App bot must never happen.
 const WriteWrapperGuidance = "\n\n---\n" +
-	"To post any GitHub comment/reply, run it as yourself with your write token:\n" +
-	"  GH_TOKEN=$" + envGHWriteToken + " gh pr comment/review ...\n" +
-	"Reads (gh pr diff, gh run view, gh pr checks) use the ambient GH_TOKEN. " +
-	"Commit and `git push` normally — pushes go over SSH as you."
+	"IDENTITY: you act as ME. GH_TOKEN/GITHUB_TOKEN are MY token, so every comment, " +
+	"review, reply, and `gh`/API write is attributed to me — and commits and `git push` " +
+	"go over SSH as me. NEVER post, submit, approve, or otherwise write anything with the " +
+	"App/bot token. If a large read would burn my rate limit you MAY read (only) with the " +
+	"App token via `GH_TOKEN=$" + envGHAppToken + " gh ...`, but never write with it."
 
 // HoldMarker is a legacy fallback: a file an agent may create in its working
 // directory to signal it still needs the user. The primary mechanism is now an
@@ -62,11 +67,11 @@ const HandoffGuidance = "\n\n---\n" +
 // not ask what to do when there's simply no target.
 const RerequestReviewGuidance = "\n\n---\n" +
 	"AFTER you have addressed the feedback and pushed, close the review loop — but " +
-	"carefully. Check current review state:\n" +
-	"  GH_TOKEN=$" + envGHWriteToken + " gh pr view {{.repo}}#{{.pr}} --json reviews,reviewRequests\n" +
+	"carefully. Check current review state (you act as me — plain gh):\n" +
+	"  gh pr view {{.repo}}#{{.pr}} --json reviews,reviewRequests\n" +
 	"Re-request review ONLY from human reviewer(s) whose LATEST review state is " +
 	"CHANGES_REQUESTED and who are not already a pending requested reviewer:\n" +
-	"  GH_TOKEN=$" + envGHWriteToken + " gh pr edit {{.repo}}#{{.pr}} --add-reviewer <login>\n" +
+	"  gh pr edit {{.repo}}#{{.pr}} --add-reviewer <login>\n" +
 	"Do NOT re-request anyone whose latest review is APPROVED (even approve-with-nits) — " +
 	"that would dismiss their approval. If NO reviewer currently has changes-requested " +
 	"outstanding, do nothing here and do not ask me about it; the loop is already closed. " +
