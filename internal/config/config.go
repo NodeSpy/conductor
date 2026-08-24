@@ -118,6 +118,7 @@ type Notify struct {
 	Push            bool     `yaml:"push"`
 	On              []string `yaml:"on"`                // subset of: dispatch, complete, escalate, needs_input
 	SlackWebhookURL string   `yaml:"slack_webhook_url"` // optional Slack incoming-webhook URL to post enabled events to
+	Digest          Duration `yaml:"digest"`            // periodic activity summary (e.g. 24h); 0 = off
 }
 
 // Wants reports whether the given notify event is enabled.

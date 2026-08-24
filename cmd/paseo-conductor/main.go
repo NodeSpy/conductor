@@ -216,6 +216,11 @@ func cmdRun(args []string) error {
 		go autoUpdateLoop(ctx, cfg.Update, stop)
 	}
 
+	// Periodic activity digest (opt-in via notify.digest).
+	if cfg.Notify.Digest.D() > 0 {
+		go digestLoop(ctx, cfg, notifier)
+	}
+
 	// Start integrations.
 	for _, ig := range igs {
 		ig := ig

@@ -74,6 +74,18 @@ func (n *Notifier) Emit(ctx context.Context, event string, t core.Trigger, msg s
 	}
 }
 
+// Digest emits a periodic activity summary (journal + Slack + audit). Unlike Emit
+// it isn't gated by notify.on — it's opt-in via notify.digest and always sent.
+func (n *Notifier) Digest(ctx context.Context, summary string) {
+	n.log("notify [digest] %s", summary)
+	if n.audit != nil {
+		n.audit(map[string]any{"event": "digest", "msg": summary})
+	}
+	if n.cfg.SlackWebhookURL != "" {
+		go n.postSlack(ctx, "[digest] "+summary)
+	}
+}
+
 // postSlack posts a plain message to a Slack incoming webhook. Best-effort: a
 // failure is logged, never fatal (the journal line already recorded the event).
 func (n *Notifier) postSlack(ctx context.Context, text string) {

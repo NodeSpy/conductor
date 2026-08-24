@@ -56,6 +56,33 @@ func TestNotifyPolicyGate(t *testing.T) {
 	}
 }
 
+func TestDigestPostsAndAudits(t *testing.T) {
+	posted := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		posted <- string(b)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var audited []map[string]any
+	n := New(config.Notify{SlackWebhookURL: srv.URL}, func(string, ...any) {},
+		func(e map[string]any) { audited = append(audited, e) })
+	n.Digest(context.Background(), "last 24h — dispatched 5 (ok 4, failed 1)")
+
+	select {
+	case body := <-posted:
+		if !strings.Contains(body, "digest") || !strings.Contains(body, "dispatched 5") {
+			t.Fatalf("digest slack payload wrong: %s", body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("digest was never posted to slack")
+	}
+	if len(audited) != 1 || audited[0]["event"] != "digest" {
+		t.Fatalf("digest should write one audit row, got %+v", audited)
+	}
+}
+
 func TestSlackSinkPosts(t *testing.T) {
 	posted := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
