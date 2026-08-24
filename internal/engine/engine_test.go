@@ -401,6 +401,33 @@ func TestFixersDoNotGetAskGuidance(t *testing.T) {
 	}
 }
 
+func TestAgentGuidanceConfigOverride(t *testing.T) {
+	run := func(cfg *config.Config) string {
+		cfg.Control.Enabled = ptrBool(true)
+		cfg.Agents = map[string]config.AgentProfile{"fixer": {Provider: "claude"}}
+		d := &fakeDispatcher{}
+		e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
+		e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h", "s",
+			config.Action{Type: "agent", Agent: "fixer", Prompt: "do it"}))
+		return d.reqs[0].Action.Prompt
+	}
+
+	// Unset → built-in concise default.
+	if p := run(&config.Config{}); !strings.Contains(p, "be concise and human") {
+		t.Fatalf("unset agent_guidance should use the built-in default, got: %q", p)
+	}
+	// Custom → replaces the default.
+	custom := "House style: reply in one short sentence."
+	if p := run(&config.Config{AgentGuidance: &custom}); !strings.Contains(p, custom) || strings.Contains(p, "be concise and human") {
+		t.Fatalf("custom agent_guidance should replace the default, got: %q", p)
+	}
+	// Empty → no guidance block (write wrapper still present).
+	empty := ""
+	if p := run(&config.Config{AgentGuidance: &empty}); strings.Contains(p, "be concise and human") {
+		t.Fatalf("empty agent_guidance should disable it, got: %q", p)
+	}
+}
+
 func TestLiveGatedKindNotAbandonedOnDispatch(t *testing.T) {
 	// changes_requested is live-gated: a "successful" dispatch (agent launched)
 	// must NOT record a done/dedup flag — otherwise a culled/incomplete agent

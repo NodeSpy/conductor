@@ -358,6 +358,13 @@ agents:
 # starts fresh. Adopted agents are yours (never relabeled or reaped).
 adopt_open_workspaces: false
 
+# House tone/format rules appended to every dispatched agent prompt (after the
+# identity/write wrapper). Omit for the built-in concise/human default; set to ""
+# to disable; set your own text to replace it.
+# agent_guidance: |
+#   Keep every GitHub reply to one or two plain sentences, like a busy engineer.
+#   No preamble, no headers, no bullet dumps. If nothing needs saying, say nothing.
+
 update:
   auto: false                          # periodically self-update to the latest release
   interval: 10m                        # check cadence (default 10m). Each check is a cheap CONDITIONAL

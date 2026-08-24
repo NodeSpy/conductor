@@ -40,6 +40,12 @@ type Config struct {
 	// agent whose checkout is already on the PR's head branch — e.g. a workspace you
 	// opened by hand — instead of spawning a fresh worktree. Opt-in.
 	AdoptOpenWorkspaces bool `yaml:"adopt_open_workspaces"`
+
+	// AgentGuidance is free text appended to every dispatched agent prompt (after
+	// the identity/write wrapper) — house rules for tone/format, e.g. "keep replies
+	// short and human". Unset (nil) → a built-in concise/human-tone default; set to
+	// "" → no guidance; set to your own text → replaces the default.
+	AgentGuidance *string `yaml:"agent_guidance"`
 }
 
 // Update configures periodic self-update checks.

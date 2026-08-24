@@ -191,6 +191,21 @@ func (e *Engine) gcLoop(ctx context.Context) {
 	}
 }
 
+// agentGuidance returns the house tone/format guidance appended to every agent
+// prompt. Config `agent_guidance` overrides the built-in default: unset → the
+// built-in concise/human default; "" → none; custom text → that text (wrapped in
+// the standard separator so it reads as its own block).
+func (e *Engine) agentGuidance() string {
+	if e.cfg.AgentGuidance == nil {
+		return dispatch.ConcisionGuidance
+	}
+	t := strings.TrimSpace(*e.cfg.AgentGuidance)
+	if t == "" {
+		return ""
+	}
+	return "\n\n---\n" + t
+}
+
 // isPaused reports whether the runtime pause control file is present.
 func (e *Engine) isPaused() bool {
 	if e.pausePath == "" {
@@ -354,7 +369,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		profile = e.cfg.Agents[act.Agent]
 		if act.Prompt != "" {
 			act.Prompt += dispatch.WriteWrapperGuidance
-			act.Prompt += dispatch.ConcisionGuidance
+			act.Prompt += e.agentGuidance()
 			if act.RerequestReview {
 				act.Prompt += dispatch.RerequestReviewGuidance
 			}
