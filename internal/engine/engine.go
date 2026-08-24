@@ -305,8 +305,18 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		// Single-action fixers instead fall through to dispatch, which queues new
 		// work to the agent already on this PR (or spawns one) — see paseo.go.
 		if len(act.Steps) > 0 && e.disp.HasLiveAgent(ctx, key, t.Kind) {
-			e.log("%s skipped — an agent is already working/parked for it", tag(t))
-			return
+			// Exception: a review re-request on a NEW head. If we've never dispatched
+			// review_requested at the current head, the parked agent is reviewing stale
+			// code — re-engage on the new head instead of being blocked indefinitely by
+			// it. A same-head re-request (or a duplicate webhook delivery) has a recorded
+			// attempt at this head, so it's suppressed here: no double-fire, no re-review
+			// of identical code.
+			if t.Kind == "review_requested" && head != "" && e.store.Attempts(key, dkind, head) == 0 {
+				e.log("%s re-engaging — review re-requested on a new head %s (agent parked on older code)", tag(t), short(head))
+			} else {
+				e.log("%s skipped — an agent is already working/parked for it", tag(t))
+				return
+			}
 		}
 		// A live-gated kind never records "done" on dispatch — the sweep re-derives
 		// reality (still dirty? threads unresolved? review pending?) each run, so
@@ -368,8 +378,16 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// backpressure, and run the steps in their own goroutine (releasing the slot
 	// when the foreground steps finish) so the engine loop isn't blocked by them.
 	if len(act.Steps) > 0 {
-		if !shadow && !liveGate { // shadow previews and live-gated kinds don't consume dedup
-			_ = e.store.Record(key, dkind, t.Dedup, head)
+		if !shadow {
+			if liveGate {
+				// Live-gated kinds don't consume the permanent dedup (the sweep re-derives
+				// them), but we DO mark the head we dispatched at, so a same-head re-request
+				// or duplicate delivery is suppressed while a genuinely new head re-engages
+				// (see the live-gate exception above).
+				_ = e.store.RecordAttempt(key, dkind, head)
+			} else { // shadow previews never record
+				_ = e.store.Record(key, dkind, t.Dedup, head)
+			}
 		}
 		e.notif.Emit(ctx, notify.EventDispatch, t, "workflow")
 		e.log("%s workflow (%d steps%s)", tag(t), len(act.Steps), shadowNote(shadow))

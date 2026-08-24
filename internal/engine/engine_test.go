@@ -272,14 +272,42 @@ func TestBackoffThenRetry(t *testing.T) {
 }
 
 func TestReviewWorkflowSkippedWhenAgentParked(t *testing.T) {
-	// The review workflow shouldn't re-run while its interactive agent is parked.
+	// The review workflow shouldn't re-run while its interactive agent is parked on
+	// the SAME head. (The parked agent implies a prior dispatch at head "h", which
+	// records the attempt — simulated here.)
 	dLive := &fakeDispatcher{liveAgent: true}
-	e, _ := newEng(t, baseCfg(), dLive, &fakeNotifier{}, nil)
+	e, st := newEng(t, baseCfg(), dLive, &fakeNotifier{}, nil)
+	_ = st.RecordAttempt("a/w#10", "review_requested", "h")
 	wf := config.Action{Steps: []config.Action{{ID: "assess", Type: "agent", Agent: "fixer", Prompt: "x"}}}
 	e.process(context.Background(), agentTrigger("review_requested", "a/w", 10, "h", "reviewreq@h", wf))
 	time.Sleep(30 * time.Millisecond) // the workflow would spawn async; assert it didn't
 	if len(dLive.reqs) != 0 {
-		t.Fatalf("review workflow must not run while an agent is parked, got %d", len(dLive.reqs))
+		t.Fatalf("review workflow must not re-run while an agent is parked on the same head, got %d", len(dLive.reqs))
+	}
+}
+
+func TestReviewRequestReengagesOnNewHead(t *testing.T) {
+	// A parked review agent from an OLD head must not block a re-request on a NEW
+	// head — the parked agent is reviewing stale code. A same-head duplicate stays
+	// suppressed. The re-engaged workflow records its attempt at the new head
+	// synchronously (before spawning the async step goroutine), so we assert on that
+	// attempt count rather than racing the goroutine's dispatch.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dLive := &fakeDispatcher{liveAgent: true}
+	e, st := newEng(t, baseCfg(), dLive, &fakeNotifier{}, nil)
+	_ = st.RecordAttempt("a/w#12", "review_requested", "h1") // agent parked on old head h1
+	wf := config.Action{Steps: []config.Action{{ID: "assess", Type: "agent", Agent: "fixer", Prompt: "x"}}}
+
+	// Re-request on new head h2 → re-engage despite the parked agent (records h2).
+	e.process(ctx, agentTrigger("review_requested", "a/w", 12, "h2", "reviewreq@h2", wf))
+	if got := st.Attempts("a/w#12", "review_requested", "h2"); got != 1 {
+		t.Fatalf("re-request on a new head should re-engage (attempt recorded at h2), got %d", got)
+	}
+	// Duplicate delivery on the same head h2 → suppressed, no new attempt.
+	e.process(ctx, agentTrigger("review_requested", "a/w", 12, "h2", "reviewreq@h2", wf))
+	if got := st.Attempts("a/w#12", "review_requested", "h2"); got != 1 {
+		t.Fatalf("duplicate re-request on the same head should be suppressed, got %d attempts", got)
 	}
 }
 

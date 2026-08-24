@@ -844,6 +844,13 @@ action fires: `merge_ready`'s gates (`merge_state`, `review_decision`, `non_auth
 Templates (`{{.repo}}`, `{{.pr}}`, `{{.base}}`,
 `{{.head}}`, `{{.author}}`, `{{.app_token}}`, `{{.gh_token}}`, …) are filled per event.
 
+A **re-requested review** (you click "re-request review" on a reviewer running conductor) re-engages
+that reviewer's `review_requested` workflow **only when the PR head has advanced** since it last
+reviewed — i.e. you pushed new commits. A re-request on an unchanged head, or a duplicate webhook
+delivery, is suppressed while an agent is still working/parked on that head (no double-review of
+identical code). This is keyed on the per-head dispatch mark, so a stale parked agent no longer blocks
+review of freshly-pushed code.
+
 **cron instance** — a `schedules` list; each has a `name`, a `cron` spec or `every` interval,
 optional `run_on_start`, and an `action` (same action shape as above).
 
