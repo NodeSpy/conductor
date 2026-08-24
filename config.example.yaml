@@ -320,6 +320,8 @@ control:
   shadow: false                       # run everything but skip the final push/merge/post
   max_concurrent_agents: 3            # cap running coding agents (protects the box and avoids
                                       #   git-lock contention when a sweep fans out). 0 = unlimited.
+  max_agents_per_hour: 0              # runaway guard: cap agent dispatches per rolling hour; over
+                                      #   the cap, work is shed + retried later. 0 = unlimited.
 notify:
   push: true                          # private to you (journal); never a PR comment
   on: [dispatch, escalate, needs_input]

@@ -787,7 +787,7 @@ dry_run: false                        # build+log every action but never execute
 | `integrations` | List of typed instances (`type: github` / `type: cron`). List a type more than once for separate setups. |
 | `agents` | Reusable named agent profiles referenced by `agent` actions. |
 | `paseo_bin` | Path to the paseo CLI (default `paseo`). Agents always run via paseo; commands run as a local subprocess. |
-| `control` | Kill switch (`enabled`), `pause_label`, global `shadow`, and `max_concurrent_agents` (cap on simultaneously running coding agents; 0 = unlimited). |
+| `control` | Kill switch (`enabled`), `pause_label`, global `shadow`, `max_concurrent_agents` (cap on running agents), and `max_agents_per_hour` (rolling-hour dispatch cap; over it, work is shed + retried). |
 | `notify` | Private notifications (journal + paseo attention flag; never a PR comment): `push` and `on` (which events). |
 | `update` | Auto-update: `auto`, `interval`, `apply`. |
 | `store` | Dedup-state + audit paths and their TTL/LRU/rotation bounds. |

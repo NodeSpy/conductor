@@ -92,7 +92,13 @@ type Control struct {
 	// (protects the machine and avoids git-lock contention on a shared repo when
 	// a sweep fans out). Absent → default 3; explicit 0 (or negative) → unlimited.
 	MaxConcurrentAgents *int `yaml:"max_concurrent_agents"`
+	// MaxAgentsPerHour caps agent dispatches in a rolling hour (runaway guard — a
+	// webhook flood or sweep misfire can't spin up unbounded agents). 0 = unlimited.
+	MaxAgentsPerHour int `yaml:"max_agents_per_hour"`
 }
+
+// AgentsPerHour returns the rolling-hour agent-dispatch cap (0 = unlimited).
+func (c Control) AgentsPerHour() int { return c.MaxAgentsPerHour }
 
 // IsEnabled reports the master on/off (default true).
 func (c Control) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }

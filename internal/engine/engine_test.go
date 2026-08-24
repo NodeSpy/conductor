@@ -133,6 +133,28 @@ func TestPauseLabelSkips(t *testing.T) {
 	}
 }
 
+func TestAgentBudgetShedsOverCap(t *testing.T) {
+	cfg := baseCfg()
+	cfg.Control.MaxAgentsPerHour = 2
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, _ := newEng(t, cfg, d, n, nil)
+	act := config.Action{Type: "agent", Agent: "fixer"}
+
+	// First two agent dispatches go through; the third is shed (over the hourly cap).
+	for i := 0; i < 3; i++ {
+		e.process(context.Background(), agentTrigger("new_comment", "a/w", i+1, "h", "sig", act))
+	}
+	if len(d.reqs) != 2 {
+		t.Fatalf("budget of 2/hr should allow 2 dispatches, got %d", len(d.reqs))
+	}
+	// A command action is never budget-gated.
+	e.process(context.Background(), agentTrigger("pr_behind", "a/w", 9, "h", "sig",
+		config.Action{Type: "command", Command: []string{"echo"}}))
+	if len(d.reqs) != 3 {
+		t.Fatalf("command should not be budget-gated, got %d", len(d.reqs))
+	}
+}
+
 func TestDispatchAndRecord(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, baseCfg(), d, n, nil)

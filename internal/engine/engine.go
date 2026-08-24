@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
@@ -68,6 +69,32 @@ type Engine struct {
 	pausePath  string            // control file; present = paused (toggled by pause/resume, no restart)
 	ch         chan core.Trigger
 	sem        chan struct{} // concurrent-agent cap; nil = unlimited
+
+	budgetMu  sync.Mutex  // guards agentDisp (rolling agent-dispatch timestamps)
+	agentDisp []time.Time // agent-dispatch times in the last hour (runaway budget)
+}
+
+// overAgentBudget prunes agent-dispatch timestamps older than an hour and reports
+// whether the last hour already has max dispatches.
+func (e *Engine) overAgentBudget(max int) bool {
+	cut := time.Now().Add(-time.Hour)
+	e.budgetMu.Lock()
+	defer e.budgetMu.Unlock()
+	kept := e.agentDisp[:0]
+	for _, t := range e.agentDisp {
+		if t.After(cut) {
+			kept = append(kept, t)
+		}
+	}
+	e.agentDisp = kept
+	return len(e.agentDisp) >= max
+}
+
+// recordAgentDispatch stamps an agent dispatch into the rolling budget window.
+func (e *Engine) recordAgentDispatch() {
+	e.budgetMu.Lock()
+	e.agentDisp = append(e.agentDisp, time.Now())
+	e.budgetMu.Unlock()
 }
 
 // Options configure an Engine.
@@ -357,9 +384,19 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// number of *running* agents. Commands (gh merge/update-branch, critique) are
 	// cheap and ungated. Checks/record/notify stay synchronous either way.
 	if act.Type == "agent" && !shadow {
+		// Runaway guard: cap agent dispatches per rolling hour. Over budget → shed
+		// (record an attempt so live-gated/backoff kinds re-run once the window frees;
+		// commands stay ungated). Protects the box from a webhook flood or a sweep
+		// misfire spinning up unbounded agents.
+		if max := e.cfg.Control.AgentsPerHour(); max > 0 && e.overAgentBudget(max) {
+			e.log("%s agent budget reached (%d/hr) — shedding, will retry later", tag(t), max)
+			_ = e.store.RecordAttempt(key, dkind, head) // so it isn't silently forgotten
+			return
+		}
 		if !e.acquire(ctx) {
 			return
 		}
+		e.recordAgentDispatch()
 	}
 
 	e.notif.Emit(ctx, notify.EventDispatch, t, act.Type)
