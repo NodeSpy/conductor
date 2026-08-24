@@ -28,23 +28,33 @@ const (
 
 // Notifier emits notifications per the configured policy.
 type Notifier struct {
-	cfg  config.Notify
-	log  func(string, ...any)
-	http *http.Client
+	cfg   config.Notify
+	log   func(string, ...any)
+	http  *http.Client
+	audit func(map[string]any) // optional: record attention events for status/report
 }
 
-// New builds a Notifier. log is the structured logger (the journal).
-func New(cfg config.Notify, log func(string, ...any)) *Notifier {
+// New builds a Notifier. log is the structured logger (the journal); audit (may be
+// nil) records attention events (escalate/needs_input/complete) to the audit log so
+// `status` and `report` can surface them.
+func New(cfg config.Notify, log func(string, ...any), audit func(map[string]any)) *Notifier {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
-	return &Notifier{cfg: cfg, log: log, http: &http.Client{Timeout: 10 * time.Second}}
+	return &Notifier{cfg: cfg, log: log, audit: audit, http: &http.Client{Timeout: 10 * time.Second}}
 }
 
 // Emit records a notification for the given event if enabled by policy. All
 // channels are private to you (the journal, plus an optional Slack webhook). The
 // two attention events get an explicit, actionable line.
 func (n *Notifier) Emit(ctx context.Context, event string, t core.Trigger, msg string) {
+	// Record attention/terminal events (escalate/needs_input/complete) for
+	// status/report regardless of notify policy — dispatch is already captured
+	// richly by the engine's own dispatch audit, so skip it here.
+	if n.audit != nil && event != EventDispatch {
+		n.audit(map[string]any{"event": event, "repo": t.Target.Repo,
+			"number": t.Target.Number, "kind": t.Kind, "msg": msg})
+	}
 	if !n.cfg.Wants(event) {
 		return
 	}

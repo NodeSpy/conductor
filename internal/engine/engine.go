@@ -240,10 +240,9 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 				return
 			}
 			if n == soft { // first time past the threshold and now eligible — say so, once
+				// notif.Emit audits the escalate for status/report (no separate row here).
 				e.notif.Emit(ctx, notify.EventEscalate, t,
 					fmt.Sprintf("still failing after %d tries at %s — backing off, will keep retrying periodically", soft, short(head)))
-				e.store.Audit(map[string]any{"event": "escalate", "repo": t.Target.Repo,
-					"number": t.Target.Number, "kind": t.Kind, "variant": t.Variant, "head": head, "attempts": n})
 			}
 		}
 	}
@@ -592,10 +591,23 @@ func (e *Engine) release() {
 
 // auditDispatch writes the dispatch audit entry and logs the outcome.
 func (e *Engine) auditDispatch(t core.Trigger, ref dispatch.RunRef, err error) {
+	outcome := "ok"
+	switch {
+	case err != nil:
+		outcome = "failed"
+	case ref.Skipped:
+		outcome = "skipped"
+	case ref.Adopted:
+		outcome = "adopted"
+	case ref.Queued:
+		outcome = "queued"
+	case ref.Shadowed:
+		outcome = "shadow"
+	}
 	entry := map[string]any{
 		"event": "dispatch", "repo": t.Target.Repo, "number": t.Target.Number,
 		"kind": t.Kind, "backend": ref.Backend, "argv": ref.Argv,
-		"shadow": ref.Shadowed, "agent_id": ref.AgentID,
+		"shadow": ref.Shadowed, "agent_id": ref.AgentID, "outcome": outcome,
 	}
 	if err != nil {
 		entry["error"] = err.Error()

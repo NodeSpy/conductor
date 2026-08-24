@@ -867,6 +867,7 @@ paseo-conductor validate               # load & validate config, then exit
 paseo-conductor replay <event.json>    # run a saved webhook through the pipeline (dry-run)
 paseo-conductor sweep                  # one catch-up sweep (dry-run print)
 paseo-conductor status                 # snapshot: live agents, in-flight workflows, stuck work, attention
+paseo-conductor report [--days N]      # activity summary: dispatches by kind/outcome + attention (default 7d)
 paseo-conductor version
 ```
 

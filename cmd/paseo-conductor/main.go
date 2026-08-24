@@ -55,6 +55,8 @@ func main() {
 		err = cmdSweep(args)
 	case "status":
 		err = cmdStatus(args)
+	case "report":
+		err = cmdReport(args)
 	case "update":
 		err = cmdUpdate(args)
 	case "service":
@@ -83,6 +85,7 @@ usage:
   paseo-conductor replay <event.json> [--config PATH]  run a saved webhook through the pipeline (dry-run)
   paseo-conductor sweep [--config PATH]       one catch-up sweep (dry-run print)
   paseo-conductor status [--config PATH]      snapshot: live agents, in-flight workflows, stuck/attention
+  paseo-conductor report [--days N]           activity summary: dispatches by kind/outcome + attention
   paseo-conductor update [--force] [--tag vX]  self-update to the latest release (uses gh)
   paseo-conductor service install|sync|uninstall  manage the background service unit
   paseo-conductor version
@@ -182,7 +185,7 @@ func cmdRun(args []string) error {
 	disp := dispatch.New(cfg.PaseoBin, retry, cfg.DryRun)
 	disp.AdoptOpenWorkspaces = cfg.AdoptOpenWorkspaces
 	preflightPATH(disp.PaseoBin)
-	notifier := notify.New(cfg.Notify, logf)
+	notifier := notify.New(cfg.Notify, logf, st.Audit)
 	// Shared "never reap" set for interactive hand-off agents: the engine registers
 	// a background step's agent at launch; the reaper skips anything in it.
 	hold := dispatch.NewHoldSet()

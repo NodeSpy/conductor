@@ -19,7 +19,7 @@ func captureNotifier(on []string) (*Notifier, *[]string) {
 	var lines []string
 	n := New(config.Notify{On: on}, func(f string, a ...any) {
 		lines = append(lines, fmt.Sprintf(f, a...))
-	})
+	}, nil)
 	return n, &lines
 }
 
@@ -65,7 +65,7 @@ func TestSlackSinkPosts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := New(config.Notify{On: []string{"escalate"}, SlackWebhookURL: srv.URL}, func(string, ...any) {})
+	n := New(config.Notify{On: []string{"escalate"}, SlackWebhookURL: srv.URL}, func(string, ...any) {}, nil)
 	tr := core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "acme/w", Number: 7}}
 	n.Emit(context.Background(), EventEscalate, tr, "gave up")
 
