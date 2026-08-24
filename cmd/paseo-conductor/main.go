@@ -193,7 +193,7 @@ func cmdRun(args []string) error {
 	notifier := notify.New(cfg.Notify, logf, st.Audit)
 	// Shared "never reap" set for interactive hand-off agents: the engine registers
 	// a background step's agent at launch; the reaper skips anything in it.
-	hold := dispatch.NewHoldSet()
+	hold := dispatch.NewHoldSet(filepath.Join(filepath.Dir(cfg.Store.StateFile), "holds.json"))
 	eng := engine.New(engine.Options{
 		Config: cfg, Store: st, Dispatch: disp, Notifier: notifier,
 		Author: gitAuthor(), UserToken: writeTok, ReadToken: readTok, Log: logf,

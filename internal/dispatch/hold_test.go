@@ -16,7 +16,7 @@ func TestHoldSet(t *testing.T) {
 		t.Fatal("nil HoldSet should never hold")
 	}
 
-	h = NewHoldSet()
+	h = NewHoldSet("")
 	h.Add("")     // empty id ignored
 	h.Add("a123") // real id
 	if !h.Has("a123") {
@@ -61,13 +61,34 @@ esac
 	return bin, archiveLog
 }
 
+func TestHoldSetPersists(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "holds.json")
+
+	h1 := NewHoldSet(p)
+	h1.Add("agent-1")
+	h1.Add("agent-2")
+
+	// A fresh set from the same path reloads the held ids (survives a restart).
+	h2 := NewHoldSet(p)
+	if !h2.Has("agent-1") || !h2.Has("agent-2") {
+		t.Fatal("held ids should persist across a new HoldSet from the same path")
+	}
+	// Pruning (an agent you archived) is persisted too.
+	h2.keepOnly(map[string]bool{"agent-1": true})
+	h3 := NewHoldSet(p)
+	if !h3.Has("agent-1") || h3.Has("agent-2") {
+		t.Fatalf("prune should persist: agent-1 kept, agent-2 dropped")
+	}
+}
+
 func TestReaperSparesHeldAgent(t *testing.T) {
 	// Both agents are idle, old (past grace), and (pretend) carry archive=1 so the
 	// reaper lists them; one is held, one is not.
 	agents := `[{"id":"held","status":"idle","cwd":"/tmp/held"},{"id":"other","status":"idle","cwd":"/tmp/other"}]`
 	bin, archiveLog := fakePaseo(t, agents)
 
-	hold := NewHoldSet()
+	hold := NewHoldSet("")
 	hold.Add("held")
 	r := &Reaper{PaseoBin: bin, Held: hold, Log: func(string, ...any) {}}
 	r.reap(context.Background())
