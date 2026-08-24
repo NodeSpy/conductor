@@ -528,10 +528,15 @@ Set `webhook.smee_url`, `webhook.listen`, or both:
 connection (a network blip with no clean close) in ~80s rather than the kernel's ~15-min default, so
 a silent drop is short. smee.io does **not** buffer, so any webhook delivered while you're
 disconnected is lost — the [sweep](#full-example) (`sweep.enabled`) is the catch-up net: it
-re-derives `review_requested`/`merge_conflict`/`pr_behind`/`changes_requested` from live PR state on
-its interval, so those recover on the next sweep after connectivity returns. Comment/issue events
-aren't re-derivable, so lower `sweep.interval` (e.g. `20m`) if you want tighter recovery of the
-sweepable kinds.
+re-derives `review_requested`/`merge_conflict`/`pr_behind`/`changes_requested` from live PR state
+(comment/issue events aren't re-derivable).
+
+The sweep runs on an **adaptive cadence**: it starts tight at `sweep.min_interval` (default `2m`)
+after startup and backs off ×2 toward the ceiling `sweep.interval` (default `1h`) while nothing
+disrupts it — so a quiet, connected daemon settles at the ceiling and doesn't sweep for nothing. When
+smee **reconnects after a drop** (the exact moment a webhook may have been lost), the cadence resets
+to the tight floor and sweeps promptly, so a gap is caught in a minute or two instead of waiting up
+to a full `interval`. You don't need to hand-tune the interval down for recovery anymore.
 
 ## Configuration
 
@@ -596,9 +601,10 @@ integrations:
       # listen: 127.0.0.1:8787        # direct receiver (point the App webhook / your tunnel here)
       # path: /webhook                # default
     sweep:
-      enabled: false                  # off by default; REST catch-up for missed events. Runs once on
-      interval: 1h                     #   start, then every interval. Recovers: pending review_requested,
-      repos: ["your-org/your-repo"]    #   and on your PRs conflict/behind + unresolved review comments.
+      enabled: false                  # off by default; REST catch-up for missed events. Adaptive cadence:
+      interval: 1h                     #   tight at min_interval after start / smee-reconnect, backing off
+      min_interval: 2m                 #   ×2 toward interval (the quiet-system ceiling). Recovers pending
+      repos: ["your-org/your-repo"]    #   review_requested + on your PRs conflict/behind/unresolved-threads.
 
     # OPTIONAL shared defaults; every rule merges over these.
     defaults:

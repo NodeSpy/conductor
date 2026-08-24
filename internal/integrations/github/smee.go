@@ -47,8 +47,15 @@ func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 		log.Printf("github[%s]: signature verification ON — note the smee re-serialization caveat; "+
 			"set verify_signature:false if valid deliveries are being dropped", g.name)
 	}
+	// renew nudges the sweep back to a tight cadence when smee reconnects (a likely
+	// dropped-webhook window). Buffered+coalescing: a full buffer means a catch-up is
+	// already pending. Only wired when both the sweep and the smee transport are on.
+	var renew chan struct{}
 	if g.cfg.Sweep.Enabled {
-		go g.sweepLoop(ctx, emit)
+		if g.cfg.Webhook.SmeeURL != "" {
+			renew = make(chan struct{}, 1)
+		}
+		go g.sweepLoop(ctx, emit, renew)
 	}
 
 	seen := newDeliveryDedup(2048)
@@ -56,7 +63,7 @@ func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 	started := 0
 	if g.cfg.Webhook.SmeeURL != "" {
 		started++
-		go func() { errc <- g.runSmee(ctx, emit, seen) }()
+		go func() { errc <- g.runSmee(ctx, emit, seen, renew) }()
 	}
 	if g.cfg.Webhook.Listen != "" {
 		started++
@@ -74,17 +81,33 @@ func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 	}
 }
 
-// runSmee streams the smee channel, reconnecting with backoff.
-func (g *Integration) runSmee(ctx context.Context, emit core.EmitFunc, seen *deliveryDedup) error {
+// runSmee streams the smee channel, reconnecting with backoff. On a reconnect
+// AFTER a drop it nudges `renew` (a webhook may have been lost while we were
+// disconnected), so the sweep catches the gap. `renew` may be nil.
+func (g *Integration) runSmee(ctx context.Context, emit core.EmitFunc, seen *deliveryDedup, renew chan<- struct{}) error {
 	backoff := time.Second
+	wasDown := false
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		err := g.streamSmee(ctx, emit, seen)
+		err := g.streamSmee(ctx, emit, seen, func() {
+			// Connected. If we'd previously dropped, signal a catch-up sweep
+			// (non-blocking — a full buffer means one is already pending), and reset
+			// the backoff so a later drop starts fresh rather than at the last cap.
+			if wasDown && renew != nil {
+				select {
+				case renew <- struct{}{}:
+				default:
+				}
+			}
+			wasDown = false
+			backoff = time.Second
+		})
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		wasDown = true
 		log.Printf("github[%s]: smee stream ended (%v); reconnecting in %s", g.name, err, backoff)
 		select {
 		case <-ctx.Done():
@@ -125,7 +148,7 @@ type smeePayload struct {
 	Body     json.RawMessage `json:"body"`
 }
 
-func (g *Integration) streamSmee(ctx context.Context, emit core.EmitFunc, seen *deliveryDedup) error {
+func (g *Integration) streamSmee(ctx context.Context, emit core.EmitFunc, seen *deliveryDedup, onUp func()) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.cfg.Webhook.SmeeURL, nil)
 	if err != nil {
 		return err
@@ -138,6 +161,9 @@ func (g *Integration) streamSmee(ctx context.Context, emit core.EmitFunc, seen *
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("smee connect: HTTP %d", resp.StatusCode)
+	}
+	if onUp != nil {
+		onUp() // connection established
 	}
 
 	sc := bufio.NewScanner(resp.Body)

@@ -32,7 +32,12 @@ integrations:
       # path: /webhook                # default
     sweep:
       enabled: false                  # off by default; catch-up only
-      interval: 1h
+      # Adaptive cadence: starts tight at min_interval after startup (and whenever
+      # smee reconnects after a drop), then backs off ×2 toward interval (the ceiling
+      # a quiet, connected daemon settles at). So gaps are caught fast without
+      # sweeping constantly for nothing.
+      interval: 1h                    # ceiling (default 1h)
+      min_interval: 2m                # tight floor after start / reconnect (default 2m)
       repos: ["your-org/*"]           # concrete owner/name, or an owner glob (owner/*) → expands to installed repos
 
     # Credential policy (optional — defaults shown). Values are inline: a keyword,

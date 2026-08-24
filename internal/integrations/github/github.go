@@ -98,9 +98,14 @@ type WebhookConfig struct {
 
 // SweepConfig configures the optional catch-up sweep.
 type SweepConfig struct {
-	Enabled  bool            `yaml:"enabled"`
-	Interval config.Duration `yaml:"interval"`
-	Repos    []string        `yaml:"repos"`
+	Enabled bool `yaml:"enabled"`
+	// Interval is the CEILING of the adaptive cadence — the cadence a quiet,
+	// connected daemon settles at (default 1h). MinInterval is the tight floor the
+	// cadence resets to after startup or a connectivity renewal (a smee reconnect),
+	// then it backs off ×2 toward Interval (default 2m).
+	Interval    config.Duration `yaml:"interval"`
+	MinInterval config.Duration `yaml:"min_interval"`
+	Repos       []string        `yaml:"repos"`
 }
 
 // Rule is one entry in the instance's `rules` list (or the `defaults` block).

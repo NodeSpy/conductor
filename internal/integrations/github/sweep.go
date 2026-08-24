@@ -13,33 +13,83 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 )
 
-// sweepLoop runs the optional catch-up sweep on an interval. It's off unless
-// configured; it exists to reconcile anything missed while the daemon was
-// offline (webhooks aren't redelivered reliably).
-func (g *Integration) sweepLoop(ctx context.Context, emit core.EmitFunc) {
-	iv := g.cfg.Sweep.Interval.D()
-	if iv <= 0 {
-		iv = time.Hour
-	}
-	// Sweep once on start to reconcile anything missed while offline, then every
-	// iv thereafter (start at T0 → next at T0+iv → T0+2·iv → …).
-	if ctx.Err() == nil {
+// sweepLoop runs the optional catch-up sweep on an ADAPTIVE cadence. It's off
+// unless configured; it exists to reconcile anything missed while the daemon was
+// offline or disconnected (webhooks aren't redelivered reliably).
+//
+// The cadence starts tight (MinInterval) after startup and backs off ×2 toward the
+// ceiling (Interval) while nothing disrupts us — so a quiet, connected daemon
+// settles at Interval and doesn't sweep for nothing. A signal on `renew` (a smee
+// reconnect — a likely dropped-webhook window) resets it to the tight floor and
+// sweeps promptly, catching the gap in a minute or two instead of up to a full
+// Interval. `renew` may be nil (no smee transport); a nil channel simply never
+// fires.
+func (g *Integration) sweepLoop(ctx context.Context, emit core.EmitFunc, renew <-chan struct{}) {
+	min, max := sweepBounds(g.cfg.Sweep)
+	runSweep := func() {
 		if err := g.sweep(ctx, emit); err != nil {
 			log.Printf("github[%s]: sweep error: %v", g.name, err)
 		}
 	}
-	t := time.NewTicker(iv)
+	if ctx.Err() != nil {
+		return
+	}
+	runSweep() // once on start — reconcile anything missed while offline
+	cur := min
+	t := time.NewTimer(cur)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-renew:
+			cur = min
+			log.Printf("github[%s]: sweep cadence reset to %s (connectivity renewed)", g.name, cur)
+			runSweep()
+			resetTimer(t, cur)
 		case <-t.C:
-			if err := g.sweep(ctx, emit); err != nil {
-				log.Printf("github[%s]: sweep error: %v", g.name, err)
-			}
+			runSweep()
+			cur = backoffInterval(cur, max)
+			resetTimer(t, cur)
 		}
 	}
+}
+
+// sweepBounds resolves the tight floor and the ceiling from config (defaults: 2m
+// floor, 1h ceiling; the floor is clamped to never exceed the ceiling).
+func sweepBounds(s SweepConfig) (min, max time.Duration) {
+	max = s.Interval.D()
+	if max <= 0 {
+		max = time.Hour
+	}
+	min = s.MinInterval.D()
+	if min <= 0 {
+		min = 2 * time.Minute
+	}
+	if min > max {
+		min = max
+	}
+	return min, max
+}
+
+// backoffInterval doubles cur, capped at max.
+func backoffInterval(cur, max time.Duration) time.Duration {
+	cur *= 2
+	if cur > max {
+		cur = max
+	}
+	return cur
+}
+
+// resetTimer safely rearms a timer to d (draining a pending fire if needed).
+func resetTimer(t *time.Timer, d time.Duration) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
 }
 
 // sweep reconciles the configured repos. Entries may be concrete (`owner/name`)
