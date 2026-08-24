@@ -219,7 +219,8 @@ type Action struct {
 	MaxAttemptsPerHead int            `yaml:"max_attempts_per_head"`
 	IgnoreChecks       []string       `yaml:"ignore_checks"`
 	FlakyRerun         FlakyRerun     `yaml:"flaky_rerun"`
-	FromUsers          []string       `yaml:"from_users"`
+	FromUsers          []string       `yaml:"from_users"`    // new_comment: only these commenters trigger (empty = any)
+	IgnoreUsers        []string       `yaml:"ignore_users"`  // new_comment: never trigger on these commenters (e.g. CI report bots)
 	LabelsAny          []string       `yaml:"labels_any"`    // issue matches if it has ANY of these labels
 	LabelsAll          []string       `yaml:"labels_all"`    // ...and ALL of these labels
 	Authors            []string       `yaml:"authors"`       // ...and was opened by one of these logins

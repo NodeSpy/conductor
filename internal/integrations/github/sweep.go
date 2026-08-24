@@ -255,7 +255,7 @@ func (g *Integration) sweepMissedComments(ctx context.Context, instID int64, own
 		trs := g.emit(repo, "new_comment", t,
 			fmt.Sprintf("sweep: comment by %s on %s#%d", c.User.Login, repo, t.Number),
 			fmt.Sprintf("comment:%d", c.ID), extra, func(act config.Action) bool {
-				return fromUsersMatch(act.FromUsers, author)
+				return commentAuthorAllowed(act, author)
 			})
 		out = append(out, trs...)
 	}

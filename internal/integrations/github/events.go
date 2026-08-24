@@ -313,8 +313,15 @@ func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []cor
 	return g.emit(repo, "new_comment", t,
 		fmt.Sprintf("new comment by %s on %s#%d", p.Comment.User.Login, repo, num),
 		fmt.Sprintf("comment:%d", p.Comment.ID), extra, func(act config.Action) bool {
-			return fromUsersMatch(act.FromUsers, author)
+			return commentAuthorAllowed(act, author)
 		})
+}
+
+// commentAuthorAllowed reports whether a comment by author should trigger this
+// new_comment variant: allowed by from_users (empty = any) AND not on ignore_users
+// (e.g. CI report bots like github-actions[bot]). ignore wins over allow.
+func commentAuthorAllowed(act config.Action, author string) bool {
+	return fromUsersMatch(act.FromUsers, author) && !loginMatch(act.IgnoreUsers, author)
 }
 
 // fromUsersMatch reports whether the commenter is allowed by a from_users filter
@@ -323,7 +330,12 @@ func fromUsersMatch(fromUsers []string, author string) bool {
 	if len(fromUsers) == 0 {
 		return true
 	}
-	for _, u := range fromUsers {
+	return loginMatch(fromUsers, author)
+}
+
+// loginMatch reports whether author is in logins (case-insensitive exact match).
+func loginMatch(logins []string, author string) bool {
+	for _, u := range logins {
 		if strings.EqualFold(u, author) {
 			return true
 		}

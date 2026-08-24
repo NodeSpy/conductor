@@ -357,9 +357,13 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			if act.RerequestReview {
 				act.Prompt += dispatch.RerequestReviewGuidance
 			}
-			if profile.ArchiveWhenDone {
-				act.Prompt += dispatch.HoldGuidance
-			}
+			// NOTE: no HoldGuidance here. A top-level single-action agent is an
+			// autonomous fixer (new_comment/changes_requested/merge_conflict/
+			// failing_checks/issue_matched) — it should make the best decision and
+			// finish, not pose courtesy questions. Interactive "ask me" behavior is
+			// reserved for review hand-offs (steps.go → HandoffGuidance on background
+			// steps). A fixer that can't proceed just stops; live-gated kinds re-derive
+			// via the sweep.
 		}
 	}
 	appTok, _ := t.Context["app_token"].(string)

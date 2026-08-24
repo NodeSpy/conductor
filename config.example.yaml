@@ -106,6 +106,9 @@ integrations:
           type: agent
           agent: fixer
           from_users: []              # empty = any author; e.g. ["coderabbitai[bot]"]
+          ignore_users: ["github-actions[bot]"]  # never trigger on these commenters — e.g. CI
+                                      #   report bots (passing test-report comments aren't actionable;
+                                      #   real CI failures come through failing_checks). ignore wins.
           prompt: |
             New comment on {{.repo}}#{{.pr}} by {{.author}}: {{.comment_body}}
             If actionable, make the change, commit, push, and reply.

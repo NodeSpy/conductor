@@ -191,6 +191,35 @@ func TestNewCommentIgnoresSelf(t *testing.T) {
 	}
 }
 
+func TestNewCommentIgnoreUsers(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Rules[0].Actions = as1(map[string]config.Action{
+		"new_comment": {Type: "agent", Agent: "fixer", IgnoreUsers: []string{"github-actions[bot]"}},
+	})
+	g := newTestIntegration(t, cfg)
+
+	// A CI report bot on the ignore list must NOT trigger new_comment.
+	report := []byte(`{
+		"action":"created",
+		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+		"issue":{"number":3,"pull_request":{},"user":{"login":"me"}},
+		"comment":{"id":20,"user":{"login":"github-actions[bot]"},"body":"All tests passed!"}
+	}`)
+	if trs := g.triggersFor(context.Background(), "issue_comment", report); len(trs) != 0 {
+		t.Fatalf("ignored CI bot comment should not trigger, got %d", len(trs))
+	}
+	// A human comment still triggers.
+	human := []byte(`{
+		"action":"created",
+		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+		"issue":{"number":3,"pull_request":{},"user":{"login":"me"}},
+		"comment":{"id":21,"user":{"login":"reviewer"},"body":"please fix"}
+	}`)
+	if trs := g.triggersFor(context.Background(), "issue_comment", human); len(trs) != 1 {
+		t.Fatalf("non-ignored comment should trigger, got %d", len(trs))
+	}
+}
+
 func TestRepoNotMatchedNoTrigger(t *testing.T) {
 	g := newTestIntegration(t, baseConfig())
 	body := []byte(`{

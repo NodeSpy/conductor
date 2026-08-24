@@ -433,6 +433,9 @@ func mergeAction(base, over config.Action) config.Action {
 	if len(over.FromUsers) > 0 {
 		base.FromUsers = over.FromUsers
 	}
+	if len(over.IgnoreUsers) > 0 {
+		base.IgnoreUsers = over.IgnoreUsers
+	}
 	if len(over.LabelsAny) > 0 {
 		base.LabelsAny = over.LabelsAny
 	}

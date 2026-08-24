@@ -373,28 +373,28 @@ func TestRerequestReviewGuidance(t *testing.T) {
 	}
 }
 
-func TestHoldGuidanceForArchiveAgents(t *testing.T) {
-	// archive_when_done agents get the hold escape-hatch guidance; others don't.
+func TestFixersDoNotGetAskGuidance(t *testing.T) {
+	// A top-level single-action fixer is autonomous: it must NOT be told to ask
+	// interactive questions, even when its profile is archive_when_done. Interactive
+	// "ask me" behavior is reserved for review hand-offs (background workflow steps).
+	// It still gets the write-token wrapper.
 	cfg := &config.Config{Agents: map[string]config.AgentProfile{
-		"reaped": {Provider: "claude", ArchiveWhenDone: true},
-		"kept":   {Provider: "claude"},
+		"archived": {Provider: "claude", ArchiveWhenDone: true},
+		"kept":     {Provider: "claude"},
 	}}
 	cfg.Control.Enabled = ptrBool(true)
 
-	d := &fakeDispatcher{}
-	e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
-	e.process(context.Background(), agentTrigger("changes_requested", "a/w", 40, "h", "s",
-		config.Action{Type: "agent", Agent: "reaped", Prompt: "fix"}))
-	if !strings.Contains(d.reqs[0].Action.Prompt, "AskUserQuestion") {
-		t.Fatalf("archive_when_done agent should get hold guidance (ask via interactive question), got: %q", d.reqs[0].Action.Prompt)
-	}
-
-	d2 := &fakeDispatcher{}
-	e2, _ := newEng(t, cfg, d2, &fakeNotifier{}, nil)
-	e2.process(context.Background(), agentTrigger("changes_requested", "a/w", 41, "h", "s",
-		config.Action{Type: "agent", Agent: "kept", Prompt: "fix"}))
-	if strings.Contains(d2.reqs[0].Action.Prompt, "AskUserQuestion") {
-		t.Fatal("non-archive agent should not get hold guidance")
+	for _, agent := range []string{"archived", "kept"} {
+		d := &fakeDispatcher{}
+		e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
+		e.process(context.Background(), agentTrigger("changes_requested", "a/w", 40, "h", "s",
+			config.Action{Type: "agent", Agent: agent, Prompt: "fix"}))
+		if strings.Contains(d.reqs[0].Action.Prompt, "AskUserQuestion") {
+			t.Fatalf("autonomous fixer (agent=%s) must not get ask/hold guidance, got: %q", agent, d.reqs[0].Action.Prompt)
+		}
+		if !strings.Contains(d.reqs[0].Action.Prompt, "PC_GH_WRITE_TOKEN") {
+			t.Fatalf("fixer (agent=%s) should still get the write-token wrapper", agent)
+		}
 	}
 }
 
