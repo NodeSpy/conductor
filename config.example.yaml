@@ -1,6 +1,12 @@
 # paseo-conductor configuration.
 # Copy to ~/.config/paseo-conductor/config.yaml and edit.
 # ${ENV} references are expanded from the environment (see conductor.env).
+#
+# Everything can live in this one file, or you can split it with `imports:` —
+# a list of YAML files or globs (relative to this file) that are deep-merged:
+# maps merge, lists (like `integrations:`) concatenate, and this file's keys win.
+#   imports:
+#     - conf.d/*.yaml        # e.g. one integration per file
 
 integrations:
   # A LIST of typed instances. List `github` more than once for separate

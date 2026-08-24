@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,6 +22,12 @@ import (
 
 // Config is the whole config file.
 type Config struct {
+	// Imports lists other YAML files (paths or globs, relative to this file's
+	// directory) to merge in, so the config can be split across files. Maps merge
+	// recursively, lists (e.g. integrations) concatenate, and this file's own keys
+	// win over imported ones. Processed at load time; empty here after loading.
+	Imports []string `yaml:"imports"`
+
 	Integrations []IntegrationRef        `yaml:"integrations"`
 	Control      Control                 `yaml:"control"`
 	Notify       Notify                  `yaml:"notify"`
@@ -302,22 +309,149 @@ func (a Actors) HasLogin(login string) bool {
 	return false
 }
 
-// Load reads, expands, defaults, and validates the config at path.
+// Load reads, expands, defaults, and validates the config at path. If the file
+// declares `imports:`, the listed files are deep-merged first (see loadMerged);
+// otherwise the file is parsed directly, exactly as before.
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	raw = expandEnv(raw)
-	var c Config
-	if err := yaml.Unmarshal(raw, &c); err != nil {
+	expanded := expandEnv(raw)
+
+	// Cheap probe: no `imports:` → parse the single file directly (unchanged path,
+	// no map round-trip). Only pay the merge machinery when imports are used.
+	var probe struct {
+		Imports []string `yaml:"imports"`
+	}
+	if err := yaml.Unmarshal(expanded, &probe); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+
+	var c Config
+	if len(probe.Imports) == 0 {
+		if err := yaml.Unmarshal(expanded, &c); err != nil {
+			return nil, fmt.Errorf("parse config: %w", err)
+		}
+	} else {
+		merged, err := loadMerged(path, map[string]bool{})
+		if err != nil {
+			return nil, err
+		}
+		out, err := yaml.Marshal(merged)
+		if err != nil {
+			return nil, fmt.Errorf("merge imports: %w", err)
+		}
+		// Re-parse the merged document so the custom unmarshalers (IntegrationRef,
+		// ActionSet, Duration, …) still run over each node.
+		if err := yaml.Unmarshal(out, &c); err != nil {
+			return nil, fmt.Errorf("parse merged config: %w", err)
+		}
 	}
 	c.applyDefaults()
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
 	return &c, nil
+}
+
+// loadMerged reads the file at path (env-expanded) as a generic map, then
+// deep-merges any files it lists under `imports:` — resolved relative to this
+// file's directory, globs allowed. Imported files are merged in listed order and
+// the importing file's own keys overlay them, so: scalars/maps in the importer
+// win, lists concatenate (imported entries first), and each file is included at
+// most once (cycles and diamond imports are de-duped, not errors).
+func loadMerged(p string, loaded map[string]bool) (map[string]any, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return nil, err
+	}
+	if loaded[abs] {
+		return map[string]any{}, nil // already included elsewhere
+	}
+	loaded[abs] = true
+
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("read config %s: %w", p, err)
+	}
+	var m map[string]any
+	if err := yaml.Unmarshal(expandEnv(raw), &m); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", p, err)
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	imports := toStrings(m["imports"])
+	delete(m, "imports")
+
+	merged := map[string]any{}
+	dir := filepath.Dir(p)
+	for _, imp := range imports {
+		pat := imp
+		if !filepath.IsAbs(pat) {
+			pat = filepath.Join(dir, pat)
+		}
+		matches, err := filepath.Glob(pat)
+		if err != nil {
+			return nil, fmt.Errorf("%s: bad import glob %q: %w", p, imp, err)
+		}
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("%s: import %q matched no files", p, imp)
+		}
+		sort.Strings(matches)
+		for _, f := range matches {
+			sub, err := loadMerged(f, loaded)
+			if err != nil {
+				return nil, err
+			}
+			merged = mergeMaps(merged, sub)
+		}
+	}
+	return mergeMaps(merged, m), nil
+}
+
+// toStrings coerces a YAML scalar or sequence of strings into []string.
+func toStrings(v any) []string {
+	switch x := v.(type) {
+	case []any:
+		out := make([]string, 0, len(x))
+		for _, e := range x {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		return []string{x}
+	}
+	return nil
+}
+
+// mergeMaps deep-merges src into dst: nested maps merge recursively, lists
+// concatenate (dst's entries first), and any other value in src overwrites dst.
+func mergeMaps(dst, src map[string]any) map[string]any {
+	if dst == nil {
+		dst = map[string]any{}
+	}
+	for k, sv := range src {
+		if dv, ok := dst[k]; ok {
+			if dm, ok1 := dv.(map[string]any); ok1 {
+				if sm, ok2 := sv.(map[string]any); ok2 {
+					dst[k] = mergeMaps(dm, sm)
+					continue
+				}
+			}
+			if dl, ok1 := dv.([]any); ok1 {
+				if sl, ok2 := sv.([]any); ok2 {
+					dst[k] = append(append([]any{}, dl...), sl...)
+					continue
+				}
+			}
+		}
+		dst[k] = sv
+	}
+	return dst
 }
 
 var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)

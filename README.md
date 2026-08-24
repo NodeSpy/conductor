@@ -539,6 +539,37 @@ Config lives at `~/.config/paseo-conductor/config.yaml`; secrets referenced via 
 the sibling `conductor.env`, which the daemon loads at startup (so systemd and launchd both work).
 The installer seeds both files. `paseo-conductor validate` checks everything before you start.
 
+### Splitting the config across files (imports)
+
+Everything can live in one file — or you can split it. A top-level **`imports:`** list pulls in other
+YAML files (paths or globs, relative to the importing file's directory) and deep-merges them: **maps
+merge recursively, lists concatenate** (so `integrations:` entries from every file combine), and the
+**importing file's own keys win** on conflicts. Each file is included once (diamond/cyclic imports are
+de-duped). `${VAR}` expansion applies per file. Configs with no `imports:` load exactly as before.
+
+```yaml
+# ~/.config/paseo-conductor/config.yaml
+imports:
+  - conf.d/*.yaml          # one integration per file, say
+agents:
+  fixer: { provider: claude, workspace: worktree }
+control: { enabled: true }
+```
+
+```yaml
+# ~/.config/paseo-conductor/conf.d/github.yaml
+integrations:
+  - type: github
+    name: default
+    app: { app_id: 123, private_key_path: ~/…/github-app.pem, webhook_secret: ${GH_WEBHOOK_SECRET} }
+    webhook: { smee_url: ${GH_SMEE_URL} }
+    # rules, defaults, actions…
+```
+
+An imported file is just a partial config — put whatever top-level sections you like in it
+(`integrations:`, `agents:`, `notify:`, …). Split by integration, or keep the big github `rules` in
+their own file, however you prefer.
+
 ### Full example
 
 This is the complete annotated config (mirrors [`config.example.yaml`](config.example.yaml)):

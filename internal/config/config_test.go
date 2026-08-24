@@ -110,6 +110,123 @@ func TestValidateRejectsNoIntegrations(t *testing.T) {
 	}
 }
 
+func TestImportsMergeAndConcat(t *testing.T) {
+	os.Setenv("TEST_WH_SECRET", "shhh")
+	defer os.Unsetenv("TEST_WH_SECRET")
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	// Split across files: main + a conf.d dir with one integration per file.
+	write("conf.d/github.yaml", `
+integrations:
+  - type: github
+    name: gh
+    app: { app_id: 1, private_key_path: ~/k.pem, webhook_secret: ${TEST_WH_SECRET} }
+    webhook: { smee_url: https://smee.io/x }
+`)
+	write("conf.d/rss.yaml", `
+integrations:
+  - type: rss
+    name: feeds
+agents:
+  planner: { provider: claude }
+`)
+	main := write("config.yaml", `
+imports:
+  - conf.d/*.yaml
+integrations:
+  - type: cron
+    name: chores
+agents:
+  fixer: { provider: claude, workspace: worktree }
+paseo_bin: /custom/paseo    # importer scalar must win over any imported default
+`)
+
+	cfg, err := Load(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Lists concatenate: imported github + rss, then the main file's cron = 3.
+	if len(cfg.Integrations) != 3 {
+		t.Fatalf("want 3 integrations (2 imported + 1 inline), got %d: %+v", len(cfg.Integrations), cfg.Integrations)
+	}
+	names := map[string]bool{}
+	for _, ig := range cfg.Integrations {
+		names[ig.Name] = true
+	}
+	if !names["gh"] || !names["feeds"] || !names["chores"] {
+		t.Fatalf("missing an integration after merge: %v", names)
+	}
+	// Maps merge: agents from both the import and the main file.
+	if _, ok := cfg.Agents["fixer"]; !ok {
+		t.Fatal("main-file agent 'fixer' missing")
+	}
+	if _, ok := cfg.Agents["planner"]; !ok {
+		t.Fatal("imported agent 'planner' missing")
+	}
+	// Importer scalar wins.
+	if cfg.PaseoBin != "/custom/paseo" {
+		t.Fatalf("importer scalar should win, got %q", cfg.PaseoBin)
+	}
+	// Env expansion reached an imported integration's raw node.
+	var gh struct {
+		App struct {
+			WebhookSecret string `yaml:"webhook_secret"`
+		} `yaml:"app"`
+	}
+	for _, ig := range cfg.Integrations {
+		if ig.Name == "gh" {
+			if err := ig.Decode(&gh); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if gh.App.WebhookSecret != "shhh" {
+		t.Fatalf("env not expanded in imported file: %q", gh.App.WebhookSecret)
+	}
+}
+
+func TestImportsMissingFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(p, []byte("imports: [nope.yaml]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil {
+		t.Fatal("an import matching no files should error")
+	}
+}
+
+func TestImportsDiamondDedup(t *testing.T) {
+	dir := t.TempDir()
+	w := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// base is imported by both a.yaml and the main file → must contribute once.
+	w("base.yaml", "integrations:\n  - { type: cron, name: base }\n")
+	w("a.yaml", "imports: [base.yaml]\n")
+	w("config.yaml", "imports: [a.yaml, base.yaml]\n")
+
+	cfg, err := Load(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Integrations) != 1 {
+		t.Fatalf("diamond import should include base once, got %d", len(cfg.Integrations))
+	}
+}
+
 func TestActionSetUnmarshal(t *testing.T) {
 	var m struct {
 		Actions map[string]ActionSet `yaml:"actions"`
