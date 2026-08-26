@@ -124,6 +124,11 @@ integrations:
             branches: ["release/*", "release-please--*"]
             labels: ["release", "autorelease: pending"]
             # title: ["[skip review]"]   # case-insensitive substrings
+          # critique gates on CI by default: if checks are still running it defers
+          # ("status: retry") and the review lands on a later sweep. Add --force to
+          # review immediately regardless of the gate (fine here — this only fires on
+          # non-draft PRs you were asked to review):
+          #   command: [..., "--post", "--force"]
           command: ["critique", "--review", "{{.repo}}#{{.pr}}", "--post"]
           env:
             CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"   # reads on App pool
