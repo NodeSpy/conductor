@@ -92,6 +92,12 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		e.log("%s step %s running (%s)", tag(t), id, actionDesc(s))
 		start := time.Now()
 		ref, err := e.disp.Dispatch(ctx, req)
+		// A step that exited cleanly but reports it isn't done yet (e.g. critique
+		// deferring on pending CI) is retried per its `retry:` policy — the workflow
+		// won't complete a not-ready step.
+		if err == nil && !s.Background && s.Retry != nil {
+			ref = e.retryWhileDeferred(ctx, req, ref, s.Retry)
+		}
 		took := time.Since(start).Round(time.Second)
 		// A background step launches a live agent and returns immediately; there's
 		// no captured output to fold into later steps.

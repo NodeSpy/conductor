@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -204,6 +205,48 @@ func (e *Engine) agentGuidance(profile config.AgentProfile) string {
 		return wrapGuidance(*e.cfg.AgentGuidance)
 	default:
 		return dispatch.ConcisionGuidance
+	}
+}
+
+// retryWhileDeferred re-runs a step while its output still signals "not ready"
+// (matches rp.WhileOutputMatches) — e.g. critique deferring on pending CI — polling
+// every rp.RetryInterval() up to rp.RetryTimeout(), then giving up (the sweep is the
+// backstop). Returns the last RunRef. Only meaningful for a step that exited cleanly
+// but reported it isn't done; a hard error is handled by the caller.
+func (e *Engine) retryWhileDeferred(ctx context.Context, req dispatch.Request, ref dispatch.RunRef, rp *config.StepRetry) dispatch.RunRef {
+	if rp == nil || rp.WhileOutputMatches == "" {
+		return ref
+	}
+	re, err := regexp.Compile(rp.WhileOutputMatches)
+	if err != nil {
+		e.log("%s step retry: bad while_output_matches %q: %v — not retrying", tag(req.Trigger), rp.WhileOutputMatches, err)
+		return ref
+	}
+	if !re.MatchString(ref.Output) {
+		return ref // already ready
+	}
+	interval, timeout := rp.RetryInterval(), rp.RetryTimeout()
+	deadline := time.Now().Add(timeout)
+	e.log("%s step deferred (matches %q) — retrying every %s for up to %s", tag(req.Trigger), rp.WhileOutputMatches, interval, timeout)
+	for {
+		if time.Now().After(deadline) {
+			e.log("%s step still deferred after %s — giving up (sweep will retry)", tag(req.Trigger), timeout)
+			return ref
+		}
+		select {
+		case <-ctx.Done():
+			return ref
+		case <-time.After(interval):
+		}
+		r2, err := e.disp.Dispatch(ctx, req)
+		if err != nil {
+			return r2 // surface the error to the caller's normal handling
+		}
+		ref = r2
+		if !re.MatchString(ref.Output) {
+			e.log("%s step retry cleared — ready", tag(req.Trigger))
+			return ref
+		}
 	}
 }
 

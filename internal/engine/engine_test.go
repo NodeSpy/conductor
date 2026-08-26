@@ -17,14 +17,18 @@ import (
 )
 
 type fakeDispatcher struct {
-	reqs      []dispatch.Request
-	ref       dispatch.RunRef
-	err       error
-	liveAgent bool // HasLiveAgent return value
+	reqs       []dispatch.Request
+	ref        dispatch.RunRef
+	err        error
+	liveAgent  bool                                            // HasLiveAgent return value
+	onDispatch func(dispatch.Request) (dispatch.RunRef, error) // per-call override (e.g. varying output)
 }
 
 func (f *fakeDispatcher) Dispatch(_ context.Context, r dispatch.Request) (dispatch.RunRef, error) {
 	f.reqs = append(f.reqs, r)
+	if f.onDispatch != nil {
+		return f.onDispatch(r)
+	}
 	return f.ref, f.err
 }
 
@@ -425,6 +429,41 @@ func TestAgentGuidanceConfigOverride(t *testing.T) {
 	empty := ""
 	if p := run(&config.Config{AgentGuidance: &empty}); strings.Contains(p, "be concise and human") {
 		t.Fatalf("empty agent_guidance should disable it, got: %q", p)
+	}
+}
+
+func TestRetryWhileDeferred(t *testing.T) {
+	// Step defers ("status: retry") twice, then succeeds — conductor must loop until
+	// the output no longer matches, not complete the deferred step.
+	calls := 0
+	d := &fakeDispatcher{onDispatch: func(dispatch.Request) (dispatch.RunRef, error) {
+		calls++
+		if calls < 3 {
+			return dispatch.RunRef{Output: "reviewing #1 (gate=checks)… status: retry"}, nil
+		}
+		return dispatch.RunRef{Output: "reviewed and posted"}, nil
+	}}
+	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
+	rp := &config.StepRetry{WhileOutputMatches: "status: retry",
+		Interval: config.Duration(2 * time.Millisecond), Timeout: config.Duration(2 * time.Second)}
+	req := dispatch.Request{Trigger: core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "a/w", Number: 1}}}
+	deferred := dispatch.RunRef{Output: "status: retry"}
+
+	out := e.retryWhileDeferred(context.Background(), req, deferred, rp)
+	if !strings.Contains(out.Output, "reviewed and posted") {
+		t.Fatalf("retry should loop until ready, got %q after %d calls", out.Output, calls)
+	}
+
+	// Times out while still deferred → returns the last (still-deferred) ref, no hang.
+	dAlways := &fakeDispatcher{onDispatch: func(dispatch.Request) (dispatch.RunRef, error) {
+		return dispatch.RunRef{Output: "status: retry"}, nil
+	}}
+	e2, _ := newEng(t, baseCfg(), dAlways, &fakeNotifier{}, nil)
+	rp2 := &config.StepRetry{WhileOutputMatches: "status: retry",
+		Interval: config.Duration(2 * time.Millisecond), Timeout: config.Duration(20 * time.Millisecond)}
+	out2 := e2.retryWhileDeferred(context.Background(), req, deferred, rp2)
+	if !strings.Contains(out2.Output, "status: retry") {
+		t.Fatalf("on timeout should return the last deferred ref, got %q", out2.Output)
 	}
 }
 

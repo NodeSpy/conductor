@@ -211,6 +211,10 @@ type Action struct {
 
 	// command-type fields
 	Command []string `yaml:"command"`
+	// Retry re-runs this step while its output signals it isn't ready yet (e.g.
+	// critique deferring on pending CI) — so the workflow doesn't complete a step
+	// that isn't actually done. Mainly for command steps.
+	Retry *StepRetry `yaml:"retry"`
 
 	// workflow (multi-step) fields. When Steps is non-empty the action runs as
 	// an ordered workflow; each step is itself an Action plus ID/If/OutputSchema.
@@ -244,6 +248,33 @@ type Action struct {
 
 // IsEnabled reports whether the action is enabled (default true).
 func (a Action) IsEnabled() bool { return a.Enabled == nil || *a.Enabled }
+
+// StepRetry re-runs a workflow step while its output still matches WhileOutputMatches
+// (a regexp) — the "not ready yet" signal, e.g. critique's "status: retry" when it's
+// waiting on CI. The step re-runs every Interval (default 1m) until the output stops
+// matching or Timeout (default 15m) elapses, at which point conductor gives up on the
+// retry (the sweep remains the backstop). Only applies to non-background steps.
+type StepRetry struct {
+	WhileOutputMatches string   `yaml:"while_output_matches"`
+	Interval           Duration `yaml:"interval"`
+	Timeout            Duration `yaml:"timeout"`
+}
+
+// RetryInterval returns the poll interval, defaulting to 1m.
+func (r StepRetry) RetryInterval() time.Duration {
+	if d := r.Interval.D(); d > 0 {
+		return d
+	}
+	return time.Minute
+}
+
+// RetryTimeout returns the give-up budget, defaulting to 15m.
+func (r StepRetry) RetryTimeout() time.Duration {
+	if d := r.Timeout.D(); d > 0 {
+		return d
+	}
+	return 15 * time.Minute
+}
 
 // ActionSet is one-or-more actions for a kind. In YAML it accepts either a single
 // mapping (`merge_conflict: { agent: opus }` → one unnamed action, the common case)

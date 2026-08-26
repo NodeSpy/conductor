@@ -125,11 +125,15 @@ integrations:
             labels: ["release", "autorelease: pending"]
             # title: ["[skip review]"]   # case-insensitive substrings
           # critique gates on CI by default: if checks are still running it defers
-          # ("status: retry") and the review lands on a later sweep. Add --force to
-          # review immediately regardless of the gate (fine here — this only fires on
-          # non-draft PRs you were asked to review):
-          #   command: [..., "--post", "--force"]
+          # ("status: retry"). Two ways to handle that:
+          #   - review anyway now:  command: [..., "--post", "--force"]
+          #   - keep the gate but don't wait for the sweep — retry this step until
+          #     critique stops deferring (or a timeout), via `retry:` below.
           command: ["critique", "--review", "{{.repo}}#{{.pr}}", "--post"]
+          retry:                                     # re-run a step while it's "not ready"
+            while_output_matches: "status: retry"    #   regexp on the step's output
+            interval: 2m                             #   poll every (default 1m)
+            timeout: 30m                             #   give up after (default 15m; sweep backstops)
           env:
             CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"   # reads on App pool
             CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}"    # submits review as YOU
