@@ -54,6 +54,13 @@ func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 	if g.cfg.Sweep.Enabled {
 		go g.sweepLoop(ctx, emit, g.renew)
 	}
+	// Stuck-check detection runs on its OWN fixed cadence (independent of the sweep's
+	// adaptive backoff, whose ceiling can be hours away) — a stuck check is time-
+	// sensitive. Runs whenever a stuck_checks action is configured and there are
+	// watch repos, regardless of sweep.enabled.
+	if g.anyStuckChecks() && len(g.cfg.Sweep.Repos) > 0 {
+		go g.stuckLoop(ctx, emit)
+	}
 
 	seen := newDeliveryDedup(2048)
 	errc := make(chan error, 2)

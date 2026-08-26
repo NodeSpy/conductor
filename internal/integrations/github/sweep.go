@@ -103,6 +103,18 @@ func resetTimer(t *time.Timer, d time.Duration) {
 func (g *Integration) sweep(ctx context.Context, emit core.EmitFunc) error {
 	st := &sweepStats{}
 	log.Printf("github[%s]: sweep starting (%d repo entr%s)", g.name, len(g.cfg.Sweep.Repos), plural(len(g.cfg.Sweep.Repos)))
+	g.eachRepo(ctx, "sweep", func(instID int64, owner, name, repo string) {
+		g.sweepRepo(ctx, emit, instID, owner, name, repo, st)
+	})
+	log.Printf("github[%s]: sweep done — repos=%d prs=%d review_requested=%d (skipped draft=%d, excluded=%d) merge_conflict=%d pr_behind=%d changes_requested=%d new_comment=%d",
+		g.name, st.repos, st.prs, st.review, st.reviewDraft, st.reviewExcluded, st.conflict, st.behind, st.comments, st.newComments)
+	return nil
+}
+
+// eachRepo resolves the configured sweep.repos entries (concrete owner/name or an
+// owner glob expanded via the installation's repo list) and calls fn for each, with
+// the resolved installation id. Shared by the full sweep and the stuck-check poller.
+func (g *Integration) eachRepo(ctx context.Context, tag string, fn func(instID int64, owner, name, repo string)) {
 	for _, entry := range g.cfg.Sweep.Repos {
 		owner, _ := splitRepo(entry)
 		if owner == "" {
@@ -111,17 +123,17 @@ func (g *Integration) sweep(ctx context.Context, emit core.EmitFunc) error {
 		if strings.Contains(entry, "*") {
 			instID, err := g.app.accountInstallationID(ctx, owner)
 			if err != nil {
-				log.Printf("github[%s]: sweep %s: %v", g.name, entry, err)
+				log.Printf("github[%s]: %s %s: %v", g.name, tag, entry, err)
 				continue
 			}
 			repos, err := g.rest.listInstallationRepos(ctx, instID)
 			if err != nil {
-				log.Printf("github[%s]: sweep %s: %v", g.name, entry, err)
+				log.Printf("github[%s]: %s %s: %v", g.name, tag, entry, err)
 				continue
 			}
 			for _, r := range repos {
 				if ok, _ := path.Match(entry, r.FullName); ok {
-					g.sweepRepo(ctx, emit, instID, r.Owner.Login, r.Name, r.FullName, st)
+					fn(instID, r.Owner.Login, r.Name, r.FullName)
 				}
 			}
 			continue
@@ -132,14 +144,73 @@ func (g *Integration) sweep(ctx context.Context, emit core.EmitFunc) error {
 		}
 		instID, err := g.app.repoInstallationID(ctx, owner, name)
 		if err != nil {
-			log.Printf("github[%s]: sweep %s: %v", g.name, entry, err)
+			log.Printf("github[%s]: %s %s: %v", g.name, tag, entry, err)
 			continue
 		}
-		g.sweepRepo(ctx, emit, instID, owner, name, entry, st)
+		fn(instID, owner, name, entry)
 	}
-	log.Printf("github[%s]: sweep done — repos=%d prs=%d review_requested=%d (skipped draft=%d, excluded=%d) merge_conflict=%d pr_behind=%d changes_requested=%d new_comment=%d stuck_checks=%d",
-		g.name, st.repos, st.prs, st.review, st.reviewDraft, st.reviewExcluded, st.conflict, st.behind, st.comments, st.newComments, st.stuck)
-	return nil
+}
+
+// stuckLoop polls for stuck CI on your open PRs on its OWN fixed cadence (default
+// 15m) — independent of the adaptive sweep, whose ceiling can be hours away. Runs
+// when a stuck_checks action is configured and there are watch repos.
+func (g *Integration) stuckLoop(ctx context.Context, emit core.EmitFunc) {
+	iv := g.cfg.Sweep.StuckInterval.D()
+	if iv <= 0 {
+		iv = 15 * time.Minute
+	}
+	log.Printf("github[%s]: stuck-check poller enabled, every %s", g.name, iv)
+	t := time.NewTicker(iv)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			g.stuckPass(ctx, emit)
+		}
+	}
+}
+
+// stuckPass scans each watched repo's open PRs (yours) for stuck CI and emits
+// stuck_checks. Uses the PR list payload directly (head SHA is there) — no extra
+// per-PR fetch beyond the stuck-run lookup.
+func (g *Integration) stuckPass(ctx context.Context, emit core.EmitFunc) {
+	n := 0
+	g.eachRepo(ctx, "stuck", func(instID int64, owner, name, repo string) {
+		prs, err := g.rest.listOpenPRs(ctx, instID, owner, name)
+		if err != nil {
+			log.Printf("github[%s]: stuck %s: %v", g.name, repo, err)
+			return
+		}
+		for _, pr := range prs {
+			if !g.self[strings.ToLower(pr.User.Login)] {
+				continue // your PRs only
+			}
+			t := g.target(repo, pr.Number, pr.Head.SHA, pr.Base.Ref, pr.HTMLURL)
+			for _, tr := range g.sweepStuckChecks(ctx, instID, owner, name, repo, t, pr.Head.SHA) {
+				tr.CatchUp = true
+				emit(ctx, tr)
+				n++
+			}
+		}
+	})
+	if n > 0 {
+		log.Printf("github[%s]: stuck-check pass emitted %d stuck_checks", g.name, n)
+	}
+}
+
+// anyStuckChecks reports whether any rule (defaults or specific) configures an
+// enabled stuck_checks action — the gate for starting the stuck poller.
+func (g *Integration) anyStuckChecks() bool {
+	for _, r := range append([]Rule{g.cfg.Defaults}, g.cfg.Rules...) {
+		for _, a := range r.Actions["stuck_checks"] {
+			if a.IsEnabled() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // sweepStats is a per-run tally so a sweep is never a black box: it says what it
@@ -149,7 +220,6 @@ type sweepStats struct {
 	review, reviewDraft, reviewExcluded int
 	conflict, behind, comments          int
 	newComments                         int
-	stuck                               int
 }
 
 func plural(n int) string {
@@ -203,9 +273,9 @@ func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID 
 		nc := g.sweepMissedComments(ctx, instID, owner, name, repo, t, info.Head.Ref)
 		st.newComments += len(nc)
 		trs = append(trs, nc...)
-		sk := g.sweepStuckChecks(ctx, instID, owner, name, repo, t, info)
-		st.stuck += len(sk)
-		trs = append(trs, sk...)
+		// NOTE: stuck_checks is NOT detected here — it runs on its own tight cadence
+		// (stuckLoop) since a stuck check is time-sensitive and the sweep's ceiling can
+		// be hours away.
 		for _, tr := range trs {
 			tr.CatchUp = true
 			emit(ctx, tr)
@@ -273,12 +343,12 @@ func (g *Integration) sweepMissedComments(ctx context.Context, instID int64, own
 // gh-rerun command) gets the stuck run in Context (run_id/run_name/run_status);
 // dedup per run id, so a given stuck run fires once (a fresh re-run gets a new id).
 // Only runs when stuck_checks is configured.
-func (g *Integration) sweepStuckChecks(ctx context.Context, instID int64, owner, name, repo string, t core.Target, info *pullInfo) []core.Trigger {
+func (g *Integration) sweepStuckChecks(ctx context.Context, instID int64, owner, name, repo string, t core.Target, headSHA string) []core.Trigger {
 	act, ok := g.actionFor(repo, "stuck_checks")
 	if !ok || !act.IsEnabled() {
 		return nil
 	}
-	runs, err := g.rest.stuckRuns(ctx, instID, owner, name, info.Head.SHA, act.StuckAfterDur(), time.Now())
+	runs, err := g.rest.stuckRuns(ctx, instID, owner, name, headSHA, act.StuckAfterDur(), time.Now())
 	if err != nil || len(runs) == 0 {
 		return nil
 	}

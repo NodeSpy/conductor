@@ -106,6 +106,12 @@ type SweepConfig struct {
 	Interval    config.Duration `yaml:"interval"`
 	MinInterval config.Duration `yaml:"min_interval"`
 	Repos       []string        `yaml:"repos"`
+	// StuckInterval is the FIXED cadence of the dedicated stuck_checks poller
+	// (default 15m). Stuck-check detection is time-sensitive, so it runs on its own
+	// tight schedule rather than the adaptive (up-to-Interval) sweep. Uses Repos as
+	// the watch list; runs whenever a stuck_checks action is configured, independent
+	// of Enabled.
+	StuckInterval config.Duration `yaml:"stuck_interval"`
 }
 
 // Rule is one entry in the instance's `rules` list (or the `defaults` block).

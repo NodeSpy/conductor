@@ -42,6 +42,10 @@ integrations:
       interval: 6h                    # ceiling — quiet-system cadence (default 6h)
       min_interval: 10m               # tight floor after start / reconnect (default 10m)
       repos: ["your-org/*"]           # concrete owner/name, or an owner glob (owner/*) → expands to installed repos
+      stuck_interval: 15m             # FIXED cadence of the dedicated stuck_checks poller (default 15m).
+                                      #   Stuck-check detection runs on its own tight schedule (not the
+                                      #   adaptive sweep), using `repos` as the watch list — active
+                                      #   whenever a stuck_checks action is set, even if enabled:false.
 
     # Credential policy (optional — defaults shown). Values are inline: a keyword,
     # or (after ${ENV} expansion) a literal token.
