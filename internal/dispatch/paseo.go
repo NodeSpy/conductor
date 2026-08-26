@@ -668,6 +668,16 @@ func (d *Dispatcher) HasLiveAgent(ctx context.Context, prKey, kind string) bool 
 	return len(agents) > 0
 }
 
+// Archive soft-deletes a finished agent (paseo archive), used to clean up a
+// non-interactive workflow step's agent the instant it finishes rather than
+// leaving it for the reaper's next poll. A blank id is a no-op.
+func (d *Dispatcher) Archive(ctx context.Context, agentID string) error {
+	if agentID == "" {
+		return nil
+	}
+	return exec.CommandContext(ctx, d.PaseoBin, "archive", agentID).Run()
+}
+
 // liveAgentForPR returns the id of a non-archived conductor agent already working
 // this PR (any kind), or "" if none — the "one worker per PR" target for queuing
 // new feedback via `paseo send`.

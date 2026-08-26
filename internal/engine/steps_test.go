@@ -63,6 +63,7 @@ func (f *stepFake) Dispatch(_ context.Context, req dispatch.Request) (dispatch.R
 
 func (f *stepFake) WaitForAgent(context.Context, string, time.Duration) {}
 func (f *stepFake) HasLiveAgent(context.Context, string, string) bool   { return false }
+func (f *stepFake) Archive(context.Context, string) error               { return nil }
 
 func (f *stepFake) count() int {
 	f.mu.Lock()

@@ -22,6 +22,7 @@ type fakeDispatcher struct {
 	err        error
 	liveAgent  bool                                            // HasLiveAgent return value
 	onDispatch func(dispatch.Request) (dispatch.RunRef, error) // per-call override (e.g. varying output)
+	archived   chan string                                     // agent ids passed to Archive (if set)
 }
 
 func (f *fakeDispatcher) Dispatch(_ context.Context, r dispatch.Request) (dispatch.RunRef, error) {
@@ -34,6 +35,12 @@ func (f *fakeDispatcher) Dispatch(_ context.Context, r dispatch.Request) (dispat
 
 func (f *fakeDispatcher) WaitForAgent(context.Context, string, time.Duration) {}
 func (f *fakeDispatcher) HasLiveAgent(context.Context, string, string) bool   { return f.liveAgent }
+func (f *fakeDispatcher) Archive(_ context.Context, id string) error {
+	if f.archived != nil {
+		f.archived <- id
+	}
+	return nil
+}
 
 type fakeNotifier struct{ events []string }
 
@@ -432,6 +439,31 @@ func TestAgentGuidanceConfigOverride(t *testing.T) {
 	}
 }
 
+func TestNonBackgroundStepArchivedImmediately(t *testing.T) {
+	// A non-interactive archive-when-done agent step (assess) is archived the moment
+	// it finishes — not left for the reaper.
+	archived := make(chan string, 4)
+	d := &fakeDispatcher{archived: archived, onDispatch: func(dispatch.Request) (dispatch.RunRef, error) {
+		return dispatch.RunRef{AgentID: "agent-assess", Output: `{"decision":"auto"}`}, nil
+	}}
+	cfg := baseCfg()
+	cfg.Agents["fixer"] = config.AgentProfile{Provider: "claude", ArchiveWhenDone: true}
+	e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
+	wf := config.Action{Steps: []config.Action{
+		{ID: "assess", Type: "agent", Agent: "fixer", Prompt: "decide"},
+	}}
+	e.process(context.Background(), agentTrigger("review_requested", "a/w", 1, "h", "reviewreq@h", wf))
+
+	select {
+	case id := <-archived:
+		if id != "agent-assess" {
+			t.Fatalf("archived wrong agent: %q", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("non-interactive step's agent was not archived on completion")
+	}
+}
+
 func TestNonBackgroundStepGetsNoAskGuidance(t *testing.T) {
 	// A non-background workflow step (e.g. `assess`, which produces structured output)
 	// must NOT be told to ask via AskUserQuestion — pausing to ask fails the schema
@@ -663,6 +695,7 @@ func (g *gateFake) WaitForAgent(ctx context.Context, _ string, _ time.Duration) 
 }
 
 func (g *gateFake) HasLiveAgent(context.Context, string, string) bool { return false }
+func (g *gateFake) Archive(context.Context, string) error             { return nil }
 
 func (g *gateFake) count() int {
 	g.mu.Lock()

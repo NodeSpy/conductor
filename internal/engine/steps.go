@@ -151,6 +151,13 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			summary = "\n" + tail
 		}
 		e.log("%s step %s done (%s) in %s%s", tag(t), id, ref.Backend, took, summary)
+
+		// A non-interactive agent step (e.g. assess) needs no interaction, so archive
+		// its agent the instant it finishes rather than leaving it to clutter paseo
+		// until the reaper's next poll. Fire-and-forget; the reaper is the backstop.
+		if s.Type == "agent" && profile.ArchiveWhenDone && ref.AgentID != "" {
+			go func(id string) { _ = e.disp.Archive(context.Background(), id) }(ref.AgentID)
+		}
 	}
 	e.notif.Emit(ctx, notify.EventComplete, t, "workflow")
 	e.finishRun(run)

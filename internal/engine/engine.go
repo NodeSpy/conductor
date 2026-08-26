@@ -30,6 +30,9 @@ type Dispatcher interface {
 	// HasLiveAgent reports whether any non-archived conductor agent is already
 	// working or parked for this PR+kind (gates re-dispatch of live-gated kinds).
 	HasLiveAgent(ctx context.Context, prKey, kind string) bool
+	// Archive soft-deletes a finished agent immediately, so a non-interactive step's
+	// agent (e.g. assess) doesn't linger in paseo until the reaper's next tick.
+	Archive(ctx context.Context, agentID string) error
 }
 
 // Notifier emits notifications. *notify.Notifier satisfies it.
