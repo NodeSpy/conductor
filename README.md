@@ -43,7 +43,7 @@ Every kind below is a configurable `action` (see [Configuration](#configuration)
 | `merge_conflict` | PR becomes conflicting | agent: resolve + push |
 | `pr_behind` | PR is behind base | `gh pr update-branch` |
 | `failing_checks` | CI fails (a check reaches a failing conclusion) | flake-rerun once, then agent: fix + push |
-| `stuck_checks` | a CI run is stuck `in_progress` past `stuck_after` (dead runner — never completes, so `failing_checks` can't catch it) | anything: re-run the run (`{{.run_id}}`) so checks finish. Polled on its own fixed cadence (`sweep.stuck_interval`, default 15m), your open PRs |
+| `stuck_checks` | a CI run is stuck `in_progress` past `stuck_after` (dead runner — never completes, so `failing_checks` can't catch it) | anything: re-run the run (`{{.run_id}}`) so checks finish. Its own periodic watcher (not the sweep): polls the rule's repos every `poll_interval` (default 15m), your open PRs |
 | `changes_requested` | a review requests changes | agent: address + push |
 | `new_comment` | a comment / bugbot review | agent: act + reply |
 | `merge_ready` | fully green: mergeable, approved by another reviewer, all threads resolved, not draft | `gh pr merge` |

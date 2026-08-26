@@ -54,11 +54,11 @@ func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 	if g.cfg.Sweep.Enabled {
 		go g.sweepLoop(ctx, emit, g.renew)
 	}
-	// Stuck-check detection runs on its OWN fixed cadence (independent of the sweep's
-	// adaptive backoff, whose ceiling can be hours away) — a stuck check is time-
-	// sensitive. Runs whenever a stuck_checks action is configured and there are
-	// watch repos, regardless of sweep.enabled.
-	if g.anyStuckChecks() && len(g.cfg.Sweep.Repos) > 0 {
+	// Stuck-check detection is its own periodic watcher — NOT part of the sweep. It
+	// runs on a fixed cadence (poll_interval on the stuck_checks action, independent
+	// of the sweep's adaptive backoff) over the repos of the rule(s) that configure
+	// stuck_checks. So it doesn't depend on the sweep block at all.
+	if g.anyStuckChecks() && len(g.stuckRepos()) > 0 {
 		go g.stuckLoop(ctx, emit)
 	}
 

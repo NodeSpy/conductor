@@ -190,3 +190,37 @@ func TestSweepNow(t *testing.T) {
 		t.Fatal("SweepNow should return false when the sweep is disabled")
 	}
 }
+
+func TestStuckReposAndInterval(t *testing.T) {
+	// stuck_checks in defaults → applies to all rules → union of their repos; interval
+	// read from the action (poll_interval).
+	cfg := Config{
+		Defaults: Rule{Actions: as1(map[string]config.Action{
+			"stuck_checks": {Type: "command", PollInterval: config.Duration(7 * time.Minute)},
+		})},
+		Rules: []Rule{
+			{Match: Match{Repos: []string{"org/a", "org/b"}}},
+			{Match: Match{Repos: []string{"org/b", "org/c"}}}, // b deduped
+		},
+	}
+	g := &Integration{cfg: cfg}
+	repos := g.stuckRepos()
+	if len(repos) != 3 {
+		t.Fatalf("want 3 deduped repos, got %v", repos)
+	}
+	if g.stuckPollInterval() != 7*time.Minute {
+		t.Fatalf("poll interval should come from the action, got %s", g.stuckPollInterval())
+	}
+	if !g.anyStuckChecks() {
+		t.Fatal("anyStuckChecks should be true")
+	}
+
+	// No stuck_checks anywhere → no repos, default interval, gate off.
+	g2 := &Integration{cfg: Config{Rules: []Rule{{Match: Match{Repos: []string{"org/a"}}}}}}
+	if len(g2.stuckRepos()) != 0 || g2.anyStuckChecks() {
+		t.Fatal("no stuck_checks → empty repos + gate off")
+	}
+	if g2.stuckPollInterval() != 15*time.Minute {
+		t.Fatalf("default interval should be 15m, got %s", g2.stuckPollInterval())
+	}
+}

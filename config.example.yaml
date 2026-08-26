@@ -42,10 +42,6 @@ integrations:
       interval: 6h                    # ceiling — quiet-system cadence (default 6h)
       min_interval: 10m               # tight floor after start / reconnect (default 10m)
       repos: ["your-org/*"]           # concrete owner/name, or an owner glob (owner/*) → expands to installed repos
-      stuck_interval: 15m             # FIXED cadence of the dedicated stuck_checks poller (default 15m).
-                                      #   Stuck-check detection runs on its own tight schedule (not the
-                                      #   adaptive sweep), using `repos` as the watch list — active
-                                      #   whenever a stuck_checks action is set, even if enabled:false.
 
     # Credential policy (optional — defaults shown). Values are inline: a keyword,
     # or (after ${ENV} expansion) a literal token.
@@ -99,15 +95,17 @@ integrations:
           prompt: |
             Checks are failing on {{.repo}}#{{.pr}}. Use `gh pr checks` and
             `gh run view --log-failed` to diagnose, fix, verify locally, commit, and push.
-        # stuck_checks: sweep-detected only — a CI run stuck "in_progress" past
-        # stuck_after (a dead runner never completes it, so failing_checks can't
-        # catch it and the PR stays blocked). The stuck workflow run is in
-        # {{.run_id}}/{{.run_name}}. Re-run it so the checks finish; a fresh failure
-        # then flows through failing_checks. Fires on your open PRs.
+        # stuck_checks: its OWN periodic watcher (not part of the sweep) — a CI run
+        # stuck "in_progress" past stuck_after (a dead runner never completes it, so
+        # failing_checks can't catch it and the PR stays blocked). It polls this
+        # rule's match.repos every poll_interval (self-contained; no sweep needed).
+        # The stuck run is in {{.run_id}}/{{.run_name}}; re-run it so checks finish —
+        # a fresh failure then flows through failing_checks. Fires on your open PRs.
         stuck_checks:
           type: command
           backend: local
-          stuck_after: 30m
+          stuck_after: 30m            # a run still in_progress this long is "stuck"
+          poll_interval: 15m          # how often to check (its own fixed cadence)
           command: ["bash", "-lc", "gh run cancel {{.run_id}} -R {{.repo}} 2>/dev/null; sleep 2; gh run rerun {{.run_id}} -R {{.repo}}"]
           env: { GH_TOKEN: "{{.gh_token}}" }
         changes_requested:

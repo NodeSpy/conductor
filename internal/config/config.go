@@ -234,6 +234,7 @@ type Action struct {
 	IgnoreChecks       []string       `yaml:"ignore_checks"`
 	FlakyRerun         FlakyRerun     `yaml:"flaky_rerun"`
 	StuckAfter         Duration       `yaml:"stuck_after"`   // stuck_checks: a check running longer than this is "stuck" (default 30m)
+	PollInterval       Duration       `yaml:"poll_interval"` // stuck_checks: how often the dedicated poller checks (default 15m)
 	FromUsers          []string       `yaml:"from_users"`    // new_comment: only these commenters trigger (empty = any)
 	IgnoreUsers        []string       `yaml:"ignore_users"`  // new_comment: never trigger on these commenters (e.g. CI report bots)
 	LabelsAny          []string       `yaml:"labels_any"`    // issue matches if it has ANY of these labels
@@ -256,6 +257,14 @@ func (a Action) StuckAfterDur() time.Duration {
 		return d
 	}
 	return 30 * time.Minute
+}
+
+// PollIntervalDur returns the stuck_checks poll cadence, defaulting to 15m.
+func (a Action) PollIntervalDur() time.Duration {
+	if d := a.PollInterval.D(); d > 0 {
+		return d
+	}
+	return 15 * time.Minute
 }
 
 // StepRetry re-runs a workflow step while its output still matches WhileOutputMatches

@@ -103,7 +103,7 @@ func resetTimer(t *time.Timer, d time.Duration) {
 func (g *Integration) sweep(ctx context.Context, emit core.EmitFunc) error {
 	st := &sweepStats{}
 	log.Printf("github[%s]: sweep starting (%d repo entr%s)", g.name, len(g.cfg.Sweep.Repos), plural(len(g.cfg.Sweep.Repos)))
-	g.eachRepo(ctx, "sweep", func(instID int64, owner, name, repo string) {
+	g.eachRepo(ctx, "sweep", g.cfg.Sweep.Repos, func(instID int64, owner, name, repo string) {
 		g.sweepRepo(ctx, emit, instID, owner, name, repo, st)
 	})
 	log.Printf("github[%s]: sweep done — repos=%d prs=%d review_requested=%d (skipped draft=%d, excluded=%d) merge_conflict=%d pr_behind=%d changes_requested=%d new_comment=%d",
@@ -111,11 +111,12 @@ func (g *Integration) sweep(ctx context.Context, emit core.EmitFunc) error {
 	return nil
 }
 
-// eachRepo resolves the configured sweep.repos entries (concrete owner/name or an
-// owner glob expanded via the installation's repo list) and calls fn for each, with
-// the resolved installation id. Shared by the full sweep and the stuck-check poller.
-func (g *Integration) eachRepo(ctx context.Context, tag string, fn func(instID int64, owner, name, repo string)) {
-	for _, entry := range g.cfg.Sweep.Repos {
+// eachRepo resolves repo entries (concrete owner/name or an owner glob expanded via
+// the installation's repo list) and calls fn for each, with the resolved
+// installation id. Shared by the full sweep (sweep.repos) and the stuck-check poller
+// (the repos of rules that configure stuck_checks).
+func (g *Integration) eachRepo(ctx context.Context, tag string, entries []string, fn func(instID int64, owner, name, repo string)) {
+	for _, entry := range entries {
 		owner, _ := splitRepo(entry)
 		if owner == "" {
 			continue
@@ -155,10 +156,7 @@ func (g *Integration) eachRepo(ctx context.Context, tag string, fn func(instID i
 // 15m) — independent of the adaptive sweep, whose ceiling can be hours away. Runs
 // when a stuck_checks action is configured and there are watch repos.
 func (g *Integration) stuckLoop(ctx context.Context, emit core.EmitFunc) {
-	iv := g.cfg.Sweep.StuckInterval.D()
-	if iv <= 0 {
-		iv = 15 * time.Minute
-	}
+	iv := g.stuckPollInterval()
 	log.Printf("github[%s]: stuck-check poller enabled, every %s", g.name, iv)
 	t := time.NewTicker(iv)
 	defer t.Stop()
@@ -177,7 +175,7 @@ func (g *Integration) stuckLoop(ctx context.Context, emit core.EmitFunc) {
 // per-PR fetch beyond the stuck-run lookup.
 func (g *Integration) stuckPass(ctx context.Context, emit core.EmitFunc) {
 	n := 0
-	g.eachRepo(ctx, "stuck", func(instID int64, owner, name, repo string) {
+	g.eachRepo(ctx, "stuck", g.stuckRepos(), func(instID int64, owner, name, repo string) {
 		prs, err := g.rest.listOpenPRs(ctx, instID, owner, name)
 		if err != nil {
 			log.Printf("github[%s]: stuck %s: %v", g.name, repo, err)
@@ -204,13 +202,56 @@ func (g *Integration) stuckPass(ctx context.Context, emit core.EmitFunc) {
 // enabled stuck_checks action — the gate for starting the stuck poller.
 func (g *Integration) anyStuckChecks() bool {
 	for _, r := range append([]Rule{g.cfg.Defaults}, g.cfg.Rules...) {
-		for _, a := range r.Actions["stuck_checks"] {
-			if a.IsEnabled() {
-				return true
-			}
+		if stuckEnabled(r.Actions["stuck_checks"]) {
+			return true
 		}
 	}
 	return false
+}
+
+// stuckEnabled reports whether an action set has an enabled stuck_checks variant.
+func stuckEnabled(set config.ActionSet) bool {
+	for _, a := range set {
+		if a.IsEnabled() {
+			return true
+		}
+	}
+	return false
+}
+
+// stuckRepos is the watch list for the stuck poller: the match.repos of every rule
+// that configures stuck_checks (all rules if it's set in defaults), deduped. This is
+// what makes stuck_checks self-contained — it watches the repos its rule targets,
+// not sweep.repos.
+func (g *Integration) stuckRepos() []string {
+	defaultsHas := stuckEnabled(g.cfg.Defaults.Actions["stuck_checks"])
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range g.cfg.Rules {
+		if !defaultsHas && !stuckEnabled(r.Actions["stuck_checks"]) {
+			continue
+		}
+		for _, repo := range r.Match.Repos {
+			if !seen[repo] {
+				seen[repo] = true
+				out = append(out, repo)
+			}
+		}
+	}
+	return out
+}
+
+// stuckPollInterval reads the poll cadence from the first enabled stuck_checks
+// action (defaults or a rule), defaulting to 15m.
+func (g *Integration) stuckPollInterval() time.Duration {
+	for _, r := range append([]Rule{g.cfg.Defaults}, g.cfg.Rules...) {
+		for _, a := range r.Actions["stuck_checks"] {
+			if a.IsEnabled() {
+				return a.PollIntervalDur()
+			}
+		}
+	}
+	return 15 * time.Minute
 }
 
 // sweepStats is a per-run tally so a sweep is never a black box: it says what it
