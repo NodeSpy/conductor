@@ -137,8 +137,8 @@ func (g *Integration) sweep(ctx context.Context, emit core.EmitFunc) error {
 		}
 		g.sweepRepo(ctx, emit, instID, owner, name, entry, st)
 	}
-	log.Printf("github[%s]: sweep done — repos=%d prs=%d review_requested=%d (skipped draft=%d, excluded=%d) merge_conflict=%d pr_behind=%d changes_requested=%d new_comment=%d",
-		g.name, st.repos, st.prs, st.review, st.reviewDraft, st.reviewExcluded, st.conflict, st.behind, st.comments, st.newComments)
+	log.Printf("github[%s]: sweep done — repos=%d prs=%d review_requested=%d (skipped draft=%d, excluded=%d) merge_conflict=%d pr_behind=%d changes_requested=%d new_comment=%d stuck_checks=%d",
+		g.name, st.repos, st.prs, st.review, st.reviewDraft, st.reviewExcluded, st.conflict, st.behind, st.comments, st.newComments, st.stuck)
 	return nil
 }
 
@@ -149,6 +149,7 @@ type sweepStats struct {
 	review, reviewDraft, reviewExcluded int
 	conflict, behind, comments          int
 	newComments                         int
+	stuck                               int
 }
 
 func plural(n int) string {
@@ -202,6 +203,9 @@ func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID 
 		nc := g.sweepMissedComments(ctx, instID, owner, name, repo, t, info.Head.Ref)
 		st.newComments += len(nc)
 		trs = append(trs, nc...)
+		sk := g.sweepStuckChecks(ctx, instID, owner, name, repo, t, info)
+		st.stuck += len(sk)
+		trs = append(trs, sk...)
 		for _, tr := range trs {
 			tr.CatchUp = true
 			emit(ctx, tr)
@@ -258,6 +262,32 @@ func (g *Integration) sweepMissedComments(ctx context.Context, instID int64, own
 				return commentAuthorAllowed(act, author)
 			})
 		out = append(out, trs...)
+	}
+	return out
+}
+
+// sweepStuckChecks fires stuck_checks for CI runs on your PR that are still
+// running well past their normal window — a dead runner leaves a run "in_progress"
+// so the check never completes (failing_checks needs a terminal failure, so it
+// never catches this) and the PR stays blocked. The configured action (e.g. a
+// gh-rerun command) gets the stuck run in Context (run_id/run_name/run_status);
+// dedup per run id, so a given stuck run fires once (a fresh re-run gets a new id).
+// Only runs when stuck_checks is configured.
+func (g *Integration) sweepStuckChecks(ctx context.Context, instID int64, owner, name, repo string, t core.Target, info *pullInfo) []core.Trigger {
+	act, ok := g.actionFor(repo, "stuck_checks")
+	if !ok || !act.IsEnabled() {
+		return nil
+	}
+	runs, err := g.rest.stuckRuns(ctx, instID, owner, name, info.Head.SHA, act.StuckAfterDur(), time.Now())
+	if err != nil || len(runs) == 0 {
+		return nil
+	}
+	var out []core.Trigger
+	for _, r := range runs {
+		extra := map[string]any{"run_id": r.ID, "run_name": r.Name, "run_status": r.Status}
+		out = append(out, g.single(repo, "stuck_checks", t,
+			fmt.Sprintf("sweep: check %q stuck (%s) on %s#%d", r.Name, r.Status, repo, t.Number),
+			fmt.Sprintf("stuck:%d", r.ID), extra)...)
 	}
 	return out
 }

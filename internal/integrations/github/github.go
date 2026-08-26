@@ -301,7 +301,7 @@ var knownKinds = map[string]bool{
 	"changes_requested": true, "new_comment": true, "review_requested": true,
 	"self_review": true, "merge_ready": true, "issue_matched": true,
 	"release": true, "deployment_status": true, "dependabot_alert": true,
-	"secret_scanning_alert": true,
+	"secret_scanning_alert": true, "stuck_checks": true,
 	// issue_assigned + issue_project_moved were merged into issue_matched (v0.4.48).
 }
 
@@ -447,6 +447,9 @@ func mergeAction(base, over config.Action) config.Action {
 	}
 	if over.FlakyRerun.Enabled || over.FlakyRerun.Max != 0 {
 		base.FlakyRerun = over.FlakyRerun
+	}
+	if over.StuckAfter.D() > 0 {
+		base.StuckAfter = over.StuckAfter
 	}
 	if len(over.FromUsers) > 0 {
 		base.FromUsers = over.FromUsers

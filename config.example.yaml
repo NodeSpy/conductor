@@ -95,6 +95,17 @@ integrations:
           prompt: |
             Checks are failing on {{.repo}}#{{.pr}}. Use `gh pr checks` and
             `gh run view --log-failed` to diagnose, fix, verify locally, commit, and push.
+        # stuck_checks: sweep-detected only — a CI run stuck "in_progress" past
+        # stuck_after (a dead runner never completes it, so failing_checks can't
+        # catch it and the PR stays blocked). The stuck workflow run is in
+        # {{.run_id}}/{{.run_name}}. Re-run it so the checks finish; a fresh failure
+        # then flows through failing_checks. Fires on your open PRs.
+        stuck_checks:
+          type: command
+          backend: local
+          stuck_after: 30m
+          command: ["bash", "-lc", "gh run cancel {{.run_id}} -R {{.repo}} 2>/dev/null; sleep 2; gh run rerun {{.run_id}} -R {{.repo}}"]
+          env: { GH_TOKEN: "{{.gh_token}}" }
         changes_requested:
           type: agent
           agent: fixer

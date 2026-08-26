@@ -233,6 +233,7 @@ type Action struct {
 	MaxAttemptsPerHead int            `yaml:"max_attempts_per_head"`
 	IgnoreChecks       []string       `yaml:"ignore_checks"`
 	FlakyRerun         FlakyRerun     `yaml:"flaky_rerun"`
+	StuckAfter         Duration       `yaml:"stuck_after"`   // stuck_checks: a check running longer than this is "stuck" (default 30m)
 	FromUsers          []string       `yaml:"from_users"`    // new_comment: only these commenters trigger (empty = any)
 	IgnoreUsers        []string       `yaml:"ignore_users"`  // new_comment: never trigger on these commenters (e.g. CI report bots)
 	LabelsAny          []string       `yaml:"labels_any"`    // issue matches if it has ANY of these labels
@@ -248,6 +249,14 @@ type Action struct {
 
 // IsEnabled reports whether the action is enabled (default true).
 func (a Action) IsEnabled() bool { return a.Enabled == nil || *a.Enabled }
+
+// StuckAfterDur returns the stuck-check threshold, defaulting to 30m.
+func (a Action) StuckAfterDur() time.Duration {
+	if d := a.StuckAfter.D(); d > 0 {
+		return d
+	}
+	return 30 * time.Minute
+}
 
 // StepRetry re-runs a workflow step while its output still matches WhileOutputMatches
 // (a regexp) — the "not ready yet" signal, e.g. critique's "status: retry" when it's

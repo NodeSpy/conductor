@@ -325,6 +325,44 @@ func (c *restClient) requestedReviewers(ctx context.Context, instID int64, owner
 	return logins, slugs, nil
 }
 
+// stuckRun is a GitHub Actions workflow run that appears stuck.
+type stuckRun struct {
+	ID     int64
+	Name   string
+	Status string
+}
+
+// stuckRuns lists the PR head's workflow runs that are still in a running state
+// (queued/in_progress) and older than olderThan — i.e. likely stuck (a dead runner
+// leaves a run "in_progress" until GitHub's multi-hour timeout, so the check never
+// completes and the PR stays blocked). now is injectable for tests.
+func (c *restClient) stuckRuns(ctx context.Context, instID int64, owner, repo, headSHA string, olderThan time.Duration, now time.Time) ([]stuckRun, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?head_sha=%s&per_page=50", c.app.apiBase, owner, repo, headSHA)
+	var data struct {
+		WorkflowRuns []struct {
+			ID        int64  `json:"id"`
+			Name      string `json:"name"`
+			Status    string `json:"status"`
+			CreatedAt string `json:"created_at"`
+		} `json:"workflow_runs"`
+	}
+	if err := c.get(ctx, instID, url, &data); err != nil {
+		return nil, err
+	}
+	var out []stuckRun
+	for _, r := range data.WorkflowRuns {
+		if r.Status != "queued" && r.Status != "in_progress" {
+			continue // completed / waiting-on-a-human / etc. — not stuck
+		}
+		created, err := time.Parse(time.RFC3339, r.CreatedAt)
+		if err != nil || now.Sub(created) < olderThan {
+			continue // still within its normal running window
+		}
+		out = append(out, stuckRun{ID: r.ID, Name: r.Name, Status: r.Status})
+	}
+	return out, nil
+}
+
 // prGate fetches the merge-readiness gate for a PR.
 func (c *restClient) prGate(ctx context.Context, instID int64, owner, name string, number int) (*mergeGate, error) {
 	const q = `query($o:String!,$n:String!,$num:Int!){

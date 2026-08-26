@@ -116,3 +116,26 @@ func TestMergeStateCleanNoTrigger(t *testing.T) {
 		t.Fatalf("clean PR should not trigger, got %+v", trs)
 	}
 }
+
+func TestStuckRuns(t *testing.T) {
+	srv, app := stubAPI(t, "clean")
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-45 * time.Minute).Format(time.RFC3339)  // stuck
+	fresh := now.Add(-2 * time.Minute).Format(time.RFC3339) // still running normally
+	mux := srv.Config.Handler.(*http.ServeMux)
+	mux.HandleFunc("/repos/acme/w/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"workflow_runs":[
+			{"id":1,"name":"tests","status":"in_progress","created_at":%q},
+			{"id":2,"name":"lint","status":"in_progress","created_at":%q},
+			{"id":3,"name":"done","status":"completed","created_at":%q}
+		]}`, old, fresh, old)
+	})
+	c := newRESTClient(app)
+	runs, err := c.stuckRuns(context.Background(), 42, "acme", "w", "h6", 30*time.Minute, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].ID != 1 {
+		t.Fatalf("only the old in_progress run should be stuck, got %+v", runs)
+	}
+}
