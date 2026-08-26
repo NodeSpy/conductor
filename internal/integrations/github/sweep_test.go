@@ -168,3 +168,25 @@ func TestSweepOrgGlob(t *testing.T) {
 		t.Fatalf("want one merge_conflict on acme/widget, got %+v", got)
 	}
 }
+
+func TestSweepNow(t *testing.T) {
+	// Enabled: signals renew, non-blocking and coalescing.
+	g := &Integration{cfg: Config{Sweep: SweepConfig{Enabled: true}}, renew: make(chan struct{}, 1)}
+	if !g.SweepNow() {
+		t.Fatal("SweepNow should return true when the sweep is enabled")
+	}
+	select {
+	case <-g.renew:
+	default:
+		t.Fatal("SweepNow should have signaled renew")
+	}
+	// Coalescing: repeated calls without a drain don't block.
+	g.SweepNow()
+	g.SweepNow()
+
+	// Disabled: no-op, returns false.
+	g2 := &Integration{cfg: Config{Sweep: SweepConfig{Enabled: false}}, renew: make(chan struct{}, 1)}
+	if g2.SweepNow() {
+		t.Fatal("SweepNow should return false when the sweep is disabled")
+	}
+}

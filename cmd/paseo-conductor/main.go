@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -88,6 +89,7 @@ usage:
   paseo-conductor validate [--config PATH]    load & validate config, then exit
   paseo-conductor replay <event.json> [--config PATH]  run a saved webhook through the pipeline (dry-run)
   paseo-conductor sweep [--config PATH]       one catch-up sweep (dry-run print)
+  paseo-conductor sweep --now [--config PATH] signal the running daemon to sweep now
   paseo-conductor status [--config PATH]      snapshot: live agents, in-flight workflows, stuck/attention
   paseo-conductor report [--days N]           activity summary: dispatches by kind/outcome + attention
   paseo-conductor pause | resume              stop / resume dispatch at runtime (no restart)
@@ -202,6 +204,35 @@ func cmdRun(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Write a pidfile so the `sweep` CLI can signal us; clean it up on exit.
+	pidFile := pidPath(cfg)
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		logf("could not write pidfile %s: %v", pidFile, err)
+	} else {
+		defer os.Remove(pidFile)
+	}
+
+	// SIGUSR1 → run a catch-up sweep now (and reset the adaptive cadence). Lets
+	// `paseo-conductor sweep` force a sweep without waiting out the backoff.
+	usr1 := make(chan os.Signal, 1)
+	signal.Notify(usr1, syscall.SIGUSR1)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-usr1:
+				n := 0
+				for _, ig := range igs {
+					if sn, ok := ig.(sweepNower); ok && sn.SweepNow() {
+						n++
+					}
+				}
+				logf("manual sweep requested (SIGUSR1) — nudged %d integration(s)", n)
+			}
+		}
+	}()
 
 	// Reaper for archive-when-done agents. It shares the hand-off hold-set so it
 	// never archives an agent the engine handed off for you to drive.
@@ -380,9 +411,17 @@ func cmdReplay(args []string) error {
 }
 
 func cmdSweep(args []string) error {
-	cfg, _, err := loadConfig(args)
+	cfg, rest, err := loadConfig(args)
 	if err != nil {
 		return err
+	}
+	// `sweep --now` signals the RUNNING daemon to run a catch-up sweep immediately
+	// (bypassing the adaptive backoff). Without --now, sweep is a dry-run preview
+	// that prints what a sweep would emit, in this process.
+	for _, a := range rest {
+		if a == "--now" {
+			return signalSweepNow(cfg)
+		}
 	}
 	igs, err := buildIntegrations(cfg)
 	if err != nil {
@@ -403,6 +442,35 @@ func cmdSweep(args []string) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// sweepNower is implemented by an integration whose running sweep can be triggered
+// on demand (the github integration). Used by the SIGUSR1 handler in run().
+type sweepNower interface{ SweepNow() bool }
+
+// pidPath is the daemon's pidfile (a sibling of the state file), written by `run`
+// and read by `sweep --now` to signal the running process.
+func pidPath(cfg *config.Config) string {
+	return filepath.Join(filepath.Dir(cfg.Store.StateFile), "paseo-conductor.pid")
+}
+
+// signalSweepNow tells the running daemon to run a catch-up sweep immediately by
+// sending it SIGUSR1 (pid read from the pidfile).
+func signalSweepNow(cfg *config.Config) error {
+	p := pidPath(cfg)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return fmt.Errorf("read pidfile %s — is the daemon running? %w", p, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return fmt.Errorf("bad pidfile %s: %w", p, err)
+	}
+	if err := syscall.Kill(pid, syscall.SIGUSR1); err != nil {
+		return fmt.Errorf("signal daemon (pid %d): %w", pid, err)
+	}
+	fmt.Printf("signaled paseo-conductor (pid %d) to run a sweep now\n", pid)
 	return nil
 }
 

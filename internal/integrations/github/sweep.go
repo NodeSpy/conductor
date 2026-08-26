@@ -44,7 +44,7 @@ func (g *Integration) sweepLoop(ctx context.Context, emit core.EmitFunc, renew <
 			return
 		case <-renew:
 			cur = min
-			log.Printf("github[%s]: sweep cadence reset to %s (connectivity renewed)", g.name, cur)
+			log.Printf("github[%s]: sweep cadence reset to %s (renew: reconnect or manual sweep)", g.name, cur)
 			runSweep()
 			resetTimer(t, cur)
 		case <-t.C:

@@ -137,6 +137,24 @@ type Integration struct {
 	self map[string]bool
 	// projectMap is cfg.ProjectMap keyed lowercase for case-insensitive lookup.
 	projectMap map[string]string
+	// renew nudges the sweep to run now and reset its adaptive cadence — signaled by
+	// a smee reconnect (dropped-webhook window) and by SweepNow() (a manual `sweep`).
+	// Buffered+coalescing (a full buffer means a catch-up is already pending).
+	renew chan struct{}
+}
+
+// SweepNow triggers an immediate catch-up sweep (and resets the adaptive cadence)
+// when the sweep is enabled. Non-blocking and coalescing. Returns false if the
+// sweep isn't enabled for this integration.
+func (g *Integration) SweepNow() bool {
+	if !g.cfg.Sweep.Enabled || g.renew == nil {
+		return false
+	}
+	select {
+	case g.renew <- struct{}{}:
+	default: // a catch-up is already pending
+	}
+	return true
 }
 
 func newIntegration(name string, decode func(any) error) (core.Integration, error) {
@@ -154,7 +172,7 @@ func newIntegration(name string, decode func(any) error) (core.Integration, erro
 		cfg.Identity.CommitAuthor = "self"
 	}
 	g := &Integration{name: name, cfg: cfg, self: map[string]bool{},
-		projectMap: map[string]string{}}
+		projectMap: map[string]string{}, renew: make(chan struct{}, 1)}
 	for k, v := range cfg.ProjectMap {
 		g.projectMap[strings.ToLower(k)] = v
 	}

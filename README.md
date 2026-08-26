@@ -566,6 +566,11 @@ webhook may have been lost), it sweeps right away and resets to the tight follow
 caught promptly instead of waiting up to a full `interval`. You don't need to hand-tune the interval
 down for recovery anymore.
 
+Need a sweep **right now** (e.g. a review is waiting and you don't want to sit through the backoff)?
+`paseo-conductor sweep --now` signals the running daemon (via `SIGUSR1`) to run a catch-up sweep
+immediately and reset the cadence. (Plain `paseo-conductor sweep` is a dry-run *preview* that prints
+what a sweep would emit, in a separate process — it doesn't touch the daemon.)
+
 ## Configuration
 
 Config lives at `~/.config/paseo-conductor/config.yaml`; secrets referenced via `${VAR}` come from

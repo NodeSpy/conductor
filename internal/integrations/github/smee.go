@@ -47,15 +47,12 @@ func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 		log.Printf("github[%s]: signature verification ON — note the smee re-serialization caveat; "+
 			"set verify_signature:false if valid deliveries are being dropped", g.name)
 	}
-	// renew nudges the sweep back to a tight cadence when smee reconnects (a likely
-	// dropped-webhook window). Buffered+coalescing: a full buffer means a catch-up is
-	// already pending. Only wired when both the sweep and the smee transport are on.
-	var renew chan struct{}
+	// g.renew (created in the constructor) nudges the sweep to run now and reset its
+	// adaptive cadence — on a smee reconnect (dropped-webhook window) and on a manual
+	// `sweep` (SweepNow). Buffered+coalescing. The sweepLoop drains it only when the
+	// sweep is enabled; the smee reconnect nudge is harmless otherwise.
 	if g.cfg.Sweep.Enabled {
-		if g.cfg.Webhook.SmeeURL != "" {
-			renew = make(chan struct{}, 1)
-		}
-		go g.sweepLoop(ctx, emit, renew)
+		go g.sweepLoop(ctx, emit, g.renew)
 	}
 
 	seen := newDeliveryDedup(2048)
@@ -63,7 +60,7 @@ func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 	started := 0
 	if g.cfg.Webhook.SmeeURL != "" {
 		started++
-		go func() { errc <- g.runSmee(ctx, emit, seen, renew) }()
+		go func() { errc <- g.runSmee(ctx, emit, seen, g.renew) }()
 	}
 	if g.cfg.Webhook.Listen != "" {
 		started++
