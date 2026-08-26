@@ -432,6 +432,37 @@ func TestAgentGuidanceConfigOverride(t *testing.T) {
 	}
 }
 
+func TestNonBackgroundStepGetsNoAskGuidance(t *testing.T) {
+	// A non-background workflow step (e.g. `assess`, which produces structured output)
+	// must NOT be told to ask via AskUserQuestion — pausing to ask fails the schema
+	// ("waiting for permission"). Only the background hand-off step is ask-guided.
+	got := make(chan string, 4)
+	d := &fakeDispatcher{onDispatch: func(r dispatch.Request) (dispatch.RunRef, error) {
+		got <- r.Action.Prompt
+		return dispatch.RunRef{Output: `{"decision":"auto"}`}, nil
+	}}
+	cfg := baseCfg()
+	cfg.Agents["fixer"] = config.AgentProfile{Provider: "claude", ArchiveWhenDone: true}
+	e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
+	wf := config.Action{Steps: []config.Action{
+		{ID: "assess", Type: "agent", Agent: "fixer", Prompt: "decide auto or manual",
+			OutputSchema: map[string]any{"decision": map[string]any{"type": "string"}}},
+	}}
+	e.process(context.Background(), agentTrigger("review_requested", "a/w", 1, "h", "reviewreq@h", wf))
+
+	select {
+	case p := <-got:
+		if strings.Contains(p, "AskUserQuestion") {
+			t.Fatalf("non-background step must not get ask-guidance, got: %q", p)
+		}
+		if !strings.Contains(p, "act as ME") {
+			t.Fatalf("step should still get the identity wrapper, got: %q", p)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("assess step never dispatched")
+	}
+}
+
 func TestForceBypassesDedup(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, baseCfg(), d, n, nil)

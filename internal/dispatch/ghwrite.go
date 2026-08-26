@@ -37,29 +37,23 @@ const ConcisionGuidance = "\n\n---\n" +
 	"your final wrap-up short too — a line, not an essay."
 
 // HoldMarker is a legacy fallback: a file an agent may create in its working
-// directory to signal it still needs the user. The primary mechanism is now an
-// interactive question (see HoldGuidance); the reaper still honors the marker if
-// present, for contexts where asking a question isn't possible.
+// directory to signal it still needs the user. The reaper still honors the marker
+// if present, for contexts where asking an interactive question isn't possible.
 const HoldMarker = ".paseo-hold"
 
-// HoldGuidance is appended to archive-when-done agent prompts. An agent that needs
-// the user must ASK an interactive question — which pauses it and surfaces as a
-// pending permission the reaper spares — rather than finishing with the question
-// written as plain text (which just goes idle and gets archived before I see it).
-const HoldGuidance = "\n\n---\n" +
-	"IMPORTANT — how to reach me: you run unattended and are archived once you go idle. " +
-	"If you need my input, a decision, or my attention — or you have a question — do NOT " +
-	"stop and write the question as plain text (I won't see it and you'll be archived). " +
-	"Instead ASK me using your interactive multiple-choice question tool (AskUserQuestion) " +
-	"and WAIT for my answer: that pauses you and keeps your workspace alive until I " +
-	"respond. Only finish when you are genuinely done and need nothing from me."
+// NOTE: autonomous agents (top-level fixers AND non-background workflow steps) are
+// deliberately NOT told to ask — they make the best decision and finish. A schema
+// step like `assess` that pauses to ask fails to produce its structured output.
+// Only the interactive hand-off (a background step) is told to ask; see
+// HandoffGuidance. (There used to be a "HoldGuidance" that nudged archive-when-done
+// agents to ask "only if they need me"; it caused exactly that assess failure and
+// is retired.)
 
-// HandoffGuidance is appended to every background (hand-off) step. Unlike a plain
-// archive-when-done agent — which asks only IF it needs something (HoldGuidance) —
-// a hand-off exists to bring a decision to the user, so it must ALWAYS finish by
-// asking rather than going idle. Ending idle shows up in paseo as merely "ready"
-// and is easy to miss; asking surfaces as "needs your input" (and pauses the agent,
-// keeping its workspace alive).
+// HandoffGuidance is appended to every background (hand-off) step. A hand-off
+// exists to bring a decision to the user, so it must ALWAYS finish by asking rather
+// than going idle. Ending idle shows up in paseo as merely "ready" and is easy to
+// miss; asking surfaces as "needs your input" (and pauses the agent, keeping its
+// workspace alive).
 const HandoffGuidance = "\n\n---\n" +
 	"HAND-OFF — this run is for ME to decide on. You do the work, then bring it to me " +
 	"as a decision; I'll drive you interactively in paseo. When you finish the work " +

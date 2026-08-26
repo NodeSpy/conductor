@@ -73,14 +73,12 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				if s.RerequestReview {
 					s.Prompt += dispatch.RerequestReviewGuidance
 				}
-				switch {
-				case s.Background:
-					// A hand-off is interactive by definition — it must ALWAYS end by
-					// asking me (so paseo shows "needs your input", not just "ready").
+				// Only the interactive hand-off (a background step) is told to ask. A
+				// non-background step runs autonomously — especially a schema step like
+				// `assess`, which MUST produce its structured output and must never pause
+				// asking (that surfaces as "waiting for permission" and fails the schema).
+				if s.Background {
 					s.Prompt += dispatch.HandoffGuidance
-				case profile.ArchiveWhenDone:
-					// A non-interactive archive-when-done agent asks only if it needs me.
-					s.Prompt += dispatch.HoldGuidance
 				}
 			}
 		}
