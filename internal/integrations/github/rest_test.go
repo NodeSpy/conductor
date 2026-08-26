@@ -24,6 +24,10 @@ func stubAPI(t *testing.T, mergeableState string) (*httptest.Server, *appAuth) {
 	mux.HandleFunc("/repos/acme/w/pulls/{num}", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, `{"mergeable_state":%q,"head":{"sha":"h6","ref":"feature/x"},"base":{"ref":"main"},"html_url":"http://x/6","user":{"login":"me"},"labels":[{"name":"conductor:off"}]}`, mergeableState)
 	})
+	// Pending requested reviewers (for ready_for_review REST fallback): reports "me".
+	mux.HandleFunc("/repos/acme/w/pulls/{num}/requested_reviewers", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"users":[{"login":"me"}],"teams":[]}`)
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 

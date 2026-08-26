@@ -344,3 +344,23 @@ func TestDisabledActionNoTrigger(t *testing.T) {
 		t.Fatalf("disabled action should not trigger, got %v", k)
 	}
 }
+
+func TestReadyForReviewRESTFallback(t *testing.T) {
+	g := richWithREST(t) // stub /pulls/{n}/requested_reviewers returns "me"
+	// A draft→ready transition whose payload omits requested_reviewers must still
+	// emit review_requested — conductor REST-fetches the pending reviewers.
+	ready := `{"action":"ready_for_review","installation":{"id":42},
+		"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"pull_request":{"number":6,"draft":false,"head":{"sha":"h6","ref":"feature/x"},
+		"base":{"ref":"main"},"user":{"login":"them"},"requested_reviewers":[],"html_url":"http://x/6"}}`
+	kinds := do(t, g, "pull_request", ready)
+	found := false
+	for _, k := range kinds {
+		if k == "review_requested" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ready_for_review should emit review_requested via the REST fallback, got %v", kinds)
+	}
+}

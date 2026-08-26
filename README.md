@@ -51,7 +51,7 @@ Every kind below is a configurable `action` (see [Configuration](#configuration)
 
 | Kind | Trigger | Action |
 | --- | --- | --- |
-| `review_requested` | your review is requested on a PR | run [critique](https://github.com/EdnitionCode/critique), post as you |
+| `review_requested` | your review is requested on a PR — or a draft with you already requested is marked **ready for review** | run [critique](https://github.com/EdnitionCode/critique), post as you |
 | `self_review` | you open/update your own PR | critique your own PR |
 
 **Issues**

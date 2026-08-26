@@ -300,6 +300,31 @@ func (c *restClient) recentComments(ctx context.Context, instID int64, owner, na
 	return append(issue, review...), nil
 }
 
+// requestedReviewers returns the PR's currently-pending requested reviewer logins
+// and team slugs (those who haven't reviewed yet). Used to make a ready_for_review
+// transition reliable when the webhook payload omits them.
+func (c *restClient) requestedReviewers(ctx context.Context, instID int64, owner, repo string, num int) (logins, slugs []string, err error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/requested_reviewers", c.app.apiBase, owner, repo, num)
+	var d struct {
+		Users []struct {
+			Login string `json:"login"`
+		} `json:"users"`
+		Teams []struct {
+			Slug string `json:"slug"`
+		} `json:"teams"`
+	}
+	if err := c.get(ctx, instID, url, &d); err != nil {
+		return nil, nil, err
+	}
+	for _, u := range d.Users {
+		logins = append(logins, u.Login)
+	}
+	for _, t := range d.Teams {
+		slugs = append(slugs, t.Slug)
+	}
+	return logins, slugs, nil
+}
+
 // prGate fetches the merge-readiness gate for a PR.
 func (c *restClient) prGate(ctx context.Context, instID int64, owner, name string, number int) (*mergeGate, error) {
 	const q = `query($o:String!,$n:String!,$num:Int!){

@@ -405,7 +405,7 @@ func (g *Integration) pullRequestTriggers(ctx context.Context, repo string, p gh
 		trs = append(trs, g.mergeReadyTriggers(ctx, repo, pr.Number, p)...)
 		if p.Action == "ready_for_review" {
 			// A review requested while draft (and skipped by not_draft) fires now.
-			trs = append(trs, g.readyReviewTriggers(repo, pr)...)
+			trs = append(trs, g.readyReviewTriggers(ctx, repo, p)...)
 		}
 		return trs
 	}
@@ -927,7 +927,8 @@ func (g *Integration) reviewerInList(rev config.Actors, logins, teamSlugs []stri
 // and your review is still pending. This is what makes the opt-in not_draft guard
 // coherent: a review requested while the PR was a draft is skipped, then picked up
 // promptly here once it's ready (rather than only on the next sweep).
-func (g *Integration) readyReviewTriggers(repo string, pr *prPayload) []core.Trigger {
+func (g *Integration) readyReviewTriggers(ctx context.Context, repo string, p ghPayload) []core.Trigger {
+	pr := p.PullRequest
 	logins := make([]string, 0, len(pr.RequestedReviewers))
 	for _, rr := range pr.RequestedReviewers {
 		logins = append(logins, rr.Login)
@@ -935,6 +936,16 @@ func (g *Integration) readyReviewTriggers(repo string, pr *prPayload) []core.Tri
 	slugs := make([]string, 0, len(pr.RequestedTeams))
 	for _, tm := range pr.RequestedTeams {
 		slugs = append(slugs, tm.Slug)
+	}
+	// The ready_for_review payload can omit reviewers that were requested while the
+	// PR was a draft. If none are present, fetch the authoritative pending set via
+	// REST so a draft→ready transition still kicks off your review now (not on the
+	// hourly sweep).
+	if len(logins) == 0 && len(slugs) == 0 && g.rest != nil && g.app != nil && p.Installation.ID > 0 {
+		owner, name := splitRepo(repo)
+		if rr, tt, err := g.rest.requestedReviewers(ctx, p.Installation.ID, owner, name, pr.Number); err == nil {
+			logins, slugs = rr, tt
+		}
 	}
 	labels := prLabelNames(pr)
 	t := g.prTarget(repo, pr)
