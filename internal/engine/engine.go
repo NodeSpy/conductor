@@ -338,10 +338,13 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// sweep re-list recent comments to recover missed ones without re-dispatching
 	// old ones (the single-slot dedup can't distinguish them). The mark advances on
 	// a successful new_comment dispatch below.
-	if t.Kind == "new_comment" {
+	if !t.Force && t.Kind == "new_comment" {
 		if id := commentID(t); id > 0 && id <= e.store.LastCommentID(key) {
 			return
 		}
+	}
+	if t.Force {
+		e.log("%s forced — bypassing dedup/liveness/backoff gates", tag(t))
 	}
 
 	// Dedup/attempt state is keyed per action variant so two variants of a kind on
@@ -375,7 +378,9 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// conductor agent for this PR is already working/parked instead of a permanent
 	// dedup flag, so a still-pending review keeps coming back until you do it.
 	liveGate := livenessGated(t.Kind)
-	if liveGate {
+	if t.Force {
+		// Forced: skip the dedup / liveness gates entirely and dispatch below.
+	} else if liveGate {
 		// A review workflow shouldn't re-run while its agent is parked for you.
 		// Single-action fixers instead fall through to dispatch, which queues new
 		// work to the agent already on this PR (or spawns one) — see paseo.go.
@@ -408,7 +413,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if soft == 0 && t.Kind != "new_comment" {
 		soft = defaultMaxAttempts
 	}
-	if soft > 0 {
+	if soft > 0 && !t.Force {
 		if n := e.store.Attempts(key, dkind, head); n >= soft {
 			if ready, wait := e.store.RetryReady(key, dkind, head, soft, retryBackoffBase, retryBackoffFactor, retryBackoffMax); !ready {
 				e.log("%s in backoff — %d attempts at %s, next retry in ~%s",

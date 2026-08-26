@@ -571,6 +571,22 @@ Need a sweep **right now** (e.g. a review is waiting and you don't want to sit t
 immediately and reset the cadence. (Plain `paseo-conductor sweep` is a dry-run *preview* that prints
 what a sweep would emit, in a separate process — it doesn't touch the daemon.)
 
+Want to force **one specific action** for **one target** — not a whole sweep? `paseo-conductor force
+<kind> <owner/repo>#<n>` injects that action into the running daemon over a local control socket
+(a sibling of the state file):
+
+```sh
+paseo-conductor force review_requested EdnitionCode/RosterStream#5332
+paseo-conductor force merge_conflict acme/widget#7 --integration default
+```
+
+It builds the trigger from live PR state (bypassing the applicability filters — reviewer match, draft,
+exclude) and marks it `Force`, so the engine **skips its dedup / liveness / backoff gates** and runs
+the action now even if it thinks the state is already handled. The kill switch and pause still apply.
+`--integration` is only needed when more than one integration configures the repo. Force is aimed at
+PR-state kinds (`review_requested`, `merge_conflict`, `pr_behind`, `self_review`, `merge_ready`); kinds
+that need event-specific data (a comment body, a CI run id) get empty values.
+
 ## Configuration
 
 Config lives at `~/.config/paseo-conductor/config.yaml`; secrets referenced via `${VAR}` come from

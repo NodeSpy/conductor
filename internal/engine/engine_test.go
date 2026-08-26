@@ -432,6 +432,25 @@ func TestAgentGuidanceConfigOverride(t *testing.T) {
 	}
 }
 
+func TestForceBypassesDedup(t *testing.T) {
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, _ := newEng(t, baseCfg(), d, n, nil)
+	act := config.Action{Type: "agent", Agent: "fixer"}
+	tr := agentTrigger("new_comment", "a/w", 1, "h", "sig", act)
+
+	e.process(context.Background(), tr) // 1: dispatches, records the signature
+	e.process(context.Background(), tr) // 2: same signature → deduped
+	if len(d.reqs) != 1 {
+		t.Fatalf("2nd identical trigger should dedup, got %d dispatches", len(d.reqs))
+	}
+	forced := tr
+	forced.Force = true
+	e.process(context.Background(), forced) // forced → dispatches despite the dedup
+	if len(d.reqs) != 2 {
+		t.Fatalf("force should bypass dedup and dispatch, got %d", len(d.reqs))
+	}
+}
+
 func TestRetryWhileDeferred(t *testing.T) {
 	// Step defers ("status: retry") twice, then succeeds — conductor must loop until
 	// the output no longer matches, not complete the deferred step.

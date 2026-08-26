@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
@@ -54,6 +56,8 @@ func main() {
 		err = cmdReplay(args)
 	case "sweep":
 		err = cmdSweep(args)
+	case "force":
+		err = cmdForce(args)
 	case "status":
 		err = cmdStatus(args)
 	case "report":
@@ -90,6 +94,7 @@ usage:
   paseo-conductor replay <event.json> [--config PATH]  run a saved webhook through the pipeline (dry-run)
   paseo-conductor sweep [--config PATH]       one catch-up sweep (dry-run print)
   paseo-conductor sweep --now [--config PATH] signal the running daemon to sweep now
+  paseo-conductor force <kind> <owner/repo>#<n>  force an action for a target now (via the running daemon)
   paseo-conductor status [--config PATH]      snapshot: live agents, in-flight workflows, stuck/attention
   paseo-conductor report [--days N]           activity summary: dispatches by kind/outcome + attention
   paseo-conductor pause | resume              stop / resume dispatch at runtime (no restart)
@@ -233,6 +238,10 @@ func cmdRun(args []string) error {
 			}
 		}
 	}()
+
+	// Control socket: lets `force` inject a specific action for a target into this
+	// running engine (parameters a signal can't carry).
+	go serveControl(ctx, controlSockPath(cfg), igs, eng.Emit, logf)
 
 	// Reaper for archive-when-done agents. It shares the hand-off hold-set so it
 	// never archives an agent the engine handed off for you to drive.
@@ -453,6 +462,178 @@ type sweepNower interface{ SweepNow() bool }
 // and read by `sweep --now` to signal the running process.
 func pidPath(cfg *config.Config) string {
 	return filepath.Join(filepath.Dir(cfg.Store.StateFile), "paseo-conductor.pid")
+}
+
+// controlSockPath is the daemon's control socket (a sibling of the state file),
+// used by `force` to inject a specific action for a target into the running engine.
+func controlSockPath(cfg *config.Config) string {
+	return filepath.Join(filepath.Dir(cfg.Store.StateFile), "control.sock")
+}
+
+type controlRequest struct {
+	Cmd         string `json:"cmd"`
+	Integration string `json:"integration,omitempty"`
+	Kind        string `json:"kind,omitempty"`
+	Repo        string `json:"repo,omitempty"`
+	Number      int    `json:"number,omitempty"`
+}
+
+type controlResponse struct {
+	OK         bool   `json:"ok"`
+	Dispatched int    `json:"dispatched,omitempty"`
+	Msg        string `json:"msg,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// serveControl runs the daemon's unix control socket until ctx is cancelled.
+func serveControl(ctx context.Context, path string, igs []core.Integration, emit core.EmitFunc, log func(string, ...any)) {
+	_ = os.Remove(path) // clear a stale socket from a prior run
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		log("control socket %s: %v", path, err)
+		return
+	}
+	go func() { <-ctx.Done(); l.Close(); os.Remove(path) }()
+	log("control socket listening at %s", path)
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			continue
+		}
+		go handleControlConn(ctx, conn, igs, emit, log)
+	}
+}
+
+func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integration, emit core.EmitFunc, log func(string, ...any)) {
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	var req controlRequest
+	if err := json.NewDecoder(conn).Decode(&req); err != nil {
+		writeControlResp(conn, controlResponse{Error: "bad request: " + err.Error()})
+		return
+	}
+	switch req.Cmd {
+	case "force":
+		n, err := forceOnIntegrations(ctx, igs, req, emit)
+		if err != nil {
+			log("force %s %s#%d failed: %v", req.Kind, req.Repo, req.Number, err)
+			writeControlResp(conn, controlResponse{Error: err.Error()})
+			return
+		}
+		log("forced %d %s trigger(s) for %s#%d (via control socket)", n, req.Kind, req.Repo, req.Number)
+		writeControlResp(conn, controlResponse{OK: true, Dispatched: n,
+			Msg: fmt.Sprintf("forced %d %s trigger(s) for %s#%d", n, req.Kind, req.Repo, req.Number)})
+	default:
+		writeControlResp(conn, controlResponse{Error: "unknown control command: " + req.Cmd})
+	}
+}
+
+func writeControlResp(conn net.Conn, resp controlResponse) {
+	_ = json.NewEncoder(conn).Encode(resp)
+}
+
+// forceOnIntegrations runs Force on the matching integration(s). With an explicit
+// integration name only that one; otherwise it tries each Forcer and returns the
+// first success (so a repo is routed to whichever integration configures it).
+func forceOnIntegrations(ctx context.Context, igs []core.Integration, req controlRequest, emit core.EmitFunc) (int, error) {
+	if req.Kind == "" || req.Repo == "" || req.Number == 0 {
+		return 0, fmt.Errorf("force needs kind, repo and number")
+	}
+	matched := false
+	var errs []string
+	for _, ig := range igs {
+		if req.Integration != "" && ig.Name() != req.Integration {
+			continue
+		}
+		f, ok := ig.(core.Forcer)
+		if !ok {
+			continue
+		}
+		matched = true
+		n, err := f.Force(ctx, req.Kind, req.Repo, req.Number, emit)
+		if err != nil {
+			errs = append(errs, ig.Name()+": "+err.Error())
+			continue
+		}
+		return n, nil // first integration that handled it wins
+	}
+	if !matched {
+		return 0, fmt.Errorf("no integration supports force (integration=%q)", req.Integration)
+	}
+	return 0, fmt.Errorf("force failed: %s", strings.Join(errs, "; "))
+}
+
+// cmdForce sends a force request to the running daemon over its control socket:
+//
+//	paseo-conductor force <kind> <owner/repo>#<number> [--integration NAME]
+func cmdForce(args []string) error {
+	cfg, rest, err := loadConfig(args)
+	if err != nil {
+		return err
+	}
+	var integration string
+	var pos []string
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == "--integration" && i+1 < len(rest) {
+			integration = rest[i+1]
+			i++
+			continue
+		}
+		pos = append(pos, rest[i])
+	}
+	if len(pos) < 2 {
+		return fmt.Errorf("usage: paseo-conductor force <kind> <owner/repo>#<number> [--integration NAME]")
+	}
+	repo, number, err := parsePRRef(pos[1])
+	if err != nil {
+		return err
+	}
+	resp, err := sendControl(cfg, controlRequest{Cmd: "force", Integration: integration,
+		Kind: pos[0], Repo: repo, Number: number})
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return fmt.Errorf("%s", resp.Error)
+	}
+	fmt.Println(resp.Msg)
+	return nil
+}
+
+// parsePRRef splits "owner/name#N" into ("owner/name", N).
+func parsePRRef(s string) (repo string, number int, err error) {
+	i := strings.LastIndex(s, "#")
+	if i <= 0 {
+		return "", 0, fmt.Errorf("target must be owner/repo#N, got %q", s)
+	}
+	repo = s[:i]
+	number, err = strconv.Atoi(s[i+1:])
+	if err != nil || number <= 0 {
+		return "", 0, fmt.Errorf("bad number in %q (want owner/repo#N)", s)
+	}
+	return repo, number, nil
+}
+
+// sendControl dials the daemon control socket and does one request/response.
+func sendControl(cfg *config.Config, req controlRequest) (controlResponse, error) {
+	p := controlSockPath(cfg)
+	conn, err := net.Dial("unix", p)
+	if err != nil {
+		return controlResponse{}, fmt.Errorf("connect to daemon control socket %s — is it running? %w", p, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		return controlResponse{}, err
+	}
+	var resp controlResponse
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return controlResponse{}, err
+	}
+	return resp, nil
 }
 
 // signalSweepNow tells the running daemon to run a catch-up sweep immediately by

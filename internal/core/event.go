@@ -57,6 +57,10 @@ type Trigger struct {
 	// catch-up triggers are skipped (don't re-nudge) while fresh events are queued
 	// to that agent.
 	CatchUp bool
+	// Force marks a manually-injected trigger (`paseo-conductor force`): the engine
+	// bypasses its dedup / liveness / backoff gates so the action runs now, even if
+	// it thinks the state is already handled. The kill switch and pause still apply.
+	Force bool
 }
 
 // Key returns the stable per-object key used by the dedup store.
@@ -80,6 +84,14 @@ type Integration interface {
 	Validate() error
 	// Start runs until ctx is cancelled, emitting Triggers as events arrive.
 	Start(ctx context.Context, emit EmitFunc) error
+}
+
+// Forcer is an optional integration capability: build and emit trigger(s) for a
+// specific kind + target on demand (the `force` command), bypassing the usual
+// applicability filters. Returns how many triggers it emitted. An integration
+// that can't build a trigger for the kind/target returns an error.
+type Forcer interface {
+	Force(ctx context.Context, kind, repo string, number int, emit EmitFunc) (int, error)
 }
 
 func itoa(n int) string {
