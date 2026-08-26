@@ -449,6 +449,9 @@ func TestRetryWhileDeferred(t *testing.T) {
 	req := dispatch.Request{Trigger: core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "a/w", Number: 1}}}
 	deferred := dispatch.RunRef{Output: "status: retry"}
 
+	// The method releases/re-acquires the concurrency slot around each wait, so the
+	// caller must be holding one (as the workflow goroutine is in production).
+	e.acquire(context.Background())
 	out := e.retryWhileDeferred(context.Background(), req, deferred, rp)
 	if !strings.Contains(out.Output, "reviewed and posted") {
 		t.Fatalf("retry should loop until ready, got %q after %d calls", out.Output, calls)
@@ -461,6 +464,7 @@ func TestRetryWhileDeferred(t *testing.T) {
 	e2, _ := newEng(t, baseCfg(), dAlways, &fakeNotifier{}, nil)
 	rp2 := &config.StepRetry{WhileOutputMatches: "status: retry",
 		Interval: config.Duration(2 * time.Millisecond), Timeout: config.Duration(20 * time.Millisecond)}
+	e2.acquire(context.Background())
 	out2 := e2.retryWhileDeferred(context.Background(), req, deferred, rp2)
 	if !strings.Contains(out2.Output, "status: retry") {
 		t.Fatalf("on timeout should return the last deferred ref, got %q", out2.Output)

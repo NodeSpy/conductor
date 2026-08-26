@@ -227,25 +227,33 @@ func (e *Engine) retryWhileDeferred(ctx context.Context, req dispatch.Request, r
 	}
 	interval, timeout := rp.RetryInterval(), rp.RetryTimeout()
 	deadline := time.Now().Add(timeout)
-	e.log("%s step deferred (matches %q) — retrying every %s for up to %s", tag(req.Trigger), rp.WhileOutputMatches, interval, timeout)
+	e.log("%s step deferred (matches %q) — releasing its slot and retrying every %s for up to %s", tag(req.Trigger), rp.WhileOutputMatches, interval, timeout)
 	for {
 		if time.Now().After(deadline) {
 			e.log("%s step still deferred after %s — giving up (sweep will retry)", tag(req.Trigger), timeout)
-			return ref
+			return ref // still holding the slot
 		}
+		// Free the concurrency slot while we idle so a deferred step (just waiting on
+		// CI) doesn't tie up capacity, then queue for one again before re-running. On
+		// ctx cancel (shutdown) we return without re-acquiring — the workflow goroutine
+		// is being torn down, so the slot accounting no longer matters.
+		e.release()
 		select {
 		case <-ctx.Done():
 			return ref
 		case <-time.After(interval):
 		}
+		if !e.acquire(ctx) {
+			return ref // cancelled while queued (shutdown)
+		}
 		r2, err := e.disp.Dispatch(ctx, req)
 		if err != nil {
-			return r2 // surface the error to the caller's normal handling
+			return r2 // surface the error to the caller's normal handling (slot held)
 		}
 		ref = r2
 		if !re.MatchString(ref.Output) {
 			e.log("%s step retry cleared — ready", tag(req.Trigger))
-			return ref
+			return ref // slot held
 		}
 	}
 }
