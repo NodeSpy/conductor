@@ -47,7 +47,8 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// of the target repo, because paseo derives the forge owner/repo from the
 	// working directory — not from a flag. Without it, paseo resolves the wrong
 	// repo and fails with WORKSPACE_CREATE_FAILED.
-	cwd := ""
+	cwd := ""        // --cwd: a base checkout paseo derives the forge repo from
+	worktreeWS := "" // pre-created isolated worktree workspace id (pinned via --workspace)
 	if req.Action.WorkDir != "" {
 		wd, err := render(req.Action.WorkDir, data)
 		if err != nil {
@@ -65,10 +66,29 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 			if err != nil {
 				return RunRef{}, fmt.Errorf("resolve checkout dir for %s: %w", proj, err)
 			}
-			cwd = dir
+			// Create the isolated worktree up front and pin the agent into it. This
+			// avoids `paseo run --new-workspace worktree`, which can silently fall the
+			// agent back to $HOME with no PR checked out (exit 0, no worktree) on a
+			// transient hiccup — the failure mode that stranded interactive review
+			// hand-offs in the scratch workspace. `workspace create` creates-or-errors,
+			// so a real failure escalates + retries instead of parking a checkout-less
+			// agent. In a preview (dry/shadow) we can't touch the daemon, so keep the
+			// old inline `--cwd` + `--new-workspace` argv shape for assertion.
+			if d.WorktreeCreator != nil || (!d.DryRun && !req.Shadow) {
+				id, _, err := d.createWorktree(ctx, req, dir)
+				if err != nil {
+					return RunRef{}, fmt.Errorf("create worktree for %s: %w", proj, err)
+				}
+				worktreeWS = id
+			} else {
+				cwd = dir
+			}
 		}
 	}
-	if cwd != "" {
+	switch {
+	case worktreeWS != "":
+		argv = append(argv, "--workspace", worktreeWS)
+	case cwd != "":
 		argv = append(argv, "--cwd", cwd)
 	}
 
@@ -93,7 +113,12 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 			}
 		}
 	}
-	argv = append(argv, checkoutArgs(req)...)
+	// When we pre-created the worktree, the agent is pinned into it via --workspace
+	// above; adding --new-workspace/--worktree-mode too would conflict. Only emit the
+	// inline worktree flags on the preview path (no pre-create).
+	if worktreeWS == "" {
+		argv = append(argv, checkoutArgs(req)...)
+	}
 
 	// Identity: the agent acts as YOU. GH_TOKEN is your write token, so every
 	// GitHub write (comment/review/API) is attributed to you — never the App bot
@@ -380,11 +405,7 @@ func (d *Dispatcher) agentInHome(ctx context.Context, id string) bool {
 	if json.Unmarshal(out, &m) != nil || m.Cwd == "" {
 		return false
 	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return false
-	}
-	return normCwd(m.Cwd) == normCwd(home)
+	return isHomeDir(m.Cwd)
 }
 
 // checkoutArgs maps an action's checkout strategy to paseo worktree flags.
@@ -410,6 +431,77 @@ func workspaceMode(req Request) string {
 		return req.Profile.Workspace
 	}
 	return "worktree"
+}
+
+// createWorktree makes an isolated PR/branch worktree workspace via
+// `paseo workspace create` and returns its id and cwd. Unlike
+// `paseo run --new-workspace worktree`, which can return a launched agent that
+// silently fell back to $HOME with no worktree, `workspace create` either
+// produces a real worktree or fails — so a genuine failure surfaces as an error
+// the engine can escalate + retry, instead of a checkout-less agent stranded in
+// the scratch workspace. baseDir is the repo's stable local checkout paseo derives
+// the forge repo from.
+func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir string) (string, string, error) {
+	if d.WorktreeCreator != nil {
+		return d.WorktreeCreator(ctx, req, baseDir)
+	}
+	strat := effectiveStrategy(req)
+	argv := []string{"workspace", "create", "--isolation", workspaceMode(req),
+		"--path", baseDir, "--mode", strat, "--json"}
+	switch strat {
+	case "checkout-pr":
+		argv = append(argv, "--pr-number", itoa(req.Trigger.Target.PR), "--forge", "github")
+	case "branch-off":
+		argv = append(argv, "--new-branch", branchSlug(req.Trigger))
+		if req.Trigger.Target.BaseRef != "" {
+			argv = append(argv, "--base", req.Trigger.Target.BaseRef)
+		}
+	default:
+		return "", "", fmt.Errorf("createWorktree: unexpected strategy %q", strat)
+	}
+	cmd := exec.CommandContext(ctx, d.PaseoBin, argv...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", fmt.Errorf("paseo workspace create (%s): %w%s", strat, err, stderrTail(&stderr))
+	}
+	var w struct {
+		WorkspaceID string `json:"workspaceId"`
+		Cwd         string `json:"cwd"`
+	}
+	if json.Unmarshal(out, &w) != nil || w.WorkspaceID == "" {
+		return "", "", fmt.Errorf("paseo workspace create (%s): unparseable output: %s", strat, strings.TrimSpace(string(out)))
+	}
+	// Belt-and-suspenders: a "successful" create that still landed in the base/home
+	// is the very fallback we're guarding against — treat it as a failure.
+	if w.Cwd == "" || isHomeDir(w.Cwd) {
+		return "", "", fmt.Errorf("paseo workspace create (%s) produced no worktree (cwd=%q)", strat, w.Cwd)
+	}
+	return w.WorkspaceID, w.Cwd, nil
+}
+
+// stderrTail returns a short, prefixed tail of captured stderr for an error
+// message, or "" when empty.
+func stderrTail(b *bytes.Buffer) string {
+	s := strings.TrimSpace(b.String())
+	if s == "" {
+		return ""
+	}
+	if len(s) > 300 {
+		s = "…" + s[len(s)-300:]
+	}
+	return ": " + s
+}
+
+// isHomeDir reports whether path is the user's home directory (the scratch/base
+// fallback location). Returns false when home can't be determined.
+func isHomeDir(path string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	return normCwd(path) == normCwd(home)
 }
 
 // resolveCheckoutDir returns a local checkout path for repo (owner/name) that

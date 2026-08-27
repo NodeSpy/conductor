@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,61 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 )
+
+// A worktree dispatch pre-creates the isolated workspace with `paseo workspace
+// create` (via the WorktreeCreator seam) and pins the agent into it with
+// --workspace, instead of the `paseo run --new-workspace worktree` path that can
+// silently drop the agent in $HOME with no PR checked out.
+func TestPaseoPreCreatesWorktreeAndPins(t *testing.T) {
+	d := newDispatcher() // DryRun: argv is built and returned, no real exec
+	d.CheckoutDir = func(context.Context, string) (string, error) { return "/checkouts/acme-w", nil }
+	var gotBase, gotStrat string
+	d.WorktreeCreator = func(_ context.Context, req Request, baseDir string) (string, string, error) {
+		gotBase, gotStrat = baseDir, effectiveStrategy(req)
+		return "wks_pr5", "/home/x/.paseo/worktrees/g/pr5", nil
+	}
+	req := Request{
+		Trigger: core.Trigger{Kind: "review_requested",
+			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}},
+		Action:  config.Action{Type: "agent", Agent: "a", Prompt: "review"},
+		Profile: config.AgentProfile{Workspace: "worktree"},
+	}
+	ref, err := d.Dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := strings.Join(ref.Argv, " ")
+	if !strings.Contains(s, "--workspace wks_pr5") {
+		t.Fatalf("agent should be pinned into the pre-created worktree; got: %s", s)
+	}
+	// The whole point: never the silent-fallback-prone --new-workspace path.
+	for _, bad := range []string{"--new-workspace", "--worktree-mode", "--cwd"} {
+		if strings.Contains(s, bad) {
+			t.Fatalf("pre-created worktree dispatch must not emit %q; got: %s", bad, s)
+		}
+	}
+	if gotBase != "/checkouts/acme-w" || gotStrat != "checkout-pr" {
+		t.Fatalf("createWorktree got base=%q strat=%q, want /checkouts/acme-w + checkout-pr", gotBase, gotStrat)
+	}
+}
+
+// A worktree-creation failure must surface as an error so the engine escalates +
+// retries — not a silent scratch fallback (the bug this replaced).
+func TestPaseoWorktreeCreateFailureIsLoud(t *testing.T) {
+	d := newDispatcher()
+	d.CheckoutDir = func(context.Context, string) (string, error) { return "/checkouts/acme-w", nil }
+	d.WorktreeCreator = func(context.Context, Request, string) (string, string, error) {
+		return "", "", fmt.Errorf("branch already checked out")
+	}
+	req := Request{
+		Trigger: core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
+		Action:  config.Action{Type: "agent", Agent: "a", Prompt: "fix"},
+		Profile: config.AgentProfile{Workspace: "worktree"},
+	}
+	if _, err := d.Dispatch(context.Background(), req); err == nil {
+		t.Fatal("a worktree-creation failure must surface as an error, not a silent scratch fallback")
+	}
+}
 
 func TestEffectiveStrategyInteractive(t *testing.T) {
 	pr := core.Target{Repo: "a/w", PR: 7, Number: 7}

@@ -79,6 +79,15 @@ type Dispatcher struct {
 	// the built-in resolver (find-by-title, else create). Injectable for tests.
 	ScratchWorkspace func(ctx context.Context) (string, error)
 
+	// WorktreeCreator creates an isolated PR/branch worktree workspace up front and
+	// returns its id and cwd. We create the worktree with `paseo workspace create`
+	// (which creates-or-errors) and then run the agent pinned into it with
+	// `--workspace <id>`, rather than `paseo run --new-workspace worktree` — that
+	// path can silently drop the agent in $HOME (exit 0, no worktree) on a transient
+	// worktree-creation hiccup. nil uses the built-in `paseo workspace create`.
+	// Injectable for tests.
+	WorktreeCreator func(ctx context.Context, req Request, baseDir string) (id, cwd string, err error)
+
 	// Retry policy for transient `paseo run` failures (git lock/timeout).
 	RetryMax     int
 	RetryBackoff time.Duration
