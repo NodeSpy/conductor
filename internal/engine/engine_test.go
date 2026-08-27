@@ -320,6 +320,25 @@ func TestReviewRequestReengagesOnNewHead(t *testing.T) {
 	if got := st.Attempts("a/w#12", "review_requested", "h2"); got != 1 {
 		t.Fatalf("duplicate re-request on the same head should be suppressed, got %d attempts", got)
 	}
+	// The re-engaged workflow runs its steps in a goroutine that writes the store
+	// (saveRun/finishRun). Drain it before returning so those writes don't race
+	// t.TempDir's RemoveAll cleanup (a flaky "directory not empty" failure).
+	waitRunsDrained(t, st)
+}
+
+// waitRunsDrained blocks until the store has no in-flight workflow runs, so an
+// async workflow goroutine's store writes complete before the test's t.TempDir
+// cleanup deletes the state dir. finishRun deletes the run last, so an empty
+// PendingRuns means the workflow's writes are done.
+func waitRunsDrained(t *testing.T, st *store.Store) {
+	t.Helper()
+	for i := 0; i < 400; i++ {
+		if len(st.PendingRuns()) == 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("workflow runs did not drain in time")
 }
 
 func TestReviewRequestedLivenessGate(t *testing.T) {
