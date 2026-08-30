@@ -49,6 +49,74 @@ func TestPaseoPreCreatesWorktreeAndPins(t *testing.T) {
 	}
 }
 
+// fakePaseoRouting stubs `paseo` so liveAgentForPR reports a live agent on the PR
+// (`ls`), `run` returns a fresh agent, `inspect` reports a worktree cwd (so
+// verifyWorktree passes), and `send` succeeds. Lets us assert routing decisions.
+func fakePaseoRouting(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "paseo")
+	script := `#!/usr/bin/env bash
+case "$1" in
+  ls)      echo '[{"id":"live-assess"}]' ;;
+  run)     echo '{"agentId":"fresh-handoff"}' ;;
+  inspect) echo '{"Cwd":"/tmp/wt/pr5","PendingPermissions":[]}' ;;
+  send)    exit 0 ;;
+  *)       echo '{}' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// An interactive review hand-off must launch a FRESH agent in its pre-created
+// worktree even when a live agent already exists on the PR — never queue onto it.
+// (Regression: the same workflow's just-finished checkout:none `assess` agent, in
+// the scratch workspace, was still alive when the hand-off dispatched, so the
+// one-worker-per-PR short-circuit ran the review in scratch and orphaned the
+// worktree.) A non-interactive feedback dispatch still queues, as before.
+func TestInteractiveHandoffLaunchesFreshNotQueued(t *testing.T) {
+	bin := fakePaseoRouting(t)
+	mk := func() *Dispatcher {
+		d := &Dispatcher{PaseoBin: bin, repoDirs: map[string]string{}}
+		d.CheckoutDir = func(context.Context, string) (string, error) { return "/checkouts/acme-w", nil }
+		d.WorktreeCreator = func(context.Context, Request, string) (string, string, error) {
+			return "wks_pr5", "/tmp/wt/pr5", nil
+		}
+		return d
+	}
+	pr := core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}
+
+	ih := Request{
+		Interactive: true, // background workflow hand-off (Wait defaults false)
+		Trigger:     core.Trigger{Kind: "review_requested", Target: pr},
+		Action:      config.Action{Type: "agent", Agent: "a", Checkout: "checkout-pr", Prompt: "review"},
+		Profile:     config.AgentProfile{Workspace: "worktree"},
+	}
+	ref, err := mk().Dispatch(context.Background(), ih)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Queued || ref.AgentID != "fresh-handoff" {
+		t.Fatalf("interactive hand-off must launch a fresh agent in its worktree, not queue; got id=%q queued=%v", ref.AgentID, ref.Queued)
+	}
+
+	// Control: a non-interactive feedback dispatch with the same live agent still
+	// queues onto it (one-worker-per-PR preserved).
+	fb := Request{
+		Trigger: core.Trigger{Kind: "new_comment", Target: pr},
+		Action:  config.Action{Type: "agent", Agent: "a", Checkout: "none", Prompt: "handle comment"},
+	}
+	ref2, err := mk().Dispatch(context.Background(), fb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ref2.Queued || ref2.AgentID != "live-assess" {
+		t.Fatalf("non-interactive feedback should queue to the live agent; got id=%q queued=%v", ref2.AgentID, ref2.Queued)
+	}
+}
+
 // A worktree-creation failure must surface as an error so the engine escalates +
 // retries — not a silent scratch fallback (the bug this replaced).
 func TestPaseoWorktreeCreateFailureIsLoud(t *testing.T) {

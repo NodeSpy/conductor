@@ -174,12 +174,20 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		return ref, nil
 	}
 
-	// One worker per PR (background autopilot only): if an agent is already working
+	// One worker per PR (autonomous feedback only): if an agent is already working
 	// this PR, hand the new work to it (`paseo send`) so it drains a burst of
 	// feedback instead of spawning a duplicate. A sweep re-derivation (CatchUp) is
-	// skipped — the live agent is already on it; don't re-nudge. Workflow steps
-	// (Wait) run in order and aren't queued.
-	if !req.Wait {
+	// skipped — the live agent is already on it; don't re-nudge.
+	//
+	// Excludes interactive hand-offs: a background workflow hand-off (review) has
+	// already been given its own dedicated worktree above and MUST launch a fresh
+	// agent there — never queued onto an existing agent. In particular the same
+	// workflow's just-finished `assess` agent (checkout:none, in the scratch
+	// workspace) can still be alive when the hand-off dispatches — its async
+	// archive races — and queuing to it would run the review in scratch with no PR
+	// checked out, orphaning the worktree. The engine's HasLiveAgent gate already
+	// dedups workflows, so this routing is redundant for hand-offs anyway.
+	if !req.Wait && !req.Interactive {
 		if id := d.liveAgentForPR(ctx, req.Trigger.Key()); id != "" {
 			if req.CatchUp {
 				ref.Skipped = true
