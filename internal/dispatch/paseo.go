@@ -626,7 +626,14 @@ func (d *Dispatcher) cloneRepo(ctx context.Context, repo string) error {
 	if err != nil {
 		return fmt.Errorf("paseo clone %s: %w", repo, err)
 	}
-	if out, err := exec.CommandContext(ctx, d.PaseoBin, "clone", repo, "--dir", dir, "--json").CombinedOutput(); err != nil {
+	// paseo requires --protocol for an owner/repo shorthand (it can't infer one).
+	// Use ssh to match our push identity: commits/pushes go over SSH as you, so the
+	// base checkout's origin should too.
+	proto := d.CloneProtocol
+	if proto == "" {
+		proto = "ssh"
+	}
+	if out, err := exec.CommandContext(ctx, d.PaseoBin, "clone", repo, "--dir", dir, "--protocol", proto, "--json").CombinedOutput(); err != nil {
 		return fmt.Errorf("paseo clone %s: %w: %s", repo, err, strings.TrimSpace(string(out)))
 	}
 	return nil

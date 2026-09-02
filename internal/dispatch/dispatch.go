@@ -92,6 +92,11 @@ type Dispatcher struct {
 	RetryMax     int
 	RetryBackoff time.Duration
 
+	// CloneProtocol is the protocol paseo uses to clone a base checkout for a repo
+	// with no existing workspace ("ssh" or "https"). paseo requires it for an
+	// owner/repo shorthand. Empty defaults to "ssh" (matches the push identity).
+	CloneProtocol string
+
 	// AdoptOpenWorkspaces routes PR feedback to an agent already checked out on the
 	// PR's head branch (e.g. a workspace you opened yourself) instead of spawning a
 	// fresh worktree. Opt-in; set from top-level config.
