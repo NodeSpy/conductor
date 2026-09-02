@@ -539,12 +539,24 @@ func (d *Dispatcher) resolveCheckoutDir(ctx context.Context, repo string) (strin
 
 	dir := d.findWorkspaceDir(ctx, repo)
 	if dir == "" {
-		// No existing checkout for this repo — clone a base checkout once.
-		if err := d.cloneRepo(ctx, repo); err != nil {
+		// No existing paseo workspace for this repo. Conductor keeps its own base
+		// checkout under ~/.paseo-conductor/checkouts/<name> and uses that directory
+		// directly — paseo 0.7's `clone` writes the checkout to disk but no longer
+		// registers a workspace, so a post-clone `workspace ls` lookup finds nothing.
+		target, err := d.cloneTargetDir(repo)
+		if err != nil {
 			return "", err
 		}
-		if dir = d.findWorkspaceDir(ctx, repo); dir == "" {
-			return "", fmt.Errorf("cloned %s but could not locate its workspace", repo)
+		if isGitRepo(ctx, target) {
+			dir = target // reuse a prior clone (avoids paseo's "path already exists")
+		} else {
+			if err := d.cloneRepo(ctx, repo); err != nil {
+				return "", err
+			}
+			if !isGitRepo(ctx, target) {
+				return "", fmt.Errorf("cloned %s but %s is not a git checkout", repo, target)
+			}
+			dir = target
 		}
 	}
 	d.mu.Lock()
@@ -637,6 +649,20 @@ func (d *Dispatcher) cloneRepo(ctx context.Context, repo string) error {
 		return fmt.Errorf("paseo clone %s: %w: %s", repo, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// cloneTargetDir is where conductor's base checkout of repo lives: the clone
+// parent dir plus the repo's short name (paseo clones owner/repo into <dir>/<name>).
+func (d *Dispatcher) cloneTargetDir(repo string) (string, error) {
+	parent, err := d.cloneParentDir()
+	if err != nil {
+		return "", err
+	}
+	name := filepath.Base(repo)
+	if name == "" || name == "." || name == "/" {
+		return "", fmt.Errorf("cannot derive checkout dir name from %q", repo)
+	}
+	return filepath.Join(parent, name), nil
 }
 
 // cloneParentDir returns the parent directory conductor clones base checkouts

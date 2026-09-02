@@ -278,3 +278,21 @@ func TestVerifyWorktreeSkipsForegroundAndNonWorktree(t *testing.T) {
 		t.Fatalf("checkout:none dispatch must be skipped: %v", err)
 	}
 }
+
+// cloneTargetDir derives conductor's base-checkout path as <parent>/<repo-name>
+// (paseo clones owner/repo into a <name> subdir); this is what resolveCheckoutDir
+// uses directly since paseo 0.7's clone no longer registers a workspace.
+func TestCloneTargetDir(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d := &Dispatcher{}
+	got, err := d.cloneTargetDir("workonlearning/teachermade-monorepo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(got) != "teachermade-monorepo" {
+		t.Fatalf("want base teachermade-monorepo, got %s", got)
+	}
+	if _, err := d.cloneTargetDir(""); err == nil {
+		t.Fatal("empty repo should error")
+	}
+}
