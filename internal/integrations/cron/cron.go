@@ -87,6 +87,17 @@ func (g *Integration) Validate() error {
 	return nil
 }
 
+// Actions enumerates each schedule's action with its location, for the CLI's
+// cross-config checks.
+func (g *Integration) Actions() []config.ActionRef {
+	refs := make([]config.ActionRef, 0, len(g.cfg.Schedules))
+	for _, s := range g.cfg.Schedules {
+		refs = append(refs, config.ActionRef{
+			Where: fmt.Sprintf("cron[%s] schedule %q", g.name, s.Name), Action: s.Action})
+	}
+	return refs
+}
+
 // trigger builds the Trigger a schedule emits (action attached for the engine).
 func (g *Integration) trigger(s Schedule) core.Trigger {
 	return core.Trigger{

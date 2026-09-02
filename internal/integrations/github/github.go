@@ -295,6 +295,22 @@ func (g *Integration) Validate() error {
 	return nil
 }
 
+// Actions enumerates every configured action (defaults + every rule, every kind,
+// every variant) with its location, for the CLI's cross-config checks.
+func (g *Integration) Actions() []config.ActionRef {
+	var refs []config.ActionRef
+	add := func(where string, actions map[string]config.ActionSet) {
+		for kind, set := range actions {
+			refs = append(refs, set.Refs(fmt.Sprintf("github[%s] %s.%s", g.name, where, kind))...)
+		}
+	}
+	add("defaults.actions", g.cfg.Defaults.Actions)
+	for i, r := range g.cfg.Rules {
+		add(fmt.Sprintf("rules[%d].actions", i), r.Actions)
+	}
+	return refs
+}
+
 // knownKinds is the set of GitHub trigger kinds an action map may configure.
 var knownKinds = map[string]bool{
 	"merge_conflict": true, "pr_behind": true, "failing_checks": true,

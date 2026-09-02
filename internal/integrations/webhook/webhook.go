@@ -112,6 +112,16 @@ func (g *Integration) Validate() error {
 	return nil
 }
 
+// Actions enumerates every source's actions with their location, for the CLI's
+// cross-config checks.
+func (g *Integration) Actions() []config.ActionRef {
+	var refs []config.ActionRef
+	for _, s := range g.cfg.Sources {
+		refs = append(refs, s.Actions.Refs(fmt.Sprintf("webhook[%s] source %q", g.name, s.Name))...)
+	}
+	return refs
+}
+
 func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 	if g.cfg.Listen != "" {
 		for _, s := range g.cfg.Sources {
