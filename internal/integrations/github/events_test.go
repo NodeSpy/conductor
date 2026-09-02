@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/paseo-conductor/internal/store"
 )
 
 // as1 wraps single actions into one-variant ActionSets, keeping the many
@@ -188,6 +189,31 @@ func TestNewCommentIgnoresSelf(t *testing.T) {
 	// the sweep's missed-comment recovery) can gate on it.
 	if got, _ := trs[0].Context["comment_id"].(int64); got != 12 {
 		t.Fatalf("comment_id not stamped, got %v", trs[0].Context["comment_id"])
+	}
+	if got := trs[0].Context["comment_kind"]; got != store.CommentKindIssue {
+		t.Fatalf("issue_comment should be stamped comment_kind=issue, got %v", got)
+	}
+}
+
+// An inline review comment is stamped comment_kind=review so the engine gates it
+// against the review high-water mark, not the (far higher) issue-comment one.
+func TestNewCommentReviewCommentKind(t *testing.T) {
+	g := newTestIntegration(t, baseConfig())
+	body := []byte(`{
+		"action":"created",
+		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+		"pull_request":{"number":3,"html_url":"u","head":{"sha":"h","ref":"feat"},"base":{"ref":"main"},"user":{"login":"me"}},
+		"comment":{"id":3918412084,"user":{"login":"reviewer"},"body":"nit"}
+	}`)
+	trs := g.triggersFor(context.Background(), "pull_request_review_comment", body)
+	if len(trs) != 1 || trs[0].Kind != "new_comment" {
+		t.Fatalf("want 1 new_comment, got %+v", trs)
+	}
+	if got, _ := trs[0].Context["comment_id"].(int64); got != 3918412084 {
+		t.Fatalf("comment_id not stamped, got %v", trs[0].Context["comment_id"])
+	}
+	if got := trs[0].Context["comment_kind"]; got != store.CommentKindReview {
+		t.Fatalf("pull_request_review_comment should be stamped comment_kind=review, got %v", got)
 	}
 }
 

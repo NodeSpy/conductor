@@ -20,9 +20,22 @@ type Record struct {
 	Acted     map[string]string    `json:"acted,omitempty"`      // kind -> last acted dedup signature
 	Attempts  map[string]int       `json:"attempts,omitempty"`   // "kind@head" -> count
 	AttemptAt map[string]time.Time `json:"attempt_at,omitempty"` // "kind@head" -> last attempt time (for backoff)
-	LastComID int64                `json:"last_comment_id,omitempty"`
-	UpdatedAt time.Time            `json:"updated_at"`
+	// LastComIDs is the per-comment-kind high-water mark ("issue" / "review" ->
+	// newest handled id). The two kinds are separate GitHub id sequences (issue
+	// comment ids run far ahead of review comment ids), so one shared mark would
+	// let a conversation comment blind us to every later inline review comment.
+	LastComIDs map[string]int64 `json:"last_comment_ids,omitempty"`
+	// LastComID is the pre-per-kind single mark, kept only to migrate old state
+	// files (it becomes the "issue" mark on load; see rec).
+	LastComID int64     `json:"last_comment_id,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// Comment kinds for the per-kind comment high-water mark.
+const (
+	CommentKindIssue  = "issue"  // PR conversation comment (issues/{n}/comments)
+	CommentKindReview = "review" // inline diff comment (pulls/{n}/comments)
+)
 
 // Store is the concurrency-safe state + audit store.
 type Store struct {
@@ -99,30 +112,46 @@ func (s *Store) rec(key string) *Record {
 	if r.AttemptAt == nil {
 		r.AttemptAt = map[string]time.Time{}
 	}
+	if r.LastComIDs == nil {
+		r.LastComIDs = map[string]int64{}
+	}
+	// Migrate the legacy single mark. It was almost always set by an issue comment
+	// (CI bots post one per run, and issue ids run ahead of review ids, so an issue
+	// comment always ended up on top); treating it as the issue mark is right in
+	// that case, and harmless otherwise — a review-sized id sits below every issue
+	// id, so it gates nothing.
+	if r.LastComID > 0 {
+		if r.LastComID > r.LastComIDs[CommentKindIssue] {
+			r.LastComIDs[CommentKindIssue] = r.LastComID
+		}
+		r.LastComID = 0
+	}
 	return r
 }
 
-// LastCommentID returns the high-water mark of the newest PR comment already acted
-// on for key (0 if none). The sweep's comment recovery uses it (via the engine) to
-// skip comments already handled and only re-emit genuinely-missed newer ones.
-func (s *Store) LastCommentID(key string) int64 {
+// LastCommentID returns the high-water mark of the newest PR comment of the given
+// kind (CommentKindIssue / CommentKindReview) already acted on for key (0 if none).
+// The sweep's comment recovery uses it (via the engine) to skip comments already
+// handled and only re-emit genuinely-missed newer ones.
+func (s *Store) LastCommentID(key, kind string) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if r := s.recs[key]; r != nil {
-		return r.LastComID
+	if s.recs[key] == nil {
+		return 0 // don't materialize a record just to read it
 	}
-	return 0
+	return s.rec(key).LastComIDs[kind] // rec applies the legacy-mark migration
 }
 
-// AdvanceCommentID raises key's comment high-water mark to id (never lowers it).
-func (s *Store) AdvanceCommentID(key string, id int64) error {
+// AdvanceCommentID raises key's comment high-water mark for kind to id (never
+// lowers it).
+func (s *Store) AdvanceCommentID(key, kind string, id int64) error {
 	s.mu.Lock()
 	r := s.rec(key)
-	if id <= r.LastComID {
+	if id <= r.LastComIDs[kind] {
 		s.mu.Unlock()
 		return nil
 	}
-	r.LastComID = id
+	r.LastComIDs[kind] = id
 	r.UpdatedAt = s.now()
 	s.mu.Unlock()
 	return s.save()

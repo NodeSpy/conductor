@@ -13,6 +13,7 @@ import (
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/paseo-conductor/internal/store"
 )
 
 // sweepStub serves the org installation lookup, installation repo list, open-PR
@@ -142,6 +143,84 @@ func TestSweepUnresolvedComments(t *testing.T) {
 	// and stops once resolved.
 	if !strings.HasPrefix(got[0].Dedup, "threads:h9:2:") {
 		t.Fatalf("unexpected dedup signature: %q", got[0].Dedup)
+	}
+}
+
+// The sweep's missed-comment recovery tags each comment with the endpoint it came
+// from (issue vs review — separate id sequences, separate high-water marks), skips
+// your own comments, and ignores comments older than commentRecoveryWindow.
+func TestSweepMissedCommentsKindsAndWindow(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/77/access_tokens", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"token":"t","expires_at":%q}`, time.Now().Add(time.Hour).Format(time.RFC3339))
+	})
+	mux.HandleFunc("/repos/acme/widget/installation", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"id":77}`)
+	})
+	mux.HandleFunc("/repos/acme/widget/pulls", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `[{"number":9,"user":{"login":"me"},"head":{"sha":"h9","ref":"feat"},"base":{"ref":"main"},"html_url":"u"}]`)
+	})
+	mux.HandleFunc("/repos/acme/widget/pulls/9", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"mergeable_state":"clean","head":{"sha":"h9"},"base":{"ref":"main"},"html_url":"u"}`)
+	})
+	fresh := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	stale := time.Now().Add(-commentRecoveryWindow - time.Hour).UTC().Format(time.RFC3339)
+	// Conversation comments: a fresh bot report (high id), a fresh self comment, a
+	// stale teammate comment.
+	mux.HandleFunc("/repos/acme/widget/issues/9/comments", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `[
+			{"id":5515854542,"user":{"login":"github-actions[bot]"},"body":"report","created_at":%q},
+			{"id":5515854000,"user":{"login":"me"},"body":"mine","created_at":%q},
+			{"id":5515000000,"user":{"login":"teammate"},"body":"old","created_at":%q}]`, fresh, fresh, stale)
+	})
+	// Inline review comments: two fresh from a reviewer (low ids).
+	mux.HandleFunc("/repos/acme/widget/pulls/9/comments", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `[
+			{"id":3918412099,"user":{"login":"reviewer"},"body":"nit 2","created_at":%q},
+			{"id":3918412084,"user":{"login":"reviewer"},"body":"nit 1","created_at":%q}]`, fresh, fresh)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	key, _ := rsa.GenerateKey(rand.Reader, 1024)
+
+	cfg := Config{
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		Sweep:   SweepConfig{Enabled: true, Repos: []string{"acme/widget"}},
+		Rules: []Rule{{
+			Match:   Match{Repos: []string{"acme/widget"}},
+			Me:      config.Actors{Logins: []string{"me"}},
+			Actions: as1(map[string]config.Action{"new_comment": {Type: "agent", Agent: "fixer"}}),
+		}},
+	}
+	g := newTestIntegration(t, cfg)
+	g.app = &appAuth{appID: 1, key: key, httpc: http.DefaultClient, apiBase: srv.URL, now: time.Now, cache: map[int64]cachedToken{}}
+	g.rest = newRESTClient(g.app)
+
+	var got []core.Trigger
+	if err := g.sweep(context.Background(), func(_ context.Context, tr core.Trigger) { got = append(got, tr) }); err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[int64]string{}
+	for _, tr := range got {
+		if tr.Kind != "new_comment" {
+			t.Fatalf("unexpected trigger kind %q: %+v", tr.Kind, tr)
+		}
+		id, _ := tr.Context["comment_id"].(int64)
+		kinds[id], _ = tr.Context["comment_kind"].(string)
+	}
+	want := map[int64]string{
+		5515854542: store.CommentKindIssue,
+		3918412099: store.CommentKindReview,
+		3918412084: store.CommentKindReview,
+	}
+	if len(kinds) != len(want) {
+		t.Fatalf("want %d new_comment triggers (self + stale skipped), got %d: %v", len(want), len(kinds), kinds)
+	}
+	for id, k := range want {
+		if kinds[id] != k {
+			t.Fatalf("comment %d: want comment_kind=%q, got %q", id, k, kinds[id])
+		}
 	}
 }
 

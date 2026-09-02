@@ -50,8 +50,8 @@ type Store interface {
 	RetryReady(key, kind, head string, soft int, base time.Duration, factor int, max time.Duration) (bool, time.Duration)
 	Record(key, kind, sig, head string) error
 	RecordAttempt(key, kind, head string) error
-	LastCommentID(key string) int64
-	AdvanceCommentID(key string, id int64) error
+	LastCommentID(key, kind string) int64
+	AdvanceCommentID(key, kind string, id int64) error
 	Audit(entry map[string]any)
 	// Workflow-run persistence, so multi-step workflows resume across restarts.
 	PutRun(r store.WorkflowRun) error
@@ -340,9 +340,10 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// was already handled (webhook or a prior sweep) — skip it. This is what lets the
 	// sweep re-list recent comments to recover missed ones without re-dispatching
 	// old ones (the single-slot dedup can't distinguish them). The mark advances on
-	// a successful new_comment dispatch below.
+	// a successful new_comment dispatch below. It's kept per comment kind: issue
+	// (conversation) and review (inline) comments are separate id sequences.
 	if !t.Force && t.Kind == "new_comment" {
-		if id := commentID(t); id > 0 && id <= e.store.LastCommentID(key) {
+		if id := commentID(t); id > 0 && id <= e.store.LastCommentID(key, commentKind(t)) {
 			return
 		}
 	}
@@ -584,7 +585,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// mark so the sweep's re-listing of recent comments won't re-dispatch this one.
 	if t.Kind == "new_comment" {
 		if id := commentID(t); id > 0 {
-			_ = e.store.AdvanceCommentID(key, id)
+			_ = e.store.AdvanceCommentID(key, commentKind(t), id)
 		}
 	}
 
@@ -878,6 +879,18 @@ func commentID(t core.Trigger) int64 {
 		return 0
 	}
 	return toInt64(t.Context["comment_id"])
+}
+
+// commentKind reads a new_comment trigger's comment kind (store.CommentKindIssue /
+// store.CommentKindReview) from Context, selecting which high-water mark applies.
+// Absent (an older trigger) → issue, matching the pre-per-kind single mark.
+func commentKind(t core.Trigger) string {
+	if t.Context != nil {
+		if k, _ := t.Context["comment_kind"].(string); k != "" {
+			return k
+		}
+	}
+	return store.CommentKindIssue
 }
 
 func shadowNote(shadow bool) string {
