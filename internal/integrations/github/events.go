@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
@@ -369,10 +370,16 @@ func (g *Integration) checkTriggers(ctx context.Context, repo string, p ghPayloa
 	num := c.PullRequests[0].Number
 	var trs []core.Trigger
 	if failureConclusions[c.Conclusion] && g.checkOwnPR(ctx, p, num) {
-		t := g.target(repo, num, c.HeadSHA, "", "")
-		extra := map[string]any{"failing_check": c.Name, "run_id": c.ID}
-		trs = append(trs, g.single(repo, "failing_checks", t,
-			fmt.Sprintf("failing checks on %s#%d", repo, num), "fail@"+c.HeadSHA, extra)...)
+		// Suppress a fixer for a check the user opted to ignore (ignore_checks) — e.g.
+		// a PR-title convention gate they don't follow. Logged so ignores are visible.
+		if act, ok := g.actionFor(repo, "failing_checks"); ok && containsFold(act.IgnoreChecks, c.Name) {
+			log.Printf("github[%s]: %s#%d failing check %q ignored (ignore_checks)", g.name, repo, num, c.Name)
+		} else {
+			t := g.target(repo, num, c.HeadSHA, "", "")
+			extra := map[string]any{"failing_check": c.Name, "run_id": c.ID}
+			trs = append(trs, g.single(repo, "failing_checks", t,
+				fmt.Sprintf("failing checks on %s#%d", repo, num), "fail@"+c.HeadSHA, extra)...)
+		}
 	}
 	// A completed check (pass or fail) may have made the PR merge-ready.
 	trs = append(trs, g.mergeReadyTriggers(ctx, repo, num, p)...)

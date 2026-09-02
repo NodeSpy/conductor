@@ -364,3 +364,27 @@ func TestReadyForReviewRESTFallback(t *testing.T) {
 		t.Fatalf("ready_for_review should emit review_requested via the REST fallback, got %v", kinds)
 	}
 }
+
+// A failing check whose name is in the action's ignore_checks must NOT spin up a
+// fixer (e.g. a PR-title convention gate the user doesn't follow); other failing
+// checks still do.
+func TestFailingCheckIgnoredByName(t *testing.T) {
+	cfg := richConfig()
+	cfg.Rules[0].Actions = as1(map[string]config.Action{
+		"failing_checks": {Type: "agent", Agent: "fixer", IgnoreChecks: []string{"title-validation"}},
+	})
+	_, app := stubAPI(t, "clean")
+	g := newTestIntegration(t, cfg)
+	g.app, g.rest = app, newRESTClient(app)
+
+	ignored := `{"action":"completed","installation":{"id":42},"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"check_run":{"conclusion":"failure","name":"title-validation","head_sha":"h1","id":1,"pull_requests":[{"number":4}]}}`
+	if k := do(t, g, "check_run", ignored); len(k) != 0 {
+		t.Fatalf("ignored check must not trigger failing_checks, got %v", k)
+	}
+	real := `{"action":"completed","installation":{"id":42},"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"check_run":{"conclusion":"failure","name":"tests","head_sha":"h2","id":2,"pull_requests":[{"number":4}]}}`
+	if k := do(t, g, "check_run", real); len(k) != 1 || k[0] != "failing_checks" {
+		t.Fatalf("a non-ignored failing check should still trigger failing_checks, got %v", k)
+	}
+}
