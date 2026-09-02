@@ -79,6 +79,16 @@ func (g *Integration) Validate() error {
 	return nil
 }
 
+// Actions enumerates every trigger rule's actions with their location, for the
+// CLI's cross-config checks.
+func (g *Integration) Actions() []config.ActionRef {
+	var refs []config.ActionRef
+	for i, r := range g.cfg.Rules {
+		refs = append(refs, r.Actions.Refs(fmt.Sprintf("slack[%s] triggers[%d] (%s)", g.name, i, r.On))...)
+	}
+	return refs
+}
+
 // Start runs the Socket Mode connection, reconnecting with capped backoff until ctx
 // is cancelled (Slack recycles connections periodically via a `disconnect` frame).
 func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {

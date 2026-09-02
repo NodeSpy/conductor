@@ -318,6 +318,21 @@ func (s *ActionSet) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
+// Refs labels each action in the set with where it lives, for CheckAgentRefs.
+// Named variants get a `[name]` suffix so a bad reference in one variant of a
+// kind is distinguishable from its siblings.
+func (s ActionSet) Refs(where string) []ActionRef {
+	refs := make([]ActionRef, 0, len(s))
+	for _, a := range s {
+		w := where
+		if a.Name != "" {
+			w += "[" + a.Name + "]"
+		}
+		refs = append(refs, ActionRef{Where: w, Action: a})
+	}
+	return refs
+}
+
 // Exclude filters out PRs an action shouldn't act on (e.g. release PRs), by head
 // branch glob, label, or a case-insensitive title substring.
 type Exclude struct {
@@ -585,6 +600,63 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ActionRef is one configured action together with a human-readable location
+// (e.g. `github[ednition] rules[0].actions.review_requested`), so a cross-config
+// check can say exactly where a bad reference lives. Integrations enumerate these
+// for the CLI's validate/startup pass; see CheckAgentRefs.
+type ActionRef struct {
+	Where  string
+	Action Action
+}
+
+// CheckAgentRefs verifies every agent-type action (and every agent-type workflow
+// step) names a profile that exists under top-level `agents:`. The engine looks a
+// profile up with a bare map index, so an unknown name would otherwise resolve to
+// an empty profile at dispatch time — no --provider — and paseo rejects the run
+// with MISSING_PROVIDER only once a live trigger reaches that step. Catch it here.
+func (c *Config) CheckAgentRefs(refs []ActionRef) error {
+	for _, r := range refs {
+		if err := c.checkAgentRef(r.Where, r.Action); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Config) checkAgentRef(where string, a Action) error {
+	if a.Type == "agent" {
+		if a.Agent == "" {
+			return fmt.Errorf("config: %s: agent action needs `agent: <profile>` (defined: %s)", where, c.agentNames())
+		}
+		if _, ok := c.Agents[a.Agent]; !ok {
+			return fmt.Errorf("config: %s: unknown agent profile %q (defined: %s)", where, a.Agent, c.agentNames())
+		}
+	}
+	for i, s := range a.Steps {
+		id := s.ID
+		if id == "" {
+			id = fmt.Sprintf("step%d", i+1) // mirrors the engine's default step id
+		}
+		if err := c.checkAgentRef(where+" step "+id, s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// agentNames lists the defined profile names, sorted, for error messages.
+func (c *Config) agentNames() string {
+	if len(c.Agents) == 0 {
+		return "none"
+	}
+	names := make([]string, 0, len(c.Agents))
+	for n := range c.Agents {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 func expandHome(p string) string {

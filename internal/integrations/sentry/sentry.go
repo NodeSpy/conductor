@@ -86,6 +86,16 @@ func (g *Integration) Validate() error {
 	return nil
 }
 
+// Actions enumerates every rule's actions with their location, for the CLI's
+// cross-config checks.
+func (g *Integration) Actions() []config.ActionRef {
+	var refs []config.ActionRef
+	for i, r := range g.cfg.Rules {
+		refs = append(refs, r.Actions.Refs(fmt.Sprintf("sentry[%s] rules[%d]", g.name, i))...)
+	}
+	return refs
+}
+
 func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 	if g.cfg.Listen != "" {
 		inbound.Register(ctx, g.cfg.Listen, g.cfg.Path, g.handler(ctx, emit), log.Printf)

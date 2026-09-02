@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -246,5 +247,55 @@ func TestActionSetUnmarshal(t *testing.T) {
 	// A sequence parses to N named variants.
 	if s := m.Actions["issue_matched"]; len(s) != 2 || s[0].Name != "a" || s[1].Name != "b" || s[1].Agent != "y" {
 		t.Fatalf("list should parse to named variants: %+v", s)
+	}
+}
+
+func TestCheckAgentRefs(t *testing.T) {
+	c := &Config{Agents: map[string]AgentProfile{"opus": {Provider: "claude"}, "sonnet": {Provider: "claude"}}}
+	step := func(id, agent string) Action { return Action{Type: "agent", ID: id, Agent: agent} }
+
+	// Defined profiles at the top level and in nested steps pass; command
+	// actions/steps never need a profile.
+	ok := []ActionRef{
+		{Where: "a", Action: Action{Type: "agent", Agent: "opus"}},
+		{Where: "b", Action: Action{Type: "command", Command: []string{"true"}}},
+		{Where: "c", Action: Action{Steps: []Action{step("assess", "sonnet"), {Type: "command"}, step("handoff", "opus")}}},
+	}
+	if err := c.CheckAgentRefs(ok); err != nil {
+		t.Fatalf("valid refs rejected: %v", err)
+	}
+
+	// An unknown profile in a workflow step is the MISSING_PROVIDER-at-dispatch
+	// bug: it must fail up front and say where.
+	bad := []ActionRef{{Where: "github[x] rules[0].actions.review_requested",
+		Action: Action{Steps: []Action{step("assess", "sonnet"), step("handoff", "sonnet-interactive")}}}}
+	err := c.CheckAgentRefs(bad)
+	if err == nil {
+		t.Fatal("unknown step profile should fail")
+	}
+	for _, want := range []string{"review_requested step handoff", `"sonnet-interactive"`, "opus, sonnet"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should mention %q", err, want)
+		}
+	}
+
+	// A top-level agent action with no profile at all is rejected too.
+	if err := c.CheckAgentRefs([]ActionRef{{Where: "cron[x] schedule \"nightly\"", Action: Action{Type: "agent"}}}); err == nil ||
+		!strings.Contains(err.Error(), "needs `agent:") {
+		t.Fatalf("agent action without profile should fail, got %v", err)
+	}
+
+	// Unnamed steps report the engine's positional default id.
+	err = c.CheckAgentRefs([]ActionRef{{Where: "w", Action: Action{Steps: []Action{step("", "nope")}}}})
+	if err == nil || !strings.Contains(err.Error(), "w step step1") {
+		t.Fatalf("unnamed step should report step1, got %v", err)
+	}
+}
+
+func TestActionSetRefsNamesVariants(t *testing.T) {
+	set := ActionSet{{Type: "agent", Agent: "a"}, {Name: "v", Type: "agent", Agent: "b"}}
+	refs := set.Refs("issue_matched")
+	if len(refs) != 2 || refs[0].Where != "issue_matched" || refs[1].Where != "issue_matched[v]" {
+		t.Fatalf("unexpected refs: %+v", refs)
 	}
 }

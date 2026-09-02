@@ -102,6 +102,16 @@ func (g *Integration) Validate() error {
 	return nil
 }
 
+// Actions enumerates every feed's actions with their location, for the CLI's
+// cross-config checks.
+func (g *Integration) Actions() []config.ActionRef {
+	var refs []config.ActionRef
+	for _, f := range g.cfg.Feeds {
+		refs = append(refs, f.Actions.Refs(fmt.Sprintf("rss[%s] feed %q", g.name, f.Name))...)
+	}
+	return refs
+}
+
 func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 	for i, f := range g.cfg.Feeds {
 		i, f := i, f

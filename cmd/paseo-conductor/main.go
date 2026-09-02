@@ -145,6 +145,30 @@ func buildIntegrations(cfg *config.Config) ([]core.Integration, error) {
 	return out, nil
 }
 
+// actionLister is implemented by an integration that can enumerate its configured
+// actions, so checks spanning the integration's sub-config and the top-level
+// config (agent profile references) can run up front rather than at dispatch.
+type actionLister interface {
+	Actions() []config.ActionRef
+}
+
+// validateAll runs each integration's own Validate, then the cross-config
+// checks: every `agent:` an action or workflow step names must be a profile
+// defined under `agents:` — otherwise the engine dispatches an empty profile and
+// paseo fails with MISSING_PROVIDER only once a live trigger reaches that step.
+func validateAll(cfg *config.Config, igs []core.Integration) error {
+	var refs []config.ActionRef
+	for _, ig := range igs {
+		if err := ig.Validate(); err != nil {
+			return err
+		}
+		if l, ok := ig.(actionLister); ok {
+			refs = append(refs, l.Actions()...)
+		}
+	}
+	return cfg.CheckAgentRefs(refs)
+}
+
 func cmdValidate(args []string) error {
 	cfg, _, err := loadConfig(args)
 	if err != nil {
@@ -154,10 +178,8 @@ func cmdValidate(args []string) error {
 	if err != nil {
 		return err
 	}
-	for _, ig := range igs {
-		if err := ig.Validate(); err != nil {
-			return err
-		}
+	if err := validateAll(cfg, igs); err != nil {
+		return err
 	}
 	fmt.Printf("ok: %d integration(s) configured (%d enabled), %d agent profile(s)\n",
 		len(cfg.Integrations), len(igs), len(cfg.Agents))
@@ -175,10 +197,8 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	for _, ig := range igs {
-		if err := ig.Validate(); err != nil {
-			return err
-		}
+	if err := validateAll(cfg, igs); err != nil {
+		return err
 	}
 
 	st, err := store.Open(store.Options{
