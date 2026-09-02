@@ -1,3 +1,7 @@
+<div align="center" width="100%">
+  <img src="paseo-conductor.png" width="320" alt="paseo-conductor" />
+</div>
+
 # paseo-conductor
 
 Event-driven agent orchestration for your local [Paseo](https://paseo.sh) daemon.
