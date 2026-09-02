@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/NodeSpy/paseo-conductor/internal/store"
 )
 
 // restClient is a small, rate-limit-aware GitHub REST client that authenticates
@@ -277,14 +279,18 @@ type prComment struct {
 	User struct {
 		Login string `json:"login"`
 	} `json:"user"`
-	HTMLURL string `json:"html_url"`
+	HTMLURL   string    `json:"html_url"`
+	CreatedAt time.Time `json:"created_at"`
+	// Kind is store.CommentKindIssue or store.CommentKindReview — set by
+	// recentComments from the endpoint the comment came from, not by GitHub.
+	Kind string `json:"-"`
 }
 
 // recentComments returns a PR's most-recent comments — both conversation (issue)
 // comments and inline review comments — merged, for the sweep's missed-comment
 // recovery. Each endpoint returns its first page newest-first; the engine's
-// comment high-water mark filters out ones already handled, so a small page is
-// enough to recover a short offline gap without an unbounded walk.
+// per-kind comment high-water mark filters out ones already handled, so a small
+// page is enough to recover a short offline gap without an unbounded walk.
 func (c *restClient) recentComments(ctx context.Context, instID int64, owner, name string, number int) ([]prComment, error) {
 	issueURL := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments?per_page=30&sort=created&direction=desc",
 		c.app.apiBase, owner, name, number)
@@ -296,6 +302,12 @@ func (c *restClient) recentComments(ctx context.Context, instID int64, owner, na
 	}
 	if err := c.get(ctx, instID, reviewURL, &review); err != nil {
 		return nil, err
+	}
+	for i := range issue {
+		issue[i].Kind = store.CommentKindIssue
+	}
+	for i := range review {
+		review[i].Kind = store.CommentKindReview
 	}
 	return append(issue, review...), nil
 }

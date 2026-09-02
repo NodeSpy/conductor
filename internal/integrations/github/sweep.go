@@ -344,13 +344,22 @@ func (g *Integration) sweepUnresolvedComments(ctx context.Context, instID int64,
 		fmt.Sprintf("sweep: %d unresolved comment thread(s) on %s#%d", len(ids), repo, t.Number), sig, nil)
 }
 
+// commentRecoveryWindow bounds the sweep's missed-comment recovery: a comment older
+// than this is never re-emitted. Recovery exists for comments whose webhook was
+// dropped while the daemon was offline — an offline gap this long is a different
+// problem, and a stale comment shouldn't suddenly spawn a fixer. It also caps the
+// blast radius when a high-water mark is missing (e.g. a state file from before
+// marks were kept per comment kind, where the review mark starts at 0).
+const commentRecoveryWindow = 24 * time.Hour
+
 // sweepMissedComments recovers PR comments (issue + review) whose live webhook the
 // daemon missed while offline. It re-lists recent comments and emits new_comment for
-// each non-self one; the engine's per-PR comment high-water mark (advanced on a
-// successful new_comment dispatch) drops any already handled, so only genuinely-newer
-// comments dispatch. Only runs when new_comment is configured (avoids the extra
-// fetch), and only on your own PRs (new_comment autopilot pushes fixes to PRs you
-// authored — matching the webhook gate in commentTriggers).
+// each non-self one within commentRecoveryWindow; the engine's per-PR, per-kind
+// comment high-water mark (advanced on a successful new_comment dispatch) drops any
+// already handled, so only genuinely-newer comments dispatch. Only runs when
+// new_comment is configured (avoids the extra fetch), and only on your own PRs
+// (new_comment autopilot pushes fixes to PRs you authored — matching the webhook
+// gate in commentTriggers).
 func (g *Integration) sweepMissedComments(ctx context.Context, instID int64, owner, name, repo string, t core.Target, headRef string) []core.Trigger {
 	act, ok := g.actionFor(repo, "new_comment")
 	if !ok || !act.IsEnabled() {
@@ -360,13 +369,18 @@ func (g *Integration) sweepMissedComments(ctx context.Context, instID int64, own
 	if err != nil || len(comments) == 0 {
 		return nil
 	}
+	cutoff := time.Now().Add(-commentRecoveryWindow)
 	var out []core.Trigger
 	for _, c := range comments {
 		author := strings.ToLower(c.User.Login)
 		if g.self[author] {
 			continue // our own comments never drive a fix
 		}
-		extra := map[string]any{"author": c.User.Login, "comment_body": c.Body, "head_ref": headRef, "comment_id": c.ID}
+		if !c.CreatedAt.IsZero() && c.CreatedAt.Before(cutoff) {
+			continue // too old to be a "missed while offline" comment
+		}
+		extra := map[string]any{"author": c.User.Login, "comment_body": c.Body, "head_ref": headRef,
+			"comment_id": c.ID, "comment_kind": c.Kind}
 		trs := g.emit(repo, "new_comment", t,
 			fmt.Sprintf("sweep: comment by %s on %s#%d", c.User.Login, repo, t.Number),
 			fmt.Sprintf("comment:%d", c.ID), extra, func(act config.Action) bool {

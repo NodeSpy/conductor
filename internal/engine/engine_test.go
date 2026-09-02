@@ -206,6 +206,15 @@ func TestDedupSkipsRepeat(t *testing.T) {
 func commentTrigger(repo string, num int, id int64, sig string, act config.Action) core.Trigger {
 	tr := agentTrigger("new_comment", repo, num, "h", sig, act)
 	tr.Context["comment_id"] = id
+	tr.Context["comment_kind"] = store.CommentKindIssue
+	return tr
+}
+
+// reviewCommentTrigger is commentTrigger for an inline review comment (its own id
+// sequence, so its own high-water mark).
+func reviewCommentTrigger(repo string, num int, id int64, sig string, act config.Action) core.Trigger {
+	tr := commentTrigger(repo, num, id, sig, act)
+	tr.Context["comment_kind"] = store.CommentKindReview
 	return tr
 }
 
@@ -219,7 +228,7 @@ func TestCommentHWMAdvancesOnDispatch(t *testing.T) {
 	if len(d.reqs) != 1 {
 		t.Fatalf("want 1 dispatch, got %d", len(d.reqs))
 	}
-	if got := st.LastCommentID("a/w#1"); got != 100 {
+	if got := st.LastCommentID("a/w#1", store.CommentKindIssue); got != 100 {
 		t.Fatalf("HWM should be 100, got %d", got)
 	}
 }
@@ -228,7 +237,7 @@ func TestCommentHWMSkipsAlreadyHandled(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, baseCfg(), d, n, nil)
 	act := config.Action{Type: "agent", Agent: "fixer"}
-	if err := st.AdvanceCommentID("a/w#1", 200); err != nil {
+	if err := st.AdvanceCommentID("a/w#1", store.CommentKindIssue, 200); err != nil {
 		t.Fatal(err)
 	}
 
@@ -243,8 +252,55 @@ func TestCommentHWMSkipsAlreadyHandled(t *testing.T) {
 	if len(d.reqs) != 1 {
 		t.Fatalf("newer comment should dispatch, got %d", len(d.reqs))
 	}
-	if got := st.LastCommentID("a/w#1"); got != 250 {
+	if got := st.LastCommentID("a/w#1", store.CommentKindIssue); got != 250 {
 		t.Fatalf("HWM should advance to 250, got %d", got)
+	}
+}
+
+// Regression: GitHub issue-comment ids and review-comment ids are separate
+// sequences, with issue ids far ahead. A CI bot's conversation comment must not
+// raise a mark that then swallows every later inline review comment on the PR.
+func TestCommentHWMIsPerKind(t *testing.T) {
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, st := newEng(t, baseCfg(), d, n, nil)
+	act := config.Action{Type: "agent", Agent: "fixer"}
+
+	// 1. github-actions[bot] posts a test report (issue comment, high id).
+	e.process(context.Background(), commentTrigger("a/w", 1, 5515854542, "c5515854542", act))
+	// 2. A reviewer leaves two inline comments (review comments, much lower ids).
+	e.process(context.Background(), reviewCommentTrigger("a/w", 1, 3918412084, "c3918412084", act))
+	e.process(context.Background(), reviewCommentTrigger("a/w", 1, 3918412099, "c3918412099", act))
+	if len(d.reqs) != 3 {
+		t.Fatalf("review comments must dispatch despite a higher issue-comment mark; want 3 dispatches, got %d", len(d.reqs))
+	}
+	if got := st.LastCommentID("a/w#1", store.CommentKindIssue); got != 5515854542 {
+		t.Fatalf("issue mark should be 5515854542, got %d", got)
+	}
+	if got := st.LastCommentID("a/w#1", store.CommentKindReview); got != 3918412099 {
+		t.Fatalf("review mark should be 3918412099, got %d", got)
+	}
+	// Each kind still dedups against its own mark.
+	e.process(context.Background(), reviewCommentTrigger("a/w", 1, 3918412084, "c3918412084", act))
+	e.process(context.Background(), commentTrigger("a/w", 1, 5515854542, "c5515854542", act))
+	if len(d.reqs) != 3 {
+		t.Fatalf("re-delivered comments at/under their kind's mark should be skipped, got %d dispatches", len(d.reqs))
+	}
+}
+
+// A trigger without comment_kind (persisted/emitted before kinds existed) gates
+// against the issue mark, matching the old single-mark behavior.
+func TestCommentHWMKindDefaultsToIssue(t *testing.T) {
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, st := newEng(t, baseCfg(), d, n, nil)
+	act := config.Action{Type: "agent", Agent: "fixer"}
+	if err := st.AdvanceCommentID("a/w#1", store.CommentKindIssue, 200); err != nil {
+		t.Fatal(err)
+	}
+	tr := commentTrigger("a/w", 1, 150, "c150", act)
+	delete(tr.Context, "comment_kind")
+	e.process(context.Background(), tr)
+	if len(d.reqs) != 0 {
+		t.Fatalf("kind-less comment under the issue mark should be skipped, got %d dispatches", len(d.reqs))
 	}
 }
 

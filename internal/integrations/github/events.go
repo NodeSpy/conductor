@@ -9,6 +9,7 @@ import (
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/paseo-conductor/internal/store"
 )
 
 // failureConclusions are check conclusions we treat as "failing".
@@ -318,7 +319,14 @@ func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []cor
 		return nil // ignore our own comments
 	}
 	t := g.target(repo, num, head, base, url)
-	extra := map[string]any{"author": p.Comment.User.Login, "comment_body": p.Comment.Body, "head_ref": headRef, "comment_id": p.Comment.ID}
+	// comment_kind picks the engine's per-kind high-water mark: inline review
+	// comments and conversation comments are separate GitHub id sequences.
+	kind := store.CommentKindIssue
+	if eventType == "pull_request_review_comment" {
+		kind = store.CommentKindReview
+	}
+	extra := map[string]any{"author": p.Comment.User.Login, "comment_body": p.Comment.Body, "head_ref": headRef,
+		"comment_id": p.Comment.ID, "comment_kind": kind}
 	// Each variant may set its own from_users filter (empty = any commenter).
 	return g.emit(repo, "new_comment", t,
 		fmt.Sprintf("new comment by %s on %s#%d", p.Comment.User.Login, repo, num),
