@@ -111,6 +111,60 @@ func TestValidateRejectsNoIntegrations(t *testing.T) {
 	}
 }
 
+func TestLoadUndefinedEnvVarFails(t *testing.T) {
+	os.Unsetenv("TEST_WH_SECRET")
+	os.Unsetenv("TEST_SMEE_URL")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := strings.Replace(sample, "smee_url: https://smee.io/abc", "smee_url: ${TEST_SMEE_URL}", 1)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for undefined ${VAR} references")
+	}
+	// Names every missing variable (once) and points at the sibling conductor.env.
+	for _, want := range []string{"TEST_WH_SECRET", "TEST_SMEE_URL", filepath.Join(dir, "conductor.env")} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error should mention %q, got: %v", want, err)
+		}
+	}
+	if strings.Count(err.Error(), "TEST_WH_SECRET") != 1 {
+		t.Fatalf("variable should be listed once, got: %v", err)
+	}
+
+	// Set-but-empty is intentional (KEY= in conductor.env) and must not error.
+	t.Setenv("TEST_WH_SECRET", "")
+	t.Setenv("TEST_SMEE_URL", "")
+	if _, err := Load(path); err != nil {
+		t.Fatalf("set-but-empty variables should load: %v", err)
+	}
+}
+
+func TestImportsUndefinedEnvVarFails(t *testing.T) {
+	os.Unsetenv("TEST_IMPORTED_SECRET")
+	dir := t.TempDir()
+	imported := filepath.Join(dir, "gh.yaml")
+	if err := os.WriteFile(imported, []byte(`
+integrations:
+  - type: github
+    name: gh
+    app: { app_id: 1, private_key_path: ~/k.pem, webhook_secret: ${TEST_IMPORTED_SECRET} }
+    webhook: { smee_url: https://smee.io/x }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	main := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(main, []byte("imports: [gh.yaml]\nagents:\n  fixer: { provider: claude }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(main)
+	if err == nil || !strings.Contains(err.Error(), "TEST_IMPORTED_SECRET") || !strings.Contains(err.Error(), imported) {
+		t.Fatalf("expected error naming the variable and the imported file, got: %v", err)
+	}
+}
+
 func TestImportsMergeAndConcat(t *testing.T) {
 	os.Setenv("TEST_WH_SECRET", "shhh")
 	defer os.Unsetenv("TEST_WH_SECRET")

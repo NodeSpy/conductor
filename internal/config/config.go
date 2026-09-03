@@ -506,7 +506,10 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	expanded := expandEnv(raw)
+	expanded, err := expandEnv(path, raw)
+	if err != nil {
+		return nil, err
+	}
 
 	// Cheap probe: no `imports:` → parse the single file directly (unchanged path,
 	// no map round-trip). Only pay the merge machinery when imports are used.
@@ -564,8 +567,12 @@ func loadMerged(p string, loaded map[string]bool) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", p, err)
 	}
+	expanded, err := expandEnv(p, raw)
+	if err != nil {
+		return nil, err
+	}
 	var m map[string]any
-	if err := yaml.Unmarshal(expandEnv(raw), &m); err != nil {
+	if err := yaml.Unmarshal(expanded, &m); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", p, err)
 	}
 	if m == nil {
@@ -646,12 +653,28 @@ func mergeMaps(dst, src map[string]any) map[string]any {
 var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 // expandEnv replaces ${VAR} (brace form only) with the environment value, so a
-// bare "$" in prompts is left untouched.
-func expandEnv(b []byte) []byte {
-	return envRe.ReplaceAllFunc(b, func(m []byte) []byte {
-		name := envRe.FindSubmatch(m)[1]
-		return []byte(os.Getenv(string(name)))
+// bare "$" in prompts is left untouched. Referencing a variable that is not set
+// at all is an error — silently expanding it to "" would turn a missing
+// conductor.env into a confusing downstream failure (e.g. "webhook_secret
+// required") instead of naming the variable. A variable that is set but empty
+// (KEY= in conductor.env) is deliberate and expands to "".
+func expandEnv(path string, b []byte) ([]byte, error) {
+	var missing []string
+	seen := map[string]bool{}
+	out := envRe.ReplaceAllFunc(b, func(m []byte) []byte {
+		name := string(envRe.FindSubmatch(m)[1])
+		v, ok := os.LookupEnv(name)
+		if !ok && !seen[name] {
+			seen[name] = true
+			missing = append(missing, name)
+		}
+		return []byte(v)
 	})
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("config %s references undefined environment variable(s): %s (define them in %s or the environment)",
+			path, strings.Join(missing, ", "), filepath.Join(filepath.Dir(path), "conductor.env"))
+	}
+	return out, nil
 }
 
 func (c *Config) applyDefaults() {
