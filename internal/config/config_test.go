@@ -403,7 +403,7 @@ func TestHandoffsNoBlockIsValid(t *testing.T) {
 func TestHandoffsValidBlock(t *testing.T) {
 	c := ctrlBaseCfg()
 	c.Handoffs = map[string]HandoffConfig{
-		"phone": {Slack: &HandoffChat{To: "dm"}, Default: true},
+		"phone": {Slack: &HandoffChat{To: "dm", User: "U123ABCD", BotToken: "xoxb-x"}, Default: true},
 		"page":  {Web: &HandoffWeb{BaseURL: "https://conductor.example.com"}},
 		"pager": {Discord: &HandoffChat{To: "thread", Channel: "C1"}},
 	}
@@ -439,6 +439,57 @@ func TestHandoffsTwoDefaultsRejected(t *testing.T) {
 	}
 	if err := c.Validate(); err == nil {
 		t.Fatal("two default:true handoffs must be rejected")
+	}
+}
+
+func TestHandoffsSlackToInvalid(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"x": {Slack: &HandoffChat{To: "channel", Channel: "C1", BotToken: "xoxb-x"}},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("slack.to must be dm|thread — an unknown value must be rejected")
+	}
+}
+
+func TestHandoffsSlackThreadRequiresChannel(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"x": {Slack: &HandoffChat{To: "thread", BotToken: "xoxb-x"}},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("slack.to: thread with no channel must be rejected")
+	}
+}
+
+func TestHandoffsSlackDMRequiresUser(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"x": {Slack: &HandoffChat{To: "dm", BotToken: "xoxb-x"}},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("slack.to: dm with no user must be rejected")
+	}
+}
+
+func TestHandoffsSlackRequiresBotToken(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"x": {Slack: &HandoffChat{To: "dm", User: "U123ABCD"}},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("slack with no bot_token must be rejected")
+	}
+}
+
+func TestHandoffsSlackValidDMAndThread(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"phone":   {Slack: &HandoffChat{To: "dm", User: "U123ABCD", BotToken: "xoxb-x"}},
+		"warroom": {Slack: &HandoffChat{To: "thread", Channel: "C0456", BotToken: "xoxb-x"}},
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid dm and thread slack handoffs should pass, got %v", err)
 	}
 }
 

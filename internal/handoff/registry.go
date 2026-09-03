@@ -8,11 +8,11 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 )
 
-// ErrNotWired is returned by a chat (Slack/Discord) hand-off channel's Present
-// until that channel's implementation lands: the `handoffs:` config schema for
-// slack/discord is stable now (decodes, validates, resolves), but only the web
-// channel actually presents a draft in this build.
-var ErrNotWired = errors.New("handoff channel not wired in this build (slack/discord land in a later increment)")
+// ErrNotWired is returned by a chat (Discord) hand-off channel's Present until
+// that channel's implementation lands: the `handoffs:` config schema for
+// discord is stable now (decodes, validates, resolves), but only web and slack
+// actually present a draft in this build.
+var ErrNotWired = errors.New("handoff channel not wired in this build (discord lands in a later increment)")
 
 // WebEntry pairs a configured web hand-off channel with the inbound listen
 // address it should be mounted on, so the caller (main.go) can register one
@@ -30,6 +30,13 @@ type Registry struct {
 	channels    map[string]Channel // user-configured, by name
 	defaultName string             // the entry flagged default:true, or ""
 	webEntries  []WebEntry
+
+	// slackInbox is shared by every configured `slack:` hand-off entry, so a
+	// single slack.SetReplyHook wiring in main.go feeds replies to all of them.
+	// hasSlack tracks whether any entry actually uses it (SlackInbox returns nil
+	// otherwise, so main.go doesn't wire a hook nobody needs).
+	slackInbox *Inbox
+	hasSlack   bool
 }
 
 // NewRegistry builds the hand-off channel set from config. Config is assumed
@@ -42,17 +49,32 @@ func NewRegistry(cfgs map[string]config.HandoffConfig, defaultName string, log f
 	r := &Registry{
 		channels:    make(map[string]Channel, len(cfgs)),
 		defaultName: defaultName,
+		slackInbox:  NewInbox(),
 	}
 	for name, hc := range cfgs {
-		ch := buildChannel(name, hc, log)
+		ch := buildChannel(name, hc, r.slackInbox, log)
 		r.channels[name] = ch
 		if hc.Web != nil {
 			if w, ok := ch.(*WebChannel); ok {
 				r.webEntries = append(r.webEntries, WebEntry{Name: name, Listen: webListen(hc.Web), Chan: w})
 			}
 		}
+		if hc.Slack != nil {
+			r.hasSlack = true
+		}
 	}
 	return r
+}
+
+// SlackInbox returns the Inbox shared by every configured `slack:` hand-off
+// entry, or nil when none is configured. main.go wires this to
+// slack.SetReplyHook so the Socket Mode integration feeds replies into it — see
+// cmd/paseo-conductor/main.go.
+func (r *Registry) SlackInbox() *Inbox {
+	if !r.hasSlack {
+		return nil
+	}
+	return r.slackInbox
 }
 
 // webListen returns the entry's configured listen address, defaulting to
@@ -65,11 +87,13 @@ func webListen(w *config.HandoffWeb) string {
 }
 
 // buildChannel constructs one hand-off channel from its config: a Web entry
-// builds a real *WebChannel wired to its tunnel (see NewTunnel); a Slack/Discord
-// entry (schema only in this build) builds a stub whose Present always fails
-// with ErrNotWired, so the config resolves and the failure is loud and specific
-// rather than a nil dereference.
-func buildChannel(name string, hc config.HandoffConfig, log func(string, ...any)) Channel {
+// builds a real *WebChannel wired to its tunnel (see NewTunnel); a Slack entry
+// builds a real *SlackChannel (dm or thread, per hc.Slack.To) sharing
+// slackInbox with every other slack entry; a Discord entry (schema only in this
+// build) builds a stub whose Present always fails with ErrNotWired, so the
+// config resolves and the failure is loud and specific rather than a nil
+// dereference.
+func buildChannel(name string, hc config.HandoffConfig, slackInbox *Inbox, log func(string, ...any)) Channel {
 	switch {
 	case hc.Web != nil:
 		w := NewWebChannel(hc.Web.BaseURL, hc.Web.TTL.D(), log)
@@ -84,9 +108,21 @@ func buildChannel(name string, hc config.HandoffConfig, log func(string, ...any)
 			w.SetTunnel(t, webListen(hc.Web))
 		}
 		return w
+	case hc.Slack != nil:
+		// config.Validate already guards `to`/channel/user/bot_token, so this
+		// only fires when a caller builds a Registry from unvalidated config.
+		if hc.Slack.To != "dm" && hc.Slack.To != "thread" {
+			log("handoff %s: slack.to must be dm|thread, got %q; hand-off will fail on use", name, hc.Slack.To)
+			return notWiredChannel{name: name}
+		}
+		poster := NewWebAPIPoster(hc.Slack.BotToken)
+		if hc.Slack.To == "dm" {
+			return NewSlackDMChannel(poster, poster, hc.Slack.User, slackInbox, log)
+		}
+		return NewSlackChannel(poster, hc.Slack.Channel, slackInbox, log)
 	default:
-		// hc.Slack != nil or hc.Discord != nil (config.Validate already rejected
-		// anything else, i.e. zero or more than one channel sub-block set).
+		// hc.Discord != nil (config.Validate already rejected anything else, i.e.
+		// zero or more than one channel sub-block set).
 		return notWiredChannel{name: name}
 	}
 }
@@ -123,9 +159,11 @@ func (r *Registry) Resolve(name string) (Channel, error) {
 	return nil, nil
 }
 
-// notWiredChannel is a placeholder for a configured Slack/Discord hand-off whose
-// implementation hasn't landed yet. It satisfies Channel so the registry and its
-// resolution order are fully exercisable today; only Present is refused.
+// notWiredChannel is a placeholder for a configured Discord hand-off whose
+// implementation hasn't landed yet (or, defensively, a slack entry with an
+// invalid `to` that skipped config.Validate). It satisfies Channel so the
+// registry and its resolution order are fully exercisable today; only Present
+// is refused.
 type notWiredChannel struct{ name string }
 
 func (c notWiredChannel) Present(context.Context, Draft) (Presentation, error) {
