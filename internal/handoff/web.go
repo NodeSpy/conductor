@@ -2,12 +2,24 @@ package handoff
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"html/template"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
+
+// defaultTTL is how long a presented draft's link stays valid when no TTL is
+// configured.
+const defaultTTL = 30 * time.Minute
+
+// tokenBytes is the amount of crypto-random entropy in a generated draft id
+// (192 bits, base64url-encoded) — the URL is the capability, so this is sized
+// like a bearer token, not a display id.
+const tokenBytes = 24
 
 // WebChannel serves each draft as a page on conductor's inbound HTTP listener and
 // captures your call from it. GET /handoff?id=<id> renders the draft with a text
@@ -18,57 +30,112 @@ import (
 //
 // The link the caller surfaces to you is BaseURL + "/handoff?id=<id>"; BaseURL is
 // the public origin conductor is reachable at (e.g. https://conductor.example.com).
+// The id is a crypto-random token (see newID) — the URL itself is the capability
+// — and each pending draft carries a server-side TTL deadline (see webPending).
 type WebChannel struct {
 	baseURL string
+	ttl     time.Duration
 	log     func(string, ...any)
 
 	mu      sync.Mutex
-	seq     int
 	pending map[string]*webPending
 }
 
 type webPending struct {
-	draft Draft
-	done  chan Decision
-	once  sync.Once
+	draft   Draft
+	done    chan Decision
+	once    sync.Once
+	expires time.Time // zero = never expires
 }
 
 // NewWebChannel builds a web-link channel. baseURL is the public origin the draft
-// links point at (trailing slash trimmed); log may be nil.
-func NewWebChannel(baseURL string, log func(string, ...any)) *WebChannel {
+// links point at (trailing slash trimmed). ttl is how long a presented draft's
+// link stays valid before it's treated as expired (<=0 uses defaultTTL — tests
+// that need deterministic expiry should pass a short explicit ttl rather than
+// relying on the default). log may be nil.
+func NewWebChannel(baseURL string, ttl time.Duration, log func(string, ...any)) *WebChannel {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
+	if ttl <= 0 {
+		ttl = defaultTTL
+	}
 	return &WebChannel{
 		baseURL: strings.TrimRight(baseURL, "/"),
+		ttl:     ttl,
 		log:     log,
 		pending: map[string]*webPending{},
 	}
 }
 
 // Present registers the draft and returns a Presentation whose Ref is the page
-// link. Await blocks until a POST resolves it (or ctx is cancelled).
-func (c *WebChannel) Present(_ context.Context, d Draft) (Presentation, error) {
+// link. Await blocks until a POST resolves it, the ttl elapses, or ctx is
+// cancelled.
+func (c *WebChannel) Present(ctx context.Context, d Draft) (Presentation, error) {
 	c.mu.Lock()
-	c.seq++
 	if d.ID == "" {
-		d.ID = fmt.Sprintf("h%d", c.seq)
+		id, err := c.newID()
+		if err != nil {
+			c.mu.Unlock()
+			return nil, fmt.Errorf("handoff: generate draft id: %w", err)
+		}
+		d.ID = id
 	}
-	p := &webPending{draft: d, done: make(chan Decision, 1)}
+	expires := time.Now().Add(c.ttl)
+	p := &webPending{draft: d, done: make(chan Decision, 1), expires: expires}
 	c.pending[d.ID] = p
 	c.mu.Unlock()
-	c.log("handoff: draft %s presented at %s", d.ID, c.link(d.ID))
-	return &webPresentation{c: c, id: d.ID, ref: c.link(d.ID)}, nil
+	// origin is computed per-Present so a future per-draft tunnel origin (a
+	// fresh public URL per hand-off) slots in here without reshaping the caller.
+	origin := c.origin(ctx, d)
+	ref := c.link(origin, d.ID)
+	c.log("handoff: draft %s presented at %s (expires %s)", d.ID, ref, expires.Format(time.RFC3339))
+	return &webPresentation{c: c, id: d.ID, ref: ref, expires: expires}, nil
 }
 
-func (c *WebChannel) link(id string) string {
-	return c.baseURL + "/handoff?id=" + id
+// origin returns the public origin a draft's link is served at. Always baseURL
+// today; a future per-hand-off tunnel computes a fresh origin per call here
+// instead.
+func (c *WebChannel) origin(context.Context, Draft) string {
+	return c.baseURL
 }
 
+// newID returns a fresh crypto-random, base64url-encoded draft id. Caller must
+// hold c.mu. Retries on the astronomically unlikely event of a collision with an
+// already-pending id.
+func (c *WebChannel) newID() (string, error) {
+	for i := 0; i < 5; i++ {
+		b := make([]byte, tokenBytes)
+		if _, err := rand.Read(b); err != nil {
+			return "", err
+		}
+		id := base64.RawURLEncoding.EncodeToString(b)
+		if _, exists := c.pending[id]; !exists {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("could not generate a unique draft id")
+}
+
+func (c *WebChannel) link(origin, id string) string {
+	return origin + "/handoff?id=" + id
+}
+
+// get returns the pending draft for id, or nil if it's unknown OR has expired —
+// an expired entry is swept (and removed) on this access rather than by a
+// background goroutine.
 func (c *WebChannel) get(id string) *webPending {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.pending[id]
+	p, ok := c.pending[id]
+	if !ok {
+		return nil
+	}
+	if !p.expires.IsZero() && !time.Now().Before(p.expires) {
+		delete(c.pending, id)
+		return nil
+	}
+	return p
 }
 
 func (c *WebChannel) remove(id string) {
@@ -178,21 +245,39 @@ func (c *WebChannel) renderDone(w http.ResponseWriter, msg string) {
 
 // webPresentation is one draft awaiting a decision from the web page.
 type webPresentation struct {
-	c   *WebChannel
-	id  string
-	ref string
+	c       *WebChannel
+	id      string
+	ref     string
+	expires time.Time
 }
 
 func (p *webPresentation) Ref() string { return p.ref }
 
+// Await blocks until a POST resolves the draft, the TTL deadline passes (this is
+// the backstop for a client that never polls/POSTs again, so a stale link doesn't
+// wait forever), or ctx is cancelled.
 func (p *webPresentation) Await(ctx context.Context) (Decision, error) {
 	pend := p.c.get(p.id)
 	if pend == nil {
-		return Decision{}, fmt.Errorf("handoff %s: no pending draft", p.id)
+		return Decision{}, fmt.Errorf("handoff %s: no pending draft (already decided or expired)", p.id)
+	}
+	var expiredCh <-chan time.Time
+	if !p.expires.IsZero() {
+		remaining := time.Until(p.expires)
+		if remaining <= 0 {
+			p.c.remove(p.id)
+			return Decision{}, fmt.Errorf("handoff %s: draft expired", p.id)
+		}
+		timer := time.NewTimer(remaining)
+		defer timer.Stop()
+		expiredCh = timer.C
 	}
 	select {
 	case <-ctx.Done():
 		return Decision{}, ctx.Err()
+	case <-expiredCh:
+		p.c.remove(p.id)
+		return Decision{}, fmt.Errorf("handoff %s: draft expired", p.id)
 	case d := <-pend.done:
 		return d, nil
 	}

@@ -156,11 +156,27 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			// or hold marker for the reaper to observe), then hand it to you.
 			e.hold.Add(ref.AgentID)
 			e.log("%s step %s launched in background after %s (agent %s)", tag(t), id, took, ref.AgentID)
-			// With a HandoffChannel configured, rewire the review over the session
+			// Resolve the step's hand-off channel (explicit `handoff:` name → the
+			// default:true entry → the sole configured entry). A step naming an
+			// unknown handoff is caught by config validation before a live trigger
+			// ever reaches here, but resolve defensively and escalate rather than
+			// silently falling back if it somehow does.
+			var handoffCh handoff.Channel
+			if e.handoffs != nil {
+				ch, herr := e.handoffs.Resolve(s.Handoff)
+				if herr != nil {
+					e.log("%s step %s handoff %q: %v", tag(t), id, s.Handoff, herr)
+					e.notif.Emit(ctx, notify.EventEscalate, t,
+						fmt.Sprintf("workflow step %q: handoff %q: %v", id, s.Handoff, herr))
+				}
+				handoffCh = ch
+			}
+			// With a hand-off channel resolved, rewire the review over the session
 			// broker + channel (present → await → revise/submit), controller-agnostic.
-			// Without one, keep today's behavior: tell you to drive the agent in paseo.
-			if e.handoff != nil && e.broker != nil && ref.AgentID != "" {
-				e.startReviewHandoff(ctx, t, id, profile, ref.AgentID)
+			// Without one (none configured, or resolution came up empty), keep today's
+			// behavior: tell you to drive the agent in paseo.
+			if handoffCh != nil && e.broker != nil && ref.AgentID != "" {
+				e.startReviewHandoff(ctx, t, id, profile, ref.AgentID, handoffCh)
 			} else {
 				e.notif.Emit(ctx, notify.EventNeedsInput, t,
 					fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
@@ -189,14 +205,15 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 }
 
 // startReviewHandoff rewires an interactive review hand-off onto the session
-// broker + HandoffChannel: it binds the just-launched agent as the PR's broker
-// session (so a follow-up funnels to it and the hand-off survives a restart), then
-// runs the present → await → revise/submit loop on the configured channel in the
-// background — controller-agnostic, driving the live session via Prompt (for the
-// paseo controller, `paseo send`). If the controller can't be resolved or the
-// agent can't be bound, it falls back to today's behavior (notify you to open the
-// agent in paseo). Only invoked when a channel and broker are configured.
-func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID string, profile config.AgentProfile, agentID string) {
+// broker + the step's resolved hand-off channel: it binds the just-launched
+// agent as the PR's broker session (so a follow-up funnels to it and the
+// hand-off survives a restart), then runs the present → await → revise/submit
+// loop on ch in the background — controller-agnostic, driving the live session
+// via Prompt (for the paseo controller, `paseo send`). If the controller can't be
+// resolved or the agent can't be bound, it falls back to today's behavior
+// (notify you to open the agent in paseo). Only invoked when ch and the broker
+// are configured.
+func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID string, profile config.AgentProfile, agentID string, ch handoff.Channel) {
 	fallback := func(reason string) {
 		if reason != "" {
 			e.log("%s review hand-off: %s — leaving agent %s live in paseo", tag(t), reason, agentID)
@@ -214,7 +231,7 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID 
 		e.notif.Emit(ctx, notify.EventNeedsInput, t,
 			fmt.Sprintf("review for %q is ready — approve/revise/discard here: %s", stepID, ref))
 	}
-	handler := handoff.NewHandler(e.handoff, notifyRef)
+	handler := handoff.NewHandler(ch, notifyRef)
 	sess, err := c.ResumeSession(ctx, agentID, handler)
 	if err != nil {
 		fallback(fmt.Sprintf("bind agent %s: %v", agentID, err))
@@ -229,7 +246,7 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID 
 		Number: t.Target.Number,
 	}
 	go func() {
-		dec, rerr := handoff.Review(ctx, sess, e.handoff, draft, notifyRef)
+		dec, rerr := handoff.Review(ctx, sess, ch, draft, notifyRef)
 		if rerr != nil {
 			if ctx.Err() == nil {
 				e.log("%s review hand-off loop for %q ended: %v", tag(t), stepID, rerr)

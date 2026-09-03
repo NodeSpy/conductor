@@ -12,6 +12,7 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/paseo-conductor/internal/handoff"
 	"github.com/NodeSpy/paseo-conductor/internal/notify"
 	"github.com/NodeSpy/paseo-conductor/internal/store"
 )
@@ -194,6 +195,67 @@ func TestWorkflowBackgroundStepNotReapable(t *testing.T) {
 
 	if d.archive["handoff"] {
 		t.Fatal("background hand-off must dispatch with ArchiveWhenDone=false so the reaper can't cull it")
+	}
+}
+
+// TestWorkflowBackgroundStepUnknownHandoffEscalates covers a step naming a
+// `handoff:` the registry doesn't have (config validation should normally catch
+// this before a live trigger reaches here — see config.CheckAgentRefs — but the
+// engine must still fail loudly rather than silently, if it somehow does).
+func TestWorkflowBackgroundStepUnknownHandoffEscalates(t *testing.T) {
+	d := newStepFake()
+	n := &fakeNotifier{}
+	cfg := &config.Config{Agents: map[string]config.AgentProfile{
+		"interactive": {Provider: "claude-sonnet"},
+	}}
+	cfg.Control.Enabled = ptrBool(true)
+	reg := handoff.NewRegistry(nil, "", nil) // no entries at all
+	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n, Handoffs: reg,
+		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+
+	act := config.Action{Steps: []config.Action{
+		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true,
+			Handoff: "does-not-exist", Prompt: "draft and hand off {{.issue}}"},
+	}}
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, "app", "usr", false)
+
+	if !n.has(notify.EventEscalate) {
+		t.Fatalf("an unresolvable handoff name should escalate, got %v", n.events)
+	}
+	// It must still fall back to the standard "open it in paseo" needs_input, same
+	// as when no handoff is configured at all.
+	if !n.has(notify.EventNeedsInput) {
+		t.Fatalf("should still fall back to needs_input, got %v", n.events)
+	}
+}
+
+// TestWorkflowBackgroundStepHandoffResolvesButNoBrokerFallsBack: a real handoff
+// resolves cleanly, but with no session broker configured the engine can't rewire
+// the review loop, so it must keep today's plain fallback (no escalate).
+func TestWorkflowBackgroundStepHandoffResolvesButNoBrokerFallsBack(t *testing.T) {
+	d := newStepFake()
+	n := &fakeNotifier{}
+	cfg := &config.Config{Agents: map[string]config.AgentProfile{
+		"interactive": {Provider: "claude-sonnet"},
+	}}
+	cfg.Control.Enabled = ptrBool(true)
+	reg := handoff.NewRegistry(map[string]config.HandoffConfig{
+		"page": {Web: &config.HandoffWeb{BaseURL: "https://conductor.example.com"}},
+	}, "", nil)
+	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n, Handoffs: reg,
+		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+
+	act := config.Action{Steps: []config.Action{
+		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true,
+			Handoff: "page", Prompt: "draft and hand off {{.issue}}"},
+	}}
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, "app", "usr", false)
+
+	if n.has(notify.EventEscalate) {
+		t.Fatalf("a resolvable handoff with no broker should not escalate, got %v", n.events)
+	}
+	if !n.has(notify.EventNeedsInput) {
+		t.Fatalf("should fall back to needs_input (no broker to rewire the review loop), got %v", n.events)
 	}
 }
 

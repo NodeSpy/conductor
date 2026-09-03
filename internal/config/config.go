@@ -31,11 +31,18 @@ type Config struct {
 	Integrations []IntegrationRef `yaml:"integrations"`
 	Control      Control          `yaml:"control"`
 	Notify       Notify           `yaml:"notify"`
-	// Handoff configures the optional portable interactive-review channel (a
-	// web-link page on the inbound listener). Absent → the review hand-off stays
-	// paseo-native (you drive the agent in paseo), unchanged.
-	Handoff Handoff                 `yaml:"handoff"`
-	Agents  map[string]AgentProfile `yaml:"agents"`
+	// Handoff is the LEGACY singular hand-off block (a web-link page on the inbound
+	// listener). Deprecated in favor of `handoffs:` (below); still parsed for
+	// back-compat and folded into Handoffs["default"] by applyDefaults when
+	// `handoffs:` is empty. New configs should use `handoffs:` directly.
+	Handoff Handoff `yaml:"handoff"`
+	// Handoffs is an OPTIONAL named map of interactive-review hand-off channels
+	// (web-link, Slack, Discord) a `background: true` workflow step can present its
+	// draft on. Entirely optional: with no `handoffs:` block (and no legacy
+	// `handoff:` block), an interactive review stays paseo-native (you drive the
+	// agent in paseo), unchanged. See HandoffConfig and internal/handoff.
+	Handoffs map[string]HandoffConfig `yaml:"handoffs"`
+	Agents   map[string]AgentProfile  `yaml:"agents"`
 	// Controllers is an OPTIONAL map of named agent runtimes conductor can
 	// dispatch through (paseo, an ACP agent, opencode, …). Entirely optional: with
 	// no `controllers:` block, every agent uses the built-in paseo controller and
@@ -127,10 +134,29 @@ func (c Control) AgentCap() int {
 	return *c.MaxConcurrentAgents
 }
 
-// Handoff configures the interactive-review hand-off channel(s). Optional — with
-// no `handoff:` block, an interactive review keeps today's paseo-native behavior.
+// Handoff is the legacy singular hand-off block. Deprecated — see Config.Handoff.
 type Handoff struct {
 	Web HandoffWeb `yaml:"web"` // web-link channel served on the inbound HTTP listener
+}
+
+// HandoffConfig is one entry in the `handoffs:` named map (mirrors
+// ControllerConfig/`controllers:`). Exactly one of Web/Slack/Discord must be set;
+// Default flags the entry a step's `handoff:` resolves to when it names none
+// explicitly. See internal/handoff.Registry for resolution order.
+type HandoffConfig struct {
+	// Web configures a web-link draft page served on conductor's inbound HTTP
+	// listener. Mutually exclusive with Slack/Discord.
+	Web *HandoffWeb `yaml:"web"`
+	// Slack configures a Slack DM/thread hand-off. SCHEMA ONLY in this build —
+	// decodes and validates, but a step resolved to it fails with
+	// handoff.ErrNotWired until the Slack increment lands.
+	Slack *HandoffChat `yaml:"slack"`
+	// Discord configures a Discord DM/thread hand-off. SCHEMA ONLY in this build —
+	// see Slack above; wired in a later increment.
+	Discord *HandoffChat `yaml:"discord"`
+	// Default flags this hand-off as the fleet default, used when a step sets no
+	// explicit `handoff:`. At most one entry may set it.
+	Default bool `yaml:"default"`
 }
 
 // HandoffWeb configures the web-link hand-off channel: a draft page (approve /
@@ -143,6 +169,39 @@ type HandoffWeb struct {
 	// :8099). Shared with other inbound integrations on the same address; defaults
 	// to :8099 when a BaseURL is set but no address is given.
 	Listen string `yaml:"listen"`
+	// TTL is how long a presented draft's link stays valid before the server-side
+	// pending entry expires (default 30m when unset).
+	TTL Duration `yaml:"ttl"`
+	// Tunnel is the SCHEMA for a per-hand-off ephemeral public URL (cloudflared,
+	// ngrok, tailscale, ssh, …) — decodes and validates but has NO behavior yet;
+	// wired in a later increment. BaseURL/Listen behave exactly as today.
+	Tunnel TunnelConfig `yaml:"tunnel"`
+}
+
+// TunnelConfig is the schema for a pluggable tunnel that gives the web hand-off
+// channel a fresh public URL per draft, instead of a persistent `base_url` you
+// host yourself. SCHEMA ONLY in this build — no tunnel is opened; a later
+// increment implements Provider handling. Field shapes mirror the provider table
+// in the design (lan/static/cloudflared/ngrok/tailscale/ssh/localxpose/command).
+type TunnelConfig struct {
+	Provider   string   `yaml:"provider"`
+	Host       string   `yaml:"host"`
+	Mode       string   `yaml:"mode"`
+	SSHHost    string   `yaml:"ssh_host"`
+	Authtoken  string   `yaml:"authtoken"`
+	URLPattern string   `yaml:"url_pattern"`
+	Command    []string `yaml:"command"`
+	Account    bool     `yaml:"account"`
+}
+
+// HandoffChat is the schema for a chat-based (Slack/Discord) hand-off channel:
+// post the draft to a DM or a thread, capture the reply. SCHEMA ONLY in this
+// build — see HandoffConfig.Slack/Discord; wired in increments 3/4.
+type HandoffChat struct {
+	To       string `yaml:"to"`        // dm | thread
+	Channel  string `yaml:"channel"`   // to: thread — channel to post in
+	User     string `yaml:"user"`      // to: dm — user to message (default: your `me` identity)
+	BotToken string `yaml:"bot_token"` // bot/app token, e.g. ${SLACK_BOT_TOKEN} / ${DISCORD_BOT_TOKEN}
 }
 
 // Notify configures notifications. All channels are private to you (the daemon
@@ -276,6 +335,18 @@ func (c *Config) DefaultControllerName() string {
 	return ""
 }
 
+// DefaultHandoffName returns the name of the `handoffs:` entry flagged
+// default:true, or "" when none is (resolution then falls back to the sole
+// configured entry, or no hand-off channel at all — see internal/handoff.Registry).
+func (c *Config) DefaultHandoffName() string {
+	for name, hc := range c.Handoffs {
+		if hc.Default {
+			return name
+		}
+	}
+	return ""
+}
+
 // AgentProfile is a reusable named agent config referenced by agent actions.
 type AgentProfile struct {
 	Provider string `yaml:"provider"`
@@ -331,6 +402,11 @@ type Action struct {
 	OutputSchema map[string]any `yaml:"output_schema"` // agent step: JSON schema for structured output
 	Background   bool           `yaml:"background"`    // workflow step: dispatch `paseo run --background` and don't
 	//                                                    wait/capture — launch a live agent to drive interactively
+	// Handoff names a `handoffs:` entry (see Config.Handoffs) a background step
+	// presents its interactive review draft on. Empty resolves to the entry
+	// flagged default:true, then the sole configured entry, then no hand-off
+	// channel (paseo-native). Only meaningful on a background step.
+	Handoff string `yaml:"handoff"`
 
 	// gating actors (live on the check they gate)
 	Reviewer Actors `yaml:"reviewer"` // review_requested: whose requested review triggers it
@@ -681,6 +757,26 @@ func (c *Config) applyDefaults() {
 	if c.Update.Auto && c.Update.Interval == 0 {
 		c.Update.Interval = Duration(10 * time.Minute)
 	}
+	c.applyHandoffCompat()
+}
+
+// applyHandoffCompat folds the LEGACY singular `handoff: { web: … }` block into
+// `handoffs: { default: { web: …, default: true } }` when the new named map is
+// empty, so a config still on the old field keeps loading and resolving exactly
+// as before (a step naming no explicit `handoff:` gets this synthesized default
+// entry). A no-op once `handoffs:` is set — the new map always wins. `handoff:`
+// shipped with no known users on it yet, but the shim is cheap to keep.
+func (c *Config) applyHandoffCompat() {
+	if len(c.Handoffs) > 0 {
+		return
+	}
+	if c.Handoff.Web.BaseURL == "" && c.Handoff.Web.Listen == "" {
+		return
+	}
+	web := c.Handoff.Web
+	c.Handoffs = map[string]HandoffConfig{
+		"default": {Web: &web, Default: true},
+	}
 }
 
 // Validate checks required fields and cross-field consistency.
@@ -702,6 +798,9 @@ func (c *Config) Validate() error {
 		names[ig.Name] = true
 	}
 	if err := c.validateControllers(); err != nil {
+		return err
+	}
+	if err := c.validateHandoffs(); err != nil {
 		return err
 	}
 	for name, p := range c.Agents {
@@ -760,6 +859,53 @@ func (c *Config) controllerNames() string {
 	return strings.Join(names, ", ")
 }
 
+// validateHandoffs checks the optional `handoffs:` block: each entry sets
+// exactly one channel sub-block (web/slack/discord), and at most one entry is
+// flagged default:true. (A workflow step's `handoff:` reference is checked
+// alongside its `agent:` reference — see CheckAgentRefs/checkAgentRef, which
+// runs after the step-owning integrations are built.)
+func (c *Config) validateHandoffs() error {
+	defaults := 0
+	for name, hc := range c.Handoffs {
+		if name == "" {
+			return fmt.Errorf("config: handoffs: empty handoff name")
+		}
+		set := 0
+		if hc.Web != nil {
+			set++
+		}
+		if hc.Slack != nil {
+			set++
+		}
+		if hc.Discord != nil {
+			set++
+		}
+		if set != 1 {
+			return fmt.Errorf("config: handoff %q: set exactly one of `web`, `slack`, or `discord` (got %d)", name, set)
+		}
+		if hc.Default {
+			defaults++
+		}
+	}
+	if defaults > 1 {
+		return fmt.Errorf("config: at most one handoff may set `default: true` (%d do)", defaults)
+	}
+	return nil
+}
+
+// handoffNames lists the defined `handoffs:` names, sorted, for error messages.
+func (c *Config) handoffNames() string {
+	if len(c.Handoffs) == 0 {
+		return "none"
+	}
+	names := make([]string, 0, len(c.Handoffs))
+	for n := range c.Handoffs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
 // ActionRef is one configured action together with a human-readable location
 // (e.g. `github[ednition] rules[0].actions.review_requested`), so a cross-config
 // check can say exactly where a bad reference lives. Integrations enumerate these
@@ -790,6 +936,11 @@ func (c *Config) checkAgentRef(where string, a Action) error {
 		}
 		if _, ok := c.Agents[a.Agent]; !ok {
 			return fmt.Errorf("config: %s: unknown agent profile %q (defined: %s)", where, a.Agent, c.agentNames())
+		}
+	}
+	if a.Handoff != "" {
+		if _, ok := c.Handoffs[a.Handoff]; !ok {
+			return fmt.Errorf("config: %s: unknown handoff %q (defined: %s)", where, a.Handoff, c.handoffNames())
 		}
 	}
 	for i, s := range a.Steps {

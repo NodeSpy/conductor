@@ -389,3 +389,142 @@ func TestEffectiveTransportDefaults(t *testing.T) {
 		t.Fatalf("an explicit transport must win, got %q", got)
 	}
 }
+
+func TestHandoffsNoBlockIsValid(t *testing.T) {
+	c := ctrlBaseCfg()
+	if err := c.Validate(); err != nil {
+		t.Fatalf("no handoffs block must validate, got %v", err)
+	}
+	if got := c.DefaultHandoffName(); got != "" {
+		t.Fatalf("no default flagged → empty name, got %q", got)
+	}
+}
+
+func TestHandoffsValidBlock(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"phone": {Slack: &HandoffChat{To: "dm"}, Default: true},
+		"page":  {Web: &HandoffWeb{BaseURL: "https://conductor.example.com"}},
+		"pager": {Discord: &HandoffChat{To: "thread", Channel: "C1"}},
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid handoffs block should pass, got %v", err)
+	}
+	if got := c.DefaultHandoffName(); got != "phone" {
+		t.Fatalf("default:true should be found, got %q", got)
+	}
+}
+
+func TestHandoffsExactlyOneChannelRequired(t *testing.T) {
+	none := ctrlBaseCfg()
+	none.Handoffs = map[string]HandoffConfig{"x": {}}
+	if err := none.Validate(); err == nil {
+		t.Fatal("an entry with no channel sub-block must be rejected")
+	}
+	both := ctrlBaseCfg()
+	both.Handoffs = map[string]HandoffConfig{"x": {
+		Web:   &HandoffWeb{BaseURL: "https://a.test"},
+		Slack: &HandoffChat{To: "dm"},
+	}}
+	if err := both.Validate(); err == nil {
+		t.Fatal("an entry with two channel sub-blocks must be rejected")
+	}
+}
+
+func TestHandoffsTwoDefaultsRejected(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"a": {Web: &HandoffWeb{BaseURL: "https://a.test"}, Default: true},
+		"b": {Slack: &HandoffChat{To: "dm"}, Default: true},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("two default:true handoffs must be rejected")
+	}
+}
+
+func TestCheckAgentRefsUnknownHandoffRejected(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{"page": {Web: &HandoffWeb{BaseURL: "https://a.test"}}}
+	refs := []ActionRef{{Where: "w", Action: Action{Steps: []Action{
+		{Type: "command", ID: "assess", Command: []string{"true"}},
+		{Type: "command", ID: "review", Background: true, Handoff: "does-not-exist", Command: []string{"true"}},
+	}}}}
+	err := c.CheckAgentRefs(refs)
+	if err == nil {
+		t.Fatal("a step naming an undefined handoff must be rejected")
+	}
+	for _, want := range []string{"w step review", `"does-not-exist"`, "page"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should mention %q", err, want)
+		}
+	}
+}
+
+func TestCheckAgentRefsKnownHandoffPasses(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{"page": {Web: &HandoffWeb{BaseURL: "https://a.test"}}}
+	refs := []ActionRef{{Where: "w", Action: Action{Steps: []Action{
+		{Type: "command", ID: "review", Background: true, Handoff: "page", Command: []string{"true"}},
+	}}}}
+	if err := c.CheckAgentRefs(refs); err != nil {
+		t.Fatalf("a step naming a defined handoff should pass, got %v", err)
+	}
+}
+
+// TestHandoffCompatShimSynthesizesDefault verifies the legacy singular
+// `handoff: { web: … }` block is folded into `handoffs: { default: { web: …,
+// default: true } }` by applyDefaults when `handoffs:` is empty, so an old
+// config keeps resolving to that channel unchanged.
+func TestHandoffCompatShimSynthesizesDefault(t *testing.T) {
+	c := &Config{}
+	c.Handoff.Web = HandoffWeb{BaseURL: "https://old.example.com", Listen: ":9099"}
+	c.applyDefaults()
+
+	if len(c.Handoffs) != 1 {
+		t.Fatalf("expected exactly one synthesized handoff entry, got %d: %+v", len(c.Handoffs), c.Handoffs)
+	}
+	hc, ok := c.Handoffs["default"]
+	if !ok {
+		t.Fatalf(`expected a "default" entry, got %+v`, c.Handoffs)
+	}
+	if !hc.Default {
+		t.Fatal("the synthesized entry must be flagged default:true")
+	}
+	if hc.Web == nil || hc.Web.BaseURL != "https://old.example.com" || hc.Web.Listen != ":9099" {
+		t.Fatalf("synthesized web config should carry over the legacy fields, got %+v", hc.Web)
+	}
+	if got := c.DefaultHandoffName(); got != "default" {
+		t.Fatalf("DefaultHandoffName should find the synthesized entry, got %q", got)
+	}
+}
+
+// TestHandoffCompatShimNoopWhenHandoffsSet confirms the new `handoffs:` map
+// always wins — the legacy block is ignored once it's populated.
+func TestHandoffCompatShimNoopWhenHandoffsSet(t *testing.T) {
+	c := &Config{}
+	c.Handoff.Web = HandoffWeb{BaseURL: "https://old.example.com"}
+	c.Handoffs = map[string]HandoffConfig{
+		"new": {Web: &HandoffWeb{BaseURL: "https://new.example.com"}, Default: true},
+	}
+	c.applyDefaults()
+
+	if len(c.Handoffs) != 1 {
+		t.Fatalf("handoffs map should be untouched, got %+v", c.Handoffs)
+	}
+	if _, ok := c.Handoffs["default"]; ok {
+		t.Fatal("the shim must not run when handoffs: is already set")
+	}
+	if c.Handoffs["new"].Web.BaseURL != "https://new.example.com" {
+		t.Fatalf("existing handoffs entry should be untouched, got %+v", c.Handoffs["new"])
+	}
+}
+
+// TestHandoffCompatShimNoopWhenLegacyEmpty confirms an unset legacy block
+// synthesizes nothing (an empty Handoffs map, not a spurious default entry).
+func TestHandoffCompatShimNoopWhenLegacyEmpty(t *testing.T) {
+	c := &Config{}
+	c.applyDefaults()
+	if len(c.Handoffs) != 0 {
+		t.Fatalf("no legacy handoff and no handoffs: should synthesize nothing, got %+v", c.Handoffs)
+	}
+}
