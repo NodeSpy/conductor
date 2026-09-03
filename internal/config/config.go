@@ -152,9 +152,11 @@ type HandoffConfig struct {
 	// integration (Socket Mode) configured and running — see the Hand-offs section
 	// of README.md.
 	Slack *HandoffChat `yaml:"slack"`
-	// Discord configures a Discord DM/thread hand-off. SCHEMA ONLY in this build —
-	// decodes and validates, but a step resolved to it fails with
-	// handoff.ErrNotWired until the Discord increment lands.
+	// Discord configures a Discord DM/thread hand-off (see
+	// internal/handoff.DiscordChannel). Posting the draft and capturing the
+	// reply both go through a Discord bot gateway conductor runs itself (see
+	// internal/handoff.RunDiscordGateway) — no separate integration needed, and
+	// no tunnel/URL.
 	Discord *HandoffChat `yaml:"discord"`
 	// Default flags this hand-off as the fleet default, used when a step sets no
 	// explicit `handoff:`. At most one entry may set it.
@@ -197,17 +199,24 @@ type TunnelConfig struct {
 }
 
 // HandoffChat is the schema for a chat-based (Slack/Discord) hand-off channel:
-// post the draft to a DM or a thread, capture the reply. Slack is wired (see
-// HandoffConfig.Slack); Discord is SCHEMA ONLY until increment 4.
+// post the draft to a DM or a thread, capture the reply. Shared by
+// HandoffConfig.Slack and HandoffConfig.Discord.
 type HandoffChat struct {
 	To      string `yaml:"to"`      // dm | thread
 	Channel string `yaml:"channel"` // to: thread — channel to post in (required)
 	// User is the target user id for a `to: dm` channel (a Slack user id, e.g.
-	// U0123ABCD — required for dm). There is no GitHub->Slack identity mapping,
-	// so this is never inferred/defaulted; you must look up the id yourself
-	// (Slack profile -> "Copy member ID").
-	User     string `yaml:"user"`
-	BotToken string `yaml:"bot_token"` // bot/app token, e.g. ${SLACK_BOT_TOKEN} / ${DISCORD_BOT_TOKEN} (required)
+	// U0123ABCD, or a Discord user id — required for dm). There is no
+	// GitHub->Slack/Discord identity mapping, so this is never
+	// inferred/defaulted; you must look up the id yourself (Slack profile ->
+	// "Copy member ID"; Discord: enable Developer Mode, right-click the user ->
+	// "Copy User ID").
+	User string `yaml:"user"`
+	// BotToken authenticates posting (and, for Discord, the gateway connection
+	// that captures replies). Slack: a bot token, xoxb-… (chat:write, +im:write
+	// for to: dm). Discord: a bot token from the Discord developer portal; the
+	// bot needs the privileged MESSAGE CONTENT intent enabled and must be
+	// invited to the server/channel (or share a DM with `user`).
+	BotToken string `yaml:"bot_token"`
 }
 
 // Notify configures notifications. All channels are private to you (the daemon
@@ -934,6 +943,9 @@ func (c *Config) validateHandoffs() error {
 		}
 		if hc.Discord != nil {
 			set++
+			if err := validateDiscordChat(name, hc.Discord); err != nil {
+				return err
+			}
 		}
 		if set != 1 {
 			return fmt.Errorf("config: handoff %q: set exactly one of `web`, `slack`, or `discord` (got %d)", name, set)
@@ -967,6 +979,27 @@ func validateSlackChat(handoffName string, hc *HandoffChat) error {
 	}
 	if hc.BotToken == "" {
 		return fmt.Errorf("config: handoff %q: slack.bot_token is required", handoffName)
+	}
+	return nil
+}
+
+// validateDiscordChat checks one `handoffs.<name>.discord:` block: `to` must
+// be dm|thread, thread requires channel, dm requires user, and bot_token is
+// always required. Mirrors validateSlackChat.
+func validateDiscordChat(handoffName string, hc *HandoffChat) error {
+	switch hc.To {
+	case "dm", "thread":
+	default:
+		return fmt.Errorf("config: handoff %q: discord.to must be dm|thread, got %q", handoffName, hc.To)
+	}
+	if hc.To == "thread" && hc.Channel == "" {
+		return fmt.Errorf("config: handoff %q: discord.to: thread requires channel", handoffName)
+	}
+	if hc.To == "dm" && hc.User == "" {
+		return fmt.Errorf("config: handoff %q: discord.to: dm requires user (a Discord user id)", handoffName)
+	}
+	if hc.BotToken == "" {
+		return fmt.Errorf("config: handoff %q: discord.bot_token is required", handoffName)
 	}
 	return nil
 }

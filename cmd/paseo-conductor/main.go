@@ -240,6 +240,12 @@ func cmdRun(args []string) error {
 	// review hand-off keeps today's paseo-native behavior.
 	handoffs := handoff.NewRegistry(cfg.Handoffs, cfg.DefaultHandoffName(), logf)
 	wireSlackHandoffInbox(cfg, handoffs)
+	// Discord hand-off gateway(s): unlike Slack this needs no separate
+	// `integrations:` entry — conductor runs the bot gateway itself, one
+	// goroutine per distinct configured bot_token (entries sharing a token
+	// share a connection). A no-op when no `discord:` hand-off is configured.
+	// Governed by ctx below so it shuts down with the daemon; started after ctx
+	// exists, alongside the web hand-off listeners.
 	// Shared "never reap" set for interactive hand-off agents: the engine registers
 	// a background step's agent at launch; the reaper skips anything in it.
 	hold := dispatch.NewHoldSet(filepath.Join(filepath.Dir(cfg.Store.StateFile), "holds.json"))
@@ -258,6 +264,17 @@ func cmdRun(args []string) error {
 	for _, we := range handoffs.WebEntries() {
 		inbound.Register(ctx, we.Listen, "/handoff", we.Chan, logf)
 		logf("handoff %s: web draft pages on %s/handoff", we.Name, we.Listen)
+	}
+
+	// Start one Discord gateway per distinct bot token configured across
+	// `discord:` hand-off entries. No-op when none are configured
+	// (DiscordBotTokens is empty).
+	for _, tok := range handoffs.DiscordBotTokens() {
+		tok := tok
+		go handoff.RunDiscordGateway(ctx, tok, handoffs.DiscordInbox(), logf)
+	}
+	if n := len(handoffs.DiscordBotTokens()); n > 0 {
+		logf("handoff: %d discord bot gateway(s) starting", n)
 	}
 
 	// Write a pidfile so the `sweep` CLI can signal us; clean it up on exit.

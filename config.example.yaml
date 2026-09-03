@@ -433,11 +433,16 @@ notify:
 #   #                                              #   never inferred from your GitHub identity
 #   #     channel: C0123456                       # to: thread — channel to post in; required
 #   #     bot_token: ${SLACK_BOT_TOKEN}            # needs chat:write (+ im:write for to: dm)
-#   # war-room:                                    # Discord DM/thread — schema only, not wired yet
-#   #   discord:
-#   #     to: thread
-#   #     channel: "123456789012345678"
-#   #     bot_token: ${DISCORD_BOT_TOKEN}
+#   # war-room:                                    # Discord DM/thread — needs no separate integration:
+#   #   discord:                                    # entry; conductor runs the bot gateway itself
+#   #     to: thread                                # dm | thread
+#   #     channel: "123456789012345678"             # to: thread — channel/thread id; required
+#   #     user: ${DISCORD_USER_ID}                  # to: dm — a Discord user id; required,
+#   #                                                #   never inferred from your GitHub identity
+#   #     bot_token: ${DISCORD_BOT_TOKEN}            # needs the MESSAGE CONTENT privileged intent
+#   #                                                #   enabled in the developer portal, and the bot
+#   #                                                #   invited to the server/channel (or sharing a
+#   #                                                #   server with the to: dm user); see README
 
 agents:
   fixer:

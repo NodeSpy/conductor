@@ -459,7 +459,7 @@ func TestHandoffsValidBlock(t *testing.T) {
 	c.Handoffs = map[string]HandoffConfig{
 		"phone": {Slack: &HandoffChat{To: "dm", User: "U123ABCD", BotToken: "xoxb-x"}, Default: true},
 		"page":  {Web: &HandoffWeb{BaseURL: "https://conductor.example.com"}},
-		"pager": {Discord: &HandoffChat{To: "thread", Channel: "C1"}},
+		"pager": {Discord: &HandoffChat{To: "thread", Channel: "C1", BotToken: "bot-x"}},
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid handoffs block should pass, got %v", err)
@@ -544,6 +544,57 @@ func TestHandoffsSlackValidDMAndThread(t *testing.T) {
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid dm and thread slack handoffs should pass, got %v", err)
+	}
+}
+
+func TestHandoffsDiscordToInvalid(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"x": {Discord: &HandoffChat{To: "channel", Channel: "C1", BotToken: "bot-x"}},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("discord.to must be dm|thread — an unknown value must be rejected")
+	}
+}
+
+func TestHandoffsDiscordThreadRequiresChannel(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"x": {Discord: &HandoffChat{To: "thread", BotToken: "bot-x"}},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("discord.to: thread with no channel must be rejected")
+	}
+}
+
+func TestHandoffsDiscordDMRequiresUser(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"x": {Discord: &HandoffChat{To: "dm", BotToken: "bot-x"}},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("discord.to: dm with no user must be rejected")
+	}
+}
+
+func TestHandoffsDiscordRequiresBotToken(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"x": {Discord: &HandoffChat{To: "dm", User: "123456789012345678"}},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("discord with no bot_token must be rejected")
+	}
+}
+
+func TestHandoffsDiscordValidDMAndThread(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"phone":   {Discord: &HandoffChat{To: "dm", User: "123456789012345678", BotToken: "bot-x"}},
+		"warroom": {Discord: &HandoffChat{To: "thread", Channel: "C0456", BotToken: "bot-x"}},
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid dm and thread discord handoffs should pass, got %v", err)
 	}
 }
 
