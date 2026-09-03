@@ -1,13 +1,26 @@
 # Live-mode conductor image. Unlike the hermetic alpine image, this is a glibc +
 # Node runtime so the REAL agent CLIs installed on the host can execute inside the
 # container when mounted in (docker-compose.live.yml): codex / agent-deck are static
-# ELF and run anywhere, but gemini is a Node app, omp is glibc-dynamic, and the
-# claude wrapper shells out to Node — none of which run on musl/alpine.
+# ELF and run anywhere, but gemini is a Node app, omp is glibc-dynamic, and claude
+# is a Node app — none of which run on musl/alpine.
 #
 # It still builds conductor + the harness services (forge/mock/sink stay on the
 # hermetic image; only `conductor` uses this one) and, crucially, fakepaseo — the
 # live path still uses fakepaseo ONLY to provision the PR worktree (a real git
 # clone/worktree, no LLM); the REAL agent then does the edit/commit/push.
+#
+# What runs the agents:
+#   - claude   → the REAL claude binary, installed here via npm (@anthropic-ai/
+#                claude-code → /usr/local/bin/claude). We drive it directly with
+#                ANTHROPIC_BASE_URL pointed at the host's TeamClaude proxy (see the
+#                compose file); the host `claude-teamclaude` wrapper is NOT used
+#                inside the container (it probes 127.0.0.1:3456 — which is the
+#                container, not the host).
+#   - codex    → the host's static-pie binary, mounted onto /usr/local/bin.
+#   - gemini   → the host's Node bundle, mounted under /opt/host-local (exact version
+#                match with the operator's on-disk gemini config/creds).
+#   - omp      → the host's glibc binary, mounted onto /usr/local/bin.
+#   - agent-deck → the host's static binary, mounted under /opt/host-local.
 #
 # Build context is the repo root (see docker-compose.live.yml). Manual use only.
 
@@ -25,11 +38,30 @@ RUN go build -o /out/paseo-conductor ./cmd/paseo-conductor \
 
 # ---- runtime stage: glibc + Node so real CLIs run ----
 FROM node:22-bookworm-slim
+# The container user MUST match the host uid/gid: the operator's credential dirs are
+# bind-mounted READ-ONLY and ~/.codex is 0700 (owner-only), so only a same-uid
+# process can read them to copy into the writable HOME. run.sh passes the host
+# uid/gid; the node base image already occupies uid 1000, so drop it first.
+ARG HOST_UID=1000
+ARG HOST_GID=1000
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git curl ca-certificates openssl bash coreutils \
  && rm -rf /var/lib/apt/lists/* \
- && useradd -m -d /home/conductor conductor
+ && (userdel -r node 2>/dev/null || true) \
+ && (getent group "${HOST_GID}" >/dev/null || groupadd -g "${HOST_GID}" conductor) \
+ && useradd -m -u "${HOST_UID}" -g "${HOST_GID}" -d /home/conductor conductor
+# The REAL claude binary. Installed globally → /usr/local/bin/claude. We point it at
+# the host TeamClaude proxy via ANTHROPIC_BASE_URL (compose), so it authenticates
+# through the operator's account pool without the host wrapper.
+RUN npm install -g @anthropic-ai/claude-code \
+ && claude --version
 COPY --from=build /out/ /usr/local/bin/
 # fakepaseo still provisions the worktree in live mode (git only, no LLM).
 RUN ln -sf /usr/local/bin/fakepaseo /usr/local/bin/paseo
+# The daemon (and every agent it spawns) runs as the non-root `conductor` user:
+# claude-code REFUSES --dangerously-skip-permissions under root/sudo, and running
+# unattended agents as root is wrong anyway. Pre-create the state dir owned by
+# conductor so the daemon can write it (it's a plain dir, not a mounted volume).
+RUN mkdir -p /data && chown -R "${HOST_UID}:${HOST_GID}" /data /home/conductor
+USER conductor
 WORKDIR /home/conductor

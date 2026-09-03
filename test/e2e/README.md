@@ -115,14 +115,47 @@ git clone — no LLM); the real agent then edits/commits/pushes. **Never run in 
 it needs provider keys and reaches real model providers.
 
 - **Image:** `Dockerfile.live` is a glibc + Node runtime (vs. the hermetic alpine
-  image) so Node CLIs (gemini) and glibc CLIs (omp) run alongside the static ones.
-- **Config:** `config/controllers.live.yaml` routes group-B repos to the real CLIs.
-- **Mounts:** host tool dirs + credential dirs (parameterized, defaulted for a dev
-  box); provider keys via env — populate `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` /
-  `GEMINI_API_KEY` / `WAFER_SERVERLESS_API_KEY` before running.
+  image). It installs the **real** `claude` binary (`@anthropic-ai/claude-code`) and
+  creates its user matching the **host uid/gid** (build args from `run.sh`) so the
+  read-only, owner-only credential mounts are readable. The daemon runs **non-root**
+  (claude-code refuses `--dangerously-skip-permissions` under root).
+- **Config:** `config/controllers.live.yaml` routes group-B repos to the real CLIs
+  with explicit non-interactive flags (`claude -p --dangerously-skip-permissions`,
+  `codex exec --dangerously-bypass-approvals-and-sandbox`, `gemini --acp -m …`).
+- **Credentials — turnkey, nothing committed.** `run.sh` sources `live-env.sh` on the
+  host, which reads the operator's own config at launch and exports the secrets as
+  env for the compose file:
+  - **claude → host TeamClaude proxy.** Reads the proxy port + key from
+    `~/.config/teamclaude.json`; the container reaches it at
+    `http://host.docker.internal:<port>` (via `extra_hosts`) and presents the proxy
+    key as `ANTHROPIC_API_KEY` (required for non-loopback callers). The real `claude`
+    binary is driven directly — the host `claude-teamclaude` wrapper is **not** used
+    inside the container (it probes `127.0.0.1:3456`, which is the container).
+  - **codex → copied OAuth tokens.** `~/.codex/auth.json` is mounted read-only into a
+    staging path and copied into the container's writable `$HOME` (so codex can
+    refresh its token in place — a read-only bind at the live location blocks that).
+  - **gemini → decrypted api key.** gemini stores its api key AES-256-GCM in
+    `~/.gemini/gemini-credentials.json` (keyed by host + user); `live-env.sh` decrypts
+    it and passes `GEMINI_API_KEY` + `GEMINI_CLI_TRUST_WORKSPACE=true`.
+  - omp/agent-deck keys are optional (`WAFER_SERVERLESS_API_KEY`, etc.).
 
-Wired for the tools present on this box: **cli:claude-code**, **cli:codex**,
-**acp:gemini**, **acp:omp** (oh-my-pi), **agent-deck**. Recorded **N/A** (not
-installed here): opencode, copilot, and `codex-acp` (the acp:codex-adapter binary).
-`make e2e-live` drives group B — each installed controller runs a real fixer and the
-run asserts a new commit lands on the forge — then prints the matrix.
+**Results — what passes live, what needs operator action.** `make e2e-live` drives
+group B and prints the matrix. Rows are classified honestly:
+
+| Row | Result | Why |
+|---|---|---|
+| **cli:claude-code** | **PASS** (required) | Authenticates through the TeamClaude proxy and lands a full clone→edit→commit→push. A red row here is a real regression. |
+| **cli:codex** | best-effort → usually **SKIP** | Wired correctly (token accepted, no 401), but this box's `codex` (v0.146.0) calls `chatgpt.com/backend-api/codex/*`, which returns **404** — reproduced on the host, so it's broken in the operator's own environment, not the harness. *Operator action:* restore codex backend access. |
+| **acp:gemini** | best-effort → **PASS** with quota, else **SKIP** | Wired correctly end-to-end (auth, trust, ACP `initialize`, permission handling all verified). Blocked only by the operator's **free-tier Gemini quota (20 requests/day)** and flaky model availability. *Operator action:* a paid Gemini tier / fresh quota. |
+| **acp:omp**, **agent-deck** | optional → **SKIP** unless their keys are present | PASS on commit, else a noted SKIP — never a hard FAIL. |
+
+Best-effort rows distinguish a **conductor-level failure** (couldn't launch/handshake
+the agent → red **FAIL**, catches regressions) from an **agent that launched &
+authenticated but whose model provider blocked the turn** (→ **SKIP** with the
+captured reason). So the run is green when conductor's wiring is correct, and it names
+exactly which agents need operator action.
+
+A conductor ACP-client fix rode along: the `initialize` handshake now always sends a
+non-empty `clientInfo.version` (`internal/acp`), which spec-strict agents like
+`gemini --acp` require — the lenient hermetic `fakeacp` accepted its absence, real
+gemini rejected it.
