@@ -121,10 +121,34 @@ func (c Control) AgentCap() int {
 // Notify configures notifications. All channels are private to you (the daemon
 // journal today; a push endpoint later) — the conductor never comments on PRs.
 type Notify struct {
-	Push            bool     `yaml:"push"`
-	On              []string `yaml:"on"`                // subset of: dispatch, complete, escalate, needs_input
-	SlackWebhookURL string   `yaml:"slack_webhook_url"` // optional Slack incoming-webhook URL to post enabled events to
-	Digest          Duration `yaml:"digest"`            // periodic activity summary (e.g. 24h); 0 = off
+	Push              bool            `yaml:"push"`
+	On                []string        `yaml:"on"`                  // subset of: dispatch, complete, escalate, needs_input
+	SlackWebhookURL   string          `yaml:"slack_webhook_url"`   // optional Slack incoming-webhook URL to post enabled events to
+	DiscordWebhookURL string          `yaml:"discord_webhook_url"` // optional Discord incoming-webhook URL to post enabled events to
+	Ntfy              NotifyNtfy      `yaml:"ntfy"`                // optional ntfy.sh (or self-hosted) topic to publish to
+	Pushover          NotifyPushover  `yaml:"pushover"`            // optional Pushover application/user to notify
+	Notifiarr         NotifyNotifiarr `yaml:"notifiarr"`           // optional Notifiarr passthrough integration
+	Digest            Duration        `yaml:"digest"`              // periodic activity summary (e.g. 24h); 0 = off
+}
+
+// NotifyNtfy configures publishing to an ntfy (https://ntfy.sh or self-hosted)
+// topic. Server defaults to https://ntfy.sh when unset.
+type NotifyNtfy struct {
+	Server string `yaml:"server"`
+	Topic  string `yaml:"topic"`
+}
+
+// NotifyPushover configures posting to the Pushover message API.
+type NotifyPushover struct {
+	Token string `yaml:"token"` // application token
+	User  string `yaml:"user"`  // user/group key
+}
+
+// NotifyNotifiarr configures posting to a Notifiarr passthrough integration,
+// which relays to Discord on Notifiarr's side.
+type NotifyNotifiarr struct {
+	APIKey    string `yaml:"api_key"`
+	ChannelID string `yaml:"channel_id"` // optional: Discord channel ID override
 }
 
 // Wants reports whether the given notify event is enabled.

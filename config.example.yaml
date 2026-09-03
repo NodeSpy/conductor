@@ -353,7 +353,17 @@ control:
 notify:
   push: true                          # private to you (journal); never a PR comment
   on: [dispatch, escalate, needs_input]
-  # slack_webhook_url: ${SLACK_WEBHOOK_URL}   # optional: also post the `on` events to a Slack channel
+  # slack_webhook_url: ${SLACK_WEBHOOK_URL}       # optional: also post the `on` events to a Slack channel
+  # discord_webhook_url: ${DISCORD_WEBHOOK_URL}   # optional: also post the `on` events to a Discord channel
+  # ntfy:                                         # optional: publish the `on` events to an ntfy topic
+  #   server: https://ntfy.sh                     #   defaults to https://ntfy.sh; point at a self-hosted server instead
+  #   topic: paseo-conductor
+  # pushover:                                     # optional: push the `on` events via Pushover
+  #   token: ${PUSHOVER_TOKEN}                    #   application token
+  #   user: ${PUSHOVER_USER}                      #   user/group key
+  # notifiarr:                                    # optional: relay the `on` events via a Notifiarr passthrough integration
+  #   api_key: ${NOTIFIARR_API_KEY}
+  #   channel_id: ${NOTIFIARR_CHANNEL_ID}         #   optional: Discord channel ID override
   # digest: 24h                              # optional: periodic activity summary (dispatches/attention); 0 = off
 
 agents:

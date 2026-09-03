@@ -113,3 +113,144 @@ func TestSlackSinkPosts(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 }
+
+func TestDiscordSinkPosts(t *testing.T) {
+	posted := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		posted <- string(b)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := New(config.Notify{On: []string{"escalate"}, DiscordWebhookURL: srv.URL}, func(string, ...any) {}, nil)
+	tr := core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "acme/w", Number: 9}}
+	n.Emit(context.Background(), EventEscalate, tr, "gave up")
+
+	select {
+	case body := <-posted:
+		if !strings.Contains(body, "escalate") || !strings.Contains(body, "acme/w#9") {
+			t.Fatalf("discord payload missing expected content: %s", body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("discord webhook was never posted")
+	}
+}
+
+func TestNtfySinkPublishes(t *testing.T) {
+	posted := make(chan struct {
+		body  string
+		title string
+		path  string
+	}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		posted <- struct {
+			body  string
+			title string
+			path  string
+		}{string(b), r.Header.Get("Title"), r.URL.Path}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := New(config.Notify{On: []string{"escalate"}, Ntfy: config.NotifyNtfy{Server: srv.URL, Topic: "conductor"}},
+		func(string, ...any) {}, nil)
+	tr := core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "acme/w", Number: 11}}
+	n.Emit(context.Background(), EventEscalate, tr, "gave up")
+
+	select {
+	case got := <-posted:
+		if got.path != "/conductor" {
+			t.Fatalf("ntfy path = %q, want /conductor", got.path)
+		}
+		if got.title != "paseo-conductor" {
+			t.Fatalf("ntfy title = %q", got.title)
+		}
+		if !strings.Contains(got.body, "acme/w#11") {
+			t.Fatalf("ntfy body missing expected content: %s", got.body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ntfy was never published")
+	}
+}
+
+func TestPushoverSinkPosts(t *testing.T) {
+	posted := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("parse form: %v", err)
+		}
+		posted <- r.Form.Get("message")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	orig := pushoverURL
+	pushoverURL = srv.URL
+	defer func() { pushoverURL = orig }()
+
+	n := New(config.Notify{On: []string{"escalate"}, Pushover: config.NotifyPushover{Token: "tok", User: "usr"}},
+		func(string, ...any) {}, nil)
+	tr := core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "acme/w", Number: 13}}
+	n.Emit(context.Background(), EventEscalate, tr, "gave up")
+
+	select {
+	case msg := <-posted:
+		if !strings.Contains(msg, "acme/w#13") {
+			t.Fatalf("pushover message missing expected content: %s", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pushover was never posted")
+	}
+
+	// Missing user/token: no post attempted.
+	n2 := New(config.Notify{On: []string{"escalate"}, Pushover: config.NotifyPushover{Token: "tok"}},
+		func(string, ...any) {}, nil)
+	n2.Emit(context.Background(), EventEscalate, tr, "gave up")
+	select {
+	case msg := <-posted:
+		t.Fatalf("incomplete pushover config should not post, got: %s", msg)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestNotifiarrSinkPosts(t *testing.T) {
+	posted := make(chan struct {
+		body   string
+		apiKey string
+		path   string
+	}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		posted <- struct {
+			body   string
+			apiKey string
+			path   string
+		}{string(b), r.Header.Get("X-Api-Key"), r.URL.Path}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	orig := notifiarrURL
+	notifiarrURL = srv.URL + "/%s"
+	defer func() { notifiarrURL = orig }()
+
+	n := New(config.Notify{On: []string{"escalate"}, Notifiarr: config.NotifyNotifiarr{APIKey: "abc123", ChannelID: "42"}},
+		func(string, ...any) {}, nil)
+	tr := core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "acme/w", Number: 17}}
+	n.Emit(context.Background(), EventEscalate, tr, "gave up")
+
+	select {
+	case got := <-posted:
+		if got.path != "/abc123" {
+			t.Fatalf("notifiarr path = %q, want /abc123", got.path)
+		}
+		if got.apiKey != "abc123" {
+			t.Fatalf("notifiarr X-Api-Key header = %q", got.apiKey)
+		}
+		if !strings.Contains(got.body, "acme/w#17") || !strings.Contains(got.body, "\"channel\":\"42\"") {
+			t.Fatalf("notifiarr payload missing expected content: %s", got.body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("notifiarr was never posted")
+	}
+}
