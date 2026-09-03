@@ -734,17 +734,11 @@ for your OS/arch (mac amd64/arm64, linux amd64/arm64/386) — no auth needed:
 curl -fsSL https://raw.githubusercontent.com/NodeSpy/conductor/main/scripts/install-release.sh | bash
 ```
 
-Pin a version with `... | bash -s -- v0.6.4`. Installs to `~/.local/bin/conductor` (or keeps
-updating `~/.local/bin/paseo-conductor` in place on an existing install — see below), seeds a
+Pin a version with `... | bash -s -- v0.6.4`. Installs to `~/.local/bin/conductor`, seeds a
 starter config, and then **installs the background service by default** (press Enter to confirm) —
 a `systemd --user` unit on Linux or a `launchd` LaunchAgent on macOS. Answer `n` to skip (set
 `CONDUCTOR_INSTALL_SERVICE=yes|no` to answer non-interactively). It only *starts* the service
 once your config validates, so a fresh install won't crash-loop.
-
-An existing install (unit/binary/config/state named `paseo-conductor` from before the rebrand)
-keeps working untouched — the binary detects it and keeps targeting the existing service unit and
-directories rather than creating parallel `conductor`-named ones. Only a fresh install uses the new
-`conductor` names.
 
 ### Updating
 
@@ -794,12 +788,11 @@ conductor service sync         # rewrite the unit if its template changed, and r
 conductor service uninstall    # stop and remove it
 ```
 
-The unit is named `conductor` on a fresh install; on a box with an existing `paseo-conductor` unit,
-these commands keep targeting that unit instead of creating a second one.
+The unit is named `conductor`.
 
 Logs: `journalctl --user -u conductor -f` (Linux) / `tail -f ~/Library/Logs/paseo-conductor.log`
-(macOS; substitute `paseo-conductor` for the unit name on an existing install). On Linux,
-`loginctl enable-linger "$USER"` keeps it running across logout/reboot (the installer does this).
+(macOS). On Linux, `loginctl enable-linger "$USER"` keeps it running across logout/reboot (the
+installer does this).
 
 **Updates keep the unit current and restart the service.** `conductor update` and the
 auto-updater regenerate the installed unit and reload it if a new release changed the template — so
@@ -807,34 +800,14 @@ you don't have to reinstall the service after an upgrade. `conductor update` als
 already-running service into the new binary; the auto-updater restarts itself the same way (by
 exiting for the manager to relaunch). (Both only touch a unit that's already installed.)
 
-Secrets live in `~/.config/conductor/conductor.env` (or `~/.config/paseo-conductor/conductor.env` on
-an existing install); the daemon loads them itself at startup (so both systemd and launchd work
-without extra env wiring).
+Secrets live in `~/.config/conductor/conductor.env`; the daemon loads them itself at startup (so
+both systemd and launchd work without extra env wiring).
 
 **PATH is baked into the unit.** A `--user` service otherwise inherits a minimal PATH and can't find
 `paseo`/`gh`/`go`/`claude` in `~/.local/bin`. The generated unit sets `PATH` to `~/.local/bin` +
 the standard bin dirs (incl. Homebrew and Go) + your install-time PATH, so the tools resolve with no
 manual drop-in. Tools in an unusual location? Add a systemd drop-in (`Environment=PATH=…`) or set
 `PATH` in `conductor.env`.
-
-### Migrating an existing paseo-conductor install
-
-If this box still has an older `paseo-conductor` install (binary, service unit, config, or state
-dir under the old name), run:
-
-```sh
-conductor migrate --dry-run   # preview every step; touches nothing
-conductor migrate             # perform the migration
-```
-
-It copies (never moves) the binary, config dir, and state dir to their new `conductor` locations,
-then stops the old service and starts the new `conductor` one in its place. It's **fail-safe**: it
-only disables/removes the old `paseo-conductor` service after confirming the new `conductor`
-service is actually active; any failure before that point rolls back by restarting the untouched
-old service, so a failed migration never leaves the box without a running service. The old
-binary, config dir, and state dir are left on disk as a backup regardless of outcome. The command
-is idempotent — it's a no-op ("nothing to migrate") once a `conductor` service unit already exists,
-or if no legacy install is found.
 
 ## GitHub App setup
 
@@ -930,9 +903,9 @@ that need event-specific data (a comment body, a CI run id) get empty values.
 
 ## Configuration
 
-Config lives at `~/.config/conductor/config.yaml` (or `~/.config/paseo-conductor/config.yaml` on an
-existing install); secrets referenced via `${VAR}` come from the sibling `conductor.env`, which the
-daemon loads at startup (so systemd and launchd both work). The installer seeds both files.
+Config lives at `~/.config/conductor/config.yaml`; secrets referenced via `${VAR}` come from the
+sibling `conductor.env`, which the daemon loads at startup (so systemd and launchd both work). The
+installer seeds both files.
 `conductor validate` checks everything before you start.
 
 This split means `config.yaml` holds no secrets and can live in a dotfiles repo, symlinked into
@@ -1273,7 +1246,6 @@ conductor status                 # snapshot: live agents, in-flight workflows, s
 conductor report [--days N]      # activity summary: dispatches by kind/outcome + attention (default 7d)
 conductor pause                  # stop dispatch now (writes a control file; no restart)
 conductor resume                 # resume dispatch
-conductor migrate [--dry-run]    # migrate an existing paseo-conductor install to conductor (fail-safe)
 conductor version
 ```
 

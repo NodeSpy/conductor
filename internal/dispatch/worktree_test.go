@@ -297,57 +297,17 @@ func TestCloneTargetDir(t *testing.T) {
 	}
 }
 
-// TestCloneParentDir proves the fleet-safe back-compat behavior: a box with an
-// existing ~/.paseo-conductor keeps cloning into it (so prior base checkouts
-// there are reused, not orphaned), while a fresh install (neither directory
-// present) gets the new ~/.conductor default.
+// TestCloneParentDir proves base checkouts are always cloned into
+// ~/.conductor/checkouts.
 func TestCloneParentDir(t *testing.T) {
-	t.Run("existing legacy dir wins", func(t *testing.T) {
-		tmp := t.TempDir()
-		t.Setenv("HOME", tmp)
-		legacy := filepath.Join(tmp, ".paseo-conductor")
-		if err := os.MkdirAll(legacy, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		d := &Dispatcher{}
-		got, err := d.cloneParentDir()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if want := filepath.Join(legacy, "checkouts"); got != want {
-			t.Fatalf("cloneParentDir() = %q, want legacy %q", got, want)
-		}
-	})
-
-	t.Run("existing new dir wins over legacy", func(t *testing.T) {
-		tmp := t.TempDir()
-		t.Setenv("HOME", tmp)
-		if err := os.MkdirAll(filepath.Join(tmp, ".paseo-conductor"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(filepath.Join(tmp, ".conductor"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		d := &Dispatcher{}
-		got, err := d.cloneParentDir()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if want := filepath.Join(tmp, ".conductor", "checkouts"); got != want {
-			t.Fatalf("cloneParentDir() = %q, want new %q", got, want)
-		}
-	})
-
-	t.Run("neither exists -> new default", func(t *testing.T) {
-		tmp := t.TempDir()
-		t.Setenv("HOME", tmp)
-		d := &Dispatcher{}
-		got, err := d.cloneParentDir()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if want := filepath.Join(tmp, ".conductor", "checkouts"); got != want {
-			t.Fatalf("cloneParentDir() = %q, want new default %q", got, want)
-		}
-	})
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	d := &Dispatcher{}
+	got, err := d.cloneParentDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(tmp, ".conductor", "checkouts"); got != want {
+		t.Fatalf("cloneParentDir() = %q, want %q", got, want)
+	}
 }

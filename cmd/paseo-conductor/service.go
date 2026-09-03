@@ -27,7 +27,7 @@ func serviceKind() string {
 }
 
 // launchedByServiceManager reports whether THIS process was started by the
-// per-user service manager (vs. a manual `paseo-conductor run` in a shell). When
+// per-user service manager (vs. a manual `conductor run` in a shell). When
 // true, an auto-update applies by exiting cleanly so the manager relaunches the
 // new binary with the unit's fresh environment — a re-exec would instead inherit
 // our stale env and never pick up a regenerated unit.
@@ -65,49 +65,15 @@ func home() string {
 
 func launchdLog() string { return filepath.Join(home(), "Library/Logs/paseo-conductor.log") }
 
-// serviceName returns the per-user service unit / launchd label name to use for
-// every systemctl/launchctl operation: "paseo-conductor" when that unit is
-// already installed on this box (an existing fleet install — every systemctl
-// --user / launchctl call MUST keep targeting it, or a deployed daemon becomes
-// unmanageable), else the new default "conductor" for a fresh install.
+// serviceName is the per-user service unit / launchd label name to use for
+// every systemctl/launchctl operation.
 func serviceName() string {
-	if legacyServiceUnitPath() != "" {
-		return "paseo-conductor"
-	}
 	return "conductor"
 }
 
-// legacyServiceUnitPath returns the install path of the legacy paseo-conductor
-// unit for this OS if one is present on disk, else "".
-func legacyServiceUnitPath() string {
-	var p string
-	switch serviceKind() {
-	case "systemd":
-		p = filepath.Join(home(), ".config/systemd/user/paseo-conductor.service")
-	case "launchd":
-		p = filepath.Join(home(), "Library/LaunchAgents/sh.paseo-conductor.plist")
-	default:
-		return ""
-	}
-	if _, err := os.Stat(p); err != nil {
-		return ""
-	}
-	return p
-}
-
-// configDir returns the config directory to use: an already-existing
-// ~/.config/conductor, else an already-existing ~/.config/paseo-conductor (an
-// existing fleet install), else the new default ~/.config/conductor.
+// configDir returns the config directory to use: ~/.config/conductor.
 func configDir() string {
-	newDir := filepath.Join(home(), ".config/conductor")
-	oldDir := filepath.Join(home(), ".config/paseo-conductor")
-	if isDir(newDir) {
-		return newDir
-	}
-	if isDir(oldDir) {
-		return oldDir
-	}
-	return newDir
+	return filepath.Join(home(), ".config/conductor")
 }
 
 func isDir(p string) bool {
@@ -145,20 +111,13 @@ func servicePATH() string {
 
 // unitPathAndContent returns the install path and rendered content of the
 // service unit for the current OS, for THIS install: exe=selfExe(),
-// cfg=configDir(), name=serviceName() — "paseo-conductor" on a box that
-// already has that unit installed, else "conductor" for a fresh install —
-// so an existing fleet install's unit file path / launchd label never moves.
-// Empty path => unsupported OS.
+// cfg=configDir(), name=serviceName(). Empty path => unsupported OS.
 func unitPathAndContent() (path, content string) {
 	return renderUnit(selfExe(), configDir(), serviceName())
 }
 
-// renderUnit renders the service unit for the current OS for an EXPLICIT
-// exe/cfg/name, independent of this install's resolved defaults. `migrate`
-// uses this to render the new conductor-named unit (forced to
-// ~/.local/bin/conductor + the conductor config dir) regardless of what's
-// currently installed, while unitPathAndContent() keeps rendering whatever
-// this install currently resolves to. Empty path => unsupported OS.
+// renderUnit renders the service unit for the current OS for an explicit
+// exe/cfg/name. Empty path => unsupported OS.
 func renderUnit(exe, cfg, name string) (path, content string) {
 	switch serviceKind() {
 	case "systemd":

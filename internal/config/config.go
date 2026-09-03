@@ -1166,24 +1166,11 @@ func expandHome(p string) string {
 }
 
 // StateDir returns the state directory to use for the default StateFile/AuditLog
-// paths: an already-existing ~/.local/state/conductor, else an already-existing
-// ~/.local/state/paseo-conductor (an existing fleet install — its accumulated
-// dedup state and audit log must keep being found in place across an upgrade),
-// else the new default ~/.local/state/conductor. cmd/paseo-conductor can't be
-// imported from here (it imports config), so this fallback is duplicated in
-// package main as configDir()/serviceName() rather than shared.
+// paths: ~/.local/state/conductor.
 func StateDir() string {
 	h, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	newDir := filepath.Join(h, ".local/state/conductor")
-	oldDir := filepath.Join(h, ".local/state/paseo-conductor")
-	if fi, err := os.Stat(newDir); err == nil && fi.IsDir() {
-		return newDir
-	}
-	if fi, err := os.Stat(oldDir); err == nil && fi.IsDir() {
-		return oldDir
-	}
-	return newDir
+	return filepath.Join(h, ".local/state/conductor")
 }
