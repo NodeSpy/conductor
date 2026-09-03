@@ -380,6 +380,33 @@ notify:
   #   channel_id: ${NOTIFIARR_CHANNEL_ID}         #   optional: Discord channel ID override
   # digest: 24h                              # optional: periodic activity summary (dispatches/attention); 0 = off
 
+# Optional: run some or all agents on a different runtime than the built-in `paseo`
+# CLI dispatcher — paseo stays the default with no `controllers:` block at all, so
+# existing configs are unaffected. Resolution per agent: its own `controller:` field (below)
+# → the controller entry flagged `default: true` (at most one) → built-in paseo.
+# See README.md#controllers.
+# controllers:
+#   gemini-review:                    # `agent:` + no transport → ACP (Zed's Agent
+#     agent: gemini                   #   Client Protocol over stdio); spawns
+#                                     #   `gemini --experimental-acp`. Provider
+#                                     #   keys (e.g. GEMINI_API_KEY) live in the
+#                                     #   agent's own process env, not here.
+#   opencode:                        # `type: opencode` → opencode's native HTTP
+#     type: opencode                  #   API (`opencode serve`); resumable sessions
+#   claude-cli:                       # `transport: cli` → a bare per-tool command
+#     agent: claude-code              #   recipe run as a direct subprocess (built-in
+#     transport: cli                  #   recipes for claude-code/codex; anything
+#                                     #   else needs an explicit `command:` list)
+
+# Optional: a portable web-link hand-off for `background: true` review steps that
+# works no matter which controller the agent runs on — the only way to interactively
+# review an agent on a controller with no native interactive surface (e.g. `cli`
+# transport). Unset → review hand-off stays paseo-native. See README.md#controllers.
+# handoff:
+#   web:
+#     base_url: https://conductor.example.com   # public origin the draft link points at
+#     listen: :8099                             # inbound address the draft page is served on (default :8099)
+
 agents:
   fixer:
     provider: claude
@@ -390,6 +417,8 @@ agents:
     wait_timeout: 30m
     archive_when_done: true
     labels: { team: autopilot }
+    # controller: gemini-review        # optional: select a controllers: entry by
+    #                                   #   name (defaults per the resolution order above)
     # guidance: |                     # per-agent tone/format; overrides top-level
     #   One or two sentences, plain and direct.  #   agent_guidance (unset → that,
     #                                             #   "" → none, text → this).

@@ -73,6 +73,10 @@ services:
       # Static ELF / glibc tools installed system-wide on the host.
       - ${HOST_CODEX:-/usr/bin/codex}:/usr/local/bin/codex:ro
       - ${HOST_OMP:-/usr/bin/omp}:/usr/local/bin/omp:ro
+      # gh: conductor shells out to it for GitHub reads/writes; without it the daemon
+      # logs "gh not found on PATH — dispatches will fail". Static Go binary, so a
+      # single-file bind works (like codex/omp).
+      - ${HOST_GH:-/usr/bin/gh}:/usr/local/bin/gh:ro
       # Per-tool credential/config dirs mounted READ-ONLY into a staging path; the
       # live entrypoint copies them into the container user's WRITABLE $HOME so codex
       # can refresh its OAuth token in place (a RO bind at the live location blocks

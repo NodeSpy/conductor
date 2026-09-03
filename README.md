@@ -192,7 +192,98 @@ issue_matched:
   review). The reaper never archives a hand-off, and it never shares the auto scratch workspace: with
   a PR/repo it gets its own PR/branch worktree (PR-centric, even if `checkout: none` was set),
   otherwise its own dedicated workspace. The shared scratch is reserved for auto, non-interactive
-  `checkout: none` steps (like a triage/assess step).
+  `checkout: none` steps (like a triage/assess step). By default that review is driven in paseo
+  itself; see [Controllers](#controllers) for running it over a portable web/Slack hand-off instead
+  (useful when the step's agent isn't on paseo).
+
+## Controllers
+
+Every dispatched agent runs on the built-in **paseo** controller unless you say otherwise —
+controllers are optional. With no `controllers:` block in config, resolution always yields paseo and
+existing behavior is unchanged. Configure `controllers:` (a map, like
+`agents:`) to run some or all agents on a different runtime instead — an ACP agent, opencode's own
+HTTP API, agent-deck, or a bare CLI recipe — and pick one per agent via `agents.<name>.controller`.
+
+### Resolution order
+
+1. An explicit `controller:` on the agent's profile.
+2. The controller entry flagged `default: true` (at most one may be; validated at load).
+3. The built-in `paseo` controller.
+
+```yaml
+controllers:
+  gemini-review:                    # `agent:` + no transport → ACP (the default transport
+    agent: gemini                   #   for an agent runtime); spawns `gemini --experimental-acp`
+  opencode:                         # `type: opencode` → opencode's native HTTP API
+    type: opencode                  #   (`opencode serve`), not ACP
+    default: true                   # the fleet default when an agent sets no `controller:`
+  claude-cli:                       # `transport: cli` → a bare per-tool command recipe
+    agent: claude-code              #   (claude-code/codex ship built-in recipes; anything
+    transport: cli                  #   else needs an explicit `command:`)
+
+agents:
+  fixer:
+    provider: claude
+    controller: gemini-review       # explicit — overrides the default
+  planner:
+    provider: claude                # no controller: → falls to opencode (default:true) above
+```
+
+### Kinds
+
+| Config | Runtime | Session model |
+| --- | --- | --- |
+| `type: paseo` (built-in, always registered as `paseo`) | The existing `paseo` CLI dispatcher | native |
+| `agent: <name>` (or explicit `transport: acp`) | An ACP agent over JSON-RPC 2.0 on stdio — gemini, claude-code-acp, codex-acp, goose, opencode over ACP, … (the [Agent Client Protocol](https://agentclientprotocol.com), Zed's open standard; conductor is the ACP client) | native, upgraded to resumable if the agent negotiates `loadSession` |
+| `type: opencode` (or `agent: opencode` + `transport: native`) | opencode's native HTTP server (`opencode serve`) — its own model routing/cost accounting | resumable |
+| `type: agent-deck` | The `agent-deck` CLI orchestrator (`launch` / `session send` / `session show` / `remove`) | native |
+| `transport: cli` | A bare per-tool command recipe run as a direct subprocess (built-in recipes for `claude-code` and `codex`; anything else needs an explicit `command:`) | resumable (e.g. claude-code `--resume`) or oneshot (codex, a generic `command:`) |
+
+An unrecognized `type`/`transport` stays registered as a stub: it negotiates capabilities but returns
+an error when selected instead of falling back to another runtime, so config can name a controller
+this build doesn't drive yet without silently running the agent somewhere else.
+
+### Session models
+
+- **native** — the controller owns the whole session lifecycle (paseo, agent-deck).
+- **resumable** — a session survives by id and is resumed on demand, rather than held as a live
+  process (an ACP agent advertising `loadSession`, opencode, or a `cli` recipe that can `--resume`).
+- **oneshot** — each turn is a fresh process; no persistent session.
+
+### Session broker and hand-off channels
+
+Two portable capabilities sit above the controller layer, so a session behaves the same regardless of
+which runtime it runs on:
+
+- The **session broker** keeps one live/resumable session per PR and funnels follow-ups to it — a
+  burst of triggers collapses onto the same session instead of spawning duplicates, and the PR→session
+  binding is persisted so an interactive hand-off survives a conductor restart (the next follow-up
+  re-attaches by id instead of orphaning the old session).
+- An optional **`handoff:`** block adds a portable web-link review channel (a draft page with
+  approve/revise/discard, served on conductor's inbound listener):
+  ```yaml
+  handoff:
+    web:
+      base_url: https://conductor.example.com   # public origin the draft link points at
+      listen: :8099                             # inbound address the draft page is served on (default :8099)
+  ```
+  With it configured, a `background: true` step's review (see [Multi-step workflows](#multi-step-workflows))
+  runs over that channel's present → await → revise/submit loop instead of paseo's own UI — the only
+  way to interactively review an agent on a controller with no native interactive surface (`cli`, or
+  opencode's native transport). With no `handoff:` block, review hand-off keeps today's paseo-native
+  behavior, unchanged. A Slack hand-off channel (thread-based approve/revise/discard) exists in
+  `internal/handoff` but isn't wired into the daemon yet.
+
+Escalations and hand-off prompts go out through the same [notify](#configuration) channels as
+everything else (journal, plus any configured Slack/Discord/ntfy/Pushover/Notifiarr) — controllers
+don't add a separate notification path.
+
+### Testing
+
+The Dockerized e2e harness at [`test/e2e/`](test/e2e/README.md) exercises the full controller matrix
+(every kind above, resolution, the session broker, hand-off, and failure/escalation) against an
+isolated local forge + mock GitHub API — `make e2e` (hermetic stubs, no keys, CI-safe) and
+`make e2e-live` (the real agent CLIs installed on your box, manual).
 
 ## Named action variants
 
@@ -870,7 +961,7 @@ dry_run: false                        # build+log every action but never execute
 (`smee_url` and/or `listen`+`path`), optional `sweep`, optional `project_map` / `project_rewrite`,
 optional shared `defaults`, and the `rules` list. **`project_map`** remaps a repo (`owner/name`) to
 the paseo project name of an existing workspace so worktree checkouts reuse it instead of cloning a
-fresh one (handy when the forge repo and the registered paseo project differ in org or casing, e.g.
+fresh one (when the forge repo and the registered paseo project differ in org or casing, e.g.
 `EdnitionCode/RosterStream: ednition/rosterstream`); keys are case-insensitive. **`project_rewrite`**
 is an org-wide shortcut applied to every repo without an explicit `project_map` entry — `org`
 replaces the owner segment (e.g. `org: ednition` turns any `EdnitionCode/AnyRepo` into
@@ -990,7 +1081,7 @@ without digging through `journalctl`.
   agent that fails, is culled, or finishes without resolving doesn't leave the work silently
   dropped. (Event-specific kinds like `new_comment` still dedup per comment id and stay uncapped.)
   Every sweep logs a summary — repos/PRs scanned, what it emitted, and *why* it skipped candidates
-  (draft-gated, excluded) — so it's never a black box.
+  (draft-gated, excluded).
 - **Bounded fan-out**: `control.max_concurrent_agents` (default 3) caps how many coding agents run
   at once, so a catch-up sweep can't swamp the machine or collide on a repo's git locks; excess
   work waits for a slot. Transient worktree-creation failures (git lock/timeout) are retried

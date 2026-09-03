@@ -213,11 +213,14 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 	case "claude-code", "claude":
 		return cliRecipe{
 			tool: "claude-code",
+			// A fixer runs headless (`-p`), so there is no interactive prompt to
+			// approve tool use — without --dangerously-skip-permissions claude denies
+			// its own Edit/Bash calls and can never modify or commit the checkout.
 			launch: func(prompt string) []string {
-				return []string{"claude", "-p", prompt, "--output-format", "json"}
+				return []string{"claude", "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"}
 			},
 			resume: func(id, prompt string) []string {
-				return []string{"claude", "-p", prompt, "--resume", id, "--output-format", "json"}
+				return []string{"claude", "-p", prompt, "--resume", id, "--output-format", "json", "--dangerously-skip-permissions"}
 			},
 			parseID: parseClaudeSessionID,
 			model:   ModelResumable,

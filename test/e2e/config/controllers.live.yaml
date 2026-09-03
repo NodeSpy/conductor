@@ -71,11 +71,12 @@ controllers:
     agent: gemini
     session_model: resumable
     # Pin an available model: the installed gemini-cli defaults to gemini-2.5-pro,
-    # which this account's Gemini backend returns 404 for (deprecated) — so without a
-    # pin the ACP turn can never succeed here. `gemini-flash-latest` is the forward-
-    # compatible alias. (Auth = GEMINI_API_KEY + GEMINI_CLI_TRUST_WORKSPACE from the
-    # compose env.)
-    command: [gemini, --acp, -m, gemini-flash-latest]
+    # which this account's Gemini backend returns 404 for (deprecated). Verified on
+    # this account's key (2026-09-03): gemini-2.5-flash → 404, gemini-flash-latest →
+    # intermittently unreachable, gemini-flash-lite-latest → clean 200 completion. Pin
+    # the one that reliably responds. (Auth = GEMINI_API_KEY + GEMINI_CLI_TRUST_WORKSPACE
+    # from the compose env.)
+    command: [gemini, --acp, -m, gemini-flash-lite-latest]
   acp_omp:                                              # → omp acp (stdio ACP)
     agent: omp
     session_model: resumable
