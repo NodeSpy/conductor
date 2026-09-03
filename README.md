@@ -278,9 +278,9 @@ which runtime it runs on:
   With it configured, a `background: true` step's review (see [Multi-step workflows](#multi-step-workflows))
   runs over that channel's present → await → revise/submit loop instead of paseo's own UI — the only
   way to interactively review an agent on a controller with no native interactive surface (`cli`, or
-  opencode's native transport). With no `handoff:` block, review hand-off keeps today's paseo-native
-  behavior, unchanged. A Slack hand-off channel (thread-based approve/revise/discard) exists in
-  `internal/handoff` but isn't wired into the daemon yet.
+  opencode's native transport). With no `handoffs:` block, review hand-off keeps today's paseo-native
+  behavior, unchanged. See [Hand-offs](#hand-offs) for the available channels — web (with ephemeral
+  tunnels), Slack, and Discord (each a DM or a thread where applicable).
 
 Escalations and hand-off prompts go out through the same [notify](#configuration) channels as
 everything else (journal, plus any configured Slack/Discord/ntfy/Pushover/Notifiarr) — controllers
