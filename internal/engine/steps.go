@@ -11,6 +11,7 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
 	"github.com/NodeSpy/paseo-conductor/internal/expr"
+	"github.com/NodeSpy/paseo-conductor/internal/handoff"
 	"github.com/NodeSpy/paseo-conductor/internal/notify"
 	"github.com/NodeSpy/paseo-conductor/internal/store"
 )
@@ -152,11 +153,18 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		if s.Background {
 			// Handed off to a live agent — tell the reaper never to touch it (this is
 			// the authoritative keep-signal; a hand-off carries no pending permission
-			// or hold marker for the reaper to observe), then tell the user.
+			// or hold marker for the reaper to observe), then hand it to you.
 			e.hold.Add(ref.AgentID)
 			e.log("%s step %s launched in background after %s (agent %s)", tag(t), id, took, ref.AgentID)
-			e.notif.Emit(ctx, notify.EventNeedsInput, t,
-				fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
+			// With a HandoffChannel configured, rewire the review over the session
+			// broker + channel (present → await → revise/submit), controller-agnostic.
+			// Without one, keep today's behavior: tell you to drive the agent in paseo.
+			if e.handoff != nil && e.broker != nil && ref.AgentID != "" {
+				e.startReviewHandoff(ctx, t, id, profile, ref.AgentID)
+			} else {
+				e.notif.Emit(ctx, notify.EventNeedsInput, t,
+					fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
+			}
 			continue
 		}
 		// Agent steps log their structured decision; command steps get a tail of their
@@ -178,6 +186,61 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 	}
 	e.notif.Emit(ctx, notify.EventComplete, t, "workflow")
 	e.finishRun(run)
+}
+
+// startReviewHandoff rewires an interactive review hand-off onto the session
+// broker + HandoffChannel: it binds the just-launched agent as the PR's broker
+// session (so a follow-up funnels to it and the hand-off survives a restart), then
+// runs the present → await → revise/submit loop on the configured channel in the
+// background — controller-agnostic, driving the live session via Prompt (for the
+// paseo controller, `paseo send`). If the controller can't be resolved or the
+// agent can't be bound, it falls back to today's behavior (notify you to open the
+// agent in paseo). Only invoked when a channel and broker are configured.
+func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID string, profile config.AgentProfile, agentID string) {
+	fallback := func(reason string) {
+		if reason != "" {
+			e.log("%s review hand-off: %s — leaving agent %s live in paseo", tag(t), reason, agentID)
+		}
+		e.notif.Emit(ctx, notify.EventNeedsInput, t,
+			fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", stepID, agentID))
+	}
+	c, err := e.controllerFor(profile)
+	if err != nil {
+		fallback(fmt.Sprintf("no controller: %v", err))
+		return
+	}
+	prKey := t.Key()
+	notifyRef := func(ref string) {
+		e.notif.Emit(ctx, notify.EventNeedsInput, t,
+			fmt.Sprintf("review for %q is ready — approve/revise/discard here: %s", stepID, ref))
+	}
+	handler := handoff.NewHandler(e.handoff, notifyRef)
+	sess, err := c.ResumeSession(ctx, agentID, handler)
+	if err != nil {
+		fallback(fmt.Sprintf("bind agent %s: %v", agentID, err))
+		return
+	}
+	e.broker.Bind(prKey, c, sess)
+	draft := handoff.Draft{
+		Title:  fmt.Sprintf("Review for %s", prKey),
+		Body:   "The agent is preparing its review. Edit the text and choose Send revision to hand it back to the agent, Approve to have it submit as-is, or Discard.",
+		PRKey:  prKey,
+		Repo:   t.Target.Repo,
+		Number: t.Target.Number,
+	}
+	go func() {
+		dec, rerr := handoff.Review(ctx, sess, e.handoff, draft, notifyRef)
+		if rerr != nil {
+			if ctx.Err() == nil {
+				e.log("%s review hand-off loop for %q ended: %v", tag(t), stepID, rerr)
+			}
+			return
+		}
+		e.log("%s review hand-off for %q resolved: %s", tag(t), stepID, dec.Action)
+		if dec.Action == handoff.ActionDiscard {
+			e.broker.Close(ctx, prKey)
+		}
+	}()
 }
 
 // tailOutput returns the last few non-blank lines of a command's captured output

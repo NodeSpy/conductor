@@ -22,6 +22,17 @@ import (
 
 func init() { core.Register("slack", newIntegration) }
 
+// replyHook, when set, receives Slack thread replies so an interactive hand-off
+// posted to a thread (see internal/handoff) can capture your reply. It reports
+// whether it consumed the message (a reply to a pending hand-off) so ordinary
+// chatter still flows to normal rule matching. nil (default) → thread replies are
+// ignored, and behavior is exactly as before.
+var replyHook func(channel, threadTS, user, text string) bool
+
+// SetReplyHook installs the hand-off reply hook (set once at startup by main
+// wiring). Passing nil clears it.
+func SetReplyHook(fn func(channel, threadTS, user, text string) bool) { replyHook = fn }
+
 // Config is one slack instance.
 type Config struct {
 	AppToken string `yaml:"app_token"` // xapp-… (Socket Mode connect)

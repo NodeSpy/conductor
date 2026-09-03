@@ -22,9 +22,12 @@ import (
 	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/paseo-conductor/internal/controller"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
 	"github.com/NodeSpy/paseo-conductor/internal/engine"
+	"github.com/NodeSpy/paseo-conductor/internal/handoff"
+	"github.com/NodeSpy/paseo-conductor/internal/inbound"
 	"github.com/NodeSpy/paseo-conductor/internal/notify"
 	"github.com/NodeSpy/paseo-conductor/internal/store"
 
@@ -218,17 +221,45 @@ func cmdRun(args []string) error {
 	disp.AdoptOpenWorkspaces = cfg.AdoptOpenWorkspaces
 	preflightPATH(disp.PaseoBin)
 	notifier := notify.New(cfg.Notify, logf, st.Audit)
+	// Controller registry (paseo is the built-in default) + the session broker that
+	// owns one live session per PR — so an interactive hand-off survives a restart
+	// and follow-ups funnel to the live session instead of a duplicate agent. Built
+	// here so the broker and the engine share one registry. With no `controllers:`
+	// block this resolves to paseo everywhere, unchanged.
+	var paseoSender controller.Sender = disp
+	reg := controller.NewRegistry(cfg.Controllers, cfg.DefaultControllerName(), disp, paseoSender)
+	broker := controller.NewBroker(reg, st, logf)
+	// Optional portable review hand-off channel: a web-link page served on the
+	// inbound HTTP listener. Absent config → nil channel → the review hand-off keeps
+	// today's paseo-native behavior.
+	var handoffCh handoff.Channel
+	var webCh *handoff.WebChannel
+	if cfg.Handoff.Web.BaseURL != "" {
+		webCh = handoff.NewWebChannel(cfg.Handoff.Web.BaseURL, logf)
+		handoffCh = webCh
+	}
 	// Shared "never reap" set for interactive hand-off agents: the engine registers
 	// a background step's agent at launch; the reaper skips anything in it.
 	hold := dispatch.NewHoldSet(filepath.Join(filepath.Dir(cfg.Store.StateFile), "holds.json"))
 	eng := engine.New(engine.Options{
-		Config: cfg, Store: st, Dispatch: disp, Notifier: notifier,
-		Author: gitAuthor(), UserToken: writeTok, ReadToken: readTok, Log: logf,
+		Config: cfg, Store: st, Dispatch: disp, Controllers: reg, Broker: broker, Handoff: handoffCh,
+		Notifier: notifier, Author: gitAuthor(), UserToken: writeTok, ReadToken: readTok, Log: logf,
 		RefreshAppToken: refreshAppToken(igs), Hold: hold, PausePath: pausePath(cfg),
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Serve the web-link hand-off draft pages on the shared inbound listener (once
+	// ctx exists to govern its shutdown). No-op when the web channel isn't configured.
+	if webCh != nil {
+		addr := cfg.Handoff.Web.Listen
+		if addr == "" {
+			addr = ":8099"
+		}
+		inbound.Register(ctx, addr, "/handoff", webCh, logf)
+		logf("handoff: web draft pages on %s/handoff (links at %s/handoff)", addr, cfg.Handoff.Web.BaseURL)
+	}
 
 	// Write a pidfile so the `sweep` CLI can signal us; clean it up on exit.
 	pidFile := pidPath(cfg)
