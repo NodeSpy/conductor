@@ -99,8 +99,15 @@ setup() {
   # unreadable and the github integration would fail to start.
   if [ ! -f "$DIR/config/github-app.pem" ]; then
     docker run --rm -v "$DIR/config:/c" paseo-conductor-e2e:latest \
-      sh -c 'openssl genrsa -out /c/github-app.pem 2048 && chmod 644 /c/github-app.pem' >/dev/null 2>&1
+      sh -c 'openssl genrsa -out /c/github-app.pem 2048' >/dev/null 2>&1
   fi
+  # ALWAYS re-assert the mode — a pem left 0600 by an older run is root-owned (a host
+  # chmod can't touch it) and would be reused forever behind the existence check
+  # above, wedging the github integration ("read app key: permission denied") so
+  # nothing dispatches. A root container is the only way to fix a root-owned file's
+  # mode from here.
+  docker run --rm -v "$DIR/config:/c" paseo-conductor-e2e:latest \
+    chmod 644 /c/github-app.pem >/dev/null 2>&1
 
   dc up -d || { echo "up failed"; dc logs; exit 1; }
 
@@ -287,10 +294,23 @@ b_live_row_required() {
   fi
 }
 
-# b_live_row_besteffort <repo> <label> — force a merge_conflict and wait for either a
-# pushed commit (PASS), a conductor-level dispatch failure (FAIL — a real
-# harness/controller problem), or the agent's turn to finish with no commit (SKIP —
-# the agent launched but its model provider blocked the turn; operator action).
+# live_await_push <repo> — a turn is marked complete a moment before its `git push`
+# lands on the forge (git:// propagation), so once the turn finishes give the commit
+# a short grace window to appear before a caller concludes it never pushed. Returns 0
+# as soon as the commit shows, 1 if the window elapses.
+live_await_push() { # repo
+  local g=$((SECONDS + 30))
+  while [ $SECONDS -lt $g ]; do
+    forge_got_new_commit "$1" pr-1 && return 0
+    sleep 2
+  done
+  return 1
+}
+
+# b_live_row_besteffort <repo> <label> — force a merge_conflict and classify by what
+# the real agent actually did: a pushed commit on the forge is PASS; a conductor-level
+# dispatch failure is FAIL (a real harness/controller problem); a finished turn that
+# left no commit even after the grace window is SKIP with the captured reason.
 b_live_row_besteffort() {
   local repo="$1" label="$2"
   force conductor merge_conflict "$repo#1" /etc/conductor/controllers.live.yaml >/dev/null
@@ -298,15 +318,16 @@ b_live_row_besteffort() {
   while [ $SECONDS -lt $deadline ]; do
     forge_got_new_commit "$repo" pr-1 && break
     live_conductor_failed "$repo" && break   # dispatch couldn't drive the agent
-    live_turn_done "$repo"        && break    # agent's turn finished (check commit next)
+    live_turn_done "$repo"        && break    # agent's turn finished; its push may still be landing
     sleep 3
   done
+  live_await_push "$repo"   # let a just-finished turn's push reach the forge
   if forge_got_new_commit "$repo" pr-1; then
     ok "B(live) $label real agent edited & pushed to the forge" B "$label"
   elif live_conductor_failed "$repo"; then
     bad "B(live) $label real fixer" B "$label" "conductor could not drive $label: $(live_last_error "$repo")"
   else
-    skip B "$label" "wired OK; agent launched & authenticated but landed no commit — provider/model unavailable (operator action).$(live_last_error "$repo")"
+    skip B "$label" "agent turn finished but no commit reached the forge within the window.$(live_last_error "$repo")"
   fi
 }
 
@@ -322,10 +343,11 @@ b_live_row_optional() {
     live_turn_done "$repo"        && break
     sleep 3
   done
+  live_await_push "$repo"
   if forge_got_new_commit "$repo" pr-1; then
     ok "B(live) $label real agent edited & pushed to the forge" B "$label"
   else
-    skip B "$label" "optional — not wired/authenticated on this host (best effort).$(live_last_error "$repo")"
+    skip B "$label" "optional — no commit reached the forge (not wired/authenticated on this host, or its turn left no commit).$(live_last_error "$repo")"
   fi
 }
 
