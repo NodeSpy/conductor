@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,10 +46,23 @@ func newAppAuth(appID int64, keyPath string) (*appAuth, error) {
 		appID:   appID,
 		key:     key,
 		httpc:   &http.Client{Timeout: 20 * time.Second},
-		apiBase: "https://api.github.com",
+		apiBase: apiBaseURL(),
 		now:     time.Now,
 		cache:   map[int64]cachedToken{},
 	}, nil
+}
+
+// apiBaseURL is the GitHub REST API base. It defaults to the public API; a
+// hermetic test harness (see test/e2e/) may point conductor at a mock API by
+// setting PC_GITHUB_API_BASE. Unset — the production case — leaves behavior
+// unchanged. This is the sole read-path base URL: every restClient call derives
+// from appAuth.apiBase, so overriding it here redirects all reads, the
+// installation-token mint, and the App-JWT lookups together.
+func apiBaseURL() string {
+	if v := os.Getenv("PC_GITHUB_API_BASE"); v != "" {
+		return strings.TrimRight(v, "/")
+	}
+	return "https://api.github.com"
 }
 
 // appJWT builds a short-lived RS256 JWT identifying the App.

@@ -1,0 +1,15 @@
+# Group A3: a single default:true controller is accepted by validation.
+integrations:
+  - type: github
+    name: github
+    enabled: true
+    app: { app_id: 1, private_key_path: /etc/conductor/github-app.pem, webhook_secret: s, verify_signature: false }
+    webhook: { listen: "0.0.0.0:8792" }
+    defaults: { me: { logins: [conductor-user] } }
+    rules: [ { match: { repos: ["acme/*"] } } ]
+controllers:
+  deflt: { type: paseo, default: true }
+agents:
+  fixer: { provider: fake, controller: deflt }
+store: { state_file: /data/state.json, audit_log: /data/audit.jsonl }
+paseo_bin: /usr/local/bin/fakepaseo

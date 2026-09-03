@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -29,6 +30,34 @@ var (
 	notifiarrURL = "https://notifiarr.com/api/v1/notification/passthrough/%s"
 	defaultNtfy  = "https://ntfy.sh"
 )
+
+// Pushover and Notifiarr post to fixed vendor hosts with no config knob (unlike
+// Slack/Discord/ntfy, whose URLs come from config). So a hermetic test harness
+// (test/e2e/) can assert those two sinks too, their base URLs may be redirected
+// via env at startup. Unset — the production case — leaves the vendor endpoints
+// unchanged. PC_NOTIFIARR_URL without a `%s` gets the passthrough/<key> path
+// appended, matching the vendor URL shape.
+func init() {
+	if v := os.Getenv("PC_PUSHOVER_URL"); v != "" {
+		pushoverURL = v
+	}
+	if v := os.Getenv("PC_NOTIFIARR_URL"); v != "" {
+		notifiarrURL = normalizeNotifiarrURL(v)
+	}
+	if v := os.Getenv("PC_NTFY_DEFAULT_URL"); v != "" {
+		defaultNtfy = v
+	}
+}
+
+// normalizeNotifiarrURL keeps the vendor passthrough shape: the URL must carry a
+// single `%s` where the API key is interpolated. A bare base (no `%s`) gets the
+// standard passthrough/<key> path appended.
+func normalizeNotifiarrURL(v string) string {
+	if strings.Contains(v, "%s") {
+		return v
+	}
+	return strings.TrimRight(v, "/") + "/api/v1/notification/passthrough/%s"
+}
 
 // Events.
 const (

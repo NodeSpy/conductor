@@ -1,0 +1,17 @@
+{
+  "action": "completed",
+  "installation": { "id": 42 },
+  "repository": {
+    "full_name": "acme/api",
+    "name": "api",
+    "default_branch": "main",
+    "owner": { "login": "acme" }
+  },
+  "check_run": {
+    "name": "title-validation",
+    "id": 556,
+    "conclusion": "failure",
+    "head_sha": "canned-head-api1",
+    "pull_requests": [ { "number": 1 } ]
+  }
+}

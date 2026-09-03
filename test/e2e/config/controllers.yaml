@@ -1,0 +1,84 @@
+# Second daemon config exercising controller RESOLUTION (issue #10 group A) with a
+# `controllers:` block. Only paseo is runnable in M1, so the non-runnable stub is
+# how precedence is made observable:
+#
+#   a2/*  → fixer_explicit (controller: pae)   → explicit type:paseo → dispatches
+#   a3/*  → fixer_default  (no controller)      → the default:true controller (deflt,
+#                                                 type:paseo) → dispatches
+#   a4/*  → fixer_stub     (controller: stub)   → explicit non-runnable controller,
+#                                                 chosen OVER default:true → escalates
+#
+# Together these prove the order: explicit `controller:` > `default:true` > paseo.
+
+integrations:
+  - type: github
+    name: github
+    enabled: true
+    app:
+      app_id: 123456
+      private_key_path: /etc/conductor/github-app.pem
+      webhook_secret: e2e-webhook-secret
+      verify_signature: false
+    webhook:
+      listen: "0.0.0.0:8788"          # required by validation; unused (force only)
+    sweep:
+      enabled: false
+    identity:
+      read_token: app
+      write_token: e2e-user-write-token
+      commit_author: self
+    defaults:
+      me: { logins: [conductor-user] }
+    rules:
+      - match: { repos: ["a2/*"] }
+        actions:
+          merge_conflict:
+            type: agent
+            agent: fixer_explicit
+            prompt: "Resolve {{.repo}}#{{.pr}} (explicit controller)."
+      - match: { repos: ["a3/*"] }
+        actions:
+          merge_conflict:
+            type: agent
+            agent: fixer_default
+            prompt: "Resolve {{.repo}}#{{.pr}} (default controller)."
+      - match: { repos: ["a4/*"] }
+        actions:
+          merge_conflict:
+            type: agent
+            agent: fixer_stub
+            prompt: "Resolve {{.repo}}#{{.pr}} (non-runnable controller)."
+
+controllers:
+  pae:
+    type: paseo
+  deflt:
+    type: paseo
+    default: true
+  stub:
+    agent: gemini                     # ACP transport → registered ErrNotRunnable in M1
+
+agents:
+  fixer_explicit:
+    provider: fake
+    controller: pae
+    workspace: worktree
+    archive_when_done: true
+  fixer_default:
+    provider: fake
+    workspace: worktree
+    archive_when_done: true
+  fixer_stub:
+    provider: fake
+    controller: stub
+    workspace: worktree
+
+control:
+  enabled: true
+  max_concurrent_agents: 3
+
+store:
+  state_file: /data/state.json
+  audit_log: /data/audit.jsonl
+
+paseo_bin: /usr/local/bin/fakepaseo
