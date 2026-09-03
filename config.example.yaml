@@ -411,6 +411,20 @@ notify:
 #       listen: :8099                            # inbound address the draft page is served on (default :8099)
 #       ttl: 30m                                 # how long a draft link stays valid (default 30m)
 #     default: true                               # at most one entry may set this
+#   # No base_url you host yourself? Set tunnel: instead (or alongside base_url,
+#   # which is then only used as the ""/static fallback). Exactly one provider
+#   # per entry; each opens fresh (new process, new URL) per hand-off and tears
+#   # down on decision/ttl. Pick ONE of the following in place of base_url above:
+#   # tunnel: { provider: lan }                        # http://<auto-detected LAN IPv4>:<listen port>; or host: 192.168.1.50
+#   # tunnel: { provider: cloudflared }                 # anonymous `cloudflared tunnel --url` quick tunnel; needs cloudflared on PATH
+#   # tunnel: { provider: ngrok, authtoken: ${NGROK_AUTHTOKEN} }  # `ngrok http`; authtoken optional if ngrok is already configured
+#   # tunnel: { provider: tailscale, mode: funnel }     # `tailscale serve` (mode: serve, default, tailnet-only) or funnel (public); headscale works transparently
+#   # tunnel: { provider: ssh, ssh_host: localhost.run } # ssh -R tunnel; ssh_host: localhost.run | serveo.net | a.pinggy.io
+#   # tunnel: { provider: localxpose }                  # `loclx tunnel http`; needs loclx on PATH
+#   # tunnel:                                           # generic escape hatch: any command, {{.port}}/{{.addr}} substituted
+#   #   provider: command
+#   #   command: ["cloudflared", "tunnel", "--url", "http://{{.addr}}"]
+#   #   url_pattern: 'https://\S+\.trycloudflare\.com\S*'  # optional; default matches any https?:// URL in the output
 #   # phone:                                      # Slack DM/thread — schema only, not wired yet
 #   #   slack:
 #   #     to: dm                                  # dm | thread

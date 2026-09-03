@@ -598,10 +598,39 @@ one is defined.
 - It is delivered only over your `notify` sinks (the `needs_input` event), never printed publicly.
 - It is invalidated the moment you decide, and expires after `ttl` (default `30m`) as a backstop.
 
-`base_url` must be an origin you can actually reach the page at. On a local machine with no public URL
-that is the open problem: **ephemeral per-hand-off tunnels** (cloudflared/ngrok/tailscale/ssh) and
-**chat channels** (`slack`/`discord`, to a DM or thread — no URL at all) are being added in follow-up
-increments. Their config keys (`tunnel:`, `slack:`, `discord:`) validate today but are not wired yet.
+`base_url` must be an origin you can actually reach the page at. On a local machine with no public URL,
+set `tunnel:` instead of (or alongside) `base_url` and conductor opens one for you:
+
+```yaml
+handoffs:
+  page:
+    web:
+      listen: :8099
+      tunnel:
+        provider: cloudflared   # lan | static | cloudflared | ngrok | tailscale | ssh | localxpose | command
+```
+
+### Tunnel providers
+
+| provider | mechanism | exposure |
+|---|---|---|
+| `lan` | no process; `http://<host>:<port>` — `host:` if set, else an auto-detected private IPv4 | LAN only |
+| `static` (or `tunnel:` unset) | no process; uses `base_url` as-is | as configured |
+| `cloudflared` | `cloudflared tunnel --url http://127.0.0.1:<port>` — an anonymous quick tunnel; for a named/authenticated Cloudflare tunnel use `command:` | public |
+| `ngrok` | `ngrok http <port>` (`authtoken:` if set); the URL is read from ngrok's local API (`127.0.0.1:4040`) | public |
+| `tailscale` | `tailscale serve`/`funnel <port>`; `mode: serve` (tailnet-only, default) or `mode: funnel` (public); works transparently over headscale — the tailnet client, not conductor, points at the control server | tailnet or public |
+| `ssh` | `ssh -R … <ssh_host>`; presets via `ssh_host:` — `localhost.run`, `serveo.net`, `a.pinggy.io` | public |
+| `localxpose` | `loclx tunnel http --to localhost:<port>` | public |
+| `command` | your own `command:` (a template — `{{.port}}`/`{{.addr}}` are substituted) plus a `url_pattern:` regex to pull the URL out of its output; every preset above is one instance of this | depends on the command |
+
+Each hand-off opens its tunnel fresh — a new subprocess, a new URL — and tears it down (kills the
+process) the moment you decide (approve/revise/discard) or the draft's `ttl` expires. `lan` and `static`
+open no process, so their origin stays the same across hand-offs. A spawning provider needs its binary
+on `PATH` (`cloudflared`, `ngrok`, `ssh`, `loclx`, `tailscale`); conductor checks with `exec.LookPath`
+first and the error names the missing binary rather than surfacing a generic exec failure.
+
+`slack`/`discord` hand-offs (a DM or thread, no URL at all) are schema-only in this build — their
+config keys (`slack:`, `discord:`) validate today but aren't wired yet.
 
 ## Identity & rate limits
 

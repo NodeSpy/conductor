@@ -37,6 +37,11 @@ type WebChannel struct {
 	ttl     time.Duration
 	log     func(string, ...any)
 
+	// tunnel and listen are set by SetTunnel (see registry.go's buildChannel). A
+	// nil tunnel keeps today's behavior: the link's origin is always baseURL.
+	tunnel Tunnel
+	listen string
+
 	mu      sync.Mutex
 	pending map[string]*webPending
 }
@@ -68,6 +73,19 @@ func NewWebChannel(baseURL string, ttl time.Duration, log func(string, ...any)) 
 	}
 }
 
+// SetTunnel wires a pluggable tunnel (see tunnel.go): Present opens
+// tunnel.Open(ctx, listen) fresh for each draft to compute that draft's link
+// origin, and the returned closeFn is invoked (tearing the tunnel down) when the
+// presentation is closed. listen is the local address the draft page is served
+// on (see Registry.WebEntries / cmd/paseo-conductor/main.go). Not calling
+// SetTunnel (the zero value: tunnel == nil) keeps today's behavior — the origin
+// is always baseURL. Not concurrency-safe with Present; call before the channel
+// is handed out (buildChannel does this at construction).
+func (c *WebChannel) SetTunnel(t Tunnel, listen string) {
+	c.tunnel = t
+	c.listen = listen
+}
+
 // Present registers the draft and returns a Presentation whose Ref is the page
 // link. Await blocks until a POST resolves it, the ttl elapses, or ctx is
 // cancelled.
@@ -85,19 +103,37 @@ func (c *WebChannel) Present(ctx context.Context, d Draft) (Presentation, error)
 	p := &webPending{draft: d, done: make(chan Decision, 1), expires: expires}
 	c.pending[d.ID] = p
 	c.mu.Unlock()
-	// origin is computed per-Present so a future per-draft tunnel origin (a
-	// fresh public URL per hand-off) slots in here without reshaping the caller.
-	origin := c.origin(ctx, d)
+	// origin is computed per-Present so a wired tunnel opens a fresh public URL
+	// for THIS draft (see openOrigin); lan/static return a stable origin.
+	origin, tunnelClose, err := c.openOrigin(ctx, d)
+	if err != nil {
+		c.remove(d.ID)
+		return nil, fmt.Errorf("handoff: open origin: %w", err)
+	}
 	ref := c.link(origin, d.ID)
 	c.log("handoff: draft %s presented at %s (expires %s)", d.ID, ref, expires.Format(time.RFC3339))
-	return &webPresentation{c: c, id: d.ID, ref: ref, expires: expires}, nil
+	return &webPresentation{c: c, id: d.ID, ref: ref, expires: expires, tunnelClose: tunnelClose}, nil
 }
 
-// origin returns the public origin a draft's link is served at. Always baseURL
-// today; a future per-hand-off tunnel computes a fresh origin per call here
-// instead.
-func (c *WebChannel) origin(context.Context, Draft) string {
-	return c.baseURL
+// openOrigin returns the public origin this draft's link should point at, and a
+// close func releasing whatever was opened to expose it. With no tunnel wired
+// (the common case — only base_url configured, SetTunnel never called) the
+// origin is always baseURL and close is a no-op, matching pre-tunnel behavior
+// exactly. A wired tunnel (including the explicit "static"/"lan" providers) is
+// asked fresh on every call, so a spawning provider gets a new process — and
+// therefore a new URL — per hand-off.
+func (c *WebChannel) openOrigin(ctx context.Context, d Draft) (string, func() error, error) {
+	if c.tunnel == nil {
+		return c.baseURL, noopClose, nil
+	}
+	origin, closeFn, err := c.tunnel.Open(ctx, c.listen)
+	if err != nil {
+		return "", nil, err
+	}
+	if closeFn == nil {
+		closeFn = noopClose
+	}
+	return origin, closeFn, nil
 }
 
 // newID returns a fresh crypto-random, base64url-encoded draft id. Caller must
@@ -249,6 +285,13 @@ type webPresentation struct {
 	id      string
 	ref     string
 	expires time.Time
+
+	// tunnelClose releases whatever openOrigin opened for this draft (a no-op for
+	// lan/static). Invoked by Close, guarded by closeOnce so repeat/concurrent
+	// Close calls (every caller closes unconditionally after Await returns) only
+	// tear it down once.
+	tunnelClose func() error
+	closeOnce   sync.Once
 }
 
 func (p *webPresentation) Ref() string { return p.ref }
@@ -283,4 +326,15 @@ func (p *webPresentation) Await(ctx context.Context) (Decision, error) {
 	}
 }
 
-func (p *webPresentation) Close() { p.c.remove(p.id) }
+// Close releases the presentation: tears down its tunnel (if any) then removes
+// the pending draft. Safe to call more than once.
+func (p *webPresentation) Close() {
+	p.closeOnce.Do(func() {
+		if p.tunnelClose != nil {
+			if err := p.tunnelClose(); err != nil {
+				p.c.log("handoff: draft %s: tunnel close: %v", p.id, err)
+			}
+		}
+		p.c.remove(p.id)
+	})
+}

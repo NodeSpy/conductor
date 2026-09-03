@@ -3,6 +3,7 @@ package handoff
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
@@ -109,6 +110,33 @@ func TestRegistryChatChannelsAreNotWiredStubs(t *testing.T) {
 		if !errors.Is(perr, ErrNotWired) {
 			t.Fatalf("%s: Present on a slack/discord stub should fail with ErrNotWired, got %v", name, perr)
 		}
+	}
+}
+
+// TestRegistryBuildChannelWiresTunnel confirms buildChannel actually wires a
+// configured tunnel into the *WebChannel (not just the schema): a `lan`
+// provider's Open should be reachable through the resolved channel's Present,
+// producing a link on the configured LAN host rather than base_url.
+func TestRegistryBuildChannelWiresTunnel(t *testing.T) {
+	cfgs := map[string]config.HandoffConfig{
+		"page": {Web: &config.HandoffWeb{
+			BaseURL: "https://unused.example",
+			Listen:  ":9911",
+			Tunnel:  config.TunnelConfig{Provider: "lan", Host: "192.168.1.50"},
+		}},
+	}
+	r := NewRegistry(cfgs, "", nil)
+	ch, err := r.Resolve("page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pres, err := ch.Present(context.Background(), Draft{Title: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "http://192.168.1.50:9911/handoff?id="
+	if !strings.HasPrefix(pres.Ref(), want) {
+		t.Fatalf("expected the lan tunnel origin in the link, got %q", pres.Ref())
 	}
 }
 

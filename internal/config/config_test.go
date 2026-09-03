@@ -442,6 +442,86 @@ func TestHandoffsTwoDefaultsRejected(t *testing.T) {
 	}
 }
 
+func TestHandoffTunnelUnknownProviderRejected(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"page": {Web: &HandoffWeb{BaseURL: "https://a.test", Tunnel: TunnelConfig{Provider: "bogus"}}},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("an unknown tunnel provider must be rejected")
+	}
+}
+
+func TestHandoffTunnelKnownProvidersAccepted(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		t    TunnelConfig
+	}{
+		{"empty", TunnelConfig{}},
+		{"static", TunnelConfig{Provider: "static"}},
+		{"lan", TunnelConfig{Provider: "lan"}},
+		{"lan with host", TunnelConfig{Provider: "lan", Host: "192.168.1.5"}},
+		{"cloudflared", TunnelConfig{Provider: "cloudflared"}},
+		{"ngrok", TunnelConfig{Provider: "ngrok", Authtoken: "${NGROK_AUTHTOKEN}"}},
+		{"tailscale serve", TunnelConfig{Provider: "tailscale"}},
+		{"tailscale funnel", TunnelConfig{Provider: "tailscale", Mode: "funnel"}},
+		{"ssh", TunnelConfig{Provider: "ssh", SSHHost: "localhost.run"}},
+		{"ssh pinggy", TunnelConfig{Provider: "ssh", SSHHost: "a.pinggy.io"}},
+		{"localxpose", TunnelConfig{Provider: "localxpose"}},
+		{"command", TunnelConfig{Provider: "command", Command: []string{"my-tunnel-cli", "--port", "{{.port}}"}, URLPattern: `https?://\S+`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := ctrlBaseCfg()
+			c.Handoffs = map[string]HandoffConfig{"page": {Web: &HandoffWeb{BaseURL: "https://a.test", Tunnel: tc.t}}}
+			if err := c.Validate(); err != nil {
+				t.Fatalf("provider %q should validate, got %v", tc.t.Provider, err)
+			}
+		})
+	}
+}
+
+func TestHandoffTunnelTailscaleBadModeRejected(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"page": {Web: &HandoffWeb{BaseURL: "https://a.test", Tunnel: TunnelConfig{Provider: "tailscale", Mode: "bogus"}}},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("tailscale mode must be serve|funnel")
+	}
+}
+
+func TestHandoffTunnelSSHRequiresHost(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"page": {Web: &HandoffWeb{BaseURL: "https://a.test", Tunnel: TunnelConfig{Provider: "ssh"}}},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("ssh provider without ssh_host must be rejected")
+	}
+}
+
+func TestHandoffTunnelCommandRequiresCommand(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"page": {Web: &HandoffWeb{BaseURL: "https://a.test", Tunnel: TunnelConfig{Provider: "command"}}},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("command provider without command: must be rejected")
+	}
+}
+
+func TestHandoffTunnelBadURLPatternRejected(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Handoffs = map[string]HandoffConfig{
+		"page": {Web: &HandoffWeb{BaseURL: "https://a.test", Tunnel: TunnelConfig{
+			Provider: "command", Command: []string{"echo"}, URLPattern: "(unclosed",
+		}}},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("an invalid url_pattern regex must be rejected")
+	}
+}
+
 func TestCheckAgentRefsUnknownHandoffRejected(t *testing.T) {
 	c := ctrlBaseCfg()
 	c.Handoffs = map[string]HandoffConfig{"page": {Web: &HandoffWeb{BaseURL: "https://a.test"}}}

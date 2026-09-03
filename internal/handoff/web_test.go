@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -234,6 +235,125 @@ func TestWebChannelTTLExpiryUnblocksAwaitAnd404s(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expired draft should 404, got %d", resp.StatusCode)
+	}
+}
+
+// fakeTunnel is a Tunnel test double: each Open call returns the next
+// pre-scripted origin/error and records whether its close func was invoked, so
+// tests can assert Present opens fresh per draft and Close tears it down.
+type fakeTunnel struct {
+	mu      sync.Mutex
+	origins []string // one per call, in order; exhausted -> err (if set) or "" and no error
+	err     error    // returned by every Open call when set (origins ignored)
+	calls   int
+	closed  []bool // parallel to the presentations opened, filled in as each closeFn is called
+}
+
+func (f *fakeTunnel) Open(context.Context, string) (string, func() error, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return "", nil, f.err
+	}
+	i := f.calls
+	f.calls++
+	f.closed = append(f.closed, false)
+	origin := ""
+	if i < len(f.origins) {
+		origin = f.origins[i]
+	}
+	return origin, func() error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.closed[i] = true
+		return nil
+	}, nil
+}
+
+func (f *fakeTunnel) closedAt(i int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closed[i]
+}
+
+// TestWebChannelTunnelOpensFreshOriginPerDraft confirms a wired tunnel is opened
+// on every Present (not just once), so each hand-off gets its own origin — the
+// per-hand-off ephemeral URL behavior a spawning provider relies on.
+func TestWebChannelTunnelOpensFreshOriginPerDraft(t *testing.T) {
+	c := NewWebChannel("http://unused.test", 0, nil)
+	tun := &fakeTunnel{origins: []string{"https://one.example", "https://two.example"}}
+	c.SetTunnel(tun, ":8099")
+
+	ctx := context.Background()
+	p1, err := c.Present(ctx, Draft{Title: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := c.Present(ctx, Draft{Title: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(p1.Ref(), "https://one.example/handoff?id=") {
+		t.Fatalf("first draft should use the first opened origin, got %q", p1.Ref())
+	}
+	if !strings.HasPrefix(p2.Ref(), "https://two.example/handoff?id=") {
+		t.Fatalf("second draft should use the second opened origin, got %q", p2.Ref())
+	}
+	if tun.calls != 2 {
+		t.Fatalf("tunnel should be opened once per draft, got %d calls", tun.calls)
+	}
+}
+
+// TestWebChannelCloseTearsDownTunnel confirms Close invokes the tunnel's close
+// func (killing its process) in addition to removing the pending draft, and that
+// calling Close twice doesn't double up.
+func TestWebChannelCloseTearsDownTunnel(t *testing.T) {
+	c := NewWebChannel("http://unused.test", 0, nil)
+	tun := &fakeTunnel{origins: []string{"https://one.example"}}
+	c.SetTunnel(tun, ":8099")
+
+	pres, err := c.Present(context.Background(), Draft{Title: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tun.closedAt(0) {
+		t.Fatal("tunnel should not be closed before Close is called")
+	}
+	pres.Close()
+	if !tun.closedAt(0) {
+		t.Fatal("Close should tear down the tunnel")
+	}
+	pres.Close() // must not panic or double-invoke
+}
+
+// TestWebChannelTunnelOpenErrorFailsPresentCleanly confirms a tunnel that fails
+// to open surfaces as a Present error and doesn't leave a dangling pending entry
+// (a subsequent GET on the never-issued id must 404, not hang or panic).
+func TestWebChannelTunnelOpenErrorFailsPresentCleanly(t *testing.T) {
+	c := NewWebChannel("http://unused.test", 0, nil)
+	tun := &fakeTunnel{err: fmt.Errorf("cloudflared not found on PATH")}
+	c.SetTunnel(tun, ":8099")
+
+	_, err := c.Present(context.Background(), Draft{Title: "a", ID: "would-be-id"})
+	if err == nil {
+		t.Fatal("a tunnel Open failure should fail Present")
+	}
+	if c.get("would-be-id") != nil {
+		t.Fatal("a failed Present must not leave a pending draft behind")
+	}
+}
+
+// TestWebChannelNoTunnelKeepsBaseURLOrigin confirms the zero value (SetTunnel
+// never called) behaves exactly as before tunnels existed: every draft's link
+// uses baseURL.
+func TestWebChannelNoTunnelKeepsBaseURLOrigin(t *testing.T) {
+	c := NewWebChannel("http://example.test", 0, nil)
+	pres, err := c.Present(context.Background(), Draft{Title: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(pres.Ref(), "http://example.test/handoff?id=") {
+		t.Fatalf("no tunnel wired should keep the baseURL origin, got %q", pres.Ref())
 	}
 }
 
