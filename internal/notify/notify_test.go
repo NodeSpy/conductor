@@ -164,7 +164,7 @@ func TestNtfySinkPublishes(t *testing.T) {
 		if got.path != "/conductor" {
 			t.Fatalf("ntfy path = %q, want /conductor", got.path)
 		}
-		if got.title != "paseo-conductor" {
+		if got.title != "conductor" {
 			t.Fatalf("ntfy title = %q", got.title)
 		}
 		if !strings.Contains(got.body, "acme/w#11") {

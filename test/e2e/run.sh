@@ -64,7 +64,7 @@ audit_count() {
 }
 
 force() { # container kind repo#n config
-  cexec "$1" paseo-conductor force "$2" "$3" --config "$4" 2>&1
+  cexec "$1" conductor force "$2" "$3" --config "$4" 2>&1
 }
 
 # post_webhook <event> <fixture> — sign and POST a fixture to conductor's receiver.
@@ -98,7 +98,7 @@ setup() {
   # root) and the config dir is mounted read-only, so a 0600 root-owned pem would be
   # unreadable and the github integration would fail to start.
   if [ ! -f "$DIR/config/github-app.pem" ]; then
-    docker run --rm -v "$DIR/config:/c" paseo-conductor-e2e:latest \
+    docker run --rm -v "$DIR/config:/c" conductor-e2e:latest \
       sh -c 'openssl genrsa -out /c/github-app.pem 2048' >/dev/null 2>&1
   fi
   # ALWAYS re-assert the mode — a pem left 0600 by an older run is root-owned (a host
@@ -106,7 +106,7 @@ setup() {
   # above, wedging the github integration ("read app key: permission denied") so
   # nothing dispatches. A root container is the only way to fix a root-owned file's
   # mode from here.
-  docker run --rm -v "$DIR/config:/c" paseo-conductor-e2e:latest \
+  docker run --rm -v "$DIR/config:/c" conductor-e2e:latest \
     chmod 644 /c/github-app.pem >/dev/null 2>&1
 
   dc up -d || { echo "up failed"; dc logs; exit 1; }
@@ -170,17 +170,17 @@ group_A_resolution() {
   fi
 
   # A5: validation rejects two defaults and an unknown transport; accepts one default.
-  if ! cexec conductor paseo-conductor validate --config /etc/conductor/resolution/a5-two-defaults.yaml >/dev/null 2>&1; then
+  if ! cexec conductor conductor validate --config /etc/conductor/resolution/a5-two-defaults.yaml >/dev/null 2>&1; then
     ok "A5 validation rejects two default:true controllers" A A5a
   else
     bad "A5 two defaults rejected" A A5a "validate unexpectedly passed"
   fi
-  if ! cexec conductor paseo-conductor validate --config /etc/conductor/resolution/a5-unknown-transport.yaml >/dev/null 2>&1; then
+  if ! cexec conductor conductor validate --config /etc/conductor/resolution/a5-unknown-transport.yaml >/dev/null 2>&1; then
     ok "A5 validation rejects an unknown transport" A A5b
   else
     bad "A5 unknown transport rejected" A A5b "validate unexpectedly passed"
   fi
-  if cexec conductor paseo-conductor validate --config /etc/conductor/resolution/a3-valid-default.yaml >/dev/null 2>&1; then
+  if cexec conductor conductor validate --config /etc/conductor/resolution/a3-valid-default.yaml >/dev/null 2>&1; then
     ok "A5 validation accepts a single default:true controller" A A5c
   else
     bad "A5 single default accepted" A A5c "validate unexpectedly failed"

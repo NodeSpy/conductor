@@ -74,7 +74,7 @@ func main() {
 	case "service":
 		err = cmdService(args)
 	case "version", "-v", "--version":
-		fmt.Println("paseo-conductor", version)
+		fmt.Println("conductor", version)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -89,27 +89,29 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `paseo-conductor — event-driven agent orchestration for your Paseo daemon
+	fmt.Fprint(os.Stderr, `conductor — event-driven agent orchestration for your Paseo daemon
 
 usage:
-  paseo-conductor run [--config PATH]         start the daemon
-  paseo-conductor validate [--config PATH]    load & validate config, then exit
-  paseo-conductor replay <event.json> [--config PATH]  run a saved webhook through the pipeline (dry-run)
-  paseo-conductor sweep [--config PATH]       one catch-up sweep (dry-run print)
-  paseo-conductor sweep --now [--config PATH] signal the running daemon to sweep now
-  paseo-conductor force <kind> <owner/repo>#<n>  force an action for a target now (via the running daemon)
-  paseo-conductor status [--config PATH]      snapshot: live agents, in-flight workflows, stuck/attention
-  paseo-conductor report [--days N]           activity summary: dispatches by kind/outcome + attention
-  paseo-conductor pause | resume              stop / resume dispatch at runtime (no restart)
-  paseo-conductor update [--force] [--tag vX]  self-update to the latest release (uses gh)
-  paseo-conductor service install|sync|uninstall  manage the background service unit
-  paseo-conductor version
+  conductor run [--config PATH]         start the daemon
+  conductor validate [--config PATH]    load & validate config, then exit
+  conductor replay <event.json> [--config PATH]  run a saved webhook through the pipeline (dry-run)
+  conductor sweep [--config PATH]       one catch-up sweep (dry-run print)
+  conductor sweep --now [--config PATH] signal the running daemon to sweep now
+  conductor force <kind> <owner/repo>#<n>  force an action for a target now (via the running daemon)
+  conductor status [--config PATH]      snapshot: live agents, in-flight workflows, stuck/attention
+  conductor report [--days N]           activity summary: dispatches by kind/outcome + attention
+  conductor pause | resume              stop / resume dispatch at runtime (no restart)
+  conductor update [--force] [--tag vX]  self-update to the latest release (uses gh)
+  conductor service install|sync|uninstall  manage the background service unit
+  conductor version
 `)
 }
 
-// configPath extracts --config from args (default ~/.config/paseo-conductor/config.yaml).
+// configPath extracts --config from args (default configDir()/config.yaml —
+// ~/.config/conductor for a fresh install, or ~/.config/paseo-conductor when
+// that directory already exists on this box).
 func configPath(args []string) (string, []string) {
-	def := expandHome("~/.config/paseo-conductor/config.yaml")
+	def := filepath.Join(configDir(), "config.yaml")
 	rest := []string{}
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--config" && i+1 < len(args) {
@@ -286,7 +288,7 @@ func cmdRun(args []string) error {
 	}
 
 	// SIGUSR1 → run a catch-up sweep now (and reset the adaptive cadence). Lets
-	// `paseo-conductor sweep` force a sweep without waiting out the backoff.
+	// `conductor sweep` force a sweep without waiting out the backoff.
 	usr1 := make(chan os.Signal, 1)
 	signal.Notify(usr1, syscall.SIGUSR1)
 	go func() {
@@ -351,7 +353,7 @@ func cmdRun(args []string) error {
 	// Resume any workflow that was mid-flight when we last stopped.
 	go eng.ResumeWorkflows(ctx)
 
-	logf("paseo-conductor %s running (%d integration(s))", version, len(igs))
+	logf("conductor %s running (%d integration(s))", version, len(igs))
 	if err := eng.Run(ctx); err != nil && ctx.Err() == nil {
 		return err
 	}
@@ -701,7 +703,7 @@ func forceOnIntegrations(ctx context.Context, igs []core.Integration, req contro
 
 // cmdForce sends a force request to the running daemon over its control socket:
 //
-//	paseo-conductor force <kind> <owner/repo>#<number> [--integration NAME]
+//	conductor force <kind> <owner/repo>#<number> [--integration NAME]
 func cmdForce(args []string) error {
 	cfg, rest, err := loadConfig(args)
 	if err != nil {
@@ -718,7 +720,7 @@ func cmdForce(args []string) error {
 		pos = append(pos, rest[i])
 	}
 	if len(pos) < 2 {
-		return fmt.Errorf("usage: paseo-conductor force <kind> <owner/repo>#<number> [--integration NAME]")
+		return fmt.Errorf("usage: conductor force <kind> <owner/repo>#<number> [--integration NAME]")
 	}
 	repo, number, err := parsePRRef(pos[1])
 	if err != nil {
@@ -784,7 +786,7 @@ func signalSweepNow(cfg *config.Config) error {
 	if err := syscall.Kill(pid, syscall.SIGUSR1); err != nil {
 		return fmt.Errorf("signal daemon (pid %d): %w", pid, err)
 	}
-	fmt.Printf("signaled paseo-conductor (pid %d) to run a sweep now\n", pid)
+	fmt.Printf("signaled conductor (pid %d) to run a sweep now\n", pid)
 	return nil
 }
 
@@ -912,13 +914,4 @@ func loadEnvFile(path string) {
 			os.Setenv(k, v)
 		}
 	}
-}
-
-func expandHome(p string) string {
-	if strings.HasPrefix(p, "~/") {
-		if h, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(h, p[2:])
-		}
-	}
-	return p
 }

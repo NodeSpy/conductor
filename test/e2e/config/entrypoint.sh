@@ -16,4 +16,4 @@ git config --global init.defaultBranch main
 
 mkdir -p /data /data/fakepaseo /home/conductor
 
-exec paseo-conductor run --config "$CONFIG"
+exec conductor run --config "$CONFIG"

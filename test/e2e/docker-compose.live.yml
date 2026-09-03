@@ -37,7 +37,7 @@ services:
         # step. run.sh exports these from the host; default to the common 1000.
         HOST_UID: "${HOST_UID:-1000}"
         HOST_GID: "${HOST_GID:-1000}"
-    image: paseo-conductor-e2e-live:latest
+    image: conductor-e2e-live:latest
     # Reach the host TeamClaude proxy (127.0.0.1:3456 on the host) from inside the
     # container. The rest of the stack still talks by service name on the bridge net.
     extra_hosts:

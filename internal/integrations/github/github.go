@@ -1,4 +1,4 @@
-// Package github is paseo-conductor's first integration. It receives GitHub App
+// Package github is conductor's first integration. It receives GitHub App
 // webhooks over a smee.io SSE channel, verifies them, translates payloads into
 // core.Triggers, and resolves the effective action from the instance's rules.
 //

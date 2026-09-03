@@ -50,7 +50,7 @@ func launchedByServiceManager() bool {
 func selfExe() string {
 	p, err := os.Executable()
 	if err != nil {
-		return "paseo-conductor"
+		return "conductor"
 	}
 	if r, err := filepath.EvalSymlinks(p); err == nil {
 		p = r
@@ -64,6 +64,56 @@ func home() string {
 }
 
 func launchdLog() string { return filepath.Join(home(), "Library/Logs/paseo-conductor.log") }
+
+// serviceName returns the per-user service unit / launchd label name to use for
+// every systemctl/launchctl operation: "paseo-conductor" when that unit is
+// already installed on this box (an existing fleet install — every systemctl
+// --user / launchctl call MUST keep targeting it, or a deployed daemon becomes
+// unmanageable), else the new default "conductor" for a fresh install.
+func serviceName() string {
+	if legacyServiceUnitPath() != "" {
+		return "paseo-conductor"
+	}
+	return "conductor"
+}
+
+// legacyServiceUnitPath returns the install path of the legacy paseo-conductor
+// unit for this OS if one is present on disk, else "".
+func legacyServiceUnitPath() string {
+	var p string
+	switch serviceKind() {
+	case "systemd":
+		p = filepath.Join(home(), ".config/systemd/user/paseo-conductor.service")
+	case "launchd":
+		p = filepath.Join(home(), "Library/LaunchAgents/sh.paseo-conductor.plist")
+	default:
+		return ""
+	}
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
+}
+
+// configDir returns the config directory to use: an already-existing
+// ~/.config/conductor, else an already-existing ~/.config/paseo-conductor (an
+// existing fleet install), else the new default ~/.config/conductor.
+func configDir() string {
+	newDir := filepath.Join(home(), ".config/conductor")
+	oldDir := filepath.Join(home(), ".config/paseo-conductor")
+	if isDir(newDir) {
+		return newDir
+	}
+	if isDir(oldDir) {
+		return oldDir
+	}
+	return newDir
+}
+
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
 
 // servicePATH builds the PATH the service should run with. A --user service
 // otherwise inherits systemd/launchd's minimal PATH, so `paseo`, `gh`, `go`, and
@@ -94,15 +144,19 @@ func servicePATH() string {
 }
 
 // unitPathAndContent returns the install path and rendered content of the
-// service unit for the current OS. Empty path => unsupported OS.
+// service unit for the current OS. Empty path => unsupported OS. The unit
+// name itself comes from serviceName() — "paseo-conductor" on a box that
+// already has that unit installed, else "conductor" for a fresh install —
+// so an existing fleet install's unit file path / launchd label never moves.
 func unitPathAndContent() (path, content string) {
 	exe := selfExe()
-	cfg := expandHome("~/.config/paseo-conductor")
+	cfg := configDir()
+	name := serviceName()
 	switch serviceKind() {
 	case "systemd":
-		path = filepath.Join(home(), ".config/systemd/user/paseo-conductor.service")
+		path = filepath.Join(home(), ".config/systemd/user", name+".service")
 		content = fmt.Sprintf(`[Unit]
-Description=paseo-conductor — event-driven agent orchestration for your Paseo daemon
+Description=conductor — event-driven agent orchestration for your Paseo daemon
 After=network-online.target
 Wants=network-online.target
 
@@ -117,13 +171,13 @@ EnvironmentFile=-%s/conductor.env
 WantedBy=default.target
 `, exe, servicePATH(), cfg)
 	case "launchd":
-		path = filepath.Join(home(), "Library/LaunchAgents/sh.paseo-conductor.plist")
+		path = filepath.Join(home(), "Library/LaunchAgents", "sh."+name+".plist")
 		log := launchdLog()
 		content = fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>Label</key><string>sh.paseo-conductor</string>
+    <key>Label</key><string>sh.%s</string>
     <key>ProgramArguments</key>
     <array>
         <string>%s</string>
@@ -137,7 +191,7 @@ WantedBy=default.target
     <key>StandardErrorPath</key><string>%s</string>
 </dict>
 </plist>
-`, exe, servicePATH(), log, log)
+`, name, exe, servicePATH(), log, log)
 	}
 	return path, content
 }
@@ -188,7 +242,7 @@ func reloadService(restart bool) {
 	case "systemd":
 		_ = sh("systemctl", "--user", "daemon-reload")
 		if restart {
-			_ = sh("systemctl", "--user", "try-restart", "paseo-conductor")
+			_ = sh("systemctl", "--user", "try-restart", serviceName())
 		}
 	case "launchd":
 		if restart {
@@ -216,15 +270,15 @@ func restartInstalledService() bool {
 	case "systemd":
 		// try-restart is a no-op on a stopped unit, so gate on is-active to only
 		// claim a restart when one actually happened.
-		if exec.Command("systemctl", "--user", "is-active", "--quiet", "paseo-conductor").Run() != nil {
+		if exec.Command("systemctl", "--user", "is-active", "--quiet", serviceName()).Run() != nil {
 			return false
 		}
 		_ = sh("systemctl", "--user", "daemon-reload")
-		return sh("systemctl", "--user", "restart", "paseo-conductor") == nil
+		return sh("systemctl", "--user", "restart", serviceName()) == nil
 	case "launchd":
 		// kickstart -k restarts the running agent (error ⇒ not loaded ⇒ false).
 		return sh("launchctl", "kickstart", "-k",
-			fmt.Sprintf("gui/%d/sh.paseo-conductor", os.Getuid())) == nil
+			fmt.Sprintf("gui/%d/sh.%s", os.Getuid(), serviceName())) == nil
 	}
 	return false
 }
@@ -232,7 +286,7 @@ func restartInstalledService() bool {
 func startHint() string {
 	switch serviceKind() {
 	case "systemd":
-		return "systemctl --user enable --now paseo-conductor"
+		return "systemctl --user enable --now " + serviceName()
 	case "launchd":
 		p, _ := unitPathAndContent()
 		return "launchctl load -w " + p
@@ -284,11 +338,11 @@ func startService() error {
 		if err := sh("systemctl", "--user", "daemon-reload"); err != nil {
 			return err
 		}
-		if err := sh("systemctl", "--user", "enable", "--now", "paseo-conductor"); err != nil {
+		if err := sh("systemctl", "--user", "enable", "--now", serviceName()); err != nil {
 			return err
 		}
 		_ = sh("loginctl", "enable-linger", os.Getenv("USER"))
-		logf("==> systemd --user service installed and started (logs: journalctl --user -u paseo-conductor -f)")
+		logf("==> systemd --user service installed and started (logs: journalctl --user -u %s -f)", serviceName())
 	case "launchd":
 		p, _ := unitPathAndContent()
 		_ = exec.Command("launchctl", "unload", p).Run()
@@ -304,7 +358,7 @@ func serviceUninstall() error {
 	p, _ := unitPathAndContent()
 	switch serviceKind() {
 	case "systemd":
-		_ = sh("systemctl", "--user", "disable", "--now", "paseo-conductor")
+		_ = sh("systemctl", "--user", "disable", "--now", serviceName())
 	case "launchd":
 		_ = exec.Command("launchctl", "unload", p).Run()
 	}

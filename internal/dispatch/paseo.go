@@ -540,9 +540,10 @@ func (d *Dispatcher) resolveCheckoutDir(ctx context.Context, repo string) (strin
 	dir := d.findWorkspaceDir(ctx, repo)
 	if dir == "" {
 		// No existing paseo workspace for this repo. Conductor keeps its own base
-		// checkout under ~/.paseo-conductor/checkouts/<name> and uses that directory
-		// directly — paseo 0.7's `clone` writes the checkout to disk but no longer
-		// registers a workspace, so a post-clone `workspace ls` lookup finds nothing.
+		// checkout under ~/.conductor/checkouts/<name> (see cloneParentDir) and uses
+		// that directory directly — paseo 0.7's `clone` writes the checkout to disk
+		// but no longer registers a workspace, so a post-clone `workspace ls` lookup
+		// finds nothing.
 		target, err := d.cloneTargetDir(repo)
 		if err != nil {
 			return "", err
@@ -666,23 +667,34 @@ func (d *Dispatcher) cloneTargetDir(repo string) (string, error) {
 }
 
 // cloneParentDir returns the parent directory conductor clones base checkouts
-// into, creating it if needed. Clones are grouped under ~/.paseo-conductor/checkouts
-// so they don't clutter $HOME; each repo lands in its own <name> subdir.
+// into, creating it if needed. Clones are grouped under ~/.conductor/checkouts
+// (or, on a box with an existing ~/.paseo-conductor, that legacy dir instead —
+// so prior clones there keep being reused rather than orphaned) so they don't
+// clutter $HOME; each repo lands in its own <name> subdir.
 func (d *Dispatcher) cloneParentDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home dir for clone: %w", err)
 	}
-	dir := filepath.Join(home, ".paseo-conductor", "checkouts")
+	dir := filepath.Join(home, ".conductor", "checkouts")
+	if legacy := filepath.Join(home, ".paseo-conductor", "checkouts"); !isDir(filepath.Join(home, ".conductor")) && isDir(filepath.Join(home, ".paseo-conductor")) {
+		dir = legacy
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create clone dir %s: %w", dir, err)
 	}
 	return dir, nil
 }
 
+// isDir reports whether p exists and is a directory.
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
+
 // scratchWorkspaceTitle marks the single shared workspace reused by checkout:none
 // agents, so they don't each leak a throwaway home workspace.
-const scratchWorkspaceTitle = "paseo-conductor-scratch"
+const scratchWorkspaceTitle = "conductor-scratch"
 
 // resolveScratchWorkspace returns a reusable local workspace id for checkout:none
 // agents: an injected resolver, else a memoized find-by-title, else create one.

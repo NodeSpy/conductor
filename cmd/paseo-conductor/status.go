@@ -25,7 +25,7 @@ func cmdStatus(args []string) error {
 		return err
 	}
 
-	fmt.Printf("paseo-conductor %s\n", version)
+	fmt.Printf("conductor %s\n", version)
 	fmt.Printf("service:  %s\n", serviceStateStr())
 
 	// Live conductor agents (running now).
@@ -104,14 +104,14 @@ func cmdPause(args []string, pause bool) error {
 func serviceStateStr() string {
 	switch serviceKind() {
 	case "systemd":
-		out, _ := exec.Command("systemctl", "--user", "is-active", "paseo-conductor").Output()
+		out, _ := exec.Command("systemctl", "--user", "is-active", serviceName()).Output()
 		st := strings.TrimSpace(string(out))
 		if st == "" {
 			st = "unknown"
 		}
 		return st
 	case "launchd":
-		if exec.Command("launchctl", "kill", "-0", fmt.Sprintf("gui/%d/sh.paseo-conductor", os.Getuid())).Run() == nil {
+		if exec.Command("launchctl", "kill", "-0", fmt.Sprintf("gui/%d/sh.%s", os.Getuid(), serviceName())).Run() == nil {
 			return "running"
 		}
 		return "not running"

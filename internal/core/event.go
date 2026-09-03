@@ -1,5 +1,5 @@
 // Package core holds the integration-agnostic types that flow through
-// paseo-conductor: the normalized Trigger emitted by every integration, and the
+// conductor: the normalized Trigger emitted by every integration, and the
 // Integration interface + type registry the engine uses to start them.
 package core
 
@@ -57,7 +57,7 @@ type Trigger struct {
 	// catch-up triggers are skipped (don't re-nudge) while fresh events are queued
 	// to that agent.
 	CatchUp bool
-	// Force marks a manually-injected trigger (`paseo-conductor force`): the engine
+	// Force marks a manually-injected trigger (`conductor force`): the engine
 	// bypasses its dedup / liveness / backoff gates so the action runs now, even if
 	// it thinks the state is already handled. The kill switch and pause still apply.
 	Force bool
