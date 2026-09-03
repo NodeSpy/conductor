@@ -1,9 +1,10 @@
 // Package notify surfaces conductor activity to *you* — never to the PR. It logs
 // to the daemon journal (so `journalctl --user -u paseo-conductor` shows it) and,
-// if a Slack incoming-webhook URL is configured, also posts there. The
-// interactive/failed agents additionally surface in paseo itself (attention flag).
-// It deliberately does NOT post comments on PRs: a handoff/escalation nudge is for
-// you, and posting it publicly on someone's PR (as you) is noise/leakage.
+// if a Slack, Discord, ntfy, Pushover, or Notifiarr sink is configured, also
+// posts there. The interactive/failed agents additionally surface in paseo
+// itself (attention flag). It deliberately does NOT post comments on PRs: a
+// handoff/escalation nudge is for you, and posting it publicly on someone's
+// PR (as you) is noise/leakage.
 package notify
 
 import (
@@ -12,10 +13,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
+)
+
+// pushoverURL and notifiarrURL are the fixed API endpoints for those services.
+// They're package-level vars (rather than inline literals) so tests can point
+// them at an httptest server.
+var (
+	pushoverURL  = "https://api.pushover.net/1/messages.json"
+	notifiarrURL = "https://notifiarr.com/api/v1/notification/passthrough/%s"
+	defaultNtfy  = "https://ntfy.sh"
 )
 
 // Events.
@@ -69,9 +81,7 @@ func (n *Notifier) Emit(ctx context.Context, event string, t core.Trigger, msg s
 		line = fmt.Sprintf("[%s] %s %s: %s", event, ref, t.Kind, msg)
 	}
 	n.log("notify %s", line)
-	if n.cfg.SlackWebhookURL != "" {
-		go n.postSlack(ctx, line)
-	}
+	n.notifyAll(ctx, line)
 }
 
 // Digest emits a periodic activity summary (journal + Slack + audit). Unlike Emit
@@ -81,13 +91,31 @@ func (n *Notifier) Digest(ctx context.Context, summary string) {
 	if n.audit != nil {
 		n.audit(map[string]any{"event": "digest", "msg": summary})
 	}
+	n.notifyAll(ctx, "[digest] "+summary)
+}
+
+// notifyAll fans a message out to every configured sink (Slack, Discord,
+// ntfy, Pushover, Notifiarr). Each post is best-effort and non-blocking — a
+// failure is logged, never fatal (the journal line already recorded the event).
+func (n *Notifier) notifyAll(ctx context.Context, text string) {
 	if n.cfg.SlackWebhookURL != "" {
-		go n.postSlack(ctx, "[digest] "+summary)
+		go n.postSlack(ctx, text)
+	}
+	if n.cfg.DiscordWebhookURL != "" {
+		go n.postDiscord(ctx, text)
+	}
+	if n.cfg.Ntfy.Topic != "" {
+		go n.postNtfy(ctx, text)
+	}
+	if n.cfg.Pushover.Token != "" && n.cfg.Pushover.User != "" {
+		go n.postPushover(ctx, text)
+	}
+	if n.cfg.Notifiarr.APIKey != "" {
+		go n.postNotifiarr(ctx, text)
 	}
 }
 
-// postSlack posts a plain message to a Slack incoming webhook. Best-effort: a
-// failure is logged, never fatal (the journal line already recorded the event).
+// postSlack posts a plain message to a Slack incoming webhook.
 func (n *Notifier) postSlack(ctx context.Context, text string) {
 	body, _ := json.Marshal(map[string]string{"text": "paseo-conductor " + text})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.cfg.SlackWebhookURL, bytes.NewReader(body))
@@ -98,6 +126,91 @@ func (n *Notifier) postSlack(ctx context.Context, text string) {
 	resp, err := n.http.Do(req)
 	if err != nil {
 		n.log("notify: slack post failed: %v", err)
+		return
+	}
+	resp.Body.Close()
+}
+
+// postDiscord posts a plain message to a Discord incoming webhook.
+func (n *Notifier) postDiscord(ctx context.Context, text string) {
+	body, _ := json.Marshal(map[string]string{"content": "paseo-conductor " + text})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.cfg.DiscordWebhookURL, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := n.http.Do(req)
+	if err != nil {
+		n.log("notify: discord post failed: %v", err)
+		return
+	}
+	resp.Body.Close()
+}
+
+// postNtfy publishes a plain-text message to an ntfy topic. Server defaults
+// to https://ntfy.sh when unset, so a self-hosted server is a config away.
+func (n *Notifier) postNtfy(ctx context.Context, text string) {
+	server := n.cfg.Ntfy.Server
+	if server == "" {
+		server = defaultNtfy
+	}
+	endpoint := strings.TrimRight(server, "/") + "/" + n.cfg.Ntfy.Topic
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(text))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Title", "paseo-conductor")
+	resp, err := n.http.Do(req)
+	if err != nil {
+		n.log("notify: ntfy post failed: %v", err)
+		return
+	}
+	resp.Body.Close()
+}
+
+// postPushover posts a message via the Pushover message API.
+func (n *Notifier) postPushover(ctx context.Context, text string) {
+	form := url.Values{
+		"token":   {n.cfg.Pushover.Token},
+		"user":    {n.cfg.Pushover.User},
+		"message": {"paseo-conductor " + text},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, pushoverURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := n.http.Do(req)
+	if err != nil {
+		n.log("notify: pushover post failed: %v", err)
+		return
+	}
+	resp.Body.Close()
+}
+
+// postNotifiarr posts a message to a Notifiarr passthrough integration, which
+// relays it to a Discord channel on Notifiarr's side.
+func (n *Notifier) postNotifiarr(ctx context.Context, text string) {
+	discord := map[string]any{
+		"text": map[string]string{"description": text},
+	}
+	if n.cfg.Notifiarr.ChannelID != "" {
+		discord["ids"] = map[string]string{"channel": n.cfg.Notifiarr.ChannelID}
+	}
+	body, _ := json.Marshal(map[string]any{
+		"notification": map[string]string{"name": "paseo-conductor"},
+		"discord":      discord,
+	})
+	endpoint := fmt.Sprintf(notifiarrURL, n.cfg.Notifiarr.APIKey)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Api-Key", n.cfg.Notifiarr.APIKey)
+	resp, err := n.http.Do(req)
+	if err != nil {
+		n.log("notify: notifiarr post failed: %v", err)
 		return
 	}
 	resp.Body.Close()
