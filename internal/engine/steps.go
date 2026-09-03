@@ -87,9 +87,26 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			Tokens: dispatch.Tokens{App: appTok, User: userTok},
 			Author: e.author, Shadow: shadow, Wait: !s.Background, Interactive: s.Background, Data: data,
 		}
+		// Resolve which controller runs this agent step (explicit `controller:` →
+		// default:true → built-in paseo). Command steps use the base dispatcher. An
+		// unrunnable controller fails the workflow fast, like any other step error.
+		// For today's configs this is the paseo dispatcher — no behavior change.
+		runner := Dispatcher(e.disp)
+		if s.Type == "agent" {
+			r, rerr := e.runnerFor(profile)
+			if rerr != nil {
+				e.log("%s step %s no runnable controller: %v", tag(t), id, rerr)
+				e.store.Audit(map[string]any{"event": "step_error", "repo": t.Target.Repo,
+					"number": t.Target.Number, "kind": t.Kind, "step": id, "error": rerr.Error()})
+				e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("workflow step %q: no runnable controller: %v", id, rerr))
+				e.finishRun(run)
+				return
+			}
+			runner = r
+		}
 		e.log("%s step %s running (%s)", tag(t), id, actionDesc(s))
 		start := time.Now()
-		ref, err := e.disp.Dispatch(ctx, req)
+		ref, err := runner.Dispatch(ctx, req)
 		// A step that exited cleanly but reports it isn't done yet (e.g. critique
 		// deferring on pending CI) is retried per its `retry:` policy — the workflow
 		// won't complete a not-ready step.

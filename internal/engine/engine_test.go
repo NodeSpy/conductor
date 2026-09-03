@@ -61,7 +61,15 @@ func ptrBool(b bool) *bool { return &b }
 
 func tempStore(t *testing.T) *store.Store {
 	t.Helper()
-	dir := t.TempDir()
+	// Not t.TempDir(): a workflow runs in a background goroutine that process()
+	// launches and the test body doesn't join, so it can still be flushing run
+	// state (store.saveRuns → write+rename) as the test returns. t.TempDir's strict
+	// auto-cleanup then fails with "directory not empty" on that trailing write.
+	// Own the dir and retry RemoveAll briefly to absorb the late flush.
+	dir, err := os.MkdirTemp("", "engine-store-*")
+	if err != nil {
+		t.Fatal(err)
+	}
 	s, err := store.Open(store.Options{
 		StatePath: filepath.Join(dir, "s.json"), AuditPath: filepath.Join(dir, "a.jsonl"),
 		TTL: 0, MaxPRs: 100, AuditMaxSize: 1 << 20,
@@ -69,7 +77,15 @@ func tempStore(t *testing.T) *store.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() {
+		s.Close()
+		for i := 0; i < 100; i++ {
+			if err := os.RemoveAll(dir); err == nil {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	})
 	return s
 }
 
@@ -879,5 +895,39 @@ func TestLogTag(t *testing.T) {
 		Target: core.Target{Repo: "acme/w", Issue: 42, Number: 42}}
 	if got := tag(issue); got != "engine[ednition acme/w#42 issue_matched]" {
 		t.Fatalf("issue tag: %q", got)
+	}
+}
+
+// TestAgentWithUnrunnableControllerEscalates proves controller selection is
+// wired into dispatch: an agent pinned to a controller conductor can't drive in
+// this build escalates and never dispatches (rather than silently running paseo).
+func TestAgentWithUnrunnableControllerEscalates(t *testing.T) {
+	cfg := baseCfg()
+	cfg.Controllers = map[string]config.ControllerConfig{"ocode": {Agent: "opencode"}}
+	cfg.Agents["fixer"] = config.AgentProfile{Provider: "claude", Controller: "ocode"}
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, _ := newEng(t, cfg, d, n, nil)
+
+	act := config.Action{Type: "agent", Agent: "fixer", Prompt: "go"}
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 5, "h", "sig", act))
+
+	if len(d.reqs) != 0 {
+		t.Fatalf("must not dispatch through an unrunnable controller, got %d dispatches", len(d.reqs))
+	}
+	if !n.has("escalate") {
+		t.Fatalf("expected an escalate notification, got %v", n.events)
+	}
+}
+
+// TestAgentDefaultControllerDispatchesThroughPaseo is the parity companion: with
+// no controllers block, an agent still dispatches through the injected (paseo)
+// dispatcher exactly as before.
+func TestAgentDefaultControllerDispatchesThroughPaseo(t *testing.T) {
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, _ := newEng(t, baseCfg(), d, n, nil)
+	act := config.Action{Type: "agent", Agent: "fixer", Prompt: "go"}
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 5, "h", "sig", act))
+	if len(d.reqs) != 1 {
+		t.Fatalf("default config must dispatch through paseo exactly once, got %d", len(d.reqs))
 	}
 }

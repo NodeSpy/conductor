@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/paseo-conductor/internal/controller"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
 	"github.com/NodeSpy/paseo-conductor/internal/notify"
@@ -61,20 +62,21 @@ type Store interface {
 
 // Engine is the central work loop.
 type Engine struct {
-	cfg        *config.Config
-	store      Store
-	disp       Dispatcher
-	notif      Notifier
-	author     dispatch.Author
-	userTok    func() (string, error)
-	readTok    func() (string, error) // read-token override (nil = use the per-trigger App token)
-	rerun      func(context.Context, core.Trigger, int64)
-	refreshTok func(core.Trigger) (string, error) // re-mint the App token on resume
-	log        func(string, ...any)
-	hold       *dispatch.HoldSet // agent ids handed off to the user; the reaper never touches these
-	pausePath  string            // control file; present = paused (toggled by pause/resume, no restart)
-	ch         chan core.Trigger
-	sem        chan struct{} // concurrent-agent cap; nil = unlimited
+	cfg         *config.Config
+	store       Store
+	disp        Dispatcher
+	controllers *controller.Registry // resolves which controller runs each agent
+	notif       Notifier
+	author      dispatch.Author
+	userTok     func() (string, error)
+	readTok     func() (string, error) // read-token override (nil = use the per-trigger App token)
+	rerun       func(context.Context, core.Trigger, int64)
+	refreshTok  func(core.Trigger) (string, error) // re-mint the App token on resume
+	log         func(string, ...any)
+	hold        *dispatch.HoldSet // agent ids handed off to the user; the reaper never touches these
+	pausePath   string            // control file; present = paused (toggled by pause/resume, no restart)
+	ch          chan core.Trigger
+	sem         chan struct{} // concurrent-agent cap; nil = unlimited
 
 	budgetMu  sync.Mutex  // guards agentDisp (rolling agent-dispatch timestamps)
 	agentDisp []time.Time // agent-dispatch times in the last hour (runaway budget)
@@ -105,12 +107,17 @@ func (e *Engine) recordAgentDispatch() {
 
 // Options configure an Engine.
 type Options struct {
-	Config    *config.Config
-	Store     Store
-	Dispatch  Dispatcher
-	Notifier  Notifier
-	Author    dispatch.Author
-	UserToken func() (string, error)
+	Config   *config.Config
+	Store    Store
+	Dispatch Dispatcher
+	// Controllers resolves which controller runs each agent (explicit
+	// `controller:` → default:true → built-in paseo). nil builds a registry from
+	// Config.Controllers with Dispatch as the built-in paseo runner — so with no
+	// `controllers:` block every agent dispatches through paseo, unchanged.
+	Controllers *controller.Registry
+	Notifier    Notifier
+	Author      dispatch.Author
+	UserToken   func() (string, error)
 	// ReadToken, if set, overrides the token used for API reads (GH_TOKEN) instead
 	// of the per-trigger App installation token — for identity.read_token != "app".
 	ReadToken func() (string, error)
@@ -136,8 +143,19 @@ func New(o Options) *Engine {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
+	reg := o.Controllers
+	if reg == nil {
+		// Build the controller set from config, with the passed dispatcher as the
+		// built-in paseo runner (and follow-up sender when it supports one). No
+		// `controllers:` block → resolution always yields paseo, unchanged.
+		var sender controller.Sender
+		if s, ok := o.Dispatch.(controller.Sender); ok {
+			sender = s
+		}
+		reg = controller.NewRegistry(o.Config.Controllers, o.Config.DefaultControllerName(), o.Dispatch, sender)
+	}
 	e := &Engine{
-		cfg: o.Config, store: o.Store, disp: o.Dispatch, notif: o.Notifier,
+		cfg: o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,
 		author: o.Author, userTok: o.UserToken, readTok: o.ReadToken, log: log,
 		hold:      o.Hold,
 		pausePath: o.PausePath,
@@ -499,6 +517,23 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		Author: e.author, Shadow: shadow, CatchUp: t.CatchUp,
 	}
 
+	// Resolve which controller runs this agent before taking a slot. Commands
+	// aren't controller-selected (they're a local subprocess). For today's configs
+	// this is the paseo dispatcher and `run` == e.disp — no behavior change.
+	run := Dispatcher(e.disp)
+	if act.Type == "agent" {
+		r, rerr := e.runnerFor(profile)
+		if rerr != nil {
+			e.log("%s no runnable controller: %v", tag(t), rerr)
+			e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("no runnable controller for agent %q: %v", act.Agent, rerr))
+			if !shadow {
+				_ = e.store.RecordAttempt(key, dkind, head)
+			}
+			return
+		}
+		run = r
+	}
+
 	// Coding agents are heavy and contend on a shared repo. Acquire a slot first
 	// (this blocks the loop as backpressure when the cap is full), then hold it in
 	// the background until the launched agent goes idle — so the cap bounds the
@@ -525,7 +560,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		e.log("%s running (%s)", tag(t), actionDesc(act))
 	}
 	start := time.Now()
-	ref, err := e.disp.Dispatch(ctx, req)
+	ref, err := run.Dispatch(ctx, req)
 	took := time.Since(start).Round(time.Second)
 	if act.Type == "command" && err == nil && !ref.Skipped {
 		tail := ""
@@ -605,7 +640,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	e.notif.Emit(ctx, notify.EventComplete, t, ref.Backend)
 	if gated && !ref.Shadowed && ref.AgentID != "" {
 		go func() {
-			e.disp.WaitForAgent(ctx, ref.AgentID, agentWaitTimeout(profile))
+			run.WaitForAgent(ctx, ref.AgentID, agentWaitTimeout(profile))
 			e.release()
 		}()
 	} else if gated {
@@ -782,6 +817,20 @@ func livenessGated(kind string) bool {
 		return true
 	}
 	return false
+}
+
+// runnerFor resolves the controller that runs an agent (from the profile's
+// `controller:`, then the default:true controller, then the built-in paseo) and
+// returns its dispatch surface. An error means the controller is unknown or its
+// transport isn't runnable in this build — the caller escalates rather than
+// silently dispatching through the wrong runtime. For today's configs (no
+// `controllers:` block) this always resolves to the paseo dispatcher.
+func (e *Engine) runnerFor(profile config.AgentProfile) (Dispatcher, error) {
+	run, err := e.controllers.RunnerFor(profile.Controller)
+	if err != nil {
+		return nil, err
+	}
+	return run, nil
 }
 
 // acquire takes a concurrency slot, blocking until one is free (backpressure).
