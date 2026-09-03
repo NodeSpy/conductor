@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -416,6 +417,14 @@ func doMigrateCopies() error {
 	} else if isDir(newConfigDirAbs()) {
 		fmt.Printf("  config  already exists at %s — left as-is\n", newConfigDirAbs())
 	}
+	// Repoint any legacy paseo-conductor dir paths inside the copied config (App
+	// key, state_file, audit_log) at the conductor dirs — otherwise the daemon keeps
+	// reading from the old dirs, which then can't be removed.
+	if changed, err := rewriteConfigPaths(filepath.Join(newConfigDirAbs(), "config.yaml")); err != nil {
+		return fmt.Errorf("repoint config paths in %s: %w", newConfigDirAbs(), err)
+	} else if changed {
+		fmt.Printf("  config  repointed paseo-conductor paths -> conductor in config.yaml\n")
+	}
 
 	copied, err = copyDirSkipExisting(legacyStateDirAbs(), newStateDirAbs())
 	if err != nil {
@@ -427,6 +436,35 @@ func doMigrateCopies() error {
 		fmt.Printf("  state   already exists at %s — left as-is\n", newStateDirAbs())
 	}
 	return nil
+}
+
+// rewriteConfigPaths repoints legacy paseo-conductor directory references inside a
+// config file (the App key's private_key_path, store.state_file, store.audit_log,
+// etc.) at the conductor dirs, so the migrated daemon reads from the new locations
+// and the old dirs become truly removable. The substrings match both the ~/ and the
+// absolute /home/<user>/ forms. Missing config (fresh install) is a no-op.
+func rewriteConfigPaths(configPath string) (changed bool, err error) {
+	info, err := os.Stat(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	b, err := os.ReadFile(configPath)
+	if err != nil {
+		return false, err
+	}
+	s := string(b)
+	out := strings.ReplaceAll(s, ".config/paseo-conductor", ".config/conductor")
+	out = strings.ReplaceAll(out, ".local/state/paseo-conductor", ".local/state/conductor")
+	if out == s {
+		return false, nil
+	}
+	if err := os.WriteFile(configPath, []byte(out), info.Mode().Perm()); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // copyRunningBinary copies the currently-running executable — which, on an
