@@ -212,22 +212,30 @@ HTTP API, agent-deck, or a bare CLI recipe — and pick one per agent via `agent
 
 ```yaml
 controllers:
-  gemini-review:                    # `agent:` + no transport → ACP (the default transport
-    agent: gemini                   #   for an agent runtime); spawns `gemini --experimental-acp`
-  opencode:                         # `type: opencode` → opencode's native HTTP API
-    type: opencode                  #   (`opencode serve`), not ACP
-    default: true                   # the fleet default when an agent sets no `controller:`
-  claude-cli:                       # `transport: cli` → a bare per-tool command recipe
-    agent: claude-code              #   (claude-code/codex ship built-in recipes; anything
-    transport: cli                  #   else needs an explicit `command:`)
+  gemini-review:                    # `agent:` + no transport → ACP; runs the gemini CLI over
+    agent: gemini                   #   stdio. The runtime IS gemini, so provider/model below don't apply.
+  opencode:                         # `type: opencode` → opencode's HTTP API (`opencode serve`),
+    type: opencode                  #   which routes by provider/model.
+  claude-cli:                       # `transport: cli` → a bare per-tool recipe (claude-code and
+    agent: claude-code              #   codex ship built-in recipes; anything else needs `command:`).
+    transport: cli
 
 agents:
-  fixer:
-    provider: claude
-    controller: gemini-review       # explicit — overrides the default
+  reviewer:
+    controller: gemini-review       # runs gemini over ACP — no provider needed (the controller is the agent)
   planner:
-    provider: claude                # no controller: → falls to opencode (default:true) above
+    controller: opencode            # runs via opencode…
+    provider: anthropic             # …which routes to this provider + model
+    model: claude-sonnet-4-5
+  fixer:
+    provider: claude                # no controller: → the built-in paseo runtime runs claude
+    model: opus
 ```
+
+`provider`/`model` select the model for the controllers that route by provider — the built-in
+**paseo**, plus **opencode** and **agent-deck**. For an **acp** or **cli** controller the runtime *is*
+the named `agent`/`command`, so `provider`/`model` on the profile don't apply. Add `default: true` to
+one controller entry to make it the fleet default for agents that set no explicit `controller:`.
 
 ### Kinds
 

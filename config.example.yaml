@@ -417,8 +417,11 @@ agents:
     wait_timeout: 30m
     archive_when_done: true
     labels: { team: autopilot }
-    # controller: gemini-review        # optional: select a controllers: entry by
-    #                                   #   name (defaults per the resolution order above)
+    # controller: claude-cli           # optional: run this agent on a controllers: entry
+    #                                   #   instead of paseo. provider/model above apply to the
+    #                                   #   paseo/opencode/agent-deck controllers; an acp or cli
+    #                                   #   controller IS the named agent, so they're ignored for it
+    #                                   #   (don't pair provider: claude with an acp: gemini controller)
     # guidance: |                     # per-agent tone/format; overrides top-level
     #   One or two sentences, plain and direct.  #   agent_guidance (unset → that,
     #                                             #   "" → none, text → this).
