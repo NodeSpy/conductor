@@ -457,13 +457,16 @@ engine store also suppresses re-acting across restarts. A feed with no `repo` ru
 
 The `slack` integration is a control plane: an @-mention, an emoji reaction, or a slash command
 dispatches an agent, and you steer it from the thread. It connects over **Socket Mode** (an outbound
-WebSocket), so it needs **no public URL**.
+WebSocket), so it needs no public URL.
 
 `triggers` route by `on` (`app_mention` / `reaction_added` / `slash_command`), with an optional
 `reaction` emoji or `command` filter, to [actions](#named-action-variants). The event exposes
 `{{.slack.text}}`, `{{.slack.channel}}`, `{{.slack.user}}`, `{{.slack.thread_ts}}` and the bot token
-(`{{.slack_bot_token}}`) so a command action can post a threaded reply. An optional `ack` message is
-posted to the thread when a rule fires.
+(`{{.slack_bot_token}}`) so a command action can post a threaded reply.
+
+Each trigger can carry three optional feedback blocks — `ack` (fired when the rule matches and
+dispatches), `on_done` (fired when the dispatched work finishes successfully), and `on_fail` (fired
+when it fails):
 
 ```yaml
 integrations:
@@ -471,9 +474,15 @@ integrations:
     name: ops
     app_token: ${SLACK_APP_TOKEN}      # xapp-… (Socket Mode; needs connections:write)
     bot_token: ${SLACK_BOT_TOKEN}      # xoxb-… (posting)
-    ack: "on it 👀"
     triggers:
       - on: app_mention                # "@conductor <task>" in any channel the bot is in
+        ack:
+          react: eyes                  # reactions.add on the mention message
+        on_done:
+          react: white_check_mark
+        on_fail:
+          react: x
+          say: "couldn't finish: check the logs"
         actions:
           type: agent
           agent: fixer
@@ -482,7 +491,28 @@ integrations:
       - on: reaction_added             # react :eyes: on a message to trigger
         reaction: eyes
         actions: { type: agent, agent: fixer, checkout: none, prompt: "Look into: {{.slack.text}}" }
+      - on: slash_command
+        command: /conductor
+        ack:
+          say: "on it"
+          ephemeral: true             # visible only to the user who ran the command
+        actions: { type: agent, agent: fixer, checkout: none, prompt: "{{.slack.text}}" }
 ```
+
+A trigger with no `ack`/`on_done`/`on_fail` block is silent for that moment (the default — dispatching
+alone produces no Slack response). Each block is:
+
+| field       | meaning                                                                             |
+|-------------|--------------------------------------------------------------------------------------|
+| `react`     | emoji name without colons; `reactions.add` on the triggering message. `slash_command` has no message to react to, so `react` there is a no-op (logged, not an error). |
+| `say`       | text posted via `chat.postMessage` (or `chat.postEphemeral`, see below). Templated over `{{.channel}}`, `{{.user}}`, `{{.text}}`, `{{.ts}}`, `{{.thread_ts}}`, `{{.reaction}}`, `{{.command}}`. |
+| `ephemeral` | `say` goes only to the triggering user via `chat.postEphemeral` instead of the channel. Falls back to a normal post if the event carries no user id. Requires `say`. |
+| `in_thread` | post `say` in the triggering message's thread instead of the channel. Default `true`. |
+
+`on_done`/`on_fail` correlate to the trigger(s) a rule dispatched by the engine's dispatch outcome
+(`ok`/`adopted`/`queued` → `on_done`; `failed` → `on_fail`). If a rule's actions dispatch more than one
+variant, feedback fires once, after every variant has reported, and `on_fail` wins if any variant
+failed.
 
 Create a Slack app with **Socket Mode enabled**, an app-level token (`connections:write`), event
 subscriptions (`app_mention`, `reaction_added`), and a bot token with `chat:write`. No inbound URL to

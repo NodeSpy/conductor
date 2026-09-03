@@ -1,8 +1,8 @@
 // Package slack is a control plane: Slack events (an @-mention, an emoji reaction,
 // a slash command) dispatch a Paseo agent, and the agent's ack/replies post back to
 // the thread. It connects over Socket Mode (an outbound WebSocket) so it needs no
-// public URL — ideal for a self-hosted box. Posting to a channel for notifications
-// is handled separately by the notify package's slack_webhook_url.
+// public URL. Posting to a channel for notifications is handled separately by the
+// notify package's slack_webhook_url.
 package slack
 
 import (
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -33,20 +34,60 @@ var replyHook func(channel, threadTS, user, text string) bool
 // wiring). Passing nil clears it.
 func SetReplyHook(fn func(channel, threadTS, user, text string) bool) { replyHook = fn }
 
+// maxPendingFeedback bounds the per-instance on_done/on_fail stash so a kind the
+// engine never reports completion for (e.g. permanently queued work) can't grow
+// the map without limit. Oldest entries are evicted first.
+const maxPendingFeedback = 2048
+
 // Config is one slack instance.
 type Config struct {
 	AppToken string `yaml:"app_token"` // xapp-… (Socket Mode connect)
 	BotToken string `yaml:"bot_token"` // xoxb-… (posting; exposed to actions as {{.slack_bot_token}})
-	Ack      string `yaml:"ack"`       // optional message posted to the thread when a rule fires
 	Rules    []Rule `yaml:"triggers"`
 }
 
-// Rule routes one kind of Slack event to action(s).
+// Feedback describes one optional Slack response: a reaction, a message, or
+// both. Omitting a Feedback block entirely (nil) means silence for that moment.
+// The same struct is reused for a rule's `ack` (fired at dispatch), `on_done`
+// (fired when the dispatched work finishes successfully) and `on_fail` (fired
+// when it fails).
+type Feedback struct {
+	React string `yaml:"react"` // reactions.add emoji name, no colons (e.g. "eyes"); "" = no reaction
+	Say   string `yaml:"say"`   // chat.postMessage/postEphemeral text; "" = no message
+	// Ephemeral sends Say only to the triggering user via chat.postEphemeral
+	// instead of posting it for the channel to see. Requires a user id (present
+	// on every trigger kind); falls back to a normal post if one isn't available.
+	Ephemeral bool `yaml:"ephemeral"`
+	// InThread posts Say in the triggering message's thread instead of the
+	// channel. nil defaults to true.
+	InThread *bool `yaml:"in_thread"`
+}
+
+func (f *Feedback) empty() bool { return f == nil || (f.React == "" && f.Say == "") }
+
+func (f *Feedback) inThread() bool { return f == nil || f.InThread == nil || *f.InThread }
+
+// Rule routes one kind of Slack event to action(s), with optional feedback.
 type Rule struct {
 	On       string           `yaml:"on"`       // app_mention | reaction_added | slash_command
 	Reaction string           `yaml:"reaction"` // reaction_added: which emoji (e.g. "eyes"); "" = any
 	Command  string           `yaml:"command"`  // slash_command: which command (e.g. "/conductor"); "" = any
+	Ack      *Feedback        `yaml:"ack"`      // fired when the rule matches and dispatches
+	OnDone   *Feedback        `yaml:"on_done"`  // fired when the dispatched work finishes successfully
+	OnFail   *Feedback        `yaml:"on_fail"`  // fired when the dispatched work fails
 	Actions  config.ActionSet `yaml:"actions"`
+}
+
+// pendingFeedback is stashed per originating Slack event (keyed by the
+// Trigger.Dedup shared by every action variant that event dispatched) so the
+// engine completion seam can post on_done/on_fail once every variant has
+// reported its outcome. See Integration.HandleCompletion.
+type pendingFeedback struct {
+	onDone, onFail              *Feedback
+	channel, ts, threadTS, user string
+	sctx                        map[string]any
+	remaining                   int
+	failed                      bool
 }
 
 // Integration implements core.Integration for one slack instance.
@@ -54,6 +95,10 @@ type Integration struct {
 	name string
 	cfg  Config
 	seen *inbound.DeliveryDedup
+
+	pendingMu   sync.Mutex
+	pending     map[string]*pendingFeedback
+	pendingRing []string
 }
 
 func newIntegration(name string, decode func(any) error) (core.Integration, error) {
@@ -61,7 +106,7 @@ func newIntegration(name string, decode func(any) error) (core.Integration, erro
 	if err := decode(&cfg); err != nil {
 		return nil, fmt.Errorf("slack[%s]: decode config: %w", name, err)
 	}
-	return &Integration{name: name, cfg: cfg, seen: inbound.NewDeliveryDedup(4096)}, nil
+	return &Integration{name: name, cfg: cfg, seen: inbound.NewDeliveryDedup(4096), pending: map[string]*pendingFeedback{}}, nil
 }
 
 func (g *Integration) Name() string { return g.name }
@@ -84,6 +129,20 @@ func (g *Integration) Validate() error {
 		for _, a := range r.Actions {
 			if a.Type == "" {
 				return fmt.Errorf("slack[%s]: triggers[%d]: action.type is required", g.name, i)
+			}
+		}
+		for _, fb := range []struct {
+			field string
+			fb    *Feedback
+		}{{"ack", r.Ack}, {"on_done", r.OnDone}, {"on_fail", r.OnFail}} {
+			if fb.fb == nil {
+				continue
+			}
+			if fb.fb.empty() {
+				return fmt.Errorf("slack[%s]: triggers[%d].%s: neither react nor say is set; omit %s for silence instead of an empty block", g.name, i, fb.field, fb.field)
+			}
+			if fb.fb.Ephemeral && fb.fb.Say == "" {
+				return fmt.Errorf("slack[%s]: triggers[%d].%s: ephemeral only applies to say", g.name, i, fb.field)
 			}
 		}
 	}

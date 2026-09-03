@@ -455,6 +455,39 @@ func TestFailedDispatchRetriesUntilCap(t *testing.T) {
 	}
 }
 
+// TestCompletionHookInvokedAfterOutcome proves the engine calls
+// core.CompletionHook exactly once per dispatch, right after it stamps the
+// dispatch's outcome, with that outcome — the seam an integration (e.g. slack)
+// uses to correlate a completed dispatch back to the trigger it emitted.
+func TestCompletionHookInvokedAfterOutcome(t *testing.T) {
+	type call struct {
+		dedup, outcome string
+	}
+	var calls []call
+	core.SetCompletionHook(func(tr core.Trigger, outcome string) {
+		calls = append(calls, call{tr.Dedup, outcome})
+	})
+	t.Cleanup(func() { core.SetCompletionHook(nil) })
+
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, _ := newEng(t, baseCfg(), d, n, nil)
+	act := config.Action{Type: "agent", Agent: "fixer"}
+	e.process(context.Background(), agentTrigger("new_comment", "a/w", 50, "h", "sig-ok", act))
+
+	fd, _ := newEng(t, baseCfg(), &fakeDispatcher{err: fmt.Errorf("boom")}, &fakeNotifier{}, nil)
+	fd.process(context.Background(), agentTrigger("new_comment", "a/w", 51, "h", "sig-fail", act))
+
+	if len(calls) != 2 {
+		t.Fatalf("want 2 completion calls, got %d: %+v", len(calls), calls)
+	}
+	if calls[0].dedup != "sig-ok" || calls[0].outcome != "ok" {
+		t.Fatalf("want (sig-ok, ok), got %+v", calls[0])
+	}
+	if calls[1].dedup != "sig-fail" || calls[1].outcome != "failed" {
+		t.Fatalf("want (sig-fail, failed), got %+v", calls[1])
+	}
+}
+
 func TestRerequestReviewGuidance(t *testing.T) {
 	// Off by default: no re-request guidance in the prompt.
 	d := &fakeDispatcher{}

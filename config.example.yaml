@@ -323,13 +323,26 @@ integrations:
   # Slack control plane over Socket Mode (outbound WebSocket — no public URL).
   # Mention / react / slash → dispatch an agent; the bot token is exposed to
   # command actions as {{.slack_bot_token}} so they can reply in-thread.
+  #
+  # Each trigger can carry `ack` (fired at dispatch), `on_done` (fired when the
+  # dispatched work finishes successfully), and `on_fail` (fired when it fails) —
+  # all optional; omitting a block means silence for that moment. Each is
+  # { react: <emoji, no colons>, say: <text, templated over {{.channel}} {{.user}}
+  # {{.text}} {{.ts}} {{.thread_ts}} {{.reaction}} {{.command}}>, ephemeral: <bool,
+  # say only to the triggering user>, in_thread: <bool, default true> }.
   - type: slack
     name: ops
     app_token: ${SLACK_APP_TOKEN}      # xapp-… (Socket Mode; connections:write)
     bot_token: ${SLACK_BOT_TOKEN}      # xoxb-… (chat:write)
-    ack: "on it 👀"                     # optional: posted to the thread when a trigger fires
     triggers:
       - on: app_mention                # "@conductor <task>"
+        ack:
+          react: eyes                  # reactions.add on the mention message
+        on_done:
+          react: white_check_mark
+        on_fail:
+          react: x
+          say: "couldn't finish: check the logs"
         actions:
           type: agent
           agent: fixer
@@ -340,6 +353,7 @@ integrations:
         actions: { type: agent, agent: fixer, checkout: none, prompt: "Look into: {{.slack.text}}" }
       # - on: slash_command
       #   command: /conductor
+      #   ack: { say: "on it", ephemeral: true }   # visible only to the user who ran the command
       #   actions: { type: agent, agent: fixer, checkout: none, prompt: "{{.slack.text}}" }
 
 control:
