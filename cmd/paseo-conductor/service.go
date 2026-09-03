@@ -144,14 +144,22 @@ func servicePATH() string {
 }
 
 // unitPathAndContent returns the install path and rendered content of the
-// service unit for the current OS. Empty path => unsupported OS. The unit
-// name itself comes from serviceName() — "paseo-conductor" on a box that
+// service unit for the current OS, for THIS install: exe=selfExe(),
+// cfg=configDir(), name=serviceName() — "paseo-conductor" on a box that
 // already has that unit installed, else "conductor" for a fresh install —
 // so an existing fleet install's unit file path / launchd label never moves.
+// Empty path => unsupported OS.
 func unitPathAndContent() (path, content string) {
-	exe := selfExe()
-	cfg := configDir()
-	name := serviceName()
+	return renderUnit(selfExe(), configDir(), serviceName())
+}
+
+// renderUnit renders the service unit for the current OS for an EXPLICIT
+// exe/cfg/name, independent of this install's resolved defaults. `migrate`
+// uses this to render the new conductor-named unit (forced to
+// ~/.local/bin/conductor + the conductor config dir) regardless of what's
+// currently installed, while unitPathAndContent() keeps rendering whatever
+// this install currently resolves to. Empty path => unsupported OS.
+func renderUnit(exe, cfg, name string) (path, content string) {
 	switch serviceKind() {
 	case "systemd":
 		path = filepath.Join(home(), ".config/systemd/user", name+".service")
