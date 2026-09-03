@@ -72,7 +72,7 @@ type Engine struct {
 	disp        Dispatcher
 	controllers *controller.Registry // resolves which controller runs each agent
 	broker      *controller.Broker   // owns one live session per PR (interactive hand-off); nil = disabled
-	handoff     handoff.Channel      // portable review hand-off channel; nil = paseo-native hand-off
+	handoffs    *handoff.Registry    // resolves a step's hand-off channel by name; nil = paseo-native hand-off
 	notif       Notifier
 	author      dispatch.Author
 	userTok     func() (string, error)
@@ -127,10 +127,12 @@ type Options struct {
 	// duplicate agent. nil disables it — the interactive hand-off then stays
 	// paseo-native (you drive the agent in paseo, as before).
 	Broker *controller.Broker
-	// Handoff is the portable human↔agent channel an interactive review is
-	// presented on (web-link / Slack). nil → the review hand-off keeps today's
-	// behavior (notify you to open the live agent in paseo).
-	Handoff   handoff.Channel
+	// Handoffs resolves the portable human↔agent channel an interactive review is
+	// presented on (a step's `handoff:` name → the handoffs: entry flagged
+	// default:true → the sole configured entry). nil, or resolving to nil, → the
+	// review hand-off keeps today's behavior (notify you to open the live agent
+	// in paseo).
+	Handoffs  *handoff.Registry
 	Notifier  Notifier
 	Author    dispatch.Author
 	UserToken func() (string, error)
@@ -172,7 +174,7 @@ func New(o Options) *Engine {
 	}
 	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,
-		broker: o.Broker, handoff: o.Handoff,
+		broker: o.Broker, handoffs: o.Handoffs,
 		author: o.Author, userTok: o.UserToken, readTok: o.ReadToken, log: log,
 		hold:      o.Hold,
 		pausePath: o.PausePath,

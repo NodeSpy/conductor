@@ -398,14 +398,30 @@ notify:
 #     transport: cli                  #   recipes for claude-code/codex; anything
 #                                     #   else needs an explicit `command:` list)
 
-# Optional: a portable web-link hand-off for `background: true` review steps that
-# works no matter which controller the agent runs on — the only way to interactively
+# Optional: named hand-off channels for `background: true` review steps that work
+# no matter which controller the agent runs on — the only way to interactively
 # review an agent on a controller with no native interactive surface (e.g. `cli`
-# transport). Unset → review hand-off stays paseo-native. See README.md#controllers.
-# handoff:
-#   web:
-#     base_url: https://conductor.example.com   # public origin the draft link points at
-#     listen: :8099                             # inbound address the draft page is served on (default :8099)
+# transport). A step selects one by name via `handoff: <name>`; empty resolves to
+# the entry flagged `default: true`, then the sole configured entry, then no
+# hand-off channel at all (paseo-native, today's behavior). Unset → paseo-native.
+# handoffs:
+#   page:                                        # a web-link draft page
+#     web:
+#       base_url: https://conductor.example.com  # public origin the draft link points at
+#       listen: :8099                            # inbound address the draft page is served on (default :8099)
+#       ttl: 30m                                 # how long a draft link stays valid (default 30m)
+#     default: true                               # at most one entry may set this
+#   # phone:                                      # Slack DM/thread — schema only, not wired yet
+#   #   slack:
+#   #     to: dm                                  # dm | thread
+#   #     user: ${SLACK_USER_ID}                  # to: dm — defaults to your `me` identity
+#   #     channel: C0123456                       # to: thread — channel to post in
+#   #     bot_token: ${SLACK_BOT_TOKEN}
+#   # war-room:                                    # Discord DM/thread — schema only, not wired yet
+#   #   discord:
+#   #     to: thread
+#   #     channel: "123456789012345678"
+#   #     bot_token: ${DISCORD_BOT_TOKEN}
 
 agents:
   fixer:

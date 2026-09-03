@@ -530,6 +530,79 @@ expose.
 enabled `notify.on` events (escalations, hand-offs, completions) also post to that channel — no Socket
 Mode needed for that half.
 
+## Notifications
+
+paseo-conductor posts short messages when something needs your attention. Every event is written to
+the journal (the audit log) regardless; `notify.on` selects which events also push to the configured
+sinks.
+
+Events (`notify.on`, default `[escalate]`):
+
+- `escalate` — a dispatch failed after its retries; you should look.
+- `needs_input` — a workflow handed a PR to a live agent and is waiting on your review (this carries the
+  hand-off link — see [Hand-offs](#hand-offs)).
+- `complete` — a workflow finished.
+- `dispatch` — every dispatch (noisy; usually left off).
+
+`notify.digest: <interval>` (e.g. `24h`) additionally posts a periodic activity summary; `0` = off.
+
+Set any combination of sinks — each is skipped unless its keys are present:
+
+```yaml
+notify:
+  on: [escalate, needs_input]
+  slack_webhook_url: ${SLACK_WEBHOOK_URL}       # Slack incoming webhook (Slack app → Incoming Webhooks)
+  discord_webhook_url: ${DISCORD_WEBHOOK_URL}   # Discord channel → Integrations → Webhooks
+  ntfy: { server: https://ntfy.sh, topic: my-conductor }  # server defaults to https://ntfy.sh
+  pushover: { token: ${PUSHOVER_TOKEN}, user: ${PUSHOVER_USER} }   # both required; from pushover.net
+  notifiarr: { api_key: ${NOTIFIARR_API_KEY}, channel_id: "0000" } # relays to Discord; channel_id optional
+  digest: 24h
+```
+
+- **Slack / Discord webhooks** post to the channel the webhook is bound to.
+- **ntfy** publishes to `<server>/<topic>` — subscribe to the topic in the ntfy app to get it on your phone.
+- **Pushover** needs both an application `token` and your `user` key; delivered to the Pushover app.
+- **Notifiarr** relays to a Discord channel via its passthrough integration.
+
+These sinks are also how a hand-off link reaches you.
+
+## Hand-offs
+
+A `background: true` step in a [workflow](#multi-step-workflows) presents a draft — the agent's proposed
+comment or change — and waits for you to **approve**, **revise**, or **discard** it. `handoffs:` defines
+the channels that carry that decision to you. It's a named map with the same resolution rules as
+[controllers](#controllers):
+
+```yaml
+handoffs:                       # named channels
+  page:
+    web: { listen: :8099, base_url: https://conductor.example.com, ttl: 30m }
+    default: true
+```
+
+Each entry sets exactly one channel and may be flagged `default: true`. A step selects one by name:
+
+```yaml
+steps:
+  - background: true
+    handoff: page               # explicit; else the default:true entry, or the sole entry if only one
+```
+
+Resolution order: the step's `handoff:` → the entry flagged `default: true` → the single entry if only
+one is defined.
+
+**`web`** serves the draft as a page on conductor's inbound HTTP listener (`listen`, default `:8099`) at
+`/handoff`. The link surfaced to you is `base_url` + `/handoff?id=<token>`:
+
+- `id` is a 192-bit crypto-random token, so the URL is unguessable — the URL is the capability.
+- It is delivered only over your `notify` sinks (the `needs_input` event), never printed publicly.
+- It is invalidated the moment you decide, and expires after `ttl` (default `30m`) as a backstop.
+
+`base_url` must be an origin you can actually reach the page at. On a local machine with no public URL
+that is the open problem: **ephemeral per-hand-off tunnels** (cloudflared/ngrok/tailscale/ssh) and
+**chat channels** (`slack`/`discord`, to a DM or thread — no URL at all) are being added in follow-up
+increments. Their config keys (`tunnel:`, `slack:`, `discord:`) validate today but are not wired yet.
+
 ## Identity & rate limits
 
 The rate-limit pain came from doing reads on your personal `gh` token. paseo-conductor separates

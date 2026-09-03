@@ -234,20 +234,16 @@ func cmdRun(args []string) error {
 	var paseoSender controller.Sender = disp
 	reg := controller.NewRegistry(cfg.Controllers, cfg.DefaultControllerName(), disp, paseoSender)
 	broker := controller.NewBroker(reg, st, logf)
-	// Optional portable review hand-off channel: a web-link page served on the
-	// inbound HTTP listener. Absent config → nil channel → the review hand-off keeps
-	// today's paseo-native behavior.
-	var handoffCh handoff.Channel
-	var webCh *handoff.WebChannel
-	if cfg.Handoff.Web.BaseURL != "" {
-		webCh = handoff.NewWebChannel(cfg.Handoff.Web.BaseURL, logf)
-		handoffCh = webCh
-	}
+	// Hand-off registry: resolves the named `handoffs:` map (config.Load already
+	// folded a legacy singular `handoff:` block into Handoffs["default"], so this
+	// is the only path needed here). Empty map → Resolve always yields nil → the
+	// review hand-off keeps today's paseo-native behavior.
+	handoffs := handoff.NewRegistry(cfg.Handoffs, cfg.DefaultHandoffName(), logf)
 	// Shared "never reap" set for interactive hand-off agents: the engine registers
 	// a background step's agent at launch; the reaper skips anything in it.
 	hold := dispatch.NewHoldSet(filepath.Join(filepath.Dir(cfg.Store.StateFile), "holds.json"))
 	eng := engine.New(engine.Options{
-		Config: cfg, Store: st, Dispatch: disp, Controllers: reg, Broker: broker, Handoff: handoffCh,
+		Config: cfg, Store: st, Dispatch: disp, Controllers: reg, Broker: broker, Handoffs: handoffs,
 		Notifier: notifier, Author: gitAuthor(), UserToken: writeTok, ReadToken: readTok, Log: logf,
 		RefreshAppToken: refreshAppToken(igs), Hold: hold, PausePath: pausePath(cfg),
 	})
@@ -255,15 +251,12 @@ func cmdRun(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Serve the web-link hand-off draft pages on the shared inbound listener (once
-	// ctx exists to govern its shutdown). No-op when the web channel isn't configured.
-	if webCh != nil {
-		addr := cfg.Handoff.Web.Listen
-		if addr == "" {
-			addr = ":8099"
-		}
-		inbound.Register(ctx, addr, "/handoff", webCh, logf)
-		logf("handoff: web draft pages on %s/handoff (links at %s/handoff)", addr, cfg.Handoff.Web.BaseURL)
+	// Serve each configured web hand-off's draft pages on the shared inbound
+	// listener (once ctx exists to govern its shutdown). No-op when no web
+	// hand-off is configured.
+	for _, we := range handoffs.WebEntries() {
+		inbound.Register(ctx, we.Listen, "/handoff", we.Chan, logf)
+		logf("handoff %s: web draft pages on %s/handoff", we.Name, we.Listen)
 	}
 
 	// Write a pidfile so the `sweep` CLI can signal us; clean it up on exit.

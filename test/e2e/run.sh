@@ -548,7 +548,7 @@ latest_handoff_url() {
   local c="$1" repo="$2"
   cexec "$c" cat /data/audit.jsonl 2>/dev/null \
     | grep '"event":"needs_input"' | grep "\"repo\":\"$repo\"" \
-    | grep -o 'http://[^ "]*/handoff?id=[A-Za-z0-9]*' | tail -1
+    | grep -o 'http://[^ "]*/handoff?id=[A-Za-z0-9_-]*' | tail -1
 }
 
 # wait_handoff_url <container> <repo> — poll until a draft URL is available, echo it.
