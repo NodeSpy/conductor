@@ -41,8 +41,26 @@ integrations:
           type: agent
           agent: fixer
           prompt: "Address the requested changes on {{.repo}}#{{.pr}}, commit and push."
+        # Interactive review hand-off (group C native / E web-link on the paseo
+        # controller): a background step launches a live agent, then conductor drives
+        # the present → approve/revise/discard loop over the web hand-off channel.
+        review_requested:
+          steps:
+            - id: review
+              type: agent
+              agent: interactive
+              background: true
+              prompt: "Draft a review of {{.repo}}#{{.pr}} and wait for the human's approve/revise/discard."
     rules:
-      - match: { repos: ["acme/*", "a2/*", "a3/*", "a4/*"] }
+      - match: { repos: ["acme/*", "grpe/*"] }
+      # Group D1: a burst of new_comment events must collapse to ONE live session
+      # (the session-broker/liveAgentForPR dedup), so this fixer must stay live —
+      # archive_when_done:false keeps it from being reaped between the burst events.
+      - match: { repos: ["grpd/*"] }
+        actions:
+          new_comment:
+            type: agent
+            agent: fixer_live
 
 agents:
   fixer:
@@ -50,6 +68,26 @@ agents:
     workspace: worktree
     archive_when_done: true           # reaper archives the agent when idle (group B)
     wait_timeout: 5m
+  # Group D1: stays live across the burst so dispatch #2/#3 dedup onto its session.
+  fixer_live:
+    provider: fake
+    workspace: worktree
+    archive_when_done: false
+    wait_timeout: 5m
+  # Group C/E: the interactive review agent handed off to the human.
+  interactive:
+    provider: fake
+    workspace: worktree
+    wait_timeout: 5m
+
+# Portable interactive-review hand-off channel (M2). The web channel serves an
+# approve/revise/discard draft page on the inbound listener; the runner drives it
+# over HTTP (group E). base_url is localhost so the runner can curl it from inside
+# the conductor container.
+handoff:
+  web:
+    base_url: "http://localhost:8099"
+    listen: "0.0.0.0:8099"
 
 control:
   enabled: true

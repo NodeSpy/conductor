@@ -1,15 +1,20 @@
 // Command fakeacp is a hermetic ACP (Agent Client Protocol) agent for the e2e
-// harness (test/e2e/). It reuses the project's own internal/acp library — the
-// same JSON-RPC-2.0-over-stdio Conn the test double in internal/acp is built on —
-// so it is a faithful agent-side peer with NO LLM and NO secrets. It answers
-// initialize, session/new, session/load and session/prompt, streams a
-// session/update, and ends the turn.
+// harness (test/e2e/). It reuses the project's own internal/acp library — the same
+// JSON-RPC-2.0-over-stdio Conn — so it is a faithful agent-side peer with NO LLM
+// and NO secrets. Conductor's ACP controller (internal/controller/acp.go) spawns
+// it with cmd.Dir set to the conductor-provisioned PR worktree and the acts-as-the-
+// user identity in its env, answers initialize / session/new / session/load, and
+// on session/prompt performs the shared fixer edit+commit+push (package fixer) in
+// the session cwd — so the acp:gemini / acp:codex-adapter / opencode-acp rows land
+// a real commit on the forge, exactly like the paseo path.
 //
-// It is a SCAFFOLD for the ACP transport (issue #9, M3): the ACP client library
-// (T3.1) has landed, but the transport isn't wired into a runnable controller yet
-// (registered as ErrNotRunnable in M1), so the e2e runner does not assert against
-// it. Set FAKE_ACP_CRASH=1 to have it exit mid-turn — the fixture group J3 (ACP
-// agent crashes mid-session → escalate) will use this once the transport lands.
+// It advertises loadSession:true so conductor negotiates session_model:resumable
+// (Group C), and it re-attaches on session/load (Group D2). Fault injection:
+//
+//	FAKE_ACP_CRASH=1  → exit mid-turn on session/prompt (Group J3: ACP agent
+//	                    crashes mid-session → conductor detects → escalate). This is
+//	                    injected per-route via the agent action's env, so only the
+//	                    crash row crashes.
 //
 // NOT part of the shipped product; harness-only.
 package main
@@ -18,12 +23,17 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"sync"
 
 	"github.com/NodeSpy/paseo-conductor/internal/acp"
+	"github.com/NodeSpy/paseo-conductor/test/e2e/services/fixer"
 )
 
 type agent struct {
 	conn *acp.Conn
+
+	mu  sync.Mutex
+	cwd string // session cwd from session/new (the conductor-provisioned worktree)
 }
 
 func (a *agent) HandleRequest(ctx context.Context, method string, params json.RawMessage) (any, *acp.RPCError) {
@@ -32,21 +42,47 @@ func (a *agent) HandleRequest(ctx context.Context, method string, params json.Ra
 		return acp.InitializeResult{
 			ProtocolVersion: 1,
 			AgentCapabilities: acp.AgentCapabilities{
-				LoadSession: true,
+				LoadSession: true, // → conductor negotiates session_model: resumable
 			},
 			AgentInfo: &acp.Implementation{Name: "fakeacp", Version: "0.0.0"},
 		}, nil
 	case acp.MethodNewSession:
+		if os.Getenv("FAKE_ACP_CRASH") != "" {
+			// Die as the session is opened: the agent process vanishing is what
+			// conductor detects synchronously (session/new RPC fails → NewSession
+			// errors → dispatch fails → escalate). Group J3.
+			os.Exit(1)
+		}
+		var p acp.NewSessionParams
+		_ = json.Unmarshal(params, &p)
+		a.mu.Lock()
+		a.cwd = p.Cwd
+		a.mu.Unlock()
 		return acp.NewSessionResult{SessionID: "fakeacp-session-1"}, nil
 	case acp.MethodLoadSession:
+		// Re-attach: conductor resumes by id (Group D2). cwd may be re-supplied.
+		var p acp.NewSessionParams
+		if json.Unmarshal(params, &p) == nil && p.Cwd != "" {
+			a.mu.Lock()
+			a.cwd = p.Cwd
+			a.mu.Unlock()
+		}
 		return acp.NewSessionResult{SessionID: "fakeacp-session-1"}, nil
 	case acp.MethodPrompt:
 		var p acp.PromptParams
 		_ = json.Unmarshal(params, &p)
 		if os.Getenv("FAKE_ACP_CRASH") != "" {
-			os.Exit(1) // simulate a mid-session crash (group J3, once M3 wired)
+			os.Exit(1) // simulate a mid-session crash (Group J3)
 		}
-		// Stream one assistant message chunk, then end the turn.
+		// Do the fixer's work in the session worktree, then stream one message
+		// chunk and end the turn.
+		a.mu.Lock()
+		cwd := a.cwd
+		a.mu.Unlock()
+		if cwd == "" {
+			cwd, _ = os.Getwd()
+		}
+		_ = fixer.Apply(cwd, "acp", promptText(p))
 		_ = a.conn.Notify(ctx, acp.MethodSessionUpdate, acp.SessionNotification{
 			SessionID: p.SessionID,
 			Update: acp.SessionUpdate{
@@ -62,6 +98,15 @@ func (a *agent) HandleRequest(ctx context.Context, method string, params json.Ra
 
 func (a *agent) HandleNotification(ctx context.Context, method string, params json.RawMessage) {
 	// session/cancel and friends: nothing to do in the fake.
+}
+
+func promptText(p acp.PromptParams) string {
+	for _, b := range p.Prompt {
+		if b.Text != "" {
+			return b.Text
+		}
+	}
+	return "resolve the issue"
 }
 
 func main() {

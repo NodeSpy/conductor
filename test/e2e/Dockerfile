@@ -22,7 +22,8 @@ RUN go build -o /out/paseo-conductor ./cmd/paseo-conductor \
  && go build -o /out/sinkcatcher   ./test/e2e/services/sinkcatcher \
  && go build -o /out/fakeopencode  ./test/e2e/services/fakeopencode \
  && go build -o /out/fakeagentdeck ./test/e2e/services/fakeagentdeck \
- && go build -o /out/fakeacp       ./test/e2e/services/fakeacp
+ && go build -o /out/fakeacp       ./test/e2e/services/fakeacp \
+ && go build -o /out/fakecli       ./test/e2e/services/fakecli
 
 # ---- runtime stage ----
 FROM alpine:3.20
@@ -30,6 +31,15 @@ RUN apk add --no-cache git git-daemon curl bash coreutils openssl \
  && adduser -D -h /home/conductor conductor
 COPY --from=build /out/ /usr/local/bin/
 # The fake paseo is installed as `paseo` too, so a config without an explicit
-# paseo_bin: still resolves it on PATH.
-RUN ln -sf /usr/local/bin/fakepaseo /usr/local/bin/paseo
+# paseo_bin: still resolves it on PATH. The fake tool runtimes are installed under
+# the exact names conductor's controllers exec on PATH (stub mode): the cli
+# controller runs `claude`/`codex`, the opencode-native controller runs `opencode
+# serve`, the agent-deck controller runs `agent-deck`. fakeacp is referenced by an
+# explicit `command:` in the stub controllers config. In live mode the real CLIs are
+# mounted ahead of these on PATH (see docker-compose.live.yml).
+RUN ln -sf /usr/local/bin/fakepaseo     /usr/local/bin/paseo \
+ && ln -sf /usr/local/bin/fakecli       /usr/local/bin/claude \
+ && ln -sf /usr/local/bin/fakecli       /usr/local/bin/codex \
+ && ln -sf /usr/local/bin/fakeopencode  /usr/local/bin/opencode \
+ && ln -sf /usr/local/bin/fakeagentdeck /usr/local/bin/agent-deck
 WORKDIR /home/conductor

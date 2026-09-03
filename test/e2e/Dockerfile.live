@@ -1,0 +1,35 @@
+# Live-mode conductor image. Unlike the hermetic alpine image, this is a glibc +
+# Node runtime so the REAL agent CLIs installed on the host can execute inside the
+# container when mounted in (docker-compose.live.yml): codex / agent-deck are static
+# ELF and run anywhere, but gemini is a Node app, omp is glibc-dynamic, and the
+# claude wrapper shells out to Node — none of which run on musl/alpine.
+#
+# It still builds conductor + the harness services (forge/mock/sink stay on the
+# hermetic image; only `conductor` uses this one) and, crucially, fakepaseo — the
+# live path still uses fakepaseo ONLY to provision the PR worktree (a real git
+# clone/worktree, no LLM); the REAL agent then does the edit/commit/push.
+#
+# Build context is the repo root (see docker-compose.live.yml). Manual use only.
+
+# ---- build stage (same as the hermetic image) ----
+FROM golang:1.26-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ENV CGO_ENABLED=0
+RUN go build -o /out/paseo-conductor ./cmd/paseo-conductor \
+ && go build -o /out/fakepaseo     ./test/e2e/services/fakepaseo \
+ && go build -o /out/mockgithub    ./test/e2e/services/mockgithub \
+ && go build -o /out/sinkcatcher   ./test/e2e/services/sinkcatcher
+
+# ---- runtime stage: glibc + Node so real CLIs run ----
+FROM node:22-bookworm-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git curl ca-certificates openssl bash coreutils \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd -m -d /home/conductor conductor
+COPY --from=build /out/ /usr/local/bin/
+# fakepaseo still provisions the worktree in live mode (git only, no LLM).
+RUN ln -sf /usr/local/bin/fakepaseo /usr/local/bin/paseo
+WORKDIR /home/conductor

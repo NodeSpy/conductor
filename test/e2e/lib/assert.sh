@@ -75,5 +75,5 @@ print_matrix() {
     printf '%-6s %-40s \033[%sm%-6s\033[0m %s\n' "$g" "$s" "$color" "$st" "$d"
   done
   echo "===================================================="
-  printf 'PASS=%d  FAIL=%d  (skipped scenarios are pending their milestone)\n' "$PASS" "$FAIL"
+  printf 'PASS=%d  FAIL=%d  (SKIP = genuinely N/A for this stack; see the row note)\n' "$PASS" "$FAIL"
 }
