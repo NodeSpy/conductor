@@ -203,6 +203,11 @@ func cmdRun(args []string) error {
 	if err := validateAll(cfg, igs); err != nil {
 		return err
 	}
+	// Wire the engine's dispatch-completion seam to every configured slack
+	// instance's on_done/on_fail handling (see core.SetCompletionHook and
+	// slack.Integration.HandleCompletion). A no-op when no slack integration is
+	// configured. Sibling seam to slack.SetReplyHook (hand-off thread replies).
+	wireSlackCompletion(igs)
 
 	st, err := store.Open(store.Options{
 		StatePath:    cfg.Store.StateFile,
@@ -368,6 +373,31 @@ func refreshAppToken(igs []core.Integration) func(core.Trigger) (string, error) 
 		}
 		return "", fmt.Errorf("no integration named %q", t.Instance)
 	}
+}
+
+// completionHandler is implemented by an integration that wants to hear a
+// dispatch's final outcome for triggers it emitted (the slack integration, for
+// on_done/on_fail feedback).
+type completionHandler interface {
+	HandleCompletion(t core.Trigger, outcome string)
+}
+
+// wireSlackCompletion installs the single global core.CompletionHook, routing
+// each call to whichever configured integration instance emitted the trigger
+// (matched by name). A no-op when no configured integration implements
+// completionHandler.
+func wireSlackCompletion(igs []core.Integration) {
+	core.SetCompletionHook(func(t core.Trigger, outcome string) {
+		for _, ig := range igs {
+			if ig.Name() != t.Instance {
+				continue
+			}
+			if ch, ok := ig.(completionHandler); ok {
+				ch.HandleCompletion(t, outcome)
+			}
+			return
+		}
+	})
 }
 
 // dispatchTuner is implemented by an integration that carries dispatch-level
