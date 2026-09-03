@@ -89,16 +89,29 @@ func doUpdate(force bool, pinTag string) (updated bool, tag string, err error) {
 		exe = resolved
 	}
 
-	asset := fmt.Sprintf("paseo-conductor_%s_%s", runtime.GOOS, runtime.GOARCH)
 	tmp := exe + ".new"
 	_ = os.Remove(tmp)
 
-	logf("update: downloading %s %s", asset, tag)
-	dl := exec.Command("gh", "release", "download", tag,
-		"--repo", updateRepo, "--pattern", asset, "--output", tmp, "--clobber")
-	dl.Stderr = os.Stderr
-	if err := dl.Run(); err != nil {
-		return false, tag, fmt.Errorf("download %s from %s: %w", asset, tag, err)
+	// The project is renaming paseo-conductor -> conductor. Prefer the new asset
+	// name, but fall back to the legacy one so this binary keeps updating whether a
+	// release carries the new name, the old name, or (during the transition) both.
+	assets := []string{
+		fmt.Sprintf("conductor_%s_%s", runtime.GOOS, runtime.GOARCH),
+		fmt.Sprintf("paseo-conductor_%s_%s", runtime.GOOS, runtime.GOARCH),
+	}
+	var dlErr error
+	for _, asset := range assets {
+		logf("update: downloading %s %s", asset, tag)
+		dl := exec.Command("gh", "release", "download", tag,
+			"--repo", updateRepo, "--pattern", asset, "--output", tmp, "--clobber")
+		dl.Stderr = os.Stderr
+		if dlErr = dl.Run(); dlErr == nil {
+			break
+		}
+		_ = os.Remove(tmp)
+	}
+	if dlErr != nil {
+		return false, tag, fmt.Errorf("download conductor binary from %s %s: %w", updateRepo, tag, dlErr)
 	}
 	if err := os.Chmod(tmp, 0o755); err != nil {
 		return false, tag, err
