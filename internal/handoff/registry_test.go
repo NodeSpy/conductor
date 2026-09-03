@@ -2,7 +2,6 @@ package handoff
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -99,19 +98,160 @@ func TestRegistryResolveUnknownName(t *testing.T) {
 	}
 }
 
-func TestRegistryDiscordChannelIsNotWiredStub(t *testing.T) {
+// TestRegistryBuildsRealDiscordChannel confirms buildChannel builds a real
+// *DiscordChannel for a `discord:` entry (not the notWiredChannel stub used
+// for a malformed `to`): Present actually posts through the (stubbed)
+// Discord REST API and Ref reflects the mode.
+func TestRegistryBuildsRealDiscordChannel(t *testing.T) {
+	var posted []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posted = append(posted, r.URL.Path)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/messages"):
+			fmt.Fprint(w, `{"id":"111222"}`)
+		case r.URL.Path == "/users/@me/channels":
+			fmt.Fprint(w, `{"id":"D999"}`)
+		default:
+			t.Fatalf("unexpected discord API call: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	defer setDiscordAPIURL(srv.URL)()
+
 	cfgs := map[string]config.HandoffConfig{
-		"discord": {Discord: &config.HandoffChat{To: "thread", Channel: "general"}},
+		"warroom": {Discord: &config.HandoffChat{To: "thread", Channel: "C0456", BotToken: "bot-x"}},
+		"phone":   {Discord: &config.HandoffChat{To: "dm", User: "U123", BotToken: "bot-x"}},
 	}
 	r := NewRegistry(cfgs, "", nil)
-	ch, err := r.Resolve("discord")
+
+	warroom, err := r.Resolve("warroom")
 	if err != nil {
-		t.Fatalf("resolving a configured (if unwired) discord handoff should not error, got %v", err)
+		t.Fatal(err)
 	}
-	_, perr := ch.Present(context.Background(), Draft{Title: "t"})
-	if !errors.Is(perr, ErrNotWired) {
-		t.Fatalf("Present on the discord stub should fail with ErrNotWired, got %v", perr)
+	if _, ok := warroom.(*DiscordChannel); !ok {
+		t.Fatalf("warroom should resolve to a real *DiscordChannel, got %T", warroom)
 	}
+	pres, err := warroom.Present(context.Background(), Draft{Title: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pres.Ref() != "discord:C0456:thread" {
+		t.Fatalf("unexpected thread ref %q", pres.Ref())
+	}
+
+	phone, err := r.Resolve("phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pres, err = phone.Present(context.Background(), Draft{Title: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pres.Ref() != "discord:D999:dm" {
+		t.Fatalf("unexpected dm ref %q", pres.Ref())
+	}
+	if len(posted) != 3 { // thread post + dm open + dm post
+		t.Fatalf("unexpected API calls: %v", posted)
+	}
+}
+
+// TestRegistryDiscordInboxSharedAcrossEntries confirms every configured
+// discord entry's replies route through the SAME Inbox, and that
+// DiscordInbox/DiscordBotTokens are empty/nil when no discord handoff is
+// configured.
+func TestRegistryDiscordInboxSharedAcrossEntries(t *testing.T) {
+	defer setDiscordAPIURL(fakeDiscordServer(t))()
+
+	cfgs := map[string]config.HandoffConfig{
+		"a": {Discord: &config.HandoffChat{To: "thread", Channel: "C1", BotToken: "bot-x"}},
+		"b": {Discord: &config.HandoffChat{To: "thread", Channel: "C2", BotToken: "bot-x"}},
+	}
+	r := NewRegistry(cfgs, "", nil)
+	if r.DiscordInbox() == nil {
+		t.Fatal("DiscordInbox should be non-nil when a discord handoff is configured")
+	}
+	if got := r.DiscordBotTokens(); len(got) != 1 || got[0] != "bot-x" {
+		t.Fatalf("expected a single distinct bot token, got %v", got)
+	}
+
+	a, _ := r.Resolve("a")
+	b, _ := r.Resolve("b")
+	pa, err := a.Present(context.Background(), Draft{Title: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pb, err := b.Present(context.Background(), Draft{Title: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan Decision, 2)
+	go func() { d, _ := pa.Await(context.Background()); done <- d }()
+	go func() { d, _ := pb.Await(context.Background()); done <- d }()
+	time.Sleep(10 * time.Millisecond)
+	if !r.DiscordInbox().Deliver("C1", "", "approve") {
+		t.Fatal("reply on entry a's channel should be consumed via the shared inbox")
+	}
+	if !r.DiscordInbox().Deliver("C2", "", "discard") {
+		t.Fatal("reply on entry b's channel should be consumed via the shared inbox")
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Await never resolved")
+		}
+	}
+}
+
+// TestRegistryDiscordBotTokensDistinct confirms two discord entries with
+// different bot_tokens produce two distinct tokens (so main.go starts a
+// gateway per token), and a shared token collapses to one.
+func TestRegistryDiscordBotTokensDistinct(t *testing.T) {
+	cfgs := map[string]config.HandoffConfig{
+		"a": {Discord: &config.HandoffChat{To: "thread", Channel: "C1", BotToken: "bot-1"}},
+		"b": {Discord: &config.HandoffChat{To: "thread", Channel: "C2", BotToken: "bot-2"}},
+		"c": {Discord: &config.HandoffChat{To: "thread", Channel: "C3", BotToken: "bot-1"}},
+	}
+	r := NewRegistry(cfgs, "", nil)
+	toks := r.DiscordBotTokens()
+	seen := map[string]bool{}
+	for _, t := range toks {
+		seen[t] = true
+	}
+	if len(toks) != 2 || !seen["bot-1"] || !seen["bot-2"] {
+		t.Fatalf("expected exactly [bot-1 bot-2] (order-independent), got %v", toks)
+	}
+}
+
+func TestRegistryDiscordInboxNilWithoutDiscord(t *testing.T) {
+	cfgs := map[string]config.HandoffConfig{
+		"page": {Web: &config.HandoffWeb{BaseURL: "https://a.test"}},
+	}
+	r := NewRegistry(cfgs, "", nil)
+	if r.DiscordInbox() != nil {
+		t.Fatal("DiscordInbox should be nil when no discord handoff is configured")
+	}
+	if len(r.DiscordBotTokens()) != 0 {
+		t.Fatal("DiscordBotTokens should be empty when no discord handoff is configured")
+	}
+}
+
+// fakeDiscordServer starts an httptest server answering the Discord REST
+// calls a hand-off channel makes, closed on test cleanup, and returns its URL.
+func fakeDiscordServer(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/messages"):
+			fmt.Fprint(w, `{"id":"1"}`)
+		case r.URL.Path == "/users/@me/channels":
+			fmt.Fprint(w, `{"id":"D999"}`)
+		default:
+			t.Fatalf("unexpected discord API call: %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
 }
 
 // TestRegistryBuildsRealSlackChannel confirms buildChannel builds a real

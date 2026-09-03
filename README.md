@@ -661,7 +661,51 @@ back to the waiting hand-off. A `slack:` hand-off with no `slack` integration co
 startup warning: the draft still posts, but a reply is never captured. This is unrelated to the
 tunnel/URL machinery above — no inbound port, no tunnel provider, no `base_url`.
 
-`discord` hand-offs (schema only in this build) validate today but aren't wired yet.
+### Discord hand-offs
+
+**`discord`** posts the draft as a DM or a channel/thread message, the same shape as Slack — no
+`base_url`, no tunnel:
+
+```yaml
+handoffs:
+  phone:
+    discord:
+      to: dm                            # dm | thread
+      user: ${DISCORD_USER_ID}          # to: dm — a Discord user id; required
+      bot_token: ${DISCORD_BOT_TOKEN}
+  war-room:
+    discord:
+      to: thread
+      channel: "123456789012345678"     # to: thread — a channel or thread id; required
+      bot_token: ${DISCORD_BOT_TOKEN}
+```
+
+- `to: dm` opens a DM (`POST /users/@me/channels` against `user`, then a message with no channel
+  creation on repeat calls — the result is cached) and posts there. `user` is a Discord user id, not a
+  GitHub handle — there is no GitHub→Discord identity mapping, so it is never inferred or defaulted.
+  Enable Developer Mode in Discord (User Settings → Advanced), then right-click the user → "Copy User
+  ID".
+- `to: thread` posts to `channel`, which can be a regular channel id or a Discord thread's own channel
+  id; either way, replies on that channel resolve the hand-off. `channel` is required.
+- `bot_token` is required either way.
+
+Unlike Slack, capturing a Discord reply needs no separate `integrations:` entry — conductor connects a
+Discord **bot gateway** itself (a persistent WebSocket to Discord, reconnecting with capped backoff)
+whenever at least one `discord:` hand-off is configured, one connection per distinct `bot_token` across
+your `handoffs:` entries. To make this work:
+
+1. Create a bot in the [Discord developer portal](https://discord.com/developers/applications), copy its
+   token into `bot_token` (e.g. via `${DISCORD_BOT_TOKEN}`).
+2. Under the bot's settings, enable the **MESSAGE CONTENT** privileged intent — without it every message
+   the gateway receives arrives with empty content, so a reply can never be parsed.
+3. Invite the bot to the server/channel a `to: thread` entry posts to (OAuth2 URL Generator, `bot` scope,
+   `Send Messages` + `Read Message History` permissions). A `to: dm` entry instead needs the target user
+   to share a server with the bot (Discord does not allow a bot to DM a user with no server in common).
+
+The gateway ignores the bot's own messages (so posting the draft can never resolve its own hand-off) and
+identifies with the `GUILDS`, `GUILD_MESSAGES`, `DIRECT_MESSAGES`, and `MESSAGE_CONTENT` intents. Like
+Slack, this is unrelated to the tunnel/URL machinery above — no inbound port, no tunnel provider, no
+`base_url`.
 
 ## Identity & rate limits
 
