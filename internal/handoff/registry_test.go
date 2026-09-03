@@ -3,8 +3,12 @@ package handoff
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 )
@@ -95,22 +99,148 @@ func TestRegistryResolveUnknownName(t *testing.T) {
 	}
 }
 
-func TestRegistryChatChannelsAreNotWiredStubs(t *testing.T) {
+func TestRegistryDiscordChannelIsNotWiredStub(t *testing.T) {
 	cfgs := map[string]config.HandoffConfig{
-		"phone":   {Slack: &config.HandoffChat{To: "dm"}},
 		"discord": {Discord: &config.HandoffChat{To: "thread", Channel: "general"}},
 	}
 	r := NewRegistry(cfgs, "", nil)
-	for _, name := range []string{"phone", "discord"} {
-		ch, err := r.Resolve(name)
-		if err != nil {
-			t.Fatalf("%s: resolving a configured (if unwired) handoff should not error, got %v", name, err)
+	ch, err := r.Resolve("discord")
+	if err != nil {
+		t.Fatalf("resolving a configured (if unwired) discord handoff should not error, got %v", err)
+	}
+	_, perr := ch.Present(context.Background(), Draft{Title: "t"})
+	if !errors.Is(perr, ErrNotWired) {
+		t.Fatalf("Present on the discord stub should fail with ErrNotWired, got %v", perr)
+	}
+}
+
+// TestRegistryBuildsRealSlackChannel confirms buildChannel builds a real
+// *SlackChannel for a `slack:` entry (not the notWiredChannel stub other chat
+// channels still use): Present actually posts through the (stubbed) Slack Web
+// API and Ref reflects the mode.
+func TestRegistryBuildsRealSlackChannel(t *testing.T) {
+	var posted []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posted = append(posted, r.URL.Path)
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			fmt.Fprint(w, `{"ok":true,"ts":"111.222"}`)
+		case "/conversations.open":
+			fmt.Fprint(w, `{"ok":true,"channel":{"id":"D999"}}`)
+		default:
+			t.Fatalf("unexpected slack API call: %s", r.URL.Path)
 		}
-		_, perr := ch.Present(context.Background(), Draft{Title: "t"})
-		if !errors.Is(perr, ErrNotWired) {
-			t.Fatalf("%s: Present on a slack/discord stub should fail with ErrNotWired, got %v", name, perr)
+	}))
+	defer srv.Close()
+	restore := setSlackAPIURL(srv.URL)
+	defer restore()
+
+	cfgs := map[string]config.HandoffConfig{
+		"warroom": {Slack: &config.HandoffChat{To: "thread", Channel: "C0456", BotToken: "xoxb-x"}},
+		"phone":   {Slack: &config.HandoffChat{To: "dm", User: "U123", BotToken: "xoxb-x"}},
+	}
+	r := NewRegistry(cfgs, "", nil)
+
+	warroom, err := r.Resolve("warroom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := warroom.(*SlackChannel); !ok {
+		t.Fatalf("warroom should resolve to a real *SlackChannel, got %T", warroom)
+	}
+	pres, err := warroom.Present(context.Background(), Draft{Title: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pres.Ref() != "slack:C0456:111.222" {
+		t.Fatalf("unexpected thread ref %q", pres.Ref())
+	}
+
+	phone, err := r.Resolve("phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pres, err = phone.Present(context.Background(), Draft{Title: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pres.Ref() != "slack:D999:dm" {
+		t.Fatalf("unexpected dm ref %q", pres.Ref())
+	}
+}
+
+// TestRegistrySlackInboxSharedAcrossEntries confirms every configured slack
+// entry's replies route through the SAME Inbox (so one slack.SetReplyHook
+// wiring in main.go covers every entry), and that SlackInbox is nil when no
+// slack handoff is configured.
+func TestRegistrySlackInboxSharedAcrossEntries(t *testing.T) {
+	restore := setSlackAPIURL(fakeSlackServer(t))
+	defer restore()
+
+	cfgs := map[string]config.HandoffConfig{
+		"a": {Slack: &config.HandoffChat{To: "thread", Channel: "C1", BotToken: "xoxb-x"}},
+		"b": {Slack: &config.HandoffChat{To: "thread", Channel: "C2", BotToken: "xoxb-x"}},
+	}
+	r := NewRegistry(cfgs, "", nil)
+	if r.SlackInbox() == nil {
+		t.Fatal("SlackInbox should be non-nil when a slack handoff is configured")
+	}
+
+	a, _ := r.Resolve("a")
+	b, _ := r.Resolve("b")
+	pa, err := a.Present(context.Background(), Draft{Title: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pb, err := b.Present(context.Background(), Draft{Title: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan Decision, 2)
+	go func() { d, _ := pa.Await(context.Background()); done <- d }()
+	go func() { d, _ := pb.Await(context.Background()); done <- d }()
+	time.Sleep(10 * time.Millisecond)
+	if !r.SlackInbox().Deliver("C1", "111.222", "approve") {
+		t.Fatal("reply to entry a's thread should be consumed via the shared inbox")
+	}
+	if !r.SlackInbox().Deliver("C2", "111.222", "discard") {
+		t.Fatal("reply to entry b's thread should be consumed via the shared inbox")
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Await never resolved")
 		}
 	}
+}
+
+func TestRegistrySlackInboxNilWithoutSlack(t *testing.T) {
+	cfgs := map[string]config.HandoffConfig{
+		"page": {Web: &config.HandoffWeb{BaseURL: "https://a.test"}},
+	}
+	r := NewRegistry(cfgs, "", nil)
+	if r.SlackInbox() != nil {
+		t.Fatal("SlackInbox should be nil when no slack handoff is configured")
+	}
+}
+
+// fakeSlackServer starts an httptest server answering chat.postMessage with a
+// fixed ts, closed on test cleanup, and returns its URL.
+func fakeSlackServer(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			fmt.Fprint(w, `{"ok":true,"ts":"111.222"}`)
+		case "/conversations.open":
+			fmt.Fprint(w, `{"ok":true,"channel":{"id":"D999"}}`)
+		default:
+			t.Fatalf("unexpected slack API call: %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
 }
 
 // TestRegistryBuildChannelWiresTunnel confirms buildChannel actually wires a

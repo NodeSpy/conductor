@@ -28,6 +28,7 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/engine"
 	"github.com/NodeSpy/paseo-conductor/internal/handoff"
 	"github.com/NodeSpy/paseo-conductor/internal/inbound"
+	"github.com/NodeSpy/paseo-conductor/internal/integrations/slack" // registers "slack"; also feeds hand-off replies (see wireSlackHandoffInbox)
 	"github.com/NodeSpy/paseo-conductor/internal/notify"
 	"github.com/NodeSpy/paseo-conductor/internal/store"
 
@@ -36,7 +37,6 @@ import (
 	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/pagerduty" // register "pagerduty"
 	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/rss"       // register "rss"
 	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/sentry"    // register "sentry"
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/slack"     // register "slack"
 	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/webhook"   // register "webhook"
 )
 
@@ -239,6 +239,7 @@ func cmdRun(args []string) error {
 	// is the only path needed here). Empty map → Resolve always yields nil → the
 	// review hand-off keeps today's paseo-native behavior.
 	handoffs := handoff.NewRegistry(cfg.Handoffs, cfg.DefaultHandoffName(), logf)
+	wireSlackHandoffInbox(cfg, handoffs)
 	// Shared "never reap" set for interactive hand-off agents: the engine registers
 	// a background step's agent at launch; the reaper skips anything in it.
 	hold := dispatch.NewHoldSet(filepath.Join(filepath.Dir(cfg.Store.StateFile), "holds.json"))
@@ -391,6 +392,37 @@ func wireSlackCompletion(igs []core.Integration) {
 			return
 		}
 	})
+}
+
+// wireSlackHandoffInbox connects any configured `slack:` hand-off entries'
+// shared Inbox to the slack integration's reply hook, so a Socket Mode
+// "message" event (thread reply or DM) resolves the pending Await instead of
+// being treated as ordinary chatter. A no-op when no slack hand-off is
+// configured. If one is configured but no enabled `slack` integration exists
+// in `integrations:`, nothing will ever call the hook — warn loudly at
+// startup rather than leaving the hand-off silently stuck waiting for a
+// reply that can never arrive.
+func wireSlackHandoffInbox(cfg *config.Config, handoffs *handoff.Registry) {
+	inbox := handoffs.SlackInbox()
+	if inbox == nil {
+		return
+	}
+	slack.SetReplyHook(func(channel, threadTS, _, text string) bool { return inbox.Deliver(channel, threadTS, text) })
+	if !anySlackIntegration(cfg) {
+		logf("handoff: a slack hand-off is configured but no enabled `slack` integration is present in integrations: — replies will never be captured (add one, see README Hand-offs)")
+	}
+}
+
+// anySlackIntegration reports whether integrations: configures at least one
+// enabled slack instance (the Socket Mode connection that must be running for
+// slack hand-off replies to be captured).
+func anySlackIntegration(cfg *config.Config) bool {
+	for _, ig := range cfg.Integrations {
+		if ig.Type == "slack" && ig.IsEnabled() {
+			return true
+		}
+	}
+	return false
 }
 
 // dispatchTuner is implemented by an integration that carries dispatch-level

@@ -426,12 +426,13 @@ notify:
 #   #   provider: command
 #   #   command: ["cloudflared", "tunnel", "--url", "http://{{.addr}}"]
 #   #   url_pattern: 'https://\S+\.trycloudflare\.com\S*'  # optional; default matches any https?:// URL in the output
-#   # phone:                                      # Slack DM/thread — schema only, not wired yet
-#   #   slack:
+#   # phone:                                      # Slack DM — needs a running `slack` integration
+#   #   slack:                                     # (Socket Mode) to capture the reply; see README
 #   #     to: dm                                  # dm | thread
-#   #     user: ${SLACK_USER_ID}                  # to: dm — defaults to your `me` identity
-#   #     channel: C0123456                       # to: thread — channel to post in
-#   #     bot_token: ${SLACK_BOT_TOKEN}
+#   #     user: ${SLACK_USER_ID}                  # to: dm — a Slack user id (e.g. U0123ABCD); required,
+#   #                                              #   never inferred from your GitHub identity
+#   #     channel: C0123456                       # to: thread — channel to post in; required
+#   #     bot_token: ${SLACK_BOT_TOKEN}            # needs chat:write (+ im:write for to: dm)
 #   # war-room:                                    # Discord DM/thread — schema only, not wired yet
 #   #   discord:
 #   #     to: thread

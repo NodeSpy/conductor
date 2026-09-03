@@ -27,15 +27,16 @@ var (
 // eventCallback is the Events API payload delivered inside an events_api envelope.
 type eventCallback struct {
 	Event struct {
-		Type     string `json:"type"`
-		Text     string `json:"text"`
-		User     string `json:"user"`
-		Channel  string `json:"channel"`
-		TS       string `json:"ts"`
-		ThreadTS string `json:"thread_ts"`
-		Reaction string `json:"reaction"`
-		BotID    string `json:"bot_id"` // set on messages the bot itself posted (skip those)
-		Item     struct {
+		Type        string `json:"type"`
+		Text        string `json:"text"`
+		User        string `json:"user"`
+		Channel     string `json:"channel"`
+		ChannelType string `json:"channel_type"` // "im" for a DM; only present on message events
+		TS          string `json:"ts"`
+		ThreadTS    string `json:"thread_ts"`
+		Reaction    string `json:"reaction"`
+		BotID       string `json:"bot_id"` // set on messages the bot itself posted (skip those)
+		Item        struct {
 			Channel string `json:"channel"`
 			TS      string `json:"ts"`
 		} `json:"item"`
@@ -56,11 +57,14 @@ func (g *Integration) handleEvent(ctx context.Context, emit core.EmitFunc, raw j
 		return
 	}
 	e := cb.Event
-	// A human reply inside a thread may be answering an interactive hand-off posted
-	// there. Route it to the hand-off reply hook first; if it's consumed, it isn't
-	// ordinary chatter and shouldn't fall through to rule matching. Skip the bot's
-	// own posts (bot_id set) and non-threaded messages.
-	if e.Type == "message" && replyHook != nil && e.ThreadTS != "" && e.BotID == "" && e.User != "" {
+	// A human reply inside a thread — or any message in a DM — may be answering
+	// an interactive hand-off posted there. Route it to the hand-off reply hook
+	// first; if it's consumed, it isn't ordinary chatter and shouldn't fall
+	// through to rule matching. Skip the bot's own posts (bot_id set). A DM
+	// message carries channel_type "im" and typically no thread_ts, so it's
+	// routed on that alone; a channel message still requires a thread_ts (this
+	// integration never treats bare channel chatter as a hand-off reply).
+	if e.Type == "message" && replyHook != nil && e.BotID == "" && e.User != "" && (e.ThreadTS != "" || e.ChannelType == "im") {
 		if replyHook(e.Channel, e.ThreadTS, e.User, e.Text) {
 			return
 		}

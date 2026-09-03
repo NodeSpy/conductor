@@ -629,8 +629,39 @@ open no process, so their origin stays the same across hand-offs. A spawning pro
 on `PATH` (`cloudflared`, `ngrok`, `ssh`, `loclx`, `tailscale`); conductor checks with `exec.LookPath`
 first and the error names the missing binary rather than surfacing a generic exec failure.
 
-`slack`/`discord` hand-offs (a DM or thread, no URL at all) are schema-only in this build — their
-config keys (`slack:`, `discord:`) validate today but aren't wired yet.
+### Slack hand-offs
+
+**`slack`** posts the draft as a DM or a channel thread instead of a web link — no `base_url`, no
+tunnel:
+
+```yaml
+handoffs:
+  phone:
+    slack:
+      to: dm                        # dm | thread
+      user: ${SLACK_USER_ID}        # to: dm — a Slack user id (e.g. U0123ABCD); required
+      bot_token: ${SLACK_BOT_TOKEN}
+  war-room:
+    slack:
+      to: thread
+      channel: C0123456             # to: thread — required
+      bot_token: ${SLACK_BOT_TOKEN}
+```
+
+- `to: dm` posts to a direct message (`conversations.open` against `user`, then `chat.postMessage`
+  with no thread). `user` is a Slack user id, not a GitHub handle — there is no GitHub→Slack identity
+  mapping, so it is never inferred or defaulted; look it up from the Slack profile ("Copy member ID").
+- `to: thread` posts to `channel` and replies land in that message's thread — today's default
+  behavior, `channel` is required.
+- `bot_token` is required either way and needs the `chat:write` scope (`im:write` too, for `to: dm`).
+
+Capturing your reply depends on the [`slack` control-plane integration](#slack-control-plane-slack-integration)
+being configured and running (Socket Mode) — it is what receives the DM/thread message and feeds it
+back to the waiting hand-off. A `slack:` hand-off with no `slack` integration configured logs a
+startup warning: the draft still posts, but a reply is never captured. This is unrelated to the
+tunnel/URL machinery above — no inbound port, no tunnel provider, no `base_url`.
+
+`discord` hand-offs (schema only in this build) validate today but aren't wired yet.
 
 ## Identity & rate limits
 
