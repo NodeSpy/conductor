@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install a released paseo-conductor binary for this OS/arch.
+# Install a released conductor binary for this OS/arch.
 #
 # The repo is private, so this uses the authenticated `gh` CLI to fetch release
 # assets. This script is mirrored to a public gist so it can be curl'd:
@@ -8,16 +8,30 @@
 #
 # Optional: pin a version, e.g. `... | bash -s -- v0.2.1`.
 # NOTE: after editing this file, re-publish the gist: scripts/publish-installer-gist.sh
+#
+# Fleet-safe: an existing paseo-conductor install (binary at ~/.local/bin or a
+# ~/.config/paseo-conductor from before the rebrand) keeps being reinstalled/
+# updated in place under the old name; only a fresh install gets the new
+# conductor-named binary/paths. Release assets ship under both names, so
+# either path resolves.
 set -euo pipefail
 
-REPO="${PASEO_CONDUCTOR_REPO:-NodeSpy/paseo-conductor}"
-BIN_DIR="${PASEO_CONDUCTOR_BIN_DIR:-$HOME/.local/bin}"
+REPO="${CONDUCTOR_REPO:-${PASEO_CONDUCTOR_REPO:-NodeSpy/conductor}}"
+BIN_DIR="${CONDUCTOR_BIN_DIR:-${PASEO_CONDUCTOR_BIN_DIR:-$HOME/.local/bin}}"
 
 command -v gh >/dev/null 2>&1 || {
   echo "error: this installer needs the GitHub CLI (gh), authenticated (gh auth login)." >&2
   echo "       https://cli.github.com" >&2
   exit 1
 }
+
+if [ -f "$BIN_DIR/conductor" ] || [ -d "$HOME/.config/conductor" ]; then
+  NAME="conductor"
+elif [ -f "$BIN_DIR/paseo-conductor" ] || [ -d "$HOME/.config/paseo-conductor" ]; then
+  NAME="paseo-conductor"
+else
+  NAME="conductor"
+fi
 
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 case "$(uname -m)" in
@@ -26,13 +40,13 @@ case "$(uname -m)" in
   i386 | i686) arch=386 ;;
   *) echo "error: unsupported arch $(uname -m)" >&2; exit 1 ;;
 esac
-asset="paseo-conductor_${os}_${arch}"
+asset="${NAME}_${os}_${arch}"
 
 tag="${1:-$(gh release view --repo "$REPO" --json tagName --jq .tagName)}"
 [ -n "$tag" ] || { echo "error: no release found in $REPO" >&2; exit 1; }
 
 mkdir -p "$BIN_DIR"
-dest="$BIN_DIR/paseo-conductor"
+dest="$BIN_DIR/$NAME"
 echo "==> installing $asset ($tag) -> $dest"
 gh release download "$tag" --repo "$REPO" --pattern "$asset" --output "$dest" --clobber
 chmod +x "$dest"
@@ -44,8 +58,8 @@ case ":$PATH:" in
 esac
 
 # Seed a valid starter config + secrets if missing; drop the full example as reference.
-CFG_DIR="${PASEO_CONDUCTOR_CFG_DIR:-$HOME/.config/paseo-conductor}"
-mkdir -p "$CFG_DIR" "$HOME/.local/state/paseo-conductor"
+CFG_DIR="${CONDUCTOR_CFG_DIR:-${PASEO_CONDUCTOR_CFG_DIR:-$HOME/.config/$NAME}}"
+mkdir -p "$CFG_DIR" "$HOME/.local/state/$NAME"
 gh api "repos/$REPO/contents/config.example.yaml" -H "Accept: application/vnd.github.raw" \
   >"$CFG_DIR/config.example.yaml" 2>/dev/null || true
 if [ ! -f "$CFG_DIR/config.yaml" ]; then

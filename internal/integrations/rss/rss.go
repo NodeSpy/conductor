@@ -223,7 +223,7 @@ func (g *Integration) fetch(ctx context.Context, url string) ([]Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "paseo-conductor")
+	req.Header.Set("User-Agent", "conductor")
 	req.Header.Set("Accept", "application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.8")
 	resp, err := g.http.Do(req)
 	if err != nil {

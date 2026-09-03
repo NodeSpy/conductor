@@ -3,7 +3,7 @@
 A hermetic, in-repo end-to-end harness for the pluggable-controller feature set
 (issue #9). It brings up an **isolated** Docker stack — a local bare-git forge, a
 mock GitHub API, a notify sink-catcher, and stub controllers — and drives the real
-`paseo-conductor` daemon through the milestone-feasible test groups, asserting
+`conductor` daemon through the milestone-feasible test groups, asserting
 behavior from the audit log, the forge, the mock API, and the sinks.
 
 **Fully isolated.** Conductor in the container sees only the local forge + mock
@@ -57,7 +57,7 @@ lands per controller, exactly like the paseo path.
 
 ## Event injection
 
-- **`paseo-conductor force <kind> <repo>#<n>`** — primary, deterministic, no
+- **`conductor force <kind> <repo>#<n>`** — primary, deterministic, no
   webhooks. Run via `docker compose exec` into a daemon container.
 - **Webhook path (group H)** — signed fixture POSTs (`fixtures/*.json`) to the
   github `listen:` receiver; the mock API serves the reads. `X-Hub-Signature-256`

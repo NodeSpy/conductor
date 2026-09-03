@@ -1,5 +1,5 @@
-# paseo-conductor configuration.
-# Copy to ~/.config/paseo-conductor/config.yaml and edit.
+# conductor configuration.
+# Copy to ~/.config/conductor/config.yaml and edit.
 # ${ENV} references are expanded from the environment (see conductor.env).
 # Referencing a variable that isn't set is an error; an empty value (KEY=) is fine.
 #
@@ -19,7 +19,7 @@ integrations:
     # Writes/posts use your gh token; commits/pushes go over SSH as you.
     app:
       app_id: 0
-      private_key_path: ~/.config/paseo-conductor/github-app.pem
+      private_key_path: ~/.config/conductor/github-app.pem
       webhook_secret: ${GH_WEBHOOK_SECRET}
       # smee re-serializes the JSON body, so HMAC often won't match — leave this
       # false with smee. With a DIRECT `listen` receiver the raw body is intact,
@@ -372,7 +372,7 @@ notify:
   # discord_webhook_url: ${DISCORD_WEBHOOK_URL}   # optional: also post the `on` events to a Discord channel
   # ntfy:                                         # optional: publish the `on` events to an ntfy topic
   #   server: https://ntfy.sh                     #   defaults to https://ntfy.sh; point at a self-hosted server instead
-  #   topic: paseo-conductor
+  #   topic: conductor
   # pushover:                                     # optional: push the `on` events via Pushover
   #   token: ${PUSHOVER_TOKEN}                    #   application token
   #   user: ${PUSHOVER_USER}                      #   user/group key
@@ -495,8 +495,8 @@ update:
                                        #   apply:false stages the new binary + logs "restart to apply"
 
 store:
-  state_file: ~/.local/state/paseo-conductor/state.json
-  audit_log: ~/.local/state/paseo-conductor/audit.jsonl
+  state_file: ~/.local/state/conductor/state.json
+  audit_log: ~/.local/state/conductor/audit.jsonl
   state_ttl: 720h
   max_tracked_prs: 5000
   audit_max_size: 50MB

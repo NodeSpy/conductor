@@ -1,5 +1,5 @@
 // Package notify surfaces conductor activity to *you* — never to the PR. It logs
-// to the daemon journal (so `journalctl --user -u paseo-conductor` shows it) and,
+// to the daemon journal (so `journalctl --user -u conductor` shows it) and,
 // if a Slack, Discord, ntfy, Pushover, or Notifiarr sink is configured, also
 // posts there. The interactive/failed agents additionally surface in paseo
 // itself (attention flag). It deliberately does NOT post comments on PRs: a
@@ -146,7 +146,7 @@ func (n *Notifier) notifyAll(ctx context.Context, text string) {
 
 // postSlack posts a plain message to a Slack incoming webhook.
 func (n *Notifier) postSlack(ctx context.Context, text string) {
-	body, _ := json.Marshal(map[string]string{"text": "paseo-conductor " + text})
+	body, _ := json.Marshal(map[string]string{"text": "conductor " + text})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.cfg.SlackWebhookURL, bytes.NewReader(body))
 	if err != nil {
 		return
@@ -162,7 +162,7 @@ func (n *Notifier) postSlack(ctx context.Context, text string) {
 
 // postDiscord posts a plain message to a Discord incoming webhook.
 func (n *Notifier) postDiscord(ctx context.Context, text string) {
-	body, _ := json.Marshal(map[string]string{"content": "paseo-conductor " + text})
+	body, _ := json.Marshal(map[string]string{"content": "conductor " + text})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.cfg.DiscordWebhookURL, bytes.NewReader(body))
 	if err != nil {
 		return
@@ -188,7 +188,7 @@ func (n *Notifier) postNtfy(ctx context.Context, text string) {
 	if err != nil {
 		return
 	}
-	req.Header.Set("Title", "paseo-conductor")
+	req.Header.Set("Title", "conductor")
 	resp, err := n.http.Do(req)
 	if err != nil {
 		n.log("notify: ntfy post failed: %v", err)
@@ -202,7 +202,7 @@ func (n *Notifier) postPushover(ctx context.Context, text string) {
 	form := url.Values{
 		"token":   {n.cfg.Pushover.Token},
 		"user":    {n.cfg.Pushover.User},
-		"message": {"paseo-conductor " + text},
+		"message": {"conductor " + text},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, pushoverURL, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -227,7 +227,7 @@ func (n *Notifier) postNotifiarr(ctx context.Context, text string) {
 		discord["ids"] = map[string]string{"channel": n.cfg.Notifiarr.ChannelID}
 	}
 	body, _ := json.Marshal(map[string]any{
-		"notification": map[string]string{"name": "paseo-conductor"},
+		"notification": map[string]string{"name": "conductor"},
 		"discord":      discord,
 	})
 	endpoint := fmt.Sprintf(notifiarrURL, n.cfg.Notifiarr.APIKey)

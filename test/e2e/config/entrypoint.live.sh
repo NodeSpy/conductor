@@ -50,4 +50,4 @@ else
   echo "entrypoint.live: WARN no gemini config at /seed-creds/gemini" >&2
 fi
 
-exec paseo-conductor run --config "$CONFIG"
+exec conductor run --config "$CONFIG"

@@ -1,12 +1,12 @@
 <div align="center" width="100%">
-  <img src="paseo-conductor.png" width="320" alt="paseo-conductor" />
+  <img src="paseo-conductor.png" width="320" alt="conductor" />
 </div>
 
-# paseo-conductor
+# conductor
 
 Event-driven agent orchestration for your local [Paseo](https://paseo.sh) daemon.
 
-paseo-conductor receives events from external services and runs Paseo coding agents (or
+conductor receives events from external services and runs Paseo coding agents (or
 deterministic tools) on your machine in response. **GitHub is the first integration**; the core is
 integration-agnostic so more can be added.
 
@@ -28,13 +28,13 @@ Then:
 1. Create a GitHub App + a smee channel — see [GitHub App setup](#github-app-setup).
    (smee.io is just a webhook relay — there's **nothing to install**; the conductor connects to the
    channel itself.)
-2. Fill in `~/.config/paseo-conductor/config.yaml` (app id, repos, your login) and
-   `~/.config/paseo-conductor/conductor.env` (secrets), then set the github integration
+2. Fill in `~/.config/conductor/config.yaml` (app id, repos, your login) and
+   `~/.config/conductor/conductor.env` (secrets), then set the github integration
    `enabled: true` — see [Configuration](#configuration). (The seeded starter is valid but disabled.)
-3. `paseo-conductor validate` → start the service (the installer offers this).
+3. `conductor validate` → start the service (the installer offers this).
 
 Details and other install paths are under [Install](#install-released-binary-one-liner). Later:
-`paseo-conductor update` (or `update.auto`) keeps it current.
+`conductor update` (or `update.auto`) keeps it current.
 
 ## What it does (GitHub)
 
@@ -109,7 +109,7 @@ integrations:
     name: default
     app:
       app_id: 123
-      private_key_path: ~/.config/paseo-conductor/github-app.pem
+      private_key_path: ~/.config/conductor/github-app.pem
       webhook_secret: ${GH_WEBHOOK_SECRET}
     webhook:
       smee_url: ${GH_SMEE_URL}
@@ -532,7 +532,7 @@ Mode needed for that half.
 
 ## Notifications
 
-paseo-conductor posts short messages when something needs your attention. Every event is written to
+conductor posts short messages when something needs your attention. Every event is written to
 the journal (the audit log) regardless; `notify.on` selects which events also push to the configured
 sinks.
 
@@ -709,7 +709,7 @@ Slack, this is unrelated to the tunnel/URL machinery above — no inbound port, 
 
 ## Identity & rate limits
 
-The rate-limit pain came from doing reads on your personal `gh` token. paseo-conductor separates
+The rate-limit pain came from doing reads on your personal `gh` token. conductor separates
 duties:
 
 - **Conductor's own reads/enrichment** (PR state, checks, labels) use the **GitHub App
@@ -735,17 +735,23 @@ for your OS/arch (mac amd64/arm64, linux amd64/arm64/386):
 curl -fsSL https://gist.githubusercontent.com/danielcbaldwin/3504ed91ac1014b3f073f44916e443a7/raw/install-release.sh | bash
 ```
 
-Pin a version with `... | bash -s -- v0.2.1`. Installs to `~/.local/bin/paseo-conductor`, seeds a
+Pin a version with `... | bash -s -- v0.2.1`. Installs to `~/.local/bin/conductor` (or keeps
+updating `~/.local/bin/paseo-conductor` in place on an existing install — see below), seeds a
 starter config, and then **installs the background service by default** (press Enter to confirm) —
 a `systemd --user` unit on Linux or a `launchd` LaunchAgent on macOS. Answer `n` to skip (set
-`PASEO_CONDUCTOR_INSTALL_SERVICE=yes|no` to answer non-interactively). It only *starts* the service
+`CONDUCTOR_INSTALL_SERVICE=yes|no` to answer non-interactively). It only *starts* the service
 once your config validates, so a fresh install won't crash-loop.
+
+An existing install (unit/binary/config/state named `paseo-conductor` from before the rebrand)
+keeps working untouched — the binary detects it and keeps targeting the existing service unit and
+directories rather than creating parallel `conductor`-named ones. Only a fresh install uses the new
+`conductor` names.
 
 ### Updating
 
 ```sh
-paseo-conductor update            # self-update to the latest release (uses gh)
-paseo-conductor update --tag v0.2.0   # or pin a version; --force to reinstall
+conductor update            # self-update to the latest release (uses gh)
+conductor update --tag v0.2.0   # or pin a version; --force to reinstall
 ```
 
 Or let it update itself — enable `update.auto` in config and the running daemon checks a few times a
@@ -771,8 +777,8 @@ binary is downloaded and staged and the daemon logs `restart to apply` instead o
 ## Install from source
 
 ```sh
-git clone https://github.com/NodeSpy/paseo-conductor.git
-cd paseo-conductor
+git clone https://github.com/NodeSpy/conductor.git
+cd conductor
 ./scripts/install.sh          # builds, seeds config, then prompts to install the service
 ```
 
@@ -784,23 +790,27 @@ The installer offers this; you can also manage it directly with the binary (it g
 unit for your OS — a `systemd --user` unit on Linux, a `launchd` LaunchAgent on macOS):
 
 ```sh
-paseo-conductor service install      # write the unit and start it (if the config validates)
-paseo-conductor service sync         # rewrite the unit if its template changed, and reload
-paseo-conductor service uninstall    # stop and remove it
+conductor service install      # write the unit and start it (if the config validates)
+conductor service sync         # rewrite the unit if its template changed, and reload
+conductor service uninstall    # stop and remove it
 ```
 
-Logs: `journalctl --user -u paseo-conductor -f` (Linux) / `tail -f ~/Library/Logs/paseo-conductor.log`
-(macOS). On Linux, `loginctl enable-linger "$USER"` keeps it running across logout/reboot (the
-installer does this).
+The unit is named `conductor` on a fresh install; on a box with an existing `paseo-conductor` unit,
+these commands keep targeting that unit instead of creating a second one.
 
-**Updates keep the unit current and restart the service.** `paseo-conductor update` and the
+Logs: `journalctl --user -u conductor -f` (Linux) / `tail -f ~/Library/Logs/paseo-conductor.log`
+(macOS; substitute `paseo-conductor` for the unit name on an existing install). On Linux,
+`loginctl enable-linger "$USER"` keeps it running across logout/reboot (the installer does this).
+
+**Updates keep the unit current and restart the service.** `conductor update` and the
 auto-updater regenerate the installed unit and reload it if a new release changed the template — so
-you don't have to reinstall the service after an upgrade. `paseo-conductor update` also restarts an
+you don't have to reinstall the service after an upgrade. `conductor update` also restarts an
 already-running service into the new binary; the auto-updater restarts itself the same way (by
 exiting for the manager to relaunch). (Both only touch a unit that's already installed.)
 
-Secrets live in `~/.config/paseo-conductor/conductor.env`; the daemon loads them itself at startup
-(so both systemd and launchd work without extra env wiring).
+Secrets live in `~/.config/conductor/conductor.env` (or `~/.config/paseo-conductor/conductor.env` on
+an existing install); the daemon loads them itself at startup (so both systemd and launchd work
+without extra env wiring).
 
 **PATH is baked into the unit.** A `--user` service otherwise inherits a minimal PATH and can't find
 `paseo`/`gh`/`go`/`claude` in `~/.local/bin`. The generated unit sets `PATH` to `~/.local/bin` +
@@ -819,14 +829,14 @@ manual drop-in. Tools in an unusual location? Add a systemd drop-in (`Environmen
 
    Suggested field values:
    - **GitHub App name** — must be globally unique, so personalize it, e.g.
-     `paseo-conductor-<your-handle>` or `<your-org>-paseo-conductor` (this becomes the bot login).
-   - **Homepage URL** — anything valid; use the repo (<https://github.com/NodeSpy/paseo-conductor>)
+     `conductor-<your-handle>` or `<your-org>-conductor` (this becomes the bot login).
+   - **Homepage URL** — anything valid; use the repo (<https://github.com/NodeSpy/conductor>)
      or <https://paseo.sh>.
    - **Webhook URL** — a smee.io channel. Open <https://smee.io/new>, copy the URL it shows
      (e.g. `https://smee.io/AbC123`), and paste it here. Put the **same URL** in `conductor.env` as
      `GH_SMEE_URL`.
 
-     > **You do NOT install or run the smee client.** smee.io is just a public relay; paseo-conductor
+     > **You do NOT install or run the smee client.** smee.io is just a public relay; conductor
      > connects to your channel itself and receives the forwarded webhooks. Nothing else to start.
    - **Webhook secret** — generate a random string (e.g. `openssl rand -hex 32`) and put it in
      `conductor.env` as `GH_WEBHOOK_SECRET`.
@@ -880,17 +890,17 @@ caught promptly instead of waiting up to a full `interval`. You don't need to ha
 down for recovery anymore.
 
 Need a sweep **right now** (e.g. a review is waiting and you don't want to sit through the backoff)?
-`paseo-conductor sweep --now` signals the running daemon (via `SIGUSR1`) to run a catch-up sweep
-immediately and reset the cadence. (Plain `paseo-conductor sweep` is a dry-run *preview* that prints
+`conductor sweep --now` signals the running daemon (via `SIGUSR1`) to run a catch-up sweep
+immediately and reset the cadence. (Plain `conductor sweep` is a dry-run *preview* that prints
 what a sweep would emit, in a separate process — it doesn't touch the daemon.)
 
-Want to force **one specific action** for **one target** — not a whole sweep? `paseo-conductor force
+Want to force **one specific action** for **one target** — not a whole sweep? `conductor force
 <kind> <owner/repo>#<n>` injects that action into the running daemon over a local control socket
 (a sibling of the state file):
 
 ```sh
-paseo-conductor force review_requested EdnitionCode/RosterStream#5332
-paseo-conductor force merge_conflict acme/widget#7 --integration default
+conductor force review_requested EdnitionCode/RosterStream#5332
+conductor force merge_conflict acme/widget#7 --integration default
 ```
 
 It builds the trigger from live PR state (bypassing the applicability filters — reviewer match, draft,
@@ -902,13 +912,14 @@ that need event-specific data (a comment body, a CI run id) get empty values.
 
 ## Configuration
 
-Config lives at `~/.config/paseo-conductor/config.yaml`; secrets referenced via `${VAR}` come from
-the sibling `conductor.env`, which the daemon loads at startup (so systemd and launchd both work).
-The installer seeds both files. `paseo-conductor validate` checks everything before you start.
+Config lives at `~/.config/conductor/config.yaml` (or `~/.config/paseo-conductor/config.yaml` on an
+existing install); secrets referenced via `${VAR}` come from the sibling `conductor.env`, which the
+daemon loads at startup (so systemd and launchd both work). The installer seeds both files.
+`conductor validate` checks everything before you start.
 
 This split means `config.yaml` holds no secrets and can live in a dotfiles repo, symlinked into
 place — `conductor.env` is looked up next to the config *path*, not the symlink target, so it stays
-private in `~/.config/paseo-conductor/`. Referencing a `${VAR}` that isn't defined anywhere is a load
+private in `~/.config/conductor/`. Referencing a `${VAR}` that isn't defined anywhere is a load
 error naming the variable (a deliberately empty `KEY=` is fine), so a missing `conductor.env` on a
 fresh machine fails fast instead of silently blanking a secret.
 
@@ -921,7 +932,7 @@ merge recursively, lists concatenate** (so `integrations:` entries from every fi
 de-duped). `${VAR}` expansion applies per file. Configs with no `imports:` load exactly as before.
 
 ```yaml
-# ~/.config/paseo-conductor/config.yaml
+# ~/.config/conductor/config.yaml
 imports:
   - conf.d/*.yaml          # one integration per file, say
 agents:
@@ -930,7 +941,7 @@ control: { enabled: true }
 ```
 
 ```yaml
-# ~/.config/paseo-conductor/conf.d/github.yaml
+# ~/.config/conductor/conf.d/github.yaml
 integrations:
   - type: github
     name: default
@@ -958,7 +969,7 @@ integrations:
     # Writes/posts use your gh token; commits/pushes go over SSH as you.
     app:
       app_id: 0
-      private_key_path: ~/.config/paseo-conductor/github-app.pem
+      private_key_path: ~/.config/conductor/github-app.pem
       webhook_secret: ${GH_WEBHOOK_SECRET}
       # smee re-serializes the body so HMAC often won't match — keep false with
       # smee; with a DIRECT `listen` receiver the raw body is intact, so set true.
@@ -1124,8 +1135,8 @@ update:
   apply: true                         # re-exec into the new binary after updating
 
 store:
-  state_file: ~/.local/state/paseo-conductor/state.json
-  audit_log: ~/.local/state/paseo-conductor/audit.jsonl
+  state_file: ~/.local/state/conductor/state.json
+  audit_log: ~/.local/state/conductor/audit.jsonl
   state_ttl: 720h                     # evict PR records untouched this long (default 30d)
   max_tracked_prs: 5000               # LRU backstop
   audit_max_size: 50MB                # rotate the audit log at this size
@@ -1236,15 +1247,15 @@ Notes:
 ## Commands
 
 ```
-paseo-conductor run                    # start the daemon (the systemd unit runs this)
-paseo-conductor validate               # load & validate config, then exit
-paseo-conductor replay <event.json>    # run a saved webhook through the pipeline (dry-run)
-paseo-conductor sweep                  # one catch-up sweep (dry-run print)
-paseo-conductor status                 # snapshot: live agents, in-flight workflows, stuck work, attention
-paseo-conductor report [--days N]      # activity summary: dispatches by kind/outcome + attention (default 7d)
-paseo-conductor pause                  # stop dispatch now (writes a control file; no restart)
-paseo-conductor resume                 # resume dispatch
-paseo-conductor version
+conductor run                    # start the daemon (the systemd unit runs this)
+conductor validate               # load & validate config, then exit
+conductor replay <event.json>    # run a saved webhook through the pipeline (dry-run)
+conductor sweep                  # one catch-up sweep (dry-run print)
+conductor status                 # snapshot: live agents, in-flight workflows, stuck work, attention
+conductor report [--days N]      # activity summary: dispatches by kind/outcome + attention (default 7d)
+conductor pause                  # stop dispatch now (writes a control file; no restart)
+conductor resume                 # resume dispatch
+conductor version
 ```
 
 `status` reads the on-disk state/runs/audit files and `paseo ls` (never opening the store, so it's
@@ -1258,7 +1269,7 @@ without digging through `journalctl`.
 
 ## Safety
 
-- **Kill switch**: `control.enabled: false`, or `paseo-conductor` shadow mode
+- **Kill switch**: `control.enabled: false`, or `conductor` shadow mode
   (`control.shadow: true`) runs everything but skips the final push/merge/post.
 - **Loop-safety**: per-`(pr,kind,head)` attempt caps; on the cap it **escalates** (notifies you)
   instead of looping. A running-agent guard avoids double-dispatch.

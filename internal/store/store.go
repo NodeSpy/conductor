@@ -1,4 +1,4 @@
-// Package store persists paseo-conductor's dedup state and audit log.
+// Package store persists conductor's dedup state and audit log.
 //
 // State is keyed per PR/issue ("owner/name#n"). It stays bounded: records are
 // deleted when a PR closes, TTL-evicted when untouched, and LRU-capped as a

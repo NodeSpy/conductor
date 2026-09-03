@@ -1,4 +1,4 @@
-# Hermetic e2e stack for paseo-conductor (issue #10). Everything runs on one
+# Hermetic e2e stack for conductor (issue #10). Everything runs on one
 # isolated bridge network with NO access to production GitHub, smee, or repos, and
 # NO LLM keys. conductor sees only the local bare-git forge + the mock GitHub API.
 #
@@ -12,13 +12,13 @@
 # One image (Dockerfile) builds conductor + every harness binary; services just
 # override `command:`. Build context is the repo root so the whole module builds.
 
-name: paseo-conductor-e2e
+name: conductor-e2e
 
 x-image: &image
   build:
     context: ../..
     dockerfile: test/e2e/Dockerfile
-  image: paseo-conductor-e2e:latest
+  image: conductor-e2e:latest
 
 services:
   forge:

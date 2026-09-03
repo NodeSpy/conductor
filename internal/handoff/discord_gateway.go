@@ -264,8 +264,8 @@ func sendDiscordIdentify(ctx context.Context, c *websocket.Conn, botToken string
 		"intents": discordIntents,
 		"properties": map[string]string{
 			"os":      "linux",
-			"browser": "paseo-conductor",
-			"device":  "paseo-conductor",
+			"browser": "conductor",
+			"device":  "conductor",
 		},
 	})
 	if err != nil {

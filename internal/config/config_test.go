@@ -103,6 +103,66 @@ func TestUpdateDefaults(t *testing.T) {
 	}
 }
 
+// TestStateDir proves the fleet-safe back-compat behavior: a box with an
+// existing ~/.local/state/paseo-conductor keeps resolving to it (so its
+// accumulated dedup state and audit log are never orphaned by an upgrade),
+// while a box with neither directory (a fresh install) gets the new default.
+func TestStateDir(t *testing.T) {
+	t.Run("existing legacy dir wins", func(t *testing.T) {
+		tmp := t.TempDir()
+		t.Setenv("HOME", tmp)
+		legacy := filepath.Join(tmp, ".local/state/paseo-conductor")
+		if err := os.MkdirAll(legacy, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got := StateDir(); got != legacy {
+			t.Fatalf("StateDir() = %q, want legacy %q", got, legacy)
+		}
+	})
+
+	t.Run("existing new dir wins over legacy", func(t *testing.T) {
+		tmp := t.TempDir()
+		t.Setenv("HOME", tmp)
+		legacy := filepath.Join(tmp, ".local/state/paseo-conductor")
+		fresh := filepath.Join(tmp, ".local/state/conductor")
+		if err := os.MkdirAll(legacy, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(fresh, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got := StateDir(); got != fresh {
+			t.Fatalf("StateDir() = %q, want new %q (an existing new dir takes priority)", got, fresh)
+		}
+	})
+
+	t.Run("neither exists -> new default", func(t *testing.T) {
+		tmp := t.TempDir()
+		t.Setenv("HOME", tmp)
+		want := filepath.Join(tmp, ".local/state/conductor")
+		if got := StateDir(); got != want {
+			t.Fatalf("StateDir() = %q, want new default %q", got, want)
+		}
+	})
+
+	t.Run("applyDefaults routes StateFile/AuditLog through StateDir", func(t *testing.T) {
+		tmp := t.TempDir()
+		t.Setenv("HOME", tmp)
+		legacy := filepath.Join(tmp, ".local/state/paseo-conductor")
+		if err := os.MkdirAll(legacy, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		c := &Config{}
+		c.applyDefaults()
+		if want := filepath.Join(legacy, "state.json"); c.Store.StateFile != want {
+			t.Fatalf("StateFile = %q, want %q", c.Store.StateFile, want)
+		}
+		if want := filepath.Join(legacy, "audit.jsonl"); c.Store.AuditLog != want {
+			t.Fatalf("AuditLog = %q, want %q", c.Store.AuditLog, want)
+		}
+	})
+}
+
 func TestValidateRejectsNoIntegrations(t *testing.T) {
 	c := &Config{}
 	c.applyDefaults()

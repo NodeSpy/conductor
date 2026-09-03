@@ -80,7 +80,7 @@ func (c *acpController) Initialize(ctx context.Context) (Capabilities, error) {
 	defer cleanup()
 
 	res, err := client.Initialize(ctx, acp.DefaultInitializeParams(acp.Implementation{
-		Name: "paseo-conductor", Title: "Paseo Conductor",
+		Name: "conductor", Title: "Conductor",
 	}))
 	if err != nil {
 		return Capabilities{SessionModel: c.Model(), Transport: TransportACP, CheckoutPR: true}, err
@@ -134,7 +134,7 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	}
 
 	if _, err := client.Initialize(sctx, acp.DefaultInitializeParams(acp.Implementation{
-		Name: "paseo-conductor", Title: "Paseo Conductor",
+		Name: "conductor", Title: "Conductor",
 	})); err != nil {
 		cleanup()
 		scancel()
@@ -171,7 +171,7 @@ func (c *acpController) ResumeSession(ctx context.Context, id string, h Handler)
 		return nil, err
 	}
 	if _, err := client.Initialize(sctx, acp.DefaultInitializeParams(acp.Implementation{
-		Name: "paseo-conductor",
+		Name: "conductor",
 	})); err != nil {
 		cleanup()
 		scancel()

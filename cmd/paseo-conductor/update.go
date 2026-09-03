@@ -16,7 +16,7 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 )
 
-const updateRepo = "NodeSpy/paseo-conductor"
+const updateRepo = "NodeSpy/conductor"
 
 // cmdUpdate is the manual `update` subcommand.
 func cmdUpdate(args []string) error {

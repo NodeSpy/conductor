@@ -1,10 +1,10 @@
-# paseo-conductor — starter config (valid out of the box; does nothing until you enable it).
+# conductor — starter config (valid out of the box; does nothing until you enable it).
 #
 # To go live:
 #   1. Create a GitHub App + a smee channel (see README → "GitHub App setup").
 #   2. Put the App id + private key path here, and the secrets in conductor.env.
 #   3. Set your GitHub login(s) and repo glob(s) below.
-#   4. Flip `enabled: true`, run `paseo-conductor validate`, then start the service.
+#   4. Flip `enabled: true`, run `conductor validate`, then start the service.
 #
 # Full annotated reference: config.example.yaml (copied next to this file).
 
@@ -14,7 +14,7 @@ integrations:
     enabled: false                    # <- set true once the App + webhook below are configured
     app:
       app_id: 0                       # <- your GitHub App id
-      private_key_path: ~/.config/paseo-conductor/github-app.pem
+      private_key_path: ~/.config/conductor/github-app.pem
       webhook_secret: ${GH_WEBHOOK_SECRET}
       verify_signature: false         # keep false with smee; true with a direct `listen` receiver
     webhook:
