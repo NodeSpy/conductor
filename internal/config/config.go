@@ -32,10 +32,15 @@ type Config struct {
 	Control      Control                 `yaml:"control"`
 	Notify       Notify                  `yaml:"notify"`
 	Agents       map[string]AgentProfile `yaml:"agents"`
-	PaseoBin     string                  `yaml:"paseo_bin"` // path to the paseo CLI (default "paseo")
-	Store        Store                   `yaml:"store"`
-	Update       Update                  `yaml:"update"`
-	DryRun       bool                    `yaml:"dry_run"`
+	// Controllers is an OPTIONAL map of named agent runtimes conductor can
+	// dispatch through (paseo, an ACP agent, opencode, …). Entirely optional: with
+	// no `controllers:` block, every agent uses the built-in paseo controller and
+	// behavior is unchanged. See ControllerConfig and internal/controller.
+	Controllers map[string]ControllerConfig `yaml:"controllers"`
+	PaseoBin    string                      `yaml:"paseo_bin"` // path to the paseo CLI (default "paseo")
+	Store       Store                       `yaml:"store"`
+	Update      Update                      `yaml:"update"`
+	DryRun      bool                        `yaml:"dry_run"`
 	// AdoptOpenWorkspaces routes PR feedback (new_comment/changes_requested) to an
 	// agent whose checkout is already on the PR's head branch — e.g. a workspace you
 	// opened by hand — instead of spawning a fresh worktree. Opt-in.
@@ -173,12 +178,68 @@ type Store struct {
 	AuditMaxSize  ByteSize `yaml:"audit_max_size"`
 }
 
+// ControllerConfig is one entry in the optional top-level `controllers:` block —
+// a named agent runtime conductor can dispatch through. All fields are optional;
+// the block itself is optional. With no `controllers:` block every agent uses the
+// built-in paseo controller (no migration, no behavior change).
+type ControllerConfig struct {
+	// Type is a built-in controller kind (M1 ships "paseo"). Mutually exclusive
+	// with Agent. Reserved kinds parse and validate but aren't runnable until their
+	// milestone lands.
+	Type string `yaml:"type"`
+	// Agent names an agent runtime driven over a transport (gemini, opencode, …).
+	// Mutually exclusive with Type; implies transport acp unless overridden.
+	Agent string `yaml:"agent"`
+	// Transport is how conductor talks to the runtime: acp | native | cli. Empty
+	// defaults to acp for an agent runtime, else native (see EffectiveTransport).
+	// Ergonomic only — it never changes the global default controller.
+	Transport string `yaml:"transport"`
+	// SessionModel hints how the runtime keeps a session across turns: native |
+	// resumable | oneshot. Optional; the controller usually reports its own.
+	SessionModel string `yaml:"session_model"`
+	// Default flags this controller as the fleet default, used when an agent sets
+	// no explicit `controller:`. At most one controller may set it.
+	Default bool `yaml:"default"`
+	// Tool and Command are a bare-CLI recipe for a non-ACP tool (transport: cli).
+	// Reserved for the cli-controller milestone.
+	Tool    string   `yaml:"tool"`
+	Command []string `yaml:"command"`
+}
+
+// EffectiveTransport returns the controller's transport, defaulting to acp for an
+// agent runtime and native for a built-in type when unset. Ergonomic only — it
+// never changes the global default controller (that's the `default:` flag).
+func (c ControllerConfig) EffectiveTransport() string {
+	if c.Transport != "" {
+		return c.Transport
+	}
+	if c.Agent != "" {
+		return "acp"
+	}
+	return "native"
+}
+
+// DefaultControllerName returns the name of the controller flagged default:true,
+// or "" when none is (resolution then falls back to the built-in paseo).
+func (c *Config) DefaultControllerName() string {
+	for name, cc := range c.Controllers {
+		if cc.Default {
+			return name
+		}
+	}
+	return ""
+}
+
 // AgentProfile is a reusable named agent config referenced by agent actions.
 type AgentProfile struct {
-	Provider        string            `yaml:"provider"`
-	Model           string            `yaml:"model"`
-	Thinking        string            `yaml:"thinking"`
-	Mode            string            `yaml:"mode"`
+	Provider string `yaml:"provider"`
+	Model    string `yaml:"model"`
+	Thinking string `yaml:"thinking"`
+	Mode     string `yaml:"mode"`
+	// Controller names the controller (from top-level `controllers:`) that runs
+	// this agent. Empty falls through to the controller flagged default:true, then
+	// to the built-in paseo controller. See internal/controller resolution order.
+	Controller      string            `yaml:"controller"`
 	Workspace       string            `yaml:"workspace"` // local | worktree
 	WaitTimeout     Duration          `yaml:"wait_timeout"`
 	ArchiveWhenDone bool              `yaml:"archive_when_done"`
@@ -594,12 +655,63 @@ func (c *Config) Validate() error {
 		}
 		names[ig.Name] = true
 	}
+	if err := c.validateControllers(); err != nil {
+		return err
+	}
 	for name, p := range c.Agents {
 		if p.Workspace != "" && p.Workspace != "local" && p.Workspace != "worktree" {
 			return fmt.Errorf("config: agent %q: workspace must be local|worktree, got %q", name, p.Workspace)
 		}
+		if p.Controller != "" {
+			if _, ok := c.Controllers[p.Controller]; !ok {
+				return fmt.Errorf("config: agent %q: unknown controller %q (defined: %s)", name, p.Controller, c.controllerNames())
+			}
+		}
 	}
 	return nil
+}
+
+// validateControllers checks the optional `controllers:` block: each entry sets
+// exactly one of type/agent, transport and session_model (when set) are known
+// values, and at most one controller is flagged default:true.
+func (c *Config) validateControllers() error {
+	validTransport := map[string]bool{"acp": true, "native": true, "cli": true}
+	validModel := map[string]bool{"native": true, "resumable": true, "oneshot": true}
+	defaults := 0
+	for name, cc := range c.Controllers {
+		if name == "" {
+			return fmt.Errorf("config: controllers: empty controller name")
+		}
+		if (cc.Type == "") == (cc.Agent == "") {
+			return fmt.Errorf("config: controller %q: set exactly one of `type` or `agent`", name)
+		}
+		if cc.Transport != "" && !validTransport[cc.Transport] {
+			return fmt.Errorf("config: controller %q: transport must be acp|native|cli, got %q", name, cc.Transport)
+		}
+		if cc.SessionModel != "" && !validModel[cc.SessionModel] {
+			return fmt.Errorf("config: controller %q: session_model must be native|resumable|oneshot, got %q", name, cc.SessionModel)
+		}
+		if cc.Default {
+			defaults++
+		}
+	}
+	if defaults > 1 {
+		return fmt.Errorf("config: at most one controller may set `default: true` (%d do)", defaults)
+	}
+	return nil
+}
+
+// controllerNames lists the defined controller names, sorted, for error messages.
+func (c *Config) controllerNames() string {
+	if len(c.Controllers) == 0 {
+		return "none"
+	}
+	names := make([]string, 0, len(c.Controllers))
+	for n := range c.Controllers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // ActionRef is one configured action together with a human-readable location

@@ -299,3 +299,93 @@ func TestActionSetRefsNamesVariants(t *testing.T) {
 		t.Fatalf("unexpected refs: %+v", refs)
 	}
 }
+
+// ctrlBaseCfg is a minimal valid config (one integration) to exercise the
+// controllers/agent validation without tripping the no-integrations check.
+func ctrlBaseCfg() *Config {
+	return &Config{Integrations: []IntegrationRef{{Type: "github", Name: "gh"}}}
+}
+
+func TestControllersNoBlockIsValidAndPaseoDefault(t *testing.T) {
+	c := ctrlBaseCfg()
+	if err := c.Validate(); err != nil {
+		t.Fatalf("no controllers block must validate, got %v", err)
+	}
+	if got := c.DefaultControllerName(); got != "" {
+		t.Fatalf("no default flagged → empty name (falls back to built-in paseo), got %q", got)
+	}
+}
+
+func TestControllersValidBlock(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Controllers = map[string]ControllerConfig{
+		"pae":   {Type: "paseo", Default: true},
+		"gem":   {Agent: "gemini"},
+		"ocode": {Agent: "opencode", Transport: "native", SessionModel: "resumable"},
+	}
+	c.Agents = map[string]AgentProfile{"reviewer": {Controller: "gem"}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid controllers block should pass, got %v", err)
+	}
+	if got := c.DefaultControllerName(); got != "pae" {
+		t.Fatalf("default:true should be found, got %q", got)
+	}
+}
+
+func TestControllersTwoDefaultsRejected(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Controllers = map[string]ControllerConfig{
+		"a": {Type: "paseo", Default: true},
+		"b": {Agent: "gemini", Default: true},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("two default:true controllers must be rejected")
+	}
+}
+
+func TestControllerTypeXorAgent(t *testing.T) {
+	both := ctrlBaseCfg()
+	both.Controllers = map[string]ControllerConfig{"x": {Type: "paseo", Agent: "gemini"}}
+	if err := both.Validate(); err == nil {
+		t.Fatal("setting both type and agent must be rejected")
+	}
+	neither := ctrlBaseCfg()
+	neither.Controllers = map[string]ControllerConfig{"x": {Transport: "acp"}}
+	if err := neither.Validate(); err == nil {
+		t.Fatal("setting neither type nor agent must be rejected")
+	}
+}
+
+func TestControllerBadTransportAndModel(t *testing.T) {
+	badT := ctrlBaseCfg()
+	badT.Controllers = map[string]ControllerConfig{"x": {Agent: "gemini", Transport: "carrier-pigeon"}}
+	if err := badT.Validate(); err == nil {
+		t.Fatal("unknown transport must be rejected")
+	}
+	badM := ctrlBaseCfg()
+	badM.Controllers = map[string]ControllerConfig{"x": {Agent: "gemini", SessionModel: "eternal"}}
+	if err := badM.Validate(); err == nil {
+		t.Fatal("unknown session_model must be rejected")
+	}
+}
+
+func TestAgentUnknownControllerRejected(t *testing.T) {
+	c := ctrlBaseCfg()
+	c.Controllers = map[string]ControllerConfig{"pae": {Type: "paseo"}}
+	c.Agents = map[string]AgentProfile{"fixer": {Controller: "does-not-exist"}}
+	if err := c.Validate(); err == nil {
+		t.Fatal("an agent referencing an undefined controller must be rejected")
+	}
+}
+
+func TestEffectiveTransportDefaults(t *testing.T) {
+	if got := (ControllerConfig{Agent: "gemini"}).EffectiveTransport(); got != "acp" {
+		t.Fatalf("an agent runtime defaults to acp, got %q", got)
+	}
+	if got := (ControllerConfig{Type: "paseo"}).EffectiveTransport(); got != "native" {
+		t.Fatalf("a built-in type defaults to native, got %q", got)
+	}
+	if got := (ControllerConfig{Agent: "aider", Transport: "cli"}).EffectiveTransport(); got != "cli" {
+		t.Fatalf("an explicit transport must win, got %q", got)
+	}
+}

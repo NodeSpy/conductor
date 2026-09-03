@@ -133,6 +133,14 @@ func (d *Dispatcher) WaitForAgent(ctx context.Context, id string, timeout time.D
 	_ = exec.CommandContext(ctx, d.PaseoBin, "wait", id).Run()
 }
 
+// Send queues a follow-up prompt to an existing live agent (paseo's native
+// session follow-up, `paseo send`). It's the concrete surface behind the paseo
+// controller's session Prompt; the engine's autonomous per-PR queuing uses the
+// same primitive internally (see liveAgentForPR).
+func (d *Dispatcher) Send(ctx context.Context, id, prompt string) error {
+	return d.sendToAgent(ctx, id, prompt)
+}
+
 // Dispatch selects the backend for the action and runs it.
 func (d *Dispatcher) Dispatch(ctx context.Context, req Request) (RunRef, error) {
 	// Routing is fixed: agents run via paseo (the only agent runner), commands run
