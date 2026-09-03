@@ -749,23 +749,60 @@ var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // conductor.env into a confusing downstream failure (e.g. "webhook_secret
 // required") instead of naming the variable. A variable that is set but empty
 // (KEY= in conductor.env) is deliberate and expands to "".
+//
+// Expansion runs per line on the code portion only: a ${VAR} inside a YAML
+// comment is left verbatim and never reported as missing, so the example config's
+// explanatory comments (which mention ${ENV}/${GH_PAT}) don't fail to load.
 func expandEnv(path string, b []byte) ([]byte, error) {
 	var missing []string
 	seen := map[string]bool{}
-	out := envRe.ReplaceAllFunc(b, func(m []byte) []byte {
-		name := string(envRe.FindSubmatch(m)[1])
-		v, ok := os.LookupEnv(name)
-		if !ok && !seen[name] {
-			seen[name] = true
-			missing = append(missing, name)
-		}
-		return []byte(v)
-	})
+	lines := strings.Split(string(b), "\n")
+	for i, line := range lines {
+		code, comment := splitYAMLComment(line)
+		code = envRe.ReplaceAllStringFunc(code, func(m string) string {
+			name := envRe.FindStringSubmatch(m)[1]
+			v, ok := os.LookupEnv(name)
+			if !ok && !seen[name] {
+				seen[name] = true
+				missing = append(missing, name)
+			}
+			return v
+		})
+		lines[i] = code + comment
+	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("config %s references undefined environment variable(s): %s (define them in %s or the environment)",
 			path, strings.Join(missing, ", "), filepath.Join(filepath.Dir(path), "conductor.env"))
 	}
-	return out, nil
+	return []byte(strings.Join(lines, "\n")), nil
+}
+
+// splitYAMLComment splits a line into its code and trailing `#…` comment. A `#`
+// starts a comment only at line start or when preceded by whitespace and not
+// inside a quoted scalar — so `${VAR}` in an explanatory comment is ignored,
+// while a value like `{{.repo}}#{{.pr}}` (its `#` not whitespace-preceded) and a
+// quoted `"a # b"` stay code.
+func splitYAMLComment(line string) (code, comment string) {
+	var inS, inD bool
+	for i := 0; i < len(line); i++ {
+		switch c := line[i]; {
+		case inS:
+			if c == '\'' {
+				inS = false
+			}
+		case inD:
+			if c == '"' {
+				inD = false
+			}
+		case c == '\'':
+			inS = true
+		case c == '"':
+			inD = true
+		case c == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
+			return line[:i], line[i:]
+		}
+	}
+	return line, ""
 }
 
 func (c *Config) applyDefaults() {
