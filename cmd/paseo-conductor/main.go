@@ -73,8 +73,6 @@ func main() {
 		err = cmdUpdate(args)
 	case "service":
 		err = cmdService(args)
-	case "migrate":
-		err = cmdMigrate(args)
 	case "version", "-v", "--version":
 		fmt.Println("conductor", version)
 	case "help", "-h", "--help":
@@ -105,14 +103,12 @@ usage:
   conductor pause | resume              stop / resume dispatch at runtime (no restart)
   conductor update [--force] [--tag vX]  self-update to the latest release (uses gh)
   conductor service install|sync|uninstall  manage the background service unit
-  conductor migrate [--dry-run]         migrate an existing paseo-conductor install to conductor (fail-safe; see README)
   conductor version
 `)
 }
 
 // configPath extracts --config from args (default configDir()/config.yaml —
-// ~/.config/conductor for a fresh install, or ~/.config/paseo-conductor when
-// that directory already exists on this box).
+// ~/.config/conductor).
 func configPath(args []string) (string, []string) {
 	def := filepath.Join(configDir(), "config.yaml")
 	rest := []string{}
@@ -599,7 +595,7 @@ type sweepNower interface{ SweepNow() bool }
 // pidPath is the daemon's pidfile (a sibling of the state file), written by `run`
 // and read by `sweep --now` to signal the running process.
 func pidPath(cfg *config.Config) string {
-	return filepath.Join(filepath.Dir(cfg.Store.StateFile), "paseo-conductor.pid")
+	return filepath.Join(filepath.Dir(cfg.Store.StateFile), "conductor.pid")
 }
 
 // controlSockPath is the daemon's control socket (a sibling of the state file),

@@ -39,148 +39,56 @@ func TestServicePATHAndUnit(t *testing.T) {
 	}
 }
 
-// TestServiceName proves the fleet-safe back-compat behavior: a box with the
-// legacy paseo-conductor unit already installed keeps every systemctl/launchctl
-// operation targeting "paseo-conductor" (so an existing daemon stays
-// manageable across an upgrade), while a box with no unit installed (a fresh
-// install) gets the new default "conductor".
+// TestServiceName proves the service unit / launchd label name is always
+// "conductor".
 func TestServiceName(t *testing.T) {
+	if got := serviceName(); got != "conductor" {
+		t.Fatalf("serviceName() = %q, want conductor", got)
+	}
+}
+
+// TestUnitPathAndContentUsesConductorName proves unitPathAndContent always
+// targets the conductor-named unit path/label.
+func TestUnitPathAndContentUsesConductorName(t *testing.T) {
 	if serviceKind() == "" {
 		t.Skip("no service manager on this OS")
 	}
-
-	t.Run("existing legacy unit wins", func(t *testing.T) {
-		tmp := t.TempDir()
-		t.Setenv("HOME", tmp)
-		writeLegacyUnit(t, tmp)
-		if got := serviceName(); got != "paseo-conductor" {
-			t.Fatalf("serviceName() = %q, want paseo-conductor", got)
-		}
-	})
-
-	t.Run("no unit installed -> new default", func(t *testing.T) {
-		tmp := t.TempDir()
-		t.Setenv("HOME", tmp)
-		if got := serviceName(); got != "conductor" {
-			t.Fatalf("serviceName() = %q, want conductor", got)
-		}
-	})
-
-	t.Run("unitPathAndContent targets the legacy unit path/label when present", func(t *testing.T) {
-		tmp := t.TempDir()
-		t.Setenv("HOME", tmp)
-		writeLegacyUnit(t, tmp)
-		path, content := unitPathAndContent()
-		switch serviceKind() {
-		case "systemd":
-			want := filepath.Join(tmp, ".config/systemd/user/paseo-conductor.service")
-			if path != want {
-				t.Fatalf("unit path = %q, want %q", path, want)
-			}
-		case "launchd":
-			want := filepath.Join(tmp, "Library/LaunchAgents/sh.paseo-conductor.plist")
-			if path != want {
-				t.Fatalf("unit path = %q, want %q", path, want)
-			}
-			if !strings.Contains(content, "sh.paseo-conductor") {
-				t.Fatalf("launchd Label should keep the legacy name:\n%s", content)
-			}
-		}
-	})
-
-	t.Run("unitPathAndContent uses the new name on a fresh install", func(t *testing.T) {
-		tmp := t.TempDir()
-		t.Setenv("HOME", tmp)
-		path, content := unitPathAndContent()
-		switch serviceKind() {
-		case "systemd":
-			want := filepath.Join(tmp, ".config/systemd/user/conductor.service")
-			if path != want {
-				t.Fatalf("unit path = %q, want %q", path, want)
-			}
-		case "launchd":
-			want := filepath.Join(tmp, "Library/LaunchAgents/sh.conductor.plist")
-			if path != want {
-				t.Fatalf("unit path = %q, want %q", path, want)
-			}
-			if !strings.Contains(content, "sh.conductor") {
-				t.Fatalf("launchd Label should use the new name:\n%s", content)
-			}
-		}
-	})
-}
-
-// writeLegacyUnit creates an empty legacy paseo-conductor unit file under a
-// temp HOME so detection sees an "already installed" fleet box.
-func writeLegacyUnit(t *testing.T, home string) {
-	t.Helper()
-	var p string
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	path, content := unitPathAndContent()
 	switch serviceKind() {
 	case "systemd":
-		p = filepath.Join(home, ".config/systemd/user/paseo-conductor.service")
+		want := filepath.Join(tmp, ".config/systemd/user/conductor.service")
+		if path != want {
+			t.Fatalf("unit path = %q, want %q", path, want)
+		}
 	case "launchd":
-		p = filepath.Join(home, "Library/LaunchAgents/sh.paseo-conductor.plist")
-	default:
-		t.Skip("no service manager on this OS")
-	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(p, []byte("legacy\n"), 0o644); err != nil {
-		t.Fatal(err)
+		want := filepath.Join(tmp, "Library/LaunchAgents/sh.conductor.plist")
+		if path != want {
+			t.Fatalf("unit path = %q, want %q", path, want)
+		}
+		if !strings.Contains(content, "sh.conductor") {
+			t.Fatalf("launchd Label should use the conductor name:\n%s", content)
+		}
 	}
 }
 
-// TestConfigDir proves the fleet-safe back-compat behavior: a box with an
-// existing ~/.config/paseo-conductor keeps resolving to it, while a fresh
-// install (neither directory present) gets the new default.
+// TestConfigDir proves configDir always resolves to ~/.config/conductor.
 func TestConfigDir(t *testing.T) {
-	t.Run("existing legacy dir wins", func(t *testing.T) {
-		tmp := t.TempDir()
-		t.Setenv("HOME", tmp)
-		legacy := filepath.Join(tmp, ".config/paseo-conductor")
-		if err := os.MkdirAll(legacy, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if got := configDir(); got != legacy {
-			t.Fatalf("configDir() = %q, want legacy %q", got, legacy)
-		}
-	})
-
-	t.Run("existing new dir wins over legacy", func(t *testing.T) {
-		tmp := t.TempDir()
-		t.Setenv("HOME", tmp)
-		legacy := filepath.Join(tmp, ".config/paseo-conductor")
-		fresh := filepath.Join(tmp, ".config/conductor")
-		if err := os.MkdirAll(legacy, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(fresh, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if got := configDir(); got != fresh {
-			t.Fatalf("configDir() = %q, want new %q (an existing new dir takes priority)", got, fresh)
-		}
-	})
-
-	t.Run("neither exists -> new default", func(t *testing.T) {
+	t.Run("resolves to the conductor config dir", func(t *testing.T) {
 		tmp := t.TempDir()
 		t.Setenv("HOME", tmp)
 		want := filepath.Join(tmp, ".config/conductor")
 		if got := configDir(); got != want {
-			t.Fatalf("configDir() = %q, want new default %q", got, want)
+			t.Fatalf("configDir() = %q, want %q", got, want)
 		}
 	})
 
 	t.Run("configPath default routes through configDir", func(t *testing.T) {
 		tmp := t.TempDir()
 		t.Setenv("HOME", tmp)
-		legacy := filepath.Join(tmp, ".config/paseo-conductor")
-		if err := os.MkdirAll(legacy, 0o755); err != nil {
-			t.Fatal(err)
-		}
 		def, _ := configPath(nil)
-		want := filepath.Join(legacy, "config.yaml")
+		want := filepath.Join(tmp, ".config/conductor/config.yaml")
 		if def != want {
 			t.Fatalf("configPath default = %q, want %q", def, want)
 		}

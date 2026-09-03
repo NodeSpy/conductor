@@ -5,25 +5,12 @@
 #   curl -fsSL https://raw.githubusercontent.com/NodeSpy/conductor/main/scripts/install-release.sh | bash
 #
 # Optional: pin a version, e.g. `... | bash -s -- v0.6.4`.
-#
-# Fleet-safe: an existing paseo-conductor install (binary at ~/.local/bin or a
-# ~/.config/paseo-conductor from before the rebrand) keeps being installed/updated in
-# place under the old name; only a fresh install gets the new conductor-named
-# binary/paths. Release assets ship under both names, so either path resolves.
 set -euo pipefail
 
 REPO="${CONDUCTOR_REPO:-NodeSpy/conductor}"
 BIN_DIR="${CONDUCTOR_BIN_DIR:-$HOME/.local/bin}"
 RAW="https://raw.githubusercontent.com/$REPO/main"
-
-# Keep an existing install's name; a fresh install is "conductor".
-if [ -f "$BIN_DIR/conductor" ] || [ -d "$HOME/.config/conductor" ]; then
-  NAME="conductor"
-elif [ -f "$BIN_DIR/paseo-conductor" ] || [ -d "$HOME/.config/paseo-conductor" ]; then
-  NAME="paseo-conductor"
-else
-  NAME="conductor"
-fi
+NAME="conductor"
 
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 case "$(uname -m)" in

@@ -668,28 +668,17 @@ func (d *Dispatcher) cloneTargetDir(repo string) (string, error) {
 
 // cloneParentDir returns the parent directory conductor clones base checkouts
 // into, creating it if needed. Clones are grouped under ~/.conductor/checkouts
-// (or, on a box with an existing ~/.paseo-conductor, that legacy dir instead —
-// so prior clones there keep being reused rather than orphaned) so they don't
-// clutter $HOME; each repo lands in its own <name> subdir.
+// so they don't clutter $HOME; each repo lands in its own <name> subdir.
 func (d *Dispatcher) cloneParentDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home dir for clone: %w", err)
 	}
 	dir := filepath.Join(home, ".conductor", "checkouts")
-	if legacy := filepath.Join(home, ".paseo-conductor", "checkouts"); !isDir(filepath.Join(home, ".conductor")) && isDir(filepath.Join(home, ".paseo-conductor")) {
-		dir = legacy
-	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create clone dir %s: %w", dir, err)
 	}
 	return dir, nil
-}
-
-// isDir reports whether p exists and is a directory.
-func isDir(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.IsDir()
 }
 
 // scratchWorkspaceTitle marks the single shared workspace reused by checkout:none
