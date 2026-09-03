@@ -131,8 +131,13 @@ func copyPath(src, dst string, info fs.FileInfo) error {
 			}
 		}
 		return nil
-	default:
+	case info.Mode().IsRegular():
 		return copyFile(src, dst, info.Mode())
+	default:
+		// Skip sockets, fifos, devices, and other irregular files — e.g. the live
+		// control.sock in the state dir, which can't be copied ("no such device or
+		// address") and is recreated by the daemon on startup anyway.
+		return nil
 	}
 }
 
