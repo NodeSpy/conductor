@@ -153,9 +153,21 @@ func (c *Client) Close() error { return c.conn.Close() }
 // Done is closed when the underlying connection shuts down.
 func (c *Client) Done() <-chan struct{} { return c.conn.Done() }
 
+// ClientVersion is the client version reported in the initialize handshake's
+// clientInfo.version. Spec-strict ACP agents (e.g. gemini --acp) validate that the
+// field is a string and reject a missing one, so DefaultInitializeParams fills this
+// non-empty default when the caller omits a version. main may override it.
+var ClientVersion = "dev"
+
 // DefaultInitializeParams returns initialize params identifying the client via
-// info, advertising no fs/terminal capabilities (unimplemented at this layer).
+// info, advertising no fs/terminal capabilities (unimplemented at this layer). A
+// non-empty clientInfo.version is guaranteed: the field is `omitempty`, so an empty
+// version would be dropped from the JSON entirely and rejected by agents that
+// require it.
 func DefaultInitializeParams(info Implementation) InitializeParams {
+	if info.Version == "" {
+		info.Version = ClientVersion
+	}
 	return InitializeParams{
 		ProtocolVersion: ProtocolVersion,
 		ClientInfo:      &info,

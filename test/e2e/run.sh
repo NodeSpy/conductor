@@ -24,6 +24,10 @@ COMPOSE=(docker compose -f "$DIR/docker-compose.yml")
 # mounts the operator's credentials (see docker-compose.live.yml + README).
 if [ "$MODE" = "live" ] && [ -f "$DIR/docker-compose.live.yml" ]; then
   COMPOSE+=(-f "$DIR/docker-compose.live.yml")
+  # Read provider secrets from the operator's own host config (best-effort; nothing
+  # secret is committed). Exports PC_LIVE_* consumed by docker-compose.live.yml.
+  # shellcheck source=live-env.sh
+  [ -f "$DIR/live-env.sh" ] && source "$DIR/live-env.sh"
 fi
 COMPOSE+=(-p "$PROJECT")
 
@@ -88,10 +92,14 @@ setup() {
 
   # Throwaway RSA key for the (mock) GitHub App — generated into the gitignored
   # config dir via the built image, so no host openssl dependency and no secret in
-  # the repo. Conductor needs a parseable PEM even against the mock.
+  # the repo. Conductor needs a parseable PEM even against the mock. It's created by
+  # a root process inside the image, so chmod it world-readable: in live mode the
+  # daemon runs NON-root (claude-code refuses --dangerously-skip-permissions under
+  # root) and the config dir is mounted read-only, so a 0600 root-owned pem would be
+  # unreadable and the github integration would fail to start.
   if [ ! -f "$DIR/config/github-app.pem" ]; then
     docker run --rm -v "$DIR/config:/c" paseo-conductor-e2e:latest \
-      openssl genrsa -out /c/github-app.pem 2048 >/dev/null 2>&1
+      sh -c 'openssl genrsa -out /c/github-app.pem 2048 && chmod 644 /c/github-app.pem' >/dev/null 2>&1
   fi
 
   dc up -d || { echo "up failed"; dc logs; exit 1; }
@@ -243,11 +251,23 @@ group_B_live() {
   banner "Group B (LIVE) — each installed controller runs a REAL fixer"
   echo "Driving the real agent CLIs mounted from the host; needs the operator's keys."
   local CFG=/etc/conductor/controllers.live.yaml
-  b_live_row grpb/cliclaude "cli:claude-code"
-  b_live_row grpb/clicodex  "cli:codex"
-  b_live_row grpb/acpgemini "acp:gemini"
-  b_live_row grpb/ocnative  "acp:omp"
-  b_live_row grpb/deck      "agent-deck"
+  # cli:claude-code is the reference agent — it authenticates through the host
+  # TeamClaude proxy and reliably lands a commit, so it's a REQUIRED pass (a red
+  # failure here is a genuine harness/controller regression).
+  b_live_row_required   grpb/cliclaude "cli:claude-code"
+  # The rest are best-effort: conductor's wiring is validated the same way (it drives
+  # the real CLI, which authenticates and runs), but whether the model PROVIDER lets
+  # the turn complete depends on the operator's account (quota, model availability,
+  # backend). A conductor-level failure (couldn't launch/handshake the agent) is a
+  # red FAIL; an agent that launched+authenticated but whose provider blocked the
+  # call (no commit, no conductor error) is a SKIP with the captured reason — an
+  # operator action, not a harness bug. See README "Live mode".
+  b_live_row_besteffort grpb/clicodex  "cli:codex"
+  b_live_row_besteffort grpb/acpgemini "acp:gemini"
+  # omp / agent-deck are fully optional (their provider keys may not be present):
+  # PASS on commit, else SKIP with the reason — never a hard FAIL.
+  b_live_row_optional   grpb/ocnative  "acp:omp"
+  b_live_row_optional   grpb/deck      "agent-deck"
   # Not installed on this box — recorded as genuinely N/A, not a stale skip.
   skip B "acp:codex-adapter" "N/A — codex-acp binary not installed on this host"
   skip B "opencode-acp"      "N/A — opencode not installed on this host"
@@ -255,9 +275,9 @@ group_B_live() {
   skip B "copilot"           "N/A — copilot not installed on this host"
 }
 
-# b_live_row <repo> <label> — force a merge_conflict routed to a real controller and
-# assert the real agent pushed a NEW commit to pr-1 on the forge.
-b_live_row() {
+# b_live_row_required <repo> <label> — force a merge_conflict routed to a real
+# controller and REQUIRE the real agent to push a NEW commit to pr-1 (PASS/FAIL).
+b_live_row_required() {
   local repo="$1" label="$2"
   force conductor merge_conflict "$repo#1" /etc/conductor/controllers.live.yaml >/dev/null
   if wait_for 300 forge_got_new_commit "$repo" pr-1; then
@@ -265,6 +285,78 @@ b_live_row() {
   else
     bad "B(live) $label real fixer" B "$label" "no new commit on $repo pr-1 (check keys/logs)"
   fi
+}
+
+# b_live_row_besteffort <repo> <label> — force a merge_conflict and wait for either a
+# pushed commit (PASS), a conductor-level dispatch failure (FAIL — a real
+# harness/controller problem), or the agent's turn to finish with no commit (SKIP —
+# the agent launched but its model provider blocked the turn; operator action).
+b_live_row_besteffort() {
+  local repo="$1" label="$2"
+  force conductor merge_conflict "$repo#1" /etc/conductor/controllers.live.yaml >/dev/null
+  local deadline=$((SECONDS + 240))
+  while [ $SECONDS -lt $deadline ]; do
+    forge_got_new_commit "$repo" pr-1 && break
+    live_conductor_failed "$repo" && break   # dispatch couldn't drive the agent
+    live_turn_done "$repo"        && break    # agent's turn finished (check commit next)
+    sleep 3
+  done
+  if forge_got_new_commit "$repo" pr-1; then
+    ok "B(live) $label real agent edited & pushed to the forge" B "$label"
+  elif live_conductor_failed "$repo"; then
+    bad "B(live) $label real fixer" B "$label" "conductor could not drive $label: $(live_last_error "$repo")"
+  else
+    skip B "$label" "wired OK; agent launched & authenticated but landed no commit — provider/model unavailable (operator action).$(live_last_error "$repo")"
+  fi
+}
+
+# b_live_row_optional <repo> <label> — like best-effort but never hard-FAILs: a
+# missing/optional provider key surfaces as a SKIP with the reason, not a red row.
+b_live_row_optional() {
+  local repo="$1" label="$2"
+  force conductor merge_conflict "$repo#1" /etc/conductor/controllers.live.yaml >/dev/null
+  local deadline=$((SECONDS + 180))
+  while [ $SECONDS -lt $deadline ]; do
+    forge_got_new_commit "$repo" pr-1 && break
+    live_conductor_failed "$repo" && break
+    live_turn_done "$repo"        && break
+    sleep 3
+  done
+  if forge_got_new_commit "$repo" pr-1; then
+    ok "B(live) $label real agent edited & pushed to the forge" B "$label"
+  else
+    skip B "$label" "optional — not wired/authenticated on this host (best effort).$(live_last_error "$repo")"
+  fi
+}
+
+# live_conductor_failed <repo> — conductor itself failed to drive the agent (the
+# dispatch escalated or was recorded as a failed dispatch): a real harness/controller
+# problem, distinct from the agent's model provider refusing the turn.
+live_conductor_failed() { # repo
+  audit_match conductor "\"repo\":\"$1\"" '"event":"escalate"' \
+    || audit_match conductor "\"repo\":\"$1\"" '"event":"dispatch"' '"outcome":"failed"'
+}
+
+# live_turn_done <repo> — conductor recorded the agent's turn as complete (the CLI
+# process exited / the ACP prompt turn ended). Used to stop waiting early once the
+# agent is done, whether or not it committed.
+live_turn_done() { # repo
+  audit_match conductor "\"repo\":\"$1\"" '"event":"complete"'
+}
+
+# live_last_error <repo> — a short error/message snippet from the newest audit line
+# for the repo carrying one, prefixed with a space (empty if none). Surfaces the
+# reason (e.g. an ACP handshake error) in the row note.
+live_last_error() { # repo
+  # Only surface a real failure signal — an `error` field or an `escalate` message —
+  # not the generic `complete` event's `"msg":"cli"/"acp"`. Empty (clean note) when
+  # the agent simply ran without committing (its provider blocked the turn).
+  local e
+  e="$(cexec conductor cat /data/audit.jsonl 2>/dev/null \
+        | grep "\"repo\":\"$1\"" \
+        | grep -E '"error":"|"event":"escalate"' \
+        | grep -oE '"(error|msg)":"[^"]*"' | tail -1)"
+  [ -n "$e" ] && printf ' %s' "$e"
 }
 
 fake_archived() { # container

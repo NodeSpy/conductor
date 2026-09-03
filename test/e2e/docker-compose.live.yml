@@ -8,31 +8,60 @@
 # forge, while conductor's GitHub reads/writes stay mocked. fakepaseo still provisions
 # the PR worktree (a real git clone, no LLM); the real agent then edits/commits/pushes.
 #
-# What's wired (this box): cli:claude-code, cli:codex, acp:gemini, acp:omp, agent-deck.
-# Not installed here → skipped in controllers.live.yaml with a note: opencode, copilot,
-# and codex-acp (the acp:codex-adapter binary).
+# Credentials & keys are read from the operator's OWN host config at launch by
+# run.sh's live-env step and injected as env — nothing secret is committed. See
+# README.md ("Live mode") for the wiring.
+#
+# Auth per agent (this box):
+#   claude → the REAL claude binary (baked into the image) talks to the host
+#            TeamClaude proxy via ANTHROPIC_BASE_URL=http://host.docker.internal:PORT
+#            + ANTHROPIC_API_KEY=<proxy key> (non-loopback clients must present it).
+#            The host `claude-teamclaude` wrapper is intentionally NOT used inside the
+#            container (it probes 127.0.0.1:3456, which is the container itself).
+#   codex  → host static binary + OAuth tokens copied writable into ~/.codex.
+#   gemini → host Node bundle (via /opt/host-local) + GEMINI_API_KEY (decrypted from
+#            the operator's gemini keychain by run.sh).
+#   omp / agent-deck → host binaries; best-effort (their keys are optional).
 #
 # Host tool + credential locations are parameterized; the defaults match this box.
-# Override via env (e.g. HOST_LOCAL_BIN=/somewhere) before `make e2e-live`.
+# Override via env (e.g. HOST_LOCAL=/somewhere) before `make e2e-live`.
 
 services:
   conductor:
     build:
       context: ../..
       dockerfile: test/e2e/Dockerfile.live
+      args:
+        # Match the container user to the host uid/gid so the read-only, owner-only
+        # (~/.codex is 0700) credential mounts are readable for the copy-into-HOME
+        # step. run.sh exports these from the host; default to the common 1000.
+        HOST_UID: "${HOST_UID:-1000}"
+        HOST_GID: "${HOST_GID:-1000}"
     image: paseo-conductor-e2e-live:latest
+    # Reach the host TeamClaude proxy (127.0.0.1:3456 on the host) from inside the
+    # container. The rest of the stack still talks by service name on the bridge net.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       HOME: /home/conductor
-      # Host tools live under /opt/host-local (mounted below); real static bins
-      # (codex, omp) are mounted straight onto /usr/local/bin. node comes from the
-      # image. Prepend the host bin dir so `gemini`/`claude`/`agent-deck` resolve.
-      PATH: "/opt/host-local/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
-      # Real model-provider credentials the live agents need. Populate from your
-      # shell/secret store — never commit these. (omp reads WAFER_SERVERLESS_API_KEY.)
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
-      GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
+      # /usr/local/bin FIRST so the image's real `claude` and the mounted static
+      # `codex`/`omp` win; the host tree (/opt/host-local/bin) is last so `gemini`
+      # and `agent-deck` still resolve from the operator's install.
+      PATH: "/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/host-local/bin"
+      # --- claude via the host TeamClaude proxy (populated by run.sh live-env) ---
+      # Base URL is rewritten to host.docker.internal so it resolves from the
+      # container; the proxy key is required for non-loopback callers.
+      ANTHROPIC_BASE_URL: "${PC_LIVE_ANTHROPIC_BASE_URL:-http://host.docker.internal:3456}"
+      ANTHROPIC_API_KEY: "${PC_LIVE_ANTHROPIC_API_KEY:-}"
+      # --- gemini (api-key auth; decrypted from the host keychain by run.sh) ---
+      GEMINI_API_KEY: "${PC_LIVE_GEMINI_API_KEY:-}"
+      # gemini --acp refuses to touch files in an "untrusted" workspace when headless
+      # (the PR worktree conductor provisions is never interactively trusted), so opt
+      # the whole run into trusting its cwd. Without this the ACP turn returns doing
+      # no edits. (GOOGLE_API_KEY intentionally unset — setting both makes gemini warn
+      # and prefer GOOGLE_API_KEY; one source is cleaner.)
+      GEMINI_CLI_TRUST_WORKSPACE: "true"
+      # --- omp (optional; oh-my-pi serverless key, if the operator exports it) ---
       WAFER_SERVERLESS_API_KEY: "${WAFER_SERVERLESS_API_KEY:-}"
       # The real agent posts comments itself; disable the fake-paseo comment shim.
       FAKE_PASEO_POST_COMMENT: ""
@@ -41,15 +70,14 @@ services:
       - ./fixtures:/fixtures:ro
       # Host tool tree (bin + lib/node_modules for the Node CLIs like gemini).
       - ${HOST_LOCAL:-${HOME}/.local}:/opt/host-local:ro
-      # Static ELF tools installed system-wide on the host.
+      # Static ELF / glibc tools installed system-wide on the host.
       - ${HOST_CODEX:-/usr/bin/codex}:/usr/local/bin/codex:ro
       - ${HOST_OMP:-/usr/bin/omp}:/usr/local/bin/omp:ro
-      # The claude wrapper (routes through the operator's TeamClaude proxy) exposed
-      # as `claude` so the claude-code recipe's `claude -p …` resolves.
-      - ${HOST_CLAUDE:-${HOME}/.local/bin/claude-teamclaude}:/usr/local/bin/claude:ro
-      # Per-tool credential/config dirs, into the container user's HOME.
-      - ${HOME}/.claude:/home/conductor/.claude:ro
-      - ${HOME}/.codex:/home/conductor/.codex:ro
-      - ${HOME}/.gemini:/home/conductor/.gemini:ro
+      # Per-tool credential/config dirs mounted READ-ONLY into a staging path; the
+      # live entrypoint copies them into the container user's WRITABLE $HOME so codex
+      # can refresh its OAuth token in place (a RO bind at the live location blocks
+      # that write). claude needs no cred dir here — it uses the proxy.
+      - ${HOME}/.codex:/seed-creds/codex:ro
+      - ${HOME}/.gemini:/seed-creds/gemini:ro
     # Point at the live controller config (real CLIs; fakepaseo only provisions).
-    command: ["bash", "/etc/conductor/entrypoint.sh", "/etc/conductor/controllers.live.yaml"]
+    command: ["bash", "/etc/conductor/entrypoint.live.sh", "/etc/conductor/controllers.live.yaml"]
