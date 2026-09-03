@@ -1,12 +1,14 @@
-// Command fakeagentdeck is a hermetic stand-in for the agent-deck CLI — the
-// orchestrator the agent-deck controller (issue #9, M4/T4.2) will drive via
-// launch / list --json / session send / session show --json / remove. It is a
-// SCAFFOLD: conductor's agent-deck controller isn't wired to run yet (M4 not
-// landed; registered as ErrNotRunnable in M1), so the e2e runner does not assert
-// against it. It exists so the harness is complete the moment M4 lands.
+// Command fakeagentdeck is a hermetic stand-in for the agent-deck CLI — installed
+// on PATH as `agent-deck`, driven by conductor's agent-deck controller
+// (internal/controller/agentdeck.go) via launch / list --json / session send /
+// session show --json / remove. Conductor execs `agent-deck launch …` IN the
+// conductor-provisioned PR worktree (cmd.Dir) with the acts-as-the-user identity in
+// its env; on launch the fake performs the shared fixer edit+commit+push (package
+// fixer) in that worktree, so the agent-deck row lands a real commit on the forge —
+// with NO LLM and NO secrets.
 //
-// It keeps a tiny JSON session store under $AGENTDECK_STATE and speaks the
-// subcommand/JSON contract with no LLM.
+// It keeps a tiny JSON session store under $AGENTDECK_STATE and reports launched
+// sessions as idle (so the controller's `session show --json` poll terminates).
 //
 // NOT part of the shipped product; harness-only.
 package main
@@ -17,6 +19,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"github.com/NodeSpy/paseo-conductor/test/e2e/services/fixer"
 )
 
 func stateFile() string {
@@ -29,11 +33,12 @@ func stateFile() string {
 }
 
 type session struct {
-	ID    string   `json:"id"`
-	Title string   `json:"title"`
-	Group string   `json:"group"`
-	Cwd   string   `json:"cwd"`
-	Sends []string `json:"sends"`
+	ID     string   `json:"id"`
+	Title  string   `json:"title"`
+	Group  string   `json:"group"`
+	Cwd    string   `json:"cwd"`
+	Status string   `json:"status"`
+	Sends  []string `json:"sends"`
 }
 
 func load() map[string]*session {
@@ -51,21 +56,26 @@ func save(m map[string]*session) {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: fakeagentdeck <launch|list|session|remove> …")
+		fmt.Fprintln(os.Stderr, "usage: agent-deck <launch|list|session|remove> …")
 		os.Exit(1)
 	}
 	switch os.Args[1] {
 	case "launch":
+		// conductor sets cmd.Dir to the worktree; do the fixer's work there.
+		cwd, _ := os.Getwd()
+		_ = fixer.Apply(cwd, "agent-deck", flagVal("--prompt"))
 		m := load()
 		id := "deck-" + strconv.Itoa(len(m)+1)
-		m[id] = &session{ID: id, Title: flagVal("--title"), Group: flagVal("--group"), Cwd: flagVal("--cwd")}
+		m[id] = &session{ID: id, Title: flagVal("--title"), Group: flagVal("--group"),
+			Cwd: cwd, Status: "idle"}
 		save(m)
 		emit(map[string]any{"id": id})
 	case "list":
 		m := load()
 		out := []map[string]any{}
 		for _, s := range m {
-			out = append(out, map[string]any{"id": s.ID, "title": s.Title, "group": s.Group, "cwd": s.Cwd})
+			out = append(out, map[string]any{"id": s.ID, "title": s.Title,
+				"group": s.Group, "cwd": s.Cwd, "status": s.Status})
 		}
 		emit(out)
 	case "session":
@@ -84,7 +94,7 @@ func main() {
 			if s := m[posAfter("show")]; s != nil {
 				emit(s)
 			} else {
-				emit(map[string]any{})
+				emit(map[string]any{"status": "idle"})
 			}
 		}
 	case "remove":

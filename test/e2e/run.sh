@@ -187,20 +187,84 @@ group_B_fixer() {
     bad "B agent archived when done" B archive "no archive recorded in fake paseo"
   fi
 
-  # Non-paseo controller rows require M3/M4 (registered ErrNotRunnable in M1).
-  skip B "cli:claude-code fixer"  "M4/T4.3 cli controller not landed"
-  skip B "cli:codex fixer"        "M4/T4.3 cli controller not landed"
-  skip B "acp:gemini fixer"       "M3/T3.3 ACP transport not wired"
-  skip B "acp:codex-adapter fixer" "M3/T3.3 ACP transport not wired"
-  skip B "opencode-acp fixer"     "M3/T3.3 ACP transport not wired"
-  skip B "opencode-native fixer"  "M4/T4.1 opencode native not landed"
-  skip B "agent-deck fixer"       "M4/T4.2 agent-deck controller not landed"
+  # Every non-paseo controller drives its fake runtime through conductor's REAL
+  # controller code (resolve → provision PR worktree → open session → first turn),
+  # and the fake does the edit+commit+push, so a `conductor:` commit lands on the
+  # forge per controller. One repo per controller keeps the rows independent.
+  local CFG=/etc/conductor/controllers.yaml
+  b_controller_row grpb/cliclaude  fx_cli_claude  cli        "cli:claude-code"
+  b_controller_row grpb/clicodex   fx_cli_codex   cli        "cli:codex"
+  b_controller_row grpb/acpgemini  fx_acp_gemini  acp        "acp:gemini"
+  b_controller_row grpb/acpcodex   fx_acp_codex   acp        "acp:codex-adapter"
+  b_controller_row grpb/ocacp      fx_oc_acp      acp        "opencode-acp"
+  b_controller_row grpb/ocnative   fx_oc_native   native     "opencode-native"
+  b_controller_row grpb/deck       fx_deck        native     "agent-deck"
+}
+
+# b_controller_row <repo> <agent> <backend> <label> — force a merge_conflict on the
+# repo (routed to the named controller), assert the controller drove a real fixer
+# (a `conductor:` commit on pr-1) and that the dispatch was recorded under the
+# controller's transport backend.
+b_controller_row() {
+  local repo="$1" agent="$2" backend="$3" label="$4"
+  force conductor-ctrl merge_conflict "$repo#1" /etc/conductor/controllers.yaml >/dev/null
+  if wait_for 60 forge_has_conductor_commit "$repo" pr-1; then
+    ok "B $label fixer edited & pushed to the forge (commit on pr-1)" B "$label"
+  else
+    bad "B $label fixer pushed a fix" B "$label" "no conductor commit on $repo pr-1"
+  fi
+  if wait_for 15 audit_match conductor-ctrl "\"repo\":\"$repo\"" '"event":"dispatch"' "\"backend\":\"$backend\""; then
+    ok "B $label dispatched via the $backend controller backend" B "$label-backend"
+  else
+    bad "B $label backend=$backend" B "$label-backend" "no $backend dispatch for $repo"
+  fi
 }
 
 forge_has_conductor_commit() { # repo branch
   local subj
   subj="$(cexec forge git --git-dir="/srv/git/$1.git" log "$2" -1 --format='%s' 2>/dev/null)"
   case "$subj" in conductor:*) return 0 ;; *) return 1 ;; esac
+}
+
+# forge_branch_commits <repo> <branch> — number of commits on the branch. The seed
+# gives every pr-1 exactly 2 commits (initial + the PR change); a pushed agent fix
+# makes it ≥3. Used by live mode, where the real agent's commit subject is its own.
+forge_branch_commits() { # repo branch
+  cexec forge git --git-dir="/srv/git/$1.git" rev-list --count "$2" 2>/dev/null | tr -d '\r'
+}
+forge_got_new_commit() { # repo branch
+  local n; n="$(forge_branch_commits "$1" "$2")"
+  [ -n "$n" ] && [ "$n" -ge 3 ]
+}
+
+# ---- live mode (real agent CLIs) --------------------------------------------
+
+group_B_live() {
+  banner "Group B (LIVE) — each installed controller runs a REAL fixer"
+  echo "Driving the real agent CLIs mounted from the host; needs the operator's keys."
+  local CFG=/etc/conductor/controllers.live.yaml
+  b_live_row grpb/cliclaude "cli:claude-code"
+  b_live_row grpb/clicodex  "cli:codex"
+  b_live_row grpb/acpgemini "acp:gemini"
+  b_live_row grpb/ocnative  "acp:omp"
+  b_live_row grpb/deck      "agent-deck"
+  # Not installed on this box — recorded as genuinely N/A, not a stale skip.
+  skip B "acp:codex-adapter" "N/A — codex-acp binary not installed on this host"
+  skip B "opencode-acp"      "N/A — opencode not installed on this host"
+  skip B "opencode-native"   "N/A — opencode not installed on this host"
+  skip B "copilot"           "N/A — copilot not installed on this host"
+}
+
+# b_live_row <repo> <label> — force a merge_conflict routed to a real controller and
+# assert the real agent pushed a NEW commit to pr-1 on the forge.
+b_live_row() {
+  local repo="$1" label="$2"
+  force conductor merge_conflict "$repo#1" /etc/conductor/controllers.live.yaml >/dev/null
+  if wait_for 300 forge_got_new_commit "$repo" pr-1; then
+    ok "B(live) $label real agent edited & pushed to the forge" B "$label"
+  else
+    bad "B(live) $label real fixer" B "$label" "no new commit on $repo pr-1 (check keys/logs)"
+  fi
 }
 
 fake_archived() { # container
@@ -336,8 +400,15 @@ group_J_failure() {
     bad "J2 escalate reaches sinks" J J2-notify "no [escalate] sink post"
   fi
 
-  # J3 needs the ACP transport wired to detect a mid-session crash.
-  skip J "J3 ACP agent crashes mid-session" "M3/T3.x ACP transport not wired (fakeacp FAKE_ACP_CRASH ready)"
+  # J3: an ACP agent that dies as its session opens (FAKE_ACP_CRASH, injected
+  # per-route) is detected — the session/new RPC fails → dispatch fails → the engine
+  # escalates loudly rather than silently dropping the crashed agent.
+  force conductor-ctrl merge_conflict grpj/acpcrash#1 /etc/conductor/controllers.yaml >/dev/null
+  if wait_for 30 audit_match conductor-ctrl '"repo":"grpj/acpcrash"' '"event":"escalate"'; then
+    ok "J3 ACP agent crash → conductor detects → escalate (not silent)" J J3
+  else
+    bad "J3 ACP crash escalates" J J3 "no escalate for grpj/acpcrash"
+  fi
 }
 
 sink_body_has() { # substring
@@ -345,31 +416,240 @@ sink_body_has() { # substring
   printf '%s' "$caps" | grep -qF -- "$1"
 }
 
-group_skips() {
-  banner "Groups pending later milestones (scaffolded, not yet asserted)"
-  skip C "native / resumable / oneshot session_model" "M2/T2.1 session broker not landed"
-  skip D "D1 burst → one live session"                "M2 session broker (dispatch-level queueing unit-tested)"
-  skip D "D2 restart mid-session re-attach"           "M2/T2.1 session broker not landed"
-  skip E "E1-E4 HandoffChannel (web-link/Slack/revise/discard)" "M2/T2.2-2.4 handoff not landed"
-  skip F "F1-F2 capability degradation"               "M2/M3 portable capability layer not landed"
+# session_ref_has <container> <pat...> — the broker's persisted PR→session map
+# (sessions.json) contains ALL patterns. It's pretty-printed, so whitespace is
+# stripped before matching (patterns are given in compact `"k":"v"` form).
+session_ref_has() {
+  local c="$1"; shift
+  local out; out="$(cexec "$c" cat /data/sessions.json 2>/dev/null | tr -d ' \n\t')"
+  [ -n "$out" ] || return 1
+  local p
+  for p in "$@"; do case "$out" in *"$p"*) ;; *) return 1 ;; esac; done
+  return 0
+}
+
+# latest_handoff_url <container> <repo> — the URL from the most recent needs_input
+# audit line for the repo (the web draft the runner drives). Empty if none yet.
+latest_handoff_url() {
+  local c="$1" repo="$2"
+  cexec "$c" cat /data/audit.jsonl 2>/dev/null \
+    | grep '"event":"needs_input"' | grep "\"repo\":\"$repo\"" \
+    | grep -o 'http://[^ "]*/handoff?id=[A-Za-z0-9]*' | tail -1
+}
+
+# wait_handoff_url <container> <repo> — poll until a draft URL is available, echo it.
+wait_handoff_url() {
+  local c="$1" repo="$2" deadline=$((SECONDS + 40)) url=""
+  while [ $SECONDS -lt $deadline ]; do
+    url="$(latest_handoff_url "$c" "$repo")"
+    [ -n "$url" ] && { echo "$url"; return 0; }
+    sleep 1
+  done
+  return 1
+}
+
+# hoff_get / hoff_post — drive the web hand-off page from inside a container.
+hoff_get()  { cexec "$1" curl -s -o /dev/null -w '%{http_code}' "$2"; }
+hoff_post() { cexec "$1" curl -s -X POST "$2" --data "$3"; }
+hoff_is_404() { [ "$(hoff_get "$1" "$2")" = "404" ]; }
+
+group_C_session_model() {
+  banner "Group C — session_model (native / resumable / oneshot)"
+
+  # NATIVE (paseo): an interactive hand-off binds the launched paseo agent as the
+  # PR's broker session; its persisted ref records session_model=native.
+  force conductor review_requested grpe/paseohoff#1 /etc/conductor/conductor.yaml >/dev/null
+  if wait_for 40 session_ref_has conductor '"pr_key"' 'grpe/paseohoff' '"model":"native"'; then
+    ok "C native: paseo live session bound to the PR (session_model=native)" C native
+  else
+    bad "C native session_model" C native "no native session ref for grpe/paseohoff"
+  fi
+
+  # RESUMABLE (acp): the ACP controller advertises loadSession → session_model
+  # resumable; its bound ref persists as resumable and survives a restart (D2).
+  force conductor-ctrl review_requested grpc/acpresume#1 /etc/conductor/controllers.yaml >/dev/null
+  if wait_for 40 session_ref_has conductor-ctrl '"pr_key"' 'grpc/acpresume' '"model":"resumable"'; then
+    ok "C resumable: ACP session persisted by id (session_model=resumable)" C resumable
+  else
+    bad "C resumable session_model" C resumable "no resumable session ref for grpc/acpresume"
+  fi
+
+  # ONESHOT (cli:codex): each turn is a fresh process — the codex fixer (group B)
+  # did real work with NO persistent session, so it never appears in the broker's
+  # session map. That absence IS the oneshot behavior.
+  if wait_for 30 forge_has_conductor_commit grpb/clicodex pr-1 \
+     && ! session_ref_has conductor-ctrl 'grpb/clicodex'; then
+    ok "C oneshot: cli:codex ran a fresh-process turn, no persistent session" C oneshot
+  else
+    bad "C oneshot behavior" C oneshot "codex left a persistent session or no commit"
+  fi
+}
+
+group_D_broker() {
+  banner "Group D — session broker (dedup burst / restart survival)"
+
+  # D1: a burst of new_comment events on ONE PR must collapse onto a single live
+  # agent (liveAgentForPR → paseo send), not spawn a duplicate per event. The live
+  # fixer (archive_when_done:false) stays open so #2/#3 dedup onto it. Sequenced
+  # with a beat between so #1's agent is registered before #2/#3 look for it.
+  local i
+  for i in 1 2 3; do
+    force conductor new_comment grpd/burst#1 /etc/conductor/conductor.yaml >/dev/null
+    sleep 3
+  done
+  local ok_n queued_n
+  ok_n="$(audit_count conductor '"repo":"grpd/burst"' '"kind":"new_comment"' '"event":"dispatch"' '"outcome":"ok"')"
+  queued_n="$(audit_count conductor '"repo":"grpd/burst"' '"kind":"new_comment"' '"event":"dispatch"' '"outcome":"queued"')"
+  if [ "$ok_n" = "1" ] && [ "$queued_n" -ge 2 ]; then
+    ok "D1 burst of 3 → ONE live session, $queued_n follow-ups queued to it" D D1
+  else
+    bad "D1 burst → one session" D D1 "ok=$ok_n queued=$queued_n (want ok=1, queued>=2)"
+  fi
+
+  # D2: the resumable ACP session bound in group C must survive a conductor restart
+  # — the broker reloads the persisted ref by id (re-attach), with no orphan.
+  if ! session_ref_has conductor-ctrl 'grpc/acpresume' '"model":"resumable"'; then
+    bad "D2 restart survival (precondition)" D D2 "no resumable ref to survive (run group C first)"
+  else
+    dc restart conductor-ctrl >/dev/null 2>&1
+    if wait_for 40 cexec conductor-ctrl test -S /data/control.sock \
+       && wait_for 20 session_ref_has conductor-ctrl 'grpc/acpresume' '"model":"resumable"'; then
+      ok "D2 restart mid-session → resumable ref re-attached from store, no orphan" D D2
+    else
+      bad "D2 restart re-attach" D D2 "resumable ref lost across restart or daemon didn't recover"
+    fi
+  fi
+}
+
+group_E_handoff() {
+  banner "Group E — HandoffChannel (web-link approve / revise / discard)"
+  local url body
+
+  # E1 (paseo): drive the review bound in group C on grpe/paseohoff to approval.
+  if url="$(wait_handoff_url conductor grpe/paseohoff)"; then
+    assert_contains "$(hoff_get conductor "$url")" "200" E E1-page \
+      "E1 web draft page served"
+    body="$(hoff_post conductor "$url" 'action=approve')"
+    assert_contains "$body" "Recorded: approve" E E1-approve \
+      "E1 web-link approve on the paseo controller"
+    if wait_for 10 hoff_is_404 conductor "$url"; then
+      ok "E1 draft consumed after decision (GET now 404)" E E1-consumed
+    else
+      bad "E1 draft consumed" E E1-consumed "draft still resolvable after approve"
+    fi
+  else
+    bad "E1 web draft appears" E E1-page "no needs_input draft url for grpe/paseohoff"
+  fi
+
+  # E1 on a BARE runner + F1: cli:claude-code reports InteractiveHandoff:false, yet
+  # completes the review over the portable web channel (grpf/clihoff).
+  force conductor-ctrl review_requested grpf/clihoff#1 /etc/conductor/controllers.yaml >/dev/null
+  if url="$(wait_handoff_url conductor-ctrl grpf/clihoff)"; then
+    body="$(hoff_post conductor-ctrl "$url" 'action=approve')"
+    assert_contains "$body" "Recorded: approve" E E1-bare \
+      "E1 web-link approve on a bare (cli) runner"
+    ok "F1 controller lacking interactive-handoff completed review via portable channel" F F1
+  else
+    bad "E1 bare-runner draft" E E1-bare "no needs_input draft for grpf/clihoff"
+    bad "F1 portable-channel review" F F1 "cli controller review hand-off never presented"
+  fi
+
+  # E3 revise: a fresh review, send a revision → the loop re-presents a new draft,
+  # then approve the re-presented one.
+  local before; before="$(audit_count conductor '"repo":"grpe/paseohoff"' '"event":"needs_input"')"
+  force conductor review_requested grpe/paseohoff#1 /etc/conductor/conductor.yaml >/dev/null
+  if url="$(wait_handoff_url_gt conductor grpe/paseohoff "$before")"; then
+    local mid; mid="$(audit_count conductor '"repo":"grpe/paseohoff"' '"event":"needs_input"')"
+    hoff_post conductor "$url" 'action=revise&text=tighten+the+wording' >/dev/null
+    if url="$(wait_handoff_url_gt conductor grpe/paseohoff "$mid")"; then
+      ok "E3 revise loop re-presents the draft after a revision turn" E E3
+      hoff_post conductor "$url" 'action=approve' >/dev/null   # close the loop
+    else
+      bad "E3 revise re-presents" E E3 "no new draft after revising"
+    fi
+  else
+    bad "E3 revise" E E3 "no draft for the revise cycle"
+  fi
+
+  # E4 discard: a fresh review, discard it.
+  before="$(audit_count conductor '"repo":"grpe/paseohoff"' '"event":"needs_input"')"
+  force conductor review_requested grpe/paseohoff#1 /etc/conductor/conductor.yaml >/dev/null
+  if url="$(wait_handoff_url_gt conductor grpe/paseohoff "$before")"; then
+    body="$(hoff_post conductor "$url" 'action=discard')"
+    assert_contains "$body" "Recorded: discard" E E4 "E4 web-link discard ends the hand-off"
+  else
+    bad "E4 discard" E E4 "no draft for the discard cycle"
+  fi
+
+  # E2 Slack: the Slack hand-off channel (internal/handoff/slack.go) + inbox +
+  # parseReply are implemented and unit-tested, but NOT wired into the daemon in
+  # this build (no `handoff.slack` config, no slack.SetReplyHook call in cmd/), and
+  # its inbound path is Slack Socket Mode (a WebSocket to slack.com) — not drivable
+  # by the hermetic harness without a production feature addition beyond e2e scope.
+  # The identical controller-agnostic Review loop IS exercised end-to-end above via
+  # the web channel (approve/revise/discard), so the hand-off mechanism is covered.
+  skip E "E2 Slack channel" "N/A — Slack hand-off channel not wired into the daemon (Socket Mode inbound); web channel exercises the same Review loop; unit-covered by internal/handoff/slack_test.go"
+}
+
+group_F_capability() {
+  banner "Group F — capability degradation"
+  # F1 is asserted in group E (cli controller, InteractiveHandoff:false, completed a
+  # web review). F2: a controller that provides no checkout itself (acp) still ran
+  # its agent in a conductor-PROVISIONED worktree — proven by the pr-1 commit landing
+  # for the acp:gemini row plus the dispatch being recorded under the acp backend.
+  if forge_has_conductor_commit grpb/acpgemini pr-1 \
+     && audit_match conductor-ctrl '"repo":"grpb/acpgemini"' '"event":"dispatch"' '"backend":"acp"'; then
+    ok "F2 controller lacking checkout-pr ran in a conductor-supplied worktree" F F2
+  else
+    bad "F2 conductor-supplied worktree" F F2 "no acp-backed commit in a provisioned worktree"
+  fi
+}
+
+# wait_handoff_url_gt <container> <repo> <before-count> — wait until a NEW needs_input
+# draft (count beyond <before>) exists, echo its url.
+wait_handoff_url_gt() {
+  local c="$1" repo="$2" before="$3" deadline=$((SECONDS + 30))
+  while [ $SECONDS -lt $deadline ]; do
+    local n; n="$(audit_count "$c" "\"repo\":\"$repo\"" '"event":"needs_input"')"
+    if [ "$n" -gt "$before" ]; then latest_handoff_url "$c" "$repo"; return 0; fi
+    sleep 1
+  done
+  return 1
+}
+
+# wait_handoff_url_after <container> <repo> — capture the current needs_input count,
+# then wait for a NEW draft beyond it (used for a fresh review cycle on a reused repo).
+wait_handoff_url_after() {
+  local c="$1" repo="$2"
+  local before; before="$(audit_count "$c" "\"repo\":\"$repo\"" '"event":"needs_input"')"
+  wait_handoff_url_gt "$c" "$repo" "$before"
 }
 
 # ---- main -------------------------------------------------------------------
 
 main() {
-  if [ "$MODE" = "live" ]; then
-    echo "live mode: real agents + mounted keys are required; see README.md."
-    echo "This runner ships the hermetic stub path; wire live controllers via docker-compose.live.yml."
-  fi
   trap teardown EXIT
   setup
+  if [ "$MODE" = "live" ]; then
+    # Live mode drives the REAL agent CLIs (docker-compose.live.yml) and asserts each
+    # installed controller runs an end-to-end fixer against the local forge. The
+    # hermetic-only groups (mock/fake-driven) don't apply here.
+    echo "live mode: driving real agents through their controllers (see README.md)."
+    group_B_live
+    print_matrix
+    [ "$FAIL" -eq 0 ]
+    return
+  fi
   group_A_resolution
   group_B_fixer
   group_I_identity
   group_G_notify
   group_H_webhook
+  group_C_session_model
+  group_D_broker
+  group_E_handoff
+  group_F_capability
   group_J_failure
-  group_skips
   print_matrix
   [ "$FAIL" -eq 0 ]
 }

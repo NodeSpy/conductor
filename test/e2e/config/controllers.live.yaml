@@ -1,0 +1,86 @@
+# Live-mode conductor config (manual, `make e2e-live`). Same shape as
+# controllers.yaml, but every controller drives a REAL agent CLI installed on the
+# host (mounted in via docker-compose.live.yml) instead of a hermetic fake. fakepaseo
+# still provisions the PR worktree (a real git clone/worktree from the forge — no
+# LLM); the REAL agent then makes the edit, commits as you, and pushes to the forge.
+#
+# Wired for the tools present on this box:
+#   grpb/cliclaude → cli:claude-code (claude -p …, via the TeamClaude wrapper)
+#   grpb/clicodex  → cli:codex       (codex exec …)
+#   grpb/acpgemini → acp:gemini      (gemini --acp)
+#   grpb/ocnative  → acp:omp         (omp acp)          [repurposed repo for omp]
+#   grpb/deck      → agent-deck
+# NOT installed here (skipped in run.sh's live matrix with a note): opencode, copilot,
+# and codex-acp (the acp:codex-adapter binary).
+
+integrations:
+  - type: github
+    name: github
+    enabled: true
+    app:
+      app_id: 123456
+      private_key_path: /etc/conductor/github-app.pem
+      webhook_secret: e2e-webhook-secret
+      verify_signature: false
+    webhook:
+      listen: "0.0.0.0:8788"
+    sweep:
+      enabled: false
+    identity:
+      read_token: app
+      write_token: e2e-user-write-token
+      commit_author: self
+    defaults:
+      me: { logins: [conductor-user] }
+      # A crisp, agent-agnostic instruction: do the work in the checked-out worktree
+      # and push it back. Real agents vary; keep it explicit and imperative.
+      actions:
+        merge_conflict:
+          type: agent
+          agent: fx_codex          # base agent; each rule overrides it per repo
+          prompt: >-
+            You are in a git worktree for {{.repo}} PR #{{.pr}} (the current
+            directory). Make a minimal edit to a file, then run `git add -A`,
+            `git commit -m "resolve {{.repo}}#{{.pr}}"`, and `git push origin HEAD`.
+            You have push access to origin. Do this now, non-interactively.
+    rules:
+      - match: { repos: ["grpb/cliclaude"] }
+        actions: { merge_conflict: { type: agent, agent: fx_claude } }
+      - match: { repos: ["grpb/clicodex"] }
+        actions: { merge_conflict: { type: agent, agent: fx_codex } }
+      - match: { repos: ["grpb/acpgemini"] }
+        actions: { merge_conflict: { type: agent, agent: fx_gemini } }
+      - match: { repos: ["grpb/ocnative"] }
+        actions: { merge_conflict: { type: agent, agent: fx_omp } }
+      - match: { repos: ["grpb/deck"] }
+        actions: { merge_conflict: { type: agent, agent: fx_deck } }
+
+controllers:
+  cli_claude: { agent: claude-code, transport: cli }   # → claude -p <prompt> …
+  cli_codex:  { agent: codex, transport: cli }          # → codex exec <prompt>
+  acp_gemini:                                           # → gemini --acp (stdio ACP)
+    agent: gemini
+    session_model: resumable
+    command: [gemini, --acp]
+  acp_omp:                                              # → omp acp (stdio ACP)
+    agent: omp
+    session_model: resumable
+    command: [omp, acp]
+  deck: { type: agent-deck }                            # → agent-deck launch …
+
+agents:
+  fx_claude: { provider: fake, controller: cli_claude, workspace: worktree, archive_when_done: true, wait_timeout: 10m }
+  fx_codex:  { provider: fake, controller: cli_codex,  workspace: worktree, archive_when_done: true, wait_timeout: 10m }
+  fx_gemini: { provider: fake, controller: acp_gemini, workspace: worktree, archive_when_done: true, wait_timeout: 10m }
+  fx_omp:    { provider: fake, controller: acp_omp,    workspace: worktree, archive_when_done: true, wait_timeout: 10m }
+  fx_deck:   { provider: fake, controller: deck,       workspace: worktree, archive_when_done: true, wait_timeout: 10m }
+
+control:
+  enabled: true
+  max_concurrent_agents: 4
+
+store:
+  state_file: /data/state.json
+  audit_log: /data/audit.jsonl
+
+paseo_bin: /usr/local/bin/fakepaseo

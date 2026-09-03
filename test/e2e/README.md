@@ -30,21 +30,30 @@ overrides `command:`.
 | `forge` | bare git repos served over `git://` — agents clone / commit / push here |
 | `mock-github` | canned repo/PR/check reads; **captures** acts-as-the-user writes (`/_captured`) |
 | `sink-catcher` | captures notify posts — Slack/Discord/ntfy/Pushover/Notifiarr (`/_captured`) |
-| `conductor` | the real daemon, **no `controllers:` block** → paseo default path; webhook receiver for group H |
-| `conductor-ctrl` | a second daemon **with** a `controllers:` block → group A resolution |
+| `conductor` | the real daemon, **no `controllers:` block** → paseo default path; webhook receiver for group H; web hand-off channel for C/D/E |
+| `conductor-ctrl` | a second daemon **with** a `controllers:` block → group A resolution + every non-paseo controller (group B) + resumable hand-off (C/D2/F) + ACP crash (J3) |
 | `conductor-fail` | a daemon whose fake paseo fails `workspace create` → group J2 |
 
-### Stub controllers (per transport)
+### Stub controller runtimes (per transport)
 
-- **`fakepaseo`** — the native controller. Conductor execs it via `paseo_bin:`,
-  exactly as the real paseo. It does **real git** (clone/commit/push to the forge),
-  commits as the acts-as-the-user identity conductor passes via `--env`, and speaks
-  the full subcommand/JSON contract (`run`/`ls`/`inspect`/`send`/`archive`/`wait`/
-  `clone`/`workspace …`). This is what makes groups B/H/I genuinely end-to-end.
-- **`fakeacp`** — an ACP agent built on the repo's own `internal/acp` library
-  (scaffold for M3; `FAKE_ACP_CRASH=1` simulates a mid-session crash for J3).
-- **`fakeopencode`** — the `opencode serve` HTTP surface (scaffold for M4/T4.1).
-- **`fakeagentdeck`** — the agent-deck CLI (scaffold for M4/T4.2).
+Each fake is driven through conductor's **real** controller code (resolve →
+provision a PR worktree → open a session → run the first turn). The shared
+`services/fixer` package makes the driven "agent" do **real git** — edit + commit
+(as the acts-as-you identity conductor passes) + push to the forge — so a commit
+lands per controller, exactly like the paseo path.
+
+- **`fakepaseo`** (installed as `paseo`) — the native controller. Speaks the full
+  subcommand/JSON contract (`run`/`ls`/`inspect`/`send`/`archive`/`wait`/`clone`/
+  `workspace …`) and, in live mode, still **provisions** the worktree (git only).
+- **`fakecli`** (installed as `claude` + `codex`) — the `cli` transport: `claude -p …`
+  (claude-code recipe, resumable) and `codex exec …` (codex recipe, oneshot).
+- **`fakeacp`** — an ACP agent on the repo's own `internal/acp` library, driving the
+  `acp:gemini` / `acp:codex-adapter` / `opencode-acp` rows. Advertises `loadSession`
+  (→ resumable). `FAKE_ACP_CRASH=1` (injected per-route via the action env) dies as
+  the session opens → J3.
+- **`fakeopencode`** (installed as `opencode`) — the `opencode serve` HTTP surface
+  the opencode-native controller drives.
+- **`fakeagentdeck`** (installed as `agent-deck`) — the agent-deck CLI orchestrator.
 
 ## Event injection
 
@@ -56,18 +65,30 @@ overrides `command:`.
 
 ## Test groups & current coverage
 
-Only groups whose milestones have merged are **asserted**; the rest are recorded
-`SKIP` with the milestone that unlocks them (the harness is already wired for them).
+The whole pluggable-controller feature set has merged, so `make e2e` **asserts every
+group** — a full controller × workflow matrix, all PASS. The only remaining row is a
+genuinely-N/A one (see below), never a stale skip.
 
 | Group | Coverage |
 |---|---|
-| **A** resolution & config | ✅ A1 no-controllers→paseo · A2 explicit · A3 default:true · A4 precedence (explicit non-runnable > default) · A5 validation (two defaults / unknown transport rejected, one default accepted) |
-| **B** controller runs a fixer | ✅ paseo row (edit/commit/push, agent archived) · other controllers SKIP (M3/M4) |
+| **A** resolution & config | ✅ A1 no-controllers→paseo · A2 explicit · A3 default:true · A4 precedence (explicit non-runnable > default) · A5 validation |
+| **B** each controller runs a fixer | ✅ paseo · cli:claude-code · cli:codex · acp:gemini · acp:codex-adapter · opencode-acp · opencode-native · agent-deck — every row edits/commits/pushes to the forge, dispatched under its transport backend; agent archived when done |
+| **C** session_model | ✅ native (paseo, bound live) · resumable (ACP, persisted by id) · oneshot (cli:codex fresh process, no persistent session) |
+| **D** session broker | ✅ D1 burst of 3 → ONE live session (follow-ups queued) · D2 restart → resumable ref re-attached from the store, no orphan |
+| **E** HandoffChannel | ✅ E1 web-link approve (paseo **and** a bare cli runner) · E3 revise loop · E4 discard · E2 Slack **N/A** (see below) |
+| **F** capability degradation | ✅ F1 cli controller (InteractiveHandoff:false) completes review over the portable web channel · F2 acp controller runs in a conductor-supplied worktree |
 | **G** notify sinks (M0) | ✅ all five sinks fire on dispatch |
 | **H** fixers via webhook | ✅ H1 merge_conflict · H2 failing_checks + ignore_checks suppression · H3 new_comment |
 | **I** identity & isolation | ✅ commit attributed to the user, API write uses the user token (not the App), no production endpoints |
-| **J** failure & escalation | ✅ J1 non-runnable controller → escalate · J2 worktree-create failure → loud escalate (+ sink) · J3 SKIP (M3) |
-| **C/D/E/F** | SKIP — session broker / handoff / capability layer (M2/M3) not yet landed |
+| **J** failure & escalation | ✅ J1 non-runnable controller → escalate · J2 worktree-create failure → loud escalate (+ sink) · J3 ACP agent crash → detected → escalate |
+
+**E2 Slack — N/A (not a stale skip).** The Slack hand-off channel
+(`internal/handoff/slack.go` — inbox + `parseReply`) is implemented and unit-tested,
+but it is **not wired into the daemon** (no `handoff.slack` config, no
+`slack.SetReplyHook` call in `cmd/`), and its inbound path is Slack **Socket Mode** (a
+WebSocket to `slack.com`) — not drivable by the hermetic harness without a production
+feature addition beyond e2e scope. The identical controller-agnostic Review loop
+(present → approve/revise/discard) **is** exercised end-to-end via the web channel.
 
 Every scenario prints expected-vs-actual and a final **results matrix**. The run
 exits non-zero if any assertion fails.
@@ -84,20 +105,24 @@ and a no-op in production:
 - `PC_REAPER_INTERVAL` / `PC_REAPER_MIN_AGE` — shrink the reaper cadence so
   archive-when-done is observable without the 3-minute production grace.
 
-## Live mode
+## Live mode (`make e2e-live`, manual)
 
-`make e2e-live` layers `docker-compose.live.yml` (a scaffold) over the stack:
-real agents + mounted provider keys, but the forge/mock/sink stay in place so the
-real agent works against the isolated repo while conductor's reads/writes stay
-mocked. Fill in the controller binary + key mounts for your environment; never run
-it in CI.
+Layers `docker-compose.live.yml` over the stack to drive the **real** agent CLIs
+installed on the host through their controllers, against the same isolated
+forge/mock/sink (so conductor's GitHub reads/writes stay mocked and the real agent's
+work lands on the local forge). `fakepaseo` still provisions the PR worktree (a real
+git clone — no LLM); the real agent then edits/commits/pushes. **Never run in CI** —
+it needs provider keys and reaches real model providers.
 
-## Extending as milestones land
+- **Image:** `Dockerfile.live` is a glibc + Node runtime (vs. the hermetic alpine
+  image) so Node CLIs (gemini) and glibc CLIs (omp) run alongside the static ones.
+- **Config:** `config/controllers.live.yaml` routes group-B repos to the real CLIs.
+- **Mounts:** host tool dirs + credential dirs (parameterized, defaulted for a dev
+  box); provider keys via env — populate `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` /
+  `GEMINI_API_KEY` / `WAFER_SERVERLESS_API_KEY` before running.
 
-When M2/M3/M4 land, flip a `skip` to a real assertion in `run.sh`:
-- **M3 (ACP transport):** wire an `acp` controller in a config, point it at
-  `fakeacp`, and assert group B's `acp:*` row + J3 (`FAKE_ACP_CRASH=1`).
-- **M4 (opencode/agent-deck):** add services for `fakeopencode`/`fakeagentdeck`,
-  wire the controllers, assert the corresponding B rows.
-- **M2 (session broker / handoff):** assert C (session_model), D (broker), E
-  (HandoffChannel), F (capability degradation).
+Wired for the tools present on this box: **cli:claude-code**, **cli:codex**,
+**acp:gemini**, **acp:omp** (oh-my-pi), **agent-deck**. Recorded **N/A** (not
+installed here): opencode, copilot, and `codex-acp` (the acp:codex-adapter binary).
+`make e2e-live` drives group B — each installed controller runs a real fixer and the
+run asserts a new commit lands on the forge — then prints the matrix.

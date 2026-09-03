@@ -1,14 +1,17 @@
-# Second daemon config exercising controller RESOLUTION (issue #10 group A) with a
-# `controllers:` block. Only paseo is runnable in M1, so the non-runnable stub is
-# how precedence is made observable:
+# Second daemon config: the controller-heavy one. It exercises
+#   - RESOLUTION (group A): explicit `controller:` > `default:true` > built-in paseo.
+#   - EACH non-paseo controller runs a real fixer (group B): cli (claude-code / codex),
+#     acp (gemini / codex-adapter / opencode-acp), opencode-native, agent-deck — every
+#     row drives its fake runtime through conductor's REAL controller code, which
+#     provisions a PR worktree and the acts-as-you identity; the fake does the
+#     edit+commit+push, so a commit lands on the local forge per controller.
+#   - session_model resumable + restart survival (C/D2), capability degradation (F),
+#     and an ACP mid-session crash → escalate (J3), via the interactive review
+#     hand-off over the web channel.
 #
-#   a2/*  → fixer_explicit (controller: pae)   → explicit type:paseo → dispatches
-#   a3/*  → fixer_default  (no controller)      → the default:true controller (deflt,
-#                                                 type:paseo) → dispatches
-#   a4/*  → fixer_stub     (controller: stub)   → explicit non-runnable controller,
-#                                                 chosen OVER default:true → escalates
-#
-# Together these prove the order: explicit `controller:` > `default:true` > paseo.
+# Stub mode pins each controller's runtime to its hermetic fake via an explicit
+# `command:` (acp) or the on-PATH fake tool names (cli/opencode/agent-deck). Live
+# mode swaps in the real CLIs (docker-compose.live.yml + controllers.live.yaml).
 
 integrations:
   - type: github
@@ -30,6 +33,7 @@ integrations:
     defaults:
       me: { logins: [conductor-user] }
     rules:
+      # ---- Group A: resolution / precedence -------------------------------------
       - match: { repos: ["a2/*"] }
         actions:
           merge_conflict:
@@ -49,33 +53,132 @@ integrations:
             agent: fixer_stub
             prompt: "Resolve {{.repo}}#{{.pr}} (non-runnable controller)."
 
+      # ---- Group B: one repo per non-paseo controller ---------------------------
+      - match: { repos: ["grpb/cliclaude"] }
+        actions: { merge_conflict: { type: agent, agent: fx_cli_claude,
+          prompt: "Resolve {{.repo}}#{{.pr}} (cli:claude-code)." } }
+      - match: { repos: ["grpb/clicodex"] }
+        actions: { merge_conflict: { type: agent, agent: fx_cli_codex,
+          prompt: "Resolve {{.repo}}#{{.pr}} (cli:codex)." } }
+      - match: { repos: ["grpb/acpgemini"] }
+        actions: { merge_conflict: { type: agent, agent: fx_acp_gemini,
+          prompt: "Resolve {{.repo}}#{{.pr}} (acp:gemini)." } }
+      - match: { repos: ["grpb/acpcodex"] }
+        actions: { merge_conflict: { type: agent, agent: fx_acp_codex,
+          prompt: "Resolve {{.repo}}#{{.pr}} (acp:codex-adapter)." } }
+      - match: { repos: ["grpb/ocacp"] }
+        actions: { merge_conflict: { type: agent, agent: fx_oc_acp,
+          prompt: "Resolve {{.repo}}#{{.pr}} (opencode-acp)." } }
+      - match: { repos: ["grpb/ocnative"] }
+        actions: { merge_conflict: { type: agent, agent: fx_oc_native,
+          prompt: "Resolve {{.repo}}#{{.pr}} (opencode-native)." } }
+      - match: { repos: ["grpb/deck"] }
+        actions: { merge_conflict: { type: agent, agent: fx_deck,
+          prompt: "Resolve {{.repo}}#{{.pr}} (agent-deck)." } }
+
+      # ---- Group C/D2/E (bare runner): resumable ACP interactive hand-off --------
+      - match: { repos: ["grpc/*"] }
+        actions:
+          review_requested:
+            steps:
+              - id: review
+                type: agent
+                agent: fx_acp_gemini
+                background: true
+                prompt: "Draft a review of {{.repo}}#{{.pr}} and wait for approve/revise/discard."
+
+      # ---- Group F1: a controller lacking interactive-handoff still reviews -------
+      # cli:claude-code reports InteractiveHandoff:false yet completes the review over
+      # the portable web channel (the Review loop only needs Session.Prompt).
+      - match: { repos: ["grpf/*"] }
+        actions:
+          review_requested:
+            steps:
+              - id: review
+                type: agent
+                agent: fx_cli_claude
+                background: true
+                prompt: "Draft a review of {{.repo}}#{{.pr}} and wait for approve/revise/discard."
+
+      # ---- Group J3: ACP agent crashes mid-session → escalate --------------------
+      # FAKE_ACP_CRASH is injected per-route via the action env, so only this row's
+      # fakeacp exits mid-turn — the other ACP rows keep working.
+      - match: { repos: ["grpj/*"] }
+        actions:
+          merge_conflict:
+            type: agent
+            agent: fx_acp_gemini
+            env: { FAKE_ACP_CRASH: "1" }
+            prompt: "Resolve {{.repo}}#{{.pr}} (acp crash)."
+
 controllers:
+  # Group A resolution stubs.
   pae:
     type: paseo
   deflt:
     type: paseo
     default: true
+  # Explicit non-runnable controller for A4/J1: `agent: gemini` builds an ACP
+  # controller, but no `gemini` binary is on PATH in stub mode (unlike acp_gemini,
+  # which pins `command: [fakeacp]`), so selecting it fails to spawn → loud escalate.
   stub:
-    agent: gemini                     # ACP transport → registered ErrNotRunnable in M1
+    agent: gemini
+
+  # ---- Group B controllers --------------------------------------------------
+  cli_claude:            # cli transport, claude-code recipe (→ `claude -p …`)
+    agent: claude-code
+    transport: cli
+  cli_codex:             # cli transport, codex recipe (→ `codex exec …`)
+    agent: codex
+    transport: cli
+  # The fake ACP agents advertise loadSession → they are resumable; declare it so
+  # the broker persists session_model=resumable (group C). (Controller.Initialize
+  # would negotiate this at runtime, but the dispatch path binds from the static
+  # model, so it's set in config.)
+  acp_gemini:            # acp transport; pinned to the fake ACP agent in stub mode
+    agent: gemini
+    session_model: resumable
+    command: [fakeacp]
+  acp_codex:             # acp transport (codex-adapter)
+    agent: codex
+    transport: acp
+    session_model: resumable
+    command: [fakeacp]
+  oc_acp:                # opencode over acp
+    agent: opencode
+    transport: acp
+    session_model: resumable
+    command: [fakeacp]
+  oc_native:             # opencode native HTTP server (`opencode serve`)
+    type: opencode
+  deck:                  # agent-deck CLI orchestrator
+    type: agent-deck
 
 agents:
-  fixer_explicit:
-    provider: fake
-    controller: pae
-    workspace: worktree
-    archive_when_done: true
-  fixer_default:
-    provider: fake
-    workspace: worktree
-    archive_when_done: true
-  fixer_stub:
-    provider: fake
-    controller: stub
-    workspace: worktree
+  # Group A.
+  fixer_explicit: { provider: fake, controller: pae, workspace: worktree, archive_when_done: true }
+  fixer_default:  { provider: fake, workspace: worktree, archive_when_done: true }
+  fixer_stub:     { provider: fake, controller: stub, workspace: worktree }
+  # Group B (one agent per controller).
+  fx_cli_claude:  { provider: fake, controller: cli_claude, workspace: worktree, archive_when_done: true }
+  fx_cli_codex:   { provider: fake, controller: cli_codex,  workspace: worktree, archive_when_done: true }
+  fx_acp_gemini:  { provider: fake, controller: acp_gemini, workspace: worktree, archive_when_done: true }
+  fx_acp_codex:   { provider: fake, controller: acp_codex,  workspace: worktree, archive_when_done: true }
+  fx_oc_acp:      { provider: fake, controller: oc_acp,     workspace: worktree, archive_when_done: true }
+  fx_oc_native:   { provider: fake, controller: oc_native,  workspace: worktree, archive_when_done: true }
+  fx_deck:        { provider: fake, controller: deck,       workspace: worktree, archive_when_done: true }
+
+# Portable interactive-review hand-off channel (M2), so C/D2/E/F run on the
+# non-paseo controllers too. Same web draft page as the main daemon; base_url is
+# localhost so the runner can curl it from inside this container.
+handoff:
+  web:
+    base_url: "http://localhost:8099"
+    listen: "0.0.0.0:8099"
 
 control:
   enabled: true
-  max_concurrent_agents: 3
+  max_concurrent_agents: 8
 
 store:
   state_file: /data/state.json

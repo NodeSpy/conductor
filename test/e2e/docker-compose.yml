@@ -26,8 +26,20 @@ services:
     command: ["bash", "/seed/seed-forge.sh"]
     environment:
       # Distinct basenames matter: conductor's base checkout dir is keyed by
-      # filepath.Base(repo), so the group-A repos use web2/web3/web4 (not all "web").
-      REPOS: "acme/web acme/api acme/svc a2/web2 a3/web3 a4/web4"
+      # filepath.Base(repo), so every repo below has a globally-unique basename.
+      #   acme/*                         — paseo fixer, notify, webhook, identity (B/G/H/I)
+      #   a2/a3/a4                        — controller resolution (A)
+      #   grpb/*                         — one repo per non-paseo controller (B)
+      #   grpc/acpresume, grpf/clihoff   — interactive review hand-off (C/D2/E/F)
+      #   grpd/burst                     — session-broker dedup burst (D1)
+      #   grpe/paseohoff                 — web hand-off on the paseo controller (C/E)
+      #   grpj/acpcrash                  — ACP crash → escalate (J3)
+      REPOS: >-
+        acme/web acme/api acme/svc
+        a2/web2 a3/web3 a4/web4
+        grpb/cliclaude grpb/clicodex grpb/acpgemini grpb/acpcodex
+        grpb/ocacp grpb/ocnative grpb/deck
+        grpc/acpresume grpf/clihoff grpd/burst grpe/paseohoff grpj/acpcrash
     volumes:
       - ./seed:/seed:ro
     # git daemon (started by the seed script) serves git://forge:9418/<owner>/<repo>.git
