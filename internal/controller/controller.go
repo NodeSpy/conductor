@@ -146,12 +146,22 @@ type Handler interface {
 	RequestInput(ctx context.Context, req InputRequest) (InputOutcome, error)
 }
 
-// Spec is a fully-resolved request to open a session. For M1 it wraps conductor's
-// dispatch.Request; the paseo controller passes it straight to the CLI
-// dispatcher, so there is exactly one argv-building path and no drift. Future
-// (neutral) controllers will read the portable fields off the request.
+// Spec is a fully-resolved request to open a session. It wraps conductor's
+// dispatch.Request; the paseo controller passes it straight to the CLI dispatcher,
+// so there is exactly one argv-building path and no drift. The neutral controllers
+// (ACP, opencode, agent-deck, cli) read the portable fields off the request and use
+// the conductor-provisioned worktree carried in Cwd.
 type Spec struct {
 	Request dispatch.Request
+	// Cwd is the conductor-provisioned worktree the session runs in — the ACP
+	// session cwd / a CLI's working directory. Empty means "no dedicated worktree";
+	// the runtime uses its own default directory. The paseo controller ignores it
+	// (paseo provisions its own worktree from the request).
+	Cwd string
+	// WorkspaceID is the provisioned worktree's workspace id when conductor created
+	// the checkout up front (empty otherwise), retained so a controller can release
+	// it on Close.
+	WorkspaceID string
 }
 
 // Session is a live agent conversation (ACP session): native = a launched paseo
