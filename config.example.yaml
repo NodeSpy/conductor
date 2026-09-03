@@ -1,6 +1,7 @@
 # paseo-conductor configuration.
 # Copy to ~/.config/paseo-conductor/config.yaml and edit.
 # ${ENV} references are expanded from the environment (see conductor.env).
+# Referencing a variable that isn't set is an error; an empty value (KEY=) is fine.
 #
 # Everything can live in this one file, or you can split it with `imports:` —
 # a list of YAML files or globs (relative to this file) that are deep-merged:

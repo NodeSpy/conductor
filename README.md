@@ -831,6 +831,12 @@ Config lives at `~/.config/paseo-conductor/config.yaml`; secrets referenced via 
 the sibling `conductor.env`, which the daemon loads at startup (so systemd and launchd both work).
 The installer seeds both files. `paseo-conductor validate` checks everything before you start.
 
+This split means `config.yaml` holds no secrets and can live in a dotfiles repo, symlinked into
+place — `conductor.env` is looked up next to the config *path*, not the symlink target, so it stays
+private in `~/.config/paseo-conductor/`. Referencing a `${VAR}` that isn't defined anywhere is a load
+error naming the variable (a deliberately empty `KEY=` is fine), so a missing `conductor.env` on a
+fresh machine fails fast instead of silently blanking a secret.
+
 ### Splitting the config across files (imports)
 
 Everything can live in one file — or you can split it. A top-level **`imports:`** list pulls in other
