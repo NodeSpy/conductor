@@ -790,7 +790,7 @@ conductor service uninstall    # stop and remove it
 
 The unit is named `conductor`.
 
-Logs: `journalctl --user -u conductor -f` (Linux) / `tail -f ~/Library/Logs/paseo-conductor.log`
+Logs: `journalctl --user -u conductor -f` (Linux) / `tail -f ~/Library/Logs/conductor.log`
 (macOS). On Linux, `loginctl enable-linger "$USER"` keeps it running across logout/reboot (the
 installer does this).
 

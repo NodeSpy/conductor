@@ -1,36 +1,14 @@
 #!/usr/bin/env bash
 # Build conductor from source, seed config, and optionally install the
 # per-user background service (systemd on Linux, launchd on macOS).
-#
-# Fleet-safe: an existing paseo-conductor install (config/state dir from
-# before the rebrand) keeps being used in place; only a fresh install gets
-# the new conductor-named paths.
 set -euo pipefail
 
 BIN_DIR="${HOME}/.local/bin"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if [ -d "${HOME}/.config/conductor" ]; then
-  CFG_DIR="${HOME}/.config/conductor"
-elif [ -d "${HOME}/.config/paseo-conductor" ]; then
-  CFG_DIR="${HOME}/.config/paseo-conductor"
-else
-  CFG_DIR="${HOME}/.config/conductor"
-fi
-
-if [ -d "${HOME}/.local/state/conductor" ]; then
-  STATE_DIR="${HOME}/.local/state/conductor"
-elif [ -d "${HOME}/.local/state/paseo-conductor" ]; then
-  STATE_DIR="${HOME}/.local/state/paseo-conductor"
-else
-  STATE_DIR="${HOME}/.local/state/conductor"
-fi
-
-if [ -f "${BIN_DIR}/paseo-conductor" ] && [ ! -f "${BIN_DIR}/conductor" ]; then
-  BIN_NAME="paseo-conductor"
-else
-  BIN_NAME="conductor"
-fi
+CFG_DIR="${HOME}/.config/conductor"
+STATE_DIR="${HOME}/.local/state/conductor"
+BIN_NAME="conductor"
 BIN="${BIN_DIR}/${BIN_NAME}"
 
 mkdir -p "$BIN_DIR" "$CFG_DIR" "$STATE_DIR"

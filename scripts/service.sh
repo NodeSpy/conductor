@@ -5,22 +5,13 @@
 #
 # Usage: service.sh <binary-path> <config-dir>
 # Prompts first (reads /dev/tty). Set CONDUCTOR_INSTALL_SERVICE=yes|no to
-# skip the prompt (the legacy PASEO_CONDUCTOR_INSTALL_SERVICE name is still
-# honored if set).
+# skip the prompt.
 set -euo pipefail
 
-default_bin() {
-  if [ -f "$HOME/.local/bin/paseo-conductor" ] && [ ! -f "$HOME/.local/bin/conductor" ]; then
-    echo "$HOME/.local/bin/paseo-conductor"
-  else
-    echo "$HOME/.local/bin/conductor"
-  fi
-}
-
-BIN="${1:-$(default_bin)}"
+BIN="${1:-$HOME/.local/bin/conductor}"
 
 ask() {
-  local ans="${CONDUCTOR_INSTALL_SERVICE:-${PASEO_CONDUCTOR_INSTALL_SERVICE:-}}"
+  local ans="${CONDUCTOR_INSTALL_SERVICE:-}"
   if [ -z "$ans" ]; then
     if [ -r /dev/tty ]; then
       printf 'Install the conductor background service now? [Y/n] ' >/dev/tty

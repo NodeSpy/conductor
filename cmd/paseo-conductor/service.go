@@ -63,7 +63,7 @@ func home() string {
 	return h
 }
 
-func launchdLog() string { return filepath.Join(home(), "Library/Logs/paseo-conductor.log") }
+func launchdLog() string { return filepath.Join(home(), "Library/Logs/conductor.log") }
 
 // serviceName is the per-user service unit / launchd label name to use for
 // every systemctl/launchctl operation.

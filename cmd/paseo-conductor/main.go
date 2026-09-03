@@ -595,7 +595,7 @@ type sweepNower interface{ SweepNow() bool }
 // pidPath is the daemon's pidfile (a sibling of the state file), written by `run`
 // and read by `sweep --now` to signal the running process.
 func pidPath(cfg *config.Config) string {
-	return filepath.Join(filepath.Dir(cfg.Store.StateFile), "paseo-conductor.pid")
+	return filepath.Join(filepath.Dir(cfg.Store.StateFile), "conductor.pid")
 }
 
 // controlSockPath is the daemon's control socket (a sibling of the state file),
