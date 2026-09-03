@@ -905,6 +905,9 @@ func (e *Engine) auditDispatch(t core.Trigger, ref dispatch.RunRef, err error) {
 		e.log("%s dispatched (backend=%s shadow=%v)", tag(t), ref.Backend, ref.Shadowed)
 	}
 	e.store.Audit(entry)
+	if core.CompletionHook != nil {
+		core.CompletionHook(t, outcome)
+	}
 }
 
 // agentWaitTimeout bounds how long a slot is held waiting for an agent to idle,

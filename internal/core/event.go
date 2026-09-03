@@ -75,6 +75,19 @@ func (t Trigger) Key() string {
 // concurrent use; the engine's implementation enqueues onto its work channel.
 type EmitFunc func(context.Context, Trigger)
 
+// CompletionHook, when set, is invoked by the engine right after it stamps a
+// dispatch's outcome (see the engine's auditDispatch), once per trigger, with
+// the final outcome: "ok", "failed", "skipped", "adopted", "queued", or
+// "shadow". It lets an integration correlate a completed dispatch back to the
+// Trigger it originally emitted (via Trigger.Dedup) — e.g. Slack posting
+// on_done/on_fail feedback. nil (default) is a no-op: dispatch behavior is
+// unchanged.
+var CompletionHook func(t Trigger, outcome string)
+
+// SetCompletionHook installs the completion hook (set once at startup by main
+// wiring). Passing nil clears it.
+func SetCompletionHook(fn func(t Trigger, outcome string)) { CompletionHook = fn }
+
 // Integration is a source of Triggers (GitHub today; Slack/Discord later).
 // Each configured instance is one Integration value.
 type Integration interface {
