@@ -28,10 +28,14 @@ type Config struct {
 	// win over imported ones. Processed at load time; empty here after loading.
 	Imports []string `yaml:"imports"`
 
-	Integrations []IntegrationRef        `yaml:"integrations"`
-	Control      Control                 `yaml:"control"`
-	Notify       Notify                  `yaml:"notify"`
-	Agents       map[string]AgentProfile `yaml:"agents"`
+	Integrations []IntegrationRef `yaml:"integrations"`
+	Control      Control          `yaml:"control"`
+	Notify       Notify           `yaml:"notify"`
+	// Handoff configures the optional portable interactive-review channel (a
+	// web-link page on the inbound listener). Absent → the review hand-off stays
+	// paseo-native (you drive the agent in paseo), unchanged.
+	Handoff Handoff                 `yaml:"handoff"`
+	Agents  map[string]AgentProfile `yaml:"agents"`
 	// Controllers is an OPTIONAL map of named agent runtimes conductor can
 	// dispatch through (paseo, an ACP agent, opencode, …). Entirely optional: with
 	// no `controllers:` block, every agent uses the built-in paseo controller and
@@ -121,6 +125,24 @@ func (c Control) AgentCap() int {
 		return 3
 	}
 	return *c.MaxConcurrentAgents
+}
+
+// Handoff configures the interactive-review hand-off channel(s). Optional — with
+// no `handoff:` block, an interactive review keeps today's paseo-native behavior.
+type Handoff struct {
+	Web HandoffWeb `yaml:"web"` // web-link channel served on the inbound HTTP listener
+}
+
+// HandoffWeb configures the web-link hand-off channel: a draft page (approve /
+// revise / discard + a text box) served on conductor's inbound HTTP listener.
+type HandoffWeb struct {
+	// BaseURL is the public origin the draft links point at (e.g.
+	// https://conductor.example.com). Empty disables the web channel.
+	BaseURL string `yaml:"base_url"`
+	// Listen is the inbound HTTP address the draft pages are served on (e.g.
+	// :8099). Shared with other inbound integrations on the same address; defaults
+	// to :8099 when a BaseURL is set but no address is given.
+	Listen string `yaml:"listen"`
 }
 
 // Notify configures notifications. All channels are private to you (the daemon

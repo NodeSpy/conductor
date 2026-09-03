@@ -17,9 +17,14 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/controller"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/paseo-conductor/internal/handoff"
 	"github.com/NodeSpy/paseo-conductor/internal/notify"
 	"github.com/NodeSpy/paseo-conductor/internal/store"
 )
+
+// *store.Store persists the broker's PR→session map; assert it here (engine
+// imports both) so a drift in the SessionStore contract fails this build.
+var _ controller.SessionStore = (*store.Store)(nil)
 
 // Dispatcher runs a resolved request against a backend. *dispatch.Dispatcher
 // satisfies it; tests inject fakes.
@@ -66,6 +71,8 @@ type Engine struct {
 	store       Store
 	disp        Dispatcher
 	controllers *controller.Registry // resolves which controller runs each agent
+	broker      *controller.Broker   // owns one live session per PR (interactive hand-off); nil = disabled
+	handoff     handoff.Channel      // portable review hand-off channel; nil = paseo-native hand-off
 	notif       Notifier
 	author      dispatch.Author
 	userTok     func() (string, error)
@@ -115,9 +122,18 @@ type Options struct {
 	// Config.Controllers with Dispatch as the built-in paseo runner — so with no
 	// `controllers:` block every agent dispatches through paseo, unchanged.
 	Controllers *controller.Registry
-	Notifier    Notifier
-	Author      dispatch.Author
-	UserToken   func() (string, error)
+	// Broker owns one live agent session per PR so an interactive hand-off survives
+	// a conductor restart and follow-ups funnel to the live session instead of a
+	// duplicate agent. nil disables it — the interactive hand-off then stays
+	// paseo-native (you drive the agent in paseo, as before).
+	Broker *controller.Broker
+	// Handoff is the portable human↔agent channel an interactive review is
+	// presented on (web-link / Slack). nil → the review hand-off keeps today's
+	// behavior (notify you to open the live agent in paseo).
+	Handoff   handoff.Channel
+	Notifier  Notifier
+	Author    dispatch.Author
+	UserToken func() (string, error)
 	// ReadToken, if set, overrides the token used for API reads (GH_TOKEN) instead
 	// of the per-trigger App installation token — for identity.read_token != "app".
 	ReadToken func() (string, error)
@@ -156,6 +172,7 @@ func New(o Options) *Engine {
 	}
 	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,
+		broker: o.Broker, handoff: o.Handoff,
 		author: o.Author, userTok: o.UserToken, readTok: o.ReadToken, log: log,
 		hold:      o.Hold,
 		pausePath: o.PausePath,
@@ -831,6 +848,13 @@ func (e *Engine) runnerFor(profile config.AgentProfile) (Dispatcher, error) {
 		return nil, err
 	}
 	return run, nil
+}
+
+// controllerFor resolves the controller (not just its runner) that owns an
+// agent's sessions — the review hand-off needs it to open/resume a broker session
+// (NewSession/ResumeSession), not only the dispatch runner.
+func (e *Engine) controllerFor(profile config.AgentProfile) (controller.Controller, error) {
+	return e.controllers.Resolve(profile.Controller)
 }
 
 // acquire takes a concurrency slot, blocking until one is free (backpressure).

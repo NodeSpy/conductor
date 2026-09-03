@@ -39,15 +39,17 @@ const (
 
 // Store is the concurrency-safe state + audit store.
 type Store struct {
-	mu       sync.Mutex
-	path     string
-	runsPath string
-	ttl      time.Duration
-	maxPRs   int
-	recs     map[string]*Record
-	runs     map[string]*WorkflowRun
-	audit    *auditLog
-	now      func() time.Time
+	mu           sync.Mutex
+	path         string
+	runsPath     string
+	sessionsPath string
+	ttl          time.Duration
+	maxPRs       int
+	recs         map[string]*Record
+	runs         map[string]*WorkflowRun
+	sessions     map[string]*SessionRecord
+	audit        *auditLog
+	now          func() time.Time
 }
 
 // Options configure a Store.
@@ -62,13 +64,15 @@ type Options struct {
 // Open loads (or creates) the state file and prepares the audit log.
 func Open(o Options) (*Store, error) {
 	s := &Store{
-		path:     o.StatePath,
-		runsPath: filepath.Join(filepath.Dir(o.StatePath), "runs.json"),
-		ttl:      o.TTL,
-		maxPRs:   o.MaxPRs,
-		recs:     map[string]*Record{},
-		runs:     map[string]*WorkflowRun{},
-		now:      time.Now,
+		path:         o.StatePath,
+		runsPath:     filepath.Join(filepath.Dir(o.StatePath), "runs.json"),
+		sessionsPath: filepath.Join(filepath.Dir(o.StatePath), "sessions.json"),
+		ttl:          o.TTL,
+		maxPRs:       o.MaxPRs,
+		recs:         map[string]*Record{},
+		runs:         map[string]*WorkflowRun{},
+		sessions:     map[string]*SessionRecord{},
+		now:          time.Now,
 	}
 	if err := os.MkdirAll(filepath.Dir(o.StatePath), 0o755); err != nil {
 		return nil, err
@@ -85,6 +89,14 @@ func Open(o Options) (*Store, error) {
 		_ = json.Unmarshal(b, &s.runs)
 		if s.runs == nil {
 			s.runs = map[string]*WorkflowRun{}
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	if b, err := os.ReadFile(s.sessionsPath); err == nil {
+		_ = json.Unmarshal(b, &s.sessions)
+		if s.sessions == nil {
+			s.sessions = map[string]*SessionRecord{}
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, err

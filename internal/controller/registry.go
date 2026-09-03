@@ -101,6 +101,20 @@ func (r *Registry) Resolve(perAgent string) (Controller, error) {
 	return r.builtin, nil
 }
 
+// ByName returns the controller with the given Controller.Name() — a configured
+// entry, or the built-in paseo default for "paseo"/"". Used by the broker to
+// re-attach to a persisted session by the name of the controller that owns it
+// (which is not necessarily an agent's configured `controller:` selector).
+func (r *Registry) ByName(name string) (Controller, error) {
+	if c, ok := r.controllers[name]; ok {
+		return c, nil
+	}
+	if name == "" || name == BuiltinPaseo {
+		return r.builtin, nil
+	}
+	return nil, fmt.Errorf("unknown controller %q", name)
+}
+
 // RunnerFor resolves the controller for an agent and returns its dispatch runner,
 // or an error if the controller is unknown or its transport isn't runnable in
 // this build.
