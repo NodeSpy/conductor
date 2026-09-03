@@ -1,5 +1,5 @@
 <div align="center" width="100%">
-  <img src="paseo-conductor.png" width="320" alt="conductor" />
+  <img src="conductor.png" width="320" alt="conductor" />
 </div>
 
 # conductor
@@ -15,12 +15,11 @@ no database, no web UI, no accounts — one Go binary run as a per-user service.
 
 ## Quick start
 
-Install the latest release (the repo is private, so this uses the authenticated `gh` CLI). It drops
-the binary in `~/.local/bin`, seeds a starter config, and **asks whether to install the background
-service** (systemd on Linux, launchd on macOS):
+Install the latest release. It drops the binary in `~/.local/bin`, seeds a starter config, and
+**asks whether to install the background service** (systemd on Linux, launchd on macOS):
 
 ```sh
-curl -fsSL https://gist.githubusercontent.com/danielcbaldwin/3504ed91ac1014b3f073f44916e443a7/raw/install-release.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NodeSpy/conductor/main/scripts/install-release.sh | bash
 ```
 
 Then:
@@ -728,14 +727,14 @@ isn't the `gh_auth`/`app` keyword is used as a literal token.
 
 ## Install (released binary, one-liner)
 
-The repo is private, so the installer uses the authenticated `gh` CLI to fetch the release asset
-for your OS/arch (mac amd64/arm64, linux amd64/arm64/386):
+The installer ([`scripts/install-release.sh`](scripts/install-release.sh)) fetches the release asset
+for your OS/arch (mac amd64/arm64, linux amd64/arm64/386) — no auth needed:
 
 ```sh
-curl -fsSL https://gist.githubusercontent.com/danielcbaldwin/3504ed91ac1014b3f073f44916e443a7/raw/install-release.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NodeSpy/conductor/main/scripts/install-release.sh | bash
 ```
 
-Pin a version with `... | bash -s -- v0.2.1`. Installs to `~/.local/bin/conductor` (or keeps
+Pin a version with `... | bash -s -- v0.6.4`. Installs to `~/.local/bin/conductor` (or keeps
 updating `~/.local/bin/paseo-conductor` in place on an existing install — see below), seeds a
 starter config, and then **installs the background service by default** (press Enter to confirm) —
 a `systemd --user` unit on Linux or a `launchd` LaunchAgent on macOS. Answer `n` to skip (set
