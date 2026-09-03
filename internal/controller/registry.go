@@ -20,31 +20,55 @@ type Registry struct {
 
 // NewRegistry builds the controller set from config. paseoRunner is the concrete
 // dispatch surface the built-in paseo controller (and any `type: paseo` entry)
-// runs through; paseoSender is its optional follow-up surface (may be nil).
+// runs through; paseoSender is its optional follow-up surface (may be nil). When
+// paseoRunner also satisfies Provisioner (the real *dispatch.Dispatcher does), the
+// non-paseo controllers reuse it to check out the conductor-supplied worktree.
 // Config is assumed already validated (see config.Config.Validate).
 func NewRegistry(cfgs map[string]config.ControllerConfig, defaultName string, paseoRunner Runner, paseoSender Sender) *Registry {
+	prov, _ := paseoRunner.(Provisioner)
 	r := &Registry{
 		controllers: make(map[string]Controller, len(cfgs)),
 		defaultName: defaultName,
 		builtin:     newPaseoController(BuiltinPaseo, paseoRunner, paseoSender),
 	}
 	for name, cc := range cfgs {
-		r.controllers[name] = buildController(name, cc, paseoRunner, paseoSender)
+		r.controllers[name] = buildController(name, cc, paseoRunner, paseoSender, prov)
 	}
 	return r
 }
 
-// buildController constructs one controller from its config. A `type: paseo`
-// entry yields a runnable paseo controller (delegating to the same dispatcher as
-// the built-in); every other type/agent is registered as a stub that reports
-// ErrNotRunnable until its transport lands in a later milestone — so config is
-// forward-compatible today without changing behavior.
-func buildController(name string, cc config.ControllerConfig, paseoRunner Runner, paseoSender Sender) Controller {
+// buildController constructs one controller from its config, dispatching on
+// type/transport exactly once:
+//
+//   - type: paseo                          → the built-in paseo runner
+//   - type: opencode / agent:opencode+native → opencode native HTTP controller
+//   - type: agent-deck                     → agent-deck CLI controller
+//   - transport: acp (the default for an agent runtime) → ACP controller
+//   - transport: cli                       → bare-cli fallback controller
+//   - anything else                        → a stub reporting ErrNotRunnable
+//
+// prov is the worktree provisioner the non-paseo controllers use (nil-tolerant);
+// an unrecognized type/transport stays a stub so a future runtime is
+// forward-compatible in config without changing behavior today.
+func buildController(name string, cc config.ControllerConfig, paseoRunner Runner, paseoSender Sender, prov Provisioner) Controller {
 	if cc.Type == BuiltinPaseo {
 		return newPaseoController(name, paseoRunner, paseoSender)
 	}
-	// Reserved for later milestones. Carry the negotiated session_model/transport
-	// so resolution and future wiring see the right shape, but refuse to run.
+	transport := Transport(cc.EffectiveTransport())
+	switch {
+	case cc.Type == "opencode":
+		return newOpencodeController(name, cc, prov)
+	case cc.Type == "agent-deck":
+		return newAgentDeckController(name, cc, prov)
+	case cc.Agent == "opencode" && transport == TransportNative:
+		return newOpencodeController(name, cc, prov)
+	case transport == TransportACP:
+		return newACPController(name, cc, prov)
+	case transport == TransportCLI:
+		return newCLIController(name, cc, prov)
+	}
+	// Unknown type/transport: keep it registered as a stub (negotiates the intended
+	// shape, refuses to run) until a later milestone teaches conductor to drive it.
 	model := SessionModel(cc.SessionModel)
 	if !model.Valid() {
 		model = ModelResumable // agent runtimes are resumable by default
@@ -52,7 +76,7 @@ func buildController(name string, cc config.ControllerConfig, paseoRunner Runner
 	return &stubController{
 		name:      name,
 		model:     model,
-		transport: Transport(cc.EffectiveTransport()),
+		transport: transport,
 	}
 }
 

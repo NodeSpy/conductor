@@ -59,8 +59,9 @@ func TestResolveDefaultsToBuiltinPaseo(t *testing.T) {
 func TestResolveExplicitWinsAndDefaultFlag(t *testing.T) {
 	run := &recordRunner{}
 	cfgs := map[string]config.ControllerConfig{
-		"pae": {Type: "paseo", Default: true},
-		"gem": {Agent: "gemini"},
+		"pae":     {Type: "paseo", Default: true},
+		"gem":     {Agent: "gemini"},  // ACP by default → now runnable
+		"mystery": {Type: "superset"}, // unrecognized type → stays a stub
 	}
 	reg := NewRegistry(cfgs, "pae", run, nil)
 
@@ -72,8 +73,21 @@ func TestResolveExplicitWinsAndDefaultFlag(t *testing.T) {
 	if c.Name() != "gem" {
 		t.Fatalf("explicit controller should win, got %q", c.Name())
 	}
-	if _, err := c.Runner(); err != ErrNotRunnable {
-		t.Fatalf("gemini stub must not be runnable in this build, got %v", err)
+	if c.Transport() != TransportACP {
+		t.Fatalf("gemini defaults to acp transport, got %q", c.Transport())
+	}
+	// The ACP transport is implemented now, so gemini yields a runnable runner.
+	if _, err := c.Runner(); err != nil {
+		t.Fatalf("gemini (acp) must be runnable in this build, got %v", err)
+	}
+
+	// An unrecognized type is still a stub that refuses to run.
+	m, err := reg.Resolve("mystery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Runner(); err != ErrNotRunnable {
+		t.Fatalf("an unknown type must stay a stub, got %v", err)
 	}
 
 	// No explicit controller → the default:true controller (a paseo type → runnable).
