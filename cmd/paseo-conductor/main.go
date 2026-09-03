@@ -73,6 +73,8 @@ func main() {
 		err = cmdUpdate(args)
 	case "service":
 		err = cmdService(args)
+	case "migrate":
+		err = cmdMigrate(args)
 	case "version", "-v", "--version":
 		fmt.Println("conductor", version)
 	case "help", "-h", "--help":
@@ -103,6 +105,7 @@ usage:
   conductor pause | resume              stop / resume dispatch at runtime (no restart)
   conductor update [--force] [--tag vX]  self-update to the latest release (uses gh)
   conductor service install|sync|uninstall  manage the background service unit
+  conductor migrate [--dry-run]         migrate an existing paseo-conductor install to conductor (fail-safe; see README)
   conductor version
 `)
 }

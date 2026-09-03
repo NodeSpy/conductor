@@ -817,6 +817,25 @@ the standard bin dirs (incl. Homebrew and Go) + your install-time PATH, so the t
 manual drop-in. Tools in an unusual location? Add a systemd drop-in (`Environment=PATH=…`) or set
 `PATH` in `conductor.env`.
 
+### Migrating an existing paseo-conductor install
+
+If this box still has an older `paseo-conductor` install (binary, service unit, config, or state
+dir under the old name), run:
+
+```sh
+conductor migrate --dry-run   # preview every step; touches nothing
+conductor migrate             # perform the migration
+```
+
+It copies (never moves) the binary, config dir, and state dir to their new `conductor` locations,
+then stops the old service and starts the new `conductor` one in its place. It's **fail-safe**: it
+only disables/removes the old `paseo-conductor` service after confirming the new `conductor`
+service is actually active; any failure before that point rolls back by restarting the untouched
+old service, so a failed migration never leaves the box without a running service. The old
+binary, config dir, and state dir are left on disk as a backup regardless of outcome. The command
+is idempotent — it's a no-op ("nothing to migrate") once a `conductor` service unit already exists,
+or if no legacy install is found.
+
 ## GitHub App setup
 
 1. **Create a GitHub App** — register a new one at:
@@ -1254,6 +1273,7 @@ conductor status                 # snapshot: live agents, in-flight workflows, s
 conductor report [--days N]      # activity summary: dispatches by kind/outcome + attention (default 7d)
 conductor pause                  # stop dispatch now (writes a control file; no restart)
 conductor resume                 # resume dispatch
+conductor migrate [--dry-run]    # migrate an existing paseo-conductor install to conductor (fail-safe)
 conductor version
 ```
 
