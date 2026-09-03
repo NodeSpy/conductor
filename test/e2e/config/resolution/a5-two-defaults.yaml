@@ -1,0 +1,16 @@
+# Group A5: two controllers flagged default:true → validation error.
+integrations:
+  - type: github
+    name: github
+    enabled: true
+    app: { app_id: 1, private_key_path: /etc/conductor/github-app.pem, webhook_secret: s, verify_signature: false }
+    webhook: { listen: "0.0.0.0:8790" }
+    defaults: { me: { logins: [conductor-user] } }
+    rules: [ { match: { repos: ["acme/*"] } } ]
+controllers:
+  one: { type: paseo, default: true }
+  two: { type: paseo, default: true }
+agents:
+  fixer: { provider: fake }
+store: { state_file: /data/state.json, audit_log: /data/audit.jsonl }
+paseo_bin: /usr/local/bin/fakepaseo

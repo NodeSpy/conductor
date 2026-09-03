@@ -298,6 +298,16 @@ func cmdRun(args []string) error {
 	// never archives an agent the engine handed off for you to drive.
 	if anyArchive(cfg) {
 		r := &dispatch.Reaper{PaseoBin: disp.PaseoBin, Log: logf, Held: hold}
+		// Testability hook (test/e2e/): shrink the reaper cadence/grace so the
+		// hermetic harness can observe archive-when-done without a multi-minute
+		// wait. Unset — the production case — leaves the reaper's own defaults (1m
+		// interval, 3m startup grace) untouched.
+		if d := envDuration("PC_REAPER_INTERVAL"); d > 0 {
+			r.Interval = d
+		}
+		if d := envDuration("PC_REAPER_MIN_AGE"); d > 0 {
+			r.MinAge = d
+		}
 		go r.Run(ctx)
 	}
 
@@ -777,6 +787,20 @@ func gitConfig(key string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// envDuration parses a duration from an env var, returning 0 when unset or
+// invalid. Used only by the test/e2e/ reaper-cadence testability hook.
+func envDuration(key string) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 func anyArchive(cfg *config.Config) bool {

@@ -1,0 +1,20 @@
+{
+  "action": "synchronize",
+  "installation": { "id": 42 },
+  "repository": {
+    "full_name": "acme/web",
+    "name": "web",
+    "default_branch": "main",
+    "owner": { "login": "acme" }
+  },
+  "pull_request": {
+    "number": 1,
+    "state": "open",
+    "draft": false,
+    "title": "conflicting PR under test",
+    "html_url": "https://forge.test/acme/web/pull/1",
+    "head": { "sha": "canned-head-web1", "ref": "pr-1" },
+    "base": { "ref": "main" },
+    "user": { "login": "conductor-user" }
+  }
+}

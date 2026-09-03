@@ -1,0 +1,126 @@
+// Command fakeagentdeck is a hermetic stand-in for the agent-deck CLI — the
+// orchestrator the agent-deck controller (issue #9, M4/T4.2) will drive via
+// launch / list --json / session send / session show --json / remove. It is a
+// SCAFFOLD: conductor's agent-deck controller isn't wired to run yet (M4 not
+// landed; registered as ErrNotRunnable in M1), so the e2e runner does not assert
+// against it. It exists so the harness is complete the moment M4 lands.
+//
+// It keeps a tiny JSON session store under $AGENTDECK_STATE and speaks the
+// subcommand/JSON contract with no LLM.
+//
+// NOT part of the shipped product; harness-only.
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+)
+
+func stateFile() string {
+	d := os.Getenv("AGENTDECK_STATE")
+	if d == "" {
+		d = "/data/agentdeck"
+	}
+	_ = os.MkdirAll(d, 0o755)
+	return filepath.Join(d, "sessions.json")
+}
+
+type session struct {
+	ID    string   `json:"id"`
+	Title string   `json:"title"`
+	Group string   `json:"group"`
+	Cwd   string   `json:"cwd"`
+	Sends []string `json:"sends"`
+}
+
+func load() map[string]*session {
+	m := map[string]*session{}
+	if b, err := os.ReadFile(stateFile()); err == nil {
+		_ = json.Unmarshal(b, &m)
+	}
+	return m
+}
+
+func save(m map[string]*session) {
+	b, _ := json.MarshalIndent(m, "", "  ")
+	_ = os.WriteFile(stateFile(), b, 0o644)
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: fakeagentdeck <launch|list|session|remove> …")
+		os.Exit(1)
+	}
+	switch os.Args[1] {
+	case "launch":
+		m := load()
+		id := "deck-" + strconv.Itoa(len(m)+1)
+		m[id] = &session{ID: id, Title: flagVal("--title"), Group: flagVal("--group"), Cwd: flagVal("--cwd")}
+		save(m)
+		emit(map[string]any{"id": id})
+	case "list":
+		m := load()
+		out := []map[string]any{}
+		for _, s := range m {
+			out = append(out, map[string]any{"id": s.ID, "title": s.Title, "group": s.Group, "cwd": s.Cwd})
+		}
+		emit(out)
+	case "session":
+		if len(os.Args) < 3 {
+			os.Exit(0)
+		}
+		switch os.Args[2] {
+		case "send":
+			m := load()
+			if s := m[posAfter("send")]; s != nil {
+				s.Sends = append(s.Sends, "sent")
+				save(m)
+			}
+		case "show":
+			m := load()
+			if s := m[posAfter("show")]; s != nil {
+				emit(s)
+			} else {
+				emit(map[string]any{})
+			}
+		}
+	case "remove":
+		m := load()
+		delete(m, posAfter("remove"))
+		save(m)
+	default:
+		os.Exit(0)
+	}
+}
+
+func flagVal(name string) string {
+	for i, a := range os.Args {
+		if a == name && i+1 < len(os.Args) {
+			return os.Args[i+1]
+		}
+	}
+	return ""
+}
+
+// posAfter returns the first non-flag arg following the given subcommand token.
+func posAfter(sub string) string {
+	seen := false
+	for _, a := range os.Args {
+		if a == sub {
+			seen = true
+			continue
+		}
+		if seen && len(a) > 0 && a[0] != '-' {
+			return a
+		}
+	}
+	return ""
+}
+
+func emit(v any) {
+	b, _ := json.Marshal(v)
+	fmt.Println(string(b))
+}

@@ -1,0 +1,35 @@
+# Live-mode override (manual): `make e2e-live` layers this on top of
+# docker-compose.yml. It swaps the hermetic fake paseo / stub controllers for REAL
+# agents driven by REAL credentials. It is intentionally a scaffold: fill in the
+# controller binaries and key mounts for your environment. NEVER run this in CI —
+# it needs secrets and reaches real model providers.
+#
+# The forge, mock-github, and sink-catcher stay in place (still no production
+# GitHub), so live mode validates that the *real* agent does the work against the
+# isolated repo, while conductor's reads/writes stay mocked.
+#
+# To use:
+#   1. Provide a real `paseo` (or other controller CLI) on PATH in the image, or
+#      mount one, and set paseo_bin accordingly in a config/conductor.live.yaml.
+#   2. Mount your provider keys (ANTHROPIC_API_KEY, etc.) as env below.
+#   3. Point the conductor command at your live config.
+
+services:
+  conductor:
+    environment:
+      # Real model-provider credentials the live agent needs. Populate from your
+      # shell/CI secret store — never commit these.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      # Disable the fake-paseo comment shim; the real agent posts via gh/API.
+      FAKE_PASEO_POST_COMMENT: ""
+    volumes:
+      # Mount a real paseo (or ACP/opencode/agent-deck) binary and any agent config.
+      # - /usr/local/bin/paseo-real:/usr/local/bin/paseo:ro
+      # - ${HOME}/.config/paseo:/home/conductor/.config/paseo:ro
+      - ./config:/etc/conductor:ro
+      - ./fixtures:/fixtures:ro
+    # Point at a live config that sets paseo_bin to the real binary and lists the
+    # controllers you want to exercise.
+    command: ["bash", "/etc/conductor/entrypoint.sh", "/etc/conductor/conductor.yaml"]

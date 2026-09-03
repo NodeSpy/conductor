@@ -1,0 +1,76 @@
+# Main hermetic conductor config. Deliberately has NO `controllers:` block, so
+# every agent resolves to the built-in paseo controller — group A1 (backward
+# compat) — and drives the fake paseo CLI. Points at the mock GitHub API and the
+# sink-catcher; commits/pushes go to the local git:// forge. No secrets, no LLM.
+
+integrations:
+  - type: github
+    name: github
+    enabled: true
+    app:
+      app_id: 123456
+      private_key_path: /etc/conductor/github-app.pem
+      webhook_secret: e2e-webhook-secret
+      verify_signature: true          # group H signs its fixture POSTs
+    webhook:
+      listen: "0.0.0.0:8787"          # direct receiver for group H (no smee)
+      path: /webhook
+    sweep:
+      enabled: false
+    identity:
+      read_token: app                 # reads use the (mock) App installation token
+      write_token: e2e-user-write-token  # literal → acts-as-the-user token, no `gh` needed
+      commit_author: self
+    defaults:
+      me: { logins: [conductor-user] }   # the mock serves PRs authored by this login
+      actions:
+        merge_conflict:
+          type: agent
+          agent: fixer
+          prompt: "Resolve the merge conflict on {{.repo}}#{{.pr}} against {{.base}}, commit and push."
+        failing_checks:
+          type: agent
+          agent: fixer
+          ignore_checks: [title-validation]   # group H2b: a check by this name never spins up a fixer
+          prompt: "Fix the failing checks on {{.repo}}#{{.pr}}, commit and push."
+        new_comment:
+          type: agent
+          agent: fixer
+          prompt: "Address the new comment on {{.repo}}#{{.pr}}, commit and push."
+        changes_requested:
+          type: agent
+          agent: fixer
+          prompt: "Address the requested changes on {{.repo}}#{{.pr}}, commit and push."
+    rules:
+      - match: { repos: ["acme/*", "a2/*", "a3/*", "a4/*"] }
+
+agents:
+  fixer:
+    provider: fake                    # inert; the fake paseo ignores provider/model
+    workspace: worktree
+    archive_when_done: true           # reaper archives the agent when idle (group B)
+    wait_timeout: 5m
+
+control:
+  enabled: true
+  max_concurrent_agents: 3
+
+notify:
+  on: [dispatch, escalate, needs_input]
+  slack_webhook_url: "http://sink-catcher:8080/slack"
+  discord_webhook_url: "http://sink-catcher:8080/discord"
+  ntfy:
+    server: "http://sink-catcher:8080/ntfy"
+    topic: conductor
+  pushover:
+    token: e2e-pushover-token
+    user: e2e-pushover-user
+  notifiarr:
+    api_key: e2e-notifiarr-key
+    channel_id: "42"
+
+store:
+  state_file: /data/state.json
+  audit_log: /data/audit.jsonl
+
+paseo_bin: /usr/local/bin/fakepaseo

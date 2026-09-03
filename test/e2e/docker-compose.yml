@@ -1,0 +1,95 @@
+# Hermetic e2e stack for paseo-conductor (issue #10). Everything runs on one
+# isolated bridge network with NO access to production GitHub, smee, or repos, and
+# NO LLM keys. conductor sees only the local bare-git forge + the mock GitHub API.
+#
+#   forge          — bare git repos the fake agents clone / commit / push to
+#   mock-github    — canned repo/PR/check reads; captures acts-as-the-user writes
+#   sink-catcher   — captures notify posts (Slack/Discord/ntfy/Pushover/Notifiarr)
+#   conductor      — the real daemon (no controllers: block → paseo default path)
+#   conductor-ctrl — a second daemon with a controllers: block, for group A
+#                    resolution (explicit / default:true / precedence / not-runnable)
+#
+# One image (Dockerfile) builds conductor + every harness binary; services just
+# override `command:`. Build context is the repo root so the whole module builds.
+
+name: paseo-conductor-e2e
+
+x-image: &image
+  build:
+    context: ../..
+    dockerfile: test/e2e/Dockerfile
+  image: paseo-conductor-e2e:latest
+
+services:
+  forge:
+    <<: *image
+    command: ["bash", "/seed/seed-forge.sh"]
+    environment:
+      # Distinct basenames matter: conductor's base checkout dir is keyed by
+      # filepath.Base(repo), so the group-A repos use web2/web3/web4 (not all "web").
+      REPOS: "acme/web acme/api acme/svc a2/web2 a3/web3 a4/web4"
+    volumes:
+      - ./seed:/seed:ro
+    # git daemon (started by the seed script) serves git://forge:9418/<owner>/<repo>.git
+
+  mock-github:
+    <<: *image
+    command: ["mockgithub"]
+    environment:
+      LISTEN: ":8080"
+      ME: "conductor-user"
+      CANNED_DIR: "/canned"
+    volumes:
+      - ./canned:/canned:ro
+
+  sink-catcher:
+    <<: *image
+    command: ["sinkcatcher"]
+    environment:
+      LISTEN: ":8080"
+
+  conductor:
+    <<: *image
+    depends_on: [forge, mock-github, sink-catcher]
+    environment:
+      HOME: /home/conductor
+      PC_GITHUB_API_BASE: "http://mock-github:8080"
+      FORGE_BASE: "git://forge/"
+      FAKE_PASEO_STATE: /data/fakepaseo
+      FAKE_PASEO_POST_COMMENT: "1"
+      PC_PUSHOVER_URL: "http://sink-catcher:8080/pushover"
+      PC_NOTIFIARR_URL: "http://sink-catcher:8080/notifiarr"
+      PC_NTFY_DEFAULT_URL: "http://sink-catcher:8080/ntfy"
+      PC_REAPER_INTERVAL: "2s"        # testability hook: fast archive-when-done (group B)
+      PC_REAPER_MIN_AGE: "1s"
+    volumes:
+      - ./config:/etc/conductor:ro
+      - ./fixtures:/fixtures:ro
+    command: ["bash", "/etc/conductor/entrypoint.sh", "/etc/conductor/conductor.yaml"]
+
+  conductor-ctrl:
+    <<: *image
+    depends_on: [forge, mock-github, sink-catcher]
+    environment:
+      HOME: /home/conductor
+      PC_GITHUB_API_BASE: "http://mock-github:8080"
+      FORGE_BASE: "git://forge/"
+      FAKE_PASEO_STATE: /data/fakepaseo
+    volumes:
+      - ./config:/etc/conductor:ro
+    command: ["bash", "/etc/conductor/entrypoint.sh", "/etc/conductor/controllers.yaml"]
+
+  # A daemon whose fake paseo fails `workspace create` — group J2 (worktree
+  # creation fails → loud escalate, never a silent scratch fallback).
+  conductor-fail:
+    <<: *image
+    depends_on: [forge, mock-github, sink-catcher]
+    environment:
+      HOME: /home/conductor
+      PC_GITHUB_API_BASE: "http://mock-github:8080"
+      FORGE_BASE: "git://forge/"
+      FAKE_PASEO_STATE: /data/fakepaseo
+      FAKE_PASEO_FAIL_WORKSPACE: "1"
+    volumes:
+      - ./config:/etc/conductor:ro
+    command: ["bash", "/etc/conductor/entrypoint.sh", "/etc/conductor/conductor.yaml"]
