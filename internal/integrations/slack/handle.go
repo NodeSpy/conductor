@@ -11,8 +11,8 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/inbound"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/inbound"
 )
 
 var httpc = &http.Client{Timeout: 15 * time.Second}

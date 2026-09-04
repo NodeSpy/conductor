@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/controller"
+	"github.com/NodeSpy/conductor/internal/controller"
 )
 
 // fakeSession is a live session standing in for any controller's agent: it

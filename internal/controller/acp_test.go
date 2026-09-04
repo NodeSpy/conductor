@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/acp"
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/acp"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // fakeACPAgent speaks the agent side of ACP over a Conn — the same pipe double

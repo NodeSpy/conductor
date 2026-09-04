@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/handoff"
+	"github.com/NodeSpy/conductor/internal/handoff"
 )
 
 func newSlackTestImpl(t *testing.T, apiBase string) *slackImpl {

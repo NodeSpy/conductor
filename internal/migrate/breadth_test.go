@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // TestGithubAlertKindsTransform (D1): the security/deploy kinds map onto

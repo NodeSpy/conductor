@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // opencodeController drives opencode over its native HTTP server (`opencode

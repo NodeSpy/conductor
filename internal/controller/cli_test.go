@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // launchCall records one cli launch.

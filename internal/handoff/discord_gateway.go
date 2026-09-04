@@ -151,7 +151,7 @@ func handleDiscordFrame(gs *discordGatewayState, raw []byte, inbox *Inbox, log f
 // botToken, identifies with discordIntents, and feeds every inbound
 // MESSAGE_CREATE through handleDiscordFrame so a DiscordChannel's pending
 // Await resolves on a reply. Meant to be started as a goroutine — one per
-// distinct configured discord bot_token — from cmd/paseo-conductor/main.go
+// distinct configured discord bot_token — from cmd/conductor/main.go
 // once at daemon startup; it blocks (never returns) until ctx is done. log
 // may be nil.
 func RunDiscordGateway(ctx context.Context, botToken string, inbox *Inbox, log func(string, ...any)) {

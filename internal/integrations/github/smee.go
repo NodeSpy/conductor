@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 // smeeClient streams the smee channel with tuned TCP keep-alive. smee sends no

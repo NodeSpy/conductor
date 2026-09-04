@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/handoff"
-	slackint "github.com/NodeSpy/paseo-conductor/internal/integrations/slack"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/handoff"
+	slackint "github.com/NodeSpy/conductor/internal/integrations/slack"
 )
 
 // slackCtx is the context schema slack events publish (nested under .slack).

@@ -9,15 +9,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/code"
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/connector"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
-	"github.com/NodeSpy/paseo-conductor/internal/expr"
-	"github.com/NodeSpy/paseo-conductor/internal/hosts"
-	"github.com/NodeSpy/paseo-conductor/internal/secrets"
-	"github.com/NodeSpy/paseo-conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/code"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/expr"
+	"github.com/NodeSpy/conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/secrets"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // Store is the persistence surface the runner needs (checkpointed runs +

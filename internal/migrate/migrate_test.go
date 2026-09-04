@@ -12,12 +12,12 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/connector"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/flow"
-	gh "github.com/NodeSpy/paseo-conductor/internal/integrations/github"
-	"github.com/NodeSpy/paseo-conductor/internal/secrets"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/flow"
+	gh "github.com/NodeSpy/conductor/internal/integrations/github"
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 // legacyGithub is a representative legacy config exercising the

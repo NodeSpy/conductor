@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 func TestForceUnconfiguredKind(t *testing.T) {

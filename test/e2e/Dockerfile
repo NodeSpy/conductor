@@ -16,7 +16,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ENV CGO_ENABLED=0
-RUN go build -o /out/conductor ./cmd/paseo-conductor \
+RUN go build -o /out/conductor ./cmd/conductor \
  && go build -o /out/fakepaseo     ./test/e2e/services/fakepaseo \
  && go build -o /out/mockgithub    ./test/e2e/services/mockgithub \
  && go build -o /out/sinkcatcher   ./test/e2e/services/sinkcatcher \

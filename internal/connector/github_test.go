@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	ghint "github.com/NodeSpy/paseo-conductor/internal/integrations/github"
-	"github.com/NodeSpy/paseo-conductor/internal/secrets"
+	"github.com/NodeSpy/conductor/internal/config"
+	ghint "github.com/NodeSpy/conductor/internal/integrations/github"
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 // --- github lowering ---

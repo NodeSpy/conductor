@@ -1,6 +1,6 @@
 .env
 conductor.env
-/paseo-conductor
+/conductor
 dist/
 *.pem
 state.json

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS LaunchAgent for conductor. scripts/service.sh generates the real
+  file (with absolute paths) at ~/Library/LaunchAgents/sh.conductor.plist;
+  this is a reference copy. Replace HOME with your home dir if installing by hand.
+  Secrets are read by the daemon from ~/.config/conductor/conductor.env
+  (launchd has no EnvironmentFile).
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>sh.conductor</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>HOME/.local/bin/conductor</string>
+        <string>run</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>HOME/Library/Logs/conductor.log</string>
+    <key>StandardErrorPath</key><string>HOME/Library/Logs/conductor.log</string>
+</dict>
+</plist>

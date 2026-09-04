@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/NodeSpy/paseo-conductor/internal/controller"
+	"github.com/NodeSpy/conductor/internal/controller"
 )
 
 // submitPrompt is the follow-up turn sent to the agent when you approve a draft:

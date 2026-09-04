@@ -20,7 +20,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // SessionModel describes how a controller keeps an agent alive across turns.

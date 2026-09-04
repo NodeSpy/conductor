@@ -13,15 +13,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/connector"
-	"github.com/NodeSpy/paseo-conductor/internal/controller"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
-	"github.com/NodeSpy/paseo-conductor/internal/flow"
-	"github.com/NodeSpy/paseo-conductor/internal/handoff"
-	"github.com/NodeSpy/paseo-conductor/internal/notify"
-	"github.com/NodeSpy/paseo-conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/controller"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/flow"
+	"github.com/NodeSpy/conductor/internal/handoff"
+	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // *store.Store persists the broker's PR→session map; assert it here (engine

@@ -1,4 +1,4 @@
-module github.com/NodeSpy/paseo-conductor
+module github.com/NodeSpy/conductor
 
 go 1.26.3
 

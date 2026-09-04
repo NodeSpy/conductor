@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/handoff"
+	"github.com/NodeSpy/conductor/internal/handoff"
 )
 
 // AskChanneler is implemented by connector types that can present an

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // restClient is a small, rate-limit-aware GitHub REST client that authenticates

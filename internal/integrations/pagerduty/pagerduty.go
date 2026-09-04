@@ -16,9 +16,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/inbound"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/inbound"
 )
 
 func init() { core.Register("pagerduty", newIntegration) }

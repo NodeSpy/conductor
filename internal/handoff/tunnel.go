@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // tunnelStartTimeout bounds how long a spawning provider gets to print/report its

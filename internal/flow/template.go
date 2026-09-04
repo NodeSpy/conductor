@@ -14,7 +14,7 @@ import (
 	"text/template"
 	"text/template/parse"
 
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 // templateFuncs is the pinned function set templates may call, mirroring the

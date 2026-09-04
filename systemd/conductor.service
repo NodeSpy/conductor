@@ -1,0 +1,15 @@
+[Unit]
+Description=conductor — event-driven agent orchestration for your Paseo daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/conductor run
+Restart=always
+RestartSec=5
+EnvironmentFile=%h/.config/conductor/conductor.env
+# If paseo/gh aren't found on the unit's PATH, uncomment and adjust:
+# Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

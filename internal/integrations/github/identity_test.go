@@ -3,7 +3,7 @@ package github
 import (
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 func identityConfig(me, reviewer []string) Config {

@@ -31,7 +31,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // sshConnectionErrorExit is the exit code OpenSSH's client reserves for its

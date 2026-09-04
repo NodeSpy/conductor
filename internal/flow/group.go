@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 // Clock abstracts time for the grouper so tests drive debounce windows with a

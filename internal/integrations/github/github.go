@@ -14,8 +14,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 func init() { core.Register("github", newIntegration) }
