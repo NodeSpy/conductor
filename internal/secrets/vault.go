@@ -8,7 +8,12 @@
 //     `Environment=`, or conductor.env).
 //  2. $CREDENTIALS_DIRECTORY/conductor-vault-key — a systemd encrypted
 //     credential (`systemd-creds encrypt`, TPM/host-bound; see the wiki).
-//  3. <vault dir>/vault.key — a chmod-600 key file seeded by
+//  3. The OS keyring, via the platform CLI (no cgo): macOS Keychain
+//     (`security find-generic-password -s conductor-vault-key -w`) or
+//     libsecret (`secret-tool lookup service conductor-vault-key`).
+//     Automatic once the login session is unlocked; absent tool or entry
+//     falls through silently.
+//  4. <vault dir>/vault.key — a chmod-600 key file seeded by
 //     `conductor vault init` or `conductor unlock`.
 //
 // Key material that decodes as 32 base64 bytes is used directly; anything else
@@ -22,7 +27,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -52,6 +59,10 @@ const EnvVaultKey = "CONDUCTOR_VAULT_KEY"
 // keyFileName is the sibling key file KeyChain checks last.
 const keyFileName = "vault.key"
 
+// keyringService is the service/name the OS-keyring lookup uses on both
+// platforms (`security -s`, `secret-tool service`).
+const keyringService = "conductor-vault-key"
+
 // KeyChain returns the raw vault key material from the documented lookup
 // order. It returns the material as found — LoadVault/deriveKey decide whether
 // it is a direct key or a passphrase.
@@ -64,11 +75,38 @@ func KeyChain(vaultPath string) ([]byte, error) {
 			return []byte(strings.TrimSpace(string(b))), nil
 		}
 	}
+	if v := osKeyringKey(); v != "" {
+		return []byte(v), nil
+	}
 	kf := filepath.Join(filepath.Dir(vaultPath), keyFileName)
 	if b, err := os.ReadFile(kf); err == nil {
 		return []byte(strings.TrimSpace(string(b))), nil
 	}
-	return nil, fmt.Errorf("no vault key: set %s, provide a systemd credential conductor-vault-key, or seed %s (`conductor vault init`)", EnvVaultKey, kf)
+	return nil, fmt.Errorf("no vault key: set %s, provide a systemd credential conductor-vault-key, store one in the OS keyring as %q, or seed %s (`conductor vault init`)", EnvVaultKey, keyringService, kf)
+}
+
+// osKeyringKey reads the vault key from the platform keyring by shelling out
+// to its CLI — macOS Keychain via `security`, libsecret via `secret-tool` —
+// keeping the binary cgo-free. A missing tool, locked keyring, or absent
+// entry returns "" so the chain falls through to the key file.
+func osKeyringKey() string {
+	var argv []string
+	switch runtime.GOOS {
+	case "darwin":
+		argv = []string{"security", "find-generic-password", "-s", keyringService, "-w"}
+	case "linux":
+		argv = []string{"secret-tool", "lookup", "service", keyringService}
+	default:
+		return ""
+	}
+	if _, err := exec.LookPath(argv[0]); err != nil {
+		return ""
+	}
+	out, err := exec.Command(argv[0], argv[1:]...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // deriveKey turns key material into the 32-byte secretbox key: direct if it
