@@ -78,7 +78,7 @@ func (g *Integration) Validate() error {
 			return fmt.Errorf("sentry[%s]: rules[%d]: no actions", g.name, i)
 		}
 		for _, a := range r.Actions {
-			if a.Type == "" {
+			if a.Type == "" && a.FlowRef == "" { // FlowRef: lowered connectors-model action
 				return fmt.Errorf("sentry[%s]: rules[%d]: action.type is required", g.name, i)
 			}
 		}

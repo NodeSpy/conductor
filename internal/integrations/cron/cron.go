@@ -80,7 +80,7 @@ func (g *Integration) Validate() error {
 		if _, err := parser.Parse(s.spec()); err != nil {
 			return fmt.Errorf("cron[%s]: schedule %q: bad spec %q: %w", g.name, s.Name, s.spec(), err)
 		}
-		if s.Action.Type == "" {
+		if s.Action.Type == "" && s.Action.FlowRef == "" { // FlowRef: a lowered connectors-model action, engine-routed
 			return fmt.Errorf("cron[%s]: schedule %q: action.type is required", g.name, s.Name)
 		}
 	}

@@ -1,0 +1,504 @@
+# conductor configuration.
+# Copy to ~/.config/conductor/config.yaml and edit.
+# ${ENV} references are expanded from the environment (see conductor.env).
+# Referencing a variable that isn't set is an error; an empty value (KEY=) is fine.
+#
+# Everything can live in this one file, or you can split it with `imports:` —
+# a list of YAML files or globs (relative to this file) that are deep-merged:
+# maps merge, lists (like `integrations:`) concatenate, and this file's keys win.
+#   imports:
+#     - conf.d/*.yaml        # e.g. one integration per file
+
+integrations:
+  # A LIST of typed instances. List `github` more than once for separate
+  # Apps/orgs (each App has its own webhook secret).
+  - type: github
+    name: github
+    enabled: true
+    # The App carries webhooks + ALL API reads/enrichment (its own rate pool).
+    # Writes/posts use your gh token; commits/pushes go over SSH as you.
+    app:
+      app_id: 0
+      private_key_path: ~/.config/conductor/github-app.pem
+      webhook_secret: ${GH_WEBHOOK_SECRET}
+      # smee re-serializes the JSON body, so HMAC often won't match — leave this
+      # false with smee. With a DIRECT `listen` receiver the raw body is intact,
+      # so set it true there.
+      verify_signature: false
+    webhook:
+      # Use smee.io (no inbound port) and/or a direct HTTP listener — set either
+      # or both. A direct listener is ideal behind your own tunnel (e.g. pangolin).
+      smee_url: ${GH_SMEE_URL}       # https://smee.io/<channel>
+      # listen: 127.0.0.1:8787        # direct receiver; point the App webhook (or your tunnel) here
+      # path: /webhook                # default
+    sweep:
+      enabled: false                  # off by default; catch-up only. Recovers
+                                      # review_requested + your PRs' conflict/behind/
+                                      # unresolved-threads AND missed new_comment (via a
+                                      # per-PR comment high-water mark, replayed once).
+      # Adaptive cadence: starts tight at min_interval after startup (and whenever
+      # smee reconnects after a drop), then backs off ×2 toward interval (the ceiling
+      # a quiet, connected daemon settles at). So gaps are caught fast without
+      # sweeping constantly for nothing.
+      interval: 6h                    # ceiling — quiet-system cadence (default 6h)
+      min_interval: 10m               # tight floor after start / reconnect (default 10m)
+      repos: ["your-org/*"]           # concrete owner/name, or an owner glob (owner/*) → expands to installed repos
+
+    # Credential policy (optional — defaults shown). Values are inline: a keyword,
+    # or (after ${ENV} expansion) a literal token.
+    identity:
+      read_token: app                 # app (default) = App installation token | gh_auth | <literal>
+      write_token: gh_auth            # gh_auth (default) = `gh auth token` | <literal PAT, e.g. ${GH_PAT}>
+      commit_author: self             # self (default): commits/pushes carry your git identity
+    retry:                            # re-attempt a `paseo run` that fails with a transient
+      max: 3                          #   git lock/timeout (common under a sweep fan-out)
+      backoff: 10s
+
+    # OPTIONAL. Remap a repo (owner/name) to the paseo project name of an existing
+    # workspace, so worktree checkouts reuse it instead of cloning a fresh one.
+    # Handy when the forge repo and the registered paseo project differ in org or
+    # casing. Keys are case-insensitive; only affects checkout (not forge ops).
+    project_map:
+      EdnitionCode/RosterStream: ednition/rosterstream
+
+    # OPTIONAL org-wide shortcut, applied to every repo WITHOUT an explicit
+    # project_map entry above. Instead of listing each repo, rewrite the project
+    # name: `org` replaces the owner segment. Casing is handled automatically —
+    # the result is normalized to lowercase and matched case-insensitively, since
+    # paseo project names are lowercased.
+    # Example: EdnitionCode/AnyRepo -> ednition/anyrepo. project_map wins over this.
+    project_rewrite:
+      org: ednition
+
+    # OPTIONAL shared defaults; every rule merges over these.
+    defaults:
+      me: { logins: [your-login] }                    # your GitHub login(s) — defines "you"
+                                                      #   (ignore your own comments, detect your own
+                                                      #   PRs for self_review, pick authored PRs in sweep)
+      actions:
+        merge_conflict:
+          type: agent
+          agent: fixer
+          # max_attempts_per_head defaults to 3: the soft threshold after which retries
+          # switch to a growing backoff (10m→30m→90m→…→24h), never a permanent give-up.
+          prompt: |
+            This PR conflicts with base {{.base}}. Merge/rebase base, resolve the
+            conflicts, make sure it builds, commit, and push to the PR branch.
+        pr_behind:
+          type: command
+          backend: local
+          command: ["gh", "pr", "update-branch", "{{.repo}}#{{.pr}}"]
+          env: { GH_TOKEN: "{{.gh_token}}" }
+        failing_checks:
+          type: agent
+          agent: fixer
+          flaky_rerun: { enabled: true, max: 1 }
+          prompt: |
+            Checks are failing on {{.repo}}#{{.pr}}. Use `gh pr checks` and
+            `gh run view --log-failed` to diagnose, fix, verify locally, commit, and push.
+        # stuck_checks: its OWN periodic watcher (not part of the sweep) — a CI run
+        # stuck "in_progress" past stuck_after (a dead runner never completes it, so
+        # failing_checks can't catch it and the PR stays blocked). It polls this
+        # rule's match.repos every poll_interval (self-contained; no sweep needed).
+        # The stuck run is in {{.run_id}}/{{.run_name}}; re-run it so checks finish —
+        # a fresh failure then flows through failing_checks. Fires on your open PRs.
+        stuck_checks:
+          type: command
+          backend: local
+          stuck_after: 30m            # a run still in_progress this long is "stuck"
+          poll_interval: 15m          # how often to check (its own fixed cadence)
+          command: ["bash", "-lc", "gh run cancel {{.run_id}} -R {{.repo}} 2>/dev/null; sleep 2; gh run rerun {{.run_id}} -R {{.repo}}"]
+          env: { GH_TOKEN: "{{.gh_token}}" }
+        changes_requested:
+          type: agent
+          agent: fixer
+          rerequest_review: true          # after addressing + pushing, re-request the reviewer(s)
+          prompt: |
+            A reviewer requested changes on {{.repo}}#{{.pr}}. Read the review with
+            `gh pr view --comments`, address each point, commit, push, and reply to threads.
+        new_comment:
+          type: agent
+          agent: fixer
+          from_users: []              # empty = any author; e.g. ["coderabbitai[bot]"]
+          ignore_users: ["github-actions[bot]"]  # never trigger on these commenters — e.g. CI
+                                      #   report bots (passing test-report comments aren't actionable;
+                                      #   real CI failures come through failing_checks). ignore wins.
+          prompt: |
+            New comment on {{.repo}}#{{.pr}} by {{.author}}: {{.comment_body}}
+            If actionable, make the change, commit, push, and reply.
+        # critique auto-review (others' PRs where your review is requested)
+        review_requested:
+          type: command
+          backend: local
+          # reviewer defaults to `me`; set it here only to broaden (e.g. a team):
+          #   reviewer: { logins: [teammate], teams: [platform] }
+          gates: { not_draft: true }   # opt-in guard: ignore while the PR is a draft;
+                                       #   fires once it's marked ready-for-review
+          exclude:                     # skip PRs matching any of these (e.g. release PRs)
+            branches: ["release/*", "release-please--*"]
+            labels: ["release", "autorelease: pending"]
+            # title: ["[skip review]"]   # case-insensitive substrings
+          # critique gates on CI by default: if checks are still running it defers
+          # ("status: retry"). Two ways to handle that:
+          #   - review anyway now:  command: [..., "--post", "--force"]
+          #   - keep the gate but don't wait for the sweep — retry this step until
+          #     critique stops deferring (or a timeout), via `retry:` below.
+          command: ["critique", "--review", "{{.repo}}#{{.pr}}", "--post"]
+          retry:                                     # re-run a step while it's "not ready"
+            while_output_matches: "status: retry"    #   regexp on the step's output
+            interval: 2m                             #   poll every (default 1m)
+            timeout: 30m                             #   give up after (default 15m; sweep backstops)
+          env:
+            CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"   # reads on App pool
+            CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}"    # submits review as YOU
+        # critique your own PRs when you open/update them (set enabled: true to use)
+        self_review:
+          type: command
+          backend: local
+          enabled: false
+          checkout: none
+          command: ["critique", "--review", "{{.repo}}#{{.pr}}"]
+          env:
+            CRITIQUE_GITHUB_TOKEN: "{{.app_token}}"
+            CRITIQUE_SUBMIT_TOKEN: "{{.gh_token}}"
+        # issues — ONE state-based trigger. Fires on `issues` changes (opened/edited/
+        # labeled/assigned/…) AND `projects_v2_item` moves, re-evaluating the issue's
+        # CURRENT state each time, once per issue. Assignee defaults to `me`; with no
+        # filters below it's simply "an issue assigned to you".
+        # Payload filters: labels_any / labels_all / authors / sole_assignee / exclude
+        # {labels,title}. Optional GraphQL gates (checked only if the payload matched):
+        #   gates: { no_branch: true, project: { Status: Ready, Priority: [High, Urgent] } }
+        # Can also be a LIST of named variants (different labels → different agents).
+        # Here it's a MULTI-STEP workflow: plan cheaply, then branch on the result:
+        #   1) evaluate for enough context  2) if enough -> implement  3) else -> ask
+        issue_matched:
+          labels_any: ["Ready"]         # only issues currently labeled "Ready"
+          # gates: { project: { Status: Ready } }   # or gate on a Projects v2 board column
+          steps:
+            - id: evaluate
+              type: agent
+              agent: planner            # cheap model just to assess
+              checkout: none            # assessing only — no branch/worktree
+              output_schema:
+                type: object
+                additionalProperties: false
+                required: [has_context, summary]
+                properties:
+                  has_context: { type: boolean }
+                  summary: { type: string }
+              prompt: |
+                Assess issue {{.repo}}#{{.issue}}. Is there enough detail (repro,
+                expected behavior, scope) to implement it? Return has_context (bool)
+                and a one-line summary.
+            - id: work
+              if: "steps.evaluate.outputs.has_context == true"
+              type: agent
+              agent: fixer              # stronger model to do the work
+              checkout: branch-off
+              prompt: |
+                Implement issue {{.repo}}#{{.issue}} — {{.steps.evaluate.outputs.summary}}.
+                Create a branch, implement it, and open a draft PR.
+            - id: ask
+              if: "steps.evaluate.outputs.has_context == false"
+              type: command
+              backend: local
+              command: ["gh", "issue", "comment", "{{.repo}}#{{.issue}}", "--body",
+                        "Thanks for the issue! Could you add repro steps, expected behavior, and scope so it can be picked up?"]
+              env: { GH_TOKEN: "{{.gh_token}}" }
+        # auto-merge a PR once it's fully green (higher-stakes; set enabled: true to turn on)
+        merge_ready:
+          type: command
+          backend: local
+          enabled: false
+          require_label: automerge       # PR must carry this label to be eligible
+          method: squash                 # squash | merge | rebase
+          gates: { merge_state: clean, review_decision: approved, non_author_approval: true, threads_resolved: true, not_draft: true }
+          command: ["gh", "pr", "merge", "{{.repo}}#{{.pr}}", "--squash"]
+          env: { GH_TOKEN: "{{.gh_token}}" }
+        # a release was PUBLISHED (prereleases skipped unless include_prereleases: true;
+        # draft publishes ignored). {{.tag_name}} / {{.prerelease}} / {{.url}} are available.
+        release:
+          type: command
+          backend: local
+          enabled: false
+          checkout: none
+          # include_prereleases: true
+          command: ["gh", "release", "view", "{{.tag_name}}", "--repo", "{{.repo}}", "--web"]
+          env: { GH_TOKEN: "{{.gh_token}}" }
+
+    # RULES: primary structure. MOST-SPECIFIC matching rule wins (order-independent):
+    # exact owner/repo > owner/* > */*; ties keep the earlier rule. The winner merges
+    # over `defaults`. `match` selects repos by glob (e.g. owner/*, */*).
+    rules:
+      - match: { repos: ["your-org/*"] }
+      - match: { repos: ["your-org/your-repo"] }
+        actions:
+          failing_checks: { agent: fixer, prompt: "checks failing on {{.repo}}#{{.pr}} — diagnose, fix, push." }
+
+  # A schedule-driven integration: run commands or agents on a cron/interval.
+  - type: cron
+    name: chores
+    schedules:
+      - name: rate-limit-check
+        every: 6h                     # or `cron: "0 */6 * * *"` / "@every 6h"
+        action:
+          type: command
+          backend: local
+          command: ["gh", "api", "rate_limit"]
+      - name: tidy-cache
+        cron: "0 4 * * *"             # standard 5-field cron (also supports @daily/@hourly)
+        run_on_start: false
+        action:
+          type: command
+          backend: local
+          workdir: ~/Projects/myrepo   # run the command here ('~' and {{.repo}}-style templates allowed)
+          command: ["make", "clean"]
+
+  # Force-multiplier: any service that can POST JSON becomes a trigger. One instance
+  # hosts many named `sources`; each maps body fields via {{.body.<...>}} templates.
+  - type: webhook
+    name: inbound
+    # smee_url: ${WEBHOOK_SMEE_URL}    # no public ingress needed (like the github smee transport)
+    listen: ":8099"                    # ...or receive directly on a port
+    sources:
+      - name: cloudwatch               # becomes the trigger Kind
+        path: /hooks/cloudwatch        # required with a listener; smee routes multiple sources by `match`
+        sign: { header: X-Signature-256, secret: ${CW_SECRET}, scheme: sha256 }  # optional HMAC verify
+        match: '{{if eq .body.detail.state "ALARM"}}true{{end}}'   # optional: fire only when it renders "true"
+        title: "{{.body.detail.alarmName}} → {{.body.detail.state}}"
+        dedup: "{{.body.detail.alarmName}}-{{.body.time}}"         # "" = fire on every delivery
+        repo: EdnitionCode/infra       # optional real repo → enables checkout; omit → runs in scratch (checkout none)
+        actions:
+          type: agent
+          agent: fixer
+          prompt: "CloudWatch alarm {{.body.detail.alarmName}} fired — investigate {{.repo}}."
+
+  # Sentry alerts → an agent root-causes against the affected repo. Knows Sentry's
+  # payload shape (no field mapping); verifies the Sentry-Hook-Signature HMAC.
+  - type: sentry
+    name: prod
+    # smee_url: ${SENTRY_SMEE_URL}
+    listen: ":8098"
+    client_secret: ${SENTRY_CLIENT_SECRET}
+    rules:                             # first matching rule wins; empty filter = match-any
+      - match: { projects: [rosterstream], levels: [error, fatal], environments: [production] }
+        repo: EdnitionCode/RosterStream          # investigated + checked out
+        actions:
+          type: agent
+          agent: fixer
+          checkout: branch-off
+          prompt: "Sentry {{.sentry.short_id}}: {{.sentry.title}} ({{.sentry.culprit}}). Root-cause in {{.repo}} — see {{.url}}."
+
+  # PagerDuty incidents → an agent starts triage. Consumes V3 webhook subscriptions;
+  # verifies the X-PagerDuty-Signature HMAC (accepts multiple v1= during rotation).
+  - type: pagerduty
+    name: oncall
+    # smee_url: ${PAGERDUTY_SMEE_URL}
+    listen: ":8097"
+    signing_secret: ${PAGERDUTY_SIGNING_SECRET}
+    rules:                             # first matching rule wins; empty filter = match-any
+      - match: { event_types: [incident.triggered, incident.escalated], urgencies: [high], services: [RosterStream API] }
+        repo: EdnitionCode/RosterStream          # triaged + checked out
+        actions:
+          type: agent
+          agent: fixer
+          checkout: branch-off
+          prompt: "PagerDuty {{.pagerduty.title}} ({{.pagerduty.priority}}/{{.pagerduty.urgency}}) on {{.pagerduty.service}} — {{.url}}. Start triage in {{.repo}}."
+
+  # Poll RSS/Atom feeds; new items → an agent assesses impact. Stdlib parsing.
+  # First poll seeds silently (no backlog flood); later polls emit new items only.
+  - type: rss
+    name: upstream
+    feeds:
+      - name: canvas-changelog
+        url: https://example.instructure.com/doc/api/file.changelog.html
+        interval: 1h                   # default 30m
+        match: "deprecat|breaking|remov|LTI|roster"   # optional case-insensitive regex (title+summary)
+        # repo: EdnitionCode/RosterStream            # optional; omit → runs in scratch (checkout none)
+        actions:
+          type: agent
+          agent: planner
+          checkout: none
+          prompt: "Canvas changelog: {{.item.title}} ({{.url}}). Does this affect RosterStream? File a heads-up issue if so."
+
+  # Slack control plane over Socket Mode (outbound WebSocket — no public URL).
+  # Mention / react / slash → dispatch an agent; the bot token is exposed to
+  # command actions as {{.slack_bot_token}} so they can reply in-thread.
+  #
+  # Each trigger can carry `ack` (fired at dispatch), `on_done` (fired when the
+  # dispatched work finishes successfully), and `on_fail` (fired when it fails) —
+  # all optional; omitting a block means silence for that moment. Each is
+  # { react: <emoji, no colons>, say: <text, templated over {{.channel}} {{.user}}
+  # {{.text}} {{.ts}} {{.thread_ts}} {{.reaction}} {{.command}}>, ephemeral: <bool,
+  # say only to the triggering user>, in_thread: <bool, default true> }.
+  - type: slack
+    name: ops
+    app_token: ${SLACK_APP_TOKEN}      # xapp-… (Socket Mode; connections:write)
+    bot_token: ${SLACK_BOT_TOKEN}      # xoxb-… (chat:write)
+    triggers:
+      - on: app_mention                # "@conductor <task>"
+        ack:
+          react: eyes                  # reactions.add on the mention message
+        on_done:
+          react: white_check_mark
+        on_fail:
+          react: x
+          say: "couldn't finish: check the logs"
+        actions:
+          type: agent
+          agent: fixer
+          checkout: none
+          prompt: "Slack request from <@{{.slack.user}}>: {{.slack.text}}. Do it and report back."
+      - on: reaction_added             # react with :eyes: to trigger
+        reaction: eyes
+        actions: { type: agent, agent: fixer, checkout: none, prompt: "Look into: {{.slack.text}}" }
+      # - on: slash_command
+      #   command: /conductor
+      #   ack: { say: "on it", ephemeral: true }   # visible only to the user who ran the command
+      #   actions: { type: agent, agent: fixer, checkout: none, prompt: "{{.slack.text}}" }
+
+control:
+  enabled: true
+  pause_label: conductor:off          # per-PR/issue opt-out: an object with this label is left alone
+  shadow: false                       # run everything but skip the final push/merge/post
+  max_concurrent_agents: 3            # cap running coding agents (protects the box and avoids
+                                      #   git-lock contention when a sweep fans out). 0 = unlimited.
+  max_agents_per_hour: 0              # runaway guard: cap agent dispatches per rolling hour; over
+                                      #   the cap, work is shed + retried later. 0 = unlimited.
+notify:
+  push: true                          # private to you (journal); never a PR comment
+  on: [dispatch, escalate, needs_input]
+  # slack_webhook_url: ${SLACK_WEBHOOK_URL}       # optional: also post the `on` events to a Slack channel
+  # discord_webhook_url: ${DISCORD_WEBHOOK_URL}   # optional: also post the `on` events to a Discord channel
+  # ntfy:                                         # optional: publish the `on` events to an ntfy topic
+  #   server: https://ntfy.sh                     #   defaults to https://ntfy.sh; point at a self-hosted server instead
+  #   topic: conductor
+  # pushover:                                     # optional: push the `on` events via Pushover
+  #   token: ${PUSHOVER_TOKEN}                    #   application token
+  #   user: ${PUSHOVER_USER}                      #   user/group key
+  # notifiarr:                                    # optional: relay the `on` events via a Notifiarr passthrough integration
+  #   api_key: ${NOTIFIARR_API_KEY}
+  #   channel_id: ${NOTIFIARR_CHANNEL_ID}         #   optional: Discord channel ID override
+  # digest: 24h                              # optional: periodic activity summary (dispatches/attention); 0 = off
+
+# Optional: run some or all agents on a different runtime than the built-in `paseo`
+# CLI dispatcher — paseo stays the default with no `controllers:` block at all, so
+# existing configs are unaffected. Resolution per agent: its own `controller:` field (below)
+# → the controller entry flagged `default: true` (at most one) → built-in paseo.
+# See README.md#controllers.
+# controllers:
+#   gemini-review:                    # `agent:` + no transport → ACP (Zed's Agent
+#     agent: gemini                   #   Client Protocol over stdio); spawns
+#                                     #   `gemini --experimental-acp`. Provider
+#                                     #   keys (e.g. GEMINI_API_KEY) live in the
+#                                     #   agent's own process env, not here.
+#   opencode:                        # `type: opencode` → opencode's native HTTP
+#     type: opencode                  #   API (`opencode serve`); resumable sessions
+#   claude-cli:                       # `transport: cli` → a bare per-tool command
+#     agent: claude-code              #   recipe run as a direct subprocess (built-in
+#     transport: cli                  #   recipes for claude-code/codex; anything
+#                                     #   else needs an explicit `command:` list)
+
+# Optional: named hand-off channels for `background: true` review steps that work
+# no matter which controller the agent runs on — the only way to interactively
+# review an agent on a controller with no native interactive surface (e.g. `cli`
+# transport). A step selects one by name via `handoff: <name>`; empty resolves to
+# the entry flagged `default: true`, then the sole configured entry, then no
+# hand-off channel at all (paseo-native, today's behavior). Unset → paseo-native.
+# handoffs:
+#   page:                                        # a web-link draft page
+#     web:
+#       base_url: https://conductor.example.com  # public origin the draft link points at
+#       listen: :8099                            # inbound address the draft page is served on (default :8099)
+#       ttl: 30m                                 # how long a draft link stays valid (default 30m)
+#     default: true                               # at most one entry may set this
+#   # No base_url you host yourself? Set tunnel: instead (or alongside base_url,
+#   # which is then only used as the ""/static fallback). Exactly one provider
+#   # per entry; each opens fresh (new process, new URL) per hand-off and tears
+#   # down on decision/ttl. Pick ONE of the following in place of base_url above:
+#   # tunnel: { provider: lan }                        # http://<auto-detected LAN IPv4>:<listen port>; or host: 192.168.1.50
+#   # tunnel: { provider: cloudflared }                 # anonymous `cloudflared tunnel --url` quick tunnel; needs cloudflared on PATH
+#   # tunnel: { provider: ngrok, authtoken: ${NGROK_AUTHTOKEN} }  # `ngrok http`; authtoken optional if ngrok is already configured
+#   # tunnel: { provider: tailscale, mode: funnel }     # `tailscale serve` (mode: serve, default, tailnet-only) or funnel (public); headscale works transparently
+#   # tunnel: { provider: ssh, ssh_host: localhost.run } # ssh -R tunnel; ssh_host: localhost.run | serveo.net | a.pinggy.io
+#   # tunnel: { provider: localxpose }                  # `loclx tunnel http`; needs loclx on PATH
+#   # tunnel:                                           # generic escape hatch: any command, {{.port}}/{{.addr}} substituted
+#   #   provider: command
+#   #   command: ["cloudflared", "tunnel", "--url", "http://{{.addr}}"]
+#   #   url_pattern: 'https://\S+\.trycloudflare\.com\S*'  # optional; default matches any https?:// URL in the output
+#   # phone:                                      # Slack DM — needs a running `slack` integration
+#   #   slack:                                     # (Socket Mode) to capture the reply; see README
+#   #     to: dm                                  # dm | thread
+#   #     user: ${SLACK_USER_ID}                  # to: dm — a Slack user id (e.g. U0123ABCD); required,
+#   #                                              #   never inferred from your GitHub identity
+#   #     channel: C0123456                       # to: thread — channel to post in; required
+#   #     bot_token: ${SLACK_BOT_TOKEN}            # needs chat:write (+ im:write for to: dm)
+#   # war-room:                                    # Discord DM/thread — needs no separate integration:
+#   #   discord:                                    # entry; conductor runs the bot gateway itself
+#   #     to: thread                                # dm | thread
+#   #     channel: "123456789012345678"             # to: thread — channel/thread id; required
+#   #     user: ${DISCORD_USER_ID}                  # to: dm — a Discord user id; required,
+#   #                                                #   never inferred from your GitHub identity
+#   #     bot_token: ${DISCORD_BOT_TOKEN}            # needs the MESSAGE CONTENT privileged intent
+#   #                                                #   enabled in the developer portal, and the bot
+#   #                                                #   invited to the server/channel (or sharing a
+#   #                                                #   server with the to: dm user); see README
+
+agents:
+  fixer:
+    provider: claude
+    model: ""                         # optional
+    thinking: ""                      # optional
+    mode: ""                          # optional
+    workspace: worktree               # local | worktree
+    wait_timeout: 30m
+    archive_when_done: true
+    labels: { team: autopilot }
+    # controller: claude-cli           # optional: run this agent on a controllers: entry
+    #                                   #   instead of paseo. provider/model above apply to the
+    #                                   #   paseo/opencode/agent-deck controllers; an acp or cli
+    #                                   #   controller IS the named agent, so they're ignored for it
+    #                                   #   (don't pair provider: claude with an acp: gemini controller)
+    # guidance: |                     # per-agent tone/format; overrides top-level
+    #   One or two sentences, plain and direct.  #   agent_guidance (unset → that,
+    #                                             #   "" → none, text → this).
+  planner:                            # cheaper/faster model for planning/triage steps
+    provider: claude
+    model: claude-haiku-4-5-20251001
+    workspace: local
+    archive_when_done: true
+
+# paseo_bin: paseo   # path to the paseo CLI (default "paseo"); set only if not resolvable by name on PATH
+
+# Opt-in: route PR feedback (new_comment/changes_requested) to an agent already
+# checked out on the PR's head branch — e.g. a workspace you opened yourself —
+# instead of spawning a fresh worktree. Picks the most-recently-active match, else
+# starts fresh. Adopted agents are yours (never relabeled or reaped).
+adopt_open_workspaces: false
+
+# House tone/format rules appended to every dispatched agent prompt (after the
+# identity/write wrapper). Omit for the built-in concise/human default; set to ""
+# to disable; set your own text to replace it.
+# agent_guidance: |
+#   Keep every GitHub reply to one or two plain sentences, like a busy engineer.
+#   No preamble, no headers, no bullet dumps. If nothing needs saying, say nothing.
+
+update:
+  auto: false                          # periodically self-update to the latest release
+  interval: 10m                        # check cadence (default 10m). Each check is a cheap CONDITIONAL
+                                       #   request (ETag → 304 Not Modified when nothing's new, un-billed
+                                       #   against the rate limit), so a tight interval is effectively free
+                                       #   and a new release is picked up within minutes, not hours.
+  apply: true                          # restart into the new binary after updating (default true):
+                                       #   under systemd/launchd the manager relaunches it (a clean
+                                       #   restart with the unit's env); foreground runs re-exec.
+                                       #   apply:false stages the new binary + logs "restart to apply"
+
+store:
+  state_file: ~/.local/state/conductor/state.json
+  audit_log: ~/.local/state/conductor/audit.jsonl
+  state_ttl: 720h
+  max_tracked_prs: 5000
+  audit_max_size: 50MB
+
+dry_run: false
