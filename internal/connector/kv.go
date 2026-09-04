@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"net/http"
+
 	"github.com/redis/go-redis/v9"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -220,6 +222,7 @@ func newKVImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
 var storeBuilders = map[string]func(name string, ref config.StoreRef, deps Deps) (kv.KVBackend, error){
 	"boltdb": buildBoltStore,
 	"redis":  buildRedisStore,
+	"http":   buildHTTPStore,
 }
 
 func buildBoltStore(name string, ref config.StoreRef, deps Deps) (kv.KVBackend, error) {
@@ -255,6 +258,31 @@ func buildRedisStore(name string, ref config.StoreRef, deps Deps) (kv.KVBackend,
 		opts.Password = pw
 	}
 	return kv.NewRedisStore(redis.NewClient(opts)), nil
+}
+
+func buildHTTPStore(name string, ref config.StoreRef, deps Deps) (kv.KVBackend, error) {
+	var conn struct {
+		BaseURL string     `yaml:"base_url"`
+		Auth    authConfig `yaml:"auth"`
+	}
+	if err := ref.Decode(&conn); err != nil {
+		return nil, fmt.Errorf("store %q: decode: %w", name, err)
+	}
+	if conn.BaseURL == "" {
+		return nil, fmt.Errorf("store %q (http): base_url: is required", name)
+	}
+	if err := conn.Auth.validate(fmt.Sprintf("store %q", name)); err != nil {
+		return nil, err
+	}
+	au, err := newAuthenticator(context.Background(), "store:"+name, conn.Auth, deps.Secrets, deps.Log)
+	if err != nil {
+		return nil, err
+	}
+	var apply func(*http.Request) error
+	if au != nil {
+		apply = func(r *http.Request) error { return au.apply(r.Context(), r) }
+	}
+	return kv.NewHTTPStore(conn.BaseURL, nil, apply), nil
 }
 
 // storeTypes returns the registered store type names, sorted.
