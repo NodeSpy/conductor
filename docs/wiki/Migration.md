@@ -34,7 +34,7 @@ never read (documented inert: rule `workspace:`, action `project:` /
 `method:`, `match.project`/`match.status`) are dropped **with a summary
 note** — stated, never silent. `${VAR}` references survive verbatim (the
 transform masks them around parsing; secrets are never inlined). Carried
-blocks (`agents:`, `notify:`, `store:`, `update:`, …) keep their original
+blocks (`agents:`, `store:`, `update:`, …) keep their original
 YAML, comments included.
 
 ## What maps where
@@ -56,7 +56,7 @@ YAML, comments included.
 | `controllers:` | `runtimes:` (same fields; agent `controller:` refs stay valid) |
 | `paseo_bin` | the paseo runtime's `bin:` |
 | `control:` (shadow/pause_label/max_concurrent_agents/max_agents_per_hour) | the global `policy:`; an explicit `enabled: false` refuses to migrate (the kill switch is now only the runtime `conductor pause`) |
-| `notify:` sinks (slack/discord webhooks, ntfy, pushover, notifiarr) | generated connectors (`notify-slack`, `notify-ntfy`, …) + `notify.via:` routes with byte-identical wire payloads; `on:`/`push`/`digest` stay on the block |
+| `notify:` (on/via/sinks/digest/push) | triggers on the `conductor.*` lifecycle events, one per enabled event (legacy `escalate` → `conductor.escalate` + `conductor.failed`), whose steps are the sink verbs — generated connectors (`notify-slack`, `notify-ntfy`, …) with byte-identical wire payloads; `digest` → a grouped `conductor.complete` trigger (`group: { window }`); the inert `push` is dropped with a note. The block itself is retired (a standalone pass also rewrites it on already-migrated files) |
 | `agents:`, `agent_guidance`, `store:`, `update:`, `imports:`, `dry_run`, `adopt_open_workspaces` | carried through unchanged |
 
 ## The vaults pass

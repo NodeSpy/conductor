@@ -1,56 +1,63 @@
-# Notifications
+# Notifications — the `conductor.*` lifecycle source
 
-conductor posts short messages when something needs your attention. Every
-event is written to the journal (the audit log) regardless of configuration;
-`notify.on` selects which events *also* deliver externally: `dispatch`,
-`complete`, `escalate`, `needs_input` (and the periodic `digest`, opt-in via
-`notify.digest`). Nothing notify sends is ever posted as a PR/issue comment —
-it is private, addressed to you alone.
+Conductor emits its own operational events as a built-in source, so alerting
+is an ordinary trigger — the retired `notify:` block auto-migrates to these
+(see [[Migration]]). Every attention event is written to the audit log
+regardless of configuration (`status` / `report` see escalations with no
+trigger at all); a trigger selects which events *also* deliver externally.
+Nothing here is ever posted as a PR/issue comment — it is private, addressed
+to you alone.
 
-## Delivery through verbs (`via:`)
+| event | fires when |
+|---|---|
+| `conductor.dispatch` | work started on a target |
+| `conductor.escalate` | a target gave up after retries |
+| `conductor.needs_input` | a workflow handed a PR to a live agent and is waiting on you |
+| `conductor.complete` | a run finished |
+| `conductor.failed` | a run errored |
+| `conductor.updated` | conductor self-updated (fires on the first boot of the new release) |
+| `conductor.update_available` | a newer release was detected under `update: { apply: workflow }` |
 
-Notifications deliver through connector verbs — the same action layer
-workflows use:
+Context: `{{.message}}` (the composed line), `{{.event}}`, `{{.ref}}`
+(repo#number), `{{.repo}}`, `{{.number}}`, `{{.origin_kind}}` (the
+originating work's kind), `{{.title}}`; the update events add
+`{{.version}}`.
 
 ```yaml
 connectors:
-  alerts:  { type: ntfy, topic: your-topic }
-  ops:     { type: slack, webhook_url: ${SLACK_WEBHOOK_URL} }  # post-only connection
+  alerts: { type: ntfy, topic: your-topic }
+  pager:  { type: pushover, token: ${PUSHOVER_TOKEN}, user: ${PUSHOVER_USER} }
 
-notify:
-  on: [escalate, needs_input]
-  via:
-    - { uses: alerts.publish, options: { title: conductor, message: "{{.message}}" } }
-    - { uses: ops.post, options: { text: "conductor {{.message}}" } }
-    - { on: [escalate], uses: pager.notify, options: { message: "{{.message}}" } }  # per-route on:
-  digest: 24h
+triggers:
+  - name: act-now
+    on: [ conductor.escalate, conductor.failed, conductor.needs_input ]
+    steps:
+      - { uses: alerts.publish, options: { title: conductor, message: "{{.message}}" } }
+  - name: page-on-giveup
+    on: conductor.escalate
+    steps:
+      - { uses: pager.notify, options: { message: "conductor {{.message}}" } }
+  - name: daily-digest
+    on: conductor.complete
+    group: { key: '"digest"', window: 24h }
+    steps:
+      - { uses: alerts.publish, options: { title: conductor, message: "[digest] {{ len .group.events }} completed run(s) today" } }
 ```
 
-Each route is an action unit: options merge over the connector's defaults and
-render with `{{.message}}` (the composed notification line) plus `{{.event}}`,
-`{{.repo}}`, `{{.number}}`, `{{.kind}}`, `{{.title}}`, and `{{.ref}}`. A route's
-own `on:` restricts it to a subset of the block's events. Routes are
-best-effort and concurrent, exactly like the sinks they replace; failures log
-and never block the daemon. `conductor validate` checks every route's verb,
-options, and references.
+Routing, filtering, per-event fan-out (`on:` lists), quiet hours
+(`policy:`), and digests (`group: { window: … }`) all come from the normal
+trigger grammar — there is no separate notification subsystem.
 
-The sink connector types: `ntfy` (`publish`), `pushover` (`notify`),
-`notifiarr` (`notify`), and the `slack`/`discord` connectors' post-only
-`webhook_url:` connection mode (an incoming webhook instead of a bot token —
-`post` sends the same `{"text": …}` / `{"content": …}` payload the legacy
-sinks did; `react`/`ask` still need the bot token).
+**Loop guard.** Events emitted *by* a conductor-lifecycle trigger's own run
+are never re-fed into `conductor.*` — a notification workflow's own
+dispatch/complete/failed cannot storm. Its escalations still land in the
+audit log.
 
-## The legacy sink fields
+**Acting on conductor.** The same connector also exposes verbs
+(`conductor.update` / `pause` / `resume` / `restart` / `reload` /
+`run {name, inputs}`, plus `gh.sweep` for the github catch-up) — see
+[[Configuration]] for the gated-update workflow
+(`update: { apply: workflow }` → a trigger on `conductor.update_available`
+drains, updates, and smoke-tests with hooks around each step).
 
-`slack_webhook_url`, `discord_webhook_url`, `ntfy:`, `pushover:`, and
-`notifiarr:` still work exactly as before on a legacy config. [[Migration]]
-maps each onto a generated connector (`notify-slack`, `notify-ntfy`, …) plus a
-`via:` route whose wire payload is byte-identical to the legacy poster's —
-proven by a golden that runs the same Emit through both paths and compares
-bodies.
-
-Workflow-level feedback ("this trigger finished") is better expressed as
-[[Workflows|hooks]] calling [[Verbs]] — per-trigger, position-scoped, and
-addressed wherever the connector posts.
-
-Related: [[Connectors]] · [[Verbs]] · [[Migration]] · [[Configuration]]
+Related: [[Configuration]] · [[Workflows]] · [[Migration]]

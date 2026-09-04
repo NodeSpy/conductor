@@ -23,7 +23,6 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 | `workflows:` | reusable step lists with `inputs:` / `outputs:` | [[Workflows]] |
 | `policy:` | global controls; also valid on connectors and triggers (most specific wins) | [[Policy]] |
 | `vaults:` | named secret stores (`conductor`/`onepassword`/`pass`/`file`/`hashicorp`), read as `{{ vault "<name>" "<key>" }}` with per-vault read/write verbs | [[Secrets]] |
-| `notify:` | daemon lifecycle notifications (unchanged from legacy) | [[Notifications]] |
 | `imports:` | split the config across files (globs, deep-merged) | below |
 | `store:` | `state_file`, `audit_log`, `state_ttl`, `max_tracked_prs`, `audit_max_size` | |
 | `update:` | `auto`, `interval`, `apply` — self-update; migration runs on the new binary's first boot | |
@@ -471,6 +470,61 @@ Host-interpreter steps use the `sql.*` verbs.
     const rows = db.query("SELECT COUNT(*) AS n FROM events WHERE kind = $1", ["comment"]);
     return { total: rows[0].n };
 ```
+
+## Conductor itself (`conductor.*`) — events and verbs
+
+Conductor is a built-in connector (always available; the name is reserved).
+Its lifecycle events are a source — alerting is an ordinary trigger, and the
+retired `notify:` block auto-migrates onto it (see [[Notifications]] for the
+event list, context, and examples):
+
+```yaml
+triggers:
+  - on: [ conductor.escalate, conductor.needs_input ]      # the "act now" events
+    steps: [ { uses: slack-ops.post, options: { text: "conductor {{.message}}" } } ]
+```
+
+Events emitted by a conductor-lifecycle trigger's own run are never re-fed
+(the loop guard — no notify storms); `escalate`/`needs_input`/`complete`
+stay audit-logged regardless, so `status`/`report` work with no trigger
+configured.
+
+Conductor also exposes **verbs** on itself, usable in `steps:`/`hooks:`
+like any verb — and since hooks nest on steps, work runs before and after
+each one:
+
+| verb | options | output |
+|---|---|---|
+| `conductor.update` | — | `{ updated, version }` — download the latest release, apply, restart into it (the step checkpoints first; the workflow resumes past it on the new process) |
+| `conductor.pause` / `conductor.resume` | — | `{}` — the runtime dispatch switch (the pause control file) |
+| `conductor.restart` | — | `{}` — restart the daemon |
+| `conductor.reload` | — | `{}` — re-read the config (a restart into the same binary; config loads at boot) |
+| `conductor.run` | `name`, `inputs?` | `{ message }` — fire a named `on: manual` trigger |
+| `gh.sweep` (github connectors) | — | `{ nudged }` — run the catch-up sweep now (`conductor sweep --now`, verb-shaped) |
+
+### Self-update as a workflow
+
+The default stays unattended: `update: { auto: true }` installs and restarts
+into each release (`apply: false` stages instead). To gate or wrap it, flip
+detection to **emit** rather than self-apply:
+
+```yaml
+update: { auto: true, apply: workflow }    # emit conductor.update_available; install nothing
+
+triggers:
+  - name: gated-update
+    on: conductor.update_available          # context carries {{.version}}
+    steps:
+      - { uses: app.drain }                                    # before
+      - uses: conductor.update                                 # download + apply + restart
+        hooks:
+          - { at: start, uses: slack-ops.post, options: { text: "updating conductor → {{.version}}" } }
+          - { at: fail,  uses: pager.notify,   options: { message: "conductor update failed: {{.error}}" } }
+      - { uses: app.smoketest }                                # after (resumes post-restart)
+```
+
+`conductor.updated` fires on the first boot of the new release — announce
+completed updates by triggering on it.
 
 ## Splitting the config across files (`imports:`)
 

@@ -150,4 +150,11 @@ its own file — `workflows: { review-flow: { import: ./workflows/review.yaml } 
 — and section-level splitting (`workflows: { imports: [...] }`) is
 [[Configuration]].
 
+Steps can also act on conductor itself — `uses: conductor.update / pause /
+resume / restart / reload / run` (and `gh.sweep`) — and react to it:
+triggers on the `conductor.*` lifecycle events replace the old notify:
+block. Hooks nest on those steps like any other, so a gated self-update
+runs drain → update (announced at start/fail) → smoke-test; see
+[[Configuration]] and [[Notifications]].
+
 Related: [[Connectors]] · [[Verbs]] · [[Code-Steps]] · [[Grouping]] · [[Hand-offs]]
