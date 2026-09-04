@@ -1,8 +1,12 @@
-// The built-in vault is a single JSON file of secretbox-encrypted entries.
-// Each entry is sealed with a 32-byte master key; the key itself is never
-// stored in the vault file. The master key resolves via KeyChain, best for
-// headless operation first, because the daemon restarts itself (auto-update)
-// and must be able to unlock without a human:
+// The built-in vault is a single JSON file holding ONE secretbox blob: the
+// whole {name -> value} map is serialized, padded to a fixed bucket, and
+// sealed with a 32-byte master key — entry names and the entry count are
+// ciphertext, and the blob length only reveals the size bucket. The file
+// header records the scrypt parameters (profile chosen at `conductor vault
+// init`, `--sensitive` for the hardened cost); the key itself is never stored
+// in the vault file. The master key resolves via KeyChain, best for headless
+// operation first, because the daemon restarts itself (auto-update) and must
+// be able to unlock without a human:
 //
 //  1. $CONDUCTOR_VAULT_KEY — base64 key material, or a passphrase (systemd
 //     `Environment=`, or conductor.env).
@@ -17,13 +21,14 @@
 //     `conductor vault init` or `conductor unlock`.
 //
 // Key material that decodes as 32 base64 bytes is used directly; anything else
-// is treated as a passphrase and stretched with scrypt against the vault's
-// per-file salt.
+// is treated as a passphrase and stretched with scrypt using the parameters
+// recorded in the vault header.
 package secrets
 
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -37,11 +42,53 @@ import (
 	"golang.org/x/crypto/scrypt"
 )
 
-// vaultFile is the on-disk shape of the encrypted vault.
+// vaultFile is the on-disk shape of the encrypted vault (version 2): the
+// whole {name → value} map is serialized, padded to a fixed bucket, and
+// sealed as ONE secretbox blob — entry names and the entry count are
+// ciphertext, not JSON keys. The KDF parameters live in the header so unlock
+// re-derives the same key; the master key itself is never in the file.
 type vaultFile struct {
-	Version int               `json:"version"`
-	Salt    string            `json:"salt"`    // base64, for passphrase-derived keys
-	Entries map[string]string `json:"entries"` // name -> base64(nonce || box)
+	Version int      `json:"version"`
+	KDF     VaultKDF `json:"kdf"`
+	Sealed  string   `json:"sealed"` // base64(nonce || box) over the padded entries JSON
+}
+
+// VaultKDF records the scrypt parameters a passphrase is stretched with.
+type VaultKDF struct {
+	N    int    `json:"n"`
+	R    int    `json:"r"`
+	P    int    `json:"p"`
+	Salt string `json:"salt"` // base64, per vault
+}
+
+// vaultVersion is the format this build reads and writes.
+const vaultVersion = 2
+
+// vaultPadBucket is the padding granularity: the serialized entry map is
+// padded up to a multiple of this before sealing, so the ciphertext length
+// does not leak the entry count or sizes within a bucket.
+const vaultPadBucket = 256
+
+// KDF profiles selectable at `conductor vault init`.
+const (
+	// kdfInteractiveN is the default scrypt cost.
+	kdfInteractiveN = 1 << 15
+	// kdfSensitiveN is the `--sensitive` profile for vaults that may end up
+	// somewhere public (e.g. committed): ~32× the work per guess.
+	kdfSensitiveN = 1 << 20
+)
+
+// KDFProfile returns the scrypt parameters for a named profile:
+// "" or "interactive" (N=2^15), "sensitive" (N=2^20). Salt is left empty —
+// the vault generates its own.
+func KDFProfile(name string) (VaultKDF, error) {
+	switch name {
+	case "", "interactive":
+		return VaultKDF{N: kdfInteractiveN, R: 8, P: 1}, nil
+	case "sensitive":
+		return VaultKDF{N: kdfSensitiveN, R: 8, P: 1}, nil
+	}
+	return VaultKDF{}, fmt.Errorf("vault: unknown KDF profile %q (interactive|sensitive)", name)
 }
 
 // DefaultVaultPath returns the default vault location: ~/.config/conductor/vault.json.
@@ -110,17 +157,19 @@ func osKeyringKey() string {
 }
 
 // deriveKey turns key material into the 32-byte secretbox key: direct if it
-// base64-decodes to exactly 32 bytes, else scrypt-stretched as a passphrase.
-func deriveKey(material, salt []byte) (*[32]byte, error) {
+// base64-decodes to exactly 32 bytes, else scrypt-stretched as a passphrase
+// with the vault's recorded parameters.
+func deriveKey(material []byte, kdf VaultKDF) (*[32]byte, error) {
 	var key [32]byte
 	if b, err := base64.StdEncoding.DecodeString(string(material)); err == nil && len(b) == 32 {
 		copy(key[:], b)
 		return &key, nil
 	}
-	if len(salt) == 0 {
-		return nil, fmt.Errorf("vault: passphrase key material but the vault has no salt")
+	salt, err := base64.StdEncoding.DecodeString(kdf.Salt)
+	if err != nil || len(salt) == 0 {
+		return nil, fmt.Errorf("vault: passphrase key material but the vault has no usable salt")
 	}
-	b, err := scrypt.Key(material, salt, 1<<15, 8, 1, 32)
+	b, err := scrypt.Key(material, salt, kdf.N, kdf.R, kdf.P, 32)
 	if err != nil {
 		return nil, fmt.Errorf("vault: derive key: %w", err)
 	}
@@ -128,36 +177,84 @@ func deriveKey(material, salt []byte) (*[32]byte, error) {
 	return &key, nil
 }
 
-// Vault is an open (decryptable) vault.
+// Vault is an open (decrypted) vault: the entry map lives in memory and is
+// serialized, padded, and sealed only on Save.
 type Vault struct {
-	Path string
-	key  *[32]byte
-	file vaultFile
+	Path    string
+	key     *[32]byte
+	kdf     VaultKDF
+	entries map[string]string
 }
 
-// OpenVault loads (or initializes in memory) the vault at path using the key
-// material from keyFn (nil = KeyChain).
+// newSalt returns fresh base64 salt material.
+func newSalt() (string, error) {
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(salt), nil
+}
+
+// InitVault creates a NEW vault at path with the named KDF profile
+// ("interactive" default, "sensitive" for the hardened cost). It refuses to
+// overwrite an existing vault.
+func InitVault(path string, keyFn func() ([]byte, error), profile string) (*Vault, error) {
+	if path == "" {
+		path = DefaultVaultPath()
+	}
+	if _, err := os.Stat(path); err == nil {
+		return nil, fmt.Errorf("vault %s already exists — remove it (or `conductor vault add` to it) instead of re-initializing", path)
+	}
+	kdf, err := KDFProfile(profile)
+	if err != nil {
+		return nil, err
+	}
+	if kdf.Salt, err = newSalt(); err != nil {
+		return nil, err
+	}
+	v := &Vault{Path: path, kdf: kdf, entries: map[string]string{}}
+	if keyFn == nil {
+		keyFn = func() ([]byte, error) { return KeyChain(path) }
+	}
+	material, err := keyFn()
+	if err != nil {
+		return nil, err
+	}
+	if v.key, err = deriveKey(material, v.kdf); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// OpenVault loads (or initializes in memory, for a missing file) the vault at
+// path using the key material from keyFn (nil = KeyChain). Opening decrypts
+// the whole entry map, so a wrong key fails here, not at first Get.
 func OpenVault(path string, keyFn func() ([]byte, error)) (*Vault, error) {
 	if path == "" {
 		path = DefaultVaultPath()
 	}
-	v := &Vault{Path: path, file: vaultFile{Version: 1, Entries: map[string]string{}}}
+	v := &Vault{Path: path, entries: map[string]string{}}
+	var f vaultFile
+	exists := false
 	if b, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(b, &v.file); err != nil {
+		if err := json.Unmarshal(b, &f); err != nil {
 			return nil, fmt.Errorf("vault %s: %w", path, err)
 		}
-		if v.file.Entries == nil {
-			v.file.Entries = map[string]string{}
+		if f.Version != vaultVersion {
+			return nil, fmt.Errorf("vault %s: unsupported version %d — this build reads v%d (recreate it with `conductor vault init`)", path, f.Version, vaultVersion)
 		}
+		exists = true
+		v.kdf = f.KDF
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("vault %s: %w", path, err)
-	}
-	if v.file.Salt == "" {
-		salt := make([]byte, 16)
-		if _, err := rand.Read(salt); err != nil {
-			return nil, err
+	} else {
+		kdf, _ := KDFProfile("")
+		v.kdf = kdf
+		salt, serr := newSalt()
+		if serr != nil {
+			return nil, serr
 		}
-		v.file.Salt = base64.StdEncoding.EncodeToString(salt)
+		v.kdf.Salt = salt
 	}
 	if keyFn == nil {
 		keyFn = func() ([]byte, error) { return KeyChain(path) }
@@ -166,70 +263,112 @@ func OpenVault(path string, keyFn func() ([]byte, error)) (*Vault, error) {
 	if err != nil {
 		return nil, err
 	}
-	salt, err := base64.StdEncoding.DecodeString(v.file.Salt)
-	if err != nil {
-		return nil, fmt.Errorf("vault %s: bad salt: %w", path, err)
-	}
-	v.key, err = deriveKey(material, salt)
-	if err != nil {
+	if v.key, err = deriveKey(material, v.kdf); err != nil {
 		return nil, err
+	}
+	if exists {
+		if v.entries, err = unseal(f.Sealed, v.key); err != nil {
+			return nil, fmt.Errorf("vault %s: %w", path, err)
+		}
 	}
 	return v, nil
 }
 
-// Get decrypts one entry.
-func (v *Vault) Get(name string) (string, error) {
-	enc, ok := v.file.Entries[name]
-	if !ok {
-		return "", fmt.Errorf("vault: no entry %q (have: %s)", name, strings.Join(v.Names(), ", "))
+// seal serializes the entry map, pads it to the bucket size (4-byte length
+// prefix, zero fill), and seals the whole thing as one secretbox blob.
+func seal(entries map[string]string, key *[32]byte) (string, error) {
+	b, err := json.Marshal(entries)
+	if err != nil {
+		return "", err
 	}
-	raw, err := base64.StdEncoding.DecodeString(enc)
+	if len(b) > int(^uint32(0)) {
+		return "", fmt.Errorf("vault: entries too large")
+	}
+	total := 4 + len(b)
+	padded := (total + vaultPadBucket - 1) / vaultPadBucket * vaultPadBucket
+	plain := make([]byte, padded)
+	binary.BigEndian.PutUint32(plain[:4], uint32(len(b)))
+	copy(plain[4:], b)
+	var nonce [24]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", err
+	}
+	out := secretbox.Seal(nonce[:], plain, &nonce, key)
+	return base64.StdEncoding.EncodeToString(out), nil
+}
+
+// unseal reverses seal: open the blob, read the length prefix, unmarshal.
+func unseal(sealed string, key *[32]byte) (map[string]string, error) {
+	raw, err := base64.StdEncoding.DecodeString(sealed)
 	if err != nil || len(raw) < 24 {
-		return "", fmt.Errorf("vault: entry %q is corrupt", name)
+		return nil, fmt.Errorf("vault: sealed blob is corrupt")
 	}
 	var nonce [24]byte
 	copy(nonce[:], raw[:24])
-	plain, ok := secretbox.Open(nil, raw[24:], &nonce, v.key)
+	plain, ok := secretbox.Open(nil, raw[24:], &nonce, key)
 	if !ok {
-		return "", fmt.Errorf("vault: entry %q: wrong key or corrupt entry", name)
+		return nil, fmt.Errorf("vault: wrong key or corrupt vault")
 	}
-	return string(plain), nil
+	if len(plain) < 4 {
+		return nil, fmt.Errorf("vault: sealed blob is corrupt")
+	}
+	n := binary.BigEndian.Uint32(plain[:4])
+	if int(n) > len(plain)-4 {
+		return nil, fmt.Errorf("vault: sealed blob is corrupt")
+	}
+	entries := map[string]string{}
+	if err := json.Unmarshal(plain[4:4+n], &entries); err != nil {
+		return nil, fmt.Errorf("vault: sealed blob is corrupt: %w", err)
+	}
+	return entries, nil
 }
 
-// Set encrypts and stores one entry (in memory; call Save to persist).
-func (v *Vault) Set(name, value string) error {
-	var nonce [24]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return err
+// Get returns one entry.
+func (v *Vault) Get(name string) (string, error) {
+	val, ok := v.entries[name]
+	if !ok {
+		return "", fmt.Errorf("vault: no entry %q (have: %s)", name, strings.Join(v.Names(), ", "))
 	}
-	sealed := secretbox.Seal(nonce[:], []byte(value), &nonce, v.key)
-	v.file.Entries[name] = base64.StdEncoding.EncodeToString(sealed)
+	return val, nil
+}
+
+// Set stores one entry (in memory; call Save to persist).
+func (v *Vault) Set(name, value string) error {
+	v.entries[name] = value
 	return nil
 }
 
 // Delete removes one entry. Reports whether it existed.
 func (v *Vault) Delete(name string) bool {
-	_, ok := v.file.Entries[name]
-	delete(v.file.Entries, name)
+	_, ok := v.entries[name]
+	delete(v.entries, name)
 	return ok
 }
 
 // Names lists the entry names, sorted.
 func (v *Vault) Names() []string {
-	out := make([]string, 0, len(v.file.Entries))
-	for n := range v.file.Entries {
+	out := make([]string, 0, len(v.entries))
+	for n := range v.entries {
 		out = append(out, n)
 	}
 	sort.Strings(out)
 	return out
 }
 
-// Save writes the vault atomically (0600).
+// KDF returns the vault's recorded key-derivation parameters.
+func (v *Vault) KDF() VaultKDF { return v.kdf }
+
+// Save seals the entry map and writes the vault atomically (0600).
 func (v *Vault) Save() error {
+	sealed, err := seal(v.entries, v.key)
+	if err != nil {
+		return err
+	}
+	f := vaultFile{Version: vaultVersion, KDF: v.kdf, Sealed: sealed}
 	if err := os.MkdirAll(filepath.Dir(v.Path), 0o700); err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(v.file, "", "  ")
+	b, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return err
 	}

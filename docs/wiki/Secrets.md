@@ -43,9 +43,30 @@ genuinely needs it.
 
 ```
 conductor vault init          # create the vault + seed a generated key file
+conductor vault init --sensitive   # same, with the hardened scrypt profile (N=2^20)
 conductor vault add <name>    # value on stdin
 conductor vault show|ls|rm
 ```
+
+The whole `{name → value}` map is serialized, padded to a fixed 256-byte
+bucket, and sealed as ONE secretbox blob: entry **names** and the entry
+**count** are ciphertext, and the blob length only reveals the size bucket.
+The file header records the scrypt parameters (`n`/`r`/`p`/salt) so unlock
+re-derives the same key; the master key is never in the file. The format is
+versioned (currently 2) — an unknown version is a clean load error.
+
+### If the vault might be committed
+
+The vault file is safe to store anywhere only as long as the key is not
+stored with it:
+
+- Keep the master key OUT of the repo: the environment, the OS keyring, or a
+  gitignored random key file. A random 32-byte key (what `vault init`
+  generates) cannot be guessed; a passphrase can be, so use a strong one and
+  pick `--sensitive` (scrypt N=2^20, ~32× the work per guess over the default
+  2^15). The chosen cost is recorded in the header and used at unlock.
+- Git history is permanent: a key that was ever committed stays extractable
+  from history even after the file is deleted — rotate the secrets it sealed.
 
 ## Unlocking — non-interactive by design
 

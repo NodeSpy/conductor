@@ -323,13 +323,19 @@ env:GH_PAT · op://Vault/Item/field · pass:conductor/gh-token · vault:gh-token
 check` validates every reference; a secret that won't resolve **disables that
 connector and notifies** instead of crash-looping the box.
 
-The built-in vault (`conductor vault init|add|show|ls|rm`) is a
-secretbox-encrypted file whose master key resolves **non-interactively** —
+The built-in vault (`conductor vault init|add|show|ls|rm`) seals the whole
+entry map — names, values, and count — as one padded secretbox blob; the
+master key is never in the file and resolves **non-interactively** —
 `$CONDUCTOR_VAULT_KEY`, then a systemd encrypted credential
-(`$CREDENTIALS_DIRECTORY/conductor-vault-key`, TPM/host-bound), then a
-chmod-600 key file seeded by `conductor unlock`. Non-interactive is the
-requirement, not a convenience: the daemon updates and restarts itself, so a
-passphrase prompt at boot would hang the fleet.
+(`$CREDENTIALS_DIRECTORY/conductor-vault-key`, TPM/host-bound), then the OS
+keyring, then a chmod-600 key file seeded by `conductor unlock`.
+Non-interactive is the requirement, not a convenience: the daemon updates and
+restarts itself, so a passphrase prompt at boot would hang the fleet. If the
+vault file may end up somewhere public (e.g. committed), keep the key out of
+the repo (env / OS keyring / a gitignored key file), use a random key or a
+strong passphrase with `vault init --sensitive` (scrypt N=2^20), and note
+that git history is permanent — a key that was ever committed stays
+extractable, so rotate what it sealed.
 
 ## Introspection and dry-run
 
