@@ -583,6 +583,9 @@ connectors:
 		reg := buildAPIRegistry(t, c.yaml, secrets.New())
 		var in *Instance
 		for _, n := range reg.Names() {
+			if n == "kv" { // the always-on built-in, never the one under test
+				continue
+			}
 			in, _ = reg.Get(n)
 		}
 		if in.DisabledReason == "" || !strings.Contains(in.DisabledReason, c.wantErr) {

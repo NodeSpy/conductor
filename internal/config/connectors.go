@@ -696,6 +696,9 @@ func (c *Config) validateConnectors() error {
 		if name == ManualSource {
 			return fmt.Errorf("config: connectors: %q is reserved (the built-in `on: manual` source)", ManualSource)
 		}
+		if name == "kv" {
+			return fmt.Errorf("config: connectors: %q is reserved (the built-in state store — always available, nothing to configure)", name)
+		}
 		if ref.Type == "" {
 			return fmt.Errorf("config: connector %q: missing type", name)
 		}
