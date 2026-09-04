@@ -185,10 +185,7 @@ one `run:` key:
   Go-flavored scripting language in pure Go, behind an explicit global
   allowlist; the final expression is the result. `run: lua` — Lua 5.1 on
   gopher-lua (pure Go); only base/table/string/math are opened and the
-  file/chunk loaders are removed; the script `return`s its result. `run: risor` — Risor, a
-  Go-flavored scripting language in pure Go; the final expression is the
-  result. `run: lua` — Lua 5.1 on gopher-lua; `return` the result. Both run
-  behind explicit allowlists (no os/io/exec/net).
+  file/chunk loaders are removed; the script `return`s its result.
 - **Host interpreters:** `run: go` (the real toolchain via `go run`),
   `run: sh | bash | ruby | node | python | php | perl | /usr/bin/…` — resolved
   via PATH or explicit path. `sh` is the portable default.
