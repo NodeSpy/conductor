@@ -81,6 +81,10 @@ for that verb.
 | `kv` | — | `get`, `set`, `setnx`, `merge`, `delete`, `incr`, `append`, `remove`, `contains`, `first`, `last`, `index`, `slice`, `len`, `pop`, `list` | the data verbs over the `stores:` section's KV types (boltdb/redis/http); every call requires `store:` naming a defined store — see [[Configuration]] |
 | `sql` | — | `query`, `exec` | parameterized SQL over the `stores:` section's SQL types (postgres/mysql/sqlite, pure-Go drivers); `store:` required, values bind through `args:` to driver placeholders — see [[Configuration]] |
 
+Every `vaults:` entry also surfaces under its own name with `read` (all
+types) and `write` (writable types) verbs — values read there are tainted
+sensitive and redacted from logs/audit. See [[Secrets]].
+
 Trigger matching is uniform across every connector: triggers are
 **independent** — every trigger whose filters match an event fires. (Legacy
 sentry/pagerduty rules were first-match-wins; the migration reproduces that

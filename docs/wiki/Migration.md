@@ -59,6 +59,26 @@ YAML, comments included.
 | `notify:` sinks (slack/discord webhooks, ntfy, pushover, notifiarr) | generated connectors (`notify-slack`, `notify-ntfy`, …) + `notify.via:` routes with byte-identical wire payloads; `on:`/`push`/`digest` stay on the block |
 | `agents:`, `agent_guidance`, `store:`, `update:`, `imports:`, `dry_run`, `adopt_open_workspaces` | carried through unchanged |
 
+## The vaults pass
+
+Secret references migrate too — on legacy files AND on connectors-schema
+files that still carry the pre-vaults model (the pass runs standalone at
+boot, and is idempotent):
+
+| pre-vaults | vaults model |
+|---|---|
+| `vault:entry` | `{{ vault "local" "entry" }}` + `vaults: local (conductor)` — the existing vault.json keeps working at its default path |
+| `op://Item/field` | `{{ vault "op" "Item/field" }}` + an `onepassword` entry |
+| `pass:name` | `{{ vault "pass" "name" }}` + a `pass` entry |
+| `file:/dir/name` | `{{ vault "files" "name" }}` + one `file` entry per directory |
+| `secrets: {x: <ref>}` | block removed; every `{{.secrets.x}}` usage rewritten inline (vault call / `${VAR}` / the literal); an unrewritable usage is a hard error |
+| oauth2 `refresh_token: vault:x` | kept as the `{{ vault … }}` seed + `token_vault:` added, so rotation keeps persisting |
+
+Existing `vaults:` entries are reused when they match; fresh names dodge
+collisions with a numeric suffix. After migration the old forms are
+rejected: an unmigrated scheme ref or `secrets:` block fails loudly with a
+pointer at `conductor config migrate` — never silently treated as a literal.
+
 ## Proof
 
 Behavioral-equivalence golden tests feed identical webhook payloads through
