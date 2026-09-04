@@ -29,6 +29,14 @@ connectors:
     bot_token: xoxb-e2e-dummy
     options: { channel: CDEFAULT }
 
+  # K7: an ask-capable web connector — its draft pages serve on :8095 inside
+  # this container; the harness drives approve/revise/discard over HTTP.
+  page:
+    type: web
+    base_url: "http://localhost:8095"
+    listen: ":8095"
+    ttl: 5m
+
 hosts:
   selfbox:
     host: 127.0.0.1 # this container's own sshd (started by entrypoint-conn.sh)
@@ -113,6 +121,18 @@ triggers:
       - id: post
         uses: slack.post
         options: { channel: C2, text: "K2 {{.shape.msg}}" }
+
+  # K7: request-response — web.ask presents a draft page per decision and the
+  # workflow reads each answer; a slack post reports all three outcomes.
+  - on: gh.new_comment
+    filters: { repos: ["conn/cask"] }
+    steps:
+      - { id: a1, uses: page.ask, options: { prompt: "K7 approve this?", draft: "{{.comment_body}}", timeout: 120s } }
+      - { id: a2, uses: page.ask, options: { prompt: "K7 revise this?", draft: "v1", timeout: 120s } }
+      - { id: a3, uses: page.ask, options: { prompt: "K7 discard this?", timeout: 120s } }
+      - id: tell
+        uses: slack.post
+        options: { channel: C7, text: "K7 {{.a1.action}}/{{.a2.action}}:{{.a2.text}}/{{.a3.action}}" }
 
   # K3: grouping — a burst of comments on one PR becomes ONE run.
   - on: gh.new_comment
