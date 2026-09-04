@@ -132,7 +132,45 @@ type Batch struct {
 // Run executes one fired trigger (or one grouped batch) through its steps and
 // hooks. It owns the full lifecycle: at-start hooks, steps with per-step
 // checkpoints, at-done/at-fail hooks, notifications, and audit.
+// botReplyKey carries the run's resolved bot-reply state through the step
+// tree on the context (the runner is shared across concurrent runs).
+type botReplyKey struct{}
+
+// botReplyState is the per-run reply_to_bots resolution: the merged policy
+// mode and whether the triggering event's author is a bot.
+type botReplyState struct {
+	mode        string
+	authorIsBot bool
+	login       string
+}
+
+// botReply reads the run's bot-reply state off the context.
+func botReply(ctx context.Context) (botReplyState, bool) {
+	st, ok := ctx.Value(botReplyKey{}).(botReplyState)
+	return st, ok
+}
+
+// resolveBotReply merges the trigger's policy scopes (trigger → connector →
+// global) and pairs the reply_to_bots mode with the trigger's author facts.
+func (r *Runner) resolveBotReply(t core.Trigger, spec config.TriggerSpec) botReplyState {
+	var connPol *config.Policy
+	if r.Cfg != nil {
+		if ref, ok := r.Cfg.ConnectorsMap[spec.Connector()]; ok {
+			connPol = ref.Policy
+		}
+	}
+	var global *config.Policy
+	if r.Cfg != nil {
+		global = r.Cfg.Policy
+	}
+	pol := config.MergePolicy(global, connPol, spec.Policy)
+	isBot, _ := t.Context["author_is_bot"].(bool)
+	login, _ := t.Context["author"].(string)
+	return botReplyState{mode: pol.ReplyToBotsMode(), authorIsBot: isBot, login: login}
+}
+
 func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, batch *Batch, shadow bool) {
+	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
 	data := baseData(t, r.SecretVals)
 	if batch != nil {
 		data["group"] = groupData(batch, r.SecretVals)
@@ -533,11 +571,34 @@ func (r *Runner) execStep(ctx context.Context, t core.Trigger, step config.Step,
 }
 
 // execVerb invokes uses: <connector>.<verb> with rendered, merged options.
+// skipBotReply reports whether a verb call is a conversational reply back to
+// the bot that authored the triggering event, under reply_to_bots=off: a
+// comment/reply verb on a github connector. The substantive work (fixes,
+// labels, thread resolution) is never gated here.
+func (r *Runner) skipBotReply(ctx context.Context, in *connector.Instance, verb string) (string, bool) {
+	st, ok := botReply(ctx)
+	if !ok || !st.authorIsBot || st.mode != config.ReplyToBotsOff {
+		return "", false
+	}
+	if in.Decl == nil || in.Decl.Type != "github" {
+		return "", false
+	}
+	if verb != "comment" && verb != "reply" {
+		return "", false
+	}
+	return st.login, true
+}
+
 func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, error) {
 	connName, verb, _ := strings.Cut(step.Uses, ".")
 	in, ok := r.Conns.Get(connName)
 	if !ok {
 		return nil, fmt.Errorf("unknown connector %q", connName)
+	}
+	if login, skip := r.skipBotReply(ctx, in, verb); skip {
+		r.Log("%s reply_to_bots=off: skipped %s.%s to bot %s", flowTag(t), connName, verb, login)
+		r.auditVerb(t, connName, verb, nil, "skipped_reply_to_bots", nil)
+		return map[string]any{"skipped": true}, nil
 	}
 	merged := connector.MergeOptions(in.DefaultOptions, step.Options)
 	rendered, err := renderOptions(merged, data)
@@ -738,6 +799,11 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		if r.Agents.Guidance != nil {
 			act.Prompt += r.Agents.Guidance(profile)
 		}
+		// A bot author can't read pleasantries: under decline_only (the
+		// default) the agent fixes silently and replies only to decline.
+		if st, ok := botReply(ctx); ok && st.authorIsBot && st.mode == config.ReplyToBotsDeclineOnly {
+			act.Prompt += dispatch.BotReplyGuidance
+		}
 		if act.RerequestReview {
 			act.Prompt += dispatch.RerequestReviewGuidance
 		}
@@ -888,6 +954,11 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 		in, ok := r.Conns.Get(connName)
 		if !ok {
 			r.Log("%s %s hook[%d]: unknown connector %q", flowTag(t), where, i, connName)
+			continue
+		}
+		if login, skip := r.skipBotReply(ctx, in, verb); skip {
+			r.Log("%s reply_to_bots=off: skipped %s.%s to bot %s", flowTag(t), connName, verb, login)
+			r.auditVerb(t, connName, verb, nil, "skipped_reply_to_bots", nil)
 			continue
 		}
 		merged := connector.MergeOptions(in.DefaultOptions, h.Options)

@@ -36,6 +36,7 @@ triggers:
 | `rate_limits.per_minute` | that connector's outbound verb cap | connector |
 | `backoff.base` / `backoff.max` | retry cadence past the soft attempt threshold | connector |
 | `pause_label` | a github label that parks a target; a trigger-level value gives that workflow its own hold label | connector, trigger |
+| `reply_to_bots` | gate the conversational reply back to a bot author: `decline_only` (default — the agent replies only to decline a suggestion), `off` (comment/reply verbs to the bot are skipped), `full` (ungated). Fixes always run. See [[Configuration]] | any |
 | `shadow` | preview instead of dispatching | any |
 | `max_attempts_per_head` | soft attempt threshold before backoff | any |
 

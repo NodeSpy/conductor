@@ -25,6 +25,16 @@ const WriteWrapperGuidance = "\n\n---\n" +
 	"App/bot token. If a large read would burn my rate limit you MAY read (only) with the " +
 	"App token via `GH_TOKEN=$" + envGHAppToken + " gh ...`, but never write with it."
 
+// BotReplyGuidance is appended to an agent prompt when the triggering
+// comment/review was authored by a bot and the resolved reply_to_bots policy
+// is decline_only (the default): a bot cannot read pleasantries, so the only
+// reply worth posting is a concrete decline.
+const BotReplyGuidance = "\n\n---\n" +
+	"The comment you are responding to was posted by an automated bot, not a person. " +
+	"Do not thank it, acknowledge it, or add pleasantries. Apply any valid fix directly. " +
+	"Post a reply comment ONLY to state a concrete reason for not applying a suggestion, " +
+	"and keep it terse."
+
 // ConcisionGuidance is appended to every dispatched agent prompt so the text it
 // posts to GitHub (and its own wrap-up) reads like a person, not an essay. Kept
 // short on purpose.

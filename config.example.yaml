@@ -62,6 +62,7 @@ connectors:
       pause_label: "conductor:hold" # label that parks a PR/issue
       rate_limits: { per_minute: 60 } # outbound verb cap
       backoff: { base: 10s, max: 30m } # retry cadence past the attempt threshold
+      # reply_to_bots: decline_only  # bot-authored comments: decline_only (default) | off | full
 
   slack-ops:
     type: slack

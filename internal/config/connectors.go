@@ -335,6 +335,10 @@ type Policy struct {
 	// PauseLabel is a github label that parks a target; connector default or a
 	// per-trigger hold label.
 	PauseLabel *string `yaml:"pause_label,omitempty"`
+	// ReplyToBots gates the conversational reply back to a bot author
+	// (decline_only | off | full, default decline_only). Substantive work —
+	// fixes, thread resolution, labels — always runs; only the reply is gated.
+	ReplyToBots *string `yaml:"reply_to_bots,omitempty"`
 	// Shadow previews instead of dispatching (legacy control.shadow).
 	// There is deliberately no `enabled` here: the global kill switch is the
 	// runtime `conductor pause`, and per-connector/per-trigger `enabled:` are
@@ -342,6 +346,39 @@ type Policy struct {
 	Shadow *bool `yaml:"shadow,omitempty"`
 	// MaxAttemptsPerHead is the soft attempt threshold before backoff.
 	MaxAttemptsPerHead *int `yaml:"max_attempts_per_head,omitempty"`
+}
+
+// reply_to_bots modes: gate the conversational reply to a bot author.
+const (
+	// ReplyToBotsDeclineOnly (default): the agent is instructed to reply only
+	// with a concrete reason for not applying a suggestion — no pleasantries.
+	ReplyToBotsDeclineOnly = "decline_only"
+	// ReplyToBotsOff: comment/reply verbs back to a bot-authored trigger are
+	// skipped structurally by the flow runner.
+	ReplyToBotsOff = "off"
+	// ReplyToBotsFull: no gating.
+	ReplyToBotsFull = "full"
+)
+
+// ReplyToBotsMode returns the resolved reply_to_bots mode (default
+// decline_only).
+func (p Policy) ReplyToBotsMode() string {
+	if p.ReplyToBots != nil {
+		return *p.ReplyToBots
+	}
+	return ReplyToBotsDeclineOnly
+}
+
+// validatePolicyBlock checks a policy block's enum fields at any scope.
+func validatePolicyBlock(where string, p *Policy) error {
+	if p == nil || p.ReplyToBots == nil {
+		return nil
+	}
+	switch *p.ReplyToBots {
+	case ReplyToBotsDeclineOnly, ReplyToBotsOff, ReplyToBotsFull:
+		return nil
+	}
+	return fmt.Errorf("config: %s: reply_to_bots must be decline_only|off|full, got %q", where, *p.ReplyToBots)
 }
 
 // QuietHours defers (hold) or drops work inside a local-time window.
@@ -430,6 +467,9 @@ func MergePolicy(scopes ...*Policy) Policy {
 		if p.PauseLabel != nil {
 			out.PauseLabel = p.PauseLabel
 		}
+		if p.ReplyToBots != nil {
+			out.ReplyToBots = p.ReplyToBots
+		}
 		if p.Shadow != nil {
 			out.Shadow = p.Shadow
 		}
@@ -450,12 +490,18 @@ func (c *Config) HasConnectors() bool {
 // validation against each connector's published schemas happens in
 // internal/connector once instances are built.
 func (c *Config) validateConnectors() error {
+	if err := validatePolicyBlock("policy", c.Policy); err != nil {
+		return err
+	}
 	for name, ref := range c.ConnectorsMap {
 		if name == "" {
 			return fmt.Errorf("config: connectors: empty connector name")
 		}
 		if ref.Type == "" {
 			return fmt.Errorf("config: connector %q: missing type", name)
+		}
+		if err := validatePolicyBlock("connector "+name+" policy", ref.Policy); err != nil {
+			return err
 		}
 	}
 	for name, rt := range c.Runtimes {
@@ -494,6 +540,9 @@ func (c *Config) validateConnectors() error {
 		}
 		if len(t.Steps) == 0 {
 			return fmt.Errorf("config: %s (on: %s): no steps", where, t.On)
+		}
+		if err := validatePolicyBlock(where+" policy", t.Policy); err != nil {
+			return err
 		}
 		if err := validateSteps(where, t.Steps, c); err != nil {
 			return err

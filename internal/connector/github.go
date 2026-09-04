@@ -78,14 +78,22 @@ var githubDecl = &TypeDecl{
 				"exclude":  {Type: TMap, Desc: "skip PRs: { branches: [...], labels: [...], title: [...] }"},
 			}, nil, nil),
 		githubEvent("changes_requested", "a review requested changes on your PR (or threads went unresolved)",
-			nil, Schema{"head_ref": {Type: TString}}, nil),
+			Schema{
+				"author_bot": {Type: TBool, Desc: "true = only bot reviewers trigger, false = only humans (absent = either)"},
+			},
+			Schema{
+				"head_ref": {Type: TString},
+				"author":   {Type: TString}, "author_is_bot": {Type: TBool, Desc: "the reviewer is an automated bot (account type Bot, or a [bot] login)"},
+			}, nil),
 		githubEvent("new_comment", "a new comment on your PR",
 			Schema{
 				"from_users":   {Type: TList, Desc: "only these commenters trigger (empty = any)"},
 				"ignore_users": {Type: TList, Desc: "never trigger on these commenters"},
+				"author_bot":   {Type: TBool, Desc: "true = only bot comments trigger, false = only humans (absent = either)"},
 			},
 			Schema{
-				"author": {Type: TString}, "comment_body": {Type: TString}, "head_ref": {Type: TString},
+				"author": {Type: TString}, "author_is_bot": {Type: TBool, Desc: "the commenter is an automated bot (account type Bot, or a [bot] login)"},
+				"comment_body": {Type: TString}, "head_ref": {Type: TString},
 				"comment_id": {Type: TInt}, "comment_kind": {Type: TString},
 			}, nil),
 		githubEvent("merge_conflict", "your PR became unmergeable", nil, nil, nil),
@@ -355,6 +363,9 @@ func (g *githubImpl) lowerTrigger(t CompiledTrigger) (config.Action, error) {
 	act.Authors = toStrings(f["authors"])
 	act.FromUsers = toStrings(f["from_users"])
 	act.IgnoreUsers = toStrings(f["ignore_users"])
+	if b, ok := f["author_bot"].(bool); ok {
+		act.AuthorBot = &b
+	}
 	act.IgnoreChecks = toStrings(f["ignore_checks"])
 	act.RequireLabel, _ = f["require_label"].(string)
 	act.IncludePrereleases, _ = f["include_prereleases"].(bool)

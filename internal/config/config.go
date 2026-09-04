@@ -573,6 +573,7 @@ type Action struct {
 	PollInterval       Duration       `yaml:"poll_interval"` // stuck_checks: how often the dedicated poller checks (default 15m)
 	FromUsers          []string       `yaml:"from_users"`    // new_comment: only these commenters trigger (empty = any)
 	IgnoreUsers        []string       `yaml:"ignore_users"`  // new_comment: never trigger on these commenters (e.g. CI report bots)
+	AuthorBot          *bool          `yaml:"author_bot"`    // comment/review events: require the author to be (true) / not be (false) a bot; nil = either
 	LabelsAny          []string       `yaml:"labels_any"`    // issue matches if it has ANY of these labels
 	LabelsAll          []string       `yaml:"labels_all"`    // ...and ALL of these labels
 	Authors            []string       `yaml:"authors"`       // ...and was opened by one of these logins

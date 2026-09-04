@@ -100,6 +100,12 @@ func githubTransform(name string, ref config.IntegrationRef, notes *[]string) (m
 	if cfg.ProjectRewrite.Org != "" {
 		conn["project_rewrite"] = map[string]any{"org": cfg.ProjectRewrite.Org}
 	}
+	// Bot-authored comments: migrated connectors state the default explicitly
+	// — replies back to a bot author are decline-only (an intended behavioral
+	// change; legacy configs had no equivalent). Independent of ignore.users,
+	// which skips the trigger entirely.
+	conn["policy"] = map[string]any{"reply_to_bots": "decline_only"}
+	*notes = append(*notes, fmt.Sprintf("%s: policy.reply_to_bots: decline_only (bot-authored comments get fixes, not pleasantries)", where))
 
 	// me: — the legacy self-set was collected from defaults + rules (falling
 	// back to reviewer/assignee logins, which the connector keeps doing at the
