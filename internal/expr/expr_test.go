@@ -114,3 +114,78 @@ func TestDefaultAndCoalesce(t *testing.T) {
 		t.Error("coalesce() with no arguments should error")
 	}
 }
+
+func TestContainsAndExists(t *testing.T) {
+	d := map[string]any{
+		"labels": []any{"bug", "p1"},
+		"strs":   []string{"x", "y"},
+		"title":  "fix the flaky test",
+		"n":      int64(3),
+		"answer": 42,
+		"quoted": "a,b",
+	}
+	cases := []struct {
+		cond string
+		want bool
+	}{
+		{`contains(labels, "bug")`, true},
+		{`contains(labels, "nope")`, false},
+		{`contains(strs, "y")`, true},
+		{`contains(title, "flaky")`, true},
+		{`contains(title, quoted)`, false}, // path arg resolving to "a,b"
+		{`contains("a,b,c", "b")`, true},   // quoted literal with a comma
+		{`contains(n, "3")`, false},        // non-container hay
+		{`exists(labels)`, true},
+		{`exists(missing.deep)`, false},
+		{`!exists(missing)`, true},
+		{`n == 3`, true},
+		{`answer >= 42`, true},
+		{`title == "fix the flaky test"`, true},
+	}
+	for _, c := range cases {
+		got, err := Eval(c.cond, d)
+		if err != nil {
+			t.Fatalf("Eval(%q): %v", c.cond, err)
+		}
+		if got != c.want {
+			t.Errorf("Eval(%q) = %v, want %v", c.cond, got, c.want)
+		}
+	}
+	// contains arity error.
+	if _, err := Eval(`contains(labels)`, d); err == nil {
+		t.Fatal("contains arity must error")
+	}
+	// empty term error.
+	if _, err := Eval(`labels && `, d); err == nil {
+		t.Fatal("empty term must error")
+	}
+}
+
+func TestTruthyAndCoercionShapes(t *testing.T) {
+	d := map[string]any{
+		"i":   7,
+		"i64": int64(8),
+		"f":   1.5,
+		"s0":  "0",
+		"sf":  "false",
+		"m":   map[string]any{"k": 1},
+		"b":   true,
+	}
+	for cond, want := range map[string]bool{
+		"i": true, "i64": true, "f": true, "b": true, "m": true,
+		"s0": false, "sf": false,
+		`i > 6`: true, `i64 <= 8`: true, `f == 1.5`: true,
+		`s0 == 0`:   true,  // string-number coercion on the left
+		`m > 1`:     false, // non-numeric ordering is false
+		`b == true`: true,
+		`i != 7`:    false,
+	} {
+		got, err := Eval(cond, d)
+		if err != nil {
+			t.Fatalf("Eval(%q): %v", cond, err)
+		}
+		if got != want {
+			t.Errorf("Eval(%q) = %v, want %v", cond, got, want)
+		}
+	}
+}
