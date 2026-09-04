@@ -52,7 +52,7 @@ func (c *Config) validateVaults() error {
 			return fmt.Errorf("config: vault %q: missing type", name)
 		}
 		switch name {
-		case "kv", "sql", ManualSource:
+		case "kv", "sql", "conductor", ManualSource:
 			return fmt.Errorf("config: vault %q: the name is reserved (a built-in verb namespace)", name)
 		}
 		if _, dup := c.ConnectorsMap[name]; dup {

@@ -231,7 +231,7 @@ func recentAttention(path string, n int) []auditEvent {
 			continue
 		}
 		ev, _ := d["event"].(string)
-		if ev != "escalate" && ev != "needs_input" {
+		if ev != "escalate" && ev != "failed" && ev != "needs_input" {
 			continue
 		}
 		repo, _ := d["repo"].(string)

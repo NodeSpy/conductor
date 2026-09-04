@@ -197,7 +197,9 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 		fdata["failed_step"] = failedStepID(err)
 		r.runHooks(ctx, t, spec.Hooks, "fail", fdata, "workflow")
 		if r.Notif != nil {
-			r.Notif.Emit(ctx, "escalate", t, fmt.Sprintf("workflow failed: %v", err))
+			// "failed" is the run-errored lifecycle event (conductor.failed);
+			// "escalate" stays the engine's gave-up-after-retries signal.
+			r.Notif.Emit(ctx, "failed", t, fmt.Sprintf("workflow failed: %v", err))
 		}
 		// A partial failure stays visible: the audit records where it stopped,
 		// and the run is removed (the sweep/backoff machinery re-derives).
