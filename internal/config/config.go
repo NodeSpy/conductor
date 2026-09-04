@@ -770,6 +770,11 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("parse merged config: %w", err)
 		}
 	}
+	// Multi-source `on:` lists expand into one trigger per source before
+	// anything downstream sees them.
+	if err := c.NormalizeTriggers(); err != nil {
+		return nil, err
+	}
 	// File-referencing `workflow:` forms (workflow:+import:, a bare file path) join the
 	// merged workflow set before defaults/validation see it.
 	if err := c.resolveWorkflowFiles(filepath.Dir(path)); err != nil {

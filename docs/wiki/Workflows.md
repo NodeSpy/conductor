@@ -3,8 +3,14 @@
 A trigger is four keys: `on:` (what fires it), `filters:` (whether it fires —
 keys from the event's schema, all AND-ed), `steps:` (the workflow), and
 `hooks:` (lifecycle actions). Plus optional `group:` ([[Grouping]]),
-`policy:` ([[Policy]]), `name:` (a variant label for dedup state), and
-`enabled:`.
+`policy:` ([[Policy]]), `name:` (a variant label for dedup state; required
+for `conductor run`), and `enabled:`.
+
+`on:` takes one `<connector>.<event>`, the built-in `manual` source
+(`conductor run <name>` fires it on demand), or a **list** of sources fanning
+into the same steps — each item a bare `conn.event` or a one-key map
+`conn.event: { filters, policy, hooks }` scoped to that source. See
+[[Configuration]] for the list grammar and merge semantics.
 
 ```yaml
 triggers:

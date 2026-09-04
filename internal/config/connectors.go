@@ -124,13 +124,96 @@ type InputSpec struct {
 	Default  any    `yaml:"default,omitempty"`
 }
 
+// OnSource is one item of a multi-source `on:` list: a bare "conn.event"
+// scalar, or a single-key mapping keyed by the event name whose value is a
+// per-source block — `filters:`, `policy:`, `hooks:` — scoped to events from
+// that source:
+//
+//	on:
+//	  - timer.nightly
+//	  - manual
+//	  - gh.issue_matched:
+//	      filters: { labels_any: [billing] }  # merged over the shared base (per-source wins)
+//	      policy:  { reply_to_bots: off }     # innermost policy scope
+//	      hooks:   [ {at: start, uses: gh.react, options: {emoji: eyes}} ]  # appended after the shared hooks
+//
+// Steps stay trigger-level (shared); a per-source block takes nothing else.
+type OnSource struct {
+	Source  string
+	Filters map[string]any
+	Policy  *Policy
+	Hooks   []Hook
+}
+
+// UnmarshalYAML accepts the bare-scalar and event-keyed one-key map forms,
+// rejecting multi-key items and unknown per-source block keys.
+func (o *OnSource) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		return n.Decode(&o.Source)
+	}
+	if n.Kind != yaml.MappingNode || len(n.Content) != 2 {
+		var keys []string
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				keys = append(keys, n.Content[i].Value)
+			}
+		}
+		return fmt.Errorf("an `on:` list item is a bare \"conn.event\" or a one-key map `conn.event: {filters, policy, hooks}` — got keys: %s", strings.Join(keys, ", "))
+	}
+	if err := n.Content[0].Decode(&o.Source); err != nil {
+		return err
+	}
+	val := n.Content[1]
+	switch {
+	case val.Kind == yaml.MappingNode:
+		for i := 0; i+1 < len(val.Content); i += 2 {
+			switch k := val.Content[i].Value; k {
+			case "filters", "policy", "hooks":
+			default:
+				return fmt.Errorf("on: %s: unknown per-source key %q — a per-source block takes filters, policy, hooks (steps stay on the trigger)", o.Source, k)
+			}
+		}
+		var block struct {
+			Filters map[string]any `yaml:"filters"`
+			Policy  *Policy        `yaml:"policy"`
+			Hooks   []Hook         `yaml:"hooks"`
+		}
+		if err := val.Decode(&block); err != nil {
+			return err
+		}
+		o.Filters, o.Policy, o.Hooks = block.Filters, block.Policy, block.Hooks
+		return nil
+	case val.Kind == yaml.ScalarNode && val.Tag == "!!null":
+		return nil // `- conn.event:` with an empty block
+	default:
+		return fmt.Errorf("on: %s: the per-source value is a block {filters, policy, hooks}", o.Source)
+	}
+}
+
+// ManualSource is the built-in `on:` source with no connector: a trigger
+// listing it is runnable on demand via `conductor run <name>`.
+const ManualSource = "manual"
+
 // TriggerSpec is one entry in the `triggers:` list: on/filters/steps/hooks
 // plus optional grouping, policy, and source-side options.
 type TriggerSpec struct {
-	// On selects the inbound event: <connector>.<event>.
+	// On selects the inbound event: <connector>.<event>, or the built-in
+	// "manual" source. The YAML `on:` also accepts a list (see OnSources).
 	On string `yaml:"on,omitempty"`
+	// OnSources holds the parsed list form of `on:`. Load expands a
+	// multi-source trigger into one internal trigger per source — shared
+	// steps/hooks/group, per-source filters merged over the shared base — so
+	// everything downstream only ever sees the scalar On.
+	OnSources []OnSource `yaml:"-"`
+	// FanSources lists every source of the original multi-source trigger
+	// (set on each expanded variant). Steps of a fan-in trigger are shared
+	// across heterogeneous sources, so their references validate against the
+	// UNION of the listed sources' contexts — a field one source publishes
+	// and another doesn't is referenced defensively ({{.x | default ""}}).
+	FanSources []string `yaml:"-"`
 	// Name is an optional variant name (distinguishes dedup/attempt state when
 	// several triggers listen to the same event; mirrors legacy action names).
+	// Required (and unique) for triggers reachable by `conductor run`.
 	Name    string `yaml:"name,omitempty"`
 	Enabled *bool  `yaml:"enabled,omitempty"`
 	// Filters gate whether the trigger fires; legal keys come from the event's
@@ -152,8 +235,32 @@ type TriggerSpec struct {
 	Shadow *bool `yaml:"shadow,omitempty"`
 }
 
+// UnmarshalYAML peels a list-valued `on:` into OnSources before the plain
+// field decode, so the scalar form stays a plain string everywhere else.
+func (t *TriggerSpec) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if n.Content[i].Value != "on" {
+				continue
+			}
+			if v := n.Content[i+1]; v.Kind == yaml.SequenceNode {
+				if err := v.Decode(&t.OnSources); err != nil {
+					return err
+				}
+				*v = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null"}
+			}
+			break
+		}
+	}
+	type plain TriggerSpec
+	return n.Decode((*plain)(t))
+}
+
 // IsEnabled reports whether the trigger is enabled (default true).
 func (t TriggerSpec) IsEnabled() bool { return t.Enabled == nil || *t.Enabled }
+
+// Manual reports whether this trigger fires from `conductor run`.
+func (t TriggerSpec) Manual() bool { return t.On == ManualSource }
 
 // Connector returns the connector name from On ("gh.new_comment" -> "gh").
 func (t TriggerSpec) Connector() string {
@@ -165,6 +272,95 @@ func (t TriggerSpec) Connector() string {
 func (t TriggerSpec) Event() string {
 	_, e, _ := strings.Cut(t.On, ".")
 	return e
+}
+
+// NormalizeTriggers expands multi-source `on:` lists — one internal trigger
+// per source, sharing steps/hooks/group, each with the shared base filters
+// merged under its per-source block (per-source keys win) — and enforces the
+// manual-trigger naming rules. Load runs it before validation, so the rest of
+// the system only ever sees scalar-On triggers.
+func (c *Config) NormalizeTriggers() error {
+	var out []TriggerSpec
+	for i, t := range c.Triggers {
+		if len(t.OnSources) == 0 {
+			out = append(out, t)
+			continue
+		}
+		if t.On != "" {
+			return fmt.Errorf("config: triggers[%d]: `on:` is both a scalar and a list", i)
+		}
+		seen := map[string]bool{}
+		fan := make([]string, 0, len(t.OnSources))
+		for _, src := range t.OnSources {
+			fan = append(fan, src.Source)
+		}
+		for _, src := range t.OnSources {
+			if src.Source == "" {
+				return fmt.Errorf("config: triggers[%d]: an `on:` list item is a bare \"conn.event\" or a one-key map `conn.event: {filters, policy, hooks}`", i)
+			}
+			if seen[src.Source] {
+				return fmt.Errorf("config: triggers[%d]: duplicate source %q in the `on:` list", i, src.Source)
+			}
+			seen[src.Source] = true
+			v := t
+			v.OnSources = nil
+			v.On = src.Source
+			v.Filters = mergeFilterMaps(t.Filters, src.Filters)
+			// Per-source policy is the innermost scope: merged over the
+			// trigger's own block here, so the engine's global → connector →
+			// trigger resolution makes it most specific.
+			if src.Policy != nil {
+				p := MergePolicy(t.Policy, src.Policy)
+				v.Policy = &p
+			}
+			// Per-source hooks append after the shared ones and fire only
+			// for events from this source (this expanded trigger).
+			if len(src.Hooks) > 0 {
+				hooks := make([]Hook, 0, len(t.Hooks)+len(src.Hooks))
+				hooks = append(hooks, t.Hooks...)
+				hooks = append(hooks, src.Hooks...)
+				v.Hooks = hooks
+			}
+			v.FanSources = fan
+			out = append(out, v)
+		}
+	}
+	c.Triggers = out
+
+	// A trigger reachable by `conductor run` needs a unique name to run it by.
+	manualAt := map[string]int{}
+	for i, t := range c.Triggers {
+		if !t.Manual() {
+			continue
+		}
+		if t.Name == "" {
+			return fmt.Errorf("config: triggers[%d]: a trigger reachable by `conductor run` (on: manual) requires a name:", i)
+		}
+		if j, dup := manualAt[t.Name]; dup {
+			return fmt.Errorf("config: triggers[%d] and triggers[%d]: manual trigger name %q is not unique — `conductor run` resolves triggers by name", j, i, t.Name)
+		}
+		manualAt[t.Name] = i
+	}
+	return nil
+}
+
+// mergeFilterMaps overlays a per-source filter block over the shared base;
+// a per-source key overrides the base for that source.
+func mergeFilterMaps(base, over map[string]any) map[string]any {
+	if len(base) == 0 {
+		return over
+	}
+	if len(over) == 0 {
+		return base
+	}
+	m := make(map[string]any, len(base)+len(over))
+	for k, v := range base {
+		m[k] = v
+	}
+	for k, v := range over {
+		m[k] = v
+	}
+	return m
 }
 
 // GroupSpec batches events: key groups them, window debounces.
@@ -497,6 +693,9 @@ func (c *Config) validateConnectors() error {
 		if name == "" {
 			return fmt.Errorf("config: connectors: empty connector name")
 		}
+		if name == ManualSource {
+			return fmt.Errorf("config: connectors: %q is reserved (the built-in `on: manual` source)", ManualSource)
+		}
 		if ref.Type == "" {
 			return fmt.Errorf("config: connector %q: missing type", name)
 		}
@@ -531,12 +730,14 @@ func (c *Config) validateConnectors() error {
 		if t.On == "" {
 			return fmt.Errorf("config: %s: missing `on:`", where)
 		}
-		conn, event, ok := strings.Cut(t.On, ".")
-		if !ok || conn == "" || event == "" {
-			return fmt.Errorf("config: %s: `on: %s` must be <connector>.<event>", where, t.On)
-		}
-		if _, okc := c.ConnectorsMap[conn]; !okc {
-			return fmt.Errorf("config: %s: unknown connector %q in `on: %s` (defined: %s)", where, conn, t.On, c.connectorNames())
+		if !t.Manual() {
+			conn, event, ok := strings.Cut(t.On, ".")
+			if !ok || conn == "" || event == "" {
+				return fmt.Errorf("config: %s: `on: %s` must be <connector>.<event> (or the built-in `manual`)", where, t.On)
+			}
+			if _, okc := c.ConnectorsMap[conn]; !okc {
+				return fmt.Errorf("config: %s: unknown connector %q in `on: %s` (defined: %s)", where, conn, t.On, c.connectorNames())
+			}
 		}
 		if len(t.Steps) == 0 {
 			return fmt.Errorf("config: %s (on: %s): no steps", where, t.On)

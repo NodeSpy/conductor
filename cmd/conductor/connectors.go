@@ -69,9 +69,13 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		return nil, err
 	}
 
-	// Lower each connector's triggers into its source integration.
+	// Lower each connector's triggers into its source integration. Manual
+	// triggers have no source — `conductor run` emits them directly.
 	byConn := map[string][]connector.CompiledTrigger{}
 	for i, spec := range cfg.Triggers {
+		if spec.Manual() {
+			continue
+		}
 		byConn[spec.Connector()] = append(byConn[spec.Connector()], connector.CompiledTrigger{Index: i, Spec: spec})
 	}
 	var igs []core.Integration

@@ -90,6 +90,9 @@ func validateNotifyVia(cfg *config.Config, reg *connector.Registry) error {
 }
 
 func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, spec config.TriggerSpec) error {
+	if spec.Manual() {
+		return validateManualTrigger(cfg, reg, where, spec)
+	}
 	in, ok := reg.Get(spec.Connector())
 	if !ok {
 		return fmt.Errorf("%s: unknown connector %q", where, spec.Connector())
@@ -125,6 +128,24 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 	}
 
 	sc := newScope(ev, cfg, spec.Group != nil)
+	// A fan-in trigger's steps are shared across every listed source, so
+	// their references check against the UNION of the sources' contexts
+	// (heterogeneous fields are read defensively — {{.x | default ""}}).
+	// The manual source contributes `inputs`.
+	for _, src := range spec.FanSources {
+		if src == config.ManualSource {
+			sc.add("inputs")
+			continue
+		}
+		conn, evName, _ := strings.Cut(src, ".")
+		if sib, ok := reg.Get(conn); ok {
+			if sev, ok := sib.Decl.Event(evName); ok {
+				for k := range sev.Context {
+					sc.add(strings.SplitN(k, ".", 2)[0])
+				}
+			}
+		}
+	}
 	if spec.Group != nil && spec.Group.Key != "" {
 		if err := checkRefs(where+" group.key", spec.Group.Key, sc); err != nil {
 			return err
@@ -138,6 +159,42 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 		return err
 	}
 	// at:done sees all step outputs; at:fail adds failure metadata.
+	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "done", sc); err != nil {
+		return err
+	}
+	failScope := sc.clone()
+	failScope.add("error")
+	failScope.add("failed_step")
+	return validateHookRefs(cfg, reg, where, spec.Hooks, "fail", failScope)
+}
+
+// validateManualTrigger checks an `on: manual` trigger: it publishes no
+// event schema (its context is the `conductor run` inputs), so filters and
+// source options have nothing to bind to, and step references validate in an
+// open scope with `inputs` addressable.
+func validateManualTrigger(cfg *config.Config, reg *connector.Registry, where string, spec config.TriggerSpec) error {
+	if len(spec.Filters) > 0 {
+		return fmt.Errorf("%s: the manual source accepts no filters (a shared base filters: must be a key every listed source accepts)", where)
+	}
+	if len(spec.Options) > 0 {
+		return fmt.Errorf("%s: the manual source accepts no options", where)
+	}
+	sc := openScope(cfg)
+	sc.add("inputs")
+	if spec.Group != nil {
+		sc.top["group"] = true
+		if spec.Group.Key != "" {
+			if err := checkRefs(where+" group.key", spec.Group.Key, sc); err != nil {
+				return err
+			}
+		}
+	}
+	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "start", sc); err != nil {
+		return err
+	}
+	if err := validateStepList(cfg, reg, where, spec.Steps, sc); err != nil {
+		return err
+	}
 	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "done", sc); err != nil {
 		return err
 	}

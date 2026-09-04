@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -110,6 +111,7 @@ func usage() {
 
 usage:
   conductor run [--config PATH]         start the daemon
+  conductor run <name> [--input k=v ...] [--json '{…}']  fire a manual trigger via the running daemon
   conductor validate [--config PATH]    load & validate config, then exit
   conductor replay <event.json> [--config PATH]  run a saved webhook through the pipeline (dry-run)
   conductor sweep [--config PATH]       one catch-up sweep (dry-run print)
@@ -229,6 +231,11 @@ func cmdValidate(args []string) error {
 }
 
 func cmdRun(args []string) error {
+	// `conductor run <name>` fires a manual trigger through the running
+	// daemon; the bare form starts the daemon itself.
+	if hasPositional(args) {
+		return cmdRunTrigger(args)
+	}
 	// Automatic in-place migration: a legacy config is transformed to the
 	// connectors schema (backed up, validated, swapped) before load; on any
 	// failure the daemon keeps running on the legacy config and notifies.
@@ -431,9 +438,10 @@ func cmdRun(args []string) error {
 		}
 	}()
 
-	// Control socket: lets `force` inject a specific action for a target into this
-	// running engine (parameters a signal can't carry).
-	go serveControl(ctx, controlSockPath(cfg), igs, eng.Emit, logf)
+	// Control socket: lets `force` inject a specific action for a target, and
+	// `run` fire a manual trigger, into this running engine (parameters a
+	// signal can't carry).
+	go serveControl(ctx, controlSockPath(cfg), igs, eng.Emit, manualTriggersByName(cfg), logf)
 
 	// Reaper for archive-when-done agents. It shares the hand-off hold-set so it
 	// never archives an agent the engine handed off for you to drive.
@@ -782,6 +790,9 @@ type controlRequest struct {
 	Kind        string `json:"kind,omitempty"`
 	Repo        string `json:"repo,omitempty"`
 	Number      int    `json:"number,omitempty"`
+	// run: the manual trigger's name and its CLI-provided inputs.
+	Name   string         `json:"name,omitempty"`
+	Inputs map[string]any `json:"inputs,omitempty"`
 }
 
 type controlResponse struct {
@@ -792,7 +803,7 @@ type controlResponse struct {
 }
 
 // serveControl runs the daemon's unix control socket until ctx is cancelled.
-func serveControl(ctx context.Context, path string, igs []core.Integration, emit core.EmitFunc, log func(string, ...any)) {
+func serveControl(ctx context.Context, path string, igs []core.Integration, emit core.EmitFunc, manual map[string]connector.CompiledTrigger, log func(string, ...any)) {
 	_ = os.Remove(path) // clear a stale socket from a prior run
 	l, err := net.Listen("unix", path)
 	if err != nil {
@@ -809,11 +820,11 @@ func serveControl(ctx context.Context, path string, igs []core.Integration, emit
 			}
 			continue
 		}
-		go handleControlConn(ctx, conn, igs, emit, log)
+		go handleControlConn(ctx, conn, igs, emit, manual, log)
 	}
 }
 
-func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integration, emit core.EmitFunc, log func(string, ...any)) {
+func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integration, emit core.EmitFunc, manual map[string]connector.CompiledTrigger, log func(string, ...any)) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 	var req controlRequest
@@ -832,9 +843,74 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		log("forced %d %s trigger(s) for %s#%d (via control socket)", n, req.Kind, req.Repo, req.Number)
 		writeControlResp(conn, controlResponse{OK: true, Dispatched: n,
 			Msg: fmt.Sprintf("forced %d %s trigger(s) for %s#%d", n, req.Kind, req.Repo, req.Number)})
+	case "run":
+		msg, err := runManualTrigger(ctx, manual, req, emit)
+		if err != nil {
+			log("run %q failed: %v", req.Name, err)
+			writeControlResp(conn, controlResponse{Error: err.Error()})
+			return
+		}
+		log("manual trigger %q dispatched (via control socket)", req.Name)
+		writeControlResp(conn, controlResponse{OK: true, Dispatched: 1, Msg: msg})
 	default:
 		writeControlResp(conn, controlResponse{Error: "unknown control command: " + req.Cmd})
 	}
+}
+
+// runManualTrigger fires an `on: manual` trigger by name: the CLI inputs land
+// in the trigger context (top-level and under `inputs`) and the run flows
+// through the same policy/quiet-hours/audit path as any other firing.
+func runManualTrigger(ctx context.Context, manual map[string]connector.CompiledTrigger, req controlRequest, emit core.EmitFunc) (string, error) {
+	ct, ok := manual[req.Name]
+	if !ok {
+		names := make([]string, 0, len(manual))
+		for n := range manual {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		if len(names) == 0 {
+			return "", fmt.Errorf("no manual trigger named %q (no trigger declares `on: manual`)", req.Name)
+		}
+		return "", fmt.Errorf("no manual trigger named %q (manual triggers: %s)", req.Name, strings.Join(names, ", "))
+	}
+	inputs := req.Inputs
+	if inputs == nil {
+		inputs = map[string]any{}
+	}
+	trigCtx := map[string]any{"inputs": inputs}
+	for k, v := range inputs {
+		if k != "inputs" {
+			trigCtx[k] = v
+		}
+	}
+	act := config.Action{Name: ct.Spec.Name, Enabled: ct.Spec.Enabled, Shadow: ct.Spec.Shadow, FlowRef: ct.Ref()}
+	act.TargetRepo = ct.Spec.Repo
+	act = inbound.ForceNoCheckout(act)
+	runID := fmt.Sprintf("%d", time.Now().UnixNano())
+	emit(ctx, core.Trigger{
+		Source:   "manual",
+		Instance: "manual",
+		Kind:     "manual",
+		Variant:  ct.Spec.Name,
+		Target:   inbound.SyntheticTarget("manual:"+ct.Spec.Name, runID),
+		Title:    "manual run: " + ct.Spec.Name,
+		Context:  trigCtx,
+		Force:    true, // bypass dedup gates — an on-demand run always runs
+		Action:   act,
+	})
+	return fmt.Sprintf("dispatched manual trigger %q", req.Name), nil
+}
+
+// manualTriggersByName indexes the `on: manual` triggers for `conductor run`
+// (names are load-validated to exist and be unique).
+func manualTriggersByName(cfg *config.Config) map[string]connector.CompiledTrigger {
+	m := map[string]connector.CompiledTrigger{}
+	for i, spec := range cfg.Triggers {
+		if spec.Manual() && spec.Name != "" {
+			m[spec.Name] = connector.CompiledTrigger{Index: i, Spec: spec}
+		}
+	}
+	return m
 }
 
 func writeControlResp(conn net.Conn, resp controlResponse) {
@@ -899,6 +975,80 @@ func cmdForce(args []string) error {
 	}
 	resp, err := sendControl(cfg, controlRequest{Cmd: "force", Integration: integration,
 		Kind: pos[0], Repo: repo, Number: number})
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return fmt.Errorf("%s", resp.Error)
+	}
+	fmt.Println(resp.Msg)
+	return nil
+}
+
+// hasPositional reports whether args carry a non-flag token, skipping the
+// value of every value-taking flag `conductor run` understands.
+func hasPositional(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--config", "--input", "--json":
+			i++ // skip the flag's value
+		default:
+			if !strings.HasPrefix(args[i], "--") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// cmdRunTrigger fires a manual trigger through the running daemon:
+//
+//	conductor run <name> [--input k=v ...] [--json '{…}']
+//
+// --json supplies structured inputs; --input k=v string entries overlay them.
+func cmdRunTrigger(args []string) error {
+	cfg, rest, err := loadConfig(args)
+	if err != nil {
+		return err
+	}
+	var name string
+	inputs := map[string]any{}
+	kvs := map[string]any{}
+	for i := 0; i < len(rest); i++ {
+		switch {
+		case rest[i] == "--input":
+			if i+1 >= len(rest) {
+				return fmt.Errorf("--input wants key=value")
+			}
+			k, v, ok := strings.Cut(rest[i+1], "=")
+			if !ok || k == "" {
+				return fmt.Errorf("--input wants key=value, got %q", rest[i+1])
+			}
+			kvs[k] = v
+			i++
+		case rest[i] == "--json":
+			if i+1 >= len(rest) {
+				return fmt.Errorf("--json wants a JSON object")
+			}
+			if err := json.Unmarshal([]byte(rest[i+1]), &inputs); err != nil {
+				return fmt.Errorf("--json: %w", err)
+			}
+			i++
+		case strings.HasPrefix(rest[i], "--"):
+			return fmt.Errorf("unknown flag %q (usage: conductor run <name> [--input k=v ...] [--json '{…}'])", rest[i])
+		case name == "":
+			name = rest[i]
+		default:
+			return fmt.Errorf("unexpected argument %q — one trigger name only", rest[i])
+		}
+	}
+	if name == "" {
+		return fmt.Errorf("usage: conductor run <name> [--input k=v ...] [--json '{…}']")
+	}
+	for k, v := range kvs {
+		inputs[k] = v
+	}
+	resp, err := sendControl(cfg, controlRequest{Cmd: "run", Name: name, Inputs: inputs})
 	if err != nil {
 		return err
 	}

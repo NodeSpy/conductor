@@ -97,6 +97,7 @@ connectors:
     type: cron
     schedules:
       nightly-tidy: { cron: "0 4 * * *" }
+      weekly-audit: { cron: "0 5 * * 0" }
       rate-check: { every: 6h, run_on_start: true }
 
   hooks:
@@ -289,6 +290,32 @@ triggers:
       - id: react
         uses: gh.comment
         options: { repo: "{{.repo}}", number: "{{.pr}}", body: "Addressed {{.group.count}} comment(s)." }
+
+  # Multiple sources fan into one step list: a cron schedule, on-demand runs
+  # (`conductor run repo-audit --input scope=all`), and a filtered GitHub
+  # event. Each on: item is a bare conn.event or a one-key map whose value
+  # is a per-source block: filters (validated against THAT source's schema
+  # only; keys override the shared top-level filters:), policy (innermost
+  # scope), hooks (appended after the shared hooks, for that source only).
+  # Steps stay trigger-level. The trigger fires once per matching event from
+  # any listed source; reference
+  # source-specific fields defensively ({{.number | default ""}}). A trigger
+  # reachable by `conductor run` requires a unique name:.
+  - name: repo-audit
+    on:
+      - timer.weekly-audit
+      - manual
+      - gh.issue_matched:
+          filters: { labels_any: [audit] }
+          hooks:
+            - { at: start, uses: gh.comment, options: { repo: "{{.repo}}", number: "{{.number}}", body: "auditing…" } }
+    steps:
+      - id: audit
+        type: agent
+        agent: fixer
+        prompt: |
+          Run the repo audit pass (scope: {{ .inputs.scope | default "changed" }}).
+          {{ if .number }}Triggered by issue #{{.number}}.{{ end }}
 
   # Review triage through the reusable workflow + a request-response ask.
   - on: gh.review_requested
