@@ -74,6 +74,15 @@ connectors:
   #   bot_token: ${DISCORD_BOT_TOKEN}
   #   options: { to: dm, user: "189..." }
 
+  # A command connector: `uses: build-box.run` executes a command — on the
+  # named hosts: entry over SSH, or locally when host:/ssh: is absent.
+  # Outputs: stdout, stderr, exit_code (a non-zero exit is data, not an error).
+  # build-box:
+  #   type: command
+  #   host: build-box            # a hosts: entry; or inline ssh: {host: …}
+  #   cwd: /srv/build
+  #   env: { CI: "1" }
+
   timer:
     type: cron
     schedules:
