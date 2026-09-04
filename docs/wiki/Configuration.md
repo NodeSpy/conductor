@@ -249,6 +249,90 @@ triggers:
 The list arrives typed from `fetch`, the code step reshapes it, and the
 mutation posts it back — three steps, no custom Go.
 
+## The built-in state store (`kv`)
+
+A durable key/value store is always available as the `kv` connector — no
+configuration, no credentials (the name is reserved). It backs cross-run
+state: values persist to a single bbolt file (`kv.db`, beside the state file
+— default `~/.local/state/conductor/kv.db`; pure Go, ACID). Commits fsync,
+so committed state survives a crash and the daemon's own auto-update
+restart, and is shared across runs — not just across steps within one run.
+
+### Verbs (`uses: kv.*`)
+
+| verb | options | output |
+|---|---|---|
+| `kv.get` | `key`, `namespace?`, `default?` | `{ value, found }` (found=false → value is `default`, else null) |
+| `kv.set` | `key`, `value`, `namespace?`, `ttl?` | `{}` |
+| `kv.setnx` | `key`, `value`, `namespace?`, `ttl?` | `{ value, created }` — set only if absent; created=false returns the existing value |
+| `kv.merge` | `key`, `value` (object), `namespace?` | `{ value }` — shallow-merge into the object at key (upsert) |
+| `kv.delete` | `key`, `namespace?` | `{}` |
+| `kv.incr` | `key`, `by?` (default 1), `namespace?` | `{ value }` |
+| `kv.append` | `key`, `item \| items`, `unique?`, `namespace?` | `{ value, len }` — append to the list at key (created as `[]`); `unique` skips present values |
+| `kv.remove` | `key`, `item \| items`, `namespace?` | `{ value, len }` — remove all occurrences (absent = no-op) |
+| `kv.contains` | `key`, `item`, `namespace?` | `{ contains }` (false when absent) |
+| `kv.first` / `kv.last` | `key`, `namespace?` | `{ value, found }` |
+| `kv.index` | `key`, `index`, `namespace?` | `{ value, found }` — negative counts from the end; out of range → found=false |
+| `kv.slice` | `key`, `start?`, `end?` (exclusive), `namespace?` | `{ value, len }` — Python-style, negatives allowed, bounds clamp |
+| `kv.len` | `key`, `namespace?` | `{ len }` (0 when absent) |
+| `kv.pop` | `key`, `from?` (front\|back, default back), `namespace?` | `{ value, found, len }` — remove and return an end element; empty/absent → found=false, no error |
+| `kv.list` | `namespace?`, `prefix?` | `{ keys, entries }` |
+
+- **Namespaces** are the store's buckets, auto-created on write; `namespace:`
+  defaults to `default`. Values are JSON — any serializable value
+  (string/number/bool/object/array) round-trips.
+- **Atomicity.** Every read-modify-write verb — `incr`, `setnx`, `merge`,
+  `append`, `remove`, `pop` — runs inside one bbolt transaction, so
+  concurrent and grouped steps hitting the same key stay correct (parallel
+  pops each take a distinct element). `first`/`last`/`index`/`slice`/`len`/
+  `contains` are read-only.
+- **TTL.** `ttl:` on `set`/`setnx` expires the key: an expired key reads as
+  absent and is skipped by `list`; a background sweep deletes expired
+  entries. Mutating a live entry keeps its expiry.
+- **Type errors** are step errors naming the key and the actual type
+  (`merge` on a non-object; the list verbs on a non-list).
+
+### Three access paths
+
+1. **Verbs** — `uses: kv.*` in steps and hooks (the table above), audited
+   like any verb call.
+2. **Templates** — read-only, anywhere a value goes:
+   `{{ kv "runs" (print .pr) | default 0 }}` (2-arg: namespace, key) or
+   `{{ kv "key" }}` (default namespace), and
+   `{{ kvContains "namespace" "key" .item }}` for list membership. The
+   template surface never mutates.
+3. **`ctx.kv` in `run:` code** — the in-process engines get the full method
+   set `get/set/setnx/merge/delete/incr/append/remove/contains/list/first/
+   last/index/slice/len/pop` (namespace first, absent reads come back
+   null/nil): `ctx.kv.get(ns, key)` in **js** and **lua**, a top-level
+   `kv` module in **risor** (`kv.get(ns, key)`), and
+   `import "conductor/kv"` in **go-embed** (`kv.Get(ns, key)`,
+   Go-typed). Host-interpreter steps (`run: sh/node/python/…`) run in a
+   separate process — use the `kv.*` verbs from those.
+
+```yaml
+- run: js
+  code: |
+    const key = "last-invoice-" + ctx.inputs.contact_id;
+    const prev = ctx.kv.get("billing", key);
+    ctx.kv.set("billing", key, ctx.recent.invoices[0].InvoiceID);
+    return { first_time: !prev };
+```
+
+### Worked example — act once per incident id, durably across runs
+
+```yaml
+triggers:
+  - name: new-incidents
+    on: [ pd.incident ]
+    steps:
+      - { id: gate, uses: kv.get, options: { namespace: pagerduty, key: last-seen, default: "" } }
+      - if: "{{ .incident.id }} != {{ .gate.value }}"
+        uses: slack-ops.post
+        options: { channel: "#outages", text: "New incident {{ .incident.id }}" }
+      - { uses: kv.set, options: { namespace: pagerduty, key: last-seen, value: "{{ .incident.id }}" } }
+```
+
 ## Splitting the config across files (`imports:`)
 
 Imports live under each section. A map section — `connectors:`, `runtimes:`,
