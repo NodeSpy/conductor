@@ -33,3 +33,17 @@ func (t *AppTokens) TokenForRepo(ctx context.Context, owner, repo string) (strin
 // APIBaseURL exposes the GitHub API base (honoring the PC_GITHUB_API_BASE
 // test override) for the connector verb implementations.
 func APIBaseURL() string { return apiBaseURL() }
+
+// PatternSpecificity exposes the repo-glob specificity scoring for the config
+// migration (it must replicate resolve()'s most-specific-wins outcome as
+// per-trigger exclusions).
+func PatternSpecificity(p string) int { return patternSpecificity(p) }
+
+// KnownKinds exposes the set of github event kinds for the migration.
+func KnownKinds() map[string]bool {
+	out := make(map[string]bool, len(knownKinds))
+	for k, v := range knownKinds {
+		out[k] = v
+	}
+	return out
+}

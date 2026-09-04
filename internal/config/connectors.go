@@ -23,24 +23,24 @@ import (
 // the raw node so the concrete connector type can decode its own connection
 // fields (tokens, app creds, schedules, feeds, …).
 type ConnectorRef struct {
-	Type    string `yaml:"type"`
-	Enabled *bool  `yaml:"enabled"`
+	Type    string `yaml:"type,omitempty"`
+	Enabled *bool  `yaml:"enabled,omitempty"`
 	// Options are the connector's default verb options; each `uses:` call's
 	// options merge over these (the call wins). Identity (`as:`) lives here.
-	Options map[string]any `yaml:"options"`
+	Options map[string]any `yaml:"options,omitempty"`
 	// Policy is the connector-scoped policy block (ignore/rate_limits/backoff/
 	// pause_label live here; quiet_hours/concurrency may override the global).
-	Policy *Policy `yaml:"policy"`
+	Policy *Policy `yaml:"policy,omitempty"`
 	raw    yaml.Node
 }
 
 // UnmarshalYAML captures the header fields and retains the raw node.
 func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 	type hdr struct {
-		Type    string         `yaml:"type"`
-		Enabled *bool          `yaml:"enabled"`
-		Options map[string]any `yaml:"options"`
-		Policy  *Policy        `yaml:"policy"`
+		Type    string         `yaml:"type,omitempty"`
+		Enabled *bool          `yaml:"enabled,omitempty"`
+		Options map[string]any `yaml:"options,omitempty"`
+		Policy  *Policy        `yaml:"policy,omitempty"`
 	}
 	var h hdr
 	if err := n.Decode(&h); err != nil {
@@ -61,25 +61,25 @@ func (r ConnectorRef) IsEnabled() bool { return r.Enabled == nil || *r.Enabled }
 type RuntimeConfig struct {
 	// Type is a built-in runtime kind: paseo | agent-deck | opencode | cli.
 	// Mutually exclusive with Agent.
-	Type string `yaml:"type"`
+	Type string `yaml:"type,omitempty"`
 	// Agent names an agent runtime driven over a transport (gemini, opencode,
 	// …). Mutually exclusive with Type; implies transport acp unless overridden.
-	Agent string `yaml:"agent"`
+	Agent string `yaml:"agent,omitempty"`
 	// Transport is how conductor talks to the runtime: acp | native | cli.
-	Transport string `yaml:"transport"`
+	Transport string `yaml:"transport,omitempty"`
 	// SessionModel hints session persistence: native | resumable | oneshot.
-	SessionModel string `yaml:"session_model"`
+	SessionModel string `yaml:"session_model,omitempty"`
 	// Default flags the fleet-default runtime (at most one).
-	Default bool `yaml:"default"`
+	Default bool `yaml:"default,omitempty"`
 	// Bin is the runtime's binary (paseo/agent-deck); replaces the global
 	// paseo_bin.
-	Bin string `yaml:"bin"`
+	Bin string `yaml:"bin,omitempty"`
 	// Tool and Command are the bare-CLI recipe for transport: cli.
-	Tool    string   `yaml:"tool"`
-	Command []string `yaml:"command"`
+	Tool    string   `yaml:"tool,omitempty"`
+	Command []string `yaml:"command,omitempty"`
 	// Host names a `hosts:` entry; the runtime's subprocesses run there over
 	// SSH (all its agents launch on that box).
-	Host string `yaml:"host"`
+	Host string `yaml:"host,omitempty"`
 }
 
 // Controller converts a runtime entry to the legacy controller shape the
@@ -95,60 +95,60 @@ func (r RuntimeConfig) Controller() ControllerConfig {
 // HostConfig is one entry in the `hosts:` map — a named SSH target referenced
 // by `host:` on connectors, runtimes, agents, and code steps.
 type HostConfig struct {
-	Host string `yaml:"host"` // hostname or address (required)
-	User string `yaml:"user"`
-	Port int    `yaml:"port"`
+	Host string `yaml:"host,omitempty"` // hostname or address (required)
+	User string `yaml:"user,omitempty"`
+	Port int    `yaml:"port,omitempty"`
 	// Key is the private-key path (empty = ssh defaults / agent).
-	Key string `yaml:"key"`
+	Key string `yaml:"key,omitempty"`
 	// KnownHosts is a known_hosts file override (empty = ssh defaults).
-	KnownHosts string `yaml:"known_hosts"`
+	KnownHosts string `yaml:"known_hosts,omitempty"`
 	// Cwd is the default remote working directory.
-	Cwd string `yaml:"cwd"`
+	Cwd string `yaml:"cwd,omitempty"`
 	// Env is exported into remote commands.
-	Env map[string]string `yaml:"env"`
+	Env map[string]string `yaml:"env,omitempty"`
 }
 
 // WorkflowDef is one entry in the `workflows:` map — a named, parameterized
 // step list invoked from triggers (or other workflows) via `use:`.
 type WorkflowDef struct {
-	Inputs  map[string]InputSpec `yaml:"inputs"`
-	Outputs map[string]string    `yaml:"outputs"` // name -> template over internal step outputs
-	Steps   []Step               `yaml:"steps"`
+	Inputs  map[string]InputSpec `yaml:"inputs,omitempty"`
+	Outputs map[string]string    `yaml:"outputs,omitempty"` // name -> template over internal step outputs
+	Steps   []Step               `yaml:"steps,omitempty"`
 }
 
 // InputSpec declares one workflow input.
 type InputSpec struct {
-	Type     string `yaml:"type"` // string | integer | number | boolean | list | map | any
-	Required bool   `yaml:"required"`
-	Default  any    `yaml:"default"`
+	Type     string `yaml:"type,omitempty"` // string | integer | number | boolean | list | map | any
+	Required bool   `yaml:"required,omitempty"`
+	Default  any    `yaml:"default,omitempty"`
 }
 
 // TriggerSpec is one entry in the `triggers:` list: on/filters/steps/hooks
 // plus optional grouping, policy, and source-side options.
 type TriggerSpec struct {
 	// On selects the inbound event: <connector>.<event>.
-	On string `yaml:"on"`
+	On string `yaml:"on,omitempty"`
 	// Name is an optional variant name (distinguishes dedup/attempt state when
 	// several triggers listen to the same event; mirrors legacy action names).
-	Name    string `yaml:"name"`
-	Enabled *bool  `yaml:"enabled"`
+	Name    string `yaml:"name,omitempty"`
+	Enabled *bool  `yaml:"enabled,omitempty"`
 	// Filters gate whether the trigger fires; legal keys come from the event's
 	// filter schema. All AND-ed.
-	Filters map[string]any `yaml:"filters"`
+	Filters map[string]any `yaml:"filters,omitempty"`
 	// Group batches a burst of related events into one run (debounce).
-	Group *GroupSpec `yaml:"group"`
-	Steps []Step     `yaml:"steps"`
-	Hooks []Hook     `yaml:"hooks"`
+	Group *GroupSpec `yaml:"group,omitempty"`
+	Steps []Step     `yaml:"steps,omitempty"`
+	Hooks []Hook     `yaml:"hooks,omitempty"`
 	// Policy is the trigger-scoped policy block (most specific — wins).
-	Policy *Policy `yaml:"policy"`
+	Policy *Policy `yaml:"policy,omitempty"`
 	// Options are source-side per-trigger options validated against the
 	// event's option schema (e.g. github flaky_rerun / stuck_after).
-	Options map[string]any `yaml:"options"`
+	Options map[string]any `yaml:"options,omitempty"`
 	// Repo pins the checkout repo for synthetic sources (sentry/pagerduty/
 	// webhook/rss); empty keeps the scratch/no-checkout behavior.
-	Repo string `yaml:"repo"`
+	Repo string `yaml:"repo,omitempty"`
 	// Shadow previews this trigger's work without dispatching.
-	Shadow *bool `yaml:"shadow"`
+	Shadow *bool `yaml:"shadow,omitempty"`
 }
 
 // IsEnabled reports whether the trigger is enabled (default true).
@@ -170,66 +170,66 @@ func (t TriggerSpec) Event() string {
 type GroupSpec struct {
 	// Key is the grouping expression (templated). Default: the event's own
 	// dedup id — every event is its own run.
-	Key string `yaml:"key"`
+	Key string `yaml:"key,omitempty"`
 	// Window is the debounce window: it resets on each new event and the batch
 	// fires when the group goes quiet. Default 15s.
-	Window Duration `yaml:"window"`
+	Window Duration `yaml:"window,omitempty"`
 	// MaxWait caps how long a busy group can defer firing (default 4×window).
-	MaxWait Duration `yaml:"max_wait"`
+	MaxWait Duration `yaml:"max_wait,omitempty"`
 }
 
 // Step is one entry in a `steps:` list (and the body of hooks' action units).
 // Exactly one of the step forms must be set: `type: agent`, `type: command`,
 // `run:` (code), `uses:` (verb), or `use:` (workflow call).
 type Step struct {
-	ID string `yaml:"id"`
-	If string `yaml:"if"`
+	ID string `yaml:"id,omitempty"`
+	If string `yaml:"if,omitempty"`
 	// Type is agent | command for the do-work forms ("" for uses/run/use).
-	Type string `yaml:"type"`
+	Type string `yaml:"type,omitempty"`
 
 	// agent form
-	Agent           string         `yaml:"agent"`
-	Prompt          string         `yaml:"prompt"`
-	Checkout        string         `yaml:"checkout"`
-	OutputSchema    map[string]any `yaml:"output_schema"`
-	Background      bool           `yaml:"background"`
-	Handoff         string         `yaml:"handoff"` // ask-capable connector for a background review
-	RerequestReview bool           `yaml:"rerequest_review"`
+	Agent           string         `yaml:"agent,omitempty"`
+	Prompt          string         `yaml:"prompt,omitempty"`
+	Checkout        string         `yaml:"checkout,omitempty"`
+	OutputSchema    map[string]any `yaml:"output_schema,omitempty"`
+	Background      bool           `yaml:"background,omitempty"`
+	Handoff         string         `yaml:"handoff,omitempty"` // ask-capable connector for a background review
+	RerequestReview bool           `yaml:"rerequest_review,omitempty"`
 
 	// command form (also carries workdir/env for agent/code forms)
-	Command []string          `yaml:"command"`
-	WorkDir string            `yaml:"workdir"`
-	Env     map[string]string `yaml:"env"`
+	Command []string          `yaml:"command,omitempty"`
+	WorkDir string            `yaml:"workdir,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
 
 	// code form: run: js | go-embed | go | sh | bash | ruby | node | python | …
-	Run  string   `yaml:"run"`
-	Code string   `yaml:"code"`
-	Args []string `yaml:"args"`
+	Run  string   `yaml:"run,omitempty"`
+	Code string   `yaml:"code,omitempty"`
+	Args []string `yaml:"args,omitempty"`
 	// Host names a `hosts:` entry to run a host-interpreter code step, or a
 	// command step, on a remote box. SSH is a one-off inline target.
-	Host string      `yaml:"host"`
-	SSH  *HostConfig `yaml:"ssh"`
+	Host string      `yaml:"host,omitempty"`
+	SSH  *HostConfig `yaml:"ssh,omitempty"`
 
 	// verb form
-	Uses    string         `yaml:"uses"`
-	Options map[string]any `yaml:"options"`
+	Uses    string         `yaml:"uses,omitempty"`
+	Options map[string]any `yaml:"options,omitempty"`
 
 	// workflow-call form
-	Use  string         `yaml:"use"`
-	With map[string]any `yaml:"with"`
+	Use  string         `yaml:"use,omitempty"`
+	With map[string]any `yaml:"with,omitempty"`
 
 	// control flow
-	ForEach         string        `yaml:"for_each"` // template resolving to a list; {{.item}} in scope
-	Parallel        *ParallelSpec `yaml:"parallel"`
-	Retry           *RetrySpec    `yaml:"retry"`
-	Timeout         Duration      `yaml:"timeout"`
-	ContinueOnError bool          `yaml:"continue_on_error"`
+	ForEach         string        `yaml:"for_each,omitempty"` // template resolving to a list; {{.item}} in scope
+	Parallel        *ParallelSpec `yaml:"parallel,omitempty"`
+	Retry           *RetrySpec    `yaml:"retry,omitempty"`
+	Timeout         Duration      `yaml:"timeout,omitempty"`
+	ContinueOnError bool          `yaml:"continue_on_error,omitempty"`
 
 	// step-level hooks, scoped to this step
-	Hooks []Hook `yaml:"hooks"`
+	Hooks []Hook `yaml:"hooks,omitempty"`
 
-	Backend string `yaml:"backend"` // dispatch backend override (carried from legacy)
-	Shadow  *bool  `yaml:"shadow"`
+	Backend string `yaml:"backend,omitempty"` // dispatch backend override (carried from legacy)
+	Shadow  *bool  `yaml:"shadow,omitempty"`
 }
 
 // Form returns the step's form keyword: "agent", "command", "code", "verb",
@@ -290,12 +290,12 @@ func (p ParallelSpec) MarshalYAML() (any, error) {
 // error (max/backoff) and re-run while the output still signals "not ready"
 // (while_output_matches/interval/timeout — the legacy StepRetry semantics).
 type RetrySpec struct {
-	Max     int      `yaml:"max"`
-	Backoff Duration `yaml:"backoff"`
+	Max     int      `yaml:"max,omitempty"`
+	Backoff Duration `yaml:"backoff,omitempty"`
 
-	WhileOutputMatches string   `yaml:"while_output_matches"`
-	Interval           Duration `yaml:"interval"`
-	Timeout            Duration `yaml:"timeout"`
+	WhileOutputMatches string   `yaml:"while_output_matches,omitempty"`
+	Interval           Duration `yaml:"interval,omitempty"`
+	Timeout            Duration `yaml:"timeout,omitempty"`
 }
 
 // StepRetry converts the defer-retry half to the legacy shape (nil if unused).
@@ -310,63 +310,63 @@ func (r *RetrySpec) StepRetry() *StepRetry {
 // anchored to a workflow (trigger-level `hooks:`) or to a single step
 // (step-level `hooks:`).
 type Hook struct {
-	At      string         `yaml:"at"` // start | done | fail
-	ID      string         `yaml:"id"`
-	If      string         `yaml:"if"`
-	Uses    string         `yaml:"uses"`
-	Options map[string]any `yaml:"options"`
+	At      string         `yaml:"at,omitempty"` // start | done | fail
+	ID      string         `yaml:"id,omitempty"`
+	If      string         `yaml:"if,omitempty"`
+	Uses    string         `yaml:"uses,omitempty"`
+	Options map[string]any `yaml:"options,omitempty"`
 }
 
 // Policy is the cross-cutting control block, valid at three scopes — global,
 // connector, trigger — with the most specific setting winning per key.
 type Policy struct {
-	QuietHours  *QuietHours  `yaml:"quiet_hours"`
-	Concurrency *Concurrency `yaml:"concurrency"`
+	QuietHours  *QuietHours  `yaml:"quiet_hours,omitempty"`
+	Concurrency *Concurrency `yaml:"concurrency,omitempty"`
 	// Connector-scoped connection properties (valid globally as defaults too).
-	Ignore     *Ignore     `yaml:"ignore"`
-	RateLimits *RateLimits `yaml:"rate_limits"`
-	Backoff    *Backoff    `yaml:"backoff"`
+	Ignore     *Ignore     `yaml:"ignore,omitempty"`
+	RateLimits *RateLimits `yaml:"rate_limits,omitempty"`
+	Backoff    *Backoff    `yaml:"backoff,omitempty"`
 	// PauseLabel is a github label that parks a target; connector default or a
 	// per-trigger hold label.
-	PauseLabel *string `yaml:"pause_label"`
+	PauseLabel *string `yaml:"pause_label,omitempty"`
 	// Enabled maps the legacy kill switch (control.enabled). Default true.
-	Enabled *bool `yaml:"enabled"`
+	Enabled *bool `yaml:"enabled,omitempty"`
 	// Shadow previews instead of dispatching (legacy control.shadow).
-	Shadow *bool `yaml:"shadow"`
+	Shadow *bool `yaml:"shadow,omitempty"`
 	// MaxAttemptsPerHead is the soft attempt threshold before backoff.
-	MaxAttemptsPerHead *int `yaml:"max_attempts_per_head"`
+	MaxAttemptsPerHead *int `yaml:"max_attempts_per_head,omitempty"`
 }
 
 // QuietHours defers (hold) or drops work inside a local-time window.
 type QuietHours struct {
-	TZ   string `yaml:"tz"`
-	From string `yaml:"from"` // "22:00"
-	To   string `yaml:"to"`   // "07:00"
+	TZ   string `yaml:"tz,omitempty"`
+	From string `yaml:"from,omitempty"` // "22:00"
+	To   string `yaml:"to,omitempty"`   // "07:00"
 	// Hold defers work until the window ends (true) or drops it (false).
 	// Default true. An override scope may set hold: false to un-quiet.
-	Hold *bool `yaml:"hold"`
+	Hold *bool `yaml:"hold,omitempty"`
 }
 
 // Concurrency bounds total agent load.
 type Concurrency struct {
-	MaxAgents        *int `yaml:"max_agents"`
-	MaxAgentsPerHour *int `yaml:"max_agents_per_hour"`
+	MaxAgents        *int `yaml:"max_agents,omitempty"`
+	MaxAgentsPerHour *int `yaml:"max_agents_per_hour,omitempty"`
 }
 
 // Ignore lists authors whose activity never triggers work.
 type Ignore struct {
-	Users []string `yaml:"users"`
+	Users []string `yaml:"users,omitempty"`
 }
 
 // RateLimits caps a connector's outbound verb calls.
 type RateLimits struct {
-	PerMinute int `yaml:"per_minute"`
+	PerMinute int `yaml:"per_minute,omitempty"`
 }
 
 // Backoff tunes the retry cadence past the soft attempt threshold.
 type Backoff struct {
-	Base Duration `yaml:"base"`
-	Max  Duration `yaml:"max"`
+	Base Duration `yaml:"base,omitempty"`
+	Max  Duration `yaml:"max,omitempty"`
 }
 
 // MergePolicy overlays scopes most-specific-last: each non-nil field of a

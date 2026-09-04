@@ -9,6 +9,15 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/handoff"
 )
 
+// AskChanneler is implemented by connector types that can present an
+// interactive hand-off (slack/discord/web): they build a handoff.Channel from
+// options — typically the connector's default options — so a background agent
+// step's `handoff: <connector>` review rides the same machinery as the
+// connector's own ask verb.
+type AskChanneler interface {
+	AskChannel(opts map[string]any) (handoff.Channel, error)
+}
+
 // askOutputs is the shared output schema of every `ask` verb: what the human
 // decided and the text they replied with (the revision, or the approved draft).
 func askOutputs() Schema {

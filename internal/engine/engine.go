@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/paseo-conductor/internal/connector"
 	"github.com/NodeSpy/paseo-conductor/internal/controller"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/paseo-conductor/internal/flow"
 	"github.com/NodeSpy/paseo-conductor/internal/handoff"
 	"github.com/NodeSpy/paseo-conductor/internal/notify"
 	"github.com/NodeSpy/paseo-conductor/internal/store"
@@ -84,6 +86,13 @@ type Engine struct {
 	pausePath   string            // control file; present = paused (toggled by pause/resume, no restart)
 	ch          chan core.Trigger
 	sem         chan struct{} // concurrent-agent cap; nil = unlimited
+
+	// flow runs connectors-model triggers (actions carrying a FlowRef);
+	// grouper batches their grouped events. nil when the config has no
+	// connectors — the legacy path is then the only path.
+	flow       *flow.Runner
+	grouper    *flow.Grouper
+	connectors *connector.Registry
 
 	budgetMu  sync.Mutex  // guards agentDisp (rolling agent-dispatch timestamps)
 	agentDisp []time.Time // agent-dispatch times in the last hour (runaway budget)
@@ -153,6 +162,13 @@ type Options struct {
 	// pause/resume commands without a restart). Empty disables the runtime pause.
 	PausePath string
 	Log       func(string, ...any)
+	// Flow runs connectors-model triggers; nil when the config has none. The
+	// engine fills in its AgentServices (runtime resolution, tokens, guidance,
+	// background hand-off) after construction.
+	Flow *flow.Runner
+	// Connectors is the built connector registry (ask-capable hand-off
+	// resolution). nil without a connectors: block.
+	Connectors *connector.Registry
 }
 
 // New builds an Engine.
@@ -188,6 +204,14 @@ func New(o Options) *Engine {
 		e.rerun = e.rerunFailed
 	}
 	e.refreshTok = o.RefreshAppToken
+	e.connectors = o.Connectors
+	if o.Flow != nil {
+		e.flow = o.Flow
+		// The runner's agent/command steps dispatch through the engine's own
+		// runtime resolution, tokens, and hand-off machinery.
+		e.flow.Agents = e.flowAgentServices()
+		e.grouper = flow.NewGrouper(nil, e.runBatch)
+	}
 	return e
 }
 
@@ -469,6 +493,18 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 	}
 
+	// A connectors-model trigger: the generic gates above (kill switch,
+	// pause, comment high-water mark, dedup, backoff) have all applied; the
+	// flow runner owns steps/hooks/verbs from here.
+	if act.FlowRef != "" {
+		if e.flow == nil {
+			e.log("%s flow trigger but no flow runner wired — dropping", tag(t))
+			return
+		}
+		e.processFlow(ctx, t, act, key, dkind, head)
+		return
+	}
+
 	// Resolve profile, tokens, shadow.
 	var profile config.AgentProfile
 	if act.Type == "agent" {
@@ -735,6 +771,21 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 		if json.Unmarshal(r.Trigger, &t) != nil || json.Unmarshal(r.Action, &act) != nil {
 			e.log("engine: resume %s: unreadable, dropping", r.ID)
 			_ = e.store.DeleteRun(r.ID)
+			continue
+		}
+		// A flow run resumes through the flow runner (its own checkpoint
+		// model); token re-minting below still applies first when possible.
+		if act.FlowRef != "" {
+			if e.flow == nil {
+				e.log("engine: resume %s: flow run but no flow runner — leaving for next start", r.ID)
+				continue
+			}
+			if t.Context != nil {
+				if appTok, err := e.refreshTok(t); err == nil && appTok != "" {
+					t.Context["app_token"] = appTok
+				}
+			}
+			e.resumeFlowRun(ctx, r, t, act)
 			continue
 		}
 		t.Action = act

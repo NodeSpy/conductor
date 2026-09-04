@@ -285,7 +285,7 @@ func (s *slackImpl) Invoke(ctx context.Context, verb string, opts map[string]any
 		}
 		return map[string]any{"ok": true}, nil
 	case "ask":
-		ch, err := s.askChannel(opts)
+		ch, err := s.AskChannel(opts)
 		if err != nil {
 			return nil, err
 		}
@@ -295,7 +295,7 @@ func (s *slackImpl) Invoke(ctx context.Context, verb string, opts map[string]any
 }
 
 // askChannel builds the hand-off channel an ask presents on.
-func (s *slackImpl) askChannel(opts map[string]any) (handoff.Channel, error) {
+func (s *slackImpl) AskChannel(opts map[string]any) (handoff.Channel, error) {
 	to, _ := opts["to"].(string)
 	logf := s.deps.Log
 	if logf == nil {

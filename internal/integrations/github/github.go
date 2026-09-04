@@ -417,14 +417,19 @@ func patternSpecificity(p string) int {
 }
 
 // merge overlays a rule onto the instance defaults.
-func (g *Integration) merge(r Rule) Rule {
+func (g *Integration) merge(r Rule) Rule { return MergeRule(g.cfg.Defaults, r) }
+
+// MergeRule overlays a rule onto a defaults rule — the resolve() semantics,
+// exported so the config migration can flatten the rules/defaults model into
+// per-trigger filters with identical behavior.
+func MergeRule(defaults, r Rule) Rule {
 	out := Rule{
-		Reviewer:  g.cfg.Defaults.Reviewer,
-		Assignee:  g.cfg.Defaults.Assignee,
-		Workspace: g.cfg.Defaults.Workspace,
+		Reviewer:  defaults.Reviewer,
+		Assignee:  defaults.Assignee,
+		Workspace: defaults.Workspace,
 		Actions:   map[string]config.ActionSet{},
 	}
-	for k, v := range g.cfg.Defaults.Actions {
+	for k, v := range defaults.Actions {
 		out.Actions[k] = v
 	}
 	if len(r.Reviewer.Logins) > 0 || len(r.Reviewer.Teams) > 0 {
@@ -440,7 +445,7 @@ func (g *Integration) merge(r Rule) Rule {
 	// over the default base (the first default variant) for that kind.
 	for k, set := range r.Actions {
 		var base config.Action
-		if d := g.cfg.Defaults.Actions[k]; len(d) > 0 {
+		if d := defaults.Actions[k]; len(d) > 0 {
 			base = d[0]
 		}
 		merged := make(config.ActionSet, len(set))
