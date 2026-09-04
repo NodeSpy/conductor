@@ -74,10 +74,11 @@ that changes the config schema migrates your file itself, with a backup.
   declare verbs (and polled events) straight from config — templated
   requests, `output:` extraction, shared auth including OAuth2 with
   refresh-token rotation (see the wiki's Configuration page).
-  A built-in durable **`kv` store** is always available — `uses: kv.get/set/
-  incr/append/pop/…` verbs, an inline `{{ kv "ns" "key" }}` template read,
-  and `ctx.kv` in code steps — persisted to a bbolt file, so state survives
-  restarts and is shared across runs.
+  A `stores:` section defines named data stores (`boltdb` files, `redis`,
+  a generic `http` shim) served by the **`kv.*` verbs** — every call names
+  its store (`store: cache`), reads compose inline via
+  `{{ kv "cache" "ns" "key" }}`, and code steps get `ctx.store("cache")`.
+  Durable state survives restarts and is shared across runs.
 - **Runtimes + agents** — the things that do the work: a runtime
   (paseo / agent-deck / cli / acp) is where agents run; an agent is a named
   profile (provider/model/prompt posture). `runtimes:` replaces
