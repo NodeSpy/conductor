@@ -207,8 +207,26 @@ func webhookTransform(name string, ref config.IntegrationRef, notes *[]string) (
 	return conn, triggers, nil
 }
 
-// sentryTransform maps rules to triggers (order preserved: sentry triggers
-// stay first-match-wins, mirroring legacy rules).
+// sentryMatchMap renders one legacy rule's match as a filter map ({} = any).
+func sentryMatchMap(m sentryint.Match) map[string]any {
+	out := map[string]any{}
+	if len(m.Projects) > 0 {
+		out["projects"] = strSlice(m.Projects)
+	}
+	if len(m.Levels) > 0 {
+		out["levels"] = strSlice(m.Levels)
+	}
+	if len(m.Environments) > 0 {
+		out["environments"] = strSlice(m.Environments)
+	}
+	return out
+}
+
+// sentryTransform maps rules to triggers. Connectors-model triggers are
+// INDEPENDENT (every matching trigger fires), while legacy rules were
+// first-match-wins — so each trigger after the first excludes the matches of
+// every EARLIER rule, reproducing the legacy winner exactly. A rule behind an
+// earlier catch-all never fired in legacy; it is skipped with a note.
 func sentryTransform(name string, ref config.IntegrationRef, notes *[]string) (map[string]any, []config.TriggerSpec, error) {
 	var cfg sentryint.Config
 	if err := ref.Decode(&cfg); err != nil {
@@ -228,18 +246,29 @@ func sentryTransform(name string, ref config.IntegrationRef, notes *[]string) (m
 		conn["client_secret"] = cfg.ClientSecret
 	}
 	var triggers []config.TriggerSpec
+	var earlier []map[string]any // prior rules' matches — excluded from later triggers
 	for ri, rule := range cfg.Rules {
 		where := fmt.Sprintf("sentry[%s] rules[%d]", name, ri)
-		filters := map[string]any{}
-		if len(rule.Match.Projects) > 0 {
-			filters["projects"] = strSlice(rule.Match.Projects)
+		filters := sentryMatchMap(rule.Match)
+		if len(earlier) > 0 {
+			blocked := false
+			for _, e := range earlier {
+				if len(e) == 0 {
+					blocked = true // an earlier catch-all matched everything
+				}
+			}
+			if blocked {
+				*notes = append(*notes, fmt.Sprintf("%s: unreachable in legacy (an earlier rule matched everything) — no trigger generated", where))
+				continue
+			}
+			ex := make([]any, len(earlier))
+			for i, e := range earlier {
+				ex[i] = e
+			}
+			filters["exclude"] = ex
+			*notes = append(*notes, fmt.Sprintf("%s: excludes %d earlier rule match(es) to preserve legacy first-match precedence", where, len(earlier)))
 		}
-		if len(rule.Match.Levels) > 0 {
-			filters["levels"] = strSlice(rule.Match.Levels)
-		}
-		if len(rule.Match.Environments) > 0 {
-			filters["environments"] = strSlice(rule.Match.Environments)
-		}
+		earlier = append(earlier, sentryMatchMap(rule.Match))
 		for vi, act := range rule.Actions {
 			awhere := fmt.Sprintf("%s actions[%d]", where, vi)
 			steps, err := actionSteps(awhere, act, notes)
@@ -257,7 +286,26 @@ func sentryTransform(name string, ref config.IntegrationRef, notes *[]string) (m
 	return conn, triggers, nil
 }
 
-// pagerdutyTransform mirrors sentryTransform for pagerduty incidents.
+// pagerdutyMatchMap renders one legacy rule's match as a filter map.
+func pagerdutyMatchMap(m pdint.Match) map[string]any {
+	out := map[string]any{}
+	if len(m.EventTypes) > 0 {
+		out["event_types"] = strSlice(m.EventTypes)
+	}
+	if len(m.Services) > 0 {
+		out["services"] = strSlice(m.Services)
+	}
+	if len(m.Urgencies) > 0 {
+		out["urgencies"] = strSlice(m.Urgencies)
+	}
+	if len(m.Priorities) > 0 {
+		out["priorities"] = strSlice(m.Priorities)
+	}
+	return out
+}
+
+// pagerdutyTransform mirrors sentryTransform: independent triggers with
+// exclusion chains preserving the legacy first-match winner.
 func pagerdutyTransform(name string, ref config.IntegrationRef, notes *[]string) (map[string]any, []config.TriggerSpec, error) {
 	var cfg pdint.Config
 	if err := ref.Decode(&cfg); err != nil {
@@ -277,21 +325,29 @@ func pagerdutyTransform(name string, ref config.IntegrationRef, notes *[]string)
 		conn["signing_secret"] = cfg.SigningSecret
 	}
 	var triggers []config.TriggerSpec
+	var earlier []map[string]any
 	for ri, rule := range cfg.Rules {
 		where := fmt.Sprintf("pagerduty[%s] rules[%d]", name, ri)
-		filters := map[string]any{}
-		if len(rule.Match.EventTypes) > 0 {
-			filters["event_types"] = strSlice(rule.Match.EventTypes)
+		filters := pagerdutyMatchMap(rule.Match)
+		if len(earlier) > 0 {
+			blocked := false
+			for _, e := range earlier {
+				if len(e) == 0 {
+					blocked = true
+				}
+			}
+			if blocked {
+				*notes = append(*notes, fmt.Sprintf("%s: unreachable in legacy (an earlier rule matched everything) — no trigger generated", where))
+				continue
+			}
+			ex := make([]any, len(earlier))
+			for i, e := range earlier {
+				ex[i] = e
+			}
+			filters["exclude"] = ex
+			*notes = append(*notes, fmt.Sprintf("%s: excludes %d earlier rule match(es) to preserve legacy first-match precedence", where, len(earlier)))
 		}
-		if len(rule.Match.Services) > 0 {
-			filters["services"] = strSlice(rule.Match.Services)
-		}
-		if len(rule.Match.Urgencies) > 0 {
-			filters["urgencies"] = strSlice(rule.Match.Urgencies)
-		}
-		if len(rule.Match.Priorities) > 0 {
-			filters["priorities"] = strSlice(rule.Match.Priorities)
-		}
+		earlier = append(earlier, pagerdutyMatchMap(rule.Match))
 		for vi, act := range rule.Actions {
 			awhere := fmt.Sprintf("%s actions[%d]", where, vi)
 			steps, err := actionSteps(awhere, act, notes)

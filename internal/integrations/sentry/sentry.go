@@ -160,16 +160,6 @@ func (g *Integration) deliver(ctx context.Context, emit core.EmitFunc, resource,
 	}
 	title := fmt.Sprintf("sentry %s: %s", firstNonEmpty(f.Level, "error"), f.Title)
 
-	var target core.Target
-	synthetic := rule.Repo == ""
-	if synthetic {
-		target = inbound.SyntheticTarget("sentry:"+firstNonEmpty(f.Project, g.name), dedup)
-	} else {
-		owner, name, _ := strings.Cut(rule.Repo, "/")
-		target = core.Target{Repo: rule.Repo, Owner: owner, Name: name,
-			Number: inbound.SyntheticTarget("", dedup).Number, HTMLURL: f.URL}
-	}
-
 	sctx := map[string]any{
 		"resource": f.Resource, "action": f.Action, "title": f.Title, "level": f.Level,
 		"environment": f.Environment, "culprit": f.Culprit, "short_id": f.ShortID,
@@ -178,6 +168,21 @@ func (g *Integration) deliver(ctx context.Context, emit core.EmitFunc, resource,
 	for _, act := range rule.Actions {
 		if !act.IsEnabled() {
 			continue
+		}
+		// The checkout repo: the rule's, or a per-variant override (lowered
+		// connectors-model triggers each carry their own repo:).
+		repo := rule.Repo
+		if act.TargetRepo != "" {
+			repo = act.TargetRepo
+		}
+		var target core.Target
+		synthetic := repo == ""
+		if synthetic {
+			target = inbound.SyntheticTarget("sentry:"+firstNonEmpty(f.Project, g.name), dedup)
+		} else {
+			owner, name, _ := strings.Cut(repo, "/")
+			target = core.Target{Repo: repo, Owner: owner, Name: name,
+				Number: inbound.SyntheticTarget("", dedup).Number, HTMLURL: f.URL}
 		}
 		if synthetic {
 			act = inbound.ForceNoCheckout(act)

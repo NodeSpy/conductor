@@ -76,10 +76,10 @@ for that verb.
 | `pagerduty` | `incident` | — | filters: event_types/services/urgencies/priorities |
 | `rss` | one per declared feed | — | per-trigger `match:` regex filter |
 
-Trigger matching semantics differ by design: github/slack/cron/webhook/rss
-triggers are **independent** (every matching trigger fires); sentry and
-pagerduty triggers are evaluated **in config order, first match wins** —
-mirroring their legacy rules exactly, which is what makes migration
-behavior-preserving.
+Trigger matching is uniform across every connector: triggers are
+**independent** — every trigger whose filters match an event fires. (Legacy
+sentry/pagerduty rules were first-match-wins; the migration reproduces that
+winner exactly by generating `exclude:` filters on later triggers, so nothing
+double-fires after a migration.)
 
 Related: [[Verbs]] · [[Configuration]] · [[Grouping]] · [[Policy]] · [[Migration]]
