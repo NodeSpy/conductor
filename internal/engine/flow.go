@@ -156,6 +156,18 @@ func (e *Engine) policyFor(spec config.TriggerSpec) config.Policy {
 	return config.MergePolicy(e.cfg.Policy, connPol, spec.Policy)
 }
 
+// retryPolicyFor resolves the policy that governs an action's retry/backoff
+// gate: the fully scoped merge for a flow trigger, the global block for a
+// legacy action (legacy integrations carry no policy of their own).
+func (e *Engine) retryPolicyFor(act config.Action) config.Policy {
+	if act.FlowRef != "" && e.flow != nil {
+		if spec, ok := e.flow.SpecFor(act.FlowRef); ok {
+			return e.policyFor(spec)
+		}
+	}
+	return config.MergePolicy(e.cfg.Policy)
+}
+
 // flowBaseData mirrors the runner's base scope for group-key rendering.
 func (e *Engine) flowBaseData(t core.Trigger) map[string]any {
 	d := map[string]any{
