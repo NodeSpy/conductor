@@ -79,6 +79,10 @@ type VerbDecl struct {
 	// Ask marks a request-response verb that presents to a human and blocks
 	// for their answer.
 	Ask bool
+	// Open marks a verb whose option keys are user-defined (rest/graphql
+	// declared verbs): unknown-key/type validation is skipped; template
+	// references inside the options are still scope-checked.
+	Open bool
 }
 
 // TypeDecl is a connector type's full self-description.
@@ -241,6 +245,14 @@ func MergeOptions(defaults, call map[string]any) map[string]any {
 	return out
 }
 
+// InstanceDecler lets an Impl replace its type's static declaration with a
+// per-instance one — rest/graphql materialize their user-declared verbs and
+// events into a real TypeDecl so validation, introspection, and InvokeFinal
+// see the instance's actual contract.
+type InstanceDecler interface {
+	InstanceDecl(base *TypeDecl) *TypeDecl
+}
+
 // Builder constructs a connector type's Impl from its instance name, the raw
 // connection config, and shared runtime dependencies.
 type Builder func(name string, ref config.ConnectorRef, deps Deps) (Impl, error)
@@ -339,6 +351,9 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 			}
 		} else {
 			in.Impl = impl
+			if id, ok := impl.(InstanceDecler); ok {
+				in.Decl = id.InstanceDecl(decl)
+			}
 			if verr := impl.Validate(); verr != nil {
 				in.DisabledReason = verr.Error()
 				if deps.Log != nil {
