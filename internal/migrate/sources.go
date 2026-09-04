@@ -511,10 +511,3 @@ func copyMap(m map[string]any) map[string]any {
 	}
 	return out
 }
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
