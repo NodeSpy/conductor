@@ -9,7 +9,7 @@ conductor sweep [--now]                    one catch-up sweep (dry-run print / s
 conductor force <kind> <owner/repo>#<n>    force an action for a target now (via the daemon)
 conductor status                           live agents, in-flight workflows, stuck/attention
 conductor report [--days N]                dispatches by kind/outcome + attention counts
-conductor pause | resume                   stop / resume dispatch at runtime (no restart)
+conductor pause | resume                   stop / resume dispatch at runtime (no restart; also verbs: conductor.pause/resume)
 conductor update [--force] [--tag vX]      self-update to the latest release
 conductor service install|sync|uninstall   manage the background service unit
 conductor connectors ls                    each connector: state, events, verbs, trigger count

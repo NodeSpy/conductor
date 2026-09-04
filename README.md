@@ -430,16 +430,28 @@ skip pleasantries and reply only to state a concrete reason for not applying
 a suggestion; `off` skips `comment`/`reply` verbs to the bot structurally;
 `full` leaves replies ungated.
 
-## Notifications
+## Conductor itself: `conductor.*`
 
-Daemon lifecycle events (`dispatch`, `complete`, `escalate`, `needs_input`,
-plus the periodic `digest`) deliver through connector verbs — `notify.via:`
-routes, each an action unit with `{{.message}}` and the event facts in scope.
-The sink connector types (`ntfy`, `pushover`, `notifiarr`, and slack/discord's
-post-only `webhook_url:` mode) cover everything the legacy sink fields did;
-those fields still work on a legacy config, and migration maps each onto a
-connector + route with a byte-identical wire payload. Workflow-level feedback
-is better expressed as hooks calling verbs — per-trigger and position-scoped.
+Conductor's own lifecycle is a built-in source — alerting is an ordinary
+trigger, not a separate notify subsystem: `on: [conductor.escalate,
+conductor.needs_input]` → steps of sink verbs (`ntfy`, `pushover`,
+`notifiarr`, slack/discord's post-only `webhook_url:` mode), with
+`{{.message}}` and the event facts in scope. Events: `dispatch`, `escalate`
+(gave up after retries), `needs_input`, `complete`, `failed` (a run
+errored), `updated`, `update_available`. Routing, fan-out, quiet hours
+(`policy:`), and digests (`group: { window }`) fall out of the trigger
+grammar; a loop guard keeps a notification workflow's own events from
+re-feeding, and escalations stay audit-logged with no trigger at all. The
+retired `notify:` block auto-migrates onto these triggers with
+byte-identical wire payloads.
+
+Conductor also exposes verbs on itself — `conductor.update` / `pause` /
+`resume` / `restart` / `reload` / `run`, plus `gh.sweep` — so a workflow
+can act on conductor. `update: { auto: true }` still self-applies
+unattended (the default is unchanged); `apply: workflow` makes detection
+emit `conductor.update_available` instead, so a trigger drains, runs
+`uses: conductor.update` (hooks before/after), and smoke-tests around the
+restart.
 
 ## Install (released binary, one-liner)
 

@@ -147,8 +147,8 @@ triggers:
 policy:
   concurrency: { max_agents: 3 }
 
-notify:
-  on: [dispatch, escalate, needs_input]
+# The notify: block is retired — alerting is triggers on the conductor.*
+# lifecycle source (this stack asserts verbs/grouping, not sink delivery).
 
 store:
   state_file: /data/state.json
