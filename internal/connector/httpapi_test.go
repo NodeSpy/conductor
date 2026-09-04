@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -35,45 +34,6 @@ func buildAPIRegistry(t *testing.T, y string, sec *secrets.Resolver) *Registry {
 		t.Fatal(err)
 	}
 	return reg
-}
-
-// tempVault seeds a vault with entries and returns a resolver wired to it.
-func tempVault(t *testing.T, entries map[string]string) *secrets.Resolver {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "vault.json")
-	material, err := secrets.GenerateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyFn := func() ([]byte, error) { return []byte(material), nil }
-	v, err := secrets.InitVault(path, keyFn, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for k, val := range entries {
-		v.Set(k, val)
-	}
-	if err := v.Save(); err != nil {
-		t.Fatal(err)
-	}
-	r := secrets.New()
-	r.VaultPath = path
-	r.VaultKey = keyFn
-	return r
-}
-
-// vaultValue reads one entry back from the resolver's vault.
-func vaultValue(t *testing.T, r *secrets.Resolver, name string) string {
-	t.Helper()
-	v, err := secrets.OpenVault(r.VaultPath, r.VaultKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	val, err := v.Get(name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return val
 }
 
 // TestRESTVerbRequestShape: templated path/query/body/headers reach the wire;
@@ -321,15 +281,21 @@ func TestOAuth2ClientCredentialsCaching(t *testing.T) {
 	}
 }
 
-// TestOAuth2RefreshRotationPersists: the refresh_token grant uses the vault
-// value; when the provider rotates it, the NEW token is written back to the
-// vault entry.
+// TestOAuth2RefreshRotationPersists: the refresh_token grant starts on the
+// vault-held token ({{ vault … }} seed); when the provider rotates it, the
+// NEW token lands in the token_vault under oauth/<connector>/refresh_token.
 func TestOAuth2RefreshRotationPersists(t *testing.T) {
+	t.Cleanup(vaults.Reset)
 	o := newOAuthServer(t)
 	o.nextRotate.Store("rt-2") // the provider rotates on use (the Xero case)
-	sec := tempVault(t, map[string]string{"xero_refresh": "rt-1"})
-	reg := buildAPIRegistry(t, oauthConnYAML(o, "refresh_token", "vault:xero_refresh"), sec)
+	vpath, vkey := seedConductorVaultEntries(t, map[string]string{"xero_refresh": "rt-1"})
+	y := tokenVaultYAML(o, "refresh_token", vpath, vkey,
+		"      refresh_token: '{{ vault \"house\" \"xero_refresh\" }}'\n")
+	reg := buildAPIRegistry(t, y, secrets.New())
 	in, _ := reg.Get("api")
+	if in.DisabledReason != "" {
+		t.Fatalf("disabled: %s", in.DisabledReason)
+	}
 
 	if _, err := in.Invoke(context.Background(), "get", nil); err != nil {
 		t.Fatal(err)
@@ -338,17 +304,19 @@ func TestOAuth2RefreshRotationPersists(t *testing.T) {
 	if form.Get("grant_type") != "refresh_token" || form.Get("refresh_token") != "rt-1" {
 		t.Fatalf("refresh form: %v", form)
 	}
-	if got := vaultValue(t, sec, "xero_refresh"); got != "rt-2" {
-		t.Fatalf("rotated refresh token not persisted: %q", got)
+	if got, err := vaults.Read(context.Background(), "house", "oauth/api/refresh_token"); err != nil || got != "rt-2" {
+		t.Fatalf("rotated refresh token not persisted: %q %v", got, err)
 	}
 }
 
 // TestOAuth2RetryOnceOn401: a token revoked out from under the cache triggers
 // exactly one refresh + retry.
 func TestOAuth2RetryOnceOn401(t *testing.T) {
+	t.Cleanup(vaults.Reset)
 	o := newOAuthServer(t)
-	sec := tempVault(t, map[string]string{"rt": "rt-1"})
-	reg := buildAPIRegistry(t, oauthConnYAML(o, "refresh_token", "vault:rt"), sec)
+	vpath, vkey := seedConductorVaultEntries(t, map[string]string{"rt": "rt-1"})
+	reg := buildAPIRegistry(t, tokenVaultYAML(o, "refresh_token", vpath, vkey,
+		"      refresh_token: '{{ vault \"house\" \"rt\" }}'\n"), secrets.New())
 	in, _ := reg.Get("api")
 	if _, err := in.Invoke(context.Background(), "get", nil); err != nil {
 		t.Fatal(err)

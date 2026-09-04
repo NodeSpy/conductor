@@ -65,45 +65,53 @@ func TestResolveLiteralPassthrough(t *testing.T) {
 	}
 }
 
-func TestResolveFile(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "tok")
-	os.WriteFile(p, []byte("file-secret-value\n"), 0o600)
+// TestLegacySchemesErrorLoudly: the replaced scheme URIs are still
+// RECOGNIZED (IsRef true, so they never pass through as literal creds) but
+// resolve to the migration-pointing error — no silent loss.
+func TestLegacySchemesErrorLoudly(t *testing.T) {
 	r := testResolver()
-	v, err := r.Resolve(context.Background(), "file:"+p)
-	if err != nil || v != "file-secret-value" {
-		t.Fatalf("file resolve: %q, %v", v, err)
+	for _, ref := range []string{
+		"op://Private/GitHub/token", "pass:conductor/gh", "vault:gh-token", "file:/run/secrets/gh",
+	} {
+		if !IsRef(ref) {
+			t.Errorf("IsRef(%q) must stay true", ref)
+		}
+		if _, err := r.Resolve(context.Background(), ref); err == nil ||
+			!strings.Contains(err.Error(), "replaced by vaults:") {
+			t.Errorf("Resolve(%q) = %v, want the migration pointer", ref, err)
+		}
 	}
 }
 
-func TestResolveOpAndPass(t *testing.T) {
+// TestResolveVaultRef: a {{ vault … }} reference resolves through the
+// VaultRead hook, caches, and tracks for redaction.
+func TestResolveVaultRef(t *testing.T) {
 	r := testResolver()
-	var calls []string
-	r.Exec = func(ctx context.Context, name string, args ...string) (string, error) {
-		calls = append(calls, name+" "+strings.Join(args, " "))
-		switch name {
-		case "op":
-			return "op-secret", nil
-		case "pass":
-			return "pass-secret\nextra: metadata", nil
+	calls := 0
+	r.VaultRead = func(ctx context.Context, name, key string) (string, error) {
+		calls++
+		if name != "op" || key != "Private/GitHub/token" {
+			t.Fatalf("hook args: %s %s", name, key)
 		}
-		return "", fmt.Errorf("unexpected helper %s", name)
+		return "hook-secret", nil
 	}
-	if v, err := r.Resolve(context.Background(), "op://Private/GitHub/token"); err != nil || v != "op-secret" {
-		t.Fatalf("op resolve: %q, %v", v, err)
+	for i := 0; i < 2; i++ {
+		v, err := r.Resolve(context.Background(), `{{ vault "op" "Private/GitHub/token" }}`)
+		if err != nil || v != "hook-secret" {
+			t.Fatalf("vault ref resolve: %q, %v", v, err)
+		}
 	}
-	if v, err := r.Resolve(context.Background(), "pass:conductor/gh-token"); err != nil || v != "pass-secret" {
-		t.Fatalf("pass resolve (first line only): %q, %v", v, err)
+	if calls != 1 {
+		t.Fatalf("expected cache hit, hook ran %d times", calls)
 	}
-	if len(calls) != 2 || !strings.HasPrefix(calls[0], "op read") || !strings.HasPrefix(calls[1], "pass show conductor/gh-token") {
-		t.Fatalf("helper calls: %v", calls)
+	if got := r.Redact("x hook-secret y"); !strings.Contains(got, Placeholder) {
+		t.Errorf("resolved vault value should redact: %q", got)
 	}
-	// Cached: a second resolve must not re-run the helper.
-	if _, err := r.Resolve(context.Background(), "op://Private/GitHub/token"); err != nil {
-		t.Fatal(err)
-	}
-	if len(calls) != 2 {
-		t.Fatalf("expected cache hit, helpers ran %d times", len(calls))
+	// Without the hook, a vault ref errors clearly.
+	r2 := testResolver()
+	if _, err := r2.Resolve(context.Background(), `{{ vault "a" "b" }}`); err == nil ||
+		!strings.Contains(err.Error(), "no vaults are configured") {
+		t.Errorf("hookless vault ref: %v", err)
 	}
 }
 
@@ -173,13 +181,14 @@ func TestVaultRoundTrip(t *testing.T) {
 		t.Fatal("vault file contains plaintext")
 	}
 
-	// Reopen and read back through the resolver.
-	r := testResolver()
-	r.VaultPath = path
-	r.VaultKey = keyFn
-	got, e := r.Resolve(context.Background(), "vault:gh-token")
+	// Reopen and read back.
+	v2, e := OpenVault(path, keyFn)
+	if e != nil {
+		t.Fatal(e)
+	}
+	got, e := v2.Get("gh-token")
 	if e != nil || got != "vault-secret" {
-		t.Fatalf("vault resolve: %q, %v", got, e)
+		t.Fatalf("vault read back: %q, %v", got, e)
 	}
 
 	// Wrong key fails closed — at open (the whole map unseals on load).

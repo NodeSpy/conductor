@@ -116,11 +116,10 @@ func (a authConfig) validate(where string) error {
 // authenticator applies the resolved auth to outbound requests, owning the
 // oauth2 token cache and refresh/rotation lifecycle for one connector.
 type authenticator struct {
-	cfg        authConfig // credential fields already secret-resolved
-	name       string     // the connector's name (token_vault key prefix)
-	refreshRef string     // LEGACY: the raw refresh_token vault: ref (pre-token_vault rotation target)
-	sec        *secrets.Resolver
-	log        func(string, ...any)
+	cfg  authConfig // credential fields already secret-resolved
+	name string     // the connector's name (token_vault key prefix)
+	sec  *secrets.Resolver
+	log  func(string, ...any)
 
 	mu      sync.Mutex
 	access  string
@@ -135,7 +134,7 @@ func newAuthenticator(ctx context.Context, name string, a authConfig, sec *secre
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	au := &authenticator{cfg: a, name: name, refreshRef: a.RefreshToken, sec: sec, log: logf}
+	au := &authenticator{cfg: a, name: name, sec: sec, log: logf}
 	resolve := func(field string, v *string) error {
 		if *v == "" {
 			return nil
@@ -298,12 +297,6 @@ func (au *authenticator) fetchTokenLocked(ctx context.Context) (string, error) {
 		au.refresh = tr.RefreshToken
 		au.sec.Track(tr.RefreshToken)
 		rotated = tr.RefreshToken
-		// LEGACY pre-token_vault rotation target: refresh_token: vault:<entry>.
-		if name, ok := strings.CutPrefix(au.refreshRef, "vault:"); ok && au.cfg.TokenVault == "" {
-			if err := au.sec.StoreVault(name, tr.RefreshToken); err != nil {
-				au.log("oauth2: rotated refresh token could not be persisted to vault:%s: %v", name, err)
-			}
-		}
 	}
 	au.persistTokensLocked(ctx, rotated)
 	return au.access, nil

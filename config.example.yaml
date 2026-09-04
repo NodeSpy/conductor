@@ -8,16 +8,29 @@
 # (or a legacy integrations: block — the previous schema still loads, and
 # `conductor config migrate` converts it; see config.example.legacy.yaml).
 #
-# Secrets: ${VAR} reads the environment / the sibling conductor.env (as
-# always). Any credential field also accepts a secret reference:
-#   env:GH_PAT · op://Vault/Item/field · pass:conductor/gh · vault:gh-token
-#   · file:/run/secrets/gh
-# The named secrets: block gives a reused reference one name, readable in
-# templates as {{.secrets.<name>}}. `conductor secrets check` resolves them
-# all and reports.
+# Secrets: ${VAR} / env:VAR reads the environment / the sibling conductor.env
+# — the implicit baseline, nothing to declare. Everything beyond env is a
+# vault declared in vaults: (below) and read with
+# {{ vault "<name>" "<key>" }}. `conductor secrets check` unlocks every
+# vault and resolves every reference without printing values.
 
-secrets:
-  gh-token: env:GH_PAT # or op://Private/GitHub/token, pass:…, vault:…, file:…
+# ---------------------------------------------------------------------------
+# vaults: — named secret stores. Types: conductor (the built-in hardened
+# encrypted vault.json — entry names and count are inside the ciphertext),
+# onepassword (op CLI, read-only), pass (GPG store), file (a mounted dir of
+# secret files, read-only), hashicorp (HashiCorp Vault KV v2). Each entry
+# carries its connection + an unlock: bootstrap ref (env:VAR, file:/path,
+# keyring:, creds: for systemd credentials — non-interactive, because the
+# daemon restarts itself). Steps read/write with `uses: <name>.read` /
+# `<name>.write` (write only on writable types); values are tainted and
+# redacted from logs/audit. CLI: conductor vault <name> init|add|get|ls|rm.
+# ---------------------------------------------------------------------------
+# vaults:
+#   house: { type: conductor }                  # ~/.config/conductor/vault.json
+#   op:    { type: onepassword, account: acme, service_account: env:OP_SA }
+#   store: { type: pass, prefix: conductor }
+#   files: { type: file, dir: /run/secrets }
+#   hcv:   { type: hashicorp, addr: https://vault.internal, unlock: { token: env:VAULT_TOKEN } }
 
 # ---------------------------------------------------------------------------
 # connectors: — external services. Each has two faces: events you can trigger
@@ -129,15 +142,18 @@ connectors:
   # statuses defaulting to 2xx, `output:` templates over the parsed response)
   # and optionally polled `events:` (a request, a `list:` template naming the
   # response array, an `id:` template for dedup, `context:` fields published
-  # to the trigger). Templates see {{.options.*}}, {{.secrets.*}}, and — in
+  # to the trigger). Templates see {{.options.*}}, {{ vault … }} reads, and — in
   # outputs — {{.response.status/body/headers}}; events add {{.item.*}}. The
   # `json` filter encodes a structured option as a JSON body.
   # auth: is shared with graphql: none | bearer{token} | basic{username,
   # password} | header{name,value} | oauth2{grant, token_url, client_id,
-  # client_secret, refresh_token, scopes, auth_url, redirect_uri}. oauth2
-  # tokens are fetched and cached per connector, refreshed ahead of expiry
-  # and once on a 401; a rotated refresh token is written back to the vault:
-  # ref (run `conductor connector auth <name>` once to seed it).
+  # client_secret, token_vault, scopes, auth_url, device_auth_url,
+  # redirect_uri}. oauth2 grants: client_credentials | refresh_token |
+  # authorization_code | device. Tokens are fetched and cached per connector,
+  # refreshed ahead of expiry and once on a 401; the captured access +
+  # refresh tokens live in token_vault (a vaults: entry) and rotations are
+  # written back there. Log in once with `conductor connector auth <name>`;
+  # `connector auth ls` shows each connector's state + expiry.
   # xero:
   #   type: rest
   #   base_url: https://api.xero.com/api.xro/2.0
@@ -147,8 +163,8 @@ connectors:
   #     token_url: https://identity.xero.com/connect/token
   #     auth_url: https://login.xero.com/identity/connect/authorize
   #     client_id: ${XERO_CLIENT_ID}
-  #     client_secret: vault:xero-client-secret
-  #     refresh_token: vault:xero-refresh      # rotations persist here
+  #     client_secret: '{{ vault "house" "xero-client-secret" }}'
+  #     token_vault: house                     # captured tokens + rotations persist here
   #     scopes: [accounting.transactions, offline_access]
   #   headers: { Accept: application/json, Xero-Tenant-Id: "${XERO_TENANT_ID}" }
   #   verbs:
@@ -178,7 +194,7 @@ connectors:
   # shop:
   #   type: graphql
   #   endpoint: https://myshop.myshopify.com/admin/api/2025-01/graphql.json
-  #   auth: { type: header, name: X-Shopify-Access-Token, value: vault:shopify-token }
+  #   auth: { type: header, name: X-Shopify-Access-Token, value: '{{ vault "house" "shopify-token" }}' }
   #   verbs:
   #     create_order:
   #       query: |
@@ -213,13 +229,13 @@ hosts:
 # stores:
 #   state: { type: boltdb }                    # <data dir>/state.db
 #   archive: { type: boltdb, path: /mnt/big/archive.db }
-#   cache: { type: redis, url: "redis://10.0.0.5:6379/0", password: vault:redis_pw }
+#   cache: { type: redis, url: "redis://10.0.0.5:6379/0", password: '{{ vault "house" "redis_pw" }}' }
 #   shared:
 #     type: http
 #     base_url: https://kv.example.com/kv
-#     auth: { type: bearer, token: vault:kv-shim }
-#   analytics: { type: postgres, url: "postgres://conductor@db/analytics", password: vault:pg }
-#   billing: { type: mysql, dsn: "conductor:@tcp(db:3306)/billing", password: vault:mysql }
+#     auth: { type: bearer, token: '{{ vault "house" "kv-shim" }}' }
+#   analytics: { type: postgres, url: "postgres://conductor@db/analytics", password: '{{ vault "house" "pg" }}' }
+#   billing: { type: mysql, dsn: "conductor:@tcp(db:3306)/billing", password: '{{ vault "house" "mysql" }}' }
 #   local: { type: sqlite }                    # <data dir>/local.sqlite
 
 # ---------------------------------------------------------------------------
