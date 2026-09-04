@@ -36,7 +36,6 @@ triggers:
 | `rate_limits.per_minute` | that connector's outbound verb cap | connector |
 | `backoff.base` / `backoff.max` | retry cadence past the soft attempt threshold | connector |
 | `pause_label` | a github label that parks a target; a trigger-level value gives that workflow its own hold label | connector, trigger |
-| `enabled` | `false` = the config-level kill switch (the runtime one stays `conductor pause`/`resume`) | any |
 | `shadow` | preview instead of dispatching | any |
 | `max_attempts_per_head` | soft attempt threshold before backoff | any |
 
@@ -46,6 +45,10 @@ Any connector or trigger turns off in place with `enabled: false` (default
 `true`): a disabled connector opens no sources and exposes no verbs; a
 disabled trigger never fires. The config stays intact and `validate` still
 checks it.
+
+There is no policy-level `enabled` — the global kill switch is the runtime
+`conductor pause` / `resume`, not a config field. (Migration refuses a legacy
+`control.enabled: false` for the same reason, naming the fix.)
 
 Unparsable quiet-hours values fail **open** (never quiet) — a typo must not
 silently hold all work.

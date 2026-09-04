@@ -676,6 +676,13 @@ integrations:
 			"integrations:\n  - {type: cron, name: c, schedules: [{name: s, cron: '* * * * *', action: {type: command, command: [x]}}]}\nconnectors:\n  x: {type: slack}\n",
 			"finish the migration by hand",
 		},
+		{
+			// The new schema has no config kill switch (runtime `conductor
+			// pause` only) — a disabled box must refuse, never silently re-enable.
+			"explicit kill switch",
+			"integrations:\n  - {type: cron, name: c, schedules: [{name: s, cron: '* * * * *', action: {type: command, command: [x]}}]}\ncontrol:\n  enabled: false\n",
+			"control.enabled: false",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
