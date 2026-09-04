@@ -27,7 +27,7 @@ RUN go build -o /out/conductor ./cmd/paseo-conductor \
 
 # ---- runtime stage ----
 FROM alpine:3.20
-RUN apk add --no-cache git git-daemon curl bash coreutils openssl \
+RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh \
  && adduser -D -h /home/conductor conductor
 COPY --from=build /out/ /usr/local/bin/
 # The fake paseo is installed as `paseo` too, so a config without an explicit

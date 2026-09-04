@@ -1,0 +1,20 @@
+{
+  "number": 1,
+  "state": "open",
+  "draft": false,
+  "mergeable_state": "clean",
+  "mergeable": true,
+  "title": "PR with a review comment",
+  "html_url": "https://forge.test/conn/csvc/pull/1",
+  "user": {
+    "login": "conductor-user"
+  },
+  "head": {
+    "sha": "canned-head-csvc1",
+    "ref": "pr-1"
+  },
+  "base": {
+    "ref": "main"
+  },
+  "labels": []
+}

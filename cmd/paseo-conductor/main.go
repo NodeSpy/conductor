@@ -204,6 +204,21 @@ func cmdValidate(args []string) error {
 	if err := validateAll(cfg, igs); err != nil {
 		return err
 	}
+	// The connectors-model semantic pass: schemas, verbs, position-scoped
+	// references, workflow inputs/outputs. No-op for legacy-only configs.
+	stack, err := buildFlowStack(cfg, nil, nil, true)
+	if err != nil {
+		return err
+	}
+	if stack != nil {
+		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s), %d agent profile(s)",
+			len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows), len(cfg.Agents))
+		if len(cfg.Integrations) > 0 {
+			fmt.Printf(" — plus %d legacy integration(s)", len(cfg.Integrations))
+		}
+		fmt.Println()
+		return nil
+	}
 	fmt.Printf("ok: %d integration(s) configured (%d enabled), %d agent profile(s)\n",
 		len(cfg.Integrations), len(igs), len(cfg.Agents))
 	return nil

@@ -1,0 +1,108 @@
+# Connectors-model config for the e2e stack (group K): a github connector
+# receiving signed fixture webhooks, a slack connector whose Web API base is
+# the sink-catcher (PC_SLACK_API_URL), an SSH host looping back to this
+# container's own sshd, and triggers exercising cross-boundary steps, hooks,
+# js code steps, grouping, and remote execution. Hermetic — no egress.
+
+connectors:
+  gh:
+    type: github
+    app:
+      app_id: 123456
+      private_key_path: /etc/conductor/github-app.pem
+      webhook_secret: e2e-webhook-secret
+      verify_signature: true
+    webhook:
+      listen: "0.0.0.0:8787"
+      path: /webhook
+    sweep: { enabled: false }
+    me: { logins: [conductor-user] }
+    identity:
+      read_token: app
+      write_token: e2e-user-write-token # literal token; no gh binary in the image
+
+  slack:
+    type: slack
+    # Verbs only (no slack triggers), so no Socket Mode connection is opened;
+    # bot_token is all the verb face needs. The API base comes from
+    # PC_SLACK_API_URL (the sink-catcher's slack-shaped endpoint).
+    bot_token: xoxb-e2e-dummy
+    options: { channel: CDEFAULT }
+
+hosts:
+  selfbox:
+    host: 127.0.0.1 # this container's own sshd (started by entrypoint-conn.sh)
+    user: root
+    key: /root/.ssh/id_ed25519
+    known_hosts: /root/.ssh/known_hosts
+
+runtimes:
+  paseo: { type: paseo, bin: /usr/local/bin/fakepaseo, default: true }
+
+agents:
+  fixer:
+    provider: fake
+    workspace: worktree
+    archive_when_done: true
+    wait_timeout: 5m
+
+triggers:
+  # K1: cross-boundary workflow — an agent fixes the conflict while slack
+  # hooks announce start and completion.
+  - on: gh.merge_conflict
+    filters: { repos: ["conn/cweb"] }
+    steps:
+      - id: fix
+        type: agent
+        agent: fixer
+        prompt: "Resolve the conflict on {{.repo}}#{{.pr}} against {{.base}}: rebase, fix, push."
+    hooks:
+      - { at: start, uses: slack.post, options: { channel: C1, text: "K1-start {{.repo}}#{{.pr}}" } }
+      - { at: done, uses: slack.post, options: { channel: C1, text: "K1-done {{.repo}}#{{.pr}}" } }
+      - { at: fail, uses: slack.post, options: { channel: C1, text: "K1-fail {{.error}}" } }
+
+  # K5: remote execution — a host-interpreter code step runs over SSH on
+  # selfbox (this container's sshd), its output flowing into a slack post.
+  - on: gh.merge_conflict
+    name: remote
+    filters: { repos: ["conn/cweb"] }
+    steps:
+      - id: remote
+        run: sh
+        host: selfbox
+        code: |
+          printf '{"where":"%s","user":"%s"}' "$(hostname)" "$(id -un)"
+      - id: tell
+        uses: slack.post
+        options: { channel: C5, text: "K5-remote {{.remote.where}} as {{.remote.user}}" }
+
+  # K2: a js code step reshapes the comment, a verb posts the result.
+  - on: gh.new_comment
+    filters: { repos: ["conn/csvc"] }
+    steps:
+      - id: shape
+        run: js
+        code: "return { msg: 'seen ' + ctx.comment_body }"
+      - id: post
+        uses: slack.post
+        options: { channel: C2, text: "K2 {{.shape.msg}}" }
+
+  # K3: grouping — a burst of comments on one PR becomes ONE run.
+  - on: gh.new_comment
+    name: grouped
+    filters: { repos: ["conn/csvc"] }
+    group: { key: "{{.repo}}#{{.number}}", window: 2s }
+    steps:
+      - id: batch
+        uses: slack.post
+        options: { channel: C3, text: "K3-batch {{.group.count}} last={{.group.last.comment_body}}" }
+
+policy:
+  concurrency: { max_agents: 3 }
+
+notify:
+  on: [dispatch, escalate, needs_input]
+
+store:
+  state_file: /data/state.json
+  audit_log: /data/audit.jsonl
