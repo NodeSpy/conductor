@@ -43,6 +43,7 @@ func (e *Executor) execJS(spec Spec, data map[string]any) (map[string]any, error
 	}
 	src := "globalThis.ctx = " + string(dataJSON) + ";\n" +
 		jsKVShim() +
+		jsSQLShim() +
 		"JSON.stringify((function(){\n" + spec.Code + "\n})() ?? null)"
 
 	rt, err := qjs.New()
@@ -63,6 +64,16 @@ func (e *Executor) execJS(spec Spec, data map[string]any) (map[string]any, error
 		return this.Context().NewString(kvInvokeJSON(payload)), nil
 	})
 	qctx.Global().SetPropertyStr("__conductor_kv", hostKV)
+
+	// ctx.sql bridges to the defined SQL stores the same way.
+	hostSQL := qctx.Function(func(this *qjs.This) (*qjs.Value, error) {
+		payload := ""
+		if args := this.Args(); len(args) > 0 {
+			payload = args[0].String()
+		}
+		return this.Context().NewString(sqlInvokeJSON(payload)), nil
+	})
+	qctx.Global().SetPropertyStr("__conductor_sql", hostSQL)
 
 	ret, err := qctx.Eval("step.js", qjs.Code(src))
 	if err != nil {
@@ -86,6 +97,24 @@ func jsKVShim() string {
 	return `ctx.store = (store) => {
   const call = (op, args) => {
     const r = JSON.parse(__conductor_kv(JSON.stringify({ store, op, args })));
+    if (r.err) throw new Error(r.err);
+    return r.v ?? null;
+  };
+  const o = {};
+  for (const op of ` + string(ops) + `) o[op] = (...args) => call(op, args);
+  return o;
+};
+`
+}
+
+// jsSQLShim builds ctx.sql over the __conductor_sql host bridge:
+// ctx.sql("analytics") returns { query, exec }, each taking (sql, args?); a
+// bridge error becomes a thrown Error.
+func jsSQLShim() string {
+	ops, _ := json.Marshal(sqlOps)
+	return `ctx.sql = (store) => {
+  const call = (op, args) => {
+    const r = JSON.parse(__conductor_sql(JSON.stringify({ store, op, args })));
     if (r.err) throw new Error(r.err);
     return r.v ?? null;
   };
