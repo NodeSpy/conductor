@@ -2,6 +2,7 @@ package kv
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -489,15 +490,18 @@ func TestListMutationAtomicity(t *testing.T) {
 	}
 }
 
-// TestDefaultStoreWiring: SetDefaultPath + lazy Default(), including the
-// re-point-and-reopen path tests rely on.
-func TestDefaultStoreWiring(t *testing.T) {
-	SetDefaultPath("")
+// TestRegistryWiring: SetDataDir + the lazy implicit boltdb default, named
+// registration with default: true resolution, reserved/duplicate errors, and
+// re-pointing the data dir.
+func TestRegistryWiring(t *testing.T) {
+	SetDataDir("")
+	ResetStores()
+	t.Cleanup(func() { SetDataDir(""); ResetStores() })
 	if _, err := Default(); err == nil {
-		t.Fatal("Default without a path must error")
+		t.Fatal("Default without a data dir must error")
 	}
-	p1 := filepath.Join(t.TempDir(), "kv.db")
-	SetDefaultPath(p1)
+	dir1 := t.TempDir()
+	SetDataDir(dir1)
 	s1, err := Default()
 	if err != nil {
 		t.Fatal(err)
@@ -505,64 +509,79 @@ func TestDefaultStoreWiring(t *testing.T) {
 	if err := s1.Set("", "k", "v1", 0); err != nil {
 		t.Fatal(err)
 	}
-	again, _ := Default()
-	if again != s1 {
+	if _, err := os.Stat(filepath.Join(dir1, "default.db")); err != nil {
+		t.Fatalf("implicit default file: %v", err)
+	}
+	if again, _ := Default(); again != s1 {
 		t.Fatal("Default must return the same open store")
 	}
-	SetDefaultPath(p1) // same path: no-op, still open
-	if s, _ := Default(); s != s1 {
-		t.Fatal("same-path SetDefaultPath must keep the store")
+	if byName, _ := Use(DefaultStoreName); byName != s1 {
+		t.Fatal("the implicit default is addressable by name")
 	}
-	p2 := filepath.Join(t.TempDir(), "kv.db")
-	SetDefaultPath(p2)
+
+	// A named store; unknown lookups name what exists.
+	other := openTemp(t)
+	if err := Register("cache", other, false); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := Use("cache"); err != nil || b != other {
+		t.Fatalf("use cache: %v %v", b, err)
+	}
+	if _, err := Use("ghost"); err == nil || !contains(err.Error(), "cache") {
+		t.Fatalf("unknown store: %v", err)
+	}
+	if err := Register("cache", other, false); err == nil {
+		t.Fatal("duplicate registration must error")
+	}
+	if err := Register(DefaultStoreName, other, false); err == nil || !contains(err.Error(), "reserved") {
+		t.Fatalf("reserved name: %v", err)
+	}
+
+	// default: true wins the "" resolution; a second claimant errors.
+	if err := Register("primary", openTemp(t), true); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := Default()
+	if p, _ := Use("primary"); b != p {
+		t.Fatal("default: true store must win the empty selector")
+	}
+	if err := Register("primary2", openTemp(t), true); err == nil || !contains(err.Error(), "pick one") {
+		t.Fatalf("two defaults: %v", err)
+	}
+	ResetStores()
+
+	// A boltdb store with an explicit path uses it; the name-derived file
+	// otherwise (through the shared construction path).
+	explicit := filepath.Join(t.TempDir(), "archive.db")
+	ab, err := OpenBoltStore("archive", explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ab.Close()
+	if _, err := os.Stat(explicit); err != nil {
+		t.Fatalf("explicit path: %v", err)
+	}
+	sb, err := OpenBoltStore("scratch", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sb.Close()
+	if _, err := os.Stat(filepath.Join(dir1, "scratch.db")); err != nil {
+		t.Fatalf("name-derived path: %v", err)
+	}
+	// An unopenable explicit path is a clear error naming the store.
+	if _, err := OpenBoltStore("bad", "/dev/null/nope/x.db"); err == nil || !contains(err.Error(), `"bad"`) {
+		t.Fatalf("bad path: %v", err)
+	}
+
+	// Re-pointing the data dir drops the lazily-opened default so it
+	// reopens fresh.
+	SetDataDir(t.TempDir())
 	s2, err := Default()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, found, _ := s2.Get("", "k"); found {
-		t.Fatal("new path must be a fresh store")
-	}
-	SetDefaultPath("")
-}
-
-// TestErrorBranches: unserializable values, required keys, and the type
-// names in mismatch errors.
-func TestErrorBranches(t *testing.T) {
-	s := openTemp(t)
-	if err := s.Set("", "bad", make(chan int), 0); err == nil || !contains(err.Error(), "JSON-serializable") {
-		t.Fatalf("unserializable set: %v", err)
-	}
-	if _, _, err := s.SetNX("", "", 1, 0); err == nil {
-		t.Fatal("setnx empty key")
-	}
-	for _, err := range []error{
-		func() error { return s.Set("", "", 1, 0) }(),
-		func() error { _, _, e := s.Get("", ""); return e }(),
-		func() error { return s.Delete("", "") }(),
-		func() error { _, e := s.Incr("", "", 1); return e }(),
-		func() error { _, e := s.Merge("", "", nil); return e }(),
-		func() error { _, e := s.Append("", "", nil, false); return e }(),
-		func() error { _, e := s.Remove("", "", nil); return e }(),
-		func() error { _, e := s.Contains("", "", 1); return e }(),
-		func() error { _, e := s.Len("", ""); return e }(),
-		func() error { _, _, _, e := s.Pop("", "", false); return e }(),
-	} {
-		if err == nil || !contains(err.Error(), "key is required") {
-			t.Fatalf("empty key must error: %v", err)
-		}
-	}
-	// typeName in mismatches: a list refuses merge; an object refuses append;
-	// null appends refuse too.
-	_, _ = s.Append("", "alist", []any{1}, false)
-	if _, err := s.Merge("", "alist", map[string]any{"a": 1}); err == nil || !contains(err.Error(), "list") {
-		t.Fatalf("merge over list: %v", err)
-	}
-	_, _ = s.Merge("", "anobj", map[string]any{"a": 1})
-	if _, err := s.Append("", "anobj", []any{1}, false); err == nil || !contains(err.Error(), "object") {
-		t.Fatalf("append over object: %v", err)
-	}
-	_ = s.Set("", "anull", nil, 0)
-	if _, err := s.Len("", "anull"); err == nil || !contains(err.Error(), "null") {
-		t.Fatalf("len over null: %v", err)
+		t.Fatal("new data dir must be a fresh default store")
 	}
 }

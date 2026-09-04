@@ -1,0 +1,226 @@
+package kv
+
+import (
+	"fmt"
+	"path/filepath"
+	"sort"
+	"sync"
+	"time"
+)
+
+// KVBackend is the contract every KV store implements — the bolt default,
+// redis, http, and any build-tagged extension (firestore/dynamodb slot in
+// here). Semantics are uniform across backends:
+//
+//   - Namespaces isolate keyspaces; "" means DefaultNamespace.
+//   - Values are JSON-shaped (string/float64/bool/map[string]any/[]any/nil).
+//   - Absent and expired keys read as found=false.
+//   - Every read-modify-write op — Incr, SetNX, Merge, Append, Remove,
+//     Pop — is ONE backend transaction (bolt Update / redis Lua script /
+//     the http shim's server-side op), so concurrent steps stay correct.
+//   - Type mismatches (Merge on a non-object, list ops on a non-list)
+//     error naming the key and the actual type.
+//
+// A backend that cannot serve one of these ops must say so via
+// Capabilities — the load-time capability check turns that into a clear
+// config error instead of a runtime surprise.
+type KVBackend interface {
+	Get(namespace, key string) (value any, found bool, err error)
+	Set(namespace, key string, value any, ttl time.Duration) error
+	SetNX(namespace, key string, value any, ttl time.Duration) (value2 any, created bool, err error)
+	Merge(namespace, key string, patch map[string]any) (map[string]any, error)
+	Delete(namespace, key string) error
+	Incr(namespace, key string, by int64) (int64, error)
+	Append(namespace, key string, items []any, unique bool) ([]any, error)
+	Remove(namespace, key string, items []any) ([]any, error)
+	Contains(namespace, key string, item any) (bool, error)
+	First(namespace, key string) (any, bool, error)
+	Last(namespace, key string) (any, bool, error)
+	Index(namespace, key string, idx int) (any, bool, error)
+	Slice(namespace, key string, start, end int, endSet bool) ([]any, error)
+	Len(namespace, key string) (int, error)
+	Pop(namespace, key string, front bool) (value any, found bool, length int, err error)
+	List(namespace, prefix string) (keys []string, entries map[string]any, err error)
+	Close() error
+}
+
+// Ops is the full operation set, in the order the verbs publish them. A
+// backend's Capabilities response is checked against the ops a config
+// actually uses.
+var Ops = []string{
+	"get", "set", "setnx", "merge", "delete", "incr",
+	"append", "remove", "contains", "first", "last",
+	"index", "slice", "len", "pop", "list",
+}
+
+// Capabilities reports which ops a backend serves. Backends implementing
+// everything (bolt, redis, http) need not implement it — full coverage is
+// assumed; a partial backend implements this to be capability-checked at
+// load.
+type Capabilities interface {
+	Capabilities() map[string]bool
+}
+
+// Supports reports whether backend b can serve op.
+func Supports(b KVBackend, op string) bool {
+	c, ok := b.(Capabilities)
+	if !ok {
+		return true
+	}
+	return c.Capabilities()[op]
+}
+
+// CheckCapability returns a clear error when the named store can't serve op.
+func CheckCapability(storeName string, b KVBackend, op string) error {
+	if !Supports(b, op) {
+		return fmt.Errorf("kv: store %q does not support %s", storeName, op)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// The store registry. boltdb is a first-class store type like redis/http —
+// nothing here special-cases it. The zero-config default is an IMPLICIT
+// boltdb store named "default" (file <data dir>/default.db), constructed
+// through the same path as any configured boltdb store and opened lazily on
+// first use. A `stores:` entry with default: true supersedes it as what an
+// omitted `store:` resolves to.
+// ---------------------------------------------------------------------------
+
+// DefaultStoreName is the implicit zero-config boltdb store's name (and its
+// file stem). A `stores:` entry may not take it.
+const DefaultStoreName = "default"
+
+var (
+	regMu       sync.Mutex
+	dataDir     string // where boltdb stores without an explicit path: live
+	named       = map[string]KVBackend{}
+	defaultName = DefaultStoreName
+)
+
+// SetDataDir points boltdb stores (including the implicit default) at dir.
+// Changing it drops a lazily-opened default so it reopens at the new
+// location (tests point this at a temp dir).
+func SetDataDir(dir string) {
+	regMu.Lock()
+	defer regMu.Unlock()
+	if dir == dataDir {
+		return
+	}
+	if b, ok := named[DefaultStoreName]; ok {
+		_ = b.Close()
+		delete(named, DefaultStoreName)
+	}
+	dataDir = dir
+}
+
+// BoltPath resolves a boltdb store's file: the explicit path, else
+// <data dir>/<store-name>.db.
+func BoltPath(storeName, path string) (string, error) {
+	if path != "" {
+		return path, nil
+	}
+	regMu.Lock()
+	dir := dataDir
+	regMu.Unlock()
+	if dir == "" {
+		return "", fmt.Errorf("kv: store %q: data dir not configured", storeName)
+	}
+	return filepath.Join(dir, storeName+".db"), nil
+}
+
+// OpenBoltStore builds the boltdb backend for a named store — the one
+// construction path both `stores:` entries and the implicit default use.
+func OpenBoltStore(storeName, path string) (KVBackend, error) {
+	p, err := BoltPath(storeName, path)
+	if err != nil {
+		return nil, err
+	}
+	b, err := Open(p)
+	if err != nil {
+		return nil, fmt.Errorf("kv: store %q: %w", storeName, err)
+	}
+	return b, nil
+}
+
+// Register adds a named backend (a `stores:` entry). The implicit default's
+// name is reserved; duplicates and a second default error.
+func Register(name string, b KVBackend, isDefault bool) error {
+	regMu.Lock()
+	defer regMu.Unlock()
+	if name == DefaultStoreName {
+		return fmt.Errorf("kv: store name %q is reserved (the implicit boltdb default)", DefaultStoreName)
+	}
+	if _, dup := named[name]; dup {
+		return fmt.Errorf("kv: store %q registered twice", name)
+	}
+	if isDefault {
+		if defaultName != DefaultStoreName {
+			return fmt.Errorf("kv: stores %q and %q both claim default: true — pick one", defaultName, name)
+		}
+		defaultName = name
+	}
+	named[name] = b
+	return nil
+}
+
+// ResetStores closes and clears every registered backend (config reload,
+// tests) and restores the implicit default. The data dir stays configured.
+func ResetStores() {
+	regMu.Lock()
+	defer regMu.Unlock()
+	for _, b := range named {
+		_ = b.Close()
+	}
+	named = map[string]KVBackend{}
+	defaultName = DefaultStoreName
+}
+
+// Use resolves a store selector: "" picks the default store (a stores:
+// entry with default: true, else the implicit boltdb default, opened lazily
+// through the ordinary boltdb path); any other name must be a registered
+// `stores:` entry or the implicit default's own name.
+func Use(name string) (KVBackend, error) {
+	regMu.Lock()
+	defer regMu.Unlock()
+	if name == "" {
+		name = defaultName
+	}
+	if b, ok := named[name]; ok {
+		return b, nil
+	}
+	if name == DefaultStoreName {
+		if dataDir == "" {
+			return nil, fmt.Errorf("kv: store path not configured")
+		}
+		b, err := Open(filepath.Join(dataDir, DefaultStoreName+".db"))
+		if err != nil {
+			return nil, fmt.Errorf("kv: store %q: %w", DefaultStoreName, err)
+		}
+		named[DefaultStoreName] = b
+		return b, nil
+	}
+	names := make([]string, 0, len(named))
+	for n := range named {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return nil, fmt.Errorf("kv: no store named %q (no stores: configured)", name)
+	}
+	return nil, fmt.Errorf("kv: no store named %q (stores: %s)", name, join(names))
+}
+
+// Default returns the default store (see Use).
+func Default() (KVBackend, error) { return Use("") }
+
+func join(names []string) string {
+	out := ""
+	for i, n := range names {
+		if i > 0 {
+			out += ", "
+		}
+		out += n
+	}
+	return out
+}

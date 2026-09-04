@@ -2,7 +2,6 @@ package connector
 
 import (
 	"context"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -19,8 +18,8 @@ import (
 // always-on kv instance, pointed at a temp store.
 func kvInstance(t *testing.T) *Instance {
 	t.Helper()
-	kv.SetDefaultPath(filepath.Join(t.TempDir(), "kv.db"))
-	t.Cleanup(func() { kv.SetDefaultPath("") })
+	kv.SetDataDir(t.TempDir())
+	t.Cleanup(func() { kv.SetDataDir("") })
 	reg := buildAPIRegistry(t, "connectors: {}\n", secrets.New())
 	in, ok := reg.Get("kv")
 	if !ok || in.DisabledReason != "" || !in.Enabled {
