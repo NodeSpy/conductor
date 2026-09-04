@@ -316,6 +316,16 @@ type Notify struct {
 	Via []NotifyRoute `yaml:"via,omitempty"`
 }
 
+// Configured reports whether the notify block carries anything — the
+// retired-model check: on a connectors-model config the block is rejected
+// (alerting is conductor.* triggers), while legacy configs keep the legacy
+// delivery until they migrate.
+func (n Notify) Configured() bool {
+	return len(n.On) > 0 || len(n.Via) > 0 || n.Digest != 0 || n.Push ||
+		n.SlackWebhookURL != "" || n.DiscordWebhookURL != "" || n.Ntfy.Topic != "" ||
+		(n.Pushover.Token != "" && n.Pushover.User != "") || n.Notifiarr.APIKey != ""
+}
+
 // NotifyRoute is one notify delivery through a connector verb.
 type NotifyRoute struct {
 	// On restricts this route to a subset of events (empty = the block's on:).
@@ -1021,7 +1031,9 @@ func (c *Config) applyDefaults() {
 	if c.Store.AuditMaxSize == 0 {
 		c.Store.AuditMaxSize = 50 * 1024 * 1024
 	}
-	if len(c.Notify.On) == 0 {
+	// The notify block (and its escalate default) is legacy-only — the
+	// connectors model alerts through conductor.* triggers instead.
+	if len(c.Integrations) > 0 && len(c.Notify.On) == 0 {
 		c.Notify.On = []string{"escalate"}
 	}
 	if c.Update.Auto && c.Update.Interval == 0 {

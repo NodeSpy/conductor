@@ -143,10 +143,11 @@ agents:
 	}
 }
 
-// TestNotifyDigestPushCarried (D4): notify sinks map onto via routes while
-// push/digest/on stay on the notify block.
+// TestNotifyDigestPushCarried (D4): the notify block is fully retired —
+// events become conductor.* triggers, digest becomes a grouped completion
+// trigger, and the inert push flag is dropped with a note.
 func TestNotifyDigestPushCarried(t *testing.T) {
-	_, out := mustTransform(t, `
+	res, out := mustTransform(t, `
 integrations:
   - type: cron
     name: c
@@ -160,20 +161,32 @@ notify:
   digest: 24h
   ntfy: { topic: ops }
 `)
-	if !out.Notify.Push {
-		t.Error("notify.push lost")
+	if out.Notify.Configured() {
+		t.Errorf("notify block survived: %+v", out.Notify)
 	}
-	if out.Notify.Digest.D() != 24*time.Hour {
-		t.Errorf("notify.digest lost: %v", out.Notify.Digest)
+	byName := map[string]config.TriggerSpec{}
+	for _, tr := range out.Triggers {
+		byName[tr.Name] = tr
 	}
-	if fmt.Sprint(out.Notify.On) != "[escalate needs_input]" {
-		t.Errorf("notify.on lost: %v", out.Notify.On)
+	// escalate → conductor.escalate + conductor.failed; needs_input maps 1:1.
+	for _, want := range []string{"notify-escalate", "notify-failed", "notify-needs_input"} {
+		tr, ok := byName[want]
+		if !ok || len(tr.Steps) != 1 || tr.Steps[0].Uses != "notify-ntfy.publish" {
+			t.Errorf("trigger %s: %+v", want, tr)
+		}
 	}
-	if len(out.Notify.Via) == 0 {
-		t.Error("ntfy sink should map onto a via route")
+	// digest → a grouped conductor.complete trigger with the digest window.
+	dg, ok := byName["notify-digest"]
+	if !ok || dg.On != "conductor.complete" || dg.Group == nil || dg.Group.Window.D() != 24*time.Hour {
+		t.Errorf("digest trigger: %+v", dg)
 	}
-	if out.Notify.Ntfy.Topic != "" {
-		t.Errorf("legacy ntfy sink field should be mapped away, got %+v", out.Notify.Ntfy)
+	// The inert push flag is dropped WITH a note.
+	joined := strings.Join(res.Summary, "\n")
+	if !strings.Contains(joined, "notify.push had no delivery effect") {
+		t.Errorf("push drop note missing:\n%s", joined)
+	}
+	if _, ok := out.ConnectorsMap["notify-ntfy"]; !ok {
+		t.Error("generated notify-ntfy connector missing")
 	}
 }
 
