@@ -141,6 +141,31 @@ func buildVaults(cfg *config.Config, deps Deps) ([]*Instance, error) {
 	return out, nil
 }
 
+// OpenVaultBackend builds ONE named vault's backend for CLI use — here an
+// unlock failure IS an error (a human is present), unlike the daemon build
+// where it disables. Returns the backend and the vault's type.
+func OpenVaultBackend(cfg *config.Config, name string, deps Deps) (vaults.Backend, string, error) {
+	if cfg == nil || len(cfg.Vaults) == 0 {
+		return nil, "", fmt.Errorf("no vaults: section in the config — declare the vault first")
+	}
+	ref, ok := cfg.Vaults[name]
+	if !ok {
+		return nil, "", fmt.Errorf("no vault %q in vaults: (defined: %s)", name, cfg.VaultNames())
+	}
+	boot := deps.VaultBoot
+	if boot == nil {
+		boot = vaults.NewBootstrap()
+	}
+	b, broken, err := buildVaultBackend(name, ref, boot, deps)
+	if err != nil {
+		return nil, "", err
+	}
+	if broken != "" {
+		return nil, "", fmt.Errorf("vault %q (%s): %s", name, ref.Type, broken)
+	}
+	return b, ref.Type, nil
+}
+
 // buildVaultBackend builds one typed backend. Returns (backend, "", nil) on
 // success, (nil, reason, nil) for an unlock/availability failure (disable,
 // don't crash), and (nil, "", err) for a structural config error.

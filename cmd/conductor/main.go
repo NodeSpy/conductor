@@ -125,8 +125,8 @@ usage:
   conductor connectors ls               list configured connectors: state, events, verbs
   conductor schema <connector>          print a connector's event/filter/verb/option schemas
   conductor secrets check               resolve every secret reference and report
-  conductor vault init|add|show|ls|rm   manage the built-in encrypted vault
-  conductor unlock                      seed the vault key for non-interactive restarts
+  conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
+  conductor unlock                      seed the default vault key for non-interactive restarts
   conductor config migrate [--dry-run]  transform a legacy config to the connectors schema
   conductor version
 `)
