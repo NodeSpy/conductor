@@ -449,6 +449,51 @@ func cmdRun(args []string) error {
 	// signal can't carry).
 	go serveControl(ctx, controlSockPath(cfg), igs, eng.Emit, manualTriggersByName(cfg), logf)
 
+	// The conductor.* verbs act on THIS daemon — wire them to the existing
+	// update/pause/restart/run machinery. Restarting ops fire AFTER the verb
+	// returns (a short grace) so the calling step checkpoints first and the
+	// workflow resumes past it on the new process.
+	restartSoon := func() {
+		time.AfterFunc(2*time.Second, func() { applyUpdate(stop) })
+	}
+	connector.SetConductorOps(&connector.ConductorOps{
+		Update: func(context.Context) (bool, string, error) {
+			updated, tag, err := doUpdate(false, "")
+			if err != nil {
+				return false, "", err
+			}
+			if !updated {
+				return false, version, nil
+			}
+			if _, serr := syncServiceUnit(false); serr != nil {
+				logf("conductor.update: service unit sync failed: %v", serr)
+			}
+			logf("conductor.update: installed %s (was %s) — restarting", tag, version)
+			restartSoon()
+			return true, tag, nil
+		},
+		Pause:   func() error { return setPaused(cfg, true) },
+		Resume:  func() error { return setPaused(cfg, false) },
+		Restart: func() error { restartSoon(); return nil },
+		Reload:  func() error { restartSoon(); return nil }, // config loads at boot
+		Run: func(ctx context.Context, name string, inputs map[string]any) (string, error) {
+			return runManualTrigger(ctx, manualTriggersByName(cfg), controlRequest{Name: name, Inputs: inputs}, eng.Emit)
+		},
+	})
+	defer connector.SetConductorOps(nil)
+	// gh.sweep: the same nudge the SIGUSR1 handler runs.
+	connector.SetSweepHook(func(context.Context) (int, error) {
+		n := 0
+		for _, ig := range igs {
+			if sn, ok := ig.(sweepNower); ok && sn.SweepNow() {
+				n++
+			}
+		}
+		logf("sweep requested (gh.sweep verb) — nudged %d integration(s)", n)
+		return n, nil
+	})
+	defer connector.SetSweepHook(nil)
+
 	// Reaper for archive-when-done agents. It shares the hand-off hold-set so it
 	// never archives an agent the engine handed off for you to drive.
 	if anyArchive(cfg) {
@@ -477,8 +522,10 @@ func cmdRun(args []string) error {
 	// Periodic self-update. `stop` lets it trigger a graceful shutdown so the
 	// service manager relaunches into the new binary.
 	if cfg.Update.Auto {
-		go autoUpdateLoop(ctx, cfg.Update, stop)
+		go autoUpdateLoop(ctx, cfg.Update, notifier, stop)
 	}
+	// conductor.updated fires on the first boot of a new release.
+	go emitUpdatedOnBoot(cfg, notifier)
 
 	// Periodic activity digest (opt-in via notify.digest).
 	if cfg.Notify.Digest.D() > 0 {

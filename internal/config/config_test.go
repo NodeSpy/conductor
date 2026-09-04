@@ -90,8 +90,7 @@ func TestUpdateDefaults(t *testing.T) {
 		t.Fatal("apply should default to true")
 	}
 	// Explicit apply:false is honored.
-	no := false
-	c.Update.Apply = &no
+	c.Update.Apply = ApplyModeFor("false")
 	if c.Update.ShouldApply() {
 		t.Fatal("apply:false should be honored")
 	}

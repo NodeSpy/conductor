@@ -189,6 +189,11 @@ var githubDecl = &TypeDecl{
 			},
 			Outputs: Schema{"ok": {Type: TBool}},
 		},
+		{
+			Name: "sweep", Desc: "run the catch-up sweep now (daemon-global; same as `conductor sweep --now`)",
+			Options: Schema{},
+			Outputs: Schema{"nudged": {Type: TInt, Desc: "integrations whose sweep was nudged"}},
+		},
 	},
 }
 
@@ -432,6 +437,15 @@ func (g *githubImpl) tokenFor(ctx context.Context, as, repo string) (string, err
 }
 
 func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
+	// sweep is daemon-global (no repo/token): nudge the running catch-up
+	// sweep now, exactly like SIGUSR1 / `conductor sweep --now`.
+	if verb == "sweep" {
+		nudged, err := runSweepHook(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"nudged": nudged}, nil
+	}
 	repo, _ := opts["repo"].(string)
 	if repo == "" {
 		return nil, fmt.Errorf("github.%s: options.repo is required", verb)
