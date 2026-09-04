@@ -186,7 +186,7 @@ func New(o Options) *Engine {
 		if s, ok := o.Dispatch.(controller.Sender); ok {
 			sender = s
 		}
-		reg = controller.NewRegistry(o.Config.Controllers, o.Config.DefaultControllerName(), o.Dispatch, sender)
+		reg = controller.NewRegistry(o.Config.MergedControllers(), o.Config.DefaultRuntimeName(), o.Dispatch, sender)
 	}
 	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,

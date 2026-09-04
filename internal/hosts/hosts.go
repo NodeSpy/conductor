@@ -211,6 +211,79 @@ func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// ShellJoin single-quotes every element of argv (via shQuote) and joins them
+// with spaces, producing one POSIX-sh-safe command line. It is the building
+// block for the controller package's "remote controller" wiring: a subprocess
+// launcher that would normally exec(argv) locally instead hands
+// ShellJoin(argv) to ArgvPrefix's ssh invocation as a single, already-quoted
+// remote-command argument.
+func ShellJoin(argv []string) string {
+	parts := make([]string, len(argv))
+	for i, a := range argv {
+		parts[i] = shQuote(a)
+	}
+	return strings.Join(parts, " ")
+}
+
+// ArgvPrefix returns the ssh argv for running a command on t, minus the
+// trailing remote-command argument itself — i.e. everything Args builds up to
+// and including the "--" separator. Exactly one further element must be
+// appended to use it: a single pre-quoted command string (ShellJoin(argv), or
+// the output of RemoteCommand/RemoteCommandEnv). This split exists so a caller
+// that already has its own argv (a controller's launch command) can wrap it
+// for remote execution without re-deriving Args' per-target flag ordering.
+//
+// Per-element quoting must already be applied before appending: ssh
+// concatenates however many trailing arguments it's given into one string
+// with a single space between them before handing the result to the remote
+// shell, so passing one already-assembled, already-quoted string is
+// equivalent to passing the original argv unquoted as separate ssh
+// arguments — except ssh's own concatenation does no quoting of its own, so
+// the caller must have done it (ShellJoin does).
+func (c *Client) ArgvPrefix(t Target) []string {
+	full := c.Args(t, "")
+	return full[:len(full)-1]
+}
+
+// RemoteCommand builds the single remote-command string an ArgvPrefix caller
+// appends: argv joined via ShellJoin, preceded by a `cd <cwd> &&` when cwd is
+// non-empty. Unlike Client.Script (which always executes through an explicit
+// `sh -c '...'`), this string is handed to ssh directly — ssh itself invokes
+// the remote user's default shell on it, so no `sh -c` wrapper is needed here.
+func RemoteCommand(argv []string, cwd string) string {
+	cmd := ShellJoin(argv)
+	if cwd != "" {
+		return "cd " + shQuote(cwd) + " && " + cmd
+	}
+	return cmd
+}
+
+// RemoteCommandEnv extends RemoteCommand with an export preamble: each env
+// entry (a "KEY=VALUE" string, e.g. as built by dispatch.AgentEnv) becomes
+// `export KEY=<shQuoted VALUE>; ` ahead of the cd/exec. This is how a
+// subprocess-seam controller's identity/token env reaches a remote launch: a
+// local argv-prefix (ssh ... --) carries no per-process environment across
+// the connection, so the KEY=VALUE pairs are instead embedded, quoted, into
+// the one remote command string ssh executes — riding the (already
+// encrypted) ssh channel instead of appearing in this box's local process
+// argv/environment table. Malformed entries (no "=") are skipped. Only the
+// given env is exported — os.Environ() is deliberately never consulted here;
+// callers that want the target host's own ambient environment get it for
+// free (the remote shell already has one), and forwarding this process's
+// local environment across the connection is never appropriate.
+func RemoteCommandEnv(argv []string, cwd string, env []string) string {
+	var b strings.Builder
+	for _, kv := range env {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(&b, "export %s=%s; ", k, shQuote(v))
+	}
+	b.WriteString(RemoteCommand(argv, cwd))
+	return b.String()
+}
+
 // runLocal is the real runFunc: exec.CommandContext with separate
 // stdout/stderr buffers. A non-zero remote exit surfaces as *exec.ExitError,
 // which is expected, ordinary control flow here (the process ran; it just
