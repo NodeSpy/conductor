@@ -45,7 +45,8 @@ triggers:
 Steps address the trigger context (`{{.repo}}`, event facts), prior step
 outputs (`{{.<id>.<field>}}`), named secrets (`{{.secrets.x}}`), and the
 batch (`{{.group.*}}`). `if:` conditions use comparison, `&&`/`||`/`!`,
-`contains()`, and `exists()`.
+`contains()`, `exists()`, `default()`, and `coalesce()`; templates may also
+call `default`/`coalesce` (`{{.sev | default "low"}}`). See [[Workflows]].
 
 ## Splitting the config across files (`imports:`)
 

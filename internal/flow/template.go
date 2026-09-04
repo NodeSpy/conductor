@@ -17,6 +17,37 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 )
 
+// templateFuncs is the pinned function set templates may call, mirroring the
+// expression language: default and coalesce. `{{.x | default "fb"}}` (or
+// `{{default "fb" .x}}`) yields the fallback when .x is absent or empty;
+// `{{coalesce .a .b "z"}}` yields the first present, non-empty argument.
+// nil and "" count as empty; 0 and false are real values.
+var templateFuncs = template.FuncMap{
+	"default": func(fallback any, v ...any) any {
+		if len(v) == 0 || templateEmpty(v[0]) {
+			return fallback
+		}
+		return v[0]
+	},
+	"coalesce": func(vals ...any) any {
+		for _, v := range vals {
+			if !templateEmpty(v) {
+				return v
+			}
+		}
+		return ""
+	},
+}
+
+// templateEmpty mirrors expr's emptiness rule: nil or an empty string.
+func templateEmpty(v any) bool {
+	if v == nil {
+		return true
+	}
+	s, ok := v.(string)
+	return ok && s == ""
+}
+
 // render evaluates one template string against data. Strings without template
 // actions pass through untouched. missingkey=zero matches the dispatch
 // package's behavior: an absent key renders as its zero value.
@@ -24,7 +55,7 @@ func render(s string, data map[string]any) (string, error) {
 	if !strings.Contains(s, "{{") {
 		return s, nil
 	}
-	t, err := template.New("t").Option("missingkey=zero").Parse(s)
+	t, err := template.New("t").Option("missingkey=zero").Funcs(templateFuncs).Parse(s)
 	if err != nil {
 		return "", fmt.Errorf("template %q: %w", snippet(s), err)
 	}
@@ -159,7 +190,7 @@ func templateRefs(s string) ([]string, error) {
 	if !strings.Contains(s, "{{") {
 		return nil, nil
 	}
-	t, err := template.New("t").Parse(s)
+	t, err := template.New("t").Funcs(templateFuncs).Parse(s)
 	if err != nil {
 		return nil, err
 	}

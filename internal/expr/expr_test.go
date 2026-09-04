@@ -62,3 +62,55 @@ func TestEval(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultAndCoalesce(t *testing.T) {
+	d := data()
+	d["empty"] = ""
+	d["zero"] = float64(0)
+	d["off"] = false
+	d["sev"] = "high"
+	cases := []struct {
+		cond string
+		want bool
+	}{
+		// default: fallback only when the path is missing or empty.
+		{`default(sev, "low") == "high"`, true},
+		{`default(missing, "low") == "low"`, true},
+		{`default(empty, "low") == "low"`, true},
+		{`default(missing, true)`, true},
+		{`default(missing, "") == ""`, true},
+		// 0 and false are real values, not empties.
+		{`default(zero, 5) == 0`, true},
+		{`default(off, true)`, false},
+		// paths as fallback; a bare unmatched word is NOT a literal fallback.
+		{`default(missing, sev) == "high"`, true},
+		{`default(missing, nope) == ""`, true},
+		// coalesce: first present, non-empty argument.
+		{`coalesce(missing, empty, sev) == "high"`, true},
+		{`coalesce(missing, "z") == "z"`, true},
+		{`coalesce(missing, empty)`, false},
+		// bare truthiness + combinators.
+		{`coalesce(missing, sev) && repo == "acme/w"`, true},
+		{`!default(missing, "")`, true},
+		// numeric ordering with a defaulted left side.
+		{`default(missing, 4) > 3`, true},
+		{`default(zero, 4) > 3`, false},
+	}
+	for _, c := range cases {
+		got, err := Eval(c.cond, d)
+		if err != nil {
+			t.Fatalf("Eval(%q) error: %v", c.cond, err)
+		}
+		if got != c.want {
+			t.Errorf("Eval(%q) = %v, want %v", c.cond, got, c.want)
+		}
+	}
+
+	// Arity errors surface, not silently false.
+	if _, err := Eval(`default(missing)`, d); err == nil {
+		t.Error("default() with one argument should error")
+	}
+	if _, err := Eval(`coalesce()`, d); err == nil {
+		t.Error("coalesce() with no arguments should error")
+	}
+}
