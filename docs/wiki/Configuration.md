@@ -19,7 +19,7 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 | `runtimes:` | where agents run: `type`/`agent`, `transport`, `bin`, `host`, `default` | [[Runtimes]] |
 | `agents:` | named profiles: `provider`, `model`, `thinking`, `mode`, `runtime`, `workspace`, `wait_timeout`, `archive_when_done`, `labels`, `guidance`, `host` | [[Agents]] |
 | `hosts:` | named SSH targets: `host`, `user`, `port`, `key`, `known_hosts`, `cwd`, `env` | [[Hosts]] |
-| `stores:` | named data stores (`boltdb`/`redis`/`http`) addressed by the required `store:` selector on `kv.*` verbs | below |
+| `stores:` | named data stores — KV (`boltdb`/`redis`/`http`) served by `kv.*`, SQL (`postgres`/`mysql`/`sqlite`) served by `sql.*`; addressed by the required `store:` selector | below |
 | `workflows:` | reusable step lists with `inputs:` / `outputs:` | [[Workflows]] |
 | `policy:` | global controls; also valid on connectors and triggers (most specific wins) | [[Policy]] |
 | `secrets:` | named secret references, read as `{{.secrets.<name>}}` | [[Secrets]] |
@@ -250,29 +250,35 @@ triggers:
 The list arrives typed from `fetch`, the code step reshapes it, and the
 mutation posts it back — three steps, no custom Go.
 
-## Stores (`stores:`) and the `kv` verbs
+## Stores (`stores:`) and the data verbs
 
-`stores:` is a named map (like `hosts:`/`agents:`) of data stores. Every
-store is explicit — nothing is implicit and there is no default: a `kv.*`
-verb reaches a store only through its required `store:` selector, and a
-config with no `stores:` section has no stores. (SQL store types —
-postgres/mysql/sqlite serving `sql.query`/`sql.exec` — land separately;
-this section covers the KV family.)
+`stores:` is a named map (like `hosts:`/`agents:`) of data stores in two
+families: **KV** types (`boltdb`/`redis`/`http`) served by the `kv.*` verbs,
+and **SQL** types (`postgres`/`mysql`/`sqlite`) served by `sql.query` /
+`sql.exec`. Every store is explicit — nothing is implicit and there is no
+default: a data verb reaches a store only through its required `store:`
+selector, and a config with no `stores:` section has no stores. The selector
+is family-checked at load: a `kv.*` verb on a SQL store, or a `sql.*` verb
+on a KV store, fails `conductor validate` naming the store and its type.
 
 ```yaml
 stores:
-  scratch: { type: boltdb }                       # file <data dir>/scratch.db
-  archive: { type: boltdb, path: /mnt/big/archive.db }
-  cache:   { type: redis,  url: "redis://10.0.0.5:6379/0", password: vault:redis_pw }
-  shared:  { type: http,   base_url: https://kv.example.com/kv, auth: { type: bearer, token: vault:kv } }
+  scratch:   { type: boltdb }                       # file <data dir>/scratch.db
+  archive:   { type: boltdb, path: /mnt/big/archive.db }
+  cache:     { type: redis,  url: "redis://10.0.0.5:6379/0", password: vault:redis_pw }
+  shared:    { type: http,   base_url: https://kv.example.com/kv, auth: { type: bearer, token: vault:kv } }
+  analytics: { type: postgres, url: "postgres://conductor@db/analytics", password: vault:pg }
+  billing:   { type: mysql,    dsn: "conductor:@tcp(db:3306)/billing", password: vault:mysql }
+  local:     { type: sqlite }                       # file <data dir>/local.sqlite
 ```
 
 Every KV backend implements one `KVBackend` interface with identical
 semantics; a `stores:` entry that names an unknown type, misses its
-connection fields, or (boltdb) can't open its file is a **load error naming
-the store**. A backend that can't serve an op is capability-checked rather
-than silently degrading. Native hosted-KV SDKs (firestore, dynamodb) are the
-documented extension point: implement `KVBackend`, add a store-builder entry.
+connection fields, or (boltdb/sqlite) can't open its file is a **load error
+naming the store**. A backend that can't serve an op is capability-checked
+rather than silently degrading. Native hosted-KV SDKs (firestore, dynamodb)
+are the documented extension point: implement `KVBackend`, add a
+store-builder entry.
 
 | type | connection | notes |
 |---|---|---|
@@ -390,6 +396,71 @@ triggers:
       - { uses: kv.set, options: { store: state, namespace: pagerduty, key: last-seen, value: "{{ .incident.id }}" } }
 ```
 
+### SQL stores and the `sql.*` verbs
+
+SQL store types run statements against your existing schema — conductor does
+not create tables or manage migrations. The drivers are pure Go (pgx,
+go-sql-driver/mysql, modernc.org/sqlite), keeping the static-binary
+invariant.
+
+| type | connection | notes |
+|---|---|---|
+| `postgres` | `url` (`postgres://user@host/db`), `password?` (secret schemes; overrides the URL's) | pgx; URL validated at load, dialed lazily; placeholders `$1`, `$2`, … |
+| `mysql` | `dsn` (`user:pass@tcp(host:3306)/db`), `password?` | DSN validated at load, dialed lazily; placeholders `?` |
+| `sqlite` | `path?` | one file per store: `path:`, else `<data dir>/<store-name>.sqlite`; `:memory:` works; opened at load like boltdb; placeholders `?` |
+
+Two verbs; `store:` is required and must name a SQL-type store:
+
+| verb | options | output |
+|---|---|---|
+| `sql.query` | `store`, `sql`, `args?` | `{ rows, count }` — `rows` is one `{column: value}` object per row |
+| `sql.exec` | `store`, `sql`, `args?` | `{ rows_affected, last_insert_id? }` — `last_insert_id` is absent on postgres (use `RETURNING` with `sql.query`) |
+
+**Parameterized, never interpolated.** The `sql:` text is fixed config;
+event data goes in `args:`, which bind to the driver's placeholders in
+order. A value containing quotes or `'; DROP TABLE …; --` is stored and
+returned as that literal string — it is never parsed as SQL. Query results
+are JSON-shaped: byte columns decode to strings, timestamps to RFC 3339,
+`NULL` to null.
+
+```yaml
+stores:
+  analytics: { type: postgres, url: "postgres://conductor@db/analytics", password: vault:pg }
+triggers:
+  - name: record-incidents
+    on: [ pd.incident ]
+    steps:
+      - id: record
+        uses: sql.exec
+        options:
+          store: analytics
+          sql: "INSERT INTO incidents (id, urgency, title) VALUES ($1, $2, $3)"
+          args: [ "{{.incident.id}}", "{{.incident.urgency}}", "{{.title}}" ]
+      - id: recent
+        uses: sql.query
+        options:
+          store: analytics
+          sql: "SELECT id, title FROM incidents WHERE urgency = $1 ORDER BY created_at DESC LIMIT 5"
+          args: [ high ]
+      - uses: slack-ops.post
+        options: { channel: "#outages", text: "{{.recent.count}} recent high-urgency incidents" }
+```
+
+**From `run:` code** — `ctx.sql("<name>")` resolves a defined SQL store to a
+handle with `query(sql, args?)` (returns the row list) and `exec(sql,
+args?)` (returns `{rows_affected, last_insert_id?}`): `ctx.sql("analytics")`
+in **js** and **lua**, a top-level `sql("analytics")` builtin in **risor**,
+and `import "conductor/sql"` + `sql.Use("analytics")` in **go-embed**.
+Host-interpreter steps use the `sql.*` verbs.
+
+```yaml
+- run: js
+  code: |
+    const db = ctx.sql("analytics");
+    db.exec("INSERT INTO events (kind, body) VALUES ($1, $2)", ["comment", ctx.comment.body]);
+    const rows = db.query("SELECT COUNT(*) AS n FROM events WHERE kind = $1", ["comment"]);
+    return { total: rows[0].n };
+```
 
 ## Splitting the config across files (`imports:`)
 

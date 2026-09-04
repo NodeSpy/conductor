@@ -197,12 +197,18 @@ hosts:
   build-box: { host: build01.internal, user: ci, key: ~/.ssh/id_ed25519 }
 
 # ---------------------------------------------------------------------------
-# stores: — named data stores served by the kv.* verbs. Every store is
-# explicit (no defaults); a kv call picks one with its required `store:`
-# option. boltdb = one pure-Go file per store (path:, or
+# stores: — named data stores in two families. KV types (boltdb/redis/http)
+# are served by the kv.* verbs; SQL types (postgres/mysql/sqlite, pure-Go
+# drivers) by sql.query/sql.exec. Every store is explicit (no defaults); a
+# data verb picks one with its required `store:` option, and the family is
+# checked at load. boltdb = one pure-Go file per store (path:, or
 # <data dir>/<name>.db); redis maps to native ops with Lua-scripted
 # read-modify-writes; http is a generic REST shim (POST base_url, one JSON
 # op per request — the shim owns RMW atomicity) reusing the rest auth block.
+# SQL stores run statements against your existing schema (conductor manages
+# no migrations); statements are parameterized only — values bind through
+# args: to driver placeholders ($1 postgres, ? mysql/sqlite), never into
+# the sql text.
 # ---------------------------------------------------------------------------
 # stores:
 #   state: { type: boltdb }                    # <data dir>/state.db
@@ -212,6 +218,9 @@ hosts:
 #     type: http
 #     base_url: https://kv.example.com/kv
 #     auth: { type: bearer, token: vault:kv-shim }
+#   analytics: { type: postgres, url: "postgres://conductor@db/analytics", password: vault:pg }
+#   billing: { type: mysql, dsn: "conductor:@tcp(db:3306)/billing", password: vault:mysql }
+#   local: { type: sqlite }                    # <data dir>/local.sqlite
 
 # ---------------------------------------------------------------------------
 # runtimes: — where agents run (previously controllers:). The paseo runtime's
@@ -351,6 +360,22 @@ triggers:
   #       uses: slack-ops.post
   #       options: { channel: "#outages", text: "New incident {{ .incident.id }}" }
   #     - { uses: kv.set, options: { store: state, namespace: pagerduty, key: last-seen, value: "{{ .incident.id }}" } }
+
+  # The sql verbs serve the stores: section's SQL types. sql.query returns
+  # { rows, count }; sql.exec returns { rows_affected, last_insert_id? }
+  # (last_insert_id is absent on postgres — use RETURNING with sql.query).
+  # Event data binds through args: to driver placeholders; code steps get
+  # ctx.sql("analytics") (js/lua), sql("analytics") (risor), or
+  # import "conductor/sql" + sql.Use("analytics") (go-embed). Record each
+  # incident as a row:
+  # - name: record-incidents
+  #   on: [ pd.incident ]
+  #   steps:
+  #     - uses: sql.exec
+  #       options:
+  #         store: analytics
+  #         sql: "INSERT INTO incidents (id, urgency, title) VALUES ($1, $2, $3)"
+  #         args: [ "{{.incident.id}}", "{{.incident.urgency}}", "{{.title}}" ]
 
   # Review triage through the reusable workflow + a request-response ask.
   - on: gh.review_requested
