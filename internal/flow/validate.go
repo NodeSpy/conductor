@@ -70,8 +70,10 @@ func validateNotifyVia(cfg *config.Config, reg *connector.Registry) error {
 			return fmt.Errorf("%s: connector %q (%s) has no verb %q (verbs: %s)",
 				w, connName, in.Decl.Type, verb, strings.Join(in.Decl.VerbNames(), ", "))
 		}
-		if err := connector.ValidateCallOptions(w+" options", vd.Options, r.Options, in.DefaultOptions); err != nil {
-			return err
+		if !vd.Open {
+			if err := connector.ValidateCallOptions(w+" options", vd.Options, r.Options, in.DefaultOptions); err != nil {
+				return err
+			}
 		}
 		if err := checkMapRefs(w+" options", r.Options, sc); err != nil {
 			return err
@@ -259,8 +261,10 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 			return fmt.Errorf("%s: connector %q (%s) has no verb %q (verbs: %s)",
 				w, connName, in.Decl.Type, verb, strings.Join(in.Decl.VerbNames(), ", "))
 		}
-		if err := connector.ValidateCallOptions(w+" options", vd.Options, step.Options, in.DefaultOptions); err != nil {
-			return err
+		if !vd.Open {
+			if err := connector.ValidateCallOptions(w+" options", vd.Options, step.Options, in.DefaultOptions); err != nil {
+				return err
+			}
 		}
 	case "workflow":
 		wf, ok := cfg.Workflows[step.Workflow]
@@ -345,8 +349,10 @@ func validateHookRefs(cfg *config.Config, reg *connector.Registry, where string,
 			return fmt.Errorf("%s: connector %q (%s) has no verb %q (verbs: %s)",
 				w, connName, in.Decl.Type, verb, strings.Join(in.Decl.VerbNames(), ", "))
 		}
-		if err := connector.ValidateCallOptions(w+" options", vd.Options, h.Options, in.DefaultOptions); err != nil {
-			return err
+		if !vd.Open {
+			if err := connector.ValidateCallOptions(w+" options", vd.Options, h.Options, in.DefaultOptions); err != nil {
+				return err
+			}
 		}
 		if h.If != "" {
 			if err := checkCondRefs(w+" if", h.If, sc); err != nil {
