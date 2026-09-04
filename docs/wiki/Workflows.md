@@ -50,7 +50,12 @@ resolves every reference against the scope at its position — a start hook
 reading a step output fails at load, not at 3am.
 
 `if:` uses the pinned expression set (comparison, `&&`/`||`/`!`,
-`contains()`, `exists()`), with paths written bare or as `{{.path}}`.
+`contains()`, `exists()`, `default(x, fallback)`, `coalesce(a, b, …)`), with
+paths written bare or as `{{.path}}`. `default`/`coalesce` yield the first
+present, non-empty argument (nil and `""` are empty; `0` and `false` are real
+values) and work bare or as a comparison's left side:
+`default(sev, "low") == "high"`. Templates get the same two as functions —
+`{{.sev | default "low"}}`, `{{coalesce .a .b "z"}}`.
 
 ## Hooks
 

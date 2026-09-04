@@ -7,6 +7,9 @@
 //   - numeric ordering against literals:          score > 7, score <= 3.5
 //   - truthiness of a bare path (and negation):   x   /   !x
 //   - boolean combinators (no parentheses):       a && b || c
+//   - functions: contains(x, y), exists(path), and the value-producing
+//     default(x, fallback) / coalesce(a, b, …) — usable bare (truthiness)
+//     or as a comparison's left side: default(sev, "low") == "high"
 //
 // Precedence: ! / comparison > && > ||.
 package expr
@@ -67,14 +70,28 @@ func atom(a string, data map[string]any) (bool, error) {
 		if i := strings.Index(a, op); i >= 0 {
 			l := strings.TrimSpace(a[:i])
 			r := strings.TrimSpace(a[i+len(op):])
-			return compare(resolve(l, data), literal(r), op), nil
+			lv, err := sideValue(l, data)
+			if err != nil {
+				return false, err
+			}
+			return compare(lv, literal(r), op), nil
 		}
 	}
 	return truthy(resolve(a, data)), nil
 }
 
+// sideValue resolves a comparison's left side: a default()/coalesce() call
+// or a data path.
+func sideValue(s string, data map[string]any) (any, error) {
+	if v, handled, err := valueFunction(s, data); handled {
+		return v, err
+	}
+	return resolve(s, data), nil
+}
+
 // function evaluates the pinned function set: contains(x, y) — substring or
-// list membership — and exists(path) — the path resolves to a non-nil value.
+// list membership — exists(path) — the path resolves to a non-nil value —
+// and the truthiness of a bare default()/coalesce() call.
 // handled=false means the term isn't a function call.
 func function(a string, data map[string]any) (ok, handled bool, err error) {
 	name, rest, found := strings.Cut(a, "(")
@@ -93,8 +110,70 @@ func function(a string, data map[string]any) (ok, handled bool, err error) {
 		hay := resolveTerm(args[0], data)
 		needle := resolveTerm(args[1], data)
 		return containsValue(hay, needle), true, nil
+	case "default", "coalesce":
+		v, _, err := valueFunction(a, data)
+		return truthy(v), true, err
 	}
 	return false, false, nil
+}
+
+// valueFunction evaluates the value-producing functions — default(x,
+// fallback) and coalesce(a, b, …): the first argument that is present and
+// non-empty (nil and "" count as empty; 0 and false are real values). Each
+// argument is a quoted/bool/number literal or a data path (a missing path is
+// empty). handled=false means the term isn't a value function call.
+func valueFunction(a string, data map[string]any) (v any, handled bool, err error) {
+	name, rest, found := strings.Cut(a, "(")
+	if !found || !strings.HasSuffix(rest, ")") || strings.ContainsAny(name, " \t") {
+		return nil, false, nil
+	}
+	args := splitArgs(strings.TrimSuffix(rest, ")"))
+	switch name {
+	case "default":
+		if len(args) != 2 {
+			return nil, true, fmt.Errorf("default() takes two arguments, got %d", len(args))
+		}
+	case "coalesce":
+		if len(args) == 0 {
+			return nil, true, fmt.Errorf("coalesce() takes at least one argument")
+		}
+	default:
+		return nil, false, nil
+	}
+	for _, arg := range args {
+		if v := argValue(arg, data); !emptyValue(v) {
+			return v, true, nil
+		}
+	}
+	return nil, true, nil
+}
+
+// argValue resolves a default/coalesce argument: a quoted/bool/number
+// literal stays a literal; anything else is a data path (nil when missing) —
+// unlike resolveTerm, a bare word with no data match is NOT promoted to a
+// string, so fallbacks only come from explicit literals.
+func argValue(s string, data map[string]any) any {
+	l := literal(s)
+	if l.isB {
+		return l.b
+	}
+	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') {
+		return l.s
+	}
+	if l.isNum {
+		return l.f
+	}
+	return resolve(s, data)
+}
+
+// emptyValue reports the default/coalesce notion of "absent": nil or an
+// empty string. Zero numbers and false are real values.
+func emptyValue(v any) bool {
+	if v == nil {
+		return true
+	}
+	s, ok := v.(string)
+	return ok && s == ""
 }
 
 // splitArgs splits a function argument list on commas outside quotes.
