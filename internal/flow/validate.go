@@ -213,8 +213,7 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 			return fmt.Errorf("%s: connector %q (%s) has no verb %q (verbs: %s)",
 				w, connName, in.Decl.Type, verb, strings.Join(in.Decl.VerbNames(), ", "))
 		}
-		merged := connector.MergeOptions(in.DefaultOptions, step.Options)
-		if err := connector.ValidateSchema(w+" options", vd.Options, merged); err != nil {
+		if err := connector.ValidateCallOptions(w+" options", vd.Options, step.Options, in.DefaultOptions); err != nil {
 			return err
 		}
 	case "workflow":
@@ -300,8 +299,7 @@ func validateHookRefs(cfg *config.Config, reg *connector.Registry, where string,
 			return fmt.Errorf("%s: connector %q (%s) has no verb %q (verbs: %s)",
 				w, connName, in.Decl.Type, verb, strings.Join(in.Decl.VerbNames(), ", "))
 		}
-		merged := connector.MergeOptions(in.DefaultOptions, h.Options)
-		if err := connector.ValidateSchema(w+" options", vd.Options, merged); err != nil {
+		if err := connector.ValidateCallOptions(w+" options", vd.Options, h.Options, in.DefaultOptions); err != nil {
 			return err
 		}
 		if h.If != "" {

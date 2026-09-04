@@ -53,7 +53,7 @@ var fakeDecl = &connector.TypeDecl{
 		},
 		{
 			Name: "ask", Desc: "a fake ask-capable verb", Ask: true,
-			Options: connector.Schema{"prompt": {Type: connector.TString}},
+			Options: connector.Schema{"prompt": {Type: connector.TString, Required: true}},
 			Outputs: connector.Schema{
 				"action": {Type: connector.TString},
 				"text":   {Type: connector.TString},

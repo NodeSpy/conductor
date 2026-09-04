@@ -370,6 +370,41 @@ func (r *Registry) Get(name string) (*Instance, bool) {
 // Names lists configured connector names in stable order.
 func (r *Registry) Names() []string { return append([]string(nil), r.order...) }
 
+// ValidateCallOptions checks one verb call's options: the CALL's own keys
+// must be declared (unknown key = typo = error) and type-check, while
+// required keys may be satisfied by the connector's default options — a
+// connector-wide default (say, a default channel or `as:`) that a particular
+// verb doesn't declare is ignored for that verb rather than failing it.
+func ValidateCallOptions(where string, s Schema, call, defaults map[string]any) error {
+	for k, v := range call {
+		f, ok := s[k]
+		if !ok {
+			known := make([]string, 0, len(s))
+			for name := range s {
+				known = append(known, name)
+			}
+			sort.Strings(known)
+			return fmt.Errorf("%s: unknown key %q (valid: %s)", where, k, strings.Join(known, ", "))
+		}
+		if err := checkType(v, f); err != nil {
+			return fmt.Errorf("%s: key %q: %v", where, k, err)
+		}
+	}
+	for k, f := range s {
+		if !f.Required {
+			continue
+		}
+		if _, inCall := call[k]; inCall {
+			continue
+		}
+		if _, inDefaults := defaults[k]; inDefaults {
+			continue
+		}
+		return fmt.Errorf("%s: missing required key %q", where, k)
+	}
+	return nil
+}
+
 // ValidateSchema checks a value map against a schema: unknown keys and
 // missing required keys are errors; typed keys are coerced-checked. where
 // names the config location for the error message.
