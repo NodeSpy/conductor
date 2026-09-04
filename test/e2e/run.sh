@@ -68,9 +68,13 @@ force() { # container kind repo#n config
 }
 
 # post_webhook <event> <fixture> — sign and POST a fixture to conductor's receiver.
-post_webhook() {
-  local event="$1" fixture="$2"
-  cexec conductor bash -c '
+post_webhook() { post_webhook_to conductor "$@"; }
+
+# post_webhook_to <container> <event> <fixture> — sign and POST a fixture to a
+# specific daemon's receiver (each daemon binds :8787 in its own container).
+post_webhook_to() {
+  local target="$1" event="$2" fixture="$3"
+  cexec "$target" bash -c '
     set -e
     f="/fixtures/'"$fixture"'"
     sig=$(openssl dgst -sha256 -hmac e2e-webhook-secret "$f" | sed "s/^.*= //")
@@ -115,7 +119,7 @@ setup() {
   wait_for 60 cexec mock-github  curl -sf http://localhost:8080/_health  || fatal "mock-github not ready"
   wait_for 60 cexec sink-catcher curl -sf http://localhost:8080/_health  || fatal "sink-catcher not ready"
   wait_for 60 cexec forge git ls-remote git://localhost/acme/web.git      || fatal "forge not ready"
-  for c in conductor conductor-ctrl conductor-fail; do
+  for c in conductor conductor-ctrl conductor-fail conductor-conn conductor-migrate; do
     wait_for 60 cexec "$c" test -S /data/control.sock || fatal "$c daemon not ready (control socket)"
   done
   echo "stack ready"
@@ -741,6 +745,157 @@ wait_handoff_url_after() {
 
 # ---- main -------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Group K — the connectors model (issue #36): new-schema config end to end.
+# ---------------------------------------------------------------------------
+
+# slack_sink_has <pattern> — a captured slack Web API call contains pattern.
+slack_sink_has() {
+  netcurl http://sink-catcher:8080/_captured | grep -q "$1"
+}
+
+group_K_connectors() {
+  banner "Group K — connectors model (new schema)"
+  netcurl -X POST http://sink-catcher:8080/_reset >/dev/null
+
+  # K1 + K5 ride one merge_conflict event on conn/cweb: the agent fixes and
+  # pushes (K1), lifecycle hooks post to slack around it, and a second
+  # trigger runs a sh code step over SSH on the loopback host (K5).
+  code="$(post_webhook_to conductor-conn pull_request conn_merge_conflict.json)"
+  if [ "$code" = "200" ] || [ "$code" = "202" ]; then
+    ok "K1 webhook accepted by the connectors daemon (HTTP $code)" K K1-http
+  else
+    bad "K1 webhook accepted" K K1-http "unexpected HTTP $code"
+  fi
+
+  if wait_for 20 slack_sink_has "K1-start conn/cweb#1"; then
+    ok "K1 at:start hook posted to slack before the step" K K1-start
+  else
+    bad "K1 at:start hook posted" K K1-start "no K1-start capture on the slack sink"
+  fi
+  if wait_for 45 forge_has_conductor_commit conn/cweb pr-1; then
+    ok "K1 agent step fixed & pushed (new-schema trigger → fakepaseo → forge)" K K1-agent
+  else
+    bad "K1 agent step pushed a fix" K K1-agent "no conductor commit on conn/cweb pr-1"
+  fi
+  if wait_for 30 slack_sink_has "K1-done conn/cweb#1"; then
+    ok "K1 at:done hook posted after the workflow" K K1-done
+  else
+    bad "K1 at:done hook posted" K K1-done "no K1-done capture"
+  fi
+  if slack_sink_has "K1-fail"; then
+    bad "K1 no fail hook fired" K K1-nofail "K1-fail capture present"
+  else
+    ok "K1 at:fail hook did NOT fire on success" K K1-nofail
+  fi
+
+  # K5: the remote sh step ran on selfbox via the system ssh — the container's
+  # own hostname flows through the step output into the slack post.
+  host="$(cexec conductor-conn hostname | tr -d '\r\n')"
+  if wait_for 30 slack_sink_has "K5-remote $host as root"; then
+    ok "K5 code step ran over SSH (host: selfbox) and its output reached slack" K K5-remote
+  else
+    bad "K5 remote code step over SSH" K K5-remote "no 'K5-remote $host' capture"
+  fi
+
+  # K2 + K3 ride a comment burst on conn/csvc: the ungrouped trigger fires per
+  # comment (js code step reshapes each), the grouped trigger batches the
+  # burst into ONE run seeing {{.group.count}} == 2.
+  post_webhook_to conductor-conn issue_comment conn_comment_1.json >/dev/null
+  sleep 0.5
+  post_webhook_to conductor-conn issue_comment conn_comment_2.json >/dev/null
+
+  if wait_for 20 slack_sink_has "K2 seen first burst comment" && wait_for 20 slack_sink_has "K2 seen second burst comment"; then
+    ok "K2 js code step reshaped each comment into a slack post" K K2-js
+  else
+    bad "K2 js code step per comment" K K2-js "missing K2 captures"
+  fi
+  if wait_for 30 slack_sink_has "K3-batch 2 last=second burst comment"; then
+    ok "K3 grouped burst → ONE run with group.count=2 and the last event's context" K K3-group
+  else
+    bad "K3 grouped burst batched" K K3-group "no K3-batch 2 capture"
+  fi
+  sleep 3
+  n="$(netcurl http://sink-catcher:8080/_captured | grep -o "K3-batch" | wc -l | tr -d ' ')"
+  if [ "$n" = "1" ]; then
+    ok "K3 exactly one batched run (one-run-per-key debounce)" K K3-once
+  else
+    bad "K3 exactly one batched run" K K3-once "K3-batch fired $n times"
+  fi
+
+  # K4: introspection over the live config.
+  out="$(cexec conductor-conn conductor connectors ls --config /etc/conductor/connectors.e2e.yaml 2>&1)"
+  case "$out" in
+    *gh*github*) ok "K4 conductor connectors ls lists the configured connectors" K K4-ls ;;
+    *) bad "K4 connectors ls" K K4-ls "unexpected output: $(echo "$out" | head -2)" ;;
+  esac
+  out="$(cexec conductor-conn conductor schema slack --config /etc/conductor/connectors.e2e.yaml 2>&1)"
+  case "$out" in
+    *"verb ask"*"request-response"*) ok "K4 conductor schema prints the ask verb contract" K K4-schema ;;
+    *) bad "K4 schema slack" K K4-schema "no ask verb in output" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Group L — automatic legacy→connectors migration on boot (issue #36, hard
+# requirement): transform + backup + validate, still working afterwards; an
+# unmappable config refuses and stays legacy.
+# ---------------------------------------------------------------------------
+group_L_migration() {
+  banner "Group L — auto-migration (legacy → connectors)"
+
+  # L1: the daemon booted on a LEGACY config; its boot transformed it.
+  if cexec conductor-migrate test -f /data/config/config.yaml.pre-connectors; then
+    ok "L1 pre-migration backup written (config.yaml.pre-connectors)" L L1-backup
+  else
+    bad "L1 backup written" L L1-backup "no .pre-connectors file"
+  fi
+  if cexec conductor-migrate grep -q "^connectors:" /data/config/config.yaml \
+     && ! cexec conductor-migrate grep -q "^integrations:" /data/config/config.yaml; then
+    ok "L1 config now on the connectors schema (integrations: gone)" L L1-schema
+  else
+    bad "L1 config migrated in place" L L1-schema "config.yaml not transformed"
+  fi
+  if cexec conductor-migrate grep -q "integrations:" /data/config/config.yaml.pre-connectors; then
+    ok "L1 backup holds the original legacy config" L L1-original
+  else
+    bad "L1 backup holds the original" L L1-original "backup is not the legacy file"
+  fi
+
+  # The migrated behavior still works: the same event fires the same work.
+  code="$(post_webhook_to conductor-migrate pull_request migr_merge_conflict.json)"
+  if [ "$code" = "200" ] || [ "$code" = "202" ]; then
+    ok "L1 webhook accepted post-migration (HTTP $code)" L L1-http
+  else
+    bad "L1 webhook accepted post-migration" L L1-http "unexpected HTTP $code"
+  fi
+  if wait_for 45 forge_has_conductor_commit migr/mweb pr-1; then
+    ok "L1 migrated trigger fixed & pushed (same event → same work)" L L1-works
+  else
+    bad "L1 migrated trigger still works" L L1-works "no conductor commit on migr/mweb pr-1"
+  fi
+
+  # L2: an UNMAPPABLE legacy config refuses with a hard error naming the
+  # construct, leaves the file untouched, and never commits a partial result.
+  out="$(cexec conductor-conn bash -c '
+    cp /etc/conductor/unmappable.yaml /tmp/unmappable.yaml
+    if conductor config migrate --config /tmp/unmappable.yaml 2>&1; then
+      echo MIGRATE_EXIT_ZERO
+    fi
+    grep -c "^integrations:" /tmp/unmappable.yaml || true
+    test ! -f /tmp/unmappable.yaml.pre-connectors && echo NO_PARTIAL_BACKUP_COMMIT || true
+  ' 2>&1)"
+  case "$out" in
+    *MIGRATE_EXIT_ZERO*) bad "L2 unmappable config refused" L L2-refuse "migrate exited zero" ;;
+    *"nested steps"*) ok "L2 unmappable construct hard-errors naming it (nested steps)" L L2-refuse ;;
+    *) bad "L2 unmappable config refused" L L2-refuse "error did not name the construct: $(echo "$out" | head -2)" ;;
+  esac
+  case "$out" in
+    *NO_PARTIAL_BACKUP_COMMIT*) ok "L2 refusal left no partial backup/commit" L L2-intact ;;
+    *) bad "L2 refusal left the file alone" L L2-intact "partial state written" ;;
+  esac
+}
+
 main() {
   trap teardown EXIT
   setup
@@ -764,6 +919,8 @@ main() {
   group_E_handoff
   group_F_capability
   group_J_failure
+  group_K_connectors
+  group_L_migration
   print_matrix
   [ "$FAIL" -eq 0 ]
 }

@@ -1,0 +1,49 @@
+# LEGACY-schema config for the auto-migration e2e (group L1). The entrypoint
+# copies this to a WRITABLE path; the daemon's boot transforms it in place
+# (backup + swap + validate) and then runs on the migrated schema — proven by
+# a fixture webhook still producing a forge commit afterwards.
+integrations:
+  - type: github
+    name: gh
+    enabled: true
+    app:
+      app_id: 123456
+      private_key_path: /etc/conductor/github-app.pem
+      webhook_secret: e2e-webhook-secret
+      verify_signature: true
+    webhook:
+      listen: "0.0.0.0:8787"
+      path: /webhook
+    sweep:
+      enabled: false
+    identity:
+      read_token: app
+      write_token: e2e-user-write-token
+    defaults:
+      me: { logins: [conductor-user] }
+      actions:
+        merge_conflict:
+          type: agent
+          agent: fixer
+          prompt: "Resolve the conflict on {{.repo}}#{{.pr}} against {{.base}}: rebase, fix, push."
+    rules:
+      - match: { repos: ["migr/*"] }
+
+agents:
+  fixer:
+    provider: fake
+    workspace: worktree
+    archive_when_done: true
+    wait_timeout: 5m
+
+control:
+  max_concurrent_agents: 3
+
+notify:
+  on: [dispatch, escalate]
+
+store:
+  state_file: /data/state.json
+  audit_log: /data/audit.jsonl
+
+paseo_bin: /usr/local/bin/fakepaseo

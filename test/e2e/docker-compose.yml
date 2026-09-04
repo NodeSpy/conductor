@@ -40,6 +40,7 @@ services:
         grpb/cliclaude grpb/clicodex grpb/acpgemini grpb/acpcodex
         grpb/ocacp grpb/ocnative grpb/deck
         grpc/acpresume grpf/clihoff grpd/burst grpe/paseohoff grpj/acpcrash
+        conn/cweb conn/csvc migr/mweb
     volumes:
       - ./seed:/seed:ro
     # git daemon (started by the seed script) serves git://forge:9418/<owner>/<repo>.git
@@ -90,6 +91,40 @@ services:
     volumes:
       - ./config:/etc/conductor:ro
     command: ["bash", "/etc/conductor/entrypoint.sh", "/etc/conductor/controllers.yaml"]
+
+  # The connectors-model daemon (group K): new-schema config, slack verbs
+  # against the sink-catcher's slack-shaped endpoint, and a loopback sshd for
+  # the remote-execution scenario.
+  conductor-conn:
+    <<: *image
+    depends_on: [forge, mock-github, sink-catcher]
+    environment:
+      HOME: /home/conductor
+      PC_GITHUB_API_BASE: "http://mock-github:8080"
+      PC_SLACK_API_URL: "http://sink-catcher:8080/slackapi"
+      FORGE_BASE: "git://forge/"
+      FAKE_PASEO_STATE: /data/fakepaseo
+      PC_REAPER_INTERVAL: "2s"
+      PC_REAPER_MIN_AGE: "1s"
+    volumes:
+      - ./config:/etc/conductor:ro
+      - ./fixtures:/fixtures:ro
+    command: ["bash", "/etc/conductor/entrypoint-conn.sh", "/etc/conductor/connectors.e2e.yaml"]
+
+  # The auto-migration daemon (group L1): boots on a LEGACY config seeded into
+  # a writable path; its own boot transforms it (backup + swap + validate).
+  conductor-migrate:
+    <<: *image
+    depends_on: [forge, mock-github, sink-catcher]
+    environment:
+      HOME: /home/conductor
+      PC_GITHUB_API_BASE: "http://mock-github:8080"
+      FORGE_BASE: "git://forge/"
+      FAKE_PASEO_STATE: /data/fakepaseo
+    volumes:
+      - ./config:/etc/conductor:ro
+      - ./fixtures:/fixtures:ro
+    command: ["bash", "/etc/conductor/entrypoint-migrate.sh"]
 
   # A daemon whose fake paseo fails `workspace create` — group J2 (worktree
   # creation fails → loud escalate, never a silent scratch fallback).
