@@ -284,6 +284,36 @@ connectors:
 	}
 }
 
+// TestRegistryAuthorDisabled: `enabled: false` set by the config author (as
+// opposed to a runtime disable) still builds the instance but rejects every
+// verb — the author's kill switch for one connector.
+func TestRegistryAuthorDisabled(t *testing.T) {
+	cfg := mustDecodeConfig(t, `
+connectors:
+  box:
+    type: command
+    enabled: false
+`)
+	reg, err := Build(cfg, Deps{Secrets: secrets.New(), Config: cfg})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	in, ok := reg.Get("box")
+	if !ok {
+		t.Fatal("connector not in registry")
+	}
+	if in.Enabled {
+		t.Fatal("enabled: false must carry through to the instance")
+	}
+	if in.DisabledReason != "" {
+		t.Fatalf("author-disabled is not a runtime failure: %q", in.DisabledReason)
+	}
+	_, err = in.Invoke(context.Background(), "run", map[string]any{"command": "true"})
+	if err == nil || !strings.Contains(err.Error(), `connector "box" is disabled`) {
+		t.Fatalf("verbs on an author-disabled connector must be rejected, got %v", err)
+	}
+}
+
 func TestRegistryBuildDisablesOnValidateFailure(t *testing.T) {
 	// slack requires bot_token; omitting it passes decode (empty string) but
 	// fails Validate().

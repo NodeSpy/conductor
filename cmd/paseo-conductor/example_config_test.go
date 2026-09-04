@@ -65,6 +65,21 @@ func TestExampleConfigValidates(t *testing.T) {
 			t.Errorf("connector %q disabled: %s", name, in.DisabledReason)
 		}
 	}
+
+	// The example's remote paseo runtime (gpu-paseo on the build-box host)
+	// must resolve to an SSH-backed dispatcher override.
+	bin, err := resolvePaseoBin(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	over, err := buildPaseoOverrides(cfg, bin, config.Retry{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pd, ok := over["gpu-paseo"]
+	if !ok || pd.Remote == nil || pd.Remote.Name != "build-box" {
+		t.Fatalf("gpu-paseo must lower to a remote dispatcher, got %+v", over)
+	}
 }
 
 // TestLegacyExampleConfigStillLoads: the retained legacy example must keep

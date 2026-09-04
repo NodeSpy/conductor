@@ -2,11 +2,19 @@ package connector
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	ghint "github.com/NodeSpy/paseo-conductor/internal/integrations/github"
@@ -85,6 +93,42 @@ connectors:
 	}
 	if act.StuckAfter.D().String() != "45m0s" {
 		t.Fatalf("act.StuckAfter = %v", act.StuckAfter.D())
+	}
+}
+
+// TestGithubSourceSweepSurvivesLowering: the connector's `sweep:` block rides
+// into the lowered integration, with the connector-level repos: filling in
+// when the sweep declares none.
+func TestGithubSourceSweepSurvivesLowering(t *testing.T) {
+	cfg := mustDecodeConfig(t, `
+connectors:
+  gh:
+    type: github
+    repos: ["org/*"]
+    sweep: { enabled: true, interval: 10m }
+    identity:
+      write_token: literal-tok
+`)
+	reg, err := Build(cfg, Deps{Secrets: secrets.New()})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	in, _ := reg.Get("gh")
+	result, err := in.Impl.Source([]CompiledTrigger{{
+		Spec: mkTriggerSpec("gh.release", "rel", nil),
+	}})
+	if err != nil {
+		t.Fatalf("Source: %v", err)
+	}
+	sw := result.(*ghint.Integration).SweepSettings()
+	if !sw.Enabled {
+		t.Fatal("sweep.enabled lost in lowering")
+	}
+	if sw.Interval.D() != 10*time.Minute {
+		t.Fatalf("sweep.interval = %v", sw.Interval.D())
+	}
+	if len(sw.Repos) != 1 || sw.Repos[0] != "org/*" {
+		t.Fatalf("sweep.repos must fall back to the connector repos, got %v", sw.Repos)
 	}
 }
 
@@ -298,6 +342,77 @@ func TestGithubVerbAddLabelsHTTP(t *testing.T) {
 	if len(labels) != 2 {
 		t.Fatalf("body.labels = %v", gotBody)
 	}
+}
+
+// TestGithubVerbAsBotMintsInstallationToken is the `as: bot` green path: the
+// verb call resolves the App installation for the repo (JWT-authenticated),
+// mints an installation access token, and posts WITH THAT TOKEN — not the
+// user's write token.
+func TestGithubVerbAsBotMintsInstallationToken(t *testing.T) {
+	var installAuth, mintAuth, commentAuth string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /repos/org/repo/installation":
+			installAuth = r.Header.Get("Authorization")
+			json.NewEncoder(w).Encode(map[string]any{"id": 555})
+		case "POST /app/installations/555/access_tokens":
+			mintAuth = r.Header.Get("Authorization")
+			json.NewEncoder(w).Encode(map[string]any{
+				"token": "ghs_minted", "expires_at": time.Now().Add(time.Hour).UTC(),
+			})
+		case "POST /repos/org/repo/issues/7/comments":
+			commentAuth = r.Header.Get("Authorization")
+			json.NewDecoder(r.Body).Decode(&gotBody)
+			json.NewEncoder(w).Encode(map[string]any{"id": 9, "html_url": "https://example/c/9"})
+		default:
+			t.Errorf("unexpected API call: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+
+	impl := newGithubTestImpl(t, fmt.Sprintf(`
+    app:
+      app_id: 99
+      private_key_path: %s
+    identity:
+      write_token: user-tok
+`, writeTestRSAKey(t)))
+	out, err := impl.Invoke(context.Background(), "comment", map[string]any{
+		"repo": "org/repo", "number": 7, "body": "from the app", "as": "bot",
+	})
+	if err != nil {
+		t.Fatalf("as: bot comment: %v", err)
+	}
+	// The App endpoints authenticate with the App JWT (an RS256 compact JWT).
+	for name, auth := range map[string]string{"installation lookup": installAuth, "token mint": mintAuth} {
+		if !strings.HasPrefix(auth, "Bearer eyJ") {
+			t.Errorf("%s auth = %q, want an App JWT", name, auth)
+		}
+	}
+	if commentAuth != "Bearer ghs_minted" {
+		t.Fatalf("comment auth = %q, want the minted installation token (not the user token)", commentAuth)
+	}
+	if gotBody["body"] != "from the app" || out["id"] != int64(9) {
+		t.Fatalf("body/out: %v / %v", gotBody, out)
+	}
+}
+
+func writeTestRSAKey(t *testing.T) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	p := filepath.Join(t.TempDir(), "app.pem")
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 func TestGithubVerbAsBotWithoutAppErrors(t *testing.T) {

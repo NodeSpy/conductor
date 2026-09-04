@@ -118,8 +118,8 @@ connectors:
 # command step, an agent profile, or a cli/acp runtime; conductor runs the
 # work there via the system ssh (key auth + known_hosts, BatchMode).
 # ---------------------------------------------------------------------------
-# hosts:
-#   build-box: { host: build01.internal, user: ci, key: ~/.ssh/id_ed25519 }
+hosts:
+  build-box: { host: build01.internal, user: ci, key: ~/.ssh/id_ed25519 }
 
 # ---------------------------------------------------------------------------
 # runtimes: — where agents run (previously controllers:). The paseo runtime's
@@ -130,7 +130,7 @@ connectors:
 # ---------------------------------------------------------------------------
 runtimes:
   paseo: { type: paseo, bin: paseo, default: true }
-  # gpu-paseo: { type: paseo, bin: /usr/local/bin/paseo, host: build-box }
+  gpu-paseo: { type: paseo, bin: /usr/local/bin/paseo, host: build-box }
   # deck:   { type: agent-deck }
   # gemini: { agent: gemini }                       # ACP transport
   # remote: { type: cli, tool: claude-code, host: build-box }
