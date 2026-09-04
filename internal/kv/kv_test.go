@@ -490,68 +490,55 @@ func TestListMutationAtomicity(t *testing.T) {
 	}
 }
 
-// TestRegistryWiring: SetDataDir + the lazy implicit boltdb default, named
-// registration with default: true resolution, reserved/duplicate errors, and
-// re-pointing the data dir.
+// TestRegistryWiring: explicit stores only — registration, Use resolution,
+// duplicate/empty errors, boltdb pathing, and that nothing is implicit.
 func TestRegistryWiring(t *testing.T) {
 	SetDataDir("")
 	ResetStores()
 	t.Cleanup(func() { SetDataDir(""); ResetStores() })
-	if _, err := Default(); err == nil {
-		t.Fatal("Default without a data dir must error")
+
+	// Nothing is implicit: no registration → no stores at all.
+	if _, err := Use(""); err == nil {
+		t.Fatal("empty selector must error — there is no default store")
 	}
-	dir1 := t.TempDir()
-	SetDataDir(dir1)
-	s1, err := Default()
+	if _, err := Use("cache"); err == nil || !contains(err.Error(), "add a stores: section") {
+		t.Fatalf("unknown with none defined: %v", err)
+	}
+
+	dir := t.TempDir()
+	SetDataDir(dir)
+	b, err := OpenBoltStore("scratch", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s1.Set("", "k", "v1", 0); err != nil {
+	if err := Register("scratch", b); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir1, "default.db")); err != nil {
-		t.Fatalf("implicit default file: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "scratch.db")); err != nil {
+		t.Fatalf("name-derived boltdb file: %v", err)
 	}
-	if again, _ := Default(); again != s1 {
-		t.Fatal("Default must return the same open store")
+	got, err := Use("scratch")
+	if err != nil || got != b {
+		t.Fatalf("use: %v %v", got, err)
 	}
-	if byName, _ := Use(DefaultStoreName); byName != s1 {
-		t.Fatal("the implicit default is addressable by name")
+	// Still no default: the empty selector remains an error.
+	if _, err := Use(""); err == nil {
+		t.Fatal("empty selector must error even with stores defined")
 	}
-
-	// A named store; unknown lookups name what exists.
-	other := openTemp(t)
-	if err := Register("cache", other, false); err != nil {
-		t.Fatal(err)
+	if _, err := Use("ghost"); err == nil || !contains(err.Error(), "scratch") {
+		t.Fatalf("unknown store must name the defined ones: %v", err)
 	}
-	if b, err := Use("cache"); err != nil || b != other {
-		t.Fatalf("use cache: %v %v", b, err)
-	}
-	if _, err := Use("ghost"); err == nil || !contains(err.Error(), "cache") {
-		t.Fatalf("unknown store: %v", err)
-	}
-	if err := Register("cache", other, false); err == nil {
+	if err := Register("scratch", b); err == nil {
 		t.Fatal("duplicate registration must error")
 	}
-	if err := Register(DefaultStoreName, other, false); err == nil || !contains(err.Error(), "reserved") {
-		t.Fatalf("reserved name: %v", err)
+	if err := Register("", b); err == nil {
+		t.Fatal("empty name must error")
+	}
+	if got := Names(); len(got) != 1 || got[0] != "scratch" {
+		t.Fatalf("names: %v", got)
 	}
 
-	// default: true wins the "" resolution; a second claimant errors.
-	if err := Register("primary", openTemp(t), true); err != nil {
-		t.Fatal(err)
-	}
-	b, _ := Default()
-	if p, _ := Use("primary"); b != p {
-		t.Fatal("default: true store must win the empty selector")
-	}
-	if err := Register("primary2", openTemp(t), true); err == nil || !contains(err.Error(), "pick one") {
-		t.Fatalf("two defaults: %v", err)
-	}
-	ResetStores()
-
-	// A boltdb store with an explicit path uses it; the name-derived file
-	// otherwise (through the shared construction path).
+	// Explicit path: wins over the data dir; unopenable path names the store.
 	explicit := filepath.Join(t.TempDir(), "archive.db")
 	ab, err := OpenBoltStore("archive", explicit)
 	if err != nil {
@@ -561,27 +548,13 @@ func TestRegistryWiring(t *testing.T) {
 	if _, err := os.Stat(explicit); err != nil {
 		t.Fatalf("explicit path: %v", err)
 	}
-	sb, err := OpenBoltStore("scratch", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sb.Close()
-	if _, err := os.Stat(filepath.Join(dir1, "scratch.db")); err != nil {
-		t.Fatalf("name-derived path: %v", err)
-	}
-	// An unopenable explicit path is a clear error naming the store.
 	if _, err := OpenBoltStore("bad", "/dev/null/nope/x.db"); err == nil || !contains(err.Error(), `"bad"`) {
 		t.Fatalf("bad path: %v", err)
 	}
-
-	// Re-pointing the data dir drops the lazily-opened default so it
-	// reopens fresh.
-	SetDataDir(t.TempDir())
-	s2, err := Default()
-	if err != nil {
-		t.Fatal(err)
+	// No data dir and no path is a clear error.
+	SetDataDir("")
+	if _, err := OpenBoltStore("nodir", ""); err == nil || !contains(err.Error(), "data dir") {
+		t.Fatalf("no data dir: %v", err)
 	}
-	if _, found, _ := s2.Get("", "k"); found {
-		t.Fatal("new data dir must be a fresh default store")
-	}
+	ResetStores()
 }

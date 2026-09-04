@@ -9,13 +9,17 @@ import (
 	"github.com/NodeSpy/conductor/internal/kv"
 )
 
-// tempKV points the shared store at a temp file for one test and returns it.
+// tempKV registers one boltdb store named "s" for a test and returns it.
 func tempKV(t *testing.T) kv.KVBackend {
 	t.Helper()
 	kv.SetDataDir(t.TempDir())
-	t.Cleanup(func() { kv.SetDataDir("") })
-	st, err := kv.Default()
+	kv.ResetStores()
+	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
+	st, err := kv.OpenBoltStore("s", "")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := kv.Register("s", st); err != nil {
 		t.Fatal(err)
 	}
 	return st
@@ -29,26 +33,27 @@ func TestCtxKVJS(t *testing.T) {
 
 	e := &Executor{}
 	out, err := e.Exec(context.Background(), Spec{Run: "js", Code: `
-const missing = ctx.kv.get("ns", "nope");
-ctx.kv.set("ns", "obj", { deep: [1, "two"] });
-const nx = ctx.kv.setnx("ns", "obj", "loser");
-const merged = ctx.kv.merge("ns", "obj", { extra: true });
-const n = ctx.kv.incr("ns", "count", 5);
-ctx.kv.append("ns", "tags", ["x", "y", "x"], true);
-ctx.kv.remove("ns", "tags", "y");
+const kv = ctx.store("s");
+const missing = kv.get("ns", "nope");
+kv.set("ns", "obj", { deep: [1, "two"] });
+const nx = kv.setnx("ns", "obj", "loser");
+const merged = kv.merge("ns", "obj", { extra: true });
+const n = kv.incr("ns", "count", 5);
+kv.append("ns", "tags", ["x", "y", "x"], true);
+kv.remove("ns", "tags", "y");
 return {
   missing: missing,
   created: nx.created,
   merged: merged.extra,
   n: n,
-  has: ctx.kv.contains("ns", "tags", "x"),
-  first: ctx.kv.first("q", "jobs"),
-  last: ctx.kv.last("q", "jobs"),
-  at: ctx.kv.index("q", "jobs", -2),
-  mid: ctx.kv.slice("q", "jobs", 1, 3),
-  len: ctx.kv.len("q", "jobs"),
-  popped: ctx.kv.pop("q", "jobs", "front"),
-  keys: ctx.kv.list("ns").keys,
+  has: kv.contains("ns", "tags", "x"),
+  first: kv.first("q", "jobs"),
+  last: kv.last("q", "jobs"),
+  at: kv.index("q", "jobs", -2),
+  mid: kv.slice("q", "jobs", 1, 3),
+  len: kv.len("q", "jobs"),
+  popped: kv.pop("q", "jobs", "front"),
+  keys: kv.list("ns").keys,
 };`}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -83,21 +88,25 @@ return {
 		t.Fatalf("pop persisted: %d", n)
 	}
 	// A kv type error surfaces as a thrown JS error.
-	_, err = e.Exec(context.Background(), Spec{Run: "js", Code: `ctx.kv.merge("ns", "count", {a: 1}); return 1`}, nil)
+	_, err = e.Exec(context.Background(), Spec{Run: "js", Code: `ctx.store("s").merge("ns", "count", {a: 1}); return 1`}, nil)
 	if err == nil || !strings.Contains(err.Error(), "not an object") {
 		t.Fatalf("js kv error: %v", err)
 	}
 }
 
-// TestCtxKVGoEmbed: the `import "conductor/kv"` virtual package in
-// run: go-embed.
+// TestCtxKVGoEmbed: the `import "conductor/store"` virtual package in
+// run: go-embed — store.Use resolves a defined store to a typed handle.
 func TestCtxKVGoEmbed(t *testing.T) {
 	st := tempKV(t)
 	e := &Executor{}
 	out, err := e.Exec(context.Background(), Spec{Run: "go-embed", Code: `
-import "conductor/kv"
+import "conductor/store"
 
 func run(ctx map[string]any) (any, error) {
+	kv, err := store.Use("s")
+	if err != nil {
+		return nil, err
+	}
 	if err := kv.Set("ns", "who", "embed"); err != nil {
 		return nil, err
 	}
@@ -142,14 +151,15 @@ func TestCtxKVRisor(t *testing.T) {
 	st := tempKV(t)
 	e := &Executor{}
 	out, err := e.Exec(context.Background(), Spec{Run: "risor", Code: `
-kv.set("ns", "who", "risor")
-kv.append("ns", "l", ["x", "y"])
+s := store("s")
+s.set("ns", "who", "risor")
+s.append("ns", "l", ["x", "y"])
 {
-  "v": kv.get("ns", "who"),
-  "n": kv.incr("ns", "count", 3),
-  "first": kv.first("ns", "l"),
-  "len": kv.len("ns", "l"),
-  "missing": kv.get("ns", "nope"),
+  "v": s.get("ns", "who"),
+  "n": s.incr("ns", "count", 3),
+  "first": s.first("ns", "l"),
+  "len": s.len("ns", "l"),
+  "missing": s.get("ns", "nope"),
 }`}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -167,14 +177,15 @@ func TestCtxKVLua(t *testing.T) {
 	st := tempKV(t)
 	e := &Executor{}
 	out, err := e.Exec(context.Background(), Spec{Run: "lua", Code: `
-ctx.kv.set("ns", "who", "lua")
-ctx.kv.append("ns", "l", {"a", "b", "c"})
+local kv = ctx.store("s")
+kv.set("ns", "who", "lua")
+kv.append("ns", "l", {"a", "b", "c"})
 return {
-  v = ctx.kv.get("ns", "who"),
-  n = ctx.kv.incr("ns", "count", 4),
-  popped = ctx.kv.pop("ns", "l", "front"),
-  len = ctx.kv.len("ns", "l"),
-  missing = ctx.kv.get("ns", "nope") == nil,
+  v = kv.get("ns", "who"),
+  n = kv.incr("ns", "count", 4),
+  popped = kv.pop("ns", "l", "front"),
+  len = kv.len("ns", "l"),
+  missing = kv.get("ns", "nope") == nil,
 }`}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +196,7 @@ return {
 	if v, _, _ := st.Get("ns", "who"); v != "lua" {
 		t.Fatalf("store: %v", v)
 	}
-	_, err = e.Exec(context.Background(), Spec{Run: "lua", Code: `ctx.kv.incr("ns", "who")`}, nil)
+	_, err = e.Exec(context.Background(), Spec{Run: "lua", Code: `ctx.store("s").incr("ns", "who")`}, nil)
 	if err == nil || !strings.Contains(err.Error(), "not a number") {
 		t.Fatalf("lua kv error: %v", err)
 	}

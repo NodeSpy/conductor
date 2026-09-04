@@ -51,9 +51,9 @@ func (e *Executor) execJS(spec Spec, data map[string]any) (map[string]any, error
 	}
 	defer rt.Close()
 
-	// ctx.kv bridges to the built-in store through one host function taking
-	// and returning JSON (see kvInvokeJSON) — values cross the WASM boundary
-	// as strings, so no Value plumbing per type.
+	// ctx.store bridges to the defined stores through one host function
+	// taking and returning JSON (see kvInvokeJSON) — values cross the WASM
+	// boundary as strings, so no Value plumbing per type.
 	qctx := rt.Context()
 	hostKV := qctx.Function(func(this *qjs.This) (*qjs.Value, error) {
 		payload := ""
@@ -78,20 +78,20 @@ func (e *Executor) execJS(spec Spec, data map[string]any) (map[string]any, error
 	return wrapValue(v), nil
 }
 
-// jsKVShim builds the ctx.kv object over the __conductor_kv host bridge:
-// every op serializes its args to JSON, and a bridge error becomes a thrown
-// Error. Absent reads come back null.
+// jsKVShim builds ctx.store over the __conductor_kv host bridge:
+// ctx.store("cache") returns an object whose ops serialize their args to
+// JSON; a bridge error becomes a thrown Error. Absent reads come back null.
 func jsKVShim() string {
 	ops, _ := json.Marshal(kvOps)
-	return `ctx.kv = (function() {
+	return `ctx.store = (store) => {
   const call = (op, args) => {
-    const r = JSON.parse(__conductor_kv(JSON.stringify({ op, args })));
+    const r = JSON.parse(__conductor_kv(JSON.stringify({ store, op, args })));
     if (r.err) throw new Error(r.err);
     return r.v ?? null;
   };
   const o = {};
   for (const op of ` + string(ops) + `) o[op] = (...args) => call(op, args);
   return o;
-})();
+};
 `
 }

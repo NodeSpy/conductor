@@ -364,8 +364,13 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 		r.byName[name] = in
 		r.order = append(r.order, name)
 	}
-	// The built-in kv store is always available — no connection block, no
-	// credentials (config.Validate reserves the name).
+	// Wire the stores: section into the kv registry — a bad store is a load
+	// error, never a disabled connector.
+	if err := buildStores(cfg, deps); err != nil {
+		return nil, err
+	}
+	// The kv connector (the verbs over those stores) is always available —
+	// no connection block, no credentials (config.Validate reserves the name).
 	if _, exists := r.byName["kv"]; !exists {
 		impl, err := buildReg["kv"]("kv", config.ConnectorRef{}, deps)
 		if err != nil {
