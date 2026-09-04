@@ -114,11 +114,14 @@ connectors:
 
 # ---------------------------------------------------------------------------
 # runtimes: — where agents run (previously controllers:). The paseo runtime's
-# bin: replaces the old top-level paseo_bin. cli/acp/agent-deck runtimes may
-# set host: to launch on a hosts: entry over SSH.
+# bin: replaces the old top-level paseo_bin. Any runtime may set host: to run
+# on a hosts: entry over SSH — a remote paseo runs its whole CLI there (put
+# its environment on the host entry's env:), an opencode server is reached
+# through an ssh -W forward, cli/acp/agent-deck wrap their launch.
 # ---------------------------------------------------------------------------
 runtimes:
   paseo: { type: paseo, bin: paseo, default: true }
+  # gpu-paseo: { type: paseo, bin: /usr/local/bin/paseo, host: build-box }
   # deck:   { type: agent-deck }
   # gemini: { agent: gemini }                       # ACP transport
   # remote: { type: cli, tool: claude-code, host: build-box }

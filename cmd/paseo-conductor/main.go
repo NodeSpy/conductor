@@ -281,8 +281,32 @@ func cmdRun(args []string) error {
 		}
 		return (&hosts.Client{}).ArgvPrefix(hosts.Target{Name: name, Cfg: hc}), nil
 	}
+	// HostDial is the ssh -W stdio forward remote opencode servers are reached
+	// through (they bind the remote 127.0.0.1; no port opens anywhere).
+	controller.HostDial = func(ctx context.Context, name, addr string) (net.Conn, error) {
+		hc, ok := cfg.Hosts[name]
+		if !ok {
+			return nil, fmt.Errorf("unknown host %q (defined: %s)", name, sortedHostNames(cfg.Hosts))
+		}
+		return (&hosts.Client{}).DialVia(ctx, hosts.Target{Name: name, Cfg: hc}, addr)
+	}
 	var paseoSender controller.Sender = disp
 	reg := controller.NewRegistry(cfg.MergedControllers(), cfg.DefaultRuntimeName(), disp, paseoSender)
+	// Paseo runtimes with their own bin: — or a host:, whose paseo CLI runs
+	// over SSH — get dedicated dispatchers; the registry rebinds them so an
+	// agent's `runtime:` selection launches on the right box.
+	paseoOverrides, err := buildPaseoOverrides(cfg, paseoBin, retry, cfg.DryRun)
+	if err != nil {
+		return err
+	}
+	for name, pd := range paseoOverrides {
+		reg.OverridePaseo(name, pd, pd)
+		where := "bin " + pd.PaseoBin
+		if pd.Remote != nil {
+			where += " on host " + pd.Remote.Name
+		}
+		logf("runtime %s: dedicated paseo dispatcher (%s)", name, where)
+	}
 	broker := controller.NewBroker(reg, st, logf)
 	// Hand-off registry: resolves the named `handoffs:` map (config.Load already
 	// folded a legacy singular `handoff:` block into Handoffs["default"], so this
@@ -395,18 +419,26 @@ func cmdRun(args []string) error {
 	// Reaper for archive-when-done agents. It shares the hand-off hold-set so it
 	// never archives an agent the engine handed off for you to drive.
 	if anyArchive(cfg) {
-		r := &dispatch.Reaper{PaseoBin: disp.PaseoBin, Log: logf, Held: hold}
-		// Testability hook (test/e2e/): shrink the reaper cadence/grace so the
-		// hermetic harness can observe archive-when-done without a multi-minute
-		// wait. Unset — the production case — leaves the reaper's own defaults (1m
-		// interval, 3m startup grace) untouched.
-		if d := envDuration("PC_REAPER_INTERVAL"); d > 0 {
-			r.Interval = d
+		// One reaper per paseo dispatch surface: the primary, plus each
+		// dedicated (own-bin / remote) runtime — their agents live where their
+		// paseo does.
+		reapers := []*dispatch.Reaper{{PaseoBin: disp.PaseoBin, Log: logf, Held: hold}}
+		for _, pd := range paseoOverrides {
+			reapers = append(reapers, &dispatch.Reaper{PaseoBin: pd.PaseoBin, Remote: pd.Remote, Log: logf, Held: hold})
 		}
-		if d := envDuration("PC_REAPER_MIN_AGE"); d > 0 {
-			r.MinAge = d
+		for _, r := range reapers {
+			// Testability hook (test/e2e/): shrink the reaper cadence/grace so the
+			// hermetic harness can observe archive-when-done without a multi-minute
+			// wait. Unset — the production case — leaves the reaper's own defaults (1m
+			// interval, 3m startup grace) untouched.
+			if d := envDuration("PC_REAPER_INTERVAL"); d > 0 {
+				r.Interval = d
+			}
+			if d := envDuration("PC_REAPER_MIN_AGE"); d > 0 {
+				r.MinAge = d
+			}
+			go r.Run(ctx)
 		}
-		go r.Run(ctx)
 	}
 
 	// Periodic self-update. `stop` lets it trigger a graceful shutdown so the

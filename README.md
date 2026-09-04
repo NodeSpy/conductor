@@ -203,15 +203,17 @@ hosts:
 - **Code steps** (host-interpreter tier) run through the remote box's
   interpreter; a missing interpreter is a clear remote error.
 - **Command steps** run remotely and output `{stdout, stderr, exit_code}`.
-- **Runtimes** of type cli / acp / agent-deck launch their subprocesses on the
-  host (all their agents run there); an agent profile's own `host:` overrides
-  its runtime's.
+- **Runtimes** launch on the host: cli / acp / agent-deck wrap their
+  subprocess in the ssh launch; a **paseo** runtime runs its entire CLI
+  (run, clone, workspace create, ls, send, wait, archive — and its reaper)
+  on that box, with checkouts under the remote user's `~/.conductor`; an
+  **opencode** runtime's server binds the remote 127.0.0.1 and is reached
+  through an `ssh -W` stdio forward — no port opens on either machine. An
+  agent profile's own `host:` overrides its runtime's (cli/acp/agent-deck).
 
 Everything goes through the system `ssh` (BatchMode, key auth, `known_hosts`
 pinning); env exports and code travel inside the ssh channel, never local
-argv. The in-process engines (`js`, `go-embed`) are local-only, and `host:`
-on paseo/opencode runtimes is rejected at validation with the reasons and
-alternatives spelled out.
+argv. The in-process engines (`js`, `go-embed`) are local-only.
 
 ## Event grouping
 

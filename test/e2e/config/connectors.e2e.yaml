@@ -35,15 +35,29 @@ hosts:
     user: root
     key: /root/.ssh/id_ed25519
     known_hosts: /root/.ssh/known_hosts
+    # A remote paseo runtime gets its runtime env from the host entry — ssh
+    # carries no local process env across.
+    env:
+      FORGE_BASE: "git://forge/"
+      FAKE_PASEO_STATE: /data/fakepaseo
+      PC_GITHUB_API_BASE: "http://mock-github:8080"
 
 runtimes:
   paseo: { type: paseo, bin: /usr/local/bin/fakepaseo, default: true }
+  # K6: a paseo runtime on an SSH host — every paseo CLI call (run/ls/send/
+  # archive/clone/workspace) executes on selfbox over ssh.
+  gpu: { type: paseo, bin: /usr/local/bin/fakepaseo, host: selfbox }
 
 agents:
   fixer:
     provider: fake
     workspace: worktree
     archive_when_done: true
+    wait_timeout: 5m
+  remotefixer:
+    provider: fake
+    runtime: gpu
+    workspace: worktree
     wait_timeout: 5m
 
 triggers:
@@ -75,6 +89,19 @@ triggers:
       - id: tell
         uses: slack.post
         options: { channel: C5, text: "K5-remote {{.remote.where}} as {{.remote.user}}" }
+
+  # K6: an agent on the REMOTE paseo runtime — the whole dispatch
+  # (clone, worktree, run, wait) rides the ssh channel.
+  - on: gh.merge_conflict
+    name: remote-agent
+    filters: { repos: ["conn/rweb"] }
+    steps:
+      - id: fix
+        type: agent
+        agent: remotefixer
+        prompt: "Resolve the conflict on {{.repo}}#{{.pr}} against {{.base}}: rebase, fix, push."
+    hooks:
+      - { at: done, uses: slack.post, options: { channel: C6, text: "K6-done {{.repo}}#{{.pr}}" } }
 
   # K2: a js code step reshapes the comment, a verb posts the result.
   - on: gh.new_comment

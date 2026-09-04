@@ -40,7 +40,7 @@ services:
         grpb/cliclaude grpb/clicodex grpb/acpgemini grpb/acpcodex
         grpb/ocacp grpb/ocnative grpb/deck
         grpc/acpresume grpf/clihoff grpd/burst grpe/paseohoff grpj/acpcrash
-        conn/cweb conn/csvc migr/mweb
+        conn/cweb conn/csvc conn/rweb migr/mweb
     volumes:
       - ./seed:/seed:ro
     # git daemon (started by the seed script) serves git://forge:9418/<owner>/<repo>.git

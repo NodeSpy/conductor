@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/NodeSpy/paseo-conductor/internal/hosts"
 )
 
 // Reaper archives conductor agents that requested archive-when-done once they
@@ -19,6 +20,9 @@ const reaperGraceDefault = 3 * time.Minute
 
 type Reaper struct {
 	PaseoBin string
+	// Remote runs the reaper's paseo invocations on an SSH host — one reaper
+	// per remote paseo runtime (its agents live on that box). nil = local.
+	Remote   *hosts.Target
 	Interval time.Duration
 	MinAge   time.Duration // don't reap agents younger than this (default reaperGraceDefault)
 	Log      func(string, ...any)
@@ -79,7 +83,7 @@ func (r *Reaper) reap(ctx context.Context) {
 	// hand-off agents shouldn't carry this label — but that's protection by absence;
 	// the authoritative guard is the engine-registered Held set, checked per agent
 	// below, so a hand-off survives even if it somehow lands in this list.
-	out, err := exec.CommandContext(ctx, r.PaseoBin, "ls", "--json",
+	out, err := r.paseoCmd(ctx, "ls", "--json",
 		"--label", "archive=1").Output()
 	if err != nil {
 		return
@@ -149,14 +153,14 @@ func (r *Reaper) reap(ctx context.Context) {
 				continue
 			}
 			if wksID := worktrees[normCwd(a.cwd)]; wksID != "" {
-				if err := exec.CommandContext(ctx, r.PaseoBin, "workspace", "archive", wksID).Run(); err == nil && r.Log != nil {
+				if err := r.paseoCmd(ctx, "workspace", "archive", wksID).Run(); err == nil && r.Log != nil {
 					r.Log("reaper: archived idle agent %s + worktree %s", a.id, wksID)
 				}
 				continue
 			}
 			// No isolated worktree (e.g. checkout: none in a shared workspace): the
 			// agent has nothing to reclaim beyond itself.
-			if err := exec.CommandContext(ctx, r.PaseoBin, "archive", a.id).Run(); err == nil && r.Log != nil {
+			if err := r.paseoCmd(ctx, "archive", a.id).Run(); err == nil && r.Log != nil {
 				r.Log("reaper: archived idle agent %s", a.id)
 			}
 		}
@@ -179,7 +183,7 @@ func (r *Reaper) reap(ctx context.Context) {
 
 // presentIDs is the set of all non-archived agent ids on the local daemon.
 func (r *Reaper) presentIDs(ctx context.Context) map[string]bool {
-	out, err := exec.CommandContext(ctx, r.PaseoBin, "ls", "--json").Output()
+	out, err := r.paseoCmd(ctx, "ls", "--json").Output()
 	if err != nil {
 		return nil
 	}
@@ -213,14 +217,14 @@ func (r *Reaper) cullScratch(ctx context.Context) {
 			return // in use — leave it
 		}
 	}
-	if err := exec.CommandContext(ctx, r.PaseoBin, "workspace", "archive", id).Run(); err == nil && r.Log != nil {
+	if err := r.paseoCmd(ctx, "workspace", "archive", id).Run(); err == nil && r.Log != nil {
 		r.Log("reaper: archived idle scratch workspace %s (recreated on demand)", id)
 	}
 }
 
 // findScratch returns the shared scratch workspace's id and cwd, or ""s if absent.
 func (r *Reaper) findScratch(ctx context.Context) (id, cwd string) {
-	out, err := exec.CommandContext(ctx, r.PaseoBin, "workspace", "ls", "--json").Output()
+	out, err := r.paseoCmd(ctx, "workspace", "ls", "--json").Output()
 	if err != nil {
 		return "", ""
 	}
@@ -243,7 +247,7 @@ func (r *Reaper) findScratch(ctx context.Context) (id, cwd string) {
 
 // activeAgentCwds lists the cwds of non-archived agents on the local daemon.
 func (r *Reaper) activeAgentCwds(ctx context.Context) []string {
-	out, err := exec.CommandContext(ctx, r.PaseoBin, "ls", "--json").Output()
+	out, err := r.paseoCmd(ctx, "ls", "--json").Output()
 	if err != nil {
 		return nil
 	}
@@ -273,10 +277,10 @@ func (r *Reaper) minAge() time.Duration {
 // and whether it has ENGAGED (done any model work — LastUsage set). A zero created
 // time means the age is unknown — the grace is skipped.
 func (r *Reaper) idleState(ctx context.Context, id, cwd string) (needsUser bool, created time.Time, engaged bool) {
-	if holdMarkerPresent(cwd) {
+	if r.holdMarkerPresent(cwd) {
 		needsUser = true
 	}
-	out, err := exec.CommandContext(ctx, r.PaseoBin, "inspect", id, "--json").Output()
+	out, err := r.paseoCmd(ctx, "inspect", id, "--json").Output()
 	if err != nil {
 		return needsUser, time.Time{}, false
 	}
@@ -309,8 +313,13 @@ func withinStartupGrace(engaged bool, created, now time.Time, grace time.Duratio
 }
 
 // holdMarkerPresent reports whether the agent set a .paseo-hold marker in cwd.
-func holdMarkerPresent(cwd string) bool {
+func (r *Reaper) holdMarkerPresent(cwd string) bool {
 	if cwd == "" {
+		return false
+	}
+	if r.Remote != nil {
+		// The marker file lives on the remote box; the explicit HoldSet (and
+		// the pending-permission signal from inspect) remain authoritative.
 		return false
 	}
 	_, err := os.Stat(filepath.Join(normCwd(cwd), HoldMarker))
@@ -320,7 +329,7 @@ func holdMarkerPresent(cwd string) bool {
 // worktreeWorkspaces maps workspace cwd -> id for worktree-isolation workspaces
 // only, so the reaper never archives a shared or base checkout.
 func (r *Reaper) worktreeWorkspaces(ctx context.Context) map[string]string {
-	out, err := exec.CommandContext(ctx, r.PaseoBin, "workspace", "ls", "--json").Output()
+	out, err := r.paseoCmd(ctx, "workspace", "ls", "--json").Output()
 	if err != nil {
 		return nil
 	}

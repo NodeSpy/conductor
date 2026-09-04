@@ -37,6 +37,14 @@ func NewRegistry(cfgs map[string]config.ControllerConfig, defaultName string, pa
 	return r
 }
 
+// OverridePaseo rebinds a paseo-type entry to its OWN dispatch surface — a
+// per-runtime dispatcher (its own bin:, or one whose paseo CLI runs over SSH
+// for a runtime with host:). Called by main wiring after construction, once
+// per paseo runtime that differs from the shared/primary dispatcher.
+func (r *Registry) OverridePaseo(name string, runner Runner, sender Sender) {
+	r.controllers[name] = newPaseoController(name, runner, sender)
+}
+
 // buildController constructs one controller from its config, dispatching on
 // type/transport exactly once:
 //
