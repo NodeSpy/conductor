@@ -329,11 +329,11 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			wantErr: "local-only",
 		},
 		{
-			name: "use: references unknown workflow",
+			name: "workflow: references unknown workflow",
 			build: func() *Config {
 				return &Config{
 					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
-					Triggers:      []TriggerSpec{validTrigger([]Step{{ID: "s1", Use: "nope"}}, nil)},
+					Triggers:      []TriggerSpec{validTrigger([]Step{{ID: "s1", Workflow: "nope"}}, nil)},
 				}
 			},
 			wantErr: `unknown workflow "nope"`,
@@ -439,7 +439,7 @@ func TestStepForm(t *testing.T) {
 		want string
 	}{
 		{"verb", Step{Uses: "gh.comment"}, "verb"},
-		{"workflow", Step{Use: "wf1"}, "workflow"},
+		{"workflow", Step{Workflow: "wf1"}, "workflow"},
 		{"code", Step{Run: "sh", Code: "echo hi"}, "code"},
 		{"agent explicit type", Step{Type: "agent"}, "agent"},
 		{"agent inferred from agent:", Step{Agent: "fixer"}, "agent"},

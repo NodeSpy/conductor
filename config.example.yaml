@@ -24,8 +24,17 @@ secrets:
 # on (`on: <name>.<event>`) and verbs you can call (`uses: <name>.<verb>`).
 # `conductor connectors ls` lists them; `conductor schema <name>` prints every
 # event's filters/context and every verb's options/outputs.
+#
+# Any section splits across files — `imports:` (plural) lists files/globs,
+# `import:` (singular) loads one file. A map section takes an `imports:` key
+# (entries merge; a duplicate name across files is a load error); a named
+# entry loads its body from a file (`pd: { import: ./conf.d/pd.yaml }`); the
+# triggers: list takes `- import:` items. A step pulls one workflow straight
+# from a file: `workflow: name, import: ./workflows/review.yaml`, or a bare
+# `workflow: ./workflows/review.yaml` when the file defines a single workflow.
 # ---------------------------------------------------------------------------
 connectors:
+  # imports: [conf.d/connectors/*.yaml]   # split entries across files
   gh:
     type: github
     # Credentials resolve app → token → the gh CLI (`gh auth token`). With an
@@ -152,7 +161,7 @@ agents:
 
 # ---------------------------------------------------------------------------
 # workflows: — named, parameterized step lists with declared inputs/outputs,
-# called from triggers via { use: <name>, with: {…} }.
+# called from triggers via { workflow: <name>, with: {…} }.
 # ---------------------------------------------------------------------------
 workflows:
   assess-and-post:
@@ -222,7 +231,7 @@ triggers:
       reviewer: { logins: [your-login] }
       exclude: { branches: ["release/*"], labels: [hold] }
     steps:
-      - { id: a, use: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
+      - { id: a, workflow: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
       - id: draft
         if: "{{.a.decision}} == auto"
         type: agent

@@ -28,7 +28,7 @@ A step is one of five forms (all share `id` and `if`):
   `host:` it runs over SSH and outputs `{stdout, stderr, exit_code}`.
 - `run:` — an inline code step ([[Code-Steps]]).
 - `uses: <conn>.<verb>` — a service verb ([[Verbs]]).
-- `use: <workflow>` — a reusable workflow call (below).
+- `workflow: <name>` — a reusable workflow call (below).
 
 ## Context and scope
 
@@ -115,15 +115,33 @@ workflows:
 triggers:
   - on: gh.review_requested
     steps:
-      - { id: a, use: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
+      - { id: a, workflow: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
       - { id: auto, if: "{{.a.decision}} == auto", uses: gh.submit_review, options: { … } }
 ```
 
 Inside, inputs read as `{{.inputs.<name>}}`; the workflow also sees the
 trigger context and its own steps — but NOT the caller's other step outputs
 (pass those via `with:`). The caller reads declared `outputs:` off the call
-step's id. Workflows may `use:` other workflows; `validate` rejects cycles,
+step's id. A workflow may call another workflow; `validate` rejects cycles,
 unknown/missing inputs, type mismatches, and outputs referencing steps that
 do not exist.
+
+## File-based references
+
+A `workflow:` resolves three ways; all are checked at load:
+
+```yaml
+- { workflow: review-flow }                                     # by name — defined inline or in any imported file
+- { workflow: review-flow, import: ./workflows/review.yaml }    # name + the file it lives in (no section import needed)
+- { workflow: ./workflows/review.yaml }                         # a bare file path, when the file defines ONE workflow
+```
+
+A referenced file holds a `workflows:` block or bare name→definition
+entries; relative paths resolve against the config file's directory. The
+bare-path form errors on a multi-workflow file (name one with `workflow:` +
+`import:`). A workflow can also keep its name in the config with its body in
+its own file — `workflows: { review-flow: { import: ./workflows/review.yaml } }`
+— and section-level splitting (`workflows: { imports: [...] }`) is
+[[Configuration]].
 
 Related: [[Connectors]] · [[Verbs]] · [[Code-Steps]] · [[Grouping]] · [[Hand-offs]]

@@ -43,6 +43,8 @@ esac
 # Seed a valid starter config + secrets if missing; drop the full example as reference.
 CFG_DIR="${CONDUCTOR_CFG_DIR:-$HOME/.config/$NAME}"
 mkdir -p "$CFG_DIR" "$HOME/.local/state/$NAME"
+# The default split layout: each section imports from its conf.d/ folder.
+mkdir -p "$CFG_DIR"/conf.d/{connectors,runtimes,hosts,agents,workflows,triggers}
 curl -fsSL "$RAW/config.example.yaml" -o "$CFG_DIR/config.example.yaml" 2>/dev/null || true
 if [ ! -f "$CFG_DIR/config.yaml" ]; then
   curl -fsSL "$RAW/config.starter.yaml" -o "$CFG_DIR/config.yaml" 2>/dev/null \

@@ -152,7 +152,7 @@ func hostLabel(t *hosts.Target) string {
 // *this* process, so there is nothing meaningful to ship to a remote host —
 // the config validator (internal/config) already rejects this combination
 // structurally, but Exec guards it too since callers can construct a Spec
-// directly (e.g. from a workflow `use:` expansion) without going through
+// directly (e.g. from a workflow call expansion) without going through
 // config validation.
 func errRemoteInProcessEngine(run string) error {
 	return fmt.Errorf("code: run: %s executes inside conductor's own process and is local-only — use a host interpreter (e.g. run: node/run: sh) for remote code", run)

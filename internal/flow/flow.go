@@ -599,13 +599,13 @@ func stubOutputs(in *connector.Instance, verb string) map[string]any {
 	return out
 }
 
-// execWorkflowCall runs { use: <workflow>, with: {…} } — an encapsulated
+// execWorkflowCall runs { workflow: <name>, with: {…} } — an encapsulated
 // child scope seeded with the trigger context + declared inputs; the caller
 // reads the workflow's declared outputs off this step's id.
 func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, error) {
-	wf, ok := r.Cfg.Workflows[step.Use]
+	wf, ok := r.Cfg.Workflows[step.Workflow]
 	if !ok {
-		return nil, fmt.Errorf("unknown workflow %q", step.Use)
+		return nil, fmt.Errorf("unknown workflow %q", step.Workflow)
 	}
 	with, err := renderOptions(step.With, data)
 	if err != nil {
@@ -616,7 +616,7 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 		v, present := with[name]
 		if !present {
 			if spec.Required {
-				return nil, fmt.Errorf("workflow %q: missing required input %q", step.Use, name)
+				return nil, fmt.Errorf("workflow %q: missing required input %q", step.Workflow, name)
 			}
 			if spec.Default != nil {
 				v = spec.Default
@@ -626,7 +626,7 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	}
 	for name := range with {
 		if _, declared := wf.Inputs[name]; !declared {
-			return nil, fmt.Errorf("workflow %q: unknown input %q", step.Use, name)
+			return nil, fmt.Errorf("workflow %q: unknown input %q", step.Workflow, name)
 		}
 	}
 	// The child sees the trigger context + its inputs + its own steps — not
@@ -639,13 +639,13 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	}
 	var childRun store.WorkflowRun
 	if err := r.runSteps(ctx, &childRun, t, wf.Steps, child, shadow, false); err != nil {
-		return nil, fmt.Errorf("workflow %q: %w", step.Use, err)
+		return nil, fmt.Errorf("workflow %q: %w", step.Workflow, err)
 	}
 	outputs := map[string]any{}
 	for name, tmpl := range wf.Outputs {
 		v, err := renderValue(tmpl, child)
 		if err != nil {
-			return nil, fmt.Errorf("workflow %q: output %q: %w", step.Use, name, err)
+			return nil, fmt.Errorf("workflow %q: output %q: %w", step.Workflow, name, err)
 		}
 		outputs[name] = v
 	}

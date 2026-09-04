@@ -7,7 +7,7 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/store"
 )
 
-// TestWorkflowCallBindsInputsAndReturnsOutputs (G3): a use:/with: step binds
+// TestWorkflowCallBindsInputsAndReturnsOutputs (G3): a workflow:/with: step binds
 // declared inputs in the callee (with a default filling the unset one), the
 // callee does NOT see the caller's step outputs, and the caller reads the
 // workflow's declared outputs off the call step's id.
@@ -34,7 +34,7 @@ workflows:
 on: svc.ping
 steps:
   - { id: prior, uses: svc.post, options: { text: before } }
-  - { id: call, use: greet, with: { who: "{{.msg}}" } }
+  - { id: call, workflow: greet, with: { who: "{{.msg}}" } }
   - { id: after, uses: svc.post, options: { text: "note={{.call.note}}" } }
 `)
 	rig := newTestRunner(t, cfg, reg)
@@ -72,7 +72,7 @@ workflows:
 	newFakeState(t, "svc")
 	spec := mustSpec(t, `
 on: svc.ping
-steps: [ { id: call, use: greet } ]
+steps: [ { id: call, workflow: greet } ]
 `)
 	rig := newTestRunner(t, cfg, reg)
 	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "x"}), spec)

@@ -50,9 +50,41 @@ call `default`/`coalesce` (`{{.sev | default "low"}}`). See [[Workflows]].
 
 ## Splitting the config across files (`imports:`)
 
-Unchanged: `imports:` lists files or globs relative to the importing file;
-maps merge recursively, lists concatenate, and the importing file's keys win.
-Auto-migration walks imports and transforms each legacy file with its own
+Imports live under each section. A map section — `connectors:`, `runtimes:`,
+`hosts:`, `agents:`, `workflows:` — takes an `imports:` key listing files or
+globs (relative to the importing file) whose entries join that section,
+alongside inline entries. The `triggers:` list takes imports as list items.
+
+One vocabulary: `imports:` (plural) is a section-level list of files/globs;
+`import:` (singular) loads one file.
+
+```yaml
+connectors:
+  imports: [conf.d/connectors/*.yaml]        # entries from these files join the section
+  gh: { type: github, … }                    # inline entries mix in
+  pd: { import: ./conf.d/pagerduty.yaml }    # a named entry's BODY from its own file
+workflows:
+  imports: [workflows/*.yaml]
+triggers:
+  - import: triggers/*.yaml                  # spliced at this position
+  - on: gh.review_requested                  # inline triggers mix in
+    steps: [ { workflow: review-flow } ]
+```
+
+An imported section file holds bare entries (`timer: { type: cron, … }`) or
+the section-wrapped form (`connectors: { timer: … }`); an entry-body file
+holds the body directly; a trigger file holds a bare list or a `triggers:`
+block. **Merge, not last-wins:** a name defined in two files (or a file and
+inline) fails the load naming the key and both sources. A glob matching no
+files is an error, never a silent no-op. Validation runs over the merged
+config, so cross-file `{{…}}`/`workflow:`/`uses:` references are checked at load.
+
+A workflow can also be pulled in per step, without a section import — see
+`workflow:`/`import:` in [[Workflows]].
+
+The legacy TOP-level `imports:` (whole-document deep merge: maps merge
+recursively, lists concatenate, the importing file's keys win) is unchanged,
+and auto-migration still walks it, transforming each legacy file with its own
 backup.
 
 ## Validation and fleet safety

@@ -99,12 +99,12 @@ workflows:
 		},
 		{
 			"unknown workflow input",
-			"- on: svc.ping\n  steps: [{id: c, use: wf, with: {x: v, y: 2}}]",
+			"- on: svc.ping\n  steps: [{id: c, workflow: wf, with: {x: v, y: 2}}]",
 			`no input "y"`,
 		},
 		{
 			"missing required workflow input",
-			"- on: svc.ping\n  steps: [{id: c, use: wf, with: {}}]",
+			"- on: svc.ping\n  steps: [{id: c, workflow: wf, with: {}}]",
 			`requires input "x"`,
 		},
 		{
@@ -468,7 +468,7 @@ triggers:
 	}
 }
 
-// TestValidateRejectsWorkflowCycle (E3): cyclic use: chains among workflows:
+// TestValidateRejectsWorkflowCycle (E3): cyclic workflow: chains among workflows:
 // fail at load, naming the cycle path.
 func TestValidateRejectsWorkflowCycle(t *testing.T) {
 	cfg := loadConfig(t, `
@@ -476,14 +476,14 @@ connectors:
   svc: { type: fake }
 workflows:
   a:
-    steps: [ { id: sb, use: b } ]
+    steps: [ { id: sb, workflow: b } ]
   b:
-    steps: [ { id: sc, use: c } ]
+    steps: [ { id: sc, workflow: c } ]
   c:
-    steps: [ { id: sa, use: a } ]
+    steps: [ { id: sa, workflow: a } ]
 triggers:
   - on: svc.ping
-    steps: [ { id: go, use: a } ]
+    steps: [ { id: go, workflow: a } ]
 `)
 	reg := buildRegistry(t, cfg)
 	err := Validate(cfg, reg)
@@ -501,10 +501,10 @@ connectors:
   svc: { type: fake }
 workflows:
   loop:
-    steps: [ { id: again, use: loop } ]
+    steps: [ { id: again, workflow: loop } ]
 triggers:
   - on: svc.ping
-    steps: [ { id: go, use: loop } ]
+    steps: [ { id: go, workflow: loop } ]
 `)
 	reg = buildRegistry(t, cfg)
 	err = Validate(cfg, reg)
@@ -519,17 +519,17 @@ connectors:
 workflows:
   top:
     steps:
-      - { id: l, use: left }
-      - { id: r, use: right }
+      - { id: l, workflow: left }
+      - { id: r, workflow: right }
   left:
-    steps: [ { id: s, use: shared } ]
+    steps: [ { id: s, workflow: shared } ]
   right:
-    steps: [ { id: s, use: shared } ]
+    steps: [ { id: s, workflow: shared } ]
   shared:
     steps: [ { id: p, uses: svc.post, options: { text: t } } ]
 triggers:
   - on: svc.ping
-    steps: [ { id: go, use: top } ]
+    steps: [ { id: go, workflow: top } ]
 `)
 	reg = buildRegistry(t, cfg)
 	if err := Validate(cfg, reg); err != nil {

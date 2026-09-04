@@ -740,17 +740,17 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// Cheap probe: no `imports:` → parse the single file directly (unchanged path,
-	// no map round-trip). Only pay the merge machinery when imports are used.
-	var probe struct {
-		Imports []string `yaml:"imports"`
-	}
+	// Cheap probe: no import of any form (top-level `imports:`, a section's
+	// `imports:` key, a `- import:` trigger item) → parse the single file
+	// directly (unchanged path, no map round-trip). Only pay the merge
+	// machinery when imports are used.
+	var probe map[string]any
 	if err := yaml.Unmarshal(expanded, &probe); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
 	var c Config
-	if len(probe.Imports) == 0 {
+	if !hasAnyImports(probe) {
 		if err := yaml.Unmarshal(expanded, &c); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
 		}
@@ -768,6 +768,11 @@ func Load(path string) (*Config, error) {
 		if err := yaml.Unmarshal(out, &c); err != nil {
 			return nil, fmt.Errorf("parse merged config: %w", err)
 		}
+	}
+	// File-referencing `workflow:` forms (workflow:+import:, a bare file path) join the
+	// merged workflow set before defaults/validation see it.
+	if err := c.resolveWorkflowFiles(filepath.Dir(path)); err != nil {
+		return nil, err
 	}
 	c.applyDefaults()
 	if err := c.Validate(); err != nil {
@@ -806,6 +811,11 @@ func loadMerged(p string, loaded map[string]bool) (map[string]any, error) {
 	}
 	if m == nil {
 		m = map[string]any{}
+	}
+	// Section-scoped imports expand per file, so their globs resolve against
+	// THIS file's directory and a duplicate entry names both sources.
+	if err := expandSectionImports(p, m); err != nil {
+		return nil, err
 	}
 	imports := toStrings(m["imports"])
 	delete(m, "imports")

@@ -41,7 +41,7 @@ defaults from `config.example.yaml`.
 - on: gh.review_requested
   filters: { reviewer: { logins: [your-login] }, exclude: { branches: ["release/*"] } }
   steps:
-    - { id: a, use: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
+    - { id: a, workflow: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
     - { id: draft, if: "{{.a.decision}} == auto", type: agent, agent: planner,
         checkout: none, prompt: "Draft the review for {{.repo}}#{{.pr}}." }
     - { id: review, if: "{{.a.decision}} == auto", uses: hoff.ask,

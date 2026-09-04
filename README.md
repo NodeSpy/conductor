@@ -96,7 +96,7 @@ A step is one of five forms (all share `id` and `if`):
 | `type: command` | run a host command (argv list); with `host:` it runs over SSH and outputs `{stdout, stderr, exit_code}` |
 | `run: <engine>` | run inline code — see [Code steps](#code-steps) |
 | `uses: <conn>.<verb>` | call a service verb — see [Verbs](#verbs-options-and-identity) |
-| `use: <workflow>` | call a reusable workflow — see [Reusable workflows](#reusable-workflows) |
+| `workflow: <name>` | call a reusable workflow — see [Reusable workflows](#reusable-workflows) |
 
 **Context is positional.** A step's templates and `if:` see the trigger
 context (the event's published facts: `{{.repo}}`, `{{.comment_body}}`,
@@ -265,7 +265,7 @@ workflows:
 triggers:
   - on: gh.review_requested
     steps:
-      - { id: a, use: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
+      - { id: a, workflow: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
       - { id: auto, if: "{{.a.decision}} == auto", uses: gh.submit_review, options: { … } }
 ```
 
@@ -482,8 +482,12 @@ still needs App credentials.
 
 The full annotated example is [`config.example.yaml`](config.example.yaml)
 (the retained legacy example: [`config.example.legacy.yaml`](config.example.legacy.yaml)).
-Secrets go in the sibling `conductor.env`. `imports:` splits the config
-across files (globs; maps merge, lists concatenate, the importer wins).
+Secrets go in the sibling `conductor.env`. The config splits across files:
+each map section takes an `imports:` key (`connectors: { imports:
+[conf.d/*.yaml] }` — entries merge, a duplicate name across files is a load
+error) and `triggers:` takes `- import:` items; a step's `workflow:` can also name
+a workflow from a file directly (`from: ./workflows/review.yaml`, or a bare
+path when the file holds one workflow).
 The wiki carries the full reference — Configuration, Connectors, Workflows,
 Verbs, Code-Steps, Hosts, Grouping, Policy, Secrets, Runtimes, Migration —
 and `conductor schema <conn>` prints any connector's exact contract.
