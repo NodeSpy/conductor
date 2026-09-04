@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/controller"
+	"github.com/NodeSpy/conductor/internal/controller"
 )
 
 // SessionRecord is the persisted pointer to a live/resumable agent session bound

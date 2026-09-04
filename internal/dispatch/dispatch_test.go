@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 func newDispatcher() *Dispatcher {
@@ -263,16 +263,16 @@ func TestParseWorktreeWorkspaces(t *testing.T) {
 
 func TestHoldMarkerPresent(t *testing.T) {
 	dir := t.TempDir()
-	if holdMarkerPresent(dir) {
+	if (&Reaper{}).holdMarkerPresent(dir) {
 		t.Fatal("no marker yet")
 	}
 	if err := os.WriteFile(filepath.Join(dir, HoldMarker), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if !holdMarkerPresent(dir) {
+	if !(&Reaper{}).holdMarkerPresent(dir) {
 		t.Fatal("marker should be detected")
 	}
-	if holdMarkerPresent("") {
+	if (&Reaper{}).holdMarkerPresent("") {
 		t.Fatal("empty cwd is not held")
 	}
 }

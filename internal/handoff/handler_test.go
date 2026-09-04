@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/controller"
+	"github.com/NodeSpy/conductor/internal/controller"
 )
 
 func TestHandlerPermissionApprove(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 func TestRegistryResolveNoneConfigured(t *testing.T) {

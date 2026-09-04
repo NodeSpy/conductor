@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // issueMatchedConfig builds a config whose issue_matched has the given variants,

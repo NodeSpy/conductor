@@ -77,7 +77,7 @@ func NewWebChannel(baseURL string, ttl time.Duration, log func(string, ...any)) 
 // tunnel.Open(ctx, listen) fresh for each draft to compute that draft's link
 // origin, and the returned closeFn is invoked (tearing the tunnel down) when the
 // presentation is closed. listen is the local address the draft page is served
-// on (see Registry.WebEntries / cmd/paseo-conductor/main.go). Not calling
+// on (see Registry.WebEntries / cmd/conductor/main.go). Not calling
 // SetTunnel (the zero value: tunnel == nil) keeps today's behavior — the origin
 // is always baseURL. Not concurrency-safe with Present; call before the channel
 // is handed out (buildChannel does this at construction).

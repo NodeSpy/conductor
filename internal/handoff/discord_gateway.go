@@ -51,8 +51,26 @@ type gatewayFrame struct {
 // every heartbeat), and the bot's own user id, captured from READY, so its
 // own posts are never mistaken for a reply. Fresh per connection attempt.
 type discordGatewayState struct {
+	mu     sync.Mutex // guards seq: written by the read loop, read by the heartbeat goroutine
 	seq    *int
 	selfID string
+}
+
+// setSeq records the last-seen dispatch sequence number.
+func (gs *discordGatewayState) setSeq(s int) {
+	gs.mu.Lock()
+	gs.seq = &s
+	gs.mu.Unlock()
+}
+
+// seqValue returns the last-seen sequence number and whether one exists.
+func (gs *discordGatewayState) seqValue() (int, bool) {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	if gs.seq == nil {
+		return 0, false
+	}
+	return *gs.seq, true
 }
 
 // discordGatewayAction tells the connection loop what to do after one frame.
@@ -107,8 +125,7 @@ func handleDiscordFrame(gs *discordGatewayState, raw []byte, inbox *Inbox, log f
 		return discordActionNone, 0
 	}
 	if f.S != nil {
-		s := *f.S
-		gs.seq = &s
+		gs.setSeq(*f.S)
 	}
 	switch f.Op {
 	case gwOpHello:
@@ -151,7 +168,7 @@ func handleDiscordFrame(gs *discordGatewayState, raw []byte, inbox *Inbox, log f
 // botToken, identifies with discordIntents, and feeds every inbound
 // MESSAGE_CREATE through handleDiscordFrame so a DiscordChannel's pending
 // Await resolves on a reply. Meant to be started as a goroutine — one per
-// distinct configured discord bot_token — from cmd/paseo-conductor/main.go
+// distinct configured discord bot_token — from cmd/conductor/main.go
 // once at daemon startup; it blocks (never returns) until ctx is done. log
 // may be nil.
 func RunDiscordGateway(ctx context.Context, botToken string, inbox *Inbox, log func(string, ...any)) {
@@ -244,8 +261,8 @@ func discordHeartbeatLoop(ctx context.Context, c *websocket.Conn, gs *discordGat
 
 func sendDiscordHeartbeat(ctx context.Context, c *websocket.Conn, gs *discordGatewayState) error {
 	f := gatewayFrame{Op: gwOpHeartbeat, D: json.RawMessage("null")}
-	if gs.seq != nil {
-		b, err := json.Marshal(*gs.seq)
+	if seq, ok := gs.seqValue(); ok {
+		b, err := json.Marshal(seq)
 		if err != nil {
 			return err
 		}

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // as1 wraps single actions into one-variant ActionSets, keeping the many

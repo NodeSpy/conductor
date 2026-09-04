@@ -3,7 +3,7 @@ package github
 import (
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 func TestMatchRepo(t *testing.T) {
@@ -127,5 +127,35 @@ func TestMergeActionKeepsExcludeAndRerequest(t *testing.T) {
 	}
 	if got.Exclude.Empty() || !got.Exclude.Matches("release/1.0", "", nil) {
 		t.Error("exclude dropped by merge")
+	}
+}
+
+// TestMergeActionKeepsBackgroundHandoffRetry: background/handoff/retry on a
+// rule's action (or its defaults) survive the defaults+rule merge — they were
+// silently dropped before, so a rule-level background review lost its
+// hand-off and a defer-retry step lost its retry.
+func TestMergeActionKeepsBackgroundHandoffRetry(t *testing.T) {
+	over := config.Action{
+		Type:       "agent",
+		Background: true,
+		Handoff:    "review",
+		Retry:      &config.StepRetry{WhileOutputMatches: "not ready"},
+	}
+	got := mergeAction(config.Action{}, over)
+	if !got.Background {
+		t.Error("background dropped by merge")
+	}
+	if got.Handoff != "review" {
+		t.Errorf("handoff dropped by merge: %q", got.Handoff)
+	}
+	if got.Retry == nil || got.Retry.WhileOutputMatches != "not ready" {
+		t.Errorf("retry dropped by merge: %+v", got.Retry)
+	}
+
+	// Base values survive when the override doesn't set them.
+	base := config.Action{Background: true, Handoff: "page", Retry: &config.StepRetry{WhileOutputMatches: "x"}}
+	got = mergeAction(base, config.Action{Type: "agent"})
+	if !got.Background || got.Handoff != "page" || got.Retry == nil {
+		t.Errorf("base background/handoff/retry lost: %+v", got)
 	}
 }

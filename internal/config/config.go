@@ -29,8 +29,30 @@ type Config struct {
 	Imports []string `yaml:"imports"`
 
 	Integrations []IntegrationRef `yaml:"integrations"`
-	Control      Control          `yaml:"control"`
-	Notify       Notify           `yaml:"notify"`
+
+	// ConnectorsMap, Runtimes, Hosts, Workflows, Triggers, Policy, and
+	// SecretRefs are the connectors-model schema (see connectors.go). They
+	// coexist with the legacy blocks: a config may carry either schema (or,
+	// mid-migration, both).
+	ConnectorsMap map[string]ConnectorRef  `yaml:"connectors"`
+	Runtimes      map[string]RuntimeConfig `yaml:"runtimes"`
+	Hosts         map[string]HostConfig    `yaml:"hosts"`
+	// Stores are named data stores (boltdb/redis/http) addressed by the
+	// `store:` selector on kv.* verbs; nothing is implicit.
+	Stores map[string]StoreRef `yaml:"stores"`
+	// Vaults are named secret stores (conductor/onepassword/pass/file/
+	// hashicorp) addressed by {{ vault "<name>" "<key>" }} references and
+	// per-vault read/write verbs; env stays the implicit baseline.
+	Vaults    map[string]VaultRef    `yaml:"vaults"`
+	Workflows map[string]WorkflowDef `yaml:"workflows"`
+	Triggers  []TriggerSpec          `yaml:"triggers"`
+	Policy    *Policy                `yaml:"policy"`
+	// SecretRefs is the named `secrets:` block: name -> secret reference
+	// (env:/op://…), readable in templates as {{.secrets.<name>}}.
+	SecretRefs map[string]string `yaml:"secrets"`
+
+	Control Control `yaml:"control"`
+	Notify  Notify  `yaml:"notify"`
 	// Handoff is the LEGACY singular hand-off block (a web-link page on the inbound
 	// listener). Deprecated in favor of `handoffs:` (below); still parsed for
 	// back-compat and folded into Handoffs["default"] by applyDefaults when
@@ -68,11 +90,45 @@ type Config struct {
 type Update struct {
 	Auto     bool     `yaml:"auto"`     // check for and install new releases periodically
 	Interval Duration `yaml:"interval"` // how often to check (default 10m; checks are cheap conditional requests)
-	Apply    *bool    `yaml:"apply"`    // re-exec into the new binary after updating (default true)
+	// Apply is what happens when a newer release is detected: true (the
+	// default — install and re-exec into it, unattended), false (install
+	// and stage; a restart applies), or "workflow" (install NOTHING —
+	// emit conductor.update_available so a trigger drives the update with
+	// pre/post steps around `uses: conductor.update`).
+	Apply ApplyMode `yaml:"apply"`
 }
 
 // ShouldApply reports whether to re-exec after a successful update (default true).
-func (u Update) ShouldApply() bool { return u.Apply == nil || *u.Apply }
+func (u Update) ShouldApply() bool { return u.Apply.mode == "" || u.Apply.mode == "true" }
+
+// ApplyWorkflow reports the emit-don't-apply mode (`apply: workflow`).
+func (u Update) ApplyWorkflow() bool { return u.Apply.mode == "workflow" }
+
+// ApplyMode parses update.apply: a YAML bool or the string "workflow".
+type ApplyMode struct {
+	mode string // "" (default true) | "true" | "false" | "workflow"
+}
+
+// ApplyModeFor builds an ApplyMode (tests, migration).
+func ApplyModeFor(mode string) ApplyMode { return ApplyMode{mode: mode} }
+
+func (m *ApplyMode) UnmarshalYAML(n *yaml.Node) error {
+	var b bool
+	if err := n.Decode(&b); err == nil {
+		if b {
+			m.mode = "true"
+		} else {
+			m.mode = "false"
+		}
+		return nil
+	}
+	var s string
+	if err := n.Decode(&s); err == nil && s == "workflow" {
+		m.mode = "workflow"
+		return nil
+	}
+	return fmt.Errorf("config: update.apply must be true, false, or workflow")
+}
 
 // IntegrationRef is one entry in the `integrations:` list. It captures the
 // common header and retains the raw node so the concrete integration can decode
@@ -132,6 +188,26 @@ func (c Control) AgentCap() int {
 		return 3
 	}
 	return *c.MaxConcurrentAgents
+}
+
+// AgentCap returns the effective concurrent-agent cap: the global
+// `policy.concurrency.max_agents` when set, else the legacy
+// `control.max_concurrent_agents` (default 3). <=0 means unlimited.
+func (c *Config) AgentCap() int {
+	if c.Policy != nil && c.Policy.Concurrency != nil && c.Policy.Concurrency.MaxAgents != nil {
+		return *c.Policy.Concurrency.MaxAgents
+	}
+	return c.Control.AgentCap()
+}
+
+// AgentsPerHour returns the effective rolling-hour dispatch cap: the global
+// `policy.concurrency.max_agents_per_hour` when set, else the legacy
+// `control.max_agents_per_hour`. 0 = unlimited.
+func (c *Config) AgentsPerHour() int {
+	if c.Policy != nil && c.Policy.Concurrency != nil && c.Policy.Concurrency.MaxAgentsPerHour != nil {
+		return *c.Policy.Concurrency.MaxAgentsPerHour
+	}
+	return c.Control.AgentsPerHour()
 }
 
 // Handoff is the legacy singular hand-off block. Deprecated — see Config.Handoff.
@@ -230,6 +306,46 @@ type Notify struct {
 	Pushover          NotifyPushover  `yaml:"pushover"`            // optional Pushover application/user to notify
 	Notifiarr         NotifyNotifiarr `yaml:"notifiarr"`           // optional Notifiarr passthrough integration
 	Digest            Duration        `yaml:"digest"`              // periodic activity summary (e.g. 24h); 0 = off
+
+	// Via routes lifecycle notifications through connector VERBS — the
+	// connectors-model delivery. Each route is an action unit invoked for the
+	// enabled events (its own on: overriding the block's), with the composed
+	// notification line addressable as {{.message}} (plus event/repo/number/
+	// kind/title/ref). The sink fields above remain the legacy delivery; the
+	// migration maps each configured sink onto a connector + a via route.
+	Via []NotifyRoute `yaml:"via,omitempty"`
+}
+
+// Configured reports whether the notify block carries anything — the
+// retired-model check: on a connectors-model config the block is rejected
+// (alerting is conductor.* triggers), while legacy configs keep the legacy
+// delivery until they migrate.
+func (n Notify) Configured() bool {
+	return len(n.On) > 0 || len(n.Via) > 0 || n.Digest != 0 || n.Push ||
+		n.SlackWebhookURL != "" || n.DiscordWebhookURL != "" || n.Ntfy.Topic != "" ||
+		(n.Pushover.Token != "" && n.Pushover.User != "") || n.Notifiarr.APIKey != ""
+}
+
+// NotifyRoute is one notify delivery through a connector verb.
+type NotifyRoute struct {
+	// On restricts this route to a subset of events (empty = the block's on:).
+	On      []string       `yaml:"on,omitempty"`
+	Uses    string         `yaml:"uses"`
+	Options map[string]any `yaml:"options,omitempty"`
+}
+
+// WantsRoute reports whether a route fires for an event: its own on: list
+// when set, else the block's policy.
+func (n Notify) WantsRoute(r NotifyRoute, event string) bool {
+	if len(r.On) == 0 {
+		return true // the caller already gated on n.Wants(event)
+	}
+	for _, e := range r.On {
+		if e == event {
+			return true
+		}
+	}
+	return false
 }
 
 // NotifyNtfy configures publishing to an ntfy (https://ntfy.sh or self-hosted)
@@ -324,6 +440,17 @@ type ControllerConfig struct {
 	// Reserved for the cli-controller milestone.
 	Tool    string   `yaml:"tool"`
 	Command []string `yaml:"command"`
+	// Bin is the runtime binary (paseo/agent-deck); for agent-deck it wins over
+	// the command/tool/"agent-deck" bin resolution. For paseo, exactly one
+	// distinct Bin may be set across all paseo runtimes/controllers combined
+	// (see cmd/conductor's resolvePaseoBin).
+	Bin string `yaml:"bin"`
+	// Host names a `hosts:` entry; this controller's subprocess launches run
+	// there over SSH instead of locally. All controller types support it —
+	// cli/acp/agent-deck wrap their subprocess in the ssh launch, paseo runs
+	// its whole CLI (and reaper) remotely, and opencode's server is reached
+	// through an ssh -W stdio forward — see checkRemoteHostSupport.
+	Host string `yaml:"host"`
 }
 
 // EffectiveTransport returns the controller's transport, defaulting to acp for an
@@ -350,6 +477,35 @@ func (c *Config) DefaultControllerName() string {
 	return ""
 }
 
+// MergedControllers unions the connectors-model `runtimes:` block into the
+// legacy `controllers:` shape the controller registry consumes (each
+// RuntimeConfig converted via its Controller() method). Both schemas name the
+// same registry, and validateRuntimeDefaults already rejects a name defined
+// under both — so this is a plain union, no precedence to resolve.
+func (c *Config) MergedControllers() map[string]ControllerConfig {
+	merged := make(map[string]ControllerConfig, len(c.Controllers)+len(c.Runtimes))
+	for name, cc := range c.Controllers {
+		merged[name] = cc
+	}
+	for name, rt := range c.Runtimes {
+		merged[name] = rt.Controller()
+	}
+	return merged
+}
+
+// DefaultRuntimeName returns the name of the runtime or controller flagged
+// default:true (runtimes: checked first), or "" when none is (resolution
+// then falls back to the built-in paseo). At most one across both maps may
+// set it — see validateRuntimeDefaults.
+func (c *Config) DefaultRuntimeName() string {
+	for name, rt := range c.Runtimes {
+		if rt.Default {
+			return name
+		}
+	}
+	return c.DefaultControllerName()
+}
+
 // DefaultHandoffName returns the name of the `handoffs:` entry flagged
 // default:true, or "" when none is (resolution then falls back to the sole
 // configured entry, or no hand-off channel at all — see internal/handoff.Registry).
@@ -371,7 +527,13 @@ type AgentProfile struct {
 	// Controller names the controller (from top-level `controllers:`) that runs
 	// this agent. Empty falls through to the controller flagged default:true, then
 	// to the built-in paseo controller. See internal/controller resolution order.
-	Controller      string            `yaml:"controller"`
+	Controller string `yaml:"controller"`
+	// Runtime is the connectors-model name for Controller (a `runtimes:` entry).
+	// When both are set, Runtime wins; use RuntimeName.
+	Runtime string `yaml:"runtime"`
+	// Host pins this agent's runtime invocations to a named `hosts:` SSH
+	// target, overriding (or standing in for) the runtime's own `host:`.
+	Host            string            `yaml:"host"`
 	Workspace       string            `yaml:"workspace"` // local | worktree
 	WaitTimeout     Duration          `yaml:"wait_timeout"`
 	ArchiveWhenDone bool              `yaml:"archive_when_done"`
@@ -380,6 +542,15 @@ type AgentProfile struct {
 	// format rules appended to its prompt). Unset (nil) → fall through to the
 	// top-level agent_guidance (then the built-in default); "" → none; text → that.
 	Guidance *string `yaml:"guidance"`
+}
+
+// RuntimeName returns the runtime/controller the profile selects (runtime
+// wins over the legacy controller key; "" = the default).
+func (p AgentProfile) RuntimeName() string {
+	if p.Runtime != "" {
+		return p.Runtime
+	}
+	return p.Controller
 }
 
 // Action is one (source,kind)→action mapping. Type is "agent" or "command".
@@ -427,6 +598,24 @@ type Action struct {
 	Reviewer Actors `yaml:"reviewer"` // review_requested: whose requested review triggers it
 	Assignee Actors `yaml:"assignee"` // issue_assigned: whose assignment triggers it
 
+	// FlowRef ties a lowered connectors-model trigger back to its
+	// config.Triggers spec ("<index>:<on>"). Set programmatically by the
+	// lowering in internal/connector — never from user YAML — and carried
+	// through JSON persistence so an in-flight run resumes onto its spec.
+	// The x_-prefixed YAML names are internal: the lowering round-trips these
+	// structs through YAML, so they need tags, but they are not part of the
+	// user-facing schema.
+	FlowRef string `yaml:"x_flow_ref,omitempty" json:"FlowRef,omitempty"`
+	// Repos / ExcludeRepos are per-variant repo gates (globs), also set by the
+	// connectors-model lowering: a trigger's `filters.repos` becomes a variant
+	// that only fires for matching repos. Legacy configs use rule-level
+	// `match.repos` instead and never set these.
+	Repos        []string `yaml:"x_repos,omitempty" json:"Repos,omitempty"`
+	ExcludeRepos []string `yaml:"x_exclude_repos,omitempty" json:"ExcludeRepos,omitempty"`
+	// TargetRepo pins the trigger's checkout repo per variant (a lowered
+	// trigger's repo: on sentry/pagerduty, whose legacy Repo was rule-level).
+	TargetRepo string `yaml:"x_target_repo,omitempty" json:"TargetRepo,omitempty"`
+
 	// kind-specific options
 	MaxAttemptsPerHead int            `yaml:"max_attempts_per_head"`
 	IgnoreChecks       []string       `yaml:"ignore_checks"`
@@ -435,6 +624,7 @@ type Action struct {
 	PollInterval       Duration       `yaml:"poll_interval"` // stuck_checks: how often the dedicated poller checks (default 15m)
 	FromUsers          []string       `yaml:"from_users"`    // new_comment: only these commenters trigger (empty = any)
 	IgnoreUsers        []string       `yaml:"ignore_users"`  // new_comment: never trigger on these commenters (e.g. CI report bots)
+	AuthorBot          *bool          `yaml:"author_bot"`    // comment/review events: require the author to be (true) / not be (false) a bot; nil = either
 	LabelsAny          []string       `yaml:"labels_any"`    // issue matches if it has ANY of these labels
 	LabelsAll          []string       `yaml:"labels_all"`    // ...and ALL of these labels
 	Authors            []string       `yaml:"authors"`       // ...and was opened by one of these logins
@@ -602,17 +792,17 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// Cheap probe: no `imports:` → parse the single file directly (unchanged path,
-	// no map round-trip). Only pay the merge machinery when imports are used.
-	var probe struct {
-		Imports []string `yaml:"imports"`
-	}
+	// Cheap probe: no import of any form (top-level `imports:`, a section's
+	// `imports:` key, a `- import:` trigger item) → parse the single file
+	// directly (unchanged path, no map round-trip). Only pay the merge
+	// machinery when imports are used.
+	var probe map[string]any
 	if err := yaml.Unmarshal(expanded, &probe); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
 	var c Config
-	if len(probe.Imports) == 0 {
+	if !hasAnyImports(probe) {
 		if err := yaml.Unmarshal(expanded, &c); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
 		}
@@ -630,6 +820,16 @@ func Load(path string) (*Config, error) {
 		if err := yaml.Unmarshal(out, &c); err != nil {
 			return nil, fmt.Errorf("parse merged config: %w", err)
 		}
+	}
+	// Multi-source `on:` lists expand into one trigger per source before
+	// anything downstream sees them.
+	if err := c.NormalizeTriggers(); err != nil {
+		return nil, err
+	}
+	// File-referencing `workflow:` forms (workflow:+import:, a bare file path) join the
+	// merged workflow set before defaults/validation see it.
+	if err := c.resolveWorkflowFiles(filepath.Dir(path)); err != nil {
+		return nil, err
 	}
 	c.applyDefaults()
 	if err := c.Validate(); err != nil {
@@ -668,6 +868,11 @@ func loadMerged(p string, loaded map[string]bool) (map[string]any, error) {
 	}
 	if m == nil {
 		m = map[string]any{}
+	}
+	// Section-scoped imports expand per file, so their globs resolve against
+	// THIS file's directory and a duplicate entry names both sources.
+	if err := expandSectionImports(p, m); err != nil {
+		return nil, err
 	}
 	imports := toStrings(m["imports"])
 	delete(m, "imports")
@@ -826,7 +1031,9 @@ func (c *Config) applyDefaults() {
 	if c.Store.AuditMaxSize == 0 {
 		c.Store.AuditMaxSize = 50 * 1024 * 1024
 	}
-	if len(c.Notify.On) == 0 {
+	// The notify block (and its escalate default) is legacy-only — the
+	// connectors model alerts through conductor.* triggers instead.
+	if len(c.Integrations) > 0 && len(c.Notify.On) == 0 {
 		c.Notify.On = []string{"escalate"}
 	}
 	if c.Update.Auto && c.Update.Interval == 0 {
@@ -856,8 +1063,17 @@ func (c *Config) applyHandoffCompat() {
 
 // Validate checks required fields and cross-field consistency.
 func (c *Config) Validate() error {
-	if len(c.Integrations) == 0 {
-		return fmt.Errorf("config: no integrations configured")
+	if len(c.Integrations) == 0 && !c.HasConnectors() {
+		return fmt.Errorf("config: no integrations or connectors configured")
+	}
+	if err := c.validateConnectors(); err != nil {
+		return err
+	}
+	if err := c.validateStores(); err != nil {
+		return err
+	}
+	if err := c.validateVaults(); err != nil {
+		return err
 	}
 	names := map[string]bool{}
 	for i, ig := range c.Integrations {
@@ -882,13 +1098,36 @@ func (c *Config) Validate() error {
 		if p.Workspace != "" && p.Workspace != "local" && p.Workspace != "worktree" {
 			return fmt.Errorf("config: agent %q: workspace must be local|worktree, got %q", name, p.Workspace)
 		}
-		if p.Controller != "" {
-			if _, ok := c.Controllers[p.Controller]; !ok {
-				return fmt.Errorf("config: agent %q: unknown controller %q (defined: %s)", name, p.Controller, c.controllerNames())
+		if rn := p.RuntimeName(); rn != "" {
+			_, isController := c.Controllers[rn]
+			_, isRuntime := c.Runtimes[rn]
+			if !isController && !isRuntime {
+				return fmt.Errorf("config: agent %q: unknown runtime %q (defined: %s)", name, rn, c.runtimeNames())
+			}
+		}
+		if p.Host != "" {
+			if _, ok := c.Hosts[p.Host]; !ok {
+				return fmt.Errorf("config: agent %q: unknown host %q (defined: %s)", name, p.Host, c.hostNames())
 			}
 		}
 	}
 	return nil
+}
+
+// runtimeNames lists runtimes and legacy controllers, sorted, for errors.
+func (c *Config) runtimeNames() string {
+	names := make([]string, 0, len(c.Runtimes)+len(c.Controllers))
+	for n := range c.Runtimes {
+		names = append(names, n)
+	}
+	for n := range c.Controllers {
+		names = append(names, n)
+	}
+	if len(names) == 0 {
+		return "none"
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // validateControllers checks the optional `controllers:` block: each entry sets
@@ -911,12 +1150,33 @@ func (c *Config) validateControllers() error {
 		if cc.SessionModel != "" && !validModel[cc.SessionModel] {
 			return fmt.Errorf("config: controller %q: session_model must be native|resumable|oneshot, got %q", name, cc.SessionModel)
 		}
+		if err := c.checkRemoteHostSupport("controller", name, cc.Host, cc.Type, cc.Agent, cc.EffectiveTransport()); err != nil {
+			return err
+		}
 		if cc.Default {
 			defaults++
 		}
 	}
 	if defaults > 1 {
 		return fmt.Errorf("config: at most one controller may set `default: true` (%d do)", defaults)
+	}
+	return nil
+}
+
+// checkRemoteHostSupport validates a runtime/controller's `host:` reference:
+// it must name a defined `hosts:` entry. Every runtime type runs remotely —
+// cli/acp/agent-deck ssh-wrap their subprocess, paseo executes its whole CLI
+// (checkouts under the remote ~/.conductor) and reaper on the host, and
+// opencode's remotely-launched server is reached through an ssh -W stdio
+// forward. kind is "runtime" or "controller" (for the error text); the
+// typ/agent/transport fields are accepted so a future type-specific
+// restriction has the context it needs.
+func (c *Config) checkRemoteHostSupport(kind, name, host, typ, agent, transport string) error {
+	if host == "" {
+		return nil
+	}
+	if _, ok := c.Hosts[host]; !ok {
+		return fmt.Errorf("config: %s %q: unknown host %q (defined: %s)", kind, name, host, c.hostNames())
 	}
 	return nil
 }

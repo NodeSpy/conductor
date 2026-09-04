@@ -10,18 +10,24 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"strings"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 func init() { core.Register("github", newIntegration) }
 
 // Config is a github integration instance's configuration.
 type Config struct {
-	App      AppConfig     `yaml:"app"`
+	App AppConfig `yaml:"app"`
+	// Token is the App-less credential: a PAT used for reads/enrichment when
+	// no GitHub App is configured. The full chain is app → token → the `gh`
+	// binary (`gh auth token`); with no App, events arrive via a plain
+	// webhook (+ secret) or the sweep, and repo globs are not expandable.
+	Token    string        `yaml:"token"`
 	Webhook  WebhookConfig `yaml:"webhook"`
 	Sweep    SweepConfig   `yaml:"sweep"`
 	Defaults Rule          `yaml:"defaults"`
@@ -212,13 +218,41 @@ func (g *Integration) ensureClients() error {
 	if g.app != nil {
 		return nil
 	}
-	app, err := newAppAuth(g.cfg.App.AppID, g.cfg.App.PrivateKeyPath)
-	if err != nil {
-		return err
+	var app *appAuth
+	switch {
+	case g.cfg.App.AppID > 0:
+		a, err := newAppAuth(g.cfg.App.AppID, g.cfg.App.PrivateKeyPath)
+		if err != nil {
+			return err
+		}
+		app = a
+	case g.cfg.Token != "":
+		app = newStaticAuth(g.cfg.Token)
+	default:
+		// App-less, token-less: fall back to the gh CLI's stored login.
+		tok, err := ghAuthToken()
+		if err != nil {
+			return fmt.Errorf("github[%s]: no credentials — configure app: or token:, or log in with `gh auth login`: %w", g.name, err)
+		}
+		app = newStaticAuth(tok)
 	}
 	g.app = app
 	g.rest = newRESTClient(app)
 	return nil
+}
+
+// ghAuthToken shells out to `gh auth token` — the last link of the App-less
+// credential chain (app → token → gh).
+func ghAuthToken() (string, error) {
+	out, err := exec.Command("gh", "auth", "token").Output()
+	if err != nil {
+		return "", fmt.Errorf("gh auth token: %w", err)
+	}
+	tok := strings.TrimSpace(string(out))
+	if tok == "" {
+		return "", fmt.Errorf("gh auth token returned empty")
+	}
+	return tok, nil
 }
 
 // Translate maps a raw webhook event to Triggers. Exported for the `replay`
@@ -249,6 +283,10 @@ func (g *Integration) AppToken(ctx context.Context, instID int64) (string, error
 // seam in main uses it to build the shared Dispatcher).
 func (g *Integration) RetryPolicy() config.Retry { return g.cfg.Retry }
 
+// SweepSettings exposes the effective catch-up sweep config (for the
+// connector-lowering tests and introspection).
+func (g *Integration) SweepSettings() SweepConfig { return g.cfg.Sweep }
+
 // IdentityTokens exposes this integration's credential policy (raw values, already
 // ${ENV}-expanded by the loader). main resolves the "app"/"gh_auth" keywords
 // against its App-token and `gh auth token` sources; any other value is a literal.
@@ -259,20 +297,32 @@ func (g *Integration) IdentityTokens() (read, write, commitAuthor string) {
 
 // Validate checks the instance configuration.
 func (g *Integration) Validate() error {
-	if g.cfg.App.AppID == 0 {
-		return fmt.Errorf("github[%s]: app.app_id is required", g.name)
+	appless := g.cfg.App.AppID == 0 && g.cfg.App.PrivateKeyPath == ""
+	if !appless {
+		// A partially-configured App is a config bug, not App-less mode.
+		if g.cfg.App.AppID == 0 {
+			return fmt.Errorf("github[%s]: app.app_id is required when app: is configured", g.name)
+		}
+		if g.cfg.App.PrivateKeyPath == "" {
+			return fmt.Errorf("github[%s]: app.private_key_path is required when app: is configured", g.name)
+		}
+		if _, err := os.Stat(expandHome(g.cfg.App.PrivateKeyPath)); err != nil {
+			return fmt.Errorf("github[%s]: private key not readable: %w", g.name, err)
+		}
 	}
-	if g.cfg.App.PrivateKeyPath == "" {
-		return fmt.Errorf("github[%s]: app.private_key_path is required", g.name)
-	}
-	if _, err := os.Stat(expandHome(g.cfg.App.PrivateKeyPath)); err != nil {
-		return fmt.Errorf("github[%s]: private key not readable: %w", g.name, err)
-	}
-	if g.cfg.App.Verify() && g.cfg.App.WebhookSecret == "" {
+	hasWebhook := g.cfg.Webhook.SmeeURL != "" || g.cfg.Webhook.Listen != ""
+	if hasWebhook && g.cfg.App.Verify() && g.cfg.App.WebhookSecret == "" {
 		return fmt.Errorf("github[%s]: webhook_secret required when verify_signature is on", g.name)
 	}
-	if g.cfg.Webhook.SmeeURL == "" && g.cfg.Webhook.Listen == "" {
-		return fmt.Errorf("github[%s]: set webhook.smee_url and/or webhook.listen", g.name)
+	if !hasWebhook && !(appless && g.cfg.Sweep.Enabled) {
+		return fmt.Errorf("github[%s]: set webhook.smee_url and/or webhook.listen (or, App-less, enable the sweep for polling)", g.name)
+	}
+	if appless {
+		for _, r := range g.cfg.Sweep.Repos {
+			if strings.Contains(r, "*") {
+				return fmt.Errorf("github[%s]: sweep repo glob %q needs a GitHub App — list repos explicitly when using token/gh credentials", g.name, r)
+			}
+		}
 	}
 	// Action maps are keyed by kind; a typo or a renamed kind (e.g. the old
 	// issue_labeled) would otherwise sit in config doing nothing. Reject unknown keys.
@@ -371,14 +421,19 @@ func patternSpecificity(p string) int {
 }
 
 // merge overlays a rule onto the instance defaults.
-func (g *Integration) merge(r Rule) Rule {
+func (g *Integration) merge(r Rule) Rule { return MergeRule(g.cfg.Defaults, r) }
+
+// MergeRule overlays a rule onto a defaults rule — the resolve() semantics,
+// exported so the config migration can flatten the rules/defaults model into
+// per-trigger filters with identical behavior.
+func MergeRule(defaults, r Rule) Rule {
 	out := Rule{
-		Reviewer:  g.cfg.Defaults.Reviewer,
-		Assignee:  g.cfg.Defaults.Assignee,
-		Workspace: g.cfg.Defaults.Workspace,
+		Reviewer:  defaults.Reviewer,
+		Assignee:  defaults.Assignee,
+		Workspace: defaults.Workspace,
 		Actions:   map[string]config.ActionSet{},
 	}
-	for k, v := range g.cfg.Defaults.Actions {
+	for k, v := range defaults.Actions {
 		out.Actions[k] = v
 	}
 	if len(r.Reviewer.Logins) > 0 || len(r.Reviewer.Teams) > 0 {
@@ -394,7 +449,7 @@ func (g *Integration) merge(r Rule) Rule {
 	// over the default base (the first default variant) for that kind.
 	for k, set := range r.Actions {
 		var base config.Action
-		if d := g.cfg.Defaults.Actions[k]; len(d) > 0 {
+		if d := defaults.Actions[k]; len(d) > 0 {
 			base = d[0]
 		}
 		merged := make(config.ActionSet, len(set))
@@ -476,6 +531,9 @@ func mergeAction(base, over config.Action) config.Action {
 	if len(over.IgnoreUsers) > 0 {
 		base.IgnoreUsers = over.IgnoreUsers
 	}
+	if over.AuthorBot != nil {
+		base.AuthorBot = over.AuthorBot
+	}
 	if len(over.LabelsAny) > 0 {
 		base.LabelsAny = over.LabelsAny
 	}
@@ -509,11 +567,31 @@ func mergeAction(base, over config.Action) config.Action {
 	if len(over.Project) > 0 {
 		base.Project = over.Project
 	}
+	// Connectors-model internals: the lowered variant's flow reference and
+	// per-variant repo gates must survive the defaults merge.
+	if over.FlowRef != "" {
+		base.FlowRef = over.FlowRef
+	}
+	if len(over.Repos) > 0 {
+		base.Repos = over.Repos
+	}
+	if len(over.ExcludeRepos) > 0 {
+		base.ExcludeRepos = over.ExcludeRepos
+	}
 	if !over.Exclude.Empty() {
 		base.Exclude = over.Exclude
 	}
 	if over.RerequestReview {
 		base.RerequestReview = over.RerequestReview
+	}
+	if over.Background {
+		base.Background = over.Background
+	}
+	if over.Handoff != "" {
+		base.Handoff = over.Handoff
+	}
+	if over.Retry != nil {
+		base.Retry = over.Retry
 	}
 	return base
 }

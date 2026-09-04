@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // tunnelStartTimeout bounds how long a spawning provider gets to print/report its
@@ -444,8 +444,9 @@ func (t ngrokTunnel) Open(ctx context.Context, localAddr string) (string, func()
 
 	url, err := pollNgrokAPI(ctx, t.timeout)
 	if err != nil {
-		t.log("tunnel ngrok: %v (output so far: %s)", err, strings.TrimSpace(buf.String()))
+		// Kill + wait FIRST so the process stops writing buf before we read it.
 		closeFn()
+		t.log("tunnel ngrok: %v (output so far: %s)", err, strings.TrimSpace(buf.String()))
 		return "", nil, fmt.Errorf("handoff: tunnel: ngrok: %w", err)
 	}
 	return url, closeFn, nil

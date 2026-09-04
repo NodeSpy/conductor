@@ -1,0 +1,24 @@
+# A legacy config the migration transform must REFUSE (group L2): the nested
+# steps were never executed by the legacy engine, so mapping them would invent
+# behavior — the transform hard-errors naming the construct and the original
+# file stays untouched (the daemon would keep running on legacy).
+integrations:
+  - type: cron
+    name: c
+    schedules:
+      - name: s
+        cron: "* * * * *"
+        action:
+          type: agent
+          agent: fixer
+          prompt: outer
+          steps:
+            - type: agent
+              agent: fixer
+              prompt: inner
+              steps:
+                - type: command
+                  command: [echo, nested]
+
+agents:
+  fixer: { provider: fake }

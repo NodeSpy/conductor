@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
-	"github.com/NodeSpy/paseo-conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 type fakeDispatcher struct {
@@ -351,6 +351,43 @@ func TestBackoffThenRetry(t *testing.T) {
 	}
 	if !n.has("escalate") {
 		t.Fatalf("expected a one-time escalation crossing the threshold, events=%v", n.events)
+	}
+}
+
+// TestPolicyBackoffOverridesCadence proves `policy.backoff` and
+// `policy.max_attempts_per_head` drive the retry gate (previously hardcoded
+// constants / the action field were the only sources).
+func TestPolicyBackoffOverridesCadence(t *testing.T) {
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	st := tempStore(t)
+	clock := time.Unix(1_700_000_000, 0)
+	st.SetNow(func() time.Time { return clock })
+	cfg := baseCfg()
+	one := 1
+	cfg.Policy = &config.Policy{
+		Backoff:            &config.Backoff{Base: config.Duration(30 * time.Minute)},
+		MaxAttemptsPerHead: &one, // soft threshold from policy, not the action
+	}
+	e := New(Options{Config: cfg, Store: st, Dispatch: d, Notifier: n,
+		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+
+	act := config.Action{Type: "agent", Agent: "fixer"} // no per-action threshold
+	// 1st: below the policy's soft threshold → dispatches, records the attempt.
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s1", act))
+	if len(d.reqs) != 1 {
+		t.Fatalf("want 1 dispatch, got %d", len(d.reqs))
+	}
+	// 15m later: past the DEFAULT 10m base but inside the policy's 30m → still gated.
+	clock = clock.Add(15 * time.Minute)
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s2", act))
+	if len(d.reqs) != 1 {
+		t.Fatalf("policy base 30m should gate a retry at 15m, got %d dispatches", len(d.reqs))
+	}
+	// Past the policy's 30m base → eligible again.
+	clock = clock.Add(20 * time.Minute)
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s3", act))
+	if len(d.reqs) != 2 {
+		t.Fatalf("want a retry after the policy cooldown, got %d dispatches", len(d.reqs))
 	}
 }
 
@@ -854,6 +891,40 @@ func TestConcurrencyCapBlocksSecondAgent(t *testing.T) {
 	}
 
 	// Freeing the first agent's slot lets the second proceed.
+	close(g.waitCh)
+	<-done
+	if g.count() != 2 {
+		t.Fatalf("second agent should dispatch once a slot frees, got %d", g.count())
+	}
+}
+
+// TestPolicyConcurrencyCapsAgents proves `policy.concurrency.max_agents` sizes
+// the agent semaphore (previously only the legacy control field did).
+func TestPolicyConcurrencyCapsAgents(t *testing.T) {
+	cfg := baseCfg()
+	one := 1
+	cfg.Policy = &config.Policy{Concurrency: &config.Concurrency{MaxAgents: &one}}
+	g := &gateFake{waitCh: make(chan struct{})}
+	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: g, Notifier: &fakeNotifier{},
+		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+	act := config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"}
+
+	// First agent takes the only slot; its WaitForAgent blocks, holding it.
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 1, "h1", "s1", act))
+	if g.count() != 1 {
+		t.Fatalf("first agent should dispatch, got %d", g.count())
+	}
+
+	// The second must block on the policy cap, not dispatch.
+	done := make(chan struct{})
+	go func() {
+		e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 2, "h2", "s2", act))
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if g.count() != 1 {
+		t.Fatalf("second agent should be blocked by the policy cap, got %d dispatches", g.count())
+	}
 	close(g.waitCh)
 	<-done
 	if g.count() != 2 {

@@ -4,8 +4,8 @@ import (
 	"hash/fnv"
 	"sync"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 // SyntheticTarget builds a Target for a source that has no real GitHub repo. The

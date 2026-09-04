@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 // pushoverURL and notifiarrURL are the fixed API endpoints for those services.
@@ -65,6 +65,12 @@ const (
 	EventComplete   = "complete"
 	EventEscalate   = "escalate"
 	EventNeedsInput = "needs_input" // a workflow handed a PR to a live agent; you need to weigh in
+	EventFailed     = "failed"      // a run errored (distinct from escalate: gave up after retries)
+	// EventUpdated / EventUpdateAvailable are the self-update lifecycle:
+	// updated fires on the first boot of a new release; update_available
+	// fires instead of self-applying under `update: { apply: workflow }`.
+	EventUpdated         = "updated"
+	EventUpdateAvailable = "update_available"
 )
 
 // Notifier emits notifications per the configured policy.
@@ -73,6 +79,41 @@ type Notifier struct {
 	log   func(string, ...any)
 	http  *http.Client
 	audit func(map[string]any) // optional: record attention events for status/report
+
+	// route delivers one notify.via route through a connector verb — the
+	// connectors-model delivery, wired by main when a connectors: block
+	// exists (see SetRouter). nil with via: configured logs a warning once.
+	route      func(ctx context.Context, r config.NotifyRoute, data map[string]any) error
+	warnedOnce bool
+
+	// publish feeds the event into the conductor.* lifecycle source (wired
+	// by main to connector.EmitLifecycle) — every event, unconditionally:
+	// the triggers do their own selection, and the source's loop guard
+	// keeps a lifecycle run's own events from re-feeding.
+	publish func(ctx context.Context, event string, t core.Trigger, line string, extra map[string]any)
+}
+
+// SetRouter wires the verb-layer delivery for notify.via routes.
+func (n *Notifier) SetRouter(route func(ctx context.Context, r config.NotifyRoute, data map[string]any) error) {
+	n.route = route
+}
+
+// SetPublisher wires the conductor.* lifecycle source.
+func (n *Notifier) SetPublisher(publish func(ctx context.Context, event string, t core.Trigger, line string, extra map[string]any)) {
+	n.publish = publish
+}
+
+// Publish emits a lifecycle event that has no legacy composition — the
+// self-update events, which carry a version. It journals, audits, and feeds
+// the conductor.* source.
+func (n *Notifier) Publish(ctx context.Context, event string, t core.Trigger, msg string, extra map[string]any) {
+	n.log("notify [%s] %s", event, msg)
+	if n.audit != nil {
+		n.audit(map[string]any{"event": event, "msg": msg})
+	}
+	if n.publish != nil {
+		n.publish(ctx, event, t, msg, extra)
+	}
 }
 
 // New builds a Notifier. log is the structured logger (the journal); audit (may be
@@ -96,9 +137,6 @@ func (n *Notifier) Emit(ctx context.Context, event string, t core.Trigger, msg s
 		n.audit(map[string]any{"event": event, "repo": t.Target.Repo,
 			"number": t.Target.Number, "kind": t.Kind, "msg": msg})
 	}
-	if !n.cfg.Wants(event) {
-		return
-	}
 	ref := fmt.Sprintf("%s#%d", t.Target.Repo, t.Target.Number)
 	var line string
 	switch event {
@@ -109,8 +147,20 @@ func (n *Notifier) Emit(ctx context.Context, event string, t core.Trigger, msg s
 	default:
 		line = fmt.Sprintf("[%s] %s %s: %s", event, ref, t.Kind, msg)
 	}
+	// The conductor.* lifecycle source sees EVERY event (triggers select);
+	// the loop guard lives on the source side.
+	if n.publish != nil {
+		n.publish(ctx, event, t, line, nil)
+	}
+	if !n.cfg.Wants(event) {
+		return
+	}
 	n.log("notify %s", line)
-	n.notifyAll(ctx, line)
+	n.notifyAll(ctx, line, event, map[string]any{
+		"message": line, "event": event, "ref": ref,
+		"repo": t.Target.Repo, "number": t.Target.Number,
+		"kind": t.Kind, "title": t.Title,
+	})
 }
 
 // Digest emits a periodic activity summary (journal + Slack + audit). Unlike Emit
@@ -120,13 +170,34 @@ func (n *Notifier) Digest(ctx context.Context, summary string) {
 	if n.audit != nil {
 		n.audit(map[string]any{"event": "digest", "msg": summary})
 	}
-	n.notifyAll(ctx, "[digest] "+summary)
+	n.notifyAll(ctx, "[digest] "+summary, "digest", map[string]any{
+		"message": "[digest] " + summary, "event": "digest",
+	})
 }
 
 // notifyAll fans a message out to every configured sink (Slack, Discord,
-// ntfy, Pushover, Notifiarr). Each post is best-effort and non-blocking — a
+// ntfy, Pushover, Notifiarr — the legacy delivery) AND every notify.via route
+// (the verb-layer delivery). Each post is best-effort and non-blocking — a
 // failure is logged, never fatal (the journal line already recorded the event).
-func (n *Notifier) notifyAll(ctx context.Context, text string) {
+func (n *Notifier) notifyAll(ctx context.Context, text, event string, data map[string]any) {
+	for _, r := range n.cfg.Via {
+		if !n.cfg.WantsRoute(r, event) {
+			continue
+		}
+		if n.route == nil {
+			if !n.warnedOnce {
+				n.warnedOnce = true
+				n.log("notify: via routes configured but no connectors are wired — %s not delivered", r.Uses)
+			}
+			continue
+		}
+		r := r
+		go func() {
+			if err := n.route(ctx, r, data); err != nil {
+				n.log("notify: via %s failed: %v", r.Uses, err)
+			}
+		}()
+	}
 	if n.cfg.SlackWebhookURL != "" {
 		go n.postSlack(ctx, text)
 	}

@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/acp"
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/acp"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // acpController drives an ACP agent (gemini, codex-via-adapter, opencode-over-acp,
@@ -31,6 +31,7 @@ type acpController struct {
 	command []string // launch argv for the agent subprocess (best-effort default; overridable via `command:`)
 	prov    Provisioner
 	dial    acpDialer // injectable connection factory; nil → spawn the subprocess
+	host    string    // configured `host:`; "" = local (see resolveHost/prepareLaunch)
 
 	mu    sync.Mutex
 	model SessionModel // cached negotiated model (native until an Initialize proves loadSession)
@@ -55,6 +56,7 @@ func newACPController(name string, cc config.ControllerConfig, prov Provisioner)
 		name:    name,
 		command: acpCommand(cc),
 		prov:    prov,
+		host:    cc.Host,
 		model:   model,
 	}
 }
@@ -73,7 +75,7 @@ func (c *acpController) Model() SessionModel {
 // and CheckoutPR is always true (conductor supplies the worktree as the session
 // cwd). The connection is closed before returning; NewSession opens its own.
 func (c *acpController) Initialize(ctx context.Context) (Capabilities, error) {
-	client, cleanup, err := c.connect(ctx, "", nil, acp.DelegateFuncs{})
+	client, cleanup, err := c.connect(ctx, "", nil, acp.DelegateFuncs{}, "")
 	if err != nil {
 		return Capabilities{SessionModel: c.Model(), Transport: TransportACP, CheckoutPR: true}, err
 	}
@@ -127,7 +129,7 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	// its own context, cancelled only by Close — not by the request ctx returning.
 	sctx, scancel := context.WithCancel(context.Background())
 	del := &acpDelegate{handler: h}
-	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del)
+	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Profile.Host)
 	if err != nil {
 		scancel()
 		return nil, err
@@ -165,7 +167,7 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 func (c *acpController) ResumeSession(ctx context.Context, id string, h Handler) (Session, error) {
 	sctx, scancel := context.WithCancel(context.Background())
 	del := &acpDelegate{handler: h}
-	client, cleanup, err := c.connect(sctx, "", nil, del)
+	client, cleanup, err := c.connect(sctx, "", nil, del, "")
 	if err != nil {
 		scancel()
 		return nil, err
@@ -181,27 +183,39 @@ func (c *acpController) ResumeSession(ctx context.Context, id string, h Handler)
 }
 
 // connect opens a connection via the injected dialer, or spawns the subprocess when
-// none is set.
-func (c *acpController) connect(ctx context.Context, cwd string, env []string, del acp.ClientDelegate) (*acp.Client, func() error, error) {
+// none is set. profileHost is the dispatched profile's host override (wins over
+// the controller's own configured host — see resolveHost); "" when no profile is
+// in reach (Initialize/ResumeSession).
+func (c *acpController) connect(ctx context.Context, cwd string, env []string, del acp.ClientDelegate, profileHost string) (*acp.Client, func() error, error) {
 	if c.dial != nil {
 		return c.dial(ctx, cwd, env, del)
 	}
-	return spawnACP(ctx, c.command, cwd, env, del)
+	return spawnACP(ctx, c.command, cwd, env, del, resolveHost(c.host, profileHost))
 }
 
 // spawnACP starts the agent subprocess wired for ACP over its stdio, with the
 // conductor worktree as cwd and the acts-as-user env applied. The process lifetime
 // is owned by the returned cleanup (session-scoped), not by ctx — a background
-// agent must survive the dispatch call returning.
-func spawnACP(_ context.Context, command []string, cwd string, env []string, del acp.ClientDelegate) (*acp.Client, func() error, error) {
+// agent must survive the dispatch call returning. host != "" wraps the launch for
+// remote execution via prepareLaunch (see its doc for what changes locally in
+// that case: no cwd, no local env — both travel inside the wrapped command).
+func spawnACP(_ context.Context, command []string, cwd string, env []string, del acp.ClientDelegate, host string) (*acp.Client, func() error, error) {
 	if len(command) == 0 {
 		return nil, nil, errors.New("acp: no launch command configured")
 	}
-	cmd := exec.Command(command[0], command[1:]...)
-	if cwd != "" {
-		cmd.Dir = cwd
+	argv, dir, remote, err := prepareLaunch(host, cwd, env, command)
+	if err != nil {
+		return nil, nil, err
 	}
-	cmd.Env = append(os.Environ(), env...)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	localEnv := env
+	if remote {
+		localEnv = nil
+	}
+	cmd.Env = append(os.Environ(), localEnv...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, nil, err
@@ -212,7 +226,7 @@ func spawnACP(_ context.Context, command []string, cwd string, env []string, del
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		return nil, nil, fmt.Errorf("acp: start %s: %w", command[0], err)
+		return nil, nil, fmt.Errorf("acp: start %s: %w", argv[0], err)
 	}
 	client := acp.NewClient(stdout, stdin, del)
 	cleanup := func() error {

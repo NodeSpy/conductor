@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 // A worktree dispatch pre-creates the isolated workspace with `paseo workspace

@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // cliController is the bare-runner fallback for tools with no ACP or HTTP server: it
@@ -30,6 +30,7 @@ type cliController struct {
 	recipe cliRecipe
 	prov   Provisioner
 	launch cliLauncher // injectable; nil → real subprocess
+	host   string      // configured `host:`; "" = local (see resolveHost/prepareLaunch)
 
 	seq  atomic.Int64
 	mu   sync.Mutex
@@ -56,6 +57,7 @@ func newCLIController(name string, cc config.ControllerConfig, prov Provisioner)
 		name:   name,
 		recipe: cliRecipeFor(cc),
 		prov:   prov,
+		host:   cc.Host,
 		live:   map[string]*cliSession{},
 	}
 }
@@ -93,9 +95,10 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 		return nil, fmt.Errorf("cli: render prompt: %w", err)
 	}
 
+	host := resolveHost(c.host, spec.Request.Profile.Host)
 	id := c.recipe.tool + "-" + strconv.FormatInt(c.seq.Add(1), 10)
 	sctx, scancel := context.WithCancel(context.Background())
-	proc, err := c.start(sctx, spec.Cwd, env, c.recipe.launch(prompt))
+	proc, err := c.launchOn(sctx, host, spec.Cwd, env, c.recipe.launch(prompt))
 	if err != nil {
 		scancel()
 		return nil, fmt.Errorf("cli: launch %s: %w", c.recipe.tool, err)
@@ -106,6 +109,7 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 		c:      c,
 		cwd:    spec.Cwd,
 		env:    env,
+		host:   host,
 		cancel: scancel,
 		ctx:    sctx,
 	}
@@ -125,7 +129,7 @@ func (c *cliController) ResumeSession(_ context.Context, id string, _ Handler) (
 		return nil, ErrNoFollowup
 	}
 	sctx, scancel := context.WithCancel(context.Background())
-	return &cliSession{id: id, c: c, toolID: id, cancel: scancel, ctx: sctx}, nil
+	return &cliSession{id: id, c: c, toolID: id, host: c.host, cancel: scancel, ctx: sctx}, nil
 }
 
 func (c *cliController) start(ctx context.Context, dir string, env, argv []string) (cliProc, error) {
@@ -133,6 +137,22 @@ func (c *cliController) start(ctx context.Context, dir string, env, argv []strin
 		return c.launch(ctx, dir, env, argv)
 	}
 	return startCLIProc(ctx, dir, env, argv)
+}
+
+// launchOn runs argv either locally in dir with env applied (host == "") or,
+// when host != "", wraps it via prepareLaunch and runs the resulting ssh
+// command instead — see prepareLaunch's doc for what changes locally (no
+// dir, no env — both travel inside the wrapped remote command) in that case.
+func (c *cliController) launchOn(ctx context.Context, host, dir string, env, argv []string) (cliProc, error) {
+	wrapped, localDir, remote, err := prepareLaunch(host, dir, env, argv)
+	if err != nil {
+		return nil, err
+	}
+	localEnv := env
+	if remote {
+		localEnv = nil
+	}
+	return c.start(ctx, localDir, localEnv, wrapped)
 }
 
 func (c *cliController) forget(id string) {
@@ -278,6 +298,7 @@ type cliSession struct {
 	c      *cliController
 	cwd    string
 	env    []string
+	host   string // resolved at creation (controller/profile host, or ""; see resolveHost)
 	cancel context.CancelFunc
 	ctx    context.Context
 
@@ -328,7 +349,7 @@ func (s *cliSession) Prompt(_ context.Context, msg Message) (<-chan Update, erro
 	}
 
 	ch := make(chan Update, 4)
-	proc, err := s.c.start(s.ctx, s.cwd, s.env, s.c.recipe.resume(tid, msg.Text))
+	proc, err := s.c.launchOn(s.ctx, s.host, s.cwd, s.env, s.c.recipe.resume(tid, msg.Text))
 	if err != nil {
 		ch <- Update{Kind: UpdateDone, AgentID: s.id, Err: err}
 		close(ch)

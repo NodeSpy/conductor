@@ -14,9 +14,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/inbound"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/inbound"
 )
 
 func init() { core.Register("sentry", newIntegration) }
@@ -78,7 +78,7 @@ func (g *Integration) Validate() error {
 			return fmt.Errorf("sentry[%s]: rules[%d]: no actions", g.name, i)
 		}
 		for _, a := range r.Actions {
-			if a.Type == "" {
+			if a.Type == "" && a.FlowRef == "" { // FlowRef: lowered connectors-model action
 				return fmt.Errorf("sentry[%s]: rules[%d]: action.type is required", g.name, i)
 			}
 		}
@@ -160,16 +160,6 @@ func (g *Integration) deliver(ctx context.Context, emit core.EmitFunc, resource,
 	}
 	title := fmt.Sprintf("sentry %s: %s", firstNonEmpty(f.Level, "error"), f.Title)
 
-	var target core.Target
-	synthetic := rule.Repo == ""
-	if synthetic {
-		target = inbound.SyntheticTarget("sentry:"+firstNonEmpty(f.Project, g.name), dedup)
-	} else {
-		owner, name, _ := strings.Cut(rule.Repo, "/")
-		target = core.Target{Repo: rule.Repo, Owner: owner, Name: name,
-			Number: inbound.SyntheticTarget("", dedup).Number, HTMLURL: f.URL}
-	}
-
 	sctx := map[string]any{
 		"resource": f.Resource, "action": f.Action, "title": f.Title, "level": f.Level,
 		"environment": f.Environment, "culprit": f.Culprit, "short_id": f.ShortID,
@@ -178,6 +168,21 @@ func (g *Integration) deliver(ctx context.Context, emit core.EmitFunc, resource,
 	for _, act := range rule.Actions {
 		if !act.IsEnabled() {
 			continue
+		}
+		// The checkout repo: the rule's, or a per-variant override (lowered
+		// connectors-model triggers each carry their own repo:).
+		repo := rule.Repo
+		if act.TargetRepo != "" {
+			repo = act.TargetRepo
+		}
+		var target core.Target
+		synthetic := repo == ""
+		if synthetic {
+			target = inbound.SyntheticTarget("sentry:"+firstNonEmpty(f.Project, g.name), dedup)
+		} else {
+			owner, name, _ := strings.Cut(repo, "/")
+			target = core.Target{Repo: repo, Owner: owner, Name: name,
+				Number: inbound.SyntheticTarget("", dedup).Number, HTMLURL: f.URL}
 		}
 		if synthetic {
 			act = inbound.ForceNoCheckout(act)

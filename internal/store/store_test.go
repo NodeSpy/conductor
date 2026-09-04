@@ -227,3 +227,82 @@ func TestRetryReadySelfHealsMissingTimestamp(t *testing.T) {
 		t.Fatal("missing attempt_at should be treated as ready (self-heal)")
 	}
 }
+
+// TestRunsPersistAcrossReopen: PutRun/PendingRuns/DeleteRun round-trip through
+// runs.json, so a restart resumes exactly the in-flight runs.
+func TestRunsPersistAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	s, err := Open(Options{StatePath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutRun(WorkflowRun{ID: "flow:a", Kind: "new_comment", Repo: "a/w",
+		StepIndex: 2, Outputs: map[string]map[string]any{"x": {"id": 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutRun(WorkflowRun{ID: "flow:b", Kind: "release"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteRun("flow:b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := Open(Options{StatePath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := s2.PendingRuns()
+	if len(runs) != 1 || runs[0].ID != "flow:a" || runs[0].StepIndex != 2 {
+		t.Fatalf("reloaded runs: %+v", runs)
+	}
+	if runs[0].Outputs["x"]["id"] != float64(1) {
+		t.Fatalf("outputs survive: %+v", runs[0].Outputs)
+	}
+	if runs[0].UpdatedAt.IsZero() {
+		t.Fatal("UpdatedAt stamped")
+	}
+}
+
+// TestTouchExtendsTTLAndSetNow: Touch refreshes a record so GC keeps it.
+func TestTouchExtendsTTLAndSetNow(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(Options{StatePath: filepath.Join(dir, "s.json"), TTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Unix(1_700_000_000, 0)
+	s.SetNow(func() time.Time { return clock })
+	_ = s.RecordAttempt("a/w#1", "k", "h")
+
+	// Move past the TTL, but Touch first — the record survives GC.
+	clock = clock.Add(2 * time.Hour)
+	s.Touch("a/w#1")
+	if n, err := s.GC(); err != nil || n != 0 {
+		t.Fatalf("touched record must survive GC: %d %v", n, err)
+	}
+	// Without another touch, the next TTL window evicts it.
+	clock = clock.Add(3 * time.Hour)
+	if n, err := s.GC(); err != nil || n != 1 {
+		t.Fatalf("stale record should GC: %d %v", n, err)
+	}
+}
+
+// TestOpenToleratesCorruptState: a corrupt state file starts fresh instead of
+// failing the boot; a corrupt runs file likewise.
+func TestOpenToleratesCorruptState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	os.WriteFile(path, []byte("{corrupt"), 0o644)
+	os.WriteFile(filepath.Join(dir, "runs.json"), []byte("also corrupt"), 0o644)
+	s, err := Open(Options{StatePath: path})
+	if err != nil {
+		t.Fatalf("corrupt files must not fail Open: %v", err)
+	}
+	if len(s.PendingRuns()) != 0 {
+		t.Fatal("fresh runs map expected")
+	}
+}

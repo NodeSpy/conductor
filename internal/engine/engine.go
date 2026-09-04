@@ -13,13 +13,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/controller"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
-	"github.com/NodeSpy/paseo-conductor/internal/handoff"
-	"github.com/NodeSpy/paseo-conductor/internal/notify"
-	"github.com/NodeSpy/paseo-conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/controller"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/flow"
+	"github.com/NodeSpy/conductor/internal/handoff"
+	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // *store.Store persists the broker's PR→session map; assert it here (engine
@@ -84,6 +86,13 @@ type Engine struct {
 	pausePath   string            // control file; present = paused (toggled by pause/resume, no restart)
 	ch          chan core.Trigger
 	sem         chan struct{} // concurrent-agent cap; nil = unlimited
+
+	// flow runs connectors-model triggers (actions carrying a FlowRef);
+	// grouper batches their grouped events. nil when the config has no
+	// connectors — the legacy path is then the only path.
+	flow       *flow.Runner
+	grouper    *flow.Grouper
+	connectors *connector.Registry
 
 	budgetMu  sync.Mutex  // guards agentDisp (rolling agent-dispatch timestamps)
 	agentDisp []time.Time // agent-dispatch times in the last hour (runaway budget)
@@ -153,6 +162,13 @@ type Options struct {
 	// pause/resume commands without a restart). Empty disables the runtime pause.
 	PausePath string
 	Log       func(string, ...any)
+	// Flow runs connectors-model triggers; nil when the config has none. The
+	// engine fills in its AgentServices (runtime resolution, tokens, guidance,
+	// background hand-off) after construction.
+	Flow *flow.Runner
+	// Connectors is the built connector registry (ask-capable hand-off
+	// resolution). nil without a connectors: block.
+	Connectors *connector.Registry
 }
 
 // New builds an Engine.
@@ -170,7 +186,7 @@ func New(o Options) *Engine {
 		if s, ok := o.Dispatch.(controller.Sender); ok {
 			sender = s
 		}
-		reg = controller.NewRegistry(o.Config.Controllers, o.Config.DefaultControllerName(), o.Dispatch, sender)
+		reg = controller.NewRegistry(o.Config.MergedControllers(), o.Config.DefaultRuntimeName(), o.Dispatch, sender)
 	}
 	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,
@@ -180,7 +196,7 @@ func New(o Options) *Engine {
 		pausePath: o.PausePath,
 		ch:        make(chan core.Trigger, 256),
 	}
-	if cap := o.Config.Control.AgentCap(); cap > 0 {
+	if cap := o.Config.AgentCap(); cap > 0 {
 		e.sem = make(chan struct{}, cap)
 	}
 	e.rerun = o.Rerun
@@ -188,6 +204,14 @@ func New(o Options) *Engine {
 		e.rerun = e.rerunFailed
 	}
 	e.refreshTok = o.RefreshAppToken
+	e.connectors = o.Connectors
+	if o.Flow != nil {
+		e.flow = o.Flow
+		// The runner's agent/command steps dispatch through the engine's own
+		// runtime resolution, tokens, and hand-off machinery.
+		e.flow.Agents = e.flowAgentServices()
+		e.grouper = flow.NewGrouper(nil, e.runBatch)
+	}
 	return e
 }
 
@@ -379,8 +403,14 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// old ones (the single-slot dedup can't distinguish them). The mark advances on
 	// a successful new_comment dispatch below. It's kept per comment kind: issue
 	// (conversation) and review (inline) comments are separate id sequences.
+	//
+	// Connectors-model triggers additionally key the mark PER VARIANT: several
+	// independent triggers may listen to the same comment event (one grouped,
+	// one not), and the first to advance a shared mark would starve its
+	// siblings of the very same comment. Legacy state is untouched (legacy
+	// actions keep the bare kind key, honoring existing state.json).
 	if !t.Force && t.Kind == "new_comment" {
-		if id := commentID(t); id > 0 && id <= e.store.LastCommentID(key, commentKind(t)) {
+		if id := commentID(t); id > 0 && id <= e.store.LastCommentID(key, commentMarkKind(t)) {
 			return
 		}
 	}
@@ -449,14 +479,29 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// Past the soft threshold (max_attempts_per_head), gate retries behind a GROWING
 	// backoff instead of a hard cap — a struggling (pr,kind,head) keeps getting
 	// periodic retries with widening gaps (10m→30m→…→24h) rather than being abandoned
-	// forever. Escalate once, when it first crosses the threshold.
+	// forever. Escalate once, when it first crosses the threshold. The cadence
+	// and threshold come from the trigger's merged policy (scoped for flow
+	// triggers, global otherwise); the constants are the defaults.
+	pol := e.retryPolicyFor(act)
 	soft := act.MaxAttemptsPerHead
+	if soft == 0 && pol.MaxAttemptsPerHead != nil {
+		soft = *pol.MaxAttemptsPerHead
+	}
 	if soft == 0 && t.Kind != "new_comment" {
 		soft = defaultMaxAttempts
 	}
+	base, max := retryBackoffBase, retryBackoffMax
+	if pol.Backoff != nil {
+		if d := pol.Backoff.Base.D(); d > 0 {
+			base = d
+		}
+		if d := pol.Backoff.Max.D(); d > 0 {
+			max = d
+		}
+	}
 	if soft > 0 && !t.Force {
 		if n := e.store.Attempts(key, dkind, head); n >= soft {
-			if ready, wait := e.store.RetryReady(key, dkind, head, soft, retryBackoffBase, retryBackoffFactor, retryBackoffMax); !ready {
+			if ready, wait := e.store.RetryReady(key, dkind, head, soft, base, retryBackoffFactor, max); !ready {
 				e.log("%s in backoff — %d attempts at %s, next retry in ~%s",
 					tag(t), n, short(head), wait.Round(time.Minute))
 				return
@@ -467,6 +512,18 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 					fmt.Sprintf("still failing after %d tries at %s — backing off, will keep retrying periodically", soft, short(head)))
 			}
 		}
+	}
+
+	// A connectors-model trigger: the generic gates above (kill switch,
+	// pause, comment high-water mark, dedup, backoff) have all applied; the
+	// flow runner owns steps/hooks/verbs from here.
+	if act.FlowRef != "" {
+		if e.flow == nil {
+			e.log("%s flow trigger but no flow runner wired — dropping", tag(t))
+			return
+		}
+		e.processFlow(ctx, t, act, key, dkind, head)
+		return
 	}
 
 	// Resolve profile, tokens, shadow.
@@ -563,7 +620,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		// (record an attempt so live-gated/backoff kinds re-run once the window frees;
 		// commands stay ungated). Protects the box from a webhook flood or a sweep
 		// misfire spinning up unbounded agents.
-		if max := e.cfg.Control.AgentsPerHour(); max > 0 && e.overAgentBudget(max) {
+		if max := e.cfg.AgentsPerHour(); max > 0 && e.overAgentBudget(max) {
 			e.log("%s agent budget reached (%d/hr) — shedding, will retry later", tag(t), max)
 			_ = e.store.RecordAttempt(key, dkind, head) // so it isn't silently forgotten
 			return
@@ -735,6 +792,21 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 		if json.Unmarshal(r.Trigger, &t) != nil || json.Unmarshal(r.Action, &act) != nil {
 			e.log("engine: resume %s: unreadable, dropping", r.ID)
 			_ = e.store.DeleteRun(r.ID)
+			continue
+		}
+		// A flow run resumes through the flow runner (its own checkpoint
+		// model); token re-minting below still applies first when possible.
+		if act.FlowRef != "" {
+			if e.flow == nil {
+				e.log("engine: resume %s: flow run but no flow runner — leaving for next start", r.ID)
+				continue
+			}
+			if t.Context != nil {
+				if appTok, err := e.refreshTok(t); err == nil && appTok != "" {
+					t.Context["app_token"] = appTok
+				}
+			}
+			e.resumeFlowRun(ctx, r, t, act)
 			continue
 		}
 		t.Action = act
@@ -957,6 +1029,17 @@ func commentID(t core.Trigger) int64 {
 		return 0
 	}
 	return toInt64(t.Context["comment_id"])
+}
+
+// commentMarkKind returns the high-water-mark key for a comment trigger:
+// the comment kind, suffixed per variant for connectors-model triggers so
+// sibling triggers on the same event keep independent marks.
+func commentMarkKind(t core.Trigger) string {
+	ck := commentKind(t)
+	if act, ok := t.Action.(config.Action); ok && act.FlowRef != "" && t.Variant != "" {
+		ck += "#" + t.Variant
+	}
+	return ck
 }
 
 // commentKind reads a new_comment trigger's comment kind (store.CommentKindIssue /

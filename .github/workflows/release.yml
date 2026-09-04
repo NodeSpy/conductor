@@ -33,7 +33,7 @@ jobs:
             echo "building $out"
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
               go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
-              -o "$out" ./cmd/paseo-conductor
+              -o "$out" ./cmd/conductor
           done
           ( cd dist && sha256sum * > checksums.txt )
           ls -la dist

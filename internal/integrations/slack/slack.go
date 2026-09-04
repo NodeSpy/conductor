@@ -16,9 +16,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/inbound"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/inbound"
 )
 
 func init() { core.Register("slack", newIntegration) }
@@ -127,7 +127,7 @@ func (g *Integration) Validate() error {
 			return fmt.Errorf("slack[%s]: triggers[%d]: no actions", g.name, i)
 		}
 		for _, a := range r.Actions {
-			if a.Type == "" {
+			if a.Type == "" && a.FlowRef == "" { // FlowRef: lowered connectors-model action
 				return fmt.Errorf("slack[%s]: triggers[%d]: action.type is required", g.name, i)
 			}
 		}

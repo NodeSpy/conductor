@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // fakeOpencodeServer is an httptest stand-in for `opencode serve`: it creates a
@@ -135,5 +137,54 @@ func TestOpencodeFollowUpTurnReturnsOutput(t *testing.T) {
 	}
 	if last.Output != "echo:second" {
 		t.Fatalf("follow-up output = %q, want echo:second", last.Output)
+	}
+}
+
+// TestOpencodeRemoteTransport: with host: set, the controller's HTTP client
+// dials through HostDial (the ssh -W forward) instead of TCP — proven by
+// serving the "remote" opencode API on a local listener the dialer returns.
+func TestOpencodeRemoteTransport(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":"sess-1"}`))
+	}))
+	defer srv.Close()
+
+	var dialed []string
+	old := HostDial
+	HostDial = func(ctx context.Context, hostName, addr string) (net.Conn, error) {
+		dialed = append(dialed, hostName+"->"+addr)
+		return net.Dial("tcp", srv.Listener.Addr().String())
+	}
+	defer func() { HostDial = old }()
+
+	c := newOpencodeController("oc", config.ControllerConfig{Type: "opencode", Host: "gpu-box"}, nil)
+	// The advertised URL is the REMOTE loopback; the transport must route it
+	// through HostDial rather than dialing 127.0.0.1:9999 here.
+	resp, err := c.hc.Get("http://127.0.0.1:9999/session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(b), "sess-1") {
+		t.Fatalf("body: %s", b)
+	}
+	if len(dialed) != 1 || dialed[0] != "gpu-box->127.0.0.1:9999" {
+		t.Fatalf("dials: %v", dialed)
+	}
+}
+
+// TestOpencodeLocalNoHostDial: without host:, the client is the plain local
+// one and never consults HostDial.
+func TestOpencodeLocalNoHostDial(t *testing.T) {
+	old := HostDial
+	HostDial = func(context.Context, string, string) (net.Conn, error) {
+		t.Fatal("HostDial must not be used for a local opencode")
+		return nil, nil
+	}
+	defer func() { HostDial = old }()
+	c := newOpencodeController("oc", config.ControllerConfig{Type: "opencode"}, nil)
+	if c.hc.Transport != nil {
+		t.Fatal("local controller must use the default transport")
 	}
 }

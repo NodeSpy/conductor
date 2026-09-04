@@ -9,14 +9,14 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"text/template"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/hosts"
 )
 
 // Tokens carries the two credentials dispatched work may need.
@@ -67,6 +67,10 @@ type RunRef struct {
 type Dispatcher struct {
 	PaseoBin string
 	DryRun   bool
+
+	// Remote runs every paseo CLI invocation on an SSH host — a paseo runtime
+	// with `host:`. nil = the local binary. See remote.go for what changes.
+	Remote *hosts.Target
 
 	// CheckoutDir resolves a local checkout path for a repo (owner/name) that
 	// paseo can derive the forge repo from when creating a PR/branch worktree.
@@ -130,7 +134,7 @@ func (d *Dispatcher) WaitForAgent(ctx context.Context, id string, timeout time.D
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	_ = exec.CommandContext(ctx, d.PaseoBin, "wait", id).Run()
+	_ = d.paseoCmd(ctx, "wait", id).Run()
 }
 
 // Send queues a follow-up prompt to an existing live agent (paseo's native
