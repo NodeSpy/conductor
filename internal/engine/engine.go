@@ -403,8 +403,14 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// old ones (the single-slot dedup can't distinguish them). The mark advances on
 	// a successful new_comment dispatch below. It's kept per comment kind: issue
 	// (conversation) and review (inline) comments are separate id sequences.
+	//
+	// Connectors-model triggers additionally key the mark PER VARIANT: several
+	// independent triggers may listen to the same comment event (one grouped,
+	// one not), and the first to advance a shared mark would starve its
+	// siblings of the very same comment. Legacy state is untouched (legacy
+	// actions keep the bare kind key, honoring existing state.json).
 	if !t.Force && t.Kind == "new_comment" {
-		if id := commentID(t); id > 0 && id <= e.store.LastCommentID(key, commentKind(t)) {
+		if id := commentID(t); id > 0 && id <= e.store.LastCommentID(key, commentMarkKind(t)) {
 			return
 		}
 	}
@@ -1008,6 +1014,17 @@ func commentID(t core.Trigger) int64 {
 		return 0
 	}
 	return toInt64(t.Context["comment_id"])
+}
+
+// commentMarkKind returns the high-water-mark key for a comment trigger:
+// the comment kind, suffixed per variant for connectors-model triggers so
+// sibling triggers on the same event keep independent marks.
+func commentMarkKind(t core.Trigger) string {
+	ck := commentKind(t)
+	if act, ok := t.Action.(config.Action); ok && act.FlowRef != "" && t.Variant != "" {
+		ck += "#" + t.Variant
+	}
+	return ck
 }
 
 // commentKind reads a new_comment trigger's comment kind (store.CommentKindIssue /
