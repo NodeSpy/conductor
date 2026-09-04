@@ -2,6 +2,10 @@ package connector
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -205,5 +209,78 @@ func TestKVConfiguredNameRejected(t *testing.T) {
 	}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("reserved name: %v", err)
+	}
+}
+
+// TestHTTPStoreAuthWiring: a stores: entry of type http carries the REST
+// auth block — the bearer token reaches the shim on every op.
+func TestHTTPStoreAuthWiring(t *testing.T) {
+	kv.SetDataDir(t.TempDir())
+	t.Cleanup(func() { kv.SetDataDir(""); kv.ResetStores() })
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["op"] == "get" {
+			fmt.Fprint(w, `{"value":"remote","found":true}`)
+			return
+		}
+		fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+
+	reg := buildAPIRegistry(t, `
+connectors: {}
+stores:
+  shared:
+    type: http
+    base_url: `+srv.URL+`
+    auth: { type: bearer, token: shim-tok }
+`, secrets.New())
+	in, _ := reg.Get("kv")
+	out, err := in.Invoke(context.Background(), "get", map[string]any{"store": "shared", "key": "k"})
+	if err != nil || out["value"] != "remote" {
+		t.Fatalf("http store get: %v %v", out, err)
+	}
+	if gotAuth != "Bearer shim-tok" {
+		t.Fatalf("auth header: %q", gotAuth)
+	}
+}
+
+// TestStoresBuildValidation: a bad stores: entry is a LOAD error from Build
+// naming the store — unknown type, missing connection, unopenable boltdb
+// path, duplicate registration cannot happen (map keys), reserved kv name
+// aside.
+func TestStoresBuildValidation(t *testing.T) {
+	kv.SetDataDir(t.TempDir())
+	t.Cleanup(func() { kv.SetDataDir(""); kv.ResetStores() })
+	build := func(y string) error {
+		var cfg config.Config
+		if err := yaml.Unmarshal([]byte(y), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Build(&cfg, Deps{Secrets: secrets.New(), Config: &cfg})
+		return err
+	}
+	if err := build("connectors: {}\nstores:\n  ok: { type: boltdb }\n"); err != nil {
+		t.Fatalf("good store: %v", err)
+	}
+	kv.ResetStores()
+	if err := build("connectors: {}\nstores:\n  x: { type: dynamo }\n"); err == nil ||
+		!strings.Contains(err.Error(), `unknown type "dynamo"`) {
+		t.Fatalf("unknown type: %v", err)
+	}
+	if err := build("connectors: {}\nstores:\n  x: { type: redis }\n"); err == nil ||
+		!strings.Contains(err.Error(), "url: is required") {
+		t.Fatalf("redis missing url: %v", err)
+	}
+	if err := build("connectors: {}\nstores:\n  x: { type: http }\n"); err == nil ||
+		!strings.Contains(err.Error(), "base_url: is required") {
+		t.Fatalf("http missing base_url: %v", err)
+	}
+	if err := build("connectors: {}\nstores:\n  x: { type: boltdb, path: /dev/null/nope/x.db }\n"); err == nil ||
+		!strings.Contains(err.Error(), `"x"`) {
+		t.Fatalf("bad bolt path: %v", err)
 	}
 }
