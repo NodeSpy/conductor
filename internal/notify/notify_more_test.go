@@ -73,3 +73,45 @@ func TestNewNilLog(t *testing.T) {
 	// The no-op default logger must be callable.
 	n.Emit(context.Background(), EventComplete, core.Trigger{}, "x")
 }
+
+// TestSinkPostFailuresAreLoggedNotFatal: an unreachable sink logs its failure
+// and never blocks or panics the emit path.
+func TestSinkPostFailuresAreLoggedNotFatal(t *testing.T) {
+	dead := "http://127.0.0.1:1/hook"
+	cfg := config.Notify{
+		On:                []string{EventEscalate},
+		SlackWebhookURL:   dead,
+		DiscordWebhookURL: dead,
+		Ntfy:              config.NotifyNtfy{Topic: "ops", Server: "http://127.0.0.1:1"},
+		Pushover:          config.NotifyPushover{Token: "t", User: "u"},
+	}
+	var mu sync.Mutex
+	var logs []string
+	n := New(cfg, func(f string, a ...any) {
+		mu.Lock()
+		logs = append(logs, f)
+		mu.Unlock()
+	}, nil)
+	n.Emit(context.Background(), EventEscalate, core.Trigger{Target: core.Target{Repo: "a/w", Number: 1}}, "boom")
+
+	deadline := time.Now().Add(5 * time.Second)
+	want := []string{"slack post failed", "discord post failed", "ntfy post failed", "pushover post failed"}
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		joined := strings.Join(logs, "\n")
+		mu.Unlock()
+		missing := 0
+		for _, w := range want {
+			if !strings.Contains(joined, w) {
+				missing++
+			}
+		}
+		if missing == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	t.Fatalf("sink failures not all logged:\n%s", strings.Join(logs, "\n"))
+}
