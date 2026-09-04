@@ -191,12 +191,12 @@ func init() { RegisterType(kvDecl, newKVImpl) }
 type kvImpl struct{}
 
 func newKVImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
-	// Point the shared store at the daemon's data dir (beside the state
-	// file); it opens lazily on first use. A loaded config always carries a
-	// state file (applyDefaults); a hand-built one without it (tests) keeps
-	// whatever path is already configured.
+	// Point boltdb stores (including the implicit "default") at the daemon's
+	// data dir (beside the state file); the default opens lazily on first
+	// use. A loaded config always carries a state file (applyDefaults); a
+	// hand-built one without it (tests) keeps whatever dir is already set.
 	if deps.Config != nil && deps.Config.Store.StateFile != "" {
-		kv.SetDefaultPath(filepath.Join(filepath.Dir(deps.Config.Store.StateFile), "kv.db"))
+		kv.SetDataDir(filepath.Dir(deps.Config.Store.StateFile))
 	}
 	return kvImpl{}, nil
 }

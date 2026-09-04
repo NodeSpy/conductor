@@ -37,11 +37,12 @@ func (e entry) expired(now time.Time) bool {
 	return e.E != 0 && now.UnixNano() >= e.E
 }
 
-// Store is one open kv database.
+// Store is one open kv database — the boltdb KVBackend.
 type Store struct {
-	db   *bolt.DB
-	stop chan struct{}
-	wg   sync.WaitGroup
+	db      *bolt.DB
+	stop    chan struct{}
+	wg      sync.WaitGroup
+	closeMu sync.Once
 }
 
 // Open opens (creating if absent) the store at path and starts the TTL
@@ -61,11 +62,16 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
-// Close stops the sweep and closes the database.
+// Close stops the sweep and closes the database. Idempotent — the registry
+// and a test cleanup may both close the same store.
 func (s *Store) Close() error {
-	close(s.stop)
-	s.wg.Wait()
-	return s.db.Close()
+	var err error
+	s.closeMu.Do(func() {
+		close(s.stop)
+		s.wg.Wait()
+		err = s.db.Close()
+	})
+	return err
 }
 
 func ns(namespace string) []byte {
@@ -637,53 +643,4 @@ func (s *Store) Sweep(now time.Time) error {
 			return nil
 		})
 	})
-}
-
-// ---------------------------------------------------------------------------
-// The shared default store: the kv connector, the {{ kv … }} template
-// function, and the code-step bindings all read/write ONE database. The
-// daemon points it at <data dir>/kv.db at boot (the kv connector's builder);
-// it opens lazily on first use.
-// ---------------------------------------------------------------------------
-
-var (
-	defMu   sync.Mutex
-	defPath string
-	def     *Store
-)
-
-// SetDefaultPath points the shared store at path. If a different path was
-// open, it is closed and the store reopens lazily at the new one (tests use
-// this to run against a temp file).
-func SetDefaultPath(path string) {
-	defMu.Lock()
-	defer defMu.Unlock()
-	if path == defPath {
-		return
-	}
-	if def != nil {
-		_ = def.Close()
-		def = nil
-	}
-	defPath = path
-}
-
-// Default returns the shared store, opening it lazily at the configured
-// path (SetDefaultPath must have been called — the kv connector's builder
-// does at boot).
-func Default() (*Store, error) {
-	defMu.Lock()
-	defer defMu.Unlock()
-	if def != nil {
-		return def, nil
-	}
-	if defPath == "" {
-		return nil, fmt.Errorf("kv: store path not configured")
-	}
-	s, err := Open(defPath)
-	if err != nil {
-		return nil, err
-	}
-	def = s
-	return def, nil
 }

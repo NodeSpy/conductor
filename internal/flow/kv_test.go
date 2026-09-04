@@ -1,7 +1,6 @@
 package flow
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,10 +8,10 @@ import (
 )
 
 // tempKV points the shared store at a temp file for one test.
-func tempKV(t *testing.T) *kv.Store {
+func tempKV(t *testing.T) kv.KVBackend {
 	t.Helper()
-	kv.SetDefaultPath(filepath.Join(t.TempDir(), "kv.db"))
-	t.Cleanup(func() { kv.SetDefaultPath("") })
+	kv.SetDataDir(t.TempDir())
+	t.Cleanup(func() { kv.SetDataDir("") })
 	st, err := kv.Default()
 	if err != nil {
 		t.Fatal(err)

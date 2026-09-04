@@ -19,8 +19,12 @@ require (
 )
 
 require (
+	github.com/alicebob/miniredis/v2 v2.39.0 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
+	github.com/redis/go-redis/v9 v9.22.0 // indirect
 	github.com/tetratelabs/wazero v1.9.0 // indirect
 	go.etcd.io/bbolt v1.5.0 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 )
