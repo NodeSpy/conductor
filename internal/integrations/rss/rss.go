@@ -94,7 +94,7 @@ func (g *Integration) Validate() error {
 			return wrapf(g.name, "feed %q: no actions", f.Name)
 		}
 		for _, a := range f.Actions {
-			if a.Type == "" {
+			if a.Type == "" && a.FlowRef == "" { // FlowRef: lowered connectors-model action
 				return wrapf(g.name, "feed %q: action.type is required", f.Name)
 			}
 		}

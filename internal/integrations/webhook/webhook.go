@@ -97,7 +97,7 @@ func (g *Integration) Validate() error {
 			return fmt.Errorf("webhook[%s]: source %q: no actions", g.name, s.Name)
 		}
 		for _, a := range s.Actions {
-			if a.Type == "" {
+			if a.Type == "" && a.FlowRef == "" { // FlowRef: lowered connectors-model action
 				return fmt.Errorf("webhook[%s]: source %q: action.type is required", g.name, s.Name)
 			}
 		}
