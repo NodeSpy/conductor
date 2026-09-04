@@ -278,6 +278,10 @@ func cmdRun(args []string) error {
 	disp.AdoptOpenWorkspaces = cfg.AdoptOpenWorkspaces
 	preflightPATH(disp.PaseoBin)
 	notifier := notify.New(cfg.Notify, logf, st.Audit)
+	// Every lifecycle event feeds the conductor.* source (ordinary triggers
+	// alert on them); the source's loop guard keeps a notification
+	// workflow's own events from re-feeding.
+	notifier.SetPublisher(connector.EmitLifecycle)
 	// Controller registry (paseo is the built-in default) + the session broker that
 	// owns one live session per PR — so an interactive hand-off survives a restart
 	// and follow-ups funnel to the live session instead of a duplicate agent. Built

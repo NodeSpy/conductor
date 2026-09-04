@@ -82,7 +82,7 @@ func cmdReport(args []string) error {
 	}
 
 	fmt.Println("\nattention:")
-	for _, ev := range []string{"escalate", "needs_input", "complete"} {
+	for _, ev := range []string{"escalate", "failed", "needs_input", "complete"} {
 		fmt.Printf("  %-12s %d\n", ev, attention[ev])
 	}
 	return nil
@@ -164,7 +164,7 @@ func tallyAudit(r io.Reader, cutoff time.Time) (dispatch map[string]map[string]i
 				dispatch[kind] = map[string]int{}
 			}
 			dispatch[kind][oc]++
-		case "escalate", "needs_input", "complete":
+		case "escalate", "failed", "needs_input", "complete":
 			attention[ev]++
 		}
 	}
