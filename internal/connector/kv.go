@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/kv"
@@ -217,6 +219,7 @@ func newKVImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
 // implements kv.KVBackend and adds an entry — that is the extension point.
 var storeBuilders = map[string]func(name string, ref config.StoreRef, deps Deps) (kv.KVBackend, error){
 	"boltdb": buildBoltStore,
+	"redis":  buildRedisStore,
 }
 
 func buildBoltStore(name string, ref config.StoreRef, deps Deps) (kv.KVBackend, error) {
@@ -227,6 +230,31 @@ func buildBoltStore(name string, ref config.StoreRef, deps Deps) (kv.KVBackend, 
 		return nil, fmt.Errorf("store %q: decode: %w", name, err)
 	}
 	return kv.OpenBoltStore(name, conn.Path)
+}
+
+func buildRedisStore(name string, ref config.StoreRef, deps Deps) (kv.KVBackend, error) {
+	var conn struct {
+		URL      string `yaml:"url"`
+		Password string `yaml:"password"`
+	}
+	if err := ref.Decode(&conn); err != nil {
+		return nil, fmt.Errorf("store %q: decode: %w", name, err)
+	}
+	if conn.URL == "" {
+		return nil, fmt.Errorf("store %q (redis): url: is required (redis://host:port/db)", name)
+	}
+	opts, err := redis.ParseURL(conn.URL)
+	if err != nil {
+		return nil, fmt.Errorf("store %q: bad redis url: %w", name, err)
+	}
+	if conn.Password != "" {
+		pw, err := deps.Secrets.Resolve(context.Background(), conn.Password)
+		if err != nil {
+			return nil, fmt.Errorf("store %q: resolve password: %w", name, err)
+		}
+		opts.Password = pw
+	}
+	return kv.NewRedisStore(redis.NewClient(opts)), nil
 }
 
 // storeTypes returns the registered store type names, sorted.
