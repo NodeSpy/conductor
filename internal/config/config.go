@@ -149,6 +149,26 @@ func (c Control) AgentCap() int {
 	return *c.MaxConcurrentAgents
 }
 
+// AgentCap returns the effective concurrent-agent cap: the global
+// `policy.concurrency.max_agents` when set, else the legacy
+// `control.max_concurrent_agents` (default 3). <=0 means unlimited.
+func (c *Config) AgentCap() int {
+	if c.Policy != nil && c.Policy.Concurrency != nil && c.Policy.Concurrency.MaxAgents != nil {
+		return *c.Policy.Concurrency.MaxAgents
+	}
+	return c.Control.AgentCap()
+}
+
+// AgentsPerHour returns the effective rolling-hour dispatch cap: the global
+// `policy.concurrency.max_agents_per_hour` when set, else the legacy
+// `control.max_agents_per_hour`. 0 = unlimited.
+func (c *Config) AgentsPerHour() int {
+	if c.Policy != nil && c.Policy.Concurrency != nil && c.Policy.Concurrency.MaxAgentsPerHour != nil {
+		return *c.Policy.Concurrency.MaxAgentsPerHour
+	}
+	return c.Control.AgentsPerHour()
+}
+
 // Handoff is the legacy singular hand-off block. Deprecated — see Config.Handoff.
 type Handoff struct {
 	Web HandoffWeb `yaml:"web"` // web-link channel served on the inbound HTTP listener

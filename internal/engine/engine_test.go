@@ -861,6 +861,40 @@ func TestConcurrencyCapBlocksSecondAgent(t *testing.T) {
 	}
 }
 
+// TestPolicyConcurrencyCapsAgents proves `policy.concurrency.max_agents` sizes
+// the agent semaphore (previously only the legacy control field did).
+func TestPolicyConcurrencyCapsAgents(t *testing.T) {
+	cfg := baseCfg()
+	one := 1
+	cfg.Policy = &config.Policy{Concurrency: &config.Concurrency{MaxAgents: &one}}
+	g := &gateFake{waitCh: make(chan struct{})}
+	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: g, Notifier: &fakeNotifier{},
+		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+	act := config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"}
+
+	// First agent takes the only slot; its WaitForAgent blocks, holding it.
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 1, "h1", "s1", act))
+	if g.count() != 1 {
+		t.Fatalf("first agent should dispatch, got %d", g.count())
+	}
+
+	// The second must block on the policy cap, not dispatch.
+	done := make(chan struct{})
+	go func() {
+		e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 2, "h2", "s2", act))
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if g.count() != 1 {
+		t.Fatalf("second agent should be blocked by the policy cap, got %d dispatches", g.count())
+	}
+	close(g.waitCh)
+	<-done
+	if g.count() != 2 {
+		t.Fatalf("second agent should dispatch once a slot frees, got %d", g.count())
+	}
+}
+
 func TestFlakyRerunBeforeDispatch(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	var reran []int64

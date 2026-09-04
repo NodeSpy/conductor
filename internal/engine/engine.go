@@ -196,7 +196,7 @@ func New(o Options) *Engine {
 		pausePath: o.PausePath,
 		ch:        make(chan core.Trigger, 256),
 	}
-	if cap := o.Config.Control.AgentCap(); cap > 0 {
+	if cap := o.Config.AgentCap(); cap > 0 {
 		e.sem = make(chan struct{}, cap)
 	}
 	e.rerun = o.Rerun
@@ -605,7 +605,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		// (record an attempt so live-gated/backoff kinds re-run once the window frees;
 		// commands stay ungated). Protects the box from a webhook flood or a sweep
 		// misfire spinning up unbounded agents.
-		if max := e.cfg.Control.AgentsPerHour(); max > 0 && e.overAgentBudget(max) {
+		if max := e.cfg.AgentsPerHour(); max > 0 && e.overAgentBudget(max) {
 			e.log("%s agent budget reached (%d/hr) — shedding, will retry later", tag(t), max)
 			_ = e.store.RecordAttempt(key, dkind, head) // so it isn't silently forgotten
 			return

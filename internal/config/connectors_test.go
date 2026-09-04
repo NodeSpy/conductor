@@ -756,3 +756,42 @@ func TestAgentLegacyControllerReferenceStillPasses(t *testing.T) {
 		t.Fatalf("an agent referencing a legacy controllers: entry should still pass, got %v", err)
 	}
 }
+
+// TestConfigAgentCapPrecedence proves the effective concurrency accessors
+// prefer the global policy.concurrency values and fall back to the legacy
+// control fields.
+func TestConfigAgentCapPrecedence(t *testing.T) {
+	// Nothing set: the legacy default (3) applies.
+	c := &Config{}
+	if got := c.AgentCap(); got != 3 {
+		t.Fatalf("default AgentCap = %d, want 3", got)
+	}
+	if got := c.AgentsPerHour(); got != 0 {
+		t.Fatalf("default AgentsPerHour = %d, want 0 (unlimited)", got)
+	}
+
+	// Only legacy set: it applies.
+	c.Control.MaxConcurrentAgents = intPtr(5)
+	c.Control.MaxAgentsPerHour = 7
+	if got := c.AgentCap(); got != 5 {
+		t.Fatalf("legacy AgentCap = %d, want 5", got)
+	}
+	if got := c.AgentsPerHour(); got != 7 {
+		t.Fatalf("legacy AgentsPerHour = %d, want 7", got)
+	}
+
+	// policy.concurrency set: it wins over legacy.
+	c.Policy = &Policy{Concurrency: &Concurrency{MaxAgents: intPtr(2), MaxAgentsPerHour: intPtr(9)}}
+	if got := c.AgentCap(); got != 2 {
+		t.Fatalf("policy AgentCap = %d, want 2", got)
+	}
+	if got := c.AgentsPerHour(); got != 9 {
+		t.Fatalf("policy AgentsPerHour = %d, want 9", got)
+	}
+
+	// A policy block without concurrency still falls back to legacy.
+	c.Policy = &Policy{}
+	if got := c.AgentCap(); got != 5 {
+		t.Fatalf("fallback AgentCap = %d, want 5", got)
+	}
+}
