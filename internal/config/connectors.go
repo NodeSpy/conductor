@@ -692,6 +692,12 @@ func (c *Config) validateConnectors() error {
 	if len(c.SecretRefs) > 0 {
 		return fmt.Errorf("config: the secrets: block was replaced by vaults: entries and {{ vault \"<name>\" \"<key>\" }} references — auto-migration rewrites it at boot, or run `conductor config migrate`")
 	}
+	// The notify: block was replaced by conductor.* lifecycle triggers on
+	// the connectors model. Legacy configs (integrations:) keep the legacy
+	// delivery until they migrate.
+	if c.Notify.Configured() && len(c.Integrations) == 0 && c.HasConnectors() {
+		return fmt.Errorf("config: the notify: block was replaced by triggers on the conductor.* lifecycle events (on: conductor.escalate, …) — auto-migration rewrites it at boot, or run `conductor config migrate`")
+	}
 	for name, ref := range c.ConnectorsMap {
 		if name == "" {
 			return fmt.Errorf("config: connectors: empty connector name")
@@ -747,7 +753,9 @@ func (c *Config) validateConnectors() error {
 			if !ok || conn == "" || event == "" {
 				return fmt.Errorf("config: %s: `on: %s` must be <connector>.<event> (or the built-in `manual`)", where, t.On)
 			}
-			if _, okc := c.ConnectorsMap[conn]; !okc {
+			if _, okc := c.ConnectorsMap[conn]; !okc && conn != "conductor" {
+				// "conductor" is the built-in lifecycle source (always
+				// available, like the manual source).
 				return fmt.Errorf("config: %s: unknown connector %q in `on: %s` (defined: %s)", where, conn, t.On, c.connectorNames())
 			}
 		}

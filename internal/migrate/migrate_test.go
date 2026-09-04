@@ -515,17 +515,23 @@ func TestKitchenSinkTransform(t *testing.T) {
 	if out.Store.StateFile != "/tmp/state.json" || !out.Update.Auto {
 		t.Errorf("carried blocks lost: store=%v update=%v", out.Store, out.Update)
 	}
-	if out.Notify.SlackWebhookURL != "" {
-		t.Errorf("legacy sink field should be mapped away, got %q", out.Notify.SlackWebhookURL)
+	if out.Notify.Configured() {
+		t.Errorf("notify block should be fully retired, got %+v", out.Notify)
 	}
-	if len(out.Notify.Via) != 1 || out.Notify.Via[0].Uses != "notify-slack.post" {
-		t.Fatalf("notify via routes: %+v", out.Notify.Via)
+	var notifyTriggers []string
+	for _, tr := range out.Triggers {
+		if strings.HasPrefix(tr.On, "conductor.") {
+			notifyTriggers = append(notifyTriggers, tr.On)
+			if len(tr.Steps) != 1 || tr.Steps[0].Uses != "notify-slack.post" {
+				t.Errorf("notify trigger steps: %+v", tr.Steps)
+			}
+		}
+	}
+	if fmt.Sprint(notifyTriggers) != "[conductor.escalate conductor.failed]" {
+		t.Fatalf("notify triggers: %v", notifyTriggers)
 	}
 	if out.ConnectorsMap["notify-slack"].Type != "slack" {
 		t.Errorf("notify-slack connector missing: %v", out.ConnectorsMap["notify-slack"])
-	}
-	if fmt.Sprint(out.Notify.On) != "[escalate]" {
-		t.Errorf("notify.on lost: %v", out.Notify.On)
 	}
 	if _, ok := out.Agents["fixer"]; !ok {
 		t.Errorf("agents block lost")

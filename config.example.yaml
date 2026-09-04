@@ -459,25 +459,46 @@ policy:
   #  `conductor pause` / `resume`; disable one connector or trigger in place
   #  with its own `enabled: false`)
 
-# notify: — daemon lifecycle notifications (dispatch/complete/escalate/
-# needs_input), delivered through connector VERBS via routes. Each route's
-# options render with {{.message}} (the composed line) + event/repo/number/
-# kind/title/ref; a route's own on: restricts it to a subset of events.
-# Workflow-level feedback is better expressed as hooks (above). The legacy
-# sink fields (slack_webhook_url, ntfy:, …) still load and auto-migrate.
-notify:
-  on: [escalate, needs_input]
-  via:
-    - { uses: slack-ops.post, options: { text: "conductor {{.message}}" } }
-    # - { on: [escalate], uses: alerts.publish, options: { title: conductor, message: "{{.message}}" } }
-  # digest: 24h
+# Conductor's own lifecycle is a built-in source: alerting is an ordinary
+# trigger on conductor.* — dispatch, escalate (gave up after retries),
+# needs_input, complete, failed (a run errored), updated, update_available.
+# Context: {{.message}} (the composed line) + event/ref/repo/number/
+# origin_kind/title (the update events add {{.version}}). Routing, per-event
+# fan-out (on: lists), quiet hours (policy:), and digests (group: window)
+# all come from the normal trigger grammar. The retired notify: block
+# auto-migrates to these triggers. A loop guard keeps a lifecycle trigger's
+# own run from re-feeding conductor.* (no notify storms);
+# escalate/needs_input/complete stay audit-logged for status/report even
+# with no trigger configured.
+#
+# triggers:
+#   - name: alert
+#     on: [ conductor.escalate, conductor.failed, conductor.needs_input ]
+#     steps:
+#       - { uses: slack-ops.post, options: { text: "conductor {{.message}}" } }
+#   - name: daily-digest
+#     on: conductor.complete
+#     group: { key: '"digest"', window: 24h }
+#     steps:
+#       - { uses: slack-ops.post, options: { text: "[digest] {{ len .group.events }} completed run(s) today" } }
+#
+# conductor also exposes VERBS on itself — uses: conductor.update | pause |
+# resume | restart | reload | run {name, inputs}; gh.sweep runs the github
+# catch-up now. Gate the self-update as a workflow:
+#
+# update: { auto: true, apply: workflow }   # detection EMITS conductor.update_available
+# triggers:
+#   - name: gated-update
+#     on: conductor.update_available
+#     steps:
+#       - { uses: build-box.run, options: { command: "drain.sh" } }
+#       - uses: conductor.update              # download + apply + restart
+#         hooks:
+#           - { at: start, uses: slack-ops.post, options: { text: "updating conductor → {{.version}}" } }
+#           - { at: fail,  uses: slack-ops.post, options: { text: "conductor update FAILED: {{.error}}" } }
+#       - { uses: build-box.run, options: { command: "smoke-test.sh" } }
 
-# Sink connector examples for via routes:
-# connectors:
-#   alerts: { type: ntfy, topic: your-topic }
-#   pager:  { type: pushover, token: ${PUSHOVER_TOKEN}, user: ${PUSHOVER_USER} }
-
-update: { auto: true } # self-update; auto-migration runs on the new binary's first boot
+update: { auto: true } # self-update (auto-applies by default); auto-migration runs on the new binary's first boot
 # store:
 #   state_file: ~/.local/state/conductor/state.json
 #   audit_log:  ~/.local/state/conductor/audit.jsonl
