@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/notify"
 )
 
 const updateRepo = "NodeSpy/conductor"
@@ -126,7 +128,7 @@ func doUpdate(force bool, pinTag string) (updated bool, tag string, err error) {
 // running conductor, with no webhook or per-operator setup. GitHub exposes no
 // release push a non-admin consumer can subscribe to, so a near-free conditional
 // poll is the portable stand-in.
-func autoUpdateLoop(ctx context.Context, u config.Update, stop func()) {
+func autoUpdateLoop(ctx context.Context, u config.Update, notifier *notify.Notifier, stop func()) {
 	iv := u.Interval.D()
 	if iv <= 0 {
 		iv = 10 * time.Minute
@@ -135,6 +137,7 @@ func autoUpdateLoop(ctx context.Context, u config.Update, stop func()) {
 	checker := &releaseChecker{}
 	t := time.NewTicker(iv)
 	defer t.Stop()
+	announced := ""
 	for {
 		select {
 		case <-ctx.Done():
@@ -148,28 +151,62 @@ func autoUpdateLoop(ctx context.Context, u config.Update, stop func()) {
 			if !newerRelease(tag, changed, version) {
 				continue // 304 (nothing new), or the latest is what we already run
 			}
-			updated, installed, err := doUpdate(false, tag)
-			if err != nil {
-				logf("auto-update: install %s failed: %v", tag, err)
-				continue
+			var applied bool
+			announced, applied = handleNewerRelease(ctx, u, tag, announced, notifier, stop)
+			if applied {
+				return // shutting down for a manager restart, or re-exec'd
 			}
-			if !updated {
-				continue
-			}
-			logf("auto-update: installed %s (was %s)", installed, version)
-			// Refresh the unit so the restart below comes up with the new template
-			// (daemon-reload on systemd). Never starts a service that wasn't there.
-			if _, err := syncServiceUnit(false); err != nil {
-				logf("auto-update: service unit sync failed: %v", err)
-			}
-			if !u.ShouldApply() {
-				logf("auto-update: %s staged — restart to apply (apply: false)", installed)
-				continue
-			}
-			applyUpdate(stop)
-			return // applied — shutting down for a manager restart, or re-exec'd
 		}
 	}
+}
+
+// installRelease and applyRelease are the install/restart seams —
+// package-level so tests exercise handleNewerRelease without touching the
+// real binary or re-exec'ing the test process.
+var (
+	installRelease = doUpdate
+	applyRelease   = applyUpdate
+)
+
+// handleNewerRelease acts on one detected newer release. DEFAULT
+// (apply: true) is unchanged: install, sync the unit, restart into it —
+// an unattended box self-updates. apply: false installs and stages.
+// apply: workflow installs NOTHING — it emits conductor.update_available
+// (once per tag) so a trigger drives the update as a workflow.
+func handleNewerRelease(ctx context.Context, u config.Update, tag, announced string, notifier *notify.Notifier, stop func()) (newAnnounced string, applied bool) {
+	if u.ApplyWorkflow() {
+		if tag == announced {
+			return announced, false // one announcement per release
+		}
+		logf("auto-update: %s available (apply: workflow) — emitting conductor.update_available", tag)
+		if notifier != nil {
+			notifier.Publish(ctx, notify.EventUpdateAvailable,
+				core.Trigger{Source: "updater", Kind: "update_available"},
+				fmt.Sprintf("release %s available (running %s)", tag, version),
+				map[string]any{"version": tag})
+		}
+		return tag, false
+	}
+	updated, installed, err := installRelease(false, tag)
+	if err != nil {
+		logf("auto-update: install %s failed: %v", tag, err)
+		return announced, false
+	}
+	if !updated {
+		return announced, false
+	}
+	logf("auto-update: installed %s (was %s)", installed, version)
+	// Refresh the unit so the restart below comes up with the new template
+	// (daemon-reload on systemd). Never starts a service that wasn't there.
+	if _, err := syncServiceUnit(false); err != nil {
+		logf("auto-update: service unit sync failed: %v", err)
+	}
+	if !u.ShouldApply() {
+		logf("auto-update: %s staged — restart to apply (apply: false)", installed)
+		return announced, false
+	}
+	applyRelease(stop)
+	return announced, true
 }
 
 // newerRelease reports whether a check result warrants an install: something
@@ -274,6 +311,48 @@ func applyUpdate(stop func()) {
 		os.Exit(0)
 	}
 	reExecInPlace()
+}
+
+// emitUpdatedOnBoot publishes conductor.updated on the first boot of a new
+// release: the version at last run persists in a sibling of the state file,
+// and a change means the self-update (or a manual `conductor update`)
+// carried the daemon here — the reliable place to announce it, since the
+// install path re-execs immediately. The short sleep lets the conductor.*
+// source register before the event fires.
+func emitUpdatedOnBoot(cfg *config.Config, notifier *notify.Notifier) {
+	p := lastVersionPath(cfg)
+	prev := ""
+	if b, err := os.ReadFile(p); err == nil {
+		prev = strings.TrimSpace(string(b))
+	}
+	if err := writeLastVersion(cfg, version); err != nil {
+		logf("update: could not record running version: %v", err)
+	}
+	if prev == "" || prev == version || notifier == nil {
+		return
+	}
+	time.Sleep(bootAnnounceDelay)
+	notifier.Publish(context.Background(), notify.EventUpdated,
+		core.Trigger{Source: "updater", Kind: "updated"},
+		fmt.Sprintf("conductor self-updated %s → %s", prev, version),
+		map[string]any{"version": version, "previous": prev})
+}
+
+// bootAnnounceDelay gives the conductor.* source time to register before the
+// boot-time updated event fires (tests zero it).
+var bootAnnounceDelay = 3 * time.Second
+
+func lastVersionPath(cfg *config.Config) string {
+	return filepath.Join(filepath.Dir(cfg.Store.StateFile), "last-version")
+}
+
+// writeLastVersion records the running release beside the state file.
+func writeLastVersion(cfg *config.Config, v string) error {
+	p := lastVersionPath(cfg)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(v+"\n"), 0o644)
 }
 
 // reExecInPlace replaces the running process image with the (already-replaced)

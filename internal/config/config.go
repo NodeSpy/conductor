@@ -90,11 +90,45 @@ type Config struct {
 type Update struct {
 	Auto     bool     `yaml:"auto"`     // check for and install new releases periodically
 	Interval Duration `yaml:"interval"` // how often to check (default 10m; checks are cheap conditional requests)
-	Apply    *bool    `yaml:"apply"`    // re-exec into the new binary after updating (default true)
+	// Apply is what happens when a newer release is detected: true (the
+	// default — install and re-exec into it, unattended), false (install
+	// and stage; a restart applies), or "workflow" (install NOTHING —
+	// emit conductor.update_available so a trigger drives the update with
+	// pre/post steps around `uses: conductor.update`).
+	Apply ApplyMode `yaml:"apply"`
 }
 
 // ShouldApply reports whether to re-exec after a successful update (default true).
-func (u Update) ShouldApply() bool { return u.Apply == nil || *u.Apply }
+func (u Update) ShouldApply() bool { return u.Apply.mode == "" || u.Apply.mode == "true" }
+
+// ApplyWorkflow reports the emit-don't-apply mode (`apply: workflow`).
+func (u Update) ApplyWorkflow() bool { return u.Apply.mode == "workflow" }
+
+// ApplyMode parses update.apply: a YAML bool or the string "workflow".
+type ApplyMode struct {
+	mode string // "" (default true) | "true" | "false" | "workflow"
+}
+
+// ApplyModeFor builds an ApplyMode (tests, migration).
+func ApplyModeFor(mode string) ApplyMode { return ApplyMode{mode: mode} }
+
+func (m *ApplyMode) UnmarshalYAML(n *yaml.Node) error {
+	var b bool
+	if err := n.Decode(&b); err == nil {
+		if b {
+			m.mode = "true"
+		} else {
+			m.mode = "false"
+		}
+		return nil
+	}
+	var s string
+	if err := n.Decode(&s); err == nil && s == "workflow" {
+		m.mode = "workflow"
+		return nil
+	}
+	return fmt.Errorf("config: update.apply must be true, false, or workflow")
+}
 
 // IntegrationRef is one entry in the `integrations:` list. It captures the
 // common header and retains the raw node so the concrete integration can decode

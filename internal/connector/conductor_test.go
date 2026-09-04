@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -210,5 +211,67 @@ func TestConductorVerbsWithoutDaemon(t *testing.T) {
 	}
 	if _, err := runSweepHook(context.Background()); err == nil || !strings.Contains(err.Error(), "not available") {
 		t.Errorf("sweep hook: %v", err)
+	}
+}
+
+// TestConductorVerbsWithOps: each daemon-global verb dispatches to its
+// injected op; run passes name/inputs; update surfaces outputs and errors.
+func TestConductorVerbsWithOps(t *testing.T) {
+	var calls []string
+	SetConductorOps(&ConductorOps{
+		Update: func(context.Context) (bool, string, error) {
+			calls = append(calls, "update")
+			return true, "v2.0.0", nil
+		},
+		Pause:   func() error { calls = append(calls, "pause"); return nil },
+		Resume:  func() error { calls = append(calls, "resume"); return nil },
+		Restart: func() error { calls = append(calls, "restart"); return nil },
+		Reload:  func() error { calls = append(calls, "reload"); return nil },
+		Run: func(_ context.Context, name string, inputs map[string]any) (string, error) {
+			calls = append(calls, "run "+name+" scope="+fmt.Sprint(inputs["scope"]))
+			return "dispatched " + name, nil
+		},
+	})
+	t.Cleanup(func() { SetConductorOps(nil) })
+	impl := conductorImpl{}
+	ctx := context.Background()
+
+	out, err := impl.Invoke(ctx, "update", nil)
+	if err != nil || out["updated"] != true || out["version"] != "v2.0.0" {
+		t.Fatalf("update: %v %v", out, err)
+	}
+	for _, v := range []string{"pause", "resume", "restart", "reload"} {
+		if out, err := impl.Invoke(ctx, v, nil); err != nil || len(out) != 0 {
+			t.Fatalf("%s: %v %v", v, out, err)
+		}
+	}
+	out, err = impl.Invoke(ctx, "run", map[string]any{"name": "audit", "inputs": map[string]any{"scope": "all"}})
+	if err != nil || out["message"] != "dispatched audit" {
+		t.Fatalf("run: %v %v", out, err)
+	}
+	if _, err := impl.Invoke(ctx, "run", map[string]any{}); err == nil || !strings.Contains(err.Error(), "name: is required") {
+		t.Fatalf("run without name: %v", err)
+	}
+	if _, err := impl.Invoke(ctx, "nosuch", nil); err == nil || !strings.Contains(err.Error(), `no verb "nosuch"`) {
+		t.Fatalf("unknown verb: %v", err)
+	}
+	want := "update pause resume restart reload run audit scope=all"
+	if got := strings.Join(calls, " "); got != want {
+		t.Fatalf("ops calls: %q, want %q", got, want)
+	}
+}
+
+// TestGHSweepVerb: gh.sweep runs the injected daemon-global catch-up nudge.
+func TestGHSweepVerb(t *testing.T) {
+	SetSweepHook(func(context.Context) (int, error) { return 3, nil })
+	t.Cleanup(func() { SetSweepHook(nil) })
+	reg := buildAPIRegistry(t, `
+connectors:
+  gh: { type: github, token: x, repos: ["o/r"] }
+`, secrets.New())
+	in, _ := reg.Get("gh")
+	out, err := in.Invoke(context.Background(), "sweep", nil)
+	if err != nil || out["nudged"] != 3 {
+		t.Fatalf("gh.sweep: %v %v", out, err)
 	}
 }

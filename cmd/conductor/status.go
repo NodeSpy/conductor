@@ -81,20 +81,29 @@ func cmdPause(args []string, pause bool) error {
 	if err != nil {
 		return err
 	}
+	if err := setPaused(cfg, pause); err != nil {
+		return err
+	}
+	if pause {
+		fmt.Println("paused — the daemon will skip dispatch until `resume` (no restart needed)")
+	} else {
+		fmt.Println("resumed")
+	}
+	return nil
+}
+
+// setPaused creates (pause) or removes (resume) the pause control file —
+// shared by the CLI and the conductor.pause/resume verbs.
+func setPaused(cfg *config.Config, pause bool) error {
 	p := pausePath(cfg)
 	if pause {
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(p, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644); err != nil {
-			return err
-		}
-		fmt.Println("paused — the daemon will skip dispatch until `resume` (no restart needed)")
-	} else {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		fmt.Println("resumed")
+		return os.WriteFile(p, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
+	}
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }
