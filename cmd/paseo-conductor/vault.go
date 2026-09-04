@@ -24,6 +24,14 @@ func cmdVault(args []string) error {
 	path := secrets.DefaultVaultPath()
 	switch rest[0] {
 	case "init":
+		// --sensitive selects the hardened scrypt profile (N=2^20) — for a
+		// vault that may end up somewhere public. Default: interactive (2^15).
+		profile := ""
+		for _, a := range args {
+			if a == "--sensitive" {
+				profile = "sensitive"
+			}
+		}
 		material, err := secrets.GenerateKey()
 		if err != nil {
 			return err
@@ -32,14 +40,14 @@ func cmdVault(args []string) error {
 		if err != nil {
 			return err
 		}
-		v, err := secrets.OpenVault(path, func() ([]byte, error) { return []byte(material), nil })
+		v, err := secrets.InitVault(path, func() ([]byte, error) { return []byte(material), nil }, profile)
 		if err != nil {
 			return err
 		}
 		if err := v.Save(); err != nil {
 			return err
 		}
-		fmt.Printf("vault initialized at %s\nkey file seeded at %s (chmod 600)\n", path, kf)
+		fmt.Printf("vault initialized at %s (scrypt N=%d)\nkey file seeded at %s (chmod 600)\n", path, v.KDF().N, kf)
 		fmt.Printf("for machine-bound storage on Linux, move the key into a systemd credential instead:\n")
 		fmt.Printf("  systemd-creds encrypt --name=conductor-vault-key %s /etc/credstore.encrypted/conductor-vault-key\n", kf)
 		return nil

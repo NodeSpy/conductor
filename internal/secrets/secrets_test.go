@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -181,17 +182,13 @@ func TestVaultRoundTrip(t *testing.T) {
 		t.Fatalf("vault resolve: %q, %v", got, e)
 	}
 
-	// Wrong key fails closed.
+	// Wrong key fails closed — at open (the whole map unseals on load).
 	bad, e := GenerateKey()
 	if e != nil {
 		t.Fatal(e)
 	}
-	v2, e := OpenVault(path, func() ([]byte, error) { return []byte(bad), nil })
-	if e != nil {
-		t.Fatal(e)
-	}
-	if _, e := v2.Get("gh-token"); e == nil {
-		t.Fatal("wrong key must not decrypt")
+	if _, e := OpenVault(path, func() ([]byte, error) { return []byte(bad), nil }); e == nil {
+		t.Fatal("wrong key must not open the vault")
 	}
 
 	// Unknown entry names the known ones.
@@ -331,5 +328,145 @@ func TestKeyChainOSKeyring(t *testing.T) {
 	}
 	if got, err := KeyChain(vaultPath); err != nil || string(got) != "file-material" {
 		t.Fatalf("key-file fallback: %q, %v", got, err)
+	}
+}
+
+// TestVaultHidesNamesAndCount: the v2 file leaks neither entry names (they
+// are inside the sealed blob, not JSON keys) nor the entry count within a
+// padding bucket (same sealed length for different small counts).
+func TestVaultHidesNamesAndCount(t *testing.T) {
+	material, _ := GenerateKey()
+	keyFn := func() ([]byte, error) { return []byte(material), nil }
+
+	sealedLen := func(t *testing.T, entries map[string]string) (int, []byte) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "vault.json")
+		v, err := InitVault(path, keyFn, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, val := range entries {
+			v.Set(k, val)
+		}
+		if err := v.Save(); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var f struct {
+			Sealed string `json:"sealed"`
+		}
+		if err := json.Unmarshal(raw, &f); err != nil {
+			t.Fatal(err)
+		}
+		return len(f.Sealed), raw
+	}
+
+	names := map[string]string{
+		"gh-token": "secret-one", "slack-bot-token": "secret-two", "pagerduty-key": "secret-three",
+	}
+	n3, raw := sealedLen(t, names)
+	for name := range names {
+		if strings.Contains(string(raw), name) {
+			t.Fatalf("entry name %q is plaintext in the vault file", name)
+		}
+	}
+	for _, val := range names {
+		if strings.Contains(string(raw), val) {
+			t.Fatal("entry value is plaintext in the vault file")
+		}
+	}
+
+	// One small entry vs three small entries: same bucket → same length.
+	n1, _ := sealedLen(t, map[string]string{"gh-token": "secret-one"})
+	if n1 != n3 {
+		t.Fatalf("sealed length leaks entry count: 1 entry = %d bytes, 3 entries = %d bytes", n1, n3)
+	}
+}
+
+// TestVaultKDFProfiles: init records the chosen scrypt cost in the header and
+// a passphrase unlock reads it back.
+func TestVaultKDFProfiles(t *testing.T) {
+	pass := func() ([]byte, error) { return []byte("correct horse battery staple"), nil }
+
+	path := filepath.Join(t.TempDir(), "vault.json")
+	v, err := InitVault(path, pass, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.KDF().N != 1<<15 {
+		t.Fatalf("default profile N = %d, want %d", v.KDF().N, 1<<15)
+	}
+	v.Set("x", "y")
+	if err := v.Save(); err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		KDF VaultKDF `json:"kdf"`
+	}
+	raw, _ := os.ReadFile(path)
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.KDF.N != 1<<15 || f.KDF.R != 8 || f.KDF.P != 1 || f.KDF.Salt == "" {
+		t.Fatalf("header KDF: %+v", f.KDF)
+	}
+	// Unlock re-derives with the recorded parameters.
+	v2, err := OpenVault(path, pass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := v2.Get("x"); err != nil || got != "y" {
+		t.Fatalf("passphrase reopen: %q, %v", got, err)
+	}
+
+	// The sensitive profile records the hardened cost. (Sealing only — no
+	// passphrase stretch at 2^20 in a unit test; a direct key skips the KDF.)
+	material, _ := GenerateKey()
+	keyFn := func() ([]byte, error) { return []byte(material), nil }
+	spath := filepath.Join(t.TempDir(), "vault.json")
+	sv, err := InitVault(spath, keyFn, "sensitive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sv.KDF().N != 1<<20 {
+		t.Fatalf("sensitive profile N = %d, want %d", sv.KDF().N, 1<<20)
+	}
+	if err := sv.Save(); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(spath)
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.KDF.N != 1<<20 {
+		t.Fatalf("sensitive header N = %d, want %d", f.KDF.N, 1<<20)
+	}
+	if _, err := OpenVault(spath, keyFn); err != nil {
+		t.Fatalf("sensitive vault reopen: %v", err)
+	}
+
+	// Unknown profile is rejected.
+	if _, err := KDFProfile("nope"); err == nil {
+		t.Fatal("unknown profile should error")
+	}
+	// Init refuses to overwrite an existing vault.
+	if _, err := InitVault(spath, keyFn, ""); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("re-init should refuse: %v", err)
+	}
+}
+
+// TestVaultUnknownVersion: an unrecognized on-disk version fails cleanly.
+func TestVaultUnknownVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vault.json")
+	if err := os.WriteFile(path, []byte(`{"version": 1, "salt": "eA==", "entries": {"gh": "x"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	material, _ := GenerateKey()
+	_, err := OpenVault(path, func() ([]byte, error) { return []byte(material), nil })
+	if err == nil || !strings.Contains(err.Error(), "unsupported version 1") {
+		t.Fatalf("want an unsupported-version error, got %v", err)
 	}
 }
