@@ -2,6 +2,7 @@
 
 ```
 conductor run [--config PATH]              start the daemon
+conductor run <name> [--input k=v ...] [--json '{…}']  fire a manual trigger via the running daemon
 conductor validate [--config PATH]         load & validate config (both schemas), then exit
 conductor replay <event.json>              run a saved webhook through the pipeline, verbs stubbed
 conductor sweep [--now]                    one catch-up sweep (dry-run print / signal the daemon)
@@ -27,6 +28,12 @@ conductor version
   agent-profile checks, and the connectors-model semantic pass
   (position-scoped references, verb options, workflow inputs/outputs, cycles).
   Service start gates on it.
+- **run `<name>`** — fires the `on: manual` trigger with that name through the
+  running daemon's control socket: same validation, policy, quiet-hours, and
+  audit as any firing. `--input k=v` (repeatable, string values) and `--json`
+  (one structured object; `--input` overlays it) land in the trigger context
+  as `{{.inputs.*}}`. The connectors-model successor to `force`. Errors
+  clearly when the daemon is down or the name is unknown.
 - **replay** — reads a `{"event": …, "body": {…}}` fixture (see `testdata/`),
   translates it, and prints what would dispatch; connectors-model triggers run
   with every outbound verb stubbed and agents mocked, so a workflow can be

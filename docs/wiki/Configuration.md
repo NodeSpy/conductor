@@ -34,7 +34,7 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 
 ```yaml
 triggers:
-  - on: <connector>.<event>       # what fires it
+  - on: <connector>.<event>       # what fires it — one source, a list, or `manual`
     filters: { … }                # whether it fires (event-schema keys, AND-ed)
     group: { key: …, window: 15s }# optional burst batching
     steps: [ … ]                  # agent | command | run: code | uses: verb | use: workflow
@@ -47,6 +47,63 @@ outputs (`{{.<id>.<field>}}`), named secrets (`{{.secrets.x}}`), and the
 batch (`{{.group.*}}`). `if:` conditions use comparison, `&&`/`||`/`!`,
 `contains()`, `exists()`, `default()`, and `coalesce()`; templates may also
 call `default`/`coalesce` (`{{.sev | default "low"}}`). See [[Workflows]].
+
+### Multiple sources, per-source filters, and manual runs
+
+`on:` takes one event **or a list** — a trigger fans in from several sources
+into the same `steps:`. Each list item is a bare `conn.event`, or a one-key
+map `conn.event: { … }` whose value is a per-source block scoped to events
+from that source. The block takes `filters:`, `policy:`, and `hooks:` —
+nothing else (`steps:` stay trigger-level, shared):
+
+```yaml
+connectors:
+  timer: { type: cron, schedules: { nightly: { cron: "0 2 * * *" } } }
+
+triggers:
+  - name: clone-invoice              # names the trigger (required for `conductor run`)
+    on:
+      - timer.nightly                # a cron schedule — no filter
+      - manual                       # `conductor run clone-invoice`
+      - gh.issue_matched:              # a per-source block
+          filters: { labels_any: [billing] }
+          policy:  { reply_to_bots: off }
+          hooks:
+            - { at: start, uses: gh.react, options: { emoji: eyes } }
+    steps:
+      - { workflow: clone-latest-invoice,
+          with: { contact_id: '{{ .issue.number | default .inputs.contact_id }}' } }
+```
+
+- **Per-source `filters:`** validate against **that** source's schema only —
+  no lowest-common-denominator restriction across sources. An optional
+  top-level `filters:` is a shared base applied to every listed source, so
+  each of its keys must be one every source accepts (the intersection); a
+  per-source key **overrides** the base for that source.
+- **Per-source `policy:`** is the innermost policy scope: per-source →
+  trigger → connector → global, most specific wins.
+- **Per-source `hooks:`** append after the trigger's shared `hooks:` (shared
+  first, per-source second) and fire only for events from that source.
+- The trigger fires **once per matching event** from any listed source;
+  `steps:` and `group:` are shared configuration (grouping batches per
+  source). Sources are heterogeneous — reference a field one source
+  publishes and another doesn't defensively: `{{ .issue.author | default "" }}`.
+  Step references validate against the union of the listed sources'
+  contexts.
+- **`manual` is a built-in source** (no connector; the name is reserved). A
+  trigger whose `on:` includes it runs on demand through the same
+  validation, policy, quiet-hours, and audit as any firing:
+
+  ```sh
+  conductor run clone-invoice --input contact_id=abc-123
+  conductor run clone-invoice --json '{"contact_id":"abc-123","adjustments":{"Quantity":2}}'
+  ```
+
+  CLI values land in the trigger context — under `{{.inputs.*}}` and as
+  top-level keys — and flow to workflow `inputs:` via `with:`. `--input k=v`
+  entries are strings and overlay `--json`. `manual` accepts no `filters:`.
+- **`name:`** is optional for ordinary triggers, **required and unique** for
+  any trigger reachable by `conductor run` (a load error otherwise).
 
 ## Bot-authored comments (github)
 

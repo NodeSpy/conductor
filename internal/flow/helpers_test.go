@@ -247,6 +247,10 @@ func loadConfig(t *testing.T, y string) *config.Config {
 	if err := yaml.Unmarshal([]byte(y), &cfg); err != nil {
 		t.Fatalf("yaml unmarshal config: %v\n---\n%s", err, y)
 	}
+	// Mirror config.Load: multi-source on: lists expand before validation.
+	if err := cfg.NormalizeTriggers(); err != nil {
+		t.Fatalf("normalize triggers: %v\n---\n%s", err, y)
+	}
 	return &cfg
 }
 

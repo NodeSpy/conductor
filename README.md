@@ -81,7 +81,10 @@ that changes the config schema migrates your file itself, with a backup.
   global `paseo_bin`.
 - **Triggers** — `on:` / `filters:` / `steps:` / `hooks:`. Filters gate the
   event (keys come from the event's schema, all AND-ed); steps are the
-  workflow; hooks are lifecycle actions.
+  workflow; hooks are lifecycle actions. `on:` takes one source, a **list**
+  of sources fanning into the same steps (each with its own per-source
+  `filters:`/`policy:`/`hooks:` block), or the built-in `manual` source — fired on demand with
+  `conductor run <name> --input k=v`.
 
 Every connector type is **self-describing**: events publish filter and
 context schemas, verbs publish option and output schemas. `conductor

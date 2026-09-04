@@ -154,6 +154,10 @@ func buildFlowEngine(t *testing.T, cfgYAML string) (*Engine, *flowGateStore, *fa
 	if err := yaml.Unmarshal([]byte(cfgYAML), &cfg); err != nil {
 		t.Fatal(err)
 	}
+	// Mirror config.Load: multi-source on: lists expand before anything else.
+	if err := cfg.NormalizeTriggers(); err != nil {
+		t.Fatal(err)
+	}
 	reg, err := connector.Build(&cfg, connector.Deps{Secrets: secrets.New(), Config: &cfg})
 	if err != nil {
 		t.Fatal(err)
@@ -302,5 +306,135 @@ func TestFlowGroupBatches(t *testing.T) {
 	gateConnMu.Unlock()
 	if last["text"] != "batch 2" {
 		t.Fatalf("batch context wrong: %v", last)
+	}
+}
+
+// TestFlowFanInFiresOncePerEvent: a multi-source trigger (expanded at load)
+// runs its shared steps once per matching event from any listed source, and
+// dedup still applies per event.
+func TestFlowFanInFiresOncePerEvent(t *testing.T) {
+	eng, _, _, cfg := buildFlowEngine(t, `
+connectors:
+  eg:  { type: enginegate }
+  eg2: { type: enginegate }
+triggers:
+  - name: fan
+    on: [eg.ping, eg2.ping]
+    steps:
+      - { id: p, uses: eg.post, options: { text: "{{.msg}}" } }
+`)
+	if len(cfg.Triggers) != 2 {
+		t.Fatalf("expected 2 expanded triggers, got %d", len(cfg.Triggers))
+	}
+	before := gateCalls()
+	from := func(inst, ref, dedup string, n int) core.Trigger {
+		tr := flowTrigger(dedup)
+		tr.Instance = inst
+		tr.Target = core.Target{Repo: "acme/" + inst, Number: n}
+		tr.Action = config.Action{Name: "fan", FlowRef: ref}
+		return tr
+	}
+	eng.process(context.Background(), from("eg", "0:eg.ping", "f1", 1))
+	eng.process(context.Background(), from("eg2", "1:eg2.ping", "f2", 2))
+	waitCond(t, "both fan-in runs", func() bool { return gateCalls()-before >= 2 })
+	if got := gateCalls() - before; got != 2 {
+		t.Fatalf("fan-in ran %d flows, want 2 (one per event)", got)
+	}
+	// Re-delivery of the same event from one source is still deduped.
+	eng.process(context.Background(), from("eg", "0:eg.ping", "f1", 1))
+	time.Sleep(50 * time.Millisecond)
+	if got := gateCalls() - before; got != 2 {
+		t.Fatalf("duplicate event re-ran the flow (%d runs)", got)
+	}
+}
+
+// TestFlowManualTriggerRuns: an `on: manual` trigger emitted by the control
+// socket's run command flows through the engine like any firing — the CLI
+// inputs are addressable in step templates.
+func TestFlowManualTriggerRuns(t *testing.T) {
+	eng, _, _, _ := buildFlowEngine(t, `
+connectors:
+  eg: { type: enginegate }
+triggers:
+  - name: adhoc
+    on: manual
+    steps:
+      - { id: p, uses: eg.post, options: { text: "run {{.inputs.contact}}" } }
+`)
+	before := gateCalls()
+	eng.process(context.Background(), core.Trigger{
+		Source: "manual", Instance: "manual", Kind: "manual", Variant: "adhoc",
+		Target:  core.Target{Repo: "manual/adhoc", Number: 1},
+		Title:   "manual run: adhoc",
+		Context: map[string]any{"inputs": map[string]any{"contact": "c-9"}, "contact": "c-9"},
+		Force:   true,
+		Action:  config.Action{Name: "adhoc", FlowRef: "0:manual"},
+	})
+	waitCond(t, "manual run", func() bool { return gateCalls() > before })
+	gateConnMu.Lock()
+	last := gateConnCalls[len(gateConnCalls)-1]
+	gateConnMu.Unlock()
+	if last["text"] != "run c-9" {
+		t.Fatalf("manual inputs did not reach the step: %v", last)
+	}
+}
+
+// TestFlowPerSourceHooksScoped: a per-source hooks: block fires only for
+// events from that source; the shared trigger hooks run for every source.
+func TestFlowPerSourceHooksScoped(t *testing.T) {
+	eng, _, _, cfg := buildFlowEngine(t, `
+connectors:
+  eg:  { type: enginegate }
+  eg2: { type: enginegate }
+triggers:
+  - name: fan
+    on:
+      - eg.ping
+      - eg2.ping:
+          hooks:
+            - { at: start, uses: eg.post, options: { text: "src-hook" } }
+    hooks:
+      - { at: start, uses: eg.post, options: { text: "shared-hook" } }
+    steps:
+      - { id: p, uses: eg.post, options: { text: "work" } }
+`)
+	if len(cfg.Triggers) != 2 {
+		t.Fatalf("expanded triggers: %d", len(cfg.Triggers))
+	}
+	texts := func(from int) []string {
+		gateConnMu.Lock()
+		defer gateConnMu.Unlock()
+		var out []string
+		for _, c := range gateConnCalls[from:] {
+			if s, ok := c["text"].(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	from := func(inst, ref, dedup string, n int) core.Trigger {
+		tr := flowTrigger(dedup)
+		tr.Instance = inst
+		tr.Target = core.Target{Repo: "acme/" + inst, Number: n}
+		tr.Action = config.Action{Name: "fan", FlowRef: ref}
+		return tr
+	}
+
+	// Event from the bare source: shared hook + work, no per-source hook.
+	mark := gateCalls()
+	eng.process(context.Background(), from("eg", "0:eg.ping", "h1", 1))
+	waitCond(t, "bare-source run", func() bool { return gateCalls()-mark >= 2 })
+	got := texts(mark)
+	if len(got) != 2 || got[0] != "shared-hook" || got[1] != "work" {
+		t.Fatalf("bare source calls: %v", got)
+	}
+
+	// Event from the per-source-hooked source: shared, then per-source, then work.
+	mark = gateCalls()
+	eng.process(context.Background(), from("eg2", "1:eg2.ping", "h2", 2))
+	waitCond(t, "per-source run", func() bool { return gateCalls()-mark >= 3 })
+	got = texts(mark)
+	if len(got) != 3 || got[0] != "shared-hook" || got[1] != "src-hook" || got[2] != "work" {
+		t.Fatalf("per-source calls (want shared, src, work): %v", got)
 	}
 }
