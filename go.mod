@@ -10,3 +10,5 @@ require (
 require github.com/robfig/cron/v3 v3.0.1
 
 require github.com/coder/websocket v1.8.15
+
+require golang.org/x/crypto v0.56.0 // indirect
