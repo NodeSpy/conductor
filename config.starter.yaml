@@ -30,7 +30,7 @@ connectors:
     repos: ["OWNER/*"] # <- your org/user, e.g. ["octocat/*"] — the default trigger scope
 
 triggers:
-  - import: conf.d/triggers/*.yaml
+  - imports: [conf.d/triggers/*.yaml]
   - on: gh.merge_conflict
     steps:
       - type: agent
