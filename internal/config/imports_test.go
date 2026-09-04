@@ -64,7 +64,7 @@ agents:
 workflows:
   imports: [workflows/*.yaml]
 triggers:
-  - import: triggers/*.yaml
+  - imports: [triggers/*.yaml]
   - on: timer.tick
     name: second
     steps:
@@ -173,7 +173,7 @@ connectors:
   imports: [conf.d/connectors/*.yaml]
   box: { type: command }
 triggers:
-  - import: conf.d/triggers/*.yaml
+  - imports: [conf.d/triggers/*.yaml]
 `,
 	})
 	cfg, err := Load(filepath.Join(dir, "config.yaml"))
@@ -367,5 +367,22 @@ func TestSectionImportNestedImportsRejected(t *testing.T) {
 	_, err := Load(filepath.Join(dir, "config.yaml"))
 	if err == nil || !strings.Contains(err.Error(), "nested imports are not supported") {
 		t.Fatalf("want a nested-imports rejection, got %v", err)
+	}
+}
+
+// TestTriggerSingularImportRejected: the trigger list splits with the plural
+// key like every section — a singular `- import:` item errors, naming the fix.
+func TestTriggerSingularImportRejected(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"config.yaml": `
+connectors:
+  box: { type: command }
+triggers:
+  - import: conf.d/triggers/*.yaml
+`,
+	})
+	_, err := Load(filepath.Join(dir, "config.yaml"))
+	if err == nil || !strings.Contains(err.Error(), "use `imports:` (plural") {
+		t.Fatalf("want the plural-imports error, got %v", err)
 	}
 }

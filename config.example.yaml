@@ -29,7 +29,7 @@ secrets:
 # `import:` (singular) loads one file. A map section takes an `imports:` key
 # (entries merge; a duplicate name across files is a load error); a named
 # entry loads its body from a file (`pd: { import: ./conf.d/pd.yaml }`); the
-# triggers: list takes `- import:` items. A step pulls one workflow straight
+# triggers: list takes the same plural key as items (`- imports: [globs]`). A step pulls one workflow straight
 # from a file: `workflow: name, import: ./workflows/review.yaml`, or a bare
 # `workflow: ./workflows/review.yaml` when the file defines a single workflow.
 # ---------------------------------------------------------------------------

@@ -55,8 +55,10 @@ Imports live under each section. A map section — `connectors:`, `runtimes:`,
 globs (relative to the importing file) whose entries join that section,
 alongside inline entries. The `triggers:` list takes imports as list items.
 
-One vocabulary: `imports:` (plural) is a section-level list of files/globs;
-`import:` (singular) loads one file.
+One vocabulary: **`imports:`** (plural) is a list of file globs, used by
+every section — including the `triggers:` list, as a `- imports: [...]` item.
+**`import:`** (singular) is exactly one file, only as a named-entry body or a
+workflow step ref.
 
 ```yaml
 connectors:
@@ -66,7 +68,7 @@ connectors:
 workflows:
   imports: [workflows/*.yaml]
 triggers:
-  - import: triggers/*.yaml                  # spliced at this position
+  - imports: [triggers/*.yaml]               # spliced at this position
   - on: gh.review_requested                  # inline triggers mix in
     steps: [ { workflow: review-flow } ]
 ```

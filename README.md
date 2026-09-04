@@ -485,7 +485,7 @@ The full annotated example is [`config.example.yaml`](config.example.yaml)
 Secrets go in the sibling `conductor.env`. The config splits across files:
 each map section takes an `imports:` key (`connectors: { imports:
 [conf.d/*.yaml] }` — entries merge, a duplicate name across files is a load
-error) and `triggers:` takes `- import:` items; a step's `workflow:` can also name
+error) and `triggers:` takes `- imports: [globs]` items; a step's `workflow:` can also name
 a workflow from a file directly (`from: ./workflows/review.yaml`, or a bare
 path when the file holds one workflow).
 The wiki carries the full reference — Configuration, Connectors, Workflows,

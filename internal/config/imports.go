@@ -1,8 +1,9 @@
 // Section-scoped config splitting (issue #36). The connectors-model sections
 // split across files without a monolith:
 //
-// One vocabulary: `imports:` (plural) is a section-level list of files/globs;
-// `import:` (singular) loads one file.
+// One vocabulary: `imports:` (plural) is a list of file globs, used by every
+// section including the triggers: list; `import:` (singular) loads exactly
+// one file, only as a named-entry body or a workflow step ref.
 //
 //   - Map sections (connectors:/runtimes:/hosts:/agents:/workflows:) take an
 //     `imports:` key listing files or globs whose entries join that section,
@@ -11,8 +12,9 @@
 //   - A named entry keeps its name in the main file with its body in its own
 //     file: `workflows: { assess: { import: ./workflows/assess.yaml } }` —
 //     valid in any map section.
-//   - The triggers: LIST takes imports as items — `- import: triggers/*.yaml`
-//     — spliced in place, mixable with inline triggers.
+//   - The triggers: LIST takes the same plural key as an item —
+//     `- imports: [triggers/*.yaml]` — spliced in place, mixable with inline
+//     triggers.
 //   - A `workflow:` step invokes a workflow by name from any imported file,
 //     or points at a file directly: `{workflow: name, import: ./file.yaml}`
 //     or a bare `{workflow: ./file.yaml}` when the file defines a single
@@ -60,6 +62,11 @@ func hasAnyImports(m map[string]any) bool {
 	if l, ok := m["triggers"].([]any); ok {
 		for _, it := range l {
 			if im, ok := it.(map[string]any); ok {
+				if _, has := im["imports"]; has {
+					return true
+				}
+				// The singular form is invalid on trigger items — route it to
+				// the merge path so the loader can say so clearly.
 				if _, has := im["import"]; has {
 					return true
 				}
@@ -157,15 +164,22 @@ func expandSectionImports(path string, m map[string]any) error {
 			out = append(out, it)
 			continue
 		}
-		impv, has := im["import"]
+		if _, has := im["import"]; has && len(im) == 1 {
+			return fmt.Errorf("%s: triggers[%d]: use `imports:` (plural, a glob list) to split the trigger list — `import:` (singular) is only a named-entry body or a workflow step ref", path, i)
+		}
+		impv, has := im["imports"]
 		if !has {
 			out = append(out, it)
 			continue
 		}
 		if len(im) != 1 {
-			return fmt.Errorf("%s: triggers[%d]: an import item carries only `import:`", path, i)
+			return fmt.Errorf("%s: triggers[%d]: an imports item carries only `imports:`", path, i)
 		}
-		for _, pat := range toStrings(impv) {
+		imports := toStrings(impv)
+		if len(imports) == 0 {
+			return fmt.Errorf("%s: triggers[%d]: imports must be a file/glob list", path, i)
+		}
+		for _, pat := range imports {
 			files, err := globImport(dir, path, pat)
 			if err != nil {
 				return err
