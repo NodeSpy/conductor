@@ -387,7 +387,7 @@ func TestExecRemote_InterpreterNotFound(t *testing.T) {
 func TestExecRemote_JSAndGoEmbedRejected(t *testing.T) {
 	e := &Executor{}
 	tgt := &hosts.Target{Name: "box", Cfg: config.HostConfig{Host: "unused"}}
-	for _, run := range []string{"js", "go-embed"} {
+	for _, run := range []string{"js", "go-embed", "risor", "lua"} {
 		_, err := e.Exec(context.Background(), Spec{Run: run, Code: "x", Host: tgt}, nil)
 		if err == nil || !strings.Contains(err.Error(), "local-only") {
 			t.Errorf("run %q: expected local-only rejection, got %v", run, err)
