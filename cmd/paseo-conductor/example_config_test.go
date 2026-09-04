@@ -202,3 +202,68 @@ triggers:
 		t.Fatal("the primary runtime must not get an override")
 	}
 }
+
+// TestStarterConfigFreshSeedLayout: the installer's fresh seed — the starter
+// config plus the six empty conf.d/ section folders — loads and validates
+// out of the box, and a file dropped into conf.d/connectors/ joins the
+// config on the next load.
+func TestStarterConfigFreshSeedLayout(t *testing.T) {
+	raw, err := os.ReadFile("../../config.starter.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"GH_WEBHOOK_SECRET", "GH_SMEE_URL"} {
+		t.Setenv(v, "dummy")
+	}
+	dir := t.TempDir()
+	for _, sec := range []string{"connectors", "runtimes", "hosts", "agents", "workflows", "triggers"} {
+		if err := os.MkdirAll(filepath.Join(dir, "conf.d", sec), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty folders: the seed works untouched.
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("fresh seed must load: %v", err)
+	}
+	if _, err := buildFlowStack(cfg, nil, nil, true); err != nil {
+		t.Fatalf("fresh seed must validate: %v", err)
+	}
+	if len(cfg.ConnectorsMap) != 1 {
+		t.Fatalf("starter connectors: %d, want just gh", len(cfg.ConnectorsMap))
+	}
+
+	// Drop a connector file in — it joins the section on the next load.
+	dropped := "timer:\n  type: cron\n  schedules: { tick: { every: 1h } }\n"
+	if err := os.WriteFile(filepath.Join(dir, "conf.d/connectors/timer.yaml"), []byte(dropped), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	trig := "- on: timer.tick\n  steps: [{ id: t, type: command, command: [\"true\"] }]\n"
+	if err := os.WriteFile(filepath.Join(dir, "conf.d/triggers/tick.yaml"), []byte(trig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = config.Load(path)
+	if err != nil {
+		t.Fatalf("drop-in load: %v", err)
+	}
+	if cfg.ConnectorsMap["timer"].Type != "cron" {
+		t.Fatalf("dropped connector not picked up: %+v", cfg.ConnectorsMap)
+	}
+	var found bool
+	for _, tr := range cfg.Triggers {
+		if tr.On == "timer.tick" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("dropped trigger not picked up: %+v", cfg.Triggers)
+	}
+	if _, err := buildFlowStack(cfg, nil, nil, true); err != nil {
+		t.Fatalf("drop-in config must validate: %v", err)
+	}
+}

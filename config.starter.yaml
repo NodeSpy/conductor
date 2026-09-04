@@ -8,8 +8,14 @@
 #   4. Flip `enabled: true`, run `conductor validate`, then start the service.
 #
 # Full annotated reference: config.example.yaml (copied next to this file).
+#
+# The config splits across files by default: every section imports from its
+# conf.d/ folder (created empty by the installer) — drop a file in
+# conf.d/connectors/ (or runtimes/hosts/agents/workflows/triggers/) and it
+# joins that section on the next reload. Inline entries mix in freely.
 
 connectors:
+  imports: [conf.d/connectors/*.yaml]
   gh:
     type: github
     enabled: false # <- set true once the App + webhook below are configured
@@ -24,6 +30,7 @@ connectors:
     repos: ["OWNER/*"] # <- your org/user, e.g. ["octocat/*"] — the default trigger scope
 
 triggers:
+  - import: conf.d/triggers/*.yaml
   - on: gh.merge_conflict
     steps:
       - type: agent
@@ -43,9 +50,17 @@ triggers:
         prompt: "Address the requested changes on {{.repo}}#{{.pr}}, commit, push, and reply to threads."
 
 runtimes:
+  imports: [conf.d/runtimes/*.yaml]
   paseo: { type: paseo, default: true }
 
+hosts:
+  imports: [conf.d/hosts/*.yaml]
+
+workflows:
+  imports: [conf.d/workflows/*.yaml]
+
 agents:
+  imports: [conf.d/agents/*.yaml]
   fixer:
     provider: claude
     workspace: worktree

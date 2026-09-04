@@ -110,7 +110,7 @@ type HostConfig struct {
 }
 
 // WorkflowDef is one entry in the `workflows:` map — a named, parameterized
-// step list invoked from triggers (or other workflows) via `use:`.
+// step list invoked from triggers (or other workflows) via `workflow:`.
 type WorkflowDef struct {
 	Inputs  map[string]InputSpec `yaml:"inputs,omitempty"`
 	Outputs map[string]string    `yaml:"outputs,omitempty"` // name -> template over internal step outputs
@@ -215,9 +215,14 @@ type Step struct {
 	Uses    string         `yaml:"uses,omitempty"`
 	Options map[string]any `yaml:"options,omitempty"`
 
-	// workflow-call form
-	Use  string         `yaml:"use,omitempty"`
-	With map[string]any `yaml:"with,omitempty"`
+	// workflow-call form. Workflow names a reusable workflow (defined inline
+	// or in any imported file), or is a bare file path when that file defines
+	// exactly one workflow; Import names the file a `workflow: <name>` lives
+	// in without a section-level import. File forms are materialized into
+	// cfg.Workflows at load (see resolveWorkflowFiles).
+	Workflow string         `yaml:"workflow,omitempty"`
+	Import   string         `yaml:"import,omitempty"`
+	With     map[string]any `yaml:"with,omitempty"`
 
 	// control flow
 	ForEach         string        `yaml:"for_each,omitempty"` // template resolving to a list; {{.item}} in scope
@@ -239,7 +244,7 @@ func (s Step) Form() string {
 	switch {
 	case s.Uses != "":
 		return "verb"
-	case s.Use != "":
+	case s.Workflow != "":
 		return "workflow"
 	case s.Run != "":
 		return "code"
@@ -568,8 +573,8 @@ func validateSteps(where string, steps []Step, c *Config) error {
 func validateStep(w string, s Step, c *Config) error {
 	forms := 0
 	for _, set := range []bool{
-		s.Uses != "", s.Use != "", s.Run != "",
-		s.Type == "agent" || (s.Type == "" && s.Agent != "" && s.Uses == "" && s.Use == ""),
+		s.Uses != "", s.Workflow != "", s.Run != "",
+		s.Type == "agent" || (s.Type == "" && s.Agent != "" && s.Uses == "" && s.Workflow == ""),
 		s.Type == "command" || (s.Type == "" && len(s.Command) > 0),
 	} {
 		if set {
@@ -588,10 +593,10 @@ func validateStep(w string, s Step, c *Config) error {
 		return validateHooks(w, s.Hooks)
 	}
 	if forms == 0 {
-		return fmt.Errorf("config: %s: set one of `type: agent`, `type: command`, `run:`, `uses:`, or `use:`", w)
+		return fmt.Errorf("config: %s: set one of `type: agent`, `type: command`, `run:`, `uses:`, or `workflow:`", w)
 	}
 	if forms > 1 {
-		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/run/uses/use)", w)
+		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/run/uses/workflow)", w)
 	}
 	if s.Uses != "" {
 		conn, verb, ok := strings.Cut(s.Uses, ".")
@@ -619,9 +624,12 @@ func validateStep(w string, s Step, c *Config) error {
 			return fmt.Errorf("config: %s: `run: %s` executes inside conductor's own process and is local-only — use a host interpreter (e.g. `run: node`/`run: sh`) for remote code", w, s.Run)
 		}
 	}
-	if s.Use != "" && c != nil {
-		if _, ok := c.Workflows[s.Use]; !ok {
-			return fmt.Errorf("config: %s: unknown workflow %q (defined: %s)", w, s.Use, c.workflowNames())
+	if s.Import != "" && s.Workflow == "" {
+		return fmt.Errorf("config: %s: a step-level `import:` needs `workflow: <name>` naming the workflow in that file", w)
+	}
+	if s.Workflow != "" && c != nil {
+		if _, ok := c.Workflows[s.Workflow]; !ok {
+			return fmt.Errorf("config: %s: unknown workflow %q (defined: %s)", w, s.Workflow, c.workflowNames())
 		}
 	}
 	return validateHooks(w, s.Hooks)

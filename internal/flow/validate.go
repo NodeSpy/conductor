@@ -263,13 +263,13 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 			return err
 		}
 	case "workflow":
-		wf, ok := cfg.Workflows[step.Use]
+		wf, ok := cfg.Workflows[step.Workflow]
 		if !ok {
-			return fmt.Errorf("%s: unknown workflow %q", w, step.Use)
+			return fmt.Errorf("%s: unknown workflow %q", w, step.Workflow)
 		}
 		for k := range step.With {
 			if _, declared := wf.Inputs[k]; !declared {
-				return fmt.Errorf("%s: workflow %q has no input %q (inputs: %s)", w, step.Use, k, inputNames(wf))
+				return fmt.Errorf("%s: workflow %q has no input %q (inputs: %s)", w, step.Workflow, k, inputNames(wf))
 			}
 		}
 		for name, in := range wf.Inputs {
@@ -277,7 +277,7 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 				continue
 			}
 			if _, ok := step.With[name]; !ok {
-				return fmt.Errorf("%s: workflow %q requires input %q", w, step.Use, name)
+				return fmt.Errorf("%s: workflow %q requires input %q", w, step.Workflow, name)
 			}
 		}
 	case "code":
@@ -544,7 +544,7 @@ func stepOutputSchema(reg *connector.Registry, step config.Step) connector.Schem
 	return nil
 }
 
-// validateWorkflowCycles rejects use: cycles among workflows.
+// validateWorkflowCycles rejects workflow: call cycles among workflows.
 func validateWorkflowCycles(cfg *config.Config) error {
 	const (
 		white = 0
@@ -563,9 +563,9 @@ func validateWorkflowCycles(cfg *config.Config) error {
 		state[name] = grey
 		wf := cfg.Workflows[name]
 		for _, s := range wf.Steps {
-			if s.Use != "" {
-				if _, ok := cfg.Workflows[s.Use]; ok {
-					if err := visit(s.Use, append(path, name)); err != nil {
+			if s.Workflow != "" {
+				if _, ok := cfg.Workflows[s.Workflow]; ok {
+					if err := visit(s.Workflow, append(path, name)); err != nil {
 						return err
 					}
 				}
