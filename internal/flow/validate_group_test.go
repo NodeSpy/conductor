@@ -467,3 +467,72 @@ triggers:
 		t.Fatalf("batch context text: %q", got)
 	}
 }
+
+// TestValidateRejectsWorkflowCycle (E3): cyclic use: chains among workflows:
+// fail at load, naming the cycle path.
+func TestValidateRejectsWorkflowCycle(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+workflows:
+  a:
+    steps: [ { id: sb, use: b } ]
+  b:
+    steps: [ { id: sc, use: c } ]
+  c:
+    steps: [ { id: sa, use: a } ]
+triggers:
+  - on: svc.ping
+    steps: [ { id: go, use: a } ]
+`)
+	reg := buildRegistry(t, cfg)
+	err := Validate(cfg, reg)
+	if err == nil || !strings.Contains(err.Error(), "workflow cycle") {
+		t.Fatalf("want a workflow-cycle rejection, got %v", err)
+	}
+	// The message names the cycle path (a -> b -> c -> a, from some start).
+	if !strings.Contains(err.Error(), "->") {
+		t.Fatalf("cycle error should name the path, got %v", err)
+	}
+
+	// A self-cycle is rejected too.
+	cfg = loadConfig(t, `
+connectors:
+  svc: { type: fake }
+workflows:
+  loop:
+    steps: [ { id: again, use: loop } ]
+triggers:
+  - on: svc.ping
+    steps: [ { id: go, use: loop } ]
+`)
+	reg = buildRegistry(t, cfg)
+	err = Validate(cfg, reg)
+	if err == nil || !strings.Contains(err.Error(), "loop -> loop") {
+		t.Fatalf("self-cycle should be rejected naming it, got %v", err)
+	}
+
+	// Diamond reuse (two paths to one workflow, no cycle) stays valid.
+	cfg = loadConfig(t, `
+connectors:
+  svc: { type: fake }
+workflows:
+  top:
+    steps:
+      - { id: l, use: left }
+      - { id: r, use: right }
+  left:
+    steps: [ { id: s, use: shared } ]
+  right:
+    steps: [ { id: s, use: shared } ]
+  shared:
+    steps: [ { id: p, uses: svc.post, options: { text: t } } ]
+triggers:
+  - on: svc.ping
+    steps: [ { id: go, use: top } ]
+`)
+	reg = buildRegistry(t, cfg)
+	if err := Validate(cfg, reg); err != nil {
+		t.Fatalf("diamond reuse is not a cycle: %v", err)
+	}
+}

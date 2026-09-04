@@ -795,3 +795,38 @@ func TestConfigAgentCapPrecedence(t *testing.T) {
 		t.Fatalf("fallback AgentCap = %d, want 5", got)
 	}
 }
+
+// TestMergePolicySameKeyThreeScopes (E4): one key set at ALL three scopes —
+// the trigger (most specific) wins; drop the trigger and the connector wins.
+func TestMergePolicySameKeyThreeScopes(t *testing.T) {
+	global := &Policy{
+		PauseLabel:  strPtr("global:hold"),
+		Concurrency: &Concurrency{MaxAgents: intPtr(8)},
+		Backoff:     &Backoff{Base: Duration(10 * time.Minute)},
+	}
+	connector := &Policy{
+		PauseLabel:  strPtr("conn:hold"),
+		Concurrency: &Concurrency{MaxAgents: intPtr(4)},
+		Backoff:     &Backoff{Base: Duration(20 * time.Minute)},
+	}
+	trigger := &Policy{
+		PauseLabel:  strPtr("trig:hold"),
+		Concurrency: &Concurrency{MaxAgents: intPtr(1)},
+		Backoff:     &Backoff{Base: Duration(30 * time.Minute)},
+	}
+
+	out := MergePolicy(global, connector, trigger)
+	if *out.PauseLabel != "trig:hold" || *out.Concurrency.MaxAgents != 1 || out.Backoff.Base.D() != 30*time.Minute {
+		t.Fatalf("trigger scope should win on every conflicting key, got %+v", out)
+	}
+
+	out = MergePolicy(global, connector, nil)
+	if *out.PauseLabel != "conn:hold" || *out.Concurrency.MaxAgents != 4 || out.Backoff.Base.D() != 20*time.Minute {
+		t.Fatalf("connector scope should win over global, got %+v", out)
+	}
+
+	out = MergePolicy(global, nil, nil)
+	if *out.PauseLabel != "global:hold" || *out.Concurrency.MaxAgents != 8 {
+		t.Fatalf("global applies when nothing overrides, got %+v", out)
+	}
+}
