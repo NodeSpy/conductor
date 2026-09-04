@@ -46,16 +46,21 @@ func AutoMigrate(mainPath string, validate func() error, logf func(string, ...an
 		if !res.Changed {
 			continue
 		}
+		mode := fileMode(f)
 		backup := f + BackupSuffix
 		if _, err := os.Stat(backup); os.IsNotExist(err) {
-			if err := os.WriteFile(backup, raw, fileMode(f)); err != nil {
+			if err := os.WriteFile(backup, raw, mode); err != nil {
 				return migrated, all, fmt.Errorf("write backup %s: %w", backup, err)
 			}
+			// WriteFile's mode is clamped by the umask; a secretful config
+			// must keep its exact permissions.
+			_ = os.Chmod(backup, mode)
 		}
 		tmp := f + ".tmp"
-		if err := os.WriteFile(tmp, res.Output, fileMode(f)); err != nil {
+		if err := os.WriteFile(tmp, res.Output, mode); err != nil {
 			return migrated, all, err
 		}
+		_ = os.Chmod(tmp, mode)
 		if err := os.Rename(tmp, f); err != nil {
 			return migrated, all, err
 		}
@@ -118,6 +123,10 @@ func discoverFiles(mainPath string) ([]string, error) {
 		}
 		dir := filepath.Dir(p)
 		for _, imp := range probe.Imports {
+			// The probe parsed masked bytes, so restore any ${VAR} tokens —
+			// otherwise the env-ref guard below can never fire and a masked
+			// path would silently glob to nothing (skipping the file).
+			imp = string(unmaskEnv([]byte(imp)))
 			if containsEnvRef(imp) {
 				return fmt.Errorf("%s: import %q references an environment variable — resolve it by hand before migrating", p, imp)
 			}
