@@ -13,14 +13,20 @@ package expr
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
 
 // Eval reports whether cond is true given data (nested map[string]any).
 // An empty condition is true.
+//
+// Conditions may write paths bare (steps.x.outputs.y) or in template form
+// ({{.x.y}} — the connectors-model spelling); template tokens are rewritten
+// to bare paths before evaluation, so a missing value stays nil/falsy instead
+// of rendering to text first.
 func Eval(cond string, data map[string]any) (bool, error) {
-	cond = strings.TrimSpace(cond)
+	cond = strings.TrimSpace(stripTemplateTokens(cond))
 	if cond == "" {
 		return true, nil
 	}
@@ -50,6 +56,13 @@ func atom(a string, data map[string]any) (bool, error) {
 	if a == "" {
 		return false, fmt.Errorf("empty condition term")
 	}
+	if strings.HasPrefix(a, "!") {
+		ok, err := atom(strings.TrimSpace(a[1:]), data)
+		return !ok, err
+	}
+	if ok, handled, err := function(a, data); handled {
+		return ok, err
+	}
 	for _, op := range comparators {
 		if i := strings.Index(a, op); i >= 0 {
 			l := strings.TrimSpace(a[:i])
@@ -57,10 +70,117 @@ func atom(a string, data map[string]any) (bool, error) {
 			return compare(resolve(l, data), literal(r), op), nil
 		}
 	}
-	if strings.HasPrefix(a, "!") {
-		return !truthy(resolve(strings.TrimSpace(a[1:]), data)), nil
-	}
 	return truthy(resolve(a, data)), nil
+}
+
+// function evaluates the pinned function set: contains(x, y) — substring or
+// list membership — and exists(path) — the path resolves to a non-nil value.
+// handled=false means the term isn't a function call.
+func function(a string, data map[string]any) (ok, handled bool, err error) {
+	name, rest, found := strings.Cut(a, "(")
+	if !found || !strings.HasSuffix(rest, ")") || strings.ContainsAny(name, " \t") {
+		return false, false, nil
+	}
+	argstr := strings.TrimSuffix(rest, ")")
+	switch name {
+	case "exists":
+		return resolve(strings.TrimSpace(argstr), data) != nil, true, nil
+	case "contains":
+		args := splitArgs(argstr)
+		if len(args) != 2 {
+			return false, true, fmt.Errorf("contains() takes two arguments, got %d", len(args))
+		}
+		hay := resolveTerm(args[0], data)
+		needle := resolveTerm(args[1], data)
+		return containsValue(hay, needle), true, nil
+	}
+	return false, false, nil
+}
+
+// splitArgs splits a function argument list on commas outside quotes.
+func splitArgs(s string) []string {
+	var out []string
+	var b strings.Builder
+	var inS, inD bool
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case inS:
+			if c == '\'' {
+				inS = false
+			}
+			b.WriteByte(c)
+		case inD:
+			if c == '"' {
+				inD = false
+			}
+			b.WriteByte(c)
+		case c == '\'':
+			inS = true
+			b.WriteByte(c)
+		case c == '"':
+			inD = true
+			b.WriteByte(c)
+		case c == ',':
+			out = append(out, strings.TrimSpace(b.String()))
+			b.Reset()
+		default:
+			b.WriteByte(c)
+		}
+	}
+	if t := strings.TrimSpace(b.String()); t != "" || len(out) > 0 {
+		out = append(out, t)
+	}
+	return out
+}
+
+// resolveTerm resolves a function argument: a quoted/bool/number literal, or
+// a data path.
+func resolveTerm(s string, data map[string]any) any {
+	l := literal(s)
+	if l.isB {
+		return l.b
+	}
+	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') {
+		return l.s
+	}
+	if l.isNum {
+		return l.f
+	}
+	if v := resolve(s, data); v != nil {
+		return v
+	}
+	return s // bare word with no data match — treat as a literal string
+}
+
+// containsValue reports substring match for strings and membership for lists.
+func containsValue(hay, needle any) bool {
+	switch h := hay.(type) {
+	case string:
+		return strings.Contains(h, asString(needle))
+	case []string:
+		for _, e := range h {
+			if e == asString(needle) {
+				return true
+			}
+		}
+	case []any:
+		for _, e := range h {
+			if asString(e) == asString(needle) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// tmplTokenRe matches {{.a.b}} template tokens (no pipelines/functions).
+var tmplTokenRe = regexp.MustCompile(`\{\{\s*\.([A-Za-z0-9_.]+)\s*\}\}`)
+
+// stripTemplateTokens rewrites {{.a.b}} tokens to bare paths so both
+// condition spellings evaluate identically.
+func stripTemplateTokens(s string) string {
+	return tmplTokenRe.ReplaceAllString(s, "$1")
 }
 
 // compare applies an operator between a resolved value and a literal. Ordering
