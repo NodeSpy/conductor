@@ -699,6 +699,9 @@ func (c *Config) validateConnectors() error {
 		if name == "kv" {
 			return fmt.Errorf("config: connectors: %q is reserved (the built-in state store — always available, nothing to configure)", name)
 		}
+		if name == "sql" {
+			return fmt.Errorf("config: connectors: %q is reserved (the built-in SQL verbs — always available; connections live in stores:)", name)
+		}
 		if ref.Type == "" {
 			return fmt.Errorf("config: connector %q: missing type", name)
 		}

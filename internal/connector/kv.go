@@ -15,6 +15,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/kv"
+	"github.com/NodeSpy/conductor/internal/sqlstore"
 )
 
 // kvDecl declares the built-in durable state store. The connector is
@@ -210,15 +211,18 @@ var kvDecl = &TypeDecl{
 
 func init() { RegisterType(kvDecl, newKVImpl) }
 
-type kvImpl struct{}
-
-func newKVImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
-	return kvImpl{}, nil
+type kvImpl struct {
+	cfg *config.Config
 }
 
-// storeBuilders maps a stores: entry's type to its backend constructor. The
-// redis and http types register here; anything else (firestore, dynamodb, …)
-// implements kv.KVBackend and adds an entry — that is the extension point.
+func newKVImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
+	return kvImpl{cfg: deps.Config}, nil
+}
+
+// storeBuilders maps a stores: entry's KV type to its backend constructor.
+// The redis and http types register here; anything else (firestore,
+// dynamodb, …) implements kv.KVBackend and adds an entry — that is the
+// extension point. SQL types route to sqlStoreBuilders (sql.go) instead.
 var storeBuilders = map[string]func(name string, ref config.StoreRef, deps Deps) (kv.KVBackend, error){
 	"boltdb": buildBoltStore,
 	"redis":  buildRedisStore,
@@ -285,22 +289,15 @@ func buildHTTPStore(name string, ref config.StoreRef, deps Deps) (kv.KVBackend, 
 	return kv.NewHTTPStore(conn.BaseURL, nil, apply), nil
 }
 
-// storeTypes returns the registered store type names, sorted.
-func storeTypes() []string {
-	out := make([]string, 0, len(storeBuilders))
-	for t := range storeBuilders {
-		out = append(out, t)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// buildStores wires the stores: section into the kv registry — every store
-// is explicit; a bad entry (unknown type, invalid connection, unopenable
-// boltdb path) is a LOAD error, not a disabled connector. Build calls this
-// before anything can address a store.
+// buildStores wires the stores: section into the two store registries —
+// KV types (boltdb/redis/http) into internal/kv, SQL types
+// (postgres/mysql/sqlite) into internal/sqlstore. Every store is explicit;
+// a bad entry (unknown type, invalid connection, unopenable boltdb/sqlite
+// path) is a LOAD error, not a disabled connector. Build calls this before
+// anything can address a store.
 func buildStores(cfg *config.Config, deps Deps) error {
 	kv.ResetStores()
+	sqlstore.ResetStores()
 	if cfg == nil {
 		return nil
 	}
@@ -314,17 +311,27 @@ func buildStores(cfg *config.Config, deps Deps) error {
 	sort.Strings(names)
 	for _, name := range names {
 		ref := cfg.Stores[name]
-		build, ok := storeBuilders[ref.Type]
-		if !ok {
-			return fmt.Errorf("store %q: unknown type %q (known: %s)", name, ref.Type, strings.Join(storeTypes(), ", "))
+		if build, ok := storeBuilders[ref.Type]; ok {
+			b, err := build(name, ref, deps)
+			if err != nil {
+				return err
+			}
+			if err := kv.Register(name, b); err != nil {
+				return err
+			}
+			continue
 		}
-		b, err := build(name, ref, deps)
-		if err != nil {
-			return err
+		if build, ok := sqlStoreBuilders[ref.Type]; ok {
+			s, err := build(name, ref, deps)
+			if err != nil {
+				return err
+			}
+			if err := sqlstore.Register(name, s); err != nil {
+				return err
+			}
+			continue
 		}
-		if err := kv.Register(name, b); err != nil {
-			return err
-		}
+		return fmt.Errorf("store %q: unknown type %q (known: %s)", name, ref.Type, strings.Join(StoreTypes(""), ", "))
 	}
 	return nil
 }
@@ -338,10 +345,16 @@ func (kvImpl) Source(triggers []CompiledTrigger) (core.Integration, error) {
 	return nil, fmt.Errorf("the kv store has no source events")
 }
 
-func (kvImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
+func (k kvImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
 	str := func(k string) string { s, _ := opts[k].(string); return s }
 	st, err := kv.Use(str("store"))
 	if err != nil {
+		// A defined store of the wrong family gets the precise mismatch
+		// (the load-time check catches config paths; this covers dynamic
+		// callers).
+		if ferr := checkStoreFamily(k.cfg, str("store"), "kv"); ferr != nil {
+			return nil, ferr
+		}
 		return nil, err
 	}
 	if err := kv.CheckCapability(str("store"), st, verb); err != nil {
