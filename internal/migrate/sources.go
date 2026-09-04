@@ -3,6 +3,7 @@ package migrate
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	cronint "github.com/NodeSpy/paseo-conductor/internal/integrations/cron"
@@ -17,8 +18,11 @@ func sortStrings(s []string) { sort.Strings(s) }
 
 // slackTransform maps a legacy slack integration: connection tokens, one
 // trigger per rule, and ack/on_done/on_fail feedback as at: start/done/fail
-// hooks on that trigger (the new engine's hooks are per-trigger, matching the
-// single-action case exactly; multi-variant aggregation timing is noted).
+// hooks. A single-variant rule maps 1:1. A MULTI-variant rule becomes ONE
+// trigger whose only step is parallel branches (one per enabled variant):
+// the join is exactly the legacy HandleCompletion aggregation point — the
+// at:done hooks fire once after ALL variants complete, at:fail once when any
+// failed — so the migrated feedback timing is identical, not approximate.
 func slackTransform(name string, ref config.IntegrationRef, notes *[]string) (map[string]any, []config.TriggerSpec, error) {
 	var cfg slackint.Config
 	if err := ref.Decode(&cfg); err != nil {
@@ -41,34 +45,125 @@ func slackTransform(name string, ref config.IntegrationRef, notes *[]string) (ma
 		if rule.Command != "" {
 			filters["command"] = rule.Command
 		}
-		// Each variant fired independently in legacy — one trigger per
-		// variant, in order. Feedback hooks ride the first variant's trigger
-		// (legacy fired ack once per event and aggregated on_done/on_fail
-		// across variants; the single-variant case — the normal one — is
-		// exactly equivalent, the multi-variant timing shift is noted).
 		hooks := slackFeedbackHooks(name, rule, where)
-		if len(rule.Actions) > 1 && (rule.OnDone != nil || rule.OnFail != nil) {
-			*notes = append(*notes, fmt.Sprintf("%s: on_done/on_fail aggregated across %d variants in legacy; now fire when the first variant's trigger completes", where, len(rule.Actions)))
+		if len(rule.Actions) <= 1 {
+			// The common case maps 1:1: one variant, one trigger, hooks on it.
+			for vi, act := range rule.Actions {
+				awhere := fmt.Sprintf("%s actions[%d]", where, vi)
+				steps, err := actionSteps(awhere, act, notes)
+				if err != nil {
+					return nil, nil, err
+				}
+				noteInertActionFields(awhere, act, notes)
+				triggers = append(triggers, config.TriggerSpec{
+					On: name + "." + rule.On, Name: act.Name,
+					Enabled: act.Enabled, Shadow: act.Shadow,
+					Filters: copyMap(filters), Steps: steps, Hooks: hooks,
+				})
+			}
+			continue
 		}
+		// Multi-variant: one trigger, parallel branches, hooks on the join.
+		var branches [][]config.Step
 		for vi, act := range rule.Actions {
 			awhere := fmt.Sprintf("%s actions[%d]", where, vi)
+			if !act.IsEnabled() {
+				*notes = append(*notes, fmt.Sprintf("%s: variant disabled — no branch generated", awhere))
+				continue
+			}
 			steps, err := actionSteps(awhere, act, notes)
 			if err != nil {
 				return nil, nil, err
 			}
 			noteInertActionFields(awhere, act, notes)
-			spec := config.TriggerSpec{
-				On: name + "." + rule.On, Name: act.Name,
-				Enabled: act.Enabled, Shadow: act.Shadow,
-				Filters: copyMap(filters), Steps: steps,
+			if act.Shadow != nil {
+				for i := range steps {
+					steps[i].Shadow = act.Shadow
+				}
 			}
-			if vi == 0 {
-				spec.Hooks = hooks
+			prefix := act.Name
+			if prefix == "" {
+				prefix = fmt.Sprintf("v%d", vi+1)
 			}
-			triggers = append(triggers, spec)
+			branches = append(branches, prefixBranchSteps(prefix, steps))
 		}
+		if len(branches) == 0 {
+			*notes = append(*notes, fmt.Sprintf("%s: every variant disabled — no trigger generated (legacy fired nothing)", where))
+			continue
+		}
+		*notes = append(*notes, fmt.Sprintf("%s: %d variants merged into parallel branches — on_done/on_fail fire once after all complete, matching legacy aggregation", where, len(branches)))
+		triggers = append(triggers, config.TriggerSpec{
+			On:      name + "." + rule.On,
+			Filters: copyMap(filters),
+			Steps: []config.Step{{
+				ID:       "variants",
+				Parallel: &config.ParallelSpec{Branches: branches},
+			}},
+			Hooks: hooks,
+		})
 	}
 	return conn, triggers, nil
+}
+
+// prefixBranchSteps renames a branch's step ids with a variant prefix so ids
+// stay unique across parallel branches, rewriting intra-branch references
+// ({{.<id>.…}} and the legacy steps.<id>. spelling) in every templated field.
+func prefixBranchSteps(prefix string, steps []config.Step) []config.Step {
+	rename := map[string]string{}
+	for i := range steps {
+		old := steps[i].ID
+		if old == "" {
+			old = fmt.Sprintf("step%d", i+1)
+		}
+		rename[old] = prefix + "-" + old
+		steps[i].ID = prefix + "-" + old
+	}
+	sub := func(v string) string {
+		for old, neu := range rename {
+			v = strings.ReplaceAll(v, "{{."+old+".", "{{."+neu+".")
+			v = strings.ReplaceAll(v, "steps."+old+".", "steps."+neu+".")
+		}
+		return v
+	}
+	var subAny func(v any) any
+	subAny = func(v any) any {
+		switch x := v.(type) {
+		case string:
+			return sub(x)
+		case map[string]any:
+			out := make(map[string]any, len(x))
+			for k, e := range x {
+				out[k] = subAny(e)
+			}
+			return out
+		case []any:
+			out := make([]any, len(x))
+			for i, e := range x {
+				out[i] = subAny(e)
+			}
+			return out
+		}
+		return v
+	}
+	for i := range steps {
+		st := &steps[i]
+		st.If = sub(st.If)
+		st.Prompt = sub(st.Prompt)
+		st.WorkDir = sub(st.WorkDir)
+		for j := range st.Command {
+			st.Command[j] = sub(st.Command[j])
+		}
+		for k, v := range st.Env {
+			st.Env[k] = sub(v)
+		}
+		if st.Options != nil {
+			st.Options = subAny(st.Options).(map[string]any)
+		}
+		if st.With != nil {
+			st.With = subAny(st.With).(map[string]any)
+		}
+	}
+	return steps
 }
 
 // slackFeedbackHooks maps ack/on_done/on_fail Feedback blocks to hooks.
