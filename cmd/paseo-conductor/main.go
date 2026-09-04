@@ -677,6 +677,46 @@ func cmdReplay(args []string) error {
 			printTrigger(cfg, disp, t)
 		}
 	}
+
+	// Connectors-model triggers: translate through the lowered sources, then
+	// run each matching trigger through the flow runner with DryRun stubbing
+	// every verb/code/agent dispatch ("would invoke …").
+	if cfg.HasConnectors() {
+		stack, err := buildFlowStack(cfg, nil, nil, true) // DryRun
+		if err != nil {
+			return err
+		}
+		stack.Runner.Agents = flow.AgentServices{Dispatch: disp.Dispatch}
+		for _, ig := range stack.Integrations {
+			tr, ok := ig.(translator)
+			if !ok {
+				continue
+			}
+			for _, t := range tr.Translate(context.Background(), fx.Event, fx.Body) {
+				act, _ := t.Action.(config.Action)
+				if act.FlowRef == "" {
+					found++
+					printTrigger(cfg, disp, t)
+					continue
+				}
+				spec, ok := stack.Runner.SpecFor(act.FlowRef)
+				if !ok {
+					continue
+				}
+				if match, err := stack.Runner.FilterMatch(t, spec); err != nil {
+					logf("replay: filter error: %v", err)
+					continue
+				} else if !match {
+					continue
+				}
+				found++
+				fmt.Printf("• %s %s#%d [workflow: %d steps] (dry-run)\n",
+					t.Kind, t.Target.Repo, t.Target.Number, len(spec.Steps))
+				stack.Runner.Run(context.Background(),
+					store.WorkflowRun{Outputs: map[string]map[string]any{}}, t, spec, nil, true)
+			}
+		}
+	}
 	if found == 0 {
 		fmt.Println("no triggers produced (no matching rule/action, or kind needs live REST)")
 	}
