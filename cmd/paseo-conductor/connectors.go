@@ -13,6 +13,7 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/handoff"
 	"github.com/NodeSpy/paseo-conductor/internal/inbound"
 	"github.com/NodeSpy/paseo-conductor/internal/integrations/slack"
+	"github.com/NodeSpy/paseo-conductor/internal/notify"
 	"github.com/NodeSpy/paseo-conductor/internal/secrets"
 )
 
@@ -24,6 +25,10 @@ type flowStack struct {
 	Runner       *flow.Runner
 	Integrations []core.Integration
 	SecretErrs   []string
+	// ConnectorErrs names each connector disabled by a credential/build
+	// failure (not by an authored enabled: false) — #36 requires disable AND
+	// notify, so main routes these through the notifier at boot.
+	ConnectorErrs []string
 }
 
 // buildFlowStack builds the connectors-model pieces from a loaded config.
@@ -68,6 +73,7 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		byConn[spec.Connector()] = append(byConn[spec.Connector()], connector.CompiledTrigger{Index: i, Spec: spec})
 	}
 	var igs []core.Integration
+	var connErrs []string
 	for _, name := range reg.Names() {
 		in, _ := reg.Get(name)
 		trigs := byConn[name]
@@ -79,6 +85,7 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		}
 		if in.DisabledReason != "" {
 			logf("connector %q disabled (%s)%s", name, in.DisabledReason, inertNote(len(trigs)))
+			connErrs = append(connErrs, fmt.Sprintf("connector %q disabled: %s%s", name, in.DisabledReason, inertNote(len(trigs))))
 			continue
 		}
 		src, err := in.Impl.Source(trigs)
@@ -100,8 +107,31 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 	})
 	return &flowStack{
 		Secrets: sec, Registry: reg, Runner: runner,
-		Integrations: igs, SecretErrs: secretErrs,
+		Integrations: igs, SecretErrs: secretErrs, ConnectorErrs: connErrs,
 	}, nil
+}
+
+// stackEmitter is the notifier surface notifyStackFailures needs (satisfied
+// by *notify.Notifier; a test fake captures the emissions).
+type stackEmitter interface {
+	Emit(ctx context.Context, event string, t core.Trigger, msg string)
+}
+
+// notifyStackFailures escalates the failures buildFlowStack collected: named
+// secrets that would not resolve and connectors disabled by credential/build
+// errors. Both must be visible, not just logged — a bad connector never
+// crash-loops the box, so a notification is the operator's only signal.
+func notifyStackFailures(stack *flowStack, n stackEmitter) {
+	if stack == nil {
+		return
+	}
+	for _, e := range stack.SecretErrs {
+		logf("secrets: %s", e)
+		n.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "secrets", Kind: "secret_unresolved"}, e)
+	}
+	for _, e := range stack.ConnectorErrs {
+		n.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "connectors", Kind: "connector_disabled"}, e)
+	}
 }
 
 func inertNote(n int) string {
