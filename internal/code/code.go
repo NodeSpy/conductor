@@ -99,6 +99,10 @@ func (e *Executor) Exec(ctx context.Context, spec Spec, data map[string]any) (ma
 		return e.execJS(spec, data)
 	case "go-embed":
 		return e.execGoEmbed(spec, data)
+	case "risor":
+		return e.execRisor(ctx, spec, data)
+	case "lua":
+		return e.execLua(spec, data)
 	case "go":
 		return e.execGoToolchain(ctx, spec, data)
 	default:

@@ -202,7 +202,7 @@ type Step struct {
 	WorkDir string            `yaml:"workdir,omitempty"`
 	Env     map[string]string `yaml:"env,omitempty"`
 
-	// code form: run: js | go-embed | go | sh | bash | ruby | node | python | …
+	// code form: run: js | go-embed | risor | lua | go | sh | bash | ruby | node | …
 	Run  string   `yaml:"run,omitempty"`
 	Code string   `yaml:"code,omitempty"`
 	Args []string `yaml:"args,omitempty"`
@@ -615,8 +615,11 @@ func validateStep(w string, s Step, c *Config) error {
 	if s.SSH != nil && s.SSH.Host == "" {
 		return fmt.Errorf("config: %s: inline ssh: needs `host:` (the address)", w)
 	}
-	if (s.Run == "js" || s.Run == "go-embed") && (s.Host != "" || s.SSH != nil) {
-		return fmt.Errorf("config: %s: `run: %s` executes inside conductor's own process and is local-only — use a host interpreter (e.g. `run: node`/`run: sh`) for remote code", w, s.Run)
+	switch s.Run {
+	case "js", "go-embed", "risor", "lua":
+		if s.Host != "" || s.SSH != nil {
+			return fmt.Errorf("config: %s: `run: %s` executes inside conductor's own process and is local-only — use a host interpreter (e.g. `run: node`/`run: sh`) for remote code", w, s.Run)
+		}
 	}
 	if s.Use != "" && c != nil {
 		if _, ok := c.Workflows[s.Use]; !ok {

@@ -77,7 +77,7 @@ func (e *Executor) execHostLocal(ctx context.Context, spec Spec, data map[string
 const remoteNotFoundExit = 127
 
 // execRemote runs a host-interpreter spec on spec.Host over SSH.
-// js/go-embed are rejected outright: they execute inside conductor's own
+// js/go-embed/risor/lua are rejected outright: they execute inside conductor's own
 // process (see errRemoteInProcessEngine) and have no remote equivalent.
 //
 // The remote side is a single generated `sh` script (run through
@@ -99,7 +99,7 @@ const remoteNotFoundExit = 127
 // path, so it never touches argv or the generated script text.
 func (e *Executor) execRemote(ctx context.Context, spec Spec, data map[string]any) (map[string]any, error) {
 	switch spec.Run {
-	case "js", "go-embed":
+	case "js", "go-embed", "risor", "lua":
 		return nil, errRemoteInProcessEngine(spec.Run)
 	}
 
