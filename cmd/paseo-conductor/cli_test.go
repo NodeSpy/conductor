@@ -137,3 +137,81 @@ func TestCmdSecretsCheck(t *testing.T) {
 		t.Errorf("green path: err=%v out:\n%s", err, out)
 	}
 }
+
+// captureOutput runs fn with both stdout and stderr redirected (flow dry-run
+// stubs log through logf → stderr).
+func captureOutput(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+	oldOut, oldErr := os.Stdout, os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout, os.Stderr = w, w
+	ferr := fn()
+	w.Close()
+	os.Stdout, os.Stderr = oldOut, oldErr
+	b, _ := io.ReadAll(r)
+	return string(b), ferr
+}
+
+// TestCmdReplayConnectorsModel: `conductor replay` on a connectors-only
+// config runs the trigger through the flow stack with every verb stubbed —
+// previously it walked only legacy integrations and reported nothing.
+func TestCmdReplayConnectorsModel(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgDoc := `
+connectors:
+  gh:
+    type: github
+    token: dummy-replay-token
+    me: { logins: [danielcbaldwin] }
+    repos: ["EdnitionCode/RosterStream"]
+    webhook: { listen: "127.0.0.1:0", secret: replay-test }
+    sweep: { enabled: false }
+  box:
+    type: command
+triggers:
+  - on: gh.review_requested
+    steps:
+      - { id: shape, run: js, code: "return { ok: true }" }
+      - { id: notecmd, uses: box.run, options: { command: "true" } }
+`
+	if err := os.WriteFile(cfgPath, []byte(cfgDoc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(dir, "fixture.json")
+	fx := `{"event": "pull_request", "body": {
+  "action": "review_requested",
+  "installation": { "id": 0 },
+  "repository": { "full_name": "EdnitionCode/RosterStream", "name": "RosterStream",
+    "default_branch": "main", "owner": { "login": "EdnitionCode" } },
+  "pull_request": { "number": 5300, "state": "open", "draft": false,
+    "title": "auth: rework session refresh",
+    "html_url": "https://github.com/EdnitionCode/RosterStream/pull/5300",
+    "head": { "sha": "cafebabe1234", "ref": "feature/auth-refresh" },
+    "base": { "ref": "main" }, "user": { "login": "someone-else" } },
+  "requested_reviewer": { "login": "danielcbaldwin" }
+}}`
+	if err := os.WriteFile(fixture, []byte(fx), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := captureOutput(t, func() error { return cmdReplay([]string{"--config", cfgPath, fixture}) })
+	if err != nil {
+		t.Fatalf("replay: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "no triggers produced") {
+		t.Fatalf("connectors-model replay found nothing:\n%s", out)
+	}
+	for _, want := range []string{
+		"review_requested EdnitionCode/RosterStream#5300 [workflow: 2 steps] (dry-run)",
+		"would run code step (js)",
+		"would invoke box.run",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("replay output missing %q:\n%s", want, out)
+		}
+	}
+}
