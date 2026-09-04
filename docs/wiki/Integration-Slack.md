@@ -35,7 +35,9 @@ commands), and the relevant event subscriptions.
 | `ask` | `prompt`*, `to`* (dm\|thread), `user`/`channel`, `draft`, `title`, `timeout` | `action`, `text`, `ref` |
 
 The legacy per-rule `ack:`/`on_done:`/`on_fail:` feedback is now ordinary
-hooks — [[Migration]] converts them:
+hooks — [[Migration]] converts them (a multi-variant rule merges into one
+trigger with parallel branches, so on_done/on_fail keep their
+fire-once-after-all-variants timing):
 
 ```yaml
 triggers:

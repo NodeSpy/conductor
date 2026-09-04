@@ -46,8 +46,8 @@ YAML, comments included.
 | every github kind + its action filters (`labels_any/labels_all/authors/assignee/sole_assignee/reviewer/from_users/ignore_users/ignore_checks/require_label/include_prereleases/gates/exclude`) and variants | `on: <conn>.<kind>` triggers, `name:` = variant, filters mapped 1:1 |
 | `flaky_rerun` / `stuck_after` / `poll_interval` / `max_attempts_per_head` | trigger `options:` |
 | action `steps:` (id/if/type/agent/prompt/checkout/workdir/env/output_schema/background/handoff/rerequest_review/retry/backend) | `steps:` carried field-for-field |
-| slack `triggers:` (on/reaction/command) | `on: <conn>.<event>` + filters; each variant its own trigger |
-| slack `ack` / `on_done` / `on_fail` | hooks `at: start/done/fail` using `<conn>.react` / `<conn>.post` |
+| slack `triggers:` (on/reaction/command) | `on: <conn>.<event>` + filters; a multi-variant rule merges into ONE trigger whose step is parallel branches (ids variant-prefixed, intra-variant references rewritten), so the feedback aggregation point is the join |
+| slack `ack` / `on_done` / `on_fail` | hooks `at: start/done/fail` using `<conn>.react` / `<conn>.post` — `on_done` fires once after ALL variants complete and `on_fail` once when any failed, identical to the legacy aggregation |
 | cron `schedules:` | connection `schedules:` + one trigger per schedule |
 | webhook `sources:` (path/sign/match/title/dedup/repo) | connection `sources:` + one trigger per source (`repo:` on the trigger) |
 | sentry / pagerduty `rules:` (match, repo) | one trigger per rule; later triggers carry `exclude:` maps of every earlier rule's match, so the legacy first-match winner is preserved under independent triggers (a rule behind a catch-all was unreachable and is skipped with a note) |
