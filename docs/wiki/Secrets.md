@@ -58,7 +58,18 @@ the next boot. The vault master key resolves in this order:
 2. `$CREDENTIALS_DIRECTORY/conductor-vault-key` — a systemd encrypted
    credential (`systemd-creds encrypt`, TPM/host-bound; no plaintext at rest).
    Best on Linux.
-3. `<vault dir>/vault.key` — a chmod-600 key file seeded by `conductor vault
+3. The OS keyring, read through the platform CLI (no cgo) — automatic once
+   the login session is unlocked. Best on macOS. Seed it once:
+   - macOS Keychain: `security add-generic-password -s conductor-vault-key
+     -a "$USER" -w '<key material>'` (read back with `security
+     find-generic-password -s conductor-vault-key -w`).
+   - libsecret (GNOME Keyring/KWallet): `secret-tool store --label
+     'conductor vault key' service conductor-vault-key` (read back with
+     `secret-tool lookup service conductor-vault-key`).
+   A missing tool, locked keyring, or absent entry falls through silently.
+   Note a headless Linux box usually has no unlocked keyring — prefer
+   systemd-creds there.
+4. `<vault dir>/vault.key` — a chmod-600 key file seeded by `conductor vault
    init` or `conductor unlock`. Simplest; with full-disk encryption the
    practical exposure is a running-host compromise, not the disk.
 

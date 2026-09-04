@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -282,5 +283,53 @@ func TestCredentialsDirectoryKey(t *testing.T) {
 	got, e := KeyChain(filepath.Join(t.TempDir(), "vault.json"))
 	if e != nil || string(got) != "cred-material" {
 		t.Fatalf("keychain via $CREDENTIALS_DIRECTORY: %q, %v", got, e)
+	}
+}
+
+// TestKeyChainOSKeyring proves the unlock chain consults the OS keyring CLI
+// (secret-tool on Linux) between the systemd credential and the key file,
+// and that the env var still wins.
+func TestKeyChainOSKeyring(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("exercises the linux secret-tool path")
+	}
+	bin := t.TempDir()
+	fake := filepath.Join(bin, "secret-tool")
+	script := "#!/bin/sh\n" +
+		`[ "$1 $2 $3" = "lookup service conductor-vault-key" ] || exit 1` + "\n" +
+		"printf 'keyring-material\\n'\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv(EnvVaultKey, "")
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	vaultPath := filepath.Join(t.TempDir(), "vault.json") // no sibling vault.key
+
+	got, err := KeyChain(vaultPath)
+	if err != nil || string(got) != "keyring-material" {
+		t.Fatalf("keyring lookup: %q, %v", got, err)
+	}
+
+	// The env var stays first in the chain.
+	t.Setenv(EnvVaultKey, "env-material")
+	if got, err := KeyChain(vaultPath); err != nil || string(got) != "env-material" {
+		t.Fatalf("env should win over keyring: %q, %v", got, err)
+	}
+
+	// No tool on PATH and no key file → the chain errors, naming every source.
+	t.Setenv(EnvVaultKey, "")
+	t.Setenv("PATH", t.TempDir())
+	if _, err := KeyChain(vaultPath); err == nil || !strings.Contains(err.Error(), "OS keyring") {
+		t.Fatalf("want a no-key error naming the keyring, got %v", err)
+	}
+
+	// The key file remains the last resort.
+	kf := filepath.Join(filepath.Dir(vaultPath), "vault.key")
+	if err := os.WriteFile(kf, []byte("file-material\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := KeyChain(vaultPath); err != nil || string(got) != "file-material" {
+		t.Fatalf("key-file fallback: %q, %v", got, err)
 	}
 }
