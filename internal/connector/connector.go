@@ -369,16 +369,23 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 	if err := buildStores(cfg, deps); err != nil {
 		return nil, err
 	}
-	// The kv connector (the verbs over those stores) is always available —
-	// no connection block, no credentials (config.Validate reserves the name).
-	if _, exists := r.byName["kv"]; !exists {
-		impl, err := buildReg["kv"]("kv", config.ConnectorRef{}, deps)
-		if err != nil {
-			return nil, fmt.Errorf("built-in kv store: %w", err)
+	// The kv and sql connectors (the verbs over those stores) are always
+	// available — no connection block, no credentials (config.Validate
+	// reserves both names).
+	for _, b := range []struct {
+		name string
+		decl *TypeDecl
+	}{{"kv", kvDecl}, {"sql", sqlDecl}} {
+		if _, exists := r.byName[b.name]; exists {
+			continue
 		}
-		in := &Instance{Name: "kv", Decl: kvDecl, Enabled: true, Impl: impl}
-		r.byName["kv"] = in
-		r.order = append(r.order, "kv")
+		impl, err := buildReg[b.name](b.name, config.ConnectorRef{}, deps)
+		if err != nil {
+			return nil, fmt.Errorf("built-in %s verbs: %w", b.name, err)
+		}
+		in := &Instance{Name: b.name, Decl: b.decl, Enabled: true, Impl: impl}
+		r.byName[b.name] = in
+		r.order = append(r.order, b.name)
 	}
 	return r, nil
 }
