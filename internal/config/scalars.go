@@ -35,6 +35,17 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 // D returns the value as a time.Duration.
 func (d Duration) D() time.Duration { return time.Duration(d) }
 
+// MarshalYAML renders the duration in the same string form UnmarshalYAML
+// accepts ("30m", "6h"), so config structs survive a marshal/unmarshal round
+// trip (the connectors-model lowering and the migration transform both rely
+// on that). A raw nanosecond integer would silently re-parse as seconds.
+func (d Duration) MarshalYAML() (any, error) {
+	if d == 0 {
+		return 0, nil
+	}
+	return time.Duration(d).String(), nil
+}
+
 // String renders the duration (or empty when zero).
 func (d Duration) String() string {
 	if d == 0 {

@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"strings"
 
@@ -21,7 +22,12 @@ func init() { core.Register("github", newIntegration) }
 
 // Config is a github integration instance's configuration.
 type Config struct {
-	App      AppConfig     `yaml:"app"`
+	App AppConfig `yaml:"app"`
+	// Token is the App-less credential: a PAT used for reads/enrichment when
+	// no GitHub App is configured. The full chain is app → token → the `gh`
+	// binary (`gh auth token`); with no App, events arrive via a plain
+	// webhook (+ secret) or the sweep, and repo globs are not expandable.
+	Token    string        `yaml:"token"`
 	Webhook  WebhookConfig `yaml:"webhook"`
 	Sweep    SweepConfig   `yaml:"sweep"`
 	Defaults Rule          `yaml:"defaults"`
@@ -212,13 +218,41 @@ func (g *Integration) ensureClients() error {
 	if g.app != nil {
 		return nil
 	}
-	app, err := newAppAuth(g.cfg.App.AppID, g.cfg.App.PrivateKeyPath)
-	if err != nil {
-		return err
+	var app *appAuth
+	switch {
+	case g.cfg.App.AppID > 0:
+		a, err := newAppAuth(g.cfg.App.AppID, g.cfg.App.PrivateKeyPath)
+		if err != nil {
+			return err
+		}
+		app = a
+	case g.cfg.Token != "":
+		app = newStaticAuth(g.cfg.Token)
+	default:
+		// App-less, token-less: fall back to the gh CLI's stored login.
+		tok, err := ghAuthToken()
+		if err != nil {
+			return fmt.Errorf("github[%s]: no credentials — configure app: or token:, or log in with `gh auth login`: %w", g.name, err)
+		}
+		app = newStaticAuth(tok)
 	}
 	g.app = app
 	g.rest = newRESTClient(app)
 	return nil
+}
+
+// ghAuthToken shells out to `gh auth token` — the last link of the App-less
+// credential chain (app → token → gh).
+func ghAuthToken() (string, error) {
+	out, err := exec.Command("gh", "auth", "token").Output()
+	if err != nil {
+		return "", fmt.Errorf("gh auth token: %w", err)
+	}
+	tok := strings.TrimSpace(string(out))
+	if tok == "" {
+		return "", fmt.Errorf("gh auth token returned empty")
+	}
+	return tok, nil
 }
 
 // Translate maps a raw webhook event to Triggers. Exported for the `replay`
@@ -259,20 +293,32 @@ func (g *Integration) IdentityTokens() (read, write, commitAuthor string) {
 
 // Validate checks the instance configuration.
 func (g *Integration) Validate() error {
-	if g.cfg.App.AppID == 0 {
-		return fmt.Errorf("github[%s]: app.app_id is required", g.name)
+	appless := g.cfg.App.AppID == 0 && g.cfg.App.PrivateKeyPath == ""
+	if !appless {
+		// A partially-configured App is a config bug, not App-less mode.
+		if g.cfg.App.AppID == 0 {
+			return fmt.Errorf("github[%s]: app.app_id is required when app: is configured", g.name)
+		}
+		if g.cfg.App.PrivateKeyPath == "" {
+			return fmt.Errorf("github[%s]: app.private_key_path is required when app: is configured", g.name)
+		}
+		if _, err := os.Stat(expandHome(g.cfg.App.PrivateKeyPath)); err != nil {
+			return fmt.Errorf("github[%s]: private key not readable: %w", g.name, err)
+		}
 	}
-	if g.cfg.App.PrivateKeyPath == "" {
-		return fmt.Errorf("github[%s]: app.private_key_path is required", g.name)
-	}
-	if _, err := os.Stat(expandHome(g.cfg.App.PrivateKeyPath)); err != nil {
-		return fmt.Errorf("github[%s]: private key not readable: %w", g.name, err)
-	}
-	if g.cfg.App.Verify() && g.cfg.App.WebhookSecret == "" {
+	hasWebhook := g.cfg.Webhook.SmeeURL != "" || g.cfg.Webhook.Listen != ""
+	if hasWebhook && g.cfg.App.Verify() && g.cfg.App.WebhookSecret == "" {
 		return fmt.Errorf("github[%s]: webhook_secret required when verify_signature is on", g.name)
 	}
-	if g.cfg.Webhook.SmeeURL == "" && g.cfg.Webhook.Listen == "" {
-		return fmt.Errorf("github[%s]: set webhook.smee_url and/or webhook.listen", g.name)
+	if !hasWebhook && !(appless && g.cfg.Sweep.Enabled) {
+		return fmt.Errorf("github[%s]: set webhook.smee_url and/or webhook.listen (or, App-less, enable the sweep for polling)", g.name)
+	}
+	if appless {
+		for _, r := range g.cfg.Sweep.Repos {
+			if strings.Contains(r, "*") {
+				return fmt.Errorf("github[%s]: sweep repo glob %q needs a GitHub App — list repos explicitly when using token/gh credentials", g.name, r)
+			}
+		}
 	}
 	// Action maps are keyed by kind; a typo or a renamed kind (e.g. the old
 	// issue_labeled) would otherwise sit in config doing nothing. Reject unknown keys.

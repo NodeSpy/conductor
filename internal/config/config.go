@@ -29,8 +29,23 @@ type Config struct {
 	Imports []string `yaml:"imports"`
 
 	Integrations []IntegrationRef `yaml:"integrations"`
-	Control      Control          `yaml:"control"`
-	Notify       Notify           `yaml:"notify"`
+
+	// ConnectorsMap, Runtimes, Hosts, Workflows, Triggers, Policy, and
+	// SecretRefs are the connectors-model schema (see connectors.go). They
+	// coexist with the legacy blocks: a config may carry either schema (or,
+	// mid-migration, both).
+	ConnectorsMap map[string]ConnectorRef  `yaml:"connectors"`
+	Runtimes      map[string]RuntimeConfig `yaml:"runtimes"`
+	Hosts         map[string]HostConfig    `yaml:"hosts"`
+	Workflows     map[string]WorkflowDef   `yaml:"workflows"`
+	Triggers      []TriggerSpec            `yaml:"triggers"`
+	Policy        *Policy                  `yaml:"policy"`
+	// SecretRefs is the named `secrets:` block: name -> secret reference
+	// (env:/op://…), readable in templates as {{.secrets.<name>}}.
+	SecretRefs map[string]string `yaml:"secrets"`
+
+	Control Control `yaml:"control"`
+	Notify  Notify  `yaml:"notify"`
 	// Handoff is the LEGACY singular hand-off block (a web-link page on the inbound
 	// listener). Deprecated in favor of `handoffs:` (below); still parsed for
 	// back-compat and folded into Handoffs["default"] by applyDefaults when
@@ -371,7 +386,13 @@ type AgentProfile struct {
 	// Controller names the controller (from top-level `controllers:`) that runs
 	// this agent. Empty falls through to the controller flagged default:true, then
 	// to the built-in paseo controller. See internal/controller resolution order.
-	Controller      string            `yaml:"controller"`
+	Controller string `yaml:"controller"`
+	// Runtime is the connectors-model name for Controller (a `runtimes:` entry).
+	// When both are set, Runtime wins; use RuntimeName.
+	Runtime string `yaml:"runtime"`
+	// Host pins this agent's runtime invocations to a named `hosts:` SSH
+	// target, overriding (or standing in for) the runtime's own `host:`.
+	Host            string            `yaml:"host"`
 	Workspace       string            `yaml:"workspace"` // local | worktree
 	WaitTimeout     Duration          `yaml:"wait_timeout"`
 	ArchiveWhenDone bool              `yaml:"archive_when_done"`
@@ -380,6 +401,15 @@ type AgentProfile struct {
 	// format rules appended to its prompt). Unset (nil) → fall through to the
 	// top-level agent_guidance (then the built-in default); "" → none; text → that.
 	Guidance *string `yaml:"guidance"`
+}
+
+// RuntimeName returns the runtime/controller the profile selects (runtime
+// wins over the legacy controller key; "" = the default).
+func (p AgentProfile) RuntimeName() string {
+	if p.Runtime != "" {
+		return p.Runtime
+	}
+	return p.Controller
 }
 
 // Action is one (source,kind)→action mapping. Type is "agent" or "command".
@@ -426,6 +456,21 @@ type Action struct {
 	// gating actors (live on the check they gate)
 	Reviewer Actors `yaml:"reviewer"` // review_requested: whose requested review triggers it
 	Assignee Actors `yaml:"assignee"` // issue_assigned: whose assignment triggers it
+
+	// FlowRef ties a lowered connectors-model trigger back to its
+	// config.Triggers spec ("<index>:<on>"). Set programmatically by the
+	// lowering in internal/connector — never from user YAML — and carried
+	// through JSON persistence so an in-flight run resumes onto its spec.
+	// The x_-prefixed YAML names are internal: the lowering round-trips these
+	// structs through YAML, so they need tags, but they are not part of the
+	// user-facing schema.
+	FlowRef string `yaml:"x_flow_ref,omitempty" json:"FlowRef,omitempty"`
+	// Repos / ExcludeRepos are per-variant repo gates (globs), also set by the
+	// connectors-model lowering: a trigger's `filters.repos` becomes a variant
+	// that only fires for matching repos. Legacy configs use rule-level
+	// `match.repos` instead and never set these.
+	Repos        []string `yaml:"x_repos,omitempty" json:"Repos,omitempty"`
+	ExcludeRepos []string `yaml:"x_exclude_repos,omitempty" json:"ExcludeRepos,omitempty"`
 
 	// kind-specific options
 	MaxAttemptsPerHead int            `yaml:"max_attempts_per_head"`
@@ -856,8 +901,11 @@ func (c *Config) applyHandoffCompat() {
 
 // Validate checks required fields and cross-field consistency.
 func (c *Config) Validate() error {
-	if len(c.Integrations) == 0 {
-		return fmt.Errorf("config: no integrations configured")
+	if len(c.Integrations) == 0 && !c.HasConnectors() {
+		return fmt.Errorf("config: no integrations or connectors configured")
+	}
+	if err := c.validateConnectors(); err != nil {
+		return err
 	}
 	names := map[string]bool{}
 	for i, ig := range c.Integrations {
@@ -882,13 +930,36 @@ func (c *Config) Validate() error {
 		if p.Workspace != "" && p.Workspace != "local" && p.Workspace != "worktree" {
 			return fmt.Errorf("config: agent %q: workspace must be local|worktree, got %q", name, p.Workspace)
 		}
-		if p.Controller != "" {
-			if _, ok := c.Controllers[p.Controller]; !ok {
-				return fmt.Errorf("config: agent %q: unknown controller %q (defined: %s)", name, p.Controller, c.controllerNames())
+		if rn := p.RuntimeName(); rn != "" {
+			_, isController := c.Controllers[rn]
+			_, isRuntime := c.Runtimes[rn]
+			if !isController && !isRuntime {
+				return fmt.Errorf("config: agent %q: unknown runtime %q (defined: %s)", name, rn, c.runtimeNames())
+			}
+		}
+		if p.Host != "" {
+			if _, ok := c.Hosts[p.Host]; !ok {
+				return fmt.Errorf("config: agent %q: unknown host %q (defined: %s)", name, p.Host, c.hostNames())
 			}
 		}
 	}
 	return nil
+}
+
+// runtimeNames lists runtimes and legacy controllers, sorted, for errors.
+func (c *Config) runtimeNames() string {
+	names := make([]string, 0, len(c.Runtimes)+len(c.Controllers))
+	for n := range c.Runtimes {
+		names = append(names, n)
+	}
+	for n := range c.Controllers {
+		names = append(names, n)
+	}
+	if len(names) == 0 {
+		return "none"
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // validateControllers checks the optional `controllers:` block: each entry sets
