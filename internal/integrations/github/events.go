@@ -209,6 +209,17 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 		}
 	}
 
+	// App-less (static-token) mode: there is no installation, but the fixed
+	// token serves the same read role. Inject it so dispatch behaves the same.
+	if len(trs) > 0 && g.app != nil && g.app.static != "" {
+		for i := range trs {
+			if trs[i].Context == nil {
+				trs[i].Context = map[string]any{}
+			}
+			trs[i].Context["app_token"] = g.app.static
+		}
+	}
+
 	// Inject the App installation token so dispatch can use it for reads, plus the
 	// installation id so a persisted workflow can re-mint the (short-lived) token
 	// on resume.
@@ -805,6 +816,15 @@ func (g *Integration) emit(repo, kind string, t core.Target, title, dedup string
 	var out []core.Trigger
 	for _, act := range g.actionsFor(repo, kind) {
 		if !act.IsEnabled() {
+			continue
+		}
+		// Per-variant repo gates, used by the connectors-model lowering where
+		// every trigger on a kind is a variant carrying its own `repos:` filter
+		// (legacy configs never set these fields, so behavior is unchanged).
+		if len(act.Repos) > 0 && !matchRepo(act.Repos, repo) {
+			continue
+		}
+		if len(act.ExcludeRepos) > 0 && matchRepo(act.ExcludeRepos, repo) {
 			continue
 		}
 		if keep != nil && !keep(act) {
