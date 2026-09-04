@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func openMem(t *testing.T) *Store {
@@ -224,6 +225,41 @@ func TestOpenMySQLWiring(t *testing.T) {
 	if _, err := OpenMySQL("this is not a dsn", ""); err == nil ||
 		!strings.Contains(err.Error(), "bad mysql dsn") {
 		t.Fatalf("bad dsn error = %v", err)
+	}
+}
+
+func TestPing(t *testing.T) {
+	s := openMem(t)
+	if err := s.Ping(context.Background()); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+}
+
+func TestNormalize(t *testing.T) {
+	ts := time.Date(2026, 9, 4, 12, 30, 0, 0, time.UTC)
+	if got := normalize(ts); got != "2026-09-04T12:30:00Z" {
+		t.Fatalf("time = %#v", got)
+	}
+	if got := normalize([]byte("raw")); got != "raw" {
+		t.Fatalf("bytes = %#v", got)
+	}
+	if got := normalize(int64(7)); got != int64(7) {
+		t.Fatalf("passthrough = %#v", got)
+	}
+}
+
+func TestBindArgsUnbindable(t *testing.T) {
+	if _, err := bindArgs([]any{make(chan int)}); err == nil ||
+		!strings.Contains(err.Error(), "not bindable") {
+		t.Fatalf("chan arg error = %v", err)
+	}
+	// time.Time binds as itself (drivers accept it natively).
+	out, err := bindArgs([]any{time.Unix(0, 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := out[0].(time.Time); !ok {
+		t.Fatalf("time arg = %#v", out[0])
 	}
 }
 
