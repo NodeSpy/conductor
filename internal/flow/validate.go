@@ -480,13 +480,24 @@ func checkAskCapable(reg *connector.Registry, w, name string) error {
 type scope struct {
 	top   map[string]bool
 	steps map[string]connector.Schema
+	// vaults are the defined vaults: names — the universe {{ vault "x" … }}
+	// calls and {{.vaults.x.…}} reads check against.
+	vaults map[string]bool
 	// open scopes (workflow bodies) allow unknown top-level refs — a workflow
 	// is polymorphic over its callers' trigger contexts.
 	open bool
 }
 
+func vaultNameSet(cfg *config.Config) map[string]bool {
+	out := make(map[string]bool, len(cfg.Vaults))
+	for n := range cfg.Vaults {
+		out[n] = true
+	}
+	return out
+}
+
 func newScope(ev connector.EventDecl, cfg *config.Config, grouped bool) *scope {
-	sc := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}}
+	sc := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, vaults: vaultNameSet(cfg)}
 	for _, k := range universalKeys {
 		sc.top[k] = true
 	}
@@ -496,6 +507,9 @@ func newScope(ev connector.EventDecl, cfg *config.Config, grouped bool) *scope {
 	if len(cfg.SecretRefs) > 0 {
 		sc.top["secrets"] = true
 	}
+	if len(cfg.Vaults) > 0 {
+		sc.top["vaults"] = true
+	}
 	if grouped {
 		sc.top["group"] = true
 	}
@@ -503,12 +517,15 @@ func newScope(ev connector.EventDecl, cfg *config.Config, grouped bool) *scope {
 }
 
 func openScope(cfg *config.Config) *scope {
-	sc := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, open: true}
+	sc := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, vaults: vaultNameSet(cfg), open: true}
 	for _, k := range universalKeys {
 		sc.top[k] = true
 	}
 	if len(cfg.SecretRefs) > 0 {
 		sc.top["secrets"] = true
+	}
+	if len(cfg.Vaults) > 0 {
+		sc.top["vaults"] = true
 	}
 	return sc
 }
@@ -525,7 +542,7 @@ func (s *scope) addStep(id string, outputs connector.Schema) {
 }
 
 func (s *scope) clone() *scope {
-	out := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, open: s.open}
+	out := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, vaults: s.vaults, open: s.open}
 	for k := range s.top {
 		out.top[k] = true
 	}
@@ -537,9 +554,16 @@ func (s *scope) clone() *scope {
 
 // check verifies one dotted reference against the scope: the root must be
 // addressable, and a verb step's declared outputs are checked field-level.
+// A .vaults.<name> read additionally checks the vault is defined.
 func (s *scope) check(where, ref string) error {
 	parts := strings.SplitN(ref, ".", 3)
 	root := parts[0]
+	if root == "vaults" && s.top[root] && len(parts) > 1 {
+		if !s.vaults[parts[1]] {
+			return fmt.Errorf("%s: {{.%s}}: no vault named %q (defined vaults: %s)", where, ref, parts[1], sortedIDs(s.vaults))
+		}
+		return nil
+	}
 	if !s.top[root] {
 		if s.open {
 			return nil
@@ -572,7 +596,8 @@ func (s *scope) describe() string {
 	return strings.Join(keys, ", ")
 }
 
-// checkRefs validates every {{.x}} reference in a template string.
+// checkRefs validates every {{.x}} reference in a template string, and every
+// {{ vault "name" … }} call's literal vault name against the defined vaults.
 func checkRefs(where, tmpl string, sc *scope) error {
 	refs, err := templateRefs(tmpl)
 	if err != nil {
@@ -581,6 +606,18 @@ func checkRefs(where, tmpl string, sc *scope) error {
 	for _, ref := range refs {
 		if err := sc.check(where, ref); err != nil {
 			return err
+		}
+	}
+	calls, err := templateVaultCalls(tmpl)
+	if err != nil {
+		return fmt.Errorf("%s: %v", where, err)
+	}
+	for _, c := range calls {
+		if c[0] == "" {
+			continue // non-literal vault name; checked at run time
+		}
+		if !sc.vaults[c[0]] {
+			return fmt.Errorf("%s: {{ vault %q … }}: no vault named %q (defined vaults: %s)", where, c[0], c[0], sortedIDs(sc.vaults))
 		}
 	}
 	return nil

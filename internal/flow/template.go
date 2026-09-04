@@ -9,6 +9,7 @@
 package flow
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"text/template"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/kv"
+	"github.com/NodeSpy/conductor/internal/vaults"
 )
 
 // templateFuncs is the pinned function set templates may call, mirroring the
@@ -57,6 +59,16 @@ var templateFuncs = template.FuncMap{
 			return nil, nil
 		}
 		return v, nil
+	},
+	// vault reads a defined vaults: entry inline:
+	// {{ vault "op" "Private/GitHub/token" }}. The value is tainted
+	// sensitive (redacted from logs/audit) by the vaults read path.
+	// Read-only — writes go through the <vault>.write verb.
+	"vault": func(args ...any) (string, error) {
+		if len(args) != 2 {
+			return "", fmt.Errorf("vault takes (vault, key), got %d args", len(args))
+		}
+		return vaults.Read(context.Background(), fmt.Sprint(args[0]), fmt.Sprint(args[1]))
 	},
 	// kvContains tests membership in a stored list, read-only:
 	// {{ kvContains "store" "namespace" "key" .item }}. An absent key is
@@ -286,6 +298,81 @@ func collectPipe(p *parse.PipeNode, rootDot bool, out *[]string) {
 	}
 }
 
+// templateVaultCalls extracts the (vault, key) pairs of every `vault`
+// function call with literal arguments in a template string, for load-time
+// validation of the vault names. Non-literal names can't be checked at load
+// (they are rejected elsewhere: config-field refs must be literal).
+func templateVaultCalls(s string) ([][2]string, error) {
+	if !strings.Contains(s, "{{") {
+		return nil, nil
+	}
+	t, err := template.New("t").Funcs(templateFuncs).Parse(s)
+	if err != nil {
+		return nil, err
+	}
+	var out [][2]string
+	for _, tmpl := range t.Templates() {
+		if tmpl.Tree != nil && tmpl.Tree.Root != nil {
+			collectVaultCalls(tmpl.Tree.Root, &out)
+		}
+	}
+	return out, nil
+}
+
+func collectVaultCalls(n parse.Node, out *[][2]string) {
+	switch x := n.(type) {
+	case *parse.ListNode:
+		if x == nil {
+			return
+		}
+		for _, c := range x.Nodes {
+			collectVaultCalls(c, out)
+		}
+	case *parse.ActionNode:
+		collectVaultPipe(x.Pipe, out)
+	case *parse.IfNode:
+		collectVaultPipe(x.Pipe, out)
+		collectVaultCalls(x.List, out)
+		if x.ElseList != nil {
+			collectVaultCalls(x.ElseList, out)
+		}
+	case *parse.RangeNode:
+		collectVaultPipe(x.Pipe, out)
+		collectVaultCalls(x.List, out)
+		if x.ElseList != nil {
+			collectVaultCalls(x.ElseList, out)
+		}
+	case *parse.WithNode:
+		collectVaultPipe(x.Pipe, out)
+		collectVaultCalls(x.List, out)
+		if x.ElseList != nil {
+			collectVaultCalls(x.ElseList, out)
+		}
+	}
+}
+
+func collectVaultPipe(p *parse.PipeNode, out *[][2]string) {
+	if p == nil {
+		return
+	}
+	for _, cmd := range p.Cmds {
+		if len(cmd.Args) == 0 {
+			continue
+		}
+		id, ok := cmd.Args[0].(*parse.IdentifierNode)
+		if !ok || id.Ident != "vault" {
+			continue
+		}
+		pair := [2]string{}
+		for i := 1; i < len(cmd.Args) && i <= 2; i++ {
+			if s, isStr := cmd.Args[i].(*parse.StringNode); isStr {
+				pair[i-1] = s.Text
+			}
+		}
+		*out = append(*out, pair)
+	}
+}
+
 // baseData builds the root template scope for a fired trigger: the target's
 // addressable facts, the event's published context, and the named secrets.
 func baseData(t core.Trigger, secrets map[string]string) map[string]any {
@@ -308,4 +395,20 @@ func baseData(t core.Trigger, secrets map[string]string) map[string]any {
 		d["secrets"] = sm
 	}
 	return d
+}
+
+// addVaultData attaches the preloaded {{.vaults.<name>.<key>}} scope.
+func addVaultData(d map[string]any, vaultVals map[string]map[string]string) {
+	if len(vaultVals) == 0 {
+		return
+	}
+	vm := make(map[string]any, len(vaultVals))
+	for name, entries := range vaultVals {
+		em := make(map[string]any, len(entries))
+		for k, v := range entries {
+			em[k] = v
+		}
+		vm[name] = em
+	}
+	d["vaults"] = vm
 }

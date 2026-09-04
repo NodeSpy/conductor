@@ -39,7 +39,11 @@ type Config struct {
 	Hosts         map[string]HostConfig    `yaml:"hosts"`
 	// Stores are named data stores (boltdb/redis/http) addressed by the
 	// `store:` selector on kv.* verbs; nothing is implicit.
-	Stores    map[string]StoreRef    `yaml:"stores"`
+	Stores map[string]StoreRef `yaml:"stores"`
+	// Vaults are named secret stores (conductor/onepassword/pass/file/
+	// hashicorp) addressed by {{ vault "<name>" "<key>" }} references and
+	// per-vault read/write verbs; env stays the implicit baseline.
+	Vaults    map[string]VaultRef    `yaml:"vaults"`
 	Workflows map[string]WorkflowDef `yaml:"workflows"`
 	Triggers  []TriggerSpec          `yaml:"triggers"`
 	Policy    *Policy                `yaml:"policy"`
@@ -1020,6 +1024,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateStores(); err != nil {
+		return err
+	}
+	if err := c.validateVaults(); err != nil {
 		return err
 	}
 	names := map[string]bool{}

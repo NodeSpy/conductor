@@ -61,9 +61,12 @@ type Runner struct {
 	Secrets *secrets.Resolver
 	// SecretVals are the resolved named secrets: values ({{.secrets.<name>}}).
 	SecretVals map[string]string
-	Store      Store
-	Notif      Notifier
-	Log        func(string, ...any)
+	// VaultVals are the preloaded listable-vault entries
+	// ({{.vaults.<name>.<key>}}) — see vaults.PreloadListable.
+	VaultVals map[string]map[string]string
+	Store     Store
+	Notif     Notifier
+	Log       func(string, ...any)
 	// DryRun stubs every outbound verb and agent/command dispatch (replay).
 	DryRun bool
 	// sleep is injectable for retry tests.
@@ -172,6 +175,7 @@ func (r *Runner) resolveBotReply(t core.Trigger, spec config.TriggerSpec) botRep
 func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, batch *Batch, shadow bool) {
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
 	data := baseData(t, r.SecretVals)
+	addVaultData(data, r.VaultVals)
 	if batch != nil {
 		data["group"] = groupData(batch, r.SecretVals)
 	}
@@ -693,6 +697,7 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	// The child sees the trigger context + its inputs + its own steps — not
 	// the caller's other step outputs (pass those via with:).
 	child := baseData(t, r.SecretVals)
+	addVaultData(child, r.VaultVals)
 	child["inputs"] = inputs
 	child["steps"] = map[string]any{}
 	if g, ok := data["group"]; ok {

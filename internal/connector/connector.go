@@ -28,6 +28,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/secrets"
+	"github.com/NodeSpy/conductor/internal/vaults"
 )
 
 // FieldType is a schema field's type.
@@ -267,6 +268,10 @@ type Deps struct {
 	// Config is the loaded config (identity defaults, hosts for the command
 	// connector, …).
 	Config *config.Config
+	// VaultBoot resolves vault unlock: references (nil = OS-backed).
+	VaultBoot *vaults.Bootstrap
+	// VaultExec runs external vault helpers — op, pass (nil = real exec).
+	VaultExec vaults.ExecFn
 }
 
 var (
@@ -320,6 +325,18 @@ type Registry struct {
 // runtime conditions.
 func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 	r := &Registry{byName: map[string]*Instance{}}
+	// Vaults build FIRST: connector credentials may hold {{ vault … }}
+	// references, which resolve through the registry this wires. A vault
+	// that won't unlock registers disabled (the daemon boots; dependents
+	// carry the reason); a structural vaults: error is a load error.
+	vinsts, err := buildVaults(cfg, deps)
+	if err != nil {
+		return nil, err
+	}
+	for _, in := range vinsts {
+		r.byName[in.Name] = in
+		r.order = append(r.order, in.Name)
+	}
 	names := make([]string, 0, len(cfg.ConnectorsMap))
 	for n := range cfg.ConnectorsMap {
 		names = append(names, n)

@@ -45,6 +45,10 @@ type Resolver struct {
 	// VaultKey returns the vault master key material (default: the KeyChain
 	// lookup order documented in vault.go).
 	VaultKey func() ([]byte, error)
+	// VaultRead resolves {{ vault "<name>" "<key>" }} references against the
+	// vaults: registry. Wired by the connector build (a plain func, so this
+	// package never imports internal/vaults).
+	VaultRead func(ctx context.Context, name, key string) (string, error)
 
 	mu     sync.Mutex
 	cache  map[string]string // ref -> resolved value
@@ -80,8 +84,14 @@ func execHelper(ctx context.Context, name string, args ...string) (string, error
 	return strings.TrimRight(string(out), "\n"), nil
 }
 
-// IsRef reports whether s is a secret reference (as opposed to a literal).
+// IsRef reports whether s is a secret reference (as opposed to a literal):
+// an env: reference (the baseline), a {{ vault … }} vault reference, or one
+// of the legacy scheme URIs (still recognized so they never silently pass
+// through as literal values).
 func IsRef(s string) bool {
+	if IsVaultRef(s) {
+		return true
+	}
 	switch {
 	case strings.HasPrefix(s, "env:"),
 		strings.HasPrefix(s, "op://"),
@@ -123,6 +133,9 @@ func (r *Resolver) Resolve(ctx context.Context, ref string) (string, error) {
 }
 
 func (r *Resolver) resolve(ctx context.Context, ref string) (string, error) {
+	if name, key, ok := ParseVaultRef(ref); ok {
+		return r.resolveVaultRef(ctx, name, key)
+	}
 	switch {
 	case strings.HasPrefix(ref, "env:"):
 		name := strings.TrimPrefix(ref, "env:")
