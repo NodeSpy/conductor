@@ -281,4 +281,3 @@ func applyNotifyPass(masked []byte, notes *[]string) (out []byte, changed bool, 
 	}
 	return b, true, nil
 }
-
