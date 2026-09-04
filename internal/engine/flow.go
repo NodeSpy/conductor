@@ -87,7 +87,7 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 	// A comment was accepted for handling — raise the high-water mark.
 	if t.Kind == "new_comment" {
 		if id := commentID(t); id > 0 {
-			_ = e.store.AdvanceCommentID(key, commentKind(t), id)
+			_ = e.store.AdvanceCommentID(key, commentMarkKind(t), id)
 		}
 	}
 
