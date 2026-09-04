@@ -488,10 +488,53 @@ func cmdConnectorAuth(args []string) error {
 		return err
 	}
 	rest := positional(args)
-	if len(rest) != 2 || rest[0] != "auth" {
-		return fmt.Errorf("usage: conductor connector auth <name>")
+	if len(rest) < 2 || rest[0] != "auth" {
+		return fmt.Errorf("usage: conductor connector auth ls | auth <name> [--revoke]")
 	}
+	sec := secrets.New()
+	deps := connector.Deps{Secrets: sec, Config: cfg}
+
+	if rest[1] == "ls" {
+		statuses, err := connector.AuthList(context.Background(), cfg, deps)
+		if err != nil {
+			return err
+		}
+		if len(statuses) == 0 {
+			fmt.Println("no oauth2 connectors configured")
+			return nil
+		}
+		for _, st := range statuses {
+			state := "not logged in — run `conductor connector auth " + st.Name + "`"
+			if st.HasRefresh {
+				state = "logged in"
+			}
+			expiry := ""
+			if st.Expiry != "" {
+				expiry = " (access token expires " + st.Expiry + ")"
+			}
+			tv := st.TokenVault
+			if tv == "" {
+				tv = "none"
+			}
+			fmt.Printf("%-20s grant=%-18s token_vault=%-12s %s%s\n", st.Name, st.Grant, tv, state, expiry)
+		}
+		return nil
+	}
+
 	name := rest[1]
+	revoke := false
+	for _, a := range args {
+		if a == "--revoke" {
+			revoke = true
+		}
+	}
+	if revoke {
+		if err := connector.AuthRevoke(context.Background(), cfg, deps, name); err != nil {
+			return err
+		}
+		fmt.Printf("cleared stored tokens for %q\n", name)
+		return nil
+	}
 	ref, ok := cfg.ConnectorsMap[name]
 	if !ok {
 		return fmt.Errorf("no connector %q configured", name)
@@ -502,7 +545,6 @@ func cmdConnectorAuth(args []string) error {
 		} `yaml:"auth"`
 	}
 	_ = ref.Decode(&conn)
-	sec := secrets.New()
 	capture := connector.LocalCodeCapture(conn.Auth.RedirectURI, os.Stdout, 5*time.Minute)
 	return connector.AuthBootstrap(context.Background(), cfg, sec, name, os.Stdout, capture)
 }

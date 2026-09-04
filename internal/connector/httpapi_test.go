@@ -20,6 +20,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/secrets"
+	"github.com/NodeSpy/conductor/internal/vaults"
 )
 
 // buildAPIRegistry builds a registry with an injected secrets resolver.
@@ -595,9 +596,10 @@ connectors:
 }
 
 // TestAuthBootstrapExchange: the interactive bootstrap builds the consent
-// URL, exchanges the captured code, and stores the refresh token in the
-// vault ref — the token values never print.
+// URL, exchanges the captured code, and stores the access + refresh tokens
+// in the connector's token_vault — the token values never print.
 func TestAuthBootstrapExchange(t *testing.T) {
+	t.Cleanup(vaults.Reset)
 	var form url.Values
 	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -610,7 +612,8 @@ func TestAuthBootstrapExchange(t *testing.T) {
 	}))
 	defer tokenSrv.Close()
 
-	sec := tempVault(t, nil)
+	vpath, vkey := seedConductorVault(t)
+	sec := secrets.New()
 	var cfg config.Config
 	if err := yaml.Unmarshal([]byte(`
 connectors:
@@ -624,9 +627,11 @@ connectors:
       auth_url: https://login.example/authorize
       client_id: cid
       client_secret: csec
-      refresh_token: vault:xero_refresh
+      token_vault: house
       scopes: [accounting, offline_access]
     verbs: { v: { method: GET, path: / } }
+vaults:
+  house: { type: conductor, path: `+vpath+`, unlock: { key: "`+vkey+`" } }
 `), &cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -655,14 +660,20 @@ connectors:
 	if form.Get("grant_type") != "authorization_code" || form.Get("code") != "code-123" {
 		t.Fatalf("exchange form: %v", form)
 	}
-	if got := vaultValue(t, sec, "xero_refresh"); got != "rt-first" {
-		t.Fatalf("refresh token stored: %q", got)
+	if got, err := vaults.Read(context.Background(), "house", "oauth/xero/refresh_token"); err != nil || got != "rt-first" {
+		t.Fatalf("refresh token stored: %q %v", got, err)
+	}
+	if got, err := vaults.Read(context.Background(), "house", "oauth/xero/access_token"); err != nil || got != "at-1" {
+		t.Fatalf("access token stored: %q %v", got, err)
+	}
+	if exp, err := vaults.Read(context.Background(), "house", "oauth/xero/expiry"); err != nil || exp == "" {
+		t.Fatalf("expiry stored: %q %v", exp, err)
 	}
 	if strings.Contains(sb.String(), "rt-first") || strings.Contains(sb.String(), "at-1") {
 		t.Fatalf("token values must not print: %s", sb.String())
 	}
 
-	// Guardrails: non-vault refresh ref, non-oauth2 auth, unknown connector.
+	// Guardrails: missing token_vault, non-oauth2 auth, unknown connector.
 	var cfg2 config.Config
 	_ = yaml.Unmarshal([]byte(`
 connectors:
@@ -671,9 +682,17 @@ connectors:
     base_url: http://x
     auth: { type: bearer, token: t }
     verbs: { v: { method: GET, path: / } }
+  notv:
+    type: rest
+    base_url: http://x
+    auth: { type: oauth2, grant: refresh_token, token_url: http://t, client_id: c }
+    verbs: { v: { method: GET, path: / } }
 `), &cfg2)
 	if err := AuthBootstrap(context.Background(), &cfg2, sec, "plain", io.Discard, nil); err == nil || !strings.Contains(err.Error(), "oauth2") {
 		t.Fatalf("non-oauth2: %v", err)
+	}
+	if err := AuthBootstrap(context.Background(), &cfg2, sec, "notv", io.Discard, nil); err == nil || !strings.Contains(err.Error(), "token_vault") {
+		t.Fatalf("missing token_vault: %v", err)
 	}
 	if err := AuthBootstrap(context.Background(), &cfg, sec, "ghost", io.Discard, nil); err == nil {
 		t.Fatal("unknown connector must error")
