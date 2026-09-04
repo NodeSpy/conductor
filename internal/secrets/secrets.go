@@ -270,3 +270,28 @@ func expandHome(p string) string {
 	}
 	return p
 }
+
+// StoreVault writes name=value into the resolver's configured vault and
+// refreshes the in-memory cache for the matching vault: reference — the
+// oauth2 refresh-token rotation write-back, so a provider-rotated token
+// survives the daemon's own restart. The value is tracked for redaction.
+func (r *Resolver) StoreVault(name, value string) error {
+	v, err := OpenVault(r.VaultPath, r.VaultKey)
+	if err != nil {
+		return err
+	}
+	if err := v.Set(name, value); err != nil {
+		return err
+	}
+	if err := v.Save(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	if r.cache == nil {
+		r.cache = map[string]string{}
+	}
+	r.cache["vault:"+name] = value
+	r.trackLocked(value)
+	r.mu.Unlock()
+	return nil
+}
