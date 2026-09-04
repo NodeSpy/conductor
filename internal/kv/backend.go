@@ -79,38 +79,24 @@ func CheckCapability(storeName string, b KVBackend, op string) error {
 }
 
 // ---------------------------------------------------------------------------
-// The store registry. boltdb is a first-class store type like redis/http —
-// nothing here special-cases it. The zero-config default is an IMPLICIT
-// boltdb store named "default" (file <data dir>/default.db), constructed
-// through the same path as any configured boltdb store and opened lazily on
-// first use. A `stores:` entry with default: true supersedes it as what an
-// omitted `store:` resolves to.
+// The store registry. Every store is explicit: a `stores:` entry names it,
+// gives it a type (boltdb/redis/http), and only then can a `store:` selector
+// reach it. There is NO implicit or default store — no stores: section means
+// no stores. boltdb entries get one file each: <data dir>/<name>.db, or
+// wherever path: points.
 // ---------------------------------------------------------------------------
 
-// DefaultStoreName is the implicit zero-config boltdb store's name (and its
-// file stem). A `stores:` entry may not take it.
-const DefaultStoreName = "default"
-
 var (
-	regMu       sync.Mutex
-	dataDir     string // where boltdb stores without an explicit path: live
-	named       = map[string]KVBackend{}
-	defaultName = DefaultStoreName
+	regMu   sync.Mutex
+	dataDir string // where boltdb stores without an explicit path: live
+	named   = map[string]KVBackend{}
 )
 
-// SetDataDir points boltdb stores (including the implicit default) at dir.
-// Changing it drops a lazily-opened default so it reopens at the new
-// location (tests point this at a temp dir).
+// SetDataDir points path-less boltdb stores at dir (the daemon's data dir;
+// tests use a temp dir).
 func SetDataDir(dir string) {
 	regMu.Lock()
 	defer regMu.Unlock()
-	if dir == dataDir {
-		return
-	}
-	if b, ok := named[DefaultStoreName]; ok {
-		_ = b.Close()
-		delete(named, DefaultStoreName)
-	}
 	dataDir = dir
 }
 
@@ -129,8 +115,7 @@ func BoltPath(storeName, path string) (string, error) {
 	return filepath.Join(dir, storeName+".db"), nil
 }
 
-// OpenBoltStore builds the boltdb backend for a named store — the one
-// construction path both `stores:` entries and the implicit default use.
+// OpenBoltStore builds the boltdb backend for a named store.
 func OpenBoltStore(storeName, path string) (KVBackend, error) {
 	p, err := BoltPath(storeName, path)
 	if err != nil {
@@ -143,29 +128,22 @@ func OpenBoltStore(storeName, path string) (KVBackend, error) {
 	return b, nil
 }
 
-// Register adds a named backend (a `stores:` entry). The implicit default's
-// name is reserved; duplicates and a second default error.
-func Register(name string, b KVBackend, isDefault bool) error {
+// Register adds a named backend (a `stores:` entry). Duplicates error.
+func Register(name string, b KVBackend) error {
 	regMu.Lock()
 	defer regMu.Unlock()
-	if name == DefaultStoreName {
-		return fmt.Errorf("kv: store name %q is reserved (the implicit boltdb default)", DefaultStoreName)
+	if name == "" {
+		return fmt.Errorf("kv: stores: empty store name")
 	}
 	if _, dup := named[name]; dup {
 		return fmt.Errorf("kv: store %q registered twice", name)
-	}
-	if isDefault {
-		if defaultName != DefaultStoreName {
-			return fmt.Errorf("kv: stores %q and %q both claim default: true — pick one", defaultName, name)
-		}
-		defaultName = name
 	}
 	named[name] = b
 	return nil
 }
 
 // ResetStores closes and clears every registered backend (config reload,
-// tests) and restores the implicit default. The data dir stays configured.
+// tests). The data dir stays configured.
 func ResetStores() {
 	regMu.Lock()
 	defer regMu.Unlock()
@@ -173,48 +151,40 @@ func ResetStores() {
 		_ = b.Close()
 	}
 	named = map[string]KVBackend{}
-	defaultName = DefaultStoreName
 }
 
-// Use resolves a store selector: "" picks the default store (a stores:
-// entry with default: true, else the implicit boltdb default, opened lazily
-// through the ordinary boltdb path); any other name must be a registered
-// `stores:` entry or the implicit default's own name.
-func Use(name string) (KVBackend, error) {
+// Names returns the registered store names, sorted.
+func Names() []string {
 	regMu.Lock()
 	defer regMu.Unlock()
-	if name == "" {
-		name = defaultName
-	}
-	if b, ok := named[name]; ok {
-		return b, nil
-	}
-	if name == DefaultStoreName {
-		if dataDir == "" {
-			return nil, fmt.Errorf("kv: store path not configured")
-		}
-		b, err := Open(filepath.Join(dataDir, DefaultStoreName+".db"))
-		if err != nil {
-			return nil, fmt.Errorf("kv: store %q: %w", DefaultStoreName, err)
-		}
-		named[DefaultStoreName] = b
-		return b, nil
-	}
-	names := make([]string, 0, len(named))
+	out := make([]string, 0, len(named))
 	for n := range named {
-		names = append(names, n)
+		out = append(out, n)
 	}
-	sort.Strings(names)
-	if len(names) == 0 {
-		return nil, fmt.Errorf("kv: no store named %q (no stores: configured)", name)
-	}
-	return nil, fmt.Errorf("kv: no store named %q (stores: %s)", name, join(names))
+	sort.Strings(out)
+	return out
 }
 
-// Default returns the default store (see Use).
-func Default() (KVBackend, error) { return Use("") }
+// Use resolves a store selector to its backend. Every kv operation names a
+// store explicitly; there is no default.
+func Use(name string) (KVBackend, error) {
+	if name == "" {
+		return nil, fmt.Errorf("kv: store: is required (defined stores: %s)", nameList())
+	}
+	regMu.Lock()
+	b, ok := named[name]
+	regMu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("kv: no store named %q (defined stores: %s)", name, nameList())
+	}
+	return b, nil
+}
 
-func join(names []string) string {
+func nameList() string {
+	names := Names()
+	if len(names) == 0 {
+		return "none — add a stores: section"
+	}
 	out := ""
 	for i, n := range names {
 		if i > 0 {

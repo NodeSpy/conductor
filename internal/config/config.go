@@ -37,9 +37,12 @@ type Config struct {
 	ConnectorsMap map[string]ConnectorRef  `yaml:"connectors"`
 	Runtimes      map[string]RuntimeConfig `yaml:"runtimes"`
 	Hosts         map[string]HostConfig    `yaml:"hosts"`
-	Workflows     map[string]WorkflowDef   `yaml:"workflows"`
-	Triggers      []TriggerSpec            `yaml:"triggers"`
-	Policy        *Policy                  `yaml:"policy"`
+	// Stores are named data stores (boltdb/redis/http) addressed by the
+	// `store:` selector on kv.* verbs; nothing is implicit.
+	Stores    map[string]StoreRef    `yaml:"stores"`
+	Workflows map[string]WorkflowDef `yaml:"workflows"`
+	Triggers  []TriggerSpec          `yaml:"triggers"`
+	Policy    *Policy                `yaml:"policy"`
 	// SecretRefs is the named `secrets:` block: name -> secret reference
 	// (env:/op://…), readable in templates as {{.secrets.<name>}}.
 	SecretRefs map[string]string `yaml:"secrets"`
@@ -1014,6 +1017,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: no integrations or connectors configured")
 	}
 	if err := c.validateConnectors(); err != nil {
+		return err
+	}
+	if err := c.validateStores(); err != nil {
 		return err
 	}
 	names := map[string]bool{}

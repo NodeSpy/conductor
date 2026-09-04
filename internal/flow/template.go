@@ -38,24 +38,18 @@ var templateFuncs = template.FuncMap{
 		}
 		return ""
 	},
-	// kv reads the built-in durable store inline: {{ kv "key" }} (default
-	// namespace) or {{ kv "namespace" "key" }}. A missing/expired key yields
-	// nil, so it composes with default: {{ kv "runs" .key | default 0 }}.
+	// kv reads a defined store inline: {{ kv "store" "namespace" "key" }}.
+	// A missing/expired key yields nil, so it composes with default:
+	// {{ kv "cache" "runs" .key | default 0 }}. Read-only.
 	"kv": func(args ...any) (any, error) {
-		var namespace, key string
-		switch len(args) {
-		case 1:
-			key = fmt.Sprint(args[0])
-		case 2:
-			namespace, key = fmt.Sprint(args[0]), fmt.Sprint(args[1])
-		default:
-			return nil, fmt.Errorf("kv takes (key) or (namespace, key), got %d args", len(args))
+		if len(args) != 3 {
+			return nil, fmt.Errorf("kv takes (store, namespace, key), got %d args", len(args))
 		}
-		st, err := kv.Default()
+		st, err := kv.Use(fmt.Sprint(args[0]))
 		if err != nil {
 			return nil, err
 		}
-		v, found, err := st.Get(namespace, key)
+		v, found, err := st.Get(fmt.Sprint(args[1]), fmt.Sprint(args[2]))
 		if err != nil {
 			return nil, err
 		}
@@ -65,26 +59,18 @@ var templateFuncs = template.FuncMap{
 		return v, nil
 	},
 	// kvContains tests membership in a stored list, read-only:
-	// {{ kvContains "namespace" "key" .item }} or {{ kvContains "key" .item }}
-	// (default namespace). An absent key is false. The template surface stays
-	// side-effect-free — kv and kvContains only read; mutations go through
-	// the kv.* verbs or ctx.kv in code steps.
+	// {{ kvContains "store" "namespace" "key" .item }}. An absent key is
+	// false. The template surface stays side-effect-free — kv and kvContains
+	// only read; mutations go through the kv.* verbs or ctx.store in code.
 	"kvContains": func(args ...any) (bool, error) {
-		var namespace, key string
-		var item any
-		switch len(args) {
-		case 2:
-			key, item = fmt.Sprint(args[0]), args[1]
-		case 3:
-			namespace, key, item = fmt.Sprint(args[0]), fmt.Sprint(args[1]), args[2]
-		default:
-			return false, fmt.Errorf("kvContains takes (key, item) or (namespace, key, item), got %d args", len(args))
+		if len(args) != 4 {
+			return false, fmt.Errorf("kvContains takes (store, namespace, key, item), got %d args", len(args))
 		}
-		st, err := kv.Default()
+		st, err := kv.Use(fmt.Sprint(args[0]))
 		if err != nil {
 			return false, err
 		}
-		return st.Contains(namespace, key, item)
+		return st.Contains(fmt.Sprint(args[1]), fmt.Sprint(args[2]), args[3])
 	},
 }
 

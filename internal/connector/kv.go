@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -22,6 +24,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "get", Desc: "read a key",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"namespace": {Type: TString, Desc: "keyspace (default \"default\")"},
 				"default":   {Type: TAny, Desc: "value returned when the key is absent/expired"},
@@ -34,6 +37,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "set", Desc: "write a key (any JSON-serializable value)",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"value":     {Type: TAny, Required: true},
 				"namespace": {Type: TString},
@@ -44,6 +48,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "setnx", Desc: "write a key only if absent (create-once)",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"value":     {Type: TAny, Required: true},
 				"namespace": {Type: TString},
@@ -57,6 +62,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "merge", Desc: "shallow-merge an object into the object at key (upsert)",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"value":     {Type: TMap, Required: true},
 				"namespace": {Type: TString},
@@ -66,6 +72,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "delete", Desc: "remove a key",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"namespace": {Type: TString},
 			},
@@ -74,6 +81,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "append", Desc: "append to the list at key (created as [] if absent)",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"item":      {Type: TAny, Desc: "one value to append"},
 				"items":     {Type: TList, Desc: "several values to append"},
@@ -88,6 +96,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "remove", Desc: "remove all occurrences of item(s) from the list at key",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"item":      {Type: TAny},
 				"items":     {Type: TList},
@@ -101,6 +110,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "contains", Desc: "membership test on the list at key (false when absent)",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"item":      {Type: TAny, Required: true},
 				"namespace": {Type: TString},
@@ -110,6 +120,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "first", Desc: "first element of the list at key",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"namespace": {Type: TString},
 			},
@@ -118,6 +129,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "last", Desc: "last element of the list at key",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"namespace": {Type: TString},
 			},
@@ -126,6 +138,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "index", Desc: "element at index of the list at key (negative counts from the end)",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"index":     {Type: TInt, Required: true},
 				"namespace": {Type: TString},
@@ -135,6 +148,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "slice", Desc: "sub-list [start:end) of the list at key; negatives allowed, bounds clamp",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"start":     {Type: TInt, Desc: "default 0"},
 				"end":       {Type: TInt, Desc: "EXCLUSIVE; default = length"},
@@ -145,6 +159,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "len", Desc: "length of the list at key (0 when absent)",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"namespace": {Type: TString},
 			},
@@ -153,6 +168,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "pop", Desc: "atomically remove and return an element from an end of the list at key",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"from":      {Type: TString, Desc: "front | back (default back)"},
 				"namespace": {Type: TString},
@@ -166,6 +182,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "incr", Desc: "atomically add to a numeric key (absent = 0)",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"by":        {Type: TInt, Desc: "amount to add (default 1)"},
 				"namespace": {Type: TString},
@@ -175,6 +192,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "list", Desc: "live keys (and values) in a namespace",
 			Options: Schema{
+				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"namespace": {Type: TString},
 				"prefix":    {Type: TString, Desc: "key prefix filter"},
 			},
@@ -191,14 +209,68 @@ func init() { RegisterType(kvDecl, newKVImpl) }
 type kvImpl struct{}
 
 func newKVImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
-	// Point boltdb stores (including the implicit "default") at the daemon's
-	// data dir (beside the state file); the default opens lazily on first
-	// use. A loaded config always carries a state file (applyDefaults); a
-	// hand-built one without it (tests) keeps whatever dir is already set.
-	if deps.Config != nil && deps.Config.Store.StateFile != "" {
-		kv.SetDataDir(filepath.Dir(deps.Config.Store.StateFile))
-	}
 	return kvImpl{}, nil
+}
+
+// storeBuilders maps a stores: entry's type to its backend constructor. The
+// redis and http types register here; anything else (firestore, dynamodb, …)
+// implements kv.KVBackend and adds an entry — that is the extension point.
+var storeBuilders = map[string]func(name string, ref config.StoreRef, deps Deps) (kv.KVBackend, error){
+	"boltdb": buildBoltStore,
+}
+
+func buildBoltStore(name string, ref config.StoreRef, deps Deps) (kv.KVBackend, error) {
+	var conn struct {
+		Path string `yaml:"path"`
+	}
+	if err := ref.Decode(&conn); err != nil {
+		return nil, fmt.Errorf("store %q: decode: %w", name, err)
+	}
+	return kv.OpenBoltStore(name, conn.Path)
+}
+
+// storeTypes returns the registered store type names, sorted.
+func storeTypes() []string {
+	out := make([]string, 0, len(storeBuilders))
+	for t := range storeBuilders {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// buildStores wires the stores: section into the kv registry — every store
+// is explicit; a bad entry (unknown type, invalid connection, unopenable
+// boltdb path) is a LOAD error, not a disabled connector. Build calls this
+// before anything can address a store.
+func buildStores(cfg *config.Config, deps Deps) error {
+	kv.ResetStores()
+	if cfg == nil {
+		return nil
+	}
+	if cfg.Store.StateFile != "" {
+		kv.SetDataDir(filepath.Dir(cfg.Store.StateFile))
+	}
+	names := make([]string, 0, len(cfg.Stores))
+	for n := range cfg.Stores {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		ref := cfg.Stores[name]
+		build, ok := storeBuilders[ref.Type]
+		if !ok {
+			return fmt.Errorf("store %q: unknown type %q (known: %s)", name, ref.Type, strings.Join(storeTypes(), ", "))
+		}
+		b, err := build(name, ref, deps)
+		if err != nil {
+			return err
+		}
+		if err := kv.Register(name, b); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (kvImpl) Validate() error          { return nil }
@@ -211,11 +283,14 @@ func (kvImpl) Source(triggers []CompiledTrigger) (core.Integration, error) {
 }
 
 func (kvImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
-	st, err := kv.Default()
+	str := func(k string) string { s, _ := opts[k].(string); return s }
+	st, err := kv.Use(str("store"))
 	if err != nil {
 		return nil, err
 	}
-	str := func(k string) string { s, _ := opts[k].(string); return s }
+	if err := kv.CheckCapability(str("store"), st, verb); err != nil {
+		return nil, err
+	}
 	namespace, key := str("namespace"), str("key")
 	switch verb {
 	case "get":

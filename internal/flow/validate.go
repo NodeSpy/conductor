@@ -168,6 +168,27 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 	return validateHookRefs(cfg, reg, where, spec.Hooks, "fail", failScope)
 }
 
+// checkKVStore enforces the kv verbs' store: selector at LOAD time: it must
+// be a literal name of a defined stores: entry (there is no default store,
+// and a templated selector would defeat the load check).
+func checkKVStore(cfg *config.Config, w, connName string, opts map[string]any) error {
+	if connName != "kv" || cfg == nil {
+		return nil
+	}
+	raw, ok := opts["store"]
+	if !ok {
+		return fmt.Errorf("%s: kv verbs require store: naming a stores: entry (defined: %s)", w, cfg.StoreNames())
+	}
+	name, isStr := raw.(string)
+	if !isStr || name == "" || strings.Contains(name, "{{") {
+		return fmt.Errorf("%s: store: must be a literal store name, got %v", w, raw)
+	}
+	if _, defined := cfg.Stores[name]; !defined {
+		return fmt.Errorf("%s: unknown store %q (defined stores: %s)", w, name, cfg.StoreNames())
+	}
+	return nil
+}
+
 // validateManualTrigger checks an `on: manual` trigger: it publishes no
 // event schema (its context is the `conductor run` inputs), so filters and
 // source options have nothing to bind to, and step references validate in an
@@ -318,6 +339,9 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 			return fmt.Errorf("%s: connector %q (%s) has no verb %q (verbs: %s)",
 				w, connName, in.Decl.Type, verb, strings.Join(in.Decl.VerbNames(), ", "))
 		}
+		if err := checkKVStore(cfg, w, connName, step.Options); err != nil {
+			return err
+		}
 		if !vd.Open {
 			if err := connector.ValidateCallOptions(w+" options", vd.Options, step.Options, in.DefaultOptions); err != nil {
 				return err
@@ -405,6 +429,9 @@ func validateHookRefs(cfg *config.Config, reg *connector.Registry, where string,
 		if !ok {
 			return fmt.Errorf("%s: connector %q (%s) has no verb %q (verbs: %s)",
 				w, connName, in.Decl.Type, verb, strings.Join(in.Decl.VerbNames(), ", "))
+		}
+		if err := checkKVStore(cfg, w, connName, h.Options); err != nil {
+			return err
 		}
 		if !vd.Open {
 			if err := connector.ValidateCallOptions(w+" options", vd.Options, h.Options, in.DefaultOptions); err != nil {
