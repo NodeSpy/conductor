@@ -83,12 +83,13 @@ type RuntimeConfig struct {
 }
 
 // Controller converts a runtime entry to the legacy controller shape the
-// controller registry consumes (Bin/Host are carried alongside by the caller).
+// controller registry consumes, carrying Bin and Host through.
 func (r RuntimeConfig) Controller() ControllerConfig {
 	return ControllerConfig{
 		Type: r.Type, Agent: r.Agent, Transport: r.Transport,
 		SessionModel: r.SessionModel, Default: r.Default,
 		Tool: r.Tool, Command: r.Command,
+		Bin: r.Bin, Host: r.Host,
 	}
 }
 
@@ -461,10 +462,8 @@ func (c *Config) validateConnectors() error {
 		if (rt.Type == "") == (rt.Agent == "") {
 			return fmt.Errorf("config: runtime %q: set exactly one of `type` or `agent`", name)
 		}
-		if rt.Host != "" {
-			if _, ok := c.Hosts[rt.Host]; !ok {
-				return fmt.Errorf("config: runtime %q: unknown host %q (defined: %s)", name, rt.Host, c.hostNames())
-			}
+		if err := c.checkRemoteHostSupport("runtime", name, rt.Host, rt.Type, rt.Agent, rt.Controller().EffectiveTransport()); err != nil {
+			return err
 		}
 	}
 	if err := c.validateRuntimeDefaults(); err != nil {

@@ -339,6 +339,15 @@ type ControllerConfig struct {
 	// Reserved for the cli-controller milestone.
 	Tool    string   `yaml:"tool"`
 	Command []string `yaml:"command"`
+	// Bin is the runtime binary (paseo/agent-deck); for agent-deck it wins over
+	// the command/tool/"agent-deck" bin resolution. For paseo, exactly one
+	// distinct Bin may be set across all paseo runtimes/controllers combined
+	// (see cmd/paseo-conductor's resolvePaseoBin).
+	Bin string `yaml:"bin"`
+	// Host names a `hosts:` entry; this controller's subprocess launches run
+	// there over SSH instead of locally. Only cli/acp/agent-deck controllers
+	// support it — see checkRemoteHostSupport.
+	Host string `yaml:"host"`
 }
 
 // EffectiveTransport returns the controller's transport, defaulting to acp for an
@@ -363,6 +372,35 @@ func (c *Config) DefaultControllerName() string {
 		}
 	}
 	return ""
+}
+
+// MergedControllers unions the connectors-model `runtimes:` block into the
+// legacy `controllers:` shape the controller registry consumes (each
+// RuntimeConfig converted via its Controller() method). Both schemas name the
+// same registry, and validateRuntimeDefaults already rejects a name defined
+// under both — so this is a plain union, no precedence to resolve.
+func (c *Config) MergedControllers() map[string]ControllerConfig {
+	merged := make(map[string]ControllerConfig, len(c.Controllers)+len(c.Runtimes))
+	for name, cc := range c.Controllers {
+		merged[name] = cc
+	}
+	for name, rt := range c.Runtimes {
+		merged[name] = rt.Controller()
+	}
+	return merged
+}
+
+// DefaultRuntimeName returns the name of the runtime or controller flagged
+// default:true (runtimes: checked first), or "" when none is (resolution
+// then falls back to the built-in paseo). At most one across both maps may
+// set it — see validateRuntimeDefaults.
+func (c *Config) DefaultRuntimeName() string {
+	for name, rt := range c.Runtimes {
+		if rt.Default {
+			return name
+		}
+	}
+	return c.DefaultControllerName()
 }
 
 // DefaultHandoffName returns the name of the `handoffs:` entry flagged
@@ -982,12 +1020,41 @@ func (c *Config) validateControllers() error {
 		if cc.SessionModel != "" && !validModel[cc.SessionModel] {
 			return fmt.Errorf("config: controller %q: session_model must be native|resumable|oneshot, got %q", name, cc.SessionModel)
 		}
+		if err := c.checkRemoteHostSupport("controller", name, cc.Host, cc.Type, cc.Agent, cc.EffectiveTransport()); err != nil {
+			return err
+		}
 		if cc.Default {
 			defaults++
 		}
 	}
 	if defaults > 1 {
 		return fmt.Errorf("config: at most one controller may set `default: true` (%d do)", defaults)
+	}
+	return nil
+}
+
+// checkRemoteHostSupport validates a runtime/controller's `host:` reference:
+// it must name a defined `hosts:` entry, and only cli/acp/agent-deck
+// runtimes support running remotely — paseo checkouts are local, and
+// opencode's native transport binds an HTTP server to 127.0.0.1, so
+// ssh-wrapping either would be meaningless (paseo) or unreachable (opencode).
+// kind is "runtime" or "controller" (for the error text); typ/agent/transport
+// are the entry's own fields — transport must be the *effective* transport
+// (e.g. via ControllerConfig.EffectiveTransport(), or
+// RuntimeConfig.Controller().EffectiveTransport()) so an unset transport on
+// an opencode agent entry still resolves to its acp/native default correctly.
+func (c *Config) checkRemoteHostSupport(kind, name, host, typ, agent, transport string) error {
+	if host == "" {
+		return nil
+	}
+	if _, ok := c.Hosts[host]; !ok {
+		return fmt.Errorf("config: %s %q: unknown host %q (defined: %s)", kind, name, host, c.hostNames())
+	}
+	if typ == "paseo" {
+		return fmt.Errorf("config: %s %q: host: is not supported on a paseo runtime — paseo checkouts are local; use a cli/acp runtime on that host or run a conductor there", kind, name)
+	}
+	if typ == "opencode" || (agent == "opencode" && transport == "native") {
+		return fmt.Errorf("config: %s %q: host: is not supported on an opencode runtime — opencode serves HTTP on 127.0.0.1 locally; ssh-wrapping the launch would bind the port on the remote host, unreachable from here", kind, name)
 	}
 	return nil
 }

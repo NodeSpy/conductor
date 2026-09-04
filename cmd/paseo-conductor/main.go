@@ -27,6 +27,7 @@ import (
 	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
 	"github.com/NodeSpy/paseo-conductor/internal/engine"
 	"github.com/NodeSpy/paseo-conductor/internal/handoff"
+	"github.com/NodeSpy/paseo-conductor/internal/hosts"
 	"github.com/NodeSpy/paseo-conductor/internal/inbound"
 	"github.com/NodeSpy/paseo-conductor/internal/integrations/slack" // registers "slack"; also feeds hand-off replies (see wireSlackHandoffInbox)
 	"github.com/NodeSpy/paseo-conductor/internal/notify"
@@ -241,7 +242,11 @@ func cmdRun(args []string) error {
 	defer st.Close()
 
 	retry, writeTok, readTok := dispatchTuning(igs)
-	disp := dispatch.New(cfg.PaseoBin, retry, cfg.DryRun)
+	paseoBin, err := resolvePaseoBin(cfg)
+	if err != nil {
+		return err
+	}
+	disp := dispatch.New(paseoBin, retry, cfg.DryRun)
 	disp.AdoptOpenWorkspaces = cfg.AdoptOpenWorkspaces
 	preflightPATH(disp.PaseoBin)
 	notifier := notify.New(cfg.Notify, logf, st.Audit)
@@ -249,9 +254,20 @@ func cmdRun(args []string) error {
 	// owns one live session per PR — so an interactive hand-off survives a restart
 	// and follow-ups funnel to the live session instead of a duplicate agent. Built
 	// here so the broker and the engine share one registry. With no `controllers:`
-	// block this resolves to paseo everywhere, unchanged.
+	// or `runtimes:` block this resolves to paseo everywhere, unchanged.
+	//
+	// HostArgvPrefix is wired here (once, before any controller launches) so
+	// cli/acp/agent-deck controllers configured with `host:` can resolve the
+	// ssh argv prefix for a named `hosts:` entry.
+	controller.HostArgvPrefix = func(name string) ([]string, error) {
+		hc, ok := cfg.Hosts[name]
+		if !ok {
+			return nil, fmt.Errorf("unknown host %q (defined: %s)", name, sortedHostNames(cfg.Hosts))
+		}
+		return (&hosts.Client{}).ArgvPrefix(hosts.Target{Name: name, Cfg: hc}), nil
+	}
 	var paseoSender controller.Sender = disp
-	reg := controller.NewRegistry(cfg.Controllers, cfg.DefaultControllerName(), disp, paseoSender)
+	reg := controller.NewRegistry(cfg.MergedControllers(), cfg.DefaultRuntimeName(), disp, paseoSender)
 	broker := controller.NewBroker(reg, st, logf)
 	// Hand-off registry: resolves the named `handoffs:` map (config.Load already
 	// folded a legacy singular `handoff:` block into Handoffs["default"], so this
