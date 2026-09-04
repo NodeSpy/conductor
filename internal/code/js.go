@@ -38,7 +38,11 @@ func (e *Executor) execJS(spec Spec, data map[string]any) (map[string]any, error
 		return nil, fmt.Errorf("code: js: marshal ctx: %w", err)
 	}
 
+	if string(dataJSON) == "null" { // no data → an empty ctx, so ctx.kv still attaches
+		dataJSON = []byte("{}")
+	}
 	src := "globalThis.ctx = " + string(dataJSON) + ";\n" +
+		jsKVShim() +
 		"JSON.stringify((function(){\n" + spec.Code + "\n})() ?? null)"
 
 	rt, err := qjs.New()
@@ -47,7 +51,20 @@ func (e *Executor) execJS(spec Spec, data map[string]any) (map[string]any, error
 	}
 	defer rt.Close()
 
-	ret, err := rt.Context().Eval("step.js", qjs.Code(src))
+	// ctx.kv bridges to the built-in store through one host function taking
+	// and returning JSON (see kvInvokeJSON) — values cross the WASM boundary
+	// as strings, so no Value plumbing per type.
+	qctx := rt.Context()
+	hostKV := qctx.Function(func(this *qjs.This) (*qjs.Value, error) {
+		payload := ""
+		if args := this.Args(); len(args) > 0 {
+			payload = args[0].String()
+		}
+		return this.Context().NewString(kvInvokeJSON(payload)), nil
+	})
+	qctx.Global().SetPropertyStr("__conductor_kv", hostKV)
+
+	ret, err := qctx.Eval("step.js", qjs.Code(src))
 	if err != nil {
 		return nil, fmt.Errorf("code: js: %w", err)
 	}
@@ -59,4 +76,22 @@ func (e *Executor) execJS(spec Spec, data map[string]any) (map[string]any, error
 		return nil, fmt.Errorf("code: js: decode result %q: %w", resultJSON, err)
 	}
 	return wrapValue(v), nil
+}
+
+// jsKVShim builds the ctx.kv object over the __conductor_kv host bridge:
+// every op serializes its args to JSON, and a bridge error becomes a thrown
+// Error. Absent reads come back null.
+func jsKVShim() string {
+	ops, _ := json.Marshal(kvOps)
+	return `ctx.kv = (function() {
+  const call = (op, args) => {
+    const r = JSON.parse(__conductor_kv(JSON.stringify({ op, args })));
+    if (r.err) throw new Error(r.err);
+    return r.v ?? null;
+  };
+  const o = {};
+  for (const op of ` + string(ops) + `) o[op] = (...args) => call(op, args);
+  return o;
+})();
+`
 }
