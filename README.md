@@ -70,6 +70,10 @@ that changes the config schema migrates your file itself, with a backup.
   **verbs** (`uses: <conn>.<verb>`). A connector declares its connection
   (credentials, identity, defaults, policy) once — Slack is no longer
   configured three times for triggers, notifications, and hand-offs.
+  For everything without a built-in type, `type: rest` and `type: graphql`
+  declare verbs (and polled events) straight from config — templated
+  requests, `output:` extraction, shared auth including OAuth2 with
+  refresh-token rotation (see the wiki's Configuration page).
 - **Runtimes + agents** — the things that do the work: a runtime
   (paseo / agent-deck / cli / acp) is where agents run; an agent is a named
   profile (provider/model/prompt posture). `runtimes:` replaces

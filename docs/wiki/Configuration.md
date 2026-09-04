@@ -67,6 +67,131 @@ Fixes, thread resolution, and labels always run — only the reply is gated:
 | `off` | the flow runner skips `comment`/`reply` verbs on github connectors for that run (logged and audited) |
 | `full` | no gating |
 
+## Generic REST & GraphQL connectors
+
+Any HTTP API becomes a connector without new Go code: `type: rest` and
+`type: graphql` take their verbs (and, for rest, polled events) from the
+config itself. Declared verbs and events flow through the same machinery as
+built-in types — `conductor schema <name>` prints them, `validate` checks
+step references against the declared `output:` keys, and calls are audited
+and rate-limited like any other verb.
+
+### `type: rest`
+
+```yaml
+connectors:
+  xero:
+    type: rest
+    base_url: https://api.xero.com/api.xro/2.0
+    auth: { … }                        # shared auth block, below
+    headers: { Accept: application/json }   # defaults, templated
+    verbs:
+      list_invoices:
+        method: GET
+        path: /Invoices                 # templated; joined onto base_url
+        query: { where: 'Contact.ContactID==Guid("{{.options.contact}}")' }
+        expect: [200]                   # success statuses; default any 2xx
+        output: { invoices: "{{.response.body.Invoices}}" }
+      create_invoice:
+        method: POST
+        path: /Invoices
+        body: "{{ .options.invoice | json }}"   # json encodes a structured option
+        output: { id: "{{ (index .response.body.Invoices 0).InvoiceID }}" }
+    events:                             # optional polled sources
+      new_invoice:
+        poll: 10m                       # default 5m
+        request: { method: GET, path: /Invoices, query: { order: "UpdatedDateUTC DESC" } }
+        list: "{{.response.body.Invoices}}"   # names the response array
+        id: "{{.item.InvoiceID}}"             # dedup key per item
+        context: { title: "invoice {{.item.InvoiceNumber}}", total: "{{.item.Total}}" }
+```
+
+Verb templates see `{{.options.*}}` (the step's rendered options) and
+`{{.secrets.*}}`; `output:` templates add `{{.response.status}}`,
+`{{.response.body.*}}` (parsed JSON; non-JSON arrives as `.body.raw`), and
+`{{.response.headers.*}}`. An output that is a sole `{{.path}}` reference
+keeps the underlying type — an array stays an array for `for_each:`. A
+status outside `expect:` fails the verb with the status and body.
+
+Polled events fetch `request:` every `poll:`, extract the `list:` array, and
+fire one trigger per item whose rendered `id:` has not been seen (the first
+poll seeds silently — no replay storm on boot). Each `context:` field and the
+raw `{{.item}}` are published to the trigger scope.
+
+### `type: graphql`
+
+```yaml
+connectors:
+  shop:
+    type: graphql
+    endpoint: https://myshop.myshopify.com/admin/api/2025-01/graphql.json
+    auth: { type: header, name: X-Shopify-Access-Token, value: vault:shopify-token }
+    verbs:
+      create_order:
+        query: |
+          mutation($id: ID!, $lines: [OrderLineInput!]!) {
+            orderCreate(customerId: $id, lines: $lines) { order { id name } }
+          }
+        variables: { id: "{{.options.customer}}", lines: "{{.options.lines}}" }
+        output: { order_id: "{{.response.data.orderCreate.order.id}}" }
+```
+
+One `endpoint:`; each verb is a named query/mutation with templated
+`variables:` (type-preserving — a sole `{{.path}}` binds a list/map/number,
+not its string form). The request is `POST {query, variables}`. A non-empty
+`errors` array in the response **fails the verb even on HTTP 200**;
+`output:` templates read `{{.response.data.*}}`.
+
+### The shared `auth:` block
+
+| type | fields | sent as |
+|---|---|---|
+| `none` (default) | — | — |
+| `bearer` | `token` | `Authorization: Bearer …` |
+| `basic` | `username`, `password` | HTTP basic auth |
+| `header` | `name`, `value` | the named header |
+| `oauth2` | `grant`, `token_url`, `client_id`, `client_secret`, `refresh_token`, `scopes`, `auth_url`, `redirect_uri` | `Authorization: Bearer <fetched>` |
+
+Every credential field takes a literal, `${ENV}`, or a secret reference
+(`vault:…`, `op://…`, `pass:…`, `file:…`, `env:…`).
+
+`oauth2` grants: `client_credentials` (machine-to-machine — tokens fetch on
+demand, nothing to seed), `refresh_token`, and `authorization_code`. Access
+tokens are cached per connector in memory, refreshed ahead of expiry and once
+more on a 401, and never logged. When the provider **rotates the refresh
+token on use** (Xero does), the new token is written back to the `vault:`
+reference named by `refresh_token:` — which is why that field must be a
+`vault:` ref for rotating providers.
+
+`conductor connector auth <name>` is the one-time interactive seeding for the
+authorization-code family: it prints the consent URL (built from `auth_url`,
+scopes, and `redirect_uri` — default `http://localhost:8400/callback`),
+captures the provider's redirect on that localhost port, exchanges the code
+at `token_url`, and stores the refresh token in the vault. Restarts never
+prompt — the daemon path only ever uses the vault.
+
+### Worked example — Xero: clone yesterday's invoice
+
+```yaml
+triggers:
+  - on: xero.new_invoice
+    steps:
+      - id: fetch
+        uses: xero.list_invoices
+        options: { contact: "{{.item.Contact.ContactID}}" }
+      - id: clone
+        run: js
+        code: |
+          const src = ctx.fetch.invoices[0];
+          return { invoice: { Type: src.Type, Contact: src.Contact,
+                              LineItems: src.LineItems, Status: "DRAFT" } };
+      - uses: xero.create_invoice
+        options: { invoice: "{{.clone.invoice}}" }
+```
+
+The list arrives typed from `fetch`, the code step reshapes it, and the
+mutation posts it back — three steps, no custom Go.
+
 ## Splitting the config across files (`imports:`)
 
 Imports live under each section. A map section — `connectors:`, `runtimes:`,

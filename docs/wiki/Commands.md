@@ -13,6 +13,7 @@ conductor update [--force] [--tag vX]      self-update to the latest release
 conductor service install|sync|uninstall   manage the background service unit
 conductor connectors ls                    each connector: state, events, verbs, trigger count
 conductor schema <connector>               full event/filter/context/verb/option/output schemas
+conductor connector auth <name>            one-time OAuth2 consent bootstrap for a rest/graphql connector
 conductor secrets check                    resolve every secret reference and report (no values)
 conductor vault init|add|show|ls|rm        the built-in encrypted vault
 conductor unlock                           seed the vault key for non-interactive restarts
@@ -32,6 +33,11 @@ conductor version
   authored without side effects.
 - **connectors ls / schema** — the introspection pair: what is configured and
   what each type accepts. `schema` also takes a bare type name.
+- **connector auth** — the only interactive auth step: prints the provider's
+  consent URL, captures the localhost redirect, exchanges the code, and stores
+  the refresh token in the vault. Applies to rest/graphql connectors with
+  `auth.type: oauth2` and an authorization-code/refresh-token grant; restarts
+  never prompt. See [[Configuration]].
 - **secrets check** — resolves `secrets:` entries and each connector's
   credentials; failures name the reference, values are never printed.
 - **vault / unlock** — see [[Secrets]] for the key-resolution order and why
