@@ -395,6 +395,14 @@ condition clears, growing backoff past the attempt threshold instead of
 abandonment, one worker per PR (new feedback queues to the live agent), the
 reaper that archives finished agents but never one that needs you.
 
+**Bot-authored comments.** `new_comment` and `changes_requested` publish
+`author_is_bot` (account type `Bot`, or a `[bot]` login) and take an
+`author_bot` filter. `policy.reply_to_bots` gates the reply back to a bot —
+the fix itself always runs: `decline_only` (default) instructs the agent to
+skip pleasantries and reply only to state a concrete reason for not applying
+a suggestion; `off` skips `comment`/`reply` verbs to the bot structurally;
+`full` leaves replies ungated.
+
 ## Notifications
 
 Daemon lifecycle events (`dispatch`, `complete`, `escalate`, `needs_input`,

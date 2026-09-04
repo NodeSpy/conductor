@@ -53,12 +53,14 @@ type ghPayload struct {
 		ID    int64  `json:"id"`
 		User  struct {
 			Login string `json:"login"`
+			Type  string `json:"type"` // "Bot" for app-authored reviews
 		} `json:"user"`
 	} `json:"review"`
 	Comment *struct {
 		ID   int64 `json:"id"`
 		User struct {
 			Login string `json:"login"`
+			Type  string `json:"type"` // "Bot" for app-authored comments
 		} `json:"user"`
 		Body string `json:"body"`
 	} `json:"comment"`
@@ -269,10 +271,15 @@ func (g *Integration) reviewTriggers(ctx context.Context, repo string, p ghPaylo
 	var trs []core.Trigger
 	if p.Review.State == "changes_requested" && g.ownPR(p.PullRequest.User.Login) {
 		t := g.prTarget(repo, p.PullRequest)
+		reviewerIsBot := isBotActor(p.Review.User.Type, p.Review.User.Login)
 		trs = append(trs, g.emit(repo, "changes_requested", t,
 			fmt.Sprintf("changes requested on %s#%d", repo, p.PullRequest.Number),
 			fmt.Sprintf("review:%d@%s", p.Review.ID, p.PullRequest.Head.SHA),
-			map[string]any{"head_ref": p.PullRequest.Head.Ref}, nil)...)
+			map[string]any{"head_ref": p.PullRequest.Head.Ref,
+				"author": p.Review.User.Login, "author_is_bot": reviewerIsBot},
+			func(act config.Action) bool {
+				return authorBotMatch(act.AuthorBot, reviewerIsBot)
+			})...)
 	}
 	// Any submitted review may have made the PR merge-ready.
 	trs = append(trs, g.mergeReadyTriggers(ctx, repo, p.PullRequest.Number, p)...)
@@ -336,13 +343,15 @@ func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []cor
 	if eventType == "pull_request_review_comment" {
 		kind = store.CommentKindReview
 	}
-	extra := map[string]any{"author": p.Comment.User.Login, "comment_body": p.Comment.Body, "head_ref": headRef,
+	authorIsBot := isBotActor(p.Comment.User.Type, p.Comment.User.Login)
+	extra := map[string]any{"author": p.Comment.User.Login, "author_is_bot": authorIsBot,
+		"comment_body": p.Comment.Body, "head_ref": headRef,
 		"comment_id": p.Comment.ID, "comment_kind": kind}
-	// Each variant may set its own from_users filter (empty = any commenter).
+	// Each variant may set its own from_users / author_bot filters.
 	return g.emit(repo, "new_comment", t,
 		fmt.Sprintf("new comment by %s on %s#%d", p.Comment.User.Login, repo, num),
 		fmt.Sprintf("comment:%d", p.Comment.ID), extra, func(act config.Action) bool {
-			return commentAuthorAllowed(act, author)
+			return commentAuthorAllowed(act, author) && authorBotMatch(act.AuthorBot, authorIsBot)
 		})
 }
 
@@ -351,6 +360,25 @@ func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []cor
 // (e.g. CI report bots like github-actions[bot]). ignore wins over allow.
 func commentAuthorAllowed(act config.Action, author string) bool {
 	return fromUsersMatch(act.FromUsers, author) && !loginMatch(act.IgnoreUsers, author)
+}
+
+// isBotLogin reports GitHub's app-account login convention: a "[bot]" suffix
+// (case-insensitive), e.g. dependabot[bot], cursor[bot].
+func isBotLogin(login string) bool {
+	return strings.HasSuffix(strings.ToLower(login), "[bot]")
+}
+
+// isBotActor reports whether an event's actor is an automated bot: the
+// webhook marks the account type "Bot", or the login carries the "[bot]"
+// suffix (belt and suspenders — some payloads omit the type).
+func isBotActor(userType, login string) bool {
+	return strings.EqualFold(userType, "Bot") || isBotLogin(login)
+}
+
+// authorBotMatch evaluates an author_bot filter: nil = either, else the
+// resolved bot-ness must match.
+func authorBotMatch(want *bool, isBot bool) bool {
+	return want == nil || *want == isBot
 }
 
 // fromUsersMatch reports whether the commenter is allowed by a from_users filter

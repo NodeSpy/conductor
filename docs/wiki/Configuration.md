@@ -48,6 +48,25 @@ batch (`{{.group.*}}`). `if:` conditions use comparison, `&&`/`||`/`!`,
 `contains()`, `exists()`, `default()`, and `coalesce()`; templates may also
 call `default`/`coalesce` (`{{.sev | default "low"}}`). See [[Workflows]].
 
+## Bot-authored comments (github)
+
+The github comment/review events (`new_comment`, `changes_requested`)
+publish `author` and `author_is_bot` in their context — true when the
+webhook's actor account type is `Bot` or the login ends in `[bot]`
+(dependabot[bot], cursor[bot]). The matching `author_bot` filter gates a
+trigger on it: `filters: { author_bot: false }` fires only for humans,
+`true` only for bots, absent for either.
+
+`policy.reply_to_bots` (github connector `policy:`, trigger-overridable,
+global default allowed) gates the conversational reply BACK to a bot author.
+Fixes, thread resolution, and labels always run — only the reply is gated:
+
+| mode | behavior |
+|---|---|
+| `decline_only` (default) | the agent is instructed to skip thanks/acknowledgements and reply only to state a concrete reason for not applying a suggestion |
+| `off` | the flow runner skips `comment`/`reply` verbs on github connectors for that run (logged and audited) |
+| `full` | no gating |
+
 ## Splitting the config across files (`imports:`)
 
 Imports live under each section. A map section — `connectors:`, `runtimes:`,

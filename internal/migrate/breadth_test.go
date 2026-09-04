@@ -311,3 +311,18 @@ agents:
 		t.Errorf("step retry lost: %+v", apply.Retry)
 	}
 }
+
+// TestMigratedGithubReplyToBotsDefault: a migrated github connector states
+// reply_to_bots: decline_only explicitly (an intended behavioral change —
+// bot-authored comments get fixes, not pleasantries). Independent of
+// ignore_users, which keeps skipping the trigger entirely.
+func TestMigratedGithubReplyToBotsDefault(t *testing.T) {
+	_, out := mustTransform(t, legacyGithub)
+	ref := out.ConnectorsMap["gh"]
+	if ref.Policy == nil || ref.Policy.ReplyToBots == nil || *ref.Policy.ReplyToBots != config.ReplyToBotsDeclineOnly {
+		t.Fatalf("migrated github connector policy: %+v, want reply_to_bots: decline_only", ref.Policy)
+	}
+	if got := ref.Policy.ReplyToBotsMode(); got != "decline_only" {
+		t.Fatalf("resolved mode: %q", got)
+	}
+}
