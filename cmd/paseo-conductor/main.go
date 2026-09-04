@@ -73,6 +73,18 @@ func main() {
 		err = cmdUpdate(args)
 	case "service":
 		err = cmdService(args)
+	case "connectors":
+		err = cmdConnectors(args)
+	case "schema":
+		err = cmdSchema(args)
+	case "secrets":
+		err = cmdSecrets(args)
+	case "vault":
+		err = cmdVault(args)
+	case "unlock":
+		err = cmdUnlock(args)
+	case "config":
+		err = cmdConfig(args)
 	case "version", "-v", "--version":
 		fmt.Println("conductor", version)
 	case "help", "-h", "--help":
@@ -103,6 +115,12 @@ usage:
   conductor pause | resume              stop / resume dispatch at runtime (no restart)
   conductor update [--force] [--tag vX]  self-update to the latest release (uses gh)
   conductor service install|sync|uninstall  manage the background service unit
+  conductor connectors ls               list configured connectors: state, events, verbs
+  conductor schema <connector>          print a connector's event/filter/verb/option schemas
+  conductor secrets check               resolve every secret reference and report
+  conductor vault init|add|show|ls|rm   manage the built-in encrypted vault
+  conductor unlock                      seed the vault key for non-interactive restarts
+  conductor config migrate [--dry-run]  transform a legacy config to the connectors schema
   conductor version
 `)
 }
@@ -191,6 +209,11 @@ func cmdValidate(args []string) error {
 }
 
 func cmdRun(args []string) error {
+	// Automatic in-place migration: a legacy config is transformed to the
+	// connectors schema (backed up, validated, swapped) before load; on any
+	// failure the daemon keeps running on the legacy config and notifies.
+	migrateWarning := autoMigrateOnBoot(args)
+
 	// loadConfig loads the sibling conductor.env first, so ${...} refs resolve
 	// (this is also how launchd — which has no EnvironmentFile — gets secrets).
 	cfg, _, err := loadConfig(args)
@@ -204,11 +227,6 @@ func cmdRun(args []string) error {
 	if err := validateAll(cfg, igs); err != nil {
 		return err
 	}
-	// Wire the engine's dispatch-completion seam to every configured slack
-	// instance's on_done/on_fail handling (see core.SetCompletionHook and
-	// slack.Integration.HandleCompletion). A no-op when no slack integration is
-	// configured. Sibling seam to slack.SetReplyHook (hand-off thread replies).
-	wireSlackCompletion(igs)
 
 	st, err := store.Open(store.Options{
 		StatePath:    cfg.Store.StateFile,
@@ -240,7 +258,30 @@ func cmdRun(args []string) error {
 	// is the only path needed here). Empty map → Resolve always yields nil → the
 	// review hand-off keeps today's paseo-native behavior.
 	handoffs := handoff.NewRegistry(cfg.Handoffs, cfg.DefaultHandoffName(), logf)
-	wireSlackHandoffInbox(cfg, handoffs)
+
+	// The connectors-model stack: secret resolution, the connector registry,
+	// the flow runner, and the lowered source integrations. nil when the
+	// config has no connectors: block — everything below then behaves exactly
+	// as before.
+	stack, err := buildFlowStack(cfg, st, notifier, cfg.DryRun)
+	if err != nil {
+		return err
+	}
+	if stack != nil {
+		igs = append(igs, stack.Integrations...)
+		for _, e := range stack.SecretErrs {
+			logf("secrets: %s", e)
+			notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "secrets", Kind: "secret_unresolved"}, e)
+		}
+	}
+	if migrateWarning != "" {
+		notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "config", Kind: "migration"}, migrateWarning)
+	}
+	// Wire the engine's dispatch-completion seam to every configured slack
+	// instance's on_done/on_fail handling (see core.SetCompletionHook and
+	// slack.Integration.HandleCompletion). A no-op when no slack integration is
+	// configured. Sibling seam to slack.SetReplyHook (hand-off thread replies).
+	wireSlackCompletion(igs)
 	// Discord hand-off gateway(s): unlike Slack this needs no separate
 	// `integrations:` entry — conductor runs the bot gateway itself, one
 	// goroutine per distinct configured bot_token (entries sharing a token
@@ -250,14 +291,23 @@ func cmdRun(args []string) error {
 	// Shared "never reap" set for interactive hand-off agents: the engine registers
 	// a background step's agent at launch; the reaper skips anything in it.
 	hold := dispatch.NewHoldSet(filepath.Join(filepath.Dir(cfg.Store.StateFile), "holds.json"))
-	eng := engine.New(engine.Options{
+	engOpts := engine.Options{
 		Config: cfg, Store: st, Dispatch: disp, Controllers: reg, Broker: broker, Handoffs: handoffs,
 		Notifier: notifier, Author: gitAuthor(), UserToken: writeTok, ReadToken: readTok, Log: logf,
 		RefreshAppToken: refreshAppToken(igs), Hold: hold, PausePath: pausePath(cfg),
-	})
+	}
+	if stack != nil {
+		engOpts.Flow = stack.Runner
+		engOpts.Connectors = stack.Registry
+	}
+	eng := engine.New(engOpts)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Mount connector ask surfaces (web pages, discord gateways) and fan
+	// Socket Mode replies into every slack inbox — legacy handoffs included.
+	wireConnectorSurfaces(ctx, stack, handoffs, cfg)
 
 	// Serve each configured web hand-off's draft pages on the shared inbound
 	// listener (once ctx exists to govern its shutdown). No-op when no web

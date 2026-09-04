@@ -197,6 +197,13 @@ type Instance struct {
 // Invoke merges options over the connector defaults and runs the verb,
 // honoring the connector's rate limit.
 func (in *Instance) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
+	return in.InvokeFinal(ctx, verb, MergeOptions(in.DefaultOptions, opts))
+}
+
+// InvokeFinal runs a verb with FINAL options — already merged over the
+// connector defaults (and, in the flow runner, template-rendered after the
+// merge so defaults may carry templates too).
+func (in *Instance) InvokeFinal(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
 	if !in.Enabled {
 		return nil, fmt.Errorf("connector %q is disabled", in.Name)
 	}
@@ -212,7 +219,7 @@ func (in *Instance) Invoke(ctx context.Context, verb string, opts map[string]any
 			return nil, err
 		}
 	}
-	return in.Impl.Invoke(ctx, verb, MergeOptions(in.DefaultOptions, opts))
+	return in.Impl.Invoke(ctx, verb, opts)
 }
 
 // MergeOptions overlays call options over connector defaults (call wins);
