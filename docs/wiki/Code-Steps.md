@@ -8,6 +8,8 @@ JSON, compute a condition — without a whole agent. A code step is `run:
 steps:
   - { id: shape,  run: js,       code: "return { sev: ctx.body.detail.severity }" }
   - { id: calc,   run: go-embed, code: "…" }                          # yaegi, install-free
+  - { id: score,  run: risor,    code: '{"sev": ctx["level"]}' }      # Risor, install-free
+  - { id: pick,   run: lua,      code: "return { sev = ctx.level }" } # Lua 5.1, install-free
   - { id: heavy,  run: go,       code: "…" }                          # host go run
   - { id: deploy, run: sh,   host: build-box, code: "make deploy" }   # sh on build01
   - { id: enrich, run: ruby, host: build-box, code: "…" }             # build01's ruby
@@ -25,6 +27,16 @@ steps:
   fmt, encoding/json, time, math, regexp, sort, …; no os, os/exec, net,
   syscall, unsafe). The code must define
   `func run(ctx map[string]any) (any, error)` (or `… any`).
+- `run: risor` — [Risor](https://github.com/risor-io/risor), a Go-flavored
+  scripting language interpreted in pure Go. The script's final expression is
+  its result. Sandboxed by an explicit global allowlist: the core builtins
+  plus strings, strconv, math, json, regexp, time, base64, bytes, and errors —
+  no os, exec, net, or filesystem modules.
+- `run: lua` — Lua 5.1 on gopher-lua, a Lua VM in pure Go. The script
+  `return`s its result (a table with string keys becomes the step's outputs).
+  Only the base, table, string, and math libraries are opened — no os, io,
+  debug, or package — and the file/chunk loaders (`dofile`, `loadfile`,
+  `load`, `loadstring`) are removed.
 
 **Host interpreters (bring your own):**
 
@@ -40,8 +52,9 @@ steps:
 ## The data contract
 
 The step's template scope — trigger context, prior step outputs, `group`,
-`inputs` inside a workflow — is injected as `ctx` (a JS global, the `run(ctx)`
-argument in go-embed, JSON on stdin for host interpreters). Named `secrets`
+`inputs` inside a workflow — is injected as `ctx` (a global in js, risor, and
+lua; the `run(ctx)` argument in go-embed; JSON on stdin for host
+interpreters). Named `secrets`
 are NOT passed into ctx; pass one explicitly via `env:` or `args:` templates
 when code genuinely needs it.
 
@@ -54,14 +67,16 @@ A code step runs where conductor runs. `host: <name>` (a [[Hosts]] entry) or
 an inline `ssh: {…}` runs a **host-interpreter** step on that box through the
 remote's interpreter — the code travels as a base64 frame, the ctx JSON on
 stdin, and a missing interpreter is a distinct clear error. The baked-in
-engines (`js`, `go-embed`) execute inside conductor's own process and are
-**local-only**; `conductor validate` rejects `host:` on them and names the
-alternatives (run `node` there, or run a conductor on that box).
+engines (`js`, `go-embed`, `risor`, `lua`) execute inside conductor's own
+process and are **local-only**; `conductor validate` rejects `host:` on them
+and names the alternatives (run `node` there, or run a conductor on that
+box).
 
 ## Trust boundary
 
-WASM (`js`) is memory-isolated. yaegi (`go-embed`) is in-process behind the
-import allowlist — appropriate for operator-authored config, not untrusted
-input. Host interpreters have full host power (that is their point).
+WASM (`js`) is memory-isolated. yaegi (`go-embed`), Risor, and Lua are
+in-process behind their allowlists — appropriate for operator-authored
+config, not untrusted input. Host interpreters have full host power (that is
+their point).
 
 Related: [[Hosts]] · [[Workflows]] · [[Connectors]]

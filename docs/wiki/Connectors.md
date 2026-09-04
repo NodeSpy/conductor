@@ -75,6 +75,7 @@ for that verb.
 | `sentry` | `alert` | — | filters: projects/levels/environments |
 | `pagerduty` | `incident` | — | filters: event_types/services/urgencies/priorities |
 | `rss` | one per declared feed | — | per-trigger `match:` regex filter |
+| `command` | — | `run` | commands local or over SSH via `host:`/`ssh:`; outputs `stdout`/`stderr`/`exit_code` |
 
 Trigger matching is uniform across every connector: triggers are
 **independent** — every trigger whose filters match an event fires. (Legacy

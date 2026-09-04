@@ -181,13 +181,17 @@ one `run:` key:
   `run: js` — QuickJS compiled to WASM under wazero (pure Go, no CGo): a real
   WASM sandbox, identical on every OS. `run: go-embed` — yaegi, a Go
   interpreter in Go, sandboxed by a stdlib import allowlist (no os/exec/net);
-  define `func run(ctx map[string]any) (any, error)`.
+  define `func run(ctx map[string]any) (any, error)`. `run: risor` — Risor, a
+  Go-flavored scripting language in pure Go; the final expression is the
+  result. `run: lua` — Lua 5.1 on gopher-lua; `return` the result. Both run
+  behind explicit allowlists (no os/io/exec/net).
 - **Host interpreters:** `run: go` (the real toolchain via `go run`),
   `run: sh | bash | ruby | node | python | php | perl | /usr/bin/…` — resolved
   via PATH or explicit path. `sh` is the portable default.
 
-Data flow is uniform: the step's scope is injected as `ctx` (a JS global, the
-`run(ctx)` argument, JSON on stdin for host interpreters) and the return
+Data flow is uniform: the step's scope is injected as `ctx` (a global in
+js/risor/lua, the `run(ctx)` argument in go-embed, JSON on stdin for host
+interpreters) and the return
 value / stdout becomes the step's outputs (a JSON object as-is, other JSON
 under `value:`, text under `text:`).
 
@@ -213,7 +217,8 @@ hosts:
 
 Everything goes through the system `ssh` (BatchMode, key auth, `known_hosts`
 pinning); env exports and code travel inside the ssh channel, never local
-argv. The in-process engines (`js`, `go-embed`) are local-only.
+argv. The in-process engines (`js`, `go-embed`, `risor`, `lua`) are
+local-only.
 
 ## Event grouping
 

@@ -28,14 +28,15 @@ ride local argv.
 |---|---|
 | host-interpreter code steps (`run: sh/node/ruby/go/…`) | the remote box's interpreter runs the code ([[Code-Steps]]) |
 | command steps (`type: command` + `host:`) | outputs `{stdout, stderr, exit_code}` |
+| command connectors (`connectors: x: {type: command, host: …}`) | `uses: x.run` executes the command on that box over SSH; the connection's `env:`/`cwd:` apply inside the remote shell ([[Connectors]]) |
 | cli / acp / agent-deck runtimes (`host:` on the runtime) | the runtime's subprocess launches on that box; a profile's `host:` overrides the runtime's |
 | paseo runtimes (`host:` on the runtime) | every paseo CLI call — run, clone, workspace create, ls, inspect, send, wait, archive, the reaper's polls — executes on that box over ssh; the host entry's `env:` supplies the remote runtime's environment; checkouts land under the remote user's `~/.conductor/checkouts` |
 | opencode runtimes (`host:` on the runtime) | `opencode serve` launches remotely, still bound to the REMOTE 127.0.0.1; every HTTP request reaches it through an `ssh -W` stdio forward, so no port opens on either machine |
 
 ## What does not
 
-- `run: js` and `run: go-embed` execute inside conductor's own process —
-  local-only by construction.
+- `run: js`, `run: go-embed`, `run: risor`, and `run: lua` execute inside
+  conductor's own process — local-only by construction.
 
 Notes on remote runtimes: a remote paseo skips this box's local-filesystem
 fast paths (stale-lock clearing, git revalidation of memoized checkouts, the
