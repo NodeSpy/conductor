@@ -560,6 +560,17 @@ func mergeAction(base, over config.Action) config.Action {
 	if len(over.Project) > 0 {
 		base.Project = over.Project
 	}
+	// Connectors-model internals: the lowered variant's flow reference and
+	// per-variant repo gates must survive the defaults merge.
+	if over.FlowRef != "" {
+		base.FlowRef = over.FlowRef
+	}
+	if len(over.Repos) > 0 {
+		base.Repos = over.Repos
+	}
+	if len(over.ExcludeRepos) > 0 {
+		base.ExcludeRepos = over.ExcludeRepos
+	}
 	if !over.Exclude.Empty() {
 		base.Exclude = over.Exclude
 	}

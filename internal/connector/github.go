@@ -320,10 +320,14 @@ func (g *githubImpl) Source(triggers []CompiledTrigger) (core.Integration, error
 		Retry:          g.conn.Retry,
 		ProjectMap:     g.conn.ProjectMap,
 		ProjectRewrite: g.conn.ProjectRewrite,
-		Defaults: gh.Rule{
-			Me:      g.conn.Me,
+		Defaults:       gh.Rule{Me: g.conn.Me},
+		// One catch-all rule carries every trigger as a variant: the legacy
+		// resolve() only matches explicit rules (defaults never fire on their
+		// own), and per-variant repos/exclude_repos gates scope each trigger.
+		Rules: []gh.Rule{{
+			Match:   gh.Match{Repos: []string{"*/*"}},
 			Actions: actions,
-		},
+		}},
 	}
 	return buildIntegration("github", g.name, cfg)
 }

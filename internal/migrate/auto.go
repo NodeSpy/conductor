@@ -111,7 +111,9 @@ func discoverFiles(mainPath string) ([]string, error) {
 		var probe struct {
 			Imports []string `yaml:"imports"`
 		}
-		if err := yaml.Unmarshal(raw, &probe); err != nil {
+		// Mask ${VAR} references first — the raw file may not parse without
+		// expansion (see Transform).
+		if err := yaml.Unmarshal(maskEnv(raw), &probe); err != nil {
 			return fmt.Errorf("parse %s: %w", p, err)
 		}
 		dir := filepath.Dir(p)
