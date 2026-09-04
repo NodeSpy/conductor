@@ -848,6 +848,51 @@ group_K_connectors() {
     *"verb ask"*"request-response"*) ok "K4 conductor schema prints the ask verb contract" K K4-schema ;;
     *) bad "K4 schema slack" K K4-schema "no ask verb in output" ;;
   esac
+
+  # K7: `uses: page.ask` in the new grammar — three sequential ask steps on
+  # one trigger; the harness answers approve, then revise (with text), then
+  # discard, and the workflow's closing slack post carries all three answers.
+  k7_draft() { # k7_draft <n> — the nth presented draft URL, if any.
+    dc logs conductor-conn 2>&1 \
+      | grep -o 'http://localhost:8095/handoff?id=[A-Za-z0-9_-]*' \
+      | sed -n "$1p"
+  }
+  k7_wait_draft() { # k7_wait_draft <n> — poll for the nth draft, echo its URL.
+    local n="$1" deadline=$((SECONDS + 30)) url=""
+    while [ $SECONDS -lt $deadline ]; do
+      url="$(k7_draft "$n")"
+      [ -n "$url" ] && { echo "$url"; return 0; }
+      sleep 1
+    done
+    return 1
+  }
+  post_webhook_to conductor-conn issue_comment conn_ask.json >/dev/null
+  if url="$(k7_wait_draft 1)"; then
+    body="$(hoff_post conductor-conn "$url" 'action=approve')"
+    case "$body" in
+      *"Recorded: approve"*) ok "K7 ask step 1: web draft approved" K K7-approve ;;
+      *) bad "K7 approve" K K7-approve "unexpected reply: $(echo "$body" | head -1)" ;;
+    esac
+  else
+    bad "K7 first ask presents" K K7-approve "no draft URL in conductor-conn logs"
+  fi
+  if url="$(k7_wait_draft 2)"; then
+    hoff_post conductor-conn "$url" 'action=revise&text=v2-better' >/dev/null
+    ok "K7 ask step 2: revision submitted" K K7-revise
+  else
+    bad "K7 second ask presents" K K7-revise "no second draft after the approve"
+  fi
+  if url="$(k7_wait_draft 3)"; then
+    hoff_post conductor-conn "$url" 'action=discard' >/dev/null
+    ok "K7 ask step 3: discard submitted" K K7-discard
+  else
+    bad "K7 third ask presents" K K7-discard "no third draft after the revise"
+  fi
+  if wait_for 30 slack_sink_has "K7 approve/revise:v2-better/discard"; then
+    ok "K7 workflow read all three ask answers (action + revision text)" K K7-decisions
+  else
+    bad "K7 ask answers reach the workflow" K K7-decisions "no K7 decision capture on the slack sink"
+  fi
 }
 
 # ---------------------------------------------------------------------------
