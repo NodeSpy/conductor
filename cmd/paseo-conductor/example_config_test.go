@@ -117,3 +117,26 @@ func writeTempRSAKey(t *testing.T) string {
 	}
 	return p
 }
+
+// TestStarterConfigValidates: the seeded starter must stay valid out of the
+// box (disabled connector, but loadable + semantically valid).
+func TestStarterConfigValidates(t *testing.T) {
+	raw, err := os.ReadFile("../../config.starter.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"GH_WEBHOOK_SECRET", "GH_SMEE_URL"} {
+		t.Setenv(v, "dummy")
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("starter config must load: %v", err)
+	}
+	if _, err := buildFlowStack(cfg, nil, nil, true); err != nil {
+		t.Fatalf("starter config must validate: %v", err)
+	}
+}

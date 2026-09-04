@@ -1,44 +1,49 @@
 # conductor — starter config (valid out of the box; does nothing until you enable it).
 #
 # To go live:
-#   1. Create a GitHub App + a smee channel (see README → "GitHub App setup").
+#   1. Create a GitHub App + a smee channel (see README → "GitHub App setup"),
+#      or skip the App and set `token: ${GH_PAT}` (webhook + secret, or sweep polling).
 #   2. Put the App id + private key path here, and the secrets in conductor.env.
 #   3. Set your GitHub login(s) and repo glob(s) below.
 #   4. Flip `enabled: true`, run `conductor validate`, then start the service.
 #
 # Full annotated reference: config.example.yaml (copied next to this file).
 
-integrations:
-  - type: github
-    name: default
-    enabled: false                    # <- set true once the App + webhook below are configured
+connectors:
+  gh:
+    type: github
+    enabled: false # <- set true once the App + webhook below are configured
     app:
-      app_id: 0                       # <- your GitHub App id
+      app_id: 0 # <- your GitHub App id
       private_key_path: ~/.config/conductor/github-app.pem
       webhook_secret: ${GH_WEBHOOK_SECRET}
-      verify_signature: false         # keep false with smee; true with a direct `listen` receiver
+      verify_signature: false # keep false with smee; true with a direct `listen` receiver
     webhook:
-      smee_url: ${GH_SMEE_URL}        # https://smee.io/<channel>   (or use `listen:` for direct HTTP)
-    defaults:
-      me: { logins: [] }              # <- your GitHub login(s), e.g. [octocat] — defines "you"
-                                      #   (reviewer/assignee go on the review_requested /
-                                      #   issue_assigned actions; add those to enable them)
-      actions:
-        merge_conflict:
-          type: agent
-          agent: fixer
-          prompt: "Resolve the conflict on {{.repo}}#{{.pr}} against {{.base}}, verify it builds, commit, and push."
-        failing_checks:
-          type: agent
-          agent: fixer
-          flaky_rerun: { enabled: true, max: 1 }
-          prompt: "Fix the failing checks on {{.repo}}#{{.pr}} — diagnose, fix, verify, commit, and push."
-        changes_requested:
-          type: agent
-          agent: fixer
-          prompt: "Address the requested changes on {{.repo}}#{{.pr}}, commit, push, and reply to threads."
-    rules:
-      - match: { repos: ["OWNER/*"] }  # <- your org/user, e.g. ["octocat/*"]
+      smee_url: ${GH_SMEE_URL} # https://smee.io/<channel>   (or use `listen:` for direct HTTP)
+    me: { logins: [] } # <- your GitHub login(s), e.g. [octocat] — defines "you"
+    repos: ["OWNER/*"] # <- your org/user, e.g. ["octocat/*"] — the default trigger scope
+
+triggers:
+  - on: gh.merge_conflict
+    steps:
+      - type: agent
+        agent: fixer
+        prompt: "Resolve the conflict on {{.repo}}#{{.pr}} against {{.base}}, verify it builds, commit, and push."
+  - on: gh.failing_checks
+    options:
+      flaky_rerun: { enabled: true, max: 1 }
+    steps:
+      - type: agent
+        agent: fixer
+        prompt: "Fix the failing checks on {{.repo}}#{{.pr}} — diagnose, fix, verify, commit, and push."
+  - on: gh.changes_requested
+    steps:
+      - type: agent
+        agent: fixer
+        prompt: "Address the requested changes on {{.repo}}#{{.pr}}, commit, push, and reply to threads."
+
+runtimes:
+  paseo: { type: paseo, default: true }
 
 agents:
   fixer:
@@ -47,5 +52,5 @@ agents:
     archive_when_done: true
 
 update:
-  auto: false                          # set true to self-update a few times a day
+  auto: false # set true to self-update a few times a day
   interval: 8h
