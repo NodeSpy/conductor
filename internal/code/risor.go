@@ -37,6 +37,7 @@ func risorGlobals(data map[string]any) map[string]any {
 	globals["strconv"] = modStrconv.Module()
 	globals["strings"] = modStrings.Module()
 	globals["time"] = modTime.Module()
+	globals["kv"] = kvRisorModule() // the built-in store, module-style (kv.get, kv.set, …)
 	globals["ctx"] = data
 	return globals
 }

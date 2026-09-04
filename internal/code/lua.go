@@ -36,7 +36,11 @@ func (e *Executor) execLua(spec Spec, data map[string]any) (map[string]any, erro
 	for _, g := range []string{"dofile", "loadfile", "load", "loadstring"} {
 		L.SetGlobal(g, lua.LNil)
 	}
-	L.SetGlobal("ctx", goToLua(L, data))
+	ctxTbl := goToLua(L, data)
+	if t, ok := ctxTbl.(*lua.LTable); ok {
+		t.RawSetString("kv", luaKVTable(L)) // the built-in store: ctx.kv.get(…), …
+	}
+	L.SetGlobal("ctx", ctxTbl)
 
 	if err := L.DoString(spec.Code); err != nil {
 		return nil, fmt.Errorf("lua: %w", err)
