@@ -581,6 +581,15 @@ func mergeAction(base, over config.Action) config.Action {
 	if over.RerequestReview {
 		base.RerequestReview = over.RerequestReview
 	}
+	if over.Background {
+		base.Background = over.Background
+	}
+	if over.Handoff != "" {
+		base.Handoff = over.Handoff
+	}
+	if over.Retry != nil {
+		base.Retry = over.Retry
+	}
 	return base
 }
 
