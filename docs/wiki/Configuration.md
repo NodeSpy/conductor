@@ -19,6 +19,7 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 | `runtimes:` | where agents run: `type`/`agent`, `transport`, `bin`, `host`, `default` | [[Runtimes]] |
 | `agents:` | named profiles: `provider`, `model`, `thinking`, `mode`, `runtime`, `workspace`, `wait_timeout`, `archive_when_done`, `labels`, `guidance`, `host` | [[Agents]] |
 | `hosts:` | named SSH targets: `host`, `user`, `port`, `key`, `known_hosts`, `cwd`, `env` | [[Hosts]] |
+| `stores:` | named data stores (`boltdb`/`redis`/`http`) addressed by the required `store:` selector on `kv.*` verbs | below |
 | `workflows:` | reusable step lists with `inputs:` / `outputs:` | [[Workflows]] |
 | `policy:` | global controls; also valid on connectors and triggers (most specific wins) | [[Policy]] |
 | `secrets:` | named secret references, read as `{{.secrets.<name>}}` | [[Secrets]] |
@@ -249,18 +250,43 @@ triggers:
 The list arrives typed from `fetch`, the code step reshapes it, and the
 mutation posts it back — three steps, no custom Go.
 
-## The built-in state store (`kv`)
+## Stores (`stores:`) and the `kv` verbs
 
-A durable key/value store is always available as the `kv` connector — no
-configuration, no credentials (the name is reserved). It backs cross-run
-state: values persist to a single bbolt file (`kv.db`, beside the state file
-— default `~/.local/state/conductor/kv.db`; pure Go, ACID). Commits fsync,
-so committed state survives a crash and the daemon's own auto-update
-restart, and is shared across runs — not just across steps within one run.
+`stores:` is a named map (like `hosts:`/`agents:`) of data stores. Every
+store is explicit — nothing is implicit and there is no default: a `kv.*`
+verb reaches a store only through its required `store:` selector, and a
+config with no `stores:` section has no stores. (SQL store types —
+postgres/mysql/sqlite serving `sql.query`/`sql.exec` — land separately;
+this section covers the KV family.)
+
+```yaml
+stores:
+  scratch: { type: boltdb }                       # file <data dir>/scratch.db
+  archive: { type: boltdb, path: /mnt/big/archive.db }
+  cache:   { type: redis,  url: "redis://10.0.0.5:6379/0", password: vault:redis_pw }
+  shared:  { type: http,   base_url: https://kv.example.com/kv, auth: { type: bearer, token: vault:kv } }
+```
+
+Every KV backend implements one `KVBackend` interface with identical
+semantics; a `stores:` entry that names an unknown type, misses its
+connection fields, or (boltdb) can't open its file is a **load error naming
+the store**. A backend that can't serve an op is capability-checked rather
+than silently degrading. Native hosted-KV SDKs (firestore, dynamodb) are the
+documented extension point: implement `KVBackend`, add a store-builder entry.
+
+| type | connection | notes |
+|---|---|---|
+| `boltdb` | `path?` | one file per store: `path:`, else `<data dir>/<store-name>.db` (beside the state file). Pure Go, ACID, fsync on commit — committed state survives a crash and the daemon's auto-update restart |
+| `redis` | `url` (`redis://host:port/db`), `password?` (secret schemes) | native ops (`SET`/`GET`/`SETNX`, `RPUSH`, `LPOP`/`RPOP`, `LRANGE`, `LREM`, `PEXPIRE` for ttl); multi-step read-modify-writes are Lua scripts (merge: `WATCH`/`MULTI`), keeping single-transaction atomicity |
+| `http` | `base_url`, `auth?` (the REST connector's block: bearer/basic/header/oauth2) | a generic REST shim — protocol below; **the remote shim owns atomicity for read-modify-write ops** |
 
 ### Verbs (`uses: kv.*`)
 
-| verb | options | output |
+`store:` is required on every verb and must be a **literal** name of a
+defined store — a missing, templated, or undefined `store:` fails
+`conductor validate`, not the run.
+
+| verb | options (beyond `store`) | output |
 |---|---|---|
 | `kv.get` | `key`, `namespace?`, `default?` | `{ value, found }` (found=false → value is `default`, else null) |
 | `kv.set` | `key`, `value`, `namespace?`, `ttl?` | `{}` |
@@ -278,17 +304,17 @@ restart, and is shared across runs — not just across steps within one run.
 | `kv.pop` | `key`, `from?` (front\|back, default back), `namespace?` | `{ value, found, len }` — remove and return an end element; empty/absent → found=false, no error |
 | `kv.list` | `namespace?`, `prefix?` | `{ keys, entries }` |
 
-- **Namespaces** are the store's buckets, auto-created on write; `namespace:`
-  defaults to `default`. Values are JSON — any serializable value
-  (string/number/bool/object/array) round-trips.
+- **Namespaces** isolate keyspaces (boltdb buckets / redis key prefixes),
+  auto-created on write; `namespace:` defaults to `default`. Values are
+  JSON — any serializable value round-trips.
 - **Atomicity.** Every read-modify-write verb — `incr`, `setnx`, `merge`,
-  `append`, `remove`, `pop` — runs inside one bbolt transaction, so
-  concurrent and grouped steps hitting the same key stay correct (parallel
-  pops each take a distinct element). `first`/`last`/`index`/`slice`/`len`/
-  `contains` are read-only.
+  `append`, `remove`, `pop` — is one backend transaction, so concurrent and
+  grouped steps hitting the same key stay correct (parallel pops each take a
+  distinct element). `first`/`last`/`index`/`slice`/`len`/`contains` are
+  read-only.
 - **TTL.** `ttl:` on `set`/`setnx` expires the key: an expired key reads as
-  absent and is skipped by `list`; a background sweep deletes expired
-  entries. Mutating a live entry keeps its expiry.
+  absent and is skipped by `list` (boltdb sweeps in the background; redis
+  expiry is native). Mutating a live entry keeps its expiry.
 - **Type errors** are step errors naming the key and the actual type
   (`merge` on a non-object; the list verbs on a non-list).
 
@@ -296,42 +322,74 @@ restart, and is shared across runs — not just across steps within one run.
 
 1. **Verbs** — `uses: kv.*` in steps and hooks (the table above), audited
    like any verb call.
-2. **Templates** — read-only, anywhere a value goes:
-   `{{ kv "runs" (print .pr) | default 0 }}` (2-arg: namespace, key) or
-   `{{ kv "key" }}` (default namespace), and
-   `{{ kvContains "namespace" "key" .item }}` for list membership. The
-   template surface never mutates.
-3. **`ctx.kv` in `run:` code** — the in-process engines get the full method
-   set `get/set/setnx/merge/delete/incr/append/remove/contains/list/first/
-   last/index/slice/len/pop` (namespace first, absent reads come back
-   null/nil): `ctx.kv.get(ns, key)` in **js** and **lua**, a top-level
-   `kv` module in **risor** (`kv.get(ns, key)`), and
-   `import "conductor/kv"` in **go-embed** (`kv.Get(ns, key)`,
-   Go-typed). Host-interpreter steps (`run: sh/node/python/…`) run in a
-   separate process — use the `kv.*` verbs from those.
+2. **Templates** — read-only, store first:
+   `{{ kv "cache" "runs" (print .pr) | default 0 }}` and
+   `{{ kvContains "cache" "pd" "seen" .incident.id }}`. The template surface
+   never mutates.
+3. **`ctx.store("<name>")` in `run:` code** — the in-process engines resolve
+   a defined store to a handle with the full method set
+   (`get/set/setnx/merge/delete/incr/append/remove/contains/list/first/
+   last/index/slice/len/pop`, namespace first, absent reads null/nil):
+   `ctx.store("cache").get(ns, key)` in **js** and **lua**, a top-level
+   `store("cache")` builtin in **risor**, and `import "conductor/store"` +
+   `store.Use("cache")` returning a typed handle in **go-embed**.
+   Host-interpreter steps (`run: sh/node/python/…`) run in a separate
+   process — use the `kv.*` verbs from those.
 
 ```yaml
 - run: js
   code: |
+    const kv = ctx.store("cache");
     const key = "last-invoice-" + ctx.inputs.contact_id;
-    const prev = ctx.kv.get("billing", key);
-    ctx.kv.set("billing", key, ctx.recent.invoices[0].InvoiceID);
+    const prev = kv.get("billing", key);
+    kv.set("billing", key, ctx.recent.invoices[0].InvoiceID);
     return { first_time: !prev };
 ```
+
+### The http store protocol
+
+An `http` store POSTs every operation to `base_url` as one JSON object and
+reads the verb's result object back:
+
+```
+POST <base_url>
+{ "op": "get|set|setnx|merge|delete|incr|append|remove|contains|
+         first|last|index|slice|len|pop|list",
+  "namespace": "…", "key": "…",
+  "value": …,                      set/setnx (any JSON), merge (object)
+  "items": […], "item": …,         append/remove; contains
+  "unique": bool, "by": int,       append; incr
+  "ttl_ms": int,                   set/setnx
+  "index": int,                    index
+  "start": int, "end": int, "end_set": bool,   slice
+  "front": bool,                   pop
+  "prefix": "…" }                  list
+
+200 → the verb's result JSON ({value, found}, {value, created},
+      {value, len}, {contains}, {len}, {value, found, len}, {keys, entries})
+non-2xx → the op fails; the body's {"error": "…"} becomes the message
+```
+
+Conductor sends exactly one request per operation and never composes
+multi-request transactions — **the shim must apply each read-modify-write op
+transactionally on its side** to keep the atomicity contract.
 
 ### Worked example — act once per incident id, durably across runs
 
 ```yaml
+stores:
+  state: { type: boltdb }
 triggers:
   - name: new-incidents
     on: [ pd.incident ]
     steps:
-      - { id: gate, uses: kv.get, options: { namespace: pagerduty, key: last-seen, default: "" } }
+      - { id: gate, uses: kv.get, options: { store: state, namespace: pagerduty, key: last-seen, default: "" } }
       - if: "{{ .incident.id }} != {{ .gate.value }}"
         uses: slack-ops.post
         options: { channel: "#outages", text: "New incident {{ .incident.id }}" }
-      - { uses: kv.set, options: { namespace: pagerduty, key: last-seen, value: "{{ .incident.id }}" } }
+      - { uses: kv.set, options: { store: state, namespace: pagerduty, key: last-seen, value: "{{ .incident.id }}" } }
 ```
+
 
 ## Splitting the config across files (`imports:`)
 

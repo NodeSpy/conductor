@@ -197,6 +197,23 @@ hosts:
   build-box: { host: build01.internal, user: ci, key: ~/.ssh/id_ed25519 }
 
 # ---------------------------------------------------------------------------
+# stores: — named data stores served by the kv.* verbs. Every store is
+# explicit (no defaults); a kv call picks one with its required `store:`
+# option. boltdb = one pure-Go file per store (path:, or
+# <data dir>/<name>.db); redis maps to native ops with Lua-scripted
+# read-modify-writes; http is a generic REST shim (POST base_url, one JSON
+# op per request — the shim owns RMW atomicity) reusing the rest auth block.
+# ---------------------------------------------------------------------------
+# stores:
+#   state: { type: boltdb }                    # <data dir>/state.db
+#   archive: { type: boltdb, path: /mnt/big/archive.db }
+#   cache: { type: redis, url: "redis://10.0.0.5:6379/0", password: vault:redis_pw }
+#   shared:
+#     type: http
+#     base_url: https://kv.example.com/kv
+#     auth: { type: bearer, token: vault:kv-shim }
+
+# ---------------------------------------------------------------------------
 # runtimes: — where agents run (previously controllers:). The paseo runtime's
 # bin: replaces the old top-level paseo_bin. Any runtime may set host: to run
 # on a hosts: entry over SSH — a remote paseo runs its whole CLI there (put
@@ -317,22 +334,23 @@ triggers:
           Run the repo audit pass (scope: {{ .inputs.scope | default "changed" }}).
           {{ if .number }}Triggered by issue #{{.number}}.{{ end }}
 
-  # The built-in kv store (no connector to configure — always available):
-  # durable cross-run state in a bbolt file beside conductor's data. Verbs:
-  # get/set/setnx/merge/delete/incr/append/remove/contains/first/last/index/
-  # slice/len/pop/list; namespaces are buckets (default "default"); values
-  # are JSON; ttl: expires a key. Read inline with {{ kv "ns" "key" }} /
-  # {{ kvContains "ns" "key" .item }}; code steps get ctx.kv (js/lua),
-  # a kv module (risor), or import "conductor/kv" (go-embed). Act once per
+  # The kv verbs serve the stores: section (see below) — every call names
+  # its store. Verbs: get/set/setnx/merge/delete/incr/append/remove/contains/
+  # first/last/index/slice/len/pop/list; namespaces isolate keyspaces; values
+  # are JSON; ttl: expires a key; read-modify-writes are one backend
+  # transaction. Read inline with {{ kv "state" "ns" "key" }} /
+  # {{ kvContains "state" "ns" "key" .item }}; code steps get
+  # ctx.store("state") (js/lua), store("state") (risor), or
+  # import "conductor/store" + store.Use("state") (go-embed). Act once per
   # incident id, durably across runs and restarts:
   # - name: new-incidents
   #   on: [ pd.incident ]
   #   steps:
-  #     - { id: gate, uses: kv.get, options: { namespace: pagerduty, key: last-seen, default: "" } }
+  #     - { id: gate, uses: kv.get, options: { store: state, namespace: pagerduty, key: last-seen, default: "" } }
   #     - if: "{{ .incident.id }} != {{ .gate.value }}"
   #       uses: slack-ops.post
   #       options: { channel: "#outages", text: "New incident {{ .incident.id }}" }
-  #     - { uses: kv.set, options: { namespace: pagerduty, key: last-seen, value: "{{ .incident.id }}" } }
+  #     - { uses: kv.set, options: { store: state, namespace: pagerduty, key: last-seen, value: "{{ .incident.id }}" } }
 
   # Review triage through the reusable workflow + a request-response ask.
   - on: gh.review_requested
