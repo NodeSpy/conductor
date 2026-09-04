@@ -470,3 +470,46 @@ func TestVaultUnknownVersion(t *testing.T) {
 		t.Fatalf("want an unsupported-version error, got %v", err)
 	}
 }
+
+func TestExpandHomeAndExecHelper(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	if got := expandHome("~/x/y"); got != filepath.Join(home, "x/y") {
+		t.Fatalf("expandHome: %q", got)
+	}
+	if got := expandHome("/abs"); got != "/abs" {
+		t.Fatalf("absolute untouched: %q", got)
+	}
+	if got := expandHome("~other/x"); got != "~other/x" {
+		t.Fatalf("~user untouched: %q", got)
+	}
+	// The real exec helper runs a process and errors on a missing one.
+	if out, err := execHelper(context.Background(), "sh", "-c", "echo hi"); err != nil || !strings.Contains(out, "hi") {
+		t.Fatalf("execHelper: %q %v", out, err)
+	}
+	if _, err := execHelper(context.Background(), "/nonexistent/bin"); err == nil {
+		t.Fatal("missing helper must error")
+	}
+}
+
+func TestInitVaultErrors(t *testing.T) {
+	// Unknown profile.
+	if _, err := InitVault(filepath.Join(t.TempDir(), "v.json"), func() ([]byte, error) { return []byte("k"), nil }, "nope"); err == nil {
+		t.Fatal("unknown profile must error")
+	}
+	// Key function failure.
+	if _, err := InitVault(filepath.Join(t.TempDir(), "v.json"), func() ([]byte, error) { return nil, os.ErrPermission }, ""); err == nil {
+		t.Fatal("key failure must error")
+	}
+}
+
+func TestSeedKeyFileDefaultPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	kf, err := SeedKeyFile("", "material")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(kf, home) || !strings.HasSuffix(kf, "vault.key") {
+		t.Fatalf("default seed path: %q", kf)
+	}
+}
