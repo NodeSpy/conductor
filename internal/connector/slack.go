@@ -33,8 +33,9 @@ var slackDecl = &TypeDecl{
 	Type: "slack",
 	Desc: "Slack: mentions/reactions/slash commands in (Socket Mode); messages, reactions, and asks out.",
 	Connection: Schema{
-		"app_token": {Type: TString, Required: true, Desc: "Socket Mode app token (xapp-…)"},
-		"bot_token": {Type: TString, Required: true, Desc: "bot token (xoxb-…) for posting"},
+		"app_token":   {Type: TString, Desc: "Socket Mode app token (xapp-…) — needed for events and ask replies"},
+		"bot_token":   {Type: TString, Desc: "bot token (xoxb-…) for the Web API verbs"},
+		"webhook_url": {Type: TString, Desc: "an incoming-webhook URL — post-only alternative to a bot token"},
 	},
 	Events: []EventDecl{
 		{
@@ -117,6 +118,10 @@ func mergeSchema(a, b Schema) Schema {
 type slackConn struct {
 	AppToken string `yaml:"app_token"`
 	BotToken string `yaml:"bot_token"`
+	// WebhookURL is the post-only alternative: an incoming webhook. With no
+	// bot_token, `post` sends {"text": …} there (the legacy notify sink's
+	// exact payload); react/ask still need the bot token.
+	WebhookURL string `yaml:"webhook_url"`
 }
 
 type slackImpl struct {
@@ -143,6 +148,9 @@ func newSlackImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error)
 	if conn.BotToken, err = deps.Secrets.Resolve(ctx, conn.BotToken); err != nil {
 		return nil, fmt.Errorf("bot_token: %w", err)
 	}
+	if conn.WebhookURL, err = deps.Secrets.Resolve(ctx, conn.WebhookURL); err != nil {
+		return nil, fmt.Errorf("webhook_url: %w", err)
+	}
 	for _, t := range []string{conn.AppToken, conn.BotToken} {
 		if t != "" {
 			deps.Secrets.Track(t)
@@ -156,8 +164,8 @@ func newSlackImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error)
 }
 
 func (s *slackImpl) Validate() error {
-	if s.conn.BotToken == "" {
-		return fmt.Errorf("connector %q: bot_token is required", s.name)
+	if s.conn.BotToken == "" && s.conn.WebhookURL == "" {
+		return fmt.Errorf("connector %q: set bot_token (Web API) or webhook_url (post-only)", s.name)
 	}
 	return nil
 }
@@ -248,6 +256,14 @@ func (s *slackImpl) Invoke(ctx context.Context, verb string, opts map[string]any
 		if text == "" {
 			return nil, fmt.Errorf("slack.post: options.text is required")
 		}
+		// Webhook-only connection: the incoming webhook is the channel — post
+		// {"text": …} there (byte-identical to the legacy notify sink).
+		if s.conn.BotToken == "" {
+			if err := postIncomingWebhook(ctx, s.api.httpc, s.conn.WebhookURL, map[string]string{"text": text}); err != nil {
+				return nil, fmt.Errorf("slack.post: %w", err)
+			}
+			return map[string]any{"ts": "", "channel": ""}, nil
+		}
 		if channel == "" && user == "" {
 			return nil, fmt.Errorf("slack.post: set options.channel or options.user")
 		}
@@ -274,6 +290,9 @@ func (s *slackImpl) Invoke(ctx context.Context, verb string, opts map[string]any
 		}
 		return map[string]any{"ts": ts, "channel": channel}, nil
 	case "react":
+		if s.conn.BotToken == "" {
+			return nil, fmt.Errorf("slack.react needs a bot_token (the webhook_url connection is post-only)")
+		}
 		channel, _ := opts["channel"].(string)
 		ts, _ := opts["ts"].(string)
 		emoji, _ := opts["emoji"].(string)
@@ -285,6 +304,9 @@ func (s *slackImpl) Invoke(ctx context.Context, verb string, opts map[string]any
 		}
 		return map[string]any{"ok": true}, nil
 	case "ask":
+		if s.conn.BotToken == "" {
+			return nil, fmt.Errorf("slack.ask needs a bot_token and app_token (the webhook_url connection is post-only)")
+		}
 		ch, err := s.AskChannel(opts)
 		if err != nil {
 			return nil, err

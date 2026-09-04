@@ -87,6 +87,13 @@ func renderValue(v any, data map[string]any) (any, error) {
 	return v, nil
 }
 
+// RenderOptions renders every templated value in an options map — exported
+// for the notify.via router (main wiring), which invokes connector verbs
+// outside a workflow scope.
+func RenderOptions(opts map[string]any, data map[string]any) (map[string]any, error) {
+	return renderOptions(opts, data)
+}
+
 // renderOptions renders every templated value in an options map.
 func renderOptions(opts map[string]any, data map[string]any) (map[string]any, error) {
 	if len(opts) == 0 {

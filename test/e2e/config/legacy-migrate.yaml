@@ -41,6 +41,7 @@ control:
 
 notify:
   on: [dispatch, escalate]
+  ntfy: { server: "http://sink-catcher:8080/ntfy", topic: migrate-e2e }
 
 store:
   state_file: /data/state.json

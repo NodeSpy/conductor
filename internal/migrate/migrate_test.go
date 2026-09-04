@@ -510,9 +510,22 @@ func TestKitchenSinkTransform(t *testing.T) {
 		t.Errorf("policy concurrency: %+v", out.Policy.Concurrency)
 	}
 
-	// Carried blocks intact.
-	if out.Notify.SlackWebhookURL == "" || out.Store.StateFile != "/tmp/state.json" || !out.Update.Auto {
-		t.Errorf("carried blocks lost: notify=%v store=%v update=%v", out.Notify, out.Store, out.Update)
+	// Carried blocks intact; the notify SINK maps onto a connector + via route
+	// (the verb-layer delivery) while on:/digest stay on the block.
+	if out.Store.StateFile != "/tmp/state.json" || !out.Update.Auto {
+		t.Errorf("carried blocks lost: store=%v update=%v", out.Store, out.Update)
+	}
+	if out.Notify.SlackWebhookURL != "" {
+		t.Errorf("legacy sink field should be mapped away, got %q", out.Notify.SlackWebhookURL)
+	}
+	if len(out.Notify.Via) != 1 || out.Notify.Via[0].Uses != "notify-slack.post" {
+		t.Fatalf("notify via routes: %+v", out.Notify.Via)
+	}
+	if out.ConnectorsMap["notify-slack"].Type != "slack" {
+		t.Errorf("notify-slack connector missing: %v", out.ConnectorsMap["notify-slack"])
+	}
+	if fmt.Sprint(out.Notify.On) != "[escalate]" {
+		t.Errorf("notify.on lost: %v", out.Notify.On)
 	}
 	if _, ok := out.Agents["fixer"]; !ok {
 		t.Errorf("agents block lost")

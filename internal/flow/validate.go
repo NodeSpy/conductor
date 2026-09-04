@@ -38,6 +38,52 @@ func Validate(cfg *config.Config, reg *connector.Registry) error {
 			return err
 		}
 	}
+	if err := validateNotifyVia(cfg, reg); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateNotifyVia checks the notify.via routes: known connector verbs,
+// valid options (required keys may come from connector defaults), and every
+// template reference resolvable in the notify scope.
+func validateNotifyVia(cfg *config.Config, reg *connector.Registry) error {
+	if len(cfg.Notify.Via) == 0 {
+		return nil
+	}
+	sc := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}}
+	for _, k := range []string{"message", "event", "ref", "repo", "number", "kind", "title"} {
+		sc.top[k] = true
+	}
+	for i, r := range cfg.Notify.Via {
+		w := fmt.Sprintf("notify.via[%d]", i)
+		connName, verb, ok := strings.Cut(r.Uses, ".")
+		if !ok || connName == "" || verb == "" {
+			return fmt.Errorf("%s: `uses: %s` must be <connector>.<verb>", w, r.Uses)
+		}
+		in, found := reg.Get(connName)
+		if !found {
+			return fmt.Errorf("%s: unknown connector %q", w, connName)
+		}
+		vd, found := in.Decl.Verb(verb)
+		if !found {
+			return fmt.Errorf("%s: connector %q (%s) has no verb %q (verbs: %s)",
+				w, connName, in.Decl.Type, verb, strings.Join(in.Decl.VerbNames(), ", "))
+		}
+		if err := connector.ValidateCallOptions(w+" options", vd.Options, r.Options, in.DefaultOptions); err != nil {
+			return err
+		}
+		if err := checkMapRefs(w+" options", r.Options, sc); err != nil {
+			return err
+		}
+		for _, ev := range r.On {
+			switch ev {
+			case "dispatch", "complete", "escalate", "needs_input", "digest":
+			default:
+				return fmt.Errorf("%s: unknown event %q in on: (dispatch|complete|escalate|needs_input|digest)", w, ev)
+			}
+		}
+	}
 	return nil
 }
 

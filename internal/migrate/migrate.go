@@ -175,12 +175,22 @@ func Transform(raw []byte) (*Result, error) {
 		notes = append(notes, "control → policy (enabled/shadow/pause_label/concurrency)")
 	}
 
+	// notify: sinks → connectors + via routes (the verb-layer delivery, with
+	// byte-identical payloads); on/push/digest stay on the notify block.
+	notifyNode, err := notifySinksToVia(&cfg, connectors, &notes)
+	if err != nil {
+		return nil, err
+	}
+
 	// Assemble the output document: transformed blocks are new nodes; carried
 	// blocks are the original nodes (comments preserved); legacy-only keys
 	// are dropped (their content lives in the new blocks).
 	dropped := map[string]bool{
 		"integrations": true, "control": true, "handoff": true,
 		"handoffs": true, "controllers": true, "paseo_bin": true,
+	}
+	if notifyNode != nil {
+		dropped["notify"] = true
 	}
 	if err := out.carryFrom(&doc, dropped, []string{"imports"}); err != nil {
 		return nil, err
@@ -207,6 +217,11 @@ func Transform(raw []byte) (*Result, error) {
 			return nil, err
 		}
 	}
+	if notifyNode != nil {
+		if err := out.set("notify", notifyNode); err != nil {
+			return nil, err
+		}
+	}
 	if err := out.carryFrom(&doc, dropped, nil); err != nil {
 		return nil, err
 	}
@@ -225,12 +240,105 @@ func Transform(raw []byte) (*Result, error) {
 	return &Result{Output: unmaskEnv(b), Summary: notes, Changed: true}, nil
 }
 
+// notifySinksToVia maps the legacy notify sink fields onto connectors + via
+// routes. Payloads are byte-identical to the legacy posters: slack/discord/
+// pushover carried a "conductor " prefix on the line, ntfy carried it in the
+// Title header, notifiarr in the notification name. Returns nil when no sink
+// is configured (the notify block then carries through verbatim).
+func notifySinksToVia(cfg *config.Config, connectors map[string]map[string]any, notes *[]string) (map[string]any, error) {
+	n := cfg.Notify
+	hasSinks := n.SlackWebhookURL != "" || n.DiscordWebhookURL != "" || n.Ntfy.Topic != "" ||
+		(n.Pushover.Token != "" && n.Pushover.User != "") || n.Notifiarr.APIKey != ""
+	if !hasSinks {
+		return nil, nil
+	}
+	addConn := func(name string, conn map[string]any) error {
+		if _, dup := connectors[name]; dup {
+			return fmt.Errorf("notify: generated connector name %q collides with an existing integration — rename that integration and re-run", name)
+		}
+		connectors[name] = conn
+		return nil
+	}
+	var via []map[string]any
+	if n.SlackWebhookURL != "" {
+		if err := addConn("notify-slack", map[string]any{"type": "slack", "webhook_url": n.SlackWebhookURL}); err != nil {
+			return nil, err
+		}
+		via = append(via, map[string]any{
+			"uses": "notify-slack.post", "options": map[string]any{"text": "conductor {{.message}}"},
+		})
+		*notes = append(*notes, "notify.slack_webhook_url → connector notify-slack + via route")
+	}
+	if n.DiscordWebhookURL != "" {
+		if err := addConn("notify-discord", map[string]any{"type": "discord", "webhook_url": n.DiscordWebhookURL}); err != nil {
+			return nil, err
+		}
+		via = append(via, map[string]any{
+			"uses": "notify-discord.post", "options": map[string]any{"text": "conductor {{.message}}"},
+		})
+		*notes = append(*notes, "notify.discord_webhook_url → connector notify-discord + via route")
+	}
+	if n.Ntfy.Topic != "" {
+		conn := map[string]any{"type": "ntfy", "topic": n.Ntfy.Topic}
+		if n.Ntfy.Server != "" {
+			conn["server"] = n.Ntfy.Server
+		}
+		if err := addConn("notify-ntfy", conn); err != nil {
+			return nil, err
+		}
+		via = append(via, map[string]any{
+			"uses": "notify-ntfy.publish", "options": map[string]any{"title": "conductor", "message": "{{.message}}"},
+		})
+		*notes = append(*notes, "notify.ntfy → connector notify-ntfy + via route")
+	}
+	if n.Pushover.Token != "" && n.Pushover.User != "" {
+		if err := addConn("notify-pushover", map[string]any{"type": "pushover", "token": n.Pushover.Token, "user": n.Pushover.User}); err != nil {
+			return nil, err
+		}
+		via = append(via, map[string]any{
+			"uses": "notify-pushover.notify", "options": map[string]any{"message": "conductor {{.message}}"},
+		})
+		*notes = append(*notes, "notify.pushover → connector notify-pushover + via route")
+	}
+	if n.Notifiarr.APIKey != "" {
+		conn := map[string]any{"type": "notifiarr", "api_key": n.Notifiarr.APIKey}
+		if n.Notifiarr.ChannelID != "" {
+			conn["channel_id"] = n.Notifiarr.ChannelID
+		}
+		if err := addConn("notify-notifiarr", conn); err != nil {
+			return nil, err
+		}
+		via = append(via, map[string]any{
+			"uses": "notify-notifiarr.notify", "options": map[string]any{"text": "{{.message}}"},
+		})
+		*notes = append(*notes, "notify.notifiarr → connector notify-notifiarr + via route")
+	}
+	out := map[string]any{"via": via}
+	if len(n.On) > 0 {
+		out["on"] = strSlice(n.On)
+	}
+	if n.Push {
+		out["push"] = true
+	}
+	if n.Digest != 0 {
+		out["digest"] = n.Digest.String()
+	}
+	return out, nil
+}
+
 // isLegacy reports whether the document carries legacy constructs.
 func isLegacy(c *config.Config) bool {
 	return len(c.Integrations) > 0 || len(c.Handoffs) > 0 ||
 		c.Handoff.Web.BaseURL != "" || c.Handoff.Web.Listen != "" ||
 		len(c.Controllers) > 0 || (c.PaseoBin != "" && c.PaseoBin != "paseo") ||
-		controlPolicy(c.Control) != nil
+		controlPolicy(c.Control) != nil || legacyNotifySinks(c.Notify)
+}
+
+// legacyNotifySinks reports whether the notify block still uses the legacy
+// sink fields (they map onto connectors + via routes).
+func legacyNotifySinks(n config.Notify) bool {
+	return n.SlackWebhookURL != "" || n.DiscordWebhookURL != "" || n.Ntfy.Topic != "" ||
+		(n.Pushover.Token != "" && n.Pushover.User != "") || n.Notifiarr.APIKey != ""
 }
 
 // handoffConnector maps one handoffs: entry to a connector map.
