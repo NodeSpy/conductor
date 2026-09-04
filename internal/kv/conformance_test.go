@@ -13,6 +13,16 @@ import (
 // so every backend proves identical semantics.
 func runConformance(t *testing.T, b KVBackend) {
 	t.Helper()
+	runConformanceAdv(t, b, nil)
+}
+
+// runConformanceAdv takes an explicit clock-advance hook for backends whose
+// test double freezes time (miniredis needs FastForward to expire ttls).
+func runConformanceAdv(t *testing.T, b KVBackend, advance func(time.Duration)) {
+	t.Helper()
+	if advance == nil {
+		advance = func(d time.Duration) { time.Sleep(d) }
+	}
 
 	t.Run("scalar round-trip and found", func(t *testing.T) {
 		values := map[string]any{
@@ -205,7 +215,7 @@ func runConformance(t *testing.T, b KVBackend) {
 		if _, found, _ := b.Get("conf", "blip"); !found {
 			t.Fatal("fresh ttl key readable")
 		}
-		time.Sleep(60 * time.Millisecond)
+		advance(60 * time.Millisecond)
 		if _, found, _ := b.Get("conf", "blip"); found {
 			t.Fatal("expired key must read absent")
 		}
