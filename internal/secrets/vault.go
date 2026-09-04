@@ -132,17 +132,21 @@ func KeyChain(vaultPath string) ([]byte, error) {
 	return nil, fmt.Errorf("no vault key: set %s, provide a systemd credential conductor-vault-key, store one in the OS keyring as %q, or seed %s (`conductor vault init`)", EnvVaultKey, keyringService, kf)
 }
 
-// osKeyringKey reads the vault key from the platform keyring by shelling out
-// to its CLI — macOS Keychain via `security`, libsecret via `secret-tool` —
+// osKeyringKey reads the default vault key entry from the platform keyring.
+func osKeyringKey() string { return KeyringLookup(keyringService) }
+
+// KeyringLookup reads one entry from the platform keyring by shelling out to
+// its CLI — macOS Keychain via `security`, libsecret via `secret-tool` —
 // keeping the binary cgo-free. A missing tool, locked keyring, or absent
-// entry returns "" so the chain falls through to the key file.
-func osKeyringKey() string {
+// entry returns "" so unlock chains can fall through. Exported for the
+// vaults package's `keyring:` unlock references.
+func KeyringLookup(service string) string {
 	var argv []string
 	switch runtime.GOOS {
 	case "darwin":
-		argv = []string{"security", "find-generic-password", "-s", keyringService, "-w"}
+		argv = []string{"security", "find-generic-password", "-s", service, "-w"}
 	case "linux":
-		argv = []string{"secret-tool", "lookup", "service", keyringService}
+		argv = []string{"secret-tool", "lookup", "service", service}
 	default:
 		return ""
 	}
