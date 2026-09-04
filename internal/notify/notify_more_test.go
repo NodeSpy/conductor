@@ -85,6 +85,9 @@ func TestSinkPostFailuresAreLoggedNotFatal(t *testing.T) {
 		Ntfy:              config.NotifyNtfy{Topic: "ops", Server: "http://127.0.0.1:1"},
 		Pushover:          config.NotifyPushover{Token: "t", User: "u"},
 	}
+	old := pushoverURL
+	pushoverURL = dead
+	defer func() { pushoverURL = old }()
 	var mu sync.Mutex
 	var logs []string
 	n := New(cfg, func(f string, a ...any) {
