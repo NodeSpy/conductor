@@ -39,12 +39,6 @@ type Resolver struct {
 	// Exec runs an external secret helper (`op`, `pass`) and returns its stdout.
 	// The default execs the command with a bounded timeout.
 	Exec func(ctx context.Context, name string, args ...string) (string, error)
-	// VaultPath is the encrypted vault file for vault: references (default
-	// DefaultVaultPath()).
-	VaultPath string
-	// VaultKey returns the vault master key material (default: the KeyChain
-	// lookup order documented in vault.go).
-	VaultKey func() ([]byte, error)
 	// VaultRead resolves {{ vault "<name>" "<key>" }} references against the
 	// vaults: registry. Wired by the connector build (a plain func, so this
 	// package never imports internal/vaults).
@@ -61,7 +55,6 @@ func New() *Resolver {
 		LookupEnv: os.LookupEnv,
 		ReadFile:  os.ReadFile,
 		Exec:      execHelper,
-		VaultPath: DefaultVaultPath(),
 		cache:     map[string]string{},
 	}
 }
@@ -151,42 +144,14 @@ func (r *Resolver) resolve(ctx context.Context, ref string) (string, error) {
 			return "", fmt.Errorf("secret %q: environment variable %s is not set", ref, name)
 		}
 		return v, nil
-	case strings.HasPrefix(ref, "op://"):
-		return r.exec(ctx, "op", "read", "-n", ref)
-	case strings.HasPrefix(ref, "pass:"):
-		name := strings.TrimPrefix(ref, "pass:")
-		if name == "" {
-			return "", fmt.Errorf("secret %q: empty pass entry name", ref)
-		}
-		out, err := r.exec(ctx, "pass", "show", name)
-		if err != nil {
-			return "", err
-		}
-		// pass entries may carry extra lines (metadata); the secret is line one.
-		if i := strings.IndexByte(out, '\n'); i >= 0 {
-			out = out[:i]
-		}
-		return out, nil
-	case strings.HasPrefix(ref, "vault:"):
-		name := strings.TrimPrefix(ref, "vault:")
-		if name == "" {
-			return "", fmt.Errorf("secret %q: empty vault entry name", ref)
-		}
-		return r.vaultGet(name)
-	case strings.HasPrefix(ref, "file:"):
-		path := strings.TrimPrefix(ref, "file:")
-		if path == "" {
-			return "", fmt.Errorf("secret %q: empty file path", ref)
-		}
-		read := r.ReadFile
-		if read == nil {
-			read = os.ReadFile
-		}
-		b, err := read(expandHome(path))
-		if err != nil {
-			return "", fmt.Errorf("secret %q: %w", ref, err)
-		}
-		return strings.TrimRight(string(b), "\r\n"), nil
+	case strings.HasPrefix(ref, "op://"),
+		strings.HasPrefix(ref, "pass:"),
+		strings.HasPrefix(ref, "vault:"),
+		strings.HasPrefix(ref, "file:"):
+		// The scheme URIs were replaced by the vaults: model. They are still
+		// RECOGNIZED so an unmigrated reference fails loudly here instead of
+		// passing through as a literal credential.
+		return "", fmt.Errorf("secret %q: the op://, pass:, vault:, and file: schemes were replaced by vaults: entries and {{ vault \"<name>\" \"<key>\" }} references — auto-migration rewrites this at boot, or run `conductor config migrate`", ref)
 	}
 	return "", fmt.Errorf("secret %q: unknown scheme", ref)
 }
@@ -282,29 +247,4 @@ func expandHome(p string) string {
 		}
 	}
 	return p
-}
-
-// StoreVault writes name=value into the resolver's configured vault and
-// refreshes the in-memory cache for the matching vault: reference — the
-// oauth2 refresh-token rotation write-back, so a provider-rotated token
-// survives the daemon's own restart. The value is tracked for redaction.
-func (r *Resolver) StoreVault(name, value string) error {
-	v, err := OpenVault(r.VaultPath, r.VaultKey)
-	if err != nil {
-		return err
-	}
-	if err := v.Set(name, value); err != nil {
-		return err
-	}
-	if err := v.Save(); err != nil {
-		return err
-	}
-	r.mu.Lock()
-	if r.cache == nil {
-		r.cache = map[string]string{}
-	}
-	r.cache["vault:"+name] = value
-	r.trackLocked(value)
-	r.mu.Unlock()
-	return nil
 }

@@ -689,6 +689,9 @@ func (c *Config) validateConnectors() error {
 	if err := validatePolicyBlock("policy", c.Policy); err != nil {
 		return err
 	}
+	if len(c.SecretRefs) > 0 {
+		return fmt.Errorf("config: the secrets: block was replaced by vaults: entries and {{ vault \"<name>\" \"<key>\" }} references — auto-migration rewrites it at boot, or run `conductor config migrate`")
+	}
 	for name, ref := range c.ConnectorsMap {
 		if name == "" {
 			return fmt.Errorf("config: connectors: empty connector name")

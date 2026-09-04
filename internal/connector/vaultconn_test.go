@@ -236,3 +236,25 @@ vaults:
 		t.Fatalf("api disabled: %s", in.DisabledReason)
 	}
 }
+
+// seedConductorVaultEntries creates a vault.json with the given entries and
+// returns its path and base64 key material.
+func seedConductorVaultEntries(t *testing.T, entries map[string]string) (path, key string) {
+	t.Helper()
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path = filepath.Join(t.TempDir(), "vault.json")
+	v, err := secrets.InitVault(path, func() ([]byte, error) { return []byte(key), nil }, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, val := range entries {
+		_ = v.Set(k, val)
+	}
+	if err := v.Save(); err != nil {
+		t.Fatal(err)
+	}
+	return path, key
+}

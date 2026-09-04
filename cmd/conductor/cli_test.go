@@ -25,16 +25,22 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 }
 
 // writeCLIConfig writes a connectors config with one healthy, one authored-off,
-// and one cred-broken connector, plus a secrets: block with one good and one
-// bad reference.
+// and one cred-broken connector, plus one healthy and one broken vault.
 func writeCLIConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
+	secDir := filepath.Join(dir, "filesec")
+	if err := os.MkdirAll(secDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(secDir, "tok"), []byte("shh-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	doc := `
-secrets:
-  good: env:PC_CLI_TEST_SECRET
-  bad: file:/nonexistent/pc-cli-secret
+vaults:
+  goodvault: { type: file, dir: ` + secDir + ` }
+  badvault:  { type: file, dir: /nonexistent/pc-cli-vault }
 connectors:
   box:
     type: command
@@ -45,16 +51,13 @@ connectors:
     schedules: { tick: { every: 1h } }
   broken:
     type: slack
-    app_token: file:/nonexistent/pc-cli-app
-    bot_token: file:/nonexistent/pc-cli-bot
+    app_token: env:PC_CLI_NOPE_APP
+    bot_token: env:PC_CLI_NOPE_BOT
 triggers:
   - on: timer.tick
     steps: [{ id: hi, uses: box.run, options: { command: "true" } }]
 `
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "conductor.env"), []byte("PC_CLI_TEST_SECRET=shh\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -115,7 +118,7 @@ func TestCmdSecretsCheck(t *testing.T) {
 		t.Fatalf("check with a bad ref should error, got %v", err)
 	}
 	for _, want := range []string{
-		"ok   secrets.good", "FAIL secrets.bad",
+		"ok   vault goodvault (file) unlocked", "FAIL vault badvault (file)",
 		"ok   connector box", "--   connector timer (disabled in config)",
 		"FAIL connector broken",
 	} {
@@ -124,8 +127,8 @@ func TestCmdSecretsCheck(t *testing.T) {
 		}
 	}
 	// Values never print.
-	if strings.Contains(out, "shh") {
-		t.Error("secrets check leaked a resolved value")
+	if strings.Contains(out, "shh-value") {
+		t.Error("secrets check leaked a vault value")
 	}
 
 	// All-green config → nil error and the closing line.

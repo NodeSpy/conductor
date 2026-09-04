@@ -408,13 +408,3 @@ func SeedKeyFile(vaultPath, material string) (string, error) {
 	}
 	return kf, nil
 }
-
-// vaultGet resolves a vault: reference through the Resolver's configured
-// vault path and key function.
-func (r *Resolver) vaultGet(name string) (string, error) {
-	v, err := OpenVault(r.VaultPath, r.VaultKey)
-	if err != nil {
-		return "", err
-	}
-	return v.Get(name)
-}

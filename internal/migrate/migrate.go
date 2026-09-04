@@ -65,7 +65,22 @@ func Transform(raw []byte) (*Result, error) {
 		return nil, err
 	}
 	if !isLegacy(&cfg) {
-		return &Result{Changed: false}, nil
+		// A connectors-schema file may still carry the pre-vaults secret
+		// model (scheme URIs, a secrets: block) — the vaults pass alone
+		// rewrites it; an already-migrated file changes nothing.
+		var notes []string
+		out, changed, err := applyVaultsPass(raw, &notes)
+		if err != nil {
+			return nil, fmt.Errorf("vaults migration: %w", err)
+		}
+		if !changed {
+			return &Result{Changed: false}, nil
+		}
+		var check config.Config
+		if err := yaml.Unmarshal(out, &check); err != nil {
+			return nil, fmt.Errorf("transformed config does not re-parse: %w", err)
+		}
+		return &Result{Output: unmaskEnv(out), Summary: notes, Changed: true}, nil
 	}
 	if cfg.HasConnectors() {
 		return nil, fmt.Errorf("config already has connectors:/triggers: blocks alongside legacy ones — finish the migration by hand (mixed files are valid to RUN, but the automatic transform only handles fully-legacy files)")
@@ -234,6 +249,14 @@ func Transform(raw []byte) (*Result, error) {
 	b, err := out.marshal()
 	if err != nil {
 		return nil, err
+	}
+	// The vaults pass runs over the legacy transform's output: legacy
+	// credential fields carry their scheme URIs into the new schema, and
+	// those must not survive migration.
+	if vout, vchanged, verr := applyVaultsPass(b, &notes); verr != nil {
+		return nil, fmt.Errorf("vaults migration: %w", verr)
+	} else if vchanged {
+		b = vout
 	}
 	// The transform must produce a parseable document (belt and braces before
 	// the caller's full validation). Checked BEFORE unmasking: after ${VAR}
