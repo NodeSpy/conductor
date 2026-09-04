@@ -41,7 +41,7 @@ case "$1" in
     for a in "$@"; do case "$a" in inspect|--json) ;; *) id="$a" ;; esac; done
     cat "$dir/inspect-$id.json" 2>/dev/null || echo '{}' ;;
   wait)
-    [ -f "$dir/wait-slow" ] && sleep 5
+    [ -f "$dir/wait-slow" ] && exec sleep 30
     exit 0 ;;
   send)
     [ -f "$dir/send-fail" ] && { echo "send boom" >&2; exit 1; }
@@ -115,7 +115,9 @@ func TestWaitForAgentTimeoutAndNoop(t *testing.T) {
 	put(t, dir, "wait-slow", "1")
 	start := time.Now()
 	d.WaitForAgent(context.Background(), "a-1", 100*time.Millisecond)
-	if time.Since(start) > 3*time.Second {
+	// The stub sleeps 30s; the 100ms timeout must cut it far short even on a
+	// heavily loaded machine.
+	if time.Since(start) > 15*time.Second {
 		t.Fatal("timeout did not bound the wait")
 	}
 	if !strings.Contains(callsLog(t, dir), "wait a-1") {
