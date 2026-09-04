@@ -39,6 +39,7 @@ func (e *Executor) execLua(spec Spec, data map[string]any) (map[string]any, erro
 	ctxTbl := goToLua(L, data)
 	if t, ok := ctxTbl.(*lua.LTable); ok {
 		t.RawSetString("store", luaStoreFn(L)) // defined stores: ctx.store("cache").get(…)
+		t.RawSetString("sql", luaSQLFn(L))     // defined SQL stores: ctx.sql("analytics").query(…)
 	}
 	L.SetGlobal("ctx", ctxTbl)
 

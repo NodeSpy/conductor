@@ -89,8 +89,10 @@ triggers:
 }
 
 // TestSQLVerbSteps: an end-to-end step chain over one sqlite :memory: store —
-// sql.exec writes (rows_affected / last_insert_id flow into scope), sql.query
-// reads the rows back, and the templated outputs land in a downstream verb.
+// sql.exec writes (rows_affected / last_insert_id flow into scope), a run: js
+// step writes through ctx.sql("db"), sql.query reads both rows back, and the
+// templated outputs land in a downstream verb: verbs and code hit ONE
+// defined store.
 func TestSQLVerbSteps(t *testing.T) {
 	kv.SetDataDir(t.TempDir())
 	kv.ResetStores()
@@ -117,15 +119,20 @@ steps:
       store: db
       sql: "INSERT INTO events (body) VALUES (?)"
       args: [ "{{.msg}}" ]
+  - id: js
+    run: js
+    code: |
+      const db = ctx.sql("db");
+      db.exec("INSERT INTO events (body) VALUES (?)", [ctx.msg + "-js"]);
+      return { total: db.query("SELECT COUNT(*) AS n FROM events")[0].n };
   - id: read
     uses: sql.query
     options:
       store: db
-      sql: "SELECT id, body FROM events WHERE body = ?"
-      args: [ "{{.msg}}" ]
+      sql: "SELECT id, body FROM events ORDER BY id"
   - id: post
     uses: svc.post
-    options: { text: "n={{.ins.rows_affected}} id={{.ins.last_insert_id}} count={{.read.count}} body={{ (index .read.rows 0).body }}" }
+    options: { text: "n={{.ins.rows_affected}} id={{.ins.last_insert_id}} total={{.js.total}} count={{.read.count}} body={{ (index .read.rows 1).body }}" }
 `)
 	rig := newTestRunner(t, cfg, reg)
 	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "inv-77"}), spec)
@@ -133,7 +140,7 @@ steps:
 		t.Fatalf("workflow failed: %s", errStr)
 	}
 	calls := fake.snapshot()
-	if len(calls) != 1 || calls[0].Opts["text"] != "n=1 id=1 count=1 body=inv-77" {
+	if len(calls) != 1 || calls[0].Opts["text"] != "n=1 id=1 total=2 count=2 body=inv-77-js" {
 		t.Fatalf("calls: %+v", calls)
 	}
 }

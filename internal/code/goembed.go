@@ -99,6 +99,9 @@ func (e *Executor) execGoEmbed(spec Spec, data map[string]any) (map[string]any, 
 	if err := i.Use(kvGoEmbedExports()); err != nil {
 		return nil, fmt.Errorf("code: go-embed: kv setup: %w", err)
 	}
+	if err := i.Use(sqlGoEmbedExports()); err != nil {
+		return nil, fmt.Errorf("code: go-embed: sql setup: %w", err)
+	}
 
 	if _, err := i.Eval(spec.Code); err != nil {
 		return nil, fmt.Errorf("code: go-embed: %w", err)
