@@ -140,3 +140,50 @@ func TestStarterConfigValidates(t *testing.T) {
 		t.Fatalf("starter config must validate: %v", err)
 	}
 }
+
+// TestPaseoRuntimeWithHost: a paseo runtime with host: is valid and gets a
+// dedicated SSH-backed dispatcher; a distinct local bin gets its own too.
+func TestPaseoRuntimeWithHost(t *testing.T) {
+	doc := `
+connectors:
+  timer:
+    type: cron
+    schedules: { tick: { every: 1h } }
+hosts:
+  gpu-box: { host: gpu01.internal, user: ml }
+runtimes:
+  paseo:     { type: paseo, bin: /usr/local/bin/paseo, default: true }
+  gpu-paseo: { type: paseo, bin: /opt/paseo, host: gpu-box }
+agents:
+  fixer: { provider: claude, runtime: gpu-paseo }
+triggers:
+  - on: timer.tick
+    steps: [{ type: agent, agent: fixer, checkout: none, prompt: p }]
+`
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("a paseo runtime with host: must validate: %v", err)
+	}
+	if _, err := buildFlowStack(cfg, nil, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	bin, err := resolvePaseoBin(cfg)
+	if err != nil || bin != "/usr/local/bin/paseo" {
+		t.Fatalf("primary bin: %q, %v", bin, err)
+	}
+	over, err := buildPaseoOverrides(cfg, bin, config.Retry{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pd, ok := over["gpu-paseo"]
+	if !ok || pd.Remote == nil || pd.Remote.Name != "gpu-box" || pd.PaseoBin != "/opt/paseo" {
+		t.Fatalf("gpu-paseo override: %+v", over)
+	}
+	if _, dup := over["paseo"]; dup {
+		t.Fatal("the primary runtime must not get an override")
+	}
+}

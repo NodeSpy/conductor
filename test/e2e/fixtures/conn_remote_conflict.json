@@ -1,0 +1,31 @@
+{
+  "action": "synchronize",
+  "installation": {
+    "id": 42
+  },
+  "repository": {
+    "full_name": "conn/rweb",
+    "name": "rweb",
+    "default_branch": "main",
+    "owner": {
+      "login": "conn"
+    }
+  },
+  "pull_request": {
+    "number": 1,
+    "state": "open",
+    "draft": false,
+    "title": "conflicting PR under test",
+    "html_url": "https://forge.test/conn/rweb/pull/1",
+    "head": {
+      "sha": "canned-head-rweb1",
+      "ref": "pr-1"
+    },
+    "base": {
+      "ref": "main"
+    },
+    "user": {
+      "login": "conductor-user"
+    }
+  }
+}

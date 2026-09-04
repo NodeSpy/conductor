@@ -1050,12 +1050,6 @@ func (c *Config) checkRemoteHostSupport(kind, name, host, typ, agent, transport 
 	if _, ok := c.Hosts[host]; !ok {
 		return fmt.Errorf("config: %s %q: unknown host %q (defined: %s)", kind, name, host, c.hostNames())
 	}
-	if typ == "paseo" {
-		return fmt.Errorf("config: %s %q: host: is not supported on a paseo runtime — paseo checkouts are local; use a cli/acp runtime on that host or run a conductor there", kind, name)
-	}
-	if typ == "opencode" || (agent == "opencode" && transport == "native") {
-		return fmt.Errorf("config: %s %q: host: is not supported on an opencode runtime — opencode serves HTTP on 127.0.0.1 locally; ssh-wrapping the launch would bind the port on the remote host, unreachable from here", kind, name)
-	}
 	return nil
 }
 

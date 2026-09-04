@@ -207,7 +207,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		// spawning a duplicate worktree. Adopted agents are yours — never relabeled,
 		// never reaped.
 		if d.AdoptOpenWorkspaces && isFeedbackKind(req.Trigger.Kind) {
-			if id := d.adoptAgentForBranch(ctx, req); id != "" {
+			if id := d.adoptAgentForBranch(ctx, req); !d.remote() && id != "" {
 				if req.CatchUp {
 					ref.Skipped = true
 					ref.Output = "skipped: your open agent " + id + " is on this branch"
@@ -230,7 +230,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	var out []byte
 	var detail string
 	for attempt := 0; ; attempt++ {
-		cmd := exec.CommandContext(ctx, d.PaseoBin, argv...)
+		cmd := d.paseoCmd(ctx, argv...)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		out, err = cmd.Output()
@@ -248,7 +248,9 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		}
 		// A timed-out git op can strand a config.lock that poisons every later
 		// creation; clear a clearly-stale one before retrying.
-		clearStaleGitLock(ctx, d.PaseoBin, cwd)
+		if !d.remote() { // the lock file lives on the remote box; leave it to paseo
+			clearStaleGitLock(ctx, d.PaseoBin, cwd)
+		}
 		select {
 		case <-ctx.Done():
 			return ref, ctx.Err()
@@ -389,11 +391,16 @@ func (d *Dispatcher) verifyWorktree(ctx context.Context, req Request, ref *RunRe
 	if req.Wait || ref.AgentID == "" || !requestedWorktree(req) {
 		return nil
 	}
+	if d.remote() {
+		// The $HOME-fallback heuristic compares agent cwds against THIS box's
+		// home; a remote paseo's paths are the other box's. Trust the CLI.
+		return nil
+	}
 	if !d.agentInHome(ctx, ref.AgentID) {
 		return nil // landed in a worktree (cwd isn't the home fallback)
 	}
 	id := ref.AgentID
-	_ = exec.CommandContext(ctx, d.PaseoBin, "archive", id).Run()
+	_ = d.paseoCmd(ctx, "archive", id).Run()
 	ref.AgentID = ""
 	return fmt.Errorf("%s checkout produced no worktree — agent %s fell back to the base workspace (checkout likely failed; archived it)",
 		effectiveStrategy(req), id)
@@ -403,7 +410,7 @@ func (d *Dispatcher) verifyWorktree(ctx context.Context, req Request, ref *RunRe
 // did not get an isolated worktree). Returns false when it can't tell, so a flaky
 // inspect never wrongly fails a good dispatch.
 func (d *Dispatcher) agentInHome(ctx context.Context, id string) bool {
-	out, err := exec.CommandContext(ctx, d.PaseoBin, "inspect", id, "--json").Output()
+	out, err := d.paseoCmd(ctx, "inspect", id, "--json").Output()
 	if err != nil {
 		return false
 	}
@@ -467,7 +474,7 @@ func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir st
 	default:
 		return "", "", fmt.Errorf("createWorktree: unexpected strategy %q", strat)
 	}
-	cmd := exec.CommandContext(ctx, d.PaseoBin, argv...)
+	cmd := d.paseoCmd(ctx, argv...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -529,7 +536,10 @@ func (d *Dispatcher) resolveCheckoutDir(ctx context.Context, repo string) (strin
 	d.mu.Lock()
 	if p, ok := d.repoDirs[repo]; ok {
 		d.mu.Unlock()
-		if isGitRepo(ctx, p) {
+		// The revalidation is a local git check; a remote dispatcher trusts the
+		// memo (a dead remote path surfaces as a paseo error and re-resolves on
+		// the retry path).
+		if d.remote() || isGitRepo(ctx, p) {
 			return p, nil
 		}
 		d.mu.Lock()
@@ -571,7 +581,7 @@ func (d *Dispatcher) resolveCheckoutDir(ctx context.Context, repo string) (strin
 // paseo can create PR/branch worktrees from something that won't be archived out
 // from under it. Prefers a local checkout; validates it's a real git repo. "".
 func (d *Dispatcher) findWorkspaceDir(ctx context.Context, repo string) string {
-	out, err := exec.CommandContext(ctx, d.PaseoBin, "workspace", "ls", "--json").Output()
+	out, err := d.paseoCmd(ctx, "workspace", "ls", "--json").Output()
 	if err != nil {
 		return ""
 	}
@@ -587,10 +597,18 @@ func (d *Dispatcher) findWorkspaceDir(ctx context.Context, repo string) string {
 	for _, w := range wl {
 		// paseo project names are lowercased; match case-insensitively so a repo
 		// whose casing differs from the registered project still reuses it.
-		if !strings.EqualFold(w.Project, repo) || w.Cwd == "" || !isGitRepo(ctx, w.Cwd) {
+		if !strings.EqualFold(w.Project, repo) || w.Cwd == "" {
 			continue
 		}
-		base := mainWorkTree(ctx, w.Cwd) // the stable primary checkout, not a worktree
+		// isGitRepo/mainWorkTree are local checks; for a remote paseo the ls
+		// output IS the remote truth — use its cwd as reported.
+		base := w.Cwd
+		if !d.remote() {
+			if !isGitRepo(ctx, w.Cwd) {
+				continue
+			}
+			base = mainWorkTree(ctx, w.Cwd) // the stable primary checkout, not a worktree
+		}
 		if w.Isolation == "local" {
 			return base
 		}
@@ -646,7 +664,7 @@ func (d *Dispatcher) cloneRepo(ctx context.Context, repo string) error {
 	if proto == "" {
 		proto = "ssh"
 	}
-	if out, err := exec.CommandContext(ctx, d.PaseoBin, "clone", repo, "--dir", dir, "--protocol", proto, "--json").CombinedOutput(); err != nil {
+	if out, err := d.paseoCmd(ctx, "clone", repo, "--dir", dir, "--protocol", proto, "--json").CombinedOutput(); err != nil {
 		return fmt.Errorf("paseo clone %s: %w: %s", repo, err, strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -670,6 +688,13 @@ func (d *Dispatcher) cloneTargetDir(repo string) (string, error) {
 // into, creating it if needed. Clones are grouped under ~/.conductor/checkouts
 // so they don't clutter $HOME; each repo lands in its own <name> subdir.
 func (d *Dispatcher) cloneParentDir() (string, error) {
+	if d.remote() {
+		// A RELATIVE dir: the remote command runs from the ssh login dir (the
+		// remote home, or the host's cwd:), so the checkout lands under the
+		// remote user's own tree; this box's home would be a foreign path
+		// there. paseo creates the directory itself.
+		return ".conductor/checkouts", nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home dir for clone: %w", err)
@@ -711,7 +736,7 @@ func (d *Dispatcher) resolveScratchWorkspace(ctx context.Context) (string, error
 // findWorkspaceByTitle returns the id of a local workspace whose name matches
 // title, or "" if none.
 func (d *Dispatcher) findWorkspaceByTitle(ctx context.Context, title string) string {
-	out, err := exec.CommandContext(ctx, d.PaseoBin, "workspace", "ls", "--json").Output()
+	out, err := d.paseoCmd(ctx, "workspace", "ls", "--json").Output()
 	if err != nil {
 		return ""
 	}
@@ -737,7 +762,10 @@ func (d *Dispatcher) createScratchWorkspace(ctx context.Context) (string, error)
 	if err != nil {
 		home = "."
 	}
-	out, err := exec.CommandContext(ctx, d.PaseoBin, "workspace", "create",
+	if d.remote() {
+		home = "." // the remote command's working directory (remote home / host cwd:)
+	}
+	out, err := d.paseoCmd(ctx, "workspace", "create",
 		"--isolation", "local", "--path", home, "--title", scratchWorkspaceTitle, "--json").Output()
 	if err != nil {
 		return "", fmt.Errorf("paseo workspace create scratch: %w", err)
@@ -790,7 +818,7 @@ func branchSlug(t core.Trigger) string {
 // you). `paseo ls` excludes archived agents, so any match means one is still in
 // play. Used to gate re-dispatch of live-gated kinds (reviews).
 func (d *Dispatcher) HasLiveAgent(ctx context.Context, prKey, kind string) bool {
-	out, err := exec.CommandContext(ctx, d.PaseoBin, "ls", "--json",
+	out, err := d.paseoCmd(ctx, "ls", "--json",
 		"--label", "conductor=1", "--label", "pr="+prKey, "--label", "kind="+kind).Output()
 	if err != nil {
 		return false
@@ -809,14 +837,14 @@ func (d *Dispatcher) Archive(ctx context.Context, agentID string) error {
 	if agentID == "" {
 		return nil
 	}
-	return exec.CommandContext(ctx, d.PaseoBin, "archive", agentID).Run()
+	return d.paseoCmd(ctx, "archive", agentID).Run()
 }
 
 // liveAgentForPR returns the id of a non-archived conductor agent already working
 // this PR (any kind), or "" if none — the "one worker per PR" target for queuing
 // new feedback via `paseo send`.
 func (d *Dispatcher) liveAgentForPR(ctx context.Context, prKey string) string {
-	out, err := exec.CommandContext(ctx, d.PaseoBin, "ls", "--json",
+	out, err := d.paseoCmd(ctx, "ls", "--json",
 		"--label", "conductor=1", "--label", "pr="+prKey).Output()
 	if err != nil {
 		return ""
@@ -890,7 +918,7 @@ func pickAdoptTarget(cands []adoptCand) string {
 
 // listAgents lists non-archived agents via `paseo ls --json`.
 func (d *Dispatcher) listAgents(ctx context.Context) []agentInfo {
-	out, err := exec.CommandContext(ctx, d.PaseoBin, "ls", "--json").Output()
+	out, err := d.paseoCmd(ctx, "ls", "--json").Output()
 	if err != nil {
 		return nil
 	}
@@ -926,7 +954,7 @@ func gitRepoMatches(ctx context.Context, dir, repo string) bool {
 // agentLastActive returns an agent's last-active timestamp (LastUsage, else
 // UpdatedAt, else CreatedAt) via `paseo inspect --json`, for recency ranking.
 func (d *Dispatcher) agentLastActive(ctx context.Context, id string) string {
-	out, err := exec.CommandContext(ctx, d.PaseoBin, "inspect", "--json", id).Output()
+	out, err := d.paseoCmd(ctx, "inspect", "--json", id).Output()
 	if err != nil {
 		return ""
 	}
@@ -950,7 +978,7 @@ func (d *Dispatcher) agentLastActive(ctx context.Context, id string) string {
 
 // sendToAgent queues a follow-up task to an existing agent.
 func (d *Dispatcher) sendToAgent(ctx context.Context, id, prompt string) error {
-	cmd := exec.CommandContext(ctx, d.PaseoBin, "send", id, prompt)
+	cmd := d.paseoCmd(ctx, "send", id, prompt)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

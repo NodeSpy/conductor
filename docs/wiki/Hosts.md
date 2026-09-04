@@ -29,17 +29,21 @@ ride local argv.
 | host-interpreter code steps (`run: sh/node/ruby/go/…`) | the remote box's interpreter runs the code ([[Code-Steps]]) |
 | command steps (`type: command` + `host:`) | outputs `{stdout, stderr, exit_code}` |
 | cli / acp / agent-deck runtimes (`host:` on the runtime) | the runtime's subprocess launches on that box; a profile's `host:` overrides the runtime's |
+| paseo runtimes (`host:` on the runtime) | every paseo CLI call — run, clone, workspace create, ls, inspect, send, wait, archive, the reaper's polls — executes on that box over ssh; the host entry's `env:` supplies the remote runtime's environment; checkouts land under the remote user's `~/.conductor/checkouts` |
+| opencode runtimes (`host:` on the runtime) | `opencode serve` launches remotely, still bound to the REMOTE 127.0.0.1; every HTTP request reaches it through an `ssh -W` stdio forward, so no port opens on either machine |
 
 ## What does not
 
 - `run: js` and `run: go-embed` execute inside conductor's own process —
   local-only by construction.
-- `host:` on a **paseo** runtime is rejected at validation: paseo checkout
-  resolution is local filesystem work. Use a cli/acp runtime on that host, or
-  run a conductor there.
-- `host:` on an **opencode** runtime is rejected: its spawned server would
-  bind on the remote box where conductor cannot reach it.
 
-Acts-as-you identity still governs anything remote work posts back.
+Notes on remote runtimes: a remote paseo skips this box's local-filesystem
+fast paths (stale-lock clearing, git revalidation of memoized checkouts, the
+$HOME-fallback detection, open-workspace adoption) — the remote paseo CLI is
+the source of truth there. Remote cli/acp/opencode sessions receive a
+conductor-provisioned worktree path only when it exists on that box; use
+`checkout: none` or a remote-existing `workdir:` otherwise (paseo runtimes
+provision remotely and need neither). Acts-as-you identity still governs
+anything remote work posts back.
 
 Related: [[Code-Steps]] · [[Runtimes]] · [[Connectors]]

@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"context"
 	"fmt"
+	"net"
 
 	"github.com/NodeSpy/paseo-conductor/internal/hosts"
 )
@@ -63,3 +65,10 @@ func prepareLaunch(host, dir string, env, argv []string) (wrappedArgv []string, 
 	wrapped = append(wrapped, remoteCmd)
 	return wrapped, "", true, nil
 }
+
+// HostDial opens a net.Conn to addr AS SEEN FROM the named host (an
+// `ssh -W` stdio forward — see hosts.Client.DialVia). The opencode
+// controller's HTTP client uses it to reach a server the remote runtime
+// bound to its own 127.0.0.1. Wired by cmd/paseo-conductor alongside
+// HostArgvPrefix; nil or an unknown host is a launch-time error.
+var HostDial func(ctx context.Context, hostName, addr string) (net.Conn, error)

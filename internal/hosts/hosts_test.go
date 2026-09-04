@@ -3,7 +3,10 @@ package hosts
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -262,5 +265,47 @@ func TestRunLocal_BinaryNotFound(t *testing.T) {
 	}
 	if code != -1 {
 		t.Errorf("code = %d, want -1", code)
+	}
+}
+
+func TestWArgs(t *testing.T) {
+	c := &Client{}
+	tgt := Target{Name: "box", Cfg: config.HostConfig{
+		Host: "b01", User: "ci", Port: 2222, Key: "/k", KnownHosts: "/kh",
+	}}
+	got := strings.Join(c.WArgs(tgt, "127.0.0.1:39481"), " ")
+	want := "ssh -o BatchMode=yes -W 127.0.0.1:39481 -p 2222 -i /k -o UserKnownHostsFile=/kh -o StrictHostKeyChecking=yes ci@b01"
+	if got != want {
+		t.Fatalf("WArgs:\n got %s\nwant %s", got, want)
+	}
+}
+
+// TestDialViaRoundTrip proves the ssh -W stdio adapter behaves as a net.Conn:
+// a stub "ssh" that just echoes stdin back (exec cat) round-trips bytes, and
+// Close reaps the subprocess.
+func TestDialViaRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "ssh")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexec cat\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{SSHBin: stub}
+	conn, err := c.DialVia(context.Background(), Target{Name: "box", Cfg: config.HostConfig{Host: "b"}}, "127.0.0.1:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("ping\n")); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatal(err)
+	}
+	if string(buf) != "ping\n" {
+		t.Fatalf("round trip: %q", buf)
+	}
+	if conn.LocalAddr().Network() != "ssh-w" {
+		t.Errorf("addr network: %s", conn.LocalAddr().Network())
 	}
 }

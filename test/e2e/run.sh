@@ -798,6 +798,20 @@ group_K_connectors() {
     bad "K5 remote code step over SSH" K K5-remote "no 'K5-remote $host' capture"
   fi
 
+  # K6: an agent on the remote paseo runtime — the fixer's commit lands on
+  # the forge even though every paseo invocation rode the ssh channel.
+  post_webhook_to conductor-conn pull_request conn_remote_conflict.json >/dev/null
+  if wait_for 60 forge_has_conductor_commit conn/rweb pr-1; then
+    ok "K6 remote paseo runtime (host:) fixed & pushed over SSH" K K6-remote-paseo
+  else
+    bad "K6 remote paseo runtime over SSH" K K6-remote-paseo "no conductor commit on conn/rweb pr-1"
+  fi
+  if wait_for 30 slack_sink_has "K6-done conn/rweb#1"; then
+    ok "K6 done hook fired after the remote workflow" K K6-done
+  else
+    bad "K6 done hook" K K6-done "no K6-done capture"
+  fi
+
   # K2 + K3 ride a comment burst on conn/csvc: the ungrouped trigger fires per
   # comment (js code step reshapes each), the grouped trigger batches the
   # burst into ONE run seeing {{.group.count}} == 2.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -29,6 +30,7 @@ import (
 // a test injects a server URL directly.
 type opencodeController struct {
 	name string
+	host string // hosts: entry the server launches on over SSH ("" = local)
 	prov Provisioner
 	dial opencodeDialer // injectable; nil → spawn `opencode serve`
 	hc   *http.Client
@@ -38,13 +40,31 @@ type opencodeController struct {
 // applied, plus a cleanup that stops any process it started.
 type opencodeDialer func(ctx context.Context, cwd string, env []string) (baseURL string, cleanup func() error, err error)
 
-// newOpencodeController builds an opencode native controller.
-func newOpencodeController(name string, _ config.ControllerConfig, prov Provisioner) *opencodeController {
-	return &opencodeController{
+// newOpencodeController builds an opencode native controller. With host: set,
+// `opencode serve` launches on that box over SSH — still bound to the REMOTE
+// 127.0.0.1 — and every HTTP request reaches it through an `ssh -W` stdio
+// forward (HostDial), so no port is exposed on either machine.
+func newOpencodeController(name string, cc config.ControllerConfig, prov Provisioner) *opencodeController {
+	c := &opencodeController{
 		name: name,
+		host: cc.Host,
 		prov: prov,
 		hc:   &http.Client{Timeout: 0}, // no client timeout: an agent turn can run long
 	}
+	if cc.Host != "" {
+		host := cc.Host
+		c.hc = &http.Client{Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+				if HostDial == nil {
+					return nil, fmt.Errorf("opencode: host %q configured but no host dialer is wired", host)
+				}
+				return HostDial(ctx, host, addr)
+			},
+			// One ssh subprocess per connection; keep-alives would pin them.
+			DisableKeepAlives: true,
+		}}
+	}
+	return c
 }
 
 func (c *opencodeController) Name() string         { return c.name }
@@ -126,18 +146,30 @@ func (c *opencodeController) connect(ctx context.Context, cwd string, env []stri
 	if c.dial != nil {
 		return c.dial(ctx, cwd, env)
 	}
-	return spawnOpencode(ctx, cwd, env)
+	return spawnOpencode(ctx, c.host, cwd, env)
 }
 
 // spawnOpencode starts `opencode serve` in the worktree with the identity env and
 // returns the URL it advertises on stdout. The process lifetime is owned by the
-// returned cleanup (session-scoped).
-func spawnOpencode(_ context.Context, cwd string, env []string) (string, func() error, error) {
-	cmd := exec.Command("opencode", "serve", "--hostname", "127.0.0.1", "--port", "0")
-	if cwd != "" {
-		cmd.Dir = cwd
+// returned cleanup (session-scoped). With host set, the launch wraps over SSH
+// (prepareLaunch): the server binds the REMOTE 127.0.0.1, its stdout — with
+// the advertised URL — streams back over the ssh channel, and the controller's
+// HTTP client reaches it via ssh -W. A locally-provisioned worktree path is
+// not meaningful on the remote box, so remote sessions want checkout: none or
+// a remote-existing directory.
+func spawnOpencode(_ context.Context, host, cwd string, env []string) (string, func() error, error) {
+	argv := []string{"opencode", "serve", "--hostname", "127.0.0.1", "--port", "0"}
+	argv, localDir, remote, err := prepareLaunch(host, cwd, env, argv)
+	if err != nil {
+		return "", nil, err
 	}
-	cmd.Env = append(os.Environ(), env...)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	if localDir != "" {
+		cmd.Dir = localDir
+	}
+	if !remote {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", nil, err

@@ -23,10 +23,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 )
@@ -310,3 +313,81 @@ func runLocal(ctx context.Context, argv []string, stdin []byte) (stdout, stderr 
 	}
 	return stdout, stderr, -1, runErr
 }
+
+// WArgs builds the ssh argv for a stdio port-forward to addr on the target
+// (`ssh -W addr host`, no remote command): ssh connects its own stdin/stdout
+// to the given host:port ON THE TARGET, turning the subprocess into a raw
+// byte pipe. DialVia wraps it as a net.Conn — the transport an HTTP client
+// uses to reach a server a remote runtime bound to ITS 127.0.0.1 (opencode's
+// serve), with no listening ports opened anywhere.
+func (c *Client) WArgs(t Target, addr string) []string {
+	cfg := t.Cfg
+	argv := []string{c.sshBin(), "-o", "BatchMode=yes", "-W", addr}
+	if cfg.Port != 0 {
+		argv = append(argv, "-p", strconv.Itoa(cfg.Port))
+	}
+	if cfg.Key != "" {
+		argv = append(argv, "-i", cfg.Key)
+	}
+	if cfg.KnownHosts != "" {
+		argv = append(argv, "-o", "UserKnownHostsFile="+cfg.KnownHosts, "-o", "StrictHostKeyChecking=yes")
+	}
+	host := cfg.Host
+	if cfg.User != "" {
+		host = cfg.User + "@" + host
+	}
+	return append(argv, host)
+}
+
+// DialVia opens a net.Conn to addr as seen FROM the target, over one
+// `ssh -W` subprocess per connection. Closing the conn kills the subprocess.
+func (c *Client) DialVia(ctx context.Context, t Target, addr string) (net.Conn, error) {
+	argv := c.WArgs(t, addr)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("ssh -W %s via %s: %w", addr, t.Name, err)
+	}
+	return &pipeConn{in: stdin, out: stdout, cmd: cmd, addr: addr}, nil
+}
+
+// pipeConn adapts an ssh -W subprocess's stdio to net.Conn. Deadlines are
+// not supported (HTTP clients using this transport bound requests with
+// contexts instead); SetDeadline calls succeed as no-ops so net/http's
+// keep-alive plumbing doesn't error.
+type pipeConn struct {
+	in   io.WriteCloser
+	out  io.ReadCloser
+	cmd  *exec.Cmd
+	addr string
+}
+
+func (p *pipeConn) Read(b []byte) (int, error)  { return p.out.Read(b) }
+func (p *pipeConn) Write(b []byte) (int, error) { return p.in.Write(b) }
+func (p *pipeConn) Close() error {
+	_ = p.in.Close()
+	_ = p.out.Close()
+	if p.cmd.Process != nil {
+		_ = p.cmd.Process.Kill()
+	}
+	_ = p.cmd.Wait()
+	return nil
+}
+func (p *pipeConn) LocalAddr() net.Addr                { return pipeAddr{p.addr} }
+func (p *pipeConn) RemoteAddr() net.Addr               { return pipeAddr{p.addr} }
+func (p *pipeConn) SetDeadline(t time.Time) error      { return nil }
+func (p *pipeConn) SetReadDeadline(t time.Time) error  { return nil }
+func (p *pipeConn) SetWriteDeadline(t time.Time) error { return nil }
+
+type pipeAddr struct{ s string }
+
+func (a pipeAddr) Network() string { return "ssh-w" }
+func (a pipeAddr) String() string  { return a.s }

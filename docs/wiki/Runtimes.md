@@ -26,12 +26,13 @@ agents:
 | `default` | the fleet default (at most one across runtimes + legacy controllers) |
 | `bin` | the runtime binary (paseo, agent-deck) |
 | `tool` / `command` | the bare-CLI recipe for `transport: cli` |
-| `host` | a [[Hosts]] entry — cli/acp/agent-deck launches run there over SSH; rejected on paseo/opencode types (see [[Hosts]] for why) |
+| `host` | a [[Hosts]] entry — the runtime executes there over SSH: cli/acp/agent-deck wrap their launch, a paseo runtime runs its whole CLI remotely (with a dedicated dispatcher and reaper), and opencode is reached through an `ssh -W` forward (see [[Hosts]]) |
 
 Resolution order for an agent: its explicit `runtime:` (or legacy
 `controller:`) → the `default: true` entry → the built-in paseo. A profile's
-own `host:` overrides the runtime's. Exactly one paseo binary per conductor:
-two paseo runtimes naming different `bin:` values is a config error.
+own `host:` overrides the runtime's (cli/acp/agent-deck). Each paseo runtime
+with its own `bin:` or a `host:` gets a dedicated dispatcher and reaper; the
+default local one is the primary that command steps and provisioning share.
 
 Everything else — session models, the session broker, capability
 degradation, interactive hand-offs — carries over from the controllers
