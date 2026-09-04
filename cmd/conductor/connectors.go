@@ -17,6 +17,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/integrations/slack"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/secrets"
+	"github.com/NodeSpy/conductor/internal/vaults"
 )
 
 // flowStack is the connectors-model runtime: the secret resolver, the built
@@ -109,7 +110,8 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 
 	runner := flow.New(flow.Runner{
 		Cfg: cfg, Conns: reg, Secrets: sec, SecretVals: vals,
-		Store: flowStore, Notif: flowNotif, Log: logf, DryRun: dryRun,
+		VaultVals: vaults.PreloadListable(context.Background()),
+		Store:     flowStore, Notif: flowNotif, Log: logf, DryRun: dryRun,
 	})
 	return &flowStack{
 		Secrets: sec, Registry: reg, Runner: runner,
@@ -412,15 +414,27 @@ func cmdSecrets(args []string) error {
 			fmt.Printf("ok   secrets.%s (%s)\n", n, redactRef(ref))
 		}
 	}
-	// Connector construction resolves each connection's credential refs; a
-	// failure surfaces as a disabled connector.
+	// Connector construction resolves each connection's credential refs and
+	// unlocks every vault; a failure surfaces as a disabled connector/vault,
+	// never a crash.
 	if cfg.HasConnectors() {
 		stack, err := buildFlowStack(cfg, nil, nil, true)
 		if err != nil {
 			return err
 		}
+		for _, name := range vaults.Names() {
+			if reason := vaults.Broken(name); reason != "" {
+				fmt.Printf("FAIL vault %s (%s): %s\n", name, vaults.Type(name), reason)
+				bad++
+			} else {
+				fmt.Printf("ok   vault %s (%s) unlocked\n", name, vaults.Type(name))
+			}
+		}
 		for _, name := range stack.Registry.Names() {
 			in, _ := stack.Registry.Get(name)
+			if _, isVault := cfg.Vaults[name]; isVault {
+				continue // reported above
+			}
 			switch {
 			case !in.Enabled:
 				fmt.Printf("--   connector %s (disabled in config)\n", name)

@@ -20,6 +20,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 // Backend is one vault's read face — the one capability every type has.
@@ -233,53 +235,10 @@ func nameList() string {
 //
 //	{{ vault "op" "Private/GitHub/token" }}
 //	{{ .vaults.house.gh_token }}
-func ParseRef(s string) (name, key string, ok bool) {
-	t := strings.TrimSpace(s)
-	if !strings.HasPrefix(t, "{{") || !strings.HasSuffix(t, "}}") || strings.Count(t, "{{") != 1 {
-		return "", "", false
-	}
-	inner := strings.TrimSpace(t[2 : len(t)-2])
-	if rest, found := strings.CutPrefix(inner, ".vaults."); found {
-		nm, k, cut := strings.Cut(rest, ".")
-		if !cut || nm == "" || k == "" || strings.ContainsAny(rest, " \t|(){}\"'") {
-			return "", "", false
-		}
-		return nm, k, true
-	}
-	rest, found := strings.CutPrefix(inner, "vault ")
-	if !found {
-		return "", "", false
-	}
-	parts, perr := splitQuoted(strings.TrimSpace(rest))
-	if perr != nil || len(parts) != 2 {
-		return "", "", false
-	}
-	return parts[0], parts[1], true
-}
+//
+// The parsing lives in internal/secrets (the resolver recognizes the same
+// refs without an import cycle); this is the vaults-side face of it.
+func ParseRef(s string) (name, key string, ok bool) { return secrets.ParseVaultRef(s) }
 
 // IsRef reports whether s is exactly one vault reference.
-func IsRef(s string) bool {
-	_, _, ok := ParseRef(s)
-	return ok
-}
-
-// splitQuoted splits `"a" "b"` into its quoted parts (no escapes — vault
-// names and keys never contain quotes).
-func splitQuoted(s string) ([]string, error) {
-	var out []string
-	for {
-		s = strings.TrimSpace(s)
-		if s == "" {
-			return out, nil
-		}
-		if s[0] != '"' {
-			return nil, fmt.Errorf("expected quoted string")
-		}
-		end := strings.IndexByte(s[1:], '"')
-		if end < 0 {
-			return nil, fmt.Errorf("unterminated quote")
-		}
-		out = append(out, s[1:1+end])
-		s = s[end+2:]
-	}
-}
+func IsRef(s string) bool { return secrets.IsVaultRef(s) }
