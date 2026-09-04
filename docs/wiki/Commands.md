@@ -14,10 +14,11 @@ conductor update [--force] [--tag vX]      self-update to the latest release
 conductor service install|sync|uninstall   manage the background service unit
 conductor connectors ls                    each connector: state, events, verbs, trigger count
 conductor schema <connector>               full event/filter/context/verb/option/output schemas
-conductor connector auth <name>            one-time OAuth2 consent bootstrap for a rest/graphql connector
-conductor secrets check                    resolve every secret reference and report (no values)
-conductor vault init|add|show|ls|rm        the built-in encrypted vault
-conductor unlock                           seed the vault key for non-interactive restarts
+conductor connector auth ls                each oauth2 connector's login state + token expiry
+conductor connector auth <name> [--revoke] one-time OAuth2 login (or clear stored tokens)
+conductor secrets check                    unlock every vault, resolve every reference, report (no values)
+conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
+conductor unlock                           seed the default vault key for non-interactive restarts
 conductor config migrate [--dry-run]       transform a legacy config to the connectors schema
 conductor version
 ```
@@ -40,15 +41,20 @@ conductor version
   authored without side effects.
 - **connectors ls / schema** — the introspection pair: what is configured and
   what each type accepts. `schema` also takes a bare type name.
-- **connector auth** — the only interactive auth step: prints the provider's
-  consent URL, captures the localhost redirect, exchanges the code, and stores
-  the refresh token in the vault. Applies to rest/graphql connectors with
-  `auth.type: oauth2` and an authorization-code/refresh-token grant; restarts
-  never prompt. See [[Configuration]].
-- **secrets check** — resolves `secrets:` entries and each connector's
-  credentials; failures name the reference, values are never printed.
-- **vault / unlock** — see [[Secrets]] for the key-resolution order and why
-  unlocking is non-interactive in steady state.
+- **connector auth** — the only interactive auth step. `auth <name>` runs the
+  grant's flow (`authorization_code`: consent URL + localhost redirect
+  capture; `device`: prints a user code and polls) and stores the access +
+  refresh tokens in the connector's `token_vault`; restarts never prompt.
+  `auth ls` shows each oauth2 connector's grant, token_vault, login state,
+  and access-token expiry; `--revoke` clears the stored tokens. See
+  [[Configuration]].
+- **secrets check** — unlocks every vault and resolves each connector's
+  credentials; failures name the vault/reference, values are never printed.
+  A vault that won't unlock is reported and disables its dependents — the
+  daemon still boots.
+- **vault / unlock** — `vault <name> …` targets a `vaults:` entry (write ops
+  only on writable backends); see [[Secrets]] for the unlock chain and why
+  it is non-interactive in steady state.
 - **config migrate** — the manual face of the automatic on-boot migration;
   `--dry-run` prints the transformed YAML plus a mapping summary. See
   [[Migration]].

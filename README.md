@@ -117,7 +117,7 @@ A step is one of five forms (all share `id` and `if`):
 **Context is positional.** A step's templates and `if:` see the trigger
 context (the event's published facts: `{{.repo}}`, `{{.comment_body}}`,
 `{{.slack.channel}}`) plus every **prior** step's outputs
-(`{{.<stepid>.<field>}}`), the named secrets (`{{.secrets.x}}`), and the
+(`{{.<stepid>.<field>}}`), vault reads (`{{ vault "house" "gh" }}`), and the
 batch (`{{.group.*}}`) when grouped. `validate` rejects a reference to a
 value that will not exist at that position — a typo or an out-of-scope read
 fails at load, not at 3am (a config that validates cannot crash-loop the box).
@@ -324,33 +324,44 @@ hold label. Any connector or trigger turns off in place with
 `enabled: false`; the global kill switch stays the runtime `conductor pause`
 / `resume`.
 
-## Secrets
+## Secrets & vaults
 
-`conductor.env` works exactly as before (`${VAR}`, chmod-600 sibling file).
-Opt-in on top: reference a secret anywhere a value goes —
+`conductor.env` works exactly as before (`${VAR}` / `env:VAR`, chmod-600
+sibling file) — the baseline, nothing to declare. Everything beyond env is a
+**vault** in a `vaults:` section:
 
+```yaml
+vaults:
+  house: { type: conductor }                  # the built-in encrypted vault.json
+  op:    { type: onepassword, service_account: env:OP_SA }
+  files: { type: file, dir: /run/secrets }
+  hcv:   { type: hashicorp, addr: https://vault.internal, unlock: { token: env:VAULT_TOKEN } }
 ```
-env:GH_PAT · op://Vault/Item/field · pass:conductor/gh-token · vault:gh-token · file:/run/secrets/gh
-```
 
-— and name reused references once in a `secrets:` block, read as
-`{{.secrets.<name>}}`. Values are resolved at load, cached in memory,
-**redacted from logs and audit**, never written back. `conductor secrets
-check` validates every reference; a secret that won't resolve **disables that
-connector and notifies** instead of crash-looping the box.
+One reference syntax everywhere — `{{ vault "op" "Private/GitHub/token" }}`
+(or `{{.vaults.house.gh}}`) — resolved at load, cached in memory, **tainted
+and redacted from logs and audit even after flowing into a later step**,
+never written back. Steps read and write with `uses: <vault>.read` /
+`<vault>.write` (write only on writable types — conductor, pass, hashicorp);
+OAuth2 connectors store and rotate their tokens through the same path
+(`token_vault:` + `conductor connector auth <name>`, `auth ls`, `--revoke`).
+`conductor secrets check` unlocks every vault and resolves every reference;
+a vault that won't unlock **disables its dependents and notifies** instead
+of crash-looping the box. The old scheme URIs (`op://`, `pass:`, `vault:`,
+`file:`) and the `secrets:` block auto-migrate to this model at boot.
 
-The built-in vault (`conductor vault init|add|show|ls|rm`) seals the whole
-entry map — names, values, and count — as one padded secretbox blob; the
-master key is never in the file and resolves **non-interactively** —
-`$CONDUCTOR_VAULT_KEY`, then a systemd encrypted credential
-(`$CREDENTIALS_DIRECTORY/conductor-vault-key`, TPM/host-bound), then the OS
-keyring, then a chmod-600 key file seeded by `conductor unlock`.
-Non-interactive is the requirement, not a convenience: the daemon updates and
-restarts itself, so a passphrase prompt at boot would hang the fleet. If the
-vault file may end up somewhere public (e.g. committed), keep the key out of
-the repo (env / OS keyring / a gitignored key file), use a random key or a
-strong passphrase with `vault init --sensitive` (scrypt N=2^20), and note
-that git history is permanent — a key that was ever committed stays
+The `conductor` vault type (`conductor vault <name> init|add|get|ls|rm`)
+seals the whole entry map — names, values, and count — as one padded
+secretbox blob; the master key is never in the file and resolves
+**non-interactively** through each vault's `unlock:` ref (`creds:` systemd
+credentials, `keyring:`, `env:`, `file:`) or the default chain
+(`$CONDUCTOR_VAULT_KEY` → systemd credential → OS keyring → a chmod-600 key
+file seeded by `conductor unlock`). Non-interactive is the requirement, not
+a convenience: the daemon updates and restarts itself, so a passphrase
+prompt at boot would hang the fleet. If the vault file may end up somewhere
+public (e.g. committed), keep the key out of the repo, use a random key or a
+strong passphrase with `vault <name> init --sensitive` (scrypt N=2^20), and
+note that git history is permanent — a key that was ever committed stays
 extractable, so rotate what it sealed.
 
 ## Introspection and dry-run

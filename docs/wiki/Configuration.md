@@ -22,7 +22,7 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 | `stores:` | named data stores — KV (`boltdb`/`redis`/`http`) served by `kv.*`, SQL (`postgres`/`mysql`/`sqlite`) served by `sql.*`; addressed by the required `store:` selector | below |
 | `workflows:` | reusable step lists with `inputs:` / `outputs:` | [[Workflows]] |
 | `policy:` | global controls; also valid on connectors and triggers (most specific wins) | [[Policy]] |
-| `secrets:` | named secret references, read as `{{.secrets.<name>}}` | [[Secrets]] |
+| `vaults:` | named secret stores (`conductor`/`onepassword`/`pass`/`file`/`hashicorp`), read as `{{ vault "<name>" "<key>" }}` with per-vault read/write verbs | [[Secrets]] |
 | `notify:` | daemon lifecycle notifications (unchanged from legacy) | [[Notifications]] |
 | `imports:` | split the config across files (globs, deep-merged) | below |
 | `store:` | `state_file`, `audit_log`, `state_ttl`, `max_tracked_prs`, `audit_max_size` | |
@@ -44,8 +44,9 @@ triggers:
 ```
 
 Steps address the trigger context (`{{.repo}}`, event facts), prior step
-outputs (`{{.<id>.<field>}}`), named secrets (`{{.secrets.x}}`), and the
-batch (`{{.group.*}}`). `if:` conditions use comparison, `&&`/`||`/`!`,
+outputs (`{{.<id>.<field>}}`), vault reads (`{{ vault "house" "gh" }}` /
+`{{.vaults.house.gh}}` — tainted, redacted from logs/audit), and the batch
+(`{{.group.*}}`). `if:` conditions use comparison, `&&`/`||`/`!`,
 `contains()`, `exists()`, `default()`, and `coalesce()`; templates may also
 call `default`/`coalesce` (`{{.sev | default "low"}}`). See [[Workflows]].
 
@@ -165,7 +166,7 @@ connectors:
 ```
 
 Verb templates see `{{.options.*}}` (the step's rendered options) and
-`{{.secrets.*}}`; `output:` templates add `{{.response.status}}`,
+`{{ vault … }}` reads; `output:` templates add `{{.response.status}}`,
 `{{.response.body.*}}` (parsed JSON; non-JSON arrives as `.body.raw`), and
 `{{.response.headers.*}}`. An output that is a sole `{{.path}}` reference
 keeps the underlying type — an array stays an array for `for_each:`. A
@@ -183,7 +184,7 @@ connectors:
   shop:
     type: graphql
     endpoint: https://myshop.myshopify.com/admin/api/2025-01/graphql.json
-    auth: { type: header, name: X-Shopify-Access-Token, value: vault:shopify-token }
+    auth: { type: header, name: X-Shopify-Access-Token, value: '{{ vault "house" "shopify-token" }}' }
     verbs:
       create_order:
         query: |
@@ -208,25 +209,34 @@ not its string form). The request is `POST {query, variables}`. A non-empty
 | `bearer` | `token` | `Authorization: Bearer …` |
 | `basic` | `username`, `password` | HTTP basic auth |
 | `header` | `name`, `value` | the named header |
-| `oauth2` | `grant`, `token_url`, `client_id`, `client_secret`, `refresh_token`, `scopes`, `auth_url`, `redirect_uri` | `Authorization: Bearer <fetched>` |
+| `oauth2` | `grant`, `token_url`, `client_id`, `client_secret`, `token_vault`, `refresh_token` (seed), `scopes`, `auth_url`, `device_auth_url`, `redirect_uri` | `Authorization: Bearer <fetched>` |
 
-Every credential field takes a literal, `${ENV}`, or a secret reference
-(`vault:…`, `op://…`, `pass:…`, `file:…`, `env:…`).
+Every credential field takes a literal, `${ENV}` / `env:VAR`, or a vault
+reference (`{{ vault "<name>" "<key>" }}` — see [[Secrets]]).
 
 `oauth2` grants: `client_credentials` (machine-to-machine — tokens fetch on
-demand, nothing to seed), `refresh_token`, and `authorization_code`. Access
-tokens are cached per connector in memory, refreshed ahead of expiry and once
-more on a 401, and never logged. When the provider **rotates the refresh
-token on use** (Xero does), the new token is written back to the `vault:`
-reference named by `refresh_token:` — which is why that field must be a
-`vault:` ref for rotating providers.
+demand, nothing to seed), `refresh_token`, `authorization_code`, and
+`device`. Access tokens are cached per connector in memory, refreshed ahead
+of expiry and once more on a 401, and never logged.
 
-`conductor connector auth <name>` is the one-time interactive seeding for the
-authorization-code family: it prints the consent URL (built from `auth_url`,
-scopes, and `redirect_uri` — default `http://localhost:8400/callback`),
-captures the provider's redirect on that localhost port, exchanges the code
-at `token_url`, and stores the refresh token in the vault. Restarts never
-prompt — the daemon path only ever uses the vault.
+**`token_vault:`** names the `vaults:` entry conductor stores the captured
+tokens in — keys `oauth/<connector>/access_token`, `…/refresh_token`,
+`…/expiry`. It must be a writable vault; the interactive grants
+(`authorization_code`, `device`) require it. When the provider **rotates the
+refresh token on use** (Xero does), the new token is written back there, so
+it survives the daemon's own restarts. A `refresh_token:` config value is
+only the SEED — used until the vault holds a captured/rotated token.
+
+`conductor connector auth <name>` is the one-time interactive login:
+`authorization_code` prints the consent URL (built from `auth_url`, scopes,
+and `redirect_uri` — default `http://localhost:8400/callback`), captures the
+provider's redirect on that localhost port, and exchanges the code at
+`token_url`; `device` requests a user code from `device_auth_url`, prints
+where to enter it, and polls `token_url` until approved. Both store the
+access + refresh tokens (and expiry) in `token_vault`. Restarts never prompt
+— the daemon path only ever uses the vault. `conductor connector auth ls`
+shows each connector's login state and access-token expiry;
+`auth <name> --revoke` clears the stored tokens.
 
 ### Worked example — Xero: clone yesterday's invoice
 
@@ -265,10 +275,10 @@ on a KV store, fails `conductor validate` naming the store and its type.
 stores:
   scratch:   { type: boltdb }                       # file <data dir>/scratch.db
   archive:   { type: boltdb, path: /mnt/big/archive.db }
-  cache:     { type: redis,  url: "redis://10.0.0.5:6379/0", password: vault:redis_pw }
-  shared:    { type: http,   base_url: https://kv.example.com/kv, auth: { type: bearer, token: vault:kv } }
-  analytics: { type: postgres, url: "postgres://conductor@db/analytics", password: vault:pg }
-  billing:   { type: mysql,    dsn: "conductor:@tcp(db:3306)/billing", password: vault:mysql }
+  cache:     { type: redis,  url: "redis://10.0.0.5:6379/0", password: '{{ vault "house" "redis_pw" }}' }
+  shared:    { type: http,   base_url: https://kv.example.com/kv, auth: { type: bearer, token: '{{ vault "house" "kv" }}' } }
+  analytics: { type: postgres, url: "postgres://conductor@db/analytics", password: '{{ vault "house" "pg" }}' }
+  billing:   { type: mysql,    dsn: "conductor:@tcp(db:3306)/billing", password: '{{ vault "house" "mysql" }}' }
   local:     { type: sqlite }                       # file <data dir>/local.sqlite
 ```
 
@@ -425,7 +435,7 @@ are JSON-shaped: byte columns decode to strings, timestamps to RFC 3339,
 
 ```yaml
 stores:
-  analytics: { type: postgres, url: "postgres://conductor@db/analytics", password: vault:pg }
+  analytics: { type: postgres, url: "postgres://conductor@db/analytics", password: '{{ vault "house" "pg" }}' }
 triggers:
   - name: record-incidents
     on: [ pd.incident ]

@@ -1,17 +1,20 @@
-// Package secrets resolves secret references used in conductor config.
+// Package secrets resolves secret references used in conductor config, and
+// implements the hardened encrypted vault file behind the `conductor` vault
+// type (vault.go).
 //
-// A secret reference is a scheme-prefixed string naming where the value lives:
+// A secret reference is one of:
 //
-//	env:GH_PAT              process environment / conductor.env (the baseline)
-//	op://Vault/Item/field   1Password (`op read`; Service Account or Connect)
-//	pass:conductor/gh       pass, the GPG password store (`pass show`)
-//	vault:gh-token          conductor's built-in encrypted vault (see vault.go)
-//	file:/run/secrets/gh    a mounted file (systemd/docker/k8s)
+//	env:GH_PAT                       process environment / conductor.env (the baseline)
+//	{{ vault "<name>" "<key>" }}     a vaults: entry, via the VaultRead hook
+//	{{ .vaults.<name>.<key> }}       the field spelling of the same
 //
-// Anything that is not a reference passes through Resolve unchanged, so config
-// fields can hold either a literal value or a reference. Resolved values are
-// cached in memory for the process lifetime, redacted from logs/audit via
-// Redact, and never written back to disk.
+// The retired scheme URIs (op://, pass:, vault:, file:) are still RECOGNIZED
+// by IsRef but resolve to an error pointing at the vaults migration — an
+// unmigrated reference fails loudly instead of passing through as a literal
+// credential. Anything that is not a reference passes through Resolve
+// unchanged, so config fields can hold either a literal value or a
+// reference. Resolved values are cached in memory for the process lifetime,
+// redacted from logs/audit via Redact, and never written back to disk.
 package secrets
 
 import (
