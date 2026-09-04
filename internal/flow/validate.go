@@ -13,6 +13,9 @@ import (
 var universalKeys = []string{
 	"repo", "owner", "name", "pr", "issue", "number", "head", "base", "url",
 	"kind", "title", "labels", "steps",
+	// dispatch injects the resolved tokens into every step's template data
+	// (legacy prompts reference them, e.g. env: {GH_TOKEN: "{{.gh_token}}"}).
+	"gh_token", "app_token",
 }
 
 // Validate is the load-time semantic pass over the connectors-model config:
