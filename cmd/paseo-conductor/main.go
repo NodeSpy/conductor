@@ -326,11 +326,8 @@ func cmdRun(args []string) error {
 	}
 	if stack != nil {
 		igs = append(igs, stack.Integrations...)
-		for _, e := range stack.SecretErrs {
-			logf("secrets: %s", e)
-			notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "secrets", Kind: "secret_unresolved"}, e)
-		}
 	}
+	notifyStackFailures(stack, notifier)
 	if migrateWarning != "" {
 		notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "config", Kind: "migration"}, migrateWarning)
 	}
