@@ -78,6 +78,8 @@ func main() {
 		err = cmdService(args)
 	case "connectors":
 		err = cmdConnectors(args)
+	case "connector":
+		err = cmdConnectorAuth(args)
 	case "schema":
 		err = cmdSchema(args)
 	case "secrets":

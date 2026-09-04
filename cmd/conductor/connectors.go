@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
@@ -285,6 +287,11 @@ func cmdSchema(args []string) error {
 	if stack, err := buildFlowStack(cfg, nil, nil, true); err == nil {
 		if in, ok := stack.Registry.Get(name); ok && in.Impl != nil {
 			dyn = in.Impl.DeclaredEvents()
+			// rest/graphql materialize their user-declared verbs/events into
+			// a per-instance declaration — print that contract, not the shell.
+			if in.Decl != nil {
+				decl = in.Decl
+			}
 		}
 	}
 	fmt.Printf("connector %s (type %s)\n", name, ref.Type)
@@ -451,4 +458,33 @@ func positional(args []string) []string {
 		out = append(out, a)
 	}
 	return out
+}
+
+// cmdConnectorAuth implements `conductor connector auth <name>`: the one-time
+// interactive OAuth2 bootstrap for a rest/graphql connector — print the
+// consent URL, capture the localhost redirect, exchange the code, and store
+// the refresh token in the connector's vault: ref.
+func cmdConnectorAuth(args []string) error {
+	cfg, _, err := loadConfig(args)
+	if err != nil {
+		return err
+	}
+	rest := positional(args)
+	if len(rest) != 2 || rest[0] != "auth" {
+		return fmt.Errorf("usage: conductor connector auth <name>")
+	}
+	name := rest[1]
+	ref, ok := cfg.ConnectorsMap[name]
+	if !ok {
+		return fmt.Errorf("no connector %q configured", name)
+	}
+	var conn struct {
+		Auth struct {
+			RedirectURI string `yaml:"redirect_uri"`
+		} `yaml:"auth"`
+	}
+	_ = ref.Decode(&conn)
+	sec := secrets.New()
+	capture := connector.LocalCodeCapture(conn.Auth.RedirectURI, os.Stdout, 5*time.Minute)
+	return connector.AuthBootstrap(context.Background(), cfg, sec, name, os.Stdout, capture)
 }
