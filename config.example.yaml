@@ -317,6 +317,23 @@ triggers:
           Run the repo audit pass (scope: {{ .inputs.scope | default "changed" }}).
           {{ if .number }}Triggered by issue #{{.number}}.{{ end }}
 
+  # The built-in kv store (no connector to configure — always available):
+  # durable cross-run state in a bbolt file beside conductor's data. Verbs:
+  # get/set/setnx/merge/delete/incr/append/remove/contains/first/last/index/
+  # slice/len/pop/list; namespaces are buckets (default "default"); values
+  # are JSON; ttl: expires a key. Read inline with {{ kv "ns" "key" }} /
+  # {{ kvContains "ns" "key" .item }}; code steps get ctx.kv (js/lua),
+  # a kv module (risor), or import "conductor/kv" (go-embed). Act once per
+  # incident id, durably across runs and restarts:
+  # - name: new-incidents
+  #   on: [ pd.incident ]
+  #   steps:
+  #     - { id: gate, uses: kv.get, options: { namespace: pagerduty, key: last-seen, default: "" } }
+  #     - if: "{{ .incident.id }} != {{ .gate.value }}"
+  #       uses: slack-ops.post
+  #       options: { channel: "#outages", text: "New incident {{ .incident.id }}" }
+  #     - { uses: kv.set, options: { namespace: pagerduty, key: last-seen, value: "{{ .incident.id }}" } }
+
   # Review triage through the reusable workflow + a request-response ask.
   - on: gh.review_requested
     filters:
