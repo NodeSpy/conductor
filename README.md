@@ -182,6 +182,10 @@ one `run:` key:
   WASM sandbox, identical on every OS. `run: go-embed` — yaegi, a Go
   interpreter in Go, sandboxed by a stdlib import allowlist (no os/exec/net);
   define `func run(ctx map[string]any) (any, error)`. `run: risor` — Risor, a
+  Go-flavored scripting language in pure Go, behind an explicit global
+  allowlist; the final expression is the result. `run: lua` — Lua 5.1 on
+  gopher-lua (pure Go); only base/table/string/math are opened and the
+  file/chunk loaders are removed; the script `return`s its result. `run: risor` — Risor, a
   Go-flavored scripting language in pure Go; the final expression is the
   result. `run: lua` — Lua 5.1 on gopher-lua; `return` the result. Both run
   behind explicit allowlists (no os/io/exec/net).

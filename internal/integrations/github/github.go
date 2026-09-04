@@ -283,6 +283,10 @@ func (g *Integration) AppToken(ctx context.Context, instID int64) (string, error
 // seam in main uses it to build the shared Dispatcher).
 func (g *Integration) RetryPolicy() config.Retry { return g.cfg.Retry }
 
+// SweepSettings exposes the effective catch-up sweep config (for the
+// connector-lowering tests and introspection).
+func (g *Integration) SweepSettings() SweepConfig { return g.cfg.Sweep }
+
 // IdentityTokens exposes this integration's credential policy (raw values, already
 // ${ENV}-expanded by the loader). main resolves the "app"/"gh_auth" keywords
 // against its App-token and `gh auth token` sources; any other value is a literal.

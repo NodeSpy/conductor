@@ -375,8 +375,10 @@ type ControllerConfig struct {
 	// (see cmd/paseo-conductor's resolvePaseoBin).
 	Bin string `yaml:"bin"`
 	// Host names a `hosts:` entry; this controller's subprocess launches run
-	// there over SSH instead of locally. Only cli/acp/agent-deck controllers
-	// support it — see checkRemoteHostSupport.
+	// there over SSH instead of locally. All controller types support it —
+	// cli/acp/agent-deck wrap their subprocess in the ssh launch, paseo runs
+	// its whole CLI (and reaper) remotely, and opencode's server is reached
+	// through an ssh -W stdio forward — see checkRemoteHostSupport.
 	Host string `yaml:"host"`
 }
 
@@ -1067,15 +1069,13 @@ func (c *Config) validateControllers() error {
 }
 
 // checkRemoteHostSupport validates a runtime/controller's `host:` reference:
-// it must name a defined `hosts:` entry, and only cli/acp/agent-deck
-// runtimes support running remotely — paseo checkouts are local, and
-// opencode's native transport binds an HTTP server to 127.0.0.1, so
-// ssh-wrapping either would be meaningless (paseo) or unreachable (opencode).
-// kind is "runtime" or "controller" (for the error text); typ/agent/transport
-// are the entry's own fields — transport must be the *effective* transport
-// (e.g. via ControllerConfig.EffectiveTransport(), or
-// RuntimeConfig.Controller().EffectiveTransport()) so an unset transport on
-// an opencode agent entry still resolves to its acp/native default correctly.
+// it must name a defined `hosts:` entry. Every runtime type runs remotely —
+// cli/acp/agent-deck ssh-wrap their subprocess, paseo executes its whole CLI
+// (checkouts under the remote ~/.conductor) and reaper on the host, and
+// opencode's remotely-launched server is reached through an ssh -W stdio
+// forward. kind is "runtime" or "controller" (for the error text); the
+// typ/agent/transport fields are accepted so a future type-specific
+// restriction has the context it needs.
 func (c *Config) checkRemoteHostSupport(kind, name, host, typ, agent, transport string) error {
 	if host == "" {
 		return nil
