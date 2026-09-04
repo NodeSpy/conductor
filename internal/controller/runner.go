@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // Provisioner resolves the conductor-supplied worktree a controller runs an agent

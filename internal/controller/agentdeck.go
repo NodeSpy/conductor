@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // agentDeckController drives agent-deck through its CLI (launch / list --json /

@@ -6,15 +6,15 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/connector"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/flow"
-	"github.com/NodeSpy/paseo-conductor/internal/handoff"
-	"github.com/NodeSpy/paseo-conductor/internal/inbound"
-	"github.com/NodeSpy/paseo-conductor/internal/integrations/slack"
-	"github.com/NodeSpy/paseo-conductor/internal/notify"
-	"github.com/NodeSpy/paseo-conductor/internal/secrets"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/flow"
+	"github.com/NodeSpy/conductor/internal/handoff"
+	"github.com/NodeSpy/conductor/internal/inbound"
+	"github.com/NodeSpy/conductor/internal/integrations/slack"
+	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 // flowStack is the connectors-model runtime: the secret resolver, the built

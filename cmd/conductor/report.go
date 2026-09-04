@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/notify"
 )
 
 // cmdReport summarizes conductor activity over a window from the audit log:

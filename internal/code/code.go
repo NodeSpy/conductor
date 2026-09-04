@@ -24,7 +24,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/NodeSpy/paseo-conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/hosts"
 )
 
 // Spec is one code step, already resolved by the caller: `host:`/inline

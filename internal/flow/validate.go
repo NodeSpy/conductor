@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
 )
 
 // universalKeys are addressable in every trigger scope regardless of event.

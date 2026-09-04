@@ -21,7 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/NodeSpy/paseo-conductor/test/e2e/services/fixer"
+	"github.com/NodeSpy/conductor/test/e2e/services/fixer"
 )
 
 func main() {

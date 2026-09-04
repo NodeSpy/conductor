@@ -5,7 +5,7 @@ import (
 	"os"
 	"slices"
 
-	"github.com/NodeSpy/paseo-conductor/internal/migrate"
+	"github.com/NodeSpy/conductor/internal/migrate"
 )
 
 // cmdConfig handles `conductor config migrate [--dry-run]`.

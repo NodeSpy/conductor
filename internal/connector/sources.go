@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	cronint "github.com/NodeSpy/paseo-conductor/internal/integrations/cron"
-	pagerdutyint "github.com/NodeSpy/paseo-conductor/internal/integrations/pagerduty"
-	rssint "github.com/NodeSpy/paseo-conductor/internal/integrations/rss"
-	sentryint "github.com/NodeSpy/paseo-conductor/internal/integrations/sentry"
-	webhookint "github.com/NodeSpy/paseo-conductor/internal/integrations/webhook"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	cronint "github.com/NodeSpy/conductor/internal/integrations/cron"
+	pagerdutyint "github.com/NodeSpy/conductor/internal/integrations/pagerduty"
+	rssint "github.com/NodeSpy/conductor/internal/integrations/rss"
+	sentryint "github.com/NodeSpy/conductor/internal/integrations/sentry"
+	webhookint "github.com/NodeSpy/conductor/internal/integrations/webhook"
 )
 
 // lowerAction builds the trigger-identity fields every connectors-model

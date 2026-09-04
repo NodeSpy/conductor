@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/handoff"
+	"github.com/NodeSpy/conductor/internal/handoff"
 )
 
 // fakeDiscordPoster is a hermetic discordPoster fake: it records calls and

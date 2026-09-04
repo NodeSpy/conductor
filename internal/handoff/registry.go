@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // ErrNotWired is returned by a hand-off channel's Present when its config
@@ -88,7 +88,7 @@ func NewRegistry(cfgs map[string]config.HandoffConfig, defaultName string, log f
 // SlackInbox returns the Inbox shared by every configured `slack:` hand-off
 // entry, or nil when none is configured. main.go wires this to
 // slack.SetReplyHook so the Socket Mode integration feeds replies into it — see
-// cmd/paseo-conductor/main.go.
+// cmd/conductor/main.go.
 func (r *Registry) SlackInbox() *Inbox {
 	if !r.hasSlack {
 		return nil
@@ -100,7 +100,7 @@ func (r *Registry) SlackInbox() *Inbox {
 // hand-off entry, or nil when none is configured. main.go feeds it from
 // RunDiscordGateway (one goroutine per distinct bot token — see
 // DiscordBotTokens), so a gateway's MESSAGE_CREATE resolves the right pending
-// hand-off — see cmd/paseo-conductor/main.go.
+// hand-off — see cmd/conductor/main.go.
 func (r *Registry) DiscordInbox() *Inbox {
 	if !r.hasDiscord {
 		return nil
@@ -116,7 +116,7 @@ func (r *Registry) DiscordInbox() *Inbox {
 func (r *Registry) DiscordBotTokens() []string { return r.discordTokens }
 
 // webListen returns the entry's configured listen address, defaulting to
-// :8099 (mirrors the default previously applied in cmd/paseo-conductor/main.go).
+// :8099 (mirrors the default previously applied in cmd/conductor/main.go).
 func webListen(w *config.HandoffWeb) string {
 	if w.Listen != "" {
 		return w.Listen
@@ -130,7 +130,7 @@ func webListen(w *config.HandoffWeb) string {
 // slackInbox with every other slack entry; a Discord entry builds a real
 // *DiscordChannel (dm or thread, per hc.Discord.To) sharing discordInbox with
 // every other discord entry, fed by RunDiscordGateway (see
-// cmd/paseo-conductor/main.go). A malformed `to` that slipped past
+// cmd/conductor/main.go). A malformed `to` that slipped past
 // config.Validate falls back to a stub whose Present fails loudly with
 // ErrNotWired rather than a nil dereference.
 func buildChannel(name string, hc config.HandoffConfig, slackInbox, discordInbox *Inbox, log func(string, ...any)) Channel {
@@ -180,7 +180,7 @@ func buildChannel(name string, hc config.HandoffConfig, slackInbox, discordInbox
 
 // WebEntries returns the configured web hand-off channels paired with their
 // resolved listen address, so the caller mounts one inbound HTTP handler per
-// entry (see cmd/paseo-conductor/main.go).
+// entry (see cmd/conductor/main.go).
 func (r *Registry) WebEntries() []WebEntry { return r.webEntries }
 
 // Resolve returns the hand-off channel a step should present its draft on,

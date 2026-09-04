@@ -22,7 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/NodeSpy/paseo-conductor/test/e2e/services/fixer"
+	"github.com/NodeSpy/conductor/test/e2e/services/fixer"
 )
 
 var (

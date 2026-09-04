@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/hosts"
 )
 
 // Reaper archives conductor agents that requested archive-when-done once they

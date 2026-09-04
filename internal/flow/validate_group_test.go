@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 // TestValidateRejections is the load-time gate's rejection table: every kind

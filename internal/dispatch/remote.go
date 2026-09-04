@@ -4,7 +4,7 @@ import (
 	"context"
 	"os/exec"
 
-	"github.com/NodeSpy/paseo-conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/hosts"
 )
 
 // paseoCommand builds the exec.Cmd for one paseo CLI invocation: the local

@@ -5,8 +5,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	gh "github.com/NodeSpy/paseo-conductor/internal/integrations/github"
+	"github.com/NodeSpy/conductor/internal/config"
+	gh "github.com/NodeSpy/conductor/internal/integrations/github"
 )
 
 // githubTransform maps one legacy github integration to a connector entry +

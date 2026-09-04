@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 // Force builds and emits trigger(s) for `kind` on repo#number on demand (the

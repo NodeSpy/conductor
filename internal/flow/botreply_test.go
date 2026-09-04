@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // botTrigger is a trigger whose event context carries the author facts the

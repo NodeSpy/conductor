@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/hosts"
 )
 
 // ---- run: js ---------------------------------------------------------------

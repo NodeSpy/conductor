@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // BuiltinPaseo is the reserved name of the built-in default controller.

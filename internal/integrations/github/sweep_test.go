@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // sweepStub serves the org installation lookup, installation repo list, open-PR

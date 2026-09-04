@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // TestWorkflowCallBindsInputsAndReturnsOutputs (G3): a workflow:/with: step binds

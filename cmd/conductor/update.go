@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 const updateRepo = "NodeSpy/conductor"

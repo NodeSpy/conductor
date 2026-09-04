@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/acp"
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/acp"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // acpController drives an ACP agent (gemini, codex-via-adapter, opencode-over-acp,

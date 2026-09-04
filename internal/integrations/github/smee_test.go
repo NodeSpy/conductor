@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 func TestDeliveryDedup(t *testing.T) {

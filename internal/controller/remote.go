@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/NodeSpy/paseo-conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/hosts"
 )
 
 // HostArgvPrefix resolves the ssh argv prefix for a named `hosts:` entry:
@@ -13,7 +13,7 @@ import (
 // hosts.RemoteCommand/RemoteCommandEnv in place of ShellJoin(argv)) runs argv
 // on that host. It is a package-level injectable seam, matching this
 // package's existing DI pattern (cliLauncher, deckRunner, acpDialer,
-// opencodeDialer): set once by cmd/paseo-conductor's wiring from the loaded
+// opencodeDialer): set once by cmd/conductor's wiring from the loaded
 // config's `hosts:` block before any controller launches, and stubbed in
 // tests. A nil value or an unknown host name is a launch-time error — there
 // is no silent local fallback for a controller configured with `host:`.
@@ -69,6 +69,6 @@ func prepareLaunch(host, dir string, env, argv []string) (wrappedArgv []string, 
 // HostDial opens a net.Conn to addr AS SEEN FROM the named host (an
 // `ssh -W` stdio forward — see hosts.Client.DialVia). The opencode
 // controller's HTTP client uses it to reach a server the remote runtime
-// bound to its own 127.0.0.1. Wired by cmd/paseo-conductor alongside
+// bound to its own 127.0.0.1. Wired by cmd/conductor alongside
 // HostArgvPrefix; nil or an unknown host is a launch-time error.
 var HostDial func(ctx context.Context, hostName, addr string) (net.Conn, error)

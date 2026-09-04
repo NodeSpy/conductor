@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // TestExampleConfigValidates proves the shipped connectors-model example

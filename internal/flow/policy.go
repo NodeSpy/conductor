@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // InQuietWindow reports whether now falls inside a quiet_hours window and,

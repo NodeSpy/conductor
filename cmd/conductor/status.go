@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // cmdStatus prints a snapshot of what conductor is doing — read entirely from the

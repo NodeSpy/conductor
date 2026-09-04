@@ -392,7 +392,7 @@ type ControllerConfig struct {
 	// Bin is the runtime binary (paseo/agent-deck); for agent-deck it wins over
 	// the command/tool/"agent-deck" bin resolution. For paseo, exactly one
 	// distinct Bin may be set across all paseo runtimes/controllers combined
-	// (see cmd/paseo-conductor's resolvePaseoBin).
+	// (see cmd/conductor's resolvePaseoBin).
 	Bin string `yaml:"bin"`
 	// Host names a `hosts:` entry; this controller's subprocess launches run
 	// there over SSH instead of locally. All controller types support it —

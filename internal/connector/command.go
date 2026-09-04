@@ -8,9 +8,9 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/hosts"
 )
 
 // The command connector: remote (or local) command execution as a VERB, per

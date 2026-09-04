@@ -3,7 +3,7 @@ package migrate
 import (
 	"fmt"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // actionSteps maps one legacy action's WORK — its steps list, or the action

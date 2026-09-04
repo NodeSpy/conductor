@@ -13,9 +13,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	gh "github.com/NodeSpy/paseo-conductor/internal/integrations/github"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	gh "github.com/NodeSpy/conductor/internal/integrations/github"
 )
 
 // baseGithubFilters are the filter keys every github event accepts.

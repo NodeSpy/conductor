@@ -5,13 +5,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	cronint "github.com/NodeSpy/paseo-conductor/internal/integrations/cron"
-	pdint "github.com/NodeSpy/paseo-conductor/internal/integrations/pagerduty"
-	rssint "github.com/NodeSpy/paseo-conductor/internal/integrations/rss"
-	sentryint "github.com/NodeSpy/paseo-conductor/internal/integrations/sentry"
-	slackint "github.com/NodeSpy/paseo-conductor/internal/integrations/slack"
-	webhookint "github.com/NodeSpy/paseo-conductor/internal/integrations/webhook"
+	"github.com/NodeSpy/conductor/internal/config"
+	cronint "github.com/NodeSpy/conductor/internal/integrations/cron"
+	pdint "github.com/NodeSpy/conductor/internal/integrations/pagerduty"
+	rssint "github.com/NodeSpy/conductor/internal/integrations/rss"
+	sentryint "github.com/NodeSpy/conductor/internal/integrations/sentry"
+	slackint "github.com/NodeSpy/conductor/internal/integrations/slack"
+	webhookint "github.com/NodeSpy/conductor/internal/integrations/webhook"
 )
 
 func sortStrings(s []string) { sort.Strings(s) }

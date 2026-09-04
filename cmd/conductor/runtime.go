@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
-	"github.com/NodeSpy/paseo-conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/hosts"
 )
 
 // paseoRuntimeDef is one paseo-type runtimes:/controllers: entry's launch

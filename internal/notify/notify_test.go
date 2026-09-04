@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 // captureNotifier returns a notifier whose log lines are collected.

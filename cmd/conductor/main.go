@@ -1,4 +1,4 @@
-// Command paseo-conductor is an event-driven agent orchestrator for a local
+// Command conductor is an event-driven agent orchestrator for a local
 // Paseo daemon. It receives GitHub App webhooks (via smee), matches them to
 // rules, and dispatches coding agents / commands.
 //
@@ -21,26 +21,26 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/connector"
-	"github.com/NodeSpy/paseo-conductor/internal/controller"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
-	"github.com/NodeSpy/paseo-conductor/internal/engine"
-	"github.com/NodeSpy/paseo-conductor/internal/flow"
-	"github.com/NodeSpy/paseo-conductor/internal/handoff"
-	"github.com/NodeSpy/paseo-conductor/internal/hosts"
-	"github.com/NodeSpy/paseo-conductor/internal/inbound"
-	"github.com/NodeSpy/paseo-conductor/internal/integrations/slack" // registers "slack"; also feeds hand-off replies (see wireSlackHandoffInbox)
-	"github.com/NodeSpy/paseo-conductor/internal/notify"
-	"github.com/NodeSpy/paseo-conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/controller"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/engine"
+	"github.com/NodeSpy/conductor/internal/flow"
+	"github.com/NodeSpy/conductor/internal/handoff"
+	"github.com/NodeSpy/conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/inbound"
+	"github.com/NodeSpy/conductor/internal/integrations/slack" // registers "slack"; also feeds hand-off replies (see wireSlackHandoffInbox)
+	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/store"
 
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/cron"      // register "cron"
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/github"    // register "github"
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/pagerduty" // register "pagerduty"
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/rss"       // register "rss"
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/sentry"    // register "sentry"
-	_ "github.com/NodeSpy/paseo-conductor/internal/integrations/webhook"   // register "webhook"
+	_ "github.com/NodeSpy/conductor/internal/integrations/cron"      // register "cron"
+	_ "github.com/NodeSpy/conductor/internal/integrations/github"    // register "github"
+	_ "github.com/NodeSpy/conductor/internal/integrations/pagerduty" // register "pagerduty"
+	_ "github.com/NodeSpy/conductor/internal/integrations/rss"       // register "rss"
+	_ "github.com/NodeSpy/conductor/internal/integrations/sentry"    // register "sentry"
+	_ "github.com/NodeSpy/conductor/internal/integrations/webhook"   // register "webhook"
 )
 
 var version = "dev"

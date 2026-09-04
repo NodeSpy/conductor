@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/NodeSpy/paseo-conductor/internal/secrets"
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 // cmdVault manages the built-in encrypted vault (vault: secret references).

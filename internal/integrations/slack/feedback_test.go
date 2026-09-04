@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 // apiCall records one request a mock Slack server received.
