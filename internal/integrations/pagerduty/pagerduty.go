@@ -157,17 +157,6 @@ func (g *Integration) deliver(ctx context.Context, emit core.EmitFunc, smeeSig s
 	dedup := f.ID + ":" + f.EventType
 	title := fmt.Sprintf("pagerduty %s: %s", strings.TrimPrefix(f.EventType, "incident."), f.Title)
 
-	var target core.Target
-	synthetic := rule.Repo == ""
-	if synthetic {
-		target = inbound.SyntheticTarget("pagerduty:"+firstNonEmpty(f.Service, g.name), dedup)
-		target.HTMLURL = f.URL
-	} else {
-		owner, name, _ := strings.Cut(rule.Repo, "/")
-		target = core.Target{Repo: rule.Repo, Owner: owner, Name: name,
-			Number: inbound.SyntheticTarget("", dedup).Number, HTMLURL: f.URL}
-	}
-
 	pctx := map[string]any{
 		"event_type": f.EventType, "status": f.Status, "title": f.Title,
 		"urgency": f.Urgency, "priority": f.Priority, "service": f.Service,
@@ -176,6 +165,22 @@ func (g *Integration) deliver(ctx context.Context, emit core.EmitFunc, smeeSig s
 	for _, act := range rule.Actions {
 		if !act.IsEnabled() {
 			continue
+		}
+		// The checkout repo: the rule's, or a per-variant override (lowered
+		// connectors-model triggers each carry their own repo:).
+		repo := rule.Repo
+		if act.TargetRepo != "" {
+			repo = act.TargetRepo
+		}
+		var target core.Target
+		synthetic := repo == ""
+		if synthetic {
+			target = inbound.SyntheticTarget("pagerduty:"+firstNonEmpty(f.Service, g.name), dedup)
+			target.HTMLURL = f.URL
+		} else {
+			owner, name, _ := strings.Cut(repo, "/")
+			target = core.Target{Repo: repo, Owner: owner, Name: name,
+				Number: inbound.SyntheticTarget("", dedup).Number, HTMLURL: f.URL}
 		}
 		if synthetic {
 			act = inbound.ForceNoCheckout(act)

@@ -25,7 +25,9 @@ Filters: `event_types`, `services` (summary or id), `urgencies`, `priorities`
 `.number`, `.id`, `.url`, plus `url`. Signature verification handles key
 rotation (any `v1=` entry may match).
 
-**Ordering:** first matching trigger wins, in config order (legacy-rule
-semantics — see [[Connectors]]).
+Filters also accept `exclude:` — a list of match-maps an event must NOT
+match. Triggers are independent (every matching trigger fires); the migration
+generates `exclude:` entries from earlier legacy rules so the legacy
+first-match winner is preserved exactly.
 
 Related: [[Connectors]] · [[Migration]]

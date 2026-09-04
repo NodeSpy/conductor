@@ -50,7 +50,7 @@ YAML, comments included.
 | slack `ack` / `on_done` / `on_fail` | hooks `at: start/done/fail` using `<conn>.react` / `<conn>.post` |
 | cron `schedules:` | connection `schedules:` + one trigger per schedule |
 | webhook `sources:` (path/sign/match/title/dedup/repo) | connection `sources:` + one trigger per source (`repo:` on the trigger) |
-| sentry / pagerduty `rules:` (match, repo) | one trigger per rule, in order (first-match-wins preserved) |
+| sentry / pagerduty `rules:` (match, repo) | one trigger per rule; later triggers carry `exclude:` maps of every earlier rule's match, so the legacy first-match winner is preserved under independent triggers (a rule behind a catch-all was unreachable and is skipped with a note) |
 | rss `feeds:` (url/interval/match/repo) | connection `feeds:` + one trigger per feed (`match` as its filter) |
 | `handoffs:` (web + tunnels, slack/discord dm/thread) | ask-capable connectors; the default entry's name is stamped onto background steps that named none |
 | `controllers:` | `runtimes:` (same fields; agent `controller:` refs stay valid) |

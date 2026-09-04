@@ -544,21 +544,65 @@ func TestKitchenSinkTransform(t *testing.T) {
 	}
 }
 
-// TestSentryRuleOrderPreserved: sentry rules are first-match-wins; migrated
-// triggers must keep the order so the same event picks the same rule.
-func TestSentryRuleOrderPreserved(t *testing.T) {
+// TestSentryPrecedencePreservedViaExcludes: connectors-model triggers are
+// independent, so the migration reproduces legacy first-match-wins by giving
+// each later trigger an exclude of every earlier rule's match. The golden
+// proof drives BOTH triggers' filters against the same event contexts through
+// the flow-side evaluator: an event the first rule matched fires ONLY the
+// first trigger; an event only the second rule matched fires only the second.
+func TestSentryPrecedencePreservedViaExcludes(t *testing.T) {
 	_, out := mustTransform(t, legacyKitchen)
-	var sentryOns []string
+	var sentryTriggers []config.TriggerSpec
 	for _, tr := range out.Triggers {
 		if tr.Connector() == "errors" {
-			sentryOns = append(sentryOns, fmt.Sprint(tr.Filters["projects"]))
+			sentryTriggers = append(sentryTriggers, tr)
 		}
 	}
-	if len(sentryOns) != 2 || sentryOns[0] == sentryOns[1] {
-		t.Fatalf("sentry trigger order: %v", sentryOns)
+	if len(sentryTriggers) != 2 {
+		t.Fatalf("sentry triggers: %d, want 2", len(sentryTriggers))
 	}
-	if !strings.Contains(sentryOns[0], "backend") {
-		t.Errorf("first sentry trigger should be the backend rule: %v", sentryOns)
+	first, second := sentryTriggers[0], sentryTriggers[1]
+	if !strings.Contains(fmt.Sprint(first.Filters["projects"]), "backend") {
+		t.Fatalf("first trigger should be the backend rule: %v", first.Filters)
+	}
+	if _, hasEx := first.Filters["exclude"]; hasEx {
+		t.Fatal("the first trigger must not exclude anything")
+	}
+	if _, hasEx := second.Filters["exclude"]; !hasEx {
+		t.Fatalf("the second trigger must exclude the first rule's match: %v", second.Filters)
+	}
+
+	sec := secrets.New()
+	sec.LookupEnv = func(string) (string, bool) { return "x", true }
+	reg, err := connector.Build(out, connector.Deps{Secrets: sec, Config: out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := flow.New(flow.Runner{Cfg: out, Conns: reg})
+	evalBoth := func(sctx map[string]any) (bool, bool) {
+		trig := core.Trigger{Kind: "sentry_alert", Context: map[string]any{"sentry": sctx}}
+		m1, err1 := runner.FilterMatch(trig, first)
+		m2, err2 := runner.FilterMatch(trig, second)
+		if err1 != nil || err2 != nil {
+			t.Fatalf("filter errors: %v %v", err1, err2)
+		}
+		return m1, m2
+	}
+
+	// A backend error: legacy rule1 won; only trigger1 may fire.
+	m1, m2 := evalBoth(map[string]any{"project": "backend", "level": "error"})
+	if !m1 || m2 {
+		t.Fatalf("backend error: trigger1=%v trigger2=%v (want true,false)", m1, m2)
+	}
+	// A frontend warning: legacy fell through to rule2 (catch-all).
+	m1, m2 = evalBoth(map[string]any{"project": "frontend", "level": "warning"})
+	if m1 || !m2 {
+		t.Fatalf("frontend warning: trigger1=%v trigger2=%v (want false,true)", m1, m2)
+	}
+	// A backend warning: rule1 requires level error|fatal → rule2 won.
+	m1, m2 = evalBoth(map[string]any{"project": "backend", "level": "warning"})
+	if m1 || !m2 {
+		t.Fatalf("backend warning: trigger1=%v trigger2=%v (want false,true)", m1, m2)
 	}
 }
 

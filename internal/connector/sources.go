@@ -378,6 +378,7 @@ var sentryDecl = &TypeDecl{
 				"projects":     {Type: TList, Desc: "only these Sentry projects (empty = any)"},
 				"levels":       {Type: TList, Desc: "only these levels (empty = any)"},
 				"environments": {Type: TList, Desc: "only these environments (empty = any)"},
+				"exclude":      {Type: TList, Desc: "match-maps to exclude (the migration uses these to preserve legacy rule precedence)"},
 			},
 			Context: Schema{
 				"sentry.resource":    {Type: TString},
@@ -399,7 +400,87 @@ var sentryDecl = &TypeDecl{
 	},
 }
 
-func init() { RegisterType(sentryDecl, newSentryImpl) }
+func init() {
+	sentryDecl.Filter = sentryFilter
+	RegisterType(sentryDecl, newSentryImpl)
+}
+
+// sentryFilter evaluates an alert trigger's filters against the event context
+// — the same containsFold semantics the integration's legacy rules use, plus
+// exclude: entries (an event matching ANY exclude map is dropped; the
+// migration generates them so earlier-rule precedence survives the move to
+// independent triggers).
+func sentryFilter(_ string, filters, trigCtx map[string]any) (bool, error) {
+	sc, _ := trigCtx["sentry"].(map[string]any)
+	get := func(k string) string {
+		if sc == nil {
+			return ""
+		}
+		v, _ := sc[k].(string)
+		return v
+	}
+	match := func(m map[string]any) bool {
+		return listMatches(m["projects"], get("project")) &&
+			listMatches(m["levels"], get("level")) &&
+			listMatches(m["environments"], get("environment"))
+	}
+	if !match(filters) {
+		return false, nil
+	}
+	for _, e := range toMapList(filters["exclude"]) {
+		if match(e) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// listMatches mirrors the integrations' containsFold: an empty/absent list
+// matches anything; otherwise the value must be in it, case-insensitively.
+func listMatches(list any, want string) bool {
+	items := toStrings(list)
+	if len(items) == 0 {
+		return true
+	}
+	for _, it := range items {
+		if strings.EqualFold(it, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// listMatchesAny is listMatches over several candidate values (pagerduty's
+// services filter matches the service summary OR id).
+func listMatchesAny(list any, wants ...string) bool {
+	items := toStrings(list)
+	if len(items) == 0 {
+		return true
+	}
+	for _, it := range items {
+		for _, w := range wants {
+			if strings.EqualFold(it, w) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// toMapList coerces a YAML list of maps.
+func toMapList(v any) []map[string]any {
+	l, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(l))
+	for _, e := range l {
+		if m, ok := e.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
 
 type sentryConn struct {
 	Listen       string `yaml:"listen"`
@@ -447,23 +528,21 @@ func (s *sentryImpl) DeclaredEvents() []string { return nil }
 // that alert. Lowering one rule per trigger, in trigger order, reproduces
 // that exact legacy-config semantics — unlike github/slack triggers, which
 // are independent (every matching trigger fires).
+// Source lowers the connector's triggers into ONE catch-all rule whose
+// variants carry each trigger (per-variant repo via TargetRepo). Filters are
+// evaluated flow-side (sentryFilter), so triggers are INDEPENDENT — every
+// matching trigger fires — exactly like the other connectors.
 func (s *sentryImpl) Source(triggers []CompiledTrigger) (core.Integration, error) {
 	if len(triggers) == 0 {
 		return nil, nil
 	}
-	rules := make([]sentryint.Rule, 0, len(triggers))
+	set := make(config.ActionSet, 0, len(triggers))
 	for _, t := range triggers {
-		f := t.Spec.Filters
-		rules = append(rules, sentryint.Rule{
-			Match: sentryint.Match{
-				Projects:     toStrings(f["projects"]),
-				Levels:       toStrings(f["levels"]),
-				Environments: toStrings(f["environments"]),
-			},
-			Repo:    t.Spec.Repo,
-			Actions: config.ActionSet{lowerAction(t)},
-		})
+		act := lowerAction(t)
+		act.TargetRepo = t.Spec.Repo
+		set = append(set, act)
 	}
+	rules := []sentryint.Rule{{Actions: set}}
 	cfg := sentryint.Config{
 		Listen:       s.conn.Listen,
 		SmeeURL:      s.conn.SmeeURL,
@@ -649,7 +728,39 @@ var pagerdutyDecl = &TypeDecl{
 	},
 }
 
-func init() { RegisterType(pagerdutyDecl, newPagerdutyImpl) }
+func init() {
+	pagerdutyDecl.Filter = pagerdutyFilter
+	RegisterType(pagerdutyDecl, newPagerdutyImpl)
+}
+
+// pagerdutyFilter mirrors the integration's legacy rule matching flow-side:
+// event_types/urgencies/priorities by value, services by summary OR id, plus
+// migration-generated exclude: maps.
+func pagerdutyFilter(_ string, filters, trigCtx map[string]any) (bool, error) {
+	pc, _ := trigCtx["pagerduty"].(map[string]any)
+	get := func(k string) string {
+		if pc == nil {
+			return ""
+		}
+		v, _ := pc[k].(string)
+		return v
+	}
+	match := func(m map[string]any) bool {
+		return listMatches(m["event_types"], get("event_type")) &&
+			listMatchesAny(m["services"], get("service"), get("service_id")) &&
+			listMatches(m["urgencies"], get("urgency")) &&
+			listMatches(m["priorities"], get("priority"))
+	}
+	if !match(filters) {
+		return false, nil
+	}
+	for _, e := range toMapList(filters["exclude"]) {
+		if match(e) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
 
 type pagerdutyConn struct {
 	Listen        string `yaml:"listen"`
@@ -696,24 +807,19 @@ func (p *pagerdutyImpl) DeclaredEvents() []string { return nil }
 // pagerduty.Integration.match): the first rule whose Match filters an
 // incoming incident handles it. Lowering one rule per trigger, in order,
 // reproduces that exact legacy-config semantics.
+// Source lowers into ONE catch-all rule with per-trigger variants; filters
+// are flow-side (pagerdutyFilter) and triggers are independent.
 func (p *pagerdutyImpl) Source(triggers []CompiledTrigger) (core.Integration, error) {
 	if len(triggers) == 0 {
 		return nil, nil
 	}
-	rules := make([]pagerdutyint.Rule, 0, len(triggers))
+	set := make(config.ActionSet, 0, len(triggers))
 	for _, t := range triggers {
-		f := t.Spec.Filters
-		rules = append(rules, pagerdutyint.Rule{
-			Match: pagerdutyint.Match{
-				EventTypes: toStrings(f["event_types"]),
-				Services:   toStrings(f["services"]),
-				Urgencies:  toStrings(f["urgencies"]),
-				Priorities: toStrings(f["priorities"]),
-			},
-			Repo:    t.Spec.Repo,
-			Actions: config.ActionSet{lowerAction(t)},
-		})
+		act := lowerAction(t)
+		act.TargetRepo = t.Spec.Repo
+		set = append(set, act)
 	}
+	rules := []pagerdutyint.Rule{{Actions: set}}
 	cfg := pagerdutyint.Config{
 		Listen:        p.conn.Listen,
 		SmeeURL:       p.conn.SmeeURL,

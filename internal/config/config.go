@@ -509,6 +509,9 @@ type Action struct {
 	// `match.repos` instead and never set these.
 	Repos        []string `yaml:"x_repos,omitempty" json:"Repos,omitempty"`
 	ExcludeRepos []string `yaml:"x_exclude_repos,omitempty" json:"ExcludeRepos,omitempty"`
+	// TargetRepo pins the trigger's checkout repo per variant (a lowered
+	// trigger's repo: on sentry/pagerduty, whose legacy Repo was rule-level).
+	TargetRepo string `yaml:"x_target_repo,omitempty" json:"TargetRepo,omitempty"`
 
 	// kind-specific options
 	MaxAttemptsPerHead int            `yaml:"max_attempts_per_head"`

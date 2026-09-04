@@ -24,8 +24,9 @@ Filters: `projects`, `levels`, `environments` (case-insensitive lists; empty
 `sentry.level`, `sentry.environment`, `sentry.culprit`, `sentry.short_id`,
 `sentry.project`, `sentry.url`, plus `url`.
 
-**Ordering:** sentry triggers are evaluated in config order and the first
-match handles an event — mirroring the legacy rules exactly (see
-[[Connectors]]).
+Filters also accept `exclude:` — a list of match-maps an event must NOT
+match. Triggers are independent (every matching trigger fires); the migration
+generates `exclude:` entries from earlier legacy rules so the legacy
+first-match winner is preserved exactly.
 
 Related: [[Connectors]] · [[Migration]]
