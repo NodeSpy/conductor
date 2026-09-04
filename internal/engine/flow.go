@@ -40,11 +40,11 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 		return
 	}
 
-	// Scoped policy: trigger → connector → global, most specific wins.
+	// Scoped policy: trigger → connector → global, most specific wins. (No
+	// policy-level enabled — the global kill switch is the runtime
+	// `conductor pause`; connectors and triggers disable via their own
+	// `enabled:` fields, checked above and at source build.)
 	pol := e.policyFor(spec)
-	if pol.Enabled != nil && !*pol.Enabled {
-		return
-	}
 	if pol.PauseLabel != nil && *pol.PauseLabel != "" && triggerHasLabel(t, *pol.PauseLabel) {
 		e.log("%s skipped — carries pause label %q", tag(t), *pol.PauseLabel)
 		return

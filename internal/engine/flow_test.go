@@ -239,14 +239,16 @@ func TestFlowPolicyIgnoreUsers(t *testing.T) {
 	}
 }
 
-func TestFlowPolicyDisabled(t *testing.T) {
-	cfg := strings.Replace(gateCfg, "steps:", "policy: { enabled: false }\n    steps:", 1)
+func TestFlowTriggerDisabled(t *testing.T) {
+	// The supported per-trigger switch is the trigger's own `enabled: false`
+	// (policy has no enabled key — the global kill switch is `conductor pause`).
+	cfg := strings.Replace(gateCfg, "steps:", "enabled: false\n    steps:", 1)
 	eng, _, _, _ := buildFlowEngine(t, cfg)
 	before := gateCalls()
 	eng.process(context.Background(), flowTrigger("d3"))
 	time.Sleep(50 * time.Millisecond)
 	if gateCalls() != before {
-		t.Fatal("disabled-by-policy trigger ran")
+		t.Fatal("disabled trigger ran")
 	}
 }
 

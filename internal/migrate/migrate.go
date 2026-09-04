@@ -169,10 +169,15 @@ func Transform(raw []byte) (*Result, error) {
 		}
 	}
 
-	// control: → policy: (global scope).
+	// control: → policy: (global scope). An explicitly disabled box cannot
+	// map — the connectors schema has no config kill switch (it is the runtime
+	// `conductor pause`) — so refuse rather than silently re-enable it.
+	if cfg.Control.Enabled != nil && !*cfg.Control.Enabled {
+		return nil, fmt.Errorf("control.enabled: false has no connectors-schema equivalent (the global kill switch is `conductor pause`) — pause the daemon or drop the key, then re-run the migration")
+	}
 	policy := controlPolicy(cfg.Control)
 	if policy != nil {
-		notes = append(notes, "control → policy (enabled/shadow/pause_label/concurrency)")
+		notes = append(notes, "control → policy (shadow/pause_label/concurrency)")
 	}
 
 	// notify: sinks → connectors + via routes (the verb-layer delivery, with
@@ -430,9 +435,8 @@ func stampDefaultHandoff(triggers []config.TriggerSpec, def string) {
 // control was all defaults).
 func controlPolicy(c config.Control) map[string]any {
 	p := map[string]any{}
-	if c.Enabled != nil {
-		p["enabled"] = *c.Enabled
-	}
+	// enabled is dropped: true is the default, and explicit false hard-errors
+	// before this runs (no policy-level kill switch in the new schema).
 	if c.Shadow {
 		p["shadow"] = true
 	}

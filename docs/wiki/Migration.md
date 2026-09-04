@@ -55,7 +55,7 @@ YAML, comments included.
 | `handoffs:` (web + tunnels, slack/discord dm/thread) | ask-capable connectors; the default entry's name is stamped onto background steps that named none |
 | `controllers:` | `runtimes:` (same fields; agent `controller:` refs stay valid) |
 | `paseo_bin` | the paseo runtime's `bin:` |
-| `control:` (enabled/shadow/pause_label/max_concurrent_agents/max_agents_per_hour) | the global `policy:` |
+| `control:` (shadow/pause_label/max_concurrent_agents/max_agents_per_hour) | the global `policy:`; an explicit `enabled: false` refuses to migrate (the kill switch is now only the runtime `conductor pause`) |
 | `notify:` sinks (slack/discord webhooks, ntfy, pushover, notifiarr) | generated connectors (`notify-slack`, `notify-ntfy`, …) + `notify.via:` routes with byte-identical wire payloads; `on:`/`push`/`digest` stay on the block |
 | `agents:`, `agent_guidance`, `store:`, `update:`, `imports:`, `dry_run`, `adopt_open_workspaces` | carried through unchanged |
 

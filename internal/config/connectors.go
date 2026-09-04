@@ -330,9 +330,10 @@ type Policy struct {
 	// PauseLabel is a github label that parks a target; connector default or a
 	// per-trigger hold label.
 	PauseLabel *string `yaml:"pause_label,omitempty"`
-	// Enabled maps the legacy kill switch (control.enabled). Default true.
-	Enabled *bool `yaml:"enabled,omitempty"`
 	// Shadow previews instead of dispatching (legacy control.shadow).
+	// There is deliberately no `enabled` here: the global kill switch is the
+	// runtime `conductor pause`, and per-connector/per-trigger `enabled:` are
+	// their own top-level fields.
 	Shadow *bool `yaml:"shadow,omitempty"`
 	// MaxAttemptsPerHead is the soft attempt threshold before backoff.
 	MaxAttemptsPerHead *int `yaml:"max_attempts_per_head,omitempty"`
@@ -423,9 +424,6 @@ func MergePolicy(scopes ...*Policy) Policy {
 		}
 		if p.PauseLabel != nil {
 			out.PauseLabel = p.PauseLabel
-		}
-		if p.Enabled != nil {
-			out.Enabled = p.Enabled
 		}
 		if p.Shadow != nil {
 			out.Shadow = p.Shadow

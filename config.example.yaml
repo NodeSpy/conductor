@@ -277,8 +277,10 @@ policy:
   quiet_hours: { tz: America/Denver, from: "22:00", to: "07:00", hold: true }
   concurrency: { max_agents: 3, max_agents_per_hour: 40 }
   # pause_label: "conductor:off"
-  # enabled: false            # config-level kill switch (runtime: conductor pause)
   # shadow: true              # preview everything, dispatch nothing
+  # (there is no config kill switch — pause the whole daemon with
+  #  `conductor pause` / `resume`; disable one connector or trigger in place
+  #  with its own `enabled: false`)
 
 # notify: — daemon lifecycle notifications (dispatch/complete/escalate/
 # needs_input), delivered through connector VERBS via routes. Each route's
