@@ -385,10 +385,14 @@ reaper that archives finished agents but never one that needs you.
 
 ## Notifications
 
-The `notify:` block is unchanged: daemon lifecycle events (`dispatch`,
-`complete`, `escalate`, `needs_input`) to Slack/Discord webhooks, ntfy,
-Pushover, Notifiarr, plus a periodic `digest`. Workflow-level feedback is
-better expressed as hooks calling verbs — per-trigger and position-scoped.
+Daemon lifecycle events (`dispatch`, `complete`, `escalate`, `needs_input`,
+plus the periodic `digest`) deliver through connector verbs — `notify.via:`
+routes, each an action unit with `{{.message}}` and the event facts in scope.
+The sink connector types (`ntfy`, `pushover`, `notifiarr`, and slack/discord's
+post-only `webhook_url:` mode) cover everything the legacy sink fields did;
+those fields still work on a legacy config, and migration maps each onto a
+connector + route with a byte-identical wire payload. Workflow-level feedback
+is better expressed as hooks calling verbs — per-trigger and position-scoped.
 
 ## Install (released binary, one-liner)
 

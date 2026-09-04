@@ -3,6 +3,8 @@ package connector
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
@@ -13,7 +15,8 @@ var discordDecl = &TypeDecl{
 	Type: "discord",
 	Desc: "Discord: post messages and asks over a bot; no source events (replies arrive via the discord gateway, wired directly to Inbox).",
 	Connection: Schema{
-		"bot_token": {Type: TString, Required: true, Desc: "Discord bot token (from the developer portal)"},
+		"bot_token":   {Type: TString, Desc: "Discord bot token (from the developer portal)"},
+		"webhook_url": {Type: TString, Desc: "an incoming-webhook URL — post-only alternative to a bot token"},
 	},
 	Verbs: []VerbDecl{
 		{
@@ -42,6 +45,9 @@ func init() { RegisterType(discordDecl, newDiscordImpl) }
 // discordConn is a discord connector's connection config.
 type discordConn struct {
 	BotToken string `yaml:"bot_token"`
+	// WebhookURL is the post-only alternative: with no bot_token, `post`
+	// sends {"content": …} there (the legacy notify sink's exact payload).
+	WebhookURL string `yaml:"webhook_url"`
 }
 
 // discordPoster is the Post+OpenDM surface discord's post/ask verbs need.
@@ -76,6 +82,9 @@ func newDiscordImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, erro
 	if conn.BotToken, err = deps.Secrets.Resolve(ctx, conn.BotToken); err != nil {
 		return nil, fmt.Errorf("bot_token: %w", err)
 	}
+	if conn.WebhookURL, err = deps.Secrets.Resolve(ctx, conn.WebhookURL); err != nil {
+		return nil, fmt.Errorf("webhook_url: %w", err)
+	}
 	if conn.BotToken != "" {
 		deps.Secrets.Track(conn.BotToken)
 	}
@@ -87,8 +96,8 @@ func newDiscordImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, erro
 }
 
 func (d *discordImpl) Validate() error {
-	if d.conn.BotToken == "" {
-		return fmt.Errorf("connector %q: bot_token is required", d.name)
+	if d.conn.BotToken == "" && d.conn.WebhookURL == "" {
+		return fmt.Errorf("connector %q: set bot_token (Web API) or webhook_url (post-only)", d.name)
 	}
 	return nil
 }
@@ -122,6 +131,14 @@ func (d *discordImpl) Invoke(ctx context.Context, verb string, opts map[string]a
 		if text == "" {
 			return nil, fmt.Errorf("discord.post: options.text is required")
 		}
+		// Webhook-only connection: post {"content": …} to the incoming
+		// webhook (byte-identical to the legacy notify sink).
+		if d.conn.BotToken == "" {
+			if err := postIncomingWebhook(ctx, d.httpc(), d.conn.WebhookURL, map[string]string{"content": text}); err != nil {
+				return nil, fmt.Errorf("discord.post: %w", err)
+			}
+			return map[string]any{"id": "", "channel": ""}, nil
+		}
 		if channel == "" && user == "" {
 			return nil, fmt.Errorf("discord.post: set options.channel or options.user")
 		}
@@ -138,6 +155,9 @@ func (d *discordImpl) Invoke(ctx context.Context, verb string, opts map[string]a
 		}
 		return map[string]any{"id": id, "channel": channel}, nil
 	case "ask":
+		if d.conn.BotToken == "" {
+			return nil, fmt.Errorf("discord.ask needs a bot_token (the webhook_url connection is post-only)")
+		}
 		ch, err := d.AskChannel(opts)
 		if err != nil {
 			return nil, err
@@ -171,4 +191,9 @@ func (d *discordImpl) AskChannel(opts map[string]any) (handoff.Channel, error) {
 		return handoff.NewDiscordChannel(d.poster, channel, d.inbox, logf), nil
 	}
 	return nil, fmt.Errorf("discord.ask: options.to must be dm|thread, got %q", to)
+}
+
+// httpc is the webhook-post client (the REST poster owns its own).
+func (d *discordImpl) httpc() *http.Client {
+	return &http.Client{Timeout: 10 * time.Second}
 }

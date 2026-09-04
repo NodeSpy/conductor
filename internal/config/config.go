@@ -245,6 +245,36 @@ type Notify struct {
 	Pushover          NotifyPushover  `yaml:"pushover"`            // optional Pushover application/user to notify
 	Notifiarr         NotifyNotifiarr `yaml:"notifiarr"`           // optional Notifiarr passthrough integration
 	Digest            Duration        `yaml:"digest"`              // periodic activity summary (e.g. 24h); 0 = off
+
+	// Via routes lifecycle notifications through connector VERBS — the
+	// connectors-model delivery. Each route is an action unit invoked for the
+	// enabled events (its own on: overriding the block's), with the composed
+	// notification line addressable as {{.message}} (plus event/repo/number/
+	// kind/title/ref). The sink fields above remain the legacy delivery; the
+	// migration maps each configured sink onto a connector + a via route.
+	Via []NotifyRoute `yaml:"via,omitempty"`
+}
+
+// NotifyRoute is one notify delivery through a connector verb.
+type NotifyRoute struct {
+	// On restricts this route to a subset of events (empty = the block's on:).
+	On      []string       `yaml:"on,omitempty"`
+	Uses    string         `yaml:"uses"`
+	Options map[string]any `yaml:"options,omitempty"`
+}
+
+// WantsRoute reports whether a route fires for an event: its own on: list
+// when set, else the block's policy.
+func (n Notify) WantsRoute(r NotifyRoute, event string) bool {
+	if len(r.On) == 0 {
+		return true // the caller already gated on n.Wants(event)
+	}
+	for _, e := range r.On {
+		if e == event {
+			return true
+		}
+	}
+	return false
 }
 
 // NotifyNtfy configures publishing to an ntfy (https://ntfy.sh or self-hosted)

@@ -56,7 +56,8 @@ YAML, comments included.
 | `controllers:` | `runtimes:` (same fields; agent `controller:` refs stay valid) |
 | `paseo_bin` | the paseo runtime's `bin:` |
 | `control:` (enabled/shadow/pause_label/max_concurrent_agents/max_agents_per_hour) | the global `policy:` |
-| `notify:`, `agents:`, `agent_guidance`, `store:`, `update:`, `imports:`, `dry_run`, `adopt_open_workspaces` | carried through unchanged |
+| `notify:` sinks (slack/discord webhooks, ntfy, pushover, notifiarr) | generated connectors (`notify-slack`, `notify-ntfy`, …) + `notify.via:` routes with byte-identical wire payloads; `on:`/`push`/`digest` stay on the block |
+| `agents:`, `agent_guidance`, `store:`, `update:`, `imports:`, `dry_run`, `adopt_open_workspaces` | carried through unchanged |
 
 ## Proof
 

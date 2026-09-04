@@ -22,10 +22,12 @@ import (
 	"time"
 
 	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/paseo-conductor/internal/connector"
 	"github.com/NodeSpy/paseo-conductor/internal/controller"
 	"github.com/NodeSpy/paseo-conductor/internal/core"
 	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
 	"github.com/NodeSpy/paseo-conductor/internal/engine"
+	"github.com/NodeSpy/paseo-conductor/internal/flow"
 	"github.com/NodeSpy/paseo-conductor/internal/handoff"
 	"github.com/NodeSpy/paseo-conductor/internal/hosts"
 	"github.com/NodeSpy/paseo-conductor/internal/inbound"
@@ -331,6 +333,24 @@ func cmdRun(args []string) error {
 	}
 	if migrateWarning != "" {
 		notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "config", Kind: "migration"}, migrateWarning)
+	}
+	// notify.via routes deliver through connector verbs — wire the router when
+	// a connectors: block exists (via with no connectors logs a warning).
+	if stack != nil {
+		notifier.SetRouter(func(ctx context.Context, r config.NotifyRoute, data map[string]any) error {
+			connName, verb, _ := strings.Cut(r.Uses, ".")
+			in, ok := stack.Registry.Get(connName)
+			if !ok {
+				return fmt.Errorf("unknown connector %q", connName)
+			}
+			merged := connector.MergeOptions(in.DefaultOptions, r.Options)
+			rendered, err := flow.RenderOptions(merged, data)
+			if err != nil {
+				return err
+			}
+			_, err = in.InvokeFinal(ctx, verb, rendered)
+			return err
+		})
 	}
 	// Wire the engine's dispatch-completion seam to every configured slack
 	// instance's on_done/on_fail handling (see core.SetCompletionHook and

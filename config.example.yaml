@@ -272,13 +272,22 @@ policy:
   # shadow: true              # preview everything, dispatch nothing
 
 # notify: — daemon lifecycle notifications (dispatch/complete/escalate/
-# needs_input), unchanged from the legacy schema. Workflow-level feedback is
-# better expressed as hooks (above).
+# needs_input), delivered through connector VERBS via routes. Each route's
+# options render with {{.message}} (the composed line) + event/repo/number/
+# kind/title/ref; a route's own on: restricts it to a subset of events.
+# Workflow-level feedback is better expressed as hooks (above). The legacy
+# sink fields (slack_webhook_url, ntfy:, …) still load and auto-migrate.
 notify:
   on: [escalate, needs_input]
-  # slack_webhook_url: ${SLACK_WEBHOOK_URL}
-  # ntfy: { topic: your-topic }
+  via:
+    - { uses: slack-ops.post, options: { text: "conductor {{.message}}" } }
+    # - { on: [escalate], uses: alerts.publish, options: { title: conductor, message: "{{.message}}" } }
   # digest: 24h
+
+# Sink connector examples for via routes:
+# connectors:
+#   alerts: { type: ntfy, topic: your-topic }
+#   pager:  { type: pushover, token: ${PUSHOVER_TOKEN}, user: ${PUSHOVER_USER} }
 
 update: { auto: true } # self-update; auto-migration runs on the new binary's first boot
 # store:

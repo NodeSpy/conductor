@@ -888,6 +888,13 @@ group_L_migration() {
   else
     bad "L1 migrated trigger still works" L L1-works "no conductor commit on migr/mweb pr-1"
   fi
+  # The legacy ntfy sink was mapped onto a connector + via route; the dispatch
+  # notification must reach the sink through the VERB layer post-migration.
+  if wait_for 30 slack_sink_has "migrate-e2e"; then
+    ok "L1 migrated notify sink delivers through the verb layer (ntfy via route)" L L1-notify
+  else
+    bad "L1 migrated notify via route" L L1-notify "no ntfy capture for topic migrate-e2e"
+  fi
 
   # L2: an UNMAPPABLE legacy config refuses with a hard error naming the
   # construct, leaves the file untouched, and never commits a partial result.
