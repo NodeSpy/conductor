@@ -125,6 +125,8 @@ usage:
   conductor connectors ls               list configured connectors: state, events, verbs
   conductor schema <connector>          print a connector's event/filter/verb/option schemas
   conductor secrets check               resolve every secret reference and report
+  conductor connector auth ls           each oauth2 connector's login state + token expiry
+  conductor connector auth <name> [--revoke]  oauth2 login (or clear stored tokens)
   conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
   conductor unlock                      seed the default vault key for non-interactive restarts
   conductor config migrate [--dry-run]  transform a legacy config to the connectors schema

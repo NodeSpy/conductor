@@ -23,6 +23,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/inbound"
 	"github.com/NodeSpy/conductor/internal/secrets"
+	"github.com/NodeSpy/conductor/internal/vaults"
 )
 
 // httpAPIClient is the shared client for declared connectors: bounded, no
@@ -42,14 +43,31 @@ type authConfig struct {
 	Value    string `yaml:"value"` // header: its value
 
 	// oauth2
-	Grant        string   `yaml:"grant"` // client_credentials | refresh_token | authorization_code
-	TokenURL     string   `yaml:"token_url"`
-	AuthURL      string   `yaml:"auth_url"` // consent endpoint (authorization_code bootstrap)
-	ClientID     string   `yaml:"client_id"`
-	ClientSecret string   `yaml:"client_secret"`
-	RefreshToken string   `yaml:"refresh_token"` // value or secret ref; a vault: ref is rotated in place
-	RedirectURI  string   `yaml:"redirect_uri"`  // authorization_code bootstrap (default http://localhost:8400/callback)
-	Scopes       []string `yaml:"scopes"`
+	Grant        string `yaml:"grant"` // client_credentials | refresh_token | authorization_code | device
+	TokenURL     string `yaml:"token_url"`
+	AuthURL      string `yaml:"auth_url"` // consent endpoint (authorization_code bootstrap)
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"client_secret"`
+	// TokenVault names the vaults: entry conductor stores and rotates the
+	// captured tokens in (keys oauth/<connector>/access_token,
+	// …/refresh_token, …/expiry). Required for the interactive grants
+	// (authorization_code, device); recommended for refresh_token so
+	// provider rotations survive the daemon's own restarts.
+	TokenVault string `yaml:"token_vault"`
+	// RefreshToken is an optional SEED — a value or secret reference used
+	// until the token_vault holds a rotated one. The captured/rotated
+	// token in token_vault always wins.
+	RefreshToken  string   `yaml:"refresh_token"`
+	RedirectURI   string   `yaml:"redirect_uri"`    // authorization_code bootstrap (default http://localhost:8400/callback)
+	DeviceAuthURL string   `yaml:"device_auth_url"` // device grant: the device-authorization endpoint
+	Scopes        []string `yaml:"scopes"`
+}
+
+// tokenVaultKeys returns the fixed key set a connector's tokens live under
+// in its token_vault.
+func tokenVaultKeys(connector string) (access, refresh, expiry string) {
+	p := "oauth/" + connector
+	return p + "/access_token", p + "/refresh_token", p + "/expiry"
 }
 
 // validateAuth structurally checks an auth block at build time.
@@ -75,11 +93,19 @@ func (a authConfig) validate(where string) error {
 		}
 		switch a.Grant {
 		case "client_credentials":
-		case "refresh_token", "authorization_code":
-			// refresh_token may be seeded later by `conductor connector auth`,
-			// so its absence is a runtime condition, not a config error.
+		case "refresh_token":
+			// The refresh token may be seeded later by `conductor connector
+			// auth`, so its absence is a runtime condition, not a config error.
+		case "authorization_code", "device":
+			// The interactive grants store their captured tokens in a vault.
+			if a.TokenVault == "" {
+				return fmt.Errorf("%s: auth oauth2 grant %s needs token_vault: (a vaults: entry the captured tokens live in)", where, a.Grant)
+			}
+			if a.Grant == "device" && a.DeviceAuthURL == "" {
+				return fmt.Errorf("%s: auth oauth2 grant device needs device_auth_url:", where)
+			}
 		default:
-			return fmt.Errorf("%s: auth oauth2 grant must be client_credentials|refresh_token|authorization_code, got %q", where, a.Grant)
+			return fmt.Errorf("%s: auth oauth2 grant must be client_credentials|refresh_token|authorization_code|device, got %q", where, a.Grant)
 		}
 	default:
 		return fmt.Errorf("%s: auth type must be none|bearer|basic|header|oauth2, got %q", where, a.Type)
@@ -91,7 +117,8 @@ func (a authConfig) validate(where string) error {
 // oauth2 token cache and refresh/rotation lifecycle for one connector.
 type authenticator struct {
 	cfg        authConfig // credential fields already secret-resolved
-	refreshRef string     // the RAW refresh_token value from config (rotation target when vault:)
+	name       string     // the connector's name (token_vault key prefix)
+	refreshRef string     // LEGACY: the raw refresh_token vault: ref (pre-token_vault rotation target)
 	sec        *secrets.Resolver
 	log        func(string, ...any)
 
@@ -101,12 +128,14 @@ type authenticator struct {
 	refresh string // current refresh token value
 }
 
-// newAuthenticator resolves an auth block's credential fields.
+// newAuthenticator resolves an auth block's credential fields. With a
+// token_vault, the vault's captured refresh token (from `conductor connector
+// auth` or a prior rotation) takes precedence over the refresh_token: seed.
 func newAuthenticator(ctx context.Context, name string, a authConfig, sec *secrets.Resolver, logf func(string, ...any)) (*authenticator, error) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	au := &authenticator{cfg: a, refreshRef: a.RefreshToken, sec: sec, log: logf}
+	au := &authenticator{cfg: a, name: name, refreshRef: a.RefreshToken, sec: sec, log: logf}
 	resolve := func(field string, v *string) error {
 		if *v == "" {
 			return nil
@@ -138,7 +167,44 @@ func newAuthenticator(ctx context.Context, name string, a authConfig, sec *secre
 		return nil, err
 	}
 	au.refresh = rt
+	// token_vault: the vault must exist and be writable (rotation writes
+	// back); a captured/rotated refresh token there beats the seed.
+	if a.Type == "oauth2" && a.TokenVault != "" {
+		b, err := vaults.Use(a.TokenVault)
+		if err != nil {
+			return nil, fmt.Errorf("connector %q: token_vault: %w", name, err)
+		}
+		if _, ok := b.(vaults.Writer); !ok {
+			return nil, fmt.Errorf("connector %q: token_vault %q (%s) is read-only — token storage/rotation needs a writable vault", name, a.TokenVault, vaults.Type(a.TokenVault))
+		}
+		_, refreshKey, _ := tokenVaultKeys(name)
+		if v, err := vaults.Read(ctx, a.TokenVault, refreshKey); err == nil && v != "" {
+			au.refresh = v
+		}
+	}
 	return au, nil
+}
+
+// persistTokensLocked writes the current access token, expiry, and (when
+// rotated) refresh token into the token_vault — best-effort: a write failure
+// is logged, not fatal (the in-memory tokens still work until restart).
+// Caller holds au.mu.
+func (au *authenticator) persistTokensLocked(ctx context.Context, rotatedRefresh string) {
+	if au.cfg.TokenVault == "" {
+		return
+	}
+	accessKey, refreshKey, expiryKey := tokenVaultKeys(au.name)
+	store := func(key, value string) {
+		if value == "" {
+			return
+		}
+		if err := vaults.Write(ctx, au.cfg.TokenVault, key, value); err != nil {
+			au.log("oauth2: token could not be persisted to vault %q key %s: %v", au.cfg.TokenVault, key, err)
+		}
+	}
+	store(accessKey, au.access)
+	store(expiryKey, au.expiry.Format(time.RFC3339))
+	store(refreshKey, rotatedRefresh)
 }
 
 // apply sets the auth on one outbound request (fetching/refreshing the oauth2
@@ -202,9 +268,9 @@ func (au *authenticator) fetchTokenLocked(ctx context.Context) (string, error) {
 		if len(au.cfg.Scopes) > 0 {
 			form.Set("scope", strings.Join(au.cfg.Scopes, " "))
 		}
-	case "refresh_token", "authorization_code":
-		// authorization_code connectors run on the refresh token after the
-		// one-time `conductor connector auth` bootstrap.
+	case "refresh_token", "authorization_code", "device":
+		// The interactive grants run on the refresh token after the one-time
+		// `conductor connector auth` bootstrap.
 		if au.refresh == "" {
 			return "", fmt.Errorf("oauth2: no refresh token yet — run `conductor connector auth <name>` once to seed it")
 		}
@@ -218,22 +284,28 @@ func (au *authenticator) fetchTokenLocked(ctx context.Context) (string, error) {
 		return "", err
 	}
 	au.access = tr.AccessToken
+	au.sec.Track(tr.AccessToken)
 	ttl := time.Duration(tr.ExpiresIn) * time.Second
 	if ttl <= 0 {
 		ttl = 30 * time.Minute
 	}
 	au.expiry = time.Now().Add(ttl)
-	// Rotation: the provider issued a NEW refresh token — adopt it, and when
-	// the configured value is a vault: ref, persist it so the connector keeps
-	// working across the daemon's own restarts.
+	// Rotation: the provider issued a NEW refresh token — adopt it and
+	// persist it (with the fresh access token + expiry) to the token_vault,
+	// so the connector keeps working across the daemon's own restarts.
+	rotated := ""
 	if tr.RefreshToken != "" && tr.RefreshToken != au.refresh {
 		au.refresh = tr.RefreshToken
-		if name, ok := strings.CutPrefix(au.refreshRef, "vault:"); ok {
+		au.sec.Track(tr.RefreshToken)
+		rotated = tr.RefreshToken
+		// LEGACY pre-token_vault rotation target: refresh_token: vault:<entry>.
+		if name, ok := strings.CutPrefix(au.refreshRef, "vault:"); ok && au.cfg.TokenVault == "" {
 			if err := au.sec.StoreVault(name, tr.RefreshToken); err != nil {
 				au.log("oauth2: rotated refresh token could not be persisted to vault:%s: %v", name, err)
 			}
 		}
 	}
+	au.persistTokensLocked(ctx, rotated)
 	return au.access, nil
 }
 
