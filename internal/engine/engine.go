@@ -83,8 +83,9 @@ type Engine struct {
 	rerun       func(context.Context, core.Trigger, int64)
 	refreshTok  func(core.Trigger) (string, error) // re-mint the App token on resume
 	log         func(string, ...any)
-	hold        *dispatch.HoldSet // agent ids handed off to the user; the reaper never touches these
-	pausePath   string            // control file; present = paused (toggled by pause/resume, no restart)
+	hold        *dispatch.HoldSet    // agent ids handed off to the user; the reaper never touches these
+	affinity    *controller.Affinity // keyed live sessions (session:); nil = every dispatch fresh
+	pausePath   string               // control file; present = paused (toggled by pause/resume, no restart)
 	ch          chan core.Trigger
 	sem         chan struct{} // concurrent-agent cap; nil = unlimited
 
@@ -159,6 +160,10 @@ type Options struct {
 	// engine registers a background step's agent id here at launch and the reaper
 	// skips it. nil disables the explicit hold (falls back to label/marker signals).
 	Hold *dispatch.HoldSet
+	// Affinity is the session-affinity registry (agents whose profile carries a
+	// session: block get one live session per rendered key, shared across
+	// triggers). nil disables affinity — every dispatch stays fresh.
+	Affinity *controller.Affinity
 	// PausePath is a control file whose presence pauses dispatch (toggled by the
 	// pause/resume commands without a restart). Empty disables the runtime pause.
 	PausePath string
@@ -194,6 +199,7 @@ func New(o Options) *Engine {
 		broker: o.Broker, handoffs: o.Handoffs,
 		author: o.Author, userTok: o.UserToken, readTok: o.ReadToken, log: log,
 		hold:      o.Hold,
+		affinity:  o.Affinity,
 		pausePath: o.PausePath,
 		ch:        make(chan core.Trigger, 256),
 	}
@@ -232,6 +238,9 @@ func (e *Engine) Run(ctx context.Context) error {
 		e.log("engine: initial GC: %v", err)
 	}
 	go e.gcLoop(ctx)
+	if e.affinity != nil {
+		go e.affinity.Run(ctx, time.Minute) // idle_ttl / max_lifetime sweep
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -272,6 +281,24 @@ func (e *Engine) agentGuidance(profile config.AgentProfile) string {
 		return dispatch.ConcisionGuidance
 	}
 }
+
+// dispatchAgent routes one request through session affinity when the profile
+// keeps keyed sessions (a follow-up to the bound live session, or a fresh
+// spawn that binds), and falls through to the plain runner otherwise —
+// including for session: profiles on runtimes without session persistence
+// (one-shot/cli), which stay fresh-per-event and lean on shared memory.
+func (e *Engine) dispatchAgent(ctx context.Context, runner Dispatcher, req dispatch.Request) (dispatch.RunRef, error) {
+	if e.affinity != nil {
+		if ref, handled, err := e.affinity.Dispatch(ctx, runner, req); handled {
+			return ref, err
+		}
+	}
+	return runner.Dispatch(ctx, req)
+}
+
+// affinityOwns reports whether an agent id is a bound keyed session — the
+// archive paths must not tear a shared session down after one step.
+func (e *Engine) affinityOwns(agentID string) bool { return e.affinity.Owns(agentID) }
 
 // memoryPrompt renders the opt-in shared-memory section for a dispatched
 // agent — the same append path as agentGuidance. A profile without
@@ -406,6 +433,10 @@ func triggerHasLabel(t core.Trigger, label string) bool {
 
 func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	key := t.Key()
+
+	// Session-affinity end_on: an eviction event (pr_closed/merged) ends the
+	// matching keyed session before any gate can drop the trigger.
+	e.affinity.ObserveEvent(ctx, t)
 
 	// Terminal state: drop dedup record, no dispatch.
 	if t.Kind == core.KindClosed {
@@ -676,7 +707,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		e.log("%s running (%s)", tag(t), actionDesc(act))
 	}
 	start := time.Now()
-	ref, err := run.Dispatch(ctx, req)
+	ref, err := e.dispatchAgent(ctx, run, req)
 	took := time.Since(start).Round(time.Second)
 	if act.Type == "command" && err == nil && !ref.Skipped {
 		tail := ""

@@ -108,7 +108,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		}
 		e.log("%s step %s running (%s)", tag(t), id, actionDesc(s))
 		start := time.Now()
-		ref, err := runner.Dispatch(ctx, req)
+		ref, err := e.dispatchAgent(ctx, runner, req)
 		// A step that exited cleanly but reports it isn't done yet (e.g. critique
 		// deferring on pending CI) is retried per its `retry:` policy — the workflow
 		// won't complete a not-ready step.
@@ -200,7 +200,8 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		// A non-interactive agent step (e.g. assess) needs no interaction, so archive
 		// its agent the instant it finishes rather than leaving it to clutter paseo
 		// until the reaper's next poll. Fire-and-forget; the reaper is the backstop.
-		if s.Type == "agent" && profile.ArchiveWhenDone && ref.AgentID != "" {
+		// A keyed session (affinity) is shared across events — never archived here.
+		if s.Type == "agent" && profile.ArchiveWhenDone && ref.AgentID != "" && !e.affinityOwns(ref.AgentID) {
 			go func(id string) { _ = e.disp.Archive(context.Background(), id) }(ref.AgentID)
 		}
 	}

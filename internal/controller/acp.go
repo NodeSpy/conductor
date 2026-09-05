@@ -65,6 +65,12 @@ func newACPController(name string, cc config.ControllerConfig, prov Provisioner)
 func (c *acpController) Name() string         { return c.name }
 func (c *acpController) Transport() Transport { return TransportACP }
 
+// SessionPersistent: an ACP session is addressable by id (session/load for
+// loadSession-capable agents) — the session-affinity gate. An agent that
+// can't actually resume surfaces as a follow-up failure, which affinity
+// degrades to a fresh spawn.
+func (c *acpController) SessionPersistent() bool { return true }
+
 func (c *acpController) Model() SessionModel {
 	c.mu.Lock()
 	defer c.mu.Unlock()

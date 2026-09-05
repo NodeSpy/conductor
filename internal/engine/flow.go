@@ -275,7 +275,7 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 				runner = r
 			}
 			req.Author = e.author
-			return runner.Dispatch(ctx, req)
+			return e.dispatchAgent(ctx, runner, req)
 		},
 		Tokens: func(t core.Trigger) dispatch.Tokens {
 			appTok, _ := t.Context["app_token"].(string)
@@ -303,6 +303,9 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 				fmt.Sprintf("interactive agent for %q is live (agent %s) — open it to review/refine", stepID, ref.AgentID))
 		},
 		Archive: func(agentID string) {
+			if e.affinityOwns(agentID) {
+				return // a keyed session outlives the step that used it
+			}
 			go func() { _ = e.disp.Archive(context.Background(), agentID) }()
 		},
 	}

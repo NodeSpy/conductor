@@ -27,6 +27,10 @@ func (c *paseoController) Name() string         { return c.name }
 func (c *paseoController) Model() SessionModel  { return ModelNative }
 func (c *paseoController) Transport() Transport { return TransportNative }
 
+// SessionPersistent: a paseo agent survives between dispatches by id when a
+// follow-up sender (`paseo send`) is wired — the session-affinity gate.
+func (c *paseoController) SessionPersistent() bool { return c.sender != nil }
+
 // Initialize reports paseo's native capabilities. paseo owns the whole session
 // lifecycle, accepts a conductor-provisioned worktree as the agent cwd, and can
 // hand a live agent off to a human to drive.

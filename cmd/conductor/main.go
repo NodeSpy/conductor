@@ -388,10 +388,14 @@ func cmdRun(args []string) error {
 	// Shared "never reap" set for interactive hand-off agents: the engine registers
 	// a background step's agent at launch; the reaper skips anything in it.
 	hold := dispatch.NewHoldSet(filepath.Join(filepath.Dir(cfg.Store.StateFile), "holds.json"))
+	// Session affinity: agents whose profile carries a session: block get one
+	// live session per rendered key, shared across triggers, persisted in
+	// affinity.json, resumed after restart, held from the reaper while bound.
+	affinity := controller.NewAffinity(reg, st, cfg, hold.Add, hold.Remove, logf)
 	engOpts := engine.Options{
 		Config: cfg, Store: st, Dispatch: disp, Controllers: reg, Broker: broker, Handoffs: handoffs,
 		Notifier: notifier, Author: gitAuthor(), UserToken: writeTok, ReadToken: readTok, Log: logf,
-		RefreshAppToken: refreshAppToken(igs), Hold: hold, PausePath: pausePath(cfg),
+		RefreshAppToken: refreshAppToken(igs), Hold: hold, Affinity: affinity, PausePath: pausePath(cfg),
 	}
 	if stack != nil {
 		engOpts.Flow = stack.Runner
