@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -200,8 +201,9 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	stepsOut := map[string]any{}
 	data["steps"] = stepsOut
 	for id, out := range run.Outputs { // restore checkpointed outputs (resume)
-		data[id] = anyMap(out)
-		stepsOut[id] = map[string]any{"outputs": out}
+		restored := r.restoreOutputs(ctx, t, spec.Steps, id, out, data)
+		data[id] = restored
+		stepsOut[id] = map[string]any{"outputs": restored}
 	}
 
 	shadow = shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow)
@@ -285,7 +287,7 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 			if !ok {
 				r.audit(map[string]any{"event": "step_skipped", "repo": t.Target.Repo,
 					"number": t.Target.Number, "kind": t.Kind, "step": id, "if": step.If})
-				r.checkpoint(run, i, id, nil, checkpoint)
+				r.checkpoint(run, i, id, step, nil, checkpoint)
 				continue
 			}
 		}
@@ -303,7 +305,7 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 				r.Log("%s step %s failed (continue_on_error): %v", flowTag(t), id, err)
 				outputs = map[string]any{"error": err.Error(), "failed": true}
 				r.recordOutputs(data, id, outputs)
-				r.checkpoint(run, i, id, outputs, checkpoint)
+				r.checkpoint(run, i, id, step, outputs, checkpoint)
 				continue
 			}
 			return &stepError{id: id, err: err}
@@ -317,7 +319,7 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 		r.audit(entry)
 		// Step-done hooks see the step's own output (position-scoped).
 		r.runHooks(ctx, t, step.Hooks, "done", data, "step "+id)
-		r.checkpoint(run, i, id, outputs, checkpoint)
+		r.checkpoint(run, i, id, step, outputs, checkpoint)
 	}
 	return nil
 }
@@ -334,8 +336,10 @@ func (r *Runner) recordOutputs(data map[string]any, id string, outputs map[strin
 	}
 }
 
-// checkpoint advances the run past a completed top-level step.
-func (r *Runner) checkpoint(run *store.WorkflowRun, i int, id string, outputs map[string]any, active bool) {
+// checkpoint advances the run past a completed top-level step. Outputs are
+// scrubbed before they touch disk: tainted values (vault reads) never
+// persist cleartext — see scrubOutputs.
+func (r *Runner) checkpoint(run *store.WorkflowRun, i int, id string, step config.Step, outputs map[string]any, active bool) {
 	if !active || run.ID == "" {
 		return
 	}
@@ -344,9 +348,69 @@ func (r *Runner) checkpoint(run *store.WorkflowRun, i int, id string, outputs ma
 		if run.Outputs == nil {
 			run.Outputs = map[string]map[string]any{}
 		}
-		run.Outputs[id] = outputs
+		run.Outputs[id] = r.scrubOutputs(step, outputs)
 	}
 	_ = r.Store.PutRun(*run)
+}
+
+// reresolveMarker flags a checkpointed step whose outputs were secret
+// material: the values are NOT on disk; a resume re-runs the (idempotent,
+// read-only) verb to rebuild them.
+const reresolveMarker = "__reresolve__"
+
+// scrubOutputs returns the persistable form of a step's outputs: clean
+// outputs pass through; a tainted vault-read step persists only a re-resolve
+// marker (the resume re-reads the vault, so templating still works); other
+// tainted outputs persist REDACTED — the secret never reaches disk, at the
+// documented cost that resumed templates render the placeholder for those
+// exact values (see Secrets.md).
+func (r *Runner) scrubOutputs(step config.Step, outputs map[string]any) map[string]any {
+	if len(outputs) == 0 || r.Secrets == nil {
+		return outputs
+	}
+	red, ok := r.Secrets.RedactValue(outputs).(map[string]any)
+	if !ok || reflect.DeepEqual(red, outputs) {
+		return outputs // no tracked secret inside
+	}
+	if connName, _, _ := strings.Cut(step.Uses, "."); connName != "" {
+		if _, isVault := r.Cfg.Vaults[connName]; isVault {
+			return map[string]any{reresolveMarker: true}
+		}
+	}
+	return red
+}
+
+// restoreOutputs rebuilds one checkpointed step's outputs on resume: a
+// re-resolve marker re-runs the step's verb (a vault read) against the
+// restored scope; anything else restores as persisted.
+func (r *Runner) restoreOutputs(ctx context.Context, t core.Trigger, steps []config.Step, id string, out map[string]any, data map[string]any) map[string]any {
+	if out == nil || out[reresolveMarker] != true {
+		return anyMap(out)
+	}
+	for i, s := range steps {
+		if stepID(s, i) != id || s.Uses == "" {
+			continue
+		}
+		connName, verb, _ := strings.Cut(s.Uses, ".")
+		in, ok := r.Conns.Get(connName)
+		if !ok {
+			break
+		}
+		merged := connector.MergeOptions(in.DefaultOptions, s.Options)
+		rendered, err := renderOptions(merged, data)
+		if err != nil {
+			r.Log("%s resume: re-resolve %s options: %v", flowTag(t), id, err)
+			break
+		}
+		fresh, err := in.InvokeFinal(ctx, verb, rendered)
+		if err != nil {
+			r.Log("%s resume: re-resolve %s: %v", flowTag(t), id, err)
+			break
+		}
+		r.auditVerb(t, connName, verb, map[string]any{"resume_reresolve": id}, "ok", nil)
+		return fresh
+	}
+	return map[string]any{}
 }
 
 func (r *Runner) finishRun(run store.WorkflowRun) {

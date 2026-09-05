@@ -6,11 +6,17 @@ import (
 	"strings"
 	"testing"
 
+	"encoding/json"
 	"github.com/NodeSpy/conductor/internal/config"
+	"os"
+	"path/filepath"
+
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/vaults"
 )
 
 // planCfg builds a config with an agent_authored policy block.
@@ -494,5 +500,118 @@ policy:
 	runTriggerWithRun(rig3, run3, newTrigger("ping", nil), mustSpec(t, planSpec))
 	if failed, errStr := rig3.workflowFailed(); !failed || !strings.Contains(errStr, "not in policy.agent_authored.allow") {
 		t.Fatalf("resume must re-guard: %v %q", failed, errStr)
+	}
+}
+
+// REGRESSION (audit finding #4): a vault-read value NEVER persists cleartext
+// in a checkpoint. The committed step stores a re-resolve marker instead,
+// and a resume re-reads the vault so later steps' templating still sees the
+// real value.
+func TestCheckpointNeverPersistsVaultValues(t *testing.T) {
+	t.Cleanup(vaults.Reset)
+	vaultDir := t.TempDir()
+	const secretVal = "hunter2-cleartext-secret"
+	if err := os.WriteFile(filepath.Join(vaultDir, "apikey"), []byte(secretVal), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+vaults:
+  hv: { type: file, dir: `+vaultDir+` }
+`)
+	// Production shares ONE secrets resolver between the connector registry
+	// (whose vault reads Track values) and the runner (whose checkpoint
+	// scrub Redacts them) — mirror that here.
+	shared := testSecrets(nil)
+	reg, err := connector.Build(cfg, connector.Deps{Secrets: shared, Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeState(t, "svc")
+	rig := newTestRunner(t, cfg, reg)
+	rig.Runner.Secrets = shared
+
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - id: r
+    uses: hv.read
+    options: { key: apikey }
+  - id: use
+    uses: svc.post
+    options: { text: "got {{.r.value}}" }
+`)
+	run := emptyRun()
+	run.ID = "flow:ping:o/r#7"
+	runTriggerWithRun(rig, run, newTrigger("ping", nil), spec)
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("workflow failed: %s", errStr)
+	}
+	// The step itself saw the real value (templating unbroken live).
+	calls := fake.snapshot()
+	if len(calls) != 1 || calls[0].Opts["text"] != "got "+secretVal {
+		t.Fatalf("live templating: %+v", calls)
+	}
+	// NOTHING persisted carries the secret; the vault step persisted a
+	// re-resolve marker.
+	rig.Store.mu.Lock()
+	putLog := append([]store.WorkflowRun{}, rig.Store.putLog...)
+	rig.Store.mu.Unlock()
+	if len(putLog) == 0 {
+		t.Fatal("expected checkpoints")
+	}
+	for _, rec := range putLog {
+		b, _ := json.Marshal(rec.Outputs)
+		if strings.Contains(string(b), secretVal) {
+			t.Fatalf("vault value persisted cleartext: %s", b)
+		}
+	}
+	last := putLog[len(putLog)-1]
+	if last.Outputs["r"] == nil || last.Outputs["r"][reresolveMarker] != true {
+		t.Fatalf("vault step must checkpoint a re-resolve marker: %+v", last.Outputs)
+	}
+
+	// RESUME: restore from the marker — the vault is re-read and the next
+	// step's template sees the real value again.
+	fake2 := newFakeState(t, "svc")
+	rig2 := newTestRunner(t, cfg, reg)
+	rig2.Runner.Secrets = shared
+	resume := emptyRun()
+	resume.ID = "flow:ping:o/r#7"
+	resume.StepIndex = 1
+	resume.Outputs = map[string]map[string]any{"r": {reresolveMarker: true}}
+	runTriggerWithRun(rig2, resume, newTrigger("ping", nil), spec)
+	if failed, errStr := rig2.workflowFailed(); failed {
+		t.Fatalf("resume failed: %s", errStr)
+	}
+	calls = fake2.snapshot()
+	if len(calls) != 1 || calls[0].Opts["text"] != "got "+secretVal {
+		t.Fatalf("resume must re-resolve the vault value: %+v", calls)
+	}
+
+	// Non-vault outputs that happen to CONTAIN a tracked secret persist
+	// redacted (never cleartext), by design at the cost of resume templating
+	// for those exact values.
+	fake3 := newFakeState(t, "svc")
+	fake3.mu.Lock()
+	fake3.outputs = map[string]map[string]any{"post": {"id": 1, "echo": secretVal}}
+	fake3.mu.Unlock()
+	rig3 := newTestRunner(t, cfg, reg)
+	rig3.Runner.Secrets = shared
+	run3 := emptyRun()
+	run3.ID = "flow:ping:o/r#8"
+	runTriggerWithRun(rig3, run3, newTrigger("ping", nil), mustSpec(t, `
+on: svc.ping
+steps: [ { id: echoer, uses: svc.post, options: { text: t } } ]
+`))
+	rig3.Store.mu.Lock()
+	putLog3 := append([]store.WorkflowRun{}, rig3.Store.putLog...)
+	rig3.Store.mu.Unlock()
+	for _, rec := range putLog3 {
+		b, _ := json.Marshal(rec.Outputs)
+		if strings.Contains(string(b), secretVal) {
+			t.Fatalf("tracked secret persisted cleartext in non-vault output: %s", b)
+		}
 	}
 }

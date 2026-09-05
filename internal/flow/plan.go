@@ -310,7 +310,7 @@ func (r *Runner) runPlan(ctx context.Context, t core.Trigger, agentName, runID, 
 func (r *Runner) runPlanState(ctx context.Context, t core.Trigger, pol *config.AgentAuthoredPolicy, st *planState, res guardResult, runID, stepID string, shadow bool) (map[string]any, error) {
 	if !shadow && runID != "" && stepID != "" && r.Store != nil {
 		st.persist = func() {
-			if err := r.Store.PutPlan(planRecord(st, runID, stepID)); err != nil {
+			if err := r.Store.PutPlan(r.planRecord(st, runID, stepID)); err != nil {
 				r.Log("%s plan checkpoint: %v", flowTag(t), err)
 			}
 		}
@@ -323,15 +323,22 @@ func (r *Runner) runPlanState(ctx context.Context, t core.Trigger, pol *config.A
 	return planOutputs(st, res), nil
 }
 
-// planRecord snapshots a plan state for persistence.
-func planRecord(st *planState, runID, stepID string) store.PlanRecord {
+// planRecord snapshots a plan state for persistence, with the same taint
+// scrub as workflow checkpoints: a committed vault read persists a
+// re-resolve marker, other tainted values persist redacted — secrets never
+// reach plans.json cleartext.
+func (r *Runner) planRecord(st *planState, runID, stepID string) store.PlanRecord {
 	raw, _ := yaml.Marshal(st.steps)
+	stepByID := map[string]config.Step{}
+	for _, c := range st.committed {
+		stepByID[c.id] = c.step
+	}
 	outputs := map[string]map[string]any{}
 	if so, ok := st.scope["steps"].(map[string]any); ok {
 		for id, v := range so {
 			if m, ok := v.(map[string]any); ok {
 				if out, ok := m["outputs"].(map[string]any); ok {
-					outputs[id] = out
+					outputs[id] = r.scrubOutputs(stepByID[id], out)
 				}
 			}
 		}
@@ -369,7 +376,7 @@ func (r *Runner) resumePlan(ctx context.Context, t core.Trigger, rec store.PlanR
 		scope:     r.planScope(t, rec.Agent),
 	}
 	for id, out := range rec.Outputs {
-		r.recordOutputs(st.scope, id, out)
+		r.recordOutputs(st.scope, id, r.restoreOutputs(ctx, t, steps, id, out, st.scope))
 	}
 	// Committed steps are restored for scope/audit purposes but NOT for
 	// compensation — their compensate: actions already ran or will only run

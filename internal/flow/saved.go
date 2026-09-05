@@ -120,7 +120,7 @@ func (s *SavedStore) save() error {
 		return err
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, s.path); err != nil {

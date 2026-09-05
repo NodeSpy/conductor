@@ -143,4 +143,24 @@ If the vault file might be committed (even publicly):
   from history even after the file is deleted — rotate the secrets it
   sealed.
 
+## Redaction, state files, and their limits
+
+Everything conductor persists (state/runs/sessions/affinity/plans, the
+audit log, holds, saved workflows, memory files) is written `0600`. Tainted
+values never persist cleartext in a workflow checkpoint: a committed
+`<vault>.read` step stores a **re-resolve marker** — the resume re-reads the
+vault, so later steps' templates still see the real value — and any other
+checkpointed output that contains a tracked secret persists **redacted**
+(the secret stays off disk; a resumed template reads the placeholder for
+those exact values, so route secrets through vault-read steps rather than
+echoing them through code/verb outputs).
+
+Know the limitation: log/audit/checkpoint redaction is **exact-substring**
+matching of tracked values. A secret that was transformed (base64,
+concatenated, split across values, re-encoded by a remote API) is no longer
+recognized. Redaction is a seatbelt, not the guardrail — the structural
+controls (`policy.agent_authored`'s allowlist and `no_secret_egress` gate,
+plan scopes carrying no ambient secrets) are what actually keep secret
+material from leaving.
+
 Related: [[Configuration]] · [[Connectors]] · [[Commands]] · [[Migration]]

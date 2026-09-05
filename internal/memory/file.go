@@ -77,7 +77,7 @@ func (b dirBackend) Put(e Entry) error {
 	}
 	content := "---\n" + string(head) + "---\n\n" + strings.TrimSpace(e.Text) + "\n"
 	tmp := b.path(e.ID) + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, b.path(e.ID))

@@ -25,7 +25,7 @@ func openAudit(path string, maxSize int64) (*auditLog, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -56,10 +56,10 @@ func (a *auditLog) write(entry map[string]any) {
 func (a *auditLog) rotate() {
 	_ = a.f.Close()
 	_ = os.Rename(a.path, a.path+".1")
-	f, err := os.OpenFile(a.path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	f, err := os.OpenFile(a.path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		// Best-effort: reopen in append mode so we don't lose the writer.
-		f, _ = os.OpenFile(a.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		f, _ = os.OpenFile(a.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	}
 	a.f = f
 	a.size = 0
