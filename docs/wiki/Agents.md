@@ -29,6 +29,11 @@ agents:
     #   One or two sentences, plain and direct.   #   (unset -> that default, "" -> none, text -> this)
     # memory: true                    # opt into shared-memory prompt injection (see below); or a
                                       #   filter: memory: { scopes: [global, repo], tags: [ci], limit: 10 }
+    # session:                        # session affinity: one live session per rendered key,
+    #   key: "{{.repo}}#{{.pr}}"      #   shared across every trigger using this agent (see below)
+    #   idle_ttl: 12h
+    #   max_lifetime: 7d
+    #   end_on: [ gh.pr_closed, gh.merged ]
   planner:                            # cheaper/faster model for planning/triage steps
     provider: claude
     model: claude-haiku-4-5
@@ -49,6 +54,7 @@ agents:
 | `controller` | Name of a `controllers.<name>` entry to run this agent on instead of the built-in `paseo` runtime. See [[Controllers]]. |
 | `guidance` | Per-agent tone/format text appended to this agent's prompts. Unset falls through to the top-level `agent_guidance`; `""` disables guidance entirely for this agent; any text replaces the default. |
 | `memory` | Opt this agent into shared-memory prompt injection ([[Memory]]). `true` appends the global + target-repo + own-agent-scoped memories (newest first, capped) through the same path as `guidance`; a map `{ scopes, tags, limit }` narrows it. Absent → no injection, no token cost. Needs a top-level `memory:` section. |
+| `session` | Session affinity: `{ key, idle_ttl, max_lifetime, end_on }` binds a live session to the rendered `key` — every event resolving to the same value reaches the same agent as a follow-up. Absent → a fresh agent per dispatch. See below. |
 
 ## Behavior
 
@@ -86,6 +92,63 @@ agents:
 - `archive_when_done: true` agents are still protected from premature cleanup: the reaper skips one
   that's paused on a permission prompt, and an agent can hold itself alive by creating a
   `.paseo-hold` marker in its worktree (guidance for this is added to its prompt automatically).
+
+## Session affinity (`session:`) — one agent per PR
+
+By default each dispatch gets a fresh agent. A `session:` block instead
+binds a live agent session to the rendered `key`, and every event resolving
+to the same value — across ALL triggers that dispatch this agent — reaches
+the SAME session as a follow-up prompt with full prior context:
+
+```yaml
+agents:
+  reviewer:
+    provider: claude
+    runtime: paseo
+    session:
+      key: "{{.repo}}#{{.pr}}"            # same value → same live session
+      idle_ttl: 12h                        # reap after this long idle (default 24h)
+      max_lifetime: 7d                     # hard age cap (default 7d)
+      end_on: [ gh.pr_closed, gh.merged ]  # evict the moment the work is done
+
+triggers:
+  - on: [ gh.new_comment, gh.changes_requested, gh.failing_checks ]
+    steps:
+      - type: agent
+        agent: reviewer
+        prompt: "New activity ({{.kind}}) on {{.repo}}#{{.pr}} — continue."
+```
+
+The first event for a PR spawns the session; a later comment, review-change,
+or check failure on the same PR arrives as a follow-up — the agent keeps the
+whole conversation. How it behaves:
+
+- **Shared pool.** The registry is keyed `(agent, key value)`, global across
+  triggers and event types.
+- **Serialized per key.** At most one prompt in flight per session;
+  concurrent same-key events queue — the `group:` one-run-per-key guarantee,
+  extended across the session's life.
+- **Durable.** The key→session map persists in conductor's own state
+  (`affinity.json`, beside audit/dedup); after a restart or auto-update the
+  session resumes via the runtime's native handle (paseo re-binds the agent
+  id, ACP `session/load`). While bound, the agent is held from the reaper.
+- **Eviction.** Idle past `idle_ttl`, older than `max_lifetime`, or an
+  `end_on` event (matched as `<connector>.<kind>`, rendered against the
+  event's own context so it ends exactly that key's session). The next event
+  starts fresh. An `end_on` event must be one conductor receives — some
+  trigger listens on it.
+- **Runtime support.** Needs a session-persistent runtime — paseo or ACP.
+  One-shot `cli` runtimes fall back to a fresh agent per event; pair the
+  profile with `memory:` ([[Memory]]) for continuity there.
+- **vs `group:` and memory.** `group:` batches a burst into one run; memory
+  injects durable facts; session affinity reuses a live conversation. They
+  compose: group a burst, route it to the keyed session, with memory
+  injected when the session first spawns.
+
+Follow-up turns return `Queued` run refs: on paseo the prompt is delivered
+via `paseo send` (no captured output for later steps); an ACP follow-up
+returns the turn's output. A follow-up to a dead session (archived by hand)
+is detected, unbound, and replaced by a fresh spawn.
 
 ## Explanation
 

@@ -44,6 +44,14 @@ post-run with the run's provenance (the output contract), and an opted-in
 profile (`memory: true`) gets the scoped memories injected into its prompt —
 see [[Memory]].
 
+An agent step whose profile carries a `session:` block participates in
+**session affinity**: events rendering the same key reach one live agent as
+follow-up prompts instead of fresh spawns, across every trigger using that
+agent — see [[Agents]]. A follow-up returns `{ agent_id, ... }` like any
+agent step; on paseo its output is empty (the prompt is queued to the live
+agent), so steps that read the agent's structured output should not assume a
+keyed session.
+
 ## Context and scope
 
 Templates and `if:` conditions address:

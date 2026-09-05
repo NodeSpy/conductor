@@ -35,6 +35,34 @@ defaults from `config.example.yaml`.
         options: { repo: "{{.repo}}", number: "{{.pr}}", body: "Addressed {{.group.count}} comment(s)." } }
 ```
 
+## One live agent per PR (session affinity)
+
+Every event on a PR — comments, review changes, failing checks — reaches the
+same live agent as a follow-up, so it keeps the whole conversation. `group:`
+above batches one burst; `session:` extends the one-run-per-key idea across
+the PR's life ([[Agents]]):
+
+```yaml
+agents:
+  pr-agent:
+    provider: claude
+    memory: true                             # inject repo memories on first spawn
+    session:
+      key: "{{.repo}}#{{.pr}}"
+      idle_ttl: 12h
+      end_on: [ gh.pr_closed, gh.merged ]
+
+triggers:
+  - on: [ gh.new_comment, gh.changes_requested, gh.failing_checks ]
+    steps:
+      - type: agent
+        agent: pr-agent
+        prompt: "New activity ({{.kind}}) on {{.repo}}#{{.pr}} — continue where you left off."
+  - on: [ gh.pr_closed, gh.merged ]          # end_on events must be received to fire
+    steps:
+      - { uses: memory.remember, options: { text: "{{.repo}}#{{.pr}} finished ({{.kind}})", scope: repo } }
+```
+
 ## Review triage → draft → human ask → submit
 
 ```yaml

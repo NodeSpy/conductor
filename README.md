@@ -94,6 +94,11 @@ that changes the config schema migrates your file itself, with a backup.
   profile (provider/model/prompt posture). `runtimes:` replaces
   `controllers:` (which still loads); the paseo runtime's `bin:` replaces the
   global `paseo_bin`.
+  A profile's `session:` block adds **session affinity**: one live agent per
+  rendered key (`"{{.repo}}#{{.pr}}"`), shared across every trigger using
+  that agent — later events arrive as follow-ups with full prior context,
+  serialized per key, persisted across restarts, and evicted on idle/age or
+  an `end_on` event like `gh.pr_closed` (see the wiki's Agents page).
 - **Triggers** — `on:` / `filters:` / `steps:` / `hooks:`. Filters gate the
   event (keys come from the event's schema, all AND-ed); steps are the
   workflow; hooks are lifecycle actions. `on:` takes one source, a **list**

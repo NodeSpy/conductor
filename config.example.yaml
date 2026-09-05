@@ -280,6 +280,11 @@ agents:
     # memory: true          # inject shared memories (global + target repo + own scope)
     #                       #   into this agent's prompts; or a filter:
     #                       #   memory: { scopes: [global, repo], tags: [ci], limit: 10 }
+    # session:               # session affinity: one live session per key, shared across
+    #   key: "{{.repo}}#{{.pr}}"  #   ALL triggers using this agent — later same-key events
+    #   idle_ttl: 12h             #   arrive as follow-ups with full prior context. Persists
+    #   max_lifetime: 7d          #   across restarts; serialized per key. paseo/acp runtimes
+    #   end_on: [ gh.pr_closed, gh.merged ]  # evict when the work is done
   planner:
     provider: claude
     model: claude-haiku-4-5

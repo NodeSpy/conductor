@@ -39,4 +39,14 @@ degradation, interactive hand-offs — carries over from the controllers
 design unchanged; a runtime that owns an interactive surface is the default
 hand-off for background review steps ([[Hand-offs]]).
 
+## Session persistence
+
+An agent profile's `session:` block (session affinity — one live agent per
+key, see [[Agents]]) needs a runtime whose sessions survive between
+dispatches by id: **paseo** (follow-ups via `paseo send`; resume re-binds
+the agent id) and **acp** (follow-ups via `session/prompt`; resume via
+`session/load` where the agent negotiates it). One-shot runtimes (`cli`)
+don't participate — a `session:` profile on them silently stays
+fresh-per-event and leans on [[Memory]] for continuity.
+
 Related: [[Agents]] · [[Hosts]] · [[Hand-offs]] · [[Configuration]]

@@ -495,6 +495,32 @@ steps get `ctx.memory`, templates get `{{ memory "<scope>" <limit> }}`.
 Recall is tags + scope + substring + recency. Full model, verb tables, and
 the write paths: [[Memory]].
 
+## Session affinity (an agent's `session:`)
+
+An `agents:` profile may carry a `session:` block — session affinity. The
+agent's dispatches bind one live session per rendered key, shared across
+every trigger using that agent: a comment, a check failure, and a
+review-change on the same PR all reach the SAME agent as follow-up prompts
+with full prior context.
+
+```yaml
+agents:
+  reviewer:
+    provider: claude
+    session:
+      key: "{{.repo}}#{{.pr}}"
+      idle_ttl: 12h
+      max_lifetime: 7d
+      end_on: [ gh.pr_closed, gh.merged ]
+```
+
+Same-key prompts serialize (one in flight; bursts queue), the key→session
+map persists in conductor's own state and resumes across restarts/
+auto-updates, and sessions evict on idle/age/end_on. Needs a
+session-persistent runtime (paseo/ACP); one-shot runtimes stay
+fresh-per-event and lean on [[Memory]]. Full behavior and the worked
+one-agent-per-PR example: [[Agents]].
+
 ## Conductor itself (`conductor.*`) — events and verbs
 
 Conductor is a built-in connector (always available; the name is reserved).
