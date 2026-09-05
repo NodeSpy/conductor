@@ -49,7 +49,7 @@ func TestACPMemoryToolInjection(t *testing.T) {
 		t.Fatalf("mcp servers: %+v", got)
 	}
 	want := []string{"mcp", "memory", "--socket", "/data/memory.sock",
-		"--agent", "fixer", "--repo", "o/r", "--trigger", "merge_conflict"}
+		"--agent", "fixer", "--repo", "o/r", "--trigger", "merge_conflict", "--number", "7"}
 	if len(got[0].Args) != len(want) {
 		t.Fatalf("args: %v, want %v", got[0].Args, want)
 	}

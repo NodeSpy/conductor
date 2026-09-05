@@ -15,9 +15,10 @@ import (
 // carries them.
 func cmdMCP(args []string) error {
 	if len(args) < 1 || args[0] != "memory" {
-		return fmt.Errorf("usage: conductor mcp memory --socket <path> [--agent <name>] [--repo <owner/repo>] [--trigger <kind>] [--run <id>]")
+		return fmt.Errorf("usage: conductor mcp memory --socket <path> [--agent <name>] [--repo <owner/repo>] [--trigger <kind>] [--run <id>] [--number <n>]")
 	}
 	var socket string
+	var number int
 	var src memory.Source
 	rest := args[1:]
 	for i := 0; i < len(rest); i++ {
@@ -39,6 +40,8 @@ func cmdMCP(args []string) error {
 			src.Trigger = next()
 		case "--run":
 			src.Run = next()
+		case "--number":
+			fmt.Sscanf(next(), "%d", &number)
 		default:
 			return fmt.Errorf("mcp memory: unknown flag %q", rest[i])
 		}
@@ -49,5 +52,5 @@ func cmdMCP(args []string) error {
 	call := func(req memory.IPCRequest) (memory.IPCResponse, error) {
 		return memory.IPCCall(socket, req)
 	}
-	return memory.ServeMCP(os.Stdin, os.Stdout, call, src)
+	return memory.ServeMCP(os.Stdin, os.Stdout, call, src, number)
 }

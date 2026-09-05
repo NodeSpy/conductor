@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -192,6 +193,9 @@ func (c *acpController) memoryServers(spec Spec) []acp.McpServer {
 	}
 	if kind := spec.Request.Trigger.Kind; kind != "" {
 		args = append(args, "--trigger", kind)
+	}
+	if n := spec.Request.Trigger.Target.Number; n > 0 {
+		args = append(args, "--number", strconv.Itoa(n))
 	}
 	return []acp.McpServer{{Name: "conductor-memory", Command: argv[0], Args: args}}
 }

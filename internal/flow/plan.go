@@ -13,6 +13,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/expr"
+	"github.com/NodeSpy/conductor/internal/memory"
 )
 
 // Agent-driven workflows (#36 §11): an agent programs conductor. Its final
@@ -261,6 +262,31 @@ func (r *Runner) runPlan(ctx context.Context, t core.Trigger, agentName string, 
 	}
 	return planOutputs(st, res), nil
 }
+
+// RunLiveStep executes ONE agent-authored step right now — the run_step
+// live tool (#36 §11). The step is validated and guarded exactly like a
+// plan: block; the trigger is reconstructed from the tool's baked-in
+// dispatch provenance, so key rendering and audit attribution match the
+// launching run.
+func (r *Runner) RunLiveStep(ctx context.Context, src memory.Source, number int, stepMap map[string]any) (map[string]any, error) {
+	steps, err := stepsFromAny([]any{stepMap})
+	if err != nil {
+		return nil, err
+	}
+	t := core.Trigger{
+		Source: "live", Instance: "live", Kind: src.Trigger,
+		Target: core.Target{Repo: src.Repo, Number: number, PR: number},
+	}
+	agent := src.Agent
+	if agent == "" {
+		agent = "live"
+	}
+	return r.runPlan(ctx, t, agent, steps, false)
+}
+
+// WorkflowCatalog exposes the workflow.list catalog (the workflow_list live
+// tool reads it through the daemon wiring).
+func (r *Runner) WorkflowCatalog() map[string]any { return r.workflowCatalog() }
 
 // planScope is the child scope a plan renders in: the trigger context, but
 // NO named secrets and NO preloaded vault values — agent-authored templates

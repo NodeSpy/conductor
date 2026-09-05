@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -17,15 +18,22 @@ import (
 // daemon serves next to its state file. The protocol is one JSON request
 // line per connection, one JSON response line back.
 
-// IPCRequest is one live-tool call: remember or recall (the live surface is
-// deliberately those two — forget/list stay on the audited verb surface).
+// IPCRequest is one live-tool call: the memory pair (remember/recall) plus
+// the agent-driven-workflow surface (#36 §11) — run_step executes ONE
+// agent-authored step through the flow runner under policy.agent_authored,
+// and workflow_list returns the choosable catalog.
 type IPCRequest struct {
-	Op        string   `json:"op"` // remember | recall
+	Op        string   `json:"op"` // remember | recall | run_step | workflow_list
 	Text      string   `json:"text,omitempty"`
 	Tags      []string `json:"tags,omitempty"`
 	Scope     string   `json:"scope,omitempty"`
 	Substring string   `json:"substring,omitempty"`
 	Limit     int      `json:"limit,omitempty"`
+	// Step is the run_step payload: one step in the normal grammar.
+	Step map[string]any `json:"step,omitempty"`
+	// Number is the dispatch target's PR/issue number (run_step's trigger
+	// reconstruction; baked into the tool flags like Source).
+	Number int `json:"number,omitempty"`
 	// Source is the dispatch provenance the daemon baked into the tool
 	// command's flags at injection time — the agent cannot spoof a different
 	// run's identity beyond what its own launch carried.
@@ -34,10 +42,40 @@ type IPCRequest struct {
 
 // IPCResponse is the daemon's reply.
 type IPCResponse struct {
-	OK      bool    `json:"ok"`
-	Error   string  `json:"error,omitempty"`
-	Entry   *Entry  `json:"entry,omitempty"`   // remember
-	Entries []Entry `json:"entries,omitempty"` // recall
+	OK      bool           `json:"ok"`
+	Error   string         `json:"error,omitempty"`
+	Entry   *Entry         `json:"entry,omitempty"`   // remember
+	Entries []Entry        `json:"entries,omitempty"` // recall
+	Result  map[string]any `json:"result,omitempty"`  // run_step / workflow_list
+}
+
+// LiveOps are the agent-driven-workflow handlers the daemon plugs in at boot
+// (the flow runner lives above this package). nil ops → those tools report
+// unavailable.
+type LiveOps struct {
+	// RunStep validates, guards (policy.agent_authored), and executes one
+	// agent-authored step, returning its outputs.
+	RunStep func(ctx context.Context, src Source, number int, step map[string]any) (map[string]any, error)
+	// ListWorkflows returns the workflow catalog (workflow.list's shape).
+	ListWorkflows func() map[string]any
+}
+
+var (
+	liveMu  sync.RWMutex
+	liveOps LiveOps
+)
+
+// SetLiveOps installs the run_step/workflow_list handlers (boot, tests).
+func SetLiveOps(ops LiveOps) {
+	liveMu.Lock()
+	liveOps = ops
+	liveMu.Unlock()
+}
+
+func getLiveOps() LiveOps {
+	liveMu.RLock()
+	defer liveMu.RUnlock()
+	return liveOps
 }
 
 // ListenSocket opens the daemon-side unix socket, replacing a stale one.
@@ -131,6 +169,29 @@ func handleIPC(m *Manager, req IPCRequest, audit func(map[string]any), log func(
 		aud(map[string]any{"event": "memory_recall", "via": "tool",
 			"agent": req.Source.Agent, "repo": req.Source.Repo, "count": len(entries)})
 		return IPCResponse{OK: true, Entries: entries}
+	case "run_step":
+		ops := getLiveOps()
+		if ops.RunStep == nil {
+			return IPCResponse{Error: "run_step: the live plan runner is not available on this daemon"}
+		}
+		if len(req.Step) == 0 {
+			return IPCResponse{Error: "run_step: step is required"}
+		}
+		out, err := ops.RunStep(context.Background(), req.Source, req.Number, req.Step)
+		if err != nil {
+			aud(map[string]any{"event": "plan_live_step", "via": "tool", "outcome": "failed",
+				"agent": req.Source.Agent, "repo": req.Source.Repo, "error": err.Error()})
+			return IPCResponse{Error: err.Error()}
+		}
+		aud(map[string]any{"event": "plan_live_step", "via": "tool", "outcome": "ok",
+			"agent": req.Source.Agent, "repo": req.Source.Repo})
+		return IPCResponse{OK: true, Result: out}
+	case "workflow_list":
+		ops := getLiveOps()
+		if ops.ListWorkflows == nil {
+			return IPCResponse{Error: "workflow_list: not available on this daemon"}
+		}
+		return IPCResponse{OK: true, Result: ops.ListWorkflows()}
 	}
 	return IPCResponse{Error: fmt.Sprintf("memory: unknown tool op %q", req.Op)}
 }

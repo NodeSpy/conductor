@@ -423,6 +423,17 @@ func cmdRun(args []string) error {
 				memory.SetToolCommand([]string{exe, "mcp", "memory", "--socket", sock})
 				logf("memory: live remember/recall tool on %s", sock)
 			}
+			// The agent-driven-workflow live surface rides the same socket:
+			// run_step executes one guarded step through the flow runner,
+			// workflow_list serves the choosable catalog.
+			if stack != nil {
+				runner := stack.Runner
+				memory.SetLiveOps(memory.LiveOps{
+					RunStep:       runner.RunLiveStep,
+					ListWorkflows: runner.WorkflowCatalog,
+				})
+				logf("memory: live run_step/workflow_list tools enabled")
+			}
 		}
 	}
 

@@ -267,13 +267,14 @@ func Active() *Manager {
 	return active
 }
 
-// Reset clears the manager and tool command (tests, shutdown).
+// Reset clears the manager, tool command, and live ops (tests, shutdown).
 func Reset() {
 	regMu.Lock()
 	prev := active
 	active = nil
 	toolCmd = nil
 	regMu.Unlock()
+	SetLiveOps(LiveOps{})
 	if prev != nil {
 		_ = prev.Close()
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/memory"
 )
 
 // planCfg builds a config with an agent_authored policy block.
@@ -346,5 +347,39 @@ policy:
 func planDispatch(output string) func(context.Context, dispatch.Request) (dispatch.RunRef, error) {
 	return func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
 		return dispatch.RunRef{AgentID: "a1", Output: output}, nil
+	}
+}
+
+// TestRunLiveStep: the run_step live tool executes one guarded step against
+// a trigger reconstructed from the tool's provenance — the same allowlist
+// applies as for a plan: block.
+func TestRunLiveStep(t *testing.T) {
+	cfg := planCfg(t, allowPolicy)
+	reg := buildRegistry(t, cfg)
+	fake := newFakeState(t, "svc")
+	rig := newTestRunner(t, cfg, reg)
+	src := memory.Source{Agent: "planner", Repo: "o/r", Trigger: "new_comment"}
+
+	out, err := rig.Runner.RunLiveStep(context.Background(), src, 7,
+		map[string]any{"id": "hi", "uses": "svc.post", "options": map[string]any{"text": "live {{.repo}}#{{.pr}}"}})
+	if err != nil {
+		t.Fatalf("live step: %v", err)
+	}
+	if out["deterministic"] != true || out["executed"] != 1 {
+		t.Fatalf("live outputs: %+v", out)
+	}
+	if calls := fake.snapshot(); len(calls) != 1 || calls[0].Opts["text"] != "live o/r#7" {
+		t.Fatalf("live call: %+v", calls)
+	}
+	// The guard applies identically.
+	_, err = rig.Runner.RunLiveStep(context.Background(), src, 7,
+		map[string]any{"uses": "svc.ask", "options": map[string]any{"prompt": "p"}})
+	if err == nil || !strings.Contains(err.Error(), "not in policy.agent_authored.allow") {
+		t.Fatalf("live guard: %v", err)
+	}
+	// And the audit attributes the plan to the live agent.
+	plans := rig.Store.auditsWithEvent("plan")
+	if len(plans) != 2 || plans[0]["agent"] != "planner" {
+		t.Fatalf("live audit: %+v", plans)
 	}
 }

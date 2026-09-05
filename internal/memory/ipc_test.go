@@ -98,7 +98,7 @@ func mcpPipe(t *testing.T, call MCPCaller, src Source) (func(msg string), func()
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	done := make(chan error, 1)
-	go func() { done <- ServeMCP(inR, outW, call, src) }()
+	go func() { done <- ServeMCP(inR, outW, call, src, 7) }()
 	t.Cleanup(func() {
 		inW.Close()
 		if err := <-done; err != nil {
@@ -153,10 +153,10 @@ func TestMCPServerLoop(t *testing.T) {
 	if r := recv(); r["result"] == nil {
 		t.Fatalf("ping: %+v", r)
 	}
-	// tools/list publishes both tools.
+	// tools/list publishes the memory pair + the plan surface.
 	send(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
 	tools := recv()["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 2 {
+	if len(tools) != 4 {
 		t.Fatalf("tools: %+v", tools)
 	}
 	if name := tools[0].(map[string]any)["name"]; name != "memory_remember" {
@@ -206,5 +206,34 @@ func TestMCPServerLoop(t *testing.T) {
 	send(`{"jsonrpc":"2.0","id":9,"method":"ping"}`)
 	if r := recv(); r["result"] == nil {
 		t.Fatalf("loop must survive a parse error: %+v", r)
+	}
+
+	// run_step routes through the live ops with provenance + number; without
+	// a wired runner it fails in-band.
+	send(`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"run_step","arguments":{"step":{"uses":"svc.post"}}}}`)
+	r = recv()["result"].(map[string]any)
+	if r["isError"] != true || !strings.Contains(r["content"].([]any)[0].(map[string]any)["text"].(string), "not available") {
+		t.Fatalf("unwired run_step: %+v", r)
+	}
+	SetLiveOps(LiveOps{
+		RunStep: func(_ context.Context, src Source, number int, step map[string]any) (map[string]any, error) {
+			if src.Agent != "gemini" || number != 7 || step["uses"] != "svc.post" {
+				t.Errorf("run_step wiring: src=%+v number=%d step=%v", src, number, step)
+			}
+			return map[string]any{"executed": 1}, nil
+		},
+		ListWorkflows: func() map[string]any { return map[string]any{"count": 2} },
+	})
+	t.Cleanup(func() { SetLiveOps(LiveOps{}) })
+	send(`{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"run_step","arguments":{"step":{"uses":"svc.post"}}}}`)
+	r = recv()["result"].(map[string]any)
+	text = r["content"].([]any)[0].(map[string]any)["text"].(string)
+	if r["isError"] != false || !strings.Contains(text, `"executed": 1`) {
+		t.Fatalf("run_step: %+v", r)
+	}
+	send(`{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"workflow_list","arguments":{}}}`)
+	r = recv()["result"].(map[string]any)
+	if !strings.Contains(r["content"].([]any)[0].(map[string]any)["text"].(string), `"count": 2`) {
+		t.Fatalf("workflow_list: %+v", r)
 	}
 }

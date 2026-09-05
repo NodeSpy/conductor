@@ -39,7 +39,7 @@ type mcpError struct {
 
 // ServeMCP runs the stdio loop until r reaches EOF. src is the dispatch
 // provenance baked into the launch flags; every remember carries it.
-func ServeMCP(r io.Reader, w io.Writer, call MCPCaller, src Source) error {
+func ServeMCP(r io.Reader, w io.Writer, call MCPCaller, src Source, number int) error {
 	in := bufio.NewScanner(r)
 	in.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	out := bufio.NewWriter(w)
@@ -92,7 +92,7 @@ func ServeMCP(r io.Reader, w io.Writer, call MCPCaller, src Source) error {
 				return err
 			}
 		case "tools/call":
-			result := mcpToolCall(msg.Params, call, src)
+			result := mcpToolCall(msg.Params, call, src, number)
 			if err := reply(msg.ID, result, nil); err != nil {
 				return err
 			}
@@ -149,12 +149,28 @@ func mcpTools() []map[string]any {
 				},
 			},
 		},
+		{
+			"name":        "run_step",
+			"description": "Author and run ONE conductor workflow step right now (the normal step grammar: uses/run/type/workflow…). Validated and guarded by policy.agent_authored before it runs; returns the step's outputs. Use it to build a plan interactively; batch the rest as a ```plan block in your final output.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"step": map[string]any{"type": "object", "description": "one step, e.g. {\"uses\": \"gh.comment\", \"options\": {…}}"},
+				},
+				"required": []string{"step"},
+			},
+		},
+		{
+			"name":        "workflow_list",
+			"description": "The workflow catalog: every config + saved workflow's name, description, inputs, and health — pick a fit and run it (a workflow step via run_step, or workflow.run in a plan) instead of authoring from scratch.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
+		},
 	}
 }
 
 // mcpToolCall executes one tools/call. Tool failures come back as an
 // isError result (the MCP convention), not a protocol error.
-func mcpToolCall(params json.RawMessage, call MCPCaller, src Source) map[string]any {
+func mcpToolCall(params json.RawMessage, call MCPCaller, src Source, number int) map[string]any {
 	fail := func(msg string) map[string]any {
 		return map[string]any{
 			"content": []map[string]any{{"type": "text", "text": msg}},
@@ -164,11 +180,12 @@ func mcpToolCall(params json.RawMessage, call MCPCaller, src Source) map[string]
 	var p struct {
 		Name string `json:"name"`
 		Args struct {
-			Text      string   `json:"text"`
-			Tags      []string `json:"tags"`
-			Scope     string   `json:"scope"`
-			Substring string   `json:"substring"`
-			Limit     int      `json:"limit"`
+			Text      string         `json:"text"`
+			Tags      []string       `json:"tags"`
+			Scope     string         `json:"scope"`
+			Substring string         `json:"substring"`
+			Limit     int            `json:"limit"`
+			Step      map[string]any `json:"step"`
 		} `json:"arguments"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -176,13 +193,18 @@ func mcpToolCall(params json.RawMessage, call MCPCaller, src Source) map[string]
 	}
 	req := IPCRequest{
 		Text: p.Args.Text, Tags: p.Args.Tags, Scope: p.Args.Scope,
-		Substring: p.Args.Substring, Limit: p.Args.Limit, Source: src,
+		Substring: p.Args.Substring, Limit: p.Args.Limit,
+		Step: p.Args.Step, Number: number, Source: src,
 	}
 	switch p.Name {
 	case "memory_remember":
 		req.Op = "remember"
 	case "memory_recall":
 		req.Op = "recall"
+	case "run_step":
+		req.Op = "run_step"
+	case "workflow_list":
+		req.Op = "workflow_list"
 	default:
 		return fail(fmt.Sprintf("unknown tool %q", p.Name))
 	}
@@ -204,6 +226,9 @@ func mcpToolCall(params json.RawMessage, call MCPCaller, src Source) map[string]
 			b, _ := json.MarshalIndent(resp.Entries, "", "  ")
 			text = string(b)
 		}
+	case "run_step", "workflow_list":
+		b, _ := json.MarshalIndent(resp.Result, "", "  ")
+		text = string(b)
 	}
 	return map[string]any{
 		"content": []map[string]any{{"type": "text", "text": text}},
