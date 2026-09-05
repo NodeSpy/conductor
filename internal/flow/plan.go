@@ -193,6 +193,35 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 					return err
 				}
 			}
+			// Step hooks are verb calls — validated like any verb step.
+			for hi, h := range step.Hooks {
+				hw := fmt.Sprintf("%s hook[%d]", w, hi)
+				switch h.At {
+				case "start", "done", "fail":
+				default:
+					return fmt.Errorf("%s: at must be start|done|fail, got %q", hw, h.At)
+				}
+				connName, verb, okCut := strings.Cut(h.Uses, ".")
+				if !okCut || connName == "" || verb == "" {
+					return fmt.Errorf("%s: `uses: %s` must be <connector>.<verb>", hw, h.Uses)
+				}
+				in, ok := reg.Get(connName)
+				if !ok {
+					return fmt.Errorf("%s: unknown connector %q", hw, connName)
+				}
+				vd, ok := in.Decl.Verb(verb)
+				if !ok {
+					return fmt.Errorf("%s: connector %q has no verb %q", hw, connName, verb)
+				}
+				if err := checkStoreSelector(cfg, hw, connName, h.Options); err != nil {
+					return err
+				}
+				if !vd.Open {
+					if err := connector.ValidateCallOptions(hw+" options", vd.Options, h.Options, in.DefaultOptions); err != nil {
+						return err
+					}
+				}
+			}
 		}
 		return nil
 	}
@@ -349,8 +378,15 @@ func (r *Runner) executePlan(ctx context.Context, t core.Trigger, pol *config.Ag
 			st.tokens += len(step.Prompt) / 4
 		}
 
+		// Plan-step hooks fire like any workflow step's (they were guarded
+		// with the plan — see guardPlan's hook walk).
+		r.runHooks(ctx, t, step.Hooks, "start", st.scope, "plan step "+id)
 		outputs, err := r.execStepWithFlow(ctx, t, step, "plan:"+id, st.scope, shadow)
 		if err != nil {
+			fdata := cloneData(st.scope)
+			fdata["error"] = err.Error()
+			fdata["failed_step"] = id
+			r.runHooks(ctx, t, step.Hooks, "fail", fdata, "plan step "+id)
 			r.audit(map[string]any{"event": "plan_step", "repo": t.Target.Repo, "number": t.Target.Number,
 				"agent": st.agent, "step": id, "outcome": "failed", "error": err.Error()})
 			if step.ContinueOnError {
@@ -364,6 +400,7 @@ func (r *Runner) executePlan(ctx context.Context, t core.Trigger, pol *config.Ag
 			continue // a revision was spliced in; retry from st.next
 		}
 		r.recordOutputs(st.scope, id, outputs)
+		r.runHooks(ctx, t, step.Hooks, "done", st.scope, "plan step "+id)
 		if step.Type == "agent" {
 			if b, jerr := json.Marshal(outputs); jerr == nil {
 				st.tokens += len(b) / 4

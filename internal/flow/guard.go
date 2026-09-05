@@ -115,6 +115,37 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 				}
 				*step.Compensate = comp[0] // keep the guard's host/identity rewrites
 			}
+			// Step hooks are verb calls too — held to exactly the same
+			// allow/approve rules, counted against max_steps, and included
+			// in the egress scan. Otherwise an allowlisted step smuggles any
+			// verb out through `hooks: [{at: done, uses: …}]`.
+			for hi := range step.Hooks {
+				h := &step.Hooks[hi]
+				hw := fmt.Sprintf("%s hook[%d]", w, hi)
+				res.declaredSteps++
+				if !pol.TrustFull() {
+					switch {
+					case matchAny(pol.Approve, h.Uses):
+						res.needsApproval = true
+						res.approvalWhy = append(res.approvalWhy, fmt.Sprintf("%s: %q is approve-gated", hw, h.Uses))
+					case matchAny(pol.Allow, h.Uses):
+						// admitted freely
+					default:
+						return fmt.Errorf("%s: %q is not in policy.agent_authored.allow (allowed: %s)",
+							hw, h.Uses, patternList(pol.Allow, pol.Approve))
+					}
+				}
+				if pol.Identity != "" {
+					injectHookIdentity(reg, h, pol.Identity)
+				}
+				if hookReadsSecrets(cfg, h) {
+					secretAccess = true
+				}
+				connName, _, _ := strings.Cut(h.Uses, ".")
+				if !internalConnectors[connName] {
+					externalTouch = true
+				}
+			}
 			if step.EscalateTo != "" && step.EscalateTo != "agent" {
 				return fmt.Errorf("%s: escalate_to must be \"agent\", got %q", w, step.EscalateTo)
 			}
@@ -210,6 +241,64 @@ func injectIdentity(reg *connector.Registry, step *config.Step, identity string)
 		step.Options = map[string]any{}
 	}
 	step.Options["as"] = identity
+}
+
+// injectHookIdentity mirrors injectIdentity for a hook's verb call.
+func injectHookIdentity(reg *connector.Registry, h *config.Hook, identity string) {
+	connName, verb, _ := strings.Cut(h.Uses, ".")
+	in, ok := reg.Get(connName)
+	if !ok || in.Decl == nil {
+		return
+	}
+	vd, ok := in.Decl.Verb(verb)
+	if !ok {
+		return
+	}
+	if _, takesAs := vd.Options["as"]; !takesAs {
+		return
+	}
+	if h.Options == nil {
+		h.Options = map[string]any{}
+	}
+	h.Options["as"] = identity
+}
+
+// hookReadsSecrets scans a hook's verb + templated fields for secret access.
+func hookReadsSecrets(cfg *config.Config, h *config.Hook) bool {
+	if connName, _, _ := strings.Cut(h.Uses, "."); connName != "" {
+		if _, isVault := cfg.Vaults[connName]; isVault {
+			return true
+		}
+	}
+	strs := []string{h.If}
+	var addVal func(v any)
+	addVal = func(v any) {
+		switch x := v.(type) {
+		case string:
+			strs = append(strs, x)
+		case map[string]any:
+			for _, e := range x {
+				addVal(e)
+			}
+		case []any:
+			for _, e := range x {
+				addVal(e)
+			}
+		}
+	}
+	addVal(h.Options)
+	for _, s := range strs {
+		if s == "" {
+			continue
+		}
+		if strings.Contains(s, ".secrets") || strings.Contains(s, ".vaults") {
+			return true
+		}
+		if calls, err := templateVaultCalls(s); err == nil && len(calls) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // builtin connectors whose verbs never leave the box.

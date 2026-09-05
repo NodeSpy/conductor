@@ -242,3 +242,94 @@ vaults:
 		t.Fatalf("disabled gate must lift: %q", errStr)
 	}
 }
+
+// REGRESSION (audit finding #2): step hooks are verb calls — an allowlisted
+// step must NOT smuggle a non-allowed verb out through hooks:. The guard
+// classifies each hook's uses: like a step, approve-listed hook verbs trip
+// the approval gate, and admitted hooks actually FIRE on plan steps (with
+// the policy identity injected) instead of being silently dropped.
+func TestGuardPlanStepHooks(t *testing.T) {
+	pol := `
+policy:
+  agent_authored:
+    allow: [ svc.post ]
+    approve: [ svc.ask ]
+`
+	cfg := planCfg(t, pol)
+
+	// A non-allowed hook verb rejects the whole plan pre-run.
+	smuggle := "```plan\n- id: ok\n  uses: svc.post\n  options: { text: fine }\n  hooks:\n    - { at: done, uses: svc.fail, options: {} }\n```"
+	rig, fake := dispatchPlan(t, cfg, smuggle)
+	failed, errStr := rig.workflowFailed()
+	if !failed || !strings.Contains(errStr, `hook[0]: "svc.fail" is not in policy.agent_authored.allow`) {
+		t.Fatalf("hook smuggling must be rejected: %v %q", failed, errStr)
+	}
+	if len(fake.snapshot()) != 0 {
+		t.Fatal("nothing may run when a hook is rejected")
+	}
+
+	// An approve-listed hook verb trips the approval gate (no approve_via →
+	// dry-run + reject), same as a step.
+	gated := "```plan\n- id: ok\n  uses: svc.post\n  options: { text: fine }\n  hooks:\n    - { at: done, uses: svc.ask, options: { prompt: p } }\n```"
+	rig, _ = dispatchPlan(t, cfg, gated)
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "approve_via is not set") {
+		t.Fatalf("approve-listed hook must gate: %v %q", failed, errStr)
+	}
+
+	// Hook options validate against the verb schema at emit time.
+	badOpt := "```plan\n- id: ok\n  uses: svc.post\n  options: { text: fine }\n  hooks:\n    - { at: done, uses: svc.post, options: { bogus: 1 } }\n```"
+	rig, _ = dispatchPlan(t, cfg, badOpt)
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, `"bogus"`) {
+		t.Fatalf("hook option validation: %v %q", failed, errStr)
+	}
+	badAt := "```plan\n- id: ok\n  uses: svc.post\n  options: { text: fine }\n  hooks:\n    - { at: sometime, uses: svc.post, options: { text: t } }\n```"
+	rig, _ = dispatchPlan(t, cfg, badAt)
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "start|done|fail") {
+		t.Fatalf("hook at validation: %v %q", failed, errStr)
+	}
+
+	// Hooks count toward max_steps — no 1-step plan with 50 hook verbs.
+	cfgLim := planCfg(t, `
+policy:
+  agent_authored:
+    allow: [ svc.post ]
+    limits: { max_steps: 2 }
+`)
+	many := "```plan\n- id: ok\n  uses: svc.post\n  options: { text: fine }\n  hooks:\n    - { at: done, uses: svc.post, options: { text: a } }\n    - { at: done, uses: svc.post, options: { text: b } }\n```"
+	rig, _ = dispatchPlan(t, cfgLim, many)
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "max_steps") {
+		t.Fatalf("hooks must count against max_steps: %v %q", failed, errStr)
+	}
+
+	// Admitted hooks FIRE on plan steps (consistent with workflow steps) and
+	// carry the policy identity.
+	cfgID := planCfg(t, `
+policy:
+  agent_authored:
+    allow: [ svc.post ]
+    identity: bot
+`)
+	firing := "```plan\n- id: main\n  uses: svc.post\n  options: { text: step }\n  hooks:\n    - { at: done, uses: svc.post, options: { text: hooked } }\n```"
+	rig, fake = dispatchPlan(t, cfgID, firing)
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("admitted hooks: %s", errStr)
+	}
+	calls := fake.snapshot()
+	if len(calls) != 2 || calls[1].Opts["text"] != "hooked" || calls[1].Opts["as"] != "bot" {
+		t.Fatalf("plan-step hooks must fire with the policy identity: %+v", calls)
+	}
+
+	// A hook reading a vault + any external verb = the egress combo.
+	cfgEg := planCfg(t, `
+policy:
+  agent_authored:
+    allow: [ svc.post, "*.read" ]
+vaults:
+  housevault: { type: file, dir: /tmp/none }
+`)
+	eg := "```plan\n- id: ok\n  uses: svc.post\n  options: { text: out }\n  hooks:\n    - { at: done, uses: housevault.read, options: { key: k } }\n```"
+	rig, _ = dispatchPlan(t, cfgEg, eg)
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "no_secret_egress") {
+		t.Fatalf("hook vault read must count for egress: %v %q", failed, errStr)
+	}
+}
