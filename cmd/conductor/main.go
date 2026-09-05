@@ -94,6 +94,8 @@ func main() {
 		err = cmdConfig(args)
 	case "mcp":
 		err = cmdMCP(args)
+	case "workflows":
+		err = cmdWorkflows(args)
 	case "version", "-v", "--version":
 		fmt.Println("conductor", version)
 	case "help", "-h", "--help":

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/memory"
 )
 
 const dynBase = `
@@ -119,8 +120,10 @@ triggers:
 		t.Fatalf("static cycle must fail validation: %v", err)
 	}
 	// Saved workflows resolve for dynamic lookups when the config has none.
-	setSavedWorkflows(map[string]config.WorkflowDef{"extra": {Steps: []config.Step{}}})
-	t.Cleanup(func() { setSavedWorkflows(nil) })
+	sw, _ := OpenSavedStore("")
+	_, _ = sw.Save("extra", "d", []config.Step{{Uses: "svc.post", Options: map[string]any{"text": "x"}}}, memory.Source{})
+	ConfigureSavedWorkflows(sw)
+	t.Cleanup(func() { ConfigureSavedWorkflows(nil) })
 	rig := newTestRunner(t, cfg, buildRegistry(t, cfg))
 	if _, ok := rig.Runner.lookupWorkflow("extra"); !ok {
 		t.Fatal("saved workflows must resolve at runtime")

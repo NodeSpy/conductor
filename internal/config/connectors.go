@@ -744,6 +744,9 @@ func (c *Config) validateConnectors() error {
 		if name == "memory" {
 			return fmt.Errorf("config: connectors: %q is reserved (the built-in shared agent memory — configure it via the top-level memory: section)", name)
 		}
+		if name == "workflow" {
+			return fmt.Errorf("config: connectors: %q is reserved (the built-in workflow verbs — always available, nothing to configure)", name)
+		}
 		if ref.Type == "" {
 			return fmt.Errorf("config: connector %q: missing type", name)
 		}

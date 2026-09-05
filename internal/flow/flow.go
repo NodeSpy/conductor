@@ -624,6 +624,22 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	if err != nil {
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}
+	// workflow.* runs in the flow runner itself (it owns the scope, the
+	// depth guard, and the plan guard). Not stubbed under shadow — the
+	// called workflow's own steps stub instead, so a dry-run previews the
+	// whole tree; workflow.save persists nothing real either way (audited).
+	if connName == "workflow" {
+		out, err := r.execWorkflowVerb(ctx, t, verb, rendered, data, shadow)
+		outcome := "ok"
+		if err != nil {
+			outcome = "failed"
+		}
+		r.auditVerb(t, connName, verb, map[string]any{"name": rendered["name"], "reason": rendered["reason"]}, outcome, err)
+		if err != nil {
+			return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
+		}
+		return out, nil
+	}
 	if shadow {
 		r.Log("%s [dry-run] would invoke %s.%s", flowTag(t), connName, verb)
 		r.auditVerb(t, connName, verb, rendered, "stubbed", nil)
@@ -710,6 +726,20 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	if !ok {
 		return nil, fmt.Errorf("unknown workflow %q (defined: %s)", name, r.workflowNames())
 	}
+	// A saved (agent-promoted) workflow earns trust before unattended reuse:
+	// unreviewed ones dry-run freely but refuse a real run (trust: full is
+	// the deliberate bypass). Real outcomes feed its health record.
+	var saved *SavedWorkflow
+	if _, fromConfig := r.Cfg.Workflows[name]; !fromConfig {
+		if st := SavedWorkflows(); st != nil {
+			if w, isSaved := st.Get(name); isSaved {
+				saved = &w
+			}
+		}
+	}
+	if saved != nil && !saved.Reviewed && !shadow && !r.planPolicy().TrustFull() {
+		return nil, fmt.Errorf("saved workflow %q (v%d) is unreviewed — dry-run it, then `conductor workflows review %s` (or trust: full) before real runs", name, saved.Version, name)
+	}
 	with, err := renderOptions(step.With, data)
 	if err != nil {
 		return nil, fmt.Errorf("with: %w", err)
@@ -742,8 +772,12 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 		child["group"] = g
 	}
 	var childRun store.WorkflowRun
-	if err := r.runSteps(ctx, &childRun, t, wf.Steps, child, shadow, false); err != nil {
-		return nil, fmt.Errorf("workflow %q: %w", name, err)
+	runErr := r.runSteps(ctx, &childRun, t, wf.Steps, child, shadow, false)
+	if saved != nil && !shadow {
+		SavedWorkflows().RecordOutcome(name, runErr == nil)
+	}
+	if runErr != nil {
+		return nil, fmt.Errorf("workflow %q: %w", name, runErr)
 	}
 	outputs := map[string]any{}
 	for out, tmpl := range wf.Outputs {
@@ -1080,6 +1114,16 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 		if err != nil {
 			r.Log("%s %s hook[%d] render: %v", flowTag(t), where, i, err)
 			r.auditVerb(t, connName, verb, nil, "hook_render_failed", err)
+			continue
+		}
+		if connName == "workflow" {
+			// Best-effort like any hook verb; runs in the flow runner.
+			if _, werr := r.execWorkflowVerb(ctx, t, verb, rendered, data, r.DryRun); werr != nil {
+				r.Log("%s %s hook %s.%s failed (best-effort): %v", flowTag(t), where, connName, verb, werr)
+				r.auditVerb(t, connName, verb, rendered, "hook_failed", werr)
+			} else {
+				r.auditVerb(t, connName, verb, map[string]any{"name": rendered["name"]}, "ok", nil)
+			}
 			continue
 		}
 		if r.DryRun {

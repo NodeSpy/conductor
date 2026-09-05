@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -67,6 +68,13 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 	if err != nil {
 		return nil, err
 	}
+	// The saved-workflow registry (agent promotions) lives beside the state
+	// file and resolves alongside the config's workflows: section.
+	sw, err := flow.OpenSavedStore(savedWorkflowsPath(cfg))
+	if err != nil {
+		return nil, err
+	}
+	flow.ConfigureSavedWorkflows(sw)
 	// Memory builds after the stores are registered so `memory: store:` can
 	// verify its backing store — a bad memory: section is a LOAD error.
 	if err := configureMemory(cfg); err != nil {
@@ -123,6 +131,15 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		Secrets: sec, Registry: reg, Runner: runner,
 		Integrations: igs, SecretErrs: secretErrs, ConnectorErrs: connErrs,
 	}, nil
+}
+
+// savedWorkflowsPath is the promoted-workflow registry file, beside the
+// state file ("" → in-memory when no state path is configured).
+func savedWorkflowsPath(cfg *config.Config) string {
+	if cfg.Store.StateFile == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(cfg.Store.StateFile), "workflows.json")
 }
 
 // configureMemory builds the memory: section's manager and installs it as

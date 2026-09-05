@@ -393,7 +393,7 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 	for _, b := range []struct {
 		name string
 		decl *TypeDecl
-	}{{"kv", kvDecl}, {"sql", sqlDecl}, {"memory", memoryDecl}, {"conductor", conductorDecl}} {
+	}{{"kv", kvDecl}, {"sql", sqlDecl}, {"memory", memoryDecl}, {"workflow", workflowDecl}, {"conductor", conductorDecl}} {
 		if _, exists := r.byName[b.name]; exists {
 			continue
 		}

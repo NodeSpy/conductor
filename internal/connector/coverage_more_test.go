@@ -50,8 +50,8 @@ connectors:
 	// The two configured connectors plus the always-on built-ins (kv, sql,
 	// memory, conductor).
 	names := reg.Names()
-	if len(names) != 6 || names[0] != "a-conn" || names[1] != "b-conn" || names[2] != "kv" ||
-		names[3] != "sql" || names[4] != "memory" || names[5] != "conductor" {
+	if len(names) != 7 || names[0] != "a-conn" || names[1] != "b-conn" || names[2] != "kv" ||
+		names[3] != "sql" || names[4] != "memory" || names[5] != "workflow" || names[6] != "conductor" {
 		t.Fatalf("names: %v", names)
 	}
 	in, _ := reg.Get("b-conn")

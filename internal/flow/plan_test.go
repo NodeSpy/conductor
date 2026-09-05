@@ -341,3 +341,10 @@ policy:
 		t.Fatalf("hybrid classification: %+v", plans)
 	}
 }
+
+// planDispatch returns a dispatchFunc emitting one canned plan output.
+func planDispatch(output string) func(context.Context, dispatch.Request) (dispatch.RunRef, error) {
+	return func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		return dispatch.RunRef{AgentID: "a1", Output: output}, nil
+	}
+}
