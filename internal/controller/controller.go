@@ -89,6 +89,11 @@ type Capabilities struct {
 // Message is one prompt turn sent to a session (ACP session/prompt).
 type Message struct {
 	Text string
+	// Capture asks the session to WAIT for the turn and carry its output on
+	// the terminal Update (the supervise loop's revise round-trip). Without
+	// it a native (paseo) follow-up stays fire-and-forget — safe to send
+	// from latency-sensitive paths. ACP sessions always capture.
+	Capture bool
 }
 
 // UpdateKind classifies a streamed session update (ACP session/update).
@@ -217,6 +222,15 @@ type Runner interface {
 // *dispatch.Dispatcher satisfies this.
 type Sender interface {
 	Send(ctx context.Context, id, prompt string) error
+}
+
+// CaptureSender is an optional Sender upgrade: deliver a follow-up AND wait
+// for the turn, returning its output. paseo implements it via
+// `paseo send --json`; sessions on senders without it emit follow-up turns
+// with no captured output (the supervise loop then escalates instead of
+// revising).
+type CaptureSender interface {
+	SendCapture(ctx context.Context, id, prompt string) (string, error)
 }
 
 // The built-in paseo controller runs through the CLI dispatcher unchanged; assert

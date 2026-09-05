@@ -453,3 +453,55 @@ func TestAffinityNotHandled(t *testing.T) {
 		t.Fatalf("empty key must error: handled=%v err=%v", handled, err)
 	}
 }
+
+// captureSender upgrades affSender with SendCapture (paseo send --json).
+type captureSender struct {
+	affSender
+	reply string
+}
+
+func (s *captureSender) SendCapture(_ context.Context, id, prompt string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return "", s.err
+	}
+	s.sent = append(s.sent, id+"\x00"+prompt)
+	return s.reply, nil
+}
+
+// TestAffinityFollowupCapture: the supervise round-trip — Followup resolves
+// the binding from (agent, trigger), waits for the turn, and returns the
+// captured output; the plain dispatch path stays fire-and-forget (Send).
+func TestAffinityFollowupCapture(t *testing.T) {
+	spec := affSpec()
+	runner := &affRunner{}
+	sender := &captureSender{reply: `{"plan":[]}`}
+	cfg := &config.Config{Agents: map[string]config.AgentProfile{
+		"reviewer": {Provider: "claude", Session: spec},
+	}}
+	reg := NewRegistry(nil, "", runner, sender)
+	aff := NewAffinity(reg, newMemAffStore(), cfg, nil, nil, nil)
+
+	trig := core.Trigger{Source: "github", Instance: "gh", Kind: "new_comment",
+		Target: core.Target{Repo: "o/r", PR: 7, Number: 7}}
+
+	// No binding yet → ok=false (the plan escalates instead of revising).
+	if _, ok, err := aff.Followup(context.Background(), "reviewer", cfg.Agents["reviewer"], trig, "revise"); ok || err != nil {
+		t.Fatalf("no binding: ok=%v err=%v", ok, err)
+	}
+
+	// Bind via a normal dispatch, then Followup captures.
+	req := affReq("reviewer", "new_comment", "o/r", 7, spec)
+	if _, handled, err := aff.Dispatch(context.Background(), runner, req); !handled || err != nil {
+		t.Fatalf("bind: %v %v", handled, err)
+	}
+	out, ok, err := aff.Followup(context.Background(), "reviewer", cfg.Agents["reviewer"], trig, "step boom failed; revise")
+	if !ok || err != nil || out != `{"plan":[]}` {
+		t.Fatalf("followup capture: ok=%v err=%v out=%q", ok, err, out)
+	}
+	// A profile without session: is never consulted.
+	if _, ok, _ := aff.Followup(context.Background(), "reviewer", config.AgentProfile{}, trig, "x"); ok {
+		t.Fatal("no session spec must be ok=false")
+	}
+}

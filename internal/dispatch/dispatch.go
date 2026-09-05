@@ -145,6 +145,24 @@ func (d *Dispatcher) Send(ctx context.Context, id, prompt string) error {
 	return d.sendToAgent(ctx, id, prompt)
 }
 
+// SendCapture delivers a follow-up prompt and waits for the turn to finish
+// (`paseo send` waits by default), returning the completed turn's JSON
+// output — the same capture shape as `paseo run --json`. The supervise loop
+// (#36 §11) reads the agent's revised plan out of it.
+func (d *Dispatcher) SendCapture(ctx context.Context, id, prompt string) (string, error) {
+	cmd := d.paseoCmd(ctx, "send", id, prompt, "--json")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if s := strings.TrimSpace(stderr.String()); s != "" {
+			return "", fmt.Errorf("%w: %s", err, truncate(s, 300))
+		}
+		return "", err
+	}
+	return string(out), nil
+}
+
 // Dispatch selects the backend for the action and runs it.
 func (d *Dispatcher) Dispatch(ctx context.Context, req Request) (RunRef, error) {
 	// Routing is fixed: agents run via paseo (the only agent runner), commands run

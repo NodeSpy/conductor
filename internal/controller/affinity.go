@@ -150,11 +150,18 @@ func (a *Affinity) Dispatch(ctx context.Context, runner Runner, req dispatch.Req
 		if reason := a.expiredReason(ref, spec); reason != "" {
 			a.evictLocked(ctx, bk, ref, reason)
 		} else {
-			out, ferr := a.followup(ctx, bk, ref, req)
+			prompt, perr := dispatch.RenderPrompt(req)
+			if perr != nil {
+				return dispatch.RunRef{}, true, perr
+			}
+			out, ferr := a.followup(ctx, bk, ref, prompt, false)
 			if ferr == nil {
 				ref.LastUsed = a.now()
 				a.putRef(bk, ref)
-				return out, true, nil
+				return dispatch.RunRef{
+					Backend: "session", Kind: req.Trigger.Kind,
+					AgentID: ref.SessionID, Queued: true, Output: out,
+				}, true, nil
 			}
 			// A dead/unreachable session is stale state, not a step error:
 			// drop the binding and fall through to a fresh spawn.
@@ -181,33 +188,30 @@ func (a *Affinity) Dispatch(ctx context.Context, runner Runner, req dispatch.Req
 	return runRef, true, nil
 }
 
-// followup delivers the request's rendered prompt to the bound session as a
-// follow-up turn, resuming the session by id when this process doesn't hold
-// it (restart). Blocks until the turn ends (drains the update stream), so
-// the caller's key lock gives one-prompt-in-flight.
-func (a *Affinity) followup(ctx context.Context, bk string, ref AffinityRef, req dispatch.Request) (dispatch.RunRef, error) {
+// followup delivers text to the bound session as a follow-up turn, resuming
+// the session by id when this process doesn't hold it (restart). Blocks
+// until the turn ends (drains the update stream), so the caller's key lock
+// gives one-prompt-in-flight. capture asks for the turn's output (waits for
+// the whole turn on native runtimes — use only off the hot dispatch path).
+func (a *Affinity) followup(ctx context.Context, bk string, ref AffinityRef, text string, capture bool) (string, error) {
 	a.mu.Lock()
 	sess := a.live[bk]
 	a.mu.Unlock()
 	if sess == nil {
 		c, err := a.reg.ByName(ref.Controller)
 		if err != nil {
-			return dispatch.RunRef{}, err
+			return "", err
 		}
 		if sess, err = c.ResumeSession(ctx, ref.SessionID, nil); err != nil {
-			return dispatch.RunRef{}, err
+			return "", err
 		}
 		a.mu.Lock()
 		a.live[bk] = sess
 		a.mu.Unlock()
 	}
-	prompt, err := dispatch.RenderPrompt(req)
+	ch, err := sess.Prompt(ctx, Message{Text: text, Capture: capture})
 	if err != nil {
-		return dispatch.RunRef{}, err
-	}
-	ch, err := sess.Prompt(ctx, Message{Text: prompt})
-	if err != nil {
-		return dispatch.RunRef{}, err
+		return "", err
 	}
 	out, turnErr := "", error(nil)
 	for u := range ch {
@@ -216,13 +220,41 @@ func (a *Affinity) followup(ctx context.Context, bk string, ref AffinityRef, req
 		}
 	}
 	if turnErr != nil {
-		return dispatch.RunRef{}, turnErr
+		return "", turnErr
 	}
 	a.log("affinity: %s follow-up delivered to session %s (key %s)", ref.Agent, ref.SessionID, ref.Key)
-	return dispatch.RunRef{
-		Backend: "session", Kind: req.Trigger.Kind,
-		AgentID: ref.SessionID, Queued: true, Output: out,
-	}, nil
+	return out, nil
+}
+
+// Followup delivers text to the agent's bound session for the trigger's
+// rendered key, waiting for and returning the turn's output — the supervise
+// loop's revise round-trip (#36 §11). ok=false when the agent keeps no
+// sessions or none is bound for this key (the plan then escalates instead
+// of revising). Serialized on the key's lock like any prompt.
+func (a *Affinity) Followup(ctx context.Context, agentName string, profile config.AgentProfile, t core.Trigger, text string) (string, bool, error) {
+	spec := profile.Session
+	if a == nil || spec == nil {
+		return "", false, nil
+	}
+	key, err := dispatch.RenderField(spec.Key, dispatch.Request{Trigger: t})
+	if err != nil || strings.TrimSpace(key) == "" {
+		return "", false, err
+	}
+	bk := bindingKey(agentName, strings.TrimSpace(key))
+	lk := a.lockFor(bk)
+	lk.Lock()
+	defer lk.Unlock()
+	ref, ok := a.refFor(bk)
+	if !ok {
+		return "", false, nil
+	}
+	out, err := a.followup(ctx, bk, ref, text, true)
+	if err != nil {
+		return "", true, err
+	}
+	ref.LastUsed = a.now()
+	a.putRef(bk, ref)
+	return out, true, nil
 }
 
 // ObserveEvent applies end_on eviction: an event listed in a profile's

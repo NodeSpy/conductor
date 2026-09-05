@@ -292,6 +292,16 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 		},
 		Guidance: e.agentGuidance,
 		Memory:   e.memoryPrompt,
+		// Revise is the supervise loop's round-trip (#36 §11): the failure
+		// context goes to the authoring agent's bound session (§10) and the
+		// captured reply carries the revised plan. No affinity, no session:
+		// profile, or no binding → ok=false and the plan escalates instead.
+		Revise: func(ctx context.Context, agentName string, t core.Trigger, prompt string) (string, bool, error) {
+			if e.affinity == nil {
+				return "", false, nil
+			}
+			return e.affinity.Followup(ctx, agentName, e.cfg.Agents[agentName], t, prompt)
+		},
 		Background: func(ctx context.Context, t core.Trigger, stepID string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string) {
 			e.hold.Add(ref.AgentID)
 			ch := e.askChannelFor(handoffConn)

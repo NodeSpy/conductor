@@ -85,15 +85,23 @@ type paseoSession struct {
 func (s *paseoSession) ID() string { return s.id }
 
 // Prompt delivers a follow-up turn to the live agent (`paseo send`) and returns a
-// single-element stream with the terminal Update.
+// single-element stream with the terminal Update. A capture-capable sender
+// waits for the turn and carries its output on the Update (the supervise
+// loop's revise round-trip); a plain sender fire-and-forgets.
 func (s *paseoSession) Prompt(ctx context.Context, msg Message) (<-chan Update, error) {
 	ch := make(chan Update, 1)
 	if s.sender == nil {
 		close(ch)
 		return ch, ErrNoFollowup
 	}
-	err := s.sender.Send(ctx, s.id, msg.Text)
-	ch <- Update{Kind: UpdateDone, AgentID: s.id, Err: err}
+	var out string
+	var err error
+	if cs, ok := s.sender.(CaptureSender); ok && msg.Capture {
+		out, err = cs.SendCapture(ctx, s.id, msg.Text)
+	} else {
+		err = s.sender.Send(ctx, s.id, msg.Text)
+	}
+	ch <- Update{Kind: UpdateDone, AgentID: s.id, Output: out, Err: err}
 	close(ch)
 	return ch, err
 }
