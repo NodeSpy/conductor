@@ -43,7 +43,11 @@ type Config struct {
 	// Vaults are named secret stores (conductor/onepassword/pass/file/
 	// hashicorp) addressed by {{ vault "<name>" "<key>" }} references and
 	// per-vault read/write verbs; env stays the implicit baseline.
-	Vaults    map[string]VaultRef    `yaml:"vaults"`
+	Vaults map[string]VaultRef `yaml:"vaults"`
+	// Memory is the shared agent memory (`memory:` section): durable notes
+	// with provenance and scope, written by verbs/agents and injected into
+	// opted-in agent prompts. Nil = memory not configured (no default).
+	Memory    *MemoryConfig          `yaml:"memory"`
 	Workflows map[string]WorkflowDef `yaml:"workflows"`
 	Triggers  []TriggerSpec          `yaml:"triggers"`
 	Policy    *Policy                `yaml:"policy"`
@@ -542,6 +546,10 @@ type AgentProfile struct {
 	// format rules appended to its prompt). Unset (nil) → fall through to the
 	// top-level agent_guidance (then the built-in default); "" → none; text → that.
 	Guidance *string `yaml:"guidance"`
+	// Memory opts this agent into shared-memory prompt injection: true for
+	// the defaults (global + target repo + own agent scope), or a filter map
+	// { scopes, tags, limit }. Absent → no injection, no token cost.
+	Memory *MemorySelector `yaml:"memory"`
 }
 
 // RuntimeName returns the runtime/controller the profile selects (runtime
@@ -1073,6 +1081,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateVaults(); err != nil {
+		return err
+	}
+	if err := c.validateMemory(); err != nil {
 		return err
 	}
 	names := map[string]bool{}

@@ -71,6 +71,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			if s.Prompt != "" {
 				s.Prompt += dispatch.WriteWrapperGuidance
 				s.Prompt += e.agentGuidance(profile)
+				s.Prompt += e.memoryPrompt(s.Agent, profile, t)
 				if s.RerequestReview {
 					s.Prompt += dispatch.RerequestReviewGuidance
 				}
@@ -120,6 +121,9 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		outputs := map[string]any{}
 		if !s.Background {
 			outputs = extractOutputs(ref)
+			if s.Type == "agent" && err == nil && !shadow {
+				e.harvestMemory(t, s.Agent, run.ID, ref.Output)
+			}
 		}
 		stepsOut[id] = map[string]any{"outputs": outputs}
 

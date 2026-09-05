@@ -342,6 +342,13 @@ func cmdRun(args []string) error {
 	if stack != nil {
 		igs = append(igs, stack.Integrations...)
 	}
+	// A legacy config (no connectors: block) can still carry a memory:
+	// section — buildFlowStack didn't run, so wire it here.
+	if stack == nil {
+		if err := configureMemory(cfg); err != nil {
+			return err
+		}
+	}
 	notifyStackFailures(stack, notifier)
 	if migrateWarning != "" {
 		notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "config", Kind: "migration"}, migrateWarning)

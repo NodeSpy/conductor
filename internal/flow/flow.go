@@ -16,6 +16,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/expr"
 	"github.com/NodeSpy/conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
 )
@@ -44,6 +45,9 @@ type AgentServices struct {
 	Tokens func(t core.Trigger) dispatch.Tokens
 	// Guidance is the house prompt guidance for a profile.
 	Guidance func(p config.AgentProfile) string
+	// Memory renders the shared-memory prompt section for an opted-in
+	// profile ("" otherwise) — appended through the same path Guidance uses.
+	Memory func(agentName string, p config.AgentProfile, t core.Trigger) string
 	// Background is invoked after a background agent step launches: register
 	// the hold, and start the interactive review hand-off on handoffConn (an
 	// ask-capable connector name; "" = runtime-native).
@@ -174,6 +178,9 @@ func (r *Runner) resolveBotReply(t core.Trigger, spec config.TriggerSpec) botRep
 
 func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, batch *Batch, shadow bool) {
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
+	// Stamp the run's provenance for memory writes: a `uses: memory.remember`
+	// step or hook records where the memory came from with no step plumbing.
+	ctx = memory.WithSource(ctx, memory.Source{Run: run.ID, Trigger: t.Kind, Repo: t.Target.Repo})
 	data := baseData(t, r.SecretVals)
 	addVaultData(data, r.VaultVals)
 	if batch != nil {
@@ -806,6 +813,11 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		if r.Agents.Guidance != nil {
 			act.Prompt += r.Agents.Guidance(profile)
 		}
+		// Opt-in shared memory rides the same append path as guidance; a
+		// profile without memory: gets nothing (no token cost).
+		if r.Agents.Memory != nil {
+			act.Prompt += r.Agents.Memory(step.Agent, profile, t)
+		}
 		// A bot author can't read pleasantries: under decline_only (the
 		// default) the agent fixes silently and replies only to decline.
 		if st, ok := botReply(ctx); ok && st.authorIsBot && st.mode == config.ReplyToBotsDeclineOnly {
@@ -836,12 +848,40 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		}
 		return map[string]any{"agent_id": ref.AgentID, "background": true}, "", nil
 	}
+	if !shadow {
+		r.harvestMemory(ctx, t, step.Agent, ref.Output)
+	}
 	outputs := extractOutputs(ref.Output)
 	outputs["agent_id"] = ref.AgentID
 	if profile.ArchiveWhenDone && ref.AgentID != "" && r.Agents.Archive != nil {
 		r.Agents.Archive(ref.AgentID)
 	}
 	return outputs, ref.Output, nil
+}
+
+// harvestMemory applies the memory output contract to an agent step's final
+// output: a `remember:` block (fenced or a JSON key) persists with the run's
+// provenance plus the agent's name. Best-effort — a malformed block is
+// logged and audited, never a step failure.
+func (r *Runner) harvestMemory(ctx context.Context, t core.Trigger, agent, output string) {
+	m := memory.Active()
+	if m == nil || strings.TrimSpace(output) == "" {
+		return
+	}
+	src := memory.SourceFrom(ctx)
+	src.Agent = agent
+	entries, err := m.HarvestOutput(output, src)
+	if err != nil {
+		r.Log("%s memory output contract: %v", flowTag(t), err)
+		r.audit(map[string]any{"event": "memory_remember", "via": "output", "outcome": "failed",
+			"repo": t.Target.Repo, "number": t.Target.Number, "kind": t.Kind, "agent": agent, "error": err.Error()})
+		return
+	}
+	for _, e := range entries {
+		r.audit(map[string]any{"event": "memory_remember", "via": "output", "outcome": "ok",
+			"repo": t.Target.Repo, "number": t.Target.Number, "kind": t.Kind, "agent": agent,
+			"id": e.ID, "scope": e.Scope})
+	}
 }
 
 // execCommand runs a type: command step — locally through dispatch (the

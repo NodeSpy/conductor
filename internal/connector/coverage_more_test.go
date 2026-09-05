@@ -48,9 +48,10 @@ connectors:
   a-conn: { type: cron, schedules: { tick: { every: 1h } } }
 `)
 	// The two configured connectors plus the always-on built-ins (kv, sql,
-	// conductor).
+	// memory, conductor).
 	names := reg.Names()
-	if len(names) != 5 || names[0] != "a-conn" || names[1] != "b-conn" || names[2] != "kv" || names[3] != "sql" || names[4] != "conductor" {
+	if len(names) != 6 || names[0] != "a-conn" || names[1] != "b-conn" || names[2] != "kv" ||
+		names[3] != "sql" || names[4] != "memory" || names[5] != "conductor" {
 		t.Fatalf("names: %v", names)
 	}
 	in, _ := reg.Get("b-conn")

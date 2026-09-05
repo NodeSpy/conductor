@@ -20,6 +20,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/handoff"
+	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/store"
 )
@@ -269,6 +270,44 @@ func (e *Engine) agentGuidance(profile config.AgentProfile) string {
 		return wrapGuidance(*e.cfg.AgentGuidance)
 	default:
 		return dispatch.ConcisionGuidance
+	}
+}
+
+// memoryPrompt renders the opt-in shared-memory section for a dispatched
+// agent — the same append path as agentGuidance. A profile without
+// `memory:` (or with memory unconfigured) gets "" — no token cost.
+func (e *Engine) memoryPrompt(agentName string, profile config.AgentProfile, t core.Trigger) string {
+	sel := profile.Memory
+	if sel == nil || !sel.Enabled {
+		return ""
+	}
+	m := memory.Active()
+	if m == nil {
+		return ""
+	}
+	return m.PromptSection(memory.Filter{Scopes: sel.Scopes, Tags: sel.Tags, Limit: sel.Limit},
+		t.Target.Repo, agentName)
+}
+
+// harvestMemory applies the memory output contract to a finished agent's
+// output (see memory.HarvestOutput): best-effort, audited, never a failure.
+func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string) {
+	m := memory.Active()
+	if m == nil || strings.TrimSpace(output) == "" {
+		return
+	}
+	src := memory.Source{Agent: agent, Run: runID, Trigger: t.Kind, Repo: t.Target.Repo}
+	entries, err := m.HarvestOutput(output, src)
+	if err != nil {
+		e.log("%s memory output contract: %v", tag(t), err)
+		e.store.Audit(map[string]any{"event": "memory_remember", "via": "output", "outcome": "failed",
+			"repo": t.Target.Repo, "number": t.Target.Number, "kind": t.Kind, "agent": agent, "error": err.Error()})
+		return
+	}
+	for _, en := range entries {
+		e.store.Audit(map[string]any{"event": "memory_remember", "via": "output", "outcome": "ok",
+			"repo": t.Target.Repo, "number": t.Target.Number, "kind": t.Kind, "agent": agent,
+			"id": en.ID, "scope": en.Scope})
 	}
 }
 
@@ -533,6 +572,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		if act.Prompt != "" {
 			act.Prompt += dispatch.WriteWrapperGuidance
 			act.Prompt += e.agentGuidance(profile)
+			act.Prompt += e.memoryPrompt(act.Agent, profile, t)
 			if act.RerequestReview {
 				act.Prompt += dispatch.RerequestReviewGuidance
 			}
@@ -698,6 +738,12 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		if id := commentID(t); id > 0 {
 			_ = e.store.AdvanceCommentID(key, commentKind(t), id)
 		}
+	}
+
+	// A finished agent's captured output may carry the memory output contract.
+	// Queued/adopted work has no final output here; shadow previews never write.
+	if act.Type == "agent" && !shadow && !ref.Queued {
+		e.harvestMemory(t, act.Agent, "", ref.Output)
 	}
 
 	if ref.Queued {

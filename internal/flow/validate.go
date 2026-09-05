@@ -177,7 +177,19 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 // entry's type must match the verb family — kv.* verbs need a KV store,
 // sql.* verbs a SQL store.
 func checkStoreSelector(cfg *config.Config, w, connName string, opts map[string]any) error {
-	if (connName != "kv" && connName != "sql") || cfg == nil {
+	if cfg == nil {
+		return nil
+	}
+	// memory.* verbs carry no store: selector — their backend is the single
+	// top-level memory: section, which must exist for the verbs to mean
+	// anything. Checked here because every verb call site funnels through.
+	if connName == "memory" {
+		if cfg.Memory == nil {
+			return fmt.Errorf("%s: memory verbs need a top-level memory: section (store:/dir:/type: memory)", w)
+		}
+		return nil
+	}
+	if connName != "kv" && connName != "sql" {
 		return nil
 	}
 	raw, ok := opts["store"]

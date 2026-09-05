@@ -15,6 +15,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/inbound"
 	"github.com/NodeSpy/conductor/internal/integrations/slack"
+	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/vaults"
@@ -64,6 +65,11 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 	deps := connector.Deps{Secrets: sec, Log: logf, Config: cfg}
 	reg, err := connector.Build(cfg, deps)
 	if err != nil {
+		return nil, err
+	}
+	// Memory builds after the stores are registered so `memory: store:` can
+	// verify its backing store — a bad memory: section is a LOAD error.
+	if err := configureMemory(cfg); err != nil {
 		return nil, err
 	}
 	if err := flow.Validate(cfg, reg); err != nil {
@@ -117,6 +123,22 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		Secrets: sec, Registry: reg, Runner: runner,
 		Integrations: igs, SecretErrs: secretErrs, ConnectorErrs: connErrs,
 	}, nil
+}
+
+// configureMemory builds the memory: section's manager and installs it as
+// the process-wide active memory. A no-op when the section is absent. Called
+// from buildFlowStack (after the stores wire up) and, for legacy configs
+// with no connectors: block, from the daemon boot directly.
+func configureMemory(cfg *config.Config) error {
+	if cfg.Memory == nil {
+		return nil
+	}
+	mgr, err := memory.Build(memory.Options{Store: cfg.Memory.Store, Dir: cfg.Memory.Dir, Type: cfg.Memory.Type})
+	if err != nil {
+		return err
+	}
+	memory.Configure(mgr)
+	return nil
 }
 
 // stackEmitter is the notifier surface notifyStackFailures needs (satisfied

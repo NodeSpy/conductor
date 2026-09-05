@@ -386,13 +386,14 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 	if err := buildStores(cfg, deps); err != nil {
 		return nil, err
 	}
-	// The kv, sql, and conductor connectors (data verbs over the stores,
-	// and conductor's own lifecycle/operations) are always available — no
-	// connection block, no credentials (config.Validate reserves the names).
+	// The kv, sql, memory, and conductor connectors (data verbs over the
+	// stores, the shared agent memory, and conductor's own lifecycle/
+	// operations) are always available — no connection block, no credentials
+	// (config.Validate reserves the names).
 	for _, b := range []struct {
 		name string
 		decl *TypeDecl
-	}{{"kv", kvDecl}, {"sql", sqlDecl}, {"conductor", conductorDecl}} {
+	}{{"kv", kvDecl}, {"sql", sqlDecl}, {"memory", memoryDecl}, {"conductor", conductorDecl}} {
 		if _, exists := r.byName[b.name]; exists {
 			continue
 		}

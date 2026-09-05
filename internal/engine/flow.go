@@ -291,6 +291,7 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			return dispatch.Tokens{App: appTok, User: userTok}
 		},
 		Guidance: e.agentGuidance,
+		Memory:   e.memoryPrompt,
 		Background: func(ctx context.Context, t core.Trigger, stepID string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string) {
 			e.hold.Add(ref.AgentID)
 			ch := e.askChannelFor(handoffConn)
