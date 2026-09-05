@@ -39,6 +39,7 @@ func risorGlobals(data map[string]any) map[string]any {
 	globals["time"] = modTime.Module()
 	globals["store"] = kvRisorStoreFn() // defined stores: s := store("cache"); s.get(…)
 	globals["sql"] = sqlRisorFn()       // defined SQL stores: db := sql("analytics"); db.query(…)
+	globals["memory"] = memRisorFn()    // shared agent memory: memory.remember(…), memory.recall(…)
 	globals["ctx"] = data
 	return globals
 }

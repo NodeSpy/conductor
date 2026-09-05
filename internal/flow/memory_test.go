@@ -269,3 +269,40 @@ steps:
 		t.Fatalf("unwired memory must not inject: %s", p)
 	}
 }
+
+// TestMemoryTemplateFunc: {{ memory <scope> <limit> }} renders newest-first
+// bullet lines, read-only.
+func TestMemoryTemplateFunc(t *testing.T) {
+	mem := tempMemory(t)
+	src := memory.Source{Repo: "o/r"}
+	_, _ = mem.Remember("older global", nil, "", src)
+	_, _ = mem.Remember("newer global", nil, "global", src)
+	_, _ = mem.Remember("repo-scoped", nil, "repo", src)
+
+	cases := []struct{ tmpl, want string }{
+		{`{{ memory "global" 0 }}`, "- newer global\n- older global"},
+		{`{{ memory "global" 1 }}`, "- newer global"},
+		{`{{ memory "repo:o/r" 0 }}`, "- repo-scoped"},
+		{`{{ memory "" 0 }}`, "- repo-scoped\n- newer global\n- older global"},
+		{`{{ memory "repo:none/none" 0 }}`, ""},
+	}
+	for _, c := range cases {
+		got, err := render(c.tmpl, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", c.tmpl, err)
+		}
+		if got != c.want {
+			t.Errorf("%s = %q, want %q", c.tmpl, got, c.want)
+		}
+	}
+	if _, err := render(`{{ memory "global" }}`, nil); err == nil {
+		t.Fatal("memory with one arg must error (scope, limit)")
+	}
+	if _, err := render(`{{ memory "repo" 1 }}`, nil); err == nil {
+		t.Fatal("relative scope must error in templates")
+	}
+	memory.Reset()
+	if _, err := render(`{{ memory "global" 1 }}`, nil); err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("unconfigured memory: %v", err)
+	}
+}

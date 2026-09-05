@@ -17,6 +17,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/kv"
+	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/vaults"
 )
 
@@ -69,6 +70,51 @@ var templateFuncs = template.FuncMap{
 			return "", fmt.Errorf("vault takes (vault, key), got %d args", len(args))
 		}
 		return vaults.Read(context.Background(), fmt.Sprint(args[0]), fmt.Sprint(args[1]))
+	},
+	// memory reads the shared agent memory inline, read-only:
+	// {{ memory "global" 5 }} renders the newest N memories of a scope as
+	// "- text" lines (scope "" = all scopes; limit 0 = no cap). Relative
+	// scopes have no run to resolve against here — use the explicit forms
+	// (global, repo:<owner/repo>, agent:<name>). Mutations go through the
+	// memory.* verbs or ctx.memory in code.
+	"memory": func(args ...any) (string, error) {
+		if len(args) != 2 {
+			return "", fmt.Errorf("memory takes (scope, limit), got %d args", len(args))
+		}
+		m := memory.Active()
+		if m == nil {
+			return "", fmt.Errorf("memory: not configured — add a top-level memory: section")
+		}
+		q := memory.Query{}
+		if s := fmt.Sprint(args[0]); s != "" {
+			resolved, err := memory.ResolveScope(s, memory.Source{})
+			if err != nil {
+				return "", err
+			}
+			q.Scopes = []string{resolved}
+		}
+		switch n := args[1].(type) {
+		case int:
+			q.Limit = n
+		case int64:
+			q.Limit = int(n)
+		case float64:
+			q.Limit = int(n)
+		default:
+			return "", fmt.Errorf("memory: limit must be a number, got %T", args[1])
+		}
+		entries, err := m.Recall(q)
+		if err != nil {
+			return "", err
+		}
+		var b strings.Builder
+		for i, e := range entries {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString("- " + strings.ReplaceAll(strings.TrimSpace(e.Text), "\n", " "))
+		}
+		return b.String(), nil
 	},
 	// kvContains tests membership in a stored list, read-only:
 	// {{ kvContains "store" "namespace" "key" .item }}. An absent key is

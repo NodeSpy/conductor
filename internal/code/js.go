@@ -44,6 +44,7 @@ func (e *Executor) execJS(spec Spec, data map[string]any) (map[string]any, error
 	src := "globalThis.ctx = " + string(dataJSON) + ";\n" +
 		jsKVShim() +
 		jsSQLShim() +
+		jsMemShim() +
 		"JSON.stringify((function(){\n" + spec.Code + "\n})() ?? null)"
 
 	rt, err := qjs.New()
@@ -74,6 +75,16 @@ func (e *Executor) execJS(spec Spec, data map[string]any) (map[string]any, error
 		return this.Context().NewString(sqlInvokeJSON(payload)), nil
 	})
 	qctx.Global().SetPropertyStr("__conductor_sql", hostSQL)
+
+	// ctx.memory bridges to the configured shared memory the same way.
+	hostMem := qctx.Function(func(this *qjs.This) (*qjs.Value, error) {
+		payload := ""
+		if args := this.Args(); len(args) > 0 {
+			payload = args[0].String()
+		}
+		return this.Context().NewString(memInvokeJSON(payload)), nil
+	})
+	qctx.Global().SetPropertyStr("__conductor_memory", hostMem)
 
 	ret, err := qctx.Eval("step.js", qjs.Code(src))
 	if err != nil {
