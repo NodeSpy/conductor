@@ -112,9 +112,13 @@ type HostConfig struct {
 // WorkflowDef is one entry in the `workflows:` map — a named, parameterized
 // step list invoked from triggers (or other workflows) via `workflow:`.
 type WorkflowDef struct {
-	Inputs  map[string]InputSpec `yaml:"inputs,omitempty"`
-	Outputs map[string]string    `yaml:"outputs,omitempty"` // name -> template over internal step outputs
-	Steps   []Step               `yaml:"steps,omitempty"`
+	// Description makes the workflow self-describing: with the declared
+	// inputs/outputs it's what `conductor schema`, `workflow.list`, and a
+	// choosing agent (#36 §11) see about what this does and when to use it.
+	Description string               `yaml:"description,omitempty"`
+	Inputs      map[string]InputSpec `yaml:"inputs,omitempty"`
+	Outputs     map[string]string    `yaml:"outputs,omitempty"` // name -> template over internal step outputs
+	Steps       []Step               `yaml:"steps,omitempty"`
 }
 
 // InputSpec declares one workflow input.

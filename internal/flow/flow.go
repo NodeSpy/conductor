@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -673,34 +674,57 @@ func stubOutputs(in *connector.Instance, verb string) map[string]any {
 	return out
 }
 
+// workflowDepthKey tracks nested workflow-call depth on the context. Static
+// names are cycle-checked at load; a dynamic (templated) name skips that, so
+// every call is depth-guarded at runtime instead — exceed → halt with a
+// clear error, never spin.
+type workflowDepthKey struct{}
+
+// MaxWorkflowDepth caps runtime workflow-call nesting (dynamic names,
+// agent-chosen workflows, saved workflows calling workflows).
+const MaxWorkflowDepth = 8
+
 // execWorkflowCall runs { workflow: <name>, with: {…} } — an encapsulated
 // child scope seeded with the trigger context + declared inputs; the caller
-// reads the workflow's declared outputs off this step's id.
+// reads the workflow's declared outputs off this step's id. The name may be
+// templated ("{{.pick}}"), resolved at runtime against the workflow set.
 func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, error) {
-	wf, ok := r.Cfg.Workflows[step.Workflow]
+	name, err := render(step.Workflow, data)
+	if err != nil {
+		return nil, fmt.Errorf("workflow name %q: %w", step.Workflow, err)
+	}
+	if strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("workflow name %q resolved empty", step.Workflow)
+	}
+	depth, _ := ctx.Value(workflowDepthKey{}).(int)
+	if depth >= MaxWorkflowDepth {
+		return nil, fmt.Errorf("workflow %q: call depth %d exceeds the limit %d (dynamic workflow names are depth-guarded)", name, depth, MaxWorkflowDepth)
+	}
+	ctx = context.WithValue(ctx, workflowDepthKey{}, depth+1)
+	wf, ok := r.lookupWorkflow(name)
 	if !ok {
-		return nil, fmt.Errorf("unknown workflow %q", step.Workflow)
+		return nil, fmt.Errorf("unknown workflow %q (defined: %s)", name, r.workflowNames())
 	}
 	with, err := renderOptions(step.With, data)
 	if err != nil {
 		return nil, fmt.Errorf("with: %w", err)
 	}
 	inputs := map[string]any{}
-	for name, spec := range wf.Inputs {
-		v, present := with[name]
+	for in, spec := range wf.Inputs {
+		v, present := with[in]
 		if !present {
 			if spec.Required {
-				return nil, fmt.Errorf("workflow %q: missing required input %q", step.Workflow, name)
+				return nil, fmt.Errorf("workflow %q: missing required input %q", name, in)
 			}
 			if spec.Default != nil {
 				v = spec.Default
 			}
 		}
-		inputs[name] = v
+		inputs[in] = v
 	}
-	for name := range with {
-		if _, declared := wf.Inputs[name]; !declared {
-			return nil, fmt.Errorf("workflow %q: unknown input %q", step.Workflow, name)
+	for in := range with {
+		if _, declared := wf.Inputs[in]; !declared {
+			return nil, fmt.Errorf("workflow %q: unknown input %q", name, in)
 		}
 	}
 	// The child sees the trigger context + its inputs + its own steps — not
@@ -714,17 +738,40 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	}
 	var childRun store.WorkflowRun
 	if err := r.runSteps(ctx, &childRun, t, wf.Steps, child, shadow, false); err != nil {
-		return nil, fmt.Errorf("workflow %q: %w", step.Workflow, err)
+		return nil, fmt.Errorf("workflow %q: %w", name, err)
 	}
 	outputs := map[string]any{}
-	for name, tmpl := range wf.Outputs {
+	for out, tmpl := range wf.Outputs {
 		v, err := renderValue(tmpl, child)
 		if err != nil {
-			return nil, fmt.Errorf("workflow %q: output %q: %w", step.Workflow, name, err)
+			return nil, fmt.Errorf("workflow %q: output %q: %w", name, out, err)
 		}
-		outputs[name] = v
+		outputs[out] = v
 	}
 	return outputs, nil
+}
+
+// lookupWorkflow resolves a runtime workflow name: the config's workflows:
+// section first, then the saved (agent-promoted) registry.
+func (r *Runner) lookupWorkflow(name string) (config.WorkflowDef, bool) {
+	if wf, ok := r.Cfg.Workflows[name]; ok {
+		return wf, true
+	}
+	return savedWorkflowDef(name)
+}
+
+// workflowNames lists every invocable workflow, for unknown-name errors.
+func (r *Runner) workflowNames() string {
+	names := make([]string, 0, len(r.Cfg.Workflows))
+	for n := range r.Cfg.Workflows {
+		names = append(names, n)
+	}
+	names = append(names, savedWorkflowNames()...)
+	if len(names) == 0 {
+		return "none"
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // execCode runs a run: code step through internal/code, remotely when the

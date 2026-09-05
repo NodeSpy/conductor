@@ -369,6 +369,15 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 			}
 		}
 	case "workflow":
+		// A templated name resolves at runtime (an agent or an if: picks the
+		// workflow), so the static name/input checks don't apply — it's
+		// guarded by the runtime depth limit and a clear unknown-name error.
+		if strings.Contains(step.Workflow, "{{") {
+			if err := checkRefs(w+" workflow", step.Workflow, sc); err != nil {
+				return err
+			}
+			break
+		}
 		wf, ok := cfg.Workflows[step.Workflow]
 		if !ok {
 			return fmt.Errorf("%s: unknown workflow %q", w, step.Workflow)
