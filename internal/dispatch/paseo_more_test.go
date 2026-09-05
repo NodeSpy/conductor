@@ -114,9 +114,11 @@ func TestWaitForAgentTimeoutAndNoop(t *testing.T) {
 	}
 	put(t, dir, "wait-slow", "1")
 	start := time.Now()
-	d.WaitForAgent(context.Background(), "a-1", 100*time.Millisecond)
-	// The stub sleeps 30s; the 100ms timeout must cut it far short even on a
-	// heavily loaded machine.
+	// The stub logs its invocation, then sleeps 30s. A 2s timeout proves the
+	// wait is bounded (far short of 30s) while giving the forked stub ample
+	// headroom to write its call-log line before the kill — even under a heavily
+	// loaded -race run, where a tighter timeout could race the log write.
+	d.WaitForAgent(context.Background(), "a-1", 2*time.Second)
 	if time.Since(start) > 15*time.Second {
 		t.Fatal("timeout did not bound the wait")
 	}
