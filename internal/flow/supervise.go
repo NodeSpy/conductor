@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -144,10 +145,21 @@ func (r *Runner) splicePlan(t core.Trigger, pol *config.AgentAuthoredPolicy, st 
 	if err != nil {
 		return err
 	}
-	// A revision must not smuggle in approval-gated work the original run
-	// never cleared: reject it back to the agent instead of silently gating.
+	// A revision may keep using the classes the ORIGINAL approval granted
+	// (otherwise every revision of an approved plan would re-trip its own
+	// committed steps and escalate) — but it must not smuggle in NEW
+	// approval-gated work the operator never cleared.
 	if res.needsApproval {
-		return fmt.Errorf("revision adds approval-gated steps (%s) — not allowed mid-run", strings.Join(res.approvalWhy, "; "))
+		var fresh []string
+		for class := range res.approvalClasses {
+			if !st.granted[class] {
+				fresh = append(fresh, class)
+			}
+		}
+		if len(fresh) > 0 {
+			sort.Strings(fresh)
+			return fmt.Errorf("revision adds approval-gated work the run's approval never covered (%s) — not allowed mid-run", strings.Join(fresh, ", "))
+		}
 	}
 	st.steps = full
 	return nil

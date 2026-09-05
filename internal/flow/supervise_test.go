@@ -249,3 +249,62 @@ policy:
 
 // ptr helper for config in tests.
 var _ = config.AgentAuthoredPolicy{}
+
+// REGRESSION (audit finding #8): a revision of an APPROVED plan splices —
+// the original grant covers the approve-gated classes already cleared
+// (including the committed steps re-seen by the full-plan re-guard) — while
+// a revision introducing a NEW approval-gated class is still rejected.
+func TestSuperviseApprovedPlanRevises(t *testing.T) {
+	pol := `
+policy:
+  agent_authored:
+    allow: [ svc.post, svc.fail ]
+    approve: [ svc.ask, svc.slow ]
+    approve_via: svc
+`
+	// The original plan needs approval (svc.ask), gets it (the fake's ask
+	// approves), commits the ask, then fails — the revision reuses the
+	// GRANTED class (another svc.ask) plus an allowed fix.
+	plan := "```plan\n" +
+		"- id: risky\n  uses: svc.ask\n  options: { prompt: may I }\n" +
+		"- id: boom\n  uses: svc.fail\n  options: {}\n" +
+		"```"
+	revision := "```plan\n- id: risky2\n  uses: svc.ask\n  options: { prompt: again }\n- id: fixed\n  uses: svc.post\n  options: { text: fixed }\n```"
+	rr := newReviseRig(t, pol, plan, []string{revision})
+	runTrigger(rr.testRig, newTrigger("ping", nil), mustSpec(t, planSpec))
+	if failed, errStr := rr.workflowFailed(); failed {
+		t.Fatalf("an approved plan's revision must splice, not escalate: %s", errStr)
+	}
+	var posts []string
+	for _, c := range rr.fake.snapshot() {
+		if c.Verb == "post" {
+			posts = append(posts, fmt.Sprint(c.Opts["text"]))
+		}
+	}
+	if len(posts) != 1 || posts[0] != "fixed" {
+		t.Fatalf("revision must run: %v", posts)
+	}
+	revs := rr.Store.auditsWithEvent("plan_revise")
+	if len(revs) != 1 || revs[0]["outcome"] != "spliced" {
+		t.Fatalf("revise audit: %+v", revs)
+	}
+
+	// A revision smuggling a NEW approve-gated class (svc.slow — never
+	// granted) is rejected.
+	sneaky := "```plan\n- id: sneak\n  uses: svc.slow\n  options: {}\n```"
+	rr2 := newReviseRig(t, pol, plan, []string{sneaky})
+	runTrigger(rr2.testRig, newTrigger("ping", nil), mustSpec(t, planSpec))
+	if failed, _ := rr2.workflowFailed(); !failed {
+		t.Fatal("a new gated class in a revision must still reject")
+	}
+	revs = rr2.Store.auditsWithEvent("plan_revise")
+	if len(revs) == 0 || revs[0]["outcome"] != "rejected" ||
+		!strings.Contains(fmt.Sprint(revs[0]["error"]), "svc.slow") {
+		t.Fatalf("new-class rejection audit: %+v", revs)
+	}
+	for _, c := range rr2.fake.snapshot() {
+		if c.Verb == "slow" {
+			t.Fatal("the smuggled verb must never run")
+		}
+	}
+}

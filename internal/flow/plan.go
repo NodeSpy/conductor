@@ -256,6 +256,10 @@ type planState struct {
 	tokens    int         // this plan's approximate sub-agent token spend (reporting)
 	subAgents int         // this plan's executed sub-agent units (reporting)
 	budget    *planBudget // the TREE-wide budget nested plans share (enforcement)
+	// granted is the approval grant covering this plan: the approve-gated
+	// classes the operator cleared at admission. A revision may reuse them;
+	// only NEW classes reject (finding #8 — an approved plan stays revisable).
+	granted map[string]bool
 	persist   func()      // checkpoint hook (nil = ephemeral: shadow, live, inline)
 }
 
@@ -289,10 +293,12 @@ func (r *Runner) runPlan(ctx context.Context, t core.Trigger, agentName, runID, 
 	}
 	r.auditPlan(t, agentName, "admitted", res, nil)
 
+	granted := map[string]bool{}
 	if res.needsApproval && !shadow {
 		if aerr := r.approvePlan(ctx, t, pol, agentName, plan, res); aerr != nil {
 			return nil, aerr
 		}
+		granted = res.approvalClasses
 	}
 
 	budget, ctx := planBudgetFrom(ctx)
@@ -308,10 +314,11 @@ func (r *Runner) runPlan(ctx context.Context, t core.Trigger, agentName, runID, 
 	defer cancel()
 
 	st := &planState{
-		agent:  agentName,
-		steps:  plan,
-		scope:  r.planScope(t, agentName),
-		budget: budget,
+		agent:   agentName,
+		steps:   plan,
+		scope:   r.planScope(t, agentName),
+		budget:  budget,
+		granted: granted,
 	}
 	return r.runPlanState(ctx, t, pol, st, res, runID, stepID, shadow)
 }
@@ -490,6 +497,7 @@ func (r *Runner) resumePlan(ctx context.Context, t core.Trigger, rec store.PlanR
 		revisions: rec.Revisions,
 		scope:     r.planScope(t, rec.Agent),
 		budget:    budget,
+		granted:   res.approvalClasses, // the original run cleared these pre-commit
 	}
 	for id, out := range rec.Outputs {
 		r.recordOutputs(st.scope, id, r.restoreOutputs(ctx, t, steps, id, out, st.scope))

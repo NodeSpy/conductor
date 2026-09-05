@@ -31,6 +31,11 @@ type guardResult struct {
 	needsApproval bool
 	// approvalWhy names what tripped the approval gate.
 	approvalWhy []string
+	// approvalClasses is the SET of approve-gated classes (verb/step classes
+	// plus the egress markers) — an approval grants these classes, and a
+	// supervised revision may keep using them without re-approval, but may
+	// not introduce new ones mid-run (see splicePlan).
+	approvalClasses map[string]bool
 	// declaredSteps / subAgents are the structural counts checked against limits.
 	declaredSteps int
 	subAgents     int
@@ -42,7 +47,7 @@ type guardResult struct {
 // place with the policy's host/identity rewrites. cfg/reg supply the
 // connector and vault universe for classification.
 func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAuthoredPolicy, steps []config.Step) (guardResult, error) {
-	res := guardResult{gate: "allow"}
+	res := guardResult{gate: "allow", approvalClasses: map[string]bool{}}
 	if pol == nil {
 		return res, fmt.Errorf("agent-authored plans are disabled — no policy.agent_authored block (safe default); add one to opt in")
 	}
@@ -71,6 +76,7 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 				case matchAny(pol.Approve, class):
 					res.needsApproval = true
 					res.approvalWhy = append(res.approvalWhy, fmt.Sprintf("%s: %q is approve-gated", w, class))
+					res.approvalClasses[class] = true
 				case matchAny(pol.Allow, class):
 					// admitted freely
 				default:
@@ -131,6 +137,7 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 					case matchAny(pol.Approve, h.Uses):
 						res.needsApproval = true
 						res.approvalWhy = append(res.approvalWhy, fmt.Sprintf("%s: %q is approve-gated", hw, h.Uses))
+						res.approvalClasses[h.Uses] = true
 					case matchAny(pol.Allow, h.Uses):
 						// admitted freely
 					default:
@@ -181,10 +188,12 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 		if externalTouch {
 			res.needsApproval = true
 			res.approvalWhy = append(res.approvalWhy, "no_secret_egress: the plan both reads secrets and touches an external service")
+			res.approvalClasses["no_secret_egress:external"] = true
 		}
 		if internalWrite {
 			res.needsApproval = true
 			res.approvalWhy = append(res.approvalWhy, "no_secret_egress: the plan reads secrets and writes durable shared state (kv/sql/memory) — a later plan could read the secret back out")
+			res.approvalClasses["no_secret_egress:park"] = true
 		}
 	}
 	res.deterministic = res.subAgents == 0
