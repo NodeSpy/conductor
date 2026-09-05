@@ -14,7 +14,9 @@
 package migrate
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"regexp"
 	"sort"
 	"strings"
@@ -56,9 +58,18 @@ func unmaskEnv(out []byte) []byte {
 // on-disk file (unexpanded); the output preserves ${VAR} references.
 func Transform(raw []byte) (*Result, error) {
 	raw = maskEnv(raw)
+	// STRICT decode: migration must never silently drop configured behavior.
+	// A key the schema doesn't know (a typo, a retired option) is a hard
+	// error NAMING it — the auto-migration fail-safe then keeps the box on
+	// the legacy config and notifies, instead of committing a transform that
+	// quietly lost something. (Sections with their own raw-node decoding —
+	// integrations:, stores:, connectors: — validate their bodies in their
+	// own loaders; this pass catches everything the top-level schema owns.)
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
 	var cfg config.Config
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w (note: config migrate reads the raw file — a ${VAR} in a numeric field can't be parsed; quote or inline it)", err)
+	if err := dec.Decode(&cfg); err != nil && err != io.EOF {
+		return nil, fmt.Errorf("parse config: %w — migration refuses to guess: an unknown key would be silently dropped, so fix or remove it (note: config migrate reads the raw file — a ${VAR} in a numeric field can't be parsed; quote or inline it)", err)
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(raw, &doc); err != nil {

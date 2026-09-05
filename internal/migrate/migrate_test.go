@@ -866,3 +866,49 @@ func TestGithubExclusionSemantics(t *testing.T) {
 		t.Errorf("rule3 exclusions: %v", got)
 	}
 }
+
+// REGRESSION (audit finding #9): a typo'd/unknown legacy key is a HARD error
+// naming the key — the transform never silently drops configured behavior.
+func TestTransformRejectsUnknownKeys(t *testing.T) {
+	cases := []struct{ name, yaml, wantKey string }{
+		{"top-level typo", `
+integrattions:
+  - name: gh
+    type: github
+`, "integrattions"},
+		{"singular controller", `
+integrations:
+  - name: gh
+    type: github
+controller: { type: paseo }
+`, "controller"},
+		{"typo inside a known struct", `
+integrations:
+  - name: gh
+    type: github
+control:
+  pause_lable: "hold"
+`, "pause_lable"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Transform([]byte(c.yaml))
+			if err == nil || !strings.Contains(err.Error(), c.wantKey) {
+				t.Fatalf("unknown key %q must be a named hard error, got %v", c.wantKey, err)
+			}
+		})
+	}
+	// A fully-valid legacy config still transforms.
+	ok := `
+integrations:
+  - name: gh
+    type: github
+    actions:
+      - on: merge_conflict
+        prompt: "fix"
+`
+	res, err := Transform([]byte(ok))
+	if err != nil || !res.Changed {
+		t.Fatalf("valid legacy config must transform: %v", err)
+	}
+}

@@ -181,7 +181,8 @@ integrations:
     actions:
       - on: app_mention
         prompt: "hi"
-controller: { type: paseo }
+controllers:
+  main: { type: paseo }
 `
 	res, err := Transform([]byte(pre))
 	if err != nil {
