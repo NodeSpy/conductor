@@ -196,12 +196,21 @@ triggers:
             options: { name: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" }, reason: "..." }
 ```
 
+**Resume.** An agent-step plan checkpoints its committed progress in
+conductor's own state (`plans.json`): a daemon crash or auto-update mid-plan
+resumes AFTER the last committed step — the agent is not re-dispatched and
+committed side effects never re-run (the restored plan is re-guarded under
+the current policy; vault-read outputs re-resolve rather than persist). The
+`workflow.run { steps }` and live `run_step` surfaces stay at-least-once,
+as do nested workflow calls and parallel branches.
+
 **Supervise.** A failing plan step routes back to the authoring agent's
 **session (§10)** as a follow-up with STRUCTURED context — the failed step,
 the error, executed steps and their outputs, the remaining steps. The agent
-replies with a revised plan; conductor re-validates, re-guards (a revision
-may not smuggle in approval-gated work), splices it in, and **resumes from
-the failed step** — committed side-effecting steps never re-run. After
+replies with a revised plan; conductor re-validates, re-guards (the classes
+the run's original approval granted stay usable; NEW approval-gated work
+rejects), splices it in, and **resumes from the failed step** — committed
+side-effecting steps never re-run. After
 `max_revisions` rounds the run compensates and escalates `needs_input`. A
 step marked `escalate_to: agent` checks in on success too. Supervision
 needs the authoring agent to keep sessions (`session:` on its profile);

@@ -22,7 +22,7 @@ conductor unlock                           seed the default vault key for non-in
 conductor config migrate [--dry-run]       transform a legacy config to the connectors schema
 conductor mcp memory --socket <path>       stdio MCP server for the live agent tools (memory + run_step; launched by runtimes, not by hand)
 conductor workflows [ls]                   config + saved (agent-promoted) workflows with review state and health
-conductor workflows review <name>          clear a saved workflow for unattended reuse (dry-run it first)
+conductor workflows review <name>          print the workflow's provenance + FULL steps, then clear it for reuse (dry-run it first; runs stay policy-guarded)
 conductor workflows rm <name>              remove a saved workflow
 conductor version
 ```

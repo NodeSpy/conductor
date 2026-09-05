@@ -64,18 +64,25 @@ policy:
 
 | key | meaning |
 |---|---|
-| `allow` | step classes emitted freely: step forms (`code`, `cli`/`command`, `agent`, `workflow`) and verb patterns (`gh.comment`, `kv.*`, `*.read`). Anything matching neither list rejects the whole plan pre-run, naming the class |
+| `allow` | step classes emitted freely: step forms (`code`, `cli`/`command`, `agent`, `workflow`) and verb patterns (`gh.comment`, `kv.*`, `*.read`). **Step `hooks:` are classified exactly the same way** (a hook's `uses:` is a verb call — it can't smuggle anything the steps couldn't). Anything matching neither list rejects the whole plan pre-run, naming the class |
 | `approve` | classes admitted only after a full dry-run preview (every verb stubbed, audited) + an approval on `approve_via` (an ask-capable connector). No `approve_via` → dry-run, `needs_input` escalation, reject. Approve wins over allow |
 | `host` | the sandbox `hosts:` entry agent `code`/`cli` steps are FORCED onto (an agent-chosen `host:` is overridden). Unset → those steps are rejected outright |
 | `identity` | set as `as:` on emitted verbs that declare the option — the plan posts as the bot, never as you; the call can't override it back |
-| `limits` | `max_steps` (declared, incl. branches/compensations), `max_fan_out` (parallel branches + runtime `for_each` size), `max_sub_agents` (declared + runtime units), `timeout` (wall clock), `tokens` (approximate sub-agent budget, chars/4). Defaults 50/20/5/30m/200k. Exceed → halt + escalate, never spin |
-| `max_revisions` | supervision rounds before the plan compensates and escalates to a human (default 3) |
-| `no_secret_egress` | default true: a plan that both reads secret material (a vault verb, `{{ vault … }}`, `.secrets`/`.vaults` refs) and touches the outside world (any non-builtin verb, code, cli) is approval-gated — the exfiltration combo the allowlist alone misses |
+| `limits` | `max_steps` (declared, incl. branches/compensations/hooks — and CUMULATIVE executed units across nested plans), `max_fan_out` (parallel branches + runtime `for_each` size), `max_sub_agents` (declared + cumulative runtime units across nested plans), `timeout` (wall clock; a nested plan can't extend its parent's), `tokens` (approximate cumulative sub-agent budget, chars/4). Defaults 50/20/5/30m/200k. A sub-agent whose output is itself a plan shares the PARENT's budget — never a fresh one — and plan nesting is depth-capped (4). Exceed → halt + escalate, never spin |
+| `max_revisions` | supervision rounds before the plan compensates and escalates to a human (default 3). A revision is fully re-guarded; the classes the run's ORIGINAL approval granted stay usable, but new approval-gated work rejects mid-run |
+| `no_secret_egress` | default true, two layers. Static: a plan that reads secret material (a vault verb, `{{ vault … }}`, `.secrets`/`.vaults` refs) AND either touches the outside world (any non-builtin verb, code, cli) or **writes durable shared state** (`kv.set/setnx/merge/append`, `memory.remember`, `sql.exec` — parking a secret where a later, individually-innocent plan could read it back out) is approval-gated. Runtime: an unapproved plan's internal write whose rendered options contain a tracked secret is refused at execution — catching values the static scan can't see |
 | `trust: full` | lift allow/approve/host for this scope — a deliberate operator opt-in; limits and revision caps still bind, and the gate is audited as `trust` |
 
 Every plan's admission is audited — the gate (`allow`/`approve`/`trust`),
 the rejection reason, per-step outcomes, compensations, and the
 deterministic-vs-hybrid classification.
+
+The same guard covers every agent-authored surface: plans, the live
+`run_step` tool, `workflow.run { steps }`, and **saved workflows** — a
+promoted workflow must pass the guard at `workflow.save` AND is re-guarded
+under the then-current policy on every run (review is a human trust signal,
+never a policy bypass; tighten the policy and the already-reviewed workflow
+obeys immediately).
 
 ## Enable / disable
 

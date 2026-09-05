@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/kv"
 	"github.com/NodeSpy/conductor/internal/sqlstore"
 )
@@ -142,5 +143,74 @@ steps:
 	calls := fake.snapshot()
 	if len(calls) != 1 || calls[0].Opts["text"] != "n=1 id=1 total=2 count=2 body=inv-77-js" {
 		t.Fatalf("calls: %+v", calls)
+	}
+}
+
+// REGRESSION (audit finding #10): a templated sql: statement is an injection
+// foot-gun — event-controlled text would splice into the SQL before the
+// driver sees placeholders. `conductor validate` (and the plan validator)
+// reject it; args: templating stays fine.
+func TestSQLTemplateInjectionRejected(t *testing.T) {
+	kv.SetDataDir(t.TempDir())
+	kv.ResetStores()
+	sqlstore.ResetStores()
+	t.Cleanup(func() { kv.ResetStores(); sqlstore.ResetStores(); kv.SetDataDir("") })
+	base := `
+connectors:
+  svc: { type: fake }
+stores:
+  db: { type: sqlite, path: ":memory:" }
+`
+	valid := func(y string) error {
+		kv.ResetStores()
+		sqlstore.ResetStores()
+		cfg := loadConfig(t, base+y)
+		reg := buildRegistry(t, cfg)
+		return Validate(cfg, reg)
+	}
+	err := valid(`
+triggers:
+  - on: svc.ping
+    steps:
+      - uses: sql.exec
+        options: { store: db, sql: "DELETE FROM t WHERE name = '{{.title}}'" }
+`)
+	if err == nil || !strings.Contains(err.Error(), "must not contain templates") {
+		t.Fatalf("templated sql must fail validate: %v", err)
+	}
+	// Hooks are covered by the same check.
+	err = valid(`
+triggers:
+  - on: svc.ping
+    steps: [ { uses: svc.post, options: { text: t } } ]
+    hooks: [ { at: done, uses: sql.exec, options: { store: db, sql: "DROP {{.x}}" } } ]
+`)
+	if err == nil || !strings.Contains(err.Error(), "must not contain templates") {
+		t.Fatalf("templated sql in a hook must fail validate: %v", err)
+	}
+	// Parameterized statements with templated ARGS are the supported shape.
+	if err := valid(`
+triggers:
+  - on: svc.ping
+    steps:
+      - uses: sql.exec
+        options: { store: db, sql: "DELETE FROM t WHERE name = $1", args: ["{{.title}}"] }
+`); err != nil {
+		t.Fatalf("parameterized sql with templated args must pass: %v", err)
+	}
+	// The plan validator applies the same rule to agent-emitted steps.
+	kv.ResetStores()
+	sqlstore.ResetStores()
+	cfg := loadConfig(t, base+`
+policy:
+  agent_authored:
+    allow: [ sql.* ]
+`)
+	reg := buildRegistry(t, cfg)
+	perr := ValidatePlanSteps(cfg, reg, []config.Step{{
+		Uses: "sql.exec", Options: map[string]any{"store": "db", "sql": "DELETE FROM t WHERE n = '{{.title}}'"},
+	}})
+	if perr == nil || !strings.Contains(perr.Error(), "must not contain templates") {
+		t.Fatalf("plan sql template must reject: %v", perr)
 	}
 }

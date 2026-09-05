@@ -207,6 +207,15 @@ func checkStoreSelector(cfg *config.Config, w, connName string, opts map[string]
 	if fam := connector.StoreFamily(ref.Type); fam != connName {
 		return connector.StoreFamilyError(w, name, ref.Type, connName)
 	}
+	// The sql engine is parameterized-only, but a TEMPLATED statement would
+	// splice event-controlled text (a PR title, a comment body) straight into
+	// the SQL before the driver ever sees placeholders — classic injection.
+	// Reject it at load: values reach the statement through args: only.
+	if connName == "sql" {
+		if stmt, ok := opts["sql"].(string); ok && strings.Contains(stmt, "{{") {
+			return fmt.Errorf("%s: sql: must not contain templates ({{…}}) — bind values through args: with driver placeholders ($1 / ?), never into the statement text", w)
+		}
+	}
 	return nil
 }
 
