@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -252,9 +253,10 @@ type planState struct {
 	revisions int
 	committed []committedStep // for reverse-order compensation
 	scope     map[string]any
-	tokens    int    // approximate token spend of sub-agent steps
-	subAgents int    // executed sub-agent units
-	persist   func() // checkpoint hook (nil = ephemeral: shadow, live, inline)
+	tokens    int         // this plan's approximate sub-agent token spend (reporting)
+	subAgents int         // this plan's executed sub-agent units (reporting)
+	budget    *planBudget // the TREE-wide budget nested plans share (enforcement)
+	persist   func()      // checkpoint hook (nil = ephemeral: shadow, live, inline)
 }
 
 // checkpoint persists the plan's progress (no-op for ephemeral plans).
@@ -293,15 +295,95 @@ func (r *Runner) runPlan(ctx context.Context, t core.Trigger, agentName, runID, 
 		}
 	}
 
+	budget, ctx := planBudgetFrom(ctx)
+	if depth := budget.enter(); depth > MaxPlanDepth {
+		budget.leave()
+		err := fmt.Errorf("plan nesting depth %d exceeds the limit %d — nested plans share one budget, never a fresh one", depth, MaxPlanDepth)
+		r.auditPlan(t, agentName, "rejected", res, err)
+		return nil, err
+	}
+	defer budget.leave()
+
 	ctx, cancel := context.WithTimeout(ctx, pol.TimeoutOrDefault())
 	defer cancel()
 
 	st := &planState{
-		agent: agentName,
-		steps: plan,
-		scope: r.planScope(t, agentName),
+		agent:  agentName,
+		steps:  plan,
+		scope:  r.planScope(t, agentName),
+		budget: budget,
 	}
 	return r.runPlanState(ctx, t, pol, st, res, runID, stepID, shadow)
+}
+
+// planBudget is ONE budget for a whole plan tree, threaded through the
+// context: a sub-agent step whose output is itself a plan re-enters runPlan,
+// and without sharing it would reset limits at every level — 5 sub-agents
+// each allowed 5 sub-agents. Nested plans instead decrement the root's
+// budget (steps, sub-agents, approximate tokens) and are depth-capped.
+type planBudget struct {
+	mu        sync.Mutex
+	depth     int
+	steps     int
+	subAgents int
+	tokens    int
+}
+
+type planBudgetKey struct{}
+
+// MaxPlanDepth caps plan-in-agent-in-plan nesting.
+const MaxPlanDepth = 4
+
+func (b *planBudget) enter() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.depth++
+	return b.depth
+}
+
+func (b *planBudget) leave() {
+	b.mu.Lock()
+	b.depth--
+	b.mu.Unlock()
+}
+
+// addSteps/addSubAgents/addTokens increment the tree-wide counters and
+// return the new totals.
+func (b *planBudget) addSteps(n int) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.steps += n
+	return b.steps
+}
+
+func (b *planBudget) addSubAgents(n int) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.subAgents += n
+	return b.subAgents
+}
+
+func (b *planBudget) addTokens(n int) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.tokens += n
+	return b.tokens
+}
+
+func (b *planBudget) subAgentTotal() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.subAgents
+}
+
+// planBudgetFrom returns the tree budget on the context, creating (and
+// attaching) the root one when this is the outermost plan.
+func planBudgetFrom(ctx context.Context) (*planBudget, context.Context) {
+	if b, ok := ctx.Value(planBudgetKey{}).(*planBudget); ok {
+		return b, ctx
+	}
+	b := &planBudget{}
+	return b, context.WithValue(ctx, planBudgetKey{}, b)
 }
 
 // planBarrierKey marks a plan execution whose internal writes must not carry
@@ -398,12 +480,16 @@ func (r *Runner) resumePlan(ctx context.Context, t core.Trigger, rec store.PlanR
 	}
 	r.audit(map[string]any{"event": "plan", "repo": t.Target.Repo, "number": t.Target.Number,
 		"kind": t.Kind, "agent": rec.Agent, "outcome": "resumed", "next": rec.Next, "steps": len(steps)})
+	budget, ctx := planBudgetFrom(ctx)
+	budget.enter()
+	defer budget.leave()
 	st := &planState{
 		agent:     rec.Agent,
 		steps:     steps,
 		next:      rec.Next,
 		revisions: rec.Revisions,
 		scope:     r.planScope(t, rec.Agent),
+		budget:    budget,
 	}
 	for id, out := range rec.Outputs {
 		r.recordOutputs(st.scope, id, r.restoreOutputs(ctx, t, steps, id, out, st.scope))
@@ -532,6 +618,9 @@ func (r *Runner) executePlan(ctx context.Context, t core.Trigger, pol *config.Ag
 				return r.haltPlan(ctx, t, st, fmt.Errorf("step %q fans out to %d items, over limits.max_fan_out %d", id, len(items), pol.MaxFanOutOrDefault()), shadow)
 			}
 		}
+		if total := st.budget.addSteps(1); total > pol.MaxStepsOrDefault() {
+			return r.haltPlan(ctx, t, st, fmt.Errorf("step %q is execution unit %d, over limits.max_steps %d (cumulative across nested plans)", id, total, pol.MaxStepsOrDefault()), shadow)
+		}
 		if step.Type == "agent" {
 			units := 1
 			if step.ForEach != "" {
@@ -539,11 +628,12 @@ func (r *Runner) executePlan(ctx context.Context, t core.Trigger, pol *config.Ag
 					units = len(items)
 				}
 			}
-			if st.subAgents+units > pol.MaxSubAgentsOrDefault() {
-				return r.haltPlan(ctx, t, st, fmt.Errorf("step %q would run sub-agent %d, over limits.max_sub_agents %d", id, st.subAgents+units, pol.MaxSubAgentsOrDefault()), shadow)
+			if total := st.budget.addSubAgents(units); total > pol.MaxSubAgentsOrDefault() {
+				return r.haltPlan(ctx, t, st, fmt.Errorf("step %q would run sub-agent %d, over limits.max_sub_agents %d (cumulative across nested plans)", id, total, pol.MaxSubAgentsOrDefault()), shadow)
 			}
 			st.subAgents += units
 			st.tokens += len(step.Prompt) / 4
+			st.budget.addTokens(len(step.Prompt) / 4)
 		}
 
 		// Plan-step hooks fire like any workflow step's (they were guarded
@@ -570,11 +660,13 @@ func (r *Runner) executePlan(ctx context.Context, t core.Trigger, pol *config.Ag
 		r.recordOutputs(st.scope, id, outputs)
 		r.runHooks(ctx, t, step.Hooks, "done", st.scope, "plan step "+id)
 		if step.Type == "agent" {
+			n := 0
 			if b, jerr := json.Marshal(outputs); jerr == nil {
-				st.tokens += len(b) / 4
+				n = len(b) / 4
 			}
-			if st.tokens > pol.TokensOrDefault() {
-				return r.haltPlan(ctx, t, st, fmt.Errorf("plan exceeded its token budget (~%d > %d)", st.tokens, pol.TokensOrDefault()), shadow)
+			st.tokens += n
+			if total := st.budget.addTokens(n); total > pol.TokensOrDefault() {
+				return r.haltPlan(ctx, t, st, fmt.Errorf("plan tree exceeded its token budget (~%d > %d, cumulative across nested plans)", total, pol.TokensOrDefault()), shadow)
 			}
 		}
 		entry := map[string]any{"event": "plan_step", "repo": t.Target.Repo, "number": t.Target.Number,

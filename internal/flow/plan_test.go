@@ -615,3 +615,115 @@ steps: [ { id: echoer, uses: svc.post, options: { text: t } } ]
 		}
 	}
 }
+
+// REGRESSION (audit finding #7): plan nesting does NOT reset limits. A
+// sub-agent whose output is itself a plan re-enters the runner with the
+// PARENT's budget — cumulative sub-agents/steps across the tree — and
+// nesting is depth-capped.
+func TestNestedPlansShareBudget(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+memory: { type: memory }
+agents:
+  planner:  { model: x }
+  helper:   { model: y }
+  recurser: { model: z }
+policy:
+  agent_authored:
+    allow: [ svc.post, agent ]
+    limits: { max_sub_agents: 2, max_steps: 50 }
+`)
+	reg := buildRegistry(t, cfg)
+	fake := newFakeState(t, "svc")
+
+	// Parent plan: one sub-agent (helper). Helper's output is a NESTED plan
+	// with two more sub-agent steps — 3 cumulative > max_sub_agents 2.
+	// Before the fix the child re-entered with a fresh budget and all ran.
+	parent := "```plan\n- id: sub\n  type: agent\n  agent: helper\n  prompt: go\n- id: after\n  uses: svc.post\n  options: { text: parent-after }\n```"
+	child := "```plan\n- {id: c1, type: agent, agent: recurser, prompt: a}\n- {id: c2, type: agent, agent: recurser, prompt: b}\n```"
+	rig := newTestRunner(t, cfg, reg)
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		switch req.Action.Agent {
+		case "planner":
+			return dispatch.RunRef{AgentID: "p", Output: parent}, nil
+		case "helper":
+			return dispatch.RunRef{AgentID: "h", Output: child}, nil
+		}
+		return dispatch.RunRef{AgentID: "r", Output: "leaf"}, nil
+	}
+	runTrigger(rig, newTrigger("ping", nil), mustSpec(t, planSpec))
+	failed, errStr := rig.workflowFailed()
+	if !failed || !strings.Contains(errStr, "cumulative across nested plans") || !strings.Contains(errStr, "max_sub_agents") {
+		t.Fatalf("nested sub-agents must share the budget: %v %q", failed, errStr)
+	}
+	for _, c := range fake.snapshot() {
+		if c.Opts["text"] == "parent-after" {
+			t.Fatal("the halted tree must not keep executing")
+		}
+	}
+
+	// Depth cap: an agent that always answers with a plan containing itself
+	// halts at MaxPlanDepth instead of spinning (budget wide enough that
+	// depth trips first).
+	cfgDeep := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+memory: { type: memory }
+agents:
+  planner:  { model: x }
+  recurser: { model: z }
+policy:
+  agent_authored:
+    allow: [ svc.post, agent ]
+    limits: { max_sub_agents: 50, max_steps: 100 }
+`)
+	regDeep := buildRegistry(t, cfgDeep)
+	newFakeState(t, "svc")
+	recurse := "```plan\n- {id: again, type: agent, agent: recurser, prompt: deeper}\n```"
+	rig2 := newTestRunner(t, cfgDeep, regDeep)
+	depthSeen := 0
+	rig2.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		depthSeen++
+		return dispatch.RunRef{AgentID: "r", Output: recurse}, nil
+	}
+	runTrigger(rig2, newTrigger("ping", nil), mustSpec(t, planSpec))
+	failed, errStr = rig2.workflowFailed()
+	if !failed || !strings.Contains(errStr, "nesting depth") {
+		t.Fatalf("recursion must halt on the depth cap: %v %q", failed, errStr)
+	}
+	if depthSeen > MaxPlanDepth+1 {
+		t.Fatalf("recursion dispatched %d agents — not bounded by depth", depthSeen)
+	}
+
+	// Cumulative step budget across the tree.
+	cfgSteps := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+memory: { type: memory }
+agents:
+  planner: { model: x }
+  helper:  { model: y }
+policy:
+  agent_authored:
+    allow: [ svc.post, agent ]
+    limits: { max_steps: 4, max_sub_agents: 5 }
+`)
+	regSteps := buildRegistry(t, cfgSteps)
+	newFakeState(t, "svc")
+	parent3 := "```plan\n- {id: a, uses: svc.post, options: {text: a}}\n- {id: sub, type: agent, agent: helper, prompt: go}\n```"
+	child3 := "```plan\n- {id: b, uses: svc.post, options: {text: b}}\n- {id: c, uses: svc.post, options: {text: c}}\n- {id: d, uses: svc.post, options: {text: d}}\n```"
+	rig3 := newTestRunner(t, cfgSteps, regSteps)
+	rig3.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		if req.Action.Agent == "planner" {
+			return dispatch.RunRef{AgentID: "p", Output: parent3}, nil
+		}
+		return dispatch.RunRef{AgentID: "h", Output: child3}, nil
+	}
+	runTrigger(rig3, newTrigger("ping", nil), mustSpec(t, planSpec))
+	failed, errStr = rig3.workflowFailed()
+	// Units: parent a(1) + sub(2) + child b(3) + c(4) + d(5) > 4.
+	if !failed || !strings.Contains(errStr, "max_steps") || !strings.Contains(errStr, "cumulative") {
+		t.Fatalf("cumulative step budget: %v %q", failed, errStr)
+	}
+}

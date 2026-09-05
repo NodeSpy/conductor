@@ -186,7 +186,10 @@ func (r *Runner) planCheckIn(ctx context.Context, t core.Trigger, pol *config.Ag
 // plan is rejected with a needs_input escalation — never run unapproved.
 func (r *Runner) approvePlan(ctx context.Context, t core.Trigger, pol *config.AgentAuthoredPolicy, agentName string, plan []config.Step, res guardResult) error {
 	// Dry-run preview: what WOULD run, in the audit, before anyone approves.
-	preview := &planState{agent: agentName, steps: append([]config.Step{}, plan...), scope: r.planScope(t, agentName)}
+	// Its own budget — stubbed preview units must not consume the real
+	// tree's allowance.
+	preview := &planState{agent: agentName, steps: append([]config.Step{}, plan...),
+		scope: r.planScope(t, agentName), budget: &planBudget{}}
 	if err := r.executePlan(ctx, t, pol, preview, true); err != nil {
 		r.Log("%s plan dry-run preview failed: %v", flowTag(t), err)
 	}
