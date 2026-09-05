@@ -226,7 +226,7 @@ func (r *restImpl) pollRequest(ctx context.Context, ev polledEvent) (httpAPIResp
 
 // buildRequest renders the path/query/headers over scope and joins the URL.
 func (r *restImpl) buildRequest(path string, query, verbHeaders map[string]string, scope map[string]any) (string, map[string]string, error) {
-	p, err := renderHTTPTemplate(path, scope)
+	p, err := renderHTTPPathTemplate(path, scope)
 	if err != nil {
 		return "", nil, err
 	}
@@ -267,7 +267,7 @@ func (r *restImpl) Invoke(ctx context.Context, verb string, opts map[string]any)
 	}
 	var body []byte
 	if v.Body != "" {
-		rendered, err := renderHTTPTemplate(v.Body, scope)
+		rendered, err := renderHTTPBodyTemplate(v.Body, scope)
 		if err != nil {
 			return nil, fmt.Errorf("rest %s.%s: body: %w", r.name, verb, err)
 		}

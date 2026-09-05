@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"text/template"
+	"text/template/parse"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -343,12 +344,48 @@ func postTokenForm(ctx context.Context, a authConfig, form url.Values) (tokenRes
 // ---------------------------------------------------------------------------
 
 // httpTemplateFuncs is the declared-connector template function set: `json`
-// encodes any value into a JSON body/fragment.
+// encodes any value into a JSON body/fragment; `raw` is the explicit opt-out
+// from the default body escaping (the value is spliced verbatim).
 var httpTemplateFuncs = template.FuncMap{
 	"json": func(v any) (string, error) {
 		b, err := json.Marshal(v)
 		return string(b), err
 	},
+	"raw":      func(v any) any { return v },
+	"_pathesc": pathEscapeValue,
+	"_jsonesc": jsonEscapeValue,
+}
+
+// pathEscapeValue percent-escapes an interpolated value as a single URL path
+// segment, so option values from event data cannot add segments (/), splice a
+// query string (?/#), or carry encoded traversal into the request path.
+func pathEscapeValue(v any) string {
+	if v == nil {
+		return "" // missingkey=zero: match the old "<no value>" strip
+	}
+	return url.PathEscape(fmt.Sprint(v))
+}
+
+// jsonEscapeValue JSON-encodes an interpolated value. Strings come back as
+// their escaped content WITHOUT the surrounding quotes, so the common
+// `"{{.options.title}}"` pattern stays valid JSON and a value like
+// `","role":"admin` cannot splice new keys into the body. Numbers, bools,
+// and structured values encode to their JSON forms.
+func jsonEscapeValue(v any) (string, error) {
+	if v == nil {
+		return "", nil // missingkey=zero: match the old "<no value>" strip
+	}
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return "", err
+	}
+	s := strings.TrimRight(b.String(), "\n")
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1], nil
+	}
+	return s, nil
 }
 
 // renderHTTPTemplate renders one template string over the request/response
@@ -366,6 +403,95 @@ func renderHTTPTemplate(s string, data map[string]any) (string, error) {
 		return "", fmt.Errorf("template %q: %w", s, err)
 	}
 	return strings.ReplaceAll(b.String(), "<no value>", ""), nil
+}
+
+// renderHTTPPathTemplate renders a verb/event path template with every
+// interpolated action piped through pathEscapeValue, then refuses any
+// rendered dot-segment. Literal text in the declared path is the config
+// author's own; only the interpolated (event-derived) values are escaped.
+func renderHTTPPathTemplate(s string, data map[string]any) (string, error) {
+	if !strings.Contains(s, "{{") {
+		return s, nil
+	}
+	rendered, err := renderEscapedTemplate(s, "_pathesc", nil, data)
+	if err != nil {
+		return "", err
+	}
+	for _, seg := range strings.Split(rendered, "/") {
+		if seg == "." || seg == ".." {
+			return "", fmt.Errorf("path template %q: rendered path %q contains a dot-segment — refusing traversal", s, rendered)
+		}
+	}
+	return rendered, nil
+}
+
+// renderHTTPBodyTemplate renders a verb body template with every
+// interpolated action piped through jsonEscapeValue, so values are
+// JSON-encoded by default and cannot inject body structure. Pipelines that
+// already end in `json` (a full JSON fragment) or `raw` (explicit opt-out
+// for non-JSON bodies) are left alone.
+func renderHTTPBodyTemplate(s string, data map[string]any) (string, error) {
+	if !strings.Contains(s, "{{") {
+		return s, nil
+	}
+	return renderEscapedTemplate(s, "_jsonesc", map[string]bool{"json": true, "raw": true}, data)
+}
+
+// renderEscapedTemplate parses s, appends the esc function to every
+// output action's pipeline (skipping assignments and pipelines whose final
+// command is in skip), and executes it over data.
+func renderEscapedTemplate(s, esc string, skip map[string]bool, data map[string]any) (string, error) {
+	t, err := template.New("t").Option("missingkey=zero").Funcs(httpTemplateFuncs).Parse(s)
+	if err != nil {
+		return "", fmt.Errorf("template %q: %w", s, err)
+	}
+	escapeActionList(t.Tree.Root, esc, skip)
+	var b strings.Builder
+	if err := t.Execute(&b, data); err != nil {
+		return "", fmt.Errorf("template %q: %w", s, err)
+	}
+	return strings.ReplaceAll(b.String(), "<no value>", ""), nil
+}
+
+// escapeActionList walks the parse tree and pipes every output action
+// through esc. Branch bodies (if/range/with) are walked recursively; their
+// condition pipes produce no output and are left alone.
+func escapeActionList(list *parse.ListNode, esc string, skip map[string]bool) {
+	if list == nil {
+		return
+	}
+	for _, n := range list.Nodes {
+		switch n := n.(type) {
+		case *parse.ActionNode:
+			escapeActionPipe(n.Pipe, esc, skip)
+		case *parse.IfNode:
+			escapeActionList(n.List, esc, skip)
+			escapeActionList(n.ElseList, esc, skip)
+		case *parse.RangeNode:
+			escapeActionList(n.List, esc, skip)
+			escapeActionList(n.ElseList, esc, skip)
+		case *parse.WithNode:
+			escapeActionList(n.List, esc, skip)
+			escapeActionList(n.ElseList, esc, skip)
+		}
+	}
+}
+
+func escapeActionPipe(pipe *parse.PipeNode, esc string, skip map[string]bool) {
+	if pipe == nil || len(pipe.Cmds) == 0 || len(pipe.Decl) > 0 {
+		return // assignments ({{$x := ...}}) print nothing
+	}
+	last := pipe.Cmds[len(pipe.Cmds)-1]
+	if len(last.Args) > 0 {
+		if id, ok := last.Args[0].(*parse.IdentifierNode); ok && skip[id.Ident] {
+			return
+		}
+	}
+	pipe.Cmds = append(pipe.Cmds, &parse.CommandNode{
+		NodeType: parse.NodeCommand,
+		Pos:      pipe.Position(),
+		Args:     []parse.Node{parse.NewIdentifier(esc)},
+	})
 }
 
 // renderHTTPValue renders a template string, preserving the underlying type
