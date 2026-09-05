@@ -521,6 +521,19 @@ session-persistent runtime (paseo/ACP); one-shot runtimes stay
 fresh-per-event and lean on [[Memory]]. Full behavior and the worked
 one-agent-per-PR example: [[Agents]].
 
+## Agent-driven workflows (`workflow.*`, `policy.agent_authored`)
+
+An agent can emit a plan of ordinary steps (a ` ```plan ` block in its final
+output, the live `run_step` tool on ACP runtimes, or `workflow.run
+{ steps }`), choose an existing workflow from the `workflow.list` catalog
+(`workflow.run { name, with, reason }`), and promote a recurring pattern
+into a durable saved workflow (`workflow.save` — versioned, provenance-
+stamped, unreviewed until `conductor workflows review <name>`). All of it is
+governed by `policy.agent_authored` — safe by default (no block, no plans),
+allowlist + approve-gated + sandboxed + bounded, enforced structurally
+before anything runs. The full model: [[Workflows]]; the guardrails:
+[[Policy]].
+
 ## Conductor itself (`conductor.*`) — events and verbs
 
 Conductor is a built-in connector (always available; the name is reserved).

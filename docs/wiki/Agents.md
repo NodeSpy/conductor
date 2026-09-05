@@ -150,6 +150,16 @@ via `paseo send` (no captured output for later steps); an ACP follow-up
 returns the turn's output. A follow-up to a dead session (archived by hand)
 is detected, unbound, and replaced by a fresh spawn.
 
+## Agent-driven workflows
+
+An agent step's final output may carry a ` ```plan ` block — steps in the
+normal grammar that conductor validates, guards (`policy.agent_authored`,
+[[Policy]]), and runs deterministically. Failures route back to this
+agent's **session** (above) for a bounded revise loop, so a planning agent
+should keep sessions; pairing with `memory:` lets it recall what worked.
+The full loop — plan, choose from the catalog, supervise, promote — is in
+[[Workflows]].
+
 ## Explanation
 
 An agent and a controller answer different questions. The **agent** profile answers "what should

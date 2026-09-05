@@ -254,6 +254,28 @@ hosts:
 #   # or type: memory                     # ephemeral, gone on restart
 
 # ---------------------------------------------------------------------------
+# policy.agent_authored — agent-driven workflows (OFF until this block
+# exists). An agent may emit a plan: of ordinary steps (validated + guarded
+# structurally before anything runs), choose a workflow from the
+# workflow.list catalog, and promote patterns with workflow.save (reviewed
+# via `conductor workflows review` before unattended reuse). allow: admits
+# step classes freely; approve: needs a dry-run + hand-off approval on
+# approve_via; host: is the sandbox agent code/cli is FORCED onto; limits
+# bound size/time/tokens; no_secret_egress gates the read-secret+write-out
+# combo; trust: full is the deliberate lift-everything opt-in.
+# ---------------------------------------------------------------------------
+# policy:
+#   agent_authored:
+#     allow:   [ kv.*, memory.*, workflow, "workflow.*", gh.comment ]
+#     approve: [ cli, code, gh.merge ]
+#     approve_via: slack-ops
+#     host: sandbox                      # a hosts: entry
+#     identity: bot
+#     limits: { max_steps: 50, max_fan_out: 20, max_sub_agents: 5, timeout: 30m, tokens: 200k }
+#     max_revisions: 3
+#     no_secret_egress: true
+
+# ---------------------------------------------------------------------------
 # runtimes: — where agents run (previously controllers:). The paseo runtime's
 # bin: replaces the old top-level paseo_bin. Any runtime may set host: to run
 # on a hosts: entry over SSH — a remote paseo runs its whole CLI there (put
@@ -296,6 +318,7 @@ agents:
 # ---------------------------------------------------------------------------
 workflows:
   assess-and-post:
+    description: "triage a PR: agent decides auto vs manual, pings a channel when manual"
     inputs:
       repo: { type: string, required: true }
       pr: { type: integer, required: true }

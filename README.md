@@ -99,6 +99,14 @@ that changes the config schema migrates your file itself, with a backup.
   that agent — later events arrive as follow-ups with full prior context,
   serialized per key, persisted across restarts, and evicted on idle/age or
   an `end_on` event like `gh.pr_closed` (see the wiki's Agents page).
+  And agents can **program conductor**: emit a `plan:` of ordinary steps
+  that runs deterministically (token-free unless it spawns sub-agents),
+  choose an existing workflow from the `workflow.list` catalog, get failures
+  routed back to their session for a bounded revise-and-resume loop, and
+  promote recurring patterns with `workflow.save` — all under
+  `policy.agent_authored`: allowlist + approval gates + a sandbox host +
+  hard limits, enforced structurally, off until you opt in (see the wiki's
+  Workflows and Policy pages).
 - **Triggers** — `on:` / `filters:` / `steps:` / `hooks:`. Filters gate the
   event (keys come from the event's schema, all AND-ed); steps are the
   workflow; hooks are lifecycle actions. `on:` takes one source, a **list**

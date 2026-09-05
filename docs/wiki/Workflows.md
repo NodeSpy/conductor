@@ -148,6 +148,99 @@ step's id. A workflow may call another workflow; `validate` rejects cycles,
 unknown/missing inputs, type mismatches, and outputs referencing steps that
 do not exist.
 
+A workflow may carry a `description:` — with its declared inputs/outputs it
+is self-describing (`conductor schema`, `workflow.list`, and a choosing
+agent all read it). `workflow:` may also be a **templated name**
+(`workflow: "{{.pick}}"`) resolved at runtime against the workflow set
+(config + saved): the static checks don't apply to a dynamic name, so it's
+guarded by a runtime depth cap (8) and a clear unknown-name error naming the
+set.
+
+## Agent-driven workflows
+
+An agent can *program* conductor (#36 §11): given a goal it emits a plan of
+ordinary steps, conductor runs them deterministically (no further tokens on
+the happy path), and the agent re-engages only on failures or to promote a
+recurring pattern. Everything below runs under
+[[Policy]]'s `agent_authored` block — **no block, no plans**.
+
+**Plan (emit), two ways.** Every runtime can end its output with a `plan:`
+block — a fenced ` ```plan ` YAML step list, or a `plan:` key in a JSON
+(`output_schema`) output. Conductor validates it against the connector
+schemas, admits it through the guard, and runs it in a child scope that has
+NO named secrets or preloaded vault values. Runtimes with live tools (ACP)
+additionally get `run_step` — author and run ONE step mid-run, same guard —
+and `workflow_list`, over the same conductor MCP server the memory tools
+ride (see [[Memory]]); paseo and remote sessions use the output contract.
+
+**Choose (don't always author).** `workflow.list` is the catalog: every
+config + saved workflow's name, description, inputs, and health.
+`workflow.run { name, with, reason }` runs the pick — the rationale is
+audited (`workflow_choice`) — and `workflow.run { steps }` runs an inline
+plan under the full guard. Memory (§9) informs the pick; repetition
+collapses to recognize → pick → run.
+
+```yaml
+# Recognize → pick → run: the agent consults the catalog and runs the fit.
+triggers:
+  - on: gh.issue_matched
+    steps:
+      - id: triage
+        type: agent
+        agent: planner
+        prompt: |
+          Goal: handle "{{.title}}". Consult the workflow catalog and prior
+          memory; if a workflow fits, run it and say why. Only author fresh
+          steps for genuine novelty. Reply with a ```plan block, e.g.
+          - uses: workflow.run
+            options: { name: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" }, reason: "..." }
+```
+
+**Supervise.** A failing plan step routes back to the authoring agent's
+**session (§10)** as a follow-up with STRUCTURED context — the failed step,
+the error, executed steps and their outputs, the remaining steps. The agent
+replies with a revised plan; conductor re-validates, re-guards (a revision
+may not smuggle in approval-gated work), splices it in, and **resumes from
+the failed step** — committed side-effecting steps never re-run. After
+`max_revisions` rounds the run compensates and escalates `needs_input`. A
+step marked `escalate_to: agent` checks in on success too. Supervision
+needs the authoring agent to keep sessions (`session:` on its profile);
+without one, failures go straight to compensate + escalate.
+
+**Compensate.** A plan step may declare `compensate:` (a nested step — its
+undo). On terminal failure the committed steps' compensations run in
+REVERSE order, best-effort, audited (`plan_compensate`).
+
+**Promote.** `workflow.save { name, description, steps }` persists a
+durable, versioned reusable workflow with provenance — a catalog candidate
+for Choose next time. Trust is earned: a saved (or newly revised) workflow
+is UNREVIEWED — it dry-runs freely but refuses a real run until `conductor
+workflows review <name>` (or `trust: full`). Conductor tracks each saved
+workflow's success rate; a rotting one (≥3 runs, <50% success) is flagged
+and deprioritized in the catalog. `conductor workflows ls` shows it all.
+
+```yaml
+# Plan → recover → promote: fix now, and keep the pattern.
+triggers:
+  - on: gh.failing_checks
+    steps:
+      - id: fixer
+        type: agent
+        agent: planner              # session: on the profile → supervised revisions
+        prompt: |
+          CI failed on {{.repo}}#{{.pr}}. Emit a ```plan that diagnoses and
+          fixes it (allowed verbs only; compensate: where a step has an undo).
+          If this pattern recurs, also include a workflow.save step promoting
+          it — future runs will pick it from the catalog with zero planning.
+```
+
+**Audit & honesty.** Every plan run is audited: the admission gate
+(`allow`/`approve`/`trust`), rejections with reasons, per-step outcomes,
+revisions, compensations, the choice rationale — and the
+**deterministic-vs-hybrid** classification (a plan with no sub-agent steps
+is truly token-free; one with them is hybrid, with its sub-agent count and
+approximate token spend bounded by `limits.tokens`).
+
 ## File-based references
 
 A `workflow:` resolves three ways; all are checked at load:
