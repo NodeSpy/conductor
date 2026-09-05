@@ -117,8 +117,9 @@ func (r *Runner) workflowRun(ctx context.Context, t core.Trigger, opts map[strin
 	entry["inline_steps"] = len(steps)
 	r.audit(entry)
 	// An inline plan through the verb is agent-authored by definition —
-	// the same guard as a plan: output block.
-	return r.runPlan(ctx, t, author, steps, shadow)
+	// the same guard as a plan: output block. (No crash checkpoint here —
+	// only agent-step plans persist; see Workflows.md.)
+	return r.runPlan(ctx, t, author, "", "", steps, shadow)
 }
 
 // workflowSave promotes steps into the saved registry: validated against the

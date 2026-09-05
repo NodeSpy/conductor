@@ -42,6 +42,7 @@ func (r *Runner) planStepFailed(ctx context.Context, t core.Trigger, pol *config
 		revised, ok := r.requestRevision(ctx, t, st, id, cause, pol)
 		if ok {
 			if err := r.splicePlan(t, pol, st, revised); err == nil {
+				st.checkpoint() // a splice changes the surviving plan
 				r.audit(map[string]any{"event": "plan_revise", "repo": t.Target.Repo, "number": t.Target.Number,
 					"agent": st.agent, "failed_step": id, "revision": st.revisions, "outcome": "spliced",
 					"steps": len(revised)})

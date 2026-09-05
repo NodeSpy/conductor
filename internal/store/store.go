@@ -44,12 +44,14 @@ type Store struct {
 	runsPath     string
 	sessionsPath string
 	affinityPath string
+	plansPath    string
 	ttl          time.Duration
 	maxPRs       int
 	recs         map[string]*Record
 	runs         map[string]*WorkflowRun
 	sessions     map[string]*SessionRecord
 	affinity     map[string]*AffinityRecord
+	plans        map[string]*PlanRecord
 	audit        *auditLog
 	now          func() time.Time
 }
@@ -70,12 +72,14 @@ func Open(o Options) (*Store, error) {
 		runsPath:     filepath.Join(filepath.Dir(o.StatePath), "runs.json"),
 		sessionsPath: filepath.Join(filepath.Dir(o.StatePath), "sessions.json"),
 		affinityPath: filepath.Join(filepath.Dir(o.StatePath), "affinity.json"),
+		plansPath:    filepath.Join(filepath.Dir(o.StatePath), "plans.json"),
 		ttl:          o.TTL,
 		maxPRs:       o.MaxPRs,
 		recs:         map[string]*Record{},
 		runs:         map[string]*WorkflowRun{},
 		sessions:     map[string]*SessionRecord{},
 		affinity:     map[string]*AffinityRecord{},
+		plans:        map[string]*PlanRecord{},
 		now:          time.Now,
 	}
 	if err := os.MkdirAll(filepath.Dir(o.StatePath), 0o755); err != nil {
@@ -109,6 +113,14 @@ func Open(o Options) (*Store, error) {
 		_ = json.Unmarshal(b, &s.affinity)
 		if s.affinity == nil {
 			s.affinity = map[string]*AffinityRecord{}
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	if b, err := os.ReadFile(s.plansPath); err == nil {
+		_ = json.Unmarshal(b, &s.plans)
+		if s.plans == nil {
+			s.plans = map[string]*PlanRecord{}
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, err

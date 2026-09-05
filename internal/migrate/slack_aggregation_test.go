@@ -89,6 +89,11 @@ type aggStore struct{ mu sync.Mutex }
 func (s *aggStore) Audit(map[string]any)           {}
 func (s *aggStore) PutRun(store.WorkflowRun) error { return nil }
 func (s *aggStore) DeleteRun(string) error         { return nil }
+func (s *aggStore) PutPlan(store.PlanRecord) error { return nil }
+func (s *aggStore) GetPlan(string, string) (store.PlanRecord, bool) {
+	return store.PlanRecord{}, false
+}
+func (s *aggStore) DeletePlan(string, string) error { return nil }
 
 type aggNotif struct{}
 

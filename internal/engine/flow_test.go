@@ -32,6 +32,12 @@ func newFlowGateStore() *flowGateStore {
 	return &flowGateStore{runs: map[string]bool{}, sigs: map[string]string{}}
 }
 
+func (s *flowGateStore) PutPlan(store.PlanRecord) error { return nil }
+func (s *flowGateStore) GetPlan(string, string) (store.PlanRecord, bool) {
+	return store.PlanRecord{}, false
+}
+func (s *flowGateStore) DeletePlan(string, string) error { return nil }
+
 func (s *flowGateStore) GC() (int, error) { return 0, nil }
 func (s *flowGateStore) Touch(string)     {}
 func (s *flowGateStore) Delete(string) error {

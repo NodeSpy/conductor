@@ -14,6 +14,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/expr"
 	"github.com/NodeSpy/conductor/internal/memory"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // Agent-driven workflows (#36 §11): an agent programs conductor. Its final
@@ -239,7 +240,10 @@ func (r *Runner) planPolicy() *config.AgentAuthoredPolicy {
 }
 
 // planState carries one plan execution across revisions (supervise splices
-// into it; compensation unwinds it).
+// into it; compensation unwinds it) and — when the plan belongs to a
+// persisted workflow run — checkpoints to disk after every committed step
+// and splice, so a daemon crash/auto-update resumes AFTER the last
+// committed side effect.
 type planState struct {
 	agent     string        // authoring agent profile name
 	steps     []config.Step // current (possibly revised) plan
@@ -247,8 +251,16 @@ type planState struct {
 	revisions int
 	committed []committedStep // for reverse-order compensation
 	scope     map[string]any
-	tokens    int // approximate token spend of sub-agent steps
-	subAgents int // executed sub-agent units
+	tokens    int    // approximate token spend of sub-agent steps
+	subAgents int    // executed sub-agent units
+	persist   func() // checkpoint hook (nil = ephemeral: shadow, live, inline)
+}
+
+// checkpoint persists the plan's progress (no-op for ephemeral plans).
+func (st *planState) checkpoint() {
+	if st.persist != nil {
+		st.persist()
+	}
 }
 
 type committedStep struct {
@@ -257,9 +269,11 @@ type committedStep struct {
 }
 
 // runPlan validates, guards, audits, and executes one agent-authored plan.
-// Returns the plan's outputs map ({"steps": n, "deterministic": bool, plus
-// each step's outputs by id}).
-func (r *Runner) runPlan(ctx context.Context, t core.Trigger, agentName string, plan []config.Step, shadow bool) (map[string]any, error) {
+// runID/stepID key the crash-resume checkpoint (empty = ephemeral — shadow
+// runs, the live run_step tool, workflow.run inline steps). Returns the
+// plan's outputs map ({"steps": n, "deterministic": bool, plus each step's
+// outputs by id}).
+func (r *Runner) runPlan(ctx context.Context, t core.Trigger, agentName, runID, stepID string, plan []config.Step, shadow bool) (map[string]any, error) {
 	pol := r.planPolicy()
 	if err := ValidatePlanSteps(r.Cfg, r.Conns, plan); err != nil {
 		r.auditPlan(t, agentName, "rejected", guardResult{}, err)
@@ -286,10 +300,84 @@ func (r *Runner) runPlan(ctx context.Context, t core.Trigger, agentName string, 
 		steps: plan,
 		scope: r.planScope(t, agentName),
 	}
+	return r.runPlanState(ctx, t, pol, st, res, runID, stepID, shadow)
+}
+
+// runPlanState executes a (fresh or restored) plan state with checkpointing
+// wired: persisted after every committed step and splice, removed on any
+// normal completion or terminal failure — only a crash leaves a record, and
+// the resume path picks it up (see execAgent).
+func (r *Runner) runPlanState(ctx context.Context, t core.Trigger, pol *config.AgentAuthoredPolicy, st *planState, res guardResult, runID, stepID string, shadow bool) (map[string]any, error) {
+	if !shadow && runID != "" && stepID != "" && r.Store != nil {
+		st.persist = func() {
+			if err := r.Store.PutPlan(planRecord(st, runID, stepID)); err != nil {
+				r.Log("%s plan checkpoint: %v", flowTag(t), err)
+			}
+		}
+		st.checkpoint() // the admitted plan itself survives a crash
+		defer func() { _ = r.Store.DeletePlan(runID, stepID) }()
+	}
 	if err := r.executePlan(ctx, t, pol, st, shadow); err != nil {
 		return planOutputs(st, res), err
 	}
 	return planOutputs(st, res), nil
+}
+
+// planRecord snapshots a plan state for persistence.
+func planRecord(st *planState, runID, stepID string) store.PlanRecord {
+	raw, _ := yaml.Marshal(st.steps)
+	outputs := map[string]map[string]any{}
+	if so, ok := st.scope["steps"].(map[string]any); ok {
+		for id, v := range so {
+			if m, ok := v.(map[string]any); ok {
+				if out, ok := m["outputs"].(map[string]any); ok {
+					outputs[id] = out
+				}
+			}
+		}
+	}
+	return store.PlanRecord{
+		RunID: runID, StepID: stepID, Agent: st.agent,
+		Steps: raw, Next: st.next, Revisions: st.revisions, Outputs: outputs,
+	}
+}
+
+// resumePlan continues a crash-interrupted plan from its checkpoint: the
+// steps are re-guarded under the CURRENT policy (approval is not re-asked —
+// the original run cleared it before any step committed), committed outputs
+// are restored to the scope, and execution continues at the resume index.
+func (r *Runner) resumePlan(ctx context.Context, t core.Trigger, rec store.PlanRecord, shadow bool) (map[string]any, error) {
+	var steps []config.Step
+	if err := yaml.Unmarshal(rec.Steps, &steps); err != nil {
+		_ = r.Store.DeletePlan(rec.RunID, rec.StepID)
+		return nil, fmt.Errorf("plan resume: corrupt checkpoint: %w", err)
+	}
+	pol := r.planPolicy()
+	res, err := guardPlan(r.Cfg, r.Conns, pol, steps)
+	if err != nil {
+		_ = r.Store.DeletePlan(rec.RunID, rec.StepID)
+		r.auditPlan(t, rec.Agent, "rejected", res, fmt.Errorf("on resume: %w", err))
+		return nil, fmt.Errorf("plan resume: %w", err)
+	}
+	r.audit(map[string]any{"event": "plan", "repo": t.Target.Repo, "number": t.Target.Number,
+		"kind": t.Kind, "agent": rec.Agent, "outcome": "resumed", "next": rec.Next, "steps": len(steps)})
+	st := &planState{
+		agent:     rec.Agent,
+		steps:     steps,
+		next:      rec.Next,
+		revisions: rec.Revisions,
+		scope:     r.planScope(t, rec.Agent),
+	}
+	for id, out := range rec.Outputs {
+		r.recordOutputs(st.scope, id, out)
+	}
+	// Committed steps are restored for scope/audit purposes but NOT for
+	// compensation — their compensate: actions already ran or will only run
+	// for steps committed in THIS process (undo state may be stale after a
+	// crash; escalation covers the gap).
+	ctx, cancel := context.WithTimeout(ctx, pol.TimeoutOrDefault())
+	defer cancel()
+	return r.runPlanState(ctx, t, pol, st, res, rec.RunID, rec.StepID, shadow)
 }
 
 // guardSavedWorkflow re-admits a saved (agent-promoted) workflow's steps
@@ -353,7 +441,7 @@ func (r *Runner) RunLiveStep(ctx context.Context, src memory.Source, number int,
 	if agent == "" {
 		agent = "live"
 	}
-	return r.runPlan(ctx, t, agent, steps, false)
+	return r.runPlan(ctx, t, agent, "", "", steps, false)
 }
 
 // WorkflowCatalog exposes the workflow.list catalog (the workflow_list live
@@ -460,6 +548,7 @@ func (r *Runner) executePlan(ctx context.Context, t core.Trigger, pol *config.Ag
 		r.audit(entry)
 		st.committed = append(st.committed, committedStep{id: id, step: step})
 		st.next = i + 1
+		st.checkpoint()
 
 		// A mid-plan check-in: the step asks the authoring agent to review
 		// its outputs (and possibly revise what remains) even on success.

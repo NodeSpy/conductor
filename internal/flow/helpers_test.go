@@ -308,10 +308,32 @@ type fakeStore struct {
 	runs   map[string]store.WorkflowRun
 	putLog []store.WorkflowRun
 	delLog []string
+	plans  map[string]store.PlanRecord
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{runs: map[string]store.WorkflowRun{}}
+	return &fakeStore{runs: map[string]store.WorkflowRun{}, plans: map[string]store.PlanRecord{}}
+}
+
+func (s *fakeStore) PutPlan(rec store.PlanRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.plans[rec.RunID+"\x00"+rec.StepID] = rec
+	return nil
+}
+
+func (s *fakeStore) GetPlan(runID, stepID string) (store.PlanRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.plans[runID+"\x00"+stepID]
+	return rec, ok
+}
+
+func (s *fakeStore) DeletePlan(runID, stepID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.plans, runID+"\x00"+stepID)
+	return nil
 }
 
 func (s *fakeStore) Audit(e map[string]any) {

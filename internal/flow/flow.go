@@ -22,12 +22,17 @@ import (
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
-// Store is the persistence surface the runner needs (checkpointed runs +
-// the audit log). *store.Store satisfies it.
+// Store is the persistence surface the runner needs (checkpointed runs,
+// in-flight plan checkpoints, and the audit log). *store.Store satisfies it.
 type Store interface {
 	Audit(entry map[string]any)
 	PutRun(r store.WorkflowRun) error
 	DeleteRun(id string) error
+	// Plan checkpoints: an agent-emitted plan persists its committed
+	// progress so a restart resumes after the last committed step (#36 §11).
+	PutPlan(rec store.PlanRecord) error
+	GetPlan(runID, stepID string) (store.PlanRecord, bool)
+	DeletePlan(runID, stepID string) error
 }
 
 // Notifier emits lifecycle notifications. *notify.Notifier satisfies it.
@@ -898,6 +903,25 @@ func (r *Runner) hostTarget(step config.Step) (*hosts.Target, error) {
 // services (runtime resolution, tokens, guidance, background hand-off).
 func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, string, error) {
 	profile := r.Cfg.Agents[step.Agent]
+	// Crash resume: a persisted plan checkpoint for this run+step means the
+	// agent already ran and its plan was interrupted mid-way — resume the
+	// PLAN after its last committed step instead of re-dispatching the agent
+	// (which would re-run committed side effects).
+	runID := memory.SourceFrom(ctx).Run
+	if !shadow && !step.Background && runID != "" && r.Store != nil {
+		if rec, ok := r.Store.GetPlan(runID, id); ok {
+			r.Log("%s resuming interrupted plan for step %s (from step %d)", flowTag(t), id, rec.Next)
+			planOut, plErr := r.resumePlan(ctx, t, rec, shadow)
+			outputs := map[string]any{"resumed_plan": true}
+			if planOut != nil {
+				outputs["plan"] = planOut
+			}
+			if plErr != nil {
+				return outputs, "", fmt.Errorf("agent plan (resumed): %w", plErr)
+			}
+			return outputs, "", nil
+		}
+	}
 	act := config.Action{
 		Type: "agent", ID: id, Agent: step.Agent,
 		Prompt: step.Prompt, Checkout: step.Checkout, WorkDir: step.WorkDir,
@@ -959,7 +983,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if plan, found, perr := ParsePlan(ref.Output); perr != nil {
 		return nil, ref.Output, perr
 	} else if found {
-		planOut, plErr := r.runPlan(ctx, t, step.Agent, plan, shadow)
+		planOut, plErr := r.runPlan(ctx, t, step.Agent, runID, id, plan, shadow)
 		if planOut != nil {
 			outputs["plan"] = planOut
 		}

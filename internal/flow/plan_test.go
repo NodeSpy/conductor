@@ -7,8 +7,10 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/memory"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // planCfg builds a config with an agent_authored policy block.
@@ -381,5 +383,116 @@ func TestRunLiveStep(t *testing.T) {
 	plans := rig.Store.auditsWithEvent("plan")
 	if len(plans) != 2 || plans[0]["agent"] != "planner" {
 		t.Fatalf("live audit: %+v", plans)
+	}
+}
+
+// REGRESSION (audit finding #3): plan resume idempotency is REAL, not
+// claimed. An agent-step plan checkpoints its committed progress per
+// run+step; a restart resumes AFTER the last committed step — the agent is
+// not re-dispatched and committed side effects never re-run. Checkpoints are
+// removed on normal completion and terminal failure, and a resumed plan is
+// re-guarded under the current policy.
+func TestPlanResumeIdempotency(t *testing.T) {
+	cfg := planCfg(t, `
+policy:
+  agent_authored:
+    allow: [ svc.* ]
+`)
+	reg := buildRegistry(t, cfg)
+	newFakeState(t, "svc")
+	rig := newTestRunner(t, cfg, reg)
+
+	// 1. In-flight persistence: at the moment the revise round runs (step
+	// "boom" failed), step "one" must already be checkpointed with its
+	// outputs — that's what a crash would recover from.
+	var midFlight *store.PlanRecord
+	rig.Runner.Agents.Revise = func(ctx context.Context, agent string, tr core.Trigger, prompt string) (string, bool, error) {
+		if rec, ok := rig.Store.GetPlan("flow:ping:o/r#7", "author"); ok {
+			midFlight = &rec
+		}
+		return "no plan", true, nil // give up → terminal failure → checkpoint removed
+	}
+	plan := "```plan\n" +
+		"- id: one\n  uses: svc.post\n  options: { text: one }\n" +
+		"- id: boom\n  uses: svc.fail\n  options: {}\n" +
+		"```"
+	rig.Agents.dispatchFunc = planDispatch(plan)
+	run := emptyRun()
+	run.ID = "flow:ping:o/r#7"
+	runTriggerWithRun(rig, run, newTrigger("ping", nil), mustSpec(t, planSpec))
+	if failed, _ := rig.workflowFailed(); !failed {
+		t.Fatal("plan should have failed terminally")
+	}
+	if midFlight == nil {
+		t.Fatal("a committed step must be checkpointed before the revise round")
+	}
+	if midFlight.Next != 1 || midFlight.Agent != "planner" || midFlight.Outputs["one"] == nil {
+		t.Fatalf("checkpoint content: %+v", midFlight)
+	}
+	if _, ok := rig.Store.GetPlan("flow:ping:o/r#7", "author"); ok {
+		t.Fatal("a terminal failure must remove the checkpoint (compensations ran)")
+	}
+
+	// 2. THE RESUME PATH: a persisted checkpoint (as a crash would leave)
+	// makes the next run of the same run+step SKIP the agent dispatch and
+	// SKIP the committed step, running only the remainder.
+	stepsYAML := "- id: one\n  uses: svc.post\n  options: { text: one }\n- id: two\n  uses: svc.post\n  options: { text: two }\n"
+	rig2 := newTestRunner(t, cfg, reg)
+	if err := rig2.Store.PutPlan(store.PlanRecord{
+		RunID: "flow:ping:o/r#7", StepID: "author", Agent: "planner",
+		Steps: []byte(stepsYAML), Next: 1,
+		Outputs: map[string]map[string]any{"one": {"id": 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fake2 := newFakeState(t, "svc")
+	dispatched := 0
+	rig2.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		dispatched++
+		return dispatch.RunRef{AgentID: "a1", Output: "should not run"}, nil
+	}
+	run2 := emptyRun()
+	run2.ID = "flow:ping:o/r#7"
+	runTriggerWithRun(rig2, run2, newTrigger("ping", nil), mustSpec(t, planSpec))
+	if failed, errStr := rig2.workflowFailed(); failed {
+		t.Fatalf("resume failed: %s", errStr)
+	}
+	if dispatched != 0 {
+		t.Fatal("resume must NOT re-dispatch the authoring agent")
+	}
+	var texts []string
+	for _, c := range fake2.snapshot() {
+		texts = append(texts, fmt.Sprint(c.Opts["text"]))
+	}
+	// Only "two" runs — "one" was committed before the crash.
+	if len(texts) != 1 || texts[0] != "two" {
+		t.Fatalf("resume must skip committed steps: %v", texts)
+	}
+	if _, ok := rig2.Store.GetPlan("flow:ping:o/r#7", "author"); ok {
+		t.Fatal("completion must remove the checkpoint")
+	}
+	resumes := rig2.Store.auditsWithEvent("plan")
+	if len(resumes) == 0 || resumes[0]["outcome"] != "resumed" {
+		t.Fatalf("resume audit: %+v", resumes)
+	}
+
+	// 3. A resumed plan is re-guarded under the CURRENT policy.
+	tight := planCfg(t, `
+policy:
+  agent_authored:
+    allow: [ kv.* ]
+`)
+	regT := buildRegistry(t, tight)
+	rig3 := newTestRunner(t, tight, regT)
+	_ = rig3.Store.PutPlan(store.PlanRecord{
+		RunID: "flow:ping:o/r#7", StepID: "author", Agent: "planner",
+		Steps: []byte(stepsYAML), Next: 1,
+	})
+	rig3.Agents.dispatchFunc = planDispatch("unused")
+	run3 := emptyRun()
+	run3.ID = "flow:ping:o/r#7"
+	runTriggerWithRun(rig3, run3, newTrigger("ping", nil), mustSpec(t, planSpec))
+	if failed, errStr := rig3.workflowFailed(); !failed || !strings.Contains(errStr, "not in policy.agent_authored.allow") {
+		t.Fatalf("resume must re-guard: %v %q", failed, errStr)
 	}
 }
