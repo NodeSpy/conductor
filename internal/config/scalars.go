@@ -10,14 +10,33 @@ import (
 )
 
 // Duration is a time.Duration that unmarshals from a Go duration string
-// ("30m", "720h") or a plain number of seconds.
+// ("30m", "720h") — plus a leading day unit ("7d", "1d12h"), which session
+// lifetimes read naturally in — or a plain number of seconds.
 type Duration time.Duration
+
+// parseDuration is time.ParseDuration plus a leading integer day component.
+func parseDuration(s string) (time.Duration, error) {
+	if i := strings.IndexByte(s, 'd'); i > 0 {
+		if days, err := strconv.Atoi(s[:i]); err == nil {
+			rest := time.Duration(0)
+			if tail := s[i+1:]; tail != "" {
+				r, err := time.ParseDuration(tail)
+				if err != nil {
+					return 0, err
+				}
+				rest = r
+			}
+			return time.Duration(days)*24*time.Hour + rest, nil
+		}
+	}
+	return time.ParseDuration(s)
+}
 
 // UnmarshalYAML parses a duration string or integer seconds.
 func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	var s string
 	if err := n.Decode(&s); err == nil && s != "" {
-		v, err := time.ParseDuration(s)
+		v, err := parseDuration(s)
 		if err != nil {
 			return fmt.Errorf("invalid duration %q: %w", s, err)
 		}

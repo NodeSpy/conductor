@@ -106,3 +106,23 @@ func TestReaperSparesHeldAgent(t *testing.T) {
 		t.Fatal("held id should still be held after a reap tick")
 	}
 }
+
+// TestHoldSetRemovePersists: Remove (session-affinity eviction) drops the id
+// and the change survives a reload.
+func TestHoldSetRemovePersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "holds.json")
+	h := NewHoldSet(path)
+	h.Add("a")
+	h.Add("b")
+	h.Remove("a")
+	h.Remove("missing") // no-op
+	if h.Has("a") || !h.Has("b") {
+		t.Fatalf("remove: a=%v b=%v", h.Has("a"), h.Has("b"))
+	}
+	h2 := NewHoldSet(path)
+	if h2.Has("a") || !h2.Has("b") {
+		t.Fatal("removal must persist across a reload")
+	}
+	var nilSet *HoldSet
+	nilSet.Remove("x") // nil-safe
+}

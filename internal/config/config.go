@@ -550,6 +550,11 @@ type AgentProfile struct {
 	// the defaults (global + target repo + own agent scope), or a filter map
 	// { scopes, tags, limit }. Absent → no injection, no token cost.
 	Memory *MemorySelector `yaml:"memory"`
+	// Session binds this agent's dispatches to a keyed live session (session
+	// affinity): every event whose rendered key matches reaches the same
+	// agent as a follow-up. Absent → a fresh agent per dispatch. See
+	// SessionSpec.
+	Session *SessionSpec `yaml:"session"`
 }
 
 // RuntimeName returns the runtime/controller the profile selects (runtime
@@ -1084,6 +1089,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateMemory(); err != nil {
+		return err
+	}
+	if err := c.validateSessions(); err != nil {
 		return err
 	}
 	names := map[string]bool{}
