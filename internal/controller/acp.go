@@ -13,6 +13,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/acp"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/memory"
 )
 
 // acpController drives an ACP agent (gemini, codex-via-adapter, opencode-over-acp,
@@ -142,7 +143,10 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 		scancel()
 		return nil, fmt.Errorf("acp: initialize: %w", err)
 	}
-	res, err := client.NewSession(sctx, acp.NewSessionParams{Cwd: spec.Cwd})
+	res, err := client.NewSession(sctx, acp.NewSessionParams{
+		Cwd:        spec.Cwd,
+		McpServers: c.memoryServers(spec),
+	})
 	if err != nil {
 		cleanup()
 		scancel()
@@ -159,6 +163,31 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	}
 	s.startTurn(prompt)
 	return s, nil
+}
+
+// memoryServers builds the MCP server list for a new ACP session: with a
+// memory: section configured (memory.ToolCommand set at daemon boot), the
+// agent gets a live remember/recall tool — the `conductor mcp memory`
+// subprocess, with this dispatch's provenance baked into its flags. Local
+// sessions only: the daemon's socket doesn't exist on a remote `host:` box,
+// so remote sessions fall back to the output contract like any runtime
+// without live tools.
+func (c *acpController) memoryServers(spec Spec) []acp.McpServer {
+	argv := memory.ToolCommand()
+	if len(argv) == 0 || resolveHost(c.host, spec.Request.Profile.Host) != "" {
+		return nil
+	}
+	args := append([]string(nil), argv[1:]...)
+	if a := spec.Request.Action.Agent; a != "" {
+		args = append(args, "--agent", a)
+	}
+	if repo := spec.Request.Trigger.Target.Repo; repo != "" {
+		args = append(args, "--repo", repo)
+	}
+	if kind := spec.Request.Trigger.Kind; kind != "" {
+		args = append(args, "--trigger", kind)
+	}
+	return []acp.McpServer{{Name: "conductor-memory", Command: argv[0], Args: args}}
 }
 
 // ResumeSession re-attaches to a prior session by id over a fresh connection. Only

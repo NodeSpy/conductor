@@ -33,6 +33,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/hosts"
 	"github.com/NodeSpy/conductor/internal/inbound"
 	"github.com/NodeSpy/conductor/internal/integrations/slack" // registers "slack"; also feeds hand-off replies (see wireSlackHandoffInbox)
+	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/store"
 
@@ -91,6 +92,8 @@ func main() {
 		err = cmdUnlock(args)
 	case "config":
 		err = cmdConfig(args)
+	case "mcp":
+		err = cmdMCP(args)
 	case "version", "-v", "--version":
 		fmt.Println("conductor", version)
 	case "help", "-h", "--help":
@@ -398,6 +401,24 @@ func cmdRun(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// The live memory tool: with a memory: section configured, serve the
+	// remember/recall socket beside the state file and publish the launch
+	// command runtimes with live-tool injection (ACP mcpServers) attach to
+	// agent sessions. A socket failure only loses the LIVE surface — the
+	// verbs, output contract, and injection still work — so log, don't die.
+	if mgr := memory.Active(); mgr != nil {
+		sock := filepath.Join(filepath.Dir(cfg.Store.StateFile), "memory.sock")
+		if l, lerr := memory.ListenSocket(sock); lerr != nil {
+			logf("memory: %v — live agent tools disabled (verbs/output contract unaffected)", lerr)
+		} else {
+			go memory.ServeIPC(ctx, l, mgr, st.Audit, logf)
+			if exe, eerr := os.Executable(); eerr == nil {
+				memory.SetToolCommand([]string{exe, "mcp", "memory", "--socket", sock})
+				logf("memory: live remember/recall tool on %s", sock)
+			}
+		}
+	}
 
 	// Mount connector ask surfaces (web pages, discord gateways) and fan
 	// Socket Mode replies into every slack inbox — legacy handoffs included.

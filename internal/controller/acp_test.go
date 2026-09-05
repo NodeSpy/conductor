@@ -22,6 +22,7 @@ type fakeACPAgent struct {
 
 	mu        sync.Mutex
 	gotCwd    string
+	gotMcp    []acp.McpServer
 	gotPrompt string
 	outcome   *acp.RequestPermissionOutcome
 }
@@ -35,6 +36,7 @@ func (a *fakeACPAgent) HandleRequest(ctx context.Context, method string, params 
 		_ = json.Unmarshal(params, &p)
 		a.mu.Lock()
 		a.gotCwd = p.Cwd
+		a.gotMcp = p.McpServers
 		a.mu.Unlock()
 		return acp.NewSessionResult{SessionID: a.sessionID}, nil
 	case acp.MethodPrompt:
