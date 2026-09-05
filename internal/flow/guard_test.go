@@ -2,8 +2,14 @@ package flow
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/kv"
+	"github.com/NodeSpy/conductor/internal/vaults"
 )
 
 // TestGuardApproveGate: an approve-listed verb triggers the dry-run + ask
@@ -331,5 +337,129 @@ vaults:
 	rig, _ = dispatchPlan(t, cfgEg, eg)
 	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "no_secret_egress") {
 		t.Fatalf("hook vault read must count for egress: %v %q", failed, errStr)
+	}
+}
+
+// REGRESSION (audit finding #5): the two-plan kv exfiltration path is
+// blocked. Plan A (vault read → kv.set) is approval-gated STATICALLY —
+// writing durable shared state with secrets in scope is parking. Values the
+// static scan can't see (a secret laundered through the trigger context or a
+// step output into kv.set) hit the runtime write barrier. Either way the
+// secret never lands in kv, so plan B (kv.get → external post) reads
+// nothing.
+func TestGuardKvExfilBlocked(t *testing.T) {
+	t.Cleanup(vaults.Reset)
+	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
+	kv.SetDataDir(t.TempDir())
+	vaultDir := t.TempDir()
+	const secretVal = "exfil-me-cleartext"
+	if err := os.WriteFile(filepath.Join(vaultDir, "apikey"), []byte(secretVal), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfgYAML := `
+connectors:
+  svc: { type: fake }
+stores:
+  main: { type: boltdb }
+vaults:
+  hv: { type: file, dir: ` + vaultDir + ` }
+agents:
+  planner: { model: x }
+policy:
+  agent_authored:
+    allow: [ svc.post, kv.*, "*.read" ]
+`
+	cfg := loadConfig(t, cfgYAML)
+	shared := testSecrets(nil)
+	reg, err := connector.Build(cfg, connector.Deps{Secrets: shared, Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRig := func() *testRig {
+		rig := newTestRunner(t, cfg, reg)
+		rig.Runner.Secrets = shared
+		return rig
+	}
+
+	// PLAN A, static layer: vault read + kv.set in one plan = parking → the
+	// egress gate fires pre-run (no approve_via → rejected).
+	rig := newRig()
+	planA := "```plan\n" +
+		"- id: r\n  uses: hv.read\n  options: { key: apikey }\n" +
+		"- id: park\n  uses: kv.set\n  options: { store: main, key: loot, value: \"{{.r.value}}\" }\n" +
+		"```"
+	rig.Agents.dispatchFunc = planDispatch(planA)
+	runTrigger(rig, newTrigger("ping", nil), mustSpec(t, planSpec))
+	failed, errStr := rig.workflowFailed()
+	if !failed || !strings.Contains(errStr, "durable shared state") {
+		t.Fatalf("plan A must gate statically: %v %q", failed, errStr)
+	}
+
+	// PLAN A, laundered variant the static scan can't see: the secret rides
+	// the trigger context into kv.set — the runtime write barrier refuses it.
+	shared.Track(secretVal)
+	rig2 := newRig()
+	planL := "```plan\n- id: park\n  uses: kv.set\n  options: { store: main, key: loot, value: \"{{.leak}}\" }\n```"
+	rig2.Agents.dispatchFunc = planDispatch(planL)
+	runTrigger(rig2, newTrigger("ping", map[string]any{"leak": secretVal}), mustSpec(t, planSpec))
+	failed, errStr = rig2.workflowFailed()
+	if !failed || !strings.Contains(errStr, "refusing to write secret material") {
+		t.Fatalf("laundered write must hit the barrier: %v %q", failed, errStr)
+	}
+	blocked := false
+	for _, e := range rig2.Store.auditsWithEvent("verb") {
+		if e["outcome"] == "blocked" {
+			blocked = true
+		}
+	}
+	if !blocked {
+		t.Fatal("the barrier refusal must be audited")
+	}
+
+	// The secret never landed: PLAN B (individually innocent kv.get →
+	// external post) reads nothing.
+	st, err := kv.Use("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := st.Get("default", "loot"); found {
+		t.Fatal("the secret must never land in kv")
+	}
+	rig3 := newRig()
+	fake := newFakeState(t, "svc")
+	planB := "```plan\n- id: g\n  uses: kv.get\n  options: { store: main, key: loot }\n- id: out\n  uses: svc.post\n  options: { text: \"loot={{.g.value}}\" }\n```"
+	rig3.Agents.dispatchFunc = planDispatch(planB)
+	runTrigger(rig3, newTrigger("ping", nil), mustSpec(t, planSpec))
+	if failed, errStr := rig3.workflowFailed(); failed {
+		t.Fatalf("plan B is individually innocent and runs: %s", errStr)
+	}
+	calls := fake.snapshot()
+	if len(calls) != 1 || strings.Contains(fmt.Sprint(calls[0].Opts["text"]), secretVal) {
+		t.Fatalf("nothing to exfiltrate: %+v", calls)
+	}
+
+	// Non-secret kv writes from plans stay unaffected.
+	rig4 := newRig()
+	planOK := "```plan\n- uses: kv.set\n  options: { store: main, key: note, value: \"plain\" }\n```"
+	rig4.Agents.dispatchFunc = planDispatch(planOK)
+	runTrigger(rig4, newTrigger("ping", nil), mustSpec(t, planSpec))
+	if failed, errStr := rig4.workflowFailed(); failed {
+		t.Fatalf("plain kv writes must pass: %s", errStr)
+	}
+	// memory.remember parking is gated the same way statically.
+	memCfg := loadConfig(t, strings.Replace(cfgYAML, "allow: [ svc.post, kv.*, \"*.read\" ]",
+		"allow: [ svc.post, kv.*, memory.*, \"*.read\" ]", 1)+"memory: { type: memory }\n")
+	regM, err := connector.Build(memCfg, connector.Deps{Secrets: shared, Config: memCfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tempMemory(t)
+	rig5 := newTestRunner(t, memCfg, regM)
+	rig5.Runner.Secrets = shared
+	planM := "```plan\n- id: r\n  uses: hv.read\n  options: { key: apikey }\n- uses: memory.remember\n  options: { text: \"{{.r.value}}\" }\n```"
+	rig5.Agents.dispatchFunc = planDispatch(planM)
+	runTrigger(rig5, newTrigger("ping", nil), mustSpec(t, planSpec))
+	if failed, errStr := rig5.workflowFailed(); !failed || !strings.Contains(errStr, "durable shared state") {
+		t.Fatalf("memory parking must gate: %v %q", failed, errStr)
 	}
 }

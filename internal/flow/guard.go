@@ -49,7 +49,7 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 	if pol.TrustFull() {
 		res.gate = "trust"
 	}
-	secretAccess, externalTouch := false, false
+	secretAccess, externalTouch, internalWrite := false, false, false
 	var walk func(where string, list []config.Step) error
 	walk = func(where string, list []config.Step) error {
 		for i := range list {
@@ -96,6 +96,9 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 			}
 			if stepTouchesOutside(step) {
 				externalTouch = true
+			}
+			if isInternalWrite(step.Uses) {
+				internalWrite = true
 			}
 			// Nested agent-authored actions are held to the same rules.
 			if step.Parallel != nil {
@@ -145,6 +148,9 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 				if !internalConnectors[connName] {
 					externalTouch = true
 				}
+				if isInternalWrite(h.Uses) {
+					internalWrite = true
+				}
 			}
 			if step.EscalateTo != "" && step.EscalateTo != "agent" {
 				return fmt.Errorf("%s: escalate_to must be \"agent\", got %q", w, step.EscalateTo)
@@ -164,12 +170,22 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 	if res.subAgents > pol.MaxSubAgentsOrDefault() {
 		return res, fmt.Errorf("plan declares %d sub-agent steps, over limits.max_sub_agents %d", res.subAgents, pol.MaxSubAgentsOrDefault())
 	}
-	// The exfiltration combination the allowlist misses: reading a secret AND
-	// touching the outside world in one plan is approval-gated (even under
-	// trust: full the audit records it; the gate applies in allowlist mode).
-	if pol.EgressGated() && secretAccess && externalTouch && !pol.TrustFull() {
-		res.needsApproval = true
-		res.approvalWhy = append(res.approvalWhy, "no_secret_egress: the plan both reads secrets and touches an external service")
+	// The exfiltration combinations the allowlist misses (approval-gated):
+	// reading a secret AND touching the outside world in one plan — or
+	// reading a secret AND writing DURABLE SHARED STATE (kv/sql/memory),
+	// which parks the secret where a later, individually-innocent plan can
+	// read it back and post it out (the two-plan kv laundering path). The
+	// runtime write barrier (plan.go) backs this up for values the static
+	// scan can't see.
+	if pol.EgressGated() && secretAccess && !pol.TrustFull() {
+		if externalTouch {
+			res.needsApproval = true
+			res.approvalWhy = append(res.approvalWhy, "no_secret_egress: the plan both reads secrets and touches an external service")
+		}
+		if internalWrite {
+			res.needsApproval = true
+			res.approvalWhy = append(res.approvalWhy, "no_secret_egress: the plan reads secrets and writes durable shared state (kv/sql/memory) — a later plan could read the secret back out")
+		}
 	}
 	res.deterministic = res.subAgents == 0
 	if res.needsApproval && res.gate == "allow" {
@@ -305,6 +321,17 @@ func hookReadsSecrets(cfg *config.Config, h *config.Hook) bool {
 var internalConnectors = map[string]bool{
 	"kv": true, "sql": true, "memory": true, "workflow": true, "conductor": true,
 }
+
+// internalWriteVerbs are the value-carrying writes into durable shared state
+// — the parking spots the two-plan kv laundering path abuses.
+var internalWriteVerbs = map[string]bool{
+	"kv.set": true, "kv.setnx": true, "kv.merge": true, "kv.append": true,
+	"memory.remember": true, "sql.exec": true,
+}
+
+// isInternalWrite reports whether a verb writes a caller-supplied value into
+// durable shared state.
+func isInternalWrite(uses string) bool { return internalWriteVerbs[uses] }
 
 // stepTouchesOutside reports whether a step can reach the outside world: any
 // verb on a non-builtin connector, or a code/command step (which can call

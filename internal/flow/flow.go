@@ -714,6 +714,15 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 		r.auditVerb(t, connName, verb, rendered, "stubbed", nil)
 		return stubOutputs(in, verb), nil
 	}
+	// The plan write barrier (no_secret_egress, runtime half): an unapproved
+	// agent plan may not park secret material in durable shared state — the
+	// static guard gates the vault-read+kv-write combos it can SEE; this
+	// catches values laundered through step outputs or the trigger context.
+	if planBarrier(ctx) && isInternalWrite(step.Uses) && r.containsTrackedSecret(rendered) {
+		err := fmt.Errorf("no_secret_egress: refusing to write secret material into %s from an agent plan — approval required", step.Uses)
+		r.auditVerb(t, connName, verb, map[string]any{"barrier": "secret_write"}, "blocked", err)
+		return nil, err
+	}
 	start := time.Now()
 	out, err := in.InvokeFinal(ctx, verb, rendered)
 	took := time.Since(start).Round(time.Millisecond)
@@ -1230,6 +1239,12 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 		if r.DryRun {
 			r.Log("%s [dry-run] would invoke hook %s.%s (at: %s)", flowTag(t), connName, verb, phase)
 			r.auditVerb(t, connName, verb, rendered, "stubbed", nil)
+			continue
+		}
+		if planBarrier(ctx) && isInternalWrite(h.Uses) && r.containsTrackedSecret(rendered) {
+			berr := fmt.Errorf("no_secret_egress: refusing to write secret material into %s from an agent plan hook", h.Uses)
+			r.Log("%s %s hook %s.%s blocked: %v", flowTag(t), where, connName, verb, berr)
+			r.auditVerb(t, connName, verb, map[string]any{"barrier": "secret_write"}, "blocked", berr)
 			continue
 		}
 		if _, err := in.InvokeFinal(ctx, verb, rendered); err != nil {

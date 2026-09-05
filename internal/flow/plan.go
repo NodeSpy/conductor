@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -303,11 +304,40 @@ func (r *Runner) runPlan(ctx context.Context, t core.Trigger, agentName, runID, 
 	return r.runPlanState(ctx, t, pol, st, res, runID, stepID, shadow)
 }
 
+// planBarrierKey marks a plan execution whose internal writes must not carry
+// secret material (the runtime half of no_secret_egress): active when the
+// gate is on, trust isn't full, and the plan did NOT go through the approval
+// hand-off (an approved plan's dry-run showed the operator exactly what
+// moves where). The static guard gates the combinations it can SEE; this
+// barrier catches values the scan can't (a secret laundered through a step
+// output or the trigger context into kv.set).
+type planBarrierKey struct{}
+
+// planBarrier reports whether the write barrier is active on this context.
+func planBarrier(ctx context.Context) bool {
+	on, _ := ctx.Value(planBarrierKey{}).(bool)
+	return on
+}
+
+// containsTrackedSecret reports whether any tracked secret value appears in
+// a rendered options tree (exact-substring, like all redaction).
+func (r *Runner) containsTrackedSecret(v map[string]any) bool {
+	if r.Secrets == nil || len(v) == 0 {
+		return false
+	}
+	red, ok := r.Secrets.RedactValue(v).(map[string]any)
+	return ok && !reflect.DeepEqual(red, v)
+}
+
 // runPlanState executes a (fresh or restored) plan state with checkpointing
 // wired: persisted after every committed step and splice, removed on any
 // normal completion or terminal failure — only a crash leaves a record, and
 // the resume path picks it up (see execAgent).
 func (r *Runner) runPlanState(ctx context.Context, t core.Trigger, pol *config.AgentAuthoredPolicy, st *planState, res guardResult, runID, stepID string, shadow bool) (map[string]any, error) {
+	// The write barrier: an unapproved plan may not persist secret material
+	// into shared state (kv/sql/memory). Approved plans cleared the hand-off.
+	ctx = context.WithValue(ctx, planBarrierKey{},
+		pol.EgressGated() && !pol.TrustFull() && !res.needsApproval)
 	if !shadow && runID != "" && stepID != "" && r.Store != nil {
 		st.persist = func() {
 			if err := r.Store.PutPlan(r.planRecord(st, runID, stepID)); err != nil {
