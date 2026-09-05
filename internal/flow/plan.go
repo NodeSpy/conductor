@@ -292,6 +292,49 @@ func (r *Runner) runPlan(ctx context.Context, t core.Trigger, agentName string, 
 	return planOutputs(st, res), nil
 }
 
+// guardSavedWorkflow re-admits a saved (agent-promoted) workflow's steps
+// under the current policy at every run: a deep copy takes the guard's
+// host/identity rewrites, a guard rejection refuses the run, and
+// approval-gated content goes through the dry-run + hand-off gate. The
+// admission is audited like any plan.
+func (r *Runner) guardSavedWorkflow(ctx context.Context, t core.Trigger, name string, saved *SavedWorkflow, shadow bool) ([]config.Step, error) {
+	pol := r.planPolicy()
+	steps, err := deepCopySteps(saved.Steps)
+	if err != nil {
+		return nil, fmt.Errorf("saved workflow %q: %w", name, err)
+	}
+	agent := saved.Source.Agent
+	if agent == "" {
+		agent = "saved"
+	}
+	res, err := guardPlan(r.Cfg, r.Conns, pol, steps)
+	if err != nil {
+		r.auditPlan(t, agent, "rejected", res, fmt.Errorf("saved workflow %q: %w", name, err))
+		return nil, fmt.Errorf("saved workflow %q: %w", name, err)
+	}
+	r.auditPlan(t, agent, "admitted", res, nil)
+	if res.needsApproval && !shadow {
+		if aerr := r.approvePlan(ctx, t, pol, agent, steps, res); aerr != nil {
+			return nil, fmt.Errorf("saved workflow %q: %w", name, aerr)
+		}
+	}
+	return steps, nil
+}
+
+// deepCopySteps clones a step list (nested maps included) so guard rewrites
+// never mutate the persisted registry copy.
+func deepCopySteps(steps []config.Step) ([]config.Step, error) {
+	b, err := yaml.Marshal(steps)
+	if err != nil {
+		return nil, err
+	}
+	var out []config.Step
+	if err := yaml.Unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RunLiveStep executes ONE agent-authored step right now — the run_step
 // live tool (#36 §11). The step is validated and guarded exactly like a
 // plan: block; the trigger is reconstructed from the tool's baked-in

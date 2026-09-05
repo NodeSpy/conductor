@@ -3,6 +3,9 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/NodeSpy/conductor/internal/flow"
 )
@@ -62,10 +65,30 @@ func cmdWorkflows(args []string) error {
 		if len(rest) != 2 {
 			return fmt.Errorf("usage: conductor workflows review <name>")
 		}
+		// Reviewing IS the trust decision — show exactly what is being
+		// trusted (the full step list, verbatim) before marking it, never a
+		// blind flip. Runs stay re-guarded by policy.agent_authored anyway.
+		w, ok := st.Get(rest[1])
+		if !ok {
+			return fmt.Errorf("no saved workflow %q", rest[1])
+		}
+		fmt.Printf("workflow %q v%d — promoted by %s (trigger %s, repo %s)\n",
+			w.Name, w.Version, orDash(w.Source.Agent), orDash(w.Source.Trigger), orDash(w.Source.Repo))
+		if w.Description != "" {
+			fmt.Printf("description: %s\n", w.Description)
+		}
+		fmt.Println("steps:")
+		body, err := yaml.Marshal(w.Steps)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(strings.TrimRight(string(body), "\n"), "\n") {
+			fmt.Println("  " + line)
+		}
 		if err := st.Review(rest[1]); err != nil {
 			return err
 		}
-		fmt.Printf("workflow %q reviewed — trusted for unattended reuse\n", rest[1])
+		fmt.Printf("workflow %q reviewed — trusted for unattended reuse (every run stays policy-guarded)\n", rest[1])
 		return nil
 	case "rm":
 		if len(rest) != 2 {

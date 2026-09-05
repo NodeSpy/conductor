@@ -140,6 +140,13 @@ func (r *Runner) workflowSave(ctx context.Context, t core.Trigger, opts map[stri
 	if err := ValidatePlanSteps(r.Cfg, r.Conns, steps); err != nil {
 		return nil, fmt.Errorf("workflow.save: %w", err)
 	}
+	// A promoted workflow is agent-authored FOREVER: it must pass the plan
+	// guard at save (host/identity rewrites are persisted, non-allowed steps
+	// reject) — and it is re-guarded at every run under the then-current
+	// policy (see execWorkflowCall), so saving is never a laundering step.
+	if _, gerr := guardPlan(r.Cfg, r.Conns, r.planPolicy(), steps); gerr != nil {
+		return nil, fmt.Errorf("workflow.save: %w", gerr)
+	}
 	if shadow {
 		r.Log("%s [dry-run] would save workflow %q (%d steps)", flowTag(t), name, len(steps))
 		return map[string]any{"name": name, "reviewed": false, "stubbed": true}, nil

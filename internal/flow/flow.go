@@ -740,6 +740,19 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	if saved != nil && !saved.Reviewed && !shadow && !r.planPolicy().TrustFull() {
 		return nil, fmt.Errorf("saved workflow %q (v%d) is unreviewed — dry-run it, then `conductor workflows review %s` (or trust: full) before real runs", name, saved.Version, name)
 	}
+	// A saved workflow is agent-authored no matter who invokes it: re-guard
+	// its steps under the CURRENT policy on every run (review is a human
+	// trust signal, not a policy bypass — a policy tightened after the save
+	// applies immediately), and approval-gated steps go through the same
+	// dry-run + hand-off gate as an inline plan.
+	steps := wf.Steps
+	if saved != nil {
+		guarded, gerr := r.guardSavedWorkflow(ctx, t, name, saved, shadow)
+		if gerr != nil {
+			return nil, gerr
+		}
+		steps = guarded
+	}
 	with, err := renderOptions(step.With, data)
 	if err != nil {
 		return nil, fmt.Errorf("with: %w", err)
@@ -772,7 +785,7 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 		child["group"] = g
 	}
 	var childRun store.WorkflowRun
-	runErr := r.runSteps(ctx, &childRun, t, wf.Steps, child, shadow, false)
+	runErr := r.runSteps(ctx, &childRun, t, steps, child, shadow, false)
 	if saved != nil && !shadow {
 		SavedWorkflows().RecordOutcome(name, runErr == nil)
 	}
