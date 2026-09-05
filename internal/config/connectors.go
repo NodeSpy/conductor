@@ -431,6 +431,14 @@ type Step struct {
 	Timeout         Duration      `yaml:"timeout,omitempty"`
 	ContinueOnError bool          `yaml:"continue_on_error,omitempty"`
 
+	// agent-authored plan fields (#36 §11; honored inside plans)
+	// EscalateTo: "agent" routes this step back to the authoring agent's
+	// session after it runs — a mid-plan check-in (failures always route).
+	EscalateTo string `yaml:"escalate_to,omitempty"`
+	// Compensate is this step's undo action, run in reverse order with the
+	// other committed steps' compensations when a plan fails mid-way.
+	Compensate *Step `yaml:"compensate,omitempty"`
+
 	// step-level hooks, scoped to this step
 	Hooks []Hook `yaml:"hooks,omitempty"`
 
@@ -546,6 +554,10 @@ type Policy struct {
 	Shadow *bool `yaml:"shadow,omitempty"`
 	// MaxAttemptsPerHead is the soft attempt threshold before backoff.
 	MaxAttemptsPerHead *int `yaml:"max_attempts_per_head,omitempty"`
+	// AgentAuthored governs agent-authored plans (#36 §11): the allowlist,
+	// approval gate, sandbox host, identity, and limits an agent-emitted
+	// step runs under. Nil at every scope = plans rejected (safe default).
+	AgentAuthored *AgentAuthoredPolicy `yaml:"agent_authored,omitempty"`
 }
 
 // reply_to_bots modes: gate the conversational reply to a bot author.
@@ -570,8 +582,16 @@ func (p Policy) ReplyToBotsMode() string {
 }
 
 // validatePolicyBlock checks a policy block's enum fields at any scope.
+// agent_authored.host is checked against hosts: only where the full config
+// is in reach (Validate passes c.Hosts for the global block).
 func validatePolicyBlock(where string, p *Policy) error {
-	if p == nil || p.ReplyToBots == nil {
+	if p == nil {
+		return nil
+	}
+	if err := validateAgentAuthored(where, p.AgentAuthored, nil); err != nil {
+		return err
+	}
+	if p.ReplyToBots == nil {
 		return nil
 	}
 	switch *p.ReplyToBots {
@@ -675,6 +695,9 @@ func MergePolicy(scopes ...*Policy) Policy {
 		}
 		if p.MaxAttemptsPerHead != nil {
 			out.MaxAttemptsPerHead = p.MaxAttemptsPerHead
+		}
+		if p.AgentAuthored != nil {
+			out.AgentAuthored = p.AgentAuthored
 		}
 	}
 	return out

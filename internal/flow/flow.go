@@ -49,6 +49,11 @@ type AgentServices struct {
 	// Memory renders the shared-memory prompt section for an opted-in
 	// profile ("" otherwise) — appended through the same path Guidance uses.
 	Memory func(agentName string, p config.AgentProfile, t core.Trigger) string
+	// Revise delivers a supervise-loop follow-up to the authoring agent's
+	// live session (§10) and returns the captured reply. ok=false when the
+	// agent has no bound session (or the runtime can't capture follow-up
+	// output) — the plan then escalates instead of revising.
+	Revise func(ctx context.Context, agentName string, t core.Trigger, prompt string) (output string, ok bool, err error)
 	// Background is invoked after a background agent step launches: register
 	// the hold, and start the interactive review hand-off on handoffConn (an
 	// ask-capable connector name; "" = runtime-native).
@@ -900,6 +905,21 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	}
 	outputs := extractOutputs(ref.Output)
 	outputs["agent_id"] = ref.AgentID
+	// The plan output contract (#36 §11): a plan: block in the final output
+	// is validated, guarded by policy.agent_authored, and executed through
+	// this same runner. A malformed or rejected plan fails the step — the
+	// plan was its purpose.
+	if plan, found, perr := ParsePlan(ref.Output); perr != nil {
+		return nil, ref.Output, perr
+	} else if found {
+		planOut, plErr := r.runPlan(ctx, t, step.Agent, plan, shadow)
+		if planOut != nil {
+			outputs["plan"] = planOut
+		}
+		if plErr != nil {
+			return outputs, ref.Output, fmt.Errorf("agent plan: %w", plErr)
+		}
+	}
 	if profile.ArchiveWhenDone && ref.AgentID != "" && r.Agents.Archive != nil {
 		r.Agents.Archive(ref.AgentID)
 	}

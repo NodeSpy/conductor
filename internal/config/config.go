@@ -1094,6 +1094,11 @@ func (c *Config) Validate() error {
 	if err := c.validateSessions(); err != nil {
 		return err
 	}
+	if c.Policy != nil {
+		if err := validateAgentAuthored("policy", c.Policy.AgentAuthored, c.Hosts); err != nil {
+			return err
+		}
+	}
 	names := map[string]bool{}
 	for i, ig := range c.Integrations {
 		if ig.Type == "" {
