@@ -33,8 +33,16 @@ A step is one of five forms (all share `id` and `if`):
 - `type: command` — a host command (POSIX sh semantics; argv list). With
   `host:` it runs over SSH and outputs `{stdout, stderr, exit_code}`.
 - `run:` — an inline code step ([[Code-Steps]]).
-- `uses: <conn>.<verb>` — a service verb ([[Verbs]]).
+- `uses: <conn>.<verb>` — a service verb ([[Verbs]]). This includes the
+  always-on data and memory verbs: `kv.*`/`sql.*` over `stores:` and
+  `memory.*` over the `memory:` section ([[Memory]]).
 - `workflow: <name>` — a reusable workflow call (below).
+
+Agent steps have two extra memory hooks (when a `memory:` section is
+configured): a `remember:` block in the agent's final output persists
+post-run with the run's provenance (the output contract), and an opted-in
+profile (`memory: true`) gets the scoped memories injected into its prompt —
+see [[Memory]].
 
 ## Context and scope
 

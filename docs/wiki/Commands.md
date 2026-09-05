@@ -20,6 +20,7 @@ conductor secrets check                    unlock every vault, resolve every ref
 conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
 conductor unlock                           seed the default vault key for non-interactive restarts
 conductor config migrate [--dry-run]       transform a legacy config to the connectors schema
+conductor mcp memory --socket <path>       stdio MCP server for the live memory tool (launched by runtimes, not by hand)
 conductor version
 ```
 
@@ -41,6 +42,11 @@ conductor version
   authored without side effects.
 - **connectors ls / schema** — the introspection pair: what is configured and
   what each type accepts. `schema` also takes a bare type name.
+- **mcp memory** — the stdio MCP server behind the live agent memory tool
+  ([[Memory]]). The daemon launches it into agent sessions on runtimes that
+  support live tools (ACP `mcpServers`), with the socket path and the
+  dispatch's provenance baked into the flags — there is no reason to run it
+  by hand.
 - **connector auth** — the only interactive auth step. `auth <name>` runs the
   grant's flow (`authorization_code`: consent URL + localhost redirect
   capture; `device`: prints a user code and polls) and stores the access +

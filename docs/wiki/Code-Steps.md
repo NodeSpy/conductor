@@ -61,6 +61,15 @@ when code genuinely needs it.
 The return value / stdout becomes the step's outputs: a JSON object as-is
 (`{{.step.field}}`), any other JSON under `value:`, plain text under `text:`.
 
+The in-process engines also get the data bindings: `ctx.store("<name>")`
+(the KV ops), `ctx.sql("<name>")` (query/exec), and `ctx.memory`
+(remember/recall/forget/list over the configured [[Memory]]; relative scopes
+need their explicit `repo:<owner/repo>` / `agent:<name>` forms in code). In
+risor these are the top-level `store(…)`, `sql(…)`, and `memory` builtins;
+in go-embed, `import "conductor/store"`, `"conductor/sql"`, and
+`"conductor/memory"`. Host-interpreter steps run in a separate process and
+use the `kv.*` / `sql.*` / `memory.*` verbs instead.
+
 ## Where it runs
 
 A code step runs where conductor runs. `host: <name>` (a [[Hosts]] entry) or

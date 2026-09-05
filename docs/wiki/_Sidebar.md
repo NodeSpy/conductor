@@ -15,6 +15,7 @@ The model
 - [[Runtimes]]
 - [[Agents]]
 - [[Grouping]]
+- [[Memory]]
 - [[Policy]]
 - [[Secrets]]
 - [[Hosts]]

@@ -27,6 +27,8 @@ agents:
                                       #   provider: claude with an acp: gemini controller)
     # guidance: |                     # per-agent tone/format; overrides the top-level agent_guidance
     #   One or two sentences, plain and direct.   #   (unset -> that default, "" -> none, text -> this)
+    # memory: true                    # opt into shared-memory prompt injection (see below); or a
+                                      #   filter: memory: { scopes: [global, repo], tags: [ci], limit: 10 }
   planner:                            # cheaper/faster model for planning/triage steps
     provider: claude
     model: claude-haiku-4-5
@@ -46,6 +48,7 @@ agents:
 | `labels` | Extra `--label key=value` pairs attached to the dispatched agent. |
 | `controller` | Name of a `controllers.<name>` entry to run this agent on instead of the built-in `paseo` runtime. See [[Controllers]]. |
 | `guidance` | Per-agent tone/format text appended to this agent's prompts. Unset falls through to the top-level `agent_guidance`; `""` disables guidance entirely for this agent; any text replaces the default. |
+| `memory` | Opt this agent into shared-memory prompt injection ([[Memory]]). `true` appends the global + target-repo + own-agent-scoped memories (newest first, capped) through the same path as `guidance`; a map `{ scopes, tags, limit }` narrows it. Absent → no injection, no token cost. Needs a top-level `memory:` section. |
 
 ## Behavior
 

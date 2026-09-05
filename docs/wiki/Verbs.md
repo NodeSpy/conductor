@@ -20,6 +20,11 @@ hooks:
 - **Request-response (`ask`)** — present to a human and block for the answer.
   Outputs: `{action: approve|revise|discard, text, ref}`. See [[Hand-offs]].
 
+Four connectors are **built-in and always available** (their names are
+reserved, nothing to configure): `kv.*` and `sql.*` serve the `stores:`
+section ([[Configuration]]), `memory.*` serves the `memory:` section
+([[Memory]]), and `conductor.*` is conductor's own lifecycle and operations.
+
 ## Options
 
 Rendered templates (`{{…}}`) work in any option value; a value that is

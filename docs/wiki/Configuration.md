@@ -471,6 +471,30 @@ Host-interpreter steps use the `sql.*` verbs.
     return { total: rows[0].n };
 ```
 
+## Agent memory (`memory:`)
+
+A durable memory agents share across runs, layered over the same storage
+model as the data verbs. Entries carry **provenance** (which agent/run/
+trigger/repo wrote them) and a **scope** (`global` / `repo:<owner/repo>` /
+`agent:<name>`). One backend is picked explicitly — no default:
+
+```yaml
+memory:
+  store: state                          # (a) a durable stores: KV entry (redis/http → fleet-shared)
+  # or  dir: ~/.config/conductor/memory # (b) one Markdown-with-frontmatter file per memory
+  # or  type: memory                    # (c) ephemeral in-process (gone on restart)
+```
+
+The always-on `memory.*` verbs (`remember` / `recall` / `forget` / `list`)
+work in steps and hooks and are audited like `kv.*`; agents write back via a
+`remember:` block in their final output (every runtime) or a live
+remember/recall MCP tool (runtimes with live-tool injection — ACP); and an
+agent profile opts into prompt injection with `memory: true` (or a
+`{ scopes, tags, limit }` filter) — non-opted profiles pay no tokens. Code
+steps get `ctx.memory`, templates get `{{ memory "<scope>" <limit> }}`.
+Recall is tags + scope + substring + recency. Full model, verb tables, and
+the write paths: [[Memory]].
+
 ## Conductor itself (`conductor.*`) — events and verbs
 
 Conductor is a built-in connector (always available; the name is reserved).

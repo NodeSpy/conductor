@@ -239,6 +239,21 @@ hosts:
 #   local: { type: sqlite }                    # <data dir>/local.sqlite
 
 # ---------------------------------------------------------------------------
+# memory: — durable memory agents share across runs (what one agent learns is
+# available to the next). Entries carry provenance {agent, run, trigger,
+# repo} and a scope (global / repo:<owner/repo> / agent:<name>). Pick exactly
+# one backend, no default: store: reuses a stores: KV entry (redis/http →
+# fleet-shared); dir: keeps one hand-editable Markdown-with-frontmatter file
+# per memory; type: memory is ephemeral in-process. Verbs: memory.remember /
+# recall / forget / list (always-on, audited). Agents write back via a
+# ```remember block in their final output (any runtime) or a live MCP tool
+# (ACP runtimes); a profile opts into prompt injection with memory: true.
+# ---------------------------------------------------------------------------
+# memory:
+#   store: state                          # or dir: ~/.config/conductor/memory
+#   # or type: memory                     # ephemeral, gone on restart
+
+# ---------------------------------------------------------------------------
 # runtimes: — where agents run (previously controllers:). The paseo runtime's
 # bin: replaces the old top-level paseo_bin. Any runtime may set host: to run
 # on a hosts: entry over SSH — a remote paseo runs its whole CLI there (put
@@ -262,6 +277,9 @@ agents:
     archive_when_done: true
     # runtime: paseo        # explicit runtime (default: the default: true one)
     # host: build-box       # pin this profile's runtime launches to a host
+    # memory: true          # inject shared memories (global + target repo + own scope)
+    #                       #   into this agent's prompts; or a filter:
+    #                       #   memory: { scopes: [global, repo], tags: [ci], limit: 10 }
   planner:
     provider: claude
     model: claude-haiku-4-5

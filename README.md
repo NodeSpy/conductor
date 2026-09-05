@@ -83,6 +83,12 @@ that changes the config schema migrates your file itself, with a backup.
   `{{ kv "cache" "ns" "key" }}`, and code steps get `ctx.store("cache")`
   and `ctx.sql("analytics")`. Durable state survives restarts and is
   shared across runs.
+  A `memory:` section adds **shared agent memory** on the same storage
+  model: durable notes with provenance and scope (global / per-repo /
+  per-agent), written by the `memory.*` verbs, by a `remember:` block in an
+  agent's final output, or by a live remember/recall tool on runtimes with
+  live-tool injection — and injected into the prompts of agent profiles
+  that opt in with `memory: true` (see the wiki's Memory page).
 - **Runtimes + agents** — the things that do the work: a runtime
   (paseo / agent-deck / cli / acp) is where agents run; an agent is a named
   profile (provider/model/prompt posture). `runtimes:` replaces
