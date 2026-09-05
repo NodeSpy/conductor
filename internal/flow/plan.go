@@ -260,7 +260,7 @@ type planState struct {
 	// classes the operator cleared at admission. A revision may reuse them;
 	// only NEW classes reject (finding #8 — an approved plan stays revisable).
 	granted map[string]bool
-	persist   func()      // checkpoint hook (nil = ephemeral: shadow, live, inline)
+	persist func() // checkpoint hook (nil = ephemeral: shadow, live, inline)
 }
 
 // checkpoint persists the plan's progress (no-op for ephemeral plans).
