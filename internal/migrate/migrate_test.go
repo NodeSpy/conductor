@@ -947,3 +947,41 @@ agents:
 		}
 	}
 }
+
+// REGRESSION: the controllers→runtimes copy dropped Bin and Host — a remote
+// (host:) or custom-binary controller silently became a local default-binary
+// runtime after migration.
+func TestControllersMigrationKeepsHostAndBin(t *testing.T) {
+	res, err := Transform([]byte(`
+integrations:
+  - name: gh
+    type: github
+    rules:
+      - match: { repos: ["acme/*"] }
+        actions:
+          merge_conflict:
+            - type: agent
+              agent: fixer
+              prompt: "fix"
+agents:
+  fixer: { provider: claude, controller: gpu }
+hosts:
+  gpu-box: { host: gpu01.internal, user: ml }
+controllers:
+  gpu: { type: paseo, bin: /opt/paseo, host: gpu-box }
+`))
+	if err != nil || !res.Changed {
+		t.Fatalf("must migrate: %v", err)
+	}
+	var out config.Config
+	if err := yaml.Unmarshal(res.Output, &out); err != nil {
+		t.Fatal(err)
+	}
+	rt, ok := out.Runtimes["gpu"]
+	if !ok {
+		t.Fatalf("controllers.gpu must become runtimes.gpu:\n%s", res.Output)
+	}
+	if rt.Bin != "/opt/paseo" || rt.Host != "gpu-box" {
+		t.Fatalf("bin/host must survive the migration: %+v", rt)
+	}
+}

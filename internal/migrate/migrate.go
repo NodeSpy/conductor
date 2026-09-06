@@ -212,6 +212,9 @@ func Transform(raw []byte) (*Result, error) {
 			Type: cc.Type, Agent: cc.Agent, Transport: cc.Transport,
 			SessionModel: cc.SessionModel, Default: cc.Default,
 			Tool: cc.Tool, Command: cc.Command,
+			// Bin and Host are load-bearing (.Controller() carries them): a
+			// remote or custom-binary runtime must survive the migration.
+			Bin: cc.Bin, Host: cc.Host,
 		}
 		notes = append(notes, fmt.Sprintf("controllers.%s → runtimes.%s", cname, cname))
 	}
