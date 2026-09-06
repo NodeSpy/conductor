@@ -316,3 +316,55 @@ triggers:
 		t.Fatalf("unknown vault must fail validation: %v", err)
 	}
 }
+
+// #122 R3 end to end: a config step whose OUTPUT contains a resolved secret
+// (e.g. a code step echoing the auth header a {{secret}} handle resolved
+// into) must not surface the value in a later agent step's rendered prompt —
+// the dispatch scrubber redacts step outputs before the external runtime
+// renders against them.
+func TestSecretInStepOutputDoesNotReachAgentPrompt(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+agents:
+  fixer: { model: x }
+`)
+	reg := buildRegistry(t, cfg)
+	st := newFakeState(t, "svc")
+	st.outputs["post"] = map[string]any{"echo": "Authorization: s3kr1t-value"}
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - id: leaky
+    uses: svc.post
+    options: { text: seed }
+  - id: fix
+    type: agent
+    agent: fixer
+    prompt: "fix using {{.leaky.echo}}"
+`)
+	rig := newTestRunner(t, cfg, reg)
+	rig.Runner.Secrets.Track("s3kr1t-value")
+	dispatch.SetScrubber(rig.Runner.Secrets)
+	t.Cleanup(func() { dispatch.SetScrubber(nil) })
+
+	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "m"}), spec)
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("workflow failed: %s", errStr)
+	}
+	reqs := rig.Agents.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("agent dispatches: %d", len(reqs))
+	}
+	// Render exactly what an external runtime would receive.
+	prompt, err := dispatch.RenderPrompt(reqs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(prompt, "s3kr1t-value") {
+		t.Fatalf("agent prompt leaked the resolved secret: %q", prompt)
+	}
+	if !strings.Contains(prompt, secrets.Placeholder) {
+		t.Fatalf("agent prompt must carry the placeholder: %q", prompt)
+	}
+}

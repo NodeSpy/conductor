@@ -434,6 +434,9 @@ func cmdRun(args []string) error {
 		engOpts.Connectors = stack.Registry
 		engOpts.Secrets = stack.Secrets
 		disp.Secrets = stack.Secrets
+		// Tracked secrets never render into an external runtime's
+		// prompt/env scope through step outputs (#122 R3).
+		dispatch.SetScrubber(stack.Secrets)
 	}
 	eng := engine.New(engOpts)
 

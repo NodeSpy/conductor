@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"text/template"
 	"time"
 
@@ -200,8 +201,23 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req Request) (RunRef, error) 
 	}
 }
 
+// scrubber is the resolver templateData uses to REDACT tracked secret values
+// out of the scope handed to an external runtime's prompt/env templates
+// (#122 R3): a step output that echoed a resolved secret (curl -v printing
+// an auth header) must not surface it in a later agent's prompt. Package
+// level because the controller-facing helpers (AgentEnv, RenderPrompt) have
+// no Dispatcher. Set once at boot beside the other redaction choke points.
+var scrubber atomic.Pointer[secrets.Resolver]
+
+// SetScrubber installs the tracked-secret scrubber for template data.
+func SetScrubber(r *secrets.Resolver) { scrubber.Store(r) }
+
 // templateData assembles the variables available to prompt/command/env
-// templates: trigger fields plus the two tokens.
+// templates: trigger fields plus the two tokens. Everything EXCEPT the
+// intentional credential channels — the named secrets/vaults scopes (the
+// deprecated-but-supported env templating) and the dispatch tokens — is
+// scrubbed of tracked secret values before an external runtime renders
+// against it; ordinary data flows through untouched.
 func templateData(req Request) map[string]any {
 	t := req.Trigger.Target
 	data := map[string]any{
@@ -226,6 +242,18 @@ func templateData(req Request) map[string]any {
 	}
 	for k, v := range req.Data { // step outputs etc. win over context
 		data[k] = v
+	}
+	if r := scrubber.Load(); r != nil {
+		for k, v := range data {
+			switch k {
+			case "secrets", "vaults", "app_token", "gh_token":
+				// The explicit credential channels: {{.secrets.x}} /
+				// {{.vaults.v.k}} (deprecated env templating, still
+				// supported) and the dispatch tokens ({{.gh_token}}).
+				continue
+			}
+			data[k] = r.RedactValue(v)
+		}
 	}
 	return data
 }
