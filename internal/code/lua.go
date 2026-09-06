@@ -44,9 +44,9 @@ func (e *Executor) execLua(ctx context.Context, spec Spec, data map[string]any) 
 	}
 	ctxTbl := goToLua(L, data)
 	if t, ok := ctxTbl.(*lua.LTable); ok {
-		t.RawSetString("store", luaStoreFn(L)) // defined stores: ctx.store("cache").get(…)
-		t.RawSetString("sql", luaSQLFn(L))     // defined SQL stores: ctx.sql("analytics").query(…)
-		t.RawSetString("memory", luaMemFn(L))  // shared agent memory: ctx.memory.remember(…)
+		t.RawSetString("store", luaStoreFn(L, spec.DataGuard)) // defined stores: ctx.store("cache").get(…)
+		t.RawSetString("sql", luaSQLFn(L, spec.DataGuard))     // defined SQL stores: ctx.sql("analytics").query(…)
+		t.RawSetString("memory", luaMemFn(L, spec.DataGuard))  // shared agent memory: ctx.memory.remember(…)
 	}
 	L.SetGlobal("ctx", ctxTbl)
 

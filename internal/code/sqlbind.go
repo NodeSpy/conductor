@@ -20,7 +20,12 @@ import (
 // {rows_affected, last_insert_id?}. Statements are parameterized only —
 // values bind through args to the driver's placeholders, never into the
 // sql text.
-func sqlInvoke(store, op string, args []any) (any, error) {
+func sqlInvoke(guard DataGuard, store, op string, args []any) (any, error) {
+	if guard != nil && op == "exec" {
+		if err := guard("sql", op, args); err != nil {
+			return nil, err
+		}
+	}
 	st, err := sqlstore.Use(store)
 	if err != nil {
 		return nil, err
@@ -79,7 +84,7 @@ var sqlOps = []string{"query", "exec"}
 // sqlInvokeJSON is the JSON bridge used by the js engine: one host function
 // taking {"store": …, "op": …, "args": […]} and returning {"v": …} or
 // {"err": …}.
-func sqlInvokeJSON(payload string) string {
+func sqlInvokeJSON(guard DataGuard, payload string) string {
 	var req struct {
 		Store string `json:"store"`
 		Op    string `json:"op"`
@@ -103,18 +108,21 @@ func sqlInvokeJSON(payload string) string {
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return enc(nil, fmt.Errorf("sql: bad bridge payload: %w", err))
 	}
-	v, err := sqlInvoke(req.Store, req.Op, req.Args)
+	v, err := sqlInvoke(guard, req.Store, req.Op, req.Args)
 	return enc(v, err)
 }
 
 // SQLHandle is the go-embed face of one defined SQL store: `import
 // "conductor/sql"`, then `db, err := sql.Use("analytics")` and call Query
 // or Exec.
-type SQLHandle struct{ name string }
+type SQLHandle struct {
+	name  string
+	guard DataGuard
+}
 
 // Query runs a row-returning statement; each row is a column→value map.
 func (h SQLHandle) Query(query string, args []any) ([]any, error) {
-	r, err := sqlInvoke(h.name, "query", []any{query, args})
+	r, err := sqlInvoke(h.guard, h.name, "query", []any{query, args})
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +132,7 @@ func (h SQLHandle) Query(query string, args []any) ([]any, error) {
 // Exec runs a mutating statement, returning {rows_affected,
 // last_insert_id?}.
 func (h SQLHandle) Exec(query string, args []any) (map[string]any, error) {
-	r, err := sqlInvoke(h.name, "exec", []any{query, args})
+	r, err := sqlInvoke(h.guard, h.name, "exec", []any{query, args})
 	if err != nil {
 		return nil, err
 	}
@@ -134,14 +142,14 @@ func (h SQLHandle) Exec(query string, args []any) (map[string]any, error) {
 // sqlGoEmbedExports is the `import "conductor/sql"` virtual package for
 // run: go-embed: sql.Use("analytics") resolves a defined SQL store to a
 // SQLHandle.
-func sqlGoEmbedExports() map[string]map[string]reflect.Value {
+func sqlGoEmbedExports(guard DataGuard) map[string]map[string]reflect.Value {
 	return map[string]map[string]reflect.Value{
 		"conductor/sql/sql": {
 			"Use": reflect.ValueOf(func(name string) (SQLHandle, error) {
 				if _, err := sqlstore.Use(name); err != nil {
 					return SQLHandle{}, err
 				}
-				return SQLHandle{name: name}, nil
+				return SQLHandle{name: name, guard: guard}, nil
 			}),
 			"SQLHandle": reflect.ValueOf((*SQLHandle)(nil)),
 		},
@@ -151,7 +159,7 @@ func sqlGoEmbedExports() map[string]map[string]reflect.Value {
 // sqlRisorFn is the top-level `sql("name")` builtin for run: risor — it
 // resolves a defined SQL store and returns a map of its ops:
 // db := sql("analytics"); db.query("SELECT …", [args]).
-func sqlRisorFn() object.Object {
+func sqlRisorFn(guard DataGuard) object.Object {
 	return object.NewBuiltin("sql", func(_ context.Context, args ...object.Object) object.Object {
 		if len(args) != 1 {
 			return object.Errorf("sql() takes the store name")
@@ -171,7 +179,7 @@ func sqlRisorFn() object.Object {
 				for i, a := range args {
 					goArgs[i] = a.Interface()
 				}
-				v, err := sqlInvoke(name, op, goArgs)
+				v, err := sqlInvoke(guard, name, op, goArgs)
 				if err != nil {
 					return object.NewError(err)
 				}
@@ -187,7 +195,7 @@ func sqlRisorFn() object.Object {
 
 // luaSQLFn is ctx.sql for run: lua: ctx.sql("analytics") resolves a defined
 // SQL store and returns a table of its ops; errors raise.
-func luaSQLFn(L *lua.LState) *lua.LFunction {
+func luaSQLFn(L *lua.LState, guard DataGuard) *lua.LFunction {
 	return L.NewFunction(func(L *lua.LState) int {
 		name := L.CheckString(1)
 		if _, err := sqlstore.Use(name); err != nil {
@@ -203,7 +211,7 @@ func luaSQLFn(L *lua.LState) *lua.LFunction {
 				for i := 1; i <= n; i++ {
 					args = append(args, luaToGo(L.Get(i)))
 				}
-				v, err := sqlInvoke(name, op, args)
+				v, err := sqlInvoke(guard, name, op, args)
 				if err != nil {
 					L.RaiseError("%s", err.Error())
 					return 0

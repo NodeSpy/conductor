@@ -53,7 +53,18 @@ type Spec struct {
 	// set `host:`/inline `ssh:`. Only host interpreters may run remotely —
 	// js/go-embed are local-only (see Exec).
 	Host *hosts.Target
+	// DataGuard, when non-nil, is consulted before every DURABLE WRITE the
+	// in-process data bindings perform (ctx.store set/setnx/merge/append,
+	// ctx.sql exec, ctx.memory remember) — the code-sandbox face of the plan
+	// write barrier: without it, an agent plan's code step could park secret
+	// material that `uses: kv.set` would have refused.
+	DataGuard DataGuard
 }
+
+// DataGuard vets one binding write: kind is kv|sql|memory, op the operation,
+// args the caller-supplied values about to be written. A non-nil error
+// refuses the write.
+type DataGuard func(kind, op string, args []any) error
 
 // Executor runs code steps. The zero value is usable: SSH defaults to a
 // zero-value *hosts.Client (real ssh subprocess), LookPath defaults to

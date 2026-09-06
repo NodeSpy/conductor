@@ -103,13 +103,13 @@ func (e *Executor) execGoEmbed(ctx context.Context, spec Spec, data map[string]a
 	if err := i.Use(goEmbedExports()); err != nil {
 		return nil, fmt.Errorf("code: go-embed: sandbox setup: %w", err)
 	}
-	if err := i.Use(kvGoEmbedExports()); err != nil {
+	if err := i.Use(kvGoEmbedExports(spec.DataGuard)); err != nil {
 		return nil, fmt.Errorf("code: go-embed: kv setup: %w", err)
 	}
-	if err := i.Use(sqlGoEmbedExports()); err != nil {
+	if err := i.Use(sqlGoEmbedExports(spec.DataGuard)); err != nil {
 		return nil, fmt.Errorf("code: go-embed: sql setup: %w", err)
 	}
-	if err := i.Use(memGoEmbedExports()); err != nil {
+	if err := i.Use(memGoEmbedExports(spec.DataGuard)); err != nil {
 		return nil, fmt.Errorf("code: go-embed: memory setup: %w", err)
 	}
 

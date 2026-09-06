@@ -18,7 +18,16 @@ import (
 // DEFINED store — there is no default. Ops take positional JSON-shaped
 // args, ns first; results are JSON-shaped. Absent reads come back nil (the
 // found flag folds into null), so dynamic code writes `if (!v) …`.
-func kvInvoke(store, op string, args []any) (any, error) {
+// kvValueWrites are the ops that persist caller-supplied values — the ones
+// the DataGuard (plan write barrier) vets. Mirrors flow's internalWriteVerbs.
+var kvValueWrites = map[string]bool{"set": true, "setnx": true, "merge": true, "append": true}
+
+func kvInvoke(guard DataGuard, store, op string, args []any) (any, error) {
+	if guard != nil && kvValueWrites[op] {
+		if err := guard("kv", op, args); err != nil {
+			return nil, err
+		}
+	}
 	st, err := kv.Use(store)
 	if err != nil {
 		return nil, err
@@ -186,7 +195,7 @@ var kvOps = []string{
 // kvInvokeJSON is the JSON bridge used by the js engine: one host function
 // taking {"store": …, "op": …, "args": […]} and returning {"v": …} or
 // {"err": …}.
-func kvInvokeJSON(payload string) string {
+func kvInvokeJSON(guard DataGuard, payload string) string {
 	var req struct {
 		Store string `json:"store"`
 		Op    string `json:"op"`
@@ -210,7 +219,7 @@ func kvInvokeJSON(payload string) string {
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return enc(nil, fmt.Errorf("kv: bad bridge payload: %w", err))
 	}
-	v, err := kvInvoke(req.Store, req.Op, req.Args)
+	v, err := kvInvoke(guard, req.Store, req.Op, req.Args)
 	return enc(v, err)
 }
 
@@ -218,9 +227,14 @@ func kvInvokeJSON(payload string) string {
 // "conductor/store"`, then `st, err := store.Use("cache")` and call the
 // typed methods. Reads fold "absent" into nil; Slice's end is exclusive
 // (use Len for "to the end").
-type KVHandle struct{ name string }
+type KVHandle struct {
+	name  string
+	guard DataGuard
+}
 
-func (h KVHandle) call(op string, args ...any) (any, error) { return kvInvoke(h.name, op, args) }
+func (h KVHandle) call(op string, args ...any) (any, error) {
+	return kvInvoke(h.guard, h.name, op, args)
+}
 
 func (h KVHandle) Get(ns, key string) (any, error) { return h.call("get", ns, key) }
 func (h KVHandle) Set(ns, key string, v any) error {
@@ -304,14 +318,14 @@ func (h KVHandle) Pop(ns, key, from string) (any, error) { return h.call("pop", 
 
 // kvGoEmbedExports is the `import "conductor/store"` virtual package for
 // run: go-embed: store.Use("cache") resolves a defined store to a KVHandle.
-func kvGoEmbedExports() map[string]map[string]reflect.Value {
+func kvGoEmbedExports(guard DataGuard) map[string]map[string]reflect.Value {
 	return map[string]map[string]reflect.Value{
 		"conductor/store/store": {
 			"Use": reflect.ValueOf(func(name string) (KVHandle, error) {
 				if _, err := kv.Use(name); err != nil {
 					return KVHandle{}, err
 				}
-				return KVHandle{name: name}, nil
+				return KVHandle{name: name, guard: guard}, nil
 			}),
 			"KVHandle": reflect.ValueOf((*KVHandle)(nil)),
 		},
@@ -321,7 +335,7 @@ func kvGoEmbedExports() map[string]map[string]reflect.Value {
 // kvRisorStoreFn is the top-level `store("name")` builtin for run: risor —
 // it resolves a defined store and returns a map of its ops:
 // s := store("cache"); s.get("ns", "k").
-func kvRisorStoreFn() object.Object {
+func kvRisorStoreFn(guard DataGuard) object.Object {
 	return object.NewBuiltin("store", func(_ context.Context, args ...object.Object) object.Object {
 		if len(args) != 1 {
 			return object.Errorf("store() takes the store name")
@@ -341,7 +355,7 @@ func kvRisorStoreFn() object.Object {
 				for i, a := range args {
 					goArgs[i] = a.Interface()
 				}
-				v, err := kvInvoke(name, op, goArgs)
+				v, err := kvInvoke(guard, name, op, goArgs)
 				if err != nil {
 					return object.NewError(err)
 				}
@@ -357,7 +371,7 @@ func kvRisorStoreFn() object.Object {
 
 // luaStoreFn is ctx.store for run: lua: ctx.store("cache") resolves a
 // defined store and returns a table of its ops; errors raise.
-func luaStoreFn(L *lua.LState) *lua.LFunction {
+func luaStoreFn(L *lua.LState, guard DataGuard) *lua.LFunction {
 	return L.NewFunction(func(L *lua.LState) int {
 		name := L.CheckString(1)
 		if _, err := kv.Use(name); err != nil {
@@ -373,7 +387,7 @@ func luaStoreFn(L *lua.LState) *lua.LFunction {
 				for i := 1; i <= n; i++ {
 					args = append(args, luaToGo(L.Get(i)))
 				}
-				v, err := kvInvoke(name, op, args)
+				v, err := kvInvoke(guard, name, op, args)
 				if err != nil {
 					L.RaiseError("%s", err.Error())
 					return 0

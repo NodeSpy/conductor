@@ -170,7 +170,7 @@ func TestSQLInvokeShapes(t *testing.T) {
 		{"query", []any{"SELECT 1", "x"}, "args must be a list"},
 		{"nosuch", []any{"SELECT 1"}, `no operation "nosuch"`},
 	} {
-		if _, err := sqlInvoke("db", c.op, c.args); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := sqlInvoke(nil, "db", c.op, c.args); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s %v: want %q, got %v", c.op, c.args, c.want, err)
 		}
 	}

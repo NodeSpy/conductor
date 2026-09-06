@@ -23,7 +23,7 @@ import (
 // of those, so the executor opts out of the defaults and grants this
 // allowlist explicitly (the issue's "sandboxed by the built-ins conductor
 // exposes").
-func risorGlobals(data map[string]any) map[string]any {
+func risorGlobals(guard DataGuard, data map[string]any) map[string]any {
 	globals := map[string]any{}
 	for k, v := range builtins.Builtins() {
 		globals[k] = v
@@ -37,9 +37,9 @@ func risorGlobals(data map[string]any) map[string]any {
 	globals["strconv"] = modStrconv.Module()
 	globals["strings"] = modStrings.Module()
 	globals["time"] = modTime.Module()
-	globals["store"] = kvRisorStoreFn() // defined stores: s := store("cache"); s.get(…)
-	globals["sql"] = sqlRisorFn()       // defined SQL stores: db := sql("analytics"); db.query(…)
-	globals["memory"] = memRisorFn()    // shared agent memory: memory.remember(…), memory.recall(…)
+	globals["store"] = kvRisorStoreFn(guard) // defined stores: s := store("cache"); s.get(…)
+	globals["sql"] = sqlRisorFn(guard)       // defined SQL stores: db := sql("analytics"); db.query(…)
+	globals["memory"] = memRisorFn(guard)    // shared agent memory: memory.remember(…), memory.recall(…)
 	globals["ctx"] = data
 	return globals
 }
@@ -56,7 +56,7 @@ func risorGlobals(data map[string]any) map[string]any {
 func (e *Executor) execRisor(ctx context.Context, spec Spec, data map[string]any) (map[string]any, error) {
 	result, err := risor.Eval(ctx, spec.Code,
 		risor.WithoutDefaultGlobals(),
-		risor.WithGlobals(risorGlobals(data)))
+		risor.WithGlobals(risorGlobals(spec.DataGuard, data)))
 	if err != nil {
 		return nil, fmt.Errorf("risor: %w", err)
 	}

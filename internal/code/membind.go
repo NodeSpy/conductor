@@ -19,7 +19,12 @@ import (
 // plainly. Code-path writes carry no run provenance, so relative scopes
 // ("repo"/"agent") need their explicit forms here (repo:<owner/repo>,
 // agent:<name>).
-func memInvoke(op string, args []any) (any, error) {
+func memInvoke(guard DataGuard, op string, args []any) (any, error) {
+	if guard != nil && op == "remember" {
+		if err := guard("memory", op, args); err != nil {
+			return nil, err
+		}
+	}
 	m := memory.Active()
 	if m == nil {
 		return nil, fmt.Errorf("memory: not configured — add a top-level memory: section")
@@ -136,7 +141,7 @@ var memOps = []string{"remember", "recall", "forget", "list"}
 
 // memInvokeJSON is the JSON bridge used by the js engine, mirroring
 // kvInvokeJSON: {"op": …, "args": […]} → {"v": …} or {"err": …}.
-func memInvokeJSON(payload string) string {
+func memInvokeJSON(guard DataGuard, payload string) string {
 	var req struct {
 		Op   string `json:"op"`
 		Args []any  `json:"args"`
@@ -159,7 +164,7 @@ func memInvokeJSON(payload string) string {
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return enc(nil, fmt.Errorf("memory: bad bridge payload: %w", err))
 	}
-	v, err := memInvoke(req.Op, req.Args)
+	v, err := memInvoke(guard, req.Op, req.Args)
 	return enc(v, err)
 }
 
@@ -181,15 +186,15 @@ func jsMemShim() string {
 
 // MemHandle is the go-embed face of the configured memory: `import
 // "conductor/memory"`, then `mem.Remember(…)` / `mem.Recall(…)`.
-type MemHandle struct{}
+type MemHandle struct{ guard DataGuard }
 
 // Remember stores one memory and returns it as a map.
-func (MemHandle) Remember(text string, tags []string, scope string) (map[string]any, error) {
+func (h MemHandle) Remember(text string, tags []string, scope string) (map[string]any, error) {
 	anyTags := make([]any, len(tags))
 	for i, t := range tags {
 		anyTags[i] = t
 	}
-	r, err := memInvoke("remember", []any{text, anyTags, scope})
+	r, err := memInvoke(h.guard, "remember", []any{text, anyTags, scope})
 	if err != nil {
 		return nil, err
 	}
@@ -197,8 +202,8 @@ func (MemHandle) Remember(text string, tags []string, scope string) (map[string]
 }
 
 // Recall filters memories ({tags, scope, substring, limit}), newest first.
-func (MemHandle) Recall(q map[string]any) ([]any, error) {
-	r, err := memInvoke("recall", []any{q})
+func (h MemHandle) Recall(q map[string]any) ([]any, error) {
+	r, err := memInvoke(h.guard, "recall", []any{q})
 	if err != nil {
 		return nil, err
 	}
@@ -206,8 +211,8 @@ func (MemHandle) Recall(q map[string]any) ([]any, error) {
 }
 
 // Forget removes one memory by id; reports whether it existed.
-func (MemHandle) Forget(id string) (bool, error) {
-	r, err := memInvoke("forget", []any{id})
+func (h MemHandle) Forget(id string) (bool, error) {
+	r, err := memInvoke(h.guard, "forget", []any{id})
 	if err != nil {
 		return false, err
 	}
@@ -215,8 +220,8 @@ func (MemHandle) Forget(id string) (bool, error) {
 }
 
 // List returns every memory, newest first.
-func (MemHandle) List() ([]any, error) {
-	r, err := memInvoke("list", nil)
+func (h MemHandle) List() ([]any, error) {
+	r, err := memInvoke(h.guard, "list", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -225,8 +230,8 @@ func (MemHandle) List() ([]any, error) {
 
 // memGoEmbedExports is the `import "conductor/memory"` virtual package for
 // run: go-embed.
-func memGoEmbedExports() map[string]map[string]reflect.Value {
-	h := MemHandle{}
+func memGoEmbedExports(guard DataGuard) map[string]map[string]reflect.Value {
+	h := MemHandle{guard: guard}
 	return map[string]map[string]reflect.Value{
 		"conductor/memory/memory": {
 			"Remember": reflect.ValueOf(h.Remember),
@@ -239,7 +244,7 @@ func memGoEmbedExports() map[string]map[string]reflect.Value {
 
 // memRisorFn is the top-level `memory` module for run: risor:
 // memory.remember("txt", ["tag"], "repo:o/r"), memory.recall({...}).
-func memRisorFn() object.Object {
+func memRisorFn(guard DataGuard) object.Object {
 	contents := map[string]object.Object{}
 	for _, op := range memOps {
 		op := op
@@ -248,7 +253,7 @@ func memRisorFn() object.Object {
 			for i, a := range args {
 				goArgs[i] = a.Interface()
 			}
-			v, err := memInvoke(op, goArgs)
+			v, err := memInvoke(guard, op, goArgs)
 			if err != nil {
 				return object.NewError(err)
 			}
@@ -262,7 +267,7 @@ func memRisorFn() object.Object {
 }
 
 // luaMemFn is ctx.memory for run: lua — a table of the ops; errors raise.
-func luaMemFn(L *lua.LState) *lua.LTable {
+func luaMemFn(L *lua.LState, guard DataGuard) *lua.LTable {
 	t := L.NewTable()
 	for _, op := range memOps {
 		op := op
@@ -272,7 +277,7 @@ func luaMemFn(L *lua.LState) *lua.LTable {
 			for i := 1; i <= n; i++ {
 				args = append(args, luaToGo(L.Get(i)))
 			}
-			v, err := memInvoke(op, args)
+			v, err := memInvoke(guard, op, args)
 			if err != nil {
 				L.RaiseError("%s", err.Error())
 				return 0

@@ -11,6 +11,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/NodeSpy/conductor/internal/code"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
@@ -422,6 +423,23 @@ func (r *Runner) containsTrackedSecret(v map[string]any) bool {
 	}
 	red, ok := r.Secrets.RedactValue(v).(map[string]any)
 	return ok && !reflect.DeepEqual(red, v)
+}
+
+// planDataGuard is the code-sandbox face of the plan write barrier: nil when
+// the barrier is off (a config step, an approved or trusted plan), else a
+// guard the ctx.store/ctx.sql/ctx.memory bindings consult before every
+// durable write — without it, an agent plan's code step could park secret
+// material that `uses: kv.set` would have refused.
+func (r *Runner) planDataGuard(ctx context.Context) code.DataGuard {
+	if !planBarrier(ctx) {
+		return nil
+	}
+	return func(kind, op string, args []any) error {
+		if r.containsTrackedSecret(map[string]any{"args": args}) {
+			return fmt.Errorf("no_secret_egress: refusing to write secret material into %s.%s from an agent plan code step — approval required", kind, op)
+		}
+		return nil
+	}
 }
 
 // runPlanState executes a (fresh or restored) plan state with checkpointing

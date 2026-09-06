@@ -126,22 +126,22 @@ func run(ctx map[string]any) (any, error) {
 // TestMemInvokeValidation: the shared dispatcher's argument contract.
 func TestMemInvokeValidation(t *testing.T) {
 	tempMem(t)
-	if _, err := memInvoke("remember", nil); err == nil {
+	if _, err := memInvoke(nil, "remember", nil); err == nil {
 		t.Error("remember without text must error")
 	}
-	if _, err := memInvoke("remember", []any{"x", 42, ""}); err == nil {
+	if _, err := memInvoke(nil, "remember", []any{"x", 42, ""}); err == nil {
 		t.Error("non-list tags must error")
 	}
-	if _, err := memInvoke("recall", []any{"not a map"}); err == nil {
+	if _, err := memInvoke(nil, "recall", []any{"not a map"}); err == nil {
 		t.Error("non-map recall options must error")
 	}
-	if _, err := memInvoke("recall", []any{map[string]any{"scope": "repo"}}); err == nil {
+	if _, err := memInvoke(nil, "recall", []any{map[string]any{"scope": "repo"}}); err == nil {
 		t.Error("relative scope without a run must error in code")
 	}
-	if _, err := memInvoke("forget", nil); err == nil {
+	if _, err := memInvoke(nil, "forget", nil); err == nil {
 		t.Error("forget without id must error")
 	}
-	if _, err := memInvoke("bogus", nil); err == nil {
+	if _, err := memInvoke(nil, "bogus", nil); err == nil {
 		t.Error("unknown op must error")
 	}
 }

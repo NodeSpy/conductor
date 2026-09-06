@@ -89,7 +89,7 @@ func (e *Executor) execJS(ctx context.Context, spec Spec, data map[string]any) (
 		if args := this.Args(); len(args) > 0 {
 			payload = args[0].String()
 		}
-		return this.Context().NewString(kvInvokeJSON(payload)), nil
+		return this.Context().NewString(kvInvokeJSON(spec.DataGuard, payload)), nil
 	})
 	qctx.Global().SetPropertyStr("__conductor_kv", hostKV)
 
@@ -99,7 +99,7 @@ func (e *Executor) execJS(ctx context.Context, spec Spec, data map[string]any) (
 		if args := this.Args(); len(args) > 0 {
 			payload = args[0].String()
 		}
-		return this.Context().NewString(sqlInvokeJSON(payload)), nil
+		return this.Context().NewString(sqlInvokeJSON(spec.DataGuard, payload)), nil
 	})
 	qctx.Global().SetPropertyStr("__conductor_sql", hostSQL)
 
@@ -109,7 +109,7 @@ func (e *Executor) execJS(ctx context.Context, spec Spec, data map[string]any) (
 		if args := this.Args(); len(args) > 0 {
 			payload = args[0].String()
 		}
-		return this.Context().NewString(memInvokeJSON(payload)), nil
+		return this.Context().NewString(memInvokeJSON(spec.DataGuard, payload)), nil
 	})
 	qctx.Global().SetPropertyStr("__conductor_memory", hostMem)
 

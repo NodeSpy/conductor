@@ -664,3 +664,69 @@ policy:
 		t.Fatalf("plain relay: %+v", fake4.snapshot())
 	}
 }
+
+// REGRESSION (end-to-end): the plan write barrier now reaches IN-PROCESS
+// code bindings. A config workflow whose js step writes its input through
+// ctx.store, invoked FROM an unapproved plan (the barrier ctx propagates
+// through execWorkflowCall), must refuse a tracked-secret value — before
+// this, ctx.store bypassed the barrier that `uses: kv.set` enforces.
+func TestGuardCodeBindingWriteBarrier(t *testing.T) {
+	const secretVal = "code-park-s3cr3t"
+	kv.SetDataDir(t.TempDir())
+	kv.ResetStores()
+	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
+	cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+stores:
+  main: { type: boltdb }
+agents:
+  planner: { model: x }
+workflows:
+  park:
+    inputs: { v: { type: string, required: true } }
+    steps:
+      - id: w
+        run: js
+        code: |
+          ctx.store("main").set("ns", "loot", ctx.inputs.v);
+          return 1;
+policy:
+  agent_authored:
+    allow: [ workflow, svc.post ]
+`)
+	shared := testSecrets(nil)
+	shared.Track(secretVal)
+	reg, err := connector.Build(cfg, connector.Deps{Secrets: shared, Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig := newTestRunner(t, cfg, reg)
+	rig.Runner.Secrets = shared
+	rig.Agents.dispatchFunc = planDispatch("```plan\n" +
+		"- id: go\n  workflow: park\n  with: { v: \"{{.leak}}\" }\n```")
+	runTrigger(rig, newTrigger("ping", map[string]any{"leak": secretVal}), mustSpec(t, planSpec))
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "no_secret_egress") {
+		t.Fatalf("code-binding write of a secret must hit the barrier: %v %q", failed, errStr)
+	}
+	st, err := kv.Use("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := st.Get("ns", "loot"); found {
+		t.Fatal("the secret must never land in kv via a code binding")
+	}
+
+	// The same workflow with a plain value passes.
+	rig2 := newTestRunner(t, cfg, reg)
+	rig2.Runner.Secrets = shared
+	rig2.Agents.dispatchFunc = planDispatch("```plan\n" +
+		"- id: go\n  workflow: park\n  with: { v: \"plain-note\" }\n```")
+	runTrigger(rig2, newTrigger("ping", nil), mustSpec(t, planSpec))
+	if failed, errStr := rig2.workflowFailed(); failed {
+		t.Fatalf("plain code-binding writes must pass: %s", errStr)
+	}
+	if v, found, _ := st.Get("ns", "loot"); !found || v != "plain-note" {
+		t.Fatalf("plain write must land: %v %v", v, found)
+	}
+}
