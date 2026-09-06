@@ -772,11 +772,19 @@ func TestLocalCodeCaptureBadStateKeepsWaiting(t *testing.T) {
 	case <-time.After(150 * time.Millisecond):
 	}
 
-	// The legitimate redirect still lands.
-	if resp, err := http.Get(redirect + "?code=real&state=expected"); err != nil {
-		t.Fatal(err)
-	} else {
-		resp.Body.Close()
+	// The legitimate redirect still lands, and its response arrives INTACT:
+	// teardown is a graceful Shutdown. The old hard srv.Close() raced the
+	// in-flight response — the client's GET died mid-response and Go's
+	// transport retried it against the already-closed port ("connection
+	// refused"), which is how this surfaced under -race.
+	legit, err := http.Get(redirect + "?code=real&state=expected")
+	if err != nil {
+		t.Fatalf("legit redirect after probe: %v", err)
+	}
+	lb, _ := io.ReadAll(legit.Body)
+	legit.Body.Close()
+	if !strings.Contains(string(lb), "Authorized") {
+		t.Fatalf("legit redirect response truncated by teardown: %q", lb)
 	}
 	r := <-done
 	if r.err != nil || r.code != "real" {

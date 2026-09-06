@@ -469,7 +469,19 @@ func LocalCodeCapture(redirectURI string, out io.Writer, timeout time.Duration) 
 			got <- result{code: code}
 		})}
 		go func() { _ = srv.Serve(ln) }()
-		defer srv.Close()
+		defer func() {
+			// Graceful, not srv.Close(): the handler that resolved the flow
+			// is likely STILL FLUSHING its response ("Authorized. You can
+			// close this tab.") when the select below returns — a hard Close
+			// resets that in-flight connection, so the browser shows a reset
+			// (and a Go client retries its GET against the now-closed port:
+			// "connection refused"). Shutdown lets it finish, bounded.
+			sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := srv.Shutdown(sctx); err != nil {
+				_ = srv.Close()
+			}
+		}()
 
 		select {
 		case r := <-got:
