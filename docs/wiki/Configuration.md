@@ -233,7 +233,11 @@ answers a state-mismatched request with a 400 while continuing to wait for
 the real redirect.
 
 **`token_vault:`** names the `vaults:` entry conductor stores the captured
-tokens in — keys `oauth/<connector>/access_token`, `…/refresh_token`,
+tokens in. Keys are per-connector (`oauth/<connector>/…`), but a vault is a
+shared namespace: EVERY connector (and every `<vault>.read` verb) configured
+against the same vault can read every other connector's stored tokens — give
+each oauth2 connector its own token vault when that blast radius matters.
+Keys are `oauth/<connector>/access_token`, `…/refresh_token`,
 `…/expiry`. It must be a writable vault; the interactive grants
 (`authorization_code`, `device`) require it. When the provider **rotates the
 refresh token on use** (Xero does), the new token is written back there, so

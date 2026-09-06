@@ -40,12 +40,21 @@ func (h *HashicorpVault) client() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
-// splitKey separates the secret path from the field (default "value").
-func splitKey(key string) (path, field string) {
-	if p, f, ok := strings.Cut(key, "#"); ok && f != "" {
-		return strings.Trim(p, "/"), f
+// splitKey separates the secret path from the field (default "value") and
+// refuses traversal: the path concatenates into the KV API URL, so a key
+// carrying ".." (or an empty segment collapsing the path) could address a
+// different mount/endpoint entirely — the same guard FileVault applies.
+func splitKey(key string) (path, field string, err error) {
+	p, f := strings.Trim(key, "/"), "value"
+	if pp, ff, ok := strings.Cut(key, "#"); ok && ff != "" {
+		p, f = strings.Trim(pp, "/"), ff
 	}
-	return strings.Trim(key, "/"), "value"
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return "", "", fmt.Errorf("hashicorp: key %q escapes the mount path", key)
+		}
+	}
+	return p, f, nil
 }
 
 func (h *HashicorpVault) do(ctx context.Context, method, path string, body any) (map[string]any, error) {
@@ -115,7 +124,10 @@ func (h *HashicorpVault) Read(ctx context.Context, key string) (string, error) {
 	if v, ok := h.c.get(key); ok {
 		return v, nil
 	}
-	path, field := splitKey(key)
+	path, field, err := splitKey(key)
+	if err != nil {
+		return "", err
+	}
 	data, err := h.data(ctx, path)
 	if err != nil {
 		return "", err
@@ -130,7 +142,10 @@ func (h *HashicorpVault) Read(ctx context.Context, key string) (string, error) {
 }
 
 func (h *HashicorpVault) Write(ctx context.Context, key, value string) error {
-	path, field := splitKey(key)
+	path, field, err := splitKey(key)
+	if err != nil {
+		return err
+	}
 	data, err := h.data(ctx, path)
 	if err != nil {
 		return err

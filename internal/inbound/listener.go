@@ -6,8 +6,10 @@ package inbound
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -22,6 +24,7 @@ var (
 )
 
 type listener struct {
+	ctx    context.Context // the first registrant's ctx — governs shutdown
 	mu     sync.RWMutex
 	routes map[string]http.Handler
 	server *http.Server
@@ -37,31 +40,50 @@ func Register(ctx context.Context, addr, path string, h http.Handler, logf func(
 	}
 	lmu.Lock()
 	l, ok := listeners[addr]
+	if ok && l.ctx.Err() != nil {
+		// The existing entry's governing ctx is already done — its shutdown
+		// goroutine may not have evicted it yet. Attaching here would mount
+		// the route on a dying server; replace the entry instead (the old
+		// goroutine's eviction is guarded by identity and won't touch the
+		// replacement; the fresh bind retries while the old socket closes).
+		delete(listeners, addr)
+		ok = false
+	}
 	if !ok {
-		l = &listener{routes: map[string]http.Handler{}}
+		l = &listener{ctx: ctx, routes: map[string]http.Handler{}}
 		listeners[addr] = l
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", l.dispatch) // one static route; per-path lookup happens in dispatch
 		l.server = &http.Server{Addr: addr, Handler: mux}
 		go func() {
 			<-ctx.Done()
-			sd, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = l.server.Shutdown(sd)
-			// Evict the dead listener: a later Register for this addr (a
-			// reload, a restart-in-process, tests) must start a FRESH
-			// server — attaching routes to this map entry would look
-			// registered while serving nothing. After Shutdown returns the
-			// socket is closed, so the fresh server can bind.
+			// Evict BEFORE the shutdown grace: a Register racing the (up to
+			// 5s) drain must build a fresh listener, never attach routes to
+			// this dying one — an attached route would look registered while
+			// serving nothing.
 			lmu.Lock()
 			if listeners[addr] == l {
 				delete(listeners, addr)
 			}
 			lmu.Unlock()
+			sd, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = l.server.Shutdown(sd)
 		}()
 		go func() {
 			logf("inbound: listener on %s", addr)
-			if err := l.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			// A fresh listener can race a dying predecessor: Shutdown closes
+			// the old listening socket early but not instantly, so retry a
+			// transient address-in-use briefly instead of dying silent.
+			var err error
+			for i := 0; i < 100; i++ {
+				err = l.server.ListenAndServe()
+				if !errors.Is(err, syscall.EADDRINUSE) {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			if err != nil && err != http.ErrServerClosed {
 				logf("inbound: listener %s stopped: %v", addr, err)
 			}
 		}()

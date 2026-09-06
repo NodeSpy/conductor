@@ -156,7 +156,13 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 	}
 	t = events[len(events)-1]
 
-	ctx := context.Background()
+	// The grouper's fire callback carries no ctx of its own; tie the run to
+	// the engine's shutdown so a SATURATED acquire() can be interrupted
+	// instead of wedging the flush goroutine forever on a stopping daemon.
+	ctx := e.baseCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	e.notif.Emit(ctx, notify.EventDispatch, t, fmt.Sprintf("workflow (batch of %d)", len(events)))
 	e.log("%s grouped batch firing (%d events, key %q)", tag(t), len(events), gkey)
 

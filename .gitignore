@@ -9,4 +9,3 @@ audit.jsonl
 # e2e harness: generated throwaway App key (never committed).
 /test/e2e/config/github-app.pem
 .scratch/
-/paseo-conductor

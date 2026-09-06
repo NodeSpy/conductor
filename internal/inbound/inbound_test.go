@@ -233,3 +233,86 @@ func TestListenerEvictedOnShutdownAndReRegistrable(t *testing.T) {
 		t.Fatal("gen2 handler never fired")
 	}
 }
+
+// REGRESSION: during the (up to 5s) shutdown grace, a concurrent Register
+// for the same addr found the dying listener still in the map and attached
+// its routes there — registered-looking, dead on arrival. The entry is now
+// evicted BEFORE the drain, and the fresh listener retries the bind while
+// the old socket closes; a re-registration mid-drain serves immediately,
+// even with an in-flight request still draining.
+func TestRegisterDuringShutdownGraceGetsFreshListener(t *testing.T) {
+	const addr = "127.0.0.1:38257"
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	release := make(chan struct{})
+	gen1Done := make(chan struct{})
+	Register(ctx1, addr, "/slow", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release // hold the connection open so the drain has work to wait on
+		w.WriteHeader(http.StatusAccepted)
+	}), t.Logf)
+
+	// Wait for the listener, then park an in-flight request on it.
+	deadline := time.Now().Add(2 * time.Second)
+	started := false
+	for time.Now().Before(deadline) {
+		resp, err := http.Post("http://"+addr+"/ping-bind", "application/json", stringReader(`{}`))
+		if err == nil {
+			resp.Body.Close()
+			started = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !started {
+		t.Fatal("gen1 listener never came up")
+	}
+	go func() {
+		resp, err := http.Post("http://"+addr+"/slow", "application/json", stringReader(`{}`))
+		if err == nil {
+			resp.Body.Close()
+		}
+		close(gen1Done)
+	}()
+	deadline = time.Now().Add(2 * time.Second)
+	// (the in-flight request is parked once the handler blocks; give it a beat)
+	time.Sleep(50 * time.Millisecond)
+	_ = deadline
+
+	// Shutdown starts draining gen1 (the parked request holds it open) …
+	cancel1()
+	// … and a re-registration DURING the grace must get a fresh listener.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		close(release)
+		<-gen1Done
+		cancel2()
+		waitListenerGone(t, addr)
+	})
+	got2 := make(chan struct{}, 1)
+	Register(ctx2, addr, "/gen2", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got2 <- struct{}{}
+		w.WriteHeader(http.StatusAccepted)
+	}), t.Logf)
+
+	deadline = time.Now().Add(3 * time.Second)
+	var served bool
+	for time.Now().Before(deadline) {
+		resp, err := http.Post("http://"+addr+"/gen2", "application/json", stringReader(`{}`))
+		if err == nil && resp.StatusCode == http.StatusAccepted {
+			resp.Body.Close()
+			served = true
+			break
+		}
+		if err == nil {
+			resp.Body.Close()
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !served {
+		t.Fatal("re-registration during the shutdown grace never served")
+	}
+	select {
+	case <-got2:
+	case <-time.After(time.Second):
+		t.Fatal("gen2 handler never fired")
+	}
+}

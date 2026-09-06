@@ -87,8 +87,9 @@ type Engine struct {
 	affinity    *controller.Affinity // keyed live sessions (session:); nil = every dispatch fresh
 	pausePath   string               // control file; present = paused (toggled by pause/resume, no restart)
 	ch          chan core.Trigger
-	sem         chan struct{} // concurrent-agent cap; nil = unlimited
-	groupWarn   sync.Map      // FlowRefs whose group key already failed once (log once, not per event)
+	sem         chan struct{}   // concurrent-agent cap; nil = unlimited
+	groupWarn   sync.Map        // FlowRefs whose group key already failed once (log once, not per event)
+	baseCtx     context.Context // the Run loop's ctx; ties ctx-less entry points (batch flush) to shutdown
 
 	// flow runs connectors-model triggers (actions carrying a FlowRef);
 	// grouper batches their grouped events. nil when the config has no
@@ -235,6 +236,7 @@ func (e *Engine) Emit(ctx context.Context, t core.Trigger) {
 
 // Run processes triggers until ctx is cancelled.
 func (e *Engine) Run(ctx context.Context) error {
+	e.baseCtx = ctx // grouper batch flushes (no ctx of their own) tie to shutdown
 	if _, err := e.store.GC(); err != nil {
 		e.log("engine: initial GC: %v", err)
 	}
@@ -774,8 +776,10 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 
 	// A finished agent's captured output may carry the memory output contract.
 	// Queued/adopted work has no final output here; shadow previews never write.
+	// Single-action dispatches have no WorkflowRun record; the agent id is the
+	// run identity that provenance (Source.Run) can trace back.
 	if act.Type == "agent" && !shadow && !ref.Queued {
-		e.harvestMemory(t, act.Agent, "", ref.Output)
+		e.harvestMemory(t, act.Agent, ref.AgentID, ref.Output)
 	}
 
 	if ref.Queued {

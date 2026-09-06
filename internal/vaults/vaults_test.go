@@ -480,3 +480,28 @@ func TestPassBackendRejectsFlagLikeKeys(t *testing.T) {
 		t.Fatal("a flag-shaped key must never reach the pass CLI")
 	}
 }
+
+// REGRESSION: the hashicorp key concatenated raw into the KV API URL — a key
+// carrying ".." (or empty segments) could address a different mount or API
+// endpoint. Traversal-shaped keys are refused before any request, mirroring
+// FileVault's guard.
+func TestHashicorpKeyTraversalRefused(t *testing.T) {
+	h := &HashicorpVault{Addr: "http://never-dialed.invalid", Token: "t"}
+	ctx := context.Background()
+	for _, key := range []string{
+		"../sys/policies/acl/root",
+		"a/../../other-mount/secret",
+		"a//b", "a/./b", "..",
+	} {
+		if _, err := h.Read(ctx, key); err == nil || !strings.Contains(err.Error(), "escapes the mount path") {
+			t.Errorf("Read(%q) must refuse traversal: %v", key, err)
+		}
+		if err := h.Write(ctx, key, "v"); err == nil || !strings.Contains(err.Error(), "escapes the mount path") {
+			t.Errorf("Write(%q) must refuse traversal: %v", key, err)
+		}
+	}
+	// Ordinary nested paths (and #field selectors) still parse.
+	if p, f, err := splitKey("team/app/db#password"); err != nil || p != "team/app/db" || f != "password" {
+		t.Fatalf("splitKey: %q %q %v", p, f, err)
+	}
+}

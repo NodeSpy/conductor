@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -84,7 +85,7 @@ type Notifier struct {
 	// connectors-model delivery, wired by main when a connectors: block
 	// exists (see SetRouter). nil with via: configured logs a warning once.
 	route      func(ctx context.Context, r config.NotifyRoute, data map[string]any) error
-	warnedOnce bool
+	warnedOnce atomic.Bool // Emit runs from the engine loop AND flow goroutines
 
 	// publish feeds the event into the conductor.* lifecycle source (wired
 	// by main to connector.EmitLifecycle) — every event, unconditionally:
@@ -185,8 +186,7 @@ func (n *Notifier) notifyAll(ctx context.Context, text, event string, data map[s
 			continue
 		}
 		if n.route == nil {
-			if !n.warnedOnce {
-				n.warnedOnce = true
+			if n.warnedOnce.CompareAndSwap(false, true) {
 				n.log("notify: via routes configured but no connectors are wired — %s not delivered", r.Uses)
 			}
 			continue

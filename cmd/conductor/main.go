@@ -1,8 +1,11 @@
 // Command conductor is an event-driven agent orchestrator for a local
-// Paseo daemon. It receives GitHub App webhooks (via smee), matches them to
-// rules, and dispatches coding agents / commands.
+// Paseo daemon: connectors turn service events (GitHub App webhooks over
+// smee, Slack, cron, sentry, …) into triggers whose steps dispatch coding
+// agents, verbs, code, and commands.
 //
-// Subcommands: run | validate | replay <event.json> | sweep | version.
+// Subcommands: run | validate | replay | sweep | force | status | report |
+// pause | resume | update | service | connectors | connector | schema |
+// secrets | vault | unlock | config | mcp | workflows | version.
 package main
 
 import (
@@ -135,6 +138,7 @@ usage:
   conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
   conductor unlock                      seed the default vault key for non-interactive restarts
   conductor config migrate [--dry-run]  transform a legacy config to the connectors schema
+  conductor workflows ls|review|rm      manage saved (agent-promoted) workflows
   conductor version
 `)
 }
