@@ -18,9 +18,14 @@ hosts:
 
 Execution goes through the system `ssh` binary with `BatchMode=yes` (never an
 interactive prompt), key auth, and — when `known_hosts:` is set — strict host
-key checking. Environment values are exported inside the remote shell and the
-code travels as a base64 frame with the ctx JSON on stdin, so secrets never
-ride local argv.
+key checking. The `--` operand separator always precedes the host, so a host
+value can never be parsed as an ssh flag. Environment VALUES never appear in
+shell text or on argv (where `ps` on either end would see them): the export
+preamble travels base64-encoded as the first line of stdin, decoded and
+eval'd by the remote wrapper before the rest of stdin reaches the script.
+Env KEYS must be valid variable names (`[A-Za-z_][A-Za-z0-9_]*`) — anything
+else is a hard error, since a key sits unquoted in the `export` text. Code
+travels as a base64 frame with the ctx JSON on stdin.
 
 ## What runs remotely
 

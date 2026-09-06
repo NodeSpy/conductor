@@ -23,7 +23,9 @@ set `group:` to batch a burst of related events into one run:
 
 - **`key`** — the grouping expression (templated). Default: the event's own
   dedup id, so each event stays its own run. Set it to batch — a poster, a
-  PR, a label.
+  PR, a label. A key that fails to render — or renders EMPTY (a typo'd
+  template path) — degrades to per-event batching (logged once per trigger)
+  rather than collapsing every event into one cross-entity batch.
 - **`window`** — the debounce window, default `15s`: it resets on each new
   event and the batch fires once the group goes quiet.
 - **`max_wait`** — caps how long a never-quiet group can defer, default 4 ×
@@ -33,8 +35,17 @@ set `group:` to batch a burst of related events into one run:
   when the run completes. `group: { key: "{{.pr}}" }` therefore gives
   one-agent-per-PR (no branch collisions) as a natural consequence.
 - Distinct keys run independently. `policy.concurrency.max_agents` remains
-  the only global cap; exact-duplicate events are still dropped by dedup — a
-  separate mechanism that runs before grouping.
+  the only global cap; exact-duplicate events are still dropped by dedup.
+- **Dedup is consumed when the batch FIRES, not when an event buffers.** The
+  buffer is in-memory: if conductor restarts mid-window the buffered events
+  are lost from memory, but nothing was recorded for them, so the source's
+  redelivery (a poll, a webhook redelivery) re-buffers them instead of being
+  silently suppressed. A redelivery while the batch is still buffered is
+  dropped at flush by signature — the batch never doubles an event.
+- One key's buffer holds at most 1000 events; past that the OLDEST drop, so
+  a hot key under a stuck run keeps the freshest context instead of growing
+  without bound. A panicking batch run is recovered and logged — the key
+  keeps batching afterwards.
 
 ## The batch in templates
 

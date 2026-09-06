@@ -161,6 +161,15 @@ concatenated, split across values, re-encoded by a remote API) is no longer
 recognized. Redaction is a seatbelt, not the guardrail — the structural
 controls (`policy.agent_authored`'s allowlist and `no_secret_egress` gate,
 plan scopes carrying no ambient secrets) are what actually keep secret
-material from leaving.
+material from leaving. The egress detector matches any word-boundaried
+mention of the `secrets`/`vaults` scopes inside a template action — the
+`.secrets.x` form AND the `{{index . "secrets" "x"}}` / variable-rebinding
+forms; a dynamically-assembled key name is the runtime write barrier's job.
+
+Two more places secrets deliberately do NOT flow: spawned code-step
+interpreters (`run: go`, `run: sh/node/…`) receive an allowlisted base
+environment (PATH/HOME/locale/GO*) plus the step's own `env:` — never the
+daemon's full environment; and remote (`host:`) execution ships env values
+base64-framed over stdin, never in shell text or argv ([[Hosts]]).
 
 Related: [[Configuration]] · [[Connectors]] · [[Commands]] · [[Migration]]

@@ -62,7 +62,7 @@ The return value / stdout becomes the step's outputs: a JSON object as-is
 (`{{.step.field}}`), any other JSON under `value:`, plain text under `text:`.
 
 The in-process engines also get the data bindings: `ctx.store("<name>")`
-(the KV ops), `ctx.sql("<name>")` (query/exec), and `ctx.memory`
+(the KV ops), `ctx.sql("<name>")` (query/exec — gated per store, below), and `ctx.memory`
 (remember/recall/forget/list over the configured [[Memory]]; relative scopes
 need their explicit `repo:<owner/repo>` / `agent:<name>` forms in code). In
 risor these are the top-level `store(…)`, `sql(…)`, and `memory` builtins;
@@ -81,11 +81,32 @@ process and are **local-only**; `conductor validate` rejects `host:` on them
 and names the alternatives (run `node` there, or run a conductor on that
 box).
 
+### `ctx.sql` capabilities
+
+Code steps are **query-only** against SQL stores by default. A store opts
+into writes with `code_access: write` on its `stores:` entry; `code_access:
+none` cuts code steps off entirely. The `sql.query`/`sql.exec` workflow
+verbs (config-authored, parameterized) are not gated. Independently, sqlite
+stores refuse `ATTACH`/`DETACH`/`PRAGMA`/`VACUUM` for every caller — those
+statements reach the host filesystem/engine, not your schema.
+
+## Timeouts
+
+A step's `timeout:` binds actual execution in every engine: QuickJS halts
+the WASM module at the deadline (and its heap is capped at 256MB), yaegi
+and Lua interrupt their interpreter loops, risor honors the context
+natively, and host interpreters are killed with the subprocess. A
+`while(1)` costs you the step, not the daemon.
+
 ## Trust boundary
 
 WASM (`js`) is memory-isolated. yaegi (`go-embed`), Risor, and Lua are
 in-process behind their allowlists — appropriate for operator-authored
-config, not untrusted input. Host interpreters have full host power (that is
-their point).
+config, not untrusted input. go-embed's interpreter never resolves source
+imports from the host GOPATH (only the registered stdlib subset exists).
+Host interpreters have full host power (that is their point) — but they
+inherit an allowlisted base environment (PATH/HOME/locale/GO*) plus the
+step's own `env:`, never the daemon's full environment; pass an ambient
+variable explicitly if a step needs it.
 
 Related: [[Hosts]] · [[Workflows]] · [[Connectors]]

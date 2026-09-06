@@ -171,6 +171,16 @@ Verb templates see `{{.options.*}}` (the step's rendered options) and
 keeps the underlying type — an array stays an array for `for_each:`. A
 status outside `expect:` fails the verb with the status and body.
 
+**Interpolated values are escaped by default** — option values come from
+event data (webhook/PR/issue text), so they are treated as data, not
+syntax. In `path:` templates every interpolated value is percent-escaped
+into a single path segment (no traversal, no spliced `?query`; a rendered
+dot-segment is refused outright). In `body:` templates values are
+JSON-encoded — a title containing `","role":"admin` stays inside its
+string. Two explicit opt-outs: `{{ .x | json }}` emits a full JSON fragment
+(as before), and `{{ .x | raw }}` splices verbatim (for non-JSON bodies,
+e.g. form-encoded). Literal template text is never touched.
+
 Polled events fetch `request:` every `poll:`, extract the `list:` array, and
 fire one trigger per item whose rendered `id:` has not been seen (the first
 poll seeds silently — no replay storm on boot). Each `context:` field and the
@@ -216,7 +226,10 @@ reference (`{{ vault "<name>" "<key>" }}` — see [[Secrets]]).
 `oauth2` grants: `client_credentials` (machine-to-machine — tokens fetch on
 demand, nothing to seed), `refresh_token`, `authorization_code`, and
 `device`. Access tokens are cached per connector in memory, refreshed ahead
-of expiry and once more on a 401, and never logged.
+of expiry and once more on a 401, and never logged. The interactive
+code-exchange bootstrap always uses PKCE (S256) and its localhost callback
+answers a state-mismatched request with a 400 while continuing to wait for
+the real redirect.
 
 **`token_vault:`** names the `vaults:` entry conductor stores the captured
 tokens in — keys `oauth/<connector>/access_token`, `…/refresh_token`,
@@ -280,6 +293,13 @@ stores:
   billing:   { type: mysql,    dsn: "conductor:@tcp(db:3306)/billing", password: '{{ vault "house" "mysql" }}' }
   local:     { type: sqlite }                       # file <data dir>/local.sqlite
 ```
+
+SQL stores additionally take `code_access: none | read | write` gating what
+in-process code steps may do through `ctx.sql` — query-only by default,
+`write` opts a store into exec from code, `none` cuts code steps off. The
+`sql.*` workflow verbs are not gated. sqlite stores refuse
+`ATTACH`/`DETACH`/`PRAGMA`/`VACUUM` for every caller (they reach the host
+filesystem/engine, not your schema).
 
 Every KV backend implements one `KVBackend` interface with identical
 semantics; a `stores:` entry that names an unknown type, misses its
@@ -619,8 +639,12 @@ the section-wrapped form (`connectors: { timer: … }`); an entry-body file
 holds the body directly; a trigger file holds a bare list or a `triggers:`
 block. **Merge, not last-wins:** a name defined in two files (or a file and
 inline) fails the load naming the key and both sources. A glob matching no
-files is an error, never a silent no-op. Validation runs over the merged
-config, so cross-file `{{…}}`/`workflow:`/`uses:` references are checked at load.
+files is an error, never a silent no-op. `**` globs are refused by name —
+`filepath` globs match one directory level, so a `conf.d/**/*.yaml` would
+quietly skip nested files; list each level instead. Workflow files may
+reference each other (even mutually) — each (file, workflow) pair resolves
+once. Validation runs over the merged config, so cross-file
+`{{…}}`/`workflow:`/`uses:` references are checked at load.
 
 A workflow can also be pulled in per step, without a section import — see
 `workflow:`/`import:` in [[Workflows]].
@@ -632,6 +656,11 @@ backup.
 
 ## Validation and fleet safety
 
+- **Unknown keys are load errors.** The whole document (and every imported
+  file) decodes strictly: a typo'd key (`known_hostss:`, `filtres:`, a
+  misplaced `approve:`) fails the load naming the key and line, instead of
+  silently not applying. Type-specific connection/store bodies keep their
+  own builder-side validation.
 - `conductor validate` (and boot) resolve every `on:` kind, `filters:` key,
   `uses:` verb, option map, workflow input/output, and `{{…}}`/`if:`
   reference against the connectors' published schemas AND the scope at that

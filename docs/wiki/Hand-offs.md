@@ -23,15 +23,25 @@ presented. `timeout:` (default 1h) bounds an unanswered ask.
 ## Channels
 
 - **`web`** — an approve / revise / discard page with an editable draft,
-  served on the inbound listener. `base_url:` for a fixed origin, or a
-  `tunnel:` provider (`lan`, `cloudflared`, `ngrok`, `tailscale`, `ssh`,
-  `localxpose`, `command`) for a fresh public URL per ask. Links carry a
-  192-bit token and expire (`ttl:`, default 30m).
+  served on the inbound listener. The default `listen:` binds loopback only
+  (`127.0.0.1:8099`) — draft pages carry approve/deny actions and are meant
+  to be reached through the tunnel or a same-box reverse proxy; bind wider
+  explicitly if you mean to. `base_url:` for a fixed origin, or a `tunnel:`
+  provider (`lan`, `cloudflared`, `ngrok`, `tailscale`, `ssh`, `localxpose`,
+  `command`) for a fresh public URL per ask. Links carry a 192-bit token and
+  expire (`ttl:`, default 30m). The `tailscale` provider leaves a serve
+  mapping that existed before the draft in place at close (it tears down
+  only its own).
 - **`slack`** — `to: dm` (a user id) or `to: thread` (a channel); the reply is
   captured over the connector's Socket Mode connection. Replies parse as
   approve (`approve`, `lgtm`, `+1`, …), discard (`discard`, `cancel`, …), or
-  anything else = a revision.
-- **`discord`** — same shape; conductor runs the bot gateway itself.
+  anything else = a revision. For `to: thread`, an optional `approvers:`
+  list of user ids restricts WHO may resolve the ask — without it, anyone
+  in the channel can approve an agent's draft; with it, replies from anyone
+  else are ignored and the ask keeps waiting. (Also an `options.approvers`
+  on the ask verb itself.)
+- **`discord`** — same shape (including `approvers:` for `to: thread`);
+  conductor runs the bot gateway itself.
 
 ## Background review steps
 
