@@ -2,6 +2,8 @@ package connector
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -628,6 +630,19 @@ vaults:
 	if form.Get("grant_type") != "authorization_code" || form.Get("code") != "code-123" {
 		t.Fatalf("exchange form: %v", form)
 	}
+	// REGRESSION: PKCE is unconditional — the consent URL carries an S256
+	// challenge and the exchange carries the verifier that hashes to it.
+	verifier := form.Get("code_verifier")
+	if verifier == "" {
+		t.Fatal("exchange form carries no code_verifier — PKCE missing")
+	}
+	if q.Get("code_challenge_method") != "S256" {
+		t.Fatalf("code_challenge_method: %q", q.Get("code_challenge_method"))
+	}
+	sum := sha256.Sum256([]byte(verifier))
+	if q.Get("code_challenge") != base64.RawURLEncoding.EncodeToString(sum[:]) {
+		t.Fatalf("code_challenge %q does not match S256(code_verifier)", q.Get("code_challenge"))
+	}
 	if got, err := vaults.Read(context.Background(), "house", "oauth/xero/refresh_token"); err != nil || got != "rt-first" {
 		t.Fatalf("refresh token stored: %q %v", got, err)
 	}
@@ -713,10 +728,59 @@ func TestLocalCodeCapture(t *testing.T) {
 	if !strings.Contains(body, "Authorized") {
 		t.Fatalf("browser reply: %s", body)
 	}
+}
 
-	// A state mismatch is rejected.
-	if r, _ := drive("expected", "?code=x&state=wrong"); r.err == nil {
-		t.Fatal("state mismatch must error")
+// REGRESSION: a request with a mismatched state gets a 400 but must NOT
+// abort the pending flow — a drive-by probe would otherwise kill a
+// legitimate login that's still coming. The listener keeps waiting and the
+// real redirect still succeeds.
+func TestLocalCodeCaptureBadStateKeepsWaiting(t *testing.T) {
+	redirect := "http://" + freeLocalAddr(t) + "/callback"
+	capture := LocalCodeCapture(redirect, io.Discard, 5*time.Second)
+	type res struct {
+		code string
+		err  error
+	}
+	done := make(chan res, 1)
+	go func() {
+		c, err := capture("https://login.example/consent", "expected")
+		done <- res{c, err}
+	}()
+
+	// Wait for the listener, then probe it with a wrong state.
+	var resp *http.Response
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var err error
+		resp, err = http.Get(redirect + "?code=stolen&state=wrong")
+		if err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if resp == nil {
+		t.Fatal("no listener came up")
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(b), "state mismatch") {
+		t.Fatalf("probe reply: %d %s", resp.StatusCode, b)
+	}
+	select {
+	case r := <-done:
+		t.Fatalf("bad-state probe killed the pending flow: %q %v", r.code, r.err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// The legitimate redirect still lands.
+	if resp, err := http.Get(redirect + "?code=real&state=expected"); err != nil {
+		t.Fatal(err)
+	} else {
+		resp.Body.Close()
+	}
+	r := <-done
+	if r.err != nil || r.code != "real" {
+		t.Fatalf("real redirect after probe: %q %v", r.code, r.err)
 	}
 }
 

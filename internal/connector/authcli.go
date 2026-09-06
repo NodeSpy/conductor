@@ -3,6 +3,8 @@ package connector
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -89,18 +91,23 @@ func AuthBootstrap(ctx context.Context, cfg *config.Config, sec *secrets.Resolve
 			return fmt.Errorf("connector %q: auth.auth_url (the consent endpoint) is required for the bootstrap", name)
 		}
 		state := randomState()
+		// PKCE (RFC 7636), unconditionally: the S256 challenge binds the
+		// authorization code to THIS bootstrap, so an intercepted redirect
+		// (localhost listener, referer leak) can't be exchanged elsewhere.
+		verifier, challenge := pkcePair()
 		var code string
-		code, err = codeFn(consentURL(a, state), state)
+		code, err = codeFn(consentURL(a, state, challenge), state)
 		if err == nil {
 			redirect := a.RedirectURI
 			if redirect == "" {
 				redirect = defaultRedirectURI
 			}
 			form := url.Values{
-				"grant_type":   {"authorization_code"},
-				"code":         {code},
-				"redirect_uri": {redirect},
-				"client_id":    {a.ClientID},
+				"grant_type":    {"authorization_code"},
+				"code":          {code},
+				"redirect_uri":  {redirect},
+				"client_id":     {a.ClientID},
+				"code_verifier": {verifier},
 			}
 			tr, err = postTokenForm(ctx, a, form)
 			if err != nil {
@@ -350,8 +357,9 @@ func newAuthenticatorForBootstrap(ctx context.Context, name string, a authConfig
 	return newAuthenticator(ctx, name, b, sec, nil)
 }
 
-// consentURL builds the provider's authorization URL.
-func consentURL(a authConfig, state string) string {
+// consentURL builds the provider's authorization URL. challenge, when set,
+// carries the PKCE S256 code challenge.
+func consentURL(a authConfig, state, challenge string) string {
 	redirect := a.RedirectURI
 	if redirect == "" {
 		redirect = defaultRedirectURI
@@ -361,6 +369,10 @@ func consentURL(a authConfig, state string) string {
 		"client_id":     {a.ClientID},
 		"redirect_uri":  {redirect},
 		"state":         {state},
+	}
+	if challenge != "" {
+		q.Set("code_challenge", challenge)
+		q.Set("code_challenge_method", "S256")
 	}
 	if len(a.Scopes) > 0 {
 		q.Set("scope", strings.Join(a.Scopes, " "))
@@ -376,6 +388,16 @@ func randomState() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// pkcePair generates a PKCE code_verifier and its S256 code_challenge
+// (RFC 7636 §4.1–4.2).
+func pkcePair() (verifier, challenge string) {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	verifier = base64.RawURLEncoding.EncodeToString(b)
+	sum := sha256.Sum256([]byte(verifier))
+	return verifier, base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 // LocalCodeCapture returns a CodeSource that prints the consent URL and
@@ -417,8 +439,12 @@ func LocalCodeCapture(redirectURI string, out io.Writer, timeout time.Duration) 
 			}
 			q := r.URL.Query()
 			if q.Get("state") != state {
+				// A wrong state is answered 400 but does NOT abort the
+				// pending flow: any drive-by request to the listener (a
+				// scanner, a CSRF probe, a stale tab) could otherwise kill a
+				// legitimate login that's still coming.
 				http.Error(w, "state mismatch", http.StatusBadRequest)
-				got <- result{err: fmt.Errorf("redirect state mismatch")}
+				fmt.Fprintf(out, "ignored a redirect with mismatched state — still waiting …\n")
 				return
 			}
 			code := q.Get("code")
