@@ -87,11 +87,17 @@ func brokerPolicy(names ...string) config.SkillPolicy {
 	return config.SkillPolicy{SecretsVia: "broker", AllowSecrets: names}
 }
 
+// register mints and claims a session (the two-step the daemon + subprocess
+// perform), unbound to a peer.
 func register(t *testing.T, b *Broker, id Identity) string {
 	t.Helper()
-	tok, err := b.RegisterSession(id)
+	code, err := b.MintClaim(id)
 	if err != nil {
-		t.Fatalf("RegisterSession: %v", err)
+		t.Fatalf("MintClaim: %v", err)
+	}
+	tok, err := b.ClaimSession(code, Peer{})
+	if err != nil {
+		t.Fatalf("ClaimSession: %v", err)
 	}
 	return tok
 }
@@ -106,7 +112,7 @@ func TestIssueDeniedByDefault(t *testing.T) {
 		{SecretsVia: "env", AllowSecrets: []string{"deploy_key"}},
 	} {
 		tok := register(t, r.b, Identity{Agent: "reviewer", Policy: pol})
-		if _, _, err := r.b.Issue(tok, "deploy_key"); err == nil {
+		if _, _, err := r.b.Issue(tok, "deploy_key", Peer{}); err == nil {
 			t.Fatalf("policy %+v: issue must be denied", pol)
 		} else if !strings.Contains(err.Error(), "secrets_via") {
 			t.Fatalf("policy %+v: want a secrets_via denial, got %v", pol, err)
@@ -120,12 +126,12 @@ func TestIssueAllowListGating(t *testing.T) {
 	r := newRig(t, map[string]string{"deploy_key": "s3cretvalue", "other": "otherval"})
 	tok := register(t, r.b, Identity{Agent: "deployer", Repo: "o/r", Policy: brokerPolicy("deploy_key")})
 
-	if _, _, err := r.b.Issue(tok, "other"); err == nil || !strings.Contains(err.Error(), "allow_secrets") {
+	if _, _, err := r.b.Issue(tok, "other", Peer{}); err == nil || !strings.Contains(err.Error(), "allow_secrets") {
 		t.Fatalf("issue outside allow_secrets must be denied, got %v", err)
 	}
 	r.auditContains(t, "deny", "secret", "other")
 
-	id, exp, err := r.b.Issue(tok, "deploy_key")
+	id, exp, err := r.b.Issue(tok, "deploy_key", Peer{})
 	if err != nil {
 		t.Fatalf("allowed issue: %v", err)
 	}
@@ -145,7 +151,7 @@ func TestIssueAllowListGating(t *testing.T) {
 func TestIssueUnresolvedSecret(t *testing.T) {
 	r := newRig(t, map[string]string{})
 	tok := register(t, r.b, Identity{Agent: "a", Policy: brokerPolicy("ghost")})
-	if _, _, err := r.b.Issue(tok, "ghost"); err == nil || !strings.Contains(err.Error(), "not configured") {
+	if _, _, err := r.b.Issue(tok, "ghost", Peer{}); err == nil || !strings.Contains(err.Error(), "not configured") {
 		t.Fatalf("want not-configured denial, got %v", err)
 	}
 }
@@ -155,15 +161,15 @@ func TestIssueUnresolvedSecret(t *testing.T) {
 func TestRedeemSingleUse(t *testing.T) {
 	r := newRig(t, map[string]string{"deploy_key": "s3cretvalue"})
 	tok := register(t, r.b, Identity{Agent: "deployer", Policy: brokerPolicy("deploy_key")})
-	id, _, err := r.b.Issue(tok, "deploy_key")
+	id, _, err := r.b.Issue(tok, "deploy_key", Peer{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, err := r.b.Redeem(tok, id)
+	v, err := r.b.Redeem(tok, id, Peer{})
 	if err != nil || v != "s3cretvalue" {
 		t.Fatalf("redeem: %q, %v", v, err)
 	}
-	if _, err := r.b.Redeem(tok, id); err == nil || !strings.Contains(err.Error(), "single-use") {
+	if _, err := r.b.Redeem(tok, id, Peer{}); err == nil || !strings.Contains(err.Error(), "single-use") {
 		t.Fatalf("second redeem must be refused as single-use, got %v", err)
 	}
 	got := r.audits()
@@ -177,12 +183,12 @@ func TestRedeemSingleUse(t *testing.T) {
 func TestGrantTTLExpiry(t *testing.T) {
 	r := newRig(t, map[string]string{"deploy_key": "s3cretvalue"})
 	tok := register(t, r.b, Identity{Agent: "deployer", Policy: brokerPolicy("deploy_key")})
-	id, _, err := r.b.Issue(tok, "deploy_key")
+	id, _, err := r.b.Issue(tok, "deploy_key", Peer{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.advance(GrantTTL + time.Second)
-	if _, err := r.b.Redeem(tok, id); err == nil || !strings.Contains(err.Error(), "expired") {
+	if _, err := r.b.Redeem(tok, id, Peer{}); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("expired redeem must be refused, got %v", err)
 	}
 	r.auditContains(t, "expire", "secret", "deploy_key")
@@ -192,7 +198,7 @@ func TestGrantTTLExpiry(t *testing.T) {
 func TestSweepAuditsUnredeemedExpiry(t *testing.T) {
 	r := newRig(t, map[string]string{"deploy_key": "s3cretvalue"})
 	tok := register(t, r.b, Identity{Agent: "deployer", Policy: brokerPolicy("deploy_key")})
-	if _, _, err := r.b.Issue(tok, "deploy_key"); err != nil {
+	if _, _, err := r.b.Issue(tok, "deploy_key", Peer{}); err != nil {
 		t.Fatal(err)
 	}
 	r.advance(GrantTTL + time.Second)
@@ -207,7 +213,7 @@ func TestSweepAuditsUnredeemedExpiry(t *testing.T) {
 		}
 	}
 	r.mu.Unlock()
-	if _, err := r.b.Redeem(tok, grantID); err == nil || !strings.Contains(err.Error(), "unknown grant") {
+	if _, err := r.b.Redeem(tok, grantID, Peer{}); err == nil || !strings.Contains(err.Error(), "unknown grant") {
 		t.Fatalf("swept grant must read as unknown, got %v", err)
 	}
 }
@@ -218,15 +224,15 @@ func TestRedeemScopedToIssuingSession(t *testing.T) {
 	r := newRig(t, map[string]string{"deploy_key": "s3cretvalue"})
 	tokA := register(t, r.b, Identity{Agent: "deployer", Policy: brokerPolicy("deploy_key")})
 	tokB := register(t, r.b, Identity{Agent: "reviewer", Policy: brokerPolicy("deploy_key")})
-	id, _, err := r.b.Issue(tokA, "deploy_key")
+	id, _, err := r.b.Issue(tokA, "deploy_key", Peer{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.b.Redeem(tokB, id); err == nil || !strings.Contains(err.Error(), "unknown grant") {
+	if _, err := r.b.Redeem(tokB, id, Peer{}); err == nil || !strings.Contains(err.Error(), "unknown grant") {
 		t.Fatalf("cross-session redeem must read as unknown grant, got %v", err)
 	}
 	// The rightful session still can.
-	if v, err := r.b.Redeem(tokA, id); err != nil || v != "s3cretvalue" {
+	if v, err := r.b.Redeem(tokA, id, Peer{}); err != nil || v != "s3cretvalue" {
 		t.Fatalf("rightful redeem: %q, %v", v, err)
 	}
 }
@@ -235,13 +241,13 @@ func TestRedeemScopedToIssuingSession(t *testing.T) {
 // client-asserted field can stand in for a minted session.
 func TestUnknownTokenRefused(t *testing.T) {
 	r := newRig(t, map[string]string{"deploy_key": "s3cretvalue"})
-	if _, _, err := r.b.Issue("forged-token", "deploy_key"); err == nil || !strings.Contains(err.Error(), "session token") {
+	if _, _, err := r.b.Issue("forged-token", "deploy_key", Peer{}); err == nil || !strings.Contains(err.Error(), "session token") {
 		t.Fatalf("forged token must be refused, got %v", err)
 	}
-	if _, err := r.b.Redeem("forged-token", "grant-x"); err == nil {
+	if _, err := r.b.Redeem("forged-token", "grant-x", Peer{}); err == nil {
 		t.Fatal("forged redeem must be refused")
 	}
-	r.auditContains(t, "deny", "reason", "unknown or expired session token")
+	r.auditContains(t, "deny", "reason", "skill: unknown or expired session token")
 }
 
 // A session token past SessionTTL no longer issues.
@@ -249,7 +255,7 @@ func TestSessionExpiry(t *testing.T) {
 	r := newRig(t, map[string]string{"deploy_key": "s3cretvalue"})
 	tok := register(t, r.b, Identity{Agent: "deployer", Policy: brokerPolicy("deploy_key")})
 	r.advance(SessionTTL + time.Second)
-	if _, _, err := r.b.Issue(tok, "deploy_key"); err == nil || !strings.Contains(err.Error(), "session token") {
+	if _, _, err := r.b.Issue(tok, "deploy_key", Peer{}); err == nil || !strings.Contains(err.Error(), "session token") {
 		t.Fatalf("expired session must be refused, got %v", err)
 	}
 	// Sweep drops it entirely.
@@ -272,5 +278,103 @@ func TestTokenMinting(t *testing.T) {
 	}
 	if len(a) != 64 {
 		t.Fatalf("token length %d, want 64 hex chars (32 bytes)", len(a))
+	}
+}
+
+// #122 R1: the claim handshake. A claim code is single-use, short-TTL, and
+// binds the session to the claiming process — a copied token is refused from
+// any other process.
+func TestClaimSingleUse(t *testing.T) {
+	r := newRig(t, nil)
+	code, err := r.b.MintClaim(Identity{Agent: "deployer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.b.ClaimSession(code, Peer{}); err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	if _, err := r.b.ClaimSession(code, Peer{}); err == nil || !strings.Contains(err.Error(), "already-claimed") {
+		t.Fatalf("second claim must be refused, got %v", err)
+	}
+	r.auditContains(t, "deny", "reason", "unknown or already-claimed claim code")
+}
+
+func TestClaimTTLExpiry(t *testing.T) {
+	r := newRig(t, nil)
+	code, err := r.b.MintClaim(Identity{Agent: "deployer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.advance(ClaimTTL + time.Second)
+	if _, err := r.b.ClaimSession(code, Peer{}); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expired claim must be refused, got %v", err)
+	}
+	// Spent even when expired: a retry reads as unknown.
+	if _, err := r.b.ClaimSession(code, Peer{}); err == nil || !strings.Contains(err.Error(), "already-claimed") {
+		t.Fatalf("expired claim must be spent, got %v", err)
+	}
+	// Sweep drops stale unclaimed codes.
+	code2, _ := r.b.MintClaim(Identity{Agent: "x"})
+	r.advance(ClaimTTL + time.Second)
+	r.b.Sweep()
+	r.b.mu.Lock()
+	n := len(r.b.claims)
+	r.b.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("swept claims remaining: %d", n)
+	}
+	_ = code2
+}
+
+func TestPeerBinding(t *testing.T) {
+	r := newRig(t, map[string]string{"deploy_key": "s3cretvalue"})
+	claimer := Peer{PID: 41, StartTime: 100, Valid: true}
+	code, _ := r.b.MintClaim(Identity{Agent: "deployer", Policy: brokerPolicy("deploy_key")})
+	tok, err := r.b.ClaimSession(code, claimer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A different PID is refused; so is a peer-less call against a bound
+	// session; so is the same PID with a different start time (PID reuse).
+	for _, bad := range []Peer{
+		{PID: 999, StartTime: 100, Valid: true},
+		{},
+		{PID: 41, StartTime: 777, Valid: true},
+	} {
+		if _, err := r.b.Authorize(tok, bad); err == nil || !strings.Contains(err.Error(), "different process") {
+			t.Fatalf("peer %+v must be refused, got %v", bad, err)
+		}
+		if _, _, err := r.b.Issue(tok, "deploy_key", bad); err == nil {
+			t.Fatalf("issue from peer %+v must be refused", bad)
+		}
+	}
+	// The claiming process itself is fine — including with a 0 start time on
+	// one side (unreadable /proc): binding then holds on PID.
+	if _, err := r.b.Authorize(tok, claimer); err != nil {
+		t.Fatalf("claiming peer refused: %v", err)
+	}
+	if _, err := r.b.Authorize(tok, Peer{PID: 41, Valid: true}); err != nil {
+		t.Fatalf("PID-only peer match refused: %v", err)
+	}
+	// Issue + redeem must both come from the bound process.
+	id, _, err := r.b.Issue(tok, "deploy_key", claimer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.b.Redeem(tok, id, Peer{PID: 999, Valid: true}); err == nil {
+		t.Fatal("redeem from another process must be refused")
+	}
+	if v, err := r.b.Redeem(tok, id, claimer); err != nil || v != "s3cretvalue" {
+		t.Fatalf("bound redeem: %q, %v", v, err)
+	}
+}
+
+// #122 R1/R5c: the session TTL is dispatch-sized, not a day.
+func TestSessionTTLDefault(t *testing.T) {
+	if SessionTTL > 2*time.Hour {
+		t.Fatalf("SessionTTL %v — must stay within a dispatch's lifetime (≤2h)", SessionTTL)
+	}
+	if ClaimTTL > 5*time.Minute {
+		t.Fatalf("ClaimTTL %v — a claim code must die fast", ClaimTTL)
 	}
 }

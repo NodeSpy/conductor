@@ -47,16 +47,25 @@ agents:
 ## How identity is bound
 
 Authorization is bound to the **real dispatch, server-side**. When the
-daemon dispatches a skill-enabled profile, it mints an unguessable session
-token, records token → (profile, dispatch target, that profile's `skill:`
-policy) in memory, and bakes the token into the MCP tool command it injects
-into the agent session. Every broker call authorizes by that token alone.
+daemon dispatches a skill-enabled profile, it mints a **one-shot claim
+code**, records code → (profile, dispatch target, that profile's `skill:`
+policy) in memory, and delivers the code via the injected MCP server's
+**environment — never argv** (argv is readable by any same-user process
+through a process listing). At startup the tool subprocess exchanges the
+code over the socket for the real session token: the exchange is
+single-use, the code expires after ~2 minutes, and the token then lives
+only in that process's memory.
 
-Client-asserted identity — like the `--agent`/`--repo` provenance flags the
-memory tools carry — is never consulted for authorization, so an agent (or
-any other same-user process that can reach the socket) cannot claim another
-profile's policy. Sessions expire after 24 h and die with the daemon (the
-table is in-memory).
+The exchange also **binds the session to the claiming process**: the daemon
+reads the connection's kernel peer credentials (Linux `SO_PEERCRED` plus the
+process start time) and refuses the token from any other process afterward —
+a copied token is useless. Client-asserted identity — like the
+`--agent`/`--repo` provenance flags the memory tools carry — is never
+consulted for authorization, so an agent (or any other same-user process
+that can reach the socket) cannot claim another profile's policy. Sessions
+expire after **2 hours** (roughly a dispatch's lifetime — a long-lived
+session that ages out loses its skill tools, never gains a stale identity)
+and die with the daemon (the table is in-memory).
 
 ## Boundary handles: `{{secret "name"}}`
 

@@ -15,7 +15,7 @@ import (
 // carries them.
 func cmdMCP(args []string) error {
 	if len(args) < 1 || args[0] != "memory" {
-		return fmt.Errorf("usage: conductor mcp memory --socket <path> [--agent <name>] [--repo <owner/repo>] [--trigger <kind>] [--run <id>] [--number <n>] [--token <skill-session-token>] [--no-memory]")
+		return fmt.Errorf("usage: conductor mcp memory --socket <path> [--agent <name>] [--repo <owner/repo>] [--trigger <kind>] [--run <id>] [--number <n>] [--no-memory] (skill claim code via $CONDUCTOR_SKILL_CLAIM)")
 	}
 	var socket string
 	var mc memory.MCPConfig
@@ -41,10 +41,6 @@ func cmdMCP(args []string) error {
 			mc.Source.Run = next()
 		case "--number":
 			fmt.Sscanf(next(), "%d", &mc.Number)
-		case "--token":
-			// The skill session token (#36 §12): minted by the daemon at
-			// dispatch time; the broker ops authorize by it alone.
-			mc.Token = next()
 		case "--no-memory":
 			mc.NoMemory = true
 		default:
@@ -54,6 +50,11 @@ func cmdMCP(args []string) error {
 	if socket == "" {
 		return fmt.Errorf("mcp memory: --socket is required (the daemon's memory.sock)")
 	}
+	// The skill claim code (#36 §12 / #122) arrives via the ENVIRONMENT the
+	// daemon set on this MCP server — never argv, which any same-user process
+	// can read from a process listing. ServeMCP exchanges it (single-use,
+	// short-TTL) for the session token over the socket.
+	mc.Claim = os.Getenv("CONDUCTOR_SKILL_CLAIM")
 	call := func(req memory.IPCRequest) (memory.IPCResponse, error) {
 		return memory.IPCCall(socket, req)
 	}

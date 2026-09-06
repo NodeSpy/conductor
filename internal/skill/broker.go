@@ -28,15 +28,44 @@ import (
 )
 
 const (
-	// SessionTTL bounds a dispatch token's life. Grants are the short-lived
-	// artifact; the token only names WHO is asking, and dies with the daemon
-	// anyway (the table is in-memory).
-	SessionTTL = 24 * time.Hour
+	// SessionTTL bounds a dispatch token's life — roughly a dispatch's
+	// lifetime (typical wait_timeouts are minutes; 2h leaves slack for slow
+	// runs). A long-lived affinity session whose token ages out simply loses
+	// its skill tools; it never gets a stale identity. The table is
+	// in-memory, so tokens also die with the daemon.
+	SessionTTL = 2 * time.Hour
+	// ClaimTTL bounds the one-shot claim code's life: minted at dispatch,
+	// exchanged by the tool subprocess at startup. Long enough for a slow
+	// runtime launch, short enough that a code scraped from a process's
+	// environment later is dead.
+	ClaimTTL = 2 * time.Minute
 	// GrantTTL is the issued-grant lifetime: long enough to redeem right
 	// away, short enough that a grant id that leaks into a log or transcript
 	// is dead by the time anyone reads it.
 	GrantTTL = 60 * time.Second
 )
+
+// Peer identifies the process on the other end of the tool socket (Linux
+// SO_PEERCRED + /proc start time). The zero value means "unknown" — a
+// platform without peer credentials; binding is skipped there.
+type Peer struct {
+	PID       int
+	StartTime uint64 // /proc/<pid>/stat field 22; 0 when unreadable
+	Valid     bool
+}
+
+// matches reports whether two peer identities are the same live process:
+// same PID and, when both sides read one, the same start time (PID reuse
+// protection).
+func (p Peer) matches(q Peer) bool {
+	if p.PID != q.PID {
+		return false
+	}
+	if p.StartTime != 0 && q.StartTime != 0 && p.StartTime != q.StartTime {
+		return false
+	}
+	return true
+}
 
 // Identity is the REAL dispatch a session token stands for, captured by the
 // daemon at dispatch time (never asserted by the client).
@@ -51,6 +80,17 @@ type Identity struct {
 }
 
 type session struct {
+	id      Identity
+	expires time.Time
+	// peer is the process that claimed the session. When Valid, every
+	// token-authorized call must come from the same live process — a copied
+	// token is useless from anywhere else.
+	peer Peer
+}
+
+// pendingClaim is a minted-but-unclaimed session: the one-shot code the
+// daemon bakes into the tool subprocess's env at dispatch time.
+type pendingClaim struct {
 	id      Identity
 	expires time.Time
 }
@@ -75,6 +115,7 @@ type Broker struct {
 
 	mu       sync.Mutex
 	sessions map[string]session
+	claims   map[string]pendingClaim
 	grants   map[string]*grant
 }
 
@@ -86,6 +127,7 @@ func NewBroker(lookup func(string) (string, bool), audit func(map[string]any)) *
 		now:      time.Now,
 		rand:     rand.Reader,
 		sessions: map[string]session{},
+		claims:   map[string]pendingClaim{},
 		grants:   map[string]*grant{},
 	}
 }
@@ -100,43 +142,88 @@ func SetActive(b *Broker) { active.Store(b) }
 // Active returns the daemon's broker, or nil when no profile enables skill.
 func Active() *Broker { return active.Load() }
 
-// RegisterSession mints an unguessable token for one dispatch and records the
-// real identity it stands for. Called by the daemon at dispatch time only.
-func (b *Broker) RegisterSession(id Identity) (string, error) {
+// MintClaim registers one dispatch's identity and returns the ONE-SHOT claim
+// code the daemon puts in the tool subprocess's environment. The code is not
+// a session token: it must be exchanged (ClaimSession) within ClaimTTL,
+// exactly once — a code scraped from /proc/<pid>/environ after startup is
+// already dead, and the real token never appears on argv or in env at all.
+// Called by the daemon at dispatch time only.
+func (b *Broker) MintClaim(id Identity) (string, error) {
+	code, err := b.randomID(32)
+	if err != nil {
+		return "", fmt.Errorf("skill: mint claim code: %w", err)
+	}
+	b.mu.Lock()
+	b.claims[code] = pendingClaim{id: id, expires: b.now().Add(ClaimTTL)}
+	b.mu.Unlock()
+	return code, nil
+}
+
+// ClaimSession exchanges a claim code for the real session token, exactly
+// once, binding the session to the CLAIMING process (its socket peer
+// credentials) — from then on every token-authorized call must come from
+// that same live process. peer.Valid=false (no peer credentials on this
+// platform) claims an unbound session.
+func (b *Broker) ClaimSession(code string, peer Peer) (string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	c, ok := b.claims[code]
+	if !ok {
+		b.auditLocked("deny", "", "", "", "", "unknown or already-claimed claim code")
+		return "", fmt.Errorf("token_claim: unknown or already-claimed claim code")
+	}
+	delete(b.claims, code) // single-use, spent even when expired
+	if b.now().After(c.expires) {
+		b.auditLocked("deny", c.id.Agent, c.id.Repo, "", "", "claim code expired unclaimed")
+		return "", fmt.Errorf("token_claim: claim code expired")
+	}
 	tok, err := b.randomID(32)
 	if err != nil {
 		return "", fmt.Errorf("skill: mint session token: %w", err)
 	}
-	b.mu.Lock()
-	b.sessions[tok] = session{id: id, expires: b.now().Add(SessionTTL)}
-	b.mu.Unlock()
+	b.sessions[tok] = session{id: c.id, expires: b.now().Add(SessionTTL), peer: peer}
 	return tok, nil
 }
 
 // Authorize resolves a session token to the real dispatch identity it stands
 // for — the authorization primitive every skill surface (broker ops, verb
-// tools) shares. Unknown or expired tokens fail.
-func (b *Broker) Authorize(token string) (Identity, error) {
+// tools) shares. Unknown and expired tokens fail; so does a valid token
+// presented by a DIFFERENT process than the one that claimed the session.
+func (b *Broker) Authorize(token string, peer Peer) (Identity, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	s, ok := b.sessions[token]
-	if !ok || b.now().After(s.expires) {
-		return Identity{}, fmt.Errorf("skill: unknown or expired session token")
+	s, err := b.authorizeLocked(token, peer)
+	if err != nil {
+		return Identity{}, err
 	}
 	return s.id, nil
+}
+
+// authorizeLocked is Authorize's body; callers hold b.mu.
+func (b *Broker) authorizeLocked(token string, peer Peer) (session, error) {
+	s, ok := b.sessions[token]
+	if !ok || b.now().After(s.expires) {
+		return session{}, fmt.Errorf("skill: unknown or expired session token")
+	}
+	if s.peer.Valid && (!peer.Valid || !s.peer.matches(peer)) {
+		b.auditLocked("deny", s.id.Agent, s.id.Repo, "", "",
+			"session token presented by a different process than the one that claimed it")
+		return session{}, fmt.Errorf("skill: session token presented by a different process than the one that claimed it")
+	}
+	return s, nil
 }
 
 // Issue requests a grant for one named secret. Deny-by-default: the session
 // must be live, the profile's skill.secrets_via must be "broker", and the
 // name must appear in skill.allow_secrets (exact match). The grant is scoped
 // to the issuing session, single-use, and expires after GrantTTL.
-func (b *Broker) Issue(token, name string) (grantID string, expires time.Time, err error) {
+func (b *Broker) Issue(token, name string, peer Peer) (grantID string, expires time.Time, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	s, ok := b.sessions[token]
-	if !ok || b.now().After(s.expires) {
-		b.auditLocked("deny", "", "", name, "", "unknown or expired session token")
-		return "", time.Time{}, fmt.Errorf("secret_issue: unknown or expired session token")
+	s, aerr := b.authorizeLocked(token, peer)
+	if aerr != nil {
+		b.auditLocked("deny", "", "", name, "", aerr.Error())
+		return "", time.Time{}, fmt.Errorf("secret_issue: %s", aerr)
 	}
 	deny := func(reason string) (string, time.Time, error) {
 		b.auditLocked("deny", s.id.Agent, s.id.Repo, name, "", reason)
@@ -176,9 +263,13 @@ func (b *Broker) Issue(token, name string) (grantID string, expires time.Time, e
 // Redeem exchanges a grant for its secret value — exactly once, within the
 // TTL, and only from the session that issued it. The value is dropped from
 // the table on success; every failure is audited with the reason.
-func (b *Broker) Redeem(token, grantID string) (string, error) {
+func (b *Broker) Redeem(token, grantID string, peer Peer) (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if _, aerr := b.authorizeLocked(token, peer); aerr != nil {
+		b.auditLocked("deny", "", "", "", grantID, aerr.Error())
+		return "", fmt.Errorf("secret_redeem: %s", aerr)
+	}
 	g, ok := b.grants[grantID]
 	if !ok || g.token != token {
 		// A wrong-session redeem reads the same as an unknown grant: the
@@ -220,6 +311,11 @@ func (b *Broker) Sweep() {
 	for tok, s := range b.sessions {
 		if now.After(s.expires) {
 			delete(b.sessions, tok)
+		}
+	}
+	for code, c := range b.claims {
+		if now.After(c.expires) {
+			delete(b.claims, code)
 		}
 	}
 }

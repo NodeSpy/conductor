@@ -138,7 +138,7 @@ func TestMCPServerLoop(t *testing.T) {
 	// Route through the real handler for realistic responses.
 	call = func(req IPCRequest) (IPCResponse, error) {
 		gotReq = req
-		return handleIPC(m, req, nil, nil), nil
+		return handleIPC(m, req, Peer{}, nil, nil), nil
 	}
 	send, recv := mcpPipe(t, call, MCPConfig{Source: src, Number: 7})
 
@@ -242,28 +242,28 @@ func TestMCPServerLoop(t *testing.T) {
 // The broker ops (#36 §12) ride the same socket surface. A daemon without a
 // memory: section still serves them (m == nil); the memory ops refuse.
 func TestIPCSecretBrokerOps(t *testing.T) {
-	if resp := handleIPC(nil, IPCRequest{Op: "remember", Text: "x"}, nil, nil); resp.Error != "memory: not configured" {
+	if resp := handleIPC(nil, IPCRequest{Op: "remember", Text: "x"}, Peer{}, nil, nil); resp.Error != "memory: not configured" {
 		t.Fatalf("remember without memory: %+v", resp)
 	}
-	if resp := handleIPC(nil, IPCRequest{Op: "recall"}, nil, nil); resp.Error != "memory: not configured" {
+	if resp := handleIPC(nil, IPCRequest{Op: "recall"}, Peer{}, nil, nil); resp.Error != "memory: not configured" {
 		t.Fatalf("recall without memory: %+v", resp)
 	}
-	if resp := handleIPC(nil, IPCRequest{Op: "secret_issue", Secret: "k"}, nil, nil); !strings.Contains(resp.Error, "no secret broker") {
+	if resp := handleIPC(nil, IPCRequest{Op: "secret_issue", Secret: "k"}, Peer{}, nil, nil); !strings.Contains(resp.Error, "no secret broker") {
 		t.Fatalf("unwired secret_issue: %+v", resp)
 	}
-	if resp := handleIPC(nil, IPCRequest{Op: "secret_redeem", Grant: "g"}, nil, nil); !strings.Contains(resp.Error, "no secret broker") {
+	if resp := handleIPC(nil, IPCRequest{Op: "secret_redeem", Grant: "g"}, Peer{}, nil, nil); !strings.Contains(resp.Error, "no secret broker") {
 		t.Fatalf("unwired secret_redeem: %+v", resp)
 	}
 
 	exp := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	SetLiveOps(LiveOps{
-		IssueSecret: func(token, name string) (string, time.Time, error) {
+		IssueSecret: func(token, name string, _ Peer) (string, time.Time, error) {
 			if token != "tok-1" || name != "deploy_key" {
 				t.Errorf("issue wiring: token=%q name=%q", token, name)
 			}
 			return "grant-abc", exp, nil
 		},
-		RedeemSecret: func(token, grant string) (string, error) {
+		RedeemSecret: func(token, grant string, _ Peer) (string, error) {
 			if token != "tok-1" || grant != "grant-abc" {
 				t.Errorf("redeem wiring: token=%q grant=%q", token, grant)
 			}
@@ -272,11 +272,11 @@ func TestIPCSecretBrokerOps(t *testing.T) {
 	})
 	t.Cleanup(func() { SetLiveOps(LiveOps{}) })
 
-	resp := handleIPC(nil, IPCRequest{Op: "secret_issue", Token: "tok-1", Secret: "deploy_key"}, nil, nil)
+	resp := handleIPC(nil, IPCRequest{Op: "secret_issue", Token: "tok-1", Secret: "deploy_key"}, Peer{}, nil, nil)
 	if !resp.OK || resp.Result["grant"] != "grant-abc" || resp.Result["expires"] != "2026-01-02T03:04:05Z" {
 		t.Fatalf("secret_issue: %+v", resp)
 	}
-	resp = handleIPC(nil, IPCRequest{Op: "secret_redeem", Token: "tok-1", Grant: "grant-abc"}, nil, nil)
+	resp = handleIPC(nil, IPCRequest{Op: "secret_redeem", Token: "tok-1", Grant: "grant-abc"}, Peer{}, nil, nil)
 	if !resp.OK || resp.Result["value"] != "s3cretvalue" {
 		t.Fatalf("secret_redeem: %+v", resp)
 	}
@@ -356,21 +356,21 @@ func TestMCPBrokerToolsHiddenWithoutToken(t *testing.T) {
 // The verb ops (#36 §12): verb_list serves the token's tool catalog, verb
 // executes one gated verb — both through the daemon-wired live ops.
 func TestIPCVerbOps(t *testing.T) {
-	if resp := handleIPC(nil, IPCRequest{Op: "verb", Uses: "svc.post"}, nil, nil); !strings.Contains(resp.Error, "not available") {
+	if resp := handleIPC(nil, IPCRequest{Op: "verb", Uses: "svc.post"}, Peer{}, nil, nil); !strings.Contains(resp.Error, "not available") {
 		t.Fatalf("unwired verb: %+v", resp)
 	}
-	if resp := handleIPC(nil, IPCRequest{Op: "verb_list"}, nil, nil); !strings.Contains(resp.Error, "not available") {
+	if resp := handleIPC(nil, IPCRequest{Op: "verb_list"}, Peer{}, nil, nil); !strings.Contains(resp.Error, "not available") {
 		t.Fatalf("unwired verb_list: %+v", resp)
 	}
 	SetLiveOps(LiveOps{
-		SkillVerbs: func(token string) ([]map[string]any, error) {
+		SkillVerbs: func(token string, _ Peer) ([]map[string]any, error) {
 			if token != "tok-1" {
 				t.Errorf("verb_list token: %q", token)
 			}
 			return []map[string]any{{"name": "svc_post", "uses": "svc.post", "description": "d",
 				"inputSchema": map[string]any{"type": "object"}}}, nil
 		},
-		RunVerb: func(_ context.Context, token, uses string, options map[string]any) (map[string]any, error) {
+		RunVerb: func(_ context.Context, token, uses string, options map[string]any, _ Peer) (map[string]any, error) {
 			if token != "tok-1" || uses != "svc.post" || options["text"] != "hi" {
 				t.Errorf("verb wiring: token=%q uses=%q options=%v", token, uses, options)
 			}
@@ -379,12 +379,12 @@ func TestIPCVerbOps(t *testing.T) {
 	})
 	t.Cleanup(func() { SetLiveOps(LiveOps{}) })
 
-	resp := handleIPC(nil, IPCRequest{Op: "verb_list", Token: "tok-1"}, nil, nil)
+	resp := handleIPC(nil, IPCRequest{Op: "verb_list", Token: "tok-1"}, Peer{}, nil, nil)
 	if !resp.OK || len(resp.Result["tools"].([]any)) != 1 {
 		t.Fatalf("verb_list: %+v", resp)
 	}
 	resp = handleIPC(nil, IPCRequest{Op: "verb", Token: "tok-1", Uses: "svc.post",
-		Options: map[string]any{"text": "hi"}}, nil, nil)
+		Options: map[string]any{"text": "hi"}}, Peer{}, nil, nil)
 	if !resp.OK || resp.Result["id"] != 42 {
 		t.Fatalf("verb: %+v", resp)
 	}
@@ -454,4 +454,88 @@ func TestMCPVerbToolsHiddenWithoutToken(t *testing.T) {
 	send, recv := mcpPipe(t, call, MCPConfig{})
 	send(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	recv()
+}
+
+// #122 R1: the claim handshake rides the socket — the subprocess exchanges
+// its env-delivered claim code for the session token at startup, and the
+// kernel peer identity is what the daemon hands the broker.
+func TestIPCTokenClaim(t *testing.T) {
+	if resp := handleIPC(nil, IPCRequest{Op: "token_claim", Claim: "c"}, Peer{}, nil, nil); !strings.Contains(resp.Error, "not available") {
+		t.Fatalf("unwired token_claim: %+v", resp)
+	}
+	wantPeer := Peer{PID: 41, StartTime: 9, Valid: true}
+	SetLiveOps(LiveOps{
+		ClaimToken: func(claim string, peer Peer) (string, error) {
+			if claim != "code-1" || peer != wantPeer {
+				t.Errorf("claim wiring: claim=%q peer=%+v", claim, peer)
+			}
+			return "tok-1", nil
+		},
+	})
+	t.Cleanup(func() { SetLiveOps(LiveOps{}) })
+	resp := handleIPC(nil, IPCRequest{Op: "token_claim", Claim: "code-1"}, wantPeer, nil, nil)
+	if !resp.OK || resp.Result["token"] != "tok-1" {
+		t.Fatalf("token_claim: %+v", resp)
+	}
+}
+
+// The MCP subprocess claims EAGERLY at startup and uses the claimed token on
+// every subsequent skill op; the raw claim code never rides a tool call.
+func TestMCPClaimsAtStartup(t *testing.T) {
+	var got []IPCRequest
+	call := func(req IPCRequest) (IPCResponse, error) {
+		got = append(got, req)
+		switch req.Op {
+		case "token_claim":
+			if req.Claim != "code-1" {
+				t.Errorf("claim: %q", req.Claim)
+			}
+			return IPCResponse{OK: true, Result: map[string]any{"token": "tok-9"}}, nil
+		case "verb_list":
+			return IPCResponse{Error: "verb_list: not available"}, nil
+		case "secret_issue":
+			return IPCResponse{OK: true, Result: map[string]any{"grant": "g", "expires": "x"}}, nil
+		}
+		return IPCResponse{Error: "unexpected op " + req.Op}, nil
+	}
+	send, recv := mcpPipe(t, call, MCPConfig{Claim: "code-1", NoMemory: true})
+
+	// The broker tools are advertised (the claim succeeded → token present).
+	send(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	names := map[string]bool{}
+	for _, tool := range recv()["result"].(map[string]any)["tools"].([]any) {
+		names[tool.(map[string]any)["name"].(string)] = true
+	}
+	if !names["secret_issue"] {
+		t.Fatalf("broker tools missing after claim: %v", names)
+	}
+	send(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"secret_issue","arguments":{"name":"house/k"}}}`)
+	if r := recv()["result"].(map[string]any); r["isError"] != false {
+		t.Fatalf("secret_issue: %+v", r)
+	}
+	if got[0].Op != "token_claim" {
+		t.Fatalf("first wire call must be the claim, got %+v", got[0])
+	}
+	last := got[len(got)-1]
+	if last.Op != "secret_issue" || last.Token != "tok-9" || last.Claim != "" {
+		t.Fatalf("post-claim op wiring: %+v", last)
+	}
+}
+
+// A failed claim leaves the skill tools off — no token, nothing advertised.
+func TestMCPClaimFailureDisablesSkillTools(t *testing.T) {
+	call := func(req IPCRequest) (IPCResponse, error) {
+		if req.Op == "token_claim" {
+			return IPCResponse{Error: "token_claim: claim code expired"}, nil
+		}
+		return IPCResponse{}, nil
+	}
+	send, recv := mcpPipe(t, call, MCPConfig{Claim: "stale", NoMemory: true})
+	send(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	for _, tool := range recv()["result"].(map[string]any)["tools"].([]any) {
+		n := tool.(map[string]any)["name"].(string)
+		if n == "secret_issue" || n == "secret_redeem" {
+			t.Fatalf("broker tool %q advertised after a failed claim", n)
+		}
+	}
 }

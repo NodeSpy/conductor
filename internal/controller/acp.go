@@ -182,10 +182,14 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 // without live tools.
 //
 // When the dispatched profile carries a skill: block (#36 §12), this is also
-// where the daemon binds identity SERVER-SIDE: it mints an unguessable
-// session token mapped to the real profile and its policy in the skill
-// broker, and bakes it into the argv. The --agent/--repo flags remain
-// provenance labels for memory writes; the broker never trusts them.
+// where the daemon binds identity SERVER-SIDE: it mints a ONE-SHOT claim
+// code mapped to the real profile and its policy in the skill broker, and
+// delivers it via the MCP server's ENVIRONMENT — never argv, which any
+// same-user process can read from a process listing. The subprocess
+// exchanges the code (single-use, short TTL) for the session token over the
+// socket at startup, and the broker binds the session to that process's
+// kernel peer credentials. The --agent/--repo flags remain provenance labels
+// for memory writes; the broker never trusts them.
 func (c *acpController) memoryServers(spec Spec) []acp.McpServer {
 	argv := memory.ToolCommand()
 	if len(argv) == 0 || resolveHost(c.host, spec.Request.Profile.Host) != "" {
@@ -204,8 +208,9 @@ func (c *acpController) memoryServers(spec Spec) []acp.McpServer {
 	if n := spec.Request.Trigger.Target.Number; n > 0 {
 		args = append(args, "--number", strconv.Itoa(n))
 	}
+	var env []acp.EnvVariable
 	if b := skill.Active(); b != nil && spec.Request.Profile.Skill != nil {
-		tok, err := b.RegisterSession(skill.Identity{
+		claim, err := b.MintClaim(skill.Identity{
 			Agent:   spec.Request.Action.Agent,
 			Repo:    spec.Request.Trigger.Target.Repo,
 			Trigger: spec.Request.Trigger.Kind,
@@ -213,10 +218,10 @@ func (c *acpController) memoryServers(spec Spec) []acp.McpServer {
 			Policy:  *spec.Request.Profile.Skill,
 		})
 		if err == nil {
-			args = append(args, "--token", tok)
+			env = append(env, acp.EnvVariable{Name: "CONDUCTOR_SKILL_CLAIM", Value: claim})
 		}
 	}
-	return []acp.McpServer{{Name: "conductor-memory", Command: argv[0], Args: args}}
+	return []acp.McpServer{{Name: "conductor-memory", Command: argv[0], Args: args, Env: env}}
 }
 
 // ResumeSession re-attaches to a prior session by id over a fresh connection. Only

@@ -38,11 +38,17 @@ type IPCRequest struct {
 	// command's flags at injection time — the agent cannot spoof a different
 	// run's identity beyond what its own launch carried.
 	Source Source `json:"source,omitempty"`
-	// Token is the skill session token the daemon minted at dispatch time
-	// (#36 §12). The broker ops authorize by it ALONE — unlike Source it is
+	// Token is the skill session token (#36 §12), obtained by exchanging the
+	// dispatch-time claim code (op token_claim). The broker ops authorize by
+	// it (plus the connection's peer credentials) ALONE — unlike Source it is
 	// unguessable, and the daemon maps it server-side to the real dispatched
 	// profile and its skill: policy.
 	Token string `json:"token,omitempty"`
+	// Claim is the one-shot claim code token_claim exchanges for a session
+	// token. The daemon bakes it into the tool subprocess's environment —
+	// never argv — and it is single-use with a short TTL, so a code scraped
+	// from a process listing or /proc later is already dead.
+	Claim string `json:"claim,omitempty"`
 	// Secret is the named secret secret_issue requests.
 	Secret string `json:"secret,omitempty"`
 	// Grant is the grant id secret_redeem redeems.
@@ -71,16 +77,31 @@ type LiveOps struct {
 	RunStep func(ctx context.Context, src Source, number int, step map[string]any) (map[string]any, error)
 	// ListWorkflows returns the workflow catalog (workflow.list's shape).
 	ListWorkflows func() map[string]any
+	// ClaimToken exchanges a one-shot claim code for a session token, binding
+	// the session to the claiming connection's peer process (#36 §12 / #122).
+	ClaimToken func(claim string, peer Peer) (token string, err error)
 	// IssueSecret / RedeemSecret are the secret broker (#36 §12), wired from
 	// internal/skill at boot. Plain funcs so this package stays free of the
-	// skill dependency. nil → the broker ops report unavailable.
-	IssueSecret  func(token, name string) (grant string, expires time.Time, err error)
-	RedeemSecret func(token, grant string) (value string, err error)
+	// skill dependency. nil → the broker ops report unavailable. Every
+	// token-authorized op carries the calling connection's peer identity —
+	// the broker refuses a token presented by a different process than the
+	// one that claimed it.
+	IssueSecret  func(token, name string, peer Peer) (grant string, expires time.Time, err error)
+	RedeemSecret func(token, grant string, peer Peer) (value string, err error)
 	// SkillVerbs / RunVerb are the verb-tool surface (#36 §12): the catalog
 	// of verbs the token's profile exposes (MCP tool declarations), and one
-	// gated verb execution. Both authorize by token server-side.
-	SkillVerbs func(token string) ([]map[string]any, error)
-	RunVerb    func(ctx context.Context, token, uses string, options map[string]any) (map[string]any, error)
+	// gated verb execution. Both authorize by token + peer server-side.
+	SkillVerbs func(token string, peer Peer) ([]map[string]any, error)
+	RunVerb    func(ctx context.Context, token, uses string, options map[string]any, peer Peer) (map[string]any, error)
+}
+
+// Peer is the socket-peer identity of the calling process (Linux
+// SO_PEERCRED + /proc start time; zero value on platforms without one).
+// Mirrored by internal/skill so this package stays dependency-free.
+type Peer struct {
+	PID       int
+	StartTime uint64
+	Valid     bool
 }
 
 var (
@@ -140,7 +161,9 @@ func serveConn(conn net.Conn, m *Manager, audit func(map[string]any), log func(s
 		writeResp(conn, IPCResponse{Error: "memory: bad tool request: " + err.Error()})
 		return
 	}
-	writeResp(conn, handleIPC(m, req, audit, log))
+	// The peer credentials come from the KERNEL, not the request — the skill
+	// ops bind and verify sessions against them.
+	writeResp(conn, handleIPC(m, req, peerInfo(conn), audit, log))
 }
 
 func writeResp(conn net.Conn, resp IPCResponse) {
@@ -154,7 +177,7 @@ func writeResp(conn net.Conn, resp IPCResponse) {
 // handleIPC executes one tool call against the manager. m may be nil when
 // the socket is up for the skill surface alone (broker/run_step); only the
 // memory ops need it.
-func handleIPC(m *Manager, req IPCRequest, audit func(map[string]any), log func(string, ...any)) IPCResponse {
+func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any), log func(string, ...any)) IPCResponse {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
@@ -229,6 +252,16 @@ func handleIPC(m *Manager, req IPCRequest, audit func(map[string]any), log func(
 			return IPCResponse{Error: "workflow_list: not available on this daemon"}
 		}
 		return IPCResponse{OK: true, Result: ops.ListWorkflows()}
+	case "token_claim":
+		ops := getLiveOps()
+		if ops.ClaimToken == nil {
+			return IPCResponse{Error: "token_claim: the skill surface is not available on this daemon"}
+		}
+		tok, err := ops.ClaimToken(req.Claim, peer)
+		if err != nil {
+			return IPCResponse{Error: err.Error()}
+		}
+		return IPCResponse{OK: true, Result: map[string]any{"token": tok}}
 	case "secret_issue":
 		// The broker audits every outcome itself (it knows the real identity
 		// behind the token); nothing to add at this layer.
@@ -236,7 +269,7 @@ func handleIPC(m *Manager, req IPCRequest, audit func(map[string]any), log func(
 		if ops.IssueSecret == nil {
 			return IPCResponse{Error: "secret_issue: no secret broker on this daemon"}
 		}
-		id, exp, err := ops.IssueSecret(req.Token, req.Secret)
+		id, exp, err := ops.IssueSecret(req.Token, req.Secret, peer)
 		if err != nil {
 			return IPCResponse{Error: err.Error()}
 		}
@@ -248,7 +281,7 @@ func handleIPC(m *Manager, req IPCRequest, audit func(map[string]any), log func(
 		if ops.RedeemSecret == nil {
 			return IPCResponse{Error: "secret_redeem: no secret broker on this daemon"}
 		}
-		v, err := ops.RedeemSecret(req.Token, req.Grant)
+		v, err := ops.RedeemSecret(req.Token, req.Grant, peer)
 		if err != nil {
 			return IPCResponse{Error: err.Error()}
 		}
@@ -260,7 +293,7 @@ func handleIPC(m *Manager, req IPCRequest, audit func(map[string]any), log func(
 		if ops.SkillVerbs == nil {
 			return IPCResponse{Error: "verb_list: the skill verb surface is not available on this daemon"}
 		}
-		tools, err := ops.SkillVerbs(req.Token)
+		tools, err := ops.SkillVerbs(req.Token, peer)
 		if err != nil {
 			return IPCResponse{Error: err.Error()}
 		}
@@ -274,7 +307,7 @@ func handleIPC(m *Manager, req IPCRequest, audit func(map[string]any), log func(
 		if ops.RunVerb == nil {
 			return IPCResponse{Error: "verb: the skill verb surface is not available on this daemon"}
 		}
-		out, err := ops.RunVerb(context.Background(), req.Token, req.Uses, req.Options)
+		out, err := ops.RunVerb(context.Background(), req.Token, req.Uses, req.Options, peer)
 		if err != nil {
 			return IPCResponse{Error: err.Error()}
 		}

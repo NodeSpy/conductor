@@ -493,21 +493,34 @@ func cmdRun(args []string) error {
 				sb := skill.NewBroker(lookup, st.Audit)
 				skill.SetActive(sb)
 				go sb.SweepLoop(ctx, 30*time.Second)
-				ops.IssueSecret = sb.Issue
-				ops.RedeemSecret = sb.Redeem
+				// Peer credentials come off each socket connection (kernel
+				// SO_PEERCRED) — the broker binds sessions to the claiming
+				// process and refuses a token from any other.
+				asPeer := func(p memory.Peer) skill.Peer {
+					return skill.Peer{PID: p.PID, StartTime: p.StartTime, Valid: p.Valid}
+				}
+				ops.ClaimToken = func(claim string, peer memory.Peer) (string, error) {
+					return sb.ClaimSession(claim, asPeer(peer))
+				}
+				ops.IssueSecret = func(token, name string, peer memory.Peer) (string, time.Time, error) {
+					return sb.Issue(token, name, asPeer(peer))
+				}
+				ops.RedeemSecret = func(token, grant string, peer memory.Peer) (string, error) {
+					return sb.Redeem(token, grant, asPeer(peer))
+				}
 				// The verb-tool surface: catalog + execution, both bound to
 				// the token's real dispatch identity and its skill.verbs.
 				if stack != nil {
 					runner := stack.Runner
-					ops.SkillVerbs = func(token string) ([]map[string]any, error) {
-						id, err := sb.Authorize(token)
+					ops.SkillVerbs = func(token string, peer memory.Peer) ([]map[string]any, error) {
+						id, err := sb.Authorize(token, asPeer(peer))
 						if err != nil {
 							return nil, err
 						}
 						return runner.SkillVerbCatalog(id.Policy.Verbs), nil
 					}
-					ops.RunVerb = func(vctx context.Context, token, uses string, options map[string]any) (map[string]any, error) {
-						id, err := sb.Authorize(token)
+					ops.RunVerb = func(vctx context.Context, token, uses string, options map[string]any, peer memory.Peer) (map[string]any, error) {
+						id, err := sb.Authorize(token, asPeer(peer))
 						if err != nil {
 							return nil, err
 						}

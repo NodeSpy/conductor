@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/acp"
@@ -10,18 +11,19 @@ import (
 	"github.com/NodeSpy/conductor/internal/skill"
 )
 
-// TestACPSkillTokenInjection: when the dispatched profile carries a skill:
-// block and a broker is active, the daemon mints a session token at dispatch
-// time, bakes it into the MCP argv, and the broker maps THAT token to the
-// real profile's identity and policy server-side. Without a skill: block, no
-// token rides along and the broker stays deny-by-default.
-func TestACPSkillTokenInjection(t *testing.T) {
+// TestACPSkillClaimInjection (#36 §12, hardened per #122 R1): dispatching a
+// skill-enabled profile mints a ONE-SHOT claim code delivered via the MCP
+// server's ENVIRONMENT — never argv, which any same-user process can read
+// from a process listing. The code exchanges exactly once for a session
+// token bound server-side to the real profile's policy; a stale code is
+// refused. Profiles without skill: get neither.
+func TestACPSkillClaimInjection(t *testing.T) {
 	memory.Reset()
 	t.Cleanup(memory.Reset)
 	memory.SetToolCommand([]string{"/usr/local/bin/conductor", "mcp", "memory", "--socket", "/data/memory.sock", "--no-memory"})
 
 	broker := skill.NewBroker(
-		func(name string) (string, bool) { return "s3cretvalue", name == "deploy_key" },
+		func(name string) (string, bool) { return "s3cretvalue", name == "house/deploy_key" },
 		nil,
 	)
 	skill.SetActive(broker)
@@ -51,45 +53,56 @@ func TestACPSkillTokenInjection(t *testing.T) {
 		return agent.gotMcp
 	}
 
-	// A skill-enabled profile gets a --token flag…
 	got := newSession(config.AgentProfile{Skill: &config.SkillPolicy{
-		SecretsVia: "broker", AllowSecrets: []string{"deploy_key"},
+		SecretsVia: "broker", AllowSecrets: []string{"house/deploy_key"},
 	}})
 	if len(got) != 1 {
 		t.Fatalf("mcp servers: %+v", got)
 	}
-	var token string
-	for i, a := range got[0].Args {
-		if a == "--token" && i+1 < len(got[0].Args) {
-			token = got[0].Args[i+1]
+	// REGRESSION (#122 R1): no token, no claim, nothing secret on argv.
+	for _, a := range got[0].Args {
+		if a == "--token" || a == "--claim" || strings.Contains(a, "CONDUCTOR_SKILL") {
+			t.Fatalf("secret material on argv: %v", got[0].Args)
 		}
 	}
-	if token == "" {
-		t.Fatalf("no --token in argv: %v", got[0].Args)
+	var claim string
+	for _, ev := range got[0].Env {
+		if ev.Name == "CONDUCTOR_SKILL_CLAIM" {
+			claim = ev.Value
+		}
+	}
+	if claim == "" {
+		t.Fatalf("no claim code in the MCP server env: %+v", got[0].Env)
 	}
 
-	// …and that token stands for the REAL dispatch identity server-side: the
-	// broker honors the profile's own policy under it.
-	grant, _, err := broker.Issue(token, "deploy_key")
+	// The claim exchanges once for a token that stands for the REAL profile's
+	// policy server-side…
+	peer := skill.Peer{PID: 7, StartTime: 1, Valid: true}
+	token, err := broker.ClaimSession(claim, peer)
 	if err != nil {
-		t.Fatalf("issue under the minted token: %v", err)
+		t.Fatalf("claim: %v", err)
 	}
-	if v, err := broker.Redeem(token, grant); err != nil || v != "s3cretvalue" {
+	grant, _, err := broker.Issue(token, "house/deploy_key", peer)
+	if err != nil {
+		t.Fatalf("issue under the claimed token: %v", err)
+	}
+	if v, err := broker.Redeem(token, grant, peer); err != nil || v != "s3cretvalue" {
 		t.Fatalf("redeem: %q, %v", v, err)
 	}
-	// The policy is the dispatched profile's, not anything client-supplied.
-	if _, _, err := broker.Issue(token, "other_secret"); err == nil {
+	if _, _, err := broker.Issue(token, "other_secret", peer); err == nil {
 		t.Fatal("a name outside the dispatched profile's allow_secrets must be denied")
 	}
+	// …and exactly once: a scraped code is dead after the exchange.
+	if _, err := broker.ClaimSession(claim, skill.Peer{PID: 666, Valid: true}); err == nil {
+		t.Fatal("a spent claim code must be refused")
+	}
 
-	// A profile without skill: gets no token at all.
+	// A profile without skill: gets no claim at all.
 	got = newSession(config.AgentProfile{})
 	if len(got) != 1 {
 		t.Fatalf("mcp servers: %+v", got)
 	}
-	for _, a := range got[0].Args {
-		if a == "--token" {
-			t.Fatalf("token minted for a profile without skill:: %v", got[0].Args)
-		}
+	if len(got[0].Env) != 0 {
+		t.Fatalf("claim minted for a profile without skill:: %+v", got[0].Env)
 	}
 }

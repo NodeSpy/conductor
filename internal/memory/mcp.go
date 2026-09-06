@@ -40,14 +40,20 @@ type mcpError struct {
 // ServeMCP runs the stdio loop until r reaches EOF. src is the dispatch
 // provenance baked into the launch flags; every remember carries it.
 // MCPConfig is the per-dispatch wiring the daemon baked into the tool
-// subprocess's flags at injection time.
+// subprocess's flags and environment at injection time.
 type MCPConfig struct {
 	Source Source
 	Number int
-	// Token is the skill session token (#36 §12). "" = this dispatch has no
-	// skill surface: the broker tools are not advertised, and the daemon
-	// would deny their calls anyway (deny by default, authorized by token
-	// alone).
+	// Claim is the one-shot claim code (#36 §12 / #122) the daemon put in
+	// this subprocess's ENVIRONMENT — never argv. ServeMCP exchanges it for
+	// the session token over the socket at startup (single-use, short TTL),
+	// binding the session to THIS process; the token then lives only in this
+	// process's memory.
+	Claim string
+	// Token is the claimed skill session token. "" = this dispatch has no
+	// skill surface: the broker/verb tools are not advertised, and the
+	// daemon would deny their calls anyway (deny by default, authorized by
+	// token + peer alone).
 	Token string
 	// NoMemory hides the memory tools when the daemon serves the socket for
 	// the skill surface without a memory: section.
@@ -55,6 +61,15 @@ type MCPConfig struct {
 }
 
 func ServeMCP(r io.Reader, w io.Writer, call MCPCaller, mc MCPConfig) error {
+	// Exchange the claim code immediately: it expires fast by design, and a
+	// prompt claim shrinks the window in which a scraped code is live. A
+	// failed claim leaves the skill tools off (Token "") — the memory tools
+	// still serve.
+	if mc.Claim != "" && mc.Token == "" {
+		if resp, err := call(IPCRequest{Op: "token_claim", Claim: mc.Claim}); err == nil && resp.Error == "" && resp.Result != nil {
+			mc.Token, _ = resp.Result["token"].(string)
+		}
+	}
 	in := bufio.NewScanner(r)
 	in.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	out := bufio.NewWriter(w)

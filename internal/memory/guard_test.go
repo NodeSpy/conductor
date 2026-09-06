@@ -37,7 +37,7 @@ func TestWriteGuardBlocksHarvestAndIPCRemember(t *testing.T) {
 
 	// IPC path: the remember op is refused and audited as blocked.
 	var audits []map[string]any
-	resp := handleIPC(m, IPCRequest{Op: "remember", Text: "key=" + secret, Source: Source{Agent: "a"}},
+	resp := handleIPC(m, IPCRequest{Op: "remember", Text: "key=" + secret, Source: Source{Agent: "a"}}, Peer{},
 		func(e map[string]any) { audits = append(audits, e) }, nil)
 	if resp.OK || !strings.Contains(resp.Error, "refusing to persist") {
 		t.Fatalf("IPC remember of a secret must refuse: %+v", resp)
@@ -59,7 +59,7 @@ func TestWriteGuardBlocksHarvestAndIPCRemember(t *testing.T) {
 	if _, err := m.HarvestOutput("```remember\n- a plain fact\n```", Source{}); err != nil {
 		t.Fatalf("clean harvest must pass: %v", err)
 	}
-	if resp := handleIPC(m, IPCRequest{Op: "remember", Text: "another fact", Source: Source{}}, nil, nil); !resp.OK {
+	if resp := handleIPC(m, IPCRequest{Op: "remember", Text: "another fact", Source: Source{}}, Peer{}, nil, nil); !resp.OK {
 		t.Fatalf("clean IPC remember must pass: %+v", resp)
 	}
 	if all, _ := m.List(); len(all) != 2 {
@@ -88,7 +88,7 @@ func TestRecalledMemoryRedactsSecrets(t *testing.T) {
 		t.Fatalf("prompt section must carry the placeholder: %s", section)
 	}
 
-	resp := handleIPC(m, IPCRequest{Op: "recall", Source: Source{Agent: "a"}}, nil, nil)
+	resp := handleIPC(m, IPCRequest{Op: "recall", Source: Source{Agent: "a"}}, Peer{}, nil, nil)
 	if !resp.OK || len(resp.Entries) != 1 {
 		t.Fatalf("recall: %+v", resp)
 	}
