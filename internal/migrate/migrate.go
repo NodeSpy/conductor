@@ -2,10 +2,14 @@
 // notify: / handoffs: / controllers: / control: / paseo_bin) into the
 // connectors-model schema (connectors: / runtimes: / triggers: / policy:).
 //
-// The transform is total or it refuses: every legacy construct maps, and
-// anything unmappable is a hard error naming exactly what didn't map — never
-// a quiet loss. Fields that were decoded but never read by the legacy engine
-// (documented inert fields) are dropped WITH a summary note.
+// Every legacy CONSTRUCT maps or the transform refuses naming it (an
+// unmappable integration type, nested steps, control.enabled: false). Legacy
+// KEYS the schema no longer knows — retired options, inert fields, blocks
+// from configs that predate the schema — are DROPPED with a summary note
+// instead: the migration is one-time, and it must produce a loadable
+// connectors config from any legacy file (a key refusal on a deployed box
+// would crash-loop it on auto-update). The output is checked against the
+// strict runtime decode before it is returned.
 //
 // It operates on the RAW yaml — no environment expansion — so ${VAR} secret
 // references survive verbatim into the output. Blocks that carry through
@@ -15,10 +19,12 @@ package migrate
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -58,18 +64,32 @@ func unmaskEnv(out []byte) []byte {
 // on-disk file (unexpanded); the output preserves ${VAR} references.
 func Transform(raw []byte) (*Result, error) {
 	raw = maskEnv(raw)
-	// STRICT decode: migration must never silently drop configured behavior.
-	// A key the schema doesn't know (a typo, a retired option) is a hard
-	// error NAMING it — the auto-migration fail-safe then keeps the box on
-	// the legacy config and notifies, instead of committing a transform that
-	// quietly lost something. (Sections with their own raw-node decoding —
-	// integrations:, stores:, connectors: — validate their bodies in their
-	// own loaders; this pass catches everything the top-level schema owns.)
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
+	var notes []string
+	droppedSeen := map[string]bool{}
+	// LENIENT decode, with a strict probe harvesting notes: this migration is
+	// one-time, and it must produce a loadable connectors config from ANY
+	// legacy file. A key the schema doesn't know (a retired option like
+	// notify.comment_on_escalate, a long-dead top-level dispatch: block) is
+	// DROPPED with a note naming it — a hard refusal here means a deployed
+	// box crash-loops on auto-update, which is strictly worse than losing a
+	// field the legacy engine never read. The strict-output scrub at the end
+	// guarantees anything carried verbatim is gone from the result too.
+	{
+		dec := yaml.NewDecoder(bytes.NewReader(raw))
+		dec.KnownFields(true)
+		var probe config.Config
+		if err := dec.Decode(&probe); err != nil && err != io.EOF {
+			if fes, ok := unknownFields(err); ok {
+				for _, fe := range fes {
+					noteUnknown(&notes, droppedSeen, fe)
+				}
+			}
+			// A genuine parse error (not unknown keys) surfaces below.
+		}
+	}
 	var cfg config.Config
-	if err := dec.Decode(&cfg); err != nil && err != io.EOF {
-		return nil, fmt.Errorf("parse config: %w — migration refuses to guess: an unknown key would be silently dropped, so fix or remove it (note: config migrate reads the raw file — a ${VAR} in a numeric field can't be parsed; quote or inline it)", err)
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("parse config: %w (note: config migrate reads the raw file — a ${VAR} in a numeric field can't be parsed; quote or inline it)", err)
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
@@ -79,8 +99,10 @@ func Transform(raw []byte) (*Result, error) {
 		// A connectors-schema file may still carry retired models — a
 		// notify: block (→ conductor.* triggers) and/or pre-vaults secret
 		// refs — the standalone passes rewrite them; an already-migrated
-		// file changes nothing.
-		var notes []string
+		// file changes nothing. (Pre-pass notes are discarded on the
+		// unchanged path: a current-schema file's unknown keys are the
+		// strict runtime loader's business, not the migration's.)
+		notes = nil
 		cur, anyChanged := raw, false
 		if out, changed, err := applyNotifyPass(cur, &notes); err != nil {
 			return nil, fmt.Errorf("notify migration: %w", err)
@@ -95,9 +117,9 @@ func Transform(raw []byte) (*Result, error) {
 		if !anyChanged {
 			return &Result{Changed: false}, nil
 		}
-		var check config.Config
-		if err := yaml.Unmarshal(cur, &check); err != nil {
-			return nil, fmt.Errorf("transformed config does not re-parse: %w", err)
+		cur, err := scrubUnknownKeys(cur, &notes, droppedSeen)
+		if err != nil {
+			return nil, err
 		}
 		return &Result{Output: unmaskEnv(cur), Summary: notes, Changed: true}, nil
 	}
@@ -105,7 +127,6 @@ func Transform(raw []byte) (*Result, error) {
 		return nil, fmt.Errorf("config already has connectors:/triggers: blocks alongside legacy ones — finish the migration by hand (mixed files are valid to RUN, but the automatic transform only handles fully-legacy files)")
 	}
 
-	var notes []string
 	out := newOutDoc()
 
 	// integrations: → connectors: + triggers:.
@@ -272,14 +293,124 @@ func Transform(raw []byte) (*Result, error) {
 	} else if vchanged {
 		b = vout
 	}
-	// The transform must produce a parseable document (belt and braces before
-	// the caller's full validation). Checked BEFORE unmasking: after ${VAR}
-	// references are restored, parseability depends on the environment again.
-	var check config.Config
-	if err := yaml.Unmarshal(b, &check); err != nil {
-		return nil, fmt.Errorf("transformed config does not re-parse: %w", err)
+	// The transform must produce a document the STRICT runtime loader accepts
+	// (belt and braces before the caller's full validation) — any key it
+	// doesn't know (a retired legacy block carried verbatim) is scrubbed with
+	// a note rather than left to crash-loop the box. Checked BEFORE
+	// unmasking: after ${VAR} references are restored, parseability depends
+	// on the environment again.
+	b, err = scrubUnknownKeys(b, &notes, droppedSeen)
+	if err != nil {
+		return nil, err
 	}
 	return &Result{Output: unmaskEnv(b), Summary: notes, Changed: true}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Unknown-key leniency: harvest, note, scrub
+// ---------------------------------------------------------------------------
+
+// fieldNotFoundRe matches one strict-decode unknown-key entry. Anchored as a
+// FULL match so a custom unmarshaler's wrapped error (whose inner line
+// numbers point into a re-encoded node, not this document) can never
+// masquerade as a scrubbable entry.
+var fieldNotFoundRe = regexp.MustCompile(`^line (\d+): field (\S+) not found in type (\S+)$`)
+
+type unknownField struct {
+	line  int
+	field string
+	typ   string
+}
+
+// unknownFields extracts the unknown-key entries from a strict decode error.
+// ok is true only when EVERY entry is a plain unknown-key entry — a mixed or
+// genuine parse error is not safely scrubbable.
+func unknownFields(err error) (fes []unknownField, ok bool) {
+	var te *yaml.TypeError
+	if !errors.As(err, &te) {
+		return nil, false
+	}
+	for _, e := range te.Errors {
+		m := fieldNotFoundRe.FindStringSubmatch(e)
+		if m == nil {
+			return nil, false
+		}
+		n, _ := strconv.Atoi(m[1])
+		fes = append(fes, unknownField{line: n, field: m[2], typ: m[3]})
+	}
+	return fes, len(fes) > 0
+}
+
+// noteUnknown records one dropped key, once per (type, field).
+func noteUnknown(notes *[]string, seen map[string]bool, fe unknownField) {
+	key := fe.typ + "." + fe.field
+	if seen[key] {
+		return
+	}
+	seen[key] = true
+	where := strings.TrimPrefix(fe.typ, "config.")
+	*notes = append(*notes, fmt.Sprintf("dropped legacy key %q (%s): not part of the connectors schema — retired or never read; nothing carries over", fe.field, where))
+}
+
+// scrubUnknownKeys makes the transformed output strictly loadable: every key
+// the connectors schema doesn't know (a retired block carried verbatim,
+// e.g. a top-level dispatch: from an old backup) is removed with a note.
+// Anything that isn't a plain unknown-key error stays a hard error.
+func scrubUnknownKeys(b []byte, notes *[]string, seen map[string]bool) ([]byte, error) {
+	for pass := 0; pass < 20; pass++ {
+		dec := yaml.NewDecoder(bytes.NewReader(b))
+		dec.KnownFields(true)
+		var check config.Config
+		err := dec.Decode(&check)
+		if err == nil || err == io.EOF {
+			return b, nil
+		}
+		fes, ok := unknownFields(err)
+		if !ok {
+			return nil, fmt.Errorf("transformed config does not re-parse: %w", err)
+		}
+		var doc yaml.Node
+		if err := yaml.Unmarshal(b, &doc); err != nil {
+			return nil, err
+		}
+		removed := 0
+		for _, fe := range fes {
+			if removeKeyAt(&doc, fe.line, fe.field) {
+				noteUnknown(notes, seen, fe)
+				removed++
+			}
+		}
+		if removed == 0 {
+			// Located nothing — refuse rather than loop or guess.
+			return nil, fmt.Errorf("transformed config does not re-parse: %w", err)
+		}
+		nb, err := marshalDoc(&doc)
+		if err != nil {
+			return nil, err
+		}
+		b = nb
+	}
+	return nil, fmt.Errorf("transformed config kept failing the strict re-parse after 20 scrub passes")
+}
+
+// removeKeyAt deletes the mapping entry whose KEY node named field sits at
+// the given (1-based) line, anywhere in the tree.
+func removeKeyAt(n *yaml.Node, line int, field string) bool {
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k := n.Content[i]
+			if k.Value == field && k.Line == line {
+				n.Content = append(n.Content[:i], n.Content[i+2:]...)
+				return true
+			}
+		}
+	}
+	for _, c := range n.Content {
+		if removeKeyAt(c, line, field) {
+			return true
+		}
+	}
+	return false
 }
 
 // isLegacy reports whether the document carries legacy constructs.

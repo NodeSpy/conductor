@@ -1,6 +1,7 @@
 package migrate
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -869,37 +870,13 @@ func TestGithubExclusionSemantics(t *testing.T) {
 
 // REGRESSION (audit finding #9): a typo'd/unknown legacy key is a HARD error
 // naming the key — the transform never silently drops configured behavior.
-func TestTransformRejectsUnknownKeys(t *testing.T) {
-	cases := []struct{ name, yaml, wantKey string }{
-		{"top-level typo", `
-integrattions:
-  - name: gh
-    type: github
-`, "integrattions"},
-		{"singular controller", `
-integrations:
-  - name: gh
-    type: github
-controller: { type: paseo }
-`, "controller"},
-		{"typo inside a known struct", `
-integrations:
-  - name: gh
-    type: github
-control:
-  pause_lable: "hold"
-`, "pause_lable"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			_, err := Transform([]byte(c.yaml))
-			if err == nil || !strings.Contains(err.Error(), c.wantKey) {
-				t.Fatalf("unknown key %q must be a named hard error, got %v", c.wantKey, err)
-			}
-		})
-	}
-	// A fully-valid legacy config still transforms.
-	ok := `
+// REGRESSION: the migration DROPS unrecognized/retired legacy keys with a
+// note instead of hard-refusing them — a refusal on a deployed box means the
+// unmigrated config then fails the strict runtime load and the service
+// crash-loops on auto-update. The output must pass the strict decode with
+// the keys gone and the notes naming them.
+func TestTransformDropsUnknownKeysWithNotes(t *testing.T) {
+	legacyBase := `
 integrations:
   - name: gh
     type: github
@@ -907,8 +884,66 @@ integrations:
       - on: merge_conflict
         prompt: "fix"
 `
-	res, err := Transform([]byte(ok))
+	cases := []struct{ name, yaml, droppedKey string }{
+		{"retired notify field", legacyBase + `
+notify:
+  push: true
+  comment_on_escalate: true
+`, "comment_on_escalate"},
+		{"retired top-level dispatch block", legacyBase + `
+dispatch:
+  identity: { read_token: app, write_token: gh_auth }
+`, "dispatch"},
+		{"singular controller", legacyBase + `
+controller: { type: paseo }
+`, "controller"},
+		{"typo inside a known struct", legacyBase + `
+control:
+  pause_lable: "hold"
+`, "pause_lable"},
+		{"unknown key in a carried block", legacyBase + `
+agents:
+  fixer: { provider: claude, retired_knob: 3 }
+`, "retired_knob"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, err := Transform([]byte(c.yaml))
+			if err != nil {
+				t.Fatalf("must migrate, dropping %q: %v", c.droppedKey, err)
+			}
+			if !res.Changed {
+				t.Fatal("legacy config must transform")
+			}
+			var noted bool
+			for _, n := range res.Summary {
+				if strings.Contains(n, c.droppedKey) {
+					noted = true
+				}
+			}
+			if !noted {
+				t.Fatalf("dropped key %q must be named in the summary: %v", c.droppedKey, res.Summary)
+			}
+			if strings.Contains(string(res.Output), c.droppedKey) {
+				t.Fatalf("dropped key %q survived into the output:\n%s", c.droppedKey, res.Output)
+			}
+			// The output passes the STRICT runtime decode — the whole point.
+			dec := yaml.NewDecoder(bytes.NewReader(res.Output))
+			dec.KnownFields(true)
+			var check config.Config
+			if err := dec.Decode(&check); err != nil {
+				t.Fatalf("output fails the strict runtime decode: %v\n%s", err, res.Output)
+			}
+		})
+	}
+	// A fully-valid legacy config still transforms with no drop notes.
+	res, err := Transform([]byte(legacyBase))
 	if err != nil || !res.Changed {
 		t.Fatalf("valid legacy config must transform: %v", err)
+	}
+	for _, n := range res.Summary {
+		if strings.Contains(n, "dropped legacy key") {
+			t.Fatalf("clean config produced a drop note: %s", n)
+		}
 	}
 }
