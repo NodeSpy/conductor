@@ -77,7 +77,7 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 	flow.ConfigureSavedWorkflows(sw)
 	// Memory builds after the stores are registered so `memory: store:` can
 	// verify its backing store — a bad memory: section is a LOAD error.
-	if err := configureMemory(cfg); err != nil {
+	if err := configureMemory(cfg, sec); err != nil {
 		return nil, err
 	}
 	if err := flow.Validate(cfg, reg); err != nil {
@@ -146,13 +146,23 @@ func savedWorkflowsPath(cfg *config.Config) string {
 // the process-wide active memory. A no-op when the section is absent. Called
 // from buildFlowStack (after the stores wire up) and, for legacy configs
 // with no connectors: block, from the daemon boot directly.
-func configureMemory(cfg *config.Config) error {
+func configureMemory(cfg *config.Config, sec *secrets.Resolver) error {
 	if cfg.Memory == nil {
 		return nil
 	}
 	mgr, err := memory.Build(memory.Options{Store: cfg.Memory.Store, Dir: cfg.Memory.Dir, Type: cfg.Memory.Type})
 	if err != nil {
 		return err
+	}
+	if sec != nil {
+		// The agent-facing remember paths (harvest output contract, the IPC
+		// tool) refuse tracked secret material — vault it, don't memorize it.
+		mgr.SetWriteGuard(func(text string) error {
+			if sec.Redact(text) != text {
+				return fmt.Errorf("memory: refusing to persist tracked secret material — store it in a vault instead")
+			}
+			return nil
+		})
 	}
 	memory.Configure(mgr)
 	return nil

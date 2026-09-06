@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -77,6 +78,31 @@ type Manager struct {
 	backend Backend
 	now     func() time.Time
 	newID   func() string
+	// guard vets the agent-facing write paths (the harvest output contract
+	// and the memory IPC tool) before anything persists — wired by main to
+	// refuse tracked secret material. The verb/code write paths carry the
+	// plan write barrier separately. Atomic: set once at boot, read from
+	// engine and flow goroutines.
+	guard atomic.Pointer[WriteGuard]
+}
+
+// WriteGuard vets one to-be-remembered text; a non-nil error refuses it.
+type WriteGuard func(text string) error
+
+// SetWriteGuard installs the agent-facing write guard.
+func (m *Manager) SetWriteGuard(g WriteGuard) {
+	if g == nil {
+		return
+	}
+	m.guard.Store(&g)
+}
+
+// checkGuard applies the write guard (nil = allowed).
+func (m *Manager) checkGuard(text string) error {
+	if gp := m.guard.Load(); gp != nil {
+		return (*gp)(text)
+	}
+	return nil
 }
 
 // NewManager wraps a backend.

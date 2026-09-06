@@ -40,6 +40,15 @@ func (m *Manager) HarvestOutput(output string, src Source) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The write guard vets every note BEFORE anything persists (all or
+	// nothing): agent output is the least-trusted remember path, and without
+	// this a tracked secret in a ```remember block landed in durable shared
+	// memory verbatim — unlike the verb and code-binding paths.
+	for _, n := range notes {
+		if gerr := m.checkGuard(n.Text); gerr != nil {
+			return nil, gerr
+		}
+	}
 	var out []Entry
 	for _, n := range notes {
 		e, err := m.Remember(n.Text, n.Tags, n.Scope, src)

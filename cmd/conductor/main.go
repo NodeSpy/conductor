@@ -366,7 +366,7 @@ func cmdRun(args []string) error {
 	// A legacy config (no connectors: block) can still carry a memory:
 	// section — buildFlowStack didn't run, so wire it here.
 	if stack == nil {
-		if err := configureMemory(cfg); err != nil {
+		if err := configureMemory(cfg, nil); err != nil {
 			return err
 		}
 	}

@@ -143,6 +143,13 @@ func handleIPC(m *Manager, req IPCRequest, audit func(map[string]any), log func(
 	}
 	switch req.Op {
 	case "remember":
+		// The same write guard as the harvest path: the IPC tool is driven
+		// by live agents and must not persist tracked secret material.
+		if gerr := m.checkGuard(req.Text); gerr != nil {
+			aud(map[string]any{"event": "memory_remember", "via": "tool", "outcome": "blocked",
+				"agent": req.Source.Agent, "repo": req.Source.Repo, "error": gerr.Error()})
+			return IPCResponse{Error: gerr.Error()}
+		}
 		e, err := m.Remember(req.Text, req.Tags, req.Scope, req.Source)
 		if err != nil {
 			aud(map[string]any{"event": "memory_remember", "via": "tool", "outcome": "failed",
