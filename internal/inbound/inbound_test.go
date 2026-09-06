@@ -96,10 +96,31 @@ func TestForceNoCheckout(t *testing.T) {
 	}
 }
 
+// waitListenerGone blocks until the shutdown goroutine evicted addr from the
+// global listener map — count-safe teardown: without it, the next test run
+// (or -count=2 iteration) would attach routes to a dead server.
+func waitListenerGone(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		lmu.Lock()
+		_, ok := listeners[addr]
+		lmu.Unlock()
+		if !ok {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("listener %s never evicted after ctx cancel", addr)
+}
+
 func TestListenerRegisterAndDispatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	const addr = "127.0.0.1:38251" // fixed high port so the test client has a known URL
+	t.Cleanup(func() {
+		cancel()
+		waitListenerGone(t, addr)
+	})
 	got := make(chan string, 1)
 	Register(ctx, addr, "/hook/a", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -152,3 +173,63 @@ func (r *sr) Read(p []byte) (int, error) {
 	return n, nil
 }
 func stringReader(s string) io.Reader { return &sr{s} }
+
+// REGRESSION: a ctx-cancel shutdown left the dead listener in the global
+// map, so a later Register for the same addr attached its routes to a server
+// that no longer serves — registered-looking, silently dead. Shutdown now
+// evicts the entry; a re-registration starts a fresh server.
+func TestListenerEvictedOnShutdownAndReRegistrable(t *testing.T) {
+	const addr = "127.0.0.1:38253"
+	post := func(path, body string) (*http.Response, error) {
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			resp, err := http.Post("http://"+addr+path, "application/json", stringReader(body))
+			if err == nil || !time.Now().Before(deadline) {
+				return resp, err
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	got1 := make(chan struct{}, 1)
+	Register(ctx1, addr, "/gen1", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got1 <- struct{}{}
+		w.WriteHeader(http.StatusAccepted)
+	}), t.Logf)
+	resp, err := post("/gen1", `{}`)
+	if err != nil {
+		t.Fatalf("first-generation post: %v", err)
+	}
+	resp.Body.Close()
+	<-got1
+
+	// Shut the shared server down; the map entry must go with it.
+	cancel1()
+	waitListenerGone(t, addr)
+
+	// A fresh Register on the same addr serves again on a NEW server.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel2()
+		waitListenerGone(t, addr)
+	})
+	got2 := make(chan struct{}, 1)
+	Register(ctx2, addr, "/gen2", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got2 <- struct{}{}
+		w.WriteHeader(http.StatusAccepted)
+	}), t.Logf)
+	resp, err = post("/gen2", `{}`)
+	if err != nil {
+		t.Fatalf("re-registration after shutdown never served: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("gen2 status: %d", resp.StatusCode)
+	}
+	select {
+	case <-got2:
+	case <-time.After(time.Second):
+		t.Fatal("gen2 handler never fired")
+	}
+}

@@ -48,6 +48,16 @@ func Register(ctx context.Context, addr, path string, h http.Handler, logf func(
 			sd, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			_ = l.server.Shutdown(sd)
+			// Evict the dead listener: a later Register for this addr (a
+			// reload, a restart-in-process, tests) must start a FRESH
+			// server — attaching routes to this map entry would look
+			// registered while serving nothing. After Shutdown returns the
+			// socket is closed, so the fresh server can bind.
+			lmu.Lock()
+			if listeners[addr] == l {
+				delete(listeners, addr)
+			}
+			lmu.Unlock()
 		}()
 		go func() {
 			logf("inbound: listener on %s", addr)
