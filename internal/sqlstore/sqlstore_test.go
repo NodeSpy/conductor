@@ -295,3 +295,50 @@ func TestRegistry(t *testing.T) {
 		t.Fatalf("unknown-store error should list defined stores, got %v", err)
 	}
 }
+
+// REGRESSION: the filesystem-statement denylist was sqlite-only — a mysql or
+// postgres store accepted INTO OUTFILE / LOAD_FILE / COPY … PROGRAM, all of
+// which reach the DB server's filesystem or shell. Every driver now refuses
+// its file-reaching statements at the store layer, for every caller.
+func TestCheckStatementDeniesFileWritesPerDriver(t *testing.T) {
+	cases := []struct {
+		driver, query, want string
+	}{
+		{"mysql", "SELECT * FROM t INTO OUTFILE '/tmp/x'", "INTO OUTFILE"},
+		{"mysql", "select 1 into dumpfile '/tmp/x'", "INTO DUMPFILE"},
+		{"mysql", "SELECT LOAD_FILE('/etc/passwd')", "LOAD_FILE"},
+		{"mysql", "LOAD DATA INFILE '/tmp/x' INTO TABLE t", "LOAD DATA"},
+		{"postgres", "COPY t TO PROGRAM 'touch /tmp/pwned'", "COPY"},
+		{"postgres", "COPY t FROM '/etc/passwd'", "COPY"},
+		{"postgres", "copy (select 1) to '/tmp/x'", "COPY"},
+		{"sqlite", "ATTACH DATABASE '/tmp/x' AS evil", "ATTACH"},
+	}
+	for _, tc := range cases {
+		st := New(nil, tc.driver)
+		err := st.checkStatement(tc.query)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s %q: want %q refusal, got %v", tc.driver, tc.query, tc.want, err)
+		}
+		// The refusal happens BEFORE any db use: Query/Exec on a nil-db store
+		// error with the denial, not a panic.
+		if _, qerr := st.Query(context.Background(), tc.query, nil); qerr == nil {
+			t.Errorf("%s Query must refuse %q", tc.driver, tc.query)
+		}
+		if _, _, xerr := st.Exec(context.Background(), tc.query, nil); xerr == nil {
+			t.Errorf("%s Exec must refuse %q", tc.driver, tc.query)
+		}
+	}
+	// Ordinary statements pass every driver's check.
+	for _, driver := range []string{"mysql", "postgres", "sqlite"} {
+		st := New(nil, driver)
+		for _, q := range []string{
+			"SELECT id, body FROM events WHERE id = ?",
+			"INSERT INTO events (body) VALUES ($1)",
+			"UPDATE loader SET copied_at = now() WHERE id = 1", // words containing the tokens don't match
+		} {
+			if err := st.checkStatement(q); err != nil {
+				t.Errorf("%s %q must pass: %v", driver, q, err)
+			}
+		}
+	}
+}

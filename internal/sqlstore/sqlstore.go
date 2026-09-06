@@ -83,13 +83,34 @@ func (s *Store) CheckCodeAccess(storeName, op string) error {
 // statements against the user's schema never need them.
 var sqliteDenied = regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_"'])(attach|detach|pragma|vacuum)($|[^A-Za-z0-9_])`)
 
-// checkStatement refuses filesystem-reaching statements on sqlite stores.
+// mysqlDenied: INTO OUTFILE / INTO DUMPFILE write server-side files;
+// LOAD_FILE() and LOAD DATA read them.
+var mysqlDenied = regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_"'])(into\s+(outfile|dumpfile)|load_file|load\s+data)($|[^A-Za-z0-9_])`)
+
+// postgresDenied: COPY … TO/FROM PROGRAM executes a server-side command;
+// COPY … TO/FROM '<path>' reads/writes server-side files. Plain COPY to
+// STDIN/STDOUT is a protocol feature the drivers don't expose here anyway,
+// so the whole server-side COPY family is refused.
+var postgresDenied = regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_"'])(copy)\s`)
+
+// checkStatement refuses statements that reach the host filesystem or shell
+// through the database server — on every driver, for every caller.
 func (s *Store) checkStatement(query string) error {
-	if s.driver != "sqlite" {
-		return nil
+	var m []string
+	switch s.driver {
+	case "sqlite":
+		m = sqliteDenied.FindStringSubmatch(query)
+	case "mysql":
+		m = mysqlDenied.FindStringSubmatch(query)
+	case "postgres":
+		m = postgresDenied.FindStringSubmatch(query)
 	}
-	if m := sqliteDenied.FindStringSubmatch(query); m != nil {
-		return fmt.Errorf("sql: %s is not allowed on a sqlite store (it reaches the host filesystem/engine, not your schema)", strings.ToUpper(m[2]))
+	if m != nil {
+		what := strings.ToUpper(strings.Join(strings.Fields(m[2]), " "))
+		if what == "" {
+			what = "COPY"
+		}
+		return fmt.Errorf("sql: %s is not allowed on a %s store (it reaches the host filesystem/engine, not your schema)", what, s.driver)
 	}
 	return nil
 }
