@@ -371,10 +371,12 @@ func cmdRun(args []string) error {
 		}
 	}
 	// Redaction reaches every outbound surface once the resolver exists: the
-	// notifier's webhooks/via routes, and the shared logf choke point.
+	// notifier's webhooks/via routes, the shared logf choke point, and the
+	// audit writer's value backstop.
 	if stack != nil {
 		notifier.SetSecrets(stack.Secrets)
 		setLogRedactor(stack.Secrets)
+		st.SetAuditRedactor(stack.Secrets.Redact)
 	}
 	notifyStackFailures(stack, notifier)
 	if migrateWarning != "" {

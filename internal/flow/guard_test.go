@@ -12,6 +12,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/kv"
+	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/sqlstore"
 	"github.com/NodeSpy/conductor/internal/vaults"
 )
@@ -728,5 +729,55 @@ policy:
 	}
 	if v, found, _ := st.Get("ns", "loot"); !found || v != "plain-note" {
 		t.Fatalf("plain write must land: %v %v", v, found)
+	}
+}
+
+// REGRESSION: audit entries redacted options/outputs but wrote err.Error()
+// RAW — a REST secret in a URL query rides url.Error verbatim into
+// step_error / verb audits (and the fail-hook scope). Error strings now
+// redact like their siblings.
+func TestAuditRedactsErrorStrings(t *testing.T) {
+	const secret = "url-borne-s3cr3t-XYZZY"
+	// A rest connector whose base_url points at a dead port: the transport
+	// error embeds the full URL — query (with the interpolated secret)
+	// included.
+	cfg := loadConfig(t, `
+connectors:
+  api:
+    type: rest
+    base_url: http://127.0.0.1:1
+    verbs:
+      ping: { method: GET, path: /x, query: { key: "url-borne-s3cr3t-XYZZY" } }
+`)
+	shared := testSecrets(nil)
+	shared.Track(secret)
+	reg, err := connector.Build(cfg, connector.Deps{Secrets: shared, Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig := newTestRunner(t, cfg, reg)
+	rig.Runner.Secrets = shared
+	runTrigger(rig, newTrigger("ping", nil), mustSpec(t, `
+on: svc.ping
+steps: [ { id: call, uses: api.ping } ]
+`))
+	if failed, _ := rig.workflowFailed(); !failed {
+		t.Fatal("the dead-port call must fail")
+	}
+	audits := rig.Store.auditsWithEvent("step_error")
+	if len(audits) == 0 {
+		t.Fatal("expected a step_error audit entry")
+	}
+	var sawRedacted bool
+	for _, e := range audits {
+		if strings.Contains(fmt.Sprint(e), secret) {
+			t.Fatalf("secret reached an audit entry: %v", e)
+		}
+		if es, _ := e["error"].(string); strings.Contains(es, secrets.Placeholder) {
+			sawRedacted = true
+		}
+	}
+	if !sawRedacted {
+		t.Fatalf("the error string must carry the redaction placeholder: %v", audits)
 	}
 }

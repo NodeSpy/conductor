@@ -306,6 +306,18 @@ func (s *Store) Delete(key string) error {
 	return s.save()
 }
 
+// SetAuditRedactor wires a string redactor applied to every audit entry's
+// values at write time — the backstop no caller can bypass (main wires the
+// secrets resolver's Redact once the stack exists).
+func (s *Store) SetAuditRedactor(red func(string) string) {
+	if s.audit == nil {
+		return
+	}
+	s.audit.mu.Lock()
+	s.audit.redact = red
+	s.audit.mu.Unlock()
+}
+
 // Audit appends an entry to the audit log.
 func (s *Store) Audit(entry map[string]any) {
 	if s.audit == nil {

@@ -687,14 +687,15 @@ func (r *Runner) executePlan(ctx context.Context, t core.Trigger, pol *config.Ag
 		r.runHooks(ctx, t, step.Hooks, "start", st.scope, "plan step "+id)
 		outputs, err := r.execStepWithFlow(ctx, t, step, "plan:"+id, st.scope, shadow)
 		if err != nil {
+			errStr := r.redactErr(err)
 			fdata := cloneData(st.scope)
-			fdata["error"] = err.Error()
+			fdata["error"] = errStr
 			fdata["failed_step"] = id
 			r.runHooks(ctx, t, step.Hooks, "fail", fdata, "plan step "+id)
 			r.audit(map[string]any{"event": "plan_step", "repo": t.Target.Repo, "number": t.Target.Number,
-				"agent": st.agent, "step": id, "outcome": "failed", "error": err.Error()})
+				"agent": st.agent, "step": id, "outcome": "failed", "error": errStr})
 			if step.ContinueOnError {
-				r.recordOutputs(st.scope, id, map[string]any{"error": err.Error(), "failed": true})
+				r.recordOutputs(st.scope, id, map[string]any{"error": errStr, "failed": true})
 				st.next = i + 1
 				continue
 			}
@@ -773,7 +774,7 @@ func (r *Runner) auditPlan(t core.Trigger, agent, outcome string, res guardResul
 		entry["approval_why"] = strings.Join(res.approvalWhy, "; ")
 	}
 	if err != nil {
-		entry["error"] = err.Error()
+		entry["error"] = r.redactErr(err)
 	}
 	r.audit(entry)
 }
@@ -807,7 +808,7 @@ func (r *Runner) compensatePlan(ctx context.Context, t core.Trigger, st *planSta
 		outcome := "ok"
 		var errStr string
 		if err != nil {
-			outcome, errStr = "failed", err.Error()
+			outcome, errStr = "failed", r.redactErr(err)
 			r.Log("%s plan compensate %s failed (best-effort): %v", flowTag(t), id, err)
 		}
 		entry := map[string]any{"event": "plan_compensate", "repo": t.Target.Repo, "number": t.Target.Number,

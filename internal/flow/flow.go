@@ -295,15 +295,19 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 		r.runHooks(ctx, t, step.Hooks, "start", data, "step "+id)
 		outputs, err := r.execStepWithFlow(ctx, t, step, id, data, shadow)
 		if err != nil {
+			// Error strings carry whatever the failing transport embedded —
+			// a REST secret in a URL query rides url.Error verbatim. Redact
+			// before the string reaches hooks' template scope or disk.
+			errStr := r.redactErr(err)
 			fdata := cloneData(data)
-			fdata["error"] = err.Error()
+			fdata["error"] = errStr
 			fdata["failed_step"] = id
 			r.runHooks(ctx, t, step.Hooks, "fail", fdata, "step "+id)
 			r.audit(map[string]any{"event": "step_error", "repo": t.Target.Repo,
-				"number": t.Target.Number, "kind": t.Kind, "step": id, "error": err.Error()})
+				"number": t.Target.Number, "kind": t.Kind, "step": id, "error": errStr})
 			if step.ContinueOnError {
 				r.Log("%s step %s failed (continue_on_error): %v", flowTag(t), id, err)
-				outputs = map[string]any{"error": err.Error(), "failed": true}
+				outputs = map[string]any{"error": errStr, "failed": true}
 				r.recordOutputs(data, id, outputs)
 				r.checkpoint(run, i, id, step, outputs, checkpoint)
 				continue
@@ -755,9 +759,22 @@ func (r *Runner) auditVerb(t core.Trigger, conn, verb string, opts map[string]an
 		entry["options"] = r.Secrets.RedactValue(opts)
 	}
 	if err != nil {
-		entry["error"] = err.Error()
+		entry["error"] = r.redactErr(err)
 	}
 	r.audit(entry)
+}
+
+// redactErr scrubs tracked secret values from an error string before it
+// reaches an audit entry, a hook scope, or a step output — the options and
+// outputs beside it are already redacted; the error must not be the leak.
+func (r *Runner) redactErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	if r.Secrets == nil {
+		return err.Error()
+	}
+	return r.Secrets.Redact(err.Error())
 }
 
 // stubOutputs synthesizes zero-valued outputs matching a verb's output
