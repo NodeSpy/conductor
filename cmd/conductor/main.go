@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -38,6 +39,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/integrations/slack" // registers "slack"; also feeds hand-off replies (see wireSlackHandoffInbox)
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
 
 	_ "github.com/NodeSpy/conductor/internal/integrations/cron"      // register "cron"
@@ -367,6 +369,12 @@ func cmdRun(args []string) error {
 		if err := configureMemory(cfg); err != nil {
 			return err
 		}
+	}
+	// Redaction reaches every outbound surface once the resolver exists: the
+	// notifier's webhooks/via routes, and the shared logf choke point.
+	if stack != nil {
+		notifier.SetSecrets(stack.Secrets)
+		setLogRedactor(stack.Secrets)
 	}
 	notifyStackFailures(stack, notifier)
 	if migrateWarning != "" {
@@ -1321,8 +1329,22 @@ func anyArchive(cfg *config.Config) bool {
 	return false
 }
 
+// logRedact scrubs tracked secret values from every journal line. logf is
+// the ONE logger handed to engine/flow/dispatch/notify/affinity/memory/
+// handoffs/control, so redacting here covers all of them at a single choke
+// point; it's atomic because subsystems log from many goroutines while main
+// wires the resolver once at boot.
+var logRedact atomic.Pointer[secrets.Resolver]
+
+// setLogRedactor wires the secrets resolver into the shared logger.
+func setLogRedactor(r *secrets.Resolver) { logRedact.Store(r) }
+
 func logf(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", a...)
+	line := fmt.Sprintf(format, a...)
+	if r := logRedact.Load(); r != nil {
+		line = r.Redact(line)
+	}
+	fmt.Fprintln(os.Stderr, line)
 }
 
 // loadEnvFile loads simple KEY=VALUE lines from path into the environment

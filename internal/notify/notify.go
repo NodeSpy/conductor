@@ -21,6 +21,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 // pushoverURL and notifiarrURL are the fixed API endpoints for those services.
@@ -92,6 +93,34 @@ type Notifier struct {
 	// the triggers do their own selection, and the source's loop guard
 	// keeps a lifecycle run's own events from re-feeding.
 	publish func(ctx context.Context, event string, t core.Trigger, line string, extra map[string]any)
+
+	// resolver redacts tracked secret values from every outbound surface —
+	// messages LEAVE the machine (Slack/Discord/ntfy/Pushover/Notifiarr and
+	// notify.via connectors) and land in the audit/journal. nil (legacy
+	// configs) passes through.
+	resolver *secrets.Resolver
+}
+
+// SetSecrets wires the redaction resolver (main, once the stack exists).
+func (n *Notifier) SetSecrets(r *secrets.Resolver) { n.resolver = r }
+
+// redact scrubs tracked secret values from one outbound string.
+func (n *Notifier) redact(s string) string {
+	if n.resolver == nil {
+		return s
+	}
+	return n.resolver.Redact(s)
+}
+
+// redactMap scrubs a fan-out data map (via routes, lifecycle extras).
+func (n *Notifier) redactMap(m map[string]any) map[string]any {
+	if n.resolver == nil || m == nil {
+		return m
+	}
+	if out, ok := n.resolver.RedactValue(m).(map[string]any); ok {
+		return out
+	}
+	return m
 }
 
 // SetRouter wires the verb-layer delivery for notify.via routes.
@@ -108,6 +137,10 @@ func (n *Notifier) SetPublisher(publish func(ctx context.Context, event string, 
 // self-update events, which carry a version. It journals, audits, and feeds
 // the conductor.* source.
 func (n *Notifier) Publish(ctx context.Context, event string, t core.Trigger, msg string, extra map[string]any) {
+	// Redact ONCE, before any surface sees the message: journal, audit, and
+	// the lifecycle source (whose triggers may post anywhere).
+	msg = n.redact(msg)
+	extra = n.redactMap(extra)
 	n.log("notify [%s] %s", event, msg)
 	if n.audit != nil {
 		n.audit(map[string]any{"event": event, "msg": msg})
@@ -131,6 +164,8 @@ func New(cfg config.Notify, log func(string, ...any), audit func(map[string]any)
 // channels are private to you (the journal, plus an optional Slack webhook). The
 // two attention events get an explicit, actionable line.
 func (n *Notifier) Emit(ctx context.Context, event string, t core.Trigger, msg string) {
+	// Redact ONCE, before ANY fan-out — the sinks below post OFF the machine.
+	msg = n.redact(msg)
 	// Record attention/terminal events (escalate/needs_input/complete) for
 	// status/report regardless of notify policy — dispatch is already captured
 	// richly by the engine's own dispatch audit, so skip it here.
@@ -157,16 +192,17 @@ func (n *Notifier) Emit(ctx context.Context, event string, t core.Trigger, msg s
 		return
 	}
 	n.log("notify %s", line)
-	n.notifyAll(ctx, line, event, map[string]any{
+	n.notifyAll(ctx, line, event, n.redactMap(map[string]any{
 		"message": line, "event": event, "ref": ref,
 		"repo": t.Target.Repo, "number": t.Target.Number,
 		"kind": t.Kind, "title": t.Title,
-	})
+	}))
 }
 
 // Digest emits a periodic activity summary (journal + Slack + audit). Unlike Emit
 // it isn't gated by notify.on — it's opt-in via notify.digest and always sent.
 func (n *Notifier) Digest(ctx context.Context, summary string) {
+	summary = n.redact(summary)
 	n.log("notify [digest] %s", summary)
 	if n.audit != nil {
 		n.audit(map[string]any{"event": "digest", "msg": summary})
