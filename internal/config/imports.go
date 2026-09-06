@@ -334,6 +334,7 @@ func (c *Config) resolveWorkflowFiles(dir string) error {
 	for name := range c.Workflows {
 		src[name] = ""
 	}
+	resolved := map[string]bool{} // (file, name) pairs whose steps were already walked
 
 	// register adds a file's workflow under name, erroring on a cross-file
 	// name collision (re-loading the same file+name is idempotent).
@@ -399,7 +400,15 @@ func (c *Config) resolveWorkflowFiles(dir string) error {
 		if err := register(name, file, def); err != nil {
 			return err
 		}
-		// The loaded workflow's own steps may reference further files.
+		// The loaded workflow's own steps may reference further files —
+		// resolved recursively, but each (file, name) pair only once: two
+		// files whose workflows reference each other would otherwise
+		// re-walk forever and crash the boot with a stack overflow.
+		id := file + "\x00" + name
+		if resolved[id] {
+			return nil
+		}
+		resolved[id] = true
 		return resolveSteps(fmt.Sprintf("workflow %q (%s)", name, file), def.Steps)
 	}
 	resolveSteps = func(where string, steps []Step) error {

@@ -386,3 +386,67 @@ triggers:
 		t.Fatalf("want the plural-imports error, got %v", err)
 	}
 }
+
+// REGRESSION: two workflow files whose workflows reference each other used
+// to re-walk forever (each resolveStep reloaded the other file) and crash
+// boot with a stack overflow. Each (file, name) pair now resolves once.
+func TestWorkflowMutualImportNoStackOverflow(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"config.yaml": `
+connectors:
+  box: { type: command }
+  timer:
+    type: cron
+    schedules: { tick: { every: 1h } }
+triggers:
+  - on: timer.tick
+    steps:
+      - { id: call, workflow: a, import: ./a.yaml }
+`,
+		"a.yaml": `
+a:
+  steps:
+    - { id: go-b, workflow: b, import: ./b.yaml }
+`,
+		"b.yaml": `
+b:
+  steps:
+    - { id: go-a, workflow: a, import: ./a.yaml }
+`,
+	})
+	cfg, err := Load(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("mutual workflow imports must load (cycles are caught by workflow-call validation, not the loader): %v", err)
+	}
+	if _, ok := cfg.Workflows["a"]; !ok {
+		t.Fatal("workflow a not registered")
+	}
+	if _, ok := cfg.Workflows["b"]; !ok {
+		t.Fatal("workflow b not registered")
+	}
+}
+
+// A workflow file referencing itself must not recurse either.
+func TestWorkflowSelfImportNoStackOverflow(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"config.yaml": `
+connectors:
+  box: { type: command }
+  timer:
+    type: cron
+    schedules: { tick: { every: 1h } }
+triggers:
+  - on: timer.tick
+    steps:
+      - { id: call, workflow: loop, import: ./loop.yaml }
+`,
+		"loop.yaml": `
+loop:
+  steps:
+    - { id: again, workflow: loop, import: ./loop.yaml }
+`,
+	})
+	if _, err := Load(filepath.Join(dir, "config.yaml")); err != nil {
+		t.Fatalf("self-referencing workflow import must load: %v", err)
+	}
+}
