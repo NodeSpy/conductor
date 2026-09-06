@@ -288,6 +288,11 @@ func TestIPCSecretBrokerOps(t *testing.T) {
 func TestMCPBrokerTools(t *testing.T) {
 	var got []IPCRequest
 	call := func(req IPCRequest) (IPCResponse, error) {
+		if req.Op == "verb_list" {
+			// tools/list also fetches the dynamic verb catalog when a token
+			// is present — not under test here.
+			return IPCResponse{Error: "verb_list: not available"}, nil
+		}
 		got = append(got, req)
 		switch req.Op {
 		case "secret_issue":
@@ -346,4 +351,107 @@ func TestMCPBrokerToolsHiddenWithoutToken(t *testing.T) {
 			t.Fatalf("broker tool %q advertised without a session token", n)
 		}
 	}
+}
+
+// The verb ops (#36 §12): verb_list serves the token's tool catalog, verb
+// executes one gated verb — both through the daemon-wired live ops.
+func TestIPCVerbOps(t *testing.T) {
+	if resp := handleIPC(nil, IPCRequest{Op: "verb", Uses: "svc.post"}, nil, nil); !strings.Contains(resp.Error, "not available") {
+		t.Fatalf("unwired verb: %+v", resp)
+	}
+	if resp := handleIPC(nil, IPCRequest{Op: "verb_list"}, nil, nil); !strings.Contains(resp.Error, "not available") {
+		t.Fatalf("unwired verb_list: %+v", resp)
+	}
+	SetLiveOps(LiveOps{
+		SkillVerbs: func(token string) ([]map[string]any, error) {
+			if token != "tok-1" {
+				t.Errorf("verb_list token: %q", token)
+			}
+			return []map[string]any{{"name": "svc_post", "uses": "svc.post", "description": "d",
+				"inputSchema": map[string]any{"type": "object"}}}, nil
+		},
+		RunVerb: func(_ context.Context, token, uses string, options map[string]any) (map[string]any, error) {
+			if token != "tok-1" || uses != "svc.post" || options["text"] != "hi" {
+				t.Errorf("verb wiring: token=%q uses=%q options=%v", token, uses, options)
+			}
+			return map[string]any{"id": 42}, nil
+		},
+	})
+	t.Cleanup(func() { SetLiveOps(LiveOps{}) })
+
+	resp := handleIPC(nil, IPCRequest{Op: "verb_list", Token: "tok-1"}, nil, nil)
+	if !resp.OK || len(resp.Result["tools"].([]any)) != 1 {
+		t.Fatalf("verb_list: %+v", resp)
+	}
+	resp = handleIPC(nil, IPCRequest{Op: "verb", Token: "tok-1", Uses: "svc.post",
+		Options: map[string]any{"text": "hi"}}, nil, nil)
+	if !resp.OK || resp.Result["id"] != 42 {
+		t.Fatalf("verb: %+v", resp)
+	}
+}
+
+// The MCP layer serves the DYNAMIC verb toolset: tools/list appends the
+// daemon-computed catalog, and a tools/call by tool name dispatches op verb
+// with the raw arguments as literal options (token attached server-side).
+func TestMCPVerbTools(t *testing.T) {
+	var got []IPCRequest
+	call := func(req IPCRequest) (IPCResponse, error) {
+		got = append(got, req)
+		switch req.Op {
+		case "verb_list":
+			return IPCResponse{OK: true, Result: map[string]any{"tools": []any{
+				map[string]any{"name": "svc_post", "uses": "svc.post", "description": "post it",
+					"inputSchema": map[string]any{"type": "object"}},
+			}}}, nil
+		case "verb":
+			return IPCResponse{OK: true, Result: map[string]any{"id": 42}}, nil
+		}
+		return IPCResponse{Error: "unexpected op " + req.Op}, nil
+	}
+	send, recv := mcpPipe(t, call, MCPConfig{Token: "tok-1", NoMemory: true})
+
+	send(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	names := map[string]bool{}
+	for _, tool := range recv()["result"].(map[string]any)["tools"].([]any) {
+		names[tool.(map[string]any)["name"].(string)] = true
+	}
+	if !names["svc_post"] {
+		t.Fatalf("verb tool missing from tools/list: %v", names)
+	}
+
+	send(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"svc_post","arguments":{"text":"hi","meta":{"k":1}}}}`)
+	r := recv()["result"].(map[string]any)
+	if r["isError"] != false {
+		t.Fatalf("svc_post call: %+v", r)
+	}
+	last := got[len(got)-1]
+	if last.Op != "verb" || last.Uses != "svc.post" || last.Token != "tok-1" {
+		t.Fatalf("verb request wiring: %+v", last)
+	}
+	if last.Options["text"] != "hi" || last.Options["meta"].(map[string]any)["k"] != float64(1) {
+		t.Fatalf("options must pass through raw: %+v", last.Options)
+	}
+	if text := r["content"].([]any)[0].(map[string]any)["text"].(string); !strings.Contains(text, `"id": 42`) {
+		t.Fatalf("verb result text: %q", text)
+	}
+
+	// An unknown tool name stays an error even after a re-fetch.
+	send(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nope_tool","arguments":{}}}`)
+	r = recv()["result"].(map[string]any)
+	if r["isError"] != true {
+		t.Fatalf("unknown tool must error: %+v", r)
+	}
+}
+
+// Without a token, tools/list never fetches the verb catalog.
+func TestMCPVerbToolsHiddenWithoutToken(t *testing.T) {
+	call := func(req IPCRequest) (IPCResponse, error) {
+		if req.Op == "verb_list" {
+			t.Errorf("verb_list must not be fetched without a token")
+		}
+		return IPCResponse{}, nil
+	}
+	send, recv := mcpPipe(t, call, MCPConfig{})
+	send(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	recv()
 }

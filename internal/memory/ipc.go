@@ -47,6 +47,10 @@ type IPCRequest struct {
 	Secret string `json:"secret,omitempty"`
 	// Grant is the grant id secret_redeem redeems.
 	Grant string `json:"grant,omitempty"`
+	// Uses / Options are the verb op's payload (#36 §12 verb tools): one
+	// connector verb invoked with LITERAL options, gated per profile.
+	Uses    string         `json:"uses,omitempty"`
+	Options map[string]any `json:"options,omitempty"`
 }
 
 // IPCResponse is the daemon's reply.
@@ -72,6 +76,11 @@ type LiveOps struct {
 	// skill dependency. nil → the broker ops report unavailable.
 	IssueSecret  func(token, name string) (grant string, expires time.Time, err error)
 	RedeemSecret func(token, grant string) (value string, err error)
+	// SkillVerbs / RunVerb are the verb-tool surface (#36 §12): the catalog
+	// of verbs the token's profile exposes (MCP tool declarations), and one
+	// gated verb execution. Both authorize by token server-side.
+	SkillVerbs func(token string) ([]map[string]any, error)
+	RunVerb    func(ctx context.Context, token, uses string, options map[string]any) (map[string]any, error)
 }
 
 var (
@@ -244,6 +253,32 @@ func handleIPC(m *Manager, req IPCRequest, audit func(map[string]any), log func(
 			return IPCResponse{Error: err.Error()}
 		}
 		return IPCResponse{OK: true, Result: map[string]any{"value": v}}
+	case "verb_list":
+		// The verb-tool catalog for THIS token's profile. The runner audits
+		// executions; listing is read-only.
+		ops := getLiveOps()
+		if ops.SkillVerbs == nil {
+			return IPCResponse{Error: "verb_list: the skill verb surface is not available on this daemon"}
+		}
+		tools, err := ops.SkillVerbs(req.Token)
+		if err != nil {
+			return IPCResponse{Error: err.Error()}
+		}
+		list := make([]any, len(tools))
+		for i, tl := range tools {
+			list[i] = tl
+		}
+		return IPCResponse{OK: true, Result: map[string]any{"tools": list}}
+	case "verb":
+		ops := getLiveOps()
+		if ops.RunVerb == nil {
+			return IPCResponse{Error: "verb: the skill verb surface is not available on this daemon"}
+		}
+		out, err := ops.RunVerb(context.Background(), req.Token, req.Uses, req.Options)
+		if err != nil {
+			return IPCResponse{Error: err.Error()}
+		}
+		return IPCResponse{OK: true, Result: out}
 	}
 	return IPCResponse{Error: fmt.Sprintf("memory: unknown tool op %q", req.Op)}
 }

@@ -76,6 +76,49 @@ func ServeMCP(r io.Reader, w io.Writer, call MCPCaller, mc MCPConfig) error {
 		return out.Flush()
 	}
 
+	// The verb toolset (#36 §12) is DYNAMIC: the daemon computes it from the
+	// token-bound profile's skill.verbs, so the subprocess fetches it over
+	// the socket at tools/list (and re-fetches on an unknown tools/call
+	// name). name → uses mapping is remembered for dispatch.
+	verbUses := map[string]string{}
+	fetchVerbTools := func() []map[string]any {
+		if mc.Token == "" {
+			return nil
+		}
+		resp, err := call(IPCRequest{Op: "verb_list", Token: mc.Token})
+		if err != nil || resp.Error != "" || resp.Result == nil {
+			return nil
+		}
+		raw, _ := resp.Result["tools"].([]any)
+		var tools []map[string]any
+		for _, e := range raw {
+			m, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := m["name"].(string)
+			uses, _ := m["uses"].(string)
+			if name == "" || uses == "" {
+				continue
+			}
+			verbUses[name] = uses
+			tools = append(tools, map[string]any{
+				"name":        name,
+				"description": m["description"],
+				"inputSchema": m["inputSchema"],
+			})
+		}
+		return tools
+	}
+	resolveVerb := func(name string) (string, bool) {
+		if u, ok := verbUses[name]; ok {
+			return u, true
+		}
+		fetchVerbTools()
+		u, ok := verbUses[name]
+		return u, ok
+	}
+
 	for in.Scan() {
 		line := in.Bytes()
 		if len(line) == 0 {
@@ -103,11 +146,11 @@ func ServeMCP(r io.Reader, w io.Writer, call MCPCaller, mc MCPConfig) error {
 				return err
 			}
 		case "tools/list":
-			if err := reply(msg.ID, map[string]any{"tools": mcpTools(mc)}, nil); err != nil {
+			if err := reply(msg.ID, map[string]any{"tools": append(mcpTools(mc), fetchVerbTools()...)}, nil); err != nil {
 				return err
 			}
 		case "tools/call":
-			result := mcpToolCall(msg.Params, call, mc)
+			result := mcpToolCall(msg.Params, call, mc, resolveVerb)
 			if err := reply(msg.ID, result, nil); err != nil {
 				return err
 			}
@@ -235,7 +278,7 @@ func brokerTools(str map[string]any) []map[string]any {
 
 // mcpToolCall executes one tools/call. Tool failures come back as an
 // isError result (the MCP convention), not a protocol error.
-func mcpToolCall(params json.RawMessage, call MCPCaller, mc MCPConfig) map[string]any {
+func mcpToolCall(params json.RawMessage, call MCPCaller, mc MCPConfig, resolveVerb func(string) (string, bool)) map[string]any {
 	fail := func(msg string) map[string]any {
 		return map[string]any{
 			"content": []map[string]any{{"type": "text", "text": msg}},
@@ -243,26 +286,32 @@ func mcpToolCall(params json.RawMessage, call MCPCaller, mc MCPConfig) map[strin
 		}
 	}
 	var p struct {
-		Name string `json:"name"`
-		Args struct {
-			Text      string         `json:"text"`
-			Tags      []string       `json:"tags"`
-			Scope     string         `json:"scope"`
-			Substring string         `json:"substring"`
-			Limit     int            `json:"limit"`
-			Step      map[string]any `json:"step"`
-			Name      string         `json:"name"`
-			Grant     string         `json:"grant"`
-		} `json:"arguments"`
+		Name string          `json:"name"`
+		Raw  json.RawMessage `json:"arguments"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return fail("bad tool arguments: " + err.Error())
 	}
+	var args struct {
+		Text      string         `json:"text"`
+		Tags      []string       `json:"tags"`
+		Scope     string         `json:"scope"`
+		Substring string         `json:"substring"`
+		Limit     int            `json:"limit"`
+		Step      map[string]any `json:"step"`
+		Name      string         `json:"name"`
+		Grant     string         `json:"grant"`
+	}
+	if len(p.Raw) > 0 {
+		if err := json.Unmarshal(p.Raw, &args); err != nil {
+			return fail("bad tool arguments: " + err.Error())
+		}
+	}
 	req := IPCRequest{
-		Text: p.Args.Text, Tags: p.Args.Tags, Scope: p.Args.Scope,
-		Substring: p.Args.Substring, Limit: p.Args.Limit,
-		Step: p.Args.Step, Number: mc.Number, Source: mc.Source,
-		Token: mc.Token, Secret: p.Args.Name, Grant: p.Args.Grant,
+		Text: args.Text, Tags: args.Tags, Scope: args.Scope,
+		Substring: args.Substring, Limit: args.Limit,
+		Step: args.Step, Number: mc.Number, Source: mc.Source,
+		Token: mc.Token, Secret: args.Name, Grant: args.Grant,
 	}
 	switch p.Name {
 	case "memory_remember":
@@ -278,7 +327,22 @@ func mcpToolCall(params json.RawMessage, call MCPCaller, mc MCPConfig) map[strin
 	case "secret_redeem":
 		req.Op = "secret_redeem"
 	default:
-		return fail(fmt.Sprintf("unknown tool %q", p.Name))
+		// A dynamic verb tool: the whole arguments object is the verb's
+		// options, passed through LITERALLY (the daemon never renders them).
+		uses, ok := "", false
+		if resolveVerb != nil {
+			uses, ok = resolveVerb(p.Name)
+		}
+		if !ok {
+			return fail(fmt.Sprintf("unknown tool %q", p.Name))
+		}
+		req.Op = "verb"
+		req.Uses = uses
+		if len(p.Raw) > 0 {
+			if err := json.Unmarshal(p.Raw, &req.Options); err != nil {
+				return fail("bad tool arguments: " + err.Error())
+			}
+		}
 	}
 	resp, err := call(req)
 	if err != nil {
@@ -298,7 +362,7 @@ func mcpToolCall(params json.RawMessage, call MCPCaller, mc MCPConfig) map[strin
 			b, _ := json.MarshalIndent(resp.Entries, "", "  ")
 			text = string(b)
 		}
-	case "run_step", "workflow_list", "secret_issue":
+	case "run_step", "workflow_list", "secret_issue", "verb":
 		b, _ := json.MarshalIndent(resp.Result, "", "  ")
 		text = string(b)
 	case "secret_redeem":

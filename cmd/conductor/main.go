@@ -483,7 +483,29 @@ func cmdRun(args []string) error {
 				go sb.SweepLoop(ctx, 30*time.Second)
 				ops.IssueSecret = sb.Issue
 				ops.RedeemSecret = sb.Redeem
-				logf("skill: secret broker enabled (per-profile allow_secrets, single-use grants)")
+				// The verb-tool surface: catalog + execution, both bound to
+				// the token's real dispatch identity and its skill.verbs.
+				if stack != nil {
+					runner := stack.Runner
+					ops.SkillVerbs = func(token string) ([]map[string]any, error) {
+						id, err := sb.Authorize(token)
+						if err != nil {
+							return nil, err
+						}
+						return runner.SkillVerbCatalog(id.Policy.Verbs), nil
+					}
+					ops.RunVerb = func(vctx context.Context, token, uses string, options map[string]any) (map[string]any, error) {
+						id, err := sb.Authorize(token)
+						if err != nil {
+							return nil, err
+						}
+						return runner.RunSkillVerb(vctx, flow.SkillIdentity{
+							Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
+							Number: id.Number, Verbs: id.Policy.Verbs,
+						}, uses, options)
+					}
+				}
+				logf("skill: secret broker + verb tools enabled (per-profile skill: policy)")
 			}
 			memory.SetLiveOps(ops)
 		}

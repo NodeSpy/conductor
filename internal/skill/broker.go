@@ -113,6 +113,19 @@ func (b *Broker) RegisterSession(id Identity) (string, error) {
 	return tok, nil
 }
 
+// Authorize resolves a session token to the real dispatch identity it stands
+// for — the authorization primitive every skill surface (broker ops, verb
+// tools) shares. Unknown or expired tokens fail.
+func (b *Broker) Authorize(token string) (Identity, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s, ok := b.sessions[token]
+	if !ok || b.now().After(s.expires) {
+		return Identity{}, fmt.Errorf("skill: unknown or expired session token")
+	}
+	return s.id, nil
+}
+
 // Issue requests a grant for one named secret. Deny-by-default: the session
 // must be live, the profile's skill.secrets_via must be "broker", and the
 // name must appear in skill.allow_secrets (exact match). The grant is scoped

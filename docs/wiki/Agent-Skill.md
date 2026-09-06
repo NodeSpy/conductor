@@ -137,6 +137,31 @@ The secret **value** never appears in audit entries, logs, or notifications
 
 ## Verbs as tools
 
-Skill-enabled profiles can also call conductor's own verbs as agent tools —
-the default path, where no credential enters the agent session at all. See
-the `verbs:` key above; the toolset is documented alongside [[Verbs]].
+The **default path**: the verbs a profile's `skill.verbs` patterns match are
+served to the agent as MCP tools — `gh.comment` appears as a `gh_comment`
+tool, `rest.*` exposes every declared verb of the `rest` connector, and so
+on. The daemon computes the toolset per dispatch from the token-bound
+profile, complete with each verb's option schema; the agent calls the tool,
+conductor executes the verb with its own credentials, and only inputs and
+outputs cross the socket. No credential enters the agent session at all.
+
+Ground rules on this surface:
+
+- **Pattern matching is the same as `policy.agent_authored`**: exact names
+  and path globs (`gh.comment`, `rest.*`); `conductor.*` verbs are
+  exact-match-only and never served here, and `workflow.*` is excluded —
+  agent-authored orchestration goes through the `run_step` tool and its
+  policy guard instead.
+- **Options are literal.** Agent-supplied options are never
+  template-rendered (no `{{.secrets…}}` evaluation) and never resolve
+  `{{secret}}` handles.
+- **The write/relay barriers apply unconditionally**: tracked secret
+  material in a tool call's options is refused before it reaches shared
+  state or an external connector.
+- Writes post as the `policy.agent_authored.identity` when the verb takes
+  `as:` — same as plan steps.
+- **Every call is audited** (`event: verb, via: skill`) with the agent,
+  target, and redacted options; outputs are redacted before they return to
+  the agent.
+
+See [[Verbs]] for the verbs themselves.
