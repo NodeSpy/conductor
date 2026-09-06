@@ -307,6 +307,8 @@ agents:
     #   allow_secrets:       #   single-use, 60s-TTL, audited grants for EXACT vault entries
     #     - house/deploy_key #   (<vault>/<key> — the entries {{ vault "house" "deploy_key" }} reads)
     #   verbs: [gh.comment, rest.*]  # conductor verbs exposed to the agent as tools
+    #   identity: bot        #   the `as:` skill writes post under (required when verbs
+    #                        #   admit a write; falls back to agent_authored.identity)
     # session:               # session affinity: one live session per key, shared across
     #   key: "{{.repo}}#{{.pr}}"  #   ALL triggers using this agent — later same-key events
     #   idle_ttl: 12h             #   arrive as follow-ups with full prior context. Persists

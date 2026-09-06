@@ -29,6 +29,9 @@ agents:
       secrets_via: broker          # broker | env (deprecated) | none (default)
       allow_secrets: [house/deploy_key]  # exact vault entries (<vault>/<key>) the broker may issue
       verbs: [gh.comment, rest.*]  # verbs exposed as agent tools (see Verbs as tools)
+      identity: bot                # the `as:` skill writes post under (falls back to
+                                   #   policy.agent_authored.identity; REQUIRED when
+                                   #   verbs admit a write — never silently the operator)
 ```
 
 - `secrets_via: none` (the default, including when the key is absent): the
@@ -188,8 +191,11 @@ Ground rules on this surface:
 - **The write/relay barriers apply unconditionally**: tracked secret
   material in a tool call's options is refused before it reaches shared
   state or an external connector.
-- Writes post as the `policy.agent_authored.identity` when the verb takes
-  `as:` — same as plan steps.
+- **Writes post as a distinguished identity, never as the operator.**
+  `skill.identity` (falling back to `policy.agent_authored.identity`) is
+  forced onto every verb that takes `as:` — including over an `as` the agent
+  supplied — and config validation REQUIRES one of the two whenever
+  `skill.verbs` admits an as-taking write verb.
 - **Every call is audited** (`event: verb, via: skill`) with the agent,
   target, and redacted options; outputs are redacted before they return to
   the agent.

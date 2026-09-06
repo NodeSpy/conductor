@@ -200,12 +200,13 @@ policy:
 	if calls := st.snapshot(); len(calls) != 0 {
 		t.Fatalf("refused call must not dispatch: %+v", calls)
 	}
-	// trust: full lifts approve everywhere — the skill surface follows.
+	// trust: full lifts approve everywhere — the skill surface follows (the
+	// identity requirement stands: attribution isn't a trust question).
 	full := loadConfig(t, `
 connectors:
   svc: { type: fake }
 agents:
-  deployer: { model: x, skill: { verbs: ["svc.*"] } }
+  deployer: { model: x, skill: { verbs: ["svc.*"], identity: bot } }
 policy:
   agent_authored: { trust: full, approve: [ svc.post ] }
 `)
@@ -240,5 +241,90 @@ stores:
 	if _, err := rig.Runner.RunSkillVerb(context.Background(), id, "kv.set",
 		map[string]any{"store": "main", "namespace": "n", "key": "k", "value": "plain"}); err != nil {
 		t.Fatalf("clean kv.set: %v", err)
+	}
+}
+
+// #122 R4: skill-verb writes post as a DISTINGUISHED identity, never as the
+// operator — skill.identity is forced onto as-taking verbs (overriding
+// anything the agent supplied), agent_authored.identity is the fallback,
+// and a write-capable skill profile without either is a config error.
+func TestSkillVerbIdentity(t *testing.T) {
+	rig, st := skillRig(t)
+	// skill.identity wins, and overwrites an agent-supplied `as`.
+	id := SkillIdentity{Agent: "a", Verbs: []string{"svc.*"}, Identity: "bot"}
+	if _, err := rig.Runner.RunSkillVerb(context.Background(), id, "svc.post",
+		map[string]any{"text": "x", "as": "me"}); err != nil {
+		t.Fatal(err)
+	}
+	calls := st.snapshot()
+	if len(calls) != 1 || calls[0].Opts["as"] != "bot" {
+		t.Fatalf("skill.identity must be forced onto the write: %+v", calls)
+	}
+
+	// Fallback: no skill.identity, agent_authored.identity applies.
+	cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+policy:
+  agent_authored: { identity: polbot }
+`)
+	reg := buildRegistry(t, cfg)
+	st2 := newFakeState(t, "svc")
+	rig2 := newTestRunner(t, cfg, reg)
+	if _, err := rig2.Runner.RunSkillVerb(context.Background(),
+		SkillIdentity{Agent: "a", Verbs: []string{"svc.*"}}, "svc.post",
+		map[string]any{"text": "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if calls := st2.snapshot(); len(calls) != 1 || calls[0].Opts["as"] != "polbot" {
+		t.Fatalf("agent_authored.identity fallback: %+v", calls)
+	}
+}
+
+// #122 R4 (load half): a skill profile whose verbs admit an as-taking write
+// verb must carry an identity.
+func TestValidateSkillIdentityRequired(t *testing.T) {
+	noID := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+agents:
+  deployer: { model: x, skill: { verbs: ["svc.*"] } }
+`)
+	err := Validate(noID, buildRegistry(t, noID))
+	if err == nil || !strings.Contains(err.Error(), "skill.identity") {
+		t.Fatalf("write-capable skill profile without identity must fail validation, got %v", err)
+	}
+
+	withSkillID := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+agents:
+  deployer: { model: x, skill: { verbs: ["svc.*"], identity: bot } }
+`)
+	if err := Validate(withSkillID, buildRegistry(t, withSkillID)); err != nil {
+		t.Fatalf("skill.identity must satisfy the requirement: %v", err)
+	}
+
+	withPolID := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+agents:
+  deployer: { model: x, skill: { verbs: ["svc.*"] } }
+policy:
+  agent_authored: { identity: polbot }
+`)
+	if err := Validate(withPolID, buildRegistry(t, withPolID)); err != nil {
+		t.Fatalf("agent_authored.identity must satisfy the requirement: %v", err)
+	}
+
+	// A profile whose admitted verbs take no `as` needs no identity.
+	readOnly := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+agents:
+  reviewer: { model: x, skill: { verbs: ["svc.ask"] } }
+`)
+	if err := Validate(readOnly, buildRegistry(t, readOnly)); err != nil {
+		t.Fatalf("as-less skill.verbs must not require an identity: %v", err)
 	}
 }
