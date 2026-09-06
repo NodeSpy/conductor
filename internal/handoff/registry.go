@@ -115,13 +115,16 @@ func (r *Registry) DiscordInbox() *Inbox {
 // hand-off is configured.
 func (r *Registry) DiscordBotTokens() []string { return r.discordTokens }
 
-// webListen returns the entry's configured listen address, defaulting to
-// :8099 (mirrors the default previously applied in cmd/conductor/main.go).
+// webListen returns the entry's configured listen address. The default binds
+// loopback only: draft pages carry approve/deny actions and are meant to be
+// reached through the tunnel (which dials the local listen) or a same-box
+// reverse proxy — an unconfigured install must not expose them to the LAN.
+// Set listen: explicitly to bind wider.
 func webListen(w *config.HandoffWeb) string {
 	if w.Listen != "" {
 		return w.Listen
 	}
-	return ":8099"
+	return "127.0.0.1:8099"
 }
 
 // buildChannel constructs one hand-off channel from its config: a Web entry

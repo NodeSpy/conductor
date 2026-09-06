@@ -1,7 +1,10 @@
 package connector
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -75,12 +78,20 @@ hosts:
 	var sshArgv []string
 	impl.ssh.Run = func(ctx context.Context, argv []string, stdin []byte) (string, string, int, error) {
 		sshArgv = argv
-		// Emulate the remote by running the final command string locally.
-		out, err := runLocalScript(ctx, argv[len(argv)-1], "", nil)
-		if err != nil {
-			return "", "", 0, err
+		// Emulate the remote by running the final command string through a
+		// local sh WITH the stdin hosts.Client built — the env preamble now
+		// travels as the first stdin line, so dropping stdin would drop env.
+		cmd := exec.CommandContext(ctx, "sh", "-c", argv[len(argv)-1])
+		cmd.Stdin = bytes.NewReader(stdin)
+		var outBuf, errBuf bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &outBuf, &errBuf
+		err := cmd.Run()
+		code := 0
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			code, err = exitErr.ExitCode(), nil
 		}
-		return out["stdout"].(string), out["stderr"].(string), out["exit_code"].(int), nil
+		return outBuf.String(), errBuf.String(), code, err
 	}
 
 	// argv form: elements are exec-literal — the remote shell must NOT expand

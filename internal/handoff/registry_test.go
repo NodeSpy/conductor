@@ -412,7 +412,7 @@ func TestRegistryBuildChannelWiresTunnel(t *testing.T) {
 
 func TestRegistryWebEntriesDefaultListen(t *testing.T) {
 	cfgs := map[string]config.HandoffConfig{
-		"a": {Web: &config.HandoffWeb{BaseURL: "http://a.test"}},                  // no listen: → :8099
+		"a": {Web: &config.HandoffWeb{BaseURL: "http://a.test"}},                  // no listen: → loopback default
 		"b": {Web: &config.HandoffWeb{BaseURL: "http://b.test", Listen: ":9100"}}, // explicit listen:
 		"c": {Slack: &config.HandoffChat{To: "dm"}},                               // not a web entry
 	}
@@ -424,8 +424,11 @@ func TestRegistryWebEntriesDefaultListen(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 web entries, got %d: %+v", len(entries), entries)
 	}
-	if entries["a"] != ":8099" {
-		t.Fatalf("entry a should default to :8099, got %q", entries["a"])
+	// REGRESSION: the default must bind loopback only — draft pages carry
+	// approve/deny actions and an unconfigured install must not expose them
+	// to the LAN.
+	if entries["a"] != "127.0.0.1:8099" {
+		t.Fatalf("entry a should default to 127.0.0.1:8099, got %q", entries["a"])
 	}
 	if entries["b"] != ":9100" {
 		t.Fatalf("entry b should keep its explicit listen, got %q", entries["b"])

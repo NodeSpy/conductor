@@ -14,7 +14,7 @@ var webDecl = &TypeDecl{
 	Desc: "Web: a draft link served on conductor's own HTTP listener (approve/revise/discard + a text box); no source events.",
 	Connection: Schema{
 		"base_url": {Type: TString, Desc: "public origin draft links point at, e.g. https://conductor.example.com"},
-		"listen":   {Type: TString, Desc: "inbound HTTP address draft pages are served on (default :8099)"},
+		"listen":   {Type: TString, Desc: "inbound HTTP address draft pages are served on (default 127.0.0.1:8099 — loopback only)"},
 		"ttl":      {Type: TDuration, Desc: "how long a presented draft's link stays valid (default 30m)"},
 		"tunnel":   {Type: TMap, Desc: "pluggable per-draft tunnel: provider, host, mode, ssh_host, authtoken, url_pattern, command"},
 	},
@@ -69,12 +69,14 @@ func newWebImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
 	return &webImpl{name: name, conn: conn, deps: deps, ch: ch}, nil
 }
 
-// webListenDefault mirrors handoff/registry.go's webListen default.
+// webListenDefault mirrors handoff/registry.go's webListen default:
+// loopback-only unless the config binds wider explicitly (draft pages carry
+// approve/deny actions and are reached through the tunnel, not the LAN).
 func webListenDefault(listen string) string {
 	if listen != "" {
 		return listen
 	}
-	return ":8099"
+	return "127.0.0.1:8099"
 }
 
 func (w *webImpl) Validate() error {
