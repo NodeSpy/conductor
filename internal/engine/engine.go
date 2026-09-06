@@ -281,14 +281,41 @@ func (e *Engine) gcLoop(ctx context.Context) {
 // At each level nil falls through, "" disables, and text (wrapped in the standard
 // separator) is used.
 func (e *Engine) agentGuidance(profile config.AgentProfile) string {
+	base := ""
 	switch {
 	case profile.Guidance != nil:
-		return wrapGuidance(*profile.Guidance)
+		base = wrapGuidance(*profile.Guidance)
 	case e.cfg.AgentGuidance != nil:
-		return wrapGuidance(*e.cfg.AgentGuidance)
+		base = wrapGuidance(*e.cfg.AgentGuidance)
 	default:
-		return dispatch.ConcisionGuidance
+		base = dispatch.ConcisionGuidance
 	}
+	// The skill blurb (#36 §12) rides the same append path, opted in by the
+	// profile's skill: block. The whole guidance is redactor-filtered — an
+	// injected prompt section must never carry a tracked secret value.
+	return e.redact(base + e.skillGuidance(profile))
+}
+
+// skillGuidance tells a skill-enabled agent what its conductor tools are and
+// how to use them: verbs first (the credential never enters the session),
+// the broker only as a last resort. "" for profiles without skill:.
+func (e *Engine) skillGuidance(profile config.AgentProfile) string {
+	sk := profile.Skill
+	if sk == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Conductor tools are available on this session.")
+	if len(sk.Verbs) > 0 {
+		b.WriteString(fmt.Sprintf(" Prefer acting THROUGH conductor: the verb tools (matching: %s) run with conductor's own credentials, so no secret ever enters this session.",
+			strings.Join(sk.Verbs, ", ")))
+	}
+	if sk.SecretsVia == "broker" && len(sk.AllowSecrets) > 0 {
+		b.WriteString(fmt.Sprintf(" If a raw tool you must run itself needs a credential, request it via secret_issue/secret_redeem (allowed: %s) — grants are single-use, expire in about a minute, and every step is audited. Use the value immediately for the one action that needs it; never echo it, store it, or write it to disk.",
+			strings.Join(sk.AllowSecrets, ", ")))
+	}
+	b.WriteString(" Values that render as «secret:…» are opaque handles — pass them through unchanged; they only resolve inside conductor.")
+	return wrapGuidance(b.String())
 }
 
 // dispatchAgent routes one request through session affinity when the profile

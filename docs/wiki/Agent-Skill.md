@@ -105,6 +105,17 @@ moment, a grant id that leaks into a log or transcript is dead within a
 minute, and the audit trail shows issue and use as separate events (so an
 issued-but-never-used or used-after-delay grant is visible).
 
+## Injected guidance
+
+A skill-enabled profile's prompts get a short appended blurb (the same
+append path as `agent_guidance`) telling the agent what it has and how to
+behave: prefer the verb tools (naming the profile's patterns), use the
+broker only as a last resort (naming the allowed secrets, only when
+`secrets_via: broker`), never echo or store a redeemed value, and pass
+`«secret:…»` handles through unchanged. Profiles without `skill:` get
+nothing. The whole guidance string is redactor-filtered before injection —
+it can never carry a tracked secret value.
+
 ## Audit trail
 
 Every broker outcome writes an audit entry (`event: secret_broker`) with an
