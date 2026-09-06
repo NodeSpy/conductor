@@ -27,8 +27,8 @@ presented. `timeout:` (default 1h) bounds an unanswered ask.
   (`127.0.0.1:8099`) — draft pages carry approve/deny actions and are meant
   to be reached through the tunnel or a same-box reverse proxy; bind wider
   explicitly if you mean to. `base_url:` for a fixed origin, or a `tunnel:`
-  provider (`lan`, `cloudflared`, `ngrok`, `tailscale`, `ssh`, `localxpose`,
-  `command`) for a fresh public URL per ask. Links carry a 192-bit token and
+  provider (`static`, `lan`, `cloudflared`, `ngrok`, `tailscale`, `ssh`,
+  `localxpose`, `command`) for a fresh public URL per ask. Links carry a 192-bit token and
   expire (`ttl:`, default 30m). The `tailscale` provider leaves a serve
   mapping that existed before the draft in place at close (it tears down
   only its own).

@@ -68,6 +68,7 @@ conductor version
   `--dry-run` prints the transformed YAML plus a mapping summary. See
   [[Migration]].
 - **pause / resume** — the runtime kill switch (a control file, no restart);
-  the config-level one is `policy: { enabled: false }`.
+  in config, disable one connector or trigger in place with its own
+  `enabled: false` (there is no policy-level kill switch — see [[Policy]]).
 
 Related: [[Configuration]] · [[Secrets]] · [[Migration]]

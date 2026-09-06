@@ -20,11 +20,13 @@ agents:
     wait_timeout: 30m                 # -> --wait-timeout
     archive_when_done: true           # reaper archives the agent+worktree once it goes idle
     labels: { team: autopilot }       # extra --label pairs
-    # controller: claude-cli          # optional: run this agent on a controllers: entry instead
-                                      #   of paseo. provider/model above apply to the paseo/opencode/
-                                      #   agent-deck controllers; an acp or cli controller IS the
-                                      #   named agent, so they're ignored for it (don't pair
-                                      #   provider: claude with an acp: gemini controller)
+    # runtime: paseo                  # optional: run this agent on a runtimes: entry (default:
+                                      #   the default: true runtime; legacy `controller:` still
+                                      #   works). provider/model above apply to paseo/opencode/
+                                      #   agent-deck runtimes; an acp or cli runtime IS the named
+                                      #   agent, so they're ignored for it (don't pair
+                                      #   provider: claude with an acp gemini runtime)
+    # host: build-box                 # pin this profile's runtime launches to a hosts: entry
     # guidance: |                     # per-agent tone/format; overrides the top-level agent_guidance
     #   One or two sentences, plain and direct.   #   (unset -> that default, "" -> none, text -> this)
     # memory: true                    # opt into shared-memory prompt injection (see below); or a
@@ -33,7 +35,7 @@ agents:
     #   key: "{{.repo}}#{{.pr}}"      #   shared across every trigger using this agent (see below)
     #   idle_ttl: 12h
     #   max_lifetime: 7d
-    #   end_on: [ gh.pr_closed, gh.merged ]
+    #   end_on: [ gh._closed ]        #   github's close-or-merge signal
   planner:                            # cheaper/faster model for planning/triage steps
     provider: claude
     model: claude-haiku-4-5
@@ -51,18 +53,19 @@ agents:
 | `wait_timeout` | Maps to `--wait-timeout` — how long a foreground (`Wait: true`) dispatch waits before giving up. |
 | `archive_when_done` | Whether the reaper archives the agent (and its worktree) once it goes idle. |
 | `labels` | Extra `--label key=value` pairs attached to the dispatched agent. |
-| `controller` | Name of a `controllers.<name>` entry to run this agent on instead of the built-in `paseo` runtime. See [[Controllers]]. |
+| `runtime` | Name of a `runtimes.<name>` entry to run this agent on (default: the `default: true` runtime, else the built-in `paseo`). The legacy `controller:` key still works. See [[Runtimes]]. |
+| `host` | A [[Hosts]] SSH target this profile's runtime launches on (cli/acp/agent-deck), overriding the runtime's own `host:`. |
 | `guidance` | Per-agent tone/format text appended to this agent's prompts. Unset falls through to the top-level `agent_guidance`; `""` disables guidance entirely for this agent; any text replaces the default. |
 | `memory` | Opt this agent into shared-memory prompt injection ([[Memory]]). `true` appends the global + target-repo + own-agent-scoped memories (newest first, capped) through the same path as `guidance`; a map `{ scopes, tags, limit }` narrows it. Absent → no injection, no token cost. Needs a top-level `memory:` section. |
 | `session` | Session affinity: `{ key, idle_ttl, max_lifetime, end_on }` binds a live session to the rendered `key` — every event resolving to the same value reaches the same agent as a follow-up. Absent → a fresh agent per dispatch. See below. |
 
 ## Behavior
 
-- `agents.<name>` profiles are referenced by name from `agent:` on any action, in any integration —
-  github rules, cron schedules, webhook sources, sentry/pagerduty rules, rss feeds, and slack
-  triggers all share the same pool.
-- `conductor validate` cross-checks every `agent:` reference in every action against a defined
-  `agents.<name>` profile — an unresolved reference fails validation before the daemon starts.
+- `agents.<name>` profiles are referenced by name from `agent:` on any `type: agent` step, in any
+  trigger — github, cron, webhook, sentry/pagerduty, rss, and slack triggers all share the same
+  pool (legacy `integrations:` actions reference them the same way).
+- `conductor validate` cross-checks every `agent:` reference against a defined `agents.<name>`
+  profile — an unresolved reference fails validation before the daemon starts.
 - `provider`/`model`/`mode`/`thinking` are validated against your **Paseo daemon**, not against
   conductor's own config schema — a provider that isn't installed/enabled in Paseo, or a model ID
   that provider doesn't recognize, fails at dispatch time even though `conductor validate` accepted
@@ -88,7 +91,7 @@ agents:
   profile can still be dispatched with `checkout: none` for a triage-only step.
 - Every step of a multi-step [[Workflows|workflow]] can name a different agent — a common pattern is
   a cheap `planner` profile assessing an issue, then handing off to a stronger `fixer` profile only
-  if the assessment justifies it (`if: steps.evaluate.outputs.has_context == true`).
+  if the assessment justifies it (`if: "{{.evaluate.has_context}} == true"`).
 - `archive_when_done: true` agents are still protected from premature cleanup: the reaper skips one
   that's paused on a permission prompt, and an agent can hold itself alive by creating a
   `.paseo-hold` marker in its worktree (guidance for this is added to its prompt automatically).
@@ -109,7 +112,7 @@ agents:
       key: "{{.repo}}#{{.pr}}"            # same value → same live session
       idle_ttl: 12h                        # reap after this long idle (default 24h)
       max_lifetime: 7d                     # hard age cap (default 7d)
-      end_on: [ gh.pr_closed, gh.merged ]  # evict the moment the work is done
+      end_on: [ gh._closed ]               # evict the moment the PR closes or merges
 
 triggers:
   - on: [ gh.new_comment, gh.changes_requested, gh.failing_checks ]
@@ -133,10 +136,15 @@ whole conversation. How it behaves:
   session resumes via the runtime's native handle (paseo re-binds the agent
   id, ACP `session/load`). While bound, the agent is held from the reaper.
 - **Eviction.** Idle past `idle_ttl`, older than `max_lifetime`, or an
-  `end_on` event (matched as `<connector>.<kind>`, rendered against the
-  event's own context so it ends exactly that key's session). The next event
-  starts fresh. An `end_on` event must be one conductor receives — some
-  trigger listens on it.
+  `end_on` event (matched as `<connector>.<kind>`, a bare `<kind>`, or
+  `<type>.<kind>`; rendered against the event's own context so it ends
+  exactly that key's session). The event must be one conductor actually
+  processes: any event kind a trigger can fire on qualifies, and github's
+  PR close **and** merge both arrive as the internal close signal
+  `_closed` — so `end_on: [ gh._closed ]` is the evict-when-done form.
+- **`_closed` is eviction-only.** It clears per-PR state and matches
+  `end_on:`, but it is not a trigger event — `on: gh._closed` fails
+  validation.
 - **Runtime support.** Needs a session-persistent runtime — paseo or ACP.
   One-shot `cli` runtimes fall back to a fresh agent per event; pair the
   profile with `memory:` ([[Memory]]) for continuity there.
@@ -162,14 +170,14 @@ The full loop — plan, choose from the catalog, supervise, promote — is in
 
 ## Explanation
 
-An agent and a controller answer different questions. The **agent** profile answers "what should
-run" — which provider, which model, what tone, what workspace lifecycle. The **controller** answers
+An agent and a runtime answer different questions. The **agent** profile answers "what should
+run" — which provider, which model, what tone, what workspace lifecycle. The **runtime** answers
 "how is it run" — which process or API actually executes it. A `fixer` profile with
 `provider: claude` can run on the built-in `paseo` dispatcher, on `agent-deck`, or through
-opencode's HTTP API, unchanged, just by pointing `controller:` at a different entry — the provider
+opencode's HTTP API, unchanged, just by pointing `runtime:` at a different entry — the provider
 and model still route through whichever runtime is selected. The one place this decouples is an
-**ACP** or **cli** controller: there, the controller's own `agent:`/`command:` names the runtime
-directly (e.g. `gemini` over ACP), so the profile's `provider`/`model` fields have nothing to route
-and are ignored. With no `controllers:` configured at all, every agent profile runs on `paseo`, so
-this distinction is invisible until you actually introduce a second runtime. See [[Controllers]] for
-the full resolution order and controller kinds.
+**ACP** or **cli** runtime: there, the runtime's own `agent:`/`command:` names the tool directly
+(e.g. `gemini` over ACP), so the profile's `provider`/`model` fields have nothing to route and are
+ignored. With no `runtimes:` configured at all, every agent profile runs on `paseo`, so this
+distinction is invisible until you actually introduce a second runtime. See [[Runtimes]] for the
+full resolution order and runtime kinds ([[Controllers]] is the legacy name).

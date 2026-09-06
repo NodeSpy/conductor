@@ -66,7 +66,7 @@ for that verb.
 
 | type | events | verbs | notes |
 |---|---|---|---|
-| `github` | `merge_conflict`, `pr_behind`, `failing_checks`, `changes_requested`, `new_comment`, `review_requested`, `self_review`, `merge_ready`, `issue_matched`, `release`, `deployment_status`, `dependabot_alert`, `secret_scanning_alert`, `stuck_checks` | `comment`, `reply`, `rerequest_review`, `submit_review`, `add_labels` | creds: app → token → gh (see [[Connector-GitHub|Integration-GitHub]]) |
+| `github` | `merge_conflict`, `pr_behind`, `failing_checks`, `changes_requested`, `new_comment`, `review_requested`, `self_review`, `merge_ready`, `issue_matched`, `release`, `deployment_status`, `dependabot_alert`, `secret_scanning_alert`, `stuck_checks` | `comment`, `reply`, `rerequest_review`, `submit_review`, `add_labels`, `sweep` | creds: app → token → gh (see [[Connector-GitHub|Integration-GitHub]]) |
 | `slack` | `app_mention`, `reaction_added`, `slash_command` | `post`, `react`, `ask` | Socket Mode in, Web API out |
 | `discord` | — | `post`, `ask` | bot token; gateway captures ask replies |
 | `web` | — | `ask` | approve/revise/discard page on the inbound listener; [[Hand-offs]] tunnels |
@@ -80,7 +80,11 @@ for that verb.
 | `graphql` | — | user-declared `verbs:` | one endpoint; verbs are queries/mutations with typed `variables:`; `errors` fails even on 200 — see [[Configuration]] |
 | `kv` | — | `get`, `set`, `setnx`, `merge`, `delete`, `incr`, `append`, `remove`, `contains`, `first`, `last`, `index`, `slice`, `len`, `pop`, `list` | the data verbs over the `stores:` section's KV types (boltdb/redis/http); every call requires `store:` naming a defined store — see [[Configuration]] |
 | `sql` | — | `query`, `exec` | parameterized SQL over the `stores:` section's SQL types (postgres/mysql/sqlite, pure-Go drivers); `store:` required, values bind through `args:` to driver placeholders — see [[Configuration]] |
-
+| `memory` | — | `remember`, `recall`, `forget`, `list` | shared agent memory over the `memory:` section; always available, load-checked against it — see [[Memory]] |
+| `workflow` | — | `list`, `run`, `save` | the workflow catalog, run-by-name / inline plans (guarded by `policy.agent_authored`), and agent promotion — see [[Workflows]] |
+| `ntfy` | — | `publish` | ntfy.sh or self-hosted; `server:` (default https://ntfy.sh) + default `topic:` |
+| `pushover` | — | `notify` | Pushover message API: `token:` + `user:` |
+| `notifiarr` | — | `notify` | Notifiarr passthrough to a Discord channel: `api_key:` (+ default `channel_id:`) |
 | `conductor` | `dispatch`, `escalate`, `needs_input`, `complete`, `failed`, `updated`, `update_available` | `update`, `pause`, `resume`, `restart`, `reload`, `run` | conductor itself — lifecycle events as a source (alerting is an ordinary trigger; loop-guarded), daemon operations as verbs; always available, name reserved — see [[Notifications]] |
 
 Every `vaults:` entry also surfaces under its own name with `read` (all

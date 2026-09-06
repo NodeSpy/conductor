@@ -60,7 +60,9 @@ Templates and `if:` conditions address:
   `{{.comment_body}}`, `{{.slack.channel}}` — see `conductor schema <conn>`).
 - **Step outputs** — `{{.<stepid>.<field>}}` from any PRIOR step (the legacy
   `{{.steps.<id>.outputs.<field>}}` spelling also resolves).
-- **Secrets** — `{{.secrets.<name>}}` from the named block.
+- **Secrets** — `${ENV}` values and vault reads: `{{ vault "house" "gh" }}`
+  or `{{.vaults.house.gh}}` (tainted, redacted — see [[Secrets]]; the legacy
+  `{{.secrets.<name>}}` block was retired and auto-migrates).
 - **The batch** — `{{.group.*}}` when the trigger groups.
 
 Scope is positional: a step sees the trigger context plus every prior step's

@@ -2,6 +2,7 @@
 
 Setup
 - [[Installation]]
+- [[Quickstart]]
 - [[GitHub-App-Setup]]
 - [[Configuration]]
 - [[Commands]]

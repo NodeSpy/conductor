@@ -17,9 +17,10 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 | `connectors:` | named service connections: type, credentials, `me:`, default `repos:`, default `options:`, `enabled:`, per-connector `policy:` | [[Connectors]] |
 | `triggers:` | the workflows: `on` / `filters` / `steps` / `hooks` (+ `group`, `policy`, `name`, `enabled`, `options`, `repo`, `shadow`) | [[Workflows]], [[Grouping]] |
 | `runtimes:` | where agents run: `type`/`agent`, `transport`, `bin`, `host`, `default` | [[Runtimes]] |
-| `agents:` | named profiles: `provider`, `model`, `thinking`, `mode`, `runtime`, `workspace`, `wait_timeout`, `archive_when_done`, `labels`, `guidance`, `host` | [[Agents]] |
+| `agents:` | named profiles: `provider`, `model`, `thinking`, `mode`, `runtime`, `workspace`, `wait_timeout`, `archive_when_done`, `labels`, `guidance`, `host`, `memory`, `session` | [[Agents]] |
 | `hosts:` | named SSH targets: `host`, `user`, `port`, `key`, `known_hosts`, `cwd`, `env` | [[Hosts]] |
 | `stores:` | named data stores — KV (`boltdb`/`redis`/`http`) served by `kv.*`, SQL (`postgres`/`mysql`/`sqlite`) served by `sql.*`; addressed by the required `store:` selector | below |
+| `memory:` | shared agent memory: `store:` (a KV `stores:` entry) \| `dir:` (Markdown files) \| `type: memory` (ephemeral) — served by `memory.*` | [[Memory]] |
 | `workflows:` | reusable step lists with `inputs:` / `outputs:` | [[Workflows]] |
 | `policy:` | global controls; also valid on connectors and triggers (most specific wins) | [[Policy]] |
 | `vaults:` | named secret stores (`conductor`/`onepassword`/`pass`/`file`/`hashicorp`), read as `{{ vault "<name>" "<key>" }}` with per-vault read/write verbs | [[Secrets]] |
@@ -37,7 +38,7 @@ triggers:
   - on: <connector>.<event>       # what fires it — one source, a list, or `manual`
     filters: { … }                # whether it fires (event-schema keys, AND-ed)
     group: { key: …, window: 15s }# optional burst batching
-    steps: [ … ]                  # agent | command | run: code | uses: verb | use: workflow
+    steps: [ … ]                  # agent | command | run: code | uses: verb | workflow: name
     hooks: [ {at: start|done|fail, uses: <conn>.<verb>, options: {…}} ]
     policy: { … }                 # trigger-scoped overrides
 ```
@@ -531,7 +532,7 @@ agents:
       key: "{{.repo}}#{{.pr}}"
       idle_ttl: 12h
       max_lifetime: 7d
-      end_on: [ gh.pr_closed, gh.merged ]
+      end_on: [ gh._closed ]     # github's close-or-merge signal
 ```
 
 Same-key prompts serialize (one in flight; bursts queue), the key→session
@@ -638,8 +639,10 @@ An imported section file holds bare entries (`timer: { type: cron, … }`) or
 the section-wrapped form (`connectors: { timer: … }`); an entry-body file
 holds the body directly; a trigger file holds a bare list or a `triggers:`
 block. **Merge, not last-wins:** a name defined in two files (or a file and
-inline) fails the load naming the key and both sources. A glob matching no
-files is an error, never a silent no-op. `**` globs are refused by name —
+inline) fails the load naming the key and both sources. An unmatched **glob**
+is a no-op — the seeded `conf.d/` folders start empty and fill over time —
+but a missing **literal** path is a load error (a typo'd filename must not
+vanish silently). `**` globs are refused by name —
 `filepath` globs match one directory level, so a `conf.d/**/*.yaml` would
 quietly skip nested files; list each level instead. Workflow files may
 reference each other (even mutually) — each (file, workflow) pair resolves
