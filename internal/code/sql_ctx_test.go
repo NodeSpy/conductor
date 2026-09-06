@@ -22,6 +22,9 @@ func tempSQL(t *testing.T) *sqlstore.Store {
 		`CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT)`, nil); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.SetCodeAccess("write"); err != nil { // these tests exercise exec from code
+		t.Fatal(err)
+	}
 	if err := sqlstore.Register("db", st); err != nil {
 		t.Fatal(err)
 	}

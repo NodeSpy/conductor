@@ -16,7 +16,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,6 +28,11 @@ import (
 type Store struct {
 	db     *sql.DB
 	driver string // postgres | mysql | sqlite
+	// codeAccess gates what in-process code steps (ctx.sql) may do against
+	// this store: "none" (no code access), "read" (query only — the
+	// default), "write" (query + exec). The sql.query/sql.exec workflow
+	// verbs are config-authored and not gated by this.
+	codeAccess string
 }
 
 // New wraps an open database handle. driver names the store type
@@ -37,6 +44,56 @@ func New(db *sql.DB, driver string) *Store {
 // Driver returns the store's driver family (postgres/mysql/sqlite).
 func (s *Store) Driver() string { return s.driver }
 
+// SetCodeAccess sets the store's code-step capability ("" keeps the "read"
+// default). An unknown mode is a config error.
+func (s *Store) SetCodeAccess(mode string) error {
+	switch mode {
+	case "", "none", "read", "write":
+		s.codeAccess = mode
+		return nil
+	}
+	return fmt.Errorf("sql: code_access: unknown mode %q (none | read | write)", mode)
+}
+
+// CheckCodeAccess reports whether an in-process code step may run op
+// ("query"/"exec") against this store. Code steps are query-only unless the
+// store opts in with code_access: write — arbitrary exec from a code step is
+// the capability the sandbox otherwise doesn't grant.
+func (s *Store) CheckCodeAccess(storeName, op string) error {
+	mode := s.codeAccess
+	if mode == "" {
+		mode = "read"
+	}
+	switch mode {
+	case "none":
+		return fmt.Errorf("sql: store %q does not allow code-step access (code_access: none)", storeName)
+	case "read":
+		if op != "query" {
+			return fmt.Errorf("sql: store %q is query-only from code steps — set code_access: write on the store to allow exec", storeName)
+		}
+	}
+	return nil
+}
+
+// sqliteDenied matches statements that reach outside the database file:
+// ATTACH opens/creates an arbitrary host file through the SQL text (a host
+// file-write from a "no filesystem" code sandbox), DETACH is its pair,
+// PRAGMA can rewrite journal/database behavior, and VACUUM INTO writes a
+// file. Denied at the store layer for every caller — parameterized
+// statements against the user's schema never need them.
+var sqliteDenied = regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_"'])(attach|detach|pragma|vacuum)($|[^A-Za-z0-9_])`)
+
+// checkStatement refuses filesystem-reaching statements on sqlite stores.
+func (s *Store) checkStatement(query string) error {
+	if s.driver != "sqlite" {
+		return nil
+	}
+	if m := sqliteDenied.FindStringSubmatch(query); m != nil {
+		return fmt.Errorf("sql: %s is not allowed on a sqlite store (it reaches the host filesystem/engine, not your schema)", strings.ToUpper(m[2]))
+	}
+	return nil
+}
+
 // Close closes the underlying database.
 func (s *Store) Close() error { return s.db.Close() }
 
@@ -47,6 +104,9 @@ func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 // placeholders and returns every row as a column→value map. Values are
 // JSON-shaped: []byte columns decode to string, timestamps to RFC 3339.
 func (s *Store) Query(ctx context.Context, query string, args []any) ([]map[string]any, error) {
+	if err := s.checkStatement(query); err != nil {
+		return nil, err
+	}
 	bound, err := bindArgs(args)
 	if err != nil {
 		return nil, fmt.Errorf("sql: query: %w", err)
@@ -86,6 +146,9 @@ func (s *Store) Query(ctx context.Context, query string, args []any) ([]map[stri
 // placeholders. lastInsertID is nil when the driver doesn't report one
 // (postgres — use RETURNING in a query instead).
 func (s *Store) Exec(ctx context.Context, query string, args []any) (rowsAffected int64, lastInsertID *int64, err error) {
+	if err := s.checkStatement(query); err != nil {
+		return 0, nil, err
+	}
 	bound, err := bindArgs(args)
 	if err != nil {
 		return 0, nil, fmt.Errorf("sql: exec: %w", err)

@@ -103,7 +103,7 @@ func TestSQLVerbSteps(t *testing.T) {
 connectors:
   svc: { type: fake }
 stores:
-  db: { type: sqlite, path: ":memory:" }
+  db: { type: sqlite, path: ":memory:", code_access: write } # the js step execs through ctx.sql
 `)
 	reg := buildRegistry(t, cfg) // buildStores registers "db"
 	fake := newFakeState(t, "svc")

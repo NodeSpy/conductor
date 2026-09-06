@@ -326,6 +326,17 @@ func buildStores(cfg *config.Config, deps Deps) error {
 			if err != nil {
 				return err
 			}
+			// code_access gates ctx.sql from in-process code steps (query-only
+			// by default); the sql.* workflow verbs are not affected.
+			var caps struct {
+				CodeAccess string `yaml:"code_access"`
+			}
+			if err := ref.Decode(&caps); err != nil {
+				return fmt.Errorf("store %q: decode: %w", name, err)
+			}
+			if err := s.SetCodeAccess(caps.CodeAccess); err != nil {
+				return fmt.Errorf("store %q: %w", name, err)
+			}
 			if err := sqlstore.Register(name, s); err != nil {
 				return err
 			}

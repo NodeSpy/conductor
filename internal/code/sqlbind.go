@@ -25,6 +25,13 @@ func sqlInvoke(store, op string, args []any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The per-store capability gate (mirrors kv.CheckCapability): code steps
+	// are query-only unless the store opts in with code_access: write, and
+	// code_access: none cuts them off entirely. Without this, any code step
+	// could run arbitrary exec against every defined store.
+	if err := st.CheckCodeAccess(store, op); err != nil {
+		return nil, err
+	}
 	if len(args) < 1 {
 		return nil, fmt.Errorf("sql.%s: want (sql, args?), got no sql", op)
 	}
