@@ -82,6 +82,43 @@ type Affinity struct {
 	live  map[string]Session     // bindingKey → live session held by THIS process
 	locks map[string]*keyLock    // bindingKey → serialization lock (ACTIVE keys only; refcounted)
 	owned map[string]string      // sessionID → bindingKey (archive guards)
+	// queue/draining implement per-key FIFO follow-up delivery: mutex
+	// waiters aren't ordered, so two near-simultaneous same-key events
+	// could otherwise deliver INVERTED — the old inline path preserved
+	// arrival order and a session is a conversation. Entries exist only
+	// while a key has pending work (bounded, like locks).
+	queue    map[string][]func()
+	draining map[string]bool
+}
+
+// enqueue appends a delivery job to bk's FIFO and ensures one drainer.
+func (a *Affinity) enqueue(bk string, job func()) {
+	a.mu.Lock()
+	a.queue[bk] = append(a.queue[bk], job)
+	if !a.draining[bk] {
+		a.draining[bk] = true
+		go a.drainQueue(bk)
+	}
+	a.mu.Unlock()
+}
+
+// drainQueue runs bk's jobs in arrival order, exiting (and cleaning up) when
+// the queue empties.
+func (a *Affinity) drainQueue(bk string) {
+	for {
+		a.mu.Lock()
+		jobs := a.queue[bk]
+		if len(jobs) == 0 {
+			delete(a.queue, bk)
+			delete(a.draining, bk)
+			a.mu.Unlock()
+			return
+		}
+		job := jobs[0]
+		a.queue[bk] = jobs[1:]
+		a.mu.Unlock()
+		job()
+	}
 }
 
 // NewAffinity builds the registry, restoring persisted bindings (and
@@ -93,10 +130,12 @@ func NewAffinity(reg *Registry, st AffinityStore, cfg *config.Config, hold, rele
 	a := &Affinity{
 		reg: reg, store: st, cfg: cfg,
 		hold: hold, release: release, log: log, now: time.Now,
-		refs:  map[string]AffinityRef{},
-		live:  map[string]Session{},
-		locks: map[string]*keyLock{},
-		owned: map[string]string{},
+		refs:     map[string]AffinityRef{},
+		live:     map[string]Session{},
+		locks:    map[string]*keyLock{},
+		owned:    map[string]string{},
+		queue:    map[string][]func(){},
+		draining: map[string]bool{},
 	}
 	if st != nil {
 		for _, r := range st.Affinities() {
@@ -154,7 +193,8 @@ func (a *Affinity) Dispatch(ctx context.Context, runner Runner, req dispatch.Req
 		}
 		ref.LastUsed = a.now()
 		a.putRef(bk, ref)
-		go a.deliver(context.WithoutCancel(ctx), runner, req, bk, c.Name(), key, prompt)
+		dctx := context.WithoutCancel(ctx)
+		a.enqueue(bk, func() { a.deliver(dctx, runner, req, bk, c.Name(), key, prompt) })
 		return dispatch.RunRef{
 			Backend: "session", Kind: req.Trigger.Kind,
 			AgentID: ref.SessionID, Queued: true,
@@ -180,7 +220,8 @@ func (a *Affinity) Dispatch(ctx context.Context, runner Runner, req dispatch.Req
 			}
 			ref.LastUsed = a.now()
 			a.putRef(bk, ref)
-			go a.deliver(context.WithoutCancel(ctx), runner, req, bk, c.Name(), key, prompt)
+			dctx := context.WithoutCancel(ctx)
+			a.enqueue(bk, func() { a.deliver(dctx, runner, req, bk, c.Name(), key, prompt) })
 			return dispatch.RunRef{
 				Backend: "session", Kind: req.Trigger.Kind,
 				AgentID: ref.SessionID, Queued: true,
@@ -212,9 +253,9 @@ func (a *Affinity) bind(bk, agent, key, controllerName, sessionID string) {
 	a.log("affinity: %s bound to session %s (key %s)", ref.Agent, ref.SessionID, ref.Key)
 }
 
-// deliver runs in its own goroutine: it takes the key lock (one prompt in
-// flight per key — concurrent same-key deliveries queue here, off the engine
-// goroutine) and sends the follow-up. A binding that vanished while queued
+// deliver runs on the key's FIFO drainer (arrival order preserved): it takes
+// the key lock (one prompt in flight per key; excludes the supervise-loop
+// Followup and teardown goroutines) and sends the follow-up. A binding that vanished while queued
 // (end_on fired) drops the prompt — the session's lifecycle is over, and
 // resurrecting a fresh session for, say, a closed PR would be worse. A
 // binding whose session is DEAD (the send fails) is evicted and the event
