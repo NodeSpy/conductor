@@ -2,6 +2,7 @@ package hosts
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"os"
@@ -24,22 +25,22 @@ func TestClientArgs(t *testing.T) {
 		{
 			name: "bare host",
 			tgt:  Target{Name: "box", Cfg: config.HostConfig{Host: "example.com"}},
-			want: []string{"ssh", "-o", "BatchMode=yes", "example.com", "--", "echo hi"},
+			want: []string{"ssh", "-o", "BatchMode=yes", "--", "example.com", "echo hi"},
 		},
 		{
 			name: "user+host",
 			tgt:  Target{Name: "box", Cfg: config.HostConfig{Host: "example.com", User: "deploy"}},
-			want: []string{"ssh", "-o", "BatchMode=yes", "deploy@example.com", "--", "echo hi"},
+			want: []string{"ssh", "-o", "BatchMode=yes", "--", "deploy@example.com", "echo hi"},
 		},
 		{
 			name: "port",
 			tgt:  Target{Cfg: config.HostConfig{Host: "example.com", Port: 2222}},
-			want: []string{"ssh", "-o", "BatchMode=yes", "-p", "2222", "example.com", "--", "echo hi"},
+			want: []string{"ssh", "-o", "BatchMode=yes", "-p", "2222", "--", "example.com", "echo hi"},
 		},
 		{
 			name: "key",
 			tgt:  Target{Cfg: config.HostConfig{Host: "example.com", Key: "/home/u/.ssh/id_ed25519"}},
-			want: []string{"ssh", "-o", "BatchMode=yes", "-i", "/home/u/.ssh/id_ed25519", "example.com", "--", "echo hi"},
+			want: []string{"ssh", "-o", "BatchMode=yes", "-i", "/home/u/.ssh/id_ed25519", "--", "example.com", "echo hi"},
 		},
 		{
 			name: "known_hosts enables strict checking",
@@ -47,7 +48,7 @@ func TestClientArgs(t *testing.T) {
 			want: []string{
 				"ssh", "-o", "BatchMode=yes",
 				"-o", "UserKnownHostsFile=/etc/conductor/known_hosts", "-o", "StrictHostKeyChecking=yes",
-				"example.com", "--", "echo hi",
+				"--", "example.com", "echo hi",
 			},
 		},
 		{
@@ -60,14 +61,14 @@ func TestClientArgs(t *testing.T) {
 				"ssh", "-o", "BatchMode=yes",
 				"-p", "2222", "-i", "/k",
 				"-o", "UserKnownHostsFile=/kh", "-o", "StrictHostKeyChecking=yes",
-				"deploy@example.com", "--", "echo hi",
+				"--", "deploy@example.com", "echo hi",
 			},
 		},
 		{
 			name: "custom ssh binary",
 			cl:   Client{SSHBin: "/opt/bin/ssh"},
 			tgt:  Target{Cfg: config.HostConfig{Host: "example.com"}},
-			want: []string{"/opt/bin/ssh", "-o", "BatchMode=yes", "example.com", "--", "echo hi"},
+			want: []string{"/opt/bin/ssh", "-o", "BatchMode=yes", "--", "example.com", "echo hi"},
 		},
 	}
 
@@ -122,20 +123,83 @@ func TestClientScript_WrapsEnvAndCwd(t *testing.T) {
 	if res.Stdout != "out" || res.ExitCode != 0 {
 		t.Fatalf("Script result = %+v", res)
 	}
-	if string(gotStdin) != "stdin-data" {
-		t.Fatalf("stdin = %q, want %q", gotStdin, "stdin-data")
+
+	// Env values ride the FIRST stdin line, base64-encoded; the caller's own
+	// stdin follows untouched.
+	line, rest, ok := strings.Cut(string(gotStdin), "\n")
+	if !ok || rest != "stdin-data" {
+		t.Fatalf("stdin = %q, want env line + %q", gotStdin, "stdin-data")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(line)
+	if err != nil {
+		t.Fatalf("env line is not base64: %q", line)
+	}
+	wantEnv := "export A=" + shQuote("call-wins") + "; " +
+		"export B=" + shQuote("target-b") + "; " +
+		"export C=" + shQuote("call-c") + "; "
+	if string(decoded) != wantEnv {
+		t.Errorf("env preamble =\n%s\nwant\n%s", decoded, wantEnv)
 	}
 
 	remote := gotArgv[len(gotArgv)-1]
-	wantRemote := "sh -c " + shQuote(
-		"export A="+shQuote("call-wins")+"; "+
-			"export B="+shQuote("target-b")+"; "+
-			"export C="+shQuote("call-c")+"; "+
-			"cd "+shQuote("/srv/app")+" && "+
-			"run-the-thing",
-	)
+	wantRemote := "sh -c " + shQuote(envStdinPrelude+"cd "+shQuote("/srv/app")+" && run-the-thing")
 	if remote != wantRemote {
 		t.Errorf("remote command =\n%s\nwant\n%s", remote, wantRemote)
+	}
+}
+
+// REGRESSION: env VALUES must never appear on the ssh argv — the whole
+// `sh -c '<script>'` string is one argv element visible to ps on both ends,
+// so a secret exported inline would leak. (The old code did exactly that,
+// under a comment claiming otherwise.)
+func TestClientScript_SecretValuesStayOffArgv(t *testing.T) {
+	var gotArgv []string
+	cl := &Client{Run: func(_ context.Context, argv []string, _ []byte) (string, string, int, error) {
+		gotArgv = argv
+		return "", "", 0, nil
+	}}
+	tgt := Target{Cfg: config.HostConfig{Host: "h"}}
+	const secret = "hunter2-super-secret"
+	if _, err := cl.Script(context.Background(), tgt, "deploy", nil, map[string]string{"TOKEN": secret}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(gotArgv, " "); strings.Contains(joined, secret) {
+		t.Fatalf("secret env value on argv: %s", joined)
+	}
+}
+
+// REGRESSION: an env KEY that isn't a valid variable name would splice into
+// the eval'd shell text (`export X; rm -rf /=...`) — refused with an error.
+func TestClientScript_HostileEnvKeyRefused(t *testing.T) {
+	cl := &Client{Run: func(_ context.Context, _ []string, _ []byte) (string, string, int, error) {
+		t.Fatal("must not run")
+		return "", "", 0, nil
+	}}
+	tgt := Target{Cfg: config.HostConfig{Host: "h"}}
+	_, err := cl.Script(context.Background(), tgt, "x", nil, map[string]string{"X; rm -rf /": "v"}, "")
+	if err == nil || !strings.Contains(err.Error(), "not a valid variable name") {
+		t.Fatalf("hostile env key accepted: %v", err)
+	}
+}
+
+// REGRESSION: `--` sits BEFORE the host operand, so a host value starting
+// with `-` (e.g. -oProxyCommand=…) can never be parsed as an ssh flag.
+func TestArgsSeparatorPrecedesHost(t *testing.T) {
+	cl := &Client{}
+	argv := cl.Args(Target{Cfg: config.HostConfig{Host: "-oProxyCommand=evil"}}, "cmd")
+	sep := -1
+	for i, a := range argv {
+		if a == "--" {
+			sep = i
+			break
+		}
+	}
+	if sep == -1 || argv[sep+1] != "-oProxyCommand=evil" {
+		t.Fatalf("host operand not protected by --: %v", argv)
+	}
+	w := cl.WArgs(Target{Cfg: config.HostConfig{Host: "-oProxyCommand=evil"}}, "127.0.0.1:1")
+	if w[len(w)-2] != "--" || w[len(w)-1] != "-oProxyCommand=evil" {
+		t.Fatalf("WArgs host operand not protected by --: %v", w)
 	}
 }
 
@@ -274,7 +338,7 @@ func TestWArgs(t *testing.T) {
 		Host: "b01", User: "ci", Port: 2222, Key: "/k", KnownHosts: "/kh",
 	}}
 	got := strings.Join(c.WArgs(tgt, "127.0.0.1:39481"), " ")
-	want := "ssh -o BatchMode=yes -W 127.0.0.1:39481 -p 2222 -i /k -o UserKnownHostsFile=/kh -o StrictHostKeyChecking=yes ci@b01"
+	want := "ssh -o BatchMode=yes -W 127.0.0.1:39481 -p 2222 -i /k -o UserKnownHostsFile=/kh -o StrictHostKeyChecking=yes -- ci@b01"
 	if got != want {
 		t.Fatalf("WArgs:\n got %s\nwant %s", got, want)
 	}

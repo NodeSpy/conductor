@@ -21,11 +21,13 @@ package hosts
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -107,13 +109,14 @@ func (c *Client) run() runFunc {
 
 // Args builds the ssh argv for running remote on t: BatchMode (never
 // prompt), then the target's own connection properties in a fixed order so
-// output is deterministic and easy to assert on in tests, then `--` (so a
-// remote command that happens to start with `-` is never misread as an ssh
-// flag) and the command itself.
+// output is deterministic and easy to assert on in tests, then `--` BEFORE
+// the host operand — so a host (or user@host) value that starts with `-`
+// (e.g. a config-injected `-oProxyCommand=…`) can never be misread as an
+// ssh flag, and neither can a remote command starting with `-`.
 //
 //	ssh -o BatchMode=yes [-p PORT] [-i KEY]
 //	    [-o UserKnownHostsFile=KH -o StrictHostKeyChecking=yes]
-//	    [USER@]HOST -- <remote command>
+//	    -- [USER@]HOST <remote command>
 //
 // KnownHosts also flips on strict host-key checking: an explicit
 // known_hosts file is a deliberate pinning decision, and pairing it with
@@ -138,7 +141,7 @@ func (c *Client) Args(t Target, remote string) []string {
 	if cfg.User != "" {
 		host = cfg.User + "@" + host
 	}
-	argv = append(argv, host, "--", remote)
+	argv = append(argv, "--", host, remote)
 	return argv
 }
 
@@ -147,15 +150,13 @@ func (c *Client) Args(t Target, remote string) []string {
 // call's env wins on key collisions — a one-off override shouldn't require
 // editing the shared `hosts:` entry); cwd "" falls back to the target's Cwd.
 //
-// The merge happens *inside* the remote shell, not by templating values into
-// the ssh argv: a wrapper script is built as `export K=V; ...; cd DIR && ` in
-// front of the caller's script, then the whole thing is handed to the remote
-// shell as a single `sh -c '<wrapper+script>'` argument (see remote()). That
-// keeps every value — including ones with secrets in them — off of argv
-// (visible to `ps` on both ends of the connection) and out of the shell
-// history/logs a naive `ssh host "export K=$V"` string-concat would produce;
-// shQuote is what makes embedding arbitrary values into that one shell string
-// safe.
+// Env values NEVER ride on argv: the whole `sh -c '<script>'` string is one
+// argv element visible to `ps` on both ends of the connection, so embedding
+// `export K=V` in it would expose every value (secrets included). Instead
+// the export preamble travels as the FIRST LINE of stdin, base64-encoded;
+// the remote wrapper reads exactly that line, evals it, and leaves the rest
+// of stdin for the script (see envStdinPrelude). Only the (validated) env
+// KEYS and the cwd appear in shell text.
 func (c *Client) Script(ctx context.Context, t Target, script string, stdin []byte, env map[string]string, cwd string) (Result, error) {
 	if cwd == "" {
 		cwd = t.Cfg.Cwd
@@ -168,7 +169,19 @@ func (c *Client) Script(ctx context.Context, t Target, script string, stdin []by
 		merged[k] = v
 	}
 
-	remote := "sh -c " + shQuote(wrapScript(merged, cwd, script))
+	wrapped := script
+	if cwd != "" {
+		wrapped = "cd " + shQuote(cwd) + " && " + wrapped
+	}
+	if len(merged) > 0 {
+		pre, err := envPreamble(merged)
+		if err != nil {
+			return Result{}, fmt.Errorf("hosts: %s: %w", t.label(), err)
+		}
+		wrapped = envStdinPrelude + wrapped
+		stdin = append([]byte(pre+"\n"), stdin...)
+	}
+	remote := "sh -c " + shQuote(wrapped)
 	argv := c.Args(t, remote)
 
 	stdout, stderr, exitCode, err := c.run()(ctx, argv, stdin)
@@ -182,26 +195,35 @@ func (c *Client) Script(ctx context.Context, t Target, script string, stdin []by
 	return res, nil
 }
 
-// wrapScript builds the remote shell text that Script's env/cwd contract
-// executes *inside* the remote sh: exported vars (sorted, for deterministic
-// output/tests) first, then a `cd` (only if cwd is set — an empty, unquoted
-// `cd` target would just fail), then the caller's script.
-func wrapScript(env map[string]string, cwd, script string) string {
+// envStdinPrelude is the wrapper prefix that receives Script's env off
+// stdin: `read` consumes exactly the first line (POSIX shells read pipes
+// byte-wise for read(1), so nothing beyond the newline is swallowed), the
+// eval runs the decoded `export K='v'; …` preamble, and the remainder of
+// stdin flows to the script untouched.
+const envStdinPrelude = `IFS= read -r __conductor_env; eval "$(printf '%s' "$__conductor_env" | base64 -d)"; unset __conductor_env; `
+
+// envKeyRe is the portable shell/environment variable name grammar. Keys
+// are the one part of the env preamble that can't be shQuoted (they sit on
+// the left of `export K=`), so anything else — spaces, `;`, `$(…)` — would
+// splice into the eval'd shell text and is refused outright.
+var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// envPreamble renders env as a base64-encoded `export K='v'; …` line
+// (sorted, for deterministic tests), validating every key.
+func envPreamble(env map[string]string) (string, error) {
 	keys := make([]string, 0, len(env))
 	for k := range env {
+		if !envKeyRe.MatchString(k) {
+			return "", fmt.Errorf("env key %q is not a valid variable name ([A-Za-z_][A-Za-z0-9_]*)", k)
+		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-
 	var b strings.Builder
 	for _, k := range keys {
 		fmt.Fprintf(&b, "export %s=%s; ", k, shQuote(env[k]))
 	}
-	if cwd != "" {
-		fmt.Fprintf(&b, "cd %s && ", shQuote(cwd))
-	}
-	b.WriteString(script)
-	return b.String()
+	return base64.StdEncoding.EncodeToString([]byte(b.String())), nil
 }
 
 // shQuote single-quotes s for POSIX sh, the one escaping rule that's actually
@@ -278,8 +300,8 @@ func RemoteCommandEnv(argv []string, cwd string, env []string) string {
 	var b strings.Builder
 	for _, kv := range env {
 		k, v, ok := strings.Cut(kv, "=")
-		if !ok {
-			continue
+		if !ok || !envKeyRe.MatchString(k) {
+			continue // a key that isn't a valid variable name would splice into the shell text
 		}
 		fmt.Fprintf(&b, "export %s=%s; ", k, shQuote(v))
 	}
@@ -336,7 +358,7 @@ func (c *Client) WArgs(t Target, addr string) []string {
 	if cfg.User != "" {
 		host = cfg.User + "@" + host
 	}
-	return append(argv, host)
+	return append(argv, "--", host)
 }
 
 // DialVia opens a net.Conn to addr as seen FROM the target, over one

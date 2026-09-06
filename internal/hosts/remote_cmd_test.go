@@ -41,7 +41,19 @@ func TestArgvPrefix(t *testing.T) {
 	if !strings.Contains(joined, "ci@build01") || !strings.Contains(joined, "-p 2222") {
 		t.Fatalf("prefix: %s", joined)
 	}
-	if prefix[len(prefix)-1] != "--" {
-		t.Fatalf("prefix must end at the -- separator: %v", prefix)
+	if prefix[len(prefix)-1] != "ci@build01" || prefix[len(prefix)-2] != "--" {
+		t.Fatalf("prefix must end with the -- separator then the host operand: %v", prefix)
+	}
+}
+
+// REGRESSION: env keys that aren't valid variable names would splice into
+// the eval'd shell text — RemoteCommandEnv drops them.
+func TestRemoteCommandEnvRejectsHostileKeys(t *testing.T) {
+	got := RemoteCommandEnv([]string{"tool"}, "", []string{"OK=1", "X; rm -rf /=boom", "2BAD=x"})
+	if strings.Contains(got, "rm -rf") || strings.Contains(got, "2BAD") {
+		t.Fatalf("hostile env key reached the shell text: %s", got)
+	}
+	if !strings.Contains(got, "export OK='1'; ") {
+		t.Fatalf("valid key dropped: %s", got)
 	}
 }
