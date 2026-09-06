@@ -528,6 +528,10 @@ func (t tailscaleTunnel) Open(ctx context.Context, localAddr string) (string, fu
 	if _, err := exec.LookPath("tailscale"); err != nil {
 		return "", nil, fmt.Errorf("handoff: tunnel: tailscale: tailscale not found on PATH (install it): %w", err)
 	}
+	// Snapshot whether a serve/funnel mapping already exists BEFORE adding
+	// ours: it belongs to the operator (another app on this box), and
+	// close's blanket `--https=443 off` would clobber it.
+	preExisting := tailscaleServeActive(ctx, t.mode, t.timeout)
 	out, err := runOnce(ctx, []string{"tailscale", t.mode, "--bg", port}, t.timeout)
 	if err != nil {
 		return "", nil, fmt.Errorf("handoff: tunnel: tailscale %s: %w (%s)", t.mode, err, strings.TrimSpace(out))
@@ -540,11 +544,31 @@ func (t tailscaleTunnel) Open(ctx context.Context, localAddr string) (string, fu
 		}
 	}
 	mode := t.mode
+	logf := t.log
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 	closeFn := func() error {
+		if preExisting {
+			logf("handoff: tunnel: tailscale %s: a serve mapping existed before this draft — leaving 443 up at close (run `tailscale %s --https=443 off` yourself to clear it)", mode, mode)
+			return nil
+		}
 		_, _ = runOnce(context.Background(), []string{"tailscale", mode, "--https=443", "off"}, 10*time.Second)
 		return nil
 	}
 	return url, closeFn, nil
+}
+
+// tailscaleServeActive reports whether a serve/funnel mapping is already
+// configured: `tailscale serve status` prints the active config, or a
+// "No serve config"/"Funnel off" marker when there is none.
+func tailscaleServeActive(ctx context.Context, mode string, timeout time.Duration) bool {
+	out, err := runOnce(ctx, []string{"tailscale", mode, "status"}, timeout)
+	if err != nil {
+		return false
+	}
+	s := strings.ToLower(strings.TrimSpace(out))
+	return s != "" && !strings.Contains(s, "no serve config") && !strings.Contains(s, "funnel off")
 }
 
 // runOnce runs argv to completion (bounded by timeout) and returns its combined

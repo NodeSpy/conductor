@@ -177,7 +177,7 @@ func deviceFlow(ctx context.Context, a authConfig, out io.Writer) (tokenResponse
 	var dr deviceResponse
 	_ = json.Unmarshal(body, &dr)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || dr.DeviceCode == "" {
-		return tokenResponse{}, fmt.Errorf("device authorization: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return tokenResponse{}, fmt.Errorf("device authorization: HTTP %d: %s", resp.StatusCode, errBodySnippet(body))
 	}
 	where := dr.VerificationURIComplete
 	if where == "" {
@@ -344,9 +344,21 @@ func postTokenFormRaw(ctx context.Context, a authConfig, form url.Values) (token
 	var tr tokenResponse
 	_ = json.Unmarshal(body, &tr)
 	if tr.AccessToken == "" && tr.Error == "" {
-		return tokenResponse{}, fmt.Errorf("oauth2 token: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return tokenResponse{}, fmt.Errorf("oauth2 token: HTTP %d: %s", resp.StatusCode, errBodySnippet(body))
 	}
 	return tr, nil
+}
+
+// errBodySnippet trims a token/device-endpoint error body for an error
+// message: the endpoint can return anything (an 8MB HTML error page, a
+// misconfigured proxy's dump) and the raw bytes would land in logs and
+// notification channels wholesale.
+func errBodySnippet(body []byte) string {
+	s := strings.TrimSpace(string(body))
+	if len(s) > 200 {
+		s = s[:200] + "…"
+	}
+	return s
 }
 
 // newAuthenticatorForBootstrap resolves credentials without touching the

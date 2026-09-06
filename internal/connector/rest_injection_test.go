@@ -164,3 +164,16 @@ func TestRESTBodyEscapeOptOuts(t *testing.T) {
 		t.Fatalf("raw opt-out mangled the value: %q", req.body)
 	}
 }
+
+// REGRESSION: a token/device endpoint can return anything (an HTML error
+// page megabytes long) — the error message carries a bounded snippet, not
+// the whole body.
+func TestOAuthErrorBodyTruncated(t *testing.T) {
+	huge := strings.Repeat("x", 100_000)
+	if got := errBodySnippet([]byte(huge)); len(got) > 210 {
+		t.Fatalf("error body snippet not truncated: %d bytes", len(got))
+	}
+	if got := errBodySnippet([]byte("  short  ")); got != "short" {
+		t.Fatalf("short body mangled: %q", got)
+	}
+}

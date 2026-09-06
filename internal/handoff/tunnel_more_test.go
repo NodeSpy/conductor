@@ -174,3 +174,52 @@ func TestAwaitCancelled(t *testing.T) {
 		t.Fatal("cancelled discord await must error")
 	}
 }
+
+// REGRESSION: close ran a blanket `tailscale serve --https=443 off`, wiping
+// any serve mapping the operator had configured BEFORE the draft. Close now
+// tears 443 down only when no mapping existed beforehand.
+func TestTailscaleClosePreservesPreexistingServe(t *testing.T) {
+	// Pre-existing mapping: `serve status` reports config → close must NOT
+	// run `off`.
+	dir := stubTool(t, "tailscale", `echo "$@" >> "$(dirname "$0")/calls"
+case "$1 $2" in
+  "serve status") echo "https://box.tailnet.ts.net (tailnet only)"; exit 0 ;;
+esac
+case "$1" in
+  serve) echo "Available at https://box.tailnet.ts.net/" ;;
+  status) echo '{"Self":{"DNSName":"box.tailnet.ts.net."}}' ;;
+esac`)
+	tun := tailscaleTunnel{mode: "serve", timeout: 5 * time.Second, log: t.Logf}
+	_, closeFn, err := tun.Open(context.Background(), ":8099")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closeFn(); err != nil {
+		t.Fatal(err)
+	}
+	calls, _ := os.ReadFile(filepath.Join(dir, "calls"))
+	if strings.Contains(string(calls), "off") {
+		t.Fatalf("close clobbered a pre-existing serve mapping: %s", calls)
+	}
+
+	// No pre-existing mapping → close tears our own mapping down.
+	dir = stubTool(t, "tailscale", `echo "$@" >> "$(dirname "$0")/calls"
+case "$1 $2" in
+  "serve status") echo "No serve config"; exit 0 ;;
+esac
+case "$1" in
+  serve) echo "Available at https://box.tailnet.ts.net/" ;;
+  status) echo '{"Self":{"DNSName":"box.tailnet.ts.net."}}' ;;
+esac`)
+	_, closeFn, err = tun.Open(context.Background(), ":8099")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closeFn(); err != nil {
+		t.Fatal(err)
+	}
+	calls, _ = os.ReadFile(filepath.Join(dir, "calls"))
+	if !strings.Contains(string(calls), "--https=443 off") {
+		t.Fatalf("close did not tear down conductor's own mapping: %s", calls)
+	}
+}

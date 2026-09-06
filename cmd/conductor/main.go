@@ -663,7 +663,9 @@ func wireSlackHandoffInbox(cfg *config.Config, handoffs *handoff.Registry) {
 	if inbox == nil {
 		return
 	}
-	slack.SetReplyHook(func(channel, threadTS, user, text string) bool { return inbox.DeliverFrom(channel, threadTS, user, text) })
+	slack.SetReplyHook(func(channel, threadTS, user, text string) bool {
+		return inbox.DeliverFrom(channel, threadTS, user, text)
+	})
 	if !anySlackIntegration(cfg) {
 		logf("handoff: a slack hand-off is configured but no enabled `slack` integration is present in integrations: — replies will never be captured (add one, see README Hand-offs)")
 	}
