@@ -857,6 +857,17 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	// the caller's other step outputs (pass those via with:).
 	child := baseData(t, r.SecretVals)
 	addVaultData(child, r.VaultVals)
+	if saved != nil {
+		// A saved workflow is agent-authored: it runs under the SAME scope
+		// contract as an inline plan (planScope) — no named secrets, no
+		// preloaded vault values. With the full maps in scope, a whole-root
+		// template dump ({{printf "%v" $}}) exfiltrates the secret map while
+		// mentioning neither "secrets" nor "vaults", sailing past the egress
+		// detector. Present-but-empty so a stray reference renders "".
+		child = baseData(t, nil)
+		child["secrets"] = map[string]any{}
+		child["vaults"] = map[string]any{}
+	}
 	child["inputs"] = inputs
 	child["steps"] = map[string]any{}
 	if g, ok := data["group"]; ok {

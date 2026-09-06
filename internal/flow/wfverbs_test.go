@@ -500,3 +500,67 @@ steps: [ { id: go, workflow: laundered } ]
 		t.Fatal("the persisted registry copy must stay unmutated")
 	}
 }
+
+// REGRESSION: a saved (agent-authored) workflow ran with the FULL
+// secrets/vaults maps in its scope — a step like {{printf "%v" $}} dumped
+// the entire template root, secret values included, while mentioning
+// neither "secrets" nor "vaults", so the egress detector had nothing to
+// catch. Saved workflows now run in the same empty-secrets scope as inline
+// plans; config workflows keep their operator-authored access.
+func TestSavedWorkflowScopeCarriesNoSecrets(t *testing.T) {
+	sw := tempSaved(t, "")
+	cfg := loadConfig(t, wfBase)
+	reg := buildRegistry(t, cfg)
+	fake := newFakeState(t, "svc")
+
+	// A promoted workflow that dumps its whole template root outward.
+	_, err := sw.Save("dump", "posts the root", []config.Step{
+		{ID: "leak", Uses: "svc.post", Options: map[string]any{"text": `{{printf "%v" $}}`}},
+	}, memory.Source{Agent: "planner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sw.Review("dump"); err != nil {
+		t.Fatal(err)
+	}
+	rig := newTestRunner(t, cfg, reg)
+	runTrigger(rig, newTrigger("ping", nil), mustSpec(t, `
+on: svc.ping
+steps: [ { id: go, workflow: dump } ]
+`))
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("saved workflow run failed: %s", errStr)
+	}
+	for _, c := range fake.snapshot() {
+		text, _ := c.Opts["text"].(string)
+		if strings.Contains(text, "s3kr1t-value") {
+			t.Fatalf("whole-root dump from a saved workflow exfiltrated a secret: %s", text)
+		}
+	}
+	if len(fake.snapshot()) == 0 {
+		t.Fatal("the dump step must still have run")
+	}
+
+	// A CONFIG workflow is operator-authored — its scope keeps the secrets.
+	cfg2 := loadConfig(t, strings.Replace(wfBase, "workflows:\n",
+		"workflows:\n  cfg-secret:\n    steps: [ { id: post, uses: svc.post, options: { text: \"tok={{.secrets.tok}}\" } } ]\n", 1))
+	reg2 := buildRegistry(t, cfg2)
+	fake2 := newFakeState(t, "svc")
+	rig2 := newTestRunner(t, cfg2, reg2)
+	runTrigger(rig2, newTrigger("ping", nil), mustSpec(t, `
+on: svc.ping
+steps: [ { id: go, workflow: cfg-secret } ]
+`))
+	if failed, errStr := rig2.workflowFailed(); failed {
+		t.Fatalf("config workflow run failed: %s", errStr)
+	}
+	var sawSecret bool
+	for _, c := range fake2.snapshot() {
+		if c.Opts["text"] == "tok=s3kr1t-value" {
+			sawSecret = true
+		}
+	}
+	if !sawSecret {
+		t.Fatal("a config workflow's scope must keep the operator's secrets")
+	}
+}
