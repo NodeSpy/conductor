@@ -466,3 +466,24 @@ triggers: []
 		t.Fatalf("** glob must be a named error, got: %v", err)
 	}
 }
+
+// REGRESSION: the TOP-level imports: (legacy whole-document merge) also
+// refuses ** — the section-scoped fix alone left it silently matching a
+// single level.
+func TestTopLevelImportDoubleStarGlobRejected(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"config.yaml": `
+imports: ["conf.d/**/*.yaml"]
+connectors:
+  timer:
+    type: cron
+    schedules: { tick: { every: 1h } }
+triggers: []
+`,
+		"conf.d/sub/extra.yaml": "agents:\n  fixer: { provider: claude }\n",
+	})
+	_, err := Load(filepath.Join(dir, "config.yaml"))
+	if err == nil || !strings.Contains(err.Error(), "`**` is not supported") {
+		t.Fatalf("top-level ** glob must be a named error, got: %v", err)
+	}
+}

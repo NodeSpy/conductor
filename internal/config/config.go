@@ -932,18 +932,17 @@ func loadMerged(p string, loaded map[string]bool) (map[string]any, error) {
 	merged := map[string]any{}
 	dir := filepath.Dir(p)
 	for _, imp := range imports {
-		pat := imp
-		if !filepath.IsAbs(pat) {
-			pat = filepath.Join(dir, pat)
-		}
-		matches, err := filepath.Glob(pat)
+		// Through globImport so `**` is refused by name here too (filepath
+		// globs match one level; a silent nested-dir skip is worse than an
+		// error). Top-level imports keep their stricter contract: even an
+		// unmatched GLOB is an error, not a ready-to-fill no-op.
+		matches, err := globImport(dir, p, imp)
 		if err != nil {
-			return nil, fmt.Errorf("%s: bad import glob %q: %w", p, imp, err)
+			return nil, err
 		}
 		if len(matches) == 0 {
 			return nil, fmt.Errorf("%s: import %q matched no files", p, imp)
 		}
-		sort.Strings(matches)
 		for _, f := range matches {
 			sub, err := loadMerged(f, loaded)
 			if err != nil {
