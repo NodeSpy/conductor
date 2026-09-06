@@ -97,7 +97,10 @@ logged and audited, never fatal.
 - `if:` — skip the step when false (skips are audited).
 - `for_each: <ref>` — run the step once per element; `{{.item}}` and
   `{{.index}}` in scope; `parallel: true` fans iterations out concurrently
-  (bounded). Outputs land under `{{.<id>.items}}` / `{{.<id>.count}}`.
+  (bounded). At runtime the collected outputs land under `{{.<id>.items}}` /
+  `{{.<id>.count}}` (on a for_each **verb** step, `validate` checks later
+  references against the verb's own output schema — read the source list
+  instead; see [[Examples]]).
 - `parallel: [ [steps…], [steps…] ]` — concurrent branches, joined before the
   next step; branch step outputs merge into the parent scope (ids must not
   collide).
