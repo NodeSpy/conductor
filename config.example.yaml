@@ -302,6 +302,11 @@ agents:
     # memory: true          # inject shared memories (global + target repo + own scope)
     #                       #   into this agent's prompts; or a filter:
     #                       #   memory: { scopes: [global, repo], tags: [ci], limit: 10 }
+    # skill:                 # agent access back into conductor (default: none of it)
+    #   secrets_via: broker  #   broker | env (deprecated) | none (default) — broker issues
+    #   allow_secrets:       #   single-use, 60s-TTL, audited grants for EXACT secrets: names
+    #     - deploy_key
+    #   verbs: [gh.comment, rest.*]  # conductor verbs exposed to the agent as tools
     # session:               # session affinity: one live session per key, shared across
     #   key: "{{.repo}}#{{.pr}}"  #   ALL triggers using this agent — later same-key events
     #   idle_ttl: 12h             #   arrive as follow-ups with full prior context. Persists

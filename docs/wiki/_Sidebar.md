@@ -17,6 +17,7 @@ The model
 - [[Agents]]
 - [[Grouping]]
 - [[Memory]]
+- [[Agent-Skill]]
 - [[Policy]]
 - [[Secrets]]
 - [[Hosts]]

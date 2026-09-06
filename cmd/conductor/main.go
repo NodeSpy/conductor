@@ -40,6 +40,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/secrets"
+	"github.com/NodeSpy/conductor/internal/skill"
 	"github.com/NodeSpy/conductor/internal/store"
 
 	_ "github.com/NodeSpy/conductor/internal/integrations/cron"      // register "cron"
@@ -434,32 +435,57 @@ func cmdRun(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// The live memory tool: with a memory: section configured, serve the
-	// remember/recall socket beside the state file and publish the launch
-	// command runtimes with live-tool injection (ACP mcpServers) attach to
-	// agent sessions. A socket failure only loses the LIVE surface — the
-	// verbs, output contract, and injection still work — so log, don't die.
-	if mgr := memory.Active(); mgr != nil {
+	// The live agent-tool socket: with a memory: section configured — or any
+	// profile opted into the conductor skill (#36 §12) — serve the tool
+	// socket beside the state file and publish the launch command runtimes
+	// with live-tool injection (ACP mcpServers) attach to agent sessions. A
+	// socket failure only loses the LIVE surface — the verbs, output
+	// contract, and injection still work — so log, don't die.
+	if mgr := memory.Active(); mgr != nil || cfg.SkillEnabled() {
 		sock := filepath.Join(filepath.Dir(cfg.Store.StateFile), "memory.sock")
 		if l, lerr := memory.ListenSocket(sock); lerr != nil {
 			logf("memory: %v — live agent tools disabled (verbs/output contract unaffected)", lerr)
 		} else {
 			go memory.ServeIPC(ctx, l, mgr, st.Audit, logf)
 			if exe, eerr := os.Executable(); eerr == nil {
-				memory.SetToolCommand([]string{exe, "mcp", "memory", "--socket", sock})
-				logf("memory: live remember/recall tool on %s", sock)
+				argv := []string{exe, "mcp", "memory", "--socket", sock}
+				if mgr == nil {
+					// Skill-only socket: hide the memory tools the daemon
+					// can't serve.
+					argv = append(argv, "--no-memory")
+				}
+				memory.SetToolCommand(argv)
+				logf("memory: live agent tools on %s", sock)
 			}
 			// The agent-driven-workflow live surface rides the same socket:
 			// run_step executes one guarded step through the flow runner,
 			// workflow_list serves the choosable catalog.
+			var ops memory.LiveOps
 			if stack != nil {
-				runner := stack.Runner
-				memory.SetLiveOps(memory.LiveOps{
-					RunStep:       runner.RunLiveStep,
-					ListWorkflows: runner.WorkflowCatalog,
-				})
+				ops.RunStep = stack.Runner.RunLiveStep
+				ops.ListWorkflows = stack.Runner.WorkflowCatalog
 				logf("memory: live run_step/workflow_list tools enabled")
 			}
+			// The secret broker (#36 §12): built only when a profile opts in
+			// via skill:, authorized by the session tokens the dispatch path
+			// mints (skill.Active), never by client-asserted identity.
+			if cfg.SkillEnabled() {
+				lookup := func(string) (string, bool) { return "", false }
+				if stack != nil {
+					vals := stack.SecretVals
+					lookup = func(name string) (string, bool) {
+						v, ok := vals[name]
+						return v, ok
+					}
+				}
+				sb := skill.NewBroker(lookup, st.Audit)
+				skill.SetActive(sb)
+				go sb.SweepLoop(ctx, 30*time.Second)
+				ops.IssueSecret = sb.Issue
+				ops.RedeemSecret = sb.Redeem
+				logf("skill: secret broker enabled (per-profile allow_secrets, single-use grants)")
+			}
+			memory.SetLiveOps(ops)
 		}
 	}
 

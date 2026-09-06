@@ -39,7 +39,22 @@ type mcpError struct {
 
 // ServeMCP runs the stdio loop until r reaches EOF. src is the dispatch
 // provenance baked into the launch flags; every remember carries it.
-func ServeMCP(r io.Reader, w io.Writer, call MCPCaller, src Source, number int) error {
+// MCPConfig is the per-dispatch wiring the daemon baked into the tool
+// subprocess's flags at injection time.
+type MCPConfig struct {
+	Source Source
+	Number int
+	// Token is the skill session token (#36 §12). "" = this dispatch has no
+	// skill surface: the broker tools are not advertised, and the daemon
+	// would deny their calls anyway (deny by default, authorized by token
+	// alone).
+	Token string
+	// NoMemory hides the memory tools when the daemon serves the socket for
+	// the skill surface without a memory: section.
+	NoMemory bool
+}
+
+func ServeMCP(r io.Reader, w io.Writer, call MCPCaller, mc MCPConfig) error {
 	in := bufio.NewScanner(r)
 	in.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	out := bufio.NewWriter(w)
@@ -88,11 +103,11 @@ func ServeMCP(r io.Reader, w io.Writer, call MCPCaller, src Source, number int) 
 				return err
 			}
 		case "tools/list":
-			if err := reply(msg.ID, map[string]any{"tools": mcpTools()}, nil); err != nil {
+			if err := reply(msg.ID, map[string]any{"tools": mcpTools(mc)}, nil); err != nil {
 				return err
 			}
 		case "tools/call":
-			result := mcpToolCall(msg.Params, call, src, number)
+			result := mcpToolCall(msg.Params, call, mc)
 			if err := reply(msg.ID, result, nil); err != nil {
 				return err
 			}
@@ -118,10 +133,24 @@ func negotiatedVersion(params json.RawMessage) string {
 	return mcpProtocolVersion
 }
 
-// mcpTools is the published tool list.
-func mcpTools() []map[string]any {
+// mcpTools is the published tool list, shaped by what THIS dispatch was
+// wired for: memory tools unless the daemon has no memory: section, broker
+// tools only when the daemon minted a skill session token.
+func mcpTools(mc MCPConfig) []map[string]any {
 	str := map[string]any{"type": "string"}
 	strList := map[string]any{"type": "array", "items": str}
+	var tools []map[string]any
+	if !mc.NoMemory {
+		tools = append(tools, memoryTools(str, strList)...)
+	}
+	tools = append(tools, liveTools()...)
+	if mc.Token != "" {
+		tools = append(tools, brokerTools(str)...)
+	}
+	return tools
+}
+
+func memoryTools(str, strList map[string]any) []map[string]any {
 	return []map[string]any{
 		{
 			"name":        "memory_remember",
@@ -149,6 +178,11 @@ func mcpTools() []map[string]any {
 				},
 			},
 		},
+	}
+}
+
+func liveTools() []map[string]any {
+	return []map[string]any{
 		{
 			"name":        "run_step",
 			"description": "Author and run ONE conductor workflow step right now (the normal step grammar: uses/run/type/workflow…). Validated and guarded by policy.agent_authored before it runs; returns the step's outputs. Use it to build a plan interactively; batch the rest as a ```plan block in your final output.",
@@ -168,9 +202,40 @@ func mcpTools() []map[string]any {
 	}
 }
 
+// brokerTools is the secret-broker pair (#36 §12): the minimized last resort
+// when a raw tool the agent must run needs a credential. Prefer acting
+// through conductor (run_step / the verb tools) — then the credential never
+// reaches this runtime at all.
+func brokerTools(str map[string]any) []map[string]any {
+	return []map[string]any{
+		{
+			"name":        "secret_issue",
+			"description": "Request a grant for ONE named conductor secret. Only names your profile's skill.allow_secrets policy lists are issued. The grant is single-use, expires in about a minute, and every issue/use/expiry is audited. Prefer running the action through conductor (run_step / the conductor verb tools) instead — then no credential enters this session at all.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{"type": "string", "description": "the secrets: entry to request"},
+				},
+				"required": []string{"name"},
+			},
+		},
+		{
+			"name":        "secret_redeem",
+			"description": "Redeem a secret_issue grant for the secret value — exactly once, before the grant expires. Use the value immediately for the one action that needs it; do not store it, echo it, or write it to disk.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"grant": map[string]any{"type": "string", "description": "the grant id secret_issue returned"},
+				},
+				"required": []string{"grant"},
+			},
+		},
+	}
+}
+
 // mcpToolCall executes one tools/call. Tool failures come back as an
 // isError result (the MCP convention), not a protocol error.
-func mcpToolCall(params json.RawMessage, call MCPCaller, src Source, number int) map[string]any {
+func mcpToolCall(params json.RawMessage, call MCPCaller, mc MCPConfig) map[string]any {
 	fail := func(msg string) map[string]any {
 		return map[string]any{
 			"content": []map[string]any{{"type": "text", "text": msg}},
@@ -186,6 +251,8 @@ func mcpToolCall(params json.RawMessage, call MCPCaller, src Source, number int)
 			Substring string         `json:"substring"`
 			Limit     int            `json:"limit"`
 			Step      map[string]any `json:"step"`
+			Name      string         `json:"name"`
+			Grant     string         `json:"grant"`
 		} `json:"arguments"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -194,7 +261,8 @@ func mcpToolCall(params json.RawMessage, call MCPCaller, src Source, number int)
 	req := IPCRequest{
 		Text: p.Args.Text, Tags: p.Args.Tags, Scope: p.Args.Scope,
 		Substring: p.Args.Substring, Limit: p.Args.Limit,
-		Step: p.Args.Step, Number: number, Source: src,
+		Step: p.Args.Step, Number: mc.Number, Source: mc.Source,
+		Token: mc.Token, Secret: p.Args.Name, Grant: p.Args.Grant,
 	}
 	switch p.Name {
 	case "memory_remember":
@@ -205,6 +273,10 @@ func mcpToolCall(params json.RawMessage, call MCPCaller, src Source, number int)
 		req.Op = "run_step"
 	case "workflow_list":
 		req.Op = "workflow_list"
+	case "secret_issue":
+		req.Op = "secret_issue"
+	case "secret_redeem":
+		req.Op = "secret_redeem"
 	default:
 		return fail(fmt.Sprintf("unknown tool %q", p.Name))
 	}
@@ -226,9 +298,13 @@ func mcpToolCall(params json.RawMessage, call MCPCaller, src Source, number int)
 			b, _ := json.MarshalIndent(resp.Entries, "", "  ")
 			text = string(b)
 		}
-	case "run_step", "workflow_list":
+	case "run_step", "workflow_list", "secret_issue":
 		b, _ := json.MarshalIndent(resp.Result, "", "  ")
 		text = string(b)
+	case "secret_redeem":
+		// The redeemed value itself — this is the broker's whole point: the
+		// value reaches the agent HERE, once, and nowhere else.
+		text, _ = resp.Result["value"].(string)
 	}
 	return map[string]any{
 		"content": []map[string]any{{"type": "text", "text": text}},

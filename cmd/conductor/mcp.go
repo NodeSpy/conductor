@@ -15,11 +15,10 @@ import (
 // carries them.
 func cmdMCP(args []string) error {
 	if len(args) < 1 || args[0] != "memory" {
-		return fmt.Errorf("usage: conductor mcp memory --socket <path> [--agent <name>] [--repo <owner/repo>] [--trigger <kind>] [--run <id>] [--number <n>]")
+		return fmt.Errorf("usage: conductor mcp memory --socket <path> [--agent <name>] [--repo <owner/repo>] [--trigger <kind>] [--run <id>] [--number <n>] [--token <skill-session-token>] [--no-memory]")
 	}
 	var socket string
-	var number int
-	var src memory.Source
+	var mc memory.MCPConfig
 	rest := args[1:]
 	for i := 0; i < len(rest); i++ {
 		next := func() string {
@@ -33,15 +32,21 @@ func cmdMCP(args []string) error {
 		case "--socket":
 			socket = next()
 		case "--agent":
-			src.Agent = next()
+			mc.Source.Agent = next()
 		case "--repo":
-			src.Repo = next()
+			mc.Source.Repo = next()
 		case "--trigger":
-			src.Trigger = next()
+			mc.Source.Trigger = next()
 		case "--run":
-			src.Run = next()
+			mc.Source.Run = next()
 		case "--number":
-			fmt.Sscanf(next(), "%d", &number)
+			fmt.Sscanf(next(), "%d", &mc.Number)
+		case "--token":
+			// The skill session token (#36 §12): minted by the daemon at
+			// dispatch time; the broker ops authorize by it alone.
+			mc.Token = next()
+		case "--no-memory":
+			mc.NoMemory = true
 		default:
 			return fmt.Errorf("mcp memory: unknown flag %q", rest[i])
 		}
@@ -52,5 +57,5 @@ func cmdMCP(args []string) error {
 	call := func(req memory.IPCRequest) (memory.IPCResponse, error) {
 		return memory.IPCCall(socket, req)
 	}
-	return memory.ServeMCP(os.Stdin, os.Stdout, call, src, number)
+	return memory.ServeMCP(os.Stdin, os.Stdout, call, mc)
 }

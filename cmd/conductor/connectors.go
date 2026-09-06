@@ -25,7 +25,10 @@ import (
 // flowStack is the connectors-model runtime: the secret resolver, the built
 // connector registry, the flow runner, and the lowered source integrations.
 type flowStack struct {
-	Secrets      *secrets.Resolver
+	Secrets *secrets.Resolver
+	// SecretVals maps named `secrets:` entries to their resolved values —
+	// the skill broker's lookup table (issuance is policy-gated per profile).
+	SecretVals   map[string]string
 	Registry     *connector.Registry
 	Runner       *flow.Runner
 	Integrations []core.Integration
@@ -128,7 +131,7 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		Store:     flowStore, Notif: flowNotif, Log: logf, DryRun: dryRun,
 	})
 	return &flowStack{
-		Secrets: sec, Registry: reg, Runner: runner,
+		Secrets: sec, SecretVals: vals, Registry: reg, Runner: runner,
 		Integrations: igs, SecretErrs: secretErrs, ConnectorErrs: connErrs,
 	}, nil
 }

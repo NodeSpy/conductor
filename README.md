@@ -415,6 +415,33 @@ strong passphrase with `vault <name> init --sensitive` (scrypt N=2^20), and
 note that git history is permanent — a key that was ever committed stays
 extractable, so rotate what it sealed.
 
+## Agent access to conductor (the skill)
+
+`skill:` on an agent profile lets a dispatched agent reach back into
+conductor over the daemon socket. Off by default; everything under it denies
+unless config allows.
+
+```yaml
+agents:
+  deployer:
+    skill:
+      secrets_via: broker          # broker | env (deprecated) | none (default)
+      allow_secrets: [deploy_key]  # exact secrets: names the broker may issue
+      verbs: [gh.comment, rest.*]  # conductor verbs exposed as agent tools
+```
+
+The principle: **the credential never leaves the daemon by default**. The
+default path is acting *through* conductor — verbs as agent tools, where the
+daemon injects credentials at its own egress boundary. When an agent must
+run a raw tool that itself needs a credential, the **secret broker** issues
+one as a minimized last resort: scoped to one named secret, single-use,
+expiring in 60 s, and fully audited (issue, use, expiry). Authorization is
+bound server-side to the real dispatch via an unguessable session token the
+daemon mints at launch — never to client-asserted identity. Once redeemed,
+the value is in the runtime's hands; if a runtime should never hold a
+secret, don't list any in its `allow_secrets`. Details: the Agent-Skill wiki
+page.
+
 ## Introspection and dry-run
 
 ```sh

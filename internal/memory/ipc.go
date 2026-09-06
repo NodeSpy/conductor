@@ -38,6 +38,15 @@ type IPCRequest struct {
 	// command's flags at injection time — the agent cannot spoof a different
 	// run's identity beyond what its own launch carried.
 	Source Source `json:"source,omitempty"`
+	// Token is the skill session token the daemon minted at dispatch time
+	// (#36 §12). The broker ops authorize by it ALONE — unlike Source it is
+	// unguessable, and the daemon maps it server-side to the real dispatched
+	// profile and its skill: policy.
+	Token string `json:"token,omitempty"`
+	// Secret is the named secret secret_issue requests.
+	Secret string `json:"secret,omitempty"`
+	// Grant is the grant id secret_redeem redeems.
+	Grant string `json:"grant,omitempty"`
 }
 
 // IPCResponse is the daemon's reply.
@@ -58,6 +67,11 @@ type LiveOps struct {
 	RunStep func(ctx context.Context, src Source, number int, step map[string]any) (map[string]any, error)
 	// ListWorkflows returns the workflow catalog (workflow.list's shape).
 	ListWorkflows func() map[string]any
+	// IssueSecret / RedeemSecret are the secret broker (#36 §12), wired from
+	// internal/skill at boot. Plain funcs so this package stays free of the
+	// skill dependency. nil → the broker ops report unavailable.
+	IssueSecret  func(token, name string) (grant string, expires time.Time, err error)
+	RedeemSecret func(token, grant string) (value string, err error)
 }
 
 var (
@@ -128,11 +142,10 @@ func writeResp(conn net.Conn, resp IPCResponse) {
 	_, _ = conn.Write(append(b, '\n'))
 }
 
-// handleIPC executes one tool call against the manager.
+// handleIPC executes one tool call against the manager. m may be nil when
+// the socket is up for the skill surface alone (broker/run_step); only the
+// memory ops need it.
 func handleIPC(m *Manager, req IPCRequest, audit func(map[string]any), log func(string, ...any)) IPCResponse {
-	if m == nil {
-		return IPCResponse{Error: "memory: not configured"}
-	}
 	if log == nil {
 		log = func(string, ...any) {}
 	}
@@ -140,6 +153,9 @@ func handleIPC(m *Manager, req IPCRequest, audit func(map[string]any), log func(
 		if audit != nil {
 			audit(e)
 		}
+	}
+	if m == nil && (req.Op == "remember" || req.Op == "recall") {
+		return IPCResponse{Error: "memory: not configured"}
 	}
 	switch req.Op {
 	case "remember":
@@ -204,6 +220,30 @@ func handleIPC(m *Manager, req IPCRequest, audit func(map[string]any), log func(
 			return IPCResponse{Error: "workflow_list: not available on this daemon"}
 		}
 		return IPCResponse{OK: true, Result: ops.ListWorkflows()}
+	case "secret_issue":
+		// The broker audits every outcome itself (it knows the real identity
+		// behind the token); nothing to add at this layer.
+		ops := getLiveOps()
+		if ops.IssueSecret == nil {
+			return IPCResponse{Error: "secret_issue: no secret broker on this daemon"}
+		}
+		id, exp, err := ops.IssueSecret(req.Token, req.Secret)
+		if err != nil {
+			return IPCResponse{Error: err.Error()}
+		}
+		return IPCResponse{OK: true, Result: map[string]any{
+			"grant": id, "expires": exp.UTC().Format(time.RFC3339),
+		}}
+	case "secret_redeem":
+		ops := getLiveOps()
+		if ops.RedeemSecret == nil {
+			return IPCResponse{Error: "secret_redeem: no secret broker on this daemon"}
+		}
+		v, err := ops.RedeemSecret(req.Token, req.Grant)
+		if err != nil {
+			return IPCResponse{Error: err.Error()}
+		}
+		return IPCResponse{OK: true, Result: map[string]any{"value": v}}
 	}
 	return IPCResponse{Error: fmt.Sprintf("memory: unknown tool op %q", req.Op)}
 }

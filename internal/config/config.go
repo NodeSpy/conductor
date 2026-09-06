@@ -593,6 +593,29 @@ type AgentProfile struct {
 	// agent as a follow-up. Absent → a fresh agent per dispatch. See
 	// SessionSpec.
 	Session *SessionSpec `yaml:"session"`
+	// Skill opts this agent into the conductor skill (#36 §12): reaching back
+	// into conductor over the daemon socket for verbs-as-tools and the secret
+	// broker. Absent → the agent gets neither (deny by default).
+	Skill *SkillPolicy `yaml:"skill"`
+}
+
+// SkillPolicy is the per-profile `skill:` block (#36 §12): which of
+// conductor's own capabilities a dispatched agent may reach back into over
+// the daemon socket. The zero value denies everything.
+type SkillPolicy struct {
+	// Verbs are the connector verbs exposed to this agent as MCP tools —
+	// path.Match patterns like policy.agent_authored uses ("gh.comment",
+	// "rest.*"). Empty → no verb tools.
+	Verbs []string `yaml:"verbs"`
+	// SecretsVia picks how this agent obtains a credential it truly needs:
+	// "broker" (the audited single-use secret broker), "env" (DEPRECATED —
+	// template the secret into the step's env:, which puts the raw value in
+	// the runtime's environment), or "none" (the default: no secrets).
+	SecretsVia string `yaml:"secrets_via"`
+	// AllowSecrets names the `secrets:` entries the broker may issue to this
+	// profile. Exact names only — no patterns; broadening is a config edit,
+	// never an agent request. Empty → the broker issues nothing.
+	AllowSecrets []string `yaml:"allow_secrets"`
 }
 
 // RuntimeName returns the runtime/controller the profile selects (runtime
@@ -1172,8 +1195,31 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("config: agent %q: unknown host %q (defined: %s)", name, p.Host, c.hostNames())
 			}
 		}
+		if p.Skill != nil {
+			switch p.Skill.SecretsVia {
+			case "", "none", "env", "broker":
+			default:
+				return fmt.Errorf("config: agent %q: skill.secrets_via must be broker|env|none, got %q", name, p.Skill.SecretsVia)
+			}
+			for _, s := range p.Skill.AllowSecrets {
+				if _, ok := c.SecretRefs[s]; !ok {
+					return fmt.Errorf("config: agent %q: skill.allow_secrets names unknown secret %q (not in secrets:)", name, s)
+				}
+			}
+		}
 	}
 	return nil
+}
+
+// SkillEnabled reports whether any agent profile carries a skill: block —
+// the daemon serves the tool socket and builds the secret broker only then.
+func (c *Config) SkillEnabled() bool {
+	for _, p := range c.Agents {
+		if p.Skill != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // runtimeNames lists runtimes and legacy controllers, sorted, for errors.
