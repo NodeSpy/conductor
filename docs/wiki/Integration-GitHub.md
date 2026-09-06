@@ -66,6 +66,7 @@ keeps their dedup state separate).
 | `rerequest_review` | `repo`*, `pr`*, `reviewers`/`team_reviewers`, `as` | `ok` |
 | `submit_review` | `repo`*, `pr`*, `event`* (APPROVE\|REQUEST_CHANGES\|COMMENT), `body`, `as` | `id` |
 | `add_labels` | `repo`*, `number`*, `labels`*, `as` | `ok` |
+| `sweep` | — | `nudged` — run the catch-up sweep now (daemon-global; `conductor sweep --now`, verb-shaped) |
 
 `as: me` (default) posts as you; `as: bot` as the App's bot user.
 

@@ -1,19 +1,19 @@
 # GitHub App Setup
 
-The `github` integration is driven entirely by a GitHub App, not a personal access
-token: the App carries the webhook subscription and all of conductor's own API
-reads, while writes are attributed to you (see [[Integration-GitHub]]). This page
-covers registering the App — permissions, events, the private key, the webhook
-secret — and the two ways a webhook delivery reaches conductor: a smee.io relay or a
-direct HTTP listener.
+The recommended way to run the `github` connector is a GitHub App: the App
+carries the webhook subscription and all of conductor's own API reads (its own
+rate pool), while writes are attributed to you (see [[Integration-GitHub]]).
+An App is not *required* — see [Running without an App](#running-without-an-app)
+— but it is the full-featured path. This page covers registering the App —
+permissions, events, the private key, the webhook secret — and the two ways a
+webhook delivery reaches conductor: a smee.io relay or a direct HTTP listener.
 
 ## Register the App
 
 Create a new GitHub App at:
 
 - Personal account: <https://github.com/settings/apps/new>
-- Organization: `https://github.com/organizations/<ORG>/settings/apps/new`
-  (e.g. `https://github.com/organizations/NodeSpy/settings/apps/new`)
+- Organization: `https://github.com/organizations/<your-org>/settings/apps/new`
 
 ([GitHub's own guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app).)
 
@@ -74,10 +74,9 @@ After granting permissions and events:
 4. Put the App id, key path, and webhook secret into config:
 
 ```yaml
-integrations:
-  - type: github
-    name: github
-    enabled: true
+connectors:
+  gh:
+    type: github
     app:
       app_id: 123456                                    # the App's numeric id
       private_key_path: ~/.config/conductor/github-app.pem  # the generated .pem
@@ -87,7 +86,12 @@ integrations:
       smee_url: ${GH_SMEE_URL}       # https://smee.io/<channel> — and/or a direct listener:
       # listen: 127.0.0.1:8787
       # path: /webhook
+    me: { logins: [your-login] }
+    repos: ["your-org/*"]
 ```
+
+(The legacy `integrations: - type: github` block takes the same `app:` /
+`webhook:` fields and still loads — see [[Migration]].)
 
 | Field | Meaning |
 | --- | --- |
@@ -164,9 +168,8 @@ An App is not required. The github connector's credentials resolve
 
 - Events arrive via a **plain repository/organization webhook** pointed at
   `webhook.listen` (set the same secret in the webhook and in
-  `app.webhook_secret` or `webhook.secret`), or by **polling** — enable the
-  sweep with explicit repos (`owner/*` glob expansion is an App-only
-  endpoint).
+  `app.webhook_secret`), or by **polling** — enable the sweep with explicit
+  repos (`owner/*` glob expansion is an App-only endpoint).
 - Reads use the PAT / gh token; writes are you, as always.
 - `as: bot` verb calls need App credentials and fail with a clear error
   without them.
