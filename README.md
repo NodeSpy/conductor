@@ -50,7 +50,38 @@ Install the latest release. It drops the binary in `~/.local/bin`, seeds a start
 curl -fsSL https://raw.githubusercontent.com/NodeSpy/conductor/main/scripts/install-release.sh | bash
 ```
 
-Then:
+**First trigger, no services needed.** Before wiring GitHub or Slack, prove
+the pipeline with a config that needs no credentials at all — a cron schedule
+plus the built-in `manual` source and a local command step:
+
+```yaml
+# ~/.config/conductor/config.yaml
+connectors:
+  timer:
+    type: cron
+    schedules:
+      hourly: { every: 1h }
+
+triggers:
+  - name: hello
+    on: [ timer.hourly, manual ]
+    steps:
+      - { id: say, type: command, command: [echo, "hello from conductor"] }
+```
+
+```sh
+$ conductor validate
+ok: 1 connector(s), 2 trigger(s), 0 workflow(s), 0 agent profile(s)
+
+$ conductor run --config ~/.config/conductor/config.yaml &   # or start the service
+$ conductor run hello
+dispatched manual trigger "hello"
+```
+
+The schedule fires the same steps every hour; `conductor run hello` fires them
+on demand through the same validation, policy, and audit.
+
+Then connect real services:
 
 1. Create a GitHub App + a smee channel — see [GitHub App setup](#github-app-setup) —
    or skip the App entirely (`token: ${GH_PAT}` + a plain webhook or sweep polling).
@@ -98,7 +129,8 @@ that changes the config schema migrates your file itself, with a backup.
   rendered key (`"{{.repo}}#{{.pr}}"`), shared across every trigger using
   that agent — later events arrive as follow-ups with full prior context,
   serialized per key, persisted across restarts, and evicted on idle/age or
-  an `end_on` event like `gh.pr_closed` (see the wiki's Agents page).
+  an `end_on` event like `gh._closed` — github's close-or-merge signal (see
+  the wiki's Agents page).
   And agents can **program conductor**: emit a `plan:` of ordinary steps
   that runs deterministically (token-free unless it spawns sub-agents),
   choose an existing workflow from the `workflow.list` catalog, get failures
@@ -558,11 +590,12 @@ Secrets go in the sibling `conductor.env`. The config splits across files:
 each map section takes an `imports:` key (`connectors: { imports:
 [conf.d/*.yaml] }` — entries merge, a duplicate name across files is a load
 error) and `triggers:` takes `- imports: [globs]` items; a step's `workflow:` can also name
-a workflow from a file directly (`from: ./workflows/review.yaml`, or a bare
-path when the file holds one workflow).
+a workflow from a file directly (`workflow: review-flow, import: ./workflows/review.yaml`,
+or a bare `workflow: ./workflows/review.yaml` path when the file holds one workflow).
 The wiki carries the full reference — Configuration, Connectors, Workflows,
-Verbs, Code-Steps, Hosts, Grouping, Policy, Secrets, Runtimes, Migration —
-and `conductor schema <conn>` prints any connector's exact contract.
+Verbs, Code-Steps, Hosts, Grouping, Memory, Agents, Policy, Secrets,
+Runtimes, Migration — and `conductor schema <conn>` prints any connector's
+exact contract.
 
 ## Commands
 
@@ -574,19 +607,22 @@ conductor sweep [--now]                    catch-up sweep (preview / signal the 
 conductor force <kind> <owner/repo>#<n>    force one action now, bypassing dedup gates
 conductor status | report [--days N]       live snapshot / activity summary
 conductor pause | resume                   runtime kill switch (no restart)
+conductor run <name> [--input k=v]         fire a named `on: manual` trigger via the daemon
 conductor connectors ls | schema <conn>    introspection
+conductor connector auth <name> | auth ls  one-time OAuth2 login / login state + expiry
 conductor secrets check                    resolve every secret reference and report
-conductor vault init|add|show|ls|rm        the built-in encrypted vault
+conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
 conductor unlock                           seed the vault key for unattended restarts
+conductor workflows [ls|review|rm]         saved (agent-promoted) workflows: state + health
 conductor config migrate [--dry-run]       legacy → connectors transform
 conductor update | service …               self-update / service unit management
 ```
 
 ## Safety
 
-- **Kill switches**: `conductor pause` at runtime; `policy: { enabled: false }`
-  in config; `policy: { shadow: true }` previews everything and dispatches
-  nothing (per trigger, connector, or globally).
+- **Kill switches**: `conductor pause` at runtime; `enabled: false` turns off
+  one connector or trigger in place; `policy: { shadow: true }` previews
+  everything and dispatches nothing (per trigger, connector, or globally).
 - **Nothing acts on an invalid config**: `validate` gates the service start
   and resolves every schema and template reference against its position — and
   a bad *connector* (unresolvable secret, dead credentials) disables that
