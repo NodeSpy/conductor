@@ -8,7 +8,10 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -19,6 +22,36 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// strictUnmarshal decodes data into v rejecting unknown keys, so a typo'd
+// config key (known_hostss, filtres, …) is a named load error instead of a
+// silently dropped setting.
+func strictUnmarshal(data []byte, v any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(v); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil // an empty document decodes to the zero value
+		}
+		return err
+	}
+	return nil
+}
+
+// strictNodeDecode is strictUnmarshal for custom UnmarshalYAML(*yaml.Node)
+// implementations: yaml.v3 does not propagate KnownFields into them, so the
+// node is re-encoded and run through a strict decoder.
+func strictNodeDecode(n *yaml.Node, v any) error {
+	var b bytes.Buffer
+	enc := yaml.NewEncoder(&b)
+	if err := enc.Encode(n); err != nil {
+		return err
+	}
+	if err := enc.Close(); err != nil {
+		return err
+	}
+	return strictUnmarshal(b.Bytes(), v)
+}
 
 // Config is the whole config file.
 type Config struct {
@@ -816,7 +849,7 @@ func Load(path string) (*Config, error) {
 
 	var c Config
 	if !hasAnyImports(probe) {
-		if err := yaml.Unmarshal(expanded, &c); err != nil {
+		if err := strictUnmarshal(expanded, &c); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
 		}
 	} else {
@@ -829,8 +862,9 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("merge imports: %w", err)
 		}
 		// Re-parse the merged document so the custom unmarshalers (IntegrationRef,
-		// ActionSet, Duration, …) still run over each node.
-		if err := yaml.Unmarshal(out, &c); err != nil {
+		// ActionSet, Duration, …) still run over each node. Strict: an unknown
+		// key from ANY of the merged files is a named error.
+		if err := strictUnmarshal(out, &c); err != nil {
 			return nil, fmt.Errorf("parse merged config: %w", err)
 		}
 	}

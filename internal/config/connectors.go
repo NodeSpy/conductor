@@ -257,7 +257,9 @@ func (t *TriggerSpec) UnmarshalYAML(n *yaml.Node) error {
 		}
 	}
 	type plain TriggerSpec
-	return n.Decode((*plain)(t))
+	// Strict: KnownFields does not reach into custom unmarshalers, so a
+	// typo'd trigger key would otherwise drop silently.
+	return strictNodeDecode(n, (*plain)(t))
 }
 
 // IsEnabled reports whether the trigger is enabled (default true).

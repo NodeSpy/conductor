@@ -458,11 +458,11 @@ func workflowFileDefs(path string) (map[string]WorkflowDef, error) {
 	var wrapped struct {
 		Workflows map[string]WorkflowDef `yaml:"workflows"`
 	}
-	if err := yaml.Unmarshal(expanded, &wrapped); err == nil && len(wrapped.Workflows) > 0 {
+	if err := strictUnmarshal(expanded, &wrapped); err == nil && len(wrapped.Workflows) > 0 {
 		return wrapped.Workflows, nil
 	}
 	var bare map[string]WorkflowDef
-	if err := yaml.Unmarshal(expanded, &bare); err != nil {
+	if err := strictUnmarshal(expanded, &bare); err != nil {
 		return nil, fmt.Errorf("parse workflow file %s: %w", path, err)
 	}
 	if len(bare) == 0 {
