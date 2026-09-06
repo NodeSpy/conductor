@@ -430,6 +430,14 @@ agents:
       verbs: [gh.comment, rest.*]  # conductor verbs exposed as agent tools
 ```
 
+`{{secret "name"}}` templates a named secret as an **opaque handle**
+(`«secret:name»`) everywhere — prompts, env, tool args, audit — and the real
+value replaces the handle only at conductor's own egress boundary (verb
+invocation, code-step env/args, remote-command env/argv), only in
+config-authored steps whose own template literally names it. Agent-authored
+steps (plans, saved workflows) and anything relayed through data keep the
+inert handle.
+
 The principle: **the credential never leaves the daemon by default**. The
 default path is acting *through* conductor — verbs as agent tools, where the
 daemon injects credentials at its own egress boundary. When an agent must

@@ -230,11 +230,17 @@ func templateData(req Request) map[string]any {
 	return data
 }
 
+// dispatchFuncs: {{secret "name"}} renders the OPAQUE boundary handle here
+// too — a dispatched agent's prompt and env carry the handle, never the
+// value (the flow runner resolves handles only at conductor's own egress;
+// an agent that needs the value goes through the secret broker).
+var dispatchFuncs = template.FuncMap{"secret": secrets.SecretTemplateFunc}
+
 func render(s string, data map[string]any) (string, error) {
 	if !strings.Contains(s, "{{") {
 		return s, nil
 	}
-	tmpl, err := template.New("t").Option("missingkey=zero").Parse(s)
+	tmpl, err := template.New("t").Option("missingkey=zero").Funcs(dispatchFuncs).Parse(s)
 	if err != nil {
 		return "", err
 	}

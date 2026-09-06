@@ -513,9 +513,21 @@ type scope struct {
 	// vaults are the defined vaults: names — the universe {{ vault "x" … }}
 	// calls and {{.vaults.x.…}} reads check against.
 	vaults map[string]bool
+	// secrets are the defined secrets: names — the universe {{ secret "x" }}
+	// boundary-handle calls check against (nil = context without a config,
+	// skip the check).
+	secrets map[string]bool
 	// open scopes (workflow bodies) allow unknown top-level refs — a workflow
 	// is polymorphic over its callers' trigger contexts.
 	open bool
+}
+
+func secretNameSet(cfg *config.Config) map[string]bool {
+	out := make(map[string]bool, len(cfg.SecretRefs))
+	for n := range cfg.SecretRefs {
+		out[n] = true
+	}
+	return out
 }
 
 func vaultNameSet(cfg *config.Config) map[string]bool {
@@ -527,7 +539,7 @@ func vaultNameSet(cfg *config.Config) map[string]bool {
 }
 
 func newScope(ev connector.EventDecl, cfg *config.Config, grouped bool) *scope {
-	sc := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, vaults: vaultNameSet(cfg)}
+	sc := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, vaults: vaultNameSet(cfg), secrets: secretNameSet(cfg)}
 	for _, k := range universalKeys {
 		sc.top[k] = true
 	}
@@ -547,7 +559,7 @@ func newScope(ev connector.EventDecl, cfg *config.Config, grouped bool) *scope {
 }
 
 func openScope(cfg *config.Config) *scope {
-	sc := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, vaults: vaultNameSet(cfg), open: true}
+	sc := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, vaults: vaultNameSet(cfg), secrets: secretNameSet(cfg), open: true}
 	for _, k := range universalKeys {
 		sc.top[k] = true
 	}
@@ -572,7 +584,7 @@ func (s *scope) addStep(id string, outputs connector.Schema) {
 }
 
 func (s *scope) clone() *scope {
-	out := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, vaults: s.vaults, open: s.open}
+	out := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, vaults: s.vaults, secrets: s.secrets, open: s.open}
 	for k := range s.top {
 		out.top[k] = true
 	}
@@ -648,6 +660,20 @@ func checkRefs(where, tmpl string, sc *scope) error {
 		}
 		if !sc.vaults[c[0]] {
 			return fmt.Errorf("%s: {{ vault %q … }}: no vault named %q (defined vaults: %s)", where, c[0], c[0], sortedIDs(sc.vaults))
+		}
+	}
+	if sc.secrets != nil {
+		names, err := templateSecretCalls(tmpl)
+		if err != nil {
+			return fmt.Errorf("%s: %v", where, err)
+		}
+		for _, n := range names {
+			if n == "" {
+				return fmt.Errorf("%s: {{ secret … }}: the name must be a literal string (a computed name renders a handle that never resolves)", where)
+			}
+			if !sc.secrets[n] {
+				return fmt.Errorf("%s: {{ secret %q }}: no secret named %q (defined secrets: %s)", where, n, n, sortedIDs(sc.secrets))
+			}
 		}
 	}
 	return nil

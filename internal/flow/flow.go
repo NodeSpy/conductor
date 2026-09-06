@@ -737,8 +737,21 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 		r.auditVerb(t, connName, verb, map[string]any{"barrier": "secret_relay"}, "blocked", err)
 		return nil, err
 	}
+	// The {{secret}} egress boundary: swap eligible handles for real values
+	// in what goes OUT — audit keeps the handle-form `rendered` map. Only
+	// names literally called in this step's own raw options are eligible, and
+	// agent-authored execution resolves nothing (see handles.go).
+	final := rendered
+	if eligible := secretCallsIn(merged); len(eligible) > 0 {
+		rv, rerr := r.resolveSecretHandles(ctx, rendered, eligible)
+		if rerr != nil {
+			r.auditVerb(t, connName, verb, rendered, "failed", rerr)
+			return nil, fmt.Errorf("uses %s: %w", step.Uses, rerr)
+		}
+		final = rv.(map[string]any)
+	}
 	start := time.Now()
-	out, err := in.InvokeFinal(ctx, verb, rendered)
+	out, err := in.InvokeFinal(ctx, verb, final)
 	took := time.Since(start).Round(time.Millisecond)
 	if err != nil {
 		r.auditVerb(t, connName, verb, rendered, "failed", err)
@@ -894,6 +907,8 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 		child = baseData(t, nil)
 		child["secrets"] = map[string]any{}
 		child["vaults"] = map[string]any{}
+		// And {{secret}} boundary handles never resolve in its steps.
+		ctx = markAgentAuthored(ctx)
 	}
 	child["inputs"] = inputs
 	child["steps"] = map[string]any{}
@@ -956,6 +971,17 @@ func (r *Runner) execCode(ctx context.Context, t core.Trigger, step config.Step,
 	args, err := renderStrings(step.Args, data)
 	if err != nil {
 		return nil, "", err
+	}
+	// The {{secret}} egress boundary for code steps: conductor executes the
+	// code itself, so eligible handles in env/args resolve here — never for
+	// agent-authored steps (see handles.go).
+	if eligible := secretCallsIn(step.Env, step.Args); len(eligible) > 0 {
+		if env, err = r.resolveHandleStringMap(ctx, env, eligible); err != nil {
+			return nil, "", err
+		}
+		if args, err = r.resolveHandleStrings(ctx, args, eligible); err != nil {
+			return nil, "", err
+		}
 	}
 	workdir, err := render(step.WorkDir, data)
 	if err != nil {
@@ -1182,6 +1208,18 @@ func (r *Runner) execRemoteCommand(ctx context.Context, t core.Trigger, step con
 	if err != nil {
 		return nil, "", err
 	}
+	// The {{secret}} egress boundary for remote commands: conductor itself
+	// SSHes to a config-named host, so eligible handles in env/argv resolve
+	// here. (Local `type: command` steps run through the agent runtime — the
+	// handle stays opaque there; use a code step for conductor-side exec.)
+	if eligible := secretCallsIn(step.Env, step.Command); len(eligible) > 0 {
+		if env, err = r.resolveHandleStringMap(ctx, env, eligible); err != nil {
+			return nil, "", err
+		}
+		if argv, err = r.resolveHandleStrings(ctx, argv, eligible); err != nil {
+			return nil, "", err
+		}
+	}
 	cwd, err := render(step.WorkDir, data)
 	if err != nil {
 		return nil, "", err
@@ -1294,7 +1332,18 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 			r.auditVerb(t, connName, verb, map[string]any{"barrier": "secret_relay"}, "blocked", berr)
 			continue
 		}
-		if _, err := in.InvokeFinal(ctx, verb, rendered); err != nil {
+		// Same {{secret}} egress boundary as execVerb; audit keeps handles.
+		final := rendered
+		if eligible := secretCallsIn(merged); len(eligible) > 0 {
+			rv, rerr := r.resolveSecretHandles(ctx, rendered, eligible)
+			if rerr != nil {
+				r.Log("%s %s hook %s.%s: %v", flowTag(t), where, connName, verb, rerr)
+				r.auditVerb(t, connName, verb, rendered, "hook_failed", rerr)
+				continue
+			}
+			final = rv.(map[string]any)
+		}
+		if _, err := in.InvokeFinal(ctx, verb, final); err != nil {
 			r.Log("%s %s hook %s.%s failed (best-effort): %v", flowTag(t), where, connName, verb, err)
 			r.auditVerb(t, connName, verb, rendered, "hook_failed", err)
 			continue

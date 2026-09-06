@@ -56,6 +56,37 @@ any other same-user process that can reach the socket) cannot claim another
 profile's policy. Sessions expire after 24 h and die with the daemon (the
 table is in-memory).
 
+## Boundary handles: `{{secret "name"}}`
+
+Config can template a named secret with `{{secret "gh_pat"}}`. It renders as
+an **opaque handle** — `«secret:gh_pat»` — everywhere a template renders: an
+agent step's prompt, its `env:`, tool arguments, audit entries, logs. The
+real value replaces the handle only at conductor's **own egress boundary**:
+
+- a verb invocation's outbound options (`uses:` steps and hooks),
+- a code step's `env:`/`args:` (conductor runs the interpreter itself),
+- a remote command step's env/argv (conductor SSHes to a config-named host).
+
+Two rules keep the handle from becoming a resolution oracle:
+
+1. **Agent-authored steps never resolve.** Plans, live `run_step` calls, and
+   saved workflows keep handles opaque whatever their trust level — a plan
+   step that pastes or templates a handle sends the inert text, not the
+   value.
+2. **Eligibility is keyed to the config-authored template source.** A handle
+   only resolves in a step whose own raw template literally calls
+   `{{secret "name"}}` for that name. A handle that arrives through *data* —
+   an agent echoing its env into a step output that a config step relays —
+   is not eligible and passes through as text.
+
+Agent steps have no conductor-side egress (the env goes to the external
+runtime), so their handles never resolve at all: env-at-rest carries the
+handle, and an agent that truly needs the value uses the broker below.
+`{{secret}}` names are validated at load time against the `secrets:` block,
+and must be literal. Local `type: command` steps run through the agent
+runtime, not conductor — use a code step (`run: sh`) when conductor itself
+should inject the value.
+
 ## The secret broker
 
 Two agent tools, riding the injected MCP server (advertised only when the

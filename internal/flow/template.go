@@ -18,6 +18,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/kv"
 	"github.com/NodeSpy/conductor/internal/memory"
+	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/vaults"
 )
 
@@ -116,6 +117,13 @@ var templateFuncs = template.FuncMap{
 		}
 		return b.String(), nil
 	},
+	// secret renders the OPAQUE boundary handle for a named `secrets:` entry
+	// (#36 §12): {{secret "gh_pat"}} → «secret:gh_pat». The real value
+	// replaces the handle only at conductor's own egress boundary (verb
+	// invocation, code env/args, remote-command env/argv) and only for
+	// config-authored steps — agent prompts/env and agent-authored steps
+	// (plans, saved workflows) keep the handle.
+	"secret": secrets.SecretTemplateFunc,
 	// kvContains tests membership in a stored list, read-only:
 	// {{ kvContains "store" "namespace" "key" .item }}. An absent key is
 	// false. The template surface stays side-effect-free — kv and kvContains
@@ -349,6 +357,37 @@ func collectPipe(p *parse.PipeNode, rootDot bool, out *[]string) {
 // validation of the vault names. Non-literal names can't be checked at load
 // (they are rejected elsewhere: config-field refs must be literal).
 func templateVaultCalls(s string) ([][2]string, error) {
+	calls, err := templateFuncCalls(s, "vault", 2)
+	if err != nil {
+		return nil, err
+	}
+	out := make([][2]string, len(calls))
+	for i, c := range calls {
+		copy(out[i][:], c)
+	}
+	return out, nil
+}
+
+// templateSecretCalls extracts the literal names of every `secret` function
+// call in a template string. Doubles as load-time name validation input and
+// as the runtime boundary-resolution eligibility list: only handles whose
+// name was LITERALLY called in the config-authored template resolve — a
+// handle arriving through data (agent output, event context) never does.
+func templateSecretCalls(s string) ([]string, error) {
+	calls, err := templateFuncCalls(s, "secret", 1)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, c := range calls {
+		out = append(out, c[0])
+	}
+	return out, nil
+}
+
+// templateFuncCalls extracts the first maxArgs literal string arguments of
+// every call to the named template function ("" for a non-literal arg).
+func templateFuncCalls(s, ident string, maxArgs int) ([][]string, error) {
 	if !strings.Contains(s, "{{") {
 		return nil, nil
 	}
@@ -356,48 +395,48 @@ func templateVaultCalls(s string) ([][2]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out [][2]string
+	var out [][]string
 	for _, tmpl := range t.Templates() {
 		if tmpl.Tree != nil && tmpl.Tree.Root != nil {
-			collectVaultCalls(tmpl.Tree.Root, &out)
+			collectFuncCalls(tmpl.Tree.Root, ident, maxArgs, &out)
 		}
 	}
 	return out, nil
 }
 
-func collectVaultCalls(n parse.Node, out *[][2]string) {
+func collectFuncCalls(n parse.Node, ident string, maxArgs int, out *[][]string) {
 	switch x := n.(type) {
 	case *parse.ListNode:
 		if x == nil {
 			return
 		}
 		for _, c := range x.Nodes {
-			collectVaultCalls(c, out)
+			collectFuncCalls(c, ident, maxArgs, out)
 		}
 	case *parse.ActionNode:
-		collectVaultPipe(x.Pipe, out)
+		collectFuncPipe(x.Pipe, ident, maxArgs, out)
 	case *parse.IfNode:
-		collectVaultPipe(x.Pipe, out)
-		collectVaultCalls(x.List, out)
+		collectFuncPipe(x.Pipe, ident, maxArgs, out)
+		collectFuncCalls(x.List, ident, maxArgs, out)
 		if x.ElseList != nil {
-			collectVaultCalls(x.ElseList, out)
+			collectFuncCalls(x.ElseList, ident, maxArgs, out)
 		}
 	case *parse.RangeNode:
-		collectVaultPipe(x.Pipe, out)
-		collectVaultCalls(x.List, out)
+		collectFuncPipe(x.Pipe, ident, maxArgs, out)
+		collectFuncCalls(x.List, ident, maxArgs, out)
 		if x.ElseList != nil {
-			collectVaultCalls(x.ElseList, out)
+			collectFuncCalls(x.ElseList, ident, maxArgs, out)
 		}
 	case *parse.WithNode:
-		collectVaultPipe(x.Pipe, out)
-		collectVaultCalls(x.List, out)
+		collectFuncPipe(x.Pipe, ident, maxArgs, out)
+		collectFuncCalls(x.List, ident, maxArgs, out)
 		if x.ElseList != nil {
-			collectVaultCalls(x.ElseList, out)
+			collectFuncCalls(x.ElseList, ident, maxArgs, out)
 		}
 	}
 }
 
-func collectVaultPipe(p *parse.PipeNode, out *[][2]string) {
+func collectFuncPipe(p *parse.PipeNode, ident string, maxArgs int, out *[][]string) {
 	if p == nil {
 		return
 	}
@@ -406,16 +445,16 @@ func collectVaultPipe(p *parse.PipeNode, out *[][2]string) {
 			continue
 		}
 		id, ok := cmd.Args[0].(*parse.IdentifierNode)
-		if !ok || id.Ident != "vault" {
+		if !ok || id.Ident != ident {
 			continue
 		}
-		pair := [2]string{}
-		for i := 1; i < len(cmd.Args) && i <= 2; i++ {
+		args := make([]string, maxArgs)
+		for i := 1; i < len(cmd.Args) && i <= maxArgs; i++ {
 			if s, isStr := cmd.Args[i].(*parse.StringNode); isStr {
-				pair[i-1] = s.Text
+				args[i-1] = s.Text
 			}
 		}
-		*out = append(*out, pair)
+		*out = append(*out, args)
 	}
 }
 
