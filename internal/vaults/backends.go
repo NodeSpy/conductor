@@ -142,11 +142,27 @@ func (p *PassVault) run(ctx context.Context, stdin string, args ...string) (stri
 	return run(ctx, stdin, nil, "pass", args...)
 }
 
+// guardEntry refuses a flag-shaped entry name: the key can come from
+// templated config (event-derived), and a value like "-f" or
+// "--store=/tmp/x" would otherwise ride the pass argv as an option. The
+// `--` separator below is the primary guard (mirroring internal/hosts);
+// failing a dash-key loudly beats depending on every helper's getopt.
+func guardEntry(entry string) error {
+	if strings.HasPrefix(strings.TrimSpace(entry), "-") {
+		return fmt.Errorf("vaults: pass entry %q looks like a CLI flag — refused", entry)
+	}
+	return nil
+}
+
 func (p *PassVault) Read(ctx context.Context, key string) (string, error) {
 	if v, ok := p.c.get(key); ok {
 		return v, nil
 	}
-	out, err := p.run(ctx, "", "show", p.entry(key))
+	entry := p.entry(key)
+	if err := guardEntry(entry); err != nil {
+		return "", err
+	}
+	out, err := p.run(ctx, "", "show", "--", entry)
 	if err != nil {
 		return "", err
 	}
@@ -159,7 +175,11 @@ func (p *PassVault) Read(ctx context.Context, key string) (string, error) {
 }
 
 func (p *PassVault) Write(ctx context.Context, key, value string) error {
-	if _, err := p.run(ctx, value+"\n", "insert", "-m", "-f", p.entry(key)); err != nil {
+	entry := p.entry(key)
+	if err := guardEntry(entry); err != nil {
+		return err
+	}
+	if _, err := p.run(ctx, value+"\n", "insert", "-m", "-f", "--", entry); err != nil {
 		return err
 	}
 	p.c.put(key, value)
@@ -167,7 +187,11 @@ func (p *PassVault) Write(ctx context.Context, key, value string) error {
 }
 
 func (p *PassVault) Delete(ctx context.Context, key string) error {
-	if _, err := p.run(ctx, "", "rm", "-f", p.entry(key)); err != nil {
+	entry := p.entry(key)
+	if err := guardEntry(entry); err != nil {
+		return err
+	}
+	if _, err := p.run(ctx, "", "rm", "-f", "--", entry); err != nil {
 		return err
 	}
 	p.c.drop(key)

@@ -313,18 +313,24 @@ func TestPassBackend(t *testing.T) {
 			if name != "pass" {
 				t.Fatalf("exec: %s", name)
 			}
+			// The entry operand always follows a `--` separator (see the
+			// arg-injection regression below).
+			if len(args) < 2 || args[len(args)-2] != "--" {
+				t.Fatalf("entry must follow --: %v", args)
+			}
+			entry := args[len(args)-1]
 			switch args[0] {
 			case "show":
-				v, ok := store[args[1]]
+				v, ok := store[entry]
 				if !ok {
-					return "", fmt.Errorf("pass: %s is not in the password store", args[1])
+					return "", fmt.Errorf("pass: %s is not in the password store", entry)
 				}
 				return v, nil
 			case "insert":
-				store[args[3]] = strings.TrimSuffix(stdin, "\n")
+				store[entry] = strings.TrimSuffix(stdin, "\n")
 				return "", nil
 			case "rm":
-				delete(store, args[2])
+				delete(store, entry)
 				return "", nil
 			}
 			return "", fmt.Errorf("unexpected args %v", args)
@@ -445,5 +451,32 @@ func TestHashicorpBackend(t *testing.T) {
 	}
 	if _, err := (&HashicorpVault{}).Read(ctx, "x"); err == nil || !strings.Contains(err.Error(), "addr:") {
 		t.Fatalf("no addr: %v", err)
+	}
+}
+
+// REGRESSION: the pass entry rode the argv bare — a templated (event-derived)
+// key like "-f" or "--store=/tmp/x" would have been parsed as a pass/getopt
+// OPTION. The entry now always follows `--`, and a flag-shaped entry is
+// refused before any exec.
+func TestPassBackendRejectsFlagLikeKeys(t *testing.T) {
+	execd := false
+	p := &PassVault{Exec: func(_ context.Context, _ string, _ []string, _ string, _ ...string) (string, error) {
+		execd = true
+		return "", nil
+	}}
+	ctx := context.Background()
+	for _, key := range []string{"-f", "--store=/tmp/evil", " -x"} {
+		if _, err := p.Read(ctx, key); err == nil || !strings.Contains(err.Error(), "CLI flag") {
+			t.Fatalf("Read(%q) must refuse: %v", key, err)
+		}
+		if err := p.Write(ctx, key, "v"); err == nil || !strings.Contains(err.Error(), "CLI flag") {
+			t.Fatalf("Write(%q) must refuse: %v", key, err)
+		}
+		if err := p.Delete(ctx, key); err == nil || !strings.Contains(err.Error(), "CLI flag") {
+			t.Fatalf("Delete(%q) must refuse: %v", key, err)
+		}
+	}
+	if execd {
+		t.Fatal("a flag-shaped key must never reach the pass CLI")
 	}
 }
