@@ -149,6 +149,25 @@ func validateSkillProfiles(cfg *config.Config, reg *connector.Registry) error {
 		if p.Skill == nil || len(p.Skill.Verbs) == 0 {
 			continue
 		}
+		// Fail-safe pattern shape checks (#122 R5a): a literal connector
+		// prefix must exist in the registry, and the surfaces the skill
+		// never serves are named errors instead of silent dead config.
+		for _, pat := range p.Skill.Verbs {
+			connPart, _, hasDot := strings.Cut(pat, ".")
+			if strings.ContainsAny(connPart, "*?[") {
+				continue // a globbed connector half checks at match time
+			}
+			if !hasDot {
+				return fmt.Errorf("config: agent %q: skill.verbs pattern %q is not a verb — use connector.verb or a pattern like %q", name, pat, pat+".*")
+			}
+			switch connPart {
+			case "workflow", "conductor":
+				return fmt.Errorf("config: agent %q: skill.verbs pattern %q — %s.* is never served on the skill surface (agent-authored orchestration goes through run_step and its policy guard)", name, pat, connPart)
+			}
+			if _, ok := reg.Get(connPart); !ok {
+				return fmt.Errorf("config: agent %q: skill.verbs pattern %q names unknown connector %q", name, pat, connPart)
+			}
+		}
 		for _, uses := range skillVerbUniverse(reg) {
 			if !matchAny(p.Skill.Verbs, uses) {
 				continue
@@ -165,6 +184,42 @@ func validateSkillProfiles(cfg *config.Config, reg *connector.Registry) error {
 		}
 	}
 	return nil
+}
+
+// SkillWarnings lints skill.verbs patterns that match NOTHING in the built
+// registry (#122 R5a) — legal (a credential-disabled connector's verbs
+// vanish from the registry), but silent dead config the operator should see
+// at validate time rather than as an agent's missing tool.
+func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
+	if cfg == nil {
+		return nil
+	}
+	universe := skillVerbUniverse(reg)
+	names := make([]string, 0, len(cfg.Agents))
+	for name := range cfg.Agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var warns []string
+	for _, name := range names {
+		p := cfg.Agents[name]
+		if p.Skill == nil {
+			continue
+		}
+		for _, pat := range p.Skill.Verbs {
+			matched := false
+			for _, uses := range universe {
+				if matchAny([]string{pat}, uses) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				warns = append(warns, fmt.Sprintf("agent %q: skill.verbs pattern %q matches no verb on this daemon — the tool list it implies is empty (typo, or the connector is disabled)", name, pat))
+			}
+		}
+	}
+	return warns
 }
 
 // verbTakesAs reports whether a verb declares the `as:` identity option.

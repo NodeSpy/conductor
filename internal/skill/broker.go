@@ -43,6 +43,10 @@ const (
 	// away, short enough that a grant id that leaks into a log or transcript
 	// is dead by the time anyone reads it.
 	GrantTTL = 60 * time.Second
+	// DefaultVerbCallCap bounds verb executions per session when the profile
+	// sets no skill.max_calls — analogous to agent_authored.limits, so a
+	// session can't hammer verbs unbounded within its TTL.
+	DefaultVerbCallCap = 256
 )
 
 // Peer identifies the process on the other end of the tool socket (Linux
@@ -86,6 +90,8 @@ type session struct {
 	// token-authorized call must come from the same live process — a copied
 	// token is useless from anywhere else.
 	peer Peer
+	// verbCalls counts executed verbs against the session's cap.
+	verbCalls int
 }
 
 // pendingClaim is a minted-but-unclaimed session: the one-shot code the
@@ -211,6 +217,30 @@ func (b *Broker) authorizeLocked(token string, peer Peer) (session, error) {
 		return session{}, fmt.Errorf("skill: session token presented by a different process than the one that claimed it")
 	}
 	return s, nil
+}
+
+// ChargeVerbCall counts one verb execution against the session's cap
+// (skill.max_calls, default DefaultVerbCallCap) — called before dispatch, so
+// a capped-out session executes nothing further. Refusals are audited.
+func (b *Broker) ChargeVerbCall(token string, peer Peer) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s, err := b.authorizeLocked(token, peer)
+	if err != nil {
+		return err
+	}
+	limit := s.id.Policy.MaxCalls
+	if limit <= 0 {
+		limit = DefaultVerbCallCap
+	}
+	if s.verbCalls >= limit {
+		b.auditLocked("deny", s.id.Agent, s.id.Repo, "", "",
+			fmt.Sprintf("session verb-call cap reached (%d; skill.max_calls)", limit))
+		return fmt.Errorf("skill: session verb-call cap reached (%d) — raise skill.max_calls if this profile legitimately needs more", limit)
+	}
+	s.verbCalls++
+	b.sessions[token] = s
+	return nil
 }
 
 // Issue requests a grant for one named secret. Deny-by-default: the session

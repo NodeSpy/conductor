@@ -32,6 +32,7 @@ agents:
       identity: bot                # the `as:` skill writes post under (falls back to
                                    #   policy.agent_authored.identity; REQUIRED when
                                    #   verbs admit a write — never silently the operator)
+      max_calls: 100               # per-session verb-call cap (default 256)
 ```
 
 - `secrets_via: none` (the default, including when the key is absent): the
@@ -199,5 +200,12 @@ Ground rules on this surface:
 - **Every call is audited** (`event: verb, via: skill`) with the agent,
   target, and redacted options; outputs are redacted before they return to
   the agent.
+- **Calls are capped per session** (`skill.max_calls`, default 256) — a
+  session cannot hammer verbs unbounded within its TTL; the cap refusal is
+  audited.
+- **Patterns are validated against the real registry**: a literal unknown
+  connector (or a `workflow.*`/`conductor.*` pattern, never served here) is
+  a load error, and `conductor validate` warns about a pattern that matches
+  no verb on this daemon (typo, or a credential-disabled connector).
 
 See [[Verbs]] for the verbs themselves.

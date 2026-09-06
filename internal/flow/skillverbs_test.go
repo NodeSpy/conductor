@@ -328,3 +328,55 @@ agents:
 		t.Fatalf("as-less skill.verbs must not require an identity: %v", err)
 	}
 }
+
+// #122 R5a: skill.verbs patterns are checked against the real registry —
+// unknown literal connectors and never-served surfaces are load errors;
+// a pattern matching nothing is a validate warning.
+func TestValidateSkillVerbPatterns(t *testing.T) {
+	cases := []struct{ verbs, wantErr string }{
+		{`["nosuch.post"]`, `unknown connector "nosuch"`},
+		{`["nosuch.*"]`, `unknown connector "nosuch"`},
+		{`["svc"]`, "is not a verb"},
+		{`["workflow.run"]`, "never served on the skill surface"},
+		{`["conductor.pause"]`, "never served on the skill surface"},
+	}
+	for _, c := range cases {
+		cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+agents:
+  a: { model: x, skill: { verbs: `+c.verbs+`, identity: bot } }
+`)
+		err := Validate(cfg, buildRegistry(t, cfg))
+		if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+			t.Fatalf("verbs %s: want %q, got %v", c.verbs, c.wantErr, err)
+		}
+	}
+
+	// A well-formed pattern that matches nothing warns (not errors).
+	cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+agents:
+  a: { model: x, skill: { verbs: ["svc.nosuchverb"], identity: bot } }
+`)
+	reg := buildRegistry(t, cfg)
+	if err := Validate(cfg, reg); err != nil {
+		t.Fatalf("zero-match pattern must not error: %v", err)
+	}
+	warns := SkillWarnings(cfg, reg)
+	if len(warns) != 1 || !strings.Contains(warns[0], "matches no verb") {
+		t.Fatalf("zero-match pattern must warn: %v", warns)
+	}
+	// Live patterns warn nothing.
+	live := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+agents:
+  a: { model: x, skill: { verbs: ["svc.*"], identity: bot } }
+`)
+	regLive := buildRegistry(t, live)
+	if warns := SkillWarnings(live, regLive); len(warns) != 0 {
+		t.Fatalf("live patterns must not warn: %v", warns)
+	}
+}

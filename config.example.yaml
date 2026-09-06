@@ -309,6 +309,7 @@ agents:
     #   verbs: [gh.comment, rest.*]  # conductor verbs exposed to the agent as tools
     #   identity: bot        #   the `as:` skill writes post under (required when verbs
     #                        #   admit a write; falls back to agent_authored.identity)
+    #   max_calls: 100       #   per-session verb-call cap (default 256)
     # session:               # session affinity: one live session per key, shared across
     #   key: "{{.repo}}#{{.pr}}"  #   ALL triggers using this agent — later same-key events
     #   idle_ttl: 12h             #   arrive as follow-ups with full prior context. Persists

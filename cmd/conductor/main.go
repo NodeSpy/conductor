@@ -231,9 +231,14 @@ func cmdValidate(args []string) error {
 	if err != nil {
 		return err
 	}
-	// Deprecation lint: warnings, never failures (back-compat stays working).
+	// Deprecation + skill lint: warnings, never failures.
 	for _, w := range flow.DeprecationWarnings(cfg) {
 		fmt.Printf("warning: %s\n", w)
+	}
+	if stack != nil {
+		for _, w := range flow.SkillWarnings(cfg, stack.Registry) {
+			fmt.Printf("warning: %s\n", w)
+		}
 	}
 	if stack != nil {
 		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s), %d agent profile(s)",
@@ -525,6 +530,11 @@ func cmdRun(args []string) error {
 					ops.RunVerb = func(vctx context.Context, token, uses string, options map[string]any, peer memory.Peer) (map[string]any, error) {
 						id, err := sb.Authorize(token, asPeer(peer))
 						if err != nil {
+							return nil, err
+						}
+						// The per-session call cap (skill.max_calls) charges
+						// BEFORE dispatch — a capped session runs nothing.
+						if err := sb.ChargeVerbCall(token, asPeer(peer)); err != nil {
 							return nil, err
 						}
 						return runner.RunSkillVerb(vctx, flow.SkillIdentity{

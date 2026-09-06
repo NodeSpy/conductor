@@ -378,3 +378,34 @@ func TestSessionTTLDefault(t *testing.T) {
 		t.Fatalf("ClaimTTL %v — a claim code must die fast", ClaimTTL)
 	}
 }
+
+// #122 R5b: the per-session verb-call cap — skill.max_calls, defaulting to
+// DefaultVerbCallCap — refuses further executions once spent, audited.
+func TestVerbCallCap(t *testing.T) {
+	r := newRig(t, nil)
+	tok := register(t, r.b, Identity{Agent: "a", Policy: config.SkillPolicy{MaxCalls: 2}})
+	for i := 0; i < 2; i++ {
+		if err := r.b.ChargeVerbCall(tok, Peer{}); err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+	}
+	if err := r.b.ChargeVerbCall(tok, Peer{}); err == nil || !strings.Contains(err.Error(), "verb-call cap") {
+		t.Fatalf("third call must be refused, got %v", err)
+	}
+	r.auditContains(t, "deny", "reason", "session verb-call cap reached (2; skill.max_calls)")
+
+	// The default cap applies when max_calls is unset.
+	tok2 := register(t, r.b, Identity{Agent: "b"})
+	for i := 0; i < DefaultVerbCallCap; i++ {
+		if err := r.b.ChargeVerbCall(tok2, Peer{}); err != nil {
+			t.Fatalf("default-cap call %d: %v", i, err)
+		}
+	}
+	if err := r.b.ChargeVerbCall(tok2, Peer{}); err == nil {
+		t.Fatal("default cap must bound the session")
+	}
+	// A forged token never charges.
+	if err := r.b.ChargeVerbCall("forged", Peer{}); err == nil {
+		t.Fatal("forged token must be refused")
+	}
+}

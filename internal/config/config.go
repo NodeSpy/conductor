@@ -622,6 +622,9 @@ type SkillPolicy struct {
 	// whose skill.verbs admit an as-taking write verb must have one of the
 	// two set (validated at load).
 	Identity string `yaml:"identity"`
+	// MaxCalls caps verb executions per skill session (analogous to
+	// agent_authored.limits). 0 = the built-in default (256).
+	MaxCalls int `yaml:"max_calls"`
 }
 
 // RuntimeName returns the runtime/controller the profile selects (runtime
@@ -1206,6 +1209,9 @@ func (c *Config) Validate() error {
 			case "", "none", "env", "broker":
 			default:
 				return fmt.Errorf("config: agent %q: skill.secrets_via must be broker|env|none, got %q", name, p.Skill.SecretsVia)
+			}
+			if p.Skill.MaxCalls < 0 {
+				return fmt.Errorf("config: agent %q: skill.max_calls must be >= 0, got %d", name, p.Skill.MaxCalls)
 			}
 			for _, s := range p.Skill.AllowSecrets {
 				// The current model names a vault entry: "<vault>/<key>"
