@@ -21,8 +21,8 @@ import (
 // values bind through args to the driver's placeholders, never into the
 // sql text.
 func sqlInvoke(guard DataGuard, store, op string, args []any) (any, error) {
-	if guard != nil && op == "exec" {
-		if err := guard("sql", op, args); err != nil {
+	if guard != nil {
+		if err := guard("sql", op, store, args); err != nil {
 			return nil, err
 		}
 	}

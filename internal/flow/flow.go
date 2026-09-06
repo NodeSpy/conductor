@@ -718,6 +718,16 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 		r.auditVerb(t, connName, verb, rendered, "stubbed", nil)
 		return stubOutputs(in, verb), nil
 	}
+	// The resource-allowlist runtime belt (#124): an agent-authored step's
+	// RENDERED options carry the concrete store/repo names the static guard
+	// couldn't evaluate — refuse + audit outside the allowlists.
+	if agentAuthored(ctx) {
+		if rerr := r.checkVerbResources(r.planPolicy(), t, step.Uses, rendered); rerr != nil {
+			rerr = fmt.Errorf("agent_authored allowlist: %w", rerr)
+			r.auditVerb(t, connName, verb, map[string]any{"barrier": "resource_allowlist"}, "blocked", rerr)
+			return nil, rerr
+		}
+	}
 	// The plan write barrier (no_secret_egress, runtime half): an unapproved
 	// agent plan may not park secret material in durable shared state — the
 	// static guard gates the vault-read+kv-write combos it can SEE; this
@@ -1319,6 +1329,14 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 			r.Log("%s [dry-run] would invoke hook %s.%s (at: %s)", flowTag(t), connName, verb, phase)
 			r.auditVerb(t, connName, verb, rendered, "stubbed", nil)
 			continue
+		}
+		if agentAuthored(ctx) {
+			if rerr := r.checkVerbResources(r.planPolicy(), t, h.Uses, rendered); rerr != nil {
+				rerr = fmt.Errorf("agent_authored allowlist: %w", rerr)
+				r.Log("%s %s hook %s.%s blocked: %v", flowTag(t), where, connName, verb, rerr)
+				r.auditVerb(t, connName, verb, map[string]any{"barrier": "resource_allowlist"}, "blocked", rerr)
+				continue
+			}
 		}
 		if planBarrier(ctx) && isInternalWrite(h.Uses) && r.containsTrackedSecret(rendered) {
 			berr := fmt.Errorf("no_secret_egress: refusing to write secret material into %s from an agent plan hook", h.Uses)

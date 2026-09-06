@@ -269,6 +269,9 @@ hosts:
 #     allow:   [ kv.*, memory.*, workflow, "workflow.*", gh.comment ]
 #     approve: [ cli, code, gh.merge ]
 #     approve_via: slack-ops
+#     allow_secrets: [ house/deploy_key ]  # secrets an agent-authored step may reference (deny-by-default;
+#     allow_stores:  [ cache ]             #   "*" = all of a kind; trust: full lifts all three lists)
+#     allow_targets: [ your-org/* ]        # repos beyond the TRIGGERING one (implicitly allowed)
 #     host: sandbox                      # a hosts: entry
 #     identity: bot
 #     limits: { max_steps: 50, max_fan_out: 20, max_sub_agents: 5, timeout: 30m, tokens: 200k }

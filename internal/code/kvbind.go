@@ -23,8 +23,8 @@ import (
 var kvValueWrites = map[string]bool{"set": true, "setnx": true, "merge": true, "append": true}
 
 func kvInvoke(guard DataGuard, store, op string, args []any) (any, error) {
-	if guard != nil && kvValueWrites[op] {
-		if err := guard("kv", op, args); err != nil {
+	if guard != nil {
+		if err := guard("kv", op, store, args); err != nil {
 			return nil, err
 		}
 	}

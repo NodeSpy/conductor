@@ -48,6 +48,7 @@ var fakeDecl = &connector.TypeDecl{
 				"channel": {Type: connector.TString},
 				"as":      {Type: connector.TString},
 				"meta":    {Type: connector.TMap},
+				"repo":    {Type: connector.TString}, // a target selector (like gh verbs)
 			},
 			Outputs: connector.Schema{"id": {Type: connector.TInt}},
 		},

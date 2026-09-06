@@ -10,13 +10,14 @@ import (
 // REGRESSION: ctx.store/ctx.sql/ctx.memory writes bypassed the plan write
 // barrier entirely (it was wired into the `uses: kv.set` verb path only) —
 // an agent plan's code step could park secret material the verb would have
-// refused. The bindings now consult Spec.DataGuard before every durable
-// write; reads and non-write ops stay unguarded.
+// refused. The bindings consult Spec.DataGuard on every kv/sql op (and
+// memory writes), passing the STORE NAME as the resource (#124) — the guard
+// implementation decides which ops it cares about.
 func TestDataGuardBlocksBindingWrites(t *testing.T) {
 	const secret = "c0de-s3cr3t-value"
 	var vetted []string
-	guard := func(kind, op string, args []any) error {
-		vetted = append(vetted, kind+"."+op)
+	guard := func(kind, op, resource string, args []any) error {
+		vetted = append(vetted, kind+"."+op+"@"+resource)
 		if strings.Contains(fmt.Sprint(args...), secret) {
 			return fmt.Errorf("no_secret_egress: refusing to write secret material into %s.%s", kind, op)
 		}
@@ -71,17 +72,19 @@ ctx.store("s").set("ns", "loot", ctx.leak)`}, map[string]any{"leak": secret})
 		t.Fatalf("lua kv.set of a secret must be refused: %v", err)
 	}
 
-	var sawWrite bool
+	// Writes AND reads are vetted (the #124 store allowlist needs every
+	// touch), each carrying its store name; memory ops carry none.
+	var sawWrite, sawRead bool
 	for _, v := range vetted {
-		if v == "kv.set" || v == "sql.exec" || v == "memory.remember" {
+		switch v {
+		case "kv.set@s", "sql.exec@db", "memory.remember@":
 			sawWrite = true
-		}
-		if strings.HasSuffix(v, ".get") || strings.HasSuffix(v, ".query") || strings.HasSuffix(v, ".recall") {
-			t.Fatalf("reads must not be guard-vetted: %v", vetted)
+		case "kv.get@s":
+			sawRead = true
 		}
 	}
-	if !sawWrite {
-		t.Fatalf("the guard never saw a write: %v", vetted)
+	if !sawWrite || !sawRead {
+		t.Fatalf("the guard must see writes and reads with their store: %v", vetted)
 	}
 
 	// A nil guard (no plan barrier) leaves everything as before.

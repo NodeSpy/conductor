@@ -165,6 +165,15 @@ Every broker outcome writes an audit entry (`event: secret_broker`) with an
 The secret **value** never appears in audit entries, logs, or notifications
 — those paths all run through the resolver's redaction as well.
 
+## Related: agent-authored resource allowlists
+
+The skill governs how an agent reaches back into conductor mid-session. The
+workflows an agent AUTHORS (plans, live `run_step`, saved workflows) are
+separately bounded by `policy.agent_authored`'s resource allowlists —
+`allow_secrets` / `allow_stores` / `allow_targets`, deny-by-default with the
+triggering repo implicitly allowed and `trust: full` as the lift-everything
+escape. See [[Policy]].
+
 ## Scope and limitations
 
 - Once a value is redeemed it is in the agent runtime's hands. The broker

@@ -64,7 +64,12 @@ type Spec struct {
 // DataGuard vets one binding write: kind is kv|sql|memory, op the operation,
 // args the caller-supplied values about to be written. A non-nil error
 // refuses the write.
-type DataGuard func(kind, op string, args []any) error
+// DataGuard vets a code step's data-plane calls: kind is kv|sql|memory, op
+// the operation, resource the store name (kv/sql; "" for memory), args the
+// caller-supplied arguments. Called on EVERY kv/sql/memory op — the guard
+// implementation decides which ops it cares about (the plan write barrier
+// vets value writes; the #124 resource allowlist vets any touch of a store).
+type DataGuard func(kind, op, resource string, args []any) error
 
 // Executor runs code steps. The zero value is usable: SSH defaults to a
 // zero-value *hosts.Client (real ssh subprocess), LookPath defaults to

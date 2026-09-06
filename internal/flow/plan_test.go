@@ -238,6 +238,7 @@ func TestPlanScopeHasNoSecrets(t *testing.T) {
 policy:
   agent_authored:
     allow: [ svc.post ]
+    allow_secrets: ["*"]
     no_secret_egress: false
 `)
 	out := "```plan\n- id: leak\n  uses: svc.post\n  options: { text: \"tok={{.secrets.tok}}.\" }\n```"

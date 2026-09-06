@@ -21,7 +21,7 @@ import (
 // agent:<name>).
 func memInvoke(guard DataGuard, op string, args []any) (any, error) {
 	if guard != nil && op == "remember" {
-		if err := guard("memory", op, args); err != nil {
+		if err := guard("memory", op, "", args); err != nil {
 			return nil, err
 		}
 	}

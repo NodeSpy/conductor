@@ -56,6 +56,19 @@ type AgentAuthoredPolicy struct {
 	// combination behind approval — the exfiltration pattern the allowlist
 	// alone misses.
 	NoSecretEgress *bool `yaml:"no_secret_egress,omitempty"`
+	// AllowSecrets / AllowStores / AllowTargets are the RESOURCE allowlists
+	// for agent-authored workflows (#124): which secrets an agent-authored
+	// step may reference (vault entries "<vault>/<key>", "<vault>/*", legacy
+	// named secrets), which kv/sql stores it may touch, and which
+	// repos/targets it may address ("owner/repo", "owner/*") BEYOND the one
+	// the workflow was triggered for (the triggering target is implicitly
+	// allowed). DENY BY DEFAULT: an unset/empty list means agent-authored
+	// steps may not reference that resource kind at all. "*" grants all of
+	// one kind; trust: full lifts all three. Config-authored steps are
+	// untouched by these lists.
+	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
+	AllowStores  []string `yaml:"allow_stores,omitempty"`
+	AllowTargets []string `yaml:"allow_targets,omitempty"`
 }
 
 // AgentAuthoredLimits bound one plan.

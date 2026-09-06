@@ -298,6 +298,12 @@ func (r *Runner) runPlan(ctx context.Context, t core.Trigger, agentName, runID, 
 		r.auditPlan(t, agentName, "rejected", res, err)
 		return nil, err
 	}
+	// The resource allowlists (#124): deny-by-default gates on which
+	// secrets/stores/targets an agent-authored plan may reference.
+	if rerr := guardPlanResources(pol, t, plan); rerr != nil {
+		r.auditPlan(t, agentName, "rejected", res, rerr)
+		return nil, rerr
+	}
 	r.auditPlan(t, agentName, "admitted", res, nil)
 
 	granted := map[string]bool{}
@@ -425,21 +431,47 @@ func (r *Runner) containsTrackedSecret(v map[string]any) bool {
 	return ok && !reflect.DeepEqual(red, v)
 }
 
-// planDataGuard is the code-sandbox face of the plan write barrier: nil when
-// the barrier is off (a config step, an approved or trusted plan), else a
-// guard the ctx.store/ctx.sql/ctx.memory bindings consult before every
-// durable write — without it, an agent plan's code step could park secret
-// material that `uses: kv.set` would have refused.
+// planDataGuard is the code-sandbox face of two gates. The plan WRITE
+// barrier (active for unapproved+untrusted plans) vets durable value writes
+// for tracked secret material — without it, an agent plan's code step could
+// park secret material that `uses: kv.set` would have refused. The resource
+// allowlist (#124, active for ALL agent-authored execution unless trust:
+// full) vets every kv/sql touch against policy.agent_authored.allow_stores —
+// the runtime belt behind the static plan scan, catching `ctx.store(name)`
+// with a name no scan could see. nil for config-authored steps.
 func (r *Runner) planDataGuard(ctx context.Context) code.DataGuard {
-	if !planBarrier(ctx) {
+	barrier := planBarrier(ctx)
+	var rp *resourcePolicy
+	if agentAuthored(ctx) {
+		rp = planResourcePolicy(r.planPolicy(), core.Trigger{})
+	}
+	if !barrier && rp == nil {
 		return nil
 	}
-	return func(kind, op string, args []any) error {
-		if r.containsTrackedSecret(map[string]any{"args": args}) {
+	return func(kind, op, resource string, args []any) error {
+		if rp != nil && (kind == "kv" || kind == "sql") && !rp.storeOK(resource) {
+			return fmt.Errorf("agent_authored allowlist: code step touches store %q — not in policy.agent_authored.allow_stores (trust: full lifts this)", resource)
+		}
+		if barrier && dataValueWrite(kind, op) && r.containsTrackedSecret(map[string]any{"args": args}) {
 			return fmt.Errorf("no_secret_egress: refusing to write secret material into %s.%s from an agent plan code step — approval required", kind, op)
 		}
 		return nil
 	}
+}
+
+// dataValueWrite mirrors the code bindings' value-write set: the ops that
+// persist caller-supplied values (the write barrier's scope; reads and
+// non-value ops pass it but still face the store allowlist).
+func dataValueWrite(kind, op string) bool {
+	switch kind {
+	case "kv":
+		return op == "set" || op == "setnx" || op == "merge" || op == "append"
+	case "sql":
+		return op == "exec"
+	case "memory":
+		return op == "remember"
+	}
+	return false
 }
 
 // runPlanState executes a (fresh or restored) plan state with checkpointing
@@ -557,6 +589,12 @@ func (r *Runner) guardSavedWorkflow(ctx context.Context, t core.Trigger, name st
 	if err != nil {
 		r.auditPlan(t, agent, "rejected", res, fmt.Errorf("saved workflow %q: %w", name, err))
 		return nil, fmt.Errorf("saved workflow %q: %w", name, err)
+	}
+	// A saved workflow is agent-authored: the resource allowlists (#124)
+	// apply on every run, under the CURRENT policy.
+	if rerr := guardPlanResources(pol, t, steps); rerr != nil {
+		r.auditPlan(t, agent, "rejected", res, fmt.Errorf("saved workflow %q: %w", name, rerr))
+		return nil, fmt.Errorf("saved workflow %q: %w", name, rerr)
 	}
 	r.auditPlan(t, agent, "admitted", res, nil)
 	if res.needsApproval && !shadow {

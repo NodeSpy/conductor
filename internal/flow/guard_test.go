@@ -213,6 +213,8 @@ func TestGuardSecretEgress(t *testing.T) {
 policy:
   agent_authored:
     allow: [ svc.post, kv.*, "*.read" ]
+    allow_secrets: ["*"]
+    allow_stores: ["*"]
 %s
 vaults:
   housevault: { type: file, dir: /tmp/none }
@@ -376,6 +378,8 @@ agents:
 policy:
   agent_authored:
     allow: [ svc.post, kv.*, "*.read" ]
+    allow_secrets: ["*"]
+    allow_stores: [main]
 `
 	cfg := loadConfig(t, cfgYAML)
 	shared := testSecrets(nil)
@@ -574,6 +578,7 @@ agents:
 policy:
   agent_authored:
     allow: [ svc.post, kv.*, sql.*, "*.read" ]
+    allow_stores: [main, db]
 `
 	kv.SetDataDir(t.TempDir())
 	kv.ResetStores()
@@ -698,6 +703,7 @@ workflows:
 policy:
   agent_authored:
     allow: [ workflow, svc.post ]
+    allow_stores: [main]
 `)
 	shared := testSecrets(nil)
 	shared.Track(secretVal)

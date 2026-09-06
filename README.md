@@ -430,6 +430,13 @@ agents:
       verbs: [gh.comment, rest.*]  # conductor verbs exposed as agent tools
 ```
 
+Agent-authored workflows are also bound by **resource allowlists** on
+`policy.agent_authored` — `allow_secrets`, `allow_stores`, `allow_targets`,
+each deny-by-default (an empty list means agent-authored steps may not touch
+that resource kind at all; the triggering repo is implicitly allowed;
+`"*"` grants a kind; `trust: full` lifts all three). Config-authored steps
+are unaffected.
+
 `{{secret "<vault>/<key>"}}` templates a vault entry as an **opaque handle**
 (`«secret:house/deploy_key»`) everywhere — prompts, env, tool args, audit — and the real
 value replaces the handle only at conductor's own egress boundary (verb

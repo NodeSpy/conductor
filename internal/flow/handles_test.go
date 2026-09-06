@@ -139,6 +139,7 @@ agents:
 policy:
   agent_authored:
     allow: [ svc.post ]
+    allow_secrets: ["*"]
 `)
 	_, fake := dispatchPlanCfg(t, cfg, "```plan\n- id: p\n  uses: svc.post\n  options: { text: 'try {{secret \"tok\"}} and "+secrets.Handle("tok")+"' }\n```")
 	calls := fake.snapshot()
@@ -179,6 +180,7 @@ secrets:
 policy:
   agent_authored:
     allow: [ svc.post ]
+    allow_secrets: ["*"]
 `)
 	sw, _ := OpenSavedStore("")
 	if _, err := sw.Save("relay", "d", []config.Step{{

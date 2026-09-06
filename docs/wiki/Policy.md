@@ -59,7 +59,10 @@ policy:
     limits: { max_steps: 50, max_fan_out: 20, max_sub_agents: 5, timeout: 30m, tokens: 200k }
     max_revisions: 3                          # supervise-loop cap → then needs_input
     no_secret_egress: true                    # secret-read + external-write in one plan needs approval
-    # trust: full                             # deliberate opt-out: lift allow/approve/host (limits still bind)
+    allow_secrets: [ house/deploy_key ]       # secrets an agent-authored step may REFERENCE (deny-by-default)
+    allow_stores:  [ cache ]                  # kv/sql stores it may touch (deny-by-default)
+    allow_targets: [ your-org/* ]             # repos beyond the triggering one (deny-by-default)
+    # trust: full                             # deliberate opt-out: lift allow/approve/host + the three allowlists (limits still bind)
 ```
 
 | key | meaning |
@@ -71,7 +74,8 @@ policy:
 | `limits` | `max_steps` (declared, incl. branches/compensations/hooks — and CUMULATIVE executed units across nested plans), `max_fan_out` (parallel branches + runtime `for_each` size), `max_sub_agents` (declared + cumulative runtime units across nested plans), `timeout` (wall clock; a nested plan can't extend its parent's), `tokens` (approximate cumulative sub-agent budget, chars/4). Defaults 50/20/5/30m/200k. A sub-agent whose output is itself a plan shares the PARENT's budget — never a fresh one — and plan nesting is depth-capped (4). Exceed → halt + escalate, never spin |
 | `max_revisions` | supervision rounds before the plan compensates and escalates to a human (default 3). A revision is fully re-guarded; the classes the run's ORIGINAL approval granted stay usable, but new approval-gated work rejects mid-run |
 | `no_secret_egress` | default true, two layers. Static: a plan that reads secret material (a vault verb, `{{ vault … }}`, `.secrets`/`.vaults` refs — including the `{{index . "secrets" …}}` forms) AND either touches the outside world (any non-builtin verb, code, cli) or **writes durable shared state** (`kv.set/setnx/merge/append`, `memory.remember`, `sql.exec` — parking a secret where a later, individually-innocent plan could read it back out) is approval-gated. Runtime, for unapproved plans: an internal write (verb OR a code step's `ctx.store`/`ctx.sql`/`ctx.memory`) carrying a tracked secret is refused; an EXTERNAL verb whose rendered options carry one is refused (the read-and-relay path); and once any step's outputs carried tracked secret material the plan is tainted — every later outside-touching step refuses, even when the value was transformed in between |
-| `trust: full` | lift allow/approve/host for this scope — a deliberate operator opt-in; limits and revision caps still bind, and the gate is audited as `trust` |
+| `allow_secrets` / `allow_stores` / `allow_targets` | the RESOURCE allowlists (#124), applying to agent-authored workflows only (plans, live `run_step`, saved workflows — config-authored steps are untouched). **Deny by default**: an unset/empty list means an agent-authored step may not reference that resource kind at all. Entries are exact names or globs — secrets as vault entries (`house/deploy_key`, `house/*`) or legacy named secrets, stores by name, targets as `owner/repo` / `owner/*`; `"*"` grants all of one kind. **The triggering target is implicitly allowed** — `allow_targets` only constrains additional repos the agent picks. Enforced statically at plan admission (literal references, hooks/branches/compensations included) plus a runtime belt: a rendered verb option (`store:`/`repo:`) or a code step's `ctx.store`/`ctx.sql` name outside the lists is refused and audited (`barrier: resource_allowlist`) |
+| `trust: full` | lift allow/approve/host AND the three resource allowlists for this scope — a deliberate operator opt-in; limits and revision caps still bind, and the gate is audited as `trust` |
 
 Every plan's admission is audited — the gate (`allow`/`approve`/`trust`),
 the rejection reason, per-step outcomes, compensations, and the
