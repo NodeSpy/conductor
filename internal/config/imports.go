@@ -229,6 +229,15 @@ func entryFileBody(path, sec, name string) (map[string]any, error) {
 	return m, nil
 }
 
+// GlobImport resolves one import pattern with the loader's exact rules —
+// `**` refused by name, an unmatched glob empty, a missing literal an error.
+// Exported for the migration's file discovery, which must collect the SAME
+// set the loader will read (a divergence under-collects, and the strict
+// loader then refuses what the migration skipped).
+func GlobImport(dir, from, pat string) ([]string, error) {
+	return globImport(dir, from, pat)
+}
+
 // globImport resolves one import pattern relative to dir. An unmatched GLOB
 // is a no-op (the default split layout ships empty conf.d/ folders that fill
 // up over time); a missing LITERAL path is an error (a typo'd filename must

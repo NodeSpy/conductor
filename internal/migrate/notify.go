@@ -116,6 +116,13 @@ func notifyToTriggers(cfg *config.Config, connectors map[string]map[string]any, 
 		return nil, err
 	}
 	for _, ev := range n.On {
+		if ev == "digest" {
+			// The digest "event" is the report timer, not a lifecycle event:
+			// its sink posts are generated with the digest message below.
+			// Adding these {{.message}}-templated sink steps here would
+			// double-post (and render an empty message) on every digest fire.
+			continue
+		}
 		stepsFor[ev] = append(stepsFor[ev], sinkSteps...)
 	}
 	if len(n.On) == 0 && len(sinkSteps) > 0 {
@@ -147,8 +154,15 @@ func notifyToTriggers(cfg *config.Config, connectors map[string]map[string]any, 
 	sort.Strings(events)
 	for _, ev := range events {
 		if ev == "digest" {
-			// The legacy digest event routed via-routes on the digest timer;
-			// folded into the grouped digest trigger below.
+			// The legacy digest event routed via-routes on the digest timer —
+			// folded into the grouped digest trigger below when digest: is
+			// set; with NO digest interval it never fired, so it drops with a
+			// note (never silently).
+			if n.Digest == 0 && len(stepsFor[ev]) > 0 {
+				*notes = append(*notes, "notify.on/via digest: no digest: interval configured — the legacy block never fired it; dropped with this note")
+			} else if len(stepsFor[ev]) > 0 {
+				*notes = append(*notes, "notify digest via-routes fold into the grouped digest trigger")
+			}
 			continue
 		}
 		if len(stepsFor[ev]) == 0 {

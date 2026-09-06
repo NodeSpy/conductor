@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // BackupSuffix names the pre-migration copy written next to each file.
@@ -130,15 +131,14 @@ func discoverFiles(mainPath string) ([]string, error) {
 			if containsEnvRef(imp) {
 				return fmt.Errorf("%s: import %q references an environment variable — resolve it by hand before migrating", p, imp)
 			}
-			pat := imp
-			if !filepath.IsAbs(pat) {
-				pat = filepath.Join(dir, pat)
-			}
-			matches, err := filepath.Glob(pat)
+			// The loader's own resolution (config.GlobImport): ** is refused
+			// by name here too — silently under-collecting and then having
+			// the strict loader refuse the same pattern wedged the daemon
+			// degraded.
+			matches, err := config.GlobImport(dir, p, imp)
 			if err != nil {
-				return fmt.Errorf("%s: bad import glob %q: %w", p, imp, err)
+				return err
 			}
-			sort.Strings(matches)
 			for _, m := range matches {
 				if err := walk(m); err != nil {
 					return err

@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -399,5 +401,104 @@ notify:
 		if strings.HasPrefix(tr.Name, "notify-") {
 			t.Fatalf("sink-less notify event still generated trigger %q", tr.Name)
 		}
+	}
+}
+
+// REGRESSION: with "digest" in notify.on AND a digest: interval, the digest
+// trigger got the sink post TWICE — once with the digest message and once
+// with a {{.message}} template that renders empty on the digest timer. There
+// is exactly one correct digest post now; a digest event with NO interval
+// drops with a note.
+func TestNotifyDigestNotDuplicated(t *testing.T) {
+	res, err := Transform([]byte(`
+integrations:
+  - name: gh
+    type: github
+    rules:
+      - match: { repos: ["acme/*"] }
+        actions:
+          merge_conflict:
+            - type: agent
+              agent: fixer
+              prompt: "fix"
+agents:
+  fixer: { provider: claude }
+notify:
+  slack_webhook_url: https://hooks.example/x
+  on: [complete, digest]
+  digest: 1h
+`))
+	if err != nil || !res.Changed {
+		t.Fatalf("must migrate: %v", err)
+	}
+	var out config.Config
+	if err := yaml.Unmarshal(maskEnv(res.Output), &out); err != nil {
+		t.Fatal(err)
+	}
+	var digest *config.TriggerSpec
+	for i := range out.Triggers {
+		if out.Triggers[i].Name == "notify-digest" {
+			digest = &out.Triggers[i]
+		}
+	}
+	if digest == nil {
+		t.Fatalf("no digest trigger:\n%s", res.Output)
+	}
+	if len(digest.Steps) != 1 {
+		t.Fatalf("digest must carry exactly ONE sink post, got %d:\n%s", len(digest.Steps), res.Output)
+	}
+	text, _ := digest.Steps[0].Options["text"].(string)
+	if !strings.Contains(text, "[digest]") || strings.Contains(text, "{{.message}}") {
+		t.Fatalf("digest post must use the digest message: %q", text)
+	}
+
+	// digest named with NO digest: interval → dropped with a note.
+	res2, err := Transform([]byte(`
+integrations:
+  - name: gh
+    type: github
+    rules:
+      - match: { repos: ["acme/*"] }
+        actions:
+          merge_conflict:
+            - type: agent
+              agent: fixer
+              prompt: "fix"
+agents:
+  fixer: { provider: claude }
+notify:
+  slack_webhook_url: https://hooks.example/x
+  on: [digest]
+`))
+	if err != nil || !res2.Changed {
+		t.Fatalf("must migrate: %v", err)
+	}
+	var out2 config.Config
+	if err := yaml.Unmarshal(maskEnv(res2.Output), &out2); err != nil {
+		t.Fatal(err)
+	}
+	for _, tr := range out2.Triggers {
+		if strings.HasPrefix(tr.Name, "notify-") {
+			t.Fatalf("interval-less digest must generate no notify trigger: %q", tr.Name)
+		}
+	}
+}
+
+// REGRESSION: discoverFiles resolved imports with a bare filepath.Glob — a
+// top-level `imports: [**]` under-collected (Glob matches one level), the
+// migration "succeeded" on a subset, and the strict loader then refused the
+// pattern: a daemon wedged degraded. Discovery now uses the loader's own
+// resolution and refuses ** by name up front.
+func TestDiscoverFilesRejectsDoubleStar(t *testing.T) {
+	dir := t.TempDir()
+	main := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(main, []byte("imports: [\"conf.d/**/*.yaml\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "conf.d/sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := discoverFiles(main); err == nil || !strings.Contains(err.Error(), "`**` is not supported") {
+		t.Fatalf("discovery must refuse ** like the loader: %v", err)
 	}
 }
