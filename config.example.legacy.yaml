@@ -59,16 +59,16 @@ integrations:
     # Handy when the forge repo and the registered paseo project differ in org or
     # casing. Keys are case-insensitive; only affects checkout (not forge ops).
     project_map:
-      EdnitionCode/RosterStream: ednition/rosterstream
+      YourOrg/YourApp: your-org/yourapp
 
     # OPTIONAL org-wide shortcut, applied to every repo WITHOUT an explicit
     # project_map entry above. Instead of listing each repo, rewrite the project
     # name: `org` replaces the owner segment. Casing is handled automatically —
     # the result is normalized to lowercase and matched case-insensitively, since
     # paseo project names are lowercased.
-    # Example: EdnitionCode/AnyRepo -> ednition/anyrepo. project_map wins over this.
+    # Example: YourOrg/AnyRepo -> your-org/anyrepo. project_map wins over this.
     project_rewrite:
-      org: ednition
+      org: your-org
 
     # OPTIONAL shared defaults; every rule merges over these.
     defaults:
@@ -267,7 +267,7 @@ integrations:
         match: '{{if eq .body.detail.state "ALARM"}}true{{end}}'   # optional: fire only when it renders "true"
         title: "{{.body.detail.alarmName}} → {{.body.detail.state}}"
         dedup: "{{.body.detail.alarmName}}-{{.body.time}}"         # "" = fire on every delivery
-        repo: EdnitionCode/infra       # optional real repo → enables checkout; omit → runs in scratch (checkout none)
+        repo: your-org/infra       # optional real repo → enables checkout; omit → runs in scratch (checkout none)
         actions:
           type: agent
           agent: fixer
@@ -281,8 +281,8 @@ integrations:
     listen: ":8098"
     client_secret: ${SENTRY_CLIENT_SECRET}
     rules:                             # first matching rule wins; empty filter = match-any
-      - match: { projects: [rosterstream], levels: [error, fatal], environments: [production] }
-        repo: EdnitionCode/RosterStream          # investigated + checked out
+      - match: { projects: [yourapp], levels: [error, fatal], environments: [production] }
+        repo: YourOrg/YourApp          # investigated + checked out
         actions:
           type: agent
           agent: fixer
@@ -297,8 +297,8 @@ integrations:
     listen: ":8097"
     signing_secret: ${PAGERDUTY_SIGNING_SECRET}
     rules:                             # first matching rule wins; empty filter = match-any
-      - match: { event_types: [incident.triggered, incident.escalated], urgencies: [high], services: [RosterStream API] }
-        repo: EdnitionCode/RosterStream          # triaged + checked out
+      - match: { event_types: [incident.triggered, incident.escalated], urgencies: [high], services: [YourApp API] }
+        repo: YourOrg/YourApp          # triaged + checked out
         actions:
           type: agent
           agent: fixer
@@ -314,12 +314,12 @@ integrations:
         url: https://example.instructure.com/doc/api/file.changelog.html
         interval: 1h                   # default 30m
         match: "deprecat|breaking|remov|LTI|roster"   # optional case-insensitive regex (title+summary)
-        # repo: EdnitionCode/RosterStream            # optional; omit → runs in scratch (checkout none)
+        # repo: YourOrg/YourApp            # optional; omit → runs in scratch (checkout none)
         actions:
           type: agent
           agent: planner
           checkout: none
-          prompt: "Canvas changelog: {{.item.title}} ({{.url}}). Does this affect RosterStream? File a heads-up issue if so."
+          prompt: "Canvas changelog: {{.item.title}} ({{.url}}). Does this affect your app? File a heads-up issue if so."
 
   # Slack control plane over Socket Mode (outbound WebSocket — no public URL).
   # Mention / react / slash → dispatch an agent; the bot token is exposed to
