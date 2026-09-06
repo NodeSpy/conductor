@@ -985,19 +985,19 @@ func TestVariantDedupIsolation(t *testing.T) {
 }
 
 func TestLogTag(t *testing.T) {
-	pr := core.Trigger{Instance: "ednition", Kind: "merge_conflict",
+	pr := core.Trigger{Instance: "acme", Kind: "merge_conflict",
 		Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}}
-	if got := tag(pr); got != "engine[ednition acme/w#5 merge_conflict]" {
+	if got := tag(pr); got != "engine[acme acme/w#5 merge_conflict]" {
 		t.Fatalf("pr tag: %q", got)
 	}
-	variant := core.Trigger{Instance: "ednition", Kind: "review_requested", Variant: "backend",
+	variant := core.Trigger{Instance: "acme", Kind: "review_requested", Variant: "backend",
 		Target: core.Target{Repo: "acme/w", PR: 6, Number: 6}}
-	if got := tag(variant); got != "engine[ednition acme/w#6 review_requested#backend]" {
+	if got := tag(variant); got != "engine[acme acme/w#6 review_requested#backend]" {
 		t.Fatalf("variant tag: %q", got)
 	}
-	issue := core.Trigger{Instance: "ednition", Kind: "issue_matched",
+	issue := core.Trigger{Instance: "acme", Kind: "issue_matched",
 		Target: core.Target{Repo: "acme/w", Issue: 42, Number: 42}}
-	if got := tag(issue); got != "engine[ednition acme/w#42 issue_matched]" {
+	if got := tag(issue); got != "engine[acme acme/w#42 issue_matched]" {
 		t.Fatalf("issue tag: %q", got)
 	}
 }

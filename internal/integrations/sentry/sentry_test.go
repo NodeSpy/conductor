@@ -29,14 +29,14 @@ func collect() (core.EmitFunc, *[]core.Trigger) {
 
 const issueBody = `{"action":"created","data":{"issue":{
 	"id":"1","shortId":"ROSTER-7","title":"nil deref in streamer","culprit":"streamer.Run",
-	"permalink":"https://sentry.io/x/ROSTER-7/","level":"error","project":{"slug":"rosterstream"}}}}`
+	"permalink":"https://sentry.io/x/ROSTER-7/","level":"error","project":{"slug":"widget"}}}}`
 
 func TestParseIssueAndRoute(t *testing.T) {
 	g := newTest(t, Config{
 		SmeeURL: "https://smee.io/x",
 		Rules: []Rule{{
-			Match:   Match{Projects: []string{"rosterstream"}, Levels: []string{"error", "fatal"}},
-			Repo:    "EdnitionCode/RosterStream",
+			Match:   Match{Projects: []string{"widget"}, Levels: []string{"error", "fatal"}},
+			Repo:    "AcmeCorp/Widget",
 			Actions: config.ActionSet{{Type: "agent", Agent: "fixer", Checkout: "branch-off"}},
 		}},
 	})
@@ -49,7 +49,7 @@ func TestParseIssueAndRoute(t *testing.T) {
 	if tr.Kind != "sentry_alert" || tr.Dedup != "ROSTER-7" {
 		t.Fatalf("unexpected kind/dedup: %q / %q", tr.Kind, tr.Dedup)
 	}
-	if tr.Target.Repo != "EdnitionCode/RosterStream" {
+	if tr.Target.Repo != "AcmeCorp/Widget" {
 		t.Fatalf("project→repo routing failed: %+v", tr.Target)
 	}
 	s := tr.Context["sentry"].(map[string]any)
@@ -63,7 +63,7 @@ func TestNoMatchingRuleDrops(t *testing.T) {
 		SmeeURL: "https://smee.io/x",
 		Rules: []Rule{{
 			Match:   Match{Projects: []string{"other-project"}},
-			Repo:    "EdnitionCode/Other",
+			Repo:    "AcmeCorp/Other",
 			Actions: config.ActionSet{{Type: "agent", Agent: "fixer"}},
 		}},
 	})
@@ -98,12 +98,12 @@ func TestSyntheticRepoForcesNoCheckout(t *testing.T) {
 func TestErrorResourceParse(t *testing.T) {
 	body := `{"action":"triggered","data":{"event":{
 		"event_id":"abc123","title":"TimeoutError","level":"warning","environment":"prod",
-		"web_url":"https://sentry.io/e/abc123/","project":"rosterstream"}}}`
+		"web_url":"https://sentry.io/e/abc123/","project":"widget"}}}`
 	g := newTest(t, Config{
 		SmeeURL: "https://smee.io/x",
 		Rules: []Rule{{
 			Match:   Match{Environments: []string{"prod"}},
-			Repo:    "EdnitionCode/RosterStream",
+			Repo:    "AcmeCorp/Widget",
 			Actions: config.ActionSet{{Type: "agent", Agent: "fixer", Checkout: "branch-off"}},
 		}},
 	})

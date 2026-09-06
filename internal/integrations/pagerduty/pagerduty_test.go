@@ -30,15 +30,15 @@ func collect() (core.EmitFunc, *[]core.Trigger) {
 const incidentBody = `{"event":{"event_type":"incident.triggered","resource_type":"incident","data":{
 	"id":"PABC123","number":42,"status":"triggered","title":"High error rate on api",
 	"html_url":"https://acme.pagerduty.com/incidents/PABC123","urgency":"high",
-	"priority":{"summary":"P1"},"service":{"id":"PSVC1","summary":"RosterStream API"}}}}`
+	"priority":{"summary":"P1"},"service":{"id":"PSVC1","summary":"Widget API"}}}}`
 
 func TestParseAndRoute(t *testing.T) {
 	g := newTest(t, Config{
 		SmeeURL: "https://smee.io/x",
 		Rules: []Rule{{
 			Match: Match{EventTypes: []string{"incident.triggered"}, Urgencies: []string{"high"},
-				Priorities: []string{"P1", "P2"}, Services: []string{"RosterStream API"}},
-			Repo:    "EdnitionCode/RosterStream",
+				Priorities: []string{"P1", "P2"}, Services: []string{"Widget API"}},
+			Repo:    "AcmeCorp/Widget",
 			Actions: config.ActionSet{{Type: "agent", Agent: "fixer", Checkout: "branch-off"}},
 		}},
 	})
@@ -51,7 +51,7 @@ func TestParseAndRoute(t *testing.T) {
 	if tr.Kind != "pagerduty_incident" || tr.Dedup != "PABC123:incident.triggered" {
 		t.Fatalf("unexpected kind/dedup: %q / %q", tr.Kind, tr.Dedup)
 	}
-	if tr.Target.Repo != "EdnitionCode/RosterStream" {
+	if tr.Target.Repo != "AcmeCorp/Widget" {
 		t.Fatalf("repo routing failed: %+v", tr.Target)
 	}
 	p := tr.Context["pagerduty"].(map[string]any)
@@ -65,7 +65,7 @@ func TestServiceOrPriorityNoMatchDrops(t *testing.T) {
 		SmeeURL: "https://smee.io/x",
 		Rules: []Rule{{
 			Match:   Match{Services: []string{"Some Other Service"}},
-			Repo:    "EdnitionCode/RosterStream",
+			Repo:    "AcmeCorp/Widget",
 			Actions: config.ActionSet{{Type: "agent", Agent: "fixer"}},
 		}},
 	})

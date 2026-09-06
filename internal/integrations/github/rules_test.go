@@ -71,8 +71,8 @@ func TestResolveMostSpecificWinsAndMerge(t *testing.T) {
 }
 
 // TestResolveMostSpecificIgnoresOrder pins the key property: the most-specific
-// matching rule wins regardless of config order. Here the general "EdnitionCode/*"
-// rule is listed BEFORE the specific "EdnitionCode/RosterStream" rule; RosterStream
+// matching rule wins regardless of config order. Here the general "AcmeCorp/*"
+// rule is listed BEFORE the specific "AcmeCorp/Widget" rule; Widget
 // must still resolve to the specific one (under the old first-match-wins it would
 // have wrongly picked the general rule).
 func TestResolveMostSpecificIgnoresOrder(t *testing.T) {
@@ -80,9 +80,9 @@ func TestResolveMostSpecificIgnoresOrder(t *testing.T) {
 		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
 		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
 		Rules: []Rule{
-			{Match: Match{Repos: []string{"EdnitionCode/*"}}, // general FIRST
+			{Match: Match{Repos: []string{"AcmeCorp/*"}}, // general FIRST
 				Actions: as1(map[string]config.Action{"new_comment": {Type: "agent", Agent: "general"}})},
-			{Match: Match{Repos: []string{"EdnitionCode/RosterStream"}}, // specific SECOND
+			{Match: Match{Repos: []string{"AcmeCorp/Widget"}}, // specific SECOND
 				Actions: as1(map[string]config.Action{"new_comment": {Type: "agent", Agent: "specific"}})},
 			{Match: Match{Repos: []string{"*/*"}}, // catch-all, least specific
 				Actions: as1(map[string]config.Action{"new_comment": {Type: "agent", Agent: "catchall"}})},
@@ -90,10 +90,10 @@ func TestResolveMostSpecificIgnoresOrder(t *testing.T) {
 	}
 	g := newTestIntegration(t, cfg)
 
-	if r, _ := g.resolve("EdnitionCode/RosterStream"); r.Actions["new_comment"][0].Agent != "specific" {
+	if r, _ := g.resolve("AcmeCorp/Widget"); r.Actions["new_comment"][0].Agent != "specific" {
 		t.Fatalf("exact match should win over org-wildcard, got %q", r.Actions["new_comment"][0].Agent)
 	}
-	if r, _ := g.resolve("EdnitionCode/infra"); r.Actions["new_comment"][0].Agent != "general" {
+	if r, _ := g.resolve("AcmeCorp/infra"); r.Actions["new_comment"][0].Agent != "general" {
 		t.Fatalf("org-wildcard should win over */*, got %q", r.Actions["new_comment"][0].Agent)
 	}
 	if r, _ := g.resolve("other/repo"); r.Actions["new_comment"][0].Agent != "catchall" {

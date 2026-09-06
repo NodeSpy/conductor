@@ -38,13 +38,13 @@ func baseCfg() Config {
 func TestAppMentionEmits(t *testing.T) {
 	g := newTest(t, baseCfg())
 	emit, got := collect()
-	raw := json.RawMessage(`{"event":{"type":"app_mention","text":"hey fix RosterStream","user":"U1","channel":"C1","ts":"1.1"}}`)
+	raw := json.RawMessage(`{"event":{"type":"app_mention","text":"hey fix Widget","user":"U1","channel":"C1","ts":"1.1"}}`)
 	g.handleEvent(context.Background(), emit, raw)
 	if len(*got) != 1 {
 		t.Fatalf("want 1 trigger, got %d", len(*got))
 	}
 	tr := (*got)[0]
-	if tr.Kind != "app_mention" || tr.Title != "hey fix RosterStream" {
+	if tr.Kind != "app_mention" || tr.Title != "hey fix Widget" {
 		t.Fatalf("unexpected kind/title: %q / %q", tr.Kind, tr.Title)
 	}
 	if !strings.HasPrefix(tr.Target.Repo, "slack:C1") {

@@ -1413,7 +1413,7 @@ func (c *Config) handoffNames() string {
 }
 
 // ActionRef is one configured action together with a human-readable location
-// (e.g. `github[ednition] rules[0].actions.review_requested`), so a cross-config
+// (e.g. `github[acme] rules[0].actions.review_requested`), so a cross-config
 // check can say exactly where a bad reference lives. Integrations enumerate these
 // for the CLI's validate/startup pass; see CheckAgentRefs.
 type ActionRef struct {

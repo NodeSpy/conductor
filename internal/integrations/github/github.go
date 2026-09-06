@@ -36,7 +36,7 @@ type Config struct {
 	// ProjectMap remaps a repo (owner/name) to the paseo project name of an
 	// existing workspace, so checkouts reuse it instead of cloning a fresh one.
 	// Useful when the forge repo and the registered paseo project differ in org
-	// or casing (e.g. EdnitionCode/RosterStream -> ednition/rosterstream). Keys
+	// or casing (e.g. AcmeCorp/Widget -> acme/widget). Keys
 	// are matched case-insensitively; only affects checkout resolution.
 	ProjectMap map[string]string `yaml:"project_map"`
 
@@ -71,7 +71,7 @@ type Identity struct {
 
 // ProjectRewrite derives a paseo project name from a repo (owner/name) without
 // listing each repo. Org, when set, replaces the owner segment (e.g. a webhook's
-// EdnitionCode -> the registered ednition). The result is always matched
+// AcmeCorp -> the registered acme). The result is always matched
 // case-insensitively and normalized to lowercase, since paseo project names are
 // lowercased — so casing differences between the forge repo and the registered
 // project never force a fresh clone. It applies to every repo in the integration;
@@ -375,7 +375,7 @@ var knownKinds = map[string]bool{
 // defaults) for a repo, or ok=false if no rule matches.
 func (g *Integration) resolve(repo string) (Rule, bool) {
 	// MOST-SPECIFIC match wins (not first-listed), so rule order doesn't matter:
-	// an exact "EdnitionCode/RosterStream" beats "EdnitionCode/*" beats "*/*".
+	// an exact "AcmeCorp/Widget" beats "AcmeCorp/*" beats "*/*".
 	// Ties (equally-specific matches) keep the earliest rule for determinism.
 	bestIdx, bestScore := -1, -1
 	for i, r := range g.cfg.Rules {
@@ -409,7 +409,7 @@ func ruleSpecificity(patterns []string, repo string) int {
 
 // patternSpecificity scores a repo glob: an exact (wildcard-free) pattern beats
 // any wildcard pattern; among wildcard patterns, more literal (non-glob) chars
-// wins, so "EdnitionCode/*" (13 literal) outranks "*/*" (1). Kept simple: `*`,
+// wins, so "AcmeCorp/*" (13 literal) outranks "*/*" (1). Kept simple: `*`,
 // `?`, and `[` are treated as glob metacharacters.
 func patternSpecificity(p string) int {
 	glob := strings.Count(p, "*") + strings.Count(p, "?") + strings.Count(p, "[")

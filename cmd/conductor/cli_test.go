@@ -170,7 +170,7 @@ connectors:
     type: github
     token: dummy-replay-token
     me: { logins: [danielcbaldwin] }
-    repos: ["EdnitionCode/RosterStream"]
+    repos: ["AcmeCorp/Widget"]
     webhook: { listen: "127.0.0.1:0", secret: replay-test }
     sweep: { enabled: false }
   box:
@@ -188,11 +188,11 @@ triggers:
 	fx := `{"event": "pull_request", "body": {
   "action": "review_requested",
   "installation": { "id": 0 },
-  "repository": { "full_name": "EdnitionCode/RosterStream", "name": "RosterStream",
-    "default_branch": "main", "owner": { "login": "EdnitionCode" } },
+  "repository": { "full_name": "AcmeCorp/Widget", "name": "Widget",
+    "default_branch": "main", "owner": { "login": "AcmeCorp" } },
   "pull_request": { "number": 5300, "state": "open", "draft": false,
     "title": "auth: rework session refresh",
-    "html_url": "https://github.com/EdnitionCode/RosterStream/pull/5300",
+    "html_url": "https://github.com/AcmeCorp/Widget/pull/5300",
     "head": { "sha": "cafebabe1234", "ref": "feature/auth-refresh" },
     "base": { "ref": "main" }, "user": { "login": "someone-else" } },
   "requested_reviewer": { "login": "danielcbaldwin" }
@@ -209,7 +209,7 @@ triggers:
 		t.Fatalf("connectors-model replay found nothing:\n%s", out)
 	}
 	for _, want := range []string{
-		"review_requested EdnitionCode/RosterStream#5300 [workflow: 2 steps] (dry-run)",
+		"review_requested AcmeCorp/Widget#5300 [workflow: 2 steps] (dry-run)",
 		"would run code step (js)",
 		"would invoke box.run",
 	} {
