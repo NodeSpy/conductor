@@ -24,18 +24,30 @@ no-op. Because both schemas coexist, every intermediate state (some files
 migrated, some not) still loads.
 
 Manual: `conductor config migrate` (same flow), `--dry-run` prints the
-transformed YAML and the mapping summary without writing.
+transformed YAML and the mapping summary, then runs the transform through
+the SAME full validation as the real path — without writing anything.
 
-## Totality — no silent drops
+## Noted drops, not refusals
 
-The transform maps **every** legacy construct; anything it cannot map is a
-hard error that names it and refuses to commit. Fields the legacy engine
-never read (documented inert: rule `workspace:`, action `project:` /
-`method:`, `match.project`/`match.status`) are dropped **with a summary
-note** — stated, never silent. `${VAR}` references survive verbatim (the
-transform masks them around parsing; secrets are never inlined). Carried
-blocks (`agents:`, `store:`, `update:`, …) keep their original
-YAML, comments included.
+The transform maps **every** legacy construct; a construct it cannot map (an
+unknown integration type, `control.enabled: false`, a mixed-schema file) is
+a hard error that names it and refuses to commit. Legacy **keys** the schema
+no longer knows — retired options, inert fields, blocks from configs that
+predate the schema — are **dropped with a summary note** instead: the
+migration is one-time and must produce a loadable config from any legacy
+file (the strict runtime loader would otherwise crash-loop the box on
+auto-update). The output is checked against the strict runtime decode before
+it is written. Fields the legacy engine never read (rule `workspace:`,
+action `project:`/`method:`, `match.project`/`match.status`) and notify
+events with no delivery sink drop with notes the same way. `${VAR}`
+references survive verbatim (the transform masks them around parsing;
+secrets are never inlined). Carried blocks (`agents:`, `store:`, `update:`,
+…) keep their original YAML, comments included.
+
+If the migration still cannot produce a loadable config, boot **holds
+degraded** instead of crash-looping: the process stays alive, logs the
+blocker, and retries migrate+load every minute until an edit (or a newer
+binary) unblocks it.
 
 ## What maps where
 
