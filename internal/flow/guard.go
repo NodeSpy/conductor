@@ -223,11 +223,20 @@ func stepClass(cfg *config.Config, step *config.Step) string {
 
 // matchAny reports whether class matches any pattern: exact, path-glob
 // ("kv.*", "*.write"), or the "cli" alias for command steps.
+//
+// conductor.* verbs are EXACT-match only: they operate the daemon itself
+// (update/pause/resume/restart/reload/run), so a broad `allow: ["*"]` — or
+// any glob, including "conductor.*" — must never hand them to an agent.
+// Admitting one requires naming it.
 func matchAny(patterns []string, class string) bool {
+	exactOnly := strings.HasPrefix(class, "conductor.")
 	for _, p := range patterns {
 		p = strings.TrimSpace(p)
 		if p == class {
 			return true
+		}
+		if exactOnly {
+			continue
 		}
 		if (p == "cli" || p == "command") && class == "command" {
 			return true

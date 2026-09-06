@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/kv"
 	"github.com/NodeSpy/conductor/internal/vaults"
@@ -500,5 +501,47 @@ vaults:
 	}
 	if len(fake.snapshot()) != 0 {
 		t.Fatal("gated plan must not run")
+	}
+}
+
+// REGRESSION: `allow: ["*"]` (and any glob, "conductor.*" included) admitted
+// the conductor.* daemon-control verbs — an agent-authored plan could
+// update/restart/reload the daemon or fire triggers under a broad allowlist.
+// Those verbs are exact-match only now.
+func TestGuardWildcardNeverAdmitsConductorVerbs(t *testing.T) {
+	mk := func(allow string) (*config.Config, *connector.Registry) {
+		cfg := planCfg(t, `
+policy:
+  agent_authored:
+    allow: [ `+allow+` ]
+`)
+		return cfg, buildRegistry(t, cfg)
+	}
+	step := func(uses string) []config.Step {
+		return []config.Step{{ID: "s", Uses: uses, Options: map[string]any{}}}
+	}
+
+	// The full wildcard: ordinary verbs admit, conductor verbs do not.
+	cfg, reg := mk(`"*"`)
+	pol := cfg.Policy.AgentAuthored
+	if _, err := guardPlan(cfg, reg, pol, step("svc.post")); err != nil {
+		t.Fatalf("wildcard must still admit ordinary verbs: %v", err)
+	}
+	for _, v := range []string{"conductor.update", "conductor.restart", "conductor.reload", "conductor.run"} {
+		if _, err := guardPlan(cfg, reg, pol, step(v)); err == nil || !strings.Contains(err.Error(), v) {
+			t.Fatalf("allow [*] must not admit %s: %v", v, err)
+		}
+	}
+
+	// A conductor glob is not explicit naming either.
+	cfg2, reg2 := mk(`"conductor.*"`)
+	if _, err := guardPlan(cfg2, reg2, cfg2.Policy.AgentAuthored, step("conductor.restart")); err == nil {
+		t.Fatal("allow [conductor.*] must not admit conductor.restart")
+	}
+
+	// Exact naming admits.
+	cfg3, reg3 := mk(`conductor.restart`)
+	if _, err := guardPlan(cfg3, reg3, cfg3.Policy.AgentAuthored, step("conductor.restart")); err != nil {
+		t.Fatalf("explicitly named conductor.restart must admit: %v", err)
 	}
 }
