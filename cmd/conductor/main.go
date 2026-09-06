@@ -42,6 +42,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/skill"
 	"github.com/NodeSpy/conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/vaults"
 
 	_ "github.com/NodeSpy/conductor/internal/integrations/cron"      // register "cron"
 	_ "github.com/NodeSpy/conductor/internal/integrations/github"    // register "github"
@@ -229,6 +230,10 @@ func cmdValidate(args []string) error {
 	stack, err := buildFlowStack(cfg, nil, nil, true)
 	if err != nil {
 		return err
+	}
+	// Deprecation lint: warnings, never failures (back-compat stays working).
+	for _, w := range flow.DeprecationWarnings(cfg) {
+		fmt.Printf("warning: %s\n", w)
 	}
 	if stack != nil {
 		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s), %d agent profile(s)",
@@ -470,13 +475,20 @@ func cmdRun(args []string) error {
 			// via skill:, authorized by the session tokens the dispatch path
 			// mints (skill.Active), never by client-asserted identity.
 			if cfg.SkillEnabled() {
-				lookup := func(string) (string, bool) { return "", false }
-				if stack != nil {
-					vals := stack.SecretVals
-					lookup = func(name string) (string, bool) {
-						v, ok := vals[name]
-						return v, ok
+				// A broker name is a vault entry ("<vault>/<key>", read at
+				// issue time through the vaults registry, which taints the
+				// value for redaction); a bare name falls back to the
+				// retired named-secrets block.
+				lookup := func(name string) (string, bool) {
+					if vault, key, ok := strings.Cut(name, "/"); ok {
+						v, err := vaults.Read(ctx, vault, key)
+						return v, err == nil && v != ""
 					}
+					if stack != nil {
+						v, ok := stack.SecretVals[name]
+						return v, ok && v != ""
+					}
+					return "", false
 				}
 				sb := skill.NewBroker(lookup, st.Audit)
 				skill.SetActive(sb)

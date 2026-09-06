@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/secrets"
+	"github.com/NodeSpy/conductor/internal/vaults"
 )
 
 // Boundary resolution for {{secret "name"}} handles (#36 §12). The template
@@ -98,7 +99,7 @@ func (r *Runner) resolveSecretHandles(ctx context.Context, v any, eligible []str
 	walk = func(v any) (any, error) {
 		switch x := v.(type) {
 		case string:
-			return r.resolveHandleString(x, eligible)
+			return r.resolveHandleString(ctx, x, eligible)
 		case map[string]any:
 			out := make(map[string]any, len(x))
 			for k, e := range x {
@@ -122,7 +123,7 @@ func (r *Runner) resolveSecretHandles(ctx context.Context, v any, eligible []str
 		case []string:
 			out := make([]string, len(x))
 			for i, e := range x {
-				res, err := r.resolveHandleString(e, eligible)
+				res, err := r.resolveHandleString(ctx, e, eligible)
 				if err != nil {
 					return nil, err
 				}
@@ -132,7 +133,7 @@ func (r *Runner) resolveSecretHandles(ctx context.Context, v any, eligible []str
 		case map[string]string:
 			out := make(map[string]string, len(x))
 			for k, e := range x {
-				res, err := r.resolveHandleString(e, eligible)
+				res, err := r.resolveHandleString(ctx, e, eligible)
 				if err != nil {
 					return nil, err
 				}
@@ -146,19 +147,41 @@ func (r *Runner) resolveSecretHandles(ctx context.Context, v any, eligible []str
 }
 
 // resolveHandleString replaces each eligible handle occurrence in one string.
-func (r *Runner) resolveHandleString(s string, eligible []string) (string, error) {
+func (r *Runner) resolveHandleString(ctx context.Context, s string, eligible []string) (string, error) {
 	for _, name := range eligible {
 		h := secrets.Handle(name)
 		if !strings.Contains(s, h) {
 			continue
 		}
-		val, ok := r.SecretVals[name]
-		if !ok || val == "" {
-			return "", fmt.Errorf("secret %q is not configured (or did not resolve) — see `conductor secrets check`", name)
+		val, err := r.secretHandleValue(ctx, name)
+		if err != nil {
+			return "", err
 		}
 		s = strings.ReplaceAll(s, h, val)
 	}
 	return s, nil
+}
+
+// secretHandleValue resolves one handle name to its value. The current model
+// names a vault entry — "<vault>/<key>", read through the vaults registry
+// (which taints the value for redaction) — with a bare name still resolving
+// against the retired named-secrets block for back-compat.
+func (r *Runner) secretHandleValue(ctx context.Context, name string) (string, error) {
+	if vault, key, ok := strings.Cut(name, "/"); ok {
+		val, err := vaults.Read(ctx, vault, key)
+		if err != nil {
+			return "", fmt.Errorf("secret %q: %w", name, err)
+		}
+		if val == "" {
+			return "", fmt.Errorf("secret %q resolved empty — see `conductor secrets check`", name)
+		}
+		return val, nil
+	}
+	val, ok := r.SecretVals[name]
+	if !ok || val == "" {
+		return "", fmt.Errorf("secret %q is not configured (or did not resolve) — name a vault entry as \"<vault>/<key>\"", name)
+	}
+	return val, nil
 }
 
 // resolveHandleStringMap is resolveSecretHandles for a rendered env map.

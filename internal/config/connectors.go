@@ -961,6 +961,7 @@ func validateHooks(where string, hooks []Hook) error {
 
 func (c *Config) connectorNames() string { return sortedKeys(c.ConnectorsMap) }
 func (c *Config) hostNames() string      { return sortedKeys(c.Hosts) }
+func (c *Config) vaultNames() string     { return sortedKeys(c.Vaults) }
 func (c *Config) workflowNames() string  { return sortedKeys(c.Workflows) }
 
 func sortedKeys[M ~map[string]V, V any](m M) string {

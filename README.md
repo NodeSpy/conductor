@@ -426,12 +426,12 @@ agents:
   deployer:
     skill:
       secrets_via: broker          # broker | env (deprecated) | none (default)
-      allow_secrets: [deploy_key]  # exact secrets: names the broker may issue
+      allow_secrets: [house/deploy_key]  # exact vault entries (<vault>/<key>) the broker may issue
       verbs: [gh.comment, rest.*]  # conductor verbs exposed as agent tools
 ```
 
-`{{secret "name"}}` templates a named secret as an **opaque handle**
-(`«secret:name»`) everywhere — prompts, env, tool args, audit — and the real
+`{{secret "<vault>/<key>"}}` templates a vault entry as an **opaque handle**
+(`«secret:house/deploy_key»`) everywhere — prompts, env, tool args, audit — and the real
 value replaces the handle only at conductor's own egress boundary (verb
 invocation, code-step env/args, remote-command env/argv), only in
 config-authored steps whose own template literally names it. Agent-authored

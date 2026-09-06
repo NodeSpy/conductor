@@ -671,8 +671,16 @@ func checkRefs(where, tmpl string, sc *scope) error {
 			if n == "" {
 				return fmt.Errorf("%s: {{ secret … }}: the name must be a literal string (a computed name renders a handle that never resolves)", where)
 			}
-			if !sc.secrets[n] {
-				return fmt.Errorf("%s: {{ secret %q }}: no secret named %q (defined secrets: %s)", where, n, n, sortedIDs(sc.secrets))
+			// The current model names a vault entry: "<vault>/<key>". The
+			// key half can't be checked statically (non-listable vaults);
+			// the vault half must exist. A bare name checks the retired
+			// named-secrets block (back-compat).
+			if vault, _, isVault := strings.Cut(n, "/"); isVault {
+				if !sc.vaults[vault] {
+					return fmt.Errorf("%s: {{ secret %q }}: no vault named %q (defined vaults: %s)", where, n, vault, sortedIDs(sc.vaults))
+				}
+			} else if !sc.secrets[n] {
+				return fmt.Errorf("%s: {{ secret %q }}: no secret named %q — name a vault entry as \"<vault>/<key>\"", where, n, n)
 			}
 		}
 	}

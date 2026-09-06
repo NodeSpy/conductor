@@ -27,7 +27,7 @@ agents:
     model: claude-sonnet-5
     skill:
       secrets_via: broker          # broker | env (deprecated) | none (default)
-      allow_secrets: [deploy_key]  # exact `secrets:` names the broker may issue
+      allow_secrets: [house/deploy_key]  # exact vault entries (<vault>/<key>) the broker may issue
       verbs: [gh.comment, rest.*]  # verbs exposed as agent tools (see Verbs as tools)
 ```
 
@@ -39,8 +39,10 @@ agents:
   into the step's `env:` yourself, which places the raw value in the
   runtime's environment for the whole run. `conductor validate` warns about
   it.
-- `allow_secrets` takes exact names from the `secrets:` block — no
-  patterns. Broadening access is a config edit, never an agent request.
+- `allow_secrets` takes exact vault entries, named `<vault>/<key>` (the
+  same entries `{{ vault "house" "deploy_key" }}` reads) — no patterns.
+  Broadening access is a config edit, never an agent request. The vault half
+  is validated at load; the key resolves at issue time.
 
 ## How identity is bound
 
@@ -58,8 +60,9 @@ table is in-memory).
 
 ## Boundary handles: `{{secret "name"}}`
 
-Config can template a named secret with `{{secret "gh_pat"}}`. It renders as
-an **opaque handle** — `«secret:gh_pat»` — everywhere a template renders: an
+Config can template a secret with `{{secret "house/gh_pat"}}` (a vault
+entry, `<vault>/<key>`). It renders as an **opaque handle** —
+`«secret:house/gh_pat»` — everywhere a template renders: an
 agent step's prompt, its `env:`, tool arguments, audit entries, logs. The
 real value replaces the handle only at conductor's **own egress boundary**:
 
@@ -82,7 +85,7 @@ Two rules keep the handle from becoming a resolution oracle:
 Agent steps have no conductor-side egress (the env goes to the external
 runtime), so their handles never resolve at all: env-at-rest carries the
 handle, and an agent that truly needs the value uses the broker below.
-`{{secret}}` names are validated at load time against the `secrets:` block,
+`{{secret}}` names are validated at load time (the vault must be defined)
 and must be literal. Local `type: command` steps run through the agent
 runtime, not conductor — use a code step (`run: sh`) when conductor itself
 should inject the value.

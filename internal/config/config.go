@@ -1202,8 +1202,16 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("config: agent %q: skill.secrets_via must be broker|env|none, got %q", name, p.Skill.SecretsVia)
 			}
 			for _, s := range p.Skill.AllowSecrets {
-				if _, ok := c.SecretRefs[s]; !ok {
-					return fmt.Errorf("config: agent %q: skill.allow_secrets names unknown secret %q (not in secrets:)", name, s)
+				// The current model names a vault entry: "<vault>/<key>"
+				// (the key half resolves at issue time — non-listable vaults
+				// can't be checked statically). A bare name checks the
+				// retired named-secrets block for back-compat.
+				if vault, _, isVault := strings.Cut(s, "/"); isVault {
+					if _, ok := c.Vaults[vault]; !ok {
+						return fmt.Errorf("config: agent %q: skill.allow_secrets %q names unknown vault %q (defined: %s)", name, s, vault, c.vaultNames())
+					}
+				} else if _, ok := c.SecretRefs[s]; !ok {
+					return fmt.Errorf("config: agent %q: skill.allow_secrets names unknown secret %q — name a vault entry as \"<vault>/<key>\"", name, s)
 				}
 			}
 		}

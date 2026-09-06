@@ -247,3 +247,72 @@ triggers:
 		t.Fatalf("non-literal secret name must fail validation: %v", err)
 	}
 }
+
+// The current-model naming: {{secret "<vault>/<key>"}} resolves through the
+// vaults registry at the boundary; the outbound call carries the value, the
+// audit carries the handle, and the taint keeps it out of every log line.
+func TestSecretHandleVaultForm(t *testing.T) {
+	rig, fake, _ := vaultRig(t, "")
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - id: a
+    uses: svc.post
+    options:
+      text: 'tok={{secret "house/gh"}}'
+`)
+	runTrigger(rig, newTrigger("ping", nil), spec)
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("workflow failed: %s", errStr)
+	}
+	calls := fake.snapshot()
+	if len(calls) != 1 || calls[0].Opts["text"] != "tok=hunter2-tok" {
+		t.Fatalf("outbound options must carry the vault value: %+v", calls)
+	}
+	for _, e := range rig.Store.auditsWithEvent("verb") {
+		opts, _ := e["options"].(map[string]any)
+		text, _ := opts["text"].(string)
+		if !strings.Contains(text, secrets.Handle("house/gh")) {
+			t.Fatalf("audit options must keep the handle: %+v", e)
+		}
+		if strings.Contains(text, "hunter2-tok") {
+			t.Fatalf("audit options leaked the vault value: %+v", e)
+		}
+	}
+	// An unknown vault in a handle fails the step loudly.
+	spec = mustSpec(t, `
+on: svc.ping
+steps:
+  - id: b
+    uses: svc.post
+    options: { text: '{{secret "ghost/k"}}' }
+`)
+	runTrigger(rig, newTrigger("ping", nil), spec)
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "ghost") {
+		t.Fatalf("unknown vault must fail the step: %v %q", failed, errStr)
+	}
+}
+
+// Load-time validation of the vault form: the vault half must exist.
+func TestValidateSecretCallVaultNames(t *testing.T) {
+	base := `
+connectors:
+  svc: { type: fake }
+vaults:
+  house: { type: file, dir: /run/secrets }
+triggers:
+  - on: svc.ping
+    steps:
+      - id: a
+        uses: svc.post
+        options: { text: '%s' }
+`
+	good := loadConfig(t, strings.Replace(base, "%s", `{{secret "house/gh"}}`, 1))
+	if err := Validate(good, buildRegistry(t, good)); err != nil {
+		t.Fatalf("known vault must validate: %v", err)
+	}
+	bad := loadConfig(t, strings.Replace(base, "%s", `{{secret "ghost/gh"}}`, 1))
+	if err := Validate(bad, buildRegistry(t, bad)); err == nil || !strings.Contains(err.Error(), "no vault named") {
+		t.Fatalf("unknown vault must fail validation: %v", err)
+	}
+}
