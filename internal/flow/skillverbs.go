@@ -116,6 +116,63 @@ func jsonSchemaType(t connector.FieldType) string {
 	return "string"
 }
 
+// validateSkillProfiles rejects a config whose skill surface would EXCEED
+// the plan surface (#122 R2): a verb pattern in a profile's skill.verbs must
+// not admit any verb policy.agent_authored.approve gates behind human
+// approval — the skill surface has no approval hand-off, so the overlap
+// would silently skip the gate the operator configured. Both sides are
+// pattern lists, so the check expands them against the REAL registry's verb
+// universe and errors on any concrete verb both admit.
+func validateSkillProfiles(cfg *config.Config, reg *connector.Registry) error {
+	if cfg == nil || cfg.Policy == nil || cfg.Policy.AgentAuthored == nil {
+		return nil
+	}
+	pol := cfg.Policy.AgentAuthored
+	if pol.TrustFull() || len(pol.Approve) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(cfg.Agents))
+	for name := range cfg.Agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		p := cfg.Agents[name]
+		if p.Skill == nil || len(p.Skill.Verbs) == 0 {
+			continue
+		}
+		for _, uses := range skillVerbUniverse(reg) {
+			if matchAny(p.Skill.Verbs, uses) && matchAny(pol.Approve, uses) {
+				return fmt.Errorf("config: agent %q: skill.verbs admits %q, which policy.agent_authored.approve gates behind human approval — the skill tool surface has no approval hand-off, so this would silently skip the gate; remove it from skill.verbs (or from approve)", name, uses)
+			}
+		}
+	}
+	return nil
+}
+
+// skillVerbUniverse is every conn.verb class the skill surface could serve
+// (workflow/conductor are never served there).
+func skillVerbUniverse(reg *connector.Registry) []string {
+	var out []string
+	if reg == nil {
+		return out
+	}
+	for _, connName := range reg.Names() {
+		if connName == "workflow" || connName == "conductor" {
+			continue
+		}
+		in, ok := reg.Get(connName)
+		if !ok || in.Decl == nil {
+			continue
+		}
+		for _, vd := range in.Decl.Verbs {
+			out = append(out, connName+"."+vd.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // RunSkillVerb executes one verb on behalf of a token-authorized agent.
 func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string, options map[string]any) (map[string]any, error) {
 	t := core.Trigger{
@@ -139,6 +196,14 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	}
 	if !matchAny(id.Verbs, uses) {
 		return deny("not allowed by this profile's skill.verbs")
+	}
+	// The skill surface must never EXCEED the plan surface: a verb the
+	// operator gated behind human approval (policy.agent_authored.approve)
+	// has no approval hand-off here, so it does not run here — config
+	// validation rejects the overlap up front (validateSkillProfiles); this
+	// is the runtime belt for saved-policy drift.
+	if pol := r.planPolicy(); pol != nil && !pol.TrustFull() && matchAny(pol.Approve, uses) {
+		return deny("gated behind approval by policy.agent_authored.approve — the skill surface has no approval hand-off; use a plan step")
 	}
 	if r.Conns == nil {
 		return deny("no connectors on this daemon")

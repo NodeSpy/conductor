@@ -41,6 +41,9 @@ func Validate(cfg *config.Config, reg *connector.Registry) error {
 	if err := validateNotifyVia(cfg, reg); err != nil {
 		return err
 	}
+	if err := validateSkillProfiles(cfg, reg); err != nil {
+		return err
+	}
 	return nil
 }
 

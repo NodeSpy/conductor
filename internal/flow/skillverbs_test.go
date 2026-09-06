@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/kv"
 )
 
 func skillRig(t *testing.T) (*testRig, *fakeState) {
@@ -143,5 +145,100 @@ func TestRunSkillVerbSecretRelayBarrier(t *testing.T) {
 		if s, ok := e["error"].(string); ok && strings.Contains(s, "s3kr1t-value") {
 			t.Fatalf("audit leaked the value: %+v", e)
 		}
+	}
+}
+
+// #122 R2: the skill surface must not silently exceed the plan surface.
+// A verb policy.agent_authored.approve gates behind human approval is
+// rejected at CONFIG LOAD when a skill.verbs pattern would admit it, and
+// refused at runtime even if such a config slipped through.
+func TestSkillVerbsCannotBypassApprove(t *testing.T) {
+	// Load-time: skill gh-wildcard vs an approve-listed concrete verb.
+	cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+agents:
+  deployer:
+    model: x
+    skill: { verbs: ["svc.*"] }
+policy:
+  agent_authored:
+    allow: [ svc.ask ]
+    approve: [ svc.post ]
+`)
+	err := Validate(cfg, buildRegistry(t, cfg))
+	if err == nil || !strings.Contains(err.Error(), `skill.verbs admits "svc.post"`) {
+		t.Fatalf("approve-overlap must fail validation, got %v", err)
+	}
+
+	// Non-overlapping skill.verbs validate fine.
+	ok := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+agents:
+  deployer:
+    model: x
+    skill: { verbs: ["svc.ask"] }
+policy:
+  agent_authored:
+    approve: [ svc.post ]
+`)
+	if err := Validate(ok, buildRegistry(t, ok)); err != nil {
+		t.Fatalf("non-overlapping skill.verbs must validate: %v", err)
+	}
+
+	// Runtime belt: even with the verb pattern-admitted, the approve gate
+	// refuses on the skill surface and nothing dispatches.
+	reg := buildRegistry(t, cfg)
+	st := newFakeState(t, "svc")
+	rig := newTestRunner(t, cfg, reg)
+	id := SkillIdentity{Agent: "deployer", Verbs: []string{"svc.*"}}
+	_, rerr := rig.Runner.RunSkillVerb(context.Background(), id, "svc.post", map[string]any{"text": "x"})
+	if rerr == nil || !strings.Contains(rerr.Error(), "approval") {
+		t.Fatalf("approve-gated verb must be refused on the skill surface, got %v", rerr)
+	}
+	if calls := st.snapshot(); len(calls) != 0 {
+		t.Fatalf("refused call must not dispatch: %+v", calls)
+	}
+	// trust: full lifts approve everywhere — the skill surface follows.
+	full := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+agents:
+  deployer: { model: x, skill: { verbs: ["svc.*"] } }
+policy:
+  agent_authored: { trust: full, approve: [ svc.post ] }
+`)
+	if err := Validate(full, buildRegistry(t, full)); err != nil {
+		t.Fatalf("trust: full must lift the overlap check: %v", err)
+	}
+}
+
+// #122 R2 (egress belt): the internal WRITE barrier holds on the skill
+// surface — tracked secret material never lands in shared state through an
+// agent tool call.
+func TestRunSkillVerbSecretWriteBarrier(t *testing.T) {
+	kv.SetDataDir(t.TempDir())
+	kv.ResetStores()
+	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
+	cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+stores:
+  main: { type: boltdb }
+`)
+	reg := buildRegistry(t, cfg)
+	rig := newTestRunner(t, cfg, reg)
+	rig.Runner.Secrets.Track("s3kr1t-value")
+	id := SkillIdentity{Agent: "a", Verbs: []string{"kv.*"}}
+	_, err := rig.Runner.RunSkillVerb(context.Background(), id, "kv.set",
+		map[string]any{"store": "main", "namespace": "n", "key": "k", "value": "park s3kr1t-value"})
+	if err == nil || !strings.Contains(err.Error(), "refusing to write secret material") {
+		t.Fatalf("want write-barrier refusal, got %v", err)
+	}
+	// A clean write still works — the barrier is value-triggered, not a ban.
+	if _, err := rig.Runner.RunSkillVerb(context.Background(), id, "kv.set",
+		map[string]any{"store": "main", "namespace": "n", "key": "k", "value": "plain"}); err != nil {
+		t.Fatalf("clean kv.set: %v", err)
 	}
 }

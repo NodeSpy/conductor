@@ -175,6 +175,13 @@ Ground rules on this surface:
   exact-match-only and never served here, and `workflow.*` is excluded —
   agent-authored orchestration goes through the `run_step` tool and its
   policy guard instead.
+- **The skill surface never exceeds the plan surface.** A verb
+  `policy.agent_authored.approve` gates behind human approval cannot be
+  served as a skill tool: config validation rejects a `skill.verbs` pattern
+  that would admit an approve-gated verb (there is no approval hand-off on
+  the tool surface), and the runtime refuses such a call regardless. The
+  `no_secret_egress` posture carries over as the unconditional write/relay
+  barriers below.
 - **Options are literal.** Agent-supplied options are never
   template-rendered (no `{{.secrets…}}` evaluation) and never resolve
   `{{secret}}` handles.
