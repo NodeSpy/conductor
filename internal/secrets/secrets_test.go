@@ -2,8 +2,11 @@ package secrets
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -520,5 +523,49 @@ func TestSeedKeyFileDefaultPath(t *testing.T) {
 	}
 	if !strings.HasPrefix(kf, home) || !strings.HasSuffix(kf, "vault.key") {
 		t.Fatalf("default seed path: %q", kf)
+	}
+}
+
+// REGRESSION: tracking stored only the raw value while Redact and the flow
+// barriers match substrings — base64/hex/url-encoding a secret defeated
+// redaction, the read-taint, and the write barriers. Tracking now covers the
+// common encoded forms. (Deliberately NOT exhaustive: an attacker-controlled
+// transform still evades substring matching — see trackLocked's scope note.)
+func TestTrackCoversCommonEncodings(t *testing.T) {
+	// A value whose URL escaping differs from the raw form.
+	const secret = "s3cr3t+value/with=chars"
+	r := New()
+	r.Track(secret)
+
+	encodings := map[string]string{
+		"raw":             secret,
+		"base64":          base64.StdEncoding.EncodeToString([]byte(secret)),
+		"base64-nopad":    strings.TrimRight(base64.StdEncoding.EncodeToString([]byte(secret)), "="),
+		"base64url":       base64.URLEncoding.EncodeToString([]byte(secret)),
+		"base64url-nopad": strings.TrimRight(base64.URLEncoding.EncodeToString([]byte(secret)), "="),
+		"hex-lower":       hex.EncodeToString([]byte(secret)),
+		"hex-upper":       strings.ToUpper(hex.EncodeToString([]byte(secret))),
+		"url-escaped":     url.QueryEscape(secret),
+	}
+	for name, enc := range encodings {
+		msg := "relayed: " + enc + " (done)"
+		red := r.Redact(msg)
+		if strings.Contains(red, enc) {
+			t.Errorf("%s form survived Redact: %s", name, red)
+		}
+		if !strings.Contains(red, Placeholder) {
+			t.Errorf("%s form: placeholder missing: %s", name, red)
+		}
+		// The flow barriers use RedactValue difference as containsTrackedSecret.
+		if r.RedactValue(map[string]any{"v": msg}).(map[string]any)["v"] == msg {
+			t.Errorf("%s form not detected as tracked", name)
+		}
+	}
+
+	// Trivially-short values still aren't tracked (nor their encodings).
+	r2 := New()
+	r2.Track("ab")
+	if got := r2.Redact("ab and " + base64.StdEncoding.EncodeToString([]byte("ab"))); strings.Contains(got, Placeholder) {
+		t.Fatalf("short values must not be tracked: %s", got)
 	}
 }

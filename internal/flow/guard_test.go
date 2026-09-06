@@ -1,7 +1,10 @@
 package flow
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -779,5 +782,29 @@ steps: [ { id: call, uses: api.ping } ]
 	}
 	if !sawRedacted {
 		t.Fatalf("the error string must carry the redaction placeholder: %v", audits)
+	}
+}
+
+// REGRESSION (encoding-aware tracking): a code step base64/hex/url-encoding
+// a secret before relaying it defeated the substring-only barriers. Tracking
+// now covers the common encodings, so the SAME containsTrackedSecret used by
+// the write barrier, relay barrier, and read-taint catches them. (An
+// attacker-controlled transform still evades — see trackLocked's scope note.)
+func TestBarriersCatchEncodedSecrets(t *testing.T) {
+	const secret = "enc-s3cr3t+value/x"
+	shared := testSecrets(nil)
+	shared.Track(secret)
+	r := &Runner{Secrets: shared}
+	for name, enc := range map[string]string{
+		"base64": base64.StdEncoding.EncodeToString([]byte(secret)),
+		"hex":    hex.EncodeToString([]byte(secret)),
+		"url":    url.QueryEscape(secret),
+	} {
+		if !r.containsTrackedSecret(map[string]any{"out": "v=" + enc}) {
+			t.Errorf("%s-encoded secret not caught by containsTrackedSecret", name)
+		}
+	}
+	if r.containsTrackedSecret(map[string]any{"out": "plain text"}) {
+		t.Error("plain text must not match")
 	}
 }

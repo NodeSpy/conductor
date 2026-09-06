@@ -19,7 +19,10 @@ package secrets
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"sort"
@@ -176,10 +179,43 @@ func (r *Resolver) Track(value string) {
 }
 
 // trackLocked adds a value to the redaction list (longest first so an
-// overlapping shorter value doesn't split a longer one mid-replace). Values
-// shorter than 4 bytes are not tracked — replacing them would shred ordinary
-// text far more than it would protect anything.
+// overlapping shorter value doesn't split a longer one mid-replace) —
+// together with its COMMON ENCODED FORMS, so a one-line transform in a code
+// step (base64/hex/url-encoding the secret before relaying it) no longer
+// defeats Redact, containsTrackedSecret, the read-taint, or the write
+// barriers: standard and URL-safe base64 (with and without padding), lower-
+// and upper-hex, and URL query escaping.
+//
+// SCOPE NOTE: this raises the bar but is NOT a complete guarantee — an
+// attacker-controlled transform (xor, split-and-rejoin, encryption, double
+// encoding) still evades any substring/encoding match. The real guarantee
+// for untrusted or external runtimes is never handing them the raw secret
+// (a broker design, tracked separately). Do not extend this list chasing
+// exhaustiveness.
+//
+// Values shorter than 4 bytes are not tracked — replacing them would shred
+// ordinary text far more than it would protect anything; the same floor
+// applies to each encoded form (and forms identical to the raw value, e.g.
+// the URL escaping of an alphanumeric token, are dropped as duplicates).
 func (r *Resolver) trackLocked(v string) {
+	if len(v) < 4 {
+		return
+	}
+	r.addLocked(v)
+	std := base64.StdEncoding.EncodeToString([]byte(v))
+	r.addLocked(std)
+	r.addLocked(strings.TrimRight(std, "="))
+	url64 := base64.URLEncoding.EncodeToString([]byte(v))
+	r.addLocked(url64)
+	r.addLocked(strings.TrimRight(url64, "="))
+	hexLower := hex.EncodeToString([]byte(v))
+	r.addLocked(hexLower)
+	r.addLocked(strings.ToUpper(hexLower))
+	r.addLocked(url.QueryEscape(v))
+}
+
+// addLocked appends one (deduped, length-floored) value to the redaction list.
+func (r *Resolver) addLocked(v string) {
 	if len(v) < 4 {
 		return
 	}
