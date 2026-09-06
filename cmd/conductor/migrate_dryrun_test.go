@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // REGRESSION: `config migrate --dry-run` used to only re-parse the transform
@@ -74,5 +75,87 @@ agents:
 	raw, _ := os.ReadFile(good)
 	if !strings.Contains(string(raw), "integrations:") {
 		t.Fatal("dry-run modified the config")
+	}
+}
+
+// REGRESSION: a config the migration refuses AND the strict loader rejects
+// used to exit cmdRun — the service manager restarted it into the same wall
+// forever (a crash-loop on auto-update). Boot now holds degraded, retries,
+// and resumes the moment the config becomes loadable.
+func TestBootHoldsDegradedUntilConfigLoadable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	// Mixed schema (migration refuses: "finish the migration by hand") plus
+	// a retired top-level block (strict load refuses: unknown key).
+	broken := `
+integrations:
+  - name: gh
+    type: github
+connectors:
+  timer:
+    type: cron
+    schedules: { tick: { every: 1h } }
+dispatch:
+  identity: { read_token: app }
+triggers:
+  - on: timer.tick
+    steps: [{ id: t, type: command, command: ["true"] }]
+`
+	if err := os.WriteFile(path, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--config", path}
+	warning := autoMigrateOnBoot(args)
+	if warning == "" {
+		t.Fatal("mixed-schema config must produce a migration warning")
+	}
+	if _, _, err := loadConfig(args); err == nil {
+		t.Fatal("the broken config must fail the strict load (that is the crash-loop scenario)")
+	}
+
+	old := degradedRetryInterval
+	degradedRetryInterval = 30 * time.Millisecond
+	t.Cleanup(func() { degradedRetryInterval = old })
+
+	type res struct {
+		err error
+	}
+	done := make(chan res, 1)
+	go func() {
+		cfg, err := holdDegradedUntilLoadable(args, warning, os.ErrInvalid)
+		if err == nil && cfg == nil {
+			err = os.ErrInvalid
+		}
+		done <- res{err}
+	}()
+
+	// The hold must NOT return while the config stays broken.
+	select {
+	case r := <-done:
+		t.Fatalf("degraded hold exited on a still-broken config: %v", r.err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// The operator (or a newer binary's migration) fixes the file — the hold
+	// picks it up and returns a loaded config.
+	fixed := `
+connectors:
+  timer:
+    type: cron
+    schedules: { tick: { every: 1h } }
+triggers:
+  - on: timer.tick
+    steps: [{ id: t, type: command, command: ["true"] }]
+`
+	if err := os.WriteFile(path, []byte(fixed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("hold must resume with the fixed config: %v", r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("degraded hold did not pick up the fixed config")
 	}
 }

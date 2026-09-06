@@ -3,8 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
+	"syscall"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/migrate"
@@ -128,4 +131,40 @@ func autoMigrateOnBoot(args []string) (warning string) {
 		logf("config migrate: %d file(s) now on the connectors schema", n)
 	}
 	return ""
+}
+
+// degradedRetryInterval paces the degraded-boot hold (a test shortens it).
+var degradedRetryInterval = time.Minute
+
+// holdDegradedUntilLoadable keeps the daemon process ALIVE when the
+// migration could not produce a loadable config AND the current file does
+// not load — exiting would just have the service manager restart us into
+// the same wall forever (a silent crash-loop). It logs the blocker loudly,
+// retries migrate+load on a ticker, and returns the config the moment a
+// retry succeeds (an auto-migration fix in a newer binary, or an operator
+// edit, is picked up without intervention). SIGINT/SIGTERM end the hold.
+func holdDegradedUntilLoadable(args []string, warning string, loadErr error) (*config.Config, error) {
+	logf("BOOT DEGRADED: config does not load: %v", loadErr)
+	logf("BOOT DEGRADED: %s", warning)
+	logf("BOOT DEGRADED: holding (nothing dispatches) and retrying every %s — the next successful migrate+load resumes a normal boot", degradedRetryInterval)
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sig)
+	t := time.NewTicker(degradedRetryInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-sig:
+			return nil, fmt.Errorf("shut down while boot-degraded — the config never loaded: %w", loadErr)
+		case <-t.C:
+			_ = autoMigrateOnBoot(args)
+			cfg, _, err := loadConfig(args)
+			if err == nil {
+				logf("BOOT DEGRADED: config loads now — resuming normal boot")
+				return cfg, nil
+			}
+			loadErr = err
+			logf("BOOT DEGRADED: still not loadable: %v", err)
+		}
+	}
 }

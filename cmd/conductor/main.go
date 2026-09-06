@@ -244,13 +244,23 @@ func cmdRun(args []string) error {
 		return cmdRunTrigger(args)
 	}
 	// Automatic in-place migration: a legacy config is transformed to the
-	// connectors schema (backed up, validated, swapped) before load; on any
-	// failure the daemon keeps running on the legacy config and notifies.
+	// connectors schema (backed up, validated, swapped) BEFORE the strict
+	// runtime load; on any failure the daemon keeps running on the legacy
+	// config and notifies.
 	migrateWarning := autoMigrateOnBoot(args)
 
 	// loadConfig loads the sibling conductor.env first, so ${...} refs resolve
 	// (this is also how launchd — which has no EnvironmentFile — gets secrets).
 	cfg, _, err := loadConfig(args)
+	if err != nil && migrateWarning != "" {
+		// The migration could not produce a loadable config AND the current
+		// file doesn't load either (a legacy config the strict loader
+		// rejects). Exiting here means the service manager restarts us into
+		// the same wall forever — a silent crash-loop. Hold the process
+		// alive instead, retrying migrate+load periodically so a fixed (or
+		// fixable) config is picked up without operator intervention.
+		cfg, err = holdDegradedUntilLoadable(args, migrateWarning, err)
+	}
 	if err != nil {
 		return err
 	}
