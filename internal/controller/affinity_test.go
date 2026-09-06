@@ -546,3 +546,24 @@ func TestAffinityFollowupCapture(t *testing.T) {
 		t.Fatal("no session spec must be ok=false")
 	}
 }
+
+// REGRESSION: the per-(agent,key) mutex map grew forever — every key a
+// session ever bound leaked an entry for the daemon's lifetime. Locks are
+// refcounted now: the map holds only keys with an active holder/waiter.
+func TestAffinityLockMapDoesNotGrow(t *testing.T) {
+	spec := affSpec()
+	rig := newAffRig(t, nil, spec)
+	for pr := 1; pr <= 20; pr++ {
+		rig.dispatch(t, affReq("reviewer", "new_comment", "o/r", pr, spec))
+		rig.dispatch(t, affReq("reviewer", "evt", "o/r", pr, spec)) // a follow-up per key
+	}
+	waitFor(t, "all follow-ups delivered", func() bool { return len(rig.sender.sends()) == 20 })
+	waitFor(t, "lock map drained", func() bool { return rig.aff.LockedKeys() == 0 })
+
+	// Eviction leaves nothing behind either.
+	rig.aff.ObserveEvent(context.Background(), core.Trigger{
+		Source: "github", Instance: "gh", Kind: "pr_closed",
+		Target: core.Target{Repo: "o/r", PR: 1, Number: 1},
+	})
+	waitFor(t, "post-eviction lock map empty", func() bool { return rig.aff.LockedKeys() == 0 })
+}

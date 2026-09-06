@@ -80,7 +80,7 @@ type Affinity struct {
 	mu    sync.Mutex
 	refs  map[string]AffinityRef // bindingKey → persisted ref
 	live  map[string]Session     // bindingKey → live session held by THIS process
-	locks map[string]*sync.Mutex // bindingKey → serialization lock
+	locks map[string]*keyLock    // bindingKey → serialization lock (ACTIVE keys only; refcounted)
 	owned map[string]string      // sessionID → bindingKey (archive guards)
 }
 
@@ -95,7 +95,7 @@ func NewAffinity(reg *Registry, st AffinityStore, cfg *config.Config, hold, rele
 		hold: hold, release: release, log: log, now: time.Now,
 		refs:  map[string]AffinityRef{},
 		live:  map[string]Session{},
-		locks: map[string]*sync.Mutex{},
+		locks: map[string]*keyLock{},
 		owned: map[string]string{},
 	}
 	if st != nil {
@@ -164,9 +164,8 @@ func (a *Affinity) Dispatch(ctx context.Context, runner Runner, req dispatch.Req
 	// Evict-and/or-spawn path: serialized on the key lock. An in-flight turn
 	// can only be holding it if the binding just missed the fast path (an
 	// expiry racing a queued delivery) — rare and bounded.
-	lk := a.lockFor(bk)
-	lk.Lock()
-	defer lk.Unlock()
+	kl := a.acquireKey(bk)
+	defer a.releaseKey(bk, kl)
 
 	if ref, ok := a.refFor(bk); ok {
 		if reason := a.expiredReason(ref, spec); reason != "" {
@@ -222,9 +221,8 @@ func (a *Affinity) bind(bk, agent, key, controllerName, sessionID string) {
 // spawns a fresh session bound to the key, exactly like the old inline
 // fallback — the event is never lost.
 func (a *Affinity) deliver(ctx context.Context, runner Runner, req dispatch.Request, bk, controllerName, key, prompt string) {
-	lk := a.lockFor(bk)
-	lk.Lock()
-	defer lk.Unlock()
+	kl := a.acquireKey(bk)
+	defer a.releaseKey(bk, kl)
 
 	ref, ok := a.refFor(bk)
 	if !ok {
@@ -308,9 +306,8 @@ func (a *Affinity) Followup(ctx context.Context, agentName string, profile confi
 		return "", false, err
 	}
 	bk := bindingKey(agentName, strings.TrimSpace(key))
-	lk := a.lockFor(bk)
-	lk.Lock()
-	defer lk.Unlock()
+	kl := a.acquireKey(bk)
+	defer a.releaseKey(bk, kl)
 	ref, ok := a.refFor(bk)
 	if !ok {
 		return "", false, nil
@@ -355,9 +352,8 @@ func (a *Affinity) ObserveEvent(ctx context.Context, t core.Trigger) {
 		sess := a.unbind(bk, ref)
 		a.log("affinity: evicted %s session %s (key %s): %s", ref.Agent, ref.SessionID, ref.Key, reason)
 		go func(bk string, ref AffinityRef, sess Session) {
-			lk := a.lockFor(bk)
-			lk.Lock()
-			defer lk.Unlock()
+			kl := a.acquireKey(bk)
+			defer a.releaseKey(bk, kl)
 			a.teardown(context.WithoutCancel(ctx), ref, sess)
 		}(bk, ref, sess)
 	}
@@ -385,13 +381,12 @@ func (a *Affinity) EvictExpired(ctx context.Context) int {
 		if reason == "" {
 			continue
 		}
-		lk := a.lockFor(bk)
-		lk.Lock()
+		kl := a.acquireKey(bk)
 		if cur, ok := a.refFor(bk); ok && cur.SessionID == ref.SessionID {
 			a.evictLocked(ctx, bk, cur, reason)
 			n++
 		}
-		lk.Unlock()
+		a.releaseKey(bk, kl)
 	}
 	return n
 }
@@ -431,15 +426,47 @@ func (a *Affinity) Owns(agentID string) bool {
 
 // ---------------------------------------------------------------------------
 
-func (a *Affinity) lockFor(bk string) *sync.Mutex {
+// keyLock is one binding key's serialization lock, refcounted so the locks
+// map only ever holds ACTIVE keys: without the refcount, one mutex per
+// (agent, key) accumulated forever — every PR a session ever bound leaked an
+// entry for the daemon's lifetime.
+type keyLock struct {
+	mu   sync.Mutex
+	refs int // guarded by a.mu: holders + waiters; the entry deletes at 0
+}
+
+// acquireKey blocks until the key's lock is held. Pair with releaseKey.
+func (a *Affinity) acquireKey(bk string) *keyLock {
+	a.mu.Lock()
+	kl := a.locks[bk]
+	if kl == nil {
+		kl = &keyLock{}
+		a.locks[bk] = kl
+	}
+	kl.refs++
+	a.mu.Unlock()
+	kl.mu.Lock()
+	return kl
+}
+
+// releaseKey unlocks and drops the map entry when this was the last user —
+// waiters hold a ref, so an entry in use is never deleted (and thus two
+// goroutines can never serialize on DIFFERENT mutexes for one key).
+func (a *Affinity) releaseKey(bk string, kl *keyLock) {
+	kl.mu.Unlock()
+	a.mu.Lock()
+	kl.refs--
+	if kl.refs == 0 && a.locks[bk] == kl {
+		delete(a.locks, bk)
+	}
+	a.mu.Unlock()
+}
+
+// LockedKeys reports the live key-lock entries (tests: bounded growth).
+func (a *Affinity) LockedKeys() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	lk, ok := a.locks[bk]
-	if !ok {
-		lk = &sync.Mutex{}
-		a.locks[bk] = lk
-	}
-	return lk
+	return len(a.locks)
 }
 
 func (a *Affinity) refFor(bk string) (AffinityRef, bool) {
