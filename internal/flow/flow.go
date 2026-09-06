@@ -723,6 +723,16 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 		r.auditVerb(t, connName, verb, map[string]any{"barrier": "secret_write"}, "blocked", err)
 		return nil, err
 	}
+	// The relay barrier (the READ half): an unapproved plan may not hand
+	// tracked secret material to an EXTERNAL connector either — the
+	// read-and-relay path (kv.get of a parked secret → gh.comment) that the
+	// static scan can't see, because reading a store isn't secret access
+	// until the value comes back.
+	if planBarrier(ctx) && !internalConnectors[connName] && r.containsTrackedSecret(rendered) {
+		err := fmt.Errorf("no_secret_egress: refusing to send secret material to %s from an agent plan — approval required", step.Uses)
+		r.auditVerb(t, connName, verb, map[string]any{"barrier": "secret_relay"}, "blocked", err)
+		return nil, err
+	}
 	start := time.Now()
 	out, err := in.InvokeFinal(ctx, verb, rendered)
 	took := time.Since(start).Round(time.Millisecond)
@@ -1256,6 +1266,12 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 			berr := fmt.Errorf("no_secret_egress: refusing to write secret material into %s from an agent plan hook", h.Uses)
 			r.Log("%s %s hook %s.%s blocked: %v", flowTag(t), where, connName, verb, berr)
 			r.auditVerb(t, connName, verb, map[string]any{"barrier": "secret_write"}, "blocked", berr)
+			continue
+		}
+		if planBarrier(ctx) && !internalConnectors[connName] && r.containsTrackedSecret(rendered) {
+			berr := fmt.Errorf("no_secret_egress: refusing to send secret material to %s from an agent plan hook", h.Uses)
+			r.Log("%s %s hook %s.%s blocked: %v", flowTag(t), where, connName, verb, berr)
+			r.auditVerb(t, connName, verb, map[string]any{"barrier": "secret_relay"}, "blocked", berr)
 			continue
 		}
 		if _, err := in.InvokeFinal(ctx, verb, rendered); err != nil {

@@ -260,7 +260,13 @@ type planState struct {
 	// classes the operator cleared at admission. A revision may reuse them;
 	// only NEW classes reject (finding #8 — an approved plan stays revisable).
 	granted map[string]bool
-	persist func() // checkpoint hook (nil = ephemeral: shadow, live, inline)
+	// secretTainted flips when a step's OUTPUTS carried tracked secret
+	// material (a kv.get/sql.query/memory.recall of a parked secret — the
+	// read half no static scan can see). Once tainted, an unapproved plan may
+	// not touch the outside world for the remainder of the run, even when the
+	// relayed value was transformed past exact-substring matching.
+	secretTainted bool
+	persist       func() // checkpoint hook (nil = ephemeral: shadow, live, inline)
 }
 
 // checkpoint persists the plan's progress (no-op for ephemeral plans).
@@ -644,6 +650,20 @@ func (r *Runner) executePlan(ctx context.Context, t core.Trigger, pol *config.Ag
 			st.budget.addTokens(len(step.Prompt) / 4)
 		}
 
+		// Once a step's outputs carried tracked secret material, an unapproved
+		// plan may not touch the outside world at all (the exact-substring
+		// relay barrier in execVerbStep misses transformed values; the taint
+		// doesn't).
+		if planBarrier(ctx) && st.secretTainted && stepTouchesOutside(&step) {
+			terr := fmt.Errorf("no_secret_egress: this plan read secret material (see the audit) — refusing the external step %q; approval required", id)
+			r.audit(map[string]any{"event": "plan_step", "repo": t.Target.Repo, "number": t.Target.Number,
+				"agent": st.agent, "step": id, "outcome": "blocked", "barrier": "secret_read_taint"})
+			if ferr := r.planStepFailed(ctx, t, pol, st, id, terr, shadow); ferr != nil {
+				return ferr
+			}
+			continue
+		}
+
 		// Plan-step hooks fire like any workflow step's (they were guarded
 		// with the plan — see guardPlan's hook walk).
 		r.runHooks(ctx, t, step.Hooks, "start", st.scope, "plan step "+id)
@@ -664,6 +684,11 @@ func (r *Runner) executePlan(ctx context.Context, t core.Trigger, pol *config.Ag
 				return ferr
 			}
 			continue // a revision was spliced in; retry from st.next
+		}
+		if planBarrier(ctx) && !st.secretTainted && r.containsTrackedSecret(outputs) {
+			st.secretTainted = true
+			r.audit(map[string]any{"event": "plan_step", "repo": t.Target.Repo, "number": t.Target.Number,
+				"agent": st.agent, "step": id, "outcome": "secret_read", "barrier": "secret_read_taint"})
 		}
 		r.recordOutputs(st.scope, id, outputs)
 		r.runHooks(ctx, t, step.Hooks, "done", st.scope, "plan step "+id)
