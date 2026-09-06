@@ -1242,6 +1242,39 @@ func (c *Config) SkillEnabled() bool {
 	return false
 }
 
+// SkillToolsSupported reports whether a profile's runtime can carry the
+// conductor MCP tool server at launch: ACP transports (mcpServers on
+// session/new) and native opencode (a per-session config via
+// OPENCODE_CONFIG). The paseo CLI, agent-deck, and bare-CLI runtimes expose
+// no MCP surface in their launch — a skill: profile there gets the output
+// contract and nothing else, which `conductor validate` warns about.
+func (c *Config) SkillToolsSupported(p AgentProfile) (runtime string, ok bool) {
+	rn := p.RuntimeName()
+	if rn == "" {
+		rn = c.DefaultRuntimeName()
+	}
+	if rn == "" {
+		return BuiltinPaseoRuntime, false // the built-in paseo fallback
+	}
+	cc, found := c.MergedControllers()[rn]
+	if !found {
+		return rn, false // unknown runtime — named by its own validation error
+	}
+	switch {
+	case cc.Type == "paseo", cc.Type == "agent-deck":
+		return rn, false
+	case cc.Type == "opencode":
+		return rn, true
+	case cc.Agent == "opencode" && cc.EffectiveTransport() == "native":
+		return rn, true
+	}
+	return rn, cc.EffectiveTransport() == "acp"
+}
+
+// BuiltinPaseoRuntime is the implicit default runtime's name (mirrors
+// controller.BuiltinPaseo without the import).
+const BuiltinPaseoRuntime = "paseo"
+
 // runtimeNames lists runtimes and legacy controllers, sorted, for errors.
 func (c *Config) runtimeNames() string {
 	names := make([]string, 0, len(c.Runtimes)+len(c.Controllers))

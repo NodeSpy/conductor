@@ -357,6 +357,8 @@ agents:
 	cfg := loadConfig(t, `
 connectors:
   svc: { type: fake }
+runtimes:
+  gem: { agent: gemini, default: true }
 agents:
   a: { model: x, skill: { verbs: ["svc.nosuchverb"], identity: bot } }
 `)
@@ -372,11 +374,67 @@ agents:
 	live := loadConfig(t, `
 connectors:
   svc: { type: fake }
+runtimes:
+  gem: { agent: gemini, default: true }
 agents:
   a: { model: x, skill: { verbs: ["svc.*"], identity: bot } }
 `)
 	regLive := buildRegistry(t, live)
 	if warns := SkillWarnings(live, regLive); len(warns) != 0 {
 		t.Fatalf("live patterns must not warn: %v", warns)
+	}
+}
+
+// #123: a skill: profile on a runtime with no MCP launch surface is a
+// validate WARNING — the tools and broker cannot reach the agent there.
+func TestSkillWarningsUnsupportedRuntime(t *testing.T) {
+	// Default (builtin paseo) runtime: unsupported.
+	cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+agents:
+  a: { model: x, skill: { verbs: ["svc.ask"] } }
+`)
+	reg := buildRegistry(t, cfg)
+	warns := SkillWarnings(cfg, reg)
+	found := false
+	for _, w := range warns {
+		if strings.Contains(w, "cannot carry the conductor MCP tools") && strings.Contains(w, `runtime "paseo"`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("skill on the paseo default must warn: %v", warns)
+	}
+
+	// Explicit paseo and cli runtimes: unsupported. ACP and opencode: fine.
+	cases := []struct {
+		runtime string
+		warn    bool
+	}{
+		{"pas: { type: paseo, default: true }", true},
+		{"deck: { type: agent-deck, default: true }", true},
+		{"oc: { type: opencode, default: true }", false},
+		{"gem: { agent: gemini, default: true }", false},
+	}
+	for _, c := range cases {
+		y := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+runtimes:
+  `+c.runtime+`
+agents:
+  a: { model: x, skill: { verbs: ["svc.ask"] } }
+`)
+		w := SkillWarnings(y, buildRegistry(t, y))
+		has := false
+		for _, s := range w {
+			if strings.Contains(s, "cannot carry the conductor MCP tools") {
+				has = true
+			}
+		}
+		if has != c.warn {
+			t.Fatalf("runtime %q: warn=%v, want %v (%v)", c.runtime, has, c.warn, w)
+		}
 	}
 }

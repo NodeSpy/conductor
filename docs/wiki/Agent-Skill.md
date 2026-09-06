@@ -6,6 +6,24 @@ conductor over the daemon's unix socket — the same socket the live
 `skill:` block gets none of this, and every part of it denies unless config
 explicitly allows.
 
+## Runtime support
+
+The tool surface (memory tools, `run_step`, the verb tools, the broker)
+reaches an agent only when its runtime can accept an MCP server at launch:
+
+| runtime | tools | how |
+|---|---|---|
+| ACP runtimes (`agent: gemini`, …) | ✅ | `mcpServers` on `session/new` |
+| `type: opencode` (native HTTP) | ✅ | a per-session config file via `OPENCODE_CONFIG` on the `opencode serve` process |
+| `type: paseo` (the built-in default) | ❌ | `paseo run` and the paseo daemon API expose no MCP surface today |
+| `type: agent-deck`, `transport: cli` | ❌ | no MCP launch surface |
+
+On an unsupported runtime a `skill:` profile is inert: no tools, no broker,
+and no injected skill guidance (promising absent tools only breaks agents) —
+`conductor validate` warns about the combination. The opencode wiring sets
+`OPENCODE_CONFIG` for the conductor-launched server process only; those
+sessions read the per-session config rather than a project `opencode.json`.
+
 ## The principle
 
 **The credential never leaves the daemon by default.** The default way for

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,8 +13,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/acp"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
-	"github.com/NodeSpy/conductor/internal/memory"
-	"github.com/NodeSpy/conductor/internal/skill"
 )
 
 // acpController drives an ACP agent (gemini, codex-via-adapter, opencode-over-acp,
@@ -173,55 +170,22 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	return s, nil
 }
 
-// memoryServers builds the MCP server list for a new ACP session: with a
-// memory: section configured (memory.ToolCommand set at daemon boot), the
-// agent gets a live remember/recall tool — the `conductor mcp memory`
-// subprocess, with this dispatch's provenance baked into its flags. Local
-// sessions only: the daemon's socket doesn't exist on a remote `host:` box,
-// so remote sessions fall back to the output contract like any runtime
-// without live tools.
-//
-// When the dispatched profile carries a skill: block (#36 §12), this is also
-// where the daemon binds identity SERVER-SIDE: it mints a ONE-SHOT claim
-// code mapped to the real profile and its policy in the skill broker, and
-// delivers it via the MCP server's ENVIRONMENT — never argv, which any
-// same-user process can read from a process listing. The subprocess
-// exchanges the code (single-use, short TTL) for the session token over the
-// socket at startup, and the broker binds the session to that process's
-// kernel peer credentials. The --agent/--repo flags remain provenance labels
-// for memory writes; the broker never trusts them.
+// memoryServers builds the MCP server list for a new ACP session: the shared
+// conductor tool server (memory + run_step + the skill's verb tools and
+// broker; see skillwire.go), with this dispatch's provenance baked into its
+// flags and the one-shot skill claim in its env. Local sessions only: the
+// daemon's socket doesn't exist on a remote `host:` box, so remote sessions
+// fall back to the output contract like any runtime without live tools.
 func (c *acpController) memoryServers(spec Spec) []acp.McpServer {
-	argv := memory.ToolCommand()
-	if len(argv) == 0 || resolveHost(c.host, spec.Request.Profile.Host) != "" {
+	ts := buildToolServer(spec, c.host)
+	if ts == nil {
 		return nil
 	}
-	args := append([]string(nil), argv[1:]...)
-	if a := spec.Request.Action.Agent; a != "" {
-		args = append(args, "--agent", a)
-	}
-	if repo := spec.Request.Trigger.Target.Repo; repo != "" {
-		args = append(args, "--repo", repo)
-	}
-	if kind := spec.Request.Trigger.Kind; kind != "" {
-		args = append(args, "--trigger", kind)
-	}
-	if n := spec.Request.Trigger.Target.Number; n > 0 {
-		args = append(args, "--number", strconv.Itoa(n))
-	}
 	var env []acp.EnvVariable
-	if b := skill.Active(); b != nil && spec.Request.Profile.Skill != nil {
-		claim, err := b.MintClaim(skill.Identity{
-			Agent:   spec.Request.Action.Agent,
-			Repo:    spec.Request.Trigger.Target.Repo,
-			Trigger: spec.Request.Trigger.Kind,
-			Number:  spec.Request.Trigger.Target.Number,
-			Policy:  *spec.Request.Profile.Skill,
-		})
-		if err == nil {
-			env = append(env, acp.EnvVariable{Name: "CONDUCTOR_SKILL_CLAIM", Value: claim})
-		}
+	for k, v := range ts.Env {
+		env = append(env, acp.EnvVariable{Name: k, Value: v})
 	}
-	return []acp.McpServer{{Name: "conductor-memory", Command: argv[0], Args: args, Env: env}}
+	return []acp.McpServer{{Name: "conductor-memory", Command: ts.Command, Args: ts.Args, Env: env}}
 }
 
 // ResumeSession re-attaches to a prior session by id over a fresh connection. Only

@@ -298,10 +298,16 @@ func (e *Engine) agentGuidance(profile config.AgentProfile) string {
 
 // skillGuidance tells a skill-enabled agent what its conductor tools are and
 // how to use them: verbs first (the credential never enters the session),
-// the broker only as a last resort. "" for profiles without skill:.
+// the broker only as a last resort. "" for profiles without skill: — and for
+// profiles on a runtime that cannot carry the MCP tools (#123): promising an
+// agent tools it doesn't have just makes it fail; `conductor validate` warns
+// the operator instead.
 func (e *Engine) skillGuidance(profile config.AgentProfile) string {
 	sk := profile.Skill
 	if sk == nil {
+		return ""
+	}
+	if _, ok := e.cfg.SkillToolsSupported(profile); !ok {
 		return ""
 	}
 	var b strings.Builder

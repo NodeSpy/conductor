@@ -100,12 +100,39 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 	if err != nil {
 		return nil, fmt.Errorf("opencode: render prompt: %w", err)
 	}
+	// The conductor tool server (memory + skill verbs + broker) rides
+	// opencode's own MCP config: a per-session config file handed to the
+	// `opencode serve` process via OPENCODE_CONFIG (see toolConfigFile).
+	// Local sessions only — buildToolServer returns nil for remote hosts.
+	var toolCfg string
+	if ts := buildToolServer(spec, c.host); ts != nil {
+		toolCfg, err = writeOpencodeToolConfig(ts)
+		if err != nil {
+			return nil, fmt.Errorf("opencode: tool config: %w", err)
+		}
+		env = append(env, "OPENCODE_CONFIG="+toolCfg)
+	}
+	removeToolCfg := func() {
+		if toolCfg != "" {
+			_ = os.Remove(toolCfg)
+		}
+	}
 
 	sctx, scancel := context.WithCancel(context.Background())
 	baseURL, cleanup, err := c.connect(sctx, spec.Cwd, env)
 	if err != nil {
+		removeToolCfg()
 		scancel()
 		return nil, err
+	}
+	// The config file must outlive the serve process, not the dispatch call.
+	inner := cleanup
+	cleanup = func() error {
+		defer removeToolCfg()
+		if inner != nil {
+			return inner()
+		}
+		return nil
 	}
 	cl := &opencodeClient{baseURL: strings.TrimRight(baseURL, "/"), hc: c.hc}
 
@@ -147,6 +174,46 @@ func (c *opencodeController) connect(ctx context.Context, cwd string, env []stri
 		return c.dial(ctx, cwd, env)
 	}
 	return spawnOpencode(ctx, c.host, cwd, env)
+}
+
+// writeOpencodeToolConfig writes a per-session opencode config (0600, outside
+// the repo worktree) declaring the conductor tool server as a local MCP
+// server, for delivery via OPENCODE_CONFIG on the `opencode serve` process.
+// The skill claim code rides the server's environment block — never argv —
+// exactly as on the ACP path; it is single-use with a 2-minute TTL, so the
+// file's sensitivity dies at the claim exchange. Note OPENCODE_CONFIG names
+// THE config for that server process: conductor-launched opencode sessions
+// see this file rather than a project opencode.json (documented on the
+// Agent-Skill wiki page).
+func writeOpencodeToolConfig(ts *toolServerSpec) (string, error) {
+	cfg := map[string]any{
+		"mcp": map[string]any{
+			"conductor-memory": map[string]any{
+				"type":        "local",
+				"command":     append([]string{ts.Command}, ts.Args...),
+				"enabled":     true,
+				"environment": ts.Env,
+			},
+		},
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp("", "conductor-opencode-*.json")
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 // spawnOpencode starts `opencode serve` in the worktree with the identity env and

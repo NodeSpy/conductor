@@ -206,6 +206,12 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 		if p.Skill == nil {
 			continue
 		}
+		// A skill: profile on a runtime with no MCP launch surface (#123):
+		// the tools and broker cannot reach the agent there — say so at
+		// validate time instead of shipping a silently tool-less skill.
+		if rt, ok := cfg.SkillToolsSupported(p); !ok {
+			warns = append(warns, fmt.Sprintf("agent %q: skill: is configured but runtime %q cannot carry the conductor MCP tools (no MCP launch surface) — the verb tools and secret broker will NOT reach this agent; use an acp or opencode runtime, or drop the skill: block", name, rt))
+		}
 		for _, pat := range p.Skill.Verbs {
 			matched := false
 			for _, uses := range universe {

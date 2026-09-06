@@ -447,8 +447,11 @@ expiring in 60 s, and fully audited (issue, use, expiry). Authorization is
 bound server-side to the real dispatch via an unguessable session token the
 daemon mints at launch — never to client-asserted identity. Once redeemed,
 the value is in the runtime's hands; if a runtime should never hold a
-secret, don't list any in its `allow_secrets`. Details: the Agent-Skill wiki
-page.
+secret, don't list any in its `allow_secrets`. The tool surface reaches ACP
+runtimes (`session/new` mcpServers) and native opencode (`OPENCODE_CONFIG`);
+the paseo CLI exposes no MCP launch surface today, so a `skill:` profile on
+a paseo runtime is inert and `conductor validate` says so. Details: the
+Agent-Skill wiki page.
 
 ## Introspection and dry-run
 
