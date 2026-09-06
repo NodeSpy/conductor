@@ -13,7 +13,7 @@ self-hosted, acting as you.
 
 ```yaml
 connectors:
-  gh:        { type: github, app: { … }, me: { logins: [you] }, repos: ["org/*"] }
+  gh:        { type: github, app: { … }, me: { logins: [your-login] }, repos: ["your-org/*"] }
   slack-ops: { type: slack, app_token: ${SLACK_APP_TOKEN}, bot_token: ${SLACK_BOT_TOKEN} }
 
 runtimes:
