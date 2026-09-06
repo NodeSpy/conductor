@@ -22,6 +22,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -87,9 +88,10 @@ type Engine struct {
 	affinity    *controller.Affinity // keyed live sessions (session:); nil = every dispatch fresh
 	pausePath   string               // control file; present = paused (toggled by pause/resume, no restart)
 	ch          chan core.Trigger
-	sem         chan struct{}   // concurrent-agent cap; nil = unlimited
-	groupWarn   sync.Map        // FlowRefs whose group key already failed once (log once, not per event)
-	baseCtx     context.Context // the Run loop's ctx; ties ctx-less entry points (batch flush) to shutdown
+	secrets     *secrets.Resolver // redacts argv/errors/output tails on audit + log surfaces
+	sem         chan struct{}     // concurrent-agent cap; nil = unlimited
+	groupWarn   sync.Map          // FlowRefs whose group key already failed once (log once, not per event)
+	baseCtx     context.Context   // the Run loop's ctx; ties ctx-less entry points (batch flush) to shutdown
 
 	// flow runs connectors-model triggers (actions carrying a FlowRef);
 	// grouper batches their grouped events. nil when the config has no
@@ -166,6 +168,9 @@ type Options struct {
 	// session: block get one live session per rendered key, shared across
 	// triggers). nil disables affinity — every dispatch stays fresh.
 	Affinity *controller.Affinity
+	// Secrets redacts tracked secret values from the engine's audit entries
+	// and output-tail log lines (nil = passthrough; legacy configs).
+	Secrets *secrets.Resolver
 	// PausePath is a control file whose presence pauses dispatch (toggled by the
 	// pause/resume commands without a restart). Empty disables the runtime pause.
 	PausePath string
@@ -203,6 +208,7 @@ func New(o Options) *Engine {
 		hold:      o.Hold,
 		affinity:  o.Affinity,
 		pausePath: o.PausePath,
+		secrets:   o.Secrets,
 		ch:        make(chan core.Trigger, 256),
 	}
 	if cap := o.Config.AgentCap(); cap > 0 {
@@ -715,7 +721,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if act.Type == "command" && err == nil && !ref.Skipped {
 		tail := ""
 		if tl := tailOutput(ref.Output); tl != "" {
-			tail = "\n" + tl
+			tail = "\n" + e.redact(tl)
 		}
 		e.log("%s command done (%s) in %s%s", tag(t), ref.Backend, took, tail)
 	}
@@ -725,7 +731,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// A catch-up whose PR already has a working agent did nothing — don't record it
 	// (it isn't an attempt) and free the slot.
 	if ref.Skipped {
-		e.log("%s %s", tag(t), ref.Output)
+		e.log("%s %s", tag(t), e.redact(ref.Output))
 		if gated {
 			e.release()
 		}
@@ -758,9 +764,9 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 
 	if err != nil {
 		if tl := tailOutput(ref.Output); tl != "" {
-			e.log("%s command output (tail):\n%s", tag(t), tl)
+			e.log("%s command output (tail):\n%s", tag(t), e.redact(tl))
 		}
-		e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("dispatch failed: %v", err))
+		e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("dispatch failed: %s", e.redact(err.Error())))
 		if gated {
 			e.release()
 		}
@@ -1034,6 +1040,26 @@ func (e *Engine) release() {
 	}
 }
 
+// redact scrubs tracked secret values ("" resolver = passthrough).
+func (e *Engine) redact(v string) string {
+	if e.secrets == nil {
+		return v
+	}
+	return e.secrets.Redact(v)
+}
+
+// redactArgv scrubs an argv copy for audit.
+func (e *Engine) redactArgv(argv []string) []string {
+	if e.secrets == nil || len(argv) == 0 {
+		return argv
+	}
+	out := make([]string, len(argv))
+	for i, a := range argv {
+		out[i] = e.secrets.Redact(a)
+	}
+	return out
+}
+
 // auditDispatch writes the dispatch audit entry and logs the outcome.
 func (e *Engine) auditDispatch(t core.Trigger, ref dispatch.RunRef, err error) {
 	outcome := "ok"
@@ -1051,12 +1077,12 @@ func (e *Engine) auditDispatch(t core.Trigger, ref dispatch.RunRef, err error) {
 	}
 	entry := map[string]any{
 		"event": "dispatch", "repo": t.Target.Repo, "number": t.Target.Number,
-		"kind": t.Kind, "backend": ref.Backend, "argv": ref.Argv,
+		"kind": t.Kind, "backend": ref.Backend, "argv": e.redactArgv(ref.Argv),
 		"shadow": ref.Shadowed, "agent_id": ref.AgentID, "outcome": outcome,
 	}
 	if err != nil {
-		entry["error"] = err.Error()
-		e.log("%s dispatch failed: %v", tag(t), err)
+		entry["error"] = e.redact(err.Error())
+		e.log("%s dispatch failed: %s", tag(t), e.redact(err.Error()))
 	} else {
 		e.log("%s dispatched (backend=%s shadow=%v)", tag(t), ref.Backend, ref.Shadowed)
 	}

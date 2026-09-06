@@ -17,6 +17,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 // Tokens carries the two credentials dispatched work may need.
@@ -68,6 +69,11 @@ type Dispatcher struct {
 	PaseoBin string
 	DryRun   bool
 
+	// Secrets redacts tracked secret values from the error details this
+	// package builds out of paseo stderr/output before they leave the
+	// package (nil = passthrough).
+	Secrets *secrets.Resolver
+
 	// Remote runs every paseo CLI invocation on an SSH host — a paseo runtime
 	// with `host:`. nil = the local binary. See remote.go for what changes.
 	Remote *hosts.Target
@@ -109,6 +115,14 @@ type Dispatcher struct {
 	mu        sync.Mutex
 	repoDirs  map[string]string // repo -> resolved checkout cwd (memoized)
 	scratchWS string            // memoized scratch workspace id
+}
+
+// redactText scrubs tracked secret values from stderr-derived detail text.
+func (d *Dispatcher) redactText(s string) string {
+	if d.Secrets == nil {
+		return s
+	}
+	return d.Secrets.Redact(s)
 }
 
 // New builds a Dispatcher. paseoBin defaults to "paseo"; retry tunes transient
@@ -156,7 +170,7 @@ func (d *Dispatcher) SendCapture(ctx context.Context, id, prompt string) (string
 	out, err := cmd.Output()
 	if err != nil {
 		if s := strings.TrimSpace(stderr.String()); s != "" {
-			return "", fmt.Errorf("%w: %s", err, truncate(s, 300))
+			return "", fmt.Errorf("%w: %s", err, d.redactText(truncate(s, 300)))
 		}
 		return "", err
 	}

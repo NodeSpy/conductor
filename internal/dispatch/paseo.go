@@ -258,7 +258,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		}
 	}
 	if detail != "" {
-		return ref, fmt.Errorf("paseo run: %w: %s", err, detail)
+		return ref, fmt.Errorf("paseo run: %w: %s", err, d.redactText(detail))
 	}
 	return ref, fmt.Errorf("paseo run: %w", err)
 }

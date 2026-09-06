@@ -130,14 +130,14 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		entry := map[string]any{"event": "step", "repo": t.Target.Repo, "number": t.Target.Number,
 			"kind": t.Kind, "step": id, "backend": ref.Backend, "shadow": ref.Shadowed}
 		if err != nil {
-			entry["error"] = err.Error()
+			entry["error"] = e.redact(err.Error())
 			e.store.Audit(entry)
 			failMsg := ""
 			if tail := tailOutput(ref.Output); tail != "" {
-				failMsg = "\n" + tail
+				failMsg = "\n" + e.redact(tail)
 			}
-			e.log("%s step %s failed after %s: %v%s", tag(t), id, took, err, failMsg)
-			e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("workflow step %q failed: %v", id, err))
+			e.log("%s step %s failed after %s: %s%s", tag(t), id, took, e.redact(err.Error()), failMsg)
+			e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("workflow step %q failed: %s", id, e.redact(err.Error())))
 			e.finishRun(run)
 			return // fail-fast
 		}

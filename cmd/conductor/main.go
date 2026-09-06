@@ -426,6 +426,8 @@ func cmdRun(args []string) error {
 	if stack != nil {
 		engOpts.Flow = stack.Runner
 		engOpts.Connectors = stack.Registry
+		engOpts.Secrets = stack.Secrets
+		disp.Secrets = stack.Secrets
 	}
 	eng := engine.New(engOpts)
 
