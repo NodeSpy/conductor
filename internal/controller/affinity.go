@@ -140,8 +140,30 @@ func (a *Affinity) Dispatch(ctx context.Context, runner Runner, req dispatch.Req
 	}
 	bk := bindingKey(req.Action.Agent, key)
 
-	// Serialize per key: at most one prompt in flight; concurrent same-key
-	// events queue here.
+	// Live-binding fast path, WITHOUT the key lock: the engine's single
+	// process goroutine calls Dispatch inline, and the key lock is held for a
+	// session's whole turn — waiting on it here head-of-line-blocks every
+	// other trigger (and eventually overflows Emit's buffer). The follow-up
+	// is rendered now (cheap) and DELIVERED asynchronously; the legacy hot
+	// path never reads the turn's output. LastUsed advances at enqueue so an
+	// expiry sweep can't reap a session with queued work.
+	if ref, ok := a.refFor(bk); ok && a.expiredReason(ref, spec) == "" {
+		prompt, perr := dispatch.RenderPrompt(req)
+		if perr != nil {
+			return dispatch.RunRef{}, true, perr
+		}
+		ref.LastUsed = a.now()
+		a.putRef(bk, ref)
+		go a.deliver(context.WithoutCancel(ctx), runner, req, bk, c.Name(), key, prompt)
+		return dispatch.RunRef{
+			Backend: "session", Kind: req.Trigger.Kind,
+			AgentID: ref.SessionID, Queued: true,
+		}, true, nil
+	}
+
+	// Evict-and/or-spawn path: serialized on the key lock. An in-flight turn
+	// can only be holding it if the binding just missed the fast path (an
+	// expiry racing a queued delivery) — rare and bounded.
 	lk := a.lockFor(bk)
 	lk.Lock()
 	defer lk.Unlock()
@@ -150,23 +172,20 @@ func (a *Affinity) Dispatch(ctx context.Context, runner Runner, req dispatch.Req
 		if reason := a.expiredReason(ref, spec); reason != "" {
 			a.evictLocked(ctx, bk, ref, reason)
 		} else {
+			// Raced with another binder while waiting on the lock: the key is
+			// live again — enqueue the follow-up (the delivery goroutine
+			// queues behind this lock until we return).
 			prompt, perr := dispatch.RenderPrompt(req)
 			if perr != nil {
 				return dispatch.RunRef{}, true, perr
 			}
-			out, ferr := a.followup(ctx, bk, ref, prompt, false)
-			if ferr == nil {
-				ref.LastUsed = a.now()
-				a.putRef(bk, ref)
-				return dispatch.RunRef{
-					Backend: "session", Kind: req.Trigger.Kind,
-					AgentID: ref.SessionID, Queued: true, Output: out,
-				}, true, nil
-			}
-			// A dead/unreachable session is stale state, not a step error:
-			// drop the binding and fall through to a fresh spawn.
-			a.log("affinity: %s/%s follow-up failed (%v) — starting fresh", ref.Agent, ref.Key, ferr)
-			a.evictLocked(ctx, bk, ref, "follow-up failed")
+			ref.LastUsed = a.now()
+			a.putRef(bk, ref)
+			go a.deliver(context.WithoutCancel(ctx), runner, req, bk, c.Name(), key, prompt)
+			return dispatch.RunRef{
+				Backend: "session", Kind: req.Trigger.Kind,
+				AgentID: ref.SessionID, Queued: true,
+			}, true, nil
 		}
 	}
 
@@ -174,10 +193,17 @@ func (a *Affinity) Dispatch(ctx context.Context, runner Runner, req dispatch.Req
 	if err != nil || runRef.AgentID == "" {
 		return runRef, true, err
 	}
+	a.bind(bk, req.Action.Agent, key, c.Name(), runRef.AgentID)
+	return runRef, true, nil
+}
+
+// bind records a fresh (agent, key) → session binding and holds the agent
+// from the reaper.
+func (a *Affinity) bind(bk, agent, key, controllerName, sessionID string) {
 	now := a.now()
 	ref := AffinityRef{
-		Agent: req.Action.Agent, Key: key,
-		Controller: c.Name(), SessionID: runRef.AgentID,
+		Agent: agent, Key: key,
+		Controller: controllerName, SessionID: sessionID,
 		Created: now, LastUsed: now,
 	}
 	a.putRef(bk, ref)
@@ -185,7 +211,48 @@ func (a *Affinity) Dispatch(ctx context.Context, runner Runner, req dispatch.Req
 		a.hold(ref.SessionID) // idle between events must not mean reaped
 	}
 	a.log("affinity: %s bound to session %s (key %s)", ref.Agent, ref.SessionID, ref.Key)
-	return runRef, true, nil
+}
+
+// deliver runs in its own goroutine: it takes the key lock (one prompt in
+// flight per key — concurrent same-key deliveries queue here, off the engine
+// goroutine) and sends the follow-up. A binding that vanished while queued
+// (end_on fired) drops the prompt — the session's lifecycle is over, and
+// resurrecting a fresh session for, say, a closed PR would be worse. A
+// binding whose session is DEAD (the send fails) is evicted and the event
+// spawns a fresh session bound to the key, exactly like the old inline
+// fallback — the event is never lost.
+func (a *Affinity) deliver(ctx context.Context, runner Runner, req dispatch.Request, bk, controllerName, key, prompt string) {
+	lk := a.lockFor(bk)
+	lk.Lock()
+	defer lk.Unlock()
+
+	ref, ok := a.refFor(bk)
+	if !ok {
+		a.log("affinity: %s session for key %q ended before its queued follow-up delivered — dropping the prompt", req.Action.Agent, key)
+		return
+	}
+	if _, err := a.followup(ctx, bk, ref, prompt, false); err == nil {
+		ref.LastUsed = a.now()
+		// Re-check under a.mu semantics: only touch the binding if it is
+		// still ours (an end_on may have unbound mid-turn; putRef would
+		// resurrect it).
+		if cur, still := a.refFor(bk); still && cur.SessionID == ref.SessionID {
+			cur.LastUsed = ref.LastUsed
+			a.putRef(bk, cur)
+		}
+		return
+	} else {
+		// A dead/unreachable session is stale state, not a lost event: drop
+		// the binding and spawn fresh, binding the key to the new session.
+		a.log("affinity: %s/%s follow-up failed (%v) — starting fresh", ref.Agent, ref.Key, err)
+		a.evictLocked(ctx, bk, ref, "follow-up failed")
+	}
+	runRef, err := runner.Dispatch(ctx, req)
+	if err != nil || runRef.AgentID == "" {
+		a.log("affinity: %s fresh dispatch after dead session failed: %v", req.Action.Agent, err)
+		return
+	}
+	a.bind(bk, req.Action.Agent, key, controllerName, runRef.AgentID)
 }
 
 // followup delivers text to the bound session as a follow-up turn, resuming
@@ -261,6 +328,12 @@ func (a *Affinity) Followup(ctx context.Context, agentName string, profile confi
 // session.end_on renders that profile's key from its own trigger context and
 // evicts the matching binding, so `gh.pr_closed` for repo X PR N ends that
 // PR's session. Called by the engine for every fired trigger, before gates.
+//
+// The UNBIND happens synchronously (the very next event for this key starts
+// fresh — engine-loop ordering is preserved), but the session TEARDOWN
+// (close/release/archive) waits for the key lock in its own goroutine, so an
+// in-flight follow-up turn finishes first and the engine goroutine never
+// blocks behind one.
 func (a *Affinity) ObserveEvent(ctx context.Context, t core.Trigger) {
 	if a == nil || a.cfg == nil {
 		return
@@ -274,12 +347,19 @@ func (a *Affinity) ObserveEvent(ctx context.Context, t core.Trigger) {
 			continue
 		}
 		bk := bindingKey(name, strings.TrimSpace(key))
-		lk := a.lockFor(bk)
-		lk.Lock()
-		if ref, ok := a.refFor(bk); ok {
-			a.evictLocked(ctx, bk, ref, "end_on "+t.Instance+"."+t.Kind)
+		ref, ok := a.refFor(bk)
+		if !ok {
+			continue
 		}
-		lk.Unlock()
+		reason := "end_on " + t.Instance + "." + t.Kind
+		sess := a.unbind(bk, ref)
+		a.log("affinity: evicted %s session %s (key %s): %s", ref.Agent, ref.SessionID, ref.Key, reason)
+		go func(bk string, ref AffinityRef, sess Session) {
+			lk := a.lockFor(bk)
+			lk.Lock()
+			defer lk.Unlock()
+			a.teardown(context.WithoutCancel(ctx), ref, sess)
+		}(bk, ref, sess)
 	}
 }
 
@@ -400,17 +480,38 @@ func (a *Affinity) expiredReason(ref AffinityRef, spec *config.SessionSpec) stri
 	return ""
 }
 
-// evictLocked removes a binding (caller holds its key lock): close the live
-// handle, release the reaper hold, archive the agent when its profile wants
-// finished agents archived, and drop the persisted ref. The next same-key
-// event starts a fresh session.
+// evictLocked removes a binding (caller holds its key lock): unbind the maps
+// and persisted ref, then tear the session down. The next same-key event
+// starts a fresh session.
 func (a *Affinity) evictLocked(ctx context.Context, bk string, ref AffinityRef, reason string) {
+	sess := a.unbind(bk, ref)
+	a.teardown(ctx, ref, sess)
+	a.log("affinity: evicted %s session %s (key %s): %s", ref.Agent, ref.SessionID, ref.Key, reason)
+}
+
+// unbind removes the binding from the in-memory maps and the persisted
+// store, returning the live session handle (nil if none). Safe without the
+// key lock — the maps are a.mu-guarded — so the engine goroutine can unbind
+// synchronously while an in-flight turn still holds the key lock.
+func (a *Affinity) unbind(bk string, ref AffinityRef) Session {
 	a.mu.Lock()
 	sess := a.live[bk]
 	delete(a.live, bk)
 	delete(a.refs, bk)
 	delete(a.owned, ref.SessionID)
 	a.mu.Unlock()
+	if a.store != nil {
+		if err := a.store.DeleteAffinity(ref.Agent, ref.Key); err != nil {
+			a.log("affinity: delete %s/%s: %v", ref.Agent, ref.Key, err)
+		}
+	}
+	return sess
+}
+
+// teardown closes the live handle, releases the reaper hold, and archives
+// the agent when its profile wants finished agents archived. Callers that
+// might race an in-flight turn hold the key lock.
+func (a *Affinity) teardown(ctx context.Context, ref AffinityRef, sess Session) {
 	if sess != nil {
 		_ = sess.Close(ctx)
 	}
@@ -424,10 +525,4 @@ func (a *Affinity) evictLocked(ctx context.Context, bk string, ref AffinityRef, 
 			}
 		}
 	}
-	if a.store != nil {
-		if err := a.store.DeleteAffinity(ref.Agent, ref.Key); err != nil {
-			a.log("affinity: delete %s/%s: %v", ref.Agent, ref.Key, err)
-		}
-	}
-	a.log("affinity: evicted %s session %s (key %s): %s", ref.Agent, ref.SessionID, ref.Key, reason)
 }

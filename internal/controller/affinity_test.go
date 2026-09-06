@@ -172,6 +172,38 @@ func (rig *affRig) held(id string) bool {
 	return rig.holds[id]
 }
 
+// waitFor polls cond — follow-up delivery is asynchronous (the engine hot
+// path must not block on a turn), so tests wait for the observable effect.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// lockedClock is a data-race-safe test clock (async deliveries read the
+// clock concurrently with the test advancing it).
+type lockedClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *lockedClock) get() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+func (c *lockedClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
+
 // TestAffinitySameKeySameSession: the first event spawns; later events for
 // the same key — across DIFFERENT event kinds/triggers — reach the same
 // session as follow-ups, never a second spawn.
@@ -199,10 +231,8 @@ func TestAffinitySameKeySameSession(t *testing.T) {
 	if rig.runner.dispatches() != 1 {
 		t.Fatalf("want exactly 1 spawn, got %d", rig.runner.dispatches())
 	}
+	waitFor(t, "both follow-ups delivered", func() bool { return len(rig.sender.sends()) == 2 })
 	sends := rig.sender.sends()
-	if len(sends) != 2 {
-		t.Fatalf("want 2 follow-ups, got %v", sends)
-	}
 	// The follow-up prompt is rendered against the follow-up's own trigger.
 	if !strings.Contains(sends[0], "agent-1\x00handle failing_checks on o/r#7") {
 		t.Fatalf("follow-up prompt: %q", sends[0])
@@ -248,20 +278,21 @@ func TestAffinitySerialization(t *testing.T) {
 			rig.dispatch(t, affReq("reviewer", fmt.Sprintf("evt%d", i), "o/r", 7, spec))
 		}(i)
 	}
+	wg.Wait() // dispatch enqueues and returns; delivery is async
 	// Let the first follow-up enter Send, then release everyone.
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, "a follow-up in flight", func() bool {
+		rig.sender.mu.Lock()
+		defer rig.sender.mu.Unlock()
+		return rig.sender.inFlight > 0
+	})
 	close(gate)
-	wg.Wait()
+	waitFor(t, "all follow-ups delivered", func() bool { return len(rig.sender.sends()) == 5 })
 
 	rig.sender.mu.Lock()
 	maxSeen := rig.sender.maxSeen
-	sent := len(rig.sender.sent)
 	rig.sender.mu.Unlock()
 	if maxSeen != 1 {
 		t.Fatalf("same-key prompts must serialize: max in flight %d", maxSeen)
-	}
-	if sent != 5 {
-		t.Fatalf("all queued follow-ups must deliver: %d", sent)
 	}
 	if rig.runner.dispatches() != 1 {
 		t.Fatalf("no duplicate spawn under concurrency: %d", rig.runner.dispatches())
@@ -304,17 +335,20 @@ func TestAffinityIdleAndLifetimeEviction(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			rig := newAffRig(t, nil, tc.spec)
-			now := base
-			rig.aff.SetClock(func() time.Time { return now })
+			clock := &lockedClock{now: base}
+			rig.aff.SetClock(clock.get)
 			first := rig.dispatch(t, affReq("reviewer", "new_comment", "o/r", 7, tc.spec))
 
 			// Still fresh: a follow-up, no eviction.
-			now = now.Add(time.Minute)
+			clock.advance(time.Minute)
 			if ref := rig.dispatch(t, affReq("reviewer", "evt", "o/r", 7, tc.spec)); !ref.Queued {
 				t.Fatalf("within ttl must follow up: %+v", ref)
 			}
+			// The delivery is async and touches LastUsed at turn end — wait
+			// for it before advancing the clock past the ttl.
+			waitFor(t, "follow-up delivered", func() bool { return len(rig.sender.sends()) == 1 })
 
-			now = now.Add(tc.advance)
+			clock.advance(tc.advance)
 			next := rig.dispatch(t, affReq("reviewer", "evt2", "o/r", 7, tc.spec))
 			if next.Queued || next.AgentID == first.AgentID {
 				t.Fatalf("expired session must be replaced: %+v", next)
@@ -390,7 +424,8 @@ func TestAffinityEndOnEviction(t *testing.T) {
 }
 
 // TestAffinityFollowupFailureFallsBack: a dead session (send fails) is
-// evicted and the event spawns a fresh session instead of erroring.
+// evicted by the async delivery, which spawns a fresh session bound to the
+// key — the event is never lost, and the engine call had already returned.
 func TestAffinityFollowupFailureFallsBack(t *testing.T) {
 	spec := affSpec()
 	rig := newAffRig(t, nil, spec)
@@ -399,21 +434,27 @@ func TestAffinityFollowupFailureFallsBack(t *testing.T) {
 	rig.sender.mu.Lock()
 	rig.sender.err = fmt.Errorf("agent archived")
 	rig.sender.mu.Unlock()
+	// The hot path returns Queued immediately; the dead-session discovery and
+	// replacement happen in the delivery goroutine.
 	second := rig.dispatch(t, affReq("reviewer", "evt", "o/r", 7, spec))
-	if second.Queued || second.AgentID == first.AgentID {
-		t.Fatalf("dead session must be replaced by a fresh spawn: %+v", second)
+	if !second.Queued {
+		t.Fatalf("hot path must enqueue without blocking: %+v", second)
 	}
-	if rig.aff.Owns(first.AgentID) {
-		t.Fatal("dead session must be unbound")
-	}
+	waitFor(t, "dead session replaced by a fresh spawn", func() bool {
+		return !rig.aff.Owns(first.AgentID) && rig.runner.dispatches() == 2
+	})
 	// The replacement works for follow-ups again.
 	rig.sender.mu.Lock()
 	rig.sender.err = nil
 	rig.sender.mu.Unlock()
 	third := rig.dispatch(t, affReq("reviewer", "evt2", "o/r", 7, spec))
-	if !third.Queued || third.AgentID != second.AgentID {
+	if !third.Queued || third.AgentID != "agent-2" {
 		t.Fatalf("replacement session must serve follow-ups: %+v", third)
 	}
+	waitFor(t, "follow-up to the replacement delivered", func() bool {
+		sends := rig.sender.sends()
+		return len(sends) == 1 && strings.HasPrefix(sends[0], "agent-2\x00")
+	})
 }
 
 // TestAffinityNotHandled: no session spec, a non-persistent runtime (paseo
