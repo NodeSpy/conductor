@@ -155,7 +155,7 @@ func handleDiscordFrame(gs *discordGatewayState, raw []byte, inbox *Inbox, log f
 			if m.Author.Bot || (gs.selfID != "" && m.Author.ID == gs.selfID) {
 				return discordActionNone, 0
 			}
-			inbox.Deliver(m.ChannelID, "", m.Content)
+			inbox.DeliverFrom(m.ChannelID, "", m.Author.ID, m.Content)
 		}
 	}
 	return discordActionNone, 0

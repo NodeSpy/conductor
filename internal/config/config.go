@@ -330,6 +330,11 @@ type HandoffChat struct {
 	// bot needs the privileged MESSAGE CONTENT intent enabled and must be
 	// invited to the server/channel (or share a DM with `user`).
 	BotToken string `yaml:"bot_token"`
+	// Approvers optionally restricts who may resolve a `to: thread` hand-off:
+	// only replies from these user ids (same id form as `user`) count —
+	// without it, ANYONE in the channel can approve an agent's draft. Ignored
+	// for `to: dm` (the DM already pins one user).
+	Approvers []string `yaml:"approvers"`
 }
 
 // Notify configures notifications. All channels are private to you (the daemon

@@ -243,9 +243,9 @@ func wireConnectorSurfaces(ctx context.Context, stack *flowStack, handoffs *hand
 	}
 	if len(slackInboxes) > 0 {
 		inboxes := slackInboxes
-		slack.SetReplyHook(func(channel, threadTS, _, text string) bool {
+		slack.SetReplyHook(func(channel, threadTS, user, text string) bool {
 			for _, ib := range inboxes {
-				if ib.Deliver(channel, threadTS, text) {
+				if ib.DeliverFrom(channel, threadTS, user, text) {
 					return true
 				}
 			}

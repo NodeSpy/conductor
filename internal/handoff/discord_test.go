@@ -46,7 +46,7 @@ func (o *fakeDiscordOpener) OpenDM(_ context.Context, user string) (string, erro
 func TestDiscordChannelReplyCapture(t *testing.T) {
 	inbox := NewInbox()
 	poster := &fakeDiscordPoster{}
-	c := NewDiscordChannel(poster, "C123", inbox, nil)
+	c := NewDiscordChannel(poster, "C123", nil, inbox, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

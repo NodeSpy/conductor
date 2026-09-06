@@ -48,7 +48,7 @@ func (o *fakeOpener) OpenDM(_ context.Context, user string) (string, error) {
 func TestSlackChannelReplyCapture(t *testing.T) {
 	inbox := NewInbox()
 	poster := &fakePoster{}
-	c := NewSlackChannel(poster, "C123", inbox, nil)
+	c := NewSlackChannel(poster, "C123", nil, inbox, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -182,5 +182,49 @@ func TestParseReply(t *testing.T) {
 		if got.Action != want.Action || got.Text != want.Text {
 			t.Errorf("parseReply(%q) = %+v, want %+v", in, got, want)
 		}
+	}
+}
+
+// REGRESSION: a thread-mode hand-off with approvers: must ignore a reply
+// from anyone else — previously ANY user in the channel could approve an
+// agent's draft. A reply with no sender identity is ignored too; the
+// configured approver still resolves it.
+func TestThreadApproversGateReplies(t *testing.T) {
+	inbox := NewInbox()
+	poster := &fakePoster{}
+	c := NewSlackChannel(poster, "C123", []string{"U-BOSS"}, inbox, nil)
+	p, err := c.Present(context.Background(), Draft{ID: "d1", Body: "deploy?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if inbox.DeliverFrom("C123", "ts-1", "U-RANDO", "approve") {
+		t.Fatal("a non-approver's reply resolved the hand-off")
+	}
+	if inbox.Deliver("C123", "ts-1", "approve") {
+		t.Fatal("an identity-less reply resolved an approver-gated hand-off")
+	}
+	if !inbox.DeliverFrom("C123", "ts-1", "U-BOSS", "approve") {
+		t.Fatal("the configured approver's reply was not consumed")
+	}
+	d, err := p.Await(context.Background())
+	if err != nil || d.Action != ActionApprove {
+		t.Fatalf("decision: %+v %v", d, err)
+	}
+}
+
+// Without approvers: the thread keeps its old anyone-can-reply behavior.
+func TestThreadNoApproversAnyoneResolves(t *testing.T) {
+	inbox := NewInbox()
+	poster := &fakePoster{}
+	c := NewSlackChannel(poster, "C123", nil, inbox, nil)
+	p, err := c.Present(context.Background(), Draft{ID: "d2", Body: "ok?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if !inbox.DeliverFrom("C123", "ts-1", "U-ANYONE", "discard") {
+		t.Fatal("ungated thread reply was not consumed")
 	}
 }

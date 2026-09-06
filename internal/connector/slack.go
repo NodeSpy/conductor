@@ -89,9 +89,10 @@ var slackDecl = &TypeDecl{
 		{
 			Name: "ask", Desc: "present a question/draft and wait for the reply", Ask: true,
 			Options: mergeSchema(askOptionBase(), Schema{
-				"to":      {Type: TString, Enum: []string{"dm", "thread"}, Required: true},
-				"user":    {Type: TString, Desc: "user id (to: dm)"},
-				"channel": {Type: TString, Desc: "channel id (to: thread)"},
+				"to":        {Type: TString, Enum: []string{"dm", "thread"}, Required: true},
+				"user":      {Type: TString, Desc: "user id (to: dm)"},
+				"channel":   {Type: TString, Desc: "channel id (to: thread)"},
+				"approvers": {Type: TList, Desc: "to: thread — only these user ids may resolve the ask (default: anyone in the channel)"},
 			}),
 			Outputs: askOutputs(),
 		},
@@ -335,9 +336,30 @@ func (s *slackImpl) AskChannel(opts map[string]any) (handoff.Channel, error) {
 		if channel == "" {
 			return nil, fmt.Errorf("slack.ask: to: thread needs options.channel")
 		}
-		return handoff.NewSlackChannel(s.api, channel, s.inbox, logf), nil
+		return handoff.NewSlackChannel(s.api, channel, askApprovers(opts), s.inbox, logf), nil
 	}
 	return nil, fmt.Errorf("slack.ask: options.to must be dm|thread, got %q", to)
+}
+
+// askApprovers reads the optional options.approvers list (user ids allowed
+// to resolve a thread-mode ask; empty = anyone in the channel).
+func askApprovers(opts map[string]any) []string {
+	var out []string
+	switch v := opts["approvers"].(type) {
+	case []any:
+		for _, e := range v {
+			if s, ok := e.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+	case []string:
+		out = v
+	case string:
+		if v != "" {
+			out = []string{v}
+		}
+	}
+	return out
 }
 
 // slackAPI is a minimal Slack Web API client for the verb face. It implements

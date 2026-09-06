@@ -69,7 +69,7 @@ func TestRunDiscordGatewaySession(t *testing.T) {
 	defer setDiscordAPIURL(api.URL)()
 
 	inbox := NewInbox()
-	pending := inbox.register("D1", "")
+	pending := inbox.register("D1", "", nil)
 
 	// One session: identify, deliver, heartbeat, reconnect request.
 	err := runDiscordGatewayOnce(context.Background(), "bot-tok", inbox, t.Logf)

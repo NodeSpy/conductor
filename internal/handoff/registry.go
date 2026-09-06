@@ -162,7 +162,7 @@ func buildChannel(name string, hc config.HandoffConfig, slackInbox, discordInbox
 		if hc.Slack.To == "dm" {
 			return NewSlackDMChannel(poster, poster, hc.Slack.User, slackInbox, log)
 		}
-		return NewSlackChannel(poster, hc.Slack.Channel, slackInbox, log)
+		return NewSlackChannel(poster, hc.Slack.Channel, hc.Slack.Approvers, slackInbox, log)
 	case hc.Discord != nil:
 		// config.Validate already guards `to`/channel/user/bot_token, so this
 		// only fires when a caller builds a Registry from unvalidated config.
@@ -174,7 +174,7 @@ func buildChannel(name string, hc config.HandoffConfig, slackInbox, discordInbox
 		if hc.Discord.To == "dm" {
 			return NewDiscordDMChannel(poster, poster, hc.Discord.User, discordInbox, log)
 		}
-		return NewDiscordChannel(poster, hc.Discord.Channel, discordInbox, log)
+		return NewDiscordChannel(poster, hc.Discord.Channel, hc.Discord.Approvers, discordInbox, log)
 	default:
 		// config.Validate already rejected zero/multiple channel sub-blocks set.
 		return notWiredChannel{name: name}

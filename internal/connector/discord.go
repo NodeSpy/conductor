@@ -31,9 +31,10 @@ var discordDecl = &TypeDecl{
 		{
 			Name: "ask", Desc: "present a question/draft and wait for the reply", Ask: true,
 			Options: mergeSchema(askOptionBase(), Schema{
-				"to":      {Type: TString, Enum: []string{"dm", "thread"}, Required: true},
-				"user":    {Type: TString, Desc: "user id (to: dm)"},
-				"channel": {Type: TString, Desc: "channel id (to: thread)"},
+				"to":        {Type: TString, Enum: []string{"dm", "thread"}, Required: true},
+				"user":      {Type: TString, Desc: "user id (to: dm)"},
+				"channel":   {Type: TString, Desc: "channel id (to: thread)"},
+				"approvers": {Type: TList, Desc: "to: thread — only these user ids may resolve the ask (default: anyone in the channel)"},
 			}),
 			Outputs: askOutputs(),
 		},
@@ -188,7 +189,7 @@ func (d *discordImpl) AskChannel(opts map[string]any) (handoff.Channel, error) {
 		if channel == "" {
 			return nil, fmt.Errorf("discord.ask: to: thread needs options.channel")
 		}
-		return handoff.NewDiscordChannel(d.poster, channel, d.inbox, logf), nil
+		return handoff.NewDiscordChannel(d.poster, channel, askApprovers(opts), d.inbox, logf), nil
 	}
 	return nil, fmt.Errorf("discord.ask: options.to must be dm|thread, got %q", to)
 }
