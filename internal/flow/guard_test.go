@@ -463,3 +463,42 @@ policy:
 		t.Fatalf("memory parking must gate: %v %q", failed, errStr)
 	}
 }
+
+// REGRESSION: the secret-scope detector matched only the literal ".secrets"/
+// ".vaults", so {{index . "secrets" "x"}} (and rebinding tricks) walked the
+// same data while evading the egress gate. Any word-boundaried mention of
+// secrets/vaults inside a template action now counts as secret access.
+func TestGuardSecretEgressIndexEvasion(t *testing.T) {
+	unit := []struct {
+		s    string
+		want bool
+	}{
+		{`{{index . "secrets" "gh_token"}}`, true},
+		{`{{ $c := . }}{{ index $c "vaults" }}`, true},
+		{`{{.secrets.gh_token}}`, true},
+		{`{{.options.supersecretsummary}}`, false}, // word boundary: no false positive
+		{`plain text mentioning secrets outside any action`, false},
+	}
+	for _, tc := range unit {
+		if got := referencesSecretScope(tc.s); got != tc.want {
+			t.Errorf("referencesSecretScope(%q) = %v, want %v", tc.s, got, tc.want)
+		}
+	}
+
+	// End to end: the index-form read + an external write is egress-gated.
+	cfg := planCfg(t, `
+policy:
+  agent_authored:
+    allow: [ svc.post, "*.read" ]
+vaults:
+  housevault: { type: file, dir: /tmp/none }
+`)
+	plan := "- uses: svc.post\n  options: { text: '{{index . \"secrets\" \"gh_token\"}}' }"
+	rig, fake := dispatchPlan(t, cfg, "```plan\n"+plan+"\n```")
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "no_secret_egress") {
+		t.Fatalf("index-form secret read must gate: %v %q", failed, errStr)
+	}
+	if len(fake.snapshot()) != 0 {
+		t.Fatal("gated plan must not run")
+	}
+}

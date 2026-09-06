@@ -316,7 +316,7 @@ func hookReadsSecrets(cfg *config.Config, h *config.Hook) bool {
 		if s == "" {
 			continue
 		}
-		if strings.Contains(s, ".secrets") || strings.Contains(s, ".vaults") {
+		if referencesSecretScope(s) {
 			return true
 		}
 		if calls, err := templateVaultCalls(s); err == nil && len(calls) > 0 {
@@ -324,6 +324,64 @@ func hookReadsSecrets(cfg *config.Config, h *config.Hook) bool {
 		}
 	}
 	return false
+}
+
+// referencesSecretScope reports whether a templated string reaches the
+// secrets/vaults scopes — including the field-access evasions of the plain
+// ".secrets" check: {{index . "secrets" "x"}}, {{$c := .}}{{$c.secrets.x}},
+// quoted/backticked forms. Any occurrence of the bare word inside a template
+// action counts (word-boundaried, so `.secretsummary` doesn't); the guard
+// prefers a rare false positive (an approval prompt) over a laundered read.
+func referencesSecretScope(s string) bool {
+	if strings.Contains(s, ".secrets") || strings.Contains(s, ".vaults") {
+		return true
+	}
+	rest := s
+	for {
+		i := strings.Index(rest, "{{")
+		if i < 0 {
+			return false
+		}
+		action := rest[i:]
+		if j := strings.Index(action, "}}"); j >= 0 {
+			action, rest = action[:j+2], rest[i+j+2:]
+		} else {
+			rest = ""
+		}
+		if containsWord(action, "secrets") || containsWord(action, "vaults") {
+			return true
+		}
+		if rest == "" {
+			return false
+		}
+	}
+}
+
+// containsWord reports whether word occurs in s with non-identifier
+// characters (or the string edges) on both sides.
+func containsWord(s, word string) bool {
+	for from := 0; ; {
+		i := strings.Index(s[from:], word)
+		if i < 0 {
+			return false
+		}
+		i += from
+		before, after := byte(0), byte(0)
+		if i > 0 {
+			before = s[i-1]
+		}
+		if end := i + len(word); end < len(s) {
+			after = s[end]
+		}
+		if !isIdentByte(before) && !isIdentByte(after) {
+			return true
+		}
+		from = i + len(word)
+	}
+}
+
+func isIdentByte(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 // builtin connectors whose verbs never leave the box.
@@ -367,7 +425,7 @@ func stepReadsSecrets(cfg *config.Config, step *config.Step) bool {
 		}
 	}
 	for _, s := range stepTemplateStrings(step) {
-		if strings.Contains(s, ".secrets") || strings.Contains(s, ".vaults") {
+		if referencesSecretScope(s) {
 			return true
 		}
 		if calls, err := templateVaultCalls(s); err == nil && len(calls) > 0 {
