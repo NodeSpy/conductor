@@ -172,4 +172,8 @@ environment (PATH/HOME/locale/GO*) plus the step's own `env:` — never the
 daemon's full environment; and remote (`host:`) execution ships env values
 base64-framed over stdin, never in shell text or argv ([[Hosts]]).
 
-Related: [[Configuration]] · [[Connectors]] · [[Commands]] · [[Migration]]
+For how a dispatched **agent** touches secrets — verbs as tools, the
+`{{secret "<vault>/<key>"}}` opaque handles, and the single-use secret
+broker — see [[Agent-Skill]].
+
+Related: [[Configuration]] · [[Connectors]] · [[Commands]] · [[Migration]] · [[Agent-Skill]]
