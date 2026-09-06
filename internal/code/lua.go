@@ -1,6 +1,7 @@
 package code
 
 import (
+	"context"
 	"fmt"
 
 	lua "github.com/yuin/gopher-lua"
@@ -17,9 +18,14 @@ import (
 // string, and math libraries are opened (no os, io, debug, or package), and
 // the base library's file/chunk loaders (dofile, loadfile, load, loadstring)
 // are removed.
-func (e *Executor) execLua(spec Spec, data map[string]any) (map[string]any, error) {
+func (e *Executor) execLua(ctx context.Context, spec Spec, data map[string]any) (map[string]any, error) {
 	L := lua.NewState(lua.Options{SkipOpenLibs: true})
 	defer L.Close()
+	// Bind the step ctx so the flow-level `timeout:` actually cuts a runaway
+	// script — the VM checks the context in its exec loop, so `while true do
+	// end` returns a context error instead of wedging the daemon. (gopher-lua
+	// has no heap cap; ctx cancellation is the available limit.)
+	L.SetContext(ctx)
 	for _, o := range []struct {
 		name string
 		fn   lua.LGFunction

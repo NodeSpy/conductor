@@ -1,11 +1,16 @@
 package code
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
 	"github.com/fastschema/qjs"
 )
+
+// jsMemoryLimit caps the QuickJS heap (bytes): a huge-alloc snippet gets an
+// out-of-memory error inside the VM instead of OOMing the daemon.
+const jsMemoryLimit = 256 << 20
 
 // execJS runs `run: js` under QuickJS (via qjs, a pure-Go/WASM build —
 // wazero under the hood, no cgo, no external quickjs install) entirely
@@ -32,7 +37,7 @@ import (
 // null rather than JSON.stringify silently producing the string
 // "undefined". The stringified result is then JSON-decoded back into a Go
 // `any` and handed to wrapValue for the object/nil/scalar contract.
-func (e *Executor) execJS(spec Spec, data map[string]any) (map[string]any, error) {
+func (e *Executor) execJS(ctx context.Context, spec Spec, data map[string]any) (out map[string]any, err error) {
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("code: js: marshal ctx: %w", err)
@@ -47,11 +52,33 @@ func (e *Executor) execJS(spec Spec, data map[string]any) (map[string]any, error
 		jsMemShim() +
 		"JSON.stringify((function(){\n" + spec.Code + "\n})() ?? null)"
 
-	rt, err := qjs.New()
+	// The step ctx binds the flow-level `timeout:` to actual execution:
+	// CloseOnContextDone makes wazero halt the WASM module when ctx expires,
+	// so a while(1) is cut instead of wedging the daemon. qjs surfaces that
+	// halt (and any call into the then-closed module, including Close) as a
+	// panic, so the whole interaction is recover-wrapped.
+	defer func() {
+		if r := recover(); r != nil {
+			out = nil
+			if ctx.Err() != nil {
+				err = fmt.Errorf("code: js: %w", ctx.Err())
+				return
+			}
+			err = fmt.Errorf("code: js: runtime fault: %v", r)
+		}
+	}()
+	rt, err := qjs.New(qjs.Option{
+		Context:            ctx,
+		CloseOnContextDone: true,
+		MemoryLimit:        jsMemoryLimit,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("code: js: create runtime: %w", err)
 	}
-	defer rt.Close()
+	defer func() {
+		defer func() { recover() }() // Close panics if ctx already halted the module
+		rt.Close()
+	}()
 
 	// ctx.store bridges to the defined stores through one host function
 	// taking and returning JSON (see kvInvokeJSON) — values cross the WASM

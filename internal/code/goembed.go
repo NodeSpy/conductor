@@ -1,9 +1,11 @@
 package code
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
@@ -91,7 +93,7 @@ var anyType = reflect.TypeOf((*any)(nil)).Elem()
 // gets the signature wrong (wrong param type, wrong return arity, a second
 // return that isn't error, or no `run` at all) fails with a message naming
 // the two accepted shapes instead of a confusing reflect panic mid-call.
-func (e *Executor) execGoEmbed(spec Spec, data map[string]any) (map[string]any, error) {
+func (e *Executor) execGoEmbed(ctx context.Context, spec Spec, data map[string]any) (map[string]any, error) {
 	i := interp.New(interp.Options{})
 	if err := i.Use(goEmbedExports()); err != nil {
 		return nil, fmt.Errorf("code: go-embed: sandbox setup: %w", err)
@@ -106,7 +108,36 @@ func (e *Executor) execGoEmbed(spec Spec, data map[string]any) (map[string]any, 
 		return nil, fmt.Errorf("code: go-embed: memory setup: %w", err)
 	}
 
-	if _, err := i.Eval(spec.Code); err != nil {
+	// call bridges the step data in and the result out of the interpreter,
+	// so the run() invocation itself happens INSIDE EvalWithContext below —
+	// yaegi's cancellation (a runid bump checked on every exec-loop
+	// iteration) is the only thing that can cut an interpreted infinite
+	// loop, and it only fires for code evaluated with a context. The mutex
+	// guards the captured result against a write racing a timeout return.
+	var (
+		mu      sync.Mutex
+		res     any
+		callErr error
+	)
+	if err := i.Use(interp.Exports{
+		"conductor/__step/__step": {
+			"Ctx": reflect.ValueOf(func() map[string]any { return data }),
+			"Return": reflect.ValueOf(func(v any, err error) {
+				mu.Lock()
+				defer mu.Unlock()
+				res, callErr = v, err
+			}),
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("code: go-embed: harness setup: %w", err)
+	}
+
+	// User code is evaluated with the step ctx too: top-level declarations
+	// can run arbitrary code (global initializers), not just declare.
+	if _, err := i.EvalWithContext(ctx, spec.Code); err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("code: go-embed: %w", ctx.Err())
+		}
 		return nil, fmt.Errorf("code: go-embed: %w", err)
 	}
 
@@ -119,13 +150,34 @@ func (e *Executor) execGoEmbed(spec Spec, data map[string]any) (map[string]any, 
 		return nil, err
 	}
 
-	results := runFn.Call([]reflect.Value{reflect.ValueOf(data)})
-	if len(results) == 2 {
-		if errVal, _ := results[1].Interface().(error); errVal != nil {
-			return nil, fmt.Errorf("code: go-embed: run: %w", errVal)
-		}
+	harness := `
+import __step "conductor/__step"
+
+func __conductor_call() { __step.Return(run(__step.Ctx())) }
+`
+	if runFn.Type().NumOut() == 1 {
+		harness = `
+import __step "conductor/__step"
+
+func __conductor_call() { __step.Return(run(__step.Ctx()), nil) }
+`
 	}
-	return wrapValue(results[0].Interface()), nil
+	if _, err := i.Eval(harness); err != nil {
+		return nil, fmt.Errorf("code: go-embed: harness: %w", err)
+	}
+	if _, err := i.EvalWithContext(ctx, "__conductor_call()"); err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("code: go-embed: %w", ctx.Err())
+		}
+		return nil, fmt.Errorf("code: go-embed: %w", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if callErr != nil {
+		return nil, fmt.Errorf("code: go-embed: run: %w", callErr)
+	}
+	return wrapValue(res), nil
 }
 
 const goEmbedContractMsg = "must define `func run(ctx map[string]any) (any, error)` or `func run(ctx map[string]any) any`"
