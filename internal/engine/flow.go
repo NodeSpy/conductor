@@ -76,22 +76,27 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 	shadow := e.cfg.Control.Shadow || (pol.Shadow != nil && *pol.Shadow) || (act.Shadow != nil && *act.Shadow)
 
 	// Consume dedup state now (mirrors the legacy multi-step branch): the
-	// event is committed to a run — grouped events buffer after this point.
-	if !shadow {
+	// event is committed to a run. NOT for grouped triggers: their events
+	// buffer in the in-memory Grouper, so recording here would make a
+	// restart drop the batch while dedup suppressed redelivery — silent
+	// loss. Grouped events record at flush time instead (see runBatch).
+	grouped := spec.Group != nil
+	if !shadow && !grouped {
 		if livenessGated(t.Kind) || t.Force {
 			_ = e.store.RecordAttempt(key, dkind, head)
 		} else {
 			_ = e.store.Record(key, dkind, t.Dedup, head)
 		}
 	}
-	// A comment was accepted for handling — raise the high-water mark.
-	if t.Kind == "new_comment" {
+	// A comment was accepted for handling — raise the high-water mark
+	// (grouped comments raise it at flush, with the same reasoning).
+	if t.Kind == "new_comment" && !grouped {
 		if id := commentID(t); id > 0 {
 			_ = e.store.AdvanceCommentID(key, commentMarkKind(t), id)
 		}
 	}
 
-	if spec.Group != nil {
+	if grouped {
 		gkey, err := flow.GroupKey(spec.Group.Key, t, e.flowBaseData(t))
 		if err != nil {
 			e.log("%s group key: %v — running ungrouped", tag(t), err)
@@ -133,6 +138,17 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 		e.log("%s stale flow ref %q at batch fire — dropping %d events", tag(t), ref, len(events))
 		return
 	}
+	// Consume dedup state now — the flush-time half of what processFlow does
+	// for ungrouped triggers at accept time. Until this point nothing was
+	// recorded, so a restart that dropped the in-memory batch leaves the
+	// events redeliverable instead of silently suppressed. Redelivery within
+	// the window can buffer an event twice; duplicates drop here by signature.
+	events = e.recordBatch(events)
+	if len(events) == 0 {
+		return
+	}
+	t = events[len(events)-1]
+
 	ctx := context.Background()
 	e.notif.Emit(ctx, notify.EventDispatch, t, fmt.Sprintf("workflow (batch of %d)", len(events)))
 	e.log("%s grouped batch firing (%d events, key %q)", tag(t), len(events), gkey)
@@ -145,6 +161,42 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 	defer e.release()
 	run := e.newFlowRun(t, spec, false)
 	e.flow.Run(ctx, run, t, spec, &flow.Batch{Key: gkey, Events: events}, false)
+}
+
+// recordBatch writes each grouped event's dedup/attempt/comment-mark state
+// as its batch fires, dropping intra-batch duplicates (the same signature
+// redelivered while buffered). Mirrors processFlow's accept-time recording.
+func (e *Engine) recordBatch(events []core.Trigger) []core.Trigger {
+	seen := map[string]bool{}
+	kept := make([]core.Trigger, 0, len(events))
+	for _, ev := range events {
+		key, dkind, head := ev.Key(), dedupKindOf(ev), ev.Target.HeadSHA
+		sig := key + "\x00" + dkind + "\x00" + ev.Dedup
+		if ev.Dedup != "" && seen[sig] {
+			continue
+		}
+		seen[sig] = true
+		kept = append(kept, ev)
+		if livenessGated(ev.Kind) || ev.Force {
+			_ = e.store.RecordAttempt(key, dkind, head)
+		} else {
+			_ = e.store.Record(key, dkind, ev.Dedup, head)
+		}
+		if ev.Kind == "new_comment" {
+			if cid := commentID(ev); cid > 0 {
+				_ = e.store.AdvanceCommentID(key, commentMarkKind(ev), cid)
+			}
+		}
+	}
+	return kept
+}
+
+// dedupKindOf mirrors process()'s per-variant dedup kind.
+func dedupKindOf(t core.Trigger) string {
+	if t.Variant != "" {
+		return t.Kind + "#" + t.Variant
+	}
+	return t.Kind
 }
 
 // policyFor merges the policy scopes that govern one trigger.
