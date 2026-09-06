@@ -163,6 +163,9 @@ func configureMemory(cfg *config.Config, sec *secrets.Resolver) error {
 			}
 			return nil
 		})
+		// And redact on the way OUT (prompt injection, the recall tool):
+		// entries written before the guard existed may carry secrets.
+		mgr.SetRedactor(sec.Redact)
 	}
 	memory.Configure(mgr)
 	return nil

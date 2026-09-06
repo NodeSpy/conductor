@@ -83,11 +83,33 @@ type Manager struct {
 	// refuse tracked secret material. The verb/code write paths carry the
 	// plan write barrier separately. Atomic: set once at boot, read from
 	// engine and flow goroutines.
-	guard atomic.Pointer[WriteGuard]
+	guard    atomic.Pointer[WriteGuard]
+	redactor atomic.Pointer[Redactor]
 }
 
 // WriteGuard vets one to-be-remembered text; a non-nil error refuses it.
 type WriteGuard func(text string) error
+
+// Redactor scrubs tracked secret values from text served back to agents.
+type Redactor func(string) string
+
+// SetRedactor installs the read-side redactor: memories written before the
+// write guard existed (or through a trusted path) may carry secrets, and
+// recalled/injected content reaches plaintext agent prompts.
+func (m *Manager) SetRedactor(r Redactor) {
+	if r == nil {
+		return
+	}
+	m.redactor.Store(&r)
+}
+
+// redactText applies the read-side redactor (nil = passthrough).
+func (m *Manager) redactText(s string) string {
+	if rp := m.redactor.Load(); rp != nil {
+		return (*rp)(s)
+	}
+	return s
+}
 
 // SetWriteGuard installs the agent-facing write guard.
 func (m *Manager) SetWriteGuard(g WriteGuard) {

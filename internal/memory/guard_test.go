@@ -66,3 +66,38 @@ func TestWriteGuardBlocksHarvestAndIPCRemember(t *testing.T) {
 		t.Fatalf("clean notes must persist: %v", all)
 	}
 }
+
+// REGRESSION: PromptSection served raw e.Text into plaintext agent prompts
+// (and the IPC recall tool returned raw entries) — a secret remembered
+// before the write guard existed came straight back into agent context. Both
+// read paths redact now.
+func TestRecalledMemoryRedactsSecrets(t *testing.T) {
+	const secret = "recalled-s3cr3t-XYZZY"
+	m := NewManager(NewMemBackend())
+	// Persist directly (simulating a pre-guard or trusted-path write).
+	if _, err := m.Remember("deploy key is "+secret, nil, "global", Source{Agent: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	m.SetRedactor(func(s string) string { return strings.ReplaceAll(s, secret, "[redacted]") })
+
+	section := m.PromptSection(Filter{}, "acme/w", "fixer")
+	if strings.Contains(section, secret) {
+		t.Fatalf("secret reached the injected prompt section: %s", section)
+	}
+	if !strings.Contains(section, "[redacted]") {
+		t.Fatalf("prompt section must carry the placeholder: %s", section)
+	}
+
+	resp := handleIPC(m, IPCRequest{Op: "recall", Source: Source{Agent: "a"}}, nil, nil)
+	if !resp.OK || len(resp.Entries) != 1 {
+		t.Fatalf("recall: %+v", resp)
+	}
+	if strings.Contains(resp.Entries[0].Text, secret) {
+		t.Fatalf("secret reached the recall tool response: %s", resp.Entries[0].Text)
+	}
+	// The stored entry itself is untouched — redaction is read-side only.
+	all, _ := m.List()
+	if len(all) != 1 || !strings.Contains(all[0].Text, secret) {
+		t.Fatalf("storage must keep the original (read-side redaction only): %v", all)
+	}
+}

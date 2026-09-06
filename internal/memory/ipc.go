@@ -175,6 +175,11 @@ func handleIPC(m *Manager, req IPCRequest, audit func(map[string]any), log func(
 		}
 		aud(map[string]any{"event": "memory_recall", "via": "tool",
 			"agent": req.Source.Agent, "repo": req.Source.Repo, "count": len(entries)})
+		// Recalled text goes straight into the calling agent's context:
+		// redact like the prompt-injection path.
+		for i := range entries {
+			entries[i].Text = m.redactText(entries[i].Text)
+		}
 		return IPCResponse{OK: true, Entries: entries}
 	case "run_step":
 		ops := getLiveOps()

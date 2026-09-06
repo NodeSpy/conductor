@@ -64,5 +64,8 @@ func (m *Manager) PromptSection(f Filter, repo, agent string) string {
 		b.WriteString("\n")
 	}
 	b.WriteString("To leave a note for future runs, end your final output with a fenced ```remember block — a YAML list of items, each `text:` with optional `tags:` and `scope:` (global | repo | agent).\n")
-	return b.String()
+	// Redact on the way OUT: memories written before the write guard existed
+	// (or via a trusted path) may carry tracked secrets, and this section is
+	// appended to a plaintext agent prompt.
+	return m.redactText(b.String())
 }
