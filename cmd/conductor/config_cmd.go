@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/migrate"
 )
 
@@ -42,7 +44,13 @@ func cmdConfigMigrate(args []string) error {
 		for _, s := range res.Summary {
 			fmt.Fprintln(os.Stderr, "#  - "+s)
 		}
-		fmt.Fprintln(os.Stderr, "# dry-run: nothing written")
+		// The SAME validation the real migration gates on — a dry run that
+		// only re-parses would false-pass a transform the real path (or the
+		// next boot) then refuses.
+		if err := validateDryRunOutput(path, res.Output); err != nil {
+			return fmt.Errorf("dry-run: transformed config FAILS validation (the real migration would refuse and restore): %w", err)
+		}
+		fmt.Fprintln(os.Stderr, "# dry-run: transformed config validates; nothing written")
 		return nil
 	}
 	n, summary, err := migrate.AutoMigrate(path, func() error { return validateAt(args) }, logf)
@@ -64,7 +72,16 @@ func cmdConfigMigrate(args []string) error {
 // agent refs, and the connectors-model semantic pass) against the current
 // on-disk config.
 func validateAt(args []string) error {
-	cfg, _, err := loadConfig(args)
+	path, _ := configPath(args)
+	return validateConfigFile(path)
+}
+
+// validateConfigFile is validateAt against an explicit file (the dry-run
+// writes the transform to a scratch file beside the config so relative
+// imports and the sibling conductor.env resolve identically).
+func validateConfigFile(path string) error {
+	loadEnvFile(filepath.Join(filepath.Dir(path), "conductor.env"))
+	cfg, err := config.Load(path)
 	if err != nil {
 		return err
 	}
@@ -77,6 +94,19 @@ func validateAt(args []string) error {
 	}
 	_, err = buildFlowStack(cfg, nil, nil, true)
 	return err
+}
+
+// validateDryRunOutput validates a transform result without committing it:
+// the output lands in a scratch file next to the real config (same dir, so
+// imports/env resolve the same way), is validated through the full pipeline,
+// and removed.
+func validateDryRunOutput(configPath string, output []byte) error {
+	tmp := configPath + ".migrate-dryrun"
+	if err := os.WriteFile(tmp, output, 0o600); err != nil {
+		return fmt.Errorf("write scratch file: %w", err)
+	}
+	defer os.Remove(tmp)
+	return validateConfigFile(tmp)
 }
 
 // autoMigrateOnBoot runs the automatic in-place migration when the daemon

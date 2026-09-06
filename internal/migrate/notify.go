@@ -151,6 +151,13 @@ func notifyToTriggers(cfg *config.Config, connectors map[string]map[string]any, 
 			// folded into the grouped digest trigger below.
 			continue
 		}
+		if len(stepsFor[ev]) == 0 {
+			// The mirror of "sinks with no events": an event with NO delivery
+			// sink never notified anyone — a zero-step trigger would only
+			// fail post-migration validation.
+			*notes = append(*notes, fmt.Sprintf("notify.on %s: no delivery sink configured — the legacy block delivered nothing for it; dropped with this note", ev))
+			continue
+		}
 		for _, cev := range conductorEventsFor(ev) {
 			out = append(out, config.TriggerSpec{
 				Name:  "notify-" + cev,

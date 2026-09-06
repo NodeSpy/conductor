@@ -361,3 +361,43 @@ notify:
 		t.Fatalf("second pass changed the output:\n%s", string(res2.Output))
 	}
 }
+
+// REGRESSION: notify events with NO delivery sink used to become zero-step
+// conductor.* triggers that fail post-migration validation ("no steps").
+// They drop with a note instead — the mirror of "sinks with no events".
+func TestNotifyEventsWithoutSinksDropped(t *testing.T) {
+	res, err := Transform([]byte(`
+integrations:
+  - name: gh
+    type: github
+    actions:
+      - on: merge_conflict
+        prompt: "fix"
+notify:
+  on: [escalate, complete]
+`))
+	if err != nil || !res.Changed {
+		t.Fatalf("must migrate: %v", err)
+	}
+	var noted bool
+	for _, n := range res.Summary {
+		if strings.Contains(n, "no delivery sink") {
+			noted = true
+		}
+	}
+	if !noted {
+		t.Fatalf("sink-less events must be noted: %v", res.Summary)
+	}
+	var out config.Config
+	if err := yaml.Unmarshal(res.Output, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, tr := range out.Triggers {
+		if len(tr.Steps) == 0 {
+			t.Fatalf("zero-step trigger %q survived migration:\n%s", tr.Name, res.Output)
+		}
+		if strings.HasPrefix(tr.Name, "notify-") {
+			t.Fatalf("sink-less notify event still generated trigger %q", tr.Name)
+		}
+	}
+}
