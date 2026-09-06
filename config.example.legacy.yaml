@@ -18,7 +18,7 @@ integrations:
     # The App carries webhooks + ALL API reads/enrichment (its own rate pool).
     # Writes/posts use your gh token; commits/pushes go over SSH as you.
     app:
-      app_id: 0
+      app_id: 123456
       private_key_path: ~/.config/conductor/github-app.pem
       webhook_secret: ${GH_WEBHOOK_SECRET}
       # smee re-serializes the JSON body, so HMAC often won't match — leave this

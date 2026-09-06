@@ -306,7 +306,8 @@ agents:
     #   key: "{{.repo}}#{{.pr}}"  #   ALL triggers using this agent — later same-key events
     #   idle_ttl: 12h             #   arrive as follow-ups with full prior context. Persists
     #   max_lifetime: 7d          #   across restarts; serialized per key. paseo/acp runtimes
-    #   end_on: [ gh.pr_closed, gh.merged ]  # evict when the work is done
+    #   end_on: [ gh._closed ]    # evict when the PR closes or merges (github reports both
+    #                             #   as the one internal close signal, kind `_closed`)
   planner:
     provider: claude
     model: claude-haiku-4-5
