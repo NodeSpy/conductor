@@ -126,3 +126,55 @@ steps:
 		t.Errorf("meta.level = %v, want step override 2", meta["level"])
 	}
 }
+
+// REGRESSION: codeCtx stripped steps+secrets but left the preloaded VAULT
+// values — an ordinary (non-plan) workflow's code step read every vault
+// entry via ctx.vaults.*, contradicting "secrets reach code only via
+// explicitly templated args/env". vaults strips like secrets now.
+func TestCodeCtxStripsSecretScopes(t *testing.T) {
+	data := map[string]any{
+		"repo":    "acme/w",
+		"steps":   map[string]any{"a": 1},
+		"secrets": map[string]any{"tok": "s1"},
+		"vaults":  map[string]any{"house": map[string]any{"gh": "v1"}},
+	}
+	out := codeCtx(data)
+	for _, k := range []string{"steps", "secrets", "vaults"} {
+		if _, has := out[k]; has {
+			t.Fatalf("codeCtx must strip %q: %v", k, out)
+		}
+	}
+	if out["repo"] != "acme/w" {
+		t.Fatalf("ordinary keys must survive: %v", out)
+	}
+}
+
+// End to end: a js step in an ordinary workflow cannot read ctx.vaults.
+func TestCodeStepCannotReadVaults(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+`)
+	reg := buildRegistry(t, cfg)
+	fake := newFakeState(t, "svc")
+	rig := newTestRunner(t, cfg, reg)
+	rig.Runner.VaultVals = map[string]map[string]string{"house": {"gh": "vault-s3cr3t-XYZZY"}}
+	runTrigger(rig, newTrigger("ping", nil), mustSpec(t, `
+on: svc.ping
+steps:
+  - id: peek
+    run: js
+    code: |
+      return { leaked: (ctx.vaults === undefined) ? "no" : JSON.stringify(ctx.vaults) };
+  - id: post
+    uses: svc.post
+    options: { text: "leak={{.peek.leaked}}" }
+`))
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("workflow failed: %s", errStr)
+	}
+	calls := fake.snapshot()
+	if len(calls) != 1 || calls[0].Opts["text"] != "leak=no" {
+		t.Fatalf("code step must not see ctx.vaults: %+v", calls)
+	}
+}

@@ -983,12 +983,14 @@ func (r *Runner) execCode(ctx context.Context, t core.Trigger, step config.Step,
 	return out, raw, nil
 }
 
-// codeCtx strips the legacy steps index and secrets from the ctx handed to
-// user code (secrets reach code only via explicitly templated args/env).
+// codeCtx strips the legacy steps index and the secret scopes — secrets AND
+// preloaded vault values — from the ctx handed to user code (secrets reach
+// code only via explicitly templated args/env). Leaving vaults in exposed
+// every preloaded vault entry to any code step as ctx.vaults.*.
 func codeCtx(data map[string]any) map[string]any {
 	out := make(map[string]any, len(data))
 	for k, v := range data {
-		if k == "steps" || k == "secrets" {
+		if k == "steps" || k == "secrets" || k == "vaults" {
 			continue
 		}
 		out[k] = v
