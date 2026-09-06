@@ -88,6 +88,7 @@ type Engine struct {
 	pausePath   string               // control file; present = paused (toggled by pause/resume, no restart)
 	ch          chan core.Trigger
 	sem         chan struct{} // concurrent-agent cap; nil = unlimited
+	groupWarn   sync.Map      // FlowRefs whose group key already failed once (log once, not per event)
 
 	// flow runs connectors-model triggers (actions carrying a FlowRef);
 	// grouper batches their grouped events. nil when the config has no

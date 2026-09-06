@@ -10,6 +10,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
@@ -108,5 +109,36 @@ func TestGroupedRedeliveryDedupesWithinBatch(t *testing.T) {
 	}
 	if !strings.HasPrefix(last["text"].(string), "batch") {
 		t.Fatalf("unexpected call: %v", last)
+	}
+}
+
+// Regression: a typo'd group key renders "" under missingkey=zero, which
+// used to collapse EVERY event — all repos, all entities — into one shared
+// batch. An empty rendered key now degrades to per-event batching.
+func TestGroupEmptyKeyBatchesPerEvent(t *testing.T) {
+	st := newFlowGateStore()
+	eng := buildFlowEngineOn(t, strings.Replace(groupRestartCfg,
+		`key: "{{.repo}}"`, `key: "{{.nosuchfield}}"`, 1), st)
+	before := gateCalls()
+	a := flowTrigger("e-a")
+	b := flowTrigger("e-b")
+	b.Target = core.Target{Repo: "acme/other", Number: 9}
+	eng.process(context.Background(), a)
+	eng.process(context.Background(), b)
+	waitCond(t, "both per-event runs", func() bool { return gateCalls()-before >= 2 })
+	if got := gateCalls() - before; got != 2 {
+		t.Fatalf("empty group key ran %d flows, want 2 (per-event)", got)
+	}
+	// Each run saw a batch of exactly one event, not a cross-entity merge.
+	gateConnMu.Lock()
+	texts := []string{}
+	for _, c := range gateConnCalls[len(gateConnCalls)-2:] {
+		texts = append(texts, c["text"].(string))
+	}
+	gateConnMu.Unlock()
+	for _, txt := range texts {
+		if txt != "batch 1" {
+			t.Fatalf("cross-entity collapse: %v", texts)
+		}
 	}
 }

@@ -2,6 +2,8 @@ package flow
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -153,12 +155,29 @@ func (g *Grouper) done(key string, window, maxWait time.Duration) {
 // each event is its own run.
 func GroupKey(spec string, t core.Trigger, data map[string]any) (string, error) {
 	if spec == "" {
-		if t.Dedup != "" {
-			return t.Dedup, nil
-		}
-		return t.Key() + ":" + t.Title, nil
+		return EventIdentity(t), nil
 	}
-	return render(spec, data)
+	key, err := render(spec, data)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(key) == "" {
+		// missingkey=zero renders a typo'd path to "" — grouping on that
+		// would collapse EVERY event (all repos, all PRs) into one
+		// cross-entity batch. An empty rendered key is a render error; the
+		// caller falls back to per-event identity.
+		return "", fmt.Errorf("group key %q rendered empty — check the template path", spec)
+	}
+	return key, nil
+}
+
+// EventIdentity is the per-event group key (dedup signature, else trigger
+// key + title): the fallback that batches nothing across entities.
+func EventIdentity(t core.Trigger) string {
+	if t.Dedup != "" {
+		return t.Dedup
+	}
+	return t.Key() + ":" + t.Title
 }
 
 // Wait is a test helper: it blocks until no group state remains or ctx ends.

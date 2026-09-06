@@ -99,8 +99,15 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 	if grouped {
 		gkey, err := flow.GroupKey(spec.Group.Key, t, e.flowBaseData(t))
 		if err != nil {
-			e.log("%s group key: %v — running ungrouped", tag(t), err)
-			gkey = t.Dedup
+			// A key that doesn't render (bad template, or one that renders
+			// empty — a typo'd path under missingkey=zero) must NOT share a
+			// bucket across events: fall back to per-event identity, so a
+			// broken key degrades to "no batching" instead of one
+			// cross-entity batch. Logged once per trigger, not per event.
+			if _, warned := e.groupWarn.LoadOrStore(act.FlowRef, true); !warned {
+				e.log("%s group key: %v — batching per-event", tag(t), err)
+			}
+			gkey = flow.EventIdentity(t)
 		}
 		full := act.FlowRef + "\x00" + gkey
 		e.grouper.Add(full, t, spec.Group.Window.D(), spec.Group.MaxWait.D())
