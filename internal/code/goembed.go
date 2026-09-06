@@ -94,7 +94,12 @@ var anyType = reflect.TypeOf((*any)(nil)).Elem()
 // return that isn't error, or no `run` at all) fails with a message naming
 // the two accepted shapes instead of a confusing reflect panic mid-call.
 func (e *Executor) execGoEmbed(ctx context.Context, spec Spec, data map[string]any) (map[string]any, error) {
-	i := interp.New(interp.Options{})
+	// GoPath is pinned to a path that never exists: yaegi would otherwise
+	// consult the ambient GOPATH and interpret source packages found under
+	// it — `import "anything/on/disk"` pulling host files into the sandbox.
+	// The allowlist above is Use()-registered binary symbols only; source
+	// lookups must always fail.
+	i := interp.New(interp.Options{GoPath: "/nonexistent-conductor-goembed"})
 	if err := i.Use(goEmbedExports()); err != nil {
 		return nil, fmt.Errorf("code: go-embed: sandbox setup: %w", err)
 	}

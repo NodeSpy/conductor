@@ -50,7 +50,7 @@ func (e *Executor) execGoToolchain(ctx context.Context, spec Spec, data map[stri
 	argv := append([]string{"run", mainPath}, spec.Args...)
 	cmd := exec.CommandContext(ctx, "go", argv...)
 	cmd.Dir = spec.WorkDir
-	cmd.Env = append(os.Environ(), envSlice(spec.Env)...)
+	cmd.Env = append(spawnBaseEnv(), envSlice(spec.Env)...)
 	cmd.Stdin = bytes.NewReader(dataJSON)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -63,14 +63,40 @@ func (e *Executor) execGoToolchain(ctx context.Context, spec Spec, data map[stri
 }
 
 // envSlice renders extra env vars in os/exec's "K=V" form, appended after
-// os.Environ() so a step's `env:` overrides the ambient environment (later
-// entries win when os/exec builds the child's actual environment) without
-// ever replacing it outright — host interpreters still need PATH, HOME,
-// etc. to function normally.
+// the allowlisted base environment (later entries win when os/exec builds
+// the child's actual environment) so a step's `env:` overrides it.
 func envSlice(env map[string]string) []string {
 	out := make([]string, 0, len(env))
 	for k, v := range env {
 		out = append(out, k+"="+v)
+	}
+	return out
+}
+
+// spawnBaseEnv is the ambient environment a spawned interpreter gets:
+// operational basics plus the Go toolchain's own variables — and nothing
+// else. The daemon's full environment routinely carries credentials
+// (webhook secrets, tokens passed to conductor itself via env), and code
+// steps run event-derived programs; forwarding os.Environ() wholesale hands
+// every one of those to the child. A step that genuinely needs an ambient
+// variable passes it explicitly via env:.
+func spawnBaseEnv() []string {
+	allow := map[string]bool{
+		"PATH": true, "HOME": true, "USER": true, "LOGNAME": true,
+		"SHELL": true, "TERM": true, "TZ": true, "LANG": true,
+		"TMPDIR": true, "TMP": true, "TEMP": true,
+	}
+	var out []string
+	for _, kv := range os.Environ() {
+		k, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		// GO* covers the toolchain (GOPATH/GOCACHE/GOMODCACHE/GOTOOLCHAIN/…)
+		// run: go needs; LC_* covers locale.
+		if allow[k] || strings.HasPrefix(k, "GO") || strings.HasPrefix(k, "LC_") {
+			out = append(out, kv)
+		}
 	}
 	return out
 }

@@ -56,7 +56,9 @@ func (e *Executor) execHostLocal(ctx context.Context, spec Spec, data map[string
 	argv := append([]string{interpPath, codePath}, spec.Args...)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = spec.WorkDir
-	cmd.Env = append(os.Environ(), envSlice(spec.Env)...)
+	// Allowlisted base env only: the daemon's environment carries secrets a
+	// spawned code step must not inherit (see spawnBaseEnv).
+	cmd.Env = append(spawnBaseEnv(), envSlice(spec.Env)...)
 	cmd.Stdin = bytes.NewReader(dataJSON)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
