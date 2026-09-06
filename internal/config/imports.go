@@ -234,6 +234,12 @@ func entryFileBody(path, sec, name string) (map[string]any, error) {
 // up over time); a missing LITERAL path is an error (a typo'd filename must
 // not vanish silently).
 func globImport(dir, from, pat string) ([]string, error) {
+	if strings.Contains(pat, "**") {
+		// filepath.Glob has no recursive `**` — it silently treats it as a
+		// single `*`, so `conf.d/**/*.yaml` would quietly skip nested dirs
+		// the author believes are loaded. Refuse it by name.
+		return nil, fmt.Errorf("%s: import glob %q: `**` is not supported (filepath globs match one level) — list each directory level, e.g. conf.d/*.yaml", from, pat)
+	}
 	p := resolveImportPath(dir, pat)
 	matches, err := filepath.Glob(p)
 	if err != nil {

@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -534,5 +535,57 @@ triggers:
 	reg = buildRegistry(t, cfg)
 	if err := Validate(cfg, reg); err != nil {
 		t.Fatalf("diamond reuse is not a cycle: %v", err)
+	}
+}
+
+// REGRESSION: a panic inside a batch run used to escape the flush goroutine
+// (crashing the daemon) and, had it been swallowed, would have left the key
+// inFlight forever. The flush now recovers and done() still runs, so the
+// next batch for the key fires normally.
+func TestGrouperFirePanicRecoversAndKeyKeepsWorking(t *testing.T) {
+	clock := newFakeClock()
+	rec := &batchRec{}
+	first := true
+	g := NewGrouper(clock, func(key string, events []core.Trigger) {
+		if first {
+			first = false
+			panic("boom in the batch run")
+		}
+		rec.fire(key, events)
+	})
+	g.Add("k", trigN("a"), time.Second, time.Minute)
+	clock.advance(2 * time.Second) // fires; panics; must be recovered
+	g.Add("k", trigN("b"), time.Second, time.Minute)
+	clock.advance(2 * time.Second)
+	deadline := time.Now().Add(time.Second)
+	for rec.count() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if rec.count() != 1 {
+		t.Fatal("key wedged after a panicking batch run — done() never ran")
+	}
+}
+
+// REGRESSION: a hot key's pending buffer is capped at MaxBatchEvents; the
+// oldest events drop so the batch keeps the freshest context.
+func TestGrouperBatchSizeCapped(t *testing.T) {
+	clock := newFakeClock()
+	rec := &batchRec{}
+	g := NewGrouper(clock, rec.fire)
+	for i := 0; i < MaxBatchEvents+50; i++ {
+		g.Add("k", trigN(fmt.Sprintf("e%d", i)), time.Second, time.Minute)
+	}
+	clock.advance(2 * time.Second)
+	deadline := time.Now().Add(time.Second)
+	for rec.count() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.batches) != 1 || len(rec.batches[0]) != MaxBatchEvents {
+		t.Fatalf("batch size: %d, want the %d cap", len(rec.batches[0]), MaxBatchEvents)
+	}
+	if rec.batches[0][len(rec.batches[0])-1].Dedup != fmt.Sprintf("e%d", MaxBatchEvents+49) {
+		t.Fatal("cap must drop the OLDEST events, keeping the freshest")
 	}
 }

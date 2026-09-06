@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,12 @@ const DefaultWindow = 15 * time.Second
 // DefaultMaxWaitFactor caps how long a never-quiet group defers: max_wait
 // defaults to 4× the window.
 const DefaultMaxWaitFactor = 4
+
+// MaxBatchEvents caps one key's pending buffer: past it, the OLDEST events
+// drop (with each drop the whole batch shifts toward the freshest context,
+// which is what a grouped summary run wants anyway). An unbounded buffer
+// under a hot key + a stuck run would grow without limit.
+const MaxBatchEvents = 1000
 
 // Grouper batches a trigger's events by key with a debounce window: the
 // window resets on each new event and the batch fires once the group goes
@@ -89,6 +96,9 @@ func (g *Grouper) Add(key string, t core.Trigger, window, maxWait time.Duration)
 		st.first = g.clock.Now()
 	}
 	st.pending = append(st.pending, t)
+	if n := len(st.pending) - MaxBatchEvents; n > 0 {
+		st.pending = append(st.pending[:0:0], st.pending[n:]...) // drop oldest, don't leak backing array
+	}
 
 	if st.inFlight {
 		// A run for this key is still going; the pending list is the next
@@ -125,8 +135,17 @@ func (g *Grouper) flush(key string, window, maxWait time.Duration) {
 	g.mu.Unlock()
 
 	go func() {
+		// done() must run even if fire panics: a panicking batch run would
+		// otherwise leave the key inFlight forever — every later event for it
+		// buffers and never fires again — and the panic itself would take the
+		// whole daemon down from a goroutine with no recovery.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("flow: group %q: batch run panicked (recovered): %v", key, r)
+			}
+			g.done(key, window, maxWait)
+		}()
 		g.fire(key, batch)
-		g.done(key, window, maxWait)
 	}()
 }
 

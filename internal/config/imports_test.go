@@ -450,3 +450,19 @@ loop:
 		t.Fatalf("self-referencing workflow import must load: %v", err)
 	}
 }
+
+// A `**` glob silently matched only one level (filepath.Glob has no
+// recursive globs) — refused by name instead.
+func TestImportDoubleStarGlobRejected(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"config.yaml": `
+connectors:
+  imports: ["conf.d/**/*.yaml"]
+triggers: []
+`,
+	})
+	_, err := Load(filepath.Join(dir, "config.yaml"))
+	if err == nil || !strings.Contains(err.Error(), "`**` is not supported") {
+		t.Fatalf("** glob must be a named error, got: %v", err)
+	}
+}
