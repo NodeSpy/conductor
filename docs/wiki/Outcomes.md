@@ -24,7 +24,12 @@ state file and pruned by age. Signals then resolve them:
 Each resolution writes an `outcome` audit row (agent, workflow, run, cost) —
 the durable record everything below reads. A bare `#N` mention is never
 treated as a revert; only GitHub's explicit back-reference on a
-revert-titled merged PR counts.
+revert-titled merged PR counts — and because a PR's title and body are
+editable text, the claim is additionally **corroborated against the revert
+PR's own commit messages** (git's `This reverts commit <sha>` trailer, one
+REST read). An uncorroborated claim writes a `reverted_unconfirmed` audit
+row for the operator's eyes and does nothing else: no agent counter, no
+engagement consumed, no workflow rot.
 
 ## Where it feeds back
 

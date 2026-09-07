@@ -112,6 +112,25 @@ type prListItem struct {
 	} `json:"labels"`
 }
 
+// prCommitMessages returns the commit messages of a PR (first page — a
+// revert PR is small; the trailer is on the revert commit itself).
+func (c *restClient) prCommitMessages(ctx context.Context, instID int64, owner, repo string, num int) ([]string, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/commits?per_page=100", c.app.apiBase, owner, repo, num)
+	var items []struct {
+		Commit struct {
+			Message string `json:"message"`
+		} `json:"commit"`
+	}
+	if err := c.get(ctx, instID, url, &items); err != nil {
+		return nil, err
+	}
+	msgs := make([]string, 0, len(items))
+	for _, it := range items {
+		msgs = append(msgs, it.Commit.Message)
+	}
+	return msgs, nil
+}
+
 // listOpenPRs lists open PRs for a repo (first page; sweep is a coarse catch-up).
 func (c *restClient) listOpenPRs(ctx context.Context, instID int64, owner, repo string) ([]prListItem, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/pulls?state=open&per_page=100", c.app.apiBase, owner, repo)

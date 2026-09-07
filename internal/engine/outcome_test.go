@@ -15,6 +15,7 @@ func closedTrigger(repo string, n int, merged bool, reverts []any) core.Trigger 
 	ctx := map[string]any{"merged": merged}
 	if reverts != nil {
 		ctx["reverts"] = reverts
+		ctx["reverts_corroborated"] = true
 	}
 	return core.Trigger{Source: "github", Instance: "i", Kind: core.KindClosed,
 		Target: core.Target{Repo: repo, PR: n, Number: n}, Context: ctx}
@@ -127,4 +128,47 @@ triggers:
     steps:
       - { id: p, uses: eg.post, options: { text: "x" } }
 `
+}
+
+// Regression (#36 review M9): an uncorroborated revert claim (title/body
+// text anyone can edit) is recorded for the operator but acts on nothing —
+// no reverted outcome, no per-agent bump, no engagement consumed, no
+// workflow rot.
+func TestUncorroboratedRevertClaimIsInert(t *testing.T) {
+	eng, st, _, _ := buildFlowEngine(t, gateCfg2())
+	st.RecordEngagement("o/r", 5, store.Engagement{Agent: "fixer", Workflow: "eg.ping"})
+
+	tr := closedTrigger("o/r", 90, true, []any{5})
+	tr.Context["reverts_corroborated"] = false
+	eng.process(context.Background(), tr)
+
+	st.mu.Lock()
+	var reverted, unconfirmed bool
+	for _, a := range st.audits {
+		if a["event"] != "outcome" {
+			continue
+		}
+		switch a["outcome"] {
+		case "reverted":
+			reverted = true
+		case "reverted_unconfirmed":
+			if a["number"] == 5 {
+				unconfirmed = true
+			}
+		}
+	}
+	bumped := st.bumps["fixer"]["reverted"]
+	st.mu.Unlock()
+	if reverted {
+		t.Fatal("uncorroborated claim must not produce a reverted outcome")
+	}
+	if !unconfirmed {
+		t.Fatal("the claim must still leave an audit trail (reverted_unconfirmed)")
+	}
+	if bumped != 0 {
+		t.Fatalf("uncorroborated claim must not bump agent stats: %d", bumped)
+	}
+	if len(st.PeekEngagements("o/r", 5)) != 1 {
+		t.Fatal("uncorroborated claim must not consume engagements")
+	}
 }

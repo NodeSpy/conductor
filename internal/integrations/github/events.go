@@ -312,6 +312,21 @@ func (g *Integration) checkOwnPR(ctx context.Context, p ghPayload, num int) bool
 	return g.ownPR(info.User.Login)
 }
 
+// corroborateRevert checks a merged revert-titled PR's commit messages for
+// the `This reverts commit <sha>` trailer git itself writes. Fails closed:
+// no REST client / no installation / API error → not corroborated (the
+// outcome loop then records the claim without acting on it).
+func (g *Integration) corroborateRevert(ctx context.Context, p ghPayload, num int) bool {
+	if g.rest == nil || p.Installation.ID == 0 {
+		return false
+	}
+	msgs, err := g.rest.prCommitMessages(ctx, p.Installation.ID, p.Repository.Owner.Login, p.Repository.Name, num)
+	if err != nil {
+		return false
+	}
+	return corroboratesRevert(msgs)
+}
+
 func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []core.Trigger {
 	if p.Action != "created" || p.Comment == nil {
 		return nil
@@ -446,12 +461,22 @@ func (g *Integration) pullRequestTriggers(ctx context.Context, repo string, p gh
 		// carries the outcome facts (#36 §18): merged vs closed-unmerged, and
 		// — for a merged revert PR — which PRs of THIS repo it reverts
 		// (GitHub's revert flow writes "Reverts owner/repo#N" into the body).
+		// Title/body are attacker-editable, so a claimed revert is
+		// corroborated against the PR's own commit messages — only a
+		// corroborated one may count against agents or rot a workflow
+		// (#36 review M9).
+		reverts := revertRefs(repo, pr)
+		corroborated := false
+		if len(reverts) > 0 {
+			corroborated = g.corroborateRevert(ctx, p, pr.Number)
+		}
 		return []core.Trigger{{Source: "github", Instance: g.name, Kind: core.KindClosed,
 			Target: g.prTarget(repo, pr),
 			Context: map[string]any{
-				"merged":  pr.Merged,
-				"title":   pr.Title,
-				"reverts": revertRefs(repo, pr),
+				"merged":               pr.Merged,
+				"title":                pr.Title,
+				"reverts":              reverts,
+				"reverts_corroborated": corroborated,
 			}}}
 	case "review_requested":
 		t := g.prTarget(repo, pr)

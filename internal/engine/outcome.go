@@ -63,16 +63,21 @@ func (e *Engine) observeClosed(ctx context.Context, t core.Trigger) {
 	// the merge rows is the report's job. Here we record the revert against
 	// any engagements still held AND emit a bare row when none are (the
 	// merge consumed them) so the report still counts the revert.
+	// A revert claim is only actionable when the integration corroborated it
+	// against the revert PR's own commit messages — the title/body a claim
+	// rides on are attacker-editable (#36 review M9). Absent or false →
+	// record the claim, act on nothing.
+	corroborated, _ := t.Context["reverts_corroborated"].(bool)
 	if reverts, ok := t.Context["reverts"].([]int); ok {
 		for _, n := range reverts {
-			e.recordRevert(ctx, t.Target.Repo, n)
+			e.recordRevert(ctx, t.Target.Repo, n, corroborated)
 		}
 	} else if revertsAny, ok := t.Context["reverts"].([]any); ok {
 		for _, v := range revertsAny {
 			if n, ok := v.(int); ok {
-				e.recordRevert(ctx, t.Target.Repo, n)
+				e.recordRevert(ctx, t.Target.Repo, n, corroborated)
 			} else if f, ok := v.(float64); ok {
-				e.recordRevert(ctx, t.Target.Repo, int(f))
+				e.recordRevert(ctx, t.Target.Repo, int(f), corroborated)
 			}
 		}
 	}
@@ -82,7 +87,16 @@ func (e *Engine) observeClosed(ctx context.Context, t core.Trigger) {
 // change usually consumed its engagements, so attribution comes from the
 // audit's merge rows; the store may still hold engagements when the revert
 // raced the merge signal — consume those too.
-func (e *Engine) recordRevert(ctx context.Context, repo string, n int) {
+func (e *Engine) recordRevert(ctx context.Context, repo string, n int, corroborated bool) {
+	if !corroborated {
+		// Title/body-only claim: keep the trail (the operator can look), but
+		// it consumes no engagements, bumps no per-agent counters, and rots
+		// no workflow — none of the report/guidance paths count this row.
+		e.store.Audit(map[string]any{"event": "outcome", "repo": repo, "number": n,
+			"outcome": "reverted_unconfirmed"})
+		e.log("outcome: %s#%d revert claimed but not corroborated by its commits — ignored", repo, n)
+		return
+	}
 	gs := e.store.TakeEngagements(repo, n)
 	if len(gs) == 0 {
 		// Attribution happens at report time by joining this row to the PR's

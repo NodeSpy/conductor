@@ -15,6 +15,25 @@ import (
 // revertsRe matches GitHub's auto-written back-reference.
 var revertsRe = regexp.MustCompile(`(?mi)^\s*Reverts\s+([\w.-]+/[\w.-]+)#(\d+)\b`)
 
+// revertCommitRe matches the trailer `git revert` (and GitHub's Revert
+// button) writes into the revert commit's message. Title and body are
+// attacker-editable text on any PR; a commit message is part of the merged
+// git history — the corroboration the outcome loop requires before a
+// "revert" is allowed to count against an agent or rot a workflow
+// (#36 review M9).
+var revertCommitRe = regexp.MustCompile(`(?mi)^This reverts commit [0-9a-f]{7,40}\b`)
+
+// corroboratesRevert reports whether any of the PR's commit messages carries
+// a real revert trailer.
+func corroboratesRevert(messages []string) bool {
+	for _, m := range messages {
+		if revertCommitRe.MatchString(m) {
+			return true
+		}
+	}
+	return false
+}
+
 // revertRefs returns the PR numbers of repo that a merged revert PR reverts
 // (nil when the PR isn't a revert, or reverts another repo's PRs).
 func revertRefs(repo string, pr *prPayload) []int {
