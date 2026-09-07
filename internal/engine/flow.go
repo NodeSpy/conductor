@@ -388,16 +388,18 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 		},
 		// The spend-budget layer (#36 §14): caps checked before each agent
 		// step dispatches, usage charged/audited after it returns.
-		CheckBudget: func(agentName string, wf *config.BudgetPolicy, wfScope string) error {
-			if berr := e.checkSpendBudget(agentName, wf, wfScope); berr != nil {
+		CheckBudget: func(agentName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
+			res, berr := e.checkSpendBudget(agentName, wf, wfScope, est)
+			if berr != nil {
 				e.store.Audit(map[string]any{"event": "budget_shed",
 					"scope": berr.Scope, "reason": berr.Reason, "agent": agentName})
-				return berr
+				return nil, berr
 			}
-			return nil
+			return res, nil
 		},
-		RecordUsage: func(t core.Trigger, agentName, stepID, runID, wfScope, savedWF string, u cost.Usage) {
-			e.recordUsage(t, agentName, stepID, runID, wfScope, u)
+		CancelBudget: func(res *cost.Reservation) { e.meter.Cancel(res) },
+		RecordUsage: func(t core.Trigger, agentName, stepID, runID, wfScope, savedWF string, res *cost.Reservation, u cost.Usage) {
+			e.recordUsage(t, agentName, stepID, runID, wfScope, res, u)
 			// The outcome loop's engagement (#36 §18): this agent acted on
 			// this target; a later terminal signal resolves it.
 			e.store.RecordEngagement(t.Target.Repo, t.Target.Number, store.Engagement{

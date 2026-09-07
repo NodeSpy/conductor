@@ -75,12 +75,19 @@ type AgentServices struct {
 	// CheckBudget vets an agent dispatch against the spend caps (#36 §14):
 	// global, the agent's profile, and the run's workflow-scope budget
 	// (wf/wfScope, resolved by the runner from the trigger's merged policy).
-	// A non-nil error sheds the dispatch. nil = no budget layer (tests).
-	CheckBudget func(agentName string, wf *config.BudgetPolicy, wfScope string) error
+	// An admitted dispatch holds a RESERVATION for est (#36 review H7) that
+	// RecordUsage settles or CancelBudget releases — concurrent under-cap
+	// checks (a team's parallel workers) cannot overshoot a hard cap. A
+	// non-nil error sheds the dispatch. nil = no budget layer (tests).
+	CheckBudget func(agentName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error)
 	// RecordUsage charges one agent run's token/$ usage to its budget scopes
-	// and the audit, and records the outcome engagement (#36 §18) — savedWF
-	// names the enclosing saved workflow ("" outside one). nil = tests.
-	RecordUsage func(t core.Trigger, agentName, stepID, runID, wfScope, savedWF string, u cost.Usage)
+	// (settling res) and the audit, and records the outcome engagement
+	// (#36 §18) — savedWF names the enclosing saved workflow ("" outside
+	// one). nil = tests.
+	RecordUsage func(t core.Trigger, agentName, stepID, runID, wfScope, savedWF string, res *cost.Reservation, u cost.Usage)
+	// CancelBudget releases a reservation whose dispatch never charged
+	// (shadowed / skipped / queued / errored). nil = no budget layer.
+	CancelBudget func(res *cost.Reservation)
 	// FollowUp delivers a gate-revise prompt to a live agent and captures the
 	// reply (#36 §16): a bound session (§10) or a paseo send-capture. ok=false
 	// when the runtime can't take one — the gate then escalates.
@@ -1207,10 +1214,14 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// Spend budget (#36 §14): an over-cap dispatch sheds — the step fails
 	// with the budget error (the workflow's fail path notifies, and the
 	// sweep/backoff machinery re-derives PR-kind work once the window frees).
+	// An admitted dispatch reserves its estimated spend (#36 review H7).
+	var spendRes *cost.Reservation
 	if !shadow {
-		if berr := r.checkBudget(ctx, step.Agent); berr != nil {
+		res, berr := r.checkBudget(ctx, step.Agent, cost.Estimate(profile.Model, act.Prompt, ""))
+		if berr != nil {
 			return nil, "", berr
 		}
+		spendRes = res
 	}
 	historySetInputs(ctx, id, map[string]any{"agent": step.Agent, "prompt": clipText(act.Prompt, 4000)})
 	req := dispatch.Request{
@@ -1220,7 +1231,9 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	}
 	ref, err := r.Agents.Dispatch(ctx, req)
 	if !shadow && !ref.Shadowed && !ref.Skipped && !ref.Queued && err == nil {
-		r.recordUsage(ctx, t, step.Agent, id, cost.FromRun(profile.Model, act.Prompt, ref.Output))
+		r.recordUsage(ctx, t, step.Agent, id, spendRes, cost.FromRun(profile.Model, act.Prompt, ref.Output))
+	} else if r.Agents.CancelBudget != nil {
+		r.Agents.CancelBudget(spendRes)
 	}
 	if err != nil {
 		return nil, ref.Output, err

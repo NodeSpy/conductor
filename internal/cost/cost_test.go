@@ -154,8 +154,8 @@ func TestReportedUsageClampedAndFloored(t *testing.T) {
 	}
 
 	// A big run "reporting" near-zero tokens is floored to the estimate.
-	prompt := strings.Repeat("p", 8000)  // ~2000 tokens
-	output := strings.Repeat("o", 8000)  // ~2000 tokens
+	prompt := strings.Repeat("p", 8000) // ~2000 tokens
+	output := strings.Repeat("o", 8000) // ~2000 tokens
 	_ = output
 	low := `{"usage":{"input_tokens":1,"output_tokens":1}}`
 	u = FromRun("claude-sonnet", prompt, low)

@@ -26,36 +26,42 @@ func TestCheckSpendBudgetScopes(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, budgetCfg(global, profile), d, n, nil)
 
-	// Under every cap → nil.
-	if berr := e.checkSpendBudget("fixer", nil, ""); berr != nil {
+	// Under every cap → nil (cancel the reservation so later checks are clean).
+	res, berr := e.checkSpendBudget("fixer", nil, "", cost.Usage{})
+	if berr != nil {
 		t.Fatalf("fresh meter must be under cap: %v", berr)
 	}
+	e.meter.Cancel(res)
 
 	// Charge the profile scope past its token cap.
 	e.meter.Record([]string{"profile:fixer"}, cost.Usage{TotalTokens: 100})
-	berr := e.checkSpendBudget("fixer", nil, "")
+	_, berr = e.checkSpendBudget("fixer", nil, "", cost.Usage{})
 	if berr == nil || berr.Scope != "profile:fixer" || !strings.Contains(berr.Reason, "tokens") {
 		t.Fatalf("profile token cap: %+v", berr)
 	}
 	// A different profile is untouched.
-	if berr := e.checkSpendBudget("other", nil, ""); berr != nil {
+	res, berr = e.checkSpendBudget("other", nil, "", cost.Usage{})
+	if berr != nil {
 		t.Fatalf("other profile: %v", berr)
 	}
+	e.meter.Cancel(res)
 
 	// Charge global past its $ cap.
 	e.meter.Record([]string{"global"}, cost.Usage{CostUSD: 1.5})
-	if berr := e.checkSpendBudget("other", nil, ""); berr == nil || berr.Scope != "global" {
+	if _, berr := e.checkSpendBudget("other", nil, "", cost.Usage{}); berr == nil || berr.Scope != "global" {
 		t.Fatalf("global $ cap: %+v", berr)
 	}
 
 	// Workflow scope: its own ledger and cap.
 	wf := &config.BudgetPolicy{MaxCostUSD: 0.10, Window: config.Duration(time.Hour)}
 	e2, _ := newEng(t, budgetCfg(nil, nil), &fakeDispatcher{}, &fakeNotifier{}, nil)
-	if berr := e2.checkSpendBudget("fixer", wf, "gh.push/ci"); berr != nil {
+	res, berr = e2.checkSpendBudget("fixer", wf, "gh.push/ci", cost.Usage{})
+	if berr != nil {
 		t.Fatalf("fresh workflow scope: %v", berr)
 	}
+	e2.meter.Cancel(res)
 	e2.meter.Record([]string{"workflow:gh.push/ci"}, cost.Usage{CostUSD: 0.10})
-	if berr := e2.checkSpendBudget("fixer", wf, "gh.push/ci"); berr == nil || berr.Scope != "workflow:gh.push/ci" {
+	if _, berr := e2.checkSpendBudget("fixer", wf, "gh.push/ci", cost.Usage{}); berr == nil || berr.Scope != "workflow:gh.push/ci" {
 		t.Fatalf("workflow cap: %+v", berr)
 	}
 }
@@ -66,12 +72,12 @@ func TestSpendBudgetWindowFrees(t *testing.T) {
 	now := time.Now()
 	e.meter.SetNow(func() time.Time { return now })
 	e.meter.Record([]string{"profile:fixer"}, cost.Usage{CostUSD: 1})
-	if berr := e.checkSpendBudget("fixer", nil, ""); berr == nil {
+	if _, berr := e.checkSpendBudget("fixer", nil, "", cost.Usage{}); berr == nil {
 		t.Fatal("over cap")
 	}
 	// The window frees → dispatches flow again (the shed's retry semantics).
 	now = now.Add(2 * time.Hour)
-	if berr := e.checkSpendBudget("fixer", nil, ""); berr != nil {
+	if _, berr := e.checkSpendBudget("fixer", nil, "", cost.Usage{}); berr != nil {
 		t.Fatalf("freed window: %v", berr)
 	}
 }
@@ -113,5 +119,60 @@ func TestLegacyDispatchRecordsUsage(t *testing.T) {
 	}
 	if tok, _ := e.meter.SpentIn("global", time.Hour); tok != 15 {
 		t.Fatalf("metered global usage: %d", tok)
+	}
+}
+
+// Regression (#36 review H7): the budget check RESERVES the admitted
+// dispatch's estimated spend atomically — a second concurrent check sees the
+// reservation and sheds BEFORE any charge lands, so a team's parallel
+// workers can't all pass an under-cap read and overshoot a hard cap.
+func TestBudgetReservationClosesCheckThenActRace(t *testing.T) {
+	profile := &config.BudgetPolicy{MaxCostUSD: 1, Window: config.Duration(time.Hour)}
+	e, _ := newEng(t, budgetCfg(nil, profile), &fakeDispatcher{}, &fakeNotifier{}, nil)
+
+	est := cost.Usage{CostUSD: 0.6, TotalTokens: 100} // two of these exceed the $1 cap
+	res1, berr := e.checkSpendBudget("fixer", nil, "", est)
+	if berr != nil {
+		t.Fatalf("first dispatch must be admitted: %v", berr)
+	}
+	// NO charge has landed yet — the reservation alone must block the second.
+	if _, berr := e.checkSpendBudget("fixer", nil, "", est); berr == nil {
+		t.Fatal("second concurrent dispatch must shed on the reservation")
+	}
+	// Settling with a smaller actual frees headroom for the next dispatch.
+	e.meter.Settle(res1, chargeScopes("fixer", ""), cost.Usage{CostUSD: 0.2, TotalTokens: 40})
+	res3, berr := e.checkSpendBudget("fixer", nil, "", est)
+	if berr != nil {
+		t.Fatalf("after settle, headroom must admit again: %v", berr)
+	}
+	// Cancelling releases without charging.
+	e.meter.Cancel(res3)
+	if tok, usd := e.meter.SpentIn("profile:fixer", time.Hour); tok != 40 || usd != 0.2 {
+		t.Fatalf("only the settled actual should remain: %d %v", tok, usd)
+	}
+
+	// The atomic step holds under real concurrency: 10 goroutines race for a
+	// cap that admits exactly one 0.6 reservation.
+	e2, _ := newEng(t, budgetCfg(nil, profile), &fakeDispatcher{}, &fakeNotifier{}, nil)
+	admitted := make(chan *cost.Reservation, 10)
+	done := make(chan struct{})
+	for i := 0; i < 10; i++ {
+		go func() {
+			if res, berr := e2.checkSpendBudget("fixer", nil, "", est); berr == nil {
+				admitted <- res
+			}
+			done <- struct{}{}
+		}()
+	}
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+	close(admitted)
+	n := 0
+	for range admitted {
+		n++
+	}
+	if n != 1 {
+		t.Fatalf("exactly one concurrent dispatch may pass a $1 cap with $0.6 estimates, got %d", n)
 	}
 }

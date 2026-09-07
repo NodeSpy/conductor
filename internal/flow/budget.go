@@ -110,23 +110,25 @@ func budgetFrom(ctx context.Context) (b *config.BudgetPolicy, scope string) {
 	return rb.b, rb.scope
 }
 
-// checkBudget vets one agent dispatch against every governing cap.
-func (r *Runner) checkBudget(ctx context.Context, agentName string) error {
+// checkBudget vets one agent dispatch against every governing cap, holding a
+// reservation for est when admitted (#36 review H7).
+func (r *Runner) checkBudget(ctx context.Context, agentName string, est cost.Usage) (*cost.Reservation, error) {
 	if r.Agents.CheckBudget == nil {
-		return nil
+		return nil, nil
 	}
 	wf, scope := budgetFrom(ctx)
-	return r.Agents.CheckBudget(agentName, wf, scope)
+	return r.Agents.CheckBudget(agentName, wf, scope, est)
 }
 
 // recordUsage charges one agent run's usage: the run's own tally and history
-// record always accumulate; the engine's meter/audit service runs when wired.
-func (r *Runner) recordUsage(ctx context.Context, t core.Trigger, agentName, stepID string, u cost.Usage) {
+// record always accumulate; the engine's meter/audit service runs when wired,
+// settling the dispatch's reservation.
+func (r *Runner) recordUsage(ctx context.Context, t core.Trigger, agentName, stepID string, res *cost.Reservation, u cost.Usage) {
 	costAccFrom(ctx).add(u)
 	historySetCost(ctx, stepID, u)
 	if r.Agents.RecordUsage == nil {
 		return
 	}
 	_, scope := budgetFrom(ctx)
-	r.Agents.RecordUsage(t, agentName, stepID, memory.SourceFrom(ctx).Run, scope, savedWFFrom(ctx), u)
+	r.Agents.RecordUsage(t, agentName, stepID, memory.SourceFrom(ctx).Run, scope, savedWFFrom(ctx), res, u)
 }

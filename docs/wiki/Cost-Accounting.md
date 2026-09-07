@@ -78,6 +78,12 @@ triggers:
 - **Every** governing scope must be under cap for a dispatch to launch.
 - Scope precedence for the *workflow* cap follows policy merging
   (trigger → connector); a global-only budget is charged once, as global.
+- The check **reserves** the dispatch's estimated spend atomically, and the
+  reservation counts against the window until it's settled with the actual
+  usage (or released if the dispatch never runs) — so a team's parallel
+  workers can't all pass an under-cap read and collectively overshoot a hard
+  cap. Once a scope has any spend, a dispatch whose estimate wouldn't fit
+  under the cap sheds up front.
 
 **Shed semantics** — identical to the agents-per-hour count budget: the
 dispatch does not launch, the attempt is recorded (so the backoff/sweep

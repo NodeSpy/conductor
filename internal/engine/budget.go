@@ -51,23 +51,47 @@ func (e *Engine) budgetScopes(agentName string, wf *config.BudgetPolicy, wfScope
 	return out
 }
 
-// checkSpendBudget reports the first over-cap scope for this dispatch (nil =
-// under every cap). The meter is charged per scope key, so each scope's
-// window is its own ledger.
-func (e *Engine) checkSpendBudget(agentName string, wf *config.BudgetPolicy, wfScope string) *ErrBudget {
-	if e.meter == nil {
-		return nil
+// chargeScopes is the scope set a dispatch's usage lands on (and a
+// reservation holds): global, the profile, and the workflow scope.
+func chargeScopes(agentName, wfScope string) []string {
+	scopes := []string{"global"}
+	if agentName != "" {
+		scopes = append(scopes, "profile:"+agentName)
 	}
+	if wfScope != "" {
+		scopes = append(scopes, "workflow:"+wfScope)
+	}
+	return scopes
+}
+
+// checkSpendBudget atomically checks every governing cap and — when under —
+// RESERVES the dispatch's estimated spend (#36 review H7), so concurrent
+// under-cap reads (a team's parallel workers) cannot all launch past a hard
+// cap. The caller settles the reservation with the actual usage
+// (recordUsage) or cancels it when the dispatch never runs. spendMu makes
+// check+reserve one atomic step across goroutines.
+func (e *Engine) checkSpendBudget(agentName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, *ErrBudget) {
+	if e.meter == nil {
+		return nil, nil
+	}
+	e.spendMu.Lock()
+	defer e.spendMu.Unlock()
 	for _, s := range e.budgetScopes(agentName, wf, wfScope) {
 		tokens, usd := e.meter.SpentIn(s.key, s.b.WindowOrDefault())
-		if max := s.b.MaxCostUSD; max > 0 && usd >= max {
-			return &ErrBudget{Scope: s.key, Reason: fmt.Sprintf("$%.2f of $%.2f in %s", usd, max, s.b.WindowOrDefault())}
+		// Prospective when an estimate is known: spent (charges + live
+		// reservations) plus THIS dispatch's estimate must fit under the cap,
+		// or a fan-out of concurrent admits each individually under the
+		// retrospective read would collectively overshoot it. A dispatch
+		// whose estimate alone exceeds the cap still runs while spend is
+		// zero — a cap smaller than one run must not deadlock the scope.
+		if max := s.b.MaxCostUSD; max > 0 && (usd >= max || (usd > 0 && usd+est.CostUSD > max)) {
+			return nil, &ErrBudget{Scope: s.key, Reason: fmt.Sprintf("$%.2f of $%.2f in %s", usd, max, s.b.WindowOrDefault())}
 		}
-		if max := int(s.b.MaxTokens); max > 0 && tokens >= max {
-			return &ErrBudget{Scope: s.key, Reason: fmt.Sprintf("%d of %d tokens in %s", tokens, max, s.b.WindowOrDefault())}
+		if max := int(s.b.MaxTokens); max > 0 && (tokens >= max || (tokens > 0 && tokens+est.TotalTokens > max)) {
+			return nil, &ErrBudget{Scope: s.key, Reason: fmt.Sprintf("%d of %d tokens in %s", tokens, max, s.b.WindowOrDefault())}
 		}
 	}
-	return nil
+	return e.meter.Reserve(chargeScopes(agentName, wfScope), est), nil
 }
 
 // shedForBudget records the shed (attempt + audit + notify) so the dispatch
@@ -82,18 +106,12 @@ func (e *Engine) shedForBudget(ctx context.Context, t core.Trigger, berr *ErrBud
 	e.notif.Emit(ctx, notify.EventEscalate, t, berr.Error())
 }
 
-// recordUsage charges one agent run's usage to its budget scopes and writes
-// the agent_usage audit row — the durable per-run cost record `conductor
-// report` aggregates (per run / workflow / repo / day).
-func (e *Engine) recordUsage(t core.Trigger, agentName, stepID, runID, wfScope string, u cost.Usage) {
-	scopes := []string{"global"}
-	if agentName != "" {
-		scopes = append(scopes, "profile:"+agentName)
-	}
-	if wfScope != "" {
-		scopes = append(scopes, "workflow:"+wfScope)
-	}
-	e.meter.Record(scopes, u)
+// recordUsage settles the dispatch's reservation with the actual usage
+// (charging its budget scopes) and writes the agent_usage audit row — the
+// durable per-run cost record `conductor report` aggregates (per run /
+// workflow / repo / day). res nil degrades to a plain charge.
+func (e *Engine) recordUsage(t core.Trigger, agentName, stepID, runID, wfScope string, res *cost.Reservation, u cost.Usage) {
+	e.meter.Settle(res, chargeScopes(agentName, wfScope), u)
 	e.store.Audit(map[string]any{"event": "agent_usage", "repo": t.Target.Repo,
 		"number": t.Target.Number, "kind": t.Kind, "agent": agentName, "step": stepID,
 		"run": runID, "workflow": wfScope, "model": u.Model,

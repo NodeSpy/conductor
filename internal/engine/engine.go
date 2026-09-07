@@ -113,6 +113,7 @@ type Engine struct {
 
 	budgetMu  sync.Mutex  // guards agentDisp (rolling agent-dispatch timestamps)
 	agentDisp []time.Time // agent-dispatch times in the last hour (runaway budget)
+	spendMu   sync.Mutex  // makes budget check + reservation one atomic step (#36 review H7)
 
 	// meter is the rolling-window token/$ spend ledger behind the hard
 	// budget caps (#36 §14) — in-memory like agentDisp; the audit's
@@ -744,6 +745,9 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		run = r
 	}
 
+	// spendRes is the budget reservation an admitted agent dispatch holds
+	// until its usage settles (or the dispatch never charges — cancelled).
+	var spendRes *cost.Reservation
 	// Coding agents are heavy and contend on a shared repo. Acquire a slot first
 	// (this blocks the loop as backpressure when the cap is full), then hold it in
 	// the background until the launched agent goes idle — so the cap bounds the
@@ -761,11 +765,16 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 		// Spend budget (#36 §14): same shed semantics as the count budget —
 		// record the attempt, retry when the rolling window frees, notify.
-		if berr := e.checkSpendBudget(act.Agent, nil, ""); berr != nil {
+		// An admitted dispatch RESERVES its estimated spend (settled or
+		// cancelled below).
+		res, berr := e.checkSpendBudget(act.Agent, nil, "", cost.Estimate(profile.Model, act.Prompt, ""))
+		if berr != nil {
 			e.shedForBudget(ctx, t, berr, shadow)
 			return
 		}
+		spendRes = res
 		if !e.acquire(ctx) {
+			e.meter.Cancel(spendRes)
 			return
 		}
 		e.recordAgentDispatch()
@@ -788,10 +797,14 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	e.auditDispatch(t, ref, err)
 	// Cost accounting (#36 §14): charge the run's usage (runtime-reported
 	// where the output carries it, else an approximate estimate) to the
-	// budget scopes and the audit. Output-less (background) runs meter the
-	// prompt side now; their output lands in later accounting as approximate.
+	// budget scopes and the audit, settling the dispatch's reservation.
+	// Output-less (background) runs meter the prompt side now; their output
+	// lands in later accounting as approximate. Non-charging outcomes
+	// (skip/queue/error) cancel the reservation instead.
 	if act.Type == "agent" && err == nil && !ref.Skipped && !ref.Shadowed && !ref.Queued {
-		e.recordUsage(t, act.Agent, act.ID, "", "", cost.FromRun(profile.Model, act.Prompt, ref.Output))
+		e.recordUsage(t, act.Agent, act.ID, "", "", spendRes, cost.FromRun(profile.Model, act.Prompt, ref.Output))
+	} else {
+		e.meter.Cancel(spendRes)
 	}
 	gated := act.Type == "agent" && !shadow
 

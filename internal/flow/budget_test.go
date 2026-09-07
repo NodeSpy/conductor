@@ -34,11 +34,11 @@ steps:
 func wireBudget(rig *testRig, checkErr error) (*[]string, *[]cost.Usage, *[]string) {
 	var checks, scopes []string
 	var usages []cost.Usage
-	rig.Runner.Agents.CheckBudget = func(agentName string, wf *config.BudgetPolicy, wfScope string) error {
+	rig.Runner.Agents.CheckBudget = func(agentName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
 		checks = append(checks, agentName+"|"+wfScope)
-		return checkErr
+		return nil, checkErr
 	}
-	rig.Runner.Agents.RecordUsage = func(t core.Trigger, agentName, stepID, runID, wfScope, savedWF string, u cost.Usage) {
+	rig.Runner.Agents.RecordUsage = func(t core.Trigger, agentName, stepID, runID, wfScope, savedWF string, res *cost.Reservation, u cost.Usage) {
 		usages = append(usages, u)
 		scopes = append(scopes, agentName+"|"+stepID+"|"+wfScope)
 	}

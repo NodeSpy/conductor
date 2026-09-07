@@ -248,11 +248,31 @@ func FromRun(model, prompt, output string) Usage {
 // the engine's agents-per-hour window it is in-memory — a restart resets the
 // window, and the durable record is the audit trail. Entries are kept per
 // scope key ("global", "profile:<name>", "workflow:<on>").
+//
+// Reservations close the check-then-act race (#36 review H7): a dispatch
+// RESERVES its estimated spend when the budget admits it, so N concurrent
+// under-cap reads cannot all launch past a hard cap; the true figure settles
+// (or the reservation cancels) when the run resolves. SpentIn counts live
+// reservations alongside charges.
 type Meter struct {
-	mu      sync.Mutex
-	entries map[string][]entry
-	now     func() time.Time
+	mu           sync.Mutex
+	entries      map[string][]entry
+	reservations map[*Reservation]struct{}
+	now          func() time.Time
 }
+
+// Reservation is one dispatch's provisional charge.
+type Reservation struct {
+	scopes []string
+	tokens int
+	usd    float64
+	at     time.Time
+}
+
+// reservationMaxAge is the leak backstop: a reservation neither settled nor
+// cancelled (a crash-path bug) stops counting against the caps after this
+// long, instead of poisoning the budget forever.
+const reservationMaxAge = 4 * time.Hour
 
 type entry struct {
 	at     time.Time
@@ -262,7 +282,7 @@ type entry struct {
 
 // NewMeter builds an empty meter.
 func NewMeter() *Meter {
-	return &Meter{entries: map[string][]entry{}, now: time.Now}
+	return &Meter{entries: map[string][]entry{}, reservations: map[*Reservation]struct{}{}, now: time.Now}
 }
 
 // SetNow injects a clock for tests.
@@ -284,8 +304,8 @@ func (m *Meter) Record(scopes []string, u Usage) {
 	m.mu.Unlock()
 }
 
-// SpentIn sums a scope's spend over the trailing window, pruning entries
-// older than the window as it goes.
+// SpentIn sums a scope's spend over the trailing window — settled charges
+// plus live reservations — pruning entries older than the window as it goes.
 func (m *Meter) SpentIn(scope string, window time.Duration) (tokens int, usd float64) {
 	if m == nil || window <= 0 {
 		return 0, 0
@@ -306,5 +326,60 @@ func (m *Meter) SpentIn(scope string, window time.Duration) (tokens int, usd flo
 	} else {
 		m.entries[scope] = kept
 	}
+	stale := m.now().Add(-reservationMaxAge)
+	for r := range m.reservations {
+		if !r.at.After(stale) {
+			delete(m.reservations, r) // leak backstop
+			continue
+		}
+		for _, s := range r.scopes {
+			if s == scope {
+				tokens += r.tokens
+				usd += r.usd
+				break
+			}
+		}
+	}
 	return tokens, usd
+}
+
+// Reserve places a provisional charge against every scope — counted by
+// SpentIn until Settle/Cancel resolves it.
+func (m *Meter) Reserve(scopes []string, u Usage) *Reservation {
+	if m == nil {
+		return nil
+	}
+	r := &Reservation{scopes: append([]string(nil), scopes...), tokens: u.TotalTokens, usd: u.CostUSD}
+	m.mu.Lock()
+	r.at = m.now()
+	if m.reservations == nil {
+		m.reservations = map[*Reservation]struct{}{}
+	}
+	m.reservations[r] = struct{}{}
+	m.mu.Unlock()
+	return r
+}
+
+// Settle replaces a reservation with the run's actual usage, charged to the
+// same scopes. A nil reservation degrades to a plain Record.
+func (m *Meter) Settle(r *Reservation, scopes []string, u Usage) {
+	if m == nil {
+		return
+	}
+	if r != nil {
+		m.mu.Lock()
+		delete(m.reservations, r)
+		m.mu.Unlock()
+	}
+	m.Record(scopes, u)
+}
+
+// Cancel drops a reservation without charging (the dispatch never ran).
+func (m *Meter) Cancel(r *Reservation) {
+	if m == nil || r == nil {
+		return
+	}
+	m.mu.Lock()
+	delete(m.reservations, r)
+	m.mu.Unlock()
 }
