@@ -42,6 +42,17 @@ type CallableConfig struct {
 	// may point anywhere, but the internal address it resolves to is refused
 	// unless listed here. Empty = every internal range is blocked.
 	CallbackAllowHosts []string `yaml:"callback_allow_hosts"`
+	// MaxWaitInflight caps concurrent synchronous `?wait=true` calls (#36 §13
+	// review, item 5). Each holds a server goroutine until the run finishes or
+	// wait_timeout (up to 5m), so an unbounded number lets a caller exhaust
+	// goroutines. A wait past the cap degrades to async (202 + run_id) — the
+	// caller polls GET /runs. Default 64; 0/unset uses the default.
+	MaxWaitInflight int `yaml:"max_wait_inflight"`
+	// MaxCallbackInflight caps concurrent in-flight completion callbacks (each a
+	// background poll up to 5m). A callback past the cap is not scheduled (audited
+	// `delivered: false`) rather than spawning an unbounded goroutine; the run
+	// still completes and is readable via GET /runs. Default 64; 0/unset uses it.
+	MaxCallbackInflight int `yaml:"max_callback_inflight"`
 }
 
 // CallableToken is one caller identity: a bearer secret OR an HMAC signature

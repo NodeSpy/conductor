@@ -44,6 +44,13 @@ callable:
   listen: ":8099"
   # Bounds a synchronous ?wait=true call (default 30s, hard-capped at 5m).
   wait_timeout: 30s
+  # Concurrency ceilings (default 64 each). Each synchronous wait and each
+  # in-flight callback holds a goroutine for up to 5m, so both are bounded: a
+  # wait past the cap degrades to async (202 + run_id, poll GET /runs); a
+  # callback past the cap is not scheduled (audited delivered:false). Raise only
+  # if a deployment genuinely fans in more than 64 concurrent blocking callers.
+  max_wait_inflight: 64
+  max_callback_inflight: 64
   tokens:
     # A bearer caller.
     - name: n8n-prod                       # recorded as the caller identity in the audit

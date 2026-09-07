@@ -42,6 +42,12 @@ const (
 	maxWaitTimeout     = 5 * time.Minute
 )
 
+// defaultMaxInflight caps concurrent synchronous waits and in-flight callbacks
+// (#36 §13 review, item 5). Each holds a goroutine for up to maxWaitTimeout, so
+// an unbounded number is a trivial resource-exhaustion vector. Overridable per
+// deployment; the default is a safe ceiling, not a tuning knob most reach.
+const defaultMaxInflight = 64
+
 // Deps are the daemon-provided seams the service drives. Keeping them as
 // closures keeps this package free of the engine/cmd wiring and trivially
 // testable with fakes.
@@ -69,6 +75,10 @@ type Deps struct {
 type Service struct {
 	d      Deps
 	issued *issuedSet // run_id → issuing token name (in-process, bounded)
+	// waitSem / cbSem bound concurrent synchronous waits and in-flight callbacks
+	// so neither can pin an unbounded number of goroutines (#36 §13 review 5).
+	waitSem chan struct{}
+	cbSem   chan struct{}
 }
 
 // New builds the service. Register mounts its handlers.
@@ -83,7 +93,21 @@ func New(d Deps) *Service {
 		// redirects. Tests inject their own HTTPPost to capture without a network.
 		d.HTTPPost = newCallbackPoster(d.Cfg).post
 	}
-	return &Service{d: d, issued: newIssuedSet(4096)}
+	return &Service{
+		d:       d,
+		issued:  newIssuedSet(4096),
+		waitSem: make(chan struct{}, inflightCap(d.Cfg.MaxWaitInflight)),
+		cbSem:   make(chan struct{}, inflightCap(d.Cfg.MaxCallbackInflight)),
+	}
+}
+
+// inflightCap resolves a configured concurrency limit, falling back to the safe
+// default when unset (≤0).
+func inflightCap(n int) int {
+	if n <= 0 {
+		return defaultMaxInflight
+	}
+	return n
 }
 
 // Register mounts POST /invoke/<name> and GET /runs/<id> on the callable
@@ -159,20 +183,43 @@ func (s *Service) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	}
 	s.d.Log("callable: %s invoked %q → run %s", tok.Name, name, runID)
 
-	// Synchronous: block (bounded) for the result.
+	// Synchronous: block (bounded) for the result — but only within the inflight
+	// cap. Each wait holds a server goroutine until the run finishes or the wait
+	// deadline (up to 5m); past the cap we degrade to async (202 + run_id) rather
+	// than pin another goroutine, and the caller polls GET /runs (#36 §13 review 5).
 	if wantsWait(r) {
-		rec, done := s.await(r.Context(), runID, s.waitTimeout())
-		code := http.StatusOK
-		if !done {
-			code = http.StatusAccepted // still running at the deadline — poll
+		select {
+		case s.waitSem <- struct{}{}:
+			defer func() { <-s.waitSem }()
+			rec, done := s.await(r.Context(), runID, s.waitTimeout())
+			code := http.StatusOK
+			if !done {
+				code = http.StatusAccepted // still running at the deadline — poll
+			}
+			writeJSON(w, code, s.result(runID, rec))
+			return
+		default:
+			s.d.Log("callable: wait capacity reached (%d) — run %s returned async", cap(s.waitSem), runID)
+			writeJSON(w, http.StatusAccepted, map[string]any{"run_id": runID, "status": "accepted"})
+			return
 		}
-		writeJSON(w, code, s.result(runID, rec))
-		return
 	}
 
-	// Callback: poll to completion in the background, then POST the result.
+	// Callback: poll to completion in a background goroutine, then POST the
+	// result — bounded by the same inflight cap. Past the cap the callback is not
+	// scheduled (audited delivered:false) rather than spawning an unbounded
+	// goroutine; the run still completes and is readable via GET /runs.
 	if req.CallbackURL != "" {
-		go s.deliverCallback(runID, req.CallbackURL)
+		select {
+		case s.cbSem <- struct{}{}:
+			go func() {
+				defer func() { <-s.cbSem }()
+				s.deliverCallback(runID, req.CallbackURL)
+			}()
+		default:
+			s.d.Log("callable: callback capacity reached (%d) — run %s callback not scheduled", cap(s.cbSem), runID)
+			s.d.Audit(map[string]any{"event": "callable_callback", "run_id": runID, "delivered": false, "reason": "callback concurrency limit"})
+		}
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]any{"run_id": runID, "status": "accepted"})
