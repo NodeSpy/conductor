@@ -20,7 +20,7 @@ func TestPutOpenRoundTrip(t *testing.T) {
 	if !strings.HasPrefix(h.Digest, "sha256:") || h.Meta.Size != 14 {
 		t.Fatalf("handle: %+v", h)
 	}
-	rc, err := s.Open(h.Digest)
+	rc, err := s.Open("run-1", h.Digest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestPutOpenRoundTrip(t *testing.T) {
 		t.Fatalf("content: %q", buf[:n])
 	}
 	// Path serves the same file.
-	p, err := s.Path(h.Digest)
+	p, err := s.Path("run-1", h.Digest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,16 +68,16 @@ func TestReleaseRunGC(t *testing.T) {
 		t.Fatal(err)
 	}
 	// run-1's exclusive blob is gone; the shared one survives via run-2.
-	if _, err := s.Open(only1.Digest); err == nil {
+	if _, err := s.Open("run-1", only1.Digest); err == nil {
 		t.Fatal("run-1's exclusive blob must be GC'd with the run")
 	}
-	if _, err := s.Open(shared.Digest); err != nil {
+	if _, err := s.Open("run-2", shared.Digest); err != nil {
 		t.Fatalf("shared blob must survive run-2's reference: %v", err)
 	}
 	if err := s.ReleaseRun("run-2"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Open(shared.Digest); err == nil {
+	if _, err := s.Open("run-2", shared.Digest); err == nil {
 		t.Fatal("last reference released — blob must be deleted")
 	}
 	// Releasing an unknown run is a no-op.
@@ -103,7 +103,7 @@ func TestRefsSurviveReopen(t *testing.T) {
 	if err := s2.ReleaseRun("run-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s2.Open(h.Digest); err == nil {
+	if _, err := s2.Open("run-1", h.Digest); err == nil {
 		t.Fatal("release after reopen must GC")
 	}
 }
@@ -123,10 +123,10 @@ func TestSweepOrphans(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("sweep: %d %v", n, err)
 	}
-	if _, err := s.Open(h.Digest); err == nil {
+	if _, err := s.Open("", h.Digest); err == nil {
 		t.Fatal("orphan must be swept")
 	}
-	if _, err := s.Open(ref.Digest); err != nil {
+	if _, err := s.Open("run-1", ref.Digest); err != nil {
 		t.Fatalf("referenced blob must survive: %v", err)
 	}
 }
@@ -162,8 +162,47 @@ func TestScopeValueRoundTrip(t *testing.T) {
 func TestBadDigestRejected(t *testing.T) {
 	s, _ := Open(t.TempDir())
 	for _, d := range []string{"sha256:../../../etc/passwd", "sha256:short", "plain", "sha256:" + strings.Repeat("a", 63) + "/"} {
-		if _, err := s.Open(d); err == nil {
+		if _, err := s.Open("", d); err == nil {
 			t.Fatalf("bad digest accepted: %q", d)
 		}
+	}
+}
+
+// Regression (#36 review H2): a digest is NOT a capability. A run may only
+// read blobs its own run references; another run — or an out-of-run caller —
+// that learned the digest (audit, event stream, `conductor runs`) is denied.
+func TestBlobOwnershipEnforced(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	h, err := s.PutBytes("run-A", []byte("run A's artifact"), Meta{Name: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The owner reads fine.
+	if _, err := s.Open("run-A", h.Digest); err != nil {
+		t.Fatalf("owner read: %v", err)
+	}
+	// Run B, armed with the digest, is denied — Open and Path both.
+	if _, err := s.Open("run-B", h.Digest); err == nil ||
+		!strings.Contains(err.Error(), "not referenced by run run-B") {
+		t.Fatalf("cross-run Open must be denied: %v", err)
+	}
+	if _, err := s.Path("run-B", h.Digest); err == nil {
+		t.Fatal("cross-run Path must be denied")
+	}
+	// An out-of-run caller is denied a run-owned blob too…
+	if _, err := s.Open("", h.Digest); err == nil ||
+		!strings.Contains(err.Error(), "out-of-run access denied") {
+		t.Fatalf("out-of-run read of a run's blob: %v", err)
+	}
+	// …but may read a truly adhoc (unreferenced) blob.
+	adhoc, _ := s.PutBytes("", []byte("adhoc"), Meta{})
+	if _, err := s.Open("", adhoc.Digest); err != nil {
+		t.Fatalf("adhoc read: %v", err)
+	}
+	// Run B putting the SAME content earns its own reference (content
+	// addressing shares the file; ownership is per run).
+	h2, _ := s.PutBytes("run-B", []byte("run A's artifact"), Meta{})
+	if _, err := s.Open("run-B", h2.Digest); err != nil {
+		t.Fatalf("run B's own put must be readable: %v", err)
 	}
 }

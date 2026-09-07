@@ -165,10 +165,35 @@ func (s *Store) PutBytes(runID string, b []byte, meta Meta) (Handle, error) {
 	return s.Put(runID, bytes.NewReader(b), meta)
 }
 
-// Open returns a reader over a blob's bytes.
-func (s *Store) Open(digest string) (io.ReadCloser, error) {
+// authorize enforces blob ownership (#36 review H2): a digest alone is not a
+// capability — knowing one (from `conductor runs`, the audit, the event
+// stream) must not read another run's artifact. A caller may access a blob
+// only when its OWN run holds a reference (the same-run/workflow scope —
+// child workflows share the run id), or, for out-of-run callers (runID ""),
+// when the blob is unreferenced by any run (an adhoc put).
+func (s *Store) authorize(runID, digest string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if runID != "" {
+		if _, ok := s.refs[runID][digest]; ok {
+			return nil
+		}
+		return fmt.Errorf("blob: %s is not referenced by run %s — a run may only read artifacts it owns", digest, runID)
+	}
+	if s.referencedLocked(digest) {
+		return fmt.Errorf("blob: %s belongs to another run — out-of-run access denied", digest)
+	}
+	return nil
+}
+
+// Open returns a reader over a blob's bytes, authorized against the calling
+// run (see authorize).
+func (s *Store) Open(runID, digest string) (io.ReadCloser, error) {
 	path, err := s.pathFor(digest)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.authorize(runID, digest); err != nil {
 		return nil, err
 	}
 	f, err := os.Open(path)
@@ -179,11 +204,15 @@ func (s *Store) Open(digest string) (io.ReadCloser, error) {
 }
 
 // Path returns the canonical on-disk path of a blob — the zero-copy way to
-// hand its bytes to a verb or write them somewhere. The file is immutable
-// (content-addressed); consumers must treat it read-only.
-func (s *Store) Path(digest string) (string, error) {
+// hand its bytes to a verb or write them somewhere — authorized against the
+// calling run (see authorize). The file is immutable (content-addressed);
+// consumers must treat it read-only.
+func (s *Store) Path(runID, digest string) (string, error) {
 	path, err := s.pathFor(digest)
 	if err != nil {
+		return "", err
+	}
+	if err := s.authorize(runID, digest); err != nil {
 		return "", err
 	}
 	if _, err := os.Stat(path); err != nil {

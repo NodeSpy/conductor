@@ -118,3 +118,31 @@ func TestBlobReadCap(t *testing.T) {
 		t.Fatalf("cap: %v", err)
 	}
 }
+
+// Regression (#36 review H2): the blob verbs enforce run ownership — run B
+// cannot get/read/stat run A's blob by digest.
+func TestBlobVerbsEnforceRunOwnership(t *testing.T) {
+	b, ctxA := blobFixture(t) // ctxA carries run-1
+	out, err := b.Invoke(ctxA, "put", map[string]any{"text": "private to run-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := out["blob"]
+
+	ctxB := memory.WithSource(context.Background(), memory.Source{Run: "run-B"})
+	for _, verb := range []string{"read", "stat"} {
+		if _, err := b.Invoke(ctxB, verb, map[string]any{"blob": handle}); err == nil ||
+			!strings.Contains(err.Error(), "not referenced by run run-B") {
+			t.Fatalf("%s across runs must be denied: %v", verb, err)
+		}
+	}
+	if _, err := b.Invoke(ctxB, "get", map[string]any{"blob": handle,
+		"path": filepath.Join(t.TempDir(), "x")}); err == nil {
+		t.Fatal("get across runs must be denied")
+	}
+	// The owner still reads.
+	if got, err := b.Invoke(ctxA, "read", map[string]any{"blob": handle}); err != nil ||
+		got["text"] != "private to run-1" {
+		t.Fatalf("owner read: %v %v", got, err)
+	}
+}

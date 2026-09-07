@@ -69,7 +69,7 @@ steps:
 		t.Fatalf("templated metadata: %+v", post.Opts)
 	}
 	// The run finished → its artifacts are GC'd with it.
-	if _, err := bs.Open(digest); err == nil {
+	if _, err := bs.Open("run-blob-1", digest); err == nil {
 		t.Fatal("blob must be GC'd with the run")
 	}
 }

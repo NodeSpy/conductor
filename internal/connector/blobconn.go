@@ -106,15 +106,16 @@ func (b blobImpl) Invoke(ctx context.Context, verb string, opts map[string]any) 
 	if b.store == nil {
 		return nil, fmt.Errorf("blob: no blob store is configured in this context")
 	}
+	runID := memory.SourceFrom(ctx).Run
 	switch verb {
 	case "put":
 		return b.put(ctx, opts)
 	case "get":
-		return b.get(opts)
+		return b.get(runID, opts)
 	case "read":
-		return b.read(opts)
+		return b.read(runID, opts)
 	case "stat":
-		return b.stat(opts)
+		return b.stat(runID, opts)
 	}
 	return nil, fmt.Errorf("blob: unknown verb %q", verb)
 }
@@ -161,7 +162,7 @@ func handleArg(opts map[string]any) (blob.Handle, error) {
 	return h, nil
 }
 
-func (b blobImpl) get(opts map[string]any) (map[string]any, error) {
+func (b blobImpl) get(runID string, opts map[string]any) (map[string]any, error) {
 	h, err := handleArg(opts)
 	if err != nil {
 		return nil, err
@@ -170,7 +171,7 @@ func (b blobImpl) get(opts map[string]any) (map[string]any, error) {
 	if dst == "" {
 		return nil, fmt.Errorf("blob.get: path is required")
 	}
-	src, err := b.store.Open(h.Digest)
+	src, err := b.store.Open(runID, h.Digest)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +193,7 @@ func (b blobImpl) get(opts map[string]any) (map[string]any, error) {
 	return map[string]any{"path": dst, "size": n}, nil
 }
 
-func (b blobImpl) read(opts map[string]any) (map[string]any, error) {
+func (b blobImpl) read(runID string, opts map[string]any) (map[string]any, error) {
 	h, err := handleArg(opts)
 	if err != nil {
 		return nil, err
@@ -203,7 +204,7 @@ func (b blobImpl) read(opts map[string]any) (map[string]any, error) {
 	} else if v, ok := opts["max_bytes"].(float64); ok && v > 0 {
 		cap = int64(v)
 	}
-	src, err := b.store.Open(h.Digest)
+	src, err := b.store.Open(runID, h.Digest)
 	if err != nil {
 		return nil, err
 	}
@@ -218,14 +219,14 @@ func (b blobImpl) read(opts map[string]any) (map[string]any, error) {
 	return map[string]any{"text": string(buf), "size": len(buf)}, nil
 }
 
-func (b blobImpl) stat(opts map[string]any) (map[string]any, error) {
+func (b blobImpl) stat(runID string, opts map[string]any) (map[string]any, error) {
 	h, err := handleArg(opts)
 	if err != nil {
 		return nil, err
 	}
 	// Size/existence from disk (the handle's meta rides the scope, but the
 	// store is the truth for existence after GC).
-	path, err := b.store.Path(h.Digest)
+	path, err := b.store.Path(runID, h.Digest)
 	if err != nil {
 		return nil, err
 	}

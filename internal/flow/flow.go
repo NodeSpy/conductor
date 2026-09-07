@@ -842,7 +842,7 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	// from blob handles to local paths; declared binary-out outputs come
 	// back as bytes and leave as run-scoped handles.
 	decl, _ := in.Decl.Verb(verb)
-	if final, err = r.stageBlobInputs(decl, final); err != nil {
+	if final, err = r.stageBlobInputs(ctx, decl, final); err != nil {
 		r.auditVerb(t, connName, verb, rendered, "failed", err)
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}

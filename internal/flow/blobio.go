@@ -18,10 +18,11 @@ import (
 // checkpoint file, or the audit.
 
 // stageBlobInputs resolves declared binary-in options: a blob handle (the
-// {"$blob": …} map or a bare digest string) becomes the blob's on-disk path.
-// A plain string that isn't a handle passes through — the option may accept
-// an ordinary local path too.
-func (r *Runner) stageBlobInputs(decl connector.VerbDecl, opts map[string]any) (map[string]any, error) {
+// {"$blob": …} map or a bare digest string) becomes the blob's on-disk path,
+// authorized against the calling run (#36 review H2). A plain string that
+// isn't a handle passes through — the option may accept an ordinary local
+// path too.
+func (r *Runner) stageBlobInputs(ctx context.Context, decl connector.VerbDecl, opts map[string]any) (map[string]any, error) {
 	if len(decl.BinaryIn) == 0 {
 		return opts, nil
 	}
@@ -41,7 +42,7 @@ func (r *Runner) stageBlobInputs(decl connector.VerbDecl, opts map[string]any) (
 		if !isHandle {
 			continue
 		}
-		path, err := r.Blobs.Path(h.Digest)
+		path, err := r.Blobs.Path(memory.SourceFrom(ctx).Run, h.Digest)
 		if err != nil {
 			return nil, fmt.Errorf("option %q: %w", name, err)
 		}
