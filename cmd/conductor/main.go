@@ -289,14 +289,15 @@ func cmdRun(args []string) error {
 	// loadConfig loads the sibling conductor.env first, so ${...} refs resolve
 	// (this is also how launchd — which has no EnvironmentFile — gets secrets).
 	cfg, _, err := loadConfig(args)
-	if err != nil && migrateWarning != "" {
-		// The migration could not produce a loadable config AND the current
-		// file doesn't load either (a legacy config the strict loader
-		// rejects). Exiting here means the service manager restarts us into
-		// the same wall forever — a silent crash-loop. Hold the process
-		// alive instead, retrying migrate+load periodically so a fixed (or
-		// fixable) config is picked up without operator intervention.
-		cfg, err = holdDegradedUntilLoadable(args, migrateWarning, err)
+	if err != nil {
+		// The post-migrate config does not load — whether or not a migration
+		// ran (migrateWarning may be ""). A connectors-schema config the strict
+		// loader rejects (a stray key, an env ref that didn't resolve) is just
+		// as much a crash-loop trap as a failed migration: returning here exits,
+		// and the service manager restarts us into the same wall forever. Hold
+		// the process alive instead, retrying migrate+load periodically so a
+		// fixed (or fixable) config is picked up without operator intervention.
+		cfg, migrateWarning, err = holdDegradedUntilLoadable(args, migrateWarning, err)
 	}
 	if err != nil {
 		return err

@@ -137,13 +137,21 @@ func autoMigrateOnBoot(args []string) (warning string) {
 var degradedRetryInterval = time.Minute
 
 // holdDegradedUntilLoadable keeps the daemon process ALIVE when the
-// migration could not produce a loadable config AND the current file does
-// not load — exiting would just have the service manager restart us into
-// the same wall forever (a silent crash-loop). It logs the blocker loudly,
-// retries migrate+load on a ticker, and returns the config the moment a
-// retry succeeds (an auto-migration fix in a newer binary, or an operator
-// edit, is picked up without intervention). SIGINT/SIGTERM end the hold.
-func holdDegradedUntilLoadable(args []string, warning string, loadErr error) (*config.Config, error) {
+// post-migrate config does not load — whether or not a migration ran. Exiting
+// would just have the service manager restart us into the same wall forever (a
+// silent crash-loop), and that trap is the same for a failed migration and for
+// a connectors-schema config the strict loader rejects. It logs the blocker
+// loudly, retries migrate+load on a ticker, and returns the config the moment a
+// retry succeeds (an auto-migration fix in a newer binary, or an operator edit,
+// is picked up without intervention). SIGINT/SIGTERM end the hold.
+//
+// warning may be "" (no migration ran — a plain unloadable config); in that
+// case the escalate message is synthesized from the load error so the returned
+// warning is always non-empty for the caller's escalate notify.
+func holdDegradedUntilLoadable(args []string, warning string, loadErr error) (*config.Config, string, error) {
+	if warning == "" {
+		warning = fmt.Sprintf("config does not load at boot: %v", loadErr)
+	}
 	logf("BOOT DEGRADED: config does not load: %v", loadErr)
 	logf("BOOT DEGRADED: %s", warning)
 	logf("BOOT DEGRADED: holding (nothing dispatches) and retrying every %s — the next successful migrate+load resumes a normal boot", degradedRetryInterval)
@@ -155,13 +163,13 @@ func holdDegradedUntilLoadable(args []string, warning string, loadErr error) (*c
 	for {
 		select {
 		case <-sig:
-			return nil, fmt.Errorf("shut down while boot-degraded — the config never loaded: %w", loadErr)
+			return nil, warning, fmt.Errorf("shut down while boot-degraded — the config never loaded: %w", loadErr)
 		case <-t.C:
 			_ = autoMigrateOnBoot(args)
 			cfg, _, err := loadConfig(args)
 			if err == nil {
 				logf("BOOT DEGRADED: config loads now — resuming normal boot")
-				return cfg, nil
+				return cfg, warning, nil
 			}
 			loadErr = err
 			logf("BOOT DEGRADED: still not loadable: %v", err)
