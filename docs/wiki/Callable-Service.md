@@ -140,8 +140,13 @@ The result body is uniform across all three modes and `GET /runs`:
 | `run_id`      | the id minted at invoke time                                        |
 | `status`      | `running` \| `ok` \| `failed` \| `retried`                          |
 | `outputs`     | per-step outputs keyed by step id (secret-scrubbed, as in §20)      |
-| `error`       | present only when `status: failed` — the failure message            |
+| `error`       | present only when `status: failed` — a generic `"workflow failed"`  |
 | `failed_step` | present only when `status: failed` — the step id that failed        |
+
+The `error` field is deliberately generic: a raw connector/step error can carry
+local paths or hostnames (non-secret, but internal), so the external caller sees
+only `"workflow failed"` plus the operator-named `failed_step`. The full failure
+detail stays in the §20 history record — read it with `conductor runs <id>`.
 
 Reads are isolated per token: a token may read only runs it invoked. An
 unknown id it did not issue returns `404`; one issued by *another* token

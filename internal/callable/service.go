@@ -307,7 +307,12 @@ func Result(id string, rec store.RunHistory) map[string]any {
 	}
 	res := map[string]any{"run_id": id, "status": status, "outputs": outputs}
 	if rec.Error != "" {
-		res["error"] = rec.Error
+		// Generic message to the external caller (#36 §13 review, item 6): a raw
+		// connector/step error can carry local paths/hostnames — non-secret, but
+		// internal. The full detail stays in the §20 record + audit/log, read via
+		// `conductor runs <id>`. `failed_step` is a step id (operator-defined,
+		// safe) so the caller still learns *where* it failed.
+		res["error"] = "workflow failed"
 	}
 	if rec.FailedStep != "" {
 		res["failed_step"] = rec.FailedStep

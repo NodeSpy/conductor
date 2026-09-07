@@ -323,6 +323,45 @@ func TestGetRunPollAndIsolation(t *testing.T) {
 	}
 }
 
+// TestFailedRunErrorIsGeneric proves a failed run's raw internal error (which
+// can carry local paths/hostnames) is NOT surfaced to the external caller —
+// only a generic "workflow failed" plus the operator-named failed_step (#36
+// §13 review, item 6).
+func TestFailedRunErrorIsGeneric(t *testing.T) {
+	h := newHarness(t, bearerCfg(), map[string]bool{"triage": true})
+	h.completeWith = func(id string) store.RunHistory {
+		return store.RunHistory{
+			ID:         id,
+			Status:     "failed",
+			Error:      "dial tcp 10.1.2.3:5432: connect: connection refused (/var/secrets/db.pem)",
+			FailedStep: "query",
+			Steps:      []store.StepRecord{{ID: "query", Status: "failed"}},
+		}
+	}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/invoke/triage?wait=true", strings.NewReader(`{}`))
+	r.Header.Set("Authorization", "Bearer s3cret")
+	h.svc.handleInvoke(w, r)
+
+	body := w.Body.String()
+	if strings.Contains(body, "10.1.2.3") || strings.Contains(body, "/var/secrets") || strings.Contains(body, "connection refused") {
+		t.Fatalf("raw internal error leaked to external caller: %s", body)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["status"] != "failed" {
+		t.Fatalf("status = %v, want failed", resp["status"])
+	}
+	if resp["error"] != "workflow failed" {
+		t.Fatalf("error = %v, want generic \"workflow failed\"", resp["error"])
+	}
+	if resp["failed_step"] != "query" {
+		t.Fatalf("failed_step = %v, want query (operator-named, safe to expose)", resp["failed_step"])
+	}
+}
+
 func TestInvokeHMACAuth(t *testing.T) {
 	body := `{"input":{"x":1}}`
 	mac := hmac.New(sha256.New, []byte("hsecret"))
