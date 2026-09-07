@@ -44,8 +44,26 @@ func DeprecationWarnings(cfg *config.Config) []string {
 				}
 				sort.Strings(keys)
 				for _, k := range keys {
-					if envTemplatesSecret(step.Env[k]) {
+					if templatesSecret(step.Env[k]) {
 						warn(fmt.Sprintf("%s: env.%s templates a secret into an agent step's environment — DEPRECATED: the raw value reaches the external runtime for the whole run. Prefer the skill surface (verbs as tools, or skill.secrets_via: broker with a {{secret %q}} handle); see the Agent-Skill wiki page.", w, k, "name"))
+					}
+				}
+				// env: is not the only way a secret leaks into the runtime: a
+				// secret templated into the prompt, the checkout/workdir path,
+				// or a code-step arg reaches the external session just the same
+				// (#57 M4). Flag each field that carries one.
+				for _, f := range []struct{ field, val string }{
+					{"prompt", step.Prompt},
+					{"checkout", step.Checkout},
+					{"workdir", step.WorkDir},
+				} {
+					if templatesSecret(f.val) {
+						warn(fmt.Sprintf("%s: %s templates a secret into an agent step — DEPRECATED: the raw value reaches the external runtime. Prefer the skill surface (verbs as tools, or skill.secrets_via: broker with a {{secret %q}} handle); see the Agent-Skill wiki page.", w, f.field, "name"))
+					}
+				}
+				for ai, a := range step.Args {
+					if templatesSecret(a) {
+						warn(fmt.Sprintf("%s: args[%d] templates a secret into an agent step — DEPRECATED: the raw value reaches the external runtime. Prefer the skill surface (verbs as tools, or skill.secrets_via: broker with a {{secret %q}} handle); see the Agent-Skill wiki page.", w, ai, "name"))
 					}
 				}
 			}
@@ -73,11 +91,11 @@ func DeprecationWarnings(cfg *config.Config) []string {
 	return warns
 }
 
-// envTemplatesSecret reports whether one env value's template reads secret
+// templatesSecret reports whether one templated string reads secret
 // material: a {{.secrets.*}} or {{.vaults.*}} field, or a {{ vault … }}
 // call. ({{secret "name"}} handles are NOT flagged — they are the
 // replacement: opaque at rest.)
-func envTemplatesSecret(s string) bool {
+func templatesSecret(s string) bool {
 	if !strings.Contains(s, "{{") {
 		return false
 	}

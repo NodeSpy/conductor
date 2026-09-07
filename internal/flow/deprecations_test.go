@@ -81,3 +81,44 @@ triggers:
 		t.Fatalf("clean config must not warn: %v", got)
 	}
 }
+
+// #57 M4: env: is not the only leak path. A secret templated into an agent
+// step's prompt, checkout/workdir path, or a code-step arg reaches the external
+// runtime just the same and must be flagged.
+func TestDeprecationWarningsAgentNonEnvFields(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+secrets:
+  tok: env:FLOW_DEP_TEST_TOK2
+agents:
+  deployer: { model: x }
+triggers:
+  - on: svc.ping
+    steps:
+      - id: leaky
+        type: agent
+        agent: deployer
+        prompt: 'deploy with {{.secrets.tok}} now'
+        checkout: 'refs/{{.secrets.tok}}'
+        workdir: '/w/{{.secrets.tok}}'
+      - id: leakyargs
+        type: agent
+        agent: deployer
+        prompt: p
+        args:
+          - "--token={{.secrets.tok}}"
+`)
+	warns := DeprecationWarnings(cfg)
+	joined := strings.Join(warns, "\n")
+	for _, want := range []string{
+		"triggers[0].steps[leaky]: prompt templates a secret",
+		"triggers[0].steps[leaky]: checkout templates a secret",
+		"triggers[0].steps[leaky]: workdir templates a secret",
+		"triggers[0].steps[leakyargs]: args[0] templates a secret",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing warning %q in:\n%s", want, joined)
+		}
+	}
+}
