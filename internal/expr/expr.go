@@ -55,14 +55,39 @@ func Eval(cond string, data map[string]any) (bool, error) {
 // comparison operators, longest first so ">=" wins over ">".
 var comparators = []string{"==", "!=", ">=", "<=", ">", "<"}
 
+// maxNegations bounds leading `!` operators on a single term. Real conditions
+// use zero or one; a large run is pathological input, and stripping them
+// iteratively under this cap keeps a term like "!!!!…!x" from recursing deep
+// enough to overflow the stack.
+const maxNegations = 64
+
 func atom(a string, data map[string]any) (bool, error) {
 	if a == "" {
 		return false, fmt.Errorf("empty condition term")
 	}
-	if strings.HasPrefix(a, "!") {
-		ok, err := atom(strings.TrimSpace(a[1:]), data)
-		return !ok, err
+	// Fold leading `!` negations iteratively (not by recursion), tracking parity.
+	neg := false
+	for depth := 0; strings.HasPrefix(a, "!"); depth++ {
+		if depth >= maxNegations {
+			return false, fmt.Errorf("too many '!' negations in condition term (max %d)", maxNegations)
+		}
+		neg = !neg
+		a = strings.TrimSpace(a[1:])
+		if a == "" {
+			return false, fmt.Errorf("empty condition term")
+		}
 	}
+
+	res, err := evalTerm(a, data)
+	if err != nil {
+		return false, err
+	}
+	return res != neg, nil
+}
+
+// evalTerm evaluates a single term with any leading negations already stripped:
+// a function call, a comparison, or the truthiness of a bare path.
+func evalTerm(a string, data map[string]any) (bool, error) {
 	if ok, handled, err := function(a, data); handled {
 		return ok, err
 	}

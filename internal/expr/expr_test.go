@@ -1,6 +1,9 @@
 package expr
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func data() map[string]any {
 	return map[string]any{
@@ -187,5 +190,49 @@ func TestTruthyAndCoercionShapes(t *testing.T) {
 		if got != want {
 			t.Errorf("Eval(%q) = %v, want %v", cond, got, want)
 		}
+	}
+}
+
+// TestNegationDepthCap (#57 L2): leading `!` operators are folded iteratively
+// under a depth cap, so ordinary and doubled negations still evaluate correctly
+// while a pathologically deep run of `!` returns a clean error instead of
+// recursing far enough to overflow the stack.
+func TestNegationDepthCap(t *testing.T) {
+	d := map[string]any{"x": true, "y": false}
+
+	// Sanity: a handful of negations still fold to the right parity.
+	ok := []struct {
+		cond string
+		want bool
+	}{
+		{"x", true},
+		{"!x", false},
+		{"!!x", true},
+		{"!!!x", false},
+		{"!y", true},
+		{"!!y", false},
+		{"! ! x", true}, // spaces between operators fold too
+	}
+	for _, c := range ok {
+		got, err := Eval(c.cond, d)
+		if err != nil {
+			t.Fatalf("Eval(%q) error: %v", c.cond, err)
+		}
+		if got != c.want {
+			t.Errorf("Eval(%q) = %v, want %v", c.cond, got, c.want)
+		}
+	}
+
+	// Pathological: a deep run of `!` past the cap must error, not crash.
+	deep := strings.Repeat("!", maxNegations+5) + "x"
+	if _, err := Eval(deep, d); err == nil {
+		t.Fatalf("Eval of %d leading '!' should error, got nil", maxNegations+5)
+	} else if !strings.Contains(err.Error(), "negations") {
+		t.Fatalf("unexpected error for deep negation: %v", err)
+	}
+
+	// A dangling `!` with no operand is a clean error, not a panic.
+	if _, err := Eval("!", d); err == nil {
+		t.Fatalf("Eval(%q) should error on a dangling negation", "!")
 	}
 }
