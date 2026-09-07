@@ -972,6 +972,12 @@ group_L_migration() {
 
 CONN_CFG=/etc/conductor/connectors.e2e.yaml
 conn() { cexec conductor-conn conductor "$@" --config "$CONN_CFG"; }
+# Predicate for wait_for: is $1 in `conductor runs`? The list reads the history
+# dir file-by-file, so a just-finished run can lag the assertion by a beat (the
+# final record flush lands just after the step side-effect Q waits on, and a
+# single-shot read under IO load can miss it). Retry rather than one-shot —
+# Q-detail still proves the record landed; this only tolerates the flush window.
+conn_runs_lists() { conn runs --limit 0 2>/dev/null | grep -q "$1"; }
 
 # The func groups share the sink-catcher with K/L; reset once up front so the
 # blob/gate/hist slack assertions read only their own captures (K/L already
@@ -1134,7 +1140,7 @@ group_Q_history() {
   # (--limit 0) so a small default cap can never be the reason it's missing.
   local id
   id="$(cexec conductor-conn sh -c 'grep -lE "\"repo\": *\"func/hist\"" /data/history/*.json 2>/dev/null | xargs -r ls -t | head -1 | xargs -r -n1 basename | sed "s/\.json$//"')"
-  if [ -n "$id" ] && conn runs --limit 0 2>/dev/null | grep -q "$id"; then
+  if [ -n "$id" ] && wait_for 15 conn_runs_lists "$id"; then
     ok "Q \`conductor runs\` lists the recorded run ($id)" Q Q-list
   else
     bad "Q runs lists the recorded run" Q Q-list "run id not found/listed (id='$id')"
