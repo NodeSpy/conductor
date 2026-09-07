@@ -158,3 +158,68 @@ func TestIsolationCarriedToControllerConfig(t *testing.T) {
 		t.Fatalf("Controller() must carry Isolation through, got %v", got)
 	}
 }
+
+func TestBudgetValidation(t *testing.T) {
+	ok := &BudgetPolicy{MaxCostUSD: 5}
+	if err := validateBudget("here", ok); err != nil {
+		t.Fatalf("valid budget: %v", err)
+	}
+	if err := validateBudget("here", &BudgetPolicy{}); err == nil ||
+		!strings.Contains(err.Error(), "caps nothing") {
+		t.Fatalf("empty budget: %v", err)
+	}
+	if err := validateBudget("here", &BudgetPolicy{MaxCostUSD: -1}); err == nil {
+		t.Fatal("negative $ cap")
+	}
+	if err := validateBudget("here", &BudgetPolicy{MaxTokens: -1}); err == nil {
+		t.Fatal("negative token cap")
+	}
+	// Default window.
+	if w := (&BudgetPolicy{}).WindowOrDefault(); w != DefaultBudgetWindow {
+		t.Fatalf("default window: %v", w)
+	}
+	var nilB *BudgetPolicy
+	if w := nilB.WindowOrDefault(); w != DefaultBudgetWindow {
+		t.Fatalf("nil window: %v", w)
+	}
+}
+
+func TestBudgetInPolicyAndProfileValidated(t *testing.T) {
+	c := isoBase(t)
+	c.Policy = &Policy{Budget: &BudgetPolicy{}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "budget") {
+		t.Fatalf("global budget validation: %v", err)
+	}
+	c = isoBase(t)
+	c.Agents["fixer"] = AgentProfile{Budget: &BudgetPolicy{MaxTokens: -5}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "agent fixer: budget") {
+		t.Fatalf("profile budget validation: %v", err)
+	}
+}
+
+func TestPricingValidation(t *testing.T) {
+	c := isoBase(t)
+	c.Pricing = &PricingConfig{Models: map[string]ModelPrice{"claude-*": {Input: 3, Output: 15}}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid pricing: %v", err)
+	}
+	c.Pricing = &PricingConfig{Models: map[string]ModelPrice{"": {Input: 3}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "empty model pattern") {
+		t.Fatalf("empty pattern: %v", err)
+	}
+	c.Pricing = &PricingConfig{Default: &ModelPrice{Input: -1}}
+	if err := c.Validate(); err == nil {
+		t.Fatal("negative price")
+	}
+}
+
+func TestBudgetMergePolicy(t *testing.T) {
+	g := &Policy{Budget: &BudgetPolicy{MaxCostUSD: 10}}
+	tr := &Policy{Budget: &BudgetPolicy{MaxCostUSD: 1}}
+	if got := MergePolicy(g, nil, tr).Budget.MaxCostUSD; got != 1 {
+		t.Fatalf("trigger budget must win: %v", got)
+	}
+	if got := MergePolicy(g, nil, nil).Budget.MaxCostUSD; got != 10 {
+		t.Fatalf("global fallback: %v", got)
+	}
+}

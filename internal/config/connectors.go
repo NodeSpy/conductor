@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -620,6 +621,94 @@ type Policy struct {
 	// approval gate, sandbox host, identity, and limits an agent-emitted
 	// step runs under. Nil at every scope = plans rejected (safe default).
 	AgentAuthored *AgentAuthoredPolicy `yaml:"agent_authored,omitempty"`
+	// Budget is a hard $/token spend cap over a rolling window (#36 §14).
+	// Global scope caps everything; a trigger-level budget caps that
+	// workflow; an agent profile's own `budget:` caps that profile. Over-cap
+	// dispatches shed like the agent-count budget (recorded, retried when
+	// the window frees) and notify.
+	Budget *BudgetPolicy `yaml:"budget,omitempty"`
+}
+
+// BudgetPolicy is one hard spend cap: $ and/or tokens over a rolling window.
+type BudgetPolicy struct {
+	// Window is the rolling spend window (default 24h).
+	Window Duration `yaml:"window,omitempty"`
+	// MaxCostUSD caps $ spend in the window (0 = uncapped).
+	MaxCostUSD float64 `yaml:"max_cost_usd,omitempty"`
+	// MaxTokens caps token spend in the window (0 = uncapped; "500k"/"2m"
+	// shorthand accepted).
+	MaxTokens TokenCount `yaml:"max_tokens,omitempty"`
+}
+
+// DefaultBudgetWindow is the rolling window when a budget doesn't set one.
+const DefaultBudgetWindow = 24 * time.Hour
+
+// PricingConfig overrides the cost layer's built-in model price table.
+type PricingConfig struct {
+	// Models maps model-name glob patterns ("claude-*") to $/1M-token prices;
+	// checked before the built-in defaults.
+	Models map[string]ModelPrice `yaml:"models,omitempty"`
+	// Default replaces the built-in fallback for models nothing matches.
+	Default *ModelPrice `yaml:"default,omitempty"`
+}
+
+// ModelPrice is $ per 1M tokens.
+type ModelPrice struct {
+	Input  float64 `yaml:"input"`
+	Output float64 `yaml:"output"`
+}
+
+// validatePricing checks the pricing block's shape.
+func (c *Config) validatePricing() error {
+	if c.Pricing == nil {
+		return nil
+	}
+	check := func(where string, p ModelPrice) error {
+		if p.Input < 0 || p.Output < 0 {
+			return fmt.Errorf("config: pricing: %s: input/output must be >= 0 ($ per 1M tokens)", where)
+		}
+		return nil
+	}
+	for pat, p := range c.Pricing.Models {
+		if strings.TrimSpace(pat) == "" {
+			return fmt.Errorf("config: pricing.models: empty model pattern")
+		}
+		if err := check("models."+pat, p); err != nil {
+			return err
+		}
+	}
+	if c.Pricing.Default != nil {
+		return check("default", *c.Pricing.Default)
+	}
+	return nil
+}
+
+// WindowOrDefault returns the budget's rolling window (default 24h).
+func (b *BudgetPolicy) WindowOrDefault() time.Duration {
+	if b != nil && b.Window.D() > 0 {
+		return b.Window.D()
+	}
+	return DefaultBudgetWindow
+}
+
+// validateBudget checks one budget block's shape.
+func validateBudget(where string, b *BudgetPolicy) error {
+	if b == nil {
+		return nil
+	}
+	if b.MaxCostUSD < 0 {
+		return fmt.Errorf("config: %s: budget.max_cost_usd must be >= 0", where)
+	}
+	if b.MaxTokens < 0 {
+		return fmt.Errorf("config: %s: budget.max_tokens must be >= 0", where)
+	}
+	if b.MaxCostUSD == 0 && b.MaxTokens == 0 {
+		return fmt.Errorf("config: %s: budget needs max_cost_usd and/or max_tokens (an empty budget caps nothing)", where)
+	}
+	if b.Window.D() < 0 {
+		return fmt.Errorf("config: %s: budget.window must be positive", where)
+	}
+	return nil
 }
 
 // reply_to_bots modes: gate the conversational reply to a bot author.
@@ -651,6 +740,9 @@ func validatePolicyBlock(where string, p *Policy) error {
 		return nil
 	}
 	if err := validateAgentAuthored(where, p.AgentAuthored, nil); err != nil {
+		return err
+	}
+	if err := validateBudget(where, p.Budget); err != nil {
 		return err
 	}
 	if p.ReplyToBots == nil {
@@ -760,6 +852,9 @@ func MergePolicy(scopes ...*Policy) Policy {
 		}
 		if p.AgentAuthored != nil {
 			out.AgentAuthored = p.AgentAuthored
+		}
+		if p.Budget != nil {
+			out.Budget = p.Budget
 		}
 	}
 	return out

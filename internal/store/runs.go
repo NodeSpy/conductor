@@ -22,6 +22,11 @@ type WorkflowRun struct {
 	Outputs   map[string]map[string]any `json:"outputs"` // completed step id -> outputs
 	StepIndex int                       `json:"step_index"`
 	UpdatedAt time.Time                 `json:"updated_at"`
+	// Tokens / CostUSD tally the run's agent spend so far (#36 §14);
+	// ApproxCost marks any contributing figure as estimated.
+	Tokens     int     `json:"tokens,omitempty"`
+	CostUSD    float64 `json:"cost_usd,omitempty"`
+	ApproxCost bool    `json:"approx_cost,omitempty"`
 }
 
 // PutRun upserts an in-flight workflow run and persists immediately.

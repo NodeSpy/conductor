@@ -84,6 +84,10 @@ type Config struct {
 	Workflows map[string]WorkflowDef `yaml:"workflows"`
 	Triggers  []TriggerSpec          `yaml:"triggers"`
 	Policy    *Policy                `yaml:"policy"`
+	// Pricing overrides the built-in model→$ table cost estimation uses
+	// (#36 §14). Model prices drift; the built-ins are coarse defaults and
+	// every estimated figure is marked approximate.
+	Pricing *PricingConfig `yaml:"pricing"`
 	// SecretRefs is the named `secrets:` block: name -> secret reference
 	// (env:/op://…), readable in templates as {{.secrets.<name>}}.
 	SecretRefs map[string]string `yaml:"secrets"`
@@ -605,6 +609,10 @@ type AgentProfile struct {
 	// policy. Wins over the runtime's own isolation:. Requires a runtime
 	// conductor launches itself (acp/cli/opencode/agent-deck — not paseo).
 	Isolation *IsolationConfig `yaml:"isolation"`
+	// Budget is this profile's hard $/token spend cap over a rolling window
+	// (#36 §14) — checked alongside the global and workflow-scope budgets;
+	// an over-cap dispatch sheds and notifies.
+	Budget *BudgetPolicy `yaml:"budget"`
 }
 
 // SkillPolicy is the per-profile `skill:` block (#36 §12): which of
@@ -1176,6 +1184,12 @@ func (c *Config) Validate() error {
 		if err := validateAgentAuthored("policy", c.Policy.AgentAuthored, c.Hosts); err != nil {
 			return err
 		}
+		if err := validateBudget("policy", c.Policy.Budget); err != nil {
+			return err
+		}
+	}
+	if err := c.validatePricing(); err != nil {
+		return err
 	}
 	names := map[string]bool{}
 	for i, ig := range c.Integrations {
@@ -1213,6 +1227,9 @@ func (c *Config) Validate() error {
 			}
 		}
 		if err := c.validateProfileIsolation(name, p); err != nil {
+			return err
+		}
+		if err := validateBudget("agent "+name, p.Budget); err != nil {
 			return err
 		}
 		if p.Skill != nil {

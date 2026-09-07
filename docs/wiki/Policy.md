@@ -102,4 +102,12 @@ There is no policy-level `enabled` — the global kill switch is the runtime
 Unparsable quiet-hours values fail **open** (never quiet) — a typo must not
 silently hold all work.
 
-Related: [[Configuration]] · [[Connectors]] · [[Grouping]]
+## Spend budgets (`budget:`)
+
+`policy.budget` is the hard `$`/token cap layer (#36 §14): a global cap
+here, a per-workflow cap on a trigger's `policy:`, and a per-profile cap on
+`agents.<name>.budget`. Over-cap dispatches shed (recorded + retried when
+the rolling window frees) and notify. Full details, capture semantics, and
+the pricing table: [[Cost-Accounting]].
+
+Related: [[Configuration]] · [[Connectors]] · [[Grouping]] · [[Cost-Accounting]]

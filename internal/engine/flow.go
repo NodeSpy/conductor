@@ -10,6 +10,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/handoff"
@@ -382,6 +383,19 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 				return // a keyed session outlives the step that used it
 			}
 			go func() { _ = e.disp.Archive(context.Background(), agentID) }()
+		},
+		// The spend-budget layer (#36 §14): caps checked before each agent
+		// step dispatches, usage charged/audited after it returns.
+		CheckBudget: func(agentName string, wf *config.BudgetPolicy, wfScope string) error {
+			if berr := e.checkSpendBudget(agentName, wf, wfScope); berr != nil {
+				e.store.Audit(map[string]any{"event": "budget_shed",
+					"scope": berr.Scope, "reason": berr.Reason, "agent": agentName})
+				return berr
+			}
+			return nil
+		},
+		RecordUsage: func(t core.Trigger, agentName, stepID, runID, wfScope string, u cost.Usage) {
+			e.recordUsage(t, agentName, stepID, runID, wfScope, u)
 		},
 	}
 }

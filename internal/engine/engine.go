@@ -17,6 +17,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/handoff"
@@ -102,6 +103,11 @@ type Engine struct {
 
 	budgetMu  sync.Mutex  // guards agentDisp (rolling agent-dispatch timestamps)
 	agentDisp []time.Time // agent-dispatch times in the last hour (runaway budget)
+
+	// meter is the rolling-window token/$ spend ledger behind the hard
+	// budget caps (#36 §14) — in-memory like agentDisp; the audit's
+	// agent_usage rows are the durable record.
+	meter *cost.Meter
 }
 
 // overAgentBudget prunes agent-dispatch timestamps older than an hour and reports
@@ -210,6 +216,7 @@ func New(o Options) *Engine {
 		pausePath: o.PausePath,
 		secrets:   o.Secrets,
 		ch:        make(chan core.Trigger, 256),
+		meter:     cost.NewMeter(),
 	}
 	if cap := o.Config.AgentCap(); cap > 0 {
 		e.sem = make(chan struct{}, cap)
@@ -738,6 +745,12 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			_ = e.store.RecordAttempt(key, dkind, head) // so it isn't silently forgotten
 			return
 		}
+		// Spend budget (#36 §14): same shed semantics as the count budget —
+		// record the attempt, retry when the rolling window frees, notify.
+		if berr := e.checkSpendBudget(act.Agent, nil, ""); berr != nil {
+			e.shedForBudget(ctx, t, berr, shadow)
+			return
+		}
 		if !e.acquire(ctx) {
 			return
 		}
@@ -759,6 +772,13 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		e.log("%s command done (%s) in %s%s", tag(t), ref.Backend, took, tail)
 	}
 	e.auditDispatch(t, ref, err)
+	// Cost accounting (#36 §14): charge the run's usage (runtime-reported
+	// where the output carries it, else an approximate estimate) to the
+	// budget scopes and the audit. Output-less (background) runs meter the
+	// prompt side now; their output lands in later accounting as approximate.
+	if act.Type == "agent" && err == nil && !ref.Skipped && !ref.Shadowed && !ref.Queued {
+		e.recordUsage(t, act.Agent, act.ID, "", "", cost.FromRun(profile.Model, act.Prompt, ref.Output))
+	}
 	gated := act.Type == "agent" && !shadow
 
 	// A catch-up whose PR already has a working agent did nothing — don't record it

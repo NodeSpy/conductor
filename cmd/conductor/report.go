@@ -85,6 +85,13 @@ func cmdReport(args []string) error {
 	for _, ev := range []string{"escalate", "failed", "needs_input", "complete"} {
 		fmt.Printf("  %-12s %d\n", ev, attention[ev])
 	}
+
+	// Spend (#36 §14): a second pass over the log for the agent_usage rows.
+	if _, err := f.Seek(0, io.SeekStart); err == nil {
+		if spend, serr := tallySpend(f, cutoff); serr == nil {
+			printSpend(spend)
+		}
+	}
 	return nil
 }
 
@@ -169,4 +176,140 @@ func tallyAudit(r io.Reader, cutoff time.Time) (dispatch map[string]map[string]i
 		}
 	}
 	return dispatch, attention, sc.Err()
+}
+
+// spendTally aggregates the audit's agent_usage rows (#36 §14): totals plus
+// per-repo / per-day / per-workflow-or-kind breakdowns, and how much of the
+// figure is runtime-reported vs estimated.
+type spendTally struct {
+	Tokens, ApproxRuns, Runs int
+	USD                      float64
+	ByRepo, ByDay, ByKind    map[string]*spendCell
+	Sheds                    int // budget_shed rows in the window
+}
+
+type spendCell struct {
+	Tokens int
+	USD    float64
+	Runs   int
+}
+
+// tallySpend streams the audit log and aggregates agent_usage rows at or
+// after cutoff (same inclusion rule as tallyAudit).
+func tallySpend(r io.Reader, cutoff time.Time) (spendTally, error) {
+	s := spendTally{ByRepo: map[string]*spendCell{}, ByDay: map[string]*spendCell{}, ByKind: map[string]*spendCell{}}
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64<<10), 8<<20)
+	for sc.Scan() {
+		var d map[string]any
+		if json.Unmarshal(sc.Bytes(), &d) != nil {
+			continue
+		}
+		day := ""
+		if ts, ok := d["ts"].(string); ok {
+			if t, e := time.Parse(time.RFC3339, ts); e == nil {
+				if t.Before(cutoff) {
+					continue
+				}
+				day = t.Format("2006-01-02")
+			}
+		}
+		switch ev, _ := d["event"].(string); ev {
+		case "budget_shed":
+			s.Sheds++
+			continue
+		case "agent_usage":
+		default:
+			continue
+		}
+		tokens := intOf(d["tokens"])
+		usd, _ := d["cost_usd"].(float64)
+		s.Tokens += tokens
+		s.USD += usd
+		s.Runs++
+		if approx, _ := d["approximate"].(bool); approx {
+			s.ApproxRuns++
+		}
+		bump := func(m map[string]*spendCell, key string) {
+			if key == "" {
+				key = "(unknown)"
+			}
+			c := m[key]
+			if c == nil {
+				c = &spendCell{}
+				m[key] = c
+			}
+			c.Tokens += tokens
+			c.USD += usd
+			c.Runs++
+		}
+		repo, _ := d["repo"].(string)
+		bump(s.ByRepo, repo)
+		bump(s.ByDay, day)
+		// The workflow scope names the configured trigger where one is set;
+		// the kind is the fallback grouping.
+		kind, _ := d["workflow"].(string)
+		if kind == "" {
+			kind, _ = d["kind"].(string)
+		}
+		bump(s.ByKind, kind)
+	}
+	return s, sc.Err()
+}
+
+func intOf(v any) int {
+	f, _ := v.(float64)
+	return int(f)
+}
+
+// printSpend renders the report's spend section.
+func printSpend(s spendTally) {
+	fmt.Println("\nspend (agent runs):")
+	if s.Runs == 0 {
+		fmt.Println("  (none metered)")
+		if s.Sheds > 0 {
+			fmt.Printf("  budget sheds: %d\n", s.Sheds)
+		}
+		return
+	}
+	approxNote := ""
+	if s.ApproxRuns > 0 {
+		approxNote = fmt.Sprintf("  (~%d/%d runs estimated)", s.ApproxRuns, s.Runs)
+	}
+	fmt.Printf("  total: $%.2f, %s tokens over %d runs ($%.3f/run)%s\n",
+		s.USD, fmtTokens(s.Tokens), s.Runs, s.USD/float64(s.Runs), approxNote)
+	if s.Sheds > 0 {
+		fmt.Printf("  budget sheds: %d\n", s.Sheds)
+	}
+	printSpendCells("by repo", s.ByRepo)
+	printSpendCells("by workflow/kind", s.ByKind)
+	printSpendCells("by day", s.ByDay)
+}
+
+func printSpendCells(title string, m map[string]*spendCell) {
+	if len(m) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return m[keys[i]].USD > m[keys[j]].USD })
+	fmt.Printf("  %s:\n", title)
+	for _, k := range keys {
+		c := m[k]
+		fmt.Printf("    %-32s $%8.2f  %10s tok  %4d runs\n", k, c.USD, fmtTokens(c.Tokens), c.Runs)
+	}
+}
+
+// fmtTokens renders a token count compactly (12.3k / 1.2m).
+func fmtTokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fm", float64(n)/1e6)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1e3)
+	default:
+		return strconv.Itoa(n)
+	}
 }

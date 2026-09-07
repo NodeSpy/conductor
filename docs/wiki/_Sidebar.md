@@ -19,6 +19,7 @@ The model
 - [[Memory]]
 - [[Agent-Skill]]
 - [[Policy]]
+- [[Cost-Accounting]]
 - [[Secrets]]
 - [[Hosts]]
 - [[Isolation]]

@@ -422,6 +422,37 @@ hold label. Any connector or trigger turns off in place with
 `enabled: false`; the global kill switch stays the runtime `conductor pause`
 / `resume`.
 
+## Cost & token accounting
+
+Every agent run is metered (#36 §14): token usage and `$` cost come from the
+runtime's reported usage where its output carries it (claude-code
+`--output-format json`, paseo `run --json`, OpenAI-style `usage:` blocks) and
+are otherwise **estimated** from model + prompt/output size and marked
+*approximate*. Usage lands on the run record, in the audit (`agent_usage` per
+run, `workflow_cost` per workflow run), and in `conductor report`'s spend
+section (totals, per repo / per workflow / per day, $ per run, estimated
+share). A `pricing:` block overrides the built-in model→$ table.
+
+Hard caps ride the same `policy:`/profile machinery — see the
+[Cost-Accounting wiki page](../../wiki/Cost-Accounting):
+
+```yaml
+policy:
+  budget: { window: 24h, max_cost_usd: 25 }     # global: $25 / rolling 24h
+agents:
+  fixer:
+    budget: { window: 1h, max_tokens: 500k }    # profile scope
+triggers:
+  - on: gh.review_requested
+    policy:
+      budget: { max_cost_usd: 5 }               # workflow scope
+```
+
+All governing scopes must be under cap for a dispatch to run; an over-cap
+dispatch **sheds** exactly like the agents-per-hour budget — the attempt is
+recorded (backoff/sweep re-derives once the rolling window frees), a
+`budget_shed` audit row is written, and a notification goes out.
+
 ## Secrets & vaults
 
 `conductor.env` works exactly as before (`${VAR}` / `env:VAR`, chmod-600

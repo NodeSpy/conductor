@@ -322,6 +322,31 @@ hosts:
 #     no_secret_egress: true
 
 # ---------------------------------------------------------------------------
+# policy.budget — hard $/token spend caps over a rolling window (#36 §14).
+# Three scopes: global (here), per profile (agents.<name>.budget), and per
+# workflow (a trigger-level policy.budget). Every governing scope must be
+# under cap; an over-cap dispatch SHEDS like the agents-per-hour budget
+# (attempt recorded, retried when the window frees) and notifies. Usage is
+# runtime-reported where the output carries it, else estimated from model +
+# I/O and marked approximate. See `conductor report` for the spend view.
+# ---------------------------------------------------------------------------
+# policy:
+#   budget: { window: 24h, max_cost_usd: 25 }        # global: $25 / rolling 24h
+# agents:
+#   fixer:
+#     budget: { window: 1h, max_tokens: 500k }       # profile scope
+# triggers:
+#   - on: gh.review_requested
+#     policy:
+#       budget: { max_cost_usd: 5 }                  # workflow scope (24h default)
+
+# pricing: — override the built-in model→$ table estimation uses.
+# pricing:
+#   models:
+#     "claude-opus-*": { input: 15.00, output: 75.00 }   # $ per 1M tokens
+#   default: { input: 3.00, output: 15.00 }
+
+# ---------------------------------------------------------------------------
 # runtimes: — where agents run (previously controllers:). The paseo runtime's
 # bin: replaces the old top-level paseo_bin. Any runtime may set host: to run
 # on a hosts: entry over SSH — a remote paseo runs its whole CLI there (put

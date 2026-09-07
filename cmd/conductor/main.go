@@ -30,6 +30,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/engine"
 	"github.com/NodeSpy/conductor/internal/flow"
@@ -453,6 +454,19 @@ func cmdRun(args []string) error {
 		// Tracked secrets never render into an external runtime's
 		// prompt/env scope through step outputs (#122 R3).
 		dispatch.SetScrubber(stack.Secrets)
+	}
+	// Cost accounting (#36 §14): install the config's model→$ overrides
+	// before anything estimates a run's spend.
+	if cfg.Pricing != nil {
+		models := make(map[string]cost.ModelPrice, len(cfg.Pricing.Models))
+		for pat, p := range cfg.Pricing.Models {
+			models[pat] = cost.ModelPrice{Input: p.Input, Output: p.Output}
+		}
+		var def *cost.ModelPrice
+		if d := cfg.Pricing.Default; d != nil {
+			def = &cost.ModelPrice{Input: d.Input, Output: d.Output}
+		}
+		cost.SetPricing(models, def)
 	}
 	eng := engine.New(engOpts)
 

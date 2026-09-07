@@ -15,6 +15,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/expr"
 	"github.com/NodeSpy/conductor/internal/hosts"
@@ -66,6 +67,14 @@ type AgentServices struct {
 	Background func(ctx context.Context, t core.Trigger, stepID string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string)
 	// Archive soft-deletes a finished non-interactive agent.
 	Archive func(agentID string)
+	// CheckBudget vets an agent dispatch against the spend caps (#36 §14):
+	// global, the agent's profile, and the run's workflow-scope budget
+	// (wf/wfScope, resolved by the runner from the trigger's merged policy).
+	// A non-nil error sheds the dispatch. nil = no budget layer (tests).
+	CheckBudget func(agentName string, wf *config.BudgetPolicy, wfScope string) error
+	// RecordUsage charges one agent run's token/$ usage to its budget scopes
+	// and the audit. nil = no accounting (tests).
+	RecordUsage func(t core.Trigger, agentName, stepID, runID, wfScope string, u cost.Usage)
 }
 
 // Runner executes fired triggers through the trigger grammar.
@@ -190,6 +199,8 @@ func (r *Runner) resolveBotReply(t core.Trigger, spec config.TriggerSpec) botRep
 
 func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, batch *Batch, shadow bool) {
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
+	ctx = r.withRunBudget(ctx, t, spec)
+	ctx, runCost := withCostAcc(ctx)
 	// Stamp the run's provenance for memory writes: a `uses: memory.remember`
 	// step or hook records where the memory came from with no step plumbing.
 	ctx = memory.WithSource(ctx, memory.Source{Run: run.ID, Trigger: t.Kind, Repo: t.Target.Repo})
@@ -225,6 +236,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 		// and the run is removed (the sweep/backoff machinery re-derives).
 		r.audit(map[string]any{"event": "workflow_failed", "repo": t.Target.Repo,
 			"number": t.Target.Number, "kind": t.Kind, "error": err.Error(), "failed_step": failedStepID(err)})
+		r.auditRunCost(t, run.ID, runCost)
 		r.finishRun(run)
 		return
 	}
@@ -232,7 +244,20 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	if r.Notif != nil {
 		r.Notif.Emit(ctx, "complete", t, "workflow")
 	}
+	r.auditRunCost(t, run.ID, runCost)
 	r.finishRun(run)
+}
+
+// auditRunCost writes the run's total spend (#36 §14 — cost per run) when
+// any agent step metered usage.
+func (r *Runner) auditRunCost(t core.Trigger, runID string, acc *costAcc) {
+	tokens, usd, approx := acc.totals()
+	if tokens == 0 && usd == 0 {
+		return
+	}
+	r.audit(map[string]any{"event": "workflow_cost", "repo": t.Target.Repo,
+		"number": t.Target.Number, "kind": t.Kind, "run": runID,
+		"tokens": tokens, "cost_usd": usd, "approximate": approx})
 }
 
 // stepError carries the failing step's id up to the workflow fail hooks.
@@ -287,7 +312,7 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 			if !ok {
 				r.audit(map[string]any{"event": "step_skipped", "repo": t.Target.Repo,
 					"number": t.Target.Number, "kind": t.Kind, "step": id, "if": step.If})
-				r.checkpoint(run, i, id, step, nil, checkpoint)
+				r.checkpoint(ctx, run, i, id, step, nil, checkpoint)
 				continue
 			}
 		}
@@ -309,7 +334,7 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 				r.Log("%s step %s failed (continue_on_error): %v", flowTag(t), id, err)
 				outputs = map[string]any{"error": errStr, "failed": true}
 				r.recordOutputs(data, id, outputs)
-				r.checkpoint(run, i, id, step, outputs, checkpoint)
+				r.checkpoint(ctx, run, i, id, step, outputs, checkpoint)
 				continue
 			}
 			return &stepError{id: id, err: err}
@@ -323,7 +348,7 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 		r.audit(entry)
 		// Step-done hooks see the step's own output (position-scoped).
 		r.runHooks(ctx, t, step.Hooks, "done", data, "step "+id)
-		r.checkpoint(run, i, id, step, outputs, checkpoint)
+		r.checkpoint(ctx, run, i, id, step, outputs, checkpoint)
 	}
 	return nil
 }
@@ -342,8 +367,9 @@ func (r *Runner) recordOutputs(data map[string]any, id string, outputs map[strin
 
 // checkpoint advances the run past a completed top-level step. Outputs are
 // scrubbed before they touch disk: tainted values (vault reads) never
-// persist cleartext — see scrubOutputs.
-func (r *Runner) checkpoint(run *store.WorkflowRun, i int, id string, step config.Step, outputs map[string]any, active bool) {
+// persist cleartext — see scrubOutputs. The run's spend tally rides along so
+// the persisted record carries cost (#36 §14).
+func (r *Runner) checkpoint(ctx context.Context, run *store.WorkflowRun, i int, id string, step config.Step, outputs map[string]any, active bool) {
 	if !active || run.ID == "" {
 		return
 	}
@@ -354,6 +380,7 @@ func (r *Runner) checkpoint(run *store.WorkflowRun, i int, id string, step confi
 		}
 		run.Outputs[id] = r.scrubOutputs(step, outputs)
 	}
+	run.Tokens, run.CostUSD, run.ApproxCost = costAccFrom(ctx).totals()
 	_ = r.Store.PutRun(*run)
 }
 
@@ -1107,12 +1134,23 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if r.Agents.Tokens != nil {
 		tokens = r.Agents.Tokens(t)
 	}
+	// Spend budget (#36 §14): an over-cap dispatch sheds — the step fails
+	// with the budget error (the workflow's fail path notifies, and the
+	// sweep/backoff machinery re-derives PR-kind work once the window frees).
+	if !shadow {
+		if berr := r.checkBudget(ctx, step.Agent); berr != nil {
+			return nil, "", berr
+		}
+	}
 	req := dispatch.Request{
 		Trigger: t, Action: act, Profile: profile, Tokens: tokens,
 		Shadow: shadow, Wait: !step.Background, Interactive: step.Background, Data: data,
 		AgentAuthored: agentAuthored(ctx),
 	}
 	ref, err := r.Agents.Dispatch(ctx, req)
+	if !shadow && !ref.Shadowed && !ref.Skipped && !ref.Queued && err == nil {
+		r.recordUsage(ctx, t, step.Agent, id, cost.FromRun(profile.Model, act.Prompt, ref.Output))
+	}
 	if err != nil {
 		return nil, ref.Output, err
 	}
