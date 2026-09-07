@@ -83,7 +83,18 @@ func RunEnter(opt EnterOpts) int {
 		defer ln.Close()
 		go serveForward(ln, opt.Unix)
 	}
-	cmd := exec.Command(opt.Argv[0], opt.Argv[1:]...)
+	// Privilege drop before exec (#36 iso-review round 2, item 1): the masks
+	// above are overmounts in THIS mount namespace, whose owning user namespace
+	// (the outer `unshare --user`) still grants the process CAP_SYS_ADMIN — so a
+	// plain exec would hand the untrusted payload the power to `umount` a mask
+	// and read the daemon file underneath. When masks are in force, re-exec the
+	// payload through a SECOND, nested user namespace it does NOT own the mount
+	// namespace from: it holds caps only over that new namespace, none over the
+	// mount ns where the masks live, so umount/remount of a mask is refused by
+	// the kernel (and mounts inherited into the less-privileged ns are locked,
+	// closing the make-a-new-mount-ns-and-umount-there bypass). Fail closed —
+	// if the hop can't be set up the payload does not run unprotected.
+	cmd := execChild(opt.Argv, len(opt.Masks) > 0)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.Env = os.Environ()
 	if err := cmd.Run(); err != nil {
