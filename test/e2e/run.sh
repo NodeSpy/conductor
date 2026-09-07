@@ -962,6 +962,247 @@ group_L_migration() {
   esac
 }
 
+# ---------------------------------------------------------------------------
+# Functional groups for issue #36 §14/§16/§17/§20/§21. Each drives the REAL
+# connectors daemon (conductor-conn) and asserts the feature's OBSERVABLE
+# side-effect — an audit row, a forge commit, a blob digest, a history record,
+# a live watch event stream — so gutting the feature's core logic turns the
+# group red. No "config parses" assertions here.
+# ---------------------------------------------------------------------------
+
+CONN_CFG=/etc/conductor/connectors.e2e.yaml
+conn() { cexec conductor-conn conductor "$@" --config "$CONN_CFG"; }
+
+# The func groups share the sink-catcher with K/L; reset once up front so the
+# blob/gate/hist slack assertions read only their own captures (K/L already
+# asserted theirs). Called by the first func group.
+func_reset_sink() { netcurl -X POST http://sink-catcher:8080/_reset >/dev/null; }
+
+# M — §14 cost accounting. The fake agent reports EXACT token/$ usage in its run
+# JSON (`[[usage in=1234 out=567 cost=0.0421]]`); conductor meters the REPORTED
+# figure, not an estimate. Observable effect: an agent_usage audit row carrying
+# that exact cost + token split, and the same spend surfaced by `conductor
+# report`. Gut the meter (or fall back to an estimate) and the exact-match dies.
+group_M_cost() {
+  banner "Group M — §14 cost & token accounting"
+  func_reset_sink
+  post_webhook_to conductor-conn pull_request func_cost_conflict.json >/dev/null
+  if wait_for 45 forge_has_conductor_commit func/cost pr-1; then
+    ok "M agent ran & pushed the fix (func/cost pr-1)" M M-run
+  else
+    bad "M agent ran" M M-run "no conductor commit on func/cost pr-1"
+  fi
+  if wait_for 20 audit_match conductor-conn \
+       '"event":"agent_usage"' '"repo":"func/cost"' \
+       '"input_tokens":1234' '"output_tokens":567' '"cost_usd":0.0421'; then
+    ok "M meter charged the agent's REPORTED cost/tokens exactly (agent_usage row)" M M-usage
+  else
+    bad "M agent_usage row carries reported figures" M M-usage \
+        "no agent_usage row with in=1234/out=567/cost=0.0421 for func/cost"
+  fi
+  if audit_match conductor-conn '"event":"agent_usage"' '"repo":"func/cost"' '"approximate":true'; then
+    bad "M reported cost was NOT flagged as an estimate" M M-exact "usage row marked approximate"
+  else
+    ok "M reported cost recorded as exact (approximate=false)" M M-exact
+  fi
+  out="$(conn report 2>&1)"
+  case "$out" in
+    *"spend (agent runs):"*"func/cost"*) ok "M \`conductor report\` shows the metered spend for func/cost" M M-report ;;
+    *) bad "M report shows metered spend" M M-report "func/cost not in report spend section" ;;
+  esac
+}
+
+# N — §14 budget shedding. A per-workflow spend cap (0.03) below one run's cost
+# (0.0421). Observable effect: event #1 runs and charges; event #2 lands while
+# the window still holds that charge and is SHED (budget_shed audit row, and its
+# agent NEVER pushes); after the 8s window frees, event #3 runs again. Remove the
+# budget check and #2 would push a commit like the others.
+group_N_budget() {
+  banner "Group N — §14 workflow budget shedding"
+  # #1 charges the meter. Wait for BOTH the push and the recorded usage, so the
+  # rolling window holds a real charge before #2 arrives.
+  post_webhook_to conductor-conn pull_request func_budget1_conflict.json >/dev/null
+  if wait_for 45 forge_has_conductor_commit func/budget1 pr-1 \
+     && wait_for 15 audit_match conductor-conn '"event":"agent_usage"' '"repo":"func/budget1"'; then
+    ok "N first event ran & charged the budget (func/budget1)" N N-first
+  else
+    bad "N first event charged the budget" N N-first "no commit+usage for func/budget1"
+  fi
+  # #2 lands inside the window with the cap already exceeded → shed. A shed at an
+  # agent step audits {event, scope, reason, agent} (no repo — the shed happens in
+  # the flow runner before target-scoped dispatch); the scope+reason pin it to
+  # THIS $0.03/8s workflow cap, and ordering makes it unambiguous: #1 has charged,
+  # #3 is not yet fired, so this is #2.
+  post_webhook_to conductor-conn pull_request func_budget2_conflict.json >/dev/null
+  if wait_for 20 audit_match conductor-conn \
+       '"event":"budget_shed"' '"scope":"workflow:gh.merge_conflict/budget"' \
+       '"agent":"fixer"' 'of $0.03 in 8s'; then
+    ok "N second event SHED against the workflow cap (budget_shed row)" N N-shed
+  else
+    bad "N second event shed" N N-shed "no budget_shed row for func/budget2"
+  fi
+  # The shed event's agent must never have run: no commit on budget2 pr-1. It was
+  # shed before dispatch, so this is a settled absence, not a race — give it the
+  # same grace #1 took to push.
+  sleep 8
+  if forge_has_conductor_commit func/budget2 pr-1; then
+    bad "N shed event did NOT dispatch its agent" N N-noshedpush "func/budget2 pr-1 has a conductor commit"
+  else
+    ok "N shed event never dispatched its agent (no push on func/budget2)" N N-noshedpush
+  fi
+  # Let the window (8s) free the first charge, then a third event runs again.
+  sleep 10
+  post_webhook_to conductor-conn pull_request func_budget3_conflict.json >/dev/null
+  if wait_for 45 forge_has_conductor_commit func/budget3 pr-1; then
+    ok "N third event ran once the window freed (budget is a rolling window, not a latch)" N N-recover
+  else
+    bad "N third event ran after the window freed" N N-recover "no commit on func/budget3 pr-1"
+  fi
+}
+
+# O — §16 eval/quality gates. Two identical shapes differing only in the gate
+# verdict. PASS: the gate clears, the downstream promote step fires. FAIL: the
+# gate check always fails; after the bounded revise loop it escalates and the
+# gated step FAILS, so promote is suppressed and a needs_input escalation is
+# raised. Delete the gate and the FAIL case would promote unchecked.
+group_O_gate() {
+  banner "Group O — §16 eval/quality gates"
+  post_webhook_to conductor-conn pull_request func_gatepass_conflict.json >/dev/null
+  if wait_for 45 audit_match conductor-conn '"event":"gate"' '"repo":"func/gatepass"' '"outcome":"pass"'; then
+    ok "O passing gate recorded a pass verdict (gate audit row)" O O-pass
+  else
+    bad "O passing gate records a pass" O O-pass "no gate pass row for func/gatepass"
+  fi
+  if wait_for 20 slack_sink_has "GATEPASS-promoted func/gatepass"; then
+    ok "O passing gate let the downstream promote step fire" O O-promote
+  else
+    bad "O passing gate promotes" O O-promote "no GATEPASS-promoted capture"
+  fi
+  # FAIL: the always-fail check escalates after the bounded revise loop.
+  post_webhook_to conductor-conn pull_request func_gatefail_conflict.json >/dev/null
+  if wait_for 60 audit_match conductor-conn '"event":"gate"' '"repo":"func/gatefail"' '"outcome":"escalated"'; then
+    ok "O failing gate escalated after the bounded revise loop (gate audit row)" O O-escalate
+  else
+    bad "O failing gate escalates" O O-escalate "no gate escalated row for func/gatefail"
+  fi
+  # The escalated gate FAILS its step → the promote step must NOT run. Give the
+  # revise loop time to finish before asserting the absence.
+  sleep 5
+  if slack_sink_has "GATEFAIL-promoted"; then
+    bad "O failing gate SUPPRESSED the downstream promote" O O-suppress "GATEFAIL-promoted captured"
+  else
+    ok "O failing gate suppressed the downstream promote step" O O-suppress
+  fi
+}
+
+# P — §21 binary/blob handling. One step stores a known payload as a run-scoped
+# content-addressed blob; a later step reads it back. Observable effect: a slack
+# post carrying BOTH the content digest (sha256 of the exact bytes, proving
+# content addressing) AND the round-tripped text (proving a byte-identical read).
+# Break storage/addressing and neither the digest nor the text survives.
+group_P_blob() {
+  banner "Group P — §21 content-addressed blob round-trip"
+  local want="BLOB digest=sha256:a9416758a338683406bb80673e81ec82a1363e67feaee33abf0f5737f13336ad text=conductor-blob-e2e-payload"
+  post_webhook_to conductor-conn issue_comment func_blob_comment.json >/dev/null
+  if wait_for 30 slack_sink_has "$want"; then
+    ok "P blob put→read round-tripped byte-identical, addressed by content digest" P P-roundtrip
+  else
+    bad "P blob round-trip by digest" P P-roundtrip "no matching BLOB digest/text capture"
+  fi
+}
+
+# Q — §20 execution history + retry-from-step. A 3-step run (js prep → agent fix
+# → slack tell) is recorded. Observable effects: `conductor runs` lists it;
+# `conductor runs <id>` shows per-step inputs/outputs (the pinned note flows
+# prep→fix→tell); retrying an already-succeeded step is refused without
+# --force-replay and re-posts with it; a record tampered on disk is refused by
+# HMAC verification. Gut history/signing and every one of these fails.
+group_Q_history() {
+  banner "Group Q — §20 execution history + retry-from-step"
+  post_webhook_to conductor-conn pull_request func_hist_conflict.json >/dev/null
+  if wait_for 45 forge_has_conductor_commit func/hist pr-1 \
+     && wait_for 15 slack_sink_has "HIST-done func/hist note=hist-prep"; then
+    ok "Q multi-step run completed (prep→fix→tell, note pinned through)" Q Q-run
+  else
+    bad "Q multi-step run completed" Q Q-run "func/hist run did not finish"
+  fi
+  # Find the recorded run's id from the history directory (the daemon signs and
+  # writes one JSON per run beside the state file).
+  local id
+  id="$(cexec conductor-conn sh -c 'grep -lE "\"repo\": *\"func/hist\"" /data/history/*.json 2>/dev/null | head -1 | xargs -r -n1 basename | sed "s/\.json$//"')"
+  if [ -n "$id" ] && conn runs 2>/dev/null | grep -q "$id"; then
+    ok "Q \`conductor runs\` lists the recorded run ($id)" Q Q-list
+  else
+    bad "Q runs lists the recorded run" Q Q-list "run id not found/listed (id='$id')"
+  fi
+  local detail; detail="$(conn runs "$id" 2>&1)"
+  case "$detail" in
+    *"prep"*"fix"*"tell"*"note=hist-prep"*)
+      ok "Q run detail shows every step with its pinned inputs/outputs" Q Q-detail ;;
+    *) bad "Q run detail shows per-step in/out" Q Q-detail "detail missing steps or pinned note" ;;
+  esac
+  # Retrying a step the record says SUCCEEDED replays side effects → refused
+  # without --force-replay.
+  local r; r="$(conn runs retry "$id" --from fix 2>&1)"
+  case "$r" in
+    *"already succeeded"*"--force-replay"*) ok "Q retry of a succeeded step is refused without --force-replay" Q Q-guard ;;
+    *) bad "Q retry guarded" Q Q-guard "unexpected retry output: $(echo "$r" | head -1)" ;;
+  esac
+  # With --force-replay it re-runs from fix, pinning prep's recorded output, and
+  # re-posts HIST-done.
+  func_reset_sink
+  conn runs retry "$id" --from fix --force-replay >/dev/null 2>&1
+  if wait_for 30 slack_sink_has "HIST-done func/hist note=hist-prep"; then
+    ok "Q --force-replay re-ran from fix with pinned inputs (note replayed prep→tell)" Q Q-replay
+  else
+    bad "Q --force-replay re-runs with pinned inputs" Q Q-replay "no HIST-done after forced replay"
+  fi
+  # Tamper the signed record on disk → verified read refuses to trust it.
+  cexec conductor-conn sh -c "sed -i 's/hist-prep/hist-XXXX/' /data/history/$id.json"
+  r="$(conn runs retry "$id" --from fix --force-replay 2>&1)"
+  case "$r" in
+    *"integrity verification"*) ok "Q a record modified on disk is refused (HMAC integrity check)" Q Q-integrity ;;
+    *) bad "Q tampered record refused" Q Q-integrity "unexpected output: $(echo "$r" | head -1)" ;;
+  esac
+}
+
+# R — §17 live run observability + proposed diff. The agent leaves its edit
+# UNCOMMITTED (`[[dirty]]`), so the run carries a proposed diff. Observable
+# effects: a `conductor watch` client attached BEFORE the event receives the
+# live step/gate/run event stream over the control socket, and the recorded run
+# carries the actual diff text. Gut event emission or diff capture and each dies.
+group_R_watch() {
+  banner "Group R — §17 live watch stream + proposed diff"
+  # Attach a live watcher (LIVE-only: it must be listening before the run).
+  dc exec -T -d conductor-conn sh -c "conductor watch --json --config $CONN_CFG > /tmp/watch.out 2>&1"
+  sleep 2
+  post_webhook_to conductor-conn pull_request func_watch_conflict.json >/dev/null
+  # The dirty run never pushes, so the run_done event is the completion signal.
+  if wait_for 45 cexec conductor-conn grep -q run_done /tmp/watch.out; then
+    local w; w="$(cexec conductor-conn cat /tmp/watch.out 2>/dev/null)"
+    case "$w" in
+      *step_started*step_done*run_done*)
+        ok "R watch streamed the live step/run events over the control socket" R R-stream ;;
+      *) bad "R watch streams live events" R R-stream "watch.out missing step/run events" ;;
+    esac
+  else
+    bad "R watch streams live events" R R-stream "no run_done event on the watch stream"
+  fi
+  # The PROPOSED (uncommitted) diff is captured into the run record's fix step:
+  # gitdiff.Proposed's "uncommitted (vs HEAD)" section carries the agent's
+  # staged-but-uncommitted edit (`+conductor fix: fix func/watch`). Requiring
+  # both the section header and the edit line proves it's the §17 diff-preview
+  # machinery's output — gut diff capture and the `diff` output key vanishes.
+  local file; file="$(cexec conductor-conn sh -c 'grep -lE "\"repo\": *\"func/watch\"" /data/history/*.json 2>/dev/null | head -1')"
+  if [ -n "$file" ] \
+     && cexec conductor-conn grep -q "uncommitted (vs HEAD)" "$file" \
+     && cexec conductor-conn grep -q "conductor fix: fix func/watch" "$file"; then
+    ok "R the run record carries the proposed uncommitted diff (§17 preview)" R R-diff
+  else
+    bad "R run record carries the proposed diff" R R-diff "no uncommitted-diff content in the func/watch history record"
+  fi
+}
+
 main() {
   trap teardown EXIT
   setup
@@ -987,6 +1228,12 @@ main() {
   group_J_failure
   group_K_connectors
   group_L_migration
+  group_M_cost
+  group_N_budget
+  group_O_gate
+  group_P_blob
+  group_Q_history
+  group_R_watch
   print_matrix
   [ "$FAIL" -eq 0 ]
 }

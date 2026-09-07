@@ -144,6 +144,122 @@ triggers:
         uses: slack.post
         options: { channel: C3, text: "K3-batch {{.group.count}} last={{.group.last.comment_body}}" }
 
+  # ---------------------------------------------------------------------------
+  # Functional groups for #36 §14/§16/§17/§20/§21 (func/* repos). Each trigger
+  # drives the REAL engine path and its group in run.sh asserts the feature's
+  # observable side-effect (audit rows, forge commits, blob digests, history
+  # records, live watch stream), and would go red if the feature were gutted.
+  # ---------------------------------------------------------------------------
+
+  # M (§14 cost): the fake agent reports exact token/$ usage in its run JSON
+  # (the `[[usage …]]` directive); conductor's meter charges the REPORTED
+  # figure (not an estimate) and writes an agent_usage audit row + report spend.
+  - on: gh.merge_conflict
+    name: cost
+    filters: { repos: ["func/cost"] }
+    steps:
+      - id: fix
+        type: agent
+        agent: fixer
+        prompt: "fix {{.repo}} [[usage in=1234 out=567 cost=0.0421]]"
+
+  # N (§14 budget): a workflow spend cap smaller than one run's cost. The first
+  # event runs (charges 0.0421), the second is SHED (0.0421 ≥ 0.03 cap) and its
+  # agent step never pushes; after the window frees, a third event runs again.
+  - on: gh.merge_conflict
+    name: budget
+    filters: { repos: ["func/budget1", "func/budget2", "func/budget3"] }
+    policy:
+      budget: { max_cost_usd: 0.03, window: 8s }
+    steps:
+      - id: fix
+        type: agent
+        agent: fixer
+        prompt: "fix {{.repo}} [[usage in=1234 out=567 cost=0.0421]]"
+
+  # O (§16 gate — PASS): the agent's change is gated by a check that passes, so
+  # the downstream promote step fires.
+  - on: gh.merge_conflict
+    name: gatepass
+    filters: { repos: ["func/gatepass"] }
+    steps:
+      - id: fix
+        type: agent
+        agent: fixer
+        prompt: "fix {{.repo}}"
+        gate: { run: [always-pass], max_revisions: 1 }
+      - id: promote
+        uses: slack.post
+        options: { channel: CGATE, text: "GATEPASS-promoted {{.repo}}" }
+
+  # O (§16 gate — FAIL): the same shape but the gate check always fails. After
+  # the bounded revise loop the gate escalates and the step FAILS, so the
+  # downstream promote step is suppressed — gutting the gate would let it fire.
+  - on: gh.merge_conflict
+    name: gatefail
+    filters: { repos: ["func/gatefail"] }
+    steps:
+      - id: fix
+        type: agent
+        agent: fixer
+        prompt: "fix {{.repo}}"
+        gate: { run: [always-fail], max_revisions: 1 }
+      - id: promote
+        uses: slack.post
+        options: { channel: CGATE, text: "GATEFAIL-promoted {{.repo}}" }
+
+  # P (§21 blob): a step stores a known payload as a run-scoped content-addressed
+  # blob; a later step reads it back BYTE-IDENTICAL. The slack post carries both
+  # the digest (content addressing) and the round-tripped text.
+  - on: gh.new_comment
+    name: blob
+    filters: { repos: ["func/blob"] }
+    steps:
+      - id: put
+        uses: blob.put
+        options: { text: "conductor-blob-e2e-payload", name: "payload.txt" }
+      - id: read
+        uses: blob.read
+        options: { blob: "{{.put.blob}}" }
+      - id: tell
+        uses: slack.post
+        options: { channel: CBLOB, text: "BLOB digest={{.put.digest}} text={{.read.text}}" }
+
+  # Q (§20 history): a multi-step workflow so the recorded run shows per-step
+  # inputs/outputs; run.sh lists it, inspects it, and retries from a step.
+  - on: gh.merge_conflict
+    name: hist
+    filters: { repos: ["func/hist"] }
+    steps:
+      - id: prep
+        run: js
+        code: "return { note: 'hist-prep' }"
+      - id: fix
+        type: agent
+        agent: fixer
+        prompt: "fix {{.repo}} note={{.prep.note}}"
+      - id: tell
+        uses: slack.post
+        options: { channel: CHIST, text: "HIST-done {{.repo}} note={{.prep.note}}" }
+
+  # R (§17 watch + diff): the agent leaves its edit UNCOMMITTED (`[[dirty]]`) so
+  # the run carries a proposed diff. run.sh attaches `conductor watch` before the
+  # event and asserts the live event stream AND the diff text in the history JSON.
+  - on: gh.merge_conflict
+    name: watch
+    filters: { repos: ["func/watch"] }
+    steps:
+      - id: fix
+        type: agent
+        agent: fixer
+        prompt: "fix {{.repo}} [[dirty]]"
+
+checks:
+  # A code check that always passes / always fails — a crisp pass/fail verdict
+  # with no external dependency, so the §16 gate machinery is what's under test.
+  always-pass: { run: js, code: "return { pass: true, reason: 'ok' }" }
+  always-fail: { run: js, code: "return { pass: false, reason: 'still broken' }" }
+
 policy:
   concurrency: { max_agents: 3 }
 

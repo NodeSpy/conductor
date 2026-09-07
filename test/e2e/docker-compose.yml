@@ -41,6 +41,8 @@ services:
         grpb/ocacp grpb/ocnative grpb/deck
         grpc/acpresume grpf/clihoff grpd/burst grpe/paseohoff grpj/acpcrash
         conn/cweb conn/csvc conn/rweb migr/mweb
+        func/cost func/budget1 func/budget2 func/budget3
+        func/gatepass func/gatefail func/blob func/hist func/watch
     volumes:
       - ./seed:/seed:ro
     # git daemon (started by the seed script) serves git://forge:9418/<owner>/<repo>.git

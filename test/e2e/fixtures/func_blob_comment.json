@@ -1,0 +1,17 @@
+{
+  "action": "created",
+  "installation": { "id": 42 },
+  "repository": {
+    "full_name": "func/blob",
+    "name": "blob",
+    "default_branch": "main",
+    "owner": { "login": "func" }
+  },
+  "issue": {
+    "number": 1,
+    "html_url": "https://forge.test/func/blob/pull/1",
+    "user": { "login": "conductor-user" },
+    "pull_request": { "url": "https://forge.test/func/blob/pull/1" }
+  },
+  "comment": { "id": 7777, "user": { "login": "a-reviewer" }, "body": "run blob roundtrip" }
+}

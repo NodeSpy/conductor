@@ -1,0 +1,20 @@
+{
+  "action": "synchronize",
+  "installation": { "id": 42 },
+  "repository": {
+    "full_name": "func/hist",
+    "name": "hist",
+    "default_branch": "main",
+    "owner": { "login": "func" }
+  },
+  "pull_request": {
+    "number": 1,
+    "state": "open",
+    "draft": false,
+    "title": "func/hist PR under test",
+    "html_url": "https://forge.test/func/hist/pull/1",
+    "head": { "sha": "canned-head-hist-1", "ref": "pr-1" },
+    "base": { "ref": "main" },
+    "user": { "login": "conductor-user" }
+  }
+}
