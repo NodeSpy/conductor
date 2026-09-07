@@ -386,6 +386,16 @@ func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string) {
 	if m == nil || strings.TrimSpace(output) == "" {
 		return
 	}
+	// Writing is opt-in per agent, exactly like reading (memoryPrompt): only an
+	// agent whose profile enables memory may harvest its output into the shared
+	// store. Otherwise any dispatched agent — including one an untrusted event
+	// steered — could poison shared memory via its output contract without the
+	// operator ever granting it memory access (#57 M8). No profile / memory off
+	// → nothing is written.
+	prof := e.cfg.Agents[agent]
+	if prof.Memory == nil || !prof.Memory.Enabled {
+		return
+	}
 	src := memory.Source{Agent: agent, Run: runID, Trigger: t.Kind, Repo: t.Target.Repo}
 	entries, err := m.HarvestOutput(output, src)
 	if err != nil {

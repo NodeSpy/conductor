@@ -83,12 +83,17 @@ func TestMemoryPromptOptIn(t *testing.T) {
 }
 
 // TestLegacyDispatchHarvestsOutput: the legacy single-action agent path also
-// applies the output contract to the captured output.
+// applies the output contract to the captured output — for an agent whose
+// profile opts into memory.
 func TestLegacyDispatchHarvestsOutput(t *testing.T) {
 	m := setupEngineMemory(t)
+	cfg := baseCfg()
+	cfg.Agents = map[string]config.AgentProfile{
+		"fixer": {Provider: "claude", Memory: &config.MemorySelector{Enabled: true}},
+	}
 	d := &fakeDispatcher{ref: dispatch.RunRef{AgentID: "a1",
 		Output: "done\n```remember\n- text: PR titles use conventional commits\n  scope: repo\n```"}}
-	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
+	e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
 	e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h", "sig",
 		config.Action{Type: "agent", Agent: "fixer", Prompt: "go"}))
 	all, err := m.List()
@@ -97,5 +102,34 @@ func TestLegacyDispatchHarvestsOutput(t *testing.T) {
 	}
 	if all[0].Scope != "repo:a/w" || all[0].Source.Agent != "fixer" || all[0].Source.Trigger != "new_comment" {
 		t.Fatalf("legacy harvest provenance: %+v", all[0])
+	}
+}
+
+// TestHarvestGatedOnProfileOptIn (#57 M8): harvesting an agent's output into
+// shared memory is write access, and write access is opt-in per agent exactly
+// like read access. An agent whose profile does not enable memory must not be
+// able to poison the shared store via its output contract — even when the same
+// output would harvest cleanly for an opted-in agent. Without this gate an
+// untrusted event that steers a non-memory agent could write attacker-chosen
+// notes that later agents read as trusted context.
+func TestHarvestGatedOnProfileOptIn(t *testing.T) {
+	m := setupEngineMemory(t)
+	cfg := baseCfg()
+	cfg.Agents = map[string]config.AgentProfile{
+		"reader": {Provider: "claude", Memory: &config.MemorySelector{Enabled: true}}, // reads, but does not run here
+		"plain":  {Provider: "claude"},                                                // no memory opt-in
+	}
+	// A "plain" agent emits a well-formed remember block.
+	out := "done\n```remember\n- text: injected fact from an untrusted run\n  scope: repo\n```"
+	d := &fakeDispatcher{ref: dispatch.RunRef{AgentID: "a1", Output: out}}
+	e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
+	e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h", "sig",
+		config.Action{Type: "agent", Agent: "plain", Prompt: "go"}))
+	all, err := m.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("a non-opted agent must write nothing to shared memory, got %d: %+v", len(all), all)
 	}
 }
