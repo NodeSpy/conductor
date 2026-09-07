@@ -527,6 +527,13 @@ func (r *Runner) execStepWithFlow(ctx context.Context, t core.Trigger, step conf
 
 // execBranches runs `parallel: [[…],[…]]` branch lists concurrently.
 func (r *Runner) execBranches(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, error) {
+	// Same fan-out cap as for_each (#36 §146 F3): bound the number of branches
+	// a single parallel step spawns concurrently.
+	if r.Cfg != nil {
+		if max := r.Cfg.FlowMaxFanOut(); len(step.Parallel.Branches) > max {
+			return nil, fmt.Errorf("parallel fans out to %d branches, over policy.max_fan_out %d", len(step.Parallel.Branches), max)
+		}
+	}
 	var (
 		wg   sync.WaitGroup
 		mu   sync.Mutex
@@ -576,6 +583,14 @@ func (r *Runner) execForEach(ctx context.Context, t core.Trigger, step config.St
 	items, err := resolveList(step.ForEach, data)
 	if err != nil {
 		return nil, fmt.Errorf("for_each: %w", err)
+	}
+	// Fan-out cap (#36 §146 F3): the list can be data-driven and externally
+	// influenced, so refuse an oversized one rather than spawning an unbounded
+	// number of dispatches. Checked before any iteration runs.
+	if r.Cfg != nil {
+		if max := r.Cfg.FlowMaxFanOut(); len(items) > max {
+			return nil, fmt.Errorf("for_each fans out to %d items, over policy.max_fan_out %d", len(items), max)
+		}
 	}
 	results := make([]any, len(items))
 	concurrent := step.Parallel != nil && step.Parallel.Concurrent

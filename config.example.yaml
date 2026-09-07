@@ -726,6 +726,9 @@ triggers:
 policy:
   quiet_hours: { tz: America/Denver, from: "22:00", to: "07:00", hold: true }
   concurrency: { max_agents: 3, max_agents_per_hour: 40 }
+  # max_fan_out: 100          # cap one for_each/parallel step's fan-out (global
+  #                             scope; default 100). A for_each over a longer,
+  #                             data-driven list is refused, not spawned.
   # pause_label: "conductor:off"
   # shadow: true              # preview everything, dispatch nothing
   # (there is no config kill switch — pause the whole daemon with

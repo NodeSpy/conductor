@@ -706,6 +706,14 @@ type Hook struct {
 type Policy struct {
 	QuietHours  *QuietHours  `yaml:"quiet_hours,omitempty"`
 	Concurrency *Concurrency `yaml:"concurrency,omitempty"`
+	// MaxFanOut caps a config-authored for_each / parallel step's fan-out
+	// (#36 §146 F3): the number of items or branches a single step may spawn.
+	// A for_each whose list resolves past this — the list can be data-driven
+	// and externally influenced — is refused rather than spawning an unbounded
+	// number of dispatches. Read at global scope only; default
+	// DefaultFlowMaxFanOut. Agent-authored plans carry their own, tighter cap
+	// (agent_authored.limits.max_fan_out).
+	MaxFanOut *int `yaml:"max_fan_out,omitempty"`
 	// Connector-scoped connection properties (valid globally as defaults too).
 	Ignore     *Ignore     `yaml:"ignore,omitempty"`
 	RateLimits *RateLimits `yaml:"rate_limits,omitempty"`

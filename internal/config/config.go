@@ -262,6 +262,23 @@ func (c *Config) AgentsPerHour() int {
 	return c.Control.AgentsPerHour()
 }
 
+// DefaultFlowMaxFanOut bounds a config-authored for_each / parallel fan-out
+// when the operator sets no `policy.max_fan_out`. Generous enough for real
+// operator flows, finite so a data-driven list cannot spawn an unbounded
+// number of dispatches (#36 §146 F3).
+const DefaultFlowMaxFanOut = 100
+
+// FlowMaxFanOut is the effective cap on one config-authored for_each/parallel
+// step's fan-out: the global `policy.max_fan_out` when set (>0), else
+// DefaultFlowMaxFanOut. Always finite — there is no "unlimited" spelling, so a
+// runaway list is always refused.
+func (c *Config) FlowMaxFanOut() int {
+	if c != nil && c.Policy != nil && c.Policy.MaxFanOut != nil && *c.Policy.MaxFanOut > 0 {
+		return *c.Policy.MaxFanOut
+	}
+	return DefaultFlowMaxFanOut
+}
+
 // Handoff is the legacy singular hand-off block. Deprecated — see Config.Handoff.
 type Handoff struct {
 	Web HandoffWeb `yaml:"web"` // web-link channel served on the inbound HTTP listener

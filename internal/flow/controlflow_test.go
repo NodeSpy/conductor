@@ -201,3 +201,62 @@ steps:
 		t.Fatalf("want 2 attempts (1 + 1 retry), got %d", got)
 	}
 }
+
+// TestForEachFanOutCapRefused proves a config-authored for_each whose list
+// resolves past policy.max_fan_out is refused before any iteration runs, rather
+// than spawning an unbounded number of dispatches over a data-driven list
+// (#36 §146 F3).
+func TestForEachFanOutCapRefused(t *testing.T) {
+	cfg := loadConfig(t, "policy: { max_fan_out: 2 }\nconnectors:\n  svc: { type: fake }\n")
+	reg := buildRegistry(t, cfg)
+	st := newFakeState(t, "svc")
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - id: fan
+    for_each: "{{.hosts}}"
+    uses: svc.post
+    options: { text: "{{.item}}" }
+`)
+	rig := newTestRunner(t, cfg, reg)
+	runTrigger(rig, newTrigger("ping", map[string]any{"hosts": []any{"a", "b", "c"}}), spec)
+	failed, errStr := rig.workflowFailed()
+	if !failed {
+		t.Fatal("for_each over 3 items under max_fan_out 2 should fail the workflow")
+	}
+	if !strings.Contains(errStr, "max_fan_out") {
+		t.Fatalf("error should cite the fan-out cap, got %q", errStr)
+	}
+	// The cap is checked before iterating: no per-item dispatch should have run.
+	if calls := st.snapshot(); len(calls) != 0 {
+		t.Fatalf("cap must be enforced before spawning; got %d dispatches", len(calls))
+	}
+}
+
+// TestParallelFanOutCapRefused mirrors the for_each cap for a parallel step's
+// branch count (#36 §146 F3).
+func TestParallelFanOutCapRefused(t *testing.T) {
+	cfg := loadConfig(t, "policy: { max_fan_out: 1 }\nconnectors:\n  svc: { type: fake }\n")
+	reg := buildRegistry(t, cfg)
+	st := newFakeState(t, "svc")
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - id: split
+    parallel:
+      - [ { id: a, uses: svc.post, options: { text: a } } ]
+      - [ { id: b, uses: svc.post, options: { text: b } } ]
+`)
+	rig := newTestRunner(t, cfg, reg)
+	runTrigger(rig, newTrigger("ping", map[string]any{}), spec)
+	failed, errStr := rig.workflowFailed()
+	if !failed {
+		t.Fatal("2 branches under max_fan_out 1 should fail the workflow")
+	}
+	if !strings.Contains(errStr, "max_fan_out") {
+		t.Fatalf("error should cite the fan-out cap, got %q", errStr)
+	}
+	if calls := st.snapshot(); len(calls) != 0 {
+		t.Fatalf("cap must be enforced before spawning branches; got %d dispatches", len(calls))
+	}
+}
