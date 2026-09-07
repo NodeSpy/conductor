@@ -12,6 +12,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -38,10 +39,104 @@ type Proxy struct {
 
 	ln   net.Listener
 	srv  *http.Server
-	ulns []net.Listener // additional unix listeners (enforced-egress path)
+	tr   *http.Transport // plain-HTTP forwarding transport (SSRF-checked DialContext)
+	ulns []net.Listener  // additional unix listeners (enforced-egress path)
+
+	// resolveIP looks a hostname up; overridable in tests. nil ⇒ the system
+	// resolver. It exists so the post-resolution SSRF check (dialAllowed) can
+	// be exercised deterministically without depending on real DNS.
+	resolveIP func(ctx context.Context, host string) ([]net.IPAddr, error)
 
 	credMu sync.Mutex
 	creds  map[string]bool // valid per-dispatch credentials (the basic-auth password)
+}
+
+// errEgressBlockedIP is returned by dialAllowed when every resolved address is
+// in a special range (loopback / link-local incl. cloud metadata / private /
+// unspecified / multicast) and none was explicitly allowlisted by literal IP —
+// an SSRF or DNS-rebinding attempt. The handler surfaces it as a 403 + audit,
+// exactly like an allowlist miss, rather than a 502.
+var errEgressBlockedIP = errors.New("resolved address is in a blocked range")
+
+// specialIP reports whether ip sits in a range the enforced-egress proxy must
+// not reach unless the operator listed that exact IP literally (#36
+// iso-review, SSRF round 2). Resolution happens daemon-side, so an
+// allowlisted *name* that resolves to 169.254.169.254 (cloud metadata),
+// loopback, RFC1918/ULA private space, or link-local would otherwise be a
+// rebinding gateway straight off the daemon's own network.
+func specialIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() || ip.IsInterfaceLocalMulticast() || ip.IsUnspecified() || ip.IsPrivate()
+}
+
+// explicitIPAllow returns the exact IPs the operator listed literally in the
+// allowlist (the host half parses as an IP). ONLY these opt a special-range
+// address back in — a hostname or glob never can, which is what closes the
+// DNS-rebinding path: the name may be allowlisted, but the internal address it
+// resolves to is not, so the connection is refused. A deliberately-internal
+// target (a metadata endpoint, an RFC1918 host) is reachable only by listing
+// its IP outright.
+func explicitIPAllow(allow []string) map[string]bool {
+	out := map[string]bool{}
+	for _, pat := range allow {
+		pat = strings.TrimSpace(pat)
+		if pat == "" || pat == "*" {
+			continue
+		}
+		host, _ := splitHostPort(pat)
+		if ip := net.ParseIP(host); ip != nil {
+			out[ip.String()] = true
+		}
+	}
+	return out
+}
+
+// lookup resolves host through the injected resolver (tests) or the system one.
+func (p *Proxy) lookup(ctx context.Context, host string) ([]net.IPAddr, error) {
+	if p.resolveIP != nil {
+		return p.resolveIP(ctx, host)
+	}
+	return net.DefaultResolver.LookupIPAddr(ctx, host)
+}
+
+// dialAllowed resolves hostport ITSELF and dials the resolved IP directly, so
+// the address checked is the address connected to — no re-resolve TOCTOU. Any
+// resolved IP in a special range is skipped unless the operator allowlisted
+// that exact IP literally; if every candidate is blocked that way, it returns
+// errEgressBlockedIP so the caller can 403 + audit.
+func (p *Proxy) dialAllowed(ctx context.Context, hostport string, timeout time.Duration) (net.Conn, error) {
+	host, port := splitHostPort(hostport)
+	if port == "" {
+		return nil, fmt.Errorf("dial %s: missing port", hostport)
+	}
+	explicit := explicitIPAllow(p.Allow)
+	ips, err := p.lookup(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	var blocked bool
+	var d net.Dialer
+	var lastErr error
+	for _, ipa := range ips {
+		if specialIP(ipa.IP) && !explicit[ipa.IP.String()] {
+			blocked = true
+			continue
+		}
+		dctx, cancel := context.WithTimeout(ctx, timeout)
+		conn, err := d.DialContext(dctx, "tcp", net.JoinHostPort(ipa.IP.String(), port))
+		cancel()
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if blocked {
+		return nil, errEgressBlockedIP
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("dial %s: no addresses resolved", hostport)
 }
 
 // proxyUser is the fixed basic-auth username; the per-dispatch credential is
@@ -109,6 +204,20 @@ func (p *Proxy) Start() (string, error) {
 		return "", fmt.Errorf("sandbox: egress proxy listen: %w", err)
 	}
 	p.ln = ln
+	// The plain-HTTP forwarding transport dials through dialAllowed, so the
+	// absolute-URI path gets the SAME post-resolution SSRF check as CONNECT —
+	// resolution happens once, in dialAllowed, and the transport connects to the
+	// checked IP (no re-resolve TOCTOU).
+	p.tr = &http.Transport{
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return p.dialAllowed(ctx, addr, 30*time.Second)
+		},
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}
 	p.srv = &http.Server{
 		Handler:           p,
 		ReadHeaderTimeout: 30 * time.Second,
@@ -141,6 +250,9 @@ func (p *Proxy) ServeUnix(path string) error {
 
 // Close shuts the proxy down.
 func (p *Proxy) Close() {
+	if p.tr != nil {
+		p.tr.CloseIdleConnections()
+	}
 	if p.srv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -175,8 +287,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	out := r.Clone(r.Context())
 	out.RequestURI = ""
 	out.Header.Del("Proxy-Authorization") // the credential never leaves the box
-	resp, err := http.DefaultTransport.RoundTrip(out)
+	resp, err := p.tr.RoundTrip(out)
 	if err != nil {
+		if errors.Is(err, errEgressBlockedIP) {
+			p.deny(w, target) // resolved into a special range → 403 + audit
+			return
+		}
 		http.Error(w, "sandbox egress proxy: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -200,8 +316,12 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		p.deny(w, target)
 		return
 	}
-	upstream, err := net.DialTimeout("tcp", target, 30*time.Second)
+	upstream, err := p.dialAllowed(r.Context(), target, 30*time.Second)
 	if err != nil {
+		if errors.Is(err, errEgressBlockedIP) {
+			p.deny(w, target) // resolved into a special range → 403 + audit
+			return
+		}
 		http.Error(w, "sandbox egress proxy: "+err.Error(), http.StatusBadGateway)
 		return
 	}

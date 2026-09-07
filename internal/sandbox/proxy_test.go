@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -272,6 +273,96 @@ func TestProxyRequiresPerDispatchCredential(t *testing.T) {
 		if r2.StatusCode != http.StatusForbidden {
 			t.Fatalf("authenticated but unlisted target: %d", r2.StatusCode)
 		}
+	}
+}
+
+// Regression (#36 iso-review, SSRF round 2): resolution happens daemon-side,
+// so an allowlisted *name* that resolves to a special-range address
+// (169.254.169.254 cloud metadata, loopback, RFC1918) must be refused — a name
+// can never opt into internal space. Only a literal IP in the allowlist opts a
+// deliberately-internal target back in. Applies to both CONNECT and plain-HTTP.
+func TestProxyRefusesSSRFRebindTarget(t *testing.T) {
+	// A resolver that maps a hostname straight at the cloud-metadata address —
+	// the classic rebinding payload, without touching real DNS.
+	rebind := func(_ context.Context, host string) ([]net.IPAddr, error) {
+		if host == "metadata.evil.example" {
+			return []net.IPAddr{{IP: net.ParseIP("169.254.169.254")}}, nil
+		}
+		return net.DefaultResolver.LookupIPAddr(context.Background(), host)
+	}
+
+	// Plain-HTTP path: the allowlisted NAME resolves into link-local → 403+audit,
+	// and the connection is refused before any byte reaches the metadata address.
+	var mu sync.Mutex
+	var denied []string
+	p := &Proxy{Allow: []string{"metadata.evil.example:80"}, OnDeny: func(hp string) {
+		mu.Lock()
+		denied = append(denied, hp)
+		mu.Unlock()
+	}}
+	p.resolveIP = rebind
+	addr, err := p.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	resp, err := viaProxy(p, addr).Get("http://metadata.evil.example/latest/meta-data/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("rebind via plain-HTTP must be refused: got %d", resp.StatusCode)
+	}
+	mu.Lock()
+	got := append([]string(nil), denied...)
+	mu.Unlock()
+	if len(got) != 1 || !strings.HasPrefix(got[0], "metadata.evil.example:") {
+		t.Fatalf("rebind refusal must audit the target: %v", got)
+	}
+
+	// CONNECT path: same rebinding name, HTTPS tunnel → the proxy's 403 surfaces
+	// as a transport error client-side.
+	pc := &Proxy{Allow: []string{"metadata.evil.example:443"}}
+	pc.resolveIP = rebind
+	caddr, err := pc.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	if _, err := viaProxy(pc, caddr).Get("https://metadata.evil.example/"); err == nil ||
+		!strings.Contains(err.Error(), "Forbidden") {
+		t.Fatalf("rebind via CONNECT must be refused, got %v", err)
+	}
+}
+
+// Regression companion: a deliberately-internal target the operator listed by
+// LITERAL IP is reachable — the opt-in the SSRF guard must not break. A
+// loopback httptest server is in a special range (IsLoopback), so allowlisting
+// it by its explicit 127.0.0.1 address exercises exactly that opt-in.
+func TestProxyAllowsExplicitlyListedInternalIP(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "internal-ok")
+	}))
+	defer upstream.Close()
+	target := strings.TrimPrefix(upstream.URL, "http://") // 127.0.0.1:PORT — literal IP
+
+	p := &Proxy{Allow: []string{target}}
+	addr, err := p.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	resp, err := viaProxy(p, addr).Get(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "internal-ok" {
+		t.Fatalf("explicit-IP internal target must be allowed: %d %q", resp.StatusCode, body)
 	}
 }
 
