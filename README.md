@@ -335,6 +335,18 @@ validate` rejects `isolation:` there rather than pretending. Non-Linux boxes
 degrade gracefully: user/container modes work wherever sudo/docker do,
 namespace mode is rejected with a clear error.
 
+## Binary / file data (blobs)
+
+Files pass between steps and agents as **content-addressed blobs**, not
+base64-in-JSON: `blob.put` stores a file (or inline text) and returns an
+opaque JSON-friendly handle (`{$blob, name, media_type, size}` — metadata
+only, redacted like any output), `blob.get` writes the bytes to a path (e.g.
+into an agent's worktree), `blob.read`/`blob.stat` cover text and metadata.
+Connector verbs can declare binary in/out in their schema — handles resolve
+to on-disk paths going in, raw bytes become handles coming out. Artifacts are
+**GC'd with the run** that produced them. See the
+[Binary-Data wiki page](../../wiki/Binary-Data).
+
 ## Event grouping
 
 ```yaml

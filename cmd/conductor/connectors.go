@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/blob"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
@@ -66,7 +67,19 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		vals[name] = v
 	}
 
-	deps := connector.Deps{Secrets: sec, Log: logf, Config: cfg}
+	// The artifact store (#36 §21) lives beside the state file; the built-in
+	// blob verbs and verb-level binary IO stage through it, and a boot sweep
+	// clears blobs no run references anymore (a crash mid-run leaks its refs;
+	// the sweep is the backstop).
+	blobs, err := blob.Open(blobStorePath(cfg))
+	if err != nil {
+		return nil, err
+	}
+	if n, err := blobs.SweepOrphans(24 * time.Hour); err == nil && n > 0 {
+		logf("blob: swept %d orphaned artifact(s)", n)
+	}
+
+	deps := connector.Deps{Secrets: sec, Log: logf, Config: cfg, Blobs: blobs}
 	reg, err := connector.Build(cfg, deps)
 	if err != nil {
 		return nil, err
@@ -129,6 +142,7 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		Cfg: cfg, Conns: reg, Secrets: sec, SecretVals: vals,
 		VaultVals: vaults.PreloadListable(context.Background()),
 		Store:     flowStore, Notif: flowNotif, Log: logf, DryRun: dryRun,
+		Blobs: blobs,
 	})
 	return &flowStack{
 		Secrets: sec, SecretVals: vals, Registry: reg, Runner: runner,
@@ -143,6 +157,15 @@ func savedWorkflowsPath(cfg *config.Config) string {
 		return ""
 	}
 	return filepath.Join(filepath.Dir(cfg.Store.StateFile), "workflows.json")
+}
+
+// blobStorePath is the artifact store directory, beside the state file
+// (falling back to the default state dir when none is configured).
+func blobStorePath(cfg *config.Config) string {
+	if cfg.Store.StateFile == "" {
+		return filepath.Join(config.StateDir(), "blobs")
+	}
+	return filepath.Join(filepath.Dir(cfg.Store.StateFile), "blobs")
 }
 
 // configureMemory builds the memory: section's manager and installs it as

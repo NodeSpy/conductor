@@ -73,6 +73,18 @@ var fakeDecl = &connector.TypeDecl{
 			Options: connector.Schema{},
 			Outputs: connector.Schema{"done": {Type: connector.TBool}},
 		},
+		{
+			Name: "download", Desc: "returns raw bytes as a declared binary output (#36 §21)",
+			Options:   connector.Schema{"url": {Type: connector.TString}},
+			Outputs:   connector.Schema{"body": {Type: connector.TAny}},
+			BinaryOut: []string{"body"},
+		},
+		{
+			Name: "upload", Desc: "accepts a blob handle on a declared binary input (#36 §21)",
+			Options:  connector.Schema{"file": {Type: connector.TAny, Required: true}},
+			Outputs:  connector.Schema{"ok": {Type: connector.TBool}},
+			BinaryIn: []string{"file"},
+		},
 	},
 }
 

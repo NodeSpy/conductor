@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/blob"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/secrets"
@@ -84,6 +85,15 @@ type VerbDecl struct {
 	// declared verbs): unknown-key/type validation is skipped; template
 	// references inside the options are still scope-checked.
 	Open bool
+	// BinaryIn names options that accept a blob handle (#36 §21): the flow
+	// runner resolves each into the blob's local file path before Invoke, so
+	// the implementation streams bytes off disk instead of finding base64 in
+	// its options.
+	BinaryIn []string
+	// BinaryOut names outputs the implementation returns as raw []byte: the
+	// flow runner stores each as a run-scoped blob and replaces the bytes
+	// with the opaque handle before the value enters the JSON scope.
+	BinaryOut []string
 }
 
 // TypeDecl is a connector type's full self-description.
@@ -272,6 +282,10 @@ type Deps struct {
 	VaultBoot *vaults.Bootstrap
 	// VaultExec runs external vault helpers — op, pass (nil = real exec).
 	VaultExec vaults.ExecFn
+	// Blobs is the content-addressed artifact store the built-in blob verbs
+	// (and verb-level binary IO) use (#36 §21). nil in contexts without one —
+	// blob verbs then error plainly.
+	Blobs *blob.Store
 }
 
 var (
@@ -393,7 +407,7 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 	for _, b := range []struct {
 		name string
 		decl *TypeDecl
-	}{{"kv", kvDecl}, {"sql", sqlDecl}, {"memory", memoryDecl}, {"workflow", workflowDecl}, {"conductor", conductorDecl}} {
+	}{{"kv", kvDecl}, {"sql", sqlDecl}, {"memory", memoryDecl}, {"workflow", workflowDecl}, {"conductor", conductorDecl}, {"blob", blobDecl}} {
 		if _, exists := r.byName[b.name]; exists {
 			continue
 		}

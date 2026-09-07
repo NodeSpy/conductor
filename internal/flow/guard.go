@@ -396,13 +396,16 @@ func isIdentByte(b byte) bool {
 // builtin connectors whose verbs never leave the box.
 var internalConnectors = map[string]bool{
 	"kv": true, "sql": true, "memory": true, "workflow": true, "conductor": true,
+	"blob": true,
 }
 
 // internalWriteVerbs are the value-carrying writes into durable shared state
-// — the parking spots the two-plan kv laundering path abuses.
+// — the parking spots the two-plan kv laundering path abuses. blob.put is one
+// of them: inline text lands in the artifact store and blob.read brings it
+// back, so a plan could park secret material there like a kv value.
 var internalWriteVerbs = map[string]bool{
 	"kv.set": true, "kv.setnx": true, "kv.merge": true, "kv.append": true,
-	"memory.remember": true, "sql.exec": true,
+	"memory.remember": true, "sql.exec": true, "blob.put": true,
 }
 
 // isInternalWrite reports whether a verb writes a caller-supplied value into

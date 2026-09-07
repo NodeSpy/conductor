@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/blob"
 	"github.com/NodeSpy/conductor/internal/code"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
@@ -92,6 +93,10 @@ type Runner struct {
 	Store     Store
 	Notif     Notifier
 	Log       func(string, ...any)
+	// Blobs is the content-addressed artifact store (#36 §21): verb-level
+	// binary IO stages through it and a run's blobs are GC'd with the run.
+	// nil = no binary handling (binary-declaring verbs then error plainly).
+	Blobs *blob.Store
 	// DryRun stubs every outbound verb and agent/command dispatch (replay).
 	DryRun bool
 	// sleep is injectable for retry tests.
@@ -448,6 +453,9 @@ func (r *Runner) finishRun(run store.WorkflowRun) {
 	if run.ID != "" {
 		_ = r.Store.DeleteRun(run.ID)
 	}
+	// A run's artifacts are GC'd with it (#36 §21): drop its blob references
+	// and delete anything no other run still holds.
+	r.releaseRunBlobs(run.ID)
 }
 
 // execStepWithFlow wraps one step's execution with the control-flow
@@ -787,10 +795,22 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 		}
 		final = rv.(map[string]any)
 	}
+	// Verb-level binary IO (#36 §21): declared binary-in options resolve
+	// from blob handles to local paths; declared binary-out outputs come
+	// back as bytes and leave as run-scoped handles.
+	decl, _ := in.Decl.Verb(verb)
+	if final, err = r.stageBlobInputs(decl, final); err != nil {
+		r.auditVerb(t, connName, verb, rendered, "failed", err)
+		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
+	}
 	start := time.Now()
 	out, err := in.InvokeFinal(ctx, verb, final)
 	took := time.Since(start).Round(time.Millisecond)
 	if err != nil {
+		r.auditVerb(t, connName, verb, rendered, "failed", err)
+		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
+	}
+	if out, err = r.storeBlobOutputs(ctx, decl, out); err != nil {
 		r.auditVerb(t, connName, verb, rendered, "failed", err)
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}

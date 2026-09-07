@@ -17,6 +17,7 @@ The model
 - [[Agents]]
 - [[Grouping]]
 - [[Memory]]
+- [[Binary-Data]]
 - [[Agent-Skill]]
 - [[Policy]]
 - [[Cost-Accounting]]

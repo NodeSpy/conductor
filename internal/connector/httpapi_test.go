@@ -554,7 +554,7 @@ connectors:
 		reg := buildAPIRegistry(t, c.yaml, secrets.New())
 		var in *Instance
 		for _, n := range reg.Names() {
-			if n == "kv" || n == "sql" || n == "memory" || n == "workflow" || n == "conductor" { // the always-on built-ins, never the one under test
+			if n == "kv" || n == "sql" || n == "memory" || n == "workflow" || n == "conductor" || n == "blob" { // the always-on built-ins, never the one under test
 				continue
 			}
 			in, _ = reg.Get(n)

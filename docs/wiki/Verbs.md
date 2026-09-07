@@ -61,4 +61,8 @@ connector's `options:` or per call.
 the audit records "stubbed" and later steps see zero-valued outputs shaped by
 the verb's output schema plus `stubbed: true`.
 
-Related: [[Connectors]] · [[Workflows]] · [[Hand-offs]] · [[Policy]]
+Binary data never rides options/outputs as base64: the built-in `blob.*`
+verbs and per-verb `BinaryIn`/`BinaryOut` schema declarations move files as
+opaque content-addressed handles — see [[Binary-Data]].
+
+Related: [[Connectors]] · [[Workflows]] · [[Hand-offs]] · [[Policy]] · [[Binary-Data]]

@@ -904,6 +904,9 @@ func (c *Config) validateConnectors() error {
 		if name == "workflow" {
 			return fmt.Errorf("config: connectors: %q is reserved (the built-in workflow verbs — always available, nothing to configure)", name)
 		}
+		if name == "blob" {
+			return fmt.Errorf("config: connectors: %q is reserved (the built-in artifact verbs — always available, nothing to configure)", name)
+		}
 		if ref.Type == "" {
 			return fmt.Errorf("config: connector %q: missing type", name)
 		}
