@@ -492,7 +492,55 @@ workflows:
 # scoped to when they fire (start: context only · done: + all outputs ·
 # fail: + {{.error}}/{{.failed_step}}).
 # ---------------------------------------------------------------------------
+# ── Callable service (#36 §13) ────────────────────────────────────────────
+# Conductor as a callable service: an external orchestrator (n8n, cron, a
+# queue, plain curl, or an MCP client) fires a named workflow, passes inputs,
+# and gets a structured result. The caller owns generic automation +
+# scheduling; conductor owns agents-on-code. Vendor-neutral — n8n is just the
+# first documented adapter.
+#
+# It dispatches agents, so it is gated like a control surface:
+#   • authenticated — a bearer token OR an HMAC body signature per caller;
+#   • deny-by-default scope — a token invokes only the workflows it lists;
+#   • explicit opt-in — a trigger is reachable only with `callable: true`.
+# Both gates must pass. Omit this block to leave the service off.
+callable:
+  # Bind for POST /invoke/<name> and GET /runs/<id>. Mounts on the shared
+  # inbound listener, so it may reuse a `listen:` a webhook/sentry connector
+  # already binds. Put it behind TLS / an internal network — the token is a
+  # bearer secret.
+  listen: ":8099"
+  # Bounds a synchronous ?wait=true call (default 30s, hard-capped at 5m).
+  wait_timeout: 30s
+  tokens:
+    # A bearer caller (n8n's "Header Auth" credential: Authorization: Bearer …).
+    - name: n8n-prod
+      bearer: "${CONDUCTOR_INVOKE_TOKEN}"   # from env/secrets — never inline
+      workflows: [pr-summary]               # deny-by-default: only these
+    # An HMAC caller: signs the raw request body (reuses the webhook-signature
+    # machinery). Mutually exclusive with bearer.
+    - name: ci-signer
+      hmac:
+        secret: "${CONDUCTOR_INVOKE_HMAC}"
+        header: X-Conductor-Signature       # header carrying the signature
+        scheme: hex                          # hex (default) | base64; "sha256=" prefix ok
+      workflows: [pr-summary]
+
 triggers:
+  # A callable manual workflow: reachable at POST /invoke/pr-summary for any
+  # token scoped to it. `callable: true` is the trigger-side opt-in; without it
+  # the workflow is invisible to the invoke surface even if a token lists it.
+  - on: manual
+    name: pr-summary
+    callable: true
+    steps:
+      - id: audit
+        type: agent
+        agent: fixer
+        prompt: |
+          Audit {{.repo}} for {{.scope}} and summarize findings.
+          (inputs arrive under .inputs and at the top level)
+
   # Autonomous conflict fixer with Slack lifecycle hooks.
   - on: gh.merge_conflict
     steps:

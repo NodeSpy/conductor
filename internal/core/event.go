@@ -61,6 +61,14 @@ type Trigger struct {
 	// bypasses its dedup / liveness / backoff gates so the action runs now, even if
 	// it thinks the state is already handled. The kill switch and pause still apply.
 	Force bool
+	// HistoryID, when non-empty, pins the id of this run's §20 history record
+	// instead of the engine minting a fresh one. It exists so a caller that
+	// dispatched the trigger (the §13 callable-invoke surface) can hand back a
+	// run_id up front and then read the record — GET /runs/<id>, wait, callback —
+	// by that exact id. It must be filesystem-safe and unique per run; the
+	// invoke surface generates it. Empty (the default) keeps the engine's own
+	// id assignment, so nothing else changes.
+	HistoryID string
 }
 
 // Key returns the stable per-object key used by the dedup store.

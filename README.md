@@ -612,6 +612,51 @@ the paseo CLI exposes no MCP launch surface today, so a `skill:` profile on
 a paseo runtime is inert and `conductor validate` says so. Details: the
 Agent-Skill wiki page.
 
+## Callable service (invoke API)
+
+The flip side of `conductor run`: an external orchestrator — n8n, cron, a
+queue, plain `curl`, or an MCP client — fires a named workflow over HTTP and
+gets a structured result. The caller owns generic automation + scheduling;
+conductor owns agents-on-code. The surface is vendor-neutral (n8n is just the
+first documented adapter).
+
+It dispatches agents, so it is gated like a control surface — and every gate
+must pass:
+
+- **authenticated** — a bearer token *or* an HMAC body signature, per caller;
+- **deny-by-default scope** — a token invokes only the workflows it lists;
+- **explicit opt-in** — a trigger is reachable only with `callable: true`.
+
+```yaml
+callable:
+  listen: ":8099"          # mounts on the shared inbound listener
+  wait_timeout: 30s        # bounds a synchronous ?wait=true call
+  tokens:
+    - name: n8n-prod
+      bearer: "${CONDUCTOR_INVOKE_TOKEN}"
+      workflows: [pr-summary]        # deny-by-default: only these
+
+triggers:
+  - on: manual
+    name: pr-summary
+    callable: true                    # the trigger-side opt-in
+    steps:
+      - { id: summarize, type: agent, agent: fixer, prompt: "Summarize {{.repo}}#{{.pr}}" }
+```
+
+```
+$ curl -s -X POST localhost:8099/invoke/pr-summary \
+    -H 'Authorization: Bearer '"$CONDUCTOR_INVOKE_TOKEN" \
+    -d '{"input":{"repo":"acme/api","pr":42}}'
+{"run_id":"r…","status":"accepted"}
+```
+
+The invoke runs through the same manual → policy / quiet-hours / budget /
+audit path as `conductor run` — the entry point changes, the containment does
+not. Every invoke is audited with the caller identity and the run id. Off
+unless a `callable:` block is configured. Details: the Callable-Service wiki
+page.
+
 ## Execution history, live watch & retry
 
 Every run leaves a full record — per-step inputs / outputs / status / timing

@@ -39,6 +39,7 @@ Connector types
 - [[Integration-RSS]]
 
 Operations
+- [[Callable-Service]]
 - [[Runs]]
 - [[Hand-offs]]
 - [[Notifications]]

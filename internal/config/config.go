@@ -96,6 +96,13 @@ type Config struct {
 	// (env:/op://…), readable in templates as {{.secrets.<name>}}.
 	SecretRefs map[string]string `yaml:"secrets"`
 
+	// Callable is the OPTIONAL `callable:` block (#36 §13): conductor's
+	// authenticated inbound invoke surface, so an external orchestrator (n8n,
+	// cron, a queue, curl, any MCP client) can fire a named callable workflow
+	// and get a structured result back. Off unless configured. See
+	// CallableConfig and internal/callable.
+	Callable CallableConfig `yaml:"callable"`
+
 	Control Control `yaml:"control"`
 	Notify  Notify  `yaml:"notify"`
 	// Handoff is the LEGACY singular hand-off block (a web-link page on the inbound
@@ -1270,6 +1277,9 @@ func (c *Config) Validate() error {
 				}
 			}
 		}
+	}
+	if err := c.validateCallable(); err != nil {
+		return err
 	}
 	return nil
 }

@@ -46,10 +46,17 @@ func (r *Runner) beginHistory(ctx context.Context, run store.WorkflowRun, t core
 	if shadow || run.ID == "" || r.Store == nil {
 		return ctx, nil
 	}
+	// A caller that dispatched this trigger (the §13 invoke surface) may pin the
+	// record id so it can read the run back by the run_id it already returned;
+	// otherwise mint a fresh time-ordered id.
+	id := "r" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	if t.HistoryID != "" {
+		id = t.HistoryID
+	}
 	h := &histRec{
 		r: r,
 		rec: store.RunHistory{
-			ID:      "r" + strconv.FormatInt(time.Now().UnixNano(), 36),
+			ID:      id,
 			RunID:   run.ID,
 			Kind:    t.Kind,
 			Variant: spec.Name,

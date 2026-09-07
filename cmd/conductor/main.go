@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/callable"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/controller"
@@ -673,6 +674,31 @@ func cmdRun(args []string) error {
 	}
 	go serveControl(ctx, controlSockPath(cfg), igs, eng.Emit, manualTriggersByName(cfg), eng.RetryRunByID, events, logf)
 
+	// Callable service (#36 §13): the authenticated inbound invoke surface. Off
+	// unless a `callable:` block is configured; mounts on the shared inbound
+	// listener (may reuse a webhook/sentry `listen:`). It dispatches agents, so
+	// it flows through the same manual → policy/quiet-hours/budget/audit path as
+	// `conductor run`; the entry point changes, the containment does not.
+	if cfg.Callable.Enabled() {
+		manual := manualTriggersByName(cfg)
+		callableSet := cfg.CallableTriggerNames()
+		histDir := historyDirPath(cfg)
+		callable.New(callable.Deps{
+			Cfg:      cfg.Callable,
+			Callable: func(name string) bool { return callableSet[name] },
+			Invoke: func(ctx context.Context, name string, input map[string]any, histID string) error {
+				_, err := runManualTrigger(ctx, manual, controlRequest{Name: name, Inputs: input, HistoryID: histID}, eng.Emit)
+				return err
+			},
+			ReadRun: func(id string) (store.RunHistory, bool) {
+				rec, err := store.ReadHistory(histDir, id)
+				return rec, err == nil
+			},
+			Audit: st.Audit,
+			Log:   logf,
+		}).Register(ctx)
+	}
+
 	// The conductor.* verbs act on THIS daemon — wire them to the existing
 	// update/pause/restart/run machinery. Restarting ops fire AFTER the verb
 	// returns (a short grace) so the calling step checkpoints first and the
@@ -1072,6 +1098,10 @@ type controlRequest struct {
 	// run: the manual trigger's name and its CLI-provided inputs.
 	Name   string         `json:"name,omitempty"`
 	Inputs map[string]any `json:"inputs,omitempty"`
+	// HistoryID, when set, pins the run's §20 history record id so the caller
+	// can read the run back by an id it already returned (the §13 invoke
+	// surface). Empty keeps the engine's own id assignment.
+	HistoryID string `json:"history_id,omitempty"`
 	// retry: the recorded run to re-run and the step to resume from
 	// ("" = the recorded failed step, else the beginning); ForceReplay
 	// permits re-running steps the record says already succeeded. (#36 §20)
@@ -1208,15 +1238,16 @@ func runManualTrigger(ctx context.Context, manual map[string]connector.CompiledT
 	act = inbound.ForceNoCheckout(act)
 	runID := fmt.Sprintf("%d", time.Now().UnixNano())
 	emit(ctx, core.Trigger{
-		Source:   "manual",
-		Instance: "manual",
-		Kind:     "manual",
-		Variant:  ct.Spec.Name,
-		Target:   inbound.SyntheticTarget("manual:"+ct.Spec.Name, runID),
-		Title:    "manual run: " + ct.Spec.Name,
-		Context:  trigCtx,
-		Force:    true, // bypass dedup gates — an on-demand run always runs
-		Action:   act,
+		Source:    "manual",
+		Instance:  "manual",
+		Kind:      "manual",
+		Variant:   ct.Spec.Name,
+		Target:    inbound.SyntheticTarget("manual:"+ct.Spec.Name, runID),
+		Title:     "manual run: " + ct.Spec.Name,
+		Context:   trigCtx,
+		Force:     true, // bypass dedup gates — an on-demand run always runs
+		Action:    act,
+		HistoryID: req.HistoryID, // "" unless a caller (the §13 invoke surface) pinned it
 	})
 	return fmt.Sprintf("dispatched manual trigger %q", req.Name), nil
 }

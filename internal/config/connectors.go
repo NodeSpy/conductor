@@ -320,6 +320,11 @@ type TriggerSpec struct {
 	// Gate is the default quality gate (#36 §16) for every agent step of
 	// this trigger that doesn't carry its own.
 	Gate *GateSpec `yaml:"gate,omitempty"`
+	// Callable opts a manual trigger into the inbound invoke surface (#36 §13):
+	// `callable: true` makes it reachable via `POST /invoke/<name>`. Unset/false
+	// (the default) means an external caller can never fire it — the entry point
+	// is deny-by-default at the trigger, on top of the per-token scope.
+	Callable *bool `yaml:"callable,omitempty"`
 }
 
 // UnmarshalYAML peels a list-valued `on:` into OnSources before the plain
