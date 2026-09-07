@@ -281,3 +281,97 @@ steps:
 		t.Fatalf("post calls (a's check + c): %d", n)
 	}
 }
+
+// CRITICAL regression (#36 review): an agent-authored plan may not set (or
+// empty out) its own gate — a step's gate wins over the inherited default,
+// so an emitted `gate: {run: []}` would be self-approval. The operator's
+// trigger/workflow default must remain the only gate path for agent output.
+func TestAgentAuthoredStepsCannotCarryTheirOwnGate(t *testing.T) {
+	cfg := loadConfig(t, gateCfg+`
+policy:
+  agent_authored:
+    allow: [ agent, team, svc.post ]
+`)
+	reg := buildRegistry(t, cfg)
+	pol := cfg.Policy.AgentAuthored
+
+	// A plan step with its own (empty!) gate is rejected structurally.
+	steps := []config.Step{{ID: "s", Type: "agent", Agent: "fixer", Prompt: "p",
+		Gate: &config.GateSpec{Run: []string{}}}}
+	if _, err := guardPlan(cfg, reg, pol, steps); err == nil ||
+		!strings.Contains(err.Error(), "may not set gate:") {
+		t.Fatalf("self-gated plan step: %v", err)
+	}
+	// Same for a team step's per-worker gate.
+	steps = []config.Step{{ID: "tm", Prompt: "p", Team: &config.TeamSpec{
+		Planner: "fixer", Worker: "critic", Gate: &config.GateSpec{Run: []string{}}}}}
+	if _, err := guardPlan(cfg, reg, pol, steps); err == nil ||
+		!strings.Contains(err.Error(), "may not set team.gate:") {
+		t.Fatalf("self-gated team plan step: %v", err)
+	}
+	// Without a gate the same steps are admitted (the inherited default is
+	// what governs them at run time).
+	steps = []config.Step{{ID: "s", Type: "agent", Agent: "fixer", Prompt: "p"}}
+	if _, err := guardPlan(cfg, reg, pol, steps); err != nil {
+		t.Fatalf("ungated plan step must be admitted: %v", err)
+	}
+}
+
+// …and the inherited trigger-level default gate really does govern a plan's
+// agent-authored sub-step: the sub-agent's output fails the default gate and
+// the run fails — the agent could not promote unchecked work.
+func TestInheritedDefaultGateGovernsPlanSubAgents(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+memory: { type: memory }
+agents:
+  fixer:   { model: m }
+  planner: { model: m }
+checks:
+  verdict: { uses: svc.post, options: { text: "check" } }
+policy:
+  agent_authored:
+    allow: [ agent, svc.post ]
+`)
+	reg := buildRegistry(t, cfg)
+	fake := newFakeState(t, "svc")
+	rig := newTestRunner(t, cfg, reg)
+	rig.Runner.Agents.FollowUp = nil // gate fail → escalate immediately
+
+	// The verdict check passes for the PLANNER's gate round, then flips to
+	// failing right after the SUB-agent's dispatch — so the failing round is
+	// provably the agent-authored sub-step's.
+	fake.mu.Lock()
+	fake.outputs["post"] = map[string]any{"pass": true}
+	fake.mu.Unlock()
+	planOut := "```plan\n- id: sub\n  type: agent\n  agent: fixer\n  prompt: \"go\"\n```"
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		if req.Action.Agent == "planner" {
+			return dispatch.RunRef{AgentID: "p1", Output: planOut}, nil
+		}
+		// The sub-agent ran — its gate round must FAIL.
+		fake.mu.Lock()
+		fake.outputs["post"] = map[string]any{"pass": false, "reason": "unchecked"}
+		fake.mu.Unlock()
+		return dispatch.RunRef{AgentID: "sub", Output: "did work", Workdir: t.TempDir()}, nil
+	}
+
+	spec := mustSpec(t, `
+on: svc.ping
+gate: { run: [ verdict ], max_revisions: 0 }
+steps:
+  - { id: author, type: agent, agent: planner, prompt: "plan it" }
+`)
+	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "m"}), spec)
+	failed, errStr := rig.workflowFailed()
+	if !failed || !strings.Contains(errStr, "gate failed: verdict") {
+		t.Fatalf("default gate must govern plan sub-agents: %v %q", failed, errStr)
+	}
+	// The failing gate round was the SUB-agent's, not the planner's.
+	gates := rig.Store.auditsWithEvent("gate")
+	last := gates[len(gates)-1]
+	if last["step"] != "plan:sub" || last["outcome"] != "escalated" {
+		t.Fatalf("failing gate must be the plan sub-step's: %+v", last)
+	}
+}

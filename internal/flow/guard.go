@@ -77,6 +77,19 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 				// counted against the plan's sub-agent budget.
 				res.subAgents += 2 + step.Team.MaxWorkersOrDefault()
 			}
+			// An agent-authored step may NEVER carry its own gate: — a step's
+			// gate wins over the inherited trigger/workflow default, so an
+			// emitted `gate: {run: []}` (or any weakened variant) would let the
+			// agent approve its own output. The operator-configured default is
+			// the ONLY gate path for agent-authored steps; the same holds for a
+			// team step's per-worker gate. (Config-authored steps keep setting
+			// their own — this guard only sees agent-authored plans.)
+			if step.Gate != nil {
+				return fmt.Errorf("%s: agent-authored steps may not set gate: — the inherited trigger/workflow gate is the only gate path for agent output", w)
+			}
+			if step.Team != nil && step.Team.Gate != nil {
+				return fmt.Errorf("%s: agent-authored team steps may not set team.gate: — the operator's configuration owns the checks on agent output", w)
+			}
 			if !pol.TrustFull() {
 				switch {
 				case matchAny(pol.Approve, class):
