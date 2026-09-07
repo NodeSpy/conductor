@@ -144,6 +144,45 @@ func TestTeamPlanWorkReconcile(t *testing.T) {
 	}
 }
 
+// Regression (#36 iso-review round 2, item 5): a worker's raw reply feeds the
+// reconciler (another agent) as "worker notes". A tracked secret in that reply
+// must be scrubbed before it enters the reconciler's prompt — the sibling diff
+// field is already redacted at its source, and worker notes must meet the same
+// bar so a secret never crosses the worker→reconciler agent boundary.
+func TestTeamReconcileWorkerNotesRedacted(t *testing.T) {
+	rig, _, td := teamRig(t)
+	const secret = "ghp_worker_secret_TOKEN_0987654321"
+	rig.Runner.Secrets.Track(secret)
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		td.record(req)
+		switch req.Action.Agent {
+		case "architect":
+			return dispatch.RunRef{AgentID: "plan-1", Output: plannerOutput("api")}, nil
+		case "implementer":
+			// Non-JSON prose → Outputs["text"], carrying a tracked secret.
+			return dispatch.RunRef{AgentID: "w-1", Output: "did it with token " + secret, Workdir: "/wt/" + req.Action.ID}, nil
+		case "merger":
+			return dispatch.RunRef{AgentID: "m-1", Output: `{"note": "combined"}`, Workdir: "/wt/merge"}, nil
+		}
+		return dispatch.RunRef{AgentID: "x", Output: `{"pass": true}`}, nil
+	}
+	runTrigger(rig, newTrigger("ping", nil), mustSpec(t, teamSpecYAML))
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("workflow failed: %s", errStr)
+	}
+	merges := td.byAgent("merger")
+	if len(merges) != 1 {
+		t.Fatalf("expected one reconcile dispatch, got %d", len(merges))
+	}
+	prompt := merges[0].Action.Prompt
+	if strings.Contains(prompt, secret) {
+		t.Fatalf("reconciler prompt must not carry the worker's raw secret:\n%s", clipText(prompt, 600))
+	}
+	if !strings.Contains(prompt, "«redacted»") {
+		t.Fatalf("reconciler prompt should show the worker secret scrubbed:\n%s", clipText(prompt, 600))
+	}
+}
+
 func TestTeamCriticGatesWorkers(t *testing.T) {
 	rig, _, td := teamRig(t)
 	var criticCalls, followUps int

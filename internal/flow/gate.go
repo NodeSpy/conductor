@@ -191,7 +191,11 @@ func (r *Runner) execCheck(ctx context.Context, t core.Trigger, stepID, name str
 		"check":   name,
 		"workdir": ref.Workdir,
 		"attempt": round + 1,
-		"output":  clipText(ref.Output, 4000),
+		// The agent's raw reply feeds ANOTHER agent (an agent-form critic reads
+		// {{.gate.output}}); scrub tracked secrets first, at the same boundary
+		// the proposed diff is scrubbed (flow.go). Redact before clipping so a
+		// secret straddling the clip point can't survive in the discarded tail.
+		"output": clipText(r.redactText(ref.Output), 4000),
 	}
 	outputs, err := r.execStepWithFlow(ctx, t, chk, "gate:"+name, cdata, false)
 	if err != nil {

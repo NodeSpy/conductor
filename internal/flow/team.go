@@ -152,7 +152,11 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 			fmt.Fprintf(&b, "proposed diff:\n%s\n", clipText(diff, 16<<10))
 		}
 		if text, ok := res.Outputs["text"].(string); ok && text != "" {
-			fmt.Fprintf(&b, "worker notes: %s\n", clipText(text, 2000))
+			// A worker's raw reply feeds the reconciler (another agent). Scrub
+			// tracked secrets first — the same boundary the diff is scrubbed at
+			// (its source redacts before it lands in Outputs["diff"]). Redact
+			// before clipping so a secret straddling the clip point can't survive.
+			fmt.Fprintf(&b, "worker notes: %s\n", clipText(r.redactText(text), 2000))
 		}
 	}
 	rstep := config.Step{Type: "agent", Agent: reconciler, Prompt: b.String(),

@@ -227,6 +227,43 @@ steps:
 	}
 }
 
+// Regression (#36 iso-review round 2, item 5): the agent's raw reply is fed to
+// an agent-form critic via {{.gate.output}}. A tracked secret in that reply
+// must be scrubbed before it enters the critic's template scope — the same
+// standard the proposed diff already meets — so a secret in one agent's output
+// never reaches another agent's model.
+func TestGateCriticOutputIsRedacted(t *testing.T) {
+	rig, _, _ := gateRig(t, gateCfg)
+	const secret = "ghp_gate_secret_TOKEN_1234567890"
+	rig.Runner.Secrets.Track(secret)
+	var criticReq dispatch.Request
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		if req.Action.Agent == "critic" {
+			criticReq = req
+			return dispatch.RunRef{AgentID: "c1", Output: `{"pass": true, "reason": "clean"}`}, nil
+		}
+		// The fixer leaks a tracked secret in its raw reply.
+		return dispatch.RunRef{AgentID: "a1", Output: "patched; used token " + secret, Workdir: "/wt/agent"}, nil
+	}
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - { id: fix, type: agent, agent: fixer, prompt: "fix", gate: { run: [ critic ] } }
+`)
+	runTrigger(rig, newTrigger("ping", nil), spec)
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("critic pass: %s", errStr)
+	}
+	gateScope, _ := criticReq.Data["gate"].(map[string]any)
+	out, _ := gateScope["output"].(string)
+	if strings.Contains(out, secret) {
+		t.Fatalf("critic gate.output must not carry the raw secret: %q", out)
+	}
+	if !strings.Contains(out, "«redacted»") {
+		t.Fatalf("critic gate.output should show the secret scrubbed to a placeholder: %q", out)
+	}
+}
+
 func TestGateNeedsWorkdirForCommandChecks(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
