@@ -792,6 +792,31 @@ func TestLocalCodeCaptureBadStateKeepsWaiting(t *testing.T) {
 	}
 }
 
+// TestResolveNamedSecretsTracksLiterals proves that a literal named secret
+// exposed to the {{.secrets.*}} template scope is tracked for redaction — the
+// resolver early-returns literals untracked, so resolveNamedSecrets must Track
+// them itself (mirroring the bearer/oauth credentials tracked at resolve time).
+func TestResolveNamedSecretsTracksLiterals(t *testing.T) {
+	sec := secrets.New()
+	const lit = "sk-supersecret-xyz"
+	cfg := &config.Config{SecretRefs: map[string]string{"api": lit}}
+
+	scope := resolveNamedSecrets(context.Background(), cfg, sec)
+	if got := scope["api"]; got != lit {
+		t.Fatalf("scope[api] = %q, want the resolved literal %q", got, lit)
+	}
+
+	// A log line interpolating the named secret must be scrubbed…
+	if red := sec.Redact("calling api with token " + lit); strings.Contains(red, lit) {
+		t.Fatalf("literal named secret leaked through Redact: %q", red)
+	}
+	// …while an ordinary non-secret string passes through untouched.
+	const plain = "calling api with no secret here"
+	if red := sec.Redact(plain); red != plain {
+		t.Fatalf("non-secret string altered by Redact: %q != %q", red, plain)
+	}
+}
+
 // freeLocalAddr reserves a localhost port and releases it for the code under
 // test to bind.
 func freeLocalAddr(t *testing.T) string {

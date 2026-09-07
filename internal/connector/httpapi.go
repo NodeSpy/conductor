@@ -676,6 +676,13 @@ func resolveNamedSecrets(ctx context.Context, cfg *config.Config, sec *secrets.R
 	}
 	for name, ref := range cfg.SecretRefs {
 		if v, err := sec.Resolve(ctx, ref); err == nil {
+			// A named secret exposed to the template scope is still a secret:
+			// track it so it's redacted from logs/audit wherever a step
+			// interpolates {{.secrets.<name>}}, exactly like the bearer/oauth
+			// credentials tracked at resolve time above.
+			if v != "" {
+				sec.Track(v)
+			}
 			out[name] = v
 		} else {
 			out[name] = ""
