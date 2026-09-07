@@ -235,7 +235,15 @@ func (f *fakeImpl) Invoke(ctx context.Context, verb string, opts map[string]any)
 		}
 	}
 	if hasOut {
-		return out, nil
+		// Return a fresh copy: a real connector mints a new output map per call,
+		// and the runner mutates it in place (binary-out → handle). Sharing the
+		// stored instance would let one invocation corrupt the canned output for
+		// the next (e.g. a []byte body rewritten to a handle across re-triggers).
+		cp := make(map[string]any, len(out))
+		for k, v := range out {
+			cp[k] = v
+		}
+		return cp, nil
 	}
 	switch verb {
 	case "post":

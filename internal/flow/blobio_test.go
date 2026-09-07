@@ -74,32 +74,72 @@ steps:
 	}
 }
 
-func TestBinaryInStagesPath(t *testing.T) {
-	rig, fake, bs := blobRig(t)
-	h, err := bs.PutBytes("run-blob-2", []byte("upload me"), blob.Meta{Name: "u.bin"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
+// REGRESSION (H2): blob ownership keyed on the STABLE run-dedup id (run.ID =
+// kind:key, unchanged across every trigger of a target) let the first
+// execution's ReleaseRun tombstone that id, so the SECOND trigger of the same
+// target could never Put again — a re-trigger DoS. Blobs now own a
+// per-EXECUTION namespace: two sequential Run()s sharing one run.ID both Put.
+func TestReTriggerSameRunIDCanStillPutBlobs(t *testing.T) {
+	rig, fake, _ := blobRig(t)
+	fake.outputs["download"] = map[string]any{"body": []byte("PDF-ish bytes"), "body_media_type": "application/pdf"}
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: up, uses: svc.upload, options: { file: "{{.artifact}}" } }
+  - { id: dl, uses: svc.download, options: { url: "http://x/report.pdf" } }
 `)
-	trig := newTrigger("ping", map[string]any{"artifact": h.ScopeValue()})
+	// Both executions share the SAME run-dedup id — pre-fix the second put hit
+	// the first execution's release tombstone ("already released") and failed.
+	for _, tag := range []string{"first", "second"} {
+		run := store.WorkflowRun{ID: "gh:o/r#1", Outputs: map[string]map[string]any{}}
+		runTriggerWithRun(rig, run, newTrigger("ping", nil), spec)
+		if failed, errStr := rig.workflowFailed(); failed {
+			t.Fatalf("%s execution of the same run-dedup id must Put its blob, got: %s", tag, errStr)
+		}
+	}
+}
+
+// REGRESSION (H2, preserves #140 F3): a late Put AFTER this execution's own
+// ReleaseRun is still refused — the per-execution namespace is one-shot, so a
+// backgrounded agent racing its run's teardown can't orphan a ref.
+func TestPostReleasePutWithinExecutionRefused(t *testing.T) {
+	bs, err := blob.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const owner = "r-exec-1" // a single execution's blob owner id
+	if _, err := bs.PutBytes(owner, []byte("a"), blob.Meta{}); err != nil {
+		t.Fatalf("first put: %v", err)
+	}
+	if err := bs.ReleaseRun(owner); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if _, err := bs.PutBytes(owner, []byte("b"), blob.Meta{}); err == nil || !strings.Contains(err.Error(), "already released") {
+		t.Fatalf("post-release put within one execution must be refused, got: %v", err)
+	}
+}
+
+func TestBinaryInStagesPath(t *testing.T) {
+	rig, fake, _ := blobRig(t)
+	// A blob produced earlier IN THIS execution (owner = the execution's blob
+	// id, post-H2) is staged to a real on-disk path for a binary-in verb.
+	fake.outputs["download"] = map[string]any{"body": []byte("upload me")}
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - { id: dl, uses: svc.download, options: { url: "http://x/u.bin" } }
+  - { id: up, uses: svc.upload, options: { file: "{{.dl.body}}" } }
+`)
 	run := store.WorkflowRun{ID: "run-blob-2", Outputs: map[string]map[string]any{}}
-	runTriggerWithRun(rig, run, trig, spec)
+	runTriggerWithRun(rig, run, newTrigger("ping", nil), spec)
 	if failed, errStr := rig.workflowFailed(); failed {
 		t.Fatalf("workflow failed: %s", errStr)
 	}
+	// The upload verb received a real on-disk path carrying the blob's bytes.
 	calls := fake.snapshot()
-	if len(calls) != 1 {
-		t.Fatalf("calls: %+v", calls)
-	}
-	// The verb received a real on-disk path carrying the blob's bytes.
-	path, _ := calls[0].Opts["file"].(string)
+	up := calls[len(calls)-1]
+	path, _ := up.Opts["file"].(string)
 	if path == "" || strings.Contains(path, "$blob") {
-		t.Fatalf("staged input: %v", calls[0].Opts["file"])
+		t.Fatalf("staged input: %v", up.Opts["file"])
 	}
 	if b, rerr := os.ReadFile(path); rerr == nil {
 		if string(b) != "upload me" {

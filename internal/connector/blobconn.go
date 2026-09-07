@@ -10,7 +10,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/blob"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
-	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
@@ -108,7 +107,7 @@ func (b blobImpl) Invoke(ctx context.Context, verb string, opts map[string]any) 
 	if b.store == nil {
 		return nil, fmt.Errorf("blob: no blob store is configured in this context")
 	}
-	runID := memory.SourceFrom(ctx).Run
+	runID := blob.OwnerFrom(ctx)
 	switch verb {
 	case "put":
 		return b.put(ctx, opts)
@@ -131,7 +130,7 @@ func (b blobImpl) put(ctx context.Context, opts map[string]any) (map[string]any,
 	meta := blob.Meta{}
 	meta.Name, _ = opts["name"].(string)
 	meta.MediaType, _ = opts["media_type"].(string)
-	runID := memory.SourceFrom(ctx).Run
+	runID := blob.OwnerFrom(ctx)
 
 	var h blob.Handle
 	if path != "" {

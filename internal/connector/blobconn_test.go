@@ -9,7 +9,6 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/blob"
 	"github.com/NodeSpy/conductor/internal/config"
-	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
@@ -23,7 +22,7 @@ func blobFixture(t *testing.T) (blobImpl, context.Context) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := memory.WithSource(context.Background(), memory.Source{Run: "run-1"})
+	ctx := blob.WithOwner(context.Background(), "run-1")
 	return impl.(blobImpl), ctx
 }
 
@@ -130,7 +129,7 @@ func TestBlobVerbsEnforceRunOwnership(t *testing.T) {
 	}
 	handle := out["blob"]
 
-	ctxB := memory.WithSource(context.Background(), memory.Source{Run: "run-B"})
+	ctxB := blob.WithOwner(context.Background(), "run-B")
 	for _, verb := range []string{"read", "stat"} {
 		if _, err := b.Invoke(ctxB, verb, map[string]any{"blob": handle}); err == nil ||
 			!strings.Contains(err.Error(), "not referenced by run run-B") {
@@ -161,7 +160,7 @@ func TestBlobPutRefusesTrackedSecrets(t *testing.T) {
 	sec.Track("s3kr1t-value")
 	impl, _ := newBlobImpl("blob", config.ConnectorRef{}, Deps{Blobs: st, Secrets: sec})
 	b := impl.(blobImpl)
-	ctx := memory.WithSource(context.Background(), memory.Source{Run: "run-1"})
+	ctx := blob.WithOwner(context.Background(), "run-1")
 
 	// A file whose bytes carry the tracked secret (the path string is clean).
 	dir := t.TempDir()

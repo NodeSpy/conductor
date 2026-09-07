@@ -240,6 +240,14 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	// Stamp the run's provenance for memory writes: a `uses: memory.remember`
 	// step or hook records where the memory came from with no step plumbing.
 	ctx = memory.WithSource(ctx, memory.Source{Run: run.ID, Trigger: t.Kind, Repo: t.Target.Repo})
+	// Blobs are owned per EXECUTION, not per run-dedup key (H2): run.ID is stable
+	// across every trigger of a target, so keying blob refs on it means the first
+	// execution's ReleaseRun tombstones the id and the next trigger can never Put
+	// again. Thread a per-Run owner id (the history id, or run.ID + a nonce) so a
+	// re-trigger gets a fresh, releasable namespace; nested workflow-calls inherit
+	// it via this ctx.
+	blobOwner := blobOwnerID(run.ID, hist)
+	ctx = blob.WithOwner(ctx, blobOwner)
 	data := baseData(t, r.SecretVals)
 	addVaultData(data, r.VaultVals)
 	if batch != nil {
@@ -274,7 +282,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 			"number": t.Target.Number, "kind": t.Kind, "error": err.Error(), "failed_step": failedStepID(err)})
 		r.auditRunCost(t, run.ID, runCost)
 		hist.finish("failed", r.redactErr(err), failedStepID(err), runCost)
-		r.finishRun(run)
+		r.finishRun(ctx, run)
 		return
 	}
 	r.runHooks(ctx, t, spec.Hooks, "done", data, "workflow")
@@ -283,7 +291,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	}
 	r.auditRunCost(t, run.ID, runCost)
 	hist.finish("ok", "", "", runCost)
-	r.finishRun(run)
+	r.finishRun(ctx, run)
 }
 
 // auditRunCost writes the run's total spend (#36 §14 — cost per run) when
@@ -494,13 +502,15 @@ func (r *Runner) restoreOutputs(ctx context.Context, t core.Trigger, steps []con
 	return map[string]any{}
 }
 
-func (r *Runner) finishRun(run store.WorkflowRun) {
+func (r *Runner) finishRun(ctx context.Context, run store.WorkflowRun) {
 	if run.ID != "" {
 		_ = r.Store.DeleteRun(run.ID)
 	}
 	// A run's artifacts are GC'd with it (#36 §21): drop its blob references
-	// and delete anything no other run still holds.
-	r.releaseRunBlobs(run.ID)
+	// and delete anything no other run still holds. Released by the per-EXECUTION
+	// blob owner (H2), not run.ID — so a re-trigger of the same dedup key is not
+	// tombstoned out of its own blob namespace.
+	r.releaseRunBlobs(blob.OwnerFrom(ctx))
 }
 
 // execStepWithFlow wraps one step's execution with the control-flow

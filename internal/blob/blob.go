@@ -18,6 +18,7 @@ package blob
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -29,6 +30,25 @@ import (
 	"sync"
 	"time"
 )
+
+// ownerCtxKey carries a run's per-EXECUTION blob owner id on the context.
+type ownerCtxKey struct{}
+
+// WithOwner threads a per-execution blob owner id on the context. The owner is
+// the namespace a Put registers under and ReleaseRun tombstones; it must be
+// unique per execution (NOT the stable run-dedup key), so a re-trigger of the
+// same target gets a fresh, releasable namespace instead of one permanently
+// tombstoned by the first execution's ReleaseRun (H2).
+func WithOwner(ctx context.Context, owner string) context.Context {
+	return context.WithValue(ctx, ownerCtxKey{}, owner)
+}
+
+// OwnerFrom reads the per-execution blob owner id off the context (empty
+// outside a recorded run — an adhoc/unreferenced put).
+func OwnerFrom(ctx context.Context) string {
+	o, _ := ctx.Value(ownerCtxKey{}).(string)
+	return o
+}
 
 // Meta is a blob's scope-visible metadata.
 type Meta struct {

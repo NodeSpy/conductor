@@ -3,11 +3,34 @@ package flow
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"sync/atomic"
 
 	"github.com/NodeSpy/conductor/internal/blob"
 	"github.com/NodeSpy/conductor/internal/connector"
-	"github.com/NodeSpy/conductor/internal/memory"
 )
+
+// blobOwnerNonce disambiguates blob owner ids minted for executions with no
+// history record (shadow/dry runs), so two such runs of one dedup key never
+// collide on a blob namespace.
+var blobOwnerNonce int64
+
+// blobOwnerID returns a per-EXECUTION blob owner id, unique to this Run()
+// invocation (H2). The run's history id (r<nano>, minted once per Run in
+// beginHistory) already has that property, so reuse it when present; with no
+// history record fall back to the stable run id plus a process-unique nonce.
+// Threaded on the context via blob.WithOwner so a re-trigger sharing a stable
+// run-dedup key gets a fresh, releasable namespace instead of one the first
+// execution's ReleaseRun permanently tombstoned.
+func blobOwnerID(runID string, hist *histRec) string {
+	if hist != nil && hist.rec.ID != "" {
+		return hist.rec.ID
+	}
+	if runID == "" {
+		return ""
+	}
+	return runID + "#" + strconv.FormatInt(atomic.AddInt64(&blobOwnerNonce, 1), 36)
+}
 
 // Verb-level binary IO (#36 §21). A verb whose declaration names BinaryIn
 // options receives each as the blob's local (immutable, content-addressed)
@@ -42,7 +65,7 @@ func (r *Runner) stageBlobInputs(ctx context.Context, decl connector.VerbDecl, o
 		if !isHandle {
 			continue
 		}
-		path, err := r.Blobs.Path(memory.SourceFrom(ctx).Run, h.Digest)
+		path, err := r.Blobs.Path(blob.OwnerFrom(ctx), h.Digest)
 		if err != nil {
 			return nil, fmt.Errorf("option %q: %w", name, err)
 		}
@@ -60,7 +83,7 @@ func (r *Runner) storeBlobOutputs(ctx context.Context, decl connector.VerbDecl, 
 	if r.Blobs == nil {
 		return nil, fmt.Errorf("blob: verb declares binary outputs but no blob store is configured")
 	}
-	runID := memory.SourceFrom(ctx).Run
+	runID := blob.OwnerFrom(ctx)
 	for _, name := range decl.BinaryOut {
 		raw, ok := outputs[name].([]byte)
 		if !ok {
