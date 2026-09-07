@@ -368,6 +368,16 @@ func cmdRun(args []string) error {
 	if cfg.Store.StateFile != "" {
 		stateDir = filepath.Dir(cfg.Store.StateFile)
 	}
+	// The state dir holds the control socket, state.json, the audit log, the
+	// pid file, and per-run history — all daemon-private. Owner-only (0700) so
+	// no other local user can read the audit trail or reach the sockets inside
+	// it; tighten an already-existing dir too, since MkdirAll won't.
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return fmt.Errorf("state dir %s: %w", stateDir, err)
+	}
+	if err := os.Chmod(stateDir, 0o700); err != nil {
+		return fmt.Errorf("state dir %s perms: %w", stateDir, err)
+	}
 	controller.DaemonMaskPaths = []string{stateDir, filepath.Dir(cfgFile)}
 	// HostDial is the ssh -W stdio forward remote opencode servers are reached
 	// through (they bind the remote 127.0.0.1; no port opens anywhere).
@@ -1084,6 +1094,17 @@ func serveControl(ctx context.Context, path string, igs []core.Integration, emit
 	l, err := net.Listen("unix", path)
 	if err != nil {
 		log("control socket %s: %v", path, err)
+		return
+	}
+	// Same-user only, like the egress proxy (proxy.go) and memory IPC
+	// (memory/ipc.go) sockets: this socket serves `retry --force-replay`
+	// (replays side effects) and `watch` (every run's live events), so any
+	// local process reaching it is a privilege boundary. Fail closed if the
+	// mode can't be tightened rather than serve a world-reachable socket.
+	if err := os.Chmod(path, 0o600); err != nil {
+		log("control socket %s perms: %v", path, err)
+		l.Close()
+		os.Remove(path)
 		return
 	}
 	go func() { <-ctx.Done(); l.Close(); os.Remove(path) }()

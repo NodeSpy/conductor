@@ -81,6 +81,27 @@ func TestControlSocketWatchWithoutHub(t *testing.T) {
 	}
 }
 
+// Regression (#36 iso-review round 2, item 6): the control socket now serves
+// `retry --force-replay` (replays side effects) and `watch` (every run's live
+// events), so any local process reaching it is a privilege boundary. Like its
+// siblings (egress proxy, memory IPC) it must be 0600 — owner-only — not the
+// world-reachable mode net.Listen leaves behind under a default umask.
+func TestControlSocketIsOwnerOnly(t *testing.T) {
+	cfg, _ := manualCfg(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go serveControl(ctx, controlSockPath(cfg), nil, nil, nil, nil, nil, func(string, ...any) {})
+	waitForSock(t, controlSockPath(cfg))
+
+	fi, err := os.Stat(controlSockPath(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("control socket mode = %04o, want 0600 (any group/other bit lets another local user replay side effects)", perm)
+	}
+}
+
 func waitForSock(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
