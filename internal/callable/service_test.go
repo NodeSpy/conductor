@@ -572,3 +572,61 @@ func TestHMACSignatureBoundToPath(t *testing.T) {
 		t.Fatalf("cross-path signature status = %d, want 401 (signature must bind method+path)", w.Code)
 	}
 }
+
+// TestReplayGuardPrunesByAge proves the replay guard evicts entries by AGE, not
+// by count (#36 §146 F7): a key seen once is refused as a replay for the whole
+// skew window, then forgotten once the window passes — which is what keeps the
+// ring holding only still-fresh signatures instead of unbounded history. The
+// old count-only ring never forgot a key by time, so it would still report the
+// post-window presentation as a replay (returning false), failing this test.
+func TestReplayGuardPrunesByAge(t *testing.T) {
+	const window = 5 * time.Minute
+	g := newReplayGuard(1000) // large cap so only age eviction is in play
+	base := time.Unix(1_700_000_000, 0)
+
+	if !g.checkAndRecord("A", base, window) {
+		t.Fatal("first presentation of A should be accepted")
+	}
+	if g.checkAndRecord("A", base, window) {
+		t.Fatal("immediate replay of A must be refused")
+	}
+	if g.checkAndRecord("A", base.Add(4*time.Minute), window) {
+		t.Fatal("replay of A near the window edge must still be refused")
+	}
+	// Past the window A can no longer verify (freshTimestamp rejects its
+	// timestamp), so the guard forgets it and stops carrying dead weight.
+	if !g.checkAndRecord("A", base.Add(6*time.Minute), window) {
+		t.Fatal("A should be pruned by age once the window has passed")
+	}
+}
+
+// TestReplayGuardFreshSurvivesVolume is the F7 regression (#36 §146): a still-
+// fresh signature must NOT be evicted by a burst of other fresh signatures
+// within the same window. The old ring evicted strictly oldest-first by count
+// (cap 8192), so more than 8192 signed requests inside one skew window pushed a
+// still-valid signature out and reopened it to replay. With the raised cap and
+// age-based eviction, a high within-window volume leaves the victim recorded.
+func TestReplayGuardFreshSurvivesVolume(t *testing.T) {
+	const window = 5 * time.Minute
+	g := newReplayGuard(replayEntries)
+	base := time.Unix(1_700_000_000, 0)
+
+	if !g.checkAndRecord("victim", base, window) {
+		t.Fatal("first presentation of victim should be accepted")
+	}
+	// 20000 distinct fresh signatures, all inside the same window (spread over
+	// ~4 minutes): far past the old 8192 cap that would have evicted victim.
+	now := base
+	for i := 0; i < 20000; i++ {
+		now = now.Add(12 * time.Millisecond)
+		g.checkAndRecord("k"+strconv.Itoa(i), now, window)
+	}
+	// victim was recorded ~240s ago — still inside the 5-minute window, so it
+	// must still be refused as a replay.
+	if got := now.Sub(base); got >= window {
+		t.Fatalf("test setup: victim aged out (%s >= %s); tighten the spacing", got, window)
+	}
+	if g.checkAndRecord("victim", now, window) {
+		t.Fatal("F7: a still-fresh signature was evicted by within-window volume — replayable")
+	}
+}

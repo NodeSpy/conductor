@@ -49,13 +49,16 @@ const (
 const defaultMaxInflight = 64
 
 // defaultMaxSkew bounds a signed request's timestamp vs. the server clock, and
-// replayEntries bounds the recent-signature cache (#36 §13 review, item 4). The
-// skew window is the real replay bound — a signature stops verifying once it
-// passes — so the ring only needs to cover far more than a window of legitimate
-// traffic, not all history.
+// replayEntries is the memory backstop on the recent-signature cache (#36 §13
+// review, item 4). The skew window is the real replay bound — a signature stops
+// verifying once it passes — and the guard now evicts by AGE, so the cache holds
+// only signatures still inside the window. replayEntries only caps memory under
+// a pathological flood of distinct valid signatures within a single window; at
+// ~218 req/s sustained it still spans a full 5-minute window, far above any
+// legitimate signed-callback rate, so a burst can never evict a still-fresh key.
 const (
 	defaultMaxSkew = 5 * time.Minute
-	replayEntries  = 8192
+	replayEntries  = 65536
 )
 
 // Deps are the daemon-provided seams the service drives. Keeping them as
@@ -322,7 +325,7 @@ func (s *Service) authenticate(r *http.Request, body []byte) (*config.CallableTo
 		if !inbound.VerifySignedRequest(t.HMAC.Secret, ts, r.Method, r.URL.Path, body, sig, t.HMAC.Scheme) {
 			continue
 		}
-		if !s.replay.checkAndRecord(t.Name + "\x00" + strings.TrimSpace(sig)) {
+		if !s.replay.checkAndRecord(t.Name+"\x00"+strings.TrimSpace(sig), s.now(), s.maxSkew()) {
 			s.d.Log("callable: replayed signature refused for token %s (%s %s)", t.Name, r.Method, r.URL.Path)
 			return nil, false
 		}
@@ -339,15 +342,21 @@ func (s *Service) freshTimestamp(ts string) bool {
 	if err != nil {
 		return false
 	}
-	skew := s.d.Cfg.MaxSkew.D()
-	if skew <= 0 {
-		skew = defaultMaxSkew
-	}
 	diff := s.now().Sub(time.Unix(secs, 0))
 	if diff < 0 {
 		diff = -diff
 	}
-	return diff <= skew
+	return diff <= s.maxSkew()
+}
+
+// maxSkew is the configured timestamp-skew window, falling back to the default.
+// It is both the freshness bound and the replay guard's retention window.
+func (s *Service) maxSkew() time.Duration {
+	skew := s.d.Cfg.MaxSkew.D()
+	if skew <= 0 {
+		skew = defaultMaxSkew
+	}
+	return skew
 }
 
 // await polls the run's record until it reaches a terminal status or the
@@ -539,15 +548,30 @@ func (s *issuedSet) owner(id string) (string, bool) {
 	return o, ok
 }
 
-// replayGuard is a bounded set of recently-seen signature keys, so a signed
-// request cannot be replayed within the skew window (#36 §13 review, item 4).
-// It evicts oldest-first: the timestamp-skew window is the real replay bound, so
-// the ring only needs to hold far more than a window of legitimate signatures.
+// replayGuard is a set of recently-seen signature keys, so a signed request
+// cannot be replayed within the skew window (#36 §13 review, item 4).
+//
+// Eviction is by AGE, not by count: an entry older than the skew window can no
+// longer verify (freshTimestamp rejects its timestamp), so it is safe to forget,
+// and a signature still inside the window is NEVER dropped to make room. This
+// closes the sustained-volume hole — the old oldest-first-by-count ring evicted
+// a still-fresh signature once more than `max` arrived within one window,
+// reopening it to replay. The `max` cap now only bounds memory against a
+// pathological flood of distinct valid signatures inside a single window; if it
+// is ever hit the oldest (closest to expiry) entry is dropped and the caller
+// logs the refusal path as usual.
 type replayGuard struct {
 	mu   sync.Mutex
 	max  int
 	seen map[string]struct{}
-	ring []string
+	ring []replayItem
+}
+
+// replayItem is one recorded signature key with the time it was seen, so the
+// guard can prune by age.
+type replayItem struct {
+	key string
+	at  time.Time
 }
 
 func newReplayGuard(max int) *replayGuard {
@@ -558,19 +582,38 @@ func newReplayGuard(max int) *replayGuard {
 }
 
 // checkAndRecord returns true if key was UNSEEN (recording it), false if it is a
-// replay of a key still in the ring.
-func (g *replayGuard) checkAndRecord(key string) bool {
+// replay of a key still within the window. now is the current time and window is
+// the skew window (both supplied by the service so the guard shares its clock);
+// entries older than the window are pruned before the check.
+func (g *replayGuard) checkAndRecord(key string, now time.Time, window time.Duration) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	// Prune by age first: entries older than the window can no longer verify, so
+	// forgetting them keeps the ring holding only still-fresh signatures and
+	// stops stale volume from crowding out a valid one. ring is in insertion
+	// order, which is time order under the forward-moving service clock.
+	if window > 0 {
+		cutoff := now.Add(-window)
+		drop := 0
+		for drop < len(g.ring) && g.ring[drop].at.Before(cutoff) {
+			delete(g.seen, g.ring[drop].key)
+			drop++
+		}
+		if drop > 0 {
+			g.ring = g.ring[drop:]
+		}
+	}
 	if _, ok := g.seen[key]; ok {
 		return false
 	}
 	g.seen[key] = struct{}{}
-	g.ring = append(g.ring, key)
+	g.ring = append(g.ring, replayItem{key: key, at: now})
+	// Memory backstop only: >max distinct valid signatures within one window.
+	// The dropped entry is the oldest, i.e. the closest to expiring anyway.
 	if len(g.ring) > g.max {
 		old := g.ring[0]
 		g.ring = g.ring[1:]
-		delete(g.seen, old)
+		delete(g.seen, old.key)
 	}
 	return true
 }
