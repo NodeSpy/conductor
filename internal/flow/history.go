@@ -67,6 +67,7 @@ func (r *Runner) beginHistory(ctx context.Context, run store.WorkflowRun, t core
 		h.rec.RetryOf = retryOf
 	}
 	h.persist()
+	h.emit("run_started", "", "running", "", 0)
 	return context.WithValue(ctx, histKey{}, h), h
 }
 
@@ -88,6 +89,7 @@ func (h *histRec) stepStart(id string, idx int) {
 	h.mu.Lock()
 	h.step(id, idx).Started = time.Now()
 	h.mu.Unlock()
+	h.emit("step_started", id, "running", "", 0)
 }
 
 // stepDone records a step's outcome. outputs are persisted in checkpoint
@@ -107,8 +109,10 @@ func (h *histRec) stepDone(id string, idx int, step config.Step, status string, 
 	if !s.Started.IsZero() {
 		s.DurationMS = time.Since(s.Started).Milliseconds()
 	}
+	dur := s.DurationMS
 	h.mu.Unlock()
 	h.persist()
+	h.emit("step_done", id, status, errStr, dur)
 }
 
 // setInputs attaches a step's rendered inputs (already template-resolved),
@@ -161,6 +165,7 @@ func (h *histRec) finish(status, errStr, failedStep string, acc *costAcc) {
 	h.rec.Tokens, h.rec.CostUSD, h.rec.ApproxCost = acc.totals()
 	h.mu.Unlock()
 	h.persist()
+	h.emit("run_done", failedStep, status, errStr, 0)
 }
 
 // persist writes the record (best-effort: a failing history write never

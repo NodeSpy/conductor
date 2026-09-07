@@ -11,6 +11,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/expr"
+	"github.com/NodeSpy/conductor/internal/gitdiff"
 	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/store"
@@ -180,7 +181,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			// Without one (none configured, or resolution came up empty), keep today's
 			// behavior: tell you to drive the agent in paseo.
 			if handoffCh != nil && e.broker != nil && ref.AgentID != "" {
-				e.startReviewHandoff(ctx, t, id, profile, ref.AgentID, handoffCh)
+				e.startReviewHandoff(ctx, t, id, profile, ref, handoffCh)
 			} else {
 				e.notif.Emit(ctx, notify.EventNeedsInput, t,
 					fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
@@ -218,7 +219,8 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 // resolved or the agent can't be bound, it falls back to today's behavior
 // (notify you to open the agent in paseo). Only invoked when ch and the broker
 // are configured.
-func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID string, profile config.AgentProfile, agentID string, ch handoff.Channel) {
+func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID string, profile config.AgentProfile, ref dispatch.RunRef, ch handoff.Channel) {
+	agentID := ref.AgentID
 	fallback := func(reason string) {
 		if reason != "" {
 			e.log("%s review hand-off: %s — leaving agent %s live in paseo", tag(t), reason, agentID)
@@ -250,8 +252,22 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID 
 		Repo:   t.Target.Repo,
 		Number: t.Target.Number,
 	}
+	// Diff preview (#36 §17): every presentation of this hand-off carries the
+	// agent's CURRENT proposed diff, read live from its worktree — the draft
+	// is a real diff, not just prose. Remote/worktree-less runs present prose
+	// only (there is no local path to read).
+	var refresh func(*handoff.Draft)
+	if wd := ref.Workdir; wd != "" {
+		refresh = func(d *handoff.Draft) {
+			diff, derr := gitdiff.Proposed(ctx, wd, 48<<10)
+			if derr != nil || strings.TrimSpace(diff) == "" {
+				return
+			}
+			d.Body += "\n\n--- proposed diff (live) ---\n" + e.redact(diff)
+		}
+	}
 	go func() {
-		dec, rerr := handoff.Review(ctx, sess, ch, draft, notifyRef)
+		dec, rerr := handoff.Review(ctx, sess, ch, draft, notifyRef, refresh)
 		if rerr != nil {
 			if ctx.Err() == nil {
 				e.log("%s review hand-off loop for %q ended: %v", tag(t), stepID, rerr)

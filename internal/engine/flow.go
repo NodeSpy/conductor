@@ -372,7 +372,7 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			e.hold.Add(ref.AgentID)
 			ch := e.askChannelFor(handoffConn)
 			if ch != nil && e.broker != nil && ref.AgentID != "" {
-				e.startReviewHandoff(ctx, t, stepID, p, ref.AgentID, ch)
+				e.startReviewHandoff(ctx, t, stepID, p, ref, ch)
 				return
 			}
 			e.notif.Emit(ctx, notify.EventNeedsInput, t,

@@ -1,11 +1,52 @@
-# Execution history & retry-from-step
+# Execution history, live watch & retry-from-step
 
-Every connectors-model run is fully inspectable after the fact (#36 §20) —
-not just the audit summary: per-step **inputs**, **outputs**, **status**,
-**timing**, and **cost**, plus the pinned trigger a user-driven retry
-re-runs from. This extends the crash-resume checkpoint machinery into a
-deliberate operation, and it is the data layer a future run-inspector UI
-would render — usable from the CLI now.
+Every connectors-model run is fully inspectable (#36 §20/§17) — live while
+it runs and after the fact: per-step **inputs**, **outputs**, **status**,
+**timing**, **cost**, and the agent's **proposed diff**, plus the pinned
+trigger a user-driven retry re-runs from. This extends the crash-resume
+checkpoint machinery into a deliberate operation, and it is the data layer a
+future run-inspector UI would render — usable from the CLI now.
+
+## Watching live
+
+```
+conductor watch                 # every run: steps, gates, outcomes as they happen
+conductor watch <run-id>        # one run (a history id, or a workflow-run id)
+conductor watch --json          # raw JSONL for tooling
+```
+
+`watch` tails the daemon's run event stream over the control socket:
+`run_started`, `step_started` / `step_done` (status + duration), `gate`
+rounds (pass / fail / revise / escalated), `run_done`. Events piggyback on
+the history recorder, so the live view shows exactly what the run record
+persists; shadow/dry runs emit nothing, and a slow watcher loses events
+rather than stalling runs (the record stays lossless).
+
+## The proposed diff
+
+A foreground agent step with a local worktree captures its **proposed
+change** when it finishes — `git diff HEAD` (uncommitted) plus committed-but-
+unpushed work — secret-scrubbed and clipped (64 KiB):
+
+- it lands in the step's outputs as `{{.<id>.diff}}` (with `{{.<id>.workdir}}`
+  beside it), so a later step can
+  present it for approval before anything applies it:
+
+  ```yaml
+  steps:
+    - { id: fix, type: agent, agent: fixer, prompt: "…" }
+    - { id: ok, uses: slack-ops.ask, options: { prompt: "Apply?\n{{.fix.diff}}" } }
+    - { id: push, if: "{{.ok.action}} == approve", type: command,
+        command: ["git", "-C", "{{.fix.workdir}}", "push"] }
+  ```
+
+- the run record persists it with the step (timeline + diff + cost);
+- an interactive review hand-off presents it live: every presentation of the
+  draft carries the agent's CURRENT worktree diff — the draft is a real
+  diff, not just prose (see [[Hand-offs]]).
+
+Remote runtimes and `checkout: none` runs have no local worktree — no diff
+is captured there.
 
 ## Inspecting
 

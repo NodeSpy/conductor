@@ -104,7 +104,7 @@ func TestControlSocketRun(t *testing.T) {
 		defer mu.Unlock()
 		emitted = append(emitted, tr)
 	}
-	go serveControl(ctx, controlSockPath(cfg), nil, emit, manualTriggersByName(cfg), nil, func(string, ...any) {})
+	go serveControl(ctx, controlSockPath(cfg), nil, emit, manualTriggersByName(cfg), nil, nil, func(string, ...any) {})
 
 	// Wait for the socket to exist.
 	deadline := time.Now().Add(3 * time.Second)
@@ -160,7 +160,7 @@ func TestCmdRunTriggerCLI(t *testing.T) {
 		defer mu.Unlock()
 		emitted = append(emitted, tr)
 	}
-	go serveControl(ctx, controlSockPath(cfg), nil, emit, manualTriggersByName(cfg), nil, func(string, ...any) {})
+	go serveControl(ctx, controlSockPath(cfg), nil, emit, manualTriggersByName(cfg), nil, nil, func(string, ...any) {})
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(controlSockPath(cfg)); err == nil {

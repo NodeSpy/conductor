@@ -32,6 +32,7 @@ type flowStack struct {
 	SecretVals   map[string]string
 	Registry     *connector.Registry
 	Runner       *flow.Runner
+	Events       *flow.EventHub
 	Integrations []core.Integration
 	SecretErrs   []string
 	// ConnectorErrs names each connector disabled by a credential/build
@@ -138,14 +139,15 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		igs = append(igs, src)
 	}
 
+	events := flow.NewEventHub()
 	runner := flow.New(flow.Runner{
 		Cfg: cfg, Conns: reg, Secrets: sec, SecretVals: vals,
 		VaultVals: vaults.PreloadListable(context.Background()),
 		Store:     flowStore, Notif: flowNotif, Log: logf, DryRun: dryRun,
-		Blobs: blobs,
+		Blobs: blobs, Events: events,
 	})
 	return &flowStack{
-		Secrets: sec, SecretVals: vals, Registry: reg, Runner: runner,
+		Secrets: sec, SecretVals: vals, Registry: reg, Runner: runner, Events: events,
 		Integrations: igs, SecretErrs: secretErrs, ConnectorErrs: connErrs,
 	}, nil
 }

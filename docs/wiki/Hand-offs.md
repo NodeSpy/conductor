@@ -60,3 +60,10 @@ type (its dm/thread target becomes the connector's default `options:`) and
 stamps the default entry's name onto background steps that named none.
 
 Related: [[Verbs]] · [[Connectors]] · [[Runtimes]] · [[Workflows]]
+
+## Diff preview
+
+When the reviewed agent works in a local worktree, every presentation of the
+hand-off draft appends its **current proposed diff** (uncommitted + unpushed,
+secret-scrubbed, clipped) — refreshed at each present, so after a revision
+you see the revised change, not the stale one. See [[Runs]] (#36 §17).

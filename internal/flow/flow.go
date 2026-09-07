@@ -19,6 +19,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/expr"
+	"github.com/NodeSpy/conductor/internal/gitdiff"
 	"github.com/NodeSpy/conductor/internal/hosts"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/secrets"
@@ -103,6 +104,9 @@ type Runner struct {
 	// binary IO stages through it and a run's blobs are GC'd with the run.
 	// nil = no binary handling (binary-declaring verbs then error plainly).
 	Blobs *blob.Store
+	// Events is the live-observability hub (#36 §17): recorded runs publish
+	// run/step/gate events `conductor watch` streams. nil = no events.
+	Events *EventHub
 	// DryRun stubs every outbound verb and agent/command dispatch (replay).
 	DryRun bool
 	// sleep is injectable for retry tests.
@@ -1221,6 +1225,21 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 			return outputs, ref.Output, gerr
 		}
 		outputs["gate"] = map[string]any{"passed": true, "rounds": rounds}
+	}
+	// Diff preview (#36 §17): the PROPOSED change (uncommitted + unpushed)
+	// read from the agent's worktree lands in the step's outputs — later
+	// steps can present it on an ask verb ({{.<id>.diff}}) for approval
+	// before anything applies it, and the run record persists it (scrubbed,
+	// clipped) with the step timeline and cost. Best-effort: an unreadable
+	// worktree never fails a step that already succeeded.
+	if !shadow && !step.Background && ref.Workdir != "" && !inGate(ctx) {
+		outputs["workdir"] = ref.Workdir
+		if diff, derr := gitdiff.Proposed(ctx, ref.Workdir, 0); derr == nil && diff != "" {
+			if r.Secrets != nil {
+				diff = r.Secrets.Redact(diff)
+			}
+			outputs["diff"] = diff
+		}
 	}
 	// The plan output contract (#36 §11): a plan: block in the final output
 	// is validated, guarded by policy.agent_authored, and executed through

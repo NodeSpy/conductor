@@ -80,7 +80,7 @@ func TestReviewReviseThenApprove(t *testing.T) {
 		{Action: ActionApprove},
 	}}
 
-	dec, err := Review(context.Background(), sess, ch, Draft{Title: "Review", Body: "draft v1"}, nil)
+	dec, err := Review(context.Background(), sess, ch, Draft{Title: "Review", Body: "draft v1"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestReviewReviseThenApprove(t *testing.T) {
 func TestReviewDiscardCancels(t *testing.T) {
 	sess := &fakeSession{}
 	ch := &scriptChannel{decisions: []Decision{{Action: ActionDiscard}}}
-	dec, err := Review(context.Background(), sess, ch, Draft{Body: "x"}, nil)
+	dec, err := Review(context.Background(), sess, ch, Draft{Body: "x"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,5 +127,36 @@ func TestReviewDiscardCancels(t *testing.T) {
 	}
 	if len(sess.prompts) != 0 {
 		t.Fatalf("discard must not send any turn, got %v", sess.prompts)
+	}
+}
+
+// The diff-preview hook (#36 §17): refresh decorates the PRESENTED copy
+// before each Present — every presentation carries the CURRENT diff, and the
+// loop's own body (the agent's text) never accumulates stale copies.
+func TestReviewRefreshDecoratesEachPresentation(t *testing.T) {
+	sess := &fakeSession{replies: []string{"draft v2"}}
+	ch := &scriptChannel{decisions: []Decision{
+		{Action: ActionRevise, Text: "tighten"},
+		{Action: ActionApprove},
+	}}
+	n := 0
+	refresh := func(d *Draft) {
+		n++
+		d.Body += "\n--- diff v" + string(rune('0'+n)) + " ---"
+	}
+	dec, err := Review(context.Background(), sess, ch, Draft{Body: "draft v1"}, nil, refresh)
+	if err != nil || dec.Action != ActionApprove {
+		t.Fatalf("review: %+v %v", dec, err)
+	}
+	if len(ch.presented) != 2 {
+		t.Fatalf("presentations: %d", len(ch.presented))
+	}
+	// First presentation: original body + diff v1.
+	if ch.presented[0].Body != "draft v1\n--- diff v1 ---" {
+		t.Fatalf("first: %q", ch.presented[0].Body)
+	}
+	// Second: the REVISED body + the refreshed diff — no stale v1 diff stacked.
+	if ch.presented[1].Body != "draft v2\n--- diff v2 ---" {
+		t.Fatalf("second: %q", ch.presented[1].Body)
 	}
 }

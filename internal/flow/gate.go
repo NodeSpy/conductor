@@ -80,12 +80,14 @@ func (r *Runner) runGate(ctx context.Context, t core.Trigger, step config.Step, 
 		if len(failures) == 0 {
 			r.audit(map[string]any{"event": "gate", "repo": t.Target.Repo, "number": t.Target.Number,
 				"kind": t.Kind, "step": id, "agent": step.Agent, "round": round, "outcome": "pass"})
+			histFrom(ctx).emit("gate", id, "pass", "", 0)
 			return round, nil
 		}
 		names := failureNames(failures)
 		r.audit(map[string]any{"event": "gate", "repo": t.Target.Repo, "number": t.Target.Number,
 			"kind": t.Kind, "step": id, "agent": step.Agent, "round": round,
 			"failed": names, "outcome": "fail"})
+		histFrom(ctx).emit("gate", id, "fail", strings.Join(names, ", "), 0)
 		if round >= maxRev {
 			return round, r.escalateGate(ctx, t, step, id, failures, round)
 		}
@@ -100,6 +102,7 @@ func (r *Runner) runGate(ctx context.Context, t core.Trigger, step config.Step, 
 		r.audit(map[string]any{"event": "gate", "repo": t.Target.Repo, "number": t.Target.Number,
 			"kind": t.Kind, "step": id, "agent": step.Agent, "round": round,
 			"failed": names, "outcome": "revise"})
+		histFrom(ctx).emit("gate", id, "revise", "", 0)
 	}
 }
 
@@ -121,6 +124,7 @@ func (r *Runner) escalateGate(ctx context.Context, t core.Trigger, step config.S
 	r.audit(map[string]any{"event": "gate", "repo": t.Target.Repo, "number": t.Target.Number,
 		"kind": t.Kind, "step": id, "agent": step.Agent, "round": round,
 		"failed": failureNames(fails), "outcome": "escalated"})
+	histFrom(ctx).emit("gate", id, "escalated", names, 0)
 	return fmt.Errorf("gate failed: %s (after %d revision round(s))", names, round)
 }
 

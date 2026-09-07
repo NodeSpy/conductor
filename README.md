@@ -582,17 +582,25 @@ the paseo CLI exposes no MCP launch surface today, so a `skill:` profile on
 a paseo runtime is inert and `conductor validate` says so. Details: the
 Agent-Skill wiki page.
 
-## Execution history & retry
+## Execution history, live watch & retry
 
 Every run leaves a full record — per-step inputs / outputs / status / timing
-/ cost, secret-scrubbed like the crash-resume checkpoints:
+/ cost, secret-scrubbed like the crash-resume checkpoints — and streams live
+while it runs:
 
 ```
+conductor watch                         # live: steps, gate rounds, outcomes as they happen
 conductor runs                          # recent executions: status, trigger, cost
 conductor runs <id>                     # one run's step-by-step detail
 conductor runs retry <id>               # re-run from the recorded failed step
 conductor runs retry <id> --from build  # …or from a chosen step
 ```
+
+A foreground agent step also captures its **proposed diff** (uncommitted +
+unpushed, from its worktree, scrubbed + clipped) into its outputs
+(`{{.<id>.diff}}` — present it on an ask verb for approve-before-apply) and
+into the run record; an interactive review hand-off shows the live diff on
+every presentation.
 
 A retry pins the recorded outputs of every earlier successful step into
 scope — those steps don't re-run — and resumes through the ordinary flow

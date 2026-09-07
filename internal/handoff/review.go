@@ -22,10 +22,19 @@ const submitPrompt = "The reviewer approved this draft as-is — submit/post it 
 // The draft's Body is refreshed from each revision turn's streamed output, so you
 // iterate with the agent through the same channel until you approve or discard.
 // notify (may be nil) is called with each presentation's Ref so the caller can
-// tell you where the draft is waiting. Returns the terminal Decision.
-func Review(ctx context.Context, sess controller.Session, ch Channel, draft Draft, notify func(ref string)) (Decision, error) {
+// tell you where the draft is waiting. refresh (may be nil) decorates the
+// PRESENTED copy of the draft just before each Present — the diff-preview hook
+// (#36 §17): the caller appends the agent's CURRENT proposed worktree diff, so
+// every presentation shows a real diff, not just prose, without the loop's own
+// Body (the agent's text) accumulating stale copies. Returns the terminal
+// Decision.
+func Review(ctx context.Context, sess controller.Session, ch Channel, draft Draft, notify func(ref string), refresh func(*Draft)) (Decision, error) {
 	for {
-		pres, err := ch.Present(ctx, draft)
+		presented := draft
+		if refresh != nil {
+			refresh(&presented)
+		}
+		pres, err := ch.Present(ctx, presented)
 		if err != nil {
 			return Decision{}, err
 		}
