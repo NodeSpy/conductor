@@ -71,6 +71,12 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 			if class == "agent" {
 				res.subAgents++
 			}
+			if class == "team" {
+				// A team is a fleet: planner + reconciler + up to max_workers
+				// workers (the critic runs as a gate check per worker), all
+				// counted against the plan's sub-agent budget.
+				res.subAgents += 2 + step.Team.MaxWorkersOrDefault()
+			}
 			if !pol.TrustFull() {
 				switch {
 				case matchAny(pol.Approve, class):
@@ -209,6 +215,8 @@ func stepClass(cfg *config.Config, step *config.Step) string {
 	switch step.Form() {
 	case "workflow":
 		return "workflow"
+	case "team":
+		return "team"
 	case "agent":
 		return "agent"
 	case "command":

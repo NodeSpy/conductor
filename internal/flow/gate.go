@@ -135,6 +135,10 @@ func (r *Runner) runGateChecks(ctx context.Context, t core.Trigger, stepID strin
 	var failures []gateCheckResult
 	for _, name := range spec.Run {
 		chk, ok := r.Cfg.Checks[name]
+		if !ok {
+			// A team step's ephemeral checks (the critic) ride the context.
+			chk, ok = teamCheck(ctx, name)
+		}
 		if !ok { // load-validated; belt for dynamic plans
 			failures = append(failures, gateCheckResult{Name: name, Detail: "unknown check"})
 			continue

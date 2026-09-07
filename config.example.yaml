@@ -384,6 +384,28 @@ hosts:
 #     outcome_feedback: true    # append a one-line track record to the agent's guidance
 
 # ---------------------------------------------------------------------------
+# team: — multi-agent on ONE task (#36 §19): a planner decomposes the step's
+# prompt into subtasks (schema-enforced), workers run them in parallel
+# isolated worktrees (their profiles' isolation: applies), a critic judges
+# each result through the gate machinery (revise loop included), and a
+# reconciler (default: the planner) merges. Distinct from for_each/parallel.
+# The step's own gate: checks the reconciler's merged change.
+# ---------------------------------------------------------------------------
+# triggers:
+#   - on: gh.issue_matched
+#     filters: { labels_any: [epic] }
+#     steps:
+#       - id: feature
+#         prompt: "Implement the feature described in {{.url}}"
+#         team:
+#           planner: architect
+#           worker: implementer
+#           critic: reviewer          # optional judge per worker
+#           reconcile: architect      # optional; defaults to the planner
+#           max_workers: 4            # subtask cap AND parallelism (1..16)
+#           gate: { run: [ test ] }   # optional explicit checks per worker
+
+# ---------------------------------------------------------------------------
 # runtimes: — where agents run (previously controllers:). The paseo runtime's
 # bin: replaces the old top-level paseo_bin. Any runtime may set host: to run
 # on a hosts: entry over SSH — a remote paseo runs its whole CLI there (put

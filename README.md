@@ -466,6 +466,24 @@ agent steps or as trigger/workflow defaults; checks run in the agent's
 worktree with `{{.gate.*}}` scope. See the
 [Gates wiki page](../../wiki/Gates).
 
+## Multi-agent teams
+
+A `team:` step splits ONE task across agents — a planner decomposes it into
+subtasks, workers implement them in parallel isolated worktrees, a critic
+judges each result (the gate machinery: verdicts, revise loops, escalation),
+and a reconciler merges the work into one change:
+
+```yaml
+steps:
+  - id: feature
+    prompt: "Implement the feature in {{.url}}"
+    team: { planner: architect, worker: implementer, critic: reviewer, max_workers: 4 }
+```
+
+Distinct from `for_each`/`parallel` (many events over one step). Budgets,
+cost, isolation, gates, history, and outcomes all apply per role. See the
+[Teams wiki page](../../wiki/Teams).
+
 ## The outcome loop
 
 Conductor learns from what lands: PR merged / closed / **reverted** (via

@@ -731,6 +731,8 @@ func (r *Runner) execStep(ctx context.Context, t core.Trigger, step config.Step,
 		return r.execAgent(ctx, t, step, id, data, shadow)
 	case "command":
 		return r.execCommand(ctx, t, step, id, data, shadow)
+	case "team":
+		return r.execTeam(ctx, t, step, id, data, shadow)
 	}
 	return nil, "", fmt.Errorf("step %q has no recognizable form", id)
 }

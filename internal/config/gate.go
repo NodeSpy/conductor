@@ -84,8 +84,10 @@ func (c *Config) validateStepGate(w string, s Step) error {
 	if s.Gate == nil {
 		return nil
 	}
-	if s.Form() != "agent" {
-		return fmt.Errorf("config: %s: gate: applies to agent steps only (this is a %s step) — a gate checks an agent's PROPOSED change", w, orIndeterminate(s.Form()))
+	// On a team step the gate applies to the RECONCILER's merged change; the
+	// workers' gate lives inside team: (gate + critic).
+	if s.Form() != "agent" && s.Form() != "team" {
+		return fmt.Errorf("config: %s: gate: applies to agent (or team) steps only (this is a %s step) — a gate checks an agent's PROPOSED change", w, orIndeterminate(s.Form()))
 	}
 	if s.Background {
 		return fmt.Errorf("config: %s: gate: cannot apply to a background agent — the interactive hand-off IS its review; gate foreground steps", w)
@@ -104,4 +106,30 @@ func (c *Config) checkNames() string {
 	}
 	sort.Strings(names)
 	return strings.Join(names, ", ")
+}
+
+// validateTeam checks a team: step's shape (#36 §19).
+func (c *Config) validateTeam(w string, ts *TeamSpec) error {
+	if ts == nil {
+		return nil
+	}
+	roles := []struct{ role, name string }{
+		{"planner", ts.Planner}, {"worker", ts.Worker},
+		{"critic", ts.Critic}, {"reconcile", ts.Reconcile},
+	}
+	for _, r := range roles {
+		if r.name == "" {
+			if r.role == "planner" || r.role == "worker" {
+				return fmt.Errorf("config: %s: team needs `%s:` (an agents: profile)", w, r.role)
+			}
+			continue
+		}
+		if _, ok := c.Agents[r.name]; !ok {
+			return fmt.Errorf("config: %s: team.%s names unknown agent %q", w, r.role, r.name)
+		}
+	}
+	if ts.MaxWorkers < 0 || ts.MaxWorkers > 16 {
+		return fmt.Errorf("config: %s: team.max_workers must be 1..16 (0 = default %d)", w, DefaultTeamMaxWorkers)
+	}
+	return c.validateGate(w+" team", ts.Gate)
 }

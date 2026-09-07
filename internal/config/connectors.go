@@ -517,6 +517,10 @@ type Step struct {
 	// (bounded), then escalates. Agent-form foreground steps only.
 	Gate *GateSpec `yaml:"gate,omitempty"`
 
+	// Team splits this step's prompt across a planner / parallel workers /
+	// critic / reconciler (#36 §19). Uses the step's prompt as the task.
+	Team *TeamSpec `yaml:"team,omitempty"`
+
 	Backend string `yaml:"backend,omitempty"` // dispatch backend override (carried from legacy)
 	Shadow  *bool  `yaml:"shadow,omitempty"`
 }
@@ -539,6 +543,48 @@ type GateSpec struct {
 // DefaultGateMaxRevisions bounds the gate revise loop when unset.
 const DefaultGateMaxRevisions = 3
 
+// TeamSpec is the multi-agent team step (#36 §19): ONE unit of work split
+// across agents — a planner decomposes it into subtasks, workers run them in
+// parallel isolated worktrees (§15 isolation via their profiles), a critic
+// judges each worker's result (through the §16 gate machinery, revise loop
+// included), and a reconciler merges. Distinct from for_each/parallel, which
+// fan MANY events/items over the same step.
+type TeamSpec struct {
+	// Planner decomposes the step's prompt into subtasks (an agents: name).
+	Planner string `yaml:"planner"`
+	// Worker is the profile each subtask dispatches on.
+	Worker string `yaml:"worker"`
+	// Critic (optional) judges each worker's result: it runs as an implicit
+	// gate check (pass: true|false verdict) with the gate's revise loop.
+	Critic string `yaml:"critic,omitempty"`
+	// Reconcile merges the workers' results (defaults to the planner).
+	Reconcile string `yaml:"reconcile,omitempty"`
+	// MaxWorkers bounds the subtask fan-out AND the parallelism (default 4).
+	MaxWorkers int `yaml:"max_workers,omitempty"`
+	// Gate adds explicit checks (from checks:) to every worker, beside the
+	// implicit critic check.
+	Gate *GateSpec `yaml:"gate,omitempty"`
+}
+
+// DefaultTeamMaxWorkers bounds a team's fan-out when unset.
+const DefaultTeamMaxWorkers = 4
+
+// MaxWorkersOrDefault returns the team's fan-out bound.
+func (ts *TeamSpec) MaxWorkersOrDefault() int {
+	if ts != nil && ts.MaxWorkers > 0 {
+		return ts.MaxWorkers
+	}
+	return DefaultTeamMaxWorkers
+}
+
+// ReconcilerOrPlanner returns the merging agent (default: the planner).
+func (ts *TeamSpec) ReconcilerOrPlanner() string {
+	if ts.Reconcile != "" {
+		return ts.Reconcile
+	}
+	return ts.Planner
+}
+
 // MaxRevisionsOrDefault returns the gate's revise bound.
 func (g *GateSpec) MaxRevisionsOrDefault() int {
 	if g != nil && g.MaxRevisions != nil {
@@ -551,6 +597,8 @@ func (g *GateSpec) MaxRevisionsOrDefault() int {
 // "workflow", "parallel", or "" when indeterminate.
 func (s Step) Form() string {
 	switch {
+	case s.Team != nil:
+		return "team"
 	case s.Uses != "":
 		return "verb"
 	case s.Workflow != "":
@@ -1097,8 +1145,8 @@ func validateSteps(where string, steps []Step, c *Config) error {
 func validateStep(w string, s Step, c *Config) error {
 	forms := 0
 	for _, set := range []bool{
-		s.Uses != "", s.Workflow != "", s.Run != "",
-		s.Type == "agent" || (s.Type == "" && s.Agent != "" && s.Uses == "" && s.Workflow == ""),
+		s.Uses != "", s.Workflow != "", s.Run != "", s.Team != nil,
+		s.Type == "agent" || (s.Type == "" && s.Agent != "" && s.Uses == "" && s.Workflow == "" && s.Team == nil),
 		s.Type == "command" || (s.Type == "" && len(s.Command) > 0),
 	} {
 		if set {
@@ -1124,6 +1172,9 @@ func validateStep(w string, s Step, c *Config) error {
 	}
 	if c != nil {
 		if err := c.validateStepGate(w, s); err != nil {
+			return err
+		}
+		if err := c.validateTeam(w, s.Team); err != nil {
 			return err
 		}
 	}

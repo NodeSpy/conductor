@@ -21,6 +21,7 @@ The model
 - [[Agent-Skill]]
 - [[Policy]]
 - [[Gates]]
+- [[Teams]]
 - [[Outcomes]]
 - [[Cost-Accounting]]
 - [[Secrets]]

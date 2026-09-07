@@ -66,7 +66,7 @@ func TestGateValidation(t *testing.T) {
 		{"unknown check", agentStep(&GateSpec{Run: []string{"ghost"}}), "unknown check"},
 		{"bad require", agentStep(&GateSpec{Run: []string{"test"}, Require: "any"}), "require must be"},
 		{"neg revisions", agentStep(&GateSpec{Run: []string{"test"}, MaxRevisions: &neg}), "max_revisions"},
-		{"gate on verb step", Step{ID: "v", Uses: "gh.comment", Gate: &GateSpec{Run: []string{"test"}}}, "agent steps only"},
+		{"gate on verb step", Step{ID: "v", Uses: "gh.comment", Gate: &GateSpec{Run: []string{"test"}}}, "agent (or team) steps only"},
 		{"gate on background", Step{ID: "b", Type: "agent", Agent: "fixer", Prompt: "p", Background: true,
 			Gate: &GateSpec{Run: []string{"test"}}}, "background agent"},
 	}
