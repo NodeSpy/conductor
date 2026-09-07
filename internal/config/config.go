@@ -493,6 +493,9 @@ type ControllerConfig struct {
 	// its whole CLI (and reaper) remotely, and opencode's server is reached
 	// through an ssh -W stdio forward — see checkRemoteHostSupport.
 	Host string `yaml:"host"`
+	// Isolation wraps this runtime's launches in the per-dispatch sandbox
+	// (#36 §15) — carried from the `runtimes:` form; see RuntimeConfig.
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
 }
 
 // EffectiveTransport returns the controller's transport, defaulting to acp for an
@@ -597,6 +600,11 @@ type AgentProfile struct {
 	// into conductor over the daemon socket for verbs-as-tools and the secret
 	// broker. Absent → the agent gets neither (deny by default).
 	Skill *SkillPolicy `yaml:"skill"`
+	// Isolation sandboxes this agent's launches (#36 §15): a low-privilege
+	// user, Linux namespaces/cgroups, or a container, plus the network egress
+	// policy. Wins over the runtime's own isolation:. Requires a runtime
+	// conductor launches itself (acp/cli/opencode/agent-deck — not paseo).
+	Isolation *IsolationConfig `yaml:"isolation"`
 }
 
 // SkillPolicy is the per-profile `skill:` block (#36 §12): which of
@@ -1203,6 +1211,9 @@ func (c *Config) Validate() error {
 			if _, ok := c.Hosts[p.Host]; !ok {
 				return fmt.Errorf("config: agent %q: unknown host %q (defined: %s)", name, p.Host, c.hostNames())
 			}
+		}
+		if err := c.validateProfileIsolation(name, p); err != nil {
+			return err
 		}
 		if p.Skill != nil {
 			switch p.Skill.SecretsVia {

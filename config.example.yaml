@@ -208,9 +208,52 @@ connectors:
 # hosts: — named SSH targets. Reference one with `host:` from a code step, a
 # command step, an agent profile, or a cli/acp runtime; conductor runs the
 # work there via the system ssh (key auth + known_hosts, BatchMode).
+# A host may carry isolation: (modes user/namespace) — every script it runs,
+# including policy.agent_authored.host sandbox code, executes de-privileged
+# on the remote box. See the Isolation wiki page.
 # ---------------------------------------------------------------------------
 hosts:
   build-box: { host: build01.internal, user: ci, key: ~/.ssh/id_ed25519 }
+  # sandbox:
+  #   host: sandbox.internal
+  #   user: ci
+  #   isolation: { mode: user, user: agents }   # sudo -n -u agents on the box
+
+# ---------------------------------------------------------------------------
+# isolation: — per-dispatch sandboxing (#36 §15) for the runtimes conductor
+# launches ITSELF (acp / cli / opencode / agent-deck — not paseo: its agents
+# are the paseo daemon's children, and validate rejects the combination).
+# Settable on a runtime (all its launches) or an agent profile (wins).
+#
+#   mode: user       — run as a low-privilege user (sudo -n -u <user>);
+#                      any Unix with the sudoers rule.
+#   mode: namespace  — Linux user/pid/mount namespaces (unshare), cgroup
+#                      limits: via systemd-run; network: {deny: true} adds
+#                      a network namespace (structurally no network).
+#   mode: container  — docker/podman run with the worktree bind-mounted;
+#                      deny: true → --network=none.
+#
+# network.egress routes the runtime's HTTP(S) traffic through conductor's
+# loopback filtering proxy: listed "host[:port]" / "*.glob[:port]" targets
+# pass, everything else is 403'd + audited (event: egress_denied). An empty
+# network: {} is deny-all. Agent-authored dispatches (§11 plans) get the
+# deny-all proxy BY DEFAULT, with or without an isolation: block — an
+# explicit egress: list on the profile opts targets back in.
+# ---------------------------------------------------------------------------
+# runtimes:
+#   gemini:
+#     agent: gemini                        # acp transport — conductor launches it
+#     isolation:
+#       mode: namespace
+#       limits: { memory: 2g, cpu: 200%, pids: 256 }
+#       network: { egress: [ "api.github.com:443", "*.googleapis.com:443" ] }
+# agents:
+#   risky-fixer:
+#     runtime: gemini
+#     isolation:                           # profile-level: wins over the runtime's
+#       mode: user
+#       user: sandboxagent
+#       network: {}                        # deny-all egress, audited
 
 # ---------------------------------------------------------------------------
 # stores: — named data stores in two families. KV types (boltdb/redis/http)

@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // sshConnectionErrorExit is the exit code OpenSSH's client reserves for its
@@ -181,7 +182,18 @@ func (c *Client) Script(ctx context.Context, t Target, script string, stdin []by
 		wrapped = envStdinPrelude + wrapped
 		stdin = append([]byte(pre+"\n"), stdin...)
 	}
+	// A host with isolation: runs every script de-privileged ON the remote
+	// box (#36 §15): the sandbox prefix (sudo -n -u … / unshare …) execs the
+	// same `sh -c '<script>'` the plain path would. Config validation
+	// restricts host isolation to the modes that work over a bare ssh
+	// channel (user/namespace).
 	remote := "sh -c " + shQuote(wrapped)
+	if t.Cfg.Isolation != nil {
+		var err error
+		if remote, err = sandbox.FromConfig(t.Cfg.Isolation).WrapRemote(wrapped); err != nil {
+			return Result{}, fmt.Errorf("hosts: %s: %w", t.label(), err)
+		}
+	}
 	argv := c.Args(t, remote)
 
 	stdout, stderr, exitCode, err := c.run()(ctx, argv, stdin)

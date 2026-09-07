@@ -49,7 +49,13 @@ type Request struct {
 	// gets a PR/branch worktree when there's repo context (PR-centric), else its own
 	// dedicated workspace.
 	Interactive bool
-	Data        map[string]any // extra template vars (e.g. prior step outputs)
+	// AgentAuthored marks a dispatch that came out of an agent-authored plan
+	// (#36 §11) rather than operator config. Conductor-launched runtimes give
+	// such a dispatch deny-by-default network (#36 §15): unless the profile's
+	// isolation names an explicit network policy, the launch is routed through
+	// the deny-all egress proxy.
+	AgentAuthored bool
+	Data          map[string]any // extra template vars (e.g. prior step outputs)
 }
 
 // RunRef is the outcome of a dispatch.

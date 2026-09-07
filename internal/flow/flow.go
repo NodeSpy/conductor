@@ -1110,6 +1110,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	req := dispatch.Request{
 		Trigger: t, Action: act, Profile: profile, Tokens: tokens,
 		Shadow: shadow, Wait: !step.Background, Interactive: step.Background, Data: data,
+		AgentAuthored: agentAuthored(ctx),
 	}
 	ref, err := r.Agents.Dispatch(ctx, req)
 	if err != nil {

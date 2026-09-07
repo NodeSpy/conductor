@@ -32,6 +32,7 @@ type acpController struct {
 	prov    Provisioner
 	dial    acpDialer // injectable connection factory; nil → spawn the subprocess
 	host    string    // configured `host:`; "" = local (see resolveHost/prepareLaunch)
+	iso     *config.IsolationConfig
 
 	mu    sync.Mutex
 	model SessionModel // cached negotiated model (native until an Initialize proves loadSession)
@@ -57,6 +58,7 @@ func newACPController(name string, cc config.ControllerConfig, prov Provisioner)
 		command: acpCommand(cc),
 		prov:    prov,
 		host:    cc.Host,
+		iso:     cc.Isolation,
 		model:   model,
 	}
 }
@@ -81,7 +83,7 @@ func (c *acpController) Model() SessionModel {
 // and CheckoutPR is always true (conductor supplies the worktree as the session
 // cwd). The connection is closed before returning; NewSession opens its own.
 func (c *acpController) Initialize(ctx context.Context) (Capabilities, error) {
-	client, cleanup, err := c.connect(ctx, "", nil, acp.DelegateFuncs{}, "")
+	client, cleanup, err := c.connect(ctx, "", nil, acp.DelegateFuncs{}, "", resumeOpts(c.iso))
 	if err != nil {
 		return Capabilities{SessionModel: c.Model(), Transport: TransportACP, CheckoutPR: true}, err
 	}
@@ -135,7 +137,7 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	// its own context, cancelled only by Close — not by the request ctx returning.
 	sctx, scancel := context.WithCancel(context.Background())
 	del := &acpDelegate{handler: h}
-	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Profile.Host)
+	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Profile.Host, launchOptsFor(c.iso, spec.Request))
 	if err != nil {
 		scancel()
 		return nil, err
@@ -194,7 +196,7 @@ func (c *acpController) memoryServers(spec Spec) []acp.McpServer {
 func (c *acpController) ResumeSession(ctx context.Context, id string, h Handler) (Session, error) {
 	sctx, scancel := context.WithCancel(context.Background())
 	del := &acpDelegate{handler: h}
-	client, cleanup, err := c.connect(sctx, "", nil, del, "")
+	client, cleanup, err := c.connect(sctx, "", nil, del, "", resumeOpts(c.iso))
 	if err != nil {
 		scancel()
 		return nil, err
@@ -213,11 +215,11 @@ func (c *acpController) ResumeSession(ctx context.Context, id string, h Handler)
 // none is set. profileHost is the dispatched profile's host override (wins over
 // the controller's own configured host — see resolveHost); "" when no profile is
 // in reach (Initialize/ResumeSession).
-func (c *acpController) connect(ctx context.Context, cwd string, env []string, del acp.ClientDelegate, profileHost string) (*acp.Client, func() error, error) {
+func (c *acpController) connect(ctx context.Context, cwd string, env []string, del acp.ClientDelegate, profileHost string, opt launchOpts) (*acp.Client, func() error, error) {
 	if c.dial != nil {
 		return c.dial(ctx, cwd, env, del)
 	}
-	return spawnACP(ctx, c.command, cwd, env, del, resolveHost(c.host, profileHost))
+	return spawnACP(ctx, c.command, cwd, env, del, resolveHost(c.host, profileHost), opt)
 }
 
 // spawnACP starts the agent subprocess wired for ACP over its stdio, with the
@@ -226,21 +228,17 @@ func (c *acpController) connect(ctx context.Context, cwd string, env []string, d
 // agent must survive the dispatch call returning. host != "" wraps the launch for
 // remote execution via prepareLaunch (see its doc for what changes locally in
 // that case: no cwd, no local env — both travel inside the wrapped command).
-func spawnACP(_ context.Context, command []string, cwd string, env []string, del acp.ClientDelegate, host string) (*acp.Client, func() error, error) {
+func spawnACP(_ context.Context, command []string, cwd string, env []string, del acp.ClientDelegate, host string, opt launchOpts) (*acp.Client, func() error, error) {
 	if len(command) == 0 {
 		return nil, nil, errors.New("acp: no launch command configured")
 	}
-	argv, dir, remote, err := prepareLaunch(host, cwd, env, command)
+	argv, dir, localEnv, _, err := prepareLaunch(host, cwd, env, command, opt)
 	if err != nil {
 		return nil, nil, err
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	if dir != "" {
 		cmd.Dir = dir
-	}
-	localEnv := env
-	if remote {
-		localEnv = nil
 	}
 	cmd.Env = append(os.Environ(), localEnv...)
 	stdin, err := cmd.StdinPipe()

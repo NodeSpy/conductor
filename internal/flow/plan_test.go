@@ -728,3 +728,36 @@ policy:
 		t.Fatalf("cumulative step budget: %v %q", failed, errStr)
 	}
 }
+
+// A plan's sub-agent dispatches are marked AgentAuthored (the launch layer
+// gives them deny-by-default network — #36 §15); the config-authored step
+// that produced the plan is not.
+func TestPlanSubAgentDispatchMarkedAgentAuthored(t *testing.T) {
+	cfg := planCfg(t, `
+policy:
+  agent_authored:
+    allow: [ svc.post, agent ]
+`)
+	out := "```plan\n- id: sub\n  type: agent\n  agent: helper\n  prompt: \"go\"\n```"
+	reg := buildRegistry(t, cfg)
+	newFakeState(t, "svc")
+	rig := newTestRunner(t, cfg, reg)
+	flags := map[string]bool{}
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		flags[req.Action.Agent] = req.AgentAuthored
+		if req.Action.Agent == "planner" {
+			return dispatch.RunRef{AgentID: "a1", Output: out}, nil
+		}
+		return dispatch.RunRef{AgentID: "sub", Output: `{"done":true}`}, nil
+	}
+	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "m"}), mustSpec(t, planSpec))
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("workflow failed: %s", errStr)
+	}
+	if flags["planner"] {
+		t.Fatal("config-authored dispatch must not be marked agent-authored")
+	}
+	if !flags["helper"] {
+		t.Fatal("plan sub-agent dispatch must be marked agent-authored")
+	}
+}

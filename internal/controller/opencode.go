@@ -31,6 +31,7 @@ import (
 type opencodeController struct {
 	name string
 	host string // hosts: entry the server launches on over SSH ("" = local)
+	iso  *config.IsolationConfig
 	prov Provisioner
 	dial opencodeDialer // injectable; nil → spawn `opencode serve`
 	hc   *http.Client
@@ -48,6 +49,7 @@ func newOpencodeController(name string, cc config.ControllerConfig, prov Provisi
 	c := &opencodeController{
 		name: name,
 		host: cc.Host,
+		iso:  cc.Isolation,
 		prov: prov,
 		hc:   &http.Client{Timeout: 0}, // no client timeout: an agent turn can run long
 	}
@@ -119,7 +121,7 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 	}
 
 	sctx, scancel := context.WithCancel(context.Background())
-	baseURL, cleanup, err := c.connect(sctx, spec.Cwd, env)
+	baseURL, cleanup, err := c.connect(sctx, spec.Cwd, env, launchOptsFor(c.iso, spec.Request))
 	if err != nil {
 		removeToolCfg()
 		scancel()
@@ -160,7 +162,7 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 // ResumeSession re-binds an existing opencode session by id (resumable by id).
 func (c *opencodeController) ResumeSession(ctx context.Context, id string, _ Handler) (Session, error) {
 	sctx, scancel := context.WithCancel(context.Background())
-	baseURL, cleanup, err := c.connect(sctx, "", nil)
+	baseURL, cleanup, err := c.connect(sctx, "", nil, resumeOpts(c.iso))
 	if err != nil {
 		scancel()
 		return nil, err
@@ -169,11 +171,11 @@ func (c *opencodeController) ResumeSession(ctx context.Context, id string, _ Han
 	return &opencodeSession{id: id, cl: cl, cleanup: cleanup, cancel: scancel, ctx: sctx}, nil
 }
 
-func (c *opencodeController) connect(ctx context.Context, cwd string, env []string) (string, func() error, error) {
+func (c *opencodeController) connect(ctx context.Context, cwd string, env []string, opt launchOpts) (string, func() error, error) {
 	if c.dial != nil {
 		return c.dial(ctx, cwd, env)
 	}
-	return spawnOpencode(ctx, c.host, cwd, env)
+	return spawnOpencode(ctx, c.host, cwd, env, opt)
 }
 
 // writeOpencodeToolConfig writes a per-session opencode config (0600, outside
@@ -224,9 +226,9 @@ func writeOpencodeToolConfig(ts *toolServerSpec) (string, error) {
 // HTTP client reaches it via ssh -W. A locally-provisioned worktree path is
 // not meaningful on the remote box, so remote sessions want checkout: none or
 // a remote-existing directory.
-func spawnOpencode(_ context.Context, host, cwd string, env []string) (string, func() error, error) {
+func spawnOpencode(_ context.Context, host, cwd string, env []string, opt launchOpts) (string, func() error, error) {
 	argv := []string{"opencode", "serve", "--hostname", "127.0.0.1", "--port", "0"}
-	argv, localDir, remote, err := prepareLaunch(host, cwd, env, argv)
+	argv, localDir, localEnv, remote, err := prepareLaunch(host, cwd, env, argv, opt)
 	if err != nil {
 		return "", nil, err
 	}
@@ -235,7 +237,7 @@ func spawnOpencode(_ context.Context, host, cwd string, env []string) (string, f
 		cmd.Dir = localDir
 	}
 	if !remote {
-		cmd.Env = append(os.Environ(), env...)
+		cmd.Env = append(os.Environ(), localEnv...)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

@@ -52,4 +52,9 @@ conductor-provisioned worktree path only when it exists on that box; use
 provision remotely and need neither). Acts-as-you identity still governs
 anything remote work posts back.
 
-Related: [[Code-Steps]] · [[Runtimes]] · [[Connectors]]
+A host may carry an `isolation:` block (modes `user`/`namespace`): every
+script it runs — including agent-authored code forced onto it by
+`policy.agent_authored.host` — executes wrapped de-privileged on the remote
+box. See [[Isolation]].
+
+Related: [[Code-Steps]] · [[Runtimes]] · [[Connectors]] · [[Isolation]]

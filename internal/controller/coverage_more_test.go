@@ -92,7 +92,7 @@ func TestACPRefusalTurn(t *testing.T) {
 }
 
 func TestSpawnACPNoCommand(t *testing.T) {
-	if _, _, err := spawnACP(context.Background(), nil, "", nil, nil, ""); err == nil {
+	if _, _, err := spawnACP(context.Background(), nil, "", nil, nil, "", launchOpts{}); err == nil {
 		t.Fatal("no command must error")
 	}
 }
@@ -340,7 +340,7 @@ func TestRegistryOverrideByNameAndStub(t *testing.T) {
 
 func TestPrepareLaunchRemote(t *testing.T) {
 	// Local: unchanged argv/dir.
-	argv, dir, remote, err := prepareLaunch("", "/wt", []string{"A=1"}, []string{"tool", "x"})
+	argv, dir, _, remote, err := prepareLaunch("", "/wt", []string{"A=1"}, []string{"tool", "x"}, launchOpts{})
 	if err != nil || remote || dir != "/wt" || strings.Join(argv, " ") != "tool x" {
 		t.Fatalf("local: %v %v %v %v", argv, dir, remote, err)
 	}
@@ -348,7 +348,7 @@ func TestPrepareLaunchRemote(t *testing.T) {
 	old := HostArgvPrefix
 	HostArgvPrefix = nil
 	defer func() { HostArgvPrefix = old }()
-	if _, _, _, err := prepareLaunch("box", "/wt", nil, []string{"tool"}); err == nil {
+	if _, _, _, _, err := prepareLaunch("box", "/wt", nil, []string{"tool"}, launchOpts{}); err == nil {
 		t.Fatal("no resolver must error")
 	}
 	// Remote with a resolver: ssh prefix + one wrapped command string.
@@ -358,14 +358,14 @@ func TestPrepareLaunchRemote(t *testing.T) {
 		}
 		return []string{"ssh", "ci@box"}, nil
 	}
-	argv, dir, remote, err = prepareLaunch("box", "/wt", []string{"A=1"}, []string{"tool", "x"})
+	argv, dir, _, remote, err = prepareLaunch("box", "/wt", []string{"A=1"}, []string{"tool", "x"}, launchOpts{})
 	if err != nil || !remote || dir != "" || len(argv) != 3 || argv[0] != "ssh" {
 		t.Fatalf("remote: %v %q %v %v", argv, dir, err, remote)
 	}
 	if !strings.Contains(argv[2], "tool") || !strings.Contains(argv[2], "A=") {
 		t.Fatalf("wrapped command: %q", argv[2])
 	}
-	if _, _, _, err := prepareLaunch("ghost", "", nil, []string{"t"}); err == nil {
+	if _, _, _, _, err := prepareLaunch("ghost", "", nil, []string{"t"}, launchOpts{}); err == nil {
 		t.Fatal("unknown host must error")
 	}
 }

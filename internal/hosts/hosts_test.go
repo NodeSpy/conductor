@@ -373,3 +373,33 @@ func TestDialViaRoundTrip(t *testing.T) {
 		t.Errorf("addr network: %s", conn.LocalAddr().Network())
 	}
 }
+
+// A host with isolation: runs its scripts through the sandbox prefix ON the
+// remote box (#36 §15) — same sh -c payload, de-privileged wrapper in front.
+func TestClientScript_IsolationWrapsRemoteCommand(t *testing.T) {
+	var gotArgv []string
+	cl := &Client{Run: func(_ context.Context, argv []string, _ []byte) (string, string, int, error) {
+		gotArgv = argv
+		return "", "", 0, nil
+	}}
+	tgt := Target{Name: "sbx", Cfg: config.HostConfig{
+		Host:      "sandbox.internal",
+		Isolation: &config.IsolationConfig{Mode: "user", User: "agents"},
+	}}
+	if _, err := cl.Script(context.Background(), tgt, "run-the-thing", nil, nil, ""); err != nil {
+		t.Fatalf("Script: %v", err)
+	}
+	remote := gotArgv[len(gotArgv)-1]
+	want := "sudo -n -u 'agents' -- sh -c " + shQuote("run-the-thing")
+	if remote != want {
+		t.Errorf("isolated remote command =\n%s\nwant\n%s", remote, want)
+	}
+
+	// Unsupported remote mode fails the script loudly, never runs unwrapped.
+	tgt.Cfg.Isolation = &config.IsolationConfig{Mode: "container",
+		Container: &config.ContainerIsolation{Image: "img"}}
+	if _, err := cl.Script(context.Background(), tgt, "x", nil, nil, ""); err == nil ||
+		!strings.Contains(err.Error(), "container") {
+		t.Fatalf("container isolation on a host must error: %v", err)
+	}
+}

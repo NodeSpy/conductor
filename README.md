@@ -288,6 +288,53 @@ pinning); env exports and code travel inside the ssh channel, never local
 argv. The in-process engines (`js`, `go-embed`, `risor`, `lua`) are
 local-only.
 
+## Agent isolation & sandboxing
+
+Per-dispatch isolation for the runtimes conductor launches itself
+(acp / cli / opencode / agent-deck), selectable per agent profile or per
+runtime (the profile's `isolation:` wins) — see the
+[Isolation wiki page](../../wiki/Isolation):
+
+```yaml
+agents:
+  risky-fixer:
+    runtime: gemini            # a runtime conductor launches (not paseo)
+    isolation:
+      mode: user               # user | namespace | container
+      user: sandboxagent       # mode user: sudo -n -u sandboxagent
+      limits: { memory: 2g, cpu: 200%, pids: 256 }
+      network:
+        egress: [ "api.github.com:443", "*.internal:443" ]
+```
+
+- **`mode: user`** runs the agent as a distinct low-privilege OS user
+  (`sudo -n`); works on any Unix with the matching sudoers rule.
+- **`mode: namespace`** (Linux) wraps the launch in user/pid/mount
+  namespaces via `unshare`, with cgroup limits via
+  `systemd-run --user --scope` when `limits:` is set;
+  `network: {deny: true}` adds a network namespace — structurally **no**
+  network.
+- **`mode: container`** launches inside `docker`/`podman run` with the
+  worktree bind-mounted; `deny: true` becomes `--network=none`.
+
+**Egress allowlist.** A `network:` block routes the runtime's HTTP(S)
+traffic through conductor's own loopback filtering proxy: `egress:` patterns
+(`host`, `host:port`, `*.glob:443`) are allowed, everything else is denied
+with a 403 and an `egress_denied` audit record. An empty `network: {}` is
+deny-all. **Agent-authored dispatches (§11 plans) get the deny-all proxy by
+default** — no config needed; an explicit `network.egress:` on the profile
+opts specific targets back in. The proxy is authoritative for well-behaved
+runtimes; when you need a structural guarantee, use `deny: true` under
+namespace/container mode.
+
+A `hosts:` entry can carry `isolation:` too (modes user/namespace): every
+script that host runs — including `policy.agent_authored.host` sandbox code —
+is wrapped de-privileged on the remote box. A **paseo** runtime's agents are
+children of the paseo daemon, which conductor cannot wrap; `conductor
+validate` rejects `isolation:` there rather than pretending. Non-Linux boxes
+degrade gracefully: user/container modes work wherever sudo/docker do,
+namespace mode is rejected with a clear error.
+
 ## Event grouping
 
 ```yaml

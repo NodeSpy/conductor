@@ -21,6 +21,7 @@ The model
 - [[Policy]]
 - [[Secrets]]
 - [[Hosts]]
+- [[Isolation]]
 
 Connector types
 - [[Integration-GitHub]]

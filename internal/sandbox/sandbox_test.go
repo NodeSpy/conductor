@@ -1,0 +1,243 @@
+package sandbox
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/NodeSpy/conductor/internal/config"
+)
+
+func TestFromConfigNil(t *testing.T) {
+	if FromConfig(nil) != nil {
+		t.Fatal("nil config must stay nil")
+	}
+	var s *Spec
+	if _, ok := s.ProxyPolicy(); ok {
+		t.Fatal("nil spec has no proxy policy")
+	}
+	if err := s.Check("linux", nil); err != nil {
+		t.Fatalf("nil spec check: %v", err)
+	}
+	argv, err := s.WrapLocal([]string{"tool"}, "/wt", nil)
+	if err != nil || strings.Join(argv, " ") != "tool" {
+		t.Fatalf("nil spec wrap: %v %v", argv, err)
+	}
+	cmd, err := s.WrapRemote("do it")
+	if err != nil || cmd != "do it" {
+		t.Fatalf("nil spec remote wrap: %q %v", cmd, err)
+	}
+}
+
+func TestWrapLocalUser(t *testing.T) {
+	s := FromConfig(&config.IsolationConfig{Mode: "user", User: "sbx"})
+	argv, err := s.WrapLocal([]string{"claude", "-p", "x"}, "/wt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(argv, " "); got != "sudo -n -u sbx -- claude -p x" {
+		t.Fatalf("user wrap: %q", got)
+	}
+	// Missing user is an error, not a silent no-op.
+	if _, err := (&Spec{Mode: "user"}).WrapLocal([]string{"t"}, "", nil); err == nil {
+		t.Fatal("mode user without user must error")
+	}
+}
+
+func TestWrapLocalNamespace(t *testing.T) {
+	s := FromConfig(&config.IsolationConfig{Mode: "namespace"})
+	argv, err := s.WrapLocal([]string{"tool"}, "/wt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "unshare --user --map-current-user --pid --fork --mount-proc --kill-child -- tool"
+	if got := strings.Join(argv, " "); got != want {
+		t.Fatalf("namespace wrap:\n got %q\nwant %q", got, want)
+	}
+
+	// deny adds the network namespace; limits add the systemd-run scope.
+	s = FromConfig(&config.IsolationConfig{
+		Mode:    "namespace",
+		Network: &config.IsolationNetwork{Deny: true},
+		Limits:  &config.IsolationLimits{Memory: "2g", CPU: "200%", Pids: 128},
+	})
+	argv, err = s.WrapLocal([]string{"tool"}, "/wt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(argv, " ")
+	for _, frag := range []string{
+		"systemd-run --user --scope --quiet --collect",
+		"-p MemoryMax=2g", "-p CPUQuota=200%", "-p TasksMax=128",
+		"--net", "-- tool",
+	} {
+		if !strings.Contains(got, frag) {
+			t.Fatalf("namespace wrap missing %q in %q", frag, got)
+		}
+	}
+}
+
+func TestWrapLocalContainer(t *testing.T) {
+	s := FromConfig(&config.IsolationConfig{
+		Mode:      "container",
+		Container: &config.ContainerIsolation{Image: "agents:latest", Engine: "podman"},
+		Network:   &config.IsolationNetwork{Deny: true},
+		Limits:    &config.IsolationLimits{Memory: "1g", CPU: "2", Pids: 64},
+	})
+	argv, err := s.WrapLocal([]string{"claude", "-p", "x"}, "/wt", []string{"GH_TOKEN", "HTTP_PROXY"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(argv, " ")
+	for _, frag := range []string{
+		"podman run --rm -i", "-v /wt:/wt -w /wt", "--network=none",
+		"--memory 1g", "--cpus 2", "--pids-limit 64",
+		"-e GH_TOKEN", "-e HTTP_PROXY",
+		"agents:latest claude -p x",
+	} {
+		if !strings.Contains(got, frag) {
+			t.Fatalf("container wrap missing %q in %q", frag, got)
+		}
+	}
+	// No image → error.
+	if _, err := (&Spec{Mode: "container"}).WrapLocal([]string{"t"}, "", nil); err == nil {
+		t.Fatal("container without image must error")
+	}
+	// Default engine is docker.
+	s = FromConfig(&config.IsolationConfig{Mode: "container", Container: &config.ContainerIsolation{Image: "img"}})
+	argv, _ = s.WrapLocal([]string{"t"}, "", nil)
+	if argv[0] != "docker" {
+		t.Fatalf("default engine: %q", argv[0])
+	}
+}
+
+func TestWrapRemote(t *testing.T) {
+	s := FromConfig(&config.IsolationConfig{Mode: "user", User: "sbx"})
+	cmd, err := s.WrapRemote(`cd /x && export A='b'; tool`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(cmd, "sudo -n -u 'sbx' -- sh -c '") || !strings.Contains(cmd, "tool") {
+		t.Fatalf("remote user wrap: %q", cmd)
+	}
+	// The inner command's single quotes survive the re-quoting.
+	if !strings.Contains(cmd, `'\''b'\''`) {
+		t.Fatalf("remote wrap quoting: %q", cmd)
+	}
+
+	ns := FromConfig(&config.IsolationConfig{Mode: "namespace", Network: &config.IsolationNetwork{Deny: true}})
+	cmd, err = ns.WrapRemote("tool x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(cmd, "unshare --user --map-current-user --pid --fork --mount-proc --kill-child --net -- sh -c ") {
+		t.Fatalf("remote namespace wrap: %q", cmd)
+	}
+
+	// Container mode never wraps a remote command.
+	ct := FromConfig(&config.IsolationConfig{Mode: "container", Container: &config.ContainerIsolation{Image: "i"}})
+	if _, err := ct.WrapRemote("tool"); err == nil {
+		t.Fatal("container remote wrap must error")
+	}
+}
+
+func TestCheck(t *testing.T) {
+	have := func(bins ...string) func(string) (string, error) {
+		return func(name string) (string, error) {
+			for _, b := range bins {
+				if b == name {
+					return "/usr/bin/" + name, nil
+				}
+			}
+			return "", fmt.Errorf("%s: not found", name)
+		}
+	}
+	cases := []struct {
+		name string
+		spec *Spec
+		goos string
+		look func(string) (string, error)
+		ok   bool
+	}{
+		{"user ok", &Spec{Mode: "user", User: "s"}, "darwin", have("sudo"), true},
+		{"user no sudo", &Spec{Mode: "user", User: "s"}, "linux", have(), false},
+		{"namespace ok", &Spec{Mode: "namespace"}, "linux", have("unshare"), true},
+		{"namespace non-linux", &Spec{Mode: "namespace"}, "darwin", have("unshare"), false},
+		{"namespace limits need systemd-run", &Spec{Mode: "namespace", Memory: "1g"}, "linux", have("unshare"), false},
+		{"namespace limits ok", &Spec{Mode: "namespace", Memory: "1g"}, "linux", have("unshare", "systemd-run"), true},
+		{"container ok", &Spec{Mode: "container", Image: "i"}, "darwin", have("docker"), true},
+		{"container podman", &Spec{Mode: "container", Image: "i", Engine: "podman"}, "linux", have("podman"), true},
+		{"container missing engine", &Spec{Mode: "container", Image: "i"}, "linux", have(), false},
+		{"unknown mode", &Spec{Mode: "jail"}, "linux", have(), false},
+	}
+	for _, tc := range cases {
+		err := tc.spec.Check(tc.goos, tc.look)
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: err=%v want ok=%v", tc.name, err, tc.ok)
+		}
+	}
+}
+
+func TestProxyPolicy(t *testing.T) {
+	// Absent network block → no proxy.
+	if _, ok := FromConfig(&config.IsolationConfig{Mode: "user", User: "s"}).ProxyPolicy(); ok {
+		t.Fatal("no network block → no proxy policy")
+	}
+	// Present-but-empty → deny-all proxy.
+	allow, ok := FromConfig(&config.IsolationConfig{Mode: "user", User: "s", Network: &config.IsolationNetwork{}}).ProxyPolicy()
+	if !ok || len(allow) != 0 {
+		t.Fatalf("empty network block → deny-all proxy: %v %v", allow, ok)
+	}
+	// Allowlist → proxy with patterns.
+	allow, ok = FromConfig(&config.IsolationConfig{Mode: "user", User: "s",
+		Network: &config.IsolationNetwork{Egress: []string{"api.example.com:443"}}}).ProxyPolicy()
+	if !ok || len(allow) != 1 {
+		t.Fatalf("allowlist: %v %v", allow, ok)
+	}
+	// Structural deny → NOT proxy-governed.
+	if _, ok := FromConfig(&config.IsolationConfig{Mode: "namespace",
+		Network: &config.IsolationNetwork{Deny: true}}).ProxyPolicy(); ok {
+		t.Fatal("deny: true is structural, not proxied")
+	}
+}
+
+func TestEgressAllowed(t *testing.T) {
+	cases := []struct {
+		allow []string
+		host  string
+		want  bool
+	}{
+		{nil, "api.example.com:443", false},
+		{[]string{}, "api.example.com:443", false},
+		{[]string{"*"}, "anything:1", true},
+		{[]string{"api.example.com"}, "api.example.com:443", true},
+		{[]string{"api.example.com"}, "api.example.com:80", true},
+		{[]string{"api.example.com:443"}, "api.example.com:443", true},
+		{[]string{"api.example.com:443"}, "api.example.com:80", false},
+		{[]string{"api.example.com:443"}, "evil.example.com:443", false},
+		{[]string{"*.example.com:443"}, "api.example.com:443", true},
+		{[]string{"*.example.com:443"}, "example.com:443", false},
+		{[]string{"API.Example.COM"}, "api.example.com:443", true},
+		{[]string{"", "  "}, "x:1", false},
+		{[]string{"[::1]:443"}, "[::1]:443", true},
+	}
+	for _, tc := range cases {
+		if got := EgressAllowed(tc.allow, tc.host); got != tc.want {
+			t.Errorf("EgressAllowed(%v, %q) = %v, want %v", tc.allow, tc.host, got, tc.want)
+		}
+	}
+}
+
+func TestSplitHostPort(t *testing.T) {
+	for _, tc := range []struct{ in, host, port string }{
+		{"a.b:443", "a.b", "443"},
+		{"a.b", "a.b", ""},
+		{"[::1]:8080", "::1", "8080"},
+		{"[::1]", "::1", ""},
+	} {
+		h, p := splitHostPort(tc.in)
+		if h != tc.host || p != tc.port {
+			t.Errorf("splitHostPort(%q) = %q,%q want %q,%q", tc.in, h, p, tc.host, tc.port)
+		}
+	}
+}

@@ -39,6 +39,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/integrations/slack" // registers "slack"; also feeds hand-off replies (see wireSlackHandoffInbox)
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/skill"
 	"github.com/NodeSpy/conductor/internal/store"
@@ -330,6 +331,16 @@ func cmdRun(args []string) error {
 		}
 		return (&hosts.Client{}).ArgvPrefix(hosts.Target{Name: name, Cfg: hc}), nil
 	}
+	// The egress proxy manager (#36 §15): one loopback proxy per distinct
+	// allowlist, enforcing isolation network policy for the runtimes conductor
+	// launches; agent-authored dispatches with no explicit policy route
+	// through its deny-all proxy. Denials are logged and audited.
+	egress := sandbox.NewProxyManager(func(key, hostport string) {
+		logf("sandbox: egress denied: %s (not in allowlist)", hostport)
+		st.Audit(map[string]any{"event": "egress_denied", "target": hostport})
+	})
+	defer egress.Close()
+	controller.EgressProxyFor = egress.Addr
 	// HostDial is the ssh -W stdio forward remote opencode servers are reached
 	// through (they bind the remote 127.0.0.1; no port opens anywhere).
 	controller.HostDial = func(ctx context.Context, name, addr string) (net.Conn, error) {

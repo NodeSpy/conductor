@@ -80,16 +80,19 @@ type RuntimeConfig struct {
 	// Host names a `hosts:` entry; the runtime's subprocesses run there over
 	// SSH (all its agents launch on that box).
 	Host string `yaml:"host,omitempty"`
+	// Isolation wraps every launch this runtime performs (#36 §15). A
+	// profile's own isolation: wins over the runtime's.
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
 }
 
 // Controller converts a runtime entry to the legacy controller shape the
-// controller registry consumes, carrying Bin and Host through.
+// controller registry consumes, carrying Bin, Host, and Isolation through.
 func (r RuntimeConfig) Controller() ControllerConfig {
 	return ControllerConfig{
 		Type: r.Type, Agent: r.Agent, Transport: r.Transport,
 		SessionModel: r.SessionModel, Default: r.Default,
 		Tool: r.Tool, Command: r.Command,
-		Bin: r.Bin, Host: r.Host,
+		Bin: r.Bin, Host: r.Host, Isolation: r.Isolation,
 	}
 }
 
@@ -107,6 +110,63 @@ type HostConfig struct {
 	Cwd string `yaml:"cwd,omitempty"`
 	// Env is exported into remote commands.
 	Env map[string]string `yaml:"env,omitempty"`
+	// Isolation wraps every script this host runs (code steps, remote
+	// commands) in the sandbox prefix ON the remote box — mode user or
+	// namespace only (the remote box needs the matching sudoers rule /
+	// util-linux). This is how the agent_authored sandbox `host:` gets a
+	// second wall: even on the sandbox box, agent code runs de-privileged.
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+}
+
+// IsolationConfig is the per-dispatch isolation block (#36 §15), settable on
+// an agent profile, a runtime, or a `hosts:` entry (most-specific wins:
+// profile → runtime). It only applies to launches conductor performs itself
+// (acp / cli / opencode / agent-deck runtimes, host scripts) — a paseo
+// runtime's agents are children of the paseo daemon, which conductor cannot
+// wrap (validate rejects the combination).
+type IsolationConfig struct {
+	// Mode selects the wrapper: user | namespace | container.
+	Mode string `yaml:"mode"`
+	// User is the low-privilege account for mode: user (sudo -n -u <user>).
+	User string `yaml:"user,omitempty"`
+	// Container configures mode: container.
+	Container *ContainerIsolation `yaml:"container,omitempty"`
+	// Limits are cgroup/engine resource caps (namespace mode applies them via
+	// systemd-run --user --scope; container mode via engine flags).
+	Limits *IsolationLimits `yaml:"limits,omitempty"`
+	// Network is the egress policy. ABSENT → no restriction for
+	// config-authored dispatches (agent-authored dispatches still get the
+	// deny-all proxy — deny by default). Present-but-empty → deny-all via
+	// conductor's egress proxy (audited). `egress:` patterns → the proxy
+	// allows only matching host:port targets. `deny: true` → structurally no
+	// network (namespace/container modes).
+	Network *IsolationNetwork `yaml:"network,omitempty"`
+}
+
+// ContainerIsolation configures isolation mode: container.
+type ContainerIsolation struct {
+	// Image is the container image the runtime launches in (required). The
+	// image must carry the runtime binary the launch expects.
+	Image string `yaml:"image"`
+	// Engine is docker (default) or podman.
+	Engine string `yaml:"engine,omitempty"`
+}
+
+// IsolationLimits are the resource caps.
+type IsolationLimits struct {
+	Memory string `yaml:"memory,omitempty"` // e.g. "2g" (systemd MemoryMax / engine --memory)
+	CPU    string `yaml:"cpu,omitempty"`    // e.g. "200%" (CPUQuota) or "2" (--cpus)
+	Pids   int    `yaml:"pids,omitempty"`   // TasksMax / --pids-limit
+}
+
+// IsolationNetwork is the egress policy for one isolation scope.
+type IsolationNetwork struct {
+	// Egress allowlists "host", "host:port", or "*.glob:port" targets through
+	// conductor's egress proxy. Empty (with the block present) denies all.
+	Egress []string `yaml:"egress,omitempty"`
+	// Deny cuts the network structurally (namespace --net / --network=none).
+	// Mutually exclusive with Egress.
+	Deny bool `yaml:"deny,omitempty"`
 }
 
 // WorkflowDef is one entry in the `workflows:` map — a named, parameterized
@@ -766,6 +826,17 @@ func (c *Config) validateConnectors() error {
 		if err := c.checkRemoteHostSupport("runtime", name, rt.Host, rt.Type, rt.Agent, rt.Controller().EffectiveTransport()); err != nil {
 			return err
 		}
+		if rt.Isolation != nil {
+			if rt.Type == "paseo" {
+				return fmt.Errorf("config: runtime %q: isolation cannot apply to a paseo runtime (its agents are the paseo daemon's children) — use an acp/cli/opencode/agent-deck runtime, or paseo's own sandboxing", name)
+			}
+			if err := validateIsolation("runtime "+name, rt.Isolation, rt.Host != ""); err != nil {
+				return err
+			}
+			if err := validateIsolationControlChannel("runtime "+name, rt.Isolation, rt.Controller()); err != nil {
+				return err
+			}
+		}
 	}
 	if err := c.validateRuntimeDefaults(); err != nil {
 		return err
@@ -776,6 +847,9 @@ func (c *Config) validateConnectors() error {
 		}
 		if h.Host == "" {
 			return fmt.Errorf("config: host %q: missing host address", name)
+		}
+		if err := validateIsolation("host "+name, h.Isolation, true); err != nil {
+			return err
 		}
 	}
 	for i, t := range c.Triggers {
