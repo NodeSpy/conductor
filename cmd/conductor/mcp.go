@@ -112,29 +112,9 @@ func cmdMCPCallable(args []string) error {
 		}
 	}
 
-	// Resolve the caller identity + its scope. Strong by default: a token is
-	// required unless callable.mcp_local explicitly opts out.
-	var tok config.CallableToken
-	scoped := tokenName != ""
-	if scoped {
-		t, ok := cfg.Callable.TokenByName(tokenName)
-		if !ok {
-			return fmt.Errorf("mcp callable: no callable token named %q in config", tokenName)
-		}
-		tok = t
-	} else if !cfg.Callable.MCPLocal {
-		return fmt.Errorf("mcp callable: --token <name> is required (set callable.mcp_local: true to expose all callable workflows unscoped)")
-	}
-
-	var tools []callable.MCPTool
-	for _, t := range cfg.Triggers {
-		if !t.IsCallable() || t.Name == "" {
-			continue
-		}
-		if scoped && !tok.Allows(t.Name) {
-			continue // deny-by-default: only the token's own workflows
-		}
-		tools = append(tools, callable.MCPTool{Name: t.Name})
+	tools, tok, scoped, err := resolveCallableMCP(cfg, tokenName)
+	if err != nil {
+		return err
 	}
 	histDir := historyDirPath(cfg)
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "conductor mcp callable: "+format+"\n", a...) }
@@ -172,4 +152,33 @@ func cmdMCPCallable(args []string) error {
 	}
 
 	return callable.ServeMCP(os.Stdin, os.Stdout, callable.MCPDeps{Tools: tools, Invoke: invoke, Log: logf})
+}
+
+// resolveCallableMCP resolves the caller identity + scope and the set of tools
+// it may see, applying the callable face's own token model (independent of the
+// daemon's re-check on each dispatch). Strong by default: a token is required
+// unless callable.mcp_local explicitly opts out; a scoped token exposes only
+// the `callable: true` workflows it Allows (deny-by-default). Returns the token
+// (when scoped) so the caller can tag dispatches for the daemon's audit.
+func resolveCallableMCP(cfg *config.Config, tokenName string) (tools []callable.MCPTool, tok config.CallableToken, scoped bool, err error) {
+	scoped = tokenName != ""
+	if scoped {
+		t, ok := cfg.Callable.TokenByName(tokenName)
+		if !ok {
+			return nil, config.CallableToken{}, false, fmt.Errorf("mcp callable: no callable token named %q in config", tokenName)
+		}
+		tok = t
+	} else if !cfg.Callable.MCPLocal {
+		return nil, config.CallableToken{}, false, fmt.Errorf("mcp callable: --token <name> is required (set callable.mcp_local: true to expose all callable workflows unscoped)")
+	}
+	for _, t := range cfg.Triggers {
+		if !t.IsCallable() || t.Name == "" {
+			continue
+		}
+		if scoped && !tok.Allows(t.Name) {
+			continue // deny-by-default: only the token's own workflows
+		}
+		tools = append(tools, callable.MCPTool{Name: t.Name})
+	}
+	return tools, tok, scoped, nil
 }
