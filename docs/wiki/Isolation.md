@@ -37,7 +37,10 @@ agents:
       limits: { memory: 2g, cpu: 200%, pids: 256 }
       network:
         egress: [ "api.github.com:443", "*.internal:443" ]
-        # deny: true       # structural no-network (namespace/container only)
+        deny: true    # + egress ⇒ ENFORCED allowlist (namespace/container);
+                      # alone ⇒ structural no-network; absent ⇒ advisory proxy
+      # privileged: true   # namespace mode: opt back into the daemon's full
+      #                    # filesystem view (state/config masked by default)
 ```
 
 ### `mode: user` — a distinct low-privilege user
@@ -206,7 +209,11 @@ that lifts the allow/approve/host gates lifts this requirement.
 | `mode: namespace` on macOS/Windows | rejected by `validate` (local) / launch error with a clear message |
 | `sudo` / `unshare` / `docker` missing | launch fails with "needs X on PATH", never silently unisolated |
 | egress policy with no proxy wired | launch fails closed |
+| enforced egress with no unix endpoint wired | launch fails closed |
+| a default filesystem mask can't be applied | launch fails, never runs unmasked |
 | isolation on a paseo runtime | rejected by `validate` |
+| `skill:` + `mode: user` isolation | rejected by `validate` (claim theft under a shared uid) |
+| `agent_authored.host` without `isolation:` | rejected by `validate` (`trust: full` opts out) |
 
 ## Audit
 

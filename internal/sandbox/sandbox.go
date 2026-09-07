@@ -14,12 +14,16 @@
 //     `network: {deny: true}` becomes `--network=none`, limits become the
 //     engine's own flags.
 //
-// The network egress allowlist is conductor-enforced through the Proxy in
-// proxy.go: conductor listens on a loopback port, filters CONNECT/absolute
-// requests against the profile's `egress:` patterns, and injects
-// HTTP(S)_PROXY into the launched runtime's environment. A well-behaved
-// runtime's traffic flows through (and is filtered/audited by) conductor; a
-// structural guarantee needs `deny: true` under namespace/container mode.
+// The network egress allowlist runs through the Proxy in proxy.go —
+// conductor filters CONNECT/absolute requests against the profile's
+// `egress:` patterns (per-dispatch client credential required) — at two
+// strengths. ADVISORY: HTTP(S)_PROXY env alone (mode user, or no deny) —
+// a runtime that ignores proxy env goes direct. ENFORCED (#36 iso-review
+// C1): `deny: true` + `egress:` under namespace/container — the sandbox has
+// NO network; `conductor sandbox-net` inside it forwards a fixed loopback
+// address into the proxy's unix socket, the only path out. Namespace mode
+// also masks the daemon's state/config dirs from the mount view by default
+// (`privileged: true` opts out, #36 iso-review H7).
 //
 // Everything degrades gracefully off Linux: user/container modes work
 // wherever sudo/docker do; namespace mode reports a clear error from Check

@@ -229,14 +229,20 @@ hosts:
 #                      any Unix with the sudoers rule.
 #   mode: namespace  — Linux user/pid/mount namespaces (unshare), cgroup
 #                      limits: via systemd-run; network: {deny: true} adds
-#                      a network namespace (structurally no network).
+#                      a network namespace (structurally no network). The
+#                      daemon's state/config dirs are MASKED from the mount
+#                      view by default; privileged: true is the opt-out.
 #   mode: container  — docker/podman run with the worktree bind-mounted;
 #                      deny: true → --network=none.
 #
 # network.egress routes the runtime's HTTP(S) traffic through conductor's
-# loopback filtering proxy: listed "host[:port]" / "*.glob[:port]" targets
-# pass, everything else is 403'd + audited (event: egress_denied). An empty
-# network: {} is deny-all. Agent-authored dispatches (§11 plans) get the
+# filtering proxy (per-dispatch credential required): listed "host:port" /
+# "*.glob:port" targets pass, everything else is 403'd + audited (event:
+# egress_denied). A bare "host" means :443 only; "host:*" is the any-port
+# opt-in. An empty network: {} is deny-all. Under mode user the allowlist is
+# ADVISORY (proxy env only — validate warns); deny: true PLUS egress: under
+# namespace/container is the ENFORCED allowlist: no network at all except a
+# forwarder into the proxy. Agent-authored dispatches (§11 plans) get the
 # deny-all proxy BY DEFAULT, with or without an isolation: block — an
 # explicit egress: list on the profile opts targets back in.
 # ---------------------------------------------------------------------------
