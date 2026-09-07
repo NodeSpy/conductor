@@ -350,7 +350,7 @@ func cmdRun(args []string) error {
 		st.Audit(map[string]any{"event": "egress_denied", "target": hostport})
 	})
 	defer egress.Close()
-	controller.EgressProxyFor = egress.Addr
+	controller.EgressProxyFor = egress.Endpoint
 	// HostDial is the ssh -W stdio forward remote opencode servers are reached
 	// through (they bind the remote 127.0.0.1; no port opens anywhere).
 	controller.HostDial = func(ctx context.Context, name, addr string) (net.Conn, error) {

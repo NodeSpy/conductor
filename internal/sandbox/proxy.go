@@ -8,6 +8,10 @@ package sandbox
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -19,6 +23,12 @@ import (
 )
 
 // Proxy is one egress-filtering forward proxy bound to 127.0.0.1.
+//
+// Clients must authenticate: the proxy is a host-wide loopback listener, so
+// without auth ANY local process could ride an allowlisted profile's egress
+// (#36 iso-review M9). Each dispatch gets its own credential (MintCred),
+// injected only into that launch's proxy env; a request without a valid
+// Proxy-Authorization is refused with 407 before any target matching.
 type Proxy struct {
 	Allow []string // EgressAllowed patterns; empty = deny everything
 	// OnDeny is called (if non-nil) with the denied host:port — the audit hook.
@@ -26,6 +36,66 @@ type Proxy struct {
 
 	ln  net.Listener
 	srv *http.Server
+
+	credMu sync.Mutex
+	creds  map[string]bool // valid per-dispatch credentials (the basic-auth password)
+}
+
+// proxyUser is the fixed basic-auth username; the per-dispatch credential is
+// the password half.
+const proxyUser = "conductor"
+
+// MintCred registers and returns a fresh per-dispatch client credential.
+func (p *Proxy) MintCred() (string, error) {
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("sandbox: mint proxy credential: %w", err)
+	}
+	cred := hex.EncodeToString(buf)
+	p.credMu.Lock()
+	if p.creds == nil {
+		p.creds = map[string]bool{}
+	}
+	p.creds[cred] = true
+	p.credMu.Unlock()
+	return cred, nil
+}
+
+// authorized checks the request's Proxy-Authorization against the registered
+// per-dispatch credentials. No registered credentials ⇒ nothing authorizes
+// (fail closed).
+func (p *Proxy) authorized(r *http.Request) bool {
+	h := r.Header.Get("Proxy-Authorization")
+	scheme, b64, ok := strings.Cut(h, " ")
+	if !ok || !strings.EqualFold(scheme, "Basic") {
+		return false
+	}
+	dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
+	if err != nil {
+		return false
+	}
+	user, pass, ok := strings.Cut(string(dec), ":")
+	if !ok || user != proxyUser {
+		return false
+	}
+	p.credMu.Lock()
+	defer p.credMu.Unlock()
+	for c := range p.creds {
+		if subtle.ConstantTimeCompare([]byte(c), []byte(pass)) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+// requireAuth answers 407 when the request carries no valid credential.
+func (p *Proxy) requireAuth(w http.ResponseWriter, r *http.Request) bool {
+	if p.authorized(r) {
+		return true
+	}
+	w.Header().Set("Proxy-Authenticate", `Basic realm="conductor egress"`)
+	http.Error(w, "sandbox egress proxy: proxy authentication required", http.StatusProxyAuthRequired)
+	return false
 }
 
 // Start listens on a fresh loopback port and serves until Close. It returns
@@ -56,6 +126,9 @@ func (p *Proxy) Close() {
 // ServeHTTP filters one proxied request: CONNECT opens a raw tunnel to an
 // allowed target; an absolute-URI request (plain-HTTP proxying) is forwarded.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !p.requireAuth(w, r) {
+		return
+	}
 	if r.Method == http.MethodConnect {
 		p.connect(w, r)
 		return
@@ -76,6 +149,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	out := r.Clone(r.Context())
 	out.RequestURI = ""
+	out.Header.Del("Proxy-Authorization") // the credential never leaves the box
 	resp, err := http.DefaultTransport.RoundTrip(out)
 	if err != nil {
 		http.Error(w, "sandbox egress proxy: "+err.Error(), http.StatusBadGateway)
@@ -139,11 +213,16 @@ func (p *Proxy) deny(w http.ResponseWriter, target string) {
 }
 
 // ProxyEnv renders the environment a launched runtime needs to route its
-// HTTP(S) traffic through the proxy at addr. Loopback stays direct so a
-// runtime can still reach conductor's own local surfaces (the skill socket,
-// a local opencode server).
-func ProxyEnv(addr string) []string {
+// HTTP(S) traffic through the proxy at addr, carrying this dispatch's
+// credential in the URL (standard HTTP stacks send it as
+// Proxy-Authorization). Loopback stays direct so a runtime can still reach
+// conductor's own local surfaces (the skill socket, a local opencode
+// server).
+func ProxyEnv(addr, cred string) []string {
 	u := "http://" + addr
+	if cred != "" {
+		u = "http://" + proxyUser + ":" + cred + "@" + addr
+	}
 	return []string{
 		"HTTP_PROXY=" + u, "http_proxy=" + u,
 		"HTTPS_PROXY=" + u, "https_proxy=" + u,
@@ -169,14 +248,29 @@ func NewProxyManager(onDeny func(key, hostport string)) *ProxyManager {
 	return &ProxyManager{OnDeny: onDeny, byKey: map[string]*Proxy{}, addrs: map[string]string{}}
 }
 
-// Addr returns the proxy address enforcing exactly this allowlist, starting
-// the proxy on first use. An empty (or nil) allowlist is the deny-all proxy.
-func (m *ProxyManager) Addr(allow []string) (string, error) {
+// Endpoint returns the proxy enforcing exactly this allowlist (starting it
+// on first use) plus a FRESH per-dispatch client credential — the launch env
+// carries it, and the proxy refuses clients without one. An empty (or nil)
+// allowlist is the deny-all proxy.
+func (m *ProxyManager) Endpoint(allow []string) (addr, cred string, err error) {
+	p, addr, err := m.proxyFor(allow)
+	if err != nil {
+		return "", "", err
+	}
+	cred, err = p.MintCred()
+	if err != nil {
+		return "", "", err
+	}
+	return addr, cred, nil
+}
+
+// proxyFor returns (starting on first use) the shared proxy for an allowlist.
+func (m *ProxyManager) proxyFor(allow []string) (*Proxy, string, error) {
 	key := allowKey(allow)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if addr, ok := m.addrs[key]; ok {
-		return addr, nil
+	if p, ok := m.byKey[key]; ok {
+		return p, m.addrs[key], nil
 	}
 	p := &Proxy{Allow: allow}
 	if m.OnDeny != nil {
@@ -184,11 +278,11 @@ func (m *ProxyManager) Addr(allow []string) (string, error) {
 	}
 	addr, err := p.Start()
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	m.byKey[key] = p
 	m.addrs[key] = addr
-	return addr, nil
+	return p, addr, nil
 }
 
 // Close shuts every proxy down.

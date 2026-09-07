@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -14,9 +15,18 @@ import (
 
 // viaProxy builds an http.Client whose traffic routes through the proxy at
 // addr (the launched runtime's view of the world).
-func viaProxy(addr string) *http.Client {
-	u, _ := url.Parse("http://" + addr)
+func viaProxyCred(addr, cred string) *http.Client {
+	u, _ := url.Parse("http://" + proxyUser + ":" + cred + "@" + addr)
 	return &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(u)}}
+}
+
+// viaProxy mints a fresh credential on p and returns an authenticated client.
+func viaProxy(p *Proxy, addr string) *http.Client {
+	cred, err := p.MintCred()
+	if err != nil {
+		panic(err)
+	}
+	return viaProxyCred(addr, cred)
 }
 
 func TestProxyAllowsListedTarget(t *testing.T) {
@@ -33,7 +43,7 @@ func TestProxyAllowsListedTarget(t *testing.T) {
 	}
 	defer p.Close()
 
-	resp, err := viaProxy(addr).Get(upstream.URL)
+	resp, err := viaProxy(p, addr).Get(upstream.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +73,7 @@ func TestProxyDeniesUnlistedTarget(t *testing.T) {
 	}
 	defer p.Close()
 
-	resp, err := viaProxy(addr).Get(upstream.URL)
+	resp, err := viaProxy(p, addr).Get(upstream.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,17 +100,17 @@ func TestProxyDenyAll(t *testing.T) {
 
 	// CONNECT to anywhere → refused (the client surfaces the proxy's 403 as a
 	// transport error).
-	if _, err := viaProxy(addr).Get("https://api.example.com/"); err == nil ||
+	if _, err := viaProxy(p, addr).Get("https://api.example.com/"); err == nil ||
 		!strings.Contains(err.Error(), "Forbidden") {
 		t.Fatalf("deny-all CONNECT: %v", err)
 	}
-	// A direct (non-proxy) hit serves nothing useful.
+	// A direct (non-proxy) hit carries no credential → 407 before anything.
 	resp, err := http.Get("http://" + addr + "/x")
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
+	if resp.StatusCode != http.StatusProxyAuthRequired {
 		t.Fatalf("direct hit: %d", resp.StatusCode)
 	}
 }
@@ -122,12 +132,17 @@ func TestProxyConnectTunnelAllowed(t *testing.T) {
 	defer p.Close()
 
 	// Speak the CONNECT handshake by hand (an https:// client would want TLS).
+	cred, err := p.MintCred()
+	if err != nil {
+		t.Fatal(err)
+	}
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+	auth := base64.StdEncoding.EncodeToString([]byte(proxyUser + ":" + cred))
+	fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Basic %s\r\n\r\n", target, target, auth)
 	buf := make([]byte, 1024)
 	n, _ := conn.Read(buf)
 	if !strings.Contains(string(buf[:n]), "200 Connection Established") {
@@ -141,11 +156,11 @@ func TestProxyConnectTunnelAllowed(t *testing.T) {
 }
 
 func TestProxyEnv(t *testing.T) {
-	env := ProxyEnv("127.0.0.1:9999")
+	env := ProxyEnv("127.0.0.1:9999", "tok123")
 	joined := strings.Join(env, "\n")
 	for _, want := range []string{
-		"HTTP_PROXY=http://127.0.0.1:9999",
-		"HTTPS_PROXY=http://127.0.0.1:9999",
+		"HTTP_PROXY=http://conductor:tok123@127.0.0.1:9999",
+		"HTTPS_PROXY=http://conductor:tok123@127.0.0.1:9999",
 		"http_proxy=", "https_proxy=",
 		"NO_PROXY=127.0.0.1,localhost,::1",
 	} {
@@ -165,18 +180,21 @@ func TestProxyManagerSharesByAllowlist(t *testing.T) {
 	})
 	defer m.Close()
 
-	a1, err := m.Addr([]string{"b.example.com", "a.example.com"})
+	a1, c1, err := m.Endpoint([]string{"b.example.com", "a.example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	a2, err := m.Addr([]string{"a.example.com", "b.example.com"}) // same set, different order
+	a2, c2, err := m.Endpoint([]string{"a.example.com", "b.example.com"}) // same set, different order
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a1 != a2 {
 		t.Fatalf("equivalent allowlists must share a proxy: %s vs %s", a1, a2)
 	}
-	deny, err := m.Addr(nil)
+	if c1 == c2 || c1 == "" {
+		t.Fatal("each dispatch must get its own credential")
+	}
+	deny, denyCred, err := m.Endpoint(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +203,7 @@ func TestProxyManagerSharesByAllowlist(t *testing.T) {
 	}
 
 	// The deny-all proxy audits through the manager hook.
-	resp, err := viaProxy(deny).Get("http://198.51.100.7:80/")
+	resp, err := viaProxyCred(deny, denyCred).Get("http://198.51.100.7:80/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,4 +216,71 @@ func TestProxyManagerSharesByAllowlist(t *testing.T) {
 	if len(denies) != 1 || denies[0] != "198.51.100.7:80" {
 		t.Fatalf("manager OnDeny: %v", denies)
 	}
+}
+
+// Regression (#36 iso-review M9): the proxy is a host-wide loopback listener
+// — without client auth ANY local process could ride an allowlisted
+// profile's egress. Unauthenticated and wrong-credential clients get 407
+// before any target matching; only a minted per-dispatch credential passes.
+func TestProxyRequiresPerDispatchCredential(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Proxy-Authorization") != "" {
+			t.Error("credential must never be forwarded upstream")
+		}
+		fmt.Fprint(w, "ok")
+	}))
+	defer upstream.Close()
+	target := strings.TrimPrefix(upstream.URL, "http://")
+
+	p := &Proxy{Allow: []string{target}}
+	addr, err := p.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	// No credential → 407 (never 403: auth comes before target matching).
+	resp, err := viaProxyCred(addr, "").Transport.(*http.Transport).RoundTrip(mustReq(t, upstream.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusProxyAuthRequired {
+		t.Fatalf("unauthenticated: %d", resp.StatusCode)
+	}
+	// Wrong credential → 407.
+	resp, err = viaProxyCred(addr, "not-a-real-cred").Transport.(*http.Transport).RoundTrip(mustReq(t, upstream.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusProxyAuthRequired {
+		t.Fatalf("wrong credential: %d", resp.StatusCode)
+	}
+	// A minted credential passes and the allowlist still applies.
+	resp, err = viaProxy(p, addr).Get(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "ok" {
+		t.Fatalf("authenticated allowed target: %d %q", resp.StatusCode, body)
+	}
+	if r2, err := viaProxy(p, addr).Get("http://198.51.100.9:80/"); err == nil {
+		r2.Body.Close()
+		if r2.StatusCode != http.StatusForbidden {
+			t.Fatalf("authenticated but unlisted target: %d", r2.StatusCode)
+		}
+	}
+}
+
+func mustReq(t *testing.T, u string) *http.Request {
+	t.Helper()
+	r, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Proxy the request by hand: absolute URI at the proxy address.
+	return r
 }

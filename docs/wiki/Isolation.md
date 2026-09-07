@@ -89,8 +89,14 @@ loopback forward proxy **inside conductor's own process**:
 - `network: {}` (present but empty) — deny-all: every egress attempt is
   refused and audited.
 - The launch env gets `HTTP_PROXY`/`HTTPS_PROXY` (and lowercase) pointing at
-  the proxy; `NO_PROXY=127.0.0.1,localhost,::1` keeps conductor's own local
-  surfaces (the skill socket, a local opencode server) reachable.
+  the proxy **with a per-dispatch credential** in the URL;
+  `NO_PROXY=127.0.0.1,localhost,::1` keeps conductor's own local surfaces
+  (the skill socket, a local opencode server) reachable.
+- The proxy **requires that credential** (`Proxy-Authorization`): it's a
+  host-wide loopback listener, so without auth any local process could ride
+  an allowlisted profile's egress. Unauthenticated clients get 407 before
+  any target matching; the credential is stripped before anything leaves the
+  box.
 
 **Deny by default for agent-authored work:** a dispatch that came from an
 agent-authored plan (§11) is routed through the deny-all proxy even with no

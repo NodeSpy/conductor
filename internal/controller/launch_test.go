@@ -15,9 +15,9 @@ func stubProxy(t *testing.T, addr string) *[][]string {
 	t.Helper()
 	var calls [][]string
 	old := EgressProxyFor
-	EgressProxyFor = func(allow []string) (string, error) {
+	EgressProxyFor = func(allow []string) (string, string, error) {
 		calls = append(calls, allow)
-		return addr, nil
+		return addr, "testcred", nil
 	}
 	t.Cleanup(func() { EgressProxyFor = old })
 	return &calls
@@ -64,7 +64,7 @@ func TestPrepareLaunchEgressProxyEnv(t *testing.T) {
 	}
 	joined := strings.Join(env, "\n")
 	if !strings.Contains(joined, "A=1") ||
-		!strings.Contains(joined, "HTTPS_PROXY=http://127.0.0.1:5555") ||
+		!strings.Contains(joined, "HTTPS_PROXY=http://conductor:testcred@127.0.0.1:5555") ||
 		!strings.Contains(joined, "NO_PROXY=127.0.0.1,localhost,::1") {
 		t.Fatalf("proxy env: %s", joined)
 	}
@@ -81,7 +81,7 @@ func TestPrepareLaunchAgentAuthoredDeniesByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(env, "\n"), "HTTP_PROXY=http://127.0.0.1:5556") {
+	if !strings.Contains(strings.Join(env, "\n"), "HTTP_PROXY=http://conductor:testcred@127.0.0.1:5556") {
 		t.Fatalf("agent-authored launch must carry deny-all proxy env: %v", env)
 	}
 	if len(*calls) != 1 || len((*calls)[0]) != 0 {

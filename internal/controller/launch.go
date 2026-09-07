@@ -14,11 +14,12 @@ import (
 
 // EgressProxyFor resolves the loopback address of conductor's egress proxy
 // enforcing exactly the given allowlist (empty/nil = deny everything),
-// starting it on first use. A package-level injectable seam like
-// HostArgvPrefix: wired once by cmd/conductor from a sandbox.ProxyManager,
-// stubbed in tests. nil + a launch that needs an egress policy is a launch
-// error — the policy fails closed, never silently unenforced.
-var EgressProxyFor func(allow []string) (string, error)
+// starting it on first use, plus a fresh per-dispatch client credential the
+// proxy requires (#36 iso-review M9). A package-level injectable seam like
+// HostArgvPrefix: wired once by cmd/conductor from a sandbox.ProxyManager
+// (Endpoint), stubbed in tests. nil + a launch that needs an egress policy
+// is a launch error — the policy fails closed, never silently unenforced.
+var EgressProxyFor func(allow []string) (addr, cred string, err error)
 
 // launchGOOS / launchLookPath feed sandbox.Spec.Check's platform probe —
 // package vars so tests can exercise the isolation paths without the wrapper
@@ -86,11 +87,11 @@ func prepareLaunch(host, dir string, env, argv []string, opt launchOpts) (wrappe
 			if EgressProxyFor == nil {
 				return nil, "", nil, false, fmt.Errorf("controller: launch needs an egress proxy (isolation network policy, or agent-authored deny-by-default) but none is wired")
 			}
-			addr, perr := EgressProxyFor(allow)
+			addr, cred, perr := EgressProxyFor(allow)
 			if perr != nil {
 				return nil, "", nil, false, fmt.Errorf("controller: egress proxy: %w", perr)
 			}
-			env = append(append([]string(nil), env...), sandbox.ProxyEnv(addr)...)
+			env = append(append([]string(nil), env...), sandbox.ProxyEnv(addr, cred)...)
 		}
 		if err := spec.Check(launchGOOS, launchLookPath); err != nil {
 			return nil, "", nil, false, err
