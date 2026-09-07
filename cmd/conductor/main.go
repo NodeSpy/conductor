@@ -245,8 +245,11 @@ func cmdValidate(args []string) error {
 	if err != nil {
 		return err
 	}
-	// Deprecation + skill lint: warnings, never failures.
+	// Deprecation + skill + isolation lint: warnings, never failures.
 	for _, w := range flow.DeprecationWarnings(cfg) {
+		fmt.Printf("warning: %s\n", w)
+	}
+	for _, w := range flow.IsolationWarnings(cfg) {
 		fmt.Printf("warning: %s\n", w)
 	}
 	if stack != nil {

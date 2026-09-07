@@ -52,6 +52,19 @@ conductor ALL=(sandboxagent) NOPASSWD: ALL
 The sandbox user should own nothing but its own scratch space; the worktree
 must be readable/writable by it (group membership or ACLs).
 
+**Honest scope — what `mode: user` does and doesn't give you.**
+It isolates the agent **from the daemon** (different uid → no reading
+conductor's state, config, or memory). It does **not** isolate concurrent
+dispatches **from each other** when they share the account: same EUID means
+a sibling agent can read `/proc/<pid>/environ` (tokens included) and
+signal/ptrace its peers. And any `egress:` allowlist under `mode: user` is
+**advisory-only** — there's no network namespace, so only the proxy env
+steers traffic; a runtime that ignores `HTTP(S)_PROXY` reaches the network
+directly. `conductor validate` warns on both. For agent-vs-agent isolation
+give each concurrent scope its own `user:`, or use `namespace`/`container`;
+for an enforced allowlist use `deny: true` + `egress:` under
+`namespace`/`container`.
+
 ### `mode: namespace` — Linux namespaces + cgroups
 
 The launch is wrapped in
