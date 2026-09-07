@@ -65,6 +65,13 @@ give each concurrent scope its own `user:`, or use `namespace`/`container`;
 for an enforced allowlist use `deny: true` + `egress:` under
 `namespace`/`container`.
 
+One combination is refused outright (no override): a `skill:` profile whose
+effective isolation is `mode: user`. The skill's one-shot claim code rides
+the tool server's environment, and same-EUID siblings can read it from
+`/proc/<pid>/environ` and race the claim — re-opening the broker-identity
+hijack the claim flow exists to close. Use `namespace`/`container` (separate
+`/proc` views) with `skill:`, or drop one of the two.
+
 ### `mode: namespace` — Linux namespaces + cgroups
 
 The launch is wrapped in

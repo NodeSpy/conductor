@@ -1241,6 +1241,9 @@ func (c *Config) Validate() error {
 		if err := c.validateProfileIsolation(name, p); err != nil {
 			return err
 		}
+		if err := c.validateSkillIsolation(name, p); err != nil {
+			return err
+		}
 		if err := validateBudget("agent "+name, p.Budget); err != nil {
 			return err
 		}

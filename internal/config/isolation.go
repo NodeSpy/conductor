@@ -102,6 +102,36 @@ func (c *Config) validateProfileIsolation(name string, p AgentProfile) error {
 	return validateIsolationControlChannel(where, p.Isolation, cc)
 }
 
+// validateSkillIsolation refuses skill: on a profile whose EFFECTIVE
+// isolation (its own, else its runtime's) is mode: user (#36 iso-review C3).
+// The skill's one-shot claim code rides the tool subprocess's environment;
+// under mode: user every dispatch of the scope shares one EUID, so a sibling
+// agent reads /proc/<pid>/environ and races ClaimSession for the claim —
+// re-opening exactly the broker-identity hijack the claim flow closed. The
+// broker's peer-binding protects the session AFTER a claim, not the claim
+// itself. Safe default with no footgun: there is no override — use
+// namespace/container isolation (structurally separate /proc views) or drop
+// the isolation, both of which keep the claim private.
+func (c *Config) validateSkillIsolation(name string, p AgentProfile) error {
+	if p.Skill == nil {
+		return nil
+	}
+	iso := p.Isolation
+	if iso == nil {
+		rn := p.RuntimeName()
+		if rn == "" {
+			rn = c.DefaultRuntimeName()
+		}
+		if cc, ok := c.MergedControllers()[rn]; ok {
+			iso = cc.Isolation
+		}
+	}
+	if iso != nil && iso.Mode == "user" {
+		return fmt.Errorf("config: agent %q: skill: cannot be combined with isolation mode user — the one-shot skill claim rides the tool server's environment, and every dispatch under the shared account %q has the same EUID (a sibling reads /proc/<pid>/environ and steals the claim). Use mode namespace or container, or drop skill: on this profile", name, iso.User)
+	}
+	return nil
+}
+
 // validateIsolationControlChannel rejects the network configurations that
 // would sever conductor's own control channel to the runtime it launched: an
 // opencode server is reached over local HTTP, so a structural network cutoff

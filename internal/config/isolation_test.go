@@ -247,3 +247,59 @@ func TestIsolationPrivilegedKnob(t *testing.T) {
 		t.Fatal("privileged on container mode must be rejected")
 	}
 }
+
+// Regression (#36 iso-review C3): the one-shot skill claim rides the tool
+// server's env — under shared-uid mode:user a sibling reads it from
+// /proc/<pid>/environ and races the claim, re-opening the broker-identity
+// hijack. skill: + effective mode:user isolation is refused at load, from
+// both the profile's own block and an inherited runtime block.
+func TestSkillRefusedUnderUserModeIsolation(t *testing.T) {
+	base := func() *Config {
+		return &Config{
+			Runtimes: map[string]RuntimeConfig{
+				"cc": {Type: "cli", Agent: "claude-code"},
+			},
+			Agents: map[string]AgentProfile{},
+		}
+	}
+
+	// Profile-level mode:user + skill → refused.
+	c := base()
+	c.Agents["fixer"] = AgentProfile{Runtime: "cc", Provider: "claude", Model: "m",
+		Skill:     &SkillPolicy{},
+		Isolation: &IsolationConfig{Mode: "user", User: "sbx"}}
+	if err := c.validateSkillIsolation("fixer", c.Agents["fixer"]); err == nil ||
+		!strings.Contains(err.Error(), "steals the claim") {
+		t.Fatalf("profile-level user isolation + skill must be refused: %v", err)
+	}
+
+	// Runtime-level mode:user inherited by a skill profile → refused too.
+	c = base()
+	rt := c.Runtimes["cc"]
+	rt.Isolation = &IsolationConfig{Mode: "user", User: "sbx"}
+	c.Runtimes["cc"] = rt
+	c.Agents["fixer"] = AgentProfile{Runtime: "cc", Provider: "claude", Model: "m", Skill: &SkillPolicy{}}
+	if err := c.validateSkillIsolation("fixer", c.Agents["fixer"]); err == nil {
+		t.Fatal("runtime-level user isolation + skill must be refused")
+	}
+
+	// namespace isolation (separate /proc views) keeps skill available.
+	c = base()
+	c.Agents["fixer"] = AgentProfile{Runtime: "cc", Provider: "claude", Model: "m",
+		Skill:     &SkillPolicy{},
+		Isolation: &IsolationConfig{Mode: "namespace"}}
+	if err := c.validateSkillIsolation("fixer", c.Agents["fixer"]); err != nil {
+		t.Fatalf("namespace + skill must be fine: %v", err)
+	}
+	// And a profile's own non-user isolation overrides a user-mode runtime.
+	c = base()
+	rt = c.Runtimes["cc"]
+	rt.Isolation = &IsolationConfig{Mode: "user", User: "sbx"}
+	c.Runtimes["cc"] = rt
+	c.Agents["fixer"] = AgentProfile{Runtime: "cc", Provider: "claude", Model: "m",
+		Skill:     &SkillPolicy{},
+		Isolation: &IsolationConfig{Mode: "namespace"}}
+	if err := c.validateSkillIsolation("fixer", c.Agents["fixer"]); err != nil {
+		t.Fatalf("profile namespace overrides runtime user: %v", err)
+	}
+}
