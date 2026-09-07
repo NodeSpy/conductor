@@ -114,7 +114,7 @@ func TestProxyConnectTunnelAllowed(t *testing.T) {
 	defer upstream.Close()
 	target := strings.TrimPrefix(upstream.URL, "http://")
 
-	p := &Proxy{Allow: []string{"127.0.0.1"}}
+	p := &Proxy{Allow: []string{"127.0.0.1:*"}}
 	addr, err := p.Start()
 	if err != nil {
 		t.Fatal(err)

@@ -211,7 +211,7 @@ func TestEgressAllowed(t *testing.T) {
 		{[]string{}, "api.example.com:443", false},
 		{[]string{"*"}, "anything:1", true},
 		{[]string{"api.example.com"}, "api.example.com:443", true},
-		{[]string{"api.example.com"}, "api.example.com:80", true},
+		{[]string{"api.example.com"}, "api.example.com:80", false},
 		{[]string{"api.example.com:443"}, "api.example.com:443", true},
 		{[]string{"api.example.com:443"}, "api.example.com:80", false},
 		{[]string{"api.example.com:443"}, "evil.example.com:443", false},
@@ -260,5 +260,31 @@ func TestWrapRemoteQuotesSystemdPrefix(t *testing.T) {
 	}
 	if !strings.Contains(cmd, `'CPUQuota=200%'`) || !strings.Contains(cmd, `'TasksMax=9'`) {
 		t.Fatalf("all limit values quoted: %q", cmd)
+	}
+}
+
+// Regression (#36 iso-review M8): a bare-host allowlist entry means :443
+// ONLY — it must not imply every port on that host (ssh, smtp, a debug
+// port). Any-port is the explicit "host:*" opt-in.
+func TestEgressBareHostIsHTTPSOnly(t *testing.T) {
+	allow := []string{"api.example.com"}
+	if !EgressAllowed(allow, "api.example.com:443") {
+		t.Fatal("bare host must allow :443")
+	}
+	for _, p := range []string{"22", "25", "80", "8443", "53"} {
+		if EgressAllowed(allow, "api.example.com:"+p) {
+			t.Fatalf("bare host must not imply port %s", p)
+		}
+	}
+	// The explicit opt-ins still work.
+	if !EgressAllowed([]string{"api.example.com:22"}, "api.example.com:22") {
+		t.Fatal("explicit host:port")
+	}
+	star := []string{"api.example.com:*"}
+	if !EgressAllowed(star, "api.example.com:22") || !EgressAllowed(star, "api.example.com:443") {
+		t.Fatal("host:* is the any-port opt-in")
+	}
+	if EgressAllowed(star, "other.example.com:22") {
+		t.Fatal("host:* is scoped to the host")
 	}
 }

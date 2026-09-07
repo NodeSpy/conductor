@@ -82,9 +82,10 @@ loopback forward proxy **inside conductor's own process**:
 
 - `egress: [ "api.github.com:443", "*.internal", "10.0.0.7:8443" ]` —
   CONNECT tunnels and plain-HTTP proxy requests are matched against the
-  patterns (`host`, `host:port`, glob on the host half; a bare host allows
-  any port). Non-matching targets get a 403 and an `egress_denied` audit
-  record.
+  patterns (`host`, `host:port`, `host:*`, glob on the host half). A bare
+  host means **:443 only** (the safe default); any other port needs an
+  explicit `host:port`, and `host:*` is the deliberate any-port opt-in.
+  Non-matching targets get a 403 and an `egress_denied` audit record.
 - `network: {}` (present but empty) — deny-all: every egress attempt is
   refused and audited.
 - The launch env gets `HTTP_PROXY`/`HTTPS_PROXY` (and lowercase) pointing at

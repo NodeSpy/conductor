@@ -255,9 +255,11 @@ func shQuote(s string) string {
 }
 
 // EgressAllowed reports whether hostport ("api.example.com:443") matches the
-// allowlist. Patterns are "host", "host:port", or globs on the host half
-// ("*.example.com", "*.example.com:443"); "*" allows everything. A bare-host
-// pattern allows any port on that host. Matching is case-insensitive on the
+// allowlist. Patterns are "host", "host:port", "host:*", or globs on the
+// host half ("*.example.com", "*.example.com:443"); "*" allows everything.
+// A bare-host pattern allows ONLY :443 (https) — the safe default; any other
+// port needs an explicit "host:port", and "host:*" is the deliberate
+// any-port opt-in (#36 iso-review M8). Matching is case-insensitive on the
 // host. An empty list allows nothing (deny-by-default).
 func EgressAllowed(allow []string, hostport string) bool {
 	host, port := splitHostPort(hostport)
@@ -270,7 +272,10 @@ func EgressAllowed(allow []string, hostport string) bool {
 			return true
 		}
 		ph, pp := splitHostPort(pat)
-		if pp != "" && pp != port {
+		if pp == "" {
+			pp = "443" // bare host ⇒ https only, never "any port"
+		}
+		if pp != "*" && pp != port {
 			continue
 		}
 		if ok, err := path.Match(strings.ToLower(ph), strings.ToLower(host)); err == nil && ok {
