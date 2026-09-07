@@ -33,6 +33,14 @@ var EgressProxyUnix func(allow []string) (sock, cred string, err error)
 // sandbox as the forwarder); a var for tests.
 var launchSelfExe = os.Executable
 
+// DaemonMaskPaths are the daemon's own sensitive paths (state dir, config
+// dir) hidden by DEFAULT inside every namespace-mode sandbox (#36 iso-review
+// H7) — a namespace shares the daemon's uid, so without masking the agent
+// could read the store, audit trail, and secrets env. `privileged: true` on
+// the isolation block is the explicit opt-out. Wired once at boot by
+// cmd/conductor.
+var DaemonMaskPaths []string
+
 // launchGOOS / launchLookPath feed sandbox.Spec.Check's platform probe —
 // package vars so tests can exercise the isolation paths without the wrapper
 // binaries (sudo/unshare/docker) installed.
@@ -106,6 +114,14 @@ func prepareLaunch(host, dir string, env, argv []string, opt launchOpts) (wrappe
 			env = append(append([]string(nil), env...), sandbox.ProxyEnv(addr, cred)...)
 		}
 		var nf *sandbox.NetForward
+		needMasks := spec != nil && spec.Mode == "namespace" && !spec.Privileged && len(DaemonMaskPaths) > 0
+		if needMasks {
+			self, serr := launchSelfExe()
+			if serr != nil {
+				return nil, "", nil, false, fmt.Errorf("controller: resolve conductor binary for sandbox masking: %w", serr)
+			}
+			nf = &sandbox.NetForward{Self: self, Masks: append([]string(nil), DaemonMaskPaths...)}
+		}
 		if spec.EnforcedEgress() {
 			// The STRUCTURAL allowlist (#36 iso-review C1): the sandbox has no
 			// network; its only path out is the forwarder into conductor's
@@ -117,11 +133,14 @@ func prepareLaunch(host, dir string, env, argv []string, opt launchOpts) (wrappe
 			if perr != nil {
 				return nil, "", nil, false, fmt.Errorf("controller: egress proxy socket: %w", perr)
 			}
-			self, serr := launchSelfExe()
-			if serr != nil {
-				return nil, "", nil, false, fmt.Errorf("controller: resolve conductor binary for sandbox-net: %w", serr)
+			if nf == nil {
+				self, serr := launchSelfExe()
+				if serr != nil {
+					return nil, "", nil, false, fmt.Errorf("controller: resolve conductor binary for sandbox-net: %w", serr)
+				}
+				nf = &sandbox.NetForward{Self: self}
 			}
-			nf = &sandbox.NetForward{Self: self, UnixSocket: sock}
+			nf.UnixSocket = sock
 			env = append(append([]string(nil), env...), sandbox.ProxyEnv(sandbox.ForwardAddr, cred)...)
 		}
 		if err := spec.Check(launchGOOS, launchLookPath); err != nil {

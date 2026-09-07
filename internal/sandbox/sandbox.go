@@ -49,6 +49,10 @@ type Spec struct {
 	Deny      bool   // structural no-network (namespace --net / --network=none)
 	Egress    []string
 	HasEgress bool // a network: block was present (even empty ⇒ deny-all proxy)
+	// Privileged (namespace mode) opts out of the default daemon-file
+	// masking — the explicit "run with my uid's full filesystem view"
+	// footgun (#36 iso-review H7).
+	Privileged bool
 }
 
 // FromConfig flattens an IsolationConfig. nil in, nil out.
@@ -56,7 +60,7 @@ func FromConfig(c *config.IsolationConfig) *Spec {
 	if c == nil {
 		return nil
 	}
-	s := &Spec{Mode: c.Mode, User: c.User}
+	s := &Spec{Mode: c.Mode, User: c.User, Privileged: c.Privileged}
 	if c.Container != nil {
 		s.Image = c.Container.Image
 		s.Engine = c.Container.Engine
@@ -177,9 +181,15 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 			prefix = append(prefix, "--net")
 		}
 		prefix = append(prefix, "--")
-		if nf != nil {
-			prefix = append(prefix, nf.Self, "sandbox-net",
-				"--listen", ForwardAddr, "--unix", nf.UnixSocket, "--")
+		if nf != nil && (nf.UnixSocket != "" || len(nf.Masks) > 0) {
+			prefix = append(prefix, nf.Self, "sandbox-net")
+			for _, m := range nf.Masks {
+				prefix = append(prefix, "--mask", m)
+			}
+			if nf.UnixSocket != "" {
+				prefix = append(prefix, "--listen", ForwardAddr, "--unix", nf.UnixSocket)
+			}
+			prefix = append(prefix, "--")
 		}
 		return append(prefix, argv...), nil
 	case "container":

@@ -214,3 +214,62 @@ func TestPrepareLaunchEnforcedEgress(t *testing.T) {
 		t.Fatal("enforced egress without a wired unix endpoint must fail closed")
 	}
 }
+
+// Regression (#36 iso-review H7): namespace mode shares the daemon's uid, so
+// by DEFAULT the daemon's own state/config paths are masked away inside the
+// mount namespace; `privileged: true` is the explicit opt-in to the full
+// filesystem view.
+func TestPrepareLaunchNamespaceMasksDaemonFilesByDefault(t *testing.T) {
+	stubPlatform(t)
+	oldMasks, oldSelf := DaemonMaskPaths, launchSelfExe
+	DaemonMaskPaths = []string{"/var/lib/conductor", "/etc/conductor"}
+	launchSelfExe = func() (string, error) { return "/opt/conductor", nil }
+	t.Cleanup(func() { DaemonMaskPaths, launchSelfExe = oldMasks, oldSelf })
+
+	iso := &config.IsolationConfig{Mode: "namespace"}
+	argv, _, _, _, err := prepareLaunch("", "/wt", nil, []string{"claude"}, launchOpts{iso: iso})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, "/opt/conductor sandbox-net --mask /var/lib/conductor --mask /etc/conductor -- claude") {
+		t.Fatalf("default namespace launch must mask daemon paths: %q", joined)
+	}
+
+	// privileged: true is the deliberate opt-out — plain unshare, no masking.
+	priv := &config.IsolationConfig{Mode: "namespace", Privileged: true}
+	argv, _, _, _, err = prepareLaunch("", "/wt", nil, []string{"claude"}, launchOpts{iso: priv})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined = strings.Join(argv, " ")
+	if strings.Contains(joined, "sandbox-net") || strings.Contains(joined, "--mask") {
+		t.Fatalf("privileged namespace must skip masking: %q", joined)
+	}
+
+	// Other modes are untouched by the mask seam (user switches uid;
+	// container never sees the daemon fs).
+	user := &config.IsolationConfig{Mode: "user", User: "sbx"}
+	argv, _, _, _, err = prepareLaunch("", "/wt", nil, []string{"claude"}, launchOpts{iso: user})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(argv, " "), "--mask") {
+		t.Fatalf("user mode must not carry masks: %v", argv)
+	}
+
+	// Masks and enforced egress compose: one helper invocation carries both.
+	oldU := EgressProxyUnix
+	EgressProxyUnix = func([]string) (string, string, error) { return "/run/sock", "c", nil }
+	t.Cleanup(func() { EgressProxyUnix = oldU })
+	both := &config.IsolationConfig{Mode: "namespace",
+		Network: &config.IsolationNetwork{Deny: true, Egress: []string{"a:443"}}}
+	argv, _, _, _, err = prepareLaunch("", "/wt", nil, []string{"claude"}, launchOpts{iso: both})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined = strings.Join(argv, " ")
+	if !strings.Contains(joined, "--mask /var/lib/conductor") || !strings.Contains(joined, "--unix /run/sock") {
+		t.Fatalf("masks + enforced egress must compose: %q", joined)
+	}
+}

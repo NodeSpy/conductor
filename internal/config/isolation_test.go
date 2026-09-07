@@ -229,3 +229,21 @@ func TestBudgetMergePolicy(t *testing.T) {
 		t.Fatalf("global fallback: %v", got)
 	}
 }
+
+// Regression (#36 iso-review H7): privileged is the namespace-mode opt-out
+// of default filesystem masking; anywhere else it would be a silent no-op,
+// so it is rejected.
+func TestIsolationPrivilegedKnob(t *testing.T) {
+	ok := &IsolationConfig{Mode: "namespace", Privileged: true}
+	if err := validateIsolation("here", ok, false); err != nil {
+		t.Fatalf("privileged namespace: %v", err)
+	}
+	bad := &IsolationConfig{Mode: "user", User: "s", Privileged: true}
+	if err := validateIsolation("here", bad, false); err == nil || !strings.Contains(err.Error(), "privileged") {
+		t.Fatalf("privileged on user mode must be rejected: %v", err)
+	}
+	badC := &IsolationConfig{Mode: "container", Container: &ContainerIsolation{Image: "i"}, Privileged: true}
+	if err := validateIsolation("here", badC, false); err == nil {
+		t.Fatal("privileged on container mode must be rejected")
+	}
+}

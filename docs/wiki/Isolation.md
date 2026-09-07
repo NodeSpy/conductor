@@ -62,6 +62,28 @@ or `/proc/<pid>/environ` of other agents. With `limits:` set, a
 `CPUQuota`, `TasksMax`). `network: {deny: true}` adds `--net`: the agent has
 no network interface but loopback in an empty namespace — structural.
 
+**Filesystem: masked by default, `privileged: true` to opt out.** A
+namespace keeps the daemon's own uid, so file permissions alone would let
+the agent read everything the daemon can. By default conductor therefore
+re-enters the launch through its own helper inside the mount namespace and
+**masks the daemon's state and config directories** (empty read-only tmpfs
+over directories, `/dev/null` over files) — the store, audit trail, history
+records, and secrets env simply don't exist in the agent's mount view, and
+a mask that can't be applied fails the launch rather than launching
+unmasked. Be honest about the remaining scope: everything else the daemon's
+uid can read (its `$HOME`, other repos) is still visible — namespace mode
+is process/mount/net isolation, **not** full filesystem-privilege
+isolation. For that, use `mode: container` (the container sees only the
+worktree) or `mode: user` with a distinct account.
+
+`isolation: { mode: namespace, privileged: true }` is the deliberate
+opt-in to the daemon's full filesystem view (no masking) — for a trusted
+profile that genuinely needs the daemon's own files. It's the same
+philosophy as `trust: full`: the strong posture is the default, the
+footgun is explicit. Remote (`hosts:`) namespace wraps never mask (the
+helper binary lives on this box) — the remote box's own account setup is
+the wall there.
+
 Linux-only; `conductor validate` rejects it on other platforms (a remote
 `hosts:` entry skips the local check — the remote box's OS applies).
 

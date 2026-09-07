@@ -135,6 +135,12 @@ type IsolationConfig struct {
 	// Limits are cgroup/engine resource caps (namespace mode applies them via
 	// systemd-run --user --scope; container mode via engine flags).
 	Limits *IsolationLimits `yaml:"limits,omitempty"`
+	// Privileged (namespace mode only) is the deliberate opt-in to run the
+	// sandboxed process with the daemon's own filesystem view: it skips the
+	// default masking of conductor's state/config directories inside the
+	// mount namespace. Default false = the agent cannot read the daemon's
+	// config, secrets env, store, or audit trail (#36 iso-review H7).
+	Privileged bool `yaml:"privileged,omitempty"`
 	// Network is the egress policy. ABSENT → no restriction for
 	// config-authored dispatches (agent-authored dispatches still get the
 	// deny-all proxy — deny by default). Present-but-empty → deny-all via

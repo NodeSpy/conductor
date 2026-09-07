@@ -23,6 +23,9 @@ func runSandboxNet(args []string) int {
 		case args[i] == "--unix" && i+1 < len(args):
 			opt.Unix = args[i+1]
 			i++
+		case args[i] == "--mask" && i+1 < len(args):
+			opt.Masks = append(opt.Masks, args[i+1])
+			i++
 		case args[i] == "--":
 			opt.Argv = args[i+1:]
 			i = len(args)

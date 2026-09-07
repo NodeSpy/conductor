@@ -44,6 +44,9 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 	default:
 		return fmt.Errorf("config: %s: unknown isolation mode %q (want user|namespace|container)", where, iso.Mode)
 	}
+	if iso.Privileged && iso.Mode != "namespace" {
+		return fmt.Errorf("config: %s: isolation `privileged: true` only applies to mode namespace (it opts out of the default filesystem masking there) — on %s it would be a silent no-op", where, iso.Mode)
+	}
 	if n := iso.Network; n != nil {
 		// `deny: true` + `egress:` together is the ENFORCED allowlist (#36
 		// iso-review C1): the namespace/container drops the network and the

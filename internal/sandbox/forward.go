@@ -32,14 +32,16 @@ const ForwardAddr = "127.0.0.1:18080"
 // this conductor binary (re-executed inside the sandbox as the forwarder)
 // and the egress proxy's unix socket.
 type NetForward struct {
-	Self       string // conductor's own executable path
-	UnixSocket string // the proxy's unix socket (daemon side)
+	Self       string   // conductor's own executable path
+	UnixSocket string   // the proxy's unix socket (daemon side); "" = no net forward
+	Masks      []string // daemon paths to hide inside the mount namespace (#36 iso-review H7)
 }
 
 // EnterOpts is the `conductor sandbox-net` helper's configuration.
 type EnterOpts struct {
 	Listen string   // TCP address to serve inside the sandbox ("" = none)
 	Unix   string   // the egress proxy's unix socket path
+	Masks  []string // paths to overmount away before exec (#36 iso-review H7)
 	Argv   []string // the real launch to exec once the plumbing is up
 }
 
@@ -52,6 +54,15 @@ func RunEnter(opt EnterOpts) int {
 	if len(opt.Argv) == 0 {
 		fmt.Fprintln(os.Stderr, "sandbox-net: nothing to run (missing -- argv)")
 		return 2
+	}
+	// Masking first: the daemon's own files disappear from this mount
+	// namespace before anything else runs. Fail closed — a mask that cannot
+	// be applied must not silently leave the files readable.
+	for _, m := range opt.Masks {
+		if err := maskPath(m); err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-net: mask %s: %v\n", m, err)
+			return 1
+		}
 	}
 	if opt.Listen != "" {
 		if opt.Unix == "" {
