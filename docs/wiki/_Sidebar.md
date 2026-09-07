@@ -26,6 +26,7 @@ The model
 - [[Isolation]]
 
 Connector types
+- [[Authoring-Connectors]]
 - [[Integration-GitHub]]
 - [[Integration-Slack]]
 - [[Integration-Cron]]

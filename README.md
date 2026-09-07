@@ -153,6 +153,13 @@ full contract; `conductor validate` resolves every reference in your config
 against those schemas — **and against the scope at each position** — before
 the daemon runs.
 
+The library **accretes** rather than shipping a big catalog: the generic
+`rest`/`graphql` connectors cover anything not yet typed, and adding a typed
+connector is deliberately cheap — one file, one registration, schemas as the
+contract, heavy-dependency backends behind build tags. Start from the
+executable template in `internal/connector/authoring_example_test.go` and
+the [Authoring-Connectors wiki page](../../wiki/Authoring-Connectors).
+
 ## The trigger grammar
 
 A step is one of five forms (all share `id` and `if`):

@@ -97,4 +97,11 @@ sentry/pagerduty rules were first-match-wins; the migration reproduces that
 winner exactly by generating `exclude:` filters on later triggers, so nothing
 double-fires after a migration.)
 
-Related: [[Verbs]] · [[Configuration]] · [[Grouping]] · [[Policy]] · [[Migration]]
+## Adding a connector type
+
+The library accretes: `rest`/`graphql` cover anything not yet typed, and a
+new typed connector is one file + one registration. See
+[[Authoring-Connectors]] and the executable template in
+`internal/connector/authoring_example_test.go`.
+
+Related: [[Verbs]] · [[Configuration]] · [[Grouping]] · [[Policy]] · [[Migration]] · [[Authoring-Connectors]]
