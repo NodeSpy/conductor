@@ -285,7 +285,10 @@ func seal(entries map[string]string, key *[32]byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(b) > int(^uint32(0)) {
+	// Compare as uint64: int(^uint32(0)) is a compile-time constant 4294967295
+	// that overflows a 32-bit int (GOARCH=386), and the length prefix below is a
+	// uint32, so the bound is uint32-max regardless of the platform's int width.
+	if uint64(len(b)) > uint64(^uint32(0)) {
 		return "", fmt.Errorf("vault: entries too large")
 	}
 	total := 4 + len(b)
