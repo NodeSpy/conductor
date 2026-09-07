@@ -52,6 +52,19 @@ func TestMaskSurvivesUmountInSandbox(t *testing.T) {
 		t.Skip("unshare not on PATH — namespace masking is Linux+util-linux only")
 	}
 
+	// Capability gate: the OUTER unshare every scenario relies on must actually
+	// run here. GitHub-hosted runners (and other locked-down kernels) forbid
+	// `unshare --user --mount`, which surfaces as a generic non-zero exit from
+	// the outer unshare — BEFORE the re-exec'd binary runs, so the inner
+	// maskCapable() probe never gets the chance to signal maskEnvCannotMask and
+	// the scenario comes back as a bare exit 1. Probe the exact namespace up
+	// front and skip cleanly (never a false green) rather than failing. On a
+	// box that DOES support it, `true` exits 0 and the real test runs.
+	if err := exec.Command("unshare", "--user", "--map-root-user", "--mount", "true").Run(); err != nil {
+		t.Skipf("requires unprivileged user namespaces; unavailable in this environment "+
+			"(e.g. restricted CI runner): %v", err)
+	}
+
 	// SAFE: RunEnter's nested-userns hop must keep the mask intact.
 	safe := runMaskScenario(t, "MASK_OUTER_SAFE")
 	switch safe {
