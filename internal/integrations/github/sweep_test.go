@@ -303,3 +303,32 @@ func TestStuckReposAndInterval(t *testing.T) {
 		t.Fatalf("default interval should be 15m, got %s", g2.stuckPollInterval())
 	}
 }
+
+// TestStuckReposUsesActionScopeUnderConnectorsLowering pins the fix for the
+// "stuck */*: users/*/installation 404" bug: the connectors lowering makes every
+// rule a "*/*" catch-all and carries each trigger's real repo scope on its
+// stuck_checks action. stuckRepos must return the action's repos (org/a, org/b),
+// never the rule's "*/*" — otherwise eachRepo tries to resolve an installation
+// for a wildcard owner. Reverting stuckRepos to read r.Match.Repos returns
+// ["*/*"] and fails this test.
+func TestStuckReposUsesActionScopeUnderConnectorsLowering(t *testing.T) {
+	cfg := Config{
+		// Defaults carry no stuck_checks (connectors puts nothing there).
+		Rules: []Rule{{
+			Match: Match{Repos: []string{"*/*"}}, // the lowering's catch-all
+			Actions: as1(map[string]config.Action{
+				"stuck_checks": {Type: "command", Repos: []string{"org/a", "org/b"}},
+			}),
+		}},
+	}
+	g := &Integration{cfg: cfg}
+	got := g.stuckRepos()
+	for _, r := range got {
+		if r == "*/*" {
+			t.Fatalf("stuckRepos leaked the catch-all wildcard: %v", got)
+		}
+	}
+	if len(got) != 2 || got[0] != "org/a" || got[1] != "org/b" {
+		t.Fatalf("want the action's concrete repos [org/a org/b], got %v", got)
+	}
+}
