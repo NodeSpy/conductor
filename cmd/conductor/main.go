@@ -138,7 +138,7 @@ usage:
   conductor status [--config PATH]      snapshot: live agents, in-flight workflows, stuck/attention
   conductor report [--days N]           activity summary: dispatches by kind/outcome + attention + spend
   conductor runs [<id>] [--limit N]     recorded executions: list, or one run's step detail
-  conductor runs retry <id> [--from <step>]  re-run a recorded execution (recorded inputs pinned)
+  conductor runs retry <id> [--from <step>] [--force-replay]  re-run a recorded execution (recorded inputs pinned)
   conductor watch [<run-id>] [--json]   tail the live run event stream (steps, gates, outcomes)
   conductor pause | resume              stop / resume dispatch at runtime (no restart)
   conductor update [--force] [--tag vX]  self-update to the latest release (uses gh)
@@ -1045,10 +1045,12 @@ type controlRequest struct {
 	Name   string         `json:"name,omitempty"`
 	Inputs map[string]any `json:"inputs,omitempty"`
 	// retry: the recorded run to re-run and the step to resume from
-	// ("" = the recorded failed step, else the beginning). (#36 §20)
+	// ("" = the recorded failed step, else the beginning); ForceReplay
+	// permits re-running steps the record says already succeeded. (#36 §20)
 	// watch: RunID filters the live event stream ("" = every run). (#36 §17)
-	RunID    string `json:"run_id,omitempty"`
-	FromStep string `json:"from_step,omitempty"`
+	RunID       string `json:"run_id,omitempty"`
+	FromStep    string `json:"from_step,omitempty"`
+	ForceReplay bool   `json:"force_replay,omitempty"`
 }
 
 type controlResponse struct {
@@ -1082,7 +1084,7 @@ func serveControl(ctx context.Context, path string, igs []core.Integration, emit
 
 // retryFunc re-runs a recorded execution from a step (#36 §20) — the
 // engine's RetryRunByID.
-type retryFunc func(ctx context.Context, runID, fromStep string) (string, error)
+type retryFunc func(ctx context.Context, runID, fromStep string, forceReplay bool) (string, error)
 
 func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integration, emit core.EmitFunc, manual map[string]connector.CompiledTrigger, retry retryFunc, events *flow.EventHub, log func(string, ...any)) {
 	defer conn.Close()
@@ -1123,7 +1125,7 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 			writeControlResp(conn, controlResponse{Error: "retry is not available (no flow runner configured)"})
 			return
 		}
-		msg, err := retry(ctx, req.RunID, req.FromStep)
+		msg, err := retry(ctx, req.RunID, req.FromStep, req.ForceReplay)
 		if err != nil {
 			log("retry %q failed: %v", req.RunID, err)
 			writeControlResp(conn, controlResponse{Error: err.Error()})

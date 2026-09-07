@@ -82,13 +82,23 @@ func TestRetryFromFailedStepPinsRecordedInputs(t *testing.T) {
 	rec := recordedRun(t)
 	_ = st.PutHistory(rec)
 
-	msg, err := eng.RetryRunByID(context.Background(), "rprev", "")
+	msg, err := eng.RetryRunByID(context.Background(), "rprev", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(msg, "step second") {
 		t.Fatalf("ack: %q", msg)
 	}
+	// The default path (from the recorded FAILED step) never needs force.
+	// A force-replay is a distinct, audited fact.
+	st.mu.Lock()
+	for _, a := range st.audits {
+		if a["event"] == "retry_from_step" && a["force_replay"] != false {
+			st.mu.Unlock()
+			t.Fatalf("default retry must audit force_replay=false: %+v", a)
+		}
+	}
+	st.mu.Unlock()
 	calls := waitGateCalls(t, 1)
 	// Only the failed step re-ran, and it rendered against the PINNED output
 	// of the recorded first step — which itself never re-ran.
@@ -126,8 +136,14 @@ func TestRetryFromExplicitStepAndErrors(t *testing.T) {
 	rec.ID = "rexpl"
 	_ = st.PutHistory(rec)
 
-	// Explicit --from first: BOTH steps re-run (the pin is only for earlier steps).
-	if _, err := eng.RetryRunByID(context.Background(), "rexpl", "first"); err != nil {
+	// Explicit --from a step the record says SUCCEEDED is refused without
+	// force (#36 review H4): re-running it replays committed side effects.
+	if _, err := eng.RetryRunByID(context.Background(), "rexpl", "first", false); err == nil ||
+		!strings.Contains(err.Error(), "--force-replay") {
+		t.Fatalf("ok-step retry must require force: %v", err)
+	}
+	// With --force-replay: BOTH steps re-run (the pin is only for earlier steps).
+	if _, err := eng.RetryRunByID(context.Background(), "rexpl", "first", true); err != nil {
 		t.Fatal(err)
 	}
 	calls := waitGateCalls(t, 2)
@@ -136,11 +152,11 @@ func TestRetryFromExplicitStepAndErrors(t *testing.T) {
 	}
 
 	// Error paths.
-	if _, err := eng.RetryRunByID(context.Background(), "ghost", ""); err == nil ||
+	if _, err := eng.RetryRunByID(context.Background(), "ghost", "", false); err == nil ||
 		!strings.Contains(err.Error(), "no recorded run") {
 		t.Fatalf("unknown id: %v", err)
 	}
-	if _, err := eng.RetryRunByID(context.Background(), "rexpl", "nope"); err == nil ||
+	if _, err := eng.RetryRunByID(context.Background(), "rexpl", "nope", false); err == nil ||
 		!strings.Contains(err.Error(), `no step "nope"`) {
 		t.Fatalf("unknown step: %v", err)
 	}
@@ -148,13 +164,13 @@ func TestRetryFromExplicitStepAndErrors(t *testing.T) {
 	running.ID = "rlive"
 	running.Status = "running"
 	_ = st.PutHistory(running)
-	if _, err := eng.RetryRunByID(context.Background(), "rlive", ""); err == nil ||
+	if _, err := eng.RetryRunByID(context.Background(), "rlive", "", false); err == nil ||
 		!strings.Contains(err.Error(), "still running") {
 		t.Fatalf("running: %v", err)
 	}
 	bare := store.RunHistory{ID: "rbare", Status: "failed"}
 	_ = st.PutHistory(bare)
-	if _, err := eng.RetryRunByID(context.Background(), "rbare", ""); err == nil ||
+	if _, err := eng.RetryRunByID(context.Background(), "rbare", "", false); err == nil ||
 		!strings.Contains(err.Error(), "no retryable trigger") {
 		t.Fatalf("bare: %v", err)
 	}

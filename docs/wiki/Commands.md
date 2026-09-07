@@ -11,7 +11,7 @@ conductor status                           live agents, in-flight workflows, stu
 conductor report [--days N]                dispatches by kind/outcome + attention counts + spend
 conductor runs [--limit N]                 recorded executions, newest first (id, status, cost)
 conductor runs <id>                        one run's step-by-step detail (also: conductor run <id>)
-conductor runs retry <id> [--from <step>]  re-run a recorded execution (recorded inputs pinned; via the daemon)
+conductor runs retry <id> [--from <step>] [--force-replay]  re-run a recorded execution (recorded inputs pinned; succeeded steps need --force-replay)
 conductor watch [<run-id>] [--json]        tail the live run event stream (steps, gates, outcomes)
 conductor pause | resume                   stop / resume dispatch at runtime (no restart; also verbs: conductor.pause/resume)
 conductor update [--force] [--tag vX]      self-update to the latest release

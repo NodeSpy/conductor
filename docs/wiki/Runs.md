@@ -76,8 +76,14 @@ renders them at dispatch) and clipped.
 
 ```
 conductor runs retry <id>                 # resume from the recorded FAILED step
-conductor runs retry <id> --from <step>   # resume from a chosen step ('' = the top)
+conductor runs retry <id> --from <step>   # resume from a chosen step
+conductor runs retry <id> --from <step> --force-replay   # …even one that already succeeded
 ```
+
+A `--from` target the record says already **succeeded** (or any step before
+the recorded failure) is refused by default — re-running it replays its
+committed side effects (posted comments, pushes). `--force-replay` does it
+deliberately, and the audit row records the flag.
 
 Retry goes through the running daemon (it needs tokens, slots, and policy).
 The recorded outputs of every successful step **before** the chosen one are

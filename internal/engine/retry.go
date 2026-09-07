@@ -22,16 +22,19 @@ import (
 
 // RetryRunByID loads a recorded execution and re-runs it from fromStep
 // (empty = the recorded failed step, else the beginning). Returns a
-// human-readable acknowledgment.
-func (e *Engine) RetryRunByID(ctx context.Context, histID, fromStep string) (string, error) {
+// human-readable acknowledgment. forceReplay permits re-running steps the
+// record says already SUCCEEDED — replaying committed side effects (posted
+// comments, pushes) is a deliberate, audited act, never the default
+// (#36 review H4).
+func (e *Engine) RetryRunByID(ctx context.Context, histID, fromStep string, forceReplay bool) (string, error) {
 	rec, ok := e.store.GetHistory(histID)
 	if !ok {
 		return "", fmt.Errorf("no recorded run %q (see `conductor runs`)", histID)
 	}
-	return e.retryRun(ctx, rec, fromStep)
+	return e.retryRun(ctx, rec, fromStep, forceReplay)
 }
 
-func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep string) (string, error) {
+func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep string, forceReplay bool) (string, error) {
 	if e.flow == nil {
 		return "", fmt.Errorf("retry: no connectors-model flow runner is configured")
 	}
@@ -67,6 +70,18 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 			}
 			sort.Strings(ids)
 			return "", fmt.Errorf("run %s has no step %q (steps: %s)", rec.ID, fromStep, strings.Join(ids, ", "))
+		}
+		// Re-running a step the record says SUCCEEDED replays its committed
+		// side effects (a posted comment, a push) — refuse unless forced.
+		// The same applies to any target before the recorded failure point:
+		// everything up to it ran to completion.
+		if !forceReplay {
+			if s.Status == "ok" {
+				return "", fmt.Errorf("run %s step %q already succeeded — re-running it replays its side effects; pass --force-replay to do that deliberately", rec.ID, fromStep)
+			}
+			if fs, ok := rec.Step(rec.FailedStep); ok && s.Index < fs.Index {
+				return "", fmt.Errorf("run %s step %q is before the recorded failure (%q) — its steps already ran; pass --force-replay to re-run them", rec.ID, fromStep, rec.FailedStep)
+			}
 		}
 		startIdx = s.Index
 	}
@@ -105,7 +120,7 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 
 	e.store.Audit(map[string]any{"event": "retry_from_step", "repo": rec.Repo,
 		"number": rec.Number, "kind": rec.Kind, "run": rec.ID, "from_step": fromStep,
-		"step_index": startIdx})
+		"step_index": startIdx, "force_replay": forceReplay})
 	e.log("%s retrying recorded run %s from step %d (%s)", tag(t), rec.ID, startIdx, orTop(fromStep))
 
 	rctx := flow.WithRetryOf(ctx, rec.ID)

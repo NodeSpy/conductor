@@ -133,17 +133,21 @@ func printKV(prefix string, m map[string]any) {
 // runsRetry asks the running daemon to re-run a recorded execution.
 func runsRetry(cfg *config.Config, rest []string) error {
 	if len(rest) == 0 || strings.HasPrefix(rest[0], "--") {
-		return fmt.Errorf("usage: conductor runs retry <id> [--from <step>]")
+		return fmt.Errorf("usage: conductor runs retry <id> [--from <step>] [--force-replay]")
 	}
 	id := rest[0]
 	from := ""
+	force := false
 	for i := 1; i < len(rest); i++ {
-		if rest[i] == "--from" && i+1 < len(rest) {
+		switch {
+		case rest[i] == "--from" && i+1 < len(rest):
 			from = rest[i+1]
 			i++
+		case rest[i] == "--force-replay":
+			force = true
 		}
 	}
-	resp, err := sendControl(cfg, controlRequest{Cmd: "retry", RunID: id, FromStep: from})
+	resp, err := sendControl(cfg, controlRequest{Cmd: "retry", RunID: id, FromStep: from, ForceReplay: force})
 	if err != nil {
 		return err
 	}
