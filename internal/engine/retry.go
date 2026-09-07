@@ -134,6 +134,7 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 		return "", fmt.Errorf("retry cancelled while waiting for a slot")
 	}
 	go func() {
+		defer e.recoverDispatch(rctx, t, run, "flow retry")
 		defer e.release()
 		e.flow.Run(rctx, run, t, spec, nil, false)
 	}()

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1034,4 +1035,39 @@ func TestAgentDefaultControllerDispatchesThroughPaseo(t *testing.T) {
 	if len(d.reqs) != 1 {
 		t.Fatalf("default config must dispatch through paseo exactly once, got %d", len(d.reqs))
 	}
+}
+
+// TestDispatchGoroutinePanicRecovered is the H5 regression: a panic inside a
+// per-event dispatch goroutine (here, a step's Dispatch call) must be recovered
+// at the goroutine's top frame — not escape and abort the whole daemon, taking
+// every other in-flight run with it. After the panic the persisted run must be
+// cleared (recorded failed, so ResumeWorkflows doesn't re-drive it straight back
+// into the same panic) and the engine must keep dispatching new events.
+//
+// Without recoverDispatch the first process() below panics in its goroutine and
+// crashes the test binary — this test then fails hard (red). With it, the panic
+// is caught, PendingRuns drains, and the second event dispatches normally.
+func TestDispatchGoroutinePanicRecovered(t *testing.T) {
+	var calls int32
+	d := &fakeDispatcher{onDispatch: func(dispatch.Request) (dispatch.RunRef, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			panic("boom inside dispatch")
+		}
+		return dispatch.RunRef{Backend: "test"}, nil
+	}}
+	n := &fakeNotifier{}
+	e, st := newEng(t, baseCfg(), d, n, nil)
+	workflow := config.Action{Steps: []config.Action{
+		{ID: "run", Type: "command", Command: []string{"true"}},
+	}}
+
+	// First event: its step dispatch panics in the workflow goroutine.
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 1, "h1", "sig1", workflow))
+	// Survival + "recorded failed": the guard cleared the persisted run.
+	waitFor(t, func() bool { return len(st.PendingRuns()) == 0 })
+
+	// The engine is still alive: a fresh event dispatches and completes cleanly.
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 2, "h2", "sig2", workflow))
+	waitFor(t, func() bool { return atomic.LoadInt32(&calls) >= 2 })
+	waitFor(t, func() bool { return len(st.PendingRuns()) == 0 })
 }

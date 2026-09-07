@@ -126,6 +126,7 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 	}
 	run := e.newFlowRun(t, spec, shadow)
 	go func() {
+		defer e.recoverDispatch(ctx, t, run, "flow dispatch")
 		if !shadow {
 			defer e.release()
 		}
@@ -294,6 +295,7 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 		return
 	}
 	go func() {
+		defer e.recoverDispatch(ctx, t, r, "flow resume")
 		defer e.release()
 		e.flow.Run(ctx, r, t, spec, nil, false)
 	}()

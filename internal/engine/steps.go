@@ -270,6 +270,7 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID,
 		}
 	}
 	go func() {
+		defer e.recoverDispatch(ctx, t, store.WorkflowRun{}, "review hand-off")
 		dec, rerr := handoff.Review(ctx, sess, ch, draft, notifyRef, refresh)
 		if rerr != nil {
 			if ctx.Err() == nil {

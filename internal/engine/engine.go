@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -716,6 +717,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 		run := e.newRun(t, act, shadow)
 		go func() {
+			defer e.recoverDispatch(ctx, t, run, "workflow dispatch")
 			if !shadow {
 				defer e.release()
 			}
@@ -886,8 +888,9 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	e.notif.Emit(ctx, notify.EventComplete, t, ref.Backend)
 	if gated && !ref.Shadowed && ref.AgentID != "" {
 		go func() {
+			defer e.recoverDispatch(ctx, t, store.WorkflowRun{}, "agent wait")
+			defer e.release()
 			run.WaitForAgent(ctx, ref.AgentID, agentWaitTimeout(profile))
-			e.release()
 		}()
 	} else if gated {
 		e.release()
@@ -932,6 +935,30 @@ func (e *Engine) finishRun(run store.WorkflowRun) {
 	if run.ID != "" {
 		_ = e.store.DeleteRun(run.ID)
 	}
+}
+
+// recoverDispatch is the top-frame panic guard for a per-event dispatch
+// goroutine. A panic inside runSteps/flow.Run/handoff.Review must not take the
+// whole daemon down and every other in-flight run with it: recover here, log
+// the stack, escalate to the operator, and clear the persisted run so it is
+// recorded failed rather than left dangling as in-flight (which ResumeWorkflows
+// would otherwise re-drive on the next start, straight back into the same
+// panic). The goroutine's own deferred e.release() still runs — recover only
+// swallows the panic, it does not skip the other defers — so the concurrency
+// slot and any budget reservation are returned normally. run may be a zero
+// value (no persisted run in scope, e.g. the WaitForAgent/review goroutines);
+// finishRun is then a no-op.
+func (e *Engine) recoverDispatch(ctx context.Context, t core.Trigger, run store.WorkflowRun, what string) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	e.log("%s PANIC in %s: %v\n%s", tag(t), what, r, debug.Stack())
+	e.store.Audit(map[string]any{"event": "panic_recovered", "repo": t.Target.Repo,
+		"number": t.Target.Number, "kind": t.Kind, "run": run.ID, "where": what})
+	e.notif.Emit(ctx, notify.EventEscalate, t,
+		fmt.Sprintf("internal error in %s — run recorded failed: %v", what, r))
+	e.finishRun(run)
 }
 
 // sanitizeContext copies a trigger context minus secrets (re-minted on resume).
@@ -1009,6 +1036,7 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 			return
 		}
 		go func() {
+			defer e.recoverDispatch(ctx, t, run, "workflow resume")
 			defer e.release()
 			e.runSteps(ctx, run, t, act, appTok, userTok, false)
 		}()
