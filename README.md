@@ -466,6 +466,18 @@ agent steps or as trigger/workflow defaults; checks run in the agent's
 worktree with `{{.gate.*}}` scope. See the
 [Gates wiki page](../../wiki/Gates).
 
+## The outcome loop
+
+Conductor learns from what lands: PR merged / closed / **reverted** (via
+GitHub's own revert back-references), review approved / rejected, CI and gate
+results — each agent action's outcome is captured, audited, fed into shared
+memory and saved-workflow health (a workflow whose changes keep getting
+reverted is flagged as rotting even when its runs succeed), and optionally
+back into the agent itself (`outcome_feedback: true` appends a one-line
+track record to its guidance). `conductor report` shows the quality view:
+accept rate, revert rate, and cost-per-merged-change per agent. See the
+[Outcomes wiki page](../../wiki/Outcomes).
+
 ## Cost & token accounting
 
 Every agent run is metered (#36 §14): token usage and `$` cost come from the

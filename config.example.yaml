@@ -372,6 +372,18 @@ hosts:
 #           gate: { run: [ test, lint, critic ], max_revisions: 2 } }
 
 # ---------------------------------------------------------------------------
+# The outcome loop (#36 §18) runs by itself: merged / closed / reverted /
+# approved / rejected / ci_failed outcomes are captured per agent action
+# (github's _closed signal needs no trigger config), audited, and fed into
+# memory + saved-workflow delivery health. `conductor report` shows accept
+# rate / revert rate / $-per-merged-change per agent. Optional per-profile
+# guidance tuning:
+# ---------------------------------------------------------------------------
+# agents:
+#   fixer:
+#     outcome_feedback: true    # append a one-line track record to the agent's guidance
+
+# ---------------------------------------------------------------------------
 # runtimes: — where agents run (previously controllers:). The paseo runtime's
 # bin: replaces the old top-level paseo_bin. Any runtime may set host: to run
 # on a hosts: entry over SSH — a remote paseo runs its whole CLI there (put

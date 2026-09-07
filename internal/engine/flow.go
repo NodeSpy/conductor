@@ -356,8 +356,10 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			}
 			return dispatch.Tokens{App: appTok, User: userTok}
 		},
-		Guidance: e.agentGuidance,
-		Memory:   e.memoryPrompt,
+		Guidance: func(agentName string, p config.AgentProfile) string {
+			return e.agentGuidance(p) + e.outcomeGuidance(agentName, p)
+		},
+		Memory: e.memoryPrompt,
 		// Revise is the supervise loop's round-trip (#36 §11): the failure
 		// context goes to the authoring agent's bound session (§10) and the
 		// captured reply carries the revised plan. No affinity, no session:
@@ -368,11 +370,11 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			}
 			return e.affinity.Followup(ctx, agentName, e.cfg.Agents[agentName], t, prompt)
 		},
-		Background: func(ctx context.Context, t core.Trigger, stepID string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string) {
+		Background: func(ctx context.Context, t core.Trigger, stepID, agentName string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string) {
 			e.hold.Add(ref.AgentID)
 			ch := e.askChannelFor(handoffConn)
 			if ch != nil && e.broker != nil && ref.AgentID != "" {
-				e.startReviewHandoff(ctx, t, stepID, p, ref, ch)
+				e.startReviewHandoff(ctx, t, stepID, agentName, p, ref, ch)
 				return
 			}
 			e.notif.Emit(ctx, notify.EventNeedsInput, t,
@@ -394,8 +396,14 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			}
 			return nil
 		},
-		RecordUsage: func(t core.Trigger, agentName, stepID, runID, wfScope string, u cost.Usage) {
+		RecordUsage: func(t core.Trigger, agentName, stepID, runID, wfScope, savedWF string, u cost.Usage) {
 			e.recordUsage(t, agentName, stepID, runID, wfScope, u)
+			// The outcome loop's engagement (#36 §18): this agent acted on
+			// this target; a later terminal signal resolves it.
+			e.store.RecordEngagement(t.Target.Repo, t.Target.Number, store.Engagement{
+				Agent: agentName, Workflow: wfScope, SavedWorkflow: savedWF,
+				Kind: t.Kind, Run: runID, CostUSD: u.CostUSD, Tokens: u.TotalTokens,
+			})
 		},
 		FollowUp: e.agentFollowUp,
 	}

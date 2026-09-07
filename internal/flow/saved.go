@@ -42,15 +42,25 @@ type SavedWorkflow struct {
 	// Health counters (real, non-shadow runs).
 	Successes int `json:"successes"`
 	Failures  int `json:"failures"`
+	// Delivery counters (#36 §18): terminal outcomes of PRs this workflow's
+	// agents worked on — merged-and-not-reverted is the health signal that
+	// matters more than "the run finished".
+	Deliveries int `json:"deliveries,omitempty"` // merged
+	Reverts    int `json:"reverts,omitempty"`    // later reverted
 }
 
 // Runs returns the total recorded outcomes.
 func (w *SavedWorkflow) Runs() int { return w.Successes + w.Failures }
 
 // Rotting reports a workflow whose track record says stop choosing it:
-// at least 3 recorded runs with under 50% success.
+// at least 3 recorded runs with under 50% success, or — the outcome loop's
+// harder signal (#36 §18) — at least 3 delivered changes with over half of
+// them reverted.
 func (w *SavedWorkflow) Rotting() bool {
-	return w.Runs() >= 3 && w.Successes*2 < w.Runs()
+	if w.Runs() >= 3 && w.Successes*2 < w.Runs() {
+		return true
+	}
+	return w.Deliveries >= 3 && w.Reverts*2 > w.Deliveries
 }
 
 // Def renders the saved workflow as a §4 WorkflowDef for the runner.
@@ -216,6 +226,24 @@ func (s *SavedStore) Delete(name string) error {
 	}
 	delete(s.m, name)
 	return s.save()
+}
+
+// RecordDelivery tracks a terminal PR outcome for a change this workflow
+// produced (#36 §18): merged bumps Deliveries; a later revert bumps Reverts
+// (a reverted change was delivered first, so the pair nets one bad delivery).
+func (s *SavedStore) RecordDelivery(name string, merged bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, ok := s.m[name]
+	if !ok {
+		return
+	}
+	if merged {
+		w.Deliveries++
+	} else {
+		w.Reverts++
+	}
+	_ = s.save()
 }
 
 // RecordOutcome tracks a real (non-shadow) run's result for rot detection.

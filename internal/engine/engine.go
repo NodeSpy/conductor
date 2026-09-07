@@ -71,6 +71,13 @@ type Store interface {
 	// Execution history (#36 §20): the recorded run a user-driven retry
 	// rehydrates.
 	GetHistory(id string) (store.RunHistory, bool)
+	// Outcome-learning state (#36 §18): engagements awaiting a terminal
+	// signal, and the per-agent counters behind guidance tuning.
+	RecordEngagement(repo string, number int, e store.Engagement)
+	TakeEngagements(repo string, number int) []store.Engagement
+	PeekEngagements(repo string, number int) []store.Engagement
+	BumpOutcome(agent, outcome string)
+	AgentOutcomeStats(agent string) map[string]int
 }
 
 // Engine is the central work loop.
@@ -489,6 +496,10 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// Session-affinity end_on: an eviction event (pr_closed/merged) ends the
 	// matching keyed session before any gate can drop the trigger.
 	e.affinity.ObserveEvent(ctx, t)
+
+	// The outcome loop (#36 §18) reads merge/close/revert/CI facts off the
+	// trigger before any gate can drop it.
+	e.observeOutcomeSignals(ctx, t)
 
 	// Terminal state: drop dedup record, no dispatch.
 	if t.Kind == core.KindClosed {

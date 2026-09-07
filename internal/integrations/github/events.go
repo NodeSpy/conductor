@@ -129,7 +129,9 @@ type prPayload struct {
 	Number  int    `json:"number"`
 	State   string `json:"state"`
 	Draft   bool   `json:"draft"`
+	Merged  bool   `json:"merged"`
 	Title   string `json:"title"`
+	Body    string `json:"body"`
 	HTMLURL string `json:"html_url"`
 	Head    struct {
 		SHA string `json:"sha"`
@@ -440,9 +442,17 @@ func (g *Integration) pullRequestTriggers(ctx context.Context, repo string, p gh
 	pr := p.PullRequest
 	switch p.Action {
 	case "closed":
-		// Signal the engine to drop dedup state; no dispatch.
+		// Signal the engine to drop dedup state; no dispatch. The context
+		// carries the outcome facts (#36 §18): merged vs closed-unmerged, and
+		// — for a merged revert PR — which PRs of THIS repo it reverts
+		// (GitHub's revert flow writes "Reverts owner/repo#N" into the body).
 		return []core.Trigger{{Source: "github", Instance: g.name, Kind: core.KindClosed,
-			Target: g.prTarget(repo, pr)}}
+			Target: g.prTarget(repo, pr),
+			Context: map[string]any{
+				"merged":  pr.Merged,
+				"title":   pr.Title,
+				"reverts": revertRefs(repo, pr),
+			}}}
 	case "review_requested":
 		t := g.prTarget(repo, pr)
 		labels := prLabelNames(pr)

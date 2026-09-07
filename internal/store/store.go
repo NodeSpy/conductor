@@ -59,6 +59,10 @@ type Store struct {
 	historyMaxAge  time.Duration
 	historyMaxRuns int
 	historyPruned  time.Time
+
+	// Outcome-learning state (#36 §18) — see outcomes.go.
+	engagements  map[string][]Engagement
+	outcomeStats map[string]map[string]int
 }
 
 // Options configure a Store.
@@ -143,6 +147,7 @@ func Open(o Options) (*Store, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
+	s.loadOutcomeState()
 	a, err := openAudit(o.AuditPath, o.AuditMaxSize)
 	if err != nil {
 		return nil, err

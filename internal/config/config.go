@@ -621,6 +621,10 @@ type AgentProfile struct {
 	// (#36 §14) — checked alongside the global and workflow-scope budgets;
 	// an over-cap dispatch sheds and notifies.
 	Budget *BudgetPolicy `yaml:"budget"`
+	// OutcomeFeedback opts this profile into guidance tuning (#36 §18): a
+	// one-line track-record summary (merged / closed / rejected / reverted
+	// counts) is appended to the agent's guidance.
+	OutcomeFeedback bool `yaml:"outcome_feedback"`
 }
 
 // SkillPolicy is the per-profile `skill:` block (#36 §12): which of

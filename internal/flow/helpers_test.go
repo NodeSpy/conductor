@@ -481,7 +481,7 @@ func (a *fakeAgents) dispatch(ctx context.Context, req dispatch.Request) (dispat
 	return dispatch.RunRef{Output: "{}"}, nil
 }
 
-func (a *fakeAgents) background(ctx context.Context, t core.Trigger, stepID string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string) {
+func (a *fakeAgents) background(ctx context.Context, t core.Trigger, stepID, agentName string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.backgroundCalls = append(a.backgroundCalls, backgroundCall{StepID: stepID, Handoff: handoffConn, Profile: p, Ref: ref})
@@ -524,7 +524,7 @@ func newTestRunner(t *testing.T, cfg *config.Config, reg *connector.Registry) *t
 		Agents: AgentServices{
 			Dispatch:   ag.dispatch,
 			Tokens:     func(t core.Trigger) dispatch.Tokens { return dispatch.Tokens{} },
-			Guidance:   func(p config.AgentProfile) string { return "|G|" },
+			Guidance:   func(agentName string, p config.AgentProfile) string { return "|G|" },
 			Background: ag.background,
 			Archive:    ag.archive,
 		},

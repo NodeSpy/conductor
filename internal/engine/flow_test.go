@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -20,13 +21,15 @@ import (
 
 // flowGateStore records the store calls the engine's gates make.
 type flowGateStore struct {
-	mu       sync.Mutex
-	recorded []string
-	attempts []string
-	audits   []map[string]any
-	runs     map[string]bool
-	sigs     map[string]string
-	history  map[string]store.RunHistory
+	mu          sync.Mutex
+	recorded    []string
+	attempts    []string
+	audits      []map[string]any
+	runs        map[string]bool
+	sigs        map[string]string
+	history     map[string]store.RunHistory
+	engagements map[string][]store.Engagement
+	bumps       map[string]map[string]int
 }
 
 func newFlowGateStore() *flowGateStore {
@@ -100,6 +103,53 @@ func (s *flowGateStore) GetHistory(id string) (store.RunHistory, bool) {
 	defer s.mu.Unlock()
 	rec, ok := s.history[id]
 	return rec, ok
+}
+
+func (s *flowGateStore) RecordEngagement(repo string, number int, e store.Engagement) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.engagements == nil {
+		s.engagements = map[string][]store.Engagement{}
+	}
+	key := fmt.Sprintf("%s#%d", repo, number)
+	s.engagements[key] = append(s.engagements[key], e)
+}
+
+func (s *flowGateStore) TakeEngagements(repo string, number int) []store.Engagement {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := fmt.Sprintf("%s#%d", repo, number)
+	out := s.engagements[key]
+	delete(s.engagements, key)
+	return out
+}
+
+func (s *flowGateStore) PeekEngagements(repo string, number int) []store.Engagement {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]store.Engagement(nil), s.engagements[fmt.Sprintf("%s#%d", repo, number)]...)
+}
+
+func (s *flowGateStore) BumpOutcome(agent, outcome string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.bumps == nil {
+		s.bumps = map[string]map[string]int{}
+	}
+	if s.bumps[agent] == nil {
+		s.bumps[agent] = map[string]int{}
+	}
+	s.bumps[agent][outcome]++
+}
+
+func (s *flowGateStore) AgentOutcomeStats(agent string) map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]int{}
+	for k, v := range s.bumps[agent] {
+		out[k] = v
+	}
+	return out
 }
 
 // fakeFlowDispatcher satisfies the engine Dispatcher (unused by verb-only flows).

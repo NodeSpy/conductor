@@ -55,8 +55,9 @@ type AgentServices struct {
 	Dispatch func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error)
 	// Tokens resolves the acts-as-you / App tokens for a trigger.
 	Tokens func(t core.Trigger) dispatch.Tokens
-	// Guidance is the house prompt guidance for a profile.
-	Guidance func(p config.AgentProfile) string
+	// Guidance is the house prompt guidance for a profile (the agent's name
+	// keys optional outcome-feedback tuning — #36 §18).
+	Guidance func(agentName string, p config.AgentProfile) string
 	// Memory renders the shared-memory prompt section for an opted-in
 	// profile ("" otherwise) — appended through the same path Guidance uses.
 	Memory func(agentName string, p config.AgentProfile, t core.Trigger) string
@@ -68,7 +69,7 @@ type AgentServices struct {
 	// Background is invoked after a background agent step launches: register
 	// the hold, and start the interactive review hand-off on handoffConn (an
 	// ask-capable connector name; "" = runtime-native).
-	Background func(ctx context.Context, t core.Trigger, stepID string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string)
+	Background func(ctx context.Context, t core.Trigger, stepID, agentName string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string)
 	// Archive soft-deletes a finished non-interactive agent.
 	Archive func(agentID string)
 	// CheckBudget vets an agent dispatch against the spend caps (#36 §14):
@@ -77,12 +78,23 @@ type AgentServices struct {
 	// A non-nil error sheds the dispatch. nil = no budget layer (tests).
 	CheckBudget func(agentName string, wf *config.BudgetPolicy, wfScope string) error
 	// RecordUsage charges one agent run's token/$ usage to its budget scopes
-	// and the audit. nil = no accounting (tests).
-	RecordUsage func(t core.Trigger, agentName, stepID, runID, wfScope string, u cost.Usage)
+	// and the audit, and records the outcome engagement (#36 §18) — savedWF
+	// names the enclosing saved workflow ("" outside one). nil = tests.
+	RecordUsage func(t core.Trigger, agentName, stepID, runID, wfScope, savedWF string, u cost.Usage)
 	// FollowUp delivers a gate-revise prompt to a live agent and captures the
 	// reply (#36 §16): a bound session (§10) or a paseo send-capture. ok=false
 	// when the runtime can't take one — the gate then escalates.
 	FollowUp func(ctx context.Context, agentID, agentName string, t core.Trigger, prompt string) (string, bool, error)
+}
+
+// savedWFKey stamps execution inside a SAVED workflow with its name, so
+// outcome engagements attribute to it (#36 §18).
+type savedWFKey struct{}
+
+// savedWFFrom reads the enclosing saved workflow's name ("" outside one).
+func savedWFFrom(ctx context.Context) string {
+	name, _ := ctx.Value(savedWFKey{}).(string)
+	return name
 }
 
 // Runner executes fired triggers through the trigger grammar.
@@ -1002,8 +1014,14 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 		child["group"] = g
 	}
 	var childRun store.WorkflowRun
-	// The workflow's own default gate (#36 §16) governs ITS agent steps.
-	runErr := r.runSteps(withDefaultGate(ctx, wf.Gate), &childRun, t, steps, child, shadow, false)
+	// The workflow's own default gate (#36 §16) governs ITS agent steps; a
+	// SAVED workflow additionally stamps its name so agent-step engagements
+	// attribute outcomes to it (#36 §18).
+	stepCtx := withDefaultGate(ctx, wf.Gate)
+	if saved != nil {
+		stepCtx = context.WithValue(stepCtx, savedWFKey{}, name)
+	}
+	runErr := r.runSteps(stepCtx, &childRun, t, steps, child, shadow, false)
 	if saved != nil && !shadow {
 		SavedWorkflows().RecordOutcome(name, runErr == nil)
 	}
@@ -1161,7 +1179,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if act.Prompt != "" {
 		act.Prompt += dispatch.WriteWrapperGuidance
 		if r.Agents.Guidance != nil {
-			act.Prompt += r.Agents.Guidance(profile)
+			act.Prompt += r.Agents.Guidance(step.Agent, profile)
 		}
 		// Opt-in shared memory rides the same append path as guidance; a
 		// profile without memory: gets nothing (no token cost).
@@ -1207,7 +1225,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	}
 	if step.Background {
 		if r.Agents.Background != nil {
-			r.Agents.Background(ctx, t, id, profile, ref, step.Handoff)
+			r.Agents.Background(ctx, t, id, step.Agent, profile, ref, step.Handoff)
 		}
 		return map[string]any{"agent_id": ref.AgentID, "background": true}, "", nil
 	}

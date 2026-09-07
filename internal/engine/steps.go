@@ -181,7 +181,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			// Without one (none configured, or resolution came up empty), keep today's
 			// behavior: tell you to drive the agent in paseo.
 			if handoffCh != nil && e.broker != nil && ref.AgentID != "" {
-				e.startReviewHandoff(ctx, t, id, profile, ref, handoffCh)
+				e.startReviewHandoff(ctx, t, id, s.Agent, profile, ref, handoffCh)
 			} else {
 				e.notif.Emit(ctx, notify.EventNeedsInput, t,
 					fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
@@ -219,7 +219,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 // resolved or the agent can't be bound, it falls back to today's behavior
 // (notify you to open the agent in paseo). Only invoked when ch and the broker
 // are configured.
-func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID string, profile config.AgentProfile, ref dispatch.RunRef, ch handoff.Channel) {
+func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID, agentName string, profile config.AgentProfile, ref dispatch.RunRef, ch handoff.Channel) {
 	agentID := ref.AgentID
 	fallback := func(reason string) {
 		if reason != "" {
@@ -275,6 +275,9 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID 
 			return
 		}
 		e.log("%s review hand-off for %q resolved: %s", tag(t), stepID, dec.Action)
+		// The outcome loop (#36 §18): the human's terminal call on this
+		// agent's work is a quality signal.
+		e.recordDecisionOutcome(t, agentName, dec.Action)
 		if dec.Action == handoff.ActionDiscard {
 			e.broker.Close(ctx, prKey)
 		}

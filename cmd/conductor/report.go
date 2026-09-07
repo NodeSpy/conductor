@@ -92,7 +92,122 @@ func cmdReport(args []string) error {
 			printSpend(spend)
 		}
 	}
+	// Agent quality (#36 §18): outcome + gate rows.
+	if _, err := f.Seek(0, io.SeekStart); err == nil {
+		if q, qerr := tallyQuality(f, cutoff); qerr == nil {
+			printQuality(q)
+		}
+	}
 	return nil
+}
+
+// qualityCell aggregates one agent's (or workflow's) outcomes.
+type qualityCell struct {
+	Merged, Closed, Reverted, Approved, Rejected, CIFailed int
+	GatePassed, GateEscalated                              int
+	MergedCost                                             float64
+}
+
+// acceptRate: merged out of terminally-resolved changes.
+func (c *qualityCell) acceptRate() float64 {
+	den := c.Merged + c.Closed + c.Rejected
+	if den == 0 {
+		return 0
+	}
+	return float64(c.Merged) / float64(den)
+}
+
+// revertRate: reverted out of merged.
+func (c *qualityCell) revertRate() float64 {
+	if c.Merged == 0 {
+		return 0
+	}
+	return float64(c.Reverted) / float64(c.Merged)
+}
+
+// tallyQuality aggregates the audit's outcome rows (#36 §18) and the final
+// gate verdicts (§16) per agent and per workflow.
+func tallyQuality(r io.Reader, cutoff time.Time) (map[string]*qualityCell, error) {
+	byAgent := map[string]*qualityCell{}
+	cell := func(key string) *qualityCell {
+		if key == "" {
+			key = "(unattributed)"
+		}
+		c := byAgent[key]
+		if c == nil {
+			c = &qualityCell{}
+			byAgent[key] = c
+		}
+		return c
+	}
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64<<10), 8<<20)
+	for sc.Scan() {
+		var d map[string]any
+		if json.Unmarshal(sc.Bytes(), &d) != nil {
+			continue
+		}
+		if ts, ok := d["ts"].(string); ok {
+			if t, e := time.Parse(time.RFC3339, ts); e == nil && t.Before(cutoff) {
+				continue
+			}
+		}
+		agent, _ := d["agent"].(string)
+		switch ev, _ := d["event"].(string); ev {
+		case "outcome":
+			c := cell(agent)
+			usd, _ := d["cost_usd"].(float64)
+			switch oc, _ := d["outcome"].(string); oc {
+			case "merged":
+				c.Merged++
+				c.MergedCost += usd
+			case "closed":
+				c.Closed++
+			case "reverted":
+				c.Reverted++
+			case "approved":
+				c.Approved++
+			case "rejected":
+				c.Rejected++
+			case "ci_failed":
+				c.CIFailed++
+			}
+		case "gate":
+			c := cell(agent)
+			switch oc, _ := d["outcome"].(string); oc {
+			case "pass":
+				c.GatePassed++
+			case "escalated":
+				c.GateEscalated++
+			}
+		}
+	}
+	return byAgent, sc.Err()
+}
+
+// printQuality renders the agent-quality section.
+func printQuality(q map[string]*qualityCell) {
+	if len(q) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(q))
+	for k := range q {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	fmt.Println("\nagent quality (outcomes):")
+	fmt.Printf("  %-20s %6s %6s %6s %6s %6s %8s %8s %10s\n",
+		"agent", "merged", "closed", "revert", "reject", "gate✓/✗", "accept", "revert%", "$/merged")
+	for _, k := range keys {
+		c := q[k]
+		perMerged := "-"
+		if c.Merged > 0 && c.MergedCost > 0 {
+			perMerged = fmt.Sprintf("$%.3f", c.MergedCost/float64(c.Merged))
+		}
+		fmt.Printf("  %-20s %6d %6d %6d %6d %3d/%-3d %7.0f%% %7.0f%% %10s\n",
+			k, c.Merged, c.Closed, c.Reverted, c.Rejected,
+			c.GatePassed, c.GateEscalated, c.acceptRate()*100, c.revertRate()*100, perMerged)
+	}
 }
 
 // digestLoop periodically emits an activity summary via the notifier (opt-in via

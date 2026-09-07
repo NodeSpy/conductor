@@ -128,5 +128,5 @@ func (r *Runner) recordUsage(ctx context.Context, t core.Trigger, agentName, ste
 		return
 	}
 	_, scope := budgetFrom(ctx)
-	r.Agents.RecordUsage(t, agentName, stepID, memory.SourceFrom(ctx).Run, scope, u)
+	r.Agents.RecordUsage(t, agentName, stepID, memory.SourceFrom(ctx).Run, scope, savedWFFrom(ctx), u)
 }

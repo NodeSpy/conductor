@@ -71,3 +71,39 @@ func TestTallySpend(t *testing.T) {
 		t.Fatalf("by day: %+v", s.ByDay)
 	}
 }
+
+func TestTallyQuality(t *testing.T) {
+	lines := strings.Join([]string{
+		`{"ts":"2026-09-05T10:00:00Z","event":"outcome","agent":"fixer","outcome":"merged","cost_usd":1.5}`,
+		`{"ts":"2026-09-05T11:00:00Z","event":"outcome","agent":"fixer","outcome":"merged","cost_usd":0.5}`,
+		`{"ts":"2026-09-05T12:00:00Z","event":"outcome","agent":"fixer","outcome":"reverted"}`,
+		`{"ts":"2026-09-05T13:00:00Z","event":"outcome","agent":"fixer","outcome":"closed"}`,
+		`{"ts":"2026-09-05T14:00:00Z","event":"outcome","agent":"reviewer","outcome":"rejected"}`,
+		`{"ts":"2026-09-05T15:00:00Z","event":"gate","agent":"fixer","outcome":"pass"}`,
+		`{"ts":"2026-09-05T15:01:00Z","event":"gate","agent":"fixer","outcome":"fail"}`,
+		`{"ts":"2026-09-05T15:02:00Z","event":"gate","agent":"fixer","outcome":"escalated"}`,
+		`{"ts":"2020-01-01T00:00:00Z","event":"outcome","agent":"fixer","outcome":"merged"}`, // pre-cutoff
+	}, "\n")
+	q, err := tallyQuality(strings.NewReader(lines), time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := q["fixer"]
+	if f.Merged != 2 || f.Reverted != 1 || f.Closed != 1 || f.GatePassed != 1 || f.GateEscalated != 1 {
+		t.Fatalf("fixer cell: %+v", f)
+	}
+	// accept = merged / (merged+closed+rejected) = 2/3; revert = 1/2.
+	if r := f.acceptRate(); r < 0.66 || r > 0.67 {
+		t.Fatalf("accept rate: %v", r)
+	}
+	if r := f.revertRate(); r != 0.5 {
+		t.Fatalf("revert rate: %v", r)
+	}
+	// cost per merged change = (1.5+0.5)/2.
+	if f.MergedCost/float64(f.Merged) != 1.0 {
+		t.Fatalf("cost/merged: %v", f.MergedCost)
+	}
+	if q["reviewer"].Rejected != 1 {
+		t.Fatalf("reviewer cell: %+v", q["reviewer"])
+	}
+}

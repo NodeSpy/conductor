@@ -52,6 +52,9 @@ func cmdWorkflows(args []string) error {
 			health := ""
 			if w.Runs() > 0 {
 				health = fmt.Sprintf(" %d/%d ok", w.Successes, w.Runs())
+				if w.Deliveries > 0 || w.Reverts > 0 {
+					health += fmt.Sprintf(", %d merged/%d reverted", w.Deliveries, w.Reverts)
+				}
 				if w.Rotting() {
 					health += " [FLAGGED: rotting]"
 				}
