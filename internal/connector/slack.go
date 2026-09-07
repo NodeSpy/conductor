@@ -152,7 +152,9 @@ func newSlackImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error)
 	if conn.WebhookURL, err = deps.Secrets.Resolve(ctx, conn.WebhookURL); err != nil {
 		return nil, fmt.Errorf("webhook_url: %w", err)
 	}
-	for _, t := range []string{conn.AppToken, conn.BotToken} {
+	// The incoming-webhook URL embeds a bearer token in its path — it is a
+	// credential, not a public endpoint, so track it alongside the tokens.
+	for _, t := range []string{conn.AppToken, conn.BotToken, conn.WebhookURL} {
 		if t != "" {
 			deps.Secrets.Track(t)
 		}

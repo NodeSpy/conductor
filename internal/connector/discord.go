@@ -86,8 +86,12 @@ func newDiscordImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, erro
 	if conn.WebhookURL, err = deps.Secrets.Resolve(ctx, conn.WebhookURL); err != nil {
 		return nil, fmt.Errorf("webhook_url: %w", err)
 	}
-	if conn.BotToken != "" {
-		deps.Secrets.Track(conn.BotToken)
+	// The incoming-webhook URL embeds a token in its path — a credential, not
+	// a public endpoint — so track it alongside the bot token.
+	for _, t := range []string{conn.BotToken, conn.WebhookURL} {
+		if t != "" {
+			deps.Secrets.Track(t)
+		}
 	}
 	return &discordImpl{
 		name: name, conn: conn, deps: deps,
