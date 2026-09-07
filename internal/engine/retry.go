@@ -27,9 +27,15 @@ import (
 // comments, pushes) is a deliberate, audited act, never the default
 // (#36 review H4).
 func (e *Engine) RetryRunByID(ctx context.Context, histID, fromStep string, forceReplay bool) (string, error) {
-	rec, ok := e.store.GetHistory(histID)
-	if !ok {
-		return "", fmt.Errorf("no recorded run %q (see `conductor runs`)", histID)
+	// The verified read: a record whose HMAC doesn't check out (edited on
+	// disk, smuggled in) must not feed its pinned outputs back into a run
+	// (#36 review M8).
+	rec, err := e.store.GetHistoryVerified(histID)
+	if err != nil {
+		if _, ok := e.store.GetHistory(histID); !ok {
+			return "", fmt.Errorf("no recorded run %q (see `conductor runs`)", histID)
+		}
+		return "", err
 	}
 	return e.retryRun(ctx, rec, fromStep, forceReplay)
 }

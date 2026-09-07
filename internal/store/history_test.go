@@ -1,6 +1,8 @@
 package store
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -105,5 +107,58 @@ func TestHistoryBadIDsRefused(t *testing.T) {
 		if _, err := ReadHistory(dir, id); err == nil || !strings.Contains(err.Error(), "bad run id") {
 			t.Fatalf("bad id read: %q → %v", id, err)
 		}
+	}
+}
+
+// Regression (#36 review M8): history records are HMAC-signed at write and
+// the retry path reads through verification — a record edited on disk (a
+// doctored pinned output, a flipped step status) or one with its signature
+// stripped is refused. Display reads stay best-effort.
+func TestHistoryTamperRefusedOnVerifiedRead(t *testing.T) {
+	dir := t.TempDir()
+	rec := RunHistory{ID: "r-signed", Kind: "ping", Status: "failed", Started: time.Now(),
+		Steps: []StepRecord{{ID: "first", Index: 0, Status: "ok",
+			Outputs: map[string]any{"token": "honest"}}}}
+	if err := WriteHistory(dir, rec); err != nil {
+		t.Fatal(err)
+	}
+
+	// Intact record verifies.
+	got, err := ReadHistoryVerified(dir, "r-signed")
+	if err != nil {
+		t.Fatalf("intact record must verify: %v", err)
+	}
+	if got.Steps[0].Outputs["token"] != "honest" {
+		t.Fatalf("round trip: %+v", got.Steps)
+	}
+
+	// Tamper with a pinned output on disk → verified read refuses.
+	path := filepath.Join(dir, "r-signed.json")
+	b, _ := os.ReadFile(path)
+	tampered := strings.Replace(string(b), "honest", "evil", 1)
+	if err := os.WriteFile(path, []byte(tampered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadHistoryVerified(dir, "r-signed"); err == nil ||
+		!strings.Contains(err.Error(), "integrity") {
+		t.Fatalf("tampered record must fail verification: %v", err)
+	}
+	// The display read still works — list/detail are not the trust boundary.
+	if _, err := ReadHistory(dir, "r-signed"); err != nil {
+		t.Fatalf("display read: %v", err)
+	}
+
+	// Stripping the signature entirely is refused too (an attacker can't
+	// just delete the field).
+	var raw map[string]any
+	_ = json.Unmarshal(b, &raw)
+	delete(raw, "sig")
+	unsigned, _ := json.Marshal(raw)
+	if err := os.WriteFile(path, unsigned, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadHistoryVerified(dir, "r-signed"); err == nil ||
+		!strings.Contains(err.Error(), "integrity") {
+		t.Fatalf("unsigned record must fail verification: %v", err)
 	}
 }

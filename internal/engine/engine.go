@@ -69,8 +69,10 @@ type Store interface {
 	DeleteRun(id string) error
 	PendingRuns() []store.WorkflowRun
 	// Execution history (#36 §20): the recorded run a user-driven retry
-	// rehydrates.
+	// rehydrates. The verified read checks the record's HMAC — retry must
+	// never trust a record modified on disk (#36 review M8).
 	GetHistory(id string) (store.RunHistory, bool)
+	GetHistoryVerified(id string) (store.RunHistory, error)
 	// Outcome-learning state (#36 §18): engagements awaiting a terminal
 	// signal, and the per-agent counters behind guidance tuning.
 	RecordEngagement(repo string, number int, e store.Engagement)

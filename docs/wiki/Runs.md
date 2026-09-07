@@ -85,6 +85,13 @@ the recorded failure) is refused by default — re-running it replays its
 committed side effects (posted comments, pushes). `--force-replay` does it
 deliberately, and the audit row records the flag.
 
+Records are HMAC-signed at write (key: `.hmac-key` beside the history files,
+generated on first use, mode 0600). Retry verifies the signature before
+trusting a record's pinned outputs — a record edited on disk, or one whose
+signature is missing (including records written before signing existed), is
+refused. List/detail views read unverified; they're display, not a trust
+boundary.
+
 Retry goes through the running daemon (it needs tokens, slots, and policy).
 The recorded outputs of every successful step **before** the chosen one are
 pinned into scope exactly as recorded — those steps do not re-run — and

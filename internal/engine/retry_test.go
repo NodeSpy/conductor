@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -207,5 +208,34 @@ func TestAgentFollowUpRoutes(t *testing.T) {
 	// No agent id and no bound session → honest ok=false.
 	if _, ok, _ := e.agentFollowUp(context.Background(), "", "fixer", tr, "x"); ok {
 		t.Fatal("no transport must report ok=false")
+	}
+}
+
+// Regression (#36 review M8): retry reads the record through HMAC
+// verification — a record that fails it never rehydrates, so tampered
+// pinned outputs can't be fed into a re-run.
+func TestRetryRefusesTamperedHistory(t *testing.T) {
+	eng, st, _, _ := buildFlowEngine(t, retryCfg)
+	resetGateCalls()
+	rec := recordedRun(t)
+	_ = st.PutHistory(rec)
+	st.histVerifyErr = fmt.Errorf("history: run \"rprev\" failed integrity verification")
+
+	if _, err := eng.RetryRunByID(context.Background(), "rprev", "", false); err == nil ||
+		!strings.Contains(err.Error(), "integrity") {
+		t.Fatalf("tampered record must refuse retry: %v", err)
+	}
+	// Nothing dispatched.
+	time.Sleep(50 * time.Millisecond)
+	gateConnMu.Lock()
+	n := len(gateConnCalls)
+	gateConnMu.Unlock()
+	if n != 0 {
+		t.Fatalf("tampered retry must not run steps: %d calls", n)
+	}
+	// A missing record still reports "no recorded run", not an integrity error.
+	if _, err := eng.RetryRunByID(context.Background(), "nope", "", false); err == nil ||
+		!strings.Contains(err.Error(), "no recorded run") {
+		t.Fatalf("missing record: %v", err)
 	}
 }

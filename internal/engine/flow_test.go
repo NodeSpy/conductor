@@ -30,6 +30,8 @@ type flowGateStore struct {
 	history     map[string]store.RunHistory
 	engagements map[string][]store.Engagement
 	bumps       map[string]map[string]int
+	// histVerifyErr simulates a failed HMAC check on the verified read.
+	histVerifyErr error
 }
 
 func newFlowGateStore() *flowGateStore {
@@ -103,6 +105,18 @@ func (s *flowGateStore) GetHistory(id string) (store.RunHistory, bool) {
 	defer s.mu.Unlock()
 	rec, ok := s.history[id]
 	return rec, ok
+}
+func (s *flowGateStore) GetHistoryVerified(id string) (store.RunHistory, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.histVerifyErr != nil {
+		return store.RunHistory{}, s.histVerifyErr
+	}
+	rec, ok := s.history[id]
+	if !ok {
+		return store.RunHistory{}, fmt.Errorf("history: run %q: not found", id)
+	}
+	return rec, nil
 }
 
 func (s *flowGateStore) RecordEngagement(repo string, number int, e store.Engagement) {
