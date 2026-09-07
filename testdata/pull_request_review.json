@@ -4,17 +4,17 @@
     "action": "submitted",
     "installation": { "id": 0 },
     "repository": {
-      "full_name": "EdnitionCode/RosterStream",
-      "name": "RosterStream",
+      "full_name": "AcmeCorp/Widget",
+      "name": "Widget",
       "default_branch": "main",
-      "owner": { "login": "EdnitionCode" }
+      "owner": { "login": "AcmeCorp" }
     },
     "pull_request": {
       "number": 5272,
       "state": "open",
       "draft": false,
       "title": "jobs: hand back deferred SQS messages fast",
-      "html_url": "https://github.com/EdnitionCode/RosterStream/pull/5272",
+      "html_url": "https://github.com/AcmeCorp/Widget/pull/5272",
       "head": { "sha": "deadbeefcafe", "ref": "feature/sqs" },
       "base": { "ref": "main" },
       "user": { "login": "danielcbaldwin" }

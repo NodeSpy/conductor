@@ -5,7 +5,7 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 func TestIsFeedbackKind(t *testing.T) {
@@ -66,16 +66,16 @@ func TestGitBranchAndRepoMatch(t *testing.T) {
 	run("config", "user.name", "t")
 	run("commit", "--allow-empty", "-q", "-m", "init")
 	run("checkout", "-q", "-b", "fix/streamer")
-	run("remote", "add", "origin", "git@github.com:EdnitionCode/RosterStream.git")
+	run("remote", "add", "origin", "git@github.com:AcmeCorp/Widget.git")
 
 	d := &Dispatcher{PaseoBin: "paseo"}
 	if b := d.gitBranch(ctx, dir); b != "fix/streamer" {
 		t.Fatalf("gitBranch = %q, want fix/streamer", b)
 	}
-	if !gitRepoMatches(ctx, dir, "EdnitionCode/RosterStream") {
+	if !gitRepoMatches(ctx, dir, "AcmeCorp/Widget") {
 		t.Fatal("origin should match the repo (case-insensitive)")
 	}
-	if !gitRepoMatches(ctx, dir, "ednitioncode/rosterstream") {
+	if !gitRepoMatches(ctx, dir, "acmecorp/widget") {
 		t.Fatal("repo match should be case-insensitive")
 	}
 	if gitRepoMatches(ctx, dir, "SomeoneElse/Other") {

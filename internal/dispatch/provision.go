@@ -98,3 +98,10 @@ func AgentEnv(req Request) ([]string, error) {
 func RenderPrompt(req Request) (string, error) {
 	return render(req.Action.Prompt, templateData(req))
 }
+
+// RenderField renders an arbitrary template string against a request's
+// trigger template data — the session-affinity key resolver ("{{.repo}}#
+// {{.pr}}") uses it so key templates see exactly the prompt's scope.
+func RenderField(s string, req Request) (string, error) {
+	return render(s, templateData(req))
+}

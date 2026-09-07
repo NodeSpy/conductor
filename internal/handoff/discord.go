@@ -39,6 +39,9 @@ type DiscordChannel struct {
 	log    func(string, ...any)
 
 	channel string // mode: thread — channel (or thread-channel) id to post in
+	// approvers, when non-empty, restricts who may resolve a thread-mode
+	// hand-off (see SlackChannel.approvers — same contract).
+	approvers []string
 
 	opener DMOpener // mode: dm — resolves user -> DM channel id
 	user   string   // mode: dm — target Discord user id
@@ -49,12 +52,13 @@ type DiscordChannel struct {
 
 // NewDiscordChannel builds a thread-mode Discord hand-off channel: it posts to
 // channel and captures replies (any message landing on that channel) routed
-// through inbox. log may be nil.
-func NewDiscordChannel(poster Poster, channel string, inbox *Inbox, log func(string, ...any)) *DiscordChannel {
+// through inbox. approvers, when non-empty, is the set of user ids whose
+// replies may resolve a draft (empty = anyone in the channel). log may be nil.
+func NewDiscordChannel(poster Poster, channel string, approvers []string, inbox *Inbox, log func(string, ...any)) *DiscordChannel {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
-	return &DiscordChannel{poster: poster, mode: discordModeThread, channel: channel, inbox: inbox, log: log}
+	return &DiscordChannel{poster: poster, mode: discordModeThread, channel: channel, approvers: approvers, inbox: inbox, log: log}
 }
 
 // NewDiscordDMChannel builds a dm-mode Discord hand-off channel: it opens (or
@@ -80,7 +84,7 @@ func (c *DiscordChannel) presentThread(ctx context.Context, d Draft) (Presentati
 	if _, err := c.poster.Post(ctx, c.channel, "", renderDiscordDraft(d)); err != nil {
 		return nil, fmt.Errorf("discord handoff: post draft: %w", err)
 	}
-	pend := c.inbox.register(c.channel, "")
+	pend := c.inbox.register(c.channel, "", c.approvers)
 	c.log("handoff: draft %s posted to discord channel %s", d.ID, c.channel)
 	return &discordPresentation{c: c, channel: c.channel, pend: pend}, nil
 }
@@ -93,7 +97,7 @@ func (c *DiscordChannel) presentDM(ctx context.Context, d Draft) (Presentation, 
 	if _, err := c.poster.Post(ctx, dmChannel, "", renderDiscordDraft(d)); err != nil {
 		return nil, fmt.Errorf("discord handoff: post draft: %w", err)
 	}
-	pend := c.inbox.register(dmChannel, "")
+	pend := c.inbox.register(dmChannel, "", nil)
 	c.log("handoff: draft %s posted to discord dm %s (channel %s)", d.ID, c.user, dmChannel)
 	return &discordPresentation{c: c, channel: dmChannel, dm: true, pend: pend}, nil
 }

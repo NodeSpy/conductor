@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -33,5 +34,41 @@ func TestAuditRotation(t *testing.T) {
 	fi, _ := os.Stat(auditPath)
 	if fi.Size() > 400 {
 		t.Fatalf("live audit log too large after rotation: %d bytes", fi.Size())
+	}
+}
+
+// REGRESSION (backstop): callers redact the audit fields they know about;
+// the writer scrubs every string VALUE at write time so a forgotten field
+// (an err.Error() embedding a URL-borne secret) can't reach disk cleartext.
+// Values are redacted pre-marshal, so secrets containing quotes/backslashes
+// (escaped by the JSON encoder) still match.
+func TestAuditWriterRedactsValues(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	a, err := openAudit(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := `quo"ted\secret-XYZZY`
+	a.redact = func(s string) string { return strings.ReplaceAll(s, secret, "[redacted]") }
+	a.write(map[string]any{
+		"event": "step_error",
+		"error": `Get "https://api.example/?key=` + secret + `": tls fail`,
+		"nested": map[string]any{
+			"list": []any{"ok", "carries " + secret},
+		},
+	})
+	_ = a.close()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The raw secret has JSON-escaped bytes; check both the raw form and the
+	// marshaled representation are absent.
+	if strings.Contains(string(raw), "XYZZY") {
+		t.Fatalf("secret reached the audit file: %s", raw)
+	}
+	if !strings.Contains(string(raw), "[redacted]") {
+		t.Fatalf("redaction placeholder missing: %s", raw)
 	}
 }

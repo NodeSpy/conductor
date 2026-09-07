@@ -10,8 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 // captureNotifier returns a notifier whose log lines are collected.
@@ -252,5 +253,81 @@ func TestNotifiarrSinkPosts(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("notifiarr was never posted")
+	}
+}
+
+// REGRESSION: the notifier had no secrets resolver — a tracked secret in a
+// notify message rode the audit, the journal, AND the outbound webhooks/via
+// routes verbatim, leaving the machine. Everything is redacted ONCE before
+// any fan-out now.
+func TestNotifyRedactsSecretsEverywhere(t *testing.T) {
+	const secret = "notify-s3cr3t-XYZZY"
+	posted := make(chan string, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		posted <- string(b)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	res := secrets.New()
+	res.Track(secret)
+	var audits []map[string]any
+	var logs []string
+	n := New(config.Notify{
+		On: []string{"escalate"}, SlackWebhookURL: srv.URL,
+		Via: []config.NotifyRoute{{Uses: "svc.post"}},
+	}, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) },
+		func(e map[string]any) { audits = append(audits, e) })
+	n.SetSecrets(res)
+	var viaData map[string]any
+	viaCh := make(chan struct{}, 1)
+	n.SetRouter(func(_ context.Context, _ config.NotifyRoute, data map[string]any) error {
+		viaData = data
+		viaCh <- struct{}{}
+		return nil
+	})
+
+	tr := core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "acme/w", Number: 7},
+		Title: "title with " + secret}
+	n.Emit(context.Background(), EventEscalate, tr, "error: token "+secret+" rejected")
+
+	select {
+	case body := <-posted:
+		if strings.Contains(body, secret) {
+			t.Fatalf("secret left the machine via the slack webhook: %s", body)
+		}
+		if !strings.Contains(body, secrets.Placeholder) {
+			t.Fatalf("payload should carry the redaction placeholder: %s", body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("slack webhook never posted")
+	}
+	select {
+	case <-viaCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("via route never fired")
+	}
+	if s := fmt.Sprint(viaData); strings.Contains(s, secret) {
+		t.Fatalf("secret reached the via route data: %s", s)
+	}
+	for _, e := range audits {
+		if strings.Contains(fmt.Sprint(e), secret) {
+			t.Fatalf("secret reached the audit: %v", e)
+		}
+	}
+	for _, l := range logs {
+		if strings.Contains(l, secret) {
+			t.Fatalf("secret reached the journal: %s", l)
+		}
+	}
+
+	// Publish and Digest redact the same way.
+	n.Publish(context.Background(), EventUpdated, tr, "now on "+secret, map[string]any{"note": secret})
+	n.Digest(context.Background(), "summary with "+secret)
+	for _, e := range audits {
+		if strings.Contains(fmt.Sprint(e), secret) {
+			t.Fatalf("secret reached the audit via Publish/Digest: %v", e)
+		}
 	}
 }

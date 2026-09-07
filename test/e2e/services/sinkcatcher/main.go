@@ -67,6 +67,17 @@ func handle(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	posts = append(posts, p)
 	mu.Unlock()
+	// The slack-shaped base (PC_SLACK_API_URL=http://sink-catcher:8080/slackapi)
+	// must answer like the Slack Web API — the connector verb checks ok:true and
+	// reads ts/channel — while still capturing the call above.
+	if strings.HasPrefix(r.URL.Path, "/slackapi/") {
+		log.Printf("captured %s post: %s", p.Sink, truncate(p.Body, 120))
+		writeJSON(w, map[string]any{
+			"ok": true, "ts": "1700000000.000100",
+			"channel": map[string]any{"id": "CDM"},
+		})
+		return
+	}
 	log.Printf("captured %s post: %s", p.Sink, truncate(p.Body, 120))
 	writeJSON(w, map[string]any{"ok": true})
 }

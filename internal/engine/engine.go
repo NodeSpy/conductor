@@ -9,17 +9,23 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/controller"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
-	"github.com/NodeSpy/paseo-conductor/internal/handoff"
-	"github.com/NodeSpy/paseo-conductor/internal/notify"
-	"github.com/NodeSpy/paseo-conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/controller"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/cost"
+	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/flow"
+	"github.com/NodeSpy/conductor/internal/handoff"
+	"github.com/NodeSpy/conductor/internal/memory"
+	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/secrets"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // *store.Store persists the broker's PR→session map; assert it here (engine
@@ -63,6 +69,18 @@ type Store interface {
 	PutRun(r store.WorkflowRun) error
 	DeleteRun(id string) error
 	PendingRuns() []store.WorkflowRun
+	// Execution history (#36 §20): the recorded run a user-driven retry
+	// rehydrates. The verified read checks the record's HMAC — retry must
+	// never trust a record modified on disk (#36 review M8).
+	GetHistory(id string) (store.RunHistory, bool)
+	GetHistoryVerified(id string) (store.RunHistory, error)
+	// Outcome-learning state (#36 §18): engagements awaiting a terminal
+	// signal, and the per-agent counters behind guidance tuning.
+	RecordEngagement(repo string, number int, e store.Engagement)
+	TakeEngagements(repo string, number int) []store.Engagement
+	PeekEngagements(repo string, number int) []store.Engagement
+	BumpOutcome(agent, outcome string)
+	AgentOutcomeStats(agent string) map[string]int
 }
 
 // Engine is the central work loop.
@@ -80,13 +98,30 @@ type Engine struct {
 	rerun       func(context.Context, core.Trigger, int64)
 	refreshTok  func(core.Trigger) (string, error) // re-mint the App token on resume
 	log         func(string, ...any)
-	hold        *dispatch.HoldSet // agent ids handed off to the user; the reaper never touches these
-	pausePath   string            // control file; present = paused (toggled by pause/resume, no restart)
+	hold        *dispatch.HoldSet    // agent ids handed off to the user; the reaper never touches these
+	affinity    *controller.Affinity // keyed live sessions (session:); nil = every dispatch fresh
+	pausePath   string               // control file; present = paused (toggled by pause/resume, no restart)
 	ch          chan core.Trigger
-	sem         chan struct{} // concurrent-agent cap; nil = unlimited
+	secrets     *secrets.Resolver // redacts argv/errors/output tails on audit + log surfaces
+	sem         chan struct{}     // concurrent-agent cap; nil = unlimited
+	groupWarn   sync.Map          // FlowRefs whose group key already failed once (log once, not per event)
+	baseCtx     context.Context   // the Run loop's ctx; ties ctx-less entry points (batch flush) to shutdown
+
+	// flow runs connectors-model triggers (actions carrying a FlowRef);
+	// grouper batches their grouped events. nil when the config has no
+	// connectors — the legacy path is then the only path.
+	flow       *flow.Runner
+	grouper    *flow.Grouper
+	connectors *connector.Registry
 
 	budgetMu  sync.Mutex  // guards agentDisp (rolling agent-dispatch timestamps)
 	agentDisp []time.Time // agent-dispatch times in the last hour (runaway budget)
+	spendMu   sync.Mutex  // makes budget check + reservation one atomic step (#36 review H7)
+
+	// meter is the rolling-window token/$ spend ledger behind the hard
+	// budget caps (#36 §14) — in-memory like agentDisp; the audit's
+	// agent_usage rows are the durable record.
+	meter *cost.Meter
 }
 
 // overAgentBudget prunes agent-dispatch timestamps older than an hour and reports
@@ -149,10 +184,24 @@ type Options struct {
 	// engine registers a background step's agent id here at launch and the reaper
 	// skips it. nil disables the explicit hold (falls back to label/marker signals).
 	Hold *dispatch.HoldSet
+	// Affinity is the session-affinity registry (agents whose profile carries a
+	// session: block get one live session per rendered key, shared across
+	// triggers). nil disables affinity — every dispatch stays fresh.
+	Affinity *controller.Affinity
+	// Secrets redacts tracked secret values from the engine's audit entries
+	// and output-tail log lines (nil = passthrough; legacy configs).
+	Secrets *secrets.Resolver
 	// PausePath is a control file whose presence pauses dispatch (toggled by the
 	// pause/resume commands without a restart). Empty disables the runtime pause.
 	PausePath string
 	Log       func(string, ...any)
+	// Flow runs connectors-model triggers; nil when the config has none. The
+	// engine fills in its AgentServices (runtime resolution, tokens, guidance,
+	// background hand-off) after construction.
+	Flow *flow.Runner
+	// Connectors is the built connector registry (ask-capable hand-off
+	// resolution). nil without a connectors: block.
+	Connectors *connector.Registry
 }
 
 // New builds an Engine.
@@ -170,17 +219,20 @@ func New(o Options) *Engine {
 		if s, ok := o.Dispatch.(controller.Sender); ok {
 			sender = s
 		}
-		reg = controller.NewRegistry(o.Config.Controllers, o.Config.DefaultControllerName(), o.Dispatch, sender)
+		reg = controller.NewRegistry(o.Config.MergedControllers(), o.Config.DefaultRuntimeName(), o.Dispatch, sender)
 	}
 	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,
 		broker: o.Broker, handoffs: o.Handoffs,
 		author: o.Author, userTok: o.UserToken, readTok: o.ReadToken, log: log,
 		hold:      o.Hold,
+		affinity:  o.Affinity,
 		pausePath: o.PausePath,
+		secrets:   o.Secrets,
 		ch:        make(chan core.Trigger, 256),
+		meter:     cost.NewMeter(),
 	}
-	if cap := o.Config.Control.AgentCap(); cap > 0 {
+	if cap := o.Config.AgentCap(); cap > 0 {
 		e.sem = make(chan struct{}, cap)
 	}
 	e.rerun = o.Rerun
@@ -188,6 +240,14 @@ func New(o Options) *Engine {
 		e.rerun = e.rerunFailed
 	}
 	e.refreshTok = o.RefreshAppToken
+	e.connectors = o.Connectors
+	if o.Flow != nil {
+		e.flow = o.Flow
+		// The runner's agent/command steps dispatch through the engine's own
+		// runtime resolution, tokens, and hand-off machinery.
+		e.flow.Agents = e.flowAgentServices()
+		e.grouper = flow.NewGrouper(nil, e.runBatch)
+	}
 	return e
 }
 
@@ -203,10 +263,14 @@ func (e *Engine) Emit(ctx context.Context, t core.Trigger) {
 
 // Run processes triggers until ctx is cancelled.
 func (e *Engine) Run(ctx context.Context) error {
+	e.baseCtx = ctx // grouper batch flushes (no ctx of their own) tie to shutdown
 	if _, err := e.store.GC(); err != nil {
 		e.log("engine: initial GC: %v", err)
 	}
 	go e.gcLoop(ctx)
+	if e.affinity != nil {
+		go e.affinity.Run(ctx, time.Minute) // idle_ttl / max_lifetime sweep
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -238,13 +302,112 @@ func (e *Engine) gcLoop(ctx context.Context) {
 // At each level nil falls through, "" disables, and text (wrapped in the standard
 // separator) is used.
 func (e *Engine) agentGuidance(profile config.AgentProfile) string {
+	base := ""
 	switch {
 	case profile.Guidance != nil:
-		return wrapGuidance(*profile.Guidance)
+		base = wrapGuidance(*profile.Guidance)
 	case e.cfg.AgentGuidance != nil:
-		return wrapGuidance(*e.cfg.AgentGuidance)
+		base = wrapGuidance(*e.cfg.AgentGuidance)
 	default:
-		return dispatch.ConcisionGuidance
+		base = dispatch.ConcisionGuidance
+	}
+	// The skill blurb (#36 §12) rides the same append path, opted in by the
+	// profile's skill: block. The whole guidance is redactor-filtered — an
+	// injected prompt section must never carry a tracked secret value.
+	return e.redact(base + e.skillGuidance(profile))
+}
+
+// skillGuidance tells a skill-enabled agent what its conductor tools are and
+// how to use them: verbs first (the credential never enters the session),
+// the broker only as a last resort. "" for profiles without skill: — and for
+// profiles on a runtime that cannot carry the MCP tools (#123): promising an
+// agent tools it doesn't have just makes it fail; `conductor validate` warns
+// the operator instead.
+func (e *Engine) skillGuidance(profile config.AgentProfile) string {
+	sk := profile.Skill
+	if sk == nil {
+		return ""
+	}
+	if _, ok := e.cfg.SkillToolsSupported(profile); !ok {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Conductor tools are available on this session.")
+	if len(sk.Verbs) > 0 {
+		b.WriteString(fmt.Sprintf(" Prefer acting THROUGH conductor: the verb tools (matching: %s) run with conductor's own credentials, so no secret ever enters this session.",
+			strings.Join(sk.Verbs, ", ")))
+	}
+	if sk.SecretsVia == "broker" && len(sk.AllowSecrets) > 0 {
+		b.WriteString(fmt.Sprintf(" If a raw tool you must run itself needs a credential, request it via secret_issue/secret_redeem (allowed: %s) — grants are single-use, expire in about a minute, and every step is audited. Use the value immediately for the one action that needs it; never echo it, store it, or write it to disk.",
+			strings.Join(sk.AllowSecrets, ", ")))
+	}
+	b.WriteString(" Values that render as «secret:…» are opaque handles — pass them through unchanged; they only resolve inside conductor.")
+	return wrapGuidance(b.String())
+}
+
+// dispatchAgent routes one request through session affinity when the profile
+// keeps keyed sessions (a follow-up to the bound live session, or a fresh
+// spawn that binds), and falls through to the plain runner otherwise —
+// including for session: profiles on runtimes without session persistence
+// (one-shot/cli), which stay fresh-per-event and lean on shared memory.
+func (e *Engine) dispatchAgent(ctx context.Context, runner Dispatcher, req dispatch.Request) (dispatch.RunRef, error) {
+	if e.affinity != nil {
+		if ref, handled, err := e.affinity.Dispatch(ctx, runner, req); handled {
+			return ref, err
+		}
+	}
+	return runner.Dispatch(ctx, req)
+}
+
+// affinityOwns reports whether an agent id is a bound keyed session — the
+// archive paths must not tear a shared session down after one step.
+func (e *Engine) affinityOwns(agentID string) bool { return e.affinity.Owns(agentID) }
+
+// memoryPrompt renders the opt-in shared-memory section for a dispatched
+// agent — the same append path as agentGuidance. A profile without
+// `memory:` (or with memory unconfigured) gets "" — no token cost.
+func (e *Engine) memoryPrompt(agentName string, profile config.AgentProfile, t core.Trigger) string {
+	sel := profile.Memory
+	if sel == nil || !sel.Enabled {
+		return ""
+	}
+	m := memory.Active()
+	if m == nil {
+		return ""
+	}
+	return m.PromptSection(memory.Filter{Scopes: sel.Scopes, Tags: sel.Tags, Limit: sel.Limit},
+		t.Target.Repo, agentName)
+}
+
+// harvestMemory applies the memory output contract to a finished agent's
+// output (see memory.HarvestOutput): best-effort, audited, never a failure.
+func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string) {
+	m := memory.Active()
+	if m == nil || strings.TrimSpace(output) == "" {
+		return
+	}
+	// Writing is opt-in per agent, exactly like reading (memoryPrompt): only an
+	// agent whose profile enables memory may harvest its output into the shared
+	// store. Otherwise any dispatched agent — including one an untrusted event
+	// steered — could poison shared memory via its output contract without the
+	// operator ever granting it memory access (#57 M8). No profile / memory off
+	// → nothing is written.
+	prof := e.cfg.Agents[agent]
+	if prof.Memory == nil || !prof.Memory.Enabled {
+		return
+	}
+	src := memory.Source{Agent: agent, Run: runID, Trigger: t.Kind, Repo: t.Target.Repo}
+	entries, err := m.HarvestOutput(output, src)
+	if err != nil {
+		e.log("%s memory output contract: %v", tag(t), err)
+		e.store.Audit(map[string]any{"event": "memory_remember", "via": "output", "outcome": "failed",
+			"repo": t.Target.Repo, "number": t.Target.Number, "kind": t.Kind, "agent": agent, "error": err.Error()})
+		return
+	}
+	for _, en := range entries {
+		e.store.Audit(map[string]any{"event": "memory_remember", "via": "output", "outcome": "ok",
+			"repo": t.Target.Repo, "number": t.Target.Number, "kind": t.Kind, "agent": agent,
+			"id": en.ID, "scope": en.Scope})
 	}
 }
 
@@ -344,6 +507,14 @@ func triggerHasLabel(t core.Trigger, label string) bool {
 func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	key := t.Key()
 
+	// Session-affinity end_on: an eviction event (pr_closed/merged) ends the
+	// matching keyed session before any gate can drop the trigger.
+	e.affinity.ObserveEvent(ctx, t)
+
+	// The outcome loop (#36 §18) reads merge/close/revert/CI facts off the
+	// trigger before any gate can drop it.
+	e.observeOutcomeSignals(ctx, t)
+
 	// Terminal state: drop dedup record, no dispatch.
 	if t.Kind == core.KindClosed {
 		_ = e.store.Delete(key)
@@ -379,8 +550,14 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// old ones (the single-slot dedup can't distinguish them). The mark advances on
 	// a successful new_comment dispatch below. It's kept per comment kind: issue
 	// (conversation) and review (inline) comments are separate id sequences.
+	//
+	// Connectors-model triggers additionally key the mark PER VARIANT: several
+	// independent triggers may listen to the same comment event (one grouped,
+	// one not), and the first to advance a shared mark would starve its
+	// siblings of the very same comment. Legacy state is untouched (legacy
+	// actions keep the bare kind key, honoring existing state.json).
 	if !t.Force && t.Kind == "new_comment" {
-		if id := commentID(t); id > 0 && id <= e.store.LastCommentID(key, commentKind(t)) {
+		if id := commentID(t); id > 0 && id <= e.store.LastCommentID(key, commentMarkKind(t)) {
 			return
 		}
 	}
@@ -449,14 +626,29 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// Past the soft threshold (max_attempts_per_head), gate retries behind a GROWING
 	// backoff instead of a hard cap — a struggling (pr,kind,head) keeps getting
 	// periodic retries with widening gaps (10m→30m→…→24h) rather than being abandoned
-	// forever. Escalate once, when it first crosses the threshold.
+	// forever. Escalate once, when it first crosses the threshold. The cadence
+	// and threshold come from the trigger's merged policy (scoped for flow
+	// triggers, global otherwise); the constants are the defaults.
+	pol := e.retryPolicyFor(act)
 	soft := act.MaxAttemptsPerHead
+	if soft == 0 && pol.MaxAttemptsPerHead != nil {
+		soft = *pol.MaxAttemptsPerHead
+	}
 	if soft == 0 && t.Kind != "new_comment" {
 		soft = defaultMaxAttempts
 	}
+	base, max := retryBackoffBase, retryBackoffMax
+	if pol.Backoff != nil {
+		if d := pol.Backoff.Base.D(); d > 0 {
+			base = d
+		}
+		if d := pol.Backoff.Max.D(); d > 0 {
+			max = d
+		}
+	}
 	if soft > 0 && !t.Force {
 		if n := e.store.Attempts(key, dkind, head); n >= soft {
-			if ready, wait := e.store.RetryReady(key, dkind, head, soft, retryBackoffBase, retryBackoffFactor, retryBackoffMax); !ready {
+			if ready, wait := e.store.RetryReady(key, dkind, head, soft, base, retryBackoffFactor, max); !ready {
 				e.log("%s in backoff — %d attempts at %s, next retry in ~%s",
 					tag(t), n, short(head), wait.Round(time.Minute))
 				return
@@ -469,6 +661,18 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 	}
 
+	// A connectors-model trigger: the generic gates above (kill switch,
+	// pause, comment high-water mark, dedup, backoff) have all applied; the
+	// flow runner owns steps/hooks/verbs from here.
+	if act.FlowRef != "" {
+		if e.flow == nil {
+			e.log("%s flow trigger but no flow runner wired — dropping", tag(t))
+			return
+		}
+		e.processFlow(ctx, t, act, key, dkind, head)
+		return
+	}
+
 	// Resolve profile, tokens, shadow.
 	var profile config.AgentProfile
 	if act.Type == "agent" {
@@ -476,6 +680,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		if act.Prompt != "" {
 			act.Prompt += dispatch.WriteWrapperGuidance
 			act.Prompt += e.agentGuidance(profile)
+			act.Prompt += e.memoryPrompt(act.Agent, profile, t)
 			if act.RerequestReview {
 				act.Prompt += dispatch.RerequestReviewGuidance
 			}
@@ -522,6 +727,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 		run := e.newRun(t, act, shadow)
 		go func() {
+			defer e.recoverDispatch(ctx, t, run, "workflow dispatch")
 			if !shadow {
 				defer e.release()
 			}
@@ -553,6 +759,9 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		run = r
 	}
 
+	// spendRes is the budget reservation an admitted agent dispatch holds
+	// until its usage settles (or the dispatch never charges — cancelled).
+	var spendRes *cost.Reservation
 	// Coding agents are heavy and contend on a shared repo. Acquire a slot first
 	// (this blocks the loop as backpressure when the cap is full), then hold it in
 	// the background until the launched agent goes idle — so the cap bounds the
@@ -563,12 +772,23 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		// (record an attempt so live-gated/backoff kinds re-run once the window frees;
 		// commands stay ungated). Protects the box from a webhook flood or a sweep
 		// misfire spinning up unbounded agents.
-		if max := e.cfg.Control.AgentsPerHour(); max > 0 && e.overAgentBudget(max) {
+		if max := e.cfg.AgentsPerHour(); max > 0 && e.overAgentBudget(max) {
 			e.log("%s agent budget reached (%d/hr) — shedding, will retry later", tag(t), max)
 			_ = e.store.RecordAttempt(key, dkind, head) // so it isn't silently forgotten
 			return
 		}
+		// Spend budget (#36 §14): same shed semantics as the count budget —
+		// record the attempt, retry when the rolling window frees, notify.
+		// An admitted dispatch RESERVES its estimated spend (settled or
+		// cancelled below).
+		res, berr := e.checkSpendBudget(act.Agent, nil, "", cost.Estimate(profile.Model, act.Prompt, ""))
+		if berr != nil {
+			e.shedForBudget(ctx, t, berr, shadow)
+			return
+		}
+		spendRes = res
 		if !e.acquire(ctx) {
+			e.meter.Cancel(spendRes)
 			return
 		}
 		e.recordAgentDispatch()
@@ -579,22 +799,33 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		e.log("%s running (%s)", tag(t), actionDesc(act))
 	}
 	start := time.Now()
-	ref, err := run.Dispatch(ctx, req)
+	ref, err := e.dispatchAgent(ctx, run, req)
 	took := time.Since(start).Round(time.Second)
 	if act.Type == "command" && err == nil && !ref.Skipped {
 		tail := ""
 		if tl := tailOutput(ref.Output); tl != "" {
-			tail = "\n" + tl
+			tail = "\n" + e.redact(tl)
 		}
 		e.log("%s command done (%s) in %s%s", tag(t), ref.Backend, took, tail)
 	}
 	e.auditDispatch(t, ref, err)
+	// Cost accounting (#36 §14): charge the run's usage (runtime-reported
+	// where the output carries it, else an approximate estimate) to the
+	// budget scopes and the audit, settling the dispatch's reservation.
+	// Output-less (background) runs meter the prompt side now; their output
+	// lands in later accounting as approximate. Non-charging outcomes
+	// (skip/queue/error) cancel the reservation instead.
+	if act.Type == "agent" && err == nil && !ref.Skipped && !ref.Shadowed && !ref.Queued {
+		e.recordUsage(t, act.Agent, act.ID, "", "", spendRes, cost.FromRun(profile.Model, act.Prompt, ref.Output))
+	} else {
+		e.meter.Cancel(spendRes)
+	}
 	gated := act.Type == "agent" && !shadow
 
 	// A catch-up whose PR already has a working agent did nothing — don't record it
 	// (it isn't an attempt) and free the slot.
 	if ref.Skipped {
-		e.log("%s %s", tag(t), ref.Output)
+		e.log("%s %s", tag(t), e.redact(ref.Output))
 		if gated {
 			e.release()
 		}
@@ -627,9 +858,9 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 
 	if err != nil {
 		if tl := tailOutput(ref.Output); tl != "" {
-			e.log("%s command output (tail):\n%s", tag(t), tl)
+			e.log("%s command output (tail):\n%s", tag(t), e.redact(tl))
 		}
-		e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("dispatch failed: %v", err))
+		e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("dispatch failed: %s", e.redact(err.Error())))
 		if gated {
 			e.release()
 		}
@@ -641,6 +872,14 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		if id := commentID(t); id > 0 {
 			_ = e.store.AdvanceCommentID(key, commentKind(t), id)
 		}
+	}
+
+	// A finished agent's captured output may carry the memory output contract.
+	// Queued/adopted work has no final output here; shadow previews never write.
+	// Single-action dispatches have no WorkflowRun record; the agent id is the
+	// run identity that provenance (Source.Run) can trace back.
+	if act.Type == "agent" && !shadow && !ref.Queued {
+		e.harvestMemory(t, act.Agent, ref.AgentID, ref.Output)
 	}
 
 	if ref.Queued {
@@ -659,8 +898,9 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	e.notif.Emit(ctx, notify.EventComplete, t, ref.Backend)
 	if gated && !ref.Shadowed && ref.AgentID != "" {
 		go func() {
+			defer e.recoverDispatch(ctx, t, store.WorkflowRun{}, "agent wait")
+			defer e.release()
 			run.WaitForAgent(ctx, ref.AgentID, agentWaitTimeout(profile))
-			e.release()
 		}()
 	} else if gated {
 		e.release()
@@ -707,6 +947,30 @@ func (e *Engine) finishRun(run store.WorkflowRun) {
 	}
 }
 
+// recoverDispatch is the top-frame panic guard for a per-event dispatch
+// goroutine. A panic inside runSteps/flow.Run/handoff.Review must not take the
+// whole daemon down and every other in-flight run with it: recover here, log
+// the stack, escalate to the operator, and clear the persisted run so it is
+// recorded failed rather than left dangling as in-flight (which ResumeWorkflows
+// would otherwise re-drive on the next start, straight back into the same
+// panic). The goroutine's own deferred e.release() still runs — recover only
+// swallows the panic, it does not skip the other defers — so the concurrency
+// slot and any budget reservation are returned normally. run may be a zero
+// value (no persisted run in scope, e.g. the WaitForAgent/review goroutines);
+// finishRun is then a no-op.
+func (e *Engine) recoverDispatch(ctx context.Context, t core.Trigger, run store.WorkflowRun, what string) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	e.log("%s PANIC in %s: %v\n%s", tag(t), what, r, debug.Stack())
+	e.store.Audit(map[string]any{"event": "panic_recovered", "repo": t.Target.Repo,
+		"number": t.Target.Number, "kind": t.Kind, "run": run.ID, "where": what})
+	e.notif.Emit(ctx, notify.EventEscalate, t,
+		fmt.Sprintf("internal error in %s — run recorded failed: %v", what, r))
+	e.finishRun(run)
+}
+
 // sanitizeContext copies a trigger context minus secrets (re-minted on resume).
 func sanitizeContext(in map[string]any) map[string]any {
 	if in == nil {
@@ -735,6 +999,21 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 		if json.Unmarshal(r.Trigger, &t) != nil || json.Unmarshal(r.Action, &act) != nil {
 			e.log("engine: resume %s: unreadable, dropping", r.ID)
 			_ = e.store.DeleteRun(r.ID)
+			continue
+		}
+		// A flow run resumes through the flow runner (its own checkpoint
+		// model); token re-minting below still applies first when possible.
+		if act.FlowRef != "" {
+			if e.flow == nil {
+				e.log("engine: resume %s: flow run but no flow runner — leaving for next start", r.ID)
+				continue
+			}
+			if t.Context != nil {
+				if appTok, err := e.refreshTok(t); err == nil && appTok != "" {
+					t.Context["app_token"] = appTok
+				}
+			}
+			e.resumeFlowRun(ctx, r, t, act)
 			continue
 		}
 		t.Action = act
@@ -767,6 +1046,7 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 			return
 		}
 		go func() {
+			defer e.recoverDispatch(ctx, t, run, "workflow resume")
 			defer e.release()
 			e.runSteps(ctx, run, t, act, appTok, userTok, false)
 		}()
@@ -880,6 +1160,26 @@ func (e *Engine) release() {
 	}
 }
 
+// redact scrubs tracked secret values ("" resolver = passthrough).
+func (e *Engine) redact(v string) string {
+	if e.secrets == nil {
+		return v
+	}
+	return e.secrets.Redact(v)
+}
+
+// redactArgv scrubs an argv copy for audit.
+func (e *Engine) redactArgv(argv []string) []string {
+	if e.secrets == nil || len(argv) == 0 {
+		return argv
+	}
+	out := make([]string, len(argv))
+	for i, a := range argv {
+		out[i] = e.secrets.Redact(a)
+	}
+	return out
+}
+
 // auditDispatch writes the dispatch audit entry and logs the outcome.
 func (e *Engine) auditDispatch(t core.Trigger, ref dispatch.RunRef, err error) {
 	outcome := "ok"
@@ -897,12 +1197,12 @@ func (e *Engine) auditDispatch(t core.Trigger, ref dispatch.RunRef, err error) {
 	}
 	entry := map[string]any{
 		"event": "dispatch", "repo": t.Target.Repo, "number": t.Target.Number,
-		"kind": t.Kind, "backend": ref.Backend, "argv": ref.Argv,
+		"kind": t.Kind, "backend": ref.Backend, "argv": e.redactArgv(ref.Argv),
 		"shadow": ref.Shadowed, "agent_id": ref.AgentID, "outcome": outcome,
 	}
 	if err != nil {
-		entry["error"] = err.Error()
-		e.log("%s dispatch failed: %v", tag(t), err)
+		entry["error"] = e.redact(err.Error())
+		e.log("%s dispatch failed: %s", tag(t), e.redact(err.Error()))
 	} else {
 		e.log("%s dispatched (backend=%s shadow=%v)", tag(t), ref.Backend, ref.Shadowed)
 	}
@@ -957,6 +1257,17 @@ func commentID(t core.Trigger) int64 {
 		return 0
 	}
 	return toInt64(t.Context["comment_id"])
+}
+
+// commentMarkKind returns the high-water-mark key for a comment trigger:
+// the comment kind, suffixed per variant for connectors-model triggers so
+// sibling triggers on the same event keep independent marks.
+func commentMarkKind(t core.Trigger) string {
+	ck := commentKind(t)
+	if act, ok := t.Action.(config.Action); ok && act.FlowRef != "" && t.Variant != "" {
+		ck += "#" + t.Variant
+	}
+	return ck
 }
 
 // commentKind reads a new_comment trigger's comment kind (store.CommentKindIssue /

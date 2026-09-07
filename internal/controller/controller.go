@@ -20,7 +20,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // SessionModel describes how a controller keeps an agent alive across turns.
@@ -89,6 +89,11 @@ type Capabilities struct {
 // Message is one prompt turn sent to a session (ACP session/prompt).
 type Message struct {
 	Text string
+	// Capture asks the session to WAIT for the turn and carry its output on
+	// the terminal Update (the supervise loop's revise round-trip). Without
+	// it a native (paseo) follow-up stays fire-and-forget — safe to send
+	// from latency-sensitive paths. ACP sessions always capture.
+	Capture bool
 }
 
 // UpdateKind classifies a streamed session update (ACP session/update).
@@ -192,8 +197,11 @@ type Controller interface {
 	// session/prompt). h receives any permission/input requests.
 	NewSession(ctx context.Context, spec Spec, h Handler) (Session, error)
 	// ResumeSession re-attaches to an existing session by id (ACP session/load);
-	// only meaningful for resumable/native controllers.
-	ResumeSession(ctx context.Context, id string, h Handler) (Session, error)
+	// only meaningful for resumable/native controllers. agentAuthored replays
+	// the persisted provenance of the ORIGINAL dispatch (#36 iso-review H5):
+	// a resumed agent-authored session relaunches under the same
+	// deny-by-default egress it started with, never weaker.
+	ResumeSession(ctx context.Context, id string, agentAuthored bool, h Handler) (Session, error)
 	// Runner returns the concrete dispatch surface the engine drives in M1. paseo
 	// returns the CLI dispatcher unchanged; a controller whose transport isn't
 	// supported in this build returns ErrNotRunnable.
@@ -217,6 +225,15 @@ type Runner interface {
 // *dispatch.Dispatcher satisfies this.
 type Sender interface {
 	Send(ctx context.Context, id, prompt string) error
+}
+
+// CaptureSender is an optional Sender upgrade: deliver a follow-up AND wait
+// for the turn, returning its output. paseo implements it via
+// `paseo send --json`; sessions on senders without it emit follow-up turns
+// with no captured output (the supervise loop then escalates instead of
+// revising).
+type CaptureSender interface {
+	SendCapture(ctx context.Context, id, prompt string) (string, error)
 }
 
 // The built-in paseo controller runs through the CLI dispatcher unchanged; assert

@@ -1,0 +1,19 @@
+{
+  "action": "synchronize",
+  "installation": { "id": 42 },
+  "repository": {
+    "full_name": "func/budget1",
+    "name": "budget1",
+    "default_branch": "main",
+    "owner": { "login": "func" }
+  },
+  "pull_request": {
+    "number": 1,
+    "state": "open",
+    "draft": false,
+    "title": "func/budget1 PR under test",
+    "head": { "sha": "canned-head-budget1-1", "ref": "pr-1" },
+    "base": { "ref": "main" },
+    "user": { "login": "conductor-user" }
+  }
+}

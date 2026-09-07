@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/NodeSpy/paseo-conductor/internal/controller"
+	"github.com/NodeSpy/conductor/internal/controller"
 )
 
 // Handler bridges an agent's mid-turn permission and input requests (the ACP

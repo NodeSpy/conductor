@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 func newTest(t *testing.T, cfg Config) *Integration {
@@ -35,7 +35,7 @@ func TestDeliverMapsBodyToTrigger(t *testing.T) {
 			Path:  "/hooks/cw",
 			Title: "{{.body.detail.alarmName}} → {{.body.detail.state}}",
 			Dedup: "{{.body.detail.alarmName}}-{{.body.time}}",
-			Repo:  "EdnitionCode/infra",
+			Repo:  "AcmeCorp/infra",
 			Actions: config.ActionSet{{Type: "agent", Agent: "fixer",
 				Prompt: "alarm {{.body.detail.alarmName}}"}},
 		}},
@@ -54,7 +54,7 @@ func TestDeliverMapsBodyToTrigger(t *testing.T) {
 	if tr.Dedup != "cpu-high-t1" {
 		t.Fatalf("dedup mapping wrong: %q", tr.Dedup)
 	}
-	if tr.Target.Repo != "EdnitionCode/infra" || tr.Target.Owner != "EdnitionCode" {
+	if tr.Target.Repo != "AcmeCorp/infra" || tr.Target.Owner != "AcmeCorp" {
 		t.Fatalf("repo target wrong: %+v", tr.Target)
 	}
 	// The action's prompt can reach the body via Context.

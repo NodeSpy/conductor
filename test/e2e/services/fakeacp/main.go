@@ -25,8 +25,8 @@ import (
 	"os"
 	"sync"
 
-	"github.com/NodeSpy/paseo-conductor/internal/acp"
-	"github.com/NodeSpy/paseo-conductor/test/e2e/services/fixer"
+	"github.com/NodeSpy/conductor/internal/acp"
+	"github.com/NodeSpy/conductor/test/e2e/services/fixer"
 )
 
 type agent struct {

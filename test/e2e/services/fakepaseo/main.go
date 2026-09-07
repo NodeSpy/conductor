@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -257,9 +258,13 @@ func cmdRun(args []string) {
 		_ = os.MkdirAll(cwd, 0o755)
 	}
 
-	// If it's a git repo, make the scripted edit + commit + push as the user.
+	dir := directives(prompt)
+
+	// If it's a git repo, make the scripted edit. Normally commit + push as the
+	// user; with the `dirty` directive (§17 diff preview) leave the change
+	// UNCOMMITTED so the worktree carries a proposed diff conductor can read.
 	if isGitRepo(cwd) {
-		applyEdit(cwd, prompt, p)
+		applyEdit(cwd, prompt, p, dir)
 	}
 
 	// Optionally simulate an acts-as-the-user WRITE against the mock GitHub API so
@@ -278,15 +283,64 @@ func cmdRun(args []string) {
 			Labels: p.labels, CreatedAt: now, LastUsage: now,
 		}
 	})
-	// Conductor parses the launched agent id off stdout JSON.
-	fmt.Printf("{\"id\":%q}\n", id)
+	// Conductor parses the launched agent id off stdout JSON AND reads runtime-
+	// reported token/cost usage from the same object (§14). Emitting an explicit
+	// `usage` + `total_cost_usd` makes the meter charge REPORTED (not estimated)
+	// numbers, so the e2e can assert exact token counts and approximate:false.
+	fmt.Printf("{\"id\":%q,\"usage\":{\"input_tokens\":%d,\"output_tokens\":%d},\"total_cost_usd\":%s}\n",
+		id, dir.inTokens, dir.outTokens, dir.costUSD)
+}
+
+// runDirectives are the deterministic signals a scenario embeds in the agent
+// prompt, so a stub dispatch emits exactly the effect a group asserts.
+type runDirectives struct {
+	inTokens  int
+	outTokens int
+	costUSD   string // formatted decimal, emitted verbatim into JSON
+	dirty     bool   // leave the edit uncommitted (proposed diff for §17)
+}
+
+// directives parses `[[usage in=N out=M cost=C]]` and `[[dirty]]` markers out of
+// the prompt. Defaults meter a small, deterministic, NON-round token/cost figure
+// so an assertion on the exact numbers can't accidentally match an estimate.
+func directives(prompt string) runDirectives {
+	d := runDirectives{inTokens: 1234, outTokens: 567, costUSD: "0.0421"}
+	if strings.Contains(prompt, "[[dirty]]") {
+		d.dirty = true
+	}
+	i := strings.Index(prompt, "[[usage")
+	if i < 0 {
+		return d
+	}
+	rest := prompt[i+len("[[usage"):]
+	if j := strings.Index(rest, "]]"); j >= 0 {
+		rest = rest[:j]
+	}
+	for _, tok := range strings.Fields(rest) {
+		k, v := splitKV(tok)
+		switch k {
+		case "in":
+			if n, err := strconv.Atoi(v); err == nil {
+				d.inTokens = n
+			}
+		case "out":
+			if n, err := strconv.Atoi(v); err == nil {
+				d.outTokens = n
+			}
+		case "cost":
+			if _, err := strconv.ParseFloat(v, 64); err == nil {
+				d.costUSD = v
+			}
+		}
+	}
+	return d
 }
 
 // applyEdit makes a deterministic edit, commits it as the acts-as-the-user
 // identity (GIT_AUTHOR_*/GIT_COMMITTER_* from conductor's --env), and pushes the
 // current branch to the forge (origin). This is what proves, per controller, that
 // a fixer edited/pushed and the commit is attributed to the user, not the bot.
-func applyEdit(cwd, prompt string, p parsed) {
+func applyEdit(cwd, prompt string, p parsed, dir runDirectives) {
 	name := p.env["GIT_AUTHOR_NAME"]
 	email := p.env["GIT_AUTHOR_EMAIL"]
 	if name == "" {
@@ -306,6 +360,14 @@ func applyEdit(cwd, prompt string, p parsed) {
 		"GIT_AUTHOR_NAME="+name, "GIT_AUTHOR_EMAIL="+email,
 		"GIT_COMMITTER_NAME="+name, "GIT_COMMITTER_EMAIL="+email,
 	)
+	// §17: leave the change staged-but-uncommitted so gitdiff.Proposed's
+	// "uncommitted (vs HEAD)" section has real content. The `add` matters: the
+	// marker is a NEW file, and `git diff HEAD` ignores untracked paths — only a
+	// staged (or tracked-modified) change shows up as an uncommitted proposal.
+	if dir.dirty {
+		git(cwd, env, "add", "-A")
+		return
+	}
 	git(cwd, env, "add", "-A")
 	// -c user.* covers the case where only committer env is honored.
 	git(cwd, env, "-c", "user.name="+name, "-c", "user.email="+email,

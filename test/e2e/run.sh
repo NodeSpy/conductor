@@ -68,9 +68,13 @@ force() { # container kind repo#n config
 }
 
 # post_webhook <event> <fixture> — sign and POST a fixture to conductor's receiver.
-post_webhook() {
-  local event="$1" fixture="$2"
-  cexec conductor bash -c '
+post_webhook() { post_webhook_to conductor "$@"; }
+
+# post_webhook_to <container> <event> <fixture> — sign and POST a fixture to a
+# specific daemon's receiver (each daemon binds :8787 in its own container).
+post_webhook_to() {
+  local target="$1" event="$2" fixture="$3"
+  cexec "$target" bash -c '
     set -e
     f="/fixtures/'"$fixture"'"
     sig=$(openssl dgst -sha256 -hmac e2e-webhook-secret "$f" | sed "s/^.*= //")
@@ -115,7 +119,7 @@ setup() {
   wait_for 60 cexec mock-github  curl -sf http://localhost:8080/_health  || fatal "mock-github not ready"
   wait_for 60 cexec sink-catcher curl -sf http://localhost:8080/_health  || fatal "sink-catcher not ready"
   wait_for 60 cexec forge git ls-remote git://localhost/acme/web.git      || fatal "forge not ready"
-  for c in conductor conductor-ctrl conductor-fail; do
+  for c in conductor conductor-ctrl conductor-fail conductor-conn conductor-migrate; do
     wait_for 60 cexec "$c" test -S /data/control.sock || fatal "$c daemon not ready (control socket)"
   done
   echo "stack ready"
@@ -741,6 +745,610 @@ wait_handoff_url_after() {
 
 # ---- main -------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Group K — the connectors model (issue #36): new-schema config end to end.
+# ---------------------------------------------------------------------------
+
+# slack_sink_has <pattern> — a captured slack Web API call contains pattern.
+slack_sink_has() {
+  netcurl http://sink-catcher:8080/_captured | grep -q "$1"
+}
+
+group_K_connectors() {
+  banner "Group K — connectors model (new schema)"
+  netcurl -X POST http://sink-catcher:8080/_reset >/dev/null
+
+  # K1 + K5 ride one merge_conflict event on conn/cweb: the agent fixes and
+  # pushes (K1), lifecycle hooks post to slack around it, and a second
+  # trigger runs a sh code step over SSH on the loopback host (K5).
+  code="$(post_webhook_to conductor-conn pull_request conn_merge_conflict.json)"
+  if [ "$code" = "200" ] || [ "$code" = "202" ]; then
+    ok "K1 webhook accepted by the connectors daemon (HTTP $code)" K K1-http
+  else
+    bad "K1 webhook accepted" K K1-http "unexpected HTTP $code"
+  fi
+
+  if wait_for 20 slack_sink_has "K1-start conn/cweb#1"; then
+    ok "K1 at:start hook posted to slack before the step" K K1-start
+  else
+    bad "K1 at:start hook posted" K K1-start "no K1-start capture on the slack sink"
+  fi
+  if wait_for 45 forge_has_conductor_commit conn/cweb pr-1; then
+    ok "K1 agent step fixed & pushed (new-schema trigger → fakepaseo → forge)" K K1-agent
+  else
+    bad "K1 agent step pushed a fix" K K1-agent "no conductor commit on conn/cweb pr-1"
+  fi
+  if wait_for 30 slack_sink_has "K1-done conn/cweb#1"; then
+    ok "K1 at:done hook posted after the workflow" K K1-done
+  else
+    bad "K1 at:done hook posted" K K1-done "no K1-done capture"
+  fi
+  if slack_sink_has "K1-fail"; then
+    bad "K1 no fail hook fired" K K1-nofail "K1-fail capture present"
+  else
+    ok "K1 at:fail hook did NOT fire on success" K K1-nofail
+  fi
+
+  # K5: the remote sh step ran on selfbox via the system ssh — the container's
+  # own hostname flows through the step output into the slack post.
+  host="$(cexec conductor-conn hostname | tr -d '\r\n')"
+  if wait_for 30 slack_sink_has "K5-remote $host as root"; then
+    ok "K5 code step ran over SSH (host: selfbox) and its output reached slack" K K5-remote
+  else
+    bad "K5 remote code step over SSH" K K5-remote "no 'K5-remote $host' capture"
+  fi
+
+  # K6: an agent on the remote paseo runtime — the fixer's commit lands on
+  # the forge even though every paseo invocation rode the ssh channel.
+  post_webhook_to conductor-conn pull_request conn_remote_conflict.json >/dev/null
+  if wait_for 60 forge_has_conductor_commit conn/rweb pr-1; then
+    ok "K6 remote paseo runtime (host:) fixed & pushed over SSH" K K6-remote-paseo
+  else
+    bad "K6 remote paseo runtime over SSH" K K6-remote-paseo "no conductor commit on conn/rweb pr-1"
+  fi
+  if wait_for 30 slack_sink_has "K6-done conn/rweb#1"; then
+    ok "K6 done hook fired after the remote workflow" K K6-done
+  else
+    bad "K6 done hook" K K6-done "no K6-done capture"
+  fi
+
+  # K2 + K3 ride a comment burst on conn/csvc: the ungrouped trigger fires per
+  # comment (js code step reshapes each), the grouped trigger batches the
+  # burst into ONE run seeing {{.group.count}} == 2.
+  post_webhook_to conductor-conn issue_comment conn_comment_1.json >/dev/null
+  sleep 0.5
+  post_webhook_to conductor-conn issue_comment conn_comment_2.json >/dev/null
+
+  if wait_for 20 slack_sink_has "K2 seen first burst comment" && wait_for 20 slack_sink_has "K2 seen second burst comment"; then
+    ok "K2 js code step reshaped each comment into a slack post" K K2-js
+  else
+    bad "K2 js code step per comment" K K2-js "missing K2 captures"
+  fi
+  if wait_for 30 slack_sink_has "K3-batch 2 last=second burst comment"; then
+    ok "K3 grouped burst → ONE run with group.count=2 and the last event's context" K K3-group
+  else
+    bad "K3 grouped burst batched" K K3-group "no K3-batch 2 capture"
+  fi
+  sleep 3
+  n="$(netcurl http://sink-catcher:8080/_captured | grep -o "K3-batch" | wc -l | tr -d ' ')"
+  if [ "$n" = "1" ]; then
+    ok "K3 exactly one batched run (one-run-per-key debounce)" K K3-once
+  else
+    bad "K3 exactly one batched run" K K3-once "K3-batch fired $n times"
+  fi
+
+  # K4: introspection over the live config.
+  out="$(cexec conductor-conn conductor connectors ls --config /etc/conductor/connectors.e2e.yaml 2>&1)"
+  case "$out" in
+    *gh*github*) ok "K4 conductor connectors ls lists the configured connectors" K K4-ls ;;
+    *) bad "K4 connectors ls" K K4-ls "unexpected output: $(echo "$out" | head -2)" ;;
+  esac
+  out="$(cexec conductor-conn conductor schema slack --config /etc/conductor/connectors.e2e.yaml 2>&1)"
+  case "$out" in
+    *"verb ask"*"request-response"*) ok "K4 conductor schema prints the ask verb contract" K K4-schema ;;
+    *) bad "K4 schema slack" K K4-schema "no ask verb in output" ;;
+  esac
+
+  # K7: `uses: page.ask` in the new grammar — three sequential ask steps on
+  # one trigger; the harness answers approve, then revise (with text), then
+  # discard, and the workflow's closing slack post carries all three answers.
+  k7_draft() { # k7_draft <n> — the nth presented draft URL, if any.
+    dc logs conductor-conn 2>&1 \
+      | grep -o 'http://localhost:8095/handoff?id=[A-Za-z0-9_-]*' \
+      | sed -n "$1p"
+  }
+  k7_wait_draft() { # k7_wait_draft <n> — poll for the nth draft, echo its URL.
+    local n="$1" deadline=$((SECONDS + 30)) url=""
+    while [ $SECONDS -lt $deadline ]; do
+      url="$(k7_draft "$n")"
+      [ -n "$url" ] && { echo "$url"; return 0; }
+      sleep 1
+    done
+    return 1
+  }
+  post_webhook_to conductor-conn issue_comment conn_ask.json >/dev/null
+  if url="$(k7_wait_draft 1)"; then
+    body="$(hoff_post conductor-conn "$url" 'action=approve')"
+    case "$body" in
+      *"Recorded: approve"*) ok "K7 ask step 1: web draft approved" K K7-approve ;;
+      *) bad "K7 approve" K K7-approve "unexpected reply: $(echo "$body" | head -1)" ;;
+    esac
+  else
+    bad "K7 first ask presents" K K7-approve "no draft URL in conductor-conn logs"
+  fi
+  if url="$(k7_wait_draft 2)"; then
+    hoff_post conductor-conn "$url" 'action=revise&text=v2-better' >/dev/null
+    ok "K7 ask step 2: revision submitted" K K7-revise
+  else
+    bad "K7 second ask presents" K K7-revise "no second draft after the approve"
+  fi
+  if url="$(k7_wait_draft 3)"; then
+    hoff_post conductor-conn "$url" 'action=discard' >/dev/null
+    ok "K7 ask step 3: discard submitted" K K7-discard
+  else
+    bad "K7 third ask presents" K K7-discard "no third draft after the revise"
+  fi
+  if wait_for 30 slack_sink_has "K7 approve/revise:v2-better/discard"; then
+    ok "K7 workflow read all three ask answers (action + revision text)" K K7-decisions
+  else
+    bad "K7 ask answers reach the workflow" K K7-decisions "no K7 decision capture on the slack sink"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Group L — automatic legacy→connectors migration on boot (issue #36, hard
+# requirement): transform + backup + validate, still working afterwards; an
+# unmappable config refuses and stays legacy.
+# ---------------------------------------------------------------------------
+group_L_migration() {
+  banner "Group L — auto-migration (legacy → connectors)"
+
+  # L1: the daemon booted on a LEGACY config; its boot transformed it.
+  if cexec conductor-migrate test -f /data/config/config.yaml.pre-connectors; then
+    ok "L1 pre-migration backup written (config.yaml.pre-connectors)" L L1-backup
+  else
+    bad "L1 backup written" L L1-backup "no .pre-connectors file"
+  fi
+  if cexec conductor-migrate grep -q "^connectors:" /data/config/config.yaml \
+     && ! cexec conductor-migrate grep -q "^integrations:" /data/config/config.yaml; then
+    ok "L1 config now on the connectors schema (integrations: gone)" L L1-schema
+  else
+    bad "L1 config migrated in place" L L1-schema "config.yaml not transformed"
+  fi
+  if cexec conductor-migrate grep -q "integrations:" /data/config/config.yaml.pre-connectors; then
+    ok "L1 backup holds the original legacy config" L L1-original
+  else
+    bad "L1 backup holds the original" L L1-original "backup is not the legacy file"
+  fi
+
+  # The migrated behavior still works: the same event fires the same work.
+  code="$(post_webhook_to conductor-migrate pull_request migr_merge_conflict.json)"
+  if [ "$code" = "200" ] || [ "$code" = "202" ]; then
+    ok "L1 webhook accepted post-migration (HTTP $code)" L L1-http
+  else
+    bad "L1 webhook accepted post-migration" L L1-http "unexpected HTTP $code"
+  fi
+  if wait_for 45 forge_has_conductor_commit migr/mweb pr-1; then
+    ok "L1 migrated trigger fixed & pushed (same event → same work)" L L1-works
+  else
+    bad "L1 migrated trigger still works" L L1-works "no conductor commit on migr/mweb pr-1"
+  fi
+  # The legacy ntfy sink was mapped onto a connector + via route; the dispatch
+  # notification must reach the sink through the VERB layer post-migration.
+  if wait_for 30 slack_sink_has "migrate-e2e"; then
+    ok "L1 migrated notify sink delivers through the verb layer (ntfy via route)" L L1-notify
+  else
+    bad "L1 migrated notify via route" L L1-notify "no ntfy capture for topic migrate-e2e"
+  fi
+
+  # L2: an UNMAPPABLE legacy config refuses with a hard error naming the
+  # construct, leaves the file untouched, and never commits a partial result.
+  out="$(cexec conductor-conn bash -c '
+    cp /etc/conductor/unmappable.yaml /tmp/unmappable.yaml
+    if conductor config migrate --config /tmp/unmappable.yaml 2>&1; then
+      echo MIGRATE_EXIT_ZERO
+    fi
+    grep -c "^integrations:" /tmp/unmappable.yaml || true
+    test ! -f /tmp/unmappable.yaml.pre-connectors && echo NO_PARTIAL_BACKUP_COMMIT || true
+  ' 2>&1)"
+  case "$out" in
+    *MIGRATE_EXIT_ZERO*) bad "L2 unmappable config refused" L L2-refuse "migrate exited zero" ;;
+    *"nested steps"*) ok "L2 unmappable construct hard-errors naming it (nested steps)" L L2-refuse ;;
+    *) bad "L2 unmappable config refused" L L2-refuse "error did not name the construct: $(echo "$out" | head -2)" ;;
+  esac
+  case "$out" in
+    *NO_PARTIAL_BACKUP_COMMIT*) ok "L2 refusal left no partial backup/commit" L L2-intact ;;
+    *) bad "L2 refusal left the file alone" L L2-intact "partial state written" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Functional groups for issue #36 §14/§16/§17/§20/§21. Each drives the REAL
+# connectors daemon (conductor-conn) and asserts the feature's OBSERVABLE
+# side-effect — an audit row, a forge commit, a blob digest, a history record,
+# a live watch event stream — so gutting the feature's core logic turns the
+# group red. No "config parses" assertions here.
+# ---------------------------------------------------------------------------
+
+CONN_CFG=/etc/conductor/connectors.e2e.yaml
+conn() { cexec conductor-conn conductor "$@" --config "$CONN_CFG"; }
+# Predicate for wait_for: is $1 in `conductor runs`? The list reads the history
+# dir file-by-file, so a just-finished run can lag the assertion by a beat (the
+# final record flush lands just after the step side-effect Q waits on, and a
+# single-shot read under IO load can miss it). Retry rather than one-shot —
+# Q-detail still proves the record landed; this only tolerates the flush window.
+conn_runs_lists() { conn runs --limit 0 2>/dev/null | grep -q "$1"; }
+
+# The func groups share the sink-catcher with K/L; reset once up front so the
+# blob/gate/hist slack assertions read only their own captures (K/L already
+# asserted theirs). Called by the first func group.
+func_reset_sink() { netcurl -X POST http://sink-catcher:8080/_reset >/dev/null; }
+
+# M — §14 cost accounting. The fake agent reports EXACT token/$ usage in its run
+# JSON (`[[usage in=1234 out=567 cost=0.0421]]`); conductor meters the REPORTED
+# figure, not an estimate. Observable effect: an agent_usage audit row carrying
+# that exact cost + token split, and the same spend surfaced by `conductor
+# report`. Gut the meter (or fall back to an estimate) and the exact-match dies.
+group_M_cost() {
+  banner "Group M — §14 cost & token accounting"
+  func_reset_sink
+  post_webhook_to conductor-conn pull_request func_cost_conflict.json >/dev/null
+  if wait_for 45 forge_has_conductor_commit func/cost pr-1; then
+    ok "M agent ran & pushed the fix (func/cost pr-1)" M M-run
+  else
+    bad "M agent ran" M M-run "no conductor commit on func/cost pr-1"
+  fi
+  if wait_for 20 audit_match conductor-conn \
+       '"event":"agent_usage"' '"repo":"func/cost"' \
+       '"input_tokens":1234' '"output_tokens":567' '"cost_usd":0.0421'; then
+    ok "M meter charged the agent's REPORTED cost/tokens exactly (agent_usage row)" M M-usage
+  else
+    bad "M agent_usage row carries reported figures" M M-usage \
+        "no agent_usage row with in=1234/out=567/cost=0.0421 for func/cost"
+  fi
+  if audit_match conductor-conn '"event":"agent_usage"' '"repo":"func/cost"' '"approximate":true'; then
+    bad "M reported cost was NOT flagged as an estimate" M M-exact "usage row marked approximate"
+  else
+    ok "M reported cost recorded as exact (approximate=false)" M M-exact
+  fi
+  out="$(conn report 2>&1)"
+  case "$out" in
+    *"spend (agent runs):"*"func/cost"*) ok "M \`conductor report\` shows the metered spend for func/cost" M M-report ;;
+    *) bad "M report shows metered spend" M M-report "func/cost not in report spend section" ;;
+  esac
+}
+
+# N — §14 budget shedding. A per-workflow spend cap (0.03) below one run's cost
+# (0.0421). Observable effect: event #1 runs and charges; event #2 lands while
+# the window still holds that charge and is SHED (budget_shed audit row, and its
+# agent NEVER pushes); after the 8s window frees, event #3 runs again. Remove the
+# budget check and #2 would push a commit like the others.
+group_N_budget() {
+  banner "Group N — §14 workflow budget shedding"
+  # #1 charges the meter. Wait for BOTH the push and the recorded usage, so the
+  # rolling window holds a real charge before #2 arrives.
+  post_webhook_to conductor-conn pull_request func_budget1_conflict.json >/dev/null
+  if wait_for 45 forge_has_conductor_commit func/budget1 pr-1 \
+     && wait_for 15 audit_match conductor-conn '"event":"agent_usage"' '"repo":"func/budget1"'; then
+    ok "N first event ran & charged the budget (func/budget1)" N N-first
+  else
+    bad "N first event charged the budget" N N-first "no commit+usage for func/budget1"
+  fi
+  # #2 lands inside the window with the cap already exceeded → shed. A shed at an
+  # agent step audits {event, scope, reason, agent} (no repo — the shed happens in
+  # the flow runner before target-scoped dispatch); the scope+reason pin it to
+  # THIS $0.03/8s workflow cap, and ordering makes it unambiguous: #1 has charged,
+  # #3 is not yet fired, so this is #2.
+  post_webhook_to conductor-conn pull_request func_budget2_conflict.json >/dev/null
+  if wait_for 20 audit_match conductor-conn \
+       '"event":"budget_shed"' '"scope":"workflow:gh.merge_conflict/budget"' \
+       '"agent":"fixer"' 'of $0.03 in 8s'; then
+    ok "N second event SHED against the workflow cap (budget_shed row)" N N-shed
+  else
+    bad "N second event shed" N N-shed "no budget_shed row for func/budget2"
+  fi
+  # The shed event's agent must never have run: no commit on budget2 pr-1. It was
+  # shed before dispatch, so this is a settled absence, not a race — give it the
+  # same grace #1 took to push.
+  sleep 8
+  if forge_has_conductor_commit func/budget2 pr-1; then
+    bad "N shed event did NOT dispatch its agent" N N-noshedpush "func/budget2 pr-1 has a conductor commit"
+  else
+    ok "N shed event never dispatched its agent (no push on func/budget2)" N N-noshedpush
+  fi
+  # Let the window (8s) free the first charge, then a third event runs again.
+  sleep 10
+  post_webhook_to conductor-conn pull_request func_budget3_conflict.json >/dev/null
+  if wait_for 45 forge_has_conductor_commit func/budget3 pr-1; then
+    ok "N third event ran once the window freed (budget is a rolling window, not a latch)" N N-recover
+  else
+    bad "N third event ran after the window freed" N N-recover "no commit on func/budget3 pr-1"
+  fi
+}
+
+# O — §16 eval/quality gates. Two identical shapes differing only in the gate
+# verdict. PASS: the gate clears, the downstream promote step fires. FAIL: the
+# gate check always fails; after the bounded revise loop it escalates and the
+# gated step FAILS, so promote is suppressed and a needs_input escalation is
+# raised. Delete the gate and the FAIL case would promote unchecked.
+group_O_gate() {
+  banner "Group O — §16 eval/quality gates"
+  post_webhook_to conductor-conn pull_request func_gatepass_conflict.json >/dev/null
+  if wait_for 45 audit_match conductor-conn '"event":"gate"' '"repo":"func/gatepass"' '"outcome":"pass"'; then
+    ok "O passing gate recorded a pass verdict (gate audit row)" O O-pass
+  else
+    bad "O passing gate records a pass" O O-pass "no gate pass row for func/gatepass"
+  fi
+  if wait_for 20 slack_sink_has "GATEPASS-promoted func/gatepass"; then
+    ok "O passing gate let the downstream promote step fire" O O-promote
+  else
+    bad "O passing gate promotes" O O-promote "no GATEPASS-promoted capture"
+  fi
+  # FAIL: the always-fail check escalates after the bounded revise loop.
+  post_webhook_to conductor-conn pull_request func_gatefail_conflict.json >/dev/null
+  if wait_for 60 audit_match conductor-conn '"event":"gate"' '"repo":"func/gatefail"' '"outcome":"escalated"'; then
+    ok "O failing gate escalated after the bounded revise loop (gate audit row)" O O-escalate
+  else
+    bad "O failing gate escalates" O O-escalate "no gate escalated row for func/gatefail"
+  fi
+  # The escalated gate FAILS its step → the promote step must NOT run. Give the
+  # revise loop time to finish before asserting the absence.
+  sleep 5
+  if slack_sink_has "GATEFAIL-promoted"; then
+    bad "O failing gate SUPPRESSED the downstream promote" O O-suppress "GATEFAIL-promoted captured"
+  else
+    ok "O failing gate suppressed the downstream promote step" O O-suppress
+  fi
+}
+
+# P — §21 binary/blob handling. One step stores a known payload as a run-scoped
+# content-addressed blob; a later step reads it back. Observable effect: a slack
+# post carrying BOTH the content digest (sha256 of the exact bytes, proving
+# content addressing) AND the round-tripped text (proving a byte-identical read).
+# Break storage/addressing and neither the digest nor the text survives.
+group_P_blob() {
+  banner "Group P — §21 content-addressed blob round-trip"
+  local want="BLOB digest=sha256:a9416758a338683406bb80673e81ec82a1363e67feaee33abf0f5737f13336ad text=conductor-blob-e2e-payload"
+  post_webhook_to conductor-conn issue_comment func_blob_comment.json >/dev/null
+  if wait_for 30 slack_sink_has "$want"; then
+    ok "P blob put→read round-tripped byte-identical, addressed by content digest" P P-roundtrip
+  else
+    bad "P blob round-trip by digest" P P-roundtrip "no matching BLOB digest/text capture"
+  fi
+}
+
+# Q — §20 execution history + retry-from-step. A 3-step run (js prep → agent fix
+# → slack tell) is recorded. Observable effects: `conductor runs` lists it;
+# `conductor runs <id>` shows per-step inputs/outputs (the pinned note flows
+# prep→fix→tell); retrying an already-succeeded step is refused without
+# --force-replay and re-posts with it; a record tampered on disk is refused by
+# HMAC verification. Gut history/signing and every one of these fails.
+group_Q_history() {
+  banner "Group Q — §20 execution history + retry-from-step"
+  post_webhook_to conductor-conn pull_request func_hist_conflict.json >/dev/null
+  if wait_for 45 forge_has_conductor_commit func/hist pr-1 \
+     && wait_for 15 slack_sink_has "HIST-done func/hist note=hist-prep"; then
+    ok "Q multi-step run completed (prep→fix→tell, note pinned through)" Q Q-run
+  else
+    bad "Q multi-step run completed" Q Q-run "func/hist run did not finish"
+  fi
+  # Find the recorded run's id from the history directory (the daemon signs and
+  # writes one JSON per run beside the state file).
+  # Pick the run we just triggered: the NEWEST func/hist record by mtime (not
+  # head -1, which grabs the oldest — if any earlier func/hist exists that one
+  # could sit past the list's default cap). And assert against the full list
+  # (--limit 0) so a small default cap can never be the reason it's missing.
+  local id
+  id="$(cexec conductor-conn sh -c 'grep -lE "\"repo\": *\"func/hist\"" /data/history/*.json 2>/dev/null | xargs -r ls -t | head -1 | xargs -r -n1 basename | sed "s/\.json$//"')"
+  if [ -n "$id" ] && wait_for 15 conn_runs_lists "$id"; then
+    ok "Q \`conductor runs\` lists the recorded run ($id)" Q Q-list
+  else
+    bad "Q runs lists the recorded run" Q Q-list "run id not found/listed (id='$id')"
+  fi
+  local detail; detail="$(conn runs "$id" 2>&1)"
+  case "$detail" in
+    *"prep"*"fix"*"tell"*"note=hist-prep"*)
+      ok "Q run detail shows every step with its pinned inputs/outputs" Q Q-detail ;;
+    *) bad "Q run detail shows per-step in/out" Q Q-detail "detail missing steps or pinned note" ;;
+  esac
+  # Retrying a step the record says SUCCEEDED replays side effects → refused
+  # without --force-replay.
+  local r; r="$(conn runs retry "$id" --from fix 2>&1)"
+  case "$r" in
+    *"already succeeded"*"--force-replay"*) ok "Q retry of a succeeded step is refused without --force-replay" Q Q-guard ;;
+    *) bad "Q retry guarded" Q Q-guard "unexpected retry output: $(echo "$r" | head -1)" ;;
+  esac
+  # With --force-replay it re-runs from fix, pinning prep's recorded output, and
+  # re-posts HIST-done.
+  func_reset_sink
+  conn runs retry "$id" --from fix --force-replay >/dev/null 2>&1
+  if wait_for 30 slack_sink_has "HIST-done func/hist note=hist-prep"; then
+    ok "Q --force-replay re-ran from fix with pinned inputs (note replayed prep→tell)" Q Q-replay
+  else
+    bad "Q --force-replay re-runs with pinned inputs" Q Q-replay "no HIST-done after forced replay"
+  fi
+  # Tamper the signed record on disk → verified read refuses to trust it.
+  cexec conductor-conn sh -c "sed -i 's/hist-prep/hist-XXXX/' /data/history/$id.json"
+  r="$(conn runs retry "$id" --from fix --force-replay 2>&1)"
+  case "$r" in
+    *"integrity verification"*) ok "Q a record modified on disk is refused (HMAC integrity check)" Q Q-integrity ;;
+    *) bad "Q tampered record refused" Q Q-integrity "unexpected output: $(echo "$r" | head -1)" ;;
+  esac
+}
+
+# R — §17 live run observability + proposed diff. The agent leaves its edit
+# UNCOMMITTED (`[[dirty]]`), so the run carries a proposed diff. Observable
+# effects: a `conductor watch` client attached BEFORE the event receives the
+# live step/gate/run event stream over the control socket, and the recorded run
+# carries the actual diff text. Gut event emission or diff capture and each dies.
+group_R_watch() {
+  banner "Group R — §17 live watch stream + proposed diff"
+  # Attach a live watcher (LIVE-only: it must be listening before the run).
+  dc exec -T -d conductor-conn sh -c "conductor watch --json --config $CONN_CFG > /tmp/watch.out 2>&1"
+  sleep 2
+  post_webhook_to conductor-conn pull_request func_watch_conflict.json >/dev/null
+  # The dirty run never pushes, so the run_done event is the completion signal.
+  if wait_for 45 cexec conductor-conn grep -q run_done /tmp/watch.out; then
+    local w; w="$(cexec conductor-conn cat /tmp/watch.out 2>/dev/null)"
+    case "$w" in
+      *step_started*step_done*run_done*)
+        ok "R watch streamed the live step/run events over the control socket" R R-stream ;;
+      *) bad "R watch streams live events" R R-stream "watch.out missing step/run events" ;;
+    esac
+  else
+    bad "R watch streams live events" R R-stream "no run_done event on the watch stream"
+  fi
+  # The PROPOSED (uncommitted) diff is captured into the run record's fix step:
+  # gitdiff.Proposed's "uncommitted (vs HEAD)" section carries the agent's
+  # staged-but-uncommitted edit (`+conductor fix: fix func/watch`). Requiring
+  # both the section header and the edit line proves it's the §17 diff-preview
+  # machinery's output — gut diff capture and the `diff` output key vanishes.
+  local file; file="$(cexec conductor-conn sh -c 'grep -lE "\"repo\": *\"func/watch\"" /data/history/*.json 2>/dev/null | head -1')"
+  if [ -n "$file" ] \
+     && cexec conductor-conn grep -q "uncommitted (vs HEAD)" "$file" \
+     && cexec conductor-conn grep -q "conductor fix: fix func/watch" "$file"; then
+    ok "R the run record carries the proposed uncommitted diff (§17 preview)" R R-diff
+  else
+    bad "R run record carries the proposed diff" R R-diff "no uncommitted-diff content in the func/watch history record"
+  fi
+}
+
+# --- Group S callable helpers ---------------------------------------------
+CALL_BASE="http://localhost:8099"
+CALL_AUTH="Authorization: Bearer e2e-invoke-token"
+
+# cinvoke <path> <auth-header|-> <body|-> — POST to the callable surface inside
+# conductor-conn (curl runs in-container; the port is container-local). Sets
+# INV_CODE (HTTP status) and INV_BODY (response body).
+cinvoke() {
+  local path="$1" auth="$2" body="$3" out
+  if [ "$auth" != "-" ] && [ "$body" != "-" ]; then
+    out="$(cexec conductor-conn curl -s -w $'\n%{http_code}' -X POST "$CALL_BASE$path" -H "$auth" -d "$body")"
+  elif [ "$auth" = "-" ]; then
+    out="$(cexec conductor-conn curl -s -w $'\n%{http_code}' -X POST "$CALL_BASE$path" -d "$body")"
+  else
+    out="$(cexec conductor-conn curl -s -w $'\n%{http_code}' -X POST "$CALL_BASE$path" -H "$auth")"
+  fi
+  INV_CODE="${out##*$'\n'}"; INV_BODY="${out%$'\n'*}"
+}
+
+# runs_get_has <id> <needle> — GET /runs/<id> with the scoped token contains needle.
+runs_get_has() { cexec conductor-conn curl -s "$CALL_BASE/runs/$1" -H "$CALL_AUTH" | grep -q "$2"; }
+
+# callback_delivered — the callback POST reached the sink-catcher AND carries the
+# structured result (a status-ok body for the who=callback run).
+callback_delivered() {
+  local caps; caps="$(netcurl http://sink-catcher:8080/_captured)"
+  printf '%s' "$caps" | grep -q 'callback/callable' && printf '%s' "$caps" | grep -q 'hi callback'
+}
+
+# S — §13 callable service. Conductor invoked over HTTP by an external
+# orchestrator, gated like every control surface: authenticated (bearer),
+# deny-by-default scope, explicit callable opt-in. Drives all three delivery
+# modes (async / ?wait=true / callback), per-token GET /runs read, the three
+# refusals (401 no token, 401 bad token, 403 out-of-scope), and the invoke
+# audit row. Observable effects: the async run's slack post, the inline wait
+# result, the sink-caught callback, the GET /runs body — gut auth/scope/dispatch
+# and each dies. The out-of-scope call must leave NO trace of its workflow.
+group_S_callable() {
+  banner "Group S — §13 callable service (HTTP invoke)"
+  func_reset_sink
+
+  # Async (default): 202 accepted + run_id, then the run posts to slack (inputs
+  # flowed: who=async → greeting "hi async").
+  cinvoke "/invoke/callable-summary" "$CALL_AUTH" '{"input":{"who":"async"}}'
+  local run_id; run_id="$(printf '%s' "$INV_BODY" | sed -n 's/.*"run_id":"\([^"]*\)".*/\1/p')"
+  if [ "$INV_CODE" = "202" ] && [ -n "$run_id" ] && printf '%s' "$INV_BODY" | grep -q '"status":"accepted"'; then
+    ok "S async invoke → 202 accepted + run_id ($run_id)" S S-async
+  else
+    bad "S async invoke → 202 + run_id" S S-async "code=$INV_CODE body=$INV_BODY"
+  fi
+  if wait_for 30 slack_sink_has "CALLABLE-done who=async greeting=hi async"; then
+    ok "S the async-invoked workflow ran (inputs flowed, slack posted)" S S-async-run
+  else
+    bad "S async-invoked workflow ran" S S-async-run "no CALLABLE-done post for who=async"
+  fi
+
+  # GET /runs/<id>: the scoped token reads back the terminal structured result,
+  # carrying the js step's output keyed by step id.
+  if [ -n "$run_id" ] && wait_for 20 runs_get_has "$run_id" '"greeting":"hi async"'; then
+    ok "S GET /runs/<id> returns the structured result (per-step outputs)" S S-runs
+  else
+    bad "S GET /runs/<id> returns the structured result" S S-runs "no ok result body for $run_id"
+  fi
+
+  # Synchronous ?wait=true: the call blocks and the result is inline (200 + ok +
+  # the greeting), no polling needed.
+  cinvoke "/invoke/callable-summary?wait=true" "$CALL_AUTH" '{"input":{"who":"sync"}}'
+  if [ "$INV_CODE" = "200" ] && printf '%s' "$INV_BODY" | grep -q '"status":"ok"' && printf '%s' "$INV_BODY" | grep -q '"greeting":"hi sync"'; then
+    ok "S ?wait=true returns the result inline (200, status ok, greeting)" S S-wait
+  else
+    bad "S ?wait=true returns the result inline" S S-wait "code=$INV_CODE body=$INV_BODY"
+  fi
+
+  # Callback (opted-in host): 202 up front, then conductor POSTs the structured
+  # result to the given URL when the run finishes (caught by the sink-catcher).
+  # sink-catcher is a private-network http host the SSRF guard blocks by default;
+  # it is delivered here only because callable.callback_allow_hosts lists it —
+  # this scenario proves the opt-in path.
+  cinvoke "/invoke/callable-summary" "$CALL_AUTH" '{"input":{"who":"callback"},"callback_url":"http://sink-catcher:8080/callback/callable"}'
+  if [ "$INV_CODE" = "202" ] && wait_for 30 callback_delivered; then
+    ok "S callback_url (opted-in host) received the structured result after completion" S S-callback
+  else
+    bad "S callback_url (opted-in host) received the result" S S-callback "code=$INV_CODE; no status-ok callback captured"
+  fi
+
+  # Callback (NON-opted-in private host): the SSRF guard blocks it by default.
+  # mock-github is on the private Docker network and is NOT in
+  # callback_allow_hosts, so the callback is never dialed — audited
+  # delivered:false with the blocked-range reason. This proves the default deny.
+  cinvoke "/invoke/callable-summary" "$CALL_AUTH" '{"input":{"who":"blocked"},"callback_url":"http://mock-github:8080/callback/blocked"}'
+  if [ "$INV_CODE" = "202" ] && wait_for 30 audit_match conductor-conn '"event":"callable_callback"' '"delivered":false' 'blocked'; then
+    ok "S callback_url to a non-opted-in private host is refused by the SSRF guard (default deny)" S S-callback-block
+  else
+    bad "S callback to a non-opted-in private host refused" S S-callback-block "code=$INV_CODE; no delivered:false blocked-range audit"
+  fi
+
+  # Refusal — no credential: uniform 401, nothing dispatched.
+  cinvoke "/invoke/callable-summary" "-" '{"input":{"who":"anon"}}'
+  if [ "$INV_CODE" = "401" ]; then
+    ok "S an unauthenticated invoke is refused (401)" S S-noauth
+  else
+    bad "S unauthenticated invoke refused" S S-noauth "code=$INV_CODE (want 401)"
+  fi
+
+  # Refusal — wrong bearer: uniform 401 (no oracle on which tokens exist).
+  cinvoke "/invoke/callable-summary" "Authorization: Bearer WRONG-TOKEN" '{"input":{"who":"bad"}}'
+  if [ "$INV_CODE" = "401" ]; then
+    ok "S an invoke with a bad token is refused (401)" S S-badauth
+  else
+    bad "S bad-token invoke refused" S S-badauth "code=$INV_CODE (want 401)"
+  fi
+
+  # Refusal — out of scope: the token authenticates but does not list
+  # callable-scoped → uniform 403, and that workflow MUST NOT run.
+  cinvoke "/invoke/callable-scoped" "$CALL_AUTH" '{"input":{}}'
+  if [ "$INV_CODE" = "403" ]; then
+    ok "S an out-of-scope invoke is refused (403, deny-by-default)" S S-scope
+  else
+    bad "S out-of-scope invoke refused" S S-scope "code=$INV_CODE (want 403)"
+  fi
+  sleep 3
+  if slack_sink_has "CALLABLE-scoped-LEAKED"; then
+    bad "S the refused out-of-scope workflow LEAKED a run" S S-scope-norun "CALLABLE-scoped-LEAKED captured"
+  else
+    ok "S the refused out-of-scope workflow never ran" S S-scope-norun
+  fi
+
+  # Audit: every admitted invoke is recorded with the caller identity, workflow,
+  # and run id.
+  if audit_match conductor-conn '"event":"callable_invoke"' '"caller":"n8n-e2e"' '"workflow":"callable-summary"'; then
+    ok "S the invoke is audited with caller + workflow + run id" S S-audit
+  else
+    bad "S invoke audited with caller/workflow" S S-audit "no callable_invoke row for n8n-e2e"
+  fi
+}
+
 main() {
   trap teardown EXIT
   setup
@@ -764,6 +1372,15 @@ main() {
   group_E_handoff
   group_F_capability
   group_J_failure
+  group_K_connectors
+  group_L_migration
+  group_M_cost
+  group_N_budget
+  group_O_gate
+  group_P_blob
+  group_Q_history
+  group_R_watch
+  group_S_callable
   print_matrix
   [ "$FAIL" -eq 0 ]
 }

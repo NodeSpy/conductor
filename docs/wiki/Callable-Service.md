@@ -1,0 +1,342 @@
+# Callable service (invoke API)
+
+Conductor as a callable service: an external orchestrator fires a named
+workflow over HTTP and gets a structured result back. It is the inbound
+counterpart to `conductor run` — the same manual machinery, reachable from
+n8n, cron, a queue, plain `curl`, or (via the MCP face) any MCP client.
+
+The division of labour is deliberate: **the caller owns generic automation and
+scheduling; conductor owns agents-on-code.** The surface is vendor-neutral —
+n8n is only the first documented adapter, and nothing here is n8n-specific.
+
+Off unless a `callable:` block is configured.
+
+## It is a control surface, gated like one
+
+The invoke endpoint dispatches agents, so it is gated like every other control
+surface in conductor. **All three gates must pass** — none alone is enough:
+
+1. **Authenticated** — every request presents a credential that resolves to a
+   configured token: a bearer secret *or* an HMAC signature over the request
+   body. An unknown/absent credential is refused with a uniform `401` that
+   reveals nothing about which tokens exist.
+2. **Deny-by-default scope** — a token invokes only the workflows named in its
+   `workflows:` allow-list. There is no wildcard.
+3. **Explicit opt-in** — a trigger is reachable only if it declares
+   `callable: true`. A workflow a token lists but the trigger has not opted
+   into is *not* invocable.
+
+A denied invoke — bad auth, out of scope, or not callable — never reaches the
+dispatch machinery, and an out-of-scope caller gets a uniform `403` that
+does not disclose whether the workflow exists.
+
+Everything downstream is unchanged: the invoke runs through the same
+policy / quiet-hours / budget / concurrency / audit path as any manual run.
+The entry point changes; the containment does not.
+
+## Configuration
+
+```yaml
+callable:
+  # Bind for the invoke endpoints. Mounts on the shared inbound listener, so it
+  # may reuse a `listen:` a webhook/sentry connector already binds. Put it
+  # behind TLS / an internal network — the bearer token is a shared secret.
+  listen: ":8099"
+  # Bounds a synchronous ?wait=true call (default 30s, hard-capped at 5m).
+  wait_timeout: 30s
+  # Concurrency ceilings (default 64 each). Each synchronous wait and each
+  # in-flight callback holds a goroutine for up to 5m, so both are bounded: a
+  # wait past the cap degrades to async (202 + run_id, poll GET /runs); a
+  # callback past the cap is not scheduled (audited delivered:false). Raise only
+  # if a deployment genuinely fans in more than 64 concurrent blocking callers.
+  max_wait_inflight: 64
+  max_callback_inflight: 64
+  tokens:
+    # A bearer caller.
+    - name: n8n-prod                       # recorded as the caller identity in the audit
+      bearer: "${CONDUCTOR_INVOKE_TOKEN}"  # from env/secrets — never inline
+      workflows: [pr-summary]              # deny-by-default: only these
+    # An HMAC caller: signs `timestamp\nMETHOD\npath\nbody` (replay-protected).
+    # Mutually exclusive with bearer.
+    - name: ci-signer
+      hmac:
+        secret: "${CONDUCTOR_INVOKE_HMAC}"
+        header: X-Conductor-Signature      # header carrying the signature
+        scheme: hex                         # hex (default) | base64; a "sha256=" prefix is stripped
+        timestamp_header: X-Conductor-Timestamp  # header carrying the signed unix-seconds timestamp (default)
+      workflows: [pr-summary]
+
+triggers:
+  # A callable manual workflow. `callable: true` is the trigger-side opt-in;
+  # without it the workflow is invisible to the invoke surface even if a token
+  # lists it. Inputs arrive under `.inputs` and at the top level.
+  - on: manual
+    name: pr-summary
+    callable: true
+    steps:
+      - id: summarize
+        type: agent
+        agent: fixer
+        prompt: "Summarize {{.repo}}#{{.pr}} for the release notes."
+```
+
+Validation (`conductor validate`) enforces the invariants up front: a
+`callable: true` trigger must be a named `on: manual` trigger; a token is
+authenticated exactly one way (an empty credential is never accepted); every
+workflow a token scopes must exist and have opted in; `listen` and `tokens`
+are set together (either alone is a misconfiguration).
+
+## Invoking
+
+`POST /invoke/<name>` with a JSON body `{"input": { … }}`. The `input` object
+becomes the trigger context (available under `.inputs` and at the top level in
+templates). The default is asynchronous — the call returns a `run_id`
+immediately:
+
+```
+$ curl -s -X POST localhost:8099/invoke/pr-summary \
+    -H 'Authorization: Bearer '"$CONDUCTOR_INVOKE_TOKEN" \
+    -d '{"input":{"repo":"acme/api","pr":42}}'
+{"run_id":"r5x9…","status":"accepted"}
+```
+
+There are three delivery modes; the caller picks per request.
+
+### Async (default)
+
+Returns `202 {"run_id","status":"accepted"}` the moment the run is admitted.
+The caller polls `GET /runs/<id>` for the result, or supplies a callback (below).
+
+### Synchronous — `?wait=true`
+
+Blocks (bounded by `wait_timeout`, hard-capped at 5m) and returns the structured
+result inline. `200` once the run reaches a terminal status; `202` (still the
+same body shape, `status:"running"`) if the deadline arrives first, so the
+caller falls back to polling:
+
+```
+$ curl -s -X POST 'localhost:8099/invoke/pr-summary?wait=true' \
+    -H 'Authorization: Bearer '"$CONDUCTOR_INVOKE_TOKEN" \
+    -d '{"input":{"repo":"acme/api","pr":42}}'
+{"run_id":"r5x9…","status":"ok","outputs":{"summarize":{"text":"…"}}}
+```
+
+### Callback — `callback_url`
+
+Returns `202` immediately (like async), then POSTs the same structured result to
+the given URL when the run finishes. Delivery is best-effort and audited
+(`event: callable_callback`, `delivered: true|false`):
+
+```
+$ curl -s -X POST localhost:8099/invoke/pr-summary \
+    -H 'Authorization: Bearer '"$CONDUCTOR_INVOKE_TOKEN" \
+    -d '{"input":{"repo":"acme/api","pr":42},"callback_url":"https://n8n.internal/webhook/pr-done"}'
+{"run_id":"r5x9…","status":"accepted"}
+```
+
+**The callback is SSRF-guarded.** `callback_url` is a caller-supplied URL the
+*daemon* dials, so it is fenced the same way as §15 egress — a caller cannot
+turn it into a request off the daemon's own network. By default the poster:
+
+- **requires `https://`** — set `callback_allow_http: true` to permit a plaintext
+  internal endpoint;
+- **resolves the host itself and refuses any resolved IP** in a blocked range —
+  loopback, link-local (incl. cloud metadata `169.254.169.254`), RFC1918/ULA
+  private space, and CGNAT (`100.64.0.0/10`). The IP checked is the IP dialed, so
+  a hostname that resolves to an internal address is refused even under
+  attacker-controlled DNS (no rebinding window);
+- **never follows redirects** — a `30x` cannot bounce delivery onto an internal
+  host.
+
+> ⚠️ **If your `callback_url` points at a private/LAN host, it is BLOCKED by
+> default.** This is the common self-hosted case: n8n (or a queue, or a Wait-node
+> resume URL) runs on your own network at something like `192.168.1.20`,
+> `10.x.x.x`, or a Docker service name that resolves to a private IP. Out of the
+> box that callback is **refused and never delivered** — the run still completes
+> and is readable via `GET /runs/<id>`, but the POST never arrives, and the only
+> sign is a `delivered: false` audit line. You must explicitly opt that host in
+> (next paragraph). A public `https://` callback needs no opt-in.
+
+A refused callback is audited (`delivered: false`) with the reason and never
+sent. To deliver to a deliberately-internal endpoint, opt its host back in with
+`callback_allow_hosts`. Each entry is **either a literal IP or a hostname**, and
+they trade off pinning vs. convenience:
+
+- a **literal IP** opts in that *exact* resolved address — the rebinding-safe
+  form: DNS may point anywhere, but only this address is ever dialed. Use it when
+  the callback sink has a stable IP;
+- a **hostname** opts in the host *by name* — whatever it resolves to at dial
+  time, even a private/LAN address. Use it when the sink's IP is DHCP- or
+  Docker-assigned and can't be pinned (n8n on your LAN, a container by service
+  name). It is safe because this is operator config, not the caller-supplied URL:
+  an attacker can't add to it, and any host **not** listed is still blocked.
+
+```yaml
+callable:
+  callback_allow_http: true                 # sink speaks plain http:// (LAN case)
+  callback_allow_hosts:
+    - n8n.internal                          # by name: any IP it resolves to (DHCP/Docker)
+    - 10.0.0.9                              # or pin an exact internal IP
+```
+
+So for the typical self-hosted wiring — conductor POSTing back to n8n at
+`http://n8n.internal:5678/webhook/...` on your LAN — you need **both**
+`callback_allow_http: true` (plain http) and `n8n.internal` in
+`callback_allow_hosts` (private host). Without them the callback is silently
+default-denied.
+
+## Reading a run — `GET /runs/<id>`
+
+```
+$ curl -s localhost:8099/runs/r5x9… -H 'Authorization: Bearer '"$CONDUCTOR_INVOKE_TOKEN"
+{"run_id":"r5x9…","status":"ok","outputs":{"summarize":{"text":"…"}}}
+```
+
+The result body is uniform across all three modes and `GET /runs`:
+
+| field         | meaning                                                              |
+| ------------- | ------------------------------------------------------------------- |
+| `run_id`      | the id minted at invoke time                                        |
+| `status`      | `running` \| `ok` \| `failed` \| `retried`                          |
+| `outputs`     | per-step outputs keyed by step id (secret-scrubbed, as in §20)      |
+| `error`       | present only when `status: failed` — a generic `"workflow failed"`  |
+| `failed_step` | present only when `status: failed` — the step id that failed        |
+
+The `error` field is deliberately generic: a raw connector/step error can carry
+local paths or hostnames (non-secret, but internal), so the external caller sees
+only `"workflow failed"` plus the operator-named `failed_step`. The full failure
+detail stays in the §20 history record — read it with `conductor runs <id>`.
+
+Reads are isolated per token and **fail closed**: a token may read only runs it
+invoked in this process. An id whose issuing token is unknown here — never
+issued, or issued before the daemon last restarted — returns `404` (the read
+map is in-memory); an id owned by *another* token returns `403`. Run ids are
+128-bit unguessable (`crypto/rand`), so an id cannot be enumerated or walked,
+and a pre-restart run is not exposed to any other caller. The durable §20 record
+remains readable with local access via `conductor runs <id>`.
+
+### HMAC callers
+
+An HMAC token signs a **canonical request string** — `timestamp\nMETHOD\npath\nbody`
+— with HMAC-SHA256, and presents both the signature and the timestamp in their
+configured headers. Binding the timestamp, method, and path (not the body alone)
+is what makes the signature un-replayable: it is valid for exactly one endpoint
+at one moment.
+
+```
+ts=$(date +%s)
+body='{"input":{"repo":"acme/api","pr":42}}'
+canonical=$(printf '%s\n%s\n%s\n%s' "$ts" POST /invoke/pr-summary "$body")
+sig=$(printf '%s' "$canonical" | openssl dgst -sha256 -hmac "$CONDUCTOR_INVOKE_HMAC" -hex | awk '{print $2}')
+curl -s -X POST localhost:8099/invoke/pr-summary \
+  -H "X-Conductor-Signature: sha256=$sig" \
+  -H "X-Conductor-Timestamp: $ts" \
+  -d "$body"
+```
+
+The server refuses a signed request whose timestamp is outside the skew window
+(`max_skew`, default 5m) and refuses any signature it has already seen — so a
+captured request cannot be replayed, and a signature minted for `POST /invoke/…`
+cannot be reused on `GET /runs/…`. A `GET /runs/<id>` read is signed the same
+way, over an empty body with `method=GET` and `path=/runs/<id>`.
+
+## Recipe: calling conductor from n8n
+
+n8n is the first documented adapter, but nothing here is n8n-specific — the
+surface is plain authenticated HTTP. Conductor owns the agents-on-code step;
+n8n owns the trigger, the fan-in, and whatever happens with the result.
+
+**Credential.** Create an n8n *Header Auth* credential once — name
+`Authorization`, value `Bearer <the token>` (store the token in n8n's
+credential vault, not in the node). Every HTTP Request node below references it.
+
+**Pattern A — fire-and-forget (async).** An **HTTP Request** node:
+`POST http://conductor.internal:8099/invoke/pr-summary`, JSON body
+`{"input": {"repo": "{{ $json.repo }}", "pr": {{ $json.pr }}}}`. It returns a
+`run_id` in milliseconds; the n8n workflow moves on. Use when conductor's result
+isn't needed inline.
+
+**Pattern B — wait for the result (synchronous).** The same node, but URL
+`…/invoke/pr-summary?wait=true` and the node's timeout raised past
+`wait_timeout`. The response body *is* the structured result — read
+`{{ $json.outputs.summarize.text }}` in the next node. Add an **IF** node on
+`{{ $json.status }} === "ok"` to branch failures. Best for short workflows where
+n8n should block.
+
+**Pattern C — callback (long runs).** POST without `wait`, but include
+`"callback_url": "{{ $execution.resumeUrl }}"` from a **Wait** node set to
+"On Webhook Call". n8n pauses; conductor POSTs the result to the resume URL when
+the run finishes; n8n continues with the result as the node output. Best for
+runs longer than any sane HTTP timeout.
+
+> ⚠️ **Self-hosted n8n is on your LAN, so its resume URL is a private host —
+> blocked by default.** `$execution.resumeUrl` points at wherever n8n runs
+> (`http://n8n.internal:5678/…`, `http://192.168.x.x/…`, a Docker service name).
+> The SSRF guard blocks that private target unless you opt it in, so out of the
+> box the callback **never arrives** — n8n waits forever and the only trace is a
+> `delivered: false` audit line on the conductor side. Add the n8n host to
+> conductor's config (and allow http, since the resume URL is usually plaintext):
+>
+> ```yaml
+> callable:
+>   callback_allow_http: true
+>   callback_allow_hosts: [n8n.internal]   # the host in your resumeUrl (by name or exact IP)
+> ```
+>
+> See [Callback — `callback_url`](#callback--callback_url) for the full rule.
+> A cloud-hosted n8n with a public `https://` resume URL needs no opt-in.
+
+In every pattern the request is one authenticated HTTP call and the response is
+the uniform result body above — swap n8n for Zapier, Make, a cron job, or a
+shell script without changing the conductor side.
+
+## MCP tool face
+
+The same callable workflows are exposed as MCP tools for a local MCP client
+(an agent, an IDE, a desktop assistant) via a stdio server:
+
+```
+conductor mcp callable --token <name>
+```
+
+By default this face is held to the **same token model as the HTTP surface**. It
+requires a `--token <name>` naming a token from the `callable:` block, and the
+client sees only the workflows that token is scoped to — nothing else. Each tool
+takes a single free-form `input` object (the same body the HTTP endpoint
+accepts); calling it fires the workflow and blocks for the structured result,
+returned as the tool's text content (`isError: true` when the run failed).
+
+The daemon does not trust the tool list alone. Every MCP dispatch is marked as a
+callable invoke, and the daemon **re-checks the `callable: true` opt-in and the
+token's workflow scope at dispatch time** and writes a `callable_invoke` audit —
+so narrowing a token or removing `callable:` from a trigger revokes reachability
+immediately, even while the MCP server stays up. A tool call for a workflow the
+token is not scoped to (or that is no longer callable) is refused. The dispatch
+still crosses the daemon's same-user control socket — the same privilege boundary
+`conductor run` uses — so the MCP server is launched by the client's own config:
+
+```json
+{
+  "mcpServers": {
+    "conductor": { "command": "conductor", "args": ["mcp", "callable", "--token", "n8n-prod", "--config", "/etc/conductor/config.yaml"] }
+  }
+}
+```
+
+To opt out — expose every `callable: true` workflow with no token and no audit,
+trusting the same-user control socket alone — set `mcp_local: true` in the
+`callable:` block and drop `--token`. This is the old behavior and should be used
+only where the local privilege boundary is the intended and sufficient control.
+
+## Audit
+
+Every invoke is audited with the caller identity, the workflow, and the run id
+(`event: callable_invoke`). A refused invoke is logged with the reason. The
+run itself then leaves the usual §20 history record, readable with
+`conductor runs <run_id>`.
+
+## See also
+
+- [[Runs]] — the execution history the invoke surface hands back.
+- [[Policy]] — quiet-hours / budget / concurrency, which apply to every invoke.
+- [[Configuration]] — the full `callable:` schema.

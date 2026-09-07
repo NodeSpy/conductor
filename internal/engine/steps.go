@@ -7,13 +7,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
-	"github.com/NodeSpy/paseo-conductor/internal/expr"
-	"github.com/NodeSpy/paseo-conductor/internal/handoff"
-	"github.com/NodeSpy/paseo-conductor/internal/notify"
-	"github.com/NodeSpy/paseo-conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/expr"
+	"github.com/NodeSpy/conductor/internal/gitdiff"
+	"github.com/NodeSpy/conductor/internal/handoff"
+	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // runSteps executes a multi-step workflow: each step may use a different
@@ -71,6 +72,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			if s.Prompt != "" {
 				s.Prompt += dispatch.WriteWrapperGuidance
 				s.Prompt += e.agentGuidance(profile)
+				s.Prompt += e.memoryPrompt(s.Agent, profile, t)
 				if s.RerequestReview {
 					s.Prompt += dispatch.RerequestReviewGuidance
 				}
@@ -107,7 +109,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		}
 		e.log("%s step %s running (%s)", tag(t), id, actionDesc(s))
 		start := time.Now()
-		ref, err := runner.Dispatch(ctx, req)
+		ref, err := e.dispatchAgent(ctx, runner, req)
 		// A step that exited cleanly but reports it isn't done yet (e.g. critique
 		// deferring on pending CI) is retried per its `retry:` policy — the workflow
 		// won't complete a not-ready step.
@@ -120,20 +122,23 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		outputs := map[string]any{}
 		if !s.Background {
 			outputs = extractOutputs(ref)
+			if s.Type == "agent" && err == nil && !shadow {
+				e.harvestMemory(t, s.Agent, run.ID, ref.Output)
+			}
 		}
 		stepsOut[id] = map[string]any{"outputs": outputs}
 
 		entry := map[string]any{"event": "step", "repo": t.Target.Repo, "number": t.Target.Number,
 			"kind": t.Kind, "step": id, "backend": ref.Backend, "shadow": ref.Shadowed}
 		if err != nil {
-			entry["error"] = err.Error()
+			entry["error"] = e.redact(err.Error())
 			e.store.Audit(entry)
 			failMsg := ""
 			if tail := tailOutput(ref.Output); tail != "" {
-				failMsg = "\n" + tail
+				failMsg = "\n" + e.redact(tail)
 			}
-			e.log("%s step %s failed after %s: %v%s", tag(t), id, took, err, failMsg)
-			e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("workflow step %q failed: %v", id, err))
+			e.log("%s step %s failed after %s: %s%s", tag(t), id, took, e.redact(err.Error()), failMsg)
+			e.notif.Emit(ctx, notify.EventEscalate, t, fmt.Sprintf("workflow step %q failed: %s", id, e.redact(err.Error())))
 			e.finishRun(run)
 			return // fail-fast
 		}
@@ -176,7 +181,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			// Without one (none configured, or resolution came up empty), keep today's
 			// behavior: tell you to drive the agent in paseo.
 			if handoffCh != nil && e.broker != nil && ref.AgentID != "" {
-				e.startReviewHandoff(ctx, t, id, profile, ref.AgentID, handoffCh)
+				e.startReviewHandoff(ctx, t, id, s.Agent, profile, ref, handoffCh)
 			} else {
 				e.notif.Emit(ctx, notify.EventNeedsInput, t,
 					fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
@@ -196,7 +201,8 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		// A non-interactive agent step (e.g. assess) needs no interaction, so archive
 		// its agent the instant it finishes rather than leaving it to clutter paseo
 		// until the reaper's next poll. Fire-and-forget; the reaper is the backstop.
-		if s.Type == "agent" && profile.ArchiveWhenDone && ref.AgentID != "" {
+		// A keyed session (affinity) is shared across events — never archived here.
+		if s.Type == "agent" && profile.ArchiveWhenDone && ref.AgentID != "" && !e.affinityOwns(ref.AgentID) {
 			go func(id string) { _ = e.disp.Archive(context.Background(), id) }(ref.AgentID)
 		}
 	}
@@ -213,7 +219,8 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 // resolved or the agent can't be bound, it falls back to today's behavior
 // (notify you to open the agent in paseo). Only invoked when ch and the broker
 // are configured.
-func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID string, profile config.AgentProfile, agentID string, ch handoff.Channel) {
+func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID, agentName string, profile config.AgentProfile, ref dispatch.RunRef, ch handoff.Channel) {
+	agentID := ref.AgentID
 	fallback := func(reason string) {
 		if reason != "" {
 			e.log("%s review hand-off: %s — leaving agent %s live in paseo", tag(t), reason, agentID)
@@ -232,12 +239,15 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID 
 			fmt.Sprintf("review for %q is ready — approve/revise/discard here: %s", stepID, ref))
 	}
 	handler := handoff.NewHandler(ch, notifyRef)
-	sess, err := c.ResumeSession(ctx, agentID, handler)
+	// Legacy engine steps are config-authored; the flow runner owns
+	// agent-authored plans — so this hand-off's provenance is never
+	// agent-authored.
+	sess, err := c.ResumeSession(ctx, agentID, false, handler)
 	if err != nil {
 		fallback(fmt.Sprintf("bind agent %s: %v", agentID, err))
 		return
 	}
-	e.broker.Bind(prKey, c, sess)
+	e.broker.Bind(prKey, c, sess, false)
 	draft := handoff.Draft{
 		Title:  fmt.Sprintf("Review for %s", prKey),
 		Body:   "The agent is preparing its review. Edit the text and choose Send revision to hand it back to the agent, Approve to have it submit as-is, or Discard.",
@@ -245,8 +255,23 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID 
 		Repo:   t.Target.Repo,
 		Number: t.Target.Number,
 	}
+	// Diff preview (#36 §17): every presentation of this hand-off carries the
+	// agent's CURRENT proposed diff, read live from its worktree — the draft
+	// is a real diff, not just prose. Remote/worktree-less runs present prose
+	// only (there is no local path to read).
+	var refresh func(*handoff.Draft)
+	if wd := ref.Workdir; wd != "" {
+		refresh = func(d *handoff.Draft) {
+			diff, derr := gitdiff.Proposed(ctx, wd, 48<<10)
+			if derr != nil || strings.TrimSpace(diff) == "" {
+				return
+			}
+			d.Body += "\n\n--- proposed diff (live) ---\n" + e.redact(diff)
+		}
+	}
 	go func() {
-		dec, rerr := handoff.Review(ctx, sess, ch, draft, notifyRef)
+		defer e.recoverDispatch(ctx, t, store.WorkflowRun{}, "review hand-off")
+		dec, rerr := handoff.Review(ctx, sess, ch, draft, notifyRef, refresh)
 		if rerr != nil {
 			if ctx.Err() == nil {
 				e.log("%s review hand-off loop for %q ended: %v", tag(t), stepID, rerr)
@@ -254,6 +279,9 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID 
 			return
 		}
 		e.log("%s review hand-off for %q resolved: %s", tag(t), stepID, dec.Action)
+		// The outcome loop (#36 §18): the human's terminal call on this
+		// agent's work is a quality signal.
+		e.recordDecisionOutcome(t, agentName, dec.Action)
 		if dec.Action == handoff.ActionDiscard {
 			e.broker.Close(ctx, prKey)
 		}

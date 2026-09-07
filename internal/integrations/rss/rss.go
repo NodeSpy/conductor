@@ -18,9 +18,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/inbound"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/inbound"
 )
 
 func init() { core.Register("rss", newIntegration) }
@@ -94,7 +94,7 @@ func (g *Integration) Validate() error {
 			return wrapf(g.name, "feed %q: no actions", f.Name)
 		}
 		for _, a := range f.Actions {
-			if a.Type == "" {
+			if a.Type == "" && a.FlowRef == "" { // FlowRef: lowered connectors-model action
 				return wrapf(g.name, "feed %q: action.type is required", f.Name)
 			}
 		}

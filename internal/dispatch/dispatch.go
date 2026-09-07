@@ -9,14 +9,16 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"text/template"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 // Tokens carries the two credentials dispatched work may need.
@@ -47,7 +49,13 @@ type Request struct {
 	// gets a PR/branch worktree when there's repo context (PR-centric), else its own
 	// dedicated workspace.
 	Interactive bool
-	Data        map[string]any // extra template vars (e.g. prior step outputs)
+	// AgentAuthored marks a dispatch that came out of an agent-authored plan
+	// (#36 §11) rather than operator config. Conductor-launched runtimes give
+	// such a dispatch deny-by-default network (#36 §15): unless the profile's
+	// isolation names an explicit network policy, the launch is routed through
+	// the deny-all egress proxy.
+	AgentAuthored bool
+	Data          map[string]any // extra template vars (e.g. prior step outputs)
 }
 
 // RunRef is the outcome of a dispatch.
@@ -60,13 +68,27 @@ type RunRef struct {
 	Skipped  bool     `json:"skipped,omitempty"` // no work dispatched (e.g. catch-up while an agent is on the PR)
 	Queued   bool     `json:"queued,omitempty"`  // handed to an agent already on the PR (no new agent spawned)
 	Adopted  bool     `json:"adopted,omitempty"` // queued to an open workspace you already had on this branch
-	Output   string   `json:"-"`
+	// Workdir is the LOCAL directory the agent worked in (its isolated
+	// worktree, or an explicit workdir) — where quality-gate checks run and
+	// the proposed diff is read (#36 §16/§17). Empty for remote runtimes,
+	// checkout-less runs, and queued/adopted dispatches.
+	Workdir string `json:"workdir,omitempty"`
+	Output  string `json:"-"`
 }
 
 // Dispatcher routes requests to a backend.
 type Dispatcher struct {
 	PaseoBin string
 	DryRun   bool
+
+	// Secrets redacts tracked secret values from the error details this
+	// package builds out of paseo stderr/output before they leave the
+	// package (nil = passthrough).
+	Secrets *secrets.Resolver
+
+	// Remote runs every paseo CLI invocation on an SSH host — a paseo runtime
+	// with `host:`. nil = the local binary. See remote.go for what changes.
+	Remote *hosts.Target
 
 	// CheckoutDir resolves a local checkout path for a repo (owner/name) that
 	// paseo can derive the forge repo from when creating a PR/branch worktree.
@@ -107,6 +129,14 @@ type Dispatcher struct {
 	scratchWS string            // memoized scratch workspace id
 }
 
+// redactText scrubs tracked secret values from stderr-derived detail text.
+func (d *Dispatcher) redactText(s string) string {
+	if d.Secrets == nil {
+		return s
+	}
+	return d.Secrets.Redact(s)
+}
+
 // New builds a Dispatcher. paseoBin defaults to "paseo"; retry tunes transient
 // `paseo run` re-attempts (git lock/timeout under a sweep fan-out).
 func New(paseoBin string, retry config.Retry, dryRun bool) *Dispatcher {
@@ -130,7 +160,7 @@ func (d *Dispatcher) WaitForAgent(ctx context.Context, id string, timeout time.D
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	_ = exec.CommandContext(ctx, d.PaseoBin, "wait", id).Run()
+	_ = d.paseoCmd(ctx, "wait", id).Run()
 }
 
 // Send queues a follow-up prompt to an existing live agent (paseo's native
@@ -139,6 +169,24 @@ func (d *Dispatcher) WaitForAgent(ctx context.Context, id string, timeout time.D
 // same primitive internally (see liveAgentForPR).
 func (d *Dispatcher) Send(ctx context.Context, id, prompt string) error {
 	return d.sendToAgent(ctx, id, prompt)
+}
+
+// SendCapture delivers a follow-up prompt and waits for the turn to finish
+// (`paseo send` waits by default), returning the completed turn's JSON
+// output — the same capture shape as `paseo run --json`. The supervise loop
+// (#36 §11) reads the agent's revised plan out of it.
+func (d *Dispatcher) SendCapture(ctx context.Context, id, prompt string) (string, error) {
+	cmd := d.paseoCmd(ctx, "send", id, prompt, "--json")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if s := strings.TrimSpace(stderr.String()); s != "" {
+			return "", fmt.Errorf("%w: %s", err, d.redactText(truncate(s, 300)))
+		}
+		return "", err
+	}
+	return string(out), nil
 }
 
 // Dispatch selects the backend for the action and runs it.
@@ -164,8 +212,23 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req Request) (RunRef, error) 
 	}
 }
 
+// scrubber is the resolver templateData uses to REDACT tracked secret values
+// out of the scope handed to an external runtime's prompt/env templates
+// (#122 R3): a step output that echoed a resolved secret (curl -v printing
+// an auth header) must not surface it in a later agent's prompt. Package
+// level because the controller-facing helpers (AgentEnv, RenderPrompt) have
+// no Dispatcher. Set once at boot beside the other redaction choke points.
+var scrubber atomic.Pointer[secrets.Resolver]
+
+// SetScrubber installs the tracked-secret scrubber for template data.
+func SetScrubber(r *secrets.Resolver) { scrubber.Store(r) }
+
 // templateData assembles the variables available to prompt/command/env
-// templates: trigger fields plus the two tokens.
+// templates: trigger fields plus the two tokens. Everything EXCEPT the
+// intentional credential channels — the named secrets/vaults scopes (the
+// deprecated-but-supported env templating) and the dispatch tokens — is
+// scrubbed of tracked secret values before an external runtime renders
+// against it; ordinary data flows through untouched.
 func templateData(req Request) map[string]any {
 	t := req.Trigger.Target
 	data := map[string]any{
@@ -191,14 +254,32 @@ func templateData(req Request) map[string]any {
 	for k, v := range req.Data { // step outputs etc. win over context
 		data[k] = v
 	}
+	if r := scrubber.Load(); r != nil {
+		for k, v := range data {
+			switch k {
+			case "secrets", "vaults", "app_token", "gh_token":
+				// The explicit credential channels: {{.secrets.x}} /
+				// {{.vaults.v.k}} (deprecated env templating, still
+				// supported) and the dispatch tokens ({{.gh_token}}).
+				continue
+			}
+			data[k] = r.RedactValue(v)
+		}
+	}
 	return data
 }
+
+// dispatchFuncs: {{secret "name"}} renders the OPAQUE boundary handle here
+// too — a dispatched agent's prompt and env carry the handle, never the
+// value (the flow runner resolves handles only at conductor's own egress;
+// an agent that needs the value goes through the secret broker).
+var dispatchFuncs = template.FuncMap{"secret": secrets.SecretTemplateFunc}
 
 func render(s string, data map[string]any) (string, error) {
 	if !strings.Contains(s, "{{") {
 		return s, nil
 	}
-	tmpl, err := template.New("t").Option("missingkey=zero").Parse(s)
+	tmpl, err := template.New("t").Option("missingkey=zero").Funcs(dispatchFuncs).Parse(s)
 	if err != nil {
 		return "", err
 	}

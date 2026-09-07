@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // ---- URL extraction (fed captured sample output, no real binaries/network) ----

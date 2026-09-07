@@ -38,7 +38,7 @@ func TestHandleDiscordFrameReady(t *testing.T) {
 func TestHandleDiscordFrameMessageCreateFromAnotherUserDelivers(t *testing.T) {
 	gs := &discordGatewayState{selfID: "SELF1"}
 	inbox := NewInbox()
-	pend := inbox.register("C123", "")
+	pend := inbox.register("C123", "", nil)
 
 	raw := []byte(`{"op":0,"t":"MESSAGE_CREATE","s":2,"d":{"channel_id":"C123","content":"approve","author":{"id":"U999","bot":false}}}`)
 	action, _ := handleDiscordFrame(gs, raw, inbox, noopLog)
@@ -58,7 +58,7 @@ func TestHandleDiscordFrameMessageCreateFromAnotherUserDelivers(t *testing.T) {
 func TestHandleDiscordFrameIgnoresOwnMessageByID(t *testing.T) {
 	gs := &discordGatewayState{selfID: "SELF1"}
 	inbox := NewInbox()
-	pend := inbox.register("C123", "")
+	pend := inbox.register("C123", "", nil)
 
 	raw := []byte(`{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"C123","content":"the posted draft","author":{"id":"SELF1","bot":false}}}`)
 	handleDiscordFrame(gs, raw, inbox, noopLog)
@@ -73,7 +73,7 @@ func TestHandleDiscordFrameIgnoresOwnMessageByID(t *testing.T) {
 func TestHandleDiscordFrameIgnoresBotMessages(t *testing.T) {
 	gs := &discordGatewayState{selfID: "SELF1"}
 	inbox := NewInbox()
-	pend := inbox.register("C123", "")
+	pend := inbox.register("C123", "", nil)
 
 	// A different bot account (author.bot true, different id) must also be
 	// ignored — not just the gateway's own id.

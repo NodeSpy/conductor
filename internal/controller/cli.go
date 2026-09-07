@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // cliController is the bare-runner fallback for tools with no ACP or HTTP server: it
@@ -30,6 +30,8 @@ type cliController struct {
 	recipe cliRecipe
 	prov   Provisioner
 	launch cliLauncher // injectable; nil → real subprocess
+	host   string      // configured `host:`; "" = local (see resolveHost/prepareLaunch)
+	iso    *config.IsolationConfig
 
 	seq  atomic.Int64
 	mu   sync.Mutex
@@ -56,13 +58,16 @@ func newCLIController(name string, cc config.ControllerConfig, prov Provisioner)
 		name:   name,
 		recipe: cliRecipeFor(cc),
 		prov:   prov,
+		host:   cc.Host,
+		iso:    cc.Isolation,
 		live:   map[string]*cliSession{},
 	}
 }
 
-func (c *cliController) Name() string         { return c.name }
-func (c *cliController) Model() SessionModel  { return c.recipe.model }
-func (c *cliController) Transport() Transport { return TransportCLI }
+func (c *cliController) Name() string           { return c.name }
+func (c *cliController) ConfiguredHost() string { return c.host }
+func (c *cliController) Model() SessionModel    { return c.recipe.model }
+func (c *cliController) Transport() Transport   { return TransportCLI }
 
 // Initialize reports the recipe's capabilities: it accepts the conductor worktree,
 // its session model is the recipe's, and it takes a follow-up only when the recipe
@@ -93,9 +98,11 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 		return nil, fmt.Errorf("cli: render prompt: %w", err)
 	}
 
+	host := resolveHost(c.host, spec.Request.Profile.Host)
+	opt := launchOptsFor(c.iso, spec.Request)
 	id := c.recipe.tool + "-" + strconv.FormatInt(c.seq.Add(1), 10)
 	sctx, scancel := context.WithCancel(context.Background())
-	proc, err := c.start(sctx, spec.Cwd, env, c.recipe.launch(prompt))
+	proc, err := c.launchOn(sctx, host, spec.Cwd, env, c.recipe.launch(prompt), opt)
 	if err != nil {
 		scancel()
 		return nil, fmt.Errorf("cli: launch %s: %w", c.recipe.tool, err)
@@ -106,6 +113,8 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 		c:      c,
 		cwd:    spec.Cwd,
 		env:    env,
+		host:   host,
+		opt:    opt,
 		cancel: scancel,
 		ctx:    sctx,
 	}
@@ -120,12 +129,12 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 // ResumeSession re-binds a session id for a resumable recipe. The bound handle
 // continues the tool session (--resume) on the next Prompt; a oneshot recipe cannot
 // resume.
-func (c *cliController) ResumeSession(_ context.Context, id string, _ Handler) (Session, error) {
+func (c *cliController) ResumeSession(_ context.Context, id string, agentAuthored bool, _ Handler) (Session, error) {
 	if c.recipe.resume == nil {
 		return nil, ErrNoFollowup
 	}
 	sctx, scancel := context.WithCancel(context.Background())
-	return &cliSession{id: id, c: c, toolID: id, cancel: scancel, ctx: sctx}, nil
+	return &cliSession{id: id, c: c, toolID: id, host: c.host, opt: resumeOpts(c.iso, agentAuthored), cancel: scancel, ctx: sctx}, nil
 }
 
 func (c *cliController) start(ctx context.Context, dir string, env, argv []string) (cliProc, error) {
@@ -135,10 +144,82 @@ func (c *cliController) start(ctx context.Context, dir string, env, argv []strin
 	return startCLIProc(ctx, dir, env, argv)
 }
 
+// launchOn runs argv either locally in dir with env applied (host == "") or,
+// when host != "", wraps it via prepareLaunch and runs the resulting ssh
+// command instead — see prepareLaunch's doc for what changes locally (no
+// dir, no env — both travel inside the wrapped remote command) in that case.
+// opt carries the dispatch's isolation policy (sandbox wrapper + egress).
+func (c *cliController) launchOn(ctx context.Context, host, dir string, env, argv []string, opt launchOpts) (cliProc, error) {
+	opt, revoke := withEgressRevoke(opt)
+	wrapped, localDir, localEnv, _, err := prepareLaunch(host, dir, env, argv, opt)
+	if err != nil {
+		revoke()
+		return nil, err
+	}
+	proc, err := c.start(ctx, localDir, localEnv, wrapped)
+	if err != nil {
+		revoke()
+		return nil, err
+	}
+	// The cli process is session-ctx-scoped (ctx cancels it, and the session's
+	// Close cancels ctx); retire this launch's egress credential when that
+	// session ctx ends so it cannot outlive the dispatch (#36 iso-review round
+	// 2, item 4).
+	context.AfterFunc(ctx, revoke)
+	return proc, nil
+}
+
 func (c *cliController) forget(id string) {
 	c.mu.Lock()
 	delete(c.live, id)
 	c.mu.Unlock()
+}
+
+// cliOutputCap bounds how much combined stdout+stderr a single CLI turn may
+// accumulate in memory. A tool that floods its output (a runaway loop, a
+// megabytes-of-diff dump) must not grow the controller's heap without limit —
+// past the cap the tail is dropped and a truncation marker is appended.
+const cliOutputCap = 1 << 20 // 1 MiB
+
+// boundedBuffer captures output up to a byte cap, discarding anything past it.
+// os/exec copies stdout and stderr with independent goroutines when they share
+// a writer, so Write must be safe for concurrent use.
+type boundedBuffer struct {
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	max       int
+	truncated bool
+}
+
+// Write appends up to the remaining capacity and drops the rest, always
+// reporting the full length written so the exec copier never sees a short write
+// (which would surface as an error and could tear down the process).
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if room := b.max - b.buf.Len(); room > 0 {
+		if len(p) <= room {
+			b.buf.Write(p)
+		} else {
+			b.buf.Write(p[:room])
+			b.truncated = true
+		}
+	} else if len(p) > 0 {
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
+// String returns the captured output, with a truncation marker when the cap was
+// hit so the reader can tell the tail was dropped.
+func (b *boundedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s := b.buf.String()
+	if b.truncated {
+		s += fmt.Sprintf("\n[conductor: output truncated at %d bytes]", b.max)
+	}
+	return s
 }
 
 // startCLIProc starts argv as a subprocess capturing its combined output. The
@@ -153,18 +234,18 @@ func startCLIProc(ctx context.Context, dir string, env, argv []string) (cliProc,
 		cmd.Dir = dir
 	}
 	cmd.Env = append(os.Environ(), env...)
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	buf := &boundedBuffer{max: cliOutputCap}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	return &execProc{cmd: cmd, buf: &buf}, nil
+	return &execProc{cmd: cmd, buf: buf}, nil
 }
 
 type execProc struct {
 	cmd *exec.Cmd
-	buf *bytes.Buffer
+	buf *boundedBuffer
 }
 
 func (p *execProc) Wait() (string, error) {
@@ -278,6 +359,8 @@ type cliSession struct {
 	c      *cliController
 	cwd    string
 	env    []string
+	host   string     // resolved at creation (controller/profile host, or ""; see resolveHost)
+	opt    launchOpts // resolved isolation policy, reused for resume turns
 	cancel context.CancelFunc
 	ctx    context.Context
 
@@ -328,7 +411,7 @@ func (s *cliSession) Prompt(_ context.Context, msg Message) (<-chan Update, erro
 	}
 
 	ch := make(chan Update, 4)
-	proc, err := s.c.start(s.ctx, s.cwd, s.env, s.c.recipe.resume(tid, msg.Text))
+	proc, err := s.c.launchOn(s.ctx, s.host, s.cwd, s.env, s.c.recipe.resume(tid, msg.Text), s.opt)
 	if err != nil {
 		ch <- Update{Kind: UpdateDone, AgentID: s.id, Err: err}
 		close(ch)

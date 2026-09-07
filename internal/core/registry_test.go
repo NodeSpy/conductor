@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"sync"
 	"testing"
 )
 
@@ -11,15 +12,21 @@ func (s stubIntegration) Name() string                          { return s.name 
 func (s stubIntegration) Validate() error                       { return nil }
 func (s stubIntegration) Start(context.Context, EmitFunc) error { return nil }
 
+// registerStubOnce keeps the test count-safe: the registry is process-global
+// and Register panics on duplicates, so `go test -count=2` would re-register.
+var registerStubOnce sync.Once
+
 func TestRegistryBuild(t *testing.T) {
-	Register("stub-test", func(name string, decode func(any) error) (Integration, error) {
-		var cfg struct {
-			Extra string `yaml:"extra"`
-		}
-		if err := decode(&cfg); err != nil {
-			return nil, err
-		}
-		return stubIntegration{name: name + ":" + cfg.Extra}, nil
+	registerStubOnce.Do(func() {
+		Register("stub-test", func(name string, decode func(any) error) (Integration, error) {
+			var cfg struct {
+				Extra string `yaml:"extra"`
+			}
+			if err := decode(&cfg); err != nil {
+				return nil, err
+			}
+			return stubIntegration{name: name + ":" + cfg.Extra}, nil
+		})
 	})
 
 	ig, err := Build("stub-test", "acme", func(v any) error {

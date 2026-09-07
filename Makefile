@@ -1,4 +1,4 @@
-# paseo-conductor — developer targets.
+# conductor — developer targets.
 #
 # The e2e harness (test/e2e/) is a Dockerized, fully isolated stack: a local
 # bare-git forge, a mock GitHub API, a notify sink-catcher, and stub controllers —

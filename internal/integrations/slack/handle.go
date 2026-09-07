@@ -11,8 +11,8 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/inbound"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/inbound"
 )
 
 var httpc = &http.Client{Timeout: 15 * time.Second}
@@ -22,6 +22,7 @@ var (
 	chatPostMessageURL   = "https://slack.com/api/chat.postMessage"
 	chatPostEphemeralURL = "https://slack.com/api/chat.postEphemeral"
 	reactionsAddURL      = "https://slack.com/api/reactions.add"
+	connectionsOpenURL   = "https://slack.com/api/apps.connections.open"
 )
 
 // eventCallback is the Events API payload delivered inside an events_api envelope.
@@ -284,7 +285,7 @@ func renderSay(s string, data map[string]any) string {
 
 // openSocket opens a Socket Mode session and returns the WebSocket URL.
 func (g *Integration) openSocket(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://slack.com/api/apps.connections.open", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, connectionsOpenURL, nil)
 	if err != nil {
 		return "", err
 	}

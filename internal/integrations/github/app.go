@@ -24,8 +24,26 @@ type appAuth struct {
 	apiBase string // overridable in tests
 	now     func() time.Time
 
+	// static is the App-less mode: a fixed token (a PAT, or `gh auth token`)
+	// used for every request instead of minted installation tokens. When set,
+	// installation-id lookups short-circuit to 0 — there is no installation.
+	static string
+
 	mu    sync.Mutex
 	cache map[int64]cachedToken
+}
+
+// newStaticAuth builds the App-less auth: a personal setup with no GitHub App
+// authenticates every read with one fixed token. Callers must not expand
+// `owner/*` repo globs in this mode (that listing is an App endpoint).
+func newStaticAuth(token string) *appAuth {
+	return &appAuth{
+		static:  token,
+		httpc:   &http.Client{Timeout: 20 * time.Second},
+		apiBase: apiBaseURL(),
+		now:     time.Now,
+		cache:   map[int64]cachedToken{},
+	}
 }
 
 type cachedToken struct {
@@ -77,14 +95,24 @@ func (a *appAuth) appJWT() (string, error) {
 }
 
 // repoInstallationID resolves the App installation id covering a repository
-// (used by the sweep, which has no webhook payload to read it from).
+// (used by the sweep, which has no webhook payload to read it from). In the
+// App-less static-token mode there is no installation; 0 is the sentinel id
+// installationToken answers with the static token.
 func (a *appAuth) repoInstallationID(ctx context.Context, owner, repo string) (int64, error) {
+	if a.static != "" {
+		return 0, nil
+	}
 	return a.installationIDByURL(ctx, fmt.Sprintf("%s/repos/%s/%s/installation", a.apiBase, owner, repo))
 }
 
 // accountInstallationID resolves the installation id for an org or user account
 // (used to expand `owner/*` sweep globs). Tries the org endpoint, then user.
+// Not available in static-token mode — glob expansion lists installation
+// repos, an App endpoint — so App-less sweeps must name repos explicitly.
 func (a *appAuth) accountInstallationID(ctx context.Context, account string) (int64, error) {
+	if a.static != "" {
+		return 0, fmt.Errorf("repo globs (%s/*) need a GitHub App; list repos explicitly when using token/gh credentials", account)
+	}
 	id, err := a.installationIDByURL(ctx, fmt.Sprintf("%s/orgs/%s/installation", a.apiBase, account))
 	if err == nil {
 		return id, nil
@@ -119,8 +147,12 @@ func (a *appAuth) installationIDByURL(ctx context.Context, url string) (int64, e
 }
 
 // installationToken returns a cached (or freshly minted) installation access
-// token for the given installation id.
+// token for the given installation id. In static-token (App-less) mode the
+// fixed token answers every id.
 func (a *appAuth) installationToken(ctx context.Context, instID int64) (string, error) {
+	if a.static != "" {
+		return a.static, nil
+	}
 	a.mu.Lock()
 	if c, ok := a.cache[instID]; ok && a.now().Before(c.exp.Add(-5*time.Minute)) {
 		a.mu.Unlock()

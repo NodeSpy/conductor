@@ -53,6 +53,12 @@ type SlackChannel struct {
 	log    func(string, ...any)
 
 	channel string // mode: thread — channel to post in
+	// approvers, when non-empty, restricts WHO may resolve a thread-mode
+	// hand-off: a reply from any other user id is ignored (still 200-OK'd at
+	// the transport, just not consumed). Without it, anyone in the channel
+	// could approve an agent's draft. DM mode needs no list — the DM is
+	// already pinned to one user.
+	approvers []string
 
 	opener DMOpener // mode: dm — resolves user -> IM channel
 	user   string   // mode: dm — target user id
@@ -63,12 +69,13 @@ type SlackChannel struct {
 
 // NewSlackChannel builds a thread-mode Slack hand-off channel: it posts to
 // channel (opening a thread per draft) and captures replies routed through
-// inbox. log may be nil.
-func NewSlackChannel(poster Poster, channel string, inbox *Inbox, log func(string, ...any)) *SlackChannel {
+// inbox. approvers, when non-empty, is the set of user ids whose replies may
+// resolve a draft (empty = anyone in the channel). log may be nil.
+func NewSlackChannel(poster Poster, channel string, approvers []string, inbox *Inbox, log func(string, ...any)) *SlackChannel {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
-	return &SlackChannel{poster: poster, mode: modeThread, channel: channel, inbox: inbox, log: log}
+	return &SlackChannel{poster: poster, mode: modeThread, channel: channel, approvers: approvers, inbox: inbox, log: log}
 }
 
 // NewSlackDMChannel builds a dm-mode Slack hand-off channel: it opens (or
@@ -96,7 +103,7 @@ func (c *SlackChannel) presentThread(ctx context.Context, d Draft) (Presentation
 	if err != nil {
 		return nil, fmt.Errorf("slack handoff: post draft: %w", err)
 	}
-	pend := c.inbox.register(c.channel, ts)
+	pend := c.inbox.register(c.channel, ts, c.approvers)
 	c.log("handoff: draft %s posted to slack %s thread %s", d.ID, c.channel, ts)
 	return &slackPresentation{c: c, channel: c.channel, threadTS: ts, pend: pend}, nil
 }
@@ -111,7 +118,7 @@ func (c *SlackChannel) presentDM(ctx context.Context, d Draft) (Presentation, er
 	}
 	// DM replies carry no thread_ts — register with an empty one, so Deliver
 	// matches any message landing on this IM channel (see Inbox).
-	pend := c.inbox.register(imChannel, "")
+	pend := c.inbox.register(imChannel, "", nil)
 	c.log("handoff: draft %s posted to slack dm %s (channel %s)", d.ID, c.user, imChannel)
 	return &slackPresentation{c: c, channel: imChannel, dm: true, pend: pend}, nil
 }
@@ -195,8 +202,9 @@ type Inbox struct {
 }
 
 type slackPending struct {
-	done chan Decision
-	once sync.Once
+	done      chan Decision
+	once      sync.Once
+	approvers []string // empty = any user may resolve
 }
 
 // NewInbox builds an empty Inbox.
@@ -204,8 +212,8 @@ func NewInbox() *Inbox { return &Inbox{pending: map[string]*slackPending{}} }
 
 func inboxKey(channel, threadTS string) string { return channel + ":" + threadTS }
 
-func (i *Inbox) register(channel, threadTS string) *slackPending {
-	p := &slackPending{done: make(chan Decision, 1)}
+func (i *Inbox) register(channel, threadTS string, approvers []string) *slackPending {
+	p := &slackPending{done: make(chan Decision, 1), approvers: approvers}
 	i.mu.Lock()
 	i.pending[inboxKey(channel, threadTS)] = p
 	i.mu.Unlock()
@@ -218,15 +226,35 @@ func (i *Inbox) unregister(channel, threadTS string) {
 	i.mu.Unlock()
 }
 
-// Deliver routes a thread reply to a pending hand-off, if one is waiting on that
-// thread. Returns true when the reply resolved a hand-off (so the caller treats
-// it as consumed, not as a fresh command).
+// Deliver routes a thread reply to a pending hand-off with no sender
+// identity — it can only resolve hand-offs that don't restrict approvers.
 func (i *Inbox) Deliver(channel, threadTS, text string) bool {
+	return i.DeliverFrom(channel, threadTS, "", text)
+}
+
+// DeliverFrom routes a thread reply to a pending hand-off, if one is waiting
+// on that thread AND the sender is allowed to resolve it (a pending with an
+// approvers list ignores every other user id — an unknown/empty sender
+// included). Returns true when the reply resolved a hand-off (so the caller
+// treats it as consumed, not as a fresh command).
+func (i *Inbox) DeliverFrom(channel, threadTS, user, text string) bool {
 	i.mu.Lock()
 	p := i.pending[inboxKey(channel, threadTS)]
 	i.mu.Unlock()
 	if p == nil {
 		return false
+	}
+	if len(p.approvers) > 0 {
+		allowed := false
+		for _, a := range p.approvers {
+			if a != "" && a == user {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
 	}
 	delivered := false
 	p.once.Do(func() {

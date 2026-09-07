@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // agentDeckController drives agent-deck through its CLI (launch / list --json /
@@ -26,6 +26,8 @@ type agentDeckController struct {
 	args []string // extra launch args from `command:` (after the bin)
 	prov Provisioner
 	run  deckRunner // injectable exec; nil → real subprocess
+	host string     // configured `host:`; "" = local (see resolveHost/prepareLaunch)
+	iso  *config.IsolationConfig
 
 	pollInterval time.Duration
 }
@@ -36,7 +38,8 @@ type deckRunner func(ctx context.Context, dir string, env []string, name string,
 
 // newAgentDeckController builds an agent-deck controller. The binary is the first
 // element of an explicit `command:` (with the rest passed through as extra launch
-// args), else `tool:`, else "agent-deck".
+// args), else `tool:`, else "agent-deck" — except an explicit `bin:` always wins
+// over all three, since it's the dedicated field for pinning the runtime binary.
 func newAgentDeckController(name string, cc config.ControllerConfig, prov Provisioner) *agentDeckController {
 	bin := "agent-deck"
 	var extra []string
@@ -47,18 +50,24 @@ func newAgentDeckController(name string, cc config.ControllerConfig, prov Provis
 	case cc.Tool != "":
 		bin = cc.Tool
 	}
+	if cc.Bin != "" {
+		bin = cc.Bin
+	}
 	return &agentDeckController{
 		name:         name,
 		bin:          bin,
 		args:         extra,
 		prov:         prov,
+		host:         cc.Host,
+		iso:          cc.Isolation,
 		pollInterval: 2 * time.Second,
 	}
 }
 
-func (c *agentDeckController) Name() string         { return c.name }
-func (c *agentDeckController) Model() SessionModel  { return ModelNative }
-func (c *agentDeckController) Transport() Transport { return TransportNative }
+func (c *agentDeckController) Name() string           { return c.name }
+func (c *agentDeckController) ConfiguredHost() string { return c.host }
+func (c *agentDeckController) Model() SessionModel    { return ModelNative }
+func (c *agentDeckController) Transport() Transport   { return TransportNative }
 
 // Initialize reports agent-deck's capabilities: it owns the session (native),
 // accepts the conductor worktree, and takes follow-up sends. Permission requests
@@ -91,6 +100,8 @@ func (c *agentDeckController) NewSession(ctx context.Context, spec Spec, _ Handl
 	}
 	title := deckTitle(spec.Request)
 	group := deckGroup(spec.Request)
+	host := resolveHost(c.host, spec.Request.Profile.Host)
+	opt := launchOptsFor(c.iso, spec.Request)
 
 	args := append([]string{"launch"}, c.args...)
 	args = append(args, "--title", title, "--group", group, "--prompt", prompt)
@@ -101,42 +112,59 @@ func (c *agentDeckController) NewSession(ctx context.Context, spec Spec, _ Handl
 		args = append(args, "--model", p.Model)
 	}
 
-	out, err := c.exec(ctx, spec.Cwd, env, args...)
+	out, err := c.exec(ctx, host, spec.Cwd, env, opt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("agent-deck: launch: %w", err)
 	}
 	id := parseDeckID(out)
 	if id == "" {
 		// Fall back to resolving the just-launched session by its unique title.
-		id = c.findByTitle(ctx, env, title)
+		id = c.findByTitle(ctx, host, env, opt, title)
 	}
 	if id == "" {
 		return nil, fmt.Errorf("agent-deck: launch returned no session id (%s)", strings.TrimSpace(string(out)))
 	}
-	return &agentDeckSession{id: id, c: c, env: env}, nil
+	return &agentDeckSession{id: id, c: c, env: env, host: host, opt: opt}, nil
 }
 
 // ResumeSession binds an existing agent-deck session by id (native lifecycle).
-func (c *agentDeckController) ResumeSession(_ context.Context, id string, _ Handler) (Session, error) {
-	return &agentDeckSession{id: id, c: c}, nil
+func (c *agentDeckController) ResumeSession(_ context.Context, id string, agentAuthored bool, _ Handler) (Session, error) {
+	return &agentDeckSession{id: id, c: c, host: c.host, opt: resumeOpts(c.iso, agentAuthored)}, nil
 }
 
-func (c *agentDeckController) exec(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+// exec runs one agent-deck subcommand (list/launch/session .../remove). host ==
+// "" runs it locally (byte-for-byte the pre-remote-support behavior: dir/env
+// applied to the local process). host != "" wraps the bin+args argv via
+// prepareLaunch and runs the resulting ssh command instead — see its doc for
+// what changes locally in that case (no dir, no env). deckRunner's signature
+// (name string, args ...string) is unchanged either way: wrapped[0] is passed
+// as name and wrapped[1:] as args, so a host=="" call is indistinguishable
+// from before this feature existed.
+func (c *agentDeckController) exec(ctx context.Context, host, dir string, env []string, opt launchOpts, args ...string) ([]byte, error) {
+	// exec is one-shot and synchronous: every per-dispatch egress credential
+	// minted for this invocation is used only by the subprocess we run below,
+	// so revoke it as soon as the call returns (#36 iso-review round 2, item 4).
+	opt, revoke := withEgressRevoke(opt)
+	defer revoke()
+	wrapped, localDir, localEnv, _, err := prepareLaunch(host, dir, env, append([]string{c.bin}, args...), opt)
+	if err != nil {
+		return nil, err
+	}
 	if c.run != nil {
-		return c.run(ctx, dir, env, c.bin, args...)
+		return c.run(ctx, localDir, localEnv, wrapped[0], wrapped[1:]...)
 	}
-	cmd := exec.CommandContext(ctx, c.bin, args...)
-	if dir != "" {
-		cmd.Dir = dir
+	cmd := exec.CommandContext(ctx, wrapped[0], wrapped[1:]...)
+	if localDir != "" {
+		cmd.Dir = localDir
 	}
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(os.Environ(), localEnv...)
 	return cmd.CombinedOutput()
 }
 
 // findByTitle returns the id of the session whose title matches (via list --json),
 // or "".
-func (c *agentDeckController) findByTitle(ctx context.Context, env []string, title string) string {
-	out, err := c.exec(ctx, "", env, "list", "--json")
+func (c *agentDeckController) findByTitle(ctx context.Context, host string, env []string, opt launchOpts, title string) string {
+	out, err := c.exec(ctx, host, "", env, opt, "list", "--json")
 	if err != nil {
 		return ""
 	}
@@ -205,9 +233,11 @@ func deckGroup(req dispatch.Request) string {
 // lifecycle, so the handle sends follow-ups, polls status for liveness, and removes
 // the session on close.
 type agentDeckSession struct {
-	id  string
-	c   *agentDeckController
-	env []string
+	id   string
+	c    *agentDeckController
+	env  []string
+	host string     // resolved at creation (controller/profile host, or ""; see resolveHost)
+	opt  launchOpts // resolved isolation policy, reused for session subcommands
 
 	mu   sync.Mutex
 	done chan struct{}
@@ -218,7 +248,7 @@ func (s *agentDeckSession) ID() string { return s.id }
 // Prompt delivers a follow-up turn (`session send`) and returns a terminal update.
 func (s *agentDeckSession) Prompt(ctx context.Context, msg Message) (<-chan Update, error) {
 	ch := make(chan Update, 1)
-	_, err := s.c.exec(ctx, "", s.env, "session", "send", s.id, msg.Text)
+	_, err := s.c.exec(ctx, s.host, "", s.env, s.opt, "session", "send", s.id, msg.Text)
 	ch <- Update{Kind: UpdateDone, AgentID: s.id, Err: err}
 	close(ch)
 	return ch, err
@@ -256,7 +286,7 @@ func (s *agentDeckSession) Wait(ctx context.Context, timeout time.Duration) {
 // `session show --json`. An unreadable status is treated as idle so a broken poll
 // can't wedge the wait forever.
 func (s *agentDeckSession) idle(ctx context.Context) bool {
-	out, err := s.c.exec(ctx, "", s.env, "session", "show", s.id, "--json")
+	out, err := s.c.exec(ctx, s.host, "", s.env, s.opt, "session", "show", s.id, "--json")
 	if err != nil {
 		return true
 	}
@@ -276,6 +306,6 @@ func (s *agentDeckSession) Cancel(context.Context) error { return nil }
 
 // Close removes the session from agent-deck (`remove`).
 func (s *agentDeckSession) Close(ctx context.Context) error {
-	_, err := s.c.exec(ctx, "", s.env, "remove", s.id)
+	_, err := s.c.exec(ctx, s.host, "", s.env, s.opt, "remove", s.id)
 	return err
 }

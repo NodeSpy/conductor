@@ -16,9 +16,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/inbound"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/inbound"
 )
 
 func init() { core.Register("pagerduty", newIntegration) }
@@ -81,7 +81,7 @@ func (g *Integration) Validate() error {
 			return fmt.Errorf("pagerduty[%s]: rules[%d]: no actions", g.name, i)
 		}
 		for _, a := range r.Actions {
-			if a.Type == "" {
+			if a.Type == "" && a.FlowRef == "" { // FlowRef: lowered connectors-model action
 				return fmt.Errorf("pagerduty[%s]: rules[%d]: action.type is required", g.name, i)
 			}
 		}
@@ -157,17 +157,6 @@ func (g *Integration) deliver(ctx context.Context, emit core.EmitFunc, smeeSig s
 	dedup := f.ID + ":" + f.EventType
 	title := fmt.Sprintf("pagerduty %s: %s", strings.TrimPrefix(f.EventType, "incident."), f.Title)
 
-	var target core.Target
-	synthetic := rule.Repo == ""
-	if synthetic {
-		target = inbound.SyntheticTarget("pagerduty:"+firstNonEmpty(f.Service, g.name), dedup)
-		target.HTMLURL = f.URL
-	} else {
-		owner, name, _ := strings.Cut(rule.Repo, "/")
-		target = core.Target{Repo: rule.Repo, Owner: owner, Name: name,
-			Number: inbound.SyntheticTarget("", dedup).Number, HTMLURL: f.URL}
-	}
-
 	pctx := map[string]any{
 		"event_type": f.EventType, "status": f.Status, "title": f.Title,
 		"urgency": f.Urgency, "priority": f.Priority, "service": f.Service,
@@ -176,6 +165,22 @@ func (g *Integration) deliver(ctx context.Context, emit core.EmitFunc, smeeSig s
 	for _, act := range rule.Actions {
 		if !act.IsEnabled() {
 			continue
+		}
+		// The checkout repo: the rule's, or a per-variant override (lowered
+		// connectors-model triggers each carry their own repo:).
+		repo := rule.Repo
+		if act.TargetRepo != "" {
+			repo = act.TargetRepo
+		}
+		var target core.Target
+		synthetic := repo == ""
+		if synthetic {
+			target = inbound.SyntheticTarget("pagerduty:"+firstNonEmpty(f.Service, g.name), dedup)
+			target.HTMLURL = f.URL
+		} else {
+			owner, name, _ := strings.Cut(repo, "/")
+			target = core.Target{Repo: repo, Owner: owner, Name: name,
+				Number: inbound.SyntheticTarget("", dedup).Number, HTMLURL: f.URL}
 		}
 		if synthetic {
 			act = inbound.ForceNoCheckout(act)

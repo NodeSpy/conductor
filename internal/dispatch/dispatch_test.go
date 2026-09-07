@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 func newDispatcher() *Dispatcher {
@@ -144,11 +144,11 @@ func TestCheckoutUsesTargetProject(t *testing.T) {
 	var got string
 	d.CheckoutDir = func(_ context.Context, repo string) (string, error) {
 		got = repo
-		return "/checkouts/rosterstream", nil
+		return "/checkouts/widget", nil
 	}
 	req := Request{
 		Trigger: core.Trigger{Kind: "merge_conflict",
-			Target: core.Target{Repo: "EdnitionCode/RosterStream", Project: "ednition/rosterstream", PR: 5, Number: 5}},
+			Target: core.Target{Repo: "AcmeCorp/Widget", Project: "acme/widget", PR: 5, Number: 5}},
 		Action:  config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"},
 		Profile: config.AgentProfile{Workspace: "worktree"},
 	}
@@ -156,10 +156,10 @@ func TestCheckoutUsesTargetProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "ednition/rosterstream" {
+	if got != "acme/widget" {
 		t.Fatalf("resolver should receive mapped project, got %q", got)
 	}
-	if !strings.Contains(joined(ref.Argv), "--cwd /checkouts/rosterstream") {
+	if !strings.Contains(joined(ref.Argv), "--cwd /checkouts/widget") {
 		t.Fatalf("expected mapped checkout cwd, got: %s", joined(ref.Argv))
 	}
 }
@@ -263,16 +263,16 @@ func TestParseWorktreeWorkspaces(t *testing.T) {
 
 func TestHoldMarkerPresent(t *testing.T) {
 	dir := t.TempDir()
-	if holdMarkerPresent(dir) {
+	if (&Reaper{}).holdMarkerPresent(dir) {
 		t.Fatal("no marker yet")
 	}
 	if err := os.WriteFile(filepath.Join(dir, HoldMarker), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if !holdMarkerPresent(dir) {
+	if !(&Reaper{}).holdMarkerPresent(dir) {
 		t.Fatal("marker should be detected")
 	}
-	if holdMarkerPresent("") {
+	if (&Reaper{}).holdMarkerPresent("") {
 		t.Fatal("empty cwd is not held")
 	}
 }

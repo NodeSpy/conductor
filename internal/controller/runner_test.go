@@ -49,7 +49,7 @@ func (c *fakeSessCtl) NewSession(_ context.Context, spec Spec, _ Handler) (Sessi
 	}
 	return c.sess, nil
 }
-func (c *fakeSessCtl) ResumeSession(context.Context, string, Handler) (Session, error) {
+func (c *fakeSessCtl) ResumeSession(context.Context, string, bool, Handler) (Session, error) {
 	return c.sess, nil
 }
 func (c *fakeSessCtl) Runner() (Runner, error) { return nil, nil }

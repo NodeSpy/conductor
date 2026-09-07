@@ -3,7 +3,7 @@ package github
 import (
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 func TestMatchRepo(t *testing.T) {
@@ -71,8 +71,8 @@ func TestResolveMostSpecificWinsAndMerge(t *testing.T) {
 }
 
 // TestResolveMostSpecificIgnoresOrder pins the key property: the most-specific
-// matching rule wins regardless of config order. Here the general "EdnitionCode/*"
-// rule is listed BEFORE the specific "EdnitionCode/RosterStream" rule; RosterStream
+// matching rule wins regardless of config order. Here the general "AcmeCorp/*"
+// rule is listed BEFORE the specific "AcmeCorp/Widget" rule; Widget
 // must still resolve to the specific one (under the old first-match-wins it would
 // have wrongly picked the general rule).
 func TestResolveMostSpecificIgnoresOrder(t *testing.T) {
@@ -80,9 +80,9 @@ func TestResolveMostSpecificIgnoresOrder(t *testing.T) {
 		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
 		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
 		Rules: []Rule{
-			{Match: Match{Repos: []string{"EdnitionCode/*"}}, // general FIRST
+			{Match: Match{Repos: []string{"AcmeCorp/*"}}, // general FIRST
 				Actions: as1(map[string]config.Action{"new_comment": {Type: "agent", Agent: "general"}})},
-			{Match: Match{Repos: []string{"EdnitionCode/RosterStream"}}, // specific SECOND
+			{Match: Match{Repos: []string{"AcmeCorp/Widget"}}, // specific SECOND
 				Actions: as1(map[string]config.Action{"new_comment": {Type: "agent", Agent: "specific"}})},
 			{Match: Match{Repos: []string{"*/*"}}, // catch-all, least specific
 				Actions: as1(map[string]config.Action{"new_comment": {Type: "agent", Agent: "catchall"}})},
@@ -90,10 +90,10 @@ func TestResolveMostSpecificIgnoresOrder(t *testing.T) {
 	}
 	g := newTestIntegration(t, cfg)
 
-	if r, _ := g.resolve("EdnitionCode/RosterStream"); r.Actions["new_comment"][0].Agent != "specific" {
+	if r, _ := g.resolve("AcmeCorp/Widget"); r.Actions["new_comment"][0].Agent != "specific" {
 		t.Fatalf("exact match should win over org-wildcard, got %q", r.Actions["new_comment"][0].Agent)
 	}
-	if r, _ := g.resolve("EdnitionCode/infra"); r.Actions["new_comment"][0].Agent != "general" {
+	if r, _ := g.resolve("AcmeCorp/infra"); r.Actions["new_comment"][0].Agent != "general" {
 		t.Fatalf("org-wildcard should win over */*, got %q", r.Actions["new_comment"][0].Agent)
 	}
 	if r, _ := g.resolve("other/repo"); r.Actions["new_comment"][0].Agent != "catchall" {
@@ -127,5 +127,35 @@ func TestMergeActionKeepsExcludeAndRerequest(t *testing.T) {
 	}
 	if got.Exclude.Empty() || !got.Exclude.Matches("release/1.0", "", nil) {
 		t.Error("exclude dropped by merge")
+	}
+}
+
+// TestMergeActionKeepsBackgroundHandoffRetry: background/handoff/retry on a
+// rule's action (or its defaults) survive the defaults+rule merge — they were
+// silently dropped before, so a rule-level background review lost its
+// hand-off and a defer-retry step lost its retry.
+func TestMergeActionKeepsBackgroundHandoffRetry(t *testing.T) {
+	over := config.Action{
+		Type:       "agent",
+		Background: true,
+		Handoff:    "review",
+		Retry:      &config.StepRetry{WhileOutputMatches: "not ready"},
+	}
+	got := mergeAction(config.Action{}, over)
+	if !got.Background {
+		t.Error("background dropped by merge")
+	}
+	if got.Handoff != "review" {
+		t.Errorf("handoff dropped by merge: %q", got.Handoff)
+	}
+	if got.Retry == nil || got.Retry.WhileOutputMatches != "not ready" {
+		t.Errorf("retry dropped by merge: %+v", got.Retry)
+	}
+
+	// Base values survive when the override doesn't set them.
+	base := config.Action{Background: true, Handoff: "page", Retry: &config.StepRetry{WhileOutputMatches: "x"}}
+	got = mergeAction(base, config.Action{Type: "agent"})
+	if !got.Background || got.Handoff != "page" || got.Retry == nil {
+		t.Errorf("base background/handoff/retry lost: %+v", got)
 	}
 }

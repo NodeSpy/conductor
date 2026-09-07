@@ -20,8 +20,6 @@ control: { pause_label: "conductor:off" }
 notify: { push: true, on: [dispatch, escalate] }
 agents:
   fixer: { provider: claude, workspace: worktree, wait_timeout: 30m, archive_when_done: true }
-dispatch:
-  identity: { read_token: app, write_token: gh_auth }
 store:
   state_ttl: 720h
   audit_max_size: 50MB
@@ -90,8 +88,7 @@ func TestUpdateDefaults(t *testing.T) {
 		t.Fatal("apply should default to true")
 	}
 	// Explicit apply:false is honored.
-	no := false
-	c.Update.Apply = &no
+	c.Update.Apply = ApplyModeFor("false")
 	if c.Update.ShouldApply() {
 		t.Fatal("apply:false should be honored")
 	}

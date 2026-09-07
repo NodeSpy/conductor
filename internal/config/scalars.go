@@ -10,14 +10,33 @@ import (
 )
 
 // Duration is a time.Duration that unmarshals from a Go duration string
-// ("30m", "720h") or a plain number of seconds.
+// ("30m", "720h") — plus a leading day unit ("7d", "1d12h"), which session
+// lifetimes read naturally in — or a plain number of seconds.
 type Duration time.Duration
+
+// parseDuration is time.ParseDuration plus a leading integer day component.
+func parseDuration(s string) (time.Duration, error) {
+	if i := strings.IndexByte(s, 'd'); i > 0 {
+		if days, err := strconv.Atoi(s[:i]); err == nil {
+			rest := time.Duration(0)
+			if tail := s[i+1:]; tail != "" {
+				r, err := time.ParseDuration(tail)
+				if err != nil {
+					return 0, err
+				}
+				rest = r
+			}
+			return time.Duration(days)*24*time.Hour + rest, nil
+		}
+	}
+	return time.ParseDuration(s)
+}
 
 // UnmarshalYAML parses a duration string or integer seconds.
 func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	var s string
 	if err := n.Decode(&s); err == nil && s != "" {
-		v, err := time.ParseDuration(s)
+		v, err := parseDuration(s)
 		if err != nil {
 			return fmt.Errorf("invalid duration %q: %w", s, err)
 		}
@@ -34,6 +53,17 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 
 // D returns the value as a time.Duration.
 func (d Duration) D() time.Duration { return time.Duration(d) }
+
+// MarshalYAML renders the duration in the same string form UnmarshalYAML
+// accepts ("30m", "6h"), so config structs survive a marshal/unmarshal round
+// trip (the connectors-model lowering and the migration transform both rely
+// on that). A raw nanosecond integer would silently re-parse as seconds.
+func (d Duration) MarshalYAML() (any, error) {
+	if d == 0 {
+		return 0, nil
+	}
+	return time.Duration(d).String(), nil
+}
 
 // String renders the duration (or empty when zero).
 func (d Duration) String() string {

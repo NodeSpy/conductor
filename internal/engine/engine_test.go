@@ -7,13 +7,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
-	"github.com/NodeSpy/paseo-conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 type fakeDispatcher struct {
@@ -351,6 +352,43 @@ func TestBackoffThenRetry(t *testing.T) {
 	}
 	if !n.has("escalate") {
 		t.Fatalf("expected a one-time escalation crossing the threshold, events=%v", n.events)
+	}
+}
+
+// TestPolicyBackoffOverridesCadence proves `policy.backoff` and
+// `policy.max_attempts_per_head` drive the retry gate (previously hardcoded
+// constants / the action field were the only sources).
+func TestPolicyBackoffOverridesCadence(t *testing.T) {
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	st := tempStore(t)
+	clock := time.Unix(1_700_000_000, 0)
+	st.SetNow(func() time.Time { return clock })
+	cfg := baseCfg()
+	one := 1
+	cfg.Policy = &config.Policy{
+		Backoff:            &config.Backoff{Base: config.Duration(30 * time.Minute)},
+		MaxAttemptsPerHead: &one, // soft threshold from policy, not the action
+	}
+	e := New(Options{Config: cfg, Store: st, Dispatch: d, Notifier: n,
+		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+
+	act := config.Action{Type: "agent", Agent: "fixer"} // no per-action threshold
+	// 1st: below the policy's soft threshold → dispatches, records the attempt.
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s1", act))
+	if len(d.reqs) != 1 {
+		t.Fatalf("want 1 dispatch, got %d", len(d.reqs))
+	}
+	// 15m later: past the DEFAULT 10m base but inside the policy's 30m → still gated.
+	clock = clock.Add(15 * time.Minute)
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s2", act))
+	if len(d.reqs) != 1 {
+		t.Fatalf("policy base 30m should gate a retry at 15m, got %d dispatches", len(d.reqs))
+	}
+	// Past the policy's 30m base → eligible again.
+	clock = clock.Add(20 * time.Minute)
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s3", act))
+	if len(d.reqs) != 2 {
+		t.Fatalf("want a retry after the policy cooldown, got %d dispatches", len(d.reqs))
 	}
 }
 
@@ -861,6 +899,40 @@ func TestConcurrencyCapBlocksSecondAgent(t *testing.T) {
 	}
 }
 
+// TestPolicyConcurrencyCapsAgents proves `policy.concurrency.max_agents` sizes
+// the agent semaphore (previously only the legacy control field did).
+func TestPolicyConcurrencyCapsAgents(t *testing.T) {
+	cfg := baseCfg()
+	one := 1
+	cfg.Policy = &config.Policy{Concurrency: &config.Concurrency{MaxAgents: &one}}
+	g := &gateFake{waitCh: make(chan struct{})}
+	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: g, Notifier: &fakeNotifier{},
+		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+	act := config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"}
+
+	// First agent takes the only slot; its WaitForAgent blocks, holding it.
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 1, "h1", "s1", act))
+	if g.count() != 1 {
+		t.Fatalf("first agent should dispatch, got %d", g.count())
+	}
+
+	// The second must block on the policy cap, not dispatch.
+	done := make(chan struct{})
+	go func() {
+		e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 2, "h2", "s2", act))
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if g.count() != 1 {
+		t.Fatalf("second agent should be blocked by the policy cap, got %d dispatches", g.count())
+	}
+	close(g.waitCh)
+	<-done
+	if g.count() != 2 {
+		t.Fatalf("second agent should dispatch once a slot frees, got %d", g.count())
+	}
+}
+
 func TestFlakyRerunBeforeDispatch(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	var reran []int64
@@ -914,19 +986,19 @@ func TestVariantDedupIsolation(t *testing.T) {
 }
 
 func TestLogTag(t *testing.T) {
-	pr := core.Trigger{Instance: "ednition", Kind: "merge_conflict",
+	pr := core.Trigger{Instance: "acme", Kind: "merge_conflict",
 		Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}}
-	if got := tag(pr); got != "engine[ednition acme/w#5 merge_conflict]" {
+	if got := tag(pr); got != "engine[acme acme/w#5 merge_conflict]" {
 		t.Fatalf("pr tag: %q", got)
 	}
-	variant := core.Trigger{Instance: "ednition", Kind: "review_requested", Variant: "backend",
+	variant := core.Trigger{Instance: "acme", Kind: "review_requested", Variant: "backend",
 		Target: core.Target{Repo: "acme/w", PR: 6, Number: 6}}
-	if got := tag(variant); got != "engine[ednition acme/w#6 review_requested#backend]" {
+	if got := tag(variant); got != "engine[acme acme/w#6 review_requested#backend]" {
 		t.Fatalf("variant tag: %q", got)
 	}
-	issue := core.Trigger{Instance: "ednition", Kind: "issue_matched",
+	issue := core.Trigger{Instance: "acme", Kind: "issue_matched",
 		Target: core.Target{Repo: "acme/w", Issue: 42, Number: 42}}
-	if got := tag(issue); got != "engine[ednition acme/w#42 issue_matched]" {
+	if got := tag(issue); got != "engine[acme acme/w#42 issue_matched]" {
 		t.Fatalf("issue tag: %q", got)
 	}
 }
@@ -963,4 +1035,39 @@ func TestAgentDefaultControllerDispatchesThroughPaseo(t *testing.T) {
 	if len(d.reqs) != 1 {
 		t.Fatalf("default config must dispatch through paseo exactly once, got %d", len(d.reqs))
 	}
+}
+
+// TestDispatchGoroutinePanicRecovered is the H5 regression: a panic inside a
+// per-event dispatch goroutine (here, a step's Dispatch call) must be recovered
+// at the goroutine's top frame — not escape and abort the whole daemon, taking
+// every other in-flight run with it. After the panic the persisted run must be
+// cleared (recorded failed, so ResumeWorkflows doesn't re-drive it straight back
+// into the same panic) and the engine must keep dispatching new events.
+//
+// Without recoverDispatch the first process() below panics in its goroutine and
+// crashes the test binary — this test then fails hard (red). With it, the panic
+// is caught, PendingRuns drains, and the second event dispatches normally.
+func TestDispatchGoroutinePanicRecovered(t *testing.T) {
+	var calls int32
+	d := &fakeDispatcher{onDispatch: func(dispatch.Request) (dispatch.RunRef, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			panic("boom inside dispatch")
+		}
+		return dispatch.RunRef{Backend: "test"}, nil
+	}}
+	n := &fakeNotifier{}
+	e, st := newEng(t, baseCfg(), d, n, nil)
+	workflow := config.Action{Steps: []config.Action{
+		{ID: "run", Type: "command", Command: []string{"true"}},
+	}}
+
+	// First event: its step dispatch panics in the workflow goroutine.
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 1, "h1", "sig1", workflow))
+	// Survival + "recorded failed": the guard cleared the persisted run.
+	waitFor(t, func() bool { return len(st.PendingRuns()) == 0 })
+
+	// The engine is still alive: a fresh event dispatches and completes cleanly.
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 2, "h2", "sig2", workflow))
+	waitFor(t, func() bool { return atomic.LoadInt32(&calls) >= 2 })
+	waitFor(t, func() bool { return len(st.PendingRuns()) == 0 })
 }

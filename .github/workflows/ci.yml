@@ -1,0 +1,145 @@
+# CI: static checks + race tests + the hermetic e2e suite on every push/PR,
+# with a summary comment posted to the PR (pass/fail, coverage, the e2e
+# scenario matrix, gofmt/vet/race status) so the outcome is visible in review
+# without digging through logs.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    outputs:
+      gofmt: ${{ steps.checks.outputs.gofmt }}
+      vet: ${{ steps.checks.outputs.vet }}
+      tests: ${{ steps.checks.outputs.tests }}
+      coverage: ${{ steps.checks.outputs.coverage }}
+      base_coverage: ${{ steps.base.outputs.coverage }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: gofmt / vet / test -race (+coverage)
+        id: checks
+        run: |
+          set +e
+          fmt_out=$(gofmt -l .)
+          if [ -z "$fmt_out" ]; then echo "gofmt=clean" >> "$GITHUB_OUTPUT"; else
+            echo "gofmt=DIRTY: $fmt_out" >> "$GITHUB_OUTPUT"; fi
+
+          vet_out=$(go vet ./... 2>&1)
+          vet_rc=$?
+          if [ $vet_rc -eq 0 ]; then echo "vet=clean" >> "$GITHUB_OUTPUT"; else
+            echo "vet=FAILED" >> "$GITHUB_OUTPUT"; echo "$vet_out"; fi
+
+          go test -race -coverprofile=cover.out ./... > test.log 2>&1
+          test_rc=$?
+          okpkgs=$(grep -c '^ok ' test.log || true)
+          failpkgs=$(grep -c '^FAIL' test.log || true)
+          if [ $test_rc -eq 0 ]; then
+            echo "tests=PASS ($okpkgs packages)" >> "$GITHUB_OUTPUT"
+          else
+            echo "tests=FAIL ($failpkgs failing / $okpkgs ok packages)" >> "$GITHUB_OUTPUT"
+            cat test.log
+          fi
+          cov=$(go tool cover -func=cover.out 2>/dev/null | tail -1 | awk '{print $3}')
+          echo "coverage=${cov:-n/a}" >> "$GITHUB_OUTPUT"
+          # The gate: fmt, vet, and tests must all be green.
+          if [ -n "$fmt_out" ] || [ $vet_rc -ne 0 ] || [ $test_rc -ne 0 ]; then exit 1; fi
+      - name: base coverage (for the delta)
+        id: base
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          git fetch --depth 1 origin "${{ github.base_ref }}"
+          git worktree add /tmp/base FETCH_HEAD
+          cd /tmp/base
+          go test -coverprofile=cover.out ./... > /dev/null 2>&1 || true
+          cov=$(go tool cover -func=cover.out 2>/dev/null | tail -1 | awk '{print $3}')
+          echo "coverage=${cov:-n/a}" >> "$GITHUB_OUTPUT"
+
+  e2e:
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.run.outputs.status }}
+      matrix: ${{ steps.run.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: hermetic e2e (stub controllers, no secrets)
+        id: run
+        run: |
+          set +e
+          MODE=stub bash test/e2e/run.sh 2>&1 | tee e2e.log
+          rc=${PIPESTATUS[0]}
+          if [ $rc -eq 0 ]; then echo "status=PASS" >> "$GITHUB_OUTPUT"; else echo "status=FAIL" >> "$GITHUB_OUTPUT"; fi
+          # Extract the scenario matrix (strip ANSI color).
+          {
+            echo 'matrix<<MATRIX_EOF'
+            sed -e 's/\x1b\[[0-9;]*m//g' e2e.log | awk '/^=+ e2e results/{f=1} f' | tail -80
+            echo 'MATRIX_EOF'
+          } >> "$GITHUB_OUTPUT"
+          exit $rc
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [unit, e2e]
+    if: always() && github.event_name == 'pull_request'
+    steps:
+      - name: post / update the summary comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const unit = ${{ toJSON(needs.unit.outputs) }};
+            const e2e = ${{ toJSON(needs.e2e.outputs) }};
+            const unitResult = '${{ needs.unit.result }}';
+            const e2eResult = '${{ needs.e2e.result }}';
+            const marker = '<!-- conductor-ci-summary -->';
+            const icon = ok => ok ? '✅' : '❌';
+            const cov = unit.coverage || 'n/a';
+            const baseCov = unit.base_coverage || '';
+            let covLine = cov;
+            if (baseCov && baseCov !== 'n/a' && cov !== 'n/a') {
+              const d = (parseFloat(cov) - parseFloat(baseCov)).toFixed(1);
+              covLine = `${cov} (base ${baseCov}, ${d >= 0 ? '+' : ''}${d}pp)`;
+            }
+            const matrix = (e2e.matrix || '').trim();
+            const body = [
+              marker,
+              `## CI summary`,
+              ``,
+              `| check | result |`,
+              `|---|---|`,
+              `| gofmt | ${unit.gofmt === 'clean' ? '✅ clean' : '❌ ' + (unit.gofmt || 'did not run')} |`,
+              `| go vet | ${unit.vet === 'clean' ? '✅ clean' : '❌ ' + (unit.vet || 'did not run')} |`,
+              `| unit tests (-race) | ${ (unit.tests || '').startsWith('PASS') ? '✅' : '❌'} ${unit.tests || 'did not run'} |`,
+              `| coverage | ${covLine} |`,
+              `| e2e (hermetic) | ${icon(e2e.status === 'PASS')} ${e2e.status || e2eResult} |`,
+              ``,
+              matrix ? `<details><summary>e2e scenario matrix</summary>\n\n\`\`\`\n${matrix}\n\`\`\`\n</details>` : '_e2e matrix unavailable_',
+              ``,
+              `_run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}_`,
+            ].join('\n');
+            const {data: comments} = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, per_page: 100,
+            });
+            const mine = comments.find(c => c.body && c.body.startsWith(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: mine.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body,
+              });
+            }

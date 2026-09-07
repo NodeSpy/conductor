@@ -8,7 +8,10 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -20,6 +23,36 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// strictUnmarshal decodes data into v rejecting unknown keys, so a typo'd
+// config key (known_hostss, filtres, …) is a named load error instead of a
+// silently dropped setting.
+func strictUnmarshal(data []byte, v any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(v); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil // an empty document decodes to the zero value
+		}
+		return err
+	}
+	return nil
+}
+
+// strictNodeDecode is strictUnmarshal for custom UnmarshalYAML(*yaml.Node)
+// implementations: yaml.v3 does not propagate KnownFields into them, so the
+// node is re-encoded and run through a strict decoder.
+func strictNodeDecode(n *yaml.Node, v any) error {
+	var b bytes.Buffer
+	enc := yaml.NewEncoder(&b)
+	if err := enc.Encode(n); err != nil {
+		return err
+	}
+	if err := enc.Close(); err != nil {
+		return err
+	}
+	return strictUnmarshal(b.Bytes(), v)
+}
+
 // Config is the whole config file.
 type Config struct {
 	// Imports lists other YAML files (paths or globs, relative to this file's
@@ -29,8 +62,49 @@ type Config struct {
 	Imports []string `yaml:"imports"`
 
 	Integrations []IntegrationRef `yaml:"integrations"`
-	Control      Control          `yaml:"control"`
-	Notify       Notify           `yaml:"notify"`
+
+	// ConnectorsMap, Runtimes, Hosts, Workflows, Triggers, Policy, and
+	// SecretRefs are the connectors-model schema (see connectors.go). They
+	// coexist with the legacy blocks: a config may carry either schema (or,
+	// mid-migration, both).
+	ConnectorsMap map[string]ConnectorRef  `yaml:"connectors"`
+	Runtimes      map[string]RuntimeConfig `yaml:"runtimes"`
+	Hosts         map[string]HostConfig    `yaml:"hosts"`
+	// Stores are named data stores (boltdb/redis/http) addressed by the
+	// `store:` selector on kv.* verbs; nothing is implicit.
+	Stores map[string]StoreRef `yaml:"stores"`
+	// Vaults are named secret stores (conductor/onepassword/pass/file/
+	// hashicorp) addressed by {{ vault "<name>" "<key>" }} references and
+	// per-vault read/write verbs; env stays the implicit baseline.
+	Vaults map[string]VaultRef `yaml:"vaults"`
+	// Memory is the shared agent memory (`memory:` section): durable notes
+	// with provenance and scope, written by verbs/agents and injected into
+	// opted-in agent prompts. Nil = memory not configured (no default).
+	Memory    *MemoryConfig          `yaml:"memory"`
+	Workflows map[string]WorkflowDef `yaml:"workflows"`
+	Triggers  []TriggerSpec          `yaml:"triggers"`
+	Policy    *Policy                `yaml:"policy"`
+	// Checks are the named quality-gate checks (#36 §16) `gate: run:` lists
+	// reference. Each check is one ordinary step (command / code / verb /
+	// critic agent) evaluated to pass/fail against the agent's worktree.
+	Checks map[string]Step `yaml:"checks"`
+	// Pricing overrides the built-in model→$ table cost estimation uses
+	// (#36 §14). Model prices drift; the built-ins are coarse defaults and
+	// every estimated figure is marked approximate.
+	Pricing *PricingConfig `yaml:"pricing"`
+	// SecretRefs is the named `secrets:` block: name -> secret reference
+	// (env:/op://…), readable in templates as {{.secrets.<name>}}.
+	SecretRefs map[string]string `yaml:"secrets"`
+
+	// Callable is the OPTIONAL `callable:` block (#36 §13): conductor's
+	// authenticated inbound invoke surface, so an external orchestrator (n8n,
+	// cron, a queue, curl, any MCP client) can fire a named callable workflow
+	// and get a structured result back. Off unless configured. See
+	// CallableConfig and internal/callable.
+	Callable CallableConfig `yaml:"callable"`
+
+	Control Control `yaml:"control"`
+	Notify  Notify  `yaml:"notify"`
 	// Handoff is the LEGACY singular hand-off block (a web-link page on the inbound
 	// listener). Deprecated in favor of `handoffs:` (below); still parsed for
 	// back-compat and folded into Handoffs["default"] by applyDefaults when
@@ -68,11 +142,45 @@ type Config struct {
 type Update struct {
 	Auto     bool     `yaml:"auto"`     // check for and install new releases periodically
 	Interval Duration `yaml:"interval"` // how often to check (default 10m; checks are cheap conditional requests)
-	Apply    *bool    `yaml:"apply"`    // re-exec into the new binary after updating (default true)
+	// Apply is what happens when a newer release is detected: true (the
+	// default — install and re-exec into it, unattended), false (install
+	// and stage; a restart applies), or "workflow" (install NOTHING —
+	// emit conductor.update_available so a trigger drives the update with
+	// pre/post steps around `uses: conductor.update`).
+	Apply ApplyMode `yaml:"apply"`
 }
 
 // ShouldApply reports whether to re-exec after a successful update (default true).
-func (u Update) ShouldApply() bool { return u.Apply == nil || *u.Apply }
+func (u Update) ShouldApply() bool { return u.Apply.mode == "" || u.Apply.mode == "true" }
+
+// ApplyWorkflow reports the emit-don't-apply mode (`apply: workflow`).
+func (u Update) ApplyWorkflow() bool { return u.Apply.mode == "workflow" }
+
+// ApplyMode parses update.apply: a YAML bool or the string "workflow".
+type ApplyMode struct {
+	mode string // "" (default true) | "true" | "false" | "workflow"
+}
+
+// ApplyModeFor builds an ApplyMode (tests, migration).
+func ApplyModeFor(mode string) ApplyMode { return ApplyMode{mode: mode} }
+
+func (m *ApplyMode) UnmarshalYAML(n *yaml.Node) error {
+	var b bool
+	if err := n.Decode(&b); err == nil {
+		if b {
+			m.mode = "true"
+		} else {
+			m.mode = "false"
+		}
+		return nil
+	}
+	var s string
+	if err := n.Decode(&s); err == nil && s == "workflow" {
+		m.mode = "workflow"
+		return nil
+	}
+	return fmt.Errorf("config: update.apply must be true, false, or workflow")
+}
 
 // IntegrationRef is one entry in the `integrations:` list. It captures the
 // common header and retains the raw node so the concrete integration can decode
@@ -132,6 +240,43 @@ func (c Control) AgentCap() int {
 		return 3
 	}
 	return *c.MaxConcurrentAgents
+}
+
+// AgentCap returns the effective concurrent-agent cap: the global
+// `policy.concurrency.max_agents` when set, else the legacy
+// `control.max_concurrent_agents` (default 3). <=0 means unlimited.
+func (c *Config) AgentCap() int {
+	if c.Policy != nil && c.Policy.Concurrency != nil && c.Policy.Concurrency.MaxAgents != nil {
+		return *c.Policy.Concurrency.MaxAgents
+	}
+	return c.Control.AgentCap()
+}
+
+// AgentsPerHour returns the effective rolling-hour dispatch cap: the global
+// `policy.concurrency.max_agents_per_hour` when set, else the legacy
+// `control.max_agents_per_hour`. 0 = unlimited.
+func (c *Config) AgentsPerHour() int {
+	if c.Policy != nil && c.Policy.Concurrency != nil && c.Policy.Concurrency.MaxAgentsPerHour != nil {
+		return *c.Policy.Concurrency.MaxAgentsPerHour
+	}
+	return c.Control.AgentsPerHour()
+}
+
+// DefaultFlowMaxFanOut bounds a config-authored for_each / parallel fan-out
+// when the operator sets no `policy.max_fan_out`. Generous enough for real
+// operator flows, finite so a data-driven list cannot spawn an unbounded
+// number of dispatches (#36 §146 F3).
+const DefaultFlowMaxFanOut = 100
+
+// FlowMaxFanOut is the effective cap on one config-authored for_each/parallel
+// step's fan-out: the global `policy.max_fan_out` when set (>0), else
+// DefaultFlowMaxFanOut. Always finite — there is no "unlimited" spelling, so a
+// runaway list is always refused.
+func (c *Config) FlowMaxFanOut() int {
+	if c != nil && c.Policy != nil && c.Policy.MaxFanOut != nil && *c.Policy.MaxFanOut > 0 {
+		return *c.Policy.MaxFanOut
+	}
+	return DefaultFlowMaxFanOut
 }
 
 // Handoff is the legacy singular hand-off block. Deprecated — see Config.Handoff.
@@ -217,6 +362,11 @@ type HandoffChat struct {
 	// bot needs the privileged MESSAGE CONTENT intent enabled and must be
 	// invited to the server/channel (or share a DM with `user`).
 	BotToken string `yaml:"bot_token"`
+	// Approvers optionally restricts who may resolve a `to: thread` hand-off:
+	// only replies from these user ids (same id form as `user`) count —
+	// without it, ANYONE in the channel can approve an agent's draft. Ignored
+	// for `to: dm` (the DM already pins one user).
+	Approvers []string `yaml:"approvers"`
 }
 
 // Notify configures notifications. All channels are private to you (the daemon
@@ -230,6 +380,46 @@ type Notify struct {
 	Pushover          NotifyPushover  `yaml:"pushover"`            // optional Pushover application/user to notify
 	Notifiarr         NotifyNotifiarr `yaml:"notifiarr"`           // optional Notifiarr passthrough integration
 	Digest            Duration        `yaml:"digest"`              // periodic activity summary (e.g. 24h); 0 = off
+
+	// Via routes lifecycle notifications through connector VERBS — the
+	// connectors-model delivery. Each route is an action unit invoked for the
+	// enabled events (its own on: overriding the block's), with the composed
+	// notification line addressable as {{.message}} (plus event/repo/number/
+	// kind/title/ref). The sink fields above remain the legacy delivery; the
+	// migration maps each configured sink onto a connector + a via route.
+	Via []NotifyRoute `yaml:"via,omitempty"`
+}
+
+// Configured reports whether the notify block carries anything — the
+// retired-model check: on a connectors-model config the block is rejected
+// (alerting is conductor.* triggers), while legacy configs keep the legacy
+// delivery until they migrate.
+func (n Notify) Configured() bool {
+	return len(n.On) > 0 || len(n.Via) > 0 || n.Digest != 0 || n.Push ||
+		n.SlackWebhookURL != "" || n.DiscordWebhookURL != "" || n.Ntfy.Topic != "" ||
+		(n.Pushover.Token != "" && n.Pushover.User != "") || n.Notifiarr.APIKey != ""
+}
+
+// NotifyRoute is one notify delivery through a connector verb.
+type NotifyRoute struct {
+	// On restricts this route to a subset of events (empty = the block's on:).
+	On      []string       `yaml:"on,omitempty"`
+	Uses    string         `yaml:"uses"`
+	Options map[string]any `yaml:"options,omitempty"`
+}
+
+// WantsRoute reports whether a route fires for an event: its own on: list
+// when set, else the block's policy.
+func (n Notify) WantsRoute(r NotifyRoute, event string) bool {
+	if len(r.On) == 0 {
+		return true // the caller already gated on n.Wants(event)
+	}
+	for _, e := range r.On {
+		if e == event {
+			return true
+		}
+	}
+	return false
 }
 
 // NotifyNtfy configures publishing to an ntfy (https://ntfy.sh or self-hosted)
@@ -296,6 +486,10 @@ type Store struct {
 	StateTTL      Duration `yaml:"state_ttl"`
 	MaxTrackedPRs int      `yaml:"max_tracked_prs"`
 	AuditMaxSize  ByteSize `yaml:"audit_max_size"`
+	// HistoryRetention / HistoryMaxRuns bound the run-history directory
+	// (#36 §20). Zero → 14d / 500 runs.
+	HistoryRetention Duration `yaml:"history_retention"`
+	HistoryMaxRuns   int      `yaml:"history_max_runs"`
 }
 
 // ControllerConfig is one entry in the optional top-level `controllers:` block —
@@ -324,6 +518,20 @@ type ControllerConfig struct {
 	// Reserved for the cli-controller milestone.
 	Tool    string   `yaml:"tool"`
 	Command []string `yaml:"command"`
+	// Bin is the runtime binary (paseo/agent-deck); for agent-deck it wins over
+	// the command/tool/"agent-deck" bin resolution. For paseo, exactly one
+	// distinct Bin may be set across all paseo runtimes/controllers combined
+	// (see cmd/conductor's resolvePaseoBin).
+	Bin string `yaml:"bin"`
+	// Host names a `hosts:` entry; this controller's subprocess launches run
+	// there over SSH instead of locally. All controller types support it —
+	// cli/acp/agent-deck wrap their subprocess in the ssh launch, paseo runs
+	// its whole CLI (and reaper) remotely, and opencode's server is reached
+	// through an ssh -W stdio forward — see checkRemoteHostSupport.
+	Host string `yaml:"host"`
+	// Isolation wraps this runtime's launches in the per-dispatch sandbox
+	// (#36 §15) — carried from the `runtimes:` form; see RuntimeConfig.
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
 }
 
 // EffectiveTransport returns the controller's transport, defaulting to acp for an
@@ -350,6 +558,35 @@ func (c *Config) DefaultControllerName() string {
 	return ""
 }
 
+// MergedControllers unions the connectors-model `runtimes:` block into the
+// legacy `controllers:` shape the controller registry consumes (each
+// RuntimeConfig converted via its Controller() method). Both schemas name the
+// same registry, and validateRuntimeDefaults already rejects a name defined
+// under both — so this is a plain union, no precedence to resolve.
+func (c *Config) MergedControllers() map[string]ControllerConfig {
+	merged := make(map[string]ControllerConfig, len(c.Controllers)+len(c.Runtimes))
+	for name, cc := range c.Controllers {
+		merged[name] = cc
+	}
+	for name, rt := range c.Runtimes {
+		merged[name] = rt.Controller()
+	}
+	return merged
+}
+
+// DefaultRuntimeName returns the name of the runtime or controller flagged
+// default:true (runtimes: checked first), or "" when none is (resolution
+// then falls back to the built-in paseo). At most one across both maps may
+// set it — see validateRuntimeDefaults.
+func (c *Config) DefaultRuntimeName() string {
+	for name, rt := range c.Runtimes {
+		if rt.Default {
+			return name
+		}
+	}
+	return c.DefaultControllerName()
+}
+
 // DefaultHandoffName returns the name of the `handoffs:` entry flagged
 // default:true, or "" when none is (resolution then falls back to the sole
 // configured entry, or no hand-off channel at all — see internal/handoff.Registry).
@@ -371,7 +608,13 @@ type AgentProfile struct {
 	// Controller names the controller (from top-level `controllers:`) that runs
 	// this agent. Empty falls through to the controller flagged default:true, then
 	// to the built-in paseo controller. See internal/controller resolution order.
-	Controller      string            `yaml:"controller"`
+	Controller string `yaml:"controller"`
+	// Runtime is the connectors-model name for Controller (a `runtimes:` entry).
+	// When both are set, Runtime wins; use RuntimeName.
+	Runtime string `yaml:"runtime"`
+	// Host pins this agent's runtime invocations to a named `hosts:` SSH
+	// target, overriding (or standing in for) the runtime's own `host:`.
+	Host            string            `yaml:"host"`
 	Workspace       string            `yaml:"workspace"` // local | worktree
 	WaitTimeout     Duration          `yaml:"wait_timeout"`
 	ArchiveWhenDone bool              `yaml:"archive_when_done"`
@@ -380,6 +623,69 @@ type AgentProfile struct {
 	// format rules appended to its prompt). Unset (nil) → fall through to the
 	// top-level agent_guidance (then the built-in default); "" → none; text → that.
 	Guidance *string `yaml:"guidance"`
+	// Memory opts this agent into shared-memory prompt injection: true for
+	// the defaults (global + target repo + own agent scope), or a filter map
+	// { scopes, tags, limit }. Absent → no injection, no token cost.
+	Memory *MemorySelector `yaml:"memory"`
+	// Session binds this agent's dispatches to a keyed live session (session
+	// affinity): every event whose rendered key matches reaches the same
+	// agent as a follow-up. Absent → a fresh agent per dispatch. See
+	// SessionSpec.
+	Session *SessionSpec `yaml:"session"`
+	// Skill opts this agent into the conductor skill (#36 §12): reaching back
+	// into conductor over the daemon socket for verbs-as-tools and the secret
+	// broker. Absent → the agent gets neither (deny by default).
+	Skill *SkillPolicy `yaml:"skill"`
+	// Isolation sandboxes this agent's launches (#36 §15): a low-privilege
+	// user, Linux namespaces/cgroups, or a container, plus the network egress
+	// policy. Wins over the runtime's own isolation:. Requires a runtime
+	// conductor launches itself (acp/cli/opencode/agent-deck — not paseo).
+	Isolation *IsolationConfig `yaml:"isolation"`
+	// Budget is this profile's hard $/token spend cap over a rolling window
+	// (#36 §14) — checked alongside the global and workflow-scope budgets;
+	// an over-cap dispatch sheds and notifies.
+	Budget *BudgetPolicy `yaml:"budget"`
+	// OutcomeFeedback opts this profile into guidance tuning (#36 §18): a
+	// one-line track-record summary (merged / closed / rejected / reverted
+	// counts) is appended to the agent's guidance.
+	OutcomeFeedback bool `yaml:"outcome_feedback"`
+}
+
+// SkillPolicy is the per-profile `skill:` block (#36 §12): which of
+// conductor's own capabilities a dispatched agent may reach back into over
+// the daemon socket. The zero value denies everything.
+type SkillPolicy struct {
+	// Verbs are the connector verbs exposed to this agent as MCP tools —
+	// path.Match patterns like policy.agent_authored uses ("gh.comment",
+	// "rest.*"). Empty → no verb tools.
+	Verbs []string `yaml:"verbs"`
+	// SecretsVia picks how this agent obtains a credential it truly needs:
+	// "broker" (the audited single-use secret broker), "env" (DEPRECATED —
+	// template the secret into the step's env:, which puts the raw value in
+	// the runtime's environment), or "none" (the default: no secrets).
+	SecretsVia string `yaml:"secrets_via"`
+	// AllowSecrets names the `secrets:` entries the broker may issue to this
+	// profile. Exact names only — no patterns; broadening is a config edit,
+	// never an agent request. Empty → the broker issues nothing.
+	AllowSecrets []string `yaml:"allow_secrets"`
+	// Identity is injected as `as:` on skill verb calls that declare the
+	// option (gh writes post as this identity, never as the operator).
+	// Empty falls through to policy.agent_authored.identity; a profile
+	// whose skill.verbs admit an as-taking write verb must have one of the
+	// two set (validated at load).
+	Identity string `yaml:"identity"`
+	// MaxCalls caps verb executions per skill session (analogous to
+	// agent_authored.limits). 0 = the built-in default (256).
+	MaxCalls int `yaml:"max_calls"`
+}
+
+// RuntimeName returns the runtime/controller the profile selects (runtime
+// wins over the legacy controller key; "" = the default).
+func (p AgentProfile) RuntimeName() string {
+	if p.Runtime != "" {
+		return p.Runtime
+	}
+	return p.Controller
 }
 
 // Action is one (source,kind)→action mapping. Type is "agent" or "command".
@@ -427,6 +733,24 @@ type Action struct {
 	Reviewer Actors `yaml:"reviewer"` // review_requested: whose requested review triggers it
 	Assignee Actors `yaml:"assignee"` // issue_assigned: whose assignment triggers it
 
+	// FlowRef ties a lowered connectors-model trigger back to its
+	// config.Triggers spec ("<index>:<on>"). Set programmatically by the
+	// lowering in internal/connector — never from user YAML — and carried
+	// through JSON persistence so an in-flight run resumes onto its spec.
+	// The x_-prefixed YAML names are internal: the lowering round-trips these
+	// structs through YAML, so they need tags, but they are not part of the
+	// user-facing schema.
+	FlowRef string `yaml:"x_flow_ref,omitempty" json:"FlowRef,omitempty"`
+	// Repos / ExcludeRepos are per-variant repo gates (globs), also set by the
+	// connectors-model lowering: a trigger's `filters.repos` becomes a variant
+	// that only fires for matching repos. Legacy configs use rule-level
+	// `match.repos` instead and never set these.
+	Repos        []string `yaml:"x_repos,omitempty" json:"Repos,omitempty"`
+	ExcludeRepos []string `yaml:"x_exclude_repos,omitempty" json:"ExcludeRepos,omitempty"`
+	// TargetRepo pins the trigger's checkout repo per variant (a lowered
+	// trigger's repo: on sentry/pagerduty, whose legacy Repo was rule-level).
+	TargetRepo string `yaml:"x_target_repo,omitempty" json:"TargetRepo,omitempty"`
+
 	// kind-specific options
 	MaxAttemptsPerHead int            `yaml:"max_attempts_per_head"`
 	IgnoreChecks       []string       `yaml:"ignore_checks"`
@@ -435,6 +759,7 @@ type Action struct {
 	PollInterval       Duration       `yaml:"poll_interval"` // stuck_checks: how often the dedicated poller checks (default 15m)
 	FromUsers          []string       `yaml:"from_users"`    // new_comment: only these commenters trigger (empty = any)
 	IgnoreUsers        []string       `yaml:"ignore_users"`  // new_comment: never trigger on these commenters (e.g. CI report bots)
+	AuthorBot          *bool          `yaml:"author_bot"`    // comment/review events: require the author to be (true) / not be (false) a bot; nil = either
 	LabelsAny          []string       `yaml:"labels_any"`    // issue matches if it has ANY of these labels
 	LabelsAll          []string       `yaml:"labels_all"`    // ...and ALL of these labels
 	Authors            []string       `yaml:"authors"`       // ...and was opened by one of these logins
@@ -602,18 +927,18 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// Cheap probe: no `imports:` → parse the single file directly (unchanged path,
-	// no map round-trip). Only pay the merge machinery when imports are used.
-	var probe struct {
-		Imports []string `yaml:"imports"`
-	}
+	// Cheap probe: no import of any form (top-level `imports:`, a section's
+	// `imports:` key, a `- import:` trigger item) → parse the single file
+	// directly (unchanged path, no map round-trip). Only pay the merge
+	// machinery when imports are used.
+	var probe map[string]any
 	if err := yaml.Unmarshal(expanded, &probe); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
 	var c Config
-	if len(probe.Imports) == 0 {
-		if err := yaml.Unmarshal(expanded, &c); err != nil {
+	if !hasAnyImports(probe) {
+		if err := strictUnmarshal(expanded, &c); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
 		}
 	} else {
@@ -626,10 +951,21 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("merge imports: %w", err)
 		}
 		// Re-parse the merged document so the custom unmarshalers (IntegrationRef,
-		// ActionSet, Duration, …) still run over each node.
-		if err := yaml.Unmarshal(out, &c); err != nil {
+		// ActionSet, Duration, …) still run over each node. Strict: an unknown
+		// key from ANY of the merged files is a named error.
+		if err := strictUnmarshal(out, &c); err != nil {
 			return nil, fmt.Errorf("parse merged config: %w", err)
 		}
+	}
+	// Multi-source `on:` lists expand into one trigger per source before
+	// anything downstream sees them.
+	if err := c.NormalizeTriggers(); err != nil {
+		return nil, err
+	}
+	// File-referencing `workflow:` forms (workflow:+import:, a bare file path) join the
+	// merged workflow set before defaults/validation see it.
+	if err := c.resolveWorkflowFiles(filepath.Dir(path)); err != nil {
+		return nil, err
 	}
 	c.applyDefaults()
 	if err := c.Validate(); err != nil {
@@ -669,24 +1005,28 @@ func loadMerged(p string, loaded map[string]bool) (map[string]any, error) {
 	if m == nil {
 		m = map[string]any{}
 	}
+	// Section-scoped imports expand per file, so their globs resolve against
+	// THIS file's directory and a duplicate entry names both sources.
+	if err := expandSectionImports(p, m); err != nil {
+		return nil, err
+	}
 	imports := toStrings(m["imports"])
 	delete(m, "imports")
 
 	merged := map[string]any{}
 	dir := filepath.Dir(p)
 	for _, imp := range imports {
-		pat := imp
-		if !filepath.IsAbs(pat) {
-			pat = filepath.Join(dir, pat)
-		}
-		matches, err := filepath.Glob(pat)
+		// Through globImport so `**` is refused by name here too (filepath
+		// globs match one level; a silent nested-dir skip is worse than an
+		// error). Top-level imports keep their stricter contract: even an
+		// unmatched GLOB is an error, not a ready-to-fill no-op.
+		matches, err := globImport(dir, p, imp)
 		if err != nil {
-			return nil, fmt.Errorf("%s: bad import glob %q: %w", p, imp, err)
+			return nil, err
 		}
 		if len(matches) == 0 {
 			return nil, fmt.Errorf("%s: import %q matched no files", p, imp)
 		}
-		sort.Strings(matches)
 		for _, f := range matches {
 			sub, err := loadMerged(f, loaded)
 			if err != nil {
@@ -826,7 +1166,9 @@ func (c *Config) applyDefaults() {
 	if c.Store.AuditMaxSize == 0 {
 		c.Store.AuditMaxSize = 50 * 1024 * 1024
 	}
-	if len(c.Notify.On) == 0 {
+	// The notify block (and its escalate default) is legacy-only — the
+	// connectors model alerts through conductor.* triggers instead.
+	if len(c.Integrations) > 0 && len(c.Notify.On) == 0 {
 		c.Notify.On = []string{"escalate"}
 	}
 	if c.Update.Auto && c.Update.Interval == 0 {
@@ -856,8 +1198,34 @@ func (c *Config) applyHandoffCompat() {
 
 // Validate checks required fields and cross-field consistency.
 func (c *Config) Validate() error {
-	if len(c.Integrations) == 0 {
-		return fmt.Errorf("config: no integrations configured")
+	if len(c.Integrations) == 0 && !c.HasConnectors() {
+		return fmt.Errorf("config: no integrations or connectors configured")
+	}
+	if err := c.validateConnectors(); err != nil {
+		return err
+	}
+	if err := c.validateStores(); err != nil {
+		return err
+	}
+	if err := c.validateVaults(); err != nil {
+		return err
+	}
+	if err := c.validateMemory(); err != nil {
+		return err
+	}
+	if err := c.validateSessions(); err != nil {
+		return err
+	}
+	if c.Policy != nil {
+		if err := validateAgentAuthored("policy", c.Policy.AgentAuthored, c.Hosts); err != nil {
+			return err
+		}
+		if err := validateBudget("policy", c.Policy.Budget); err != nil {
+			return err
+		}
+	}
+	if err := c.validatePricing(); err != nil {
+		return err
 	}
 	names := map[string]bool{}
 	for i, ig := range c.Integrations {
@@ -882,13 +1250,115 @@ func (c *Config) Validate() error {
 		if p.Workspace != "" && p.Workspace != "local" && p.Workspace != "worktree" {
 			return fmt.Errorf("config: agent %q: workspace must be local|worktree, got %q", name, p.Workspace)
 		}
-		if p.Controller != "" {
-			if _, ok := c.Controllers[p.Controller]; !ok {
-				return fmt.Errorf("config: agent %q: unknown controller %q (defined: %s)", name, p.Controller, c.controllerNames())
+		if rn := p.RuntimeName(); rn != "" {
+			_, isController := c.Controllers[rn]
+			_, isRuntime := c.Runtimes[rn]
+			if !isController && !isRuntime {
+				return fmt.Errorf("config: agent %q: unknown runtime %q (defined: %s)", name, rn, c.runtimeNames())
+			}
+		}
+		if p.Host != "" {
+			if _, ok := c.Hosts[p.Host]; !ok {
+				return fmt.Errorf("config: agent %q: unknown host %q (defined: %s)", name, p.Host, c.hostNames())
+			}
+		}
+		if err := c.validateProfileIsolation(name, p); err != nil {
+			return err
+		}
+		if err := c.validateSkillIsolation(name, p); err != nil {
+			return err
+		}
+		if err := validateBudget("agent "+name, p.Budget); err != nil {
+			return err
+		}
+		if p.Skill != nil {
+			switch p.Skill.SecretsVia {
+			case "", "none", "env", "broker":
+			default:
+				return fmt.Errorf("config: agent %q: skill.secrets_via must be broker|env|none, got %q", name, p.Skill.SecretsVia)
+			}
+			if p.Skill.MaxCalls < 0 {
+				return fmt.Errorf("config: agent %q: skill.max_calls must be >= 0, got %d", name, p.Skill.MaxCalls)
+			}
+			for _, s := range p.Skill.AllowSecrets {
+				// The current model names a vault entry: "<vault>/<key>"
+				// (the key half resolves at issue time — non-listable vaults
+				// can't be checked statically). A bare name checks the
+				// retired named-secrets block for back-compat.
+				if vault, _, isVault := strings.Cut(s, "/"); isVault {
+					if _, ok := c.Vaults[vault]; !ok {
+						return fmt.Errorf("config: agent %q: skill.allow_secrets %q names unknown vault %q (defined: %s)", name, s, vault, c.vaultNames())
+					}
+				} else if _, ok := c.SecretRefs[s]; !ok {
+					return fmt.Errorf("config: agent %q: skill.allow_secrets names unknown secret %q — name a vault entry as \"<vault>/<key>\"", name, s)
+				}
 			}
 		}
 	}
+	if err := c.validateCallable(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// SkillEnabled reports whether any agent profile carries a skill: block —
+// the daemon serves the tool socket and builds the secret broker only then.
+func (c *Config) SkillEnabled() bool {
+	for _, p := range c.Agents {
+		if p.Skill != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// SkillToolsSupported reports whether a profile's runtime can carry the
+// conductor MCP tool server at launch: ACP transports (mcpServers on
+// session/new) and native opencode (a per-session config via
+// OPENCODE_CONFIG). The paseo CLI, agent-deck, and bare-CLI runtimes expose
+// no MCP surface in their launch — a skill: profile there gets the output
+// contract and nothing else, which `conductor validate` warns about.
+func (c *Config) SkillToolsSupported(p AgentProfile) (runtime string, ok bool) {
+	rn := p.RuntimeName()
+	if rn == "" {
+		rn = c.DefaultRuntimeName()
+	}
+	if rn == "" {
+		return BuiltinPaseoRuntime, false // the built-in paseo fallback
+	}
+	cc, found := c.MergedControllers()[rn]
+	if !found {
+		return rn, false // unknown runtime — named by its own validation error
+	}
+	switch {
+	case cc.Type == "paseo", cc.Type == "agent-deck":
+		return rn, false
+	case cc.Type == "opencode":
+		return rn, true
+	case cc.Agent == "opencode" && cc.EffectiveTransport() == "native":
+		return rn, true
+	}
+	return rn, cc.EffectiveTransport() == "acp"
+}
+
+// BuiltinPaseoRuntime is the implicit default runtime's name (mirrors
+// controller.BuiltinPaseo without the import).
+const BuiltinPaseoRuntime = "paseo"
+
+// runtimeNames lists runtimes and legacy controllers, sorted, for errors.
+func (c *Config) runtimeNames() string {
+	names := make([]string, 0, len(c.Runtimes)+len(c.Controllers))
+	for n := range c.Runtimes {
+		names = append(names, n)
+	}
+	for n := range c.Controllers {
+		names = append(names, n)
+	}
+	if len(names) == 0 {
+		return "none"
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // validateControllers checks the optional `controllers:` block: each entry sets
@@ -911,12 +1381,33 @@ func (c *Config) validateControllers() error {
 		if cc.SessionModel != "" && !validModel[cc.SessionModel] {
 			return fmt.Errorf("config: controller %q: session_model must be native|resumable|oneshot, got %q", name, cc.SessionModel)
 		}
+		if err := c.checkRemoteHostSupport("controller", name, cc.Host, cc.Type, cc.Agent, cc.EffectiveTransport()); err != nil {
+			return err
+		}
 		if cc.Default {
 			defaults++
 		}
 	}
 	if defaults > 1 {
 		return fmt.Errorf("config: at most one controller may set `default: true` (%d do)", defaults)
+	}
+	return nil
+}
+
+// checkRemoteHostSupport validates a runtime/controller's `host:` reference:
+// it must name a defined `hosts:` entry. Every runtime type runs remotely —
+// cli/acp/agent-deck ssh-wrap their subprocess, paseo executes its whole CLI
+// (checkouts under the remote ~/.conductor) and reaper on the host, and
+// opencode's remotely-launched server is reached through an ssh -W stdio
+// forward. kind is "runtime" or "controller" (for the error text); the
+// typ/agent/transport fields are accepted so a future type-specific
+// restriction has the context it needs.
+func (c *Config) checkRemoteHostSupport(kind, name, host, typ, agent, transport string) error {
+	if host == "" {
+		return nil
+	}
+	if _, ok := c.Hosts[host]; !ok {
+		return fmt.Errorf("config: %s %q: unknown host %q (defined: %s)", kind, name, host, c.hostNames())
 	}
 	return nil
 }
@@ -1090,7 +1581,7 @@ func (c *Config) handoffNames() string {
 }
 
 // ActionRef is one configured action together with a human-readable location
-// (e.g. `github[ednition] rules[0].actions.review_requested`), so a cross-config
+// (e.g. `github[acme] rules[0].actions.review_requested`), so a cross-config
 // check can say exactly where a bad reference lives. Integrations enumerate these
 // for the CLI's validate/startup pass; see CheckAgentRefs.
 type ActionRef struct {

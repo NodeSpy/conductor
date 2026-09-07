@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 // maxWebhookBody caps a webhook payload (GitHub's documented limit is 25 MB).

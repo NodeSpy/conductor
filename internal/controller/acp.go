@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/acp"
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/acp"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // acpController drives an ACP agent (gemini, codex-via-adapter, opencode-over-acp,
@@ -31,6 +31,8 @@ type acpController struct {
 	command []string // launch argv for the agent subprocess (best-effort default; overridable via `command:`)
 	prov    Provisioner
 	dial    acpDialer // injectable connection factory; nil → spawn the subprocess
+	host    string    // configured `host:`; "" = local (see resolveHost/prepareLaunch)
+	iso     *config.IsolationConfig
 
 	mu    sync.Mutex
 	model SessionModel // cached negotiated model (native until an Initialize proves loadSession)
@@ -55,12 +57,21 @@ func newACPController(name string, cc config.ControllerConfig, prov Provisioner)
 		name:    name,
 		command: acpCommand(cc),
 		prov:    prov,
+		host:    cc.Host,
+		iso:     cc.Isolation,
 		model:   model,
 	}
 }
 
-func (c *acpController) Name() string         { return c.name }
-func (c *acpController) Transport() Transport { return TransportACP }
+func (c *acpController) Name() string           { return c.name }
+func (c *acpController) ConfiguredHost() string { return c.host }
+func (c *acpController) Transport() Transport   { return TransportACP }
+
+// SessionPersistent: an ACP session is addressable by id (session/load for
+// loadSession-capable agents) — the session-affinity gate. An agent that
+// can't actually resume surfaces as a follow-up failure, which affinity
+// degrades to a fresh spawn.
+func (c *acpController) SessionPersistent() bool { return true }
 
 func (c *acpController) Model() SessionModel {
 	c.mu.Lock()
@@ -73,7 +84,7 @@ func (c *acpController) Model() SessionModel {
 // and CheckoutPR is always true (conductor supplies the worktree as the session
 // cwd). The connection is closed before returning; NewSession opens its own.
 func (c *acpController) Initialize(ctx context.Context) (Capabilities, error) {
-	client, cleanup, err := c.connect(ctx, "", nil, acp.DelegateFuncs{})
+	client, cleanup, err := c.connect(ctx, "", nil, acp.DelegateFuncs{}, "", resumeOpts(c.iso, false))
 	if err != nil {
 		return Capabilities{SessionModel: c.Model(), Transport: TransportACP, CheckoutPR: true}, err
 	}
@@ -127,7 +138,7 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	// its own context, cancelled only by Close — not by the request ctx returning.
 	sctx, scancel := context.WithCancel(context.Background())
 	del := &acpDelegate{handler: h}
-	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del)
+	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Profile.Host, launchOptsFor(c.iso, spec.Request))
 	if err != nil {
 		scancel()
 		return nil, err
@@ -140,7 +151,10 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 		scancel()
 		return nil, fmt.Errorf("acp: initialize: %w", err)
 	}
-	res, err := client.NewSession(sctx, acp.NewSessionParams{Cwd: spec.Cwd})
+	res, err := client.NewSession(sctx, acp.NewSessionParams{
+		Cwd:        spec.Cwd,
+		McpServers: c.memoryServers(spec),
+	})
 	if err != nil {
 		cleanup()
 		scancel()
@@ -159,13 +173,31 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	return s, nil
 }
 
+// memoryServers builds the MCP server list for a new ACP session: the shared
+// conductor tool server (memory + run_step + the skill's verb tools and
+// broker; see skillwire.go), with this dispatch's provenance baked into its
+// flags and the one-shot skill claim in its env. Local sessions only: the
+// daemon's socket doesn't exist on a remote `host:` box, so remote sessions
+// fall back to the output contract like any runtime without live tools.
+func (c *acpController) memoryServers(spec Spec) []acp.McpServer {
+	ts := buildToolServer(spec, c.host)
+	if ts == nil {
+		return nil
+	}
+	var env []acp.EnvVariable
+	for k, v := range ts.Env {
+		env = append(env, acp.EnvVariable{Name: k, Value: v})
+	}
+	return []acp.McpServer{{Name: "conductor-memory", Command: ts.Command, Args: ts.Args, Env: env}}
+}
+
 // ResumeSession re-attaches to a prior session by id over a fresh connection. Only
 // meaningful for a loadSession-capable (resumable) agent; the bound session accepts
 // follow-up prompt turns.
-func (c *acpController) ResumeSession(ctx context.Context, id string, h Handler) (Session, error) {
+func (c *acpController) ResumeSession(ctx context.Context, id string, agentAuthored bool, h Handler) (Session, error) {
 	sctx, scancel := context.WithCancel(context.Background())
 	del := &acpDelegate{handler: h}
-	client, cleanup, err := c.connect(sctx, "", nil, del)
+	client, cleanup, err := c.connect(sctx, "", nil, del, "", resumeOpts(c.iso, agentAuthored))
 	if err != nil {
 		scancel()
 		return nil, err
@@ -181,46 +213,64 @@ func (c *acpController) ResumeSession(ctx context.Context, id string, h Handler)
 }
 
 // connect opens a connection via the injected dialer, or spawns the subprocess when
-// none is set.
-func (c *acpController) connect(ctx context.Context, cwd string, env []string, del acp.ClientDelegate) (*acp.Client, func() error, error) {
+// none is set. profileHost is the dispatched profile's host override (wins over
+// the controller's own configured host — see resolveHost); "" when no profile is
+// in reach (Initialize/ResumeSession).
+func (c *acpController) connect(ctx context.Context, cwd string, env []string, del acp.ClientDelegate, profileHost string, opt launchOpts) (*acp.Client, func() error, error) {
 	if c.dial != nil {
 		return c.dial(ctx, cwd, env, del)
 	}
-	return spawnACP(ctx, c.command, cwd, env, del)
+	return spawnACP(ctx, c.command, cwd, env, del, resolveHost(c.host, profileHost), opt)
 }
 
 // spawnACP starts the agent subprocess wired for ACP over its stdio, with the
 // conductor worktree as cwd and the acts-as-user env applied. The process lifetime
 // is owned by the returned cleanup (session-scoped), not by ctx — a background
-// agent must survive the dispatch call returning.
-func spawnACP(_ context.Context, command []string, cwd string, env []string, del acp.ClientDelegate) (*acp.Client, func() error, error) {
+// agent must survive the dispatch call returning. host != "" wraps the launch for
+// remote execution via prepareLaunch (see its doc for what changes locally in
+// that case: no cwd, no local env — both travel inside the wrapped command).
+func spawnACP(_ context.Context, command []string, cwd string, env []string, del acp.ClientDelegate, host string, opt launchOpts) (*acp.Client, func() error, error) {
 	if len(command) == 0 {
 		return nil, nil, errors.New("acp: no launch command configured")
 	}
-	cmd := exec.Command(command[0], command[1:]...)
-	if cwd != "" {
-		cmd.Dir = cwd
+	opt, revoke := withEgressRevoke(opt)
+	argv, dir, localEnv, _, err := prepareLaunch(host, cwd, env, command, opt)
+	if err != nil {
+		revoke()
+		return nil, nil, err
 	}
-	cmd.Env = append(os.Environ(), env...)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	cmd.Env = append(os.Environ(), localEnv...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		revoke()
 		return nil, nil, err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		revoke()
 		return nil, nil, err
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		return nil, nil, fmt.Errorf("acp: start %s: %w", command[0], err)
+		revoke()
+		return nil, nil, fmt.Errorf("acp: start %s: %w", argv[0], err)
 	}
 	client := acp.NewClient(stdout, stdin, del)
+	// This ACP agent is a background session owned by cleanup, not ctx (see the
+	// doc above) — so the egress credential is retired in cleanup, at session
+	// end, rather than when the dispatch call returns (#36 iso-review round 2,
+	// item 4).
 	cleanup := func() error {
 		client.Close()
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
 		_ = cmd.Wait()
+		revoke()
 		return nil
 	}
 	return client, cleanup, nil

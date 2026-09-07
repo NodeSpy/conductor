@@ -1,0 +1,447 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/cost"
+	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/flow"
+	"github.com/NodeSpy/conductor/internal/handoff"
+	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/store"
+)
+
+// processFlow handles a trigger whose lowered action carries a FlowRef — the
+// connectors-model path. It runs after process()'s generic gates (kill
+// switch, pause, dedup, backoff), so those behave identically for both
+// schemas; here we add the flow-side filters, the scoped policy gates, and
+// group batching, then hand the run to the flow runner.
+func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Action, key, dkind, head string) {
+	spec, ok := e.flow.SpecFor(act.FlowRef)
+	if !ok {
+		e.log("%s stale flow ref %q — config changed; dropping", tag(t), act.FlowRef)
+		return
+	}
+	if !spec.IsEnabled() {
+		return
+	}
+	// Flow-side filters (synthetic sources): a non-matching event is dropped
+	// before any dedup state is consumed.
+	if ok, err := e.flow.FilterMatch(t, spec); err != nil {
+		e.log("%s filter error: %v", tag(t), err)
+		return
+	} else if !ok {
+		return
+	}
+
+	// Scoped policy: trigger → connector → global, most specific wins. (No
+	// policy-level enabled — the global kill switch is the runtime
+	// `conductor pause`; connectors and triggers disable via their own
+	// `enabled:` fields, checked above and at source build.)
+	pol := e.policyFor(spec)
+	if pol.PauseLabel != nil && *pol.PauseLabel != "" && triggerHasLabel(t, *pol.PauseLabel) {
+		e.log("%s skipped — carries pause label %q", tag(t), *pol.PauseLabel)
+		return
+	}
+	if ig := pol.Ignore; ig != nil && len(ig.Users) > 0 {
+		if author, _ := t.Context["author"].(string); author != "" {
+			for _, u := range ig.Users {
+				if strings.EqualFold(u, author) {
+					e.log("%s skipped — author %q is ignored by policy", tag(t), author)
+					return
+				}
+			}
+		}
+	}
+	if q := pol.QuietHours; q != nil {
+		if in, until := flow.InQuietWindow(q, time.Now()); in {
+			if q.Hold == nil || *q.Hold {
+				delay := time.Until(until)
+				e.log("%s quiet hours — holding for %s", tag(t), delay.Round(time.Minute))
+				tt := t
+				time.AfterFunc(delay, func() { e.Emit(context.WithoutCancel(ctx), tt) })
+			} else {
+				e.log("%s quiet hours — dropped (hold: false)", tag(t))
+			}
+			return
+		}
+	}
+
+	shadow := e.cfg.Control.Shadow || (pol.Shadow != nil && *pol.Shadow) || (act.Shadow != nil && *act.Shadow)
+
+	// Consume dedup state now (mirrors the legacy multi-step branch): the
+	// event is committed to a run. NOT for grouped triggers: their events
+	// buffer in the in-memory Grouper, so recording here would make a
+	// restart drop the batch while dedup suppressed redelivery — silent
+	// loss. Grouped events record at flush time instead (see runBatch).
+	grouped := spec.Group != nil
+	if !shadow && !grouped {
+		if livenessGated(t.Kind) || t.Force {
+			_ = e.store.RecordAttempt(key, dkind, head)
+		} else {
+			_ = e.store.Record(key, dkind, t.Dedup, head)
+		}
+	}
+	// A comment was accepted for handling — raise the high-water mark
+	// (grouped comments raise it at flush, with the same reasoning).
+	if t.Kind == "new_comment" && !grouped {
+		if id := commentID(t); id > 0 {
+			_ = e.store.AdvanceCommentID(key, commentMarkKind(t), id)
+		}
+	}
+
+	if grouped {
+		gkey, err := flow.GroupKey(spec.Group.Key, t, e.flowBaseData(t))
+		if err != nil {
+			// A key that doesn't render (bad template, or one that renders
+			// empty — a typo'd path under missingkey=zero) must NOT share a
+			// bucket across events: fall back to per-event identity, so a
+			// broken key degrades to "no batching" instead of one
+			// cross-entity batch. Logged once per trigger, not per event.
+			if _, warned := e.groupWarn.LoadOrStore(act.FlowRef, true); !warned {
+				e.log("%s group key: %v — batching per-event", tag(t), err)
+			}
+			gkey = flow.EventIdentity(t)
+		}
+		full := act.FlowRef + "\x00" + gkey
+		e.grouper.Add(full, t, spec.Group.Window.D(), spec.Group.MaxWait.D())
+		return
+	}
+	e.notif.Emit(ctx, notify.EventDispatch, t, "workflow")
+	e.startFlowRun(ctx, t, spec, nil, shadow)
+}
+
+// startFlowRun takes a concurrency slot and runs one flow (or batch) in its
+// own goroutine.
+func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.TriggerSpec, batch *flow.Batch, shadow bool) {
+	if !shadow && !e.acquire(ctx) {
+		return
+	}
+	run := e.newFlowRun(t, spec, shadow)
+	go func() {
+		defer e.recoverDispatch(ctx, t, run, "flow dispatch")
+		if !shadow {
+			defer e.release()
+		}
+		e.flow.Run(ctx, run, t, spec, batch, shadow)
+	}()
+}
+
+// runBatch fires a grouped batch: the last event is the representative
+// trigger (freshest context/tokens), the whole burst rides under {{.group.*}}.
+func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
+	if len(events) == 0 {
+		return
+	}
+	t := events[len(events)-1]
+	ref, gkey, _ := strings.Cut(fullKey, "\x00")
+	spec, ok := e.flow.SpecFor(ref)
+	if !ok {
+		e.log("%s stale flow ref %q at batch fire — dropping %d events", tag(t), ref, len(events))
+		return
+	}
+	// Consume dedup state now — the flush-time half of what processFlow does
+	// for ungrouped triggers at accept time. Until this point nothing was
+	// recorded, so a restart that dropped the in-memory batch leaves the
+	// events redeliverable instead of silently suppressed. Redelivery within
+	// the window can buffer an event twice; duplicates drop here by signature.
+	events = e.recordBatch(events)
+	if len(events) == 0 {
+		return
+	}
+	t = events[len(events)-1]
+
+	// The grouper's fire callback carries no ctx of its own; tie the run to
+	// the engine's shutdown so a SATURATED acquire() can be interrupted
+	// instead of wedging the flush goroutine forever on a stopping daemon.
+	ctx := e.baseCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	e.notif.Emit(ctx, notify.EventDispatch, t, fmt.Sprintf("workflow (batch of %d)", len(events)))
+	e.log("%s grouped batch firing (%d events, key %q)", tag(t), len(events), gkey)
+
+	// Synchronous: the grouper's one-run-per-key guarantee depends on this
+	// call not returning until the run finishes.
+	if !e.acquire(ctx) {
+		return
+	}
+	defer e.release()
+	run := e.newFlowRun(t, spec, false)
+	e.flow.Run(ctx, run, t, spec, &flow.Batch{Key: gkey, Events: events}, false)
+}
+
+// recordBatch writes each grouped event's dedup/attempt/comment-mark state
+// as its batch fires, dropping intra-batch duplicates (the same signature
+// redelivered while buffered). Mirrors processFlow's accept-time recording.
+func (e *Engine) recordBatch(events []core.Trigger) []core.Trigger {
+	seen := map[string]bool{}
+	kept := make([]core.Trigger, 0, len(events))
+	for _, ev := range events {
+		key, dkind, head := ev.Key(), dedupKindOf(ev), ev.Target.HeadSHA
+		sig := key + "\x00" + dkind + "\x00" + ev.Dedup
+		if ev.Dedup != "" && seen[sig] {
+			continue
+		}
+		seen[sig] = true
+		kept = append(kept, ev)
+		if livenessGated(ev.Kind) || ev.Force {
+			_ = e.store.RecordAttempt(key, dkind, head)
+		} else {
+			_ = e.store.Record(key, dkind, ev.Dedup, head)
+		}
+		if ev.Kind == "new_comment" {
+			if cid := commentID(ev); cid > 0 {
+				_ = e.store.AdvanceCommentID(key, commentMarkKind(ev), cid)
+			}
+		}
+	}
+	return kept
+}
+
+// dedupKindOf mirrors process()'s per-variant dedup kind.
+func dedupKindOf(t core.Trigger) string {
+	if t.Variant != "" {
+		return t.Kind + "#" + t.Variant
+	}
+	return t.Kind
+}
+
+// policyFor merges the policy scopes that govern one trigger.
+func (e *Engine) policyFor(spec config.TriggerSpec) config.Policy {
+	var connPol *config.Policy
+	if ref, ok := e.cfg.ConnectorsMap[spec.Connector()]; ok {
+		connPol = ref.Policy
+	}
+	return config.MergePolicy(e.cfg.Policy, connPol, spec.Policy)
+}
+
+// retryPolicyFor resolves the policy that governs an action's retry/backoff
+// gate: the fully scoped merge for a flow trigger, the global block for a
+// legacy action (legacy integrations carry no policy of their own).
+func (e *Engine) retryPolicyFor(act config.Action) config.Policy {
+	if act.FlowRef != "" && e.flow != nil {
+		if spec, ok := e.flow.SpecFor(act.FlowRef); ok {
+			return e.policyFor(spec)
+		}
+	}
+	return config.MergePolicy(e.cfg.Policy)
+}
+
+// flowBaseData mirrors the runner's base scope for group-key rendering.
+func (e *Engine) flowBaseData(t core.Trigger) map[string]any {
+	d := map[string]any{
+		"repo": t.Target.Repo, "owner": t.Target.Owner, "name": t.Target.Name,
+		"pr": t.Target.PR, "issue": t.Target.Issue, "number": t.Target.Number,
+		"head": t.Target.HeadSHA, "base": t.Target.BaseRef, "url": t.Target.HTMLURL,
+		"kind": t.Kind, "title": t.Title,
+	}
+	for k, v := range t.Context {
+		if _, ok := d[k]; !ok {
+			d[k] = v
+		}
+	}
+	return d
+}
+
+// newFlowRun persists a resumable run for a flow trigger (tokens stripped,
+// exactly like legacy workflow runs).
+func (e *Engine) newFlowRun(t core.Trigger, spec config.TriggerSpec, shadow bool) store.WorkflowRun {
+	run := store.WorkflowRun{
+		ID:       "flow:" + t.Kind + ":" + t.Key(),
+		Source:   t.Source,
+		Instance: t.Instance,
+		Kind:     t.Kind,
+		Repo:     t.Target.Repo,
+		Number:   t.Target.Number,
+		Outputs:  map[string]map[string]any{},
+	}
+	tp := t
+	act, _ := tp.Action.(config.Action)
+	tp.Action = nil
+	tp.Context = sanitizeContext(t.Context)
+	run.Trigger, _ = json.Marshal(tp)
+	run.Action, _ = json.Marshal(act)
+	if shadow || e.store == nil {
+		run.ID = ""
+		return run
+	}
+	_ = e.store.PutRun(run)
+	return run
+}
+
+// resumeFlowRun resumes one persisted flow run (the FlowRef path of
+// ResumeWorkflows): re-find the spec, re-mint tokens, continue after the last
+// checkpointed step.
+func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.Trigger, act config.Action) {
+	spec, ok := e.flow.SpecFor(act.FlowRef)
+	if !ok {
+		e.log("engine: resume %s: trigger no longer in config — dropping", r.ID)
+		_ = e.store.DeleteRun(r.ID)
+		return
+	}
+	t.Action = act
+	e.log("%s resuming flow from step %d", tag(t), r.StepIndex)
+	e.store.Audit(map[string]any{"event": "resume", "repo": t.Target.Repo,
+		"number": t.Target.Number, "kind": t.Kind, "step_index": r.StepIndex})
+	if !e.acquire(ctx) {
+		return
+	}
+	go func() {
+		defer e.recoverDispatch(ctx, t, r, "flow resume")
+		defer e.release()
+		e.flow.Run(ctx, r, t, spec, nil, false)
+	}()
+}
+
+// askChannelFor resolves the hand-off channel a background step presents on:
+// an ask-capable connector by name, then the legacy handoffs: registry, then
+// nil (runtime-native — the notify-to-open-paseo fallback).
+func (e *Engine) askChannelFor(name string) handoff.Channel {
+	if name != "" && e.connectors != nil {
+		if in, ok := e.connectors.Get(name); ok && in.Impl != nil {
+			if ac, isAsk := in.Impl.(connector.AskChanneler); isAsk {
+				ch, err := ac.AskChannel(in.DefaultOptions)
+				if err != nil {
+					e.log("handoff connector %q: %v", name, err)
+					return nil
+				}
+				return ch
+			}
+		}
+	}
+	if e.handoffs != nil {
+		ch, err := e.handoffs.Resolve(name)
+		if err != nil {
+			e.log("handoff %q: %v", name, err)
+			return nil
+		}
+		return ch
+	}
+	return nil
+}
+
+// flowAgentServices builds the engine-owned services the flow runner needs
+// for agent/command steps: runtime resolution, tokens, guidance, and the
+// background review hand-off.
+func (e *Engine) flowAgentServices() flow.AgentServices {
+	return flow.AgentServices{
+		Dispatch: func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+			runner := Dispatcher(e.disp)
+			if req.Action.Type == "agent" {
+				r, err := e.runnerFor(req.Profile)
+				if err != nil {
+					return dispatch.RunRef{}, err
+				}
+				runner = r
+			}
+			req.Author = e.author
+			return e.dispatchAgent(ctx, runner, req)
+		},
+		Tokens: func(t core.Trigger) dispatch.Tokens {
+			appTok, _ := t.Context["app_token"].(string)
+			if e.readTok != nil {
+				if tok, err := e.readTok(); err == nil && tok != "" {
+					appTok = tok
+				}
+			}
+			userTok := ""
+			if e.userTok != nil {
+				userTok, _ = e.userTok()
+			}
+			return dispatch.Tokens{App: appTok, User: userTok}
+		},
+		Guidance: func(agentName string, p config.AgentProfile) string {
+			return e.agentGuidance(p) + e.outcomeGuidance(agentName, p)
+		},
+		Memory: e.memoryPrompt,
+		// Revise is the supervise loop's round-trip (#36 §11): the failure
+		// context goes to the authoring agent's bound session (§10) and the
+		// captured reply carries the revised plan. No affinity, no session:
+		// profile, or no binding → ok=false and the plan escalates instead.
+		Revise: func(ctx context.Context, agentName string, t core.Trigger, prompt string) (string, bool, error) {
+			if e.affinity == nil {
+				return "", false, nil
+			}
+			return e.affinity.Followup(ctx, agentName, e.cfg.Agents[agentName], t, prompt)
+		},
+		Background: func(ctx context.Context, t core.Trigger, stepID, agentName string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string) {
+			e.hold.Add(ref.AgentID)
+			ch := e.askChannelFor(handoffConn)
+			if ch != nil && e.broker != nil && ref.AgentID != "" {
+				e.startReviewHandoff(ctx, t, stepID, agentName, p, ref, ch)
+				return
+			}
+			e.notif.Emit(ctx, notify.EventNeedsInput, t,
+				fmt.Sprintf("interactive agent for %q is live (agent %s) — open it to review/refine", stepID, ref.AgentID))
+		},
+		Archive: func(agentID string) {
+			if e.affinityOwns(agentID) {
+				return // a keyed session outlives the step that used it
+			}
+			go func() { _ = e.disp.Archive(context.Background(), agentID) }()
+		},
+		// The spend-budget layer (#36 §14): caps checked before each agent
+		// step dispatches, usage charged/audited after it returns.
+		CheckBudget: func(agentName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
+			res, berr := e.checkSpendBudget(agentName, wf, wfScope, est)
+			if berr != nil {
+				e.store.Audit(map[string]any{"event": "budget_shed",
+					"scope": berr.Scope, "reason": berr.Reason, "agent": agentName})
+				return nil, berr
+			}
+			return res, nil
+		},
+		CancelBudget: func(res *cost.Reservation) { e.meter.Cancel(res) },
+		RecordUsage: func(t core.Trigger, agentName, stepID, runID, wfScope, savedWF string, res *cost.Reservation, u cost.Usage) {
+			e.recordUsage(t, agentName, stepID, runID, wfScope, res, u)
+			// The outcome loop's engagement (#36 §18): this agent acted on
+			// this target; a later terminal signal resolves it.
+			e.store.RecordEngagement(t.Target.Repo, t.Target.Number, store.Engagement{
+				Agent: agentName, Workflow: wfScope, SavedWorkflow: savedWF,
+				Kind: t.Kind, Run: runID, CostUSD: u.CostUSD, Tokens: u.TotalTokens,
+			})
+		},
+		FollowUp: e.agentFollowUp,
+	}
+}
+
+// sendCapturer is the optional Runner capability behind gate revisions: send
+// a follow-up prompt to a live agent and capture the completed turn's output
+// (the paseo dispatcher's `paseo send --json`).
+type sendCapturer interface {
+	SendCapture(ctx context.Context, id, prompt string) (string, error)
+}
+
+// agentFollowUp routes a gate-revise prompt (#36 §16) back to the SAME
+// agent: a session-bound profile (§10) goes through affinity; a paseo agent
+// takes a captured follow-up turn. ok=false when neither applies — the gate
+// escalates instead of revising (an honest "this runtime can't revise").
+func (e *Engine) agentFollowUp(ctx context.Context, agentID, agentName string, t core.Trigger, prompt string) (string, bool, error) {
+	profile := e.cfg.Agents[agentName]
+	if e.affinity != nil && profile.Session != nil {
+		return e.affinity.Followup(ctx, agentName, profile, t, prompt)
+	}
+	if agentID == "" {
+		return "", false, nil
+	}
+	runner, err := e.runnerFor(profile)
+	if err != nil {
+		return "", false, err
+	}
+	if sc, ok := runner.(sendCapturer); ok {
+		out, serr := sc.SendCapture(ctx, agentID, prompt)
+		if serr != nil {
+			return "", false, serr
+		}
+		return out, true, nil
+	}
+	return "", false, nil
+}

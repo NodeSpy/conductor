@@ -12,9 +12,11 @@ BIN_NAME="conductor"
 BIN="${BIN_DIR}/${BIN_NAME}"
 
 mkdir -p "$BIN_DIR" "$CFG_DIR" "$STATE_DIR"
+# The default split layout: each section imports from its conf.d/ folder.
+mkdir -p "$CFG_DIR"/conf.d/{connectors,runtimes,hosts,agents,workflows,triggers}
 
 echo "==> building $BIN_NAME"
-(cd "$here" && CGO_ENABLED=0 go build -o "$BIN" ./cmd/paseo-conductor)
+(cd "$here" && CGO_ENABLED=0 go build -o "$BIN" ./cmd/conductor)
 
 install -m 0644 "$here/config.example.yaml" "$CFG_DIR/config.example.yaml"
 if [ ! -f "$CFG_DIR/config.yaml" ]; then

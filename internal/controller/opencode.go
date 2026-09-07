@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // opencodeController drives opencode over its native HTTP server (`opencode
@@ -29,6 +30,8 @@ import (
 // a test injects a server URL directly.
 type opencodeController struct {
 	name string
+	host string // hosts: entry the server launches on over SSH ("" = local)
+	iso  *config.IsolationConfig
 	prov Provisioner
 	dial opencodeDialer // injectable; nil → spawn `opencode serve`
 	hc   *http.Client
@@ -38,18 +41,38 @@ type opencodeController struct {
 // applied, plus a cleanup that stops any process it started.
 type opencodeDialer func(ctx context.Context, cwd string, env []string) (baseURL string, cleanup func() error, err error)
 
-// newOpencodeController builds an opencode native controller.
-func newOpencodeController(name string, _ config.ControllerConfig, prov Provisioner) *opencodeController {
-	return &opencodeController{
+// newOpencodeController builds an opencode native controller. With host: set,
+// `opencode serve` launches on that box over SSH — still bound to the REMOTE
+// 127.0.0.1 — and every HTTP request reaches it through an `ssh -W` stdio
+// forward (HostDial), so no port is exposed on either machine.
+func newOpencodeController(name string, cc config.ControllerConfig, prov Provisioner) *opencodeController {
+	c := &opencodeController{
 		name: name,
+		host: cc.Host,
+		iso:  cc.Isolation,
 		prov: prov,
 		hc:   &http.Client{Timeout: 0}, // no client timeout: an agent turn can run long
 	}
+	if cc.Host != "" {
+		host := cc.Host
+		c.hc = &http.Client{Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+				if HostDial == nil {
+					return nil, fmt.Errorf("opencode: host %q configured but no host dialer is wired", host)
+				}
+				return HostDial(ctx, host, addr)
+			},
+			// One ssh subprocess per connection; keep-alives would pin them.
+			DisableKeepAlives: true,
+		}}
+	}
+	return c
 }
 
-func (c *opencodeController) Name() string         { return c.name }
-func (c *opencodeController) Model() SessionModel  { return ModelResumable }
-func (c *opencodeController) Transport() Transport { return TransportNative }
+func (c *opencodeController) Name() string           { return c.name }
+func (c *opencodeController) ConfiguredHost() string { return c.host }
+func (c *opencodeController) Model() SessionModel    { return ModelResumable }
+func (c *opencodeController) Transport() Transport   { return TransportNative }
 
 // Initialize reports opencode's native capabilities. A session is resumable by id,
 // runs in the conductor-provisioned worktree, accepts follow-up turns, and can be
@@ -80,12 +103,39 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 	if err != nil {
 		return nil, fmt.Errorf("opencode: render prompt: %w", err)
 	}
+	// The conductor tool server (memory + skill verbs + broker) rides
+	// opencode's own MCP config: a per-session config file handed to the
+	// `opencode serve` process via OPENCODE_CONFIG (see toolConfigFile).
+	// Local sessions only — buildToolServer returns nil for remote hosts.
+	var toolCfg string
+	if ts := buildToolServer(spec, c.host); ts != nil {
+		toolCfg, err = writeOpencodeToolConfig(ts)
+		if err != nil {
+			return nil, fmt.Errorf("opencode: tool config: %w", err)
+		}
+		env = append(env, "OPENCODE_CONFIG="+toolCfg)
+	}
+	removeToolCfg := func() {
+		if toolCfg != "" {
+			_ = os.Remove(toolCfg)
+		}
+	}
 
 	sctx, scancel := context.WithCancel(context.Background())
-	baseURL, cleanup, err := c.connect(sctx, spec.Cwd, env)
+	baseURL, cleanup, err := c.connect(sctx, spec.Cwd, env, launchOptsFor(c.iso, spec.Request))
 	if err != nil {
+		removeToolCfg()
 		scancel()
 		return nil, err
+	}
+	// The config file must outlive the serve process, not the dispatch call.
+	inner := cleanup
+	cleanup = func() error {
+		defer removeToolCfg()
+		if inner != nil {
+			return inner()
+		}
+		return nil
 	}
 	cl := &opencodeClient{baseURL: strings.TrimRight(baseURL, "/"), hc: c.hc}
 
@@ -111,9 +161,9 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 }
 
 // ResumeSession re-binds an existing opencode session by id (resumable by id).
-func (c *opencodeController) ResumeSession(ctx context.Context, id string, _ Handler) (Session, error) {
+func (c *opencodeController) ResumeSession(ctx context.Context, id string, agentAuthored bool, _ Handler) (Session, error) {
 	sctx, scancel := context.WithCancel(context.Background())
-	baseURL, cleanup, err := c.connect(sctx, "", nil)
+	baseURL, cleanup, err := c.connect(sctx, "", nil, resumeOpts(c.iso, agentAuthored))
 	if err != nil {
 		scancel()
 		return nil, err
@@ -122,35 +172,94 @@ func (c *opencodeController) ResumeSession(ctx context.Context, id string, _ Han
 	return &opencodeSession{id: id, cl: cl, cleanup: cleanup, cancel: scancel, ctx: sctx}, nil
 }
 
-func (c *opencodeController) connect(ctx context.Context, cwd string, env []string) (string, func() error, error) {
+func (c *opencodeController) connect(ctx context.Context, cwd string, env []string, opt launchOpts) (string, func() error, error) {
 	if c.dial != nil {
 		return c.dial(ctx, cwd, env)
 	}
-	return spawnOpencode(ctx, cwd, env)
+	return spawnOpencode(ctx, c.host, cwd, env, opt)
+}
+
+// writeOpencodeToolConfig writes a per-session opencode config (0600, outside
+// the repo worktree) declaring the conductor tool server as a local MCP
+// server, for delivery via OPENCODE_CONFIG on the `opencode serve` process.
+// The skill claim code rides the server's environment block — never argv —
+// exactly as on the ACP path; it is single-use with a 2-minute TTL, so the
+// file's sensitivity dies at the claim exchange. Note OPENCODE_CONFIG names
+// THE config for that server process: conductor-launched opencode sessions
+// see this file rather than a project opencode.json (documented on the
+// Agent-Skill wiki page).
+func writeOpencodeToolConfig(ts *toolServerSpec) (string, error) {
+	cfg := map[string]any{
+		"mcp": map[string]any{
+			"conductor-memory": map[string]any{
+				"type":        "local",
+				"command":     append([]string{ts.Command}, ts.Args...),
+				"enabled":     true,
+				"environment": ts.Env,
+			},
+		},
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp("", "conductor-opencode-*.json")
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 // spawnOpencode starts `opencode serve` in the worktree with the identity env and
 // returns the URL it advertises on stdout. The process lifetime is owned by the
-// returned cleanup (session-scoped).
-func spawnOpencode(_ context.Context, cwd string, env []string) (string, func() error, error) {
-	cmd := exec.Command("opencode", "serve", "--hostname", "127.0.0.1", "--port", "0")
-	if cwd != "" {
-		cmd.Dir = cwd
+// returned cleanup (session-scoped). With host set, the launch wraps over SSH
+// (prepareLaunch): the server binds the REMOTE 127.0.0.1, its stdout — with
+// the advertised URL — streams back over the ssh channel, and the controller's
+// HTTP client reaches it via ssh -W. A locally-provisioned worktree path is
+// not meaningful on the remote box, so remote sessions want checkout: none or
+// a remote-existing directory.
+func spawnOpencode(_ context.Context, host, cwd string, env []string, opt launchOpts) (string, func() error, error) {
+	argv := []string{"opencode", "serve", "--hostname", "127.0.0.1", "--port", "0"}
+	opt, revoke := withEgressRevoke(opt)
+	argv, localDir, localEnv, remote, err := prepareLaunch(host, cwd, env, argv, opt)
+	if err != nil {
+		revoke()
+		return "", nil, err
 	}
-	cmd.Env = append(os.Environ(), env...)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	if localDir != "" {
+		cmd.Dir = localDir
+	}
+	if !remote {
+		cmd.Env = append(os.Environ(), localEnv...)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		revoke()
 		return "", nil, err
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
+		revoke()
 		return "", nil, fmt.Errorf("opencode: start serve: %w", err)
 	}
+	// Background server owned by cleanup, not ctx — retire the egress
+	// credential at session end (#36 iso-review round 2, item 4).
 	cleanup := func() error {
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
 		_ = cmd.Wait()
+		revoke()
 		return nil
 	}
 	url, err := scanOpencodeURL(stdout)

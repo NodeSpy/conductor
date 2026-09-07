@@ -43,13 +43,26 @@ type Store struct {
 	path         string
 	runsPath     string
 	sessionsPath string
+	affinityPath string
+	plansPath    string
 	ttl          time.Duration
 	maxPRs       int
 	recs         map[string]*Record
 	runs         map[string]*WorkflowRun
 	sessions     map[string]*SessionRecord
+	affinity     map[string]*AffinityRecord
+	plans        map[string]*PlanRecord
 	audit        *auditLog
 	now          func() time.Time
+
+	// Run-history retention (#36 §20) — see history.go.
+	historyMaxAge  time.Duration
+	historyMaxRuns int
+	historyPruned  time.Time
+
+	// Outcome-learning state (#36 §18) — see outcomes.go.
+	engagements  map[string][]Engagement
+	outcomeStats map[string]map[string]int
 }
 
 // Options configure a Store.
@@ -59,6 +72,10 @@ type Options struct {
 	TTL          time.Duration
 	MaxPRs       int
 	AuditMaxSize int64
+	// HistoryMaxAge / HistoryMaxRuns bound the run-history directory
+	// (#36 §20). Zero values take the package defaults.
+	HistoryMaxAge  time.Duration
+	HistoryMaxRuns int
 }
 
 // Open loads (or creates) the state file and prepares the audit log.
@@ -67,12 +84,25 @@ func Open(o Options) (*Store, error) {
 		path:         o.StatePath,
 		runsPath:     filepath.Join(filepath.Dir(o.StatePath), "runs.json"),
 		sessionsPath: filepath.Join(filepath.Dir(o.StatePath), "sessions.json"),
+		affinityPath: filepath.Join(filepath.Dir(o.StatePath), "affinity.json"),
+		plansPath:    filepath.Join(filepath.Dir(o.StatePath), "plans.json"),
 		ttl:          o.TTL,
 		maxPRs:       o.MaxPRs,
 		recs:         map[string]*Record{},
 		runs:         map[string]*WorkflowRun{},
 		sessions:     map[string]*SessionRecord{},
+		affinity:     map[string]*AffinityRecord{},
+		plans:        map[string]*PlanRecord{},
 		now:          time.Now,
+
+		historyMaxAge:  o.HistoryMaxAge,
+		historyMaxRuns: o.HistoryMaxRuns,
+	}
+	if s.historyMaxAge <= 0 {
+		s.historyMaxAge = DefaultHistoryMaxAge
+	}
+	if s.historyMaxRuns == 0 {
+		s.historyMaxRuns = DefaultHistoryMaxRuns
 	}
 	if err := os.MkdirAll(filepath.Dir(o.StatePath), 0o755); err != nil {
 		return nil, err
@@ -101,6 +131,23 @@ func Open(o Options) (*Store, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
+	if b, err := os.ReadFile(s.affinityPath); err == nil {
+		_ = json.Unmarshal(b, &s.affinity)
+		if s.affinity == nil {
+			s.affinity = map[string]*AffinityRecord{}
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	if b, err := os.ReadFile(s.plansPath); err == nil {
+		_ = json.Unmarshal(b, &s.plans)
+		if s.plans == nil {
+			s.plans = map[string]*PlanRecord{}
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	s.loadOutcomeState()
 	a, err := openAudit(o.AuditPath, o.AuditMaxSize)
 	if err != nil {
 		return nil, err
@@ -282,6 +329,18 @@ func (s *Store) Delete(key string) error {
 	return s.save()
 }
 
+// SetAuditRedactor wires a string redactor applied to every audit entry's
+// values at write time — the backstop no caller can bypass (main wires the
+// secrets resolver's Redact once the stack exists).
+func (s *Store) SetAuditRedactor(red func(string) string) {
+	if s.audit == nil {
+		return
+	}
+	s.audit.mu.Lock()
+	s.audit.redact = red
+	s.audit.mu.Unlock()
+}
+
 // Audit appends an entry to the audit log.
 func (s *Store) Audit(entry map[string]any) {
 	if s.audit == nil {
@@ -310,7 +369,7 @@ func (s *Store) save() error {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

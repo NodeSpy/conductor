@@ -27,6 +27,10 @@ func (c *paseoController) Name() string         { return c.name }
 func (c *paseoController) Model() SessionModel  { return ModelNative }
 func (c *paseoController) Transport() Transport { return TransportNative }
 
+// SessionPersistent: a paseo agent survives between dispatches by id when a
+// follow-up sender (`paseo send`) is wired — the session-affinity gate.
+func (c *paseoController) SessionPersistent() bool { return c.sender != nil }
+
 // Initialize reports paseo's native capabilities. paseo owns the whole session
 // lifecycle, accepts a conductor-provisioned worktree as the agent cwd, and can
 // hand a live agent off to a human to drive.
@@ -66,7 +70,7 @@ func (c *paseoController) NewSession(ctx context.Context, spec Spec, _ Handler) 
 
 // ResumeSession re-attaches to a paseo agent by id. There's no re-attach step —
 // a follow-up is just `paseo send` — so this simply binds the id.
-func (c *paseoController) ResumeSession(_ context.Context, id string, _ Handler) (Session, error) {
+func (c *paseoController) ResumeSession(_ context.Context, id string, _ bool, _ Handler) (Session, error) {
 	return &paseoSession{id: id, sender: c.sender}, nil
 }
 
@@ -81,15 +85,23 @@ type paseoSession struct {
 func (s *paseoSession) ID() string { return s.id }
 
 // Prompt delivers a follow-up turn to the live agent (`paseo send`) and returns a
-// single-element stream with the terminal Update.
+// single-element stream with the terminal Update. A capture-capable sender
+// waits for the turn and carries its output on the Update (the supervise
+// loop's revise round-trip); a plain sender fire-and-forgets.
 func (s *paseoSession) Prompt(ctx context.Context, msg Message) (<-chan Update, error) {
 	ch := make(chan Update, 1)
 	if s.sender == nil {
 		close(ch)
 		return ch, ErrNoFollowup
 	}
-	err := s.sender.Send(ctx, s.id, msg.Text)
-	ch <- Update{Kind: UpdateDone, AgentID: s.id, Err: err}
+	var out string
+	var err error
+	if cs, ok := s.sender.(CaptureSender); ok && msg.Capture {
+		out, err = cs.SendCapture(ctx, s.id, msg.Text)
+	} else {
+		err = s.sender.Send(ctx, s.id, msg.Text)
+	}
+	ch <- Update{Kind: UpdateDone, AgentID: s.id, Output: out, Err: err}
 	close(ch)
 	return ch, err
 }

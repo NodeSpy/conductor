@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // as1 wraps single actions into one-variant ActionSets, keeping the many
@@ -117,10 +117,10 @@ func TestProjectRewrite(t *testing.T) {
 		repo    string
 		want    string // expected Target.Project ("" = falls back to Repo)
 	}{
-		{"org remap normalizes case", ProjectRewrite{Org: "ednition"}, "EdnitionCode/RosterStream", "ednition/rosterstream"},
+		{"org remap normalizes case", ProjectRewrite{Org: "acme"}, "AcmeCorp/Widget", "acme/widget"},
 		{"noop when already normalized", ProjectRewrite{Org: "acme"}, "acme/widget", ""},
 		{"noop is case-insensitive", ProjectRewrite{Org: "acme"}, "Acme/Widget", ""},
-		{"inactive rewrite", ProjectRewrite{}, "EdnitionCode/RosterStream", ""},
+		{"inactive rewrite", ProjectRewrite{}, "AcmeCorp/Widget", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -137,14 +137,14 @@ func TestProjectRewrite(t *testing.T) {
 func TestProjectMapWinsOverRewrite(t *testing.T) {
 	// An explicit per-repo mapping takes precedence over the org-wide rewrite.
 	cfg := baseConfig()
-	cfg.ProjectMap = map[string]string{"EdnitionCode/Special": "custom/project"}
-	cfg.ProjectRewrite = ProjectRewrite{Org: "ednition"}
+	cfg.ProjectMap = map[string]string{"AcmeCorp/Special": "custom/project"}
+	cfg.ProjectRewrite = ProjectRewrite{Org: "acme"}
 	g := newTestIntegration(t, cfg)
-	if got := g.mapProject("EdnitionCode/Special"); got != "custom/project" {
+	if got := g.mapProject("AcmeCorp/Special"); got != "custom/project" {
 		t.Fatalf("explicit map should win, got %q", got)
 	}
 	// A repo without an explicit entry still gets the rewrite.
-	if got := g.mapProject("EdnitionCode/Other"); got != "ednition/other" {
+	if got := g.mapProject("AcmeCorp/Other"); got != "acme/other" {
 		t.Fatalf("rewrite should apply to unlisted repos, got %q", got)
 	}
 }

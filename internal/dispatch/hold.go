@@ -46,6 +46,20 @@ func (h *HoldSet) Add(id string) {
 	h.mu.Unlock()
 }
 
+// Remove drops an agent id from the set (session-affinity eviction hands the
+// agent back to the reaper's normal idle handling). No-op when absent.
+func (h *HoldSet) Remove(id string) {
+	if h == nil || id == "" {
+		return
+	}
+	h.mu.Lock()
+	if h.m[id] {
+		delete(h.m, id)
+		h.save()
+	}
+	h.mu.Unlock()
+}
+
 // Has reports whether an agent id is held.
 func (h *HoldSet) Has(id string) bool {
 	if h == nil {
@@ -113,7 +127,7 @@ func (h *HoldSet) save() {
 		return
 	}
 	tmp := h.path + ".tmp"
-	if os.WriteFile(tmp, b, 0o644) == nil {
+	if os.WriteFile(tmp, b, 0o600) == nil {
 		_ = os.Rename(tmp, h.path)
 	}
 }

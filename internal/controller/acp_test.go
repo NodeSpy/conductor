@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/NodeSpy/paseo-conductor/internal/acp"
-	"github.com/NodeSpy/paseo-conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/acp"
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // fakeACPAgent speaks the agent side of ACP over a Conn — the same pipe double
@@ -22,6 +22,7 @@ type fakeACPAgent struct {
 
 	mu        sync.Mutex
 	gotCwd    string
+	gotMcp    []acp.McpServer
 	gotPrompt string
 	outcome   *acp.RequestPermissionOutcome
 }
@@ -35,6 +36,7 @@ func (a *fakeACPAgent) HandleRequest(ctx context.Context, method string, params 
 		_ = json.Unmarshal(params, &p)
 		a.mu.Lock()
 		a.gotCwd = p.Cwd
+		a.gotMcp = p.McpServers
 		a.mu.Unlock()
 		return acp.NewSessionResult{SessionID: a.sessionID}, nil
 	case acp.MethodPrompt:

@@ -1,0 +1,31 @@
+{
+  "action": "created",
+  "installation": {
+    "id": 42
+  },
+  "repository": {
+    "full_name": "conn/cask",
+    "name": "cask",
+    "default_branch": "main",
+    "owner": {
+      "login": "conn"
+    }
+  },
+  "issue": {
+    "number": 1,
+    "html_url": "https://forge.test/conn/cask/pull/1",
+    "user": {
+      "login": "conductor-user"
+    },
+    "pull_request": {
+      "url": "https://forge.test/conn/cask/pull/1"
+    }
+  },
+  "comment": {
+    "id": 9301,
+    "user": {
+      "login": "a-reviewer"
+    },
+    "body": "please review K7"
+  }
+}

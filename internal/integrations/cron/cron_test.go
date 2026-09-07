@@ -2,11 +2,13 @@ package cron
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/NodeSpy/paseo-conductor/internal/config"
-	"github.com/NodeSpy/paseo-conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 func build(t *testing.T, cfg Config) *Integration {
@@ -92,5 +94,20 @@ func TestRunOnStartEmits(t *testing.T) {
 
 	if len(got) != 1 || got[0].Kind != "boot" {
 		t.Fatalf("run_on_start should emit exactly the boot trigger, got %+v", got)
+	}
+}
+
+func TestNameActionsAndDecodeError(t *testing.T) {
+	g := build(t, Config{Schedules: []Schedule{{Name: "s", Every: config.Duration(time.Hour),
+		Action: config.Action{Type: "command", Command: []string{"x"}}}}})
+	if g.Name() != "chores" {
+		t.Fatalf("Name = %q", g.Name())
+	}
+	refs := g.Actions()
+	if len(refs) != 1 || !strings.Contains(refs[0].Where, `schedule "s"`) {
+		t.Fatalf("Actions: %+v", refs)
+	}
+	if _, err := newIntegration("bad", func(any) error { return errors.New("boom") }); err == nil {
+		t.Fatal("decode error must surface")
 	}
 }
