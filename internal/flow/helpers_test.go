@@ -373,6 +373,16 @@ func (s *fakeStore) lastHistory() (store.RunHistory, bool) {
 	return s.history[len(s.history)-1], true
 }
 
+// allHistory returns a snapshot of every persisted history write, in the order
+// the store received them.
+func (s *fakeStore) allHistory() []store.RunHistory {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]store.RunHistory, len(s.history))
+	copy(out, s.history)
+	return out
+}
+
 func (s *fakeStore) PutRun(r store.WorkflowRun) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

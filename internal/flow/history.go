@@ -28,10 +28,18 @@ type histKey struct{}
 type histRec struct {
 	r *Runner
 
-	mu    sync.Mutex
-	rec   store.RunHistory
-	byID  map[string]int // step id → index into rec.Steps
-	saved bool           // at least one persist succeeded (best-effort trail)
+	mu   sync.Mutex
+	rec  store.RunHistory
+	byID map[string]int // step id → index into rec.Steps
+
+	// wmu serializes persist's snapshot-and-write. The recorder is shared
+	// across a run's concurrent sub-agents (team workers call setCost/setInputs
+	// on it in parallel), so persist must be safe to call concurrently: without
+	// this a stale snapshot could reach disk AFTER a fresher one (lost update),
+	// and saved would race. Held across both the snapshot and PutHistory so the
+	// on-disk write order matches snapshot order.
+	wmu   sync.Mutex
+	saved bool // at least one persist succeeded (best-effort trail); guarded by wmu
 }
 
 // histFrom reads the recorder off the context (nil outside a recorded run).
@@ -178,6 +186,12 @@ func (h *histRec) finish(status, errStr, failedStep string, acc *costAcc) {
 // persist writes the record (best-effort: a failing history write never
 // fails the run — the audit still has the step events).
 func (h *histRec) persist() {
+	// Serialize the whole snapshot-and-write. Steps only ever grow, so taking
+	// the snapshot under wmu makes disk writes monotonic — a persist that runs
+	// concurrently with a later mutation still writes the latest committed
+	// steps, and two persists can't reorder their writes to drop a step.
+	h.wmu.Lock()
+	defer h.wmu.Unlock()
 	h.mu.Lock()
 	rec := h.rec
 	rec.Steps = append([]store.StepRecord(nil), h.rec.Steps...)

@@ -2,9 +2,12 @@ package flow
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/store"
 )
@@ -113,6 +116,68 @@ steps:
 	opts, _ := step.Inputs["options"].(map[string]any)
 	if text, _ := opts["text"].(string); strings.Contains(text, "s3kr1t-value") {
 		t.Fatalf("secret leaked into history inputs: %q", text)
+	}
+}
+
+// TestConcurrentStepDoneNoLostUpdate is the F5 regression (#36 §146): the run
+// recorder is shared across a run's concurrent sub-agents (team workers mutate
+// it in parallel via setCost/setInputs), so persist must be safe to call
+// concurrently. Before the fix, persist snapshotted under the lock then wrote
+// to the store OUTSIDE it and touched `saved` with no lock at all — two
+// concurrent persists could reorder their writes (a stale snapshot landing
+// after a fresher one drops steps) and raced `saved`. Firing many stepDone
+// calls at once must leave every step on disk, with `-race` proving `saved` is
+// no longer racy.
+func TestConcurrentStepDoneNoLostUpdate(t *testing.T) {
+	cfg := loadConfig(t, histCfg)
+	reg := buildRegistry(t, cfg)
+	rig := newTestRunner(t, cfg, reg)
+
+	spec := config.TriggerSpec{On: "svc.ping", Name: "nightly"}
+	run := store.WorkflowRun{ID: "ping:conc", Outputs: map[string]map[string]any{}}
+	_, h := rig.Runner.beginHistory(context.Background(), run, newTrigger("ping", nil), spec, false)
+	if h == nil {
+		t.Fatal("no recorder created")
+	}
+
+	const n = 64
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id := fmt.Sprintf("s%d", i)
+			h.stepStart(id, i)
+			h.stepDone(id, i, config.Step{}, "ok", nil, "", false)
+		}(i)
+	}
+	wg.Wait()
+
+	// The final on-disk record must carry every step — a lost update would drop
+	// one whose fresh snapshot got overwritten by a stale later write.
+	rec, ok := rig.Store.lastHistory()
+	if !ok {
+		t.Fatal("no history recorded")
+	}
+	if len(rec.Steps) != n {
+		t.Fatalf("lost update: final record has %d/%d steps", len(rec.Steps), n)
+	}
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("s%d", i)
+		if s, ok := rec.Step(id); !ok || s.Status != "ok" {
+			t.Fatalf("step %s missing/incomplete in final record: %+v (ok=%v)", id, s, ok)
+		}
+	}
+	// Every persisted write is a prefix-consistent, monotonic snapshot: no write
+	// ever regresses below a fuller one already flushed.
+	max := 0
+	for _, w := range rig.Store.allHistory() {
+		if len(w.Steps) < max {
+			t.Fatalf("stale write: a persist wrote %d steps after %d were already flushed", len(w.Steps), max)
+		}
+		if len(w.Steps) > max {
+			max = len(w.Steps)
+		}
 	}
 }
 
