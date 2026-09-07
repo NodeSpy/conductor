@@ -435,6 +435,39 @@ policy:
 	}
 }
 
+// CRITICAL regression (H3): background: and handoff: escape the gate on agent
+// output the same way a weakened gate: would — a background step runs a live
+// agent OUTSIDE the synchronous run (nothing returns for the gate to hold), and
+// handoff: diverts the review draft to an agent-nominated channel. An emitted
+// plan may set neither; both guardPlan and ValidatePlanSteps refuse them.
+func TestAgentAuthoredStepsCannotBackgroundOrHandoff(t *testing.T) {
+	cfg := loadConfig(t, gateCfg+`
+policy:
+  agent_authored:
+    allow: [ agent, team, svc.post ]
+`)
+	reg := buildRegistry(t, cfg)
+	pol := cfg.Policy.AgentAuthored
+
+	bg := []config.Step{{ID: "s", Type: "agent", Agent: "fixer", Prompt: "p", Background: true}}
+	ho := []config.Step{{ID: "s", Type: "agent", Agent: "fixer", Prompt: "p", Handoff: "phone"}}
+
+	// guardPlan (the security guard) rejects both outright.
+	if _, err := guardPlan(cfg, reg, pol, bg); err == nil || !strings.Contains(err.Error(), "may not set background:") {
+		t.Fatalf("backgrounded plan step (guardPlan): %v", err)
+	}
+	if _, err := guardPlan(cfg, reg, pol, ho); err == nil || !strings.Contains(err.Error(), "may not set handoff:") {
+		t.Fatalf("handed-off plan step (guardPlan): %v", err)
+	}
+	// ValidatePlanSteps refuses them independently (no plan path admits one).
+	if err := ValidatePlanSteps(cfg, reg, bg); err == nil || !strings.Contains(err.Error(), "may not set background:") {
+		t.Fatalf("backgrounded plan step (ValidatePlanSteps): %v", err)
+	}
+	if err := ValidatePlanSteps(cfg, reg, ho); err == nil || !strings.Contains(err.Error(), "may not set handoff:") {
+		t.Fatalf("handed-off plan step (ValidatePlanSteps): %v", err)
+	}
+}
+
 // …and the inherited trigger-level default gate really does govern a plan's
 // agent-authored sub-step: the sub-agent's output fails the default gate and
 // the run fails — the agent could not promote unchecked work.

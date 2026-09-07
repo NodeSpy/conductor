@@ -90,6 +90,19 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 			if step.Team != nil && step.Team.Gate != nil {
 				return fmt.Errorf("%s: agent-authored team steps may not set team.gate: — the operator's configuration owns the checks on agent output", w)
 			}
+			// Nor may an agent-authored step background itself or divert its
+			// review to a hand-off channel — both escape the gate the same way a
+			// weakened gate: would. A background step launches a live, interactive
+			// agent that runs OUTSIDE the synchronous run (the gate can't hold
+			// output that never returns), and handoff: routes the review draft to
+			// an agent-nominated channel instead of the operator's gate. The
+			// operator opts into these in config; an emitted plan may not.
+			if step.Background {
+				return fmt.Errorf("%s: agent-authored steps may not set background: — a backgrounded agent runs outside the gate on agent output", w)
+			}
+			if step.Handoff != "" {
+				return fmt.Errorf("%s: agent-authored steps may not set handoff: — the review channel for agent output is the operator's to configure", w)
+			}
 			if !pol.TrustFull() {
 				switch {
 				case matchAny(pol.Approve, class):

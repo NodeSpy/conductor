@@ -137,6 +137,17 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 			if step.ID != "" {
 				w = fmt.Sprintf("%s(%s)", w, step.ID)
 			}
+			// A backgrounded or handed-off step escapes the gate on agent output
+			// (H3): the live agent runs outside the synchronous run, and handoff:
+			// diverts the review draft to an agent-nominated channel. guardPlan
+			// rejects both too — this validator refuses them independently so no
+			// plan path admits one (matching the gate: posture).
+			if step.Background {
+				return fmt.Errorf("%s: agent-authored steps may not set background:", w)
+			}
+			if step.Handoff != "" {
+				return fmt.Errorf("%s: agent-authored steps may not set handoff:", w)
+			}
 			switch step.Form() {
 			case "verb":
 				connName, verb, okCut := strings.Cut(step.Uses, ".")
