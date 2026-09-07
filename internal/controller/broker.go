@@ -49,9 +49,10 @@ type Broker struct {
 	store SessionStore
 	log   func(string, ...any)
 
-	mu   sync.Mutex
-	live map[string]Session    // prKey -> live session held by THIS process
-	refs map[string]SessionRef // prKey -> persisted ref (survives restart)
+	mu      sync.Mutex
+	live    map[string]Session     // prKey -> live session held by THIS process
+	refs    map[string]SessionRef  // prKey -> persisted ref (survives restart)
+	resolve map[string]*sync.Mutex // prKey -> serializes ResumeSession (TOCTOU guard)
 }
 
 // NewBroker builds a broker over a controller registry and an optional session
@@ -62,11 +63,12 @@ func NewBroker(reg *Registry, st SessionStore, log func(string, ...any)) *Broker
 		log = func(string, ...any) {}
 	}
 	b := &Broker{
-		reg:   reg,
-		store: st,
-		log:   log,
-		live:  map[string]Session{},
-		refs:  map[string]SessionRef{},
+		reg:     reg,
+		store:   st,
+		log:     log,
+		live:    map[string]Session{},
+		refs:    map[string]SessionRef{},
+		resolve: map[string]*sync.Mutex{},
 	}
 	if st != nil {
 		for _, r := range st.Sessions() {
@@ -126,6 +128,27 @@ func (b *Broker) Session(ctx context.Context, prKey string, h Handler) (Session,
 		b.mu.Unlock()
 		return s, nil
 	}
+	_, ok := b.refs[prKey]
+	b.mu.Unlock()
+	if !ok {
+		return nil, nil
+	}
+	// Serialize resolution per PR. ResumeSession is a slow re-attach (ACP
+	// session/load; paseo re-bind), so two concurrent follow-ups that both saw
+	// no live session would each resume — spawning duplicate agents and leaking
+	// the loser, which is silently overwritten in b.live and never Closed. The
+	// per-PR claim keeps this to "one worker per PR": the first resumes, the
+	// rest wait and reuse its result (#36 §146 F9 TOCTOU).
+	claim := b.resolveClaim(prKey)
+	claim.Lock()
+	defer claim.Unlock()
+	// Re-check under the claim: a peer may have resumed (or Close may have
+	// dropped the ref) while we waited.
+	b.mu.Lock()
+	if s := b.live[prKey]; s != nil {
+		b.mu.Unlock()
+		return s, nil
+	}
 	ref, ok := b.refs[prKey]
 	b.mu.Unlock()
 	if !ok {
@@ -143,6 +166,21 @@ func (b *Broker) Session(ctx context.Context, prKey string, h Handler) (Session,
 	b.live[prKey] = sess
 	b.mu.Unlock()
 	return sess, nil
+}
+
+// resolveClaim returns the per-PR mutex that serializes session resolution,
+// creating it on first use. Held only around ResumeSession so concurrent
+// Session/Followup calls for one PR resume it once instead of racing to spawn
+// duplicate live sessions.
+func (b *Broker) resolveClaim(prKey string) *sync.Mutex {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	m := b.resolve[prKey]
+	if m == nil {
+		m = &sync.Mutex{}
+		b.resolve[prKey] = m
+	}
+	return m
 }
 
 // Followup delivers a follow-up turn to the PR's live session, resuming it by id

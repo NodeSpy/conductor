@@ -44,10 +44,12 @@ func (s *fakeSession) Close(context.Context) error {
 type fakeController struct {
 	name                 string
 	model                SessionModel
+	cmu                  sync.Mutex // guards the counters under concurrent resume
 	newN                 int
 	resumeN              int
 	resumedAgentAuthored bool
 	last                 *fakeSession
+	onResume             func() // optional hook to widen the resume window in tests
 }
 
 func (c *fakeController) Name() string         { return c.name }
@@ -59,16 +61,24 @@ func (c *fakeController) Initialize(context.Context) (Capabilities, error) {
 }
 
 func (c *fakeController) NewSession(_ context.Context, _ Spec, _ Handler) (Session, error) {
+	c.cmu.Lock()
 	c.newN++
+	c.cmu.Unlock()
 	c.last = &fakeSession{id: "sess-1"}
 	return c.last, nil
 }
 
 func (c *fakeController) ResumeSession(_ context.Context, id string, agentAuthored bool, _ Handler) (Session, error) {
+	if c.onResume != nil {
+		c.onResume()
+	}
+	sess := &fakeSession{id: id}
+	c.cmu.Lock()
 	c.resumeN++
 	c.resumedAgentAuthored = agentAuthored
-	c.last = &fakeSession{id: id}
-	return c.last, nil
+	c.last = sess
+	c.cmu.Unlock()
+	return sess, nil
 }
 
 func (c *fakeController) Runner() (Runner, error) { return nil, ErrNotRunnable }
@@ -197,6 +207,68 @@ func TestBrokerRestartSurvival(t *testing.T) {
 	fc.last.mu.Unlock()
 	if len(got) != 1 || got[0] != "resumed follow-up" {
 		t.Fatalf("follow-up not delivered to the resumed session: %v", got)
+	}
+}
+
+// TestBrokerSessionResumeIsSingleFlight (#36 §146 F9): concurrent follow-ups for
+// one PR with a persisted ref but no live session must resume it EXACTLY ONCE.
+// Pre-fix, Session() read live under the lock, released it, then resumed outside
+// any lock — so N racers all saw no live session and each spawned an agent, with
+// every loser silently overwritten in b.live and leaked (never Closed). The
+// onResume hook widens the resume window so the old code deterministically
+// resumes >1; the fix's per-PR claim collapses it to one.
+func TestBrokerSessionResumeIsSingleFlight(t *testing.T) {
+	var wg sync.WaitGroup
+	resumeStarted := make(chan struct{})
+	var once sync.Once
+	fc := &fakeController{name: "fake", model: ModelResumable, onResume: func() {
+		// Signal the first resumer has entered, then dwell so any peer that also
+		// slipped past the live check would resume concurrently (old code races).
+		once.Do(func() { close(resumeStarted) })
+		<-resumeStarted
+		for i := 0; i < 1e6; i++ { // busy dwell (no wall-clock deps in tests)
+			_ = i
+		}
+	}}
+	st := newFakeStore()
+	const pr = "o/r#42"
+
+	// Persist a ref via one broker, then hand the store to a fresh broker whose
+	// in-memory live map is empty — the post-restart resume path.
+	b1 := NewBroker(fakeRegistry(fc), st, nil)
+	if _, err := b1.Open(context.Background(), pr, "fake", Spec{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	b := NewBroker(fakeRegistry(fc), st, nil)
+
+	const racers = 16
+	sessions := make([]Session, racers)
+	errs := make([]error, racers)
+	wg.Add(racers)
+	for i := 0; i < racers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			sessions[i], errs[i] = b.Session(context.Background(), pr, nil)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("racer %d: %v", i, err)
+		}
+	}
+	if fc.resumeN != 1 {
+		t.Fatalf("concurrent Session() must resume once, got resume=%d", fc.resumeN)
+	}
+	// Every racer got the same single resumed session — no leaked duplicates.
+	for i, s := range sessions {
+		if s == nil {
+			t.Fatalf("racer %d got a nil session", i)
+		}
+		if s != sessions[0] {
+			t.Fatalf("racer %d got a different session than racer 0 (duplicate resume leaked)", i)
+		}
 	}
 }
 
