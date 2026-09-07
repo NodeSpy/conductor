@@ -241,3 +241,24 @@ func TestSplitHostPort(t *testing.T) {
 		}
 	}
 }
+
+// Regression (#36 iso-review M10): WrapRemote's systemd-run prefix lands in
+// a remote shell string — limit values must be quoted like the command is,
+// or a hostile value becomes shell.
+func TestWrapRemoteQuotesSystemdPrefix(t *testing.T) {
+	ns := FromConfig(&config.IsolationConfig{Mode: "namespace",
+		Limits: &config.IsolationLimits{Memory: "2g; rm -rf /", CPU: "200%", Pids: 9}})
+	cmd, err := ns.WrapRemote("tool x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cmd, `'MemoryMax=2g; rm -rf /'`) {
+		t.Fatalf("memory value must be one quoted token: %q", cmd)
+	}
+	if strings.Contains(cmd, `-p MemoryMax=2g;`) {
+		t.Fatalf("unquoted limit escaped into shell: %q", cmd)
+	}
+	if !strings.Contains(cmd, `'CPUQuota=200%'`) || !strings.Contains(cmd, `'TasksMax=9'`) {
+		t.Fatalf("all limit values quoted: %q", cmd)
+	}
+}

@@ -221,7 +221,15 @@ func (s *Spec) WrapRemote(cmd string) (string, error) {
 		}
 		return "sudo -n -u " + shQuote(s.User) + " -- sh -c " + shQuote(cmd), nil
 	case "namespace":
-		prefix := strings.Join(s.systemdPrefix(), " ")
+		// The prefix tokens land in a REMOTE SHELL string — every value the
+		// config controls (limits) is quoted, exactly like cmd itself, so a
+		// hostile-looking limit value ("2g; rm -rf /") stays one argument
+		// instead of becoming shell (#36 iso-review M10).
+		quoted := make([]string, 0, 8)
+		for _, tok := range s.systemdPrefix() {
+			quoted = append(quoted, shQuote(tok))
+		}
+		prefix := strings.Join(quoted, " ")
 		flags := "--user --map-current-user --pid --fork --mount-proc --kill-child"
 		if s.Deny {
 			flags += " --net"
