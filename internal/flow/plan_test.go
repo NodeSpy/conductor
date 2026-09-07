@@ -729,6 +729,59 @@ policy:
 	}
 }
 
+// #57 M9: a team step is a whole fleet (planner + reconciler + workers), but
+// the runtime cumulative budget only counted plain agent steps — so a nested
+// plan could spin up teams whose fleets never charged against max_sub_agents.
+// Here each plan passes its OWN static guard, yet the tree's cumulative
+// sub-agent count (parent agent + child team fleet) exceeds the cap and must
+// halt at runtime, before the child team dispatches.
+func TestNestedPlanTeamCountsAgainstBudget(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc: { type: fake }
+memory: { type: memory }
+agents:
+  planner:     { model: x }
+  helper:      { model: y }
+  architect:   { model: a }
+  implementer: { model: b }
+policy:
+  agent_authored:
+    allow: [ svc.post, agent, team ]
+    limits: { max_sub_agents: 3, max_steps: 50 }
+`)
+	reg := buildRegistry(t, cfg)
+	fake := newFakeState(t, "svc")
+
+	// Parent plan: one plain sub-agent (helper) → 1 unit (guard: 1 ≤ 3, ok).
+	parent := "```plan\n- {id: sub, type: agent, agent: helper, prompt: go}\n```"
+	// Helper's output is a NESTED plan whose single team step's fleet is
+	// 2 + max_workers(1) = 3 — passing the child's OWN guard (3 ≤ 3), but the
+	// tree cumulative is 1 + 3 = 4 > 3.
+	child := "```plan\n- {id: tm, prompt: go, team: {planner: architect, worker: implementer, max_workers: 1}}\n```"
+	rig := newTestRunner(t, cfg, reg)
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		switch req.Action.Agent {
+		case "planner":
+			return dispatch.RunRef{AgentID: "p", Output: parent}, nil
+		case "helper":
+			return dispatch.RunRef{AgentID: "h", Output: child}, nil
+		}
+		// architect/implementer must never be reached — the budget halts the
+		// child team before execTeam dispatches its planner.
+		t.Errorf("team fleet dispatched despite over-budget: %s", req.Action.Agent)
+		return dispatch.RunRef{AgentID: "x", Output: "leaf"}, nil
+	}
+	runTrigger(rig, newTrigger("ping", nil), mustSpec(t, planSpec))
+	failed, errStr := rig.workflowFailed()
+	if !failed || !strings.Contains(errStr, "cumulative across nested plans") || !strings.Contains(errStr, "max_sub_agents") {
+		t.Fatalf("nested team fleet must share the cumulative budget: %v %q", failed, errStr)
+	}
+	if len(fake.snapshot()) != 0 {
+		t.Fatal("the halted tree must not reach any external step")
+	}
+}
+
 // A plan's sub-agent dispatches are marked AgentAuthored (the launch layer
 // gives them deny-by-default network — #36 §15); the config-authored step
 // that produced the plan is not.

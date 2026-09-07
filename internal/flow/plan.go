@@ -742,6 +742,27 @@ func (r *Runner) executePlan(ctx context.Context, t core.Trigger, pol *config.Ag
 			st.tokens += len(step.Prompt) / 4
 			st.budget.addTokens(len(step.Prompt) / 4)
 		}
+		if step.Team != nil {
+			// A team step is a whole fleet — a planner, a reconcile pass, and up
+			// to MaxWorkers parallel workers — not one sub-agent. guardPlan counts
+			// it statically (guard.go: 2 + MaxWorkers), but the runtime cumulative
+			// budget only counted agent steps, so a nested plan could spin up
+			// teams without them ever charging against max_sub_agents / the token
+			// budget. Count the fleet here too (#57 M9).
+			per := 2 + step.Team.MaxWorkersOrDefault()
+			units := per
+			if step.ForEach != "" {
+				if items, err := resolveList(step.ForEach, st.scope); err == nil {
+					units = per * len(items)
+				}
+			}
+			if total := st.budget.addSubAgents(units); total > pol.MaxSubAgentsOrDefault() {
+				return r.haltPlan(ctx, t, st, fmt.Errorf("step %q spawns a team of %d sub-agents (execution unit %d), over limits.max_sub_agents %d (cumulative across nested plans)", id, units, total, pol.MaxSubAgentsOrDefault()), shadow)
+			}
+			st.subAgents += units
+			st.tokens += len(step.Prompt) / 4
+			st.budget.addTokens(len(step.Prompt) / 4)
+		}
 
 		// Once a step's outputs carried tracked secret material, an unapproved
 		// plan may not touch the outside world at all (the exact-substring
@@ -786,7 +807,7 @@ func (r *Runner) executePlan(ctx context.Context, t core.Trigger, pol *config.Ag
 		}
 		r.recordOutputs(st.scope, id, outputs)
 		r.runHooks(ctx, t, step.Hooks, "done", st.scope, "plan step "+id)
-		if step.Type == "agent" {
+		if step.Type == "agent" || step.Team != nil {
 			n := 0
 			if b, jerr := json.Marshal(outputs); jerr == nil {
 				n = len(b) / 4
