@@ -169,9 +169,13 @@ func TestLaunchOptsResolution(t *testing.T) {
 	if opt.iso != profIso || !opt.agentAuthored {
 		t.Fatalf("profile iso must win: %+v", opt)
 	}
-	// Resume keeps the runtime's isolation.
-	if got := resumeOpts(rtIso); got.iso != rtIso || got.agentAuthored {
+	// Resume keeps the runtime's isolation and replays the persisted
+	// provenance (#36 iso-review H5).
+	if got := resumeOpts(rtIso, false); got.iso != rtIso || got.agentAuthored {
 		t.Fatalf("resume opts: %+v", got)
+	}
+	if got := resumeOpts(rtIso, true); !got.agentAuthored {
+		t.Fatalf("agent-authored resume must keep the flag: %+v", got)
 	}
 }
 

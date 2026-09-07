@@ -66,11 +66,12 @@ func launchOptsFor(runtimeIso *config.IsolationConfig, req dispatch.Request) lau
 }
 
 // resume returns the opts a profile-less relaunch (ResumeSession, session
-// follow-ups) runs under: the runtime's own isolation, never weaker — but
-// with no request in scope the agent-authored flag cannot be re-derived, so
-// callers that kept the original opts should reuse those instead.
-func resumeOpts(runtimeIso *config.IsolationConfig) launchOpts {
-	return launchOpts{iso: runtimeIso}
+// follow-ups) runs under: the runtime's own isolation, never weaker, plus
+// the ORIGINAL dispatch's agent-authored provenance replayed from the
+// persisted session ref (#36 iso-review H5) — a resumed agent-authored
+// session keeps its deny-by-default egress across restarts.
+func resumeOpts(runtimeIso *config.IsolationConfig, agentAuthored bool) launchOpts {
+	return launchOpts{iso: runtimeIso, agentAuthored: agentAuthored}
 }
 
 // prepareLaunch adapts a local subprocess launch (argv, working directory,

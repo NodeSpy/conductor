@@ -161,9 +161,9 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 }
 
 // ResumeSession re-binds an existing opencode session by id (resumable by id).
-func (c *opencodeController) ResumeSession(ctx context.Context, id string, _ Handler) (Session, error) {
+func (c *opencodeController) ResumeSession(ctx context.Context, id string, agentAuthored bool, _ Handler) (Session, error) {
 	sctx, scancel := context.WithCancel(context.Background())
-	baseURL, cleanup, err := c.connect(sctx, "", nil, resumeOpts(c.iso))
+	baseURL, cleanup, err := c.connect(sctx, "", nil, resumeOpts(c.iso, agentAuthored))
 	if err != nil {
 		scancel()
 		return nil, err

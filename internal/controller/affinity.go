@@ -34,12 +34,15 @@ import (
 
 // AffinityRef is one persisted (agent, key) → session binding.
 type AffinityRef struct {
-	Agent      string    // agent profile name
-	Key        string    // rendered session key value
-	Controller string    // runtime that owns the session
-	SessionID  string    // the runtime's session/agent id
-	Created    time.Time // spawn time (max_lifetime)
-	LastUsed   time.Time // last prompt (idle_ttl)
+	Agent      string // agent profile name
+	Key        string // rendered session key value
+	Controller string // runtime that owns the session
+	SessionID  string // the runtime's session/agent id
+	// AgentAuthored: the original dispatch's provenance, replayed on resume
+	// so the deny-by-default egress survives restarts (#36 iso-review H5).
+	AgentAuthored bool
+	Created       time.Time // spawn time (max_lifetime)
+	LastUsed      time.Time // last prompt (idle_ttl)
 }
 
 // AffinityStore persists the bindings in conductor's own state. *store.Store
@@ -233,18 +236,19 @@ func (a *Affinity) Dispatch(ctx context.Context, runner Runner, req dispatch.Req
 	if err != nil || runRef.AgentID == "" {
 		return runRef, true, err
 	}
-	a.bind(bk, req.Action.Agent, key, c.Name(), runRef.AgentID)
+	a.bind(bk, req.Action.Agent, key, c.Name(), runRef.AgentID, req.AgentAuthored)
 	return runRef, true, nil
 }
 
 // bind records a fresh (agent, key) → session binding and holds the agent
 // from the reaper.
-func (a *Affinity) bind(bk, agent, key, controllerName, sessionID string) {
+func (a *Affinity) bind(bk, agent, key, controllerName, sessionID string, agentAuthored bool) {
 	now := a.now()
 	ref := AffinityRef{
 		Agent: agent, Key: key,
 		Controller: controllerName, SessionID: sessionID,
-		Created: now, LastUsed: now,
+		AgentAuthored: agentAuthored,
+		Created:       now, LastUsed: now,
 	}
 	a.putRef(bk, ref)
 	if a.hold != nil {
@@ -291,7 +295,7 @@ func (a *Affinity) deliver(ctx context.Context, runner Runner, req dispatch.Requ
 		a.log("affinity: %s fresh dispatch after dead session failed: %v", req.Action.Agent, err)
 		return
 	}
-	a.bind(bk, req.Action.Agent, key, controllerName, runRef.AgentID)
+	a.bind(bk, req.Action.Agent, key, controllerName, runRef.AgentID, req.AgentAuthored)
 }
 
 // followup delivers text to the bound session as a follow-up turn, resuming
@@ -308,7 +312,7 @@ func (a *Affinity) followup(ctx context.Context, bk string, ref AffinityRef, tex
 		if err != nil {
 			return "", err
 		}
-		if sess, err = c.ResumeSession(ctx, ref.SessionID, nil); err != nil {
+		if sess, err = c.ResumeSession(ctx, ref.SessionID, ref.AgentAuthored, nil); err != nil {
 			return "", err
 		}
 		a.mu.Lock()

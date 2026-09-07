@@ -153,7 +153,7 @@ func TestPaseoSessionPromptSends(t *testing.T) {
 	snd := &recordSender{}
 	reg := NewRegistry(nil, "", &recordRunner{}, snd)
 	c, _ := reg.Resolve("")
-	sess, _ := c.ResumeSession(context.Background(), "ag_9", nil)
+	sess, _ := c.ResumeSession(context.Background(), "ag_9", false, nil)
 	ch, err := sess.Prompt(context.Background(), Message{Text: "more"})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +170,7 @@ func TestPaseoSessionPromptSends(t *testing.T) {
 func TestPaseoPromptWithoutSender(t *testing.T) {
 	reg := NewRegistry(nil, "", &recordRunner{}, nil)
 	c, _ := reg.Resolve("")
-	sess, _ := c.ResumeSession(context.Background(), "ag_9", nil)
+	sess, _ := c.ResumeSession(context.Background(), "ag_9", false, nil)
 	if _, err := sess.Prompt(context.Background(), Message{Text: "x"}); err != ErrNoFollowup {
 		t.Fatalf("a controller without a sender must report ErrNoFollowup, got %v", err)
 	}

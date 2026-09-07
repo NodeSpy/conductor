@@ -15,7 +15,11 @@ type SessionRef struct {
 	Controller string       // controller name that owns the session
 	SessionID  string       // the controller's session/agent id
 	Model      SessionModel // session_model at bind time
-	UpdatedAt  time.Time
+	// AgentAuthored records the original dispatch's provenance so a
+	// post-restart resume re-derives the deny-by-default egress
+	// (#36 iso-review H5) instead of relaunching unrestricted.
+	AgentAuthored bool
+	UpdatedAt     time.Time
 }
 
 // SessionStore persists the broker's PR→session map so an interactive hand-off
@@ -85,7 +89,7 @@ func (b *Broker) Open(ctx context.Context, prKey, perAgent string, spec Spec, h 
 	if err != nil {
 		return nil, err
 	}
-	b.Bind(prKey, c, sess)
+	b.Bind(prKey, c, sess, spec.Request.AgentAuthored)
 	return sess, nil
 }
 
@@ -93,12 +97,13 @@ func (b *Broker) Open(ctx context.Context, prKey, perAgent string, spec Spec, h 
 // ref. Used when a session was launched outside the broker (e.g. the engine's
 // existing background dispatch) but should still be broker-owned so follow-ups
 // funnel to it and it survives a restart.
-func (b *Broker) Bind(prKey string, c Controller, sess Session) {
+func (b *Broker) Bind(prKey string, c Controller, sess Session, agentAuthored bool) {
 	ref := SessionRef{
-		PRKey:      prKey,
-		Controller: c.Name(),
-		SessionID:  sess.ID(),
-		Model:      c.Model(),
+		PRKey:         prKey,
+		Controller:    c.Name(),
+		SessionID:     sess.ID(),
+		Model:         c.Model(),
+		AgentAuthored: agentAuthored,
 	}
 	b.mu.Lock()
 	b.live[prKey] = sess
@@ -130,7 +135,7 @@ func (b *Broker) Session(ctx context.Context, prKey string, h Handler) (Session,
 	if err != nil {
 		return nil, err
 	}
-	sess, err := c.ResumeSession(ctx, ref.SessionID, h)
+	sess, err := c.ResumeSession(ctx, ref.SessionID, ref.AgentAuthored, h)
 	if err != nil {
 		return nil, err
 	}

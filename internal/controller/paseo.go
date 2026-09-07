@@ -70,7 +70,7 @@ func (c *paseoController) NewSession(ctx context.Context, spec Spec, _ Handler) 
 
 // ResumeSession re-attaches to a paseo agent by id. There's no re-attach step —
 // a follow-up is just `paseo send` — so this simply binds the id.
-func (c *paseoController) ResumeSession(_ context.Context, id string, _ Handler) (Session, error) {
+func (c *paseoController) ResumeSession(_ context.Context, id string, _ bool, _ Handler) (Session, error) {
 	return &paseoSession{id: id, sender: c.sender}, nil
 }
 

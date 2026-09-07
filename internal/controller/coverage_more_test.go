@@ -30,7 +30,7 @@ func TestACPResumePromptCancelClose(t *testing.T) {
 	c := newACPController("gem", config.ControllerConfig{Agent: "gemini"}, nil)
 	c.dial = dialFake(agent)
 
-	s, err := c.ResumeSession(context.Background(), "sess-9", nil)
+	s, err := c.ResumeSession(context.Background(), "sess-9", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestACPRefusalTurn(t *testing.T) {
 	}
 	c := newACPController("gem", config.ControllerConfig{Agent: "gemini"}, nil)
 	c.dial = dialFake(agent)
-	s, err := c.ResumeSession(context.Background(), "sess-r", nil)
+	s, err := c.ResumeSession(context.Background(), "sess-r", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestCLISessionLifecycle(t *testing.T) {
 	c := newCLIController("cc", config.ControllerConfig{Type: "cli", Tool: "claude-code"}, nil)
 	c.launch = l.launch
 
-	s, err := c.ResumeSession(context.Background(), "tool-7", nil)
+	s, err := c.ResumeSession(context.Background(), "tool-7", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestCLISessionLifecycle(t *testing.T) {
 	// Oneshot recipes refuse both resume and follow-ups.
 	oneshot := newCLIController("cx", config.ControllerConfig{Type: "cli", Tool: "codex"}, nil)
 	oneshot.launch = l.launch
-	if _, err := oneshot.ResumeSession(context.Background(), "x", nil); err == nil {
+	if _, err := oneshot.ResumeSession(context.Background(), "x", false, nil); err == nil {
 		t.Fatal("oneshot resume must refuse")
 	}
 }
@@ -225,7 +225,7 @@ func TestOpencodeAccessors(t *testing.T) {
 func TestAgentDeckResumeAndCancel(t *testing.T) {
 	deck := &fakeDeck{byArgs: func(args []string) ([]byte, error) { return []byte(`{}`), nil }}
 	c := newDeckFor(nil, deck)
-	s, err := c.ResumeSession(context.Background(), "deck-9", nil)
+	s, err := c.ResumeSession(context.Background(), "deck-9", false, nil)
 	if err != nil || s.ID() != "deck-9" {
 		t.Fatalf("resume: %v %q", err, s.ID())
 	}
@@ -256,7 +256,7 @@ func TestOpencodeResumeCancelClose(t *testing.T) {
 	c.dial = func(context.Context, string, []string) (string, func() error, error) {
 		return srv.URL, func() error { cleaned = true; return nil }, nil
 	}
-	s, err := c.ResumeSession(context.Background(), "ses-1", nil)
+	s, err := c.ResumeSession(context.Background(), "ses-1", false, nil)
 	if err != nil || s.ID() != "ses-1" {
 		t.Fatalf("resume: %v", err)
 	}
@@ -270,14 +270,14 @@ func TestOpencodeResumeCancelClose(t *testing.T) {
 	c.dial = func(context.Context, string, []string) (string, func() error, error) {
 		return "", nil, fmt.Errorf("dial down")
 	}
-	if _, err := c.ResumeSession(context.Background(), "x", nil); err == nil {
+	if _, err := c.ResumeSession(context.Background(), "x", false, nil); err == nil {
 		t.Fatal("failed dial must error")
 	}
 }
 
 func TestPaseoSessionCancelClose(t *testing.T) {
 	c := newPaseoController(BuiltinPaseo, nil, nil)
-	s, err := c.ResumeSession(context.Background(), "a-1", nil)
+	s, err := c.ResumeSession(context.Background(), "a-1", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +330,7 @@ func TestRegistryOverrideByNameAndStub(t *testing.T) {
 	if _, err := stub.NewSession(context.Background(), Spec{}, nil); err == nil {
 		t.Fatal("stub NewSession must refuse")
 	}
-	if _, err := stub.ResumeSession(context.Background(), "x", nil); err == nil {
+	if _, err := stub.ResumeSession(context.Background(), "x", false, nil); err == nil {
 		t.Fatal("stub ResumeSession must refuse")
 	}
 	if _, err := stub.Runner(); err == nil {

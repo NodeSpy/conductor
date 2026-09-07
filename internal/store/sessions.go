@@ -16,11 +16,14 @@ import (
 // per PR/issue ("owner/name#n") in a sibling sessions.json, mirroring runs.json.
 // No secrets are persisted.
 type SessionRecord struct {
-	PRKey      string    `json:"pr_key"`
-	Controller string    `json:"controller"` // controller name that owns the session
-	SessionID  string    `json:"session_id"` // the controller's session/agent id
-	Model      string    `json:"model"`      // session_model (native|resumable|oneshot)
-	UpdatedAt  time.Time `json:"updated_at"`
+	PRKey      string `json:"pr_key"`
+	Controller string `json:"controller"` // controller name that owns the session
+	SessionID  string `json:"session_id"` // the controller's session/agent id
+	Model      string `json:"model"`      // session_model (native|resumable|oneshot)
+	// AgentAuthored: the original dispatch's provenance — resume re-derives
+	// the deny-by-default egress from it (#36 iso-review H5).
+	AgentAuthored bool      `json:"agent_authored,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // The store persists the broker's PR→session map. Assert *Store satisfies the
@@ -31,11 +34,12 @@ var _ controller.SessionStore = (*Store)(nil)
 func (s *Store) PutSession(ref controller.SessionRef) error {
 	s.mu.Lock()
 	rec := &SessionRecord{
-		PRKey:      ref.PRKey,
-		Controller: ref.Controller,
-		SessionID:  ref.SessionID,
-		Model:      string(ref.Model),
-		UpdatedAt:  s.now(),
+		PRKey:         ref.PRKey,
+		Controller:    ref.Controller,
+		SessionID:     ref.SessionID,
+		Model:         string(ref.Model),
+		AgentAuthored: ref.AgentAuthored,
+		UpdatedAt:     s.now(),
 	}
 	s.sessions[ref.PRKey] = rec
 	s.mu.Unlock()
@@ -62,11 +66,12 @@ func (s *Store) Sessions() []controller.SessionRef {
 	out := make([]controller.SessionRef, 0, len(s.sessions))
 	for _, r := range s.sessions {
 		out = append(out, controller.SessionRef{
-			PRKey:      r.PRKey,
-			Controller: r.Controller,
-			SessionID:  r.SessionID,
-			Model:      controller.SessionModel(r.Model),
-			UpdatedAt:  r.UpdatedAt,
+			PRKey:         r.PRKey,
+			Controller:    r.Controller,
+			SessionID:     r.SessionID,
+			Model:         controller.SessionModel(r.Model),
+			AgentAuthored: r.AgentAuthored,
+			UpdatedAt:     r.UpdatedAt,
 		})
 	}
 	return out

@@ -129,12 +129,12 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 // ResumeSession re-binds a session id for a resumable recipe. The bound handle
 // continues the tool session (--resume) on the next Prompt; a oneshot recipe cannot
 // resume.
-func (c *cliController) ResumeSession(_ context.Context, id string, _ Handler) (Session, error) {
+func (c *cliController) ResumeSession(_ context.Context, id string, agentAuthored bool, _ Handler) (Session, error) {
 	if c.recipe.resume == nil {
 		return nil, ErrNoFollowup
 	}
 	sctx, scancel := context.WithCancel(context.Background())
-	return &cliSession{id: id, c: c, toolID: id, host: c.host, opt: resumeOpts(c.iso), cancel: scancel, ctx: sctx}, nil
+	return &cliSession{id: id, c: c, toolID: id, host: c.host, opt: resumeOpts(c.iso, agentAuthored), cancel: scancel, ctx: sctx}, nil
 }
 
 func (c *cliController) start(ctx context.Context, dir string, env, argv []string) (cliProc, error) {

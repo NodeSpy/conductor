@@ -2,8 +2,11 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // fakeSession records the turns it received and returns a single terminal update
@@ -39,11 +42,12 @@ func (s *fakeSession) Close(context.Context) error {
 // fakeController hands out sessions and counts new-vs-resume, so a test can prove
 // a follow-up after a restart RESUMES by id rather than opening a fresh session.
 type fakeController struct {
-	name    string
-	model   SessionModel
-	newN    int
-	resumeN int
-	last    *fakeSession
+	name                 string
+	model                SessionModel
+	newN                 int
+	resumeN              int
+	resumedAgentAuthored bool
+	last                 *fakeSession
 }
 
 func (c *fakeController) Name() string         { return c.name }
@@ -60,8 +64,9 @@ func (c *fakeController) NewSession(_ context.Context, _ Spec, _ Handler) (Sessi
 	return c.last, nil
 }
 
-func (c *fakeController) ResumeSession(_ context.Context, id string, _ Handler) (Session, error) {
+func (c *fakeController) ResumeSession(_ context.Context, id string, agentAuthored bool, _ Handler) (Session, error) {
 	c.resumeN++
+	c.resumedAgentAuthored = agentAuthored
 	c.last = &fakeSession{id: id}
 	return c.last, nil
 }
@@ -192,5 +197,64 @@ func TestBrokerRestartSurvival(t *testing.T) {
 	fc.last.mu.Unlock()
 	if len(got) != 1 || got[0] != "resumed follow-up" {
 		t.Fatalf("follow-up not delivered to the resumed session: %v", got)
+	}
+}
+
+// Regression (#36 iso-review H5): a resumed agent-authored session must
+// relaunch under the SAME deny-by-default posture it started with — the
+// provenance is persisted in the session ref and replayed to ResumeSession
+// across a restart, and the launch layer derives the deny-all proxy from it.
+func TestBrokerResumeKeepsAgentAuthoredDenyDefault(t *testing.T) {
+	fc := &fakeController{name: "fake", model: ModelResumable}
+	st := newFakeStore()
+	ctx := context.Background()
+	const pr = "o/r#12"
+
+	// The original dispatch was agent-authored.
+	b1 := NewBroker(fakeRegistry(fc), st, nil)
+	if _, err := b1.Open(ctx, pr, "fake", Spec{Request: dispatch.Request{AgentAuthored: true}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !st.recs[pr].AgentAuthored {
+		t.Fatal("the ref must persist agent-authored provenance")
+	}
+
+	// Restart → resume must replay the flag, not hardcode false.
+	b2 := NewBroker(fakeRegistry(fc), st, nil)
+	if handled, err := b2.Followup(ctx, pr, "carry on", nil); err != nil || !handled {
+		t.Fatalf("handled=%v err=%v", handled, err)
+	}
+	if fc.resumeN != 1 || !fc.resumedAgentAuthored {
+		t.Fatalf("resume must carry agentAuthored=true (resume=%d, flag=%v)", fc.resumeN, fc.resumedAgentAuthored)
+	}
+
+	// And the launch layer turns that resumed flag into the deny-all proxy.
+	stubPlatform(t)
+	calls := stubProxy(t, "127.0.0.1:5599")
+	_, _, env, _, err := prepareLaunch("", "/wt", nil, []string{"tool"}, resumeOpts(nil, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(env, "\n"), "127.0.0.1:5599") {
+		t.Fatalf("agent-authored resume must route through the deny-all proxy: %v", env)
+	}
+	if len(*calls) != 1 || len((*calls)[0]) != 0 {
+		t.Fatalf("deny-all = empty allowlist: %v", *calls)
+	}
+
+	// A config-authored session resumes without the deny default.
+	if fc2 := (&fakeController{name: "fake", model: ModelResumable}); true {
+		st2 := newFakeStore()
+		b3 := NewBroker(fakeRegistry(fc2), st2, nil)
+		if _, err := b3.Open(ctx, pr, "fake", Spec{}, nil); err != nil {
+			t.Fatal(err)
+		}
+		b4 := NewBroker(fakeRegistry(fc2), st2, nil)
+		if _, err := b4.Followup(ctx, pr, "x", nil); err != nil {
+			t.Fatal(err)
+		}
+		if fc2.resumedAgentAuthored {
+			t.Fatal("config-authored resume must not inherit the deny default")
+		}
 	}
 }

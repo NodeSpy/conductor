@@ -84,7 +84,7 @@ func (c *acpController) Model() SessionModel {
 // and CheckoutPR is always true (conductor supplies the worktree as the session
 // cwd). The connection is closed before returning; NewSession opens its own.
 func (c *acpController) Initialize(ctx context.Context) (Capabilities, error) {
-	client, cleanup, err := c.connect(ctx, "", nil, acp.DelegateFuncs{}, "", resumeOpts(c.iso))
+	client, cleanup, err := c.connect(ctx, "", nil, acp.DelegateFuncs{}, "", resumeOpts(c.iso, false))
 	if err != nil {
 		return Capabilities{SessionModel: c.Model(), Transport: TransportACP, CheckoutPR: true}, err
 	}
@@ -194,10 +194,10 @@ func (c *acpController) memoryServers(spec Spec) []acp.McpServer {
 // ResumeSession re-attaches to a prior session by id over a fresh connection. Only
 // meaningful for a loadSession-capable (resumable) agent; the bound session accepts
 // follow-up prompt turns.
-func (c *acpController) ResumeSession(ctx context.Context, id string, h Handler) (Session, error) {
+func (c *acpController) ResumeSession(ctx context.Context, id string, agentAuthored bool, h Handler) (Session, error) {
 	sctx, scancel := context.WithCancel(context.Background())
 	del := &acpDelegate{handler: h}
-	client, cleanup, err := c.connect(sctx, "", nil, del, "", resumeOpts(c.iso))
+	client, cleanup, err := c.connect(sctx, "", nil, del, "", resumeOpts(c.iso, agentAuthored))
 	if err != nil {
 		scancel()
 		return nil, err

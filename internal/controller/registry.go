@@ -155,7 +155,7 @@ func (c *stubController) NewSession(context.Context, Spec, Handler) (Session, er
 	return nil, ErrNotRunnable
 }
 
-func (c *stubController) ResumeSession(context.Context, string, Handler) (Session, error) {
+func (c *stubController) ResumeSession(context.Context, string, bool, Handler) (Session, error) {
 	return nil, ErrNotRunnable
 }
 

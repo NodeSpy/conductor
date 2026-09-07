@@ -239,12 +239,15 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID,
 			fmt.Sprintf("review for %q is ready — approve/revise/discard here: %s", stepID, ref))
 	}
 	handler := handoff.NewHandler(ch, notifyRef)
-	sess, err := c.ResumeSession(ctx, agentID, handler)
+	// Legacy engine steps are config-authored; the flow runner owns
+	// agent-authored plans — so this hand-off's provenance is never
+	// agent-authored.
+	sess, err := c.ResumeSession(ctx, agentID, false, handler)
 	if err != nil {
 		fallback(fmt.Sprintf("bind agent %s: %v", agentID, err))
 		return
 	}
-	e.broker.Bind(prKey, c, sess)
+	e.broker.Bind(prKey, c, sess, false)
 	draft := handoff.Draft{
 		Title:  fmt.Sprintf("Review for %s", prKey),
 		Body:   "The agent is preparing its review. Edit the text and choose Send revision to hand it back to the agent, Approve to have it submit as-is, or Discard.",

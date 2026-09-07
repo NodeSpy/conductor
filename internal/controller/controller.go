@@ -197,8 +197,11 @@ type Controller interface {
 	// session/prompt). h receives any permission/input requests.
 	NewSession(ctx context.Context, spec Spec, h Handler) (Session, error)
 	// ResumeSession re-attaches to an existing session by id (ACP session/load);
-	// only meaningful for resumable/native controllers.
-	ResumeSession(ctx context.Context, id string, h Handler) (Session, error)
+	// only meaningful for resumable/native controllers. agentAuthored replays
+	// the persisted provenance of the ORIGINAL dispatch (#36 iso-review H5):
+	// a resumed agent-authored session relaunches under the same
+	// deny-by-default egress it started with, never weaker.
+	ResumeSession(ctx context.Context, id string, agentAuthored bool, h Handler) (Session, error)
 	// Runner returns the concrete dispatch surface the engine drives in M1. paseo
 	// returns the CLI dispatcher unchanged; a controller whose transport isn't
 	// supported in this build returns ErrNotRunnable.

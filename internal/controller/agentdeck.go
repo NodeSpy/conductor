@@ -128,8 +128,8 @@ func (c *agentDeckController) NewSession(ctx context.Context, spec Spec, _ Handl
 }
 
 // ResumeSession binds an existing agent-deck session by id (native lifecycle).
-func (c *agentDeckController) ResumeSession(_ context.Context, id string, _ Handler) (Session, error) {
-	return &agentDeckSession{id: id, c: c, host: c.host, opt: resumeOpts(c.iso)}, nil
+func (c *agentDeckController) ResumeSession(_ context.Context, id string, agentAuthored bool, _ Handler) (Session, error) {
+	return &agentDeckSession{id: id, c: c, host: c.host, opt: resumeOpts(c.iso, agentAuthored)}, nil
 }
 
 // exec runs one agent-deck subcommand (list/launch/session .../remove). host ==
