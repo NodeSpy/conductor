@@ -16,7 +16,9 @@ package callable
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base32"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -189,24 +191,31 @@ func (s *Service) handleRun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "run path is /runs/<id>")
 		return
 	}
-	// A run is readable by the token that invoked it. When the issuing token is
-	// unknown here (a run from before this process started — the map is
-	// in-memory), any authenticated token may read it; all tokens are
-	// first-class operators of this instance and the record is already readable
-	// via the CLI to anyone with local access.
-	if owner, known := s.issued.owner(id); known && owner != tok.Name {
+	// A run is readable ONLY by the token that invoked it (#36 §13 review, item
+	// 3a — fail CLOSED). If the issuing token is unknown here — a run from before
+	// this process started, or one whose entry the bounded map evicted — we
+	// refuse rather than let any authenticated token read it. The old behaviour
+	// failed OPEN (unknown owner ⇒ readable by anyone), which combined with
+	// enumerable ids (now fixed, 3b) and weaponizable eviction (now defanged: an
+	// evicted entry denies, it no longer discloses) let a caller read a victim's
+	// run. A 404 (not 403) avoids disclosing that the id exists. The durable §20
+	// record remains readable with local access via `conductor runs <id>`.
+	owner, known := s.issued.owner(id)
+	if !known {
+		// Fail closed: refuse and do not disclose that the id exists.
+		writeErr(w, http.StatusNotFound, "no such run")
+		return
+	}
+	if owner != tok.Name {
+		// Known, but owned by another token — the documented per-token isolation.
 		writeErr(w, http.StatusForbidden, "run not readable by this token")
 		return
 	}
 	rec, found := s.d.ReadRun(id)
 	if !found {
-		if _, issued := s.issued.owner(id); issued {
-			// Issued but not yet on disk (the run just started): accepted, not
-			// missing — the caller keeps polling.
-			writeJSON(w, http.StatusOK, map[string]any{"run_id": id, "status": "accepted"})
-			return
-		}
-		writeErr(w, http.StatusNotFound, "no such run")
+		// Issued by this token but not yet on disk (the run just started):
+		// accepted, not missing — the caller keeps polling.
+		writeJSON(w, http.StatusOK, map[string]any{"run_id": id, "status": "accepted"})
 		return
 	}
 	writeJSON(w, http.StatusOK, s.result(id, rec))
@@ -343,26 +352,44 @@ func wantsWait(r *http.Request) bool {
 	return v == "1" || strings.EqualFold(v, "true")
 }
 
-// runIDSeq disambiguates two invokes that land in the same nanosecond.
+// lowerBase32 encodes the random id suffix: the standard base32 alphabet,
+// lowercased and unpadded, so an id is filesystem-safe (used as a §20 history
+// filename) and URL-safe (used as a /runs/<id> path segment).
+var lowerBase32 = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
+
+// NewRunID mints a unique, filesystem-safe, time-ordered, UNGUESSABLE history id
+// — exported for callers that dispatch through a different transport (the MCP
+// face over the control socket) but need the same id shape to read the run back.
+func NewRunID() string { return newRunID() }
+
+// newRunID mints a unique, filesystem-safe, time-ordered, unguessable history
+// id (#36 §13 review, item 3b). A run id doubles as the read capability for
+// GET /runs/<id>, so it must not be enumerable: the leading time component
+// keeps §20 records loosely ordered and collision-free across a nanosecond,
+// while the trailing 128 bits of crypto/rand entropy make an id impossible to
+// guess or walk. The old "r"+base36(nanos)+"x"+base36(seq) shape leaked the
+// clock and a monotonic counter — trivially enumerable.
+func newRunID() string {
+	// The '-' separator is absent from both the base36 time part and the base32
+	// suffix alphabet, so the id splits cleanly and stays filesystem/URL-safe.
+	prefix := "r" + strconv.FormatInt(time.Now().UnixNano(), 36) + "-"
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failing is catastrophic and near-impossible; fall back to a
+		// still-unique (if not unguessable) id rather than panic mid-invoke.
+		runIDSeq.Lock()
+		runIDSeq.n++
+		seq := runIDSeq.n
+		runIDSeq.Unlock()
+		return prefix + strconv.FormatInt(seq, 36)
+	}
+	return prefix + lowerBase32.EncodeToString(b[:])
+}
+
+// runIDSeq is the fallback disambiguator if crypto/rand ever fails.
 var runIDSeq struct {
 	sync.Mutex
 	n int64
-}
-
-// NewRunID mints a unique, filesystem-safe, time-ordered history id — exported
-// for callers that dispatch through a different transport (the MCP face over
-// the control socket) but need the same id shape to read the run back.
-func NewRunID() string { return newRunID() }
-
-// newRunID mints a unique, filesystem-safe, time-ordered history id. Same shape
-// family as the engine's own ("r" + base36), with a per-process counter so
-// concurrent invokes never collide.
-func newRunID() string {
-	runIDSeq.Lock()
-	runIDSeq.n++
-	seq := runIDSeq.n
-	runIDSeq.Unlock()
-	return "r" + strconv.FormatInt(time.Now().UnixNano(), 36) + "x" + strconv.FormatInt(seq, 36)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

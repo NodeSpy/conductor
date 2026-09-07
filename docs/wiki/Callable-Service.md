@@ -148,11 +148,13 @@ local paths or hostnames (non-secret, but internal), so the external caller sees
 only `"workflow failed"` plus the operator-named `failed_step`. The full failure
 detail stays in the §20 history record — read it with `conductor runs <id>`.
 
-Reads are isolated per token: a token may read only runs it invoked. An
-unknown id it did not issue returns `404`; one issued by *another* token
-returns `403`. (After a daemon restart the in-memory issue map is empty, so a
-pre-restart run is readable by any authenticated token — the §20 record itself
-is the durable audit.)
+Reads are isolated per token and **fail closed**: a token may read only runs it
+invoked in this process. An id whose issuing token is unknown here — never
+issued, or issued before the daemon last restarted — returns `404` (the read
+map is in-memory); an id owned by *another* token returns `403`. Run ids are
+128-bit unguessable (`crypto/rand`), so an id cannot be enumerated or walked,
+and a pre-restart run is not exposed to any other caller. The durable §20 record
+remains readable with local access via `conductor runs <id>`.
 
 ### HMAC callers
 

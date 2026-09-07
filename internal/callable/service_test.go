@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -359,6 +360,95 @@ func TestFailedRunErrorIsGeneric(t *testing.T) {
 	}
 	if resp["failed_step"] != "query" {
 		t.Fatalf("failed_step = %v, want query (operator-named, safe to expose)", resp["failed_step"])
+	}
+}
+
+// TestGetRunFailsClosedOnUnknownOwner proves a run whose issuing token this
+// process does not know — a record on disk but never issued here (the
+// post-restart or ring-evicted case) — is REFUSED, not readable by any
+// authenticated token. The old code failed OPEN, which combined with
+// enumerable ids let a caller read a victim's run. (#36 §13 review, item 3a.)
+func TestGetRunFailsClosedOnUnknownOwner(t *testing.T) {
+	h := newHarness(t, bearerCfg(), map[string]bool{"triage": true})
+	h.runs.put(okRun("rvictim-not-issued")) // on disk, never issued by this Service
+
+	rw := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/runs/rvictim-not-issued", nil)
+	r.Header.Set("Authorization", "Bearer s3cret")
+	h.svc.handleRun(rw, r)
+
+	if rw.Code != http.StatusNotFound {
+		t.Fatalf("unknown-owner read status = %d, want 404 (fail closed); body=%s", rw.Code, rw.Body.String())
+	}
+	if strings.Contains(rw.Body.String(), "answer") {
+		t.Fatalf("run outputs leaked for an unknown-owner run: %s", rw.Body.String())
+	}
+}
+
+// TestEvictionDeniesRatherThanDiscloses proves a bounded-map eviction (a caller
+// bursting invokes to push a victim's ownership entry out of the ring) can no
+// longer be weaponized into a cross-token read: once evicted the run is
+// unknown-owner and fails closed, not readable by the evicting token. (#36 §13
+// review, item 3c.)
+func TestEvictionDeniesRatherThanDiscloses(t *testing.T) {
+	h := newHarness(t, bearerCfg(), map[string]bool{"triage": true})
+	h.svc.issued = newIssuedSet(4) // tiny ring so eviction is cheap to trigger
+
+	h.svc.issued.add("rvictim", "other") // the victim token owns a run…
+	h.runs.put(okRun("rvictim"))         // …which lands on disk
+	for i := 0; i < 6; i++ {             // attacker bursts, evicting rvictim
+		h.svc.issued.add("rburst"+strconv.Itoa(i), "n8n")
+	}
+	if _, known := h.svc.issued.owner("rvictim"); known {
+		t.Fatal("precondition: rvictim should have been evicted by the burst")
+	}
+
+	rw := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/runs/rvictim", nil)
+	r.Header.Set("Authorization", "Bearer s3cret") // n8n, the evictor
+	h.svc.handleRun(rw, r)
+
+	if rw.Code != http.StatusNotFound {
+		t.Fatalf("evicted-run read status = %d, want 404 (deny, not disclose); body=%s", rw.Code, rw.Body.String())
+	}
+	if strings.Contains(rw.Body.String(), "answer") {
+		t.Fatalf("victim run outputs leaked after eviction: %s", rw.Body.String())
+	}
+}
+
+// TestRunIDUnguessable proves minted run ids carry crypto-random entropy — not
+// a walkable monotonic counter — while staying unique and filesystem/URL-safe.
+// A run id doubles as the read capability for GET /runs/<id>. (#36 §13 review,
+// item 3b.)
+func TestRunIDUnguessable(t *testing.T) {
+	seen := map[string]bool{}
+	var suffixes []string
+	for i := 0; i < 2000; i++ {
+		id := newRunID()
+		if !strings.HasPrefix(id, "r") {
+			t.Fatalf("id %q missing r prefix", id)
+		}
+		if strings.ContainsAny(id, "/\\.") || strings.Contains(id, "..") {
+			t.Fatalf("id %q is not filesystem/URL-safe", id)
+		}
+		if seen[id] {
+			t.Fatalf("duplicate id %q", id)
+		}
+		seen[id] = true
+		dash := strings.LastIndexByte(id, '-')
+		if dash < 0 {
+			t.Fatalf("id %q has no random suffix", id)
+		}
+		suffixes = append(suffixes, id[dash+1:])
+	}
+	// 128 bits base32 → 26 chars: long enough to be unguessable, not a counter.
+	if len(suffixes[0]) < 24 {
+		t.Fatalf("random suffix %q too short (%d chars) to be unguessable", suffixes[0], len(suffixes[0]))
+	}
+	// A monotonic counter would make consecutive suffixes near-identical; random
+	// ones differ completely.
+	if suffixes[0] == suffixes[1] {
+		t.Fatalf("consecutive ids share a suffix — not random")
 	}
 }
 
