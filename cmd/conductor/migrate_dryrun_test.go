@@ -247,3 +247,69 @@ triggers:
 		t.Fatal("degraded hold did not pick up the fixed connectors-schema config")
 	}
 }
+
+// TestResolveBootConfigHoldsGateOnUnknownKey drives the actual boot seam
+// resolveBootConfig (the gate cmdRun uses), not holdDegradedUntilLoadable in
+// isolation, so a regression that re-narrows the hold to migrateWarning!="" is
+// caught: a connectors-schema config with a stray key loads-fails with an empty
+// warning, and the seam must HOLD (never return → never exit cmdRun) until the
+// key is removed.
+func TestResolveBootConfigHoldsGateOnUnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	broken := `
+connectors:
+  timer:
+    type: cron
+    schedules: { tick: { every: 1h } }
+bogus_unknown_key: true
+triggers:
+  - on: timer.tick
+    steps: [{ id: t, type: command, command: ["true"] }]
+`
+	if err := os.WriteFile(path, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--config", path}
+	// Precondition: no migration (already connectors schema) → migrateWarning=="".
+	if w := autoMigrateOnBoot(args); w != "" {
+		t.Fatalf("connectors-schema config must not migrate (warning %q)", w)
+	}
+
+	old := degradedRetryInterval
+	degradedRetryInterval = 30 * time.Millisecond
+	t.Cleanup(func() { degradedRetryInterval = old })
+
+	done := make(chan error, 1)
+	go func() { _, _, err := resolveBootConfig(args); done <- err }()
+
+	// The seam must NOT return on a still-broken config — returning is exactly
+	// the cmdRun exit → service-manager crash-loop H1 prevents.
+	select {
+	case err := <-done:
+		t.Fatalf("resolveBootConfig returned on a still-broken connectors-schema config (would exit cmdRun → crash-loop): err=%v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// Operator removes the stray key — the seam resumes a normal boot.
+	fixed := `
+connectors:
+  timer:
+    type: cron
+    schedules: { tick: { every: 1h } }
+triggers:
+  - on: timer.tick
+    steps: [{ id: t, type: command, command: ["true"] }]
+`
+	if err := os.WriteFile(path, []byte(fixed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("seam must resume with the fixed config: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("seam did not pick up the fixed connectors-schema config")
+	}
+}

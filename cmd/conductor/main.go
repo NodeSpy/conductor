@@ -190,6 +190,26 @@ func loadConfig(args []string) (*config.Config, []string, error) {
 	return cfg, rest, err
 }
 
+// resolveBootConfig runs the daemon's boot config pipeline: migrate-on-boot,
+// then load, and on ANY load failure holds degraded until the config becomes
+// loadable rather than returning an error that exits cmdRun into a
+// service-manager crash-loop (H1). The failure that must hold is not only a
+// failed migration — a connectors-schema config the strict loader rejects (a
+// stray key, an env ref that didn't resolve) reaches here with migrateWarning
+// == "", just as much a restart-loop trap. Returns the loaded config and any
+// escalate warning to surface. This is the testable boot seam: the gate lives
+// here, not inline in cmdRun.
+func resolveBootConfig(args []string) (*config.Config, string, error) {
+	migrateWarning := autoMigrateOnBoot(args)
+	// loadConfig loads the sibling conductor.env first, so ${...} refs resolve
+	// (this is also how launchd — which has no EnvironmentFile — gets secrets).
+	cfg, _, err := loadConfig(args)
+	if err != nil {
+		cfg, migrateWarning, err = holdDegradedUntilLoadable(args, migrateWarning, err)
+	}
+	return cfg, migrateWarning, err
+}
+
 // buildIntegrations instantiates every configured integration via the registry.
 func buildIntegrations(cfg *config.Config) ([]core.Integration, error) {
 	var out []core.Integration
@@ -284,21 +304,7 @@ func cmdRun(args []string) error {
 	// connectors schema (backed up, validated, swapped) BEFORE the strict
 	// runtime load; on any failure the daemon keeps running on the legacy
 	// config and notifies.
-	migrateWarning := autoMigrateOnBoot(args)
-
-	// loadConfig loads the sibling conductor.env first, so ${...} refs resolve
-	// (this is also how launchd — which has no EnvironmentFile — gets secrets).
-	cfg, _, err := loadConfig(args)
-	if err != nil {
-		// The post-migrate config does not load — whether or not a migration
-		// ran (migrateWarning may be ""). A connectors-schema config the strict
-		// loader rejects (a stray key, an env ref that didn't resolve) is just
-		// as much a crash-loop trap as a failed migration: returning here exits,
-		// and the service manager restarts us into the same wall forever. Hold
-		// the process alive instead, retrying migrate+load periodically so a
-		// fixed (or fixable) config is picked up without operator intervention.
-		cfg, migrateWarning, err = holdDegradedUntilLoadable(args, migrateWarning, err)
-	}
+	cfg, migrateWarning, err := resolveBootConfig(args)
 	if err != nil {
 		return err
 	}
