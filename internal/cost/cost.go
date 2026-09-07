@@ -179,6 +179,16 @@ func usageFrom(m map[string]any, model string) (Usage, bool) {
 	if !found {
 		return Usage{}, false
 	}
+	// Self-reported figures are untrusted input (#36 review H5): a negative
+	// value would poison the shared spend meter (draining other runs' budget
+	// windows), so clamp everything to >= 0 before it goes anywhere.
+	u.InputTokens = max(u.InputTokens, 0)
+	u.OutputTokens = max(u.OutputTokens, 0)
+	u.TotalTokens = max(u.TotalTokens, 0)
+	u.CostUSD = max(u.CostUSD, 0)
+	if u.TotalTokens < u.InputTokens+u.OutputTokens {
+		u.TotalTokens = u.InputTokens + u.OutputTokens
+	}
 	if !costReported && u.TotalTokens > 0 {
 		u.CostUSD = PriceUSD(u.Model, u.InputTokens, u.OutputTokens)
 	}
@@ -205,13 +215,33 @@ func Estimate(model, prompt, output string) Usage {
 	}
 }
 
+// underReportDivisor is the plausibility floor: a reported figure below
+// 1/10th of the model+I/O estimate is treated as evasion (or breakage), not
+// truth — a runtime "reporting" near-zero usage must not slip under budget
+// caps. Legitimate savings (prompt caching) don't shrink usage 10x below the
+// raw I/O size; when they someday do, the floor errs toward over-charging
+// the budget, never under.
+const underReportDivisor = 10
+
 // FromRun resolves one run's usage: runtime-reported when the output carries
-// it, estimated (approximate) otherwise.
+// it — clamped and floored against the model+I/O estimate (#36 review H5) —
+// estimated (approximate) otherwise.
 func FromRun(model, prompt, output string) Usage {
-	if u, ok := ParseReported(output, model); ok {
-		return u
+	u, ok := ParseReported(output, model)
+	if !ok {
+		return Estimate(model, prompt, output)
 	}
-	return Estimate(model, prompt, output)
+	est := Estimate(model, prompt, output)
+	// Implausibly low token report → the estimate is the floor.
+	if u.TotalTokens*underReportDivisor < est.TotalTokens {
+		return est
+	}
+	// Tokens plausible but the $ figure is far below what those very tokens
+	// cost at table price → recompute from the reported tokens.
+	if floor := PriceUSD(u.Model, u.InputTokens, u.OutputTokens); u.CostUSD*underReportDivisor < floor {
+		u.CostUSD = floor
+	}
+	return u
 }
 
 // Meter is the rolling-window spend ledger behind the hard budget caps. Like

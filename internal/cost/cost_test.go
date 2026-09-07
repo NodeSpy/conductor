@@ -2,6 +2,7 @@ package cost
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -132,5 +133,53 @@ func TestMeterWindows(t *testing.T) {
 	nilM.Record([]string{"x"}, Usage{})
 	if tok, _ := nilM.SpentIn("x", time.Hour); tok != 0 {
 		t.Fatal("nil meter")
+	}
+}
+
+// Regression (#36 review H5): self-reported usage is untrusted — negatives
+// are clamped (they'd drain other runs' shared budget windows) and
+// absurdly-low reports are floored to the model+I/O estimate (a runtime
+// "reporting" near-zero must not slip under hard caps).
+func TestReportedUsageClampedAndFloored(t *testing.T) {
+	// Negative report → clamped at parse.
+	u, ok := ParseReported(`{"usage":{"input_tokens":-5000,"output_tokens":-1},"total_cost_usd":-9.5}`, "claude-sonnet")
+	if !ok || u.InputTokens != 0 || u.OutputTokens != 0 || u.TotalTokens != 0 || u.CostUSD != 0 {
+		t.Fatalf("negative report must clamp to zero: %+v (ok=%v)", u, ok)
+	}
+	// And a negative report can't poison the meter through FromRun either.
+	m := NewMeter()
+	m.Record([]string{"global"}, FromRun("claude-sonnet", "p", `{"usage":{"input_tokens":-5000,"output_tokens":0}}`))
+	if tok, usd := m.SpentIn("global", time.Hour); tok < 0 || usd < 0 {
+		t.Fatalf("meter poisoned: %d %v", tok, usd)
+	}
+
+	// A big run "reporting" near-zero tokens is floored to the estimate.
+	prompt := strings.Repeat("p", 8000)  // ~2000 tokens
+	output := strings.Repeat("o", 8000)  // ~2000 tokens
+	_ = output
+	low := `{"usage":{"input_tokens":1,"output_tokens":1}}`
+	u = FromRun("claude-sonnet", prompt, low)
+	est := Estimate("claude-sonnet", prompt, low)
+	if !u.Approximate || u.TotalTokens != est.TotalTokens {
+		t.Fatalf("under-report must be floored to the estimate: %+v (est %+v)", u, est)
+	}
+
+	// Plausible tokens with an absurdly low $ figure → cost recomputed from
+	// the reported tokens at table price.
+	rep := `{"usage":{"input_tokens":2000,"output_tokens":2000},"total_cost_usd":0.000001}`
+	u = FromRun("claude-sonnet", prompt, rep)
+	want := PriceUSD("claude-sonnet", 2000, 2000)
+	if u.CostUSD != want {
+		t.Fatalf("lowballed cost must be floored: %v want %v", u.CostUSD, want)
+	}
+	if u.Approximate {
+		t.Fatalf("reported-token usage stays non-approximate: %+v", u)
+	}
+
+	// An honest report well within range passes through untouched.
+	honest := `{"usage":{"input_tokens":1900,"output_tokens":600},"total_cost_usd":0.02}`
+	u = FromRun("claude-sonnet", prompt, honest)
+	if u.TotalTokens != 2500 || u.CostUSD != 0.02 || u.Approximate {
+		t.Fatalf("honest report altered: %+v", u)
 	}
 }
