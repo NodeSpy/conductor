@@ -375,3 +375,32 @@ steps:
 		t.Fatalf("failing gate must be the plan sub-step's: %+v", last)
 	}
 }
+
+// Regression (#36 review H6): an agent-form critic with NO worktree to
+// review must fail the check loudly — a critic that reviewed nothing can
+// still emit pass: true, which would be a silent pass.
+func TestGateCriticWithoutWorkdirFailsLoudly(t *testing.T) {
+	rig, _, _ := gateRig(t, gateCfg)
+	rig.Runner.Agents.FollowUp = nil
+	criticRan := false
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		if req.Action.Agent == "critic" {
+			criticRan = true
+			return dispatch.RunRef{AgentID: "c1", Output: `{"pass": true}`}, nil
+		}
+		return dispatch.RunRef{AgentID: "a1", Output: "done"}, nil // NO Workdir
+	}
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - { id: fix, type: agent, agent: fixer, prompt: "fix", gate: { run: [ critic ], max_revisions: 0 } }
+`)
+	runTrigger(rig, newTrigger("ping", nil), spec)
+	failed, errStr := rig.workflowFailed()
+	if !failed || !strings.Contains(errStr, "gate failed: critic") {
+		t.Fatalf("workdir-less critic must fail the gate: %v %q", failed, errStr)
+	}
+	if criticRan {
+		t.Fatal("the critic must not even dispatch with nothing to review")
+	}
+}

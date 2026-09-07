@@ -162,23 +162,23 @@ func passWord(p bool) string {
 // execCheck runs one check step against the agent's worktree and reads its
 // verdict.
 func (r *Runner) execCheck(ctx context.Context, t core.Trigger, stepID, name string, chk config.Step, ref dispatch.RunRef, data map[string]any, round int) gateCheckResult {
-	// Command/code checks run IN the proposed change. A check may pin its own
-	// workdir (or host) instead; otherwise a missing local worktree (remote
-	// runtime, checkout: none) is a clear failure, never a silent pass.
-	needsWorkdir := (chk.Form() == "command" || chk.Form() == "code") &&
+	// Checks that examine the proposed change run IN the agent's worktree. A
+	// check may pin its own workdir (or host) instead; otherwise a missing
+	// local worktree (remote runtime, checkout: none) is a clear FAILURE for
+	// every form — command, code, AND an agent critic (#36 review H6): a
+	// critic dispatched with nothing to review can still emit pass: true,
+	// which would be a silent pass on an unreviewed change.
+	needsWorkdir := (chk.Form() == "command" || chk.Form() == "code" || chk.Form() == "agent") &&
 		chk.WorkDir == "" && chk.Host == "" && chk.SSH == nil
 	if needsWorkdir && ref.Workdir == "" {
 		return gateCheckResult{Name: name, Detail: "no local worktree to check (remote runtime or checkout: none) — give the check an explicit workdir:/host:, or run the agent on a local worktree"}
 	}
 	if needsWorkdir {
 		chk.WorkDir = ref.Workdir
-	}
-	// Agent checks (critics) default into the same worktree so they see the
-	// proposed change.
-	if chk.Form() == "agent" && chk.WorkDir == "" && ref.Workdir != "" {
-		chk.WorkDir = ref.Workdir
-		if chk.Checkout == "" {
-			chk.Checkout = "none" // the worktree already exists; don't provision another
+		// An agent critic reviews the existing worktree in place — never
+		// provision a second checkout.
+		if chk.Form() == "agent" && chk.Checkout == "" {
+			chk.Checkout = "none"
 		}
 	}
 
