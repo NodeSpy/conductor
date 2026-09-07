@@ -64,9 +64,10 @@ func newAgentDeckController(name string, cc config.ControllerConfig, prov Provis
 	}
 }
 
-func (c *agentDeckController) Name() string         { return c.name }
-func (c *agentDeckController) Model() SessionModel  { return ModelNative }
-func (c *agentDeckController) Transport() Transport { return TransportNative }
+func (c *agentDeckController) Name() string           { return c.name }
+func (c *agentDeckController) ConfiguredHost() string { return c.host }
+func (c *agentDeckController) Model() SessionModel    { return ModelNative }
+func (c *agentDeckController) Transport() Transport   { return TransportNative }
 
 // Initialize reports agent-deck's capabilities: it owns the session (native),
 // accepts the conductor worktree, and takes follow-up sends. Permission requests

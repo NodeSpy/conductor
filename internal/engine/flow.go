@@ -397,5 +397,39 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 		RecordUsage: func(t core.Trigger, agentName, stepID, runID, wfScope string, u cost.Usage) {
 			e.recordUsage(t, agentName, stepID, runID, wfScope, u)
 		},
+		FollowUp: e.agentFollowUp,
 	}
+}
+
+// sendCapturer is the optional Runner capability behind gate revisions: send
+// a follow-up prompt to a live agent and capture the completed turn's output
+// (the paseo dispatcher's `paseo send --json`).
+type sendCapturer interface {
+	SendCapture(ctx context.Context, id, prompt string) (string, error)
+}
+
+// agentFollowUp routes a gate-revise prompt (#36 §16) back to the SAME
+// agent: a session-bound profile (§10) goes through affinity; a paseo agent
+// takes a captured follow-up turn. ok=false when neither applies — the gate
+// escalates instead of revising (an honest "this runtime can't revise").
+func (e *Engine) agentFollowUp(ctx context.Context, agentID, agentName string, t core.Trigger, prompt string) (string, bool, error) {
+	profile := e.cfg.Agents[agentName]
+	if e.affinity != nil && profile.Session != nil {
+		return e.affinity.Followup(ctx, agentName, profile, t, prompt)
+	}
+	if agentID == "" {
+		return "", false, nil
+	}
+	runner, err := e.runnerFor(profile)
+	if err != nil {
+		return "", false, err
+	}
+	if sc, ok := runner.(sendCapturer); ok {
+		out, serr := sc.SendCapture(ctx, agentID, prompt)
+		if serr != nil {
+			return "", false, serr
+		}
+		return out, true, nil
+	}
+	return "", false, nil
 }

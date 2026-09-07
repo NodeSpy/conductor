@@ -68,7 +68,12 @@ type RunRef struct {
 	Skipped  bool     `json:"skipped,omitempty"` // no work dispatched (e.g. catch-up while an agent is on the PR)
 	Queued   bool     `json:"queued,omitempty"`  // handed to an agent already on the PR (no new agent spawned)
 	Adopted  bool     `json:"adopted,omitempty"` // queued to an open workspace you already had on this branch
-	Output   string   `json:"-"`
+	// Workdir is the LOCAL directory the agent worked in (its isolated
+	// worktree, or an explicit workdir) — where quality-gate checks run and
+	// the proposed diff is read (#36 §16/§17). Empty for remote runtimes,
+	// checkout-less runs, and queued/adopted dispatches.
+	Workdir string `json:"workdir,omitempty"`
+	Output  string `json:"-"`
 }
 
 // Dispatcher routes requests to a backend.

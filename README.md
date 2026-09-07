@@ -441,6 +441,31 @@ hold label. Any connector or trigger turns off in place with
 `enabled: false`; the global kill switch stays the runtime `conductor pause`
 / `resume`.
 
+## Quality gates on agent output
+
+A `gate:` runs named checks — tests, lint, a critic-agent verdict, any verb
+with a pass/fail reading — against an agent's **proposed change** (in its
+worktree) before the step's result promotes:
+
+```yaml
+checks:
+  test:   { type: command, command: ["make", "test"] }
+  critic: { type: agent, agent: reviewer, prompt: "Review {{.gate.workdir}}; output {\"pass\": bool}" }
+
+triggers:
+  - on: gh.review_requested
+    steps:
+      - { id: fix, type: agent, agent: fixer, prompt: "…",
+          gate: { run: [ test, critic ], max_revisions: 2 } }
+```
+
+Pass → promote. Fail → the failing checks' detail loops back to the **same
+agent** as a revise follow-up (bounded by `max_revisions`), then the run
+escalates and the step fails — discard, audited at every round. Gates sit on
+agent steps or as trigger/workflow defaults; checks run in the agent's
+worktree with `{{.gate.*}}` scope. See the
+[Gates wiki page](../../wiki/Gates).
+
 ## Cost & token accounting
 
 Every agent run is metered (#36 §14): token usage and `$` cost come from the

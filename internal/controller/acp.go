@@ -63,8 +63,9 @@ func newACPController(name string, cc config.ControllerConfig, prov Provisioner)
 	}
 }
 
-func (c *acpController) Name() string         { return c.name }
-func (c *acpController) Transport() Transport { return TransportACP }
+func (c *acpController) Name() string           { return c.name }
+func (c *acpController) ConfiguredHost() string { return c.host }
+func (c *acpController) Transport() Transport   { return TransportACP }
 
 // SessionPersistent: an ACP session is addressable by id (session/load for
 // loadSession-capable agents) — the session-affinity gate. An agent that

@@ -64,9 +64,10 @@ func newCLIController(name string, cc config.ControllerConfig, prov Provisioner)
 	}
 }
 
-func (c *cliController) Name() string         { return c.name }
-func (c *cliController) Model() SessionModel  { return c.recipe.model }
-func (c *cliController) Transport() Transport { return TransportCLI }
+func (c *cliController) Name() string           { return c.name }
+func (c *cliController) ConfiguredHost() string { return c.host }
+func (c *cliController) Model() SessionModel    { return c.recipe.model }
+func (c *cliController) Transport() Transport   { return TransportCLI }
 
 // Initialize reports the recipe's capabilities: it accepts the conductor worktree,
 // its session model is the recipe's, and it takes a follow-up only when the recipe

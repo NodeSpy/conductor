@@ -21,6 +21,19 @@ type Provisioner interface {
 // the build here rather than at a call site.
 var _ Provisioner = (*dispatch.Dispatcher)(nil)
 
+// hostedController is an optional Controller capability: report the
+// configured `host:` ("" = launches are local). Used to decide whether the
+// provisioned worktree path is meaningful on THIS box (RunRef.Workdir).
+type hostedController interface{ ConfiguredHost() string }
+
+// hostOf reads a controller's configured host, "" when it doesn't say.
+func hostOf(c Controller) string {
+	if h, ok := c.(hostedController); ok {
+		return h.ConfiguredHost()
+	}
+	return ""
+}
+
 // waiter is an optional Session capability: block until the session's in-flight
 // turn finishes. The generic runner's WaitForAgent uses it so a concurrency slot
 // frees only once the agent's work is done, matching paseo's `wait`. Sessions that
@@ -87,6 +100,11 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	sess, err := r.c.NewSession(ctx, Spec{Request: req, Cwd: cwd, WorkspaceID: wsID}, r.h)
 	if err != nil {
 		return ref, err
+	}
+	// The provisioned worktree is where gate checks run and the proposed
+	// diff is read (#36 §16/§17); remote-host launches have no local path.
+	if resolveHost(hostOf(r.c), req.Profile.Host) == "" {
+		ref.Workdir = cwd
 	}
 
 	id := sess.ID()

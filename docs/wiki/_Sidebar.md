@@ -20,6 +20,7 @@ The model
 - [[Binary-Data]]
 - [[Agent-Skill]]
 - [[Policy]]
+- [[Gates]]
 - [[Cost-Accounting]]
 - [[Secrets]]
 - [[Hosts]]

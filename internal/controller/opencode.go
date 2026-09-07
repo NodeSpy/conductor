@@ -69,9 +69,10 @@ func newOpencodeController(name string, cc config.ControllerConfig, prov Provisi
 	return c
 }
 
-func (c *opencodeController) Name() string         { return c.name }
-func (c *opencodeController) Model() SessionModel  { return ModelResumable }
-func (c *opencodeController) Transport() Transport { return TransportNative }
+func (c *opencodeController) Name() string           { return c.name }
+func (c *opencodeController) ConfiguredHost() string { return c.host }
+func (c *opencodeController) Model() SessionModel    { return ModelResumable }
+func (c *opencodeController) Transport() Transport   { return TransportNative }
 
 // Initialize reports opencode's native capabilities. A session is resumable by id,
 // runs in the conductor-provisioned worktree, accepts follow-up turns, and can be

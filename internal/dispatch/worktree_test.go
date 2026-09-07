@@ -10,6 +10,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/hosts"
 )
 
 // A worktree dispatch pre-creates the isolated workspace with `paseo workspace
@@ -309,5 +310,39 @@ func TestCloneParentDir(t *testing.T) {
 	}
 	if want := filepath.Join(tmp, ".conductor", "checkouts"); got != want {
 		t.Fatalf("cloneParentDir() = %q, want %q", got, want)
+	}
+}
+
+// The pre-created worktree's path rides RunRef.Workdir (#36 §16/§17) — where
+// gate checks run and the proposed diff is read. Remote paseo leaves it
+// empty: the path lives on the other box.
+func TestPaseoWorkdirCaptured(t *testing.T) {
+	d := newDispatcher()
+	d.CheckoutDir = func(context.Context, string) (string, error) { return "/checkouts/acme-w", nil }
+	d.WorktreeCreator = func(context.Context, Request, string) (string, string, error) {
+		return "wks_pr5", "/wt/pr5", nil
+	}
+	req := Request{
+		Trigger: core.Trigger{Kind: "review_requested",
+			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}},
+		Action:  config.Action{Type: "agent", Agent: "a", Prompt: "review"},
+		Profile: config.AgentProfile{Workspace: "worktree"},
+	}
+	ref, err := d.Dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Workdir != "/wt/pr5" {
+		t.Fatalf("Workdir: %q", ref.Workdir)
+	}
+
+	// Remote: same dispatch, host-pinned dispatcher → no local Workdir.
+	d.Remote = &hosts.Target{Name: "box", Cfg: config.HostConfig{Host: "box.internal"}}
+	ref, err = d.Dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Workdir != "" {
+		t.Fatalf("remote Workdir must be empty: %q", ref.Workdir)
 	}
 }

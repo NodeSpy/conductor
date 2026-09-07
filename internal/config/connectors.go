@@ -180,6 +180,9 @@ type WorkflowDef struct {
 	Inputs      map[string]InputSpec `yaml:"inputs,omitempty"`
 	Outputs     map[string]string    `yaml:"outputs,omitempty"` // name -> template over internal step outputs
 	Steps       []Step               `yaml:"steps,omitempty"`
+	// Gate is the default quality gate (#36 §16) for this workflow's agent
+	// steps (a step's own gate wins).
+	Gate *GateSpec `yaml:"gate,omitempty"`
 }
 
 // InputSpec declares one workflow input.
@@ -298,6 +301,9 @@ type TriggerSpec struct {
 	Repo string `yaml:"repo,omitempty"`
 	// Shadow previews this trigger's work without dispatching.
 	Shadow *bool `yaml:"shadow,omitempty"`
+	// Gate is the default quality gate (#36 §16) for every agent step of
+	// this trigger that doesn't carry its own.
+	Gate *GateSpec `yaml:"gate,omitempty"`
 }
 
 // UnmarshalYAML peels a list-valued `on:` into OnSources before the plain
@@ -505,8 +511,40 @@ type Step struct {
 	// step-level hooks, scoped to this step
 	Hooks []Hook `yaml:"hooks,omitempty"`
 
+	// Gate is the quality gate on this agent step's PROPOSED change
+	// (#36 §16): named checks from the top-level checks: map run in the
+	// agent's worktree after it finishes; a failure loops back to the agent
+	// (bounded), then escalates. Agent-form foreground steps only.
+	Gate *GateSpec `yaml:"gate,omitempty"`
+
 	Backend string `yaml:"backend,omitempty"` // dispatch backend override (carried from legacy)
 	Shadow  *bool  `yaml:"shadow,omitempty"`
+}
+
+// GateSpec configures one quality gate (#36 §16): which checks run against
+// the agent's proposed change and how many revise rounds a failure gets
+// before the run escalates. Settable on an agent step, or as a default for
+// every agent step of a trigger/workflow (the step's own gate wins).
+type GateSpec struct {
+	// Run names checks from the top-level `checks:` map, run in order.
+	Run []string `yaml:"run"`
+	// Require is the pass criterion: "pass" (default — every check must
+	// pass). Reserved for future criteria; only "pass" is valid today.
+	Require string `yaml:"require,omitempty"`
+	// MaxRevisions bounds the fail → agent-revise → re-check loop before the
+	// gate escalates (default 3; 0 = no revisions, escalate on first fail).
+	MaxRevisions *int `yaml:"max_revisions,omitempty"`
+}
+
+// DefaultGateMaxRevisions bounds the gate revise loop when unset.
+const DefaultGateMaxRevisions = 3
+
+// MaxRevisionsOrDefault returns the gate's revise bound.
+func (g *GateSpec) MaxRevisionsOrDefault() int {
+	if g != nil && g.MaxRevisions != nil {
+		return *g.MaxRevisions
+	}
+	return DefaultGateMaxRevisions
 }
 
 // Form returns the step's form keyword: "agent", "command", "code", "verb",
@@ -939,6 +977,9 @@ func (c *Config) validateConnectors() error {
 	if err := c.validateRuntimeDefaults(); err != nil {
 		return err
 	}
+	if err := c.validateChecks(); err != nil {
+		return err
+	}
 	for name, h := range c.Hosts {
 		if name == "" {
 			return fmt.Errorf("config: hosts: empty host name")
@@ -972,6 +1013,9 @@ func (c *Config) validateConnectors() error {
 		if err := validatePolicyBlock(where+" policy", t.Policy); err != nil {
 			return err
 		}
+		if err := c.validateGate(where, t.Gate); err != nil {
+			return err
+		}
 		if err := validateSteps(where, t.Steps, c); err != nil {
 			return err
 		}
@@ -993,6 +1037,9 @@ func (c *Config) validateConnectors() error {
 			default:
 				return fmt.Errorf("config: %s: input %q: unknown type %q", where, in, spec.Type)
 			}
+		}
+		if err := c.validateGate(where, wf.Gate); err != nil {
+			return err
 		}
 		if err := validateSteps(where, wf.Steps, c); err != nil {
 			return err
@@ -1074,6 +1121,11 @@ func validateStep(w string, s Step, c *Config) error {
 	}
 	if forms > 1 {
 		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/run/uses/workflow)", w)
+	}
+	if c != nil {
+		if err := c.validateStepGate(w, s); err != nil {
+			return err
+		}
 	}
 	if s.Uses != "" {
 		conn, verb, ok := strings.Cut(s.Uses, ".")

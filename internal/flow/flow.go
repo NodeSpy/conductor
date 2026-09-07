@@ -78,6 +78,10 @@ type AgentServices struct {
 	// RecordUsage charges one agent run's token/$ usage to its budget scopes
 	// and the audit. nil = no accounting (tests).
 	RecordUsage func(t core.Trigger, agentName, stepID, runID, wfScope string, u cost.Usage)
+	// FollowUp delivers a gate-revise prompt to a live agent and captures the
+	// reply (#36 §16): a bound session (§10) or a paseo send-capture. ok=false
+	// when the runtime can't take one — the gate then escalates.
+	FollowUp func(ctx context.Context, agentID, agentName string, t core.Trigger, prompt string) (string, bool, error)
 }
 
 // Runner executes fired triggers through the trigger grammar.
@@ -206,6 +210,7 @@ func (r *Runner) resolveBotReply(t core.Trigger, spec config.TriggerSpec) botRep
 
 func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, batch *Batch, shadow bool) {
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
+	ctx = withDefaultGate(ctx, spec.Gate)
 	ctx = r.withRunBudget(ctx, t, spec)
 	ctx, runCost := withCostAcc(ctx)
 	ctx, hist := r.beginHistory(ctx, run, t, spec, shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow))
@@ -993,7 +998,8 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 		child["group"] = g
 	}
 	var childRun store.WorkflowRun
-	runErr := r.runSteps(ctx, &childRun, t, steps, child, shadow, false)
+	// The workflow's own default gate (#36 §16) governs ITS agent steps.
+	runErr := r.runSteps(withDefaultGate(ctx, wf.Gate), &childRun, t, steps, child, shadow, false)
 	if saved != nil && !shadow {
 		SavedWorkflows().RecordOutcome(name, runErr == nil)
 	}
@@ -1206,6 +1212,16 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	}
 	outputs := extractOutputs(ref.Output)
 	outputs["agent_id"] = ref.AgentID
+	// The quality gate (#36 §16): the agent's PROPOSED change must pass its
+	// checks before this step's outputs promote. Runs while the agent is
+	// still live so a failure can loop back as a revise follow-up.
+	if gspec := r.effectiveGate(ctx, step); gspec != nil && !shadow {
+		rounds, gerr := r.runGate(ctx, t, step, id, gspec, ref, data)
+		if gerr != nil {
+			return outputs, ref.Output, gerr
+		}
+		outputs["gate"] = map[string]any{"passed": true, "rounds": rounds}
+	}
 	// The plan output contract (#36 §11): a plan: block in the final output
 	// is validated, guarded by policy.agent_authored, and executed through
 	// this same runner. A malformed or rejected plan fails the step — the

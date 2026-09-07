@@ -47,8 +47,9 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// of the target repo, because paseo derives the forge owner/repo from the
 	// working directory — not from a flag. Without it, paseo resolves the wrong
 	// repo and fails with WORKSPACE_CREATE_FAILED.
-	cwd := ""        // --cwd: a base checkout paseo derives the forge repo from
-	worktreeWS := "" // pre-created isolated worktree workspace id (pinned via --workspace)
+	cwd := ""         // --cwd: a base checkout paseo derives the forge repo from
+	worktreeWS := ""  // pre-created isolated worktree workspace id (pinned via --workspace)
+	worktreeCwd := "" // that worktree's local path (RunRef.Workdir for gates/diffs)
 	if req.Action.WorkDir != "" {
 		wd, err := render(req.Action.WorkDir, data)
 		if err != nil {
@@ -75,11 +76,12 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 			// agent. In a preview (dry/shadow) we can't touch the daemon, so keep the
 			// old inline `--cwd` + `--new-workspace` argv shape for assertion.
 			if d.WorktreeCreator != nil || (!d.DryRun && !req.Shadow) {
-				id, _, err := d.createWorktree(ctx, req, dir)
+				id, wcwd, err := d.createWorktree(ctx, req, dir)
 				if err != nil {
 					return RunRef{}, fmt.Errorf("create worktree for %s: %w", proj, err)
 				}
 				worktreeWS = id
+				worktreeCwd = wcwd
 			} else {
 				cwd = dir
 			}
@@ -168,6 +170,17 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	}
 
 	ref := RunRef{Backend: "paseo", Kind: req.Trigger.Kind, Argv: append([]string{d.PaseoBin}, argv...)}
+	// The agent's local working directory, for gate checks and diff capture
+	// (#36 §16/§17). A REMOTE paseo's paths live on the other box — leave
+	// empty there so nothing tries to read them locally.
+	if !d.remote() {
+		switch {
+		case worktreeCwd != "":
+			ref.Workdir = worktreeCwd
+		case req.Action.WorkDir != "":
+			ref.Workdir = cwd
+		}
+	}
 
 	if d.DryRun || req.Shadow {
 		ref.Shadowed = true

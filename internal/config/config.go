@@ -84,6 +84,10 @@ type Config struct {
 	Workflows map[string]WorkflowDef `yaml:"workflows"`
 	Triggers  []TriggerSpec          `yaml:"triggers"`
 	Policy    *Policy                `yaml:"policy"`
+	// Checks are the named quality-gate checks (#36 §16) `gate: run:` lists
+	// reference. Each check is one ordinary step (command / code / verb /
+	// critic agent) evaluated to pass/fail against the agent's worktree.
+	Checks map[string]Step `yaml:"checks"`
 	// Pricing overrides the built-in model→$ table cost estimation uses
 	// (#36 §14). Model prices drift; the built-ins are coarse defaults and
 	// every estimated figure is marked approximate.

@@ -159,3 +159,37 @@ func TestRetryFromExplicitStepAndErrors(t *testing.T) {
 		t.Fatalf("bare: %v", err)
 	}
 }
+
+// gate revisions (#36 §16): the engine routes a follow-up to the SAME agent —
+// a paseo runner takes a captured send; runtimes without the capability
+// report ok=false so the gate escalates instead of guessing.
+type capturingDispatcher struct {
+	fakeDispatcher
+	sends []string
+}
+
+func (c *capturingDispatcher) SendCapture(_ context.Context, id, prompt string) (string, error) {
+	c.sends = append(c.sends, id+"|"+prompt)
+	return `{"note":"revised"}`, nil
+}
+
+func TestAgentFollowUpRoutes(t *testing.T) {
+	d := &capturingDispatcher{}
+	// Build the engine ON the capture-capable dispatcher: runnerFor resolves
+	// the default profile to the built-in paseo runner, which is exactly it.
+	e := New(Options{Config: baseCfg(), Store: tempStore(t), Dispatch: d,
+		Notifier: &fakeNotifier{}, UserToken: func() (string, error) { return "u", nil }})
+
+	tr := agentTrigger("fix", "o/r", 1, "h", "s", config.Action{Type: "agent", Agent: "fixer"})
+	out, ok, err := e.agentFollowUp(context.Background(), "agent-9", "fixer", tr, "please fix the tests")
+	if err != nil || !ok || !strings.Contains(out, "revised") {
+		t.Fatalf("paseo follow-up: %q %v %v", out, ok, err)
+	}
+	if len(d.sends) != 1 || !strings.HasPrefix(d.sends[0], "agent-9|") {
+		t.Fatalf("send capture: %v", d.sends)
+	}
+	// No agent id and no bound session → honest ok=false.
+	if _, ok, _ := e.agentFollowUp(context.Background(), "", "fixer", tr, "x"); ok {
+		t.Fatal("no transport must report ok=false")
+	}
+}

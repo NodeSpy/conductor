@@ -347,6 +347,31 @@ hosts:
 #   default: { input: 3.00, output: 15.00 }
 
 # ---------------------------------------------------------------------------
+# checks: + gate: — quality gates on agent output (#36 §16). A gate runs
+# named checks against the agent's PROPOSED change (in its worktree) before
+# the step's result promotes: all pass → promote; a failure loops the detail
+# back to the SAME agent as a revise follow-up (bounded by max_revisions);
+# exhausted → escalate (needs_input) and the step fails. Checks are ordinary
+# steps (command / code / verb / critic agent): a step error or `pass: false`
+# output is a fail; a critic MUST output pass: true|false. gate: sits on an
+# agent step, or on a trigger/workflow as the default for its agent steps.
+# Checks see {{.gate.workdir}} / {{.gate.attempt}} / {{.gate.output}}.
+# ---------------------------------------------------------------------------
+# checks:
+#   test: { type: command, command: ["make", "test"] }        # exit 0 = pass
+#   lint: { run: sh, code: "golangci-lint run ./..." }
+#   critic:
+#     type: agent
+#     agent: reviewer
+#     prompt: "Review the change in {{.gate.workdir}}; output {\"pass\": bool, \"reason\": \"…\"}"
+#     output_schema: { type: object, required: [pass], properties: { pass: { type: boolean } } }
+# triggers:
+#   - on: gh.review_requested
+#     steps:
+#       - { id: fix, type: agent, agent: fixer, prompt: "…",
+#           gate: { run: [ test, lint, critic ], max_revisions: 2 } }
+
+# ---------------------------------------------------------------------------
 # runtimes: — where agents run (previously controllers:). The paseo runtime's
 # bin: replaces the old top-level paseo_bin. Any runtime may set host: to run
 # on a hosts: entry over SSH — a remote paseo runs its whole CLI there (put
