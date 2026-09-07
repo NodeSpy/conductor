@@ -2,11 +2,14 @@ package flow
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
@@ -111,6 +114,84 @@ func TestGateRevisesThenPasses(t *testing.T) {
 	}
 	if strings.Join(outcomes, ",") != "fail,revise,pass" {
 		t.Fatalf("gate outcomes: %v", outcomes)
+	}
+}
+
+// TestGateReviseTurnIsMetered is the F2 regression (#36 §146): a gate-revise
+// follow-up is a real agent turn and must be metered like the initial dispatch
+// — its estimated spend reserved before, its real usage (the captured revise
+// transcript) recorded after under a :revise step id.
+func TestGateReviseTurnIsMetered(t *testing.T) {
+	rig, fake, _ := gateRig(t, gateCfg)
+	fake.outputs["post"] = map[string]any{"id": 1, "pass": false, "reason": "red"}
+	rig.Runner.Agents.FollowUp = func(_ context.Context, agentID, agentName string, _ core.Trigger, prompt string) (string, bool, error) {
+		fake.mu.Lock()
+		fake.outputs["post"] = map[string]any{"id": 2, "pass": true} // the revision fixed it
+		fake.mu.Unlock()
+		// The captured revise turn is a real transcript carrying usage.
+		return `{"usage":{"input_tokens":80,"output_tokens":40},"total_cost_usd":0.3}`, true, nil
+	}
+	var checks []string
+	var recorded []string
+	rig.Runner.Agents.CheckBudget = func(agentName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
+		checks = append(checks, agentName)
+		return nil, nil
+	}
+	rig.Runner.Agents.RecordUsage = func(_ core.Trigger, agentName, stepID, _, _, _ string, res *cost.Reservation, u cost.Usage) {
+		recorded = append(recorded, stepID+"|"+strconv.Itoa(u.TotalTokens))
+	}
+
+	runTrigger(rig, newTrigger("ping", nil), specf(t, gateSpecYAML, 2))
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("workflow failed: %s", errStr)
+	}
+	// Two budget checks: the initial dispatch AND the revise turn.
+	if len(checks) != 2 {
+		t.Fatalf("want dispatch + revise budget checks, got %v", checks)
+	}
+	// The revise turn's real usage (80+40) was recorded under fix:revise.
+	sawRevise := false
+	for _, r := range recorded {
+		if r == "fix:revise|120" {
+			sawRevise = true
+		}
+	}
+	if !sawRevise {
+		t.Fatalf("revise turn usage must be recorded under fix:revise: %v", recorded)
+	}
+}
+
+// TestGateReviseOverBudgetEscalates: when the revise turn is over the spend
+// cap it sheds — the follow-up never reaches the agent and the gate escalates
+// instead of promoting an unmetered change (#36 §146 F2).
+func TestGateReviseOverBudgetEscalates(t *testing.T) {
+	rig, fake, _ := gateRig(t, gateCfg)
+	fake.outputs["post"] = map[string]any{"id": 1, "pass": false, "reason": "red"}
+	followUpCalled := false
+	rig.Runner.Agents.FollowUp = func(_ context.Context, agentID, agentName string, _ core.Trigger, prompt string) (string, bool, error) {
+		followUpCalled = true
+		return "revised", true, nil
+	}
+	n := 0
+	rig.Runner.Agents.CheckBudget = func(agentName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
+		n++
+		if n >= 2 { // the initial dispatch clears; the revise sheds
+			return nil, fmt.Errorf("spend budget: profile:fixer over cap — shedding")
+		}
+		return nil, nil
+	}
+
+	runTrigger(rig, newTrigger("ping", nil), specf(t, gateSpecYAML, 2))
+	failed, errStr := rig.workflowFailed()
+	if !failed || !strings.Contains(errStr, "gate failed") {
+		t.Fatalf("over-budget revise must escalate the gate: failed=%v err=%q", failed, errStr)
+	}
+	if followUpCalled {
+		t.Fatal("a shed revise must never reach the agent")
+	}
+	gates := rig.Store.auditsWithEvent("gate")
+	if len(gates) == 0 || gates[len(gates)-1]["outcome"] != "escalated" {
+		t.Fatalf("gate must escalate on a shed revise: %+v", gates)
 	}
 }
 

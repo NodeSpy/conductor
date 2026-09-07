@@ -7,6 +7,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
@@ -91,7 +92,7 @@ func (r *Runner) runGate(ctx context.Context, t core.Trigger, step config.Step, 
 		if round >= maxRev {
 			return round, r.escalateGate(ctx, t, step, id, failures, round)
 		}
-		out, ok, ferr := r.followUp(ctx, t, step, ref, r.revisePrompt(failures, round, maxRev))
+		out, ok, ferr := r.followUp(ctx, t, step, id, ref, r.revisePrompt(failures, round, maxRev))
 		if ferr != nil || !ok {
 			if ferr != nil {
 				r.Log("%s gate %s: revise follow-up failed: %v", flowTag(t), id, ferr)
@@ -247,9 +248,28 @@ func (r *Runner) redactText(s string) string {
 // followUp routes the revise prompt back to the SAME agent: the engine
 // resolves the transport (bound session, paseo send-capture) — ok=false when
 // the runtime can't take a follow-up, which escalates instead of revising.
-func (r *Runner) followUp(ctx context.Context, t core.Trigger, step config.Step, ref dispatch.RunRef, prompt string) (string, bool, error) {
+//
+// A revise turn is a real agent turn and is metered like the initial dispatch
+// (#36 §146 F2): its estimated spend is reserved before, and its real usage —
+// the captured revise output IS a transcript, so cost.FromRun parses it —
+// settles after. An over-cap revise sheds (the budget error propagates, and
+// the gate escalates rather than promoting an unmetered change).
+func (r *Runner) followUp(ctx context.Context, t core.Trigger, step config.Step, id string, ref dispatch.RunRef, prompt string) (string, bool, error) {
 	if r.Agents.FollowUp == nil {
 		return "", false, nil
 	}
-	return r.Agents.FollowUp(ctx, ref.AgentID, step.Agent, t, prompt)
+	model := r.Cfg.Agents[step.Agent].Model
+	res, berr := r.checkBudget(ctx, step.Agent, cost.Estimate(model, prompt, ""))
+	if berr != nil {
+		return "", false, berr
+	}
+	out, ok, err := r.Agents.FollowUp(ctx, ref.AgentID, step.Agent, t, prompt)
+	if !ok || err != nil {
+		if r.Agents.CancelBudget != nil {
+			r.Agents.CancelBudget(res)
+		}
+		return out, ok, err
+	}
+	r.recordUsage(ctx, t, step.Agent, id+":revise", res, cost.FromRun(model, prompt, out))
+	return out, ok, err
 }
