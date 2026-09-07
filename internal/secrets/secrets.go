@@ -266,6 +266,12 @@ func (r *Resolver) RedactValue(v any) any {
 			out[i] = r.Redact(e)
 		}
 		return out
+	case map[string]string:
+		out := make(map[string]string, len(x))
+		for k, e := range x {
+			out[k] = r.Redact(e)
+		}
+		return out
 	}
 	return v
 }

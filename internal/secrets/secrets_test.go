@@ -147,6 +147,7 @@ func TestRedactValue(t *testing.T) {
 		"list":  []any{"s3cret99", 42},
 		"strs":  []string{"a s3cret99"},
 		"inner": map[string]any{"tok": "s3cret99"},
+		"smap":  map[string]string{"h": "bearer s3cret99"},
 		"n":     7,
 	}
 	out := r.RedactValue(in).(map[string]any)
@@ -156,6 +157,13 @@ func TestRedactValue(t *testing.T) {
 	}
 	if out["n"] != 7 {
 		t.Errorf("non-string values must pass through")
+	}
+	// A map[string]string (e.g. a headers map) must be walked, not passed
+	// through opaque — every sibling shape is redacted, so this one is too.
+	if sm, ok := out["smap"].(map[string]string); !ok {
+		t.Errorf("map[string]string must survive as its own type, got %T", out["smap"])
+	} else if strings.Contains(sm["h"], "s3cret99") {
+		t.Errorf("RedactValue left secret in map[string]string: %q", sm["h"])
 	}
 }
 
