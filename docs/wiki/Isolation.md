@@ -189,9 +189,15 @@ hosts:
 Every script that host runs — including agent-authored code forced onto it
 by `policy.agent_authored.host` — executes wrapped
 (`sudo -n -u agents -- sh -c '…'`) on the remote box. Modes `user` and
-`namespace` only; the egress proxy is loopback-only and doesn't reach remote
-launches (validation rejects a remote `egress:` list — use `deny: true` with
-namespace mode there).
+`namespace` only; the egress proxy lives on the daemon's box and doesn't
+reach remote launches (validation rejects a remote `egress:` list — use
+`deny: true` with namespace mode there).
+
+A host named by `policy.agent_authored.host` **must carry an `isolation:`
+block** — a "sandbox" host that doesn't isolate is a plain remote shell
+wearing the name, so `conductor validate` rejects the combination.
+`agent_authored: { trust: full }` is the documented opt-out: the same knob
+that lifts the allow/approve/host gates lifts this requirement.
 
 ## Degradation
 

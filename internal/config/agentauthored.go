@@ -173,8 +173,17 @@ func validateAgentAuthored(where string, p *AgentAuthoredPolicy, hosts map[strin
 	// hosts == nil means the caller can't see the hosts: section (a scoped
 	// policy block) — the global pass re-checks with it.
 	if p.Host != "" && hosts != nil {
-		if _, ok := hosts[p.Host]; !ok {
+		hc, ok := hosts[p.Host]
+		if !ok {
 			return fmt.Errorf("config: %s: agent_authored.host %q is not a hosts: entry", where, p.Host)
+		}
+		// The sandbox host must actually sandbox (#36 iso-review H6): agent
+		// code forced onto it needs the host's isolation: wrapper as the
+		// second wall, or it's just a plain remote shell wearing the name.
+		// `trust: full` is the documented opt-out — the same knob that lifts
+		// the allow/approve/host gates lifts this requirement, deliberately.
+		if hc.Isolation == nil && !p.TrustFull() {
+			return fmt.Errorf("config: %s: agent_authored.host %q has no isolation: block — a sandbox host must actually isolate the agent code it runs (add `isolation: {mode: user|namespace, ...}` to hosts.%s, or opt out deliberately with agent_authored `trust: full`)", where, p.Host, p.Host)
 		}
 	}
 	if p.MaxRevisions != nil && *p.MaxRevisions < 0 {
