@@ -92,6 +92,63 @@ $ curl -s -X POST localhost:8099/invoke/pr-summary \
 {"run_id":"r5x9…","status":"accepted"}
 ```
 
+There are three delivery modes; the caller picks per request.
+
+### Async (default)
+
+Returns `202 {"run_id","status":"accepted"}` the moment the run is admitted.
+The caller polls `GET /runs/<id>` for the result, or supplies a callback (below).
+
+### Synchronous — `?wait=true`
+
+Blocks (bounded by `wait_timeout`, hard-capped at 5m) and returns the structured
+result inline. `200` once the run reaches a terminal status; `202` (still the
+same body shape, `status:"running"`) if the deadline arrives first, so the
+caller falls back to polling:
+
+```
+$ curl -s -X POST 'localhost:8099/invoke/pr-summary?wait=true' \
+    -H 'Authorization: Bearer '"$CONDUCTOR_INVOKE_TOKEN" \
+    -d '{"input":{"repo":"acme/api","pr":42}}'
+{"run_id":"r5x9…","status":"ok","outputs":{"summarize":{"text":"…"}}}
+```
+
+### Callback — `callback_url`
+
+Returns `202` immediately (like async), then POSTs the same structured result to
+the given URL when the run finishes. Delivery is best-effort and audited
+(`event: callable_callback`, `delivered: true|false`):
+
+```
+$ curl -s -X POST localhost:8099/invoke/pr-summary \
+    -H 'Authorization: Bearer '"$CONDUCTOR_INVOKE_TOKEN" \
+    -d '{"input":{"repo":"acme/api","pr":42},"callback_url":"https://n8n.internal/webhook/pr-done"}'
+{"run_id":"r5x9…","status":"accepted"}
+```
+
+## Reading a run — `GET /runs/<id>`
+
+```
+$ curl -s localhost:8099/runs/r5x9… -H 'Authorization: Bearer '"$CONDUCTOR_INVOKE_TOKEN"
+{"run_id":"r5x9…","status":"ok","outputs":{"summarize":{"text":"…"}}}
+```
+
+The result body is uniform across all three modes and `GET /runs`:
+
+| field         | meaning                                                              |
+| ------------- | ------------------------------------------------------------------- |
+| `run_id`      | the id minted at invoke time                                        |
+| `status`      | `running` \| `ok` \| `failed` \| `retried`                          |
+| `outputs`     | per-step outputs keyed by step id (secret-scrubbed, as in §20)      |
+| `error`       | present only when `status: failed` — the failure message            |
+| `failed_step` | present only when `status: failed` — the step id that failed        |
+
+Reads are isolated per token: a token may read only runs it invoked. An
+unknown id it did not issue returns `404`; one issued by *another* token
+returns `403`. (After a daemon restart the in-memory issue map is empty, so a
+pre-restart run is readable by any authenticated token — the §20 record itself
+is the durable audit.)
+
 ### HMAC callers
 
 An HMAC token signs the **raw request body** with HMAC-SHA256 and presents the
@@ -103,6 +160,39 @@ sig=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$CONDUCTOR_INVOKE_HMAC" 
 curl -s -X POST localhost:8099/invoke/pr-summary \
   -H "X-Conductor-Signature: sha256=$sig" -d "$body"
 ```
+
+## Recipe: calling conductor from n8n
+
+n8n is the first documented adapter, but nothing here is n8n-specific — the
+surface is plain authenticated HTTP. Conductor owns the agents-on-code step;
+n8n owns the trigger, the fan-in, and whatever happens with the result.
+
+**Credential.** Create an n8n *Header Auth* credential once — name
+`Authorization`, value `Bearer <the token>` (store the token in n8n's
+credential vault, not in the node). Every HTTP Request node below references it.
+
+**Pattern A — fire-and-forget (async).** An **HTTP Request** node:
+`POST http://conductor.internal:8099/invoke/pr-summary`, JSON body
+`{"input": {"repo": "{{ $json.repo }}", "pr": {{ $json.pr }}}}`. It returns a
+`run_id` in milliseconds; the n8n workflow moves on. Use when conductor's result
+isn't needed inline.
+
+**Pattern B — wait for the result (synchronous).** The same node, but URL
+`…/invoke/pr-summary?wait=true` and the node's timeout raised past
+`wait_timeout`. The response body *is* the structured result — read
+`{{ $json.outputs.summarize.text }}` in the next node. Add an **IF** node on
+`{{ $json.status }} === "ok"` to branch failures. Best for short workflows where
+n8n should block.
+
+**Pattern C — callback (long runs).** POST without `wait`, but include
+`"callback_url": "{{ $execution.resumeUrl }}"` from a **Wait** node set to
+"On Webhook Call". n8n pauses; conductor POSTs the result to the resume URL when
+the run finishes; n8n continues with the result as the node output. Best for
+runs longer than any sane HTTP timeout.
+
+In every pattern the request is one authenticated HTTP call and the response is
+the uniform result body above — swap n8n for Zapier, Make, a cron job, or a
+shell script without changing the conductor side.
 
 ## MCP tool face
 
