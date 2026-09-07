@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"sort"
@@ -19,6 +20,7 @@ import (
 	rssint "github.com/NodeSpy/conductor/internal/integrations/rss"
 	sentryint "github.com/NodeSpy/conductor/internal/integrations/sentry"
 	webhookint "github.com/NodeSpy/conductor/internal/integrations/webhook"
+	"github.com/NodeSpy/conductor/internal/netguard"
 )
 
 // lowerAction builds the trigger-identity fields every connectors-model
@@ -138,9 +140,11 @@ var webhookDecl = &TypeDecl{
 	Type: "webhook",
 	Desc: "Webhook: generic inbound JSON delivery via a field-mapping DSL; plus a generic outbound HTTP post verb.",
 	Connection: Schema{
-		"listen":   {Type: TString, Desc: "direct HTTP listener address, e.g. :8099"},
-		"smee_url": {Type: TString, Desc: "smee.io channel (no public ingress needed)"},
-		"sources":  {Type: TMap, Required: true, Desc: "name -> { path, sign: {header,secret,scheme}, match, title, dedup }"},
+		"listen":        {Type: TString, Desc: "direct HTTP listener address, e.g. :8099"},
+		"smee_url":      {Type: TString, Desc: "smee.io channel (no public ingress needed)"},
+		"sources":       {Type: TMap, Required: true, Desc: "name -> { path, sign: {header,secret,scheme}, match, title, dedup }"},
+		"allow_private": {Type: TBool, Desc: "permit webhook.post to reach loopback/private/link-local/CGNAT addresses (default false — blocked to prevent SSRF)"},
+		"allow_hosts":   {Type: TList, Desc: "specific hosts (by name) or exact IPs that webhook.post may reach even in an otherwise-blocked range"},
 	},
 	Events: []EventDecl{
 		{
@@ -190,15 +194,81 @@ type webhookSource struct {
 }
 
 type webhookConn struct {
-	Listen  string                   `yaml:"listen"`
-	SmeeURL string                   `yaml:"smee_url"`
-	Sources map[string]webhookSource `yaml:"sources"`
+	Listen       string                   `yaml:"listen"`
+	SmeeURL      string                   `yaml:"smee_url"`
+	Sources      map[string]webhookSource `yaml:"sources"`
+	AllowPrivate bool                     `yaml:"allow_private"`
+	AllowHosts   []string                 `yaml:"allow_hosts"`
 }
 
 type webhookImpl struct {
 	name string
 	conn webhookConn
 	deps Deps
+	// resolve overrides the DNS resolver in the egress guard (tests only).
+	resolve func(ctx context.Context, host string) ([]net.IPAddr, error)
+}
+
+var errWebhookBlockedIP = fmt.Errorf("webhook.post: refused: resolves to a blocked address (loopback/private/link-local); set allow_private or allow_hosts to permit it")
+
+// safeDial mirrors the callable callback poster's guarded dialer: it resolves
+// the target host daemon-side and connects only to a resolved IP that passes
+// netguard, so a caller-supplied url whose host resolves to loopback, cloud
+// metadata (169.254.169.254), RFC1918/ULA, link-local, or CGNAT is refused by
+// default. Because it dials the exact IP it just vetted (not a re-resolved
+// name), DNS rebinding can't slip an internal address past the check. Operators
+// opt specific targets back in via allow_private (blanket) or allow_hosts (by
+// name or exact IP).
+func (w *webhookImpl) safeDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	var ips []net.IPAddr
+	if w.resolve != nil {
+		ips, err = w.resolve(ctx, host)
+	} else {
+		ips, err = net.DefaultResolver.LookupIPAddr(ctx, host)
+	}
+	if err != nil {
+		return nil, err
+	}
+	hostAllowed := w.conn.AllowPrivate
+	ipAllowed := map[string]bool{}
+	for _, h := range w.conn.AllowHosts {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
+		}
+		if ip := net.ParseIP(h); ip != nil {
+			ipAllowed[ip.String()] = true
+		} else if strings.EqualFold(h, host) {
+			// A host listed by name is operator-trusted: permit whatever it
+			// resolves to, even a private/LAN address.
+			hostAllowed = true
+		}
+	}
+	var blocked bool
+	var d net.Dialer
+	var lastErr error
+	for _, ipa := range ips {
+		if netguard.Blocked(ipa.IP) && !hostAllowed && !ipAllowed[ipa.IP.String()] {
+			blocked = true
+			continue
+		}
+		conn, derr := d.DialContext(ctx, network, net.JoinHostPort(ipa.IP.String(), port))
+		if derr == nil {
+			return conn, nil
+		}
+		lastErr = derr
+	}
+	if blocked {
+		return nil, errWebhookBlockedIP
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("webhook.post: no address for %q", host)
 }
 
 func newWebhookImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
@@ -345,7 +415,19 @@ func (w *webhookImpl) Invoke(ctx context.Context, verb string, opts map[string]a
 	if d > 0 {
 		timeout = d
 	}
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DialContext:         w.safeDial,
+			TLSHandshakeTimeout: 10 * time.Second,
+			DisableKeepAlives:   true,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			// Never follow a redirect off the vetted host — a 30x to an
+			// internal URL would sidestep the resolved-IP check entirely.
+			return http.ErrUseLastResponse
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("webhook.post: %w", err)
