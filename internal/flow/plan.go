@@ -182,6 +182,29 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 				if len(step.Command) == 0 {
 					return fmt.Errorf("%s: command step has no command", w)
 				}
+			case "team":
+				// A team's roles must name known agents (guardPlan admits the
+				// class and counts the fleet; this validates the references,
+				// mirroring config.validateTeam). The per-worker gate is not
+				// checked here — guardPlan forbids agent-authored teams from
+				// setting one at all.
+				roles := []struct{ role, name string }{
+					{"planner", step.Team.Planner}, {"worker", step.Team.Worker},
+					{"critic", step.Team.Critic}, {"reconcile", step.Team.Reconcile},
+				}
+				for _, ro := range roles {
+					if ro.name == "" {
+						if ro.role == "planner" || ro.role == "worker" {
+							return fmt.Errorf("%s: team needs `%s:` (an agents: profile)", w, ro.role)
+						}
+						continue
+					}
+					if _, ok := cfg.Agents[ro.name]; !ok {
+						return fmt.Errorf("%s: team.%s names unknown agent %q", w, ro.role, ro.name)
+					}
+				}
+			case "parallel":
+				// Branches are validated by the step.Parallel recursion below.
 			default:
 				return fmt.Errorf("%s: no recognizable step form", w)
 			}

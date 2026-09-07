@@ -58,9 +58,17 @@ var teamPlanSchema = map[string]any{
 func (r *Runner) execTeam(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, string, error) {
 	spec := step.Team
 	maxWorkers := spec.MaxWorkersOrDefault()
-	// Team roles carry their own gates (workers: team.gate + critic;
-	// reconciler: the step's gate) — a trigger/workflow default gate must not
-	// leak onto the planner, whose output is a plan, not a change.
+	// Capture the operator's effective gate for this team step (its own gate:,
+	// else the inherited trigger/workflow default) BEFORE the default is cleared
+	// from ctx just below. It governs the change-producing roles — the
+	// reconciler always, and each worker when the team declares no gate/critic
+	// of its own — so an agent-authored team step (which guardPlan forbids from
+	// setting its own gate) cannot emit an UNGATED merged change (#36 §146 F4).
+	opGate := r.effectiveGate(ctx, step)
+	// Team roles carry their own gates (workers: team.gate + critic, else
+	// opGate; reconciler: the step's gate, else opGate) — the inherited default
+	// must not leak onto the PLANNER, whose output is a plan, not a change, so
+	// clear it from ctx and gate each role explicitly below.
 	ctx = context.WithValue(ctx, gateKey{}, (*config.GateSpec)(nil))
 
 	// ---- plan ---------------------------------------------------------
@@ -86,6 +94,11 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 
 	// ---- work (parallel, gated) ---------------------------------------
 	workerGate, extraChecks := r.teamWorkerGate(spec)
+	if workerGate == nil {
+		// No team-declared gate or critic: the operator's default gate still
+		// governs each worker's change rather than leaving it ungated (F4).
+		workerGate = opGate
+	}
 	type workerResult struct {
 		Subtask teamSubtask
 		Outputs map[string]any
@@ -159,8 +172,14 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 			fmt.Fprintf(&b, "worker notes: %s\n", clipText(r.redactText(text), 2000))
 		}
 	}
+	// The reconciler produces the team's merged change, so it is always gated:
+	// the step's own gate wins, else the operator's default (F4).
+	reconcilerGate := step.Gate
+	if reconcilerGate == nil {
+		reconcilerGate = opGate
+	}
 	rstep := config.Step{Type: "agent", Agent: reconciler, Prompt: b.String(),
-		Checkout: step.Checkout, WorkDir: step.WorkDir, Env: step.Env, Gate: step.Gate}
+		Checkout: step.Checkout, WorkDir: step.WorkDir, Env: step.Env, Gate: reconcilerGate}
 	recOut, raw, err := r.execAgent(ctx, t, rstep, id+":reconcile", data, shadow)
 	if err != nil {
 		return outputs, raw, fmt.Errorf("team reconcile: %w", err)

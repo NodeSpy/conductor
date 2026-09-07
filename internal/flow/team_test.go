@@ -416,3 +416,82 @@ steps:
 		t.Fatalf("real critic must gate the worker despite the shadow: critic=%d followups=%d", criticCalls, followUps)
 	}
 }
+
+// TestTeamReconcilerGovernedByDefaultGate is the F4 regression (#36 §146): an
+// agent-authored team step (which guardPlan forbids from setting its own gate)
+// must still have its change-producing roles governed by the operator's default
+// gate. execTeam clears the inherited default from ctx so it never leaks onto
+// the PLANNER (whose output is a plan, not a change) — but the RECONCILER
+// produces the merged change and must remain gated. Mirrors
+// TestInheritedDefaultGateGovernsPlanSubAgents for a team step: the failing
+// gate round is provably the reconciler's.
+func TestTeamReconcilerGovernedByDefaultGate(t *testing.T) {
+	cfg := loadConfig(t, teamCfg+`
+checks:
+  verdict: { uses: svc.post, options: { text: "check" } }
+policy:
+  agent_authored:
+    allow: [ team, agent ]
+    limits: { max_sub_agents: 5 }
+`)
+	reg := buildRegistry(t, cfg)
+	fake := newFakeState(t, "svc")
+	rig := newTestRunner(t, cfg, reg)
+	rig.Runner.Agents.FollowUp = nil // gate fail → escalate immediately
+
+	fake.mu.Lock()
+	fake.outputs["post"] = map[string]any{"pass": true}
+	fake.mu.Unlock()
+
+	// The plan author emits a team step. Being agent-authored, it carries no
+	// gate of its own — only the trigger's default gate can govern it.
+	plan := "```plan\n" +
+		"- id: feature\n" +
+		"  prompt: \"Build it\"\n" +
+		"  team:\n" +
+		"    planner: architect\n" +
+		"    worker: implementer\n" +
+		"    reconcile: merger\n" +
+		"    max_workers: 1\n" +
+		"```"
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		switch req.Action.Agent {
+		case "reviewer": // the plan author
+			return dispatch.RunRef{AgentID: "auth", Output: plan}, nil
+		case "architect":
+			return dispatch.RunRef{AgentID: "p", Output: plannerOutput("api")}, nil
+		case "implementer":
+			return dispatch.RunRef{AgentID: "w", Output: "did it", Workdir: "/wt/api"}, nil
+		case "merger":
+			// The reconciler produced the merged change — flip the verdict so
+			// its gate round FAILS, proving the default gate governs it.
+			fake.mu.Lock()
+			fake.outputs["post"] = map[string]any{"pass": false, "reason": "unreviewed merge"}
+			fake.mu.Unlock()
+			return dispatch.RunRef{AgentID: "m", Output: `{"note":"merged"}`, Workdir: "/wt/merge"}, nil
+		}
+		return dispatch.RunRef{AgentID: "x", Output: `{"pass": true}`}, nil
+	}
+
+	spec := mustSpec(t, `
+on: svc.ping
+gate: { run: [ verdict ], max_revisions: 0 }
+steps:
+  - { id: author, type: agent, agent: reviewer, prompt: "plan the team" }
+`)
+	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "m"}), spec)
+	failed, errStr := rig.workflowFailed()
+	if !failed || !strings.Contains(errStr, "gate failed: verdict") {
+		t.Fatalf("default gate must govern the team reconciler: failed=%v err=%q", failed, errStr)
+	}
+	// The failing gate round was the reconciler's, not the planner's/worker's.
+	gates := rig.Store.auditsWithEvent("gate")
+	if len(gates) == 0 {
+		t.Fatal("no gate audit recorded — reconciler ran ungated (F4)")
+	}
+	last := gates[len(gates)-1]
+	step, _ := last["step"].(string)
+	if !strings.HasSuffix(step, ":reconcile") || last["outcome"] != "escalated" {
+		t.Fatalf("failing gate must be the reconciler's: %+v", last)
+	}
+}
