@@ -654,8 +654,20 @@ $ curl -s -X POST localhost:8099/invoke/pr-summary \
 The invoke runs through the same manual → policy / quiet-hours / budget /
 audit path as `conductor run` — the entry point changes, the containment does
 not. Every invoke is audited with the caller identity and the run id. Off
-unless a `callable:` block is configured. Details: the Callable-Service wiki
-page.
+unless a `callable:` block is configured.
+
+The same callable workflows are also reachable as **MCP tools** for a local
+MCP client (an agent, an IDE, a desktop assistant):
+
+```
+conductor mcp callable        # stdio MCP server; one tool per `callable: true` workflow
+```
+
+It is scoped callable-only by construction — the tool list is exactly the
+opted-in triggers — and dispatches over the daemon's same-user control socket
+(the `conductor run` privilege boundary), so it needs no separate token. Each
+tool call blocks for the run's structured result. Details: the Callable-Service
+wiki page.
 
 ## Execution history, live watch & retry
 

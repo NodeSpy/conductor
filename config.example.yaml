@@ -503,7 +503,12 @@ workflows:
 #   • authenticated — a bearer token OR an HMAC body signature per caller;
 #   • deny-by-default scope — a token invokes only the workflows it lists;
 #   • explicit opt-in — a trigger is reachable only with `callable: true`.
-# Both gates must pass. Omit this block to leave the service off.
+# All three gates must pass. Omit this block to leave the HTTP service off.
+#
+# The same callable workflows are also exposed as MCP tools for a local MCP
+# client via `conductor mcp callable` (a stdio server; one tool per
+# `callable: true` workflow, scoped callable-only). That face dispatches over
+# the daemon's same-user control socket, so it needs no token from this block.
 callable:
   # Bind for POST /invoke/<name> and GET /runs/<id>. Mounts on the shared
   # inbound listener, so it may reuse a `listen:` a webhook/sentry connector

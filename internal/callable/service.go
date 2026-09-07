@@ -286,9 +286,15 @@ func (s *Service) deliverCallback(id, url string) {
 	s.d.Audit(map[string]any{"event": "callable_callback", "run_id": id, "delivered": true, "status": rec.Status})
 }
 
-// result builds the structured invoke result from a run record: per-step
-// outputs keyed by step id (typed data, not a log scrape), plus status/error.
+// result builds the structured invoke result from a run record.
 func (s *Service) result(id string, rec store.RunHistory) map[string]any {
+	return Result(id, rec)
+}
+
+// Result builds the structured invoke result from a §20 run record: per-step
+// outputs keyed by step id (typed data, not a log scrape), plus status/error.
+// Exported so the HTTP and MCP faces return byte-identical bodies.
+func Result(id string, rec store.RunHistory) map[string]any {
 	status := rec.Status
 	if status == "" {
 		status = "accepted" // issued, record not yet written
@@ -308,6 +314,10 @@ func (s *Service) result(id string, rec store.RunHistory) map[string]any {
 	}
 	return res
 }
+
+// Terminal reports whether a run status is final (not still running). Exported
+// for the MCP face's completion poll.
+func Terminal(status string) bool { return terminal(status) }
 
 func (s *Service) waitTimeout() time.Duration {
 	d := s.d.Cfg.WaitTimeout.D()
@@ -333,6 +343,11 @@ var runIDSeq struct {
 	sync.Mutex
 	n int64
 }
+
+// NewRunID mints a unique, filesystem-safe, time-ordered history id — exported
+// for callers that dispatch through a different transport (the MCP face over
+// the control socket) but need the same id shape to read the run back.
+func NewRunID() string { return newRunID() }
 
 // newRunID mints a unique, filesystem-safe, time-ordered history id. Same shape
 // family as the engine's own ("r" + base36), with a per-process counter so
@@ -379,7 +394,7 @@ func defaultPost(ctx context.Context, url string, body []byte) error {
 type issuedSet struct {
 	mu     sync.Mutex
 	max    int
-	owner_ map[string]string
+	owners map[string]string
 	ring   []string
 }
 
@@ -387,26 +402,26 @@ func newIssuedSet(max int) *issuedSet {
 	if max <= 0 {
 		max = 4096
 	}
-	return &issuedSet{max: max, owner_: map[string]string{}}
+	return &issuedSet{max: max, owners: map[string]string{}}
 }
 
 func (s *issuedSet) add(id, owner string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.owner_[id]; !ok {
+	if _, ok := s.owners[id]; !ok {
 		s.ring = append(s.ring, id)
 		if len(s.ring) > s.max {
 			old := s.ring[0]
 			s.ring = s.ring[1:]
-			delete(s.owner_, old)
+			delete(s.owners, old)
 		}
 	}
-	s.owner_[id] = owner
+	s.owners[id] = owner
 }
 
 func (s *issuedSet) owner(id string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	o, ok := s.owner_[id]
+	o, ok := s.owners[id]
 	return o, ok
 }

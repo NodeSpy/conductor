@@ -104,6 +104,35 @@ curl -s -X POST localhost:8099/invoke/pr-summary \
   -H "X-Conductor-Signature: sha256=$sig" -d "$body"
 ```
 
+## MCP tool face
+
+The same callable workflows are exposed as MCP tools for a local MCP client
+(an agent, an IDE, a desktop assistant) via a stdio server:
+
+```
+conductor mcp callable
+```
+
+The client sees one tool per `callable: true` workflow and nothing else — the
+tool list is exactly the opted-in triggers, so it is scoped callable-only by
+construction. A tool takes a single free-form `input` object (the same body the
+HTTP endpoint accepts); calling it fires the workflow and blocks for the
+structured result, returned as the tool's text content (`isError: true` when the
+run failed).
+
+Unlike the HTTP face, this one carries no bearer/HMAC token: it dispatches over
+the daemon's same-user control socket — the same privilege boundary
+`conductor run` uses — so it is a local face, launched by the MCP client's own
+config. A typical client entry:
+
+```json
+{
+  "mcpServers": {
+    "conductor": { "command": "conductor", "args": ["mcp", "callable", "--config", "/etc/conductor/config.yaml"] }
+  }
+}
+```
+
 ## Audit
 
 Every invoke is audited with the caller identity, the workflow, and the run id

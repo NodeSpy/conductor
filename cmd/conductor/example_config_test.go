@@ -28,6 +28,7 @@ func TestExampleConfigValidates(t *testing.T) {
 	for _, v := range []string{
 		"GH_WEBHOOK_SECRET", "GH_SMEE_URL", "SLACK_APP_TOKEN",
 		"SLACK_BOT_TOKEN", "CW_SECRET", "GH_PAT",
+		"CONDUCTOR_INVOKE_TOKEN", "CONDUCTOR_INVOKE_HMAC",
 	} {
 		t.Setenv(v, "dummy-"+v)
 	}
