@@ -54,6 +54,17 @@ jobs:
           echo "coverage=${cov:-n/a}" >> "$GITHUB_OUTPUT"
           # The gate: fmt, vet, and tests must all be green.
           if [ -n "$fmt_out" ] || [ $vet_rc -ne 0 ] || [ $test_rc -ne 0 ]; then exit 1; fi
+      - name: cross-compile release targets (arch portability)
+        run: |
+          set -euo pipefail
+          # Mirror release.yml's target matrix so an arch-specific break (e.g. a
+          # constant that overflows a 32-bit int on 386) fails CI here, not the
+          # release build after a tag is already pushed.
+          for t in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 linux/386; do
+            os="${t%/*}"; arch="${t#*/}"
+            echo "building $t"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -o /dev/null ./cmd/conductor
+          done
       - name: base coverage (for the delta)
         id: base
         if: github.event_name == 'pull_request'
