@@ -47,6 +47,14 @@ conductor version
   translates it, and prints what would dispatch; connectors-model triggers run
   with every outbound verb stubbed and agents mocked, so a workflow can be
   authored without side effects.
+- **runs / watch** — the run-inspection pair ([[Runs]]): `runs` reads the
+  history directory straight off disk (works with the daemon down); `watch`
+  and `runs retry` go through the running daemon's control socket. `run <id>`
+  shows the same detail when the argument names a recorded run rather than a
+  manual trigger (a configured trigger name always wins).
+- **report** — three sections over the audit window: dispatches by
+  kind/outcome + attention counts, spend ([[Cost-Accounting]]), and agent
+  quality ([[Outcomes]]).
 - **connectors ls / schema** — the introspection pair: what is configured and
   what each type accepts. `schema` also takes a bare type name.
 - **mcp memory** — the stdio MCP server behind the live agent memory tool

@@ -4,8 +4,8 @@
 // agents, verbs, code, and commands.
 //
 // Subcommands: run | validate | replay | sweep | force | status | report |
-// pause | resume | update | service | connectors | connector | schema |
-// secrets | vault | unlock | config | mcp | workflows | version.
+// runs | watch | pause | resume | update | service | connectors | connector |
+// schema | secrets | vault | unlock | config | mcp | workflows | version.
 package main
 
 import (

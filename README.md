@@ -158,7 +158,7 @@ The library **accretes** rather than shipping a big catalog: the generic
 connector is deliberately cheap — one file, one registration, schemas as the
 contract, heavy-dependency backends behind build tags. Start from the
 executable template in `internal/connector/authoring_example_test.go` and
-the [Authoring-Connectors wiki page](../../wiki/Authoring-Connectors).
+the [Authoring-Connectors wiki page](docs/wiki/Authoring-Connectors.md).
 
 ## The trigger grammar
 
@@ -300,7 +300,7 @@ local-only.
 Per-dispatch isolation for the runtimes conductor launches itself
 (acp / cli / opencode / agent-deck), selectable per agent profile or per
 runtime (the profile's `isolation:` wins) — see the
-[Isolation wiki page](../../wiki/Isolation):
+[Isolation wiki page](docs/wiki/Isolation.md):
 
 ```yaml
 agents:
@@ -352,7 +352,7 @@ into an agent's worktree), `blob.read`/`blob.stat` cover text and metadata.
 Connector verbs can declare binary in/out in their schema — handles resolve
 to on-disk paths going in, raw bytes become handles coming out. Artifacts are
 **GC'd with the run** that produced them. See the
-[Binary-Data wiki page](../../wiki/Binary-Data).
+[Binary-Data wiki page](docs/wiki/Binary-Data.md).
 
 ## Event grouping
 
@@ -464,7 +464,7 @@ agent** as a revise follow-up (bounded by `max_revisions`), then the run
 escalates and the step fails — discard, audited at every round. Gates sit on
 agent steps or as trigger/workflow defaults; checks run in the agent's
 worktree with `{{.gate.*}}` scope. See the
-[Gates wiki page](../../wiki/Gates).
+[Gates wiki page](docs/wiki/Gates.md).
 
 ## Multi-agent teams
 
@@ -482,7 +482,7 @@ steps:
 
 Distinct from `for_each`/`parallel` (many events over one step). Budgets,
 cost, isolation, gates, history, and outcomes all apply per role. See the
-[Teams wiki page](../../wiki/Teams).
+[Teams wiki page](docs/wiki/Teams.md).
 
 ## The outcome loop
 
@@ -494,7 +494,7 @@ reverted is flagged as rotting even when its runs succeed), and optionally
 back into the agent itself (`outcome_feedback: true` appends a one-line
 track record to its guidance). `conductor report` shows the quality view:
 accept rate, revert rate, and cost-per-merged-change per agent. See the
-[Outcomes wiki page](../../wiki/Outcomes).
+[Outcomes wiki page](docs/wiki/Outcomes.md).
 
 ## Cost & token accounting
 
@@ -508,7 +508,7 @@ section (totals, per repo / per workflow / per day, $ per run, estimated
 share). A `pricing:` block overrides the built-in model→$ table.
 
 Hard caps ride the same `policy:`/profile machinery — see the
-[Cost-Accounting wiki page](../../wiki/Cost-Accounting):
+[Cost-Accounting wiki page](docs/wiki/Cost-Accounting.md):
 
 ```yaml
 policy:
@@ -637,7 +637,7 @@ scope — those steps don't re-run — and resumes through the ordinary flow
 runner (checkpoints, budgets, policy, audit; the new record backlinks the
 original via `retry_of`). Retention is configurable
 (`store.history_retention` / `history_max_runs`, default 14d / 500). See the
-[Runs wiki page](../../wiki/Runs).
+[Runs wiki page](docs/wiki/Runs.md).
 
 ## Introspection and dry-run
 
@@ -818,8 +818,10 @@ a workflow from a file directly (`workflow: review-flow, import: ./workflows/rev
 or a bare `workflow: ./workflows/review.yaml` path when the file holds one workflow).
 The wiki carries the full reference — Configuration, Connectors, Workflows,
 Verbs, Code-Steps, Hosts, Grouping, Memory, Agents, Policy, Secrets,
-Runtimes, Migration — and `conductor schema <conn>` prints any connector's
-exact contract.
+Runtimes, Migration, plus the agent-quality layer: Gates, Teams, Outcomes,
+Cost-Accounting, Isolation, Binary-Data, Runs (history/watch/retry),
+Agent-Skill, and Authoring-Connectors — and `conductor schema <conn>` prints
+any connector's exact contract.
 
 ## Commands
 
@@ -829,7 +831,10 @@ conductor validate                         load & validate (both schemas, full s
 conductor replay <event.json>              run a saved webhook through the pipeline, verbs stubbed
 conductor sweep [--now]                    catch-up sweep (preview / signal the daemon)
 conductor force <kind> <owner/repo>#<n>    force one action now, bypassing dedup gates
-conductor status | report [--days N]       live snapshot / activity summary
+conductor status | report [--days N]       live snapshot / activity summary + spend + agent quality
+conductor runs [<id>] [--limit N]          recorded executions: list, or one run's step detail
+conductor runs retry <id> [--from <step>]  re-run a recorded execution (recorded inputs pinned)
+conductor watch [<run-id>] [--json]        tail the live run event stream (steps, gates, outcomes)
 conductor pause | resume                   runtime kill switch (no restart)
 conductor run <name> [--input k=v]         fire a named `on: manual` trigger via the daemon
 conductor connectors ls | schema <conn>    introspection

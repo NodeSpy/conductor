@@ -34,10 +34,13 @@ Pass a handle between steps with a sole-reference template
 | `blob.stat { blob }` | metadata: digest / name / media_type / size |
 
 ```yaml
+connectors:
+  ci: { type: webhook, listen: ":8099", sources: { build_done: { path: /hooks/build } } }
+
 triggers:
   - on: ci.build_done
     steps:
-      - { id: art, uses: blob.put, options: { path: "{{.artifact_path}}", media_type: "application/gzip" } }
+      - { id: art, uses: blob.put, options: { path: "{{.body.artifact_path}}", media_type: "application/gzip" } }
       - { id: fetch, uses: blob.get, options: { blob: "{{.art.blob}}", path: "/srv/agents/wt/input.tar.gz" } }
       - { id: fix, type: agent, agent: fixer,
           prompt: "The build artifact is at input.tar.gz in your worktree ({{.art.size}} bytes). …" }

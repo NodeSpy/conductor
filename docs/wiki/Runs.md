@@ -35,7 +35,7 @@ unpushed work — secret-scrubbed and clipped (64 KiB):
   ```yaml
   steps:
     - { id: fix, type: agent, agent: fixer, prompt: "…" }
-    - { id: ok, uses: slack-ops.ask, options: { prompt: "Apply?\n{{.fix.diff}}" } }
+    - { id: ok, uses: slack-ops.ask, options: { to: dm, user: U0123ABCD, prompt: "Apply?\n{{.fix.diff}}" } }
     - { id: push, if: "{{.ok.action}} == approve", type: command,
         command: ["git", "-C", "{{.fix.workdir}}", "push"] }
   ```

@@ -49,7 +49,21 @@ triggers:
 - **[[Secrets]]** — `${ENV}` as the baseline plus named `vaults:`
   (conductor / onepassword / pass / file / hashicorp), one
   `{{ vault … }}` reference syntax, tainting/redaction, and the
-  non-interactive unlock model.
+  non-interactive unlock model. **[[Agent-Skill]]** — how a dispatched agent
+  reaches back into conductor (verb tools + the secret broker), gated per
+  profile.
+- **[[Gates]]** — quality gates on agent output: checks against the
+  proposed change, a bounded revise loop, escalation. **[[Teams]]** — one
+  task split across planner / parallel workers / critic / reconciler.
+- **[[Outcomes]]** — merged / reverted / approved / rejected captured per
+  agent action and fed back into memory, workflow health, and guidance;
+  **[[Cost-Accounting]]** — per-run token/$ usage and hard budget caps.
+- **[[Runs]]** — full execution history, `conductor watch` live streaming,
+  proposed-diff preview, and retry-from-step. **[[Isolation]]** —
+  per-dispatch sandboxing and the egress allowlist. **[[Binary-Data]]** —
+  files as content-addressed blob handles between steps and agents.
+- **[[Authoring-Connectors]]** — adding a connector type in-tree (the
+  contract, the executable template, build-tag pattern).
 
 ## Learning path
 
@@ -75,10 +89,16 @@ Work down this list and you go from zero to the most advanced setup:
 7. **Hardening** — [[Secrets]] (vaults, OAuth2 logins, unlock), [[Policy]]
    (quiet hours, rate limits, bots), and dry-run/replay ([[Commands]]).
 8. **Advanced** — agent-driven workflows and `policy.agent_authored`
-   ([[Workflows]] + [[Policy]]), self-update as a workflow
-   ([[Configuration]]), remote fleets over SSH ([[Hosts]]).
-9. **Coming from the legacy schema** — [[Migration]] (automatic, total,
-   fail-safe).
+   ([[Workflows]] + [[Policy]]), the agent skill ([[Agent-Skill]]),
+   self-update as a workflow ([[Configuration]]), remote fleets over SSH
+   ([[Hosts]]).
+9. **Agent quality** — [[Gates]] on agent output, [[Teams]] for one big
+   task, [[Outcomes]] closing the loop, [[Cost-Accounting]] budgets,
+   [[Isolation]] sandboxing, [[Runs]] (history / `watch` / retry),
+   [[Binary-Data]] artifacts.
+10. **Growing the library** — [[Authoring-Connectors]].
+11. **Coming from the legacy schema** — [[Migration]] (automatic, total,
+    fail-safe).
 
 ## Pages
 
@@ -86,12 +106,13 @@ Setup: [[Installation]] · [[Quickstart]] · [[GitHub-App-Setup]] ·
 [[Configuration]] · [[Commands]] · [[Examples]]
 
 The model: [[Connectors]] · [[Workflows]] · [[Verbs]] · [[Code-Steps]] ·
-[[Runtimes]] · [[Agents]] · [[Grouping]] · [[Memory]] · [[Policy]] ·
-[[Secrets]] · [[Hosts]]
+[[Runtimes]] · [[Agents]] · [[Grouping]] · [[Memory]] · [[Binary-Data]] ·
+[[Agent-Skill]] · [[Policy]] · [[Gates]] · [[Teams]] · [[Outcomes]] ·
+[[Cost-Accounting]] · [[Secrets]] · [[Hosts]] · [[Isolation]]
 
-Connector references: [[Integration-GitHub]] · [[Integration-Slack]] ·
-[[Integration-Cron]] · [[Integration-Webhook]] · [[Integration-Sentry]] ·
-[[Integration-PagerDuty]] · [[Integration-RSS]]
+Connector references: [[Authoring-Connectors]] · [[Integration-GitHub]] ·
+[[Integration-Slack]] · [[Integration-Cron]] · [[Integration-Webhook]] ·
+[[Integration-Sentry]] · [[Integration-PagerDuty]] · [[Integration-RSS]]
 
-Operations: [[Notifications]] · [[Hand-offs]] · [[Migration]] (the legacy
-schema still loads and auto-migrates)
+Operations: [[Runs]] · [[Notifications]] · [[Hand-offs]] · [[Migration]]
+(the legacy schema still loads and auto-migrates)

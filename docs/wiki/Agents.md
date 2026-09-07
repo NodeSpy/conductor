@@ -58,6 +58,10 @@ agents:
 | `guidance` | Per-agent tone/format text appended to this agent's prompts. Unset falls through to the top-level `agent_guidance`; `""` disables guidance entirely for this agent; any text replaces the default. |
 | `memory` | Opt this agent into shared-memory prompt injection ([[Memory]]). `true` appends the global + target-repo + own-agent-scoped memories (newest first, capped) through the same path as `guidance`; a map `{ scopes, tags, limit }` narrows it. Absent → no injection, no token cost. Needs a top-level `memory:` section. |
 | `session` | Session affinity: `{ key, idle_ttl, max_lifetime, end_on }` binds a live session to the rendered `key` — every event resolving to the same value reaches the same agent as a follow-up. Absent → a fresh agent per dispatch. See below. |
+| `skill` | Opt this agent into the conductor skill (verb tools + the secret broker over the daemon socket), gated per profile: `{ verbs, secrets_via, allow_secrets, identity, max_calls }`. Absent → neither. See [[Agent-Skill]]. |
+| `isolation` | Per-dispatch sandboxing for this profile's launches: `{ mode: user\|namespace\|container, user, container, limits, network }`. Wins over the runtime's own `isolation:`; requires a runtime conductor launches itself (not paseo). See [[Isolation]]. |
+| `budget` | This profile's hard spend cap over a rolling window: `{ window, max_cost_usd, max_tokens }` — checked beside the global and workflow-scope budgets; over-cap dispatches shed and notify. See [[Cost-Accounting]]. |
+| `outcome_feedback` | `true` appends a one-line track record (merged / closed / rejected / reverted counts) to this agent's guidance. See [[Outcomes]]. |
 
 ## Behavior
 

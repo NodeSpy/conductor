@@ -219,3 +219,41 @@ Requires a `policy.agent_authored` block — without one, plans are rejected:
 
 Related: [[Quickstart]] · [[Workflows]] · [[Connectors]] · [[Code-Steps]] ·
 [[Grouping]] · [[Hand-offs]] · [[Configuration]]
+
+## Gate the fix, approve the diff, team up on epics ([[Gates]] + [[Teams]])
+
+The agent-quality layer end to end: a gated fixer whose proposed diff is
+approved before it pushes (with a per-profile spend cap and outcome-tuned
+guidance), and a planner/workers/critic team for issues labeled `epic`.
+
+```yaml
+checks:
+  test: { type: command, command: ["make", "test"] }
+
+agents:
+  fixer:     { provider: claude, workspace: worktree, outcome_feedback: true,
+               budget: { window: 1h, max_cost_usd: 2 } }
+  architect: { provider: claude }
+  reviewer:  { provider: claude }
+
+triggers:
+  - on: gh.failing_checks
+    steps:
+      - { id: fix, type: agent, agent: fixer, prompt: "Fix the failing checks on {{.repo}}#{{.pr}}.",
+          gate: { run: [ test ], max_revisions: 2 } }
+      - { id: ok, uses: slack-ops.ask,
+          options: { to: dm, user: U0123ABCD, prompt: "Gate passed. Apply?\n{{.fix.diff}}" } }
+      - { id: push, if: "{{.ok.action}} == approve", type: command,
+          command: ["git", "-C", "{{.fix.workdir}}", "push"] }
+
+  - on: gh.issue_matched
+    filters: { labels_any: [epic] }
+    steps:
+      - id: feature
+        prompt: "Implement the feature in {{.url}}."
+        team: { planner: architect, worker: fixer, critic: reviewer, max_workers: 4 }
+```
+
+Watch it live with `conductor watch`, inspect or retry afterwards with
+`conductor runs` ([[Runs]]); merges/reverts feed back per agent
+([[Outcomes]], [[Cost-Accounting]]).

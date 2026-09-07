@@ -147,7 +147,9 @@ If the vault file might be committed (even publicly):
 
 Everything conductor persists (state/runs/sessions/affinity/plans, the
 audit log, holds, saved workflows, memory files) is written `0600`. Tainted
-values never persist cleartext in a workflow checkpoint: a committed
+values never persist cleartext in a workflow checkpoint — nor in the run
+history's step inputs/outputs or captured diffs ([[Runs]]), which go through
+the same scrubbing: a committed
 `<vault>.read` step stores a **re-resolve marker** — the resume re-reads the
 vault, so later steps' templates still see the real value — and any other
 checkpointed output that contains a tracked secret persists **redacted**

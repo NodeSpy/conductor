@@ -19,9 +19,12 @@ runtime:
    produces the combined change.
 
 ```yaml
+runtimes:
+  gemini: { agent: gemini }            # isolation applies to runtimes conductor launches itself
+
 agents:
   architect:   { provider: claude, model: claude-opus-4 }
-  implementer: { provider: claude, workspace: worktree,
+  implementer: { runtime: gemini, workspace: worktree,
                  isolation: { mode: namespace, network: { egress: ["api.github.com:443"] } } }
   reviewer:    { provider: claude }
 

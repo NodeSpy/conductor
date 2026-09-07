@@ -25,18 +25,23 @@ triggers:
 
 ## Step forms
 
-A step is one of five forms (all share `id` and `if`):
+A step is one of six forms (all share `id` and `if`):
 
 - `type: agent` — run an agent profile: `agent`, `prompt`, `checkout`,
   `output_schema`, `background` (+ `handoff`, see [[Hand-offs]]),
-  `rerequest_review`, `workdir`, `env`.
+  `rerequest_review`, `workdir`, `env`, and an optional `gate:` on the
+  agent's proposed change ([[Gates]]). A foreground agent step with a local
+  worktree also outputs its proposed `diff` and `workdir` ([[Runs]]).
 - `type: command` — a host command (POSIX sh semantics; argv list). With
   `host:` it runs over SSH and outputs `{stdout, stderr, exit_code}`.
 - `run:` — an inline code step ([[Code-Steps]]).
 - `uses: <conn>.<verb>` — a service verb ([[Verbs]]). This includes the
-  always-on data and memory verbs: `kv.*`/`sql.*` over `stores:` and
-  `memory.*` over the `memory:` section ([[Memory]]).
+  always-on data, memory, and artifact verbs: `kv.*`/`sql.*` over `stores:`,
+  `memory.*` over the `memory:` section ([[Memory]]), and `blob.*`
+  ([[Binary-Data]]).
 - `workflow: <name>` — a reusable workflow call (below).
+- `team:` — one task split across a planner, parallel workers in isolated
+  worktrees, an optional critic, and a reconciler ([[Teams]]).
 
 Agent steps have two extra memory hooks (when a `memory:` section is
 configured): a `remember:` block in the agent's final output persists
@@ -118,6 +123,9 @@ the step named, `report` shows where it stopped). Runs checkpoint each
 completed top-level step in `runs.json`: a daemon restart resumes AFTER the
 last completed step, so a `slack.post` that already ran never re-fires; the
 interrupted step re-runs (at-least-once).
+
+A trigger (or a reusable workflow) may also set a default `gate:` for every
+agent step it contains — the step's own `gate:` wins ([[Gates]]).
 
 ## Reusable workflows
 

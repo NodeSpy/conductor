@@ -49,4 +49,10 @@ the agent id) and **acp** (follow-ups via `session/prompt`; resume via
 don't participate — a `session:` profile on them silently stays
 fresh-per-event and leans on [[Memory]] for continuity.
 
-Related: [[Agents]] · [[Hosts]] · [[Hand-offs]] · [[Configuration]]
+A runtime conductor launches itself (acp / cli / opencode / agent-deck) may
+carry an `isolation:` block — per-dispatch sandboxing and the network egress
+allowlist for every launch it performs; a profile's own `isolation:` wins.
+Not applicable to paseo runtimes (their agents are the paseo daemon's
+children) — `conductor validate` rejects that combination. See [[Isolation]].
+
+Related: [[Agents]] · [[Hosts]] · [[Hand-offs]] · [[Configuration]] · [[Isolation]]

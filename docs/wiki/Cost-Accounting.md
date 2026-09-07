@@ -31,8 +31,9 @@ the model table when no `$` figure came along.
   `budget_shed` row per shed.
 - **`conductor report`** — a spend section: total `$`/tokens/runs, `$` per
   run, the estimated share, breakdowns by repo, by workflow/kind, and by day,
-  plus the shed count. (Cost-per-merged-change joins once §18's outcome
-  capture lands — the usage rows already carry everything it needs.)
+  plus the shed count. The agent-quality section ([[Outcomes]]) adds
+  **cost-per-merged-change**, joined from these usage figures on merged
+  engagements.
 
 ## Pricing
 
@@ -95,4 +96,4 @@ The plan-level token cap (`policy.agent_authored.limits.tokens`, #36 §11)
 bounds ONE agent-authored plan's size at guard time. `budget:` meters real
 spend across runs over time. They compose; neither replaces the other.
 
-Related: [[Policy]] · [[Agents]] · [[Commands]]
+Related: [[Policy]] · [[Agents]] · [[Commands]] · [[Outcomes]]
