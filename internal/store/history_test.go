@@ -151,6 +151,38 @@ func TestHistoryPrune(t *testing.T) {
 	}
 }
 
+// #57 M6: a still-running record is live state (its checkpoints back an
+// in-flight run), so prune must exempt it on both bounds — even when it is old
+// and over the count cap — until it finishes.
+func TestHistoryPruneExemptsRunning(t *testing.T) {
+	dir := t.TempDir()
+	// An ancient, unfinished (running) record: over age AND, below, over count.
+	running := RunHistory{ID: "r-live", Started: time.Now().Add(-30 * 24 * time.Hour), Status: "running"}
+	if err := WriteHistory(dir, running); err != nil {
+		t.Fatal(err)
+	}
+	// Age bound must skip it.
+	if n, err := PruneHistoryDir(dir, 14*24*time.Hour, 0); err != nil || n != 0 {
+		t.Fatalf("age prune removed a running record: n=%d err=%v", n, err)
+	}
+	if _, err := ReadHistory(dir, "r-live"); err != nil {
+		t.Fatalf("running record must survive age prune: %v", err)
+	}
+	// Count bound: add finished records newer than the running one, cap at 1.
+	// The running record is old (sorts last) so a naive count prune would drop
+	// it; the exemption must keep it.
+	for i := 0; i < 3; i++ {
+		_ = WriteHistory(dir, RunHistory{ID: "r-done" + string(rune('a'+i)),
+			Started: time.Now().Add(time.Duration(i) * time.Second), Status: "ok"})
+	}
+	if _, err := PruneHistoryDir(dir, 14*24*time.Hour, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadHistory(dir, "r-live"); err != nil {
+		t.Fatalf("running record must survive count prune: %v", err)
+	}
+}
+
 func TestHistoryBadIDsRefused(t *testing.T) {
 	dir := t.TempDir()
 	for _, id := range []string{"", "../evil", "a/b", `a\b`} {

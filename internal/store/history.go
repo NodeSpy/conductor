@@ -296,6 +296,16 @@ func PruneHistoryDir(dir string, maxAge time.Duration, maxRuns int) (int, error)
 	cut := time.Now().Add(-maxAge)
 	removed := 0
 	for i, rec := range recs {
+		// A still-running record is live state, not history: its checkpoints
+		// back an in-flight run and its resume base. Deleting it out from under
+		// the running flow would strand or corrupt that run, so never prune one
+		// on age or count — it becomes eligible only once it has finished
+		// (#57 M6). Status is the reliable signal here; Finished is not always
+		// stamped on older finished records, so keying off it would wrongly
+		// exempt them.
+		if rec.Status == "running" {
+			continue
+		}
 		tooOld := rec.Started.Before(cut)
 		overCount := maxRuns > 0 && i >= maxRuns
 		if !tooOld && !overCount {
