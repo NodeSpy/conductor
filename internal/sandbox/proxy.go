@@ -16,6 +16,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -34,8 +36,9 @@ type Proxy struct {
 	// OnDeny is called (if non-nil) with the denied host:port — the audit hook.
 	OnDeny func(hostport string)
 
-	ln  net.Listener
-	srv *http.Server
+	ln   net.Listener
+	srv  *http.Server
+	ulns []net.Listener // additional unix listeners (enforced-egress path)
 
 	credMu sync.Mutex
 	creds  map[string]bool // valid per-dispatch credentials (the basic-auth password)
@@ -112,6 +115,28 @@ func (p *Proxy) Start() (string, error) {
 	}
 	go func() { _ = p.srv.Serve(ln) }()
 	return ln.Addr().String(), nil
+}
+
+// ServeUnix attaches a unix-socket listener serving the same filtered proxy
+// — the daemon-side end of the enforced-egress forwarder (#36 iso-review
+// C1). The socket file is 0600: only the daemon's own user reaches it, and
+// the per-dispatch credential still applies on top.
+func (p *Proxy) ServeUnix(path string) error {
+	if p.srv == nil {
+		return fmt.Errorf("sandbox: egress proxy not started")
+	}
+	_ = os.Remove(path)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return fmt.Errorf("sandbox: egress proxy unix listen: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		ln.Close()
+		return fmt.Errorf("sandbox: egress proxy socket perms: %w", err)
+	}
+	p.ulns = append(p.ulns, ln)
+	go func() { _ = p.srv.Serve(ln) }()
+	return nil
 }
 
 // Close shuts the proxy down.
@@ -238,9 +263,11 @@ type ProxyManager struct {
 	// host:port.
 	OnDeny func(key, hostport string)
 
-	mu    sync.Mutex
-	byKey map[string]*Proxy
-	addrs map[string]string
+	mu      sync.Mutex
+	byKey   map[string]*Proxy
+	addrs   map[string]string
+	socks   map[string]string // allowlist key → unix socket path
+	sockDir string            // 0700 directory holding the unix sockets
 }
 
 // NewProxyManager builds an empty manager. onDeny may be nil.
@@ -262,6 +289,44 @@ func (m *ProxyManager) Endpoint(allow []string) (addr, cred string, err error) {
 		return "", "", err
 	}
 	return addr, cred, nil
+}
+
+// UnixEndpoint returns the unix-socket path of the proxy enforcing exactly
+// this allowlist (creating the socket on first use) plus a fresh
+// per-dispatch credential — the daemon-side end the in-sandbox forwarder
+// pipes into (#36 iso-review C1).
+func (m *ProxyManager) UnixEndpoint(allow []string) (sock, cred string, err error) {
+	p, _, err := m.proxyFor(allow)
+	if err != nil {
+		return "", "", err
+	}
+	key := allowKey(allow)
+	m.mu.Lock()
+	if m.socks == nil {
+		m.socks = map[string]string{}
+	}
+	sock, ok := m.socks[key]
+	if !ok {
+		if m.sockDir == "" {
+			m.sockDir, err = os.MkdirTemp("", "conductor-egress")
+			if err != nil {
+				m.mu.Unlock()
+				return "", "", fmt.Errorf("sandbox: egress socket dir: %w", err)
+			}
+		}
+		sock = filepath.Join(m.sockDir, fmt.Sprintf("egress-%d.sock", len(m.socks)))
+		if err := p.ServeUnix(sock); err != nil {
+			m.mu.Unlock()
+			return "", "", err
+		}
+		m.socks[key] = sock
+	}
+	m.mu.Unlock()
+	cred, err = p.MintCred()
+	if err != nil {
+		return "", "", err
+	}
+	return sock, cred, nil
 }
 
 // proxyFor returns (starting on first use) the shared proxy for an allowlist.
@@ -292,7 +357,11 @@ func (m *ProxyManager) Close() {
 	for _, p := range m.byKey {
 		p.Close()
 	}
-	m.byKey, m.addrs = map[string]*Proxy{}, map[string]string{}
+	if m.sockDir != "" {
+		_ = os.RemoveAll(m.sockDir)
+		m.sockDir = ""
+	}
+	m.byKey, m.addrs, m.socks = map[string]*Proxy{}, map[string]string{}, nil
 }
 
 // allowKey canonicalizes an allowlist (sorted, joined) so equivalent lists

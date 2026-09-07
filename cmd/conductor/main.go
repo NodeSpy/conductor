@@ -65,6 +65,11 @@ func main() {
 	args := os.Args[2:]
 	var err error
 	switch cmd {
+	case "sandbox-net":
+		// Internal: the in-sandbox forwarder for enforced egress (#36 §15).
+		// Launched by conductor itself inside a namespace/container; not a
+		// user-facing command.
+		os.Exit(runSandboxNet(args))
 	case "run":
 		err = cmdRun(args)
 	case "validate":
@@ -351,6 +356,7 @@ func cmdRun(args []string) error {
 	})
 	defer egress.Close()
 	controller.EgressProxyFor = egress.Endpoint
+	controller.EgressProxyUnix = egress.UnixEndpoint
 	// HostDial is the ssh -W stdio forward remote opencode servers are reached
 	// through (they bind the remote 127.0.0.1; no port opens anywhere).
 	controller.HostDial = func(ctx context.Context, name, addr string) (net.Conn, error) {

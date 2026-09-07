@@ -83,13 +83,24 @@ func (s *Spec) engine() string {
 }
 
 // ProxyPolicy reports whether this launch's network is governed by the
-// egress proxy (an explicit network: block that isn't a structural deny),
-// and the allowlist to enforce (empty = deny everything, audited).
+// ADVISORY egress proxy (an explicit network: block without a structural
+// deny), and the allowlist to enforce (empty = deny everything, audited).
 func (s *Spec) ProxyPolicy() (allow []string, ok bool) {
 	if s == nil || !s.HasEgress || s.Deny {
 		return nil, false
 	}
 	return s.Egress, true
+}
+
+// EnforcedEgress reports the STRUCTURAL allowlist combination (#36
+// iso-review C1): `deny: true` plus an `egress:` list under
+// namespace/container mode. The namespace/container drops the network
+// entirely; the in-sandbox forwarder into conductor's proxy (over a unix
+// socket) is the only path out, so the allowlist is an OS boundary, not
+// advisory.
+func (s *Spec) EnforcedEgress() bool {
+	return s != nil && s.Deny && s.HasEgress && len(s.Egress) > 0 &&
+		(s.Mode == "namespace" || s.Mode == "container")
 }
 
 // Check verifies the mode is runnable here: the wrapper binaries exist and
@@ -130,13 +141,27 @@ func (s *Spec) Check(goos string, lookPath func(string) (string, error)) error {
 	}
 }
 
+// containerSelf / containerSock are where the enforced-egress pieces appear
+// inside a container: conductor's own (static, zero-cgo) binary and the
+// proxy's unix socket, bind-mounted read-only.
+const (
+	containerSelf = "/run/conductor/conductor"
+	containerSock = "/run/conductor/egress.sock"
+)
+
 // WrapLocal wraps a local launch: argv becomes the isolated invocation. dir
 // is the working directory (container mode bind-mounts it); envKeys are the
 // environment keys the launch will carry (container mode passes each through
 // with `-e KEY` since a container never inherits the parent environment).
-func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string) ([]string, error) {
+// nf, non-nil exactly when EnforcedEgress(), carries the forwarder wiring:
+// the launch is re-entered through `conductor sandbox-net`, the only network
+// path out of the empty namespace (#36 iso-review C1).
+func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetForward) ([]string, error) {
 	if s == nil {
 		return argv, nil
+	}
+	if s.EnforcedEgress() && nf == nil {
+		return nil, fmt.Errorf("sandbox: enforced egress (deny+allowlist) needs the forwarder wiring — refusing to launch without it")
 	}
 	switch s.Mode {
 	case "user":
@@ -152,6 +177,10 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string) ([]string,
 			prefix = append(prefix, "--net")
 		}
 		prefix = append(prefix, "--")
+		if nf != nil {
+			prefix = append(prefix, nf.Self, "sandbox-net",
+				"--listen", ForwardAddr, "--unix", nf.UnixSocket, "--")
+		}
 		return append(prefix, argv...), nil
 	case "container":
 		if s.Image == "" {
@@ -163,6 +192,11 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string) ([]string,
 		}
 		if s.Deny {
 			out = append(out, "--network=none")
+		}
+		if nf != nil {
+			out = append(out,
+				"-v", nf.Self+":"+containerSelf+":ro",
+				"-v", nf.UnixSocket+":"+containerSock)
 		}
 		if s.Memory != "" {
 			out = append(out, "--memory", s.Memory)
@@ -177,6 +211,10 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string) ([]string,
 			out = append(out, "-e", k)
 		}
 		out = append(out, s.Image)
+		if nf != nil {
+			out = append(out, containerSelf, "sandbox-net",
+				"--listen", ForwardAddr, "--unix", containerSock, "--")
+		}
 		return append(out, argv...), nil
 	case "":
 		return argv, nil

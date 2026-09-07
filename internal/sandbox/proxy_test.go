@@ -284,3 +284,67 @@ func mustReq(t *testing.T, u string) *http.Request {
 	// Proxy the request by hand: absolute URI at the proxy address.
 	return r
 }
+
+// Regression (#36 iso-review C1): the full enforced-egress chain in-process
+// — a client speaks to the sandbox-side TCP forwarder, which pipes into the
+// proxy's unix socket; the allowlist and the per-dispatch credential both
+// apply, and DNS/exfil targets outside the list are refused at the proxy.
+func TestEnforcedEgressChainOverUnixSocket(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "through the wall")
+	}))
+	defer upstream.Close()
+	target := strings.TrimPrefix(upstream.URL, "http://")
+
+	m := NewProxyManager(nil)
+	defer m.Close()
+	sock, cred, err := m.UnixEndpoint([]string{target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same allowlist → same socket; each dispatch gets its own credential.
+	sock2, cred2, err := m.UnixEndpoint([]string{target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sock2 != sock || cred2 == cred {
+		t.Fatalf("socket shared, creds distinct: %q vs %q, %v", sock, sock2, cred2 == cred)
+	}
+
+	// The in-sandbox forwarder: TCP on loopback → the unix socket.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go serveForward(ln, sock)
+
+	client := viaProxyCred(ln.Addr().String(), cred)
+	resp, err := client.Get(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "through the wall" {
+		t.Fatalf("allowed target through the chain: %d %q", resp.StatusCode, body)
+	}
+	// An unlisted target is refused by the proxy on the far side of the wall.
+	r2, err := client.Get("http://198.51.100.10:80/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.Body.Close()
+	if r2.StatusCode != http.StatusForbidden {
+		t.Fatalf("unlisted target: %d", r2.StatusCode)
+	}
+	// No credential → 407 even through the forwarder.
+	r3, err := viaProxyCred(ln.Addr().String(), "wrong").Get(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r3.Body.Close()
+	if r3.StatusCode != http.StatusProxyAuthRequired {
+		t.Fatalf("forwarder must not bypass auth: %d", r3.StatusCode)
+	}
+}

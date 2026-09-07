@@ -19,7 +19,7 @@ func TestFromConfigNil(t *testing.T) {
 	if err := s.Check("linux", nil); err != nil {
 		t.Fatalf("nil spec check: %v", err)
 	}
-	argv, err := s.WrapLocal([]string{"tool"}, "/wt", nil)
+	argv, err := s.WrapLocal([]string{"tool"}, "/wt", nil, nil)
 	if err != nil || strings.Join(argv, " ") != "tool" {
 		t.Fatalf("nil spec wrap: %v %v", argv, err)
 	}
@@ -31,7 +31,7 @@ func TestFromConfigNil(t *testing.T) {
 
 func TestWrapLocalUser(t *testing.T) {
 	s := FromConfig(&config.IsolationConfig{Mode: "user", User: "sbx"})
-	argv, err := s.WrapLocal([]string{"claude", "-p", "x"}, "/wt", nil)
+	argv, err := s.WrapLocal([]string{"claude", "-p", "x"}, "/wt", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,14 +39,14 @@ func TestWrapLocalUser(t *testing.T) {
 		t.Fatalf("user wrap: %q", got)
 	}
 	// Missing user is an error, not a silent no-op.
-	if _, err := (&Spec{Mode: "user"}).WrapLocal([]string{"t"}, "", nil); err == nil {
+	if _, err := (&Spec{Mode: "user"}).WrapLocal([]string{"t"}, "", nil, nil); err == nil {
 		t.Fatal("mode user without user must error")
 	}
 }
 
 func TestWrapLocalNamespace(t *testing.T) {
 	s := FromConfig(&config.IsolationConfig{Mode: "namespace"})
-	argv, err := s.WrapLocal([]string{"tool"}, "/wt", nil)
+	argv, err := s.WrapLocal([]string{"tool"}, "/wt", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestWrapLocalNamespace(t *testing.T) {
 		Network: &config.IsolationNetwork{Deny: true},
 		Limits:  &config.IsolationLimits{Memory: "2g", CPU: "200%", Pids: 128},
 	})
-	argv, err = s.WrapLocal([]string{"tool"}, "/wt", nil)
+	argv, err = s.WrapLocal([]string{"tool"}, "/wt", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestWrapLocalContainer(t *testing.T) {
 		Network:   &config.IsolationNetwork{Deny: true},
 		Limits:    &config.IsolationLimits{Memory: "1g", CPU: "2", Pids: 64},
 	})
-	argv, err := s.WrapLocal([]string{"claude", "-p", "x"}, "/wt", []string{"GH_TOKEN", "HTTP_PROXY"})
+	argv, err := s.WrapLocal([]string{"claude", "-p", "x"}, "/wt", []string{"GH_TOKEN", "HTTP_PROXY"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,12 +100,12 @@ func TestWrapLocalContainer(t *testing.T) {
 		}
 	}
 	// No image → error.
-	if _, err := (&Spec{Mode: "container"}).WrapLocal([]string{"t"}, "", nil); err == nil {
+	if _, err := (&Spec{Mode: "container"}).WrapLocal([]string{"t"}, "", nil, nil); err == nil {
 		t.Fatal("container without image must error")
 	}
 	// Default engine is docker.
 	s = FromConfig(&config.IsolationConfig{Mode: "container", Container: &config.ContainerIsolation{Image: "img"}})
-	argv, _ = s.WrapLocal([]string{"t"}, "", nil)
+	argv, _ = s.WrapLocal([]string{"t"}, "", nil, nil)
 	if argv[0] != "docker" {
 		t.Fatalf("default engine: %q", argv[0])
 	}
@@ -286,5 +286,67 @@ func TestEgressBareHostIsHTTPSOnly(t *testing.T) {
 	}
 	if EgressAllowed(star, "other.example.com:22") {
 		t.Fatal("host:* is scoped to the host")
+	}
+}
+
+// Regression (#36 iso-review C1): deny+egress under namespace/container is
+// the ENFORCED allowlist — the wrap drops the network structurally and
+// re-enters through the sandbox-net forwarder, whose unix socket is the only
+// path out.
+func TestWrapLocalEnforcedEgress(t *testing.T) {
+	nf := &NetForward{Self: "/usr/bin/conductor", UnixSocket: "/tmp/egress.sock"}
+
+	ns := FromConfig(&config.IsolationConfig{Mode: "namespace",
+		Network: &config.IsolationNetwork{Deny: true, Egress: []string{"api.example.com:443"}}})
+	if !ns.EnforcedEgress() {
+		t.Fatal("namespace deny+egress must be enforced")
+	}
+	argv, err := ns.WrapLocal([]string{"claude", "-p", "x"}, "/wt", nil, nf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, "--net") {
+		t.Fatalf("enforced egress must still drop the network: %q", joined)
+	}
+	if !strings.Contains(joined, "/usr/bin/conductor sandbox-net --listen "+ForwardAddr+" --unix /tmp/egress.sock -- claude -p x") {
+		t.Fatalf("launch must re-enter through the forwarder: %q", joined)
+	}
+	// Without the forwarder wiring the launch fails closed, never launches
+	// unfiltered.
+	if _, err := ns.WrapLocal([]string{"claude"}, "/wt", nil, nil); err == nil {
+		t.Fatal("enforced egress without wiring must refuse to launch")
+	}
+
+	ct := FromConfig(&config.IsolationConfig{Mode: "container",
+		Container: &config.ContainerIsolation{Image: "img"},
+		Network:   &config.IsolationNetwork{Deny: true, Egress: []string{"api.example.com:443"}}})
+	argv, err = ct.WrapLocal([]string{"claude"}, "/wt", []string{"HTTPS_PROXY"}, nf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined = strings.Join(argv, " ")
+	for _, want := range []string{
+		"--network=none",
+		"-v /usr/bin/conductor:/run/conductor/conductor:ro",
+		"-v /tmp/egress.sock:/run/conductor/egress.sock",
+		"img /run/conductor/conductor sandbox-net --listen " + ForwardAddr + " --unix /run/conductor/egress.sock -- claude",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("container enforced egress missing %q: %q", want, joined)
+		}
+	}
+
+	// Plain deny (no list) and advisory egress (no deny) are NOT the enforced
+	// path.
+	plain := FromConfig(&config.IsolationConfig{Mode: "namespace",
+		Network: &config.IsolationNetwork{Deny: true}})
+	if plain.EnforcedEgress() {
+		t.Fatal("plain deny is not enforced-egress")
+	}
+	adv := FromConfig(&config.IsolationConfig{Mode: "user", User: "s",
+		Network: &config.IsolationNetwork{Egress: []string{"x:443"}}})
+	if adv.EnforcedEgress() {
+		t.Fatal("user-mode egress is advisory, never enforced")
 	}
 }

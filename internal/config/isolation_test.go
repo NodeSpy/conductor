@@ -46,10 +46,16 @@ func TestIsolationValidation(t *testing.T) {
 		{"container ok", &IsolationConfig{Mode: "container", Container: &ContainerIsolation{Image: "i"}}, false, ""},
 		{"container bad engine", &IsolationConfig{Mode: "container", Container: &ContainerIsolation{Image: "i", Engine: "lxc"}}, false, "docker|podman"},
 		{"container remote rejected", &IsolationConfig{Mode: "container", Container: &ContainerIsolation{Image: "i"}}, true, "not supported with a remote host"},
-		{"deny+egress conflict", &IsolationConfig{Mode: "namespace", Network: &IsolationNetwork{Deny: true, Egress: []string{"a"}}}, false, "mutually exclusive"},
+		// deny+egress together is the ENFORCED allowlist (#36 iso-review C1)
+		// under the structural modes; user mode still can't structurally deny.
+		{"deny+egress enforced namespace", &IsolationConfig{Mode: "namespace", Network: &IsolationNetwork{Deny: true, Egress: []string{"a:443"}}}, false, ""},
+		{"deny+egress enforced container", &IsolationConfig{Mode: "container", Container: &ContainerIsolation{Image: "i"}, Network: &IsolationNetwork{Deny: true, Egress: []string{"a:443"}}}, false, ""},
+		{"deny+egress user rejected", &IsolationConfig{Mode: "user", User: "s", Network: &IsolationNetwork{Deny: true, Egress: []string{"a:443"}}}, false, "structural mode"},
+		{"deny+egress remote rejected", &IsolationConfig{Mode: "namespace", Network: &IsolationNetwork{Deny: true, Egress: []string{"a:443"}}}, true, "local launch"},
 		{"deny needs structural mode", &IsolationConfig{Mode: "user", User: "s", Network: &IsolationNetwork{Deny: true}}, false, "structural mode"},
 		{"deny ok namespace", &IsolationConfig{Mode: "namespace", Network: &IsolationNetwork{Deny: true}}, false, ""},
-		{"egress remote rejected", &IsolationConfig{Mode: "user", User: "s", Network: &IsolationNetwork{Egress: []string{"a:443"}}}, true, "loopback-only"},
+		{"deny ok remote namespace", &IsolationConfig{Mode: "namespace", Network: &IsolationNetwork{Deny: true}}, true, ""},
+		{"egress remote rejected", &IsolationConfig{Mode: "user", User: "s", Network: &IsolationNetwork{Egress: []string{"a:443"}}}, true, "local launch"},
 		{"empty egress pattern", &IsolationConfig{Mode: "user", User: "s", Network: &IsolationNetwork{Egress: []string{""}}}, false, "empty pattern"},
 		{"negative pids", &IsolationConfig{Mode: "user", User: "s", Limits: &IsolationLimits{Pids: -1}}, false, "pids"},
 	}

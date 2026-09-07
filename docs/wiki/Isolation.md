@@ -104,14 +104,35 @@ agent-authored plan (§11) is routed through the deny-all proxy even with no
 opts specific targets back in; `trust` doesn't change this — only config
 does.
 
-The proxy is enforcement for well-behaved runtimes (anything honoring proxy
-env — git over HTTPS, gh, node/python HTTP stacks). A runtime that ignores
-proxy env can still reach the network in `user` mode; when you need the
-structural guarantee, use `deny: true` under namespace/container mode, which
-removes the network interface entirely. `deny: true` and `egress:` are
-mutually exclusive, and `deny: true` is rejected for opencode runtimes (it
-would sever conductor's own HTTP control channel — use `network: {}`
-instead).
+### Enforced vs. advisory
+
+The allowlist has two strengths, and the strong one is what you should
+reach for:
+
+- **Enforced — `deny: true` + `egress:` under `namespace`/`container`.**
+  The sandbox's network is removed structurally (`unshare --net` /
+  `--network=none`); the launch is re-entered through `conductor
+  sandbox-net`, an in-sandbox forwarder that pipes into conductor's
+  filtering proxy over a **unix socket** (a filesystem object — it crosses
+  the namespace boundary; nothing else does). The runtime's
+  `HTTP(S)_PROXY` points at the forwarder's in-sandbox loopback address,
+  reachable from inside and nowhere else. A runtime that ignores proxy env
+  reaches **nothing**: there is no interface, no route, and no DNS — the
+  proxy resolves CONNECT targets itself outside the sandbox, so
+  DNS-tunnel exfiltration is closed with the rest. The allowlist is an OS
+  boundary. (Container mode bind-mounts conductor's own static binary and
+  the socket into the container; same-architecture image required.)
+- **Advisory — `egress:` under `mode: user` (or without `deny`).** Only
+  the proxy env steers traffic; a runtime that ignores `HTTP(S)_PROXY`
+  can still reach the network directly. `conductor validate` says so out
+  loud. Use it for audit/visibility, not as a boundary — and prefer the
+  enforced form whenever the profile runs on this box.
+
+Plain `deny: true` (no list) remains the full structural cutoff. `deny:
+true` in any form is rejected for opencode runtimes (it would sever
+conductor's own HTTP control channel — use `network: {}` instead), and an
+`egress:` list needs a local launch (the proxy lives on this box; use
+plain `deny: true` with namespace mode on a remote host).
 
 ## Hosts
 

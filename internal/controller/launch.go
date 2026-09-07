@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -20,6 +21,17 @@ import (
 // (Endpoint), stubbed in tests. nil + a launch that needs an egress policy
 // is a launch error — the policy fails closed, never silently unenforced.
 var EgressProxyFor func(allow []string) (addr, cred string, err error)
+
+// EgressProxyUnix resolves the UNIX-socket endpoint of the proxy enforcing
+// the given allowlist — the daemon-side end of the ENFORCED egress path
+// (deny+allowlist under namespace/container, #36 iso-review C1) — plus a
+// fresh per-dispatch credential. Wired from sandbox.ProxyManager.UnixEndpoint;
+// nil + an enforced-egress launch fails closed.
+var EgressProxyUnix func(allow []string) (sock, cred string, err error)
+
+// launchSelfExe resolves conductor's own binary (re-executed inside the
+// sandbox as the forwarder); a var for tests.
+var launchSelfExe = os.Executable
 
 // launchGOOS / launchLookPath feed sandbox.Spec.Check's platform probe —
 // package vars so tests can exercise the isolation paths without the wrapper
@@ -93,10 +105,29 @@ func prepareLaunch(host, dir string, env, argv []string, opt launchOpts) (wrappe
 			}
 			env = append(append([]string(nil), env...), sandbox.ProxyEnv(addr, cred)...)
 		}
+		var nf *sandbox.NetForward
+		if spec.EnforcedEgress() {
+			// The STRUCTURAL allowlist (#36 iso-review C1): the sandbox has no
+			// network; its only path out is the forwarder into conductor's
+			// proxy over a unix socket. Fails closed when unwired.
+			if EgressProxyUnix == nil {
+				return nil, "", nil, false, fmt.Errorf("controller: enforced egress (deny+allowlist) needs the proxy's unix endpoint but none is wired")
+			}
+			sock, cred, perr := EgressProxyUnix(spec.Egress)
+			if perr != nil {
+				return nil, "", nil, false, fmt.Errorf("controller: egress proxy socket: %w", perr)
+			}
+			self, serr := launchSelfExe()
+			if serr != nil {
+				return nil, "", nil, false, fmt.Errorf("controller: resolve conductor binary for sandbox-net: %w", serr)
+			}
+			nf = &sandbox.NetForward{Self: self, UnixSocket: sock}
+			env = append(append([]string(nil), env...), sandbox.ProxyEnv(sandbox.ForwardAddr, cred)...)
+		}
 		if err := spec.Check(launchGOOS, launchLookPath); err != nil {
 			return nil, "", nil, false, err
 		}
-		wrapped, werr := spec.WrapLocal(argv, dir, envKeys(env))
+		wrapped, werr := spec.WrapLocal(argv, dir, envKeys(env), nf)
 		if werr != nil {
 			return nil, "", nil, false, werr
 		}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // stubProxy wires a fake EgressProxyFor for a test, recording the allowlists
@@ -171,5 +172,45 @@ func TestLaunchOptsResolution(t *testing.T) {
 	// Resume keeps the runtime's isolation.
 	if got := resumeOpts(rtIso); got.iso != rtIso || got.agentAuthored {
 		t.Fatalf("resume opts: %+v", got)
+	}
+}
+
+// Regression (#36 iso-review C1): a deny+egress launch gets the ENFORCED
+// wiring — proxy env pinned at the in-sandbox forwarder address, the unix
+// endpoint resolved, and the argv re-entered through sandbox-net. Unwired,
+// it fails closed.
+func TestPrepareLaunchEnforcedEgress(t *testing.T) {
+	stubPlatform(t)
+	oldU, oldSelf := EgressProxyUnix, launchSelfExe
+	var asked [][]string
+	EgressProxyUnix = func(allow []string) (string, string, error) {
+		asked = append(asked, allow)
+		return "/run/sock", "ucred", nil
+	}
+	launchSelfExe = func() (string, error) { return "/opt/conductor", nil }
+	t.Cleanup(func() { EgressProxyUnix, launchSelfExe = oldU, oldSelf })
+
+	iso := &config.IsolationConfig{Mode: "namespace",
+		Network: &config.IsolationNetwork{Deny: true, Egress: []string{"api.example.com:443"}}}
+	argv, _, env, _, err := prepareLaunch("", "/wt", nil, []string{"claude"}, launchOpts{iso: iso})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, "--net") ||
+		!strings.Contains(joined, "/opt/conductor sandbox-net --listen "+sandbox.ForwardAddr+" --unix /run/sock -- claude") {
+		t.Fatalf("enforced argv: %q", joined)
+	}
+	if !strings.Contains(strings.Join(env, "\n"), "HTTPS_PROXY=http://conductor:ucred@"+sandbox.ForwardAddr) {
+		t.Fatalf("proxy env must point at the in-sandbox forwarder: %v", env)
+	}
+	if len(asked) != 1 || strings.Join(asked[0], ",") != "api.example.com:443" {
+		t.Fatalf("unix endpoint allowlist: %v", asked)
+	}
+
+	// Unwired → fail closed, never an unfiltered launch.
+	EgressProxyUnix = nil
+	if _, _, _, _, err := prepareLaunch("", "/wt", nil, []string{"claude"}, launchOpts{iso: iso}); err == nil {
+		t.Fatal("enforced egress without a wired unix endpoint must fail closed")
 	}
 }

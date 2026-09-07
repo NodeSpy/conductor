@@ -45,14 +45,16 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 		return fmt.Errorf("config: %s: unknown isolation mode %q (want user|namespace|container)", where, iso.Mode)
 	}
 	if n := iso.Network; n != nil {
-		if n.Deny && len(n.Egress) > 0 {
-			return fmt.Errorf("config: %s: isolation network `deny: true` and an `egress:` allowlist are mutually exclusive", where)
-		}
+		// `deny: true` + `egress:` together is the ENFORCED allowlist (#36
+		// iso-review C1): the namespace/container drops the network and the
+		// in-sandbox forwarder into conductor's proxy is the only path out.
+		// mode: user has no network namespace to enforce with, so deny —
+		// alone or with an allowlist — needs a structural mode there.
 		if n.Deny && iso.Mode == "user" {
-			return fmt.Errorf("config: %s: isolation network `deny: true` needs a structural mode (namespace or container) — mode user can only enforce the egress proxy", where)
+			return fmt.Errorf("config: %s: isolation network `deny: true` needs a structural mode (namespace or container) — mode user can only run the ADVISORY egress proxy", where)
 		}
-		if !n.Deny && remote {
-			return fmt.Errorf("config: %s: an isolation egress allowlist needs a local launch (conductor's egress proxy is loopback-only) — use `deny: true` with mode namespace for a remote box", where)
+		if len(n.Egress) > 0 && remote {
+			return fmt.Errorf("config: %s: an isolation egress allowlist needs a local launch (conductor's egress proxy lives on this box) — use plain `deny: true` with mode namespace for a remote box", where)
 		}
 		for _, pat := range n.Egress {
 			if pat == "" {
