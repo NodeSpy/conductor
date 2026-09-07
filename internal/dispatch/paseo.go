@@ -849,10 +849,15 @@ var slugRe = regexp.MustCompile(`[^a-z0-9._-]+`)
 // "", which callers must treat as "needs a fallback" rather than a valid suffix.
 func SanitizeBranchSuffix(s string) string {
 	s = slugRe.ReplaceAllString(strings.ToLower(s), "-")
-	s = strings.Trim(s, "-.")
+	// Truncate BEFORE the final trim: a cut at 32 can land on a '-'/'.', and a
+	// trailing separator is not a valid ref tail. Trimming after truncation is
+	// what makes this idempotent — feeding the output back through yields the
+	// same string, so a pre-slugified suffix matches the branch name exactly
+	// (a trim-then-truncate order would re-trim that boundary separator).
 	if len(s) > 32 {
 		s = s[:32]
 	}
+	s = strings.Trim(s, "-.")
 	return s
 }
 

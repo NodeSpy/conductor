@@ -463,3 +463,32 @@ func TestBranchSuffixKeepsTeamWorkerBranchesDistinct(t *testing.T) {
 		t.Fatalf("checkout args missing suffixed branch: %v", args)
 	}
 }
+
+// Regression (H4): SanitizeBranchSuffix must be idempotent. A slug longer than
+// 32 chars whose 32-char cut lands on a '-'/'.' left a trailing separator when
+// the trim ran BEFORE the truncation, so a second pass produced a shorter,
+// different string — a pre-slugified suffix would then not match the branch the
+// dispatcher actually derived. Truncate-then-trim fixes it.
+func TestSanitizeBranchSuffixIdempotentAtBoundary(t *testing.T) {
+	// 31 ref-safe chars, then a space (→ '-'): the 32nd char is a separator.
+	in := strings.Repeat("a", 31) + " subtask-tail-that-overflows"
+	once := SanitizeBranchSuffix(in)
+	twice := SanitizeBranchSuffix(once)
+	if once != twice {
+		t.Fatalf("not idempotent: once=%q twice=%q", once, twice)
+	}
+	if len(once) > 32 {
+		t.Fatalf("suffix exceeds cap: %q (%d)", once, len(once))
+	}
+	if strings.HasSuffix(once, "-") || strings.HasSuffix(once, ".") {
+		t.Fatalf("suffix ends in a separator (invalid ref tail): %q", once)
+	}
+	// Two subtask ids diverging BEFORE the 32-char cut still yield distinct,
+	// idempotent branches (the team dedup in team.go relies on this).
+	tr := core.Trigger{Kind: "team_task", Target: core.Target{Number: 9}}
+	a := branchSlug(WithBranchSuffix(context.Background(), "auth api service refactor pass one"), tr)
+	b := branchSlug(WithBranchSuffix(context.Background(), "auth ui service refactor pass two"), tr)
+	if a == b {
+		t.Fatalf("distinct subtasks collided: %q", a)
+	}
+}
