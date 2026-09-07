@@ -122,6 +122,16 @@ func (g *Integration) eachRepo(ctx context.Context, tag string, entries []string
 			continue
 		}
 		if strings.Contains(entry, "*") {
+			if strings.Contains(owner, "*") {
+				// A wildcard OWNER ("*/*", "*/foo") can't resolve to a single
+				// account's installation, and expanding it would need
+				// enumerating every App installation. Skip with a clear note
+				// rather than a misleading GET /users/*/installation 404. Use an
+				// explicit owner (e.g. "acme/*") to glob repos within one
+				// installation.
+				log.Printf("github[%s]: %s %s: skipped — a wildcard owner can't be expanded; use an explicit owner like acme/*", g.name, tag, entry)
+				continue
+			}
 			instID, err := g.app.accountInstallationID(ctx, owner)
 			if err != nil {
 				log.Printf("github[%s]: %s %s: %v", g.name, tag, entry, err)
@@ -227,15 +237,36 @@ func (g *Integration) stuckRepos() []string {
 	defaultsHas := stuckEnabled(g.cfg.Defaults.Actions["stuck_checks"])
 	seen := map[string]bool{}
 	var out []string
-	for _, r := range g.cfg.Rules {
-		if !defaultsHas && !stuckEnabled(r.Actions["stuck_checks"]) {
-			continue
-		}
-		for _, repo := range r.Match.Repos {
+	add := func(repos []string) {
+		for _, repo := range repos {
 			if !seen[repo] {
 				seen[repo] = true
 				out = append(out, repo)
 			}
+		}
+	}
+	for _, r := range g.cfg.Rules {
+		set := r.Actions["stuck_checks"]
+		if !defaultsHas && !stuckEnabled(set) {
+			continue
+		}
+		// The connectors lowering (github.go Source) makes every rule a "*/*"
+		// catch-all and carries each trigger's real repo scope on its action;
+		// legacy configs put the scope on the rule's Match.Repos. Prefer the
+		// enabled stuck_checks action's own Repos so the poller targets the
+		// configured repos — not the "*/*" catch-all, which would send eachRepo
+		// into an installation lookup for a wildcard owner (github: stuck */*:
+		// users/*/installation 404). Fall back to Match.Repos for the legacy
+		// rule-scoped shape.
+		scoped := false
+		for _, a := range set {
+			if a.IsEnabled() && len(a.Repos) > 0 {
+				add(a.Repos)
+				scoped = true
+			}
+		}
+		if !scoped {
+			add(r.Match.Repos)
 		}
 	}
 	return out
