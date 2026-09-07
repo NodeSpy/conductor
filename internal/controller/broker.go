@@ -163,6 +163,16 @@ func (b *Broker) Session(ctx context.Context, prKey string, h Handler) (Session,
 		return nil, err
 	}
 	b.mu.Lock()
+	// A Close() for this PR may have dropped the ref while we were resuming.
+	// Don't resurrect a closed hand-off: if the PR is no longer bound, close
+	// the session we just spun up and report none (#57 M5). Close() also holds
+	// the per-PR claim, so this is belt-and-suspenders against any other ref
+	// removal path that does not.
+	if _, ok := b.refs[prKey]; !ok {
+		b.mu.Unlock()
+		_ = sess.Close(ctx)
+		return nil, nil
+	}
 	b.live[prKey] = sess
 	b.mu.Unlock()
 	return sess, nil
@@ -208,6 +218,14 @@ func (b *Broker) Followup(ctx context.Context, prKey, text string, h Handler) (b
 // Close ends the PR's session (best-effort) and drops its live handle and
 // persisted ref, so a completed/discarded hand-off isn't re-attached later.
 func (b *Broker) Close(ctx context.Context, prKey string) {
+	// Serialize against an in-flight ResumeSession for the same PR (#57 M5):
+	// without the claim, a concurrent Session() that already passed its ref
+	// re-check could store its freshly-resumed session into b.live AFTER we
+	// delete it here — resurrecting a closed hand-off and leaking a session
+	// that is never Closed. Holding the claim keeps Close and resume ordered.
+	claim := b.resolveClaim(prKey)
+	claim.Lock()
+	defer claim.Unlock()
 	b.mu.Lock()
 	sess := b.live[prKey]
 	delete(b.live, prKey)

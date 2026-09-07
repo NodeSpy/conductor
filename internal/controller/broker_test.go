@@ -272,6 +272,63 @@ func TestBrokerSessionResumeIsSingleFlight(t *testing.T) {
 	}
 }
 
+// Regression (#57 M5): a Close() racing an in-flight ResumeSession must not
+// leave a resurrected, never-closed session behind. Close now holds the per-PR
+// claim, and Session re-checks the ref after resuming, so the end state is
+// deterministic: no live session for the PR, and the session that was resumed
+// mid-race is closed rather than leaked.
+func TestBrokerCloseRacesResumeNoLeak(t *testing.T) {
+	resumeEntered := make(chan struct{})
+	var once sync.Once
+	fc := &fakeController{name: "fake", model: ModelResumable, onResume: func() {
+		// Announce we've entered resume, then dwell so the concurrent Close()
+		// is contending for the claim while the session is being resumed.
+		once.Do(func() { close(resumeEntered) })
+		for i := 0; i < 1e6; i++ { // busy dwell, no wall-clock dep
+			_ = i
+		}
+	}}
+	st := newFakeStore()
+	const pr = "o/r#77"
+
+	// Persist a ref via one broker, then resume through a fresh broker whose
+	// live map is empty (the restart path that ResumeSession serves).
+	b1 := NewBroker(fakeRegistry(fc), st, nil)
+	if _, err := b1.Open(context.Background(), pr, "fake", Spec{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	b := NewBroker(fakeRegistry(fc), st, nil)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = b.Session(context.Background(), pr, nil)
+	}()
+	go func() {
+		defer wg.Done()
+		<-resumeEntered // only race Close once a resume is genuinely in flight
+		b.Close(context.Background(), pr)
+	}()
+	wg.Wait()
+
+	// No live session survives for the PR…
+	b.mu.Lock()
+	live := b.live[pr]
+	b.mu.Unlock()
+	if live != nil {
+		t.Fatalf("Close racing resume left a live session behind: %v", live)
+	}
+	// …the persisted ref is gone…
+	if _, ok := st.recs[pr]; ok {
+		t.Fatal("Close must delete the persisted ref")
+	}
+	// …and the session that got resumed mid-race is closed, not leaked.
+	if fc.last == nil || !fc.last.closed {
+		t.Fatalf("the resumed session must be closed, not leaked (last=%v)", fc.last)
+	}
+}
+
 // Regression (#36 iso-review H5): a resumed agent-authored session must
 // relaunch under the SAME deny-by-default posture it started with — the
 // provenance is persisted in the session ref and replayed to ResumeSession
