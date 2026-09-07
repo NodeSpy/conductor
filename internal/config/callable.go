@@ -58,6 +58,25 @@ type CallableConfig struct {
 	// refused, so a captured signature stops verifying once the window passes.
 	// Default 5m; 0/unset uses the default.
 	MaxSkew Duration `yaml:"max_skew"`
+	// MCPLocal opts the `conductor mcp callable` face out of the token model
+	// (#36 §13 review, item 2). By default that face is held to the SAME model
+	// as the HTTP surface: it must present a `--token`, its tool list is scoped
+	// to that token's workflows, and the daemon re-checks the callable opt-in +
+	// token scope and audits every invoke at dispatch time. Set true to restore
+	// the old unscoped/unaudited behavior — every `callable: true` workflow is
+	// exposed with no token and no `callable_invoke` audit, trusting the
+	// same-user privilege boundary alone (like `conductor run`).
+	MCPLocal bool `yaml:"mcp_local"`
+}
+
+// TokenByName returns the callable token with the given name, if any.
+func (c CallableConfig) TokenByName(name string) (CallableToken, bool) {
+	for _, t := range c.Tokens {
+		if t.Name == name {
+			return t, true
+		}
+	}
+	return CallableToken{}, false
 }
 
 // CallableToken is one caller identity: a bearer secret OR an HMAC signature

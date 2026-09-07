@@ -21,7 +21,7 @@ func TestControlSocketWatchStreams(t *testing.T) {
 	defer cancel()
 
 	hub := flow.NewEventHub()
-	go serveControl(ctx, controlSockPath(cfg), nil, nil, nil, nil, hub, func(string, ...any) {})
+	go serveControl(ctx, controlSockPath(cfg), nil, nil, nil, nil, hub, nil, func(string, ...any) {})
 	waitForSock(t, controlSockPath(cfg))
 
 	conn, err := net.Dial("unix", controlSockPath(cfg))
@@ -69,7 +69,7 @@ func TestControlSocketWatchWithoutHub(t *testing.T) {
 	cfg, _ := manualCfg(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go serveControl(ctx, controlSockPath(cfg), nil, nil, nil, nil, nil, func(string, ...any) {})
+	go serveControl(ctx, controlSockPath(cfg), nil, nil, nil, nil, nil, nil, func(string, ...any) {})
 	waitForSock(t, controlSockPath(cfg))
 
 	resp, err := sendControl(cfg, controlRequest{Cmd: "watch"})
@@ -90,7 +90,7 @@ func TestControlSocketIsOwnerOnly(t *testing.T) {
 	cfg, _ := manualCfg(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go serveControl(ctx, controlSockPath(cfg), nil, nil, nil, nil, nil, func(string, ...any) {})
+	go serveControl(ctx, controlSockPath(cfg), nil, nil, nil, nil, nil, nil, func(string, ...any) {})
 	waitForSock(t, controlSockPath(cfg))
 
 	fi, err := os.Stat(controlSockPath(cfg))

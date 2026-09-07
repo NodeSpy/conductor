@@ -253,28 +253,37 @@ The same callable workflows are exposed as MCP tools for a local MCP client
 (an agent, an IDE, a desktop assistant) via a stdio server:
 
 ```
-conductor mcp callable
+conductor mcp callable --token <name>
 ```
 
-The client sees one tool per `callable: true` workflow and nothing else — the
-tool list is exactly the opted-in triggers, so it is scoped callable-only by
-construction. A tool takes a single free-form `input` object (the same body the
-HTTP endpoint accepts); calling it fires the workflow and blocks for the
-structured result, returned as the tool's text content (`isError: true` when the
-run failed).
+By default this face is held to the **same token model as the HTTP surface**. It
+requires a `--token <name>` naming a token from the `callable:` block, and the
+client sees only the workflows that token is scoped to — nothing else. Each tool
+takes a single free-form `input` object (the same body the HTTP endpoint
+accepts); calling it fires the workflow and blocks for the structured result,
+returned as the tool's text content (`isError: true` when the run failed).
 
-Unlike the HTTP face, this one carries no bearer/HMAC token: it dispatches over
-the daemon's same-user control socket — the same privilege boundary
-`conductor run` uses — so it is a local face, launched by the MCP client's own
-config. A typical client entry:
+The daemon does not trust the tool list alone. Every MCP dispatch is marked as a
+callable invoke, and the daemon **re-checks the `callable: true` opt-in and the
+token's workflow scope at dispatch time** and writes a `callable_invoke` audit —
+so narrowing a token or removing `callable:` from a trigger revokes reachability
+immediately, even while the MCP server stays up. A tool call for a workflow the
+token is not scoped to (or that is no longer callable) is refused. The dispatch
+still crosses the daemon's same-user control socket — the same privilege boundary
+`conductor run` uses — so the MCP server is launched by the client's own config:
 
 ```json
 {
   "mcpServers": {
-    "conductor": { "command": "conductor", "args": ["mcp", "callable", "--config", "/etc/conductor/config.yaml"] }
+    "conductor": { "command": "conductor", "args": ["mcp", "callable", "--token", "n8n-prod", "--config", "/etc/conductor/config.yaml"] }
   }
 }
 ```
+
+To opt out — expose every `callable: true` workflow with no token and no audit,
+trusting the same-user control socket alone — set `mcp_local: true` in the
+`callable:` block and drop `--token`. This is the old behavior and should be used
+only where the local privilege boundary is the intended and sufficient control.
 
 ## Audit
 

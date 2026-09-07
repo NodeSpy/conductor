@@ -506,9 +506,12 @@ workflows:
 # All three gates must pass. Omit this block to leave the HTTP service off.
 #
 # The same callable workflows are also exposed as MCP tools for a local MCP
-# client via `conductor mcp callable` (a stdio server; one tool per
-# `callable: true` workflow, scoped callable-only). That face dispatches over
-# the daemon's same-user control socket, so it needs no token from this block.
+# client via `conductor mcp callable --token <name>` (a stdio server). By default
+# that face is held to the SAME token model as the HTTP surface: it requires a
+# --token, exposes only that token's workflows, and the daemon re-checks the
+# callable opt-in + token scope and writes a callable_invoke audit for each call.
+# Set `mcp_local: true` below to opt out (expose every callable workflow with no
+# token and no audit, trusting the same-user control socket alone).
 callable:
   # Bind for POST /invoke/<name> and GET /runs/<id>. Mounts on the shared
   # inbound listener, so it may reuse a `listen:` a webhook/sentry connector
@@ -529,6 +532,10 @@ callable:
   # Clock-skew window for signed (HMAC) requests (default 5m). A request whose
   # signed timestamp is further from the server clock than this is refused.
   max_skew: 5m
+  # `conductor mcp callable` token model. Default (false): the MCP face requires
+  # --token and is scoped + audited like the HTTP surface. Set true to expose all
+  # callable workflows over MCP with no token and no audit (same-user boundary only).
+  # mcp_local: false
   tokens:
     # A bearer caller (n8n's "Header Auth" credential: Authorization: Bearer …).
     - name: n8n-prod

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/callable"
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/store"
 )
@@ -82,29 +83,72 @@ func cmdMCPMemory(args []string) error {
 const mcpCallableTimeout = 5 * time.Minute
 
 // cmdMCPCallable implements `conductor mcp callable` — a stdio MCP server that
-// exposes each `callable: true` workflow as a tool. Unlike `mcp memory`, a
-// human (or an MCP client's config) launches it directly; it reads the config
-// to find the workflows + the daemon's control socket, and each tool call
-// dispatches through that socket (same-user privilege boundary, like
-// `conductor run`) and blocks for the structured result. Scoped callable-only:
-// the tool list is exactly the opted-in triggers, nothing else.
+// exposes `callable: true` workflows as tools. Unlike `mcp memory`, a human (or
+// an MCP client's config) launches it directly; it reads the config to find the
+// workflows + the daemon's control socket, and each tool call dispatches through
+// that socket and blocks for the structured result.
+//
+// By default (#36 §13 review, item 2) this face is held to the SAME token model
+// as the HTTP surface: it REQUIRES `--token <name>`, exposes only the workflows
+// that token is scoped to, and marks each dispatch req.Callable so the daemon
+// re-checks the callable opt-in + token scope and writes a `callable_invoke`
+// audit. `callable.mcp_local: true` opts out — every `callable: true` workflow
+// is exposed with no token and no audit, trusting the same-user boundary alone.
 func cmdMCPCallable(args []string) error {
-	cfg, _, err := loadConfig(args)
+	cfg, rest, err := loadConfig(args)
 	if err != nil {
 		return err
 	}
+	var tokenName string
+	for i := 0; i < len(rest); i++ {
+		switch rest[i] {
+		case "--token":
+			if i+1 < len(rest) {
+				i++
+				tokenName = rest[i]
+			}
+		default:
+			return fmt.Errorf("mcp callable: unknown flag %q", rest[i])
+		}
+	}
+
+	// Resolve the caller identity + its scope. Strong by default: a token is
+	// required unless callable.mcp_local explicitly opts out.
+	var tok config.CallableToken
+	scoped := tokenName != ""
+	if scoped {
+		t, ok := cfg.Callable.TokenByName(tokenName)
+		if !ok {
+			return fmt.Errorf("mcp callable: no callable token named %q in config", tokenName)
+		}
+		tok = t
+	} else if !cfg.Callable.MCPLocal {
+		return fmt.Errorf("mcp callable: --token <name> is required (set callable.mcp_local: true to expose all callable workflows unscoped)")
+	}
+
 	var tools []callable.MCPTool
 	for _, t := range cfg.Triggers {
-		if t.IsCallable() && t.Name != "" {
-			tools = append(tools, callable.MCPTool{Name: t.Name})
+		if !t.IsCallable() || t.Name == "" {
+			continue
 		}
+		if scoped && !tok.Allows(t.Name) {
+			continue // deny-by-default: only the token's own workflows
+		}
+		tools = append(tools, callable.MCPTool{Name: t.Name})
 	}
 	histDir := historyDirPath(cfg)
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "conductor mcp callable: "+format+"\n", a...) }
 
 	invoke := func(ctx context.Context, name string, input map[string]any) (map[string]any, error) {
 		histID := callable.NewRunID()
-		resp, err := sendControl(cfg, controlRequest{Cmd: "run", Name: name, Inputs: input, HistoryID: histID})
+		req := controlRequest{Cmd: "run", Name: name, Inputs: input, HistoryID: histID}
+		if scoped {
+			// Mark the dispatch so the daemon enforces the token model + audits
+			// it; unscoped (mcp_local) stays on the ungated local-run path.
+			req.Callable = true
+			req.Caller = tok.Name
+		}
+		resp, err := sendControl(cfg, req)
 		if err != nil {
 			return nil, err
 		}

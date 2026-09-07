@@ -672,7 +672,20 @@ func cmdRun(args []string) error {
 	if stack != nil {
 		events = stack.Events
 	}
-	go serveControl(ctx, controlSockPath(cfg), igs, eng.Emit, manualTriggersByName(cfg), eng.RetryRunByID, events, logf)
+	// Gate for MCP-callable control-socket runs (#36 §13 review, item 2): the
+	// same callable opt-in + per-token scope the HTTP surface enforces, re-checked
+	// at dispatch time. Local `conductor run` is unaffected (it sends no token).
+	callableNames := cfg.CallableTriggerNames()
+	callableTokens := map[string]config.CallableToken{}
+	for _, tok := range cfg.Callable.Tokens {
+		callableTokens[tok.Name] = tok
+	}
+	ctlGate := &callableGate{
+		tokens:   callableTokens,
+		callable: func(name string) bool { return callableNames[name] },
+		audit:    st.Audit,
+	}
+	go serveControl(ctx, controlSockPath(cfg), igs, eng.Emit, manualTriggersByName(cfg), eng.RetryRunByID, events, ctlGate, logf)
 
 	// Callable service (#36 §13): the authenticated inbound invoke surface. Off
 	// unless a `callable:` block is configured; mounts on the shared inbound
@@ -1102,6 +1115,16 @@ type controlRequest struct {
 	// can read the run back by an id it already returned (the §13 invoke
 	// surface). Empty keeps the engine's own id assignment.
 	HistoryID string `json:"history_id,omitempty"`
+	// Callable marks a `run` that arrived via the MCP callable face (#36 §13
+	// review, item 2). It flips the daemon from the ungated local-`conductor
+	// run` path onto the same model the HTTP surface enforces: the trigger's
+	// callable opt-in and the presenting token's scope are re-checked at
+	// dispatch time and the invoke is audited. Caller is the token identity.
+	// A same-user process reaching this socket already has ungated `run`; the
+	// gate exists so the legitimate MCP face is held to the token model, not as
+	// a new boundary against a local attacker.
+	Callable bool   `json:"callable,omitempty"`
+	Caller   string `json:"caller,omitempty"`
 	// retry: the recorded run to re-run and the step to resume from
 	// ("" = the recorded failed step, else the beginning); ForceReplay
 	// permits re-running steps the record says already succeeded. (#36 §20)
@@ -1118,8 +1141,42 @@ type controlResponse struct {
 	Error      string `json:"error,omitempty"`
 }
 
+// callableGate authorizes + audits a control-socket `run` that the MCP callable
+// face marked req.Callable (#36 §13 review, item 2). The MCP face is a separate
+// process that reaches the daemon over the same-user control socket; without
+// this gate it would dispatch straight to runManualTrigger, bypassing the token
+// scope, the run-time callable opt-in re-check, and the callable_invoke audit
+// the HTTP surface enforces. Only req.Callable runs are gated — local
+// `conductor run` (req.Callable false) stays ungated.
+type callableGate struct {
+	tokens   map[string]config.CallableToken // caller identity → its workflow scope
+	callable func(string) bool               // run-time `callable: true` opt-in re-check
+	audit    func(map[string]any)
+}
+
+// authorize re-checks an MCP-originated run at dispatch time: the trigger must
+// still be callable and the presenting token still scoped to it. Returns nil if
+// the run may proceed. Deny-by-default: an unknown token or a missing gate
+// refuses.
+func (g *callableGate) authorize(caller, name string) error {
+	if g == nil {
+		return fmt.Errorf("callable invoke not available")
+	}
+	if !g.callable(name) {
+		return fmt.Errorf("workflow %q is not callable", name)
+	}
+	tok, ok := g.tokens[caller]
+	if !ok {
+		return fmt.Errorf("unknown callable token %q", caller)
+	}
+	if !tok.Allows(name) {
+		return fmt.Errorf("token %q is not scoped to invoke %q", caller, name)
+	}
+	return nil
+}
+
 // serveControl runs the daemon's unix control socket until ctx is cancelled.
-func serveControl(ctx context.Context, path string, igs []core.Integration, emit core.EmitFunc, manual map[string]connector.CompiledTrigger, retry retryFunc, events *flow.EventHub, log func(string, ...any)) {
+func serveControl(ctx context.Context, path string, igs []core.Integration, emit core.EmitFunc, manual map[string]connector.CompiledTrigger, retry retryFunc, events *flow.EventHub, gate *callableGate, log func(string, ...any)) {
 	_ = os.Remove(path) // clear a stale socket from a prior run
 	l, err := net.Listen("unix", path)
 	if err != nil {
@@ -1147,7 +1204,7 @@ func serveControl(ctx context.Context, path string, igs []core.Integration, emit
 			}
 			continue
 		}
-		go handleControlConn(ctx, conn, igs, emit, manual, retry, events, log)
+		go handleControlConn(ctx, conn, igs, emit, manual, retry, events, gate, log)
 	}
 }
 
@@ -1155,7 +1212,7 @@ func serveControl(ctx context.Context, path string, igs []core.Integration, emit
 // engine's RetryRunByID.
 type retryFunc func(ctx context.Context, runID, fromStep string, forceReplay bool) (string, error)
 
-func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integration, emit core.EmitFunc, manual map[string]connector.CompiledTrigger, retry retryFunc, events *flow.EventHub, log func(string, ...any)) {
+func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integration, emit core.EmitFunc, manual map[string]connector.CompiledTrigger, retry retryFunc, events *flow.EventHub, gate *callableGate, log func(string, ...any)) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 	var req controlRequest
@@ -1175,11 +1232,29 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		writeControlResp(conn, controlResponse{OK: true, Dispatched: n,
 			Msg: fmt.Sprintf("forced %d %s trigger(s) for %s#%d", n, req.Kind, req.Repo, req.Number)})
 	case "run":
+		// A run marked req.Callable arrived via the MCP callable face: hold it to
+		// the same token model as the HTTP surface (#36 §13 review, item 2) —
+		// re-check the callable opt-in + the token's scope at dispatch time, so
+		// removing `callable:` or narrowing the token revokes reachability even
+		// while the MCP process stays up. Local `conductor run` is req.Callable
+		// false and stays ungated.
+		if req.Callable {
+			if err := gate.authorize(req.Caller, req.Name); err != nil {
+				log("callable run %q refused for %q: %v", req.Name, req.Caller, err)
+				writeControlResp(conn, controlResponse{Error: err.Error()})
+				return
+			}
+		}
 		msg, err := runManualTrigger(ctx, manual, req, emit)
 		if err != nil {
 			log("run %q failed: %v", req.Name, err)
 			writeControlResp(conn, controlResponse{Error: err.Error()})
 			return
+		}
+		if req.Callable && gate != nil {
+			gate.audit(map[string]any{
+				"event": "callable_invoke", "caller": req.Caller, "workflow": req.Name, "run_id": req.HistoryID,
+			})
 		}
 		log("manual trigger %q dispatched (via control socket)", req.Name)
 		writeControlResp(conn, controlResponse{OK: true, Dispatched: 1, Msg: msg})
