@@ -11,6 +11,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/memory"
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 // blobDecl declares the built-in binary/artifact verbs (#36 §21). Like
@@ -82,11 +83,12 @@ var blobDecl = &TypeDecl{
 func init() { RegisterType(blobDecl, newBlobImpl) }
 
 type blobImpl struct {
-	store *blob.Store
+	store   *blob.Store
+	secrets *secrets.Resolver
 }
 
 func newBlobImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
-	return blobImpl{store: deps.Blobs}, nil
+	return blobImpl{store: deps.Blobs, secrets: deps.Secrets}, nil
 }
 
 func (blobImpl) Validate() error          { return nil }
@@ -133,6 +135,14 @@ func (b blobImpl) put(ctx context.Context, opts map[string]any) (map[string]any,
 
 	var h blob.Handle
 	if path != "" {
+		// The secret-egress write barrier (#36 review H3): the flow layer's
+		// scan sees only the PATH STRING in the rendered options — the file's
+		// bytes bypass it. Scan the content itself before it lands in the
+		// artifact store (the same posture as the memory write guard: tracked
+		// secret material is vaulted, never parked in shared state).
+		if err := b.scanFileForSecrets(path); err != nil {
+			return nil, err
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			return nil, fmt.Errorf("blob.put: %w", err)
@@ -145,12 +155,61 @@ func (b blobImpl) put(ctx context.Context, opts map[string]any) (map[string]any,
 			return nil, err
 		}
 	} else {
+		// Inline text gets the same refusal (the flow barrier already blocks
+		// this for unapproved agent plans; this holds for every caller).
+		if b.secrets != nil && b.secrets.Redact(text) != text {
+			return nil, fmt.Errorf("blob.put: refusing to store tracked secret material in the artifact store — keep it in a vault")
+		}
 		var err error
 		if h, err = b.store.PutBytes(runID, []byte(text), meta); err != nil {
 			return nil, err
 		}
 	}
 	return map[string]any{"blob": h.ScopeValue(), "digest": h.Digest, "size": h.Meta.Size}, nil
+}
+
+// scanFileForSecrets streams the file in overlapping chunks through the
+// redactor: a tracked secret anywhere in the content refuses the put. The
+// overlap (secretScanOverlap) catches values straddling a chunk boundary —
+// tracked secrets are short (tokens/keys), far below the overlap size.
+func (b blobImpl) scanFileForSecrets(path string) error {
+	if b.secrets == nil {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("blob.put: %w", err)
+	}
+	defer f.Close()
+	const (
+		chunk             = 256 << 10
+		secretScanOverlap = 8 << 10
+	)
+	buf := make([]byte, chunk)
+	carry := make([]byte, 0, secretScanOverlap)
+	for {
+		n, rerr := f.Read(buf)
+		if n > 0 {
+			window := string(append(append([]byte(nil), carry...), buf[:n]...))
+			if b.secrets.Redact(window) != window {
+				return fmt.Errorf("blob.put: refusing to store tracked secret material from %s in the artifact store — keep it in a vault", filepath.Base(path))
+			}
+			if n >= secretScanOverlap {
+				carry = append(carry[:0], buf[n-secretScanOverlap:n]...)
+			} else {
+				carry = append(carry, buf[:n]...)
+				if len(carry) > secretScanOverlap {
+					carry = carry[len(carry)-secretScanOverlap:]
+				}
+			}
+		}
+		if rerr == io.EOF {
+			return nil
+		}
+		if rerr != nil {
+			return fmt.Errorf("blob.put: %w", rerr)
+		}
+	}
 }
 
 // handleArg parses the "blob" option (a handle map or bare digest string).

@@ -10,6 +10,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/blob"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/memory"
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 func blobFixture(t *testing.T) (blobImpl, context.Context) {
@@ -144,5 +145,54 @@ func TestBlobVerbsEnforceRunOwnership(t *testing.T) {
 	if got, err := b.Invoke(ctxA, "read", map[string]any{"blob": handle}); err != nil ||
 		got["text"] != "private to run-1" {
 		t.Fatalf("owner read: %v %v", got, err)
+	}
+}
+
+// Regression (#36 review H3): blob.put with `path:` stores the FILE's bytes,
+// which the flow layer's option scan never sees — the content itself is
+// scanned here, and tracked secret material refuses the put (inline text
+// too, for every caller).
+func TestBlobPutRefusesTrackedSecrets(t *testing.T) {
+	st, err := blob.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec := secrets.New()
+	sec.Track("s3kr1t-value")
+	impl, _ := newBlobImpl("blob", config.ConnectorRef{}, Deps{Blobs: st, Secrets: sec})
+	b := impl.(blobImpl)
+	ctx := memory.WithSource(context.Background(), memory.Source{Run: "run-1"})
+
+	// A file whose bytes carry the tracked secret (the path string is clean).
+	dir := t.TempDir()
+	leaky := filepath.Join(dir, "app.env")
+	if err := os.WriteFile(leaky, []byte("A=1\nTOKEN=s3kr1t-value\nB=2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Invoke(ctx, "put", map[string]any{"path": leaky}); err == nil ||
+		!strings.Contains(err.Error(), "tracked secret material") {
+		t.Fatalf("path-based put of secret bytes must refuse: %v", err)
+	}
+	// Inline text with the secret refuses too.
+	if _, err := b.Invoke(ctx, "put", map[string]any{"text": "here: s3kr1t-value"}); err == nil ||
+		!strings.Contains(err.Error(), "tracked secret material") {
+		t.Fatalf("inline put of secret text must refuse: %v", err)
+	}
+	// Clean content still stores; a secret straddling the chunk boundary is
+	// caught by the overlap.
+	if _, err := b.Invoke(ctx, "put", map[string]any{"text": "clean"}); err != nil {
+		t.Fatalf("clean put: %v", err)
+	}
+	big := filepath.Join(dir, "big.bin")
+	pad := make([]byte, (256<<10)-6) // secret starts 6 bytes before the first chunk ends
+	for i := range pad {
+		pad[i] = 'x'
+	}
+	if err := os.WriteFile(big, append(pad, []byte("s3kr1t-value tail")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Invoke(ctx, "put", map[string]any{"path": big}); err == nil ||
+		!strings.Contains(err.Error(), "tracked secret material") {
+		t.Fatalf("boundary-straddling secret must refuse: %v", err)
 	}
 }
