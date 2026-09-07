@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
@@ -133,6 +134,74 @@ func TestOverBudgetShedsStep(t *testing.T) {
 	}
 	if dispatched {
 		t.Fatal("over-budget dispatch must never launch")
+	}
+}
+
+// TestBackgroundDispatchKeepsReservationOpen is the F1 regression (#36 §146):
+// a background/hand-off dispatch must NOT settle its reservation with the
+// launch-confirmation output (which cost.FromRun scores at ~0). Wired to a real
+// meter mirroring the engine, the reservation stays OPEN — its estimated spend
+// keeps counting against the caps — and the estimate is reported approximate.
+func TestBackgroundDispatchKeepsReservationOpen(t *testing.T) {
+	cfg := loadConfig(t, budgetCfg)
+	reg := buildRegistry(t, cfg)
+	rig := newTestRunner(t, cfg, reg)
+
+	m := cost.NewMeter()
+	scopesFor := func(agent, wf string) []string {
+		s := []string{"global", "profile:" + agent}
+		if wf != "" {
+			s = append(s, "workflow:"+wf)
+		}
+		return s
+	}
+	var settled []cost.Usage
+	var reservedUSD float64
+	rig.Runner.Agents.CheckBudget = func(agentName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
+		reservedUSD = est.CostUSD
+		return m.Reserve(scopesFor(agentName, wfScope), est), nil
+	}
+	rig.Runner.Agents.CancelBudget = func(res *cost.Reservation) { m.Cancel(res) }
+	rig.Runner.Agents.RecordUsage = func(_ core.Trigger, agentName, _, _, wfScope, _ string, res *cost.Reservation, u cost.Usage) {
+		settled = append(settled, u)
+		m.Settle(res, scopesFor(agentName, wfScope), u)
+	}
+	// paseo returns a launch confirmation (the agent id), not a transcript —
+	// cost.FromRun would score this at ~0.
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		return dispatch.RunRef{AgentID: "bg1", Output: `{"agent_id":"bg1","status":"launched"}`}, nil
+	}
+
+	spec := mustSpec(t, `
+on: svc.ping
+name: nightly
+steps:
+  - id: handoff
+    type: agent
+    agent: fixer
+    prompt: "take it from here"
+    background: true
+`)
+	runTrigger(rig, newTrigger("ping", nil), spec)
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("workflow failed: %s", errStr)
+	}
+	// A background dispatch never settles — settling with the launch JSON would
+	// charge a bogus ~0 and erase the reserved estimate.
+	if len(settled) != 0 {
+		t.Fatalf("background dispatch must not settle its reservation, settled=%+v", settled)
+	}
+	if reservedUSD <= 0 {
+		t.Fatal("test setup: prompt estimate should be > 0")
+	}
+	// The open reservation still holds the full estimate against the cap.
+	if _, usd := m.SpentIn("profile:fixer", 24*time.Hour); usd != reservedUSD {
+		t.Fatalf("open reservation must hold the estimate against the cap: spent=%v want=%v", usd, reservedUSD)
+	}
+	// And the estimate is surfaced as an approximate agent_usage row.
+	usage := rig.Store.auditsWithEvent("agent_usage")
+	if len(usage) != 1 || usage[0]["approximate"] != true || usage[0]["background"] != true {
+		t.Fatalf("background agent_usage audit: %+v", usage)
 	}
 }
 

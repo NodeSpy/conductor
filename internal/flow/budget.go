@@ -132,3 +132,25 @@ func (r *Runner) recordUsage(ctx context.Context, t core.Trigger, agentName, ste
 	_, scope := budgetFrom(ctx)
 	r.Agents.RecordUsage(t, agentName, stepID, memory.SourceFrom(ctx).Run, scope, savedWFFrom(ctx), res, u)
 }
+
+// recordBackgroundEstimate tallies a background/hand-off dispatch's ESTIMATED
+// spend on the run record, history, and an approximate agent_usage audit row
+// WITHOUT settling its reservation (#36 §146 F1). The reservation is left open
+// on purpose: a fire-and-forget agent's real usage is unobtainable, so its
+// estimate is held provisionally against the caps via the meter's backstop
+// rather than settled to the known-wrong ~0 that cost.FromRun derives from the
+// paseo launch-confirmation output. The open reservation already counts toward
+// the meter caps, so this path is deliberately meter-free — it would otherwise
+// double-charge the same estimate.
+func (r *Runner) recordBackgroundEstimate(ctx context.Context, t core.Trigger, agentName, stepID string, est cost.Usage) {
+	est.Approximate = true
+	costAccFrom(ctx).add(est)
+	historySetCost(ctx, stepID, est)
+	_, scope := budgetFrom(ctx)
+	r.audit(map[string]any{"event": "agent_usage", "repo": t.Target.Repo,
+		"number": t.Target.Number, "kind": t.Kind, "agent": agentName, "step": stepID,
+		"run": memory.SourceFrom(ctx).Run, "workflow": scope, "model": est.Model,
+		"input_tokens": est.InputTokens, "output_tokens": est.OutputTokens,
+		"tokens": est.TotalTokens, "cost_usd": est.CostUSD, "approximate": true,
+		"background": true})
+}

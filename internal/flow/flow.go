@@ -1231,8 +1231,9 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// sweep/backoff machinery re-derives PR-kind work once the window frees).
 	// An admitted dispatch reserves its estimated spend (#36 review H7).
 	var spendRes *cost.Reservation
+	est := cost.Estimate(profile.Model, act.Prompt, "")
 	if !shadow {
-		res, berr := r.checkBudget(ctx, step.Agent, cost.Estimate(profile.Model, act.Prompt, ""))
+		res, berr := r.checkBudget(ctx, step.Agent, est)
 		if berr != nil {
 			return nil, "", berr
 		}
@@ -1245,10 +1246,24 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		AgentAuthored: agentAuthored(ctx),
 	}
 	ref, err := r.Agents.Dispatch(ctx, req)
-	if !shadow && !ref.Shadowed && !ref.Skipped && !ref.Queued && err == nil {
+	switch {
+	case shadow || ref.Shadowed || ref.Skipped || ref.Queued || err != nil:
+		if r.Agents.CancelBudget != nil {
+			r.Agents.CancelBudget(spendRes)
+		}
+	case step.Background:
+		// Background/hand-off dispatch (#36 §146 F1): ref.Output is the paseo
+		// LAUNCH confirmation (an agent id), NOT the agent's transcript, so
+		// cost.FromRun would settle this reservation at a bogus ~0. A
+		// fire-and-forget agent's real usage is unobtainable (paseo exposes no
+		// cumulative cost at inspect time), so we never settle a known-wrong
+		// figure: the reservation stays OPEN, holding its estimated spend
+		// against the caps until the meter's reservationMaxAge backstop reclaims
+		// it. The estimate is still tallied on the run record / history / audit
+		// as approximate so reporting shows a provisional charge, not nothing.
+		r.recordBackgroundEstimate(ctx, t, step.Agent, id, est)
+	default:
 		r.recordUsage(ctx, t, step.Agent, id, spendRes, cost.FromRun(profile.Model, act.Prompt, ref.Output))
-	} else if r.Agents.CancelBudget != nil {
-		r.Agents.CancelBudget(spendRes)
 	}
 	if err != nil {
 		return nil, ref.Output, err
