@@ -35,12 +35,18 @@ type CallableConfig struct {
 	// dialed. Set true only for a trusted internal callback endpoint reachable
 	// over plaintext http.
 	CallbackAllowHTTP bool `yaml:"callback_allow_http"`
-	// CallbackAllowHosts opts specific literal IPs back in as `callback_url`
-	// targets even though they sit in an otherwise-blocked range (loopback /
-	// private / link-local / CGNAT). A hostname never opts an IP in — only the
-	// exact resolved IP, which is what closes the DNS-rebinding path: the name
-	// may point anywhere, but the internal address it resolves to is refused
-	// unless listed here. Empty = every internal range is blocked.
+	// CallbackAllowHosts opts `callback_url` targets back in even though they sit
+	// in an otherwise-blocked range (loopback / private / link-local / CGNAT).
+	// Each entry is a literal IP or a hostname:
+	//   - a literal IP opts in that exact resolved address (rebinding-safe: DNS
+	//     may point anywhere, only this address is dialed);
+	//   - a hostname opts in the host by name — whatever it resolves to at dial
+	//     time — for the common case of a callback sink on your own network
+	//     (n8n / a queue / a container by service name) whose private IP is
+	//     DHCP- or Docker-assigned and can't be pinned.
+	// This is operator config, not caller-supplied: a `callback_url` whose host
+	// is not listed here is still resolved-and-blocked by default. Empty = every
+	// internal range is blocked.
 	CallbackAllowHosts []string `yaml:"callback_allow_hosts"`
 	// MaxWaitInflight caps concurrent synchronous `?wait=true` calls (#36 §13
 	// review, item 5). Each holds a server goroutine until the run finishes or

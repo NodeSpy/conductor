@@ -101,6 +101,49 @@ func TestCallbackAllowHostsOptsIPBackIn(t *testing.T) {
 	}
 }
 
+// TestCallbackAllowHostsByName — a HOSTNAME in callback_allow_hosts opts the
+// host in by name: whatever it resolves to at dial time (here a private/LAN
+// address) is permitted. This is the n8n-on-your-own-network case, where the
+// callback sink's IP is DHCP/Docker-assigned and can't be pinned. A host that
+// is NOT listed stays blocked.
+func TestCallbackAllowHostsByName(t *testing.T) {
+	got := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(b)
+		got <- b
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	// The URL uses a name that resolves (via the injected resolver) to the
+	// loopback test server — an address the guard blocks by default.
+	cbURL := "http://n8n.internal:" + port + "/cb"
+	resolveHost := func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.IPv4(127, 0, 0, 1)}}, nil
+	}
+
+	// A different name that is not listed stays blocked even though allow-list
+	// is non-empty.
+	p := newCallbackPoster(config.CallableConfig{CallbackAllowHTTP: true, CallbackAllowHosts: []string{"other.internal"}})
+	p.resolve = resolveHost
+	if err := p.post(context.Background(), cbURL, []byte(`{"ok":1}`)); !errors.Is(err, errCallbackBlockedIP) {
+		t.Fatalf("unlisted host callback: err = %v, want errCallbackBlockedIP", err)
+	}
+
+	// The exact host, listed by name, is delivered.
+	p = newCallbackPoster(config.CallableConfig{CallbackAllowHTTP: true, CallbackAllowHosts: []string{"n8n.internal"}})
+	p.resolve = resolveHost
+	if err := p.post(context.Background(), cbURL, []byte(`{"ok":1}`)); err != nil {
+		t.Fatalf("callback to host opted in by name failed: %v", err)
+	}
+	select {
+	case <-got:
+	default:
+		t.Fatal("name-opted-in callback was not delivered")
+	}
+}
+
 // TestCallbackBadURL — a non-absolute or schemeless URL is refused up front.
 func TestCallbackBadURL(t *testing.T) {
 	p := newCallbackPoster(config.CallableConfig{})

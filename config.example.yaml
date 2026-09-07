@@ -525,10 +525,14 @@ callable:
   # to async (202 + run_id); a callback past the cap is audited delivered:false.
   max_wait_inflight: 64
   max_callback_inflight: 64
-  # SSRF fence for callback_url delivery. https-only by default; opt into http
-  # and/or opt an exact internal IP back in for a trusted internal callback sink.
+  # SSRF fence for callback_url delivery. https-only by default, and any host
+  # resolving into a private/LAN/loopback/CGNAT range is BLOCKED — so a
+  # callback_url pointed at self-hosted n8n on your own network never arrives
+  # unless you opt it in here. Set callback_allow_http for a plaintext sink, and
+  # list its host below (a literal IP pins the exact address — rebinding-safe; a
+  # hostname trusts it by name whatever it resolves to — for DHCP/Docker IPs).
   # callback_allow_http: false
-  # callback_allow_hosts: []                 # e.g. [10.0.0.9] — literal IPs only
+  # callback_allow_hosts: []                 # e.g. [n8n.internal] or [10.0.0.9]
   # Clock-skew window for signed (HMAC) requests (default 5m). A request whose
   # signed timestamp is further from the server clock than this is refused.
   max_skew: 5m

@@ -35,21 +35,39 @@ var (
 //   - never follows redirects (a 30x could bounce it onto an internal host).
 type callbackPoster struct {
 	allowHTTP bool
-	allowIP   map[string]bool                                              // literal IPs opted back in
+	allowIP   map[string]bool                                              // literal IPs opted back in (exact resolved IP)
+	allowHost map[string]bool                                              // hostnames opted back in (operator-trusted by name)
 	resolve   func(ctx context.Context, host string) ([]net.IPAddr, error) // nil ⇒ system resolver
 }
 
-// newCallbackPoster builds the poster from the callable config. The literal
-// allow-list is parsed once; a non-IP entry is ignored (only an exact IP can
-// opt a blocked range back in — a hostname never can, which is the point).
+// newCallbackPoster builds the poster from the callable config's allow-list.
+// Each entry is either a literal IP or a hostname, and each opts a
+// callback_url target back into an otherwise-blocked range in a different way:
+//
+//   - a literal IP opts in that EXACT resolved address — the rebinding-safe
+//     form: DNS may point anywhere, but only this address is ever dialed.
+//   - a hostname opts in the host BY NAME — whatever it resolves to at dial
+//     time is permitted, even a private/LAN address. This is the common case
+//     (n8n or a queue on your own network, a container by service name), where
+//     the operator trusts the name but the IP is DHCP/Docker-assigned and can't
+//     be pinned. It is safe because this list is operator config, not the
+//     caller-supplied URL — an attacker can't add to it; a callback_url whose
+//     host is NOT listed is still resolved-and-blocked by default.
 func newCallbackPoster(cfg config.CallableConfig) *callbackPoster {
-	allow := map[string]bool{}
+	allowIP := map[string]bool{}
+	allowHost := map[string]bool{}
 	for _, h := range cfg.CallbackAllowHosts {
-		if ip := net.ParseIP(strings.TrimSpace(h)); ip != nil {
-			allow[ip.String()] = true
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
+		}
+		if ip := net.ParseIP(h); ip != nil {
+			allowIP[ip.String()] = true
+		} else {
+			allowHost[strings.ToLower(h)] = true
 		}
 	}
-	return &callbackPoster{allowHTTP: cfg.CallbackAllowHTTP, allowIP: allow}
+	return &callbackPoster{allowHTTP: cfg.CallbackAllowHTTP, allowIP: allowIP, allowHost: allowHost}
 }
 
 // post validates the scheme, then dials through the guarded transport. Scheme
@@ -118,11 +136,14 @@ func (c *callbackPoster) safeDial(ctx context.Context, network, addr string) (ne
 	if err != nil {
 		return nil, err
 	}
+	// A host listed by name in the allow-list is operator-trusted: permit
+	// whatever it resolves to, even a private/LAN address.
+	hostAllowed := c.allowHost[strings.ToLower(host)]
 	var blocked bool
 	var d net.Dialer
 	var lastErr error
 	for _, ipa := range ips {
-		if netguard.Blocked(ipa.IP) && !c.allowIP[ipa.IP.String()] {
+		if netguard.Blocked(ipa.IP) && !hostAllowed && !c.allowIP[ipa.IP.String()] {
 			blocked = true
 			continue
 		}

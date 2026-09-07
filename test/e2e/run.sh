@@ -1280,13 +1280,27 @@ group_S_callable() {
     bad "S ?wait=true returns the result inline" S S-wait "code=$INV_CODE body=$INV_BODY"
   fi
 
-  # Callback: 202 up front, then conductor POSTs the structured result to the
-  # given URL when the run finishes (caught by the sink-catcher).
+  # Callback (opted-in host): 202 up front, then conductor POSTs the structured
+  # result to the given URL when the run finishes (caught by the sink-catcher).
+  # sink-catcher is a private-network http host the SSRF guard blocks by default;
+  # it is delivered here only because callable.callback_allow_hosts lists it —
+  # this scenario proves the opt-in path.
   cinvoke "/invoke/callable-summary" "$CALL_AUTH" '{"input":{"who":"callback"},"callback_url":"http://sink-catcher:8080/callback/callable"}'
   if [ "$INV_CODE" = "202" ] && wait_for 30 callback_delivered; then
-    ok "S callback_url received the structured result after completion" S S-callback
+    ok "S callback_url (opted-in host) received the structured result after completion" S S-callback
   else
-    bad "S callback_url received the result" S S-callback "code=$INV_CODE; no status-ok callback captured"
+    bad "S callback_url (opted-in host) received the result" S S-callback "code=$INV_CODE; no status-ok callback captured"
+  fi
+
+  # Callback (NON-opted-in private host): the SSRF guard blocks it by default.
+  # mock-github is on the private Docker network and is NOT in
+  # callback_allow_hosts, so the callback is never dialed — audited
+  # delivered:false with the blocked-range reason. This proves the default deny.
+  cinvoke "/invoke/callable-summary" "$CALL_AUTH" '{"input":{"who":"blocked"},"callback_url":"http://mock-github:8080/callback/blocked"}'
+  if [ "$INV_CODE" = "202" ] && wait_for 30 audit_match conductor-conn '"event":"callable_callback"' '"delivered":false' 'blocked'; then
+    ok "S callback_url to a non-opted-in private host is refused by the SSRF guard (default deny)" S S-callback-block
+  else
+    bad "S callback to a non-opted-in private host refused" S S-callback-block "code=$INV_CODE; no delivered:false blocked-range audit"
   fi
 
   # Refusal — no credential: uniform 401, nothing dispatched.

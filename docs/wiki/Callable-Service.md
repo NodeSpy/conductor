@@ -148,16 +148,42 @@ turn it into a request off the daemon's own network. By default the poster:
 - **never follows redirects** — a `30x` cannot bounce delivery onto an internal
   host.
 
+> ⚠️ **If your `callback_url` points at a private/LAN host, it is BLOCKED by
+> default.** This is the common self-hosted case: n8n (or a queue, or a Wait-node
+> resume URL) runs on your own network at something like `192.168.1.20`,
+> `10.x.x.x`, or a Docker service name that resolves to a private IP. Out of the
+> box that callback is **refused and never delivered** — the run still completes
+> and is readable via `GET /runs/<id>`, but the POST never arrives, and the only
+> sign is a `delivered: false` audit line. You must explicitly opt that host in
+> (next paragraph). A public `https://` callback needs no opt-in.
+
 A refused callback is audited (`delivered: false`) with the reason and never
-sent. To deliver to a deliberately-internal endpoint, opt its **exact IP** back
-in with `callback_allow_hosts` (a hostname never opts an IP in — only the literal
-resolved address, which is what keeps the rebinding path closed):
+sent. To deliver to a deliberately-internal endpoint, opt its host back in with
+`callback_allow_hosts`. Each entry is **either a literal IP or a hostname**, and
+they trade off pinning vs. convenience:
+
+- a **literal IP** opts in that *exact* resolved address — the rebinding-safe
+  form: DNS may point anywhere, but only this address is ever dialed. Use it when
+  the callback sink has a stable IP;
+- a **hostname** opts in the host *by name* — whatever it resolves to at dial
+  time, even a private/LAN address. Use it when the sink's IP is DHCP- or
+  Docker-assigned and can't be pinned (n8n on your LAN, a container by service
+  name). It is safe because this is operator config, not the caller-supplied URL:
+  an attacker can't add to it, and any host **not** listed is still blocked.
 
 ```yaml
 callable:
-  callback_allow_http: true            # allow http:// callback targets
-  callback_allow_hosts: [10.0.0.9]     # opt this exact internal IP back in
+  callback_allow_http: true                 # sink speaks plain http:// (LAN case)
+  callback_allow_hosts:
+    - n8n.internal                          # by name: any IP it resolves to (DHCP/Docker)
+    - 10.0.0.9                              # or pin an exact internal IP
 ```
+
+So for the typical self-hosted wiring — conductor POSTing back to n8n at
+`http://n8n.internal:5678/webhook/...` on your LAN — you need **both**
+`callback_allow_http: true` (plain http) and `n8n.internal` in
+`callback_allow_hosts` (private host). Without them the callback is silently
+default-denied.
 
 ## Reading a run — `GET /runs/<id>`
 
@@ -242,6 +268,23 @@ n8n should block.
 "On Webhook Call". n8n pauses; conductor POSTs the result to the resume URL when
 the run finishes; n8n continues with the result as the node output. Best for
 runs longer than any sane HTTP timeout.
+
+> ⚠️ **Self-hosted n8n is on your LAN, so its resume URL is a private host —
+> blocked by default.** `$execution.resumeUrl` points at wherever n8n runs
+> (`http://n8n.internal:5678/…`, `http://192.168.x.x/…`, a Docker service name).
+> The SSRF guard blocks that private target unless you opt it in, so out of the
+> box the callback **never arrives** — n8n waits forever and the only trace is a
+> `delivered: false` audit line on the conductor side. Add the n8n host to
+> conductor's config (and allow http, since the resume URL is usually plaintext):
+>
+> ```yaml
+> callable:
+>   callback_allow_http: true
+>   callback_allow_hosts: [n8n.internal]   # the host in your resumeUrl (by name or exact IP)
+> ```
+>
+> See [Callback — `callback_url`](#callback--callback_url) for the full rule.
+> A cloud-hosted n8n with a public `https://` resume URL needs no opt-in.
 
 In every pattern the request is one authenticated HTTP call and the response is
 the uniform result body above — swap n8n for Zapier, Make, a cron job, or a

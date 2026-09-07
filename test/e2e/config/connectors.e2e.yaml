@@ -297,6 +297,14 @@ policy:
 callable:
   listen: "0.0.0.0:8099"
   wait_timeout: 20s
+  # The callback sink (sink-catcher) sits on the private Docker network over
+  # plain http, so the SSRF guard (#36 §13 review item 1) blocks it by default.
+  # Opt it back in explicitly — proving BOTH the default-deny and the opt-in
+  # path. Listed by NAME (its Docker IP is assigned at runtime, not pinnable);
+  # `callback-blocked` below is a second sink that is deliberately NOT listed, so
+  # the group also covers the default block.
+  callback_allow_http: true
+  callback_allow_hosts: [sink-catcher]
   tokens:
     - name: n8n-e2e
       bearer: "e2e-invoke-token"
