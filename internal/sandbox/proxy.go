@@ -159,6 +159,19 @@ func (p *Proxy) MintCred() (string, error) {
 	return cred, nil
 }
 
+// Revoke retires a per-dispatch credential (#36 iso-review round 2, item 4):
+// once the dispatch/session that minted it ends, the credential must stop
+// authorizing so it cannot outlive its launch on this host-wide loopback
+// listener. Idempotent — revoking an unknown/already-revoked cred is a no-op.
+func (p *Proxy) Revoke(cred string) {
+	if cred == "" {
+		return
+	}
+	p.credMu.Lock()
+	delete(p.creds, cred)
+	p.credMu.Unlock()
+}
+
 // authorized checks the request's Proxy-Authorization against the registered
 // per-dispatch credentials. No registered credentials ⇒ nothing authorizes
 // (fail closed).
@@ -398,27 +411,30 @@ func NewProxyManager(onDeny func(key, hostport string)) *ProxyManager {
 // Endpoint returns the proxy enforcing exactly this allowlist (starting it
 // on first use) plus a FRESH per-dispatch client credential — the launch env
 // carries it, and the proxy refuses clients without one. An empty (or nil)
-// allowlist is the deny-all proxy.
-func (m *ProxyManager) Endpoint(allow []string) (addr, cred string, err error) {
+// allowlist is the deny-all proxy. The returned revoke func retires the
+// credential when the dispatch/session ends so it cannot outlive its launch
+// (#36 iso-review round 2, item 4).
+func (m *ProxyManager) Endpoint(allow []string) (addr, cred string, revoke func(), err error) {
 	p, addr, err := m.proxyFor(allow)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	cred, err = p.MintCred()
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
-	return addr, cred, nil
+	return addr, cred, func() { p.Revoke(cred) }, nil
 }
 
 // UnixEndpoint returns the unix-socket path of the proxy enforcing exactly
 // this allowlist (creating the socket on first use) plus a fresh
 // per-dispatch credential — the daemon-side end the in-sandbox forwarder
-// pipes into (#36 iso-review C1).
-func (m *ProxyManager) UnixEndpoint(allow []string) (sock, cred string, err error) {
+// pipes into (#36 iso-review C1). The returned revoke func retires the
+// credential at dispatch/session end (#36 iso-review round 2, item 4).
+func (m *ProxyManager) UnixEndpoint(allow []string) (sock, cred string, revoke func(), err error) {
 	p, _, err := m.proxyFor(allow)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	key := allowKey(allow)
 	m.mu.Lock()
@@ -431,22 +447,22 @@ func (m *ProxyManager) UnixEndpoint(allow []string) (sock, cred string, err erro
 			m.sockDir, err = os.MkdirTemp("", "conductor-egress")
 			if err != nil {
 				m.mu.Unlock()
-				return "", "", fmt.Errorf("sandbox: egress socket dir: %w", err)
+				return "", "", nil, fmt.Errorf("sandbox: egress socket dir: %w", err)
 			}
 		}
 		sock = filepath.Join(m.sockDir, fmt.Sprintf("egress-%d.sock", len(m.socks)))
 		if err := p.ServeUnix(sock); err != nil {
 			m.mu.Unlock()
-			return "", "", err
+			return "", "", nil, err
 		}
 		m.socks[key] = sock
 	}
 	m.mu.Unlock()
 	cred, err = p.MintCred()
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
-	return sock, cred, nil
+	return sock, cred, func() { p.Revoke(cred) }, nil
 }
 
 // proxyFor returns (starting on first use) the shared proxy for an allowlist.

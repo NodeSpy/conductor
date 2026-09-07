@@ -150,11 +150,23 @@ func (c *cliController) start(ctx context.Context, dir string, env, argv []strin
 // dir, no env — both travel inside the wrapped remote command) in that case.
 // opt carries the dispatch's isolation policy (sandbox wrapper + egress).
 func (c *cliController) launchOn(ctx context.Context, host, dir string, env, argv []string, opt launchOpts) (cliProc, error) {
+	opt, revoke := withEgressRevoke(opt)
 	wrapped, localDir, localEnv, _, err := prepareLaunch(host, dir, env, argv, opt)
 	if err != nil {
+		revoke()
 		return nil, err
 	}
-	return c.start(ctx, localDir, localEnv, wrapped)
+	proc, err := c.start(ctx, localDir, localEnv, wrapped)
+	if err != nil {
+		revoke()
+		return nil, err
+	}
+	// The cli process is session-ctx-scoped (ctx cancels it, and the session's
+	// Close cancels ctx); retire this launch's egress credential when that
+	// session ctx ends so it cannot outlive the dispatch (#36 iso-review round
+	// 2, item 4).
+	context.AfterFunc(ctx, revoke)
+	return proc, nil
 }
 
 func (c *cliController) forget(id string) {

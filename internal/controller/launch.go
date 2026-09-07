@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
@@ -20,14 +21,14 @@ import (
 // HostArgvPrefix: wired once by cmd/conductor from a sandbox.ProxyManager
 // (Endpoint), stubbed in tests. nil + a launch that needs an egress policy
 // is a launch error — the policy fails closed, never silently unenforced.
-var EgressProxyFor func(allow []string) (addr, cred string, err error)
+var EgressProxyFor func(allow []string) (addr, cred string, revoke func(), err error)
 
 // EgressProxyUnix resolves the UNIX-socket endpoint of the proxy enforcing
 // the given allowlist — the daemon-side end of the ENFORCED egress path
 // (deny+allowlist under namespace/container, #36 iso-review C1) — plus a
 // fresh per-dispatch credential. Wired from sandbox.ProxyManager.UnixEndpoint;
 // nil + an enforced-egress launch fails closed.
-var EgressProxyUnix func(allow []string) (sock, cred string, err error)
+var EgressProxyUnix func(allow []string) (sock, cred string, revoke func(), err error)
 
 // launchSelfExe resolves conductor's own binary (re-executed inside the
 // sandbox as the forwarder); a var for tests.
@@ -54,6 +55,42 @@ var (
 type launchOpts struct {
 	iso           *config.IsolationConfig
 	agentAuthored bool
+	// onEgressCred, if set, receives a revoke func for each per-dispatch egress
+	// credential minted for this launch. The caller wires it to the launch's
+	// own session end (ctx cancel / cleanup func) so the credential does not
+	// outlive the dispatch on the host-wide loopback proxy (#36 iso-review
+	// round 2, item 4). nil = no revocation collected (tests / no-egress paths).
+	onEgressCred func(revoke func())
+}
+
+// withEgressRevoke installs an onEgressCred sink on opt and returns it
+// alongside a revoke func that retires every per-dispatch egress credential
+// minted for this launch, exactly once. Callers wire the returned revoke to
+// their own session end — a ctx cancel for ctx-scoped launches, or the
+// cleanup func for background sessions — so a credential does not outlive the
+// dispatch on conductor's host-wide loopback proxy (#36 iso-review round 2,
+// item 4). Safe to call unconditionally: with no egress policy nothing is
+// collected and revoke is a no-op.
+func withEgressRevoke(opt launchOpts) (launchOpts, func()) {
+	var mu sync.Mutex
+	var revokes []func()
+	opt.onEgressCred = func(rev func()) {
+		mu.Lock()
+		revokes = append(revokes, rev)
+		mu.Unlock()
+	}
+	var once sync.Once
+	return opt, func() {
+		once.Do(func() {
+			mu.Lock()
+			rs := revokes
+			revokes = nil
+			mu.Unlock()
+			for _, r := range rs {
+				r()
+			}
+		})
+	}
 }
 
 // launchOptsFor resolves the isolation for one dispatch: the profile's own
@@ -109,9 +146,12 @@ func prepareLaunch(host, dir string, env, argv []string, opt launchOpts) (wrappe
 			if EgressProxyFor == nil {
 				return nil, "", nil, false, fmt.Errorf("controller: launch needs an egress proxy (isolation network policy, or agent-authored deny-by-default) but none is wired")
 			}
-			addr, cred, perr := EgressProxyFor(allow)
+			addr, cred, revoke, perr := EgressProxyFor(allow)
 			if perr != nil {
 				return nil, "", nil, false, fmt.Errorf("controller: egress proxy: %w", perr)
+			}
+			if opt.onEgressCred != nil && revoke != nil {
+				opt.onEgressCred(revoke)
 			}
 			env = append(append([]string(nil), env...), sandbox.ProxyEnv(addr, cred)...)
 		}
@@ -131,9 +171,12 @@ func prepareLaunch(host, dir string, env, argv []string, opt launchOpts) (wrappe
 			if EgressProxyUnix == nil {
 				return nil, "", nil, false, fmt.Errorf("controller: enforced egress (deny+allowlist) needs the proxy's unix endpoint but none is wired")
 			}
-			sock, cred, perr := EgressProxyUnix(spec.Egress)
+			sock, cred, revoke, perr := EgressProxyUnix(spec.Egress)
 			if perr != nil {
 				return nil, "", nil, false, fmt.Errorf("controller: egress proxy socket: %w", perr)
+			}
+			if opt.onEgressCred != nil && revoke != nil {
+				opt.onEgressCred(revoke)
 			}
 			if nf == nil {
 				self, serr := launchSelfExe()

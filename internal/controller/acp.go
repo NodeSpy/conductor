@@ -233,8 +233,10 @@ func spawnACP(_ context.Context, command []string, cwd string, env []string, del
 	if len(command) == 0 {
 		return nil, nil, errors.New("acp: no launch command configured")
 	}
+	opt, revoke := withEgressRevoke(opt)
 	argv, dir, localEnv, _, err := prepareLaunch(host, cwd, env, command, opt)
 	if err != nil {
+		revoke()
 		return nil, nil, err
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
@@ -244,23 +246,31 @@ func spawnACP(_ context.Context, command []string, cwd string, env []string, del
 	cmd.Env = append(os.Environ(), localEnv...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		revoke()
 		return nil, nil, err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		revoke()
 		return nil, nil, err
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
+		revoke()
 		return nil, nil, fmt.Errorf("acp: start %s: %w", argv[0], err)
 	}
 	client := acp.NewClient(stdout, stdin, del)
+	// This ACP agent is a background session owned by cleanup, not ctx (see the
+	// doc above) — so the egress credential is retired in cleanup, at session
+	// end, rather than when the dispatch call returns (#36 iso-review round 2,
+	// item 4).
 	cleanup := func() error {
 		client.Close()
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
 		_ = cmd.Wait()
+		revoke()
 		return nil
 	}
 	return client, cleanup, nil

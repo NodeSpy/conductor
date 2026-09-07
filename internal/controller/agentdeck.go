@@ -141,6 +141,11 @@ func (c *agentDeckController) ResumeSession(_ context.Context, id string, agentA
 // as name and wrapped[1:] as args, so a host=="" call is indistinguishable
 // from before this feature existed.
 func (c *agentDeckController) exec(ctx context.Context, host, dir string, env []string, opt launchOpts, args ...string) ([]byte, error) {
+	// exec is one-shot and synchronous: every per-dispatch egress credential
+	// minted for this invocation is used only by the subprocess we run below,
+	// so revoke it as soon as the call returns (#36 iso-review round 2, item 4).
+	opt, revoke := withEgressRevoke(opt)
+	defer revoke()
 	wrapped, localDir, localEnv, _, err := prepareLaunch(host, dir, env, append([]string{c.bin}, args...), opt)
 	if err != nil {
 		return nil, err

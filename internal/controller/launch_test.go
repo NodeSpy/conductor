@@ -16,9 +16,9 @@ func stubProxy(t *testing.T, addr string) *[][]string {
 	t.Helper()
 	var calls [][]string
 	old := EgressProxyFor
-	EgressProxyFor = func(allow []string) (string, string, error) {
+	EgressProxyFor = func(allow []string) (string, string, func(), error) {
 		calls = append(calls, allow)
-		return addr, "testcred", nil
+		return addr, "testcred", func() {}, nil
 	}
 	t.Cleanup(func() { EgressProxyFor = old })
 	return &calls
@@ -75,6 +75,39 @@ func TestPrepareLaunchEgressProxyEnv(t *testing.T) {
 	}
 	if len(*calls) != 1 || len((*calls)[0]) != 1 || (*calls)[0][0] != "api.example.com:443" {
 		t.Fatalf("allowlist handed to the proxy: %v", *calls)
+	}
+}
+
+// Regression (#36 iso-review round 2, item 4): the per-dispatch credential must
+// be revoked at session end. prepareLaunch must hand the seam's revoke func to
+// opt.onEgressCred, and the aggregate revoke returned by withEgressRevoke must
+// fan out to it — proving the wiring a controller relies on is connected, not
+// just the proxy primitive.
+func TestPrepareLaunchWiresEgressRevoke(t *testing.T) {
+	stubPlatform(t)
+	var revoked int
+	old := EgressProxyFor
+	EgressProxyFor = func(allow []string) (string, string, func(), error) {
+		return "127.0.0.1:5557", "cred", func() { revoked++ }, nil
+	}
+	t.Cleanup(func() { EgressProxyFor = old })
+
+	iso := &config.IsolationConfig{Mode: "user", User: "sbx",
+		Network: &config.IsolationNetwork{Egress: []string{"api.example.com:443"}}}
+	opt, revoke := withEgressRevoke(launchOpts{iso: iso})
+	if _, _, _, _, err := prepareLaunch("", "/wt", nil, []string{"tool"}, opt); err != nil {
+		t.Fatal(err)
+	}
+	if revoked != 0 {
+		t.Fatalf("credential revoked before session end: %d", revoked)
+	}
+	revoke()
+	if revoked != 1 {
+		t.Fatalf("session end must revoke exactly once, got %d", revoked)
+	}
+	revoke() // idempotent
+	if revoked != 1 {
+		t.Fatalf("revoke must be idempotent, got %d", revoked)
 	}
 }
 
@@ -191,9 +224,9 @@ func TestPrepareLaunchEnforcedEgress(t *testing.T) {
 	stubPlatform(t)
 	oldU, oldSelf := EgressProxyUnix, launchSelfExe
 	var asked [][]string
-	EgressProxyUnix = func(allow []string) (string, string, error) {
+	EgressProxyUnix = func(allow []string) (string, string, func(), error) {
 		asked = append(asked, allow)
-		return "/run/sock", "ucred", nil
+		return "/run/sock", "ucred", func() {}, nil
 	}
 	launchSelfExe = func() (string, error) { return "/opt/conductor", nil }
 	t.Cleanup(func() { EgressProxyUnix, launchSelfExe = oldU, oldSelf })
@@ -268,7 +301,7 @@ func TestPrepareLaunchNamespaceMasksDaemonFilesByDefault(t *testing.T) {
 
 	// Masks and enforced egress compose: one helper invocation carries both.
 	oldU := EgressProxyUnix
-	EgressProxyUnix = func([]string) (string, string, error) { return "/run/sock", "c", nil }
+	EgressProxyUnix = func([]string) (string, string, func(), error) { return "/run/sock", "c", func() {}, nil }
 	t.Cleanup(func() { EgressProxyUnix = oldU })
 	both := &config.IsolationConfig{Mode: "namespace",
 		Network: &config.IsolationNetwork{Deny: true, Egress: []string{"a:443"}}}

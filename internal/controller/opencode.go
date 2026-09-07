@@ -229,8 +229,10 @@ func writeOpencodeToolConfig(ts *toolServerSpec) (string, error) {
 // a remote-existing directory.
 func spawnOpencode(_ context.Context, host, cwd string, env []string, opt launchOpts) (string, func() error, error) {
 	argv := []string{"opencode", "serve", "--hostname", "127.0.0.1", "--port", "0"}
+	opt, revoke := withEgressRevoke(opt)
 	argv, localDir, localEnv, remote, err := prepareLaunch(host, cwd, env, argv, opt)
 	if err != nil {
+		revoke()
 		return "", nil, err
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
@@ -242,17 +244,22 @@ func spawnOpencode(_ context.Context, host, cwd string, env []string, opt launch
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		revoke()
 		return "", nil, err
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
+		revoke()
 		return "", nil, fmt.Errorf("opencode: start serve: %w", err)
 	}
+	// Background server owned by cleanup, not ctx — retire the egress
+	// credential at session end (#36 iso-review round 2, item 4).
 	cleanup := func() error {
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
 		_ = cmd.Wait()
+		revoke()
 		return nil
 	}
 	url, err := scanOpencodeURL(stdout)

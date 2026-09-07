@@ -181,11 +181,11 @@ func TestProxyManagerSharesByAllowlist(t *testing.T) {
 	})
 	defer m.Close()
 
-	a1, c1, err := m.Endpoint([]string{"b.example.com", "a.example.com"})
+	a1, c1, _, err := m.Endpoint([]string{"b.example.com", "a.example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	a2, c2, err := m.Endpoint([]string{"a.example.com", "b.example.com"}) // same set, different order
+	a2, c2, _, err := m.Endpoint([]string{"a.example.com", "b.example.com"}) // same set, different order
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestProxyManagerSharesByAllowlist(t *testing.T) {
 	if c1 == c2 || c1 == "" {
 		t.Fatal("each dispatch must get its own credential")
 	}
-	deny, denyCred, err := m.Endpoint(nil)
+	deny, denyCred, _, err := m.Endpoint(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,6 +274,53 @@ func TestProxyRequiresPerDispatchCredential(t *testing.T) {
 			t.Fatalf("authenticated but unlisted target: %d", r2.StatusCode)
 		}
 	}
+}
+
+// Regression (#36 iso-review round 2, item 4): a per-dispatch credential must
+// not outlive the dispatch that minted it. The proxy is a host-wide loopback
+// listener, so a credential that keeps authorizing after its session ends lets
+// any later local process ride that allowlist. Endpoint's revoke func — wired
+// by every controller to its session end — must retire the credential: a
+// request that passed before revoke gets 407 after.
+func TestProxyEndpointRevokeRetiresCredential(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "ok")
+	}))
+	defer upstream.Close()
+	target := strings.TrimPrefix(upstream.URL, "http://")
+
+	m := NewProxyManager(nil)
+	defer m.Close()
+	addr, cred, revoke, err := m.Endpoint([]string{target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Before revoke: the minted credential authorizes the allowlisted target.
+	resp, err := viaProxyCred(addr, cred).Get(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "ok" {
+		t.Fatalf("pre-revoke: %d %q", resp.StatusCode, body)
+	}
+
+	revoke()
+
+	// After revoke: the same credential is refused (407) before target matching.
+	resp, err = viaProxyCred(addr, cred).Get(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusProxyAuthRequired {
+		t.Fatalf("revoked credential must be refused, got %d", resp.StatusCode)
+	}
+
+	// revoke is idempotent — a second call is a harmless no-op.
+	revoke()
 }
 
 // Regression (#36 iso-review, SSRF round 2): resolution happens daemon-side,
@@ -389,12 +436,12 @@ func TestEnforcedEgressChainOverUnixSocket(t *testing.T) {
 
 	m := NewProxyManager(nil)
 	defer m.Close()
-	sock, cred, err := m.UnixEndpoint([]string{target})
+	sock, cred, _, err := m.UnixEndpoint([]string{target})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Same allowlist → same socket; each dispatch gets its own credential.
-	sock2, cred2, err := m.UnixEndpoint([]string{target})
+	sock2, cred2, _, err := m.UnixEndpoint([]string{target})
 	if err != nil {
 		t.Fatal(err)
 	}
