@@ -38,19 +38,30 @@ func cmdRuns(args []string) error {
 		return printRunDetail(dir, rest[0])
 	}
 
-	limit := 30
+	// The list is the discovery surface for "was my run recorded?". A run that
+	// exists on disk (and is readable via `conductor runs <id>`) must not vanish
+	// from the list just because it fell past a small cap. So the default is
+	// generous, `--limit 0` shows everything, and any truncation is announced —
+	// never silent (#140 Q-list).
+	limit := defaultRunsLimit
 	for i := 0; i < len(rest); i++ {
 		if rest[i] == "--limit" && i+1 < len(rest) {
-			if n, err := strconv.Atoi(rest[i+1]); err == nil && n > 0 {
+			if n, err := strconv.Atoi(rest[i+1]); err == nil && n >= 0 {
 				limit = n
 			}
 			i++
 		}
 	}
-	recs := store.ListHistoryDir(dir, limit)
-	if len(recs) == 0 {
+	// Read the full set (retention keeps it bounded) so truncation is exact and
+	// the newest runs are always the ones shown.
+	all := store.ListHistoryDir(dir, 0)
+	if len(all) == 0 {
 		fmt.Println("no recorded runs (history records connectors-model runs; see the Runs wiki page)")
 		return nil
+	}
+	recs := all
+	if limit > 0 && len(all) > limit {
+		recs = all[:limit]
 	}
 	fmt.Printf("%-22s %-8s %-19s %-26s %-22s %5s %9s\n", "ID", "STATUS", "STARTED", "TRIGGER", "TARGET", "STEPS", "COST")
 	for _, r := range recs {
@@ -58,8 +69,16 @@ func cmdRuns(args []string) error {
 			r.ID, r.Status, r.Started.Format("2006-01-02 15:04:05"),
 			triggerLabel(r), targetLabel(r), len(r.Steps), costLabel(r.CostUSD, r.ApproxCost))
 	}
+	if hidden := len(all) - len(recs); hidden > 0 {
+		fmt.Printf("… %d older run(s) not shown — use --limit %d (or --limit 0 for all)\n", hidden, len(all))
+	}
 	return nil
 }
+
+// defaultRunsLimit caps `conductor runs` output by default. It is deliberately
+// generous: the newest runs are shown first, so a just-recorded run is always
+// within it, and anything elided is reported rather than silently dropped.
+const defaultRunsLimit = 200
 
 // printRunDetail renders one recorded run.
 func printRunDetail(dir, id string) error {

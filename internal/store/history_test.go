@@ -65,6 +65,59 @@ func TestHistoryListNewestFirstAndLimit(t *testing.T) {
 	}
 }
 
+// Regression (#140 Q-list): a small list cap must not be the reason a run that
+// exists on disk — and is readable by id via ReadHistory — is absent from the
+// listing. The cap keeps the newest; an uncapped list surfaces every record.
+func TestHistoryListCapHidesButReadStillFinds(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Now().Add(-time.Hour)
+	const n = 35
+	var oldest string
+	for i := 0; i < n; i++ {
+		id := "r" + string(rune('a'+i/26)) + string(rune('a'+i%26))
+		if i == 0 {
+			oldest = id
+		}
+		if err := WriteHistory(dir, RunHistory{ID: id,
+			Started: base.Add(time.Duration(i) * time.Second), Status: "ok"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The oldest record is genuinely on disk and readable by id.
+	if _, err := ReadHistory(dir, oldest); err != nil {
+		t.Fatalf("oldest record must be readable by id: %v", err)
+	}
+	// A small cap keeps only the newest and — this is the hole — drops the
+	// oldest, even though it exists and detail can read it.
+	capped := ListHistoryDir(dir, 30)
+	if len(capped) != 30 {
+		t.Fatalf("capped list: got %d, want 30", len(capped))
+	}
+	for _, r := range capped {
+		if r.ID == oldest {
+			t.Fatal("cap should have excluded the oldest record")
+		}
+	}
+	// Uncapped, every record is present — the list is not lying about what exists.
+	all := ListHistoryDir(dir, 0)
+	if len(all) != n {
+		t.Fatalf("uncapped list: got %d, want %d", len(all), n)
+	}
+	found := false
+	for _, r := range all {
+		if r.ID == oldest {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("uncapped list must include the oldest record that ReadHistory finds")
+	}
+	// Newest-first ordering holds regardless of cap.
+	if all[0].ID != capped[0].ID {
+		t.Fatalf("newest-first mismatch: all[0]=%s capped[0]=%s", all[0].ID, capped[0].ID)
+	}
+}
+
 func TestHistoryPrune(t *testing.T) {
 	dir := t.TempDir()
 	old := RunHistory{ID: "r-ancient", Started: time.Now().Add(-30 * 24 * time.Hour), Status: "ok"}

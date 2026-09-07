@@ -1128,9 +1128,13 @@ group_Q_history() {
   fi
   # Find the recorded run's id from the history directory (the daemon signs and
   # writes one JSON per run beside the state file).
+  # Pick the run we just triggered: the NEWEST func/hist record by mtime (not
+  # head -1, which grabs the oldest — if any earlier func/hist exists that one
+  # could sit past the list's default cap). And assert against the full list
+  # (--limit 0) so a small default cap can never be the reason it's missing.
   local id
-  id="$(cexec conductor-conn sh -c 'grep -lE "\"repo\": *\"func/hist\"" /data/history/*.json 2>/dev/null | head -1 | xargs -r -n1 basename | sed "s/\.json$//"')"
-  if [ -n "$id" ] && conn runs 2>/dev/null | grep -q "$id"; then
+  id="$(cexec conductor-conn sh -c 'grep -lE "\"repo\": *\"func/hist\"" /data/history/*.json 2>/dev/null | xargs -r ls -t | head -1 | xargs -r -n1 basename | sed "s/\.json$//"')"
+  if [ -n "$id" ] && conn runs --limit 0 2>/dev/null | grep -q "$id"; then
     ok "Q \`conductor runs\` lists the recorded run ($id)" Q Q-list
   else
     bad "Q runs lists the recorded run" Q Q-list "run id not found/listed (id='$id')"
