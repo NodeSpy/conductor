@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -178,6 +179,26 @@ func Use(name string) (KVBackend, error) {
 		return nil, fmt.Errorf("kv: no store named %q (defined stores: %s)", name, nameList())
 	}
 	return b, nil
+}
+
+// nameSeparator is the byte the redis backend uses to join namespace and key
+// into a single physical key (see redis.go rkey). A namespace or key that
+// itself contains this byte could straddle the boundary and collide with — or
+// read/overwrite — another namespace's keyspace (e.g. namespace "a", key
+// "\x1fb" maps to the same physical key as namespace "a\x1fb", key ""). It has
+// no legitimate use in a name, so it is rejected outright rather than escaped
+// (#57 M7).
+const nameSeparator = '\x1f'
+
+// CheckName rejects a namespace or key containing the unit separator the redis
+// backend uses to join them. Called at the kv verb boundary and defensively in
+// the redis backend so no entry path (connector verb, template, ctx.kv, memory
+// backend) can smuggle a boundary-straddling name through.
+func CheckName(namespace, key string) error {
+	if strings.IndexByte(namespace, nameSeparator) >= 0 || strings.IndexByte(key, nameSeparator) >= 0 {
+		return fmt.Errorf("kv: namespace and key must not contain the U+001F unit separator")
+	}
+	return nil
 }
 
 func nameList() string {

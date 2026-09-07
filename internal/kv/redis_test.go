@@ -2,6 +2,7 @@ package kv
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -116,5 +117,69 @@ func TestRedisNamespaceScan(t *testing.T) {
 	keys, _, _ = st.List("b", "")
 	if len(keys) != 1 {
 		t.Fatalf("namespace scope: %v", keys)
+	}
+}
+
+// TestRedisSeparatorInNameRefused (#57 M7): the redis backend joins namespace
+// and key with a U+001F unit separator, so a name that itself contains that
+// byte could straddle the boundary — e.g. namespace "a", key "\x1fb" would map
+// to the same physical key as namespace "a", key "b" under a crafted namespace
+// "a\x1f". Every verb must refuse a namespace or key carrying the separator
+// rather than let it collide with, or read across, another namespace.
+func TestRedisSeparatorInNameRefused(t *testing.T) {
+	st, _ := miniStore(t)
+
+	// A legitimate value lives at namespace "tenant-a", key "secret".
+	if err := st.Set("tenant-a", "secret", "owned-by-a", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	const sep = "\x1f"
+	wantRefused := func(op string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: separator in name must be refused", op)
+		}
+		if !strings.Contains(err.Error(), "U+001F") {
+			t.Fatalf("%s: error must name the separator, got %v", op, err)
+		}
+	}
+
+	// A crafted key carrying the separator (attempting to straddle into another
+	// namespace's keyspace) is refused on every operation.
+	wantRefused("set/key", st.Set("tenant-b", sep+"tenant-a"+sep+"secret", "pwned", 0))
+	{
+		_, _, err := st.Get("tenant-b", sep+"tenant-a"+sep+"secret")
+		wantRefused("get/key", err)
+	}
+	wantRefused("delete/key", st.Delete("tenant-b", sep+"x"))
+	{
+		_, err := st.Incr("tenant-b", sep+"n", 1)
+		wantRefused("incr/key", err)
+	}
+	{
+		_, err := st.Append("tenant-b", sep+"l", []any{1}, false)
+		wantRefused("append/key", err)
+	}
+
+	// A crafted namespace is refused too.
+	{
+		_, _, err := st.Get("tenant-a"+sep, "secret")
+		wantRefused("get/namespace", err)
+	}
+	{
+		_, _, err := st.List("tenant-a"+sep, "")
+		wantRefused("list/namespace", err)
+	}
+
+	// The refusals never touched the legitimate value.
+	v, found, err := st.Get("tenant-a", "secret")
+	if err != nil || !found || v != "owned-by-a" {
+		t.Fatalf("legit value must be intact: %v %v %v", v, found, err)
+	}
+
+	// CheckName accepts ordinary names.
+	if err := CheckName("tenant-a", "secret"); err != nil {
+		t.Fatalf("ordinary name must pass: %v", err)
 	}
 }

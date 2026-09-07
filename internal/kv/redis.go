@@ -180,6 +180,9 @@ func (r *RedisStore) Set(namespace, key string, value any, ttl time.Duration) er
 	if key == "" {
 		return fmt.Errorf("kv: set: key is required")
 	}
+	if err := CheckName(namespace, key); err != nil {
+		return err
+	}
 	if lst, ok := value.([]any); ok {
 		args := make([]any, 0, len(lst)+1)
 		args = append(args, ttl.Milliseconds())
@@ -210,6 +213,9 @@ func max0(d time.Duration) time.Duration {
 func (r *RedisStore) Get(namespace, key string) (any, bool, error) {
 	if key == "" {
 		return nil, false, fmt.Errorf("kv: get: key is required")
+	}
+	if err := CheckName(namespace, key); err != nil {
+		return nil, false, err
 	}
 	k := rkey(namespace, key)
 	t, err := r.c.Type(r.ctx, k).Result()
@@ -248,6 +254,9 @@ func (r *RedisStore) Get(namespace, key string) (any, bool, error) {
 func (r *RedisStore) SetNX(namespace, key string, value any, ttl time.Duration) (any, bool, error) {
 	if key == "" {
 		return nil, false, fmt.Errorf("kv: setnx: key is required")
+	}
+	if err := CheckName(namespace, key); err != nil {
+		return nil, false, err
 	}
 	k := rkey(namespace, key)
 	if lst, ok := value.([]any); ok {
@@ -289,6 +298,9 @@ func (r *RedisStore) SetNX(namespace, key string, value any, ttl time.Duration) 
 func (r *RedisStore) Merge(namespace, key string, patch map[string]any) (map[string]any, error) {
 	if key == "" {
 		return nil, fmt.Errorf("kv: merge: key is required")
+	}
+	if err := CheckName(namespace, key); err != nil {
+		return nil, err
 	}
 	k := rkey(namespace, key)
 	var out map[string]any
@@ -352,12 +364,18 @@ func (r *RedisStore) Delete(namespace, key string) error {
 	if key == "" {
 		return fmt.Errorf("kv: delete: key is required")
 	}
+	if err := CheckName(namespace, key); err != nil {
+		return err
+	}
 	return r.c.Del(r.ctx, rkey(namespace, key)).Err()
 }
 
 func (r *RedisStore) Incr(namespace, key string, by int64) (int64, error) {
 	if key == "" {
 		return 0, fmt.Errorf("kv: incr: key is required")
+	}
+	if err := CheckName(namespace, key); err != nil {
+		return 0, err
 	}
 	n, err := scriptIncr.Run(r.ctx, r.c, []string{rkey(namespace, key)}, by, disp(namespace, key)).Int64()
 	return n, err
@@ -392,6 +410,9 @@ func (r *RedisStore) Append(namespace, key string, items []any, unique bool) ([]
 	if key == "" {
 		return nil, fmt.Errorf("kv: append: key is required")
 	}
+	if err := CheckName(namespace, key); err != nil {
+		return nil, err
+	}
 	enc, err := r.encodeItems(items)
 	if err != nil {
 		return nil, err
@@ -412,6 +433,9 @@ func (r *RedisStore) Remove(namespace, key string, items []any) ([]any, error) {
 	if key == "" {
 		return nil, fmt.Errorf("kv: remove: key is required")
 	}
+	if err := CheckName(namespace, key); err != nil {
+		return nil, err
+	}
 	enc, err := r.encodeItems(items)
 	if err != nil {
 		return nil, err
@@ -427,6 +451,9 @@ func (r *RedisStore) Remove(namespace, key string, items []any) ([]any, error) {
 func (r *RedisStore) Contains(namespace, key string, item any) (bool, error) {
 	if key == "" {
 		return false, fmt.Errorf("kv: contains: key is required")
+	}
+	if err := CheckName(namespace, key); err != nil {
+		return false, err
 	}
 	enc, err := encJSON(item)
 	if err != nil {
@@ -454,6 +481,9 @@ func (r *RedisStore) listTypeErr(namespace, key, op string, err error) error {
 func (r *RedisStore) Index(namespace, key string, idx int) (any, bool, error) {
 	if key == "" {
 		return nil, false, fmt.Errorf("kv: index: key is required")
+	}
+	if err := CheckName(namespace, key); err != nil {
+		return nil, false, err
 	}
 	k := rkey(namespace, key)
 	n, err := r.c.LLen(r.ctx, k).Result()
@@ -486,6 +516,9 @@ func (r *RedisStore) Last(namespace, key string) (any, bool, error) {
 func (r *RedisStore) Slice(namespace, key string, start, end int, endSet bool) ([]any, error) {
 	if key == "" {
 		return nil, fmt.Errorf("kv: slice: key is required")
+	}
+	if err := CheckName(namespace, key); err != nil {
+		return nil, err
 	}
 	k := rkey(namespace, key)
 	n64, err := r.c.LLen(r.ctx, k).Result()
@@ -532,6 +565,9 @@ func (r *RedisStore) Len(namespace, key string) (int, error) {
 	if key == "" {
 		return 0, fmt.Errorf("kv: len: key is required")
 	}
+	if err := CheckName(namespace, key); err != nil {
+		return 0, err
+	}
 	n, err := r.c.LLen(r.ctx, rkey(namespace, key)).Result()
 	if err = r.listTypeErr(namespace, key, "len", err); err != nil {
 		return 0, err
@@ -542,6 +578,9 @@ func (r *RedisStore) Len(namespace, key string) (int, error) {
 func (r *RedisStore) Pop(namespace, key string, front bool) (any, bool, int, error) {
 	if key == "" {
 		return nil, false, 0, fmt.Errorf("kv: pop: key is required")
+	}
+	if err := CheckName(namespace, key); err != nil {
+		return nil, false, 0, err
 	}
 	from := "back"
 	if front {
@@ -570,6 +609,9 @@ func globEscape(s string) string {
 }
 
 func (r *RedisStore) List(namespace, prefix string) ([]string, map[string]any, error) {
+	if err := CheckName(namespace, prefix); err != nil {
+		return nil, nil, err
+	}
 	nsp := rkey(namespace, prefix)
 	pattern := globEscape(nsp) + "*"
 	entries := map[string]any{}

@@ -372,6 +372,13 @@ func (k kvImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (m
 		return nil, err
 	}
 	namespace, key := str("namespace"), str("key")
+	// Reject boundary-straddling names at the verb boundary: a namespace or
+	// key carrying the redis backend's unit separator could collide with
+	// another namespace's keyspace (#57 M7). Rejected here for every verb, and
+	// defensively again inside the redis backend.
+	if err := kv.CheckName(namespace, key); err != nil {
+		return nil, err
+	}
 	switch verb {
 	case "get":
 		v, found, err := st.Get(namespace, key)
