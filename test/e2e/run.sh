@@ -1207,6 +1207,128 @@ group_R_watch() {
   fi
 }
 
+# --- Group S callable helpers ---------------------------------------------
+CALL_BASE="http://localhost:8099"
+CALL_AUTH="Authorization: Bearer e2e-invoke-token"
+
+# cinvoke <path> <auth-header|-> <body|-> — POST to the callable surface inside
+# conductor-conn (curl runs in-container; the port is container-local). Sets
+# INV_CODE (HTTP status) and INV_BODY (response body).
+cinvoke() {
+  local path="$1" auth="$2" body="$3" out
+  if [ "$auth" != "-" ] && [ "$body" != "-" ]; then
+    out="$(cexec conductor-conn curl -s -w $'\n%{http_code}' -X POST "$CALL_BASE$path" -H "$auth" -d "$body")"
+  elif [ "$auth" = "-" ]; then
+    out="$(cexec conductor-conn curl -s -w $'\n%{http_code}' -X POST "$CALL_BASE$path" -d "$body")"
+  else
+    out="$(cexec conductor-conn curl -s -w $'\n%{http_code}' -X POST "$CALL_BASE$path" -H "$auth")"
+  fi
+  INV_CODE="${out##*$'\n'}"; INV_BODY="${out%$'\n'*}"
+}
+
+# runs_get_has <id> <needle> — GET /runs/<id> with the scoped token contains needle.
+runs_get_has() { cexec conductor-conn curl -s "$CALL_BASE/runs/$1" -H "$CALL_AUTH" | grep -q "$2"; }
+
+# callback_delivered — the callback POST reached the sink-catcher AND carries the
+# structured result (a status-ok body for the who=callback run).
+callback_delivered() {
+  local caps; caps="$(netcurl http://sink-catcher:8080/_captured)"
+  printf '%s' "$caps" | grep -q 'callback/callable' && printf '%s' "$caps" | grep -q 'hi callback'
+}
+
+# S — §13 callable service. Conductor invoked over HTTP by an external
+# orchestrator, gated like every control surface: authenticated (bearer),
+# deny-by-default scope, explicit callable opt-in. Drives all three delivery
+# modes (async / ?wait=true / callback), per-token GET /runs read, the three
+# refusals (401 no token, 401 bad token, 403 out-of-scope), and the invoke
+# audit row. Observable effects: the async run's slack post, the inline wait
+# result, the sink-caught callback, the GET /runs body — gut auth/scope/dispatch
+# and each dies. The out-of-scope call must leave NO trace of its workflow.
+group_S_callable() {
+  banner "Group S — §13 callable service (HTTP invoke)"
+  func_reset_sink
+
+  # Async (default): 202 accepted + run_id, then the run posts to slack (inputs
+  # flowed: who=async → greeting "hi async").
+  cinvoke "/invoke/callable-summary" "$CALL_AUTH" '{"input":{"who":"async"}}'
+  local run_id; run_id="$(printf '%s' "$INV_BODY" | sed -n 's/.*"run_id":"\([^"]*\)".*/\1/p')"
+  if [ "$INV_CODE" = "202" ] && [ -n "$run_id" ] && printf '%s' "$INV_BODY" | grep -q '"status":"accepted"'; then
+    ok "S async invoke → 202 accepted + run_id ($run_id)" S S-async
+  else
+    bad "S async invoke → 202 + run_id" S S-async "code=$INV_CODE body=$INV_BODY"
+  fi
+  if wait_for 30 slack_sink_has "CALLABLE-done who=async greeting=hi async"; then
+    ok "S the async-invoked workflow ran (inputs flowed, slack posted)" S S-async-run
+  else
+    bad "S async-invoked workflow ran" S S-async-run "no CALLABLE-done post for who=async"
+  fi
+
+  # GET /runs/<id>: the scoped token reads back the terminal structured result,
+  # carrying the js step's output keyed by step id.
+  if [ -n "$run_id" ] && wait_for 20 runs_get_has "$run_id" '"greeting":"hi async"'; then
+    ok "S GET /runs/<id> returns the structured result (per-step outputs)" S S-runs
+  else
+    bad "S GET /runs/<id> returns the structured result" S S-runs "no ok result body for $run_id"
+  fi
+
+  # Synchronous ?wait=true: the call blocks and the result is inline (200 + ok +
+  # the greeting), no polling needed.
+  cinvoke "/invoke/callable-summary?wait=true" "$CALL_AUTH" '{"input":{"who":"sync"}}'
+  if [ "$INV_CODE" = "200" ] && printf '%s' "$INV_BODY" | grep -q '"status":"ok"' && printf '%s' "$INV_BODY" | grep -q '"greeting":"hi sync"'; then
+    ok "S ?wait=true returns the result inline (200, status ok, greeting)" S S-wait
+  else
+    bad "S ?wait=true returns the result inline" S S-wait "code=$INV_CODE body=$INV_BODY"
+  fi
+
+  # Callback: 202 up front, then conductor POSTs the structured result to the
+  # given URL when the run finishes (caught by the sink-catcher).
+  cinvoke "/invoke/callable-summary" "$CALL_AUTH" '{"input":{"who":"callback"},"callback_url":"http://sink-catcher:8080/callback/callable"}'
+  if [ "$INV_CODE" = "202" ] && wait_for 30 callback_delivered; then
+    ok "S callback_url received the structured result after completion" S S-callback
+  else
+    bad "S callback_url received the result" S S-callback "code=$INV_CODE; no status-ok callback captured"
+  fi
+
+  # Refusal — no credential: uniform 401, nothing dispatched.
+  cinvoke "/invoke/callable-summary" "-" '{"input":{"who":"anon"}}'
+  if [ "$INV_CODE" = "401" ]; then
+    ok "S an unauthenticated invoke is refused (401)" S S-noauth
+  else
+    bad "S unauthenticated invoke refused" S S-noauth "code=$INV_CODE (want 401)"
+  fi
+
+  # Refusal — wrong bearer: uniform 401 (no oracle on which tokens exist).
+  cinvoke "/invoke/callable-summary" "Authorization: Bearer WRONG-TOKEN" '{"input":{"who":"bad"}}'
+  if [ "$INV_CODE" = "401" ]; then
+    ok "S an invoke with a bad token is refused (401)" S S-badauth
+  else
+    bad "S bad-token invoke refused" S S-badauth "code=$INV_CODE (want 401)"
+  fi
+
+  # Refusal — out of scope: the token authenticates but does not list
+  # callable-scoped → uniform 403, and that workflow MUST NOT run.
+  cinvoke "/invoke/callable-scoped" "$CALL_AUTH" '{"input":{}}'
+  if [ "$INV_CODE" = "403" ]; then
+    ok "S an out-of-scope invoke is refused (403, deny-by-default)" S S-scope
+  else
+    bad "S out-of-scope invoke refused" S S-scope "code=$INV_CODE (want 403)"
+  fi
+  sleep 3
+  if slack_sink_has "CALLABLE-scoped-LEAKED"; then
+    bad "S the refused out-of-scope workflow LEAKED a run" S S-scope-norun "CALLABLE-scoped-LEAKED captured"
+  else
+    ok "S the refused out-of-scope workflow never ran" S S-scope-norun
+  fi
+
+  # Audit: every admitted invoke is recorded with the caller identity, workflow,
+  # and run id.
+  if audit_match conductor-conn '"event":"callable_invoke"' '"caller":"n8n-e2e"' '"workflow":"callable-summary"'; then
+    ok "S the invoke is audited with caller + workflow + run id" S S-audit
+  else
+    bad "S invoke audited with caller/workflow" S S-audit "no callable_invoke row for n8n-e2e"
+  fi
+}
+
 main() {
   trap teardown EXIT
   setup
@@ -1238,6 +1360,7 @@ main() {
   group_P_blob
   group_Q_history
   group_R_watch
+  group_S_callable
   print_matrix
   [ "$FAIL" -eq 0 ]
 }

@@ -254,6 +254,33 @@ triggers:
         agent: fixer
         prompt: "fix {{.repo}} [[dirty]]"
 
+  # S (§13 callable): invoked over HTTP by an external orchestrator, not a
+  # webhook. `callable: true` opts the trigger into the invoke surface; the
+  # n8n-e2e token (below) scopes it. A js step echoes the caller's input (proving
+  # inputs flow in under .who / .inputs.who) and a slack post makes the async run
+  # observable; the js output surfaces in the structured GET /runs result.
+  - on: manual
+    name: callable-summary
+    callable: true
+    steps:
+      - id: echo
+        run: js
+        code: "return { greeting: 'hi ' + (ctx.who || 'nobody') }"
+      - id: tell
+        uses: slack.post
+        options: { channel: CCALL, text: "CALLABLE-done who={{.who}} greeting={{.echo.greeting}}" }
+
+  # S (scope): a second callable workflow the n8n-e2e token does NOT list. Proves
+  # deny-by-default scope — invoking it with that token is a uniform 403 and this
+  # step must never run.
+  - on: manual
+    name: callable-scoped
+    callable: true
+    steps:
+      - id: tell
+        uses: slack.post
+        options: { channel: CCALL, text: "CALLABLE-scoped-LEAKED" }
+
 checks:
   # A code check that always passes / always fails — a crisp pass/fail verdict
   # with no external dependency, so the §16 gate machinery is what's under test.
@@ -262,6 +289,18 @@ checks:
 
 policy:
   concurrency: { max_agents: 3 }
+
+# §13 callable service: the invoke surface group S drives. Binds inside this
+# container; run.sh curls it as localhost:8099. One bearer token, scoped
+# deny-by-default to callable-summary only (callable-scoped is deliberately
+# out of scope). Literal secret — hermetic stack, no env plumbing.
+callable:
+  listen: "0.0.0.0:8099"
+  wait_timeout: 20s
+  tokens:
+    - name: n8n-e2e
+      bearer: "e2e-invoke-token"
+      workflows: [callable-summary]
 
 # The notify: block is retired — alerting is triggers on the conductor.*
 # lifecycle source (this stack asserts verbs/grouping, not sink delivery).
