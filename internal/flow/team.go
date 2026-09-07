@@ -104,6 +104,15 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 		Outputs map[string]any
 		Err     error
 	}
+	// Each parallel worker off one trigger derives the SAME branch name under
+	// checkout branch-off; the subtask id distinguishes them. But the id is
+	// slugified for the ref, and a non-ASCII/punctuation-only id sanitizes to ""
+	// (or two ids collapse to the same slug) — collapsing distinct workers onto
+	// one branch/worktree. parseSubtasks only dedups RAW ids, so precompute a
+	// collision-free branch suffix per worker, falling back to the worker index
+	// (#36 §146 F6, review M10).
+	branchSuffixes := teamBranchSuffixes(subtasks)
+
 	results := make([]workerResult, len(subtasks))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxWorkers)
@@ -122,10 +131,10 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 				Prompt:   fmt.Sprintf("You are one WORKER of an agent team on this overall task:\n\n%s\n\nYOUR subtask (%s):\n\n%s\n\nWork only your subtask, in this worktree.", step.Prompt, st.ID, st.Prompt),
 				Checkout: step.Checkout, Env: step.Env, Gate: workerGate}
 			wctx := withTeamChecks(ctx, extraChecks)
-			// Parallel workers off one trigger derive the same branch name
-			// under checkout branch-off; the subtask id keeps each worker's
-			// branch/worktree distinct (#36 review M10).
-			wctx = dispatch.WithBranchSuffix(wctx, st.ID)
+			// A precomputed, collision-free suffix keeps each worker's
+			// branch/worktree distinct even when subtask ids sanitize to the
+			// same (or an empty) slug (#36 §146 F6, review M10).
+			wctx = dispatch.WithBranchSuffix(wctx, branchSuffixes[i])
 			out, _, werr := r.execAgent(wctx, t, wstep, fmt.Sprintf("%s:%s", id, st.ID), local, shadow)
 			results[i] = workerResult{Subtask: st, Outputs: out, Err: werr}
 		}(i, st)
@@ -192,6 +201,30 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 	r.audit(map[string]any{"event": "team", "repo": t.Target.Repo, "number": t.Target.Number,
 		"kind": t.Kind, "step": id, "phase": "reconcile", "reconciler": reconciler})
 	return outputs, raw, nil
+}
+
+// teamBranchSuffixes assigns each worker a git-safe, collision-free branch
+// suffix. The subtask id is the readable default, but ids are slugified for the
+// ref: a non-ASCII or punctuation-only id sanitizes to "" and distinct ids can
+// collapse to the same slug — either would put two workers on one branch. When
+// the sanitized id is empty or already taken, fall back to the worker index
+// ("w<i>"), which is itself sanitized and de-duplicated so it can never clash
+// with a literal "w0"-style id (#36 §146 F6).
+func teamBranchSuffixes(subs []teamSubtask) []string {
+	out := make([]string, len(subs))
+	seen := map[string]bool{}
+	for i, st := range subs {
+		slug := dispatch.SanitizeBranchSuffix(st.ID)
+		if slug == "" || seen[slug] {
+			slug = fmt.Sprintf("w%d", i)
+			for n := 0; slug == "" || seen[slug]; n++ {
+				slug = dispatch.SanitizeBranchSuffix(fmt.Sprintf("w%d-%d", i, n))
+			}
+		}
+		seen[slug] = true
+		out[i] = slug
+	}
+	return out
 }
 
 // teamWorkerGate composes each worker's gate: the team's explicit checks

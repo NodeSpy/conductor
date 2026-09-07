@@ -840,14 +840,25 @@ func WithBranchSuffix(ctx context.Context, suffix string) context.Context {
 // slugRe strips anything a git ref (or paseo) could choke on.
 var slugRe = regexp.MustCompile(`[^a-z0-9._-]+`)
 
-func branchSuffixFrom(ctx context.Context) string {
-	s, _ := ctx.Value(branchSuffixKey{}).(string)
+// SanitizeBranchSuffix renders an arbitrary label (a team subtask id) into the
+// exact form branchSuffixFrom appends to a branch name: lowercased, non-ref
+// characters collapsed to '-', trimmed, capped. It is idempotent — feeding its
+// own output back through WithBranchSuffix reproduces it unchanged — so a caller
+// can pre-slugify to guarantee uniqueness and trust the branch name to match.
+// A label with no ref-safe characters (all non-ASCII, punctuation-only) yields
+// "", which callers must treat as "needs a fallback" rather than a valid suffix.
+func SanitizeBranchSuffix(s string) string {
 	s = slugRe.ReplaceAllString(strings.ToLower(s), "-")
 	s = strings.Trim(s, "-.")
 	if len(s) > 32 {
 		s = s[:32]
 	}
 	return s
+}
+
+func branchSuffixFrom(ctx context.Context) string {
+	s, _ := ctx.Value(branchSuffixKey{}).(string)
+	return SanitizeBranchSuffix(s)
 }
 
 func branchSlug(ctx context.Context, t core.Trigger) string {

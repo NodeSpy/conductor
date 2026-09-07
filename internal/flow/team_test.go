@@ -495,3 +495,45 @@ steps:
 		t.Fatalf("failing gate must be the reconciler's: %+v", last)
 	}
 }
+
+// TestTeamBranchSuffixesUniqueAndSafe is the F6 regression (#36 §146): team
+// worker branch suffixes must stay distinct even when subtask ids sanitize to
+// the same slug or to nothing. parseSubtasks dedups only raw ids, so ids like
+// "café"/"café☕" (both → "caf") or an all-non-ASCII id (→ "") would otherwise
+// collapse workers onto one branch/worktree.
+func TestTeamBranchSuffixesUniqueAndSafe(t *testing.T) {
+	cases := map[string][]string{
+		"non-ascii collapse to same slug":  {"café", "café☕"},
+		"punctuation/space collisions":     {"a/b", "a b", "a.b"},
+		"all non-ascii sanitizes empty":    {"日本語", "☕", "→"},
+		"fallback clashes with literal id": {"w1", "🚀", "w1-0"},
+		"mixed clean and dirty":            {"api", "api", "", "ok-slug"},
+	}
+	for name, ids := range cases {
+		t.Run(name, func(t *testing.T) {
+			subs := make([]teamSubtask, len(ids))
+			for i, id := range ids {
+				subs[i] = teamSubtask{ID: id, Prompt: "p"}
+			}
+			got := teamBranchSuffixes(subs)
+			if len(got) != len(subs) {
+				t.Fatalf("want %d suffixes, got %d", len(subs), len(got))
+			}
+			seen := map[string]bool{}
+			for i, s := range got {
+				if s == "" {
+					t.Fatalf("worker %d (id %q) got an empty branch suffix", i, ids[i])
+				}
+				// Suffix must be idempotent under the dispatch sanitizer — the
+				// branch name the dispatcher derives has to match what we chose.
+				if dispatch.SanitizeBranchSuffix(s) != s {
+					t.Fatalf("worker %d suffix %q is not ref-safe/idempotent", i, s)
+				}
+				if seen[s] {
+					t.Fatalf("worker %d (id %q) collides on suffix %q", i, ids[i], s)
+				}
+				seen[s] = true
+			}
+		})
+	}
+}
