@@ -86,6 +86,48 @@ func TestReleaseRunGC(t *testing.T) {
 	}
 }
 
+// A Put that lands after its run was released must not create a blob that is
+// permanently referenced by a dead run — nothing would ever free it (#140 F3).
+// The put is refused and the already-written file is left for the age sweep.
+func TestPutAfterReleaseRefused(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	if _, err := s.PutBytes("run-1", []byte("first"), Meta{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReleaseRun("run-1"); err != nil {
+		t.Fatal(err)
+	}
+	// A later put re-registering the released run must be refused.
+	late, err := s.PutBytes("run-1", []byte("late artifact"), Meta{})
+	if err == nil {
+		t.Fatal("put under an already-released run must be refused")
+	}
+	if late != (Handle{}) {
+		t.Fatalf("refused put must not return a handle: %+v", late)
+	}
+	// The file the refused put wrote is unreferenced, so the age sweep reclaims
+	// it — it is not left permanently referenced by the dead run.
+	n, err := s.SweepOrphans(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("refused put's file must be sweepable as an orphan, swept %d", n)
+	}
+	// A never-used run is tombstoned by ReleaseRun too: a put after it is
+	// refused, not silently orphaned.
+	if err := s.ReleaseRun("run-empty"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PutBytes("run-empty", []byte("x"), Meta{}); err == nil {
+		t.Fatal("put under a released never-used run must be refused")
+	}
+	// A live, never-released run is unaffected — the guard is per-run.
+	if _, err := s.PutBytes("run-2", []byte("live"), Meta{}); err != nil {
+		t.Fatalf("put under a live run must still work: %v", err)
+	}
+}
+
 func TestRefsSurviveReopen(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := Open(dir)

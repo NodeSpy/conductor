@@ -93,7 +93,24 @@ type Store struct {
 
 	mu   sync.Mutex
 	refs map[string]map[string]Meta // runID -> digest -> meta
+
+	// released tombstones recently-released run IDs so Put can refuse a
+	// reference under a run whose ReleaseRun already ran (#140 F3). Bounded by
+	// a fixed-size ring because the store is long-lived (opened once at boot):
+	// growing this with total run count would itself leak.
+	released map[string]struct{}
+	relRing  []string // FIFO ring backing `released`
+	relNext  int      // next write slot in relRing
 }
+
+// maxReleasedTombstones bounds the recently-released run-ID set. Once
+// ReleaseRun has run for a run, a later Put re-registering that run ID would
+// create a blob no ReleaseRun will ever free (the run is gone) and that
+// SweepOrphans will never reclaim (it still looks referenced) — a permanent
+// leak. The tombstone set lets Put refuse such a put. The window that matters
+// is a Put racing with, or shortly following, its run's teardown; a fixed cap
+// covers that without the set growing unbounded over the daemon's lifetime.
+const maxReleasedTombstones = 4096
 
 // Open opens (creating if needed) a store rooted at dir and loads its refs.
 func Open(dir string) (*Store, error) {
@@ -147,6 +164,19 @@ func (s *Store) Put(runID string, r io.Reader, meta Meta) (Handle, error) {
 	hd := Handle{Digest: digest, Meta: meta}
 	if runID != "" {
 		s.mu.Lock()
+		if _, gone := s.released[runID]; gone {
+			s.mu.Unlock()
+			// The run has already been released (#140 F3): registering a
+			// reference now would create a blob no ReleaseRun will ever free —
+			// the run is gone — and that SweepOrphans will never reclaim because
+			// it still looks referenced. Refuse the put. The already-written
+			// file is left unreferenced for the age sweep to reclaim; we must
+			// NOT delete it here — content addressing means a concurrent run may
+			// share this exact digest. On the normal background path this is
+			// unreachable (verb-steps run in the flow loop, which finishes before
+			// finishRun → releaseRunBlobs); the guard is defense-in-depth.
+			return Handle{}, fmt.Errorf("blob: run %s already released — refusing put that would orphan a permanently-referenced blob", runID)
+		}
 		if s.refs[runID] == nil {
 			s.refs[runID] = map[string]Meta{}
 		}
@@ -229,6 +259,10 @@ func (s *Store) ReleaseRun(runID string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Tombstone the run even if it held no blobs, so a later Put under this run
+	// ID is refused rather than silently creating a permanently-orphaned ref
+	// (#140 F3) — ReleaseRun runs once per run and will not run again.
+	s.markReleasedLocked(runID)
 	released := s.refs[runID]
 	if released == nil {
 		return nil
@@ -243,6 +277,24 @@ func (s *Store) ReleaseRun(runID string) error {
 		}
 	}
 	return s.saveRefsLocked()
+}
+
+// markReleasedLocked records runID in the bounded released-tombstone ring,
+// evicting the oldest entry when the ring is full. Caller holds s.mu.
+func (s *Store) markReleasedLocked(runID string) {
+	if s.released == nil {
+		s.released = make(map[string]struct{}, maxReleasedTombstones)
+		s.relRing = make([]string, maxReleasedTombstones)
+	}
+	if _, ok := s.released[runID]; ok {
+		return
+	}
+	if old := s.relRing[s.relNext]; old != "" {
+		delete(s.released, old)
+	}
+	s.relRing[s.relNext] = runID
+	s.relNext = (s.relNext + 1) % maxReleasedTombstones
+	s.released[runID] = struct{}{}
 }
 
 // referencedLocked reports whether any run still references digest.
