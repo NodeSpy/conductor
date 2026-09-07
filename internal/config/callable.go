@@ -53,6 +53,11 @@ type CallableConfig struct {
 	// `delivered: false`) rather than spawning an unbounded goroutine; the run
 	// still completes and is readable via GET /runs. Default 64; 0/unset uses it.
 	MaxCallbackInflight int `yaml:"max_callback_inflight"`
+	// MaxSkew bounds how far a signed (HMAC) request's timestamp may sit from the
+	// server clock (#36 §13 review, item 4). A request outside the window is
+	// refused, so a captured signature stops verifying once the window passes.
+	// Default 5m; 0/unset uses the default.
+	MaxSkew Duration `yaml:"max_skew"`
 }
 
 // CallableToken is one caller identity: a bearer secret OR an HMAC signature
@@ -73,11 +78,27 @@ type CallableToken struct {
 	Workflows []string `yaml:"workflows"`
 }
 
-// CallableHMAC configures request-body signature verification for a token.
+// CallableHMAC configures signed-request verification for a token. Unlike a
+// webhook signature (body only), a callable caller signs timestamp + method +
+// path + body, and presents the timestamp in TimestampHeader — so a captured
+// signature is bound to one endpoint at one moment and cannot be replayed (#36
+// §13 review, item 4).
 type CallableHMAC struct {
 	Secret string `yaml:"secret"`
 	Header string `yaml:"header"` // e.g. X-Conductor-Signature
 	Scheme string `yaml:"scheme"` // hex (default) | base64; a "sha256=" prefix is stripped
+	// TimestampHeader carries the unix-seconds timestamp the caller signed and
+	// presents. Default X-Conductor-Timestamp.
+	TimestampHeader string `yaml:"timestamp_header"`
+}
+
+// TimestampHeaderName is the header the signed timestamp is read from, defaulting
+// to X-Conductor-Timestamp when unset.
+func (h *CallableHMAC) TimestampHeaderName() string {
+	if h != nil && h.TimestampHeader != "" {
+		return h.TimestampHeader
+	}
+	return "X-Conductor-Timestamp"
 }
 
 // Enabled reports whether the callable service should start.

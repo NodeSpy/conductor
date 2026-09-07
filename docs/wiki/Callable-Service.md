@@ -56,13 +56,14 @@ callable:
     - name: n8n-prod                       # recorded as the caller identity in the audit
       bearer: "${CONDUCTOR_INVOKE_TOKEN}"  # from env/secrets — never inline
       workflows: [pr-summary]              # deny-by-default: only these
-    # An HMAC caller: signs the raw request body (reuses the webhook-signature
-    # machinery). Mutually exclusive with bearer.
+    # An HMAC caller: signs `timestamp\nMETHOD\npath\nbody` (replay-protected).
+    # Mutually exclusive with bearer.
     - name: ci-signer
       hmac:
         secret: "${CONDUCTOR_INVOKE_HMAC}"
         header: X-Conductor-Signature      # header carrying the signature
         scheme: hex                         # hex (default) | base64; a "sha256=" prefix is stripped
+        timestamp_header: X-Conductor-Timestamp  # header carrying the signed unix-seconds timestamp (default)
       workflows: [pr-summary]
 
 triggers:
@@ -190,15 +191,28 @@ remains readable with local access via `conductor runs <id>`.
 
 ### HMAC callers
 
-An HMAC token signs the **raw request body** with HMAC-SHA256 and presents the
-signature in its configured header:
+An HMAC token signs a **canonical request string** — `timestamp\nMETHOD\npath\nbody`
+— with HMAC-SHA256, and presents both the signature and the timestamp in their
+configured headers. Binding the timestamp, method, and path (not the body alone)
+is what makes the signature un-replayable: it is valid for exactly one endpoint
+at one moment.
 
 ```
+ts=$(date +%s)
 body='{"input":{"repo":"acme/api","pr":42}}'
-sig=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$CONDUCTOR_INVOKE_HMAC" -hex | awk '{print $2}')
+canonical=$(printf '%s\n%s\n%s\n%s' "$ts" POST /invoke/pr-summary "$body")
+sig=$(printf '%s' "$canonical" | openssl dgst -sha256 -hmac "$CONDUCTOR_INVOKE_HMAC" -hex | awk '{print $2}')
 curl -s -X POST localhost:8099/invoke/pr-summary \
-  -H "X-Conductor-Signature: sha256=$sig" -d "$body"
+  -H "X-Conductor-Signature: sha256=$sig" \
+  -H "X-Conductor-Timestamp: $ts" \
+  -d "$body"
 ```
+
+The server refuses a signed request whose timestamp is outside the skew window
+(`max_skew`, default 5m) and refuses any signature it has already seen — so a
+captured request cannot be replayed, and a signature minted for `POST /invoke/…`
+cannot be reused on `GET /runs/…`. A `GET /runs/<id>` read is signed the same
+way, over an empty body with `method=GET` and `path=/runs/<id>`.
 
 ## Recipe: calling conductor from n8n
 

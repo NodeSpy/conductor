@@ -517,18 +517,31 @@ callable:
   listen: ":8099"
   # Bounds a synchronous ?wait=true call (default 30s, hard-capped at 5m).
   wait_timeout: 30s
+  # Concurrency ceilings (default 64 each): each synchronous wait and each
+  # in-flight callback holds a goroutine up to 5m. A wait past the cap degrades
+  # to async (202 + run_id); a callback past the cap is audited delivered:false.
+  max_wait_inflight: 64
+  max_callback_inflight: 64
+  # SSRF fence for callback_url delivery. https-only by default; opt into http
+  # and/or opt an exact internal IP back in for a trusted internal callback sink.
+  # callback_allow_http: false
+  # callback_allow_hosts: []                 # e.g. [10.0.0.9] — literal IPs only
+  # Clock-skew window for signed (HMAC) requests (default 5m). A request whose
+  # signed timestamp is further from the server clock than this is refused.
+  max_skew: 5m
   tokens:
     # A bearer caller (n8n's "Header Auth" credential: Authorization: Bearer …).
     - name: n8n-prod
       bearer: "${CONDUCTOR_INVOKE_TOKEN}"   # from env/secrets — never inline
       workflows: [pr-summary]               # deny-by-default: only these
-    # An HMAC caller: signs the raw request body (reuses the webhook-signature
-    # machinery). Mutually exclusive with bearer.
+    # An HMAC caller: signs `timestamp\nMETHOD\npath\nbody` with HMAC-SHA256 and
+    # presents the timestamp — replay-protected. Mutually exclusive with bearer.
     - name: ci-signer
       hmac:
         secret: "${CONDUCTOR_INVOKE_HMAC}"
         header: X-Conductor-Signature       # header carrying the signature
         scheme: hex                          # hex (default) | base64; "sha256=" prefix ok
+        timestamp_header: X-Conductor-Timestamp  # header carrying the signed unix-seconds timestamp (default)
       workflows: [pr-summary]
 
 triggers:

@@ -452,37 +452,123 @@ func TestRunIDUnguessable(t *testing.T) {
 	}
 }
 
-func TestInvokeHMACAuth(t *testing.T) {
-	body := `{"input":{"x":1}}`
-	mac := hmac.New(sha256.New, []byte("hsecret"))
-	mac.Write([]byte(body))
-	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-
+// hmacHarness builds a service with one HMAC token (X-Sig / X-Ts) and a clock
+// pinned to a fixed instant so timestamp-skew is deterministic. It returns the
+// harness plus a signer that produces the header values for a given timestamp,
+// method, path, and body.
+func hmacHarness(t *testing.T) (*harness, time.Time, func(ts int64, method, path, body string) (sig, tsStr string)) {
+	t.Helper()
 	cfg := config.CallableConfig{
 		Listen: ":0",
 		Tokens: []config.CallableToken{{
 			Name:      "signed",
-			HMAC:      &config.CallableHMAC{Secret: "hsecret", Header: "X-Sig", Scheme: "hex"},
+			HMAC:      &config.CallableHMAC{Secret: "hsecret", Header: "X-Sig", Scheme: "hex", TimestampHeader: "X-Ts"},
 			Workflows: []string{"triage"},
 		}},
 	}
 	h := newHarness(t, cfg, map[string]bool{"triage": true})
+	clock := time.Unix(1_700_000_000, 0)
+	h.svc.now = func() time.Time { return clock }
+	sign := func(ts int64, method, path, body string) (string, string) {
+		tsStr := strconv.FormatInt(ts, 10)
+		mac := hmac.New(sha256.New, []byte("hsecret"))
+		mac.Write([]byte(tsStr + "\n" + method + "\n" + path + "\n" + body))
+		return "sha256=" + hex.EncodeToString(mac.Sum(nil)), tsStr
+	}
+	return h, clock, sign
+}
 
-	// Valid signature → accepted.
+func TestInvokeHMACAuth(t *testing.T) {
+	h, clock, sign := hmacHarness(t)
+	body := `{"input":{"x":1}}`
+	sig, ts := sign(clock.Unix(), http.MethodPost, "/invoke/triage", body)
+
+	// Valid signed request → accepted.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/invoke/triage", strings.NewReader(body))
 	r.Header.Set("X-Sig", sig)
+	r.Header.Set("X-Ts", ts)
 	h.svc.handleInvoke(w, r)
 	if w.Code != http.StatusAccepted {
-		t.Fatalf("valid HMAC status = %d, want 202; body=%s", w.Code, w.Body.String())
+		t.Fatalf("valid signed HMAC status = %d, want 202; body=%s", w.Code, w.Body.String())
 	}
 
-	// Tampered body → 401.
+	// Tampered body → 401 (signature no longer matches).
 	w2 := httptest.NewRecorder()
 	r2 := httptest.NewRequest(http.MethodPost, "/invoke/triage", strings.NewReader(body+" "))
 	r2.Header.Set("X-Sig", sig)
+	r2.Header.Set("X-Ts", ts)
 	h.svc.handleInvoke(w2, r2)
 	if w2.Code != http.StatusUnauthorized {
-		t.Fatalf("tampered HMAC status = %d, want 401", w2.Code)
+		t.Fatalf("tampered body status = %d, want 401", w2.Code)
+	}
+}
+
+// TestHMACReplayRefused proves a captured, byte-for-byte-identical signed
+// request cannot be replayed: the first presentation authenticates, the second
+// (same token + signature) is refused (#36 §13 review, item 4).
+func TestHMACReplayRefused(t *testing.T) {
+	h, clock, sign := hmacHarness(t)
+	body := `{"input":{"x":1}}`
+	sig, ts := sign(clock.Unix(), http.MethodPost, "/invoke/triage", body)
+	do := func() int {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/invoke/triage", strings.NewReader(body))
+		r.Header.Set("X-Sig", sig)
+		r.Header.Set("X-Ts", ts)
+		h.svc.handleInvoke(w, r)
+		return w.Code
+	}
+	if code := do(); code != http.StatusAccepted {
+		t.Fatalf("first request status = %d, want 202", code)
+	}
+	if code := do(); code != http.StatusUnauthorized {
+		t.Fatalf("replayed request status = %d, want 401 (replay must be refused)", code)
+	}
+	if len(h.invoked) != 1 {
+		t.Fatalf("replay reached dispatch: Invoke ran %d times, want 1", len(h.invoked))
+	}
+}
+
+// TestHMACStaleTimestampRefused proves a signature whose timestamp is outside
+// the skew window is refused even though the HMAC is otherwise valid — so a
+// signature captured long ago cannot be presented later (#36 §13 review 4).
+func TestHMACStaleTimestampRefused(t *testing.T) {
+	h, clock, sign := hmacHarness(t)
+	body := `{"input":{"x":1}}`
+	// Signed 10 minutes before the server clock — outside the 5m default skew.
+	staleTs := clock.Add(-10 * time.Minute).Unix()
+	sig, ts := sign(staleTs, http.MethodPost, "/invoke/triage", body)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/invoke/triage", strings.NewReader(body))
+	r.Header.Set("X-Sig", sig)
+	r.Header.Set("X-Ts", ts)
+	h.svc.handleInvoke(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("stale-timestamp status = %d, want 401", w.Code)
+	}
+	if len(h.invoked) != 0 {
+		t.Fatal("stale signed request reached dispatch")
+	}
+}
+
+// TestHMACSignatureBoundToPath proves the signature is bound to method+path: a
+// signature minted for POST /invoke/triage cannot be reused on GET /runs/<id>
+// (the old scheme signed the body alone, so a GET over an empty body was
+// unbound) (#36 §13 review, item 4).
+func TestHMACSignatureBoundToPath(t *testing.T) {
+	h, clock, sign := hmacHarness(t)
+	// A signature for the POST invoke over an empty body…
+	sig, ts := sign(clock.Unix(), http.MethodPost, "/invoke/triage", "")
+
+	// …replayed on a GET /runs read (also empty body) must not authenticate.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/runs/rsomething", nil)
+	r.Header.Set("X-Sig", sig)
+	r.Header.Set("X-Ts", ts)
+	h.svc.handleRun(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("cross-path signature status = %d, want 401 (signature must bind method+path)", w.Code)
 	}
 }

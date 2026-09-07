@@ -48,6 +48,16 @@ const (
 // deployment; the default is a safe ceiling, not a tuning knob most reach.
 const defaultMaxInflight = 64
 
+// defaultMaxSkew bounds a signed request's timestamp vs. the server clock, and
+// replayEntries bounds the recent-signature cache (#36 §13 review, item 4). The
+// skew window is the real replay bound — a signature stops verifying once it
+// passes — so the ring only needs to cover far more than a window of legitimate
+// traffic, not all history.
+const (
+	defaultMaxSkew = 5 * time.Minute
+	replayEntries  = 8192
+)
+
 // Deps are the daemon-provided seams the service drives. Keeping them as
 // closures keeps this package free of the engine/cmd wiring and trivially
 // testable with fakes.
@@ -79,6 +89,11 @@ type Service struct {
 	// so neither can pin an unbounded number of goroutines (#36 §13 review 5).
 	waitSem chan struct{}
 	cbSem   chan struct{}
+	// replay tracks recently-seen (token, signature) pairs so a signed request
+	// cannot be replayed within the skew window (#36 §13 review 4).
+	replay *replayGuard
+	// now is the clock for timestamp-skew checks (overridable in tests).
+	now func() time.Time
 }
 
 // New builds the service. Register mounts its handlers.
@@ -98,6 +113,8 @@ func New(d Deps) *Service {
 		issued:  newIssuedSet(4096),
 		waitSem: make(chan struct{}, inflightCap(d.Cfg.MaxWaitInflight)),
 		cbSem:   make(chan struct{}, inflightCap(d.Cfg.MaxCallbackInflight)),
+		replay:  newReplayGuard(replayEntries),
+		now:     time.Now,
 	}
 }
 
@@ -294,11 +311,43 @@ func (s *Service) authenticate(r *http.Request, body []byte) (*config.CallableTo
 		if sig == "" {
 			continue
 		}
-		if inbound.VerifyHMAC(t.HMAC.Secret, body, sig, t.HMAC.Scheme) {
-			return t, true
+		// A callable HMAC caller signs timestamp + method + path + body and
+		// presents the timestamp — so the signature is bound to this endpoint at
+		// this moment (#36 §13 review, item 4). A missing/stale timestamp, a bad
+		// signature, or a replayed (already-seen) signature all fail authentication.
+		ts := r.Header.Get(t.HMAC.TimestampHeaderName())
+		if ts == "" || !s.freshTimestamp(ts) {
+			continue
 		}
+		if !inbound.VerifySignedRequest(t.HMAC.Secret, ts, r.Method, r.URL.Path, body, sig, t.HMAC.Scheme) {
+			continue
+		}
+		if !s.replay.checkAndRecord(t.Name + "\x00" + strings.TrimSpace(sig)) {
+			s.d.Log("callable: replayed signature refused for token %s (%s %s)", t.Name, r.Method, r.URL.Path)
+			return nil, false
+		}
+		return t, true
 	}
 	return nil, false
+}
+
+// freshTimestamp reports whether a unix-seconds timestamp string is within the
+// configured skew window of the server clock. An unparseable timestamp is not
+// fresh — a signed request must carry a valid one.
+func (s *Service) freshTimestamp(ts string) bool {
+	secs, err := strconv.ParseInt(strings.TrimSpace(ts), 10, 64)
+	if err != nil {
+		return false
+	}
+	skew := s.d.Cfg.MaxSkew.D()
+	if skew <= 0 {
+		skew = defaultMaxSkew
+	}
+	diff := s.now().Sub(time.Unix(secs, 0))
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= skew
 }
 
 // await polls the run's record until it reaches a terminal status or the
@@ -488,4 +537,40 @@ func (s *issuedSet) owner(id string) (string, bool) {
 	defer s.mu.Unlock()
 	o, ok := s.owners[id]
 	return o, ok
+}
+
+// replayGuard is a bounded set of recently-seen signature keys, so a signed
+// request cannot be replayed within the skew window (#36 §13 review, item 4).
+// It evicts oldest-first: the timestamp-skew window is the real replay bound, so
+// the ring only needs to hold far more than a window of legitimate signatures.
+type replayGuard struct {
+	mu   sync.Mutex
+	max  int
+	seen map[string]struct{}
+	ring []string
+}
+
+func newReplayGuard(max int) *replayGuard {
+	if max <= 0 {
+		max = replayEntries
+	}
+	return &replayGuard{max: max, seen: map[string]struct{}{}}
+}
+
+// checkAndRecord returns true if key was UNSEEN (recording it), false if it is a
+// replay of a key still in the ring.
+func (g *replayGuard) checkAndRecord(key string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, ok := g.seen[key]; ok {
+		return false
+	}
+	g.seen[key] = struct{}{}
+	g.ring = append(g.ring, key)
+	if len(g.ring) > g.max {
+		old := g.ring[0]
+		g.ring = g.ring[1:]
+		delete(g.seen, old)
+	}
+	return true
 }
