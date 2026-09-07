@@ -41,6 +41,8 @@ agents:
                       # alone ⇒ structural no-network; absent ⇒ advisory proxy
       # privileged: true   # namespace mode: opt back into the daemon's full
       #                    # filesystem view (state/config masked by default)
+      # allow_root: true   # namespace mode: run the sandbox even when the
+      #                    # daemon is root (NOT a boundary then — see below)
 ```
 
 ### `mode: user` — a distinct low-privilege user
@@ -106,6 +108,24 @@ philosophy as `trust: full`: the strong posture is the default, the
 footgun is explicit. Remote (`hosts:`) namespace wraps never mask (the
 helper binary lives on this box) — the remote box's own account setup is
 the wall there.
+
+**Never a boundary as root — refused by default.** `--map-current-user` maps
+the daemon's own uid into the new user namespace. When the daemon runs as
+**root (euid 0)** that mapping is root→root: the sandboxed agent keeps real
+uid 0 and full `CAP_SYS_ADMIN` over the host, so the user namespace confers
+**no privilege separation at all** — masks, `--net`, and cgroup limits become
+things a root agent can simply undo. Conductor therefore **refuses a
+namespace-mode launch when euid is 0** with an error pointing you at a
+non-root daemon user or `mode: container`. Run conductor as a dedicated
+non-root user (the intended posture), or switch that profile to
+`mode: container`.
+
+`isolation: { mode: namespace, allow_root: true }` is the deliberate opt-in
+to run the namespace sandbox as root anyway — valid **only** when you are
+using the namespace for process/mount cleanup or cgroup limits and are **not**
+relying on it as a security wall against the agent. Same philosophy as
+`privileged:` and `trust: full`: strong-by-default, footgun explicit. It
+applies to namespace mode only (`validate` rejects it elsewhere as a no-op).
 
 Linux-only; `conductor validate` rejects it on other platforms (a remote
 `hosts:` entry skips the local check — the remote box's OS applies).
@@ -207,6 +227,7 @@ that lifts the allow/approve/host gates lifts this requirement.
 | Situation | Behavior |
 |---|---|
 | `mode: namespace` on macOS/Windows | rejected by `validate` (local) / launch error with a clear message |
+| `mode: namespace` while daemon is root (euid 0) | launch refused (not a boundary as root) unless `allow_root: true` |
 | `sudo` / `unshare` / `docker` missing | launch fails with "needs X on PATH", never silently unisolated |
 | egress policy with no proxy wired | launch fails closed |
 | enforced egress with no unix endpoint wired | launch fails closed |

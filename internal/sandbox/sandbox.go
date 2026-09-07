@@ -57,6 +57,12 @@ type Spec struct {
 	// masking — the explicit "run with my uid's full filesystem view"
 	// footgun (#36 iso-review H7).
 	Privileged bool
+	// AllowRoot (namespace mode) is the explicit opt-in to run the
+	// user-namespace sandbox when the daemon is root (euid 0), where
+	// --map-current-user maps root→root and the namespace grants no privilege
+	// separation. Default false = Check refuses namespace mode as root
+	// (#36 iso-review round 2, item 2).
+	AllowRoot bool
 }
 
 // FromConfig flattens an IsolationConfig. nil in, nil out.
@@ -64,7 +70,7 @@ func FromConfig(c *config.IsolationConfig) *Spec {
 	if c == nil {
 		return nil
 	}
-	s := &Spec{Mode: c.Mode, User: c.User, Privileged: c.Privileged}
+	s := &Spec{Mode: c.Mode, User: c.User, Privileged: c.Privileged, AllowRoot: c.AllowRoot}
 	if c.Container != nil {
 		s.Image = c.Container.Image
 		s.Engine = c.Container.Engine
@@ -111,12 +117,15 @@ func (s *Spec) EnforcedEgress() bool {
 		(s.Mode == "namespace" || s.Mode == "container")
 }
 
-// Check verifies the mode is runnable here: the wrapper binaries exist and
-// namespace mode is on Linux. goos is runtime.GOOS; lookPath is
-// exec.LookPath (both injected for tests). A remote launch (the wrapper runs
-// on another box over ssh) should skip Check — the remote box's own PATH and
-// OS apply there.
-func (s *Spec) Check(goos string, lookPath func(string) (string, error)) error {
+// Check verifies the mode is runnable AND a real boundary here: the wrapper
+// binaries exist, namespace mode is on Linux, and namespace mode is not being
+// run as root (where --map-current-user maps root→root and confers no
+// privilege separation — #36 iso-review round 2, item 2). goos is
+// runtime.GOOS; euid is the daemon's effective uid; lookPath is exec.LookPath
+// (all injected for tests). A remote launch (the wrapper runs on another box
+// over ssh) should skip Check — the remote box's own PATH, OS, and uid apply
+// there.
+func (s *Spec) Check(goos string, euid int, lookPath func(string) (string, error)) error {
 	if s == nil {
 		return nil
 	}
@@ -132,6 +141,9 @@ func (s *Spec) Check(goos string, lookPath func(string) (string, error)) error {
 	case "namespace":
 		if goos != "linux" {
 			return fmt.Errorf("sandbox: isolation mode namespace is Linux-only (running on %s) — use mode user or container here", goos)
+		}
+		if euid == 0 && !s.AllowRoot {
+			return fmt.Errorf("sandbox: isolation mode namespace is not a privilege boundary when conductor runs as root — `unshare --user --map-current-user` maps root→root, leaving the sandboxed agent with real uid 0 and full CAP_SYS_ADMIN over the host; run the daemon as a non-root user, or use mode container. Set isolation `allow_root: true` to override (cleanup/limits only, NOT a security wall)")
 		}
 		if err := need("unshare", "to enter the namespaces"); err != nil {
 			return err

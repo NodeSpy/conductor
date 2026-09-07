@@ -28,10 +28,14 @@ func stubProxy(t *testing.T, addr string) *[][]string {
 // wrap paths run hermetically wherever the tests do.
 func stubPlatform(t *testing.T) {
 	t.Helper()
-	oldOS, oldLook := launchGOOS, launchLookPath
+	oldOS, oldLook, oldEuid := launchGOOS, launchLookPath, launchGeteuid
 	launchGOOS = "linux"
 	launchLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
-	t.Cleanup(func() { launchGOOS, launchLookPath = oldOS, oldLook })
+	// Pin a non-root euid so namespace-mode wrap paths run deterministically
+	// even when the tests themselves run as root (CI/Docker); the root refusal
+	// is exercised explicitly in TestPrepareLaunchNamespaceRefusesRoot.
+	launchGeteuid = func() int { return 1000 }
+	t.Cleanup(func() { launchGOOS, launchLookPath, launchGeteuid = oldOS, oldLook, oldEuid })
 }
 
 func TestPrepareLaunchNoIsolationUnchanged(t *testing.T) {
@@ -275,5 +279,42 @@ func TestPrepareLaunchNamespaceMasksDaemonFilesByDefault(t *testing.T) {
 	joined = strings.Join(argv, " ")
 	if !strings.Contains(joined, "--mask /var/lib/conductor") || !strings.Contains(joined, "--unix /run/sock") {
 		t.Fatalf("masks + enforced egress must compose: %q", joined)
+	}
+}
+
+// Regression (#36 iso-review round 2, item 2): namespace mode is NOT a
+// privilege boundary when the daemon runs as root — `unshare --user
+// --map-current-user` maps root→root, so the sandboxed agent keeps real uid 0
+// and full CAP_SYS_ADMIN over the host. prepareLaunch must REFUSE a namespace
+// launch when euid == 0, and permit it only with the explicit `allow_root`
+// opt-in. A non-root daemon (the default via stubPlatform) is unaffected, and
+// so are the other modes.
+func TestPrepareLaunchNamespaceRefusesRoot(t *testing.T) {
+	stubPlatform(t)                         // pins euid 1000 by default
+	launchGeteuid = func() int { return 0 } // now pretend the daemon is root
+
+	// The exact hole: namespace mode as root, no opt-in → refused, no launch.
+	ns := &config.IsolationConfig{Mode: "namespace"}
+	if _, _, _, _, err := prepareLaunch("", "/wt", nil, []string{"claude"}, launchOpts{iso: ns}); err == nil {
+		t.Fatal("namespace mode as root must be refused (it is not a privilege boundary)")
+	} else if !strings.Contains(err.Error(), "not a privilege boundary") || !strings.Contains(err.Error(), "allow_root") {
+		t.Fatalf("refusal must explain the hole and the opt-in: %v", err)
+	}
+
+	// The explicit opt-in permits it (operator acknowledges cleanup/limits use).
+	allow := &config.IsolationConfig{Mode: "namespace", AllowRoot: true}
+	if _, _, _, _, err := prepareLaunch("", "/wt", nil, []string{"claude"}, launchOpts{iso: allow}); err != nil {
+		t.Fatalf("allow_root must permit namespace mode as root: %v", err)
+	}
+
+	// Container and user modes remain launchable as root — they DO switch
+	// privilege domain (a container / sudo -u), so root is not a footgun there.
+	cont := &config.IsolationConfig{Mode: "container", Container: &config.ContainerIsolation{Image: "img"}}
+	if _, _, _, _, err := prepareLaunch("", "/wt", nil, []string{"claude"}, launchOpts{iso: cont}); err != nil {
+		t.Fatalf("container mode as root must launch: %v", err)
+	}
+	usr := &config.IsolationConfig{Mode: "user", User: "sbx"}
+	if _, _, _, _, err := prepareLaunch("", "/wt", nil, []string{"claude"}, launchOpts{iso: usr}); err != nil {
+		t.Fatalf("user mode as root must launch: %v", err)
 	}
 }

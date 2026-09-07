@@ -141,6 +141,16 @@ type IsolationConfig struct {
 	// mount namespace. Default false = the agent cannot read the daemon's
 	// config, secrets env, store, or audit trail (#36 iso-review H7).
 	Privileged bool `yaml:"privileged,omitempty"`
+	// AllowRoot (namespace mode only) is the deliberate opt-in to permit
+	// namespace isolation when the daemon runs as root (euid 0). Under root,
+	// `unshare --user --map-current-user` maps root→root: the sandboxed
+	// process keeps real uid 0 and full CAP_SYS_ADMIN over the host, so the
+	// user namespace is NOT a privilege boundary. Default false = conductor
+	// REFUSES namespace mode as root and points you at a non-root daemon user
+	// or mode container (#36 iso-review round 2, item 2). Set true only when
+	// you understand the namespace is being used for cleanup/limits, not as a
+	// security wall.
+	AllowRoot bool `yaml:"allow_root,omitempty"`
 	// Network is the egress policy. ABSENT → no restriction for
 	// config-authored dispatches (agent-authored dispatches still get the
 	// deny-all proxy — deny by default). Present-but-empty → deny-all via

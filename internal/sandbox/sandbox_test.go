@@ -16,7 +16,7 @@ func TestFromConfigNil(t *testing.T) {
 	if _, ok := s.ProxyPolicy(); ok {
 		t.Fatal("nil spec has no proxy policy")
 	}
-	if err := s.Check("linux", nil); err != nil {
+	if err := s.Check("linux", 1000, nil); err != nil {
 		t.Fatalf("nil spec check: %v", err)
 	}
 	argv, err := s.WrapLocal([]string{"tool"}, "/wt", nil, nil)
@@ -152,26 +152,35 @@ func TestCheck(t *testing.T) {
 			return "", fmt.Errorf("%s: not found", name)
 		}
 	}
+	const nonRoot, root = 1000, 0
 	cases := []struct {
 		name string
 		spec *Spec
 		goos string
+		euid int
 		look func(string) (string, error)
 		ok   bool
 	}{
-		{"user ok", &Spec{Mode: "user", User: "s"}, "darwin", have("sudo"), true},
-		{"user no sudo", &Spec{Mode: "user", User: "s"}, "linux", have(), false},
-		{"namespace ok", &Spec{Mode: "namespace"}, "linux", have("unshare"), true},
-		{"namespace non-linux", &Spec{Mode: "namespace"}, "darwin", have("unshare"), false},
-		{"namespace limits need systemd-run", &Spec{Mode: "namespace", Memory: "1g"}, "linux", have("unshare"), false},
-		{"namespace limits ok", &Spec{Mode: "namespace", Memory: "1g"}, "linux", have("unshare", "systemd-run"), true},
-		{"container ok", &Spec{Mode: "container", Image: "i"}, "darwin", have("docker"), true},
-		{"container podman", &Spec{Mode: "container", Image: "i", Engine: "podman"}, "linux", have("podman"), true},
-		{"container missing engine", &Spec{Mode: "container", Image: "i"}, "linux", have(), false},
-		{"unknown mode", &Spec{Mode: "jail"}, "linux", have(), false},
+		{"user ok", &Spec{Mode: "user", User: "s"}, "darwin", nonRoot, have("sudo"), true},
+		{"user no sudo", &Spec{Mode: "user", User: "s"}, "linux", nonRoot, have(), false},
+		{"namespace ok", &Spec{Mode: "namespace"}, "linux", nonRoot, have("unshare"), true},
+		{"namespace non-linux", &Spec{Mode: "namespace"}, "darwin", nonRoot, have("unshare"), false},
+		{"namespace limits need systemd-run", &Spec{Mode: "namespace", Memory: "1g"}, "linux", nonRoot, have("unshare"), false},
+		{"namespace limits ok", &Spec{Mode: "namespace", Memory: "1g"}, "linux", nonRoot, have("unshare", "systemd-run"), true},
+		// #36 iso-review round 2, item 2: namespace mode as root is not a
+		// boundary (--map-current-user maps root→root) — refuse by default,
+		// permit only with the explicit allow_root opt-in.
+		{"namespace root refused", &Spec{Mode: "namespace"}, "linux", root, have("unshare"), false},
+		{"namespace root allow_root", &Spec{Mode: "namespace", AllowRoot: true}, "linux", root, have("unshare"), true},
+		{"user root ok", &Spec{Mode: "user", User: "s"}, "linux", root, have("sudo"), true},
+		{"container root ok", &Spec{Mode: "container", Image: "i"}, "linux", root, have("docker"), true},
+		{"container ok", &Spec{Mode: "container", Image: "i"}, "darwin", nonRoot, have("docker"), true},
+		{"container podman", &Spec{Mode: "container", Image: "i", Engine: "podman"}, "linux", nonRoot, have("podman"), true},
+		{"container missing engine", &Spec{Mode: "container", Image: "i"}, "linux", nonRoot, have(), false},
+		{"unknown mode", &Spec{Mode: "jail"}, "linux", nonRoot, have(), false},
 	}
 	for _, tc := range cases {
-		err := tc.spec.Check(tc.goos, tc.look)
+		err := tc.spec.Check(tc.goos, tc.euid, tc.look)
 		if (err == nil) != tc.ok {
 			t.Errorf("%s: err=%v want ok=%v", tc.name, err, tc.ok)
 		}

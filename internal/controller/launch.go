@@ -46,6 +46,7 @@ var DaemonMaskPaths []string
 // binaries (sudo/unshare/docker) installed.
 var (
 	launchGOOS     = runtime.GOOS
+	launchGeteuid  = os.Geteuid
 	launchLookPath = exec.LookPath
 )
 
@@ -144,7 +145,7 @@ func prepareLaunch(host, dir string, env, argv []string, opt launchOpts) (wrappe
 			nf.UnixSocket = sock
 			env = append(append([]string(nil), env...), sandbox.ProxyEnv(sandbox.ForwardAddr, cred)...)
 		}
-		if err := spec.Check(launchGOOS, launchLookPath); err != nil {
+		if err := spec.Check(launchGOOS, launchGeteuid(), launchLookPath); err != nil {
 			return nil, "", nil, false, err
 		}
 		wrapped, werr := spec.WrapLocal(argv, dir, envKeys(env), nf)
