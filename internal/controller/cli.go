@@ -175,6 +175,53 @@ func (c *cliController) forget(id string) {
 	c.mu.Unlock()
 }
 
+// cliOutputCap bounds how much combined stdout+stderr a single CLI turn may
+// accumulate in memory. A tool that floods its output (a runaway loop, a
+// megabytes-of-diff dump) must not grow the controller's heap without limit —
+// past the cap the tail is dropped and a truncation marker is appended.
+const cliOutputCap = 1 << 20 // 1 MiB
+
+// boundedBuffer captures output up to a byte cap, discarding anything past it.
+// os/exec copies stdout and stderr with independent goroutines when they share
+// a writer, so Write must be safe for concurrent use.
+type boundedBuffer struct {
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	max       int
+	truncated bool
+}
+
+// Write appends up to the remaining capacity and drops the rest, always
+// reporting the full length written so the exec copier never sees a short write
+// (which would surface as an error and could tear down the process).
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if room := b.max - b.buf.Len(); room > 0 {
+		if len(p) <= room {
+			b.buf.Write(p)
+		} else {
+			b.buf.Write(p[:room])
+			b.truncated = true
+		}
+	} else if len(p) > 0 {
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
+// String returns the captured output, with a truncation marker when the cap was
+// hit so the reader can tell the tail was dropped.
+func (b *boundedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s := b.buf.String()
+	if b.truncated {
+		s += fmt.Sprintf("\n[conductor: output truncated at %d bytes]", b.max)
+	}
+	return s
+}
+
 // startCLIProc starts argv as a subprocess capturing its combined output. The
 // process is session-scoped (ctx cancels it), matching the other controllers'
 // background-agent lifetime.
@@ -187,18 +234,18 @@ func startCLIProc(ctx context.Context, dir string, env, argv []string) (cliProc,
 		cmd.Dir = dir
 	}
 	cmd.Env = append(os.Environ(), env...)
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	buf := &boundedBuffer{max: cliOutputCap}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	return &execProc{cmd: cmd, buf: &buf}, nil
+	return &execProc{cmd: cmd, buf: buf}, nil
 }
 
 type execProc struct {
 	cmd *exec.Cmd
-	buf *bytes.Buffer
+	buf *boundedBuffer
 }
 
 func (p *execProc) Wait() (string, error) {
