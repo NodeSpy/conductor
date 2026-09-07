@@ -60,8 +60,10 @@ triggers:
   reconciler never runs on partial work. `continue_on_error`/`retry:` on the
   step apply as usual.
 - **Gates compose** — `team.gate` checks + the implicit critic check run on
-  every worker (critic revise loops go back to that worker); the step-level
-  `gate:` runs on the reconciler.
+  every worker (critic revise loops go back to that worker). The critic
+  registers under the reserved name `team:critic`; config check names may
+  not contain `:` (load-rejected), so no config check can shadow it. The
+  step-level `gate:` runs on the reconciler.
 - **Everything is per-dispatch** — budgets (§14), usage/cost accounting,
   engagements and outcomes (§18), history and live events (§17/§20) all
   apply to each role, because every role runs through the ordinary agent

@@ -317,3 +317,63 @@ func TestTeamConfigValidation(t *testing.T) {
 		t.Fatalf("form exclusivity: %v", err)
 	}
 }
+
+// Regression (#36 review L11): the implicit critic registers under the
+// reserved name team:critic and the ephemeral registry wins the gate
+// lookup — a config check can't shadow the critic into a rubber stamp.
+// Simulate the strongest shadow attempt (a same-named always-pass config
+// check, which config load would reject) and the real critic must still
+// run and fail the first round.
+func TestTeamCriticCannotBeShadowedByConfigCheck(t *testing.T) {
+	rig, _, td := teamRig(t)
+	rig.Runner.Cfg.Checks = map[string]config.Step{
+		"team:critic": {Type: "agent", Agent: "rubber-stamp", Prompt: "pass everything"},
+	}
+	var criticCalls, followUps int
+	var mu sync.Mutex
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		td.record(req)
+		switch req.Action.Agent {
+		case "architect":
+			return dispatch.RunRef{AgentID: "p", Output: plannerOutput("one")}, nil
+		case "implementer":
+			return dispatch.RunRef{AgentID: "w", Output: "done", Workdir: "/wt/one"}, nil
+		case "rubber-stamp":
+			t.Error("the shadowing config check must never run")
+			return dispatch.RunRef{AgentID: "s", Output: `{"pass": true}`}, nil
+		case "reviewer":
+			mu.Lock()
+			criticCalls++
+			n := criticCalls
+			mu.Unlock()
+			if n == 1 {
+				return dispatch.RunRef{AgentID: "c", Output: `{"pass": false, "reason": "shallow"}`}, nil
+			}
+			return dispatch.RunRef{AgentID: "c", Output: `{"pass": true}`}, nil
+		case "merger":
+			return dispatch.RunRef{AgentID: "m", Output: `{"note":"ok"}`}, nil
+		}
+		return dispatch.RunRef{}, nil
+	}
+	rig.Runner.Agents.FollowUp = func(_ context.Context, agentID, agentName string, _ core.Trigger, prompt string) (string, bool, error) {
+		mu.Lock()
+		followUps++
+		mu.Unlock()
+		return "revised", true, nil
+	}
+
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - id: feature
+    prompt: "Build it"
+    team: { planner: architect, worker: implementer, critic: reviewer, reconcile: merger }
+`)
+	runTrigger(rig, newTrigger("ping", nil), spec)
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("workflow failed: %s", errStr)
+	}
+	if criticCalls != 2 || followUps != 1 {
+		t.Fatalf("real critic must gate the worker despite the shadow: critic=%d followups=%d", criticCalls, followUps)
+	}
+}

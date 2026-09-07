@@ -198,7 +198,9 @@ func (r *Runner) teamWorkerGate(spec *config.TeamSpec) (*config.GateSpec, map[st
 }
 
 // teamCriticCheck is the implicit critic check's registry name.
-const teamCriticCheck = "team-critic"
+// The ':' is load-rejected in config check names, so no operator config can
+// shadow (or be shadowed by) this name (#36 review L11).
+const teamCriticCheck = "team:critic"
 
 // teamChecksKey carries a team's ephemeral checks to runGate's lookup.
 type teamChecksKey struct{}

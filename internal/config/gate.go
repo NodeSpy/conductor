@@ -21,6 +21,9 @@ func (c *Config) validateChecks() error {
 		if strings.TrimSpace(name) == "" {
 			return fmt.Errorf("config: checks: empty check name")
 		}
+		if strings.Contains(name, ":") {
+			return fmt.Errorf("config: checks: %q — check names may not contain ':' (reserved for built-in ephemeral checks like team:critic)", name)
+		}
 		w := "check " + name
 		// The check-specific shape rules run FIRST so their messages win over
 		// the generic step validation's.

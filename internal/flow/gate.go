@@ -134,10 +134,13 @@ func (r *Runner) escalateGate(ctx context.Context, t core.Trigger, step config.S
 func (r *Runner) runGateChecks(ctx context.Context, t core.Trigger, stepID string, spec *config.GateSpec, ref dispatch.RunRef, data map[string]any, round int) []gateCheckResult {
 	var failures []gateCheckResult
 	for _, name := range spec.Run {
-		chk, ok := r.Cfg.Checks[name]
+		// A team step's ephemeral checks (the critic) ride the context and
+		// win the lookup — config names can't contain ':' (load-rejected),
+		// so a config check can never shadow team:critic, and the flipped
+		// order keeps it that way even for legacy-named ephemerals.
+		chk, ok := teamCheck(ctx, name)
 		if !ok {
-			// A team step's ephemeral checks (the critic) ride the context.
-			chk, ok = teamCheck(ctx, name)
+			chk, ok = r.Cfg.Checks[name]
 		}
 		if !ok { // load-validated; belt for dynamic plans
 			failures = append(failures, gateCheckResult{Name: name, Detail: "unknown check"})

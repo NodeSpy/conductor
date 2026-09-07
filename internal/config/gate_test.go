@@ -111,3 +111,13 @@ func TestGateMaxRevisionsDefault(t *testing.T) {
 		t.Fatal("explicit zero must stick (escalate on first fail)")
 	}
 }
+
+// Regression (#36 review L11): ':' is reserved for built-in ephemeral check
+// names (team:critic) — a config check can never take (or shadow) one.
+func TestCheckNamesRejectColon(t *testing.T) {
+	c := gateBase(t)
+	c.Checks["team:critic"] = Step{Type: "command", Command: []string{"true"}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("colon name must be rejected: %v", err)
+	}
+}
