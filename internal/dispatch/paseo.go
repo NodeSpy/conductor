@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -119,7 +120,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// above; adding --new-workspace/--worktree-mode too would conflict. Only emit the
 	// inline worktree flags on the preview path (no pre-create).
 	if worktreeWS == "" {
-		argv = append(argv, checkoutArgs(req)...)
+		argv = append(argv, checkoutArgs(ctx, req)...)
 	}
 
 	// Identity: the agent acts as YOU. GH_TOKEN is your write token, so every
@@ -437,14 +438,14 @@ func (d *Dispatcher) agentInHome(ctx context.Context, id string) bool {
 }
 
 // checkoutArgs maps an action's checkout strategy to paseo worktree flags.
-func checkoutArgs(req Request) []string {
+func checkoutArgs(ctx context.Context, req Request) []string {
 	switch effectiveStrategy(req) {
 	case "checkout-pr":
 		return []string{"--new-workspace", workspaceMode(req), "--worktree-mode", "checkout-pr",
 			"--pr-number", itoa(req.Trigger.Target.PR), "--forge", "github"}
 	case "branch-off":
 		args := []string{"--new-workspace", workspaceMode(req), "--worktree-mode", "branch-off",
-			"--new-branch", branchSlug(req.Trigger)}
+			"--new-branch", branchSlug(ctx, req.Trigger)}
 		if req.Trigger.Target.BaseRef != "" {
 			args = append(args, "--base", req.Trigger.Target.BaseRef)
 		}
@@ -480,7 +481,7 @@ func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir st
 	case "checkout-pr":
 		argv = append(argv, "--pr-number", itoa(req.Trigger.Target.PR), "--forge", "github")
 	case "branch-off":
-		argv = append(argv, "--new-branch", branchSlug(req.Trigger))
+		argv = append(argv, "--new-branch", branchSlug(ctx, req.Trigger))
 		if req.Trigger.Target.BaseRef != "" {
 			argv = append(argv, "--base", req.Trigger.Target.BaseRef)
 		}
@@ -821,8 +822,39 @@ func labelArgs(req Request) []string {
 	return labels
 }
 
-func branchSlug(t core.Trigger) string {
+// branchSuffixKey carries a per-dispatch branch-name suffix through ctx. A
+// team's parallel workers (#36 §19) all dispatch off the SAME trigger under
+// branch-off — without a distinguishing suffix they'd race to create one
+// branch name and collide (#36 review M10).
+type branchSuffixKey struct{}
+
+// WithBranchSuffix marks every branch-off dispatch under ctx with a suffix
+// appended to the derived branch name (e.g. a team worker's subtask id).
+func WithBranchSuffix(ctx context.Context, suffix string) context.Context {
+	if suffix == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, branchSuffixKey{}, suffix)
+}
+
+// slugRe strips anything a git ref (or paseo) could choke on.
+var slugRe = regexp.MustCompile(`[^a-z0-9._-]+`)
+
+func branchSuffixFrom(ctx context.Context) string {
+	s, _ := ctx.Value(branchSuffixKey{}).(string)
+	s = slugRe.ReplaceAllString(strings.ToLower(s), "-")
+	s = strings.Trim(s, "-.")
+	if len(s) > 32 {
+		s = s[:32]
+	}
+	return s
+}
+
+func branchSlug(ctx context.Context, t core.Trigger) string {
 	s := fmt.Sprintf("conductor/%s-%d", t.Kind, t.Target.Number)
+	if sfx := branchSuffixFrom(ctx); sfx != "" {
+		s += "-" + sfx
+	}
 	return strings.ReplaceAll(s, " ", "-")
 }
 

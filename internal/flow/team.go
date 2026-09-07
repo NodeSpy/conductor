@@ -9,6 +9,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // The team step (#36 §19): ONE unit of work split across agents.
@@ -108,6 +109,10 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 				Prompt:   fmt.Sprintf("You are one WORKER of an agent team on this overall task:\n\n%s\n\nYOUR subtask (%s):\n\n%s\n\nWork only your subtask, in this worktree.", step.Prompt, st.ID, st.Prompt),
 				Checkout: step.Checkout, Env: step.Env, Gate: workerGate}
 			wctx := withTeamChecks(ctx, extraChecks)
+			// Parallel workers off one trigger derive the same branch name
+			// under checkout branch-off; the subtask id keeps each worker's
+			// branch/worktree distinct (#36 review M10).
+			wctx = dispatch.WithBranchSuffix(wctx, st.ID)
 			out, _, werr := r.execAgent(wctx, t, wstep, fmt.Sprintf("%s:%s", id, st.ID), local, shadow)
 			results[i] = workerResult{Subtask: st, Outputs: out, Err: werr}
 		}(i, st)

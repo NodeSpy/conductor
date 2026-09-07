@@ -10,7 +10,10 @@ runtime:
    `max_workers`; zero, duplicate, or over-cap subtasks fail loudly);
 2. **work** — each subtask dispatches the worker profile **in parallel**,
    each in its own isolated worktree (the ordinary dispatch machinery, plus
-   whatever [[Isolation]] the worker's profile carries);
+   whatever [[Isolation]] the worker's profile carries); under checkout
+   `branch-off` every worker's branch name carries its subtask id as a
+   suffix (`conductor/<kind>-<n>-<subtask>`), so parallel workers off one
+   trigger never collide on a branch;
 3. **judge** — the critic reviews each worker's proposed change through the
    [[Gates]] machinery: an implicit agent check with a mandatory
    `pass: true|false` verdict, full revise loop and escalation included;

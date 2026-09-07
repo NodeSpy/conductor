@@ -400,7 +400,7 @@ func TestLabelArgsAndSlug(t *testing.T) {
 			t.Fatalf("labels missing %q: %s", want, labels)
 		}
 	}
-	if got := branchSlug(core.Trigger{Kind: "merge conflict", Target: core.Target{Number: 7}}); got != "conductor/merge-conflict-7" {
+	if got := branchSlug(context.Background(), core.Trigger{Kind: "merge conflict", Target: core.Target{Number: 7}}); got != "conductor/merge-conflict-7" {
 		t.Fatalf("slug: %q", got)
 	}
 }
@@ -422,5 +422,44 @@ func TestTemplateDataPrecedence(t *testing.T) {
 	}
 	if d["app_token"] != "at" || d["gh_token"] != "ut" {
 		t.Fatal("tokens plumbed")
+	}
+}
+
+// Regression (#36 review M10): a team's parallel workers dispatch off ONE
+// trigger — under checkout branch-off they'd all derive the same branch name
+// and collide. The per-worker suffix (set via WithBranchSuffix) keeps every
+// worker's --new-branch distinct; a suffix-less dispatch is unchanged.
+func TestBranchSuffixKeepsTeamWorkerBranchesDistinct(t *testing.T) {
+	tr := core.Trigger{Kind: "team_task", Target: core.Target{Number: 7}}
+	base := branchSlug(context.Background(), tr)
+	if base != "conductor/team_task-7" {
+		t.Fatalf("base slug: %q", base)
+	}
+	w1 := branchSlug(WithBranchSuffix(context.Background(), "auth-api"), tr)
+	w2 := branchSlug(WithBranchSuffix(context.Background(), "auth-ui"), tr)
+	if w1 == w2 || w1 == base {
+		t.Fatalf("worker branches must be distinct: %q %q %q", base, w1, w2)
+	}
+	if w1 != "conductor/team_task-7-auth-api" {
+		t.Fatalf("suffix shape: %q", w1)
+	}
+	// Hostile subtask ids can't smuggle ref syntax into the branch name.
+	got := branchSlug(WithBranchSuffix(context.Background(), "../evil ref~^:HEAD"), tr)
+	if strings.ContainsAny(got, " ~^:\\") || strings.Contains(got, "..") {
+		t.Fatalf("unsanitized suffix: %q", got)
+	}
+
+	// And it reaches the actual paseo argv: branch-off checkout args carry
+	// the suffixed --new-branch.
+	req := Request{Trigger: tr, Action: config.Action{Checkout: "branch-off"}}
+	args := checkoutArgs(WithBranchSuffix(context.Background(), "auth-api"), req)
+	found := false
+	for i, a := range args {
+		if a == "--new-branch" && i+1 < len(args) && args[i+1] == "conductor/team_task-7-auth-api" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("checkout args missing suffixed branch: %v", args)
 	}
 }
