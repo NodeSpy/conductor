@@ -324,15 +324,27 @@ agents:
 - **`mode: container`** launches inside `docker`/`podman run` with the
   worktree bind-mounted; `deny: true` becomes `--network=none`.
 
+In namespace mode the daemon's own state/config/secrets/audit directories are
+**masked** from the sandbox's mount view by default; `privileged: true` is the
+deliberate opt-out that lets the sandbox see the daemon's filesystem. And
+because a user namespace created by a **root** daemon maps root→root — no
+privilege boundary at all — conductor **refuses** namespace mode when it runs as
+root (euid 0) and points you at a non-root daemon user or `mode: container`;
+`allow_root: true` forces it anyway, for cleanup/limits only, never as a security
+wall.
+
 **Egress allowlist.** A `network:` block routes the runtime's HTTP(S)
 traffic through conductor's own loopback filtering proxy: `egress:` patterns
 (`host`, `host:port`, `*.glob:443`) are allowed, everything else is denied
 with a 403 and an `egress_denied` audit record. An empty `network: {}` is
 deny-all. **Agent-authored dispatches (§11 plans) get the deny-all proxy by
 default** — no config needed; an explicit `network.egress:` on the profile
-opts specific targets back in. The proxy is authoritative for well-behaved
-runtimes; when you need a structural guarantee, use `deny: true` under
-namespace/container mode.
+opts specific targets back in. Under **`mode: user` the allowlist is only
+advisory** — it sets the runtime's proxy env vars, which a determined process
+could unset (`conductor validate` warns). For a structural guarantee use
+`deny: true` (a real network namespace / `--network=none`), or `deny: true` plus
+`egress:` under namespace/container mode for an *enforced* allowlist: no network
+at all except a forwarder into the proxy.
 
 A `hosts:` entry can carry `isolation:` too (modes user/namespace): every
 script that host runs — including `policy.agent_authored.host` sandbox code —
@@ -580,7 +592,14 @@ agents:
       secrets_via: broker          # broker | env (deprecated) | none (default)
       allow_secrets: [house/deploy_key]  # exact vault entries (<vault>/<key>) the broker may issue
       verbs: [gh.comment, rest.*]  # conductor verbs exposed as agent tools
+      identity: conductor-bot      # `as:` on skill verb writes — gh posts as this, never the operator
+      max_calls: 256               # cap on verb executions per skill session (default 256)
 ```
+
+A profile whose `skill.verbs` admit an `as:`-taking write verb (e.g. a GitHub
+comment) must set `skill.identity` (or inherit `policy.agent_authored.identity`)
+— validated at load — so an agent's writes are attributed to a declared bot
+identity, never silently to the operator.
 
 Agent-authored workflows are also bound by **resource allowlists** on
 `policy.agent_authored` — `allow_secrets`, `allow_stores`, `allow_targets`,
@@ -656,18 +675,29 @@ audit path as `conductor run` — the entry point changes, the containment does
 not. Every invoke is audited with the caller identity and the run id. Off
 unless a `callable:` block is configured.
 
+An async or callback invoke returns `202` immediately; a `callback_url` is then
+POSTed the structured result by the *daemon* when the run finishes. That POST is
+SSRF-guarded: it requires `https://` and **refuses any host resolving into a
+private/LAN/loopback/CGNAT range by default** — so a `callback_url` pointed at
+self-hosted n8n on your own network is blocked until you opt its host in with
+`callable.callback_allow_hosts` (and `callback_allow_http` for a plaintext
+sink). Without that, the run still completes and is readable via `GET /runs/<id>`,
+but the callback never arrives (audited `delivered: false`).
+
 The same callable workflows are also reachable as **MCP tools** for a local
 MCP client (an agent, an IDE, a desktop assistant):
 
 ```
-conductor mcp callable        # stdio MCP server; one tool per `callable: true` workflow
+conductor mcp callable --token n8n-prod   # stdio MCP server; tools = that token's callable workflows
 ```
 
-It is scoped callable-only by construction — the tool list is exactly the
-opted-in triggers — and dispatches over the daemon's same-user control socket
-(the `conductor run` privilege boundary), so it needs no separate token. Each
-tool call blocks for the run's structured result. Details: the Callable-Service
-wiki page.
+By default this face is held to the **same token model** as the HTTP surface: it
+requires `--token <name>`, its tool list is scoped to that token's workflows, and
+the daemon re-checks the callable opt-in + token scope and audits every invoke at
+dispatch time. Set `callable.mcp_local: true` to opt out — exposing every
+`callable: true` workflow with no token and no per-invoke audit, trusting the
+same-user control-socket boundary alone (like `conductor run`). Each tool call
+blocks for the run's structured result. Details: the Callable-Service wiki page.
 
 ## Execution history, live watch & retry
 
@@ -901,6 +931,8 @@ conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
 conductor unlock                           seed the vault key for unattended restarts
 conductor workflows [ls|review|rm]         saved (agent-promoted) workflows: state + health
 conductor config migrate [--dry-run]       legacy → connectors transform
+conductor mcp memory --socket <path>       stdio MCP server: memory + skill broker (agent-facing)
+conductor mcp callable --token <name>      stdio MCP server: invoke callable workflows (external MCP clients)
 conductor update | service …               self-update / service unit management
 ```
 

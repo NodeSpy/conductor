@@ -157,6 +157,8 @@ usage:
   conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
   conductor unlock                      seed the default vault key for non-interactive restarts
   conductor config migrate [--dry-run]  transform a legacy config to the connectors schema
+  conductor mcp memory --socket <path>  stdio MCP server: memory + skill broker (agent-facing)
+  conductor mcp callable --token <name> [--config PATH]  stdio MCP server: invoke callable workflows (external MCP clients)
   conductor workflows ls|review|rm      manage saved (agent-promoted) workflows
   conductor version
 `)

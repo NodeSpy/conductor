@@ -232,6 +232,11 @@ hosts:
 #                      a network namespace (structurally no network). The
 #                      daemon's state/config dirs are MASKED from the mount
 #                      view by default; privileged: true is the opt-out.
+#                      As ROOT (euid 0) the user namespace maps root→root and is
+#                      NOT a privilege boundary, so conductor REFUSES namespace
+#                      mode as root — run a non-root daemon or mode: container.
+#                      allow_root: true forces it anyway (cleanup/limits only,
+#                      never a security wall).
 #   mode: container  — docker/podman run with the worktree bind-mounted;
 #                      deny: true → --network=none.
 #
