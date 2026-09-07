@@ -54,6 +54,11 @@ type Store struct {
 	plans        map[string]*PlanRecord
 	audit        *auditLog
 	now          func() time.Time
+
+	// Run-history retention (#36 §20) — see history.go.
+	historyMaxAge  time.Duration
+	historyMaxRuns int
+	historyPruned  time.Time
 }
 
 // Options configure a Store.
@@ -63,6 +68,10 @@ type Options struct {
 	TTL          time.Duration
 	MaxPRs       int
 	AuditMaxSize int64
+	// HistoryMaxAge / HistoryMaxRuns bound the run-history directory
+	// (#36 §20). Zero values take the package defaults.
+	HistoryMaxAge  time.Duration
+	HistoryMaxRuns int
 }
 
 // Open loads (or creates) the state file and prepares the audit log.
@@ -81,6 +90,15 @@ func Open(o Options) (*Store, error) {
 		affinity:     map[string]*AffinityRecord{},
 		plans:        map[string]*PlanRecord{},
 		now:          time.Now,
+
+		historyMaxAge:  o.HistoryMaxAge,
+		historyMaxRuns: o.HistoryMaxRuns,
+	}
+	if s.historyMaxAge <= 0 {
+		s.historyMaxAge = DefaultHistoryMaxAge
+	}
+	if s.historyMaxRuns == 0 {
+		s.historyMaxRuns = DefaultHistoryMaxRuns
 	}
 	if err := os.MkdirAll(filepath.Dir(o.StatePath), 0o755); err != nil {
 		return nil, err

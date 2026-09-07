@@ -316,12 +316,13 @@ func newTrigger(kind string, ctx map[string]any) core.Trigger {
 // ---------------------------------------------------------------------------
 
 type fakeStore struct {
-	mu     sync.Mutex
-	audits []map[string]any
-	runs   map[string]store.WorkflowRun
-	putLog []store.WorkflowRun
-	delLog []string
-	plans  map[string]store.PlanRecord
+	mu      sync.Mutex
+	audits  []map[string]any
+	runs    map[string]store.WorkflowRun
+	putLog  []store.WorkflowRun
+	history []store.RunHistory
+	delLog  []string
+	plans   map[string]store.PlanRecord
 }
 
 func newFakeStore() *fakeStore {
@@ -353,6 +354,23 @@ func (s *fakeStore) Audit(e map[string]any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.audits = append(s.audits, e)
+}
+
+func (s *fakeStore) PutHistory(rec store.RunHistory) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.history = append(s.history, rec)
+	return nil
+}
+
+// lastHistory returns the most recently persisted history record.
+func (s *fakeStore) lastHistory() (store.RunHistory, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.history) == 0 {
+		return store.RunHistory{}, false
+	}
+	return s.history[len(s.history)-1], true
 }
 
 func (s *fakeStore) PutRun(r store.WorkflowRun) error {

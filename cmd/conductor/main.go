@@ -79,6 +79,8 @@ func main() {
 		err = cmdStatus(args)
 	case "report":
 		err = cmdReport(args)
+	case "runs":
+		err = cmdRuns(args)
 	case "pause":
 		err = cmdPause(args, true)
 	case "resume":
@@ -132,7 +134,9 @@ usage:
   conductor sweep --now [--config PATH] signal the running daemon to sweep now
   conductor force <kind> <owner/repo>#<n>  force an action for a target now (via the running daemon)
   conductor status [--config PATH]      snapshot: live agents, in-flight workflows, stuck/attention
-  conductor report [--days N]           activity summary: dispatches by kind/outcome + attention
+  conductor report [--days N]           activity summary: dispatches by kind/outcome + attention + spend
+  conductor runs [<id>] [--limit N]     recorded executions: list, or one run's step detail
+  conductor runs retry <id> [--from <step>]  re-run a recorded execution (recorded inputs pinned)
   conductor pause | resume              stop / resume dispatch at runtime (no restart)
   conductor update [--force] [--tag vX]  self-update to the latest release (uses gh)
   conductor service install|sync|uninstall  manage the background service unit
@@ -292,11 +296,13 @@ func cmdRun(args []string) error {
 	}
 
 	st, err := store.Open(store.Options{
-		StatePath:    cfg.Store.StateFile,
-		AuditPath:    cfg.Store.AuditLog,
-		TTL:          cfg.Store.StateTTL.D(),
-		MaxPRs:       cfg.Store.MaxTrackedPRs,
-		AuditMaxSize: cfg.Store.AuditMaxSize.Bytes(),
+		StatePath:      cfg.Store.StateFile,
+		AuditPath:      cfg.Store.AuditLog,
+		TTL:            cfg.Store.StateTTL.D(),
+		MaxPRs:         cfg.Store.MaxTrackedPRs,
+		AuditMaxSize:   cfg.Store.AuditMaxSize.Bytes(),
+		HistoryMaxAge:  cfg.Store.HistoryRetention.D(),
+		HistoryMaxRuns: cfg.Store.HistoryMaxRuns,
 	})
 	if err != nil {
 		return err
@@ -630,7 +636,7 @@ func cmdRun(args []string) error {
 	// Control socket: lets `force` inject a specific action for a target, and
 	// `run` fire a manual trigger, into this running engine (parameters a
 	// signal can't carry).
-	go serveControl(ctx, controlSockPath(cfg), igs, eng.Emit, manualTriggersByName(cfg), logf)
+	go serveControl(ctx, controlSockPath(cfg), igs, eng.Emit, manualTriggersByName(cfg), eng.RetryRunByID, logf)
 
 	// The conductor.* verbs act on THIS daemon — wire them to the existing
 	// update/pause/restart/run machinery. Restarting ops fire AFTER the verb
@@ -1031,6 +1037,10 @@ type controlRequest struct {
 	// run: the manual trigger's name and its CLI-provided inputs.
 	Name   string         `json:"name,omitempty"`
 	Inputs map[string]any `json:"inputs,omitempty"`
+	// retry: the recorded run to re-run and the step to resume from
+	// ("" = the recorded failed step, else the beginning). (#36 §20)
+	RunID    string `json:"run_id,omitempty"`
+	FromStep string `json:"from_step,omitempty"`
 }
 
 type controlResponse struct {
@@ -1041,7 +1051,7 @@ type controlResponse struct {
 }
 
 // serveControl runs the daemon's unix control socket until ctx is cancelled.
-func serveControl(ctx context.Context, path string, igs []core.Integration, emit core.EmitFunc, manual map[string]connector.CompiledTrigger, log func(string, ...any)) {
+func serveControl(ctx context.Context, path string, igs []core.Integration, emit core.EmitFunc, manual map[string]connector.CompiledTrigger, retry retryFunc, log func(string, ...any)) {
 	_ = os.Remove(path) // clear a stale socket from a prior run
 	l, err := net.Listen("unix", path)
 	if err != nil {
@@ -1058,11 +1068,15 @@ func serveControl(ctx context.Context, path string, igs []core.Integration, emit
 			}
 			continue
 		}
-		go handleControlConn(ctx, conn, igs, emit, manual, log)
+		go handleControlConn(ctx, conn, igs, emit, manual, retry, log)
 	}
 }
 
-func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integration, emit core.EmitFunc, manual map[string]connector.CompiledTrigger, log func(string, ...any)) {
+// retryFunc re-runs a recorded execution from a step (#36 §20) — the
+// engine's RetryRunByID.
+type retryFunc func(ctx context.Context, runID, fromStep string) (string, error)
+
+func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integration, emit core.EmitFunc, manual map[string]connector.CompiledTrigger, retry retryFunc, log func(string, ...any)) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 	var req controlRequest
@@ -1089,6 +1103,19 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 			return
 		}
 		log("manual trigger %q dispatched (via control socket)", req.Name)
+		writeControlResp(conn, controlResponse{OK: true, Dispatched: 1, Msg: msg})
+	case "retry":
+		if retry == nil {
+			writeControlResp(conn, controlResponse{Error: "retry is not available (no flow runner configured)"})
+			return
+		}
+		msg, err := retry(ctx, req.RunID, req.FromStep)
+		if err != nil {
+			log("retry %q failed: %v", req.RunID, err)
+			writeControlResp(conn, controlResponse{Error: err.Error()})
+			return
+		}
+		log("retry %q dispatched (via control socket)", req.RunID)
 		writeControlResp(conn, controlResponse{OK: true, Dispatched: 1, Msg: msg})
 	default:
 		writeControlResp(conn, controlResponse{Error: "unknown control command: " + req.Cmd})
@@ -1285,6 +1312,15 @@ func cmdRunTrigger(args []string) error {
 	}
 	for k, v := range kvs {
 		inputs[k] = v
+	}
+	// `conductor run <id>` (#36 §20): an argument that isn't a configured
+	// manual trigger but names a RECORDED execution shows its detail — a
+	// configured trigger name always wins, and inspection works with the
+	// daemon down.
+	if _, isTrigger := manualTriggersByName(cfg)[name]; !isTrigger && len(inputs) == 0 {
+		if _, err := store.ReadHistory(historyDirPath(cfg), name); err == nil {
+			return printRunDetail(historyDirPath(cfg), name)
+		}
 	}
 	resp, err := sendControl(cfg, controlRequest{Cmd: "run", Name: name, Inputs: inputs})
 	if err != nil {

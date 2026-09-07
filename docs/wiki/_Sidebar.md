@@ -35,6 +35,7 @@ Connector types
 - [[Integration-RSS]]
 
 Operations
+- [[Runs]]
 - [[Hand-offs]]
 - [[Notifications]]
 - [[Migration]]

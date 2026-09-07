@@ -26,6 +26,7 @@ type flowGateStore struct {
 	audits   []map[string]any
 	runs     map[string]bool
 	sigs     map[string]string
+	history  map[string]store.RunHistory
 }
 
 func newFlowGateStore() *flowGateStore {
@@ -85,6 +86,21 @@ func (s *flowGateStore) DeleteRun(id string) error {
 	return nil
 }
 func (s *flowGateStore) PendingRuns() []store.WorkflowRun { return nil }
+func (s *flowGateStore) PutHistory(rec store.RunHistory) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.history == nil {
+		s.history = map[string]store.RunHistory{}
+	}
+	s.history[rec.ID] = rec
+	return nil
+}
+func (s *flowGateStore) GetHistory(id string) (store.RunHistory, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.history[id]
+	return rec, ok
+}
 
 // fakeFlowDispatcher satisfies the engine Dispatcher (unused by verb-only flows).
 type fakeFlowDispatcher struct{}

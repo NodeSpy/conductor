@@ -36,6 +36,8 @@ type Store interface {
 	PutPlan(rec store.PlanRecord) error
 	GetPlan(runID, stepID string) (store.PlanRecord, bool)
 	DeletePlan(runID, stepID string) error
+	// PutHistory persists the run's execution record (#36 §20).
+	PutHistory(rec store.RunHistory) error
 }
 
 // Notifier emits lifecycle notifications. *notify.Notifier satisfies it.
@@ -206,6 +208,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
 	ctx = r.withRunBudget(ctx, t, spec)
 	ctx, runCost := withCostAcc(ctx)
+	ctx, hist := r.beginHistory(ctx, run, t, spec, shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow))
 	// Stamp the run's provenance for memory writes: a `uses: memory.remember`
 	// step or hook records where the memory came from with no step plumbing.
 	ctx = memory.WithSource(ctx, memory.Source{Run: run.ID, Trigger: t.Kind, Repo: t.Target.Repo})
@@ -242,6 +245,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 		r.audit(map[string]any{"event": "workflow_failed", "repo": t.Target.Repo,
 			"number": t.Target.Number, "kind": t.Kind, "error": err.Error(), "failed_step": failedStepID(err)})
 		r.auditRunCost(t, run.ID, runCost)
+		hist.finish("failed", r.redactErr(err), failedStepID(err), runCost)
 		r.finishRun(run)
 		return
 	}
@@ -250,6 +254,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 		r.Notif.Emit(ctx, "complete", t, "workflow")
 	}
 	r.auditRunCost(t, run.ID, runCost)
+	hist.finish("ok", "", "", runCost)
 	r.finishRun(run)
 }
 
@@ -305,6 +310,13 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 	if checkpoint {
 		start = run.StepIndex
 	}
+	// History records top-level steps only (checkpoint parity) — nested
+	// scopes re-run whole steps on resume/retry, so recording them would
+	// suggest a resolution the retry machinery doesn't have.
+	var hist *histRec
+	if checkpoint {
+		hist = histFrom(ctx)
+	}
 	for i := start; i < len(steps); i++ {
 		step := steps[i]
 		id := stepID(step, i)
@@ -317,12 +329,14 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 			if !ok {
 				r.audit(map[string]any{"event": "step_skipped", "repo": t.Target.Repo,
 					"number": t.Target.Number, "kind": t.Kind, "step": id, "if": step.If})
+				hist.stepDone(id, i, step, "skipped", nil, "", false)
 				r.checkpoint(ctx, run, i, id, step, nil, checkpoint)
 				continue
 			}
 		}
 
 		r.runHooks(ctx, t, step.Hooks, "start", data, "step "+id)
+		hist.stepStart(id, i)
 		outputs, err := r.execStepWithFlow(ctx, t, step, id, data, shadow)
 		if err != nil {
 			// Error strings carry whatever the failing transport embedded —
@@ -339,12 +353,15 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 				r.Log("%s step %s failed (continue_on_error): %v", flowTag(t), id, err)
 				outputs = map[string]any{"error": errStr, "failed": true}
 				r.recordOutputs(data, id, outputs)
+				hist.stepDone(id, i, step, "failed", outputs, errStr, true)
 				r.checkpoint(ctx, run, i, id, step, outputs, checkpoint)
 				continue
 			}
+			hist.stepDone(id, i, step, "failed", nil, errStr, false)
 			return &stepError{id: id, err: err}
 		}
 		r.recordOutputs(data, id, outputs)
+		hist.stepDone(id, i, step, "ok", outputs, "", false)
 		entry := map[string]any{"event": "step", "repo": t.Target.Repo,
 			"number": t.Target.Number, "kind": t.Kind, "step": id}
 		if len(outputs) > 0 && r.Secrets != nil {
@@ -732,6 +749,9 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	if err != nil {
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}
+	// The run history records the step's RENDERED inputs (#36 §20) — the
+	// handle-form options, scrubbed of tracked secret values like the audit.
+	historySetInputs(ctx, id, map[string]any{"uses": step.Uses, "options": rendered})
 	// workflow.* runs in the flow runner itself (it owns the scope, the
 	// depth guard, and the plan guard). Not stubbed under shadow — the
 	// called workflow's own steps stub instead, so a dry-run previews the
@@ -1162,6 +1182,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 			return nil, "", berr
 		}
 	}
+	historySetInputs(ctx, id, map[string]any{"agent": step.Agent, "prompt": clipText(act.Prompt, 4000)})
 	req := dispatch.Request{
 		Trigger: t, Action: act, Profile: profile, Tokens: tokens,
 		Shadow: shadow, Wait: !step.Background, Interactive: step.Background, Data: data,

@@ -119,12 +119,14 @@ func (r *Runner) checkBudget(ctx context.Context, agentName string) error {
 	return r.Agents.CheckBudget(agentName, wf, scope)
 }
 
-// recordUsage charges one agent run's usage (and audits it).
+// recordUsage charges one agent run's usage: the run's own tally and history
+// record always accumulate; the engine's meter/audit service runs when wired.
 func (r *Runner) recordUsage(ctx context.Context, t core.Trigger, agentName, stepID string, u cost.Usage) {
+	costAccFrom(ctx).add(u)
+	historySetCost(ctx, stepID, u)
 	if r.Agents.RecordUsage == nil {
 		return
 	}
 	_, scope := budgetFrom(ctx)
-	costAccFrom(ctx).add(u)
 	r.Agents.RecordUsage(t, agentName, stepID, memory.SourceFrom(ctx).Run, scope, u)
 }

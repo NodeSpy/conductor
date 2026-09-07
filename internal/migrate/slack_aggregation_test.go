@@ -86,10 +86,11 @@ func TestSlackMultiVariantAggregationShape(t *testing.T) {
 // aggStore/aggNotif are minimal flow deps.
 type aggStore struct{ mu sync.Mutex }
 
-func (s *aggStore) Audit(map[string]any)           {}
-func (s *aggStore) PutRun(store.WorkflowRun) error { return nil }
-func (s *aggStore) DeleteRun(string) error         { return nil }
-func (s *aggStore) PutPlan(store.PlanRecord) error { return nil }
+func (s *aggStore) Audit(map[string]any)              {}
+func (s *aggStore) PutRun(store.WorkflowRun) error    { return nil }
+func (s *aggStore) PutHistory(store.RunHistory) error { return nil }
+func (s *aggStore) DeleteRun(string) error            { return nil }
+func (s *aggStore) PutPlan(store.PlanRecord) error    { return nil }
 func (s *aggStore) GetPlan(string, string) (store.PlanRecord, bool) {
 	return store.PlanRecord{}, false
 }

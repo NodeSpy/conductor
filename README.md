@@ -550,6 +550,25 @@ the paseo CLI exposes no MCP launch surface today, so a `skill:` profile on
 a paseo runtime is inert and `conductor validate` says so. Details: the
 Agent-Skill wiki page.
 
+## Execution history & retry
+
+Every run leaves a full record — per-step inputs / outputs / status / timing
+/ cost, secret-scrubbed like the crash-resume checkpoints:
+
+```
+conductor runs                          # recent executions: status, trigger, cost
+conductor runs <id>                     # one run's step-by-step detail
+conductor runs retry <id>               # re-run from the recorded failed step
+conductor runs retry <id> --from build  # …or from a chosen step
+```
+
+A retry pins the recorded outputs of every earlier successful step into
+scope — those steps don't re-run — and resumes through the ordinary flow
+runner (checkpoints, budgets, policy, audit; the new record backlinks the
+original via `retry_of`). Retention is configurable
+(`store.history_retention` / `history_max_runs`, default 14d / 500). See the
+[Runs wiki page](../../wiki/Runs).
+
 ## Introspection and dry-run
 
 ```sh

@@ -458,6 +458,10 @@ type Store struct {
 	StateTTL      Duration `yaml:"state_ttl"`
 	MaxTrackedPRs int      `yaml:"max_tracked_prs"`
 	AuditMaxSize  ByteSize `yaml:"audit_max_size"`
+	// HistoryRetention / HistoryMaxRuns bound the run-history directory
+	// (#36 §20). Zero → 14d / 500 runs.
+	HistoryRetention Duration `yaml:"history_retention"`
+	HistoryMaxRuns   int      `yaml:"history_max_runs"`
 }
 
 // ControllerConfig is one entry in the optional top-level `controllers:` block —

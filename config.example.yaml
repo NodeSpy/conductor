@@ -628,4 +628,6 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 # store:
 #   state_file: ~/.local/state/conductor/state.json
 #   audit_log:  ~/.local/state/conductor/audit.jsonl
+#   history_retention: 14d    # execution-history age bound (#36 §20; default 14d)
+#   history_max_runs: 500     # …and count bound (default 500). See `conductor runs`.
 # dry_run: false

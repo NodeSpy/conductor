@@ -68,6 +68,9 @@ type Store interface {
 	PutRun(r store.WorkflowRun) error
 	DeleteRun(id string) error
 	PendingRuns() []store.WorkflowRun
+	// Execution history (#36 §20): the recorded run a user-driven retry
+	// rehydrates.
+	GetHistory(id string) (store.RunHistory, bool)
 }
 
 // Engine is the central work loop.
