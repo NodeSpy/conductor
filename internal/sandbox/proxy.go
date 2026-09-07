@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/netguard"
 )
 
 // Proxy is one egress-filtering forward proxy bound to 127.0.0.1.
@@ -62,12 +64,11 @@ var errEgressBlockedIP = errors.New("resolved address is in a blocked range")
 // not reach unless the operator listed that exact IP literally (#36
 // iso-review, SSRF round 2). Resolution happens daemon-side, so an
 // allowlisted *name* that resolves to 169.254.169.254 (cloud metadata),
-// loopback, RFC1918/ULA private space, or link-local would otherwise be a
-// rebinding gateway straight off the daemon's own network.
-func specialIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast() || ip.IsInterfaceLocalMulticast() || ip.IsUnspecified() || ip.IsPrivate()
-}
+// loopback, RFC1918/ULA private space, CGNAT, or link-local would otherwise be
+// a rebinding gateway straight off the daemon's own network. It delegates to
+// the shared netguard predicate so this path and the §13 callback poster block
+// the exact same set of ranges.
+func specialIP(ip net.IP) bool { return netguard.Blocked(ip) }
 
 // explicitIPAllow returns the exact IPs the operator listed literally in the
 // allowlist (the host half parses as an IP). ONLY these opt a special-range

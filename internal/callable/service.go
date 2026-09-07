@@ -20,7 +20,6 @@ import (
 	"crypto/subtle"
 	"encoding/base32"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -78,7 +77,11 @@ func New(d Deps) *Service {
 		d.Log = func(string, ...any) {}
 	}
 	if d.HTTPPost == nil {
-		d.HTTPPost = defaultPost
+		// SSRF-guarded by default (#36 §13 review, item 1): a completion callback
+		// is a daemon-side POST to a caller-supplied URL, so the default poster
+		// requires https, refuses internal/rebinding target IPs, and never follows
+		// redirects. Tests inject their own HTTPPost to capture without a network.
+		d.HTTPPost = newCallbackPoster(d.Cfg).post
 	}
 	return &Service{d: d, issued: newIssuedSet(4096)}
 }
@@ -400,24 +403,6 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]any{"error": msg})
-}
-
-func defaultPost(ctx context.Context, url string, body []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("callback returned %d", resp.StatusCode)
-	}
-	return nil
 }
 
 // issuedSet is a bounded run_id → issuing-token-name map, so the service can

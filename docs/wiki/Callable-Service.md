@@ -126,6 +126,31 @@ $ curl -s -X POST localhost:8099/invoke/pr-summary \
 {"run_id":"r5x9…","status":"accepted"}
 ```
 
+**The callback is SSRF-guarded.** `callback_url` is a caller-supplied URL the
+*daemon* dials, so it is fenced the same way as §15 egress — a caller cannot
+turn it into a request off the daemon's own network. By default the poster:
+
+- **requires `https://`** — set `callback_allow_http: true` to permit a plaintext
+  internal endpoint;
+- **resolves the host itself and refuses any resolved IP** in a blocked range —
+  loopback, link-local (incl. cloud metadata `169.254.169.254`), RFC1918/ULA
+  private space, and CGNAT (`100.64.0.0/10`). The IP checked is the IP dialed, so
+  a hostname that resolves to an internal address is refused even under
+  attacker-controlled DNS (no rebinding window);
+- **never follows redirects** — a `30x` cannot bounce delivery onto an internal
+  host.
+
+A refused callback is audited (`delivered: false`) with the reason and never
+sent. To deliver to a deliberately-internal endpoint, opt its **exact IP** back
+in with `callback_allow_hosts` (a hostname never opts an IP in — only the literal
+resolved address, which is what keeps the rebinding path closed):
+
+```yaml
+callable:
+  callback_allow_http: true            # allow http:// callback targets
+  callback_allow_hosts: [10.0.0.9]     # opt this exact internal IP back in
+```
+
 ## Reading a run — `GET /runs/<id>`
 
 ```

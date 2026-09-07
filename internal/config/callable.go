@@ -29,6 +29,19 @@ type CallableConfig struct {
 	// service refuses every request; each token grants an explicit,
 	// enumerated workflow allow-list (no wildcard).
 	Tokens []CallableToken `yaml:"tokens"`
+	// CallbackAllowHTTP relaxes the https-only default for a `callback_url`
+	// delivery target (#36 §13 review, item 1). A completion callback is a
+	// daemon-side POST to a caller-supplied URL; by default only `https://` is
+	// dialed. Set true only for a trusted internal callback endpoint reachable
+	// over plaintext http.
+	CallbackAllowHTTP bool `yaml:"callback_allow_http"`
+	// CallbackAllowHosts opts specific literal IPs back in as `callback_url`
+	// targets even though they sit in an otherwise-blocked range (loopback /
+	// private / link-local / CGNAT). A hostname never opts an IP in — only the
+	// exact resolved IP, which is what closes the DNS-rebinding path: the name
+	// may point anywhere, but the internal address it resolves to is refused
+	// unless listed here. Empty = every internal range is blocked.
+	CallbackAllowHosts []string `yaml:"callback_allow_hosts"`
 }
 
 // CallableToken is one caller identity: a bearer secret OR an HMAC signature
