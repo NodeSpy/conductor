@@ -44,7 +44,7 @@ Per-event additions:
 | `changes_requested` | | `head_ref` |
 | `new_comment` | `from_users`, `ignore_users` | `author`, `comment_body`, `comment_id`, `comment_kind`, `head_ref` |
 | `merge_conflict`, `pr_behind`, `self_review` | | |
-| `failing_checks` | `ignore_checks` | `failing_check`, `run_id`; options `flaky_rerun: {enabled, max}` |
+| `failing_checks` | `ignore_checks` | `failing_check`, `run_id` (the Actions *workflow run* id, resolved from a `check_run`/`check_suite`; `0` for a non-Actions check); options `flaky_rerun: {enabled, max}` — reruns the failed run once it has finished, before the fixer; a rerun that couldn't be requested isn't counted toward `max` |
 | `stuck_checks` | | `run_id`, `run_name`, `run_status`; options `stuck_after`, `poll_interval` |
 | `merge_ready` | `require_label`, `gates: {not_draft, merge_state, review_decision, non_author_approval, threads_resolved}` | |
 | `issue_matched` | `assignee`, `sole_assignee`, `labels_any`, `labels_all`, `authors`, `exclude`, `gates: {no_branch, project}` | |

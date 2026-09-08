@@ -95,8 +95,9 @@ type Engine struct {
 	author      dispatch.Author
 	userTok     func() (string, error)
 	readTok     func() (string, error) // read-token override (nil = use the per-trigger App token)
-	rerun       func(context.Context, core.Trigger, int64)
-	refreshTok  func(core.Trigger) (string, error) // re-mint the App token on resume
+	rerun       func(context.Context, core.Trigger, int64) error
+	runStatus   func(context.Context, core.Trigger, int64) (string, error) // workflow run status (completed|in_progress|queued|…)
+	refreshTok  func(core.Trigger) (string, error)                         // re-mint the App token on resume
 	log         func(string, ...any)
 	hold        *dispatch.HoldSet    // agent ids handed off to the user; the reaper never touches these
 	affinity    *controller.Affinity // keyed live sessions (session:); nil = every dispatch fresh
@@ -174,8 +175,12 @@ type Options struct {
 	// ReadToken, if set, overrides the token used for API reads (GH_TOKEN) instead
 	// of the per-trigger App installation token — for identity.read_token != "app".
 	ReadToken func() (string, error)
-	// Rerun, if set, overrides the flaky-CI rerun step (tests inject a spy).
-	Rerun func(context.Context, core.Trigger, int64)
+	// Rerun, if set, overrides the flaky-CI rerun step (tests inject a spy). A
+	// returned error means the rerun was NOT requested; the attempt isn't counted.
+	Rerun func(context.Context, core.Trigger, int64) error
+	// RunStatus, if set, overrides the workflow-run status lookup the flaky-CI step
+	// uses to wait for a run to finish before rerunning it (tests inject a stub).
+	RunStatus func(context.Context, core.Trigger, int64) (string, error)
 	// RefreshAppToken re-mints the App installation token for a persisted trigger
 	// on resume (the persisted one is expired). Given the trigger's instance +
 	// installation_id. nil disables workflow resume.
@@ -238,6 +243,10 @@ func New(o Options) *Engine {
 	e.rerun = o.Rerun
 	if e.rerun == nil {
 		e.rerun = e.rerunFailed
+	}
+	e.runStatus = o.RunStatus
+	if e.runStatus == nil {
+		e.runStatus = e.workflowRunStatus
 	}
 	e.refreshTok = o.RefreshAppToken
 	e.connectors = o.Connectors
@@ -588,15 +597,26 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		dkind = t.Kind + "#" + t.Variant
 	}
 
-	// Flaky-CI: rerun failed checks once before spawning a fix agent.
-	if t.Kind == "failing_checks" && act.FlakyRerun.Enabled {
+	// Flaky-CI: rerun the failed run once before spawning a fix agent. run_id is 0
+	// for a non-Actions check (nothing to rerun) — straight to the fixer.
+	if runID := toInt64(t.Context["run_id"]); t.Kind == "failing_checks" && act.FlakyRerun.Enabled && runID > 0 {
+		// One failed job cancels its siblings, so failing check_run events land while
+		// the run is still finishing — GitHub refuses to rerun a run in progress, and
+		// the same holds for a stale failure event arriving after we've already kicked
+		// off the rerun. Either way: wait; the run's completion re-triggers us.
+		if status, err := e.runStatus(ctx, t, runID); err == nil && status != "completed" {
+			e.log("%s run %d still %s — waiting for it to finish", tag(t), runID, status)
+			return
+		}
 		maxRerun := act.FlakyRerun.Max
 		if maxRerun <= 0 {
 			maxRerun = 1
 		}
 		if e.store.Attempts(key, "failing_checks_rerun", head) < maxRerun {
-			if runID := toInt64(t.Context["run_id"]); runID > 0 {
-				e.rerun(ctx, t, runID)
+			if err := e.rerun(ctx, t, runID); err != nil {
+				// Not requested, so don't burn the attempt; fall through to the fixer.
+				e.log("%s flaky rerun run %d: %v — dispatching the fixer instead", tag(t), runID, err)
+			} else {
 				_ = e.store.Record(key, "failing_checks_rerun", head, head)
 				e.store.Audit(map[string]any{"event": "flaky_rerun", "repo": t.Target.Repo,
 					"number": t.Target.Number, "run_id": runID})
@@ -1237,20 +1257,38 @@ func agentWaitTimeout(p config.AgentProfile) time.Duration {
 	return time.Hour
 }
 
-// rerunFailed re-runs the failed jobs of a workflow run, as you.
-func (e *Engine) rerunFailed(ctx context.Context, t core.Trigger, runID int64) {
-	tok := ""
-	if e.userTok != nil {
-		tok, _ = e.userTok()
-	}
+// rerunFailed re-runs the failed jobs of a workflow run, as you. Returns the gh
+// error (with its output) when the rerun could not be requested.
+func (e *Engine) rerunFailed(ctx context.Context, t core.Trigger, runID int64) error {
 	c := exec.CommandContext(ctx, "gh", "run", "rerun", fmt.Sprintf("%d", runID),
 		"--failed", "--repo", t.Target.Repo)
-	c.Env = append(os.Environ(), "GH_TOKEN="+tok)
+	c.Env = append(os.Environ(), "GH_TOKEN="+e.userToken())
 	if out, err := c.CombinedOutput(); err != nil {
-		e.log("%s flaky rerun run %d: %v: %s", tag(t), runID, err, out)
-	} else {
-		e.log("%s flaky rerun triggered (run %d)", tag(t), runID)
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
+	e.log("%s flaky rerun triggered (run %d)", tag(t), runID)
+	return nil
+}
+
+// workflowRunStatus reads a workflow run's status (queued|in_progress|completed|…), as you.
+func (e *Engine) workflowRunStatus(ctx context.Context, t core.Trigger, runID int64) (string, error) {
+	c := exec.CommandContext(ctx, "gh", "api", fmt.Sprintf("repos/%s/actions/runs/%d", t.Target.Repo, runID),
+		"--jq", ".status")
+	c.Env = append(os.Environ(), "GH_TOKEN="+e.userToken())
+	out, err := c.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// userToken returns your GitHub token ("" when unavailable).
+func (e *Engine) userToken() string {
+	if e.userTok == nil {
+		return ""
+	}
+	tok, _ := e.userTok()
+	return tok
 }
 
 func toInt64(v any) int64 {

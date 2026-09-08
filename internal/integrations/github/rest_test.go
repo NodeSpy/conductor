@@ -28,6 +28,14 @@ func stubAPI(t *testing.T, mergeableState string) (*httptest.Server, *appAuth) {
 	mux.HandleFunc("/repos/acme/w/pulls/{num}/requested_reviewers", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, `{"users":[{"login":"me"}],"teams":[]}`)
 	})
+	// Actions job 321 belongs to run 555; any other job id is not an Actions job.
+	mux.HandleFunc("/repos/acme/w/actions/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("id") != "321" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		fmt.Fprint(w, `{"id":321,"run_id":555}`)
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 

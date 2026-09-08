@@ -96,13 +96,15 @@ func baseCfg() *config.Config {
 	return c
 }
 
-func newEng(t *testing.T, cfg *config.Config, d *fakeDispatcher, n *fakeNotifier, rerun func(context.Context, core.Trigger, int64)) (*Engine, *store.Store) {
+func newEng(t *testing.T, cfg *config.Config, d *fakeDispatcher, n *fakeNotifier, rerun func(context.Context, core.Trigger, int64) error) (*Engine, *store.Store) {
 	st := tempStore(t)
 	e := New(Options{
 		Config: cfg, Store: st, Dispatch: d, Notifier: n,
 		Author:    dispatch.Author{Name: "Me"},
 		UserToken: func() (string, error) { return "utok", nil },
 		Rerun:     rerun,
+		// Runs are finished unless a test says otherwise (never shell out to gh).
+		RunStatus: func(context.Context, core.Trigger, int64) (string, error) { return "completed", nil },
 	})
 	return e, st
 }
@@ -969,7 +971,7 @@ func TestPolicyConcurrencyCapsAgents(t *testing.T) {
 func TestFlakyRerunBeforeDispatch(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	var reran []int64
-	rerun := func(_ context.Context, _ core.Trigger, id int64) { reran = append(reran, id) }
+	rerun := func(_ context.Context, _ core.Trigger, id int64) error { reran = append(reran, id); return nil }
 	e, _ := newEng(t, baseCfg(), d, n, rerun)
 
 	act := config.Action{Type: "agent", Agent: "fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
@@ -988,6 +990,83 @@ func TestFlakyRerunBeforeDispatch(t *testing.T) {
 	e.process(context.Background(), tr)
 	if len(d.reqs) != 1 {
 		t.Fatalf("expected dispatch after rerun, got %d", len(d.reqs))
+	}
+}
+
+func TestFlakyRerunFailureNotCounted(t *testing.T) {
+	// A rerun that gh couldn't request (404 on a bad id, auth, …) must not consume
+	// the single allowed attempt — that's how #5376 skipped straight to the fixer
+	// on every subsequent failing leg. The fixer still runs as the fallback.
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	var reran int
+	fail := true
+	rerun := func(context.Context, core.Trigger, int64) error {
+		reran++
+		if fail {
+			return fmt.Errorf("HTTP 404: Not Found")
+		}
+		return nil
+	}
+	e, _ := newEng(t, baseCfg(), d, n, rerun)
+	act := config.Action{Type: "agent", Agent: "fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
+	tr := agentTrigger("failing_checks", "a/w", 8, "h", "fail@h", act)
+	tr.Context["run_id"] = int64(555)
+
+	e.process(context.Background(), tr)
+	if reran != 1 || len(d.reqs) != 1 {
+		t.Fatalf("failed rerun should fall through to the fixer: reran=%d dispatched=%d", reran, len(d.reqs))
+	}
+	// Next failure: the attempt wasn't burned, so the rerun is tried again (and
+	// now succeeds), with no extra dispatch.
+	fail = false
+	e.process(context.Background(), tr)
+	if reran != 2 || len(d.reqs) != 1 {
+		t.Fatalf("rerun should be retried after an unrequested attempt: reran=%d dispatched=%d", reran, len(d.reqs))
+	}
+}
+
+func TestFlakyRerunWaitsForRunToFinish(t *testing.T) {
+	// One failing job cancels its siblings, so failing check_run events arrive
+	// while the run is still in progress; GitHub won't rerun a running run. Wait
+	// (no rerun, no fixer) until it completes.
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	var reran int
+	e, _ := newEng(t, baseCfg(), d, n, func(context.Context, core.Trigger, int64) error { reran++; return nil })
+	status := "in_progress"
+	e.runStatus = func(context.Context, core.Trigger, int64) (string, error) { return status, nil }
+	act := config.Action{Type: "agent", Agent: "fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
+	tr := agentTrigger("failing_checks", "a/w", 8, "h", "fail@h", act)
+	tr.Context["run_id"] = int64(555)
+
+	e.process(context.Background(), tr)
+	e.process(context.Background(), tr) // a second cancelled leg
+	if reran != 0 || len(d.reqs) != 0 {
+		t.Fatalf("in-progress run: want no rerun/dispatch, got reran=%d dispatched=%d", reran, len(d.reqs))
+	}
+	status = "completed"
+	e.process(context.Background(), tr)
+	if reran != 1 || len(d.reqs) != 0 {
+		t.Fatalf("completed run: want one rerun and no dispatch, got reran=%d dispatched=%d", reran, len(d.reqs))
+	}
+}
+
+func TestFlakyRerunSkippedWithoutRunID(t *testing.T) {
+	// A non-Actions check (run_id 0) has nothing to rerun: straight to the fixer,
+	// without consulting run status.
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	var reran int
+	e, _ := newEng(t, baseCfg(), d, n, func(context.Context, core.Trigger, int64) error { reran++; return nil })
+	e.runStatus = func(context.Context, core.Trigger, int64) (string, error) {
+		t.Fatal("run status should not be looked up without a run id")
+		return "", nil
+	}
+	act := config.Action{Type: "agent", Agent: "fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
+	tr := agentTrigger("failing_checks", "a/w", 8, "h", "fail@h", act)
+	tr.Context["run_id"] = int64(0)
+
+	e.process(context.Background(), tr)
+	if reran != 0 || len(d.reqs) != 1 {
+		t.Fatalf("want dispatch without rerun, got reran=%d dispatched=%d", reran, len(d.reqs))
 	}
 }
 
