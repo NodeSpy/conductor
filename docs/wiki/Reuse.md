@@ -108,7 +108,9 @@ guidance: { replace: "only me" } # reset: drop everything below this level, use 
 
 `agent_guidance:` (the old top-level field) still works — it is folded into the **global**
 `policy.guidance` for back-compat, so connector/trigger-scoped guidance stacks on top of it. If both
-are set, `policy.guidance` wins.
+are set, `policy.guidance` wins. `conductor config migrate` (and the boot auto-migration) rewrites a
+top-level `agent_guidance:` to `policy.guidance` so configs converge on the canonical form; the alias
+stays accepted, so migrating is optional.
 
 > **Behavior change (v0.7.4):** a per-agent `guidance:` now *appends* to the baseline instead of
 > replacing it. To restore the old replace-the-global behavior, write `guidance: { replace: … }`.

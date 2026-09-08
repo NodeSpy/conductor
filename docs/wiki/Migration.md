@@ -69,7 +69,8 @@ binary) unblocks it.
 | `paseo_bin` | the paseo runtime's `bin:` |
 | `control:` (shadow/pause_label/max_concurrent_agents/max_agents_per_hour) | the global `policy:`; an explicit `enabled: false` refuses to migrate (the kill switch is now only the runtime `conductor pause`) |
 | `notify:` (on/via/sinks/digest/push) | triggers on the `conductor.*` lifecycle events, one per enabled event (legacy `escalate` → `conductor.escalate` + `conductor.failed`), whose steps are the sink verbs — generated connectors (`notify-slack`, `notify-ntfy`, …) with byte-identical wire payloads; `digest` → a grouped `conductor.complete` trigger (`group: { window }`); the inert `push` is dropped with a note. The block itself is retired (a standalone pass also rewrites it on already-migrated files) |
-| `agents:`, `agent_guidance`, `store:`, `update:`, `imports:`, `dry_run`, `adopt_open_workspaces` | carried through unchanged |
+| `agents:`, `store:`, `update:`, `imports:`, `dry_run`, `adopt_open_workspaces` | carried through unchanged |
+| `agent_guidance` | folded into `policy.guidance` (the global scope of the guidance cascade) by a standalone pass — see [[Reuse]]; the top-level alias stays accepted |
 
 ## The vaults pass
 
