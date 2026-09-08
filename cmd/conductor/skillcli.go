@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/memory"
 )
@@ -27,37 +31,67 @@ import (
 //	conductor memory recall <query> | remember <text> [--tags a,b] [--scope s]
 //	conductor secret <name>
 
-// skillEndpoint resolves the daemon endpoint from the environment. Only the
-// unix transport is wired today; https:// is the remote-agent path (a later
-// increment) and reports a clear "not yet" rather than silently failing.
-func skillEndpoint() (socket string, err error) {
+// skillEndpoint resolves the raw daemon endpoint from the environment. A
+// local agent gets a unix:// socket path; a remote agent (another machine) gets
+// an https:// URL its daemon is reachable at through the tunnel/reverse proxy.
+func skillEndpoint() (string, error) {
 	ep := strings.TrimSpace(os.Getenv("CONDUCTOR_ENDPOINT"))
 	if ep == "" {
 		return "", fmt.Errorf("CONDUCTOR_ENDPOINT is not set — this command only runs inside a conductor-dispatched agent")
 	}
-	switch {
-	case strings.HasPrefix(ep, "unix://"):
-		return strings.TrimPrefix(ep, "unix://"), nil
-	case strings.HasPrefix(ep, "https://"), strings.HasPrefix(ep, "http://"):
-		return "", fmt.Errorf("remote (%s) skill endpoints are not supported by this build yet", ep)
-	default:
-		return ep, nil // a bare path
-	}
+	return ep, nil
 }
 
 // skillCall dials the daemon endpoint for one op, stamping the session token.
+// unix:// (or a bare path) uses the local socket; http(s):// posts to the
+// remote HTTP face with the token as a bearer credential.
 func skillCall(req memory.IPCRequest) (memory.IPCResponse, error) {
-	socket, err := skillEndpoint()
+	ep, err := skillEndpoint()
 	if err != nil {
 		return memory.IPCResponse{}, err
 	}
-	req.Token = os.Getenv("CONDUCTOR_SKILL_TOKEN")
-	resp, err := memory.IPCCall(socket, req)
+	token := os.Getenv("CONDUCTOR_SKILL_TOKEN")
+	var resp memory.IPCResponse
+	switch {
+	case strings.HasPrefix(ep, "https://"), strings.HasPrefix(ep, "http://"):
+		resp, err = httpSkillCall(ep, token, req)
+	default:
+		req.Token = token
+		resp, err = memory.IPCCall(strings.TrimPrefix(ep, "unix://"), req)
+	}
 	if err != nil {
 		return resp, err
 	}
 	if resp.Error != "" {
 		return resp, fmt.Errorf("%s", resp.Error)
+	}
+	return resp, nil
+}
+
+// httpSkillCall posts one op to the remote HTTP face. The session token rides
+// the Authorization header (never the body), matching the daemon's HTTPHandler.
+func httpSkillCall(url, token string, req memory.IPCRequest) (memory.IPCResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return memory.IPCResponse{}, err
+	}
+	hreq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return memory.IPCResponse{}, err
+	}
+	hreq.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		hreq.Header.Set("Authorization", "Bearer "+token)
+	}
+	client := &http.Client{Timeout: 60 * time.Second}
+	hresp, err := client.Do(hreq)
+	if err != nil {
+		return memory.IPCResponse{}, fmt.Errorf("conductor: remote endpoint %s: %w", url, err)
+	}
+	defer hresp.Body.Close()
+	var resp memory.IPCResponse
+	if err := json.NewDecoder(io.LimitReader(hresp.Body, 8<<20)).Decode(&resp); err != nil {
+		return memory.IPCResponse{}, fmt.Errorf("conductor: read remote response (%s): %w", hresp.Status, err)
 	}
 	return resp, nil
 }
