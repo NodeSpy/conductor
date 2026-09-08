@@ -43,6 +43,21 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	}
 	strat := effectiveStrategy(req)
 
+	// Before creating a fresh worktree, decide whether this dispatch should
+	// instead queue onto an agent already on this PR, adopt an open workspace you
+	// have on its branch, or skip (a burst of feedback on one PR). Doing this
+	// FIRST is what stops the orphan-worktree leak: createWorktree used to run
+	// unconditionally, so every queued/adopted/skipped dispatch left behind a
+	// fresh worktree it never launched an agent into, which paseo keeps as an
+	// orphan (…-1, …-2). Now the worktree is created only when we actually launch.
+	// Real-daemon only (a preview can't query the daemon); interactive hand-offs
+	// keep their dedicated worktree and never queue.
+	if !req.Wait && !req.Interactive && !d.DryRun && !req.Shadow {
+		if ref, handled, err := d.queueOrAdopt(ctx, req, prompt); handled || err != nil {
+			return ref, err
+		}
+	}
+
 	// Working directory. An explicit WorkDir always wins. Otherwise a worktree
 	// checkout (checkout-pr / branch-off) needs --cwd pointed at a local checkout
 	// of the target repo, because paseo derives the forge owner/repo from the
@@ -188,56 +203,8 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		return ref, nil
 	}
 
-	// One worker per PR (autonomous feedback only): if an agent is already working
-	// this PR, hand the new work to it (`paseo send`) so it drains a burst of
-	// feedback instead of spawning a duplicate. A sweep re-derivation (CatchUp) is
-	// skipped — the live agent is already on it; don't re-nudge.
-	//
-	// Excludes interactive hand-offs: a background workflow hand-off (review) has
-	// already been given its own dedicated worktree above and MUST launch a fresh
-	// agent there — never queued onto an existing agent. In particular the same
-	// workflow's just-finished `assess` agent (checkout:none, in the scratch
-	// workspace) can still be alive when the hand-off dispatches — its async
-	// archive races — and queuing to it would run the review in scratch with no PR
-	// checked out, orphaning the worktree. The engine's HasLiveAgent gate already
-	// dedups workflows, so this routing is redundant for hand-offs anyway.
-	if !req.Wait && !req.Interactive {
-		if id := d.liveAgentForPR(ctx, req.Trigger.Key()); id != "" {
-			if req.CatchUp {
-				ref.Skipped = true
-				ref.Output = "skipped: agent " + id + " already working this PR"
-				return ref, nil
-			}
-			if err := d.sendToAgent(ctx, id, prompt); err != nil {
-				return ref, fmt.Errorf("queue to agent %s: %w", id, err)
-			}
-			ref.AgentID = id
-			ref.Queued = true
-			ref.Output = "queued to live agent " + id
-			return ref, nil
-		}
-		// Opt-in: no conductor agent on this PR, but you may have a workspace open on
-		// its branch (where you started the work). Route feedback there instead of
-		// spawning a duplicate worktree. Adopted agents are yours — never relabeled,
-		// never reaped.
-		if d.AdoptOpenWorkspaces && isFeedbackKind(req.Trigger.Kind) {
-			if id := d.adoptAgentForBranch(ctx, req); !d.remote() && id != "" {
-				if req.CatchUp {
-					ref.Skipped = true
-					ref.Output = "skipped: your open agent " + id + " is on this branch"
-					return ref, nil
-				}
-				if err := d.sendToAgent(ctx, id, prompt); err != nil {
-					return ref, fmt.Errorf("queue to open agent %s: %w", id, err)
-				}
-				ref.AgentID = id
-				ref.Queued = true
-				ref.Adopted = true
-				ref.Output = "adopted your open agent " + id
-				return ref, nil
-			}
-		}
-	}
+	// (Queue/adopt/skip was decided up front, before any worktree was created —
+	// see queueOrAdopt near the top. Reaching here means we're launching fresh.)
 
 	// Skill surface on a paseo runtime (#123). paseo exposes no MCP surface of
 	// its own, but the agent it launches has a shell, so it reaches conductor
@@ -915,11 +882,110 @@ func (d *Dispatcher) HasLiveAgent(ctx context.Context, prKey, kind string) bool 
 // Archive soft-deletes a finished agent (paseo archive), used to clean up a
 // non-interactive workflow step's agent the instant it finishes rather than
 // leaving it for the reaper's next poll. A blank id is a no-op.
+//
+// When the agent lives in an isolated worktree WE created, it archives the whole
+// WORKSPACE instead — which reclaims the worktree AND the agent it owns in one
+// shot. Archiving only the agent would strand the worktree: once the agent is
+// archived it drops out of `paseo ls`, so the reaper (which reclaims a worktree
+// by mapping a still-listed agent to its workspace) can never see it again, and
+// the empty worktree lingers forever. A shared/base checkout (checkout:none in
+// the scratch workspace) is never a worktree, so those still archive just the
+// agent — the scratch is left for cullScratch. Best-effort: if the workspace
+// lookup fails, fall back to archiving the agent.
 func (d *Dispatcher) Archive(ctx context.Context, agentID string) error {
 	if agentID == "" {
 		return nil
 	}
+	if wksID := d.agentWorktreeWorkspace(ctx, agentID); wksID != "" {
+		return d.paseoCmd(ctx, "workspace", "archive", wksID).Run()
+	}
 	return d.paseoCmd(ctx, "archive", agentID).Run()
+}
+
+// agentWorktreeWorkspace returns the id of the isolated-worktree workspace the
+// agent lives in, or "" when the agent isn't in one (a shared/base checkout, or
+// it's already gone). It reads the agent's cwd from `paseo ls` and maps it to a
+// worktree via `paseo workspace ls` — the same worktree filter the reaper uses.
+func (d *Dispatcher) agentWorktreeWorkspace(ctx context.Context, agentID string) string {
+	cwd := d.agentCwd(ctx, agentID)
+	if cwd == "" {
+		return ""
+	}
+	out, err := d.paseoCmd(ctx, "workspace", "ls", "--json").Output()
+	if err != nil {
+		return ""
+	}
+	return parseWorktreeWorkspaces(out)[normCwd(cwd)]
+}
+
+// agentCwd returns the working directory of a non-archived agent by id, or "".
+func (d *Dispatcher) agentCwd(ctx context.Context, agentID string) string {
+	out, err := d.paseoCmd(ctx, "ls", "--json").Output()
+	if err != nil {
+		return ""
+	}
+	var agents []struct {
+		ID  string `json:"id"`
+		Cwd string `json:"cwd"`
+	}
+	if json.Unmarshal(out, &agents) != nil {
+		return ""
+	}
+	for _, a := range agents {
+		if a.ID == agentID {
+			return a.Cwd
+		}
+	}
+	return ""
+}
+
+// queueOrAdopt routes a background feedback dispatch onto an EXISTING agent
+// rather than launching a new one — the "one worker per PR" rule. It runs BEFORE
+// any worktree is created (that's the point: a queued/adopted/skipped dispatch
+// must not leave an orphan worktree behind). handled=true means it took care of
+// the dispatch and the caller should return the ref as-is; handled=false means
+// proceed to launch a fresh agent.
+//
+//   - An agent already on this PR (any kind): queue the work to it (`paseo
+//     send`), or — for a sweep re-derivation (CatchUp) — skip, since it's
+//     already on it.
+//   - Otherwise, opt-in: an open workspace YOU have on the branch (where you
+//     started the work) is adopted for feedback instead of spawning a duplicate.
+//     Adopted agents are yours — never relabeled, never reaped.
+//
+// Interactive hand-offs are excluded by the caller: a review hand-off must get
+// its own dedicated worktree and never queue onto another agent (its just-
+// finished assess agent can still be alive, and queuing there would run in the
+// scratch workspace with no PR checked out).
+func (d *Dispatcher) queueOrAdopt(ctx context.Context, req Request, prompt string) (RunRef, bool, error) {
+	ref := RunRef{Backend: "paseo", Kind: req.Trigger.Kind}
+	if id := d.liveAgentForPR(ctx, req.Trigger.Key()); id != "" {
+		if req.CatchUp {
+			ref.Skipped = true
+			ref.Output = "skipped: agent " + id + " already working this PR"
+			return ref, true, nil
+		}
+		if err := d.sendToAgent(ctx, id, prompt); err != nil {
+			return ref, true, fmt.Errorf("queue to agent %s: %w", id, err)
+		}
+		ref.AgentID, ref.Queued, ref.Output = id, true, "queued to live agent "+id
+		return ref, true, nil
+	}
+	if d.AdoptOpenWorkspaces && isFeedbackKind(req.Trigger.Kind) {
+		if id := d.adoptAgentForBranch(ctx, req); !d.remote() && id != "" {
+			if req.CatchUp {
+				ref.Skipped = true
+				ref.Output = "skipped: your open agent " + id + " is on this branch"
+				return ref, true, nil
+			}
+			if err := d.sendToAgent(ctx, id, prompt); err != nil {
+				return ref, true, fmt.Errorf("queue to open agent %s: %w", id, err)
+			}
+			ref.AgentID, ref.Queued, ref.Adopted, ref.Output = id, true, true, "adopted your open agent "+id
+			return ref, true, nil
+		}
+	}
+	return ref, false, nil
 }
 
 // liveAgentForPR returns the id of a non-archived conductor agent already working
