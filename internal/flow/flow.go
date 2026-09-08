@@ -56,8 +56,10 @@ type AgentServices struct {
 	// Tokens resolves the acts-as-you / App tokens for a trigger.
 	Tokens func(t core.Trigger) dispatch.Tokens
 	// Guidance is the house prompt guidance for a profile (the agent's name
-	// keys optional outcome-feedback tuning — #36 §18).
-	Guidance func(agentName string, p config.AgentProfile) string
+	// keys optional outcome-feedback tuning — #36 §18). pol is the trigger's
+	// resolved policy cascade — its Guidance is the scoped layer-0 baseline the
+	// profile's own guidance stacks onto.
+	Guidance func(agentName string, p config.AgentProfile, pol config.Policy) string
 	// Memory renders the shared-memory prompt section for an opted-in
 	// profile ("" otherwise) — appended through the same path Guidance uses.
 	Memory func(agentName string, p config.AgentProfile, t core.Trigger) string
@@ -212,26 +214,42 @@ func botReply(ctx context.Context) (botReplyState, bool) {
 	return st, ok
 }
 
-// resolveBotReply merges the trigger's policy scopes (trigger → connector →
-// global) and pairs the reply_to_bots mode with the trigger's author facts.
-func (r *Runner) resolveBotReply(t core.Trigger, spec config.TriggerSpec) botReplyState {
-	var connPol *config.Policy
+// policyKey carries the run's resolved policy cascade (global → connector →
+// trigger) through the step context, so agent steps can read the scoped
+// guidance baseline without re-resolving it.
+type policyKey struct{}
+
+// policyFrom reads the run's resolved policy off the context (zero Policy if
+// unset — a legacy or test path that never stashed one).
+func policyFrom(ctx context.Context) config.Policy {
+	p, _ := ctx.Value(policyKey{}).(config.Policy)
+	return p
+}
+
+// resolvePolicy merges the trigger's policy scopes most-specific-last (global →
+// connector → trigger).
+func (r *Runner) resolvePolicy(spec config.TriggerSpec) config.Policy {
+	var connPol, global *config.Policy
 	if r.Cfg != nil {
 		if ref, ok := r.Cfg.ConnectorsMap[spec.Connector()]; ok {
 			connPol = ref.Policy
 		}
-	}
-	var global *config.Policy
-	if r.Cfg != nil {
 		global = r.Cfg.Policy
 	}
-	pol := config.MergePolicy(global, connPol, spec.Policy)
+	return config.MergePolicy(global, connPol, spec.Policy)
+}
+
+// resolveBotReply pairs the reply_to_bots mode from the resolved policy with the
+// trigger's author facts.
+func (r *Runner) resolveBotReply(t core.Trigger, spec config.TriggerSpec) botReplyState {
+	pol := r.resolvePolicy(spec)
 	isBot, _ := t.Context["author_is_bot"].(bool)
 	login, _ := t.Context["author"].(string)
 	return botReplyState{mode: pol.ReplyToBotsMode(), authorIsBot: isBot, login: login}
 }
 
 func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, batch *Batch, shadow bool) {
+	ctx = context.WithValue(ctx, policyKey{}, r.resolvePolicy(spec))
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
 	ctx = withDefaultGate(ctx, spec.Gate)
 	ctx = r.withRunBudget(ctx, t, spec)
@@ -1224,7 +1242,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if act.Prompt != "" {
 		act.Prompt += dispatch.WriteWrapperGuidance
 		if r.Agents.Guidance != nil {
-			act.Prompt += r.Agents.Guidance(step.Agent, profile)
+			act.Prompt += r.Agents.Guidance(step.Agent, profile, policyFrom(ctx))
 		}
 		// Opt-in shared memory rides the same append path as guidance; a
 		// profile without memory: gets nothing (no token cost).

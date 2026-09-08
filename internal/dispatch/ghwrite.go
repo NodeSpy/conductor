@@ -38,8 +38,12 @@ const BotReplyGuidance = "\n\n---\n" +
 // ConcisionGuidance is appended to every dispatched agent prompt so the text it
 // posts to GitHub (and its own wrap-up) reads like a person, not an essay. Kept
 // short on purpose.
-const ConcisionGuidance = "\n\n---\n" +
-	"TONE: be concise and human. Anything you post to GitHub — comments, replies, " +
+const ConcisionGuidance = "\n\n---\n" + ConcisionGuidanceText
+
+// ConcisionGuidanceText is the raw body of ConcisionGuidance, without the block
+// separator — the guidance stack ((*Engine).agentGuidance) feeds it through the
+// same wrapGuidance path as every other layer, so it must be unprefixed.
+const ConcisionGuidanceText = "TONE: be concise and human. Anything you post to GitHub — comments, replies, " +
 	"review notes — should read like a busy engineer dashed it off: a sentence or " +
 	"two, plain and direct. No preamble, no restating the question, no summarizing " +
 	"what you did, no headers or bullet dumps unless they genuinely earn their place. " +

@@ -297,24 +297,45 @@ func (e *Engine) gcLoop(ctx context.Context) {
 }
 
 // agentGuidance returns the house tone/format guidance appended to a dispatched
-// agent's prompt. Precedence, most specific first: the profile's own `guidance`,
-// then the top-level `agent_guidance`, then the built-in concise/human default.
-// At each level nil falls through, "" disables, and text (wrapped in the standard
-// separator) is used.
-func (e *Engine) agentGuidance(profile config.AgentProfile) string {
-	base := ""
-	switch {
-	case profile.Guidance != nil:
-		base = wrapGuidance(*profile.Guidance)
-	case e.cfg.AgentGuidance != nil:
-		base = wrapGuidance(*e.cfg.AgentGuidance)
-	default:
-		base = dispatch.ConcisionGuidance
+// agent's prompt. Guidance is *additive* (a stack), not replace-only: layer 0 is
+// the top-level `agent_guidance` (or the built-in concise/human default when that
+// is unset), and the profile's own guidance parts — already carrying any extends:
+// ancestor's parts, prepended during resolveExtends — stack on top as separate
+// blocks. A profile `guidance: { replace: … }` drops layer 0 and every inherited
+// part, using only its own parts (and `replace: ""` disables guidance entirely).
+// If nothing contributes text, the built-in default stands in.
+func (e *Engine) agentGuidance(profile config.AgentProfile, pol config.Policy) string {
+	spec := profile.Guidance
+	replace := spec != nil && spec.Replace
+
+	var parts []string
+	if !replace {
+		// Layer 0 is the policy-resolved baseline (global → connector → trigger,
+		// already stacked by MergePolicy). Fall back to the unfolded top-level
+		// agent_guidance (a config that never ran applyDefaults, e.g. a test),
+		// then to the built-in concise default when nothing is configured. An
+		// explicit "" at any of these renders nothing — a deliberate disable.
+		switch {
+		case pol.Guidance != nil:
+			parts = append(parts, pol.Guidance.Parts...)
+		case e.cfg.AgentGuidance != nil:
+			parts = append(parts, *e.cfg.AgentGuidance)
+		default:
+			parts = append(parts, dispatch.ConcisionGuidanceText)
+		}
+	}
+	if spec != nil {
+		parts = append(parts, spec.Parts...)
+	}
+
+	var b strings.Builder
+	for _, p := range parts {
+		b.WriteString(wrapGuidance(p)) // empty parts render nothing
 	}
 	// The skill blurb (#36 §12) rides the same append path, opted in by the
 	// profile's skill: block. The whole guidance is redactor-filtered — an
 	// injected prompt section must never carry a tracked secret value.
-	return e.redact(base + e.skillGuidance(profile))
+	return e.redact(b.String() + e.skillGuidance(profile))
 }
 
 // skillGuidance tells a skill-enabled agent what its conductor tools are and
@@ -679,7 +700,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		profile = e.cfg.Agents[act.Agent]
 		if act.Prompt != "" {
 			act.Prompt += dispatch.WriteWrapperGuidance
-			act.Prompt += e.agentGuidance(profile)
+			act.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))
 			act.Prompt += e.memoryPrompt(act.Agent, profile, t)
 			if act.RerequestReview {
 				act.Prompt += dispatch.RerequestReviewGuidance

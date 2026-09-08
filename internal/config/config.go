@@ -131,10 +131,13 @@ type Config struct {
 	// opened by hand — instead of spawning a fresh worktree. Opt-in.
 	AdoptOpenWorkspaces bool `yaml:"adopt_open_workspaces"`
 
-	// AgentGuidance is free text appended to every dispatched agent prompt (after
-	// the identity/write wrapper) — house rules for tone/format, e.g. "keep replies
-	// short and human". Unset (nil) → a built-in concise/human-tone default; set to
-	// "" → no guidance; set to your own text → replaces the default.
+	// AgentGuidance is layer 0 of every agent's guidance stack — house rules for
+	// tone/format appended to each dispatched prompt (after the identity/write
+	// wrapper), e.g. "keep replies short and human". A profile's own guidance and
+	// its extends: ancestors stack ON TOP of this rather than replacing it (see
+	// GuidanceSpec and (*Engine).agentGuidance). Unset (nil) → the built-in
+	// concise/human-tone default is layer 0 instead; a profile's `guidance:
+	// { replace: … }` drops this layer for that agent.
 	AgentGuidance *string `yaml:"agent_guidance"`
 }
 
@@ -619,10 +622,11 @@ type AgentProfile struct {
 	WaitTimeout     Duration          `yaml:"wait_timeout"`
 	ArchiveWhenDone bool              `yaml:"archive_when_done"`
 	Labels          map[string]string `yaml:"labels"`
-	// Guidance overrides the top-level agent_guidance for THIS agent (house tone/
-	// format rules appended to its prompt). Unset (nil) → fall through to the
-	// top-level agent_guidance (then the built-in default); "" → none; text → that.
-	Guidance *string `yaml:"guidance"`
+	// Guidance layers house tone/format rules onto THIS agent's prompt. It is
+	// additive: the top-level agent_guidance (layer 0) and any extends: ancestor's
+	// guidance stack underneath it, rather than being replaced (see GuidanceSpec).
+	// Unset (nil) → inherit the stack unchanged; `{ replace: … }` → reset it.
+	Guidance *GuidanceSpec `yaml:"guidance"`
 	// Memory opts this agent into shared-memory prompt injection: true for
 	// the defaults (global + target repo + own agent scope), or a filter map
 	// { scopes, tags, limit }. Absent → no injection, no token cost.
@@ -1148,6 +1152,18 @@ func splitYAMLComment(line string) (code, comment string) {
 func (c *Config) applyDefaults() {
 	if c.PaseoBin == "" {
 		c.PaseoBin = "paseo"
+	}
+	// Back-compat: the top-level agent_guidance is now the GLOBAL scope of
+	// policy.guidance. Fold it in so connector/trigger-scoped guidance stacks
+	// on top of it through the normal policy cascade. policy.guidance (if set
+	// explicitly at global scope) wins; agent_guidance is then ignored.
+	if c.AgentGuidance != nil {
+		if c.Policy == nil {
+			c.Policy = &Policy{}
+		}
+		if c.Policy.Guidance == nil {
+			c.Policy.Guidance = &GuidanceSpec{Parts: []string{*c.AgentGuidance}}
+		}
 	}
 	if c.Store.StateFile == "" {
 		c.Store.StateFile = filepath.Join(StateDir(), "state.json")

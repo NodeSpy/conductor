@@ -742,6 +742,15 @@ type Policy struct {
 	// dispatches shed like the agent-count budget (recorded, retried when
 	// the window frees) and notify.
 	Budget *BudgetPolicy `yaml:"budget,omitempty"`
+	// Guidance is the scoped house-tone baseline (layer 0) for every agent
+	// this scope governs — the successor to the top-level agent_guidance (which
+	// now folds into the global scope's Guidance). Because policy cascades
+	// global → connector → trigger, the baseline is scopable: a broader scope's
+	// guidance stacks UNDER a narrower one by default, and a scope using the
+	// `{ replace: … }` form resets the stack from that scope down. The agent
+	// profile's own guidance (with its extends: chain) then stacks on top of
+	// this resolved baseline. See MergePolicy and (*Engine).agentGuidance.
+	Guidance *GuidanceSpec `yaml:"guidance,omitempty"`
 }
 
 // BudgetPolicy is one hard spend cap: $ and/or tokens over a rolling window.
@@ -970,6 +979,20 @@ func MergePolicy(scopes ...*Policy) Policy {
 		}
 		if p.Budget != nil {
 			out.Budget = p.Budget
+		}
+		// Guidance is the one field that STACKS across scopes instead of
+		// most-specific-wins: a scope's parts append under the narrower scope's,
+		// so a trigger adds to (rather than erases) the global house tone. The
+		// `{ replace: … }` form opts back into most-specific-wins — it resets
+		// the accumulation to this scope's own parts. The merged result's
+		// Replace flag is not meaningful downstream (the engine reads Parts).
+		if p.Guidance != nil {
+			if p.Guidance.Replace || out.Guidance == nil {
+				out.Guidance = &GuidanceSpec{Parts: append([]string(nil), p.Guidance.Parts...)}
+			} else {
+				merged := append([]string(nil), out.Guidance.Parts...)
+				out.Guidance = &GuidanceSpec{Parts: append(merged, p.Guidance.Parts...)}
+			}
 		}
 	}
 	return out
