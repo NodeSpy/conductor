@@ -23,6 +23,26 @@ triggers:
       - { at: done, uses: slack-ops.post, options: { text: "resolved {{.repo}}#{{.pr}}" } }
 ```
 
+## What sets it apart
+
+Most workflow tools wire events to API calls. conductor's steps run **autonomous
+coding agents** — they check out a repo, edit in a worktree, run commands, and open
+a PR — and the platform is built to direct and contain that:
+
+- **Agent-authored workflows** — an agent can plan a multi-step workflow at runtime
+  and run it under guardrails: an allow-list of the steps, connectors, and secrets it
+  may touch, so the plan can't reach past what you granted ([[Workflows]]).
+- **Quality gates on agent output** — tests, lint, or a critic agent must pass before
+  a proposed change lands; a failure loops back a revise ([[Gates]]).
+- **Governance for autonomous work** — cost/token budgets ([[Cost-Accounting]]),
+  OS-enforced isolation with an egress allow-list ([[Isolation]]), and a secret broker
+  so agents act *through* conductor without seeing raw secret values ([[Agent-Skill]]).
+- **Multi-agent teams** ([[Teams]]), scoped **memory** across runs ([[Memory]]), and an
+  **outcome-learning** loop ([[Outcomes]]).
+
+Another orchestrator (n8n and the like) can also call conductor's authenticated
+`/invoke` API for the agent work it does ([[Callable-Service]]).
+
 ## The model
 
 - **[[Connectors]]** — external services, each with events (`on:`) and verbs
