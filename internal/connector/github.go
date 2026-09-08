@@ -164,12 +164,38 @@ var githubDecl = &TypeDecl{
 			Outputs: Schema{"id": {Type: TInt}, "url": {Type: TString}},
 		},
 		{
-			Name: "rerequest_review", Desc: "re-request review from reviewers",
+			Name: "request_review", Desc: "request review from users/teams on a PR (also re-requests one who already reviewed)",
+			Options: Schema{
+				"repo":           {Type: TString, Required: true},
+				"pr":             {Type: TInt, Required: true},
+				"reviewers":      {Type: TList, Desc: "user logins"},
+				"team_reviewers": {Type: TList, Desc: "team slugs"},
+				"as":             {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"ok": {Type: TBool}},
+		},
+		{
+			// Back-compat alias of request_review: GitHub has one endpoint for
+			// requesting reviewers, and re-requesting a prior reviewer is the
+			// same call. Kept because live configs reference it for the
+			// re-review-on-new-changes flow.
+			Name: "rerequest_review", Desc: "re-request review (alias of request_review)",
 			Options: Schema{
 				"repo":           {Type: TString, Required: true},
 				"pr":             {Type: TInt, Required: true},
 				"reviewers":      {Type: TList, Desc: "logins"},
 				"team_reviewers": {Type: TList, Desc: "team slugs"},
+				"as":             {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"ok": {Type: TBool}},
+		},
+		{
+			Name: "remove_reviewer", Desc: "cancel a pending review request (remove requested users/teams)",
+			Options: Schema{
+				"repo":           {Type: TString, Required: true},
+				"pr":             {Type: TInt, Required: true},
+				"reviewers":      {Type: TList, Desc: "user logins to un-request"},
+				"team_reviewers": {Type: TList, Desc: "team slugs to un-request"},
 				"as":             {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"ok": {Type: TBool}},
@@ -736,9 +762,9 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 			return nil, err
 		}
 		return map[string]any{"id": out.ID, "url": out.HTMLURL}, nil
-	case "rerequest_review":
+	case "request_review", "rerequest_review", "remove_reviewer":
 		if number == 0 {
-			return nil, fmt.Errorf("github.rerequest_review: options.pr is required")
+			return nil, fmt.Errorf("github.%s: options.pr is required", verb)
 		}
 		body := map[string]any{}
 		if rs := toStrings(opts["reviewers"]); len(rs) > 0 {
@@ -748,9 +774,18 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 			body["team_reviewers"] = ts
 		}
 		if len(body) == 0 {
-			return nil, fmt.Errorf("github.rerequest_review: set options.reviewers and/or team_reviewers")
+			return nil, fmt.Errorf("github.%s: set options.reviewers and/or team_reviewers", verb)
 		}
-		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d/requested_reviewers", base, repo, number), body, nil); err != nil {
+		u := fmt.Sprintf("%s/repos/%s/pulls/%d/requested_reviewers", base, repo, number)
+		// Same endpoint: POST requests reviewers (and re-requests a prior one),
+		// DELETE cancels a pending request.
+		var err error
+		if verb == "remove_reviewer" {
+			err = g.del(ctx, tok, u, body)
+		} else {
+			err = g.post(ctx, tok, u, body, nil)
+		}
+		if err != nil {
 			return nil, err
 		}
 		return map[string]any{"ok": true}, nil

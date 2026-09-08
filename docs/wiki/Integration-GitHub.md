@@ -63,7 +63,9 @@ keeps their dedup state separate).
 |---|---|---|
 | `comment` | `repo`*, `number`/`pr`*, `body`*, `as` | `id`, `url` |
 | `reply` | `repo`*, `pr`*, `in_reply_to`*, `body`*, `as` | `id`, `url` |
-| `rerequest_review` | `repo`*, `pr`*, `reviewers`/`team_reviewers`, `as` | `ok` |
+| `request_review` | `repo`*, `pr`*, `reviewers`/`team_reviewers`, `as` | `ok` — request review (also re-requests a prior reviewer) |
+| `rerequest_review` | `repo`*, `pr`*, `reviewers`/`team_reviewers`, `as` | `ok` — alias of `request_review` |
+| `remove_reviewer` | `repo`*, `pr`*, `reviewers`/`team_reviewers`, `as` | `ok` — cancel a pending review request |
 | `submit_review` | `repo`*, `pr`*, `event`* (APPROVE\|REQUEST_CHANGES\|COMMENT), `body`, `comments`, `as` | `id`, `comments` |
 | `add_labels` | `repo`*, `number`*, `labels`*, `as` | `ok` |
 | `sweep` | — | `nudged` — run the catch-up sweep now (daemon-global; `conductor sweep --now`, verb-shaped) |

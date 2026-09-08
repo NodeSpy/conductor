@@ -846,3 +846,49 @@ func TestGithubWriteInvalidatesCache(t *testing.T) {
 		t.Fatalf("after write the cache must be cold: %d GETs, want 2", n)
 	}
 }
+
+func TestGithubReviewRequestVerbs(t *testing.T) {
+	var last struct {
+		method, path string
+		body         map[string]any
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		last.method, last.path = r.Method, r.URL.Path
+		last.body = nil
+		json.NewDecoder(r.Body).Decode(&last.body)
+		json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	// request_review → POST requested_reviewers with the reviewers.
+	if _, err := impl.Invoke(ctx, "request_review", map[string]any{"repo": "o/r", "pr": 7, "reviewers": []any{"alice"}, "team_reviewers": []any{"platform"}}); err != nil {
+		t.Fatal(err)
+	}
+	if last.method != "POST" || last.path != "/repos/o/r/pulls/7/requested_reviewers" {
+		t.Fatalf("request_review req: %+v", last)
+	}
+	if rs, _ := last.body["reviewers"].([]any); len(rs) != 1 || rs[0] != "alice" {
+		t.Fatalf("request_review body: %+v", last.body)
+	}
+	// rerequest_review is the same endpoint (back-compat alias).
+	if _, err := impl.Invoke(ctx, "rerequest_review", map[string]any{"repo": "o/r", "pr": 7, "reviewers": []any{"bob"}}); err != nil {
+		t.Fatal(err)
+	}
+	if last.method != "POST" || last.path != "/repos/o/r/pulls/7/requested_reviewers" {
+		t.Fatalf("rerequest_review req: %+v", last)
+	}
+	// remove_reviewer → DELETE the same endpoint.
+	if _, err := impl.Invoke(ctx, "remove_reviewer", map[string]any{"repo": "o/r", "pr": 7, "reviewers": []any{"alice"}}); err != nil {
+		t.Fatal(err)
+	}
+	if last.method != "DELETE" || last.path != "/repos/o/r/pulls/7/requested_reviewers" {
+		t.Fatalf("remove_reviewer req: %+v", last)
+	}
+	// Nothing to request is an error.
+	if _, err := impl.Invoke(ctx, "request_review", map[string]any{"repo": "o/r", "pr": 7}); err == nil {
+		t.Fatal("request_review with no reviewers must error")
+	}
+}
