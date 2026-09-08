@@ -29,7 +29,7 @@ func peerInfo(conn net.Conn) Peer {
 	}); cerr != nil || serr != nil || cred == nil || cred.Pid == 0 {
 		return Peer{}
 	}
-	return Peer{PID: int(cred.Pid), StartTime: procStartTime(int(cred.Pid)), Valid: true}
+	return Peer{PID: int(cred.Pid), StartTime: procStartTime(int(cred.Pid)), UID: cred.Uid, Valid: true}
 }
 
 // procStartTime reads /proc/<pid>/stat field 22 (starttime, clock ticks since

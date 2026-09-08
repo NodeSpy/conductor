@@ -108,7 +108,7 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 	// `opencode serve` process via OPENCODE_CONFIG (see toolConfigFile).
 	// Local sessions only — buildToolServer returns nil for remote hosts.
 	var toolCfg string
-	if ts := buildToolServer(spec, c.host); ts != nil {
+	if ts := dispatch.BuildToolServer(spec.Request, c.host); ts != nil {
 		toolCfg, err = writeOpencodeToolConfig(ts)
 		if err != nil {
 			return nil, fmt.Errorf("opencode: tool config: %w", err)
@@ -188,7 +188,7 @@ func (c *opencodeController) connect(ctx context.Context, cwd string, env []stri
 // THE config for that server process: conductor-launched opencode sessions
 // see this file rather than a project opencode.json (documented on the
 // Agent-Skill wiki page).
-func writeOpencodeToolConfig(ts *toolServerSpec) (string, error) {
+func writeOpencodeToolConfig(ts *dispatch.ToolServerSpec) (string, error) {
 	cfg := map[string]any{
 		"mcp": map[string]any{
 			"conductor-memory": map[string]any{

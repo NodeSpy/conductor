@@ -239,6 +239,27 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		}
 	}
 
+	// Skill surface on a paseo runtime (#123). paseo exposes no MCP surface of
+	// its own, but the agent it launches has a shell, so it reaches conductor
+	// through the `conductor` CLI over the daemon's unix socket. Locally that's
+	// the daemon's own socket; for a remote (host:) launch it's an SSH reverse
+	// tunnel that forwards the daemon socket onto the remote box (opened here,
+	// torn down with the daemon). Hand the agent the socket endpoint + a session
+	// token in env (never argv, forwarded to the box paseo runs on); the injected
+	// prompt guidance tells it to run `conductor discover`/`call`. SkillEnv
+	// returns nil for a non-skill profile or when no endpoint is available.
+	if req.Profile.Skill != nil {
+		endpoint := ""
+		if d.remote() {
+			endpoint = d.remoteSkillEndpoint(ctx, req)
+		} else {
+			endpoint = LocalSkillEndpoint()
+		}
+		for k, v := range SkillEnv(req, endpoint) {
+			argv = append(argv, "--env", k+"="+v)
+		}
+	}
+
 	// Run with bounded retries on transient git-lock/timeout failures — common
 	// when a sweep fans out worktree creations onto one shared repo.
 	var out []byte

@@ -389,7 +389,8 @@ agents:
 // #123: a skill: profile on a runtime with no MCP launch surface is a
 // validate WARNING — the tools and broker cannot reach the agent there.
 func TestSkillWarningsUnsupportedRuntime(t *testing.T) {
-	// Default (builtin paseo) runtime: unsupported.
+	// Default (builtin paseo) runtime: local → supported via the CLI face,
+	// so no unreachable-endpoint warning.
 	cfg := loadConfig(t, `
 connectors:
   svc: { type: fake }
@@ -397,45 +398,34 @@ agents:
   a: { model: x, skill: { verbs: ["svc.ask"] } }
 `)
 	reg := buildRegistry(t, cfg)
-	warns := SkillWarnings(cfg, reg)
-	found := false
-	for _, w := range warns {
-		if strings.Contains(w, "cannot carry the conductor MCP tools") && strings.Contains(w, `runtime "paseo"`) {
-			found = true
+	for _, w := range SkillWarnings(cfg, reg) {
+		if strings.Contains(w, "cannot reach the conductor skill surface") {
+			t.Fatalf("local paseo default must NOT warn as unreachable: %v", w)
 		}
 	}
-	if !found {
-		t.Fatalf("skill on the paseo default must warn: %v", warns)
-	}
 
-	// Explicit paseo and cli runtimes: unsupported. ACP and opencode: fine.
-	cases := []struct {
-		runtime string
-		warn    bool
-	}{
-		{"pas: { type: paseo, default: true }", true},
-		{"deck: { type: agent-deck, default: true }", true},
-		{"oc: { type: opencode, default: true }", false},
-		{"gem: { agent: gemini, default: true }", false},
-	}
-	for _, c := range cases {
+	// Every known runtime is reachable now: local paseo/agent-deck via the CLI
+	// face, opencode/acp via MCP, and a remote host: via the SSH reverse tunnel.
+	// None warn as unreachable.
+	for _, runtime := range []string{
+		"pas: { type: paseo, default: true }",
+		"deck: { type: agent-deck, default: true }",
+		"oc: { type: opencode, default: true }",
+		"gem: { agent: gemini, default: true }",
+		"rem: { type: paseo, host: build-box, default: true }",
+	} {
 		y := loadConfig(t, `
 connectors:
   svc: { type: fake }
 runtimes:
-  `+c.runtime+`
+  `+runtime+`
 agents:
   a: { model: x, skill: { verbs: ["svc.ask"] } }
 `)
-		w := SkillWarnings(y, buildRegistry(t, y))
-		has := false
-		for _, s := range w {
-			if strings.Contains(s, "cannot carry the conductor MCP tools") {
-				has = true
+		for _, s := range SkillWarnings(y, buildRegistry(t, y)) {
+			if strings.Contains(s, "cannot reach the conductor skill surface") {
+				t.Fatalf("runtime %q must not warn as unreachable: %v", runtime, s)
 			}
-		}
-		if has != c.warn {
-			t.Fatalf("runtime %q: warn=%v, want %v (%v)", c.runtime, has, c.warn, w)
 		}
 	}
 }

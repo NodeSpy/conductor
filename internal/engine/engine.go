@@ -353,9 +353,20 @@ func (e *Engine) skillGuidance(profile config.AgentProfile) string {
 	if sk == nil {
 		return ""
 	}
-	if _, ok := e.cfg.SkillToolsSupported(profile); !ok {
-		return ""
+	_, mode := e.cfg.SkillDelivery(profile)
+	switch mode {
+	case config.SkillModeMCP:
+		return wrapGuidance(e.skillGuidanceMCP(sk))
+	case config.SkillModeCLI:
+		return wrapGuidance(e.skillGuidanceCLI(sk))
+	default:
+		return "" // SkillModeNone: the surface can't reach this agent
 	}
+}
+
+// skillGuidanceMCP is the blurb for runtimes that carry the tool server as MCP
+// tools (ACP/opencode) — the agent calls the tools natively.
+func (e *Engine) skillGuidanceMCP(sk *config.SkillPolicy) string {
 	var b strings.Builder
 	b.WriteString("Conductor tools are available on this session.")
 	if len(sk.Verbs) > 0 {
@@ -367,7 +378,23 @@ func (e *Engine) skillGuidance(profile config.AgentProfile) string {
 			strings.Join(sk.AllowSecrets, ", ")))
 	}
 	b.WriteString(" Values that render as «secret:…» are opaque handles — pass them through unchanged; they only resolve inside conductor.")
-	return wrapGuidance(b.String())
+	return b.String()
+}
+
+// skillGuidanceCLI is the blurb for local runtimes with no MCP surface (paseo,
+// agent-deck, cli): the agent shells the `conductor` CLI. Progressive
+// disclosure — it names the discovery command, never the whole verb catalog, so
+// the prompt stays small regardless of how many verbs the profile allows.
+func (e *Engine) skillGuidanceCLI(sk *config.SkillPolicy) string {
+	var b strings.Builder
+	b.WriteString("Conductor is available on this machine via the `conductor` CLI (endpoint + a scoped token are already in your environment).")
+	b.WriteString(" Run `conductor discover` to see which connectors and verbs you may use, `conductor discover <connector>` or `conductor discover -s <term>` to narrow, and `conductor discover <connector.verb>` for a verb's options.")
+	b.WriteString(" Act THROUGH conductor with `conductor call <connector.verb> --opt value`: it runs server-side with conductor's own credentials, so no secret ever enters this session. `conductor memory recall|remember` is your shared memory.")
+	if sk.SecretsVia == "broker" && len(sk.AllowSecrets) > 0 {
+		b.WriteString(fmt.Sprintf(" If a raw tool you run yourself genuinely needs a credential, `conductor secret <name>` mints a single-use, ~1-minute, audited value (allowed: %s) — use it immediately for that one action; never echo, store, or write it to disk.",
+			strings.Join(sk.AllowSecrets, ", ")))
+	}
+	return b.String()
 }
 
 // dispatchAgent routes one request through session affinity when the profile

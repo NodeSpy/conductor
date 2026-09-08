@@ -282,6 +282,49 @@ func (c *Client) ArgvPrefix(t Target) []string {
 	return full[:len(full)-1]
 }
 
+// ReverseForwardArgs builds the ssh argv for a persistent reverse tunnel that
+// forwards a unix socket on the remote box back to a local one — the private
+// back-channel a remote agent uses to reach conductor (#36 §12 skill surface).
+// It reuses the Target's own connection flags (port/key/known_hosts) so the
+// tunnel rides the exact SSH trust conductor already uses to launch paseo there.
+//
+//   - StreamLocalBindUnlink clears a stale remote socket from a prior tunnel;
+//   - StreamLocalBindMask=0177 makes the remote socket mode 0600 (owner only);
+//   - ExitOnForwardFailure makes ssh exit (not silently continue) if the forward
+//     can't be set up, so a failure is observable;
+//   - ServerAlive* drops a dead tunnel promptly so the supervisor restarts it.
+//
+// remoteCmd runs on the far side once the channel (and thus the forward) is up —
+// the caller uses it to emit a readiness marker then block, keeping the session
+// (and the tunnel) alive.
+func (c *Client) ReverseForwardArgs(t Target, remoteSocket, localSocket, remoteCmd string) []string {
+	cfg := t.Cfg
+	argv := []string{c.sshBin(),
+		"-o", "BatchMode=yes",
+		"-o", "ExitOnForwardFailure=yes",
+		"-o", "StreamLocalBindUnlink=yes",
+		"-o", "StreamLocalBindMask=0177",
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=3",
+	}
+	if cfg.Port != 0 {
+		argv = append(argv, "-p", strconv.Itoa(cfg.Port))
+	}
+	if cfg.Key != "" {
+		argv = append(argv, "-i", cfg.Key)
+	}
+	if cfg.KnownHosts != "" {
+		argv = append(argv, "-o", "UserKnownHostsFile="+cfg.KnownHosts, "-o", "StrictHostKeyChecking=yes")
+	}
+	argv = append(argv, "-R", remoteSocket+":"+localSocket)
+	host := cfg.Host
+	if cfg.User != "" {
+		host = cfg.User + "@" + host
+	}
+	argv = append(argv, "--", host, remoteCmd)
+	return argv
+}
+
 // RemoteCommand builds the single remote-command string an ArgvPrefix caller
 // appends: argv joined via ShellJoin, preceded by a `cd <cwd> &&` when cwd is
 // non-empty. Unlike Client.Script (which always executes through an explicit

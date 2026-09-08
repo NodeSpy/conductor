@@ -113,6 +113,14 @@ func main() {
 		err = cmdConfig(args)
 	case "mcp":
 		err = cmdMCP(args)
+	case "discover":
+		err = cmdDiscover(args)
+	case "call":
+		err = cmdCall(args)
+	case "memory":
+		err = cmdSkillMemory(args)
+	case "secret":
+		err = cmdSecret(args)
 	case "workflows":
 		err = cmdWorkflows(args)
 	case "version", "-v", "--version":
@@ -577,7 +585,7 @@ func cmdRun(args []string) error {
 				// SO_PEERCRED) — the broker binds sessions to the claiming
 				// process and refuses a token from any other.
 				asPeer := func(p memory.Peer) skill.Peer {
-					return skill.Peer{PID: p.PID, StartTime: p.StartTime, Valid: p.Valid}
+					return skill.Peer{PID: p.PID, StartTime: p.StartTime, UID: p.UID, Valid: p.Valid}
 				}
 				ops.ClaimToken = func(claim string, peer memory.Peer) (string, error) {
 					return sb.ClaimSession(claim, asPeer(peer))
@@ -587,6 +595,16 @@ func cmdRun(args []string) error {
 				}
 				ops.RedeemSecret = func(token, grant string, peer memory.Peer) (string, error) {
 					return sb.Redeem(token, grant, asPeer(peer))
+				}
+				// Identify resolves a session token to its dispatch provenance
+				// so the CLI/remote memory + run_step ops bind their Source to
+				// the token's real identity, never a spoofable body Source.
+				ops.Identify = func(token string, peer memory.Peer) (memory.Source, int, bool) {
+					id, err := sb.Authorize(token, asPeer(peer))
+					if err != nil {
+						return memory.Source{}, 0, false
+					}
+					return memory.Source{Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger}, id.Number, true
 				}
 				// The verb-tool surface: catalog + execution, both bound to
 				// the token's real dispatch identity and its skill.verbs.
@@ -619,6 +637,12 @@ func cmdRun(args []string) error {
 				logf("skill: secret broker + verb tools enabled (per-profile skill: policy)")
 			}
 			memory.SetLiveOps(ops)
+
+			// Remote (host:) skill agents reach this socket through a per-host
+			// SSH reverse tunnel the dispatch path opens on demand and this
+			// manager supervises for the daemon's lifetime — internal wiring
+			// over the same SSH trust that launches paseo there, nothing public.
+			dispatch.InitSkillTunnels(ctx, logf)
 		}
 	}
 

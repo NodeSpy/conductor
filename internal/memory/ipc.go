@@ -93,6 +93,14 @@ type LiveOps struct {
 	// gated verb execution. Both authorize by token + peer server-side.
 	SkillVerbs func(token string, peer Peer) ([]map[string]any, error)
 	RunVerb    func(ctx context.Context, token, uses string, options map[string]any, peer Peer) (map[string]any, error)
+	// Identify resolves a session token to the dispatch provenance the broker
+	// holds for it (the real Agent/Repo/Trigger + PR/issue number), authorizing
+	// by token + peer. The CLI and remote-HTTP faces carry a token but no baked
+	// Source, so the memory / run_step ops derive provenance from HERE rather
+	// than trusting a body-supplied Source — a caller cannot spoof another
+	// run's identity. nil → those ops fall back to the body Source (the MCP
+	// path, where the daemon baked Source into the tool command's flags).
+	Identify func(token string, peer Peer) (src Source, number int, ok bool)
 }
 
 // Peer is the socket-peer identity of the calling process (Linux
@@ -101,6 +109,7 @@ type LiveOps struct {
 type Peer struct {
 	PID       int
 	StartTime uint64
+	UID       uint32 // SO_PEERCRED uid — the uid-bound session token authorizes by this
 	Valid     bool
 }
 
@@ -188,6 +197,22 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 	}
 	if m == nil && (req.Op == "remember" || req.Op == "recall") {
 		return IPCResponse{Error: "memory: not configured"}
+	}
+	// Provenance binding for the token-carrying faces (CLI / remote HTTP): the
+	// ops below trust the dispatched identity the broker holds for the token,
+	// never a Source in the request body. When a token is present and the
+	// broker can identify it, its provenance is authoritative; when the broker
+	// rejects the token, the op is denied rather than falling back to a
+	// spoofable body Source. A request with no token (the MCP tool subprocess,
+	// which bakes Source into its flags) keeps the body Source unchanged.
+	if req.Token != "" && (req.Op == "remember" || req.Op == "recall" || req.Op == "run_step") {
+		if ops := getLiveOps(); ops.Identify != nil {
+			src, number, ok := ops.Identify(req.Token, peer)
+			if !ok {
+				return IPCResponse{Error: "memory: unknown or unauthorized session token"}
+			}
+			req.Source, req.Number = src, number
+		}
 	}
 	switch req.Op {
 	case "remember":

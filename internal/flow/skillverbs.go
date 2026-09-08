@@ -206,11 +206,13 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 		if p.Skill == nil {
 			continue
 		}
-		// A skill: profile on a runtime with no MCP launch surface (#123):
-		// the tools and broker cannot reach the agent there — say so at
-		// validate time instead of shipping a silently tool-less skill.
+		// A skill: profile on a runtime the surface can't reach (#123). Every
+		// known runtime IS reachable — local paseo/agent-deck via the CLI face,
+		// opencode/acp via MCP tools, a remote host: via the SSH reverse tunnel
+		// — so this only fires for an unresolvable runtime, caught here rather
+		// than shipping a silently tool-less skill.
 		if rt, ok := cfg.SkillToolsSupported(p); !ok {
-			warns = append(warns, fmt.Sprintf("agent %q: skill: is configured but runtime %q cannot carry the conductor MCP tools (no MCP launch surface) — the verb tools and secret broker will NOT reach this agent; use an acp or opencode runtime, or drop the skill: block", name, rt))
+			warns = append(warns, fmt.Sprintf("agent %q: skill: is configured but runtime %q cannot reach the conductor skill surface — the verb tools and secret broker will NOT reach this agent; point it at a defined runtime or drop the skill: block", name, rt))
 		}
 		for _, pat := range p.Skill.Verbs {
 			matched := false
