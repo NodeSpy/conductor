@@ -113,6 +113,14 @@ func main() {
 		err = cmdConfig(args)
 	case "mcp":
 		err = cmdMCP(args)
+	case "discover":
+		err = cmdDiscover(args)
+	case "call":
+		err = cmdCall(args)
+	case "memory":
+		err = cmdSkillMemory(args)
+	case "secret":
+		err = cmdSecret(args)
 	case "workflows":
 		err = cmdWorkflows(args)
 	case "version", "-v", "--version":
