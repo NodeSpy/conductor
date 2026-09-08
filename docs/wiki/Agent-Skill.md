@@ -15,14 +15,13 @@ runtime. There is nothing to configure for the local case:
 | **MCP tools** | ACP runtimes (`agent: gemini`, …); `type: opencode` (native HTTP) | conductor injects an MCP server at launch (`mcpServers` on `session/new`; a per-session `OPENCODE_CONFIG` file for opencode). The verbs, memory, `run_step`, and broker appear as native tools. |
 | **`conductor` CLI** | `type: paseo`, `type: agent-deck`, bare `cli` — any local runtime with a shell | the agent shells the `conductor` command. The daemon puts the endpoint + a scoped session token in the agent's **environment** (`CONDUCTOR_ENDPOINT`, `CONDUCTOR_SKILL_TOKEN`), and the injected guidance tells the agent to run `conductor discover` / `conductor call`. No config files, no MCP server. |
 
-A **remote** runtime (`host:`) reaches the CLI over HTTPS instead of the
-local socket — see [Remote agents](#remote-agents) below. It needs a `skill:`
-block (the `skill.base_url` endpoint); without one a remote profile is inert.
+A **remote** runtime (`host:`) uses the same CLI face, reached over an SSH
+reverse tunnel instead of the local socket — see [Remote agents](#remote-agents)
+below. No config; it just works over the SSH conductor already uses.
 
-On any runtime that can't be reached — a remote host with no endpoint
-configured, or an unknown runtime — a `skill:` profile is inert: no tools, no
-broker, and no injected skill guidance (promising an absent surface only
-breaks agents). `conductor validate` warns about the combination.
+Only a runtime conductor can't resolve at all leaves a `skill:` profile inert
+(no tools, no broker, no injected guidance — promising an absent surface only
+breaks agents); `conductor validate` warns about it.
 
 > The earlier design injected a `.mcp.json` into a paseo run's worktree. That
 > never worked — the Claude Code agent paseo launches is started with paseo's
@@ -99,10 +98,13 @@ Two binding shapes, matching the two delivery paths:
   anywhere else. This tighter binding fits the single long-lived MCP
   subprocess; the CLI's uid binding fits its fan-out of short calls.
 
-Over the **remote HTTP** endpoint there are no kernel peer credentials, so
-the session token is the bearer credential on its own (TLS terminated by your
-proxy — see below). The one-shot claim exchange is local-only and refused
-over HTTP; a remote agent gets its session token directly in its env.
+A **remote** agent reaches the socket through an SSH reverse tunnel (see
+below), so the connection the daemon sees comes from conductor's own ssh
+relay, not the agent — the uid check passes trivially and provenance rests on
+the session token alone. That's why the memory / `run_step` ops always derive
+their `Source` from the token, never from the caller's peer identity. The
+one-shot claim exchange stays local-only; a remote agent gets its session
+token directly in its env.
 
 ## Using it from the agent (the CLI face)
 
@@ -130,27 +132,35 @@ capabilities and the policy behind them are identical.
 ## Remote agents
 
 An agent dispatched to a **remote runtime** (`host:`) runs on another box and
-can't reach the daemon's unix socket. Point it at conductor over HTTPS with a
-top-level `skill:` block:
+can't see the daemon's unix socket. Rather than expose conductor on a public
+URL, the back-channel rides the **same SSH trust conductor already uses to
+launch paseo there**: the daemon holds an `ssh -R <remote.sock>:<daemon.sock>`
+reverse tunnel that forwards its own socket onto the remote box, bound to a
+`0600` unix socket. The remote agent's `conductor` CLI dials that forwarded
+socket exactly as a local agent dials the real one — same commands, same
+token, same audit. Nothing binds a public interface; there is **nothing to
+configure**.
 
-```yaml
-skill:
-  listen: 127.0.0.1:8098               # where the daemon serves the endpoint
-  base_url: https://conductor.example.com   # public origin the agent reaches it at
-```
+Mechanics, for the curious:
 
-The daemon mounts the same tool surface at `POST <base_url>/skill` on the
-shared inbound listener (reuse a `listen:` a webhook/sentry/callable surface
-already binds). A remote agent is handed `CONDUCTOR_ENDPOINT=<base_url>/skill`
-and its session token; the `conductor` CLI posts each op there with the token
-as a `Bearer` credential. **Off unless configured**, and it errors at load if
-`listen`/`base_url` are half-set or no agent has a `skill:` block.
+- The tunnel is a daemon-lifetime process, one per remote host, opened on the
+  first remote skill dispatch and supervised (restarted on drop). paseo `run`
+  returns immediately — the agent keeps running under paseo's own remote
+  daemon — so the channel can't ride the run invocation; it's held
+  independently.
+- It reuses the host's own `key` / `port` / `known_hosts` from `hosts:`, so it
+  is exactly as trusted (and as reachable) as the SSH conductor already uses.
+  `StreamLocalBindMask` keeps the remote socket owner-only; `ExitOnForwardFailure`
+  makes a failed forward observable rather than silent.
+- The agent is handed `CONDUCTOR_ENDPOINT=unix://<forwarded-sock>` + its
+  session token in env — a plain `unix://` path, indistinguishable from the
+  local case to the CLI.
 
-Terminate TLS at the reverse proxy / tunnel that already fronts conductor's
-other inbound surfaces — the daemon serves plaintext HTTP on `listen` and
-should never face the internet directly. The session token is the whole
-credential over this transport, so the endpoint must be TLS-fronted and
-reachable only through your tunnel/VPN, not open to the world.
+The security boundary is the SSH channel itself: only conductor can open the
+reverse forward, and the forwarded socket is `0600` on the remote box. The
+session token still gates every op (deny-by-default, audited); a token leaked
+off-box is useless because there is no route to the socket except through
+conductor's own tunnel.
 
 ## Boundary handles: `{{secret "name"}}`
 
@@ -250,10 +260,10 @@ escape. See [[Policy]].
   `allow_secrets`.
 - The daemon socket is same-user only (`0600`). Anything running as that
   user can dial it; the token binding means such a process still cannot
-  obtain secrets outside a dispatched, skill-enabled profile's policy. The
-  remote HTTP endpoint has no such OS boundary — the session token is the
-  whole credential, so it must be TLS-fronted and reachable only through your
-  tunnel/VPN, never exposed to the public internet.
+  obtain secrets outside a dispatched, skill-enabled profile's policy. For a
+  remote agent the same socket is reached through an SSH reverse tunnel only
+  conductor can open, bound `0600` on the remote box — so the boundary is the
+  SSH channel plus the same per-token policy; nothing is exposed to any network.
 - The encoding-aware redaction of tracked secrets (base64/hex/url forms) is
   a backstop, not a guarantee — see [[Secrets]]. The guarantee is this
   design: prefer verbs-as-tools, and when a value must be handed out, hand
