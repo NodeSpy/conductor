@@ -32,13 +32,14 @@ func remoteSkillEndpoint() string {
 }
 
 // The conductor tool server (memory + run_step + the skill's verb tools and
-// secret broker) is injected per dispatch into whatever the runtime launches.
-// This is the SHARED wiring — what to launch, with which provenance flags, and
-// the one-shot skill claim (#122 R1) — so every injection path (ACP/opencode
-// via session/new mcpServers; paseo via a workspace .mcp.json) assembles the
-// same server instead of copy-pasting it. It lives here in dispatch, not
-// controller, because the paseo dispatcher can't import controller (controller
-// imports dispatch).
+// secret broker) is injected per dispatch into the MCP-delivery runtimes
+// (ACP/opencode) as an mcpServers entry on session/new. This is the SHARED
+// wiring — what to launch, with which provenance flags, and the one-shot skill
+// claim (#122 R1) — so both MCP paths assemble the same server instead of
+// copy-pasting it. Shell runtimes (paseo/agent-deck) don't use this; they get
+// the CLI face via SkillEnv instead. It lives here in dispatch, not controller,
+// because the paseo dispatcher can't import controller (controller imports
+// dispatch).
 
 // ToolServerSpec is one dispatch's conductor tool server: the subprocess to
 // launch, its argv, and the environment to set on it.
