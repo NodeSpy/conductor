@@ -577,7 +577,7 @@ func cmdRun(args []string) error {
 				// SO_PEERCRED) — the broker binds sessions to the claiming
 				// process and refuses a token from any other.
 				asPeer := func(p memory.Peer) skill.Peer {
-					return skill.Peer{PID: p.PID, StartTime: p.StartTime, Valid: p.Valid}
+					return skill.Peer{PID: p.PID, StartTime: p.StartTime, UID: p.UID, Valid: p.Valid}
 				}
 				ops.ClaimToken = func(claim string, peer memory.Peer) (string, error) {
 					return sb.ClaimSession(claim, asPeer(peer))

@@ -409,3 +409,30 @@ func TestVerbCallCap(t *testing.T) {
 		t.Fatal("forged token must be refused")
 	}
 }
+
+// TestMintSessionUIDBound covers the CLI/remote path: a reusable session token
+// bound to a uid, authorized across many short-lived (different-PID) processes
+// of that uid, refused for a different uid, and bearer-only when the transport
+// carries no peer creds (remote HTTP).
+func TestMintSessionUIDBound(t *testing.T) {
+	b := NewBroker(func(string) (string, bool) { return "", false }, nil)
+	tok, err := b.MintSession(Identity{Agent: "fixer"}, 1000)
+	if err != nil {
+		t.Fatalf("MintSession: %v", err)
+	}
+	// Same uid, two DIFFERENT live processes both authorize (token is reusable).
+	if _, err := b.Authorize(tok, Peer{PID: 111, StartTime: 5, UID: 1000, Valid: true}); err != nil {
+		t.Fatalf("same-uid PID 111 should authorize: %v", err)
+	}
+	if _, err := b.Authorize(tok, Peer{PID: 222, StartTime: 9, UID: 1000, Valid: true}); err != nil {
+		t.Fatalf("same-uid PID 222 should also authorize (reusable across processes): %v", err)
+	}
+	// A different uid is refused.
+	if _, err := b.Authorize(tok, Peer{PID: 333, UID: 2000, Valid: true}); err == nil {
+		t.Fatal("a different uid must be refused")
+	}
+	// No peer creds (remote HTTP over TLS) → bearer token alone authorizes.
+	if _, err := b.Authorize(tok, Peer{Valid: false}); err != nil {
+		t.Fatalf("no-peer-cred (remote) should authorize by token alone: %v", err)
+	}
+}

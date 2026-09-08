@@ -55,6 +55,7 @@ const (
 type Peer struct {
 	PID       int
 	StartTime uint64 // /proc/<pid>/stat field 22; 0 when unreadable
+	UID       uint32 // SO_PEERCRED uid; a uid-bound session authorizes by this
 	Valid     bool
 }
 
@@ -86,10 +87,17 @@ type Identity struct {
 type session struct {
 	id      Identity
 	expires time.Time
-	// peer is the process that claimed the session. When Valid, every
-	// token-authorized call must come from the same live process — a copied
-	// token is useless from anywhere else.
+	// peer is the process that claimed the session (MCP path). When Valid,
+	// every token-authorized call must come from the same live process — a
+	// copied token is useless from anywhere else.
 	peer Peer
+	// uidBound marks a session minted for the CLI/remote path (MintSession):
+	// the token is delivered in the agent's env and reused across many
+	// short-lived `conductor call` processes, so it authorizes by same-uid
+	// (boundUID) rather than exact process. On a transport with no peer creds
+	// (remote HTTP), the endpoint authorizes by the bearer token alone.
+	uidBound bool
+	boundUID uint32
 	// verbCalls counts executed verbs against the session's cap.
 	verbCalls int
 }
@@ -165,6 +173,27 @@ func (b *Broker) MintClaim(id Identity) (string, error) {
 	return code, nil
 }
 
+// MintSession registers one dispatch's identity and returns a REUSABLE session
+// token, bound to the uid the agent will run as. Unlike MintClaim (the MCP
+// path: one-shot code → exact-process-bound token held by a long-lived
+// subprocess), this token is delivered in the agent's env (CONDUCTOR_SKILL_TOKEN)
+// and presented by many short-lived `conductor call` processes across the run —
+// so it authorizes by same-uid rather than exact process. Meaningful when the
+// agent runs under its own uid (per-dispatch isolation); on the remote HTTP
+// endpoint (no peer creds) the bearer token authorizes alone. Called by the
+// daemon at dispatch time only. Short TTL + verb-allowlist scope + audit bound
+// the exposure of a token scraped from env.
+func (b *Broker) MintSession(id Identity, uid uint32) (string, error) {
+	tok, err := b.randomID(32)
+	if err != nil {
+		return "", fmt.Errorf("skill: mint session token: %w", err)
+	}
+	b.mu.Lock()
+	b.sessions[tok] = session{id: id, expires: b.now().Add(SessionTTL), uidBound: true, boundUID: uid}
+	b.mu.Unlock()
+	return tok, nil
+}
+
 // ClaimSession exchanges a claim code for the real session token, exactly
 // once, binding the session to the CLAIMING process (its socket peer
 // credentials) — from then on every token-authorized call must come from
@@ -210,6 +239,19 @@ func (b *Broker) authorizeLocked(token string, peer Peer) (session, error) {
 	s, ok := b.sessions[token]
 	if !ok || b.now().After(s.expires) {
 		return session{}, fmt.Errorf("skill: unknown or expired session token")
+	}
+	if s.uidBound {
+		// CLI/remote path: authorize any process running as the bound uid
+		// (reused across short-lived `conductor call` invocations). A local
+		// socket carries peer creds; a peer with a different uid is refused. A
+		// transport with no peer creds (remote HTTP over TLS) authorizes by the
+		// bearer token alone — that endpoint has no kernel identity to check.
+		if peer.Valid && peer.UID != s.boundUID {
+			b.auditLocked("deny", s.id.Agent, s.id.Repo, "", "",
+				"session token presented by a different uid than the dispatch's")
+			return session{}, fmt.Errorf("skill: session token presented by a different uid than the dispatch's")
+		}
+		return s, nil
 	}
 	if s.peer.Valid && (!peer.Valid || !s.peer.matches(peer)) {
 		b.auditLocked("deny", s.id.Agent, s.id.Repo, "", "",

@@ -101,6 +101,7 @@ type LiveOps struct {
 type Peer struct {
 	PID       int
 	StartTime uint64
+	UID       uint32 // SO_PEERCRED uid — the uid-bound session token authorizes by this
 	Valid     bool
 }
 
