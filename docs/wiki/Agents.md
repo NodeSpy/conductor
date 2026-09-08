@@ -18,6 +18,7 @@ literal unknown name is still caught at load).
 ```yaml
 agents:
   fixer:
+    # extends: base                   # inherit another profile's fields (see [[Reuse]])
     provider: claude                  # -> paseo run --provider  (or provider/model shorthand)
     model: claude-opus-5              # -> --model     (optional; omit for the provider's default)
     thinking: ""                      # -> --thinking  (optional)
@@ -33,8 +34,9 @@ agents:
                                       #   agent, so they're ignored for it (don't pair
                                       #   provider: claude with an acp gemini runtime)
     # host: build-box                 # pin this profile's runtime launches to a hosts: entry
-    # guidance: |                     # per-agent tone/format; overrides the top-level agent_guidance
-    #   One or two sentences, plain and direct.   #   (unset -> that default, "" -> none, text -> this)
+    # guidance: |                     # per-agent tone/format; STACKS on the scoped baseline
+    #   One or two sentences, plain and direct.   #   (policy.guidance / agent_guidance). List or
+    #                                 #   { replace: … } also accepted — see [[Reuse]].
     # memory: true                    # opt into shared-memory prompt injection (see below); or a
                                       #   filter: memory: { scopes: [global, repo], tags: [ci], limit: 10 }
     # session:                        # session affinity: one live session per rendered key,
@@ -51,6 +53,7 @@ agents:
 
 | Field | Meaning |
 | --- | --- |
+| `extends` | Inherit from another `agents:` profile: unset fields are filled from the parent, `labels` deep-merge, and `guidance` stacks (parent tone under the child's). Chains allowed; cycles/unknown targets are load errors. See [[Reuse]]. |
 | `provider` | Paseo provider name, or the `provider/model` shorthand (e.g. `codex/gpt-5.5`). Maps to `paseo run --provider`. |
 | `model` | Model ID from `paseo provider models <provider>`. Maps to `--model`. Omit to use the provider's default. |
 | `thinking` | Maps to `--thinking`. Optional. |
@@ -61,7 +64,7 @@ agents:
 | `labels` | Extra `--label key=value` pairs attached to the dispatched agent. |
 | `runtime` | Name of a `runtimes.<name>` entry to run this agent on (default: the `default: true` runtime, else the built-in `paseo`). The legacy `controller:` key still works. See [[Runtimes]]. |
 | `host` | A [[Hosts]] SSH target this profile's runtime launches on (cli/acp/agent-deck), overriding the runtime's own `host:`. |
-| `guidance` | Per-agent tone/format text appended to this agent's prompts. Unset falls through to the top-level `agent_guidance`; `""` disables guidance entirely for this agent; any text replaces the default. |
+| `guidance` | Per-agent tone/format that **stacks on** the scoped baseline ([[Policy\|`policy.guidance`]] / `agent_guidance`) rather than replacing it. A string, a list of blocks, or `{ replace: … }` to drop the baseline (and `{ replace: "" }` to disable guidance for this agent). Unset → inherit the baseline unchanged. See [[Reuse]]. |
 | `memory` | Opt this agent into shared-memory prompt injection ([[Memory]]). `true` appends the global + target-repo + own-agent-scoped memories (newest first, capped) through the same path as `guidance`; a map `{ scopes, tags, limit }` narrows it. Absent → no injection, no token cost. Needs a top-level `memory:` section. |
 | `session` | Session affinity: `{ key, idle_ttl, max_lifetime, end_on }` binds a live session to the rendered `key` — every event resolving to the same value reaches the same agent as a follow-up. Absent → a fresh agent per dispatch. See below. |
 | `skill` | Opt this agent into the conductor skill (verb tools + the secret broker over the daemon socket), gated per profile: `{ verbs, secrets_via, allow_secrets, identity, max_calls }`. Absent → neither. See [[Agent-Skill]]. |

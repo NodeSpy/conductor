@@ -109,6 +109,25 @@ triggers:
 - **`name:`** is optional for ordinary triggers, **required and unique** for
   any trigger reachable by `conductor run` (a load error otherwise).
 
+### Sharing config across triggers (`extends:` / `abstract:`)
+
+Near-identical triggers (the same `steps:`/`filters:` repeated per repo or org) can share a base.
+A trigger `extends: <name>` inherits another trigger's config — `filters:`/`options:` deep-merge,
+`steps:`/`hooks:` replace when set, `policy:`/`gate:` fill if unset. A base marked
+`abstract: true` never fires and is stripped after resolution, so it needs no `on:`:
+
+```yaml
+triggers:
+  - name: review-base
+    abstract: true
+    steps:
+      - { id: r, type: agent, agent: reviewer, prompt: "Review {{.repo}}#{{.pr}}." }
+  - { on: gh.review_requested, extends: review-base, filters: { repos: [org/api] } }
+  - { on: gh.review_requested, extends: review-base, filters: { repos: [org/web] } }
+```
+
+Full semantics (chains, cycles, the merge rules, and layered guidance) are in [[Reuse]].
+
 ## Bot-authored comments (github)
 
 The github comment/review events (`new_comment`, `changes_requested`)

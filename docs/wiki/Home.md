@@ -102,8 +102,8 @@ Work down this list and you go from zero to the most advanced setup:
    [[Hand-offs]] (`ask` verbs), and [[Notifications]] (the `conductor.*`
    lifecycle source).
 5. **Composition** — reusable workflows with inputs/outputs ([[Workflows]]),
-   [[Grouping]], [[Code-Steps]], [[Hosts]], and file splitting
-   (`imports:`, [[Configuration]]).
+   `extends:` inheritance + layered guidance ([[Reuse]]), [[Grouping]],
+   [[Code-Steps]], [[Hosts]], and file splitting (`imports:`, [[Configuration]]).
 6. **State** — `stores:` + the `kv.*`/`sql.*` verbs ([[Configuration]]),
    [[Memory]], and session affinity ([[Agents]]).
 7. **Hardening** — [[Secrets]] (vaults, OAuth2 logins, unlock), [[Policy]]
@@ -125,7 +125,7 @@ Work down this list and you go from zero to the most advanced setup:
 Setup: [[Installation]] · [[Quickstart]] · [[GitHub-App-Setup]] ·
 [[Configuration]] · [[Commands]] · [[Examples]]
 
-The model: [[Connectors]] · [[Workflows]] · [[Verbs]] · [[Code-Steps]] ·
+The model: [[Connectors]] · [[Workflows]] · [[Reuse]] · [[Verbs]] · [[Code-Steps]] ·
 [[Runtimes]] · [[Agents]] · [[Grouping]] · [[Memory]] · [[Binary-Data]] ·
 [[Agent-Skill]] · [[Policy]] · [[Gates]] · [[Teams]] · [[Outcomes]] ·
 [[Cost-Accounting]] · [[Secrets]] · [[Hosts]] · [[Isolation]]
