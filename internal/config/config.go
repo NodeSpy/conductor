@@ -679,12 +679,6 @@ type SkillPolicy struct {
 	// profile. Exact names only — no patterns; broadening is a config edit,
 	// never an agent request. Empty → the broker issues nothing.
 	AllowSecrets []string `yaml:"allow_secrets"`
-	// Identity is injected as `as:` on skill verb calls that declare the
-	// option (gh writes post as this identity, never as the operator).
-	// Empty falls through to policy.agent_authored.identity; a profile
-	// whose skill.verbs admit an as-taking write verb must have one of the
-	// two set (validated at load).
-	Identity string `yaml:"identity"`
 	// MaxCalls caps verb executions per skill session (analogous to
 	// agent_authored.limits). 0 = the built-in default (256).
 	MaxCalls int `yaml:"max_calls"`

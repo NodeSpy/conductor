@@ -456,9 +456,10 @@ agents:
     #   allow_secrets:       #   single-use, 60s-TTL, audited grants for EXACT vault entries
     #     - house/deploy_key #   (<vault>/<key> — the entries {{ vault "house" "deploy_key" }} reads)
     #   verbs: [gh.comment, rest.*]  # conductor verbs exposed to the agent as tools
-    #   identity: bot        #   the `as:` skill writes post under (required when verbs
-    #                        #   admit a write; falls back to agent_authored.identity)
     #   max_calls: 100       #   per-session verb-call cap (default 256)
+    #   # Identity is a per-verb concern, not a skill setting: a verb's own `as:`
+    #   # option travels through as the agent supplies it, and each connector
+    #   # applies its own default when it's absent (gh writes default to `me`).
     # session:               # session affinity: one live session per key, shared across
     #   key: "{{.repo}}#{{.pr}}"  #   ALL triggers using this agent — later same-key events
     #   idle_ttl: 12h             #   arrive as follow-ups with full prior context. Persists
