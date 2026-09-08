@@ -114,6 +114,11 @@ func Transform(raw []byte) (*Result, error) {
 		} else if changed {
 			cur, anyChanged = out, true
 		}
+		if out, changed, err := applyAgentGuidancePass(cur, &notes); err != nil {
+			return nil, fmt.Errorf("agent_guidance migration: %w", err)
+		} else if changed {
+			cur, anyChanged = out, true
+		}
 		if !anyChanged {
 			return &Result{Changed: false}, nil
 		}

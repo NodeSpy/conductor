@@ -542,7 +542,7 @@ func newTestRunner(t *testing.T, cfg *config.Config, reg *connector.Registry) *t
 		Agents: AgentServices{
 			Dispatch:   ag.dispatch,
 			Tokens:     func(t core.Trigger) dispatch.Tokens { return dispatch.Tokens{} },
-			Guidance:   func(agentName string, p config.AgentProfile) string { return "|G|" },
+			Guidance:   func(agentName string, p config.AgentProfile, pol config.Policy) string { return "|G|" },
 			Background: ag.background,
 			Archive:    ag.archive,
 		},

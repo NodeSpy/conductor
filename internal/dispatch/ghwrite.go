@@ -35,17 +35,6 @@ const BotReplyGuidance = "\n\n---\n" +
 	"Post a reply comment ONLY to state a concrete reason for not applying a suggestion, " +
 	"and keep it terse."
 
-// ConcisionGuidance is appended to every dispatched agent prompt so the text it
-// posts to GitHub (and its own wrap-up) reads like a person, not an essay. Kept
-// short on purpose.
-const ConcisionGuidance = "\n\n---\n" +
-	"TONE: be concise and human. Anything you post to GitHub — comments, replies, " +
-	"review notes — should read like a busy engineer dashed it off: a sentence or " +
-	"two, plain and direct. No preamble, no restating the question, no summarizing " +
-	"what you did, no headers or bullet dumps unless they genuinely earn their place. " +
-	"Say only what's needed and stop. If nothing needs saying, post nothing. Keep " +
-	"your final wrap-up short too — a line, not an essay."
-
 // HoldMarker is a legacy fallback: a file an agent may create in its working
 // directory to signal it still needs the user. The reaper still honors the marker
 // if present, for contexts where asking an interactive question isn't possible.

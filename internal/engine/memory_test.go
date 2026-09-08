@@ -36,6 +36,8 @@ func TestMemoryPromptOptIn(t *testing.T) {
 	}
 
 	cfg := baseCfg()
+	houseTone := "HOUSE TONE: terse."
+	cfg.AgentGuidance = &houseTone // explicit guidance — conductor injects none by default
 	cfg.Agents = map[string]config.AgentProfile{
 		"opted":  {Provider: "claude", Memory: &config.MemorySelector{Enabled: true}},
 		"plain":  {Provider: "claude"},
@@ -62,7 +64,7 @@ func TestMemoryPromptOptIn(t *testing.T) {
 		t.Errorf("opted prompt leaked another repo's memory:\n%s", p)
 	}
 	// The memory section rides after guidance, like the guidance block itself.
-	if gi, mi := strings.Index(p, "be concise and human"), strings.Index(p, "Shared memory"); gi < 0 || mi < gi {
+	if gi, mi := strings.Index(p, "HOUSE TONE"), strings.Index(p, "Shared memory"); gi < 0 || mi < gi {
 		t.Errorf("memory section must append after guidance (guidance@%d memory@%d)", gi, mi)
 	}
 

@@ -568,9 +568,6 @@ func TestFixersDoNotGetAskGuidance(t *testing.T) {
 		if !strings.Contains(d.reqs[0].Action.Prompt, "act as ME") {
 			t.Fatalf("fixer (agent=%s) should still get the identity/write wrapper", agent)
 		}
-		if !strings.Contains(d.reqs[0].Action.Prompt, "be concise and human") {
-			t.Fatalf("fixer (agent=%s) should get the concision guidance", agent)
-		}
 	}
 }
 
@@ -585,19 +582,23 @@ func TestAgentGuidanceConfigOverride(t *testing.T) {
 		return d.reqs[0].Action.Prompt
 	}
 
-	// Unset → built-in concise default.
-	if p := run(&config.Config{}); !strings.Contains(p, "be concise and human") {
-		t.Fatalf("unset agent_guidance should use the built-in default, got: %q", p)
-	}
-	// Custom → replaces the default.
+	// Custom agent_guidance → that exact text is injected.
 	custom := "House style: reply in one short sentence."
-	if p := run(&config.Config{AgentGuidance: &custom}); !strings.Contains(p, custom) || strings.Contains(p, "be concise and human") {
-		t.Fatalf("custom agent_guidance should replace the default, got: %q", p)
+	cp := run(&config.Config{AgentGuidance: &custom})
+	if !strings.Contains(cp, custom) {
+		t.Fatalf("custom agent_guidance should be injected, got: %q", cp)
 	}
-	// Empty → no guidance block (write wrapper still present).
+	// Unset → conductor imposes NO tone of its own (config-driven): the prompt
+	// carries no guidance block, so it is shorter than the custom one and lacks
+	// the custom text.
+	bare := run(&config.Config{})
+	if strings.Contains(bare, custom) || len(bare) >= len(cp) {
+		t.Fatalf("unset agent_guidance should inject nothing, got: %q", bare)
+	}
+	// Empty behaves like unset — still nothing (and identical to the bare prompt).
 	empty := ""
-	if p := run(&config.Config{AgentGuidance: &empty}); strings.Contains(p, "be concise and human") {
-		t.Fatalf("empty agent_guidance should disable it, got: %q", p)
+	if p := run(&config.Config{AgentGuidance: &empty}); p != bare {
+		t.Fatalf("empty agent_guidance should inject nothing (same as unset), got: %q", p)
 	}
 }
 
@@ -715,10 +716,9 @@ func TestRetryWhileDeferred(t *testing.T) {
 	}
 }
 
-func TestPerAgentGuidancePrecedence(t *testing.T) {
+func TestAdditiveGuidanceLayering(t *testing.T) {
 	global := "GLOBAL house style."
 	perAgent := "FIXER-only style."
-	empty := ""
 
 	run := func(profile config.AgentProfile, globalGuidance *string) string {
 		cfg := &config.Config{AgentGuidance: globalGuidance,
@@ -730,23 +730,56 @@ func TestPerAgentGuidancePrecedence(t *testing.T) {
 			config.Action{Type: "agent", Agent: "fixer", Prompt: "do it"}))
 		return d.reqs[0].Action.Prompt
 	}
+	prof := func(g config.GuidanceSpec) config.AgentProfile {
+		return config.AgentProfile{Provider: "claude", Guidance: &g}
+	}
 	base := config.AgentProfile{Provider: "claude"}
 
-	// Per-agent guidance wins over the global.
-	if p := run(config.AgentProfile{Provider: "claude", Guidance: &perAgent}, &global); !strings.Contains(p, perAgent) || strings.Contains(p, global) {
-		t.Fatalf("per-agent guidance should override global, got: %q", p)
+	// The core of this feature: per-agent guidance STACKS onto the global (layer 0)
+	// rather than replacing it — both must be present.
+	if p := run(prof(config.GuidanceSpec{Parts: []string{perAgent}}), &global); !strings.Contains(p, perAgent) || !strings.Contains(p, global) {
+		t.Fatalf("per-agent guidance should stack ON TOP of the global, not replace it, got: %q", p)
+	}
+	// A list form contributes every part, in order.
+	if p := run(prof(config.GuidanceSpec{Parts: []string{"AAA", "BBB"}}), &global); !strings.Contains(p, "AAA") || !strings.Contains(p, "BBB") || !strings.Contains(p, global) {
+		t.Fatalf("list guidance should contribute all parts atop the global, got: %q", p)
+	}
+	// { replace: … } drops layer 0 — only the profile's own text survives.
+	if p := run(prof(config.GuidanceSpec{Parts: []string{perAgent}, Replace: true}), &global); !strings.Contains(p, perAgent) || strings.Contains(p, global) {
+		t.Fatalf("replace guidance should drop the global layer, got: %q", p)
+	}
+	// { replace: "" } is the explicit disable — no global, no built-in default.
+	if p := run(prof(config.GuidanceSpec{Parts: []string{""}, Replace: true}), &global); strings.Contains(p, global) || strings.Contains(p, "be concise and human") {
+		t.Fatalf("replace-empty should disable guidance entirely, got: %q", p)
+	}
+	// A plain "" no longer disables: the global (layer 0) still applies underneath.
+	if p := run(prof(config.GuidanceSpec{Parts: []string{""}}), &global); !strings.Contains(p, global) {
+		t.Fatalf("plain empty must not suppress the global layer, got: %q", p)
 	}
 	// No per-agent → falls through to global.
 	if p := run(base, &global); !strings.Contains(p, global) {
 		t.Fatalf("no per-agent guidance should fall through to global, got: %q", p)
 	}
-	// No per-agent, no global → built-in default.
-	if p := run(base, nil); !strings.Contains(p, "be concise and human") {
-		t.Fatalf("no guidance anywhere should use the built-in default, got: %q", p)
+	// No per-agent, no global → NO guidance block (conductor imposes no default).
+	withGlobal := run(base, &global)
+	if p := run(base, nil); strings.Contains(p, global) || len(p) >= len(withGlobal) {
+		t.Fatalf("no guidance anywhere should inject nothing, got: %q", p)
 	}
-	// Per-agent "" disables even when a global is set.
-	if p := run(config.AgentProfile{Provider: "claude", Guidance: &empty}, &global); strings.Contains(p, global) || strings.Contains(p, "be concise and human") {
-		t.Fatalf("per-agent empty should disable guidance for that agent, got: %q", p)
+
+	// policy.guidance is the scoped baseline (layer 0): the agent profile stacks
+	// on top of it, exactly like the top-level agent_guidance alias does.
+	runPol := func(profile config.AgentProfile, base *config.GuidanceSpec) string {
+		cfg := &config.Config{Policy: &config.Policy{Guidance: base},
+			Agents: map[string]config.AgentProfile{"fixer": profile}}
+		cfg.Control.Enabled = ptrBool(true)
+		d := &fakeDispatcher{}
+		e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
+		e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h", "s",
+			config.Action{Type: "agent", Agent: "fixer", Prompt: "do it"}))
+		return d.reqs[0].Action.Prompt
+	}
+	if p := runPol(prof(config.GuidanceSpec{Parts: []string{perAgent}}), &config.GuidanceSpec{Parts: []string{"POLICY base"}}); !strings.Contains(p, "POLICY base") || !strings.Contains(p, perAgent) {
+		t.Fatalf("policy.guidance should be layer 0 with the profile stacked on top, got: %q", p)
 	}
 }
 

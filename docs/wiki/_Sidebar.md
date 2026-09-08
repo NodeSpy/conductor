@@ -12,6 +12,7 @@ Setup
 The model
 - [[Connectors]]
 - [[Workflows]]
+- [[Reuse]]
 - [[Verbs]]
 - [[Code-Steps]]
 - [[Runtimes]]

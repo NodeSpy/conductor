@@ -129,7 +129,12 @@ agent step it contains — the step's own `gate:` wins ([[Gates]]).
 
 ## Reusable workflows
 
-`workflows:` holds named, parameterized step lists:
+`workflows:` holds named, parameterized step lists. A workflow may also `extends:` another
+workflow to inherit its `inputs`/`outputs`/`gate` (steps replace when set) — see [[Reuse]].
+
+```yaml
+workflows:
+  assess-and-post:
 
 ```yaml
 workflows:

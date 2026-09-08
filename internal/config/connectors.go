@@ -60,6 +60,9 @@ func (r ConnectorRef) IsEnabled() bool { return r.Enabled == nil || *r.Enabled }
 // RuntimeConfig is one entry in the `runtimes:` map — where agents run
 // (today's controllers, renamed, plus launch config that used to be global).
 type RuntimeConfig struct {
+	// Extends names another runtimes: entry this one inherits unset fields from
+	// (see resolveExtends) — e.g. several cli runtimes sharing host/isolation.
+	Extends string `yaml:"extends,omitempty"`
 	// Type is a built-in runtime kind: paseo | agent-deck | opencode | cli.
 	// Mutually exclusive with Agent.
 	Type string `yaml:"type,omitempty"`
@@ -189,6 +192,9 @@ type IsolationNetwork struct {
 // WorkflowDef is one entry in the `workflows:` map — a named, parameterized
 // step list invoked from triggers (or other workflows) via `workflow:`.
 type WorkflowDef struct {
+	// Extends names another workflows: entry this one inherits from (unset
+	// inputs/outputs/gate filled, steps replace if set). See resolveExtends.
+	Extends string `yaml:"extends,omitempty"`
 	// Description makes the workflow self-describing: with the declared
 	// inputs/outputs it's what `conductor schema`, `workflow.list`, and a
 	// choosing agent (#36 §11) see about what this does and when to use it.
@@ -297,9 +303,18 @@ type TriggerSpec struct {
 	FanSources []string `yaml:"-"`
 	// Name is an optional variant name (distinguishes dedup/attempt state when
 	// several triggers listen to the same event; mirrors legacy action names).
-	// Required (and unique) for triggers reachable by `conductor run`.
-	Name    string `yaml:"name,omitempty"`
-	Enabled *bool  `yaml:"enabled,omitempty"`
+	// Required (and unique) for triggers reachable by `conductor run`, and the
+	// handle an `extends:` child references a base by.
+	Name string `yaml:"name,omitempty"`
+	// Extends names another trigger (by Name) this one inherits from: filters
+	// and options deep-merge, steps/hooks replace when set, policy/gate/group
+	// fill if unset. Resolved before NormalizeTriggers. See resolveTriggerExtends.
+	Extends string `yaml:"extends,omitempty"`
+	// Abstract marks a base that exists only to be extended: it never fires and
+	// is stripped after resolution (so it needs no `on:`). A `conductor run`
+	// target cannot be abstract.
+	Abstract bool  `yaml:"abstract,omitempty"`
+	Enabled  *bool `yaml:"enabled,omitempty"`
 	// Filters gate whether the trigger fires; legal keys come from the event's
 	// filter schema. All AND-ed.
 	Filters map[string]any `yaml:"filters,omitempty"`
@@ -742,6 +757,15 @@ type Policy struct {
 	// dispatches shed like the agent-count budget (recorded, retried when
 	// the window frees) and notify.
 	Budget *BudgetPolicy `yaml:"budget,omitempty"`
+	// Guidance is the scoped house-tone baseline (layer 0) for every agent
+	// this scope governs — the successor to the top-level agent_guidance (which
+	// now folds into the global scope's Guidance). Because policy cascades
+	// global → connector → trigger, the baseline is scopable: a broader scope's
+	// guidance stacks UNDER a narrower one by default, and a scope using the
+	// `{ replace: … }` form resets the stack from that scope down. The agent
+	// profile's own guidance (with its extends: chain) then stacks on top of
+	// this resolved baseline. See MergePolicy and (*Engine).agentGuidance.
+	Guidance *GuidanceSpec `yaml:"guidance,omitempty"`
 }
 
 // BudgetPolicy is one hard spend cap: $ and/or tokens over a rolling window.
@@ -970,6 +994,20 @@ func MergePolicy(scopes ...*Policy) Policy {
 		}
 		if p.Budget != nil {
 			out.Budget = p.Budget
+		}
+		// Guidance is the one field that STACKS across scopes instead of
+		// most-specific-wins: a scope's parts append under the narrower scope's,
+		// so a trigger adds to (rather than erases) the global house tone. The
+		// `{ replace: … }` form opts back into most-specific-wins — it resets
+		// the accumulation to this scope's own parts. The merged result's
+		// Replace flag is not meaningful downstream (the engine reads Parts).
+		if p.Guidance != nil {
+			if p.Guidance.Replace || out.Guidance == nil {
+				out.Guidance = &GuidanceSpec{Parts: append([]string(nil), p.Guidance.Parts...)}
+			} else {
+				merged := append([]string(nil), out.Guidance.Parts...)
+				out.Guidance = &GuidanceSpec{Parts: append(merged, p.Guidance.Parts...)}
+			}
 		}
 	}
 	return out

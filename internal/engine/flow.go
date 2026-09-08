@@ -358,8 +358,8 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			}
 			return dispatch.Tokens{App: appTok, User: userTok}
 		},
-		Guidance: func(agentName string, p config.AgentProfile) string {
-			return e.agentGuidance(p) + e.outcomeGuidance(agentName, p)
+		Guidance: func(agentName string, p config.AgentProfile, pol config.Policy) string {
+			return e.agentGuidance(p, pol) + e.outcomeGuidance(agentName, p)
 		},
 		Memory: e.memoryPrompt,
 		// Revise is the supervise loop's round-trip (#36 §11): the failure

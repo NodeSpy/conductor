@@ -432,12 +432,20 @@ runtimes:
 
 # agents: — named profiles (provider/model/prompt posture), run on a runtime.
 agents:
+  # A profile can `extends:` another to inherit its fields — unset scalars fill,
+  # labels/maps deep-merge, and `guidance:` STACKS (parent tone under the child).
+  # Chains allowed; cycles/unknown targets are load errors. (wiki: Reuse)
+  #   base:  { provider: claude, workspace: worktree, guidance: "Terse and human." }
+  #   fixer: { extends: base, model: claude-opus-5, guidance: "You fix CI: verify, push." }
   fixer:
+    # extends: base         # inherit another profile's fields (see wiki: Reuse)
     provider: claude
     model: claude-sonnet-5
     workspace: worktree
     wait_timeout: 25m
     archive_when_done: true
+    # guidance: "Reply in a sentence or two."  # STACKS on policy.guidance (layer 0);
+    #                       #   a list or { replace: … } is also accepted (wiki: Reuse)
     # runtime: paseo        # explicit runtime (default: the default: true one)
     # host: build-box       # pin this profile's runtime launches to a host
     # memory: true          # inject shared memories (global + target repo + own scope)
@@ -561,6 +569,14 @@ callable:
       workflows: [pr-summary]
 
 triggers:
+  # Near-identical triggers can share a base: a trigger `extends: <name>` inherits
+  # another's steps/filters/policy (filters deep-merge, steps replace), and a base
+  # marked `abstract: true` never fires and is stripped after resolution:
+  #   - { name: review-base, abstract: true, steps: [ { id: r, type: agent, agent: reviewer, prompt: "Review {{.repo}}#{{.pr}}." } ] }
+  #   - { on: gh.review_requested, extends: review-base, filters: { repos: [org/api] } }
+  #   - { on: gh.review_requested, extends: review-base, filters: { repos: [org/web] } }
+  # (wiki: Reuse)
+  #
   # A callable manual workflow: reachable at POST /invoke/pr-summary for any
   # token scoped to it. `callable: true` is the trigger-side opt-in; without it
   # the workflow is invisible to the invoke surface even if a token lists it.
@@ -726,6 +742,14 @@ triggers:
 policy:
   quiet_hours: { tz: America/Denver, from: "22:00", to: "07:00", hold: true }
   concurrency: { max_agents: 3, max_agents_per_hour: 40 }
+  # guidance: "Write like a busy engineer: a sentence or two, plain and direct."
+  #                           # the scoped house-tone baseline (layer 0). Because
+  #                           #   policy cascades global -> connector -> trigger,
+  #                           #   a connector/trigger `policy.guidance` STACKS on
+  #                           #   top; { replace: … } resets the cascade. An agent
+  #                           #   profile's own guidance stacks above this. The
+  #                           #   legacy top-level `agent_guidance` folds in here.
+  #                           #   (wiki: Reuse)
   # max_fan_out: 100          # cap one for_each/parallel step's fan-out (global
   #                             scope; default 100). A for_each over a longer,
   #                             data-driven list is refused, not spawned.

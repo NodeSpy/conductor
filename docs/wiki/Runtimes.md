@@ -17,8 +17,12 @@ agents:
 
 ## Fields
 
+A runtime may `extends:` another runtimes entry to inherit unset fields (e.g. several `cli`
+runtimes sharing a `host:`/`isolation:` — the child overrides only `command`). See [[Reuse]].
+
 | field | meaning |
 |---|---|
+| `extends` | inherit unset fields from another `runtimes:` entry (see [[Reuse]]) |
 | `type` | built-in kind: `paseo` \| `agent-deck` \| `opencode` \| `cli` (mutually exclusive with `agent`) |
 | `agent` | an agent runtime driven over a transport (gemini, opencode, …); implies `transport: acp` |
 | `transport` | `acp` \| `native` \| `cli` |
