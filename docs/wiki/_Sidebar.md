@@ -2,6 +2,7 @@
 
 Setup
 - [[Installation]]
+- [[Docker]]
 - [[Quickstart]]
 - [[GitHub-App-Setup]]
 - [[Configuration]]
