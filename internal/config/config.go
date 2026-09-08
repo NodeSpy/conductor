@@ -1346,40 +1346,61 @@ func (c *Config) SkillEnabled() bool {
 	return false
 }
 
-// SkillToolsSupported reports whether a profile's runtime can carry the
-// conductor MCP tool server at launch: ACP transports (mcpServers on
-// session/new) and native opencode (a per-session config via
-// OPENCODE_CONFIG). The paseo CLI, agent-deck, and bare-CLI runtimes expose
-// no MCP surface in their launch — a skill: profile there gets the output
-// contract and nothing else, which `conductor validate` warns about.
-func (c *Config) SkillToolsSupported(p AgentProfile) (runtime string, ok bool) {
+// Skill delivery modes: how a dispatched agent reaches the conductor skill
+// surface on its runtime.
+const (
+	SkillModeNone = "none" // the surface can't reach this agent (remote, until the HTTP endpoint)
+	SkillModeMCP  = "mcp"  // injected as an MCP server at launch (ACP session/new, opencode config)
+	SkillModeCLI  = "cli"  // the agent shells the `conductor` CLI over the local daemon socket
+)
+
+// SkillDelivery reports HOW the conductor skill surface reaches a profile's
+// agent. MCP runtimes (ACP transports, native opencode) carry the tool server
+// injected at launch. Every other LOCAL runtime — paseo, agent-deck, bare cli —
+// exposes no MCP surface, but the agent runs on the daemon's box with a shell,
+// so it uses the `conductor` CLI over the unix socket (broker.MintSession token
+// in env). A REMOTE launch (a runtime/profile host:) can reach neither today —
+// the daemon socket isn't on that box — so it's SkillModeNone until the HTTP
+// endpoint lands.
+func (c *Config) SkillDelivery(p AgentProfile) (runtime, mode string) {
 	rn := p.RuntimeName()
 	if rn == "" {
 		rn = c.DefaultRuntimeName()
 	}
 	if rn == "" {
-		return BuiltinPaseoRuntime, false // the built-in paseo fallback
+		rn = BuiltinPaseoRuntime
 	}
 	cc, found := c.MergedControllers()[rn]
 	if !found {
-		return rn, false // unknown runtime — named by its own validation error
+		// The implicit built-in paseo is a local runtime with a shell → CLI;
+		// an unknown named runtime is its own validation error.
+		if rn == BuiltinPaseoRuntime {
+			return rn, SkillModeCLI
+		}
+		return rn, SkillModeNone
+	}
+	host := cc.Host
+	if p.Host != "" {
+		host = p.Host
+	}
+	if host != "" {
+		return rn, SkillModeNone // remote: no local socket, no HTTP endpoint yet
 	}
 	switch {
-	case cc.Type == "paseo":
-		// paseo exposes no MCP surface of its own, but a Claude Code agent it
-		// launches in an isolated worktree auto-discovers a project .mcp.json
-		// conductor drops there (dispatch.InjectClaudeMCP). Gated to an explicit
-		// claude provider (the injected config shapes are Claude Code's) and
-		// workspace: worktree (where a dedicated checkout to inject into exists).
-		return rn, strings.HasPrefix(p.Provider, "claude") && p.Workspace == "worktree"
-	case cc.Type == "agent-deck":
-		return rn, false
-	case cc.Type == "opencode":
-		return rn, true
-	case cc.Agent == "opencode" && cc.EffectiveTransport() == "native":
-		return rn, true
+	case cc.Type == "opencode", cc.Agent == "opencode" && cc.EffectiveTransport() == "native":
+		return rn, SkillModeMCP
+	case cc.EffectiveTransport() == "acp":
+		return rn, SkillModeMCP
 	}
-	return rn, cc.EffectiveTransport() == "acp"
+	return rn, SkillModeCLI // paseo / agent-deck / bare-cli, all local with a shell
+}
+
+// SkillToolsSupported reports whether the skill surface reaches this profile's
+// agent at all (via MCP or the CLI). `conductor validate` warns when it does
+// not (a skill: profile that gets nothing — a remote launch today).
+func (c *Config) SkillToolsSupported(p AgentProfile) (runtime string, ok bool) {
+	rn, mode := c.SkillDelivery(p)
+	return rn, mode != SkillModeNone
 }
 
 // BuiltinPaseoRuntime is the implicit default runtime's name (mirrors

@@ -239,21 +239,15 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		}
 	}
 
-	// Skill tools on a paseo runtime (#123 workaround). paseo exposes no MCP
-	// surface of its own, but the Claude Code agent it launches auto-discovers a
-	// project `.mcp.json`. So when a skill: profile runs Claude in an isolated
-	// worktree we created, drop the conductor tool server's config there — the
-	// agent connects to the same broker + memory + verb tools the ACP/opencode
-	// paths inject, delivered through Claude's own config discovery. Gated to a
-	// worktree (never the shared scratch or a base checkout) and to an explicit
-	// claude provider (the .mcp.json/.claude config shapes are Claude Code's).
-	// Best-effort: on failure the agent just runs without the tools.
-	if worktreeCwd != "" && p.Skill != nil && strings.HasPrefix(p.Provider, "claude") {
-		if ts := BuildToolServer(req, ""); ts != nil {
-			// Best-effort: a write failure just means the agent runs without the
-			// skill tools (the safe degradation), never a failed dispatch.
-			_, _ = InjectClaudeMCP(worktreeCwd, ts)
-		}
+	// Skill surface on a paseo runtime (#123). paseo exposes no MCP surface of
+	// its own, but the agent it launches runs on this box with a shell, so it
+	// reaches conductor through the `conductor` CLI over the daemon socket. Hand
+	// it the endpoint + a uid-bound session token in env (never argv); the
+	// injected prompt guidance tells it to run `conductor discover`/`call`.
+	// Provider-agnostic and no config injection. SkillEnv returns nil for a
+	// non-skill profile or a remote launch, so this is a no-op then.
+	for k, v := range SkillEnv(req, "") {
+		argv = append(argv, "--env", k+"="+v)
 	}
 
 	// Run with bounded retries on transient git-lock/timeout failures — common

@@ -389,7 +389,8 @@ agents:
 // #123: a skill: profile on a runtime with no MCP launch surface is a
 // validate WARNING — the tools and broker cannot reach the agent there.
 func TestSkillWarningsUnsupportedRuntime(t *testing.T) {
-	// Default (builtin paseo) runtime: unsupported.
+	// Default (builtin paseo) runtime: local → supported via the CLI face,
+	// so no unreachable-endpoint warning.
 	cfg := loadConfig(t, `
 connectors:
   svc: { type: fake }
@@ -397,26 +398,23 @@ agents:
   a: { model: x, skill: { verbs: ["svc.ask"] } }
 `)
 	reg := buildRegistry(t, cfg)
-	warns := SkillWarnings(cfg, reg)
-	found := false
-	for _, w := range warns {
-		if strings.Contains(w, "cannot carry the conductor MCP tools") && strings.Contains(w, `runtime "paseo"`) {
-			found = true
+	for _, w := range SkillWarnings(cfg, reg) {
+		if strings.Contains(w, "cannot reach the conductor skill endpoint") {
+			t.Fatalf("local paseo default must NOT warn as unreachable: %v", w)
 		}
 	}
-	if !found {
-		t.Fatalf("skill on the paseo default must warn: %v", warns)
-	}
 
-	// Explicit paseo and cli runtimes: unsupported. ACP and opencode: fine.
+	// Local runtimes are all supported (paseo/agent-deck via CLI, opencode/acp
+	// via MCP). Only a remote host: makes the endpoint unreachable.
 	cases := []struct {
 		runtime string
 		warn    bool
 	}{
-		{"pas: { type: paseo, default: true }", true},
-		{"deck: { type: agent-deck, default: true }", true},
+		{"pas: { type: paseo, default: true }", false},
+		{"deck: { type: agent-deck, default: true }", false},
 		{"oc: { type: opencode, default: true }", false},
 		{"gem: { agent: gemini, default: true }", false},
+		{"rem: { type: paseo, host: build-box, default: true }", true},
 	}
 	for _, c := range cases {
 		y := loadConfig(t, `
@@ -430,7 +428,7 @@ agents:
 		w := SkillWarnings(y, buildRegistry(t, y))
 		has := false
 		for _, s := range w {
-			if strings.Contains(s, "cannot carry the conductor MCP tools") {
+			if strings.Contains(s, "cannot reach the conductor skill endpoint") {
 				has = true
 			}
 		}

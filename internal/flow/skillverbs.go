@@ -206,11 +206,13 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 		if p.Skill == nil {
 			continue
 		}
-		// A skill: profile on a runtime with no MCP launch surface (#123):
-		// the tools and broker cannot reach the agent there — say so at
-		// validate time instead of shipping a silently tool-less skill.
+		// A skill: profile on a runtime with no reachable skill surface
+		// (#123): a remote host — where the local unix endpoint can't be
+		// injected — or an unknown runtime. Say so at validate time instead
+		// of shipping a silently tool-less skill. Local paseo/agent-deck get
+		// the CLI face; opencode/acp get MCP tools; both are supported.
 		if rt, ok := cfg.SkillToolsSupported(p); !ok {
-			warns = append(warns, fmt.Sprintf("agent %q: skill: is configured but runtime %q cannot carry the conductor MCP tools — the verb tools and secret broker will NOT reach this agent; use an acp or opencode runtime, a paseo runtime with provider: claude + workspace: worktree, or drop the skill: block", name, rt))
+			warns = append(warns, fmt.Sprintf("agent %q: skill: is configured but runtime %q cannot reach the conductor skill endpoint (a remote host:, or an unknown runtime) — the verb tools and secret broker will NOT reach this agent; run it on a local runtime or drop the skill: block", name, rt))
 		}
 		for _, pat := range p.Skill.Verbs {
 			matched := false
