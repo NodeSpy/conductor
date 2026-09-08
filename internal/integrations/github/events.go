@@ -159,6 +159,7 @@ type checkPayload struct {
 	Name         string `json:"name"`
 	HeadSHA      string `json:"head_sha"`
 	ID           int64  `json:"id"`
+	DetailsURL   string `json:"details_url"` // check_run only: .../actions/runs/<run>/job/<job>
 	PullRequests []struct {
 		Number int `json:"number"`
 	} `json:"pull_requests"`
@@ -440,7 +441,7 @@ func (g *Integration) checkTriggers(ctx context.Context, repo string, p ghPayloa
 			log.Printf("github[%s]: %s#%d failing check %q ignored (ignore_checks)", g.name, repo, num, c.Name)
 		} else {
 			t := g.target(repo, num, c.HeadSHA, "", "")
-			extra := map[string]any{"failing_check": c.Name, "run_id": c.ID}
+			extra := map[string]any{"failing_check": c.Name, "run_id": g.workflowRunID(ctx, p, c)}
 			trs = append(trs, g.single(repo, "failing_checks", t,
 				fmt.Sprintf("failing checks on %s#%d", repo, num), "fail@"+c.HeadSHA, extra)...)
 		}
@@ -448,6 +449,55 @@ func (g *Integration) checkTriggers(ctx context.Context, repo string, p ghPayloa
 	// A completed check (pass or fail) may have made the PR merge-ready.
 	trs = append(trs, g.mergeReadyTriggers(ctx, repo, num, p)...)
 	return trs
+}
+
+// workflowRunID resolves the *workflow run* id behind a check event — the id
+// `gh run rerun` takes. Only a workflow_run payload carries it directly: a
+// check_run's id is the job id and a check_suite's id is the suite id (passing
+// either to rerun 404s). check_run: parsed from details_url
+// (.../actions/runs/<run>/job/<job>), falling back to the jobs API; check_suite:
+// looked up via the runs API. 0 = not an Actions run (nothing to rerun).
+func (g *Integration) workflowRunID(ctx context.Context, p ghPayload, c *checkPayload) int64 {
+	if c == p.WorkflowRun {
+		return c.ID
+	}
+	if c == p.CheckRun {
+		if id := runIDFromDetailsURL(c.DetailsURL); id > 0 {
+			return id
+		}
+	}
+	if g.rest == nil || p.Installation.ID == 0 {
+		return 0
+	}
+	owner, name := p.Repository.Owner.Login, p.Repository.Name
+	var id int64
+	var err error
+	if c == p.CheckRun {
+		id, err = g.rest.jobRunID(ctx, p.Installation.ID, owner, name, c.ID)
+	} else {
+		id, err = g.rest.suiteRunID(ctx, p.Installation.ID, owner, name, c.ID)
+	}
+	if err != nil {
+		return 0
+	}
+	return id
+}
+
+// runIDFromDetailsURL pulls the run id out of an Actions check_run details_url
+// (https://github.com/o/r/actions/runs/123/job/456). 0 when absent.
+func runIDFromDetailsURL(u string) int64 {
+	_, rest, ok := strings.Cut(u, "/actions/runs/")
+	if !ok {
+		return 0
+	}
+	var id int64
+	for _, r := range rest {
+		if r < '0' || r > '9' {
+			break
+		}
+		id = id*10 + int64(r-'0')
+	}
+	return id
 }
 
 func (g *Integration) pullRequestTriggers(ctx context.Context, repo string, p ghPayload) []core.Trigger {

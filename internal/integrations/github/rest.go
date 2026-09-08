@@ -394,6 +394,38 @@ func (c *restClient) stuckRuns(ctx context.Context, instID int64, owner, repo, h
 	return out, nil
 }
 
+// jobRunID resolves the workflow run an Actions job (a check_run id) belongs to.
+// A check_run id is a *job* id, not a run id — `gh run rerun` needs the latter.
+// Non-Actions checks (Bugbot, etc.) 404 here: there's nothing to rerun.
+func (c *restClient) jobRunID(ctx context.Context, instID int64, owner, repo string, jobID int64) (int64, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/actions/jobs/%d", c.app.apiBase, owner, repo, jobID)
+	var data struct {
+		RunID int64 `json:"run_id"`
+	}
+	if err := c.get(ctx, instID, url, &data); err != nil {
+		return 0, err
+	}
+	return data.RunID, nil
+}
+
+// suiteRunID resolves the workflow run behind a check_suite id (each Actions run
+// owns exactly one suite). Returns 0 when no run matches (a non-Actions suite).
+func (c *restClient) suiteRunID(ctx context.Context, instID int64, owner, repo string, suiteID int64) (int64, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?check_suite_id=%d&per_page=1", c.app.apiBase, owner, repo, suiteID)
+	var data struct {
+		WorkflowRuns []struct {
+			ID int64 `json:"id"`
+		} `json:"workflow_runs"`
+	}
+	if err := c.get(ctx, instID, url, &data); err != nil {
+		return 0, err
+	}
+	if len(data.WorkflowRuns) == 0 {
+		return 0, nil
+	}
+	return data.WorkflowRuns[0].ID, nil
+}
+
 // prGate fetches the merge-readiness gate for a PR.
 func (c *restClient) prGate(ctx context.Context, instID int64, owner, name string, number int) (*mergeGate, error) {
 	const q = `query($o:String!,$n:String!,$num:Int!){

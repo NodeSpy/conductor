@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -99,13 +100,16 @@ func TestNewCommentLabelsEnriched(t *testing.T) {
 
 func TestCheckRunFailing(t *testing.T) {
 	g := richWithREST(t)
+	// A check_run's id is the *job* id; run_id must be the workflow run (from
+	// details_url) — `gh run rerun` 404s on a job id.
 	body := `{"action":"completed","installation":{"id":42},"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
-		"check_run":{"conclusion":"failure","name":"build","head_sha":"h9","id":321,"pull_requests":[{"number":4}]}}`
+		"check_run":{"conclusion":"failure","name":"build","head_sha":"h9","id":321,
+		"details_url":"https://github.com/acme/w/actions/runs/777/job/321","pull_requests":[{"number":4}]}}`
 	trs := g.triggersFor(context.Background(), "check_run", []byte(body))
 	if len(trs) != 1 || trs[0].Kind != "failing_checks" {
 		t.Fatalf("want failing_checks, got %+v", trs)
 	}
-	if trs[0].Context["run_id"] != int64(321) || trs[0].Dedup != "fail@h9" {
+	if trs[0].Context["run_id"] != int64(777) || trs[0].Dedup != "fail@h9" {
 		t.Fatalf("run_id/dedup wrong: %+v", trs[0].Context)
 	}
 	// A successful check produces nothing.
@@ -113,6 +117,68 @@ func TestCheckRunFailing(t *testing.T) {
 		"check_run":{"conclusion":"success","head_sha":"h","pull_requests":[{"number":4}]}}`
 	if k := do(t, g, "check_run", ok); len(k) != 0 {
 		t.Fatalf("success check should not trigger, got %v", k)
+	}
+}
+
+func TestCheckRunRunIDFallbacks(t *testing.T) {
+	g := richWithREST(t)
+	runID := func(body string) any {
+		trs := g.triggersFor(context.Background(), "check_run", []byte(body))
+		if len(trs) != 1 || trs[0].Kind != "failing_checks" {
+			t.Fatalf("want failing_checks, got %+v", trs)
+		}
+		return trs[0].Context["run_id"]
+	}
+	// No details_url → the jobs API resolves the run (job 321 → run 555).
+	noURL := `{"action":"completed","installation":{"id":42},"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"check_run":{"conclusion":"failure","name":"build","head_sha":"h9","id":321,"pull_requests":[{"number":4}]}}`
+	if got := runID(noURL); got != int64(555) {
+		t.Fatalf("run_id via jobs API = %v, want 555", got)
+	}
+	// A non-Actions check (external details_url, unknown job) has no run to rerun.
+	external := `{"action":"completed","installation":{"id":42},"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"check_run":{"conclusion":"failure","name":"Bugbot","head_sha":"h9","id":999,
+		"details_url":"https://cursor.com/docs/bugbot","pull_requests":[{"number":4}]}}`
+	if got := runID(external); got != int64(0) {
+		t.Fatalf("run_id for non-Actions check = %v, want 0", got)
+	}
+}
+
+func TestCheckSuiteFailing(t *testing.T) {
+	srv, app := stubAPI(t, "clean")
+	g := newTestIntegration(t, richConfig())
+	g.app = app
+	g.rest = newRESTClient(app)
+	// A check_suite id is the suite id; the run is looked up by check_suite_id (77 → 888).
+	mux := srv.Config.Handler.(*http.ServeMux)
+	mux.HandleFunc("/repos/acme/w/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("check_suite_id") != "77" {
+			t.Errorf("runs lookup should filter by check_suite_id=77, got %q", r.URL.RawQuery)
+		}
+		fmt.Fprint(w, `{"workflow_runs":[{"id":888}]}`)
+	})
+	body := `{"action":"completed","installation":{"id":42},"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"check_suite":{"conclusion":"failure","head_sha":"h9","id":77,"pull_requests":[{"number":4}]}}`
+	trs := g.triggersFor(context.Background(), "check_suite", []byte(body))
+	if len(trs) != 1 || trs[0].Kind != "failing_checks" {
+		t.Fatalf("want failing_checks, got %+v", trs)
+	}
+	if trs[0].Context["run_id"] != int64(888) {
+		t.Fatalf("run_id via runs API = %v, want 888", trs[0].Context["run_id"])
+	}
+}
+
+func TestRunIDFromDetailsURL(t *testing.T) {
+	cases := map[string]int64{
+		"https://github.com/acme/w/actions/runs/34249290897/job/102139431976": 34249290897,
+		"https://ghe.example.com/o/r/actions/runs/12?pr=5":                    12,
+		"https://cursor.com/docs/bugbot":                                      0,
+		"":                                                                    0,
+	}
+	for u, want := range cases {
+		if got := runIDFromDetailsURL(u); got != want {
+			t.Errorf("runIDFromDetailsURL(%q) = %d, want %d", u, got, want)
+		}
 	}
 }
 
