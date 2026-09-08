@@ -568,9 +568,6 @@ func TestFixersDoNotGetAskGuidance(t *testing.T) {
 		if !strings.Contains(d.reqs[0].Action.Prompt, "act as ME") {
 			t.Fatalf("fixer (agent=%s) should still get the identity/write wrapper", agent)
 		}
-		if !strings.Contains(d.reqs[0].Action.Prompt, "be concise and human") {
-			t.Fatalf("fixer (agent=%s) should get the concision guidance", agent)
-		}
 	}
 }
 
@@ -585,19 +582,23 @@ func TestAgentGuidanceConfigOverride(t *testing.T) {
 		return d.reqs[0].Action.Prompt
 	}
 
-	// Unset → built-in concise default.
-	if p := run(&config.Config{}); !strings.Contains(p, "be concise and human") {
-		t.Fatalf("unset agent_guidance should use the built-in default, got: %q", p)
-	}
-	// Custom → replaces the default.
+	// Custom agent_guidance → that exact text is injected.
 	custom := "House style: reply in one short sentence."
-	if p := run(&config.Config{AgentGuidance: &custom}); !strings.Contains(p, custom) || strings.Contains(p, "be concise and human") {
-		t.Fatalf("custom agent_guidance should replace the default, got: %q", p)
+	cp := run(&config.Config{AgentGuidance: &custom})
+	if !strings.Contains(cp, custom) {
+		t.Fatalf("custom agent_guidance should be injected, got: %q", cp)
 	}
-	// Empty → no guidance block (write wrapper still present).
+	// Unset → conductor imposes NO tone of its own (config-driven): the prompt
+	// carries no guidance block, so it is shorter than the custom one and lacks
+	// the custom text.
+	bare := run(&config.Config{})
+	if strings.Contains(bare, custom) || len(bare) >= len(cp) {
+		t.Fatalf("unset agent_guidance should inject nothing, got: %q", bare)
+	}
+	// Empty behaves like unset — still nothing (and identical to the bare prompt).
 	empty := ""
-	if p := run(&config.Config{AgentGuidance: &empty}); strings.Contains(p, "be concise and human") {
-		t.Fatalf("empty agent_guidance should disable it, got: %q", p)
+	if p := run(&config.Config{AgentGuidance: &empty}); p != bare {
+		t.Fatalf("empty agent_guidance should inject nothing (same as unset), got: %q", p)
 	}
 }
 
@@ -759,9 +760,10 @@ func TestAdditiveGuidanceLayering(t *testing.T) {
 	if p := run(base, &global); !strings.Contains(p, global) {
 		t.Fatalf("no per-agent guidance should fall through to global, got: %q", p)
 	}
-	// No per-agent, no global → built-in default.
-	if p := run(base, nil); !strings.Contains(p, "be concise and human") {
-		t.Fatalf("no guidance anywhere should use the built-in default, got: %q", p)
+	// No per-agent, no global → NO guidance block (conductor imposes no default).
+	withGlobal := run(base, &global)
+	if p := run(base, nil); strings.Contains(p, global) || len(p) >= len(withGlobal) {
+		t.Fatalf("no guidance anywhere should inject nothing, got: %q", p)
 	}
 
 	// policy.guidance is the scoped baseline (layer 0): the agent profile stacks

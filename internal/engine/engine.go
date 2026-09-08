@@ -297,31 +297,25 @@ func (e *Engine) gcLoop(ctx context.Context) {
 }
 
 // agentGuidance returns the house tone/format guidance appended to a dispatched
-// agent's prompt. Guidance is *additive* (a stack), not replace-only: layer 0 is
-// the top-level `agent_guidance` (or the built-in concise/human default when that
-// is unset), and the profile's own guidance parts — already carrying any extends:
-// ancestor's parts, prepended during resolveExtends — stack on top as separate
-// blocks. A profile `guidance: { replace: … }` drops layer 0 and every inherited
-// part, using only its own parts (and `replace: ""` disables guidance entirely).
-// If nothing contributes text, the built-in default stands in.
+// agent's prompt. Guidance is *additive* (a stack) and entirely config-driven —
+// conductor injects NO tone of its own. Layer 0 is the policy-resolved baseline
+// (global → connector → trigger, stacked by MergePolicy), or the unfolded
+// top-level agent_guidance (a config that never ran applyDefaults, e.g. a test).
+// The profile's own parts — carrying any extends: ancestor's, prepended during
+// resolveExtends — stack on top as separate blocks. Nothing configured → no
+// guidance block at all. A profile `guidance: { replace: … }` drops layer 0 and
+// every inherited part; an explicit "" renders nothing (a deliberate disable).
 func (e *Engine) agentGuidance(profile config.AgentProfile, pol config.Policy) string {
 	spec := profile.Guidance
 	replace := spec != nil && spec.Replace
 
 	var parts []string
 	if !replace {
-		// Layer 0 is the policy-resolved baseline (global → connector → trigger,
-		// already stacked by MergePolicy). Fall back to the unfolded top-level
-		// agent_guidance (a config that never ran applyDefaults, e.g. a test),
-		// then to the built-in concise default when nothing is configured. An
-		// explicit "" at any of these renders nothing — a deliberate disable.
 		switch {
 		case pol.Guidance != nil:
 			parts = append(parts, pol.Guidance.Parts...)
 		case e.cfg.AgentGuidance != nil:
 			parts = append(parts, *e.cfg.AgentGuidance)
-		default:
-			parts = append(parts, dispatch.ConcisionGuidanceText)
 		}
 	}
 	if spec != nil {

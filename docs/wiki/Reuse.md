@@ -80,15 +80,18 @@ expansion, so a child may also inherit a base's `on:`. An `abstract: true` base 
 ## Layered guidance
 
 Guidance (house tone/format appended to an agent's prompt) is **additive** — a stack, not a value
-that the most specific level overwrites. From the bottom up:
+that the most specific level overwrites. It is also entirely **config-driven**: conductor ships no
+tone of its own. If you configure nothing, nothing is injected. From the bottom up:
 
 1. **Layer 0 — the scoped baseline: [[Policy|`policy.guidance`]].** Because policy cascades
    **global → connector → trigger**, the baseline is scopable. Scopes **stack** by default (a
    trigger's guidance adds under the global tone); a scope that uses the `{ replace: … }` form
-   **resets** the cascade from that scope down. If no `policy.guidance` is set anywhere, a built-in
-   concise/human default stands in as layer 0.
+   **resets** the cascade from that scope down.
 2. **The agent profile's own `guidance`** (plus anything it inherits through `extends:`) stacks on
    top of the baseline.
+
+`config.example.yaml` ships a reasonable house tone under `policy.guidance` you can adopt or
+change — it is an example, not a default conductor imposes.
 
 `guidance:` accepts three forms, at both the policy scope and the agent profile:
 
