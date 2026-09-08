@@ -1,26 +1,23 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/NodeSpy/conductor/internal/memory"
 )
 
 // The agent-facing skill CLI (#36 §12, CLI face). A dispatched agent reaches
 // back into conductor by shelling these commands — no MCP server, no config
-// injection. The daemon endpoint + one-shot-ish session token arrive in the
-// agent's environment (set by the dispatch path):
+// injection. The daemon endpoint + session token arrive in the agent's
+// environment (set by the dispatch path):
 //
-//	CONDUCTOR_ENDPOINT     unix://<memory.sock>   (https://… for a remote agent)
-//	CONDUCTOR_SKILL_TOKEN  the uid-bound session token (broker.MintSession)
+//	CONDUCTOR_ENDPOINT     unix://<socket>   — the daemon socket locally, or an
+//	                       SSH-reverse-forwarded copy of it on a remote box
+//	CONDUCTOR_SKILL_TOKEN  the session token (broker.MintSession)
 //
 // Every op authorizes by that token plus, on the local socket, the calling
 // process's kernel uid (read server-side) — so a token scraped from env is
@@ -31,67 +28,31 @@ import (
 //	conductor memory recall <query> | remember <text> [--tags a,b] [--scope s]
 //	conductor secret <name>
 
-// skillEndpoint resolves the raw daemon endpoint from the environment. A
-// local agent gets a unix:// socket path; a remote agent (another machine) gets
-// an https:// URL its daemon is reachable at through the tunnel/reverse proxy.
+// skillEndpoint resolves the daemon socket path from the environment. The value
+// is a unix:// endpoint — the daemon's own socket for a local agent, or an
+// SSH-reverse-forwarded copy of it on a remote agent's box; either way one
+// socket path to dial.
 func skillEndpoint() (string, error) {
 	ep := strings.TrimSpace(os.Getenv("CONDUCTOR_ENDPOINT"))
 	if ep == "" {
 		return "", fmt.Errorf("CONDUCTOR_ENDPOINT is not set — this command only runs inside a conductor-dispatched agent")
 	}
-	return ep, nil
+	return strings.TrimPrefix(ep, "unix://"), nil
 }
 
-// skillCall dials the daemon endpoint for one op, stamping the session token.
-// unix:// (or a bare path) uses the local socket; http(s):// posts to the
-// remote HTTP face with the token as a bearer credential.
+// skillCall dials the daemon socket for one op, stamping the session token.
 func skillCall(req memory.IPCRequest) (memory.IPCResponse, error) {
-	ep, err := skillEndpoint()
+	socket, err := skillEndpoint()
 	if err != nil {
 		return memory.IPCResponse{}, err
 	}
-	token := os.Getenv("CONDUCTOR_SKILL_TOKEN")
-	var resp memory.IPCResponse
-	switch {
-	case strings.HasPrefix(ep, "https://"), strings.HasPrefix(ep, "http://"):
-		resp, err = httpSkillCall(ep, token, req)
-	default:
-		req.Token = token
-		resp, err = memory.IPCCall(strings.TrimPrefix(ep, "unix://"), req)
-	}
+	req.Token = os.Getenv("CONDUCTOR_SKILL_TOKEN")
+	resp, err := memory.IPCCall(socket, req)
 	if err != nil {
 		return resp, err
 	}
 	if resp.Error != "" {
 		return resp, fmt.Errorf("%s", resp.Error)
-	}
-	return resp, nil
-}
-
-// httpSkillCall posts one op to the remote HTTP face. The session token rides
-// the Authorization header (never the body), matching the daemon's HTTPHandler.
-func httpSkillCall(url, token string, req memory.IPCRequest) (memory.IPCResponse, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return memory.IPCResponse{}, err
-	}
-	hreq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return memory.IPCResponse{}, err
-	}
-	hreq.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		hreq.Header.Set("Authorization", "Bearer "+token)
-	}
-	client := &http.Client{Timeout: 60 * time.Second}
-	hresp, err := client.Do(hreq)
-	if err != nil {
-		return memory.IPCResponse{}, fmt.Errorf("conductor: remote endpoint %s: %w", url, err)
-	}
-	defer hresp.Body.Close()
-	var resp memory.IPCResponse
-	if err := json.NewDecoder(io.LimitReader(hresp.Body, 8<<20)).Decode(&resp); err != nil {
-		return memory.IPCResponse{}, fmt.Errorf("conductor: read remote response (%s): %w", hresp.Status, err)
 	}
 	return resp, nil
 }

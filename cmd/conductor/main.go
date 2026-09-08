@@ -638,18 +638,11 @@ func cmdRun(args []string) error {
 			}
 			memory.SetLiveOps(ops)
 
-			// The remote HTTP face (opt-in `skill:` block): mount the same tool
-			// ops on the shared inbound listener so an agent dispatched to a
-			// remote runtime (host:) can reach the broker + verbs + memory over
-			// HTTPS (TLS terminated by the reverse proxy / tunnel in front). Off
-			// unless configured, and useless without the broker — so it's built
-			// only inside this SkillEnabled path.
-			if cfg.SkillEnabled() && cfg.RemoteSkillEnabled() {
-				addr := cfg.SkillRemoteListen()
-				inbound.RegisterPrefix(ctx, addr, "/skill", memory.HTTPHandler(mgr, st.Audit, logf), logf)
-				dispatch.SetSkillRemoteEndpoint(cfg.SkillRemoteEndpoint())
-				logf("skill: remote HTTP face on %s (POST %s)", addr, cfg.SkillRemoteEndpoint())
-			}
+			// Remote (host:) skill agents reach this socket through a per-host
+			// SSH reverse tunnel the dispatch path opens on demand and this
+			// manager supervises for the daemon's lifetime — internal wiring
+			// over the same SSH trust that launches paseo there, nothing public.
+			dispatch.InitSkillTunnels(ctx, logf)
 		}
 	}
 

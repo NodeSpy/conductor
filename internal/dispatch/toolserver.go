@@ -3,33 +3,10 @@ package dispatch
 import (
 	"os"
 	"strconv"
-	"sync"
 
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/skill"
 )
-
-// skillRemoteEndpoint is the public URL a REMOTE agent posts skill ops to
-// (base_url + "/skill"), published by the daemon at boot from the `skill:`
-// block. Empty (the default) means no remote face is configured, so a remote
-// launch injects nothing — a local socket is never handed to an off-box agent.
-var (
-	skillRemoteMu       sync.RWMutex
-	skillRemoteEndpoint string
-)
-
-// SetSkillRemoteEndpoint records the remote skill URL (daemon boot). "" clears.
-func SetSkillRemoteEndpoint(url string) {
-	skillRemoteMu.Lock()
-	skillRemoteEndpoint = url
-	skillRemoteMu.Unlock()
-}
-
-func remoteSkillEndpoint() string {
-	skillRemoteMu.RLock()
-	defer skillRemoteMu.RUnlock()
-	return skillRemoteEndpoint
-}
 
 // The conductor tool server (memory + run_step + the skill's verb tools and
 // secret broker) is injected per dispatch into the MCP-delivery runtimes
@@ -105,45 +82,26 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 	return out
 }
 
-// SkillEnv returns the environment a LOCAL dispatched agent needs to reach the
-// conductor skill surface via the `conductor` CLI: the daemon endpoint and a
-// uid-bound session token (broker.MintSession). Delivered through the runtime's
-// env (paseo `--env`, etc.), never argv. Returns nil when there is nothing to
-// offer — no tool socket published at boot, no skill: on the profile, or a
-// remote (host:) launch where the daemon socket isn't reachable (the HTTP
-// endpoint is a later increment). This is the paseo/cli counterpart to
-// BuildToolServer's MCP injection (ACP/opencode).
-func SkillEnv(req Request, host string) map[string]string {
-	if req.Profile.Skill == nil {
+// SkillEnv returns the environment a dispatched agent needs to reach the
+// conductor skill surface via the `conductor` CLI: the socket endpoint and a
+// session token (broker.MintSession). Delivered through the runtime's env
+// (paseo `--env`, etc.), never argv. `endpoint` is a resolved `unix://<socket>`
+// — the daemon's own socket for a local launch, or an SSH-reverse-forwarded
+// copy of it on the remote box (the caller resolves which). Returns nil when
+// there is nothing to offer: no skill: on the profile, or no endpoint. This is
+// the paseo/cli counterpart to BuildToolServer's MCP injection (ACP/opencode).
+func SkillEnv(req Request, endpoint string) map[string]string {
+	if req.Profile.Skill == nil || endpoint == "" {
 		return nil
-	}
-	effHost := host
-	if req.Profile.Host != "" {
-		effHost = req.Profile.Host
-	}
-	var endpoint string
-	if effHost != "" {
-		// Remote launch: the local socket doesn't exist on that box. Hand the
-		// agent the public HTTP endpoint, but ONLY if one is configured — never
-		// a local socket path an off-box process couldn't dial anyway.
-		remote := remoteSkillEndpoint()
-		if remote == "" {
-			return nil
-		}
-		endpoint = remote
-	} else {
-		sock := socketFromToolCommand(memory.ToolCommand())
-		if sock == "" {
-			return nil // no tool server published (no memory: and no skill: at boot)
-		}
-		endpoint = "unix://" + sock
 	}
 	b := skill.Active()
 	if b == nil {
 		return nil
 	}
-	// The uid binding matters only on the local socket (kernel peer creds); a
-	// remote connection has none, so the token authorizes by the bearer alone.
+	// The uid binding matters on the local socket (kernel peer creds). Over an
+	// SSH-forwarded socket the peer is the ssh relay running as the daemon's own
+	// uid, so the uid check passes and provenance rests on the token — which is
+	// exactly why memory/run_step ops derive Source from the token, not the peer.
 	tok, err := b.MintSession(skill.Identity{
 		Agent:   req.Action.Agent,
 		Repo:    req.Trigger.Target.Repo,
@@ -158,6 +116,17 @@ func SkillEnv(req Request, host string) map[string]string {
 		"CONDUCTOR_ENDPOINT":    endpoint,
 		"CONDUCTOR_SKILL_TOKEN": tok,
 	}
+}
+
+// LocalSkillEndpoint is the `unix://` endpoint for a LOCAL dispatched agent —
+// the daemon's own tool socket, or "" when none was published at boot (no
+// memory: section and no skill: profile).
+func LocalSkillEndpoint() string {
+	sock := socketFromToolCommand(memory.ToolCommand())
+	if sock == "" {
+		return ""
+	}
+	return "unix://" + sock
 }
 
 // socketFromToolCommand pulls the --socket value out of memory.ToolCommand()

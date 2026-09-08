@@ -5,18 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 )
-
-// maxHTTPBody bounds a remote tool request body: tool calls are small JSON
-// (options, a query, a step), never a payload upload.
-const maxHTTPBody = 1 << 20 // 1 MiB
 
 // The live-tool transport. The `conductor mcp memory` subprocess an agent
 // runtime attaches (see mcp.go) runs OUTSIDE the daemon, but the memory
@@ -346,70 +339,6 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 		return IPCResponse{OK: true, Result: out}
 	}
 	return IPCResponse{Error: fmt.Sprintf("memory: unknown tool op %q", req.Op)}
-}
-
-// HTTPHandler is the remote face of the tool surface: the same ops ServeIPC
-// serves on the local unix socket, reachable over HTTP for an agent running on
-// another machine (reverse-proxied / tunnelled with TLS terminated upstream —
-// see the daemon wiring). One POST is one op: the body is the IPCRequest JSON,
-// and the session token rides the `Authorization: Bearer` header, NOT the body,
-// so a caller cannot smuggle a different session's token in the payload.
-//
-// A remote connection has no kernel peer credentials, so the caller is
-// presented to the broker as Peer{} (Valid:false); a uid-bound session token
-// authorizes by the bearer token alone (its uid check has no local identity to
-// compare against — that is the deliberate TLS-bearer model). token_claim is
-// refused here: the one-shot claim flow is peer-bound and local-only; a remote
-// agent receives its session token directly in its environment.
-func HTTPHandler(m *Manager, audit func(map[string]any), log func(string, ...any)) http.Handler {
-	if log == nil {
-		log = func(string, ...any) {}
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			httpJSON(w, http.StatusMethodNotAllowed, IPCResponse{Error: "skill: POST only"})
-			return
-		}
-		tok := bearerToken(r.Header.Get("Authorization"))
-		if tok == "" {
-			httpJSON(w, http.StatusUnauthorized, IPCResponse{Error: "skill: missing bearer token"})
-			return
-		}
-		var req IPCRequest
-		if err := json.NewDecoder(io.LimitReader(r.Body, maxHTTPBody)).Decode(&req); err != nil {
-			httpJSON(w, http.StatusBadRequest, IPCResponse{Error: "skill: bad tool request: " + err.Error()})
-			return
-		}
-		// The token is the header's, never the body's.
-		req.Token = tok
-		if req.Op == "token_claim" {
-			httpJSON(w, http.StatusForbidden, IPCResponse{Error: "skill: token_claim is not available over the remote endpoint"})
-			return
-		}
-		// No kernel peer identity on a remote connection.
-		resp := handleIPC(m, req, Peer{}, audit, log)
-		httpJSON(w, http.StatusOK, resp)
-	})
-}
-
-// bearerToken extracts the token from an `Authorization: Bearer <token>` header
-// (case-insensitive scheme), returning "" when absent or malformed.
-func bearerToken(h string) string {
-	h = strings.TrimSpace(h)
-	if len(h) < 7 || !strings.EqualFold(h[:7], "bearer ") {
-		return ""
-	}
-	return strings.TrimSpace(h[7:])
-}
-
-func httpJSON(w http.ResponseWriter, code int, resp IPCResponse) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	b, err := json.Marshal(resp)
-	if err != nil {
-		b = []byte(`{"ok":false,"error":"skill: unencodable response"}`)
-	}
-	_, _ = w.Write(append(b, '\n'))
 }
 
 // IPCCall dials the daemon socket for one tool call (the subprocess side).

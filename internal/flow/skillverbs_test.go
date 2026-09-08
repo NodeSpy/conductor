@@ -399,41 +399,33 @@ agents:
 `)
 	reg := buildRegistry(t, cfg)
 	for _, w := range SkillWarnings(cfg, reg) {
-		if strings.Contains(w, "cannot reach the conductor skill endpoint") {
+		if strings.Contains(w, "cannot reach the conductor skill surface") {
 			t.Fatalf("local paseo default must NOT warn as unreachable: %v", w)
 		}
 	}
 
-	// Local runtimes are all supported (paseo/agent-deck via CLI, opencode/acp
-	// via MCP). Only a remote host: makes the endpoint unreachable.
-	cases := []struct {
-		runtime string
-		warn    bool
-	}{
-		{"pas: { type: paseo, default: true }", false},
-		{"deck: { type: agent-deck, default: true }", false},
-		{"oc: { type: opencode, default: true }", false},
-		{"gem: { agent: gemini, default: true }", false},
-		{"rem: { type: paseo, host: build-box, default: true }", true},
-	}
-	for _, c := range cases {
+	// Every known runtime is reachable now: local paseo/agent-deck via the CLI
+	// face, opencode/acp via MCP, and a remote host: via the SSH reverse tunnel.
+	// None warn as unreachable.
+	for _, runtime := range []string{
+		"pas: { type: paseo, default: true }",
+		"deck: { type: agent-deck, default: true }",
+		"oc: { type: opencode, default: true }",
+		"gem: { agent: gemini, default: true }",
+		"rem: { type: paseo, host: build-box, default: true }",
+	} {
 		y := loadConfig(t, `
 connectors:
   svc: { type: fake }
 runtimes:
-  `+c.runtime+`
+  `+runtime+`
 agents:
   a: { model: x, skill: { verbs: ["svc.ask"] } }
 `)
-		w := SkillWarnings(y, buildRegistry(t, y))
-		has := false
-		for _, s := range w {
-			if strings.Contains(s, "cannot reach the conductor skill endpoint") {
-				has = true
+		for _, s := range SkillWarnings(y, buildRegistry(t, y)) {
+			if strings.Contains(s, "cannot reach the conductor skill surface") {
+				t.Fatalf("runtime %q must not warn as unreachable: %v", runtime, s)
 			}
-		}
-		if has != c.warn {
-			t.Fatalf("runtime %q: warn=%v, want %v (%v)", c.runtime, has, c.warn, w)
 		}
 	}
 }

@@ -1,7 +1,6 @@
 package dispatch
 
 import (
-	"os"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -21,48 +20,39 @@ func TestSkillEnv(t *testing.T) {
 		Trigger: core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "o/r", Number: 7}},
 	}
 
-	// Local skill profile → endpoint + a minted session token in env.
-	env := SkillEnv(req, "")
-	if env["CONDUCTOR_ENDPOINT"] != "unix:///run/c/memory.sock" {
-		t.Errorf("endpoint = %q, want unix:///run/c/memory.sock", env["CONDUCTOR_ENDPOINT"])
-	}
-	if env["CONDUCTOR_SKILL_TOKEN"] == "" {
-		t.Errorf("expected a session token in env, got none")
+	// LocalSkillEndpoint reads the published tool socket.
+	if got := LocalSkillEndpoint(); got != "unix:///run/c/memory.sock" {
+		t.Fatalf("LocalSkillEndpoint = %q, want unix:///run/c/memory.sock", got)
 	}
 
-	// A remote launch with NO remote endpoint configured → nothing injected
-	// (never hand a local socket path to an off-box agent).
-	remote := req
-	remote.Profile.Host = "build-box"
-	if SkillEnv(remote, "") != nil {
-		t.Errorf("remote (host:) launch must not inject a local endpoint")
-	}
-	if SkillEnv(req, "build-box") != nil {
-		t.Errorf("runtime host: must not inject a local endpoint")
-	}
-
-	// With a remote endpoint published, a remote launch gets the HTTPS endpoint
-	// (not the socket) + a token; a LOCAL launch still gets the unix socket.
-	SetSkillRemoteEndpoint("https://conductor.example.com/skill")
-	t.Cleanup(func() { SetSkillRemoteEndpoint("") })
-	if renv := SkillEnv(req, "build-box"); renv["CONDUCTOR_ENDPOINT"] != "https://conductor.example.com/skill" || renv["CONDUCTOR_SKILL_TOKEN"] == "" {
-		t.Errorf("remote launch with endpoint configured = %v, want the https endpoint + a token", renv)
-	}
-	if lenv := SkillEnv(req, ""); lenv["CONDUCTOR_ENDPOINT"] != "unix:///run/c/memory.sock" {
-		t.Errorf("a local launch must still use the unix socket, got %v", lenv)
+	// A skill profile + a resolved endpoint → that endpoint + a minted token.
+	// The endpoint is passed in verbatim (a forwarded remote socket looks the
+	// same as a local one — a plain unix:// path).
+	for _, ep := range []string{"unix:///run/c/memory.sock", "unix:///tmp/conductor-skill-deadbeef.sock"} {
+		env := SkillEnv(req, ep)
+		if env["CONDUCTOR_ENDPOINT"] != ep {
+			t.Errorf("endpoint = %q, want %q", env["CONDUCTOR_ENDPOINT"], ep)
+		}
+		if env["CONDUCTOR_SKILL_TOKEN"] == "" {
+			t.Errorf("expected a session token in env for %q, got none", ep)
+		}
 	}
 
-	// No skill: block → nothing.
+	// No endpoint resolved → nothing (never inject a token with nowhere to send it).
+	if SkillEnv(req, "") != nil {
+		t.Errorf("an empty endpoint must inject nothing")
+	}
+
+	// No skill: block → nothing, even with an endpoint.
 	noskill := req
 	noskill.Profile.Skill = nil
-	if SkillEnv(noskill, "") != nil {
+	if SkillEnv(noskill, "unix:///run/c/memory.sock") != nil {
 		t.Errorf("a non-skill profile must get no skill env")
 	}
 
-	// No tool server published at boot → nothing.
+	// No tool server published at boot → LocalSkillEndpoint is empty.
 	memory.SetToolCommand(nil)
-	if SkillEnv(req, "") != nil {
-		t.Errorf("no tool command published → no skill env")
+	if LocalSkillEndpoint() != "" {
+		t.Errorf("no tool command published → empty local endpoint")
 	}
-	_ = os.Getuid
 }

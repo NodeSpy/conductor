@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"io"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,59 +84,6 @@ func TestSkillCLIEndToEnd(t *testing.T) {
 	// foreign-uid peer (the socket path's uid is covered by the calls above).
 	if _, err := b.Authorize(tok, skill.Peer{PID: 9, UID: uint32(os.Getuid()) + 1, Valid: true}); err == nil {
 		t.Fatal("a different uid must be refused")
-	}
-}
-
-// TestSkillCLIRemoteHTTP drives the SAME CLI over the remote HTTP face: an
-// agent on another machine reaches its daemon through an https:// endpoint,
-// authorizing with the session token as a bearer credential (no kernel peer).
-// httptest serves plain HTTP (TLS is terminated by the tunnel in production);
-// the client branch handles http(s):// identically.
-func TestSkillCLIRemoteHTTP(t *testing.T) {
-	b := skill.NewBroker(func(string) (string, bool) { return "", false }, nil)
-	tok, err := b.MintSession(skill.Identity{
-		Agent:  "fixer",
-		Policy: config.SkillPolicy{Verbs: []string{"gh.*"}},
-	}, uint32(os.Getuid()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	asPeer := func(p memory.Peer) skill.Peer {
-		return skill.Peer{PID: p.PID, StartTime: p.StartTime, UID: p.UID, Valid: p.Valid}
-	}
-	memory.SetLiveOps(memory.LiveOps{
-		SkillVerbs: func(token string, peer memory.Peer) ([]map[string]any, error) {
-			if _, err := b.Authorize(token, asPeer(peer)); err != nil {
-				return nil, err
-			}
-			return []map[string]any{{"uses": "gh.comment", "description": "Post a comment."}}, nil
-		},
-		RunVerb: func(_ context.Context, token, uses string, opts map[string]any, peer memory.Peer) (map[string]any, error) {
-			if _, err := b.Authorize(token, asPeer(peer)); err != nil {
-				return nil, err
-			}
-			return map[string]any{"uses": uses, "posted": true, "body": opts["body"]}, nil
-		},
-	})
-	t.Cleanup(func() { memory.SetLiveOps(memory.LiveOps{}) })
-
-	srv := httptest.NewServer(memory.HTTPHandler(nil, func(map[string]any) {}, nil))
-	t.Cleanup(srv.Close)
-
-	t.Setenv("CONDUCTOR_ENDPOINT", srv.URL) // http://… — the remote branch
-	t.Setenv("CONDUCTOR_SKILL_TOKEN", tok)
-
-	if out := capture(t, func() error { return cmdDiscover(nil) }); !strings.Contains(out, "gh") {
-		t.Fatalf("remote discover should list gh, got:\n%s", out)
-	}
-	if out := capture(t, func() error { return cmdCall([]string{"gh.comment", "--body", "hi"}) }); !strings.Contains(out, `"posted": true`) || !strings.Contains(out, "hi") {
-		t.Fatalf("remote call should return the server-side result, got:\n%s", out)
-	}
-
-	// A bad/blank token over HTTP is refused (broker rejects; 401 surfaces).
-	t.Setenv("CONDUCTOR_SKILL_TOKEN", "")
-	if _, err := skillCall(memory.IPCRequest{Op: "verb_list"}); err == nil {
-		t.Fatal("a blank token over the remote endpoint must be refused")
 	}
 }
 
