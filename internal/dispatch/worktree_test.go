@@ -118,6 +118,37 @@ func TestInteractiveHandoffLaunchesFreshNotQueued(t *testing.T) {
 	}
 }
 
+// Fix for the orphan-worktree leak: a checkout-pr feedback dispatch that queues
+// onto a live agent must NOT pre-create a worktree first. Before the fix,
+// createWorktree ran unconditionally at the top, so every queued dispatch left a
+// fresh worktree behind (…-1, …-2) that no agent ever occupied and the reaper
+// could never reclaim.
+func TestFeedbackQueuesWithoutCreatingWorktree(t *testing.T) {
+	bin := fakePaseoRouting(t)
+	created := false
+	d := &Dispatcher{PaseoBin: bin, repoDirs: map[string]string{}}
+	d.CheckoutDir = func(context.Context, string) (string, error) { return "/checkouts/acme-w", nil }
+	d.WorktreeCreator = func(context.Context, Request, string) (string, string, error) {
+		created = true
+		return "wks_pr5", "/tmp/wt/pr5", nil
+	}
+	pr := core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}
+	fb := Request{
+		Trigger: core.Trigger{Kind: "new_comment", Target: pr},
+		Action:  config.Action{Type: "agent", Agent: "a", Checkout: "checkout-pr", Prompt: "handle comment"},
+	}
+	ref, err := d.Dispatch(context.Background(), fb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ref.Queued {
+		t.Fatalf("feedback with a live agent should queue; got %+v", ref)
+	}
+	if created {
+		t.Fatal("queuing to a live agent must NOT pre-create a worktree (the orphan-leak fix)")
+	}
+}
+
 // A worktree-creation failure must surface as an error so the engine escalates +
 // retries — not a silent scratch fallback (the bug this replaced).
 func TestPaseoWorktreeCreateFailureIsLoud(t *testing.T) {
