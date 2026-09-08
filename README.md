@@ -169,11 +169,18 @@ cd conductor && ./scripts/install.sh
 ```
 
 ```sh
+# Docker (multi-arch amd64/arm64):
+docker run -d --name conductor -v ~/.config/conductor:/config -v conductor-data:/data \
+  -p 8080:8080 ghcr.io/nodespy/conductor:latest
+```
+
+```sh
 conductor service install     # run as a service (unit named "conductor")
 conductor update              # self-update to the latest release
 ```
 
-See [Installation](https://github.com/NodeSpy/conductor/wiki/Installation) for the
+See [Installation](https://github.com/NodeSpy/conductor/wiki/Installation) and the
+[Docker](https://github.com/NodeSpy/conductor/wiki/Docker) page for the
 full walkthrough, service management, and updating.
 
 ## Documentation

@@ -65,6 +65,22 @@ cd conductor
 
 Requires the local `paseo` CLI (authenticated to your daemon) and `gh` on `PATH`.
 
+## Docker
+
+A multi-arch image is published to `ghcr.io/nodespy/conductor`:
+
+```sh
+docker run -d --name conductor \
+  -v ~/.config/conductor:/config \
+  -v conductor-data:/data \
+  -p 8080:8080 \
+  ghcr.io/nodespy/conductor:latest
+```
+
+See [[Docker]] for the full walkthrough — volumes, docker-compose, linking a
+runtime over SSH for agent dispatch, and the container-specific update and
+isolation notes.
+
 ## Running as a service
 
 The installer offers this during setup; the binary also manages it directly — it
