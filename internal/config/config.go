@@ -292,6 +292,9 @@ type Handoff struct {
 // Default flags the entry a step's `handoff:` resolves to when it names none
 // explicitly. See internal/handoff.Registry for resolution order.
 type HandoffConfig struct {
+	// Extends names another handoffs: entry this one inherits unset fields from
+	// (see resolveExtends).
+	Extends string `yaml:"extends,omitempty"`
 	// Web configures a web-link draft page served on conductor's inbound HTTP
 	// listener. Mutually exclusive with Slack/Discord.
 	Web *HandoffWeb `yaml:"web"`
@@ -604,6 +607,10 @@ func (c *Config) DefaultHandoffName() string {
 
 // AgentProfile is a reusable named agent config referenced by agent actions.
 type AgentProfile struct {
+	// Extends names another agents: profile this one inherits from. Unset fields
+	// are filled from the parent; guidance stacks (parent under child). See
+	// resolveExtends.
+	Extends  string `yaml:"extends,omitempty"`
 	Provider string `yaml:"provider"`
 	Model    string `yaml:"model"`
 	Thinking string `yaml:"thinking"`
@@ -969,6 +976,11 @@ func Load(path string) (*Config, error) {
 	// File-referencing `workflow:` forms (workflow:+import:, a bare file path) join the
 	// merged workflow set before defaults/validation see it.
 	if err := c.resolveWorkflowFiles(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	// `extends:` inheritance across map sections resolves before defaults fold
+	// (agent_guidance → policy) and before validation cross-checks references.
+	if err := c.resolveExtends(); err != nil {
 		return nil, err
 	}
 	c.applyDefaults()

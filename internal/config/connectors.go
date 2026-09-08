@@ -60,6 +60,9 @@ func (r ConnectorRef) IsEnabled() bool { return r.Enabled == nil || *r.Enabled }
 // RuntimeConfig is one entry in the `runtimes:` map — where agents run
 // (today's controllers, renamed, plus launch config that used to be global).
 type RuntimeConfig struct {
+	// Extends names another runtimes: entry this one inherits unset fields from
+	// (see resolveExtends) — e.g. several cli runtimes sharing host/isolation.
+	Extends string `yaml:"extends,omitempty"`
 	// Type is a built-in runtime kind: paseo | agent-deck | opencode | cli.
 	// Mutually exclusive with Agent.
 	Type string `yaml:"type,omitempty"`
@@ -189,6 +192,9 @@ type IsolationNetwork struct {
 // WorkflowDef is one entry in the `workflows:` map — a named, parameterized
 // step list invoked from triggers (or other workflows) via `workflow:`.
 type WorkflowDef struct {
+	// Extends names another workflows: entry this one inherits from (unset
+	// inputs/outputs/gate filled, steps replace if set). See resolveExtends.
+	Extends string `yaml:"extends,omitempty"`
 	// Description makes the workflow self-describing: with the declared
 	// inputs/outputs it's what `conductor schema`, `workflow.list`, and a
 	// choosing agent (#36 §11) see about what this does and when to use it.
