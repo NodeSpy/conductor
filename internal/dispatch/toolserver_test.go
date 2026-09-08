@@ -30,15 +30,26 @@ func TestSkillEnv(t *testing.T) {
 		t.Errorf("expected a session token in env, got none")
 	}
 
-	// A remote launch (profile host:) has no local socket → nothing injected.
+	// A remote launch with NO remote endpoint configured → nothing injected
+	// (never hand a local socket path to an off-box agent).
 	remote := req
 	remote.Profile.Host = "build-box"
 	if SkillEnv(remote, "") != nil {
 		t.Errorf("remote (host:) launch must not inject a local endpoint")
 	}
-	// A runtime-level host: likewise.
 	if SkillEnv(req, "build-box") != nil {
 		t.Errorf("runtime host: must not inject a local endpoint")
+	}
+
+	// With a remote endpoint published, a remote launch gets the HTTPS endpoint
+	// (not the socket) + a token; a LOCAL launch still gets the unix socket.
+	SetSkillRemoteEndpoint("https://conductor.example.com/skill")
+	t.Cleanup(func() { SetSkillRemoteEndpoint("") })
+	if renv := SkillEnv(req, "build-box"); renv["CONDUCTOR_ENDPOINT"] != "https://conductor.example.com/skill" || renv["CONDUCTOR_SKILL_TOKEN"] == "" {
+		t.Errorf("remote launch with endpoint configured = %v, want the https endpoint + a token", renv)
+	}
+	if lenv := SkillEnv(req, ""); lenv["CONDUCTOR_ENDPOINT"] != "unix:///run/c/memory.sock" {
+		t.Errorf("a local launch must still use the unix socket, got %v", lenv)
 	}
 
 	// No skill: block → nothing.

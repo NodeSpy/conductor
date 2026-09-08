@@ -240,13 +240,18 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	}
 
 	// Skill surface on a paseo runtime (#123). paseo exposes no MCP surface of
-	// its own, but the agent it launches runs on this box with a shell, so it
-	// reaches conductor through the `conductor` CLI over the daemon socket. Hand
-	// it the endpoint + a uid-bound session token in env (never argv); the
-	// injected prompt guidance tells it to run `conductor discover`/`call`.
-	// Provider-agnostic and no config injection. SkillEnv returns nil for a
-	// non-skill profile or a remote launch, so this is a no-op then.
-	for k, v := range SkillEnv(req, "") {
+	// its own, but the agent it launches has a shell, so it reaches conductor
+	// through the `conductor` CLI: over the daemon's unix socket locally, or —
+	// for a remote (host:) launch — over the configured HTTPS endpoint. Hand it
+	// the endpoint + a session token in env (never argv, forwarded to the box
+	// paseo runs on); the injected prompt guidance tells it to run `conductor
+	// discover`/`call`. SkillEnv returns nil for a non-skill profile, or for a
+	// remote launch when no remote endpoint (`skill.base_url`) is configured.
+	skillHost := ""
+	if d.remote() {
+		skillHost = d.Remote.Cfg.Host
+	}
+	for k, v := range SkillEnv(req, skillHost) {
 		argv = append(argv, "--env", k+"="+v)
 	}
 

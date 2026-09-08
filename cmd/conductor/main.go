@@ -596,6 +596,16 @@ func cmdRun(args []string) error {
 				ops.RedeemSecret = func(token, grant string, peer memory.Peer) (string, error) {
 					return sb.Redeem(token, grant, asPeer(peer))
 				}
+				// Identify resolves a session token to its dispatch provenance
+				// so the CLI/remote memory + run_step ops bind their Source to
+				// the token's real identity, never a spoofable body Source.
+				ops.Identify = func(token string, peer memory.Peer) (memory.Source, int, bool) {
+					id, err := sb.Authorize(token, asPeer(peer))
+					if err != nil {
+						return memory.Source{}, 0, false
+					}
+					return memory.Source{Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger}, id.Number, true
+				}
 				// The verb-tool surface: catalog + execution, both bound to
 				// the token's real dispatch identity and its skill.verbs.
 				if stack != nil {
@@ -627,6 +637,19 @@ func cmdRun(args []string) error {
 				logf("skill: secret broker + verb tools enabled (per-profile skill: policy)")
 			}
 			memory.SetLiveOps(ops)
+
+			// The remote HTTP face (opt-in `skill:` block): mount the same tool
+			// ops on the shared inbound listener so an agent dispatched to a
+			// remote runtime (host:) can reach the broker + verbs + memory over
+			// HTTPS (TLS terminated by the reverse proxy / tunnel in front). Off
+			// unless configured, and useless without the broker — so it's built
+			// only inside this SkillEnabled path.
+			if cfg.SkillEnabled() && cfg.RemoteSkillEnabled() {
+				addr := cfg.SkillRemoteListen()
+				inbound.RegisterPrefix(ctx, addr, "/skill", memory.HTTPHandler(mgr, st.Audit, logf), logf)
+				dispatch.SetSkillRemoteEndpoint(cfg.SkillRemoteEndpoint())
+				logf("skill: remote HTTP face on %s (POST %s)", addr, cfg.SkillRemoteEndpoint())
+			}
 		}
 	}
 

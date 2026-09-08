@@ -3,10 +3,33 @@ package dispatch
 import (
 	"os"
 	"strconv"
+	"sync"
 
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/skill"
 )
+
+// skillRemoteEndpoint is the public URL a REMOTE agent posts skill ops to
+// (base_url + "/skill"), published by the daemon at boot from the `skill:`
+// block. Empty (the default) means no remote face is configured, so a remote
+// launch injects nothing — a local socket is never handed to an off-box agent.
+var (
+	skillRemoteMu       sync.RWMutex
+	skillRemoteEndpoint string
+)
+
+// SetSkillRemoteEndpoint records the remote skill URL (daemon boot). "" clears.
+func SetSkillRemoteEndpoint(url string) {
+	skillRemoteMu.Lock()
+	skillRemoteEndpoint = url
+	skillRemoteMu.Unlock()
+}
+
+func remoteSkillEndpoint() string {
+	skillRemoteMu.RLock()
+	defer skillRemoteMu.RUnlock()
+	return skillRemoteEndpoint
+}
 
 // The conductor tool server (memory + run_step + the skill's verb tools and
 // secret broker) is injected per dispatch into whatever the runtime launches.
@@ -97,17 +120,29 @@ func SkillEnv(req Request, host string) map[string]string {
 	if req.Profile.Host != "" {
 		effHost = req.Profile.Host
 	}
+	var endpoint string
 	if effHost != "" {
-		return nil // remote: no local socket, no HTTP endpoint yet
-	}
-	sock := socketFromToolCommand(memory.ToolCommand())
-	if sock == "" {
-		return nil // no tool server published (no memory: and no skill: at boot)
+		// Remote launch: the local socket doesn't exist on that box. Hand the
+		// agent the public HTTP endpoint, but ONLY if one is configured — never
+		// a local socket path an off-box process couldn't dial anyway.
+		remote := remoteSkillEndpoint()
+		if remote == "" {
+			return nil
+		}
+		endpoint = remote
+	} else {
+		sock := socketFromToolCommand(memory.ToolCommand())
+		if sock == "" {
+			return nil // no tool server published (no memory: and no skill: at boot)
+		}
+		endpoint = "unix://" + sock
 	}
 	b := skill.Active()
 	if b == nil {
 		return nil
 	}
+	// The uid binding matters only on the local socket (kernel peer creds); a
+	// remote connection has none, so the token authorizes by the bearer alone.
 	tok, err := b.MintSession(skill.Identity{
 		Agent:   req.Action.Agent,
 		Repo:    req.Trigger.Target.Repo,
@@ -119,7 +154,7 @@ func SkillEnv(req Request, host string) map[string]string {
 		return nil
 	}
 	return map[string]string{
-		"CONDUCTOR_ENDPOINT":    "unix://" + sock,
+		"CONDUCTOR_ENDPOINT":    endpoint,
 		"CONDUCTOR_SKILL_TOKEN": tok,
 	}
 }

@@ -103,6 +103,14 @@ type Config struct {
 	// CallableConfig and internal/callable.
 	Callable CallableConfig `yaml:"callable"`
 
+	// Skill is the OPTIONAL `skill:` block: the REMOTE HTTP face of the agent
+	// skill surface (#36 §12). Off unless `listen` is set. When configured, an
+	// agent dispatched to a remote runtime (host:) reaches conductor over HTTP
+	// at base_url + "/skill", authorizing with its session token as a bearer
+	// credential (TLS terminated by your reverse proxy / tunnel). Local agents
+	// always use the unix socket regardless of this block. See SkillConfig.
+	Skill *SkillConfig `yaml:"skill"`
+
 	Control Control `yaml:"control"`
 	Notify  Notify  `yaml:"notify"`
 	// Handoff is the LEGACY singular hand-off block (a web-link page on the inbound
@@ -1332,6 +1340,9 @@ func (c *Config) Validate() error {
 	if err := c.validateCallable(); err != nil {
 		return err
 	}
+	if err := c.validateSkill(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1349,7 +1360,7 @@ func (c *Config) SkillEnabled() bool {
 // Skill delivery modes: how a dispatched agent reaches the conductor skill
 // surface on its runtime.
 const (
-	SkillModeNone = "none" // the surface can't reach this agent (remote, until the HTTP endpoint)
+	SkillModeNone = "none" // the surface can't reach this agent (remote with no skill.base_url, or unknown runtime)
 	SkillModeMCP  = "mcp"  // injected as an MCP server at launch (ACP session/new, opencode config)
 	SkillModeCLI  = "cli"  // the agent shells the `conductor` CLI over the local daemon socket
 )
@@ -1384,7 +1395,14 @@ func (c *Config) SkillDelivery(p AgentProfile) (runtime, mode string) {
 		host = p.Host
 	}
 	if host != "" {
-		return rn, SkillModeNone // remote: no local socket, no HTTP endpoint yet
+		// Remote runtime: no local socket. It reaches conductor over the
+		// remote HTTP endpoint via the same `conductor` CLI face — but only
+		// when that endpoint is configured (skill.base_url); otherwise the
+		// surface can't reach the agent at all.
+		if c.RemoteSkillEnabled() {
+			return rn, SkillModeCLI
+		}
+		return rn, SkillModeNone
 	}
 	switch {
 	case cc.Type == "opencode", cc.Agent == "opencode" && cc.EffectiveTransport() == "native":
