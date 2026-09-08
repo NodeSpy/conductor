@@ -315,6 +315,75 @@ func TestGithubVerbSubmitReviewHTTP(t *testing.T) {
 	}
 }
 
+func TestGithubVerbSubmitReviewInlineComments(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		json.NewEncoder(w).Encode(map[string]any{"id": 9})
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+
+	out, err := impl.Invoke(context.Background(), "submit_review", map[string]any{
+		"repo": "org/repo", "pr": 7, "event": "REQUEST_CHANGES", "body": "see inline",
+		"comments": []any{
+			map[string]any{"path": "a.go", "line": 42, "body": "nil deref here"},
+			map[string]any{"path": "b.go", "line": 10, "side": "RIGHT", "start_line": 8, "body": "tighten this range"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if out["comments"] != 2 {
+		t.Fatalf("out.comments = %v, want 2", out["comments"])
+	}
+	cs, ok := gotBody["comments"].([]any)
+	if !ok || len(cs) != 2 {
+		t.Fatalf("posted comments = %v", gotBody["comments"])
+	}
+	c0 := cs[0].(map[string]any)
+	if c0["path"] != "a.go" || c0["body"] != "nil deref here" || c0["line"].(float64) != 42 {
+		t.Fatalf("comment[0] = %v", c0)
+	}
+	c1 := cs[1].(map[string]any)
+	if c1["side"] != "RIGHT" || c1["start_line"].(float64) != 8 {
+		t.Fatalf("comment[1] multi-line fields = %v", c1)
+	}
+}
+
+func TestReviewComments(t *testing.T) {
+	// nil / empty → no comments, no error (a summary-only review).
+	if got, err := reviewComments(nil); err != nil || got != nil {
+		t.Fatalf("nil: got %v, %v", got, err)
+	}
+	// Coercion: line passes through, side/start_line optional, defaults omitted.
+	got, err := reviewComments([]any{
+		map[string]any{"path": "x.go", "line": 3, "body": "b"},
+		map[string]any{"path": "y.go", "body": "file-level"}, // no line: a file comment
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0]["line"] != 3 || got[0]["path"] != "x.go" {
+		t.Fatalf("coerced[0] = %v", got[0])
+	}
+	if _, hasLine := got[1]["line"]; hasLine {
+		t.Fatalf("a comment with no line must not carry a zero line: %v", got[1])
+	}
+	// Missing path or body is an error — a comment must anchor somewhere and say something.
+	if _, err := reviewComments([]any{map[string]any{"line": 1, "body": "b"}}); err == nil {
+		t.Fatal("missing path must error")
+	}
+	if _, err := reviewComments([]any{map[string]any{"path": "x.go", "line": 1}}); err == nil {
+		t.Fatal("missing body must error")
+	}
+	// Not a list → error.
+	if _, err := reviewComments("nope"); err == nil {
+		t.Fatal("non-list must error")
+	}
+}
+
 func TestGithubVerbAddLabelsHTTP(t *testing.T) {
 	var gotPath string
 	var gotBody map[string]any

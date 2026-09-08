@@ -169,15 +169,19 @@ var githubDecl = &TypeDecl{
 			Outputs: Schema{"ok": {Type: TBool}},
 		},
 		{
-			Name: "submit_review", Desc: "submit a PR review",
+			Name: "submit_review", Desc: "submit a PR review: a summary + verdict, with optional inline file:line comments",
 			Options: Schema{
 				"repo":  {Type: TString, Required: true},
 				"pr":    {Type: TInt, Required: true},
-				"body":  {Type: TString},
+				"body":  {Type: TString, Desc: "the review summary (top-level comment)"},
 				"event": {Type: TString, Enum: []string{"APPROVE", "REQUEST_CHANGES", "COMMENT"}, Required: true},
-				"as":    {Type: TString, Enum: []string{"me", "bot"}},
+				"comments": {Type: TList, Desc: "inline comments posted with the review: a list of " +
+					"{path, line, body, side?, start_line?, start_side?}. line is the file's line number; " +
+					"side defaults to RIGHT (the new version). start_line/start_side make a multi-line range. " +
+					"Every commented line MUST fall within the PR's diff, or GitHub rejects the whole review."},
+				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
-			Outputs: Schema{"id": {Type: TInt}},
+			Outputs: Schema{"id": {Type: TInt}, "comments": {Type: TInt, Desc: "inline comments posted"}},
 		},
 		{
 			Name: "add_labels", Desc: "add labels to an issue or PR",
@@ -523,10 +527,17 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 		if b, _ := opts["body"].(string); b != "" {
 			body["body"] = b
 		}
+		comments, err := reviewComments(opts["comments"])
+		if err != nil {
+			return nil, err
+		}
+		if len(comments) > 0 {
+			body["comments"] = comments
+		}
 		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d/reviews", base, repo, number), body, &out); err != nil {
 			return nil, err
 		}
-		return map[string]any{"id": out.ID}, nil
+		return map[string]any{"id": out.ID, "comments": len(comments)}, nil
 	case "add_labels":
 		if number == 0 {
 			return nil, fmt.Errorf("github.add_labels: options.number is required")
@@ -617,6 +628,50 @@ func toActors(v any) config.Actors {
 }
 
 // toInt coerces YAML integer shapes.
+// reviewComments coerces the submit_review `comments` option into GitHub review
+// comment objects. Each needs a path + body; line/side/start_line/start_side are
+// passed through when set (a line-based comment defaults to side RIGHT — the new
+// version of the file). GitHub requires every commented line to fall within the
+// PR's diff; a comment outside it makes the whole review 422, so callers should
+// only comment on changed lines. nil/empty is fine — a review with no inline
+// comments, just a summary + verdict.
+func reviewComments(v any) ([]map[string]any, error) {
+	if v == nil {
+		return nil, nil
+	}
+	raw, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("github.submit_review: comments must be a list of {path, line, body}, got %T", v)
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for i, e := range raw {
+		m, ok := e.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("github.submit_review: comments[%d] must be an object {path, line, body}, got %T", i, e)
+		}
+		path, _ := m["path"].(string)
+		cbody, _ := m["body"].(string)
+		if path == "" || cbody == "" {
+			return nil, fmt.Errorf("github.submit_review: comments[%d] needs a non-empty path and body", i)
+		}
+		c := map[string]any{"path": path, "body": cbody}
+		if n := toInt(m["line"]); n > 0 {
+			c["line"] = n
+		}
+		if s, _ := m["side"].(string); s != "" {
+			c["side"] = s
+		}
+		if n := toInt(m["start_line"]); n > 0 {
+			c["start_line"] = n
+		}
+		if s, _ := m["start_side"].(string); s != "" {
+			c["start_side"] = s
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
 func toInt(v any) int {
 	switch x := v.(type) {
 	case int:

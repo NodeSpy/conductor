@@ -64,11 +64,32 @@ keeps their dedup state separate).
 | `comment` | `repo`*, `number`/`pr`*, `body`*, `as` | `id`, `url` |
 | `reply` | `repo`*, `pr`*, `in_reply_to`*, `body`*, `as` | `id`, `url` |
 | `rerequest_review` | `repo`*, `pr`*, `reviewers`/`team_reviewers`, `as` | `ok` |
-| `submit_review` | `repo`*, `pr`*, `event`* (APPROVE\|REQUEST_CHANGES\|COMMENT), `body`, `as` | `id` |
+| `submit_review` | `repo`*, `pr`*, `event`* (APPROVE\|REQUEST_CHANGES\|COMMENT), `body`, `comments`, `as` | `id`, `comments` |
 | `add_labels` | `repo`*, `number`*, `labels`*, `as` | `ok` |
 | `sweep` | — | `nudged` — run the catch-up sweep now (daemon-global; `conductor sweep --now`, verb-shaped) |
 
 `as: me` (default) posts as you; `as: bot` as the App's bot user.
+
+`submit_review` posts a real code review — a summary (`body`) + a verdict
+(`event`) and, optionally, **inline comments** anchored to file lines:
+
+```yaml
+uses: gh.submit_review
+options:
+  repo: "{{.repo}}"
+  pr: "{{.pr}}"
+  event: REQUEST_CHANGES        # APPROVE | REQUEST_CHANGES | COMMENT
+  body: "2 blocking issues; details inline."
+  comments:                     # each line MUST be within the PR's diff
+    - { path: internal/x.go, line: 42, body: "nil deref when cfg is empty." }
+    - { path: internal/y.go, line: 8, start_line: 5, side: RIGHT, body: "tighten this range." }
+```
+
+Each comment needs `path` + `body`; `line` is the file's line number and
+`side` defaults to `RIGHT` (the new version). `start_line`/`start_side` make a
+multi-line range. Omit `line` for a file-level comment. GitHub rejects the
+**whole** review (422) if any commented line falls outside the diff, so only
+comment on changed lines. Output `comments` is the count posted.
 
 ## Legacy
 
