@@ -353,7 +353,10 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 		if step.Agent == "" {
 			return fmt.Errorf("%s: agent step needs `agent: <profile>`", w)
 		}
-		if _, ok := cfg.Agents[step.Agent]; !ok {
+		// A templated agent (agent: "{{.inputs.reviewer}}") is resolved at
+		// dispatch, not load — an unknown resolved name fails there. Only a
+		// literal name is checked against the defined profiles here.
+		if _, ok := cfg.Agents[step.Agent]; !ok && !strings.Contains(step.Agent, "{{") {
 			return fmt.Errorf("%s: unknown agent profile %q (defined: %s)", w, step.Agent, agentNames(cfg))
 		}
 		if step.Handoff != "" {

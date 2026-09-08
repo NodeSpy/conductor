@@ -1608,7 +1608,9 @@ func (c *Config) checkAgentRef(where string, a Action) error {
 		if a.Agent == "" {
 			return fmt.Errorf("config: %s: agent action needs `agent: <profile>` (defined: %s)", where, c.agentNames())
 		}
-		if _, ok := c.Agents[a.Agent]; !ok {
+		// A templated agent ("{{.inputs.reviewer}}") resolves at dispatch; only a
+		// literal name is checked against the defined profiles at load.
+		if _, ok := c.Agents[a.Agent]; !ok && !strings.Contains(a.Agent, "{{") {
 			return fmt.Errorf("config: %s: unknown agent profile %q (defined: %s)", where, a.Agent, c.agentNames())
 		}
 	}

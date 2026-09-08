@@ -7,6 +7,12 @@ across every trigger. It says nothing about *how* the process is executed; that'
 works). A profile may also pin `host:` — a [[Hosts]] SSH target its runtime launches on (cli/acp/
 agent-deck runtimes).
 
+A step's `agent:` may be a **template**, so a [[Workflows|workflow]] can choose the profile — and so
+the runtime — per invocation instead of hard-coding it: `agent: "{{.inputs.reviewer}}"` with an
+`inputs: { reviewer: { default: fixer } }`, invoked as `conductor run rev --input reviewer=other`.
+The name is resolved against the step's data at dispatch; an unknown resolved name fails there (a
+literal unknown name is still caught at load).
+
 ## Config
 
 ```yaml

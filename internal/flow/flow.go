@@ -1181,6 +1181,17 @@ func (r *Runner) hostTarget(step config.Step) (*hosts.Target, error) {
 // execAgent dispatches a type: agent step through the engine-provided
 // services (runtime resolution, tokens, guidance, background hand-off).
 func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, string, error) {
+	// The agent profile name may be templated (e.g. agent: "{{.inputs.reviewer}}")
+	// so a workflow can pick which profile — and so which runtime — reviews or
+	// assesses per invocation, without editing the workflow. Resolve it before the
+	// profile lookup; step is a value copy, so every downstream use reads the
+	// resolved name. An unknown resolved name yields an empty profile and fails at
+	// dispatch with a clear error, same as a literal typo.
+	if strings.Contains(step.Agent, "{{") {
+		if rendered, err := render(step.Agent, data); err == nil {
+			step.Agent = strings.TrimSpace(rendered)
+		}
+	}
 	profile := r.Cfg.Agents[step.Agent]
 	// Crash resume: a persisted plan checkpoint for this run+step means the
 	// agent already ran and its plan was interrupted mid-way — resume the
