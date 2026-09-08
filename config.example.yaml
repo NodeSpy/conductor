@@ -568,6 +568,23 @@ callable:
         timestamp_header: X-Conductor-Timestamp  # header carrying the signed unix-seconds timestamp (default)
       workflows: [pr-summary]
 
+# ── skill: the REMOTE face of the agent skill surface (wiki: Agent-Skill) ─────
+# A skill-enabled agent (agents.*.skill) reaches conductor's verbs, memory, and
+# secret broker while it runs. On a LOCAL runtime this is automatic — no config:
+# an MCP runtime gets the tools injected, a shell runtime (paseo/agent-deck) gets
+# the `conductor` CLI pointed at the daemon's unix socket. You only need this
+# block to also reach an agent on ANOTHER machine (a runtime with host:), which
+# can't see the local socket. Omit it to leave the remote face off.
+# skill:
+#   listen: 127.0.0.1:8098               # where the daemon serves POST /skill
+#                                        #   (mounts on the shared inbound listener —
+#                                        #    may reuse a webhook/callable listen:)
+#   base_url: https://conductor.example.com   # public origin remote agents reach it at;
+#                                        #   they're handed CONDUCTOR_ENDPOINT=<base_url>/skill
+#                                        #   and post ops with their session token as a Bearer.
+# Put it behind the SAME TLS/tunnel that fronts your other inbound surfaces — the
+# daemon serves plaintext here and the token is the whole credential over HTTP.
+
 triggers:
   # Near-identical triggers can share a base: a trigger `extends: <name>` inherits
   # another's steps/filters/policy (filters deep-merge, steps replace), and a base

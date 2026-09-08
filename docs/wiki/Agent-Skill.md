@@ -1,29 +1,34 @@
 # Agent Skill & Secret Broker
 
 `skill:` on an agent profile lets a dispatched agent reach back into
-conductor over the daemon's unix socket — the same socket the live
-[[Memory]] tools ride. It is **off by default**: a profile without a
-`skill:` block gets none of this, and every part of it denies unless config
-explicitly allows.
+conductor — its verbs, the live [[Memory]], and the secret broker — while it
+runs. It is **off by default**: a profile without a `skill:` block gets none
+of this, and every part of it denies unless config explicitly allows.
 
-## Runtime support
+## How the surface reaches the agent
 
-The tool surface (memory tools, `run_step`, the verb tools, the broker)
-reaches an agent only when its runtime can accept an MCP server at launch:
+The agent reaches conductor one of two ways, chosen automatically from the
+runtime. There is nothing to configure for the local case:
 
-| runtime | tools | how |
+| delivery | runtimes | how |
 |---|---|---|
-| ACP runtimes (`agent: gemini`, …) | ✅ | `mcpServers` on `session/new` |
-| `type: opencode` (native HTTP) | ✅ | a per-session config file via `OPENCODE_CONFIG` on the `opencode serve` process |
-| `type: paseo`, **`provider: claude`**, `workspace: worktree` | ✅ | paseo has no MCP surface of its own, so conductor drops a `.mcp.json` (+ a `.claude/settings.local.json` enabling only that server and pre-approving its tools) into the run's isolated worktree; the Claude Code agent paseo launches auto-discovers it. The files are `.git/info/exclude`d so they never enter the agent's commits |
-| `type: paseo`, other providers / `workspace: local` | ❌ | the `.mcp.json`/`.claude` config shapes are Claude Code's, and there's no isolated worktree to drop them in — no tools |
-| `type: agent-deck`, `transport: cli` | ❌ | no MCP launch surface |
+| **MCP tools** | ACP runtimes (`agent: gemini`, …); `type: opencode` (native HTTP) | conductor injects an MCP server at launch (`mcpServers` on `session/new`; a per-session `OPENCODE_CONFIG` file for opencode). The verbs, memory, `run_step`, and broker appear as native tools. |
+| **`conductor` CLI** | `type: paseo`, `type: agent-deck`, bare `cli` — any local runtime with a shell | the agent shells the `conductor` command. The daemon puts the endpoint + a scoped session token in the agent's **environment** (`CONDUCTOR_ENDPOINT`, `CONDUCTOR_SKILL_TOKEN`), and the injected guidance tells the agent to run `conductor discover` / `conductor call`. No config files, no MCP server. |
 
-On an unsupported runtime a `skill:` profile is inert: no tools, no broker,
-and no injected skill guidance (promising absent tools only breaks agents) —
-`conductor validate` warns about the combination. The opencode wiring sets
-`OPENCODE_CONFIG` for the conductor-launched server process only; those
-sessions read the per-session config rather than a project `opencode.json`.
+A **remote** runtime (`host:`) reaches the CLI over HTTPS instead of the
+local socket — see [Remote agents](#remote-agents) below. It needs a `skill:`
+block (the `skill.base_url` endpoint); without one a remote profile is inert.
+
+On any runtime that can't be reached — a remote host with no endpoint
+configured, or an unknown runtime — a `skill:` profile is inert: no tools, no
+broker, and no injected skill guidance (promising an absent surface only
+breaks agents). `conductor validate` warns about the combination.
+
+> The earlier design injected a `.mcp.json` into a paseo run's worktree. That
+> never worked — the Claude Code agent paseo launches is started with paseo's
+> own `--mcp-config` and ignores a project `.mcp.json` in headless mode — so
+> paseo (and every other shell runtime) now uses the CLI face instead. It is
+> provider-agnostic and writes nothing into the workspace.
 
 ## The principle
 
@@ -69,26 +74,83 @@ agents:
 
 ## How identity is bound
 
-Authorization is bound to the **real dispatch, server-side**. When the
-daemon dispatches a skill-enabled profile, it mints a **one-shot claim
-code**, records code → (profile, dispatch target, that profile's `skill:`
-policy) in memory, and delivers the code via the injected MCP server's
-**environment — never argv** (argv is readable by any same-user process
-through a process listing). At startup the tool subprocess exchanges the
-code over the socket for the real session token: the exchange is
-single-use, the code expires after ~2 minutes, and the token then lives
-only in that process's memory.
+Authorization is bound to the **real dispatch, server-side**, by a session
+token the daemon mints at dispatch and hands the agent in its environment
+(never argv, which any same-user process can read from a process listing).
+The token maps server-side to (profile, dispatch target, that profile's
+`skill:` policy); client-asserted provenance — like the `--agent`/`--repo`
+flags the memory tools carry — is never consulted for authorization, so an
+agent (or any same-user process that reaches the socket) cannot claim another
+profile's policy. Sessions expire after **2 hours** (roughly a dispatch's
+lifetime — a session that ages out loses its skill tools, never gains a
+stale identity) and die with the daemon (the table is in-memory).
 
-The exchange also **binds the session to the claiming process**: the daemon
-reads the connection's kernel peer credentials (Linux `SO_PEERCRED` plus the
-process start time) and refuses the token from any other process afterward —
-a copied token is useless. Client-asserted identity — like the
-`--agent`/`--repo` provenance flags the memory tools carry — is never
-consulted for authorization, so an agent (or any other same-user process
-that can reach the socket) cannot claim another profile's policy. Sessions
-expire after **2 hours** (roughly a dispatch's lifetime — a long-lived
-session that ages out loses its skill tools, never gains a stale identity)
-and die with the daemon (the table is in-memory).
+Two binding shapes, matching the two delivery paths:
+
+- **CLI face (session token, uid-bound).** The token is reusable across the
+  many short-lived `conductor` processes one dispatch runs. On the local
+  socket the daemon reads the caller's kernel uid (`SO_PEERCRED`) and refuses
+  a token presented from a **different uid** — a token scraped from one
+  agent's env is useless to a process running as someone else.
+- **MCP face (one-shot claim, process-bound).** The injected MCP server
+  receives a single-use **claim code** (env, ~2-minute TTL) and exchanges it
+  over the socket for the session token; the exchange binds the session to
+  that exact process (`SO_PEERCRED` + start time), so a copied token is dead
+  anywhere else. This tighter binding fits the single long-lived MCP
+  subprocess; the CLI's uid binding fits its fan-out of short calls.
+
+Over the **remote HTTP** endpoint there are no kernel peer credentials, so
+the session token is the bearer credential on its own (TLS terminated by your
+proxy — see below). The one-shot claim exchange is local-only and refused
+over HTTP; a remote agent gets its session token directly in its env.
+
+## Using it from the agent (the CLI face)
+
+On a shell runtime the agent drives conductor with four commands. Discovery
+is **progressive** — the agent never has to swallow the whole verb catalog to
+find what it can do, so a profile with a large `verbs:` allowlist doesn't
+bloat the prompt:
+
+```
+conductor discover                     # connectors this agent may act through
+conductor discover gh                  # verbs on the gh connector
+conductor discover gh.comment          # one verb's options
+conductor discover -s deploy           # search verbs by name/description
+conductor call gh.comment --body "…"   # run a verb server-side (see Verbs as tools)
+conductor memory recall <query>        # read shared memory  (see Memory)
+conductor memory remember <text> [--tags a,b] [--scope s]
+conductor secret <name>                # last-resort broker value (see below)
+```
+
+Each command authorizes by the `CONDUCTOR_SKILL_TOKEN` in the agent's
+environment and is audited daemon-side exactly like the MCP tools. On an
+MCP-delivery runtime the agent calls the equivalent tools instead; the
+capabilities and the policy behind them are identical.
+
+## Remote agents
+
+An agent dispatched to a **remote runtime** (`host:`) runs on another box and
+can't reach the daemon's unix socket. Point it at conductor over HTTPS with a
+top-level `skill:` block:
+
+```yaml
+skill:
+  listen: 127.0.0.1:8098               # where the daemon serves the endpoint
+  base_url: https://conductor.example.com   # public origin the agent reaches it at
+```
+
+The daemon mounts the same tool surface at `POST <base_url>/skill` on the
+shared inbound listener (reuse a `listen:` a webhook/sentry/callable surface
+already binds). A remote agent is handed `CONDUCTOR_ENDPOINT=<base_url>/skill`
+and its session token; the `conductor` CLI posts each op there with the token
+as a `Bearer` credential. **Off unless configured**, and it errors at load if
+`listen`/`base_url` are half-set or no agent has a `skill:` block.
+
+Terminate TLS at the reverse proxy / tunnel that already fronts conductor's
+other inbound surfaces — the daemon serves plaintext HTTP on `listen` and
+should never face the internet directly. The session token is the whole
+credential over this transport, so the endpoint must be TLS-fronted and
+reachable only through your tunnel/VPN, not open to the world.
 
 ## Boundary handles: `{{secret "name"}}`
 
@@ -138,14 +200,18 @@ dispatch carries a session token):
 The two-step shape is deliberate: the value only materializes at the last
 moment, a grant id that leaks into a log or transcript is dead within a
 minute, and the audit trail shows issue and use as separate events (so an
-issued-but-never-used or used-after-delay grant is visible).
+issued-but-never-used or used-after-delay grant is visible). On the CLI face
+`conductor secret <name>` performs both steps and prints the value once.
 
 ## Injected guidance
 
 A skill-enabled profile's prompts get a short appended blurb (the same
-append path as `agent_guidance`) telling the agent what it has and how to
-behave: prefer the verb tools (naming the profile's patterns), use the
-broker only as a last resort (naming the allowed secrets, only when
+append path as `policy.guidance`) telling the agent what it has and how to
+behave. On an MCP runtime it names the verb tools and the broker tools; on a
+shell runtime it names the `conductor discover`/`call`/`memory`/`secret`
+commands (and points at `discover` for the verb list rather than dumping it,
+so the prompt stays small). Either way: prefer acting *through* conductor,
+use the broker only as a last resort (naming the allowed secrets, only when
 `secrets_via: broker`), never echo or store a redeemed value, and pass
 `«secret:…»` handles through unchanged. Profiles without `skill:` get
 nothing. The whole guidance string is redactor-filtered before injection —
@@ -184,7 +250,10 @@ escape. See [[Policy]].
   `allow_secrets`.
 - The daemon socket is same-user only (`0600`). Anything running as that
   user can dial it; the token binding means such a process still cannot
-  obtain secrets outside a dispatched, skill-enabled profile's policy.
+  obtain secrets outside a dispatched, skill-enabled profile's policy. The
+  remote HTTP endpoint has no such OS boundary — the session token is the
+  whole credential, so it must be TLS-fronted and reachable only through your
+  tunnel/VPN, never exposed to the public internet.
 - The encoding-aware redaction of tracked secrets (base64/hex/url forms) is
   a backstop, not a guarantee — see [[Secrets]]. The guarantee is this
   design: prefer verbs-as-tools, and when a value must be handed out, hand
@@ -193,12 +262,14 @@ escape. See [[Policy]].
 ## Verbs as tools
 
 The **default path**: the verbs a profile's `skill.verbs` patterns match are
-served to the agent as MCP tools — `gh.comment` appears as a `gh_comment`
-tool, `rest.*` exposes every declared verb of the `rest` connector, and so
-on. The daemon computes the toolset per dispatch from the token-bound
-profile, complete with each verb's option schema; the agent calls the tool,
-conductor executes the verb with its own credentials, and only inputs and
-outputs cross the socket. No credential enters the agent session at all.
+exposed to the agent — as MCP tools on an MCP runtime (`gh.comment` appears
+as a `gh_comment` tool, `rest.*` exposes every declared verb of the `rest`
+connector), or via `conductor call gh.comment --body "…"` on a shell runtime.
+Either way the daemon computes the allowed set per dispatch from the
+token-bound profile, complete with each verb's option schema; the agent
+invokes it, conductor executes the verb with its own credentials, and only
+inputs and outputs cross the boundary. No credential enters the agent session
+at all.
 
 Ground rules on this surface:
 
