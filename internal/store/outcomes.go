@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// The outcome-learning loop's persistence (#36 §18). Two small files beside
+// The outcome-learning loop's persistence (#36 §18). Three small files beside
 // the state file:
 //
 //   - engagements.json — which agents acted on which PR/issue (with their
@@ -19,6 +19,10 @@ import (
 //     reverted / approved / rejected / ci_failed), the durable feed behind
 //     optional per-profile guidance tuning. The audit's `outcome` rows are
 //     the full record; these counters are the cheap always-loaded summary.
+//   - ci_failed.json — the head SHA that last produced a `ci_failed` outcome
+//     per target, so a fail-fast matrix's fan-out of cancelled-check triggers
+//     records one ci_failed per push, not one per check event. Pruned by age
+//     like engagements; a terminal outcome clears it with them.
 
 // Engagement is one agent's recorded work on a target.
 type Engagement struct {
@@ -42,6 +46,16 @@ const (
 	// touches on a long-lived PR keep the newest).
 	engagementCap = 20
 )
+
+// ciFailMark remembers the head SHA that last produced a `ci_failed` outcome for
+// a target. A fail-fast CI matrix emits one failing_checks trigger per cancelled
+// sibling check — dozens for a single failed push — so without this the loop
+// would record dozens of identical ci_failed rows. Pruned by age like the
+// engagements it gates.
+type ciFailMark struct {
+	Head string    `json:"head"`
+	At   time.Time `json:"at"`
+}
 
 func targetKey(repo string, number int) string {
 	return fmt.Sprintf("%s#%d", repo, number)
@@ -71,15 +85,21 @@ func (s *Store) RecordEngagement(repo string, number int, e Engagement) {
 }
 
 // TakeEngagements returns and CLEARS a target's engagements (a terminal
-// outcome — merged/closed/reverted — consumes them).
+// outcome — merged/closed/reverted — consumes them). The target's ci_failed
+// marker is cleared with them.
 func (s *Store) TakeEngagements(repo string, number int) []Engagement {
 	s.mu.Lock()
 	key := targetKey(repo, number)
 	out := s.engagements[key]
 	delete(s.engagements, key)
+	_, hadMark := s.ciFailed[key]
+	delete(s.ciFailed, key)
 	s.mu.Unlock()
 	if len(out) > 0 {
 		s.saveEngagements()
+	}
+	if hadMark {
+		s.saveCIFailed()
 	}
 	return out
 }
@@ -106,6 +126,44 @@ func (s *Store) pruneEngagementsLocked() {
 			delete(s.engagements, key)
 		} else {
 			s.engagements[key] = kept
+		}
+	}
+}
+
+// MarkCIFailure records a CI failure of (repo, number) at head, reporting whether
+// this is the FIRST failing_checks seen for that head. The caller records a
+// `ci_failed` outcome only when it returns true, so a fail-fast matrix (one job
+// fails, its siblings cancel) collapses to one ci_failed per push instead of one
+// per check event; a later push that fails again is a new head and records anew.
+// An empty head is never deduped (fail-safe: record rather than drop the signal).
+func (s *Store) MarkCIFailure(repo string, number int, head string) bool {
+	if repo == "" || number <= 0 || head == "" {
+		return true
+	}
+	key := targetKey(repo, number)
+	s.mu.Lock()
+	if s.ciFailed == nil {
+		s.ciFailed = map[string]ciFailMark{}
+	}
+	if s.ciFailed[key].Head == head {
+		s.mu.Unlock()
+		return false
+	}
+	s.ciFailed[key] = ciFailMark{Head: head, At: s.now()}
+	s.pruneCIFailedLocked()
+	s.mu.Unlock()
+	s.saveCIFailed()
+	return true
+}
+
+// pruneCIFailedLocked drops markers past the engagement retention window (they
+// share a lifecycle with the engagements they gate). Called on the write path so
+// the map stays bounded even on repos conductor never dispatches into.
+func (s *Store) pruneCIFailedLocked() {
+	cut := s.now().Add(-engagementMaxAge)
+	for key, m := range s.ciFailed {
+		if !m.At.After(cut) {
+			delete(s.ciFailed, key)
 		}
 	}
 }
@@ -186,7 +244,31 @@ func (s *Store) saveOutcomeStats() {
 	}
 }
 
-// loadOutcomeState loads both files at Open (missing/corrupt = start fresh).
+func (s *Store) ciFailedPath() string {
+	if s.path == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(s.path), "ci_failed.json")
+}
+
+func (s *Store) saveCIFailed() {
+	path := s.ciFailedPath()
+	if path == "" {
+		return
+	}
+	s.mu.Lock()
+	b, err := json.MarshalIndent(s.ciFailed, "", " ")
+	s.mu.Unlock()
+	if err != nil {
+		return
+	}
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, b, 0o600) == nil {
+		_ = os.Rename(tmp, path)
+	}
+}
+
+// loadOutcomeState loads the outcome files at Open (missing/corrupt = start fresh).
 func (s *Store) loadOutcomeState() {
 	if p := s.engagementsPath(); p != "" {
 		if b, err := os.ReadFile(p); err == nil {
@@ -203,5 +285,13 @@ func (s *Store) loadOutcomeState() {
 	}
 	if s.outcomeStats == nil {
 		s.outcomeStats = map[string]map[string]int{}
+	}
+	if p := s.ciFailedPath(); p != "" {
+		if b, err := os.ReadFile(p); err == nil {
+			_ = json.Unmarshal(b, &s.ciFailed)
+		}
+	}
+	if s.ciFailed == nil {
+		s.ciFailed = map[string]ciFailMark{}
 	}
 }

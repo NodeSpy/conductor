@@ -71,6 +71,52 @@ func TestEngagementsCapAndAgePrune(t *testing.T) {
 	}
 }
 
+func TestMarkCIFailureDedupsPerHead(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(Options{StatePath: filepath.Join(dir, "s.json"), AuditPath: filepath.Join(dir, "a.jsonl")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First failing_checks for a head records; the matrix's fan-out is suppressed.
+	if !s.MarkCIFailure("o/r", 5, "headA") {
+		t.Fatal("first head must record")
+	}
+	for i := 0; i < 20; i++ {
+		if s.MarkCIFailure("o/r", 5, "headA") {
+			t.Fatalf("same head must dedup (iter %d)", i)
+		}
+	}
+	// A fresh push (new head) records again.
+	if !s.MarkCIFailure("o/r", 5, "headB") {
+		t.Fatal("new head must record")
+	}
+	// A different target is independent.
+	if !s.MarkCIFailure("o/r", 6, "headA") {
+		t.Fatal("other target must record")
+	}
+	// Empty head is never deduped (fail-safe) and leaves the marker unchanged.
+	if !s.MarkCIFailure("o/r", 5, "") {
+		t.Fatal("empty head must not dedup")
+	}
+	if !s.MarkCIFailure("o/r", 5, "") {
+		t.Fatal("repeated empty head must not dedup")
+	}
+
+	// The marker survives a restart mid-fan-out.
+	s.Close()
+	s2, _ := Open(Options{StatePath: filepath.Join(dir, "s.json"), AuditPath: filepath.Join(dir, "a2.jsonl")})
+	defer s2.Close()
+	if s2.MarkCIFailure("o/r", 5, "headB") {
+		t.Fatal("marker must survive reopen")
+	}
+	// The terminal signal (TakeEngagements) clears the marker.
+	s2.TakeEngagements("o/r", 5)
+	if !s2.MarkCIFailure("o/r", 5, "headB") {
+		t.Fatal("terminal outcome must clear the marker")
+	}
+}
+
 func TestOutcomeStats(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := Open(Options{StatePath: filepath.Join(dir, "s.json"), AuditPath: filepath.Join(dir, "a.jsonl")})

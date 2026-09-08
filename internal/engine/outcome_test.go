@@ -118,6 +118,48 @@ func TestDecisionOutcomeAndGuidance(t *testing.T) {
 	}
 }
 
+// Regression: a fail-fast CI matrix fans one failed push out into dozens of
+// failing_checks triggers (one job fails, its siblings cancel — cancelled is a
+// failure conclusion). observeOutcomeSignals runs before any dedup gate, so
+// ci_failed must dedup on the head itself: once per push, not once per check
+// event. Real evidence: EdnitionCode/RosterStream#5376 took 23 identical
+// ci_failed rows in ~70s for one head. A fresh push (new head) records anew.
+func TestCIFailedOncePerHead(t *testing.T) {
+	eng, st, _, _ := buildFlowEngine(t, gateCfg2())
+	st.RecordEngagement("o/r", 5376, store.Engagement{Agent: "fixer"})
+
+	ciAt := func(head string) core.Trigger {
+		return core.Trigger{Source: "github", Instance: "i", Kind: "failing_checks",
+			Target:  core.Target{Repo: "o/r", PR: 5376, Number: 5376, HeadSHA: head},
+			Context: map[string]any{}}
+	}
+
+	// 23 failing_checks on the same head → exactly one ci_failed row / one bump.
+	for i := 0; i < 23; i++ {
+		eng.observeOutcomeSignals(context.Background(), ciAt("headA"))
+	}
+	if got := outcomesFrom(st); len(got) != 1 || got[0] != "ci_failed:fixer" {
+		t.Fatalf("same head must record once, got: %v", got)
+	}
+	if st.bumps["fixer"]["ci_failed"] != 1 {
+		t.Fatalf("same head must bump once: %+v", st.bumps["fixer"])
+	}
+
+	// A fresh push (new head) that fails is a distinct CI failure → a second row.
+	eng.observeOutcomeSignals(context.Background(), ciAt("headB"))
+	if got := outcomesFrom(st); len(got) != 2 {
+		t.Fatalf("new head must record a second row, got: %v", got)
+	}
+	if st.bumps["fixer"]["ci_failed"] != 2 {
+		t.Fatalf("new head must bump again: %+v", st.bumps["fixer"])
+	}
+
+	// ci_failed is non-terminal: engagements are never consumed.
+	if len(st.PeekEngagements("o/r", 5376)) != 1 {
+		t.Fatal("ci_failed must not consume engagements")
+	}
+}
+
 // gateCfg2 is a minimal flow-engine config for outcome tests.
 func gateCfg2() string {
 	return `

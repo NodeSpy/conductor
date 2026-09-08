@@ -29,6 +29,7 @@ type flowGateStore struct {
 	sigs        map[string]string
 	history     map[string]store.RunHistory
 	engagements map[string][]store.Engagement
+	ciFailed    map[string]string
 	bumps       map[string]map[string]int
 	// histVerifyErr simulates a failed HMAC check on the verified read.
 	histVerifyErr error
@@ -142,6 +143,23 @@ func (s *flowGateStore) PeekEngagements(repo string, number int) []store.Engagem
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]store.Engagement(nil), s.engagements[fmt.Sprintf("%s#%d", repo, number)]...)
+}
+
+func (s *flowGateStore) MarkCIFailure(repo string, number int, head string) bool {
+	if head == "" {
+		return true // fail-safe: never dedup a headless signal
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ciFailed == nil {
+		s.ciFailed = map[string]string{}
+	}
+	key := fmt.Sprintf("%s#%d", repo, number)
+	if s.ciFailed[key] == head {
+		return false
+	}
+	s.ciFailed[key] = head
+	return true
 }
 
 func (s *flowGateStore) BumpOutcome(agent, outcome string) {
