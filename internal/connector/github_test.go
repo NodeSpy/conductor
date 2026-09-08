@@ -5,14 +5,17 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -315,6 +318,75 @@ func TestGithubVerbSubmitReviewHTTP(t *testing.T) {
 	}
 }
 
+func TestGithubVerbSubmitReviewInlineComments(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		json.NewEncoder(w).Encode(map[string]any{"id": 9})
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+
+	out, err := impl.Invoke(context.Background(), "submit_review", map[string]any{
+		"repo": "org/repo", "pr": 7, "event": "REQUEST_CHANGES", "body": "see inline",
+		"comments": []any{
+			map[string]any{"path": "a.go", "line": 42, "body": "nil deref here"},
+			map[string]any{"path": "b.go", "line": 10, "side": "RIGHT", "start_line": 8, "body": "tighten this range"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if out["comments"] != 2 {
+		t.Fatalf("out.comments = %v, want 2", out["comments"])
+	}
+	cs, ok := gotBody["comments"].([]any)
+	if !ok || len(cs) != 2 {
+		t.Fatalf("posted comments = %v", gotBody["comments"])
+	}
+	c0 := cs[0].(map[string]any)
+	if c0["path"] != "a.go" || c0["body"] != "nil deref here" || c0["line"].(float64) != 42 {
+		t.Fatalf("comment[0] = %v", c0)
+	}
+	c1 := cs[1].(map[string]any)
+	if c1["side"] != "RIGHT" || c1["start_line"].(float64) != 8 {
+		t.Fatalf("comment[1] multi-line fields = %v", c1)
+	}
+}
+
+func TestReviewComments(t *testing.T) {
+	// nil / empty → no comments, no error (a summary-only review).
+	if got, err := reviewComments(nil); err != nil || got != nil {
+		t.Fatalf("nil: got %v, %v", got, err)
+	}
+	// Coercion: line passes through, side/start_line optional, defaults omitted.
+	got, err := reviewComments([]any{
+		map[string]any{"path": "x.go", "line": 3, "body": "b"},
+		map[string]any{"path": "y.go", "body": "file-level"}, // no line: a file comment
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0]["line"] != 3 || got[0]["path"] != "x.go" {
+		t.Fatalf("coerced[0] = %v", got[0])
+	}
+	if _, hasLine := got[1]["line"]; hasLine {
+		t.Fatalf("a comment with no line must not carry a zero line: %v", got[1])
+	}
+	// Missing path or body is an error — a comment must anchor somewhere and say something.
+	if _, err := reviewComments([]any{map[string]any{"line": 1, "body": "b"}}); err == nil {
+		t.Fatal("missing path must error")
+	}
+	if _, err := reviewComments([]any{map[string]any{"path": "x.go", "line": 1}}); err == nil {
+		t.Fatal("missing body must error")
+	}
+	// Not a list → error.
+	if _, err := reviewComments("nope"); err == nil {
+		t.Fatal("non-list must error")
+	}
+}
+
 func TestGithubVerbAddLabelsHTTP(t *testing.T) {
 	var gotPath string
 	var gotBody map[string]any
@@ -446,5 +518,573 @@ func TestGithubVerbRepoRequired(t *testing.T) {
 	_, err := impl.Invoke(context.Background(), "comment", map[string]any{"number": 1, "body": "x"})
 	if err == nil || !strings.Contains(err.Error(), "options.repo is required") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// --- read verbs + cache + rate-limit ---
+
+func TestGithubReadVerbs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/org/repo/pulls/7" && r.Header.Get("Accept") == "application/vnd.github.diff":
+			w.Write([]byte("diff --git a/x b/x\n+line"))
+		case r.URL.Path == "/repos/org/repo/pulls/7":
+			json.NewEncoder(w).Encode(map[string]any{
+				"title": "T", "body": "B", "state": "open", "draft": false,
+				"additions": 3, "deletions": 1, "changed_files": 2, "html_url": "u",
+				"user":   map[string]any{"login": "alice"},
+				"base":   map[string]any{"ref": "main"},
+				"head":   map[string]any{"ref": "feat", "sha": "abc"},
+				"labels": []any{map[string]any{"name": "bug"}},
+			})
+		case r.URL.Path == "/repos/org/repo/pulls/7/files":
+			json.NewEncoder(w).Encode([]any{
+				map[string]any{"filename": "x.go", "status": "modified", "additions": 2, "deletions": 1, "changes": 3},
+			})
+		case r.URL.Path == "/repos/org/repo/pulls/7/comments":
+			json.NewEncoder(w).Encode([]any{
+				map[string]any{"id": 11, "path": "x.go", "line": 0, "original_line": 9, "body": "old", "user": map[string]any{"login": "bob"}},
+			})
+		case r.URL.Path == "/repos/org/repo/contents/CLAUDE.md":
+			w.Write([]byte("# standards"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	diff, err := impl.Invoke(ctx, "pr_diff", map[string]any{"repo": "org/repo", "pr": 7})
+	if err != nil || !strings.Contains(diff["diff"].(string), "diff --git") {
+		t.Fatalf("pr_diff = %v, %v", diff, err)
+	}
+	meta, err := impl.Invoke(ctx, "pr_get", map[string]any{"repo": "org/repo", "pr": 7})
+	if err != nil || meta["title"] != "T" || meta["author"] != "alice" || meta["head_sha"] != "abc" {
+		t.Fatalf("pr_get = %v, %v", meta, err)
+	}
+	if labels, _ := meta["labels"].([]string); len(labels) != 1 || labels[0] != "bug" {
+		t.Fatalf("pr_get labels = %v", meta["labels"])
+	}
+	files, err := impl.Invoke(ctx, "pr_files", map[string]any{"repo": "org/repo", "pr": 7})
+	fl, _ := files["files"].([]any)
+	if err != nil || len(fl) != 1 || fl[0].(map[string]any)["path"] != "x.go" {
+		t.Fatalf("pr_files = %v, %v", files, err)
+	}
+	rc, err := impl.Invoke(ctx, "review_comments", map[string]any{"repo": "org/repo", "pr": 7})
+	cl, _ := rc["comments"].([]any)
+	if err != nil || len(cl) != 1 || cl[0].(map[string]any)["line"] != 9 { // falls back to original_line
+		t.Fatalf("review_comments = %v, %v", rc, err)
+	}
+	f, err := impl.Invoke(ctx, "file", map[string]any{"repo": "org/repo", "path": "CLAUDE.md"})
+	if err != nil || f["text"] != "# standards" {
+		t.Fatalf("file = %v, %v", f, err)
+	}
+}
+
+func TestGithubReadCacheHit(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("ETag", `"v1"`)
+		w.Write([]byte("the diff"))
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	for i := 0; i < 3; i++ {
+		if _, err := impl.Invoke(context.Background(), "pr_diff", map[string]any{"repo": "org/repo", "pr": 7}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("3 identical reads hit the API %d times, want 1 (cached)", n)
+	}
+}
+
+func TestGithubReadRevalidatesWithETag(t *testing.T) {
+	var full, conditional int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			atomic.AddInt32(&conditional, 1)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		atomic.AddInt32(&full, 1)
+		w.Header().Set("ETag", `"v1"`)
+		w.Write([]byte("the diff"))
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	impl.cacheTTL = 0 // always revalidate → exercise the 304 path
+	for i := 0; i < 3; i++ {
+		out, err := impl.Invoke(context.Background(), "pr_diff", map[string]any{"repo": "org/repo", "pr": 7})
+		if err != nil || out["diff"] != "the diff" {
+			t.Fatalf("call %d: %v %v", i, out, err) // 304 must still serve the cached body
+		}
+	}
+	if full != 1 || conditional != 2 {
+		t.Fatalf("full=%d conditional=%d, want 1 full + 2 conditional (304)", full, conditional)
+	}
+}
+
+func TestGithubRateLimit(t *testing.T) {
+	// Pure helpers: classification + retry-after parsing.
+	rl := &http.Response{StatusCode: 403, Header: http.Header{"X-Ratelimit-Remaining": {"0"}}}
+	if !isRateLimited(rl) {
+		t.Fatal("403 + remaining:0 should be rate-limited")
+	}
+	if isRateLimited(&http.Response{StatusCode: 403, Header: http.Header{"X-Ratelimit-Remaining": {"5"}}}) {
+		t.Fatal("403 with remaining>0 is not a rate limit")
+	}
+	ra := &http.Response{Header: http.Header{"Retry-After": {"7"}}}
+	if retryAfter(ra) != 7*time.Second {
+		t.Fatalf("retryAfter(Retry-After: 7) = %v", retryAfter(ra))
+	}
+
+	// Integration: a rate-limited read with no cache errors clearly; with a
+	// primed cache it serves stale rather than failing the caller.
+	var mode int32 // 0 = serve, 1 = rate-limit
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.LoadInt32(&mode) == 1 {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset", "1") // in the past → no wait
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Write([]byte("cached diff"))
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	impl.cacheTTL = 0 // force a revalidating request each call
+	if _, err := impl.Invoke(context.Background(), "pr_diff", map[string]any{"repo": "org/repo", "pr": 7}); err != nil {
+		t.Fatal(err) // prime the cache
+	}
+	atomic.StoreInt32(&mode, 1)
+	out, err := impl.Invoke(context.Background(), "pr_diff", map[string]any{"repo": "org/repo", "pr": 7})
+	if err != nil || out["diff"] != "cached diff" {
+		t.Fatalf("rate-limited read should serve stale cache: %v %v", out, err)
+	}
+
+	// A fresh repo with no cached copy surfaces a clear rate-limit error.
+	fresh := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	if _, err := fresh.Invoke(context.Background(), "pr_diff", map[string]any{"repo": "org/repo", "pr": 8}); err == nil || !strings.Contains(err.Error(), "rate limit") {
+		t.Fatalf("uncached rate-limited read should error with 'rate limit', got %v", err)
+	}
+}
+
+// --- PR/issue/repo/actions write + action verbs ---
+
+func TestGithubWriteAndActionVerbs(t *testing.T) {
+	type rec struct {
+		method, path string
+		body         map[string]any
+	}
+	var reqs []rec
+	// A superset response body that decodes for every verb's output struct.
+	resp := map[string]any{
+		"number": 123, "html_url": "u", "merged": true, "sha": "deadbeef", "state": "closed",
+		"assignees": []any{map[string]any{"login": "alice"}},
+		"labels":    []any{map[string]any{"name": "bug"}},
+		"title":     "T", "body": "B",
+		"user":          map[string]any{"login": "octo"},
+		"content":       map[string]any{"sha": "blob1"},
+		"commit":        map[string]any{"sha": "c1"},
+		"object":        map[string]any{"sha": "ref1"},
+		"workflow_runs": []any{map[string]any{"id": 9, "name": "CI", "status": "completed", "conclusion": "success", "head_branch": "main", "head_sha": "h", "html_url": "ru"}},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		reqs = append(reqs, rec{r.Method, r.URL.Path, b})
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	last := func() rec { return reqs[len(reqs)-1] }
+
+	// create_pr
+	out, err := impl.Invoke(ctx, "create_pr", map[string]any{"repo": "o/r", "title": "T", "head": "feat", "base": "main", "draft": true})
+	if err != nil || out["number"] != int64(123) {
+		t.Fatalf("create_pr: %v %v", out, err)
+	}
+	if r := last(); r.method != "POST" || r.path != "/repos/o/r/pulls" || r.body["head"] != "feat" || r.body["draft"] != true {
+		t.Fatalf("create_pr req: %+v", r)
+	}
+	// merge_pr
+	if out, err := impl.Invoke(ctx, "merge_pr", map[string]any{"repo": "o/r", "pr": 7, "method": "squash"}); err != nil || out["merged"] != true {
+		t.Fatalf("merge_pr: %v %v", out, err)
+	}
+	if r := last(); r.method != "PUT" || r.path != "/repos/o/r/pulls/7/merge" || r.body["merge_method"] != "squash" {
+		t.Fatalf("merge_pr req: %+v", r)
+	}
+	// update_pr (close)
+	if _, err := impl.Invoke(ctx, "update_pr", map[string]any{"repo": "o/r", "pr": 7, "state": "closed"}); err != nil {
+		t.Fatalf("update_pr: %v", err)
+	}
+	if r := last(); r.method != "PATCH" || r.path != "/repos/o/r/pulls/7" || r.body["state"] != "closed" {
+		t.Fatalf("update_pr req: %+v", r)
+	}
+	// create_issue
+	if out, err := impl.Invoke(ctx, "create_issue", map[string]any{"repo": "o/r", "title": "bug", "labels": []any{"a", "b"}}); err != nil || out["number"] != int64(123) {
+		t.Fatalf("create_issue: %v %v", out, err)
+	}
+	if r := last(); r.path != "/repos/o/r/issues" || len(r.body["labels"].([]any)) != 2 {
+		t.Fatalf("create_issue req: %+v", r)
+	}
+	// update_issue (close as not_planned)
+	if _, err := impl.Invoke(ctx, "update_issue", map[string]any{"repo": "o/r", "number": 5, "state": "closed", "state_reason": "not_planned"}); err != nil {
+		t.Fatalf("update_issue: %v", err)
+	}
+	if r := last(); r.method != "PATCH" || r.path != "/repos/o/r/issues/5" || r.body["state_reason"] != "not_planned" {
+		t.Fatalf("update_issue req: %+v", r)
+	}
+	// assign (add + remove → POST then DELETE)
+	if out, err := impl.Invoke(ctx, "assign", map[string]any{"repo": "o/r", "number": 5, "add": []any{"alice"}, "remove": []any{"bob"}}); err != nil {
+		t.Fatalf("assign: %v %v", out, err)
+	} else if as, _ := out["assignees"].([]string); len(as) != 1 || as[0] != "alice" {
+		t.Fatalf("assign out: %v", out)
+	}
+	if r := last(); r.method != "DELETE" || r.path != "/repos/o/r/issues/5/assignees" {
+		t.Fatalf("assign remove req: %+v", r)
+	}
+	// remove_label (label path-escaped)
+	if _, err := impl.Invoke(ctx, "remove_label", map[string]any{"repo": "o/r", "number": 5, "label": "needs review"}); err != nil {
+		t.Fatalf("remove_label: %v", err)
+	}
+	if r := last(); r.method != "DELETE" || r.path != "/repos/o/r/issues/5/labels/needs review" { // server decodes %20
+		t.Fatalf("remove_label req: %+v", r)
+	}
+	// get_issue
+	if out, err := impl.Invoke(ctx, "get_issue", map[string]any{"repo": "o/r", "number": 5}); err != nil || out["author"] != "octo" {
+		t.Fatalf("get_issue: %v %v", out, err)
+	}
+	// put_file (base64-encodes content)
+	if out, err := impl.Invoke(ctx, "put_file", map[string]any{"repo": "o/r", "path": "x.md", "content": "hi", "message": "add"}); err != nil || out["sha"] != "blob1" || out["commit"] != "c1" {
+		t.Fatalf("put_file: %v %v", out, err)
+	}
+	if r := last(); r.method != "PUT" || r.path != "/repos/o/r/contents/x.md" || r.body["content"] != base64.StdEncoding.EncodeToString([]byte("hi")) {
+		t.Fatalf("put_file req: %+v", r)
+	}
+	// delete_file
+	if out, err := impl.Invoke(ctx, "delete_file", map[string]any{"repo": "o/r", "path": "x.md", "message": "rm", "sha": "blob1"}); err != nil || out["commit"] != "c1" {
+		t.Fatalf("delete_file: %v %v", out, err)
+	}
+	if r := last(); r.method != "DELETE" || r.path != "/repos/o/r/contents/x.md" {
+		t.Fatalf("delete_file req: %+v", r)
+	}
+	// get_ref
+	if out, err := impl.Invoke(ctx, "get_ref", map[string]any{"repo": "o/r", "ref": "main"}); err != nil || out["sha"] != "deadbeef" {
+		t.Fatalf("get_ref: %v %v", out, err)
+	}
+	// create_branch (GET commits/HEAD then POST git/refs)
+	if out, err := impl.Invoke(ctx, "create_branch", map[string]any{"repo": "o/r", "branch": "feat-x"}); err != nil || out["sha"] != "ref1" {
+		t.Fatalf("create_branch: %v %v", out, err)
+	}
+	if r := last(); r.method != "POST" || r.path != "/repos/o/r/git/refs" || r.body["ref"] != "refs/heads/feat-x" {
+		t.Fatalf("create_branch req: %+v", r)
+	}
+	// dispatch_workflow
+	if _, err := impl.Invoke(ctx, "dispatch_workflow", map[string]any{"repo": "o/r", "workflow": "ci.yml", "ref": "main", "inputs": map[string]any{"env": "prod"}}); err != nil {
+		t.Fatalf("dispatch_workflow: %v", err)
+	}
+	if r := last(); r.path != "/repos/o/r/actions/workflows/ci.yml/dispatches" || r.body["ref"] != "main" {
+		t.Fatalf("dispatch_workflow req: %+v", r)
+	}
+	// rerun_run (failed_only → rerun-failed-jobs)
+	if _, err := impl.Invoke(ctx, "rerun_run", map[string]any{"repo": "o/r", "run_id": 99, "failed_only": true}); err != nil {
+		t.Fatalf("rerun_run: %v", err)
+	}
+	if r := last(); r.path != "/repos/o/r/actions/runs/99/rerun-failed-jobs" {
+		t.Fatalf("rerun_run req: %+v", r)
+	}
+	// cancel_run
+	if _, err := impl.Invoke(ctx, "cancel_run", map[string]any{"repo": "o/r", "run_id": 99}); err != nil {
+		t.Fatalf("cancel_run: %v", err)
+	}
+	if r := last(); r.path != "/repos/o/r/actions/runs/99/cancel" {
+		t.Fatalf("cancel_run req: %+v", r)
+	}
+	// list_runs
+	if out, err := impl.Invoke(ctx, "list_runs", map[string]any{"repo": "o/r", "branch": "main"}); err != nil {
+		t.Fatalf("list_runs: %v", err)
+	} else if runs, _ := out["runs"].([]any); len(runs) != 1 || runs[0].(map[string]any)["conclusion"] != "success" {
+		t.Fatalf("list_runs out: %v", out)
+	}
+}
+
+// A write invalidates the read cache, so a mutate-then-read never serves stale.
+func TestGithubWriteInvalidatesCache(t *testing.T) {
+	var diffHits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			atomic.AddInt32(&diffHits, 1)
+			w.Write([]byte("d"))
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"state": "closed"})
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	impl.Invoke(ctx, "pr_diff", map[string]any{"repo": "o/r", "pr": 7}) // caches
+	impl.Invoke(ctx, "pr_diff", map[string]any{"repo": "o/r", "pr": 7}) // cache hit
+	if n := atomic.LoadInt32(&diffHits); n != 1 {
+		t.Fatalf("before write: %d GETs, want 1", n)
+	}
+	impl.Invoke(ctx, "update_pr", map[string]any{"repo": "o/r", "pr": 7, "state": "closed"}) // write → invalidate
+	impl.Invoke(ctx, "pr_diff", map[string]any{"repo": "o/r", "pr": 7})                      // must refetch
+	if n := atomic.LoadInt32(&diffHits); n != 2 {
+		t.Fatalf("after write the cache must be cold: %d GETs, want 2", n)
+	}
+}
+
+func TestGithubReviewRequestVerbs(t *testing.T) {
+	var last struct {
+		method, path string
+		body         map[string]any
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		last.method, last.path = r.Method, r.URL.Path
+		last.body = nil
+		json.NewDecoder(r.Body).Decode(&last.body)
+		json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	// request_review → POST requested_reviewers with the reviewers.
+	if _, err := impl.Invoke(ctx, "request_review", map[string]any{"repo": "o/r", "pr": 7, "reviewers": []any{"alice"}, "team_reviewers": []any{"platform"}}); err != nil {
+		t.Fatal(err)
+	}
+	if last.method != "POST" || last.path != "/repos/o/r/pulls/7/requested_reviewers" {
+		t.Fatalf("request_review req: %+v", last)
+	}
+	if rs, _ := last.body["reviewers"].([]any); len(rs) != 1 || rs[0] != "alice" {
+		t.Fatalf("request_review body: %+v", last.body)
+	}
+	// rerequest_review is the same endpoint (back-compat alias).
+	if _, err := impl.Invoke(ctx, "rerequest_review", map[string]any{"repo": "o/r", "pr": 7, "reviewers": []any{"bob"}}); err != nil {
+		t.Fatal(err)
+	}
+	if last.method != "POST" || last.path != "/repos/o/r/pulls/7/requested_reviewers" {
+		t.Fatalf("rerequest_review req: %+v", last)
+	}
+	// remove_reviewer → DELETE the same endpoint.
+	if _, err := impl.Invoke(ctx, "remove_reviewer", map[string]any{"repo": "o/r", "pr": 7, "reviewers": []any{"alice"}}); err != nil {
+		t.Fatal(err)
+	}
+	if last.method != "DELETE" || last.path != "/repos/o/r/pulls/7/requested_reviewers" {
+		t.Fatalf("remove_reviewer req: %+v", last)
+	}
+	// Nothing to request is an error.
+	if _, err := impl.Invoke(ctx, "request_review", map[string]any{"repo": "o/r", "pr": 7}); err == nil {
+		t.Fatal("request_review with no reviewers must error")
+	}
+}
+
+func TestGithubReleaseSearchChecksDraftVerbs(t *testing.T) {
+	var last struct {
+		method, path, ct string
+		body             map[string]any
+		raw              string
+	}
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		last.method, last.path, last.ct = r.Method, r.URL.Path, r.Header.Get("Content-Type")
+		last.body, last.raw = nil, ""
+		if last.ct == "application/octet-stream" {
+			b, _ := io.ReadAll(r.Body)
+			last.raw = string(b)
+		} else {
+			json.NewDecoder(r.Body).Decode(&last.body)
+		}
+		// list_issues wants a top-level array; everything else an object.
+		if r.Method == "GET" && r.URL.Path == "/repos/o/r/issues" {
+			json.NewEncoder(w).Encode([]any{
+				map[string]any{"number": 1, "title": "real", "state": "open", "html_url": "iu", "labels": []any{map[string]any{"name": "bug"}}, "user": map[string]any{"login": "octo"}},
+				map[string]any{"number": 2, "title": "a pr", "state": "open", "pull_request": map[string]any{}}, // filtered out
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": 55, "html_url": "u", "upload_url": srv.URL + "/uploads/repos/o/r/releases/55/assets{?name,label}",
+			"browser_download_url": "dl", "node_id": "PR_node",
+			"total_count": 1,
+			"items":       []any{map[string]any{"number": 3, "title": "t", "state": "open", "html_url": "iu", "pull_request": map[string]any{}}},
+			"check_runs":  []any{map[string]any{"name": "build", "status": "completed", "conclusion": "success", "html_url": "cu"}},
+			"data":        map[string]any{"ok": true},
+		})
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	// create_release
+	if out, err := impl.Invoke(ctx, "create_release", map[string]any{"repo": "o/r", "tag": "v1", "name": "One", "prerelease": true}); err != nil || out["id"] != int64(55) {
+		t.Fatalf("create_release: %v %v", out, err)
+	}
+	if last.method != "POST" || last.path != "/repos/o/r/releases" || last.body["tag_name"] != "v1" || last.body["prerelease"] != true {
+		t.Fatalf("create_release req: %+v", last)
+	}
+	// upload_asset (GET release for upload_url, then raw POST to it)
+	if out, err := impl.Invoke(ctx, "upload_asset", map[string]any{"repo": "o/r", "release_id": 55, "name": "a.txt", "content": "hi"}); err != nil || out["url"] != "dl" {
+		t.Fatalf("upload_asset: %v %v", out, err)
+	}
+	if last.path != "/uploads/repos/o/r/releases/55/assets" || last.ct != "application/octet-stream" || last.raw != "hi" {
+		t.Fatalf("upload_asset req: %+v", last)
+	}
+	// list_issues
+	if out, err := impl.Invoke(ctx, "list_issues", map[string]any{"repo": "o/r", "state": "open"}); err != nil {
+		t.Fatalf("list_issues: %v", err)
+	} else if is := out["issues"].([]any); len(is) != 1 || is[0].(map[string]any)["title"] != "real" { // the PR is filtered out
+		t.Fatalf("list_issues must drop PRs: %v", out)
+	}
+	// search_issues (scoped to repo; item flagged is_pr)
+	if out, err := impl.Invoke(ctx, "search_issues", map[string]any{"repo": "o/r", "q": "is:open label:bug"}); err != nil || out["total"] != 1 {
+		t.Fatalf("search_issues: %v %v", out, err)
+	} else if it := out["items"].([]any)[0].(map[string]any); it["is_pr"] != true {
+		t.Fatalf("search item: %v", it)
+	}
+	if !strings.Contains(last.path, "/search/issues") {
+		t.Fatalf("search path: %q", last.path)
+	}
+	// checks
+	if out, err := impl.Invoke(ctx, "checks", map[string]any{"repo": "o/r", "ref": "main"}); err != nil {
+		t.Fatalf("checks: %v", err)
+	} else if cs := out["checks"].([]any); len(cs) != 1 || cs[0].(map[string]any)["conclusion"] != "success" {
+		t.Fatalf("checks out: %v", out)
+	}
+	// ready_for_review (GET pull for node_id, then GraphQL)
+	if _, err := impl.Invoke(ctx, "ready_for_review", map[string]any{"repo": "o/r", "pr": 7}); err != nil {
+		t.Fatalf("ready_for_review: %v", err)
+	}
+	if last.method != "POST" || last.path != "/graphql" || !strings.Contains(last.body["query"].(string), "markPullRequestReadyForReview") {
+		t.Fatalf("ready_for_review req: %+v", last)
+	}
+	// convert_to_draft
+	if _, err := impl.Invoke(ctx, "convert_to_draft", map[string]any{"repo": "o/r", "pr": 7}); err != nil {
+		t.Fatalf("convert_to_draft: %v", err)
+	}
+	if !strings.Contains(last.body["query"].(string), "convertPullRequestToDraft") {
+		t.Fatalf("convert_to_draft query: %v", last.body)
+	}
+}
+
+func TestGithubGistVerbs(t *testing.T) {
+	var last struct {
+		method, path string
+		body         map[string]any
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		last.method, last.path = r.Method, r.URL.Path
+		last.body = nil
+		json.NewDecoder(r.Body).Decode(&last.body)
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/gists":
+			json.NewEncoder(w).Encode([]any{map[string]any{"id": "g1", "description": "d", "public": true, "html_url": "u1"}})
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/gists/"):
+			json.NewEncoder(w).Encode(map[string]any{
+				"html_url": "u", "description": "d", "public": false,
+				"files": map[string]any{"a.txt": map[string]any{"content": "hello"}},
+			})
+		default:
+			json.NewEncoder(w).Encode(map[string]any{"id": "g1", "html_url": "u"})
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	// create_gist WITHOUT a repo (gists are user-scoped).
+	out, err := impl.Invoke(ctx, "create_gist", map[string]any{"files": map[string]any{"a.txt": "hi"}, "public": true})
+	if err != nil || out["id"] != "g1" {
+		t.Fatalf("create_gist: %v %v", out, err)
+	}
+	if last.method != "POST" || last.path != "/gists" || last.body["public"] != true {
+		t.Fatalf("create_gist req: %+v", last)
+	}
+	if f := last.body["files"].(map[string]any)["a.txt"].(map[string]any); f["content"] != "hi" {
+		t.Fatalf("create_gist files shape: %v", last.body["files"])
+	}
+	// get_gist → flattens files to {name: content}
+	if out, err := impl.Invoke(ctx, "get_gist", map[string]any{"id": "g1"}); err != nil {
+		t.Fatalf("get_gist: %v", err)
+	} else if fs := out["files"].(map[string]any); fs["a.txt"] != "hello" {
+		t.Fatalf("get_gist files: %v", out)
+	}
+	// update_gist (PATCH)
+	if _, err := impl.Invoke(ctx, "update_gist", map[string]any{"id": "g1", "description": "new"}); err != nil {
+		t.Fatalf("update_gist: %v", err)
+	}
+	if last.method != "PATCH" || last.path != "/gists/g1" {
+		t.Fatalf("update_gist req: %+v", last)
+	}
+	// delete_gist (DELETE)
+	if _, err := impl.Invoke(ctx, "delete_gist", map[string]any{"id": "g1"}); err != nil {
+		t.Fatalf("delete_gist: %v", err)
+	}
+	if last.method != "DELETE" || last.path != "/gists/g1" {
+		t.Fatalf("delete_gist req: %+v", last)
+	}
+	// list_gists
+	if out, err := impl.Invoke(ctx, "list_gists", nil); err != nil {
+		t.Fatalf("list_gists: %v", err)
+	} else if gs := out["gists"].([]any); len(gs) != 1 || gs[0].(map[string]any)["id"] != "g1" {
+		t.Fatalf("list_gists: %v", out)
+	}
+}
+
+func TestGithubPaginateAll(t *testing.T) {
+	var pages int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := atomic.AddInt32(&pages, 1)
+		var files []any
+		n := 100 // page 1 is full → pagination continues
+		if p >= 2 {
+			n = 3 // page 2 is short → stop
+		}
+		for i := 0; i < n; i++ {
+			files = append(files, map[string]any{"filename": "f", "status": "modified"})
+		}
+		json.NewEncoder(w).Encode(files)
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	// Without all: one page (100).
+	if out, err := impl.Invoke(ctx, "pr_files", map[string]any{"repo": "o/r", "pr": 7}); err != nil {
+		t.Fatal(err)
+	} else if fs := out["files"].([]any); len(fs) != 100 {
+		t.Fatalf("no-all should return one page (100), got %d", len(fs))
+	}
+	if n := atomic.LoadInt32(&pages); n != 1 {
+		t.Fatalf("no-all should make 1 request, made %d", n)
+	}
+	// all: follows to the short page (100 + 3 = 103).
+	atomic.StoreInt32(&pages, 0)
+	impl.cacheTTL = 0 // don't serve the cached first page
+	if out, err := impl.Invoke(ctx, "pr_files", map[string]any{"repo": "o/r", "pr": 7, "all": true}); err != nil {
+		t.Fatal(err)
+	} else if fs := out["files"].([]any); len(fs) != 103 {
+		t.Fatalf("all should follow pages (103), got %d", len(fs))
+	}
+	if n := atomic.LoadInt32(&pages); n != 2 {
+		t.Fatalf("all should make 2 requests, made %d", n)
 	}
 }
