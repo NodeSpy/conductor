@@ -15,6 +15,7 @@ The model
 - [[Reuse]]
 - [[Verbs]]
 - [[Code-Steps]]
+- [[Stores]]
 - [[Runtimes]]
 - [[Agents]]
 - [[Grouping]]

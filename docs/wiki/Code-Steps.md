@@ -49,26 +49,60 @@ steps:
   temp file and invokes it (`args:` appends extra argv); the ctx JSON arrives
   on stdin. `sh` is the portable default — never assume bash.
 
-## The data contract
+## What's in `ctx`
 
-The step's template scope — trigger context, prior step outputs, `group`,
-`inputs` inside a workflow — is injected as `ctx` (a global in js, risor, and
-lua; the `run(ctx)` argument in go-embed; JSON on stdin for host
-interpreters). Named `secrets`
-are NOT passed into ctx; pass one explicitly via `env:` or `args:` templates
-when code genuinely needs it.
+Everything a code step gets arrives as `ctx` — a global in js, risor, and lua; the `run(ctx)`
+argument in go-embed; JSON on stdin for host interpreters. It carries the same scope your templates
+see, **plus** live handles to stores and memory in the in-process engines.
 
-The return value / stdout becomes the step's outputs: a JSON object as-is
-(`{{.step.field}}`), any other JSON under `value:`, plain text under `text:`.
+### Data (read-only)
 
-The in-process engines also get the data bindings: `ctx.store("<name>")`
-(the KV ops), `ctx.sql("<name>")` (query/exec — gated per store, below), and `ctx.memory`
-(remember/recall/forget/list over the configured [[Memory]]; relative scopes
-need their explicit `repo:<owner/repo>` / `agent:<name>` forms in code). In
-risor these are the top-level `store(…)`, `sql(…)`, and `memory` builtins;
-in go-embed, `import "conductor/store"`, `"conductor/sql"`, and
-`"conductor/memory"`. Host-interpreter steps run in a separate process and
-use the `kv.*` / `sql.*` / `memory.*` verbs instead.
+| in `ctx` | what |
+|---|---|
+| `ctx.inputs` | the workflow/manual-run inputs (`--input`, `with:`) — a map |
+| `ctx.<stepId>` | a prior step's outputs, e.g. `ctx.diff.text`, `ctx.assess.decision` |
+| trigger fields | `ctx.repo`, `ctx.owner`, `ctx.name`, `ctx.pr`, `ctx.number`, `ctx.head`, `ctx.base`, `ctx.kind`, `ctx.title`, `ctx.url` (+ every connector-specific context key, e.g. `ctx.comment`, `ctx.incident`) |
+| `ctx.item` | the current element inside a `for_each` step |
+| `ctx.group` | the batched events when the trigger has a `group:` window |
+
+Named `secrets`/vault values are **NOT** in `ctx` — pass one explicitly via a step's `env:` or
+`args:` template when code genuinely needs it (see [[Secrets]]).
+
+### Bindings (in-process engines only — js, go-embed, risor, lua)
+
+| binding | shape | notes |
+|---|---|---|
+| `ctx.store("<name>")` | a KV handle: `get, set, setnx, merge, delete, incr, append, remove, contains, list, first, last, index, slice, len, pop` — **namespace first**, e.g. `.get(ns, key)`, `.set(ns, key, value)` | semantics mirror the `kv.*` verbs ([[Stores]]); absent reads return null/nil |
+| `ctx.sql("<name>")` | a SQL handle: `query(sql, args?)` → row list, `exec(sql, args?)` → `{rows_affected, last_insert_id?}` | **query-only by default**; a store needs `code_access: write` to `exec` from code (see below) |
+| `ctx.memory` | `remember(text, {tags, scope}?)`, `recall(query?, filter?)`, `forget(id)`, `list(filter?)` | over the configured [[Memory]]; relative scopes need explicit `repo:<owner/repo>` / `agent:<name>` forms in code |
+
+The spelling differs by engine but the surface is identical:
+
+| engine | store | sql | memory |
+|---|---|---|---|
+| **js**, **lua** | `ctx.store("x")` | `ctx.sql("x")` | `ctx.memory` |
+| **risor** | `store("x")` (builtin) | `sql("x")` | `memory` |
+| **go-embed** | `import "conductor/store"` → `store.Use("x")` | `import "conductor/sql"` → `sql.Use("x")` | `import "conductor/memory"` |
+
+**Host interpreters** (`run: sh/node/python/…`) run in a separate process — they have no `ctx`
+handles; use the `kv.*` / `sql.*` / `memory.*` **verbs** in surrounding steps instead.
+
+```yaml
+- run: js
+  code: |
+    const kv = ctx.store("state");
+    const seen = kv.contains("pd", "incidents", ctx.incident.id);   // (ns, key, item)
+    if (!seen) kv.append("pd", "incidents", ctx.incident.id);
+    const n = ctx.sql("analytics").query(
+      "SELECT count(*) AS c FROM incidents WHERE day = $1", [ctx.inputs.day]);
+    return { first_time: !seen, total: n[0].c };
+```
+
+### Outputs
+
+The return value / stdout becomes the step's outputs: a JSON **object** as-is (referenced as
+`{{.step.field}}` / `ctx.step.field` downstream), any other JSON under `value:`, plain text under
+`text:`.
 
 ## Where it runs
 
