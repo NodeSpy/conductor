@@ -90,6 +90,13 @@ keeps their dedup state separate).
 | `rerun_run` | `repo`*, `run_id`*, `failed_only`, `as` | `ok` |
 | `cancel_run` | `repo`*, `run_id`*, `as` | `ok` |
 | `list_runs` | `repo`*, `branch`, `status`, `per_page`, `as` | `runs` — recent workflow runs |
+| `checks` | `repo`*, `ref`*, `as` | `checks` — check-run status for a ref |
+| `create_release` | `repo`*, `tag`*, `target`, `name`, `body`, `draft`, `prerelease`, `as` | `id`, `url`, `upload_url` |
+| `upload_asset` | `repo`*, `release_id`*, `name`*, `content`/`path`, `content_type`, `as` | `id`, `url` |
+| `list_issues` | `repo`*, `state`, `labels`, `assignee`, `per_page`, `as` | `issues` (PRs excluded) |
+| `search_issues` | `repo`*, `q`*, `per_page`, `as` | `total`, `items` — search scoped to the repo |
+| `ready_for_review` | `repo`*, `pr`*, `as` | `ok` — mark a draft PR ready (GraphQL) |
+| `convert_to_draft` | `repo`*, `pr`*, `as` | `ok` — convert a PR back to draft (GraphQL) |
 
 The **read** verbs (`pr_diff`, `pr_get`, `pr_files`, `review_comments`, `file`)
 are cached in-process for ~45s with ETag revalidation, so a fan-out that all

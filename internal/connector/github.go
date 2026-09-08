@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -431,6 +432,78 @@ var githubDecl = &TypeDecl{
 				"as":       {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"runs": {Type: TList}},
+		},
+		{
+			Name: "create_release", Desc: "publish a release for a tag",
+			Options: Schema{
+				"repo":   {Type: TString, Required: true},
+				"tag":    {Type: TString, Required: true, Desc: "the tag to release (created if it doesn't exist, on target)"},
+				"target": {Type: TString, Desc: "commitish the tag points at when created (default: default branch)"},
+				"name":   {Type: TString, Desc: "release title"}, "body": {Type: TString, Desc: "release notes"},
+				"draft": {Type: TBool}, "prerelease": {Type: TBool},
+				"as": {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"id": {Type: TInt}, "url": {Type: TString}, "upload_url": {Type: TString}},
+		},
+		{
+			Name: "upload_asset", Desc: "attach a file to a release",
+			Options: Schema{
+				"repo":         {Type: TString, Required: true},
+				"release_id":   {Type: TInt, Required: true, Desc: "id from create_release"},
+				"name":         {Type: TString, Required: true, Desc: "asset file name"},
+				"content":      {Type: TString, Desc: "inline asset bytes (mutually exclusive with path)"},
+				"path":         {Type: TString, Desc: "local file to upload"},
+				"content_type": {Type: TString, Desc: "MIME type (default application/octet-stream)"},
+				"as":           {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"id": {Type: TInt}, "url": {Type: TString}},
+		},
+		{
+			Name: "list_issues", Desc: "list issues (PRs excluded): [{number, title, state, labels, author, url}]",
+			Options: Schema{
+				"repo":     {Type: TString, Required: true},
+				"state":    {Type: TString, Desc: "open|closed|all (default open)"},
+				"labels":   {Type: TList, Desc: "filter to issues with all these labels"},
+				"assignee": {Type: TString, Desc: "filter to this assignee (or * / none)"},
+				"per_page": {Type: TInt, Desc: "default 30, max 100"},
+				"as":       {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"issues": {Type: TList}},
+		},
+		{
+			Name: "search_issues", Desc: "search issues/PRs in this repo: [{number, title, state, is_pr, url}]",
+			Options: Schema{
+				"repo":     {Type: TString, Required: true},
+				"q":        {Type: TString, Required: true, Desc: "GitHub search query (scoped to this repo automatically)"},
+				"per_page": {Type: TInt, Desc: "default 30, max 100"},
+				"as":       {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"total": {Type: TInt}, "items": {Type: TList}},
+		},
+		{
+			Name: "checks", Desc: "check-run status for a ref: [{name, status, conclusion, url}]",
+			Options: Schema{
+				"repo": {Type: TString, Required: true},
+				"ref":  {Type: TString, Required: true, Desc: "branch, tag, or sha"},
+				"as":   {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"checks": {Type: TList}},
+		},
+		{
+			Name: "ready_for_review", Desc: "mark a draft PR ready for review",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"as": {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"ok": {Type: TBool}},
+		},
+		{
+			Name: "convert_to_draft", Desc: "convert a PR back to a draft",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"as": {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"ok": {Type: TBool}},
 		},
 		{
 			Name: "add_labels", Desc: "add labels to an issue or PR",
@@ -1279,6 +1352,202 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 			})
 		}
 		return map[string]any{"runs": runs}, nil
+	case "create_release":
+		tag, _ := opts["tag"].(string)
+		if tag == "" {
+			return nil, fmt.Errorf("github.create_release: options.tag is required")
+		}
+		reqBody := map[string]any{"tag_name": tag}
+		if s, _ := opts["target"].(string); s != "" {
+			reqBody["target_commitish"] = s
+		}
+		if s, _ := opts["name"].(string); s != "" {
+			reqBody["name"] = s
+		}
+		if s, _ := opts["body"].(string); s != "" {
+			reqBody["body"] = s
+		}
+		if b, _ := opts["draft"].(bool); b {
+			reqBody["draft"] = true
+		}
+		if b, _ := opts["prerelease"].(bool); b {
+			reqBody["prerelease"] = true
+		}
+		var out struct {
+			ID        int64  `json:"id"`
+			HTMLURL   string `json:"html_url"`
+			UploadURL string `json:"upload_url"`
+		}
+		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/releases", base, repo), reqBody, &out); err != nil {
+			return nil, err
+		}
+		return map[string]any{"id": out.ID, "url": out.HTMLURL, "upload_url": out.UploadURL}, nil
+	case "upload_asset":
+		relID := toInt(opts["release_id"])
+		name, _ := opts["name"].(string)
+		if relID == 0 || name == "" {
+			return nil, fmt.Errorf("github.upload_asset: release_id and name are required")
+		}
+		var data []byte
+		if c, ok := opts["content"].(string); ok && c != "" {
+			data = []byte(c)
+		} else if p, _ := opts["path"].(string); p != "" {
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return nil, fmt.Errorf("github.upload_asset: read %s: %w", p, err)
+			}
+			data = b
+		} else {
+			return nil, fmt.Errorf("github.upload_asset: set content or path")
+		}
+		var rel struct {
+			UploadURL string `json:"upload_url"`
+		}
+		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/releases/%d", base, repo, relID), &rel); err != nil {
+			return nil, err
+		}
+		up := rel.UploadURL
+		if i := strings.IndexByte(up, '{'); i >= 0 { // strip the {?name,label} template
+			up = up[:i]
+		}
+		if up == "" {
+			return nil, fmt.Errorf("github.upload_asset: release %d has no upload URL", relID)
+		}
+		up += "?name=" + url.QueryEscape(name)
+		ct, _ := opts["content_type"].(string)
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		var out struct {
+			ID                 int64  `json:"id"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		}
+		if err := g.postRaw(ctx, tok, up, ct, data, &out); err != nil {
+			return nil, err
+		}
+		return map[string]any{"id": out.ID, "url": out.BrowserDownloadURL}, nil
+	case "list_issues":
+		q := url.Values{}
+		if s, _ := opts["state"].(string); s != "" {
+			q.Set("state", s)
+		}
+		if l := toStrings(opts["labels"]); len(l) > 0 {
+			q.Set("labels", strings.Join(l, ","))
+		}
+		if s, _ := opts["assignee"].(string); s != "" {
+			q.Set("assignee", s)
+		}
+		pp := toInt(opts["per_page"])
+		if pp <= 0 {
+			pp = 30
+		}
+		q.Set("per_page", strconv.Itoa(pp))
+		var raw []struct {
+			Number  int64  `json:"number"`
+			Title   string `json:"title"`
+			State   string `json:"state"`
+			HTMLURL string `json:"html_url"`
+			User    struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Labels []struct {
+				Name string `json:"name"`
+			} `json:"labels"`
+			PullRequest *struct{} `json:"pull_request"`
+		}
+		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/issues?%s", base, repo, q.Encode()), &raw); err != nil {
+			return nil, err
+		}
+		issues := make([]any, 0, len(raw))
+		for _, i := range raw {
+			if i.PullRequest != nil { // the issues endpoint returns PRs too — drop them
+				continue
+			}
+			labels := make([]string, 0, len(i.Labels))
+			for _, l := range i.Labels {
+				labels = append(labels, l.Name)
+			}
+			issues = append(issues, map[string]any{
+				"number": i.Number, "title": i.Title, "state": i.State,
+				"author": i.User.Login, "labels": labels, "url": i.HTMLURL,
+			})
+		}
+		return map[string]any{"issues": issues}, nil
+	case "search_issues":
+		query, _ := opts["q"].(string)
+		if query == "" {
+			return nil, fmt.Errorf("github.search_issues: options.q is required")
+		}
+		pp := toInt(opts["per_page"])
+		if pp <= 0 {
+			pp = 30
+		}
+		u := fmt.Sprintf("%s/search/issues?q=%s&per_page=%d", base, url.QueryEscape(query+" repo:"+repo), pp)
+		var out struct {
+			TotalCount int `json:"total_count"`
+			Items      []struct {
+				Number      int64     `json:"number"`
+				Title       string    `json:"title"`
+				State       string    `json:"state"`
+				HTMLURL     string    `json:"html_url"`
+				PullRequest *struct{} `json:"pull_request"`
+			} `json:"items"`
+		}
+		if err := g.get(ctx, tok, u, &out); err != nil {
+			return nil, err
+		}
+		items := make([]any, 0, len(out.Items))
+		for _, it := range out.Items {
+			items = append(items, map[string]any{
+				"number": it.Number, "title": it.Title, "state": it.State,
+				"is_pr": it.PullRequest != nil, "url": it.HTMLURL,
+			})
+		}
+		return map[string]any{"total": out.TotalCount, "items": items}, nil
+	case "checks":
+		ref, _ := opts["ref"].(string)
+		if ref == "" {
+			return nil, fmt.Errorf("github.checks: options.ref is required")
+		}
+		var out struct {
+			CheckRuns []struct {
+				Name       string `json:"name"`
+				Status     string `json:"status"`
+				Conclusion string `json:"conclusion"`
+				HTMLURL    string `json:"html_url"`
+			} `json:"check_runs"`
+		}
+		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/commits/%s/check-runs", base, repo, url.PathEscape(ref)), &out); err != nil {
+			return nil, err
+		}
+		checks := make([]any, 0, len(out.CheckRuns))
+		for _, c := range out.CheckRuns {
+			checks = append(checks, map[string]any{
+				"name": c.Name, "status": c.Status, "conclusion": c.Conclusion, "url": c.HTMLURL,
+			})
+		}
+		return map[string]any{"checks": checks}, nil
+	case "ready_for_review", "convert_to_draft":
+		if number == 0 {
+			return nil, fmt.Errorf("github.%s: options.pr is required", verb)
+		}
+		var pr struct {
+			NodeID string `json:"node_id"`
+		}
+		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d", base, repo, number), &pr); err != nil {
+			return nil, err
+		}
+		if pr.NodeID == "" {
+			return nil, fmt.Errorf("github.%s: could not resolve the PR's node id", verb)
+		}
+		mutation := "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){clientMutationId}}"
+		if verb == "convert_to_draft" {
+			mutation = "mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){clientMutationId}}"
+		}
+		if err := g.graphql(ctx, tok, mutation, map[string]any{"id": pr.NodeID}, nil); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
 	case "add_labels":
 		if number == 0 {
 			return nil, fmt.Errorf("github.add_labels: options.number is required")
@@ -1356,6 +1625,64 @@ func (g *githubImpl) invalidateCache() {
 	g.mu.Lock()
 	g.getCache = map[string]*ghCacheEntry{}
 	g.mu.Unlock()
+}
+
+// graphql runs one GraphQL (v4) query/mutation. GraphQL returns 200 even on
+// query errors, so those are surfaced from the response body, not the status.
+func (g *githubImpl) graphql(ctx context.Context, token, query string, variables map[string]any, out any) error {
+	reqBody := map[string]any{"query": query}
+	if len(variables) > 0 {
+		reqBody["variables"] = variables
+	}
+	var resp struct {
+		Data   json.RawMessage `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := g.post(ctx, token, gh.APIBaseURL()+"/graphql", reqBody, &resp); err != nil {
+		return err
+	}
+	if len(resp.Errors) > 0 {
+		return fmt.Errorf("github graphql: %s", resp.Errors[0].Message)
+	}
+	if out != nil && len(resp.Data) > 0 {
+		return json.Unmarshal(resp.Data, out)
+	}
+	return nil
+}
+
+// postRaw uploads a raw body (a release asset) with a caller-set content type —
+// release assets go to a separate uploads host, so the caller passes the full
+// upload URL. Invalidates the read cache like any write.
+func (g *githubImpl) postRaw(ctx context.Context, token, url, contentType string, body []byte, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	resp, err := g.httpc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	g.noteRateLimit(resp)
+	if resp.StatusCode/100 != 2 {
+		if isRateLimited(resp) {
+			return g.rateLimitError()
+		}
+		return ghHTTPError("POST", url, resp)
+	}
+	g.invalidateCache()
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
 }
 
 const (

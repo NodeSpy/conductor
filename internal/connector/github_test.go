@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -890,5 +891,94 @@ func TestGithubReviewRequestVerbs(t *testing.T) {
 	// Nothing to request is an error.
 	if _, err := impl.Invoke(ctx, "request_review", map[string]any{"repo": "o/r", "pr": 7}); err == nil {
 		t.Fatal("request_review with no reviewers must error")
+	}
+}
+
+func TestGithubReleaseSearchChecksDraftVerbs(t *testing.T) {
+	var last struct {
+		method, path, ct string
+		body             map[string]any
+		raw              string
+	}
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		last.method, last.path, last.ct = r.Method, r.URL.Path, r.Header.Get("Content-Type")
+		last.body, last.raw = nil, ""
+		if last.ct == "application/octet-stream" {
+			b, _ := io.ReadAll(r.Body)
+			last.raw = string(b)
+		} else {
+			json.NewDecoder(r.Body).Decode(&last.body)
+		}
+		// list_issues wants a top-level array; everything else an object.
+		if r.Method == "GET" && r.URL.Path == "/repos/o/r/issues" {
+			json.NewEncoder(w).Encode([]any{
+				map[string]any{"number": 1, "title": "real", "state": "open", "html_url": "iu", "labels": []any{map[string]any{"name": "bug"}}, "user": map[string]any{"login": "octo"}},
+				map[string]any{"number": 2, "title": "a pr", "state": "open", "pull_request": map[string]any{}}, // filtered out
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": 55, "html_url": "u", "upload_url": srv.URL + "/uploads/repos/o/r/releases/55/assets{?name,label}",
+			"browser_download_url": "dl", "node_id": "PR_node",
+			"total_count": 1,
+			"items":       []any{map[string]any{"number": 3, "title": "t", "state": "open", "html_url": "iu", "pull_request": map[string]any{}}},
+			"check_runs":  []any{map[string]any{"name": "build", "status": "completed", "conclusion": "success", "html_url": "cu"}},
+			"data":        map[string]any{"ok": true},
+		})
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	// create_release
+	if out, err := impl.Invoke(ctx, "create_release", map[string]any{"repo": "o/r", "tag": "v1", "name": "One", "prerelease": true}); err != nil || out["id"] != int64(55) {
+		t.Fatalf("create_release: %v %v", out, err)
+	}
+	if last.method != "POST" || last.path != "/repos/o/r/releases" || last.body["tag_name"] != "v1" || last.body["prerelease"] != true {
+		t.Fatalf("create_release req: %+v", last)
+	}
+	// upload_asset (GET release for upload_url, then raw POST to it)
+	if out, err := impl.Invoke(ctx, "upload_asset", map[string]any{"repo": "o/r", "release_id": 55, "name": "a.txt", "content": "hi"}); err != nil || out["url"] != "dl" {
+		t.Fatalf("upload_asset: %v %v", out, err)
+	}
+	if last.path != "/uploads/repos/o/r/releases/55/assets" || last.ct != "application/octet-stream" || last.raw != "hi" {
+		t.Fatalf("upload_asset req: %+v", last)
+	}
+	// list_issues
+	if out, err := impl.Invoke(ctx, "list_issues", map[string]any{"repo": "o/r", "state": "open"}); err != nil {
+		t.Fatalf("list_issues: %v", err)
+	} else if is := out["issues"].([]any); len(is) != 1 || is[0].(map[string]any)["title"] != "real" { // the PR is filtered out
+		t.Fatalf("list_issues must drop PRs: %v", out)
+	}
+	// search_issues (scoped to repo; item flagged is_pr)
+	if out, err := impl.Invoke(ctx, "search_issues", map[string]any{"repo": "o/r", "q": "is:open label:bug"}); err != nil || out["total"] != 1 {
+		t.Fatalf("search_issues: %v %v", out, err)
+	} else if it := out["items"].([]any)[0].(map[string]any); it["is_pr"] != true {
+		t.Fatalf("search item: %v", it)
+	}
+	if !strings.Contains(last.path, "/search/issues") {
+		t.Fatalf("search path: %q", last.path)
+	}
+	// checks
+	if out, err := impl.Invoke(ctx, "checks", map[string]any{"repo": "o/r", "ref": "main"}); err != nil {
+		t.Fatalf("checks: %v", err)
+	} else if cs := out["checks"].([]any); len(cs) != 1 || cs[0].(map[string]any)["conclusion"] != "success" {
+		t.Fatalf("checks out: %v", out)
+	}
+	// ready_for_review (GET pull for node_id, then GraphQL)
+	if _, err := impl.Invoke(ctx, "ready_for_review", map[string]any{"repo": "o/r", "pr": 7}); err != nil {
+		t.Fatalf("ready_for_review: %v", err)
+	}
+	if last.method != "POST" || last.path != "/graphql" || !strings.Contains(last.body["query"].(string), "markPullRequestReadyForReview") {
+		t.Fatalf("ready_for_review req: %+v", last)
+	}
+	// convert_to_draft
+	if _, err := impl.Invoke(ctx, "convert_to_draft", map[string]any{"repo": "o/r", "pr": 7}); err != nil {
+		t.Fatalf("convert_to_draft: %v", err)
+	}
+	if !strings.Contains(last.body["query"].(string), "convertPullRequestToDraft") {
+		t.Fatalf("convert_to_draft query: %v", last.body)
 	}
 }
