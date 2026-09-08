@@ -37,6 +37,14 @@ func (e *Engine) observeOutcomeSignals(ctx context.Context, t core.Trigger) {
 	case core.KindClosed:
 		e.observeClosed(ctx, t)
 	case "failing_checks":
+		// Once per head (per push), not once per check event: a fail-fast matrix
+		// emits one failing_checks per cancelled sibling — dozens for one failed
+		// push — and this loop runs before any dedup gate. Record ci_failed on the
+		// first head only; a fresh push that fails again is a new head. Empty head
+		// falls back to per-event (MarkCIFailure's fail-safe).
+		if !e.store.MarkCIFailure(t.Target.Repo, t.Target.Number, t.Target.HeadSHA) {
+			return
+		}
 		// Non-terminal: the PR lives on; the engagements stay for the
 		// terminal signal.
 		for _, g := range e.store.PeekEngagements(t.Target.Repo, t.Target.Number) {

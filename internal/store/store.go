@@ -63,6 +63,7 @@ type Store struct {
 	// Outcome-learning state (#36 §18) — see outcomes.go.
 	engagements  map[string][]Engagement
 	outcomeStats map[string]map[string]int
+	ciFailed     map[string]ciFailMark
 }
 
 // Options configure a Store.

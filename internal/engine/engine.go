@@ -79,6 +79,7 @@ type Store interface {
 	RecordEngagement(repo string, number int, e store.Engagement)
 	TakeEngagements(repo string, number int) []store.Engagement
 	PeekEngagements(repo string, number int) []store.Engagement
+	MarkCIFailure(repo string, number int, head string) bool
 	BumpOutcome(agent, outcome string)
 	AgentOutcomeStats(agent string) map[string]int
 }

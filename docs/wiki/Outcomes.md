@@ -17,7 +17,7 @@ state file and pruned by age. Signals then resolve them:
 | PR closed, merged | the github connector's `_closed` signal (emitted unconditionally — no trigger config needed) | `merged` (terminal — consumes the engagements) |
 | PR closed, unmerged | same | `closed` (terminal) |
 | a merged PR titled `Revert "…"` whose body carries GitHub's own `Reverts owner/repo#N` back-reference (same repo only) | same | `reverted` for PR N |
-| a configured `failing_checks` trigger fires on an engaged PR | github events | `ci_failed` (non-terminal — the PR lives on) |
+| a configured `failing_checks` trigger fires on an engaged PR | github events | `ci_failed` — **once per head** (per push, so a fail-fast matrix's cancelled-check fan-out counts once), non-terminal (the PR lives on) |
 | a review hand-off resolves | approve / discard on the [[Hand-offs]] channel | `approved` / `rejected` |
 | a gate resolves (§16) | `event: gate` audit rows | pass / escalated rates in the report |
 
