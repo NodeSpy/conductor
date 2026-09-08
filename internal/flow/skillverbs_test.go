@@ -201,13 +201,12 @@ policy:
 	if calls := st.snapshot(); len(calls) != 0 {
 		t.Fatalf("refused call must not dispatch: %+v", calls)
 	}
-	// trust: full lifts approve everywhere — the skill surface follows (the
-	// identity requirement stands: attribution isn't a trust question).
+	// trust: full lifts approve everywhere — the skill surface follows.
 	full := loadConfig(t, `
 connectors:
   svc: { type: fake }
 agents:
-  deployer: { model: x, skill: { verbs: ["svc.*"], identity: bot } }
+  deployer: { model: x, skill: { verbs: ["svc.*"] } }
 policy:
   agent_authored: { trust: full, approve: [ svc.post ] }
 `)
@@ -245,24 +244,38 @@ stores:
 	}
 }
 
-// #122 R4: skill-verb writes post as a DISTINGUISHED identity, never as the
-// operator — skill.identity is forced onto as-taking verbs (overriding
-// anything the agent supplied), agent_authored.identity is the fallback,
-// and a write-capable skill profile without either is a config error.
+// Identity is a per-verb concern: the skill layer never forces an `as:`. A
+// verb's own `as:` option travels through exactly as the agent supplied it
+// (or absent → the connector's own default, e.g. gh: me). The old #122-R4
+// forcing (skill.identity / agent_authored.identity injected onto writes) is
+// gone.
 func TestSkillVerbIdentity(t *testing.T) {
+	// Agent-supplied `as` passes through untouched.
 	rig, st := skillRig(t)
-	// skill.identity wins, and overwrites an agent-supplied `as`.
-	id := SkillIdentity{Agent: "a", Verbs: []string{"svc.*"}, Identity: "bot"}
+	id := SkillIdentity{Agent: "a", Verbs: []string{"svc.*"}}
 	if _, err := rig.Runner.RunSkillVerb(context.Background(), id, "svc.post",
-		map[string]any{"text": "x", "as": "me"}); err != nil {
+		map[string]any{"text": "x", "as": "bot"}); err != nil {
 		t.Fatal(err)
 	}
-	calls := st.snapshot()
-	if len(calls) != 1 || calls[0].Opts["as"] != "bot" {
-		t.Fatalf("skill.identity must be forced onto the write: %+v", calls)
+	if calls := st.snapshot(); len(calls) != 1 || calls[0].Opts["as"] != "bot" {
+		t.Fatalf("agent-supplied as must pass through unchanged: %+v", calls)
 	}
 
-	// Fallback: no skill.identity, agent_authored.identity applies.
+	// No `as` supplied → the skill layer injects nothing; the option stays
+	// absent so the connector applies its own default.
+	rig2, st2 := skillRig(t)
+	if _, err := rig2.Runner.RunSkillVerb(context.Background(), id, "svc.post",
+		map[string]any{"text": "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if calls := st2.snapshot(); len(calls) != 1 {
+		t.Fatalf("expected one call: %+v", calls)
+	} else if v, present := calls[0].Opts["as"]; present {
+		t.Fatalf("skill layer must not inject an identity, got as=%v", v)
+	}
+
+	// A policy.agent_authored.identity is NOT injected onto skill verbs either
+	// (that fallback is gone with the redesign).
 	cfg := loadConfig(t, `
 connectors:
   svc: { type: fake }
@@ -270,63 +283,33 @@ policy:
   agent_authored: { identity: polbot }
 `)
 	reg := buildRegistry(t, cfg)
-	st2 := newFakeState(t, "svc")
-	rig2 := newTestRunner(t, cfg, reg)
-	if _, err := rig2.Runner.RunSkillVerb(context.Background(),
+	st3 := newFakeState(t, "svc")
+	rig3 := newTestRunner(t, cfg, reg)
+	if _, err := rig3.Runner.RunSkillVerb(context.Background(),
 		SkillIdentity{Agent: "a", Verbs: []string{"svc.*"}}, "svc.post",
 		map[string]any{"text": "x"}); err != nil {
 		t.Fatal(err)
 	}
-	if calls := st2.snapshot(); len(calls) != 1 || calls[0].Opts["as"] != "polbot" {
-		t.Fatalf("agent_authored.identity fallback: %+v", calls)
+	if calls := st3.snapshot(); len(calls) != 1 {
+		t.Fatalf("expected one call: %+v", calls)
+	} else if v, present := calls[0].Opts["as"]; present {
+		t.Fatalf("agent_authored.identity must NOT be injected onto skill verbs, got as=%v", v)
 	}
 }
 
-// #122 R4 (load half): a skill profile whose verbs admit an as-taking write
-// verb must carry an identity.
-func TestValidateSkillIdentityRequired(t *testing.T) {
-	noID := loadConfig(t, `
+// The redesign removes the load-time identity requirement: a skill profile
+// whose verbs admit an as-taking write verb needs no skill.identity (nor
+// agent_authored.identity) — identity is a per-verb `as:` option defaulting
+// to the connector's own default.
+func TestValidateSkillNoIdentityNeeded(t *testing.T) {
+	cfg := loadConfig(t, `
 connectors:
   svc: { type: fake }
 agents:
   deployer: { model: x, skill: { verbs: ["svc.*"] } }
 `)
-	err := Validate(noID, buildRegistry(t, noID))
-	if err == nil || !strings.Contains(err.Error(), "skill.identity") {
-		t.Fatalf("write-capable skill profile without identity must fail validation, got %v", err)
-	}
-
-	withSkillID := loadConfig(t, `
-connectors:
-  svc: { type: fake }
-agents:
-  deployer: { model: x, skill: { verbs: ["svc.*"], identity: bot } }
-`)
-	if err := Validate(withSkillID, buildRegistry(t, withSkillID)); err != nil {
-		t.Fatalf("skill.identity must satisfy the requirement: %v", err)
-	}
-
-	withPolID := loadConfig(t, `
-connectors:
-  svc: { type: fake }
-agents:
-  deployer: { model: x, skill: { verbs: ["svc.*"] } }
-policy:
-  agent_authored: { identity: polbot }
-`)
-	if err := Validate(withPolID, buildRegistry(t, withPolID)); err != nil {
-		t.Fatalf("agent_authored.identity must satisfy the requirement: %v", err)
-	}
-
-	// A profile whose admitted verbs take no `as` needs no identity.
-	readOnly := loadConfig(t, `
-connectors:
-  svc: { type: fake }
-agents:
-  reviewer: { model: x, skill: { verbs: ["svc.ask"] } }
-`)
-	if err := Validate(readOnly, buildRegistry(t, readOnly)); err != nil {
-		t.Fatalf("as-less skill.verbs must not require an identity: %v", err)
+	if err := Validate(cfg, buildRegistry(t, cfg)); err != nil {
+		t.Fatalf("write-capable skill profile without identity must now validate: %v", err)
 	}
 }
 
@@ -346,7 +329,7 @@ func TestValidateSkillVerbPatterns(t *testing.T) {
 connectors:
   svc: { type: fake }
 agents:
-  a: { model: x, skill: { verbs: `+c.verbs+`, identity: bot } }
+  a: { model: x, skill: { verbs: `+c.verbs+` } }
 `)
 		err := Validate(cfg, buildRegistry(t, cfg))
 		if err == nil || !strings.Contains(err.Error(), c.wantErr) {
@@ -361,7 +344,7 @@ connectors:
 runtimes:
   gem: { agent: gemini, default: true }
 agents:
-  a: { model: x, skill: { verbs: ["svc.nosuchverb"], identity: bot } }
+  a: { model: x, skill: { verbs: ["svc.nosuchverb"] } }
 `)
 	reg := buildRegistry(t, cfg)
 	if err := Validate(cfg, reg); err != nil {
@@ -378,7 +361,7 @@ connectors:
 runtimes:
   gem: { agent: gemini, default: true }
 agents:
-  a: { model: x, skill: { verbs: ["svc.*"], identity: bot } }
+  a: { model: x, skill: { verbs: ["svc.*"] } }
 `)
 	regLive := buildRegistry(t, live)
 	if warns := SkillWarnings(live, regLive); len(warns) != 0 {

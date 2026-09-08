@@ -33,9 +33,6 @@ type SkillIdentity struct {
 	Number  int
 	// Verbs are the profile's skill.verbs patterns.
 	Verbs []string
-	// Identity is the profile's skill.identity — the `as:` every as-taking
-	// verb call posts under ("" falls through to agent_authored.identity).
-	Identity string
 }
 
 // SkillVerbCatalog lists the verbs the given patterns expose, shaped as MCP
@@ -135,10 +132,6 @@ func validateSkillProfiles(cfg *config.Config, reg *connector.Registry) error {
 		pol = cfg.Policy.AgentAuthored
 	}
 	approveActive := pol != nil && !pol.TrustFull() && len(pol.Approve) > 0
-	polIdentity := ""
-	if pol != nil {
-		polIdentity = pol.Identity
-	}
 	names := make([]string, 0, len(cfg.Agents))
 	for name := range cfg.Agents {
 		names = append(names, name)
@@ -174,12 +167,6 @@ func validateSkillProfiles(cfg *config.Config, reg *connector.Registry) error {
 			}
 			if approveActive && matchAny(pol.Approve, uses) {
 				return fmt.Errorf("config: agent %q: skill.verbs admits %q, which policy.agent_authored.approve gates behind human approval — the skill tool surface has no approval hand-off, so this would silently skip the gate; remove it from skill.verbs (or from approve)", name, uses)
-			}
-			// A write verb (one that posts `as:` an identity) must never
-			// silently post as the operator (#122 R4): require a
-			// distinguished identity when such a verb is admitted.
-			if p.Skill.Identity == "" && polIdentity == "" && verbTakesAs(reg, uses) {
-				return fmt.Errorf("config: agent %q: skill.verbs admits %q, which posts as an identity — set skill.identity (or policy.agent_authored.identity) so skill writes post as a distinguished bot identity, never as the operator", name, uses)
 			}
 		}
 	}
@@ -228,21 +215,6 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 		}
 	}
 	return warns
-}
-
-// verbTakesAs reports whether a verb declares the `as:` identity option.
-func verbTakesAs(reg *connector.Registry, uses string) bool {
-	connName, verb, _ := strings.Cut(uses, ".")
-	in, ok := reg.Get(connName)
-	if !ok || in.Decl == nil {
-		return false
-	}
-	vd, ok := in.Decl.Verb(verb)
-	if !ok {
-		return false
-	}
-	_, takesAs := vd.Options["as"]
-	return takesAs
 }
 
 // skillVerbUniverse is every conn.verb class the skill surface could serve
@@ -320,22 +292,10 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	if !internalConnectors[connName] && r.containsTrackedSecret(options) {
 		return deny("refusing to relay secret material to an external connector from an agent tool call")
 	}
-	// Writes post as the configured bot identity, never as the operator —
-	// and never as whatever `as:` the agent supplied (injectIdentity
-	// overwrites it). skill.identity wins; agent_authored.identity is the
-	// fallback; load validation guarantees one exists when an as-taking
-	// verb is admitted.
-	identity := id.Identity
-	if identity == "" {
-		if pol := r.planPolicy(); pol != nil {
-			identity = pol.Identity
-		}
-	}
-	if identity != "" {
-		step := config.Step{Uses: uses, Options: options}
-		injectIdentity(r.Conns, &step, identity)
-		options = step.Options
-	}
+	// Identity is a per-verb concern: a verb's own `as:` option (when it has
+	// one) travels through as the agent supplied it, and the connector applies
+	// its own default when it's absent — e.g. gh writes default to `me`
+	// (identity.write_token). The skill layer imposes no identity of its own.
 	merged := connector.MergeOptions(in.DefaultOptions, options)
 	if r.DryRun {
 		r.auditSkillVerb(t, id.Agent, uses, merged, "stubbed", nil)

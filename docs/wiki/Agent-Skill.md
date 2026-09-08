@@ -52,11 +52,14 @@ agents:
       secrets_via: broker          # broker | env (deprecated) | none (default)
       allow_secrets: [house/deploy_key]  # exact vault entries (<vault>/<key>) the broker may issue
       verbs: [gh.comment, rest.*]  # verbs exposed as agent tools (see Verbs as tools)
-      identity: bot                # the `as:` skill writes post under (falls back to
-                                   #   policy.agent_authored.identity; REQUIRED when
-                                   #   verbs admit a write — never silently the operator)
       max_calls: 100               # per-session verb-call cap (default 256)
 ```
+
+Identity is **not** a skill setting. Each verb carries its own `as:` option (when
+it has one), and the connector applies its own default when the agent omits it —
+GitHub writes default to `me` (the connector's `identity.write_token`). An agent
+may pass `as:` per verb call to choose a configured identity; the skill layer
+imposes nothing of its own.
 
 - `secrets_via: none` (the default, including when the key is absent): the
   agent gets no secrets at all.
@@ -301,11 +304,10 @@ Ground rules on this surface:
 - **The write/relay barriers apply unconditionally**: tracked secret
   material in a tool call's options is refused before it reaches shared
   state or an external connector.
-- **Writes post as a distinguished identity, never as the operator.**
-  `skill.identity` (falling back to `policy.agent_authored.identity`) is
-  forced onto every verb that takes `as:` — including over an `as` the agent
-  supplied — and config validation REQUIRES one of the two whenever
-  `skill.verbs` admits an as-taking write verb.
+- **Identity is per-verb, defaulting to the connector's default.** A verb's
+  own `as:` option travels through as the agent supplies it; when absent, the
+  connector applies its own default (GitHub writes default to `me`, the
+  `identity.write_token`). The skill layer forces no identity of its own.
 - **Every call is audited** (`event: verb, via: skill`) with the agent,
   target, and redacted options; outputs are redacted before they return to
   the agent.
