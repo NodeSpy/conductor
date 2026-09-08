@@ -72,6 +72,22 @@ keeps their dedup state separate).
 | `pr_files` | `repo`*, `pr`*, `page`, `as` | `files`: `[{path, status, additions, deletions, changes}]` (100/page) |
 | `review_comments` | `repo`*, `pr`*, `page`, `as` | `comments`: existing inline review comments `[{path, line, body, user, id}]` |
 | `file` | `repo`*, `path`*, `ref`, `as` | `text` — a repo file's raw contents at a ref |
+| `create_pr` | `repo`*, `title`*, `head`*, `base`*, `body`, `draft`, `as` | `number`, `url` |
+| `merge_pr` | `repo`*, `pr`*, `method` (merge\|squash\|rebase), `commit_title`, `commit_message`, `sha`, `as` | `merged`, `sha` |
+| `update_pr` | `repo`*, `pr`*, `state` (open\|closed), `title`, `body`, `base`, `as` | `number`, `state` — close/reopen/edit |
+| `create_issue` | `repo`*, `title`*, `body`, `labels`, `assignees`, `as` | `number`, `url` |
+| `update_issue` | `repo`*, `number`*, `state`, `state_reason`, `title`, `body`, `as` | `number`, `state` — close/reopen/edit |
+| `assign` | `repo`*, `number`*/`pr`, `add`, `remove`, `as` | `assignees` |
+| `remove_label` | `repo`*, `number`*, `label`*, `as` | `ok` |
+| `get_issue` | `repo`*, `number`*, `as` | `title`, `body`, `state`, `labels`, `assignees`, `author`, `url` |
+| `put_file` | `repo`*, `path`*, `content`*, `message`*, `branch`, `sha`, `as` | `commit`, `sha` — create or update in one commit |
+| `delete_file` | `repo`*, `path`*, `message`*, `sha`*, `branch`, `as` | `commit` |
+| `get_ref` | `repo`*, `ref`*, `as` | `sha` — the commit a branch/tag/ref points at |
+| `create_branch` | `repo`*, `branch`*, `from`, `as` | `sha` — branch off another ref (default the default branch's HEAD) |
+| `dispatch_workflow` | `repo`*, `workflow`*, `ref`*, `inputs`, `as` | `ok` — trigger a workflow_dispatch |
+| `rerun_run` | `repo`*, `run_id`*, `failed_only`, `as` | `ok` |
+| `cancel_run` | `repo`*, `run_id`*, `as` | `ok` |
+| `list_runs` | `repo`*, `branch`, `status`, `per_page`, `as` | `runs` — recent workflow runs |
 
 The **read** verbs (`pr_diff`, `pr_get`, `pr_files`, `review_comments`, `file`)
 are cached in-process for ~45s with ETag revalidation, so a fan-out that all

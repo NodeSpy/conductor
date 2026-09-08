@@ -3,6 +3,7 @@ package connector
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -236,6 +237,174 @@ var githubDecl = &TypeDecl{
 				"as":   {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"text": {Type: TString}},
+		},
+		{
+			Name: "create_pr", Desc: "open a pull request",
+			Options: Schema{
+				"repo":  {Type: TString, Required: true},
+				"title": {Type: TString, Required: true},
+				"head":  {Type: TString, Required: true, Desc: "the branch with your changes (owner:branch for a fork)"},
+				"base":  {Type: TString, Required: true, Desc: "the branch to merge into"},
+				"body":  {Type: TString},
+				"draft": {Type: TBool},
+				"as":    {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"number": {Type: TInt}, "url": {Type: TString}},
+		},
+		{
+			Name: "merge_pr", Desc: "merge a pull request",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"method":         {Type: TString, Enum: []string{"merge", "squash", "rebase"}, Desc: "default merge"},
+				"commit_title":   {Type: TString},
+				"commit_message": {Type: TString},
+				"sha":            {Type: TString, Desc: "require the PR head to match this sha (safety)"},
+				"as":             {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"merged": {Type: TBool}, "sha": {Type: TString}},
+		},
+		{
+			Name: "update_pr", Desc: "edit a PR: state (open|closed → close/reopen), title, body, base",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"state": {Type: TString, Enum: []string{"open", "closed"}},
+				"title": {Type: TString}, "body": {Type: TString},
+				"base": {Type: TString, Desc: "retarget the PR onto this branch"},
+				"as":   {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"number": {Type: TInt}, "state": {Type: TString}},
+		},
+		{
+			Name: "create_issue", Desc: "open an issue",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "title": {Type: TString, Required: true},
+				"body":   {Type: TString},
+				"labels": {Type: TList}, "assignees": {Type: TList, Desc: "logins to assign"},
+				"as": {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"number": {Type: TInt}, "url": {Type: TString}},
+		},
+		{
+			Name: "update_issue", Desc: "edit an issue: state (open|closed → close/reopen), state_reason, title, body",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "number": {Type: TInt, Required: true},
+				"state":        {Type: TString, Enum: []string{"open", "closed"}},
+				"state_reason": {Type: TString, Enum: []string{"completed", "not_planned", "reopened"}},
+				"title":        {Type: TString}, "body": {Type: TString},
+				"as": {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"number": {Type: TInt}, "state": {Type: TString}},
+		},
+		{
+			Name: "assign", Desc: "add and/or remove issue/PR assignees",
+			Options: Schema{
+				"repo":   {Type: TString, Required: true},
+				"number": {Type: TInt, Desc: "issue or PR number (alias: pr)"}, "pr": {Type: TInt},
+				"add": {Type: TList, Desc: "logins to assign"}, "remove": {Type: TList, Desc: "logins to unassign"},
+				"as": {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"assignees": {Type: TList}},
+		},
+		{
+			Name: "remove_label", Desc: "remove one label from an issue or PR",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "number": {Type: TInt, Required: true},
+				"label": {Type: TString, Required: true},
+				"as":    {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"ok": {Type: TBool}},
+		},
+		{
+			Name: "get_issue", Desc: "read an issue: title, body, state, labels, assignees, author, url",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "number": {Type: TInt, Required: true},
+				"as": {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{
+				"title": {Type: TString}, "body": {Type: TString}, "state": {Type: TString},
+				"labels": {Type: TList}, "assignees": {Type: TList}, "author": {Type: TString}, "url": {Type: TString},
+			},
+		},
+		{
+			Name: "put_file", Desc: "create or update a file in one commit",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "path": {Type: TString, Required: true},
+				"content": {Type: TString, Required: true, Desc: "the new file content (UTF-8 text; base64-encoded for the API automatically)"},
+				"message": {Type: TString, Required: true, Desc: "commit message"},
+				"branch":  {Type: TString, Desc: "branch to commit on (default: the repo's default branch)"},
+				"sha":     {Type: TString, Desc: "blob sha of the file being replaced (required to UPDATE an existing file; get it from `file`)"},
+				"as":      {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"commit": {Type: TString}, "sha": {Type: TString, Desc: "the new blob sha"}},
+		},
+		{
+			Name: "delete_file", Desc: "delete a file in one commit",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "path": {Type: TString, Required: true},
+				"message": {Type: TString, Required: true},
+				"sha":     {Type: TString, Required: true, Desc: "blob sha of the file to delete"},
+				"branch":  {Type: TString},
+				"as":      {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"commit": {Type: TString}},
+		},
+		{
+			Name: "get_ref", Desc: "the commit sha a branch/tag/ref points at",
+			Options: Schema{
+				"repo": {Type: TString, Required: true},
+				"ref":  {Type: TString, Required: true, Desc: "branch, tag, or sha"},
+				"as":   {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"sha": {Type: TString}},
+		},
+		{
+			Name: "create_branch", Desc: "create a branch from another ref",
+			Options: Schema{
+				"repo":   {Type: TString, Required: true},
+				"branch": {Type: TString, Required: true, Desc: "new branch name"},
+				"from":   {Type: TString, Desc: "source branch/tag/sha (default: the default branch's HEAD)"},
+				"as":     {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"sha": {Type: TString}},
+		},
+		{
+			Name: "dispatch_workflow", Desc: "trigger a workflow_dispatch run",
+			Options: Schema{
+				"repo":     {Type: TString, Required: true},
+				"workflow": {Type: TString, Required: true, Desc: "workflow file name (ci.yml) or numeric id"},
+				"ref":      {Type: TString, Required: true, Desc: "branch or tag to run on"},
+				"inputs":   {Type: TMap, Desc: "workflow_dispatch inputs"},
+				"as":       {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"ok": {Type: TBool}},
+		},
+		{
+			Name: "rerun_run", Desc: "re-run a workflow run (optionally only its failed jobs)",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "run_id": {Type: TInt, Required: true},
+				"failed_only": {Type: TBool, Desc: "re-run only failed jobs"},
+				"as":          {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"ok": {Type: TBool}},
+		},
+		{
+			Name: "cancel_run", Desc: "cancel a workflow run",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "run_id": {Type: TInt, Required: true},
+				"as": {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"ok": {Type: TBool}},
+		},
+		{
+			Name: "list_runs", Desc: "recent workflow runs: [{id, name, status, conclusion, head_branch, head_sha, url}]",
+			Options: Schema{
+				"repo":     {Type: TString, Required: true},
+				"branch":   {Type: TString, Desc: "filter to a branch"},
+				"status":   {Type: TString, Desc: "queued|in_progress|completed|success|failure|…"},
+				"per_page": {Type: TInt, Desc: "default 20, max 100"},
+				"as":       {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"runs": {Type: TList}},
 		},
 		{
 			Name: "add_labels", Desc: "add labels to an issue or PR",
@@ -740,6 +909,341 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 			return nil, err
 		}
 		return map[string]any{"text": text}, nil
+	case "create_pr":
+		title, _ := opts["title"].(string)
+		head, _ := opts["head"].(string)
+		baseRef, _ := opts["base"].(string)
+		if title == "" || head == "" || baseRef == "" {
+			return nil, fmt.Errorf("github.create_pr: title, head and base are required")
+		}
+		reqBody := map[string]any{"title": title, "head": head, "base": baseRef}
+		if b, _ := opts["body"].(string); b != "" {
+			reqBody["body"] = b
+		}
+		if d, _ := opts["draft"].(bool); d {
+			reqBody["draft"] = true
+		}
+		var out struct {
+			Number  int64  `json:"number"`
+			HTMLURL string `json:"html_url"`
+		}
+		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls", base, repo), reqBody, &out); err != nil {
+			return nil, err
+		}
+		return map[string]any{"number": out.Number, "url": out.HTMLURL}, nil
+	case "merge_pr":
+		if number == 0 {
+			return nil, fmt.Errorf("github.merge_pr: options.pr is required")
+		}
+		reqBody := map[string]any{}
+		if m, _ := opts["method"].(string); m != "" {
+			reqBody["merge_method"] = m
+		}
+		if s, _ := opts["commit_title"].(string); s != "" {
+			reqBody["commit_title"] = s
+		}
+		if s, _ := opts["commit_message"].(string); s != "" {
+			reqBody["commit_message"] = s
+		}
+		if s, _ := opts["sha"].(string); s != "" {
+			reqBody["sha"] = s
+		}
+		var out struct {
+			Merged bool   `json:"merged"`
+			SHA    string `json:"sha"`
+		}
+		if err := g.put(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d/merge", base, repo, number), reqBody, &out); err != nil {
+			return nil, err
+		}
+		return map[string]any{"merged": out.Merged, "sha": out.SHA}, nil
+	case "update_pr":
+		if number == 0 {
+			return nil, fmt.Errorf("github.update_pr: options.pr is required")
+		}
+		reqBody := stringFields(opts, "state", "title", "body", "base")
+		if len(reqBody) == 0 {
+			return nil, fmt.Errorf("github.update_pr: nothing to change (set state/title/body/base)")
+		}
+		var out struct {
+			Number int64  `json:"number"`
+			State  string `json:"state"`
+		}
+		if err := g.patch(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d", base, repo, number), reqBody, &out); err != nil {
+			return nil, err
+		}
+		return map[string]any{"number": out.Number, "state": out.State}, nil
+	case "create_issue":
+		title, _ := opts["title"].(string)
+		if title == "" {
+			return nil, fmt.Errorf("github.create_issue: options.title is required")
+		}
+		reqBody := map[string]any{"title": title}
+		if b, _ := opts["body"].(string); b != "" {
+			reqBody["body"] = b
+		}
+		if l := toStrings(opts["labels"]); len(l) > 0 {
+			reqBody["labels"] = l
+		}
+		if a := toStrings(opts["assignees"]); len(a) > 0 {
+			reqBody["assignees"] = a
+		}
+		var out struct {
+			Number  int64  `json:"number"`
+			HTMLURL string `json:"html_url"`
+		}
+		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/issues", base, repo), reqBody, &out); err != nil {
+			return nil, err
+		}
+		return map[string]any{"number": out.Number, "url": out.HTMLURL}, nil
+	case "update_issue":
+		if number == 0 {
+			return nil, fmt.Errorf("github.update_issue: options.number is required")
+		}
+		reqBody := stringFields(opts, "state", "state_reason", "title", "body")
+		if len(reqBody) == 0 {
+			return nil, fmt.Errorf("github.update_issue: nothing to change")
+		}
+		var out struct {
+			Number int64  `json:"number"`
+			State  string `json:"state"`
+		}
+		if err := g.patch(ctx, tok, fmt.Sprintf("%s/repos/%s/issues/%d", base, repo, number), reqBody, &out); err != nil {
+			return nil, err
+		}
+		return map[string]any{"number": out.Number, "state": out.State}, nil
+	case "assign":
+		if number == 0 {
+			return nil, fmt.Errorf("github.assign: options.number (or pr) is required")
+		}
+		add, rem := toStrings(opts["add"]), toStrings(opts["remove"])
+		if len(add) == 0 && len(rem) == 0 {
+			return nil, fmt.Errorf("github.assign: set add and/or remove")
+		}
+		var out struct {
+			Assignees []struct {
+				Login string `json:"login"`
+			} `json:"assignees"`
+		}
+		u := fmt.Sprintf("%s/repos/%s/issues/%d/assignees", base, repo, number)
+		if len(add) > 0 {
+			if err := g.send(ctx, http.MethodPost, tok, u, map[string]any{"assignees": add}, &out); err != nil {
+				return nil, err
+			}
+		}
+		if len(rem) > 0 {
+			if err := g.send(ctx, http.MethodDelete, tok, u, map[string]any{"assignees": rem}, &out); err != nil {
+				return nil, err
+			}
+		}
+		logins := make([]string, 0, len(out.Assignees))
+		for _, a := range out.Assignees {
+			logins = append(logins, a.Login)
+		}
+		return map[string]any{"assignees": logins}, nil
+	case "remove_label":
+		if number == 0 {
+			return nil, fmt.Errorf("github.remove_label: options.number is required")
+		}
+		label, _ := opts["label"].(string)
+		if label == "" {
+			return nil, fmt.Errorf("github.remove_label: options.label is required")
+		}
+		u := fmt.Sprintf("%s/repos/%s/issues/%d/labels/%s", base, repo, number, url.PathEscape(label))
+		if err := g.del(ctx, tok, u, nil); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
+	case "get_issue":
+		if number == 0 {
+			return nil, fmt.Errorf("github.get_issue: options.number is required")
+		}
+		var iss struct {
+			Title   string `json:"title"`
+			Body    string `json:"body"`
+			State   string `json:"state"`
+			HTMLURL string `json:"html_url"`
+			User    struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Labels []struct {
+				Name string `json:"name"`
+			} `json:"labels"`
+			Assignees []struct {
+				Login string `json:"login"`
+			} `json:"assignees"`
+		}
+		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/issues/%d", base, repo, number), &iss); err != nil {
+			return nil, err
+		}
+		labels := make([]string, 0, len(iss.Labels))
+		for _, l := range iss.Labels {
+			labels = append(labels, l.Name)
+		}
+		assignees := make([]string, 0, len(iss.Assignees))
+		for _, a := range iss.Assignees {
+			assignees = append(assignees, a.Login)
+		}
+		return map[string]any{
+			"title": iss.Title, "body": iss.Body, "state": iss.State,
+			"labels": labels, "assignees": assignees, "author": iss.User.Login, "url": iss.HTMLURL,
+		}, nil
+	case "put_file":
+		path, _ := opts["path"].(string)
+		content, _ := opts["content"].(string)
+		message, _ := opts["message"].(string)
+		if path == "" || message == "" {
+			return nil, fmt.Errorf("github.put_file: path and message are required")
+		}
+		reqBody := map[string]any{"message": message, "content": base64.StdEncoding.EncodeToString([]byte(content))}
+		if b, _ := opts["branch"].(string); b != "" {
+			reqBody["branch"] = b
+		}
+		if s, _ := opts["sha"].(string); s != "" {
+			reqBody["sha"] = s
+		}
+		var out struct {
+			Content struct {
+				SHA string `json:"sha"`
+			} `json:"content"`
+			Commit struct {
+				SHA string `json:"sha"`
+			} `json:"commit"`
+		}
+		if err := g.put(ctx, tok, fmt.Sprintf("%s/repos/%s/contents/%s", base, repo, path), reqBody, &out); err != nil {
+			return nil, err
+		}
+		return map[string]any{"commit": out.Commit.SHA, "sha": out.Content.SHA}, nil
+	case "delete_file":
+		path, _ := opts["path"].(string)
+		message, _ := opts["message"].(string)
+		sha, _ := opts["sha"].(string)
+		if path == "" || message == "" || sha == "" {
+			return nil, fmt.Errorf("github.delete_file: path, message and sha are required")
+		}
+		reqBody := map[string]any{"message": message, "sha": sha}
+		if b, _ := opts["branch"].(string); b != "" {
+			reqBody["branch"] = b
+		}
+		var out struct {
+			Commit struct {
+				SHA string `json:"sha"`
+			} `json:"commit"`
+		}
+		if err := g.send(ctx, http.MethodDelete, tok, fmt.Sprintf("%s/repos/%s/contents/%s", base, repo, path), reqBody, &out); err != nil {
+			return nil, err
+		}
+		return map[string]any{"commit": out.Commit.SHA}, nil
+	case "get_ref":
+		ref, _ := opts["ref"].(string)
+		if ref == "" {
+			return nil, fmt.Errorf("github.get_ref: options.ref is required")
+		}
+		var out struct {
+			SHA string `json:"sha"`
+		}
+		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/commits/%s", base, repo, url.PathEscape(ref)), &out); err != nil {
+			return nil, err
+		}
+		return map[string]any{"sha": out.SHA}, nil
+	case "create_branch":
+		newBranch, _ := opts["branch"].(string)
+		if newBranch == "" {
+			return nil, fmt.Errorf("github.create_branch: options.branch is required")
+		}
+		from, _ := opts["from"].(string)
+		if from == "" {
+			from = "HEAD"
+		}
+		var src struct {
+			SHA string `json:"sha"`
+		}
+		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/commits/%s", base, repo, url.PathEscape(from)), &src); err != nil {
+			return nil, err
+		}
+		if src.SHA == "" {
+			return nil, fmt.Errorf("github.create_branch: could not resolve %q", from)
+		}
+		var out struct {
+			Object struct {
+				SHA string `json:"sha"`
+			} `json:"object"`
+		}
+		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/git/refs", base, repo),
+			map[string]any{"ref": "refs/heads/" + newBranch, "sha": src.SHA}, &out); err != nil {
+			return nil, err
+		}
+		return map[string]any{"sha": out.Object.SHA}, nil
+	case "dispatch_workflow":
+		wf, _ := opts["workflow"].(string)
+		ref, _ := opts["ref"].(string)
+		if wf == "" || ref == "" {
+			return nil, fmt.Errorf("github.dispatch_workflow: workflow and ref are required")
+		}
+		reqBody := map[string]any{"ref": ref}
+		if in, ok := opts["inputs"].(map[string]any); ok && len(in) > 0 {
+			reqBody["inputs"] = in
+		}
+		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/actions/workflows/%s/dispatches", base, repo, url.PathEscape(wf)), reqBody, nil); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
+	case "rerun_run":
+		runID := toInt(opts["run_id"])
+		if runID == 0 {
+			return nil, fmt.Errorf("github.rerun_run: options.run_id is required")
+		}
+		endpoint := "rerun"
+		if f, _ := opts["failed_only"].(bool); f {
+			endpoint = "rerun-failed-jobs"
+		}
+		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/actions/runs/%d/%s", base, repo, runID, endpoint), nil, nil); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
+	case "cancel_run":
+		runID := toInt(opts["run_id"])
+		if runID == 0 {
+			return nil, fmt.Errorf("github.cancel_run: options.run_id is required")
+		}
+		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/actions/runs/%d/cancel", base, repo, runID), nil, nil); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
+	case "list_runs":
+		q := url.Values{}
+		perPage := toInt(opts["per_page"])
+		if perPage <= 0 {
+			perPage = 20
+		}
+		q.Set("per_page", strconv.Itoa(perPage))
+		if b, _ := opts["branch"].(string); b != "" {
+			q.Set("branch", b)
+		}
+		if s, _ := opts["status"].(string); s != "" {
+			q.Set("status", s)
+		}
+		var out struct {
+			Runs []struct {
+				ID         int64  `json:"id"`
+				Name       string `json:"name"`
+				Status     string `json:"status"`
+				Conclusion string `json:"conclusion"`
+				HeadBranch string `json:"head_branch"`
+				HeadSHA    string `json:"head_sha"`
+				HTMLURL    string `json:"html_url"`
+			} `json:"workflow_runs"`
+		}
+		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/actions/runs?%s", base, repo, q.Encode()), &out); err != nil {
+			return nil, err
+		}
+		runs := make([]any, 0, len(out.Runs))
+		for _, r := range out.Runs {
+			runs = append(runs, map[string]any{
+				"id": r.ID, "name": r.Name, "status": r.Status, "conclusion": r.Conclusion,
+				"head_branch": r.HeadBranch, "head_sha": r.HeadSHA, "url": r.HTMLURL,
+			})
+		}
+		return map[string]any{"runs": runs}, nil
 	case "add_labels":
 		if number == 0 {
 			return nil, fmt.Errorf("github.add_labels: options.number is required")
@@ -757,20 +1261,42 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 	return nil, fmt.Errorf("github: unknown verb %q", verb)
 }
 
-// post issues one authenticated JSON POST against the GitHub API.
+// post/patch/put/del are the write verbs' authenticated JSON requests.
 func (g *githubImpl) post(ctx context.Context, token, url string, body, out any) error {
-	b, err := json.Marshal(body)
-	if err != nil {
-		return err
+	return g.send(ctx, http.MethodPost, token, url, body, out)
+}
+func (g *githubImpl) patch(ctx context.Context, token, url string, body, out any) error {
+	return g.send(ctx, http.MethodPatch, token, url, body, out)
+}
+func (g *githubImpl) put(ctx context.Context, token, url string, body, out any) error {
+	return g.send(ctx, http.MethodPut, token, url, body, out)
+}
+func (g *githubImpl) del(ctx context.Context, token, url string, body any) error {
+	return g.send(ctx, http.MethodDelete, token, url, body, nil)
+}
+
+// send issues one authenticated JSON request of any method. A nil body sends no
+// content. Any successful write invalidates the read cache, so a mutate-then-
+// read (e.g. merge_pr then pr_get) never serves the pre-write copy.
+func (g *githubImpl) send(ctx context.Context, method, token, url string, body, out any) error {
+	var rdr io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		rdr = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, method, url, rdr)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := g.httpc.Do(req)
 	if err != nil {
 		return err
@@ -781,12 +1307,20 @@ func (g *githubImpl) post(ctx context.Context, token, url string, body, out any)
 		if isRateLimited(resp) {
 			return g.rateLimitError()
 		}
-		return ghHTTPError("POST", url, resp)
+		return ghHTTPError(method, url, resp)
 	}
+	g.invalidateCache() // a write may have changed what a cached read returns
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)
 	}
 	return nil
+}
+
+// invalidateCache drops every cached GET body (called after a successful write).
+func (g *githubImpl) invalidateCache() {
+	g.mu.Lock()
+	g.getCache = map[string]*ghCacheEntry{}
+	g.mu.Unlock()
 }
 
 const (
@@ -1108,6 +1642,18 @@ func reviewComments(v any) ([]map[string]any, error) {
 		out = append(out, c)
 	}
 	return out, nil
+}
+
+// stringFields collects the named options that are present and non-empty into a
+// request body — the shape of a partial PATCH (only send what's being changed).
+func stringFields(opts map[string]any, keys ...string) map[string]any {
+	out := map[string]any{}
+	for _, k := range keys {
+		if s, _ := opts[k].(string); s != "" {
+			out[k] = s
+		}
+	}
+	return out
 }
 
 func toInt(v any) int {

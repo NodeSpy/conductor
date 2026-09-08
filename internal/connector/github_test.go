@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -672,5 +673,176 @@ func TestGithubRateLimit(t *testing.T) {
 	fresh := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
 	if _, err := fresh.Invoke(context.Background(), "pr_diff", map[string]any{"repo": "org/repo", "pr": 8}); err == nil || !strings.Contains(err.Error(), "rate limit") {
 		t.Fatalf("uncached rate-limited read should error with 'rate limit', got %v", err)
+	}
+}
+
+// --- PR/issue/repo/actions write + action verbs ---
+
+func TestGithubWriteAndActionVerbs(t *testing.T) {
+	type rec struct {
+		method, path string
+		body         map[string]any
+	}
+	var reqs []rec
+	// A superset response body that decodes for every verb's output struct.
+	resp := map[string]any{
+		"number": 123, "html_url": "u", "merged": true, "sha": "deadbeef", "state": "closed",
+		"assignees": []any{map[string]any{"login": "alice"}},
+		"labels":    []any{map[string]any{"name": "bug"}},
+		"title":     "T", "body": "B",
+		"user":          map[string]any{"login": "octo"},
+		"content":       map[string]any{"sha": "blob1"},
+		"commit":        map[string]any{"sha": "c1"},
+		"object":        map[string]any{"sha": "ref1"},
+		"workflow_runs": []any{map[string]any{"id": 9, "name": "CI", "status": "completed", "conclusion": "success", "head_branch": "main", "head_sha": "h", "html_url": "ru"}},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		reqs = append(reqs, rec{r.Method, r.URL.Path, b})
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	last := func() rec { return reqs[len(reqs)-1] }
+
+	// create_pr
+	out, err := impl.Invoke(ctx, "create_pr", map[string]any{"repo": "o/r", "title": "T", "head": "feat", "base": "main", "draft": true})
+	if err != nil || out["number"] != int64(123) {
+		t.Fatalf("create_pr: %v %v", out, err)
+	}
+	if r := last(); r.method != "POST" || r.path != "/repos/o/r/pulls" || r.body["head"] != "feat" || r.body["draft"] != true {
+		t.Fatalf("create_pr req: %+v", r)
+	}
+	// merge_pr
+	if out, err := impl.Invoke(ctx, "merge_pr", map[string]any{"repo": "o/r", "pr": 7, "method": "squash"}); err != nil || out["merged"] != true {
+		t.Fatalf("merge_pr: %v %v", out, err)
+	}
+	if r := last(); r.method != "PUT" || r.path != "/repos/o/r/pulls/7/merge" || r.body["merge_method"] != "squash" {
+		t.Fatalf("merge_pr req: %+v", r)
+	}
+	// update_pr (close)
+	if _, err := impl.Invoke(ctx, "update_pr", map[string]any{"repo": "o/r", "pr": 7, "state": "closed"}); err != nil {
+		t.Fatalf("update_pr: %v", err)
+	}
+	if r := last(); r.method != "PATCH" || r.path != "/repos/o/r/pulls/7" || r.body["state"] != "closed" {
+		t.Fatalf("update_pr req: %+v", r)
+	}
+	// create_issue
+	if out, err := impl.Invoke(ctx, "create_issue", map[string]any{"repo": "o/r", "title": "bug", "labels": []any{"a", "b"}}); err != nil || out["number"] != int64(123) {
+		t.Fatalf("create_issue: %v %v", out, err)
+	}
+	if r := last(); r.path != "/repos/o/r/issues" || len(r.body["labels"].([]any)) != 2 {
+		t.Fatalf("create_issue req: %+v", r)
+	}
+	// update_issue (close as not_planned)
+	if _, err := impl.Invoke(ctx, "update_issue", map[string]any{"repo": "o/r", "number": 5, "state": "closed", "state_reason": "not_planned"}); err != nil {
+		t.Fatalf("update_issue: %v", err)
+	}
+	if r := last(); r.method != "PATCH" || r.path != "/repos/o/r/issues/5" || r.body["state_reason"] != "not_planned" {
+		t.Fatalf("update_issue req: %+v", r)
+	}
+	// assign (add + remove → POST then DELETE)
+	if out, err := impl.Invoke(ctx, "assign", map[string]any{"repo": "o/r", "number": 5, "add": []any{"alice"}, "remove": []any{"bob"}}); err != nil {
+		t.Fatalf("assign: %v %v", out, err)
+	} else if as, _ := out["assignees"].([]string); len(as) != 1 || as[0] != "alice" {
+		t.Fatalf("assign out: %v", out)
+	}
+	if r := last(); r.method != "DELETE" || r.path != "/repos/o/r/issues/5/assignees" {
+		t.Fatalf("assign remove req: %+v", r)
+	}
+	// remove_label (label path-escaped)
+	if _, err := impl.Invoke(ctx, "remove_label", map[string]any{"repo": "o/r", "number": 5, "label": "needs review"}); err != nil {
+		t.Fatalf("remove_label: %v", err)
+	}
+	if r := last(); r.method != "DELETE" || r.path != "/repos/o/r/issues/5/labels/needs review" { // server decodes %20
+		t.Fatalf("remove_label req: %+v", r)
+	}
+	// get_issue
+	if out, err := impl.Invoke(ctx, "get_issue", map[string]any{"repo": "o/r", "number": 5}); err != nil || out["author"] != "octo" {
+		t.Fatalf("get_issue: %v %v", out, err)
+	}
+	// put_file (base64-encodes content)
+	if out, err := impl.Invoke(ctx, "put_file", map[string]any{"repo": "o/r", "path": "x.md", "content": "hi", "message": "add"}); err != nil || out["sha"] != "blob1" || out["commit"] != "c1" {
+		t.Fatalf("put_file: %v %v", out, err)
+	}
+	if r := last(); r.method != "PUT" || r.path != "/repos/o/r/contents/x.md" || r.body["content"] != base64.StdEncoding.EncodeToString([]byte("hi")) {
+		t.Fatalf("put_file req: %+v", r)
+	}
+	// delete_file
+	if out, err := impl.Invoke(ctx, "delete_file", map[string]any{"repo": "o/r", "path": "x.md", "message": "rm", "sha": "blob1"}); err != nil || out["commit"] != "c1" {
+		t.Fatalf("delete_file: %v %v", out, err)
+	}
+	if r := last(); r.method != "DELETE" || r.path != "/repos/o/r/contents/x.md" {
+		t.Fatalf("delete_file req: %+v", r)
+	}
+	// get_ref
+	if out, err := impl.Invoke(ctx, "get_ref", map[string]any{"repo": "o/r", "ref": "main"}); err != nil || out["sha"] != "deadbeef" {
+		t.Fatalf("get_ref: %v %v", out, err)
+	}
+	// create_branch (GET commits/HEAD then POST git/refs)
+	if out, err := impl.Invoke(ctx, "create_branch", map[string]any{"repo": "o/r", "branch": "feat-x"}); err != nil || out["sha"] != "ref1" {
+		t.Fatalf("create_branch: %v %v", out, err)
+	}
+	if r := last(); r.method != "POST" || r.path != "/repos/o/r/git/refs" || r.body["ref"] != "refs/heads/feat-x" {
+		t.Fatalf("create_branch req: %+v", r)
+	}
+	// dispatch_workflow
+	if _, err := impl.Invoke(ctx, "dispatch_workflow", map[string]any{"repo": "o/r", "workflow": "ci.yml", "ref": "main", "inputs": map[string]any{"env": "prod"}}); err != nil {
+		t.Fatalf("dispatch_workflow: %v", err)
+	}
+	if r := last(); r.path != "/repos/o/r/actions/workflows/ci.yml/dispatches" || r.body["ref"] != "main" {
+		t.Fatalf("dispatch_workflow req: %+v", r)
+	}
+	// rerun_run (failed_only → rerun-failed-jobs)
+	if _, err := impl.Invoke(ctx, "rerun_run", map[string]any{"repo": "o/r", "run_id": 99, "failed_only": true}); err != nil {
+		t.Fatalf("rerun_run: %v", err)
+	}
+	if r := last(); r.path != "/repos/o/r/actions/runs/99/rerun-failed-jobs" {
+		t.Fatalf("rerun_run req: %+v", r)
+	}
+	// cancel_run
+	if _, err := impl.Invoke(ctx, "cancel_run", map[string]any{"repo": "o/r", "run_id": 99}); err != nil {
+		t.Fatalf("cancel_run: %v", err)
+	}
+	if r := last(); r.path != "/repos/o/r/actions/runs/99/cancel" {
+		t.Fatalf("cancel_run req: %+v", r)
+	}
+	// list_runs
+	if out, err := impl.Invoke(ctx, "list_runs", map[string]any{"repo": "o/r", "branch": "main"}); err != nil {
+		t.Fatalf("list_runs: %v", err)
+	} else if runs, _ := out["runs"].([]any); len(runs) != 1 || runs[0].(map[string]any)["conclusion"] != "success" {
+		t.Fatalf("list_runs out: %v", out)
+	}
+}
+
+// A write invalidates the read cache, so a mutate-then-read never serves stale.
+func TestGithubWriteInvalidatesCache(t *testing.T) {
+	var diffHits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			atomic.AddInt32(&diffHits, 1)
+			w.Write([]byte("d"))
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"state": "closed"})
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	impl.Invoke(ctx, "pr_diff", map[string]any{"repo": "o/r", "pr": 7}) // caches
+	impl.Invoke(ctx, "pr_diff", map[string]any{"repo": "o/r", "pr": 7}) // cache hit
+	if n := atomic.LoadInt32(&diffHits); n != 1 {
+		t.Fatalf("before write: %d GETs, want 1", n)
+	}
+	impl.Invoke(ctx, "update_pr", map[string]any{"repo": "o/r", "pr": 7, "state": "closed"}) // write → invalidate
+	impl.Invoke(ctx, "pr_diff", map[string]any{"repo": "o/r", "pr": 7})                      // must refetch
+	if n := atomic.LoadInt32(&diffHits); n != 2 {
+		t.Fatalf("after write the cache must be cold: %d GETs, want 2", n)
 	}
 }
