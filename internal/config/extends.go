@@ -88,6 +88,90 @@ func resolveExtendsSection[T any](m map[string]T, kind string, extendsOf func(T)
 	return nil
 }
 
+// resolveTriggerExtends resolves `extends:` across the triggers list (keyed by
+// Name) and strips abstract bases. It runs BEFORE NormalizeTriggers so a child
+// can inherit an abstract base's `on:` (and so bases with no `on:` never reach
+// the on:-required / manual-name checks). Filters/options deep-merge and
+// steps/hooks replace via mergeStruct; Name/Abstract/Extends are never
+// inherited (they are identity, not config).
+func (c *Config) resolveTriggerExtends() error {
+	ts := c.Triggers
+	if len(ts) == 0 {
+		return nil
+	}
+	byName := map[string][]int{}
+	for i := range ts {
+		if ts[i].Name != "" {
+			byName[ts[i].Name] = append(byName[ts[i].Name], i)
+		}
+	}
+	const (
+		unvisited = iota
+		visiting
+		done
+	)
+	state := make([]int, len(ts))
+	var resolve func(i int) error
+	resolve = func(i int) error {
+		switch state[i] {
+		case done:
+			return nil
+		case visiting:
+			return fmt.Errorf("config: trigger %s: extends: cycle", triggerRef(ts[i], i))
+		}
+		state[i] = visiting
+		if ext := ts[i].Extends; ext != "" {
+			js := byName[ext]
+			switch {
+			case len(js) == 0:
+				return fmt.Errorf("config: trigger %s: extends: unknown trigger %q", triggerRef(ts[i], i), ext)
+			case len(js) > 1:
+				return fmt.Errorf("config: trigger %s: extends: %q is ambiguous (%d triggers share that name)", triggerRef(ts[i], i), ext, len(js))
+			}
+			j := js[0]
+			if j == i {
+				return fmt.Errorf("config: trigger %s: extends: itself", triggerRef(ts[i], i))
+			}
+			if err := resolve(j); err != nil {
+				return err
+			}
+			name, abstract, ext := ts[i].Name, ts[i].Abstract, ts[i].Extends
+			merged := ts[i]
+			mergeStruct(reflect.ValueOf(&merged).Elem(), reflect.ValueOf(ts[j]))
+			merged.Name, merged.Abstract, merged.Extends = name, abstract, ext
+			ts[i] = merged
+		}
+		state[i] = done
+		return nil
+	}
+	for i := range ts {
+		if err := resolve(i); err != nil {
+			return err
+		}
+	}
+	// Drop abstract bases — they exist only to be extended.
+	out := make([]TriggerSpec, 0, len(ts))
+	for i, t := range ts {
+		if t.Abstract {
+			if t.Manual() {
+				return fmt.Errorf("config: trigger %s: an abstract base cannot be `on: manual` (it never fires and is not a `conductor run` target)", triggerRef(t, i))
+			}
+			continue
+		}
+		out = append(out, t)
+	}
+	c.Triggers = out
+	return nil
+}
+
+// triggerRef labels a trigger for errors: its name, else its list position.
+func triggerRef(t TriggerSpec, i int) string {
+	if t.Name != "" {
+		return fmt.Sprintf("%q", t.Name)
+	}
+	return fmt.Sprintf("triggers[%d]", i)
+}
+
 // mergeStruct fills dst's unset fields from src (the resolved parent). dst must
 // be an addressable struct value; src the same type. See the file header for
 // the per-kind policy.

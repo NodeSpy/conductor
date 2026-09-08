@@ -303,9 +303,18 @@ type TriggerSpec struct {
 	FanSources []string `yaml:"-"`
 	// Name is an optional variant name (distinguishes dedup/attempt state when
 	// several triggers listen to the same event; mirrors legacy action names).
-	// Required (and unique) for triggers reachable by `conductor run`.
-	Name    string `yaml:"name,omitempty"`
-	Enabled *bool  `yaml:"enabled,omitempty"`
+	// Required (and unique) for triggers reachable by `conductor run`, and the
+	// handle an `extends:` child references a base by.
+	Name string `yaml:"name,omitempty"`
+	// Extends names another trigger (by Name) this one inherits from: filters
+	// and options deep-merge, steps/hooks replace when set, policy/gate/group
+	// fill if unset. Resolved before NormalizeTriggers. See resolveTriggerExtends.
+	Extends string `yaml:"extends,omitempty"`
+	// Abstract marks a base that exists only to be extended: it never fires and
+	// is stripped after resolution (so it needs no `on:`). A `conductor run`
+	// target cannot be abstract.
+	Abstract bool  `yaml:"abstract,omitempty"`
+	Enabled  *bool `yaml:"enabled,omitempty"`
 	// Filters gate whether the trigger fires; legal keys come from the event's
 	// filter schema. All AND-ed.
 	Filters map[string]any `yaml:"filters,omitempty"`

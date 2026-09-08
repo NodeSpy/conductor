@@ -968,6 +968,12 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("parse merged config: %w", err)
 		}
 	}
+	// Trigger `extends:` resolves + abstract bases are stripped BEFORE
+	// normalization, so a child can inherit a base's `on:` and bases (which may
+	// carry no `on:`) never reach the on:-required / manual-name checks.
+	if err := c.resolveTriggerExtends(); err != nil {
+		return nil, err
+	}
 	// Multi-source `on:` lists expand into one trigger per source before
 	// anything downstream sees them.
 	if err := c.NormalizeTriggers(); err != nil {
