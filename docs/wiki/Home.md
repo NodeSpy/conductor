@@ -59,9 +59,8 @@ Another orchestrator (n8n and the like) can also call conductor's authenticated
 - **[[Code-Steps]]** — sandboxed in-process engines (`js`, `go-embed`,
   `risor`, `lua`) and host interpreters; **[[Hosts]]** for SSH remote
   execution.
-- **Stores & [[Memory]]** — named `stores:` (KV + SQL) behind the always-on
-  `kv.*` / `sql.*` verbs ([[Configuration]]), and shared agent memory with
-  provenance and scope.
+- **[[Stores]] & [[Memory]]** — named `stores:` (KV + SQL) behind the always-on
+  `kv.*` / `sql.*` verbs, and shared agent memory with provenance and scope.
 - **[[Grouping]]** — debounce batching, one run per key.
 - **[[Policy]]** — quiet hours, concurrency, ignores, rate limits, pause
   labels, `reply_to_bots`, and the `agent_authored` guardrails; global /
@@ -104,7 +103,7 @@ Work down this list and you go from zero to the most advanced setup:
 5. **Composition** — reusable workflows with inputs/outputs ([[Workflows]]),
    `extends:` inheritance + layered guidance ([[Reuse]]), [[Grouping]],
    [[Code-Steps]], [[Hosts]], and file splitting (`imports:`, [[Configuration]]).
-6. **State** — `stores:` + the `kv.*`/`sql.*` verbs ([[Configuration]]),
+6. **State** — `stores:` + the `kv.*`/`sql.*` verbs ([[Stores]]),
    [[Memory]], and session affinity ([[Agents]]).
 7. **Hardening** — [[Secrets]] (vaults, OAuth2 logins, unlock), [[Policy]]
    (quiet hours, rate limits, bots), and dry-run/replay ([[Commands]]).
@@ -125,7 +124,7 @@ Work down this list and you go from zero to the most advanced setup:
 Setup: [[Installation]] · [[Quickstart]] · [[GitHub-App-Setup]] ·
 [[Configuration]] · [[Commands]] · [[Examples]]
 
-The model: [[Connectors]] · [[Workflows]] · [[Reuse]] · [[Verbs]] · [[Code-Steps]] ·
+The model: [[Connectors]] · [[Workflows]] · [[Reuse]] · [[Verbs]] · [[Code-Steps]] · [[Stores]] ·
 [[Runtimes]] · [[Agents]] · [[Grouping]] · [[Memory]] · [[Binary-Data]] ·
 [[Agent-Skill]] · [[Policy]] · [[Gates]] · [[Teams]] · [[Outcomes]] ·
 [[Cost-Accounting]] · [[Secrets]] · [[Hosts]] · [[Isolation]]
