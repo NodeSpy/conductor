@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -515,5 +516,161 @@ func TestGithubVerbRepoRequired(t *testing.T) {
 	_, err := impl.Invoke(context.Background(), "comment", map[string]any{"number": 1, "body": "x"})
 	if err == nil || !strings.Contains(err.Error(), "options.repo is required") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// --- read verbs + cache + rate-limit ---
+
+func TestGithubReadVerbs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/org/repo/pulls/7" && r.Header.Get("Accept") == "application/vnd.github.diff":
+			w.Write([]byte("diff --git a/x b/x\n+line"))
+		case r.URL.Path == "/repos/org/repo/pulls/7":
+			json.NewEncoder(w).Encode(map[string]any{
+				"title": "T", "body": "B", "state": "open", "draft": false,
+				"additions": 3, "deletions": 1, "changed_files": 2, "html_url": "u",
+				"user":   map[string]any{"login": "alice"},
+				"base":   map[string]any{"ref": "main"},
+				"head":   map[string]any{"ref": "feat", "sha": "abc"},
+				"labels": []any{map[string]any{"name": "bug"}},
+			})
+		case r.URL.Path == "/repos/org/repo/pulls/7/files":
+			json.NewEncoder(w).Encode([]any{
+				map[string]any{"filename": "x.go", "status": "modified", "additions": 2, "deletions": 1, "changes": 3},
+			})
+		case r.URL.Path == "/repos/org/repo/pulls/7/comments":
+			json.NewEncoder(w).Encode([]any{
+				map[string]any{"id": 11, "path": "x.go", "line": 0, "original_line": 9, "body": "old", "user": map[string]any{"login": "bob"}},
+			})
+		case r.URL.Path == "/repos/org/repo/contents/CLAUDE.md":
+			w.Write([]byte("# standards"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	diff, err := impl.Invoke(ctx, "pr_diff", map[string]any{"repo": "org/repo", "pr": 7})
+	if err != nil || !strings.Contains(diff["diff"].(string), "diff --git") {
+		t.Fatalf("pr_diff = %v, %v", diff, err)
+	}
+	meta, err := impl.Invoke(ctx, "pr_get", map[string]any{"repo": "org/repo", "pr": 7})
+	if err != nil || meta["title"] != "T" || meta["author"] != "alice" || meta["head_sha"] != "abc" {
+		t.Fatalf("pr_get = %v, %v", meta, err)
+	}
+	if labels, _ := meta["labels"].([]string); len(labels) != 1 || labels[0] != "bug" {
+		t.Fatalf("pr_get labels = %v", meta["labels"])
+	}
+	files, err := impl.Invoke(ctx, "pr_files", map[string]any{"repo": "org/repo", "pr": 7})
+	fl, _ := files["files"].([]any)
+	if err != nil || len(fl) != 1 || fl[0].(map[string]any)["path"] != "x.go" {
+		t.Fatalf("pr_files = %v, %v", files, err)
+	}
+	rc, err := impl.Invoke(ctx, "review_comments", map[string]any{"repo": "org/repo", "pr": 7})
+	cl, _ := rc["comments"].([]any)
+	if err != nil || len(cl) != 1 || cl[0].(map[string]any)["line"] != 9 { // falls back to original_line
+		t.Fatalf("review_comments = %v, %v", rc, err)
+	}
+	f, err := impl.Invoke(ctx, "file", map[string]any{"repo": "org/repo", "path": "CLAUDE.md"})
+	if err != nil || f["text"] != "# standards" {
+		t.Fatalf("file = %v, %v", f, err)
+	}
+}
+
+func TestGithubReadCacheHit(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("ETag", `"v1"`)
+		w.Write([]byte("the diff"))
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	for i := 0; i < 3; i++ {
+		if _, err := impl.Invoke(context.Background(), "pr_diff", map[string]any{"repo": "org/repo", "pr": 7}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("3 identical reads hit the API %d times, want 1 (cached)", n)
+	}
+}
+
+func TestGithubReadRevalidatesWithETag(t *testing.T) {
+	var full, conditional int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			atomic.AddInt32(&conditional, 1)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		atomic.AddInt32(&full, 1)
+		w.Header().Set("ETag", `"v1"`)
+		w.Write([]byte("the diff"))
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	impl.cacheTTL = 0 // always revalidate → exercise the 304 path
+	for i := 0; i < 3; i++ {
+		out, err := impl.Invoke(context.Background(), "pr_diff", map[string]any{"repo": "org/repo", "pr": 7})
+		if err != nil || out["diff"] != "the diff" {
+			t.Fatalf("call %d: %v %v", i, out, err) // 304 must still serve the cached body
+		}
+	}
+	if full != 1 || conditional != 2 {
+		t.Fatalf("full=%d conditional=%d, want 1 full + 2 conditional (304)", full, conditional)
+	}
+}
+
+func TestGithubRateLimit(t *testing.T) {
+	// Pure helpers: classification + retry-after parsing.
+	rl := &http.Response{StatusCode: 403, Header: http.Header{"X-Ratelimit-Remaining": {"0"}}}
+	if !isRateLimited(rl) {
+		t.Fatal("403 + remaining:0 should be rate-limited")
+	}
+	if isRateLimited(&http.Response{StatusCode: 403, Header: http.Header{"X-Ratelimit-Remaining": {"5"}}}) {
+		t.Fatal("403 with remaining>0 is not a rate limit")
+	}
+	ra := &http.Response{Header: http.Header{"Retry-After": {"7"}}}
+	if retryAfter(ra) != 7*time.Second {
+		t.Fatalf("retryAfter(Retry-After: 7) = %v", retryAfter(ra))
+	}
+
+	// Integration: a rate-limited read with no cache errors clearly; with a
+	// primed cache it serves stale rather than failing the caller.
+	var mode int32 // 0 = serve, 1 = rate-limit
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.LoadInt32(&mode) == 1 {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset", "1") // in the past → no wait
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Write([]byte("cached diff"))
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	impl.cacheTTL = 0 // force a revalidating request each call
+	if _, err := impl.Invoke(context.Background(), "pr_diff", map[string]any{"repo": "org/repo", "pr": 7}); err != nil {
+		t.Fatal(err) // prime the cache
+	}
+	atomic.StoreInt32(&mode, 1)
+	out, err := impl.Invoke(context.Background(), "pr_diff", map[string]any{"repo": "org/repo", "pr": 7})
+	if err != nil || out["diff"] != "cached diff" {
+		t.Fatalf("rate-limited read should serve stale cache: %v %v", out, err)
+	}
+
+	// A fresh repo with no cached copy surfaces a clear rate-limit error.
+	fresh := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	if _, err := fresh.Invoke(context.Background(), "pr_diff", map[string]any{"repo": "org/repo", "pr": 8}); err == nil || !strings.Contains(err.Error(), "rate limit") {
+		t.Fatalf("uncached rate-limited read should error with 'rate limit', got %v", err)
 	}
 }

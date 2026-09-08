@@ -67,6 +67,18 @@ keeps their dedup state separate).
 | `submit_review` | `repo`*, `pr`*, `event`* (APPROVE\|REQUEST_CHANGES\|COMMENT), `body`, `comments`, `as` | `id`, `comments` |
 | `add_labels` | `repo`*, `number`*, `labels`*, `as` | `ok` |
 | `sweep` | — | `nudged` — run the catch-up sweep now (daemon-global; `conductor sweep --now`, verb-shaped) |
+| `pr_diff` | `repo`*, `pr`*, `as` | `diff` — the PR's unified diff |
+| `pr_get` | `repo`*, `pr`*, `as` | `title`, `body`, `state`, `draft`, `author`, `base`, `head`, `head_sha`, `additions`, `deletions`, `changed_files`, `labels`, `url` |
+| `pr_files` | `repo`*, `pr`*, `page`, `as` | `files`: `[{path, status, additions, deletions, changes}]` (100/page) |
+| `review_comments` | `repo`*, `pr`*, `page`, `as` | `comments`: existing inline review comments `[{path, line, body, user, id}]` |
+| `file` | `repo`*, `path`*, `ref`, `as` | `text` — a repo file's raw contents at a ref |
+
+The **read** verbs (`pr_diff`, `pr_get`, `pr_files`, `review_comments`, `file`)
+are cached in-process for ~45s with ETag revalidation, so a fan-out that all
+wants the same PR (e.g. a multi-reviewer workflow) hits GitHub once. Every call
+tracks the rate limit: on a limit refusal the connector waits out a short
+`Retry-After` once, then serves a cached copy if it has one, else errors with
+the reset time — so a review job degrades instead of storming the API.
 
 `as: me` (default) posts as you; `as: bot` as the App's bot user.
 

@@ -5,10 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"io"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -184,6 +189,55 @@ var githubDecl = &TypeDecl{
 			Outputs: Schema{"id": {Type: TInt}, "comments": {Type: TInt, Desc: "inline comments posted"}},
 		},
 		{
+			Name: "pr_diff", Desc: "the PR's unified diff (cached; GitHub caps the .diff media type around 300 files)",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"as": {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"diff": {Type: TString}},
+		},
+		{
+			Name: "pr_get", Desc: "PR metadata: title, body, state, author, base/head, line counts, labels",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"as": {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{
+				"title": {Type: TString}, "body": {Type: TString}, "state": {Type: TString},
+				"draft": {Type: TBool}, "author": {Type: TString}, "base": {Type: TString},
+				"head": {Type: TString}, "head_sha": {Type: TString}, "additions": {Type: TInt},
+				"deletions": {Type: TInt}, "changed_files": {Type: TInt}, "labels": {Type: TList}, "url": {Type: TString},
+			},
+		},
+		{
+			Name: "pr_files", Desc: "changed files: [{path, status, additions, deletions, changes}] (100/page; pass page for more)",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"page": {Type: TInt, Desc: "1-based page (default 1; 100 files per page)"},
+				"as":   {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"files": {Type: TList}},
+		},
+		{
+			Name: "review_comments", Desc: "existing inline review comments on the PR: [{path, line, body, user, id}] (100/page)",
+			Options: Schema{
+				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"page": {Type: TInt, Desc: "1-based page (default 1)"},
+				"as":   {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"comments": {Type: TList}},
+		},
+		{
+			Name: "file", Desc: "a repo file's raw contents at a ref (cached; GitHub's raw media type caps at ~1 MiB)",
+			Options: Schema{
+				"repo": {Type: TString, Required: true},
+				"path": {Type: TString, Required: true, Desc: "repo-relative file path"},
+				"ref":  {Type: TString, Desc: "branch / tag / sha (default: the repo's default branch)"},
+				"as":   {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"text": {Type: TString}},
+		},
+		{
 			Name: "add_labels", Desc: "add labels to an issue or PR",
 			Options: Schema{
 				"repo":   {Type: TString, Required: true},
@@ -238,6 +292,22 @@ type githubImpl struct {
 
 	// ghToken is injectable for tests (defaults to `gh auth token`).
 	ghToken func() (string, error)
+
+	// GET response cache (reads only) + last-seen rate-limit state, so a
+	// fan-out of reviewers/verifiers that all want the same diff/metadata hits
+	// GitHub once and backs off gracefully near the limit. Guarded by mu.
+	mu          sync.Mutex
+	getCache    map[string]*ghCacheEntry
+	cacheTTL    time.Duration // how long a GET body is served without revalidating
+	rlRemaining int           // X-RateLimit-Remaining from the last response (-1 = unknown)
+	rlReset     time.Time     // when the primary limit resets
+}
+
+// ghCacheEntry is one cached GET body + its ETag (for cheap revalidation).
+type ghCacheEntry struct {
+	etag    string
+	body    []byte
+	fetched time.Time
 }
 
 func newGithubImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
@@ -267,8 +337,11 @@ func newGithubImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error
 	}
 	g := &githubImpl{
 		name: name, conn: conn, deps: deps,
-		httpc:   &http.Client{Timeout: 20 * time.Second},
-		ghToken: ghAuthToken,
+		httpc:       &http.Client{Timeout: 20 * time.Second},
+		ghToken:     ghAuthToken,
+		getCache:    map[string]*ghCacheEntry{},
+		cacheTTL:    defaultCacheTTL,
+		rlRemaining: -1,
 	}
 	if conn.App.AppID > 0 && conn.App.PrivateKeyPath != "" {
 		at, err := gh.NewAppTokens(conn.App.AppID, conn.App.PrivateKeyPath)
@@ -538,6 +611,135 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 			return nil, err
 		}
 		return map[string]any{"id": out.ID, "comments": len(comments)}, nil
+	case "pr_diff":
+		if number == 0 {
+			return nil, fmt.Errorf("github.pr_diff: options.pr is required")
+		}
+		diff, err := g.getText(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d", base, repo, number), "application/vnd.github.diff")
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"diff": diff}, nil
+	case "pr_get":
+		if number == 0 {
+			return nil, fmt.Errorf("github.pr_get: options.pr is required")
+		}
+		var pr struct {
+			Title        string `json:"title"`
+			Body         string `json:"body"`
+			State        string `json:"state"`
+			Draft        bool   `json:"draft"`
+			Merged       bool   `json:"merged"`
+			Mergeable    *bool  `json:"mergeable"`
+			Additions    int    `json:"additions"`
+			Deletions    int    `json:"deletions"`
+			ChangedFiles int    `json:"changed_files"`
+			HTMLURL      string `json:"html_url"`
+			User         struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Base struct {
+				Ref string `json:"ref"`
+			} `json:"base"`
+			Head struct {
+				Ref string `json:"ref"`
+				SHA string `json:"sha"`
+			} `json:"head"`
+			Labels []struct {
+				Name string `json:"name"`
+			} `json:"labels"`
+		}
+		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d", base, repo, number), &pr); err != nil {
+			return nil, err
+		}
+		labels := make([]string, 0, len(pr.Labels))
+		for _, l := range pr.Labels {
+			labels = append(labels, l.Name)
+		}
+		res := map[string]any{
+			"title": pr.Title, "body": pr.Body, "state": pr.State, "draft": pr.Draft,
+			"merged": pr.Merged, "author": pr.User.Login, "base": pr.Base.Ref,
+			"head": pr.Head.Ref, "head_sha": pr.Head.SHA, "additions": pr.Additions,
+			"deletions": pr.Deletions, "changed_files": pr.ChangedFiles, "labels": labels, "url": pr.HTMLURL,
+		}
+		if pr.Mergeable != nil {
+			res["mergeable"] = *pr.Mergeable
+		}
+		return res, nil
+	case "pr_files":
+		if number == 0 {
+			return nil, fmt.Errorf("github.pr_files: options.pr is required")
+		}
+		page := toInt(opts["page"])
+		if page < 1 {
+			page = 1
+		}
+		var raw []struct {
+			Filename  string `json:"filename"`
+			Status    string `json:"status"`
+			Additions int    `json:"additions"`
+			Deletions int    `json:"deletions"`
+			Changes   int    `json:"changes"`
+		}
+		u := fmt.Sprintf("%s/repos/%s/pulls/%d/files?per_page=100&page=%d", base, repo, number, page)
+		if err := g.get(ctx, tok, u, &raw); err != nil {
+			return nil, err
+		}
+		files := make([]any, 0, len(raw))
+		for _, f := range raw {
+			files = append(files, map[string]any{
+				"path": f.Filename, "status": f.Status,
+				"additions": f.Additions, "deletions": f.Deletions, "changes": f.Changes,
+			})
+		}
+		return map[string]any{"files": files}, nil
+	case "review_comments":
+		if number == 0 {
+			return nil, fmt.Errorf("github.review_comments: options.pr is required")
+		}
+		page := toInt(opts["page"])
+		if page < 1 {
+			page = 1
+		}
+		var raw []struct {
+			ID           int64  `json:"id"`
+			Path         string `json:"path"`
+			Line         int    `json:"line"`
+			OriginalLine int    `json:"original_line"`
+			Body         string `json:"body"`
+			User         struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		}
+		u := fmt.Sprintf("%s/repos/%s/pulls/%d/comments?per_page=100&page=%d", base, repo, number, page)
+		if err := g.get(ctx, tok, u, &raw); err != nil {
+			return nil, err
+		}
+		comments := make([]any, 0, len(raw))
+		for _, c := range raw {
+			line := c.Line
+			if line == 0 {
+				line = c.OriginalLine
+			}
+			comments = append(comments, map[string]any{
+				"id": c.ID, "path": c.Path, "line": line, "body": c.Body, "user": c.User.Login,
+			})
+		}
+		return map[string]any{"comments": comments}, nil
+	case "file":
+		path, _ := opts["path"].(string)
+		if path == "" {
+			return nil, fmt.Errorf("github.file: options.path is required")
+		}
+		u := fmt.Sprintf("%s/repos/%s/contents/%s", base, repo, path)
+		if ref, _ := opts["ref"].(string); ref != "" {
+			u += "?ref=" + url.QueryEscape(ref)
+		}
+		text, err := g.getText(ctx, tok, u, "application/vnd.github.raw")
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"text": text}, nil
 	case "add_labels":
 		if number == 0 {
 			return nil, fmt.Errorf("github.add_labels: options.number is required")
@@ -574,20 +776,256 @@ func (g *githubImpl) post(ctx context.Context, token, url string, body, out any)
 		return err
 	}
 	defer resp.Body.Close()
+	g.noteRateLimit(resp)
 	if resp.StatusCode/100 != 2 {
-		var msg struct {
-			Message string `json:"message"`
+		if isRateLimited(resp) {
+			return g.rateLimitError()
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&msg)
-		if msg.Message != "" {
-			return fmt.Errorf("POST %s: HTTP %d: %s", url, resp.StatusCode, msg.Message)
-		}
-		return fmt.Errorf("POST %s: HTTP %d", url, resp.StatusCode)
+		return ghHTTPError("POST", url, resp)
 	}
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)
 	}
 	return nil
+}
+
+const (
+	// maxReadBytes caps a raw text read (a diff, a repo file) so a pathologically
+	// large response can't exhaust memory. A body over the limit is truncated.
+	maxReadBytes = 16 << 20 // 16 MiB
+	// defaultCacheTTL is how long a GET body is served without revalidating —
+	// long enough that a review fan-out (6 reviewers + verifiers, same PR) hits
+	// the API once, short enough that a read after a write sees fresh data soon.
+	defaultCacheTTL = 45 * time.Second
+	// maxCacheEntries bounds the read cache over the daemon's lifetime.
+	maxCacheEntries = 1024
+	// maxRateWait caps how long a single GET will block waiting out a rate
+	// limit before giving up (and serving stale, or erroring).
+	maxRateWait = 30 * time.Second
+)
+
+// get issues an authenticated JSON GET (cached) and decodes into out.
+func (g *githubImpl) get(ctx context.Context, token, url string, out any) error {
+	b, err := g.cachedGet(ctx, token, url, "application/vnd.github+json")
+	if err != nil {
+		return err
+	}
+	if out != nil {
+		return json.Unmarshal(b, out)
+	}
+	return nil
+}
+
+// getText issues an authenticated GET (cached) with a caller-supplied Accept
+// (the diff or raw media type) and returns the body as a string.
+func (g *githubImpl) getText(ctx context.Context, token, url, accept string) (string, error) {
+	b, err := g.cachedGet(ctx, token, url, accept)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// cachedGet is the read path shared by every GET verb: an in-process TTL cache
+// with ETag revalidation, and rate-limit awareness. A fresh entry is served
+// without a round-trip; a stale one revalidates conditionally (a 304 costs no
+// body). On a rate-limit response it waits out a short Retry-After once, then
+// falls back to a stale cached body if it has one, else errors with the reset.
+func (g *githubImpl) cachedGet(ctx context.Context, token, url, accept string) ([]byte, error) {
+	key := cacheKey(token, accept, url)
+	now := time.Now()
+
+	g.mu.Lock()
+	e := g.getCache[key]
+	if e != nil && now.Sub(e.fetched) < g.cacheTTL {
+		body := e.body
+		g.mu.Unlock()
+		return body, nil
+	}
+	etag := ""
+	if e != nil {
+		etag = e.etag
+	}
+	g.mu.Unlock()
+
+	for attempt := 0; ; attempt++ {
+		resp, err := g.getRaw(ctx, token, url, accept, etag)
+		if err != nil {
+			return nil, err
+		}
+		g.noteRateLimit(resp)
+
+		switch {
+		case resp.StatusCode == http.StatusNotModified:
+			resp.Body.Close()
+			g.mu.Lock()
+			if e := g.getCache[key]; e != nil {
+				e.fetched = time.Now()
+				body := e.body
+				g.mu.Unlock()
+				return body, nil
+			}
+			g.mu.Unlock()
+			etag = "" // cache was evicted under us — refetch unconditionally
+			continue
+
+		case resp.StatusCode/100 == 2:
+			b, rerr := io.ReadAll(io.LimitReader(resp.Body, maxReadBytes))
+			newEtag := resp.Header.Get("ETag")
+			resp.Body.Close()
+			if rerr != nil {
+				return nil, rerr
+			}
+			g.storeCache(key, newEtag, b)
+			return b, nil
+
+		case isRateLimited(resp):
+			wait := retryAfter(resp)
+			resp.Body.Close()
+			if attempt == 0 && wait > 0 && wait <= maxRateWait {
+				if err := sleepCtx(ctx, wait); err != nil {
+					return nil, err
+				}
+				continue // one retry after the window
+			}
+			// Prefer stale data over failing the caller — a review shouldn't
+			// die because the limit blipped when we already hold the diff.
+			g.mu.Lock()
+			if e := g.getCache[key]; e != nil {
+				body := e.body
+				g.mu.Unlock()
+				return body, nil
+			}
+			g.mu.Unlock()
+			return nil, g.rateLimitError()
+
+		default:
+			err := ghHTTPError("GET", url, resp)
+			resp.Body.Close()
+			return nil, err
+		}
+	}
+}
+
+// getRaw builds and sends an authenticated GET; the caller reads/closes the
+// body. A non-empty etag makes it a conditional request (If-None-Match).
+func (g *githubImpl) getRaw(ctx context.Context, token, url, accept, etag string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", accept)
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+	return g.httpc.Do(req)
+}
+
+func (g *githubImpl) storeCache(key, etag string, body []byte) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.getCache) >= maxCacheEntries {
+		now := time.Now()
+		for k, e := range g.getCache { // drop expired first
+			if now.Sub(e.fetched) >= g.cacheTTL {
+				delete(g.getCache, k)
+			}
+		}
+		if len(g.getCache) >= maxCacheEntries {
+			g.getCache = map[string]*ghCacheEntry{} // still full: reset
+		}
+	}
+	g.getCache[key] = &ghCacheEntry{etag: etag, body: body, fetched: time.Now()}
+}
+
+// noteRateLimit records the primary rate-limit state from a response's headers.
+func (g *githubImpl) noteRateLimit(resp *http.Response) {
+	rem, err := strconv.Atoi(resp.Header.Get("X-RateLimit-Remaining"))
+	if err != nil {
+		return
+	}
+	g.mu.Lock()
+	g.rlRemaining = rem
+	if s, err := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil {
+		g.rlReset = time.Unix(s, 0)
+	}
+	g.mu.Unlock()
+}
+
+func (g *githubImpl) rateLimitError() error {
+	g.mu.Lock()
+	reset := g.rlReset
+	g.mu.Unlock()
+	if !reset.IsZero() {
+		return fmt.Errorf("github: rate limit reached; resets in %s", time.Until(reset).Round(time.Second))
+	}
+	return fmt.Errorf("github: rate limit reached")
+}
+
+// isRateLimited reports whether a response is a GitHub rate-limit refusal —
+// primary (403 with X-RateLimit-Remaining: 0) or secondary (403/429 with a
+// Retry-After).
+func isRateLimited(resp *http.Response) bool {
+	if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusTooManyRequests {
+		return false
+	}
+	if resp.Header.Get("Retry-After") != "" {
+		return true
+	}
+	return resp.Header.Get("X-RateLimit-Remaining") == "0"
+}
+
+// retryAfter is how long to wait before retrying a rate-limited response, from
+// Retry-After (seconds) or the X-RateLimit-Reset epoch, clamped to a sane bound.
+func retryAfter(resp *http.Response) time.Duration {
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(ra)); err == nil && n >= 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	if rs := resp.Header.Get("X-RateLimit-Reset"); rs != "" {
+		if s, err := strconv.ParseInt(rs, 10, 64); err == nil {
+			if d := time.Until(time.Unix(s, 0)); d > 0 {
+				return d
+			}
+		}
+	}
+	return 0
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// cacheKey namespaces a cached GET by token (so as:me and as:bot never share)
+// without storing the secret, plus the Accept (diff vs json vs raw differ) and
+// the URL.
+func cacheKey(token, accept, url string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(token))
+	return strconv.FormatUint(h.Sum64(), 36) + "\x00" + accept + "\x00" + url
+}
+
+// ghHTTPError renders a non-2xx GitHub response into an error, surfacing the
+// API's own message when present.
+func ghHTTPError(method, url string, resp *http.Response) error {
+	var msg struct {
+		Message string `json:"message"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&msg)
+	if msg.Message != "" {
+		return fmt.Errorf("%s %s: HTTP %d: %s", method, url, resp.StatusCode, msg.Message)
+	}
+	return fmt.Errorf("%s %s: HTTP %d", method, url, resp.StatusCode)
 }
 
 // --- shared option/filter coercion helpers ---
