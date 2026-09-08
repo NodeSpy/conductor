@@ -71,8 +71,8 @@ keeps their dedup state separate).
 | `sweep` | — | `nudged` — run the catch-up sweep now (daemon-global; `conductor sweep --now`, verb-shaped) |
 | `pr_diff` | `repo`*, `pr`*, `as` | `diff` — the PR's unified diff |
 | `pr_get` | `repo`*, `pr`*, `as` | `title`, `body`, `state`, `draft`, `author`, `base`, `head`, `head_sha`, `additions`, `deletions`, `changed_files`, `labels`, `url` |
-| `pr_files` | `repo`*, `pr`*, `page`, `as` | `files`: `[{path, status, additions, deletions, changes}]` (100/page) |
-| `review_comments` | `repo`*, `pr`*, `page`, `as` | `comments`: existing inline review comments `[{path, line, body, user, id}]` |
+| `pr_files` | `repo`*, `pr`*, `all`, `as` | `files`: `[{path, status, additions, deletions, changes}]` (100/page) |
+| `review_comments` | `repo`*, `pr`*, `all`, `as` | `comments`: existing inline review comments `[{path, line, body, user, id}]` |
 | `file` | `repo`*, `path`*, `ref`, `as` | `text` — a repo file's raw contents at a ref |
 | `create_pr` | `repo`*, `title`*, `head`*, `base`*, `body`, `draft`, `as` | `number`, `url` |
 | `merge_pr` | `repo`*, `pr`*, `method` (merge\|squash\|rebase), `commit_title`, `commit_message`, `sha`, `as` | `merged`, `sha` |
@@ -89,14 +89,19 @@ keeps their dedup state separate).
 | `dispatch_workflow` | `repo`*, `workflow`*, `ref`*, `inputs`, `as` | `ok` — trigger a workflow_dispatch |
 | `rerun_run` | `repo`*, `run_id`*, `failed_only`, `as` | `ok` |
 | `cancel_run` | `repo`*, `run_id`*, `as` | `ok` |
-| `list_runs` | `repo`*, `branch`, `status`, `per_page`, `as` | `runs` — recent workflow runs |
+| `list_runs` | `repo`*, `branch`, `status`, `per_page`, `all`, `as` | `runs` — recent workflow runs |
 | `checks` | `repo`*, `ref`*, `as` | `checks` — check-run status for a ref |
 | `create_release` | `repo`*, `tag`*, `target`, `name`, `body`, `draft`, `prerelease`, `as` | `id`, `url`, `upload_url` |
 | `upload_asset` | `repo`*, `release_id`*, `name`*, `content`/`path`, `content_type`, `as` | `id`, `url` |
-| `list_issues` | `repo`*, `state`, `labels`, `assignee`, `per_page`, `as` | `issues` (PRs excluded) |
-| `search_issues` | `repo`*, `q`*, `per_page`, `as` | `total`, `items` — search scoped to the repo |
+| `list_issues` | `repo`*, `state`, `labels`, `assignee`, `per_page`, `all`, `as` | `issues` (PRs excluded) |
+| `search_issues` | `repo`*, `q`*, `per_page`, `all`, `as` | `total`, `items` — search scoped to the repo |
 | `ready_for_review` | `repo`*, `pr`*, `as` | `ok` — mark a draft PR ready (GraphQL) |
 | `convert_to_draft` | `repo`*, `pr`*, `as` | `ok` — convert a PR back to draft (GraphQL) |
+| `create_gist` | `files`*, `description`, `public` | `id`, `url` — user-scoped, no repo |
+| `get_gist` | `id`* | `files` `{name: content}`, `description`, `public`, `url` |
+| `update_gist` | `id`*, `files`, `description` | `id`, `url` |
+| `delete_gist` | `id`* | `ok` |
+| `list_gists` | `user`, `per_page`, `all` | `gists` — your gists (or a user's public ones) |
 
 The **read** verbs (`pr_diff`, `pr_get`, `pr_files`, `review_comments`, `file`)
 are cached in-process for ~45s with ETag revalidation, so a fan-out that all
@@ -104,6 +109,10 @@ wants the same PR (e.g. a multi-reviewer workflow) hits GitHub once. Every call
 tracks the rate limit: on a limit refusal the connector waits out a short
 `Retry-After` once, then serves a cached copy if it has one, else errors with
 the reset time — so a review job degrades instead of storming the API.
+
+The **list** verbs (`pr_files`, `review_comments`, `list_issues`, `list_runs`,
+`search_issues`, `list_gists`) return one page (~100) by default; pass
+`all: true` to follow pagination to completion.
 
 `as: me` (default) posts as you; `as: bot` as the App's bot user.
 

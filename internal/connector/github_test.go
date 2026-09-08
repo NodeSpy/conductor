@@ -982,3 +982,109 @@ func TestGithubReleaseSearchChecksDraftVerbs(t *testing.T) {
 		t.Fatalf("convert_to_draft query: %v", last.body)
 	}
 }
+
+func TestGithubGistVerbs(t *testing.T) {
+	var last struct {
+		method, path string
+		body         map[string]any
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		last.method, last.path = r.Method, r.URL.Path
+		last.body = nil
+		json.NewDecoder(r.Body).Decode(&last.body)
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/gists":
+			json.NewEncoder(w).Encode([]any{map[string]any{"id": "g1", "description": "d", "public": true, "html_url": "u1"}})
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/gists/"):
+			json.NewEncoder(w).Encode(map[string]any{
+				"html_url": "u", "description": "d", "public": false,
+				"files": map[string]any{"a.txt": map[string]any{"content": "hello"}},
+			})
+		default:
+			json.NewEncoder(w).Encode(map[string]any{"id": "g1", "html_url": "u"})
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	// create_gist WITHOUT a repo (gists are user-scoped).
+	out, err := impl.Invoke(ctx, "create_gist", map[string]any{"files": map[string]any{"a.txt": "hi"}, "public": true})
+	if err != nil || out["id"] != "g1" {
+		t.Fatalf("create_gist: %v %v", out, err)
+	}
+	if last.method != "POST" || last.path != "/gists" || last.body["public"] != true {
+		t.Fatalf("create_gist req: %+v", last)
+	}
+	if f := last.body["files"].(map[string]any)["a.txt"].(map[string]any); f["content"] != "hi" {
+		t.Fatalf("create_gist files shape: %v", last.body["files"])
+	}
+	// get_gist → flattens files to {name: content}
+	if out, err := impl.Invoke(ctx, "get_gist", map[string]any{"id": "g1"}); err != nil {
+		t.Fatalf("get_gist: %v", err)
+	} else if fs := out["files"].(map[string]any); fs["a.txt"] != "hello" {
+		t.Fatalf("get_gist files: %v", out)
+	}
+	// update_gist (PATCH)
+	if _, err := impl.Invoke(ctx, "update_gist", map[string]any{"id": "g1", "description": "new"}); err != nil {
+		t.Fatalf("update_gist: %v", err)
+	}
+	if last.method != "PATCH" || last.path != "/gists/g1" {
+		t.Fatalf("update_gist req: %+v", last)
+	}
+	// delete_gist (DELETE)
+	if _, err := impl.Invoke(ctx, "delete_gist", map[string]any{"id": "g1"}); err != nil {
+		t.Fatalf("delete_gist: %v", err)
+	}
+	if last.method != "DELETE" || last.path != "/gists/g1" {
+		t.Fatalf("delete_gist req: %+v", last)
+	}
+	// list_gists
+	if out, err := impl.Invoke(ctx, "list_gists", nil); err != nil {
+		t.Fatalf("list_gists: %v", err)
+	} else if gs := out["gists"].([]any); len(gs) != 1 || gs[0].(map[string]any)["id"] != "g1" {
+		t.Fatalf("list_gists: %v", out)
+	}
+}
+
+func TestGithubPaginateAll(t *testing.T) {
+	var pages int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := atomic.AddInt32(&pages, 1)
+		var files []any
+		n := 100 // page 1 is full → pagination continues
+		if p >= 2 {
+			n = 3 // page 2 is short → stop
+		}
+		for i := 0; i < n; i++ {
+			files = append(files, map[string]any{"filename": "f", "status": "modified"})
+		}
+		json.NewEncoder(w).Encode(files)
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	// Without all: one page (100).
+	if out, err := impl.Invoke(ctx, "pr_files", map[string]any{"repo": "o/r", "pr": 7}); err != nil {
+		t.Fatal(err)
+	} else if fs := out["files"].([]any); len(fs) != 100 {
+		t.Fatalf("no-all should return one page (100), got %d", len(fs))
+	}
+	if n := atomic.LoadInt32(&pages); n != 1 {
+		t.Fatalf("no-all should make 1 request, made %d", n)
+	}
+	// all: follows to the short page (100 + 3 = 103).
+	atomic.StoreInt32(&pages, 0)
+	impl.cacheTTL = 0 // don't serve the cached first page
+	if out, err := impl.Invoke(ctx, "pr_files", map[string]any{"repo": "o/r", "pr": 7, "all": true}); err != nil {
+		t.Fatal(err)
+	} else if fs := out["files"].([]any); len(fs) != 103 {
+		t.Fatalf("all should follow pages (103), got %d", len(fs))
+	}
+	if n := atomic.LoadInt32(&pages); n != 2 {
+		t.Fatalf("all should make 2 requests, made %d", n)
+	}
+}

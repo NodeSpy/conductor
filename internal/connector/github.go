@@ -241,8 +241,8 @@ var githubDecl = &TypeDecl{
 			Name: "pr_files", Desc: "changed files: [{path, status, additions, deletions, changes}] (100/page; pass page for more)",
 			Options: Schema{
 				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
-				"page": {Type: TInt, Desc: "1-based page (default 1; 100 files per page)"},
-				"as":   {Type: TString, Enum: []string{"me", "bot"}},
+				"all": {Type: TBool, Desc: "fetch every page (default: first 100)"},
+				"as":  {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"files": {Type: TList}},
 		},
@@ -250,8 +250,8 @@ var githubDecl = &TypeDecl{
 			Name: "review_comments", Desc: "existing inline review comments on the PR: [{path, line, body, user, id}] (100/page)",
 			Options: Schema{
 				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
-				"page": {Type: TInt, Desc: "1-based page (default 1)"},
-				"as":   {Type: TString, Enum: []string{"me", "bot"}},
+				"all": {Type: TBool, Desc: "fetch every page (default: first 100)"},
+				"as":  {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"comments": {Type: TList}},
 		},
@@ -429,6 +429,7 @@ var githubDecl = &TypeDecl{
 				"branch":   {Type: TString, Desc: "filter to a branch"},
 				"status":   {Type: TString, Desc: "queued|in_progress|completed|success|failure|…"},
 				"per_page": {Type: TInt, Desc: "default 20, max 100"},
+				"all":      {Type: TBool, Desc: "fetch every page"},
 				"as":       {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"runs": {Type: TList}},
@@ -466,6 +467,7 @@ var githubDecl = &TypeDecl{
 				"labels":   {Type: TList, Desc: "filter to issues with all these labels"},
 				"assignee": {Type: TString, Desc: "filter to this assignee (or * / none)"},
 				"per_page": {Type: TInt, Desc: "default 30, max 100"},
+				"all":      {Type: TBool, Desc: "fetch every page"},
 				"as":       {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"issues": {Type: TList}},
@@ -476,6 +478,7 @@ var githubDecl = &TypeDecl{
 				"repo":     {Type: TString, Required: true},
 				"q":        {Type: TString, Required: true, Desc: "GitHub search query (scoped to this repo automatically)"},
 				"per_page": {Type: TInt, Desc: "default 30, max 100"},
+				"all":      {Type: TBool, Desc: "fetch every page"},
 				"as":       {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"total": {Type: TInt}, "items": {Type: TList}},
@@ -504,6 +507,45 @@ var githubDecl = &TypeDecl{
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"ok": {Type: TBool}},
+		},
+		{
+			Name: "create_gist", Desc: "create a gist (user-scoped, no repo)",
+			Options: Schema{
+				"files":       {Type: TMap, Required: true, Desc: "{filename: content} — the gist's files"},
+				"description": {Type: TString},
+				"public":      {Type: TBool, Desc: "default false (secret gist)"},
+			},
+			Outputs: Schema{"id": {Type: TString}, "url": {Type: TString}},
+		},
+		{
+			Name: "get_gist", Desc: "read a gist: its files, description, visibility",
+			Options: Schema{
+				"id": {Type: TString, Required: true},
+			},
+			Outputs: Schema{"files": {Type: TMap, Desc: "{filename: content}"}, "description": {Type: TString}, "public": {Type: TBool}, "url": {Type: TString}},
+		},
+		{
+			Name: "update_gist", Desc: "edit a gist's files and/or description",
+			Options: Schema{
+				"id":          {Type: TString, Required: true},
+				"files":       {Type: TMap, Desc: "{filename: content}; a null/empty content deletes that file"},
+				"description": {Type: TString},
+			},
+			Outputs: Schema{"id": {Type: TString}, "url": {Type: TString}},
+		},
+		{
+			Name: "delete_gist", Desc: "delete a gist",
+			Options: Schema{"id": {Type: TString, Required: true}},
+			Outputs: Schema{"ok": {Type: TBool}},
+		},
+		{
+			Name: "list_gists", Desc: "list gists: [{id, description, public, url}]",
+			Options: Schema{
+				"user":     {Type: TString, Desc: "whose public gists (default: your own, incl. secret)"},
+				"per_page": {Type: TInt, Desc: "default 30, max 100"},
+				"all":      {Type: TBool, Desc: "fetch every page, not just the first"},
+			},
+			Outputs: Schema{"gists": {Type: TList}},
 		},
 		{
 			Name: "add_labels", Desc: "add labels to an issue or PR",
@@ -792,7 +834,8 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 		return map[string]any{"nudged": nudged}, nil
 	}
 	repo, _ := opts["repo"].(string)
-	if repo == "" {
+	// Gists are user-scoped, not repo-scoped — they don't require a repo.
+	if repo == "" && !isGistVerb(verb) {
 		return nil, fmt.Errorf("github.%s: options.repo is required", verb)
 	}
 	as, _ := opts["as"].(string)
@@ -947,60 +990,68 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 		if number == 0 {
 			return nil, fmt.Errorf("github.pr_files: options.pr is required")
 		}
-		page := toInt(opts["page"])
-		if page < 1 {
-			page = 1
-		}
-		var raw []struct {
-			Filename  string `json:"filename"`
-			Status    string `json:"status"`
-			Additions int    `json:"additions"`
-			Deletions int    `json:"deletions"`
-			Changes   int    `json:"changes"`
-		}
-		u := fmt.Sprintf("%s/repos/%s/pulls/%d/files?per_page=100&page=%d", base, repo, number, page)
-		if err := g.get(ctx, tok, u, &raw); err != nil {
+		all, _ := opts["all"].(bool)
+		files := []any{}
+		err := g.listAll(ctx, tok, all, 100, func(page int) string {
+			return fmt.Sprintf("%s/repos/%s/pulls/%d/files?per_page=100&page=%d", base, repo, number, page)
+		}, func(b []byte) (int, error) {
+			var raw []struct {
+				Filename  string `json:"filename"`
+				Status    string `json:"status"`
+				Additions int    `json:"additions"`
+				Deletions int    `json:"deletions"`
+				Changes   int    `json:"changes"`
+			}
+			if err := json.Unmarshal(b, &raw); err != nil {
+				return 0, err
+			}
+			for _, f := range raw {
+				files = append(files, map[string]any{
+					"path": f.Filename, "status": f.Status,
+					"additions": f.Additions, "deletions": f.Deletions, "changes": f.Changes,
+				})
+			}
+			return len(raw), nil
+		})
+		if err != nil {
 			return nil, err
-		}
-		files := make([]any, 0, len(raw))
-		for _, f := range raw {
-			files = append(files, map[string]any{
-				"path": f.Filename, "status": f.Status,
-				"additions": f.Additions, "deletions": f.Deletions, "changes": f.Changes,
-			})
 		}
 		return map[string]any{"files": files}, nil
 	case "review_comments":
 		if number == 0 {
 			return nil, fmt.Errorf("github.review_comments: options.pr is required")
 		}
-		page := toInt(opts["page"])
-		if page < 1 {
-			page = 1
-		}
-		var raw []struct {
-			ID           int64  `json:"id"`
-			Path         string `json:"path"`
-			Line         int    `json:"line"`
-			OriginalLine int    `json:"original_line"`
-			Body         string `json:"body"`
-			User         struct {
-				Login string `json:"login"`
-			} `json:"user"`
-		}
-		u := fmt.Sprintf("%s/repos/%s/pulls/%d/comments?per_page=100&page=%d", base, repo, number, page)
-		if err := g.get(ctx, tok, u, &raw); err != nil {
-			return nil, err
-		}
-		comments := make([]any, 0, len(raw))
-		for _, c := range raw {
-			line := c.Line
-			if line == 0 {
-				line = c.OriginalLine
+		all, _ := opts["all"].(bool)
+		comments := []any{}
+		err := g.listAll(ctx, tok, all, 100, func(page int) string {
+			return fmt.Sprintf("%s/repos/%s/pulls/%d/comments?per_page=100&page=%d", base, repo, number, page)
+		}, func(b []byte) (int, error) {
+			var raw []struct {
+				ID           int64  `json:"id"`
+				Path         string `json:"path"`
+				Line         int    `json:"line"`
+				OriginalLine int    `json:"original_line"`
+				Body         string `json:"body"`
+				User         struct {
+					Login string `json:"login"`
+				} `json:"user"`
 			}
-			comments = append(comments, map[string]any{
-				"id": c.ID, "path": c.Path, "line": line, "body": c.Body, "user": c.User.Login,
-			})
+			if err := json.Unmarshal(b, &raw); err != nil {
+				return 0, err
+			}
+			for _, c := range raw {
+				line := c.Line
+				if line == 0 {
+					line = c.OriginalLine
+				}
+				comments = append(comments, map[string]any{
+					"id": c.ID, "path": c.Path, "line": line, "body": c.Body, "user": c.User.Login,
+				})
+			}
+			return len(raw), nil
+		})
+		if err != nil {
+			return nil, err
 		}
 		return map[string]any{"comments": comments}, nil
 	case "file":
@@ -1318,38 +1369,49 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 		}
 		return map[string]any{"ok": true}, nil
 	case "list_runs":
-		q := url.Values{}
+		all, _ := opts["all"].(bool)
 		perPage := toInt(opts["per_page"])
 		if perPage <= 0 {
 			perPage = 20
 		}
-		q.Set("per_page", strconv.Itoa(perPage))
-		if b, _ := opts["branch"].(string); b != "" {
-			q.Set("branch", b)
+		if all {
+			perPage = 100
 		}
-		if s, _ := opts["status"].(string); s != "" {
-			q.Set("status", s)
-		}
-		var out struct {
-			Runs []struct {
-				ID         int64  `json:"id"`
-				Name       string `json:"name"`
-				Status     string `json:"status"`
-				Conclusion string `json:"conclusion"`
-				HeadBranch string `json:"head_branch"`
-				HeadSHA    string `json:"head_sha"`
-				HTMLURL    string `json:"html_url"`
-			} `json:"workflow_runs"`
-		}
-		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/actions/runs?%s", base, repo, q.Encode()), &out); err != nil {
+		runs := []any{}
+		err := g.listAll(ctx, tok, all, perPage, func(page int) string {
+			q := url.Values{"per_page": {strconv.Itoa(perPage)}, "page": {strconv.Itoa(page)}}
+			if b, _ := opts["branch"].(string); b != "" {
+				q.Set("branch", b)
+			}
+			if s, _ := opts["status"].(string); s != "" {
+				q.Set("status", s)
+			}
+			return fmt.Sprintf("%s/repos/%s/actions/runs?%s", base, repo, q.Encode())
+		}, func(b []byte) (int, error) {
+			var out struct {
+				Runs []struct {
+					ID         int64  `json:"id"`
+					Name       string `json:"name"`
+					Status     string `json:"status"`
+					Conclusion string `json:"conclusion"`
+					HeadBranch string `json:"head_branch"`
+					HeadSHA    string `json:"head_sha"`
+					HTMLURL    string `json:"html_url"`
+				} `json:"workflow_runs"`
+			}
+			if err := json.Unmarshal(b, &out); err != nil {
+				return 0, err
+			}
+			for _, r := range out.Runs {
+				runs = append(runs, map[string]any{
+					"id": r.ID, "name": r.Name, "status": r.Status, "conclusion": r.Conclusion,
+					"head_branch": r.HeadBranch, "head_sha": r.HeadSHA, "url": r.HTMLURL,
+				})
+			}
+			return len(out.Runs), nil
+		})
+		if err != nil {
 			return nil, err
-		}
-		runs := make([]any, 0, len(out.Runs))
-		for _, r := range out.Runs {
-			runs = append(runs, map[string]any{
-				"id": r.ID, "name": r.Name, "status": r.Status, "conclusion": r.Conclusion,
-				"head_branch": r.HeadBranch, "head_sha": r.HeadSHA, "url": r.HTMLURL,
-			})
 		}
 		return map[string]any{"runs": runs}, nil
 	case "create_release":
@@ -1427,50 +1489,61 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 		}
 		return map[string]any{"id": out.ID, "url": out.BrowserDownloadURL}, nil
 	case "list_issues":
-		q := url.Values{}
-		if s, _ := opts["state"].(string); s != "" {
-			q.Set("state", s)
-		}
-		if l := toStrings(opts["labels"]); len(l) > 0 {
-			q.Set("labels", strings.Join(l, ","))
-		}
-		if s, _ := opts["assignee"].(string); s != "" {
-			q.Set("assignee", s)
-		}
+		all, _ := opts["all"].(bool)
 		pp := toInt(opts["per_page"])
 		if pp <= 0 {
 			pp = 30
 		}
-		q.Set("per_page", strconv.Itoa(pp))
-		var raw []struct {
-			Number  int64  `json:"number"`
-			Title   string `json:"title"`
-			State   string `json:"state"`
-			HTMLURL string `json:"html_url"`
-			User    struct {
-				Login string `json:"login"`
-			} `json:"user"`
-			Labels []struct {
-				Name string `json:"name"`
-			} `json:"labels"`
-			PullRequest *struct{} `json:"pull_request"`
+		if all {
+			pp = 100
 		}
-		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/issues?%s", base, repo, q.Encode()), &raw); err != nil {
+		issues := []any{}
+		err := g.listAll(ctx, tok, all, pp, func(page int) string {
+			q := url.Values{"per_page": {strconv.Itoa(pp)}, "page": {strconv.Itoa(page)}}
+			if s, _ := opts["state"].(string); s != "" {
+				q.Set("state", s)
+			}
+			if l := toStrings(opts["labels"]); len(l) > 0 {
+				q.Set("labels", strings.Join(l, ","))
+			}
+			if s, _ := opts["assignee"].(string); s != "" {
+				q.Set("assignee", s)
+			}
+			return fmt.Sprintf("%s/repos/%s/issues?%s", base, repo, q.Encode())
+		}, func(b []byte) (int, error) {
+			var raw []struct {
+				Number  int64  `json:"number"`
+				Title   string `json:"title"`
+				State   string `json:"state"`
+				HTMLURL string `json:"html_url"`
+				User    struct {
+					Login string `json:"login"`
+				} `json:"user"`
+				Labels []struct {
+					Name string `json:"name"`
+				} `json:"labels"`
+				PullRequest *struct{} `json:"pull_request"`
+			}
+			if err := json.Unmarshal(b, &raw); err != nil {
+				return 0, err
+			}
+			for _, i := range raw {
+				if i.PullRequest != nil { // the issues endpoint returns PRs too — drop them
+					continue
+				}
+				labels := make([]string, 0, len(i.Labels))
+				for _, l := range i.Labels {
+					labels = append(labels, l.Name)
+				}
+				issues = append(issues, map[string]any{
+					"number": i.Number, "title": i.Title, "state": i.State,
+					"author": i.User.Login, "labels": labels, "url": i.HTMLURL,
+				})
+			}
+			return len(raw), nil // count includes PRs, so pagination still advances correctly
+		})
+		if err != nil {
 			return nil, err
-		}
-		issues := make([]any, 0, len(raw))
-		for _, i := range raw {
-			if i.PullRequest != nil { // the issues endpoint returns PRs too — drop them
-				continue
-			}
-			labels := make([]string, 0, len(i.Labels))
-			for _, l := range i.Labels {
-				labels = append(labels, l.Name)
-			}
-			issues = append(issues, map[string]any{
-				"number": i.Number, "title": i.Title, "state": i.State,
-				"author": i.User.Login, "labels": labels, "url": i.HTMLURL,
-			})
 		}
 		return map[string]any{"issues": issues}, nil
 	case "search_issues":
@@ -1478,32 +1551,46 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 		if query == "" {
 			return nil, fmt.Errorf("github.search_issues: options.q is required")
 		}
+		all, _ := opts["all"].(bool)
 		pp := toInt(opts["per_page"])
 		if pp <= 0 {
 			pp = 30
 		}
-		u := fmt.Sprintf("%s/search/issues?q=%s&per_page=%d", base, url.QueryEscape(query+" repo:"+repo), pp)
-		var out struct {
-			TotalCount int `json:"total_count"`
-			Items      []struct {
-				Number      int64     `json:"number"`
-				Title       string    `json:"title"`
-				State       string    `json:"state"`
-				HTMLURL     string    `json:"html_url"`
-				PullRequest *struct{} `json:"pull_request"`
-			} `json:"items"`
+		if all {
+			pp = 100
 		}
-		if err := g.get(ctx, tok, u, &out); err != nil {
+		scoped := url.QueryEscape(query + " repo:" + repo)
+		items := []any{}
+		total := 0
+		err := g.listAll(ctx, tok, all, pp, func(page int) string {
+			return fmt.Sprintf("%s/search/issues?q=%s&per_page=%d&page=%d", base, scoped, pp, page)
+		}, func(b []byte) (int, error) {
+			var out struct {
+				TotalCount int `json:"total_count"`
+				Items      []struct {
+					Number      int64     `json:"number"`
+					Title       string    `json:"title"`
+					State       string    `json:"state"`
+					HTMLURL     string    `json:"html_url"`
+					PullRequest *struct{} `json:"pull_request"`
+				} `json:"items"`
+			}
+			if err := json.Unmarshal(b, &out); err != nil {
+				return 0, err
+			}
+			total = out.TotalCount
+			for _, it := range out.Items {
+				items = append(items, map[string]any{
+					"number": it.Number, "title": it.Title, "state": it.State,
+					"is_pr": it.PullRequest != nil, "url": it.HTMLURL,
+				})
+			}
+			return len(out.Items), nil
+		})
+		if err != nil {
 			return nil, err
 		}
-		items := make([]any, 0, len(out.Items))
-		for _, it := range out.Items {
-			items = append(items, map[string]any{
-				"number": it.Number, "title": it.Title, "state": it.State,
-				"is_pr": it.PullRequest != nil, "url": it.HTMLURL,
-			})
-		}
-		return map[string]any{"total": out.TotalCount, "items": items}, nil
+		return map[string]any{"total": total, "items": items}, nil
 	case "checks":
 		ref, _ := opts["ref"].(string)
 		if ref == "" {
@@ -1548,6 +1635,114 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 			return nil, err
 		}
 		return map[string]any{"ok": true}, nil
+	case "create_gist":
+		files := gistFiles(opts["files"])
+		if len(files) == 0 {
+			return nil, fmt.Errorf("github.create_gist: options.files is required ({filename: content})")
+		}
+		reqBody := map[string]any{"files": files}
+		if d, _ := opts["description"].(string); d != "" {
+			reqBody["description"] = d
+		}
+		if p, _ := opts["public"].(bool); p {
+			reqBody["public"] = true
+		}
+		var out struct {
+			ID      string `json:"id"`
+			HTMLURL string `json:"html_url"`
+		}
+		if err := g.post(ctx, tok, base+"/gists", reqBody, &out); err != nil {
+			return nil, err
+		}
+		return map[string]any{"id": out.ID, "url": out.HTMLURL}, nil
+	case "get_gist":
+		id, _ := opts["id"].(string)
+		if id == "" {
+			return nil, fmt.Errorf("github.get_gist: options.id is required")
+		}
+		var out struct {
+			HTMLURL     string `json:"html_url"`
+			Description string `json:"description"`
+			Public      bool   `json:"public"`
+			Files       map[string]struct {
+				Content string `json:"content"`
+			} `json:"files"`
+		}
+		if err := g.get(ctx, tok, base+"/gists/"+url.PathEscape(id), &out); err != nil {
+			return nil, err
+		}
+		files := make(map[string]any, len(out.Files))
+		for name, f := range out.Files {
+			files[name] = f.Content
+		}
+		return map[string]any{"files": files, "description": out.Description, "public": out.Public, "url": out.HTMLURL}, nil
+	case "update_gist":
+		id, _ := opts["id"].(string)
+		if id == "" {
+			return nil, fmt.Errorf("github.update_gist: options.id is required")
+		}
+		reqBody := map[string]any{}
+		if files := gistFiles(opts["files"]); len(files) > 0 {
+			reqBody["files"] = files
+		}
+		if d, _ := opts["description"].(string); d != "" {
+			reqBody["description"] = d
+		}
+		if len(reqBody) == 0 {
+			return nil, fmt.Errorf("github.update_gist: set files and/or description")
+		}
+		var out struct {
+			ID      string `json:"id"`
+			HTMLURL string `json:"html_url"`
+		}
+		if err := g.patch(ctx, tok, base+"/gists/"+url.PathEscape(id), reqBody, &out); err != nil {
+			return nil, err
+		}
+		return map[string]any{"id": out.ID, "url": out.HTMLURL}, nil
+	case "delete_gist":
+		id, _ := opts["id"].(string)
+		if id == "" {
+			return nil, fmt.Errorf("github.delete_gist: options.id is required")
+		}
+		if err := g.del(ctx, tok, base+"/gists/"+url.PathEscape(id), nil); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
+	case "list_gists":
+		all, _ := opts["all"].(bool)
+		perPage := toInt(opts["per_page"])
+		if perPage <= 0 {
+			perPage = 30
+		}
+		if all {
+			perPage = 100
+		}
+		path := "/gists"
+		if user, _ := opts["user"].(string); user != "" {
+			path = "/users/" + url.PathEscape(user) + "/gists"
+		}
+		gists := []any{}
+		err := g.listAll(ctx, tok, all, perPage, func(page int) string {
+			return fmt.Sprintf("%s%s?per_page=%d&page=%d", base, path, perPage, page)
+		}, func(b []byte) (int, error) {
+			var raw []struct {
+				ID          string `json:"id"`
+				HTMLURL     string `json:"html_url"`
+				Description string `json:"description"`
+				Public      bool   `json:"public"`
+			}
+			if err := json.Unmarshal(b, &raw); err != nil {
+				return 0, err
+			}
+			for _, gg := range raw {
+				gists = append(gists, map[string]any{"id": gg.ID, "description": gg.Description, "public": gg.Public, "url": gg.HTMLURL})
+			}
+			return len(raw), nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"gists": gists}, nil
 	case "add_labels":
 		if number == 0 {
 			return nil, fmt.Errorf("github.add_labels: options.number is required")
@@ -2004,6 +2199,54 @@ func reviewComments(v any) ([]map[string]any, error) {
 		out = append(out, c)
 	}
 	return out, nil
+}
+
+// listAll gathers items across pages of urlFor(page): each page's body goes to
+// add (which decodes + appends and returns that page's item count). It stops on
+// a short page or the page cap. all=false fetches just page 1.
+func (g *githubImpl) listAll(ctx context.Context, token string, all bool, perPage int, urlFor func(page int) string, add func(body []byte) (int, error)) error {
+	maxPages := 1
+	if all {
+		maxPages = 50 // backstop: ~5000 items at perPage 100
+	}
+	for page := 1; page <= maxPages; page++ {
+		b, err := g.cachedGet(ctx, token, urlFor(page), "application/vnd.github+json")
+		if err != nil {
+			return err
+		}
+		n, err := add(b)
+		if err != nil {
+			return err
+		}
+		if n < perPage {
+			return nil
+		}
+	}
+	return nil
+}
+
+// isGistVerb reports whether a verb operates on gists (user-scoped, no repo).
+func isGistVerb(verb string) bool {
+	switch verb {
+	case "create_gist", "get_gist", "update_gist", "delete_gist", "list_gists":
+		return true
+	}
+	return false
+}
+
+// gistFiles turns a {name: content} option map into the gist API's
+// {name: {content}} shape. Returns nil for an empty/absent map.
+func gistFiles(v any) map[string]any {
+	m, ok := v.(map[string]any)
+	if !ok || len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for name, content := range m {
+		s, _ := content.(string)
+		out[name] = map[string]any{"content": s}
+	}
+	return out
 }
 
 // stringFields collects the named options that are present and non-empty into a
