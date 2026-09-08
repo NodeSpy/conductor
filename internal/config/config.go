@@ -1365,7 +1365,14 @@ func (c *Config) SkillToolsSupported(p AgentProfile) (runtime string, ok bool) {
 		return rn, false // unknown runtime — named by its own validation error
 	}
 	switch {
-	case cc.Type == "paseo", cc.Type == "agent-deck":
+	case cc.Type == "paseo":
+		// paseo exposes no MCP surface of its own, but a Claude Code agent it
+		// launches in an isolated worktree auto-discovers a project .mcp.json
+		// conductor drops there (dispatch.InjectClaudeMCP). Gated to an explicit
+		// claude provider (the injected config shapes are Claude Code's) and
+		// workspace: worktree (where a dedicated checkout to inject into exists).
+		return rn, strings.HasPrefix(p.Provider, "claude") && p.Workspace == "worktree"
+	case cc.Type == "agent-deck":
 		return rn, false
 	case cc.Type == "opencode":
 		return rn, true

@@ -180,7 +180,7 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 // daemon's socket doesn't exist on a remote `host:` box, so remote sessions
 // fall back to the output contract like any runtime without live tools.
 func (c *acpController) memoryServers(spec Spec) []acp.McpServer {
-	ts := buildToolServer(spec, c.host)
+	ts := dispatch.BuildToolServer(spec.Request, c.host)
 	if ts == nil {
 		return nil
 	}

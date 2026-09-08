@@ -15,7 +15,8 @@ reaches an agent only when its runtime can accept an MCP server at launch:
 |---|---|---|
 | ACP runtimes (`agent: gemini`, …) | ✅ | `mcpServers` on `session/new` |
 | `type: opencode` (native HTTP) | ✅ | a per-session config file via `OPENCODE_CONFIG` on the `opencode serve` process |
-| `type: paseo` (the built-in default) | ❌ | `paseo run` and the paseo daemon API expose no MCP surface today |
+| `type: paseo`, **`provider: claude`**, `workspace: worktree` | ✅ | paseo has no MCP surface of its own, so conductor drops a `.mcp.json` (+ a `.claude/settings.local.json` enabling only that server and pre-approving its tools) into the run's isolated worktree; the Claude Code agent paseo launches auto-discovers it. The files are `.git/info/exclude`d so they never enter the agent's commits |
+| `type: paseo`, other providers / `workspace: local` | ❌ | the `.mcp.json`/`.claude` config shapes are Claude Code's, and there's no isolated worktree to drop them in — no tools |
 | `type: agent-deck`, `transport: cli` | ❌ | no MCP launch surface |
 
 On an unsupported runtime a `skill:` profile is inert: no tools, no broker,
