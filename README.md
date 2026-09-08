@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  Event-driven orchestration for AI coding agents — self-hosted, config-as-code, acting as you.
+  Event-driven orchestration for AI coding agents — self-hosted, config-as-code.
 </p>
 
 Connect to your services once (**connectors**), declare where agents run
@@ -58,9 +58,29 @@ into agent work. You describe, in YAML:
 - **Runtimes + agents** — where and how agents run (Paseo by default; ACP,
   OpenCode, CLI and others via controllers), with per-agent workspaces.
 
-It acts as **you** — your identity and credentials, not a bot — governs what
-agents are allowed to do, and is config-as-code: every change is validated,
-audited, and (across schema changes) migrated for you.
+It governs what agents are allowed to do, and is config-as-code: every change is
+validated, audited, and — across schema changes — migrated for you.
+
+## What sets it apart
+
+Most workflow tools wire events to API calls. conductor's steps run **autonomous
+coding agents** — they check out a repo, edit in a worktree, run commands, and open
+a PR — and the platform is built to direct and contain that:
+
+- **Agent-authored workflows** — an agent can plan a multi-step workflow at runtime
+  and run it under guardrails: an allow-list of the steps, connectors, and secrets it
+  may touch, so the plan can't reach past what you granted. — [Workflows](https://github.com/NodeSpy/conductor/wiki/Workflows)
+- **Quality gates on agent output** — tests, lint, or a critic agent must pass before
+  a proposed change is allowed to land; a failure loops back a revise. — [Gates](https://github.com/NodeSpy/conductor/wiki/Gates)
+- **Governance for autonomous work** — cost/token budgets, OS-enforced isolation with
+  an egress allow-list, and a secret broker so agents act *through* conductor without
+  ever seeing raw secret values. — [Cost](https://github.com/NodeSpy/conductor/wiki/Cost-Accounting) · [Isolation](https://github.com/NodeSpy/conductor/wiki/Isolation) · [Agent Skill](https://github.com/NodeSpy/conductor/wiki/Agent-Skill)
+- **Multi-agent teams** (planner / workers / critic), scoped **memory** that carries
+  context across runs, and an **outcome-learning** loop. — [Teams](https://github.com/NodeSpy/conductor/wiki/Teams) · [Memory](https://github.com/NodeSpy/conductor/wiki/Memory) · [Outcomes](https://github.com/NodeSpy/conductor/wiki/Outcomes)
+
+It also complements the tools you already run: another orchestrator (n8n and the
+like) can call conductor's authenticated `/invoke` API for the agent work it does —
+[Callable Service](https://github.com/NodeSpy/conductor/wiki/Callable-Service).
 
 ## What it can do
 
