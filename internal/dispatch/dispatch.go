@@ -130,9 +130,33 @@ type Dispatcher struct {
 	// fresh worktree. Opt-in; set from top-level config.
 	AdoptOpenWorkspaces bool
 
+	// backendImpl is the paseo-daemon Backend this Dispatcher drives. nil (the
+	// default, and every existing construction path) uses cliBackend — the
+	// CLI-shelling implementation that is behavior-identical to the
+	// pre-Backend-interface Dispatcher. Set to an rpcBackend to run paseo
+	// through a conductor-paseo plugin instead. Use SetBackend to configure it;
+	// the field stays unexported so every call site goes through backend(),
+	// which supplies the cliBackend default.
+	backendImpl Backend
+
 	mu        sync.Mutex
 	repoDirs  map[string]string // repo -> resolved checkout cwd (memoized)
 	scratchWS string            // memoized scratch workspace id
+}
+
+// SetBackend configures the Backend this Dispatcher drives paseo through. nil
+// (or never calling SetBackend) keeps the default cliBackend — the bundled,
+// CLI-shelling path. Not safe to call concurrently with dispatch in progress.
+func (d *Dispatcher) SetBackend(b Backend) { d.backendImpl = b }
+
+// backend returns the configured Backend, defaulting to cliBackend (the
+// CLI-shelling implementation wrapping this Dispatcher's own PaseoBin/Remote/
+// Retry/Secrets config) when none was set.
+func (d *Dispatcher) backend() Backend {
+	if d.backendImpl != nil {
+		return d.backendImpl
+	}
+	return &cliBackend{d: d}
 }
 
 // redactText scrubs tracked secret values from stderr-derived detail text.
@@ -166,7 +190,7 @@ func (d *Dispatcher) WaitForAgent(ctx context.Context, id string, timeout time.D
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	_ = d.paseoCmd(ctx, "wait", id).Run()
+	_ = d.backend().Wait(ctx, id)
 }
 
 // Send queues a follow-up prompt to an existing live agent (paseo's native
@@ -182,17 +206,14 @@ func (d *Dispatcher) Send(ctx context.Context, id, prompt string) error {
 // output — the same capture shape as `paseo run --json`. The supervise loop
 // (#36 §11) reads the agent's revised plan out of it.
 func (d *Dispatcher) SendCapture(ctx context.Context, id, prompt string) (string, error) {
-	cmd := d.paseoCmd(ctx, "send", id, prompt, "--json")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	res, err := d.backend().Send(ctx, SendOptions{ID: id, Prompt: prompt, JSON: true})
 	if err != nil {
-		if s := strings.TrimSpace(stderr.String()); s != "" {
+		if s := strings.TrimSpace(res.Stderr); s != "" {
 			return "", fmt.Errorf("%w: %s", err, d.redactText(truncate(s, 300)))
 		}
 		return "", err
 	}
-	return string(out), nil
+	return res.Output, nil
 }
 
 // Dispatch selects the backend for the action and runs it.
