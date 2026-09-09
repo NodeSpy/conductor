@@ -216,6 +216,7 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 			}
 		}
 		rw.rebindAgent(&base)
+		rw.rewriteAgentExtends(&base)
 		st.cfg.setAgent(rw.agentName(role), base)
 	}
 

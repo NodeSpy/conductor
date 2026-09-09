@@ -974,6 +974,22 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("parse merged config: %w", err)
 		}
 	}
+	// File-referencing `workflow:` forms (workflow:+import:, a bare file path) join
+	// the merged workflow set first — before packs add namespaced `review/flow`
+	// refs that would otherwise look like relative file paths.
+	if err := c.resolveWorkflowFiles(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	// Instantiate `packs:` into the effective config (namespace + bind + settings
+	// + disarmed triggers) from the already-vendored packs, BEFORE the trigger/
+	// extends/normalize passes — so a pack's own triggers (including list-form
+	// `on:` and `extends:`) and pack-local `extends:` on agents/workflows get the
+	// same treatment as the consumer's own. No-op without a `packs:` block, so
+	// existing configs are unaffected. Offline — the network fetch is
+	// `conductor init`.
+	if err := c.instantiatePacks(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
 	// Trigger `extends:` resolves + abstract bases are stripped BEFORE
 	// normalization, so a child can inherit a base's `on:` and bases (which may
 	// carry no `on:`) never reach the on:-required / manual-name checks.
@@ -985,21 +1001,9 @@ func Load(path string) (*Config, error) {
 	if err := c.NormalizeTriggers(); err != nil {
 		return nil, err
 	}
-	// File-referencing `workflow:` forms (workflow:+import:, a bare file path) join the
-	// merged workflow set before defaults/validation see it.
-	if err := c.resolveWorkflowFiles(filepath.Dir(path)); err != nil {
-		return nil, err
-	}
 	// `extends:` inheritance across map sections resolves before defaults fold
 	// (agent_guidance → policy) and before validation cross-checks references.
 	if err := c.resolveExtends(); err != nil {
-		return nil, err
-	}
-	// Instantiate `packs:` into the effective config (namespace + bind + settings
-	// + disarmed triggers) from the already-vendored packs, on top of the fully
-	// resolved consumer config. No-op without a `packs:` block, so existing
-	// configs are unaffected. Offline — the network fetch is `conductor init`.
-	if err := c.instantiatePacks(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	c.applyDefaults()

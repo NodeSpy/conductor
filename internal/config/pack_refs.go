@@ -123,6 +123,14 @@ func (rw *refRewriter) rebindAgent(p *AgentProfile) {
 	}
 }
 
+// rewriteAgentExtends namespaces a pack agent's pack-local `extends:` target so
+// inheritance resolves within the pack, not against a consumer global.
+func (rw *refRewriter) rewriteAgentExtends(p *AgentProfile) {
+	if p.Extends != "" {
+		p.Extends = rw.resolveAgentRef(p.Extends)
+	}
+}
+
 // deepOverride merges a pack OVERRIDE map onto a base map with replace
 // semantics: nested maps deep-merge, but scalars and LISTS are replaced (not
 // appended). This differs from mergeMaps (which appends lists) because a pack
@@ -147,6 +155,9 @@ func deepOverride(base, ov map[string]any) map[string]any {
 }
 
 func (rw *refRewriter) rewriteWorkflow(w *WorkflowDef) {
+	if w.Extends != "" {
+		w.Extends = rw.resolveWorkflowRef(w.Extends)
+	}
 	if w.Gate != nil {
 		rw.rewriteGate(w.Gate)
 	}
@@ -157,6 +168,15 @@ func (rw *refRewriter) rewriteWorkflow(w *WorkflowDef) {
 
 func (rw *refRewriter) rewriteTrigger(t *TriggerSpec) {
 	t.On = rw.rebindSource(t.On)
+	// A list-form `on:` decodes into OnSources (expanded later by
+	// NormalizeTriggers); rebind each source's connector too.
+	for i := range t.OnSources {
+		t.OnSources[i].Source = rw.rebindSource(t.OnSources[i].Source)
+	}
+	// A pack-local `extends:` target namespaces under the instance.
+	if t.Extends != "" {
+		t.Extends = rw.ns + "/" + t.Extends
+	}
 	if t.Gate != nil {
 		rw.rewriteGate(t.Gate)
 	}
