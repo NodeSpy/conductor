@@ -101,10 +101,12 @@ func (r *Reaper) Run(ctx context.Context) {
 }
 
 func (r *Reaper) reap(ctx context.Context) {
-	// Filter on archive=1 only. `paseo ls` treats repeated --label as LAST-WINS
-	// (not AND), so a second --label would just override the first — and archive=1
-	// is set exclusively by the conductor, and only for archive_when_done agents,
-	// so it already implies conductor=1 and is exactly the reap set. Interactive
+	// Filter on archive=1 only — one label, so this renders the single
+	// `--label archive=1` it always did. `paseo ls` treats repeated --label as
+	// LAST-WINS (not AND), so a second one would just override the first — and
+	// archive=1 is set exclusively by the conductor, and only for
+	// archive_when_done agents, so it already implies conductor=1 and is exactly
+	// the reap set. Interactive
 	// hand-off agents shouldn't carry this label — but that's protection by absence;
 	// the authoritative guard is the engine-registered Held set, checked per agent
 	// below, so a hand-off survives even if it somehow lands in this list.
