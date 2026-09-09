@@ -82,6 +82,12 @@ agents:
   # (omit a role entirely to keep the bundled default)
 ```
 
+Override uses the same deep-merge as `imports:` (`mergeMaps`): nested maps merge,
+scalars win child-side, and **list fields append** (an override of a bundled
+agent's `skill.verbs` *adds* to the bundle, it does not replace). To narrow a
+bundled list — e.g. remove a verb — **bind** the role to a global of your own
+instead of overriding it.
+
 ## `requires:` — the interface
 
 A pack manifest declares the resources it needs and, for roles, the capabilities
