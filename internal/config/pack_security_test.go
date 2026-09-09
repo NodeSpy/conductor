@@ -245,3 +245,70 @@ agents:
 		t.Fatalf("agent memory opt-in should survive instantiation, got %+v", cfg.Agents["ok/a"].Memory)
 	}
 }
+
+// The pack_trust allowlist gates remote sources (glob match), exempts local
+// sources, and is bypassable with the explicit unlisted override.
+func TestPackTrustAllowlist(t *testing.T) {
+	// glob matching unit cases.
+	tr := &PackTrustConfig{Allow: []string{"github.com/your-org/*", "github.com/acme/packs*"}}
+	allow := []string{
+		"github.com/your-org/kit//review@v1",
+		"git::github.com/your-org/anything",
+		"github.com/acme/packs//x",
+		"./local/path",       // local always allowed
+		"git::file:///tmp/r", // local file transport not in the remote set
+	}
+	for _, s := range allow {
+		if !tr.SourceAllowed(s) {
+			t.Errorf("SourceAllowed(%q) should be true", s)
+		}
+	}
+	deny := []string{
+		"github.com/evil/kit",
+		"https://gitlab.com/x/y",
+		"git@github.com:someone/else",
+	}
+	for _, s := range deny {
+		if tr.SourceAllowed(s) {
+			t.Errorf("SourceAllowed(%q) should be false", s)
+		}
+	}
+	// nil policy allows everything.
+	var none *PackTrustConfig
+	if !none.SourceAllowed("github.com/anyone/x") {
+		t.Fatal("a nil trust policy must allow all sources")
+	}
+
+	// End-to-end: a remote dependency source outside the allowlist is refused at
+	// resolve, and the unlisted override bypasses it.
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/kit", `
+pack:
+  name: kit
+  version: 1.0.0
+  requires:
+    conductor: ">=0.1"
+    packs:
+      dep: { source: github.com/evil/dep }
+workflows:
+  flow: { steps: [ { id: s, run: js, code: "return {}" } ] }
+`)
+	body := `
+connectors: { gh: { type: github } }
+pack_trust:
+  allow: [github.com/trusted/*]
+packs:
+  kit:
+    source: ./src/kit
+`
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The local top-level source is exempt, but the remote dep is gated -> error
+	// (the fetch of the evil dep is refused before it happens).
+	_, err := ResolvePacks(path)
+	if err == nil || !strings.Contains(err.Error(), "pack_trust.allow") {
+		t.Fatalf("an untrusted remote dependency source should be refused, got: %v", err)
+	}
+}

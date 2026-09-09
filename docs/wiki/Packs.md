@@ -178,6 +178,24 @@ for the reference. The manifest carries identity/discovery/compat metadata
 (`pack:`), typed `settings:` + `presets:`, the public `exports:` surface, and the
 bundled behavior. Run `conductor pack lint` before publishing.
 
+## Trusted sources
+
+An optional operator-level allowlist gates **where** packs may come from — the
+trust surface the lockfile can't provide (the lockfile proves *unchanged*, not
+*trusted*):
+
+```yaml
+pack_trust:
+  allow:
+    - github.com/your-org/*
+    - github.com/acme/conductor-packs*
+```
+
+With `pack_trust:` set, `conductor init` refuses any **remote** pack source — at
+any depth, including a dependency's — that matches no `allow:` glob (`*` matches
+any run of characters). Local sources (your own disk) are exempt. Override once
+with `conductor init --allow-unlisted`.
+
 ## Security model
 
 - Packs ship **no connectors and no secrets** — bind-only, enforced at install.
@@ -195,9 +213,9 @@ The following are **not yet** implemented and are called out honestly:
 
 - **`conductor add` / `remove` / `update --packs`** — the config-mutating install
   helpers. Use the `packs:` block + `conductor init` directly for now.
-- **Trust/provenance** — the lockfile digest is verified at load (drift warns),
-  but a source allowlist and signature verification (cosign/attestation) are not
-  yet implemented.
+- **Signature verification** (cosign / build attestation, §21 Phase B) is not yet
+  implemented. The source allowlist (`pack_trust:`, below) and lockfile digest
+  verification (drift warns at load) are.
 - **Ref-rewriting** covers agent/workflow/check refs, connector prefixes in
   `uses`/`on`/hooks (scalar and list-form), the `store:` selector, team roles,
   `skill.verbs`, `skill.allow_secrets`, `session.end_on`, and pack-local

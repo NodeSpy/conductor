@@ -215,10 +215,20 @@ func safeSubdir(sub string) bool {
 // ResolvePacks fetches every pack declared in the config's `packs:` block into
 // the vendor dir, recursing through pack dependencies, and writes the sha-pinned
 // lockfile. This is the network step (`conductor init`); everything else is
-// offline. Returns the lockfile and any warnings.
+// offline. It enforces the `pack_trust:` source allowlist. Returns the lockfile.
 func ResolvePacks(configPath string) (*Lockfile, error) {
+	return resolvePacks(configPath, false)
+}
+
+// ResolvePacksAllowingUnlisted is ResolvePacks with the `pack_trust:` allowlist
+// bypassed — the operator's explicit `conductor init --allow-unlisted` override.
+func ResolvePacksAllowingUnlisted(configPath string) (*Lockfile, error) {
+	return resolvePacks(configPath, true)
+}
+
+func resolvePacks(configPath string, allowUnlisted bool) (*Lockfile, error) {
 	dir := filepath.Dir(configPath)
-	packs, err := loadPacksBlock(configPath)
+	packs, trust, err := loadPacksBlock(configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +239,7 @@ func ResolvePacks(configPath string) (*Lockfile, error) {
 	if err := os.MkdirAll(vendor, 0o755); err != nil {
 		return nil, err
 	}
-	r := &resolver{configDir: dir, lock: &Lockfile{Version: 1}}
+	r := &resolver{configDir: dir, lock: &Lockfile{Version: 1}, trust: trust, allowUnlisted: allowUnlisted}
 	for _, name := range sortedPackKeys(packs) {
 		if !validPackAlias(name) {
 			return nil, fmt.Errorf("pack instance name %q is invalid (letters, digits, '-', '_' only)", name)
@@ -246,9 +256,11 @@ func ResolvePacks(configPath string) (*Lockfile, error) {
 }
 
 type resolver struct {
-	configDir string
-	lock      *Lockfile
-	total     int
+	configDir     string
+	lock          *Lockfile
+	total         int
+	trust         *PackTrustConfig
+	allowUnlisted bool
 }
 
 func (r *resolver) resolve(chain, nameChain []string, inst PackInstance, destDir string) error {
@@ -263,6 +275,10 @@ func (r *resolver) resolve(chain, nameChain []string, inst PackInstance, destDir
 	spec, err := parseSource(inst.Source, r.configDir)
 	if err != nil {
 		return fmt.Errorf("pack %q: %w", ns, err)
+	}
+	// Provenance allowlist (§21): a remote source at any depth must be trusted.
+	if !r.allowUnlisted && !r.trust.SourceAllowed(inst.Source) {
+		return fmt.Errorf("pack %q: source %q is not in pack_trust.allow — add it to the allowlist or re-run with `conductor init --allow-unlisted`", ns, inst.Source)
 	}
 	// A DEPENDENCY source (depth > 0) comes from a pack author, not the operator.
 	// A local dependency source must stay INSIDE the config dir tree, so a hostile
@@ -552,39 +568,40 @@ func ReadLockfile(configDir string) (*Lockfile, error) {
 	return &lock, nil
 }
 
-// loadPacksBlock extracts just the `packs:` block from a config (with imports
-// merged), without the full strict decode or pack instantiation — so it can run
-// before packs are vendored.
-func loadPacksBlock(path string) (map[string]PackInstance, error) {
+// loadPacksBlock extracts the `packs:` and `pack_trust:` blocks from a config
+// (with imports merged), without the full strict decode or pack instantiation —
+// so it can run before packs are vendored.
+func loadPacksBlock(path string) (map[string]PackInstance, *PackTrustConfig, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
+		return nil, nil, fmt.Errorf("read config: %w", err)
 	}
 	expanded, err := expandEnv(path, raw)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var probe map[string]any
 	if err := yaml.Unmarshal(expanded, &probe); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
+		return nil, nil, fmt.Errorf("parse config: %w", err)
 	}
 	var doc []byte
 	if hasAnyImports(probe) {
 		merged, err := loadMerged(path, map[string]bool{})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if doc, err = yaml.Marshal(merged); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	} else {
 		doc = expanded
 	}
 	var c struct {
-		Packs map[string]PackInstance `yaml:"packs"`
+		Packs     map[string]PackInstance `yaml:"packs"`
+		PackTrust *PackTrustConfig        `yaml:"pack_trust"`
 	}
 	if err := yaml.Unmarshal(doc, &c); err != nil {
-		return nil, fmt.Errorf("parse packs: block: %w", err)
+		return nil, nil, fmt.Errorf("parse packs: block: %w", err)
 	}
-	return c.Packs, nil
+	return c.Packs, c.PackTrust, nil
 }

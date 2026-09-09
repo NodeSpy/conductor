@@ -832,3 +832,13 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #   #   triggers:
 #   #     - on: gh.pull_request
 #   #       steps: [ { workflow: review/review-flow } ]
+
+# pack_trust: — OPTIONAL provenance allowlist for pack sources (#53 §21). With
+# this set, `conductor init` refuses any REMOTE pack source (at any depth) that
+# matches no allow: glob; local sources are exempt; override with
+# `conductor init --allow-unlisted`. Absent → no restriction.
+#
+# pack_trust:
+#   allow:
+#     - github.com/your-org/*
+#     - github.com/acme/conductor-packs*

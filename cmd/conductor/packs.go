@@ -14,10 +14,20 @@ import (
 // plan-style preview of what the packs add. This is the only network step; the
 // daemon then loads offline from the vendored packs + lockfile.
 func cmdInit(args []string) error {
-	path, _ := configPath(args)
+	path, rest := configPath(args)
+	allowUnlisted := false
+	for _, a := range rest {
+		if a == "--allow-unlisted" {
+			allowUnlisted = true
+		}
+	}
 	loadEnvFile(filepath.Join(filepath.Dir(path), "conductor.env"))
 
-	lock, err := config.ResolvePacks(path)
+	resolve := config.ResolvePacks
+	if allowUnlisted {
+		resolve = config.ResolvePacksAllowingUnlisted
+	}
+	lock, err := resolve(path)
 	if err != nil {
 		return err
 	}

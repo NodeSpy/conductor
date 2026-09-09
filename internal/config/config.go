@@ -148,6 +148,13 @@ type Config struct {
 	// pack.go / pack_instantiate.go / pack_resolve.go.
 	Packs map[string]PackInstance `yaml:"packs,omitempty"`
 
+	// PackTrust is the OPTIONAL operator-level provenance allowlist (issue #53
+	// §21 Phase A): when set, `conductor init` refuses any REMOTE pack source —
+	// at any depth, including a dependency's — that does not match one of its
+	// `allow:` source globs, unless the operator passes `--allow-unlisted`. Absent
+	// → no restriction. See pack_trust.go.
+	PackTrust *PackTrustConfig `yaml:"pack_trust,omitempty"`
+
 	// packWarnings holds non-fatal notices raised while instantiating packs
 	// (deprecations, armed-but-unscoped triggers). Not serialized. See PackWarnings.
 	packWarnings []string `yaml:"-"`
