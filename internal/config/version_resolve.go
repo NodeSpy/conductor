@@ -2,6 +2,17 @@ package config
 
 import "strings"
 
+// BestMatch and SatisfiesConstraint are the exported entry points to the shared
+// version-constraint resolver, for other packages (e.g. plugin remote fetch).
+func BestMatch(tags []string, prefix, constraint string) (string, bool) {
+	return bestMatch(tags, prefix, constraint)
+}
+
+// SatisfiesConstraint reports whether version satisfies an AND-ed constraint.
+func SatisfiesConstraint(version, constraint string) bool {
+	return satisfiesConstraint(version, constraint)
+}
+
 // Shared version-constraint resolution for sourced dependencies (packs and
 // plugins). A `version:` constraint is Terraform/gems style — comma- or
 // space-separated parts, AND-ed — and drives which git tag a dependency
