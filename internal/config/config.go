@@ -147,6 +147,10 @@ type Config struct {
 	// + bind + settings + disarmed triggers). Absent → nothing changes. See
 	// pack.go / pack_instantiate.go / pack_resolve.go.
 	Packs map[string]PackInstance `yaml:"packs,omitempty"`
+
+	// packWarnings holds non-fatal notices raised while instantiating packs
+	// (deprecations, armed-but-unscoped triggers). Not serialized. See PackWarnings.
+	packWarnings []string `yaml:"-"`
 }
 
 // Update configures periodic self-update checks.
@@ -989,6 +993,13 @@ func Load(path string) (*Config, error) {
 	// `extends:` inheritance across map sections resolves before defaults fold
 	// (agent_guidance → policy) and before validation cross-checks references.
 	if err := c.resolveExtends(); err != nil {
+		return nil, err
+	}
+	// Instantiate `packs:` into the effective config (namespace + bind + settings
+	// + disarmed triggers) from the already-vendored packs, on top of the fully
+	// resolved consumer config. No-op without a `packs:` block, so existing
+	// configs are unaffected. Offline — the network fetch is `conductor init`.
+	if err := c.instantiatePacks(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	c.applyDefaults()
