@@ -5,18 +5,69 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
 )
 
-// cliBackend implements Backend by shelling to the `paseo` CLI, reusing the
-// wrapped Dispatcher's existing exec seam (paseoCmd) and its PaseoBin/Remote/
-// Retry/Secrets configuration. It is the DEFAULT Backend — extracting this
+// paseoExec is the only thing cliBackend needs to reach the paseo CLI: a
+// builder for one invocation, carrying its owner's PaseoBin/Remote config.
+// Both *Dispatcher and *Reaper provide it (their paseoCmd methods), so the
+// same CLI backend serves the dispatcher's launch/query path and the reaper's
+// cull path without either depending on the other.
+type paseoExec interface {
+	paseoCmd(ctx context.Context, args ...string) *exec.Cmd
+}
+
+// cliBackend implements Backend by shelling to the `paseo` CLI through its
+// owner's exec seam (paseoExec). It is the DEFAULT Backend — extracting this
 // interface changed no behavior on the default path; every method body here
-// is the CLI-shelling half of what used to be a Dispatcher method directly.
+// is the CLI-shelling half of what used to be a Dispatcher (or Reaper) method
+// directly.
 type cliBackend struct {
-	d *Dispatcher
+	exec paseoExec
+
+	// RunAgent-only policy, supplied by the Dispatcher — the only owner that
+	// launches agents. A reaper-built backend leaves these zero: it never calls
+	// RunAgent, and the zero values mean "no retries, no redaction", not
+	// anything unsafe.
+	paseoBin     string
+	remote       bool
+	retryMax     int
+	retryBackoff time.Duration
+	redact       func(string) string
+}
+
+// newDispatcherCLIBackend builds the CLI backend for a Dispatcher: its exec
+// seam plus the `paseo run` retry/redaction policy. Built fresh per backend()
+// call, so it always reflects the Dispatcher's current configuration.
+func newDispatcherCLIBackend(d *Dispatcher) *cliBackend {
+	return &cliBackend{
+		exec:         d,
+		paseoBin:     d.PaseoBin,
+		remote:       d.remote(),
+		retryMax:     d.RetryMax,
+		retryBackoff: d.RetryBackoff,
+		redact:       d.redactText,
+	}
+}
+
+// newReaperCLIBackend builds the CLI backend for a Reaper: the same paseo
+// binary and remote host its paseoCmd already used, so the reaper's argv is
+// byte-identical to the pre-Backend path. No run policy — the reaper only
+// lists, inspects and archives.
+func newReaperCLIBackend(r *Reaper) *cliBackend {
+	return &cliBackend{exec: r, paseoBin: r.PaseoBin, remote: r.Remote != nil}
+}
+
+// redactText scrubs tracked secret values from stderr-derived detail text,
+// via the owner's redactor when it has one.
+func (b *cliBackend) redactText(s string) string {
+	if b.redact == nil {
+		return s
+	}
+	return b.redact(s)
 }
 
 // RunAgent runs `paseo run <opts.Args...>` with bounded retries on a
@@ -24,12 +75,11 @@ type cliBackend struct {
 // between attempts. Mirrors the pre-extraction retry loop in Dispatcher.paseo
 // exactly.
 func (b *cliBackend) RunAgent(ctx context.Context, opts RunAgentOptions) (RunAgentResult, error) {
-	d := b.d
 	var out []byte
 	var err error
 	var detail string
 	for attempt := 0; ; attempt++ {
-		cmd := d.paseoCmd(ctx, opts.Args...)
+		cmd := b.exec.paseoCmd(ctx, opts.Args...)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		out, err = cmd.Output()
@@ -37,20 +87,20 @@ func (b *cliBackend) RunAgent(ctx context.Context, opts RunAgentOptions) (RunAge
 			return RunAgentResult{Output: string(out), AgentID: parseAgentID(out)}, nil
 		}
 		detail = paseoErrDetail(out, stderr.Bytes())
-		if attempt >= d.RetryMax || !isTransientPaseoErr(detail) {
+		if attempt >= b.retryMax || !isTransientPaseoErr(detail) {
 			break
 		}
-		if !d.remote() { // the lock file lives on the remote box; leave it to paseo
-			clearStaleGitLock(ctx, d.PaseoBin, opts.Cwd)
+		if !b.remote { // the lock file lives on the remote box; leave it to paseo
+			clearStaleGitLock(ctx, b.paseoBin, opts.Cwd)
 		}
 		select {
 		case <-ctx.Done():
 			return RunAgentResult{Output: string(out)}, ctx.Err()
-		case <-time.After(d.RetryBackoff):
+		case <-time.After(b.retryBackoff):
 		}
 	}
 	if detail != "" {
-		return RunAgentResult{Output: string(out)}, fmt.Errorf("paseo run: %w: %s", err, d.redactText(detail))
+		return RunAgentResult{Output: string(out)}, fmt.Errorf("paseo run: %w: %s", err, b.redactText(detail))
 	}
 	return RunAgentResult{Output: string(out)}, fmt.Errorf("paseo run: %w", err)
 }
@@ -61,7 +111,7 @@ func (b *cliBackend) RunAgent(ctx context.Context, opts RunAgentOptions) (RunAge
 func (b *cliBackend) ListAgents(ctx context.Context, labels map[string]string) ([]AgentInfo, error) {
 	args := []string{"ls", "--json"}
 	args = append(args, sortedLabelArgs(labels)...)
-	out, err := b.d.paseoCmd(ctx, args...).Output()
+	out, err := b.exec.paseoCmd(ctx, args...).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +141,7 @@ func sortedLabelArgs(labels map[string]string) []string {
 
 // Inspect runs `paseo inspect <id> --json`.
 func (b *cliBackend) Inspect(ctx context.Context, id string) (AgentDetail, error) {
-	out, err := b.d.paseoCmd(ctx, "inspect", id, "--json").Output()
+	out, err := b.exec.paseoCmd(ctx, "inspect", id, "--json").Output()
 	if err != nil {
 		return AgentDetail{}, err
 	}
@@ -104,12 +154,12 @@ func (b *cliBackend) Inspect(ctx context.Context, id string) (AgentDetail, error
 
 // ArchiveAgent runs `paseo archive <id>`.
 func (b *cliBackend) ArchiveAgent(ctx context.Context, id string) error {
-	return b.d.paseoCmd(ctx, "archive", id).Run()
+	return b.exec.paseoCmd(ctx, "archive", id).Run()
 }
 
 // ArchiveWorkspace runs `paseo workspace archive <id>`.
 func (b *cliBackend) ArchiveWorkspace(ctx context.Context, id string) error {
-	return b.d.paseoCmd(ctx, "workspace", "archive", id).Run()
+	return b.exec.paseoCmd(ctx, "workspace", "archive", id).Run()
 }
 
 // CreateWorktree runs `paseo workspace create` for an isolated PR/branch
@@ -129,7 +179,7 @@ func (b *cliBackend) CreateWorktree(ctx context.Context, opts CreateWorktreeOpti
 	default:
 		return CreateWorktreeResult{}, fmt.Errorf("createWorktree: unexpected strategy %q", opts.Strategy)
 	}
-	cmd := b.d.paseoCmd(ctx, args...)
+	cmd := b.exec.paseoCmd(ctx, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -154,7 +204,7 @@ func (b *cliBackend) CreateWorktree(ctx context.Context, opts CreateWorktreeOpti
 // CreateWorkspace runs `paseo workspace create` for a plain (non-worktree)
 // workspace, e.g. the shared scratch workspace.
 func (b *cliBackend) CreateWorkspace(ctx context.Context, opts CreateWorkspaceOptions) (CreateWorkspaceResult, error) {
-	out, err := b.d.paseoCmd(ctx, "workspace", "create",
+	out, err := b.exec.paseoCmd(ctx, "workspace", "create",
 		"--isolation", opts.Isolation, "--path", opts.Path, "--title", opts.Title, "--json").Output()
 	if err != nil {
 		return CreateWorkspaceResult{}, fmt.Errorf("paseo workspace create: %w", err)
@@ -174,7 +224,7 @@ func (b *cliBackend) CreateWorkspace(ctx context.Context, opts CreateWorkspaceOp
 
 // ListWorkspaces runs `paseo workspace ls --json`.
 func (b *cliBackend) ListWorkspaces(ctx context.Context) ([]WorkspaceInfo, error) {
-	out, err := b.d.paseoCmd(ctx, "workspace", "ls", "--json").Output()
+	out, err := b.exec.paseoCmd(ctx, "workspace", "ls", "--json").Output()
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +237,7 @@ func (b *cliBackend) ListWorkspaces(ctx context.Context) ([]WorkspaceInfo, error
 
 // Clone runs `paseo clone <repo> --dir <dir> --protocol <protocol> --json`.
 func (b *cliBackend) Clone(ctx context.Context, opts CloneOptions) error {
-	out, err := b.d.paseoCmd(ctx, "clone", opts.Repo, "--dir", opts.Dir, "--protocol", opts.Protocol, "--json").CombinedOutput()
+	out, err := b.exec.paseoCmd(ctx, "clone", opts.Repo, "--dir", opts.Dir, "--protocol", opts.Protocol, "--json").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("paseo clone %s: %w: %s", opts.Repo, err, strings.TrimSpace(string(out)))
 	}
@@ -202,7 +252,7 @@ func (b *cliBackend) Send(ctx context.Context, opts SendOptions) (SendResult, er
 	if opts.JSON {
 		args = append(args, "--json")
 	}
-	cmd := b.d.paseoCmd(ctx, args...)
+	cmd := b.exec.paseoCmd(ctx, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -212,5 +262,5 @@ func (b *cliBackend) Send(ctx context.Context, opts SendOptions) (SendResult, er
 // Wait runs `paseo wait <id>`, blocking until the agent goes idle (bounded by
 // ctx, e.g. a caller-applied timeout).
 func (b *cliBackend) Wait(ctx context.Context, id string) error {
-	return b.d.paseoCmd(ctx, "wait", id).Run()
+	return b.exec.paseoCmd(ctx, "wait", id).Run()
 }

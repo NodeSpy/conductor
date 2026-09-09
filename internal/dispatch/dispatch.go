@@ -156,7 +156,7 @@ func (d *Dispatcher) backend() Backend {
 	if d.backendImpl != nil {
 		return d.backendImpl
 	}
-	return &cliBackend{d: d}
+	return newDispatcherCLIBackend(d)
 }
 
 // redactText scrubs tracked secret values from stderr-derived detail text.

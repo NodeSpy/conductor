@@ -1,6 +1,9 @@
 package dispatch
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Backend is the paseo-daemon operations the Dispatcher performs: launching
 // and querying agents, and creating/archiving the workspaces (including
@@ -76,12 +79,19 @@ type AgentInfo struct {
 	Status string `json:"status"`
 }
 
-// AgentDetail is the subset of `paseo inspect --json` the dispatcher needs.
+// AgentDetail is the subset of `paseo inspect --json` the dispatcher and the
+// reaper need.
 type AgentDetail struct {
 	Cwd       string `json:"Cwd"`
 	LastUsage string `json:"LastUsage"`
 	UpdatedAt string `json:"UpdatedAt"`
 	CreatedAt string `json:"CreatedAt"`
+
+	// PendingPermissions is the agent's outstanding permission prompts. The
+	// reaper only reads its length (a non-empty list means the agent is waiting
+	// on you, so it must not be culled), but the entries are carried verbatim
+	// rather than counted so a caller that wants the prompt itself can have it.
+	PendingPermissions []json.RawMessage `json:"PendingPermissions"`
 }
 
 // WorkspaceInfo is the subset of `paseo workspace ls --json` the dispatcher
