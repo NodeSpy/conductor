@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -249,7 +250,7 @@ func TestParseWorktreeWorkspaces(t *testing.T) {
 	  {"workspaceId":"wks_base","project":"a/w","isolation":"local","cwd":"/home/me/w"},
 	  {"workspaceId":"wks_nocwd","isolation":"worktree","cwd":""}
 	]`)
-	m := parseWorktreeWorkspaces(data)
+	m := worktreeWorkspaceMap(decodeWorkspaces(t, data))
 	if m["/wt/one"] != "wks_wt" {
 		t.Errorf("worktree should map: %v", m)
 	}
@@ -327,10 +328,21 @@ func TestNormCwdMatchesTildeAndAbsolute(t *testing.T) {
 	// `paseo workspace ls` gives absolute; `paseo ls` gives `~/…`. They must match.
 	abs := filepath.Join(home, ".paseo/worktrees/x/branch")
 	data := []byte(`[{"workspaceId":"wks_wt","isolation":"worktree","cwd":` + strconv.Quote(abs) + `}]`)
-	m := parseWorktreeWorkspaces(data)
+	m := worktreeWorkspaceMap(decodeWorkspaces(t, data))
 	if m[normCwd("~/.paseo/worktrees/x/branch")] != "wks_wt" {
 		t.Fatalf("tilde agent cwd must map to the absolute workspace: %v", m)
 	}
+}
+
+// decodeWorkspaces parses raw `paseo workspace ls --json` output the way the
+// Backend does, so these tests still cover the wire field names.
+func decodeWorkspaces(t *testing.T, data []byte) []WorkspaceInfo {
+	t.Helper()
+	var wl []WorkspaceInfo
+	if err := json.Unmarshal(data, &wl); err != nil {
+		t.Fatalf("workspace ls fixture: %v", err)
+	}
+	return wl
 }
 
 func TestLocalCommandArgv(t *testing.T) {

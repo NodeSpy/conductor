@@ -98,12 +98,17 @@ func (b *rpcBackend) Inspect(ctx context.Context, id string) (AgentDetail, error
 	if err != nil {
 		return AgentDetail{}, err
 	}
-	return AgentDetail{
+	det := AgentDetail{
 		Cwd:       rpcStr(out["cwd"]),
 		LastUsage: rpcStr(out["lastUsage"]),
 		UpdatedAt: rpcStr(out["updatedAt"]),
 		CreatedAt: rpcStr(out["createdAt"]),
-	}, nil
+	}
+	// A malformed pending-permissions payload must not fail the whole inspect:
+	// the reaper's other signals (hold marker, HoldSet) still apply, and an
+	// error here would read as "couldn't inspect" and skip the startup grace.
+	_ = decodeInto(out["pendingPermissions"], &det.PendingPermissions)
+	return det, nil
 }
 
 func (b *rpcBackend) ArchiveAgent(ctx context.Context, id string) error {
