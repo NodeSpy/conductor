@@ -25,25 +25,33 @@
 //     restart backoff that cannot crash-loop (manager.go).
 package plugin
 
-import "github.com/NodeSpy/conductor/internal/config"
+import (
+	"github.com/NodeSpy/conductor/internal/config"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
+)
+
+// The wire schema is defined once in the PUBLIC SDK (pkg/plugin) and aliased
+// here, so a plugin built against the SDK is byte-identical to what the daemon
+// expects — there is no second copy to drift. The daemon's own integration
+// tests drive an SDK-built reference plugin over the real transport to prove it.
 
 // ProtocolVersion is the plugin wire-protocol version the daemon speaks. A
 // plugin reports its own in Describe; the daemon refuses a plugin whose major
 // version it does not understand (graceful degradation, not a crash).
-const ProtocolVersion = 1
+const ProtocolVersion = sdk.ProtocolVersion
 
 // Wire method names.
 const (
-	MethodDescribe = "plugin.describe"
-	MethodInvoke   = "plugin.invoke"
+	MethodDescribe = sdk.MethodDescribe
+	MethodInvoke   = sdk.MethodInvoke
 )
 
 // Kind is what a plugin provides.
-type Kind string
+type Kind = sdk.Kind
 
 const (
-	KindConnector Kind = "connector"
-	KindRuntime   Kind = "runtime"
+	KindConnector = sdk.KindConnector
+	KindRuntime   = sdk.KindRuntime
 )
 
 // Spec is a resolved plugin ready to run: config.PluginRef with its source
@@ -72,70 +80,15 @@ func (s Spec) Ref() string {
 	return s.Name + "@" + s.Version
 }
 
-// --- wire schema (maps 1:1 to connector.TypeDecl on the connector side) ---
+// --- wire schema (aliased from pkg/plugin; maps 1:1 to connector.TypeDecl) ---
 
-// Field mirrors connector.Field on the wire.
-type Field struct {
-	Type     string   `json:"type"`
-	Required bool     `json:"required,omitempty"`
-	Enum     []string `json:"enum,omitempty"`
-	Desc     string   `json:"desc,omitempty"`
-}
-
-// Schema is a set of named fields.
-type Schema map[string]Field
-
-// Verb is one action verb the plugin exposes.
-type Verb struct {
-	Name    string `json:"name"`
-	Desc    string `json:"desc,omitempty"`
-	Options Schema `json:"options,omitempty"`
-	Outputs Schema `json:"outputs,omitempty"`
-	Ask     bool   `json:"ask,omitempty"`
-}
-
-// Event is one source event the plugin exposes (declared; live streaming of
-// events — StartSource — is a documented follow-up, see docs/wiki/Plugins.md).
-type Event struct {
-	Name    string `json:"name"`
-	Desc    string `json:"desc,omitempty"`
-	Filters Schema `json:"filters,omitempty"`
-	Context Schema `json:"context,omitempty"`
-	Options Schema `json:"options,omitempty"`
-	Dynamic bool   `json:"dynamic,omitempty"`
-}
-
-// Capabilities is the plugin's DECLARED privilege manifest (§8.3): what it says
-// it needs. The operator GRANTS these via the isolation: block; `plugin show`
-// prints declared-vs-granted so a mismatch is visible before install.
-type Capabilities struct {
-	Egress []string `json:"egress,omitempty"` // network hosts the plugin says it needs
-	FS     []string `json:"fs,omitempty"`     // filesystem paths it says it needs
-	Spawns bool     `json:"spawns,omitempty"` // whether it spawns child processes
-}
-
-// Decl is a plugin's full self-description, returned by Describe.
-type Decl struct {
-	ProtocolVersion int          `json:"protocol_version"`
-	Type            string       `json:"type"`
-	Desc            string       `json:"desc,omitempty"`
-	Connection      Schema       `json:"connection,omitempty"`
-	Verbs           []Verb       `json:"verbs,omitempty"`
-	Events          []Event      `json:"events,omitempty"`
-	Capabilities    Capabilities `json:"capabilities,omitempty"`
-}
-
-// InvokeRequest is the daemon→plugin verb call. Connection carries ONLY the
-// calling instance's resolved credentials (least privilege, own-type-only);
-// the plugin holds no cross-instance state by protocol design.
-type InvokeRequest struct {
-	Instance   string         `json:"instance"`
-	Verb       string         `json:"verb"`
-	Options    map[string]any `json:"options,omitempty"`
-	Connection map[string]any `json:"connection,omitempty"`
-}
-
-// InvokeResult is the plugin→daemon verb response.
-type InvokeResult struct {
-	Outputs map[string]any `json:"outputs,omitempty"`
-}
+type (
+	Field         = sdk.Field
+	Schema        = sdk.Schema
+	Verb          = sdk.Verb
+	Event         = sdk.Event
+	Capabilities  = sdk.Capabilities
+	Decl          = sdk.Decl
+	InvokeRequest = sdk.InvokeRequest
+	InvokeResult  = sdk.InvokeResult
+)
