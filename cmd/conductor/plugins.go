@@ -148,9 +148,14 @@ func cmdPluginShow(args []string) error {
 	}
 	name := rest[0]
 
-	// External plugin?
+	// External plugin, by config key or by the type/runtime it provides?
 	if ref, ok := cfg.Plugins[name]; ok {
 		return showExternalPlugin(cfg, name, ref)
+	}
+	for key, ref := range cfg.Plugins {
+		if ref.ProvidesName(key) == name {
+			return showExternalPlugin(cfg, key, ref)
+		}
 	}
 	// Bundled connector type?
 	if decl, ok := connector.TypeDeclFor(name); ok {
