@@ -87,6 +87,21 @@ packs:
 	if !strings.Contains(wf.Steps[0].Prompt, "gpt-5-pro") {
 		t.Fatalf("preset settings substitution failed, prompt=%q", wf.Steps[0].Prompt)
 	}
+	// The bundled handoff agent's skill.verbs connector prefix is rebound
+	// github.* -> gh.* (the consumer's connector name).
+	if h, ok := cfg.Agents["review/handoff"]; !ok || h.Skill == nil {
+		t.Fatalf("expected review/handoff with a skill block")
+	} else {
+		for _, v := range h.Skill.Verbs {
+			if strings.HasPrefix(v, "github.") {
+				t.Fatalf("skill.verbs connector prefix not rebound: %q", v)
+			}
+		}
+		if !contains(h.Skill.Verbs, "gh.submit_review") {
+			t.Fatalf("expected gh.submit_review in handoff skill.verbs, got %v", h.Skill.Verbs)
+		}
+	}
+
 	// Trigger armed + scoped.
 	tr := findTrigger(cfg, "review/on_review_request")
 	if tr == nil || tr.Enabled == nil || !*tr.Enabled {

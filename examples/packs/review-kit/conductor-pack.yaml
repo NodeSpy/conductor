@@ -86,6 +86,9 @@ agents:
     workspace: local
     skill:
       verbs: [github.submit_review, github.comment]
+      # A write verb posts as a distinguished bot identity, never as the
+      # operator. `app` posts as the bound GitHub App.
+      identity: app
       allow_secrets: [review_token]
 
 workflows:
@@ -128,4 +131,9 @@ triggers:
         workflow: review-flow
         with: { repo: "{{.repo}}", pr: "{{.number}}" }
     hooks:
-      - { at: start, uses: github.react, options: { emoji: eyes } }
+      - at: start
+        uses: github.comment
+        options:
+          repo: "{{.repo}}"
+          number: "{{.number}}"
+          body: "review-kit: reviewing {{.repo}}#{{.number}}…"

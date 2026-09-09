@@ -75,7 +75,7 @@ triggers:
       - id: run
         workflow: review-flow
     hooks:
-      - { at: done, uses: github.react, options: { emoji: eyes } }
+      - { at: done, uses: github.comment, options: { text: "done" } }
 `
 
 // baseConfigWithReview writes a consumer config that instantiates review-kit
@@ -208,7 +208,7 @@ func TestPackDisarmedTriggerArming(t *testing.T) {
 	if tr.On != "gh.review_requested" {
 		t.Fatalf("trigger on: connector rebind failed, got %q", tr.On)
 	}
-	if tr.Hooks[0].Uses != "gh.react" {
+	if tr.Hooks[0].Uses != "gh.comment" {
 		t.Fatalf("hook connector rebind failed, got %q", tr.Hooks[0].Uses)
 	}
 	// The workflow step ref inside the trigger is namespaced.

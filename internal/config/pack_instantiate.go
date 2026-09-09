@@ -301,8 +301,16 @@ func (st *packInstantiation) validateRequires(ns string, man *PackManifest, inst
 			return fmt.Errorf("pack %q: role %q bound to agent %q which is not defined under agents:", ns, role, b.Bind)
 		}
 		for _, want := range rr.Skill {
-			if !agentGrantsSkill(prof, want) {
-				st.warnf("pack %q: role %q is bound to agent %q, which does not grant skill %q the pack expects", ns, role, b.Bind, want)
+			// The requirement is written pack-side (github.submit_review); rebind
+			// its connector prefix to the consumer's before comparing to grants.
+			wantBound := want
+			if conn, verb, ok := strings.Cut(want, "."); ok {
+				if bound, ok := env.conn[conn]; ok {
+					wantBound = bound + "." + verb
+				}
+			}
+			if !agentGrantsSkill(prof, wantBound) {
+				st.warnf("pack %q: role %q is bound to agent %q, which does not grant skill %q the pack expects", ns, role, b.Bind, wantBound)
 			}
 		}
 	}

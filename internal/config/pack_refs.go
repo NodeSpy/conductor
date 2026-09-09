@@ -118,11 +118,15 @@ func (rw *refRewriter) rebindVerb(ref string) string {
 // rebindSource rewrites the connector of a trigger `on: conn.event` reference.
 func (rw *refRewriter) rebindSource(ref string) string { return rw.rebindVerb(ref) }
 
-// rebindAgent rewrites the environment references a pack agent profile carries
-// (secret allowlist, handoff — provider/model/runtime are left to the consumer
-// default). Agent-to-agent refs live on steps, not profiles.
+// rebindAgent rewrites the environment references a pack agent profile carries:
+// the secret allowlist and the connector prefix of every skill.verbs pattern
+// (provider/model/runtime are left to the consumer default). Agent-to-agent
+// refs live on steps, not profiles.
 func (rw *refRewriter) rebindAgent(p *AgentProfile) {
-	if p.Skill != nil && len(p.Skill.AllowSecrets) > 0 {
+	if p.Skill == nil {
+		return
+	}
+	if len(p.Skill.AllowSecrets) > 0 {
 		out := make([]string, len(p.Skill.AllowSecrets))
 		for i, s := range p.Skill.AllowSecrets {
 			if bound, ok := rw.env.secret[s]; ok {
@@ -132,6 +136,13 @@ func (rw *refRewriter) rebindAgent(p *AgentProfile) {
 			}
 		}
 		p.Skill.AllowSecrets = out
+	}
+	if len(p.Skill.Verbs) > 0 {
+		out := make([]string, len(p.Skill.Verbs))
+		for i, v := range p.Skill.Verbs {
+			out[i] = rw.rebindVerb(v) // rebinds the connector prefix of conn.verb / conn.*
+		}
+		p.Skill.Verbs = out
 	}
 }
 
