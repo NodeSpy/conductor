@@ -15,24 +15,10 @@ import (
 // credentials (webhook secrets, tokens), so forwarding os.Environ() wholesale
 // would hand every one of them to third-party code (§8.1). A plugin's
 // instance credential is delivered per-call over the RPC transport instead —
-// never in env, never in argv. Mirrors internal/code/gorun.go: spawnBaseEnv.
+// never in env, never in argv. Shared with the env-scrubbed ACP runtime path
+// via sandbox.MinimalEnv.
 func spawnBaseEnv() []string {
-	allow := map[string]bool{
-		"PATH": true, "HOME": true, "USER": true, "LOGNAME": true,
-		"SHELL": true, "TERM": true, "TZ": true, "LANG": true,
-		"TMPDIR": true, "TMP": true, "TEMP": true,
-	}
-	var out []string
-	for _, kv := range os.Environ() {
-		k, _, ok := strings.Cut(kv, "=")
-		if !ok {
-			continue
-		}
-		if allow[k] || strings.HasPrefix(k, "LC_") {
-			out = append(out, kv)
-		}
-	}
-	return out
+	return sandbox.MinimalEnv()
 }
 
 // EgressUnixFunc mints an OS-enforced egress proxy endpoint for an allowlist,

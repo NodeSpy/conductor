@@ -137,8 +137,9 @@ func pluginRuntimeControllers(cfg *config.Config) (map[string]config.ControllerC
 			Transport: "acp",
 			Command:   wrap,
 			Isolation: ref.Isolation,
+			ScrubEnv:  true, // untrusted third-party code: minimal env, no daemon secrets (#54 §8.1)
 		}
-		logf("plugin %s: registered runtime %q (acp, per-spawn re-verified) — SECURITY: runtime plugins inherit the daemon environment; run only fully-trusted runtime plugins", spec.Ref(), spec.Provides)
+		logf("plugin %s: registered runtime %q (acp, per-spawn re-verified, env-scrubbed)", spec.Ref(), spec.Provides)
 	}
 	return out, nil
 }

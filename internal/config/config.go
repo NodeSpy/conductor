@@ -566,6 +566,12 @@ type ControllerConfig struct {
 	// Isolation wraps this runtime's launches in the per-dispatch sandbox
 	// (#36 §15) — carried from the `runtimes:` form; see RuntimeConfig.
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// ScrubEnv makes an ACP launch inherit only a minimal env allowlist
+	// (sandbox.MinimalEnv) instead of the daemon's full os.Environ(), so the
+	// daemon's credential-bearing env is not handed to the child. Set for
+	// EXTERNAL runtime plugins (#54 §8.1) — untrusted third-party code. Not a
+	// user-facing config key (synthesized in cmd/conductor); never decoded.
+	ScrubEnv bool `yaml:"-"`
 }
 
 // EffectiveTransport returns the controller's transport, defaulting to acp for an
