@@ -160,6 +160,28 @@ func withinDir(root, target string) bool {
 	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..")
 }
 
+// depAliases returns the sorted union of a pack's DECLARED dependencies
+// (requires.packs) and any the consumer instantiated in the block — so a
+// declared dependency is auto-pulled even when the consumer adds no override.
+func depAliases(required map[string]PackDepReq, provided map[string]PackInstance) []string {
+	seen := map[string]bool{}
+	var out []string
+	for a := range required {
+		if !seen[a] {
+			seen[a] = true
+			out = append(out, a)
+		}
+	}
+	for a := range provided {
+		if !seen[a] {
+			seen[a] = true
+			out = append(out, a)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // validPackAlias reports whether a pack instance/dependency name is safe to use
 // as a vendor-directory component (no path separators, no traversal, no `.`).
 func validPackAlias(s string) bool {
@@ -212,7 +234,7 @@ func ResolvePacks(configPath string) (*Lockfile, error) {
 		if !validPackAlias(name) {
 			return nil, fmt.Errorf("pack instance name %q is invalid (letters, digits, '-', '_' only)", name)
 		}
-		if err := r.resolve([]string{name}, packs[name], filepath.Join(vendor, name)); err != nil {
+		if err := r.resolve([]string{name}, nil, packs[name], filepath.Join(vendor, name)); err != nil {
 			return nil, err
 		}
 	}
@@ -229,7 +251,7 @@ type resolver struct {
 	total     int
 }
 
-func (r *resolver) resolve(chain []string, inst PackInstance, destDir string) error {
+func (r *resolver) resolve(chain, nameChain []string, inst PackInstance, destDir string) error {
 	ns := strings.Join(chain, "/")
 	if len(chain) > MaxPackDepth {
 		return fmt.Errorf("pack %q: dependency depth exceeds the limit %d (chain: %s)", ns, MaxPackDepth, strings.Join(chain, " -> "))
@@ -267,6 +289,11 @@ func (r *resolver) resolve(chain []string, inst PackInstance, destDir string) er
 	if err != nil {
 		return fmt.Errorf("pack %q: %w", ns, err)
 	}
+	// Cycle detection by pack IDENTITY: the same canonical pack name repeating
+	// in the ancestry is a cycle even when it is reached under a different alias.
+	if contains(nameChain, man.Pack.Name) {
+		return fmt.Errorf("pack cycle: %s -> %s", strings.Join(nameChain, " -> "), man.Pack.Name)
+	}
 	digest, err := digestTree(destDir)
 	if err != nil {
 		return err
@@ -279,12 +306,14 @@ func (r *resolver) resolve(chain []string, inst PackInstance, destDir string) er
 		Resolved: resolved,
 		Digest:   digest,
 	})
-	// Recurse into declared dependencies.
-	for _, alias := range sortedPackKeys(inst.Packs) {
+	// Recurse into every declared dependency (auto-pulled), plus any override the
+	// consumer supplied in the block.
+	for _, alias := range depAliases(man.Pack.Requires.Packs, inst.Packs) {
 		if !validPackAlias(alias) {
 			return fmt.Errorf("pack %q: dependency alias %q is invalid (letters, digits, '-', '_' only — it is a directory name)", ns, alias)
 		}
-		if _, ok := man.Pack.Requires.Packs[alias]; !ok {
+		dep, declared := man.Pack.Requires.Packs[alias]
+		if !declared {
 			return fmt.Errorf("pack %q: %q is not a declared dependency (requires.packs: %s)", ns, alias, depNames(man.Pack.Requires.Packs))
 		}
 		if contains(chain, alias) {
@@ -294,17 +323,18 @@ func (r *resolver) resolve(chain []string, inst PackInstance, destDir string) er
 		// A dependency may take its source from the instance block or default to
 		// the source declared in the parent's requires.packs.
 		if child.Source == "" {
-			if dep, ok := man.Pack.Requires.Packs[alias]; ok {
-				child.Source = dep.Source
-				if child.Version == "" {
-					child.Version = dep.Version
-				}
+			child.Source = dep.Source
+			if child.Version == "" {
+				child.Version = dep.Version
 			}
 		}
 		if child.Source == "" {
 			return fmt.Errorf("pack %q: dependency %q has no source (set packs.%s.source or requires.packs.%s.source)", ns, alias, alias, alias)
 		}
-		if err := r.resolve(append(append([]string{}, chain...), alias), child, filepath.Join(destDir, ".deps", alias)); err != nil {
+		if err := r.resolve(
+			append(append([]string{}, chain...), alias),
+			append(append([]string{}, nameChain...), man.Pack.Name),
+			child, filepath.Join(destDir, ".deps", alias)); err != nil {
 			return err
 		}
 	}

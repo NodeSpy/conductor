@@ -108,9 +108,10 @@ type packInstantiation struct {
 
 // instantiateReq is one node in the pack tree to instantiate.
 type instantiateReq struct {
-	chain   []string // instance-name chain from the root, e.g. [review base]
-	inst    PackInstance
-	nodeDir string
+	chain     []string // instance-name chain from the root, e.g. [review base]
+	nameChain []string // canonical pack names of the ancestry (cycle detection by identity)
+	inst      PackInstance
+	nodeDir   string
 	// connForward/storeForward/secretForward/handoffForward carry a parent's
 	// concrete environment bindings so a dependency's required environment can be
 	// forwarded down (the concrete binding only ever happens at the top).
@@ -130,6 +131,11 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	rawMan, err := loadPackManifest(req.nodeDir)
 	if err != nil {
 		return fmt.Errorf("pack %q: %w", ns, err)
+	}
+	// Cycle detection by pack IDENTITY: the same canonical pack name repeating in
+	// the ancestry is a cycle even when reached under a different alias.
+	if contains(req.nameChain, rawMan.Pack.Name) {
+		return fmt.Errorf("pack cycle: %s -> %s", strings.Join(req.nameChain, " -> "), rawMan.Pack.Name)
 	}
 
 	// Effective settings (defaults <- preset <- instance overrides) come from the
@@ -276,8 +282,9 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		}
 	}
 
-	// ---- Recurse into pack dependencies (requires.packs). ----
-	for _, alias := range sortedPackKeys(req.inst.Packs) {
+	// ---- Recurse into pack dependencies: every declared requires.packs dep
+	// (auto-pulled), plus any override the consumer supplied. ----
+	for _, alias := range depAliases(man.Pack.Requires.Packs, req.inst.Packs) {
 		if !validPackAlias(alias) {
 			return fmt.Errorf("pack %q: dependency alias %q is invalid (letters, digits, '-', '_' only)", ns, alias)
 		}
@@ -291,6 +298,7 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		child := req.inst.Packs[alias]
 		if err := st.instantiate(instantiateReq{
 			chain:          append(append([]string{}, req.chain...), alias),
+			nameChain:      append(append([]string{}, req.nameChain...), man.Pack.Name),
 			inst:           child,
 			nodeDir:        filepath.Join(req.nodeDir, ".deps", alias),
 			connForward:    child.Connectors,

@@ -206,3 +206,85 @@ packs:
 		t.Fatalf("an undeclared dependency alias should be rejected, got: %v", err)
 	}
 }
+
+// A declared requires.packs dependency is auto-pulled even when the consumer
+// adds no override for it.
+func TestPackDependencyAutoPulled(t *testing.T) {
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/parent", `
+pack:
+  name: parent
+  version: 1.0.0
+  requires:
+    conductor: ">=0.1"
+    packs:
+      child: { source: ./src/child }
+workflows:
+  parent-flow: { steps: [ { id: s, workflow: child/flow } ] }
+`)
+	writePackSource(t, dir, "src/child", baseManifestNoConn2)
+	body := `
+connectors: { gh: { type: github } }
+packs:
+  p:
+    source: ./src/parent
+`
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := resolveAndLoad(t, path)
+	if err != nil {
+		t.Fatalf("resolveAndLoad: %v", err)
+	}
+	if _, ok := cfg.Workflows["p/child/flow"]; !ok {
+		t.Fatalf("declared dependency should be auto-pulled + double-namespaced; have %v", workflowKeys(cfg))
+	}
+}
+
+const baseManifestNoConn2 = `
+pack: { name: child, version: "1.0.0", requires: { conductor: ">=0.1" } }
+workflows:
+  flow: { steps: [ { id: c, run: js, code: "return {}" } ] }
+`
+
+// A cycle reached under a DIFFERENT alias (same pack identity) is detected.
+func TestPackIdentityCycleDetected(t *testing.T) {
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/alpha", `
+pack:
+  name: alpha
+  version: 1.0.0
+  requires:
+    conductor: ">=0.1"
+    packs:
+      b: { source: ./src/beta }
+workflows:
+  flow: { steps: [ { id: s, run: js, code: "return {}" } ] }
+`)
+	writePackSource(t, dir, "src/beta", `
+pack:
+  name: beta
+  version: 1.0.0
+  requires:
+    conductor: ">=0.1"
+    packs:
+      c: { source: ./src/alpha }
+workflows:
+  flow: { steps: [ { id: s, run: js, code: "return {}" } ] }
+`)
+	body := `
+connectors: { gh: { type: github } }
+packs:
+  x:
+    source: ./src/alpha
+`
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ResolvePacks(path)
+	if err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("a cycle via a different alias (same pack identity) should be detected, got: %v", err)
+	}
+}
