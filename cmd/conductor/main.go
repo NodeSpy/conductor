@@ -47,12 +47,10 @@ import (
 	"github.com/NodeSpy/conductor/internal/store"
 	"github.com/NodeSpy/conductor/internal/vaults"
 
-	_ "github.com/NodeSpy/conductor/internal/integrations/cron"      // register "cron"
-	_ "github.com/NodeSpy/conductor/internal/integrations/github"    // register "github"
-	_ "github.com/NodeSpy/conductor/internal/integrations/pagerduty" // register "pagerduty"
-	_ "github.com/NodeSpy/conductor/internal/integrations/rss"       // register "rss"
-	_ "github.com/NodeSpy/conductor/internal/integrations/sentry"    // register "sentry"
-	_ "github.com/NodeSpy/conductor/internal/integrations/webhook"   // register "webhook"
+	_ "github.com/NodeSpy/conductor/internal/integrations/cron"    // register "cron"
+	_ "github.com/NodeSpy/conductor/internal/integrations/github"  // register "github"
+	_ "github.com/NodeSpy/conductor/internal/integrations/rss"     // register "rss"
+	_ "github.com/NodeSpy/conductor/internal/integrations/webhook" // register "webhook"
 )
 
 var version = "dev"

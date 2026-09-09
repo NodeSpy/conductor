@@ -452,12 +452,24 @@ update:
 func TestKitchenSinkTransform(t *testing.T) {
 	res, out := mustTransform(t, legacyKitchen)
 
-	// Every integration + both handoffs became connectors.
-	wantConns := []string{"ops", "chores", "hooks", "errors", "oncall", "upstream", "review", "page"}
+	// Every BUNDLED integration + both handoffs became connectors.
+	wantConns := []string{"ops", "chores", "hooks", "upstream", "review", "page"}
 	for _, n := range wantConns {
 		if _, ok := out.ConnectorsMap[n]; !ok {
 			t.Errorf("missing connector %q", n)
 		}
+	}
+	// sentry[errors] and pagerduty[oncall] are extracted types: skipped with a
+	// note, not transformed (see legacy_extracted.go). The rest of this
+	// kitchen-sink file still migrates, which is the point.
+	for _, gone := range []string{"errors", "oncall"} {
+		if _, ok := out.ConnectorsMap[gone]; ok {
+			t.Errorf("connector %q must not be emitted for an extracted type", gone)
+		}
+	}
+	if joined := strings.Join(res.Summary, "\n"); !strings.Contains(joined, "sentry[errors]: NOT migrated") ||
+		!strings.Contains(joined, "pagerduty[oncall]: NOT migrated") {
+		t.Errorf("extracted integrations must be noted as skipped:\n%s", joined)
 	}
 	if out.ConnectorsMap["review"].Type != "slack" || out.ConnectorsMap["page"].Type != "web" {
 		t.Errorf("handoff connector types: review=%s page=%s",
@@ -543,7 +555,10 @@ func TestKitchenSinkTransform(t *testing.T) {
 			len(out.Integrations), len(out.Handoffs), len(out.Controllers), out.PaseoBin)
 	}
 
-	// The migrated config passes the FULL semantic validation.
+	// The migrated config passes the FULL semantic validation — with the
+	// extracted types' plugins installed, which the migrated config's own
+	// plugins: block now declares.
+	installExtractedPlugins(t)
 	sec := secrets.New()
 	sec.LookupEnv = func(string) (string, bool) { return "resolved", true }
 	reg, err := connector.Build(out, connector.Deps{Secrets: sec, Config: out})
@@ -561,68 +576,6 @@ func TestKitchenSinkTransform(t *testing.T) {
 	}
 	if res2.Changed {
 		t.Fatal("transform of a migrated config must be a no-op")
-	}
-}
-
-// TestSentryPrecedencePreservedViaExcludes: connectors-model triggers are
-// independent, so the migration reproduces legacy first-match-wins by giving
-// each later trigger an exclude of every earlier rule's match. The golden
-// proof drives BOTH triggers' filters against the same event contexts through
-// the flow-side evaluator: an event the first rule matched fires ONLY the
-// first trigger; an event only the second rule matched fires only the second.
-func TestSentryPrecedencePreservedViaExcludes(t *testing.T) {
-	_, out := mustTransform(t, legacyKitchen)
-	var sentryTriggers []config.TriggerSpec
-	for _, tr := range out.Triggers {
-		if tr.Connector() == "errors" {
-			sentryTriggers = append(sentryTriggers, tr)
-		}
-	}
-	if len(sentryTriggers) != 2 {
-		t.Fatalf("sentry triggers: %d, want 2", len(sentryTriggers))
-	}
-	first, second := sentryTriggers[0], sentryTriggers[1]
-	if !strings.Contains(fmt.Sprint(first.Filters["projects"]), "backend") {
-		t.Fatalf("first trigger should be the backend rule: %v", first.Filters)
-	}
-	if _, hasEx := first.Filters["exclude"]; hasEx {
-		t.Fatal("the first trigger must not exclude anything")
-	}
-	if _, hasEx := second.Filters["exclude"]; !hasEx {
-		t.Fatalf("the second trigger must exclude the first rule's match: %v", second.Filters)
-	}
-
-	sec := secrets.New()
-	sec.LookupEnv = func(string) (string, bool) { return "x", true }
-	reg, err := connector.Build(out, connector.Deps{Secrets: sec, Config: out})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runner := flow.New(flow.Runner{Cfg: out, Conns: reg})
-	evalBoth := func(sctx map[string]any) (bool, bool) {
-		trig := core.Trigger{Kind: "sentry_alert", Context: map[string]any{"sentry": sctx}}
-		m1, err1 := runner.FilterMatch(trig, first)
-		m2, err2 := runner.FilterMatch(trig, second)
-		if err1 != nil || err2 != nil {
-			t.Fatalf("filter errors: %v %v", err1, err2)
-		}
-		return m1, m2
-	}
-
-	// A backend error: legacy rule1 won; only trigger1 may fire.
-	m1, m2 := evalBoth(map[string]any{"project": "backend", "level": "error"})
-	if !m1 || m2 {
-		t.Fatalf("backend error: trigger1=%v trigger2=%v (want true,false)", m1, m2)
-	}
-	// A frontend warning: legacy fell through to rule2 (catch-all).
-	m1, m2 = evalBoth(map[string]any{"project": "frontend", "level": "warning"})
-	if m1 || !m2 {
-		t.Fatalf("frontend warning: trigger1=%v trigger2=%v (want false,true)", m1, m2)
-	}
-	// A backend warning: rule1 requires level error|fatal → rule2 won.
-	m1, m2 = evalBoth(map[string]any{"project": "backend", "level": "warning"})
-	if m1 || !m2 {
-		t.Fatalf("backend warning: trigger1=%v trigger2=%v (want false,true)", m1, m2)
 	}
 }
 
@@ -752,6 +705,7 @@ func TestExampleConfigTransforms(t *testing.T) {
 	if len(out.ConnectorsMap) == 0 || len(out.Triggers) == 0 {
 		t.Fatalf("example transform produced %d connectors / %d triggers", len(out.ConnectorsMap), len(out.Triggers))
 	}
+	installExtractedPlugins(t)
 	sec := secrets.New()
 	sec.LookupEnv = func(string) (string, bool) { return "resolved", true }
 	reg, err := connector.Build(&out, connector.Deps{Secrets: sec, Config: &out})
