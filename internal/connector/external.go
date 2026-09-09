@@ -25,7 +25,12 @@ var externalTypes = map[string]bool{}
 func RegisterExternalType(decl *TypeDecl, b Builder) error {
 	regMu.Lock()
 	defer regMu.Unlock()
-	if _, dup := typeReg[decl.Type]; dup && !externalTypes[decl.Type] {
+	if _, dup := typeReg[decl.Type]; dup {
+		if externalTypes[decl.Type] {
+			// Two plugins providing the same type would silently redirect
+			// credentials to whichever registered last — refuse the collision.
+			return fmt.Errorf("connector type %q is already provided by another plugin — two plugins cannot provide the same type", decl.Type)
+		}
 		return fmt.Errorf("connector type %q is bundled and cannot be replaced by a plugin", decl.Type)
 	}
 	typeReg[decl.Type] = decl

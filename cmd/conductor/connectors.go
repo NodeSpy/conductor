@@ -106,11 +106,19 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 	if err != nil {
 		return nil, err
 	}
+	// The manager owns spawned plugin subprocesses. On ANY later failure in this
+	// function the returned stack is nil, so the caller's `defer stack.Close()`
+	// is a no-op — close here unless we hand ownership to a successful stack.
+	stackOK := false
+	defer func() {
+		if !stackOK {
+			pluginMgr.Close()
+		}
+	}()
 
 	deps := connector.Deps{Secrets: sec, Log: logf, Config: cfg, Blobs: blobs, Audit: auditSink}
 	reg, err := connector.Build(cfg, deps)
 	if err != nil {
-		pluginMgr.Close()
 		return nil, err
 	}
 	// The saved-workflow registry (agent promotions) lives beside the state
@@ -174,6 +182,7 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		Store:     flowStore, Notif: flowNotif, Log: logf, DryRun: dryRun,
 		Blobs: blobs, Events: events,
 	})
+	stackOK = true // ownership of pluginMgr passes to the returned stack
 	return &flowStack{
 		Secrets: sec, SecretVals: vals, Registry: reg, Runner: runner, Events: events,
 		Integrations: igs, SecretErrs: secretErrs, ConnectorErrs: connErrs,

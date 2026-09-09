@@ -18,10 +18,16 @@ const DefaultCallTimeout = 30 * time.Second
 
 // restart backoff: after restartBurst failed (re)starts inside restartWindow,
 // the plugin is parked "down" for the rest of the window instead of being
-// respawned — a crashing plugin can never crash-loop the daemon (§8.5).
+// respawned. On top of that trailing-window burst limit, restartLifetimeCap
+// bounds TOTAL (re)starts over the client's whole life — otherwise a plugin
+// crashing at a steady rate just under the burst threshold (e.g. every ~11s)
+// would respawn forever. Once the lifetime cap is hit the plugin is parked
+// permanently (until config reload), so a crashing plugin can never crash-loop
+// the daemon (§8.5).
 const (
-	restartBurst  = 3
-	restartWindow = 30 * time.Second
+	restartBurst       = 3
+	restartWindow      = 30 * time.Second
+	restartLifetimeCap = 32
 )
 
 // transport is the subset of *acp.Conn the client drives; the seam lets tests
@@ -53,13 +59,15 @@ type Client struct {
 	spec Spec
 	deps Deps
 
-	mu        sync.Mutex
-	conn      transport
-	kill      func()
-	digest    string // verified sha, set on first successful start
-	starts    []time.Time
-	downUntil time.Time
-	closed    bool
+	mu          sync.Mutex
+	conn        transport
+	kill        func()
+	digest      string // verified sha, set on first successful start
+	starts      []time.Time
+	totalStart  int // cumulative (re)starts over the client's lifetime
+	downForGood bool
+	downUntil   time.Time
+	closed      bool
 }
 
 // NewClient builds a Client for spec. It does not start the subprocess; call
@@ -110,9 +118,17 @@ func (c *Client) ensureLocked(ctx context.Context) error {
 			return nil // up
 		}
 	}
+	if c.downForGood {
+		return fmt.Errorf("plugin %s is down for good (exceeded %d lifetime restarts) — reload config to retry", c.spec.Name, restartLifetimeCap)
+	}
 	now := time.Now()
 	if now.Before(c.downUntil) {
 		return fmt.Errorf("plugin %s is down (restart backoff until %s)", c.spec.Name, c.downUntil.Format(time.RFC3339))
+	}
+	if c.totalStart >= restartLifetimeCap {
+		c.downForGood = true
+		c.deps.Log("plugin %s: exceeded %d lifetime restarts — parking down for good", c.spec.Name, restartLifetimeCap)
+		return fmt.Errorf("plugin %s is down for good (crash-loop lifetime cap)", c.spec.Name)
 	}
 	// prune starts outside the window, then enforce the burst cap
 	kept := c.starts[:0]
@@ -137,6 +153,7 @@ func (c *Client) ensureLocked(ctx context.Context) error {
 		c.deps.Log("plugin %s: WARNING running UNVERIFIED (no sha256 pin); on-disk digest %s", c.spec.Name, digest)
 	}
 	c.starts = append(c.starts, now)
+	c.totalStart++
 	conn, kill, err := c.deps.dial(ctx, c.spec, c.deps)
 	if err != nil {
 		return fmt.Errorf("plugin %s: launch: %w", c.spec.Name, err)
@@ -269,13 +286,15 @@ func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
 		})
 	}
 	// Bind the process to ctx: daemon shutdown (ctx cancel) kills the plugin.
+	// On either path we call kill(): it is once-guarded and reaps the child via
+	// cmd.Wait() (avoiding a zombie when the plugin exits on its own) and
+	// releases the egress credential.
 	go func() {
 		select {
 		case <-ctx.Done():
-			kill()
 		case <-conn.Done():
-			cleanup() // process exited on its own; release egress cred
 		}
+		kill()
 	}()
 	return conn, kill, nil
 }

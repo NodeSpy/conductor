@@ -62,6 +62,16 @@ func TestRegisterExternalTypeRefusesBundledOverride(t *testing.T) {
 	if _, ok := TypeDeclFor("github"); !ok {
 		t.Fatal("bundled github must survive UnregisterExternalType")
 	}
+
+	// Two plugins providing the same type must not silently clobber each other
+	// (that would redirect credentials to whichever registered last).
+	t.Cleanup(func() { UnregisterExternalType("acme-collide") })
+	if err := RegisterExternalType(&TypeDecl{Type: "acme-collide"}, nil); err != nil {
+		t.Fatalf("first register: %v", err)
+	}
+	if err := RegisterExternalType(&TypeDecl{Type: "acme-collide"}, nil); err == nil || !strings.Contains(err.Error(), "another plugin") {
+		t.Fatalf("want external-collision refusal, got %v", err)
+	}
 }
 
 func TestResolveConnectionRedactsAndAudits(t *testing.T) {

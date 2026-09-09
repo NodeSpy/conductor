@@ -65,6 +65,25 @@ func TestVerify(t *testing.T) {
 			t.Fatalf("want world-writable refusal, got %v", err)
 		}
 	})
+	t.Run("group-writable refused", func(t *testing.T) {
+		gw := writeBin(t, dir, "gw", data, 0o755)
+		if err := os.Chmod(gw, 0o770); err != nil { // group-writable
+			t.Fatal(err)
+		}
+		_, err := verify(Spec{Name: "p", BinPath: gw, Sha256: sha(data)})
+		if err == nil || !strings.Contains(err.Error(), "group/world-writable") {
+			t.Fatalf("want group-writable refusal, got %v", err)
+		}
+	})
+	t.Run("symlink resolves to real target", func(t *testing.T) {
+		link := filepath.Join(dir, "link")
+		if err := os.Symlink(bin, link); err != nil {
+			t.Skipf("symlink unsupported: %v", err)
+		}
+		if _, err := verify(Spec{Name: "p", BinPath: link, Sha256: sha(data)}); err != nil {
+			t.Fatalf("symlink to a safe target should verify: %v", err)
+		}
+	})
 	t.Run("relative path refused", func(t *testing.T) {
 		_, err := verify(Spec{Name: "p", BinPath: "rel/path", Sha256: sha(data)})
 		if err == nil || !strings.Contains(err.Error(), "not absolute") {
@@ -265,5 +284,31 @@ func TestClientRestartBackoff(t *testing.T) {
 	c.mu.Unlock()
 	if !parked {
 		t.Fatal("expected plugin parked down after burst")
+	}
+}
+
+// TestClientLifetimeCap proves a plugin crashing at a steady, sub-burst cadence
+// is still parked permanently once it exceeds the lifetime restart cap (the
+// trailing-window burst guard alone would let it respawn forever).
+func TestClientLifetimeCap(t *testing.T) {
+	sp := connectorSpec()
+	sp.BinPath = writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	c := NewClient(sp, Deps{dial: func(context.Context, Spec, Deps) (transport, func(), error) {
+		return nil, nil, errors.New("boom")
+	}})
+	// Simulate a long life of spread-out restarts that never trip the burst
+	// window: jump the lifetime counter to the cap directly.
+	c.mu.Lock()
+	c.totalStart = restartLifetimeCap
+	c.mu.Unlock()
+	if err := c.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "down for good") {
+		t.Fatalf("want lifetime-cap refusal, got %v", err)
+	}
+	// Stays down for good even after the burst window would have elapsed.
+	c.mu.Lock()
+	dfg := c.downForGood
+	c.mu.Unlock()
+	if !dfg {
+		t.Fatal("expected downForGood after lifetime cap")
 	}
 }

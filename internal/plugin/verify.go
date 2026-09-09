@@ -28,9 +28,19 @@ func verify(s Spec) (digest string, err error) {
 		return "", fmt.Errorf("plugin %s: source path is not absolute: %s", s.Name, s.BinPath)
 	}
 
+	// Resolve symlinks FIRST and verify the real target: otherwise a symlink in
+	// a safe directory could point at an attacker-writable target whose
+	// permissions we'd never inspect (and whose content could be swapped after
+	// verification). Everything below — perms, parent walk, hash, exec — must
+	// concern the resolved path, not the link.
+	real, err := filepath.EvalSymlinks(s.BinPath)
+	if err != nil {
+		return "", fmt.Errorf("plugin %s: cannot resolve source: %w", s.Name, err)
+	}
+
 	// Open once and hash THAT handle, so the bytes we verify are the bytes we
 	// will exec (defends against a swap between stat and hash).
-	f, err := os.Open(s.BinPath)
+	f, err := os.Open(real)
 	if err != nil {
 		return "", fmt.Errorf("plugin %s: cannot open source: %w", s.Name, err)
 	}
@@ -41,12 +51,15 @@ func verify(s Spec) (digest string, err error) {
 		return "", fmt.Errorf("plugin %s: cannot stat source: %w", s.Name, err)
 	}
 	if info.IsDir() {
-		return "", fmt.Errorf("plugin %s: source is a directory: %s", s.Name, s.BinPath)
+		return "", fmt.Errorf("plugin %s: source is a directory: %s", s.Name, real)
 	}
-	if info.Mode()&0o002 != 0 {
-		return "", fmt.Errorf("plugin %s: source is world-writable (%v) — refusing to run an attacker-swappable binary: %s", s.Name, info.Mode(), s.BinPath)
+	// Group- OR world-writable is refused: in a shared deploy group a
+	// group-writable binary is just as attacker-swappable as a world-writable
+	// one, defeating the sha pin. Operators pin at mode 0755.
+	if info.Mode()&0o022 != 0 {
+		return "", fmt.Errorf("plugin %s: source is group/world-writable (%v) — refusing to run an attacker-swappable binary: %s", s.Name, info.Mode(), real)
 	}
-	if err := checkParentPerms(s.BinPath); err != nil {
+	if err := checkParentPerms(real); err != nil {
 		return "", fmt.Errorf("plugin %s: %w", s.Name, err)
 	}
 

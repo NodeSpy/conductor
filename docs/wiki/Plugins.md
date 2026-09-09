@@ -110,6 +110,25 @@ gracefully to "down".
 that a connector plugin receives your credentials / a runtime plugin executes
 your agents, and the capabilities it declares vs what your `isolation:` grants.
 
+### Runtime plugins are less isolated than connector plugins (read this)
+
+A `kind: runtime` plugin reuses conductor's existing ACP runtime path, which does
+**not** yet get the full connector-plugin guard set:
+
+- **It inherits the daemon's environment.** The ACP spawn seeds the child with
+  the daemon's full `os.Environ()` — which can carry `env:`-resolved secrets.
+  The `isolation:` block masks *paths* and *network*, not *env vars*. A runtime
+  plugin should be treated as receiving the daemon's environment.
+- **Verification is at boot, and the binary is re-spawned per session** with no
+  re-verification — a lifetime-long TOCTOU window if the on-disk binary is
+  swapped after boot.
+- **It bypasses `internal/plugin`'s supervision** (crash-loop cap, size cap,
+  stderr redaction) and relies on ACP's own handling.
+
+**Only run runtime plugins you fully trust.** Per-spawn re-verification and an
+env-scrubbing ACP path are the immediate follow-ups. Connector plugins get the
+full guard set (env allowlist, per-call creds, redaction, size cap, supervision).
+
 ### Sandbox caveats (read these)
 
 - OS-level confinement depends on the `isolation:` mode. `namespace` mode is a

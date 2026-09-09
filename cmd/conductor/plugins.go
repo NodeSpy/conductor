@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
@@ -50,34 +51,58 @@ func pluginDeps(sec *secrets.Resolver, audit func(map[string]any)) plugin.Deps {
 // Returns a manager the caller must Close.
 func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any)) (*plugin.Manager, error) {
 	mgr := plugin.NewManager(cfg.Plugins, cfg.BaseDir(), pluginDeps(sec, audit))
-	ctx := context.Background()
+	// Bound the boot phase: verify+spawn+describe must not hang forever (a
+	// stalled binary read or sandbox preflight) with no deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), pluginBootTimeout)
+	defer cancel()
+	var registered []string
+	rollback := func() {
+		for _, t := range registered {
+			connector.UnregisterExternalType(t)
+		}
+		mgr.Close()
+	}
 	for _, spec := range mgr.ConnectorSpecs() {
 		decl, err := mgr.StartAndDescribe(ctx, spec.Name)
 		if err != nil {
-			mgr.Close()
+			rollback()
 			return nil, fmt.Errorf("plugin %s: %w", spec.Name, err)
 		}
 		cl, _ := mgr.Client(spec.Name)
 		if _, err := connector.RegisterExternalConnector(cl, spec, decl); err != nil {
-			mgr.Close()
+			rollback()
 			return nil, fmt.Errorf("plugin %s: %w", spec.Name, err)
 		}
+		registered = append(registered, spec.Provides)
 		logf("plugin %s: registered connector type %q (%d verb(s))", spec.Ref(), spec.Provides, len(decl.Verbs))
 	}
 	return mgr, nil
 }
 
+// pluginBootTimeout bounds a single connector plugin's verify+spawn+describe at
+// boot, so a stalled plugin can't hang daemon startup indefinitely.
+const pluginBootTimeout = 30 * time.Second
+
 // pluginRuntimeControllers verifies each runtime-kind plugin (verify-before-
 // execute, fail-closed) and synthesizes it into a ControllerConfig the existing
 // controller registry drives as an ACP subprocess — generalizing the shipped
 // ACP runtime (#54 §4). A runtime plugin is the highest-stakes plugin (§8.7):
-// it EXECUTES agents, so it gets the same sandbox isolation block as any
-// runtime plus the sha gate here. Returns entries keyed by the runtime name
-// each plugin provides.
+// it EXECUTES agents. Returns entries keyed by the runtime name each provides.
 //
-// Known limitation (documented, not stubbed): verification is at boot; the ACP
-// controller spawns the (already-verified, operator-owned) binary lazily on
-// first dispatch. Per-spawn re-verification is a follow-up.
+// KNOWN LIMITATIONS — runtime plugins do NOT yet get the full connector-plugin
+// guard set (documented, not stubbed; see docs/wiki/Plugins.md):
+//   - Environment is NOT scrubbed. The ACP controller (internal/controller/
+//     acp.go: spawnACP) seeds the child with os.Environ() — the daemon's full
+//     environment, which can carry env:-resolved secrets. Isolation masks paths
+//     and network, NOT env vars. Treat a runtime plugin as receiving the
+//     daemon's environment; only run ones you fully trust.
+//   - Verification is at BOOT, and the ACP controller re-spawns the binary on
+//     every new session with no re-verification — a lifetime-long TOCTOU window
+//     if the on-disk binary is swapped post-boot.
+//   - Runtime plugins bypass internal/plugin's supervision (crash-loop cap,
+//     size-bound, stderr redaction); they rely on ACP's own handling.
+//
+// A per-spawn re-verification + env-scrubbing ACP path is the immediate follow-up.
 func pluginRuntimeControllers(cfg *config.Config) (map[string]config.ControllerConfig, error) {
 	out := map[string]config.ControllerConfig{}
 	for name, ref := range cfg.Plugins {
@@ -97,7 +122,7 @@ func pluginRuntimeControllers(cfg *config.Config) (map[string]config.ControllerC
 			Command:   argv,
 			Isolation: ref.Isolation,
 		}
-		logf("plugin %s: registered runtime %q (acp, sandboxed)", spec.Ref(), spec.Provides)
+		logf("plugin %s: registered runtime %q (acp) — SECURITY: runtime plugins inherit the daemon environment and are re-spawned per session without re-verification; run only fully-trusted runtime plugins", spec.Ref(), spec.Provides)
 	}
 	return out, nil
 }
