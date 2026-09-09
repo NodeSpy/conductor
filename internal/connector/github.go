@@ -258,10 +258,11 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "file", Desc: "a repo file's raw contents at a ref (cached; GitHub's raw media type caps at ~1 MiB)",
 			Options: Schema{
-				"repo": {Type: TString, Required: true},
-				"path": {Type: TString, Required: true, Desc: "repo-relative file path"},
-				"ref":  {Type: TString, Desc: "branch / tag / sha (default: the repo's default branch)"},
-				"as":   {Type: TString, Enum: []string{"me", "bot"}},
+				"repo":     {Type: TString, Required: true},
+				"path":     {Type: TString, Required: true, Desc: "repo-relative file path"},
+				"ref":      {Type: TString, Desc: "branch / tag / sha (default: the repo's default branch)"},
+				"as":       {Type: TString, Enum: []string{"me", "bot"}},
+				"optional": {Type: TBool, Desc: "return empty text instead of erroring when the file is missing (404) — for optional convention files"},
 			},
 			Outputs: Schema{"text": {Type: TString}},
 		},
@@ -1065,6 +1066,12 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 		}
 		text, err := g.getText(ctx, tok, u, "application/vnd.github.raw")
 		if err != nil {
+			// optional: a missing file (404) is not an error — return empty
+			// text so a workflow can inline convention files that may not exist
+			// without a failed step in the logs.
+			if opt, _ := opts["optional"].(bool); opt && strings.Contains(err.Error(), "HTTP 404") {
+				return map[string]any{"text": ""}, nil
+			}
 			return nil, err
 		}
 		return map[string]any{"text": text}, nil
