@@ -47,7 +47,10 @@ type PackInstance struct {
 	// `git::ssh://git@github.com/…`, or a local path (`./packs/review-kit`,
 	// relative to the config file) for vendored/example packs.
 	Source string `yaml:"source"`
-	// Version is metadata only — it does NOT pin a git ref. It is recorded in
+	// Version is a semver constraint (Terraform/gems-style: ">= 1.2, < 2.0",
+	// "~> 1.1", "^1.0", "1.0"). An unpinned git source resolves to the highest
+	// tag satisfying it (a monorepo tags components "<subdir>/vX.Y.Z"). A hard
+	// @ref in Source overrides it; an empty constraint tracks HEAD. Recorded in
 	// the lockfile and used as the default `version:` for a child dependency
 	// that omits its own. To pin, append `@<tag|branch|sha>` to Source; the
 	// lockfile then records the resolved sha for reproducibility.

@@ -293,6 +293,18 @@ func (r *resolver) resolve(chain, nameChain []string, inst PackInstance, destDir
 			return fmt.Errorf("pack %q: dependency local source %q escapes the config directory — use a remote source or a path inside the project", ns, inst.Source)
 		}
 	}
+	// Version constraints (#59): an unpinned git source (no @ref) with a
+	// `version:` constraint resolves to the highest matching tag. A hard @ref
+	// pin wins; a bare unpinned/unconstrained source still tracks HEAD.
+	if spec.git && spec.ref == "" {
+		if c := strings.TrimSpace(inst.Version); c != "" {
+			tag, err := resolveVersionTag(spec, c)
+			if err != nil {
+				return fmt.Errorf("pack %q: %w", ns, err)
+			}
+			spec.ref = tag
+		}
+	}
 	resolved := "local"
 	if spec.git {
 		if resolved, err = fetchGit(spec, destDir); err != nil {
@@ -377,6 +389,42 @@ func fetchLocal(spec sourceSpec, destDir string) error {
 		return err
 	}
 	return copyTree(src, destDir)
+}
+
+// resolveVersionTag lists the source repo's tags and returns the highest one
+// satisfying the version constraint. For a //subdir source the tags are
+// component-prefixed (`<subdir>/vX.Y.Z`, so one monorepo can version many
+// packs); otherwise they are plain (`vX.Y.Z`).
+func resolveVersionTag(spec sourceSpec, constraint string) (string, error) {
+	out, err := runGit("", "ls-remote", "--tags", "--refs", "--", spec.gitURL)
+	if err != nil {
+		return "", fmt.Errorf("list tags for %s: %s", spec.gitURL, strings.TrimSpace(out))
+	}
+	prefix := ""
+	if spec.subdir != "" {
+		prefix = spec.subdir + "/"
+	}
+	tags := parseLsRemoteTags(out)
+	tag, ok := bestMatch(tags, prefix, constraint)
+	if !ok {
+		return "", fmt.Errorf("no tag satisfies version %q (looked for %q<semver> among %d tags at %s)", constraint, prefix, len(tags), spec.gitURL)
+	}
+	return tag, nil
+}
+
+// parseLsRemoteTags extracts tag names from `git ls-remote --tags --refs`
+// output (lines of "<sha>\trefs/tags/<name>").
+func parseLsRemoteTags(out string) []string {
+	const marker = "refs/tags/"
+	var tags []string
+	for _, line := range strings.Split(out, "\n") {
+		if i := strings.Index(line, marker); i >= 0 {
+			if name := strings.TrimSpace(line[i+len(marker):]); name != "" {
+				tags = append(tags, name)
+			}
+		}
+	}
+	return tags
 }
 
 // fetchGit clones a pack with the minimal-fetch flags (repo hygiene / §12) and

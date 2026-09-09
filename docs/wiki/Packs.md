@@ -168,11 +168,14 @@ resolved graph, each node pinned by a resolved revision and a tree digest. Commi
 it: `conductor init` on another machine yields a byte-identical setup, and a
 changed remote is tamper-evident on the next `init`.
 
-The instance block's `version:` does **not** select a ref — it is metadata,
-recorded in the lockfile and used as the default `version:` for a child
-dependency that omits its own. The real pin is `@<tag|branch|sha>` appended to
-`source:` (e.g. `source: github.com/your-org/packs//review-kit@v1.0.0`); the
-lockfile's `resolved:` sha is what actually reproduces the fetch.
+The instance block's `version:` is a **semver constraint** (Terraform/gems
+style: `">= 1.2, < 2.0"`, `"~> 1.1"`, `"^1.0"`, `"1.0"`). An unpinned git source
+resolves to the **highest tag** that satisfies it — a monorepo tags its
+components `"<subdir>/vX.Y.Z"` so one repo can version many packs. Precedence: a
+hard `@<tag|branch|sha>` on `source:` wins over any constraint; a constraint
+selects a tag; a bare source with no constraint tracks the default branch. The
+lockfile's `resolved:` sha is what actually reproduces the fetch, and re-running
+`conductor init` re-resolves within the constraint.
 
 ## CLI
 

@@ -125,6 +125,9 @@ func bestMatch(tags []string, prefix, constraint string) (string, bool) {
 	var bestTag string
 	var best semver
 	for _, t := range tags {
+		if prefix != "" && !strings.HasPrefix(t, prefix) {
+			continue // a component-prefixed query ignores other components' tags
+		}
 		raw := strings.TrimPrefix(t, prefix)
 		sv, err := parseSemver(raw)
 		if err != nil {
