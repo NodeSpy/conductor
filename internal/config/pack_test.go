@@ -352,6 +352,10 @@ func TestCheckConductorConstraint(t *testing.T) {
 		{">=0.8", "0.7.9", false},
 		{"^1.2", "1.5.0", true},
 		{"^1.2", "2.0.0", false},
+		{"^0.8", "0.8.5", true},   // 0.x caret: locked to the minor
+		{"^0.8", "0.9.0", false},  // 0.9 is NOT compatible with ^0.8
+		{"^0.0.3", "0.0.3", true}, // 0.0.z caret: exact patch
+		{"^0.0.3", "0.0.4", false},
 		{"~1.2.3", "1.2.9", true},
 		{"~1.2.3", "1.3.0", false},
 		{">=0.8 <2.0", "1.4.0", true},

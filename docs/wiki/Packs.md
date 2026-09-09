@@ -195,13 +195,19 @@ The following are **not yet** implemented and are called out honestly:
 
 - **`conductor add` / `remove` / `update --packs`** — the config-mutating install
   helpers. Use the `packs:` block + `conductor init` directly for now.
-- **Trust/provenance** (source allowlist, signature verification) beyond the
-  lockfile's tamper-evidence.
+- **Trust/provenance** — the lockfile digest is verified at load (drift warns),
+  but a source allowlist and signature verification (cosign/attestation) are not
+  yet implemented.
 - **Ref-rewriting** covers agent/workflow/check refs, connector prefixes in
-  `uses`/`on`/hooks, the `store:` selector, team roles, and `skill.verbs` — but
-  not arbitrary connector/store/secret references buried inside free-form `code:`
-  step bodies or runtime `{{ vault … }}` templates.
+  `uses`/`on`/hooks (scalar and list-form), the `store:` selector, team roles,
+  `skill.verbs`, `skill.allow_secrets`, `session.end_on`, and pack-local
+  `extends:` — but **not** connector/store/secret references buried inside
+  free-form `code:` step bodies or runtime `{{ vault … }}` templates.
 - **Pack policy** is folded onto the pack's own triggers; a pack workflow called
   from *your* trigger does not carry the pack's policy.
+- **Pack `memory:`** is parsed but not yet applied (it warns on load).
+- **Cycle detection** keys on the dependency alias in the chain; a diamond that
+  reaches the same pack twice under two different aliases is bounded by the depth
+  cap rather than reported as a cycle.
 - **Registry / discovery search** — packs are URL/path-addressable; there is no
   central index yet.

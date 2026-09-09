@@ -154,6 +154,41 @@ agents:
 	}
 }
 
+// A pack step that references a name it never declared (nor bound) must NOT
+// resolve to a consumer global of the same name — it is namespaced so it fails
+// as an unknown pack ref instead of silently reaching the operator's agent.
+func TestPackBareRefDoesNotReachConsumerGlobal(t *testing.T) {
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/p", `
+pack: { name: p, version: "1.0.0", requires: { conductor: ">=0.1" } }
+workflows:
+  flow:
+    steps:
+      - id: s
+        type: agent
+        agent: deploy-bot     # a consumer global; NOT a pack agent, NOT a bound role
+`)
+	body := `
+connectors: { gh: { type: github } }
+agents:
+  deploy-bot: { provider: claude }
+packs:
+  p:
+    source: ./src/p
+`
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := resolveAndLoad(t, path)
+	if err != nil {
+		t.Fatalf("resolveAndLoad: %v", err)
+	}
+	if got := cfg.Workflows["p/flow"].Steps[0].Agent; got != "p/deploy-bot" {
+		t.Fatalf("an undeclared ref must be namespaced (p/deploy-bot), not reach the consumer global; got %q", got)
+	}
+}
+
 // The lockfile digest check warns when a vendored file is edited after init.
 func TestPackLockDigestDriftWarns(t *testing.T) {
 	path := baseConfigWithReview(t, "")
