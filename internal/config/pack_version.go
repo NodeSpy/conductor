@@ -36,53 +36,15 @@ func checkConductorConstraint(constraint, version string) error {
 }
 
 func checkOneConstraint(part string, have semver, version, full string) error {
-	op, rest := splitConstraintOp(part)
+	op, rest := splitOp(part)
 	want, err := parseSemver(rest)
 	if err != nil {
 		return fmt.Errorf("requires.conductor %q: unrecognized constraint %q", full, part)
 	}
-	cmp := compareSemver(have, want)
-	ok := false
-	switch op {
-	case ">=":
-		ok = cmp >= 0
-	case ">":
-		ok = cmp > 0
-	case "<=":
-		ok = cmp <= 0
-	case "<":
-		ok = cmp < 0
-	case "=", "==":
-		ok = cmp == 0
-	case "^": // compatible-with, npm-style (0.x is treated as unstable)
-		switch {
-		case want.major > 0:
-			ok = have.major == want.major && cmp >= 0
-		case want.minor > 0: // ^0.8.x => >=0.8.0 <0.9.0
-			ok = have.major == 0 && have.minor == want.minor && cmp >= 0
-		default: // ^0.0.z => exactly that patch
-			ok = have.major == 0 && have.minor == 0 && have.patch == want.patch
-		}
-	case "~": // approximately: same major.minor, >= want
-		ok = have.major == want.major && have.minor == want.minor && cmp >= 0
-	case "": // bare version means >=
-		ok = cmp >= 0
-	default:
-		return fmt.Errorf("requires.conductor %q: unrecognized operator in %q", full, part)
-	}
-	if !ok {
+	if !matchOp(have, op, want, semverComponents(rest)) {
 		return fmt.Errorf("requires conductor %s but this daemon is %s", full, version)
 	}
 	return nil
-}
-
-func splitConstraintOp(s string) (op, rest string) {
-	for _, o := range []string{">=", "<=", "==", ">", "<", "=", "^", "~"} {
-		if strings.HasPrefix(s, o) {
-			return o, strings.TrimSpace(s[len(o):])
-		}
-	}
-	return "", s
 }
 
 type semver struct{ major, minor, patch int }
