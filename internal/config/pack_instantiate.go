@@ -631,8 +631,8 @@ func connectorNames(c *Config) string {
 }
 
 func presetNames(m map[string]map[string]any) string { return sortedJoin(mapKeys(m)) }
-func settingNames(m map[string]SettingSpec) string    { return sortedJoin(mapKeys(m)) }
-func depNames(m map[string]PackDepReq) string         { return sortedJoin(mapKeys(m)) }
+func settingNames(m map[string]SettingSpec) string   { return sortedJoin(mapKeys(m)) }
+func depNames(m map[string]PackDepReq) string        { return sortedJoin(mapKeys(m)) }
 
 func mapKeys[V any](m map[string]V) []string {
 	out := make([]string, 0, len(m))
