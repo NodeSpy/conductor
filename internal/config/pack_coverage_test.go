@@ -137,24 +137,28 @@ agents:
 	}
 }
 
-// TestApplyAgentOverrideListsAppend documents mergeMaps list semantics: an
-// override of a list field ADDS to the bundle (append), it does not replace. A
-// consumer can broaden a bundled agent's skill.verbs but not narrow it via
-// override — narrowing requires a full bind to a global.
-func TestApplyAgentOverrideListsAppend(t *testing.T) {
+// TestApplyAgentOverrideReplacesLists locks in the security-relevant override
+// semantics: a pack override REPLACES a bundled list (it does not append), so a
+// consumer can NARROW a bundled agent's skill.verbs — not only widen it.
+func TestApplyAgentOverrideReplacesLists(t *testing.T) {
 	base := AgentProfile{
 		Workspace: "worktree",
-		Skill:     &SkillPolicy{Verbs: []string{"gh.comment"}},
+		Skill:     &SkillPolicy{Verbs: []string{"gh.comment", "gh.submit_review"}},
 	}
 	out, err := applyAgentOverride(base, map[string]any{
-		"skill": map[string]any{"verbs": []any{"gh.submit_review"}},
+		"skill": map[string]any{"verbs": []any{"gh.comment"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// append semantics: both verbs present.
-	if !contains(out.Skill.Verbs, "gh.comment") || !contains(out.Skill.Verbs, "gh.submit_review") {
-		t.Fatalf("override should append to the bundled list, got %v", out.Skill.Verbs)
+	// replace semantics: the override's single verb wins; the bundle's extra
+	// verb is dropped (a real restriction).
+	if len(out.Skill.Verbs) != 1 || out.Skill.Verbs[0] != "gh.comment" {
+		t.Fatalf("override should REPLACE the bundled list (narrowing), got %v", out.Skill.Verbs)
+	}
+	// non-overridden scalar fields survive the deep-merge.
+	if out.Workspace != "worktree" {
+		t.Fatalf("non-overridden field should survive, got workspace=%q", out.Workspace)
 	}
 }
 

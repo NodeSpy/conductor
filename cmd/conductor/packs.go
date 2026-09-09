@@ -127,8 +127,13 @@ func printPackPlan(cfg *config.Config) {
 		for name := range cfg.Agents {
 			if strings.HasPrefix(name, prefix) {
 				grant := ""
-				if p := cfg.Agents[name]; p.Skill != nil && len(p.Skill.Verbs) > 0 {
-					grant = "  !! grants skill: " + strings.Join(p.Skill.Verbs, ", ")
+				if p := cfg.Agents[name]; p.Skill != nil {
+					if len(p.Skill.Verbs) > 0 {
+						grant += "  !! grants skill: " + strings.Join(p.Skill.Verbs, ", ")
+					}
+					if len(p.Skill.AllowSecrets) > 0 {
+						grant += "  !! may read secrets: " + strings.Join(p.Skill.AllowSecrets, ", ")
+					}
 				}
 				agents = append(agents, name+grant)
 			}

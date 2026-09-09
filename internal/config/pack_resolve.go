@@ -121,7 +121,59 @@ func parseSource(src, baseDir string) (sourceSpec, error) {
 	if spec.subdir != "" && !safeSubdir(spec.subdir) {
 		return sourceSpec{}, fmt.Errorf("pack source %q: //subdir %q escapes the repository", src, spec.subdir)
 	}
+	// Transport allowlist: only known-safe git transports. This rejects the git
+	// remote-helper transports (ext::/fd::/…) that would run an arbitrary local
+	// command as the "remote" — e.g. `git::ext::sh -c '…'` → RCE at fetch time.
+	if !safeGitTransport(spec.gitURL) {
+		return sourceSpec{}, fmt.Errorf("pack source %q: unsupported git transport — use https://, ssh://, git://, file://, or git@host:path", src)
+	}
 	return spec, nil
+}
+
+// safeGitTransport reports whether a git URL uses an allowed transport. Only
+// https/http/ssh/git/file schemes and the scp-like git@host:path form are
+// permitted; remote-helper transports (ext::, fd::, transport::…) are refused.
+func safeGitTransport(url string) bool {
+	for _, p := range []string{"https://", "http://", "ssh://", "git://", "file://"} {
+		if strings.HasPrefix(url, p) {
+			return true
+		}
+	}
+	// scp-like: git@host:path (user@host:...), but not a remote-helper `foo::…`.
+	if i := strings.Index(url, "::"); i >= 0 {
+		return false
+	}
+	if strings.Contains(url, "@") && strings.Contains(url, ":") {
+		return true
+	}
+	return false
+}
+
+// withinDir reports whether target resolves inside root (root itself counts).
+func withinDir(root, target string) bool {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..")
+}
+
+// validPackAlias reports whether a pack instance/dependency name is safe to use
+// as a vendor-directory component (no path separators, no traversal, no `.`).
+func validPackAlias(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // safeSubdir rejects a //subdir that is absolute or contains a `..` segment, so
@@ -157,6 +209,9 @@ func ResolvePacks(configPath string) (*Lockfile, error) {
 	}
 	r := &resolver{configDir: dir, lock: &Lockfile{Version: 1}}
 	for _, name := range sortedPackKeys(packs) {
+		if !validPackAlias(name) {
+			return nil, fmt.Errorf("pack instance name %q is invalid (letters, digits, '-', '_' only)", name)
+		}
 		if err := r.resolve([]string{name}, packs[name], filepath.Join(vendor, name)); err != nil {
 			return nil, err
 		}
@@ -187,6 +242,16 @@ func (r *resolver) resolve(chain []string, inst PackInstance, destDir string) er
 	if err != nil {
 		return fmt.Errorf("pack %q: %w", ns, err)
 	}
+	// A DEPENDENCY source (depth > 0) comes from a pack author, not the operator.
+	// A local dependency source must stay INSIDE the config dir tree, so a hostile
+	// pack cannot point requires.packs.dep.source at, say, ../../../etc and read
+	// arbitrary directories on the machine running `conductor init`. (Top-level
+	// sources are operator-authored and unconfined; git sources need a real repo.)
+	if len(chain) > 1 && !spec.git {
+		if !withinDir(r.configDir, spec.local) {
+			return fmt.Errorf("pack %q: dependency local source %q escapes the config directory — use a remote source or a path inside the project", ns, inst.Source)
+		}
+	}
 	resolved := "local"
 	if spec.git {
 		if resolved, err = fetchGit(spec, destDir); err != nil {
@@ -216,6 +281,12 @@ func (r *resolver) resolve(chain []string, inst PackInstance, destDir string) er
 	})
 	// Recurse into declared dependencies.
 	for _, alias := range sortedPackKeys(inst.Packs) {
+		if !validPackAlias(alias) {
+			return fmt.Errorf("pack %q: dependency alias %q is invalid (letters, digits, '-', '_' only — it is a directory name)", ns, alias)
+		}
+		if _, ok := man.Pack.Requires.Packs[alias]; !ok {
+			return fmt.Errorf("pack %q: %q is not a declared dependency (requires.packs: %s)", ns, alias, depNames(man.Pack.Requires.Packs))
+		}
 		if contains(chain, alias) {
 			return fmt.Errorf("pack cycle: %s", strings.Join(append(append([]string{}, chain...), alias), " -> "))
 		}
@@ -322,7 +393,14 @@ func gitFetchRef(url, ref, dir string) (string, error) {
 }
 
 func runGit(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	// Defense-in-depth alongside the parseSource transport allowlist: disable the
+	// remote-helper transports at the git level too, so a crafted URL can never
+	// spawn an arbitrary command as the "remote".
+	full := append([]string{
+		"-c", "protocol.ext.allow=never",
+		"-c", "protocol.fd.allow=never",
+	}, args...)
+	cmd := exec.Command("git", full...)
 	if dir != "" {
 		cmd.Dir = dir
 	}

@@ -82,11 +82,12 @@ agents:
   # (omit a role entirely to keep the bundled default)
 ```
 
-Override uses the same deep-merge as `imports:` (`mergeMaps`): nested maps merge,
-scalars win child-side, and **list fields append** (an override of a bundled
-agent's `skill.verbs` *adds* to the bundle, it does not replace). To narrow a
-bundled list — e.g. remove a verb — **bind** the role to a global of your own
-instead of overriding it.
+Override deep-merges with **replace** semantics: nested maps merge recursively,
+but scalars and **list fields are replaced**, not appended. So an override of a
+bundled agent's `skill.verbs` fully replaces the bundled list — you can *narrow*
+a bundled agent's capabilities, not only widen them. (This differs from
+`imports:`, where lists concatenate; a pack override is a deliberate restriction
+surface.)
 
 ## `requires:` — the interface
 

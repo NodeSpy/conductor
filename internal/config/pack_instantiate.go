@@ -53,6 +53,9 @@ func (c *Config) instantiatePacks(configDir string) error {
 	vendor := packVendorDir(configDir)
 	st := &packInstantiation{cfg: c}
 	for _, name := range sortedPackKeys(c.Packs) {
+		if !validPackAlias(name) {
+			return fmt.Errorf("pack instance name %q is invalid (letters, digits, '-', '_' only)", name)
+		}
 		if err := st.instantiate(instantiateReq{
 			chain:   []string{name},
 			inst:    c.Packs[name],
@@ -61,8 +64,39 @@ func (c *Config) instantiatePacks(configDir string) error {
 			return err
 		}
 	}
+	// Tamper-evidence: compare each vendored tree against the lockfile digest and
+	// warn on drift (a vendored file edited after `conductor init`). A warning,
+	// not a hard error, so a benign re-vendor or a missing lockfile never
+	// crash-loops the daemon.
+	st.verifyLockDigests(configDir, vendor)
 	c.packWarnings = st.warnings
 	return nil
+}
+
+// verifyLockDigests re-hashes each vendored pack node and warns when it no
+// longer matches the sha recorded in conductor.lock.yaml.
+func (st *packInstantiation) verifyLockDigests(configDir, vendor string) {
+	lock, err := ReadLockfile(configDir)
+	if err != nil || lock == nil {
+		return // no lockfile (e.g. instantiated without init) → nothing to verify
+	}
+	for _, e := range lock.Packs {
+		nodeDir := vendor
+		for _, seg := range strings.Split(e.Instance, "/") {
+			if nodeDir == vendor {
+				nodeDir = filepath.Join(nodeDir, seg)
+			} else {
+				nodeDir = filepath.Join(nodeDir, ".deps", seg)
+			}
+		}
+		got, err := digestTree(nodeDir)
+		if err != nil {
+			continue
+		}
+		if e.Digest != "" && got != e.Digest {
+			st.warnf("pack %q: vendored tree does not match the lockfile digest — it was modified after `conductor init` (re-run init to re-pin)", e.Instance)
+		}
+	}
 }
 
 // packInstantiation accumulates state across the recursive walk.
@@ -93,11 +127,26 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		return fmt.Errorf("pack %q: total resolved packs exceeds the limit %d", ns, MaxTotalPacks)
 	}
 
-	man, err := loadPackManifest(req.nodeDir)
+	rawMan, err := loadPackManifest(req.nodeDir)
 	if err != nil {
 		return fmt.Errorf("pack %q: %w", ns, err)
 	}
-	// Security boundary: reject a pack that ships any bind-only section.
+
+	// Effective settings (defaults <- preset <- instance overrides) come from the
+	// raw manifest, then ${settings.NAME} is substituted and the manifest is
+	// re-decoded. ALL manifest-level security/compat checks below run on the
+	// FINAL (substituted) manifest, so a value that injects a bind-only section
+	// or a templated compat gate is still caught.
+	settings, err := effectiveSettings(rawMan, req.inst, ns, st)
+	if err != nil {
+		return err
+	}
+	man, err := substituteSettings(req.nodeDir, settings)
+	if err != nil {
+		return fmt.Errorf("pack %q: %w", ns, err)
+	}
+	// Security boundary: reject a pack that ships any bind-only section (checked
+	// on the substituted manifest so a settings value can't smuggle one in).
 	if err := man.checkNoEnvironment(); err != nil {
 		return fmt.Errorf("pack %q: %w", ns, err)
 	}
@@ -109,16 +158,10 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	if man.Pack.Deprecated != "" {
 		st.warnf("pack %q (%s): deprecated: %s", ns, man.Pack.Name, man.Pack.Deprecated)
 	}
-
-	// Effective settings: defaults <- preset <- instance overrides, then
-	// substitute ${settings.NAME} into the pack body and re-decode.
-	settings, err := effectiveSettings(man, req.inst, ns, st)
-	if err != nil {
-		return err
-	}
-	man, err = substituteSettings(req.nodeDir, settings)
-	if err != nil {
-		return fmt.Errorf("pack %q: %w", ns, err)
+	// A pack `memory:` block is decoded but not yet applied — warn rather than
+	// silently drop it (global memory can't be namespaced cleanly yet).
+	if man.Memory != nil {
+		st.warnf("pack %q: a memory: block is declared but pack memory is not yet applied (ignored)", ns)
 	}
 
 	// Resolve environment bindings for this node. A binding may be given
@@ -141,7 +184,14 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 
 	// ---- Agents: default / bind / override, then namespace. ----
 	for _, role := range sortedAgentKeys(man.Agents) {
-		base := man.Agents[role]
+		bundled := man.Agents[role]
+		// A pack agent may not pin infrastructure (runtime/host/controller) — a
+		// pack defines behavior, not environment. Provider/model are allowed
+		// (they fall through to the consumer default runtime when empty).
+		if bundled.Host != "" || bundled.Runtime != "" || bundled.Controller != "" {
+			return fmt.Errorf("pack %q: agent %q pins runtime/host/controller — a pack defines behavior, not environment; leave it to the consumer's default runtime or bind the role to a global", ns, role)
+		}
+		base := bundled
 		b := req.inst.Agents[role]
 		switch {
 		case b.IsBind():
@@ -154,6 +204,16 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 				return fmt.Errorf("pack %q: agent %q override: %w", ns, role, err)
 			}
 			base = merged
+		}
+		// Secret-broker containment: a pack agent may only allow_secrets names it
+		// DECLARED in requires.secrets (and the consumer bound). Otherwise a pack
+		// could guess a consumer's secret names and have the broker issue them.
+		if base.Skill != nil {
+			for _, s := range base.Skill.AllowSecrets {
+				if _, ok := man.Pack.Requires.Secrets[s]; !ok {
+					return fmt.Errorf("pack %q: agent %q skill.allow_secrets %q is not a declared requires.secrets entry — a pack may only reach secrets it declares and the consumer binds", ns, role, s)
+				}
+			}
 		}
 		rw.rebindAgent(&base)
 		st.cfg.setAgent(rw.agentName(role), base)
@@ -217,6 +277,9 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 
 	// ---- Recurse into pack dependencies (requires.packs). ----
 	for _, alias := range sortedPackKeys(req.inst.Packs) {
+		if !validPackAlias(alias) {
+			return fmt.Errorf("pack %q: dependency alias %q is invalid (letters, digits, '-', '_' only)", ns, alias)
+		}
 		if _, ok := man.Pack.Requires.Packs[alias]; !ok {
 			return fmt.Errorf("pack %q: packs: %q is not a declared dependency (requires.packs: %s)", ns, alias, depNames(man.Pack.Requires.Packs))
 		}
@@ -423,25 +486,40 @@ func substituteSettings(nodeDir string, settings map[string]string) (*PackManife
 	if err != nil {
 		return nil, err
 	}
-	sub := settingsRefRE.ReplaceAllFunc(raw, func(m []byte) []byte {
-		name := string(settingsRefRE.FindSubmatch(m)[1])
-		if val, ok := settings[name]; ok {
-			return []byte(val)
+	// Iterate so a declared setting whose VALUE itself contains ${settings.other}
+	// resolves too (bounded to avoid a self-referential loop).
+	sub := raw
+	for i := 0; i < 8; i++ {
+		next := settingsRefRE.ReplaceAllFunc(sub, func(m []byte) []byte {
+			name := string(settingsRefRE.FindSubmatch(m)[1])
+			if val, ok := settings[name]; ok {
+				return []byte(val)
+			}
+			return m // leave unknown refs; caught post-decode if in a real field
+		})
+		if string(next) == string(sub) {
+			break
 		}
-		return m // leave unknown refs; caught post-decode if in a real field
-	})
+		sub = next
+	}
 	var man PackManifest
 	if err := strictUnmarshal(sub, &man); err != nil {
 		return nil, fmt.Errorf("parse manifest after settings substitution: %w", err)
 	}
-	// Any ${settings.NAME} still present in a decoded field is an unknown ref.
+	// A ${settings.NAME} still present in a decoded field, whose NAME is not a
+	// declared setting, is a genuine unknown reference. (A declared name that
+	// survives — e.g. it arrived inside a setting value that itself was a literal
+	// placeholder — is left as-is rather than failing the load.)
 	body, err := yaml.Marshal(&man)
 	if err != nil {
 		return nil, err
 	}
 	var missing []string
 	for _, m := range settingsRefRE.FindAllSubmatch(body, -1) {
-		missing = append(missing, string(m[1]))
+		name := string(m[1])
+		if _, declared := settings[name]; !declared {
+			missing = append(missing, name)
+		}
 	}
 	if len(missing) > 0 {
 		missing = uniq(missing)
@@ -512,7 +590,7 @@ func applyAgentOverride(base AgentProfile, override map[string]any) (AgentProfil
 	if bm == nil {
 		bm = map[string]any{}
 	}
-	merged := mergeMaps(bm, override)
+	merged := deepOverride(bm, override) // replace semantics so an override can narrow a list
 	mb, err := yaml.Marshal(merged)
 	if err != nil {
 		return base, err
@@ -532,16 +610,16 @@ func mergePolicy(bundled *Policy, override map[string]any, triggerPolicy *Policy
 		b, _ := yaml.Marshal(bundled)
 		var m map[string]any
 		_ = yaml.Unmarshal(b, &m)
-		acc = mergeMaps(acc, m)
+		acc = deepOverride(acc, m)
 	}
 	if override != nil {
-		acc = mergeMaps(acc, override)
+		acc = deepOverride(acc, override)
 	}
 	if triggerPolicy != nil {
 		b, _ := yaml.Marshal(triggerPolicy)
 		var m map[string]any
 		_ = yaml.Unmarshal(b, &m)
-		acc = mergeMaps(acc, m)
+		acc = deepOverride(acc, m)
 	}
 	if len(acc) == 0 {
 		return triggerPolicy, nil
@@ -568,7 +646,7 @@ func applyTriggerArm(tr *TriggerSpec, arm TriggerArm) error {
 		tr.Filters["repos"] = repos
 	}
 	if arm.Filters != nil {
-		tr.Filters = mergeMaps(tr.Filters, arm.Filters)
+		tr.Filters = deepOverride(tr.Filters, arm.Filters)
 	}
 	if arm.Policy != nil {
 		pol, err := mergePolicy(nil, arm.Policy, tr.Policy)

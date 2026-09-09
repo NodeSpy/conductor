@@ -18,32 +18,15 @@ type refRewriter struct {
 	// agentBind maps a pack agent role to a consumer global (bind form); refs to
 	// it resolve to the global directly, not to a namespaced copy.
 	agentBind map[string]string
-	// packAgents/packWorkflows/packChecks are the names the pack defines, so a
-	// ref is only rewritten when it actually names a pack-local resource.
-	packAgents    map[string]bool
-	packWorkflows map[string]bool
-	packChecks    map[string]bool
 	// env rebinds required environment names to consumer globals.
 	env envBindings
 }
 
 func newRefRewriter(ns string, man *PackManifest, inst PackInstance, env envBindings) *refRewriter {
 	rw := &refRewriter{
-		ns:            ns,
-		agentBind:     map[string]string{},
-		packAgents:    map[string]bool{},
-		packWorkflows: map[string]bool{},
-		packChecks:    map[string]bool{},
-		env:           env,
-	}
-	for role := range man.Agents {
-		rw.packAgents[role] = true
-	}
-	for name := range man.Workflows {
-		rw.packWorkflows[name] = true
-	}
-	for name := range man.Checks {
-		rw.packChecks[name] = true
+		ns:        ns,
+		agentBind: map[string]string{},
+		env:       env,
 	}
 	for role, b := range inst.Agents {
 		if b.IsBind() {
@@ -58,8 +41,10 @@ func (rw *refRewriter) workflowName(name string) string { return rw.ns + "/" + n
 func (rw *refRewriter) checkName(name string) string    { return rw.ns + "/" + name }
 
 // resolveAgentRef maps a bare pack agent ref to its final name: a bound global,
-// a namespaced pack agent, or (for a dependency alias like "base/fetcher") a
-// nested-namespace name. Unknown refs are left untouched for later validation.
+// else a name scoped under this instance. An UNDECLARED name (not a pack agent,
+// not a bound role) is deliberately namespaced too, so it becomes `<ns>/<name>`
+// and FAILS validation loudly rather than silently resolving to a consumer
+// global of the same name — that would be a privilege reach past `requires:`.
 func (rw *refRewriter) resolveAgentRef(ref string) string {
 	if ref == "" {
 		return ref
@@ -67,37 +52,21 @@ func (rw *refRewriter) resolveAgentRef(ref string) string {
 	if g, ok := rw.agentBind[ref]; ok {
 		return g
 	}
-	if rw.packAgents[ref] {
-		return rw.agentName(ref)
-	}
-	// A dependency-qualified ref (alias/name) namespaces under this instance.
-	if strings.Contains(ref, "/") {
-		return rw.ns + "/" + ref
-	}
-	return ref
+	return rw.ns + "/" + ref
 }
 
 func (rw *refRewriter) resolveWorkflowRef(ref string) string {
 	if ref == "" {
 		return ref
 	}
-	if rw.packWorkflows[ref] {
-		return rw.workflowName(ref)
-	}
-	if strings.Contains(ref, "/") {
-		return rw.ns + "/" + ref
-	}
-	return ref
+	return rw.ns + "/" + ref
 }
 
 func (rw *refRewriter) resolveCheckRef(ref string) string {
-	if rw.packChecks[ref] {
-		return rw.checkName(ref)
+	if ref == "" {
+		return ref
 	}
-	if strings.Contains(ref, "/") {
-		return rw.ns + "/" + ref
-	}
-	return ref
+	return rw.ns + "/" + ref
 }
 
 // rebindVerb rewrites the connector prefix of a `conn.verb` reference when
@@ -144,6 +113,37 @@ func (rw *refRewriter) rebindAgent(p *AgentProfile) {
 		}
 		p.Skill.Verbs = out
 	}
+	// A session `end_on: [<connector>.<kind>]` eviction rule names connectors
+	// too — rebind their prefixes, or the rule would name a connector that does
+	// not exist in the consumer config and silently never fire.
+	if p.Session != nil && len(p.Session.EndOn) > 0 {
+		for i, e := range p.Session.EndOn {
+			p.Session.EndOn[i] = rw.rebindVerb(e)
+		}
+	}
+}
+
+// deepOverride merges a pack OVERRIDE map onto a base map with replace
+// semantics: nested maps deep-merge, but scalars and LISTS are replaced (not
+// appended). This differs from mergeMaps (which appends lists) because a pack
+// override must be able to NARROW a bundled list — e.g. restrict a bundled
+// agent's skill.verbs — not only widen it. Security-relevant: an override that
+// appended could never remove a permission.
+func deepOverride(base, ov map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range ov {
+		if bm, ok := out[k].(map[string]any); ok {
+			if om, ok2 := v.(map[string]any); ok2 {
+				out[k] = deepOverride(bm, om)
+				continue
+			}
+		}
+		out[k] = v
+	}
+	return out
 }
 
 func (rw *refRewriter) rewriteWorkflow(w *WorkflowDef) {

@@ -54,8 +54,15 @@ func checkOneConstraint(part string, have semver, version, full string) error {
 		ok = cmp < 0
 	case "=", "==":
 		ok = cmp == 0
-	case "^": // compatible: same major, >= want
-		ok = have.major == want.major && cmp >= 0
+	case "^": // compatible-with, npm-style (0.x is treated as unstable)
+		switch {
+		case want.major > 0:
+			ok = have.major == want.major && cmp >= 0
+		case want.minor > 0: // ^0.8.x => >=0.8.0 <0.9.0
+			ok = have.major == 0 && have.minor == want.minor && cmp >= 0
+		default: // ^0.0.z => exactly that patch
+			ok = have.major == 0 && have.minor == 0 && have.patch == want.patch
+		}
 	case "~": // approximately: same major.minor, >= want
 		ok = have.major == want.major && have.minor == want.minor && cmp >= 0
 	case "": // bare version means >=
