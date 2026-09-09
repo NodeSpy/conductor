@@ -1,0 +1,276 @@
+package config
+
+import (
+	"fmt"
+
+	"gopkg.in/yaml.v3"
+)
+
+// ---------------------------------------------------------------------------
+// Distributable config packs (issue #53) — Terraform-modules-for-conductor.
+//
+// A pack is a self-contained, versioned bundle of behavior (agents, workflows,
+// policy, disarmed triggers) that anyone can install from a source, parameterize,
+// override, and compose. The top-level `packs:` block instantiates them.
+//
+// The governing rule is DEFINE BEHAVIOR / BIND ENVIRONMENT:
+//   - Define-in-pack (shipped, namespaced, overridable): agents, workflows,
+//     policy, checks, memory, triggers. Pure behavior.
+//   - Bind-only (declared in requires:, wired in the instance, NEVER shipped):
+//     connectors, secrets, vaults, stores, runtimes, hosts, handoffs. Anything
+//     carrying credentials, endpoints, or infra identity.
+//
+// This is the security boundary: a pack from a stranger can define prompts,
+// policy, and workflows, but cannot smuggle in a credential or point at
+// infrastructure. The consumer always owns the environment side.
+//
+// Two layers keep daemon boot offline and deterministic:
+//   - resolve (conductor init): fetch sources into the vendor dir, write the
+//     sha-pinned lockfile. The only network step. See pack_resolve.go.
+//   - instantiate (every config.Load): read the already-vendored packs, namespace
+//     + bind + settings-substitute + arm triggers, merge into the effective
+//     Config. Offline. See pack_instantiate.go.
+// ---------------------------------------------------------------------------
+
+// PackInstance is one entry in the top-level `packs:` block: a sourced,
+// versioned, parameterized instance of a distributable pack. The instance name
+// (the map key in `packs:`) becomes the namespace for everything the pack
+// defines — `agents.reviewer` in the pack resolves to `<instance>/reviewer`.
+//
+// The block IS the override surface. Every field is optional; a pack authored
+// for the zero-config 80% case (§26) runs with near-nothing bound.
+type PackInstance struct {
+	// Source locates the pack: a go-getter/Terraform-style
+	// `github.com/org/repo//subdir@ref`, an SSH form
+	// `git::ssh://git@github.com/…`, or a local path (`./packs/review-kit`,
+	// relative to the config file) for vendored/example packs.
+	Source string `yaml:"source"`
+	// Version pins the pack version; the lockfile records the resolved sha.
+	Version string `yaml:"version,omitempty"`
+	// Auth is an OPTIONAL fetch credential for a private source, resolved
+	// through the consumer's secrets:/vaults: (redacted, never written into a
+	// pack). Absent → the box's ambient `gh`/git auth. Bind-environment: the
+	// credential is the consumer's, never the pack's.
+	Auth string `yaml:"auth,omitempty"`
+
+	// Preset selects one of the manifest's named `presets:` (a pre-filled
+	// bundle of setting values, e.g. a `claude` vs `codex` flavor). Individual
+	// Settings below still override the preset.
+	Preset string `yaml:"preset,omitempty"`
+	// Settings overrides the pack's typed `settings:` defaults, substituted into
+	// the pack's templated fields at instantiate time (`${settings.NAME}`).
+	Settings map[string]any `yaml:"settings,omitempty"`
+
+	// Connectors/Stores/Secrets/Handoffs are BIND-ONLY (environment): they map
+	// a pack `requires:` name to one of the consumer's own globals. A pack never
+	// ships these; the consumer always owns them.
+	Connectors map[string]string `yaml:"connectors,omitempty"`
+	Stores     map[string]string `yaml:"stores,omitempty"`
+	Secrets    map[string]string `yaml:"secrets,omitempty"`
+	Handoffs   map[string]string `yaml:"handoffs,omitempty"`
+
+	// Policy deep-merges onto the pack's bundled policy (behavior override).
+	Policy map[string]any `yaml:"policy,omitempty"`
+	// Agents satisfies each of the pack's agent roles: absent → bundled default,
+	// string → bind to one of your globals, map → override (deep-merged onto the
+	// bundle). See Binding.
+	Agents map[string]Binding `yaml:"agents,omitempty"`
+	// Triggers arms (and optionally overrides) the pack's DISARMED triggers,
+	// keyed by trigger name. Arming — enabled:true + a repo scope — is the
+	// environment binding that constitutes consent. See TriggerArm.
+	Triggers map[string]TriggerArm `yaml:"triggers,omitempty"`
+
+	// Packs instantiates the pack's own pack dependencies (requires.packs),
+	// recursively — the identical default/override/bind surface, one level down.
+	Packs map[string]PackInstance `yaml:"packs,omitempty"`
+}
+
+// Binding is the polymorphic satisfy-a-resource value (§4): its YAML shape
+// selects the strategy.
+//
+//	absent  -> the pack's bundled default
+//	string  -> BIND: swap in one of your own existing globals entirely
+//	map     -> OVERRIDE: keep the bundle, deep-merge changes onto it
+type Binding struct {
+	// Bind, when non-empty, names a consumer global to substitute for the
+	// pack's bundled resource.
+	Bind string
+	// Override, when non-nil, is deep-merged onto the pack's bundled resource.
+	Override map[string]any
+}
+
+// UnmarshalYAML accepts the string (bind) and map (override) forms.
+func (b *Binding) UnmarshalYAML(n *yaml.Node) error {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		return n.Decode(&b.Bind)
+	case yaml.MappingNode:
+		b.Override = map[string]any{}
+		return n.Decode(&b.Override)
+	default:
+		return fmt.Errorf("a pack binding is a string (bind to a global) or a map (override the bundle)")
+	}
+}
+
+// IsBind reports the bind form (a global name was supplied).
+func (b Binding) IsBind() bool { return b.Bind != "" }
+
+// IsOverride reports the override form (a deep-merge map was supplied).
+func (b Binding) IsOverride() bool { return b.Override != nil }
+
+// TriggerArm arms and optionally scopes a pack's disarmed trigger. A pack ships
+// its triggers so the consumer never rebuilds the event mapping / gates / steps,
+// but they arrive DISARMED — disabled, with no repos. Arming is the two
+// environment-only things: enabled:true AND a repo scope. A trigger with no repo
+// scope has nothing to match, so even an accidental enabled:true fires nothing —
+// the binding you must do IS the consent (§7).
+type TriggerArm struct {
+	// Enabled arms the trigger. Absent/false leaves the shipped trigger inert.
+	Enabled *bool `yaml:"enabled,omitempty"`
+	// Repos scopes the trigger to the consumer's repositories (the consent). An
+	// armed trigger with no repos matches nothing.
+	Repos []string `yaml:"repos,omitempty"`
+	// Filters deep-merges onto the shipped trigger's filters (behavior override).
+	Filters map[string]any `yaml:"filters,omitempty"`
+	// Policy deep-merges onto the shipped trigger's policy (behavior override).
+	Policy map[string]any `yaml:"policy,omitempty"`
+}
+
+// IsArmed reports whether the consumer armed this trigger (enabled:true).
+func (t TriggerArm) IsArmed() bool { return t.Enabled != nil && *t.Enabled }
+
+// ---------------------------------------------------------------------------
+// Pack manifest (conductor-pack.yaml) — the pack's own definition.
+// ---------------------------------------------------------------------------
+
+// PackManifestFile is the conventional manifest filename inside a pack source.
+const PackManifestFile = "conductor-pack.yaml"
+
+// PackManifest is a pack's self-contained definition: identity/discovery/compat
+// metadata (`pack:`), typed settings + presets, the public `exports:` surface,
+// and the bundled behavior (agents/workflows/policy/checks/triggers/memory).
+//
+// The bind-only sections (connectors/secrets/vaults/stores/runtimes/hosts) are
+// FORBIDDEN in a manifest and rejected at install with a precise error — the
+// security boundary. They are captured here (as raw nodes) only so the rejection
+// names them rather than surfacing a generic unknown-field error.
+type PackManifest struct {
+	Pack     PackMeta                  `yaml:"pack"`
+	Settings map[string]SettingSpec    `yaml:"settings,omitempty"`
+	Presets  map[string]map[string]any `yaml:"presets,omitempty"`
+	Exports  PackExports               `yaml:"exports,omitempty"`
+
+	// Define-in-pack (behavior) — shipped, namespaced, overridable.
+	Agents    map[string]AgentProfile `yaml:"agents,omitempty"`
+	Workflows map[string]WorkflowDef  `yaml:"workflows,omitempty"`
+	Triggers  []TriggerSpec           `yaml:"triggers,omitempty"` // shipped DISARMED
+	Policy    *Policy                 `yaml:"policy,omitempty"`
+	Checks    map[string]Step         `yaml:"checks,omitempty"`
+	Memory    *MemoryConfig           `yaml:"memory,omitempty"`
+
+	// Bind-only sections — FORBIDDEN here. Captured as raw nodes so an offending
+	// pack is rejected by name (see (*PackManifest).checkNoEnvironment).
+	Connectors map[string]yaml.Node `yaml:"connectors,omitempty"`
+	Secrets    map[string]yaml.Node `yaml:"secrets,omitempty"`
+	Vaults     map[string]yaml.Node `yaml:"vaults,omitempty"`
+	StoresRaw  map[string]yaml.Node `yaml:"stores,omitempty"`
+	Runtimes   map[string]yaml.Node `yaml:"runtimes,omitempty"`
+	Hosts      map[string]yaml.Node `yaml:"hosts,omitempty"`
+}
+
+// PackMeta is the manifest's identity/discovery/compatibility header.
+type PackMeta struct {
+	// Name is the pack's CANONICAL identity, independent of the hosting URL, so
+	// it can move repos without breaking references or the lockfile. Distinct
+	// from the instance name (the local namespace) and the source URL (location).
+	Name        string       `yaml:"name"`
+	Version     string       `yaml:"version"`
+	Description string       `yaml:"description,omitempty"`
+	Tags        []string     `yaml:"tags,omitempty"`
+	Homepage    string       `yaml:"homepage,omitempty"`
+	License     string       `yaml:"license,omitempty"`
+	Maintainers []string     `yaml:"maintainers,omitempty"`
+	Requires    PackRequires `yaml:"requires,omitempty"`
+	// Deprecated, when non-empty, makes the daemon warn on load (§22) without
+	// forcing an update — the message is surfaced verbatim.
+	Deprecated string `yaml:"deprecated,omitempty"`
+}
+
+// PackRequires is the pack's interface (§5): the resources it needs and, for
+// roles, the capabilities a binding must satisfy. It does double duty — the
+// "sockets you plug in" list AND the allowlist of global names the pack may
+// reach. Anything NOT in requires: is pack-local.
+type PackRequires struct {
+	// Conductor is the daemon-version constraint (§16) — REQUIRED for the
+	// auto-updating fleet. Loading a pack outside its range is a named error,
+	// never a crash. Mirrors Terraform required_version.
+	Conductor  string                `yaml:"conductor,omitempty"`
+	Connectors []string              `yaml:"connectors,omitempty"`
+	Stores     []string              `yaml:"stores,omitempty"`
+	Handoffs   []string              `yaml:"handoffs,omitempty"`
+	Secrets    map[string]SecretReq  `yaml:"secrets,omitempty"`
+	Roles      map[string]RoleReq    `yaml:"roles,omitempty"`
+	Packs      map[string]PackDepReq `yaml:"packs,omitempty"`
+}
+
+// RoleReq declares an agent role the pack defines: a bound agent MUST provide
+// the listed skill capabilities (validated at install).
+type RoleReq struct {
+	Skill []string `yaml:"skill,omitempty"`
+}
+
+// SecretReq documents a secret the pack needs (name/role, no value).
+type SecretReq struct {
+	Desc string `yaml:"desc,omitempty"`
+}
+
+// PackDepReq declares a pack dependency (§10), satisfied by a nested `packs:`
+// instance block.
+type PackDepReq struct {
+	Source  string `yaml:"source"`
+	Version string `yaml:"version,omitempty"`
+}
+
+// SettingSpec is one typed pack setting with a default (§6).
+type SettingSpec struct {
+	Type    string `yaml:"type,omitempty"` // string | integer | number | boolean
+	Default any    `yaml:"default,omitempty"`
+	Desc    string `yaml:"desc,omitempty"`
+}
+
+// PackExports declares the pack's public surface (§8) — the workflows/agents
+// meant to be referenced externally — so authors can refactor internals without
+// breaking consumers. Empty → everything is addressable.
+type PackExports struct {
+	Workflows []string `yaml:"workflows,omitempty"`
+	Agents    []string `yaml:"agents,omitempty"`
+}
+
+// checkNoEnvironment enforces the security boundary: a manifest that ships any
+// bind-only (environment) section is rejected by name. Packs ship no connectors
+// and no secrets — enforced at install (§13).
+func (m *PackManifest) checkNoEnvironment() error {
+	var shipped []string
+	if len(m.Connectors) > 0 {
+		shipped = append(shipped, "connectors")
+	}
+	if len(m.Secrets) > 0 {
+		shipped = append(shipped, "secrets")
+	}
+	if len(m.Vaults) > 0 {
+		shipped = append(shipped, "vaults")
+	}
+	if len(m.StoresRaw) > 0 {
+		shipped = append(shipped, "stores")
+	}
+	if len(m.Runtimes) > 0 {
+		shipped = append(shipped, "runtimes")
+	}
+	if len(m.Hosts) > 0 {
+		shipped = append(shipped, "hosts")
+	}
+	if len(shipped) > 0 {
+		return fmt.Errorf("pack %q ships bind-only section(s) %v: a pack must not carry connectors, secrets, vaults, stores, runtimes, or hosts (define behavior / bind environment) — declare them in requires: and let the consumer bind them", m.Pack.Name, shipped)
+	}
+	return nil
+}

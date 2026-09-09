@@ -139,6 +139,14 @@ type Config struct {
 	// concise/human-tone default is layer 0 instead; a profile's `guidance:
 	// { replace: … }` drops this layer for that agent.
 	AgentGuidance *string `yaml:"agent_guidance"`
+
+	// Packs is the OPTIONAL `packs:` block (issue #53): distributable, versioned,
+	// parameterized instances of reusable packs (Terraform-modules-for-conductor).
+	// Each entry is namespaced under its instance name and, once fetched by
+	// `conductor init`, instantiated into the effective config at load (namespace
+	// + bind + settings + disarmed triggers). Absent → nothing changes. See
+	// pack.go / pack_instantiate.go / pack_resolve.go.
+	Packs map[string]PackInstance `yaml:"packs,omitempty"`
 }
 
 // Update configures periodic self-update checks.
