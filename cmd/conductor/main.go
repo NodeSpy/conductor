@@ -174,9 +174,12 @@ usage:
   conductor mcp memory --socket <path>  stdio MCP server: memory + skill broker (agent-facing)
   conductor mcp callable --token <name> [--config PATH]  stdio MCP server: invoke callable workflows (external MCP clients)
   conductor workflows ls|review|rm      manage saved (agent-promoted) workflows
-  conductor init [--config PATH]        fetch the packs: block, write the lockfile, preview the effect
+  conductor init [--config PATH] [--allow-unlisted]  fetch the packs: block, write the lockfile, preview
   conductor pack list|plan              list configured packs; preview what they add
+  conductor pack add <source>           fetch a pack, show its install review + a ready-to-paste block
   conductor pack lint|show <pack-dir>   validate / render a pack (author + install-review tooling)
+  conductor pack remove <instance>      clear a pack's vendored tree + lockfile entries
+  conductor pack update | update --packs  re-resolve the packs: block and diff the lockfile
   conductor version
 `)
 }

@@ -160,12 +160,20 @@ changed remote is tamper-evident on the next `init`.
 ## CLI
 
 ```
-conductor init                    # fetch the packs: block, write the lockfile, preview the effect
+conductor init [--allow-unlisted] # fetch the packs: block, write the lockfile, preview the effect
 conductor pack list               # configured instances + lock status
 conductor pack plan               # preview what the packs add (agents, skill grants, armed triggers)
+conductor pack add <source>       # fetch a pack, show its install review + a ready-to-paste block
 conductor pack lint <pack-dir>    # validate a pack is well-formed (author tooling)
 conductor pack show <pack-dir>    # render a pack's docs: settings, requires, exports, example
+conductor pack remove <instance>  # clear a pack's vendored tree + lockfile entries
+conductor pack update             # re-resolve the packs: block and diff the lockfile
+conductor update --packs          # alias for `conductor pack update`
 ```
+
+`conductor pack add` and `remove` do **not** edit your config: `add` prints a
+block for you to paste (so you review the binds first), and `remove` clears the
+vendored tree + lockfile and tells you which `packs:` block to delete.
 
 Typical flow: edit `packs:` → `conductor init` → `conductor pack plan` → arm a
 trigger → `conductor validate`.

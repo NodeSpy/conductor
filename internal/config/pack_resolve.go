@@ -552,6 +552,46 @@ func writeLockfile(configDir string, lock *Lockfile) error {
 	return os.WriteFile(filepath.Join(configDir, LockfileName), append([]byte(header), b...), 0o644)
 }
 
+// PackVendorDir is the exported vendor-dir path for the CLI (`conductor remove`).
+func PackVendorDir(configDir string) string { return packVendorDir(configDir) }
+
+// WriteLockfileTo writes a lockfile next to the config (exported for the CLI).
+func WriteLockfileTo(configDir string, lock *Lockfile) error { return writeLockfile(configDir, lock) }
+
+// FetchPackForReview fetches a single pack source into a temp dir and returns
+// its manifest, for `conductor add` to render an install review WITHOUT touching
+// the config or vendor dir. Dependencies are not fetched. The temp dir is
+// removed before returning.
+func FetchPackForReview(source, baseDir string) (*PackManifest, error) {
+	spec, err := parseSource(source, baseDir)
+	if err != nil {
+		return nil, err
+	}
+	tmp, err := os.MkdirTemp("", "conductor-pack-review-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	dest := filepath.Join(tmp, "pack")
+	if spec.git {
+		if _, err := fetchGit(spec, dest); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := fetchLocal(spec, dest); err != nil {
+			return nil, err
+		}
+	}
+	man, err := loadPackManifest(dest)
+	if err != nil {
+		return nil, err
+	}
+	if err := man.checkNoEnvironment(); err != nil {
+		return nil, err
+	}
+	return man, nil
+}
+
 // ReadLockfile reads the lockfile next to the config (nil, nil if absent).
 func ReadLockfile(configDir string) (*Lockfile, error) {
 	b, err := os.ReadFile(filepath.Join(configDir, LockfileName))

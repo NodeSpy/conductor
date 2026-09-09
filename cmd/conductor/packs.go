@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -65,9 +66,173 @@ func cmdPack(args []string) error {
 		return cmdPackLint(rest[1:])
 	case "show":
 		return cmdPackShow(rest[1:])
+	case "add":
+		return cmdPackAdd(args)
+	case "remove", "rm":
+		return cmdPackRemove(args)
+	case "update":
+		return cmdPackUpdate(args)
 	default:
-		return fmt.Errorf("unknown pack subcommand %q (list|plan|lint|show)", rest[0])
+		return fmt.Errorf("unknown pack subcommand %q (list|plan|lint|show|add|remove|update)", rest[0])
 	}
+}
+
+// cmdPackAdd fetches a pack source and prints an install review plus a
+// ready-to-paste `packs:` block — WITHOUT mutating the config (§14). The
+// operator pastes the block, binds/arms it, then runs `conductor init`.
+func cmdPackAdd(args []string) error {
+	path, rest := configPath(args)
+	// rest[0] is "add"; the source follows.
+	pos := positional(rest)
+	if len(pos) < 2 {
+		return fmt.Errorf("usage: conductor pack add <source>")
+	}
+	source := pos[1]
+	man, err := config.FetchPackForReview(source, filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	m := man.Pack
+	fmt.Printf("%s v%s — %s\n", m.Name, m.Version, m.Description)
+	fmt.Println("\ninstall review:")
+	for _, a := range sortedAgentNames(man.Agents) {
+		if s := man.Agents[a].Skill; s != nil && (len(s.Verbs) > 0 || len(s.AllowSecrets) > 0) {
+			fmt.Printf("  agent %s", a)
+			if len(s.Verbs) > 0 {
+				fmt.Printf("  !! skill: %s", strings.Join(s.Verbs, ", "))
+			}
+			if len(s.AllowSecrets) > 0 {
+				fmt.Printf("  !! secrets: %s", strings.Join(s.AllowSecrets, ", "))
+			}
+			fmt.Println()
+		}
+	}
+	for _, tr := range man.Triggers {
+		fmt.Printf("  ships trigger %q on:%s (disarmed — you arm it)\n", tr.Name, tr.On)
+	}
+	// Ready-to-paste block.
+	fmt.Println("\nadd to your config's packs: block, then `conductor init`:")
+	inst := m.Name
+	fmt.Printf("  %s:\n    source: %s\n", inst, source)
+	if m.Version != "" {
+		fmt.Printf("    version: %s\n", m.Version)
+	}
+	for _, c := range m.Requires.Connectors {
+		fmt.Printf("    connectors: { %s: <your-connector> }\n", c)
+	}
+	for _, s := range m.Requires.Stores {
+		fmt.Printf("    stores: { %s: <your-store> }\n", s)
+	}
+	for name := range m.Requires.Secrets {
+		fmt.Printf("    secrets: { %s: <your-secret-or-vault-ref> }\n", name)
+	}
+	for _, tr := range man.Triggers {
+		fmt.Printf("    triggers: { %s: { enabled: true, repos: [your-org/repo] } }\n", tr.Name)
+	}
+	return nil
+}
+
+// cmdPackRemove clears a pack instance's vendored tree and lockfile entries.
+func cmdPackRemove(args []string) error {
+	path, rest := configPath(args)
+	pos := positional(rest)
+	if len(pos) < 2 {
+		return fmt.Errorf("usage: conductor pack remove <instance>")
+	}
+	inst := pos[1]
+	dir := filepath.Dir(path)
+	vendor := config.PackVendorDir(dir)
+	if err := os.RemoveAll(filepath.Join(vendor, inst)); err != nil {
+		return err
+	}
+	if lock, _ := config.ReadLockfile(dir); lock != nil {
+		kept := lock.Packs[:0]
+		removed := 0
+		for _, e := range lock.Packs {
+			if e.Instance == inst || strings.HasPrefix(e.Instance, inst+"/") {
+				removed++
+				continue
+			}
+			kept = append(kept, e)
+		}
+		lock.Packs = kept
+		if err := config.WriteLockfileTo(dir, lock); err != nil {
+			return err
+		}
+		fmt.Printf("removed %d lockfile entr(ies) and the vendored tree for %q\n", removed, inst)
+	}
+	fmt.Printf("note: also remove the `packs.%s:` block from your config so it is not re-fetched\n", inst)
+	return nil
+}
+
+// cmdPackUpdate re-resolves the packs: block and prints the lockfile diff.
+func cmdPackUpdate(args []string) error {
+	path, rest := configPath(args)
+	allowUnlisted := false
+	for _, a := range rest {
+		if a == "--allow-unlisted" {
+			allowUnlisted = true
+		}
+	}
+	loadEnvFile(filepath.Join(filepath.Dir(path), "conductor.env"))
+	old, _ := config.ReadLockfile(filepath.Dir(path))
+	resolve := config.ResolvePacks
+	if allowUnlisted {
+		resolve = config.ResolvePacksAllowingUnlisted
+	}
+	next, err := resolve(path)
+	if err != nil {
+		return err
+	}
+	printLockDiff(old, next)
+	return nil
+}
+
+func printLockDiff(old, next *config.Lockfile) {
+	oldBy := map[string]config.LockEntry{}
+	if old != nil {
+		for _, e := range old.Packs {
+			oldBy[e.Instance] = e
+		}
+	}
+	changes := 0
+	for _, e := range next.Packs {
+		prev, existed := oldBy[e.Instance]
+		switch {
+		case !existed:
+			fmt.Printf("  + %s %s@%s (%s)\n", e.Instance, e.Name, orNone(e.Version), e.Resolved)
+			changes++
+		case prev.Resolved != e.Resolved || prev.Digest != e.Digest:
+			fmt.Printf("  ~ %s %s: %s -> %s\n", e.Instance, e.Name, short(prev.Resolved), short(e.Resolved))
+			changes++
+		}
+		delete(oldBy, e.Instance)
+	}
+	for inst, e := range oldBy {
+		fmt.Printf("  - %s %s (removed)\n", inst, e.Name)
+		changes++
+	}
+	if changes == 0 {
+		fmt.Println("packs are up to date (no changes)")
+	} else {
+		fmt.Printf("%d change(s) written to %s\n", changes, config.LockfileName)
+	}
+}
+
+func short(s string) string {
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
+}
+
+func sortedAgentNames(m map[string]config.AgentProfile) []string {
+	out := make([]string, 0, len(m))
+	for n := range m {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // cmdPackList lists the configured pack instances and their lock status.
