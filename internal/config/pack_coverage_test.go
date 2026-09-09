@@ -78,10 +78,59 @@ packs:
 		t.Fatalf("resolveAndLoad: %v", err)
 	}
 	ws := strings.Join(cfg.PackWarnings(), "\n")
-	for _, want := range []string{"deprecated", "armed with no repos", "not declared"} {
+	for _, want := range []string{"deprecated", "not declared"} {
 		if !strings.Contains(ws, want) {
 			t.Errorf("expected a warning containing %q, got:\n%s", want, ws)
 		}
+	}
+}
+
+// TestPackGithubTriggerArmedNeedsRepos proves the fail-closed consent boundary:
+// a github pack trigger armed with enabled:true but no repos is rejected (an
+// empty repo set would otherwise match every repo the connector observes),
+// while the same arm WITH repos succeeds.
+func TestPackGithubTriggerArmedNeedsRepos(t *testing.T) {
+	const manifest = `
+pack:
+  name: gh-pack
+  version: 1.0.0
+  requires:
+    conductor: ">=0.1"
+    connectors: [github]
+triggers:
+  - name: on_review
+    on: github.review_requested
+    steps: [ { id: s, run: js, code: "return {}" } ]
+`
+	write := func(t *testing.T, arm string) string {
+		dir := t.TempDir()
+		writePackSource(t, dir, "src", manifest)
+		body := `
+connectors: { gh: { type: github } }
+packs:
+  p:
+    source: ./src
+    connectors: { github: gh }
+    triggers:
+      on_review:
+` + arm
+		path := filepath.Join(dir, "config.yaml")
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	// Armed, no repos → hard error naming the fix.
+	if _, err := resolveAndLoad(t, write(t, "        enabled: true\n")); err == nil {
+		t.Fatal("armed github pack trigger with no repos was accepted; the consent boundary must reject it")
+	} else if !strings.Contains(err.Error(), "repos") {
+		t.Fatalf("error did not name repos as the fix: %v", err)
+	}
+
+	// Armed, WITH repos → accepted.
+	if _, err := resolveAndLoad(t, write(t, "        enabled: true\n        repos: [acme/app]\n")); err != nil {
+		t.Fatalf("armed github pack trigger WITH repos must be accepted: %v", err)
 	}
 }
 

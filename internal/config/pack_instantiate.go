@@ -278,8 +278,15 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 			if err := applyTriggerArm(&tr, arm); err != nil {
 				return fmt.Errorf("pack %q: trigger %q: %w", ns, armName, err)
 			}
-			if arm.IsArmed() && len(arm.Repos) == 0 {
-				st.warnf("pack %q: trigger %q armed with no repos — it will match nothing (a repo scope is the consent)", ns, armName)
+			// Fail closed: an armed trigger on a repo-scoped (github) source
+			// MUST name its repos. The github matcher treats an empty repo set
+			// as "match every repo" — falling back to the connector's global
+			// scope — so an armed-but-unscoped pack trigger would silently run
+			// on repos the consumer never granted THIS pack. The repo list is
+			// the pack's consent boundary, so its absence is a hard error, not
+			// a warning. (Non-repo sources like `manual`/`rss` are exempt.)
+			if arm.IsArmed() && !triggerScopesRepos(&tr) && st.sourceIsRepoScoped(tr.On) {
+				return fmt.Errorf("pack %q: trigger %q is armed (enabled: true) but names no repos — a github pack trigger must scope its repos (the repo list is the consent). Add e.g. triggers: { %s: { enabled: true, repos: [owner/repo] } }", ns, armName, armName)
 			}
 		}
 		st.cfg.Triggers = append(st.cfg.Triggers, tr)
@@ -711,6 +718,36 @@ func clearTriggerRepos(tr *TriggerSpec) {
 	if tr.Filters != nil {
 		delete(tr.Filters, "repos")
 	}
+}
+
+// triggerScopesRepos reports whether tr carries a non-empty repos filter.
+func triggerScopesRepos(tr *TriggerSpec) bool {
+	v, ok := tr.Filters["repos"]
+	if !ok {
+		return false
+	}
+	switch r := v.(type) {
+	case []any:
+		return len(r) > 0
+	case []string:
+		return len(r) > 0
+	default:
+		return false
+	}
+}
+
+// sourceIsRepoScoped reports whether a trigger's `on:` names a github-type
+// connector — the only source whose matcher treats an empty repo set as "match
+// every repo", which makes an explicit repo scope load-bearing for consent.
+// Bare sources like the built-in `manual` (no ".") and non-github connectors
+// have no repo scope and are exempt.
+func (st *packInstantiation) sourceIsRepoScoped(on string) bool {
+	conn, _, ok := strings.Cut(on, ".")
+	if !ok {
+		return false
+	}
+	ref, ok := st.cfg.ConnectorsMap[conn]
+	return ok && ref.Type == "github"
 }
 
 func hasTrigger(trs []TriggerSpec, name string) bool {
