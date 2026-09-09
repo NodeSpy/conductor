@@ -73,6 +73,11 @@ type Config struct {
 	// Stores are named data stores (boltdb/redis/http) addressed by the
 	// `store:` selector on kv.* verbs; nothing is implicit.
 	Stores map[string]StoreRef `yaml:"stores"`
+	// Plugins is the OPTIONAL `plugins:` block (#54): EXTERNAL plugins the
+	// daemon runs out-of-process to acquire connector types / runtime names
+	// without recompiling. Bundled connectors/runtimes are NOT listed here.
+	// Entirely optional; strict-decode-safe. See PluginRef and internal/plugin.
+	Plugins map[string]PluginRef `yaml:"plugins"`
 	// Vaults are named secret stores (conductor/onepassword/pass/file/
 	// hashicorp) addressed by {{ vault "<name>" "<key>" }} references and
 	// per-vault read/write verbs; env stays the implicit baseline.
@@ -1260,6 +1265,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: no integrations or connectors configured")
 	}
 	if err := c.validateConnectors(); err != nil {
+		return err
+	}
+	if err := c.validatePlugins(); err != nil {
 		return err
 	}
 	if err := c.validateStores(); err != nil {
