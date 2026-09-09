@@ -19,6 +19,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/integrations/slack"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/plugin"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/vaults"
 )
@@ -39,6 +40,17 @@ type flowStack struct {
 	// failure (not by an authored enabled: false) — #36 requires disable AND
 	// notify, so main routes these through the notifier at boot.
 	ConnectorErrs []string
+	// Plugins holds the external plugin subprocesses (#54). nil when no
+	// plugins: block is configured. Close() must be called to stop them.
+	Plugins *plugin.Manager
+}
+
+// Close releases the flow stack's out-of-process resources (plugin
+// subprocesses). Safe on a nil receiver / nil manager.
+func (s *flowStack) Close() {
+	if s != nil && s.Plugins != nil {
+		s.Plugins.Close()
+	}
 }
 
 // buildFlowStack builds the connectors-model pieces from a loaded config.
@@ -80,9 +92,25 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		logf("blob: swept %d orphaned artifact(s)", n)
 	}
 
-	deps := connector.Deps{Secrets: sec, Log: logf, Config: cfg, Blobs: blobs}
+	// External connector plugins (#54): verify, spawn, describe, and register
+	// their types into the SAME registry BEFORE Build resolves connector types.
+	// Fail-closed — a plugin that can't be verified/started stops boot (a bad
+	// sha is a security event, not a degraded-boot condition); post-boot
+	// runtime crashes degrade to "connector down" instead (see internal/plugin).
+	auditSink := func(e map[string]any) {
+		if flowStore != nil {
+			flowStore.Audit(e)
+		}
+	}
+	pluginMgr, err := loadConnectorPlugins(cfg, sec, auditSink)
+	if err != nil {
+		return nil, err
+	}
+
+	deps := connector.Deps{Secrets: sec, Log: logf, Config: cfg, Blobs: blobs, Audit: auditSink}
 	reg, err := connector.Build(cfg, deps)
 	if err != nil {
+		pluginMgr.Close()
 		return nil, err
 	}
 	// The saved-workflow registry (agent promotions) lives beside the state
@@ -149,6 +177,7 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 	return &flowStack{
 		Secrets: sec, SecretVals: vals, Registry: reg, Runner: runner, Events: events,
 		Integrations: igs, SecretErrs: secretErrs, ConnectorErrs: connErrs,
+		Plugins: pluginMgr,
 	}, nil
 }
 
@@ -314,6 +343,7 @@ func cmdConnectors(args []string) error {
 	if err != nil {
 		return err
 	}
+	defer stack.Close()
 	trigCount := map[string]int{}
 	for _, t := range cfg.Triggers {
 		trigCount[t.Connector()]++
@@ -371,6 +401,7 @@ func cmdSchema(args []string) error {
 	}
 	var dyn []string
 	if stack, err := buildFlowStack(cfg, nil, nil, true); err == nil {
+		defer stack.Close()
 		if in, ok := stack.Registry.Get(name); ok && in.Impl != nil {
 			dyn = in.Impl.DeclaredEvents()
 			// rest/graphql materialize their user-declared verbs/events into
@@ -502,6 +533,7 @@ func cmdSecrets(args []string) error {
 		if err != nil {
 			return err
 		}
+		defer stack.Close()
 		for _, name := range vaults.Names() {
 			if reason := vaults.Broken(name); reason != "" {
 				fmt.Printf("FAIL vault %s (%s): %s\n", name, vaults.Type(name), reason)

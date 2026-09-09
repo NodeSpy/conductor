@@ -115,6 +115,8 @@ func main() {
 		err = cmdConfig(args)
 	case "mcp":
 		err = cmdMCP(args)
+	case "plugin", "plugins":
+		err = cmdPlugin(args)
 	case "discover":
 		err = cmdDiscover(args)
 	case "call":
@@ -164,6 +166,8 @@ usage:
   conductor update [--force] [--tag vX]  self-update to the latest release (uses gh)
   conductor service install|sync|uninstall  manage the background service unit
   conductor connectors ls               list configured connectors: state, events, verbs
+  conductor plugin list                 list plugins: bundled connectors/runtimes + external (#54)
+  conductor plugin show <name>          a plugin's surface (Decl + capability/credential disclosure)
   conductor schema <connector>          print a connector's event/filter/verb/option schemas
   conductor secrets check               resolve every secret reference and report
   conductor connector auth ls           each oauth2 connector's login state + token expiry
@@ -288,6 +292,7 @@ func cmdValidate(args []string) error {
 	if err != nil {
 		return err
 	}
+	defer stack.Close()
 	// Deprecation + skill + isolation lint: warnings, never failures.
 	for _, w := range flow.DeprecationWarnings(cfg) {
 		fmt.Printf("warning: %s\n", w)
@@ -450,6 +455,7 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
+	defer stack.Close() // stop plugin subprocesses on daemon shutdown (#54)
 	if stack != nil {
 		igs = append(igs, stack.Integrations...)
 	}
@@ -1058,6 +1064,7 @@ func cmdReplay(args []string) error {
 		if err != nil {
 			return err
 		}
+		defer stack.Close()
 		stack.Runner.Agents = flow.AgentServices{Dispatch: disp.Dispatch}
 		for _, ig := range stack.Integrations {
 			tr, ok := ig.(translator)

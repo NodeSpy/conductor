@@ -61,6 +61,10 @@ type Config struct {
 	// win over imported ones. Processed at load time; empty here after loading.
 	Imports []string `yaml:"imports"`
 
+	// baseDir is the directory the config file was loaded from — the anchor for
+	// resolving relative paths (e.g. a plugin's local source). Set by Load.
+	baseDir string
+
 	Integrations []IntegrationRef `yaml:"integrations"`
 
 	// ConnectorsMap, Runtimes, Hosts, Workflows, Triggers, Policy, and
@@ -966,6 +970,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	var c Config
+	c.baseDir = filepath.Dir(path)
 	if !hasAnyImports(probe) {
 		if err := strictUnmarshal(expanded, &c); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
@@ -1769,6 +1774,10 @@ func expandHome(p string) string {
 	}
 	return p
 }
+
+// BaseDir returns the directory the config was loaded from (empty for a config
+// built in memory rather than loaded from disk).
+func (c *Config) BaseDir() string { return c.baseDir }
 
 // StateDir returns the state directory to use for the default StateFile/AuditLog
 // paths: ~/.local/state/conductor.

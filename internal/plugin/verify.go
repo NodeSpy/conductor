@@ -71,6 +71,13 @@ func verify(s Spec) (digest string, err error) {
 	return digest, nil
 }
 
+// VerifyOnly runs verify-before-execute (sha + safe perms) and discards the
+// digest — the health check `plugin list` uses without spawning the binary.
+func VerifyOnly(s Spec) error {
+	_, err := verify(s)
+	return err
+}
+
 // checkParentPerms walks from the binary's directory up to root and refuses any
 // world-writable directory without the sticky bit — such a directory lets an
 // attacker replace the binary (or an ancestor) out from under us.
