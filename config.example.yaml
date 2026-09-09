@@ -432,26 +432,35 @@ runtimes:
 
 # ---------------------------------------------------------------------------
 # plugins: — acquire connector TYPES and RUNTIMES from external binaries
-# (in-process built-ins stay bundled; this only ADDS to them). source: is a
-# local executable path in this release. An external plugin is verified before
-# it ever runs (sha256, fail-closed) and sandboxed by default (an isolation:
-# block is required unless allow_unsandboxed). Then reference the type/runtime
-# it registers from connectors:/runtimes:/agents: as usual.
+# (in-process built-ins stay bundled; this only ADDS to them). source: is either
+# a local executable path OR a remote release repo (github.com/org/repo//comp),
+# fetched + checksum-verified + vendored + locked by `conductor init`. An external
+# plugin is verified before it ever runs (sha256, fail-closed) and sandboxed by
+# default (an isolation: block is required unless allow_unsandboxed). Then
+# reference the type/runtime it registers from connectors:/runtimes:/agents:.
 # ---------------------------------------------------------------------------
 # plugins:
-#   jira:                                             # a connector plugin
+#   jira:                                             # a LOCAL connector plugin
 #     source: ./plugins/conductor-jira
 #     kind: connector
 #     provides: jira                                  # the connector type it registers
-#     sha256: "<hex>"                                 # REQUIRED (or allow_unverified: true, dev only)
+#     sha256: "<hex>"                                 # REQUIRED for a local source (dev: allow_unverified: true)
 #     args: ["--profile", "prod"]                     # optional extra argv
 #     isolation: { mode: namespace, network: { egress: ["your-org.atlassian.net:443"] } }
+#   linear:                                           # a REMOTE connector plugin (release-asset fetch)
+#     source: github.com/acme/conductor-plugins//linear
+#     kind: connector
+#     version: "~> 1.2"                               # semver constraint picks the release tag;
+#                                                     # sha comes from the release, recorded in the lockfile
+#     # hold: true                                    # freeze at the locked version (skip auto-update)
+#     isolation: { mode: namespace, network: { egress: ["api.linear.app:443"] } }
 #   modal:                                            # a runtime plugin (co-equal)
 #     source: ./plugins/conductor-modal
 #     kind: runtime
 #     provides: modal                                 # then: agents: { x: { runtime: modal } }
 #     sha256: "<hex>"
 #     isolation: { mode: namespace }
+# plugin_trust: { allow: [github.com/acme/conductor-plugins*] }  # gate remote plugin sources (fail-closed)
 # connectors: { jira: { type: jira } }                # use the plugin's connector type
 # agents:     { deployer: { runtime: modal } }        # use the plugin's runtime
 
@@ -825,6 +834,9 @@ policy:
 #       - { uses: build-box.run, options: { command: "smoke-test.sh" } }
 
 update: { auto: true } # self-update (auto-applies by default); auto-migration runs on the new binary's first boot
+# update: { auto: true, deps: true } # ALSO auto-update packs: + remote plugins: each cycle (opt-in);
+#                                     # a changed dep that still validates restarts to apply; every change is logged.
+#                                     # Freeze one with `hold: true` on its packs:/plugins: entry.
 # store:
 #   state_file: ~/.local/state/conductor/state.json
 #   audit_log:  ~/.local/state/conductor/audit.jsonl

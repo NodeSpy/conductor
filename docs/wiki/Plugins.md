@@ -48,10 +48,50 @@ strict-decode-safe. Every bundled connector/runtime keeps working unchanged.
 
 ### Sources
 
-In this release `source:` is a **local executable path** (absolute, or relative
-to the config file). Remote sources (`github.com/acme/conductor-jira@1.4.0`) with
-fetch, a lockfile, and `conductor plugin add` are a documented follow-up (see
-[Not yet implemented](#not-yet-implemented)).
+`source:` is either a **local executable path** (absolute, or relative to the
+config file) or a **remote release repo**, resolved by the release-asset model:
+
+```yaml
+plugins:
+  jira:
+    source: github.com/acme/conductor-plugins//jira  # a repo, // a monorepo component
+    kind: connector
+    version: "~> 1.4"                 # semver constraint (Terraform/gems style) — picks the tag
+    isolation: { mode: namespace, network: { egress: ["your-org.atlassian.net:443"] } }
+    # sha256: NOT required for a remote source — the sha comes from the resolved
+    # release and is recorded in the lockfile (verify-before-execute checks it).
+    # hold: true                      # freeze at the currently-locked version (no auto-update)
+```
+
+A remote plugin is a **binary**, so — unlike a pack, which is a git tree — it is
+served as a GitHub **release asset**. Resolution (`conductor init`) is:
+
+1. List the repo's release tags; a monorepo prefixes each component's tags
+   (`jira/v1.4.0`). The `version:` constraint selects the **highest** matching tag
+   (`>=`, `>`, `<=`, `<`, `=`, `^`, `~`, `~>`, space/comma-AND'd — the same
+   resolver packs use).
+2. Download the per-platform asset `conductor-<component>_<os>_<arch>` and, if the
+   release publishes a `checksums.txt`, verify the asset against it.
+3. Cache the binary under `.conductor/plugins/<name>/` and record the resolved
+   **tag + verified sha + path** in `conductor.lock.yaml`.
+
+At boot the daemon loads **offline** from the vendored binary and the locked sha
+— `Load` rewrites a remote `source:` to that vendored path, so verify-before-execute
+and the sandbox treat it exactly like a local, sha-pinned plugin. Commit the
+lockfile for a byte-identical, tamper-evident setup on another machine.
+
+An optional `plugin_trust:` allowlist gates **where** remote plugins may come from
+(exact analogue of `pack_trust:`), fail-closed on any unlisted remote source
+unless you run `conductor init --allow-unlisted`:
+
+```yaml
+plugin_trust:
+  allow: [github.com/acme/conductor-plugins*]
+```
+
+Update remote plugins with `conductor plugin update` (or `conductor update
+--plugins`), or automatically alongside the daemon — see
+[Keeping plugins updated](#keeping-plugins-updated).
 
 ## Inspecting plugins
 
@@ -60,11 +100,40 @@ conductor plugin list          # bundled connectors AND runtimes (tagged bundled
                                # plus external plugins (tagged external, sha-verified)
 conductor plugin show <name>   # a plugin's Decl + its capability/credential disclosure
 conductor plugin remove <name> # guidance (managed remove is a follow-up)
+conductor plugin update [--allow-unlisted]  # re-resolve remote plugins, re-vendor + re-lock
 ```
 
 `plugin list` never executes a plugin — external entries show a cheap
 verify-before-execute health check. `plugin show` spawns and describes a
 connector plugin to print its real contract.
+
+## Keeping plugins updated
+
+Remote plugins move only when you resolve them — `conductor init`, `conductor
+plugin update`, or `conductor update --plugins` — unless you opt into automatic
+dependency updates alongside the daemon's own self-update:
+
+```yaml
+update:
+  auto: true      # the daemon self-updates from its release feed (existing behavior)
+  deps: true      # ALSO re-resolve packs: and plugins: each cycle (opt-in, default false)
+```
+
+With `update.deps: true`, each auto-update cycle re-resolves every pack and remote
+plugin against its `version:` constraint. If anything moved **and** the resulting
+config still validates, the daemon restarts to load it — the same fail-safe as a
+binary release (a change that fails to validate is discarded; the running config
+stands). Every change is logged:
+
+```
+auto-update: plugin jira -> jira/v1.5.0 (9f2b1c…)
+auto-update: pack review -> review-kit@~> 1.1 (a1b2c3…)
+auto-update: dependency change validated — restarting to apply
+```
+
+Freeze one dependency while leaving auto-update on for the rest with `hold: true`
+on that `plugins:` (or `packs:`) entry — it stays pinned at its locked version
+until you clear the hold or run an explicit `update`.
 
 ## The protocol
 
@@ -143,11 +212,12 @@ a follow-up.
 This release lands a coherent, tested core with the security guards real, not
 stubbed. The following are **documented follow-ups**, not silent gaps:
 
-- **Remote sources**: fetch from a URL, a lockfile pinning binaries by SHA per
-  OS/arch, discovery/search, and `conductor plugin add`/`update`. Today
-  `source:` is a local path and the SHA pin is authored by hand. `allow_unverified`
-  (the no-pin dev opt-in) is intended only for local development; when remote
-  sources land it will be refused for them (a fetched binary must be pinned).
+- **Remote-source refinements**: remote release-asset fetch, the SHA lockfile,
+  `plugin_trust:`, `conductor plugin update`, and constraint-based version
+  resolution **are implemented** (see [Sources](#sources)). Still open:
+  discovery/search (a central index), `conductor plugin add` (a paste-a-block
+  helper like `pack add`), and multi-repo asset naming beyond
+  `conductor-<component>_<os>_<arch>`.
 - **Cryptographic signing** (cosign/Sigstore or build attestations). SHA-256
   pinning *is* implemented; signature verification is the next layer.
 - **Connector source/event streaming** (`StartSource`) — a plugin *emitting*
