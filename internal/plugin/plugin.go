@@ -42,8 +42,10 @@ const ProtocolVersion = sdk.ProtocolVersion
 
 // Wire method names.
 const (
-	MethodDescribe = sdk.MethodDescribe
-	MethodInvoke   = sdk.MethodInvoke
+	MethodDescribe    = sdk.MethodDescribe
+	MethodInvoke      = sdk.MethodInvoke
+	MethodStartSource = sdk.MethodStartSource
+	MethodEvent       = sdk.MethodEvent
 )
 
 // Kind is what a plugin provides.
@@ -83,12 +85,13 @@ func (s Spec) Ref() string {
 // --- wire schema (aliased from pkg/plugin; maps 1:1 to connector.TypeDecl) ---
 
 type (
-	Field         = sdk.Field
-	Schema        = sdk.Schema
-	Verb          = sdk.Verb
-	Event         = sdk.Event
-	Capabilities  = sdk.Capabilities
-	Decl          = sdk.Decl
-	InvokeRequest = sdk.InvokeRequest
-	InvokeResult  = sdk.InvokeResult
+	Field              = sdk.Field
+	Schema             = sdk.Schema
+	Verb               = sdk.Verb
+	Event              = sdk.Event
+	Capabilities       = sdk.Capabilities
+	Decl               = sdk.Decl
+	InvokeRequest      = sdk.InvokeRequest
+	InvokeResult       = sdk.InvokeResult
+	StartSourceRequest = sdk.StartSourceRequest
 )

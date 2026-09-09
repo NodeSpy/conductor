@@ -51,6 +51,10 @@ type Deps struct {
 	// dial is the transport opener; nil uses the real subprocess dialer.
 	// Tests inject a fake.
 	dial func(ctx context.Context, s Spec, d Deps) (t transport, kill func(), err error)
+
+	// onNotify routes a plugin→daemon notification (e.g. a source plugin's
+	// streamed events) to the owning Client. Set by NewClient.
+	onNotify func(method string, params json.RawMessage)
 }
 
 // Client is one external plugin: a verified, sandboxed subprocess reached over
@@ -68,6 +72,7 @@ type Client struct {
 	downForGood bool
 	downUntil   time.Time
 	closed      bool
+	onEvent     func(json.RawMessage) // current source-event sink (set by StartSource)
 }
 
 // NewClient builds a Client for spec. It does not start the subprocess; call
@@ -85,7 +90,44 @@ func NewClient(spec Spec, deps Deps) *Client {
 	if deps.dial == nil {
 		deps.dial = realDial
 	}
-	return &Client{spec: spec, deps: deps}
+	c := &Client{spec: spec}
+	deps.onNotify = c.handleNotify
+	c.deps = deps
+	return c
+}
+
+// handleNotify routes a plugin→daemon notification. Only source-event
+// notifications are meaningful today; anything else is ignored.
+func (c *Client) handleNotify(method string, params json.RawMessage) {
+	if method != MethodEvent {
+		return
+	}
+	c.mu.Lock()
+	emit := c.onEvent
+	c.mu.Unlock()
+	if emit != nil {
+		emit(params)
+	}
+}
+
+// StartSource asks a source plugin to begin streaming events for one instance.
+// emit is called for each event (the raw serialized trigger) until ctx is
+// cancelled or the plugin exits — cancelling ctx tears down the subprocess,
+// which ends the stream. It returns once streaming is acknowledged.
+func (c *Client) StartSource(ctx context.Context, req StartSourceRequest, emit func(json.RawMessage)) error {
+	c.mu.Lock()
+	c.onEvent = emit
+	c.mu.Unlock()
+	// No per-call timeout: start_source is long-lived; the plugin acks quickly but
+	// the stream lives for the daemon's lifetime, bounded by ctx.
+	c.mu.Lock()
+	if err := c.ensureLocked(ctx); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	conn := c.conn
+	c.mu.Unlock()
+	return conn.Call(ctx, MethodStartSource, req, &struct{}{})
 }
 
 // Digest is the verified SHA-256 of the running binary (empty until started).
@@ -272,7 +314,7 @@ func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
 	go pumpStderr(stderr, s.Ref(), d)
 
 	bounded := newBoundedReader(stdout, d.MaxMessageBytes)
-	conn := acp.NewConn(bounded, stdin, noopHandler{})
+	conn := acp.NewConn(bounded, stdin, pluginHandler{onNotify: d.onNotify})
 
 	var once sync.Once
 	kill := func() {
@@ -307,11 +349,19 @@ func pumpStderr(r io.Reader, ref string, d Deps) {
 	}
 }
 
-// noopHandler ignores peer-initiated traffic — a connector plugin never calls
-// back into the daemon (runtime plugins use the ACP controller's own delegate).
-type noopHandler struct{}
+// pluginHandler handles peer-initiated traffic from a plugin. The daemon exposes
+// no callable methods (a plugin never Calls the daemon), but a SOURCE plugin
+// streams events as one-way notifications — routed to the owning Client via
+// onNotify. onNotify may be nil (verb-only clients).
+type pluginHandler struct {
+	onNotify func(method string, params json.RawMessage)
+}
 
-func (noopHandler) HandleRequest(context.Context, string, json.RawMessage) (any, *acp.RPCError) {
+func (pluginHandler) HandleRequest(context.Context, string, json.RawMessage) (any, *acp.RPCError) {
 	return nil, acp.NewRPCError(acp.CodeMethodNotFound, "daemon exposes no plugin callbacks")
 }
-func (noopHandler) HandleNotification(context.Context, string, json.RawMessage) {}
+func (h pluginHandler) HandleNotification(_ context.Context, method string, params json.RawMessage) {
+	if h.onNotify != nil {
+		h.onNotify(method, params)
+	}
+}

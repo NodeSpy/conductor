@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -36,6 +37,15 @@ func Errorf(code int, msg string) *Error { return &Error{Code: code, Message: ms
 type Handler interface {
 	Describe() Decl
 	Invoke(InvokeRequest) (InvokeResult, error)
+}
+
+// SourceHandler is implemented by a plugin that ALSO emits events (a source).
+// On a start_source call, Serve acks immediately and runs StartSource in the
+// background: call emit for each event (the payload is marshaled into a
+// plugin.event notification the daemon feeds to its engine). StartSource should
+// return when ctx is cancelled (Serve cancels it when the daemon closes stdin).
+type SourceHandler interface {
+	StartSource(ctx context.Context, req StartSourceRequest, emit func(payload any) error) error
 }
 
 // ConnectorFunc adapts two funcs into a Handler, for a verb-only connector
@@ -79,6 +89,18 @@ func serve(in io.Reader, out io.Writer, h Handler) error {
 		defer writeMu.Unlock()
 		return enc.Encode(m) // Encode appends '\n' — newline-delimited framing
 	}
+	// ctx bounds any background source stream: cancelled when the loop exits (the
+	// daemon closed stdin), so a StartSource goroutine unwinds.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// emit writes a plugin.event notification (no id) — the source stream path.
+	emit := func(payload any) error {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		return write(wireMessage{Method: MethodEvent, Params: raw})
+	}
 
 	for {
 		var m wireMessage
@@ -94,7 +116,7 @@ func serve(in io.Reader, out io.Writer, h Handler) error {
 			continue
 		}
 		resp := wireMessage{ID: m.ID}
-		result, rpcErr := dispatch(h, m.Method, m.Params)
+		result, rpcErr := dispatch(ctx, h, m.Method, m.Params, emit)
 		if rpcErr != nil {
 			resp.Error = rpcErr
 		} else if raw, err := json.Marshal(result); err != nil {
@@ -108,7 +130,7 @@ func serve(in io.Reader, out io.Writer, h Handler) error {
 	}
 }
 
-func dispatch(h Handler, method string, params json.RawMessage) (any, *Error) {
+func dispatch(ctx context.Context, h Handler, method string, params json.RawMessage, emit func(any) error) (any, *Error) {
 	switch method {
 	case MethodDescribe:
 		d := h.Describe()
@@ -132,6 +154,20 @@ func dispatch(h Handler, method string, params json.RawMessage) (any, *Error) {
 			return nil, Errorf(CodeInternalError, err.Error())
 		}
 		return res, nil
+	case MethodStartSource:
+		sh, ok := h.(SourceHandler)
+		if !ok {
+			return nil, Errorf(CodeMethodNotFound, "this plugin is not a source")
+		}
+		var req StartSourceRequest
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, &req); err != nil {
+				return nil, Errorf(CodeInvalidParams, err.Error())
+			}
+		}
+		// Ack immediately; stream events in the background until ctx cancels.
+		go func() { _ = sh.StartSource(ctx, req, emit) }()
+		return struct{}{}, nil
 	default:
 		return nil, Errorf(CodeMethodNotFound, "unknown method "+method)
 	}

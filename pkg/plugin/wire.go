@@ -40,7 +40,23 @@ const ProtocolVersion = 1
 const (
 	MethodDescribe = "plugin.describe"
 	MethodInvoke   = "plugin.invoke"
+	// MethodStartSource (daemon→plugin request) tells a source plugin to begin
+	// streaming events for one instance. The plugin acknowledges immediately and
+	// then emits events as MethodEvent notifications until stdin closes.
+	MethodStartSource = "plugin.start_source"
+	// MethodEvent (plugin→daemon notification) carries one source event: a
+	// serialized trigger the daemon feeds into its engine. One-way; no response.
+	MethodEvent = "plugin.event"
 )
+
+// StartSourceRequest is the daemon→plugin start_source params: the instance name
+// and its resolved config/credentials (a source plugin owns the listener/poller,
+// so it needs the instance's full config, delivered per-call like a verb's
+// connection — never via env).
+type StartSourceRequest struct {
+	Instance string         `json:"instance"`
+	Config   map[string]any `json:"config,omitempty"`
+}
 
 // Kind is what a plugin provides.
 type Kind string
