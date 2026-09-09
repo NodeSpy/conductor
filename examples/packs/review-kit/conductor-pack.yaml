@@ -86,7 +86,11 @@ agents:
     workspace: local
     skill:
       verbs: [github.submit_review, github.comment]
-      # The broker may issue this secret to the hand-off agent (single-use,
+      # secrets_via: broker is REQUIRED for allow_secrets to work — the broker
+      # only issues to a session whose skill.secrets_via is "broker" (the
+      # default is "none", which would silently refuse every issue).
+      secrets_via: broker
+      # The broker issues this secret to the hand-off agent (single-use,
       # audited, redacted). Write verbs post as the connector's own write
       # identity (a verb's `as:` option), never as the operator.
       allow_secrets: [review_token]

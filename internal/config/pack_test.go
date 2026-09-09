@@ -55,6 +55,7 @@ agents:
   handoff:
     workspace: local
     skill:
+      secrets_via: broker
       allow_secrets: [api_token]
 workflows:
   review-flow:

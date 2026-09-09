@@ -1338,6 +1338,19 @@ func (c *Config) Validate() error {
 			if p.Skill.MaxCalls < 0 {
 				return fmt.Errorf("config: agent %q: skill.max_calls must be >= 0, got %d", name, p.Skill.MaxCalls)
 			}
+			// allow_secrets only works through the broker: the broker refuses to
+			// issue to a session whose secrets_via is not "broker" (default is
+			// "none"). An allow_secrets list without secrets_via: broker is a
+			// silent footgun — the grants would never resolve — so reject it.
+			if len(p.Skill.AllowSecrets) > 0 {
+				via := p.Skill.SecretsVia
+				if via == "" {
+					via = "none"
+				}
+				if via != "broker" {
+					return fmt.Errorf("config: agent %q: skill.allow_secrets is set but skill.secrets_via is %q — the broker only issues secrets to a session with secrets_via: broker, so these grants would never resolve; set secrets_via: broker", name, via)
+				}
+			}
 			for _, s := range p.Skill.AllowSecrets {
 				// The current model names a vault entry: "<vault>/<key>"
 				// (the key half resolves at issue time — non-listable vaults
