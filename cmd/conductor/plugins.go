@@ -67,6 +67,60 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 	return mgr, nil
 }
 
+// pluginRuntimeControllers verifies each runtime-kind plugin (verify-before-
+// execute, fail-closed) and synthesizes it into a ControllerConfig the existing
+// controller registry drives as an ACP subprocess — generalizing the shipped
+// ACP runtime (#54 §4). A runtime plugin is the highest-stakes plugin (§8.7):
+// it EXECUTES agents, so it gets the same sandbox isolation block as any
+// runtime plus the sha gate here. Returns entries keyed by the runtime name
+// each plugin provides.
+//
+// Known limitation (documented, not stubbed): verification is at boot; the ACP
+// controller spawns the (already-verified, operator-owned) binary lazily on
+// first dispatch. Per-spawn re-verification is a follow-up.
+func pluginRuntimeControllers(cfg *config.Config) (map[string]config.ControllerConfig, error) {
+	out := map[string]config.ControllerConfig{}
+	for name, ref := range cfg.Plugins {
+		if ref.Kind != config.PluginKindRuntime {
+			continue
+		}
+		spec := plugin.SpecFromRef(name, ref, cfg.BaseDir())
+		if err := plugin.VerifyOnly(spec); err != nil {
+			return nil, fmt.Errorf("runtime plugin %s: %w", name, err)
+		}
+		if spec.Sha256 == "" && spec.AllowUnverified {
+			logf("runtime plugin %s: WARNING running UNVERIFIED (no sha256 pin)", name)
+		}
+		argv := append([]string{spec.BinPath}, spec.Args...)
+		out[spec.Provides] = config.ControllerConfig{
+			Transport: "acp",
+			Command:   argv,
+			Isolation: ref.Isolation,
+		}
+		logf("plugin %s: registered runtime %q (acp, sandboxed)", spec.Ref(), spec.Provides)
+	}
+	return out, nil
+}
+
+// mergedControllersWithPlugins is cfg.MergedControllers() plus verified runtime
+// plugins. A plugin runtime name that collides with a configured runtime/
+// controller is refused (external-overrides-bundled is already blocked at
+// config validation).
+func mergedControllersWithPlugins(cfg *config.Config) (map[string]config.ControllerConfig, error) {
+	merged := cfg.MergedControllers()
+	prt, err := pluginRuntimeControllers(cfg)
+	if err != nil {
+		return nil, err
+	}
+	for name, cc := range prt {
+		if _, dup := merged[name]; dup {
+			return nil, fmt.Errorf("runtime plugin provides %q which collides with a configured runtime/controller", name)
+		}
+		merged[name] = cc
+	}
+	return merged, nil
+}
+
 // cmdPlugin implements `conductor plugin list|show|remove`.
 func cmdPlugin(args []string) error {
 	if len(args) == 0 {

@@ -424,7 +424,14 @@ func cmdRun(args []string) error {
 		return (&hosts.Client{}).DialVia(ctx, hosts.Target{Name: name, Cfg: hc}, addr)
 	}
 	var paseoSender controller.Sender = disp
-	reg := controller.NewRegistry(cfg.MergedControllers(), cfg.DefaultRuntimeName(), disp, paseoSender)
+	// External runtime plugins (#54) are verified (fail-closed) and merged into
+	// the controller set as sandboxed ACP subprocesses, selectable via a
+	// profile's runtime:.
+	mergedControllers, err := mergedControllersWithPlugins(cfg)
+	if err != nil {
+		return err
+	}
+	reg := controller.NewRegistry(mergedControllers, cfg.DefaultRuntimeName(), disp, paseoSender)
 	// Paseo runtimes with their own bin: — or a host:, whose paseo CLI runs
 	// over SSH — get dedicated dispatchers; the registry rebinds them so an
 	// agent's `runtime:` selection launches on the right box.

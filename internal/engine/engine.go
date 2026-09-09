@@ -1188,7 +1188,13 @@ func livenessGated(kind string) bool {
 // silently dispatching through the wrong runtime. For today's configs (no
 // `controllers:` block) this always resolves to the paseo dispatcher.
 func (e *Engine) runnerFor(profile config.AgentProfile) (Dispatcher, error) {
-	run, err := e.controllers.RunnerFor(profile.Controller)
+	// RuntimeName() honors the connectors-model `runtime:` field (falling back
+	// to the legacy `controller:`). Reading `.Controller` directly here left a
+	// `runtime:`-only profile resolving to the default runtime on first
+	// dispatch, even though the session-affinity path already used
+	// RuntimeName() — so a plugin/ACP runtime selected via `runtime:` was
+	// silently skipped until a follow-up turn (#54).
+	run, err := e.controllers.RunnerFor(profile.RuntimeName())
 	if err != nil {
 		return nil, err
 	}
@@ -1199,7 +1205,7 @@ func (e *Engine) runnerFor(profile config.AgentProfile) (Dispatcher, error) {
 // agent's sessions — the review hand-off needs it to open/resume a broker session
 // (NewSession/ResumeSession), not only the dispatch runner.
 func (e *Engine) controllerFor(profile config.AgentProfile) (controller.Controller, error) {
-	return e.controllers.Resolve(profile.Controller)
+	return e.controllers.Resolve(profile.RuntimeName())
 }
 
 // acquire takes a concurrency slot, blocking until one is free (backpressure).

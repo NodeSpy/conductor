@@ -105,6 +105,15 @@ func TestControllerFor(t *testing.T) {
 	if _, err := e.controllerFor(config.AgentProfile{Controller: "ghost"}); err == nil {
 		t.Fatal("unknown controller must error")
 	}
+	// #54 regression: a `runtime:`-only profile must route through RuntimeName()
+	// on the plain dispatch path (not just the affinity path). Before the fix,
+	// Controller:"" resolved to the default and this unknown name was ignored.
+	if _, err := e.controllerFor(config.AgentProfile{Runtime: "ghost-runtime"}); err == nil {
+		t.Fatal("unknown runtime: must error (RuntimeName routing)")
+	}
+	if _, err := e.runnerFor(config.AgentProfile{Runtime: "ghost-runtime"}); err == nil {
+		t.Fatal("runnerFor must honor runtime: and error on unknown name")
+	}
 }
 
 // TestFlowAgentServices: the engine-owned service funcs the flow runner gets —
