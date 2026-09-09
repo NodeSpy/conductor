@@ -22,6 +22,14 @@ const updateRepo = "NodeSpy/conductor"
 
 // cmdUpdate is the manual `update` subcommand.
 func cmdUpdate(args []string) error {
+	// `conductor update --packs` re-resolves the packs: block and diffs the
+	// lockfile (the binary itself auto-updates; packs are opt-in, so this is
+	// separate from the self-update below).
+	for _, a := range args {
+		if a == "--packs" {
+			return cmdPackUpdate(args)
+		}
+	}
 	force := false
 	var pinTag string
 	for i := 0; i < len(args); i++ {

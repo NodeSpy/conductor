@@ -92,6 +92,9 @@ like) can call conductor's authenticated `/invoke` API for the agent work it doe
 - Inline **code steps** and remote **host/SSH** commands — [Code Steps](https://github.com/NodeSpy/conductor/wiki/Code-Steps) · [Hosts](https://github.com/NodeSpy/conductor/wiki/Hosts)
 - Reusable **workflows** (typed inputs/outputs, nesting) and **multi-agent teams**
   (planner / workers / critic) — [Workflows](https://github.com/NodeSpy/conductor/wiki/Workflows) · [Teams](https://github.com/NodeSpy/conductor/wiki/Teams)
+- Distributable **packs** — install a versioned bundle of workflows/agents/policy
+  from a URL, bind its environment, arm its (disarmed) triggers; namespaced,
+  lockfile-pinned, and impossible to auto-arm — [Packs](https://github.com/NodeSpy/conductor/wiki/Packs)
 
 **Agents & governance**
 - Pluggable runtimes and agent profiles; request-response **asks** and interactive

@@ -139,6 +139,25 @@ type Config struct {
 	// concise/human-tone default is layer 0 instead; a profile's `guidance:
 	// { replace: … }` drops this layer for that agent.
 	AgentGuidance *string `yaml:"agent_guidance"`
+
+	// Packs is the OPTIONAL `packs:` block (issue #53): distributable, versioned,
+	// parameterized instances of reusable packs (Terraform-modules-for-conductor).
+	// Each entry is namespaced under its instance name and, once fetched by
+	// `conductor init`, instantiated into the effective config at load (namespace
+	// + bind + settings + disarmed triggers). Absent → nothing changes. See
+	// pack.go / pack_instantiate.go / pack_resolve.go.
+	Packs map[string]PackInstance `yaml:"packs,omitempty"`
+
+	// PackTrust is the OPTIONAL operator-level provenance allowlist (issue #53
+	// §21 Phase A): when set, `conductor init` refuses any REMOTE pack source —
+	// at any depth, including a dependency's — that does not match one of its
+	// `allow:` source globs, unless the operator passes `--allow-unlisted`. Absent
+	// → no restriction. See pack_trust.go.
+	PackTrust *PackTrustConfig `yaml:"pack_trust,omitempty"`
+
+	// packWarnings holds non-fatal notices raised while instantiating packs
+	// (deprecations, armed-but-unscoped triggers). Not serialized. See PackWarnings.
+	packWarnings []string `yaml:"-"`
 }
 
 // Update configures periodic self-update checks.
@@ -962,6 +981,22 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("parse merged config: %w", err)
 		}
 	}
+	// File-referencing `workflow:` forms (workflow:+import:, a bare file path) join
+	// the merged workflow set first — before packs add namespaced `review/flow`
+	// refs that would otherwise look like relative file paths.
+	if err := c.resolveWorkflowFiles(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	// Instantiate `packs:` into the effective config (namespace + bind + settings
+	// + disarmed triggers) from the already-vendored packs, BEFORE the trigger/
+	// extends/normalize passes — so a pack's own triggers (including list-form
+	// `on:` and `extends:`) and pack-local `extends:` on agents/workflows get the
+	// same treatment as the consumer's own. No-op without a `packs:` block, so
+	// existing configs are unaffected. Offline — the network fetch is
+	// `conductor init`.
+	if err := c.instantiatePacks(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
 	// Trigger `extends:` resolves + abstract bases are stripped BEFORE
 	// normalization, so a child can inherit a base's `on:` and bases (which may
 	// carry no `on:`) never reach the on:-required / manual-name checks.
@@ -971,11 +1006,6 @@ func Load(path string) (*Config, error) {
 	// Multi-source `on:` lists expand into one trigger per source before
 	// anything downstream sees them.
 	if err := c.NormalizeTriggers(); err != nil {
-		return nil, err
-	}
-	// File-referencing `workflow:` forms (workflow:+import:, a bare file path) join the
-	// merged workflow set before defaults/validation see it.
-	if err := c.resolveWorkflowFiles(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	// `extends:` inheritance across map sections resolves before defaults fold
@@ -1307,6 +1337,19 @@ func (c *Config) Validate() error {
 			}
 			if p.Skill.MaxCalls < 0 {
 				return fmt.Errorf("config: agent %q: skill.max_calls must be >= 0, got %d", name, p.Skill.MaxCalls)
+			}
+			// allow_secrets only works through the broker: the broker refuses to
+			// issue to a session whose secrets_via is not "broker" (default is
+			// "none"). An allow_secrets list without secrets_via: broker is a
+			// silent footgun — the grants would never resolve — so reject it.
+			if len(p.Skill.AllowSecrets) > 0 {
+				via := p.Skill.SecretsVia
+				if via == "" {
+					via = "none"
+				}
+				if via != "broker" {
+					return fmt.Errorf("config: agent %q: skill.allow_secrets is set but skill.secrets_via is %q — the broker only issues secrets to a session with secrets_via: broker, so these grants would never resolve; set secrets_via: broker", name, via)
+				}
 			}
 			for _, s := range p.Skill.AllowSecrets {
 				// The current model names a vault entry: "<vault>/<key>"

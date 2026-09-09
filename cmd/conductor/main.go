@@ -62,6 +62,8 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+	// Let pack requires.conductor constraints check against the running version.
+	config.SetRuntimeVersion(version)
 	cmd := os.Args[1]
 	args := os.Args[2:]
 	var err error
@@ -123,6 +125,10 @@ func main() {
 		err = cmdSecret(args)
 	case "workflows":
 		err = cmdWorkflows(args)
+	case "init":
+		err = cmdInit(args)
+	case "pack":
+		err = cmdPack(args)
 	case "version", "-v", "--version":
 		fmt.Println("conductor", version)
 	case "help", "-h", "--help":
@@ -168,6 +174,12 @@ usage:
   conductor mcp memory --socket <path>  stdio MCP server: memory + skill broker (agent-facing)
   conductor mcp callable --token <name> [--config PATH]  stdio MCP server: invoke callable workflows (external MCP clients)
   conductor workflows ls|review|rm      manage saved (agent-promoted) workflows
+  conductor init [--config PATH] [--allow-unlisted]  fetch the packs: block, write the lockfile, preview
+  conductor pack list|plan              list configured packs; preview what they add
+  conductor pack add <source>           fetch a pack, show its install review + a ready-to-paste block
+  conductor pack lint|show <pack-dir>   validate / render a pack (author + install-review tooling)
+  conductor pack remove <instance>      clear a pack's vendored tree + lockfile entries
+  conductor pack update | update --packs  re-resolve the packs: block and diff the lockfile
   conductor version
 `)
 }

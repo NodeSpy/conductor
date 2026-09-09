@@ -72,7 +72,10 @@ imposes nothing of its own.
 - `allow_secrets` takes exact vault entries, named `<vault>/<key>` (the
   same entries `{{ vault "house" "deploy_key" }}` reads) — no patterns.
   Broadening access is a config edit, never an agent request. The vault half
-  is validated at load; the key resolves at issue time.
+  is validated at load; the key resolves at issue time. Setting
+  `allow_secrets` **without** `secrets_via: broker` is a **load error** — the
+  broker only issues to a broker session, so the grants would never resolve;
+  the config is rejected rather than failing silently at runtime.
 
 ## How identity is bound
 

@@ -1,0 +1,143 @@
+# review-kit — a distributable conductor pack (issue #53).
+#
+# Multi-lens PR review with an optional human hand-off. This file is the format
+# reference: a self-contained bundle of BEHAVIOR (agents, workflows, policy,
+# checks, a disarmed trigger). It ships NO environment — no connectors, no
+# secrets — per the define-behavior / bind-environment rule. The consumer binds
+# those in their `packs:` block.
+#
+# Install:
+#   packs:
+#     review:
+#       source: ./examples/packs/review-kit      # or github.com/your-org/packs//review-kit@v1
+#       preset: claude
+#       connectors: { github: gh }               # bind the pack's required github -> your connector
+#       secrets:    { review_token: house/review }
+#       agents:     { reviewer: my-opus }         # bind a role to your global (or omit for the default)
+#       triggers:
+#         on_review_request:
+#           enabled: true                         # arm it
+#           repos:   [your-org/app]               # scope it — this IS the consent
+#   Then: `conductor init` (fetch + lock), `conductor pack plan`, `conductor validate`.
+
+pack:
+  name: review-kit
+  version: 1.0.0
+  description: Multi-lens PR review (correctness / security / clarity) with an optional human hand-off.
+  tags: [review, github, code-quality]
+  homepage: https://github.com/your-org/conductor-packs
+  license: Apache-2.0
+  maintainers: ["your-org <team@your-org.example>"]
+  requires:
+    # The daemon versions this pack supports (the auto-updating fleet needs it).
+    conductor: ">=0.1"
+    # Bind-only environment the pack needs — the consumer wires these; the pack
+    # never ships them.
+    connectors: [github]
+    secrets:
+      review_token:
+        desc: token the review-poster uses to submit the review comment
+    # Agent roles: any agent satisfies `reviewer`; a bound `handoff` must be
+    # able to submit a review.
+    roles:
+      reviewer: {}
+      handoff:
+        skill: [github.submit_review]
+
+# Typed settings with defaults, plus named presets the consumer can pick. The
+# consumer overrides these WITHOUT editing this file.
+settings:
+  lenses:
+    type: string
+    default: "correctness, security, clarity"
+    desc: comma-separated review lenses the reviewer applies
+  heavy_model:
+    type: string
+    default: default
+    desc: model hint for the heavier review pass (falls through to your default runtime)
+
+# NOTE: settings placeholders (${settings.NAME}) are substituted as text and so
+# must sit in STRING-valued fields (prompts, options, guidance). A numeric field
+# like a gate's max_revisions takes a literal, not a placeholder.
+
+presets:
+  claude:
+    heavy_model: claude-opus
+  codex:
+    heavy_model: gpt-5-pro
+
+# The public surface: what consumers may reference by qualified name. Authors
+# can refactor everything else without breaking anyone.
+exports:
+  workflows: [review-flow]
+  agents: [reviewer]
+
+# ---- Behavior the pack ships (namespaced under the instance name) ----
+
+agents:
+  # The reviewer role. No provider/model is pinned, so it falls through to the
+  # consumer's default runtime — zero-config still runs (§6/§26).
+  reviewer:
+    workspace: worktree
+    guidance: "Review only what the diff changes. Be concrete and cite file:line."
+  # The hand-off role posts the review back. It needs the review_token secret,
+  # referenced abstractly here and resolved by the broker at runtime.
+  handoff:
+    workspace: local
+    skill:
+      verbs: [github.submit_review, github.comment]
+      # secrets_via: broker is REQUIRED for allow_secrets to work — the broker
+      # only issues to a session whose skill.secrets_via is "broker" (the
+      # default is "none", which would silently refuse every issue).
+      secrets_via: broker
+      # The broker issues this secret to the hand-off agent (single-use,
+      # audited, redacted). Write verbs post as the connector's own write
+      # identity (a verb's `as:` option), never as the operator.
+      allow_secrets: [review_token]
+
+workflows:
+  review-flow:
+    description: Review the PR across configured lenses, then post the result.
+    inputs:
+      repo: { type: string, required: true }
+      pr: { type: integer, required: true }
+    steps:
+      - id: review
+        type: agent
+        agent: reviewer
+        prompt: |
+          Review {{.repo}}#{{.pr}} across these lenses: ${settings.lenses}.
+          Use the ${settings.heavy_model} model hint. Return concise, actionable
+          findings grouped by lens, each with a file:line anchor.
+        gate:
+          run: [no-todos]
+          max_revisions: 1
+      - id: post
+        type: agent
+        agent: handoff
+        prompt: "Post this review on {{.repo}}#{{.pr}}:\n\n{{.review.output}}"
+
+checks:
+  # A trivial, dependency-free gate: the proposed change must not add TODO/FIXME.
+  no-todos:
+    run: js
+    code: |
+      return { pass: true, reason: "review-kit sample gate" }
+
+# The pack SHIPS this trigger so the consumer never rebuilds the event mapping,
+# but it arrives DISARMED — no `enabled`, no repos. Arming it (enabled + repos)
+# in the instance block is the consent.
+triggers:
+  - name: on_review_request
+    on: github.review_requested
+    steps:
+      - id: run
+        workflow: review-flow
+        with: { repo: "{{.repo}}", pr: "{{.number}}" }
+    hooks:
+      - at: start
+        uses: github.comment
+        options:
+          repo: "{{.repo}}"
+          number: "{{.number}}"
+          body: "review-kit: reviewing {{.repo}}#{{.number}}…"
