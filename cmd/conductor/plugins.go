@@ -94,17 +94,14 @@ const pluginBootTimeout = 30 * time.Second
 // wrapper (M2 fix), so the sha pin holds for the daemon's whole lifetime, not
 // just at boot.
 //
-// KNOWN LIMITATION — runtime plugins still do NOT get the full connector-plugin
-// guard set (documented, not stubbed; see docs/wiki/Plugins.md):
-//   - Environment is NOT scrubbed. The ACP controller (internal/controller/
-//     acp.go: spawnACP) seeds the child with os.Environ() — the daemon's full
-//     environment, which can carry env:-resolved secrets. Isolation masks paths
-//     and network, NOT env vars. Treat a runtime plugin as receiving the
-//     daemon's environment; only run ones you fully trust.
-//   - Runtime plugins bypass internal/plugin's supervision (crash-loop cap,
-//     size-bound, stderr redaction); they rely on ACP's own handling.
-//
-// An env-scrubbing ACP path is the immediate follow-up.
+// Runtime plugins reuse conductor's ACP controller path and are LESS isolated
+// than connector plugins in one remaining way (documented, not stubbed; see
+// docs/wiki/Plugins.md): they bypass internal/plugin's supervision (crash-loop
+// cap, size-bound, stderr redaction) and rely on ACP's own handling. Their
+// environment IS scrubbed, though — ScrubEnv (set below) makes acp.go's
+// spawnACP seed the child from sandbox.MinimalEnv() instead of the daemon's
+// os.Environ(), so a runtime plugin does not inherit env:-resolved secrets;
+// isolation still masks paths and network.
 func pluginRuntimeControllers(cfg *config.Config) (map[string]config.ControllerConfig, error) {
 	out := map[string]config.ControllerConfig{}
 	for name, ref := range cfg.Plugins {

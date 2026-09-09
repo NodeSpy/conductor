@@ -151,4 +151,4 @@ SQL stores are the precedent).
   and, when config surface is added, a `config.example.yaml` block — same
   commit.
 
-Related: [[Connectors]] · [[Verbs]] · [[Binary-Data]] · [[Configuration]]
+Related: [[Connectors]] · [[Verbs]] · [[Binary-Data]] · [[Configuration]] · [[Plugins]]

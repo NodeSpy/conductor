@@ -197,7 +197,7 @@ The **[wiki](https://github.com/NodeSpy/conductor/wiki)** is the complete refere
 - **Data** — [Memory](https://github.com/NodeSpy/conductor/wiki/Memory) · [Binary Data](https://github.com/NodeSpy/conductor/wiki/Binary-Data)
 - **Operating** — [Runs](https://github.com/NodeSpy/conductor/wiki/Runs) · [Callable Service](https://github.com/NodeSpy/conductor/wiki/Callable-Service) · [Migration](https://github.com/NodeSpy/conductor/wiki/Migration)
 - **Integrations** — [GitHub](https://github.com/NodeSpy/conductor/wiki/Integration-GitHub) · [Slack](https://github.com/NodeSpy/conductor/wiki/Integration-Slack) · [Sentry](https://github.com/NodeSpy/conductor/wiki/Integration-Sentry) · [PagerDuty](https://github.com/NodeSpy/conductor/wiki/Integration-PagerDuty) · [RSS](https://github.com/NodeSpy/conductor/wiki/Integration-RSS) · [Webhook](https://github.com/NodeSpy/conductor/wiki/Integration-Webhook) · [Cron](https://github.com/NodeSpy/conductor/wiki/Integration-Cron)
-- **Extending** — [Authoring Connectors](https://github.com/NodeSpy/conductor/wiki/Authoring-Connectors) · [Controllers](https://github.com/NodeSpy/conductor/wiki/Controllers) · [Examples](https://github.com/NodeSpy/conductor/wiki/Examples)
+- **Extending** — [Authoring Connectors](https://github.com/NodeSpy/conductor/wiki/Authoring-Connectors) · [Controllers](https://github.com/NodeSpy/conductor/wiki/Controllers) · [Plugins](https://github.com/NodeSpy/conductor/wiki/Plugins) (ship a connector or runtime as an external binary) · [Examples](https://github.com/NodeSpy/conductor/wiki/Examples)
 
 The annotated [`config.example.yaml`](config.example.yaml) is the reference config,
 and `conductor schema <connector>` prints any connector's exact contract.

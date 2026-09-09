@@ -24,6 +24,7 @@ plugins:
     kind: connector                     # connector | runtime
     provides: jira                      # the type/runtime it registers (default: the map key)
     version: 1.4.0                      # attribution on every audit record
+    args: ["--profile", "prod"]         # optional: extra argv appended at spawn
     sha256: 9f2b…                        # REQUIRED: verified before the binary is ever run
     isolation:                          # the sandbox grant (see Security); deny-by-default
       mode: namespace

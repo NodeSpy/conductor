@@ -168,8 +168,9 @@ usage:
   conductor update [--force] [--tag vX]  self-update to the latest release (uses gh)
   conductor service install|sync|uninstall  manage the background service unit
   conductor connectors ls               list configured connectors: state, events, verbs
-  conductor plugin list                 list plugins: bundled connectors/runtimes + external (#54)
+  conductor plugin list                 list plugins: bundled connectors/runtimes + external
   conductor plugin show <name>          a plugin's surface (Decl + capability/credential disclosure)
+  conductor plugin remove <name>        how to remove an external plugin from your plugins: block
   conductor schema <connector>          print a connector's event/filter/verb/option schemas
   conductor secrets check               resolve every secret reference and report
   conductor connector auth ls           each oauth2 connector's login state + token expiry

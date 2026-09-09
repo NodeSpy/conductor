@@ -430,6 +430,31 @@ runtimes:
   # gemini: { agent: gemini }                       # ACP transport
   # remote: { type: cli, tool: claude-code, host: build-box }
 
+# ---------------------------------------------------------------------------
+# plugins: — acquire connector TYPES and RUNTIMES from external binaries
+# (in-process built-ins stay bundled; this only ADDS to them). source: is a
+# local executable path in this release. An external plugin is verified before
+# it ever runs (sha256, fail-closed) and sandboxed by default (an isolation:
+# block is required unless allow_unsandboxed). Then reference the type/runtime
+# it registers from connectors:/runtimes:/agents: as usual.
+# ---------------------------------------------------------------------------
+# plugins:
+#   jira:                                             # a connector plugin
+#     source: ./plugins/conductor-jira
+#     kind: connector
+#     provides: jira                                  # the connector type it registers
+#     sha256: "<hex>"                                 # REQUIRED (or allow_unverified: true, dev only)
+#     args: ["--profile", "prod"]                     # optional extra argv
+#     isolation: { mode: namespace, network: { egress: ["your-org.atlassian.net:443"] } }
+#   modal:                                            # a runtime plugin (co-equal)
+#     source: ./plugins/conductor-modal
+#     kind: runtime
+#     provides: modal                                 # then: agents: { x: { runtime: modal } }
+#     sha256: "<hex>"
+#     isolation: { mode: namespace }
+# connectors: { jira: { type: jira } }                # use the plugin's connector type
+# agents:     { deployer: { runtime: modal } }        # use the plugin's runtime
+
 # agents: — named profiles (provider/model/prompt posture), run on a runtime.
 agents:
   # A profile can `extends:` another to inherit its fields — unset scalars fill,

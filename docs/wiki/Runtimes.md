@@ -59,4 +59,4 @@ allowlist for every launch it performs; a profile's own `isolation:` wins.
 Not applicable to paseo runtimes (their agents are the paseo daemon's
 children) — `conductor validate` rejects that combination. See [[Isolation]].
 
-Related: [[Agents]] · [[Hosts]] · [[Hand-offs]] · [[Configuration]] · [[Isolation]]
+Related: [[Agents]] · [[Hosts]] · [[Hand-offs]] · [[Configuration]] · [[Isolation]] · [[Plugins]]
