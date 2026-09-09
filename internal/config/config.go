@@ -61,6 +61,10 @@ type Config struct {
 	// win over imported ones. Processed at load time; empty here after loading.
 	Imports []string `yaml:"imports"`
 
+	// baseDir is the directory the config file was loaded from — the anchor for
+	// resolving relative paths (e.g. a plugin's local source). Set by Load.
+	baseDir string
+
 	Integrations []IntegrationRef `yaml:"integrations"`
 
 	// ConnectorsMap, Runtimes, Hosts, Workflows, Triggers, Policy, and
@@ -73,6 +77,11 @@ type Config struct {
 	// Stores are named data stores (boltdb/redis/http) addressed by the
 	// `store:` selector on kv.* verbs; nothing is implicit.
 	Stores map[string]StoreRef `yaml:"stores"`
+	// Plugins is the OPTIONAL `plugins:` block (#54): EXTERNAL plugins the
+	// daemon runs out-of-process to acquire connector types / runtime names
+	// without recompiling. Bundled connectors/runtimes are NOT listed here.
+	// Entirely optional; strict-decode-safe. See PluginRef and internal/plugin.
+	Plugins map[string]PluginRef `yaml:"plugins"`
 	// Vaults are named secret stores (conductor/onepassword/pass/file/
 	// hashicorp) addressed by {{ vault "<name>" "<key>" }} references and
 	// per-vault read/write verbs; env stays the implicit baseline.
@@ -557,6 +566,12 @@ type ControllerConfig struct {
 	// Isolation wraps this runtime's launches in the per-dispatch sandbox
 	// (#36 §15) — carried from the `runtimes:` form; see RuntimeConfig.
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// ScrubEnv makes an ACP launch inherit only a minimal env allowlist
+	// (sandbox.MinimalEnv) instead of the daemon's full os.Environ(), so the
+	// daemon's credential-bearing env is not handed to the child. Set for
+	// EXTERNAL runtime plugins (#54 §8.1) — untrusted third-party code. Not a
+	// user-facing config key (synthesized in cmd/conductor); never decoded.
+	ScrubEnv bool `yaml:"-"`
 }
 
 // EffectiveTransport returns the controller's transport, defaulting to acp for an
@@ -961,6 +976,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	var c Config
+	c.baseDir = filepath.Dir(path)
 	if !hasAnyImports(probe) {
 		if err := strictUnmarshal(expanded, &c); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
@@ -1260,6 +1276,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: no integrations or connectors configured")
 	}
 	if err := c.validateConnectors(); err != nil {
+		return err
+	}
+	if err := c.validatePlugins(); err != nil {
 		return err
 	}
 	if err := c.validateStores(); err != nil {
@@ -1761,6 +1780,10 @@ func expandHome(p string) string {
 	}
 	return p
 }
+
+// BaseDir returns the directory the config was loaded from (empty for a config
+// built in memory rather than loaded from disk).
+func (c *Config) BaseDir() string { return c.baseDir }
 
 // StateDir returns the state directory to use for the default StateFile/AuditLog
 // paths: ~/.local/state/conductor.

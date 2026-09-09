@@ -90,6 +90,12 @@ type Dispatcher struct {
 	// with `host:`. nil = the local binary. See remote.go for what changes.
 	Remote *hosts.Target
 
+	// HostClient is the SSH client used for out-of-band remote checks a paseo
+	// CLI invocation can't do itself (targetIsGitRepo's remote half). nil uses
+	// a real hosts.Client (actual ssh). Injectable for tests, mirroring
+	// hosts.Client's own Run seam.
+	HostClient *hosts.Client
+
 	// CheckoutDir resolves a local checkout path for a repo (owner/name) that
 	// paseo can derive the forge repo from when creating a PR/branch worktree.
 	// nil uses the built-in resolver (reuse an existing workspace, else clone).

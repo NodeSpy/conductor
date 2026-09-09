@@ -18,6 +18,9 @@ conductor update [--force] [--tag vX]      self-update to the latest release
 conductor service install|sync|uninstall   manage the background service unit
 conductor connectors ls                    each connector: state, events, verbs, trigger count
 conductor schema <connector>               full event/filter/context/verb/option/output schemas
+conductor plugin list                      configured plugins: bundled connectors/runtimes + external
+conductor plugin show <name>               one plugin's surface (Decl + capability/credential disclosure)
+conductor plugin remove <name>             how to remove an external plugin from your plugins: block
 conductor connector auth ls                each oauth2 connector's login state + token expiry
 conductor connector auth <name> [--revoke] one-time OAuth2 login (or clear stored tokens)
 conductor secrets check                    unlock every vault, resolve every reference, report (no values)

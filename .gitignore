@@ -9,3 +9,8 @@ audit.jsonl
 # e2e harness: generated throwaway App key (never committed).
 /test/e2e/config/github-app.pem
 .scratch/
+
+# Built plugin binaries (#54) — compiled into temp dirs at test/run time,
+# never committed. A bare `go build ./test/plugins/acme-echo` drops one here.
+/acme-echo
+/test/plugins/acme-echo/acme-echo

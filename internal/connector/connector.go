@@ -286,6 +286,11 @@ type Deps struct {
 	// (and verb-level binary IO) use (#36 §21). nil in contexts without one —
 	// blob verbs then error plainly.
 	Blobs *blob.Store
+	// Audit records security-relevant connector events to the audit log — used
+	// by external plugins to attribute a credential hand-off to a
+	// plugin@version (#54 §8.1). nil in contexts with no audit sink; callers
+	// must nil-check.
+	Audit func(map[string]any)
 }
 
 var (

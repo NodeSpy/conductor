@@ -17,6 +17,7 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 | `connectors:` | named service connections: type, credentials, `me:`, default `repos:`, default `options:`, `enabled:`, per-connector `policy:` | [[Connectors]] |
 | `triggers:` | the workflows: `on` / `filters` / `steps` / `hooks` (+ `group`, `policy`, `gate`, `name`, `enabled`, `options`, `repo`, `shadow`) | [[Workflows]], [[Grouping]], [[Gates]] |
 | `runtimes:` | where agents run: `type`/`agent`, `transport`, `bin`, `host`, `isolation`, `default` | [[Runtimes]], [[Isolation]] |
+| `plugins:` | acquire connector **types** and **runtimes** from external binaries: `source`, `kind` (connector\|runtime), `provides`, `sha256`, `args`, `isolation`, `allow_unverified`/`allow_unsandboxed`, `allow_secrets` | [[Plugins]] |
 | `agents:` | named profiles: `provider`, `model`, `thinking`, `mode`, `runtime`, `workspace`, `wait_timeout`, `archive_when_done`, `labels`, `guidance`, `host`, `memory`, `session`, `skill`, `isolation`, `budget`, `outcome_feedback` | [[Agents]], [[Agent-Skill]], [[Isolation]], [[Cost-Accounting]], [[Outcomes]] |
 | `hosts:` | named SSH targets: `host`, `user`, `port`, `key`, `known_hosts`, `cwd`, `env`, `isolation` | [[Hosts]], [[Isolation]] |
 | `stores:` | named data stores — KV (`boltdb`/`redis`/`http`) served by `kv.*`, SQL (`postgres`/`mysql`/`sqlite`) served by `sql.*`; addressed by the required `store:` selector | below |

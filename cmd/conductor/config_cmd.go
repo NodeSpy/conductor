@@ -95,7 +95,8 @@ func validateConfigFile(path string) error {
 	if err := validateAll(cfg, igs); err != nil {
 		return err
 	}
-	_, err = buildFlowStack(cfg, nil, nil, true)
+	stack, err := buildFlowStack(cfg, nil, nil, true)
+	stack.Close()
 	return err
 }
 

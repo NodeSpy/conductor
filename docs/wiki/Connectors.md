@@ -104,4 +104,4 @@ new typed connector is one file + one registration. See
 [[Authoring-Connectors]] and the executable template in
 `internal/connector/authoring_example_test.go`.
 
-Related: [[Verbs]] · [[Configuration]] · [[Grouping]] · [[Policy]] · [[Migration]] · [[Authoring-Connectors]]
+Related: [[Verbs]] · [[Configuration]] · [[Grouping]] · [[Policy]] · [[Migration]] · [[Authoring-Connectors]] · [[Plugins]]

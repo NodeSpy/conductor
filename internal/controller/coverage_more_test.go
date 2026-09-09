@@ -92,7 +92,7 @@ func TestACPRefusalTurn(t *testing.T) {
 }
 
 func TestSpawnACPNoCommand(t *testing.T) {
-	if _, _, err := spawnACP(context.Background(), nil, "", nil, nil, "", launchOpts{}); err == nil {
+	if _, _, err := spawnACP(context.Background(), nil, "", nil, nil, "", launchOpts{}, false); err == nil {
 		t.Fatal("no command must error")
 	}
 }

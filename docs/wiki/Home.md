@@ -83,6 +83,9 @@ Another orchestrator (n8n and the like) can also call conductor's authenticated
   files as content-addressed blob handles between steps and agents.
 - **[[Authoring-Connectors]]** — adding a connector type in-tree (the
   contract, the executable template, build-tag pattern).
+- **[[Plugins]]** — external connectors & runtimes: out-of-process plugins the
+  daemon runs to add a `type:` or `runtime:` without recompiling, and the
+  security model that gates them (verify, sandbox, least-privilege creds).
 
 ## Learning path
 

@@ -13,6 +13,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/acp"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // acpController drives an ACP agent (gemini, codex-via-adapter, opencode-over-acp,
@@ -27,12 +28,13 @@ import (
 // session_model is negotiated: an agent that advertises loadSession is resumable
 // (a session survives by id), otherwise native. Transport is always acp.
 type acpController struct {
-	name    string
-	command []string // launch argv for the agent subprocess (best-effort default; overridable via `command:`)
-	prov    Provisioner
-	dial    acpDialer // injectable connection factory; nil → spawn the subprocess
-	host    string    // configured `host:`; "" = local (see resolveHost/prepareLaunch)
-	iso     *config.IsolationConfig
+	name     string
+	command  []string // launch argv for the agent subprocess (best-effort default; overridable via `command:`)
+	prov     Provisioner
+	dial     acpDialer // injectable connection factory; nil → spawn the subprocess
+	host     string    // configured `host:`; "" = local (see resolveHost/prepareLaunch)
+	iso      *config.IsolationConfig
+	scrubEnv bool // inherit only a minimal env allowlist (external runtime plugins, #54)
 
 	mu    sync.Mutex
 	model SessionModel // cached negotiated model (native until an Initialize proves loadSession)
@@ -54,12 +56,13 @@ func newACPController(name string, cc config.ControllerConfig, prov Provisioner)
 		model = ModelNative
 	}
 	return &acpController{
-		name:    name,
-		command: acpCommand(cc),
-		prov:    prov,
-		host:    cc.Host,
-		iso:     cc.Isolation,
-		model:   model,
+		name:     name,
+		command:  acpCommand(cc),
+		prov:     prov,
+		host:     cc.Host,
+		iso:      cc.Isolation,
+		scrubEnv: cc.ScrubEnv,
+		model:    model,
 	}
 }
 
@@ -220,7 +223,7 @@ func (c *acpController) connect(ctx context.Context, cwd string, env []string, d
 	if c.dial != nil {
 		return c.dial(ctx, cwd, env, del)
 	}
-	return spawnACP(ctx, c.command, cwd, env, del, resolveHost(c.host, profileHost), opt)
+	return spawnACP(ctx, c.command, cwd, env, del, resolveHost(c.host, profileHost), opt, c.scrubEnv)
 }
 
 // spawnACP starts the agent subprocess wired for ACP over its stdio, with the
@@ -229,7 +232,7 @@ func (c *acpController) connect(ctx context.Context, cwd string, env []string, d
 // agent must survive the dispatch call returning. host != "" wraps the launch for
 // remote execution via prepareLaunch (see its doc for what changes locally in
 // that case: no cwd, no local env — both travel inside the wrapped command).
-func spawnACP(_ context.Context, command []string, cwd string, env []string, del acp.ClientDelegate, host string, opt launchOpts) (*acp.Client, func() error, error) {
+func spawnACP(_ context.Context, command []string, cwd string, env []string, del acp.ClientDelegate, host string, opt launchOpts, scrubEnv bool) (*acp.Client, func() error, error) {
 	if len(command) == 0 {
 		return nil, nil, errors.New("acp: no launch command configured")
 	}
@@ -243,7 +246,14 @@ func spawnACP(_ context.Context, command []string, cwd string, env []string, del
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = append(os.Environ(), localEnv...)
+	// scrubEnv (external runtime plugins, #54 §8.1): inherit only a minimal env
+	// allowlist so the daemon's credential-bearing environment is not handed to
+	// untrusted third-party code. Bundled ACP runtimes keep full os.Environ().
+	base := os.Environ()
+	if scrubEnv {
+		base = sandbox.MinimalEnv()
+	}
+	cmd.Env = append(base, localEnv...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		revoke()
