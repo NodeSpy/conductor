@@ -24,23 +24,28 @@ import (
 	"time"
 )
 
-// VerifyHMAC reports whether sig is a valid HMAC-SHA256 of body under secret. It
-// accepts a bare hex digest (Sentry) or a `sha256=<hex>` value (GitHub). An
-// empty secret disables verification (returns true) — the caller decides whether
-// that is acceptable. Comparison is constant-time.
-func VerifyHMAC(secret string, body []byte, sig string) bool {
+// VerifyHMAC reports whether the signature header is a valid HMAC-SHA256 of body
+// under secret. It accepts a bare hex digest (Sentry), a `sha256=<hex>` value
+// (GitHub), OR a comma-separated list of `v1=<hex>` / `sha256=<hex>` / bare-hex
+// values where ANY match passes (PagerDuty sends several during key rotation).
+// An empty secret disables verification (returns true) — the caller decides
+// whether that is acceptable. Comparison is constant-time.
+func VerifyHMAC(secret string, body []byte, header string) bool {
 	if secret == "" {
 		return true
 	}
-	sig = strings.TrimSpace(sig)
-	sig = strings.TrimPrefix(sig, "sha256=")
-	want, err := hex.DecodeString(sig)
-	if err != nil {
-		return false
-	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
-	return hmac.Equal(mac.Sum(nil), want)
+	want := mac.Sum(nil)
+	for _, part := range strings.Split(header, ",") {
+		p := strings.TrimSpace(part)
+		p = strings.TrimPrefix(p, "v1=")
+		p = strings.TrimPrefix(p, "sha256=")
+		if got, err := hex.DecodeString(p); err == nil && hmac.Equal(got, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // Listener is a bounded HTTP webhook receiver. Serve runs until ctx is cancelled.

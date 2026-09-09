@@ -104,6 +104,10 @@ func (sentry) StartSource(ctx context.Context, req plugin.StartSourceRequest, em
 				"resource": f.resource, "action": f.action, "title": f.title, "level": f.level,
 				"environment": f.environment, "culprit": f.culprit, "short_id": f.shortID,
 				"project": f.project, "url": f.url,
+				// Plural aliases so the documented filter vocabulary
+				// (filters: {levels/projects/environments: [...]}) matches
+				// against the daemon's generic list-contains filter evaluator.
+				"levels": f.level, "projects": f.project, "environments": f.environment,
 			},
 		})
 	})
