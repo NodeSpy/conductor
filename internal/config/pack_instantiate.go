@@ -235,6 +235,11 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		st.cfg.setWorkflow(rw.workflowName(name), wf)
 	}
 
+	// Lint for references the rewriter cannot reach: a `{{ vault … }}` template
+	// (packs bind secrets via requires.secrets + the broker, not vaults) and a
+	// bound environment name used inside a `code:` body (code is not rebound).
+	st.lintPackRefs(ns, man, env)
+
 	// ---- Pack policy (overridden) folds onto the pack's own triggers. ----
 	packPolicyOverride := req.inst.Policy
 

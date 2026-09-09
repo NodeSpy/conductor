@@ -172,3 +172,52 @@ func containsSubstr(ss []string, sub string) bool {
 	}
 	return false
 }
+
+// The ref-lint warns about a bound name used inside a code body and a
+// {{ vault }} template — references the rewriter cannot reach.
+func TestPackRefLintWarnings(t *testing.T) {
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/p", `
+pack:
+  name: p
+  version: 1.0.0
+  requires:
+    conductor: ">=0.1"
+    stores: [cache]
+    secrets: { tok: { desc: x } }
+workflows:
+  flow:
+    steps:
+      - id: a
+        run: js
+        code: "const v = ctx.store('cache'); return { v }"
+      - id: b
+        run: js
+        code: "return { s: '{{ vault \"house\" \"k\" }}' }"
+`)
+	body := `
+connectors: { gh: { type: github } }
+vaults: { house: { type: file, dir: /tmp/pc-reflint } }
+stores: { redis1: { type: boltdb, path: /tmp/pc-reflint.db } }
+packs:
+  p:
+    source: ./src/p
+    stores: { cache: redis1 }
+    secrets: { tok: house/k }
+`
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := resolveAndLoad(t, path)
+	if err != nil {
+		t.Fatalf("resolveAndLoad: %v", err)
+	}
+	ws := strings.Join(cfg.PackWarnings(), "\n")
+	if !strings.Contains(ws, "code: step body references bound name(s) cache") {
+		t.Errorf("expected a code-ref warning for 'cache', got:\n%s", ws)
+	}
+	if !strings.Contains(ws, "vault") {
+		t.Errorf("expected a vault-template warning, got:\n%s", ws)
+	}
+}

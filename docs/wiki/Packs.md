@@ -228,7 +228,10 @@ The following are **not yet** implemented and are called out honestly:
   `uses`/`on`/hooks (scalar and list-form), the `store:` selector, team roles,
   `skill.verbs`, `skill.allow_secrets`, `session.end_on`, and pack-local
   `extends:` — but **not** connector/store/secret references buried inside
-  free-form `code:` step bodies or runtime `{{ vault … }}` templates.
+  free-form `code:` step bodies or runtime `{{ vault … }}` templates. Those are
+  not rebound; instead the loader **warns** when a pack code body references a
+  bound name or uses a `{{ vault … }}` template, so the author fixes it (pass
+  the value via a setting or workflow input).
 - **Pack policy** is folded onto the pack's own triggers; a pack workflow called
   from *your* trigger does not carry the pack's policy.
 - **Pack-scoped memory/state namespace** (§24) is not yet implemented: a pack's
