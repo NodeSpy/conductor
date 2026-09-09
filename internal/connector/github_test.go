@@ -618,7 +618,7 @@ func TestGithubReadRevalidatesWithETag(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
 	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
-	impl.cacheTTL = 0 // always revalidate → exercise the 304 path
+	impl.kit.CacheTTL = 0 // always revalidate → exercise the 304 path
 	for i := 0; i < 3; i++ {
 		out, err := impl.Invoke(context.Background(), "pr_diff", map[string]any{"repo": "org/repo", "pr": 7})
 		if err != nil || out["diff"] != "the diff" {
@@ -660,7 +660,7 @@ func TestGithubRateLimit(t *testing.T) {
 	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
 
 	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
-	impl.cacheTTL = 0 // force a revalidating request each call
+	impl.kit.CacheTTL = 0 // force a revalidating request each call
 	if _, err := impl.Invoke(context.Background(), "pr_diff", map[string]any{"repo": "org/repo", "pr": 7}); err != nil {
 		t.Fatal(err) // prime the cache
 	}
@@ -1078,7 +1078,7 @@ func TestGithubPaginateAll(t *testing.T) {
 	}
 	// all: follows to the short page (100 + 3 = 103).
 	atomic.StoreInt32(&pages, 0)
-	impl.cacheTTL = 0 // don't serve the cached first page
+	impl.kit.CacheTTL = 0 // don't serve the cached first page
 	if out, err := impl.Invoke(ctx, "pr_files", map[string]any{"repo": "o/r", "pr": 7, "all": true}); err != nil {
 		t.Fatal(err)
 	} else if fs := out["files"].([]any); len(fs) != 103 {

@@ -104,7 +104,7 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 		if b, _ := opts["body"].(string); b != "" {
 			body["body"] = b
 		}
-		comments, err := reviewComments(opts["comments"])
+		comments, err := ReviewComments(opts["comments"])
 		if err != nil {
 			return nil, err
 		}
@@ -1015,14 +1015,14 @@ func toInt(v any) int {
 	return 0
 }
 
-// reviewComments coerces the submit_review `comments` option into GitHub
+// ReviewComments coerces the submit_review `comments` option into GitHub
 // review comment objects. Each needs a path + body; line/side/start_line/
 // start_side are passed through when set (a line-based comment defaults to
 // side RIGHT — the new version of the file). GitHub requires every commented
 // line to fall within the PR's diff; a comment outside it makes the whole
 // review 422, so callers should only comment on changed lines. nil/empty is
 // fine — a review with no inline comments, just a summary + verdict.
-func reviewComments(v any) ([]map[string]any, error) {
+func ReviewComments(v any) ([]map[string]any, error) {
 	if v == nil {
 		return nil, nil
 	}
