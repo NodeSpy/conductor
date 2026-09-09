@@ -86,9 +86,9 @@ agents:
     workspace: local
     skill:
       verbs: [github.submit_review, github.comment]
-      # A write verb posts as a distinguished bot identity, never as the
-      # operator. `app` posts as the bound GitHub App.
-      identity: app
+      # The broker may issue this secret to the hand-off agent (single-use,
+      # audited, redacted). Write verbs post as the connector's own write
+      # identity (a verb's `as:` option), never as the operator.
       allow_secrets: [review_token]
 
 workflows:
