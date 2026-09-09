@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/hosts"
 )
 
 // paseo runs an agent action via `paseo run`. Reads use the App token
@@ -560,13 +561,13 @@ func (d *Dispatcher) resolveCheckoutDir(ctx context.Context, repo string) (strin
 		if err != nil {
 			return "", err
 		}
-		if isGitRepo(ctx, target) {
+		if d.targetIsGitRepo(ctx, target) {
 			dir = target // reuse a prior clone (avoids paseo's "path already exists")
 		} else {
 			if err := d.cloneRepo(ctx, repo); err != nil {
 				return "", err
 			}
-			if !isGitRepo(ctx, target) {
+			if !d.targetIsGitRepo(ctx, target) {
 				return "", fmt.Errorf("cloned %s but %s is not a git checkout", repo, target)
 			}
 			dir = target
@@ -621,7 +622,10 @@ func (d *Dispatcher) findWorkspaceDir(ctx context.Context, repo string) string {
 	return fallback
 }
 
-// isGitRepo reports whether dir exists and is inside a git working tree.
+// isGitRepo reports whether dir exists and is inside a git working tree. This
+// is a LOCAL filesystem/process check — see targetIsGitRepo, which is what
+// callers resolving a checkout dir should use instead when the dispatcher may
+// be remote.
 func isGitRepo(ctx context.Context, dir string) bool {
 	if dir == "" {
 		return false
@@ -630,6 +634,39 @@ func isGitRepo(ctx context.Context, dir string) bool {
 		return false
 	}
 	return exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--git-dir").Run() == nil
+}
+
+// targetIsGitRepo reports whether dir is a git working tree on the box this
+// dispatcher actually drives paseo on: a local stat+git check, or — for a
+// remote (host:) dispatcher — the same check run over the paseo host's own
+// ssh channel. dir is frequently a RELATIVE path (see cloneParentDir: a
+// remote dispatcher's checkouts live under the ssh session's own login
+// directory, not this box's), so a local isGitRepo call on it would silently
+// check the wrong filesystem location entirely — this box's cwd, not the
+// remote login dir the clone actually landed in — always reporting false and
+// masking every reused (or freshly cloned) checkout as "not a git checkout".
+func (d *Dispatcher) targetIsGitRepo(ctx context.Context, dir string) bool {
+	if d.remote() {
+		return d.remoteIsGitRepo(ctx, dir)
+	}
+	return isGitRepo(ctx, dir)
+}
+
+// remoteIsGitRepo is targetIsGitRepo's remote half: it runs the equivalent
+// `git … rev-parse --git-dir` check on the configured host over ssh, so dir
+// is resolved against the SAME login directory paseoCmd's ssh invocations
+// (and thus the actual clone) use — never this box's own filesystem.
+func (d *Dispatcher) remoteIsGitRepo(ctx context.Context, dir string) bool {
+	if d.Remote == nil || dir == "" {
+		return false
+	}
+	client := d.HostClient
+	if client == nil {
+		client = &hosts.Client{}
+	}
+	script := "git -C " + hosts.ShellJoin([]string{dir}) + " rev-parse --git-dir"
+	res, err := client.Script(ctx, *d.Remote, script, nil, nil, "")
+	return err == nil && res.ExitCode == 0
 }
 
 // mainWorkTree returns the repo's primary working tree for a path inside it.
