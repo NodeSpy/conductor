@@ -907,7 +907,7 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 		r.auditVerb(t, connName, verb, rendered, "failed", err)
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}
-	r.Log("%s %s.%s done in %s", flowTag(t), connName, verb, took)
+	r.Log("%s step %s (%s.%s) done in %s", flowTag(t), id, connName, verb, took)
 	r.auditVerb(t, connName, verb, rendered, "ok", nil)
 	return out, nil
 }

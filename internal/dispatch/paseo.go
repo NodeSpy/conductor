@@ -30,7 +30,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	}
 
 	argv := []string{"run", prompt,
-		"--title", fmt.Sprintf("conductor: %s %s", req.Trigger.Target.Repo, req.Trigger.Kind),
+		"--title", agentTitle(req),
 	}
 	p := req.Profile
 	if p.Provider != "" {
@@ -444,6 +444,18 @@ func checkPromptSize(prompt string) error {
 		return fmt.Errorf("rendered prompt is %d bytes, over the ~%d-byte limit a single paseo argument can carry (the kernel's MAX_ARG_STRLEN) — cap large inlined fields such as a PR diff in the step's prompt so it fits", len(prompt), maxPromptArgBytes)
 	}
 	return nil
+}
+
+// agentTitle labels the paseo agent so a person can tell which target it is
+// for — "conductor: <repo>#<number> <kind>" (e.g. a hand-off agent waiting on a
+// review is identifiable by its PR). The number is omitted for targets without
+// one; a PR's branch name can be misleading, so the number is the anchor.
+func agentTitle(req Request) string {
+	tgt := req.Trigger.Target
+	if tgt.Number > 0 {
+		return fmt.Sprintf("conductor: %s#%d %s", tgt.Repo, tgt.Number, req.Trigger.Kind)
+	}
+	return fmt.Sprintf("conductor: %s %s", tgt.Repo, req.Trigger.Kind)
 }
 
 // checkoutArgs maps an action's checkout strategy to paseo worktree flags.
