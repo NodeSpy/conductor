@@ -101,7 +101,7 @@ func (c *Client) graphql(ctx context.Context, token, query string, variables map
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	if err := c.post(ctx, token, APIBaseURL()+"/graphql", reqBody, &resp); err != nil {
+	if err := c.post(ctx, token, c.base()+"/graphql", reqBody, &resp); err != nil {
 		return err
 	}
 	if len(resp.Errors) > 0 {

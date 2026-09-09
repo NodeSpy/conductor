@@ -31,7 +31,7 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 	if number == 0 {
 		number = toInt(opts["pr"])
 	}
-	base := APIBaseURL()
+	base := c.base()
 	switch verb {
 	case "comment":
 		if number == 0 {

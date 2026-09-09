@@ -46,6 +46,12 @@ type Config struct {
 	// CacheTTL is how long a cached GET body is served without revalidating
 	// (default 45s; see DefaultCacheTTL).
 	CacheTTL time.Duration
+	// APIBase overrides the GitHub REST/GraphQL API base URL (default: the
+	// public API, or PC_GITHUB_API_BASE when set — see APIBaseURL). This is
+	// for GitHub Enterprise Server, and for a caller (e.g. an external plugin
+	// subprocess) that cannot rely on inheriting the parent process's
+	// environment to reach a hermetic test double.
+	APIBase string
 }
 
 // DefaultCacheTTL is how long a GET body is served without revalidating —
@@ -65,6 +71,9 @@ type Client struct {
 	app        *AppAuth // nil when App-less (no `bot` identity)
 
 	httpc *http.Client
+
+	// apiBase overrides APIBaseURL() when non-empty (see Config.APIBase).
+	apiBase string
 
 	// GET response cache (reads only) + last-seen rate-limit state, so a
 	// fan-out of reviewers/verifiers that all want the same diff/metadata hits
@@ -104,7 +113,7 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	c := &Client{
 		token: cfg.Token, writeToken: cfg.WriteToken, ghToken: ghToken,
-		httpc: httpc, CacheTTL: ttl,
+		httpc: httpc, CacheTTL: ttl, apiBase: cfg.APIBase,
 		getCache: map[string]*cacheEntry{}, rlRemaining: -1,
 	}
 	if cfg.App != nil && cfg.App.AppID > 0 {
@@ -112,9 +121,21 @@ func NewClient(cfg Config) (*Client, error) {
 		if err != nil {
 			return nil, fmt.Errorf("app credentials: %w", err)
 		}
+		if cfg.APIBase != "" {
+			app.apiBase = cfg.APIBase
+		}
 		c.app = app
 	}
 	return c, nil
+}
+
+// base returns the GitHub API base URL this client uses: Config.APIBase when
+// set, else the package default (APIBaseURL, which honors PC_GITHUB_API_BASE).
+func (c *Client) base() string {
+	if c.apiBase != "" {
+		return c.apiBase
+	}
+	return APIBaseURL()
 }
 
 // GhAuthToken shells out to `gh auth token` — the last link of the
