@@ -117,6 +117,8 @@ func main() {
 		err = cmdMCP(args)
 	case "plugin", "plugins":
 		err = cmdPlugin(args)
+	case "plugin-exec": // hidden: re-verify-then-exec wrapper for runtime plugins
+		err = cmdPluginExec(args)
 	case "discover":
 		err = cmdDiscover(args)
 	case "call":

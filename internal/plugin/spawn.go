@@ -63,9 +63,16 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 
 	spec := sandbox.FromConfig(s.Isolation)
 	if spec == nil {
-		// No isolation block: run directly with a scrubbed env. The operator
-		// is told (loudly, by the manager) that OS confinement is off.
-		c := exec.Command(argv[0], argv[1:]...) //nolint:gosec // path is verified (verify.go) and operator-configured
+		// No isolation block means NO OS confinement — a same-uid process with
+		// a full filesystem view can read ~/.config/conductor, App keys, and
+		// other on-disk secrets. Deny by default (§8.3): refuse unless the
+		// operator has explicitly, knowingly opted in.
+		if !s.AllowUnsandboxed {
+			return nil, nil, false, fmt.Errorf("plugin %s: no isolation block — refusing to launch an unsandboxed external plugin (add an isolation: block, or allow_unsandboxed: true to run it with NO OS confinement — insecure, never for third-party plugins)", s.Name)
+		}
+		// Explicit opt-in: run directly with a scrubbed env. The operator is
+		// told (loudly, by the manager) that OS confinement is off.
+		c := exec.Command(argv[0], argv[1:]...) //nolint:gosec // path is verified (verify.go) and operator-opted-in
 		c.Env = env
 		return c, cleanup, false, nil
 	}

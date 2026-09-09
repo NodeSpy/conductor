@@ -108,6 +108,22 @@ func TestVerify(t *testing.T) {
 			t.Fatalf("want parent-perm refusal, got %v", err)
 		}
 	})
+	t.Run("group-writable non-sticky parent refused", func(t *testing.T) {
+		// A group-writable ancestor lets a same-group attacker swap the binary
+		// even when the file's own mode is safe (M1).
+		gwdir := filepath.Join(dir, "gwdir")
+		if err := os.Mkdir(gwdir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(gwdir, 0o775); err != nil { // group-writable, not sticky
+			t.Fatal(err)
+		}
+		gbin := writeBin(t, gwdir, "plug", data, 0o755)
+		_, err := verify(Spec{Name: "p", BinPath: gbin, Sha256: sha(data)})
+		if err == nil || !strings.Contains(err.Error(), "group/world-writable") {
+			t.Fatalf("want group-writable parent refusal, got %v", err)
+		}
+	})
 	t.Run("sticky world-writable parent accepted", func(t *testing.T) {
 		// /tmp is world-writable but sticky, which prevents cross-user swaps —
 		// checkParentPerms must NOT refuse it (else every plugin under /tmp
@@ -284,6 +300,27 @@ func TestClientRestartBackoff(t *testing.T) {
 	c.mu.Unlock()
 	if !parked {
 		t.Fatal("expected plugin parked down after burst")
+	}
+}
+
+// TestUnsandboxedExternalRefused proves H1: an external plugin with no
+// isolation block refuses to launch unless allow_unsandboxed is set.
+func TestUnsandboxedExternalRefused(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	base := Spec{Name: "p", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, AllowUnverified: true}
+
+	// No isolation, no opt-in → refused at buildCommand.
+	_, _, _, err := buildCommand(base, SandboxDeps{})
+	if err == nil || !strings.Contains(err.Error(), "unsandboxed") {
+		t.Fatalf("want unsandboxed refusal, got %v", err)
+	}
+
+	// Explicit opt-in → allowed (runs directly, sandboxed=false).
+	opted := base
+	opted.AllowUnsandboxed = true
+	cmd, _, sandboxed, err := buildCommand(opted, SandboxDeps{})
+	if err != nil || cmd == nil || sandboxed {
+		t.Fatalf("opt-in should allow an unsandboxed launch: cmd=%v sandboxed=%v err=%v", cmd, sandboxed, err)
 	}
 }
 

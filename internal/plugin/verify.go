@@ -92,8 +92,9 @@ func VerifyOnly(s Spec) error {
 }
 
 // checkParentPerms walks from the binary's directory up to root and refuses any
-// world-writable directory without the sticky bit — such a directory lets an
-// attacker replace the binary (or an ancestor) out from under us.
+// group- or world-writable directory without the sticky bit — such a directory
+// lets an attacker (same-group, or anyone) replace the binary (or an ancestor)
+// out from under us, defeating the sha pin regardless of the file's own mode.
 func checkParentPerms(path string) error {
 	dir := filepath.Dir(path)
 	for {
@@ -101,10 +102,12 @@ func checkParentPerms(path string) error {
 		if err != nil {
 			return fmt.Errorf("cannot stat parent %s: %w", dir, err)
 		}
-		// World-writable AND not sticky (0o1000) is the dangerous case;
-		// /tmp is world-writable but sticky, which prevents cross-user swaps.
-		if info.Mode()&0o002 != 0 && info.Mode()&os.ModeSticky == 0 {
-			return fmt.Errorf("parent directory is world-writable without sticky bit (%v) — attacker-swappable: %s", info.Mode(), dir)
+		// Group- or world-writable AND not sticky (0o1000) is the dangerous
+		// case; /tmp is world-writable but sticky, which prevents cross-user
+		// swaps. Group-writable ancestors matter for the same shared-deploy-
+		// group reason the file check refuses group-write.
+		if info.Mode()&0o022 != 0 && info.Mode()&os.ModeSticky == 0 {
+			return fmt.Errorf("parent directory is group/world-writable without sticky bit (%v) — attacker-swappable: %s", info.Mode(), dir)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {

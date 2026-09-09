@@ -96,9 +96,9 @@ guards (see `internal/plugin`, `internal/connector/external.go`):
 | **Verify-before-execute** | The binary's SHA-256 is checked against the `sha256:` pin — from a path with safe permissions (no world-writable binary or ancestor dir) — **before the binary is ever run**. A mismatch is a hard refusal. `allow_unverified: true` is a deliberate, insecure dev-only opt-in. |
 | **Least-privilege credentials** | A connector plugin only ever receives creds for instances of **its own type**, delivered per-call over the RPC transport — never in argv or env (env is visible via `/proc/<pid>/environ`). The child inherits a minimal env allowlist, never the daemon's credential-bearing environment. An optional `allow_secrets` exact-match allowlist gates which refs may cross. |
 | **Audit attribution** | Every credential hand-off is audited as `plugin_credential` with the `plugin@version` and the secret **ref name — never the value**. |
-| **Transport redaction** | The plugin's stdout/stderr is scrubbed through the secret redactor before it reaches any log or the audit trail. |
-| **Untrusted output** | Every response is **size-bounded** (a plugin can't OOM the daemon) and **schema-validated** against the plugin's declared verb outputs. A connector plugin **cannot forge its identity** — its declared type must match the name you configured. |
-| **Enforced sandbox** | With an `isolation:` block the subprocess is wrapped through conductor's isolation layer: process/mount/pid isolation, the daemon's config/state/secret env masked away, and **deny-by-default egress** (only hosts you list under `network.egress` are reachable). See [[Isolation]]. |
+| **Transport redaction** | The plugin's stdout/stderr is scrubbed through the secret redactor before it reaches any log or the audit trail. **Best-effort:** it matches known secret *values* (and their common encodings) — a plugin that transforms a credential before printing can still evade it. Redaction reduces, but does not eliminate, leak risk; don't rely on it as the only barrier. |
+| **Untrusted output** | Every response is **size-bounded** (the primary guard — a plugin can't OOM the daemon). Responses for verbs that **declare an `Outputs` schema** are additionally validated against it; verbs with dynamic/undeclared outputs are size-bounded only, so treat their output as untrusted input downstream. A connector plugin **cannot forge its identity** — its declared type must match the name you configured. |
+| **Enforced sandbox (fail-closed)** | An external plugin with **no `isolation:` block is refused** (deny-by-default) unless `allow_unsandboxed: true` is explicitly set. With an `isolation:` block the subprocess is wrapped through conductor's isolation layer: process/mount/pid isolation, the daemon's config/state/secret env masked away, and **deny-by-default egress** (only hosts under `network.egress` are reachable). See [[Isolation]]. |
 | **Supervision** | Every call has a timeout. A crashed or hung plugin degrades to "that connector/runtime is down" and **never takes the daemon with it**, with a restart backoff that cannot crash-loop. |
 
 **Boot vs runtime failure.** A plugin that fails to *verify* or *start* at boot
@@ -133,10 +133,11 @@ full guard set (env allowlist, per-call creds, redaction, size cap, supervision)
 
 - OS-level confinement depends on the `isolation:` mode. `namespace` mode is a
   real boundary but **Linux-only** (it uses `unshare`/`systemd-run`); `container`
-  mode is cross-platform (docker/podman); `user` mode is weakest. **Without an
-  `isolation:` block a plugin runs unsandboxed** (same uid as the daemon, able
-  to read its files) — the daemon logs a prominent warning. Always add an
-  `isolation:` block for third-party plugins.
+  mode is cross-platform (docker/podman); `user` mode is weakest. **A plugin
+  with no `isolation:` block is refused** unless you set `allow_unsandboxed:
+  true` — an unsandboxed plugin runs same-uid and can read the daemon's files
+  (config, App keys). Never opt in for a third-party plugin; add an `isolation:`
+  block instead.
 - Resource caps (CPU/mem/pids) come from cgroups in `namespace` mode
   (`systemd-run`) or engine flags in `container` mode.
 
@@ -147,14 +148,18 @@ stubbed. The following are **documented follow-ups**, not silent gaps:
 
 - **Remote sources**: fetch from a URL, a lockfile pinning binaries by SHA per
   OS/arch, discovery/search, and `conductor plugin add`/`update`. Today
-  `source:` is a local path and the SHA pin is authored by hand.
+  `source:` is a local path and the SHA pin is authored by hand. `allow_unverified`
+  (the no-pin dev opt-in) is intended only for local development; when remote
+  sources land it will be refused for them (a fetched binary must be pinned).
 - **Cryptographic signing** (cosign/Sigstore or build attestations). SHA-256
   pinning *is* implemented; signature verification is the next layer.
 - **Connector source/event streaming** (`StartSource`) — a plugin *emitting*
   webhook/poll events. Connector plugins are verb-only for now.
-- **Runtime dispatch depth**: a live ACP reference runtime + per-spawn
-  re-verification (verification is currently at boot) and mid-session
-  crash/restart supervision beyond what ACP already provides.
+- **Runtime plugin isolation depth**: runtime plugins are re-verified on every
+  spawn (via the `plugin-exec` wrapper) but still **inherit the daemon
+  environment** (the ACP spawn path is not env-scrubbed) and rely on ACP's own
+  supervision. An env-scrubbing ACP path + a live ACP reference runtime are the
+  next steps. Until then, only run fully-trusted runtime plugins.
 - **Multi-instance isolation**: one plugin serving several instances shares a
   process; creds are scoped per-call, but shared-process inter-instance
   hardening is a follow-up.

@@ -50,16 +50,17 @@ const (
 // resolved to an absolute path. Construction (and path resolution) is in
 // manager.go.
 type Spec struct {
-	Name            string
-	Kind            Kind
-	Provides        string
-	Version         string
-	BinPath         string // absolute path to the executable
-	Args            []string
-	Sha256          string
-	AllowUnverified bool
-	Isolation       *config.IsolationConfig
-	AllowSecrets    []string
+	Name             string
+	Kind             Kind
+	Provides         string
+	Version          string
+	BinPath          string // absolute path to the executable
+	Args             []string
+	Sha256           string
+	AllowUnverified  bool
+	Isolation        *config.IsolationConfig
+	AllowUnsandboxed bool
+	AllowSecrets     []string
 }
 
 // Ref is the `plugin@version` attribution string carried on audit records and

@@ -27,16 +27,17 @@ func SpecFromRef(name string, ref config.PluginRef, configDir string) Spec {
 		bin = filepath.Join(configDir, bin)
 	}
 	return Spec{
-		Name:            name,
-		Kind:            Kind(ref.Kind),
-		Provides:        ref.ProvidesName(name),
-		Version:         ref.Version,
-		BinPath:         bin,
-		Args:            ref.Args,
-		Sha256:          ref.Sha256,
-		AllowUnverified: ref.AllowUnverified,
-		Isolation:       ref.Isolation,
-		AllowSecrets:    ref.AllowSecrets,
+		Name:             name,
+		Kind:             Kind(ref.Kind),
+		Provides:         ref.ProvidesName(name),
+		Version:          ref.Version,
+		BinPath:          bin,
+		Args:             ref.Args,
+		Sha256:           ref.Sha256,
+		AllowUnverified:  ref.AllowUnverified,
+		Isolation:        ref.Isolation,
+		AllowUnsandboxed: ref.AllowUnsandboxed,
+		AllowSecrets:     ref.AllowSecrets,
 	}
 }
 

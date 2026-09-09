@@ -45,11 +45,18 @@ type PluginRef struct {
 	// Args are extra arguments appended to the plugin binary's argv at spawn.
 	Args []string `yaml:"args,omitempty"`
 	// Isolation is the sandbox policy for this plugin's subprocess (#36 §15,
-	// the OPERATOR's grant of the plugin's declared capabilities). ABSENT →
-	// deny-by-default: the plugin runs sandboxed with a deny-all egress proxy
-	// and no view of the daemon's config/state/secret env. Grant egress by
-	// listing hosts under isolation.network.egress.
+	// the OPERATOR's grant of the plugin's declared capabilities). Grant egress
+	// by listing hosts under isolation.network.egress. With NO isolation block
+	// the plugin would run same-uid with a full filesystem view (able to read
+	// ~/.config/conductor, App keys, other on-disk secrets), so an external
+	// plugin without an isolation block is REFUSED unless AllowUnsandboxed is
+	// set (deny-by-default, §8.3).
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// AllowUnsandboxed is the deliberate, insecure opt-in to run an EXTERNAL
+	// plugin with no isolation block (no OS confinement — same uid, full
+	// filesystem read). Never use for third-party plugins. Default false = a
+	// plugin without isolation refuses to launch.
+	AllowUnsandboxed bool `yaml:"allow_unsandboxed,omitempty"`
 	// AllowSecrets optionally tightens which secret refs the plugin's instances
 	// may hand across the process boundary — an EXACT-match allowlist (no
 	// globs), mirroring the skill broker. Empty = no extra restriction beyond

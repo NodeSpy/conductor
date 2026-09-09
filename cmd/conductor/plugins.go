@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -89,20 +90,21 @@ const pluginBootTimeout = 30 * time.Second
 // ACP runtime (#54 §4). A runtime plugin is the highest-stakes plugin (§8.7):
 // it EXECUTES agents. Returns entries keyed by the runtime name each provides.
 //
-// KNOWN LIMITATIONS — runtime plugins do NOT yet get the full connector-plugin
+// The binary is re-verified on EVERY spawn via the `conductor plugin-exec`
+// wrapper (M2 fix), so the sha pin holds for the daemon's whole lifetime, not
+// just at boot.
+//
+// KNOWN LIMITATION — runtime plugins still do NOT get the full connector-plugin
 // guard set (documented, not stubbed; see docs/wiki/Plugins.md):
 //   - Environment is NOT scrubbed. The ACP controller (internal/controller/
 //     acp.go: spawnACP) seeds the child with os.Environ() — the daemon's full
 //     environment, which can carry env:-resolved secrets. Isolation masks paths
 //     and network, NOT env vars. Treat a runtime plugin as receiving the
 //     daemon's environment; only run ones you fully trust.
-//   - Verification is at BOOT, and the ACP controller re-spawns the binary on
-//     every new session with no re-verification — a lifetime-long TOCTOU window
-//     if the on-disk binary is swapped post-boot.
 //   - Runtime plugins bypass internal/plugin's supervision (crash-loop cap,
 //     size-bound, stderr redaction); they rely on ACP's own handling.
 //
-// A per-spawn re-verification + env-scrubbing ACP path is the immediate follow-up.
+// An env-scrubbing ACP path is the immediate follow-up.
 func pluginRuntimeControllers(cfg *config.Config) (map[string]config.ControllerConfig, error) {
 	out := map[string]config.ControllerConfig{}
 	for name, ref := range cfg.Plugins {
@@ -116,13 +118,27 @@ func pluginRuntimeControllers(cfg *config.Config) (map[string]config.ControllerC
 		if spec.Sha256 == "" && spec.AllowUnverified {
 			logf("runtime plugin %s: WARNING running UNVERIFIED (no sha256 pin)", name)
 		}
-		argv := append([]string{spec.BinPath}, spec.Args...)
+		// Route the ACP launch through `conductor plugin-exec`, which re-verifies
+		// the binary's sha against the pin on EVERY spawn (the ACP controller
+		// re-spawns per session) before exec'ing it — closing the boot-only
+		// verification window (M2). The wrapper runs inside the same sandbox the
+		// ACP controller applies.
+		self, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("runtime plugin %s: cannot resolve conductor binary for re-verify wrapper: %w", name, err)
+		}
+		wrap := []string{self, "plugin-exec", "--sha", spec.Sha256}
+		if spec.AllowUnverified {
+			wrap = append(wrap, "--allow-unverified")
+		}
+		wrap = append(wrap, "--", spec.BinPath)
+		wrap = append(wrap, spec.Args...)
 		out[spec.Provides] = config.ControllerConfig{
 			Transport: "acp",
-			Command:   argv,
+			Command:   wrap,
 			Isolation: ref.Isolation,
 		}
-		logf("plugin %s: registered runtime %q (acp) — SECURITY: runtime plugins inherit the daemon environment and are re-spawned per session without re-verification; run only fully-trusted runtime plugins", spec.Ref(), spec.Provides)
+		logf("plugin %s: registered runtime %q (acp, per-spawn re-verified) — SECURITY: runtime plugins inherit the daemon environment; run only fully-trusted runtime plugins", spec.Ref(), spec.Provides)
 	}
 	return out, nil
 }
@@ -144,6 +160,49 @@ func mergedControllersWithPlugins(cfg *config.Config) (map[string]config.Control
 		merged[name] = cc
 	}
 	return merged, nil
+}
+
+// cmdPluginExec is the hidden re-verify-then-exec wrapper a runtime plugin's
+// ACP launch is routed through (see pluginRuntimeControllers). It re-checks the
+// binary's SHA-256 against the pin — from a safe path — on every spawn, then
+// replaces itself with the plugin via exec. Usage:
+//
+//	conductor plugin-exec --sha <hex> [--allow-unverified] -- <binPath> [args...]
+func cmdPluginExec(args []string) error {
+	var sha string
+	var allowUnverified bool
+	i := 0
+	for i < len(args) {
+		switch args[i] {
+		case "--sha":
+			if i+1 >= len(args) {
+				return fmt.Errorf("plugin-exec: --sha needs a value")
+			}
+			sha, i = args[i+1], i+2
+		case "--allow-unverified":
+			allowUnverified, i = true, i+1
+		case "--":
+			i++
+			goto rest
+		default:
+			return fmt.Errorf("plugin-exec: unexpected arg %q", args[i])
+		}
+	}
+rest:
+	rest := args[i:]
+	if len(rest) == 0 {
+		return fmt.Errorf("plugin-exec: missing -- <binPath>")
+	}
+	bin := rest[0]
+	// Re-verify (sha + safe perms) BEFORE exec — the per-spawn TOCTOU close.
+	if err := plugin.VerifyOnly(plugin.Spec{
+		Name: "runtime", Kind: plugin.KindRuntime, BinPath: bin,
+		Sha256: sha, AllowUnverified: allowUnverified,
+	}); err != nil {
+		return err
+	}
+	// Replace this process with the verified plugin, inheriting stdio+env.
+	return syscall.Exec(bin, rest, os.Environ())
 }
 
 // cmdPlugin implements `conductor plugin list|show|remove`.

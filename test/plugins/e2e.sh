@@ -28,6 +28,10 @@ plugins:
     provides: acme-echo
     version: 1.0.0
     sha256: $1
+    allow_unsandboxed: true   # demo runs the plugin without an OS sandbox
+
+# NOTE: production configs should grant an isolation: block instead of
+# allow_unsandboxed — an external plugin with no isolation runs same-uid.
 
 connectors:
   myecho:

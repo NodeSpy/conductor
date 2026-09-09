@@ -38,6 +38,7 @@ func TestExternalInvokeRejectsBadOutputOverRealWire(t *testing.T) {
 	bin, sum := buildEcho(t)
 	cl := plugin.NewClient(plugin.Spec{
 		Name: "echo", Kind: plugin.KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum,
+		AllowUnsandboxed: true,
 	}, plugin.Deps{})
 	defer cl.Close()
 
