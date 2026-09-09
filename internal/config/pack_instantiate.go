@@ -405,28 +405,40 @@ func stringifySetting(v any) string {
 
 // substituteSettings re-reads the manifest, substitutes ${settings.NAME}, and
 // re-decodes. Only the `settings.` prefix is substituted, so a step's runtime
-// ${VAR} (shell) is left untouched; an unknown settings ref is an error.
+// ${VAR} (shell) is left untouched. Known refs are replaced everywhere (fields
+// and comments alike — harmless in comments); a genuinely-unknown ref is caught
+// AFTER decode by re-marshaling the manifest (which drops comments) and scanning
+// the real string fields, so a pack comment that merely mentions the syntax does
+// not error.
 func substituteSettings(nodeDir string, settings map[string]string) (*PackManifest, error) {
 	raw, err := os.ReadFile(filepath.Join(nodeDir, PackManifestFile))
 	if err != nil {
 		return nil, err
 	}
-	var missing []string
 	sub := settingsRefRE.ReplaceAllFunc(raw, func(m []byte) []byte {
-		name := settingsRefRE.FindSubmatch(m)[1]
-		if val, ok := settings[string(name)]; ok {
+		name := string(settingsRefRE.FindSubmatch(m)[1])
+		if val, ok := settings[name]; ok {
 			return []byte(val)
 		}
-		missing = append(missing, string(name))
-		return m
+		return m // leave unknown refs; caught post-decode if in a real field
 	})
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		return nil, fmt.Errorf("unknown setting reference(s): %s", strings.Join(uniq(missing), ", "))
-	}
 	var man PackManifest
 	if err := strictUnmarshal(sub, &man); err != nil {
 		return nil, fmt.Errorf("parse manifest after settings substitution: %w", err)
+	}
+	// Any ${settings.NAME} still present in a decoded field is an unknown ref.
+	body, err := yaml.Marshal(&man)
+	if err != nil {
+		return nil, err
+	}
+	var missing []string
+	for _, m := range settingsRefRE.FindAllSubmatch(body, -1) {
+		missing = append(missing, string(m[1]))
+	}
+	if len(missing) > 0 {
+		missing = uniq(missing)
+		sort.Strings(missing)
+		return nil, fmt.Errorf("unknown setting reference(s): %s", strings.Join(missing, ", "))
 	}
 	return &man, nil
 }
