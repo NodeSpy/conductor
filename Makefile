@@ -4,7 +4,7 @@
 # bare-git forge, a mock GitHub API, a notify sink-catcher, and stub controllers —
 # NO production GitHub/smee/repos, NO LLM keys.
 
-.PHONY: build test vet fmt e2e e2e-live e2e-down ship-gate
+.PHONY: build test vet fmt e2e e2e-live e2e-down e2e-packs ship-gate
 
 # Go build / test / static checks.
 build:
@@ -26,6 +26,12 @@ e2e:
 # Live e2e (manual): real agents + mounted API keys. See test/e2e/README.md.
 e2e-live:
 	MODE=live bash test/e2e/run.sh
+
+# Hermetic pack lifecycle e2e (issue #53): drives the real binary through
+# init/plan/validate against examples/packs/review-kit from a local AND a git
+# source. No Docker, no secrets, no egress.
+e2e-packs:
+	bash test/e2e/packs.sh
 
 # Tear down a leftover e2e stack (e.g. after a KEEP=1 run).
 e2e-down:
