@@ -227,11 +227,15 @@ The following are **not yet** implemented and are called out honestly:
 - **Ref-rewriting** covers agent/workflow/check refs, connector prefixes in
   `uses`/`on`/hooks (scalar and list-form), the `store:` selector, team roles,
   `skill.verbs`, `skill.allow_secrets`, `session.end_on`, and pack-local
-  `extends:` — but **not** connector/store/secret references buried inside
-  free-form `code:` step bodies or runtime `{{ vault … }}` templates. Those are
-  not rebound; instead the loader **warns** when a pack code body references a
-  bound name or uses a `{{ vault … }}` template, so the author fixes it (pass
-  the value via a setting or workflow input).
+  `extends:` — but **not** the free-form runtime env-access templates
+  `{{ vault … }}`, `{{ secret … }}`, and `{{ kv … }}`. Those are not rebound:
+  they resolve the consumer's *global* vault/secret/store by name, so a pack can
+  reach undeclared environment through them. The loader **warns** on every such
+  template it finds in a pack's behavior (at `conductor init` / `conductor pack
+  plan`), so the reach is never silent — bind the value through `requires:` or
+  pass it via a setting/workflow input instead. (`http://`/`git://` plaintext
+  pack sources are also refused — an unauthenticated fetch can't be safely
+  sha-pinned.)
 - **Pack policy** is folded onto the pack's own triggers; a pack workflow called
   from *your* trigger does not carry the pack's policy.
 - **Pack-scoped memory/state namespace** (§24) is not yet implemented: a pack's

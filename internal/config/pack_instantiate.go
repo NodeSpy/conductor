@@ -164,6 +164,15 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	if man.Pack.Deprecated != "" {
 		st.warnf("pack %q (%s): deprecated: %s", ns, man.Pack.Name, man.Pack.Deprecated)
 	}
+	// Confinement visibility (§13): structural refs are namespace-rebound, but a
+	// free-form {{ vault|secret|kv "name" }} template in a prompt/code/option is
+	// NOT — it reaches the consumer's global environment by name, bypassing the
+	// requires:/bind boundary. We can't statically confine a free-form template,
+	// so surface each one at install time — the review's "silent undeclared reach"
+	// gap becomes a visible warning at `conductor init`/`plan`.
+	for _, w := range scanEnvReach(man) {
+		st.warnf("pack %q: %s", ns, w)
+	}
 
 	// Resolve environment bindings for this node. A binding may be given
 	// concretely on this instance, or forwarded from a parent.
@@ -434,6 +443,37 @@ func agentGrantsSkill(p AgentProfile, want string) bool {
 // ---------------------------------------------------------------------------
 
 var settingsRefRE = regexp.MustCompile(`\$\{settings\.([A-Za-z0-9_.-]+)\}`)
+
+// envReachRE matches a {{ vault|secret|kv "NAME" … }} runtime env-access template
+// call. Structural refs (agents/workflows/connectors in uses/on/hooks/store/…)
+// are namespace-rebound, but these free-form template funcs are not: they resolve
+// the consumer's GLOBAL vault/secret/store by name, so a pack can reach undeclared
+// environment through them. We can't confine a free-form template statically —
+// scanEnvReach surfaces each so the operator sees it (§13 confinement is
+// structural, not total).
+var envReachRE = regexp.MustCompile(`\{\{-?\s*(vault|secret|kv)\s+"([^"]+)"`)
+
+// scanEnvReach reports every {{ vault|secret|kv "name" }} reach in the pack's
+// behavior — undeclared, unrebound access to the consumer's global environment.
+func scanEnvReach(man *PackManifest) []string {
+	body, err := yaml.Marshal(man)
+	if err != nil {
+		return nil
+	}
+	kind := map[string]string{"vault": "vault", "secret": "secret", "kv": "store"}
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range envReachRE.FindAllSubmatch(body, -1) {
+		fn, name := string(m[1]), string(m[2])
+		if seen[fn+" "+name] {
+			continue
+		}
+		seen[fn+" "+name] = true
+		out = append(out, fmt.Sprintf("reaches consumer %s %q via a {{ %s }} template — pack templates are NOT namespace-rebound, so this accesses the consumer's global environment directly (undeclared/unconfined); bind it through requires: or remove it", kind[fn], name, fn))
+	}
+	sort.Strings(out)
+	return out
+}
 
 // effectiveSettings resolves defaults <- preset <- instance overrides.
 func effectiveSettings(man *PackManifest, inst PackInstance, ns string, st *packInstantiation) (map[string]string, error) {

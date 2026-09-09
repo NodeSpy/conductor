@@ -125,16 +125,19 @@ func parseSource(src, baseDir string) (sourceSpec, error) {
 	// remote-helper transports (ext::/fd::/…) that would run an arbitrary local
 	// command as the "remote" — e.g. `git::ext::sh -c '…'` → RCE at fetch time.
 	if !safeGitTransport(spec.gitURL) {
-		return sourceSpec{}, fmt.Errorf("pack source %q: unsupported git transport — use https://, ssh://, git://, file://, or git@host:path", src)
+		return sourceSpec{}, fmt.Errorf("pack source %q: unsupported git transport — use https://, ssh://, file://, or git@host:path (plaintext http:// and git:// are refused — an unauthenticated fetch can't be safely sha-pinned)", src)
 	}
 	return spec, nil
 }
 
 // safeGitTransport reports whether a git URL uses an allowed transport. Only
-// https/http/ssh/git/file schemes and the scp-like git@host:path form are
-// permitted; remote-helper transports (ext::, fd::, transport::…) are refused.
+// authenticated/encrypted transports — https/ssh/file — and the scp-like
+// git@host:path form are permitted. Plaintext transports (http://, git://) are
+// refused: the fetch is sha-pinned only AFTER it completes, so a first-fetch
+// MITM would poison the pin itself — an unauthenticated fetch is never safe.
+// Remote-helper transports (ext::, fd::, transport::…) are also refused.
 func safeGitTransport(url string) bool {
-	for _, p := range []string{"https://", "http://", "ssh://", "git://", "file://"} {
+	for _, p := range []string{"https://", "ssh://", "file://"} {
 		if strings.HasPrefix(url, p) {
 			return true
 		}

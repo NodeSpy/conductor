@@ -72,10 +72,16 @@ func TestParseSourceRejectsRemoteHelperTransports(t *testing.T) {
 		"git::ext::sh -c 'id'",
 		"git::fd::7,8",
 		"git::transport::whatever",
+		// Plaintext transports: an unauthenticated fetch can be MITM'd, and the
+		// sha pin is computed only AFTER the fetch, so it can't protect the
+		// first fetch. Refuse them.
+		"git::http://example.com/o/r",
+		"http://example.com/o/r",
+		"git::git://example.com/o/r",
 	}
 	for _, s := range bad {
 		if _, err := parseSource(s, "/cfg"); err == nil {
-			t.Errorf("parseSource(%q) should reject the remote-helper transport", s)
+			t.Errorf("parseSource(%q) should reject the unsafe transport", s)
 		}
 	}
 	// Legit transports still parse.
@@ -310,5 +316,29 @@ packs:
 	_, err := ResolvePacks(path)
 	if err == nil || !strings.Contains(err.Error(), "pack_trust.allow") {
 		t.Fatalf("an untrusted remote dependency source should be refused, got: %v", err)
+	}
+}
+
+// A pack that reaches the consumer's global environment through a free-form
+// {{ vault|secret|kv "name" }} template (which is NOT namespace-rebound) is
+// surfaced — the confinement gap the review flagged becomes visible, not silent.
+func TestPackEnvReachSurfaced(t *testing.T) {
+	man := &PackManifest{}
+	man.Pack.Name = "p"
+	man.Workflows = map[string]WorkflowDef{
+		"wf": {Steps: []Step{
+			{Prompt: `db is {{ vault "prod" "db_pass" }}`},
+			{Code: `t := {{ secret "gh_pat" }}`},
+		}},
+	}
+	got := strings.Join(scanEnvReach(man), "\n")
+	if !strings.Contains(got, `vault "prod"`) || !strings.Contains(got, `secret "gh_pat"`) {
+		t.Fatalf("scanEnvReach must surface undeclared vault/secret template reach, got: %q", got)
+	}
+	// A pack with no env-access templates produces nothing (no false positives).
+	clean := &PackManifest{}
+	clean.Workflows = map[string]WorkflowDef{"wf": {Steps: []Step{{Prompt: "plain text"}}}}
+	if w := scanEnvReach(clean); len(w) != 0 {
+		t.Fatalf("clean pack should have no env-reach warnings, got: %v", w)
 	}
 }
