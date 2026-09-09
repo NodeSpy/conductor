@@ -25,6 +25,9 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	if err != nil {
 		return RunRef{}, fmt.Errorf("render prompt: %w", err)
 	}
+	if err := checkPromptSize(prompt); err != nil {
+		return RunRef{}, err
+	}
 
 	argv := []string{"run", prompt,
 		"--title", fmt.Sprintf("conductor: %s %s", req.Trigger.Target.Repo, req.Trigger.Kind),
@@ -424,6 +427,23 @@ func (d *Dispatcher) agentInHome(ctx context.Context, id string) bool {
 		return false
 	}
 	return isHomeDir(m.Cwd)
+}
+
+// maxPromptArgBytes bounds a single paseo prompt argument. The kernel caps one
+// argv element at MAX_ARG_STRLEN (32 pages = 128 KiB on Linux); a prompt over
+// that makes fork/exec fail with a cryptic "argument list too long" (E2BIG) —
+// which is what a large inlined field (e.g. a full PR diff) produces. We check
+// up front and fail with an actionable message instead. The margin leaves room
+// for the rest of the argv (flags) under the limit.
+const maxPromptArgBytes = 120000
+
+// checkPromptSize rejects a prompt that would overflow paseo's single-argument
+// limit, turning a cryptic kernel E2BIG into a clear, fixable error.
+func checkPromptSize(prompt string) error {
+	if len(prompt) > maxPromptArgBytes {
+		return fmt.Errorf("rendered prompt is %d bytes, over the ~%d-byte limit a single paseo argument can carry (the kernel's MAX_ARG_STRLEN) — cap large inlined fields such as a PR diff in the step's prompt so it fits", len(prompt), maxPromptArgBytes)
+	}
+	return nil
 }
 
 // checkoutArgs maps an action's checkout strategy to paseo worktree flags.
@@ -1163,6 +1183,9 @@ func (d *Dispatcher) agentLastActive(ctx context.Context, id string) string {
 
 // sendToAgent queues a follow-up task to an existing agent.
 func (d *Dispatcher) sendToAgent(ctx context.Context, id, prompt string) error {
+	if err := checkPromptSize(prompt); err != nil {
+		return err
+	}
 	cmd := d.paseoCmd(ctx, "send", id, prompt)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
