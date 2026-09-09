@@ -71,6 +71,34 @@ func TestVerify(t *testing.T) {
 			t.Fatalf("want abs-path refusal, got %v", err)
 		}
 	})
+	t.Run("world-writable non-sticky parent refused (TOCTOU)", func(t *testing.T) {
+		// A world-writable parent dir lets an attacker swap the binary between
+		// verify and exec. This exercises checkParentPerms directly — the
+		// binary's own mode is safe (0o755), so the refusal must come from the
+		// ancestor walk.
+		sub := filepath.Join(dir, "wwdir")
+		if err := os.Mkdir(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(sub, 0o777); err != nil { // world-writable, NOT sticky
+			t.Fatal(err)
+		}
+		bin2 := writeBin(t, sub, "plug", data, 0o755)
+		_, err := verify(Spec{Name: "p", BinPath: bin2, Sha256: sha(data)})
+		if err == nil || !strings.Contains(err.Error(), "world-writable") {
+			t.Fatalf("want parent-perm refusal, got %v", err)
+		}
+	})
+	t.Run("sticky world-writable parent accepted", func(t *testing.T) {
+		// /tmp is world-writable but sticky, which prevents cross-user swaps —
+		// checkParentPerms must NOT refuse it (else every plugin under /tmp
+		// breaks). t.TempDir() lives under the OS temp root, whose sticky
+		// ancestor(s) the walk crosses; a plain verify of the base binary
+		// confirms the sticky path is allowed.
+		if _, err := verify(Spec{Name: "p", BinPath: bin, Sha256: sha(data)}); err != nil {
+			t.Fatalf("sticky-ancestor path should be accepted: %v", err)
+		}
+	})
 }
 
 func TestBoundedReader(t *testing.T) {

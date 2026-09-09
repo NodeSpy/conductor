@@ -78,6 +78,39 @@ func TestExamplePluginShaMismatchRefused(t *testing.T) {
 	}
 }
 
+// TestExamplePluginHangTimeoutAndRecovery proves supervision against a REAL
+// unresponsive subprocess: a hung call returns via the per-call timeout (the
+// daemon is not stuck), and a later call restarts the plugin and succeeds.
+func TestExamplePluginHangTimeoutAndRecovery(t *testing.T) {
+	bin, sum := buildExamplePlugin(t)
+	spec := Spec{Name: "echo", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum}
+	c := NewClient(spec, Deps{CallTimeout: 300 * time.Millisecond})
+	defer c.Close()
+	ctx := context.Background()
+
+	// A hung call must return (timeout), not block forever.
+	start := time.Now()
+	_, err := c.Invoke(ctx, InvokeRequest{Instance: "e1", Verb: "echo",
+		Options: map[string]any{"message": "x", "hang": true}})
+	if err == nil {
+		t.Fatal("hung call should have timed out")
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatalf("timeout took too long: %v", time.Since(start))
+	}
+
+	// The daemon survives and recovers: a subsequent normal call restarts the
+	// plugin and succeeds.
+	out, err := c.Invoke(ctx, InvokeRequest{Instance: "e1", Verb: "echo",
+		Options: map[string]any{"message": "recovered"}})
+	if err != nil {
+		t.Fatalf("recovery call failed: %v", err)
+	}
+	if out["message"] != "recovered" {
+		t.Fatalf("bad recovery output: %+v", out)
+	}
+}
+
 // TestExamplePluginOversizeRejected proves the untrusted-output size cap: the
 // plugin's --oversize mode emits a >8 MiB describe result, which must be
 // rejected rather than buffered.

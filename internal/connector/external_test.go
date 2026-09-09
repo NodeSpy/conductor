@@ -43,7 +43,10 @@ func TestRegisterExternalTypeRefusesBundledOverride(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "bundled") {
 		t.Fatalf("want bundled-override refusal, got %v", err)
 	}
-	// A fresh external type registers, then unregisters cleanly.
+	// A fresh external type registers, then unregisters cleanly. Cleanup runs
+	// even if an assertion below fails, so the global registry never leaks this
+	// type into other tests in the package.
+	t.Cleanup(func() { UnregisterExternalType("acme-ext-test") })
 	if err := RegisterExternalType(&TypeDecl{Type: "acme-ext-test"}, nil); err != nil {
 		t.Fatalf("register external: %v", err)
 	}
@@ -126,6 +129,27 @@ func TestResolveConnectionRedactsAndAudits(t *testing.T) {
 		if strings.Contains(v, "s3cr3t-value") {
 			t.Fatalf("audit leaked the secret value: %+v", audits[0])
 		}
+	}
+}
+
+func TestResolveConnectionAllowSecretsGate(t *testing.T) {
+	sec := secrets.New()
+	sec.LookupEnv = func(k string) (string, bool) { return "v", true }
+
+	// allow_secrets set but the referenced secret is NOT on it → refused.
+	allow := map[string]bool{"env:PERMITTED": true}
+	_, _, err := resolveConnection(refWith(t, map[string]any{
+		"type": "jira", "token": "env:FORBIDDEN",
+	}), sec, allow)
+	if err == nil || !strings.Contains(err.Error(), "allow_secrets") {
+		t.Fatalf("want allow_secrets refusal, got %v", err)
+	}
+
+	// The permitted ref passes.
+	if _, refs, err := resolveConnection(refWith(t, map[string]any{
+		"type": "jira", "token": "env:PERMITTED",
+	}), sec, allow); err != nil || len(refs) != 1 {
+		t.Fatalf("permitted ref should pass: refs=%v err=%v", refs, err)
 	}
 }
 

@@ -65,7 +65,17 @@ func (handler) HandleRequest(_ context.Context, method string, params json.RawMe
 		if leak, _ := req.Options["leak"].(bool); leak {
 			fmt.Fprintf(os.Stderr, "echo: DEBUG received token=%s\n", token)
 		}
+		// hang: never respond, to exercise the daemon's per-call timeout +
+		// supervision against a real (unresponsive) subprocess.
+		if hang, _ := req.Options["hang"].(bool); hang {
+			select {}
+		}
 		fmt.Fprintf(os.Stderr, "echo: invoked verb=%s instance=%s\n", req.Verb, req.Instance)
+		// badoutput: return an undeclared/mistyped field, to exercise the
+		// daemon's schema validation of untrusted output over the real wire.
+		if bad, _ := req.Options["badoutput"].(bool); bad {
+			return plugin.InvokeResult{Outputs: map[string]any{"surprise": "undeclared"}}, nil
+		}
 		msg, _ := req.Options["message"].(string)
 		return plugin.InvokeResult{Outputs: map[string]any{
 			"message":        msg,
