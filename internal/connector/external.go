@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -73,8 +74,13 @@ func RegisterExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin
 		if err != nil {
 			return nil, err
 		}
+		log := deps.Log
+		if log == nil {
+			log = func(string, ...any) {}
+		}
 		return &externalImpl{
 			client:     cl,
+			source:     cl, // *plugin.Client also satisfies pluginSourcer
 			instance:   name,
 			decl:       td,
 			conn:       conn,
@@ -82,6 +88,7 @@ func RegisterExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin
 			pluginRef:  spec.Ref(),
 			pluginType: spec.Provides,
 			audit:      deps.Audit,
+			log:        log,
 		}, nil
 	}
 	if err := RegisterExternalType(td, builder); err != nil {
@@ -173,6 +180,7 @@ type pluginInvoker interface {
 // plugin subprocess and validates the response against the declared Decl.
 type externalImpl struct {
 	client     pluginInvoker
+	source     pluginSourcer
 	instance   string
 	decl       *TypeDecl
 	conn       map[string]any
@@ -181,6 +189,7 @@ type externalImpl struct {
 	pluginType string
 	audit      func(map[string]any)
 	auditOnce  sync.Once
+	log        func(string, ...any)
 }
 
 // Validate is a no-op: the plugin was verified and described at registration.
@@ -190,10 +199,32 @@ func (e *externalImpl) Validate() error { return nil }
 // streaming is a documented follow-up).
 func (e *externalImpl) DeclaredEvents() []string { return nil }
 
-// Source returns no integration: connector plugins are verb-only in this
-// release (event/source streaming — the "hard half" — is a documented
-// follow-up, see docs/wiki/Plugins.md).
-func (e *externalImpl) Source(_ []CompiledTrigger) (core.Integration, error) { return nil, nil }
+// Source returns a streaming integration when this plugin declares events AND
+// some configured trigger references it; otherwise (nil, nil) for a verb-only
+// plugin. The daemon matches the plugin's streamed events to these triggers and
+// resolves the action (see pluginsource.go), so the plugin stays a dumb source.
+func (e *externalImpl) Source(triggers []CompiledTrigger) (core.Integration, error) {
+	if len(e.decl.Events) == 0 || e.source == nil {
+		return nil, nil
+	}
+	var mine []CompiledTrigger
+	for _, t := range triggers {
+		if t.Spec.On == "" || strings.HasPrefix(t.Spec.On, e.instance+".") {
+			mine = append(mine, t)
+		}
+	}
+	if len(mine) == 0 {
+		return nil, nil
+	}
+	return &pluginSourceIntegration{
+		source:   e.source,
+		instance: e.instance,
+		typ:      e.pluginType,
+		config:   e.conn,
+		triggers: mine,
+		log:      e.log,
+	}, nil
+}
 
 // Invoke forwards the verb to the plugin with this instance's credentials and
 // schema-validates the untrusted response.
