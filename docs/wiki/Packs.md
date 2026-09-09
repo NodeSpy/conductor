@@ -20,22 +20,28 @@ cleanly updatable.**
 ```yaml
 packs:
   review:                                      # instance name == the namespace
-    source: github.com/your-org/packs//review-kit
-    version: 1.0.0                              # the lockfile records the resolved sha
+    source: github.com/your-org/packs//review-kit@v1.0.0  # @ref PINS (tag/branch/sha)
+    version: 1.0.0                             # metadata only, NOT a pin — recorded in the
+                                                # lockfile; see Lockfile and reproducibility
+    auth:       house/gh-pat                   # OPTIONAL fetch credential for a private source,
+                                                # resolved through your secrets:/vaults:
     preset: claude                             # pick a settings preset
     settings: { heavy_model: claude-opus }     # or override individual settings
     connectors: { github: gh }                 # BIND the pack's required github -> your gh
     secrets:    { review_token: house/review } # BIND a required secret -> your vault ref
+    policy:     { budget: { max_cost_usd: 5 } } # deep-merges onto the pack's bundled policy
     agents:
       reviewer: my-opus                        # BIND a role to your global agent
       handoff:  { workspace: local }           # OVERRIDE the bundled agent (deep-merge)
     triggers:
       on_review_request:                        # the pack ships this DISARMED
         enabled: true                           # you arm it
-        repos:   [your-org/app]                 # you scope it — this IS the consent
+        repos:   [your-org/app]                 # required for a github trigger — this IS the consent
 ```
 
-The block **is** the override surface — no separate drop-in files.
+The block **is** the override surface — no separate drop-in files. `policy:`
+deep-merges in order bundled pack policy <- instance `policy:` <- a trigger
+arm's own `policy:` (most specific wins).
 
 ## Governing rule: define behavior / bind environment
 
@@ -133,11 +139,16 @@ surface, and that is the only place consent lives.
 
 - The pack **ships** its triggers (you never rebuild the event mapping / gates /
   steps), but they arrive **disarmed** — disabled, with **no repos**.
-- **Arming** = the two environment-only things: `enabled: true` **and** `repos:`.
-  A trigger with no repo scope matches nothing, so even an accidental
-  `enabled: true` fires nothing. **The binding you must do is the consent.**
+- **Arming** = the two environment-only things: `enabled: true` **and**, for a
+  github-sourced trigger, `repos:`. The repo list **is** the consent: arming a
+  github pack trigger with `enabled: true` but no `repos:` is a **hard error at
+  load**, not a silent no-op — the github matcher treats an empty repo set as
+  "match every repo", so an unscoped arm would otherwise run the pack on every
+  repo the consumer's connector can reach. A non-repo-scoped source (`manual`,
+  `rss`, …) has no repo concept and is exempt from this requirement.
 
-Guarantee: a freshly-added pack does **nothing** until you arm a trigger.
+Guarantee: a freshly-added pack does **nothing** until you arm a trigger, and a
+github trigger **cannot be armed at all** without explicitly scoping its repos.
 
 ## Composition and dependencies
 
@@ -157,6 +168,12 @@ resolved graph, each node pinned by a resolved revision and a tree digest. Commi
 it: `conductor init` on another machine yields a byte-identical setup, and a
 changed remote is tamper-evident on the next `init`.
 
+The instance block's `version:` does **not** select a ref — it is metadata,
+recorded in the lockfile and used as the default `version:` for a child
+dependency that omits its own. The real pin is `@<tag|branch|sha>` appended to
+`source:` (e.g. `source: github.com/your-org/packs//review-kit@v1.0.0`); the
+lockfile's `resolved:` sha is what actually reproduces the fetch.
+
 ## CLI
 
 ```
@@ -166,8 +183,8 @@ conductor pack plan               # preview what the packs add (agents, skill gr
 conductor pack add <source>       # fetch a pack, show its install review + a ready-to-paste block
 conductor pack lint <pack-dir>    # validate a pack is well-formed (author tooling)
 conductor pack show <pack-dir>    # render a pack's docs: settings, requires, exports, example
-conductor pack remove <instance>  # clear a pack's vendored tree + lockfile entries
-conductor pack update             # re-resolve the packs: block and diff the lockfile
+conductor pack remove <instance>  # clear a pack's vendored tree + lockfile entries (alias: rm)
+conductor pack update [--allow-unlisted] # re-resolve the packs: block and diff the lockfile
 conductor update --packs          # alias for `conductor pack update`
 ```
 
@@ -219,8 +236,6 @@ with `conductor init --allow-unlisted`.
 
 The following are **not yet** implemented and are called out honestly:
 
-- **`conductor add` / `remove` / `update --packs`** — the config-mutating install
-  helpers. Use the `packs:` block + `conductor init` directly for now.
 - **Signature verification** (cosign / build attestation, §21 Phase B) is not yet
   implemented. The source allowlist (`pack_trust:`, below) and lockfile digest
   verification (drift warns at load) are.

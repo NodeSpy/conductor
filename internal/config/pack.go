@@ -47,7 +47,10 @@ type PackInstance struct {
 	// `git::ssh://git@github.com/…`, or a local path (`./packs/review-kit`,
 	// relative to the config file) for vendored/example packs.
 	Source string `yaml:"source"`
-	// Version pins the pack version; the lockfile records the resolved sha.
+	// Version is metadata only — it does NOT pin a git ref. It is recorded in
+	// the lockfile and used as the default `version:` for a child dependency
+	// that omits its own. To pin, append `@<tag|branch|sha>` to Source; the
+	// lockfile then records the resolved sha for reproducibility.
 	Version string `yaml:"version,omitempty"`
 	// Auth is an OPTIONAL fetch credential for a private source, resolved
 	// through the consumer's secrets:/vaults: (redacted, never written into a

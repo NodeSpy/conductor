@@ -816,18 +816,22 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #
 # packs:
 #   review:                                       # instance name == the namespace
-#     source: github.com/your-org/packs//review-kit   # or ./examples/packs/review-kit
-#     version: 1.0.0                              # conductor.lock.yaml records the resolved sha
+#     source: github.com/your-org/packs//review-kit@v1.0.0  # @ref PINS — or ./examples/packs/review-kit
+#     version: 1.0.0                              # metadata only, NOT a pin — conductor.lock.yaml
+#                                                  # records the resolved sha (the real pin)
+#     auth:       house/gh-pat                    # OPTIONAL fetch credential for a private source,
+#                                                  # resolved through your secrets:/vaults:
 #     preset: claude                              # a settings preset (or set `settings:` directly)
 #     connectors: { github: gh }                  # BIND the pack's required github -> your connector
 #     secrets:    { review_token: house/review }  # BIND a required secret -> your vault ref
+#     policy:     { budget: { max_cost_usd: 5 } } # deep-merges onto the pack's bundled policy
 #     agents:
 #       reviewer: my-opus                         # BIND a role to your global agent…
 #       handoff:  { workspace: local }            # …or OVERRIDE the bundled one (deep-merge)
 #     triggers:
 #       on_review_request:                         # the pack ships this DISARMED
 #         enabled: true                            # you arm it…
-#         repos:   [your-org/app]                  # …and scope it — the repo scope IS the consent
+#         repos:   [your-org/app]                  # required for a github trigger — the repo scope IS the consent
 #   # Reference an exported pack workflow from your own trigger:
 #   #   triggers:
 #   #     - on: gh.pull_request
