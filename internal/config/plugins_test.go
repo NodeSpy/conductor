@@ -30,14 +30,14 @@ func TestValidatePlugins(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || !contains(err.Error(), tc.wantErr) {
+			if err == nil || !strContains(err.Error(), tc.wantErr) {
 				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
 			}
 		})
 	}
 }
 
-func contains(s, sub string) bool {
+func strContains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {
 			return true
