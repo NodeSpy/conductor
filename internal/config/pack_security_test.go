@@ -212,3 +212,36 @@ func TestPackLockDigestDriftWarns(t *testing.T) {
 		t.Fatalf("expected a lockfile-drift warning, got %v", cfg.PackWarnings())
 	}
 }
+
+// A pack manifest-level memory: BACKEND is bind-only (it points at a store/dir)
+// and must be rejected — but an agent's own memory: opt-in (behavior) is fine.
+func TestPackMemoryBackendRejectedButAgentOptInAllowed(t *testing.T) {
+	// (a) manifest memory: backend -> rejected.
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/bad", `
+pack: { name: bad, version: "1.0.0", requires: { conductor: ">=0.1" } }
+memory: { type: memory }
+`)
+	path := writeConsumer(t, dir, "packs:\n  bad:\n    source: ./src/bad\n")
+	if _, err := resolveAndLoad(t, path); err == nil || !strings.Contains(err.Error(), "memory") {
+		t.Fatalf("a manifest memory: backend must be rejected, got: %v", err)
+	}
+
+	// (b) an agent memory: opt-in is behavior and instantiates fine.
+	dir2 := t.TempDir()
+	writePackSource(t, dir2, "src/ok", `
+pack: { name: ok, version: "1.0.0", requires: { conductor: ">=0.1" } }
+agents:
+  a:
+    workspace: local
+    memory: { scopes: [repo, agent], limit: 5 }
+`)
+	path2 := writeConsumer(t, dir2, "packs:\n  ok:\n    source: ./src/ok\n")
+	cfg, err := resolveAndLoad(t, path2)
+	if err != nil {
+		t.Fatalf("an agent memory opt-in should be allowed: %v", err)
+	}
+	if a := cfg.Agents["ok/a"]; a.Memory == nil || !a.Memory.Enabled {
+		t.Fatalf("agent memory opt-in should survive instantiation, got %+v", cfg.Agents["ok/a"].Memory)
+	}
+}

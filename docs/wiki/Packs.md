@@ -205,9 +205,9 @@ The following are **not yet** implemented and are called out honestly:
   free-form `code:` step bodies or runtime `{{ vault … }}` templates.
 - **Pack policy** is folded onto the pack's own triggers; a pack workflow called
   from *your* trigger does not carry the pack's policy.
-- **Pack `memory:`** is parsed but not yet applied (it warns on load).
-- **Cycle detection** keys on the dependency alias in the chain; a diamond that
-  reaches the same pack twice under two different aliases is bounded by the depth
-  cap rather than reported as a cycle.
+- **Pack-scoped memory/state namespace** (§24) is not yet implemented: a pack's
+  agents may opt into memory (behavior), but two packs share the same memory
+  namespace. (The manifest-level `memory:` *backend* is bind-only and rejected —
+  it selects a store/dir, which is environment.)
 - **Registry / discovery search** — packs are URL/path-addressable; there is no
   central index yet.

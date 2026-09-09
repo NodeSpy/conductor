@@ -164,11 +164,6 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	if man.Pack.Deprecated != "" {
 		st.warnf("pack %q (%s): deprecated: %s", ns, man.Pack.Name, man.Pack.Deprecated)
 	}
-	// A pack `memory:` block is decoded but not yet applied — warn rather than
-	// silently drop it (global memory can't be namespaced cleanly yet).
-	if man.Memory != nil {
-		st.warnf("pack %q: a memory: block is declared but pack memory is not yet applied (ignored)", ns)
-	}
 
 	// Resolve environment bindings for this node. A binding may be given
 	// concretely on this instance, or forwarded from a parent.

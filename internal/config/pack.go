@@ -15,10 +15,12 @@ import (
 //
 // The governing rule is DEFINE BEHAVIOR / BIND ENVIRONMENT:
 //   - Define-in-pack (shipped, namespaced, overridable): agents, workflows,
-//     policy, checks, memory, triggers. Pure behavior.
+//     policy, checks, triggers. Pure behavior. (Agents may opt into memory via
+//     their own memory: selector — that's behavior — but the daemon-wide memory
+//     BACKEND is not shippable.)
 //   - Bind-only (declared in requires:, wired in the instance, NEVER shipped):
-//     connectors, secrets, vaults, stores, runtimes, hosts, handoffs. Anything
-//     carrying credentials, endpoints, or infra identity.
+//     connectors, secrets, vaults, stores, runtimes, hosts, handoffs, and the
+//     memory backend. Anything carrying credentials, endpoints, or infra identity.
 //
 // This is the security boundary: a pack from a stranger can define prompts,
 // policy, and workflows, but cannot smuggle in a credential or point at
@@ -148,7 +150,7 @@ const PackManifestFile = "conductor-pack.yaml"
 
 // PackManifest is a pack's self-contained definition: identity/discovery/compat
 // metadata (`pack:`), typed settings + presets, the public `exports:` surface,
-// and the bundled behavior (agents/workflows/policy/checks/triggers/memory).
+// and the bundled behavior (agents/workflows/policy/checks/triggers).
 //
 // The bind-only sections (connectors/secrets/vaults/stores/runtimes/hosts) are
 // FORBIDDEN in a manifest and rejected at install with a precise error — the
@@ -160,22 +162,26 @@ type PackManifest struct {
 	Presets  map[string]map[string]any `yaml:"presets,omitempty"`
 	Exports  PackExports               `yaml:"exports,omitempty"`
 
-	// Define-in-pack (behavior) — shipped, namespaced, overridable.
+	// Define-in-pack (behavior) — shipped, namespaced, overridable. (Agents may
+	// still opt INTO memory via their own `memory:` selector — that's behavior;
+	// the daemon-wide memory BACKEND below is not shippable.)
 	Agents    map[string]AgentProfile `yaml:"agents,omitempty"`
 	Workflows map[string]WorkflowDef  `yaml:"workflows,omitempty"`
 	Triggers  []TriggerSpec           `yaml:"triggers,omitempty"` // shipped DISARMED
 	Policy    *Policy                 `yaml:"policy,omitempty"`
 	Checks    map[string]Step         `yaml:"checks,omitempty"`
-	Memory    *MemoryConfig           `yaml:"memory,omitempty"`
 
 	// Bind-only sections — FORBIDDEN here. Captured as raw nodes so an offending
-	// pack is rejected by name (see (*PackManifest).checkNoEnvironment).
+	// pack is rejected by name (see (*PackManifest).checkNoEnvironment). The
+	// `memory:` block selects the daemon-wide memory backend (a `stores:` entry
+	// or a filesystem dir) — infra identity, so it is bind-only too.
 	Connectors map[string]yaml.Node `yaml:"connectors,omitempty"`
 	Secrets    map[string]yaml.Node `yaml:"secrets,omitempty"`
 	Vaults     map[string]yaml.Node `yaml:"vaults,omitempty"`
 	StoresRaw  map[string]yaml.Node `yaml:"stores,omitempty"`
 	Runtimes   map[string]yaml.Node `yaml:"runtimes,omitempty"`
 	Hosts      map[string]yaml.Node `yaml:"hosts,omitempty"`
+	Memory     yaml.Node            `yaml:"memory,omitempty"`
 }
 
 // PackMeta is the manifest's identity/discovery/compatibility header.
@@ -269,8 +275,11 @@ func (m *PackManifest) checkNoEnvironment() error {
 	if len(m.Hosts) > 0 {
 		shipped = append(shipped, "hosts")
 	}
+	if m.Memory.Kind != 0 {
+		shipped = append(shipped, "memory")
+	}
 	if len(shipped) > 0 {
-		return fmt.Errorf("pack %q ships bind-only section(s) %v: a pack must not carry connectors, secrets, vaults, stores, runtimes, or hosts (define behavior / bind environment) — declare them in requires: and let the consumer bind them", m.Pack.Name, shipped)
+		return fmt.Errorf("pack %q ships bind-only section(s) %v: a pack must not carry connectors, secrets, vaults, stores, runtimes, hosts, or a memory backend (define behavior / bind environment) — declare them in requires: and let the consumer bind them; agents may still opt into memory via their own memory: selector", m.Pack.Name, shipped)
 	}
 	return nil
 }

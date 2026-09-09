@@ -13,6 +13,7 @@ import (
 // name — the security boundary is six independent branches, not just connectors.
 func TestCheckNoEnvironmentAllSections(t *testing.T) {
 	one := map[string]yaml.Node{"x": {Kind: yaml.ScalarNode, Value: "y"}}
+	node := yaml.Node{Kind: yaml.MappingNode}
 	cases := []struct {
 		name string
 		m    PackManifest
@@ -23,6 +24,7 @@ func TestCheckNoEnvironmentAllSections(t *testing.T) {
 		{"stores", PackManifest{StoresRaw: one}},
 		{"runtimes", PackManifest{Runtimes: one}},
 		{"hosts", PackManifest{Hosts: one}},
+		{"memory", PackManifest{Memory: node}},
 	}
 	for _, c := range cases {
 		c.m.Pack.Name = "p"
