@@ -845,7 +845,7 @@ func cmdRun(args []string) error {
 	// Periodic self-update. `stop` lets it trigger a graceful shutdown so the
 	// service manager relaunches into the new binary.
 	if cfg.Update.Auto {
-		go autoUpdateLoop(ctx, cfg.Update, notifier, stop)
+		go autoUpdateLoop(ctx, cfg.Update, cfgFile, notifier, stop)
 	}
 	// conductor.updated fires on the first boot of a new release.
 	go emitUpdatedOnBoot(cfg, notifier)

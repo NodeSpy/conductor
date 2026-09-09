@@ -164,6 +164,13 @@ type Config struct {
 	// → no restriction. See pack_trust.go.
 	PackTrust *PackTrustConfig `yaml:"pack_trust,omitempty"`
 
+	// PluginTrust is the OPTIONAL operator-level provenance allowlist for REMOTE
+	// plugin sources (#59), the exact analogue of PackTrust: when set, resolving
+	// a remote plugin (`conductor init` / `plugin update`) refuses any source not
+	// matching an `allow:` glob unless `--allow-unlisted`. Absent → no
+	// restriction. Reuses the pack-trust matcher. See pack_trust.go.
+	PluginTrust *PackTrustConfig `yaml:"plugin_trust,omitempty"`
+
 	// packWarnings holds non-fatal notices raised while instantiating packs
 	// (deprecations, armed-but-unscoped triggers). Not serialized. See PackWarnings.
 	packWarnings []string `yaml:"-"`
@@ -179,6 +186,16 @@ type Update struct {
 	// emit conductor.update_available so a trigger drives the update with
 	// pre/post steps around `uses: conductor.update`).
 	Apply ApplyMode `yaml:"apply"`
+	// Deps, when true, also re-resolves `packs:` and `plugins:` on each
+	// auto-update cycle — pulling the newest release each dependency's `version:`
+	// constraint allows, re-vendoring, and (if anything changed and the resulting
+	// config still validates) restarting to load them. Default false: dependency
+	// versions move only on an explicit `conductor init` / `pack update` /
+	// `plugin update`. Per-item `hold: true` freezes one dependency even when this
+	// is on. A dep refresh that fails to validate is discarded — the running
+	// config stands — the same fail-safe as a bad binary release. Every change and
+	// every hold is logged.
+	Deps bool `yaml:"deps"`
 }
 
 // ShouldApply reports whether to re-exec after a successful update (default true).
@@ -1030,10 +1047,41 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	c.applyDefaults()
+	// Point remote plugins (#59) at their vendored binary + locked sha so the
+	// existing verify-before-execute + SpecFromRef path treats them exactly like
+	// a local, sha-pinned plugin. Offline — the fetch is `conductor init`.
+	c.resolveRemotePluginSources(filepath.Dir(path))
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
 	return &c, nil
+}
+
+// resolveRemotePluginSources rewrites each REMOTE plugin's Source to its
+// vendored binary path and fills in the sha256 recorded in the lockfile, so the
+// rest of the pipeline (validate, SpecFromRef, verify-before-execute) is
+// oblivious to remoteness. A remote plugin with no lock entry yet (not
+// initialized) is left with its remote Source; SpecFromRef reports a clear
+// "run conductor init" error rather than trying to exec a URL.
+func (c *Config) resolveRemotePluginSources(configDir string) {
+	for name, ref := range c.Plugins {
+		if !ref.IsRemote() {
+			continue
+		}
+		lock, ok := PluginLock(configDir, name)
+		if !ok || lock.Path == "" {
+			continue
+		}
+		p := lock.Path
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(configDir, p)
+		}
+		ref.Source = p
+		if ref.Sha256 == "" {
+			ref.Sha256 = lock.Sha256
+		}
+		c.Plugins[name] = ref
+	}
 }
 
 // loadMerged reads the file at path (env-expanded) as a generic map, then

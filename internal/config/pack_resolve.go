@@ -22,8 +22,29 @@ const LockfileName = "conductor.lock.yaml"
 
 // Lockfile is the resolved pack graph.
 type Lockfile struct {
-	Version int         `yaml:"version"`
-	Packs   []LockEntry `yaml:"packs"`
+	Version int               `yaml:"version"`
+	Packs   []LockEntry       `yaml:"packs"`
+	Plugins []PluginLockEntry `yaml:"plugins,omitempty"`
+}
+
+// PluginLockEntry pins one resolved REMOTE plugin (release-asset model, #59):
+// the constraint that selected it, the concrete release tag, the verified binary
+// sha (verify-before-execute checks against this), and the vendored binary path
+// (relative to the config dir). Local-path plugins are not locked — they carry
+// their own sha256: pin in the config.
+type PluginLockEntry struct {
+	// Name is the plugins: map key.
+	Name string `yaml:"name"`
+	// Source is the remote source as written in the config.
+	Source string `yaml:"source"`
+	// Version is the requested version constraint, if any.
+	Version string `yaml:"version,omitempty"`
+	// Resolved is the concrete release tag the constraint selected.
+	Resolved string `yaml:"resolved"`
+	// Sha256 is the verified hex sha of the downloaded binary.
+	Sha256 string `yaml:"sha256"`
+	// Path is the vendored binary, relative to the config dir.
+	Path string `yaml:"path"`
 }
 
 // LockEntry pins one resolved pack node (an instance or a nested dependency).
@@ -242,7 +263,16 @@ func resolvePacks(configPath string, allowUnlisted bool) (*Lockfile, error) {
 	if err := os.MkdirAll(vendor, 0o755); err != nil {
 		return nil, err
 	}
-	r := &resolver{configDir: dir, lock: &Lockfile{Version: 1}, trust: trust, allowUnlisted: allowUnlisted}
+	// Carry forward the previous lock: its plugin section is preserved (packs
+	// don't own it) and its pack revisions back per-instance `hold:`.
+	prevLock, _ := ReadLockfile(dir)
+	prev := map[string]LockEntry{}
+	if prevLock != nil {
+		for _, e := range prevLock.Packs {
+			prev[e.Instance] = e
+		}
+	}
+	r := &resolver{configDir: dir, lock: &Lockfile{Version: 1}, trust: trust, allowUnlisted: allowUnlisted, prev: prev}
 	for _, name := range sortedPackKeys(packs) {
 		if !validPackAlias(name) {
 			return nil, fmt.Errorf("pack instance name %q is invalid (letters, digits, '-', '_' only)", name)
@@ -252,6 +282,9 @@ func resolvePacks(configPath string, allowUnlisted bool) (*Lockfile, error) {
 		}
 	}
 	sort.Slice(r.lock.Packs, func(i, j int) bool { return r.lock.Packs[i].Instance < r.lock.Packs[j].Instance })
+	if prevLock != nil {
+		r.lock.Plugins = prevLock.Plugins // don't clobber the plugin lock
+	}
 	if err := writeLockfile(dir, r.lock); err != nil {
 		return nil, err
 	}
@@ -264,6 +297,7 @@ type resolver struct {
 	total         int
 	trust         *PackTrustConfig
 	allowUnlisted bool
+	prev          map[string]LockEntry // previous lock, by instance — for `hold:`
 }
 
 func (r *resolver) resolve(chain, nameChain []string, inst PackInstance, destDir string) error {
@@ -295,14 +329,24 @@ func (r *resolver) resolve(chain, nameChain []string, inst PackInstance, destDir
 	}
 	// Version constraints (#59): an unpinned git source (no @ref) with a
 	// `version:` constraint resolves to the highest matching tag. A hard @ref
-	// pin wins; a bare unpinned/unconstrained source still tracks HEAD.
+	// pin wins; a bare unpinned/unconstrained source still tracks HEAD. A held
+	// instance re-pins to its previously-locked revision instead of re-resolving,
+	// so auto-update leaves it frozen (an explicit `pack update` clears the hold
+	// path by carrying no prior lock for a changed source).
 	if spec.git && spec.ref == "" {
-		if c := strings.TrimSpace(inst.Version); c != "" {
-			tag, err := resolveVersionTag(spec, c)
-			if err != nil {
-				return fmt.Errorf("pack %q: %w", ns, err)
+		if inst.Hold {
+			if p, ok := r.prev[ns]; ok && p.Resolved != "" && p.Resolved != "local" {
+				spec.ref = p.Resolved
 			}
-			spec.ref = tag
+		}
+		if spec.ref == "" {
+			if c := strings.TrimSpace(inst.Version); c != "" {
+				tag, err := resolveVersionTag(spec, c)
+				if err != nil {
+					return fmt.Errorf("pack %q: %w", ns, err)
+				}
+				spec.ref = tag
+			}
 		}
 	}
 	resolved := "local"
@@ -609,6 +653,56 @@ func PackVendorDir(configDir string) string { return packVendorDir(configDir) }
 // WriteLockfileTo writes a lockfile next to the config (exported for the CLI).
 func WriteLockfileTo(configDir string, lock *Lockfile) error { return writeLockfile(configDir, lock) }
 
+// PluginVendorDir is where remote plugin binaries are cached, next to the pack
+// vendor dir under the config dir.
+func PluginVendorDir(configDir string) string {
+	return filepath.Join(packVendorDir(configDir), "..", "plugins")
+}
+
+// MergePluginLock read-modify-writes the lockfile's plugins: section, replacing
+// entries by Name (pack entries untouched). It preserves entries for plugins not
+// in `entries` (e.g. held plugins whose prior pin should stand).
+func MergePluginLock(configDir string, entries []PluginLockEntry) error {
+	lock, err := ReadLockfile(configDir)
+	if err != nil {
+		return err
+	}
+	if lock == nil {
+		lock = &Lockfile{Version: 1}
+	}
+	byName := make(map[string]PluginLockEntry, len(lock.Plugins))
+	for _, e := range lock.Plugins {
+		byName[e.Name] = e
+	}
+	for _, e := range entries {
+		byName[e.Name] = e
+	}
+	lock.Plugins = lock.Plugins[:0]
+	names := make([]string, 0, len(byName))
+	for n := range byName {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		lock.Plugins = append(lock.Plugins, byName[n])
+	}
+	return writeLockfile(configDir, lock)
+}
+
+// PluginLock returns the locked entry for a plugin name, if present.
+func PluginLock(configDir, name string) (PluginLockEntry, bool) {
+	lock, err := ReadLockfile(configDir)
+	if err != nil || lock == nil {
+		return PluginLockEntry{}, false
+	}
+	for _, e := range lock.Plugins {
+		if e.Name == name {
+			return e, true
+		}
+	}
+	return PluginLockEntry{}, false
+}
+
 // FetchPackForReview fetches a single pack source into a temp dir and returns
 // its manifest, for `conductor add` to render an install review WITHOUT touching
 // the config or vendor dir. Dependencies are not fetched. The temp dir is
@@ -695,4 +789,40 @@ func loadPacksBlock(path string) (map[string]PackInstance, *PackTrustConfig, err
 		return nil, nil, fmt.Errorf("parse packs: block: %w", err)
 	}
 	return c.Packs, c.PackTrust, nil
+}
+
+// LoadPluginsBlock extracts the `plugins:` and `plugin_trust:` blocks (with
+// imports merged) without a full strict decode — so plugin resolution can run
+// before the binaries are vendored, mirroring loadPacksBlock.
+func LoadPluginsBlock(path string) (map[string]PluginRef, *PackTrustConfig, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read config: %w", err)
+	}
+	expanded, err := expandEnv(path, raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	var probe map[string]any
+	if err := yaml.Unmarshal(expanded, &probe); err != nil {
+		return nil, nil, fmt.Errorf("parse config: %w", err)
+	}
+	doc := expanded
+	if hasAnyImports(probe) {
+		merged, err := loadMerged(path, map[string]bool{})
+		if err != nil {
+			return nil, nil, err
+		}
+		if doc, err = yaml.Marshal(merged); err != nil {
+			return nil, nil, err
+		}
+	}
+	var c struct {
+		Plugins     map[string]PluginRef `yaml:"plugins"`
+		PluginTrust *PackTrustConfig     `yaml:"plugin_trust"`
+	}
+	if err := yaml.Unmarshal(doc, &c); err != nil {
+		return nil, nil, fmt.Errorf("parse plugins: block: %w", err)
+	}
+	return c.Plugins, c.PluginTrust, nil
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/plugin"
 )
 
 // cmdInit resolves everything declared in `packs:` (fetch sources, recurse
@@ -32,23 +33,66 @@ func cmdInit(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(lock.Packs) == 0 {
-		fmt.Println("no packs: block — nothing to initialize")
+	// Resolve remote plugins (release-asset fetch) in the same step.
+	nPlugins, err := resolvePluginsForInit(path, allowUnlisted)
+	if err != nil {
+		return err
+	}
+	if len(lock.Packs) == 0 && nPlugins == 0 {
+		fmt.Println("no packs: or remote plugins: block — nothing to initialize")
 		return nil
 	}
-	fmt.Printf("resolved %d pack(s) into %s\n", len(lock.Packs), config.LockfileName)
-	for _, e := range lock.Packs {
-		fmt.Printf("  %-24s %s@%s (%s)\n", e.Instance, e.Name, orNone(e.Version), e.Resolved)
+	if len(lock.Packs) > 0 {
+		fmt.Printf("resolved %d pack(s) into %s\n", len(lock.Packs), config.LockfileName)
+		for _, e := range lock.Packs {
+			fmt.Printf("  %-24s %s@%s (%s)\n", e.Instance, e.Name, orNone(e.Version), e.Resolved)
+		}
+		fmt.Println()
 	}
-	fmt.Println()
 	// Load the config so the instantiated effect can be previewed.
 	cfg, err := config.Load(path)
 	if err != nil {
-		return fmt.Errorf("packs resolved, but loading the instantiated config failed: %w", err)
+		return fmt.Errorf("resolved, but loading the config failed: %w", err)
 	}
-	printPackPlan(cfg)
+	if len(lock.Packs) > 0 {
+		printPackPlan(cfg)
+	}
 	fmt.Println("\nnext: arm a pack trigger (enabled + repos) in your config, then `conductor validate`")
 	return nil
+}
+
+// resolvePluginsForInit fetches + verifies + vendors the remote plugins in the
+// `plugins:` block, writes their lockfile entries, and prints a per-plugin line.
+// Returns the count of remote plugins it touched.
+func resolvePluginsForInit(path string, allowUnlisted bool) (int, error) {
+	plugins, trust, err := config.LoadPluginsBlock(path)
+	if err != nil {
+		return 0, err
+	}
+	results, err := plugin.ResolvePlugins(filepath.Dir(path), plugins, trust, allowUnlisted, plugin.GHReleaseAPI{})
+	if err != nil {
+		return 0, err
+	}
+	remote := 0
+	for _, r := range results {
+		if r.Action == "skipped-local" {
+			continue
+		}
+		remote++
+		fmt.Printf("  plugin %-20s %-11s %s (%s)\n", r.Name, r.Action, r.Tag, shortSha(r.Sha))
+	}
+	if remote > 0 {
+		fmt.Println()
+	}
+	return remote, nil
+}
+
+// shortSha abbreviates a hex sha for a preview line.
+func shortSha(s string) string {
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
 }
 
 // cmdPack is the author/operator surface: list | plan | lint | show.

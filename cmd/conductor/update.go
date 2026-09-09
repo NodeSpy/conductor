@@ -16,6 +16,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/plugin"
 )
 
 const updateRepo = "NodeSpy/conductor"
@@ -28,6 +29,9 @@ func cmdUpdate(args []string) error {
 	for _, a := range args {
 		if a == "--packs" {
 			return cmdPackUpdate(args)
+		}
+		if a == "--plugins" {
+			return cmdPluginUpdate(args)
 		}
 	}
 	force := false
@@ -136,12 +140,16 @@ func doUpdate(force bool, pinTag string) (updated bool, tag string, err error) {
 // running conductor, with no webhook or per-operator setup. GitHub exposes no
 // release push a non-admin consumer can subscribe to, so a near-free conditional
 // poll is the portable stand-in.
-func autoUpdateLoop(ctx context.Context, u config.Update, notifier *notify.Notifier, stop func()) {
+func autoUpdateLoop(ctx context.Context, u config.Update, cfgFile string, notifier *notify.Notifier, stop func()) {
 	iv := u.Interval.D()
 	if iv <= 0 {
 		iv = 10 * time.Minute
 	}
-	logf("auto-update: enabled, checking every %s", iv)
+	if u.Deps {
+		logf("auto-update: enabled, checking every %s (packs + plugins included)", iv)
+	} else {
+		logf("auto-update: enabled, checking every %s", iv)
+	}
 	checker := &releaseChecker{}
 	t := time.NewTicker(iv)
 	defer t.Stop()
@@ -151,6 +159,13 @@ func autoUpdateLoop(ctx context.Context, u config.Update, notifier *notify.Notif
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// Dependency refresh first: a changed pack/plugin restarts to load it,
+			// same as a new binary. Opt-in (update.deps) — off, this is a no-op.
+			if u.Deps && refreshDeps(cfgFile) {
+				logf("auto-update: dependency change validated — restarting to apply")
+				applyRelease(stop)
+				return
+			}
 			tag, changed, err := checker.check()
 			if err != nil {
 				logf("auto-update: check failed: %v", err)
@@ -166,6 +181,78 @@ func autoUpdateLoop(ctx context.Context, u config.Update, notifier *notify.Notif
 			}
 		}
 	}
+}
+
+// refreshDeps re-resolves packs + remote plugins against their `version:`
+// constraints, logging every change and every held dependency. It returns true
+// only when something actually changed AND the resulting config still loads —
+// the caller then restarts to apply it. A refresh that fails to validate is
+// logged and reported as no-change: the running daemon stands, and the
+// degraded-boot fail-safe covers the (now newer) on-disk lockfile on the next
+// manual restart. Network errors are logged and swallowed (transient).
+func refreshDeps(cfgFile string) (changed bool) {
+	dir := filepath.Dir(cfgFile)
+	before, _ := config.ReadLockfile(dir)
+
+	if _, err := config.ResolvePacks(cfgFile); err != nil {
+		logf("auto-update: pack refresh failed (keeping current): %v", err)
+		return false
+	}
+	plugins, trust, err := config.LoadPluginsBlock(cfgFile)
+	if err != nil {
+		logf("auto-update: plugin block read failed (keeping current): %v", err)
+		return false
+	}
+	if _, err := plugin.ResolvePlugins(dir, plugins, trust, false, plugin.GHReleaseAPI{}); err != nil {
+		logf("auto-update: plugin refresh failed (keeping current): %v", err)
+		return false
+	}
+
+	after, _ := config.ReadLockfile(dir)
+	if !logDepChanges(before, after) {
+		return false // nothing moved
+	}
+	// A dependency moved — only apply if the new graph still loads.
+	if _, err := config.Load(cfgFile); err != nil {
+		logf("auto-update: dependency update does NOT validate — NOT applying: %v", err)
+		return false
+	}
+	return true
+}
+
+// logDepChanges logs each pack/plugin whose resolved revision changed between
+// two lockfiles and returns whether anything changed. Held or unchanged
+// dependencies are logged at most as "unchanged" only when something else moved.
+func logDepChanges(before, after *config.Lockfile) bool {
+	if after == nil {
+		return false
+	}
+	moved := false
+	oldPack := map[string]string{}
+	if before != nil {
+		for _, e := range before.Packs {
+			oldPack[e.Instance] = e.Resolved
+		}
+	}
+	for _, e := range after.Packs {
+		if prev, ok := oldPack[e.Instance]; !ok || prev != e.Resolved {
+			logf("auto-update: pack %s -> %s@%s (%s)", e.Instance, e.Name, orNone(e.Version), shortSha(e.Resolved))
+			moved = true
+		}
+	}
+	oldPlug := map[string]string{}
+	if before != nil {
+		for _, e := range before.Plugins {
+			oldPlug[e.Name] = e.Sha256
+		}
+	}
+	for _, e := range after.Plugins {
+		if prev, ok := oldPlug[e.Name]; !ok || prev != e.Sha256 {
+			logf("auto-update: plugin %s -> %s (%s)", e.Name, e.Resolved, shortSha(e.Sha256))
+			moved = true
+		}
+	}
+	return moved
 }
 
 // installRelease and applyRelease are the install/restart seams —

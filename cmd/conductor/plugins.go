@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -215,9 +216,34 @@ func cmdPlugin(args []string) error {
 		return cmdPluginShow(args[1:])
 	case "remove", "rm":
 		return cmdPluginRemove(args[1:])
+	case "update":
+		return cmdPluginUpdate(args[1:])
 	default:
-		return fmt.Errorf("unknown plugin subcommand %q (list|show|remove)", args[0])
+		return fmt.Errorf("unknown plugin subcommand %q (list|show|remove|update)", args[0])
 	}
+}
+
+// cmdPluginUpdate re-resolves the remote plugins (release-asset fetch) against
+// their version: constraints, re-vendoring + re-locking any that moved. It is
+// the plugin analogue of `conductor pack update`, and what `update.deps: true`
+// runs automatically. Prints a per-plugin line so the operator sees what moved.
+func cmdPluginUpdate(args []string) error {
+	path, rest := configPath(args)
+	allowUnlisted := false
+	for _, a := range rest {
+		if a == "--allow-unlisted" {
+			allowUnlisted = true
+		}
+	}
+	loadEnvFile(filepath.Join(filepath.Dir(path), "conductor.env"))
+	n, err := resolvePluginsForInit(path, allowUnlisted)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		fmt.Println("no remote plugins to update")
+	}
+	return nil
 }
 
 // cmdPluginList shows bundled connectors AND runtimes (tagged bundled) plus the

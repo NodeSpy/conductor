@@ -55,6 +55,11 @@ type PackInstance struct {
 	// that omits its own. To pin, append `@<tag|branch|sha>` to Source; the
 	// lockfile then records the resolved sha for reproducibility.
 	Version string `yaml:"version,omitempty"`
+	// Hold, when true, freezes this instance at its currently-locked revision:
+	// auto-update (`update.deps: true`) will not re-resolve it. An explicit
+	// `conductor init` / `pack update` still moves it. No effect on the first
+	// resolve (nothing to hold yet). Mirrors a plugin's `hold:`.
+	Hold bool `yaml:"hold,omitempty"`
 	// Auth is an OPTIONAL fetch credential for a private source, resolved
 	// through the consumer's secrets:/vaults: (redacted, never written into a
 	// pack). Absent → the box's ambient `gh`/git auth. Bind-environment: the

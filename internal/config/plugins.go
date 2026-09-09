@@ -44,6 +44,11 @@ type PluginRef struct {
 	AllowUnverified bool `yaml:"allow_unverified,omitempty"`
 	// Args are extra arguments appended to the plugin binary's argv at spawn.
 	Args []string `yaml:"args,omitempty"`
+	// Hold, when true, freezes a REMOTE plugin at its currently-locked version:
+	// `conductor init` / auto-update will not re-resolve it (mirrors a pack's
+	// hold). No effect on a local plugin. Update it deliberately by clearing hold
+	// or running `conductor plugin update <name> --force`.
+	Hold bool `yaml:"hold,omitempty"`
 	// Isolation is the sandbox policy for this plugin's subprocess (#36 §15,
 	// the OPERATOR's grant of the plugin's declared capabilities). Grant egress
 	// by listing hosts under isolation.network.egress. With NO isolation block
@@ -80,6 +85,19 @@ func (p PluginRef) ProvidesName(key string) string {
 	return key
 }
 
+// IsRemote reports whether Source names a remote release repo
+// (github.com/owner/repo[//component]) rather than a local executable path. A
+// remote plugin is fetched at `conductor init` (release-asset model, #59): its
+// sha comes from the resolved release, so it is exempt from the config-time
+// sha256 requirement below — verify-before-execute is still enforced against the
+// sha recorded in the lockfile once resolved.
+func (p PluginRef) IsRemote() bool {
+	s := strings.TrimSpace(p.Source)
+	s = strings.TrimPrefix(s, "https://")
+	s = strings.TrimPrefix(s, "http://")
+	return strings.HasPrefix(s, "github.com/")
+}
+
 // bundledConnectorTypes and bundledRuntimeTypes name the always-present
 // in-binary plugins a plugins: entry must NOT collide with (external-overrides-
 // bundled is deliberately disallowed in this release — see §7 open Q4).
@@ -106,7 +124,7 @@ func (c *Config) validatePlugins() error {
 		if strings.TrimSpace(p.Source) == "" {
 			return fmt.Errorf("config: %s: missing source (a local executable path)", where)
 		}
-		if p.Sha256 == "" && !p.AllowUnverified {
+		if p.Sha256 == "" && !p.AllowUnverified && !p.IsRemote() {
 			return fmt.Errorf("config: %s: missing sha256 pin — set sha256: to the binary's SHA-256 (verify-before-execute), or allow_unverified: true to run it unpinned (insecure, dev only)", where)
 		}
 		if p.Sha256 != "" && !isHexSHA256(p.Sha256) {
