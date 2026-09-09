@@ -396,6 +396,48 @@ func TestParseSource(t *testing.T) {
 	}
 }
 
+func TestParseSourceRejectsInjectionAndTraversal(t *testing.T) {
+	bad := []string{
+		"git::--upload-pack=evil",        // leading '-' => git option injection
+		"git::ssh://h/r@-somebranch",     // ref begins with '-'
+		"github.com/o/r//../../etc@main", // subdir traversal via ..
+		"github.com/o/r//sub/../../x",    // .. in a later segment
+	}
+	for _, s := range bad {
+		if _, err := parseSource(s, "/cfg"); err == nil {
+			t.Errorf("parseSource(%q) should be rejected (injection/traversal), got nil error", s)
+		}
+	}
+	// A normal source with a ref that merely CONTAINS a dash is fine.
+	if _, err := parseSource("github.com/o/r//kit@release-1.2", "/cfg"); err != nil {
+		t.Errorf("a normal dashed ref should parse: %v", err)
+	}
+}
+
+func TestCopyTreeSkipsSymlinks(t *testing.T) {
+	src := t.TempDir()
+	secret := filepath.Join(src, "regular.txt")
+	if err := os.WriteFile(secret, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A symlink pointing outside the tree must not be copied (no file, and
+	// certainly not the target's contents).
+	link := filepath.Join(src, "escape")
+	if err := os.Symlink("/etc/hostname", link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	dst := filepath.Join(t.TempDir(), "out")
+	if err := copyTree(src, dst); err != nil {
+		t.Fatalf("copyTree: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "escape")); !os.IsNotExist(err) {
+		t.Fatalf("symlink should be skipped, but %q exists", filepath.Join(dst, "escape"))
+	}
+	if _, err := os.Stat(filepath.Join(dst, "regular.txt")); err != nil {
+		t.Fatalf("regular file should be copied: %v", err)
+	}
+}
+
 func TestPackLockfileWritten(t *testing.T) {
 	path := baseConfigWithReview(t, "")
 	lock, err := ResolvePacks(path)

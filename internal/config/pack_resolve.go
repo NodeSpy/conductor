@@ -112,7 +112,30 @@ func parseSource(src, baseDir string) (sourceSpec, error) {
 		repo = "https://" + repo
 	}
 	spec.gitURL = repo
+	// Harden against argument injection and traversal: a source flows through
+	// from a (possibly hostile) parent pack's requires.packs, so refuse a URL,
+	// ref, or subdir that could be read as a git option or escape the checkout.
+	if strings.HasPrefix(spec.gitURL, "-") || strings.HasPrefix(spec.ref, "-") || strings.HasPrefix(spec.subdir, "-") {
+		return sourceSpec{}, fmt.Errorf("pack source %q: URL/ref/subdir may not begin with '-'", src)
+	}
+	if spec.subdir != "" && !safeSubdir(spec.subdir) {
+		return sourceSpec{}, fmt.Errorf("pack source %q: //subdir %q escapes the repository", src, spec.subdir)
+	}
 	return spec, nil
+}
+
+// safeSubdir rejects a //subdir that is absolute or contains a `..` segment, so
+// a fetched subdir can never resolve outside the cloned/copied tree.
+func safeSubdir(sub string) bool {
+	if filepath.IsAbs(sub) {
+		return false
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(sub), "/") {
+		if seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // ResolvePacks fetches every pack declared in the config's `packs:` block into
@@ -250,7 +273,9 @@ func fetchGit(spec sourceSpec, destDir string) (string, error) {
 	if spec.ref != "" {
 		clone = append(clone, "--branch", spec.ref)
 	}
-	clone = append(clone, spec.gitURL, tmp)
+	// `--` ends option parsing so a hostile URL can't be read as a git flag
+	// (the URL/ref were already refused a leading '-' in parseSource).
+	clone = append(clone, "--", spec.gitURL, tmp)
 	if out, err := runGit("", clone...); err != nil {
 		// --branch fails for a raw commit sha; fall back to a full-ish fetch.
 		if spec.ref != "" {
@@ -284,7 +309,7 @@ func gitFetchRef(url, ref, dir string) (string, error) {
 	if out, err := runGit("", "init", dir); err != nil {
 		return out, err
 	}
-	if out, err := runGit(dir, "remote", "add", "origin", url); err != nil {
+	if out, err := runGit(dir, "remote", "add", "origin", "--", url); err != nil {
 		return out, err
 	}
 	if out, err := runGit(dir, "fetch", "--depth", "1", "origin", ref); err != nil {
@@ -325,6 +350,14 @@ func copyTree(src, dst string) error {
 				return filepath.SkipDir
 			}
 			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
+		}
+		// Never follow a symlink out of the pack tree: a pack with a
+		// `x -> /etc/passwd` link must not copy the target into the vendor dir.
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return nil // skip devices/pipes/sockets
 		}
 		return copyFile(path, filepath.Join(dst, rel), info.Mode())
 	})
