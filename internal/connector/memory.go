@@ -88,17 +88,28 @@ func (memoryImpl) Invoke(ctx context.Context, verb string, opts map[string]any) 
 	}
 	str := func(k string) string { s, _ := opts[k].(string); return s }
 	src := memory.SourceFrom(ctx)
-	switch verb {
-	case "remember":
-		// The scope on this path is AGENT-supplied: the verb is reachable
-		// by any `skill.verbs: [memory.*]` grant. "global" is the shared
-		// bucket injected into every opted-in agent's prompt on this
-		// daemon, so writing there turns one repo's note into every
-		// repo's context. Same guard as the output contract and the MCP
-		// tool — this face was simply missed.
-		if err := memory.CheckAgentScope(str("scope")); err != nil {
+	// EVERY verb is gated, not just remember. This face is reachable by any
+	// `skill.verbs: [memory.*]` grant, so recall/list/forget were as open as
+	// remember was before the H8 guard landed on it — a grant could read the
+	// shared bucket it could not write, list every tenant's entries, and
+	// delete an id belonging to another scope. memory.CheckOp is the one gate
+	// this and the run:code binding share; for forget the scope is the stored
+	// entry's, which is how ownership is enforced.
+	scope := str("scope")
+	if verb == "forget" {
+		s, found, err := m.ScopeOf(str("id"))
+		if err != nil {
 			return nil, err
 		}
+		if found {
+			scope = s
+		}
+	}
+	if err := m.CheckOp(verb, scope); err != nil {
+		return nil, err
+	}
+	switch verb {
+	case "remember":
 		e, err := m.Remember(str("text"), stringList(opts["tags"]), str("scope"), src)
 		if err != nil {
 			return nil, err
@@ -116,6 +127,9 @@ func (memoryImpl) Invoke(ctx context.Context, verb string, opts map[string]any) 
 		if s := str("scope"); s != "" {
 			q.Scopes = []string{memory.NormalizeScope(s)}
 		}
+		// `list` shares this branch: with a scope named it is a scoped
+		// read like recall, and without one it is bounded by whatever the
+		// installed scope guard permits (CheckOp above), not by nothing.
 		entries, err := m.Recall(q)
 		if err != nil {
 			return nil, err

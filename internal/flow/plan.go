@@ -488,6 +488,18 @@ func (r *Runner) planDataGuard(ctx context.Context) code.DataGuard {
 		if rp != nil && (kind == "kv" || kind == "sql") && !rp.storeOK(resource) {
 			return fmt.Errorf("agent_authored allowlist: code step touches store %q — not in policy.agent_authored.allow_stores (trust: full lifts this)", resource)
 		}
+		// Memory is a shared resource like a store, and gets the same
+		// deny-by-default treatment: an agent-authored step reads, writes
+		// and forgets in its own scope plus whatever allow_memory_scopes
+		// grants. `resource` is the scope the op touches — for forget, the
+		// stored entry's own scope, so ownership rides the same check.
+		if rp != nil && kind == "memory" && !rp.memoryScopeOK(resource) {
+			named := resource
+			if named == "" {
+				named = "(none named)"
+			}
+			return fmt.Errorf("agent_authored allowlist: code step %ss memory scope %s — not in policy.agent_authored.allow_memory_scopes, and not this run's own scope (trust: full lifts this)", op, named)
+		}
 		if barrier && dataValueWrite(kind, op) && r.containsTrackedSecret(map[string]any{"args": args}) {
 			return fmt.Errorf("no_secret_egress: refusing to write secret material into %s.%s from an agent plan code step — approval required", kind, op)
 		}

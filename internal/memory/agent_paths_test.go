@@ -62,7 +62,10 @@ func TestEveryAgentFacingRememberIsGuarded(t *testing.T) {
 			t.Errorf("%s no longer writes memory — drop it from this list", rel)
 			continue
 		}
-		guarded := strings.Contains(src, "CheckAgentScope")
+		// Either the direct reserved-bucket call, or CheckOp — the round-3
+		// chokepoint, which runs CheckAgentScope itself AND the operator's
+		// scope allowlist, for every op rather than just this one.
+		guarded := strings.Contains(src, "CheckAgentScope") || strings.Contains(src, ".CheckOp(")
 		if agentFacing && !guarded {
 			t.Errorf("%s takes an agent-supplied scope but never calls CheckAgentScope — the shared bucket is reachable from it", rel)
 		}

@@ -49,6 +49,7 @@ type resourcePolicy struct {
 	secrets []string
 	stores  []string
 	targets []string
+	scopes  []string // memory scopes (allow_memory_scopes)
 	// trigger is the implicitly-allowed triggering repo ("" when the trigger
 	// has no repo context).
 	trigger string
@@ -64,6 +65,7 @@ func planResourcePolicy(pol *config.AgentAuthoredPolicy, t core.Trigger) *resour
 		secrets: pol.AllowSecrets,
 		stores:  pol.AllowStores,
 		targets: pol.AllowTargets,
+		scopes:  pol.AllowMemoryScopes,
 		trigger: t.Target.Repo,
 	}
 }
@@ -75,6 +77,31 @@ func (rp *resourcePolicy) secretOK(name string) bool {
 func (rp *resourcePolicy) storeOK(name string) bool {
 	return rp == nil || resourceAllowed(rp.stores, name)
 }
+
+// memoryScopeOK reports whether an agent-authored step may touch a memory
+// scope. Deny-by-default, with the triggering repo's own scope implicitly
+// allowed — the same shape as targetOK, because it is the same question about
+// a different resource.
+//
+// An UNSCOPED op ("") is refused whenever a policy applies: a recall that
+// names no scope would otherwise read every scope on the daemon, which is the
+// cross-tenant read this closes. The caller names the scope it means.
+func (rp *resourcePolicy) memoryScopeOK(scope string) bool {
+	if rp == nil {
+		return true
+	}
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return false
+	}
+	if rp.trigger != "" && scope == memoryScopeFor(rp.trigger) {
+		return true // the triggering repo's own scope is always in scope
+	}
+	return resourceAllowed(rp.scopes, scope)
+}
+
+// memoryScopeFor is the scope a repo's memories live under.
+func memoryScopeFor(repo string) string { return "repo:" + repo }
 
 func (rp *resourcePolicy) targetOK(repo string) bool {
 	if rp == nil || repo == "" {

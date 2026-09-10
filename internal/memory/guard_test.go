@@ -96,8 +96,16 @@ func TestRecalledMemoryRedactsSecrets(t *testing.T) {
 		t.Fatalf("secret reached the recall tool response: %s", resp.Entries[0].Text)
 	}
 	// The stored entry itself is untouched — redaction is read-side only.
-	all, _ := m.List()
+	// Read the BACKEND, not m.List(): Recall now redacts on the way out (so
+	// no read face can forget to), which is the property under test two
+	// assertions up. Going straight to storage is what "stored" means here.
+	all, _ := m.backend.List()
 	if len(all) != 1 || !strings.Contains(all[0].Text, secret) {
 		t.Fatalf("storage must keep the original (read-side redaction only): %v", all)
+	}
+	// And the read face does redact, for every op — not just the IPC one.
+	via, _ := m.List()
+	if len(via) != 1 || strings.Contains(via[0].Text, secret) {
+		t.Fatalf("List() must redact like every other read face: %v", via)
 	}
 }

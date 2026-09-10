@@ -69,6 +69,15 @@ type AgentAuthoredPolicy struct {
 	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
 	AllowStores  []string `yaml:"allow_stores,omitempty"`
 	AllowTargets []string `yaml:"allow_targets,omitempty"`
+	// AllowMemoryScopes is the same allowlist for shared memory: which
+	// memory scopes an agent-authored step may read, write or forget BEYOND
+	// its own triggering scope (implicitly allowed, as the triggering target
+	// is for AllowTargets). Deny-by-default like the rest — unset means an
+	// agent-authored step touches only its own scope, so an unscoped recall
+	// returns its own entries rather than every tenant's. "*" grants all;
+	// trust: full lifts it. The reserved `global` bucket is NOT grantable
+	// here: it is refused unconditionally on write (memory.CheckAgentScope).
+	AllowMemoryScopes []string `yaml:"allow_memory_scopes,omitempty"`
 }
 
 // AgentAuthoredLimits bound one plan.

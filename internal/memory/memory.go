@@ -138,8 +138,9 @@ type Manager struct {
 	// refuse tracked secret material. The verb/code write paths carry the
 	// plan write barrier separately. Atomic: set once at boot, read from
 	// engine and flow goroutines.
-	guard    atomic.Pointer[WriteGuard]
-	redactor atomic.Pointer[Redactor]
+	guard      atomic.Pointer[WriteGuard]
+	redactor   atomic.Pointer[Redactor]
+	scopeGuard atomic.Pointer[ScopeGuard]
 }
 
 // WriteGuard vets one to-be-remembered text; a non-nil error refuses it.
@@ -259,6 +260,17 @@ func (m *Manager) Recall(q Query) ([]Entry, error) {
 	})
 	if q.Limit > 0 && len(out) > q.Limit {
 		out = out[:q.Limit]
+	}
+	// Redact HERE, not at the call sites. Memories written before the write
+	// guard existed (or by a conductor-authored path the guard does not
+	// cover) can hold tracked secret values, and every read face — the
+	// prompt injection, the IPC recall, the code binding, the connector verb
+	// — had to remember to scrub them. The prompt and IPC paths did; the
+	// code binding and the connector's recall/list verbs did not. Doing it
+	// inside the one function they all funnel through means a new read face
+	// cannot forget.
+	for i := range out {
+		out[i].Text = m.redactText(out[i].Text)
 	}
 	return out, nil
 }
