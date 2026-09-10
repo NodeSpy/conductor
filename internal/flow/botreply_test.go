@@ -35,7 +35,7 @@ func TestReplyToBotsOffSkipsGithubReply(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   gh:
-    type: github
+    use: github
     token: dummy
     identity: { write_token: w-token }
     webhook: { listen: "127.0.0.1:0", secret: s }
@@ -87,7 +87,7 @@ hooks:
 func TestReplyToBotsDeclineOnlyGuidance(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   fixer: { provider: claude }
 `)

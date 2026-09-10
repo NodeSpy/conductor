@@ -61,30 +61,30 @@ func cmdInit(args []string) error {
 	return nil
 }
 
-// resolvePluginsForInit fetches + verifies + vendors the remote plugins in the
-// `plugins:` block, writes their lockfile entries, and prints a per-plugin line.
-// Returns the count of remote plugins it touched.
+// resolvePluginsForInit reconciles local install state against every plugin the
+// config references (`use:` that did not resolve to a builtin): fetches what is
+// missing, re-resolves what is not pinned, records each permission manifest, and
+// prints a line per plugin. Returns the count it touched.
+//
+// This is the app-extension "declare it and it is there" step: the operator
+// wrote `use: sentry` and ran `conductor init`; everything else is conductor's
+// job.
 func resolvePluginsForInit(path string, allowUnlisted bool) (int, error) {
-	plugins, trust, err := config.LoadPluginsBlock(path)
+	cfg, err := config.Load(path)
 	if err != nil {
 		return 0, err
 	}
-	results, err := plugin.ResolvePlugins(filepath.Dir(path), plugins, trust, allowUnlisted, plugin.GHReleaseAPI{})
+	results, err := reconcilePlugins(cfg, plugin.Options{AllowUnlisted: allowUnlisted, Log: logf})
 	if err != nil {
 		return 0, err
 	}
-	remote := 0
-	for _, r := range results {
-		if r.Action == "skipped-local" {
-			continue
+	if len(results) > 0 {
+		if perr := printResolutions(results); perr != nil {
+			return len(results), perr
 		}
-		remote++
-		fmt.Printf("  plugin %-20s %-11s %s (%s)\n", r.Name, r.Action, r.Tag, shortSha(r.Sha))
-	}
-	if remote > 0 {
 		fmt.Println()
 	}
-	return remote, nil
+	return len(results), nil
 }
 
 // shortSha abbreviates a hex sha for a preview line.

@@ -5,231 +5,347 @@ vs "plugin" — there are only plugins.** Some are **bundled** (they ship in the
 binary and run in-process — github, slack, rest, cron, …; paseo, acp, opencode,
 agent-deck) and some are **external** (a subprocess binary the daemon fetches
 and runs out-of-process). One registry, one config surface, one
-`conductor plugin list`/`show`.
+`conductor plugin list` / `show`.
 
-An external plugin lets you add a custom **connector** (a new `type:`) or a
-custom **runtime** (a new `runtime:`) **without recompiling** conductor.
+And there is one field: **`use:`**. It names what implements a connector or a
+runtime, and it is the *only* thing you write. Adding a plugin should feel like
+adding a browser extension — you name it, it arrives, it stays current.
 
-> **An external plugin is arbitrary code the daemon executes.** A connector
-> plugin also *receives your credentials* (it makes the API call); a runtime
-> plugin *executes your agents*. Installing one is the highest-trust action in
-> conductor. Read [Security](#security) before you add a third-party plugin.
+> **An external plugin is code the daemon executes.** A connector plugin also
+> *receives your credentials* (it makes the API call); a runtime plugin
+> *executes your agents*. Read [Security](#security) before adding a
+> third-party plugin.
 
-## Declaring a plugin
-
-```yaml
-plugins:
-  jira:
-    source: ./plugins/conductor-jira   # local executable (see "Sources" below)
-    kind: connector                     # connector | runtime
-    provides: jira                      # the type/runtime it registers (default: the map key)
-    version: 1.4.0                      # attribution on every audit record
-    args: ["--profile", "prod"]         # optional: extra argv appended at spawn
-    sha256: 9f2b…                        # REQUIRED: verified before the binary is ever run
-    isolation:                          # the sandbox grant (see Security); deny-by-default
-      mode: namespace
-      network: { egress: ["your-org.atlassian.net:443"] }
-    allow_secrets: ["vault:house/jira"] # optional: exact-match creds this plugin may receive
-```
-
-`plugins:` only **acquires types** — it configures nothing. You then use the
-type exactly like a bundled one:
+## `use:`
 
 ```yaml
 connectors:
-  myjira: { type: jira, base_url: https://your-org.atlassian.net, token: ${JIRA_TOKEN} }
+  gh:      { use: github, app_id: "${GH_APP_ID}" }   # bundled
+  alerts:  { use: sentry, listen: ":9099" }          # official plugin repo
+  tickets:
+    use: acme/plugins/jira                            # an explicit repo
+    api_key: ${JIRA_TOKEN}
+
+runtimes:
+  local: { use: paseo, default: true }
+  modal: { use: modal }                               # a runtime plugin
 
 agents:
-  deployer: { runtime: my-runtime }     # for a kind: runtime plugin
+  deployer: { runtime: modal }
 ```
 
-Existing configs are unaffected: `plugins:` is new, optional, and
-strict-decode-safe. Every bundled connector/runtime keeps working unchanged.
+That is the whole surface. There is no `plugins:` block, no `source:`, no
+`kind:`, and no `type:` — `use:` replaced all four.
 
-### Sources
+### How a reference resolves
 
-`source:` is either a **local executable path** (absolute, or relative to the
-config file) or a **remote release repo**, resolved by the release-asset model:
+One search path, shared by `connectors:` and `runtimes:`. **First match wins.**
+
+| You write | It resolves to |
+|---|---|
+| `use: github` | a **builtin** — compiled into the daemon |
+| `use: sentry` | not builtin → the **official repo**, `NodeSpy/conductor-plugins`, at `connectors/sentry` |
+| `use: acme/plugins/jira` | an explicit **github** repo (github.com is implied) |
+| `use: git.corp.example/team/p//jira` | an explicit **non-github** host |
+| `use: ./bin/conductor-jira` | a **local** binary, for developing one |
+
+Two rules make this unambiguous:
+
+- **Builtin beats official.** `use: github` is always the in-binary connector;
+  it never reaches for the plugin repo.
+- **A first path segment containing a `.` is a hostname.** That is what
+  separates `git.corp.example/team/repo//jira` from `acme/repo/jira`.
+
+The `//` component separator still reads (it is what the old `source:` field
+wrote), but it is no longer required: after `owner/repo`, everything left is the
+component. `acme/repo//jira` and `acme/repo/jira` parse identically.
+
+### The kind is derived, never written
+
+The kind is **the block the reference appears in**: `connectors:` means
+connector, `runtimes:` means runtime. You never hand-author it, and it is
+enforced twice —
+
+1. **At load.** `connectors: { x: { use: paseo } }` is a config error, because
+   `paseo` is a builtin *runtime*.
+2. **Against the plugin itself.** The kind the plugin reports in its own
+   `describe` must match the block it was referenced from, checked at install
+   and again before it is registered.
+
+**A connector can never be wired as a runtime.** A runtime executes your agents;
+accepting one where you asked for a connector would silently escalate what you
+agreed to.
+
+(A plugin built against an older SDK reports no kind at all. That is treated as
+*unspecified* and trusted to its block, rather than refused — an additive wire
+change should not break working plugins.)
+
+### Versions
+
+Leave the version off and the plugin **stays current**: it tracks the newest
+compatible release, and every move is logged with the sha it came from.
 
 ```yaml
-plugins:
-  jira:
-    source: github.com/acme/conductor-plugins//jira  # a repo, // a monorepo component
-    kind: connector
-    version: "~> 1.4"                 # semver constraint (Terraform/gems style) — picks the tag
-    isolation: { mode: namespace, network: { egress: ["your-org.atlassian.net:443"] } }
-    # sha256: NOT required for a remote source — the sha comes from the resolved
-    # release and is recorded in the lockfile (verify-before-execute checks it).
-    # hold: true                      # freeze at the currently-locked version (no auto-update)
+use: sentry            # stay current (the default)
+use: sentry@^1.2       # stay current within a range
+use: sentry@v1.2.3     # PIN — this exact build, no auto-update
 ```
 
-A remote plugin is a **binary**, so — unlike a pack, which is a git tree — it is
-served as a GitHub **release asset**. Resolution (`conductor init`) is:
+An exact `major.minor.patch` is the opt-out. A range (`^1.2`, `~> 1.4`) still
+tracks, using the same resolver packs use.
 
-1. List the repo's release tags; a monorepo prefixes each component's tags
-   (`jira/v1.4.0`). The `version:` constraint selects the **highest** matching tag
-   (`>=`, `>`, `<=`, `<`, `=`, `^`, `~`, `~>`, space/comma-AND'd — the same
-   resolver packs use).
-2. Download the per-platform asset `conductor-<component>_<os>_<arch>` and, if the
-   release publishes a `checksums.txt`, verify the asset against it.
-3. Cache the binary under `.conductor/plugins/<name>/` and record the resolved
-   **tag + verified sha + path** in `conductor.lock.yaml`.
+A builtin has no version to pin, and a local binary is whatever is on disk —
+both **refuse** an `@version` rather than ignoring it.
 
-At boot the daemon loads **offline** from the vendored binary and the locked sha
-— `Load` rewrites a remote `source:` to that vendored path, so verify-before-execute
-and the sandbox treat it exactly like a local, sha-pinned plugin. Commit the
-lockfile for a byte-identical, tamper-evident setup on another machine.
+## Install state is local
 
-An optional `plugin_trust:` allowlist gates **where** remote plugins may come from
-(exact analogue of `pack_trust:`), fail-closed on any unlisted remote source
-unless you run `conductor init --allow-unlisted`:
+`conductor init` installs everything the config references. Where it goes:
+
+```
+~/.local/state/conductor/plugins/
+  installed.yaml                       # the record
+  connectors/sentry/conductor-sentry_linux_amd64
+  runtimes/modal/conductor-modal_linux_amd64
+```
+
+**This is not a committed lockfile, and that is deliberate.** A pack is config,
+and config belongs in the repo. A plugin is an *installed binary*, and which
+binary is installed is a property of *this machine* — the same way an extension
+is installed in your browser, not in your project.
+
+`installed.yaml` records, per plugin: the `use:` reference as written, the
+resolved release tag, the verified sha, the binary path, and the plugin's
+**permission manifest** (below).
+
+What follows from that:
+
+- **Boot is offline.** Nothing on the hot path touches the network.
+- **A fetch happens only for a genuine gap** — referenced, not installed.
+- **A network failure degrades, it does not fail.** conductor keeps running the
+  build it already has, logs why, and retries on the next cycle.
+- Every install and update is **logged with the sha it moved from**, so a
+  surprise change is visible rather than silent.
+
+### Trust
+
+The official repo (`github.com/NodeSpy/conductor-plugins`) is in the **default**
+allowlist: installing an official plugin needs no ceremony. Anything else remote
+needs an explicit entry, or a one-off `--allow-unlisted`:
 
 ```yaml
 plugin_trust:
-  allow: [github.com/acme/conductor-plugins*]
+  allow: [github.com/acme/*]
 ```
 
-Update remote plugins with `conductor plugin update` (or `conductor update
---plugins`), or automatically alongside the daemon — see
-[Keeping plugins updated](#keeping-plugins-updated).
+"No policy configured" does not mean "any repo on the internet is fine" — a
+plugin is a binary conductor executes.
 
-## Inspecting plugins
+## Commands
 
 ```
-conductor plugin list          # bundled connectors AND runtimes (tagged bundled),
-                               # plus external plugins (tagged external, sha-verified)
-conductor plugin show <name>   # a plugin's Decl + its capability/credential disclosure
-conductor plugin remove <name> # guidance (managed remove is a follow-up)
-conductor plugin update [--allow-unlisted]  # re-resolve remote plugins, re-vendor + re-lock
+conductor init                     # install everything the config references
+conductor plugin list              # every connector + runtime, with ORIGIN and kind
+conductor plugin list --caps       # …and each one's permission manifest
+conductor plugin show <name>       # one implementation's full surface
+conductor plugin add <ref>         # install, show the permissions, print the stub
+conductor plugin update [name]     # bump everything unpinned, or just one
+conductor plugin remove <name>     # drop it from install state and delete the binary
+conductor connectors ls            # each instance's resolved use:/origin
 ```
 
-`plugin list` never executes a plugin — external entries show a cheap
+`plugin list` never executes anything: it shows install state plus a
 verify-before-execute health check. `plugin show` spawns and describes a
 connector plugin to print its real contract.
 
-## Keeping plugins updated
+`plugin add` deliberately **prints** the config stub rather than editing your
+config. The config is your file; a tool that silently rewrites it is a tool you
+stop trusting.
 
-Remote plugins move only when you resolve them — `conductor init`, `conductor
-plugin update`, or `conductor update --plugins` — unless you opt into automatic
-dependency updates alongside the daemon's own self-update:
+`plugin remove` does not touch your config either — the reference *is* the
+declaration, so deleting it is your edit to make. It says so if you forget.
+
+## Keeping plugins current
+
+Unpinned plugins move when you resolve them — `conductor init`, `conductor
+plugin update` — or automatically, alongside the daemon's own self-update:
 
 ```yaml
 update:
-  auto: true      # the daemon self-updates from its release feed (existing behavior)
-  deps: true      # ALSO re-resolve packs: and plugins: each cycle (opt-in, default false)
+  auto: true      # the daemon self-updates from its release feed
+  deps: true      # ALSO keep packs: and use: plugins current each cycle (opt-in)
 ```
 
-With `update.deps: true`, each auto-update cycle re-resolves every pack and remote
-plugin against its `version:` constraint. If anything moved **and** the resulting
-config still validates, the daemon restarts to load it — the same fail-safe as a
-binary release (a change that fails to validate is discarded; the running config
-stands). Every change is logged:
+Every change is logged:
 
 ```
-auto-update: plugin jira -> jira/v1.5.0 (9f2b1c…)
-auto-update: pack review -> review-kit@~> 1.1 (a1b2c3…)
-auto-update: dependency change validated — restarting to apply
+plugin sentry: updated connectors/sentry/v1.4.0 -> connectors/sentry/v1.5.0 (sha 9f2b1c… -> a1b2c3…); permissions: no declared capabilities
+plugin jira: could not reach github.com/acme/plugins//jira (network unreachable) — keeping the installed build jira/v1.2.0 (7d3e9a…)
 ```
 
-Freeze one dependency while leaving auto-update on for the rest with `hold: true`
-on that `plugins:` (or `packs:`) entry — it stays pinned at its locked version
-until you clear the hold or run an explicit `update`.
+Freeze one plugin while leaving the rest current by pinning it exactly
+(`use: sentry@v1.2.3`).
+
+## Security
+
+The default model is a **visible permission manifest with
+can't-exceed-declaration** — *not* an OS jail.
+
+That is a deliberate change of posture. conductor is a privileged app you chose
+to run, and a plugin you added is one too. Pretending otherwise costs real
+usability (an `isolation:` block you must author before anything works) and buys
+a boundary that a determined adversary walks around anyway. What conductor owes
+you instead is: *here is exactly what this can do, you saw it before you
+accepted it, and it cannot exceed it.*
+
+### The manifest
+
+A plugin declares, in its own `describe`:
+
+- **`egress`** — the `host:port` targets it calls
+- **`commands`** — the commands it spawns, by name
+- **`fs`** — the filesystem paths it needs
+
+conductor **records** that at install (so it is known before the plugin runs on
+any later boot), **surfaces** it (`plugin add`, `plugin list --caps`, `plugin
+show`), and **confines the subprocess to it**.
+
+A connector may NARROW the declaration — never widen it:
+
+```yaml
+connectors:
+  tickets:
+    use: acme/plugins/jira
+    network: ["your-org.atlassian.net:443"]   # ⊆ what the plugin declared
+```
+
+A `network:` entry that is not covered by the plugin's declaration is a **load
+error**, not a silent grant.
+
+### What that enforces, exactly
+
+Stated plainly, because a security claim you cannot check is worse than none:
+
+- **Egress confinement is real.** It runs through the same egress proxy the
+  `isolation:` path uses. A host outside the effective set is refused.
+- **Command confinement is default-path confinement, not a jail.** The child's
+  `PATH` becomes a directory holding links to exactly the declared commands, so
+  a plugin reaching for an undeclared tool *by name* fails. A plugin that
+  invokes an absolute path bypasses it. This has teeth against accident and
+  drift, not against a determined adversary.
+- **A plugin declaring "I spawn things I am not naming"** gets no `PATH`
+  rewrite at all, and is shown as `commands (unnamed)`. conductor does not claim
+  a confinement it is not performing.
+- **The install-time `describe` runs before any manifest exists**, confined to
+  nothing. That is safe because `describe` is a pure self-description — it needs
+  neither network nor child processes.
+- **A plugin that declares nothing** is confined to nothing beyond the scrubbed
+  environment. It declared no needs; inventing an allowlist for it would break
+  plugins that predate the manifest.
+
+### What is kept, unchanged
+
+| Guard | What it does |
+|---|---|
+| **Download integrity** | The fetched binary is verified against the release's published `checksums.txt`, and the verified sha is recorded. Verify-before-execute re-checks it from a safe path (no group/world-writable binary or ancestor dir) before every spawn — a runtime plugin re-verifies on *every* launch via the `plugin-exec` wrapper. |
+| **Source trust** | `plugin_trust` gates where remote plugins come from. The official repo is allowed by default; anything else needs an entry. |
+| **Least-privilege credentials** | A connector plugin only ever receives creds for instances of **its own** implementation, delivered per-call over the RPC transport — never in argv or env. The child inherits a minimal env allowlist, never the daemon's credential-bearing environment. `allow_secrets:` narrows further. |
+| **Audit attribution** | Every credential hand-off is audited as `plugin_credential` with `plugin@version` and the secret **ref name — never the value**. |
+| **Transport redaction** | Plugin stdout/stderr is scrubbed through the secret redactor. **Best-effort**: it matches known secret *values*; a plugin that transforms a credential before printing can evade it. |
+| **Untrusted output** | Every response is size-bounded (a plugin cannot OOM the daemon). Responses for verbs declaring an `Outputs` schema are validated against it. A connector plugin cannot forge its identity. |
+| **Supervision** | Every call has a timeout. A crashed or hung plugin degrades to "that connector is down" and never takes the daemon with it, with a restart backoff that cannot crash-loop. |
+
+**Boot vs runtime failure.** A plugin that fails to verify or start at boot is
+fail-closed — a bad sha is a security event, not a degraded-boot condition. A
+plugin that crashes *after* boot degrades to "down".
+
+### Opt-in hardening
+
+The OS isolation layer is still there. It is now **optional**, for a locked-down
+box:
+
+```yaml
+connectors:
+  tickets:
+    use: acme/plugins/jira
+    isolation:
+      mode: namespace
+      network: { egress: ["your-org.atlassian.net:443"] }
+```
+
+With a block present you get process/mount/pid isolation, the daemon's
+config/state/secrets masked away inside the mount namespace, and structurally
+enforced egress. `namespace` is Linux-only; `container` is cross-platform
+(docker/podman); `user` is weakest. See [[Isolation]].
+
+**Runtimes are not wrapped in a heavy sandbox by default.** A runtime plugin
+executes your agents, which is exactly the privilege you already granted
+conductor. It *is* env-scrubbed (`sandbox.MinimalEnv`, so it does not inherit
+`env:`-resolved secrets) and re-verified on every spawn, but it relies on ACP's
+own supervision rather than `internal/plugin`'s crash-loop cap and size cap.
+**Only run runtime plugins you fully trust.**
 
 ## The protocol
 
 A plugin speaks newline-delimited **JSON-RPC 2.0 on stdin/stdout** — the same
-transport the ACP runtime uses (`internal/acp/jsonrpc.go`). stdout is the
-transport; all logging goes to stderr.
+transport the ACP runtime uses. stdout is the transport; logging goes to stderr.
 
-**Connector plugin** (`internal/plugin`):
+**Connector plugin:**
 
-- `plugin.describe → Decl` — `{protocol_version, type, desc, connection, verbs[],
-  events[], capabilities}`. Maps 1:1 to a connector `TypeDecl`.
+- `plugin.describe → Decl` — `{protocol_version, kind, type, desc, connection,
+  verbs[], events[], capabilities}`. Maps 1:1 to a connector `TypeDecl`.
 - `plugin.invoke {instance, verb, options, connection} → {outputs}` — the
   `connection` map carries **only the calling instance's** resolved credentials.
+- `plugin.start_source` — a source plugin emitting webhook/poll events.
 
-See `test/plugins/acme-echo/` for a complete reference connector plugin, and
-`test/plugins/e2e.sh` for an end-to-end demonstration.
+See `test/plugins/acme-echo/` for a reference connector plugin, and
+`github.com/NodeSpy/conductor-plugins` for production ones.
 
-**Runtime plugin**: an external runtime is an **ACP-speaking** subprocess (ACP,
-shipped in v0.6.0, is the runtime protocol this generalizes). conductor verifies
-it, then drives it through the existing ACP controller — session create/resume,
-streamed status/output, cancel/cleanup.
+**Runtime plugin:** an ACP-speaking subprocess. conductor verifies it, then
+drives it through the existing ACP controller — session create/resume, streamed
+status/output, cancel/cleanup.
 
-## Security
+## Migrating from `plugins:`
 
-The security model is the core of this feature. A plugin runs behind these
-guards (see `internal/plugin`, `internal/connector/external.go`):
+`conductor config migrate` folds the old shape into the new, and the daemon runs
+it automatically at boot — a deployed box crosses this change without an edit.
 
-| Guard | What it does |
+| Old | New |
 |---|---|
-| **Verify-before-execute** | The binary's SHA-256 is checked against the `sha256:` pin — from a path with safe permissions (no world-writable binary or ancestor dir) — **before the binary is ever run**. A mismatch is a hard refusal. `allow_unverified: true` is a deliberate, insecure dev-only opt-in. |
-| **Least-privilege credentials** | A connector plugin only ever receives creds for instances of **its own type**, delivered per-call over the RPC transport — never in argv or env (env is visible via `/proc/<pid>/environ`). The child inherits a minimal env allowlist, never the daemon's credential-bearing environment. An optional `allow_secrets` exact-match allowlist gates which refs may cross. |
-| **Audit attribution** | Every credential hand-off is audited as `plugin_credential` with the `plugin@version` and the secret **ref name — never the value**. |
-| **Transport redaction** | The plugin's stdout/stderr is scrubbed through the secret redactor before it reaches any log or the audit trail. **Best-effort:** it matches known secret *values* (and their common encodings) — a plugin that transforms a credential before printing can still evade it. Redaction reduces, but does not eliminate, leak risk; don't rely on it as the only barrier. |
-| **Untrusted output** | Every response is **size-bounded** (the primary guard — a plugin can't OOM the daemon). Responses for verbs that **declare an `Outputs` schema** are additionally validated against it; verbs with dynamic/undeclared outputs are size-bounded only, so treat their output as untrusted input downstream. A connector plugin **cannot forge its identity** — its declared type must match the name you configured. |
-| **Enforced sandbox (fail-closed)** | An external plugin with **no `isolation:` block is refused** (deny-by-default) unless `allow_unsandboxed: true` is explicitly set. With an `isolation:` block the subprocess is wrapped through conductor's isolation layer: process/mount/pid isolation, the daemon's config/state/secret env masked away, and **deny-by-default egress** (only hosts under `network.egress` are reachable). See [[Isolation]]. |
-| **Supervision** | Every call has a timeout. A crashed or hung plugin degrades to "that connector/runtime is down" and **never takes the daemon with it**, with a restart backoff that cannot crash-loop. |
+| `connectors: { y: { type: github } }` | `connectors: { y: { use: github } }` |
+| `plugins: { x: { source: github.com/a/b//x, kind: connector } }` + `connectors: { y: { type: x } }` | `connectors: { y: { use: a/b/x } }` |
+| `plugins: { m: { source: …, kind: runtime, provides: modal } }` | `runtimes: { modal: { use: … } }` |
+| `runtimes: { r: { type: paseo } }` | `runtimes: { r: { use: paseo } }` |
+| `runtimes: { g: { agent: gemini } }` | `runtimes: { g: { use: acp, agent: gemini } }` |
+| `plugins.<n>.version` | folded into the ref as `@<version>` |
+| `plugins.<n>.isolation` | carried onto the connector/runtime entry |
 
-**Boot vs runtime failure.** A plugin that fails to *verify* or *start* at boot
-is **fail-closed** — the daemon refuses to start (a bad SHA is a security event,
-not a degraded-boot condition). A plugin that crashes *after* boot degrades
-gracefully to "down".
+Retired fields are dropped **with a note naming what replaced them**:
 
-**Disclosure.** `conductor plugin show` prints, before you rely on a plugin,
-that a connector plugin receives your credentials / a runtime plugin executes
-your agents, and the capabilities it declares vs what your `isolation:` grants.
+- `sha256` — the verified sha now lives in local install state, recorded when
+  `conductor init` fetches the binary. Nothing to pin by hand.
+- `allow_unverified` — a local `use: ./path` binary is verified on safe
+  permissions rather than a pin (it changes on every build); a fetched one
+  always carries its release sha.
+- `allow_unsandboxed` — running without OS isolation is now the *default*.
+- `hold` — pin an exact version instead (`use: <ref>@v1.2.3`).
+- `args` — a plugin is configured over the RPC transport per instance, not by
+  process arguments shared across all of them.
 
-### Runtime plugins are less isolated than connector plugins (read this)
-
-A `kind: runtime` plugin reuses conductor's existing ACP runtime path. It now
-gets **verify-before-execute on every spawn** (via the `plugin-exec` wrapper)
-and an **env-scrubbed launch** (only `sandbox.MinimalEnv` — the daemon's
-credential-bearing environment is NOT forwarded, unlike bundled ACP runtimes).
-It still, unlike connector plugins:
-
-- **bypasses `internal/plugin`'s supervision** (crash-loop cap, size cap,
-  stderr redaction) and relies on ACP's own handling.
-
-**Still: only run runtime plugins you fully trust** — a runtime plugin executes
-your agents (spawns processes, runs tool calls). A live ACP reference runtime is
-a follow-up.
-
-### Sandbox caveats (read these)
-
-- OS-level confinement depends on the `isolation:` mode. `namespace` mode is a
-  real boundary but **Linux-only** (it uses `unshare`/`systemd-run`); `container`
-  mode is cross-platform (docker/podman); `user` mode is weakest. **A plugin
-  with no `isolation:` block is refused** unless you set `allow_unsandboxed:
-  true` — an unsandboxed plugin runs same-uid and can read the daemon's files
-  (config, App keys). Never opt in for a third-party plugin; add an `isolation:`
-  block instead.
-- Resource caps (CPU/mem/pids) come from cgroups in `namespace` mode
-  (`systemd-run`) or engine flags in `container` mode.
+A `plugins:` entry nothing referenced still migrates, into an entry named after
+the plugin, so nothing is silently lost.
 
 ## Not yet implemented
 
-This release lands a coherent, tested core with the security guards real, not
-stubbed. The following are **documented follow-ups**, not silent gaps:
+Documented follow-ups, not silent gaps:
 
-- **Remote-source refinements**: remote release-asset fetch, the SHA lockfile,
-  `plugin_trust:`, `conductor plugin update`, and constraint-based version
-  resolution **are implemented** (see [Sources](#sources)). Still open:
-  discovery/search (a central index), `conductor plugin add` (a paste-a-block
-  helper like `pack add`), and multi-repo asset naming beyond
-  `conductor-<component>_<os>_<arch>`.
-- **Cryptographic signing** (cosign/Sigstore or build attestations). SHA-256
-  pinning *is* implemented; signature verification is the next layer.
-- **Connector source/event streaming** (`StartSource`) — a plugin *emitting*
-  webhook/poll events. Connector plugins are verb-only for now.
-- **Runtime plugin supervision depth**: runtime plugins are re-verified per
-  spawn and env-scrubbed, but still rely on ACP's own supervision rather than
-  `internal/plugin`'s crash-loop cap / size cap / stderr redaction. A live ACP
-  reference runtime and unified supervision are the next steps.
+- **Cryptographic signing** (cosign/Sigstore, build attestations). Checksum
+  verification *is* implemented; signature verification is the next layer.
+- **Discovery/search** — a central index of available plugins.
 - **Multi-instance isolation**: one plugin serving several instances shares a
   process; creds are scoped per-call, but shared-process inter-instance
   hardening is a follow-up.
-- **External-overrides-bundled**: a plugin may not replace a bundled type/
-  runtime (safe default); opt-in override is a follow-up.
-
-See issue #54 for the full epic.
+- **External-overrides-bundled**: a plugin may not replace a bundled
+  implementation (builtin beats official by design); opt-in override is a
+  follow-up.
+- **Runtime plugin supervision depth**: re-verified per spawn and env-scrubbed,
+  but still on ACP's supervision rather than `internal/plugin`'s.

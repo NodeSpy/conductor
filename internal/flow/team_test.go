@@ -15,7 +15,7 @@ import (
 
 const teamCfg = `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   architect:   { model: m }
   implementer: { model: m }

@@ -13,7 +13,7 @@ import (
 
 const blobFlowCfg = `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 `
 
 // blobRig wires a flow rig with a real blob store.
@@ -186,7 +186,7 @@ func TestPlanBarrierGatesBlobPut(t *testing.T) {
 	// park tracked secret material in the artifact store.
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 agents:
   planner: { model: x }

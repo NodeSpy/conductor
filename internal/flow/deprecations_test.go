@@ -10,7 +10,7 @@ import (
 func TestDeprecationWarningsAgentEnvSecrets(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 secrets:
   tok: env:FLOW_DEP_TEST_TOK
 vaults:
@@ -72,7 +72,7 @@ workflows:
 	// A config with no agent-env secrets warns nothing.
 	clean := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 triggers:
   - on: svc.ping
     steps: [ { id: a, uses: svc.post, options: { text: hi } } ]
@@ -88,7 +88,7 @@ triggers:
 func TestDeprecationWarningsAgentNonEnvFields(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 secrets:
   tok: env:FLOW_DEP_TEST_TOK2
 agents:

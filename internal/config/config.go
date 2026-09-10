@@ -77,11 +77,10 @@ type Config struct {
 	// Stores are named data stores (boltdb/redis/http) addressed by the
 	// `store:` selector on kv.* verbs; nothing is implicit.
 	Stores map[string]StoreRef `yaml:"stores"`
-	// Plugins is the OPTIONAL `plugins:` block (#54): EXTERNAL plugins the
-	// daemon runs out-of-process to acquire connector types / runtime names
-	// without recompiling. Bundled connectors/runtimes are NOT listed here.
-	// Entirely optional; strict-decode-safe. See PluginRef and internal/plugin.
-	Plugins map[string]PluginRef `yaml:"plugins"`
+	// (There is no `plugins:` block. An external plugin is declared by the
+	// `use:` reference on the connectors:/runtimes: entry that uses it — see
+	// PluginRefs and docs/design/use-unification.md.)
+
 	// Vaults are named secret stores (conductor/onepassword/pass/file/
 	// hashicorp) addressed by {{ vault "<name>" "<key>" }} references and
 	// per-vault read/write verbs; env stays the implicit baseline.
@@ -1047,41 +1046,10 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	c.applyDefaults()
-	// Point remote plugins (#59) at their vendored binary + locked sha so the
-	// existing verify-before-execute + SpecFromRef path treats them exactly like
-	// a local, sha-pinned plugin. Offline — the fetch is `conductor init`.
-	c.resolveRemotePluginSources(filepath.Dir(path))
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
 	return &c, nil
-}
-
-// resolveRemotePluginSources rewrites each REMOTE plugin's Source to its
-// vendored binary path and fills in the sha256 recorded in the lockfile, so the
-// rest of the pipeline (validate, SpecFromRef, verify-before-execute) is
-// oblivious to remoteness. A remote plugin with no lock entry yet (not
-// initialized) is left with its remote Source; SpecFromRef reports a clear
-// "run conductor init" error rather than trying to exec a URL.
-func (c *Config) resolveRemotePluginSources(configDir string) {
-	for name, ref := range c.Plugins {
-		if !ref.IsRemote() {
-			continue
-		}
-		lock, ok := PluginLock(configDir, name)
-		if !ok || lock.Path == "" {
-			continue
-		}
-		p := lock.Path
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(configDir, p)
-		}
-		ref.Source = p
-		if ref.Sha256 == "" {
-			ref.Sha256 = lock.Sha256
-		}
-		c.Plugins[name] = ref
-	}
 }
 
 // loadMerged reads the file at path (env-expanded) as a generic map, then
@@ -1326,7 +1294,7 @@ func (c *Config) Validate() error {
 	if err := c.validateConnectors(); err != nil {
 		return err
 	}
-	if err := c.validatePlugins(); err != nil {
+	if err := c.validatePluginRefs(); err != nil {
 		return err
 	}
 	if err := c.validateStores(); err != nil {

@@ -3,7 +3,7 @@
 ```yaml
 connectors:
   gh:
-    type: github
+    use: github
     app:                                   # GitHub App credentials (optional — see App-less below)
       app_id: 123456
       private_key_path: ~/.config/conductor/github-app.pem

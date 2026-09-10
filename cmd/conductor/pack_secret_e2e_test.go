@@ -83,7 +83,7 @@ func TestPackBoundSecretDeliveredThroughBroker(t *testing.T) {
 	cfgBody := `
 connectors:
   gh:
-    type: github
+    use: github
 vaults:
   house:
     type: file
@@ -189,7 +189,7 @@ func TestPackAllowSecretsWithoutBrokerRejected(t *testing.T) {
 	cfgBody := `
 connectors:
   gh:
-    type: github
+    use: github
 vaults:
   house:
     type: file

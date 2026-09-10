@@ -23,7 +23,7 @@ func tokenVaultYAML(o *oauthTestServer, grant, vpath, vkey, extra string) string
 	return `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: ` + o.URL + `/api
     auth:
       type: oauth2
@@ -101,7 +101,7 @@ func TestOAuth2TokenVaultMustBeUsable(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(`
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: `+o.URL+`/api
     auth: { type: oauth2, grant: refresh_token, token_url: `+o.URL+`/token, client_id: cid, token_vault: ghost }
     verbs: { get: { method: GET, path: /thing } }
@@ -124,7 +124,7 @@ connectors:
 	if err := yaml.Unmarshal([]byte(`
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: `+o.URL+`/api
     auth: { type: oauth2, grant: refresh_token, token_url: `+o.URL+`/token, client_id: cid, token_vault: files }
     verbs: { get: { method: GET, path: /thing } }
@@ -181,7 +181,7 @@ func TestDeviceFlowBootstrap(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(`
 connectors:
   iot:
-    type: rest
+    use: rest
     base_url: `+srv.URL+`/api
     auth:
       type: oauth2
@@ -229,17 +229,17 @@ func TestAuthListAndRevoke(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(`
 connectors:
   xero:
-    type: rest
+    use: rest
     base_url: http://x
     auth: { type: oauth2, grant: authorization_code, token_url: http://t, auth_url: http://a, client_id: c, token_vault: house }
     verbs: { v: { method: GET, path: / } }
   fresh:
-    type: rest
+    use: rest
     base_url: http://y
     auth: { type: oauth2, grant: device, token_url: http://t, device_auth_url: http://d, client_id: c, token_vault: house }
     verbs: { v: { method: GET, path: / } }
   plain:
-    type: rest
+    use: rest
     base_url: http://z
     auth: { type: bearer, token: tok }
     verbs: { v: { method: GET, path: / } }

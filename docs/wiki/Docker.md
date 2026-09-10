@@ -96,7 +96,7 @@ conductor drives the agent CLI there over SSH — see [[Hosts]] and
        known_hosts: /data/.ssh/known_hosts   # optional pin
 
    runtimes:
-     paseo: { type: paseo, bin: paseo, host: runtime-box, default: true }
+     paseo: { use: paseo, bin: paseo, host: runtime-box, default: true }
    ```
 
    The runtime box needs the actual runtime binary (`paseo`, or whatever

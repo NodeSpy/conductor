@@ -6,11 +6,11 @@ inline code, and any connector's verbs, crossing service boundaries freely.
 
 ```yaml
 connectors:
-  gh:        { type: github, app: {…}, me: { logins: [your-login] }, repos: ["your-org/*"] }
-  slack-ops: { type: slack, app_token: ${SLACK_APP_TOKEN}, bot_token: ${SLACK_BOT_TOKEN} }
+  gh:        { use: github, app: {…}, me: { logins: [your-login] }, repos: ["your-org/*"] }
+  slack-ops: { use: slack, app_token: ${SLACK_APP_TOKEN}, bot_token: ${SLACK_BOT_TOKEN} }
 
 runtimes:
-  paseo: { type: paseo, default: true }
+  paseo: { use: paseo, default: true }
 
 agents:
   fixer: { provider: claude, workspace: worktree }

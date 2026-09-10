@@ -48,9 +48,15 @@ func ParseRemoteSource(src string) (RemoteSource, bool) {
 	return RemoteSource{Repo: parts[0] + "/" + parts[1], Component: comp}, true
 }
 
-// AssetName is the per-platform binary conductor expects in a release.
+// AssetName is the per-platform binary conductor expects in a release. The
+// component may be a PATH inside the repo ("connectors/sentry"), but an asset
+// name is flat — so the LEAF names the asset: connectors/sentry publishes
+// conductor-sentry_linux_amd64.
 func (rs RemoteSource) AssetName() string {
 	base := rs.Component
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
 	if base == "" {
 		base = "plugin"
 	}

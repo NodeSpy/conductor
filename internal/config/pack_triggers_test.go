@@ -26,7 +26,7 @@ triggers:
     steps: [ { id: s, workflow: flow } ]
 `)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   p:
     source: ./src/p
@@ -65,7 +65,7 @@ workflows:
     extends: base
 `)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   p:
     source: ./src/p

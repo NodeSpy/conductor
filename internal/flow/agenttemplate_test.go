@@ -16,7 +16,7 @@ import (
 func TestAgentStepResolvesTemplatedProfile(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   opus:   { model: claude-opus }
   sonnet: { model: claude-sonnet }
@@ -53,7 +53,7 @@ steps:
 func TestValidateAllowsTemplatedAgent(t *testing.T) {
 	good := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   opus: { model: claude-opus }
 triggers:
@@ -69,7 +69,7 @@ triggers:
 
 	bad := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   opus: { model: claude-opus }
 triggers:

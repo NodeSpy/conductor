@@ -116,7 +116,7 @@ func TestMemoryVerbsUnconfigured(t *testing.T) {
 // TestMemoryBuiltinRegistered: the connector is always in a built registry
 // and its source face refuses triggers.
 func TestMemoryBuiltinRegistered(t *testing.T) {
-	reg := buildSinkRegistry(t, "connectors:\n  c: { type: command }\n")
+	reg := buildSinkRegistry(t, "connectors:\n  c: { use: command }\n")
 	in, ok := reg.Get("memory")
 	if !ok || in.Decl.Type != "memory" || !in.Enabled {
 		t.Fatalf("memory built-in missing: %+v", in)

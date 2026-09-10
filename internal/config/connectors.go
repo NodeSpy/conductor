@@ -24,30 +24,62 @@ import (
 // the raw node so the concrete connector type can decode its own connection
 // fields (tokens, app creds, schedules, feeds, …).
 type ConnectorRef struct {
-	Type    string `yaml:"type,omitempty"`
-	Enabled *bool  `yaml:"enabled,omitempty"`
+	// Use names WHAT IMPLEMENTS this connector — a builtin type (`github`), a
+	// bare name resolved from the official plugin repo (`sentry`), an explicit
+	// repo (`acme/plugins/jira`), or a local binary (`./bin/conductor-jira`).
+	// It replaced the old `type:` field plus the whole `plugins:` block; the
+	// kind (connector) comes from this block, never from the operator. See
+	// ParseUse and docs/design/use-unification.md.
+	Use string `yaml:"use,omitempty"`
+	// Network is this instance's DECLARED EGRESS — the "host:port" targets it
+	// is allowed to reach. It is the visible half of the permission manifest:
+	// what the operator accepts when they add the connector. It may not exceed
+	// the implementation's own declared egress.
+	Network []string `yaml:"network,omitempty"`
+	Enabled *bool    `yaml:"enabled,omitempty"`
 	// Options are the connector's default verb options; each `uses:` call's
 	// options merge over these (the call wins). Identity (`as:`) lives here.
 	Options map[string]any `yaml:"options,omitempty"`
 	// Policy is the connector-scoped policy block (ignore/rate_limits/backoff/
 	// pause_label live here; quiet_hours/concurrency may override the global).
 	Policy *Policy `yaml:"policy,omitempty"`
-	raw    yaml.Node
+	// Isolation is OPTIONAL hardening for a plugin-backed connector: the OS
+	// confinement layer (#36 §15) applied to the plugin's subprocess. Absent is
+	// the NORMAL case — the default model is the permission manifest above, not
+	// a jail. Set this on a locked-down box where OS confinement is wanted on
+	// top. Ignored for a builtin connector (nothing separate to confine).
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// AllowSecrets optionally tightens which secret refs may cross the process
+	// boundary to a plugin-backed connector — an EXACT-match allowlist (no
+	// globs). Empty = no extra restriction beyond the structural guarantee that
+	// an implementation only ever receives its own instances' credentials.
+	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
+	raw          yaml.Node
+	// legacyType holds a pre-`use:` `type:` value. It is NOT part of the schema
+	// — it exists only so validateConnectors can emit a migration-specific error
+	// instead of the silent "missing use:" a dropped field would produce.
+	legacyType string
 }
 
 // UnmarshalYAML captures the header fields and retains the raw node.
 func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 	type hdr struct {
-		Type    string         `yaml:"type,omitempty"`
+		Use     string         `yaml:"use,omitempty"`
+		Network []string       `yaml:"network,omitempty"`
 		Enabled *bool          `yaml:"enabled,omitempty"`
 		Options map[string]any `yaml:"options,omitempty"`
 		Policy  *Policy        `yaml:"policy,omitempty"`
+		// Type is the retired field, read for diagnostics only (see legacyType).
+		Type         string           `yaml:"type,omitempty"`
+		Isolation    *IsolationConfig `yaml:"isolation,omitempty"`
+		AllowSecrets []string         `yaml:"allow_secrets,omitempty"`
 	}
 	var h hdr
 	if err := n.Decode(&h); err != nil {
 		return err
 	}
-	r.Type, r.Enabled, r.Options, r.Policy, r.raw = h.Type, h.Enabled, h.Options, h.Policy, *n
+	r.Use, r.Network, r.Enabled, r.Options, r.Policy = h.Use, h.Network, h.Enabled, h.Options, h.Policy
+	r.Isolation, r.AllowSecrets, r.legacyType, r.raw = h.Isolation, h.AllowSecrets, h.Type, *n
 	return nil
 }
 
@@ -57,17 +89,35 @@ func (r ConnectorRef) Decode(v any) error { return r.raw.Decode(v) }
 // IsEnabled reports whether the connector is enabled (default true).
 func (r ConnectorRef) IsEnabled() bool { return r.Enabled == nil || *r.Enabled }
 
+// Resolved parses this entry's `use:` reference as a connector.
+func (r ConnectorRef) Resolved() (Use, error) { return ParseUse(UseKindConnector, r.Use) }
+
+// TypeName is the connector TYPE this entry implements — the name the connector
+// registry is keyed by. For a builtin it is the `use:` name itself; for a plugin
+// it is the component leaf (`acme/plugins/jira` → "jira"). Empty when `use:`
+// does not parse; validateConnectors reports that as a config error.
+func (r ConnectorRef) TypeName() string {
+	u, err := r.Resolved()
+	if err != nil {
+		return ""
+	}
+	return u.Name
+}
+
 // RuntimeConfig is one entry in the `runtimes:` map — where agents run
 // (today's controllers, renamed, plus launch config that used to be global).
 type RuntimeConfig struct {
 	// Extends names another runtimes: entry this one inherits unset fields from
 	// (see resolveExtends) — e.g. several cli runtimes sharing host/isolation.
 	Extends string `yaml:"extends,omitempty"`
-	// Type is a built-in runtime kind: paseo | agent-deck | opencode | cli.
-	// Mutually exclusive with Agent.
-	Type string `yaml:"type,omitempty"`
-	// Agent names an agent runtime driven over a transport (gemini, opencode,
-	// …). Mutually exclusive with Type; implies transport acp unless overridden.
+	// Use names WHAT IMPLEMENTS this runtime — a builtin (`paseo`, `acp`,
+	// `opencode`, `agent-deck`, `cli`), a bare name resolved from the official
+	// plugin repo (`modal`), an explicit repo, or a local binary. It replaced
+	// the old `type:` field plus the whole `plugins:` block; the kind (runtime)
+	// comes from this block. See ParseUse.
+	Use string `yaml:"use,omitempty"`
+	// Agent names the agent driven over the ACP transport (gemini, opencode,
+	// …). Valid only with `use: acp`, which it is required by.
 	Agent string `yaml:"agent,omitempty"`
 	// Transport is how conductor talks to the runtime: acp | native | cli.
 	Transport string `yaml:"transport,omitempty"`
@@ -87,13 +137,69 @@ type RuntimeConfig struct {
 	// Isolation wraps every launch this runtime performs (#36 §15). A
 	// profile's own isolation: wins over the runtime's.
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+
+	// legacy holds a pre-`use:` `type:` value. NOT part of the schema — it is
+	// accepted by the decoder only so validateConnectors can name the migration
+	// instead of the strict decoder emitting "field type not found", which
+	// would be an opaque wall for every not-yet-migrated config on a box that
+	// auto-updates. See UnmarshalYAML.
+	legacy string
+}
+
+// runtimeFields is RuntimeConfig without its UnmarshalYAML method, so the strict
+// decode below does not recurse. The retired `type:` rides alongside it, read
+// for diagnostics only.
+type runtimeFields RuntimeConfig
+
+type runtimeDecode struct {
+	runtimeFields `yaml:",inline"`
+	Type          string `yaml:"type,omitempty"`
+}
+
+// UnmarshalYAML strict-decodes the runtime entry (so a typo is still an error)
+// while tolerating the retired `type:` key, which is captured for the migration
+// diagnostic in validateConnectors rather than rejected here.
+func (r *RuntimeConfig) UnmarshalYAML(n *yaml.Node) error {
+	var d runtimeDecode
+	if err := strictNodeDecode(n, &d); err != nil {
+		return err
+	}
+	*r = RuntimeConfig(d.runtimeFields)
+	r.legacy = d.Type
+	return nil
+}
+
+// legacyType returns a retired `type:` value this entry still carries, for the
+// migration diagnostic.
+func (r RuntimeConfig) legacyType() string { return r.legacy }
+
+// Resolved parses this entry's `use:` reference as a runtime.
+func (r RuntimeConfig) Resolved() (Use, error) { return ParseUse(UseKindRuntime, r.Use) }
+
+// BuiltinType is the built-in controller kind this runtime maps onto — paseo |
+// opencode | agent-deck | cli — or "" for `use: acp` (driven by Agent) and for a
+// PLUGIN runtime (whose ControllerConfig is synthesized at boot once the binary
+// is verified, in cmd/conductor).
+func (r RuntimeConfig) BuiltinType() string {
+	u, err := r.Resolved()
+	if err != nil || !u.IsBuiltin() || u.Name == "acp" {
+		return ""
+	}
+	return u.Name
+}
+
+// IsPlugin reports whether this runtime is implemented by an external plugin
+// rather than compiled into the daemon.
+func (r RuntimeConfig) IsPlugin() bool {
+	u, err := r.Resolved()
+	return err == nil && !u.IsBuiltin()
 }
 
 // Controller converts a runtime entry to the legacy controller shape the
 // controller registry consumes, carrying Bin, Host, and Isolation through.
 func (r RuntimeConfig) Controller() ControllerConfig {
 	return ControllerConfig{
-		Type: r.Type, Agent: r.Agent, Transport: r.Transport,
+		Type: r.BuiltinType(), Agent: r.Agent, Transport: r.Transport,
 		SessionModel: r.SessionModel, Default: r.Default,
 		Tool: r.Tool, Command: r.Command,
 		Bin: r.Bin, Host: r.Host, Isolation: r.Isolation,
@@ -1060,8 +1166,23 @@ func (c *Config) validateConnectors() error {
 		if name == "blob" {
 			return fmt.Errorf("config: connectors: %q is reserved (the built-in artifact verbs — always available, nothing to configure)", name)
 		}
-		if ref.Type == "" {
-			return fmt.Errorf("config: connector %q: missing type", name)
+		if err := validateUseRef("connector "+name, ref.Use, ref.legacyType, UseKindConnector); err != nil {
+			return err
+		}
+		if ref.Isolation != nil {
+			if err := validateIsolation("connector "+name, ref.Isolation, false); err != nil {
+				return err
+			}
+		}
+		for _, s := range ref.AllowSecrets {
+			if strings.ContainsAny(s, "*?") {
+				return fmt.Errorf("config: connector %q: allow_secrets entries are exact names, no globs (%q)", name, s)
+			}
+		}
+		for _, n := range ref.Network {
+			if err := validateEgressTarget("connector "+name+" network", n); err != nil {
+				return err
+			}
 		}
 		if err := validatePolicyBlock("connector "+name+" policy", ref.Policy); err != nil {
 			return err
@@ -1071,14 +1192,24 @@ func (c *Config) validateConnectors() error {
 		if name == "" {
 			return fmt.Errorf("config: runtimes: empty runtime name")
 		}
-		if (rt.Type == "") == (rt.Agent == "") {
-			return fmt.Errorf("config: runtime %q: set exactly one of `type` or `agent`", name)
+		if err := validateUseRef("runtime "+name, rt.Use, rt.legacyType(), UseKindRuntime); err != nil {
+			return err
 		}
-		if err := c.checkRemoteHostSupport("runtime", name, rt.Host, rt.Type, rt.Agent, rt.Controller().EffectiveTransport()); err != nil {
+		// `agent:` is the ACP runtime's own field: it names the agent the ACP
+		// transport drives. It is meaningless on any other implementation, and
+		// `use: acp` without it has nothing to drive.
+		u, _ := rt.Resolved()
+		if u.IsBuiltin() && u.Name == "acp" && rt.Agent == "" {
+			return fmt.Errorf("config: runtime %q: `use: acp` needs `agent:` (the agent the ACP transport drives, e.g. gemini)", name)
+		}
+		if rt.Agent != "" && !(u.IsBuiltin() && u.Name == "acp") {
+			return fmt.Errorf("config: runtime %q: `agent:` applies to `use: acp` only (got use: %s)", name, rt.Use)
+		}
+		if err := c.checkRemoteHostSupport("runtime", name, rt.Host, rt.BuiltinType(), rt.Agent, rt.Controller().EffectiveTransport()); err != nil {
 			return err
 		}
 		if rt.Isolation != nil {
-			if rt.Type == "paseo" {
+			if rt.BuiltinType() == "paseo" {
 				return fmt.Errorf("config: runtime %q: isolation cannot apply to a paseo runtime (its agents are the paseo daemon's children) — use an acp/cli/opencode/agent-deck runtime, or paseo's own sandboxing", name)
 			}
 			if err := validateIsolation("runtime "+name, rt.Isolation, rt.Host != ""); err != nil {

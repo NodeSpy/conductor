@@ -19,7 +19,7 @@ func loadDoc(t *testing.T, doc string) (*Config, error) {
 const strictBase = `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 `
 

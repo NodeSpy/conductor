@@ -300,7 +300,7 @@ notify:
 func TestNotifyPassStandalone(t *testing.T) {
 	pre := `
 connectors:
-  alerts: { type: ntfy, topic: t }
+  alerts: { use: ntfy, topic: t }
 triggers:
   - name: ping
     on: manual

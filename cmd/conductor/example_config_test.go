@@ -163,13 +163,13 @@ func TestPaseoRuntimeWithHost(t *testing.T) {
 	doc := `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 hosts:
   gpu-box: { host: gpu01.internal, user: ml }
 runtimes:
-  paseo:     { type: paseo, bin: /usr/local/bin/paseo, default: true }
-  gpu-paseo: { type: paseo, bin: /opt/paseo, host: gpu-box }
+  paseo:     { use: paseo, bin: /usr/local/bin/paseo, default: true }
+  gpu-paseo: { use: paseo, bin: /opt/paseo, host: gpu-box }
 agents:
   fixer: { provider: claude, runtime: gpu-paseo }
 triggers:
@@ -240,7 +240,7 @@ func TestStarterConfigFreshSeedLayout(t *testing.T) {
 	}
 
 	// Drop a connector file in — it joins the section on the next load.
-	dropped := "timer:\n  type: cron\n  schedules: { tick: { every: 1h } }\n"
+	dropped := "timer:\n  use: cron\n  schedules: { tick: { every: 1h } }\n"
 	if err := os.WriteFile(filepath.Join(dir, "conf.d/connectors/timer.yaml"), []byte(dropped), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestStarterConfigFreshSeedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("drop-in load: %v", err)
 	}
-	if cfg.ConnectorsMap["timer"].Type != "cron" {
+	if cfg.ConnectorsMap["timer"].TypeName() != "cron" {
 		t.Fatalf("dropped connector not picked up: %+v", cfg.ConnectorsMap)
 	}
 	var found bool

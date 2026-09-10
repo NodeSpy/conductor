@@ -18,7 +18,7 @@ import (
 
 const handleCfg = `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 secrets:
   tok: env:FLOW_HANDLE_TEST_TOK
 `
@@ -130,7 +130,7 @@ steps:
 func TestSecretHandlePlanStepsStayOpaque(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 secrets:
   tok: env:FLOW_HANDLE_TEST_TOK
@@ -174,7 +174,7 @@ func dispatchPlanCfg(t *testing.T, cfg *config.Config, output string) (*testRig,
 func TestSecretHandleSavedWorkflowStaysOpaque(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 secrets:
   tok: env:FLOW_HANDLE_TEST_TOK
 policy:
@@ -226,7 +226,7 @@ steps:
 func TestValidateSecretCallNames(t *testing.T) {
 	base := `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 secrets:
   tok: env:FLOW_HANDLE_TEST_TOK
 triggers:
@@ -299,7 +299,7 @@ steps:
 func TestValidateSecretCallVaultNames(t *testing.T) {
 	base := `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 vaults:
   house: { type: file, dir: /run/secrets }
 triggers:
@@ -327,7 +327,7 @@ triggers:
 func TestSecretInStepOutputDoesNotReachAgentPrompt(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   fixer: { model: x }
 `)

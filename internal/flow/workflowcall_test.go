@@ -14,7 +14,7 @@ import (
 func TestWorkflowCallBindsInputsAndReturnsOutputs(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 workflows:
   greet:
     inputs:
@@ -62,7 +62,7 @@ steps:
 func TestWorkflowCallMissingRequiredInput(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 workflows:
   greet:
     inputs: { who: { type: string, required: true } }
@@ -87,7 +87,7 @@ steps: [ { id: call, workflow: greet } ]
 // re-fire, later steps see the restored outputs, and the finished run is
 // deleted from the store.
 func TestResumeSkipsCompletedSteps(t *testing.T) {
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	spec := mustSpec(t, `
@@ -129,7 +129,7 @@ steps:
 // continue_on_error keeps the workflow going — later steps see the failure
 // marker outputs, the step_error is audited, and the run completes.
 func TestContinueOnErrorSuppressesFailure(t *testing.T) {
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	spec := mustSpec(t, `

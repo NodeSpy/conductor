@@ -186,13 +186,20 @@ func (c *Client) ensureLocked(ctx context.Context) error {
 		return fmt.Errorf("plugin %s is down (crash-loop guard)", c.spec.Name)
 	}
 
+	if !c.spec.Installed() {
+		return c.spec.NotInstalledError()
+	}
 	// verify-before-execute, every (re)start
 	digest, err := verify(c.spec)
 	if err != nil {
 		return err
 	}
-	if c.spec.Sha256 == "" && c.spec.AllowUnverified {
-		c.deps.Log("plugin %s: WARNING running UNVERIFIED (no sha256 pin); on-disk digest %s", c.spec.Name, digest)
+	if c.spec.Local {
+		// A development binary the operator pointed at directly: there is no
+		// release sha to check it against (it changes on every build), so the
+		// guarantee is the safe-permissions check verify() just made. Say so,
+		// with the digest, so it is at least attributable in the log.
+		c.deps.Log("plugin %s: local build at %s (digest %s) — no release sha to verify against", c.spec.Name, c.spec.BinPath, digest)
 	}
 	c.starts = append(c.starts, now)
 	c.totalStart++

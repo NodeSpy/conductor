@@ -49,7 +49,7 @@
 connectors:
   # imports: [conf.d/connectors/*.yaml]   # split entries across files
   gh:
-    type: github
+    use: github
     # Credentials resolve app → token → the gh CLI (`gh auth token`). With an
     # App you get webhook installs + a separate read-rate pool; without one, a
     # plain webhook (+ secret) or the sweep delivers events and a PAT (or your
@@ -78,7 +78,7 @@ connectors:
       # reply_to_bots: decline_only  # bot-authored comments: decline_only (default) | off | full
 
   slack-ops:
-    type: slack
+    use: slack
     app_token: ${SLACK_APP_TOKEN} # Socket Mode (events in)
     bot_token: ${SLACK_BOT_TOKEN} # posting (verbs out)
     options: { channel: C0123456789 } # default channel for post/ask
@@ -86,7 +86,7 @@ connectors:
   # An ask-capable web page (approve / revise / discard) served on the inbound
   # listener — `uses: hoff.ask` presents a draft there and waits.
   hoff:
-    type: web
+    use: web
     base_url: https://conductor.example.com
     listen: ":8099"
     ttl: 30m
@@ -107,14 +107,14 @@ connectors:
   #   env: { CI: "1" }
 
   timer:
-    type: cron
+    use: cron
     schedules:
       nightly-tidy: { cron: "0 4 * * *" }
       weekly-audit: { cron: "0 5 * * 0" }
       rate-check: { every: 6h, run_on_start: true }
 
   hooks:
-    type: webhook
+    use: webhook
     listen: ":8099" # shared with other listeners on the same address
     sources:
       cloudwatch:
@@ -124,28 +124,21 @@ connectors:
         title: "{{.body.detail.alarmName}}"
         dedup: "{{.body.detail.alarmName}}-{{.body.time}}"
 
-  # sentry and pagerduty are NOT bundled — they are external plugins from
-  # github.com/NodeSpy/conductor-plugins. Declare the plugin, then the
-  # connector instance; `conductor init` fetches, verifies and pins the binary.
+  # sentry and pagerduty are NOT bundled — they are plugins from the official
+  # repo (github.com/NodeSpy/conductor-plugins). There is nothing extra to
+  # declare: the bare name in `use:` IS the declaration. `conductor init`
+  # fetches, checksum-verifies, and installs the binary; it then stays current
+  # unless you pin an exact version (use: sentry@v1.2.3).
+  #
   # Filters use the plugin's own vocabulary and steps template its flat context
   # keys ({{.level}}, {{.short_id}}, …), not the old nested {{.sentry.*}}.
   #
-  # plugins:
-  #   sentry:
-  #     source: github.com/NodeSpy/conductor-plugins//sentry
-  #     kind: connector
-  #     isolation: { mode: namespace }
-  #   pagerduty:
-  #     source: github.com/NodeSpy/conductor-plugins//pagerduty
-  #     kind: connector
-  #     isolation: { mode: namespace }
-  #
   # sentry-prod:
-  #   type: sentry
+  #   use: sentry
   #   listen: ":8098"
   #   client_secret: ${SENTRY_CLIENT_SECRET}
   # pd:
-  #   type: pagerduty
+  #   use: pagerduty
   #   listen: ":8097"
   #   signing_secret: ${PAGERDUTY_SIGNING_SECRET}
   # upstream:
@@ -440,45 +433,68 @@ hosts:
 # through an ssh -W forward, cli/acp/agent-deck wrap their launch.
 # ---------------------------------------------------------------------------
 runtimes:
-  paseo: { type: paseo, bin: paseo, default: true }
-  gpu-paseo: { type: paseo, bin: /usr/local/bin/paseo, host: build-box }
+  paseo: { use: paseo, bin: paseo, default: true }
+  gpu-paseo: { use: paseo, bin: /usr/local/bin/paseo, host: build-box }
   # deck:   { type: agent-deck }
   # gemini: { agent: gemini }                       # ACP transport
   # remote: { type: cli, tool: claude-code, host: build-box }
 
 # ---------------------------------------------------------------------------
-# plugins: — acquire connector TYPES and RUNTIMES from external binaries
-# (in-process built-ins stay bundled; this only ADDS to them). source: is either
-# a local executable path OR a remote release repo (github.com/org/repo//comp),
-# fetched + checksum-verified + vendored + locked by `conductor init`. An external
-# plugin is verified before it ever runs (sha256, fail-closed) and sandboxed by
-# default (an isolation: block is required unless allow_unsandboxed). Then
-# reference the type/runtime it registers from connectors:/runtimes:/agents:.
+# use: — ONE field names what implements a connector or a runtime. There is no
+# separate plugins: block: the reference IS the declaration, the way adding a
+# browser extension is one action, not two.
+#
+# Resolution (first match wins, and the KIND comes from the block you wrote it
+# in — a connector can never be wired as a runtime):
+#
+#   use: github                    a BUILTIN (compiled in; `conductor plugin list`)
+#   use: sentry                    not builtin -> the OFFICIAL plugin repo,
+#                                  github.com/NodeSpy/conductor-plugins, at
+#                                  connectors/sentry (runtimes/<name> under runtimes:)
+#   use: acme/plugins/jira         an explicit github repo (github.com implied)
+#   use: git.corp.example/t/p//x   an explicit non-github host
+#   use: ./bin/conductor-jira      a local binary, for developing one
+#
+# `conductor init` installs everything referenced. Install state is LOCAL — it
+# lives in the state dir, NOT in a committed lockfile: which build is on this
+# box is a property of this box. Boot reads it offline; a plugin that cannot be
+# reached keeps running the build already installed.
+#
+# By default a plugin STAYS CURRENT and every update is logged with the sha it
+# moved from. Pin an exact build to opt out: use: sentry@v1.2.3 (a RANGE such as
+# @^1.2 still tracks). The official repo is trusted by default; a third-party
+# repo needs a plugin_trust entry.
 # ---------------------------------------------------------------------------
-# plugins:
-#   jira:                                             # a LOCAL connector plugin
-#     source: ./plugins/conductor-jira
-#     kind: connector
-#     provides: jira                                  # the connector type it registers
-#     sha256: "<hex>"                                 # REQUIRED for a local source (dev: allow_unverified: true)
-#     args: ["--profile", "prod"]                     # optional extra argv
+# connectors:
+#   tickets:
+#     use: acme/plugins/jira                # explicit repo, tracks latest 1.x…
+#     # use: acme/plugins/jira@^1.2         # …or constrain it
+#     # use: acme/plugins/jira@v1.2.3       # …or pin it exactly (no auto-update)
+#     api_key: ${JIRA_TOKEN}
+#     network: ["your-org.atlassian.net:443"]   # NARROWS the plugin's declared
+#                                               # egress; it can never widen it
+#   linear:
+#     use: linear                           # bare name -> the official repo
+#     api_key: ${LINEAR_KEY}
+# runtimes:
+#   modal: { use: modal }                   # a runtime plugin, co-equal with paseo
+# agents:
+#   deployer: { runtime: modal }            # then select it here
+#
+# plugin_trust: { allow: [github.com/acme/*] }   # third-party sources need an
+#                                                # entry; the official repo does not
+#
+# SECURITY. A plugin declares the hosts it calls and the commands it spawns.
+# Conductor records that manifest when it installs the plugin, SHOWS it to you
+# (`conductor plugin add`, `plugin list --caps`, `plugin show`), and confines
+# the subprocess to it. That is a visible permission manifest, not an OS jail —
+# conductor is a privileged app you chose to run, and so is a plugin you added.
+# OS isolation is still there, as OPT-IN hardening for a locked-down box:
+#
+# connectors:
+#   tickets:
+#     use: acme/plugins/jira
 #     isolation: { mode: namespace, network: { egress: ["your-org.atlassian.net:443"] } }
-#   linear:                                           # a REMOTE connector plugin (release-asset fetch)
-#     source: github.com/acme/conductor-plugins//linear
-#     kind: connector
-#     version: "~> 1.2"                               # semver constraint picks the release tag;
-#                                                     # sha comes from the release, recorded in the lockfile
-#     # hold: true                                    # freeze at the locked version (skip auto-update)
-#     isolation: { mode: namespace, network: { egress: ["api.linear.app:443"] } }
-#   modal:                                            # a runtime plugin (co-equal)
-#     source: ./plugins/conductor-modal
-#     kind: runtime
-#     provides: modal                                 # then: agents: { x: { runtime: modal } }
-#     sha256: "<hex>"
-#     isolation: { mode: namespace }
-# plugin_trust: { allow: [github.com/acme/conductor-plugins*] }  # gate remote plugin sources (fail-closed)
-# connectors: { jira: { type: jira } }                # use the plugin's connector type
-# agents:     { deployer: { runtime: modal } }        # use the plugin's runtime
 
 # agents: — named profiles (provider/model/prompt posture), run on a runtime.
 agents:
@@ -850,9 +866,10 @@ policy:
 #       - { uses: build-box.run, options: { command: "smoke-test.sh" } }
 
 update: { auto: true } # self-update (auto-applies by default); auto-migration runs on the new binary's first boot
-# update: { auto: true, deps: true } # ALSO auto-update packs: + remote plugins: each cycle (opt-in);
-#                                     # a changed dep that still validates restarts to apply; every change is logged.
-#                                     # Freeze one with `hold: true` on its packs:/plugins: entry.
+# update: { auto: true, deps: true } # ALSO keep packs: and `use:` plugins current each cycle (opt-in);
+#                                     # a changed dep that still validates restarts to apply; every change is logged
+#                                     # with the sha it moved from. Freeze a pack with `hold: true`; freeze a plugin
+#                                     # by pinning an exact version (use: <ref>@v1.2.3).
 # store:
 #   state_file: ~/.local/state/conductor/state.json
 #   audit_log:  ~/.local/state/conductor/audit.jsonl

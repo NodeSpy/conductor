@@ -173,7 +173,7 @@ func TestResolveTriggerExtendsErrors(t *testing.T) {
 
 func TestResolveExtendsRuntime(t *testing.T) {
 	c := &Config{Runtimes: map[string]RuntimeConfig{
-		"remote": {Type: "cli", Host: "build-box", Command: []string{"gemini"}},
+		"remote": {Use: "cli", Host: "build-box", Command: []string{"gemini"}},
 		"remote2": {
 			Extends: "remote",
 			Command: []string{"codex"}, // slice replaces
@@ -183,7 +183,7 @@ func TestResolveExtendsRuntime(t *testing.T) {
 		t.Fatalf("resolveExtends: %v", err)
 	}
 	r := c.Runtimes["remote2"]
-	if r.Type != "cli" || r.Host != "build-box" {
+	if r.Use != "cli" || r.Host != "build-box" {
 		t.Errorf("runtime inherit: %+v", r)
 	}
 	if !reflect.DeepEqual(r.Command, []string{"codex"}) {

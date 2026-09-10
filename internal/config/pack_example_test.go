@@ -44,7 +44,7 @@ func TestExampleReviewKitInstantiates(t *testing.T) {
 	body := `
 connectors:
   gh:
-    type: github
+    use: github
 vaults:
   house:
     type: file

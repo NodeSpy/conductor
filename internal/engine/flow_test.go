@@ -292,7 +292,7 @@ func flowTrigger(dedup string) core.Trigger {
 
 const gateCfg = `
 connectors:
-  eg: { type: enginegate }
+  eg: { use: enginegate }
 triggers:
   - on: eg.ping
     steps:
@@ -332,7 +332,7 @@ func TestFlowBranchRunsAndConsumesDedup(t *testing.T) {
 }
 
 func TestFlowPolicyIgnoreUsers(t *testing.T) {
-	cfg := strings.Replace(gateCfg, "type: enginegate }", "type: enginegate, policy: { ignore: { users: [spammer] } } }", 1)
+	cfg := strings.Replace(gateCfg, "use: enginegate }", "use: enginegate, policy: { ignore: { users: [spammer] } } }", 1)
 	eng, st, _, _ := buildFlowEngine(t, cfg)
 	before := gateCalls()
 	eng.process(context.Background(), flowTrigger("d2"))
@@ -419,8 +419,8 @@ func TestFlowGroupBatches(t *testing.T) {
 func TestFlowFanInFiresOncePerEvent(t *testing.T) {
 	eng, _, _, cfg := buildFlowEngine(t, `
 connectors:
-  eg:  { type: enginegate }
-  eg2: { type: enginegate }
+  eg:  { use: enginegate }
+  eg2: { use: enginegate }
 triggers:
   - name: fan
     on: [eg.ping, eg2.ping]
@@ -458,7 +458,7 @@ triggers:
 func TestFlowManualTriggerRuns(t *testing.T) {
 	eng, _, _, _ := buildFlowEngine(t, `
 connectors:
-  eg: { type: enginegate }
+  eg: { use: enginegate }
 triggers:
   - name: adhoc
     on: manual
@@ -488,8 +488,8 @@ triggers:
 func TestFlowPerSourceHooksScoped(t *testing.T) {
 	eng, _, _, cfg := buildFlowEngine(t, `
 connectors:
-  eg:  { type: enginegate }
-  eg2: { type: enginegate }
+  eg:  { use: enginegate }
+  eg2: { use: enginegate }
 triggers:
   - name: fan
     on:

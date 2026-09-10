@@ -164,7 +164,7 @@ func TestCIFailedOncePerHead(t *testing.T) {
 func gateCfg2() string {
 	return `
 connectors:
-  eg: { type: enginegate }
+  eg: { use: enginegate }
 triggers:
   - on: eg.ping
     steps:

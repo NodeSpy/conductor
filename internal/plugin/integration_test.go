@@ -37,7 +37,7 @@ func buildExamplePlugin(t *testing.T) (string, string) {
 // TestExamplePluginRoundTrip drives the REAL subprocess over the real transport.
 func TestExamplePluginRoundTrip(t *testing.T) {
 	bin, sum := buildExamplePlugin(t)
-	spec := Spec{Name: "echo", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum, Version: "1.0.0", AllowUnsandboxed: true}
+	spec := Spec{Name: "echo", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum, Version: "1.0.0"}
 	c := NewClient(spec, Deps{})
 	defer c.Close()
 	ctx := context.Background()
@@ -83,7 +83,7 @@ func TestExamplePluginShaMismatchRefused(t *testing.T) {
 // daemon is not stuck), and a later call restarts the plugin and succeeds.
 func TestExamplePluginHangTimeoutAndRecovery(t *testing.T) {
 	bin, sum := buildExamplePlugin(t)
-	spec := Spec{Name: "echo", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum, AllowUnsandboxed: true}
+	spec := Spec{Name: "echo", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum}
 	c := NewClient(spec, Deps{CallTimeout: 300 * time.Millisecond})
 	defer c.Close()
 	ctx := context.Background()
@@ -116,7 +116,7 @@ func TestExamplePluginHangTimeoutAndRecovery(t *testing.T) {
 // rejected rather than buffered.
 func TestExamplePluginOversizeRejected(t *testing.T) {
 	bin, sum := buildExamplePlugin(t)
-	spec := Spec{Name: "echo", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum, Args: []string{"--oversize"}, AllowUnsandboxed: true}
+	spec := Spec{Name: "echo", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Sha256: sum, Args: []string{"--oversize"}}
 	c := NewClient(spec, Deps{CallTimeout: 5 * time.Second})
 	defer c.Close()
 	if _, err := c.Describe(context.Background()); err == nil {

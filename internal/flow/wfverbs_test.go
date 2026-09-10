@@ -25,7 +25,7 @@ func tempSaved(t *testing.T, path string) *SavedStore {
 
 const wfBase = `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 agents:
   planner: { model: x }
@@ -394,7 +394,7 @@ steps:
 	}
 	tight := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 agents:
   planner: { model: x }
@@ -419,7 +419,7 @@ steps: [ { id: go, workflow: laundered } ]
 	// And with NO agent_authored policy at all, a saved workflow refuses too.
 	nopol := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   planner: { model: x }
 `)
@@ -437,7 +437,7 @@ steps: [ { id: go, workflow: laundered } ]
 	// run time (no approve_via here → dry-run + reject), even though it saved.
 	approveCfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 agents:
   planner: { model: x }
@@ -473,7 +473,7 @@ steps: [ { id: go, workflow: risky } ]
 	// registry: an identity policy forces as: on the saved steps at run.
 	idCfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 agents:
   planner: { model: x }

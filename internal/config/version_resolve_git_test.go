@@ -43,7 +43,7 @@ func TestPackVersionConstraintResolvesTag(t *testing.T) {
 	dir := t.TempDir()
 	body := `
 connectors:
-  gh: { type: github }
+  gh: { use: github }
 vaults:
   house: { type: file, dir: /tmp/pc-pack-vault }
 agents:

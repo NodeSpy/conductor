@@ -30,7 +30,7 @@ func TestGithubSourceLowersTriggerFilters(t *testing.T) {
 	cfg := mustDecodeConfig(t, `
 connectors:
   gh:
-    type: github
+    use: github
     repos: ["org/*"]
     identity:
       write_token: literal-tok
@@ -106,7 +106,7 @@ func TestGithubSourceSweepSurvivesLowering(t *testing.T) {
 	cfg := mustDecodeConfig(t, `
 connectors:
   gh:
-    type: github
+    use: github
     repos: ["org/*"]
     sweep: { enabled: true, interval: 10m }
     identity:
@@ -139,7 +139,7 @@ func TestGithubSourceRepoFallsBackToConnectorRepos(t *testing.T) {
 	cfg := mustDecodeConfig(t, `
 connectors:
   gh:
-    type: github
+    use: github
     repos: ["default/repo"]
 `)
 	reg, err := Build(cfg, Deps{Secrets: secrets.New()})
@@ -162,7 +162,7 @@ func TestGithubSourceNoTriggersReturnsNil(t *testing.T) {
 	cfg := mustDecodeConfig(t, `
 connectors:
   gh:
-    type: github
+    use: github
 `)
 	reg, err := Build(cfg, Deps{Secrets: secrets.New()})
 	if err != nil {
@@ -187,7 +187,7 @@ func newGithubTestImpl(t *testing.T, extraYAML string) *githubImpl {
 	cfg := mustDecodeConfig(t, `
 connectors:
   gh:
-    type: github
+    use: github
 `+extraYAML)
 	reg, err := Build(cfg, Deps{Secrets: secrets.New()})
 	if err != nil {

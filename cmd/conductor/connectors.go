@@ -365,7 +365,20 @@ func cmdConnectors(args []string) error {
 		} else if in.DisabledReason != "" {
 			state = "disabled: " + in.DisabledReason
 		}
-		fmt.Printf("%-14s %-10s %s\n", name, in.Decl.Type, state)
+		// Show what IMPLEMENTS each instance and where it came from — the
+		// question `use:` exists to answer. Built-in instances (kv, sql,
+		// conductor, …) have no connectors: entry, so they resolve to builtin.
+		use, origin := "-", string(config.OriginBuiltin)
+		if ref, ok := cfg.ConnectorsMap[name]; ok {
+			use = ref.Use
+			if u, uerr := ref.Resolved(); uerr == nil {
+				origin = string(u.Origin)
+			}
+		}
+		fmt.Printf("%-14s %-10s %-9s %s\n", name, in.Decl.Type, origin, state)
+		if use != "-" && use != in.Decl.Type {
+			fmt.Printf("  use:    %s\n", use)
+		}
 		events := in.Decl.EventNames()
 		if in.Impl != nil {
 			if dyn := in.Impl.DeclaredEvents(); len(dyn) > 0 {
@@ -404,9 +417,9 @@ func cmdSchema(args []string) error {
 		}
 		return fmt.Errorf("no connector %q configured (and no such type); types: %s", name, strings.Join(connector.Types(), ", "))
 	}
-	decl, ok := connector.TypeDeclFor(ref.Type)
+	decl, ok := connector.TypeDeclFor(ref.TypeName())
 	if !ok {
-		return fmt.Errorf("connector %q has unknown type %q", name, ref.Type)
+		return fmt.Errorf("connector %q has unknown type %q", name, ref.TypeName())
 	}
 	var dyn []string
 	if stack, err := buildFlowStack(cfg, nil, nil, true); err == nil {
@@ -420,7 +433,7 @@ func cmdSchema(args []string) error {
 			}
 		}
 	}
-	fmt.Printf("connector %s (type %s)\n", name, ref.Type)
+	fmt.Printf("connector %s (use %s, type %s)\n", name, ref.Use, ref.TypeName())
 	printTypeDecl(decl, dyn)
 	return nil
 }

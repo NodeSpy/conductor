@@ -162,7 +162,7 @@ stores:
 // load error (the name is reserved for the built-in).
 func TestSQLConfiguredNameRejected(t *testing.T) {
 	var cfg config.Config
-	if err := yaml.Unmarshal([]byte("connectors:\n  sql: { type: command }\n"), &cfg); err != nil {
+	if err := yaml.Unmarshal([]byte("connectors:\n  sql: { use: command }\n"), &cfg); err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "reserved") {

@@ -93,7 +93,7 @@ integrations:
     type: github
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 dispatch:
   identity: { read_token: app }
@@ -141,7 +141,7 @@ triggers:
 	fixed := `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 triggers:
   - on: timer.tick
@@ -176,7 +176,7 @@ func TestBootHoldsDegradedOnConnectorsSchemaUnknownKey(t *testing.T) {
 	broken := `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 bogus_unknown_key: true
 triggers:
@@ -226,7 +226,7 @@ triggers:
 	fixed := `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 triggers:
   - on: timer.tick
@@ -260,7 +260,7 @@ func TestResolveBootConfigHoldsGateOnUnknownKey(t *testing.T) {
 	broken := `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 bogus_unknown_key: true
 triggers:
@@ -295,7 +295,7 @@ triggers:
 	fixed := `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 triggers:
   - on: timer.tick

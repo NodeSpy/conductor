@@ -10,7 +10,7 @@ func TestWorkflowHooksOrderingAndData(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc:
-    type: fake
+    use: fake
 `)
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
@@ -86,7 +86,7 @@ func TestWorkflowFailHookSeesError(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc:
-    type: fake
+    use: fake
 `)
 	reg := buildRegistry(t, cfg)
 	newFakeState(t, "svc")
@@ -139,7 +139,7 @@ func TestStepHooks(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc:
-    type: fake
+    use: fake
 `)
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")

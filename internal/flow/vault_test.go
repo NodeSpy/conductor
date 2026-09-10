@@ -34,7 +34,7 @@ func vaultRig(t *testing.T, extraYAML string) (*testRig, *fakeState, *config.Con
 
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 vaults:
   house: { type: conductor, path: `+vpath+`, unlock: { key: "`+key+`" } }
 `+extraYAML)
@@ -154,7 +154,7 @@ func TestVaultRefValidation(t *testing.T) {
 	vpath := filepath.Join(t.TempDir(), "vault.json")
 	base := `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 vaults:
   house: { type: conductor, path: ` + vpath + `, unlock: { key: "some-passphrase" } }
   files: { type: file, dir: ` + fdir + ` }

@@ -205,7 +205,7 @@ handoffs:
         account: true
 `)
 	hoff := doc["connectors"].(map[string]any)["hoff"].(map[string]any)
-	if hoff["type"] != "web" || hoff["base_url"] != "https://c.example.com" || hoff["ttl"] != "45m0s" {
+	if hoff["use"] != "web" || hoff["base_url"] != "https://c.example.com" || hoff["ttl"] != "45m0s" {
 		t.Fatalf("web connector: %v", hoff)
 	}
 	tun := hoff["tunnel"].(map[string]any)
@@ -265,7 +265,7 @@ integrations:
 	if !ok || p["bin"] != "/opt/paseo/bin/paseo" {
 		t.Fatalf("synthesized paseo runtime: %v", rts)
 	}
-	if deck := rts["deck"].(map[string]any); deck["type"] != "agent-deck" {
+	if deck := rts["deck"].(map[string]any); deck["use"] != "agent-deck" {
 		t.Fatalf("carried controller: %v", rts)
 	}
 	if !strings.Contains(strings.Join(res.Summary, "\n"), "paseo_bin → runtimes.paseo.bin") {

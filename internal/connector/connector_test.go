@@ -247,7 +247,7 @@ func TestRegistryBuildUnknownTypeErrors(t *testing.T) {
 	cfg := mustDecodeConfig(t, `
 connectors:
   foo:
-    type: does-not-exist
+    use: does-not-exist
 `)
 	_, err := Build(cfg, Deps{Secrets: secrets.New()})
 	if err == nil || !strings.Contains(err.Error(), `unknown type "does-not-exist"`) {
@@ -259,7 +259,7 @@ func TestRegistryBuildDisablesOnSecretFailure(t *testing.T) {
 	cfg := mustDecodeConfig(t, `
 connectors:
   disc:
-    type: discord
+    use: discord
     bot_token: env:PC_TEST_MISSING_VAR_XYZ
 `)
 	sec := secrets.New()
@@ -291,7 +291,7 @@ func TestRegistryAuthorDisabled(t *testing.T) {
 	cfg := mustDecodeConfig(t, `
 connectors:
   box:
-    type: command
+    use: command
     enabled: false
 `)
 	reg, err := Build(cfg, Deps{Secrets: secrets.New(), Config: cfg})
@@ -320,7 +320,7 @@ func TestRegistryBuildDisablesOnValidateFailure(t *testing.T) {
 	cfg := mustDecodeConfig(t, `
 connectors:
   sl:
-    type: slack
+    use: slack
     app_token: xapp-literal
 `)
 	reg, err := Build(cfg, Deps{Secrets: secrets.New()})
@@ -337,7 +337,7 @@ func TestInstanceInvokeMergesDefaultsInvokeFinalDoesNot(t *testing.T) {
 	cfg := mustDecodeConfig(t, `
 connectors:
   wh:
-    type: webhook
+    use: webhook
     listen: ":0"
     sources:
       s1:

@@ -12,7 +12,7 @@ func TestValidateRESTOpenVerbs(t *testing.T) {
 	base := `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: http://api.invalid
     verbs:
       list:
