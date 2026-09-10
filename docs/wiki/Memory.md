@@ -113,11 +113,11 @@ stamps `run`/`trigger`/`repo` on every step and hook.
 An agent gets memory in its prompt only when its profile asks:
 
 ```yaml
-steps:
-  fixer:
+x-templates:
+  fixer: &fixer
     type: agent
     memory: true                                    # the shared set + this run's context keys
-  reviewer:
+  reviewer: &reviewer
     type: agent
     memory: { scopes: ["${repo}", "${step}"], tags: [ci], limit: 10 }
 ```

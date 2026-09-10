@@ -12,8 +12,8 @@ runtimes:
   remote: { use: cli, tool: claude-code, host: build-box }
   modal:  { use: modal }                           # a runtime PLUGIN, co-equal
 
-steps:
-  fixer: { type: agent, runtime: paseo }           # a step pins its backend
+x-templates:
+  fixer: &fixer { type: agent, runtime: paseo }           # a step pins its backend
 ```
 
 ## Three shapes, and the name implies `use:`

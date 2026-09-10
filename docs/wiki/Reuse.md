@@ -41,11 +41,14 @@ Two caveats:
 
 - **Anchors are file-local.** YAML resolves them per document, so an anchor defined in
   `config.yaml` is invisible to an imported `conf.d/*.yaml`. That is YAML, not a conductor limit.
-  For cross-file reuse, use `extends:` (below) or a named step.
+  For cross-file reuse, use `extends:` (below).
 - **An anchor shares fields, not identity.** Two steps merging one anchor remain two identities —
   their memory namespaces, session pools, and track records stay separate. `name:` is the separate,
   deliberate opt-in to sharing one; see [[Steps]]. Do not add `name:` just because you used an
   anchor.
+- **An anchor is not a reference.** It is resolved at parse time and leaves nothing to point at, so
+  a `team:` role and a pack overlay address a step where it lives instead — `<workflow>/<step-id>`,
+  or `<workflow>[<n>]` for a step with no `id:`. See [[Steps]].
 - Ordinary YAML rules apply: the merge overrides whole keys, and unlike `extends:` below, a
   `guidance:` merged in is **replaced** by the step's own rather than stacked under it.
 
@@ -142,10 +145,10 @@ guidance: { replace: "only me" } # reset: drop everything below this level, use 
 
 - `guidance: ""` or `[]` at a level contributes nothing but does **not** suppress the levels below.
 - `guidance: { replace: "" }` disables guidance entirely for that agent.
-- An `extends:` child — and a step playing a named `steps:` entry — inherits the parent's guidance
-  underneath its own, unless it resets with `{ replace }`. A YAML anchor does **not** stack: a
-  merged `guidance:` is replaced wholesale by the step's own, because that is what a YAML merge
-  does.
+- An `extends:` child — and a `team:` role filled in from the step it references — inherits the
+  parent's guidance underneath its own, unless it resets with `{ replace }`. A YAML anchor does
+  **not** stack: a merged `guidance:` is replaced wholesale by the step's own, because that is what
+  a YAML merge does.
 
 `agent_guidance:` (the old top-level field) still works — it is folded into the **global**
 `policy.guidance` for back-compat, so connector/trigger-scoped guidance stacks on top of it. If both
@@ -168,18 +171,21 @@ connectors:
     policy:
       guidance: "On PRs, lead with the point and propose a concrete fix."   # stacks under global
 
-steps:
-  reviewer:
-    type: agent
-    guidance: "Flag only what a thoughtful senior would bother raising."     # stacks on top
+workflows:
+  review:
+    steps:
+      - id: reviewer
+        type: agent
+        guidance: "Flag only what a thoughtful senior would bother raising."  # stacks on top
+        prompt: "Review {{.repo}}#{{.pr}}."
 ```
 
-A step playing `reviewer` from a `gh` trigger sees all three blocks; the same step on a Slack
+The `reviewer` step reached from a `gh` trigger sees all three blocks; the same step on a Slack
 trigger sees only the global tone plus its own.
 
 ## See also
 
-- [[Steps]] — step behavior, the `steps:` registry, and step identity
+- [[Steps]] — step behavior, step references, and step identity
 - [[Policy]] — the cascade `policy.guidance` rides on
 - [[Runtimes]], [[Workflows]] — other sections that support `extends:`
 - [[Configuration]] — the full trigger grammar

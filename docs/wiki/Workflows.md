@@ -100,10 +100,10 @@ A step is one of six forms (all share `id` and `if`):
 An agent step carries its own BEHAVIOR — guidance, skill, memory opt-in,
 workspace, timeouts, isolation, model, runtime — and shares it with other
 steps through a YAML anchor (`<<: *base`, parked under a top-level `x-`
-key). Where the NAME is the point rather than the fields — a `team:` role,
-a pack role a consumer rebinds — the step plays a named entry of the
-top-level `steps:` registry with `step: <name>`. There is no `agents:`
-block; see [[Steps]] and [[Reuse]].
+key). There is no top-level `steps:` section and no `agents:` block: a step
+lives where it runs, and anything that must POINT at one — a `team:` role,
+a pack overlay — addresses it as `<workflow>/<step-id>` (or
+`<workflow>[<n>]`). See [[Steps]] and [[Reuse]].
 
 Agent steps have two extra memory hooks (when a `memory:` section is
 configured): a `remember:` block in the agent's final output persists

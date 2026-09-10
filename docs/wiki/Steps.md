@@ -72,34 +72,51 @@ Two things to know:
   are still two identities. `name:` is the separate, deliberate opt-in to
   sharing one — see below.
 
-## Named steps: the `steps:` registry
+## Pointing at a step
 
-The top-level `steps:` map is not a template store; it is a registry of
-steps that other config addresses **by name**. Two things address it:
+There is **no top-level `steps:` section**. A step lives in the workflow or
+trigger that runs it, and anything that must point at a particular one
+addresses it there:
 
-- a [[Workflows|`team:`]] block, whose `planner`/`worker`/`critic`/
-  `reconcile` roles are names;
-- a step that plays one with **`step: <name>`**, inheriting every field it
-  leaves unset — and the entry's name as its identity.
-
-```yaml
-steps:
-  reviewer:
-    type: agent
-    workspace: worktree
-    guidance: "Review only what the diff changes. Cite file:line."
-
-workflows:
-  review:
-    steps:
-      - { id: r, step: reviewer, prompt: "Review {{.repo}}#{{.pr}}." }
+```
+review-flow/architect     by the step's own id: (or name:, if it has no id:)
+review-flow[2]            by position, for a step that carries neither
 ```
 
-Reach for a name when the name is the point: a [[Packs|pack]] ships a
-`reviewer` role its consumer rebinds (`packs.review.steps: { reviewer:
-my-opus }`), which an anchor cannot express because an anchor is resolved
-at parse time and leaves nothing to rebind. For plain "these steps share a
-model and a tone", use an anchor and stay anonymous.
+The container is a `workflows:` entry or a **named** trigger. That is the
+same slot the identity ladder uses below — id if present, else index — so
+a reference and an identity always name the same step by the same rule:
+`review-flow/architect` addresses exactly the step whose structural
+identity is `workflow:review-flow/architect`.
+
+Two things use references:
+
+- a [[Teams|`team:`]] block, whose `planner`/`worker`/`critic`/`reconcile`
+  roles each name a step. The role takes that step's behavior **and its
+  identity**, so every team pointing at it shares one memory namespace,
+  session pool, and track record;
+- a [[Packs|pack]] overlay, where a consumer overrides one step of a pack
+  by reference (`packs.review.steps: { review-flow/review: { … } }`).
+
+```yaml
+workflows:
+  roles:
+    steps:
+      - id: architect
+        type: agent
+        guidance: "Decompose before building. Name the risky part."
+        prompt: "…"
+
+triggers:
+  - on: gh.issue_matched
+    steps:
+      - id: feature
+        prompt: "Implement {{.url}}"
+        team: { planner: roles/architect, worker: roles/architect }
+```
+
+The index form is the escape hatch, not the habit: it is positional, so
+inserting a step above shifts it. Give a step an `id:` and reference that.
 
 `agent:` still parses, but it is now a free-form **attribution label** that
 selects nothing. What identifies a dispatch is its identity, below.
@@ -112,12 +129,14 @@ pure function of config — never a per-run value:
 
 1. an explicit **`name:`** — author-pinned, and **shareable**: two steps with
    the same name share one memory namespace, one session pool, and one track
-   record. A step that plays a named step (`step: fixer`) inherits that
-   name, so every user of it shares one identity — exactly the reuse a
-   shared `agent: fixer` gave you. Merging an **anchor** does not do this:
-   an anchor copies fields and leaves identity alone.
+   record — exactly the reuse a shared `agent: fixer` gave you. A `team:`
+   role inherits the name of the step it references, for the same reason.
+   Merging an **anchor** does not do this: an anchor copies fields and
+   leaves identity alone.
 2. **structural** — the enclosing qualified trigger/workflow plus the step's
-   slot: `github.pull_request/security`. This is the default.
+   **slot**: its `id:`, else its `name:`, else its index in the list —
+   `github.pull_request/security`, or `github.pull_request/2`. This is the
+   default, and it is the same slot a step reference uses.
 3. a deterministic **fingerprint** of the step's definition, for a step with
    no enclosing context.
 
@@ -135,7 +154,7 @@ a step that has neither a `name:` nor an `id:` — give it one to pin it.
 | Field | Meaning |
 | --- | --- |
 | `name` | Pins the step's identity (see above). Shareable on purpose. |
-| `step` | Play a named entry of the top-level `steps:` registry: unset fields fill, `labels` deep-merge, `guidance` stacks (the entry's tone under the step's), and the entry's name becomes this step's identity. See [[Reuse]]. |
+| `id` | The step's slot: how outputs are addressed (`steps.<id>.outputs.*`), what a step reference points at, and — absent a `name:` — the structural half of its identity. |
 | `model` | Which model to run: a fleet name, a model id, a wildcard, an inline list, or `{ any, required }`. Unset → the runtime's `models.default:`, then a bare launch. See [[Model-Selection]]. |
 | `runtime` | A `runtimes.<name>` entry to run on (default: the `default: true` runtime, else the built-in paseo). See [[Runtimes]]. |
 | `thinking` / `mode` | Runtime launch hints, passed through where the runtime supports them. |
@@ -195,8 +214,8 @@ runtimes:
       idle_ttl: 12h
       end_on: [ gh._closed ]
 
-steps:
-  reviewer:
+x-templates:
+  reviewer: &reviewer
     type: agent
     session:                          # this step's OWN pool, namespaced to its
       key: "{{.repo}}#{{.pr}}"        #   identity — so the same key string is
@@ -243,16 +262,22 @@ unbound, and replaced by a fresh spawn.
 `conductor config migrate` (and the automatic boot migration) decomposes each
 profile, and it is careful about one thing above all: **your accumulated
 history carries over.** Memory, sessions, and outcomes used to key off the
-agent NAME; they now key off the step IDENTITY. So the migration emits each
-profile as a named `steps:` entry whose **`name:` is the old agent name** —
-the identity ladder's top rung — and rewrites every `agent: X` to
-`step: X`, which inherits that name.
+agent NAME; they now key off the step IDENTITY. So the migration INLINES
+each profile's behavior onto every step that referenced it, carrying
+**`name: <the old agent name>`** — the identity ladder's top rung — onto
+each one.
 
-A named step rather than an anchor, deliberately: `agents:` commonly sat in
-`config.yaml` while the triggers naming it sat in `conf.d/*.yaml`, and an
-anchor does not cross `imports:`. (Where a profile `extends:` another
-profile, both land in the same file, so the migration *does* emit an anchor
-there.)
+Where a profile was referenced from several steps IN THE SAME FILE, those
+steps share a YAML anchor parked under `x-migrated:` instead of each
+getting a copy. Where the steps are in different files, each gets its own:
+anchors do not cross `imports:`, and duplicated config that works beats DRY
+config that does not parse. Because `agents:` commonly sat in `config.yaml`
+while the triggers naming it sat in `conf.d/*.yaml`, the profile table is
+gathered from the whole import tree before any file is rewritten.
+
+A profile nothing referenced is dropped with a note — there is no top-level
+section left to park it in, and its behavior is in the `.pre-connectors`
+backup.
 
 The keys therefore come out identical to what your box already has on disk:
 `outcomeStats["fixer"]` stays `outcomeStats["fixer"]`, engagements still
@@ -261,14 +286,14 @@ recalled through a compatibility alias.
 
 | Old | New |
 | --- | --- |
-| `agents.<n>` | `steps.<n>` with `name: <n>` |
+| `agents.<n>` | its fields, inlined on each referencing step, with `name: <n>` |
 | `provider` + `model` | `model:` (an exact pin — a migration never invents a fleet) |
 | `provider` alone | nothing — that named a backend, not a model, so it becomes a bare launch |
 | `budget` | `runtimes.<the runtime it ran on>.budget` |
 | `controller` | `runtime` |
-| behavior fields | the same key on the named step |
-| `agents.<child>.extends: <parent>` | a YAML anchor `&parent` + `<<: *parent` within `steps:` |
-| `agent: <n>` on a step | `step: <n>` |
+| behavior fields | the same key on each referencing step |
+| `agents.<child>.extends: <parent>` | flattened — the parent's fields are copied into the child before inlining |
+| `agent: <n>` on a step | the profile's fields, plus `name: <n>` (or `<<: *n` when shared in-file) |
 
 Anything the decomposition has no home for is dropped **with a note** in the
 migration summary, never silently.

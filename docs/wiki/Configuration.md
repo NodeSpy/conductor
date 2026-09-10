@@ -354,8 +354,8 @@ review-change on the same PR all reach the SAME agent as follow-up prompts
 with full prior context.
 
 ```yaml
-steps:
-  reviewer:
+x-templates:
+  reviewer: &reviewer
     provider: claude
     session:
       key: "{{.repo}}#{{.pr}}"

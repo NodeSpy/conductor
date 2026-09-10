@@ -46,8 +46,8 @@ connectors:
   gh: { use: github }
 vaults:
   house: { type: file, dir: /tmp/pc-pack-vault }
-steps:
-  my-opus: { type: agent, name: my-opus, skill: { verbs: [github.submit_review] } }
+x-steps:
+  my-opus: &my-opus { type: agent, name: my-opus, skill: { verbs: [github.submit_review] } }
 packs:
   review:
     source: git::file://` + repo + `//review-kit

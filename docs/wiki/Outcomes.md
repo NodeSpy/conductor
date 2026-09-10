@@ -50,8 +50,8 @@ engagement consumed, no workflow rot.
   across restarts; the line is omitted while there is no history.
 
 ```yaml
-steps:
-  fixer:
+x-templates:
+  fixer: &fixer
     type: agent
     outcome_feedback: true      # append THIS step's track record to its prompt
     # outcome_key: reviewers    # …or pool several steps onto one record

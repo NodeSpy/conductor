@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -135,4 +136,33 @@ func StripExtensionKeys(m map[string]any) {
 			delete(m, k)
 		}
 	}
+}
+
+// ResolveAliasBytes re-renders a YAML document with every alias expanded
+// into its target's content and every anchor label dropped, leaving a
+// self-contained document that means the same thing.
+//
+// Exported for the migration, which runs its own strict decoders over raw
+// bytes. Those hit the same wall Load does: a custom UnmarshalYAML re-encodes
+// the node it is given, and an alias whose anchor lives outside that node
+// cannot be re-encoded. Resolving first is what makes such a document
+// decodable at all.
+func ResolveAliasBytes(b []byte) ([]byte, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, err
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return b, nil
+	}
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(resolveAliases(&doc)); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

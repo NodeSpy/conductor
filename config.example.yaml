@@ -395,7 +395,7 @@ hosts:
 # triggers:
 #   - on: gh.review_requested
 #     steps:
-#       - { id: fix, type: agent, step: fixer, prompt: "…",
+#       - { id: fix, type: agent, <<: *fixer, prompt: "…",
 #           gate: { run: [ test, lint, critic ], max_revisions: 2 } }
 
 # ---------------------------------------------------------------------------
@@ -427,10 +427,14 @@ hosts:
 #       - id: feature
 #         prompt: "Implement the feature described in {{.url}}"
 #         team:
-#           planner: architect
-#           worker: implementer
-#           critic: reviewer          # optional judge per worker
-#           reconcile: architect      # optional; defaults to the planner
+#           # Each role is a STEP REFERENCE: `<workflow>/<step-id>`, or
+#           # `<workflow>[<n>]` for a step that carries no id: of its own.
+#           # The role takes the referenced step's behavior AND identity, so
+#           # every team pointing at it shares one track record.
+#           planner: roles/architect
+#           worker: roles/implementer
+#           critic: roles/reviewer    # optional judge per worker
+#           reconcile: roles/architect # optional; defaults to the planner
 #           max_workers: 4            # subtask cap AND parallelism (1..16)
 #           gate: { run: [ test ] }   # optional explicit checks per worker
 
@@ -612,19 +616,23 @@ models:
 #
 # Two caveats worth knowing up front:
 #   * anchors are FILE-LOCAL — they do not cross `imports:`. For reuse across
-#     files, use `extends:` on a map section (runtimes/workflows/handoffs) or
-#     a named step below.
+#     files, use `extends:` on a map section (runtimes/workflows/handoffs).
 #   * an anchor copies FIELDS, not identity. Two steps merging one anchor are
 #     still two identities. `name:` is the separate, deliberate opt-in to
 #     sharing one.
 #
-# The `steps:` map below is NOT that mechanism. It is a REGISTRY of named
-# steps other config addresses BY NAME — a `team:` role, or a pack role a
-# consumer rebinds. A step plays one with `step: <name>` and takes its
-# behavior AND its name, which is exactly what `agent: fixer` used to give.
+# There is NO top-level steps: section. A step lives in the workflow or
+# trigger that runs it. Something that must POINT at a particular step — a
+# `team:` role, a pack overlay — addresses it there:
+#
+#   review-flow/architect     by its id: (or name:, if it has no id:)
+#   review-flow[2]            by position, for a step with neither
+#
+# That is the same slot the identity ladder uses, so a reference and an
+# identity always name the same step by the same rule.
 # ---------------------------------------------------------------------------
-steps:
-  fixer:
+x-templates:
+  fixer: &fixer
     type: agent
     model: claude-sonnet-5  # a fleet name, a model id, a wildcard, or { any, required }
     workspace: worktree
@@ -663,7 +671,7 @@ steps:
     #   idle_ttl: 12h             #    overall pool every step without one joins). A binding
     #   max_lifetime: 7d          #    is (runtime, model, key) — you cannot resume a paseo
     #   end_on: [ gh._closed ]    #    session on codex, nor an opus step into a haiku one.
-  planner:
+  planner: &planner
     type: agent
     model: claude-haiku-4-5
     archive_when_done: true
@@ -684,7 +692,7 @@ workflows:
     steps:
       - id: triage
         type: agent
-        step: planner
+        <<: *planner
         checkout: none
         output_schema:
           type: object
@@ -812,7 +820,7 @@ triggers:
     steps:
       - id: audit
         type: agent
-        step: fixer
+        <<: *fixer
         model: reviewer          # a fleet from models: — runs on whatever you have
         prompt: |
           Audit {{.repo}} for {{.scope}} and summarize findings.
@@ -823,7 +831,7 @@ triggers:
     steps:
       - id: fix
         type: agent
-        step: fixer
+        <<: *fixer
         prompt: |
           {{.repo}}#{{.pr}} has a merge conflict against {{.base}}.
           Rebase or merge, resolve, verify the build, and push.
@@ -840,7 +848,7 @@ triggers:
     steps:
       - id: handle
         type: agent
-        step: fixer
+        <<: *fixer
         prompt: |
           Address the review comments on {{.repo}}#{{.pr}}:
           {{range .group.events}}- {{.comment_body}}
@@ -870,7 +878,7 @@ triggers:
     steps:
       - id: audit
         type: agent
-        step: fixer
+        <<: *fixer
         prompt: |
           Run the repo audit pass (scope: {{ .inputs.scope | default "changed" }}).
           {{ if .number }}Triggered by issue #{{.number}}.{{ end }}
@@ -919,7 +927,7 @@ triggers:
       - id: draft
         if: "{{.a.decision}} == auto"
         type: agent
-        step: planner
+        <<: *planner
         checkout: none
         prompt: "Draft the review for {{.repo}}#{{.pr}}."
       - id: review

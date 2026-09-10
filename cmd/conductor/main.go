@@ -312,16 +312,16 @@ func cmdValidate(args []string) error {
 		}
 	}
 	if stack != nil {
-		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s), %d agent profile(s)",
-			len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows), len(cfg.Steps))
+		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s)",
+			len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows))
 		if len(cfg.Integrations) > 0 {
 			fmt.Printf(" — plus %d legacy integration(s)", len(cfg.Integrations))
 		}
 		fmt.Println()
 		return nil
 	}
-	fmt.Printf("ok: %d integration(s) configured (%d enabled), %d agent profile(s)\n",
-		len(cfg.Integrations), len(igs), len(cfg.Steps))
+	fmt.Printf("ok: %d integration(s) configured (%d enabled)\n",
+		len(cfg.Integrations), len(igs))
 	return nil
 }
 

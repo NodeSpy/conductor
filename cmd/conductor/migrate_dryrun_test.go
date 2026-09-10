@@ -67,9 +67,9 @@ integrations:
         actions:
           merge_conflict:
             - type: agent
-              step: fixer
+              agent: fixer
               prompt: "fix"
-steps:
+agents:
   fixer: { type: agent, name: fixer }
 `)
 	if err := cmdConfigMigrate([]string{"--config", good, "--dry-run"}); err != nil {

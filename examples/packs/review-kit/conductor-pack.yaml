@@ -13,7 +13,8 @@
 #       preset: claude
 #       connectors: { github: gh }               # bind the pack's required github -> your connector
 #       secrets:    { review_token: house/review }
-#       steps:      { reviewer: my-opus }         # bind the pack's role to your own named step (or omit for the default)
+#       steps:                                    # override a step of the pack, by reference
+#         review-flow/review: { model: my-fleet }
 #       triggers:
 #         on_review_request:
 #           enabled: true                         # arm it
@@ -69,49 +70,21 @@ presets:
 # can refactor everything else without breaking anyone.
 exports:
   workflows: [review-flow]
-  steps: [reviewer]
+  # Step exports are REFERENCES — <workflow>/<step-id>, the same address a
+  # consumer writes to override one.
+  steps: [review-flow/review]
 
-# Config a pack shares between its own steps is a plain YAML anchor. A
-# top-level `x-` key holds the anchors and is ignored by the loader (the
-# docker-compose convention), and `<<: *name` merges one in. Anchors are
-# file-local — they do not cross into the consumer's config, which is exactly
-# right for a pack's private house style.
+# ---- Behavior the pack ships (namespaced under the instance name) ----
+#
+# There is no top-level steps: section. A step lives in the workflow that
+# runs it, and config shared between steps is a plain YAML anchor parked
+# under a top-level `x-` key — the loader ignores those (the docker-compose
+# extension-field convention) and `<<: *name` merges one in. Anchors are
+# file-local, so this house style stays inside the pack.
 x-templates:
   house: &house
     type: agent
     archive_when_done: true
-
-# ---- Behavior the pack ships (namespaced under the instance name) ----
-#
-# These are ROLES: named steps the pack's workflows play by name, so a
-# consumer can rebind or override one from their `packs:` block. That is the
-# case a name is for — an anchor is resolved at parse time and leaves nothing
-# to rebind.
-
-steps:
-  # The reviewer role. No provider/model is pinned, so it falls through to the
-  # consumer's default runtime — zero-config still runs (§6/§26).
-  reviewer:
-    <<: *house
-    name: reviewer
-    workspace: worktree
-    guidance: "Review only what the diff changes. Be concrete and cite file:line."
-  # The hand-off role posts the review back. It needs the review_token secret,
-  # referenced abstractly here and resolved by the broker at runtime.
-  handoff:
-    <<: *house
-    name: handoff
-    workspace: local
-    skill:
-      verbs: [github.submit_review, github.comment]
-      # secrets_via: broker is REQUIRED for allow_secrets to work — the broker
-      # only issues to a session whose skill.secrets_via is "broker" (the
-      # default is "none", which would silently refuse every issue).
-      secrets_via: broker
-      # The broker issues this secret to the hand-off agent (single-use,
-      # audited, redacted). Write verbs post as the connector's own write
-      # identity (a verb's `as:` option), never as the operator.
-      allow_secrets: [review_token]
 
 workflows:
   review-flow:
@@ -120,8 +93,12 @@ workflows:
       repo: { type: string, required: true }
       pr: { type: integer, required: true }
     steps:
+      # A consumer addresses this step as `review-flow/review` in their
+      # packs: block — by its id:, which is also its identity slot.
       - id: review
-        step: reviewer
+        <<: *house
+        workspace: worktree
+        guidance: "Review only what the diff changes. Be concrete and cite file:line."
         prompt: |
           Review {{.repo}}#{{.pr}} across these lenses: ${settings.lenses}.
           Use the ${settings.heavy_model} model hint. Return concise, actionable
@@ -129,8 +106,22 @@ workflows:
         gate:
           run: [no-todos]
           max_revisions: 1
+      # The hand-off step posts the review back. It needs the review_token
+      # secret, referenced abstractly here and resolved by the broker at
+      # runtime.
       - id: post
-        step: handoff
+        <<: *house
+        workspace: local
+        skill:
+          verbs: [github.submit_review, github.comment]
+          # secrets_via: broker is REQUIRED for allow_secrets to work — the
+          # broker only issues to a session whose skill.secrets_via is
+          # "broker" (the default is "none", which silently refuses).
+          secrets_via: broker
+          # The broker issues this secret to the hand-off agent (single-use,
+          # audited, redacted). Write verbs post as the connector's own write
+          # identity (a verb's `as:` option), never as the operator.
+          allow_secrets: [review_token]
         prompt: "Post this review on {{.repo}}#{{.pr}}:\n\n{{.review.output}}"
 
 checks:

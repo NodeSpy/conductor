@@ -181,11 +181,11 @@ hosts:
 runtimes:
   paseo:     { use: paseo, bin: /usr/local/bin/paseo, default: true }
   gpu-paseo: { use: paseo, bin: /opt/paseo, host: gpu-box }
-steps:
-  fixer: { type: agent, name: fixer, runtime: gpu-paseo }
+x-steps:
+  fixer: &fixer { type: agent, name: fixer, runtime: gpu-paseo }
 triggers:
   - on: timer.tick
-    steps: [{ type: agent, step: fixer, checkout: none, prompt: p }]
+    steps: [{ type: agent, <<: *fixer, checkout: none, prompt: p }]
 `
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {

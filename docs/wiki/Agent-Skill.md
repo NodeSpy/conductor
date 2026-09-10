@@ -44,8 +44,8 @@ in an agent's prompt or env-at-rest.
 ## Enabling it
 
 ```yaml
-steps:
-  deployer:
+x-templates:
+  deployer: &deployer
     type: agent
     model: claude-sonnet-5
     skill:

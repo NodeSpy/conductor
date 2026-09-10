@@ -139,9 +139,9 @@ func cmdPackAdd(args []string) error {
 	m := man.Pack
 	fmt.Printf("%s v%s — %s\n", m.Name, m.Version, m.Description)
 	fmt.Println("\ninstall review:")
-	for _, a := range sortedAgentNames(man.Steps) {
-		if s := man.Steps[a].Skill; s != nil && (len(s.Verbs) > 0 || len(s.AllowSecrets) > 0) {
-			fmt.Printf("  step %s", a)
+	man.WalkPackSteps(func(where string, st *config.Step) {
+		if s := st.Skill; s != nil && (len(s.Verbs) > 0 || len(s.AllowSecrets) > 0) {
+			fmt.Printf("  step %s", where)
 			if len(s.Verbs) > 0 {
 				fmt.Printf("  !! skill: %s", strings.Join(s.Verbs, ", "))
 			}
@@ -150,7 +150,7 @@ func cmdPackAdd(args []string) error {
 			}
 			fmt.Println()
 		}
-	}
+	})
 	for _, tr := range man.Triggers {
 		fmt.Printf("  ships trigger %q on:%s (disarmed — you arm it)\n", tr.Name, tr.On)
 	}
@@ -342,19 +342,29 @@ func printPackPlan(cfg *config.Config) {
 		fmt.Printf("pack %q adds:\n", ns)
 		prefix := ns + "/"
 
+		// A pack's steps live in its workflows now, so its grants are
+		// reported per addressable step rather than per registry entry.
 		var agents, workflows, checks []string
-		for name := range cfg.Steps {
-			if strings.HasPrefix(name, prefix) {
-				grant := ""
-				if p := cfg.Steps[name]; p.Skill != nil {
-					if len(p.Skill.Verbs) > 0 {
-						grant += "  !! grants skill: " + strings.Join(p.Skill.Verbs, ", ")
-					}
-					if len(p.Skill.AllowSecrets) > 0 {
-						grant += "  !! may read secrets: " + strings.Join(p.Skill.AllowSecrets, ", ")
-					}
+		for name := range cfg.Workflows {
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			wf := cfg.Workflows[name]
+			for i := range wf.Steps {
+				p := wf.Steps[i]
+				if p.Skill == nil {
+					continue
 				}
-				agents = append(agents, name+grant)
+				grant := ""
+				if len(p.Skill.Verbs) > 0 {
+					grant += "  !! grants skill: " + strings.Join(p.Skill.Verbs, ", ")
+				}
+				if len(p.Skill.AllowSecrets) > 0 {
+					grant += "  !! may read secrets: " + strings.Join(p.Skill.AllowSecrets, ", ")
+				}
+				if grant != "" {
+					agents = append(agents, name+"/"+config.StepSlot(p, i)+grant)
+				}
 			}
 		}
 		for name := range cfg.Workflows {

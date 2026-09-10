@@ -30,8 +30,8 @@ runtimes:
   local: { use: paseo, default: true }
   modal: { use: modal }                               # a runtime plugin
 
-steps:
-  deployer: { type: agent, runtime: modal }
+x-templates:
+  deployer: &deployer { type: agent, runtime: modal }
 ```
 
 That is the whole surface. There is no `plugins:` block, no `source:`, no

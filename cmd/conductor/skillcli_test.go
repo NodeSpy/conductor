@@ -117,12 +117,15 @@ connectors:
   gh:
     use: github
     identity: { write_token: me-sentinel }
-steps:
-  fixer:
-    type: agent
-    name: fixer
-    model: x
-    skill: { verbs: [gh.submit_review] }
+workflows:
+  w:
+    steps:
+      - id: fixer
+        type: agent
+        name: fixer
+        model: x
+        prompt: p
+        skill: { verbs: [gh.submit_review] }
 `)
 	stack, err := buildFlowStack(cfg, nil, nil, false) // dryRun=false → really invoke
 	if err != nil || stack == nil {

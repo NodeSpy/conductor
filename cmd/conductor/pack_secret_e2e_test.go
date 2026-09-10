@@ -21,7 +21,7 @@ func writeSecKitPack(t *testing.T, dir string, brokerVia bool) {
 	t.Helper()
 	via := ""
 	if brokerVia {
-		via = "      secrets_via: broker\n"
+		via = "          secrets_via: broker\n"
 	}
 	manifest := `
 pack:
@@ -31,13 +31,16 @@ pack:
     conductor: ">=0.1"
     secrets:
       review_token: { desc: token the poster uses }
-steps:
-  handoff:
-    type: agent
-    name: handoff
-    workspace: local
-    skill:
-` + via + `      allow_secrets: [review_token]
+workflows:
+  flow:
+    steps:
+      - id: handoff
+        type: agent
+        name: handoff
+        workspace: local
+        prompt: post it
+        skill:
+` + via + `          allow_secrets: [review_token]
 `
 	pd := filepath.Join(dir, "src")
 	if err := os.MkdirAll(pd, 0o755); err != nil {
@@ -109,14 +112,11 @@ packs:
 
 	// The rebind must have rewritten the pack's abstract name to the
 	// consumer's bound vault ref, under the namespaced agent.
-	prof, ok := cfg.Steps["review/handoff"]
-	if !ok {
-		var have []string
-		for n := range cfg.Steps {
-			have = append(have, n)
-		}
-		t.Fatalf("namespaced agent review/handoff missing; have %v", have)
+	step, err := cfg.FindStepRef("review/flow/handoff")
+	if err != nil {
+		t.Fatalf("namespaced pack step missing: %v", err)
 	}
+	prof := *step
 	if prof.Skill == nil {
 		t.Fatal("review/handoff has no skill block")
 	}

@@ -57,8 +57,8 @@ packs:
     connectors: { github: gh }                 # BIND the pack's required github -> your gh
     secrets:    { review_token: house/review } # BIND a required secret -> your vault ref
     policy:     { budget: { max_cost_usd: 5 } } # deep-merges onto the pack's bundled policy
-    steps:
-      reviewer: my-opus                        # BIND a role to one of your named steps
+    steps:                                     # OVERRIDE a pack step, by reference
+      review-flow/review: { model: my-fleet }
       handoff:  { workspace: local }           # OVERRIDE the bundled step (deep-merge)
     models:
       reviewer: claude-opus-5                  # OVERRIDE a bundled fleet
@@ -78,7 +78,7 @@ arm's own `policy:` (most specific wins).
 
 This single rule decides what a pack may *ship* vs must *bind*:
 
-- **Define-in-pack** (shipped, namespaced, overridable): `steps:`, `models:`
+- **Define-in-pack** (shipped, namespaced, overridable): `workflows:`, `models:`
   (fleets), `workflows:`, `policy:`, `checks:`, and its disarmed `triggers:`.
   Pure behavior.
 - **Bind-only** (declared in `requires:`, wired in the block, **never shipped**):
@@ -98,7 +98,7 @@ Everything a pack defines is auto-scoped under the instance name:
 
 Refs **inside** the pack are written **bare** and resolve pack-local — the author
 writes no prefixes. The loader scopes them. The one boundary that reaches global
-names is `requires:`: a required connector/store/secret/handoff, or a step role
+names is `requires:`: a required connector/store/secret/handoff
 **bound** to a global, resolves in the consumer namespace. You reference a pack's
 entry point qualified: `workflow: review/review-flow`.
 
@@ -110,15 +110,24 @@ shape:
 | shape   | meaning  |
 |---------|----------|
 | absent  | the pack's bundled default |
-| string  | **bind**: swap in one of your existing globals entirely |
 | map      | **override**: keep the bundle, deep-merge changes onto it |
+
+A step is addressed by REFERENCE — `<workflow>/<step-id>`, or
+`<workflow>[<n>]` for a step with no `id:` — in the pack's own
+(un-namespaced) vocabulary:
 
 ```yaml
 steps:
-  reviewer: my-opus            # bind
-  handoff:  { workspace: local } # override
-  # (omit a role entirely to keep the bundled default)
+  review-flow/review: { model: my-fleet }
+  review-flow/post:   { workspace: local }
+  # (omit a step entirely to keep the bundled default)
 ```
+
+> **The scalar bind form is gone.** It named a top-level `steps:` entry to
+> swap in wholesale, and there is no such section any more. Reach your own
+> config with a YAML anchor instead — `review-flow/review: { <<: *my-reviewer }`
+> — which composes with the pack's own fields rather than replacing the
+> whole step.
 
 Override deep-merges with **replace** semantics: nested maps merge recursively,
 but scalars and **list fields are replaced**, not appended. So an override of a
@@ -138,19 +147,22 @@ reached (or clobbered) by the consumer:
 x-templates:
   house: &house { type: agent, archive_when_done: true }
 
-steps:
-  reviewer:
-    <<: *house
-    workspace: worktree
-    guidance: "Review only what the diff changes."
+workflows:
+  review-flow:
+    steps:
+      - <<: *house
+        id: review
+        workspace: worktree
+        guidance: "Review only what the diff changes."
+        prompt: "Review {{.repo}}#{{.pr}}."
 ```
 
-A pack's **roles** are the entries of that `steps:` map, and they are named
-rather than anonymous for a reason: a name is what a consumer binds or
-overrides. A pack's own workflow plays one with `step: <role>`. An anchor
-cannot serve here — it is resolved at parse time and leaves nothing to
-rebind — so use an anchor for shared fields and a role for the pack's
-public surface.
+A pack's overridable surface is its **workflow steps**, addressed by
+reference. Give each an `id:` — that is what a consumer writes, and it is
+also the step's identity slot, so a rename moves both together. A step
+with no `id:` is still addressable by index (`review-flow[1]`), but that
+shifts when you insert a step above it, which is a poor thing to ask of
+your consumers.
 
 ## `requires:` — the interface
 
@@ -180,11 +192,13 @@ required connectors"*:
 
 ```yaml
 requires: { connectors: { github: "*" } }
-steps:
-  reviewer:
-    skill: { verbs: ["*"] }           # => github.* only
-    # skill: { verbs: [github.*] }    # fine — declared
-    # skill: { verbs: [pagerduty.*] } # LINT ERROR — not declared
+workflows:
+  review-flow:
+    steps:
+      - id: review
+        skill: { verbs: ["*"] }           # => github.* only
+        # skill: { verbs: [github.*] }    # fine — declared
+        # skill: { verbs: [pagerduty.*] } # LINT ERROR — not declared
 ```
 
 Enforced twice: `conductor pack lint` errors on a pattern naming an
@@ -260,9 +274,9 @@ packs:
     on:                                        # its triggers, by name
       github.pull_request: { filters: { labels_not: [wip] } }   # ADD a filter
       gitlab.merge_request: { enabled: false }                  # turn one off
-    steps:                                     # its steps, by name
-      security:  { guidance: "focus on authz + SSRF" }          # ADDITIVE
-      summarize: { enabled: false }
+    steps:                                     # its steps, by reference
+      github.pull_request/sec: { guidance: "focus on authz + SSRF" }  # ADDITIVE
+      review-flow/summarize:   { enabled: false }
     models:                                    # its fleets, by name
       reviewer: claude-opus-5
     connectors: { github: work-github }        # instance disambiguation
@@ -387,7 +401,7 @@ The following are **not yet** implemented and are called out honestly:
 - **Ref-rewriting** covers agent/workflow/check refs, connector prefixes in
   `uses`/`on`/hooks (scalar and list-form), the `store:` selector, team roles,
   `skill.verbs`, `skill.allow_secrets`, `session.end_on`, and pack-local
-  `step:` role refs — but **not** the free-form runtime env-access templates
+  team-role step references — but **not** the free-form runtime env-access templates
   `{{ vault … }}`, `{{ secret … }}`, and `{{ kv … }}`. Those are not rebound:
   they resolve the consumer's *global* vault/secret/store by name, so a pack can
   reach undeclared environment through them. The loader **warns** on every such
