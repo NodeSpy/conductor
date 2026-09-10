@@ -1457,6 +1457,16 @@ func (c *Config) validateConnectors() error {
 				return fmt.Errorf("config: %s: `on: %s` must be <connector>.<event> (or the built-in `manual`)", where, t.On)
 			}
 			if _, okc := c.ConnectorsMap[conn]; !okc && conn != "conductor" {
+				// A DISABLED trigger naming a connector this config does not
+				// have is the dormant-source case (a pack bundling a
+				// pagerduty trigger for a consumer who has no pagerduty —
+				// docs/design/runtimes-models-packs.md §5.2). It can never
+				// fire, it was already surfaced as a load notice, and
+				// failing the boot over it would defeat the whole point of
+				// degrading rather than refusing.
+				if !t.IsEnabled() {
+					continue
+				}
 				// "conductor" is the built-in lifecycle source (always
 				// available, like the manual source).
 				return fmt.Errorf("config: %s: unknown connector %q in `on: %s` (defined: %s)", where, conn, t.On, c.connectorNames())

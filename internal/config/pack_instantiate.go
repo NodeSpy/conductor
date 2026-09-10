@@ -197,6 +197,16 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// environment references.
 	rw := newRefRewriter(ns, man, req.inst, env)
 
+	// ---- Mirrored-section overlay (§5.3): the consumer's steps:/models:
+	// blocks deep-merge onto the pack's members BY NAME before anything is
+	// namespaced, so the overrides address the pack's own vocabulary. ----
+	if err := st.applyStepOverlay(ns, req.inst, man.Steps); err != nil {
+		return err
+	}
+	if err := st.applyFleetOverlay(ns, req.inst, man.Models); err != nil {
+		return err
+	}
+
 	// ---- Step templates: default / bind / override, then namespace. ----
 	for _, role := range sortedStepKeys(man.Steps) {
 		bundled := man.Steps[role]
@@ -206,19 +216,13 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		if bundled.Host != "" || bundled.Runtime != "" {
 			return fmt.Errorf("pack %q: step %q pins runtime/host — a pack defines behavior, not environment; leave it to the consumer's default runtime or bind the role to one of their steps:", ns, role)
 		}
+		// An OVERRIDE was already merged by applyStepOverlay above (which is
+		// the single place it happens, so guidance stacks exactly once); a
+		// BIND swaps in one of the consumer's own templates and emits no
+		// namespaced copy.
 		base := bundled
-		b := req.inst.Steps[role]
-		switch {
-		case b.IsBind():
-			// Bound to a consumer global: refs to this role resolve to that
-			// global directly (no namespaced copy is emitted).
+		if req.inst.Steps[role].IsBind() {
 			continue
-		case b.IsOverride():
-			merged, err := applyStepOverride(base, b.Override)
-			if err != nil {
-				return fmt.Errorf("pack %q: step %q override: %w", ns, role, err)
-			}
-			base = merged
 		}
 		// Secret-broker containment: a pack step may only allow_secrets names
 		// it DECLARED in requires.secrets (and the consumer bound). Otherwise
@@ -273,7 +277,25 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// ---- Pack policy (overridden) folds onto the pack's own triggers. ----
 	packPolicyOverride := req.inst.Policy
 
-	// ---- Triggers: ship DISARMED; arm from the instance block. ----
+	// ---- Triggers ----
+	//
+	// Scope lives on the CONNECTOR, not the pack (§5.2): each trigger binds
+	// to the consumer's connector of its own source type, and a source they
+	// have none of goes dormant + surfaced rather than failing the load.
+	if err := st.validateSourceDeclarations(ns, man, req.inst, man.Triggers); err != nil {
+		return err
+	}
+	// The overlay addresses triggers by the name the PACK gave them, so it
+	// runs before source binding rewrites `on:`.
+	if err := st.applyTriggerOverlay(ns, req.inst, man.Triggers,
+		func(i int) string { return triggerOverlayName(man.Triggers[i]) }); err != nil {
+		return err
+	}
+	if err := st.bindPackSources(ns, man, req.inst, man.Triggers); err != nil {
+		return err
+	}
+
+	// Ship DISARMED; arm from the instance block.
 	for i := range man.Triggers {
 		tr := man.Triggers[i]
 		if tr.Name == "" {
@@ -282,7 +304,12 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		armName := tr.Name
 		tr.Name = ns + "/" + tr.Name
 		rw.rewriteTrigger(&tr)
-		// Disarm: pack triggers arrive inert regardless of what the manifest set.
+		// Disarm: pack triggers arrive inert regardless of what the manifest
+		// set. A trigger already parked by source dormancy (§5.2) or by an
+		// `on:` overlay's `enabled: false` stays parked — arming it would
+		// re-enable something the consumer cannot serve or explicitly
+		// switched off.
+		dormant := tr.Enabled != nil && !*tr.Enabled
 		disabled := false
 		tr.Enabled = &disabled
 		clearTriggerRepos(&tr)
@@ -295,7 +322,7 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 			tr.Policy = pol
 		}
 		// Arm from the instance block (consent = enabled + repos).
-		if arm, ok := req.inst.Triggers[armName]; ok {
+		if arm, ok := req.inst.Triggers[armName]; ok && !dormant {
 			if err := applyTriggerArm(&tr, arm); err != nil {
 				return fmt.Errorf("pack %q: trigger %q: %w", ns, armName, err)
 			}
