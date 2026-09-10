@@ -15,8 +15,12 @@ import (
 const histCfg = `
 connectors:
   svc: { use: fake }
-steps:
-  fixer: { type: agent, name: fixer, model: claude-sonnet }
+x-t:
+  fixer: &fixer { type: agent, name: fixer, model: claude-sonnet }
+workflows:
+  roles:
+    steps:
+      - { id: fixer, type: agent, name: fixer, prompt: p, model: claude-sonnet }
 `
 
 var histSpec = `
@@ -27,7 +31,7 @@ steps:
   - { id: skipme, if: "{{.msg}} == never", uses: svc.post, options: { text: x } }
   - id: fix
     type: agent
-    step: fixer
+    <<: *fixer
     prompt: "fix {{.msg}}"
 `
 

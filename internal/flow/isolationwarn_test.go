@@ -13,17 +13,17 @@ import (
 // enforced.
 func TestIsolationWarningsHonestAboutUserMode(t *testing.T) {
 	cfg := &config.Config{
-		Steps: map[string]config.Step{
-			"a": {Isolation: &config.IsolationConfig{Mode: "user", User: "sbx",
+		Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
+			{ID: "a", Isolation: &config.IsolationConfig{Mode: "user", User: "sbx",
 				Network: &config.IsolationNetwork{Egress: []string{"api.example.com:443"}}}},
-			"b": {Isolation: &config.IsolationConfig{Mode: "user", User: "sbx"}},
-		},
+			{ID: "b", Isolation: &config.IsolationConfig{Mode: "user", User: "sbx"}},
+		}}},
 		Hosts: map[string]config.HostConfig{
 			"box": {Host: "h", Isolation: &config.IsolationConfig{Mode: "user", User: "other"}},
 		},
 	}
 	warns := strings.Join(IsolationWarnings(cfg), "\n")
-	if !strings.Contains(warns, "step:a") || !strings.Contains(warns, "ADVISORY-ONLY") {
+	if !strings.Contains(warns, "workflow:w a") || !strings.Contains(warns, "ADVISORY-ONLY") {
 		t.Fatalf("user-mode egress must be flagged advisory: %s", warns)
 	}
 	if !strings.Contains(warns, "not concurrent agents from each other") &&
@@ -38,10 +38,10 @@ func TestIsolationWarningsHonestAboutUserMode(t *testing.T) {
 	}
 
 	// namespace / container scopes produce no user-mode noise.
-	quiet := &config.Config{Steps: map[string]config.Step{
-		"c": {Isolation: &config.IsolationConfig{Mode: "namespace",
+	quiet := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
+		{ID: "c", Isolation: &config.IsolationConfig{Mode: "namespace",
 			Network: &config.IsolationNetwork{Deny: true, Egress: []string{"a:443"}}}},
-	}}
+	}}}}
 	if ws := IsolationWarnings(quiet); len(ws) != 0 {
 		t.Fatalf("enforced posture must not warn: %v", ws)
 	}

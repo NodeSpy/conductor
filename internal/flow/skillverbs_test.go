@@ -158,12 +158,15 @@ func TestSkillVerbsCannotBypassApprove(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc: { use: fake }
-steps:
-  deployer:
-    type: agent
-    name: deployer
-    model: x
-    skill: { verbs: ["svc.*"] }
+workflows:
+  roles:
+    steps:
+      - id: deployer
+        type: agent
+        name: deployer
+        model: x
+        prompt: p
+        skill: { verbs: ["svc.*"] }
 policy:
   agent_authored:
     allow: [ svc.ask ]
@@ -178,12 +181,15 @@ policy:
 	ok := loadConfig(t, `
 connectors:
   svc: { use: fake }
-steps:
-  deployer:
-    type: agent
-    name: deployer
-    model: x
-    skill: { verbs: ["svc.ask"] }
+workflows:
+  roles:
+    steps:
+      - id: deployer
+        type: agent
+        name: deployer
+        model: x
+        prompt: p
+        skill: { verbs: ["svc.ask"] }
 policy:
   agent_authored:
     approve: [ svc.post ]
@@ -209,8 +215,10 @@ policy:
 	full := loadConfig(t, `
 connectors:
   svc: { use: fake }
-steps:
-  deployer: { type: agent, name: deployer, model: x, skill: { verbs: ["svc.*"] } }
+workflows:
+  roles:
+    steps:
+      - { id: deployer, type: agent, name: deployer, prompt: p, model: x, skill: { verbs: ["svc.*"] } }
 policy:
   agent_authored: { trust: full, approve: [ svc.post ] }
 `)
@@ -309,8 +317,10 @@ func TestValidateSkillNoIdentityNeeded(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc: { use: fake }
-steps:
-  deployer: { type: agent, name: deployer, model: x, skill: { verbs: ["svc.*"] } }
+workflows:
+  roles:
+    steps:
+      - { id: deployer, type: agent, name: deployer, prompt: p, model: x, skill: { verbs: ["svc.*"] } }
 `)
 	if err := Validate(cfg, buildRegistry(t, cfg)); err != nil {
 		t.Fatalf("write-capable skill profile without identity must now validate: %v", err)
@@ -332,8 +342,10 @@ func TestValidateSkillVerbPatterns(t *testing.T) {
 		cfg := loadConfig(t, `
 connectors:
   svc: { use: fake }
-steps:
-  a: { type: agent, name: a, model: x, skill: { verbs: `+c.verbs+` } }
+workflows:
+  roles:
+    steps:
+      - { id: a, type: agent, name: a, prompt: p, model: x, skill: { verbs: `+c.verbs+` } }
 `)
 		err := Validate(cfg, buildRegistry(t, cfg))
 		if err == nil || !strings.Contains(err.Error(), c.wantErr) {
@@ -347,8 +359,10 @@ connectors:
   svc: { use: fake }
 runtimes:
   gem: { agent: gemini, default: true }
-steps:
-  a: { type: agent, name: a, model: x, skill: { verbs: ["svc.nosuchverb"] } }
+workflows:
+  roles:
+    steps:
+      - { id: a, type: agent, name: a, prompt: p, model: x, skill: { verbs: ["svc.nosuchverb"] } }
 `)
 	reg := buildRegistry(t, cfg)
 	if err := Validate(cfg, reg); err != nil {
@@ -364,8 +378,10 @@ connectors:
   svc: { use: fake }
 runtimes:
   gem: { agent: gemini, default: true }
-steps:
-  a: { type: agent, name: a, model: x, skill: { verbs: ["svc.*"] } }
+workflows:
+  roles:
+    steps:
+      - { id: a, type: agent, name: a, prompt: p, model: x, skill: { verbs: ["svc.*"] } }
 `)
 	regLive := buildRegistry(t, live)
 	if warns := SkillWarnings(live, regLive); len(warns) != 0 {
@@ -381,8 +397,10 @@ func TestSkillWarningsUnsupportedRuntime(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc: { use: fake }
-steps:
-  a: { type: agent, name: a, model: x, skill: { verbs: ["svc.ask"] } }
+workflows:
+  roles:
+    steps:
+      - { id: a, type: agent, name: a, prompt: p, model: x, skill: { verbs: ["svc.ask"] } }
 `)
 	reg := buildRegistry(t, cfg)
 	for _, w := range SkillWarnings(cfg, reg) {
@@ -406,8 +424,10 @@ connectors:
   svc: { use: fake }
 runtimes:
   `+runtime+`
-steps:
-  a: { type: agent, name: a, model: x, skill: { verbs: ["svc.ask"] } }
+workflows:
+  roles:
+    steps:
+      - { id: a, type: agent, name: a, prompt: p, model: x, skill: { verbs: ["svc.ask"] } }
 `)
 		for _, s := range SkillWarnings(y, buildRegistry(t, y)) {
 			if strings.Contains(s, "cannot reach the conductor skill surface") {

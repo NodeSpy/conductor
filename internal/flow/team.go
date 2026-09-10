@@ -270,21 +270,43 @@ func (r *Runner) teamWorkerGate(spec *config.TeamSpec) (*config.GateSpec, map[st
 	return &config.GateSpec{Run: run, MaxRevisions: maxRev}, extra, nil
 }
 
-// roleStep fills a synthesized role step in from the named step the team
-// addresses. The fields set here win; the rest — model, workspace, skill,
-// memory, guidance — come from that entry, along with its name, so the role
-// keeps one identity across every team that uses it.
+// roleStep fills a synthesized role step in from the workflow step the team
+// references (`<workflow>/<step-id>`, or `<workflow>[<n>]` for a step with
+// no id). The fields set here win; the rest — model, workspace, skill,
+// memory, guidance — come from the referenced step.
 //
-// A missing entry is a load-time error in both validateTeam and guardPlan,
-// so reaching it here means something built a team spec that never went
-// through either. Fail rather than silently dispatch a bare agent.
+// IDENTITY. The role takes the referenced step's identity: its `name:` if
+// it pins one, else the reference itself, which is that step's structural
+// identity written out. Either way every team pointing at the same step
+// shares one memory namespace, session pool, and track record — the point
+// of pointing at a step rather than inlining one.
+//
+// A reference that resolves to nothing is a load-time error in both
+// validateTeam and guardPlan, so reaching that here means something built a
+// team spec that went through neither. Fail rather than silently dispatch a
+// bare agent.
 func (r *Runner) roleStep(role string, s config.Step) (config.Step, error) {
-	if r.Cfg == nil || strings.TrimSpace(role) == "" {
+	role = strings.TrimSpace(role)
+	if r.Cfg == nil || role == "" {
 		return s, nil
 	}
-	if err := r.Cfg.ResolveStepRef(role, &s); err != nil {
+	base, err := r.Cfg.FindStepRef(role)
+	if err != nil {
 		return s, err
 	}
+	pinned := strings.TrimSpace(s.Name)
+	config.MergeStepInto(&s, *base)
+	switch {
+	case pinned != "":
+		s.Name = pinned
+	case strings.TrimSpace(base.Name) != "":
+		s.Name = base.Name
+	default:
+		s.Name = role
+	}
+	// The role runs as the team's planner/worker/critic, not in the
+	// workflow the base step sits in — its own id would be misleading.
+	s.ID = ""
 	return s, nil
 }
 

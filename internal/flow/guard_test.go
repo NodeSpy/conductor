@@ -373,8 +373,10 @@ stores:
   main: { type: boltdb }
 vaults:
   hv: { type: file, dir: ` + vaultDir + ` }
-steps:
-  planner: { type: agent, name: planner, model: x }
+workflows:
+  roles:
+    steps:
+      - { id: planner, type: agent, name: planner, prompt: p, model: x }
 policy:
   agent_authored:
     allow: [ svc.post, kv.*, "*.read" ]
@@ -573,8 +575,10 @@ connectors:
 stores:
   main: { type: boltdb }
   db:   { type: sqlite, path: ":memory:" }
-steps:
-  planner: { type: agent, name: planner, model: x }
+workflows:
+  roles:
+    steps:
+      - { id: planner, type: agent, name: planner, prompt: p, model: x }
 policy:
   agent_authored:
     allow: [ svc.post, kv.*, sql.*, "*.read" ]
@@ -689,9 +693,10 @@ connectors:
   svc: { use: fake }
 stores:
   main: { type: boltdb }
-steps:
-  planner: { type: agent, name: planner, model: x }
 workflows:
+  roles:
+    steps:
+      - { id: planner, type: agent, name: planner, prompt: p, model: x }
   park:
     inputs: { v: { type: string, required: true } }
     steps:

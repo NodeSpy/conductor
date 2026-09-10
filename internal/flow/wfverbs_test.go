@@ -27,8 +27,6 @@ const wfBase = `
 connectors:
   svc: { use: fake }
 memory: { type: memory }
-steps:
-  planner: { type: agent, name: planner, model: x }
 workflows:
   greet:
     description: "post a greeting"
@@ -396,8 +394,6 @@ steps:
 connectors:
   svc: { use: fake }
 memory: { type: memory }
-steps:
-  planner: { type: agent, name: planner, model: x }
 workflows: {}
 policy:
   agent_authored:
@@ -420,8 +416,7 @@ steps: [ { id: go, workflow: laundered } ]
 	nopol := loadConfig(t, `
 connectors:
   svc: { use: fake }
-steps:
-  planner: { type: agent, name: planner, model: x }
+workflows:
 `)
 	regN := buildRegistry(t, nopol)
 	rigN := newTestRunner(t, nopol, regN)
@@ -439,8 +434,6 @@ steps: [ { id: go, workflow: laundered } ]
 connectors:
   svc: { use: fake }
 memory: { type: memory }
-steps:
-  planner: { type: agent, name: planner, model: x }
 policy:
   agent_authored:
     allow: [ svc.post ]
@@ -475,8 +468,6 @@ steps: [ { id: go, workflow: risky } ]
 connectors:
   svc: { use: fake }
 memory: { type: memory }
-steps:
-  planner: { type: agent, name: planner, model: x }
 policy:
   agent_authored:
     allow: [ svc.post ]

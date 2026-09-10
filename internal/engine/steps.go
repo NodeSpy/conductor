@@ -58,10 +58,16 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		}
 
 		s := step
-		// The step IS the profile (design §6). A legacy Action step names a
-		// `steps:` template with `agent:` — the shape the migration emits.
-		profile := e.cfg.Steps[s.Agent]
-		identity := s.Agent
+		// A legacy Action step carries no behavior fields of its own, so
+		// `agent:` is where it points at some: a STEP REFERENCE
+		// (`<workflow>/<step-id>`) naming a step in the operator's own
+		// workflows. Anything else is a plain attribution label, and the
+		// dispatch runs on the policy baseline alone — deny-by-default, so
+		// no Action can inherit memory or a grant nobody wrote down.
+		profile, identity := e.actionProfile(s.Agent)
+		if s.Backend != "" {
+			profile.Runtime = s.Backend
+		}
 		model := ""
 		if s.Type == "agent" {
 			model = e.resolveModel(ctx, profile)
@@ -69,8 +75,9 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				// A background step hands off a live agent for you to drive and
 				// close yourself; it sits idle *because* it's waiting for you, so
 				// the reaper must never archive it. Force this regardless of the
-				// profile — a stale-on-disk or mistaken archive_when_done: true
-				// must not be able to reap an interactive hand-off out from under you.
+				// referenced step — a stale-on-disk or mistaken
+				// archive_when_done: true must not reap an interactive hand-off
+				// out from under you.
 				profile.ArchiveWhenDone = false
 			}
 			if s.Prompt != "" {
@@ -127,7 +134,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		if !s.Background {
 			outputs = extractOutputs(ref)
 			if s.Type == "agent" && err == nil && !shadow {
-				e.harvestMemory(t, s.Agent, run.ID, ref.Output)
+				e.harvestMemory(t, s.Agent, run.ID, ref.Output, profile.Memory)
 			}
 		}
 		stepsOut[id] = map[string]any{"outputs": outputs}

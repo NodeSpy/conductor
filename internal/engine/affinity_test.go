@@ -74,13 +74,13 @@ func affinityEngine(t *testing.T, cfg *config.Config, d *sendingDispatcher) *Eng
 }
 
 func affinityCfg() *config.Config {
-	cfg := &config.Config{Steps: map[string]config.Step{
-		"pr-agent": {Session: &config.SessionSpec{
+	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
+		{ID: "pr-agent", Session: &config.SessionSpec{
 			Key:   "{{.repo}}#{{.number}}",
 			EndOn: []string{"i.pr_closed"},
 		}},
-		"fresh-agent": {},
-	}}
+		{ID: "fresh-agent"},
+	}}}}
 	cfg.Control.Enabled = ptrBool(true)
 	return cfg
 }
@@ -97,12 +97,12 @@ func TestEngineAffinityRoutesFollowups(t *testing.T) {
 	act := func(agent string) config.Action {
 		return config.Action{Type: "agent", Agent: agent, Prompt: "work {{.kind}}"}
 	}
-	e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h1", "s1", act("pr-agent")))
+	e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h1", "s1", act("w/pr-agent")))
 	if len(d.reqs) != 1 {
 		t.Fatalf("first event must spawn: %d dispatches", len(d.reqs))
 	}
-	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 1, "h2", "s2", act("pr-agent")))
-	e.process(context.Background(), agentTrigger("failing_checks", "a/w", 1, "h3", "s3", act("pr-agent")))
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 1, "h2", "s2", act("w/pr-agent")))
+	e.process(context.Background(), agentTrigger("failing_checks", "a/w", 1, "h3", "s3", act("w/pr-agent")))
 	if len(d.reqs) != 1 {
 		t.Fatalf("same-key events must not spawn again: %d dispatches", len(d.reqs))
 	}
@@ -113,14 +113,14 @@ func TestEngineAffinityRoutesFollowups(t *testing.T) {
 	}
 
 	// A different PR spawns its own session.
-	e.process(context.Background(), agentTrigger("new_comment", "a/w", 2, "h4", "s4", act("pr-agent")))
+	e.process(context.Background(), agentTrigger("new_comment", "a/w", 2, "h4", "s4", act("w/pr-agent")))
 	if len(d.reqs) != 2 {
 		t.Fatalf("a new key must spawn: %d dispatches", len(d.reqs))
 	}
 
 	// A profile without session: dispatches fresh every time.
-	e.process(context.Background(), agentTrigger("new_comment", "a/w", 3, "h5", "s5", act("fresh-agent")))
-	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h6", "s6", act("fresh-agent")))
+	e.process(context.Background(), agentTrigger("new_comment", "a/w", 3, "h5", "s5", act("w/fresh-agent")))
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h6", "s6", act("w/fresh-agent")))
 	if len(d.reqs) != 4 {
 		t.Fatalf("non-session profile must stay fresh-per-event: %d dispatches", len(d.reqs))
 	}
@@ -132,7 +132,7 @@ func TestEngineAffinityEndOnEvent(t *testing.T) {
 	cfg := affinityCfg()
 	d := &sendingDispatcher{fakeDispatcher: fakeDispatcher{ref: dispatch.RunRef{AgentID: "agent-1"}}}
 	e := affinityEngine(t, cfg, d)
-	act := config.Action{Type: "agent", Agent: "pr-agent", Prompt: "work"}
+	act := config.Action{Type: "agent", Agent: "w/pr-agent", Prompt: "work"}
 
 	e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h1", "s1", act))
 	if !e.affinityOwns("agent-1") {
@@ -163,7 +163,7 @@ func TestEngineAffinityFollowupDoesNotBlockLoop(t *testing.T) {
 	cfg := affinityCfg()
 	d := &sendingDispatcher{fakeDispatcher: fakeDispatcher{ref: dispatch.RunRef{AgentID: "agent-1"}}}
 	e := affinityEngine(t, cfg, d)
-	act := config.Action{Type: "agent", Agent: "pr-agent", Prompt: "work {{.kind}}"}
+	act := config.Action{Type: "agent", Agent: "w/pr-agent", Prompt: "work {{.kind}}"}
 
 	e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h1", "s1", act)) // bind PR 1
 

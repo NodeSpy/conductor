@@ -15,14 +15,14 @@ secrets:
   tok: env:FLOW_DEP_TEST_TOK
 vaults:
   house: { type: file, dir: /tmp }
-steps:
-  deployer: { type: agent, name: deployer, model: x }
+x-t:
+  deployer: &deployer { type: agent, name: deployer, model: x }
 triggers:
   - on: svc.ping
     steps:
       - id: legacy
         type: agent
-        step: deployer
+        <<: *deployer
         prompt: p
         env:
           TOKEN: "{{.secrets.tok}}"
@@ -36,11 +36,14 @@ triggers:
         env:
           TOKEN: "{{.secrets.tok}}"
 workflows:
+  roles:
+    steps:
+      - { id: deployer, type: agent, name: deployer, prompt: p, model: x }
   deploy:
     steps:
       - id: wfagent
         type: agent
-        step: deployer
+        <<: *deployer
         prompt: p
         env:
           T: "{{.secrets.tok}}"
@@ -91,20 +94,22 @@ connectors:
   svc: { use: fake }
 secrets:
   tok: env:FLOW_DEP_TEST_TOK2
-steps:
-  deployer: { type: agent, name: deployer, model: x }
+workflows:
+  roles:
+    steps:
+      - { id: deployer, type: agent, name: deployer, prompt: p, model: x }
 triggers:
   - on: svc.ping
     steps:
       - id: leaky
         type: agent
-        step: deployer
+        <<: *deployer
         prompt: 'deploy with {{.secrets.tok}} now'
         checkout: 'refs/{{.secrets.tok}}'
         workdir: '/w/{{.secrets.tok}}'
       - id: leakyargs
         type: agent
-        step: deployer
+        <<: *deployer
         prompt: p
         args:
           - "--token={{.secrets.tok}}"

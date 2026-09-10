@@ -467,7 +467,7 @@ func (e *Engine) memoryPrompt(identity string, step config.Step, t core.Trigger,
 
 // harvestMemory applies the memory output contract to a finished agent's
 // output (see memory.HarvestOutput): best-effort, audited, never a failure.
-func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string) {
+func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string, sel *config.MemorySelector) {
 	m := memory.Active()
 	if m == nil || strings.TrimSpace(output) == "" {
 		return
@@ -477,7 +477,7 @@ func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string) {
 	// store. Otherwise any dispatched agent — including one an untrusted
 	// event steered — could poison shared memory through its output contract
 	// without the operator ever granting it memory access (#57 M8).
-	if sel := e.cfg.Steps[agent].Memory; sel == nil || !sel.Enabled {
+	if sel == nil || !sel.Enabled {
 		return
 	}
 	src := memory.Source{Step: agent, Run: runID, Trigger: t.Kind, Repo: t.Target.Repo}
@@ -769,12 +769,17 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 
 	// Resolve the step's behavior, tokens, shadow. A legacy (integrations:)
-	// Action carries no step block of its own, so its `agent:` names a
-	// `steps:` TEMPLATE — which is exactly what the migration emits for each
-	// retired profile, under the same name. That is what keeps a migrated
-	// box's behavior (and its memory/session/outcome keys) intact.
-	profile := e.cfg.Steps[act.Agent]
-	identity := act.Agent
+	// Action carries no behavior fields of its own, so `agent:` is where it
+	// points at some: a STEP REFERENCE (`<workflow>/<step-id>`) naming a
+	// step in the operator's own workflows. Anything else is a plain
+	// attribution label and the dispatch runs on the policy baseline alone
+	// — deny-by-default, so no Action inherits memory access or a skill
+	// grant nobody wrote down. Either way `agent:` supplies the IDENTITY,
+	// so a box's memory/session/outcome keys are unchanged.
+	profile, identity := e.actionProfile(act.Agent)
+	if act.Backend != "" {
+		profile.Runtime = act.Backend
+	}
 	model := e.resolveModel(ctx, profile)
 	if act.Type == "agent" {
 		if act.Prompt != "" {
@@ -979,7 +984,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// Single-action dispatches have no WorkflowRun record; the agent id is the
 	// run identity that provenance (Source.Run) can trace back.
 	if act.Type == "agent" && !shadow && !ref.Queued {
-		e.harvestMemory(t, act.Agent, ref.AgentID, ref.Output)
+		e.harvestMemory(t, act.Agent, ref.AgentID, ref.Output, profile.Memory)
 	}
 
 	if ref.Queued {
@@ -1236,6 +1241,27 @@ func (e *Engine) runnerFor(profile config.Step) (Dispatcher, error) {
 		return nil, err
 	}
 	return run, nil
+}
+
+// actionProfile resolves a legacy Action's `agent:` to the step it points at
+// and that step's identity. Deny-by-default: a reference that names nothing
+// yields an empty step, so an Action can never inherit memory access or a
+// skill grant the operator did not write down somewhere addressable — and
+// the raw string stays the identity, so nothing about its history moves.
+//
+// When the reference DOES resolve, the identity is the referenced step's,
+// which is what the session sweep computes when it walks the config looking
+// for an `end_on:` to honor. Two different answers there would bind a
+// session under one key and try to evict it under another.
+func (e *Engine) actionProfile(ref string) (config.Step, string) {
+	if e.cfg == nil || ref == "" {
+		return config.Step{}, ref
+	}
+	s, identity, err := e.cfg.FindStepIdentity(ref)
+	if err != nil {
+		return config.Step{}, ref
+	}
+	return *s, identity
 }
 
 // controllerFor resolves the controller (not just its runner) that owns an

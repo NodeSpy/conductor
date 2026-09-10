@@ -164,8 +164,12 @@ triggers:
 func TestMemoryOutputContractHarvest(t *testing.T) {
 	mem := tempMemory(t)
 	cfg := loadConfig(t, memBase+`
-steps:
-  fixer: { type: agent, name: fixer, model: x, memory: true }
+x-t:
+  fixer: &fixer { type: agent, name: fixer, model: x, memory: true }
+workflows:
+  roles:
+    steps:
+      - { id: fixer, type: agent, name: fixer, prompt: p, model: x, memory: true }
 `)
 	reg := buildRegistry(t, cfg)
 	spec := mustSpec(t, `
@@ -173,7 +177,7 @@ on: svc.ping
 steps:
   - id: fix
     type: agent
-    step: fixer
+    <<: *fixer
     prompt: "fix it"
 `)
 	rig := newTestRunner(t, cfg, reg)
@@ -228,8 +232,8 @@ steps:
 // Memory keeps prompts unchanged.
 func TestMemoryPromptInjectionSeam(t *testing.T) {
 	cfg := loadConfig(t, memBase+`
-steps:
-  opted: { type: agent, name: opted, model: x }
+x-t:
+  opted: &opted { type: agent, name: opted, model: x }
 `)
 	reg := buildRegistry(t, cfg)
 	spec := mustSpec(t, `
@@ -237,7 +241,7 @@ on: svc.ping
 steps:
   - id: fix
     type: agent
-    step: opted
+    <<: *opted
     prompt: "do it"
 `)
 	rig2 := newTestRunner(t, cfg, reg)

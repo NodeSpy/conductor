@@ -18,16 +18,21 @@ import (
 const gateCfg = `
 connectors:
   svc: { use: fake }
-steps:
-  fixer: { type: agent, name: fixer, model: m }
-  critic: { type: agent, name: critic, model: m }
+x-t:
+  critic: &critic { type: agent, name: critic, model: m }
+  fixer: &fixer { type: agent, name: fixer, model: m }
+workflows:
+  roles:
+    steps:
+      - { id: fixer, type: agent, name: fixer, prompt: p, model: m }
+      - { id: critic, type: agent, name: critic, prompt: p, model: m }
 checks:
   verdict: { uses: svc.post, options: { text: "check {{.gate.attempt}}" } }
   scope:
     run: js
     code: |
       return { pass: ctx.gate.workdir.length > 0, detail: "wd=" + ctx.gate.workdir };
-  critic: { type: agent, step: critic, prompt: "review the change in {{.gate.workdir}}" }
+  critic: { type: agent, <<: *critic, prompt: "review the change in {{.gate.workdir}}" }
 `
 
 var gateSpecYAML = `
@@ -35,7 +40,7 @@ on: svc.ping
 steps:
   - id: fix
     type: agent
-    step: fixer
+    <<: *fixer
     prompt: "fix it"
     gate: { run: [ verdict ], max_revisions: %d }
 `
@@ -244,7 +249,7 @@ on: svc.ping
 steps:
   - id: fix
     type: agent
-    step: fixer
+    <<: *fixer
     prompt: "fix it"
     gate: { run: [ scope ] }
 `)
@@ -268,7 +273,7 @@ func TestGateCriticWithoutVerdictFails(t *testing.T) {
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, step: fixer, prompt: "fix", gate: { run: [ critic ], max_revisions: 0 } }
+  - { id: fix, type: agent, <<: *fixer, prompt: "fix", gate: { run: [ critic ], max_revisions: 0 } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	failed, errStr := rig.workflowFailed()
@@ -290,7 +295,7 @@ func TestGateCriticVerdictPasses(t *testing.T) {
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, step: fixer, prompt: "fix", gate: { run: [ critic ] } }
+  - { id: fix, type: agent, <<: *fixer, prompt: "fix", gate: { run: [ critic ] } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	if failed, errStr := rig.workflowFailed(); failed {
@@ -329,7 +334,7 @@ func TestGateCriticOutputIsRedacted(t *testing.T) {
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, step: fixer, prompt: "fix", gate: { run: [ critic ] } }
+  - { id: fix, type: agent, <<: *fixer, prompt: "fix", gate: { run: [ critic ] } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	if failed, errStr := rig.workflowFailed(); failed {
@@ -347,10 +352,14 @@ steps:
 
 func TestGateNeedsWorkdirForCommandChecks(t *testing.T) {
 	cfg := loadConfig(t, `
+x-t:
+  fixer: &fixer { type: agent, name: fixer, model: m }
 connectors:
   svc: { use: fake }
-steps:
-  fixer: { type: agent, name: fixer, model: m }
+workflows:
+  roles:
+    steps:
+      - { id: fixer, type: agent, name: fixer, prompt: p, model: m }
 checks:
   build: { type: command, command: ["make", "build"] }
 `)
@@ -364,7 +373,7 @@ checks:
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, step: fixer, prompt: "fix", gate: { run: [ build ], max_revisions: 0 } }
+  - { id: fix, type: agent, <<: *fixer, prompt: "fix", gate: { run: [ build ], max_revisions: 0 } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	failed, errStr := rig.workflowFailed()
@@ -380,8 +389,8 @@ func TestTriggerLevelGateAppliesAndStepGateWins(t *testing.T) {
 on: svc.ping
 gate: { run: [ verdict ] }
 steps:
-  - { id: a, type: agent, step: fixer, prompt: "one" }
-  - { id: b, type: agent, step: fixer, prompt: "two", gate: { run: [ scope ] } }
+  - { id: a, type: agent, <<: *fixer, prompt: "one" }
+  - { id: b, type: agent, <<: *fixer, prompt: "two", gate: { run: [ scope ] } }
   - { id: c, uses: svc.post, options: { text: "not gated" } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
@@ -473,12 +482,16 @@ policy:
 // the run fails — the agent could not promote unchecked work.
 func TestInheritedDefaultGateGovernsPlanSubAgents(t *testing.T) {
 	cfg := loadConfig(t, `
+x-t:
+  fixer: &fixer { type: agent, name: fixer, model: m }
 connectors:
   svc: { use: fake }
 memory: { type: memory }
-steps:
-  fixer: { type: agent, name: fixer, model: m }
-  planner: { type: agent, name: planner, model: m }
+workflows:
+  roles:
+    steps:
+      - { id: fixer, type: agent, name: fixer, prompt: p, model: m }
+      - { id: planner, type: agent, name: planner, prompt: p, model: m }
 checks:
   verdict: { uses: svc.post, options: { text: "check" } }
 policy:
@@ -512,7 +525,7 @@ policy:
 on: svc.ping
 gate: { run: [ verdict ], max_revisions: 0 }
 steps:
-  - { id: author, type: agent, step: planner, prompt: "plan it" }
+  - { id: author, type: agent, <<: *planner, prompt: "plan it" }
 `)
 	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "m"}), spec)
 	failed, errStr := rig.workflowFailed()
@@ -544,7 +557,7 @@ func TestGateCriticWithoutWorkdirFailsLoudly(t *testing.T) {
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, step: fixer, prompt: "fix", gate: { run: [ critic ], max_revisions: 0 } }
+  - { id: fix, type: agent, <<: *fixer, prompt: "fix", gate: { run: [ critic ], max_revisions: 0 } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	failed, errStr := rig.workflowFailed()

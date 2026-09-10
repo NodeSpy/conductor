@@ -15,13 +15,7 @@ import (
 // track record — is the step's stable IDENTITY. A templated `agent:` still
 // renders (so an operator's label can vary), but it selects nothing.
 func TestAgentStepIdentityIsDispatched(t *testing.T) {
-	cfg := loadConfig(t, `
-connectors:
-  svc: { use: fake }
-steps:
-  opus: { type: agent, name: opus, model: claude-opus }
-  sonnet: { type: agent, name: sonnet, model: claude-sonnet }
-`)
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	rig := newTestRunner(t, cfg, reg)
 	var got, gotModel string
@@ -29,30 +23,33 @@ steps:
 		got, gotModel = req.Identity, req.Step.Model.Ref
 		return dispatch.RunRef{AgentID: "a1", Output: "done"}, nil
 	}
+	// `name:` is the identity-SHARING override — the continuity a shared
+	// `agent: sonnet` used to give. Everything else on the step is just the
+	// step's own config, whether it was typed here or merged from an anchor.
 	spec := mustSpec(t, `
 on: svc.ping
 name: t
 steps:
   - id: r
     type: agent
-    step: sonnet
+    name: sonnet
+    model: claude-sonnet
+    agent: "{{.who}}"
     prompt: "review"
 `)
 	runTrigger(rig, newTrigger("ping", map[string]any{"who": "sonnet"}), spec)
 	if failed, e := rig.workflowFailed(); failed {
 		t.Fatalf("workflow failed: %s", e)
 	}
-	// extends: pulls in the template's behavior AND its name, so the step
-	// shares that identity — the continuity a shared `agent: sonnet` gave.
 	if got != "sonnet" {
-		t.Fatalf("identity should be the extended template's name, got %q", got)
+		t.Fatalf("identity should be the pinned name, got %q", got)
 	}
 	if gotModel != "claude-sonnet" {
-		t.Fatalf("the template's model should carry through, got %q", gotModel)
+		t.Fatalf("the step's model should carry through, got %q", gotModel)
 	}
 }
 
-// A step that extends nothing takes a STRUCTURAL identity: the enclosing
+// A step that pins no name takes a STRUCTURAL identity: the enclosing
 // trigger plus its slot. Stable across a prompt edit, distinct per trigger.
 func TestAgentStepStructuralIdentity(t *testing.T) {
 	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
@@ -85,8 +82,10 @@ func TestValidateAgentStepShape(t *testing.T) {
 	good := loadConfig(t, `
 connectors:
   svc: { use: fake }
-steps:
-  opus: { type: agent, name: opus, model: claude-opus }
+workflows:
+  roles:
+    steps:
+      - { id: opus, type: agent, name: opus, prompt: p, model: claude-opus }
 triggers:
   - on: svc.ping
     name: t

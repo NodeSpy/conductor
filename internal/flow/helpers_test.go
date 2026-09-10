@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -265,8 +266,35 @@ func (f *fakeImpl) Invoke(ctx context.Context, verb string, opts map[string]any)
 
 // loadConfig parses a YAML document directly into a config.Config (no file
 // I/O, no import/env expansion — just the structural shape flow needs).
+// lastConfigYAML is the document loadConfig most recently parsed. mustSpec
+// prepends it so a trigger spec written in a test can merge an anchor the
+// config document defines — anchors are FILE-local, and a rig that parses
+// the two halves separately would otherwise be unable to express what a
+// real single-file config can. No test here runs in parallel.
+var lastConfigYAML string
+
+// commonAnchors is a fallback anchor preamble for the trigger specs in this
+// package. Anchors are FILE-local, and the rig parses a config document and
+// a trigger spec through separate helpers — so a spec that merges `<<:
+// *fixer` needs the definition in scope. A config document that defines its
+// own overrides these, since it is spliced in after.
+const commonAnchors = `x-rig:
+  critic: &critic { type: agent, name: critic, model: m }
+  deployer: &deployer { type: agent, name: deployer, model: x }
+  fixer: &fixer { type: agent, name: fixer, model: m }
+  opted: &opted { type: agent }
+  planner: &planner { type: agent, name: planner, model: x }
+  reviewer: &reviewer { type: agent, name: reviewer, model: m }
+`
+
 func loadConfig(t *testing.T, y string) *config.Config {
 	t.Helper()
+	lastConfigYAML = y
+	// Resolve anchors the way config.Load does, with the rig preamble in
+	// scope so a config document may merge one it did not define itself.
+	if flat, err := config.ResolveAliasBytes([]byte(commonAnchors + "\n" + y)); err == nil {
+		y = string(flat)
+	}
 	var cfg config.Config
 	if err := yaml.Unmarshal([]byte(y), &cfg); err != nil {
 		t.Fatalf("yaml unmarshal config: %v\n---\n%s", err, y)
@@ -309,11 +337,47 @@ func testSecrets(env map[string]string) *secrets.Resolver {
 // config.TriggerSpec.
 func mustSpec(t *testing.T, y string) config.TriggerSpec {
 	t.Helper()
-	var s config.TriggerSpec
-	if err := yaml.Unmarshal([]byte(y), &s); err != nil {
-		t.Fatalf("yaml unmarshal trigger spec: %v\n---\n%s", err, y)
+	// Parse the spec in the same DOCUMENT as the config that set the scene,
+	// so `<<: *fixer` resolves the way it would in a real config file. The
+	// spec is a one-entry `triggers:` list inside that document.
+	doc := commonAnchors + "\n" + lastConfigYAML + "\ntriggers:\n" + indentYAML("  ", "- "+strings.TrimPrefix(strings.TrimSpace(y), "- "))
+	// …and resolve the anchors first, exactly as config.Load does: a custom
+	// UnmarshalYAML re-encodes the node it is handed, so an alias pointing
+	// outside that node cannot be read directly.
+	flat, rerr := config.ResolveAliasBytes([]byte(doc))
+	if rerr != nil {
+		flat = []byte(doc)
 	}
-	return s
+	var whole struct {
+		Triggers []config.TriggerSpec `yaml:"triggers"`
+	}
+	if err := yaml.Unmarshal(flat, &whole); err != nil || len(whole.Triggers) != 1 {
+		// Fall back to the spec alone — a test that set no config, or one
+		// whose spec is not list-shaped.
+		var s config.TriggerSpec
+		if err2 := yaml.Unmarshal([]byte(y), &s); err2 != nil {
+			t.Fatalf("yaml unmarshal trigger spec: %v\n---\n%s", err2, y)
+		}
+		return s
+	}
+	return whole.Triggers[0]
+}
+
+// indentYAML re-indents a block, leaving the first line's own "- " marker in
+// place so a mapping becomes one sequence entry.
+func indentYAML(pad, y string) string {
+	lines := strings.Split(y, "\n")
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		if i == 0 {
+			lines[i] = pad + l
+			continue
+		}
+		lines[i] = pad + "  " + l
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 // newTrigger builds a minimal core.Trigger for a test: a repo/number target

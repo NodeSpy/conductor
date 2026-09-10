@@ -134,8 +134,10 @@ connectors:
 memory: { type: memory }
 secrets:
   tok: env:FLOW_HANDLE_TEST_TOK
-steps:
-  planner: { type: agent, name: planner, model: x }
+workflows:
+  roles:
+    steps:
+      - { id: planner, type: agent, name: planner, prompt: p, model: x }
 policy:
   agent_authored:
     allow: [ svc.post ]
@@ -328,8 +330,10 @@ func TestSecretInStepOutputDoesNotReachAgentPrompt(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc: { use: fake }
-steps:
-  fixer: { type: agent, name: fixer, model: x }
+workflows:
+  roles:
+    steps:
+      - { id: fixer, type: agent, name: fixer, prompt: p, model: x }
 `)
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
@@ -342,7 +346,7 @@ steps:
     options: { text: seed }
   - id: fix
     type: agent
-    step: fixer
+    <<: *fixer
     prompt: "fix using {{.leaky.echo}}"
 `)
 	rig := newTestRunner(t, cfg, reg)

@@ -145,8 +145,8 @@ func newAffRig(t *testing.T, st *memAffStore, spec *config.SessionSpec) *affRig 
 		st = newMemAffStore()
 	}
 	rig := &affRig{runner: &affRunner{}, sender: &affSender{}, store: st, holds: map[string]bool{}}
-	rig.cfg = &config.Config{Steps: map[string]config.Step{
-		"reviewer": {Session: spec, ArchiveWhenDone: true},
+	rig.cfg = &config.Config{Workflows: map[string]config.WorkflowDef{
+		"w": {Steps: []config.Step{{ID: "reviewer", Name: "reviewer", Session: spec, ArchiveWhenDone: true}}},
 	}}
 	reg := NewRegistry(nil, "", rig.runner, rig.sender)
 	hold := func(id string) { rig.mu.Lock(); rig.holds[id] = true; rig.mu.Unlock() }
@@ -474,7 +474,7 @@ func TestAffinityNotHandled(t *testing.T) {
 	// Non-persistent runtime: built-in paseo with NO follow-up sender.
 	runner := &affRunner{}
 	reg := NewRegistry(nil, "", runner, nil)
-	cfg := &config.Config{Steps: map[string]config.Step{"reviewer": {Session: spec}}}
+	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{{ID: "reviewer", Session: spec}}}}}
 	aff := NewAffinity(reg, newMemAffStore(), cfg, nil, nil, nil)
 	req = affReq("reviewer", "new_comment", "o/r", 7, spec)
 	if _, handled, _ := aff.Dispatch(context.Background(), runner, req); handled {
@@ -519,9 +519,9 @@ func TestAffinityFollowupCapture(t *testing.T) {
 	spec := affSpec()
 	runner := &affRunner{}
 	sender := &captureSender{reply: `{"plan":[]}`}
-	cfg := &config.Config{Steps: map[string]config.Step{
-		"reviewer": {Session: spec},
-	}}
+	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
+		{ID: "reviewer", Session: spec},
+	}}}}
 	reg := NewRegistry(nil, "", runner, sender)
 	aff := NewAffinity(reg, newMemAffStore(), cfg, nil, nil, nil)
 
@@ -529,7 +529,7 @@ func TestAffinityFollowupCapture(t *testing.T) {
 		Target: core.Target{Repo: "o/r", PR: 7, Number: 7}}
 
 	// No binding yet → ok=false (the plan escalates instead of revising).
-	if _, ok, err := aff.Followup(context.Background(), cfg.Steps["reviewer"], "reviewer", "", trig, "revise"); ok || err != nil {
+	if _, ok, err := aff.Followup(context.Background(), cfg.Workflows["w"].Steps[0], "reviewer", "", trig, "revise"); ok || err != nil {
 		t.Fatalf("no binding: ok=%v err=%v", ok, err)
 	}
 
@@ -538,7 +538,7 @@ func TestAffinityFollowupCapture(t *testing.T) {
 	if _, handled, err := aff.Dispatch(context.Background(), runner, req); !handled || err != nil {
 		t.Fatalf("bind: %v %v", handled, err)
 	}
-	out, ok, err := aff.Followup(context.Background(), cfg.Steps["reviewer"], "reviewer", "", trig, "step boom failed; revise")
+	out, ok, err := aff.Followup(context.Background(), cfg.Workflows["w"].Steps[0], "reviewer", "", trig, "step boom failed; revise")
 	if !ok || err != nil || out != `{"plan":[]}` {
 		t.Fatalf("followup capture: ok=%v err=%v out=%q", ok, err, out)
 	}

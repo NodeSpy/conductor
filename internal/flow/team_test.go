@@ -16,11 +16,15 @@ import (
 const teamCfg = `
 connectors:
   svc: { use: fake }
-steps:
-  architect: { type: agent, name: architect, model: m }
-  implementer: { type: agent, name: implementer, model: m }
-  reviewer: { type: agent, name: reviewer, model: m }
-  merger: { type: agent, name: merger, model: m }
+x-t:
+  reviewer: &reviewer { type: agent, name: reviewer, model: m }
+workflows:
+  roles:
+    steps:
+      - { id: architect, type: agent, name: architect, prompt: p, model: m }
+      - { id: implementer, type: agent, name: implementer, prompt: p, model: m }
+      - { id: reviewer, type: agent, name: reviewer, prompt: p, model: m }
+      - { id: merger, type: agent, name: merger, prompt: p, model: m }
 `
 
 var teamSpecYAML = `
@@ -29,9 +33,9 @@ steps:
   - id: feature
     prompt: "Build feature X"
     team:
-      planner: architect
-      worker: implementer
-      reconcile: merger
+      planner: roles/architect
+      worker: roles/implementer
+      reconcile: roles/merger
       max_workers: 3
   - id: tell
     uses: svc.post
@@ -101,13 +105,13 @@ func TestTeamPlanWorkReconcile(t *testing.T) {
 	}
 
 	// The planner got the task + decomposition instructions.
-	plans := td.byAgent("architect")
+	plans := td.byAgent("roles/architect")
 	if len(plans) != 1 || !strings.Contains(plans[0].Action.Prompt, "Build feature X") ||
 		!strings.Contains(plans[0].Action.Prompt, "PLANNER") {
 		t.Fatalf("planner dispatch: %+v", plans)
 	}
 	// Two workers, one per subtask, each with its own prompt and scope.
-	workers := td.byAgent("implementer")
+	workers := td.byAgent("roles/implementer")
 	if len(workers) != 2 {
 		t.Fatalf("workers: %d", len(workers))
 	}
@@ -122,7 +126,7 @@ func TestTeamPlanWorkReconcile(t *testing.T) {
 		}
 	}
 	// The reconciler saw every worker's worktree.
-	merges := td.byAgent("merger")
+	merges := td.byAgent("roles/merger")
 	if len(merges) != 1 || !strings.Contains(merges[0].Action.Prompt, "/wt/feature:api") ||
 		!strings.Contains(merges[0].Action.Prompt, "/wt/feature:ui") {
 		t.Fatalf("reconciler prompt: %s", clipText(merges[0].Action.Prompt, 400))
@@ -170,7 +174,7 @@ func TestTeamReconcileWorkerNotesRedacted(t *testing.T) {
 	if failed, errStr := rig.workflowFailed(); failed {
 		t.Fatalf("workflow failed: %s", errStr)
 	}
-	merges := td.byAgent("merger")
+	merges := td.byAgent("roles/merger")
 	if len(merges) != 1 {
 		t.Fatalf("expected one reconcile dispatch, got %d", len(merges))
 	}
@@ -223,7 +227,7 @@ on: svc.ping
 steps:
   - id: feature
     prompt: "Build it"
-    team: { planner: architect, worker: implementer, critic: reviewer, reconcile: merger }
+    team: { planner: roles/architect, worker: roles/implementer, critic: roles/reviewer, reconcile: roles/merger }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	if failed, errStr := rig.workflowFailed(); failed {
@@ -233,7 +237,7 @@ steps:
 		t.Fatalf("critic loop: critic=%d followups=%d", criticCalls, followUps)
 	}
 	// The critic ran pinned into the worker's worktree.
-	critics := td.byAgent("reviewer")
+	critics := td.byAgent("roles/reviewer")
 	if critics[0].Action.WorkDir != "/wt/one" || critics[0].Action.Checkout != "none" {
 		t.Fatalf("critic placement: %+v", critics[0].Action)
 	}
@@ -260,7 +264,7 @@ func TestTeamWorkerFailureFailsStep(t *testing.T) {
 		t.Fatalf("worker failure: %v %q", failed, errStr)
 	}
 	// The reconciler never ran.
-	if len(td.byAgent("merger")) != 0 {
+	if len(td.byAgent("roles/merger")) != 0 {
 		t.Fatal("reconciler must not run after a worker failure")
 	}
 }
@@ -333,25 +337,25 @@ func TestTeamConfigValidation(t *testing.T) {
 			{ID: "x", Prompt: "p", Team: ts}}}}
 		return cfg
 	}
-	if err := base(&config.TeamSpec{Planner: "architect", Worker: "implementer"}).Validate(); err != nil {
+	if err := base(&config.TeamSpec{Planner: "roles/architect", Worker: "roles/implementer"}).Validate(); err != nil {
 		t.Fatalf("valid team: %v", err)
 	}
-	if err := base(&config.TeamSpec{Worker: "implementer"}).Validate(); err == nil ||
+	if err := base(&config.TeamSpec{Worker: "roles/implementer"}).Validate(); err == nil ||
 		!strings.Contains(err.Error(), "team needs `planner:`") {
 		t.Fatalf("missing planner: %v", err)
 	}
-	if err := base(&config.TeamSpec{Planner: "architect", Worker: "ghost"}).Validate(); err == nil ||
-		!strings.Contains(err.Error(), "names no top-level steps: entry") {
+	if err := base(&config.TeamSpec{Planner: "roles/architect", Worker: "roles/ghost"}).Validate(); err == nil ||
+		!strings.Contains(err.Error(), "no step with id/name") {
 		t.Fatalf("unknown worker: %v", err)
 	}
-	if err := base(&config.TeamSpec{Planner: "architect", Worker: "implementer", MaxWorkers: 99}).Validate(); err == nil ||
+	if err := base(&config.TeamSpec{Planner: "roles/architect", Worker: "roles/implementer", MaxWorkers: 99}).Validate(); err == nil ||
 		!strings.Contains(err.Error(), "max_workers") {
 		t.Fatalf("max_workers bound: %v", err)
 	}
 	// Mutually exclusive with other forms.
 	cfg := loadConfig(t, teamCfg)
 	cfg.Triggers = []config.TriggerSpec{{On: "svc.ping", Steps: []config.Step{
-		{ID: "x", Uses: "svc.post", Team: &config.TeamSpec{Planner: "architect", Worker: "implementer"}}}}}
+		{ID: "x", Uses: "svc.post", Team: &config.TeamSpec{Planner: "roles/architect", Worker: "roles/implementer"}}}}}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("form exclusivity: %v", err)
 	}
@@ -406,7 +410,7 @@ on: svc.ping
 steps:
   - id: feature
     prompt: "Build it"
-    team: { planner: architect, worker: implementer, critic: reviewer, reconcile: merger }
+    team: { planner: roles/architect, worker: roles/implementer, critic: roles/reviewer, reconcile: roles/merger }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	if failed, errStr := rig.workflowFailed(); failed {
@@ -449,9 +453,9 @@ policy:
 		"- id: feature\n" +
 		"  prompt: \"Build it\"\n" +
 		"  team:\n" +
-		"    planner: architect\n" +
-		"    worker: implementer\n" +
-		"    reconcile: merger\n" +
+		"    planner: roles/architect\n" +
+		"    worker: roles/implementer\n" +
+		"    reconcile: roles/merger\n" +
 		"    max_workers: 1\n" +
 		"```"
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
@@ -477,7 +481,7 @@ policy:
 on: svc.ping
 gate: { run: [ verdict ], max_revisions: 0 }
 steps:
-  - { id: author, type: agent, step: reviewer, prompt: "plan the team" }
+  - { id: author, type: agent, <<: *reviewer, prompt: "plan the team" }
 `)
 	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "m"}), spec)
 	failed, errStr := rig.workflowFailed()

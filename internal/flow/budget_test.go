@@ -17,8 +17,12 @@ import (
 const budgetCfg = `
 connectors:
   svc: { use: fake }
-steps:
-  fixer: { type: agent, name: fixer, model: claude-sonnet }
+x-t:
+  fixer: &fixer { type: agent, name: fixer, model: claude-sonnet }
+workflows:
+  roles:
+    steps:
+      - { id: fixer, type: agent, name: fixer, prompt: p, model: claude-sonnet }
 `
 
 var budgetSpecYAML = `
@@ -27,7 +31,7 @@ name: nightly
 steps:
   - id: fix
     type: agent
-    step: fixer
+    <<: *fixer
     prompt: "fix it"
 `
 
@@ -180,7 +184,7 @@ name: nightly
 steps:
   - id: handoff
     type: agent
-    step: fixer
+    <<: *fixer
     prompt: "take it from here"
     background: true
 `)

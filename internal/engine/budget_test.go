@@ -18,14 +18,9 @@ func budgetCfg(global, runtimeBudget *config.BudgetPolicy) *config.Config {
 		c.Runtimes = config.RuntimeSet{}
 	}
 	c.Runtimes["fixer"] = config.RuntimeConfig{Use: "paseo", Budget: runtimeBudget}
-	// The dispatch reaches that runtime through the step template its
-	// legacy `agent: fixer` names.
-	if c.Steps == nil {
-		c.Steps = map[string]config.Step{}
-	}
-	st := c.Steps["fixer"]
-	st.Runtime = "fixer"
-	c.Steps["fixer"] = st
+	// A legacy Action reaches that runtime through the workflow step its
+	// `agent: w/fixer` REFERENCES — there is no step registry any more.
+	c.Workflows["w"] = config.WorkflowDef{Steps: []config.Step{{ID: "fixer", Runtime: "fixer"}}}
 	if global != nil {
 		c.Policy = &config.Policy{Budget: global}
 	}
@@ -100,7 +95,7 @@ func TestLegacyDispatchShedsOnBudget(t *testing.T) {
 	e, st := newEng(t, budgetCfg(nil, profile), d, n, nil)
 	e.meter.Record([]string{"runtime:fixer"}, cost.Usage{CostUSD: 2})
 
-	tr := agentTrigger("merge_conflict", "o/r", 1, "h", "sig", config.Action{Type: "agent", Agent: "fixer"})
+	tr := agentTrigger("merge_conflict", "o/r", 1, "h", "sig", config.Action{Type: "agent", Agent: "w/fixer"})
 	e.process(context.Background(), tr)
 
 	if len(d.reqs) != 0 {
@@ -121,7 +116,7 @@ func TestLegacyDispatchRecordsUsage(t *testing.T) {
 	n := &fakeNotifier{}
 	e, _ := newEng(t, budgetCfg(nil, nil), d, n, nil)
 
-	tr := agentTrigger("merge_conflict", "o/r", 1, "h", "sig", config.Action{Type: "agent", Agent: "fixer"})
+	tr := agentTrigger("merge_conflict", "o/r", 1, "h", "sig", config.Action{Type: "agent", Agent: "w/fixer"})
 	e.process(context.Background(), tr)
 	if len(d.reqs) != 1 {
 		t.Fatalf("dispatched: %d", len(d.reqs))

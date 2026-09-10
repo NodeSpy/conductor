@@ -188,8 +188,10 @@ func TestPlanBarrierGatesBlobPut(t *testing.T) {
 connectors:
   svc: { use: fake }
 memory: { type: memory }
-steps:
-  planner: { type: agent, name: planner, model: x }
+workflows:
+  roles:
+    steps:
+      - { id: planner, type: agent, name: planner, prompt: p, model: x }
 policy:
   agent_authored:
     allow: [ blob.put, agent ]
