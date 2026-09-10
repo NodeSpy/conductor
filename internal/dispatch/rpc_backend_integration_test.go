@@ -139,7 +139,7 @@ func TestRPCBackendVerbAndOptionMapping(t *testing.T) {
 	fi := &fakeInvoker{outputs: map[string]map[string]any{
 		"run":               {"output": "ran", "agentId": "a-new"},
 		"list_agents":       {"agents": []any{map[string]any{"id": "a-1", "cwd": "/c", "status": "idle"}}},
-		"inspect":           {"cwd": "/c", "lastUsage": "L", "updatedAt": "U", "createdAt": "C"},
+		"inspect":           {"cwd": "/c", "lastUsage": "L", "updatedAt": "U", "createdAt": "C", "pendingPermissions": []any{map[string]any{"q": 1}}},
 		"create_worktree":   {"workspaceId": "wks_1", "cwd": "/wt"},
 		"create_workspace":  {"workspaceId": "wks_2"},
 		"list_workspaces":   {"workspaces": []any{map[string]any{"workspaceId": "wks_1", "project": "a/w", "cwd": "/wt", "isolation": "worktree", "name": ""}}},
@@ -174,6 +174,11 @@ func TestRPCBackendVerbAndOptionMapping(t *testing.T) {
 	det, err := b.Inspect(ctx, "a-1")
 	if err != nil || det.Cwd != "/c" || det.LastUsage != "L" || det.UpdatedAt != "U" || det.CreatedAt != "C" {
 		t.Fatalf("Inspect: %v %+v", err, det)
+	}
+	// The reaper spares an agent with a pending prompt, so this must survive
+	// the RPC hop rather than arriving empty (which would reap a live agent).
+	if len(det.PendingPermissions) != 1 {
+		t.Fatalf("Inspect pendingPermissions = %#v, want 1 entry", det.PendingPermissions)
 	}
 	if fi.last().Options["id"] != "a-1" {
 		t.Fatalf("Inspect options = %#v", fi.last().Options)

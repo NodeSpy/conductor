@@ -906,10 +906,9 @@ func (d *Dispatcher) agentWorktreeWorkspace(ctx context.Context, agentID string)
 	return worktreeWorkspaceMap(wl)[normCwd(cwd)]
 }
 
-// worktreeWorkspaceMap builds the cwd->id map from a workspace list, keeping
-// only worktree-isolation entries — mirrors parseWorktreeWorkspaces (which the
-// reaper still uses directly against raw `paseo workspace ls` output), just
-// operating on the Backend's already-parsed []WorkspaceInfo.
+// worktreeWorkspaceMap builds the cwd->id map from a Backend workspace list,
+// keeping only worktree-isolation entries so neither the dispatcher nor the
+// reaper can archive a shared or base checkout.
 func worktreeWorkspaceMap(list []WorkspaceInfo) map[string]string {
 	m := map[string]string{}
 	for _, w := range list {
