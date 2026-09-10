@@ -200,10 +200,12 @@ var kvDecl = &TypeDecl{
 				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
 				"namespace": {Type: TString},
 				"prefix":    {Type: TString, Desc: "key prefix filter"},
+				"limit":     {Type: TInt, Desc: "max keys to return (default 1000, the cap that keeps an unbounded namespace out of an agent's context)"},
 			},
 			Outputs: Schema{
-				"keys":    {Type: TList},
-				"entries": {Type: TMap},
+				"keys":      {Type: TList},
+				"entries":   {Type: TMap},
+				"truncated": {Type: TBool, Desc: "more keys existed than the limit returned"},
 			},
 		},
 	},
@@ -542,17 +544,39 @@ func (k kvImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (m
 		if err != nil {
 			return nil, err
 		}
+		// A namespace has no inherent bound, and the result crosses into an
+		// agent's context. Cap it by default rather than let one call return
+		// a million keys; the caller can ask for fewer, and `truncated` says
+		// when it got a partial answer instead of quietly implying it's all.
+		limit := kvListDefaultLimit
+		if n, ok := kvInt(opts["limit"]); ok && n > 0 {
+			limit = n
+		}
+		truncated := false
+		if len(keys) > limit {
+			keys, truncated = keys[:limit], true
+			kept := make(map[string]any, limit)
+			for _, k := range keys {
+				if v, ok := entries[k]; ok {
+					kept[k] = v
+				}
+			}
+			entries = kept
+		}
 		ks := make([]any, len(keys))
 		for i, k := range keys {
 			ks[i] = k
 		}
-		return map[string]any{"keys": ks, "entries": entries}, nil
+		return map[string]any{"keys": ks, "entries": entries, "truncated": truncated}, nil
 	}
 	return nil, fmt.Errorf("kv: no verb %q", verb)
 }
 
 // kvInt coerces a rendered option (int from a type-preserving template,
 // float64 from JSON) into an int.
+// kvListDefaultLimit bounds kv.list when the caller names no limit.
+const kvListDefaultLimit = 1000
+
 func kvInt(v any) (int, bool) {
 	switch n := v.(type) {
 	case int:

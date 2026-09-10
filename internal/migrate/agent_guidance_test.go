@@ -1,6 +1,8 @@
 package migrate
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -83,5 +85,40 @@ func TestAgentGuidancePass_NoopAndIdempotent(t *testing.T) {
 	first, _, _ := applyAgentGuidancePass([]byte("agent_guidance: x\n"), new([]string))
 	if _, changed, _ := applyAgentGuidancePass(first, new([]string)); changed {
 		t.Fatalf("second pass over migrated output should not change it:\n%s", first)
+	}
+}
+
+// The identity-scope change re-keys sessions/outcomes for two constructs. It
+// is announced to the configs that contain them, and stays quiet for those
+// that don't — a notice everyone sees is a notice nobody reads.
+func TestIdentityScopeNoticeOnlyFiresForAffectedConfigs(t *testing.T) {
+	write := func(t *testing.T, body string) []string {
+		t.Helper()
+		p := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return []string{p}
+	}
+
+	if n := identityScopeNotices(write(t, "triggers:\n  - on: manual.go\n    steps: [{id: a, uses: x.y}]\n")); n != nil {
+		t.Errorf("an unaffected config got an upgrade notice: %v", n)
+	}
+	// A comment mentioning the key is not a use of it.
+	if n := identityScopeNotices(write(t, "# compensate: not really\nsteps: []\n")); n != nil {
+		t.Errorf("a commented-out key triggered the notice: %v", n)
+	}
+
+	for _, body := range []string{
+		"steps:\n  - workflow: helper\n",
+		"steps:\n  - id: a\n    compensate:\n      run: js\n",
+	} {
+		n := identityScopeNotices(write(t, body))
+		if len(n) != 1 {
+			t.Fatalf("affected config got %d notices: %v", len(n), n)
+		}
+		if !strings.Contains(n[0], "identity") || !strings.Contains(n[0], "no action is required") {
+			t.Errorf("notice does not explain the change or its impact: %q", n[0])
+		}
 	}
 }

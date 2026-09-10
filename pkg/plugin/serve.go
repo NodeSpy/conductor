@@ -93,13 +93,19 @@ func serve(in io.Reader, out io.Writer, h Handler) error {
 	// ctx bounds any background source stream: cancelled when the loop exits (the
 	// daemon closed stdin), so a StartSource goroutine unwinds.
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	// In-flight request handlers. Serve must not return while one is still
 	// writing: its response would be lost and the caller would see a dead
 	// transport instead of an answer. Long-lived StartSource streams are
 	// NOT tracked here — they unwind on ctx.
 	var inflight sync.WaitGroup
+	// ORDER MATTERS. Defers run LIFO, so registering Wait first and cancel
+	// second makes cancel fire FIRST on the way out: handlers are told to
+	// unwind, and only then do we wait for them. The other order waits on
+	// handlers that were never told to stop — a handler blocked on this ctx
+	// would hang shutdown forever. Nothing blocks on it today; this keeps
+	// that from becoming a deadlock the first time one does.
 	defer inflight.Wait()
+	defer cancel()
 	// emit writes a plugin.event notification (no id) — the source stream path.
 	emit := func(payload any) error {
 		raw, err := json.Marshal(payload)

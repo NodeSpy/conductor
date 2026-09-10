@@ -284,3 +284,38 @@ func TestStoresBuildValidation(t *testing.T) {
 		t.Fatalf("bad bolt path: %v", err)
 	}
 }
+
+// kv.list and sql.query used to return an entire namespace / result set. Both
+// cross into an agent's context, and neither has an inherent bound — one call
+// against a large store could return everything. They are capped by default,
+// and say so when they truncate rather than implying a partial answer is
+// complete.
+func TestListAndQueryAreBoundedByDefault(t *testing.T) {
+	if kvListDefaultLimit <= 0 {
+		t.Fatal("kv.list has no default cap")
+	}
+	if sqlQueryDefaultLimit <= 0 {
+		t.Fatal("sql.query has no default cap")
+	}
+	// Both verbs must ADVERTISE the limit option, or a caller has no way to
+	// ask for a different bound and no way to know one exists.
+	for _, tc := range []struct {
+		decl *TypeDecl
+		verb string
+	}{
+		{kvDecl, "list"},
+		{sqlDecl, "query"},
+	} {
+		vd, ok := tc.decl.Verb(tc.verb)
+		if !ok {
+			t.Fatalf("no %s verb", tc.verb)
+		}
+		if _, ok := vd.Options["limit"]; !ok {
+			t.Errorf("%s does not declare a limit option", tc.verb)
+		}
+		if _, ok := vd.Outputs["truncated"]; !ok {
+			t.Errorf("%s does not report truncation — a capped answer that looks complete "+
+				"is worse than an uncapped one", tc.verb)
+		}
+	}
+}

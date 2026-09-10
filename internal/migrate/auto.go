@@ -161,6 +161,14 @@ func AutoMigrate(mainPath string, validate func() error, logf func(string, ...an
 
 	migrated := len(todo)
 	var all []string
+	// Announced whether or not anything was migrated: the identity change
+	// ships with the binary, not with a config rewrite.
+	for _, n := range identityScopeNotices(files) {
+		all = append(all, n)
+		if logf != nil {
+			logf("config migrate: %s", n)
+		}
+	}
 	for _, name := range orphans {
 		all = append(all, fmt.Sprintf(
 			"agents.%s dropped — no step in this config referenced it, and there is no top-level steps: section left to park it in. Its behavior is in the %s backup if you still want it", name, BackupSuffix))

@@ -37,6 +37,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	plugin "github.com/NodeSpy/conductor/pkg/plugin"
 )
@@ -66,6 +67,11 @@ func describe() plugin.Decl {
 	return d
 }
 
+// callsLogMu serialises the calls_log read-modify-write below. It must be
+// PACKAGE level: the SDK dispatches Invoke concurrently, and a mutex declared
+// inside the handler would be a fresh one per call, serialising nothing.
+var callsLogMu sync.Mutex
+
 func invoke(req plugin.InvokeRequest) (plugin.InvokeResult, error) {
 	known := false
 	for _, v := range verbs {
@@ -82,6 +88,16 @@ func invoke(req plugin.InvokeRequest) (plugin.InvokeResult, error) {
 	// subprocess restart the daemon performs after an error response.
 	n := 1
 	if path, _ := req.Connection["calls_log"].(string); path != "" {
+		// Invoke is dispatched CONCURRENTLY by the SDK, so the
+		// append-then-count-back below is a read-modify-write over shared
+		// state: two calls landing together would both append and then both
+		// read the same total, handing out a duplicate call number. Held
+		// across the whole append+read so the count a call sees includes its
+		// own line and no other call's partial write. Reference plugins are
+		// read as examples, so this one shows the locking a plugin author
+		// now needs.
+		callsLogMu.Lock()
+		defer callsLogMu.Unlock()
 		opts, _ := json.Marshal(req.Options)
 		if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
 			fmt.Fprintf(f, "%s %s\n", req.Verb, opts)

@@ -145,6 +145,20 @@ func namesConnectorExplicitly(patterns []string, connName string) bool {
 	return false
 }
 
+// unattributedAgent builds a stable stand-in for an audit record whose caller
+// had no name, so the entry still identifies WHICH dispatch made the call
+// rather than reading as though nobody did.
+func unattributedAgent(t core.Trigger) string {
+	switch {
+	case t.Kind != "" && t.Target.Repo != "":
+		return fmt.Sprintf("(unnamed step: %s on %s)", t.Kind, t.Target.Repo)
+	case t.Kind != "":
+		return fmt.Sprintf("(unnamed step: %s)", t.Kind)
+	default:
+		return "(unnamed step)"
+	}
+}
+
 // optionsJSONSchema shapes a verb's option schema as MCP tool input schema.
 func optionsJSONSchema(vd connector.VerbDecl) map[string]any {
 	props := map[string]any{}
@@ -403,6 +417,13 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 
 // auditSkillVerb records one skill tool call, options redacted.
 func (r *Runner) auditSkillVerb(t core.Trigger, agent, uses string, opts map[string]any, outcome string, err error) {
+	// A step with no `name:` has an empty Agent, which left the audit record
+	// with no attribution at all — the one field a forensic reader needs to
+	// answer "who called this". Fall back to what the record still knows: the
+	// trigger and target the grant was minted for.
+	if strings.TrimSpace(agent) == "" {
+		agent = unattributedAgent(t)
+	}
 	entry := map[string]any{
 		"event": "verb", "via": "skill", "uses": uses, "outcome": outcome,
 		"agent": agent, "repo": t.Target.Repo, "number": t.Target.Number,
