@@ -365,21 +365,32 @@ type unknownField struct {
 
 // unknownFields extracts the unknown-key entries from a strict decode error.
 // ok is true only when EVERY entry is a plain unknown-key entry — a mixed or
-// genuine parse error is not safely scrubbable.
+// genuine parse error is not safely scrubbable. An `ok` with no entries means
+// the whole error was top-level `x-` holders, which are not unknown keys at
+// all: the caller should treat the document as clean.
 func unknownFields(err error) (fes []unknownField, ok bool) {
 	var te *yaml.TypeError
 	if !errors.As(err, &te) {
 		return nil, false
 	}
+	parsed := 0
 	for _, e := range te.Errors {
 		m := fieldNotFoundRe.FindStringSubmatch(e)
 		if m == nil {
 			return nil, false
 		}
-		n, _ := strconv.Atoi(m[1])
-		fes = append(fes, unknownField{line: n, field: m[2], typ: m[3]})
+		parsed++
+		line, _ := strconv.Atoi(m[1])
+		fe := unknownField{line: line, field: m[2], typ: m[3]}
+		// A top-level `x-` holder is an anchor park, not an unknown key —
+		// the loader ignores it, so the migration must leave it in place
+		// rather than scrub the anchors a user's config depends on.
+		if fe.typ == "config.Config" && config.IsExtensionKey(fe.field) {
+			continue
+		}
+		fes = append(fes, fe)
 	}
-	return fes, len(fes) > 0
+	return fes, parsed > 0
 }
 
 // noteUnknown records one dropped key, once per (type, field).
@@ -416,6 +427,9 @@ func scrubUnknownKeys(b []byte, notes *[]string, seen map[string]bool) ([]byte, 
 		fes, ok := unknownFields(err)
 		if !ok {
 			return nil, fmt.Errorf("transformed config does not re-parse: %w", err)
+		}
+		if len(fes) == 0 {
+			return b, nil // the only "unknowns" were x- holders
 		}
 		var doc yaml.Node
 		if err := yaml.Unmarshal(b, &doc); err != nil {

@@ -95,11 +95,12 @@ triggers:
 		t.Fatal("the migration must not invent a fleet")
 	}
 
-	// The referencing step now extends the template, and therefore INHERITS
-	// its name — so the dispatch keys off "fixer" exactly as before.
+	// The referencing step now plays the named step, and therefore INHERITS
+	// its name — so the dispatch keys off "fixer" exactly as before. Load
+	// resolves the reference and drops it, so the name is what to look at.
 	step := out.Triggers[0].Steps[0]
-	if step.Extends != "fixer" {
-		t.Fatalf("agent: fixer should become extends: fixer, got %+v", step)
+	if step.Name != "fixer" {
+		t.Fatalf("agent: fixer should become step: fixer, got %+v", step)
 	}
 	if got := step.Identity(config.ScopeForTrigger(out.Triggers[0], 0), 0); got != "fixer" {
 		t.Fatalf("the referencing step's identity = %q, want fixer", got)
@@ -124,8 +125,8 @@ triggers:
 	}
 	for i, tr := range out.Triggers {
 		s := tr.Steps[0]
-		if s.Extends != "fixer" || s.Workspace != "worktree" {
-			t.Fatalf("trigger %d did not inherit the shared template: %+v", i, s)
+		if s.Name != "fixer" || s.Workspace != "worktree" {
+			t.Fatalf("trigger %d did not inherit the shared named step: %+v", i, s)
 		}
 		if got := s.Identity(config.ScopeForTrigger(tr, i), 0); got != "fixer" {
 			t.Fatalf("trigger %d identity = %q — both must share one record", i, got)

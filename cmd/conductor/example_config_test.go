@@ -185,7 +185,7 @@ steps:
   fixer: { type: agent, name: fixer, runtime: gpu-paseo }
 triggers:
   - on: timer.tick
-    steps: [{ type: agent, extends: fixer, checkout: none, prompt: p }]
+    steps: [{ type: agent, step: fixer, checkout: none, prompt: p }]
 `
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {

@@ -16,9 +16,20 @@ import (
 //	provider+model   -> model: on the step (an exact pin; a migration must
 //	                    never invent a fleet)
 //	budget           -> the runtime the agent ran on
-//	behavior fields  -> a `steps:` TEMPLATE, reached from each referencing
-//	                    step by `extends:`
-//	memory / session / outcome opt-ins -> the step (they ride the template)
+//	behavior fields  -> a NAMED STEP in the top-level `steps:` registry,
+//	                    played from each referencing step by `step: <name>`
+//	memory / session / outcome opt-ins -> the named step (they ride with it)
+//
+// A named step rather than a YAML anchor, deliberately. Anchors are the
+// reuse mechanism now (anchors.go) and this pass does emit one — for a
+// profile that `extends:` another, where both sides land in the same
+// section of the same file. But a REFERENCE cannot be an anchor: `agents:`
+// commonly sits in the main config while the triggers that named it sit in
+// `conf.d/*.yaml`, and a YAML anchor does not cross `imports:`. Emitting
+// `<<: *fixer` there would produce a config that no longer parses, the
+// re-validate would refuse, and a box that has already auto-updated past
+// `agents:` would be stuck. A name resolves after imports merge, so it
+// works wherever the profile was written.
 //
 // TRACK-RECORD CONTINUITY is the delicate part and the reason this is one
 // pass rather than a mechanical field move. Memory scoping, session
@@ -50,9 +61,9 @@ var behaviorKeys = []string{
 	"outcome_feedback", "host", "runtime",
 }
 
-// applyAgentsPass rewrites `agents:` into `steps:` templates, moves each
+// applyAgentsPass rewrites `agents:` into named `steps:` entries, moves each
 // profile's budget onto its runtime, and repoints every `agent: <name>`
-// reference at `extends: <name>`.
+// reference at `step: <name>`.
 func applyAgentsPass(masked []byte, notes *[]string) (out []byte, changed bool, err error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(masked, &doc); err != nil {
@@ -83,6 +94,10 @@ func applyAgentsPass(masked []byte, notes *[]string) (out []byte, changed bool, 
 	templates := &yaml.Node{Kind: yaml.MappingNode}
 	names := make([]string, 0, len(agents.Content)/2)
 	profileRuntime := map[string]string{}
+	// parent[child] = the profile it extended. A named step cannot play
+	// another named step, so these become a YAML anchor + merge key within
+	// the emitted section — same file, same map, so the anchor resolves.
+	parent := map[string]string{}
 
 	for i := 0; i+1 < len(agents.Content); i += 2 {
 		name, body := agents.Content[i].Value, agents.Content[i+1]
@@ -115,10 +130,10 @@ func applyAgentsPass(masked []byte, notes *[]string) (out []byte, changed bool, 
 				"agents.%s: provider: %s named a backend, not a model — steps.%s now BARE LAUNCHES (no --model, the runtime's own default). Pin one with model:, or declare a fleet under models:", name, provider, name))
 		}
 
-		// extends: between profiles becomes extends: between templates —
-		// the same word, the same meaning, one section over.
+		// extends: between profiles becomes a YAML anchor merge between the
+		// emitted entries (wired up after every entry exists, below).
 		if ext := scalarAt(body, "extends"); ext != "" {
-			setMapKey(tmpl, "extends", scalar(ext))
+			parent[name] = ext
 		}
 
 		// Behavior fields move verbatim.
@@ -156,28 +171,31 @@ func applyAgentsPass(masked []byte, notes *[]string) (out []byte, changed bool, 
 				"agents.%s.%s dropped — no equivalent on a step (the profile's five jobs moved to fleets, the runtime, and the step itself)", name, k))
 		}
 		setMapKey(templates, name, tmpl)
-		*notes = append(*notes, fmt.Sprintf("agents.%s -> steps.%s (name: %s pins the identity, so its memory/session/outcome history carries over)", name, name, name))
+		*notes = append(*notes, fmt.Sprintf("agents.%s -> steps.%s, played by `step: %s` (name: pins the identity, so its memory/session/outcome history carries over)", name, name, name))
 	}
 	sort.Strings(names)
 
 	// Merge into any existing `steps:` block rather than replacing it.
-	existing := mapValue(root, "steps")
-	if existing != nil && existing.Kind == yaml.MappingNode {
+	target := mapValue(root, "steps")
+	if target != nil && target.Kind == yaml.MappingNode {
 		for i := 0; i+1 < len(templates.Content); i += 2 {
 			key := templates.Content[i].Value
-			if nodeAt(existing, key) != nil {
+			if nodeAt(target, key) != nil {
 				*notes = append(*notes, fmt.Sprintf(
 					"steps.%s already exists — kept it and DROPPED the agents.%s profile of the same name (rename one if they were meant to differ)", key, key))
 				continue
 			}
-			setMapKey(existing, key, templates.Content[i+1])
+			setMapKey(target, key, templates.Content[i+1])
 		}
 	} else if len(templates.Content) > 0 {
+		target = templates
 		setMapKey(root, "steps", templates)
 	}
 	removeMapKey(root, "agents")
 
-	// Repoint every `agent: <name>` reference at `extends: <name>`.
+	linkProfileAnchors(target, parent, notes)
+
+	// Repoint every `agent: <name>` reference at `step: <name>`.
 	defined := map[string]bool{}
 	for _, n := range names {
 		defined[n] = true
@@ -189,6 +207,93 @@ func applyAgentsPass(masked []byte, notes *[]string) (out []byte, changed bool, 
 		return nil, false, err
 	}
 	return b, true, nil
+}
+
+// linkProfileAnchors turns each `agents.<child>.extends: <parent>` into a
+// YAML anchor on the parent entry and a `<<: *parent` merge key on the
+// child. Both live in the emitted `steps:` map, so the anchor is in scope.
+//
+// YAML requires the anchor to appear before the alias, so entries are
+// reordered parents-first. A parent nothing defines, or a cycle, drops the
+// link with a note — the lenient posture: a broken alias would make the
+// whole file unparseable, which is far worse than a lost inheritance.
+func linkProfileAnchors(steps *yaml.Node, parent map[string]string, notes *[]string) {
+	if steps == nil || steps.Kind != yaml.MappingNode || len(parent) == 0 {
+		return
+	}
+	index := map[string]int{}
+	present := map[string]bool{}
+	for i := 0; i+1 < len(steps.Content); i += 2 {
+		index[steps.Content[i].Value] = i
+		present[steps.Content[i].Value] = true
+	}
+	// Keep only links whose parent exists and whose chain terminates.
+	linked := map[string]string{}
+	for child, p := range parent {
+		switch {
+		case !present[p] || !present[child]:
+			*notes = append(*notes, fmt.Sprintf(
+				"agents.%s.extends: %s dropped — no profile or steps: entry named %q to inherit from", child, p, p))
+		case cyclic(child, parent):
+			*notes = append(*notes, fmt.Sprintf(
+				"agents.%s.extends: %s dropped — the inheritance chain loops back on itself", child, p))
+		default:
+			linked[child] = p
+		}
+	}
+	if len(linked) == 0 {
+		return
+	}
+	// Parents first, so every `<<: *name` follows its `&name`.
+	order := make([]string, 0, len(steps.Content)/2)
+	placed := map[string]bool{}
+	var emit func(string)
+	emit = func(name string) {
+		if placed[name] {
+			return
+		}
+		placed[name] = true
+		if p, ok := linked[name]; ok {
+			emit(p)
+		}
+		order = append(order, name)
+	}
+	for i := 0; i+1 < len(steps.Content); i += 2 {
+		emit(steps.Content[i].Value)
+	}
+	reordered := make([]*yaml.Node, 0, len(steps.Content))
+	for _, name := range order {
+		i := index[name]
+		reordered = append(reordered, steps.Content[i], steps.Content[i+1])
+	}
+	steps.Content = reordered
+
+	for child, p := range linked {
+		base := nodeAt(steps, p)
+		body := nodeAt(steps, child)
+		if base == nil || body == nil || body.Kind != yaml.MappingNode {
+			continue
+		}
+		base.Anchor = p
+		body.Content = append([]*yaml.Node{
+			{Kind: yaml.ScalarNode, Tag: "!!merge", Value: "<<"},
+			{Kind: yaml.AliasNode, Value: p, Alias: base},
+		}, body.Content...)
+		*notes = append(*notes, fmt.Sprintf(
+			"agents.%s.extends: %s -> steps.%s merges the anchor &%s (YAML anchors are the reuse mechanism now; they are file-local, so this works because both entries land in this file)", child, p, child, p))
+	}
+}
+
+// cyclic reports whether following parent links from name loops.
+func cyclic(name string, parent map[string]string) bool {
+	seen := map[string]bool{name: true}
+	for cur, ok := parent[name]; ok; cur, ok = parent[cur] {
+		if seen[cur] {
+			return true
+		}
+		seen[cur] = true
+	}
+	return false
 }
 
 // handledAgentKeys are the profile keys the decomposition has a home for.
@@ -269,7 +374,7 @@ func defaultRuntimeKey(rts *yaml.Node) string {
 }
 
 // rewriteAgentRefs turns every `agent: <profile>` on a step into
-// `extends: <profile>`, anywhere in the tree (trigger steps, workflow steps,
+// `step: <profile>`, anywhere in the tree (trigger steps, workflow steps,
 // checks, nested branches). A reference to a name no profile defined is left
 // alone with a note — `agent:` survives as a free-form attribution label, so
 // leaving it is harmless and losing it would not be.
@@ -279,14 +384,14 @@ func rewriteAgentRefs(n *yaml.Node, defined map[string]bool, notes *[]string) {
 			switch {
 			case strings.Contains(ref, "{{"):
 				*notes = append(*notes, fmt.Sprintf(
-					"a step's agent: %q is templated — it selected a profile per run, which steps cannot do. It now reads as an attribution label only; give the step an explicit model:/extends: if it needs to vary", ref))
+					"a step's agent: %q is templated — it selected a profile per run, which steps cannot do. It now reads as an attribution label only; give the step an explicit model:/step: if it needs to vary", ref))
 			case defined[ref]:
-				if nodeAt(n, "extends") == nil {
+				if nodeAt(n, "step") == nil {
 					removeMapKey(n, "agent")
-					setMapKeyFirst(n, "extends", scalar(ref))
+					setMapKeyFirst(n, "step", scalar(ref))
 				} else {
 					*notes = append(*notes, fmt.Sprintf(
-						"a step names both agent: %s and extends: %s — kept extends:, dropped agent:", ref, scalarAt(n, "extends")))
+						"a step names both agent: %s and step: %s — kept step:, dropped agent:", ref, scalarAt(n, "step")))
 					removeMapKey(n, "agent")
 				}
 			}

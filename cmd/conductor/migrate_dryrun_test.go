@@ -67,7 +67,7 @@ integrations:
         actions:
           merge_conflict:
             - type: agent
-              extends: fixer
+              step: fixer
               prompt: "fix"
 steps:
   fixer: { type: agent, name: fixer }

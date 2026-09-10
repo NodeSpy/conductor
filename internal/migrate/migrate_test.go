@@ -93,6 +93,12 @@ func mustTransform(t *testing.T, raw string) (*Result, *config.Config) {
 	if err := yaml.Unmarshal(maskEnv(res.Output), &out); err != nil {
 		t.Fatalf("migrated config does not parse: %v\n%s", err, res.Output)
 	}
+	// Mirror config.Load: a migrated step plays a named `steps:` entry, and
+	// the identity that carries a user's history over comes from resolving
+	// that reference. Asserting on the unresolved document would miss it.
+	if err := out.ResolveExtends(); err != nil {
+		t.Fatalf("migrated config does not resolve: %v\n%s", err, res.Output)
+	}
 	return res, &out
 }
 
@@ -217,9 +223,10 @@ func TestGithubBehavioralEquivalence(t *testing.T) {
 				var idx int
 				fmt.Sscanf(act.FlowRef, "%d:", &idx)
 				st := compiled[idx].Spec.Steps[0]
-				// The legacy `agent: <profile>` became `extends: <template>`
-				// — the same name, one field over (design §6).
-				work = st.Type + "|" + st.Extends + "|" + st.Prompt + "|" + strings.Join(st.Command, " ")
+				// The legacy `agent: <profile>` became `step: <name>`, and
+				// load resolved it — the profile's name is now the step's
+				// identity (design §6).
+				work = st.Type + "|" + st.Name + "|" + st.Prompt + "|" + strings.Join(st.Command, " ")
 			} else {
 				work = act.Type + "|" + act.Agent + "|" + act.Prompt + "|" + strings.Join(act.Command, " ")
 			}

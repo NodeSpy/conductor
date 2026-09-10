@@ -44,7 +44,7 @@ agents:
 		t.Fatalf("deployment_status trigger missing/wrong: %+v", dep)
 	}
 	da, ok := byOn["gh.dependabot_alert"]
-	if !ok || da.Steps[0].Extends != "fixer" {
+	if !ok || da.Steps[0].Name != "fixer" {
 		t.Fatalf("dependabot_alert trigger missing/wrong: %+v", da)
 	}
 	ssa, ok := byOn["gh.secret_scanning_alert"]
@@ -305,10 +305,10 @@ agents:
 		t.Fatalf("steps: %d, want 2", len(steps))
 	}
 	plan := steps[0]
-	// `agent: planner` became `extends: planner` — the step now reaches
-	// the migrated template, which carries the old profile's behavior AND
+	// `agent: planner` became `step: planner` — the step now plays the
+	// migrated named step, which carries the old profile's behavior AND
 	// its name (so its memory/session/outcome history carries over).
-	if plan.ID != "plan" || plan.Type != "agent" || plan.Extends != "planner" ||
+	if plan.ID != "plan" || plan.Type != "agent" || plan.Name != "planner" ||
 		plan.Checkout != "none" || plan.Prompt != "Plan the fix" {
 		t.Errorf("plan step fields lost: %+v", plan)
 	}
