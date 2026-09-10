@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"gopkg.in/yaml.v3"
 
@@ -77,6 +78,7 @@ func AutoMigrate(mainPath string, validate func() error, logf func(string, ...an
 		summary      []string
 	}
 	var todo []pending
+	inlined := map[string]bool{}
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
@@ -89,11 +91,24 @@ func AutoMigrate(mainPath string, validate func() error, logf func(string, ...an
 		if !res.Changed {
 			continue
 		}
+		for _, n := range res.InlinedProfiles {
+			inlined[n] = true
+		}
 		todo = append(todo, pending{
 			path: f, backup: f + BackupSuffix, original: raw,
 			output: res.Output, mode: fileMode(f), summary: res.Summary,
 		})
 	}
+	// Only NOW can an unreferenced profile be named. A per-file pass sees
+	// one file, where "nothing referenced it" is routinely false — the
+	// referencing trigger is in another file of the same tree.
+	var orphans []string
+	for name := range profiles {
+		if !inlined[name] {
+			orphans = append(orphans, name)
+		}
+	}
+	sort.Strings(orphans)
 	if len(todo) == 0 {
 		return 0, nil, nil
 	}
@@ -139,6 +154,10 @@ func AutoMigrate(mainPath string, validate func() error, logf func(string, ...an
 
 	migrated := len(todo)
 	var all []string
+	for _, name := range orphans {
+		all = append(all, fmt.Sprintf(
+			"agents.%s dropped — no step in this config referenced it, and there is no top-level steps: section left to park it in. Its behavior is in the %s backup if you still want it", name, BackupSuffix))
+	}
 	for _, p := range todo {
 		all = append(all, fmt.Sprintf("migrated %s (backup: %s)", p.path, p.backup))
 		all = append(all, p.summary...)

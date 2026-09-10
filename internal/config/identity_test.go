@@ -40,9 +40,12 @@ func TestIdentityLadder(t *testing.T) {
 			want: "workflow:nightly/audit",
 		},
 		{
-			name: "a steps: template IS its key",
-			step: Step{}, scope: IdentityScope{Kind: "step", Name: "fixer"}, slot: 0,
-			want: "fixer",
+			// The registry rung is gone with the registry: a step in a
+			// parallel branch gets its scope from BranchScope, and there
+			// is no scope kind that bypasses the ladder any more.
+			name: "a branch scope is prefixed like any other",
+			step: Step{}, scope: BranchScope(WorkflowScope("w"), "fan", 1), slot: 0,
+			want: "workflow:w/fan[1]/0",
 		},
 	}
 	for _, tc := range tests {

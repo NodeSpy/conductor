@@ -79,7 +79,10 @@ func resolveStepReuse(n *yaml.Node, depth int) (*yaml.Node, error) {
 	if depth > maxExtendsDepth {
 		return nil, fmt.Errorf("extends: chain is more than %d deep — an inline `extends:` that eventually points back at itself never terminates; break the cycle", maxExtendsDepth)
 	}
-	child := applyMergeKeys(n)
+	child, err := applyMergeKeys(n)
+	if err != nil {
+		return nil, err
+	}
 
 	base, rest := splitExtends(child)
 	if base == nil {
@@ -91,9 +94,9 @@ func resolveStepReuse(n *yaml.Node, depth int) (*yaml.Node, error) {
 	}
 	// Base first, so a chain stacks in definition order: the outermost
 	// child's guidance ends up last, under nothing.
-	resolvedBase, err := resolveStepReuse(base, depth+1)
-	if err != nil {
-		return nil, err
+	resolvedBase, rerr := resolveStepReuse(base, depth+1)
+	if rerr != nil {
+		return nil, rerr
 	}
 	out := fieldAwareMerge(resolvedBase, rest)
 	stripReuseTags(out)
@@ -106,10 +109,11 @@ func resolveStepReuse(n *yaml.Node, depth int) (*yaml.Node, error) {
 // yaml.v3 does this itself when it decodes a mapping, but a custom
 // UnmarshalYAML is handed the node before that happens — so a step would
 // silently lose its `<<:` if this did not exist.
-func applyMergeKeys(n *yaml.Node) *yaml.Node {
+func applyMergeKeys(n *yaml.Node) (*yaml.Node, error) {
 	if n == nil || n.Kind != yaml.MappingNode {
-		return n
+		return n, nil
 	}
+	var badMerge error
 	var merged []*yaml.Node // key/value pairs contributed by `<<:`
 	own := make([]*yaml.Node, 0, len(n.Content))
 	for i := 0; i+1 < len(n.Content); i += 2 {
@@ -122,6 +126,9 @@ func applyMergeKeys(n *yaml.Node) *yaml.Node {
 		// entry wins, per the YAML merge-key spec.
 		for _, m := range mergeSources(v) {
 			if m.Kind != yaml.MappingNode {
+				// yaml.v3 errors on this; skipping it silently would let
+				// `<<: [*base, "oops"]` half-apply and look correct.
+				badMerge = fmt.Errorf("`<<:` merges mappings — got a %s. Write `<<: *anchor` or `<<: [*a, *b]`", nodeKindName(m))
 				continue
 			}
 			for j := 0; j+1 < len(m.Content); j += 2 {
@@ -131,8 +138,11 @@ func applyMergeKeys(n *yaml.Node) *yaml.Node {
 			}
 		}
 	}
+	if badMerge != nil {
+		return nil, badMerge
+	}
 	if len(merged) == 0 {
-		return n
+		return n, nil
 	}
 	out := *n
 	out.Content = own
@@ -141,7 +151,7 @@ func applyMergeKeys(n *yaml.Node) *yaml.Node {
 			out.Content = append(out.Content, merged[i], merged[i+1])
 		}
 	}
-	return &out
+	return &out, nil
 }
 
 // mergeSources lists the mappings one `<<:` value contributes.

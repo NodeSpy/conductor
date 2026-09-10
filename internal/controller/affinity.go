@@ -188,8 +188,14 @@ func StepSessionKey(stepIdentity, rendered string) string {
 	if stepIdentity == "" {
 		return rendered
 	}
-	return stepIdentity + "\x1f" + rendered
+	return stepIdentity + string(keySep) + rendered
 }
+
+// keySep joins a step identity to its rendered key. A control byte, so it
+// cannot occur in a hand-written identity; renderKey refuses a RENDERED
+// key that contains one, since event data could otherwise choose which
+// pool a session lands in.
+const keySep = '\x1f'
 
 // Dispatch routes one agent request through session affinity. handled=false
 // means affinity doesn't apply (no session: spec, a non-persistent runtime,
@@ -315,6 +321,16 @@ func (a *Affinity) renderKey(spec *config.SessionSpec, req dispatch.Request, ste
 	}
 	if key = strings.TrimSpace(key); key == "" {
 		return "", fmt.Errorf("step %q session.key rendered empty for %s", req.Identity, req.Trigger.Kind)
+	}
+	// The step-scope namespace is joined with \x1f, and specForRef reads
+	// the binding back by cutting on the FIRST one. A rendered key
+	// carrying that byte — it can arrive from event data, so it is not
+	// hypothetical — would make a runtime-pool key parse as step-scoped
+	// and be judged against the wrong session: spec, or a step's key
+	// parse with a truncated identity. Refuse it at the boundary rather
+	// than let it decide which pool a session joins.
+	if strings.ContainsRune(key, keySep) {
+		return "", fmt.Errorf("step %q session.key rendered a value containing a control byte (U+001F), which is reserved as the scope separator — template a key from fields that cannot carry one", req.Identity)
 	}
 	if stepScoped {
 		key = StepSessionKey(req.Identity, key)
@@ -665,7 +681,7 @@ func (a *Affinity) specForRef(ref AffinityRef) *config.SessionSpec {
 	if a.cfg == nil {
 		return nil
 	}
-	ident, _, stepScoped := strings.Cut(ref.Key, "\x1f")
+	ident, _, stepScoped := strings.Cut(ref.Key, string(keySep))
 	if !stepScoped {
 		if rt, ok := a.cfg.Runtimes[ref.Runtime]; ok {
 			return rt.Session
@@ -750,7 +766,7 @@ func (a *Affinity) archiveWanted(ref AffinityRef) bool {
 	if a.cfg == nil {
 		return false
 	}
-	ident, _, stepScoped := strings.Cut(ref.Key, "\x1f")
+	ident, _, stepScoped := strings.Cut(ref.Key, string(keySep))
 	if !stepScoped {
 		return false
 	}

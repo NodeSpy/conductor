@@ -80,12 +80,6 @@ func (s IdentityScope) String() string {
 // at position slot (0-based) in its step list. See the file header for the
 // ladder and why `id:` is the slot rather than the pin.
 func (s Step) Identity(scope IdentityScope, slot int) string {
-	// A `steps:` TEMPLATE is already a named thing: its map key IS its
-	// identity, which is what makes every step extending it share one
-	// memory namespace, session pool, and track record.
-	if scope.Kind == "step" && strings.TrimSpace(s.Name) == "" {
-		return scope.Name
-	}
 	return IdentityFor(scope, s.Name, s.slotLabel(slot), s.Fingerprint)
 }
 

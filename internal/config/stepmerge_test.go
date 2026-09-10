@@ -442,3 +442,22 @@ workflows:
 		t.Fatalf("an unset argv still inherits, got %v", got)
 	}
 }
+
+// L2: yaml.v3 errors on a non-mapping entry in a `<<:` sequence. Skipping
+// it silently let `<<: [*base, "oops"]` half-apply and look fine.
+func TestMergeSequenceRejectsANonMapping(t *testing.T) {
+	var c Config
+	err := strictUnmarshal([]byte(`
+x-t:
+  base: &base { type: agent, workspace: worktree }
+workflows:
+  w:
+    steps:
+      - <<: [*base, "oops"]
+        id: a
+        prompt: p
+`), &c)
+	if err == nil || !strings.Contains(err.Error(), "merges mappings") {
+		t.Fatalf("a non-mapping merge source must be an error, got %v", err)
+	}
+}

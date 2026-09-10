@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
@@ -66,5 +67,23 @@ func TestCLICustomCommandGetsNoInventedFlag(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(got, " "), "--model") {
 		t.Fatalf("a hand-written command: must not gain an invented flag, got %v", got)
+	}
+}
+
+// L5: the step-scope namespace is joined with \x1f and read back by
+// cutting on the first one. A rendered key carrying that byte — event
+// data can — would make a runtime-pool key parse as step-scoped and be
+// judged against the wrong session: spec.
+func TestSessionKeyRefusesTheScopeSeparator(t *testing.T) {
+	if got := StepSessionKey("ident", "k"); got != "ident\x1fk" {
+		t.Fatalf("the namespace join is the separator: %q", got)
+	}
+	a := &Affinity{}
+	_, err := a.renderKey(&config.SessionSpec{Key: "{{.repo}}"}, dispatch.Request{
+		Identity: "s",
+		Trigger:  core.Trigger{Kind: "ping", Target: core.Target{Repo: "o\x1fr"}},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "U+001F") {
+		t.Fatalf("a rendered key with the separator must be refused, got %v", err)
 	}
 }

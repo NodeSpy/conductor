@@ -55,6 +55,11 @@ type Result struct {
 	Summary []string
 	// Changed reports whether the file had legacy constructs to transform.
 	Changed bool
+	// InlinedProfiles names the `agents:` profiles this file resolved at
+	// least one referencing step for. A whole-tree caller unions these to
+	// tell a genuinely unreferenced profile from one whose reference is
+	// simply in another file — a distinction a per-file pass cannot make.
+	InlinedProfiles []string
 }
 
 // envTokenRe matches ${VAR} references; maskEnvRe reverses the masking.
@@ -91,6 +96,7 @@ func Transform(raw []byte) (*Result, error) { return TransformWith(raw, nil, nil
 // live in different files, and a budget that cannot find its runtime used
 // to be dropped with a misleading "declares no runtimes" note.
 func TransformWith(raw []byte, profiles map[string]*yaml.Node, runtimeNames []string, defaultRuntime string) (*Result, error) {
+	var inlined []string
 	tree := treeRuntimes{names: map[string]bool{}, defaultName: defaultRuntime}
 	for _, n := range runtimeNames {
 		tree.names[n] = true
@@ -173,10 +179,13 @@ func TransformWith(raw []byte, profiles map[string]*yaml.Node, runtimeNames []st
 		}
 		// The agents: pass runs after use:, so a budget it moves lands on a
 		// runtimes: entry that already carries its `use:`.
-		if out, changed, err := applyAgentsPass(cur, profiles, tree, &notes); err != nil {
+		if out, changed, done, err := applyAgentsPass(cur, profiles, tree, &notes); err != nil {
 			return nil, fmt.Errorf("agents migration: %w", err)
-		} else if changed {
-			cur, anyChanged = out, true
+		} else {
+			inlined = append(inlined, done...)
+			if changed {
+				cur, anyChanged = out, true
+			}
 		}
 		if !anyChanged {
 			return &Result{Changed: false}, nil
@@ -185,7 +194,7 @@ func TransformWith(raw []byte, profiles map[string]*yaml.Node, runtimeNames []st
 		if err != nil {
 			return nil, err
 		}
-		return &Result{Output: unmaskEnv(cur), Summary: notes, Changed: true}, nil
+		return &Result{Output: unmaskEnv(cur), Summary: notes, Changed: true, InlinedProfiles: inlined}, nil
 	}
 	if cfg.HasConnectors() {
 		return nil, fmt.Errorf("config already has connectors:/triggers: blocks alongside legacy ones — finish the migration by hand (mixed files are valid to RUN, but the automatic transform only handles fully-legacy files)")
@@ -373,7 +382,9 @@ func TransformWith(raw []byte, profiles map[string]*yaml.Node, runtimeNames []st
 	// …and the agents: pass over that output: the legacy transform carries
 	// agents: through verbatim, so it needs the same decomposition a
 	// hand-written connectors config does.
-	if aout, achanged, aerr := applyAgentsPass(b, profiles, tree, &notes); aerr != nil {
+	aout, achanged, adone, aerr := applyAgentsPass(b, profiles, tree, &notes)
+	inlined = append(inlined, adone...)
+	if aerr != nil {
 		return nil, fmt.Errorf("agents migration: %w", aerr)
 	} else if achanged {
 		b = aout
@@ -388,7 +399,7 @@ func TransformWith(raw []byte, profiles map[string]*yaml.Node, runtimeNames []st
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Output: unmaskEnv(b), Summary: notes, Changed: true}, nil
+	return &Result{Output: unmaskEnv(b), Summary: notes, Changed: true, InlinedProfiles: inlined}, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -247,17 +247,19 @@ triggers:
 
 // An `agents:` block a config no longer references still migrates rather
 // than tripping the strict decoder.
-// A profile nothing references has nowhere to be inlined — there is no
-// registry to park it in — so it is dropped WITH A NOTE, never in silence.
-func TestAgentsMigrationReportsUnreferencedProfiles(t *testing.T) {
+// L3: a SINGLE-file pass must not claim a profile is unreferenced — the
+// referencing step is routinely in another file of the same tree. The
+// claim belongs to AutoMigrate, which sees all of them (see
+// TestAutoMigrateReportsGenuinelyUnreferencedProfiles).
+func TestSingleFilePassDoesNotClaimUnreferenced(t *testing.T) {
 	_, notes := migrateDoc(t, agentsBase+`
 agents:
   orphan: { provider: claude, workspace: local }
 triggers:
   - { on: gh.pull_request, name: t, steps: [{ id: s, uses: gh.comment, options: { body: hi } }] }
 `)
-	if !hasNote(notes, "no step referenced it") {
-		t.Fatalf("an unreferenced profile must be reported: %v", notes)
+	if hasNote(notes, "no step in this config referenced it") {
+		t.Fatalf("one file cannot know the tree: %v", notes)
 	}
 }
 
@@ -290,4 +292,19 @@ func hasNote(notes []string, sub string) bool {
 		}
 	}
 	return false
+}
+
+// L4: an `agents:` entry that is not a block was skipped in silence, so
+// the operator saw it vanish with no note.
+func TestNonBlockAgentEntryIsNoted(t *testing.T) {
+	_, notes := migrateDoc(t, agentsBase+`
+agents:
+  weird: "not a block"
+  fixer: { workspace: worktree }
+triggers:
+  - { on: gh.pull_request, name: t, steps: [{ id: s, type: agent, agent: fixer, prompt: p }] }
+`)
+	if !hasNote(notes, "agents.weird skipped") {
+		t.Fatalf("a non-block agents: entry must be reported: %v", notes)
+	}
 }

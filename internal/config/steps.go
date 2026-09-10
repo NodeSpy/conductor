@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -69,7 +70,34 @@ func StepLabel(scope IdentityScope, slot int, s Step) string {
 // validateSteps checks the behavior fields that moved off `agents:` onto the
 // step — the same checks the agent-profile loop used to run, now anchored on
 // the step that carries them.
+// warnSharedAnchorIDs surfaces a shared base that carries an `id:`.
+//
+// Reuse copies fields, `id:` among them — so two steps merging one anchor
+// that sets `id: review` both land on the SAME structural identity, and
+// silently share a memory namespace, session pool, and track record. That
+// is occasionally intended (`name:` is the explicit way to say it) and
+// usually a surprise, so it is a notice, not an error.
+func (c *Config) warnSharedAnchorIDs() {
+	byID := map[string][]string{}
+	c.WalkSteps(func(scope IdentityScope, slot int, s *Step) {
+		if strings.TrimSpace(s.ID) == "" || strings.TrimSpace(s.Name) != "" {
+			return // no id to collide, or an explicit name already decides
+		}
+		byID[s.Identity(scope, slot)] = append(byID[s.Identity(scope, slot)], StepLabel(scope, slot, *s))
+	})
+	for id, where := range byID {
+		if len(where) < 2 {
+			continue
+		}
+		sort.Strings(where)
+		c.packWarnings = append(c.packWarnings, fmt.Sprintf(
+			"steps %s share the identity %q — they carry the same id: in the same scope, most likely from a shared base that sets one. They will share a memory namespace, session pool, and track record. Give each its own id:, or pin `name:` if sharing is what you meant",
+			strings.Join(where, " and "), id))
+	}
+}
+
 func (c *Config) validateSteps() error {
+	c.warnSharedAnchorIDs()
 	var firstErr error
 	fail := func(err error) {
 		if firstErr == nil {

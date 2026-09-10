@@ -68,17 +68,17 @@ var behaviorKeys = []string{
 //
 // extra carries profiles declared in OTHER files of the import tree, so a
 // file holding only triggers still resolves the names they reference.
-func applyAgentsPass(masked []byte, extra map[string]*yaml.Node, tree treeRuntimes, notes *[]string) (out []byte, changed bool, err error) {
+func applyAgentsPass(masked []byte, extra map[string]*yaml.Node, tree treeRuntimes, notes *[]string) (out []byte, changed bool, inlined []string, err error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(masked, &doc); err != nil {
-		return nil, false, err
+		return nil, false, inlined, err
 	}
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
-		return nil, false, nil
+		return nil, false, nil, nil
 	}
 	root := doc.Content[0]
 	if root.Kind != yaml.MappingNode {
-		return nil, false, nil
+		return nil, false, nil, nil
 	}
 	agents := mapValue(root, "agents")
 	hasLocal := agents != nil && agents.Kind == yaml.MappingNode && len(agents.Content) > 0
@@ -88,12 +88,12 @@ func applyAgentsPass(masked []byte, extra map[string]*yaml.Node, tree treeRuntim
 		if removeMapKey(root, "agents") {
 			b, mErr := marshalDoc(&doc)
 			if mErr != nil {
-				return nil, false, mErr
+				return nil, false, inlined, mErr
 			}
 			*notes = append(*notes, "agents: was empty — removed (behavior now lives on the step; see docs/design/agents-removal.md)")
-			return b, true, nil
+			return b, true, inlined, nil
 		}
-		return nil, false, nil
+		return nil, false, inlined, nil
 	}
 	if !hasLocal {
 		// This file declares no profiles, but a file it shares an import
@@ -102,18 +102,19 @@ func applyAgentsPass(masked []byte, extra map[string]*yaml.Node, tree treeRuntim
 		for name, n := range extra {
 			fragments[name] = n
 		}
-		n := inlineProfiles(root, fragments, notes)
+		n, done := inlineProfiles(root, fragments, notes)
+		inlined = append(inlined, done...)
 		if removeMapKey(root, "agents") {
 			n++
 		}
 		if n == 0 {
-			return nil, false, nil
+			return nil, false, inlined, nil
 		}
 		b, mErr := marshalDoc(&doc)
 		if mErr != nil {
-			return nil, false, mErr
+			return nil, false, inlined, mErr
 		}
-		return b, true, nil
+		return b, true, inlined, nil
 	}
 
 	templates, parent := buildProfileFragments(root, true, tree, notes)
@@ -134,13 +135,14 @@ func applyAgentsPass(masked []byte, extra map[string]*yaml.Node, tree treeRuntim
 	}
 	removeMapKey(root, "agents")
 
-	inlineProfiles(root, fragments, notes)
+	_, done := inlineProfiles(root, fragments, notes)
+	inlined = append(inlined, done...)
 
 	b, err := marshalDoc(&doc)
 	if err != nil {
-		return nil, false, err
+		return nil, false, inlined, err
 	}
-	return b, true, nil
+	return b, true, inlined, nil
 }
 
 // buildProfileFragments turns each `agents:` entry into a ready-to-inline
@@ -201,6 +203,10 @@ func buildProfileFragments(root *yaml.Node, moveBudget bool, tree treeRuntimes, 
 	for i := 0; i+1 < len(agents.Content); i += 2 {
 		name, body := agents.Content[i].Value, agents.Content[i+1]
 		if body.Kind != yaml.MappingNode {
+			// Not a profile block. Skipping it silently left the operator
+			// with an agents: entry that vanished and no note saying so.
+			*notes = append(*notes, fmt.Sprintf(
+				"agents.%s skipped — an agent profile is a block of fields, and this entry is not one. Nothing was carried over from it; it is in the backup file", name))
 			continue
 		}
 		names = append(names, name)
@@ -310,17 +316,16 @@ func CollectProfiles(raw []byte) map[string]*yaml.Node {
 // session pool, and track record pointing at the history it already has.
 //
 // Returns the number of sites rewritten.
-func inlineProfiles(root *yaml.Node, fragments map[string]*yaml.Node, notes *[]string) int {
+// It returns the profile names it actually inlined somewhere in THIS
+// file. It deliberately does not report the ones it did not: "no step in
+// this file referenced it" is not "nothing referenced it", and the
+// referencing step is routinely in another file of the import tree.
+// AutoMigrate, which sees every file, reports the genuinely unreferenced.
+func inlineProfiles(root *yaml.Node, fragments map[string]*yaml.Node, notes *[]string) (int, []string) {
 	sites := map[string][]*yaml.Node{}
 	collectAgentSites(root, fragments, &sites, notes)
-	for name := range fragments {
-		if len(sites[name]) == 0 {
-			*notes = append(*notes, fmt.Sprintf(
-				"agents.%s dropped — no step referenced it, and there is no top-level steps: section left to park it in. Its behavior is in the backup file if you still want it", name))
-		}
-	}
 	if len(sites) == 0 {
-		return 0
+		return 0, nil
 	}
 	names := make([]string, 0, len(sites))
 	for n := range sites {
@@ -376,7 +381,12 @@ func inlineProfiles(root *yaml.Node, fragments map[string]*yaml.Node, notes *[]s
 				"agents.%s -> inlined on the step that referenced it (name: %s pins the identity, so its memory/session/outcome history carries over)", name, name))
 		}
 	}
-	return count
+	inlined := make([]string, 0, len(sites))
+	for n := range sites {
+		inlined = append(inlined, n)
+	}
+	sort.Strings(inlined)
+	return count, inlined
 }
 
 // migratedAnchorKey is the `x-` holder the migration parks shared fragments
@@ -579,35 +589,6 @@ func defaultRuntimeKey(rts *yaml.Node) string {
 		return sole
 	}
 	return ""
-}
-
-// rewriteAgentRefs turns every `agent: <profile>` on a step into
-// `step: <profile>`, anywhere in the tree (trigger steps, workflow steps,
-// checks, nested branches). A reference to a name no profile defined is left
-// alone with a note — `agent:` survives as a free-form attribution label, so
-// leaving it is harmless and losing it would not be.
-func rewriteAgentRefs(n *yaml.Node, defined map[string]bool, notes *[]string) {
-	if n.Kind == yaml.MappingNode {
-		if ref := scalarAt(n, "agent"); ref != "" {
-			switch {
-			case strings.Contains(ref, "{{"):
-				*notes = append(*notes, fmt.Sprintf(
-					"a step's agent: %q is templated — it selected a profile per run, which steps cannot do. It now reads as an attribution label only; give the step an explicit model:/step: if it needs to vary", ref))
-			case defined[ref]:
-				if nodeAt(n, "step") == nil {
-					removeMapKey(n, "agent")
-					setMapKeyFirst(n, "step", scalar(ref))
-				} else {
-					*notes = append(*notes, fmt.Sprintf(
-						"a step names both agent: %s and step: %s — kept step:, dropped agent:", ref, scalarAt(n, "step")))
-					removeMapKey(n, "agent")
-				}
-			}
-		}
-	}
-	for _, c := range n.Content {
-		rewriteAgentRefs(c, defined, notes)
-	}
 }
 
 func scalar(v string) *yaml.Node {

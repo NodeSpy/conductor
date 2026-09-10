@@ -60,16 +60,38 @@ func cardIDs(r *Runner, patterns []string, universe []string) []string {
 	return out
 }
 
-// enforcedIDs is what RunSkillVerb would admit: the same gate it applies,
-// exercised over the whole universe.
-func enforcedIDs(r *Runner, patterns []string, universe []string) []string {
+// gateDenials are RunSkillVerb's own refusal reasons. Anything else it
+// returns means the call got PAST the gate and failed later (an unroutable
+// connector, a missing option) — which is admission for our purposes.
+var gateDenials = []string{
+	"not available on the skill surface",
+	"not allowed by this profile's skill.verbs",
+	"gated behind human approval",
+}
+
+// enforcedIDs is what RunSkillVerb actually admits.
+//
+// It CALLS the real thing rather than restating its rules. A
+// reimplementation here would pass while the gate itself drifted — and
+// this test's whole job is to prove the card, discover, and enforcement
+// agree, which is worth nothing if "enforcement" is a copy.
+func enforcedIDs(t *testing.T, r *Runner, patterns []string, universe []string) []string {
+	t.Helper()
 	var out []string
 	for _, id := range universe {
-		conn, _, _ := strings.Cut(id, ".")
-		if conn == "workflow" || conn == "conductor" {
-			continue // refused before the pattern gate, at any breadth
+		_, err := r.RunSkillVerb(context.Background(), SkillIdentity{
+			Agent: "probe", Verbs: patterns, Repo: "o/r", Number: 1,
+		}, id, map[string]any{})
+		denied := false
+		if err != nil {
+			for _, d := range gateDenials {
+				if strings.Contains(err.Error(), d) {
+					denied = true
+					break
+				}
+			}
 		}
-		if matchAny(patterns, id) {
+		if !denied {
 			out = append(out, id)
 		}
 	}
@@ -112,7 +134,7 @@ func TestGrantIsOneSourceOfTruth(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			card := cardIDs(r, patterns, universe)
 			disc := discoverIDs(r, patterns)
-			enf := enforcedIDs(r, patterns, universe)
+			enf := enforcedIDs(t, r, patterns, universe)
 			if !equalIDs(disc, enf) {
 				t.Fatalf("discover != enforcement\n  discover:    %v\n  enforcement: %v", disc, enf)
 			}

@@ -150,3 +150,50 @@ agents:
 		t.Fatalf("budget should have landed on runtimes.gpu, got %+v", b)
 	}
 }
+
+// L3: the "nothing referenced it" note belongs to the whole-tree pass. A
+// profile referenced from ANOTHER file is not an orphan (that note was
+// false and alarming); one nothing references anywhere is, and is still
+// reported rather than vanishing.
+func TestAutoMigrateReportsGenuinelyUnreferencedProfiles(t *testing.T) {
+	dir := t.TempDir()
+	main := filepath.Join(dir, "config.yaml")
+	sub := filepath.Join(dir, "conf.d", "t.yaml")
+	if err := os.MkdirAll(filepath.Dir(sub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(main, []byte(`
+imports: [conf.d/*.yaml]
+connectors:
+  gh: { use: github, token: x }
+runtimes:
+  paseo: { use: paseo, default: true }
+agents:
+  used:   { workspace: worktree }
+  orphan: { workspace: local }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The reference to `used` lives in the OTHER file.
+	if err := os.WriteFile(sub, []byte(`
+triggers:
+  - { on: gh.pull_request, name: a, steps: [{ id: s, type: agent, agent: used, prompt: p }] }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, summary, err := AutoMigrate(main, func() error {
+		_, lerr := config.Load(main)
+		return lerr
+	}, nil)
+	if err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	joined := strings.Join(summary, "\n")
+	if !strings.Contains(joined, "agents.orphan dropped") {
+		t.Errorf("a genuinely unreferenced profile should be reported: %v", summary)
+	}
+	if strings.Contains(joined, "agents.used dropped") {
+		t.Errorf("a profile referenced from another file is NOT an orphan: %v", summary)
+	}
+}
