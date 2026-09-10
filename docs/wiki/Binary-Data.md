@@ -35,7 +35,7 @@ Pass a handle between steps with a sole-reference template
 
 ```yaml
 connectors:
-  ci: { type: webhook, listen: ":8099", sources: { build_done: { path: /hooks/build } } }
+  ci: { use: webhook, listen: ":8099", sources: { build_done: { path: /hooks/build } } }
 
 triggers:
   - on: ci.build_done

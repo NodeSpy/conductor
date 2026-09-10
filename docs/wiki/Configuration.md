@@ -14,10 +14,10 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 
 | key | what | reference |
 |---|---|---|
-| `connectors:` | named service connections: type, credentials, `me:`, default `repos:`, default `options:`, `enabled:`, per-connector `policy:` | [[Connectors]] |
+| `connectors:` | named service connections: `use:` (what implements it), credentials, `network:` (declared egress), `me:`, default `repos:`, default `options:`, `enabled:`, per-connector `policy:`, optional `isolation:` | [[Connectors]], [[Plugins]] |
 | `triggers:` | the workflows: `on` / `filters` / `steps` / `hooks` (+ `group`, `policy`, `gate`, `name`, `enabled`, `options`, `repo`, `shadow`) | [[Workflows]], [[Grouping]], [[Gates]] |
-| `runtimes:` | where agents run: `type`/`agent`, `transport`, `bin`, `host`, `isolation`, `default` | [[Runtimes]], [[Isolation]] |
-| `plugins:` | acquire connector **types** and **runtimes** from external binaries: `source`, `kind` (connector\|runtime), `provides`, `sha256`, `args`, `isolation`, `allow_unverified`/`allow_unsandboxed`, `allow_secrets` | [[Plugins]] |
+| `runtimes:` | where agents run: `use:` (what implements it), `agent` (with `use: acp`), `transport`, `bin`, `host`, `isolation`, `default` | [[Runtimes]], [[Isolation]] |
+| `plugin_trust:` | where remote plugins may come from: `allow:` source globs. The official plugin repo is trusted by default; anything else remote needs an entry | [[Plugins]] |
 | `agents:` | named profiles: `provider`, `model`, `thinking`, `mode`, `runtime`, `workspace`, `wait_timeout`, `archive_when_done`, `labels`, `guidance`, `host`, `memory`, `session`, `skill`, `isolation`, `budget`, `outcome_feedback` | [[Agents]], [[Agent-Skill]], [[Isolation]], [[Cost-Accounting]], [[Outcomes]] |
 | `hosts:` | named SSH targets: `host`, `user`, `port`, `key`, `known_hosts`, `cwd`, `env`, `isolation` | [[Hosts]], [[Isolation]] |
 | `stores:` | named data stores — KV (`boltdb`/`redis`/`http`) served by `kv.*`, SQL (`postgres`/`mysql`/`sqlite`) served by `sql.*`; addressed by the required `store:` selector | below |
@@ -63,7 +63,7 @@ nothing else (`steps:` stay trigger-level, shared):
 
 ```yaml
 connectors:
-  timer: { type: cron, schedules: { nightly: { cron: "0 2 * * *" } } }
+  timer: { use: cron, schedules: { nightly: { cron: "0 2 * * *" } } }
 
 triggers:
   - name: clone-invoice              # names the trigger (required for `conductor run`)
@@ -162,7 +162,7 @@ and rate-limited like any other verb.
 ```yaml
 connectors:
   xero:
-    type: rest
+    use: rest
     base_url: https://api.xero.com/api.xro/2.0
     auth: { … }                        # shared auth block, below
     headers: { Accept: application/json }   # defaults, templated
@@ -214,7 +214,7 @@ raw `{{.item}}` are published to the trigger scope.
 ```yaml
 connectors:
   shop:
-    type: graphql
+    use: graphql
     endpoint: https://myshop.myshopify.com/admin/api/2025-01/graphql.json
     auth: { type: header, name: X-Shopify-Access-Token, value: '{{ vault "house" "shopify-token" }}' }
     verbs:
@@ -453,7 +453,7 @@ workflow step ref.
 ```yaml
 connectors:
   imports: [conf.d/connectors/*.yaml]        # entries from these files join the section
-  gh: { type: github, … }                    # inline entries mix in
+  gh: { use: github, … }                    # inline entries mix in
   pd: { import: ./conf.d/pagerduty.yaml }    # a named entry's BODY from its own file
 workflows:
   imports: [workflows/*.yaml]

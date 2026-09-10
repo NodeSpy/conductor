@@ -6,10 +6,11 @@ A runtime is where agents run — the block previously named `controllers:`
 
 ```yaml
 runtimes:
-  paseo:  { type: paseo, bin: paseo, default: true }
-  deck:   { type: agent-deck }
-  gemini: { agent: gemini }                        # ACP transport
-  remote: { type: cli, tool: claude-code, host: build-box }
+  paseo:  { use: paseo, bin: paseo, default: true }
+  deck:   { use: agent-deck }
+  gemini: { use: acp, agent: gemini }              # ACP transport
+  remote: { use: cli, tool: claude-code, host: build-box }
+  modal:  { use: modal }                           # a runtime PLUGIN, co-equal
 
 agents:
   fixer: { provider: claude, runtime: paseo }      # `controller:` still accepted
@@ -23,8 +24,8 @@ runtimes sharing a `host:`/`isolation:` — the child overrides only `command`).
 | field | meaning |
 |---|---|
 | `extends` | inherit unset fields from another `runtimes:` entry (see [[Reuse]]) |
-| `type` | built-in kind: `paseo` \| `agent-deck` \| `opencode` \| `cli` (mutually exclusive with `agent`) |
-| `agent` | an agent runtime driven over a transport (gemini, opencode, …); implies `transport: acp` |
+| `use` | **what implements it** (required): a builtin — `paseo` \| `acp` \| `agent-deck` \| `opencode` \| `cli` — or a plugin reference. Same resolution as a connector's `use:`; see [[Plugins]] |
+| `agent` | the agent the ACP transport drives (gemini, …). Valid **only** with `use: acp`, and required by it |
 | `transport` | `acp` \| `native` \| `cli` |
 | `session_model` | `native` \| `resumable` \| `oneshot` |
 | `default` | the fleet default (at most one across runtimes + legacy controllers) |

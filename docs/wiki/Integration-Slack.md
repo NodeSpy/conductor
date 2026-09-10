@@ -7,7 +7,7 @@ out, and interactive asks.
 ```yaml
 connectors:
   slack-ops:
-    type: slack
+    use: slack
     app_token: ${SLACK_APP_TOKEN}   # xapp-… Socket Mode (needed for events + ask replies)
     bot_token: ${SLACK_BOT_TOKEN}   # xoxb-… posting
     options: { channel: C0123456789 }

@@ -13,7 +13,7 @@ Replace the seeded `~/.config/conductor/config.yaml` with (or just read along
 ```yaml
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules:
       hourly: { every: 1h }
 
@@ -68,7 +68,7 @@ interpreter needed (`js` runs in a WASM sandbox inside conductor):
 ```yaml
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules:
       nightly: { cron: "0 2 * * *" }
 
@@ -103,7 +103,7 @@ Follow the **learning path** on [[Home]]. The immediate next steps:
 
   ```yaml
   runtimes:
-    paseo: { type: paseo, default: true }
+    paseo: { use: paseo, default: true }
   agents:
     fixer: { provider: claude, workspace: worktree, archive_when_done: true }
   triggers:

@@ -5,7 +5,7 @@ Schedules are declared on the connection; each schedule name is an event.
 ```yaml
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules:
       nightly-tidy: { cron: "0 4 * * *" }            # standard 5-field cron, or @daily etc.
       rate-check:   { every: 6h, run_on_start: true } # interval form

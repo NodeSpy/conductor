@@ -123,7 +123,7 @@ policy:
 
 connectors:
   gh:
-    type: github
+    use: github
     policy:
       guidance: "On PRs, lead with the point and propose a concrete fix."   # stacks under global
 

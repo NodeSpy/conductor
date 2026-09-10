@@ -12,7 +12,7 @@ policy:                                   # global defaults
 
 connectors:
   gh:
-    type: github
+    use: github
     policy:
       ignore: { users: ["dependabot[bot]", your-login] }
       pause_label: "conductor:hold"
