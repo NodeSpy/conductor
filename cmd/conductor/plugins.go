@@ -654,3 +654,33 @@ func loadConfigRest(args []string) (*config.Config, []string, error) {
 	}
 	return cfg, positional(rest), nil
 }
+
+// publishConnectorVersions hands config the resolved release of every
+// installed PLUGIN connector, so a pack's `requires.connectors:
+// { jira: ">=2.0" }` can be gated at instantiate (design §D).
+//
+// It reads local install state only — never the network. Install state is
+// owned by internal/plugin, which imports internal/config, so the values are
+// injected downward rather than config reaching up for them. A connector
+// with no install record is builtin (or a dev binary): config falls back to
+// the daemon version, or skips the gate when neither is known.
+func publishConnectorVersions() {
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	if state == nil {
+		return
+	}
+	vers := map[string]string{}
+	for _, key := range state.Keys() {
+		in, ok := state.Get(key)
+		if !ok {
+			continue
+		}
+		if in.Kind != config.PluginKindConnector {
+			continue
+		}
+		if v := strings.TrimSpace(in.Resolved); v != "" {
+			vers[in.Name] = v
+		}
+	}
+	config.SetConnectorVersions(vers)
+}

@@ -61,8 +61,12 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
-	// Let pack requires.conductor constraints check against the running version.
+	// Let pack requires.conductor constraints check against the running
+	// version, and requires.connectors constraints against each installed
+	// plugin connector's resolved release (a builtin connector's version IS
+	// the daemon version — see config.resolvedConnectorVersion).
 	config.SetRuntimeVersion(version)
+	publishConnectorVersions()
 	cmd := os.Args[1]
 	args := os.Args[2:]
 	var err error

@@ -161,7 +161,7 @@ func cmdPackAdd(args []string) error {
 	if m.Version != "" {
 		fmt.Printf("    version: %s\n", m.Version)
 	}
-	for _, c := range m.Requires.Connectors {
+	for _, c := range m.Requires.Connectors.Names() {
 		fmt.Printf("    connectors: { %s: <your-connector> }\n", c)
 	}
 	for _, s := range m.Requires.Stores {
@@ -447,21 +447,18 @@ func cmdPackShow(args []string) error {
 	if m.Requires.Conductor != "" {
 		fmt.Printf("  conductor: %s\n", m.Requires.Conductor)
 	}
-	if len(m.Requires.Connectors) > 0 {
-		fmt.Printf("  connectors: %s\n", strings.Join(m.Requires.Connectors, ", "))
+	for _, n := range m.Requires.Connectors.Names() {
+		if c := m.Requires.Connectors[n]; c != "" && c != config.AnyVersion {
+			fmt.Printf("  connector %s: %s\n", n, c)
+		} else {
+			fmt.Printf("  connector %s\n", n)
+		}
 	}
 	if len(m.Requires.Stores) > 0 {
 		fmt.Printf("  stores: %s\n", strings.Join(m.Requires.Stores, ", "))
 	}
 	for name, s := range m.Requires.Secrets {
 		fmt.Printf("  secret %s: %s\n", name, s.Desc)
-	}
-	for role, r := range m.Requires.Roles {
-		if len(r.Skill) > 0 {
-			fmt.Printf("  role %s (needs skill: %s)\n", role, strings.Join(r.Skill, ", "))
-		} else {
-			fmt.Printf("  role %s\n", role)
-		}
 	}
 	if len(man.Settings) > 0 {
 		fmt.Println("\nsettings (override in the instance block):")
@@ -491,8 +488,8 @@ func cmdPackShow(args []string) error {
 	}
 	fmt.Println("\nexample:")
 	fmt.Printf("  packs:\n    %s:\n      source: <source>\n", m.Name)
-	if len(m.Requires.Connectors) > 0 {
-		fmt.Printf("      connectors: { %s: <your-connector> }\n", m.Requires.Connectors[0])
+	if names := m.Requires.Connectors.Names(); len(names) > 0 {
+		fmt.Printf("      connectors: { %s: <your-connector> }\n", names[0])
 	}
 	return nil
 }

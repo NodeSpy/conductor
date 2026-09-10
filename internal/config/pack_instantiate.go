@@ -398,7 +398,7 @@ func (st *packInstantiation) warnf(format string, a ...any) {
 func (st *packInstantiation) validateRequires(ns string, man *PackManifest, inst PackInstance, env envBindings) error {
 	req := man.Pack.Requires
 	// Connectors: every required connector must be bound to a defined global.
-	for _, name := range req.Connectors {
+	for _, name := range req.Connectors.Names() {
 		bound, ok := env.conn[name]
 		if !ok {
 			return fmt.Errorf("pack %q: requires connector %q — bind it: connectors: { %s: <your-connector> }", ns, name, name)
@@ -406,6 +406,12 @@ func (st *packInstantiation) validateRequires(ns string, man *PackManifest, inst
 		if _, ok := st.cfg.ConnectorsMap[bound]; !ok {
 			return fmt.Errorf("pack %q: connector binding %s -> %q names no connector in your config (defined: %s)", ns, name, bound, connectorNames(st.cfg))
 		}
+	}
+	// …and satisfy the version constraint the pack declared for it (§D).
+	// This GATES, it never fetches: a connector is bind-only, so the only
+	// question is whether what the consumer already has is compatible.
+	if err := st.checkConnectorVersions(ns, req.Connectors, env); err != nil {
+		return err
 	}
 	// Stores.
 	for _, name := range req.Stores {

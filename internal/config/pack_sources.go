@@ -143,7 +143,7 @@ func (st *packInstantiation) validateSourceDeclarations(ns string, man *PackMani
 			used[src] = true
 		}
 	}
-	for _, n := range man.Pack.Requires.Connectors {
+	for _, n := range man.Pack.Requires.ConnectorNames() {
 		used[n] = true
 	}
 	for typ := range man.Pack.Requires.Sources {

@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -313,8 +312,13 @@ type PackRequires struct {
 	// Conductor is the daemon-version constraint (§16) — REQUIRED for the
 	// auto-updating fleet. Loading a pack outside its range is a named error,
 	// never a crash. Mirrors Terraform required_version.
-	Conductor  string   `yaml:"conductor,omitempty"`
-	Connectors []string `yaml:"connectors,omitempty"`
+	Conductor string `yaml:"conductor,omitempty"`
+	// Connectors is the pack's connector interface AND its capability
+	// boundary: version-aware (`{ jira: ">=2.0" }`), with a bare list as
+	// sugar for "any version". A pack's skill.verbs may name no connector
+	// outside it (§C), and each constraint is gated at instantiate against
+	// the consumer's resolved connector (§D).
+	Connectors ConnectorReqs `yaml:"connectors,omitempty"`
 
 	Stores   []string              `yaml:"stores,omitempty"`
 	Handoffs []string              `yaml:"handoffs,omitempty"`
@@ -333,11 +337,7 @@ type PackRequires struct {
 // ConnectorNames lists the connectors the pack declares, sorted. This is
 // the pack's capability boundary: its `skill.verbs` may name no connector
 // outside it (docs/design/skill-capability-and-pack-interface.md §C).
-func (r PackRequires) ConnectorNames() []string {
-	out := append([]string(nil), r.Connectors...)
-	sort.Strings(out)
-	return out
-}
+func (r PackRequires) ConnectorNames() []string { return r.Connectors.Names() }
 
 // RoleReq declares a step role the pack defines: a bound step MUST provide
 // the listed skill capabilities (validated at install).
