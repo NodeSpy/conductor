@@ -22,13 +22,18 @@ import (
 // genuinely changed. Sessions are short-lived (idle_ttl defaults to 24h), so
 // nothing durable is lost; a track record would have been another matter.
 type AffinityRecord struct {
-	Runtime    string    `json:"runtime"`
-	Model      string    `json:"model,omitempty"`
-	Key        string    `json:"key"`
-	Controller string    `json:"controller"` // runtime implementation that owns the session
-	SessionID  string    `json:"session_id"`
-	Created    time.Time `json:"created"`
-	LastUsed   time.Time `json:"last_used"`
+	Runtime    string `json:"runtime"`
+	Model      string `json:"model,omitempty"`
+	Key        string `json:"key"`
+	Controller string `json:"controller"` // runtime implementation that owns the session
+	SessionID  string `json:"session_id"`
+	// Shape fingerprints the controller the session was opened on, so a
+	// resume after a config edit can refuse rather than hand a foreign
+	// session id to a different tool. Empty for records written before
+	// this field existed — those simply skip the check.
+	Shape    string    `json:"shape,omitempty"`
+	Created  time.Time `json:"created"`
+	LastUsed time.Time `json:"last_used"`
 }
 
 // Assert *Store satisfies the affinity registry's persistence contract.
@@ -47,6 +52,7 @@ func (s *Store) PutAffinity(ref controller.AffinityRef) error {
 		Key:        ref.Key,
 		Controller: ref.Controller,
 		SessionID:  ref.SessionID,
+		Shape:      ref.Shape,
 		Created:    ref.Created,
 		LastUsed:   ref.LastUsed,
 	}
@@ -82,6 +88,7 @@ func (s *Store) Affinities() []controller.AffinityRef {
 			Key:        r.Key,
 			Controller: r.Controller,
 			SessionID:  r.SessionID,
+			Shape:      r.Shape,
 			Created:    r.Created,
 			LastUsed:   r.LastUsed,
 		})

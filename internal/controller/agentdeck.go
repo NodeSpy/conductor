@@ -21,13 +21,14 @@ import (
 // the PR identity (title + group), and polls agent-deck for liveness. Identity env
 // is applied to the exec'd process.
 type agentDeckController struct {
-	name string
-	bin  string   // agent-deck binary (default "agent-deck")
-	args []string // extra launch args from `command:` (after the bin)
-	prov Provisioner
-	run  deckRunner // injectable exec; nil → real subprocess
-	host string     // configured `host:`; "" = local (see resolveHost/prepareLaunch)
-	iso  *config.IsolationConfig
+	runner runnerMemo
+	name   string
+	bin    string   // agent-deck binary (default "agent-deck")
+	args   []string // extra launch args from `command:` (after the bin)
+	prov   Provisioner
+	run    deckRunner // injectable exec; nil → real subprocess
+	host   string     // configured `host:`; "" = local (see resolveHost/prepareLaunch)
+	iso    *config.IsolationConfig
 
 	pollInterval time.Duration
 }
@@ -84,7 +85,9 @@ func (c *agentDeckController) Initialize(context.Context) (Capabilities, error) 
 }
 
 func (c *agentDeckController) Runner() (Runner, error) {
-	return newControllerRunner(c, c.prov, nil), nil
+	// One runner per controller: its live-agent tracking is the state
+	// the engine's duplicate-dispatch gate reads (see runnerMemo).
+	return c.runner.get(func() Runner { return newControllerRunner(c, c.prov, nil) }), nil
 }
 
 // NewSession launches an agent-deck session in the worktree, tagged with the PR

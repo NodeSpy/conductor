@@ -254,7 +254,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		// until the reaper's next poll. Fire-and-forget; the reaper is the backstop.
 		// A keyed session (affinity) is shared across events — never archived here.
 		if s.Type == "agent" && profile.ArchiveWhenDone && ref.AgentID != "" && !e.affinityOwns(ref.AgentID) {
-			go func(id string) { _ = e.disp.Archive(context.Background(), id) }(ref.AgentID)
+			go func(id string) { _ = e.archiveAgent(context.Background(), id) }(ref.AgentID)
 		}
 	}
 	e.notif.Emit(ctx, notify.EventComplete, t, "workflow")

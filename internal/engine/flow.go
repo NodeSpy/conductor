@@ -391,7 +391,7 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			if e.affinityOwns(agentID) {
 				return // a keyed session outlives the step that used it
 			}
-			go func() { _ = e.disp.Archive(context.Background(), agentID) }()
+			go func() { _ = e.archiveAgent(context.Background(), agentID) }()
 		},
 		// The spend-budget layer (#36 §14): caps checked before each agent
 		// step dispatches, usage charged/audited after it returns.

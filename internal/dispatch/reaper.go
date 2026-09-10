@@ -12,6 +12,15 @@ import (
 
 // Reaper archives conductor agents that requested archive-when-done once they
 // go idle. It polls the local daemon only (`paseo ls`) — no GitHub API.
+//
+// Scope: paseo agents, and only those. `paseo ls` is the idle signal, and no
+// other transport has an equivalent — ACP exposes no roster, opencode's lives
+// behind its server API, and a CLI recipe is just a process. On those
+// transports `archive_when_done` is closed deterministically instead, by the
+// engine archiving through the runner that opened the session the moment the
+// step finishes (see engine.archiveAgent); the backstop the reaper provides
+// for paseo is the controller's own session lifetime. A cross-transport reaper
+// would need a per-transport idle probe and is deliberately not built here.
 // reaperGraceDefault is the startup grace: an agent younger than this is never
 // reaped. A freshly launched agent reports "idle" before the model engages, so a
 // reaper tick landing in that window would kill it before it does any work.

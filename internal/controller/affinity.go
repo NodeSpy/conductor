@@ -59,6 +59,9 @@ type AffinityRef struct {
 	Key        string
 	Controller string // runtime implementation that owns the session
 	SessionID  string // the runtime's session/agent id
+	// Shape fingerprints the controller this session was opened on, so a
+	// resume can tell that `runtimes.<name>` now points somewhere else.
+	Shape string
 	// AgentAuthored: the original dispatch's provenance, replayed on resume
 	// so the deny-by-default egress survives restarts (#36 iso-review H5).
 	AgentAuthored bool
@@ -163,6 +166,21 @@ func NewAffinity(reg *Registry, st AffinityStore, cfg *config.Config, hold, rele
 	}
 	if st != nil {
 		for _, r := range st.Affinities() {
+			// A binding that the CURRENT config can no longer produce is
+			// dead: its runtime was deleted or renamed, so no dispatch
+			// will ever key to it again. Holding it kept the agent alive
+			// (and the reaper away) until idle-out, for a session nothing
+			// could reach. Drop it at startup instead.
+			if !a.bindingStillReachable(r) {
+				if a.log != nil {
+					a.log("affinity: dropping binding %s/%s (session %s) — no runtime %q in the current config",
+						r.Runtime, r.Key, r.SessionID, r.Runtime)
+				}
+				if st != nil {
+					_ = st.DeleteAffinity(r.Runtime, r.Model, r.Key)
+				}
+				continue
+			}
 			bk := bindingKey(r.Runtime, r.Model, r.Key)
 			a.refs[bk] = r
 			a.owned[r.SessionID] = bk
@@ -172,6 +190,40 @@ func NewAffinity(reg *Registry, st AffinityStore, cfg *config.Config, hold, rele
 		}
 	}
 	return a
+}
+
+// bindingStillReachable reports whether a persisted binding could still be
+// produced by the current config. With no config in hand (a bare
+// registry, a test) everything is kept — this prunes what it can prove
+// dead, and guesses at nothing.
+func (a *Affinity) bindingStillReachable(r AffinityRef) bool {
+	if a.cfg == nil {
+		return true
+	}
+	if r.Runtime == config.BuiltinPaseoRuntime {
+		return true
+	}
+	_, ok := a.cfg.Runtimes[r.Runtime]
+	return ok
+}
+
+// controllerShape is a fingerprint of the controller a session was opened
+// on: its implementation and the argv/agent that implementation launches.
+//
+// A resume looked the controller up by NAME against the CURRENT config, so
+// editing `runtimes.<name>` to point at a different tool — a different
+// binary, a different ACP agent — sent a foreign session id to a program
+// that had never heard of it. The failure is confusing at best and, if the
+// id happens to be meaningful to the new tool, wrong at worst.
+func controllerShape(cfg *config.Config, name string) string {
+	if cfg == nil {
+		return ""
+	}
+	rt, ok := cfg.Runtimes[name]
+	if !ok {
+		return ""
+	}
+	return strings.Join(append([]string{rt.Use, rt.Agent, rt.Tool, rt.Bin}, rt.Command...), "\x00")
 }
 
 // bindingKey is the registry key: the three structural dimensions joined by
@@ -346,6 +398,7 @@ func (a *Affinity) bind(bk, runtimeName, model, key, controllerName, sessionID s
 		Runtime: runtimeName, Model: model, Key: key,
 		Controller: controllerName, SessionID: sessionID,
 		AgentAuthored: agentAuthored,
+		Shape:         controllerShape(a.cfg, runtimeName),
 		Created:       now, LastUsed: now,
 	}
 	a.putRef(bk, ref)
@@ -417,6 +470,20 @@ func (a *Affinity) followup(ctx context.Context, bk string, ref AffinityRef, tex
 		c, err := a.reg.ByName(ref.Controller)
 		if err != nil {
 			return "", err
+		}
+		// The controller must still be the SHAPE the session was opened
+		// on. Resuming by name alone would hand a foreign session id to
+		// whatever `runtimes.<name>` now points at.
+		if want := ref.Shape; want != "" {
+			if now := controllerShape(a.cfg, ref.Runtime); now != want {
+				a.mu.Lock()
+				sess := a.unbind(bk, ref)
+				a.mu.Unlock()
+				if sess != nil {
+					_ = sess.Close(ctx)
+				}
+				return "", fmt.Errorf("affinity: runtime %q was reconfigured since session %s was opened — not resuming into a different tool", ref.Runtime, ref.SessionID)
+			}
 		}
 		if sess, err = c.ResumeSession(ctx, ref.SessionID, ref.AgentAuthored, nil); err != nil {
 			return "", err

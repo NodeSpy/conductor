@@ -29,12 +29,13 @@ import (
 // dialer starts `opencode serve` in the worktree with conductor's identity env, or
 // a test injects a server URL directly.
 type opencodeController struct {
-	name string
-	host string // hosts: entry the server launches on over SSH ("" = local)
-	iso  *config.IsolationConfig
-	prov Provisioner
-	dial opencodeDialer // injectable; nil → spawn `opencode serve`
-	hc   *http.Client
+	runner runnerMemo
+	name   string
+	host   string // hosts: entry the server launches on over SSH ("" = local)
+	iso    *config.IsolationConfig
+	prov   Provisioner
+	dial   opencodeDialer // injectable; nil → spawn `opencode serve`
+	hc     *http.Client
 
 	// cwds remembers the worktree each session was opened in, keyed by
 	// session id. ResumeSession is handed only an id — the Controller
@@ -119,7 +120,9 @@ func (c *opencodeController) Initialize(context.Context) (Capabilities, error) {
 }
 
 func (c *opencodeController) Runner() (Runner, error) {
-	return newControllerRunner(c, c.prov, nil), nil
+	// One runner per controller: its live-agent tracking is the state
+	// the engine's duplicate-dispatch gate reads (see runnerMemo).
+	return c.runner.get(func() Runner { return newControllerRunner(c, c.prov, nil) }), nil
 }
 
 // NewSession starts (or connects to) an opencode server rooted at the worktree,

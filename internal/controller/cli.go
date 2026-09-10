@@ -26,6 +26,7 @@ import (
 // session_model follows the recipe: a tool that can continue a prior run (claude-
 // code `--resume`) is resumable; otherwise each turn is a fresh process (oneshot).
 type cliController struct {
+	runner runnerMemo
 	name   string
 	recipe cliRecipe
 	prov   Provisioner
@@ -82,7 +83,9 @@ func (c *cliController) Initialize(context.Context) (Capabilities, error) {
 }
 
 func (c *cliController) Runner() (Runner, error) {
-	return newControllerRunner(c, c.prov, nil), nil
+	// One runner per controller: its live-agent tracking is the state
+	// the engine's duplicate-dispatch gate reads (see runnerMemo).
+	return c.runner.get(func() Runner { return newControllerRunner(c, c.prov, nil) }), nil
 }
 
 // NewSession launches the tool for its first (and, for a oneshot recipe, only) turn

@@ -25,12 +25,21 @@ type fakeACPAgent struct {
 	gotMcp    []acp.McpServer
 	gotPrompt string
 	outcome   *acp.RequestPermissionOutcome
+	loadedID  string // the session/load the controller issued, if any
 }
 
 func (a *fakeACPAgent) HandleRequest(ctx context.Context, method string, params json.RawMessage) (any, *acp.RPCError) {
 	switch method {
 	case acp.MethodInitialize:
 		return a.initResult, nil
+	case acp.MethodLoadSession:
+		var p acp.LoadSessionParams
+		_ = json.Unmarshal(params, &p)
+		a.mu.Lock()
+		a.loadedID = p.SessionID
+		a.gotCwd = p.Cwd
+		a.mu.Unlock()
+		return struct{}{}, nil
 	case acp.MethodNewSession:
 		var p acp.NewSessionParams
 		_ = json.Unmarshal(params, &p)

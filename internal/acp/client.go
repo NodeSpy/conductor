@@ -127,6 +127,25 @@ func (c *Client) NewSession(ctx context.Context, params NewSessionParams) (*NewS
 	return &res, nil
 }
 
+// LoadSession re-attaches to an existing session (`session/load`), the
+// resume half of the protocol.
+//
+// The method constant existed and nothing ever called it: ResumeSession
+// spawned a fresh agent, ran initialize, and handed back a session id the
+// agent had never been told about. Every "resumed" turn therefore started
+// from an empty context while conductor reported it as continuous — the
+// worst shape for a bug, since the transcript looks fine and only the
+// agent's memory of the conversation is missing.
+//
+// Only call it when AgentCapabilities.LoadSession is set; an agent that
+// does not advertise it answers with a method-not-found.
+func (c *Client) LoadSession(ctx context.Context, params LoadSessionParams) error {
+	if params.McpServers == nil {
+		params.McpServers = []McpServer{}
+	}
+	return c.conn.Call(ctx, MethodLoadSession, params, nil)
+}
+
 // Prompt runs one prompt turn and blocks until the agent ends it, returning the
 // stop reason. Streamed updates and permission requests reach the delegate while
 // this call is in flight.

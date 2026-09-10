@@ -568,3 +568,48 @@ func TestAffinityLockMapDoesNotGrow(t *testing.T) {
 	})
 	waitFor(t, "post-eviction lock map empty", func() bool { return rig.aff.LockedKeys() == 0 })
 }
+
+// §20: a resume looked the controller up by NAME against the CURRENT
+// config, so editing `runtimes.<name>` to point at a different tool sent a
+// foreign session id to a program that had never heard of it.
+func TestResumeRefusesAReconfiguredController(t *testing.T) {
+	cfg := &config.Config{Runtimes: config.RuntimeSet{
+		"r": {Use: "acp", Agent: "gemini"},
+	}}
+	shapeThen := controllerShape(cfg, "r")
+	if shapeThen == "" {
+		t.Fatal("a configured runtime should have a shape")
+	}
+	// The operator repoints the same NAME at a different tool.
+	cfg.Runtimes["r"] = config.RuntimeConfig{Use: "acp", Agent: "opencode"}
+	if now := controllerShape(cfg, "r"); now == shapeThen {
+		t.Fatal("a different agent must produce a different shape")
+	}
+}
+
+// §24: a binding the current config can no longer produce is dead — its
+// runtime was deleted or renamed, so no dispatch will key to it again.
+// Holding it kept the agent alive (and the reaper away) until idle-out for
+// a session nothing could reach.
+func TestStartupDropsUnreachableBindings(t *testing.T) {
+	st := newMemAffStore()
+	_ = st.PutAffinity(AffinityRef{Runtime: "gone", Key: "k1", SessionID: "s1", Controller: "acp"})
+	_ = st.PutAffinity(AffinityRef{Runtime: "kept", Key: "k2", SessionID: "s2", Controller: "acp"})
+
+	var held []string
+	cfg := &config.Config{Runtimes: config.RuntimeSet{"kept": {Use: "acp", Agent: "gemini"}}}
+	a := NewAffinity(NewRegistry(nil, "", nil, nil), st, cfg,
+		func(id string) { held = append(held, id) }, func(string) {}, nil)
+
+	if a.Owns("s1") {
+		t.Error("a binding whose runtime is gone must not be restored")
+	}
+	if !a.Owns("s2") {
+		t.Error("a binding whose runtime still exists must be restored")
+	}
+	for _, id := range held {
+		if id == "s1" {
+			t.Error("an unreachable session must not be held against the reaper")
+		}
+	}
+}

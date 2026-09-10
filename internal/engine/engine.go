@@ -87,9 +87,14 @@ type Store interface {
 
 // Engine is the central work loop.
 type Engine struct {
-	cfg         *config.Config
-	store       Store
-	disp        Dispatcher
+	cfg   *config.Config
+	store Store
+	disp  Dispatcher
+	// owner maps a live agent id → the runner that dispatched it, so
+	// archive_when_done closes the session on the transport that opened it
+	// rather than always on paseo. See archiveAgent.
+	ownerMu     sync.Mutex
+	owner       map[string]Dispatcher
 	controllers *controller.Registry // resolves which controller runs each agent
 	broker      *controller.Broker   // owns one live session per PR (interactive hand-off); nil = disabled
 	handoffs    *handoff.Registry    // resolves a step's hand-off channel by name; nil = paseo-native hand-off
@@ -128,6 +133,34 @@ type Engine struct {
 	// modelResolver walks the fleet ladder (design §2.3) per dispatch. nil
 	// = no model layer: every dispatch bare-launches.
 	modelResolver *models.Resolver
+}
+
+// hasLiveAgentFor asks the controller that would actually RUN this work
+// whether an agent for this PR+kind is already open.
+//
+// It used to ask e.disp — the paseo dispatcher — unconditionally, so on
+// every other transport the answer came from a tracker that had never seen
+// the dispatch and was always "no". A second review event for an in-flight
+// PR then spawned a duplicate agent against the same worktree. (The other
+// half of that bug was every non-paseo Runner() returning a FRESH tracker
+// per call; see controller.runnerMemo.)
+//
+// It falls back to e.disp when the controller cannot be resolved or has no
+// runner: an unanswerable question should not silently become "yes" and
+// block the work.
+func (e *Engine) hasLiveAgentFor(ctx context.Context, act config.Action, key, kind string) bool {
+	profile, _ := e.actionProfile(act.Agent)
+	if act.Backend != "" {
+		profile.Runtime = act.Backend
+	}
+	if r, err := e.runnerFor(profile); err == nil && r != nil {
+		if lr, ok := r.(interface {
+			HasLiveAgent(context.Context, string, string) bool
+		}); ok {
+			return lr.HasLiveAgent(ctx, key, kind)
+		}
+	}
+	return e.disp.HasLiveAgent(ctx, key, kind)
 }
 
 // overAgentBudget prunes agent-dispatch timestamps older than an hour and reports
@@ -233,6 +266,7 @@ func New(o Options) *Engine {
 	}
 	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,
+		owner:  map[string]Dispatcher{},
 		broker: o.Broker, handoffs: o.Handoffs,
 		author: o.Author, userTok: o.UserToken, readTok: o.ReadToken, log: log,
 		hold:      o.Hold,
@@ -433,10 +467,74 @@ func (e *Engine) capabilityCard(sk *config.SkillPolicy) string {
 func (e *Engine) dispatchAgent(ctx context.Context, runner Dispatcher, req dispatch.Request) (dispatch.RunRef, error) {
 	if e.affinity != nil {
 		if ref, handled, err := e.affinity.Dispatch(ctx, runner, req); handled {
+			e.rememberDispatcher(ref.AgentID, runner)
 			return ref, err
 		}
 	}
-	return runner.Dispatch(ctx, req)
+	ref, err := runner.Dispatch(ctx, req)
+	e.rememberDispatcher(ref.AgentID, runner)
+	return ref, err
+}
+
+// rememberDispatcher records which runner opened an agent so archiving can
+// reach it later. Every agent dispatch funnels through dispatchAgent, which
+// makes this the one place the association is knowable.
+func (e *Engine) rememberDispatcher(agentID string, runner Dispatcher) {
+	// A paseo-dispatched agent needs no record: archiveAgent's fallback is
+	// e.disp, which is already the right answer for it. Skipping those keeps
+	// the table to the non-paseo minority it exists for.
+	if agentID == "" || runner == nil || runner == e.disp {
+		return
+	}
+	e.ownerMu.Lock()
+	defer e.ownerMu.Unlock()
+	// Entries are dropped on archive, but an agent that is never archived
+	// (reaped by its transport, or lost to a crash) would linger. Bound the
+	// table: evicting only costs the fallback path, which is the behaviour
+	// this whole record replaced, so an over-long-lived agent degrades to
+	// exactly what it did before rather than to a leak.
+	if len(e.owner) >= maxTrackedOwners {
+		for k := range e.owner {
+			delete(e.owner, k)
+			if len(e.owner) < maxTrackedOwners {
+				break
+			}
+		}
+	}
+	e.owner[agentID] = runner
+}
+
+// maxTrackedOwners caps the agent→runner table. Far above any plausible count
+// of concurrently-live non-paseo sessions; it exists so a pathological daemon
+// uptime can't grow the map without limit.
+const maxTrackedOwners = 4096
+
+// archiveAgent closes a finished agent through the runner that OPENED it.
+//
+// Both archive sites used to call e.disp.Archive — the paseo dispatcher —
+// regardless of which transport actually ran the step. On ACP, opencode and
+// the CLI recipes that meant `archive_when_done: true` closed nothing: the
+// session stayed open and its subprocess stayed resident until the transport
+// idled it out on its own, if it ever did. Archiving through the recorded
+// owner is what makes the flag mean the same thing on every transport.
+//
+// Falls back to e.disp for an id we have no record of (a session adopted
+// across a daemon restart, say) — the old behaviour, which is right for the
+// paseo-dispatched majority and harmless elsewhere.
+func (e *Engine) archiveAgent(ctx context.Context, agentID string) error {
+	if agentID == "" {
+		return nil
+	}
+	e.ownerMu.Lock()
+	runner := e.owner[agentID]
+	delete(e.owner, agentID)
+	e.ownerMu.Unlock()
+	if a, ok := runner.(interface {
+		Archive(context.Context, string) error
+	}); ok {
+		return a.Archive(ctx, agentID)
+	}
+	return e.disp.Archive(ctx, agentID)
 }
 
 // affinityOwns reports whether an agent id is a bound keyed session — the
@@ -697,7 +795,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		// A review workflow shouldn't re-run while its agent is parked for you.
 		// Single-action fixers instead fall through to dispatch, which queues new
 		// work to the agent already on this PR (or spawns one) — see paseo.go.
-		if len(act.Steps) > 0 && e.disp.HasLiveAgent(ctx, key, t.Kind) {
+		if len(act.Steps) > 0 && e.hasLiveAgentFor(ctx, act, key, t.Kind) {
 			// Exception: a review re-request on a NEW head. If we've never dispatched
 			// review_requested at the current head, the parked agent is reviewing stale
 			// code — re-engage on the new head instead of being blocked indefinitely by
