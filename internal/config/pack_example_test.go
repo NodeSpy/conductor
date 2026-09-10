@@ -81,8 +81,8 @@ packs:
 	if !ok {
 		t.Fatalf("expected review/review-flow, have %v", workflowKeys(cfg))
 	}
-	if wf.Steps[0].Extends != "my-opus" {
-		t.Fatalf("bound reviewer should resolve to my-opus, got %q", wf.Steps[0].Extends)
+	if wf.Steps[0].Name != "my-opus" {
+		t.Fatalf("bound reviewer should resolve to my-opus, got %q", wf.Steps[0].Name)
 	}
 	// Preset codex applied: heavy_model=gpt-5-pro substituted into the prompt.
 	if !strings.Contains(wf.Steps[0].Prompt, "gpt-5-pro") {

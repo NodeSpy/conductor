@@ -22,7 +22,7 @@ triggers:
     steps:
       - id: legacy
         type: agent
-        extends: deployer
+        step: deployer
         prompt: p
         env:
           TOKEN: "{{.secrets.tok}}"
@@ -40,7 +40,7 @@ workflows:
     steps:
       - id: wfagent
         type: agent
-        extends: deployer
+        step: deployer
         prompt: p
         env:
           T: "{{.secrets.tok}}"
@@ -98,13 +98,13 @@ triggers:
     steps:
       - id: leaky
         type: agent
-        extends: deployer
+        step: deployer
         prompt: 'deploy with {{.secrets.tok}} now'
         checkout: 'refs/{{.secrets.tok}}'
         workdir: '/w/{{.secrets.tok}}'
       - id: leakyargs
         type: agent
-        extends: deployer
+        step: deployer
         prompt: p
         args:
           - "--token={{.secrets.tok}}"

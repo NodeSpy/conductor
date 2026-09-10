@@ -135,88 +135,106 @@ func TestIdentityIsPureConfig(t *testing.T) {
 	}
 }
 
-// --- step templates and reuse ---------------------------------------------
+// --- anchors, reuse, and identity -----------------------------------------
+//
+// An anchor shares CONFIGURATION. It does not share identity: a merged step
+// is still identified by where it sits, which is what keeps a step's memory
+// and track record attached to its job rather than to its wording.
 
-func TestStepTemplateExtendsSharesIdentityAndBehavior(t *testing.T) {
+func TestAnchoredStepsKeepStructuralIdentity(t *testing.T) {
 	src := `
-connectors:
-  gh: { use: github }
-steps:
-  fixer:
+x-templates:
+  fixer: &fixer
     type: agent
     workspace: worktree
     archive_when_done: true
     model: claude-opus-5
+connectors:
+  gh: { use: github }
 triggers:
   github.pull_request:
     steps:
-      - { id: a, extends: fixer, prompt: "one" }
+      - <<: *fixer
+        id: a
+        prompt: "one"
   gitlab.merge_request:
     steps:
-      - { id: b, extends: fixer, prompt: "two" }
+      - <<: *fixer
+        id: b
+        prompt: "two"
 `
 	var c Config
 	if err := strictUnmarshal([]byte(src), &c); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.resolveExtends(); err != nil {
-		t.Fatal(err)
-	}
+	var ids []string
 	for i, tr := range c.Triggers {
 		s := tr.Steps[0]
 		if s.Workspace != "worktree" || !s.ArchiveWhenDone || s.Model.Ref != "claude-opus-5" {
-			t.Fatalf("trigger %d: template behavior not inherited: %+v", i, s)
+			t.Fatalf("trigger %d: anchored behavior not merged: %+v", i, s)
 		}
-		// Both steps take the TEMPLATE's name as their identity, so they
-		// share one memory namespace, session pool, and track record.
-		if got := s.Identity(ScopeForTrigger(tr, i), 0); got != "fixer" {
-			t.Fatalf("trigger %d: identity = %q, want fixer", i, got)
+		ids = append(ids, s.Identity(ScopeForTrigger(tr, i), 0))
+	}
+	// Two steps sharing an anchor are still two identities — the anchor
+	// copied fields, it did not merge the steps.
+	if ids[0] == ids[1] {
+		t.Fatalf("an anchor must not collapse identity, both are %q", ids[0])
+	}
+	for _, id := range ids {
+		if id == "fixer" {
+			t.Fatalf("identity leaked the anchor label: %q", id)
 		}
 	}
 }
 
-func TestStepTemplateChildNamePinWins(t *testing.T) {
-	c := &Config{
-		Steps: map[string]Step{"fixer": {Type: "agent", Workspace: "worktree"}},
-		Triggers: TriggerList{{Name: "t", On: "gh.pr", Steps: []Step{
-			{ID: "a", Extends: "fixer", Name: "special"},
-		}}},
+// `name:` is the separate, deliberate opt-in to SHARING identity across
+// workflows — the thing an anchor does not do.
+func TestNameSharesIdentityAcrossTriggers(t *testing.T) {
+	src := `
+x-templates:
+  fixer: &fixer
+    type: agent
+    name: fixer
+    workspace: worktree
+connectors:
+  gh: { use: github }
+triggers:
+  github.pull_request:
+    steps: [{ <<: *fixer, id: a, prompt: "one" }]
+  gitlab.merge_request:
+    steps: [{ <<: *fixer, id: b, prompt: "two" }]
+`
+	var c Config
+	if err := strictUnmarshal([]byte(src), &c); err != nil {
+		t.Fatal(err)
 	}
-	if err := c.resolveExtends(); err != nil {
+	for i, tr := range c.Triggers {
+		if got := tr.Steps[0].Identity(ScopeForTrigger(tr, i), 0); got != "fixer" {
+			t.Fatalf("trigger %d: identity = %q, want the shared name fixer", i, got)
+		}
+	}
+}
+
+// A step's own `name:` wins over one merged in, same as any other key.
+func TestMergedNameIsOverridable(t *testing.T) {
+	src := `
+x-templates:
+  fixer: &fixer { type: agent, name: fixer, workspace: worktree }
+connectors:
+  gh: { use: github }
+triggers:
+  github.pull_request:
+    steps: [{ <<: *fixer, id: a, name: special, prompt: p }]
+`
+	var c Config
+	if err := strictUnmarshal([]byte(src), &c); err != nil {
 		t.Fatal(err)
 	}
 	s := c.Triggers[0].Steps[0]
 	if s.Workspace != "worktree" {
-		t.Fatal("behavior should still be inherited")
+		t.Fatal("the rest of the merge should still apply")
 	}
 	if got := s.Identity(TriggerScope("t"), 0); got != "special" {
-		t.Fatalf("an explicit name must win over the template's, got %q", got)
-	}
-}
-
-func TestStepTemplateUnknownTargetIsALoadError(t *testing.T) {
-	c := &Config{Triggers: TriggerList{{Name: "t", On: "gh.pr", Steps: []Step{{ID: "a", Extends: "ghost"}}}}}
-	err := c.resolveExtends()
-	if err == nil || !strings.Contains(err.Error(), `unknown step template "ghost"`) {
-		t.Fatalf("want an unknown-template error, got %v", err)
-	}
-}
-
-// Guidance STACKS rather than fills, so applying a template twice would
-// duplicate its tone. ApplyStepTemplates must be idempotent — the runtime
-// paths (team roles, plan sub-steps) call it on already-loaded steps.
-func TestApplyStepTemplatesIsIdempotent(t *testing.T) {
-	c := &Config{Steps: map[string]Step{
-		"fixer": {Type: "agent", Guidance: &GuidanceSpec{Parts: []string{"house tone"}}},
-	}}
-	steps := []Step{{ID: "a", Extends: "fixer", Guidance: &GuidanceSpec{Parts: []string{"mine"}}}}
-	for i := 0; i < 3; i++ {
-		if err := c.ApplyStepTemplates("t", steps); err != nil {
-			t.Fatal(err)
-		}
-	}
-	got := steps[0].Guidance.Parts
-	if len(got) != 2 || got[0] != "house tone" || got[1] != "mine" {
-		t.Fatalf("guidance stacked more than once: %v", got)
+		t.Fatalf("an explicit name must win, got %q", got)
 	}
 }

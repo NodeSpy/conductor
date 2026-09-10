@@ -63,7 +63,7 @@ workflows:
     steps:
       - id: review
         type: agent
-        extends: reviewer
+        step: reviewer
         prompt: "review with {{.repo}} using ${settings.heavy_model}"
       - id: post
         uses: github.comment
@@ -149,8 +149,13 @@ func TestPackInstantiateNamespaceAndBind(t *testing.T) {
 	if _, leaked := cfg.Steps["review/reviewer"]; leaked {
 		t.Fatal("a bound role must not emit a namespaced agent copy")
 	}
-	if got := wf.Steps[0].Extends; got != "my-opus" {
-		t.Fatalf("bound agent ref should resolve to the global my-opus, got %q", got)
+	// The role is resolved by load, so the workflow step carries the
+	// GLOBAL's identity and behavior rather than a dangling reference.
+	if got := wf.Steps[0].Name; got != "my-opus" {
+		t.Fatalf("bound role should take the global's identity, got %q", got)
+	}
+	if sk := wf.Steps[0].Skill; sk == nil || len(sk.Verbs) != 1 || sk.Verbs[0] != "github.submit_review" {
+		t.Fatalf("bound role should inherit the global's skill, got %+v", sk)
 	}
 
 	// Agent override: handoff kept the bundle and merged the override.

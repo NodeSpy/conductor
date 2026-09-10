@@ -27,7 +27,7 @@ steps:
   - { id: skipme, if: "{{.msg}} == never", uses: svc.post, options: { text: x } }
   - id: fix
     type: agent
-    extends: fixer
+    step: fixer
     prompt: "fix {{.msg}}"
 `
 

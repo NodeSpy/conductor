@@ -280,11 +280,11 @@ func (r *Runner) resolveBotReply(t core.Trigger, spec config.TriggerSpec) botRep
 
 func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, batch *Batch, shadow bool) {
 	ctx = withIdentityScope(ctx, config.ScopeForTrigger(spec, 0))
-	// A spec that did not come through config.Load (a lowered legacy
-	// trigger, an agent-authored plan) may still name a `steps:` template.
-	// Idempotent — already-resolved steps are skipped.
+	// A spec that did not come through config.Load (a lowered legacy trigger,
+	// an agent-authored plan) may still name a `steps:` entry. Idempotent —
+	// a resolved step has already dropped its reference.
 	if r.Cfg != nil {
-		if err := r.Cfg.ApplyStepTemplates(triggerLabel(spec), spec.Steps); err != nil {
+		if err := r.Cfg.ResolveStepRefsIn(spec.Steps); err != nil {
 			r.Log("%s %v", flowTag(t), err)
 		}
 	}
@@ -1269,15 +1269,12 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 			step.Agent = strings.TrimSpace(rendered)
 		}
 	}
-	// Resolve `extends:` here too, not only at load: team roles, plan
-	// sub-steps, and gate checks are SYNTHESIZED at runtime and may name a
-	// `steps:` template. Idempotent, so a load-resolved step is untouched.
-	if r.Cfg != nil && step.Extends != "" {
-		resolved := []config.Step{step}
-		if err := r.Cfg.ApplyStepTemplates(flowTag(t), resolved); err != nil {
+	// Resolve `step:` here too, not only at load: plan sub-steps and gate
+	// checks are SYNTHESIZED at runtime and may name a `steps:` entry.
+	if r.Cfg != nil && step.StepRef != "" {
+		if err := r.Cfg.ResolveStepRef(step.StepRef, &step); err != nil {
 			return nil, "", err
 		}
-		step = resolved[0]
 	}
 	// The step IS the profile now (design §6), and its identity is the key
 	// memory, sessions, and outcomes use (§5).

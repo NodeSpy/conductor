@@ -134,13 +134,19 @@ type Config struct {
 	// reference. Each check is one ordinary step (command / code / verb /
 	// critic agent) evaluated to pass/fail against the agent's worktree.
 	Checks map[string]Step `yaml:"checks"`
-	// Steps is the OPTIONAL `steps:` map of NAMED, REUSABLE step templates —
-	// the successor to the retired `agents:` profiles. A step in a trigger or
-	// workflow points `extends:` at one of these and inherits every field it
-	// leaves unset, which is exactly the reuse a named agent profile gave.
-	// The template's own key is also its identity default, so several triggers
-	// extending one template share its memory namespace, session pool, and
-	// track record. See Step and docs/design/agents-removal.md §6.
+	// Steps is the OPTIONAL `steps:` map of NAMED steps — a registry of steps
+	// that other config addresses BY NAME rather than writing inline. There
+	// is one such addresser: a `team:`, whose planner/worker/critic/reconcile
+	// roles are names, resolved by ResolveRoleStep (and by a pack's step
+	// roles, which are namespaced into this same map).
+	//
+	// It is NOT the reuse mechanism. Sharing step configuration is a YAML
+	// anchor (`&base` / `<<: *base`, see anchors.go) — no section needed, and
+	// it works identically in a pack manifest.
+	//
+	// An entry's key is its identity default, so every team using `architect`
+	// as its planner shares one memory namespace, session pool, and track
+	// record. See Step and docs/design/agents-removal.md §6.
 	Steps map[string]Step `yaml:"steps,omitempty"`
 	// Pricing overrides the built-in model→$ table cost estimation uses
 	// (#36 §14). Model prices drift; the built-ins are coarse defaults and

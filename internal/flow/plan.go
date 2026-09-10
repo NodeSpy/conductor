@@ -207,12 +207,12 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 				for _, ro := range roles {
 					if ro.name == "" {
 						if ro.role == "planner" || ro.role == "worker" {
-							return fmt.Errorf("%s: team needs `%s:` (a steps: template)", w, ro.role)
+							return fmt.Errorf("%s: team needs `%s:` (the name of a top-level steps: entry)", w, ro.role)
 						}
 						continue
 					}
 					if _, ok := cfg.Steps[ro.name]; !ok {
-						return fmt.Errorf("%s: team.%s names unknown steps: template %q", w, ro.role, ro.name)
+						return fmt.Errorf("%s: team.%s names no top-level steps: entry %q", w, ro.role, ro.name)
 					}
 				}
 			case "parallel":

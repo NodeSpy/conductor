@@ -7,10 +7,18 @@ import (
 )
 
 // extends.go implements Docker-Compose-style `extends:` inheritance for the
-// map-of-named-entries config sections (agents, runtimes, workflows, handoffs).
-// A child entry names one parent in the SAME section and inherits every field it
-// leaves unset. Resolution runs once in Load, after imports merge and before
-// validation, so downstream only ever sees fully-resolved entries.
+// map-of-named-entries config sections (runtimes, workflows, handoffs) and for
+// triggers. A child entry names one parent in the SAME section and inherits
+// every field it leaves unset. Resolution runs once in Load, after imports
+// merge and before validation, so downstream only ever sees fully-resolved
+// entries.
+//
+// Steps are NOT in that list. Reuse of step behavior is plain YAML anchors
+// (anchors.go) — `&base` / `<<: *base` — which needs no conductor machinery
+// and works the same in a pack manifest. What remains of the top-level
+// `steps:` map is a REGISTRY of named steps that other config addresses by
+// name (a `team:` role, a pack's step roles); resolveRoleStep below is that
+// lookup, and it is not reachable from YAML.
 //
 // Merge rules (see mergeStruct): scalars — child wins when set; pointers —
 // child wins when non-nil; maps (labels/env/inputs) — deep-merged, child keys
@@ -39,99 +47,95 @@ func (c *Config) resolveExtends() error {
 	if err := resolveExtendsSection(c.Handoffs, "handoff", func(h HandoffConfig) string { return h.Extends }); err != nil {
 		return err
 	}
-	if err := resolveExtendsSection(c.Steps, "step", func(s Step) string { return s.Extends }); err != nil {
-		return err
-	}
-	if err := c.resolveStepTemplates(); err != nil {
-		return err
-	}
-	return nil
+	return c.resolveStepRefs()
 }
 
-// ApplyStepTemplates resolves `extends:` for a step list built OUTSIDE Load
-// (a lowered trigger, a test rig, an agent-authored plan). It is idempotent:
-// a step whose template is already merged is skipped, which matters because
-// guidance stacks rather than filling.
-func (c *Config) ApplyStepTemplates(where string, steps []Step) error {
+// resolveStepRefs resolves every `step: <name>` reference in the config
+// against the top-level `steps:` registry. It runs after packs instantiate,
+// so a pack's role name has already been namespaced or rebound to whatever
+// the consumer pointed it at.
+func (c *Config) resolveStepRefs() error {
+	var err error
+	c.WalkSteps(func(scope IdentityScope, _ int, s *Step) {
+		if err != nil || s.StepRef == "" {
+			return
+		}
+		// A registry entry may not play another one. Chains would need an
+		// order the map does not have, and an entry that wants another's
+		// fields is describing an anchor, not a role.
+		if scope.Kind == "step" {
+			err = fmt.Errorf("config: steps.%s: a named step cannot itself use `step: %s` — share fields with a YAML anchor instead", scope.Name, s.StepRef)
+			return
+		}
+		err = c.ResolveStepRef(s.StepRef, s)
+	})
+	return err
+}
+
+// ResolveStepRefsIn resolves `step:` across a step list built OUTSIDE Load —
+// a lowered legacy trigger, an agent-authored plan — recursing into the
+// nested step forms. Idempotent, so calling it on a load-resolved list does
+// nothing.
+func (c *Config) ResolveStepRefsIn(steps []Step) error {
 	for i := range steps {
-		if err := c.applyStepTemplate(where, &steps[i]); err != nil {
+		if err := c.resolveStepRefIn(&steps[i]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// resolveStepTemplates applies `extends:` from a step in a trigger, workflow,
-// or check to an entry in the top-level `steps:` map — the cross-section half
-// of step reuse (the same-section half, a template extending a template, is
-// handled by the resolveExtendsSection call above, which runs first so a
-// chain is fully collapsed before anything inherits from it).
-//
-// This is what carries a retired named agent profile forward: several
-// triggers that all dispatched to `agent: fixer` become several steps that
-// all `extends: fixer`, inheriting the behavior AND — because a template's
-// key becomes the child's identity when the child pins none — the memory
-// namespace, session pool, and track record that name accumulated.
-func (c *Config) resolveStepTemplates() error {
-	var walkErr error
-	apply := func(where string, steps []Step) {
-		for i := range steps {
-			if walkErr != nil {
-				return
-			}
-			walkErr = c.applyStepTemplate(where, &steps[i])
+func (c *Config) resolveStepRefIn(s *Step) error {
+	if s.StepRef != "" {
+		if err := c.ResolveStepRef(s.StepRef, s); err != nil {
+			return err
 		}
-	}
-	for i := range c.Triggers {
-		apply(triggerRef(c.Triggers[i], i), c.Triggers[i].Steps)
-	}
-	for name, wf := range c.Workflows {
-		apply("workflow "+name, wf.Steps)
-	}
-	for name, ck := range c.Checks {
-		s := ck
-		if walkErr == nil {
-			walkErr = c.applyStepTemplate("check "+name, &s)
-		}
-		c.Checks[name] = s
-	}
-	return walkErr
-}
-
-// applyStepTemplate merges one step with the template it extends, recursing
-// into the nested step forms (parallel branches, compensations).
-func (c *Config) applyStepTemplate(where string, s *Step) error {
-	if ext := strings.TrimSpace(s.Extends); ext != "" && !s.tmplApplied {
-		base, ok := c.Steps[ext]
-		if !ok {
-			return fmt.Errorf("config: %s: extends: unknown step template %q (defined: %s)", where, ext, sortedKeys(c.Steps))
-		}
-		// Identity: a child that pins no name inherits the TEMPLATE'S name —
-		// its map key — so every step extending one template shares one
-		// identity. Pinning `name:` on the child opts out.
-		name := s.Name
-		mergeStruct(reflect.ValueOf(s).Elem(), reflect.ValueOf(base))
-		if strings.TrimSpace(name) == "" {
-			s.Name = ext
-		} else {
-			s.Name = name
-		}
-		s.Extends, s.tmplApplied = ext, true
 	}
 	if s.Parallel != nil {
 		for bi := range s.Parallel.Branches {
-			for si := range s.Parallel.Branches[bi] {
-				if err := c.applyStepTemplate(where, &s.Parallel.Branches[bi][si]); err != nil {
-					return err
-				}
+			if err := c.ResolveStepRefsIn(s.Parallel.Branches[bi]); err != nil {
+				return err
 			}
 		}
 	}
 	if s.Compensate != nil {
-		if err := c.applyStepTemplate(where+" compensate", s.Compensate); err != nil {
-			return err
-		}
+		return c.resolveStepRefIn(s.Compensate)
 	}
+	return nil
+}
+
+// ResolveStepRef fills a step in from the named `steps:` entry it plays.
+//
+// Two callers: the load-time pass above, and the runtime, which synthesizes
+// team role steps from names a `team:` block supplies. Fields already set
+// win; the rest come from the registry entry, guidance stacking as it does
+// under `extends:`.
+//
+// Identity comes with it. A step that pins no `name:` takes the registry
+// key, so every team using `architect` as its planner — and every workflow
+// step that plays it — share one memory namespace, session pool, and track
+// record. That sharing is the reason to name a step at all; a step that
+// only wants the fields should use an anchor and stay anonymous.
+//
+// Applying twice is a no-op: the reference is cleared once merged, which
+// matters because guidance stacks rather than fills.
+func (c *Config) ResolveStepRef(name string, s *Step) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	base, ok := c.Steps[name]
+	if !ok {
+		return fmt.Errorf("config: step: %q names no entry in the top-level steps: map (defined: %s)", name, sortedKeys(c.Steps))
+	}
+	pinned := strings.TrimSpace(s.Name)
+	mergeStruct(reflect.ValueOf(s).Elem(), reflect.ValueOf(base))
+	if pinned == "" {
+		s.Name = name
+	} else {
+		s.Name = pinned
+	}
+	s.StepRef = ""
 	return nil
 }
 

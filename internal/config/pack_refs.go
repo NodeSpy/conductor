@@ -122,16 +122,22 @@ func (rw *refRewriter) rebindStep(p *Step) {
 	}
 }
 
-// rewriteStepExtends namespaces a pack step's pack-local `extends:` target so
-// inheritance resolves within the pack, not against a consumer global. The
-// step's identity-pinning `name:` is namespaced with it, so a pack's track
-// records/memory/sessions stay inside the instance's namespace.
-func (rw *refRewriter) rewriteStepExtends(p *Step) {
-	if p.Extends != "" {
-		p.Extends = rw.resolveAgentRef(p.Extends)
-	}
+// rewriteStepName namespaces a pack step's identity-pinning `name:`, so a
+// pack's track records, memory, and sessions stay inside the instance's
+// namespace rather than colliding with a consumer's.
+func (rw *refRewriter) rewriteStepName(p *Step) {
 	if p.Name != "" {
 		p.Name = rw.agentName(p.Name)
+	}
+}
+
+// rewriteStepRef points a pack step's `step: <role>` at whatever the role
+// resolved to — the consumer's own step when they bound one, else the
+// pack's namespaced copy. Without this a pack would reach a consumer global
+// that happens to share the role's name.
+func (rw *refRewriter) rewriteStepRef(p *Step) {
+	if p.StepRef != "" {
+		p.StepRef = rw.resolveAgentRef(p.StepRef)
 	}
 }
 
@@ -207,16 +213,8 @@ func (rw *refRewriter) rewriteHook(h *Hook) {
 // step forms (compensate, parallel branches, step hooks).
 func (rw *refRewriter) rewriteStep(s *Step) {
 	s.Agent = rw.resolveAgentRef(s.Agent)
-	// A step reaching a pack-local template by `extends:` must resolve
-	// inside the pack's namespace, not against a consumer global — and its
-	// identity-pinning `name:` is namespaced with it, so the pack's memory /
-	// session / track records stay inside the instance.
-	if s.Extends != "" {
-		s.Extends = rw.resolveAgentRef(s.Extends)
-	}
-	if s.Name != "" {
-		s.Name = rw.agentName(s.Name)
-	}
+	rw.rewriteStepRef(s)
+	rw.rewriteStepName(s)
 	s.Workflow = rw.resolveWorkflowRef(s.Workflow)
 	s.Uses = rw.rebindVerb(s.Uses)
 	if s.Handoff != "" {

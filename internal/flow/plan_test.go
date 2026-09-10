@@ -45,7 +45,7 @@ on: svc.ping
 steps:
   - id: author
     type: agent
-    extends: planner
+    step: planner
     prompt: "plan it"
 `
 
@@ -214,7 +214,7 @@ hosts:
 	}
 
 	// Too many declared sub-agents.
-	agents := "```plan\n- {type: agent, extends: helper, prompt: a}\n- {type: agent, extends: helper, prompt: b}\n```"
+	agents := "```plan\n- {type: agent, step: helper, prompt: a}\n- {type: agent, step: helper, prompt: b}\n```"
 	rig, _ = dispatchPlan(t, cfg, agents)
 	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "max_sub_agents") {
 		t.Fatalf("max_sub_agents: %v %q", failed, errStr)
@@ -643,7 +643,7 @@ policy:
 	// with two more sub-agent steps — 3 cumulative > max_sub_agents 2.
 	// Before the fix the child re-entered with a fresh budget and all ran.
 	parent := "```plan\n- id: sub\n  type: agent\n  agent: helper\n  prompt: go\n- id: after\n  uses: svc.post\n  options: { text: parent-after }\n```"
-	child := "```plan\n- {id: c1, type: agent, extends: recurser, prompt: a}\n- {id: c2, type: agent, extends: recurser, prompt: b}\n```"
+	child := "```plan\n- {id: c1, type: agent, step: recurser, prompt: a}\n- {id: c2, type: agent, step: recurser, prompt: b}\n```"
 	rig := newTestRunner(t, cfg, reg)
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
 		if req.Identity == "planner" {
@@ -682,7 +682,7 @@ policy:
 `)
 	regDeep := buildRegistry(t, cfgDeep)
 	newFakeState(t, "svc")
-	recurse := "```plan\n- {id: again, type: agent, extends: recurser, prompt: deeper}\n```"
+	recurse := "```plan\n- {id: again, type: agent, step: recurser, prompt: deeper}\n```"
 	rig2 := newTestRunner(t, cfgDeep, regDeep)
 	depthSeen := 0
 	rig2.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
@@ -713,7 +713,7 @@ policy:
 `)
 	regSteps := buildRegistry(t, cfgSteps)
 	newFakeState(t, "svc")
-	parent3 := "```plan\n- {id: a, uses: svc.post, options: {text: a}}\n- {id: sub, type: agent, extends: helper, prompt: go}\n```"
+	parent3 := "```plan\n- {id: a, uses: svc.post, options: {text: a}}\n- {id: sub, type: agent, step: helper, prompt: go}\n```"
 	child3 := "```plan\n- {id: b, uses: svc.post, options: {text: b}}\n- {id: c, uses: svc.post, options: {text: c}}\n- {id: d, uses: svc.post, options: {text: d}}\n```"
 	rig3 := newTestRunner(t, cfgSteps, regSteps)
 	rig3.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {

@@ -70,7 +70,7 @@ workflows:
 		},
 		{
 			"dangling template ref",
-			"- on: svc.ping\n  steps: [{id: a, type: agent, extends: fixer, prompt: 'do {{.nope}}'}]",
+			"- on: svc.ping\n  steps: [{id: a, type: agent, step: fixer, prompt: 'do {{.nope}}'}]",
 			"{{.nope}} is not available",
 		},
 		{
@@ -97,7 +97,7 @@ workflows:
 		},
 		{
 			"handoff on a non-ask connector",
-			"- on: svc.ping\n  steps: [{type: agent, extends: fixer, prompt: p, background: true, handoff: svc}]",
+			"- on: svc.ping\n  steps: [{type: agent, step: fixer, prompt: p, background: true, handoff: svc}]",
 			"", // svc HAS an ask verb (Ask true) — this case asserts the positive; see below
 		},
 		{

@@ -27,7 +27,7 @@ name: nightly
 steps:
   - id: fix
     type: agent
-    extends: fixer
+    step: fixer
     prompt: "fix it"
 `
 
@@ -180,7 +180,7 @@ name: nightly
 steps:
   - id: handoff
     type: agent
-    extends: fixer
+    step: fixer
     prompt: "take it from here"
     background: true
 `)

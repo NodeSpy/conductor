@@ -177,7 +177,7 @@ workflows:
     steps:
       - id: s
         type: agent
-        extends: a
+        step: a
         prompt: "uses ${settings.nope}"
 steps:
   a: { type: agent, name: a, workspace: local }

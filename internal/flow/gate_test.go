@@ -27,7 +27,7 @@ checks:
     run: js
     code: |
       return { pass: ctx.gate.workdir.length > 0, detail: "wd=" + ctx.gate.workdir };
-  critic: { type: agent, extends: critic, prompt: "review the change in {{.gate.workdir}}" }
+  critic: { type: agent, step: critic, prompt: "review the change in {{.gate.workdir}}" }
 `
 
 var gateSpecYAML = `
@@ -35,7 +35,7 @@ on: svc.ping
 steps:
   - id: fix
     type: agent
-    extends: fixer
+    step: fixer
     prompt: "fix it"
     gate: { run: [ verdict ], max_revisions: %d }
 `
@@ -244,7 +244,7 @@ on: svc.ping
 steps:
   - id: fix
     type: agent
-    extends: fixer
+    step: fixer
     prompt: "fix it"
     gate: { run: [ scope ] }
 `)
@@ -268,7 +268,7 @@ func TestGateCriticWithoutVerdictFails(t *testing.T) {
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, extends: fixer, prompt: "fix", gate: { run: [ critic ], max_revisions: 0 } }
+  - { id: fix, type: agent, step: fixer, prompt: "fix", gate: { run: [ critic ], max_revisions: 0 } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	failed, errStr := rig.workflowFailed()
@@ -290,7 +290,7 @@ func TestGateCriticVerdictPasses(t *testing.T) {
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, extends: fixer, prompt: "fix", gate: { run: [ critic ] } }
+  - { id: fix, type: agent, step: fixer, prompt: "fix", gate: { run: [ critic ] } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	if failed, errStr := rig.workflowFailed(); failed {
@@ -329,7 +329,7 @@ func TestGateCriticOutputIsRedacted(t *testing.T) {
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, extends: fixer, prompt: "fix", gate: { run: [ critic ] } }
+  - { id: fix, type: agent, step: fixer, prompt: "fix", gate: { run: [ critic ] } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	if failed, errStr := rig.workflowFailed(); failed {
@@ -364,7 +364,7 @@ checks:
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, extends: fixer, prompt: "fix", gate: { run: [ build ], max_revisions: 0 } }
+  - { id: fix, type: agent, step: fixer, prompt: "fix", gate: { run: [ build ], max_revisions: 0 } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	failed, errStr := rig.workflowFailed()
@@ -380,8 +380,8 @@ func TestTriggerLevelGateAppliesAndStepGateWins(t *testing.T) {
 on: svc.ping
 gate: { run: [ verdict ] }
 steps:
-  - { id: a, type: agent, extends: fixer, prompt: "one" }
-  - { id: b, type: agent, extends: fixer, prompt: "two", gate: { run: [ scope ] } }
+  - { id: a, type: agent, step: fixer, prompt: "one" }
+  - { id: b, type: agent, step: fixer, prompt: "two", gate: { run: [ scope ] } }
   - { id: c, uses: svc.post, options: { text: "not gated" } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
@@ -512,7 +512,7 @@ policy:
 on: svc.ping
 gate: { run: [ verdict ], max_revisions: 0 }
 steps:
-  - { id: author, type: agent, extends: planner, prompt: "plan it" }
+  - { id: author, type: agent, step: planner, prompt: "plan it" }
 `)
 	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "m"}), spec)
 	failed, errStr := rig.workflowFailed()
@@ -544,7 +544,7 @@ func TestGateCriticWithoutWorkdirFailsLoudly(t *testing.T) {
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, extends: fixer, prompt: "fix", gate: { run: [ critic ], max_revisions: 0 } }
+  - { id: fix, type: agent, step: fixer, prompt: "fix", gate: { run: [ critic ], max_revisions: 0 } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	failed, errStr := rig.workflowFailed()

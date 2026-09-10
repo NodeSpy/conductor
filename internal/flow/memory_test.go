@@ -173,7 +173,7 @@ on: svc.ping
 steps:
   - id: fix
     type: agent
-    extends: fixer
+    step: fixer
     prompt: "fix it"
 `)
 	rig := newTestRunner(t, cfg, reg)
@@ -237,7 +237,7 @@ on: svc.ping
 steps:
   - id: fix
     type: agent
-    extends: opted
+    step: opted
     prompt: "do it"
 `)
 	rig2 := newTestRunner(t, cfg, reg)

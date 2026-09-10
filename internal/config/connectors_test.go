@@ -44,7 +44,7 @@ triggers:
     steps:
       - id: respond
         type: agent
-        extends: fixer
+        step: fixer
 `)
 	cfg, err := Load(path)
 	if err != nil {

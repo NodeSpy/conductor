@@ -729,11 +729,23 @@ type Step struct {
 	// migrated `agent: fixer` keeps the history it accumulated. Unset, a
 	// step's identity is structural (enclosing trigger/workflow + slot), which
 	// survives a prompt edit. Never a random value. See Step.Identity.
+	//
+	// Sharing CONFIG is a different thing and needs no field: that is a YAML
+	// anchor (`<<: *base`, see anchors.go), which copies fields at parse time
+	// and leaves identity alone.
 	Name string `yaml:"name,omitempty"`
-	// Extends names an entry in the top-level `steps:` map this step inherits
-	// unset fields from — the reuse a named agent profile used to give. See
-	// resolveExtends.
-	Extends string `yaml:"extends,omitempty"`
+	// StepRef names an entry of the top-level `steps:` registry this step
+	// PLAYS: the entry's fields fill in whatever this step leaves unset, and
+	// its key becomes this step's identity unless `name:` pins one.
+	//
+	// It is a REFERENCE, not reuse. Reuse — "these three steps share a
+	// model and a tone" — is a YAML anchor, which needs no name and no
+	// registry. `step:` exists for the case where the name is the point:
+	// a pack ships a `reviewer` role its workflow plays and its consumer
+	// rebinds (`packs.review.steps: { reviewer: my-opus }`), which an
+	// anchor cannot express because an anchor is resolved at parse time and
+	// leaves nothing to rebind.
+	StepRef string `yaml:"step,omitempty"`
 	If      string `yaml:"if,omitempty"`
 	// Type is agent | command for the do-work forms ("" for uses/run/use).
 	Type string `yaml:"type,omitempty"`
@@ -865,12 +877,6 @@ type Step struct {
 	// OutcomeKey overrides the track-record key (default: the step identity),
 	// so several steps can deliberately pool one record.
 	OutcomeKey string `yaml:"outcome_key,omitempty"`
-
-	// tmplApplied records that `extends:` has already been merged in, so a
-	// second pass is a no-op. It matters because guidance STACKS rather than
-	// filling: re-merging would duplicate the template's tone. Not part of
-	// the schema.
-	tmplApplied bool `yaml:"-"`
 }
 
 // GateSpec configures one quality gate (#36 §16): which checks run against

@@ -35,7 +35,7 @@ name: t
 steps:
   - id: r
     type: agent
-    extends: sonnet
+    step: sonnet
     prompt: "review"
 `)
 	runTrigger(rig, newTrigger("ping", map[string]any{"who": "sonnet"}), spec)

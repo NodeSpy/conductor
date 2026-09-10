@@ -342,7 +342,7 @@ steps:
     options: { text: seed }
   - id: fix
     type: agent
-    extends: fixer
+    step: fixer
     prompt: "fix using {{.leaky.echo}}"
 `)
 	rig := newTestRunner(t, cfg, reg)

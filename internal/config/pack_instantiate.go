@@ -247,7 +247,7 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 			}
 		}
 		rw.rebindStep(&base)
-		rw.rewriteStepExtends(&base)
+		rw.rewriteStepName(&base)
 		st.cfg.setStep(rw.agentName(role), base)
 	}
 

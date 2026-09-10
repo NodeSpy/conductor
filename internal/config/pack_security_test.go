@@ -149,7 +149,7 @@ workflows:
     steps:
       - id: s
         type: agent
-        extends: a
+        step: a
         prompt: "${settings.greet}"
 steps:
   a: { type: agent, name: a, workspace: local }

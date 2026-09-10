@@ -341,7 +341,7 @@ func TestTeamConfigValidation(t *testing.T) {
 		t.Fatalf("missing planner: %v", err)
 	}
 	if err := base(&config.TeamSpec{Planner: "architect", Worker: "ghost"}).Validate(); err == nil ||
-		!strings.Contains(err.Error(), "unknown steps: template") {
+		!strings.Contains(err.Error(), "names no top-level steps: entry") {
 		t.Fatalf("unknown worker: %v", err)
 	}
 	if err := base(&config.TeamSpec{Planner: "architect", Worker: "implementer", MaxWorkers: 99}).Validate(); err == nil ||
@@ -477,7 +477,7 @@ policy:
 on: svc.ping
 gate: { run: [ verdict ], max_revisions: 0 }
 steps:
-  - { id: author, type: agent, extends: reviewer, prompt: "plan the team" }
+  - { id: author, type: agent, step: reviewer, prompt: "plan the team" }
 `)
 	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "m"}), spec)
 	failed, errStr := rig.workflowFailed()

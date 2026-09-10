@@ -13,8 +13,9 @@ import (
 // every cross-cutting pass shares and the validation those fields need.
 
 // WalkSteps visits every step in the config — trigger steps, workflow steps,
-// named checks, and the `steps:` templates — with its identity scope and
-// slot, recursing into parallel branches and compensations.
+// named checks, and the named steps of the `steps:` registry — with its
+// identity scope and slot, recursing into parallel branches and
+// compensations.
 //
 // The visitor gets a POINTER so a pass can rewrite in place; order is
 // deterministic (triggers by position, maps by sorted key) so diagnostics are
@@ -35,8 +36,8 @@ func (c *Config) WalkSteps(fn func(scope IdentityScope, slot int, s *Step)) {
 	}
 	for _, name := range sortedNames(c.Steps) {
 		s := c.Steps[name]
-		// A template's identity scope is its own key: a step extending it
-		// inherits that name, so the template and its users agree.
+		// A named step's identity scope is its own key: a team role that
+		// resolves to it inherits that name, so the two agree.
 		walkStep(IdentityScope{Kind: "step", Name: name}, 0, &s, fn)
 		c.Steps[name] = s
 	}

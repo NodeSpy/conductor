@@ -46,11 +46,11 @@ triggers:
   - name: github.pull_request
     on: github.pull_request
     steps:
-      - { id: sec, extends: security, prompt: "review" }
+      - { id: sec, step: security, prompt: "review" }
   - name: pagerduty.incident
     on: pagerduty.incident
     steps:
-      - { id: tri, extends: summarize, prompt: "triage" }
+      - { id: tri, step: summarize, prompt: "triage" }
 `
 
 // A consumer with only a github connector gets the github trigger bound to

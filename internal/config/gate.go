@@ -123,12 +123,12 @@ func (c *Config) validateTeam(w string, ts *TeamSpec) error {
 	for _, r := range roles {
 		if r.name == "" {
 			if r.role == "planner" || r.role == "worker" {
-				return fmt.Errorf("config: %s: team needs `%s:` (a steps: template)", w, r.role)
+				return fmt.Errorf("config: %s: team needs `%s:` (the name of a top-level steps: entry)", w, r.role)
 			}
 			continue
 		}
 		if _, ok := c.Steps[r.name]; !ok {
-			return fmt.Errorf("config: %s: team.%s names unknown steps: template %q (defined: %s)", w, r.role, r.name, sortedKeys(c.Steps))
+			return fmt.Errorf("config: %s: team.%s names no top-level steps: entry %q (defined: %s)", w, r.role, r.name, sortedKeys(c.Steps))
 		}
 	}
 	if ts.MaxWorkers < 0 || ts.MaxWorkers > 16 {
