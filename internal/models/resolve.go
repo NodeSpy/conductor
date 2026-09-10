@@ -64,6 +64,10 @@ type Resolver struct {
 	mu      sync.Mutex
 	rosters map[string]Roster
 	failed  map[string]error
+	// inflight dedups concurrent cold discovery per runtime: the second
+	// caller waits on the first's channel instead of issuing its own
+	// List. See roster.
+	inflight map[string]chan struct{}
 }
 
 // NewResolver builds a resolver over a loaded config. cat may be nil, which
@@ -319,17 +323,45 @@ func (r *Resolver) allowedRoster(ctx context.Context, name string) Roster {
 
 // roster discovers one runtime's models, memoized (including the failure, so
 // an unreachable provider is not re-probed for every dispatch in a fan-out).
+//
+// Concurrent callers for the SAME runtime share one discovery. The cache
+// alone was not enough: it is consulted and populated under the lock but
+// List runs outside it, so a `parallel:` step whose branches all dispatch
+// at once had every branch probing the provider simultaneously — N cold
+// round-trips, and N chances to trip a rate limit — before the first
+// result was cached.
 func (r *Resolver) roster(ctx context.Context, name string) Roster {
-	r.mu.Lock()
-	if cached, ok := r.rosters[name]; ok {
+	for {
+		r.mu.Lock()
+		if cached, ok := r.rosters[name]; ok {
+			r.mu.Unlock()
+			return cached
+		}
+		if _, bad := r.failed[name]; bad {
+			r.mu.Unlock()
+			return nil
+		}
+		if wait, inflight := r.inflight[name]; inflight {
+			// Someone else is already asking. Wait for their answer
+			// rather than asking again.
+			r.mu.Unlock()
+			<-wait
+			continue
+		}
+		done := make(chan struct{})
+		if r.inflight == nil {
+			r.inflight = map[string]chan struct{}{}
+		}
+		r.inflight[name] = done
 		r.mu.Unlock()
-		return cached
+		defer func() {
+			r.mu.Lock()
+			delete(r.inflight, name)
+			r.mu.Unlock()
+			close(done)
+		}()
+		break
 	}
-	if _, bad := r.failed[name]; bad {
-		r.mu.Unlock()
-		return nil
-	}
-	r.mu.Unlock()
 
 	rt, ok := r.cfg.Runtimes[name]
 	if !ok {

@@ -31,12 +31,16 @@ import (
 // (see anchors.go): aliases are expanded into their content and top-level
 // `x-` extension keys are dropped. Everything else is judged exactly as
 // strictly as before — `x-` is the whole exemption.
-func strictUnmarshal(data []byte, v any) error {
+func strictUnmarshal(data []byte, v any) error { return strictDecode(data, v, true) }
+
+// strictDecode is strictUnmarshal with the `x-` exemption made explicit.
+// topLevel is true only for a whole config document; see prepareStrict.
+func strictDecode(data []byte, v any, topLevel bool) error {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return err
 	}
-	prepared := prepareStrict(&doc)
+	prepared := prepareStrict(&doc, topLevel)
 	if prepared == nil {
 		return nil // an empty document decodes to the zero value
 	}
@@ -69,6 +73,11 @@ func strictDecodeBytes(data []byte, v any) error {
 // strictNodeDecode is strictUnmarshal for custom UnmarshalYAML(*yaml.Node)
 // implementations: yaml.v3 does not propagate KnownFields into them, so the
 // node is re-encoded and run through a strict decoder.
+//
+// It is NOT the document top level, so the `x-` exemption does not apply:
+// an `x-note` on a step or a runtime is an unknown key, exactly like any
+// other typo. The exemption exists so a document has somewhere to park
+// anchors — a step has no such need.
 func strictNodeDecode(n *yaml.Node, v any) error {
 	var b bytes.Buffer
 	enc := yaml.NewEncoder(&b)
@@ -78,7 +87,7 @@ func strictNodeDecode(n *yaml.Node, v any) error {
 	if err := enc.Close(); err != nil {
 		return err
 	}
-	return strictUnmarshal(b.Bytes(), v)
+	return strictDecode(b.Bytes(), v, false)
 }
 
 // Config is the whole config file.

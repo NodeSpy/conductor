@@ -43,7 +43,18 @@ func (st *packInstantiation) applyTriggerOverlay(ns string, inst PackInstance, t
 	matched := map[string]bool{}
 	for i := range trs {
 		name := armName(i)
+		// A trigger written as an instance ARRAY carries a
+		// content-addressed name (`review#a1b2c3d4`), which no consumer
+		// can predict or would want to write. The overlay is keyed on the
+		// address the author WROTE, and applies to every instance of it —
+		// they are one trigger fanned out, so a filter meant for it is
+		// meant for all of them.
+		addr, _ := SplitInstanceName(name)
 		ov, ok := inst.On[name]
+		if !ok {
+			ov, ok = inst.On[addr]
+			name = addr
+		}
 		if !ok {
 			continue
 		}

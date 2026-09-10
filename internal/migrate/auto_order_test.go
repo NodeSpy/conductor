@@ -101,3 +101,52 @@ func TestAutoMigrateRestoresEveryFileOnFailure(t *testing.T) {
 		t.Fatalf("the error should say the originals are back: %v", err)
 	}
 }
+
+// M3: `runtimes:` in the main file, `agents.x.budget` in an imported one.
+// moveBudgetToRuntime only ever looked at the CURRENT file, so the budget
+// was dropped with a "declares no runtimes" note that was not true of the
+// tree. Imports merge maps, so writing the budget under the runtime's name
+// in the file being transformed lands it on the same entry.
+func TestAutoMigrateMovesBudgetAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	main := filepath.Join(dir, "config.yaml")
+	sub := filepath.Join(dir, "conf.d", "agents.yaml")
+	if err := os.MkdirAll(filepath.Dir(sub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(main, []byte(`
+imports: [conf.d/*.yaml]
+connectors:
+  gh: { use: github, token: x }
+runtimes:
+  gpu: { use: paseo, default: true }
+triggers:
+  - { on: gh.pull_request, name: a, steps: [{ id: s, type: agent, agent: fixer, prompt: p }] }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sub, []byte(`
+agents:
+  fixer: { runtime: gpu, budget: { max_cost_usd: 5 } }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, summary, err := AutoMigrate(main, func() error {
+		_, lerr := config.Load(main)
+		return lerr
+	}, nil)
+	if err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if strings.Contains(strings.Join(summary, "\n"), "declares no runtimes") {
+		t.Fatalf("the budget must not be dropped as unplaceable: %v", summary)
+	}
+	cfg, err := config.Load(main)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if b := cfg.Runtimes["gpu"].Budget; b == nil || b.MaxCostUSD != 5 {
+		t.Fatalf("budget should have landed on runtimes.gpu, got %+v", b)
+	}
+}

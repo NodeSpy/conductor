@@ -333,7 +333,14 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 			tr.Policy = pol
 		}
 		// Arm from the instance block (consent = enabled + repos).
-		if arm, ok := req.inst.Triggers[armName]; ok && !dormant {
+		// An instance-array trigger's name carries its content handle; the
+		// consumer arms the ADDRESS, which covers every instance of it.
+		armAddr, _ := SplitInstanceName(armName)
+		arm, ok := req.inst.Triggers[armName]
+		if !ok {
+			arm, ok = req.inst.Triggers[armAddr]
+		}
+		if ok && !dormant {
 			if err := applyTriggerArm(&tr, arm); err != nil {
 				return fmt.Errorf("pack %q: trigger %q: %w", ns, armName, err)
 			}
@@ -775,9 +782,16 @@ func (st *packInstantiation) sourceIsRepoScoped(on string) bool {
 	return ok && ref.TypeName() == "github"
 }
 
+// hasTrigger reports whether a pack ships a trigger a consumer named.
+// An instance-array trigger carries a content-addressed name
+// (`review#a1b2c3d4`), so the author-facing ADDRESS matches too — that is
+// the only spelling a consumer can write.
 func hasTrigger(trs []TriggerSpec, name string) bool {
 	for _, t := range trs {
 		if t.Name == name {
+			return true
+		}
+		if addr, handle := SplitInstanceName(t.Name); handle != "" && addr == name {
 			return true
 		}
 	}

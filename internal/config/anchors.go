@@ -54,12 +54,19 @@ const extensionPrefix = "x-"
 // expanded into their content, then top-level `x-` entries are dropped.
 //
 // Returns nil when there is nothing to decode (an empty document).
-func prepareStrict(doc *yaml.Node) *yaml.Node {
+// dropExt distinguishes the TRUE document top level from a re-entrant
+// decode. `x-` is exempt because a document needs somewhere to park
+// anchors; a step or a runtime does not, and an `x-note` nested inside one
+// is a typo the strict decoder should catch. Stripping at every
+// custom-UnmarshalYAML boundary silently swallowed those.
+func prepareStrict(doc *yaml.Node, dropExt bool) *yaml.Node {
 	if doc == nil || doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 		return nil
 	}
 	out := resolveAliases(doc)
-	dropExtensionKeys(out.Content[0])
+	if dropExt {
+		dropExtensionKeys(out.Content[0])
+	}
 	return out
 }
 

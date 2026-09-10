@@ -38,6 +38,8 @@ func AutoMigrate(mainPath string, validate func() error, logf func(string, ...an
 	// `agents:` block and the triggers that named it are routinely in
 	// different files.
 	profiles := map[string]*yaml.Node{}
+	var runtimeNames []string
+	defaultRuntime := ""
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
@@ -47,6 +49,11 @@ func AutoMigrate(mainPath string, validate func() error, logf func(string, ...an
 			if _, dup := profiles[name]; !dup {
 				profiles[name] = frag
 			}
+		}
+		names, def := CollectRuntimes(raw)
+		runtimeNames = append(runtimeNames, names...)
+		if def != "" && defaultRuntime == "" {
+			defaultRuntime = def
 		}
 	}
 
@@ -75,7 +82,7 @@ func AutoMigrate(mainPath string, validate func() error, logf func(string, ...an
 		if err != nil {
 			return 0, nil, fmt.Errorf("read %s: %w", f, err)
 		}
-		res, err := TransformWith(raw, profiles)
+		res, err := TransformWith(raw, profiles, runtimeNames, defaultRuntime)
 		if err != nil {
 			return 0, nil, fmt.Errorf("config %s needs manual migration: %w", f, err)
 		}

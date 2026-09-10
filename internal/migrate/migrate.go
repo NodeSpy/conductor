@@ -77,7 +77,7 @@ func unmaskEnv(out []byte) []byte {
 
 // Transform converts one legacy config document. The raw bytes must be the
 // on-disk file (unexpanded); the output preserves ${VAR} references.
-func Transform(raw []byte) (*Result, error) { return TransformWith(raw, nil) }
+func Transform(raw []byte) (*Result, error) { return TransformWith(raw, nil, nil, "") }
 
 // TransformWith is Transform given the agent profiles declared ELSEWHERE in
 // the import tree. `agents:` commonly sat in the main config while the
@@ -86,7 +86,15 @@ func Transform(raw []byte) (*Result, error) { return TransformWith(raw, nil) }
 // triggers needs the table to inline from. AutoMigrate gathers it with
 // CollectProfiles before rewriting any file; a single-file caller passes nil
 // and gets the file's own profiles only.
-func TransformWith(raw []byte, profiles map[string]*yaml.Node) (*Result, error) {
+// runtimeNames/defaultRuntime describe the runtimes: the WHOLE tree
+// declares — an `agents.x.budget` and the runtime it belongs on routinely
+// live in different files, and a budget that cannot find its runtime used
+// to be dropped with a misleading "declares no runtimes" note.
+func TransformWith(raw []byte, profiles map[string]*yaml.Node, runtimeNames []string, defaultRuntime string) (*Result, error) {
+	tree := treeRuntimes{names: map[string]bool{}, defaultName: defaultRuntime}
+	for _, n := range runtimeNames {
+		tree.names[n] = true
+	}
 	raw = maskEnv(raw)
 	// A file this migration has ALREADY produced carries anchors, and a
 	// strict/lenient decode of raw bytes cannot read those (a custom
@@ -165,7 +173,7 @@ func TransformWith(raw []byte, profiles map[string]*yaml.Node) (*Result, error) 
 		}
 		// The agents: pass runs after use:, so a budget it moves lands on a
 		// runtimes: entry that already carries its `use:`.
-		if out, changed, err := applyAgentsPass(cur, profiles, &notes); err != nil {
+		if out, changed, err := applyAgentsPass(cur, profiles, tree, &notes); err != nil {
 			return nil, fmt.Errorf("agents migration: %w", err)
 		} else if changed {
 			cur, anyChanged = out, true
@@ -365,7 +373,7 @@ func TransformWith(raw []byte, profiles map[string]*yaml.Node) (*Result, error) 
 	// …and the agents: pass over that output: the legacy transform carries
 	// agents: through verbatim, so it needs the same decomposition a
 	// hand-written connectors config does.
-	if aout, achanged, aerr := applyAgentsPass(b, profiles, &notes); aerr != nil {
+	if aout, achanged, aerr := applyAgentsPass(b, profiles, tree, &notes); aerr != nil {
 		return nil, fmt.Errorf("agents migration: %w", aerr)
 	} else if achanged {
 		b = aout

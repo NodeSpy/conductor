@@ -55,16 +55,6 @@ func TestStrictDecodeStillRejectsNonExtensionUnknownKeys(t *testing.T) {
 	}
 }
 
-// `x-` is only exempt at the TOP level of a document — nested, it is that
-// section's business and judged normally.
-func TestNestedExtensionKeysAreUntouched(t *testing.T) {
-	var c Config
-	err := strictUnmarshal([]byte("connectors:\n  gh: { use: github }\nworkflows:\n  w: { steps: [], x-note: hi }\n"), &c)
-	if err == nil || !strings.Contains(err.Error(), "x-note") {
-		t.Fatalf("a nested x- key must be judged normally, got %v", err)
-	}
-}
-
 // --- the merge itself ------------------------------------------------------
 
 func TestMergeKeyResolvesAfterHolderIsDropped(t *testing.T) {
@@ -338,5 +328,48 @@ func TestStripExtensionKeys(t *testing.T) {
 	conns := m["connectors"].(map[string]any)
 	if _, ok := conns["x-nested"]; !ok {
 		t.Fatal("nested x- keys must be untouched")
+	}
+}
+
+// M5: `x-` is exempt because a DOCUMENT needs somewhere to park anchors.
+// A step or a runtime has no such need, so an `x-` key nested inside one
+// is a typo like any other. The re-entrant strict decode used to run the
+// same top-level strip at every custom-UnmarshalYAML boundary, silently
+// swallowing them.
+func TestNestedExtensionKeysAreRejectedNotDropped(t *testing.T) {
+	cases := map[string]string{
+		"on a step":     "connectors:\n  gh: { use: github }\nworkflows:\n  w: { steps: [{ id: a, type: agent, prompt: p, x-note: hi }] }\n",
+		"on a trigger":  "connectors:\n  gh: { use: github }\ntriggers:\n  - { on: gh.pull_request, x-note: hi, steps: [] }\n",
+		"on a runtime":  "connectors:\n  gh: { use: github }\nruntimes:\n  r: { use: cli, tool: claude, x-note: hi }\n",
+		"on a workflow": "connectors:\n  gh: { use: github }\nworkflows:\n  w: { steps: [], x-note: hi }\n",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			var c Config
+			err := strictUnmarshal([]byte(src), &c)
+			if err == nil || !strings.Contains(err.Error(), "x-note") {
+				t.Fatalf("a nested x- key must be an unknown-field error, got %v", err)
+			}
+		})
+	}
+}
+
+// …while the document's own holder still passes, and its anchors still
+// resolve into the very steps that now reject their own `x-` keys.
+func TestTopLevelHolderStillExemptAlongsideStrictNesting(t *testing.T) {
+	var c Config
+	if err := strictUnmarshal([]byte(`
+x-templates:
+  base: &base { type: agent, workspace: worktree }
+connectors:
+  gh: { use: github }
+workflows:
+  w:
+    steps: [{ <<: *base, id: a, prompt: p }]
+`), &c); err != nil {
+		t.Fatalf("the top-level holder must still be exempt: %v", err)
+	}
+	if got := c.Workflows["w"].Steps[0].Workspace; got != "worktree" {
+		t.Fatalf("the anchor should still merge: %q", got)
 	}
 }

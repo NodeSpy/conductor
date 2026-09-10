@@ -68,7 +68,7 @@ var behaviorKeys = []string{
 //
 // extra carries profiles declared in OTHER files of the import tree, so a
 // file holding only triggers still resolves the names they reference.
-func applyAgentsPass(masked []byte, extra map[string]*yaml.Node, notes *[]string) (out []byte, changed bool, err error) {
+func applyAgentsPass(masked []byte, extra map[string]*yaml.Node, tree treeRuntimes, notes *[]string) (out []byte, changed bool, err error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(masked, &doc); err != nil {
 		return nil, false, err
@@ -116,7 +116,7 @@ func applyAgentsPass(masked []byte, extra map[string]*yaml.Node, notes *[]string
 		return b, true, nil
 	}
 
-	templates, parent := buildProfileFragments(root, true, notes)
+	templates, parent := buildProfileFragments(root, true, tree, notes)
 
 	// A profile that extended another is FLATTENED here: without a registry
 	// there is no second entry to inherit from at load, and inlining a
@@ -147,7 +147,45 @@ func applyAgentsPass(masked []byte, extra map[string]*yaml.Node, notes *[]string
 // step fragment. When moveBudget is set it also relocates each profile's
 // budget onto the runtime it ran on — the one part that mutates the rest of
 // the document, and so the one part CollectProfiles skips.
-func buildProfileFragments(root *yaml.Node, moveBudget bool, notes *[]string) (*yaml.Node, map[string]string) {
+// treeRuntimes is what the whole import tree declares under `runtimes:` —
+// the names, and which one is `default: true`. Gathered before any file is
+// rewritten, because an `agents.x.budget` and the runtime it belongs on
+// are routinely in different files.
+type treeRuntimes struct {
+	names       map[string]bool
+	defaultName string
+}
+
+func (t treeRuntimes) has(name string) bool { return t.names[name] }
+
+// CollectRuntimes reads one file's `runtimes:` names and its default, for
+// the whole-tree gather in AutoMigrate.
+func CollectRuntimes(raw []byte) (names []string, defaultName string) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(maskEnv(raw), &doc); err != nil {
+		return nil, ""
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return nil, ""
+	}
+	rts := mapValue(doc.Content[0], "runtimes")
+	if rts == nil || rts.Kind != yaml.MappingNode {
+		return nil, ""
+	}
+	for i := 0; i+1 < len(rts.Content); i += 2 {
+		n, body := rts.Content[i].Value, rts.Content[i+1]
+		if n == "imports" {
+			continue
+		}
+		names = append(names, n)
+		if body.Kind == yaml.MappingNode && scalarAt(body, "default") == "true" {
+			defaultName = n
+		}
+	}
+	return names, defaultName
+}
+
+func buildProfileFragments(root *yaml.Node, moveBudget bool, tree treeRuntimes, notes *[]string) (*yaml.Node, map[string]string) {
 	agents := mapValue(root, "agents")
 	if agents == nil || agents.Kind != yaml.MappingNode {
 		return nil, nil
@@ -220,7 +258,7 @@ func buildProfileFragments(root *yaml.Node, moveBudget bool, notes *[]string) (*
 		// backend (design §1).
 		if b := nodeAt(body, "budget"); b != nil && moveBudget {
 			target := profileRuntime[name]
-			if moveBudgetToRuntime(root, target, b, name, notes) {
+			if moveBudgetToRuntime(root, target, b, name, tree, notes) {
 				// moved (or reported); nothing stays on the step
 				_ = target
 			}
@@ -249,7 +287,7 @@ func CollectProfiles(raw []byte) map[string]*yaml.Node {
 		return nil
 	}
 	var notes []string
-	templates, parent := buildProfileFragments(doc.Content[0], false, &notes)
+	templates, parent := buildProfileFragments(doc.Content[0], false, treeRuntimes{}, &notes)
 	if templates == nil || len(templates.Content) == 0 {
 		return nil
 	}
@@ -469,16 +507,40 @@ func unhandledAgentKeys(body *yaml.Node) []string {
 // moveBudgetToRuntime attaches a profile's budget to the runtimes: entry it
 // ran on. With no runtime named, it lands on the `default: true` runtime;
 // with none of those either, it is reported rather than silently dropped.
-func moveBudgetToRuntime(root *yaml.Node, runtimeName string, budget *yaml.Node, profile string, notes *[]string) bool {
+func moveBudgetToRuntime(root *yaml.Node, runtimeName string, budget *yaml.Node, profile string, tree treeRuntimes, notes *[]string) bool {
 	rts := mapValue(root, "runtimes")
-	if rts == nil || rts.Kind != yaml.MappingNode || len(rts.Content) == 0 {
+	local := rts != nil && rts.Kind == yaml.MappingNode
+	if !local && len(tree.names) == 0 {
 		*notes = append(*notes, fmt.Sprintf(
-			"agents.%s.budget dropped — a budget now caps execution cost on a RUNTIME, and this config declares no runtimes: entry to put it on. Re-add it as runtimes.<name>.budget", profile))
+			"agents.%s.budget dropped — a budget now caps execution cost on a RUNTIME, and this config tree declares no runtimes: entry to put it on. Re-add it as runtimes.<name>.budget", profile))
 		return false
 	}
+	// The named runtime counts if THIS file declares it or any file in the
+	// tree does; otherwise fall back to the default, local knowledge first.
 	target := runtimeName
-	if target == "" || nodeAt(rts, target) == nil {
-		target = defaultRuntimeKey(rts)
+	known := target != "" && ((local && nodeAt(rts, target) != nil) || tree.has(target))
+	if !known {
+		target = ""
+		if local {
+			target = defaultRuntimeKey(rts)
+		}
+		if target == "" {
+			target = tree.defaultName
+		}
+	}
+	// The runtime may be DEFINED in another file of the import tree — the
+	// agent and the runtime routinely live apart. A per-file transform
+	// cannot edit that file, but it does not need to: `imports:` merges
+	// maps recursively, so writing `runtimes.<target>.budget` here lands
+	// on the same entry once the tree is loaded. Dropping the budget
+	// because the definition was elsewhere is what the old same-file-only
+	// lookup did.
+	if target != "" && (!local || nodeAt(rts, target) == nil) {
+		if !local {
+			rts = &yaml.Node{Kind: yaml.MappingNode}
+			setMapKey(root, "runtimes", rts)
+		}
+		setMapKey(rts, target, &yaml.Node{Kind: yaml.MappingNode})
 	}
 	if target == "" {
 		*notes = append(*notes, fmt.Sprintf(

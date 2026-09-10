@@ -233,8 +233,24 @@ func (c *Catalog) fetch(ctx context.Context) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
 	}
-	return io.ReadAll(resp.Body)
+	// Bounded read: this body comes from a remote host, and an unbounded
+	// ReadAll lets it decide how much of the daemon's memory to take. The
+	// real catalog is a few MB, so the cap is generous enough to never
+	// bite a legitimate response and small enough to stay a rounding error.
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxCatalogBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > maxCatalogBytes {
+		return nil, fmt.Errorf("GET %s: catalog exceeds %d MB — refusing to buffer it", url, maxCatalogBytes>>20)
+	}
+	return b, nil
 }
+
+// maxCatalogBytes caps a models.dev catalog fetch. The published document
+// is ~5 MB; this leaves room for years of growth while keeping a hostile
+// or broken endpoint from being an OOM.
+const maxCatalogBytes int64 = 32 << 20
 
 // --- the models.dev document shape -----------------------------------------
 //
