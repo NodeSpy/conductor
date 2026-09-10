@@ -374,10 +374,22 @@ func (r *Resolver) roster(ctx context.Context, name string) Roster {
 		r.mu.Unlock()
 		return nil
 	}
-	roster, err := lister.List(ctx)
+	// The shared discovery runs on a context derived from the BACKGROUND
+	// one, carrying only this call's deadline-free cancellation semantics.
+	// A leader whose caller had a 1ns deadline would otherwise fail, cache
+	// its own ctx error durably, and bare-launch every dispatch after it —
+	// one unlucky caller poisoning the runtime forever. Followers waiting
+	// on this leader are not that caller either.
+	roster, err := lister.List(context.WithoutCancel(ctx))
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err != nil {
+		// A cancellation or deadline is about the CALLER, not the runtime.
+		// Remembering it as "this runtime cannot enumerate" is how a
+		// transient timeout became permanent.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil
+		}
 		r.failed[name] = err
 		return nil
 	}

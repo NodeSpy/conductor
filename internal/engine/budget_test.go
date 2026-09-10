@@ -9,6 +9,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // The middle budget scope is the RUNTIME now (design §1), not an agent.
@@ -181,5 +182,64 @@ func TestBudgetReservationClosesCheckThenActRace(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("exactly one concurrent dispatch may pass a $1 cap with $0.6 estimates, got %d", n)
+	}
+}
+
+// §11: the legacy `steps:` workflow path gated NEITHER budget layer, while
+// the single-action path next door gated both. A workflow is the easiest
+// way to produce the agent flood the runaway guard exists to stop.
+//
+// runSteps is called directly: process() hands it to a goroutine, so a test
+// that goes through process races the assertion.
+func TestLegacyStepsWorkflowRespectsTheAgentBudget(t *testing.T) {
+	cfg := budgetCfg(nil, nil)
+	cfg.Control.MaxAgentsPerHour = 1
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, _ := newEng(t, cfg, d, n, nil)
+	e.recordAgentDispatch() // burn the window
+
+	wf := config.Action{Steps: []config.Action{
+		{ID: "one", Type: "agent", Agent: "w/fixer", Prompt: "go"},
+	}}
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}},
+		agentTrigger("merge_conflict", "o/r", 1, "h", "sig", wf), wf, "app", "usr", false)
+	if len(d.reqs) != 0 {
+		t.Fatalf("an over-cap steps: workflow must shed like the single-action path, got %d dispatches", len(d.reqs))
+	}
+}
+
+// …and the spend cap too, with the same shed semantics (notify included).
+func TestLegacyStepsWorkflowRespectsTheSpendBudget(t *testing.T) {
+	cfg := budgetCfg(nil, &config.BudgetPolicy{MaxCostUSD: 1})
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, _ := newEng(t, cfg, d, n, nil)
+	e.meter.Record([]string{"runtime:fixer"}, cost.Usage{CostUSD: 2})
+
+	wf := config.Action{Steps: []config.Action{
+		{ID: "one", Type: "agent", Agent: "w/fixer", Prompt: "go"},
+	}}
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}},
+		agentTrigger("merge_conflict", "o/r", 2, "h", "sig2", wf), wf, "app", "usr", false)
+	if len(d.reqs) != 0 {
+		t.Fatalf("an over-spend steps: workflow must shed, got %d dispatches", len(d.reqs))
+	}
+	if !n.has("escalate") {
+		t.Fatal("a spend shed must notify")
+	}
+}
+
+// The baseline the two above are measured against: with no caps the same
+// workflow DOES dispatch, so a shed assertion cannot pass vacuously.
+func TestLegacyStepsWorkflowDispatchesWhenUnderBudget(t *testing.T) {
+	cfg := budgetCfg(nil, nil)
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, _ := newEng(t, cfg, d, n, nil)
+	wf := config.Action{Steps: []config.Action{
+		{ID: "one", Type: "agent", Agent: "w/fixer", Prompt: "go"},
+	}}
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}},
+		agentTrigger("merge_conflict", "o/r", 3, "h", "sig3", wf), wf, "app", "usr", false)
+	if len(d.reqs) != 1 {
+		t.Fatalf("under budget the workflow must dispatch, got %d", len(d.reqs))
 	}
 }

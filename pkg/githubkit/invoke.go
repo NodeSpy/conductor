@@ -243,7 +243,7 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 		if path == "" {
 			return nil, fmt.Errorf("github.file: options.path is required")
 		}
-		u := fmt.Sprintf("%s/repos/%s/contents/%s", base, repo, path)
+		u := fmt.Sprintf("%s/repos/%s/contents/%s", base, repo, escapePath(path))
 		if ref, _ := opts["ref"].(string); ref != "" {
 			u += "?ref=" + url.QueryEscape(ref)
 		}
@@ -458,7 +458,7 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 				SHA string `json:"sha"`
 			} `json:"commit"`
 		}
-		if err := c.put(ctx, tok, fmt.Sprintf("%s/repos/%s/contents/%s", base, repo, path), reqBody, &out); err != nil {
+		if err := c.put(ctx, tok, fmt.Sprintf("%s/repos/%s/contents/%s", base, repo, escapePath(path)), reqBody, &out); err != nil {
 			return nil, err
 		}
 		return map[string]any{"commit": out.Commit.SHA, "sha": out.Content.SHA}, nil
@@ -478,7 +478,7 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 				SHA string `json:"sha"`
 			} `json:"commit"`
 		}
-		if err := c.send(ctx, http.MethodDelete, tok, fmt.Sprintf("%s/repos/%s/contents/%s", base, repo, path), reqBody, &out); err != nil {
+		if err := c.send(ctx, http.MethodDelete, tok, fmt.Sprintf("%s/repos/%s/contents/%s", base, repo, escapePath(path)), reqBody, &out); err != nil {
 			return nil, err
 		}
 		return map[string]any{"commit": out.Commit.SHA}, nil
@@ -1094,4 +1094,21 @@ func stringFields(opts map[string]any, keys ...string) map[string]any {
 		}
 	}
 	return out
+}
+
+// escapePath percent-escapes a content path SEGMENT BY SEGMENT, so the
+// separators survive but nothing inside a segment can end the path or
+// start a query.
+//
+// The neighbouring ref/label/id interpolations already escape; the three
+// content-path ones did not, so a `path` containing `?`, `#`, or an
+// encoded traversal reached the API as structure rather than as a name —
+// a caller-supplied path could address a different endpoint or a
+// different file than the one it named.
+func escapePath(p string) string {
+	parts := strings.Split(p, "/")
+	for i, seg := range parts {
+		parts[i] = url.PathEscape(seg)
+	}
+	return strings.Join(parts, "/")
 }

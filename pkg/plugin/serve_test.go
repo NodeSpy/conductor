@@ -34,10 +34,24 @@ func TestServeDescribeInvoke(t *testing.T) {
 		t.Fatalf("serve: %v", err)
 	}
 
+	// Requests are serviced concurrently, so responses arrive in whatever
+	// order they finish — which is why JSON-RPC echoes the id. Match on it
+	// rather than on position (the daemon's client does the same: see
+	// internal/acp jsonrpc.go's pending map).
+	byID := map[string]wireMessage{}
 	dec := json.NewDecoder(strings.NewReader(out.String()))
-	var m1, m2, m3 wireMessage
-	if err := dec.Decode(&m1); err != nil {
-		t.Fatalf("decode describe resp: %v", err)
+	for {
+		var m wireMessage
+		if err := dec.Decode(&m); err != nil {
+			break
+		}
+		if m.ID != nil {
+			byID[string(*m.ID)] = m
+		}
+	}
+	m1, m2, m3 := byID["1"], byID["2"], byID["3"]
+	if m1.ID == nil {
+		t.Fatalf("no response for the describe request; got %d responses", len(byID))
 	}
 	var decl Decl
 	if err := json.Unmarshal(m1.Result, &decl); err != nil || decl.Type != "t" {
@@ -50,17 +64,11 @@ func TestServeDescribeInvoke(t *testing.T) {
 		t.Fatalf("describe id echoed as %s, want 1", *m1.ID)
 	}
 
-	if err := dec.Decode(&m2); err != nil {
-		t.Fatalf("decode invoke resp: %v", err)
-	}
 	var res InvokeResult
 	if err := json.Unmarshal(m2.Result, &res); err != nil || res.Outputs["msg"] != "hi" {
 		t.Fatalf("invoke result = %s (%v)", m2.Result, err)
 	}
 
-	if err := dec.Decode(&m3); err != nil {
-		t.Fatalf("decode error resp: %v", err)
-	}
 	if m3.Error == nil || m3.Error.Code != CodeInvalidParams {
 		t.Fatalf("expected InvalidParams error, got %+v", m3.Error)
 	}

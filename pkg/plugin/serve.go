@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -80,7 +81,7 @@ type wireMessage struct {
 }
 
 func serve(in io.Reader, out io.Writer, h Handler) error {
-	dec := json.NewDecoder(in)
+	dec := json.NewDecoder(io.LimitReader(in, maxRequestBytes))
 	enc := json.NewEncoder(out)
 	var writeMu sync.Mutex
 	write := func(m wireMessage) error {
@@ -93,6 +94,12 @@ func serve(in io.Reader, out io.Writer, h Handler) error {
 	// daemon closed stdin), so a StartSource goroutine unwinds.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// In-flight request handlers. Serve must not return while one is still
+	// writing: its response would be lost and the caller would see a dead
+	// transport instead of an answer. Long-lived StartSource streams are
+	// NOT tracked here — they unwind on ctx.
+	var inflight sync.WaitGroup
+	defer inflight.Wait()
 	// emit writes a plugin.event notification (no id) — the source stream path.
 	emit := func(payload any) error {
 		raw, err := json.Marshal(payload)
@@ -115,22 +122,52 @@ func serve(in io.Reader, out io.Writer, h Handler) error {
 		if m.Method == "" || m.ID == nil {
 			continue
 		}
-		resp := wireMessage{ID: m.ID}
-		result, rpcErr := dispatch(ctx, h, m.Method, m.Params, emit)
-		if rpcErr != nil {
-			resp.Error = rpcErr
-		} else if raw, err := json.Marshal(result); err != nil {
-			resp.Error = Errorf(CodeInternalError, err.Error())
-		} else {
-			resp.Result = raw
-		}
-		if err := write(resp); err != nil {
-			return err
-		}
+		// Service each request on its own goroutine. Running dispatch
+		// inline meant ONE slow verb — a paseo `wait` on a long agent, an
+		// unreachable API — blocked the read loop, so every later call
+		// (including a plain Describe) queued behind it and the daemon
+		// saw the whole plugin as hung. StartSource already got a
+		// goroutine for exactly this reason; the rest of the surface
+		// needs the same treatment.
+		//
+		// write() is mutex-guarded, and each response carries its own
+		// echoed id, so out-of-order completion is the protocol working
+		// as designed rather than a hazard.
+		inflight.Add(1)
+		go func(m wireMessage) {
+			defer inflight.Done()
+			resp := wireMessage{ID: m.ID}
+			result, rpcErr := dispatch(ctx, h, m.Method, m.Params, emit)
+			if rpcErr != nil {
+				resp.Error = rpcErr
+			} else if raw, err := json.Marshal(result); err != nil {
+				resp.Error = Errorf(CodeInternalError, err.Error())
+			} else {
+				resp.Result = raw
+			}
+			// A write failure means stdout is gone; the read loop will
+			// see stdin close and return. Nothing to escalate here.
+			_ = write(resp)
+		}(m)
 	}
 }
 
-func dispatch(ctx context.Context, h Handler, method string, params json.RawMessage, emit func(any) error) (any, *Error) {
+// maxRequestBytes bounds one JSON-RPC request. The daemon is the only
+// writer, but a plugin must not be a way to turn a malformed or hostile
+// frame into unbounded memory on the box.
+const maxRequestBytes = 32 << 20
+
+func dispatch(ctx context.Context, h Handler, method string, params json.RawMessage, emit func(any) error) (result any, rpcErr *Error) {
+	// A panic in third-party plugin code is a protocol ERROR, not a dead
+	// process. Letting it escape killed the plugin mid-conversation and
+	// took every in-flight call with it; the daemon then saw a transport
+	// failure with nothing to attribute it to.
+	defer func() {
+		if r := recover(); r != nil {
+			result = nil
+			rpcErr = Errorf(CodeInternalError, fmt.Sprintf("plugin panicked handling %s: %v", method, r))
+		}
+	}()
 	switch method {
 	case MethodDescribe:
 		d := h.Describe()

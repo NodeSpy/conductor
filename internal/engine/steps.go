@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/cost"
+
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
@@ -124,6 +126,29 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			}
 			runner = r
 		}
+		// Both budget layers, which this path skipped entirely: a legacy
+		// `steps:` workflow could dispatch unbounded agents and unbounded
+		// spend while the single-action path next door was capped. The
+		// runaway guard exists to protect the box from a webhook flood;
+		// a workflow is the EASIEST way to produce one.
+		var spendRes *cost.Reservation
+		if s.Type == "agent" && !shadow {
+			if max := e.cfg.AgentsPerHour(); max > 0 && e.overAgentBudget(max) {
+				e.log("%s step %s: agent budget reached (%d/hr) — shedding, will retry later", tag(t), id, max)
+				e.store.Audit(map[string]any{"event": "step_shed", "repo": t.Target.Repo,
+					"number": t.Target.Number, "kind": t.Kind, "step": id, "reason": "agents_per_hour"})
+				e.finishRun(run)
+				return
+			}
+			res, berr := e.checkSpendBudget(e.runtimeOf(profile), nil, "", cost.Estimate(model, s.Prompt, ""))
+			if berr != nil {
+				e.shedForBudget(ctx, t, berr, shadow)
+				e.finishRun(run)
+				return
+			}
+			spendRes = res
+			e.recordAgentDispatch()
+		}
 		e.log("%s step %s running (%s)", tag(t), id, actionDesc(s))
 		start := time.Now()
 		ref, err := e.dispatchAgent(ctx, runner, req)
@@ -134,6 +159,15 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			ref = e.retryWhileDeferred(ctx, req, ref, s.Retry)
 		}
 		took := time.Since(start).Round(time.Second)
+		// Settle the reservation with what the step actually spent, so the
+		// rolling window reflects reality rather than the estimate.
+		if spendRes != nil {
+			if err != nil {
+				e.meter.Cancel(spendRes)
+			} else {
+				e.recordUsage(t, identity, e.runtimeOf(profile), id, run.ID, "", spendRes, cost.FromRun(model, s.Prompt, ref.Output))
+			}
+		}
 		// A background step launches a live agent and returns immediately; there's
 		// no captured output to fold into later steps.
 		outputs := map[string]any{}

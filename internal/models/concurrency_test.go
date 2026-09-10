@@ -70,3 +70,78 @@ func TestConcurrentResolveSharesOneDiscovery(t *testing.T) {
 		t.Fatalf("concurrent callers must share one discovery, got %d List calls", n)
 	}
 }
+
+// §9: the M2 singleflight made one caller the LEADER for everyone. If that
+// caller's ctx was already cancelled or past its deadline, the resulting
+// error was cached durably in r.failed and never cleared — one unlucky
+// caller bare-launching the runtime for the life of the process.
+func TestACancelledLeaderDoesNotPoisonTheRoster(t *testing.T) {
+	var calls atomic.Int32
+	Register("poisontest", func(Runtime, *Catalog) Lister {
+		return listerFunc(func() (Roster, error) {
+			calls.Add(1)
+			return Roster{{ID: "m1"}}, nil
+		})
+	})
+	r := NewResolver(&config.Config{Runtimes: config.RuntimeSet{
+		"rt": {Use: "poisontest"},
+	}}, nil)
+
+	// A caller whose context is already dead.
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+	r.roster(dead, "rt")
+
+	// A later, healthy caller must still get a roster.
+	if got := r.roster(context.Background(), "rt"); len(got) != 1 {
+		t.Fatalf("a cancelled caller must not poison the runtime for everyone: got %v", got)
+	}
+}
+
+// §10: ensure() set loaded=true BEFORE fetching, so one failed attempt —
+// a flaky moment at boot — was remembered for the life of the process and
+// every later dispatch ran with no catalog and no retry.
+func TestCatalogRetriesAfterAFailedLoad(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if hits.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"anthropic":{"id":"anthropic","name":"Anthropic","models":{"claude-x":{"id":"claude-x","name":"Claude X"}}}}`)
+	}))
+	defer srv.Close()
+
+	c := &Catalog{HTTP: srv.Client(), URL: srv.URL, Dir: t.TempDir(), RetryAfter: time.Nanosecond}
+	if err := c.ensure(context.Background()); err == nil {
+		t.Fatal("the first load should fail")
+	}
+	// A later call must try again rather than serve the remembered error.
+	if err := c.ensure(context.Background()); err != nil {
+		t.Fatalf("a later call must refetch and succeed, got %v", err)
+	}
+	if hits.Load() < 2 {
+		t.Fatalf("the catalog was never refetched (hits=%d)", hits.Load())
+	}
+}
+
+// …but a hard-down endpoint is not refetched on every dispatch.
+func TestCatalogFailureIsRateLimited(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := &Catalog{HTTP: srv.Client(), URL: srv.URL, Dir: t.TempDir(), RetryAfter: time.Hour}
+	for i := 0; i < 5; i++ {
+		if err := c.ensure(context.Background()); err == nil {
+			t.Fatal("every load should fail here")
+		}
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("a failed load should be remembered for RetryAfter, got %d fetches", hits.Load())
+	}
+}

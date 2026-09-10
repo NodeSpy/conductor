@@ -35,6 +35,11 @@ const CatalogURL = "https://models.dev/api.json"
 // DefaultCatalogTTL is how long a cached catalog is served without refetching.
 const DefaultCatalogTTL = 24 * time.Hour
 
+// DefaultCatalogRetry is how long a FAILED load is remembered before a
+// later call may try again — long enough not to refetch per dispatch
+// against a hard-down endpoint, short enough that a blip at boot heals.
+const DefaultCatalogRetry = 5 * time.Minute
+
 // catalogFile is the cache filename inside the catalog directory.
 const catalogFile = "models.dev.json"
 
@@ -58,6 +63,8 @@ type Catalog struct {
 	Dir string
 	// TTL is how long a cached copy is served before a refetch is attempted.
 	TTL time.Duration
+	// RetryAfter is how long a failed load is remembered (0 = the default).
+	RetryAfter time.Duration
 	// HTTP is the client used for the fetch.
 	HTTP HTTPDoer
 	// Now is the clock (overridden in tests).
@@ -66,6 +73,7 @@ type Catalog struct {
 	mu       sync.Mutex
 	loaded   bool
 	loadErr  error
+	retryAt  time.Time
 	byProv   map[string]Roster
 	provided []string
 }
@@ -124,7 +132,15 @@ func (c *Catalog) ensure(ctx context.Context) error {
 	if c.loaded {
 		return c.loadErr
 	}
-	c.loaded = true
+	// NOT set here. Setting loaded before the fetch meant a single failed
+	// attempt — one flaky network moment at boot — was remembered for the
+	// life of the process, and every later dispatch bare-launched with no
+	// catalog and no retry. It is set on SUCCESS below; a failure records
+	// the error for the message and lets a later call try again, rate-
+	// limited by retryAfter so a hard-down endpoint is not hammered.
+	if !c.retryAt.IsZero() && c.now().Before(c.retryAt) {
+		return c.loadErr
+	}
 
 	path := c.cachePath()
 	raw, age, haveCache := c.readCache(path)
@@ -140,6 +156,7 @@ func (c *Catalog) ensure(ctx context.Context) error {
 	if ferr == nil {
 		if err := c.parse(fetched); err == nil {
 			c.writeCache(path, fetched)
+			c.loaded, c.loadErr, c.retryAt = true, nil, time.Time{}
 			return nil
 		} else {
 			ferr = err
@@ -148,11 +165,23 @@ func (c *Catalog) ensure(ctx context.Context) error {
 	// Degrade: a STALE cache beats no catalog at all.
 	if haveCache {
 		if err := c.parse(raw); err == nil {
+			c.loaded, c.loadErr, c.retryAt = true, nil, time.Time{}
 			return nil
 		}
 	}
 	c.loadErr = fmt.Errorf("%w: models.dev catalog unavailable: %v", ErrNoDiscovery, ferr)
+	c.retryAt = c.now().Add(c.retryAfter())
 	return c.loadErr
+}
+
+// retryAfter is how long a failed catalog load is remembered before another
+// call may try again. Long enough that a hard-down endpoint is not hammered
+// per dispatch, short enough that a boot-time blip heals itself.
+func (c *Catalog) retryAfter() time.Duration {
+	if c.RetryAfter > 0 {
+		return c.RetryAfter
+	}
+	return DefaultCatalogRetry
 }
 
 func (c *Catalog) ttl() time.Duration {
