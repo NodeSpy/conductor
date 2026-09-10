@@ -12,12 +12,20 @@ import (
 // merge and before validation, so downstream only ever sees fully-resolved
 // entries.
 //
-// Steps are NOT in that list, and there is no top-level steps: section for
-// one to point at. Reuse of step behavior is plain YAML anchors
-// (anchors.go) — `&base` / `<<: *base` — which needs no conductor machinery
-// and works the same in a pack manifest. Where something must POINT at a
-// particular step (a `team:` role, a pack overlay), it addresses it where
-// it lives: `<workflow>/<id>` or `<workflow>[<n>]`. See stepref.go.
+// A STEP's `extends:` is a different thing that happens to share the word,
+// and it lives in stepmerge.go. It takes an anchor alias or an inline map
+// rather than a sibling key (there is no registry of steps), and it merges
+// the YAML NODES rather than the decoded values — which it must, because
+// its `!override` / `!reset` escape hatches are node TAGS and are gone by
+// the time reflection sees a struct. The two cannot share a mechanism;
+// they only share a policy, and where they overlap (scalars fill, maps
+// deep-merge, guidance stacks) both are written to agree.
+//
+// Steps also have `<<: *base` (anchors.go), which is plain YAML: dumb
+// override, resolved by the parser. See stepmerge.go for why both exist.
+// Where something must POINT at a particular step (a `team:` role, a pack
+// overlay), it addresses it where it lives: `<workflow>/<id>` or
+// `<workflow>[<n>]`. See stepref.go.
 //
 // Merge rules (see mergeStruct): scalars — child wins when set; pointers —
 // child wins when non-nil; maps (labels/env/inputs) — deep-merged, child keys
