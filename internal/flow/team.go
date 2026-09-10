@@ -83,7 +83,7 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 	if err != nil {
 		return nil, "", err
 	}
-	planOut, _, err := r.execAgent(ctx, t, plannerStep, id+":plan", data, shadow)
+	planOut, _, err := r.execAgent(ctx, t, plannerStep, id+":plan", id+":plan", data, shadow)
 	if err != nil {
 		return nil, "", fmt.Errorf("team plan: %w", err)
 	}
@@ -145,7 +145,7 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 			// branch/worktree distinct even when subtask ids sanitize to the
 			// same (or an empty) slug (#36 §146 F6, review M10).
 			wctx = dispatch.WithBranchSuffix(wctx, branchSuffixes[i])
-			out, _, werr := r.execAgent(wctx, t, wstep, fmt.Sprintf("%s:%s", id, st.ID), local, shadow)
+			out, _, werr := r.execAgent(wctx, t, wstep, fmt.Sprintf("%s:%s", id, st.ID), fmt.Sprintf("%s:%s", id, st.ID), local, shadow)
 			results[i] = workerResult{Subtask: st, Outputs: out, Err: werr}
 		}(i, st)
 	}
@@ -202,7 +202,7 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 	if err != nil {
 		return outputs, "", err
 	}
-	recOut, raw, err := r.execAgent(ctx, t, rstep, id+":reconcile", data, shadow)
+	recOut, raw, err := r.execAgent(ctx, t, rstep, id+":reconcile", id+":reconcile", data, shadow)
 	if err != nil {
 		return outputs, raw, fmt.Errorf("team reconcile: %w", err)
 	}

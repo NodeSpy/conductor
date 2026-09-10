@@ -44,39 +44,89 @@ func (st *packInstantiation) bindPackSources(ns string, man *PackManifest, inst 
 	// Report each unservable source once, not once per trigger.
 	reported := map[string]bool{}
 	for i := range trs {
-		src := trs[i].Connector()
-		if src == "" || src == ManualSource || src == "conductor" {
+		// A LIST-form `on:` keeps its sources in OnSources and leaves On
+		// empty until NormalizeTriggers expands it — which runs after this.
+		// Reading only On skipped the whole binding pass for those, so the
+		// pack's generic `github` never became the consumer's `gh` and the
+		// load died on "unknown connector" instead of degrading. Both forms
+		// go through the same per-source treatment.
+		if trs[i].On == "" && len(trs[i].OnSources) > 0 {
+			for j := range trs[i].OnSources {
+				bound, servable, err := st.bindOneSource(ns, &trs[i], i, trs[i].OnSources[j].Source, inst, byType, required, reported)
+				if err != nil {
+					return err
+				}
+				if servable {
+					trs[i].OnSources[j].Source = bound + "." + sourceEvent(trs[i].OnSources[j].Source)
+					continue
+				}
+				// Only THIS source is unservable; the trigger's other
+				// sources still arm. The expansion turns it into a
+				// disabled variant.
+				trs[i].OnSources[j].dormant = true
+			}
 			continue
 		}
-		// The pack writes its own source name (`github.pull_request`); the
-		// consumer's connector may be called anything (`gh`). Rebinding
-		// already mapped a DECLARED requires.connectors name; what is left
-		// here is a source type the pack uses but did not declare.
-		if _, isInstance := st.cfg.ConnectorsMap[src]; isInstance {
-			continue // already names one of the consumer's connectors
-		}
-		bound, err := st.resolveSourceConnector(ns, src, inst, byType)
+		bound, servable, err := st.bindOneSource(ns, &trs[i], i, trs[i].Connector(), inst, byType, required, reported)
 		if err != nil {
 			return err
 		}
-		if bound != "" {
+		switch {
+		case bound == "" && servable:
+			// Nothing to do (manual/conductor/already an instance name).
+		case servable:
 			trs[i].On = bound + "." + trs[i].Event()
-			continue
-		}
-		// Dormant: disable it and say so. A required source is a hard error.
-		if req, ok := required[src]; ok && req.Required {
-			return fmt.Errorf("pack %q: trigger %q needs a %s connector, which this config has none of — the pack declares that source REQUIRED (requires.sources.%s.required). Add a connectors: entry with `use: %s`",
-				ns, triggerRef(trs[i], i), src, src, src)
-		}
-		off := false
-		trs[i].Enabled = &off
-		if !reported[src] {
-			reported[src] = true
-			st.warnf("pack %q: no %s connector is configured — its %s trigger(s) are DORMANT. Add a connectors: entry with `use: %s` to arm them; the rest of the pack runs.",
-				ns, src, src, src)
+		default:
+			off := false
+			trs[i].Enabled = &off
 		}
 	}
 	return nil
+}
+
+// bindOneSource resolves one `<source>.<event>` reference to the consumer
+// connector that serves it. servable=false means the config has none and
+// the caller should mark that source dormant; a source the pack declared
+// REQUIRED is a hard error instead.
+//
+// bound=="" with servable==true means the reference needs no rebinding at
+// all (manual, conductor, or already one of the consumer's instances).
+func (st *packInstantiation) bindOneSource(ns string, tr *TriggerSpec, i int, ref string, inst PackInstance,
+	byType map[string][]string, required map[string]SourceReq, reported map[string]bool) (bound string, servable bool, err error) {
+	src, _, _ := strings.Cut(ref, ".")
+	if src == "" || src == ManualSource || src == "conductor" {
+		return "", true, nil
+	}
+	// The pack writes its own source name (`github.pull_request`); the
+	// consumer's connector may be called anything (`gh`). Rebinding already
+	// mapped a DECLARED requires.connectors name; what is left here is a
+	// source type the pack uses but did not declare.
+	if _, isInstance := st.cfg.ConnectorsMap[src]; isInstance {
+		return "", true, nil
+	}
+	bound, err = st.resolveSourceConnector(ns, src, inst, byType)
+	if err != nil {
+		return "", false, err
+	}
+	if bound != "" {
+		return bound, true, nil
+	}
+	if req, ok := required[src]; ok && req.Required {
+		return "", false, fmt.Errorf("pack %q: trigger %q needs a %s connector, which this config has none of — the pack declares that source REQUIRED (requires.sources.%s.required). Add a connectors: entry with `use: %s`",
+			ns, triggerRef(*tr, i), src, src, src)
+	}
+	if !reported[src] {
+		reported[src] = true
+		st.warnf("pack %q: no %s connector is configured — its %s trigger(s) are DORMANT. Add a connectors: entry with `use: %s` to arm them; the rest of the pack runs.",
+			ns, src, src, src)
+	}
+	return "", false, nil
+}
+
+// sourceEvent is the event half of a `<source>.<event>` reference.
+func sourceEvent(ref string) string {
+	_, e, _ := strings.Cut(ref, ".")
+	return e
 }
 
 // resolveSourceConnector picks the consumer connector serving one source

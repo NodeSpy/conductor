@@ -782,7 +782,7 @@ func (r *Runner) executePlan(ctx context.Context, t core.Trigger, pol *config.Ag
 		// Plan-step hooks fire like any workflow step's (they were guarded
 		// with the plan — see guardPlan's hook walk).
 		r.runHooks(ctx, t, step.Hooks, "start", st.scope, "plan step "+id)
-		outputs, err := r.execStepWithFlow(ctx, t, step, "plan:"+id, st.scope, shadow)
+		outputs, err := r.execStepWithFlow(ctx, t, step, "plan:"+id, "plan:"+id, st.scope, shadow)
 		if err != nil {
 			errStr := r.redactErr(err)
 			fdata := cloneData(st.scope)
@@ -901,7 +901,7 @@ func (r *Runner) compensatePlan(ctx context.Context, t core.Trigger, st *planSta
 		}
 		comp := *c.step.Compensate
 		id := c.id + ".compensate"
-		_, err := r.execStepWithFlow(ctx, t, comp, "plan:"+id, st.scope, shadow)
+		_, err := r.execStepWithFlow(ctx, t, comp, "plan:"+id, "plan:"+id, st.scope, shadow)
 		outcome := "ok"
 		var errStr string
 		if err != nil {

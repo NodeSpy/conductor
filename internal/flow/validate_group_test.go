@@ -434,11 +434,11 @@ triggers:
     steps: [{uses: svc.post, options: {text: t}}]
 `)
 	r := New(Runner{Cfg: cfg})
-	if _, ok := r.SpecFor("0:svc.ping"); !ok {
-		t.Error("valid ref should resolve")
+	if _, idx, ok := r.SpecFor("0:svc.ping"); !ok || idx != 0 {
+		t.Errorf("valid ref should resolve at its index: idx=%d ok=%v", idx, ok)
 	}
 	for _, bad := range []string{"1:svc.ping", "0:svc.other", "garbage", "x:y", ""} {
-		if _, ok := r.SpecFor(bad); ok {
+		if _, _, ok := r.SpecFor(bad); ok {
 			t.Errorf("ref %q should not resolve", bad)
 		}
 	}
@@ -464,7 +464,7 @@ triggers:
 	t1 := newTrigger("ping", map[string]any{"msg": "first-msg"})
 	t2 := newTrigger("ping", map[string]any{"msg": "last-msg"})
 	batch := &Batch{Key: "K", Events: []core.Trigger{t1, t2}}
-	rig.Runner.Run(context.Background(), emptyRun(), t2, spec, batch, false)
+	rig.Runner.Run(context.Background(), emptyRun(), t2, spec, rig.Runner.IndexOf(spec), batch, false)
 
 	calls := st.snapshot()
 	if len(calls) == 0 {

@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -107,14 +106,12 @@ func IdentityFor(scope IdentityScope, name, slotLabel string, fingerprint func()
 	return "step:" + fingerprint() // 3. deterministic fingerprint
 }
 
-// slotLabel is the step's position within its list: its `id:` when it has one
-// (stable across reordering), else its ordinal.
-func (s Step) slotLabel(slot int) string {
-	if id := strings.TrimSpace(s.ID); id != "" {
-		return id
-	}
-	return strconv.Itoa(slot)
-}
+// slotLabel is the step's position within its list. It delegates to
+// StepSlot so that the slot an identity is built from and the slot a step
+// REFERENCE addresses are the same string — see stepref.go. Two spellings
+// of "which step is this" is how a session gets bound under one key and
+// evicted under another.
+func (s Step) slotLabel(slot int) string { return StepSlot(s, slot) }
 
 // Fingerprint is a deterministic hash of the step's canonical definition —
 // the automatic floor of the identity ladder. It is a pure function of

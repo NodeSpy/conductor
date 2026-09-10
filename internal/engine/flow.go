@@ -24,7 +24,7 @@ import (
 // schemas; here we add the flow-side filters, the scoped policy gates, and
 // group batching, then hand the run to the flow runner.
 func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Action, key, dkind, head string) {
-	spec, ok := e.flow.SpecFor(act.FlowRef)
+	spec, tidx, ok := e.flow.SpecFor(act.FlowRef)
 	if !ok {
 		e.log("%s stale flow ref %q — config changed; dropping", tag(t), act.FlowRef)
 		return
@@ -115,12 +115,12 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 		return
 	}
 	e.notif.Emit(ctx, notify.EventDispatch, t, "workflow")
-	e.startFlowRun(ctx, t, spec, nil, shadow)
+	e.startFlowRun(ctx, t, spec, tidx, nil, shadow)
 }
 
 // startFlowRun takes a concurrency slot and runs one flow (or batch) in its
 // own goroutine.
-func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.TriggerSpec, batch *flow.Batch, shadow bool) {
+func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.TriggerSpec, tidx int, batch *flow.Batch, shadow bool) {
 	if !shadow && !e.acquire(ctx) {
 		return
 	}
@@ -130,7 +130,7 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 		if !shadow {
 			defer e.release()
 		}
-		e.flow.Run(ctx, run, t, spec, batch, shadow)
+		e.flow.Run(ctx, run, t, spec, tidx, batch, shadow)
 	}()
 }
 
@@ -142,7 +142,7 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 	}
 	t := events[len(events)-1]
 	ref, gkey, _ := strings.Cut(fullKey, "\x00")
-	spec, ok := e.flow.SpecFor(ref)
+	spec, tidx, ok := e.flow.SpecFor(ref)
 	if !ok {
 		e.log("%s stale flow ref %q at batch fire — dropping %d events", tag(t), ref, len(events))
 		return
@@ -175,7 +175,7 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 	}
 	defer e.release()
 	run := e.newFlowRun(t, spec, false)
-	e.flow.Run(ctx, run, t, spec, &flow.Batch{Key: gkey, Events: events}, false)
+	e.flow.Run(ctx, run, t, spec, tidx, &flow.Batch{Key: gkey, Events: events}, false)
 }
 
 // recordBatch writes each grouped event's dedup/attempt/comment-mark state
@@ -228,7 +228,7 @@ func (e *Engine) policyFor(spec config.TriggerSpec) config.Policy {
 // legacy action (legacy integrations carry no policy of their own).
 func (e *Engine) retryPolicyFor(act config.Action) config.Policy {
 	if act.FlowRef != "" && e.flow != nil {
-		if spec, ok := e.flow.SpecFor(act.FlowRef); ok {
+		if spec, _, ok := e.flow.SpecFor(act.FlowRef); ok {
 			return e.policyFor(spec)
 		}
 	}
@@ -281,7 +281,7 @@ func (e *Engine) newFlowRun(t core.Trigger, spec config.TriggerSpec, shadow bool
 // ResumeWorkflows): re-find the spec, re-mint tokens, continue after the last
 // checkpointed step.
 func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.Trigger, act config.Action) {
-	spec, ok := e.flow.SpecFor(act.FlowRef)
+	spec, tidx, ok := e.flow.SpecFor(act.FlowRef)
 	if !ok {
 		e.log("engine: resume %s: trigger no longer in config — dropping", r.ID)
 		_ = e.store.DeleteRun(r.ID)
@@ -297,7 +297,7 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 	go func() {
 		defer e.recoverDispatch(ctx, t, r, "flow resume")
 		defer e.release()
-		e.flow.Run(ctx, r, t, spec, nil, false)
+		e.flow.Run(ctx, r, t, spec, tidx, nil, false)
 	}()
 }
 

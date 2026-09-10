@@ -1096,7 +1096,7 @@ func cmdReplay(args []string) error {
 					printTrigger(cfg, disp, t)
 					continue
 				}
-				spec, ok := stack.Runner.SpecFor(act.FlowRef)
+				spec, tidx, ok := stack.Runner.SpecFor(act.FlowRef)
 				if !ok {
 					continue
 				}
@@ -1110,7 +1110,7 @@ func cmdReplay(args []string) error {
 				fmt.Printf("• %s %s#%d [workflow: %d steps] (dry-run)\n",
 					t.Kind, t.Target.Repo, t.Target.Number, len(spec.Steps))
 				stack.Runner.Run(context.Background(),
-					store.WorkflowRun{Outputs: map[string]map[string]any{}}, t, spec, nil, true)
+					store.WorkflowRun{Outputs: map[string]map[string]any{}}, t, spec, tidx, nil, true)
 			}
 		}
 	}

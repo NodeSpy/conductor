@@ -180,7 +180,7 @@ func TestSlackAggregationTimingGolden(t *testing.T) {
 				},
 			},
 		})
-		runner.Run(context.Background(), store.WorkflowRun{}, trig, spec, nil, false)
+		runner.Run(context.Background(), store.WorkflowRun{}, trig, spec, runner.IndexOf(spec), nil, false)
 
 		mu.Lock()
 		defer mu.Unlock()

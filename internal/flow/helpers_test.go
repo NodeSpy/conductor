@@ -646,24 +646,28 @@ func emptyRun() store.WorkflowRun {
 	return store.WorkflowRun{Outputs: map[string]map[string]any{}}
 }
 
+// The rig resolves the trigger's index the way production does rather
+// than assuming 0 — that assumption WAS the bug (C1), so a test rig that
+// hardcodes it cannot catch a regression.
+
 // runTrigger runs one trigger (no batch, no checkpoint) to completion.
 func runTrigger(rig *testRig, trig core.Trigger, spec config.TriggerSpec) {
-	rig.Runner.Run(context.Background(), emptyRun(), trig, spec, nil, false)
+	rig.Runner.Run(context.Background(), emptyRun(), trig, spec, rig.Runner.IndexOf(spec), nil, false)
 }
 
 // runTriggerCtx is runTrigger with an explicit context (timeout tests).
 func runTriggerCtx(ctx context.Context, rig *testRig, trig core.Trigger, spec config.TriggerSpec) {
-	rig.Runner.Run(ctx, emptyRun(), trig, spec, nil, false)
+	rig.Runner.Run(ctx, emptyRun(), trig, spec, rig.Runner.IndexOf(spec), nil, false)
 }
 
 // runTriggerBatch runs one trigger with a grouped batch.
 func runTriggerBatch(rig *testRig, trig core.Trigger, spec config.TriggerSpec, batch *Batch) {
-	rig.Runner.Run(context.Background(), emptyRun(), trig, spec, batch, false)
+	rig.Runner.Run(context.Background(), emptyRun(), trig, spec, rig.Runner.IndexOf(spec), batch, false)
 }
 
 // runTriggerWithRun runs a (possibly checkpointed) WorkflowRun.
 func runTriggerWithRun(rig *testRig, run store.WorkflowRun, trig core.Trigger, spec config.TriggerSpec) {
-	rig.Runner.Run(context.Background(), run, trig, spec, nil, false)
+	rig.Runner.Run(context.Background(), run, trig, spec, rig.Runner.IndexOf(spec), nil, false)
 }
 
 // workflowFailed reports whether the run just executed logged a

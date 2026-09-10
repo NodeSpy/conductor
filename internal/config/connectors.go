@@ -466,6 +466,12 @@ type OnSource struct {
 	Filters map[string]any
 	Policy  *Policy
 	Hooks   []Hook
+	// dormant marks a source a pack shipped that this config cannot serve
+	// (no connector of its type). The expansion below turns it into a
+	// disabled variant, so ONE unservable source of a fan-in trigger does
+	// not take the servable ones down with it. Set by bindPackSources; not
+	// part of the schema.
+	dormant bool
 }
 
 // UnmarshalYAML accepts the bare-scalar and event-keyed one-key map forms,
@@ -664,6 +670,10 @@ func (c *Config) NormalizeTriggers() error {
 				v.Hooks = hooks
 			}
 			v.FanSources = fan
+			if src.dormant {
+				off := false
+				v.Enabled = &off
+			}
 			out = append(out, v)
 		}
 	}

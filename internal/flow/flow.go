@@ -119,11 +119,16 @@ func identityScopeFrom(ctx context.Context) config.IdentityScope {
 	return sc
 }
 
-// stepIdentity resolves a step's stable identity in the current scope. slotID
-// is the runner's own step id (config `id:`, else "stepN") — already the
-// structural slot label.
-func stepIdentity(ctx context.Context, s config.Step, slotID string) string {
-	return config.IdentityFor(identityScopeFrom(ctx), s.Name, slotID, s.Fingerprint)
+// stepIdentity resolves a step's stable identity in the current scope.
+//
+// The slot comes from config.StepSlot — the SAME rule every lookup path
+// uses (WalkSteps, a step reference, the affinity sweep). It is
+// deliberately not the runner's own `stepID`: that one is the user-facing
+// output key (`{{.steps.step1.outputs}}`) and is 1-based for readability,
+// which is a different job. Computing identity from it is how a session
+// came to be bound under `…/step1` and swept under `…/0`.
+func stepIdentity(ctx context.Context, s config.Step, slot string) string {
+	return config.IdentityFor(identityScopeFrom(ctx), s.Name, slot, s.Fingerprint)
 }
 
 // savedWFKey stamps execution inside a SAVED workflow with its name, so
@@ -188,21 +193,50 @@ func New(r Runner) *Runner {
 }
 
 // SpecFor resolves a lowered action's FlowRef ("<index>:<on>") back to its
-// trigger spec. The on-part is verified so a stale index from a resumed run
-// against an edited config is caught instead of running the wrong trigger.
-func (r *Runner) SpecFor(ref string) (config.TriggerSpec, bool) {
+// trigger spec AND its position in the list. The on-part is verified so a
+// stale index from a resumed run against an edited config is caught instead
+// of running the wrong trigger.
+//
+// The index is not incidental: an unnamed list-form trigger's identity
+// scope is `<on>[<index>]`, so a caller that drops it dispatches every
+// such trigger under index 0 — binding sessions and track records that no
+// lookup path can ever find again.
+func (r *Runner) SpecFor(ref string) (config.TriggerSpec, int, bool) {
 	idxStr, on, ok := strings.Cut(ref, ":")
 	if !ok {
-		return config.TriggerSpec{}, false
+		return config.TriggerSpec{}, 0, false
 	}
 	var idx int
 	if _, err := fmt.Sscanf(idxStr, "%d", &idx); err != nil {
-		return config.TriggerSpec{}, false
+		return config.TriggerSpec{}, 0, false
 	}
 	if idx < 0 || idx >= len(r.Cfg.Triggers) || r.Cfg.Triggers[idx].On != on {
-		return config.TriggerSpec{}, false
+		return config.TriggerSpec{}, 0, false
 	}
-	return r.Cfg.Triggers[idx], true
+	return r.Cfg.Triggers[idx], idx, true
+}
+
+// IndexOf locates a spec in the configured trigger list, for a caller that
+// did not come through SpecFor. A named trigger matches by name (names are
+// unique); an unnamed one by `on:` plus deep equality of its steps, which
+// is the best available and still beats assuming 0.
+func (r *Runner) IndexOf(spec config.TriggerSpec) int {
+	if r.Cfg == nil {
+		return 0
+	}
+	for i := range r.Cfg.Triggers {
+		c := r.Cfg.Triggers[i]
+		if spec.Name != "" {
+			if c.Name == spec.Name {
+				return i
+			}
+			continue
+		}
+		if c.Name == "" && c.On == spec.On && len(c.Steps) == len(spec.Steps) {
+			return i
+		}
+	}
+	return 0
 }
 
 // FilterMatch evaluates a trigger's flow-side filters (connector types whose
@@ -278,8 +312,14 @@ func (r *Runner) resolveBotReply(t core.Trigger, spec config.TriggerSpec) botRep
 	return botReplyState{mode: pol.ReplyToBotsMode(), authorIsBot: isBot, login: login}
 }
 
-func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, batch *Batch, shadow bool) {
-	ctx = withIdentityScope(ctx, config.ScopeForTrigger(spec, 0))
+// Run executes one fired trigger. triggerIndex is the spec's position in
+// `config.Triggers` — it is half of an unnamed list-form trigger's identity
+// scope (`<on>[<index>]`), so passing a wrong one silently detaches this
+// run's sessions, memory, and track record from every lookup path.
+// SpecFor returns it; a caller holding a spec from elsewhere can use
+// Runner.IndexOf.
+func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, triggerIndex int, batch *Batch, shadow bool) {
+	ctx = withIdentityScope(ctx, config.ScopeForTrigger(spec, triggerIndex))
 	ctx = context.WithValue(ctx, policyKey{}, r.resolvePolicy(spec))
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
 	ctx = withDefaultGate(ctx, spec.Gate)
@@ -403,8 +443,14 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 		hist = histFrom(ctx)
 	}
 	for i := start; i < len(steps); i++ {
+		// Two different jobs, deliberately: `id` is the user-facing output
+		// key (`{{.steps.step1.outputs}}`, 1-based for readability) and
+		// `slot` is the IDENTITY slot — the same string every lookup path
+		// computes (config.StepSlot). Conflating them is how a session got
+		// bound under `…/step1` and swept under `…/0`.
 		step := steps[i]
 		id := stepID(step, i)
+		slot := config.StepSlot(step, i)
 
 		if step.If != "" {
 			ok, err := expr.Eval(step.If, data)
@@ -422,7 +468,7 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 
 		r.runHooks(ctx, t, step.Hooks, "start", data, "step "+id)
 		hist.stepStart(id, i)
-		outputs, err := r.execStepWithFlow(ctx, t, step, id, data, shadow)
+		outputs, err := r.execStepWithFlow(ctx, t, step, id, slot, data, shadow)
 		if err != nil {
 			// Error strings carry whatever the failing transport embedded —
 			// a REST secret in a URL query rides url.Error verbatim. Redact
@@ -564,7 +610,7 @@ func (r *Runner) finishRun(ctx context.Context, run store.WorkflowRun) {
 
 // execStepWithFlow wraps one step's execution with the control-flow
 // modifiers: for_each fan-out, parallel branches, timeout, and retry.
-func (r *Runner) execStepWithFlow(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, error) {
+func (r *Runner) execStepWithFlow(ctx context.Context, t core.Trigger, step config.Step, id, slot string, data map[string]any, shadow bool) (map[string]any, error) {
 	if step.Timeout.D() > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, step.Timeout.D())
@@ -578,10 +624,10 @@ func (r *Runner) execStepWithFlow(ctx context.Context, t core.Trigger, step conf
 	}
 
 	if step.ForEach != "" {
-		return r.execForEach(ctx, t, step, id, data, shadow)
+		return r.execForEach(ctx, t, step, id, slot, data, shadow)
 	}
 
-	return r.execWithRetry(ctx, t, step, id, data, shadow)
+	return r.execWithRetry(ctx, t, step, id, slot, data, shadow)
 }
 
 // execBranches runs `parallel: [[…],[…]]` branch lists concurrently.
@@ -638,7 +684,7 @@ func (r *Runner) execBranches(ctx context.Context, t core.Trigger, step config.S
 // execForEach fans one step over a collection; {{.item}} / {{.index}} are in
 // scope per iteration. With parallel: true iterations run concurrently
 // (bounded), else in order. Outputs: { items: [each iteration's outputs] }.
-func (r *Runner) execForEach(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, error) {
+func (r *Runner) execForEach(ctx context.Context, t core.Trigger, step config.Step, id, slot string, data map[string]any, shadow bool) (map[string]any, error) {
 	items, err := resolveList(step.ForEach, data)
 	if err != nil {
 		return nil, fmt.Errorf("for_each: %w", err)
@@ -658,7 +704,7 @@ func (r *Runner) execForEach(ctx context.Context, t core.Trigger, step config.St
 		local := cloneData(data)
 		local["item"] = items[i]
 		local["index"] = i
-		out, err := r.execWithRetry(ctx, t, step, fmt.Sprintf("%s[%d]", id, i), local, shadow)
+		out, err := r.execWithRetry(ctx, t, step, fmt.Sprintf("%s[%d]", id, i), fmt.Sprintf("%s[%d]", slot, i), local, shadow)
 		if err != nil {
 			return fmt.Errorf("item %d: %w", i, err)
 		}
@@ -736,7 +782,7 @@ func resolveList(exprStr string, data map[string]any) ([]any, error) {
 // execWithRetry wraps execStep with the error-retry half of retry: (max /
 // backoff) and the defer-retry half (while_output_matches / interval /
 // timeout — re-run while the output still says "not ready").
-func (r *Runner) execWithRetry(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, error) {
+func (r *Runner) execWithRetry(ctx context.Context, t core.Trigger, step config.Step, id, slot string, data map[string]any, shadow bool) (map[string]any, error) {
 	max := 0
 	backoff := 10 * time.Second
 	if step.Retry != nil {
@@ -749,7 +795,7 @@ func (r *Runner) execWithRetry(ctx context.Context, t core.Trigger, step config.
 	var raw string
 	var err error
 	for attempt := 0; ; attempt++ {
-		out, raw, err = r.execStep(ctx, t, step, id, data, shadow)
+		out, raw, err = r.execStep(ctx, t, step, id, slot, data, shadow)
 		if err == nil || attempt >= max || ctx.Err() != nil {
 			break
 		}
@@ -780,7 +826,7 @@ func (r *Runner) execWithRetry(ctx context.Context, t core.Trigger, step config.
 			if serr := r.sleep(ctx, interval); serr != nil {
 				return out, nil
 			}
-			out, raw, err = r.execStep(ctx, t, step, id, data, shadow)
+			out, raw, err = r.execStep(ctx, t, step, id, slot, data, shadow)
 			if err != nil {
 				return nil, err
 			}
@@ -798,7 +844,7 @@ func retryTimeout(rs *config.RetrySpec) time.Duration {
 
 // execStep runs one step form once. raw is the unparsed output (for
 // while_output_matches).
-func (r *Runner) execStep(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, string, error) {
+func (r *Runner) execStep(ctx context.Context, t core.Trigger, step config.Step, id, slot string, data map[string]any, shadow bool) (map[string]any, string, error) {
 	switch step.Form() {
 	case "verb":
 		out, err := r.execVerb(ctx, t, step, id, data, shadow)
@@ -809,7 +855,7 @@ func (r *Runner) execStep(ctx context.Context, t core.Trigger, step config.Step,
 	case "code":
 		return r.execCode(ctx, t, step, id, data, shadow)
 	case "agent":
-		return r.execAgent(ctx, t, step, id, data, shadow)
+		return r.execAgent(ctx, t, step, id, slot, data, shadow)
 	case "command":
 		return r.execCommand(ctx, t, step, id, data, shadow)
 	case "team":
@@ -1252,7 +1298,7 @@ func (r *Runner) runtimeOf(step config.Step) string {
 
 // execAgent dispatches a type: agent step through the engine-provided
 // services (runtime resolution, tokens, guidance, background hand-off).
-func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, string, error) {
+func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step, id, slot string, data map[string]any, shadow bool) (map[string]any, string, error) {
 	// `agent:` is retained as a free-form ATTRIBUTION label on the dispatch
 	// (it used to name a profile; profiles are gone — design §6). It may be
 	// templated, so render it before use; step is a value copy.
@@ -1263,7 +1309,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	}
 	// The step IS the profile now (design §6), and its identity is the key
 	// memory, sessions, and outcomes use (§5).
-	identity := stepIdentity(ctx, step, id)
+	identity := stepIdentity(ctx, step, slot)
 	// The RESOLVED model — "" is a bare launch, a first-class outcome.
 	model := ""
 	if r.Agents.ResolveModel != nil {
@@ -1387,7 +1433,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// checks before this step's outputs promote. Runs while the agent is
 	// still live so a failure can loop back as a revise follow-up.
 	if gspec := r.effectiveGate(ctx, step); gspec != nil && !shadow {
-		rounds, gerr := r.runGate(ctx, t, step, id, gspec, ref, data)
+		rounds, gerr := r.runGate(ctx, t, step, id, slot, gspec, ref, data)
 		if gerr != nil {
 			return outputs, ref.Output, gerr
 		}
