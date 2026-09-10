@@ -107,15 +107,42 @@ func (r *Runner) GrantedVerbs(patterns []string) []GrantedVerb {
 		if !ok || in.Decl == nil {
 			continue
 		}
+		// A vault is its own capability class: its verbs read and write
+		// SECRET material. A broad `["*"]` grant is written to mean "the
+		// ordinary connectors", and silently folding every vault into it
+		// hands an agent the secret store. Vaults are therefore reachable
+		// only by a pattern that NAMES the vault — an operator can still
+		// grant `myvault.read` deliberately, which is the point; what they
+		// can't do is grant it by accident with a wildcard.
+		vault := connector.IsVault(in)
 		for _, vd := range in.Decl.Verbs {
 			uses := connName + "." + vd.Name
 			if !matchAny(patterns, uses) {
+				continue
+			}
+			if vault && !namesConnectorExplicitly(patterns, connName) {
 				continue
 			}
 			out = append(out, GrantedVerb{Uses: uses, Connector: connName, Decl: vd})
 		}
 	}
 	return out
+}
+
+// namesConnectorExplicitly reports whether any pattern names this connector
+// literally in its connector segment (`v.read`, `v.*`) rather than reaching it
+// through a wildcard (`*`, `*.read`).
+func namesConnectorExplicitly(patterns []string, connName string) bool {
+	for _, p := range patterns {
+		seg, _, ok := strings.Cut(strings.TrimSpace(p), ".")
+		if !ok {
+			seg = strings.TrimSpace(p)
+		}
+		if seg == connName {
+			return true
+		}
+	}
+	return false
 }
 
 // optionsJSONSchema shapes a verb's option schema as MCP tool input schema.
@@ -337,6 +364,17 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	}
 	if !internalConnectors[connName] && r.containsTrackedSecret(options) {
 		return deny("refusing to relay secret material to an external connector from an agent tool call")
+	}
+	// RESOURCE SCOPING. The gate above answers "may this profile call this
+	// verb"; it says nothing about WHICH repo or store the call names. The
+	// plan surface has always checked that (checkVerbResources), so a
+	// `skill.verbs: [gh.submit_review]` grant intended for the PR under
+	// review could be turned on any repo the connector could reach simply by
+	// passing a different `repo:` option. Same function, same allowlists, so
+	// the two surfaces cannot drift: the dispatch's own target is implicitly
+	// allowed and anything beyond it needs allow_targets/allow_stores.
+	if err := r.checkVerbResources(r.planPolicy(), t, uses, options); err != nil {
+		return deny(r.redactErr(err))
 	}
 	// Identity is a per-verb concern: a verb's own `as:` option (when it has
 	// one) travels through as the agent supplied it, and the connector applies

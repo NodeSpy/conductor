@@ -251,3 +251,15 @@ func buildVaultBackend(name string, ref config.VaultRef, boot *vaults.Bootstrap,
 	}
 	return nil, "", fmt.Errorf("vault %q: unknown type %q (known: conductor, file, hashicorp, onepassword, pass)", name, ref.Type)
 }
+
+// IsVault reports whether an instance is a vault (a `vaults:` entry surfaced
+// as a connector), so callers can treat secret material as its own capability
+// class. The skill surface uses it to keep a broad `["*"]` grant from
+// silently including secret read/write.
+func IsVault(in *Instance) bool {
+	if in == nil {
+		return false
+	}
+	_, ok := in.Impl.(vaultImpl)
+	return ok
+}
