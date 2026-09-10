@@ -676,9 +676,29 @@ func (c *Config) DefaultHandoffName() string {
 // conductor's own capabilities a dispatched agent may reach back into over
 // the daemon socket. The zero value denies everything.
 type SkillPolicy struct {
-	// Verbs are the connector verbs exposed to this agent as MCP tools —
-	// path.Match patterns like policy.agent_authored uses ("gh.comment",
-	// "rest.*"). Empty → no verb tools.
+	// Verbs is the DENY-BY-DEFAULT allowlist of connector verbs this step may
+	// call — the one list that drives all three agent-facing surfaces: the
+	// capability card injected into the prompt, `conductor discover` / the
+	// MCP tool list, and what the daemon enforces
+	// (docs/design/skill-capability-and-pack-interface.md §A/§B).
+	//
+	// Grant forms (path.Match patterns, same matcher policy.agent_authored
+	// uses):
+	//
+	//	verbs: ["*"]                    all verbs of all connectors
+	//	verbs: [github.*]               all verbs of one connector
+	//	verbs: [github.*, sentry.*]     several connectors
+	//	verbs: [github.submit_review]   specific verbs
+	//
+	// Empty (or no `skill:` block at all) → no surface: no tools, no card,
+	// nothing injected, everything denied. READS ARE NOT OPEN BY DEFAULT —
+	// a read verb outside the grant is refused like any other. Breadth is
+	// an explicit dial, never a default.
+	//
+	// `conductor.*` and `workflow.*` are never reachable here at ANY
+	// breadth, including `["*"]`: conductor's own orchestration goes through
+	// run_step under policy.agent_authored. Inside a PACK the grant is
+	// additionally bounded by requires.connectors (§C).
 	Verbs []string `yaml:"verbs"`
 	// SecretsVia picks how this agent obtains a credential it truly needs:
 	// "broker" (the audited single-use secret broker), "env" (DEPRECATED —

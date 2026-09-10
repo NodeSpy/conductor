@@ -256,7 +256,12 @@ func stepClass(cfg *config.Config, step *config.Step) string {
 }
 
 // matchAny reports whether class matches any pattern: exact, path-glob
-// ("kv.*", "*.write"), or the "cli" alias for command steps.
+// ("kv.*", "*.write", bare "*"), or the "cli" alias for command steps.
+//
+// It is the single matcher behind BOTH the agent-authored plan allowlist
+// and the skill grant (config.SkillPolicy.Verbs), which is what lets the
+// capability card, `conductor discover`, and the enforcement point agree by
+// construction — see internal/flow/capability.go.
 //
 // conductor.* verbs are EXACT-match only: they operate the daemon itself
 // (update/pause/resume/restart/reload/run), so a broad `allow: ["*"]` — or

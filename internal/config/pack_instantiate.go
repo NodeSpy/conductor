@@ -197,6 +197,17 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// environment references.
 	rw := newRefRewriter(ns, man, req.inst, env)
 
+	// ---- The pack's skill grants are bounded by requires.connectors (§C).
+	//
+	// Runs in the pack's OWN vocabulary, before the ref rewriter maps
+	// connector prefixes onto the consumer's instance names — and before the
+	// overlay, deliberately: what this bounds is what the PACK grants. A
+	// consumer who writes `packs.<n>.steps.<role>.skill` in their own config
+	// is granting for themselves, exactly as they would on their own step;
+	// that is theirs to decide and is visible in their config. What a pack
+	// can never do is reach a connector it did not declare. ----
+	st.applyPackSkillBoundary(ns, man)
+
 	// ---- Mirrored-section overlay (§5.3): the consumer's steps:/models:
 	// blocks deep-merge onto the pack's members BY NAME before anything is
 	// namespaced, so the overrides address the pack's own vocabulary. ----

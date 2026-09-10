@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -312,13 +313,14 @@ type PackRequires struct {
 	// Conductor is the daemon-version constraint (§16) — REQUIRED for the
 	// auto-updating fleet. Loading a pack outside its range is a named error,
 	// never a crash. Mirrors Terraform required_version.
-	Conductor  string                `yaml:"conductor,omitempty"`
-	Connectors []string              `yaml:"connectors,omitempty"`
-	Stores     []string              `yaml:"stores,omitempty"`
-	Handoffs   []string              `yaml:"handoffs,omitempty"`
-	Secrets    map[string]SecretReq  `yaml:"secrets,omitempty"`
-	Roles      map[string]RoleReq    `yaml:"roles,omitempty"`
-	Packs      map[string]PackDepReq `yaml:"packs,omitempty"`
+	Conductor  string   `yaml:"conductor,omitempty"`
+	Connectors []string `yaml:"connectors,omitempty"`
+
+	Stores   []string              `yaml:"stores,omitempty"`
+	Handoffs []string              `yaml:"handoffs,omitempty"`
+	Secrets  map[string]SecretReq  `yaml:"secrets,omitempty"`
+	Roles    map[string]RoleReq    `yaml:"roles,omitempty"`
+	Packs    map[string]PackDepReq `yaml:"packs,omitempty"`
 	// Sources names the connector SOURCE TYPES this pack's triggers bind to
 	// (github, gitlab, pagerduty…). Scope for each lives on the CONSUMER's
 	// connector of that type, never on the pack
@@ -326,6 +328,15 @@ type PackRequires struct {
 	// no connector for leaves its triggers DORMANT with a load-time notice,
 	// unless the author marks it required.
 	Sources map[string]SourceReq `yaml:"sources,omitempty"`
+}
+
+// ConnectorNames lists the connectors the pack declares, sorted. This is
+// the pack's capability boundary: its `skill.verbs` may name no connector
+// outside it (docs/design/skill-capability-and-pack-interface.md §C).
+func (r PackRequires) ConnectorNames() []string {
+	out := append([]string(nil), r.Connectors...)
+	sort.Strings(out)
+	return out
 }
 
 // RoleReq declares a step role the pack defines: a bound step MUST provide

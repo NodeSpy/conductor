@@ -25,9 +25,9 @@ func LintPackDir(dir string) ([]string, error) {
 
 // LintPackManifest checks a pack is well-formed (§18) and returns a list of
 // human-readable problems (empty when clean). It validates: identity present,
-// no bind-only sections shipped, requires.conductor declared, exports resolve,
-// requires.roles correspond to bundled agents, triggers are named, and every
-// ${settings.NAME} reference is a declared setting.
+// no bind-only sections shipped, requires.conductor declared, exports
+// resolve, skill grants stay inside requires.connectors, triggers are named,
+// and every ${settings.NAME} reference is a declared setting.
 func LintPackManifest(man *PackManifest) []string {
 	var problems []string
 
@@ -70,6 +70,11 @@ func LintPackManifest(man *PackManifest) []string {
 			problems = append(problems, fmt.Sprintf("triggers[%d]: a shipped trigger must have a name (so it can be armed)", i))
 		}
 	}
+
+	// A pack may only grant its agents access to connectors it DECLARED
+	// (§C): requires.connectors is the capability boundary, not just a list
+	// of sockets.
+	problems = append(problems, lintPackSkillGrants(man)...)
 
 	problems = append(problems, lintSettingsRefs(man)...)
 	sort.Strings(problems)
