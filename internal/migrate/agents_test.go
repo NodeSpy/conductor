@@ -65,18 +65,16 @@ triggers:
     steps:
       - { id: fix, type: agent, agent: fixer, prompt: "fix it" }
 `)
-	tmpl, ok := out.Steps["fixer"]
-	if !ok {
-		t.Fatalf("agents.fixer should become steps.fixer, have %v", out.Steps)
-	}
-	// THE continuity property: the old agent name is the template's name, so
-	// the step identity is byte-identical to the key the box already has on
-	// disk for memory / sessions / outcomes.
+	// The behavior is INLINED on the step that referenced it — there is no
+	// registry to park it in.
+	tmpl := out.Triggers[0].Steps[0]
+	// THE continuity property: the old agent name is pinned as the step's
+	// name:, so its identity is byte-identical to the key the box already
+	// has on disk for memory / sessions / outcomes.
 	if tmpl.Name != "fixer" {
 		t.Fatalf("the old agent name must be pinned as name:, got %q", tmpl.Name)
 	}
-	scope := config.IdentityScope{Kind: "step", Name: "fixer"}
-	if got := tmpl.Identity(scope, 0); got != "fixer" {
+	if got := tmpl.Identity(config.ScopeForTrigger(out.Triggers[0], 0), 0); got != "fixer" {
 		t.Fatalf("migrated identity = %q, want fixer", got)
 	}
 	// Behavior moved verbatim.
@@ -95,16 +93,6 @@ triggers:
 		t.Fatal("the migration must not invent a fleet")
 	}
 
-	// The referencing step now plays the named step, and therefore INHERITS
-	// its name — so the dispatch keys off "fixer" exactly as before. Load
-	// resolves the reference and drops it, so the name is what to look at.
-	step := out.Triggers[0].Steps[0]
-	if step.Name != "fixer" {
-		t.Fatalf("agent: fixer should become step: fixer, got %+v", step)
-	}
-	if got := step.Identity(config.ScopeForTrigger(out.Triggers[0], 0), 0); got != "fixer" {
-		t.Fatalf("the referencing step's identity = %q, want fixer", got)
-	}
 	if !hasNote(notes, "history carries over") {
 		t.Fatalf("the summary should say the history carries over: %v", notes)
 	}
@@ -184,10 +172,10 @@ agents:
 triggers:
   - { on: gh.pull_request, name: t, steps: [{ id: s, type: agent, agent: a, prompt: "p" }] }
 `)
-	if out.Steps["a"].Model.Set() {
-		t.Fatalf("provider-only must not become a model pin, got %+v", out.Steps["a"].Model)
+	if m := out.Triggers[0].Steps[0].Model; m.Set() {
+		t.Fatalf("provider-only must not become a model pin, got %+v", m)
 	}
-	if !hasNote(notes, "BARE LAUNCHES") {
+	if !hasNote(notes, "BARE LAUNCH") {
 		t.Fatalf("the bare-launch outcome should be summarized: %v", notes)
 	}
 }
@@ -201,7 +189,7 @@ agents:
 triggers:
   - { on: gh.pull_request, name: t, steps: [{ id: s, type: agent, agent: a, prompt: "p" }] }
 `)
-	sess := out.Steps["a"].Session
+	sess := out.Triggers[0].Steps[0].Session
 	if sess == nil || sess.Key != "{{.repo}}#{{.pr}}" || len(sess.EndOn) != 1 {
 		t.Fatalf("session lost: %+v", sess)
 	}
@@ -259,31 +247,39 @@ triggers:
 
 // An `agents:` block a config no longer references still migrates rather
 // than tripping the strict decoder.
-func TestAgentsMigrationHandlesUnreferencedProfiles(t *testing.T) {
-	out, _ := migrateDoc(t, agentsBase+`
+// A profile nothing references has nowhere to be inlined — there is no
+// registry to park it in — so it is dropped WITH A NOTE, never in silence.
+func TestAgentsMigrationReportsUnreferencedProfiles(t *testing.T) {
+	_, notes := migrateDoc(t, agentsBase+`
 agents:
   orphan: { provider: claude, workspace: local }
 triggers:
   - { on: gh.pull_request, name: t, steps: [{ id: s, uses: gh.comment, options: { body: hi } }] }
 `)
-	if _, ok := out.Steps["orphan"]; !ok {
-		t.Fatalf("an unreferenced profile must still migrate, have %v", out.Steps)
+	if !hasNote(notes, "no step referenced it") {
+		t.Fatalf("an unreferenced profile must be reported: %v", notes)
 	}
 }
 
-// A collision with an existing steps: entry is reported, not silently
-// overwritten.
-func TestAgentsMigrationReportsTemplateCollision(t *testing.T) {
-	_, notes := migrateDoc(t, agentsBase+`
-steps:
-  a: { type: agent, name: a, workspace: local }
+// A profile referenced from SEVERAL steps in one file becomes an anchor
+// under x-migrated: rather than being copied at each site.
+func TestAgentsMigrationSharesAnAnchorAcrossSites(t *testing.T) {
+	res, err := Transform([]byte(agentsBase + `
 agents:
-  a: { provider: claude, workspace: worktree }
+  fixer: { provider: claude, workspace: worktree }
 triggers:
-  - { on: gh.pull_request, name: t, steps: [{ id: s, type: agent, agent: a, prompt: "p" }] }
-`)
-	if !hasNote(notes, "already exists") {
-		t.Fatalf("a collision must be reported: %v", notes)
+  - { on: gh.pull_request, name: a, steps: [{ id: s, type: agent, agent: fixer, prompt: "one" }] }
+  - { on: gh.issues, name: b, steps: [{ id: s, type: agent, agent: fixer, prompt: "two" }] }
+`))
+	if err != nil {
+		t.Fatalf("transform: %v", err)
+	}
+	out := string(res.Output)
+	if !strings.Contains(out, "x-migrated:") || !strings.Contains(out, "&fixer") {
+		t.Fatalf("two sites should share one anchor:\n%s", out)
+	}
+	if strings.Count(out, "<<: *fixer") != 2 {
+		t.Fatalf("both sites should merge the anchor:\n%s", out)
 	}
 }
 

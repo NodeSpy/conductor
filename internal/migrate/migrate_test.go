@@ -89,13 +89,18 @@ func mustTransform(t *testing.T, raw string) (*Result, *config.Config) {
 	}
 	// The output must parse as a config (with env refs masked, mirroring the
 	// production load which expands them first).
+	// Mirror config.Load: resolve anchors before decoding. A custom
+	// UnmarshalYAML re-encodes the node it is handed, so an alias whose
+	// anchor lives outside that node cannot be read directly — which is
+	// exactly why the loader resolves first.
+	resolved, rerr := config.ResolveAliasBytes(maskEnv(res.Output))
+	if rerr != nil {
+		t.Fatalf("migrated config does not parse: %v\n%s", rerr, res.Output)
+	}
 	var out config.Config
-	if err := yaml.Unmarshal(maskEnv(res.Output), &out); err != nil {
+	if err := yaml.Unmarshal(resolved, &out); err != nil {
 		t.Fatalf("migrated config does not parse: %v\n%s", err, res.Output)
 	}
-	// Mirror config.Load: a migrated step plays a named `steps:` entry, and
-	// the identity that carries a user's history over comes from resolving
-	// that reference. Asserting on the unresolved document would miss it.
 	if err := out.ResolveExtends(); err != nil {
 		t.Fatalf("migrated config does not resolve: %v\n%s", err, res.Output)
 	}
@@ -379,13 +384,13 @@ integrations:
         ack: { react: eyes }
         on_done: { react: white_check_mark, say: "done!", in_thread: true }
         on_fail: { say: "failed", ephemeral: true }
-        actions: { type: agent, extends: fixer, prompt: "Do {{.slack.text}}" }
+        actions: { type: agent, agent: fixer, prompt: "Do {{.slack.text}}" }
       - on: reaction_added
         reaction: rocket
         actions: { type: command, command: ["echo", "hi"] }
       - on: slash_command
         command: /deploy
-        actions: { type: agent, extends: fixer, prompt: "deploy" }
+        actions: { type: agent, agent: fixer, prompt: "deploy" }
   - type: cron
     name: chores
     schedules:
@@ -404,7 +409,7 @@ integrations:
         title: "{{.body.name}}"
         dedup: "{{.body.id}}"
         repo: acme/infra
-        actions: { type: agent, extends: fixer, prompt: "investigate {{.body.name}}" }
+        actions: { type: agent, agent: fixer, prompt: "investigate {{.body.name}}" }
   - type: sentry
     name: errors
     listen: ":8098"
@@ -412,7 +417,7 @@ integrations:
     rules:
       - match: { projects: [backend], levels: [error, fatal] }
         repo: acme/backend
-        actions: { type: agent, extends: fixer, prompt: "fix {{.sentry.title}}" }
+        actions: { type: agent, agent: fixer, prompt: "fix {{.sentry.title}}" }
       - match: {}
         actions: { type: command, command: ["echo", "{{.sentry.title}}"] }
   - type: pagerduty
@@ -421,7 +426,7 @@ integrations:
     signing_secret: ${PD_SECRET}
     rules:
       - match: { event_types: [incident.triggered], urgencies: [high] }
-        actions: { type: agent, extends: fixer, prompt: "mitigate {{.pagerduty.title}}" }
+        actions: { type: agent, agent: fixer, prompt: "mitigate {{.pagerduty.title}}" }
   - type: rss
     name: upstream
     feeds:
@@ -429,7 +434,7 @@ integrations:
         url: https://example.com/feed.xml
         interval: 45m
         match: "(?i)security"
-        actions: { type: agent, extends: fixer, prompt: "read {{.item.link}}" }
+        actions: { type: agent, agent: fixer, prompt: "read {{.item.link}}" }
 handoffs:
   review:
     slack: { to: dm, user: U123, bot_token: ${SLACK_BOT_TOKEN} }
@@ -555,7 +560,17 @@ func TestKitchenSinkTransform(t *testing.T) {
 	if out.ConnectorsMap["notify-slack"].TypeName() != "slack" {
 		t.Errorf("notify-slack connector missing: %v", out.ConnectorsMap["notify-slack"])
 	}
-	if _, ok := out.Steps["fixer"]; !ok {
+	// The agents block was inlined onto the steps that referenced it; the
+	// old name rides along as the step's identity.
+	found := false
+	for _, tr := range out.Triggers {
+		for _, st := range tr.Steps {
+			if st.Name == "fixer" {
+				found = true
+			}
+		}
+	}
+	if !found {
 		t.Errorf("agents block lost")
 	}
 	// Legacy keys gone.
@@ -728,8 +743,12 @@ func TestExampleConfigTransforms(t *testing.T) {
 	if !res.Changed {
 		t.Skip("example config already on the connectors schema")
 	}
+	resolved, err := config.ResolveAliasBytes(maskEnv(res.Output))
+	if err != nil {
+		t.Fatalf("migrated example config does not parse: %v", err)
+	}
 	var out config.Config
-	if err := yaml.Unmarshal(maskEnv(res.Output), &out); err != nil {
+	if err := yaml.Unmarshal(resolved, &out); err != nil {
 		t.Fatalf("migrated example config does not parse: %v", err)
 	}
 	if len(out.ConnectorsMap) == 0 || len(out.Triggers) == 0 {

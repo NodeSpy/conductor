@@ -32,6 +32,21 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 )
 
+// decodeConfig decodes raw YAML into a Config with anchors resolved first.
+//
+// Every pass that decodes bytes needs this: a custom UnmarshalYAML
+// re-encodes the node it is handed, so an alias whose anchor lives outside
+// that node cannot be read. The migration's own output carries anchors, so
+// without this a second run — which must be a no-op — is a hard error.
+// Callers keep the ORIGINAL bytes for the node tree they rewrite, so
+// anchors, comments, and formatting survive.
+func decodeConfig(b []byte, out *config.Config) error {
+	if resolved, err := config.ResolveAliasBytes(b); err == nil {
+		b = resolved
+	}
+	return yaml.Unmarshal(b, out)
+}
+
 // Result is one file's transform outcome.
 type Result struct {
 	// Output is the transformed YAML (nil when Changed is false).
@@ -62,8 +77,29 @@ func unmaskEnv(out []byte) []byte {
 
 // Transform converts one legacy config document. The raw bytes must be the
 // on-disk file (unexpanded); the output preserves ${VAR} references.
-func Transform(raw []byte) (*Result, error) {
+func Transform(raw []byte) (*Result, error) { return TransformWith(raw, nil) }
+
+// TransformWith is Transform given the agent profiles declared ELSEWHERE in
+// the import tree. `agents:` commonly sat in the main config while the
+// triggers naming it sat in conf.d/*.yaml, and profile behavior is inlined
+// at each site now rather than parked in a registry — so a file holding only
+// triggers needs the table to inline from. AutoMigrate gathers it with
+// CollectProfiles before rewriting any file; a single-file caller passes nil
+// and gets the file's own profiles only.
+func TransformWith(raw []byte, profiles map[string]*yaml.Node) (*Result, error) {
 	raw = maskEnv(raw)
+	// A file this migration has ALREADY produced carries anchors, and a
+	// strict/lenient decode of raw bytes cannot read those (a custom
+	// UnmarshalYAML re-encodes the node it is handed, and an alias whose
+	// anchor lives outside that node has nothing to point at). Decode from
+	// an alias-resolved rendering; the NODE tree below stays on the
+	// original bytes so a rewrite preserves the anchors, the comments, and
+	// the formatting. Without this, re-running the migration on its own
+	// output is a hard error instead of the no-op it must be.
+	flat := raw
+	if resolved, err := config.ResolveAliasBytes(raw); err == nil {
+		flat = resolved
+	}
 	var notes []string
 	droppedSeen := map[string]bool{}
 	// LENIENT decode, with a strict probe harvesting notes: this migration is
@@ -75,7 +111,7 @@ func Transform(raw []byte) (*Result, error) {
 	// field the legacy engine never read. The strict-output scrub at the end
 	// guarantees anything carried verbatim is gone from the result too.
 	{
-		dec := yaml.NewDecoder(bytes.NewReader(raw))
+		dec := yaml.NewDecoder(bytes.NewReader(flat))
 		dec.KnownFields(true)
 		var probe config.Config
 		if err := dec.Decode(&probe); err != nil && err != io.EOF {
@@ -88,7 +124,7 @@ func Transform(raw []byte) (*Result, error) {
 		}
 	}
 	var cfg config.Config
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+	if err := yaml.Unmarshal(flat, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w (note: config migrate reads the raw file — a ${VAR} in a numeric field can't be parsed; quote or inline it)", err)
 	}
 	var doc yaml.Node
@@ -129,7 +165,7 @@ func Transform(raw []byte) (*Result, error) {
 		}
 		// The agents: pass runs after use:, so a budget it moves lands on a
 		// runtimes: entry that already carries its `use:`.
-		if out, changed, err := applyAgentsPass(cur, &notes); err != nil {
+		if out, changed, err := applyAgentsPass(cur, profiles, &notes); err != nil {
 			return nil, fmt.Errorf("agents migration: %w", err)
 		} else if changed {
 			cur, anyChanged = out, true
@@ -329,7 +365,7 @@ func Transform(raw []byte) (*Result, error) {
 	// …and the agents: pass over that output: the legacy transform carries
 	// agents: through verbatim, so it needs the same decomposition a
 	// hand-written connectors config does.
-	if aout, achanged, aerr := applyAgentsPass(b, &notes); aerr != nil {
+	if aout, achanged, aerr := applyAgentsPass(b, profiles, &notes); aerr != nil {
 		return nil, fmt.Errorf("agents migration: %w", aerr)
 	} else if achanged {
 		b = aout
@@ -416,6 +452,32 @@ func noteUnknown(notes *[]string, seen map[string]bool, fe unknownField) {
 // e.g. a top-level dispatch: from an old backup) is removed with a note.
 // Anything that isn't a plain unknown-key error stays a hard error.
 func scrubUnknownKeys(b []byte, notes *[]string, seen map[string]bool) ([]byte, error) {
+	// The output may carry ANCHORS — the agents pass emits one when several
+	// steps in a file shared a profile. A strict decode cannot read those
+	// directly (a custom UnmarshalYAML re-encodes the node it is handed, and
+	// an alias whose anchor sits outside that node has nothing to point at),
+	// so the check runs against an alias-resolved rendering.
+	//
+	// When it comes back clean the ORIGINAL is returned, anchors intact.
+	// Only when something actually has to be scrubbed does the resolved
+	// rendering become the output — inlining an anchor is a cosmetic loss,
+	// and it beats refusing a migration over a document the loader would
+	// have accepted.
+	if resolved, err := config.ResolveAliasBytes(b); err == nil && !bytes.Equal(resolved, b) {
+		dec := yaml.NewDecoder(bytes.NewReader(resolved))
+		dec.KnownFields(true)
+		var check config.Config
+		err := dec.Decode(&check)
+		if err == nil || err == io.EOF {
+			return b, nil
+		}
+		// An error made up entirely of `x-` holders is not an error — those
+		// are anchor parks the loader ignores.
+		if fes, ok := unknownFields(err); ok && len(fes) == 0 {
+			return b, nil
+		}
+		b = resolved
+	}
 	for pass := 0; pass < 20; pass++ {
 		dec := yaml.NewDecoder(bytes.NewReader(b))
 		dec.KnownFields(true)

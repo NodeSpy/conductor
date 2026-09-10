@@ -129,8 +129,12 @@ func TestSlackAggregationTimingGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	resolved, err := config.ResolveAliasBytes(res.Output)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var cfg config.Config
-	if err := yaml.Unmarshal(res.Output, &cfg); err != nil {
+	if err := yaml.Unmarshal(resolved, &cfg); err != nil {
 		t.Fatal(err)
 	}
 	sec := secrets.New()

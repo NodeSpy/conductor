@@ -33,6 +33,23 @@ func AutoMigrate(mainPath string, validate func() error, logf func(string, ...an
 	if err != nil {
 		return 0, nil, err
 	}
+	// Profile behavior is INLINED at each referencing step now, so the whole
+	// import tree has to be read before any single file is rewritten: the
+	// `agents:` block and the triggers that named it are routinely in
+	// different files.
+	profiles := map[string]*yaml.Node{}
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			return 0, nil, fmt.Errorf("read %s: %w", f, err)
+		}
+		for name, frag := range CollectProfiles(raw) {
+			if _, dup := profiles[name]; !dup {
+				profiles[name] = frag
+			}
+		}
+	}
+
 	migrated := 0
 	var all []string
 	for _, f := range files {
@@ -40,7 +57,7 @@ func AutoMigrate(mainPath string, validate func() error, logf func(string, ...an
 		if err != nil {
 			return migrated, all, fmt.Errorf("read %s: %w", f, err)
 		}
-		res, err := Transform(raw)
+		res, err := TransformWith(raw, profiles)
 		if err != nil {
 			return migrated, all, fmt.Errorf("config %s needs manual migration: %w", f, err)
 		}
