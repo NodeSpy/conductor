@@ -26,7 +26,35 @@ import (
 // strictUnmarshal decodes data into v rejecting unknown keys, so a typo'd
 // config key (known_hostss, filtres, …) is a named load error instead of a
 // silently dropped setting.
+//
+// Before the strict pass the document is prepared for YAML-anchor reuse
+// (see anchors.go): aliases are expanded into their content and top-level
+// `x-` extension keys are dropped. Everything else is judged exactly as
+// strictly as before — `x-` is the whole exemption.
 func strictUnmarshal(data []byte, v any) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return err
+	}
+	prepared := prepareStrict(&doc)
+	if prepared == nil {
+		return nil // an empty document decodes to the zero value
+	}
+	var b bytes.Buffer
+	enc := yaml.NewEncoder(&b)
+	enc.SetIndent(2)
+	if err := enc.Encode(prepared); err != nil {
+		return err
+	}
+	if err := enc.Close(); err != nil {
+		return err
+	}
+	return strictDecodeBytes(b.Bytes(), v)
+}
+
+// strictDecodeBytes is the strict decode itself, over a document already
+// prepared by prepareStrict.
+func strictDecodeBytes(data []byte, v any) error {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(v); err != nil {
@@ -1054,6 +1082,11 @@ func loadMerged(p string, loaded map[string]bool) (map[string]any, error) {
 	if m == nil {
 		m = map[string]any{}
 	}
+	// `x-` holders are per-file anchor parks (anchors.go). The decode above
+	// already resolved this file's aliases into values, so only the holder
+	// itself needs dropping — and dropping it HERE, per file, is what keeps
+	// anchors file-local: a holder never merges into another file's scope.
+	StripExtensionKeys(m)
 	// Section-scoped imports expand per file, so their globs resolve against
 	// THIS file's directory and a duplicate entry names both sources.
 	if err := expandSectionImports(p, m); err != nil {
