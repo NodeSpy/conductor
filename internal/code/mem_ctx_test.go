@@ -58,14 +58,14 @@ func TestCtxMemoryRisor(t *testing.T) {
 	tempMem(t)
 	e := &Executor{}
 	out, err := e.Exec(context.Background(), Spec{Run: "risor", Code: `
-kept := memory.remember("risor note", ["infra"], "global")
+kept := memory.remember("risor note", ["infra"], "acme/infra")
 hits := memory.recall({"tags": ["infra"]})
 {"scope": kept["scope"], "n": len(hits), "text": hits[0]["text"], "gone": memory.forget(kept["id"])}
 `}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out["scope"] != "global" || out["text"] != "risor note" || out["gone"] != true {
+	if out["scope"] != "acme/infra" || out["text"] != "risor note" || out["gone"] != true {
 		t.Fatalf("risor memory: %+v", out)
 	}
 }

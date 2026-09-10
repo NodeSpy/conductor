@@ -90,6 +90,15 @@ func (memoryImpl) Invoke(ctx context.Context, verb string, opts map[string]any) 
 	src := memory.SourceFrom(ctx)
 	switch verb {
 	case "remember":
+		// The scope on this path is AGENT-supplied: the verb is reachable
+		// by any `skill.verbs: [memory.*]` grant. "global" is the shared
+		// bucket injected into every opted-in agent's prompt on this
+		// daemon, so writing there turns one repo's note into every
+		// repo's context. Same guard as the output contract and the MCP
+		// tool — this face was simply missed.
+		if err := memory.CheckAgentScope(str("scope")); err != nil {
+			return nil, err
+		}
 		e, err := m.Remember(str("text"), stringList(opts["tags"]), str("scope"), src)
 		if err != nil {
 			return nil, err

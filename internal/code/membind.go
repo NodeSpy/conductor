@@ -55,6 +55,13 @@ func memInvoke(guard DataGuard, op string, args []any) (any, error) {
 				return nil, fmt.Errorf("memory.remember: tags must be a list, got %T", args[1])
 			}
 		}
+		// Agent-supplied scope: a `run: code` step is authored by an agent
+		// on the plan path, and MemHandle.Remember (the go-embed face)
+		// funnels here too. The shared bucket is not theirs to write into
+		// — see memory.CheckAgentScope.
+		if err := memory.CheckAgentScope(argStr(2)); err != nil {
+			return nil, err
+		}
 		e, err := m.Remember(argStr(0), tags, argStr(2), memory.Source{})
 		if err != nil {
 			return nil, err
