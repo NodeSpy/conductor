@@ -37,6 +37,13 @@ func (t *PackTrustConfig) SourceAllowed(source string) bool {
 	if !remote {
 		return true
 	}
+	// The OFFICIAL pack repo is in the default allowlist, mirroring
+	// PluginSourceAllowed. A `packs:` key implies that repo (design §5.1), so
+	// an operator who adds an allowlist for third-party packs would otherwise
+	// silently break every official pack they already reference by name.
+	if s == OfficialPacksSource || strings.HasPrefix(s, OfficialPacksSource+"/") {
+		return true
+	}
 	for _, pat := range t.Allow {
 		if globMatch(strings.TrimSpace(pat), s) {
 			return true
@@ -59,8 +66,12 @@ func (t *PackTrustConfig) PluginSourceAllowed(source string) bool {
 	if s == "" {
 		return true // local binary: the operator's own disk
 	}
-	if s == OfficialSource || strings.HasPrefix(s, OfficialSource+"/") {
-		return true
+	// The official plugin and pack repos are trusted by default: naming an
+	// official component needs no ceremony, a third-party source still does.
+	for _, official := range []string{OfficialSource, OfficialPacksSource} {
+		if s == official || strings.HasPrefix(s, official+"/") {
+			return true
+		}
 	}
 	if t == nil {
 		return false

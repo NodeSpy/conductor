@@ -50,6 +50,11 @@ func (c *Config) instantiatePacks(configDir string) error {
 	if len(c.Packs) == 0 {
 		return nil
 	}
+	// `packs:` key-implies-`use:`: fill each instance's source from its use:
+	// reference, or from the key itself (the official pack repo).
+	if err := applyPackSourceDefaults(c.Packs); err != nil {
+		return err
+	}
 	vendor := packVendorDir(configDir)
 	st := &packInstantiation{cfg: c}
 	for _, name := range sortedPackKeys(c.Packs) {

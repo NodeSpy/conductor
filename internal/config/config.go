@@ -96,8 +96,12 @@ type Config struct {
 	// opted-in agent prompts. Nil = memory not configured (no default).
 	Memory    *MemoryConfig          `yaml:"memory"`
 	Workflows map[string]WorkflowDef `yaml:"workflows"`
-	Triggers  []TriggerSpec          `yaml:"triggers"`
-	Policy    *Policy                `yaml:"policy"`
+	// Triggers is the `triggers:` section. It decodes from the list form or
+	// the named/qualified MAP form, where the key is the trigger's stable
+	// address and a `source.event` key implies `on:` — see TriggerList and
+	// docs/design/runtimes-models-packs.md §5.4.
+	Triggers TriggerList `yaml:"triggers"`
+	Policy   *Policy     `yaml:"policy"`
 	// Checks are the named quality-gate checks (#36 §16) `gate: run:` lists
 	// reference. Each check is one ordinary step (command / code / verb /
 	// critic agent) evaluated to pass/fail against the agent's worktree.

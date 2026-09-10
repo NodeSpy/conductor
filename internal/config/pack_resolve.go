@@ -241,6 +241,11 @@ func resolvePacks(configPath string, allowUnlisted bool) (*Lockfile, error) {
 	if len(packs) == 0 {
 		return &Lockfile{Version: 1}, nil
 	}
+	// `packs:` key-implies-`use:` — the same lowering config.Load does, so
+	// resolve and instantiate see identical sources.
+	if err := applyPackSourceDefaults(packs); err != nil {
+		return nil, err
+	}
 	vendor := packVendorDir(dir)
 	if err := os.MkdirAll(vendor, 0o755); err != nil {
 		return nil, err
@@ -385,7 +390,14 @@ func (r *resolver) resolve(chain, nameChain []string, inst PackInstance, destDir
 			}
 		}
 		if child.Source == "" {
-			return fmt.Errorf("pack %q: dependency %q has no source (set packs.%s.source or requires.packs.%s.source)", ns, alias, alias, alias)
+			// Neither the instance block nor the parent's requires.packs
+			// named a source: fall back to the dependency's own `use:`, then
+			// to its alias (the official pack repo).
+			src, err := packDependencySource(alias, child.Use)
+			if err != nil {
+				return fmt.Errorf("pack %q: dependency %q: %w (set packs.%s.use or requires.packs.%s.source)", ns, alias, err, alias, alias)
+			}
+			child.Source = src
 		}
 		if err := r.resolve(
 			append(append([]string{}, chain...), alias),

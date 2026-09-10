@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -42,6 +43,17 @@ import (
 // The block IS the override surface. Every field is optional; a pack authored
 // for the zero-config 80% case (§26) runs with near-nothing bound.
 type PackInstance struct {
+	// Use names WHERE this pack comes from, in the same one-field form
+	// connectors and runtimes use (docs/design/runtimes-models-packs.md §5.1).
+	// It is rarely written: the `packs:` KEY IS the reference, so
+	// `packs: { pr-review-team: {} }` resolves to the official pack repo
+	// (OfficialPacksRepo) with no `use:` line at all. Write `use:` only to
+	// point somewhere else — `use: ./packs/house-style`, `use: acme/packs/x`.
+	//
+	// Source (below) is the older, longer spelling and still wins when both
+	// are set; applyPackSourceDefaults lowers Use (and the key) onto it, so
+	// resolution and the lockfile have one field to read.
+	Use string `yaml:"use,omitempty"`
 	// Source locates the pack: a go-getter/Terraform-style
 	// `github.com/org/repo//subdir@ref`, an SSH form
 	// `git::ssh://git@github.com/…`, or a local path (`./packs/review-kit`,
@@ -96,6 +108,75 @@ type PackInstance struct {
 	// Packs instantiates the pack's own pack dependencies (requires.packs),
 	// recursively — the identical default/override/bind surface, one level down.
 	Packs map[string]PackInstance `yaml:"packs,omitempty"`
+}
+
+// applyPackSourceDefaults lowers the `use:` reference — and, failing that, the
+// instance KEY — onto Source, so everything downstream (resolve, the trust
+// allowlist, the lockfile) keeps reading one field.
+//
+// Precedence: an explicit Source wins (it is the pre-`use:` spelling and may
+// carry a go-getter form `use:` cannot express), then `use:`, then the key.
+//
+// It deliberately does NOT recurse into pack DEPENDENCIES. A dependency's
+// source is declared by its parent's `requires.packs.<alias>.source`, which
+// the resolver reads at the point it descends; implying one from the alias up
+// front would shadow the author's declaration. The resolver applies the same
+// implication for a dependency only after that declaration comes up empty
+// (see packDependencySource).
+func applyPackSourceDefaults(packs map[string]PackInstance) error {
+	for _, name := range sortedPackKeys(packs) {
+		inst := packs[name]
+		if inst.Source == "" {
+			src, err := packDependencySource(name, inst.Use)
+			if err != nil {
+				return err
+			}
+			inst.Source = src
+		}
+		packs[name] = inst
+	}
+	return nil
+}
+
+// packDependencySource resolves one instance's source from its `use:` (or, if
+// that is empty too, from its key/alias).
+func packDependencySource(name, use string) (string, error) {
+	ref := strings.TrimSpace(use)
+	if ref == "" {
+		ref = name
+	}
+	src, err := packUseSource(ref)
+	if err != nil {
+		return "", fmt.Errorf("pack %q: %w", name, err)
+	}
+	return src, nil
+}
+
+// packUseSource turns a pack `use:` reference into the `source:` string the
+// resolver understands. A local path passes through; anything else resolves
+// through the shared use: search path, with a bare name landing in the
+// official pack repo.
+func packUseSource(ref string) (string, error) {
+	u, err := ParseUse(UseKindPack, ref)
+	if err != nil {
+		return "", err
+	}
+	switch u.Origin {
+	case OriginLocal:
+		return u.Path, nil
+	case OriginBuiltin:
+		// There are no builtin packs, so ParseUse cannot produce this; guard
+		// rather than emit an empty source if that ever changes.
+		return "", fmt.Errorf("use: %q resolves to a builtin, which is not a pack", ref)
+	}
+	src := u.Host + "/" + u.Repo
+	if u.Component != "" {
+		src += "//" + u.Component
+	}
+	if u.Version != "" {
+		src += "@" + u.Version
+	}
+	return src, nil
 }
 
 // Binding is the polymorphic satisfy-a-resource value (§4): its YAML shape

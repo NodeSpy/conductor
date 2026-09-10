@@ -35,17 +35,43 @@ type UseKind string
 const (
 	UseKindConnector UseKind = "connector"
 	UseKindRuntime   UseKind = "runtime"
+	// UseKindPack is a distributable config pack. Packs live in their own
+	// official repo (they are config, not a binary), so a bare pack name
+	// resolves to OfficialPacksRepo rather than the plugin repo.
+	UseKindPack UseKind = "pack"
 )
 
 // Dir is the official repo's directory for this kind ("connectors", "runtimes")
-// and the prefix on its release tags ("connectors/sentry/v1.0.0").
+// and the prefix on its release tags ("connectors/sentry/v1.0.0"). A pack sits
+// at the root of its own repo, so its Dir is only the block name.
 func (k UseKind) Dir() string {
 	switch k {
 	case UseKindRuntime:
 		return "runtimes"
+	case UseKindPack:
+		return "packs"
 	default:
 		return "connectors"
 	}
+}
+
+// officialRepoFor is the repo a bare, non-builtin name of this kind resolves
+// to.
+func (k UseKind) officialRepoFor() string {
+	if k == UseKindPack {
+		return OfficialPacksRepo
+	}
+	return OfficialRepo
+}
+
+// officialComponentFor is the path within the official repo. Plugins are laid
+// out by kind (`connectors/sentry`); a pack is a top-level directory of the
+// packs repo (`pr-review-team`).
+func (k UseKind) officialComponentFor(name string) string {
+	if k == UseKindPack {
+		return name
+	}
+	return k.Dir() + "/" + name
 }
 
 // Block is the config block a reference of this kind appears in.
@@ -73,6 +99,15 @@ const (
 
 // OfficialRepo is the plugin repo a bare, non-builtin name resolves to.
 const OfficialRepo = "NodeSpy/conductor-plugins"
+
+// OfficialPacksRepo is the pack repo a bare `packs:` key resolves to. Packs
+// are config rather than binaries, so they have their own repo.
+const OfficialPacksRepo = "NodeSpy/conductor-packs"
+
+// OfficialPacksSource is the `pack_trust` source form of the official pack
+// repo — in the DEFAULT allowlist, so naming an official pack needs no
+// ceremony while a third-party source still does.
+const OfficialPacksSource = "github.com/" + OfficialPacksRepo
 
 // OfficialSource is the `plugin_trust` source form of the official repo. It is
 // in the DEFAULT trust allowlist: adding an official plugin needs no ceremony,
@@ -266,12 +301,12 @@ func ParseUse(kind UseKind, ref string) (Use, error) {
 		// Not builtin for THIS kind. If it is a builtin of the other kind, say
 		// so plainly rather than sending the operator to the plugin repo for
 		// something that is already in the binary.
-		if other := otherKind(kind); builtinFor(other, name) {
+		if other := otherKind(kind); other != "" && builtinFor(other, name) {
 			return Use{}, fmt.Errorf("use: %q resolves to the builtin %s %q, but it is declared under %s: — a %s can never be wired as a %s", raw, other, name, kind.Block(), other, kind)
 		}
 		u.Origin = OriginOfficial
-		u.Host, u.Repo = defaultHost, OfficialRepo
-		u.Component = kind.Dir() + "/" + name
+		u.Host, u.Repo = defaultHost, kind.officialRepoFor()
+		u.Component = kind.officialComponentFor(name)
 		u.Name = name
 		return u, nil
 	}
@@ -432,11 +467,17 @@ func firstN(s []string, n int) []string {
 	return s[:n]
 }
 
+// otherKind is the kind a name could be confused with. Only connectors and
+// runtimes share the plugin repo and can be mis-declared for one another; a
+// pack is config in its own repo, so it has no counterpart.
 func otherKind(k UseKind) UseKind {
-	if k == UseKindConnector {
+	switch k {
+	case UseKindConnector:
 		return UseKindRuntime
+	case UseKindRuntime:
+		return UseKindConnector
 	}
-	return UseKindConnector
+	return ""
 }
 
 // --- the builtin registries the search path consults -------------------------

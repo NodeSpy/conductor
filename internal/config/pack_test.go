@@ -520,3 +520,99 @@ func triggerNamesOf(c *Config) []string {
 	}
 	return out
 }
+
+// --- `packs:` key-implies-`use:` (design §5.1) -----------------------------
+
+func TestPackKeyImpliesUse(t *testing.T) {
+	tests := []struct {
+		name  string
+		packs map[string]PackInstance
+		want  map[string]string
+	}{
+		{
+			name:  "bare key resolves to the official pack repo",
+			packs: map[string]PackInstance{"pr-review-team": {}},
+			want:  map[string]string{"pr-review-team": "github.com/NodeSpy/conductor-packs//pr-review-team"},
+		},
+		{
+			name:  "use: a local folder",
+			packs: map[string]PackInstance{"house-style": {Use: "./packs/house-style"}},
+			want:  map[string]string{"house-style": "./packs/house-style"},
+		},
+		{
+			name:  "use: an explicit repo",
+			packs: map[string]PackInstance{"kit": {Use: "acme/conductor-packs/kit"}},
+			want:  map[string]string{"kit": "github.com/acme/conductor-packs//kit"},
+		},
+		{
+			name:  "use: carries a version suffix",
+			packs: map[string]PackInstance{"kit": {Use: "acme/packs/kit@~> 1.2"}},
+			want:  map[string]string{"kit": "github.com/acme/packs//kit@~> 1.2"},
+		},
+		{
+			name:  "an explicit source: still wins",
+			packs: map[string]PackInstance{"kit": {Use: "acme/packs/kit", Source: "git::ssh://git@x/y//kit"}},
+			want:  map[string]string{"kit": "git::ssh://git@x/y//kit"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := applyPackSourceDefaults(tc.packs); err != nil {
+				t.Fatal(err)
+			}
+			for name, want := range tc.want {
+				if got := tc.packs[name].Source; got != want {
+					t.Errorf("%s: source = %q, want %q", name, got, want)
+				}
+			}
+		})
+	}
+}
+
+// The key implication must not reach pack DEPENDENCIES: their source is
+// declared by the parent's requires.packs, which the resolver reads later.
+func TestPackKeyImplicationDoesNotTouchDependencies(t *testing.T) {
+	packs := map[string]PackInstance{
+		"kit": {Packs: map[string]PackInstance{"base": {}}},
+	}
+	if err := applyPackSourceDefaults(packs); err != nil {
+		t.Fatal(err)
+	}
+	if got := packs["kit"].Packs["base"].Source; got != "" {
+		t.Fatalf("dependency source was pre-filled with %q — it must come from requires.packs first", got)
+	}
+}
+
+// The official pack repo is trusted by default, exactly as the plugin repo is.
+func TestOfficialPackRepoIsTrustedByDefault(t *testing.T) {
+	var trust *PackTrustConfig // no operator allowlist configured
+	if !trust.SourceAllowed("github.com/NodeSpy/conductor-packs//pr-review-team") {
+		t.Error("the official pack repo should be trusted by default")
+	}
+	trust = &PackTrustConfig{Allow: []string{"github.com/acme/*"}}
+	if !trust.SourceAllowed("github.com/NodeSpy/conductor-packs//x") {
+		t.Error("an allowlist must not revoke the official pack repo")
+	}
+	if trust.SourceAllowed("github.com/stranger/packs//x") {
+		t.Error("a third-party source still needs an explicit entry")
+	}
+}
+
+func TestPackUseKindResolvesToItsOwnRepo(t *testing.T) {
+	u, err := ParseUse(UseKindPack, "pr-review-team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Repo != OfficialPacksRepo {
+		t.Errorf("repo = %q, want %q", u.Repo, OfficialPacksRepo)
+	}
+	// A pack sits at the root of the packs repo — not under a kind directory.
+	if u.Component != "pr-review-team" {
+		t.Errorf("component = %q", u.Component)
+	}
+	// A name that is a builtin RUNTIME is a perfectly good pack name: the
+	// connector/runtime confusion check must not fire across repos.
+	if _, err := ParseUse(UseKindPack, "paseo"); err != nil {
+		t.Errorf("a pack may be named after a builtin runtime: %v", err)
+	}
+}
