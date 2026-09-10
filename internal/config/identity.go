@@ -152,6 +152,24 @@ func BranchScope(parent IdentityScope, parentSlot string, branch int) IdentitySc
 	return IdentityScope{Kind: parent.Kind, Name: fmt.Sprintf("%s%s[%d]", name, parentSlot, branch)}
 }
 
+// CompensateScope is the identity scope of a step's `compensate:` undo.
+//
+// The undo is a different piece of work from the step it undoes — it has
+// its own prompt and its own outcome — so it needs its own identity. Both
+// were walked with the parent's scope AND slot, which made them literally
+// the same identity: one memory namespace, one session pool, one track
+// record shared between doing a thing and undoing it.
+//
+// The suffix matches what the plan executor already appends when it
+// dispatches an undo (`<id>.compensate`), so the two spellings agree.
+func CompensateScope(parent IdentityScope, parentSlot string) IdentityScope {
+	name := parent.Name
+	if name != "" {
+		name += "/"
+	}
+	return IdentityScope{Kind: parent.Kind, Name: name + parentSlot + ".compensate"}
+}
+
 // ScopeForTrigger is a trigger's identity scope: its Name when it has one
 // (the map form always sets it), else its `on:` plus position — so a
 // list-form trigger with no name still gets a stable prefix.

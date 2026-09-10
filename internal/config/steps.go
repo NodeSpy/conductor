@@ -54,7 +54,9 @@ func walkStep(scope IdentityScope, slot int, s *Step, fn func(IdentityScope, int
 		}
 	}
 	if s.Compensate != nil {
-		walkStep(scope, slot, s.Compensate, fn)
+		// The undo is its own work with its own outcome; walking it with
+		// the parent's scope AND slot gave it the parent's identity.
+		walkStep(CompensateScope(scope, s.slotLabel(slot)), 0, s.Compensate, fn)
 	}
 }
 

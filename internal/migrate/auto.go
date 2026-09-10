@@ -126,6 +126,13 @@ func AutoMigrate(mainPath string, validate func() error, logf func(string, ...an
 	for _, p := range todo {
 		if _, err := os.Stat(p.backup); os.IsNotExist(err) {
 			if err := os.WriteFile(p.backup, p.original, p.mode); err != nil {
+				// The loop may already have swapped EARLIER files. Bare-
+				// returning left those migrated but never validated —
+				// exactly the half-migrated tree the transform-all-then-
+				// validate-once design exists to prevent, and a
+				// crash-loop on the next boot. Every error path in this
+				// loop restores.
+				_ = restoreAll()
 				return 0, nil, fmt.Errorf("write backup %s: %w", p.backup, err)
 			}
 			// WriteFile's mode is clamped by the umask; a secretful config

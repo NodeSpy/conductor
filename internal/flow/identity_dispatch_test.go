@@ -81,3 +81,46 @@ steps:
 		}
 	}
 }
+
+// §2: a `workflow:` call runs the CALLED workflow's steps, so they carry
+// that workflow's identity scope — the one WalkSteps computes. Inheriting
+// the caller's scope gave a shared helper a different identity per call
+// site, and its sessions bound where nothing would look for them.
+func TestCalledWorkflowStepsUseTheCalledWorkflowScope(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc: { use: fake }
+workflows:
+  helper:
+    steps:
+      - { id: work, type: agent, prompt: helping }
+`)
+	reg := buildRegistry(t, cfg)
+	rig := newTestRunner(t, cfg, reg)
+	var got string
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		got = req.Identity
+		return dispatch.RunRef{AgentID: "a1", Output: "done"}, nil
+	}
+	spec := mustSpec(t, `
+on: svc.ping
+name: caller
+steps:
+  - { id: call, workflow: helper }
+`)
+	runTrigger(rig, newTrigger("ping", nil), spec)
+
+	// What the lookup path — the affinity sweep — computes for that step.
+	var want string
+	cfg.WalkSteps(func(scope config.IdentityScope, slot int, s *config.Step) {
+		if s.Prompt == "helping" {
+			want = s.Identity(scope, slot)
+		}
+	})
+	if want == "" {
+		t.Fatal("the helper step should be walkable")
+	}
+	if got != want {
+		t.Fatalf("dispatch identity %q != lookup identity %q — a called workflow's steps must use ITS scope", got, want)
+	}
+}

@@ -1154,7 +1154,14 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	// The workflow's own default gate (#36 §16) governs ITS agent steps; a
 	// SAVED workflow additionally stamps its name so agent-step engagements
 	// attribute outcomes to it (#36 §18).
-	stepCtx := withDefaultGate(ctx, wf.Gate)
+	// A called workflow's steps belong to THAT workflow's identity scope —
+	// which is exactly what WalkSteps computes for them
+	// (`workflow:<name>/<slot>`). Inheriting the caller's scope gave every
+	// step of a shared helper workflow a different identity per call site,
+	// so its sessions bound under keys the sweep looks for under another
+	// name. Same root cause as the trigger-index bug; this is the call
+	// path that fix missed.
+	stepCtx := withIdentityScope(withDefaultGate(ctx, wf.Gate), config.WorkflowScope(name))
 	if saved != nil {
 		stepCtx = context.WithValue(stepCtx, savedWFKey{}, name)
 	}

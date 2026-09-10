@@ -57,7 +57,14 @@ func (st *packInstantiation) bindPackSources(ns string, man *PackManifest, inst 
 					return err
 				}
 				if servable {
-					trs[i].OnSources[j].Source = bound + "." + sourceEvent(trs[i].OnSources[j].Source)
+					// bound=="" means "needs no rebinding at all" —
+					// manual, conductor, or already one of the consumer's
+					// instance names. The scalar path below treats that as
+					// a no-op; rewriting unconditionally here turned
+					// `manual.rerun` into `.rerun`.
+					if bound != "" {
+						trs[i].OnSources[j].Source = bound + "." + sourceEvent(trs[i].OnSources[j].Source)
+					}
 					continue
 				}
 				// Only THIS source is unservable; the trigger's other
@@ -189,8 +196,19 @@ func (st *packInstantiation) validateSourceDeclarations(ns string, man *PackMani
 	}
 	used := map[string]bool{}
 	for _, t := range trs {
+		// Connector() reads On, which is empty for a LIST-form `on:` until
+		// NormalizeTriggers expands it — and that runs after this. A pack
+		// whose only use of a connector is list-form therefore looked like
+		// it used nothing, and the consumer's own correct
+		// `connectors: { github: gh }` disambiguation was rejected as
+		// naming an unused source. Same blind spot as the binding loop.
 		if src := t.Connector(); src != "" {
 			used[src] = true
+		}
+		for _, os := range t.OnSources {
+			if src, _, _ := strings.Cut(os.Source, "."); src != "" {
+				used[src] = true
+			}
 		}
 	}
 	for _, n := range man.Pack.Requires.ConnectorNames() {

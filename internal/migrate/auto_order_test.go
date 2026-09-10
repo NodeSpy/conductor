@@ -197,3 +197,47 @@ triggers:
 		t.Errorf("a profile referenced from another file is NOT an orphan: %v", summary)
 	}
 }
+
+// §6: the backup-write failure branch bare-returned while its siblings
+// (tmp-write, rename) restored. By then the loop may already have swapped
+// EARLIER files, leaving a migrated-but-never-validated tree on disk —
+// the crash-loop the whole transform-all-then-validate-once shape exists
+// to prevent.
+func TestAutoMigrateRestoresWhenABackupWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	main := filepath.Join(dir, "config.yaml")
+	// Two files, both migrating. The SECOND file's backup path is made
+	// unwritable, so the failure lands after the first has been swapped.
+	subDir := filepath.Join(dir, "conf.d")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(subDir, "z.yaml")
+	mainBody := "imports: [conf.d/*.yaml]\nagents:\n  a: { workspace: local }\n"
+	subBody := "agents:\n  b: { workspace: local }\n"
+	if err := os.WriteFile(main, []byte(mainBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sub, []byte(subBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Read-only parent: Stat says the backup does not exist (so the branch
+	// is taken) and WriteFile then fails inside it.
+	if err := os.Chmod(subDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(subDir, 0o755) })
+
+	_, _, err := AutoMigrate(main, func() error { return nil }, nil)
+	if err == nil {
+		t.Fatal("a backup-write failure must abort the migration")
+	}
+	// main was already SWAPPED when the failure hit; it must be back.
+	got, rerr := os.ReadFile(main)
+	if rerr != nil {
+		t.Fatalf("read %s: %v", main, rerr)
+	}
+	if string(got) != mainBody {
+		t.Fatalf("an already-swapped file was left migrated-but-unvalidated:\n%s", got)
+	}
+}
