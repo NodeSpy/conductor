@@ -304,10 +304,16 @@ type PackMeta struct {
 	Deprecated string `yaml:"deprecated,omitempty"`
 }
 
-// PackRequires is the pack's interface (§5): the resources it needs and, for
-// roles, the capabilities a binding must satisfy. It does double duty — the
-// "sockets you plug in" list AND the allowlist of global names the pack may
-// reach. Anything NOT in requires: is pack-local.
+// PackRequires is the pack's interface (§5): the resources it needs. It does
+// double duty — the "sockets you plug in" list AND the allowlist of global
+// names the pack may reach. Anything NOT in requires: is pack-local.
+//
+// There is deliberately no `roles:` here. It was vestigial after the agents
+// removal: "which model/agent fills this role" is answered by fleets + the
+// runtime roster + the mirrored overlay, and "what capabilities must a
+// binding satisfy" is answered by requires.connectors, which bounds every
+// grant the pack can make (docs/design/skill-capability-and-pack-interface.md
+// §C/§E).
 type PackRequires struct {
 	// Conductor is the daemon-version constraint (§16) — REQUIRED for the
 	// auto-updating fleet. Loading a pack outside its range is a named error,
@@ -323,7 +329,6 @@ type PackRequires struct {
 	Stores   []string              `yaml:"stores,omitempty"`
 	Handoffs []string              `yaml:"handoffs,omitempty"`
 	Secrets  map[string]SecretReq  `yaml:"secrets,omitempty"`
-	Roles    map[string]RoleReq    `yaml:"roles,omitempty"`
 	Packs    map[string]PackDepReq `yaml:"packs,omitempty"`
 	// Sources names the connector SOURCE TYPES this pack's triggers bind to
 	// (github, gitlab, pagerduty…). Scope for each lives on the CONSUMER's
@@ -338,12 +343,6 @@ type PackRequires struct {
 // the pack's capability boundary: its `skill.verbs` may name no connector
 // outside it (docs/design/skill-capability-and-pack-interface.md §C).
 func (r PackRequires) ConnectorNames() []string { return r.Connectors.Names() }
-
-// RoleReq declares a step role the pack defines: a bound step MUST provide
-// the listed skill capabilities (validated at install).
-type RoleReq struct {
-	Skill []string `yaml:"skill,omitempty"`
-}
 
 // SourceReq declares one connector source type a pack's triggers bind to.
 // Required turns the missing-connector notice into a hard error — for a pack

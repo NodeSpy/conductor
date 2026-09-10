@@ -148,9 +148,12 @@ func TestLintPackManifestNegatives(t *testing.T) {
 			Pack:    PackMeta{Name: "p", Version: "1", Requires: PackRequires{Conductor: ">=0.1"}},
 			Exports: PackExports{Workflows: []string{"ghost"}},
 		}, "exports.workflows"},
-		{"role without agent", PackManifest{
-			Pack: PackMeta{Name: "p", Version: "1", Requires: PackRequires{Conductor: ">=0.1", Roles: map[string]RoleReq{"r": {}}}},
-		}, "requires.roles"},
+		// requires.roles is gone (§E); requires.connectors took over the
+		// "what must a binding be able to do" job by bounding the grant.
+		{"grant outside requires.connectors", PackManifest{
+			Pack:  PackMeta{Name: "p", Version: "1", Requires: PackRequires{Conductor: ">=0.1", Connectors: ConnectorReqs{"github": AnyVersion}}},
+			Steps: map[string]Step{"a": {Type: "agent", Skill: &SkillPolicy{Verbs: []string{"pagerduty.trigger"}}}},
+		}, "requires.connectors"},
 	}
 	for _, c := range cases {
 		problems := LintPackManifest(&c.man)

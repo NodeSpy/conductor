@@ -624,7 +624,16 @@ steps:
     #   secrets_via: broker  #   broker | env (deprecated) | none (default) — broker issues
     #   allow_secrets:       #   single-use, 60s-TTL, audited grants for EXACT vault entries
     #     - house/deploy_key #   (<vault>/<key> — the entries {{ vault "house" "deploy_key" }} reads)
-    #   verbs: [gh.comment, rest.*]  # conductor verbs exposed to the agent as tools
+    #   verbs: [gh.comment, rest.*]  # THE GRANT — deny-by-default. Forms:
+    #                       #     ["*"]  all verbs, all connectors
+    #                       #     [gh.*] all verbs of one connector
+    #                       #     [gh.*, sentry.*] / [gh.comment] — several / specific
+    #                       #   Reads are NOT open by default; breadth is an explicit
+    #                       #   dial. conductor.*/workflow.* are unreachable at ANY
+    #                       #   breadth (they go through run_step + agent_authored).
+    #                       #   Conductor injects the matching verbs' options and call
+    #                       #   form into the agent's prompt (the capability card), so
+    #                       #   your prompt states INTENT — no `conductor call …` in it.
     #   max_calls: 100       #   per-session verb-call cap (default 256)
     #   # Identity is a per-verb concern, not a skill setting: a verb's own `as:`
     #   # option travels through as the agent supplies it, and each connector

@@ -443,30 +443,6 @@ func (st *packInstantiation) validateRequires(ns string, man *PackManifest, inst
 			return fmt.Errorf("pack %q: secret binding %s -> %q: %w", ns, name, bound, err)
 		}
 	}
-	// Roles: a bound step must provide the required skill capabilities.
-	for role, rr := range req.Roles {
-		b := inst.Steps[role]
-		if !b.IsBind() {
-			continue // default/override use the pack's bundled step (assumed to satisfy)
-		}
-		prof, ok := st.cfg.Steps[b.Bind]
-		if !ok {
-			return fmt.Errorf("pack %q: role %q bound to step %q which is not defined under steps:", ns, role, b.Bind)
-		}
-		for _, want := range rr.Skill {
-			// The requirement is written pack-side (github.submit_review); rebind
-			// its connector prefix to the consumer's before comparing to grants.
-			wantBound := want
-			if conn, verb, ok := strings.Cut(want, "."); ok {
-				if bound, ok := env.conn[conn]; ok {
-					wantBound = bound + "." + verb
-				}
-			}
-			if !agentGrantsSkill(prof, wantBound) {
-				st.warnf("pack %q: role %q is bound to agent %q, which does not grant skill %q the pack expects", ns, role, b.Bind, wantBound)
-			}
-		}
-	}
 	return nil
 }
 
@@ -492,22 +468,6 @@ func (c *Config) checkSecretRef(ref string) error {
 		return nil
 	}
 	return fmt.Errorf("names no secrets: entry, vault, or reference form (env:… / <vault>/<key>)")
-}
-
-// agentGrantsSkill reports whether a step's skill policy grants a verb.
-func agentGrantsSkill(p Step, want string) bool {
-	if p.Skill == nil {
-		return false
-	}
-	for _, v := range p.Skill.Verbs {
-		if v == want || v == "*" {
-			return true
-		}
-		if ok, _ := filepath.Match(v, want); ok {
-			return true
-		}
-	}
-	return false
 }
 
 // ---------------------------------------------------------------------------

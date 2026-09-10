@@ -40,9 +40,6 @@ pack:
     stores: [cache]
     secrets:
       api_token: { desc: token the review-poster uses }
-    roles:
-      handoff:  { skill: [github.submit_review] }
-      reviewer: {}
 settings:
   heavy_model: { type: string, default: default-heavy }
 presets:

@@ -31,8 +31,6 @@ pack:
     conductor: ">=0.1"
     secrets:
       review_token: { desc: token the poster uses }
-    roles:
-      handoff: {}
 steps:
   handoff:
     type: agent

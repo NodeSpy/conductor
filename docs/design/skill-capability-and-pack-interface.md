@@ -162,3 +162,52 @@ edit conductor-packs from this branch.
 - roles removal: config that used `requires.roles` migrates/loads without it; no
   dangling refs; example packs updated.
 - `go test ./...` green, `gofmt -l` clean, `go vet ./...` clean.
+
+---
+
+## Implementation status (branch `feat/runtimes-fleets-packs`, PR #61)
+
+All of A–E is implemented. Maintained with the code.
+
+| § | Where |
+|---|---|
+| A capability injection | `internal/flow/capability.go` (preamble + card), `flow.GrantedVerbs` as the one resolution, `engine.skillGuidance{CLI,MCP}`; `Usage` on `pkg/plugin.Verb` → `connector.VerbDecl` → `mapDecl` |
+| B grant forms | `config.SkillPolicy.Verbs` docs; `flow.matchAny` (already pattern-matched — now documented and covered) |
+| C pack skill boundary | `internal/config/pack_skill.go`; lint via `LintPackManifest`, belt via `applyPackSkillBoundary` at instantiate |
+| D version-aware requires.connectors | `internal/config/pack_connectors.go`; resolved versions injected by `cmd/conductor.publishConnectorVersions` |
+| E roles removed | `PackRequires.Roles`, `RoleReq`, the instantiate role check, the stale lint check, and the now-dead `agentGrantsSkill` all deleted |
+
+### How card == discover == enforcement is proven
+
+`flow.GrantedVerbs(patterns)` is the single resolution of a grant against the
+verb registry. `CapabilityCard` renders it, `SkillVerbCatalog` (→ the
+`verb_list` IPC op → `conductor discover` and the MCP tool list) serializes
+it, and `RunSkillVerb` gates with the same `matchAny` over the same patterns.
+
+`TestGrantIsOneSourceOfTruth` (internal/flow/capability_test.go) derives all
+three views independently from one fixture — parsing the ids back out of the
+rendered card text, out of the catalog maps, and out of the enforcement
+predicate — and asserts set equality for every grant form including `["*"]`,
+`<connector>.*`, specific verbs, a pattern matching nothing, and the empty
+grant.
+
+### Two judgement calls
+
+**An unknown connector version warns rather than fails.** §D says gate at
+instantiate. When the resolved version is genuinely unknown — a dev build, a
+plugin not yet installed, a daemon with no install state published — there is
+nothing to compare against. Failing there would crash-loop an auto-updating
+fleet on a box that may be perfectly fine, so it warns and skips, matching
+how `requires.conductor` treats an unversioned daemon.
+
+**The pack skill boundary bounds the PACK, not the consumer.** It runs before
+the mirrored overlay, deliberately. A consumer who writes
+`packs.<n>.steps.<role>.skill` in their own config is granting for
+themselves — exactly as they would on their own step, visible in their own
+config. What a pack can never do is reach a connector it did not declare.
+
+### Downstream follow-up (NOT this PR)
+
+In the `conductor-packs` repo, `pr-review-team` can now drop its
+`conductor discover` / `conductor call …` incantation to intent-only (the
+capability card supplies the mechanics) and remove its `roles:` block.

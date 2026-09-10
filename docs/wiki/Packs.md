@@ -129,25 +129,60 @@ surface.)
 
 ## `requires:` — the interface
 
-A pack manifest declares the resources it needs and, for roles, the capabilities
-a binding must satisfy:
+A pack manifest declares the resources it needs:
 
 ```yaml
 requires:
   conductor: ">=0.8"                        # daemon-version compat (the fleet auto-updates)
-  connectors: [github]
+  connectors:                               # sockets AND the capability boundary
+    github: "*"                             #   any version
+    jira:   ">=2.0"                         #   a plugin connector at a compatible release
+  # connectors: [github]                    # sugar for { github: "*" }
   stores:     [cache]
   secrets:
     review_token: { desc: "token the review-poster uses" }
-  roles:
-    handoff:  { skill: [github.submit_review] }  # a bound step MUST provide this
-    reviewer: {}
   packs:
     base: { source: github.com/your-org/base-kit, version: "^2.0" }
 ```
 
-`conductor init` checks each socket is satisfied and warns when a bound step
-lacks a required skill.
+`conductor init` checks each socket is satisfied.
+
+### `requires.connectors` is the capability boundary
+
+It is not only a list of things to bind. A pack's `skill.verbs` may name **no
+connector outside it**, and a wildcard inside a pack means *"all verbs of my
+required connectors"*:
+
+```yaml
+requires: { connectors: { github: "*" } }
+steps:
+  reviewer:
+    skill: { verbs: ["*"] }           # => github.* only
+    # skill: { verbs: [github.*] }    # fine — declared
+    # skill: { verbs: [pagerduty.*] } # LINT ERROR — not declared
+```
+
+Enforced twice: `conductor pack lint` errors on a pattern naming an
+undeclared connector (so the author sees it while authoring), and instantiate
+**intersects** the grant as a belt (so a hand-authored pack that never ran
+lint still cannot exceed its interface, with anything dropped surfaced as a
+load notice). This is what makes a pack from a stranger safe to install: it
+can only ever hand an agent the connectors it declared — never quietly scope
+onto your pagerduty or your secrets connector.
+
+### Versions
+
+Each constraint is checked at instantiate against the connector's **resolved**
+version — the installed release for a plugin connector, the daemon version for
+a builtin. It **gates, it does not fetch** (connectors are bind-only), and a
+mismatch is a clear load error naming pack + connector + required-vs-actual.
+An unknown version (a dev build, a plugin not yet installed) warns and skips
+the gate rather than failing the box.
+
+> There is no `requires.roles`. It was vestigial once `agents:` was removed:
+> "which model fills this role" is answered by [[Model-Selection|fleets]] and
+> the mirrored overlay, and "what must a binding be able to do" is answered by
+> `requires.connectors`, which bounds every grant the pack can make.
 
 ## Settings and presets
 

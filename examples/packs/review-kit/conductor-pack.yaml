@@ -33,16 +33,15 @@ pack:
     conductor: ">=0.1"
     # Bind-only environment the pack needs — the consumer wires these; the pack
     # never ships them.
+    # requires.connectors is the pack's CAPABILITY BOUNDARY as well as its
+    # socket list: the pack's skill.verbs may name no connector outside it,
+    # and its wildcards are bounded to it. Version-aware — a bare list means
+    # "any version"; `{ github: ">=2.0" }` gates the consumer's resolved
+    # connector at load.
     connectors: [github]
     secrets:
       review_token:
         desc: token the review-poster uses to submit the review comment
-    # Agent roles: any agent satisfies `reviewer`; a bound `handoff` must be
-    # able to submit a review.
-    roles:
-      reviewer: {}
-      handoff:
-        skill: [github.submit_review]
 
 # Typed settings with defaults, plus named presets the consumer can pick. The
 # consumer overrides these WITHOUT editing this file.

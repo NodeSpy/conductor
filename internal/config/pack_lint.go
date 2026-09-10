@@ -56,14 +56,6 @@ func LintPackManifest(man *PackManifest) []string {
 		}
 	}
 
-	// requires.roles should correspond to a bundled agent (so it can be
-	// defaulted / overridden / bound).
-	for role := range man.Pack.Requires.Roles {
-		if _, ok := man.Steps[role]; !ok {
-			problems = append(problems, fmt.Sprintf("requires.roles: %q has no bundled agent of that name", role))
-		}
-	}
-
 	// Shipped triggers must be named so a consumer can arm them.
 	for i, tr := range man.Triggers {
 		if tr.Name == "" {
