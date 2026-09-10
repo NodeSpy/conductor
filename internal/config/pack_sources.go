@@ -196,17 +196,14 @@ func (st *packInstantiation) validateSourceDeclarations(ns string, man *PackMani
 	}
 	used := map[string]bool{}
 	for _, t := range trs {
-		// Connector() reads On, which is empty for a LIST-form `on:` until
-		// NormalizeTriggers expands it — and that runs after this. A pack
-		// whose only use of a connector is list-form therefore looked like
-		// it used nothing, and the consumer's own correct
-		// `connectors: { github: gh }` disambiguation was rejected as
-		// naming an unused source. Same blind spot as the binding loop.
-		if src := t.Connector(); src != "" {
-			used[src] = true
-		}
-		for _, os := range t.OnSources {
-			if src, _, _ := strings.Cut(os.Source, "."); src != "" {
+		// Sources() covers both `on:` forms. Reading On (via Connector())
+		// alone was the original bug here: On is empty for a LIST-form `on:`
+		// until NormalizeTriggers, which runs after this, so a pack whose
+		// only use of a connector was list-form looked like it used nothing
+		// and the consumer's own correct `connectors: { github: gh }`
+		// disambiguation was rejected as naming an unused source.
+		for _, on := range t.Sources() {
+			if src, _, _ := strings.Cut(on, "."); src != "" {
 				used[src] = true
 			}
 		}

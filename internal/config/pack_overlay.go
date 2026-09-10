@@ -172,5 +172,15 @@ func triggerOverlayName(t TriggerSpec) string {
 	if n := strings.TrimSpace(t.Name); n != "" {
 		return n
 	}
-	return t.On
+	// Sequence-form `triggers:` assigns no name (only the map form does), so
+	// an unnamed trigger is addressed by its source. Reading On alone left a
+	// LIST-form `on:` with the empty string for an address: the consumer's
+	// overlay could never match it, and arming it was impossible — so it
+	// failed closed, but it also made such a trigger unconfigurable and the
+	// resulting "addresses no trigger this pack ships" error misleading.
+	// The first source is the same handle the scalar form exposes.
+	if srcs := t.Sources(); len(srcs) > 0 {
+		return srcs[0]
+	}
+	return ""
 }

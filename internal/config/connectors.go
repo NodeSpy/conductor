@@ -622,6 +622,37 @@ func (t TriggerSpec) Event() string {
 	return e
 }
 
+// Sources returns every "<connector>.<event>" this trigger fires on, in
+// either form.
+//
+// THE PRE-NORMALIZE WINDOW. A list-form `on:` decodes into OnSources and
+// leaves On EMPTY until NormalizeTriggers expands it (config.go: Load runs
+// instantiatePacks first, NormalizeTriggers after). So every consumer that
+// runs before normalization — all of internal/config/pack_*.go — sees On==""
+// for a list-form trigger. Reading On directly there doesn't misbehave
+// loudly; it silently treats the trigger as having no source at all, which
+// is how an armed list-form pack trigger slipped past its repo-consent check.
+//
+// Sources() is the one accessor that answers the question correctly for both
+// forms. Anything in that window that asks "what does this trigger fire on"
+// goes through it, and TestPreNormalizeReadersHandleBothTriggerForms fails
+// the build if a raw On read is added back.
+//
+// After NormalizeTriggers every trigger is scalar and Sources() returns the
+// single On — so it is also correct, and safe, downstream.
+func (t TriggerSpec) Sources() []string {
+	if t.On != "" {
+		return []string{t.On}
+	}
+	out := make([]string, 0, len(t.OnSources))
+	for _, src := range t.OnSources {
+		if src.Source != "" {
+			out = append(out, src.Source)
+		}
+	}
+	return out
+}
+
 // NormalizeTriggers expands multi-source `on:` lists — one internal trigger
 // per source, sharing steps/hooks/group, each with the shared base filters
 // merged under its per-source block (per-source keys win) — and enforces the

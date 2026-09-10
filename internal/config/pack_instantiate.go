@@ -351,7 +351,14 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 			// on repos the consumer never granted THIS pack. The repo list is
 			// the pack's consent boundary, so its absence is a hard error, not
 			// a warning. (Non-repo sources like `manual`/`rss` are exempt.)
-			if arm.IsArmed() && !triggerScopesRepos(&tr) && st.sourceIsRepoScoped(tr.On) {
+			// Checked against EVERY source the trigger fires on, not just
+			// tr.On — a list-form `on:` leaves On empty until
+			// NormalizeTriggers (which runs after pack instantiation), so
+			// reading On alone silently found no repo-scoped source and
+			// skipped this consent check entirely. An armed list-form github
+			// trigger with no repos: was accepted and then matched EVERY repo
+			// the connector could see.
+			if arm.IsArmed() && !triggerScopesRepos(&tr) && st.anySourceIsRepoScoped(&tr) {
 				return fmt.Errorf("pack %q: trigger %q is armed (enabled: true) but names no repos — a github pack trigger must scope its repos (the repo list is the consent). Add e.g. triggers: { %s: { enabled: true, repos: [owner/repo] } }", ns, armName, armName)
 			}
 		}
@@ -783,6 +790,18 @@ func triggerScopesRepos(tr *TriggerSpec) bool {
 // every repo", which makes an explicit repo scope load-bearing for consent.
 // Bare sources like the built-in `manual` (no ".") and non-github connectors
 // have no repo scope and are exempt.
+// anySourceIsRepoScoped reports whether the trigger fires on any repo-scoped
+// (github) source, in either `on:` form. This is the consent question: if even
+// one source is repo-scoped, an empty repo set means "every repo".
+func (st *packInstantiation) anySourceIsRepoScoped(tr *TriggerSpec) bool {
+	for _, src := range tr.Sources() {
+		if st.sourceIsRepoScoped(src) {
+			return true
+		}
+	}
+	return false
+}
+
 func (st *packInstantiation) sourceIsRepoScoped(on string) bool {
 	conn, _, ok := strings.Cut(on, ".")
 	if !ok {
