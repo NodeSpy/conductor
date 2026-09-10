@@ -97,19 +97,19 @@ Follow the **learning path** on [[Home]]. The immediate next steps:
   [[Integration-GitHub]]: events like `gh.merge_conflict` /
   `gh.failing_checks` replace the cron tick, and verbs like `gh.comment`
   replace `echo`.
-- **Run an agent** — add a `runtimes:` + `agents:` profile and a
-  `type: agent` step ([[Runtimes]], [[Agents]]); the seeded starter's
+- **Run an agent** — add a `runtimes:` entry, a `steps:` template, and a
+  `type: agent` step ([[Runtimes]], [[Steps]]); the seeded starter's
   triggers show the shape:
 
   ```yaml
   runtimes:
     paseo: { use: paseo, default: true }
-  agents:
-    fixer: { provider: claude, workspace: worktree, archive_when_done: true }
+  steps:
+    fixer: { type: agent, workspace: worktree, archive_when_done: true }
   triggers:
     - on: gh.merge_conflict
       steps:
-        - { id: fix, type: agent, agent: fixer,
+        - { id: fix, extends: fixer,
             prompt: "Resolve the conflict on {{.repo}}#{{.pr}} against {{.base}}." }
   ```
 

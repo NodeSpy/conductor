@@ -16,7 +16,7 @@ into the same steps — each item a bare `conn.event` or a one-key map
 triggers:
   - on: gh.merge_conflict
     steps:
-      - { id: fix, type: agent, agent: fixer, prompt: "Resolve the conflict on {{.repo}}#{{.pr}}." }
+      - { id: fix, extends: fixer, prompt: "Resolve the conflict on {{.repo}}#{{.pr}}." }
     hooks:
       - { at: start, uses: slack-ops.post, options: { text: "on it: {{.repo}}#{{.pr}}" } }
       - { at: done,  uses: slack-ops.post, options: { text: "resolved {{.repo}}#{{.pr}}" } }
@@ -75,7 +75,7 @@ written twice.
 
 A step is one of six forms (all share `id` and `if`):
 
-- `type: agent` — run an agent profile: `agent`, `prompt`, `checkout`,
+- `type: agent` — dispatch an agent: `prompt`, `checkout`,
   `output_schema`, `background` (+ `handoff`, see [[Hand-offs]]),
   `rerequest_review`, `workdir`, `env`, and an optional `gate:` on the
   agent's proposed change ([[Gates]]). A foreground agent step with a local
@@ -94,19 +94,24 @@ A step is one of six forms (all share `id` and `if`):
 - `team:` — one task split across a planner, parallel workers in isolated
   worktrees, an optional critic, and a reconciler ([[Teams]]).
 
+An agent step carries its own BEHAVIOR — guidance, skill, memory opt-in,
+workspace, timeouts, isolation, model, runtime — and shares it with other
+steps through a named template in `steps:` reached by `extends:`. There is no
+`agents:` block; see [[Steps]].
+
 Agent steps have two extra memory hooks (when a `memory:` section is
 configured): a `remember:` block in the agent's final output persists
 post-run with the run's provenance (the output contract), and an opted-in
-profile (`memory: true`) gets the scoped memories injected into its prompt —
-see [[Memory]].
+step (`memory: true`) gets the scoped memories injected into its prompt. The
+opt-in gates BOTH directions — a step that did not ask for memory cannot
+write to it either. See [[Memory]].
 
-An agent step whose profile carries a `session:` block participates in
-**session affinity**: events rendering the same key reach one live agent as
-follow-up prompts instead of fresh spawns, across every trigger using that
-agent — see [[Agents]]. A follow-up returns `{ agent_id, ... }` like any
-agent step; on paseo its output is empty (the prompt is queued to the live
-agent), so steps that read the agent's structured output should not assume a
-keyed session.
+An agent step carrying a `session:` block (or running on a runtime that has
+one) participates in **session affinity**: events rendering the same key
+reach one live agent as follow-up prompts instead of fresh spawns — see
+[[Steps]]. A follow-up returns `{ agent_id, ... }` like any agent step; on
+paseo its output is empty (the prompt is queued to the live agent), so steps
+that read the agent's structured output should not assume a keyed session.
 
 ## Context and scope
 

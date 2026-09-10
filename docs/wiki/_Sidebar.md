@@ -20,7 +20,7 @@ The model
 - [[Runtimes]]
 - [[Model-Selection]]
 - [[Model-Discovery]]
-- [[Agents]]
+- [[Steps]]
 - [[Grouping]]
 - [[Memory]]
 - [[Binary-Data]]

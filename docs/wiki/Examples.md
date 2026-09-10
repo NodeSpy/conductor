@@ -156,7 +156,7 @@ against the verb's own output schema, so read the source list — as above —
 rather than `{{.probe.count}}`; for_each over a code step has no schema and
 either read passes.)
 
-## One live agent per PR — session affinity ([[Agents]])
+## One live agent per PR — session affinity ([[Steps]])
 
 Every event on a PR — comments, review changes, failing checks — reaches the
 same live agent as a follow-up, so it keeps the whole conversation. `group:`
@@ -166,10 +166,10 @@ closes **or merges** (github reports both as the one internal close signal;
 it is eviction-only — you cannot trigger `on:` it):
 
 ```yaml
-agents:
+steps:
   pr-agent:
-    provider: claude
-    memory: true                             # inject repo memories on first spawn
+    type: agent
+    memory: true                             # inject the run's context memories
     session:
       key: "{{.repo}}#{{.pr}}"
       idle_ttl: 12h
@@ -230,10 +230,9 @@ guidance), and a planner/workers/critic team for issues labeled `epic`.
 checks:
   test: { type: command, command: ["make", "test"] }
 
-agents:
-  fixer:     { provider: claude, workspace: worktree, outcome_feedback: true,
-               budget: { window: 1h, max_cost_usd: 2 } }
-  architect: { provider: claude }
+steps:
+  fixer:     { type: agent, workspace: worktree, outcome_feedback: true }
+  architect: { type: agent }
   reviewer:  { provider: claude }
 
 triggers:

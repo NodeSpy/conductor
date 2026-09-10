@@ -156,3 +156,45 @@ fleet — the degraded-boot invariant is mandatory).
   on a config that wouldn't validate; old agent name preserved as step `name:` so
   memory/session/outcome history carries over; `agent_guidance` preserved.
 - `go test ./...` green, `gofmt -l` clean, `go vet ./...` clean.
+
+---
+
+## Implementation status (branch `feat/runtimes-fleets-packs`)
+
+All of the above is implemented. Maintained with the code.
+
+| § | Where |
+|---|---|
+| 1 budget → runtime | `RuntimeConfig.Budget`; `engine/budget.go` scopes `runtime:<name>`; the audit row carries `runtime` |
+| 2 memory → opaque keys | `internal/memory` (`ResolveScope` and the scope enum deleted); engine context keys in `memory/prompt.go`; `memory:` opt-in on `Step` |
+| 3 sessions → (runtime, model, key) | `controller/affinity.go`, `store/affinity.go`; `session:` on `RuntimeConfig` and `Step` |
+| 4 outcomes → opaque key | `store/outcomes.go` (`Engagement.Key`, `OutcomeStats`); `engine/outcome.go`; `outcome_feedback`/`outcome_key` on `Step` |
+| 5 step identity | `config/identity.go` — one resolver, routed through by memory, sessions, and outcomes |
+| 6 behavior → the step | `Step` + the top-level `steps:` template map, reached by `extends:` |
+| 7 migration | `internal/migrate/agents.go` |
+
+### Two decisions worth recording
+
+**`id:` is the structural slot, not rung 1.** §5 lists "explicit `name:`/`id:`"
+as the top rung while also requiring the default to be structural. Those
+conflict: `id:` is near-universal (it is the `steps.<id>.outputs` handle), so
+treating it as a global identity would make two unrelated triggers that both
+write `id: fix` share one memory namespace, session pool, and track record.
+So `name:` is the pin and `id:` supplies the structural SLOT — which has the
+bonus that structural identity survives reordering wherever ids are used.
+
+**Memory continuity needed one compatibility alias.** Setting the migrated
+step's `name:` to the old agent name makes the outcome and engagement keys
+byte-identical, because those were keyed on the bare name. Memory was not: it
+used `agent:<name>`. Rather than reintroduce a privileged prefix, the engine's
+default recall set includes `memory.LegacyStepScope(identity)` —
+`agent:<identity>` — so pre-upgrade memories stay readable while writes go to
+the clean key. It can be dropped once configs have turned over.
+
+### Session bindings do not carry over
+
+An affinity record written before the re-key has no runtime/model and is
+skipped on restore, so the next event starts a fresh session. This is the
+correct outcome for a partition that genuinely changed, and sessions are
+short-lived (24h idle default). A track record is a different matter, which is
+why that one is preserved explicitly.

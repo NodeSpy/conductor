@@ -269,10 +269,11 @@ hosts:
 #       mode: namespace
 #       limits: { memory: 2g, cpu: 200%, pids: 256 }
 #       network: { egress: [ "api.github.com:443", "*.googleapis.com:443" ] }
-# agents:
+# steps:
 #   risky-fixer:
+#     type: agent
 #     runtime: gemini
-#     isolation:                           # profile-level: wins over the runtime's
+#     isolation:                           # step-level: wins over the runtime's
 #       mode: user
 #       user: sandboxagent
 #       network: {}                        # deny-all egress, audited
@@ -352,11 +353,15 @@ hosts:
 # runtime-reported where the output carries it, else estimated from model +
 # I/O and marked approximate. See `conductor report` for the spend view.
 # ---------------------------------------------------------------------------
+# A budget caps EXECUTION COST on a backend, so the middle scope is the
+# RUNTIME (it used to be a per-agent profile). Spend is tracked and reported
+# per runtime.
+#
 # policy:
 #   budget: { window: 24h, max_cost_usd: 25 }        # global: $25 / rolling 24h
-# agents:
-#   fixer:
-#     budget: { window: 1h, max_tokens: 500k }       # profile scope
+# runtimes:
+#   gpu-paseo:
+#     budget: { window: 1h, max_tokens: 500k }       # this backend's own cap
 # triggers:
 #   - on: gh.review_requested
 #     policy:
@@ -398,12 +403,14 @@ hosts:
 # approved / rejected / ci_failed outcomes are captured per agent action
 # (github's _closed signal needs no trigger config), audited, and fed into
 # memory + saved-workflow delivery health. `conductor report` shows accept
-# rate / revert rate / $-per-merged-change per agent. Optional per-profile
-# guidance tuning:
+# rate / revert rate / $-per-merged-change per TRACK-RECORD KEY, which
+# defaults to the step identity. Optional per-step guidance tuning:
 # ---------------------------------------------------------------------------
-# agents:
+# steps:
 #   fixer:
-#     outcome_feedback: true    # append a one-line track record to the agent's guidance
+#     type: agent
+#     outcome_feedback: true    # append this step's own track record to its prompt
+#     # outcome_key: reviewers  # …or pool several steps onto one record
 
 # ---------------------------------------------------------------------------
 # team: — multi-agent on ONE task (#36 §19): a planner decomposes the step's
@@ -547,8 +554,8 @@ models:
 #     api_key: ${LINEAR_KEY}
 # runtimes:
 #   modal: { use: modal }                   # a runtime plugin, co-equal with paseo
-# agents:
-#   deployer: { runtime: modal }            # then select it here
+# steps:
+#   deployer: { type: agent, runtime: modal }   # then select it here
 #
 # plugin_trust: { allow: [github.com/acme/*] }   # third-party sources need an
 #                                                # entry; the official repo does not
@@ -565,7 +572,6 @@ models:
 #     use: acme/plugins/jira
 #     isolation: { mode: namespace, network: { egress: ["your-org.atlassian.net:443"] } }
 
-# agents: — named profiles (provider/model/prompt posture), run on a runtime.
 # ---------------------------------------------------------------------------
 # steps: — NAMED, REUSABLE STEP TEMPLATES. This replaced `agents:`.
 #
@@ -1031,9 +1037,17 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #     connectors: { github: gh }                  # BIND the pack's required github -> your connector
 #     secrets:    { review_token: house/review }  # BIND a required secret -> your vault ref
 #     policy:     { budget: { max_cost_usd: 5 } } # deep-merges onto the pack's bundled policy
-#     agents:
-#       reviewer: my-opus                         # BIND a role to your global agent…
+#     steps:
+#       reviewer: my-opus                         # BIND a role to your steps: template…
 #       handoff:  { workspace: local }            # …or OVERRIDE the bundled one (deep-merge)
+#     models:
+#       reviewer: claude-opus-5                   # OVERRIDE a bundled fleet
+#     on:                                          # its triggers, by qualified name
+#       github.pull_request: { filters: { labels_not: [wip] } }
+#     # Scope lives on the CONNECTOR, not the pack: each trigger binds to your
+#     # connector of its own source type. Two of a type -> disambiguate with
+#     # connectors: { github: work-github }; none of a type -> those triggers
+#     # go DORMANT with a load notice and the rest of the pack still runs.
 #     triggers:
 #       on_review_request:                         # the pack ships this DISARMED
 #         enabled: true                            # you arm it…

@@ -25,11 +25,11 @@ runtime:
 runtimes:
   gemini: { agent: gemini }            # isolation applies to runtimes conductor launches itself
 
-agents:
-  architect:   { provider: claude, model: claude-opus-4 }
-  implementer: { runtime: gemini, workspace: worktree,
+steps:
+  architect:   { type: agent, model: claude-opus-5 }
+  implementer: { type: agent, runtime: gemini, workspace: worktree,
                  isolation: { mode: namespace, network: { egress: ["api.github.com:443"] } } }
-  reviewer:    { provider: claude }
+  reviewer:    { type: agent }
 
 triggers:
   - on: gh.issue_matched

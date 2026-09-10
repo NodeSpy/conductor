@@ -18,7 +18,8 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 | `triggers:` | the workflows: `on` / `filters` / `steps` / `hooks` (+ `group`, `policy`, `gate`, `name`, `enabled`, `options`, `repo`, `shadow`) | [[Workflows]], [[Grouping]], [[Gates]] |
 | `runtimes:` | where agents run: `use:` (what implements it), `agent` (with `use: acp`), `transport`, `bin`, `host`, `isolation`, `default` | [[Runtimes]], [[Isolation]] |
 | `plugin_trust:` | where remote plugins may come from: `allow:` source globs. The official plugin repo is trusted by default; anything else remote needs an entry | [[Plugins]] |
-| `agents:` | named profiles: `provider`, `model`, `thinking`, `mode`, `runtime`, `workspace`, `wait_timeout`, `archive_when_done`, `labels`, `guidance`, `host`, `memory`, `session`, `skill`, `isolation`, `budget`, `outcome_feedback` | [[Agents]], [[Agent-Skill]], [[Isolation]], [[Cost-Accounting]], [[Outcomes]] |
+| `steps:` | named, reusable STEP TEMPLATES (this replaced `agents:`): `name`, `model`, `runtime`, `thinking`, `mode`, `workspace`, `wait_timeout`, `archive_when_done`, `labels`, `guidance`, `host`, `memory`, `session`, `skill`, `isolation`, `outcome_feedback`, `outcome_key` | [[Steps]], [[Agent-Skill]], [[Isolation]], [[Outcomes]] |
+| `models:` | named FLEETS — ranked acceptable-model lists `{ any, required }` a step's `model:` can name | [[Model-Selection]] |
 | `hosts:` | named SSH targets: `host`, `user`, `port`, `key`, `known_hosts`, `cwd`, `env`, `isolation` | [[Hosts]], [[Isolation]] |
 | `stores:` | named data stores — KV (`boltdb`/`redis`/`http`) served by `kv.*`, SQL (`postgres`/`mysql`/`sqlite`) served by `sql.*`; addressed by the required `store:` selector | below |
 | `memory:` | shared agent memory: `store:` (a KV `stores:` entry) \| `dir:` (Markdown files) \| `type: memory` (ephemeral) — served by `memory.*` | [[Memory]] |
@@ -31,7 +32,7 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 | `store:` | `state_file`, `audit_log`, `state_ttl`, `max_tracked_prs`, `audit_max_size`, `history_retention`, `history_max_runs` | [[Runs]] |
 | `update:` | `auto`, `interval`, `apply` — self-update; migration runs on the new binary's first boot | |
 | `dry_run:` | stub every dispatch and verb | |
-| `agent_guidance:` | house prompt guidance appended to every agent (per-profile `guidance:` overrides) | [[Agents]] |
+| `agent_guidance:` | house prompt guidance appended to every agent (per-profile `guidance:` overrides) | [[Steps]] |
 | `adopt_open_workspaces:` | route PR feedback to a workspace already on the branch | |
 
 ## The trigger grammar in brief
@@ -346,14 +347,14 @@ the write paths: [[Memory]].
 
 ## Session affinity (an agent's `session:`)
 
-An `agents:` profile may carry a `session:` block — session affinity. The
-agent's dispatches bind one live session per rendered key, shared across
-every trigger using that agent: a comment, a check failure, and a
+A `session:` block — on a **runtime** (the overall pool) or on a **step**
+(its own) — is session affinity. Dispatches bind one live session per
+`(runtime, model, rendered key)`, so a comment, a check failure, and a
 review-change on the same PR all reach the SAME agent as follow-up prompts
 with full prior context.
 
 ```yaml
-agents:
+steps:
   reviewer:
     provider: claude
     session:
@@ -368,7 +369,7 @@ map persists in conductor's own state and resumes across restarts/
 auto-updates, and sessions evict on idle/age/end_on. Needs a
 session-persistent runtime (paseo/ACP); one-shot runtimes stay
 fresh-per-event and lean on [[Memory]]. Full behavior and the worked
-one-agent-per-PR example: [[Agents]].
+one-agent-per-PR example: [[Steps]].
 
 ## Agent-driven workflows (`workflow.*`, `policy.agent_authored`)
 

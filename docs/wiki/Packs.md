@@ -1,8 +1,8 @@
 # Packs
 
 **Packs** make a conductor configuration **distributable**. A pack is a
-self-contained, versioned bundle of behavior — workflows, agents, policy, checks,
-and (disarmed) triggers — that anyone can install from a source, parameterize,
+self-contained, versioned bundle of behavior — workflows, step templates,
+fleets, policy, checks, and (disarmed) triggers — that anyone can install from a source, parameterize,
 override, and compose. The model is **Terraform-modules-for-conductor**: a
 top-level `packs:` block where each entry is a sourced, versioned, parameterized
 *instance* of a pack, namespaced under its instance name.
@@ -57,9 +57,13 @@ packs:
     connectors: { github: gh }                 # BIND the pack's required github -> your gh
     secrets:    { review_token: house/review } # BIND a required secret -> your vault ref
     policy:     { budget: { max_cost_usd: 5 } } # deep-merges onto the pack's bundled policy
-    agents:
-      reviewer: my-opus                        # BIND a role to your global agent
-      handoff:  { workspace: local }           # OVERRIDE the bundled agent (deep-merge)
+    steps:
+      reviewer: my-opus                        # BIND a role to one of your steps: templates
+      handoff:  { workspace: local }           # OVERRIDE the bundled step (deep-merge)
+    models:
+      reviewer: claude-opus-5                  # OVERRIDE a bundled fleet
+    on:
+      github.pull_request: { filters: { labels_not: [wip] } }   # override a trigger by name
     triggers:
       on_review_request:                        # the pack ships this DISARMED
         enabled: true                           # you arm it
@@ -74,8 +78,9 @@ arm's own `policy:` (most specific wins).
 
 This single rule decides what a pack may *ship* vs must *bind*:
 
-- **Define-in-pack** (shipped, namespaced, overridable): `agents:`, `workflows:`,
-  `policy:`, `checks:`, `memory:`, and its disarmed `triggers:`. Pure behavior.
+- **Define-in-pack** (shipped, namespaced, overridable): `steps:`, `models:`
+  (fleets), `workflows:`, `policy:`, `checks:`, and its disarmed `triggers:`.
+  Pure behavior.
 - **Bind-only** (declared in `requires:`, wired in the block, **never shipped**):
   `connectors:`, `secrets:`, `vaults:`, `stores:`, `runtimes:`, `hosts:`,
   `handoffs:`. Anything carrying credentials, endpoints, or infra identity.
@@ -88,12 +93,12 @@ install**.
 ## Namespacing
 
 Everything a pack defines is auto-scoped under the instance name:
-`agents.handoff` → `review/handoff`, `workflows.review-flow` →
+`steps.handoff` → `review/handoff`, `workflows.review-flow` →
 `review/review-flow`. Two packs can both define `reviewer` and never collide.
 
 Refs **inside** the pack are written **bare** and resolve pack-local — the author
 writes no prefixes. The loader scopes them. The one boundary that reaches global
-names is `requires:`: a required connector/store/secret/handoff, or an agent role
+names is `requires:`: a required connector/store/secret/handoff, or a step role
 **bound** to a global, resolves in the consumer namespace. You reference a pack's
 entry point qualified: `workflow: review/review-flow`.
 
@@ -109,7 +114,7 @@ shape:
 | map      | **override**: keep the bundle, deep-merge changes onto it |
 
 ```yaml
-agents:
+steps:
   reviewer: my-opus            # bind
   handoff:  { workspace: local } # override
   # (omit a role entirely to keep the bundled default)
@@ -117,8 +122,8 @@ agents:
 
 Override deep-merges with **replace** semantics: nested maps merge recursively,
 but scalars and **list fields are replaced**, not appended. So an override of a
-bundled agent's `skill.verbs` fully replaces the bundled list — you can *narrow*
-a bundled agent's capabilities, not only widen them. (This differs from
+bundled step's `skill.verbs` fully replaces the bundled list — you can *narrow*
+a bundled step's capabilities, not only widen them. (This differs from
 `imports:`, where lists concatenate; a pack override is a deliberate restriction
 surface.)
 
@@ -135,13 +140,13 @@ requires:
   secrets:
     review_token: { desc: "token the review-poster uses" }
   roles:
-    handoff:  { skill: [github.submit_review] }  # a bound agent MUST provide this
+    handoff:  { skill: [github.submit_review] }  # a bound step MUST provide this
     reviewer: {}
   packs:
     base: { source: github.com/your-org/base-kit, version: "^2.0" }
 ```
 
-`conductor init` checks each socket is satisfied and warns when a bound agent
+`conductor init` checks each socket is satisfied and warns when a bound step
 lacks a required skill.
 
 ## Settings and presets
@@ -155,8 +160,58 @@ templated fields at instantiate time with `${settings.NAME}`.
 > **string-valued** field (a prompt, an option, guidance) — not a numeric field
 > like a gate's `max_revisions`.
 
-Agents that omit provider/model fall through to your **default runtime**, so a
-well-made pack runs with near-nothing bound.
+A pack step that omits `model:` falls through to your **default runtime**, and
+one that names a FLEET resolves against whatever models you actually have — so
+a well-made pack runs with near-nothing bound. See [[Model-Selection]].
+
+## Scope lives on the connector, not the pack
+
+A pack can bundle triggers from several sources (github, gitlab, pagerduty).
+`repos:` is meaningless to a pagerduty trigger, so scope is **not** a
+pack-level field: each trigger binds to your connector **of its own source
+type**, and the scope lives there, configured once.
+
+```yaml
+connectors:
+  github:    { repos: [me/app, me/api] }   # scopes the github-sourced triggers
+  pagerduty: { service: PROD }             # scopes the pagerduty one
+
+packs:
+  incident-responder: {}                   # each trigger finds its own connector
+```
+
+- **More than one connector of a type** is ambiguous, and conductor says so
+  rather than guessing: disambiguate with
+  `packs.<name>.connectors: { github: work-github }`.
+- **No connector of a type** leaves those triggers **dormant**, surfaced as a
+  load notice. The rest of the pack runs — a consumer without pagerduty still
+  gets the github half. A pack author whose pack is meaningless without a
+  source marks it `requires.sources.<type>.required` and gets a hard error
+  instead.
+
+## Overriding pack internals
+
+`packs.<name>:` **mirrors the pack's own sections**, and keys deep-merge onto
+its members by name — no pack-specific override language:
+
+```yaml
+packs:
+  pr-review-team:
+    on:                                        # its triggers, by name
+      github.pull_request: { filters: { labels_not: [wip] } }   # ADD a filter
+      gitlab.merge_request: { enabled: false }                  # turn one off
+    steps:                                     # its steps, by name
+      security:  { guidance: "focus on authz + SSRF" }          # ADDITIVE
+      summarize: { enabled: false }
+    models:                                    # its fleets, by name
+      reviewer: claude-opus-5
+    connectors: { github: work-github }        # instance disambiguation
+```
+
+`guidance:` is appended rather than replaced, `enabled: false` turns a trigger
+or step off, and the consumer wins on conflict. Only **named** members are
+addressable, so a pack must name what it wants you to be able to reach — and
+an overlay key that matches nothing is an error, not silent dead config.
 
 ## Triggers ship disarmed — consent is load-bearing
 

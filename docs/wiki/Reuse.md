@@ -9,19 +9,20 @@ don't cross imported `conf.d/*.yaml` files and can't append to a scalar.
 ## `extends:` — inherit from another entry
 
 A named entry declares `extends: <name>` to inherit from another entry **in the same section**.
-Supported on **`agents:`, `runtimes:`, `workflows:`, `handoffs:`, and `triggers:`**. Resolution runs
+Supported on **`steps:`, `runtimes:`, `workflows:`, `handoffs:`, and `triggers:`** — and from a
+trigger/workflow step onto a `steps:` template. Resolution runs
 once at load, after `imports:` merge and before validation, so everything downstream sees
 fully-resolved entries.
 
 ```yaml
-agents:
+steps:
   base:
-    provider: claude
+    type: agent
     workspace: worktree
     labels: { team: autopilot }
     guidance: "House style: terse, one thought per sentence."
   fixer:
-    extends: base            # inherits provider/workspace/labels
+    extends: base            # inherits workspace/labels
     model: claude-opus-5     # scalars: the child wins
     labels: { role: ci }     # maps deep-merge -> {team: autopilot, role: ci}
     guidance:
@@ -127,9 +128,9 @@ connectors:
     policy:
       guidance: "On PRs, lead with the point and propose a concrete fix."   # stacks under global
 
-agents:
+steps:
   reviewer:
-    provider: claude
+    type: agent
     guidance: "Flag only what a thoughtful senior would bother raising."     # stacks on top
 ```
 
@@ -138,7 +139,7 @@ trigger sees only the global tone plus its own.
 
 ## See also
 
-- [[Agents]] — agent profiles and the `guidance`/`extends` fields
+- [[Steps]] — agent profiles and the `guidance`/`extends` fields
 - [[Policy]] — the cascade `policy.guidance` rides on
 - [[Runtimes]], [[Workflows]] — other sections that support `extends:`
 - [[Configuration]] — the full trigger grammar

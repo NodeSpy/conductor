@@ -25,13 +25,13 @@ runtimes: paseo                      # the name implies use: — scalar, list, o
 models:
   fixer: ["claude-opus-*", "gpt-5.6-*"]   # a FLEET: what's acceptable, best-first
 
-agents:
-  fixer: { provider: claude, workspace: worktree, archive_when_done: true }
+steps:                                    # named, reusable step templates
+  fixer: { type: agent, model: fixer, workspace: worktree, archive_when_done: true }
 
 triggers:
   - on: gh.merge_conflict
     steps:
-      - { id: fix, type: agent, agent: fixer, model: fixer,
+      - { id: fix, extends: fixer,
           prompt: "Resolve the conflict on {{.repo}}#{{.pr}} against {{.base}}." }
     hooks:
       - { at: start, uses: slack-ops.post, options: { text: "conflict on {{.repo}}#{{.pr}} — on it" } }

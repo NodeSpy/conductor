@@ -44,9 +44,9 @@ in an agent's prompt or env-at-rest.
 ## Enabling it
 
 ```yaml
-agents:
+steps:
   deployer:
-    provider: claude
+    type: agent
     model: claude-sonnet-5
     skill:
       secrets_via: broker          # broker | env (deprecated) | none (default)

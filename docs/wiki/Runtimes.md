@@ -12,8 +12,8 @@ runtimes:
   remote: { use: cli, tool: claude-code, host: build-box }
   modal:  { use: modal }                           # a runtime PLUGIN, co-equal
 
-agents:
-  fixer: { provider: claude, runtime: paseo }      # `controller:` still accepted
+steps:
+  fixer: { type: agent, runtime: paseo }           # a step pins its backend
 ```
 
 ## Three shapes, and the name implies `use:`
@@ -77,11 +77,13 @@ runtimes sharing a `host:`/`isolation:` — the child overrides only `command`).
 | `default` | the fleet default (at most one across runtimes + legacy controllers) |
 | `bin` | the runtime binary (paseo, agent-deck) |
 | `tool` / `command` | the bare-CLI recipe for `transport: cli` |
+| `session` | the OVERALL session-affinity pool for this runtime: `{ key, idle_ttl, max_lifetime, end_on }`, shared by every step without its own. See [[Steps]] |
+| `budget` | this backend's hard spend cap: `{ window, max_cost_usd, max_tokens }`. A budget caps EXECUTION COST, and the runtime is where execution happens — this is where per-agent budgets moved to. See [[Cost-Accounting]] |
 | `host` | a [[Hosts]] entry — the runtime executes there over SSH: cli/acp/agent-deck wrap their launch, a paseo runtime runs its whole CLI remotely (with a dedicated dispatcher and reaper), and opencode is reached through an `ssh -W` forward (see [[Hosts]]) |
 
-Resolution order for an agent: its explicit `runtime:` (or legacy
-`controller:`) → the `default: true` entry → the built-in paseo. A profile's
-own `host:` overrides the runtime's (cli/acp/agent-deck). Each paseo runtime
+Resolution order for a step: its explicit `runtime:` → the `default: true`
+entry → the built-in paseo. A step's own `host:` overrides the runtime's
+(cli/acp/agent-deck). Each paseo runtime
 with its own `bin:` or a `host:` gets a dedicated dispatcher and reaper; the
 default local one is the primary that command steps and provisioning share.
 
@@ -92,18 +94,18 @@ hand-off for background review steps ([[Hand-offs]]).
 
 ## Session persistence
 
-An agent profile's `session:` block (session affinity — one live agent per
-key, see [[Agents]]) needs a runtime whose sessions survive between
+A `session:` block — on this runtime (the overall pool) or on a step (its
+own), see [[Steps]] — needs a runtime whose sessions survive between
 dispatches by id: **paseo** (follow-ups via `paseo send`; resume re-binds
 the agent id) and **acp** (follow-ups via `session/prompt`; resume via
 `session/load` where the agent negotiates it). One-shot runtimes (`cli`)
-don't participate — a `session:` profile on them silently stays
-fresh-per-event and leans on [[Memory]] for continuity.
+don't participate — a `session:` on them silently stays fresh-per-event and
+leans on [[Memory]] for continuity.
 
 A runtime conductor launches itself (acp / cli / opencode / agent-deck) may
 carry an `isolation:` block — per-dispatch sandboxing and the network egress
-allowlist for every launch it performs; a profile's own `isolation:` wins.
+allowlist for every launch it performs; a step's own `isolation:` wins.
 Not applicable to paseo runtimes (their agents are the paseo daemon's
 children) — `conductor validate` rejects that combination. See [[Isolation]].
 
-Related: [[Agents]] · [[Hosts]] · [[Hand-offs]] · [[Configuration]] · [[Isolation]] · [[Plugins]]
+Related: [[Steps]] · [[Hosts]] · [[Hand-offs]] · [[Configuration]] · [[Isolation]] · [[Plugins]]

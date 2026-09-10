@@ -469,14 +469,15 @@ maintained with the code, not written ahead of it.
    existed. When a roster *did* answer and does not offer the model, the ladder
    is followed normally.
 
-**Not yet landed**
+**Also landed since**
 
-- §5.2 connector-owned scope, missing-connector dormancy, `required` sources.
-- §5.3 the mirrored-section pack overlay (`packs.<n>.on:`/`steps:`/`models:`).
-- §6 removing `agents:`/`AgentProfile`, and §6's migration. The chosen
-  destination for the behavior fields is a top-level `steps:` map of named
-  reusable step templates reached via the existing `extends:` — see the PR
-  description. The `model:`/`runtime:` half of that move is already on `Step`.
+- §5.2 connector-owned scope, missing-connector dormancy, `required` sources
+  (`internal/config/pack_sources.go`).
+- §5.3 the mirrored-section pack overlay (`packs.<n>.on:`/`steps:`/`models:`)
+  (`internal/config/pack_overlay.go`).
+- §6 is SUPERSEDED by `docs/design/agents-removal.md`, which is implemented:
+  `agents:` and `AgentProfile` are gone, behavior lives on the step, and the
+  migration ships with the removal.
 
 ## Evidence (validated on the maintainer's box — do not regress to paseo-only)
 
