@@ -1731,9 +1731,28 @@ func expandHome(p string) string {
 // built in memory rather than loaded from disk).
 func (c *Config) BaseDir() string { return c.baseDir }
 
-// StateDir returns the state directory to use for the default StateFile/AuditLog
-// paths: ~/.local/state/conductor.
+// stateDirOverride is set by --state-dir, for a CLI invocation or a test
+// that must not touch the real install state.
+var stateDirOverride string
+
+// SetStateDir overrides the state directory for this process.
+func SetStateDir(dir string) { stateDirOverride = dir }
+
+// StateDir returns the state directory for the default StateFile/AuditLog
+// paths, honouring the override, then XDG_STATE_HOME, then the
+// spec's default of ~/.local/state.
+//
+// The XDG variable is the whole point of the XDG path it was hardwiring:
+// hardcoding $HOME/.local/state meant a box that redirects its state — a
+// container, a multi-tenant host, a test — silently wrote install state
+// somewhere it did not expect, and read a different box's back.
 func StateDir() string {
+	if stateDirOverride != "" {
+		return stateDirOverride
+	}
+	if x := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); x != "" {
+		return filepath.Join(x, "conductor")
+	}
 	h, err := os.UserHomeDir()
 	if err != nil {
 		return ""

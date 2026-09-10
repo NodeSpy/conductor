@@ -110,7 +110,7 @@ func TestBoundGrant(t *testing.T) {
 func TestLintRejectsGrantOutsideRequires(t *testing.T) {
 	man := &PackManifest{
 		Pack: PackMeta{Name: "p", Version: "1.0.0", Requires: PackRequires{
-			Conductor: ">=0.1", Connectors: ConnectorReqs{"github": AnyVersion},
+			Conductor: ">=0.1", Connectors: ConnectorReqs{"github": {Version: AnyVersion, Required: true}},
 		}},
 		Workflows: map[string]WorkflowDef{"flow": {Steps: []Step{
 			{ID: "reviewer", Type: "agent", Skill: &SkillPolicy{Verbs: []string{"github.submit_review", "pagerduty.trigger"}}},
@@ -134,7 +134,7 @@ func TestLintRejectsGrantOutsideRequires(t *testing.T) {
 func TestLintAcceptsGrantInsideRequires(t *testing.T) {
 	man := &PackManifest{
 		Pack: PackMeta{Name: "p", Version: "1.0.0", Requires: PackRequires{
-			Conductor: ">=0.1", Connectors: ConnectorReqs{"github": AnyVersion, "sentry": AnyVersion},
+			Conductor: ">=0.1", Connectors: ConnectorReqs{"github": {Version: AnyVersion, Required: true}, "sentry": {Version: AnyVersion, Required: true}},
 		}},
 		Workflows: map[string]WorkflowDef{"flow": {Steps: []Step{
 			{ID: "a", Type: "agent", Skill: &SkillPolicy{Verbs: []string{"github.*", "sentry.issue"}}},

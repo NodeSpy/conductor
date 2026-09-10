@@ -39,6 +39,16 @@ const (
 
 // Store is the concurrency-safe state + audit store.
 type Store struct {
+	// writeMu serialises every save's marshal→write→rename as one unit.
+	//
+	// Each save marshalled under mu and then wrote OUTSIDE it, so two
+	// concurrent saves could rename in the opposite order to the one they
+	// marshalled in — the older snapshot landing last and silently
+	// dropping the newer one's record. Harmless while saves were
+	// effectively serial; `parallel:` branches made them concurrent.
+	// Holding this across the marshal too is what keeps rename order equal
+	// to marshal order.
+	writeMu      sync.Mutex
 	mu           sync.Mutex
 	path         string
 	runsPath     string
@@ -362,9 +372,20 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) save() error {
+	return s.persist(func() ([]byte, string, error) {
+		b, err := json.MarshalIndent(s.recs, "", "  ")
+		return b, s.path, err
+	})
+}
+
+// persist marshals and writes one state file as a single serialised unit.
+// marshal is called with writeMu held and takes s.mu itself, so the
+// snapshot a caller writes is the snapshot that lands.
+func (s *Store) persist(marshal func() ([]byte, string, error)) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.mu.Lock()
-	b, err := json.MarshalIndent(s.recs, "", "  ")
-	path := s.path
+	b, path, err := marshal()
 	s.mu.Unlock()
 	if err != nil {
 		return err

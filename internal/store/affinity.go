@@ -2,7 +2,6 @@ package store
 
 import (
 	"encoding/json"
-	"os"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/controller"
@@ -92,15 +91,8 @@ func (s *Store) Affinities() []controller.AffinityRef {
 
 // saveAffinity persists the binding map (best-effort atomic via temp+rename).
 func (s *Store) saveAffinity() error {
-	s.mu.Lock()
-	b, err := json.MarshalIndent(s.affinity, "", "  ")
-	s.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	tmp := s.affinityPath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.affinityPath)
+	return s.persist(func() ([]byte, string, error) {
+		b, err := json.MarshalIndent(s.affinity, "", "  ")
+		return b, s.affinityPath, err
+	})
 }

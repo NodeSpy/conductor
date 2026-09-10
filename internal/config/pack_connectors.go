@@ -28,10 +28,24 @@ import (
 // naming pack + connector + required-vs-actual — the same failure mode as a
 // bad `requires.conductor`, and degrade-safe for the same reason.
 
-// ConnectorReqs is the `requires.connectors` value: connector name → version
-// constraint. It decodes from a MAP (name → constraint) or, as sugar, a LIST
-// of bare names meaning "any version".
-type ConnectorReqs map[string]string
+// ConnectorReq is one declared connector: a version constraint, and
+// whether the pack can run without it.
+//
+// Required defaults to TRUE, deliberately. A pack declares a connector
+// because it uses it, so an unbound one is a config mistake and saying so
+// loudly beats a pack that installs clean and then does nothing when the
+// event arrives. `required: false` is the author's explicit statement that
+// the pack degrades — its triggers for that source go dormant and the rest
+// of it runs (the same treatment requires.sources gives).
+type ConnectorReq struct {
+	Version  string
+	Required bool
+}
+
+// ConnectorReqs is the `requires.connectors` value: connector name → its
+// requirement. It decodes from a MAP (name → constraint, or name → block)
+// or, as sugar, a LIST of bare names meaning "any version, required".
+type ConnectorReqs map[string]ConnectorReq
 
 // AnyVersion is the constraint that gates nothing.
 const AnyVersion = "*"
@@ -48,7 +62,7 @@ func (c *ConnectorReqs) UnmarshalYAML(n *yaml.Node) error {
 		if err := n.Decode(&one); err != nil {
 			return fmt.Errorf("requires.connectors: want a list of names or a map of name -> version constraint: %w", err)
 		}
-		*c = ConnectorReqs{one: AnyVersion}
+		*c = ConnectorReqs{one: {Version: AnyVersion, Required: true}}
 		return nil
 	case yaml.SequenceNode:
 		var names []string
@@ -61,25 +75,48 @@ func (c *ConnectorReqs) UnmarshalYAML(n *yaml.Node) error {
 			if name == "" {
 				return fmt.Errorf("requires.connectors: empty connector name")
 			}
-			out[name] = AnyVersion
+			out[name] = ConnectorReq{Version: AnyVersion, Required: true}
 		}
 		*c = out
 		return nil
 	case yaml.MappingNode:
-		var m map[string]string
-		if err := n.Decode(&m); err != nil {
-			return fmt.Errorf("requires.connectors: map form takes name -> version constraint (e.g. { jira: \">=2.0\" }): %w", err)
-		}
-		out := make(ConnectorReqs, len(m))
-		for name, constraint := range m {
-			name = strings.TrimSpace(name)
+		// Each value is either a bare version constraint (the common case)
+		// or a block that can also say `required: false`.
+		out := make(ConnectorReqs, len(n.Content)/2)
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			name := strings.TrimSpace(n.Content[i].Value)
 			if name == "" {
 				return fmt.Errorf("requires.connectors: empty connector name")
 			}
-			if strings.TrimSpace(constraint) == "" {
-				constraint = AnyVersion
+			v := n.Content[i+1]
+			req := ConnectorReq{Version: AnyVersion, Required: true}
+			switch v.Kind {
+			case yaml.ScalarNode:
+				var constraint string
+				if err := v.Decode(&constraint); err != nil {
+					return fmt.Errorf("requires.connectors.%s: want a version constraint or a { version, required } block: %w", name, err)
+				}
+				if strings.TrimSpace(constraint) != "" {
+					req.Version = constraint
+				}
+			case yaml.MappingNode:
+				var blk struct {
+					Version  string `yaml:"version,omitempty"`
+					Required *bool  `yaml:"required,omitempty"`
+				}
+				if err := strictNodeDecode(v, &blk); err != nil {
+					return fmt.Errorf("requires.connectors.%s: %w", name, err)
+				}
+				if strings.TrimSpace(blk.Version) != "" {
+					req.Version = blk.Version
+				}
+				if blk.Required != nil {
+					req.Required = *blk.Required
+				}
+			default:
+				return fmt.Errorf("requires.connectors.%s: want a version constraint or a { version, required } block", name)
 			}
-			out[name] = constraint
+			out[name] = req
 		}
 		*c = out
 		return nil
@@ -96,7 +133,7 @@ func (c ConnectorReqs) MarshalYAML() (any, error) {
 	names := c.Names()
 	plain := true
 	for _, n := range names {
-		if c[n] != AnyVersion {
+		if c[n].Version != AnyVersion || !c[n].Required {
 			plain = false
 			break
 		}
@@ -104,7 +141,15 @@ func (c ConnectorReqs) MarshalYAML() (any, error) {
 	if plain {
 		return names, nil
 	}
-	return map[string]string(c), nil
+	out := make(map[string]any, len(c))
+	for n, r := range c {
+		if r.Required {
+			out[n] = r.Version
+			continue
+		}
+		out[n] = map[string]any{"version": r.Version, "required": false}
+	}
+	return out, nil
 }
 
 // Names lists the declared connectors, sorted.
@@ -173,7 +218,7 @@ func resolvedConnectorVersion(instance string, ref ConnectorRef) (string, bool) 
 // bind-only, so this only ever reads what the consumer already resolved.
 func (st *packInstantiation) checkConnectorVersions(ns string, reqs ConnectorReqs, env envBindings) error {
 	for _, name := range reqs.Names() {
-		constraint := strings.TrimSpace(reqs[name])
+		constraint := strings.TrimSpace(reqs[name].Version)
 		if constraint == "" || constraint == AnyVersion {
 			continue // declared, but any version will do
 		}

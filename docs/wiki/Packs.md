@@ -263,6 +263,23 @@ packs:
   source marks it `requires.sources.<type>.required` and gets a hard error
   instead.
 
+> **`requires.connectors` is different, and stricter.** The dormancy above is
+> for a source a pack merely *uses*. A connector the pack **declares** is
+> required by default: leaving it unbound is a load error, because a pack that
+> installs clean and then does nothing when the event arrives is worse than one
+> that says what is missing. An author whose pack genuinely degrades opts in
+> per connector:
+>
+> ```yaml
+> requires:
+>   connectors:
+>     github: "*"                              # required (the default)
+>     pagerduty: { version: "*", required: false }   # optional — dormant if unbound
+> ```
+>
+> An unbound optional connector is a load notice, and the parts of the pack
+> that use it go dormant.
+
 ## Overriding pack internals
 
 `packs.<name>:` **mirrors the pack's own sections**, and keys deep-merge onto

@@ -458,10 +458,15 @@ func cmdPackShow(args []string) error {
 		fmt.Printf("  conductor: %s\n", m.Requires.Conductor)
 	}
 	for _, n := range m.Requires.Connectors.Names() {
-		if c := m.Requires.Connectors[n]; c != "" && c != config.AnyVersion {
-			fmt.Printf("  connector %s: %s\n", n, c)
+		c := m.Requires.Connectors[n]
+		note := ""
+		if !c.Required {
+			note = "  (optional — its triggers go dormant if unbound)"
+		}
+		if c.Version != "" && c.Version != config.AnyVersion {
+			fmt.Printf("  connector %s: %s%s\n", n, c.Version, note)
 		} else {
-			fmt.Printf("  connector %s\n", n)
+			fmt.Printf("  connector %s%s\n", n, note)
 		}
 	}
 	if len(m.Requires.Stores) > 0 {

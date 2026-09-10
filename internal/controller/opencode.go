@@ -35,6 +35,36 @@ type opencodeController struct {
 	prov Provisioner
 	dial opencodeDialer // injectable; nil → spawn `opencode serve`
 	hc   *http.Client
+
+	// cwds remembers the worktree each session was opened in, keyed by
+	// session id. ResumeSession is handed only an id — the Controller
+	// interface carries no Spec on that call — and it was rooting the
+	// resumed server at "" (the daemon's own cwd) instead of the
+	// checkout. A follow-up then read and edited the wrong tree, silently.
+	cwdMu sync.Mutex
+	cwds  map[string]string
+}
+
+// rememberCwd records where a session was opened, for ResumeSession.
+func (c *opencodeController) rememberCwd(id, cwd string) {
+	if id == "" || cwd == "" {
+		return
+	}
+	c.cwdMu.Lock()
+	defer c.cwdMu.Unlock()
+	if c.cwds == nil {
+		c.cwds = map[string]string{}
+	}
+	c.cwds[id] = cwd
+}
+
+// cwdFor returns a session's remembered worktree ("" when unknown — a
+// resume after a daemon restart, where the caller's own checkout logic
+// applies).
+func (c *opencodeController) cwdFor(id string) string {
+	c.cwdMu.Lock()
+	defer c.cwdMu.Unlock()
+	return c.cwds[id]
 }
 
 // opencodeDialer resolves a base URL for an opencode server rooted at cwd with env
@@ -161,6 +191,9 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 		provider: provider,
 		model:    model,
 	}
+	// Remember where this session lives, so a follow-up resumes into the
+	// same worktree rather than the daemon's cwd.
+	c.rememberCwd(id, spec.Cwd)
 	s.startTurn(prompt)
 	return s, nil
 }
@@ -168,7 +201,10 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 // ResumeSession re-binds an existing opencode session by id (resumable by id).
 func (c *opencodeController) ResumeSession(ctx context.Context, id string, agentAuthored bool, _ Handler) (Session, error) {
 	sctx, scancel := context.WithCancel(context.Background())
-	baseURL, cleanup, err := c.connect(sctx, "", nil, resumeOpts(c.iso, agentAuthored))
+	// Root the resumed server at the session's OWN worktree. Passing ""
+	// rooted it at the daemon's cwd, so a follow-up turn read and edited
+	// a different tree than the one the session had been working in.
+	baseURL, cleanup, err := c.connect(sctx, c.cwdFor(id), nil, resumeOpts(c.iso, agentAuthored))
 	if err != nil {
 		scancel()
 		return nil, err

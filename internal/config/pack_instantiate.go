@@ -408,6 +408,16 @@ func (st *packInstantiation) validateRequires(ns string, man *PackManifest, inst
 	for _, name := range req.Connectors.Names() {
 		bound, ok := env.conn[name]
 		if !ok {
+			// A declared connector is REQUIRED by default: the pack says
+			// it uses this, so an unbound one is a config mistake and
+			// failing loudly beats a pack that installs clean and then
+			// does nothing when the event arrives. An author who knows
+			// their pack degrades says `required: false`, and the source's
+			// triggers go dormant instead (bindPackSources, §5.2).
+			if !req.Connectors[name].Required {
+				st.warnf("pack %q: optional connector %q is not bound — the parts of the pack that use it are DORMANT. Bind it with connectors: { %s: <your-connector> } to arm them.", ns, name, name)
+				continue
+			}
 			return fmt.Errorf("pack %q: requires connector %q — bind it: connectors: { %s: <your-connector> }", ns, name, name)
 		}
 		if _, ok := st.cfg.ConnectorsMap[bound]; !ok {

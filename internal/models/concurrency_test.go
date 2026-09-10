@@ -145,3 +145,52 @@ func TestCatalogFailureIsRateLimited(t *testing.T) {
 		t.Fatalf("a failed load should be remembered for RetryAfter, got %d fetches", hits.Load())
 	}
 }
+
+// §12: CheckRequired had no callers at all, so `required: true` — the one
+// hard guarantee the fleet ladder offers — was never enforced anywhere.
+// It is wired into `conductor validate` now (an operator is present);
+// dispatch stays degrade-safe on purpose.
+func TestCheckRequiredErrorsWhenDiscoveryAnswers(t *testing.T) {
+	Register("reqtest", func(Runtime, *Catalog) Lister {
+		return listerFunc(func() (Roster, error) {
+			return Roster{{ID: "only-this"}}, nil // answers, and does NOT have the model
+		})
+	})
+	cfg := &config.Config{
+		Runtimes: config.RuntimeSet{"rt": {Use: "reqtest", Default: true}},
+		Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
+			{ID: "a", Type: "agent", Prompt: "p", Model: mustRequiredSpec(t, "nope-*")},
+		}}},
+	}
+	r := NewResolver(cfg, nil)
+	if err := r.CheckRequired(context.Background()); err == nil {
+		t.Fatal("an unsatisfiable required: fleet must fail validation")
+	}
+}
+
+// …but a box that cannot reach its providers has learned NOTHING, and
+// must not be failed for it — that is the degraded-boot invariant.
+func TestCheckRequiredStaysQuietWhenDiscoveryCannotAnswer(t *testing.T) {
+	Register("reqdead", func(Runtime, *Catalog) Lister {
+		return listerFunc(func() (Roster, error) { return nil, ErrNoDiscovery })
+	})
+	cfg := &config.Config{
+		Runtimes: config.RuntimeSet{"rt": {Use: "reqdead", Default: true}},
+		Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
+			{ID: "a", Type: "agent", Prompt: "p", Model: mustRequiredSpec(t, "nope-*")},
+		}}},
+	}
+	r := NewResolver(cfg, nil)
+	if err := r.CheckRequired(context.Background()); err != nil {
+		t.Fatalf("an unreachable provider is not a negative answer: %v", err)
+	}
+}
+
+func mustRequiredSpec(t *testing.T, pattern string) config.ModelSpec {
+	t.Helper()
+	var spec config.ModelSpec
+	if err := unmarshalSpec(&spec, `{ any: ["`+pattern+`"], required: true }`); err != nil {
+		t.Fatal(err)
+	}
+	return spec
+}

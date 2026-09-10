@@ -124,3 +124,26 @@ steps:
 		t.Fatalf("dispatch identity %q != lookup identity %q — a called workflow's steps must use ITS scope", got, want)
 	}
 }
+
+// §19: IndexOf's doc claimed deep equality but it compared only the step
+// COUNT, so two unnamed triggers on the same event with the same number of
+// steps were indistinguishable — the first always won, which is the
+// assume-zero bug IndexOf exists to avoid, moved one step along.
+func TestIndexOfDistinguishesEqualLengthTriggers(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc: { use: fake }
+triggers:
+  - on: svc.ping
+    steps: [{ id: a, type: agent, prompt: first }]
+  - on: svc.ping
+    steps: [{ id: b, type: agent, prompt: second }]
+`)
+	r := New(Runner{Cfg: cfg})
+	if got := r.IndexOf(cfg.Triggers[0]); got != 0 {
+		t.Errorf("first trigger resolved to %d", got)
+	}
+	if got := r.IndexOf(cfg.Triggers[1]); got != 1 {
+		t.Errorf("second trigger resolved to %d — equal step COUNTS are not equal steps", got)
+	}
+}

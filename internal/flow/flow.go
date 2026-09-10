@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -24,6 +25,8 @@ import (
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Store is the persistence surface the runner needs (checkpointed runs,
@@ -235,11 +238,31 @@ func (r *Runner) IndexOf(spec config.TriggerSpec) int {
 			}
 			continue
 		}
-		if c.Name == "" && c.On == spec.On && len(c.Steps) == len(spec.Steps) {
+		// Deep equality, as the doc says. Comparing only the step COUNT
+		// made two unnamed triggers on the same event with the same number
+		// of steps indistinguishable — and the first one always won, which
+		// is the assume-zero bug this function exists to avoid, moved one
+		// step along.
+		if c.Name == "" && c.On == spec.On && sameSteps(c.Steps, spec.Steps) {
 			return i
 		}
 	}
 	return 0
+}
+
+// sameSteps reports whether two step lists are the same configuration.
+// Steps are plain config, so their canonical YAML is a faithful identity —
+// the same basis Step.Fingerprint uses.
+func sameSteps(a, b []config.Step) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	ay, aerr := yaml.Marshal(a)
+	by, berr := yaml.Marshal(b)
+	if aerr != nil || berr != nil {
+		return false
+	}
+	return bytes.Equal(ay, by)
 }
 
 // FilterMatch evaluates a trigger's flow-side filters (connector types whose

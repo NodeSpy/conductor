@@ -15,12 +15,42 @@ import "strings"
 // resolves in the consumer namespace, not prefixed.
 type refRewriter struct {
 	ns string
+	// fleets are the pack's OWN `models:` names, so a step's `model:` that
+	// refers to one can be namespaced with it. Anything else — an exact
+	// model id, a wildcard, a consumer fleet — is left alone.
+	fleets map[string]bool
 	// env rebinds required environment names to consumer globals.
 	env envBindings
 }
 
 func newRefRewriter(ns string, man *PackManifest, inst PackInstance, env envBindings) *refRewriter {
-	return &refRewriter{ns: ns, env: env}
+	rw := &refRewriter{ns: ns, env: env, fleets: map[string]bool{}}
+	if man != nil {
+		for name := range man.Models {
+			rw.fleets[name] = true
+		}
+	}
+	return rw
+}
+
+// rewriteStepModel points a step's `model:` at the pack's OWN fleet when it
+// names one.
+//
+// The pack's `models:` block is instantiated as `<ns>/<name>` fleets, but
+// nothing rewrote the reference — so a pack step saying `model: reviewer`
+// resolved against the CONSUMER's globals instead. That is either a silent
+// mis-resolution or, if the consumer happens to have a fleet by that name,
+// a reach across the namespace boundary the rest of this file exists to
+// enforce.
+//
+// Only a name the pack actually declares is rewritten: `model:` is
+// map-key-wins, so an exact id (`claude-opus-5`), a wildcard, or an inline
+// list must pass through untouched.
+func (rw *refRewriter) rewriteStepModel(s *Step) {
+	if s.Model.Ref == "" || !rw.fleets[s.Model.Ref] {
+		return
+	}
+	s.Model.Ref = rw.agentName(s.Model.Ref)
 }
 
 func (rw *refRewriter) agentName(role string) string    { return rw.ns + "/" + role }
@@ -188,6 +218,7 @@ func (rw *refRewriter) rewriteHook(h *Hook) {
 // step forms (compensate, parallel branches, step hooks).
 func (rw *refRewriter) rewriteStep(s *Step) {
 	rw.rewriteStepName(s)
+	rw.rewriteStepModel(s)
 	rw.rebindStep(s)
 	s.Workflow = rw.resolveWorkflowRef(s.Workflow)
 	s.Uses = rw.rebindVerb(s.Uses)

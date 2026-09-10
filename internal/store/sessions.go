@@ -2,7 +2,6 @@ package store
 
 import (
 	"encoding/json"
-	"os"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/controller"
@@ -79,15 +78,8 @@ func (s *Store) Sessions() []controller.SessionRef {
 
 // saveSessions persists the sessions map (best-effort atomic via temp+rename).
 func (s *Store) saveSessions() error {
-	s.mu.Lock()
-	b, err := json.MarshalIndent(s.sessions, "", "  ")
-	s.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	tmp := s.sessionsPath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.sessionsPath)
+	return s.persist(func() ([]byte, string, error) {
+		b, err := json.MarshalIndent(s.sessions, "", "  ")
+		return b, s.sessionsPath, err
+	})
 }

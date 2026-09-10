@@ -494,9 +494,15 @@ func availableLabel(r Roster) string {
 // It errors ONLY when discovery actually answered. A box that cannot reach
 // its providers has not learned that a model is unavailable; it has learned
 // nothing, and turning that into a hard failure would crash-loop an
-// auto-updating fleet on the first network blip. That is why this is called
-// from `conductor validate` and from dispatch — where an operator is present
-// or the run can degrade — and not from config.Load, which must stay offline.
+// auto-updating fleet on the first network blip.
+//
+// It is called from `conductor validate` ONLY — where an operator is
+// present to read the error and fix the config. Dispatch deliberately does
+// NOT call it: there the same unsatisfiable fleet logs and bare-launches,
+// because a box that stops taking work is worse than one taking it on the
+// wrong model. config.Load never calls it either; loading must stay
+// offline. (The comment here previously claimed dispatch called it. It did
+// not — nothing did.)
 func (r *Resolver) CheckRequired(ctx context.Context) error {
 	for _, ref := range r.cfg.ModelRefs() {
 		_, resolved := r.deref(ref.Spec)

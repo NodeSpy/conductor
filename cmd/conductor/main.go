@@ -195,13 +195,21 @@ usage:
 }
 
 // configPath extracts --config from args (default configDir()/config.yaml —
-// ~/.config/conductor).
+// ~/.config/conductor). It also consumes --state-dir, which redirects the
+// install-state directory for this process: the same isolation
+// XDG_STATE_HOME gives, reachable from a single command without exporting
+// anything.
 func configPath(args []string) (string, []string) {
 	def := filepath.Join(configDir(), "config.yaml")
 	rest := []string{}
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--config" && i+1 < len(args) {
 			def = args[i+1]
+			i++
+			continue
+		}
+		if args[i] == "--state-dir" && i+1 < len(args) {
+			config.SetStateDir(args[i+1])
 			i++
 			continue
 		}
@@ -305,6 +313,21 @@ func cmdValidate(args []string) error {
 	}
 	for _, w := range flow.IsolationWarnings(cfg) {
 		fmt.Printf("warning: %s\n", w)
+	}
+	// The `required: true` guardrail (§12). It lives HERE and not at
+	// dispatch on purpose: an operator is present to read the error, and a
+	// box whose providers are briefly unreachable must keep dispatching
+	// (degraded, bare-launching) rather than crash-loop an auto-updating
+	// fleet. CheckRequired itself errors only when discovery actually
+	// ANSWERED — an unreachable provider has taught it nothing.
+	{
+		res := agentmodels.NewResolver(cfg, agentmodels.NewCatalog(config.StateDir()))
+		rctx, rcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := res.CheckRequired(rctx)
+		rcancel()
+		if err != nil {
+			return err
+		}
 	}
 	if stack != nil {
 		for _, w := range flow.SkillWarnings(cfg, stack.Registry) {
@@ -1485,7 +1508,7 @@ func cmdForce(args []string) error {
 func hasPositional(args []string) bool {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--config", "--input", "--json":
+		case "--config", "--input", "--json", "--state-dir":
 			i++ // skip the flag's value
 		default:
 			if !strings.HasPrefix(args[i], "--") {

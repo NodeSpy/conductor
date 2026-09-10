@@ -614,3 +614,48 @@ func TestPackUseKindResolvesToItsOwnRepo(t *testing.T) {
 		t.Errorf("a pack may be named after a builtin runtime: %v", err)
 	}
 }
+
+// §15: a pack's `models:` block IS instantiated as `<ns>/<name>` fleets,
+// but nothing rewrote a step's `model:` reference — so a pack step saying
+// `model: reviewer` resolved against the CONSUMER's globals. Silent
+// mis-resolution at best; a reach across the namespace boundary if the
+// consumer happens to have that name.
+func TestPackStepModelResolvesToThePacksOwnFleet(t *testing.T) {
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/kit", `
+pack:
+  name: kit
+  version: "1.0.0"
+  requires: { conductor: ">=0.1" }
+models:
+  reviewer: { any: ["claude-opus-*"] }
+workflows:
+  flow:
+    steps:
+      - { id: review, type: agent, prompt: p, model: reviewer }
+      - { id: pinned, type: agent, prompt: p, model: claude-opus-5 }
+`)
+	cfg, err := resolveAndLoad(t, writeDoc(t, dir, `
+connectors:
+  gh: { use: github, token: x }
+models:
+  reviewer: { any: ["a-consumer-model"] }
+packs:
+  kit: { source: ./src/kit }
+`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// The pack's own fleet, not the consumer's same-named one.
+	if got := packStep(t, cfg, "kit/flow/review").Model.Ref; got != "kit/reviewer" {
+		t.Fatalf("a pack step's fleet ref must resolve inside the pack, got %q", got)
+	}
+	if _, ok := cfg.Models["kit/reviewer"]; !ok {
+		t.Fatalf("the namespaced fleet should exist, have %v", mapKeys(cfg.Models))
+	}
+	// An exact pin is not a fleet name and must pass through untouched —
+	// `model:` is map-key-wins.
+	if got := packStep(t, cfg, "kit/flow/pinned").Model.Ref; got != "claude-opus-5" {
+		t.Fatalf("an exact model id must not be namespaced, got %q", got)
+	}
+}

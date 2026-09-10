@@ -151,7 +151,7 @@ func TestLintPackManifestNegatives(t *testing.T) {
 		// requires.roles is gone (§E); requires.connectors took over the
 		// "what must a binding be able to do" job by bounding the grant.
 		{"grant outside requires.connectors", PackManifest{
-			Pack: PackMeta{Name: "p", Version: "1", Requires: PackRequires{Conductor: ">=0.1", Connectors: ConnectorReqs{"github": AnyVersion}}},
+			Pack: PackMeta{Name: "p", Version: "1", Requires: PackRequires{Conductor: ">=0.1", Connectors: ConnectorReqs{"github": {Version: AnyVersion, Required: true}}}},
 			Workflows: map[string]WorkflowDef{"f": {Steps: []Step{
 				{ID: "a", Type: "agent", Skill: &SkillPolicy{Verbs: []string{"pagerduty.trigger"}}},
 			}}},
