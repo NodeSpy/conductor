@@ -204,7 +204,7 @@ func TestKVVerbSurface(t *testing.T) {
 // error (the name is reserved for the built-in).
 func TestKVConfiguredNameRejected(t *testing.T) {
 	var cfg config.Config
-	if err := yaml.Unmarshal([]byte("connectors:\n  kv: { type: command }\ntriggers:\n  - { on: kv.tick, steps: [ { uses: kv.get, options: { key: k } } ] }\n"), &cfg); err != nil {
+	if err := yaml.Unmarshal([]byte("connectors:\n  kv: { use: command }\ntriggers:\n  - { on: kv.tick, steps: [ { uses: kv.get, options: { key: k } } ] }\n"), &cfg); err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "reserved") {

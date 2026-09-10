@@ -17,7 +17,7 @@
 connectors:
   imports: [conf.d/connectors/*.yaml]
   gh:
-    type: github
+    use: github
     enabled: false # <- set true once the App + webhook below are configured
     app:
       app_id: 0 # <- your GitHub App id
@@ -51,7 +51,7 @@ triggers:
 
 runtimes:
   imports: [conf.d/runtimes/*.yaml]
-  paseo: { type: paseo, default: true }
+  paseo: { use: paseo, default: true }
 
 hosts:
   imports: [conf.d/hosts/*.yaml]

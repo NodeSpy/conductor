@@ -27,7 +27,7 @@ func TestCronConnector(t *testing.T) {
 	reg := buildSinkRegistry(t, `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules:
       tick:    { every: 1h }
       nightly: { cron: "0 4 * * *", run_on_start: true }
@@ -85,7 +85,7 @@ func TestRSSConnector(t *testing.T) {
 	reg := buildSinkRegistry(t, `
 connectors:
   news:
-    type: rss
+    use: rss
     feeds:
       rel:  { url: "https://example.com/releases.atom", interval: 30m }
       blog: { url: "https://example.com/blog.rss" }

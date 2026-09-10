@@ -1,164 +1,215 @@
 package config
 
 import (
-	"fmt"
+	"sort"
 	"strings"
 )
 
-// PluginRef is one entry in the `plugins:` map — an EXTERNAL plugin: arbitrary
-// code the daemon fetches (a follow-up; today a local path) and runs
-// out-of-process, speaking conductor's plugin protocol over stdio. A plugin
-// acquires a connector `type:` or a `runtime:` name; it configures nothing on
-// its own (instances live in connectors:/runtimes:, with their own creds).
+// PluginRef is one external plugin the daemon must run out-of-process. It is
+// DERIVED, never authored: there is no `plugins:` block. Every entry here comes
+// from a `use:` reference on a connectors:/runtimes: entry that did not resolve
+// to a builtin (see PluginRefs).
 //
-// Bundled connectors/runtimes (github, slack, paseo, acp, …) are NOT declared
-// here — they ship in the binary and are always present. `plugins:` only
-// APPENDS external ones; `conductor plugin list` shows both.
-//
-// Because an external plugin is code the daemon executes (and, for connectors,
-// code that RECEIVES the instance's credential), every entry is gated:
-// verify-before-execute (Sha256), a reviewed sandbox (Isolation, deny-by-default
-// egress), and per-@version audit attribution. See internal/plugin and
-// docs/wiki/Plugins.md.
+// The kind is the block the reference appeared in — a connector can never be
+// wired as a runtime — and is re-checked against the plugin's own `describe` at
+// install/start time.
 type PluginRef struct {
-	// Source is the plugin executable. In this release it is a LOCAL path
-	// (absolute, or relative to the config file's directory). Remote sources
-	// (github.com/acme/conductor-jira@1.4.0) with fetch + lockfile + signing
-	// are a documented follow-up — see docs/wiki/Plugins.md.
-	Source string `yaml:"source"`
-	// Kind is what the plugin provides: connector | runtime.
-	Kind string `yaml:"kind"`
-	// Provides names the connector type or runtime this plugin registers.
-	// Defaults to the plugins: map key when empty.
-	Provides string `yaml:"provides,omitempty"`
-	// Version pins the plugin version — advisory, and the attribution carried
-	// on every audit record (`plugin@version`).
-	Version string `yaml:"version,omitempty"`
-	// Sha256 pins the binary's hex-encoded SHA-256, verified BEFORE the binary
-	// is ever executed (§8.4). REQUIRED unless AllowUnverified is set: with no
-	// pin and no opt-in, the plugin loads but is REFUSED execution.
-	Sha256 string `yaml:"sha256,omitempty"`
-	// AllowUnverified is the deliberate, insecure opt-in to run a plugin with
-	// no Sha256 pin (local development). Never use in production — it disables
-	// verify-before-execute. Default false = a plugin without a pin is inert.
-	AllowUnverified bool `yaml:"allow_unverified,omitempty"`
-	// Args are extra arguments appended to the plugin binary's argv at spawn.
-	Args []string `yaml:"args,omitempty"`
-	// Hold, when true, freezes a REMOTE plugin at its currently-locked version:
-	// `conductor init` / auto-update will not re-resolve it (mirrors a pack's
-	// hold). No effect on a local plugin. Update it deliberately by clearing hold
-	// or running `conductor plugin update <name> --force`.
-	Hold bool `yaml:"hold,omitempty"`
-	// Isolation is the sandbox policy for this plugin's subprocess (#36 §15,
-	// the OPERATOR's grant of the plugin's declared capabilities). Grant egress
-	// by listing hosts under isolation.network.egress. With NO isolation block
-	// the plugin would run same-uid with a full filesystem view (able to read
-	// ~/.config/conductor, App keys, other on-disk secrets), so an external
-	// plugin without an isolation block is REFUSED unless AllowUnsandboxed is
-	// set (deny-by-default, §8.3).
-	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
-	// AllowUnsandboxed is the deliberate, insecure opt-in to run an EXTERNAL
-	// plugin with no isolation block (no OS confinement — same uid, full
-	// filesystem read). Never use for third-party plugins. Default false = a
-	// plugin without isolation refuses to launch.
-	AllowUnsandboxed bool `yaml:"allow_unsandboxed,omitempty"`
-	// AllowSecrets optionally tightens which secret refs the plugin's instances
-	// may hand across the process boundary — an EXACT-match allowlist (no
-	// globs), mirroring the skill broker. Empty = no extra restriction beyond
-	// the structural guarantee that a plugin only ever receives creds for
-	// instances of its own type.
-	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
+	// Name is the implementation name: the connector type it registers, or the
+	// runtime name agents select with `runtime:`. It is the `use:` reference's
+	// resolved leaf, not the config map key.
+	Name string
+	// Instance is the connectors:/runtimes: map key that referenced it. Several
+	// instances may share one plugin; the first in sorted order names it here.
+	Instance string
+	// Use is the parsed reference — where the implementation comes from.
+	Use Use
+	// Isolation is OPTIONAL hardening carried from the referencing entry. nil
+	// is the normal case: the default model is the permission manifest, not OS
+	// confinement.
+	Isolation *IsolationConfig
+	// Network is the referencing connector's declared egress. Empty for a
+	// runtime (a runtime executes your agents; its egress is not narrowed).
+	Network []string
+	// AllowSecrets optionally tightens which secret refs may cross to the
+	// plugin (exact names, no globs).
+	AllowSecrets []string
 }
 
-// PluginKind values.
+// PluginKind values, retained as the wire/CLI spelling of UseKind.
 const (
-	PluginKindConnector = "connector"
-	PluginKindRuntime   = "runtime"
+	PluginKindConnector = string(UseKindConnector)
+	PluginKindRuntime   = string(UseKindRuntime)
 )
 
-// ProvidesName is the connector type / runtime name this plugin registers,
-// defaulting to the map key.
-func (p PluginRef) ProvidesName(key string) string {
-	if p.Provides != "" {
-		return p.Provides
+// Kind is what this plugin provides, derived from the block it was referenced
+// from.
+func (p PluginRef) Kind() string { return string(p.Use.Kind) }
+
+// Key is the plugin's stable identity in install state: "<kind-dir>/<name>".
+func (p PluginRef) Key() string { return p.Use.InstallKey() }
+
+// IsRemote reports whether the plugin must be fetched from a forge (as opposed
+// to a local development binary).
+func (p PluginRef) IsRemote() bool { return p.Use.IsRemote() }
+
+// Source is the canonical source string for the trust allowlist — "" for a
+// local binary, which is not fetched.
+func (p PluginRef) Source() string { return p.Use.Source() }
+
+// Version is the `@…` constraint from the reference, if any.
+func (p PluginRef) Version() string { return p.Use.Version }
+
+// Ref is the `name@version` attribution carried on audit records and shown by
+// `plugin list`.
+func (p PluginRef) Ref() string {
+	if p.Use.Version == "" {
+		return p.Name
 	}
-	return key
+	return p.Name + "@" + p.Use.Version
 }
 
-// IsRemote reports whether Source names a remote release repo
-// (github.com/owner/repo[//component]) rather than a local executable path. A
-// remote plugin is fetched at `conductor init` (release-asset model, #59): its
-// sha comes from the resolved release, so it is exempt from the config-time
-// sha256 requirement below — verify-before-execute is still enforced against the
-// sha recorded in the lockfile once resolved.
-func (p PluginRef) IsRemote() bool {
-	s := strings.TrimSpace(p.Source)
-	s = strings.TrimPrefix(s, "https://")
-	s = strings.TrimPrefix(s, "http://")
-	return strings.HasPrefix(s, "github.com/")
+// PluginRefs derives the set of external plugins this config needs: every
+// connectors:/runtimes: entry whose `use:` did not resolve to a builtin, keyed
+// by "<kind-dir>/<name>" so a connector and a runtime of the same name never
+// collide. Entries whose `use:` does not parse are skipped — validateConnectors
+// reports those as config errors.
+//
+// Two instances may legitimately share one plugin (two Jira connectors, one
+// jira plugin). They are folded into a single entry; a second instance naming
+// the SAME name from a DIFFERENT source is reported by validatePluginRefs.
+func (c *Config) PluginRefs() map[string]PluginRef {
+	out := map[string]PluginRef{}
+
+	names := make([]string, 0, len(c.ConnectorsMap))
+	for n := range c.ConnectorsMap {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		ref := c.ConnectorsMap[name]
+		u, err := ref.Resolved()
+		if err != nil || u.IsBuiltin() {
+			continue
+		}
+		p, seen := out[u.InstallKey()]
+		if !seen {
+			p = PluginRef{Name: u.Name, Instance: name, Use: u}
+		}
+		// Hardening and declared egress union across instances: the plugin runs
+		// once, so it must be permitted whatever any of its instances declares.
+		if ref.Isolation != nil && p.Isolation == nil {
+			p.Isolation = ref.Isolation
+		}
+		p.Network = appendUnique(p.Network, ref.Network...)
+		p.AllowSecrets = appendUnique(p.AllowSecrets, ref.AllowSecrets...)
+		out[u.InstallKey()] = p
+	}
+
+	rnames := make([]string, 0, len(c.Runtimes))
+	for n := range c.Runtimes {
+		rnames = append(rnames, n)
+	}
+	sort.Strings(rnames)
+	for _, name := range rnames {
+		rt := c.Runtimes[name]
+		u, err := rt.Resolved()
+		if err != nil || u.IsBuiltin() {
+			continue
+		}
+		// A runtime's map key IS the runtime name agents select, so it wins over
+		// the reference leaf (`runtimes: { modal: { use: acme/p/conductor-modal } }`
+		// is selected as `runtime: modal`).
+		u.Name = name
+		p := PluginRef{Name: name, Instance: name, Use: u, Isolation: rt.Isolation}
+		out[u.InstallKey()] = p
+	}
+	return out
 }
 
-// bundledConnectorTypes and bundledRuntimeTypes name the always-present
-// in-binary plugins a plugins: entry must NOT collide with (external-overrides-
-// bundled is deliberately disallowed in this release — see §7 open Q4).
-var bundledRuntimeTypes = map[string]bool{
-	"paseo": true, "opencode": true, "agent-deck": true, "cli": true,
-}
+// validatePluginRefs checks the derived plugin set for the conflicts the
+// per-entry validation cannot see: two connectors claiming the same
+// implementation name from different sources would silently route one
+// instance's credentials to the other's binary.
+func (c *Config) validatePluginRefs() error {
+	bySource := map[string]string{} // "<kind>/<name>" -> source, first wins
+	byInstance := map[string]string{}
 
-// validatePlugins checks the `plugins:` block: names, kinds, sources, and the
-// sandbox grant. It does NOT touch the binary (no I/O, no exec) — that is the
-// plugin manager's job at build time (verify-before-execute).
-func (c *Config) validatePlugins() error {
-	for name, p := range c.Plugins {
-		where := "plugin " + name
-		if name == "" {
-			return fmt.Errorf("config: plugins: empty plugin name")
+	check := func(kind UseKind, instance, ref string) error {
+		u, err := ParseUse(kind, ref)
+		if err != nil || u.IsBuiltin() {
+			return nil
 		}
-		switch p.Kind {
-		case PluginKindConnector, PluginKindRuntime:
-		case "":
-			return fmt.Errorf("config: %s: missing kind (connector | runtime)", where)
-		default:
-			return fmt.Errorf("config: %s: unknown kind %q (connector | runtime)", where, p.Kind)
+		key := u.InstallKey()
+		src := u.Source()
+		if src == "" {
+			src = "local:" + u.Path
 		}
-		if strings.TrimSpace(p.Source) == "" {
-			return fmt.Errorf("config: %s: missing source (a local executable path)", where)
+		if prev, ok := bySource[key]; ok && prev != src {
+			return errConflict(kind, u.Name, byInstance[key], prev, instance, src)
 		}
-		if p.Sha256 == "" && !p.AllowUnverified && !p.IsRemote() {
-			return fmt.Errorf("config: %s: missing sha256 pin — set sha256: to the binary's SHA-256 (verify-before-execute), or allow_unverified: true to run it unpinned (insecure, dev only)", where)
-		}
-		if p.Sha256 != "" && !isHexSHA256(p.Sha256) {
-			return fmt.Errorf("config: %s: sha256 must be 64 hex characters", where)
-		}
-		provides := p.ProvidesName(name)
-		if provides == "" {
-			return fmt.Errorf("config: %s: empty provides", where)
-		}
-		// External-overrides-bundled is disallowed: a plugin may not claim a
-		// name a built-in already owns (safe default; opt-in override is a
-		// documented follow-up).
-		if p.Kind == PluginKindRuntime && bundledRuntimeTypes[provides] {
-			return fmt.Errorf("config: %s: runtime %q is a bundled runtime and cannot be replaced by a plugin", where, provides)
-		}
-		if p.Isolation != nil {
-			// A plugin subprocess is always conductor-launched, so the same
-			// isolation rules as a cli/acp runtime apply (never remote-only
-			// here; host: plugins are a follow-up).
-			if err := validateIsolation(where, p.Isolation, false); err != nil {
-				return err
-			}
-		}
-		for _, s := range p.AllowSecrets {
-			if strings.ContainsAny(s, "*?") {
-				return fmt.Errorf("config: %s: allow_secrets entries are exact names, no globs (%q)", where, s)
-			}
+		bySource[key], byInstance[key] = src, instance
+		return nil
+	}
+
+	names := make([]string, 0, len(c.ConnectorsMap))
+	for n := range c.ConnectorsMap {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if err := check(UseKindConnector, n, c.ConnectorsMap[n].Use); err != nil {
+			return err
 		}
 	}
-	// Reject a plugin providing a connector type that also collides with a
-	// bundled connector type — checked at build time against the live registry
-	// (validatePlugins has no registry handle); connector-name reservation for
-	// instances is enforced separately in validateConnectors.
+	rnames := make([]string, 0, len(c.Runtimes))
+	for n := range c.Runtimes {
+		rnames = append(rnames, n)
+	}
+	sort.Strings(rnames)
+	for _, n := range rnames {
+		if err := check(UseKindRuntime, n, c.Runtimes[n].Use); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func errConflict(kind UseKind, name, aInst, aSrc, bInst, bSrc string) error {
+	return &conflictError{kind: kind, name: name, aInst: aInst, aSrc: aSrc, bInst: bInst, bSrc: bSrc}
+}
+
+type conflictError struct {
+	kind                     UseKind
+	name                     string
+	aInst, aSrc, bInst, bSrc string
+	_                        struct{}
+}
+
+func (e *conflictError) Error() string {
+	return "config: " + e.kind.Block() + ": " + e.aInst + " and " + e.bInst +
+		" both resolve to the " + string(e.kind) + " " + e.name +
+		", but from different sources (" + e.aSrc + " vs " + e.bSrc +
+		") — two implementations cannot share a name; rename one, or point both at the same source"
+}
+
+func appendUnique(dst []string, add ...string) []string {
+	for _, a := range add {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		dup := false
+		for _, d := range dst {
+			if d == a {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			dst = append(dst, a)
+		}
+	}
+	return dst
 }
 
 // isHexSHA256 reports whether s is exactly 64 lowercase/uppercase hex digits.

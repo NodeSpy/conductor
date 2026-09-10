@@ -25,9 +25,9 @@ func writeTree(t *testing.T, files map[string]string) string {
 
 const splitMonolith = `
 connectors:
-  box: { type: command }
+  box: { use: command }
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 hosts:
   build-box: { host: build01.internal, user: ci }
@@ -56,7 +56,7 @@ func TestSectionImportsMatchMonolith(t *testing.T) {
 		"config.yaml": `
 connectors:
   imports: [conf.d/connectors/*.yaml]
-  box: { type: command }
+  box: { use: command }
 hosts:
   imports: [conf.d/hosts.yaml]
 agents:
@@ -73,7 +73,7 @@ triggers:
 		// Bare-entry form.
 		"conf.d/connectors/cron.yaml": `
 timer:
-  type: cron
+  use: cron
   schedules: { tick: { every: 1h } }
 `,
 		// Section-wrapped form.
@@ -109,7 +109,7 @@ workflows:
 		t.Fatalf("monolith load: %v", err)
 	}
 
-	if len(split.ConnectorsMap) != len(mono.ConnectorsMap) || split.ConnectorsMap["timer"].Type != "cron" {
+	if len(split.ConnectorsMap) != len(mono.ConnectorsMap) || split.ConnectorsMap["timer"].TypeName() != "cron" {
 		t.Errorf("connectors differ: split=%v", split.ConnectorsMap)
 	}
 	if split.Hosts["build-box"].Host != mono.Hosts["build-box"].Host {
@@ -153,7 +153,7 @@ connectors:
 		"config.yaml": `
 connectors:
   imports: [conf.d/a.yaml]
-  box: { type: command }
+  box: { use: command }
 `,
 		"conf.d/a.yaml": "box: { type: command }\n",
 	})
@@ -171,7 +171,7 @@ func TestSectionImportEmptyGlobIsNoop(t *testing.T) {
 		"config.yaml": `
 connectors:
   imports: [conf.d/connectors/*.yaml]
-  box: { type: command }
+  box: { use: command }
 triggers:
   - imports: [conf.d/triggers/*.yaml]
 `,
@@ -199,9 +199,9 @@ func TestUseImportFile(t *testing.T) {
 	dir := writeTree(t, map[string]string{
 		"config.yaml": `
 connectors:
-  box: { type: command }
+  box: { use: command }
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 triggers:
   - on: timer.tick
@@ -231,7 +231,7 @@ workflows:
 	dir2 := writeTree(t, map[string]string{
 		"config.yaml": `
 connectors:
-  timer: { type: cron, schedules: { tick: { every: 1h } } }
+  timer: { use: cron, schedules: { tick: { every: 1h } } }
 triggers:
   - on: timer.tick
     steps: [ { id: call, workflow: nope, import: ./workflows/review.yaml } ]
@@ -250,9 +250,9 @@ func TestUseBareFilePath(t *testing.T) {
 	dir := writeTree(t, map[string]string{
 		"config.yaml": `
 connectors:
-  box: { type: command }
+  box: { use: command }
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 triggers:
   - on: timer.tick
@@ -281,7 +281,7 @@ review-flow:
 	dir2 := writeTree(t, map[string]string{
 		"config.yaml": `
 connectors:
-  timer: { type: cron, schedules: { tick: { every: 1h } } }
+  timer: { use: cron, schedules: { tick: { every: 1h } } }
 triggers:
   - on: timer.tick
     steps: [ { id: call, workflow: ./workflows/two.yaml } ]
@@ -302,7 +302,7 @@ func TestStepImportWithoutUseErrors(t *testing.T) {
 	dir := writeTree(t, map[string]string{
 		"config.yaml": `
 connectors:
-  timer: { type: cron, schedules: { tick: { every: 1h } } }
+  timer: { use: cron, schedules: { tick: { every: 1h } } }
 triggers:
   - on: timer.tick
     steps: [ { id: call, import: ./workflows/review.yaml } ]
@@ -320,7 +320,7 @@ func TestEntryBodyImport(t *testing.T) {
 	dir := writeTree(t, map[string]string{
 		"config.yaml": `
 connectors:
-  box: { type: command }
+  box: { use: command }
   timer: { import: ./conf.d/timer.yaml }
 workflows:
   assess-and-post: { import: ./workflows/assess.yaml }
@@ -331,7 +331,7 @@ triggers:
 `,
 		// The body directly (canonical).
 		"conf.d/timer.yaml": `
-type: cron
+use: cron
 schedules: { tick: { every: 1h } }
 `,
 		// The name-wrapped form also reads.
@@ -344,7 +344,7 @@ assess-and-post:
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.ConnectorsMap["timer"].Type != "cron" {
+	if cfg.ConnectorsMap["timer"].TypeName() != "cron" {
 		t.Fatalf("entry-body connector import lost: %+v", cfg.ConnectorsMap["timer"])
 	}
 	wf, ok := cfg.Workflows["assess-and-post"]
@@ -361,8 +361,8 @@ assess-and-post:
 func TestSectionImportNestedImportsRejected(t *testing.T) {
 	dir := writeTree(t, map[string]string{
 		"config.yaml":   "connectors:\n  imports: [conf.d/a.yaml]\n",
-		"conf.d/a.yaml": "imports: [b.yaml]\nbox: { type: command }\n",
-		"conf.d/b.yaml": "timer: { type: cron, schedules: { t: { every: 1h } } }\n",
+		"conf.d/a.yaml": "imports: [b.yaml]\nbox: { use: command }\n",
+		"conf.d/b.yaml": "timer: { use: cron, schedules: { t: { every: 1h } } }\n",
 	})
 	_, err := Load(filepath.Join(dir, "config.yaml"))
 	if err == nil || !strings.Contains(err.Error(), "nested imports are not supported") {
@@ -376,7 +376,7 @@ func TestTriggerSingularImportRejected(t *testing.T) {
 	dir := writeTree(t, map[string]string{
 		"config.yaml": `
 connectors:
-  box: { type: command }
+  box: { use: command }
 triggers:
   - import: conf.d/triggers/*.yaml
 `,
@@ -394,9 +394,9 @@ func TestWorkflowMutualImportNoStackOverflow(t *testing.T) {
 	dir := writeTree(t, map[string]string{
 		"config.yaml": `
 connectors:
-  box: { type: command }
+  box: { use: command }
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 triggers:
   - on: timer.tick
@@ -431,9 +431,9 @@ func TestWorkflowSelfImportNoStackOverflow(t *testing.T) {
 	dir := writeTree(t, map[string]string{
 		"config.yaml": `
 connectors:
-  box: { type: command }
+  box: { use: command }
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 triggers:
   - on: timer.tick
@@ -476,7 +476,7 @@ func TestTopLevelImportDoubleStarGlobRejected(t *testing.T) {
 imports: ["conf.d/**/*.yaml"]
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 triggers: []
 `,

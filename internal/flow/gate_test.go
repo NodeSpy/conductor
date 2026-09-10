@@ -17,7 +17,7 @@ import (
 // connector's canned outputs) and a js critic-scope check.
 const gateCfg = `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   fixer:  { model: m }
   critic: { model: m }
@@ -348,7 +348,7 @@ steps:
 func TestGateNeedsWorkdirForCommandChecks(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   fixer: { model: m }
 checks:
@@ -474,7 +474,7 @@ policy:
 func TestInheritedDefaultGateGovernsPlanSubAgents(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 agents:
   fixer:   { model: m }

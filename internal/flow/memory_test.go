@@ -27,7 +27,7 @@ func tempMemory(t *testing.T) *memory.Manager {
 
 const memBase = `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 `
 
@@ -120,7 +120,7 @@ triggers:
 	if err := valid(memBase, ok); err != nil {
 		t.Fatalf("memory verbs must validate with a memory: section: %v", err)
 	}
-	noMem := "\nconnectors:\n  svc: { type: fake }\n"
+	noMem := "\nconnectors:\n  svc: { use: fake }\n"
 	if err := valid(noMem, ok); err == nil || !strings.Contains(err.Error(), "memory: section") {
 		t.Fatalf("memory verbs without memory: must fail load: %v", err)
 	}

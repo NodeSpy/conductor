@@ -377,6 +377,61 @@ func checkUseName(name string) error {
 	return nil
 }
 
+// validateUseRef checks one `use:` field. legacyType carries a pre-`use:`
+// `type:` value when the entry still has one, purely so a stale config gets a
+// migration-specific error instead of an opaque "missing use:".
+func validateUseRef(where, use, legacyType string, kind UseKind) error {
+	u := strings.TrimSpace(use)
+	if u == "" {
+		if legacyType != "" {
+			return fmt.Errorf("config: %s: `type: %s` was replaced by `use: %s` — the daemon migrates automatically at boot, or run `conductor config migrate`", where, legacyType, legacyType)
+		}
+		return fmt.Errorf("config: %s: missing use: — name what implements it (a builtin such as %s, a plugin name, or owner/repo/component)", where, strings.Join(firstN(BuiltinNames(kind), 3), " / "))
+	}
+	if legacyType != "" && legacyType != u {
+		return fmt.Errorf("config: %s: both `use: %s` and the retired `type: %s` are set — delete the type: line", where, u, legacyType)
+	}
+	if _, err := ParseUse(kind, u); err != nil {
+		return fmt.Errorf("config: %s: %w", where, err)
+	}
+	return nil
+}
+
+// validateEgressTarget checks one "host[:port]" (glob allowed in the host)
+// declared-egress entry. It is deliberately shape-only — resolution and
+// enforcement belong to the proxy, not the loader.
+func validateEgressTarget(where, target string) error {
+	t := strings.TrimSpace(target)
+	if t == "" {
+		return fmt.Errorf("config: %s: empty entry", where)
+	}
+	if strings.Contains(t, "://") || strings.Contains(t, "/") {
+		return fmt.Errorf("config: %s: %q is a URL — declare a host or host:port target", where, target)
+	}
+	host, port, hasPort := strings.Cut(t, ":")
+	if host == "" {
+		return fmt.Errorf("config: %s: %q has no host", where, target)
+	}
+	if hasPort {
+		if port == "" {
+			return fmt.Errorf("config: %s: %q has an empty port", where, target)
+		}
+		for _, r := range port {
+			if r < '0' || r > '9' {
+				return fmt.Errorf("config: %s: %q has a non-numeric port", where, target)
+			}
+		}
+	}
+	return nil
+}
+
+func firstN(s []string, n int) []string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
 func otherKind(k UseKind) UseKind {
 	if k == UseKindConnector {
 		return UseKindRuntime

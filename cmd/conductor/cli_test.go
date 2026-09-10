@@ -43,14 +43,14 @@ vaults:
   badvault:  { type: file, dir: /nonexistent/pc-cli-vault }
 connectors:
   box:
-    type: command
+    use: command
     env: { CI: "1" }
   timer:
-    type: cron
+    use: cron
     enabled: false
     schedules: { tick: { every: 1h } }
   broken:
-    type: slack
+    use: slack
     app_token: env:PC_CLI_NOPE_APP
     bot_token: env:PC_CLI_NOPE_BOT
 triggers:
@@ -92,7 +92,7 @@ func TestCmdSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("schema box: %v", err)
 	}
-	for _, want := range []string{"connector box (type command)", "verb run", "stdout", "exit_code"} {
+	for _, want := range []string{"connector box (use command, type command)", "verb run", "stdout", "exit_code"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("schema output missing %q:\n%s", want, out)
 		}
@@ -134,7 +134,7 @@ func TestCmdSecretsCheck(t *testing.T) {
 	// All-green config → nil error and the closing line.
 	goodDir := t.TempDir()
 	good := filepath.Join(goodDir, "config.yaml")
-	os.WriteFile(good, []byte("connectors:\n  box: { type: command }\n"), 0o600)
+	os.WriteFile(good, []byte("connectors:\n  box: { use: command }\n"), 0o600)
 	out, err = captureStdout(t, func() error { return cmdSecrets([]string{"--config", good, "check"}) })
 	if err != nil || !strings.Contains(out, "all secret references resolve") {
 		t.Errorf("green path: err=%v out:\n%s", err, out)
@@ -167,14 +167,14 @@ func TestCmdReplayConnectorsModel(t *testing.T) {
 	cfgDoc := `
 connectors:
   gh:
-    type: github
+    use: github
     token: dummy-replay-token
     me: { logins: [danielcbaldwin] }
     repos: ["AcmeCorp/Widget"]
     webhook: { listen: "127.0.0.1:0", secret: replay-test }
     sweep: { enabled: false }
   box:
-    type: command
+    use: command
 triggers:
   - on: gh.review_requested
     steps:

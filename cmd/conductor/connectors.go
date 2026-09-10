@@ -404,9 +404,9 @@ func cmdSchema(args []string) error {
 		}
 		return fmt.Errorf("no connector %q configured (and no such type); types: %s", name, strings.Join(connector.Types(), ", "))
 	}
-	decl, ok := connector.TypeDeclFor(ref.Type)
+	decl, ok := connector.TypeDeclFor(ref.TypeName())
 	if !ok {
-		return fmt.Errorf("connector %q has unknown type %q", name, ref.Type)
+		return fmt.Errorf("connector %q has unknown type %q", name, ref.TypeName())
 	}
 	var dyn []string
 	if stack, err := buildFlowStack(cfg, nil, nil, true); err == nil {
@@ -420,7 +420,7 @@ func cmdSchema(args []string) error {
 			}
 		}
 	}
-	fmt.Printf("connector %s (type %s)\n", name, ref.Type)
+	fmt.Printf("connector %s (use %s, type %s)\n", name, ref.Use, ref.TypeName())
 	printTypeDecl(decl, dyn)
 	return nil
 }

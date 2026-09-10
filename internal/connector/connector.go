@@ -370,9 +370,9 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 	sort.Strings(names)
 	for _, name := range names {
 		ref := cfg.ConnectorsMap[name]
-		decl, ok := TypeDeclFor(ref.Type)
+		decl, ok := TypeDeclFor(ref.TypeName())
 		if !ok {
-			return nil, fmt.Errorf("connector %q: unknown type %q (known: %s)", name, ref.Type, strings.Join(Types(), ", "))
+			return nil, fmt.Errorf("connector %q: unknown type %q (known: %s)", name, ref.TypeName(), strings.Join(Types(), ", "))
 		}
 		in := &Instance{
 			Name:           name,
@@ -384,7 +384,7 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 		if p := effectiveRateLimit(cfg.Policy, ref.Policy); p > 0 {
 			in.limiter = newRateLimiter(p)
 		}
-		impl, err := buildReg[ref.Type](name, ref, deps)
+		impl, err := buildReg[ref.TypeName()](name, ref, deps)
 		if err != nil {
 			// Runtime construction failure (an unresolvable secret, unreadable
 			// key file): disable the connector and keep booting.

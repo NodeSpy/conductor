@@ -16,7 +16,7 @@ import (
 
 const budgetCfg = `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   fixer: { model: claude-sonnet }
 `

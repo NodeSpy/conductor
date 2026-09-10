@@ -40,7 +40,7 @@ func buildTickerPlugin(t *testing.T) (string, string) {
 // plugin protocol end-to-end (the missing StartSource interface, #59).
 func TestSourcePluginStreamsEvents(t *testing.T) {
 	bin, sum := buildTickerPlugin(t)
-	spec := Spec{Name: "ticker", Kind: KindConnector, Provides: "acme-ticker", BinPath: bin, Sha256: sum, AllowUnsandboxed: true}
+	spec := Spec{Name: "ticker", Kind: KindConnector, Provides: "acme-ticker", BinPath: bin, Sha256: sum}
 	c := NewClient(spec, Deps{})
 	defer c.Close()
 

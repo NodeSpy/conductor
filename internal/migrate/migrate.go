@@ -119,6 +119,14 @@ func Transform(raw []byte) (*Result, error) {
 		} else if changed {
 			cur, anyChanged = out, true
 		}
+		// The use: pass runs LAST: it consumes the connectors:/runtimes: blocks
+		// the passes above may have produced, and folds plugins:/type:/source:/
+		// kind: into the single use: field.
+		if out, changed, err := applyUsePass(cur, &notes); err != nil {
+			return nil, fmt.Errorf("use migration: %w", err)
+		} else if changed {
+			cur, anyChanged = out, true
+		}
 		if !anyChanged {
 			return &Result{Changed: false}, nil
 		}
@@ -216,7 +224,7 @@ func Transform(raw []byte) (*Result, error) {
 	runtimes := map[string]config.RuntimeConfig{}
 	for cname, cc := range cfg.Controllers {
 		runtimes[cname] = config.RuntimeConfig{
-			Type: cc.Type, Agent: cc.Agent, Transport: cc.Transport,
+			Use: runtimeUse(cc.Type, cc.Agent), Agent: cc.Agent, Transport: cc.Transport,
 			SessionModel: cc.SessionModel, Default: cc.Default,
 			Tool: cc.Tool, Command: cc.Command,
 			// Bin and Host are load-bearing (.Controller() carries them): a
@@ -229,7 +237,7 @@ func Transform(raw []byte) (*Result, error) {
 		if patched := patchPaseoBin(runtimes, cfg.PaseoBin); patched != "" {
 			notes = append(notes, fmt.Sprintf("paseo_bin → runtimes.%s.bin", patched))
 		} else {
-			runtimes["paseo"] = config.RuntimeConfig{Type: "paseo", Bin: cfg.PaseoBin}
+			runtimes["paseo"] = config.RuntimeConfig{Use: "paseo", Bin: cfg.PaseoBin}
 			notes = append(notes, "paseo_bin → runtimes.paseo.bin")
 		}
 	}
@@ -302,6 +310,14 @@ func Transform(raw []byte) (*Result, error) {
 		return nil, fmt.Errorf("vaults migration: %w", verr)
 	} else if vchanged {
 		b = vout
+	}
+	// Same for the use: pass — the legacy transform emits connectors:/runtimes:
+	// entries in the pre-`use:` shape, so it folds them the same way it folds a
+	// hand-written connectors-schema file.
+	if uout, uchanged, uerr := applyUsePass(b, &notes); uerr != nil {
+		return nil, fmt.Errorf("use migration: %w", uerr)
+	} else if uchanged {
+		b = uout
 	}
 	// The transform must produce a document the STRICT runtime loader accepts
 	// (belt and braces before the caller's full validation) — any key it
@@ -551,11 +567,25 @@ func controlPolicy(c config.Control) map[string]any {
 	return p
 }
 
+// runtimeUse maps a legacy controller's type:/agent: pair onto the single `use:`
+// field. A controller naming an `agent:` is driven over ACP, which is now spelt
+// `use: acp` with the agent alongside it. A controller naming neither (the
+// implicit default) becomes the paseo runtime it always was.
+func runtimeUse(ccType, ccAgent string) string {
+	if ccType != "" {
+		return ccType
+	}
+	if ccAgent != "" {
+		return "acp"
+	}
+	return "paseo"
+}
+
 // patchPaseoBin sets bin on an existing paseo-type runtime; returns its name
 // or "".
 func patchPaseoBin(runtimes map[string]config.RuntimeConfig, bin string) string {
 	for name, rt := range runtimes {
-		if rt.Type == "paseo" {
+		if rt.Use == "paseo" {
 			rt.Bin = bin
 			runtimes[name] = rt
 			return name

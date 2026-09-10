@@ -3,6 +3,7 @@ package plugin
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -34,9 +35,15 @@ type stubAPI struct {
 	bin       []byte
 	assetName string
 	badSum    bool // publish a wrong checksum to force a mismatch
+	tagsErr   bool // fail the tag listing, to exercise the degraded path
 }
 
-func (s stubAPI) ListTags(string) ([]string, error) { return s.tags, nil }
+func (s stubAPI) ListTags(string) ([]string, error) {
+	if s.tagsErr {
+		return nil, errors.New("network unreachable")
+	}
+	return s.tags, nil
+}
 func (s stubAPI) Download(_, _, asset, destDir string) (string, error) {
 	p := filepath.Join(destDir, asset)
 	if asset == "checksums.txt" {

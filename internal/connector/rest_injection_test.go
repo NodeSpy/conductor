@@ -33,7 +33,7 @@ func injectionREST(t *testing.T, verbs string) (*Registry, chan injReq) {
 	return buildAPIRegistry(t, `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: `+srv.URL+`
     verbs:
 `+verbs, secrets.New()), reqCh

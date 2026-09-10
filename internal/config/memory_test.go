@@ -77,7 +77,7 @@ func TestMemorySelectorUnmarshal(t *testing.T) {
 
 func TestMemoryConnectorNameReserved(t *testing.T) {
 	var cfg Config
-	y := "connectors:\n  memory: { type: command }\ntriggers:\n  - { on: manual, steps: [ { run: js, code: \"1\" } ] }\n"
+	y := "connectors:\n  memory: { use: command }\ntriggers:\n  - { on: manual, steps: [ { run: js, code: \"1\" } ] }\n"
 	if err := yaml.Unmarshal([]byte(y), &cfg); err != nil {
 		t.Fatal(err)
 	}

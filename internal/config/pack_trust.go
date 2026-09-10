@@ -45,6 +45,34 @@ func (t *PackTrustConfig) SourceAllowed(source string) bool {
 	return false
 }
 
+// PluginSourceAllowed reports whether a PLUGIN source is permitted. It differs
+// from SourceAllowed in one way, and deliberately: the OFFICIAL plugin repo is
+// in the DEFAULT allowlist, and everything else remote is not.
+//
+// A plugin is a binary conductor executes, so "no policy configured" must not
+// mean "any repo on the internet is fine" — but requiring ceremony to install an
+// official plugin would defeat the whole app-extension model. So: official is
+// always allowed, a third-party repo needs an explicit `plugin_trust.allow`
+// entry (or `--allow-unlisted`), and a local path is the operator's own disk.
+func (t *PackTrustConfig) PluginSourceAllowed(source string) bool {
+	s := strings.TrimSpace(source)
+	if s == "" {
+		return true // local binary: the operator's own disk
+	}
+	if s == OfficialSource || strings.HasPrefix(s, OfficialSource+"/") {
+		return true
+	}
+	if t == nil {
+		return false
+	}
+	for _, pat := range t.Allow {
+		if globMatch(strings.TrimSpace(pat), s) {
+			return true
+		}
+	}
+	return false
+}
+
 // globMatch reports whether s matches pattern, where `*` matches any run of
 // characters (including `/`). Anchored at both ends.
 func globMatch(pattern, s string) bool {

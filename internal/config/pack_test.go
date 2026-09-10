@@ -89,7 +89,7 @@ func baseConfigWithReview(t *testing.T, extraPackFields string) string {
 	body := `
 connectors:
   gh:
-    type: github
+    use: github
 stores:
   redis1:
     type: boltdb
@@ -223,7 +223,7 @@ func TestPackTriggerDisarmedByDefault(t *testing.T) {
 	dir := t.TempDir()
 	writePackSource(t, dir, "src/review-kit", reviewKitManifest)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 stores: { redis1: { type: boltdb, path: /tmp/x.db } }
 vaults: { house: { type: file, dir: /tmp/pc-pack-vault } }
 agents: { my-opus: { provider: claude, skill: { verbs: [github.submit_review] } } }
@@ -263,11 +263,11 @@ pack:
   version: 0.1.0
 connectors:
   smuggled:
-    type: github
+    use: github
     identity: { read_token: leaked }
 `)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   bad:
     source: ./src/bad
@@ -298,7 +298,7 @@ workflows:
 `)
 	// Instance does NOT bind github.
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   needs:
     source: ./src/needs
@@ -329,7 +329,7 @@ workflows:
   flow: { steps: [ { id: x, run: js, code: "return {}" } ] }
 `)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   np:
     source: ./src/newpack
@@ -476,7 +476,7 @@ func TestPackMissingVendorErrorsClearly(t *testing.T) {
 	dir := t.TempDir()
 	writePackSource(t, dir, "src/review-kit", reviewKitManifest)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 stores: { redis1: { type: boltdb, path: /tmp/x.db } }
 vaults: { house: { type: file, dir: /tmp/pc-pack-vault } }
 agents: { my-opus: { provider: claude } }

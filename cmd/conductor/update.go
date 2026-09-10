@@ -198,18 +198,24 @@ func refreshDeps(cfgFile string) (changed bool) {
 		logf("auto-update: pack refresh failed (keeping current): %v", err)
 		return false
 	}
-	plugins, trust, err := config.LoadPluginsBlock(cfgFile)
+	// Plugins stay current on the same cycle. Their install state is LOCAL, so
+	// (unlike packs) nothing about this lands in the repo: the reconcile logs
+	// each install/update with the sha it moved from, and a plugin whose fetch
+	// fails keeps running the build already installed rather than failing the
+	// refresh.
+	cfg, err := config.Load(cfgFile)
 	if err != nil {
-		logf("auto-update: plugin block read failed (keeping current): %v", err)
+		logf("auto-update: config load failed (keeping current): %v", err)
 		return false
 	}
-	if _, err := plugin.ResolvePlugins(dir, plugins, trust, false, plugin.GHReleaseAPI{}); err != nil {
+	pluginsMoved, err := refreshPlugins(cfg)
+	if err != nil {
 		logf("auto-update: plugin refresh failed (keeping current): %v", err)
 		return false
 	}
 
 	after, _ := config.ReadLockfile(dir)
-	if !logDepChanges(before, after) {
+	if !logDepChanges(before, after) && !pluginsMoved {
 		return false // nothing moved
 	}
 	// A dependency moved — only apply if the new graph still loads.
@@ -240,19 +246,29 @@ func logDepChanges(before, after *config.Lockfile) bool {
 			moved = true
 		}
 	}
-	oldPlug := map[string]string{}
-	if before != nil {
-		for _, e := range before.Plugins {
-			oldPlug[e.Name] = e.Sha256
-		}
+	return moved
+}
+
+// refreshPlugins re-resolves every referenced plugin that is not pinned to an
+// exact version — the stay-current half of the auto-update cycle. It reports
+// whether any plugin actually moved. A per-plugin fetch failure is NOT an
+// error: Reconcile keeps the installed build and records the failure, so one
+// unreachable plugin never blocks the update or the daemon.
+func refreshPlugins(cfg *config.Config) (bool, error) {
+	results, err := reconcilePlugins(cfg, plugin.Options{Log: logf})
+	if err != nil {
+		return false, err
 	}
-	for _, e := range after.Plugins {
-		if prev, ok := oldPlug[e.Name]; !ok || prev != e.Sha256 {
-			logf("auto-update: plugin %s -> %s (%s)", e.Name, e.Resolved, shortSha(e.Sha256))
+	moved := false
+	for _, r := range results {
+		if r.Changed() {
 			moved = true
 		}
+		if r.Action == plugin.ActionFailed {
+			logf("auto-update: plugin %s: %v", r.Name, r.Err)
+		}
 	}
-	return moved
+	return moved, nil
 }
 
 // installRelease and applyRelease are the install/restart seams —

@@ -50,7 +50,7 @@ func TestRPCBackendRoundTripsListAgentsAndArchive(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "calls.log")
 
 	spec := plugin.Spec{Name: "rt1", Kind: plugin.KindConnector, Provides: "acme-runtime",
-		BinPath: pluginBin, AllowUnverified: true, AllowUnsandboxed: true}
+		BinPath: pluginBin, Local: true}
 	client := plugin.NewClient(spec, plugin.Deps{})
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -113,7 +113,7 @@ func TestRPCBackendRetriesOverRealSubprocess(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "calls.log")
 
 	spec := plugin.Spec{Name: "rt2", Kind: plugin.KindConnector, Provides: "acme-runtime",
-		BinPath: pluginBin, AllowUnverified: true, AllowUnsandboxed: true}
+		BinPath: pluginBin, Local: true}
 	client := plugin.NewClient(spec, plugin.Deps{})
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

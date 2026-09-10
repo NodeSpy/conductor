@@ -6,7 +6,7 @@
 
 connectors:
   gh:
-    type: github
+    use: github
     app:
       app_id: 123456
       private_key_path: /etc/conductor/github-app.pem
@@ -22,7 +22,7 @@ connectors:
       write_token: e2e-user-write-token # literal token; no gh binary in the image
 
   slack:
-    type: slack
+    use: slack
     # Verbs only (no slack triggers), so no Socket Mode connection is opened;
     # bot_token is all the verb face needs. The API base comes from
     # PC_SLACK_API_URL (the sink-catcher's slack-shaped endpoint).
@@ -32,7 +32,7 @@ connectors:
   # K7: an ask-capable web connector — its draft pages serve on :8095 inside
   # this container; the harness drives approve/revise/discard over HTTP.
   page:
-    type: web
+    use: web
     base_url: "http://localhost:8095"
     listen: ":8095"
     ttl: 5m
@@ -51,10 +51,10 @@ hosts:
       PC_GITHUB_API_BASE: "http://mock-github:8080"
 
 runtimes:
-  paseo: { type: paseo, bin: /usr/local/bin/fakepaseo, default: true }
+  paseo: { use: paseo, bin: /usr/local/bin/fakepaseo, default: true }
   # K6: a paseo runtime on an SSH host — every paseo CLI call (run/ls/send/
   # archive/clone/workspace) executes on selfbox over ssh.
-  gpu: { type: paseo, bin: /usr/local/bin/fakepaseo, host: selfbox }
+  gpu: { use: paseo, bin: /usr/local/bin/fakepaseo, host: selfbox }
 
 agents:
   fixer:

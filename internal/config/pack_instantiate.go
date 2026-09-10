@@ -747,7 +747,7 @@ func (st *packInstantiation) sourceIsRepoScoped(on string) bool {
 		return false
 	}
 	ref, ok := st.cfg.ConnectorsMap[conn]
-	return ok && ref.Type == "github"
+	return ok && ref.TypeName() == "github"
 }
 
 func hasTrigger(trs []TriggerSpec, name string) bool {

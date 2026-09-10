@@ -101,8 +101,8 @@ func TestGithubTransformShape(t *testing.T) {
 	if len(out.ConnectorsMap) != 1 {
 		t.Fatalf("connectors: %d, want 1", len(out.ConnectorsMap))
 	}
-	if out.ConnectorsMap["gh"].Type != "github" {
-		t.Fatalf("gh connector type: %q", out.ConnectorsMap["gh"].Type)
+	if out.ConnectorsMap["gh"].TypeName() != "github" {
+		t.Fatalf("gh connector type: %q", out.ConnectorsMap["gh"].TypeName())
 	}
 	// rule1: merge_conflict + new_comment + review_requested×2 + failing_checks = 5
 	// rule2: merge_conflict = 1
@@ -471,9 +471,9 @@ func TestKitchenSinkTransform(t *testing.T) {
 		!strings.Contains(joined, "pagerduty[oncall]: NOT migrated") {
 		t.Errorf("extracted integrations must be noted as skipped:\n%s", joined)
 	}
-	if out.ConnectorsMap["review"].Type != "slack" || out.ConnectorsMap["page"].Type != "web" {
+	if out.ConnectorsMap["review"].TypeName() != "slack" || out.ConnectorsMap["page"].TypeName() != "web" {
 		t.Errorf("handoff connector types: review=%s page=%s",
-			out.ConnectorsMap["review"].Type, out.ConnectorsMap["page"].Type)
+			out.ConnectorsMap["review"].TypeName(), out.ConnectorsMap["page"].TypeName())
 	}
 	// Handoff target rides as default options.
 	if to := out.ConnectorsMap["review"].Options["to"]; to != "dm" {
@@ -543,7 +543,7 @@ func TestKitchenSinkTransform(t *testing.T) {
 	if fmt.Sprint(notifyTriggers) != "[conductor.escalate conductor.failed]" {
 		t.Fatalf("notify triggers: %v", notifyTriggers)
 	}
-	if out.ConnectorsMap["notify-slack"].Type != "slack" {
+	if out.ConnectorsMap["notify-slack"].TypeName() != "slack" {
 		t.Errorf("notify-slack connector missing: %v", out.ConnectorsMap["notify-slack"])
 	}
 	if _, ok := out.Agents["fixer"]; !ok {
@@ -633,7 +633,7 @@ integrations:
 		},
 		{
 			"mixed schema",
-			"integrations:\n  - {type: cron, name: c, schedules: [{name: s, cron: '* * * * *', action: {type: command, command: [x]}}]}\nconnectors:\n  x: {type: slack}\n",
+			"integrations:\n  - {type: cron, name: c, schedules: [{name: s, cron: '* * * * *', action: {type: command, command: [x]}}]}\nconnectors:\n  x: {use: slack}\n",
 			"finish the migration by hand",
 		},
 		{
@@ -674,12 +674,33 @@ integrations:
 }
 
 func TestNoLegacyMeansNoChange(t *testing.T) {
-	res, err := Transform([]byte("connectors:\n  gh: {type: github}\ntriggers:\n  - on: gh.release\n    steps: [{type: command, command: [x]}]\n"))
+	// An ALREADY-migrated file (connectors schema, `use:` surface) changes
+	// nothing — migration is idempotent, which is what makes it safe to run on
+	// every boot.
+	res, err := Transform([]byte("connectors:\n  gh: {use: github}\ntriggers:\n  - on: gh.release\n    steps: [{type: command, command: [x]}]\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Changed {
-		t.Fatal("connectors-only config must be a no-op")
+		t.Fatal("an already-migrated config must be a no-op")
+	}
+}
+
+// A connectors-schema file still on `type:` is NOT a no-op: the use: pass folds
+// it, which is how a deployed box crosses this schema change without an edit.
+func TestConnectorsSchemaTypeIsMigrated(t *testing.T) {
+	res, err := Transform([]byte("connectors:\n  gh: {type: github}\nruntimes:\n  r: {type: paseo}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Changed {
+		t.Fatal("a config still on type: must migrate")
+	}
+	if !strings.Contains(string(res.Output), "use: github") || strings.Contains(string(res.Output), "type: github") {
+		t.Fatalf("type: not folded onto use::\n%s", res.Output)
+	}
+	if !strings.Contains(string(res.Output), "use: paseo") {
+		t.Fatalf("runtime type: not folded:\n%s", res.Output)
 	}
 }
 

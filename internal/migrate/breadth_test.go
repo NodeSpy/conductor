@@ -118,7 +118,7 @@ agents:
   fixer: { provider: claude }
 `)
 	ref, ok := out.ConnectorsMap["disc"]
-	if !ok || ref.Type != "discord" {
+	if !ok || ref.TypeName() != "discord" {
 		t.Fatalf("discord handoff should become a discord connector, got %+v", out.ConnectorsMap)
 	}
 	// The hand-off target maps onto the connector's default options, which

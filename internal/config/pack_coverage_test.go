@@ -61,7 +61,7 @@ triggers:
     steps: [ { id: s, run: js, code: "return {}" } ]
 `)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   dep:
     source: ./src/dep
@@ -106,7 +106,7 @@ triggers:
 		dir := t.TempDir()
 		writePackSource(t, dir, "src", manifest)
 		body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   p:
     source: ./src
@@ -245,7 +245,7 @@ workflows:
         code: "return { s: '{{ vault \"house\" \"k\" }}' }"
 `)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 vaults: { house: { type: file, dir: /tmp/pc-reflint } }
 stores: { redis1: { type: boltdb, path: /tmp/pc-reflint.db } }
 packs:

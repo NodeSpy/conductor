@@ -10,7 +10,7 @@ import (
 // consumerBody wraps a packs: block in a minimal valid consumer config.
 func writeConsumer(t *testing.T, dir, packsBlock string) string {
 	t.Helper()
-	body := "connectors: { gh: { type: github } }\n" + packsBlock
+	body := "connectors: { gh: { use: github } }\n" + packsBlock
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -175,7 +175,7 @@ workflows:
         agent: deploy-bot     # a consumer global; NOT a pack agent, NOT a bound role
 `)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 agents:
   deploy-bot: { provider: claude }
 packs:
@@ -300,7 +300,7 @@ workflows:
   flow: { steps: [ { id: s, run: js, code: "return {}" } ] }
 `)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 pack_trust:
   allow: [github.com/trusted/*]
 packs:

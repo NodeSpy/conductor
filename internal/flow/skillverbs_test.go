@@ -10,7 +10,7 @@ import (
 
 func skillRig(t *testing.T) (*testRig, *fakeState) {
 	t.Helper()
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	return newTestRunner(t, cfg, reg), st
@@ -157,7 +157,7 @@ func TestSkillVerbsCannotBypassApprove(t *testing.T) {
 	// Load-time: skill gh-wildcard vs an approve-listed concrete verb.
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   deployer:
     model: x
@@ -175,7 +175,7 @@ policy:
 	// Non-overlapping skill.verbs validate fine.
 	ok := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   deployer:
     model: x
@@ -204,7 +204,7 @@ policy:
 	// trust: full lifts approve everywhere — the skill surface follows.
 	full := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   deployer: { model: x, skill: { verbs: ["svc.*"] } }
 policy:
@@ -224,7 +224,7 @@ func TestRunSkillVerbSecretWriteBarrier(t *testing.T) {
 	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   main: { type: boltdb }
 `)
@@ -278,7 +278,7 @@ func TestSkillVerbIdentity(t *testing.T) {
 	// (that fallback is gone with the redesign).
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 policy:
   agent_authored: { identity: polbot }
 `)
@@ -304,7 +304,7 @@ policy:
 func TestValidateSkillNoIdentityNeeded(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   deployer: { model: x, skill: { verbs: ["svc.*"] } }
 `)
@@ -327,7 +327,7 @@ func TestValidateSkillVerbPatterns(t *testing.T) {
 	for _, c := range cases {
 		cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   a: { model: x, skill: { verbs: `+c.verbs+` } }
 `)
@@ -340,7 +340,7 @@ agents:
 	// A well-formed pattern that matches nothing warns (not errors).
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 runtimes:
   gem: { agent: gemini, default: true }
 agents:
@@ -357,7 +357,7 @@ agents:
 	// Live patterns warn nothing.
 	live := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 runtimes:
   gem: { agent: gemini, default: true }
 agents:
@@ -376,7 +376,7 @@ func TestSkillWarningsUnsupportedRuntime(t *testing.T) {
 	// so no unreachable-endpoint warning.
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 agents:
   a: { model: x, skill: { verbs: ["svc.ask"] } }
 `)
@@ -399,7 +399,7 @@ agents:
 	} {
 		y := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 runtimes:
   `+runtime+`
 agents:

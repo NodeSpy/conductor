@@ -115,7 +115,7 @@ func TestSkillCLISubmitReviewRoundTrip(t *testing.T) {
 	cfg := loadConfigDoc(t, `
 connectors:
   gh:
-    type: github
+    use: github
     identity: { write_token: me-sentinel }
 agents:
   fixer:

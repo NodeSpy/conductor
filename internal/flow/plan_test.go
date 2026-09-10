@@ -24,7 +24,7 @@ func planCfg(t *testing.T, policyYAML string) *config.Config {
 	t.Helper()
 	return loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 agents:
   planner: { model: x }
@@ -517,7 +517,7 @@ func TestCheckpointNeverPersistsVaultValues(t *testing.T) {
 	}
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 vaults:
   hv: { type: file, dir: `+vaultDir+` }
 `)
@@ -624,7 +624,7 @@ steps: [ { id: echoer, uses: svc.post, options: { text: t } } ]
 func TestNestedPlansShareBudget(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 agents:
   planner:  { model: x }
@@ -669,7 +669,7 @@ policy:
 	// depth trips first).
 	cfgDeep := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 agents:
   planner:  { model: x }
@@ -700,7 +700,7 @@ policy:
 	// Cumulative step budget across the tree.
 	cfgSteps := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 agents:
   planner: { model: x }
@@ -738,7 +738,7 @@ policy:
 func TestNestedPlanTeamCountsAgainstBudget(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 agents:
   planner:     { model: x }

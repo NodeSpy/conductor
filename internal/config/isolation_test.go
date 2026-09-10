@@ -10,10 +10,10 @@ import (
 func isoBase(t *testing.T) *Config {
 	t.Helper()
 	c := &Config{
-		ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+		ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 		Runtimes: map[string]RuntimeConfig{
-			"gemini": {Agent: "gemini"},
-			"pd":     {Type: "paseo"},
+			"gemini": {Use: "acp", Agent: "gemini"},
+			"pd":     {Use: "paseo"},
 		},
 		Hosts:  map[string]HostConfig{"sbx": {Host: "sandbox.internal"}},
 		Agents: map[string]AgentProfile{},
@@ -134,7 +134,7 @@ func TestRuntimeIsolationValidation(t *testing.T) {
 
 	// Opencode + structural deny severs the control channel → rejected.
 	c = isoBase(t)
-	c.Runtimes["oc"] = RuntimeConfig{Type: "opencode", Isolation: &IsolationConfig{
+	c.Runtimes["oc"] = RuntimeConfig{Use: "opencode", Isolation: &IsolationConfig{
 		Mode: "namespace", Network: &IsolationNetwork{Deny: true}}}
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "control channel") {
 		t.Fatalf("opencode deny: %v", err)
@@ -257,7 +257,7 @@ func TestSkillRefusedUnderUserModeIsolation(t *testing.T) {
 	base := func() *Config {
 		return &Config{
 			Runtimes: map[string]RuntimeConfig{
-				"cc": {Type: "cli", Agent: "claude-code"},
+				"cc": {Use: "cli", Tool: "claude-code"},
 			},
 			Agents: map[string]AgentProfile{},
 		}

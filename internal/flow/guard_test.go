@@ -368,7 +368,7 @@ func TestGuardKvExfilBlocked(t *testing.T) {
 	}
 	cfgYAML := `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   main: { type: boltdb }
 vaults:
@@ -569,7 +569,7 @@ func TestGuardReadAndRelayBarrier(t *testing.T) {
 	const secretVal = "parked-s3cr3t-XYZZY"
 	cfgYAML := `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   main: { type: boltdb }
   db:   { type: sqlite, path: ":memory:" }
@@ -686,7 +686,7 @@ func TestGuardCodeBindingWriteBarrier(t *testing.T) {
 	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   main: { type: boltdb }
 agents:
@@ -753,7 +753,7 @@ func TestAuditRedactsErrorStrings(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: http://127.0.0.1:1
     verbs:
       ping: { method: GET, path: /x, query: { key: "url-borne-s3cr3t-XYZZY" } }

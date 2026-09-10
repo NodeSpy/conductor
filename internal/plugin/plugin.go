@@ -26,6 +26,8 @@
 package plugin
 
 import (
+	"fmt"
+
 	"github.com/NodeSpy/conductor/internal/config"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
@@ -56,21 +58,44 @@ const (
 	KindRuntime   = sdk.KindRuntime
 )
 
-// Spec is a resolved plugin ready to run: config.PluginRef with its source
-// resolved to an absolute path. Construction (and path resolution) is in
-// manager.go.
+// Spec is a resolved plugin ready to run: a derived config.PluginRef joined
+// with local install state, its binary resolved to an absolute path.
+// Construction is in manager.go.
 type Spec struct {
-	Name             string
-	Kind             Kind
-	Provides         string
-	Version          string
-	BinPath          string // absolute path to the executable
-	Args             []string
-	Sha256           string
-	AllowUnverified  bool
-	Isolation        *config.IsolationConfig
-	AllowUnsandboxed bool
-	AllowSecrets     []string
+	// Name is the implementation name (connector type / runtime name).
+	Name string
+	// Kind is what it provides, derived from the block that referenced it.
+	Kind Kind
+	// Provides is the registered name — the same as Name.
+	Provides string
+	// Version is the `@…` constraint from the reference, if any.
+	Version string
+	// Resolved is the concrete release tag the installed build came from.
+	Resolved string
+	// Use is the parsed reference, for origin display and re-resolution.
+	Use config.Use
+	// BinPath is the absolute path to the executable. Empty means "referenced
+	// but not installed" — Start says so rather than exec'ing nothing.
+	BinPath string
+	// Args are extra argv appended at spawn. NOT settable from config: the old
+	// `plugins:` block had an `args:` key, and the `use:` surface deliberately
+	// does not — a plugin's configuration arrives over the RPC transport, per
+	// instance, not as process arguments shared by all of them. Retained for
+	// internal callers and tests that drive a reference plugin's modes.
+	Args []string
+	// Local marks a development binary the operator pointed at directly. There
+	// is no sha to pin (it changes on every build); safe-permissions still applies.
+	Local bool
+	// Sha256 is the verified sha recorded at install, checked before every exec.
+	Sha256 string
+	// Manifest is the permission manifest recorded at install.
+	Manifest Manifest
+	// Network is the referencing connector's declared egress.
+	Network []string
+	// Isolation is OPTIONAL OS hardening. nil is the normal case.
+	Isolation *config.IsolationConfig
+	// AllowSecrets optionally tightens which secret refs may cross the boundary.
+	AllowSecrets []string
 }
 
 // Ref is the `plugin@version` attribution string carried on audit records and
@@ -80,6 +105,23 @@ func (s Spec) Ref() string {
 		return s.Name
 	}
 	return s.Name + "@" + s.Version
+}
+
+// Key is the plugin's identity in install state: "<kind-dir>/<name>".
+func (s Spec) Key() string {
+	if s.Kind == KindRuntime {
+		return "runtimes/" + s.Name
+	}
+	return "connectors/" + s.Name
+}
+
+// Installed reports whether a binary is available to run.
+func (s Spec) Installed() bool { return s.BinPath != "" }
+
+// NotInstalledError is the error a not-yet-fetched plugin produces — a
+// direction, not a stack trace.
+func (s Spec) NotInstalledError() error {
+	return fmt.Errorf("plugin %s (%s) is referenced by your config but not installed — run `conductor init` (or `conductor plugin update %s`) to fetch it", s.Name, s.Use.String(), s.Name)
 }
 
 // --- wire schema (aliased from pkg/plugin; maps 1:1 to connector.TypeDecl) ---

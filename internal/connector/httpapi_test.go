@@ -56,7 +56,7 @@ func TestRESTVerbRequestShape(t *testing.T) {
 	reg := buildAPIRegistry(t, `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: `+srv.URL+`
     headers:
       Accept: application/json
@@ -136,7 +136,7 @@ func TestRESTExpectStatus(t *testing.T) {
 	reg := buildAPIRegistry(t, `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: `+srv.URL+`
     verbs:
       anytwo: { method: GET, path: /a }
@@ -168,7 +168,7 @@ func TestStaticAuthSchemes(t *testing.T) {
 		reg := buildAPIRegistry(t, `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: `+srv.URL+`
     auth:
       `+auth+`
@@ -241,7 +241,7 @@ func oauthConnYAML(o *oauthTestServer, grant, refreshRef string) string {
 	y := `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: ` + o.URL + `/api
     auth:
       type: oauth2
@@ -358,7 +358,7 @@ func TestGraphQLVerb(t *testing.T) {
 	reg := buildAPIRegistry(t, `
 connectors:
   shop:
-    type: graphql
+    use: graphql
     endpoint: `+srv.URL+`
     auth: { type: bearer, token: tok }
     verbs:
@@ -422,7 +422,7 @@ func TestPolledEventsDedup(t *testing.T) {
 	reg := buildAPIRegistry(t, `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: `+srv.URL+`
     verbs:
       noop: { method: GET, path: / }
@@ -497,56 +497,56 @@ func TestDeclaredValidation(t *testing.T) {
 	cases := []struct{ name, yaml, wantErr string }{
 		{"rest no base_url", `
 connectors:
-  api: { type: rest, verbs: { v: { method: GET, path: / } } }`, "base_url is required"},
+  api: { use: rest, verbs: { v: { method: GET, path: / } } }`, "base_url is required"},
 		{"rest verb no method/path", `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: http://x
     verbs: { v: { method: GET } }`, "method: and path: are required"},
 		{"rest nothing declared", `
 connectors:
-  api: { type: rest, base_url: http://x }`, "at least one verb or event"},
+  api: { use: rest, base_url: http://x }`, "at least one verb or event"},
 		{"rest bad template", `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: http://x
     verbs: { v: { method: GET, path: "/x/{{.broken" } }`, "bad path template"},
 		{"rest event missing id", `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: http://x
     events: { e: { request: { path: /x }, list: "{{.response.body.X}}" } }`, "list: and id: are required"},
 		{"oauth2 missing token_url", `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: http://x
     auth: { type: oauth2, grant: client_credentials, client_id: c }
     verbs: { v: { method: GET, path: / } }`, "needs token_url"},
 		{"oauth2 bad grant", `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: http://x
     auth: { type: oauth2, grant: implicit, token_url: http://t, client_id: c }
     verbs: { v: { method: GET, path: / } }`, "grant must be"},
 		{"unknown auth type", `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: http://x
     auth: { type: magic }
     verbs: { v: { method: GET, path: / } }`, "auth type must be"},
 		{"graphql no endpoint", `
 connectors:
-  shop: { type: graphql, verbs: { v: { query: "query { x }" } } }`, "endpoint is required"},
+  shop: { use: graphql, verbs: { v: { query: "query { x }" } } }`, "endpoint is required"},
 		{"graphql verb no query", `
 connectors:
   shop:
-    type: graphql
+    use: graphql
     endpoint: http://x
     verbs: { v: { output: { a: "{{.response.data.a}}" } } }`, "query: is required"},
 	}
@@ -588,7 +588,7 @@ func TestAuthBootstrapExchange(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(`
 connectors:
   xero:
-    type: rest
+    use: rest
     base_url: http://api
     auth:
       type: oauth2
@@ -661,12 +661,12 @@ vaults:
 	_ = yaml.Unmarshal([]byte(`
 connectors:
   plain:
-    type: rest
+    use: rest
     base_url: http://x
     auth: { type: bearer, token: t }
     verbs: { v: { method: GET, path: / } }
   notv:
-    type: rest
+    use: rest
     base_url: http://x
     auth: { type: oauth2, grant: refresh_token, token_url: http://t, client_id: c }
     verbs: { v: { method: GET, path: / } }

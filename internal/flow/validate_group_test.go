@@ -18,7 +18,7 @@ import (
 func TestValidateRejections(t *testing.T) {
 	base := `
 connectors:
-  svc: { type: fake, options: { text: "default" } }
+  svc: { use: fake, options: { text: "default" } }
 agents:
   fixer: { provider: claude }
 workflows:
@@ -142,7 +142,7 @@ workflows:
 func TestValidateScopedPositives(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake, options: { text: "covers-required" } }
+  svc: { use: fake, options: { text: "covers-required" } }
 agents:
   fixer: { provider: claude }
 triggers:
@@ -421,7 +421,7 @@ func TestInQuietWindow(t *testing.T) {
 func TestSpecFor(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 triggers:
   - on: svc.ping
     steps: [{uses: svc.post, options: {text: t}}]
@@ -442,7 +442,7 @@ triggers:
 func TestRunWithBatchContext(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 triggers:
   - on: svc.ping
     steps:
@@ -474,7 +474,7 @@ triggers:
 func TestValidateRejectsWorkflowCycle(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 workflows:
   a:
     steps: [ { id: sb, workflow: b } ]
@@ -499,7 +499,7 @@ triggers:
 	// A self-cycle is rejected too.
 	cfg = loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 workflows:
   loop:
     steps: [ { id: again, workflow: loop } ]
@@ -516,7 +516,7 @@ triggers:
 	// Diamond reuse (two paths to one workflow, no cycle) stays valid.
 	cfg = loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 workflows:
   top:
     steps:

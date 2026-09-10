@@ -97,24 +97,43 @@ type Event struct {
 	Dynamic bool   `json:"dynamic,omitempty"`
 }
 
-// Capabilities is the plugin's DECLARED privilege manifest: what it says it
-// needs. The operator GRANTS these via the isolation: block; `plugin show`
-// prints declared-vs-granted so a mismatch is visible before install.
+// Capabilities is the plugin's DECLARED PERMISSION MANIFEST: what it says it
+// needs. Conductor records it at install, SURFACES it (so the operator sees what
+// they accept when they add the plugin), and confines the plugin to it — a
+// visible manifest with can't-exceed-declaration, not an OS jail. See
+// docs/design/use-unification.md §D for exactly what that does and does not
+// enforce.
 type Capabilities struct {
-	Egress []string `json:"egress,omitempty"` // network hosts the plugin needs
-	FS     []string `json:"fs,omitempty"`     // filesystem paths it needs
-	Spawns bool     `json:"spawns,omitempty"` // whether it spawns child processes
+	// Egress are the "host[:port]" targets the plugin calls. A connector
+	// instance's `network:` may narrow this, never widen it.
+	Egress []string `json:"egress,omitempty"`
+	// Commands are the commands the plugin spawns, by name. Declaring them lets
+	// conductor confine the subprocess's PATH to exactly these; leaving this
+	// empty while setting Spawns declares "I spawn things I am not naming",
+	// which is surfaced as such.
+	Commands []string `json:"commands,omitempty"`
+	// FS are the filesystem paths it needs.
+	FS []string `json:"fs,omitempty"`
+	// Spawns reports that the plugin spawns child processes. Implied by a
+	// non-empty Commands.
+	Spawns bool `json:"spawns,omitempty"`
 }
 
 // Decl is a plugin's full self-description, returned by Describe.
 type Decl struct {
-	ProtocolVersion int          `json:"protocol_version"`
-	Type            string       `json:"type"`
-	Desc            string       `json:"desc,omitempty"`
-	Connection      Schema       `json:"connection,omitempty"`
-	Verbs           []Verb       `json:"verbs,omitempty"`
-	Events          []Event      `json:"events,omitempty"`
-	Capabilities    Capabilities `json:"capabilities,omitempty"`
+	ProtocolVersion int `json:"protocol_version"`
+	// Kind is what this plugin PROVIDES: connector or runtime. It is the
+	// authoritative answer — conductor derives the kind from the config block
+	// the plugin was referenced from and refuses the plugin when the two
+	// disagree, so a connector can never be wired as a runtime. Empty (an older
+	// plugin) is treated as unspecified and trusted to its block.
+	Kind         Kind         `json:"kind,omitempty"`
+	Type         string       `json:"type"`
+	Desc         string       `json:"desc,omitempty"`
+	Connection   Schema       `json:"connection,omitempty"`
+	Verbs        []Verb       `json:"verbs,omitempty"`
+	Events       []Event      `json:"events,omitempty"`
+	Capabilities Capabilities `json:"capabilities,omitempty"`
 }
 
 // InvokeRequest is the daemon→plugin verb call. Connection carries ONLY the
