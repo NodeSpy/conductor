@@ -77,14 +77,19 @@ exports:
 # ---- Behavior the pack ships (namespaced under the instance name) ----
 #
 # There is no top-level steps: section. A step lives in the workflow that
-# runs it, and config shared between steps is a plain YAML anchor parked
-# under a top-level `x-` key — the loader ignores those (the docker-compose
-# extension-field convention) and `<<: *name` merges one in. Anchors are
-# file-local, so this house style stays inside the pack.
+# runs it, and config shared between steps is parked under a top-level `x-`
+# key — the loader ignores those (the docker-compose extension-field
+# convention). Anchors are file-local, so this house style stays inside the
+# pack.
+#
+# Two ways to pull one in, both used below:
+#   <<: *house       plain YAML. Dumb override — a copy of the base.
+#   extends: *house  conductor's merge. Lists append, guidance stacks.
 x-templates:
   house: &house
     type: agent
     archive_when_done: true
+    guidance: "Stay inside the diff. Prefer the smallest correct change."
 
 workflows:
   review-flow:
@@ -96,7 +101,9 @@ workflows:
       # A consumer addresses this step as `review-flow/review` in their
       # packs: block — by its id:, which is also its identity slot.
       - id: review
-        <<: *house
+        # extends: — the house guidance STACKS under this step's own, and
+        # a consumer's override would stack under both.
+        extends: *house
         workspace: worktree
         guidance: "Review only what the diff changes. Be concrete and cite file:line."
         prompt: |
@@ -110,6 +117,7 @@ workflows:
       # secret, referenced abstractly here and resolved by the broker at
       # runtime.
       - id: post
+        # <<: — this step wants the house defaults verbatim, nothing added.
         <<: *house
         workspace: local
         skill:

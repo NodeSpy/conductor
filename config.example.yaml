@@ -598,28 +598,43 @@ models:
 #      (`github.pull_request/security`); editing a prompt does not rotate it
 #   3. a deterministic fingerprint of the step's definition
 #
-# SHARING CONFIG between steps is a different thing from sharing identity,
-# and it is plain YAML — an anchor, the same mechanism docker-compose uses.
-# Park the anchors under any top-level `x-` key (the loader ignores those)
-# and merge one in with `<<:`:
+# SHARING CONFIG between steps is a different thing from sharing identity.
+# Park a base under any top-level `x-` key (the loader ignores those) and
+# pull it in one of TWO ways, which differ in when they happen:
 #
 #   x-templates:
 #     base: &base
 #       type: agent
 #       workspace: worktree
-#   triggers:
-#     - on: gh.review_requested
-#       steps:
-#         - <<: *base           # merge the base…
-#           id: fix             # …then this step's own fields (they win)
-#           prompt: "Fix CI."
+#       guidance: "Terse and human."
+#       skill: { verbs: [gh.comment] }
+#
+#   #  <<:  — plain YAML, resolved by the PARSER. Dumb: the step's own key
+#   #         wins outright, scalars and lists alike. A copy of the base.
+#   - <<: *base
+#     id: fix
+#     skill: { verbs: [gh.submit_review] }   # REPLACES the whole skill map
+#
+#   #  extends:  — conductor's own merge, with BOTH layers in hand, so it
+#   #              can be field-aware. Adds to the base.
+#   - extends: *base
+#     id: review
+#     model: light                       # scalars   OVERRIDE
+#     skill: { verbs: [linear.create] }  # lists     APPEND  → gh.comment, linear.create
+#     guidance: "Cite file:line."        # guidance  APPENDS under the base tone
+#     # guidance: !override "Only this." #   …escape the append
+#     # guidance: !reset                 #   …or drop what was inherited
+#
+# `extends:` chains (a base that itself extends one) resolve base-first, so
+# the outermost layer speaks last. Both on one step is defined: `<<:` first,
+# then `extends:` on top of the result.
 #
 # Two caveats worth knowing up front:
-#   * anchors are FILE-LOCAL — they do not cross `imports:`. For reuse across
-#     files, use `extends:` on a map section (runtimes/workflows/handoffs).
-#   * an anchor copies FIELDS, not identity. Two steps merging one anchor are
-#     still two identities. `name:` is the separate, deliberate opt-in to
-#     sharing one.
+#   * neither crosses `imports:` — an anchor is file-local. For reuse across
+#     files, use `extends:` on a map section (runtimes/workflows/handoffs),
+#     which is a different feature that happens to share the word.
+#   * both copy FIELDS, not identity. Two steps sharing a base are still two
+#     identities. `name:` is the separate, deliberate opt-in to sharing one.
 #
 # There is NO top-level steps: section. A step lives in the workflow or
 # trigger that runs it. Something that must POINT at a particular step — a

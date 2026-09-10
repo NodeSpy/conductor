@@ -20,12 +20,18 @@ accumulated history — see [Migration](#migration-from-agents) below.
 ## Sharing step behavior
 
 Behavior lives on the step that dispatches the work. To share it between
-steps, use a **YAML anchor** — `&name` to define, `<<: *name` to merge. It
-is the same mechanism docker-compose uses, it needs no conductor feature,
-and it works identically in a [[Packs|pack manifest]]. Park the anchors
-under any top-level `x-` key: the loader ignores `x-`-prefixed sections
-(the compose extension-field convention), so they exist purely to hold
-anchors.
+steps, park a base under any top-level `x-` key — the loader ignores
+`x-`-prefixed sections (the docker-compose extension-field convention), so
+they exist purely to hold anchors — and pull it in one of two ways:
+
+- **`<<: *base`** — plain YAML merge. Dumb: the step's own key wins
+  outright, scalars and lists alike. Use it for a copy of a base.
+- **`extends: *base`** — conductor's own merge. Field-aware: scalars
+  override, lists append, maps deep-merge, and `guidance:` stacks. Use it
+  to add to a base. `!override` and `!reset` are the escape hatches.
+
+Both work identically in a [[Packs|pack manifest]]. See [[Reuse]] for the
+full rules; the example below uses `<<:`.
 
 ```yaml
 x-templates:
