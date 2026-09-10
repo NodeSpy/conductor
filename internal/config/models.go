@@ -309,6 +309,80 @@ func RankByPrefer(candidates, prefer []string) []string {
 }
 
 // ---------------------------------------------------------------------------
+// Enumerating the model references a config makes
+// ---------------------------------------------------------------------------
+
+// ModelRef is one `model:` reference together with where it was written, so
+// resolution can report a failure against the step the operator can find.
+type ModelRef struct {
+	// Where is a human-readable location ("trigger review step security").
+	Where string
+	// Spec is the reference exactly as written.
+	Spec ModelSpec
+	// Runtime is the step's own `runtime:` pin, empty when it names none.
+	Runtime string
+}
+
+// ModelRefs enumerates every `model:` a config carries — trigger steps,
+// workflow steps, and named checks, including nested parallel branches and
+// compensations. Order is deterministic (triggers by position, maps by sorted
+// key) so a validation failure is stable across runs.
+func (c *Config) ModelRefs() []ModelRef {
+	var out []ModelRef
+	for i, t := range c.Triggers {
+		where := fmt.Sprintf("triggers[%d]", i)
+		if t.Name != "" {
+			where = fmt.Sprintf("trigger %q", t.Name)
+		}
+		out = append(out, stepModelRefs(where, t.Steps)...)
+	}
+	for _, name := range sortedNames(c.Workflows) {
+		out = append(out, stepModelRefs("workflow "+name, c.Workflows[name].Steps)...)
+	}
+	for _, name := range sortedNames(c.Checks) {
+		out = append(out, stepModelRefs("check "+name, []Step{c.Checks[name]})...)
+	}
+	return out
+}
+
+// stepModelRefs collects references from a step list, recursing into the
+// nested step forms.
+func stepModelRefs(where string, steps []Step) []ModelRef {
+	var out []ModelRef
+	for i, s := range steps {
+		id := s.ID
+		if id == "" {
+			id = fmt.Sprintf("step%d", i+1)
+		}
+		at := where + " " + id
+		if s.Model.Set() {
+			out = append(out, ModelRef{Where: at, Spec: s.Model, Runtime: s.Runtime})
+		}
+		if s.Parallel != nil {
+			for bi, branch := range s.Parallel.Branches {
+				out = append(out, stepModelRefs(fmt.Sprintf("%s branch %d", at, bi+1), branch)...)
+			}
+		}
+		if s.Compensate != nil {
+			out = append(out, stepModelRefs(at+" compensate", []Step{*s.Compensate})...)
+		}
+	}
+	return out
+}
+
+// sortedNames returns a map's keys in sorted order, so enumeration is
+// deterministic. (sortedKeys, in connectors.go, renders a JOINED list for
+// error messages — a different job.)
+func sortedNames[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
 
@@ -337,6 +411,22 @@ func (c *Config) validateModels() error {
 	for _, n := range rnames {
 		if err := validateRuntimeModels("runtime "+n, c.Runtimes[n].Models); err != nil {
 			return err
+		}
+	}
+	// A step's own `model:`/`runtime:`. Whether a model is AVAILABLE is a
+	// resolution-time question (it needs a discovered roster, and Load must
+	// stay offline) — this is shape and reference checking only.
+	for _, ref := range c.ModelRefs() {
+		if err := validateFleet(ref.Where+" model", ref.Spec); err != nil {
+			return err
+		}
+		if ref.Runtime == "" {
+			continue
+		}
+		_, isRuntime := c.Runtimes[ref.Runtime]
+		_, isController := c.Controllers[ref.Runtime]
+		if !isRuntime && !isController {
+			return fmt.Errorf("config: %s: unknown runtime %q (defined: %s)", ref.Where, ref.Runtime, c.runtimeNames())
 		}
 	}
 	return nil

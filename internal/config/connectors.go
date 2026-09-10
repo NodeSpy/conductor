@@ -723,7 +723,11 @@ type Step struct {
 	// `{ any, required }` object. Unset → the runtime's `models.default:`, and
 	// failing that a BARE LAUNCH (no --model, the runtime's own default). See
 	// ModelSpec and docs/design/runtimes-models-packs.md §2.2.
-	Model           ModelSpec      `yaml:"model,omitempty"`
+	Model ModelSpec `yaml:"model,omitempty"`
+	// Runtime pins WHERE this step runs — a `runtimes:` entry. Unset lets
+	// model resolution pick the runtime that offers the chosen model, falling
+	// back to the runtime flagged `default: true`.
+	Runtime         string         `yaml:"runtime,omitempty"`
 	Prompt          string         `yaml:"prompt,omitempty"`
 	Checkout        string         `yaml:"checkout,omitempty"`
 	OutputSchema    map[string]any `yaml:"output_schema,omitempty"`
