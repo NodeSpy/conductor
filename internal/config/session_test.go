@@ -62,7 +62,7 @@ func TestSessionEndsOn(t *testing.T) {
 // overall pool) and on a STEP (its own). Both go through the same check.
 func TestValidateSessions(t *testing.T) {
 	step := func(s *SessionSpec) *Config {
-		return &Config{Steps: map[string]Step{"a": {Session: s}}}
+		return &Config{Workflows: map[string]WorkflowDef{"w": {Steps: []Step{{ID: "a", Session: s}}}}}
 	}
 	runtime := func(s *SessionSpec) *Config {
 		return &Config{Runtimes: RuntimeSet{"paseo": {Use: "paseo", Session: s}}}

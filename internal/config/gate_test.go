@@ -8,7 +8,7 @@ import (
 // gateBase is isoBase plus a checks: map and an agent profile.
 func gateBase(t *testing.T) *Config {
 	c := isoBase(t)
-	c.Steps["fixer"] = Step{Model: ModelSpecOf("m")}
+	setTestStep(c, "fixer", Step{Model: ModelSpecOf("m")})
 	c.Checks = map[string]Step{
 		"test":   {Type: "command", Command: []string{"make", "test"}},
 		"lint":   {Run: "sh", Code: "golangci-lint run"},

@@ -35,8 +35,8 @@ func TestLoadNewSchemaMinimal(t *testing.T) {
 connectors:
   gh:
     use: github
-steps:
-  fixer:
+x-steps:
+  fixer: &fixer
     type: agent
     name: fixer
 triggers:
@@ -44,7 +44,7 @@ triggers:
     steps:
       - id: respond
         type: agent
-        step: fixer
+        <<: *fixer
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -60,8 +60,8 @@ func TestLoadLegacyOnlyStillLoads(t *testing.T) {
 integrations:
   - type: github
     name: acme
-steps:
-  fixer:
+x-steps:
+  fixer: &fixer
     type: agent
     name: fixer
 `)
@@ -735,7 +735,7 @@ func connBaseCfg() *Config {
 func TestStepRuntimeReferenceValid(t *testing.T) {
 	c := connBaseCfg()
 	c.Runtimes = map[string]RuntimeConfig{"paseo1": {Use: "paseo"}}
-	c.Steps = map[string]Step{"fixer": {Runtime: "paseo1"}}
+	setTestStep(c, "fixer", Step{Runtime: "paseo1"})
 	if err := c.Validate(); err != nil {
 		t.Fatalf("a step referencing a defined runtimes: entry should pass, got %v", err)
 	}
@@ -743,7 +743,7 @@ func TestStepRuntimeReferenceValid(t *testing.T) {
 
 func TestStepRuntimeReferenceUnknown(t *testing.T) {
 	c := connBaseCfg()
-	c.Steps = map[string]Step{"fixer": {Runtime: "nope"}}
+	setTestStep(c, "fixer", Step{Runtime: "nope"})
 	err := c.Validate()
 	if err == nil || !strings.Contains(err.Error(), "unknown runtime") {
 		t.Fatalf("an agent referencing nothing should fail with 'unknown runtime', got %v", err)
@@ -752,7 +752,7 @@ func TestStepRuntimeReferenceUnknown(t *testing.T) {
 
 func TestAgentHostReferenceUnknown(t *testing.T) {
 	c := connBaseCfg()
-	c.Steps = map[string]Step{"fixer": {Host: "nope"}}
+	setTestStep(c, "fixer", Step{Host: "nope"})
 	err := c.Validate()
 	if err == nil || !strings.Contains(err.Error(), `unknown host "nope"`) {
 		t.Fatalf("an agent referencing an unknown host should fail, got %v", err)
@@ -762,7 +762,7 @@ func TestAgentHostReferenceUnknown(t *testing.T) {
 func TestAgentLegacyControllerReferenceStillPasses(t *testing.T) {
 	c := connBaseCfg()
 	c.Controllers = map[string]ControllerConfig{"pae": {Type: "paseo"}}
-	c.Steps = map[string]Step{"fixer": {Runtime: "pae"}}
+	setTestStep(c, "fixer", Step{Runtime: "pae"})
 	if err := c.Validate(); err != nil {
 		t.Fatalf("an agent referencing a legacy controllers: entry should still pass, got %v", err)
 	}

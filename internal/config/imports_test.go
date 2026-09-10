@@ -31,8 +31,8 @@ connectors:
     schedules: { tick: { every: 1h } }
 hosts:
   build-box: { host: build01.internal, user: ci }
-steps:
-  fixer: { type: agent, name: fixer, model: opus }
+x-steps:
+  fixer: &fixer { type: agent, name: fixer, model: opus }
 workflows:
   review-flow:
     inputs: { pr: { type: integer, required: true } }
@@ -59,8 +59,6 @@ connectors:
   box: { use: command }
 hosts:
   imports: [conf.d/hosts.yaml]
-steps:
-  imports: [conf.d/steps.yaml]
 workflows:
   imports: [workflows/*.yaml]
 triggers:
@@ -80,9 +78,6 @@ timer:
 		"conf.d/hosts.yaml": `
 hosts:
   build-box: { host: build01.internal, user: ci }
-`,
-		"conf.d/steps.yaml": `
-fixer: { type: agent, name: fixer, model: opus }
 `,
 		"workflows/review.yaml": `
 workflows:
@@ -115,8 +110,8 @@ workflows:
 	if split.Hosts["build-box"].Host != mono.Hosts["build-box"].Host {
 		t.Errorf("hosts differ: %+v", split.Hosts)
 	}
-	if split.Steps["fixer"].Model.Ref != "opus" {
-		t.Errorf("step templates differ: %+v", split.Steps)
+	if split.Workflows["review-flow"].Steps[0].ID != "note" {
+		t.Errorf("imported workflow steps differ: %+v", split.Workflows)
 	}
 	if len(split.Workflows) != 1 || len(split.Workflows["review-flow"].Steps) != 1 {
 		t.Errorf("workflows differ: %+v", split.Workflows)

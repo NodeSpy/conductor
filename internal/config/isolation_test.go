@@ -16,7 +16,6 @@ func isoBase(t *testing.T) *Config {
 			"pd":     {Use: "paseo"},
 		},
 		Hosts: map[string]HostConfig{"sbx": {Host: "sandbox.internal"}},
-		Steps: map[string]Step{},
 		Triggers: []TriggerSpec{{On: "gh.release", Steps: []Step{
 			{Uses: "gh.comment"},
 		}}},
@@ -93,21 +92,21 @@ func TestProfileIsolationNeedsConductorLaunchedRuntime(t *testing.T) {
 	// No runtime at all → built-in paseo → rejected.
 	c := isoBase(t)
 	c.Runtimes = nil
-	c.Steps["fixer"] = Step{Isolation: iso}
+	setTestStep(c, "fixer", Step{Isolation: iso})
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "built-in paseo") {
 		t.Fatalf("builtin paseo: %v", err)
 	}
 
 	// A paseo runtime → rejected.
 	c = isoBase(t)
-	c.Steps["fixer"] = Step{Runtime: "pd", Isolation: iso}
+	setTestStep(c, "fixer", Step{Runtime: "pd", Isolation: iso})
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "paseo runtime") {
 		t.Fatalf("paseo runtime: %v", err)
 	}
 
 	// An acp runtime → fine.
 	c = isoBase(t)
-	c.Steps["fixer"] = Step{Runtime: "gemini", Isolation: iso}
+	setTestStep(c, "fixer", Step{Runtime: "gemini", Isolation: iso})
 	if err := c.Validate(); err != nil {
 		t.Fatalf("acp runtime: %v", err)
 	}
@@ -260,16 +259,15 @@ func TestSkillRefusedUnderUserModeIsolation(t *testing.T) {
 			Runtimes: map[string]RuntimeConfig{
 				"cc": {Use: "cli", Tool: "claude-code"},
 			},
-			Steps: map[string]Step{},
 		}
 	}
 
 	// Profile-level mode:user + skill → refused.
 	c := base()
-	c.Steps["fixer"] = Step{Runtime: "cc", Model: ModelSpecOf("m"),
+	setTestStep(c, "fixer", Step{Runtime: "cc", Model: ModelSpecOf("m"),
 		Skill:     &SkillPolicy{},
-		Isolation: &IsolationConfig{Mode: "user", User: "sbx"}}
-	if err := c.validateStepSkillIsolation("step fixer", c.Steps["fixer"]); err == nil ||
+		Isolation: &IsolationConfig{Mode: "user", User: "sbx"}})
+	if err := c.validateStepSkillIsolation("step fixer", c.Workflows["w"].Steps[0]); err == nil ||
 		!strings.Contains(err.Error(), "steals the claim") {
 		t.Fatalf("profile-level user isolation + skill must be refused: %v", err)
 	}
@@ -279,17 +277,17 @@ func TestSkillRefusedUnderUserModeIsolation(t *testing.T) {
 	rt := c.Runtimes["cc"]
 	rt.Isolation = &IsolationConfig{Mode: "user", User: "sbx"}
 	c.Runtimes["cc"] = rt
-	c.Steps["fixer"] = Step{Runtime: "cc", Model: ModelSpecOf("m"), Skill: &SkillPolicy{}}
-	if err := c.validateStepSkillIsolation("step fixer", c.Steps["fixer"]); err == nil {
+	setTestStep(c, "fixer", Step{Runtime: "cc", Model: ModelSpecOf("m"), Skill: &SkillPolicy{}})
+	if err := c.validateStepSkillIsolation("step fixer", c.Workflows["w"].Steps[0]); err == nil {
 		t.Fatal("runtime-level user isolation + skill must be refused")
 	}
 
 	// namespace isolation (separate /proc views) keeps skill available.
 	c = base()
-	c.Steps["fixer"] = Step{Runtime: "cc", Model: ModelSpecOf("m"),
+	setTestStep(c, "fixer", Step{Runtime: "cc", Model: ModelSpecOf("m"),
 		Skill:     &SkillPolicy{},
-		Isolation: &IsolationConfig{Mode: "namespace"}}
-	if err := c.validateStepSkillIsolation("step fixer", c.Steps["fixer"]); err != nil {
+		Isolation: &IsolationConfig{Mode: "namespace"}})
+	if err := c.validateStepSkillIsolation("step fixer", c.Workflows["w"].Steps[0]); err != nil {
 		t.Fatalf("namespace + skill must be fine: %v", err)
 	}
 	// And a profile's own non-user isolation overrides a user-mode runtime.
@@ -297,10 +295,10 @@ func TestSkillRefusedUnderUserModeIsolation(t *testing.T) {
 	rt = c.Runtimes["cc"]
 	rt.Isolation = &IsolationConfig{Mode: "user", User: "sbx"}
 	c.Runtimes["cc"] = rt
-	c.Steps["fixer"] = Step{Runtime: "cc", Model: ModelSpecOf("m"),
+	setTestStep(c, "fixer", Step{Runtime: "cc", Model: ModelSpecOf("m"),
 		Skill:     &SkillPolicy{},
-		Isolation: &IsolationConfig{Mode: "namespace"}}
-	if err := c.validateStepSkillIsolation("step fixer", c.Steps["fixer"]); err != nil {
+		Isolation: &IsolationConfig{Mode: "namespace"}})
+	if err := c.validateStepSkillIsolation("step fixer", c.Workflows["w"].Steps[0]); err != nil {
 		t.Fatalf("profile namespace overrides runtime user: %v", err)
 	}
 }

@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"reflect"
-	"strings"
 )
 
 // extends.go implements Docker-Compose-style `extends:` inheritance for the
@@ -13,12 +12,12 @@ import (
 // merge and before validation, so downstream only ever sees fully-resolved
 // entries.
 //
-// Steps are NOT in that list. Reuse of step behavior is plain YAML anchors
+// Steps are NOT in that list, and there is no top-level steps: section for
+// one to point at. Reuse of step behavior is plain YAML anchors
 // (anchors.go) — `&base` / `<<: *base` — which needs no conductor machinery
-// and works the same in a pack manifest. What remains of the top-level
-// `steps:` map is a REGISTRY of named steps that other config addresses by
-// name (a `team:` role, a pack's step roles); resolveRoleStep below is that
-// lookup, and it is not reachable from YAML.
+// and works the same in a pack manifest. Where something must POINT at a
+// particular step (a `team:` role, a pack overlay), it addresses it where
+// it lives: `<workflow>/<id>` or `<workflow>[<n>]`. See stepref.go.
 //
 // Merge rules (see mergeStruct): scalars — child wins when set; pointers —
 // child wins when non-nil; maps (labels/env/inputs) — deep-merged, child keys
@@ -47,95 +46,6 @@ func (c *Config) resolveExtends() error {
 	if err := resolveExtendsSection(c.Handoffs, "handoff", func(h HandoffConfig) string { return h.Extends }); err != nil {
 		return err
 	}
-	return c.resolveStepRefs()
-}
-
-// resolveStepRefs resolves every `step: <name>` reference in the config
-// against the top-level `steps:` registry. It runs after packs instantiate,
-// so a pack's role name has already been namespaced or rebound to whatever
-// the consumer pointed it at.
-func (c *Config) resolveStepRefs() error {
-	var err error
-	c.WalkSteps(func(scope IdentityScope, _ int, s *Step) {
-		if err != nil || s.StepRef == "" {
-			return
-		}
-		// A registry entry may not play another one. Chains would need an
-		// order the map does not have, and an entry that wants another's
-		// fields is describing an anchor, not a role.
-		if scope.Kind == "step" {
-			err = fmt.Errorf("config: steps.%s: a named step cannot itself use `step: %s` — share fields with a YAML anchor instead", scope.Name, s.StepRef)
-			return
-		}
-		err = c.ResolveStepRef(s.StepRef, s)
-	})
-	return err
-}
-
-// ResolveStepRefsIn resolves `step:` across a step list built OUTSIDE Load —
-// a lowered legacy trigger, an agent-authored plan — recursing into the
-// nested step forms. Idempotent, so calling it on a load-resolved list does
-// nothing.
-func (c *Config) ResolveStepRefsIn(steps []Step) error {
-	for i := range steps {
-		if err := c.resolveStepRefIn(&steps[i]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *Config) resolveStepRefIn(s *Step) error {
-	if s.StepRef != "" {
-		if err := c.ResolveStepRef(s.StepRef, s); err != nil {
-			return err
-		}
-	}
-	if s.Parallel != nil {
-		for bi := range s.Parallel.Branches {
-			if err := c.ResolveStepRefsIn(s.Parallel.Branches[bi]); err != nil {
-				return err
-			}
-		}
-	}
-	if s.Compensate != nil {
-		return c.resolveStepRefIn(s.Compensate)
-	}
-	return nil
-}
-
-// ResolveStepRef fills a step in from the named `steps:` entry it plays.
-//
-// Two callers: the load-time pass above, and the runtime, which synthesizes
-// team role steps from names a `team:` block supplies. Fields already set
-// win; the rest come from the registry entry, guidance stacking as it does
-// under `extends:`.
-//
-// Identity comes with it. A step that pins no `name:` takes the registry
-// key, so every team using `architect` as its planner — and every workflow
-// step that plays it — share one memory namespace, session pool, and track
-// record. That sharing is the reason to name a step at all; a step that
-// only wants the fields should use an anchor and stay anonymous.
-//
-// Applying twice is a no-op: the reference is cleared once merged, which
-// matters because guidance stacks rather than fills.
-func (c *Config) ResolveStepRef(name string, s *Step) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil
-	}
-	base, ok := c.Steps[name]
-	if !ok {
-		return fmt.Errorf("config: step: %q names no entry in the top-level steps: map (defined: %s)", name, sortedKeys(c.Steps))
-	}
-	pinned := strings.TrimSpace(s.Name)
-	mergeStruct(reflect.ValueOf(s).Elem(), reflect.ValueOf(base))
-	if pinned == "" {
-		s.Name = name
-	} else {
-		s.Name = pinned
-	}
-	s.StepRef = ""
 	return nil
 }
 
@@ -334,4 +244,14 @@ func mergeGuidance(dst, src reflect.Value) {
 	parent := src.Interface().(*GuidanceSpec)
 	merged := child.prepend(parent.Parts)
 	dst.Set(reflect.ValueOf(&merged))
+}
+
+// MergeStepInto fills dst's unset fields from base, using the same merge
+// policy as `extends:` — scalars fill, maps deep-merge, slices replace when
+// dst leaves them empty, and guidance STACKS (base's tone under dst's).
+//
+// Exported for the runtime, which synthesizes a team's role steps from the
+// workflow step the team references and has to join the two.
+func MergeStepInto(dst *Step, base Step) {
+	mergeStruct(reflect.ValueOf(dst).Elem(), reflect.ValueOf(base))
 }

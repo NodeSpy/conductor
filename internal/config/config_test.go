@@ -18,8 +18,8 @@ integrations:
     webhook: { smee_url: https://smee.io/abc }
 control: { pause_label: "conductor:off" }
 notify: { push: true, on: [dispatch, escalate] }
-steps:
-  fixer: { type: agent, name: fixer, workspace: worktree, wait_timeout: 30m, archive_when_done: true }
+x-steps:
+  fixer: &fixer { type: agent, name: fixer, workspace: worktree, wait_timeout: 30m, archive_when_done: true }
 store:
   state_ttl: 720h
   audit_max_size: 50MB
@@ -215,8 +215,9 @@ integrations:
 integrations:
   - type: rss
     name: feeds
-steps:
-  planner: { type: agent, name: planner }
+workflows:
+  plan:
+    steps: [{ id: p, type: agent, prompt: plan }]
 `)
 	main := write("config.yaml", `
 imports:
@@ -224,8 +225,9 @@ imports:
 integrations:
   - type: cron
     name: chores
-steps:
-  fixer: { type: agent, name: fixer, workspace: worktree }
+workflows:
+  fix:
+    steps: [{ id: f, type: agent, prompt: fix, workspace: worktree }]
 paseo_bin: /custom/paseo    # importer scalar must win over any imported default
 `)
 
@@ -244,12 +246,12 @@ paseo_bin: /custom/paseo    # importer scalar must win over any imported default
 	if !names["gh"] || !names["feeds"] || !names["chores"] {
 		t.Fatalf("missing an integration after merge: %v", names)
 	}
-	// Maps merge: agents from both the import and the main file.
-	if _, ok := cfg.Steps["fixer"]; !ok {
-		t.Fatal("main-file agent 'fixer' missing")
+	// Maps merge: workflows from both the import and the main file.
+	if _, ok := cfg.Workflows["fix"]; !ok {
+		t.Fatal("main-file workflow 'fix' missing")
 	}
-	if _, ok := cfg.Steps["planner"]; !ok {
-		t.Fatal("imported agent 'planner' missing")
+	if _, ok := cfg.Workflows["plan"]; !ok {
+		t.Fatal("imported workflow 'plan' missing")
 	}
 	// Importer scalar wins.
 	if cfg.PaseoBin != "/custom/paseo" {
@@ -375,7 +377,7 @@ func TestControllersValidBlock(t *testing.T) {
 		"gem":   {Agent: "gemini"},
 		"ocode": {Agent: "opencode", Transport: "native", SessionModel: "resumable"},
 	}
-	c.Steps = map[string]Step{"reviewer": {Runtime: "gem"}}
+	setTestStep(c, "reviewer", Step{Runtime: "gem"})
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid controllers block should pass, got %v", err)
 	}
@@ -424,7 +426,7 @@ func TestControllerBadTransportAndModel(t *testing.T) {
 func TestAgentUnknownControllerRejected(t *testing.T) {
 	c := ctrlBaseCfg()
 	c.Controllers = map[string]ControllerConfig{"pae": {Type: "paseo"}}
-	c.Steps = map[string]Step{"fixer": {Runtime: "does-not-exist"}}
+	setTestStep(c, "fixer", Step{Runtime: "does-not-exist"})
 	if err := c.Validate(); err == nil {
 		t.Fatal("an agent referencing an undefined controller must be rejected")
 	}

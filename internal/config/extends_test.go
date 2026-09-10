@@ -8,96 +8,49 @@ import (
 
 func gspec(parts ...string) *GuidanceSpec { return &GuidanceSpec{Parts: parts} }
 
-// A team role is a NAME, so the runtime has to join the synthesized role
-// step to the `steps:` entry it addresses. That join uses the same merge
-// policy as every `extends:` — this is where those rules are pinned for
-// steps now that steps have no `extends:` of their own.
-func TestResolveStepRefMergePolicy(t *testing.T) {
-	c := &Config{Steps: map[string]Step{
-		"base": {
-			Model: ModelSpecOf("opus"), Workspace: "worktree",
-			Labels:   map[string]string{"team": "autopilot", "tier": "base"},
-			Guidance: gspec("house tone"),
-		},
-	}}
+// A team role is a REFERENCE to a workflow step, so the runtime has to join
+// the synthesized role step to the step it addresses. That join uses the
+// same merge policy as every `extends:` — this is where those rules are
+// pinned for steps, which have no `extends:` of their own.
+func TestMergeStepIntoPolicy(t *testing.T) {
+	base := Step{
+		Model: ModelSpecOf("opus"), Workspace: "worktree",
+		Labels:   map[string]string{"team": "autopilot", "tier": "base"},
+		Guidance: gspec("house tone"),
+	}
 	role := Step{
 		Model:    ModelSpecOf("sonnet"), // the caller's value wins
 		Labels:   map[string]string{"tier": "fixer", "role": "ci"},
 		Guidance: gspec("you fix CI"),
 	}
-	if err := c.ResolveStepRef("base", &role); err != nil {
-		t.Fatalf("ResolveStepRef: %v", err)
-	}
+	MergeStepInto(&role, base)
 	if role.Model.Ref != "sonnet" {
 		t.Errorf("scalar override: model = %q, want sonnet", role.Model.Ref)
 	}
 	if role.Workspace != "worktree" {
 		t.Errorf("scalar inherit: workspace = %q, want worktree", role.Workspace)
 	}
-	// Labels deep-merge: caller's keys win, the entry's missing ones added.
+	// Labels deep-merge: caller's keys win, the base's missing ones added.
 	want := map[string]string{"team": "autopilot", "tier": "fixer", "role": "ci"}
 	if !reflect.DeepEqual(role.Labels, want) {
 		t.Errorf("labels deep-merge = %v, want %v", role.Labels, want)
 	}
-	// Guidance stacks: the named step's tone under the role's own.
+	// Guidance stacks: the referenced step's tone under the role's own.
 	if got := role.Guidance.Parts; !reflect.DeepEqual(got, []string{"house tone", "you fix CI"}) {
 		t.Errorf("guidance stack = %v, want [house tone, you fix CI]", got)
 	}
-	// The registry entry is untouched.
-	if b := c.Steps["base"]; b.Model.Ref != "opus" || len(b.Guidance.Parts) != 1 {
-		t.Errorf("registry entry mutated: %+v", b)
+	// The base is untouched.
+	if base.Model.Ref != "opus" || len(base.Guidance.Parts) != 1 {
+		t.Errorf("base mutated: %+v", base)
 	}
 }
 
-// The role takes the entry's NAME, which is the whole point of naming it:
-// every team using `base` as its planner shares one identity. A role that
-// pins its own name keeps it.
-func TestResolveStepRefIdentity(t *testing.T) {
-	c := &Config{Steps: map[string]Step{"base": {Model: ModelSpecOf("opus")}}}
-	var role Step
-	if err := c.ResolveStepRef("base", &role); err != nil {
-		t.Fatal(err)
-	}
-	if role.Name != "base" {
-		t.Errorf("role name = %q, want base", role.Name)
-	}
-	pinned := Step{Name: "mine"}
-	if err := c.ResolveStepRef("base", &pinned); err != nil {
-		t.Fatal(err)
-	}
-	if pinned.Name != "mine" {
-		t.Errorf("a pinned name must survive, got %q", pinned.Name)
-	}
-}
-
-func TestResolveStepRefGuidanceReplace(t *testing.T) {
-	c := &Config{Steps: map[string]Step{"base": {Guidance: gspec("house tone")}}}
+func TestMergeStepIntoGuidanceReplace(t *testing.T) {
 	role := Step{Guidance: &GuidanceSpec{Parts: []string{"only mine"}, Replace: true}}
-	if err := c.ResolveStepRef("base", &role); err != nil {
-		t.Fatal(err)
-	}
-	// { replace } does not inherit the entry's parts.
+	MergeStepInto(&role, Step{Guidance: gspec("house tone")})
+	// { replace } does not inherit the base's parts.
 	if p := role.Guidance.Parts; !reflect.DeepEqual(p, []string{"only mine"}) {
 		t.Errorf("replace should not inherit, got %v", p)
-	}
-}
-
-func TestResolveStepRefUnknown(t *testing.T) {
-	c := &Config{Steps: map[string]Step{"base": {}}}
-	var role Step
-	err := c.ResolveStepRef("nope", &role)
-	if err == nil || !strings.Contains(err.Error(), "names no entry") {
-		t.Fatalf("want an unknown-step-ref error, got %v", err)
-	}
-}
-
-// Steps have no `extends:` at all any more — reuse is a YAML anchor, and a
-// leftover `extends:` on a step is a plain unknown-key load error.
-func TestStepsHaveNoExtendsKey(t *testing.T) {
-	var c Config
-	err := strictUnmarshal([]byte("workflows:\n  w: { steps: [{ id: a, extends: base }] }\n"), &c)
-	if err == nil || !strings.Contains(err.Error(), "extends") {
-		t.Fatalf("a step-level extends: must be rejected, got %v", err)
 	}
 }
 

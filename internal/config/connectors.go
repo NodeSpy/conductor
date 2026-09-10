@@ -734,19 +734,7 @@ type Step struct {
 	// anchor (`<<: *base`, see anchors.go), which copies fields at parse time
 	// and leaves identity alone.
 	Name string `yaml:"name,omitempty"`
-	// StepRef names an entry of the top-level `steps:` registry this step
-	// PLAYS: the entry's fields fill in whatever this step leaves unset, and
-	// its key becomes this step's identity unless `name:` pins one.
-	//
-	// It is a REFERENCE, not reuse. Reuse — "these three steps share a
-	// model and a tone" — is a YAML anchor, which needs no name and no
-	// registry. `step:` exists for the case where the name is the point:
-	// a pack ships a `reviewer` role its workflow plays and its consumer
-	// rebinds (`packs.review.steps: { reviewer: my-opus }`), which an
-	// anchor cannot express because an anchor is resolved at parse time and
-	// leaves nothing to rebind.
-	StepRef string `yaml:"step,omitempty"`
-	If      string `yaml:"if,omitempty"`
+	If   string `yaml:"if,omitempty"`
 	// Type is agent | command for the do-work forms ("" for uses/run/use).
 	Type string `yaml:"type,omitempty"`
 

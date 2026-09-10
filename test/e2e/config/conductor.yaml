@@ -26,20 +26,20 @@ integrations:
       actions:
         merge_conflict:
           type: agent
-          step: fixer
+          agent: fixer
           prompt: "Resolve the merge conflict on {{.repo}}#{{.pr}} against {{.base}}, commit and push."
         failing_checks:
           type: agent
-          step: fixer
+          agent: fixer
           ignore_checks: [title-validation]   # group H2b: a check by this name never spins up a fixer
           prompt: "Fix the failing checks on {{.repo}}#{{.pr}}, commit and push."
         new_comment:
           type: agent
-          step: fixer
+          agent: fixer
           prompt: "Address the new comment on {{.repo}}#{{.pr}}, commit and push."
         changes_requested:
           type: agent
-          step: fixer
+          agent: fixer
           prompt: "Address the requested changes on {{.repo}}#{{.pr}}, commit and push."
         # Interactive review hand-off (group C native / E web-link on the paseo
         # controller): a background step launches a live agent, then conductor drives
@@ -48,7 +48,7 @@ integrations:
           steps:
             - id: review
               type: agent
-              step: interactive
+              agent: interactive
               background: true
               prompt: "Draft a review of {{.repo}}#{{.pr}} and wait for the human's approve/revise/discard."
     rules:
@@ -60,25 +60,23 @@ integrations:
         actions:
           new_comment:
             type: agent
-            step: fixer_live
-steps:
+            agent: fixer_live
+
+agents:
   fixer:
-    type: agent
-    name: fixer
+    provider: fake                    # inert; the fake paseo ignores provider/model
     workspace: worktree
     archive_when_done: true           # reaper archives the agent when idle (group B)
     wait_timeout: 5m
   # Group D1: stays live across the burst so dispatch #2/#3 dedup onto its session.
   fixer_live:
-    type: agent
-    name: fixer_live
+    provider: fake
     workspace: worktree
     archive_when_done: false
     wait_timeout: 5m
   # Group C/E: the interactive review agent handed off to the human.
   interactive:
-    type: agent
-    name: interactive
+    provider: fake
     workspace: worktree
     wait_timeout: 5m
 
