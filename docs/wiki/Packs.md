@@ -1,7 +1,7 @@
 # Packs
 
 **Packs** make a conductor configuration **distributable**. A pack is a
-self-contained, versioned bundle of behavior — workflows, step templates,
+self-contained, versioned bundle of behavior — workflows, named steps,
 fleets, policy, checks, and (disarmed) triggers — that anyone can install from a source, parameterize,
 override, and compose. The model is **Terraform-modules-for-conductor**: a
 top-level `packs:` block where each entry is a sourced, versioned, parameterized
@@ -58,7 +58,7 @@ packs:
     secrets:    { review_token: house/review } # BIND a required secret -> your vault ref
     policy:     { budget: { max_cost_usd: 5 } } # deep-merges onto the pack's bundled policy
     steps:
-      reviewer: my-opus                        # BIND a role to one of your steps: templates
+      reviewer: my-opus                        # BIND a role to one of your named steps
       handoff:  { workspace: local }           # OVERRIDE the bundled step (deep-merge)
     models:
       reviewer: claude-opus-5                  # OVERRIDE a bundled fleet
@@ -126,6 +126,31 @@ bundled step's `skill.verbs` fully replaces the bundled list — you can *narrow
 a bundled step's capabilities, not only widen them. (This differs from
 `imports:`, where lists concatenate; a pack override is a deliberate restriction
 surface.)
+
+### Sharing config inside a manifest
+
+A pack's own steps share configuration the same way the main config does —
+a **YAML anchor** under a top-level `x-` key, merged with `<<:`. Anchors are
+file-local, so a pack's house style stays inside the pack and cannot be
+reached (or clobbered) by the consumer:
+
+```yaml
+x-templates:
+  house: &house { type: agent, archive_when_done: true }
+
+steps:
+  reviewer:
+    <<: *house
+    workspace: worktree
+    guidance: "Review only what the diff changes."
+```
+
+A pack's **roles** are the entries of that `steps:` map, and they are named
+rather than anonymous for a reason: a name is what a consumer binds or
+overrides. A pack's own workflow plays one with `step: <role>`. An anchor
+cannot serve here — it is resolved at parse time and leaves nothing to
+rebind — so use an anchor for shared fields and a role for the pack's
+public surface.
 
 ## `requires:` — the interface
 
@@ -362,7 +387,7 @@ The following are **not yet** implemented and are called out honestly:
 - **Ref-rewriting** covers agent/workflow/check refs, connector prefixes in
   `uses`/`on`/hooks (scalar and list-form), the `store:` selector, team roles,
   `skill.verbs`, `skill.allow_secrets`, `session.end_on`, and pack-local
-  `extends:` — but **not** the free-form runtime env-access templates
+  `step:` role refs — but **not** the free-form runtime env-access templates
   `{{ vault … }}`, `{{ secret … }}`, and `{{ kv … }}`. Those are not rebound:
   they resolve the consumer's *global* vault/secret/store by name, so a pack can
   reach undeclared environment through them. The loader **warns** on every such

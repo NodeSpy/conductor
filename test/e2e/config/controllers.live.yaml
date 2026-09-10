@@ -45,15 +45,15 @@ integrations:
             You have push access to origin. Do this now, non-interactively.
     rules:
       - match: { repos: ["grpb/cliclaude"] }
-        actions: { merge_conflict: { type: agent, extends: fx_claude } }
+        actions: { merge_conflict: { type: agent, step: fx_claude } }
       - match: { repos: ["grpb/clicodex"] }
-        actions: { merge_conflict: { type: agent, extends: fx_codex } }
+        actions: { merge_conflict: { type: agent, step: fx_codex } }
       - match: { repos: ["grpb/acpgemini"] }
-        actions: { merge_conflict: { type: agent, extends: fx_gemini } }
+        actions: { merge_conflict: { type: agent, step: fx_gemini } }
       - match: { repos: ["grpb/ocnative"] }
-        actions: { merge_conflict: { type: agent, extends: fx_omp } }
+        actions: { merge_conflict: { type: agent, step: fx_omp } }
       - match: { repos: ["grpb/deck"] }
-        actions: { merge_conflict: { type: agent, extends: fx_deck } }
+        actions: { merge_conflict: { type: agent, step: fx_deck } }
 
 controllers:
   # Explicit command: overrides so the agents run FULLY NON-INTERACTIVELY — an

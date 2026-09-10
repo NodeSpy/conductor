@@ -10,11 +10,11 @@ integrations:
         cron: "* * * * *"
         action:
           type: agent
-          extends: fixer
+          step: fixer
           prompt: outer
           steps:
             - type: agent
-              extends: fixer
+              step: fixer
               prompt: inner
               steps:
                 - type: command

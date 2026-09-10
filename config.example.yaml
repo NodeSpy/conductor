@@ -395,7 +395,7 @@ hosts:
 # triggers:
 #   - on: gh.review_requested
 #     steps:
-#       - { id: fix, type: agent, extends: fixer, prompt: "…",
+#       - { id: fix, type: agent, step: fixer, prompt: "…",
 #           gate: { run: [ test, lint, critic ], max_revisions: 2 } }
 
 # ---------------------------------------------------------------------------
@@ -583,7 +583,7 @@ models:
 #   private memory       -> an opaque scope key, defaulting to the step identity
 #   live-session pool    -> (runtime, model, key) — session: on the runtime or the step
 #   track record         -> an opaque outcome key, defaulting to the step identity
-#   behavior             -> the step itself, shared via extends:
+#   behavior             -> the step itself, shared via a YAML anchor
 #
 # STEP IDENTITY is the one key memory, sessions, and outcomes all default to.
 # It is stable across restarts (never a per-run value):
@@ -594,18 +594,38 @@ models:
 #      (`github.pull_request/security`); editing a prompt does not rotate it
 #   3. a deterministic fingerprint of the step's definition
 #
-# A template's key IS its name, so every step that `extends:` it shares that
-# identity — which is exactly what `agent: fixer` used to give you.
+# SHARING CONFIG between steps is a different thing from sharing identity,
+# and it is plain YAML — an anchor, the same mechanism docker-compose uses.
+# Park the anchors under any top-level `x-` key (the loader ignores those)
+# and merge one in with `<<:`:
+#
+#   x-templates:
+#     base: &base
+#       type: agent
+#       workspace: worktree
+#   triggers:
+#     - on: gh.review_requested
+#       steps:
+#         - <<: *base           # merge the base…
+#           id: fix             # …then this step's own fields (they win)
+#           prompt: "Fix CI."
+#
+# Two caveats worth knowing up front:
+#   * anchors are FILE-LOCAL — they do not cross `imports:`. For reuse across
+#     files, use `extends:` on a map section (runtimes/workflows/handoffs) or
+#     a named step below.
+#   * an anchor copies FIELDS, not identity. Two steps merging one anchor are
+#     still two identities. `name:` is the separate, deliberate opt-in to
+#     sharing one.
+#
+# The `steps:` map below is NOT that mechanism. It is a REGISTRY of named
+# steps other config addresses BY NAME — a `team:` role, or a pack role a
+# consumer rebinds. A step plays one with `step: <name>` and takes its
+# behavior AND its name, which is exactly what `agent: fixer` used to give.
 # ---------------------------------------------------------------------------
 steps:
-  # A template can `extends:` another to inherit its fields — unset scalars
-  # fill, labels/maps deep-merge, and `guidance:` STACKS (parent tone under
-  # the child). Chains allowed; cycles/unknown targets are load errors.
-  #   base:  { type: agent, workspace: worktree, guidance: "Terse and human." }
-  #   fixer: { extends: base, model: claude-opus-5, guidance: "You fix CI." }
   fixer:
     type: agent
-    # extends: base         # inherit another template's fields (wiki: Reuse)
     model: claude-sonnet-5  # a fleet name, a model id, a wildcard, or { any, required }
     workspace: worktree
     wait_timeout: 25m
@@ -664,7 +684,7 @@ workflows:
     steps:
       - id: triage
         type: agent
-        extends: planner
+        step: planner
         checkout: none
         output_schema:
           type: object
@@ -792,7 +812,7 @@ triggers:
     steps:
       - id: audit
         type: agent
-        extends: fixer
+        step: fixer
         model: reviewer          # a fleet from models: — runs on whatever you have
         prompt: |
           Audit {{.repo}} for {{.scope}} and summarize findings.
@@ -803,7 +823,7 @@ triggers:
     steps:
       - id: fix
         type: agent
-        extends: fixer
+        step: fixer
         prompt: |
           {{.repo}}#{{.pr}} has a merge conflict against {{.base}}.
           Rebase or merge, resolve, verify the build, and push.
@@ -820,7 +840,7 @@ triggers:
     steps:
       - id: handle
         type: agent
-        extends: fixer
+        step: fixer
         prompt: |
           Address the review comments on {{.repo}}#{{.pr}}:
           {{range .group.events}}- {{.comment_body}}
@@ -850,7 +870,7 @@ triggers:
     steps:
       - id: audit
         type: agent
-        extends: fixer
+        step: fixer
         prompt: |
           Run the repo audit pass (scope: {{ .inputs.scope | default "changed" }}).
           {{ if .number }}Triggered by issue #{{.number}}.{{ end }}
@@ -899,7 +919,7 @@ triggers:
       - id: draft
         if: "{{.a.decision}} == auto"
         type: agent
-        extends: planner
+        step: planner
         checkout: none
         prompt: "Draft the review for {{.repo}}#{{.pr}}."
       - id: review
@@ -1047,7 +1067,7 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #     secrets:    { review_token: house/review }  # BIND a required secret -> your vault ref
 #     policy:     { budget: { max_cost_usd: 5 } } # deep-merges onto the pack's bundled policy
 #     steps:
-#       reviewer: my-opus                         # BIND a role to your steps: template…
+#       reviewer: my-opus                         # BIND a role to one of your named steps…
 #       handoff:  { workspace: local }            # …or OVERRIDE the bundled one (deep-merge)
 #     models:
 #       reviewer: claude-opus-5                   # OVERRIDE a bundled fleet

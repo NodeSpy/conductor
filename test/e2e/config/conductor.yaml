@@ -26,20 +26,20 @@ integrations:
       actions:
         merge_conflict:
           type: agent
-          extends: fixer
+          step: fixer
           prompt: "Resolve the merge conflict on {{.repo}}#{{.pr}} against {{.base}}, commit and push."
         failing_checks:
           type: agent
-          extends: fixer
+          step: fixer
           ignore_checks: [title-validation]   # group H2b: a check by this name never spins up a fixer
           prompt: "Fix the failing checks on {{.repo}}#{{.pr}}, commit and push."
         new_comment:
           type: agent
-          extends: fixer
+          step: fixer
           prompt: "Address the new comment on {{.repo}}#{{.pr}}, commit and push."
         changes_requested:
           type: agent
-          extends: fixer
+          step: fixer
           prompt: "Address the requested changes on {{.repo}}#{{.pr}}, commit and push."
         # Interactive review hand-off (group C native / E web-link on the paseo
         # controller): a background step launches a live agent, then conductor drives
@@ -48,7 +48,7 @@ integrations:
           steps:
             - id: review
               type: agent
-              extends: interactive
+              step: interactive
               background: true
               prompt: "Draft a review of {{.repo}}#{{.pr}} and wait for the human's approve/revise/discard."
     rules:
@@ -60,7 +60,7 @@ integrations:
         actions:
           new_comment:
             type: agent
-            extends: fixer_live
+            step: fixer_live
 steps:
   fixer:
     type: agent

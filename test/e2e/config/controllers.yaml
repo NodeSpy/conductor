@@ -38,42 +38,42 @@ integrations:
         actions:
           merge_conflict:
             type: agent
-            extends: fixer_explicit
+            step: fixer_explicit
             prompt: "Resolve {{.repo}}#{{.pr}} (explicit controller)."
       - match: { repos: ["a3/*"] }
         actions:
           merge_conflict:
             type: agent
-            extends: fixer_default
+            step: fixer_default
             prompt: "Resolve {{.repo}}#{{.pr}} (default controller)."
       - match: { repos: ["a4/*"] }
         actions:
           merge_conflict:
             type: agent
-            extends: fixer_stub
+            step: fixer_stub
             prompt: "Resolve {{.repo}}#{{.pr}} (non-runnable controller)."
 
       # ---- Group B: one repo per non-paseo controller ---------------------------
       - match: { repos: ["grpb/cliclaude"] }
-        actions: { merge_conflict: { type: agent, extends: fx_cli_claude,
+        actions: { merge_conflict: { type: agent, step: fx_cli_claude,
           prompt: "Resolve {{.repo}}#{{.pr}} (cli:claude-code)." } }
       - match: { repos: ["grpb/clicodex"] }
-        actions: { merge_conflict: { type: agent, extends: fx_cli_codex,
+        actions: { merge_conflict: { type: agent, step: fx_cli_codex,
           prompt: "Resolve {{.repo}}#{{.pr}} (cli:codex)." } }
       - match: { repos: ["grpb/acpgemini"] }
-        actions: { merge_conflict: { type: agent, extends: fx_acp_gemini,
+        actions: { merge_conflict: { type: agent, step: fx_acp_gemini,
           prompt: "Resolve {{.repo}}#{{.pr}} (acp:gemini)." } }
       - match: { repos: ["grpb/acpcodex"] }
-        actions: { merge_conflict: { type: agent, extends: fx_acp_codex,
+        actions: { merge_conflict: { type: agent, step: fx_acp_codex,
           prompt: "Resolve {{.repo}}#{{.pr}} (acp:codex-adapter)." } }
       - match: { repos: ["grpb/ocacp"] }
-        actions: { merge_conflict: { type: agent, extends: fx_oc_acp,
+        actions: { merge_conflict: { type: agent, step: fx_oc_acp,
           prompt: "Resolve {{.repo}}#{{.pr}} (opencode-acp)." } }
       - match: { repos: ["grpb/ocnative"] }
-        actions: { merge_conflict: { type: agent, extends: fx_oc_native,
+        actions: { merge_conflict: { type: agent, step: fx_oc_native,
           prompt: "Resolve {{.repo}}#{{.pr}} (opencode-native)." } }
       - match: { repos: ["grpb/deck"] }
-        actions: { merge_conflict: { type: agent, extends: fx_deck,
+        actions: { merge_conflict: { type: agent, step: fx_deck,
           prompt: "Resolve {{.repo}}#{{.pr}} (agent-deck)." } }
 
       # ---- Group C/D2/E (bare runner): resumable ACP interactive hand-off --------
@@ -83,7 +83,7 @@ integrations:
             steps:
               - id: review
                 type: agent
-                extends: fx_acp_gemini
+                step: fx_acp_gemini
                 background: true
                 prompt: "Draft a review of {{.repo}}#{{.pr}} and wait for approve/revise/discard."
 
@@ -96,7 +96,7 @@ integrations:
             steps:
               - id: review
                 type: agent
-                extends: fx_cli_claude
+                step: fx_cli_claude
                 background: true
                 prompt: "Draft a review of {{.repo}}#{{.pr}} and wait for approve/revise/discard."
 
@@ -107,7 +107,7 @@ integrations:
         actions:
           merge_conflict:
             type: agent
-            extends: fx_acp_gemini
+            step: fx_acp_gemini
             env: { FAKE_ACP_CRASH: "1" }
             prompt: "Resolve {{.repo}}#{{.pr}} (acp crash)."
 

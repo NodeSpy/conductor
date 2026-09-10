@@ -59,10 +59,14 @@ hosts:
 workflows:
   imports: [conf.d/workflows/*.yaml]
 
-# steps: — named, reusable step templates. A trigger's step reaches one with
-# `extends: fixer` and inherits everything it leaves unset. The template's
-# name is also its stable IDENTITY: the key its memory namespace, session
-# pool, and outcome track record all use.
+# steps: — a registry of NAMED steps other config addresses by name: a
+# `team:` role, or a step that plays one with `step: fixer` and inherits
+# everything it leaves unset. The name is also the stable IDENTITY: the key
+# its memory namespace, session pool, and outcome track record all use.
+#
+# To share config WITHOUT sharing identity, use a YAML anchor instead —
+# park it under a top-level `x-` key and merge it with `<<:`. Anchors are
+# file-local, so they do not cross these imports.
 steps:
   imports: [conf.d/steps/*.yaml]
   fixer:

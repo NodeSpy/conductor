@@ -12,13 +12,13 @@ connectors:
 runtimes:
   paseo: { use: paseo, default: true }
 
-steps:
-  fixer: { type: agent, workspace: worktree }
+x-templates:
+  fixer: &fixer { type: agent, workspace: worktree }
 
 triggers:
   - on: gh.merge_conflict
     steps:
-      - { id: fix, extends: fixer, prompt: "Resolve the conflict on {{.repo}}#{{.pr}}." }
+      - { <<: *fixer, id: fix, prompt: "Resolve the conflict on {{.repo}}#{{.pr}}." }
     hooks:
       - { at: done, uses: slack-ops.post, options: { text: "resolved {{.repo}}#{{.pr}}" } }
 ```
@@ -104,7 +104,7 @@ Work down this list and you go from zero to the most advanced setup:
    [[Hand-offs]] (`ask` verbs), and [[Notifications]] (the `conductor.*`
    lifecycle source).
 5. **Composition** — reusable workflows with inputs/outputs ([[Workflows]]),
-   `extends:` inheritance + layered guidance ([[Reuse]]), [[Grouping]],
+   YAML anchors, `extends:` inheritance + layered guidance ([[Reuse]]), [[Grouping]],
    [[Code-Steps]], [[Hosts]], and file splitting (`imports:`, [[Configuration]]).
 6. **State** — `stores:` + the `kv.*`/`sql.*` verbs ([[Stores]]),
    [[Memory]], and session affinity ([[Steps]]).

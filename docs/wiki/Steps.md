@@ -11,23 +11,26 @@ home now, and none of them is an agent:
 | private memory namespace | an **opaque scope key**, defaulting to the step identity ([[Memory]]) |
 | live-session pool (`session`) | **`(runtime, model, key)`** ([[Runtimes]], below) |
 | self-improvement track record | an **opaque track-record key**, defaulting to the step identity ([[Outcomes]]) |
-| behavior (guidance, skill, workspace, timeouts, archive, host, isolation) | **the step**, reused via `extends:` |
+| behavior (guidance, skill, workspace, timeouts, archive, host, isolation) | **the step**, shared with a **YAML anchor** |
 
 Existing configs are migrated automatically at boot (or by
 `conductor config migrate`), and the migration is careful to preserve your
 accumulated history — see [Migration](#migration-from-agents) below.
 
-## Step templates
+## Sharing step behavior
 
-Behavior lives on the step that dispatches the work. To share it, put it in
-the top-level `steps:` map and point `extends:` at it — the same `extends:`
-machinery every other section uses ([[Reuse]]).
+Behavior lives on the step that dispatches the work. To share it between
+steps, use a **YAML anchor** — `&name` to define, `<<: *name` to merge. It
+is the same mechanism docker-compose uses, it needs no conductor feature,
+and it works identically in a [[Packs|pack manifest]]. Park the anchors
+under any top-level `x-` key: the loader ignores `x-`-prefixed sections
+(the compose extension-field convention), so they exist purely to hold
+anchors.
 
 ```yaml
-steps:
-  fixer:
+x-templates:
+  fixer: &fixer
     type: agent
-    # extends: base                   # inherit another template's fields
     model: claude-opus-5              # a fleet name, a model id, a wildcard,
                                       #   or { any: [...], required: bool }
     thinking: ""                      # runtime launch hint (optional)
@@ -46,20 +49,57 @@ steps:
     # session: { key: "{{.repo}}#{{.pr}}" }   # this step's own session pool
     # skill: { verbs: [gh.comment] }  # reach back into conductor ([[Agent-Skill]])
     # isolation: { mode: namespace }  # per-dispatch sandboxing ([[Isolation]])
-  planner:
-    type: agent
-    model: claude-haiku-4-5           # cheaper/faster for planning and triage
-    workspace: local
-    archive_when_done: true
 
 triggers:
   github.pull_request:
     steps:
-      - { id: fix, extends: fixer, prompt: "Resolve the conflict on {{.repo}}#{{.pr}}." }
+      - <<: *fixer                    # merge the anchor…
+        id: fix                       # …then this step's own fields, which win
+        prompt: "Resolve the conflict on {{.repo}}#{{.pr}}."
 ```
 
-A step may of course carry these fields inline — a template is only how you
-share them.
+A step may of course carry these fields inline — an anchor is only how you
+avoid retyping them.
+
+Two things to know:
+
+- **Anchors are file-local.** YAML resolves them per document, so an anchor
+  defined in `config.yaml` is not visible in an imported `conf.d/*.yaml`.
+  For reuse across files, use `extends:` on a map section
+  (`runtimes:`/`workflows:`/`handoffs:`) or a named step, below. See
+  [[Reuse]].
+- **An anchor copies fields, not identity.** Two steps merging one anchor
+  are still two identities. `name:` is the separate, deliberate opt-in to
+  sharing one — see below.
+
+## Named steps: the `steps:` registry
+
+The top-level `steps:` map is not a template store; it is a registry of
+steps that other config addresses **by name**. Two things address it:
+
+- a [[Workflows|`team:`]] block, whose `planner`/`worker`/`critic`/
+  `reconcile` roles are names;
+- a step that plays one with **`step: <name>`**, inheriting every field it
+  leaves unset — and the entry's name as its identity.
+
+```yaml
+steps:
+  reviewer:
+    type: agent
+    workspace: worktree
+    guidance: "Review only what the diff changes. Cite file:line."
+
+workflows:
+  review:
+    steps:
+      - { id: r, step: reviewer, prompt: "Review {{.repo}}#{{.pr}}." }
+```
+
+Reach for a name when the name is the point: a [[Packs|pack]] ships a
+`reviewer` role its consumer rebinds (`packs.review.steps: { reviewer:
+my-opus }`), which an anchor cannot express because an anchor is resolved
+at parse time and leaves nothing to rebind. For plain "these steps share a
+model and a tone", use an anchor and stay anonymous.
 
 `agent:` still parses, but it is now a free-form **attribution label** that
 selects nothing. What identifies a dispatch is its identity, below.
@@ -72,9 +112,10 @@ pure function of config — never a per-run value:
 
 1. an explicit **`name:`** — author-pinned, and **shareable**: two steps with
    the same name share one memory namespace, one session pool, and one track
-   record. A step that `extends:` a template inherits the template's name, so
-   every user of one template shares its identity — exactly the reuse a
-   shared `agent: fixer` gave you.
+   record. A step that plays a named step (`step: fixer`) inherits that
+   name, so every user of it shares one identity — exactly the reuse a
+   shared `agent: fixer` gave you. Merging an **anchor** does not do this:
+   an anchor copies fields and leaves identity alone.
 2. **structural** — the enclosing qualified trigger/workflow plus the step's
    slot: `github.pull_request/security`. This is the default.
 3. a deterministic **fingerprint** of the step's definition, for a step with
@@ -94,7 +135,7 @@ a step that has neither a `name:` nor an `id:` — give it one to pin it.
 | Field | Meaning |
 | --- | --- |
 | `name` | Pins the step's identity (see above). Shareable on purpose. |
-| `extends` | Inherit from a `steps:` template: unset fields fill, `labels` deep-merge, `guidance` stacks (template tone under the step's), and the template's `name:` becomes this step's identity. See [[Reuse]]. |
+| `step` | Play a named entry of the top-level `steps:` registry: unset fields fill, `labels` deep-merge, `guidance` stacks (the entry's tone under the step's), and the entry's name becomes this step's identity. See [[Reuse]]. |
 | `model` | Which model to run: a fleet name, a model id, a wildcard, an inline list, or `{ any, required }`. Unset → the runtime's `models.default:`, then a bare launch. See [[Model-Selection]]. |
 | `runtime` | A `runtimes.<name>` entry to run on (default: the `default: true` runtime, else the built-in paseo). See [[Runtimes]]. |
 | `thinking` / `mode` | Runtime launch hints, passed through where the runtime supports them. |
@@ -117,7 +158,7 @@ it lives on the **runtime** ([[Cost-Accounting]]).
 ## Behavior
 
 - Every step of a multi-step [[Workflows|workflow]] can differ — a common
-  pattern is a cheap `planner` template triaging an issue and handing off to
+  pattern is a cheap `planner` step triaging an issue and handing off to
   a stronger `fixer` only when the triage justifies it
   (`if: "{{.evaluate.has_context}} == true"`).
 - `workspace` governs the checkout lifecycle (persistent checkout vs. a fresh
@@ -203,9 +244,15 @@ unbound, and replaced by a fresh spawn.
 profile, and it is careful about one thing above all: **your accumulated
 history carries over.** Memory, sessions, and outcomes used to key off the
 agent NAME; they now key off the step IDENTITY. So the migration emits each
-profile as a template whose **`name:` is the old agent name** — the identity
-ladder's top rung — and rewrites every `agent: X` to `extends: X`, which
-inherits that name.
+profile as a named `steps:` entry whose **`name:` is the old agent name** —
+the identity ladder's top rung — and rewrites every `agent: X` to
+`step: X`, which inherits that name.
+
+A named step rather than an anchor, deliberately: `agents:` commonly sat in
+`config.yaml` while the triggers naming it sat in `conf.d/*.yaml`, and an
+anchor does not cross `imports:`. (Where a profile `extends:` another
+profile, both land in the same file, so the migration *does* emit an anchor
+there.)
 
 The keys therefore come out identical to what your box already has on disk:
 `outcomeStats["fixer"]` stays `outcomeStats["fixer"]`, engagements still
@@ -219,8 +266,9 @@ recalled through a compatibility alias.
 | `provider` alone | nothing — that named a backend, not a model, so it becomes a bare launch |
 | `budget` | `runtimes.<the runtime it ran on>.budget` |
 | `controller` | `runtime` |
-| behavior fields | the same key on the template |
-| `agent: <n>` on a step | `extends: <n>` |
+| behavior fields | the same key on the named step |
+| `agents.<child>.extends: <parent>` | a YAML anchor `&parent` + `<<: *parent` within `steps:` |
+| `agent: <n>` on a step | `step: <n>` |
 
 Anything the decomposition has no home for is dropped **with a note** in the
 migration summary, never silently.

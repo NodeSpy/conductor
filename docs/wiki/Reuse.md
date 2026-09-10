@@ -1,32 +1,70 @@
-# Configuration reuse: `extends:` and layered guidance
+# Configuration reuse: anchors, `extends:`, and layered guidance
 
-Real configs repeat themselves: agent profiles share a provider/model/runtime, and
-near-identical triggers repeat the same `repos:`/`steps:`/`filters:` per team. Two mechanisms
-remove that duplication — `extends:` inheritance between named entries, and guidance that
-*stacks* across scopes instead of being retyped. YAML anchors (`<<: *base`) don't cover this: they
-don't cross imported `conf.d/*.yaml` files and can't append to a scalar.
+Real configs repeat themselves: steps share a model and a tone, and near-identical triggers repeat
+the same `repos:`/`steps:`/`filters:` per team. Three mechanisms remove that duplication, and they
+do different jobs:
 
-## `extends:` — inherit from another entry
+| | what it shares | scope |
+| --- | --- | --- |
+| **YAML anchors** (`&base` / `<<: *base`) | fields, copied at parse time | one file |
+| **`extends:`** on a map section or a trigger | fields, merged at load | the whole config, after `imports:` |
+| **layered `guidance:`** | tone, stacked rather than replaced | the policy cascade |
 
-A named entry declares `extends: <name>` to inherit from another entry **in the same section**.
-Supported on **`steps:`, `runtimes:`, `workflows:`, `handoffs:`, and `triggers:`** — and from a
-trigger/workflow step onto a `steps:` template. Resolution runs
-once at load, after `imports:` merge and before validation, so everything downstream sees
-fully-resolved entries.
+## YAML anchors — the default way to share step behavior
+
+Steps have no `extends:`. Sharing their configuration is plain YAML, exactly as in
+docker-compose: `&name` defines an anchor, `<<: *name` merges it, and the merging step's own keys
+win. Anchors must live somewhere, so park them under any top-level **`x-`** key — the loader
+ignores `x-`-prefixed sections (the compose extension-field convention), and they exist purely to
+hold anchors.
 
 ```yaml
-steps:
-  base:
+x-templates:
+  base: &base
     type: agent
     workspace: worktree
     labels: { team: autopilot }
-    guidance: "House style: terse, one thought per sentence."
-  fixer:
-    extends: base            # inherits workspace/labels
-    model: claude-opus-5     # scalars: the child wins
-    labels: { role: ci }     # maps deep-merge -> {team: autopilot, role: ci}
-    guidance:
-      - "You fix failing CI: reproduce, fix, verify locally, push."   # stacks under base's tone
+
+triggers:
+  - on: gh.review_requested
+    steps:
+      - <<: *base                    # merge the anchor…
+        id: fix                      # …then this step's own fields, which win
+        model: claude-opus-5
+        prompt: "Fix the failing checks on {{.repo}}#{{.pr}}."
+```
+
+This works the same in a [[Packs|pack manifest]] — a pack author gets anchors with no extra
+machinery, and they stay inside the pack's own file.
+
+Two caveats:
+
+- **Anchors are file-local.** YAML resolves them per document, so an anchor defined in
+  `config.yaml` is invisible to an imported `conf.d/*.yaml`. That is YAML, not a conductor limit.
+  For cross-file reuse, use `extends:` (below) or a named step.
+- **An anchor shares fields, not identity.** Two steps merging one anchor remain two identities —
+  their memory namespaces, session pools, and track records stay separate. `name:` is the separate,
+  deliberate opt-in to sharing one; see [[Steps]]. Do not add `name:` just because you used an
+  anchor.
+- Ordinary YAML rules apply: the merge overrides whole keys, and unlike `extends:` below, a
+  `guidance:` merged in is **replaced** by the step's own rather than stacked under it.
+
+## `extends:` — inherit from another named entry
+
+A named entry declares `extends: <name>` to inherit from another entry **in the same section**.
+Supported on **`runtimes:`, `workflows:`, `handoffs:`, and `triggers:`**. Resolution runs once at
+load, **after `imports:` merge** and before validation — which is what makes it work across files
+where an anchor cannot.
+
+```yaml
+runtimes:
+  remote:
+    use: cli
+    host: build-box
+    isolation: { mode: namespace }
+  remote-codex:
+    extends: remote          # inherits host/isolation
+    command: [codex]         # slices: the child replaces
 ```
 
 ### Merge rules
@@ -40,7 +78,7 @@ steps:
 | `guidance` | **stacks** (parent parts, then child parts) — see below |
 
 Chains are allowed (`c → b → a`, resolved root→leaf). A **cycle** or an **unknown `extends:`
-target** is a load error. One documented limitation: a plain `bool` field (e.g. an agent's
+target** is a load error. One documented limitation: a plain `bool` field (e.g. a step's
 `archive_when_done`, a runtime's `default`) is inherited only when the child leaves it `false` — a
 child can't force a parent's `true` back to `false`. The optional fields that matter are pointers or
 strings, so this rarely bites.
@@ -88,13 +126,13 @@ tone of its own. If you configure nothing, nothing is injected. From the bottom 
    **global → connector → trigger**, the baseline is scopable. Scopes **stack** by default (a
    trigger's guidance adds under the global tone); a scope that uses the `{ replace: … }` form
    **resets** the cascade from that scope down.
-2. **The agent profile's own `guidance`** (plus anything it inherits through `extends:`) stacks on
+2. **The step's own `guidance`** (plus anything it inherits from a named step it plays) stacks on
    top of the baseline.
 
 `config.example.yaml` ships a reasonable house tone under `policy.guidance` you can adopt or
 change — it is an example, not a default conductor imposes.
 
-`guidance:` accepts three forms, at both the policy scope and the agent profile:
+`guidance:` accepts three forms, at both the policy scope and the step:
 
 ```yaml
 guidance: "one block"            # a single part
@@ -104,8 +142,10 @@ guidance: { replace: "only me" } # reset: drop everything below this level, use 
 
 - `guidance: ""` or `[]` at a level contributes nothing but does **not** suppress the levels below.
 - `guidance: { replace: "" }` disables guidance entirely for that agent.
-- An `extends:` child inherits its parent's guidance underneath its own, unless the child resets with
-  `{ replace }`.
+- An `extends:` child — and a step playing a named `steps:` entry — inherits the parent's guidance
+  underneath its own, unless it resets with `{ replace }`. A YAML anchor does **not** stack: a
+  merged `guidance:` is replaced wholesale by the step's own, because that is what a YAML merge
+  does.
 
 `agent_guidance:` (the old top-level field) still works — it is folded into the **global**
 `policy.guidance` for back-compat, so connector/trigger-scoped guidance stacks on top of it. If both
@@ -134,12 +174,12 @@ steps:
     guidance: "Flag only what a thoughtful senior would bother raising."     # stacks on top
 ```
 
-A `reviewer` dispatched from a `gh` trigger sees all three blocks; the same profile on a Slack
+A step playing `reviewer` from a `gh` trigger sees all three blocks; the same step on a Slack
 trigger sees only the global tone plus its own.
 
 ## See also
 
-- [[Steps]] — agent profiles and the `guidance`/`extends` fields
+- [[Steps]] — step behavior, the `steps:` registry, and step identity
 - [[Policy]] — the cascade `policy.guidance` rides on
 - [[Runtimes]], [[Workflows]] — other sections that support `extends:`
 - [[Configuration]] — the full trigger grammar

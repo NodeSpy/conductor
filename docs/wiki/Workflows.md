@@ -13,10 +13,13 @@ into the same steps — each item a bare `conn.event` or a one-key map
 [[Configuration]] for the list grammar and merge semantics.
 
 ```yaml
+x-templates:
+  fixer: &fixer { type: agent, workspace: worktree }
+
 triggers:
   - on: gh.merge_conflict
     steps:
-      - { id: fix, extends: fixer, prompt: "Resolve the conflict on {{.repo}}#{{.pr}}." }
+      - { <<: *fixer, id: fix, prompt: "Resolve the conflict on {{.repo}}#{{.pr}}." }
     hooks:
       - { at: start, uses: slack-ops.post, options: { text: "on it: {{.repo}}#{{.pr}}" } }
       - { at: done,  uses: slack-ops.post, options: { text: "resolved {{.repo}}#{{.pr}}" } }
@@ -96,8 +99,11 @@ A step is one of six forms (all share `id` and `if`):
 
 An agent step carries its own BEHAVIOR — guidance, skill, memory opt-in,
 workspace, timeouts, isolation, model, runtime — and shares it with other
-steps through a named template in `steps:` reached by `extends:`. There is no
-`agents:` block; see [[Steps]].
+steps through a YAML anchor (`<<: *base`, parked under a top-level `x-`
+key). Where the NAME is the point rather than the fields — a `team:` role,
+a pack role a consumer rebinds — the step plays a named entry of the
+top-level `steps:` registry with `step: <name>`. There is no `agents:`
+block; see [[Steps]] and [[Reuse]].
 
 Agent steps have two extra memory hooks (when a `memory:` section is
 configured): a `remember:` block in the agent's final output persists
