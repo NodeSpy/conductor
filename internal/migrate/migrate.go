@@ -155,10 +155,12 @@ func Transform(raw []byte) (*Result, error) {
 			conn, trs, err = cronTransform(ref.Name, ref, &notes)
 		case "webhook":
 			conn, trs, err = webhookTransform(ref.Name, ref, &notes)
-		case "sentry":
-			conn, trs, err = sentryTransform(ref.Name, ref, &notes)
-		case "pagerduty":
-			conn, trs, err = pagerdutyTransform(ref.Name, ref, &notes)
+		case "sentry", "pagerduty":
+			// Extracted to an external plugin — recognised, deliberately not
+			// transformed. See legacy_extracted.go for why an automatic
+			// transform would emit a config that never fires.
+			notes = append(notes, extractedNote(ref.Type, ref.Name))
+			continue
 		case "rss":
 			conn, trs, err = rssTransform(ref.Name, ref, &notes)
 		default:

@@ -124,6 +124,22 @@ connectors:
         title: "{{.body.detail.alarmName}}"
         dedup: "{{.body.detail.alarmName}}-{{.body.time}}"
 
+  # sentry and pagerduty are NOT bundled — they are external plugins from
+  # github.com/NodeSpy/conductor-plugins. Declare the plugin, then the
+  # connector instance; `conductor init` fetches, verifies and pins the binary.
+  # Filters use the plugin's own vocabulary and steps template its flat context
+  # keys ({{.level}}, {{.short_id}}, …), not the old nested {{.sentry.*}}.
+  #
+  # plugins:
+  #   sentry:
+  #     source: github.com/NodeSpy/conductor-plugins//sentry
+  #     kind: connector
+  #     isolation: { mode: namespace }
+  #   pagerduty:
+  #     source: github.com/NodeSpy/conductor-plugins//pagerduty
+  #     kind: connector
+  #     isolation: { mode: namespace }
+  #
   # sentry-prod:
   #   type: sentry
   #   listen: ":8098"

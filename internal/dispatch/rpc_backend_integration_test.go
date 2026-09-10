@@ -13,54 +13,43 @@ import (
 	"github.com/NodeSpy/conductor/internal/plugin"
 )
 
-// buildPaseoPlugin compiles the REAL conductor-paseo plugin (built only
-// against pkg/plugin + os/exec + stdlib) into a temp dir, mirroring
-// internal/plugin's buildGithubPlugin helper.
-func buildPaseoPlugin(t *testing.T) string {
+// buildRuntimePlugin compiles the in-repo acme-runtime reference plugin (built
+// only against the public pkg/plugin SDK) into a temp dir, mirroring
+// internal/plugin's buildExamplePlugin helper.
+//
+// It deliberately does NOT build a concrete runtime plugin. The paseo plugin
+// now lives in the conductor-plugins repo, where its own verbs and CLI
+// shell-out are tested against a protocol client
+// (conductor-plugins/e2e/paseo_test.go). What belongs HERE is the daemon's half
+// of the contract — rpcBackend over a real subprocess — so this drives the
+// generic runtime-shaped reference plugin instead, and stays green regardless
+// of what any external plugin does.
+func buildRuntimePlugin(t *testing.T) string {
 	t.Helper()
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go toolchain not available")
 	}
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "conductor-paseo")
-	build := exec.Command("go", "build", "-o", bin, "github.com/NodeSpy/conductor/plugins/conductor-paseo")
+	bin := filepath.Join(dir, "acme-runtime")
+	build := exec.Command("go", "build", "-o", bin, "github.com/NodeSpy/conductor/test/plugins/acme-runtime")
 	build.Env = os.Environ()
 	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build conductor-paseo: %v\n%s", err, out)
+		t.Fatalf("build acme-runtime: %v\n%s", err, out)
 	}
 	return bin
 }
 
-// TestRPCBackendRoundTripsListAgentsAndArchive builds the real conductor-paseo
-// plugin binary, drives it through a *plugin.Client exactly the way the
-// daemon would, and round-trips ListAgents and ArchiveAgent through
-// rpcBackend end to end: verb call -> plugin subprocess -> shells to a stub
-// `paseo` CLI (pointed at via the paseo_bin connection field) -> JSON result
-// parsed back into Backend's typed result. This proves the wiring the
-// Dispatcher would use when configured to run paseo via a plugin, without
-// changing the default (cliBackend) path at all.
+// TestRPCBackendRoundTripsListAgentsAndArchive drives rpcBackend through a
+// *plugin.Client against a REAL plugin subprocess over the REAL transport, the
+// way the daemon would: Backend method -> verb call + options across the wire
+// -> plugin reply -> parsed back into Backend's typed result. This proves the
+// wiring the Dispatcher uses when configured to run a runtime via a plugin,
+// without changing the default (cliBackend) path at all.
 func TestRPCBackendRoundTripsListAgentsAndArchive(t *testing.T) {
-	pluginBin := buildPaseoPlugin(t)
-	stubDir := t.TempDir()
-	stubBin := filepath.Join(stubDir, "paseo")
-	script := `#!/usr/bin/env bash
-dir="$(cd "$(dirname "$0")" && pwd)"
-echo "$@" >> "$dir/calls.log"
-case "$1" in
-  ls) cat "$dir/ls.json" 2>/dev/null || echo '[]' ;;
-  archive) exit 0 ;;
-  *) echo '{}' ;;
-esac
-`
-	if err := os.WriteFile(stubBin, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(stubDir, "ls.json"),
-		[]byte(`[{"id":"a-1","cwd":"/wt/one","status":"idle"}]`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	pluginBin := buildRuntimePlugin(t)
+	logPath := filepath.Join(t.TempDir(), "calls.log")
 
-	spec := plugin.Spec{Name: "paseo1", Kind: plugin.KindConnector, Provides: "paseo",
+	spec := plugin.Spec{Name: "rt1", Kind: plugin.KindConnector, Provides: "acme-runtime",
 		BinPath: pluginBin, AllowUnverified: true, AllowUnsandboxed: true}
 	client := plugin.NewClient(spec, plugin.Deps{})
 	defer client.Close()
@@ -71,9 +60,8 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decl.Type != "paseo" {
-		t.Fatalf("decl.Type = %q, want paseo", decl.Type)
-	}
+	// Every operation the Backend interface needs must be declared, or
+	// rpcBackend has nothing to call.
 	wantVerbs := map[string]bool{
 		"run": false, "list_agents": false, "inspect": false, "archive_agent": false,
 		"archive_workspace": false, "create_worktree": false, "create_workspace": false,
@@ -90,7 +78,11 @@ esac
 		}
 	}
 
-	backend := NewRPCBackend(client, "paseo1", map[string]any{"paseo_bin": stubBin}, 0, 0)
+	conn := map[string]any{
+		"calls_log":         logPath,
+		"reply_list_agents": `{"agents":[{"id":"a-1","cwd":"/wt/one","status":"idle"}]}`,
+	}
+	backend := NewRPCBackend(client, "rt1", conn, 0, 0)
 
 	agents, err := backend.ListAgents(ctx, map[string]string{"conductor": "1"})
 	if err != nil {
@@ -104,19 +96,53 @@ esac
 		t.Fatalf("ArchiveAgent: %v", err)
 	}
 
-	calls, _ := os.ReadFile(filepath.Join(stubDir, "calls.log"))
-	if !strings.Contains(string(calls), "--label conductor=1") {
-		t.Errorf("ListAgents should have forwarded the label filter to the CLI, got:\n%s", calls)
+	calls, _ := os.ReadFile(logPath)
+	if !strings.Contains(string(calls), `list_agents {"labels":{"conductor":"1"}}`) {
+		t.Errorf("ListAgents should have sent the label filter across the wire, got:\n%s", calls)
 	}
-	if !strings.Contains(string(calls), "archive a-1") {
-		t.Errorf("ArchiveAgent should have shelled `archive a-1`, got:\n%s", calls)
+	if !strings.Contains(string(calls), `archive_agent {"id":"a-1"}`) {
+		t.Errorf("ArchiveAgent should have sent verb archive_agent with id a-1, got:\n%s", calls)
+	}
+}
+
+// TestRPCBackendRetriesOverRealSubprocess proves the retry loop against a real
+// plugin subprocess, not just an in-process double: the plugin fails the first
+// two `run` calls with a transient git-lock message and succeeds on the third.
+func TestRPCBackendRetriesOverRealSubprocess(t *testing.T) {
+	pluginBin := buildRuntimePlugin(t)
+	logPath := filepath.Join(t.TempDir(), "calls.log")
+
+	spec := plugin.Spec{Name: "rt2", Kind: plugin.KindConnector, Provides: "acme-runtime",
+		BinPath: pluginBin, AllowUnverified: true, AllowUnsandboxed: true}
+	client := plugin.NewClient(spec, plugin.Deps{})
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	conn := map[string]any{
+		"calls_log": logPath,
+		"fail_run":  "fatal: could not lock config file .git/config: File exists#2",
+		"reply_run": `{"output":"ran","agentId":"a-ok"}`,
+	}
+	backend := NewRPCBackend(client, "rt2", conn, 2, time.Millisecond)
+
+	res, err := backend.RunAgent(ctx, RunAgentOptions{Args: []string{"run", "p"}})
+	if err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+	if res.AgentID != "a-ok" || res.Output != "ran" {
+		t.Fatalf("RunAgent result = %+v", res)
+	}
+	calls, _ := os.ReadFile(logPath)
+	if got := strings.Count(string(calls), "run "); got != 3 {
+		t.Fatalf("expected 3 run attempts (2 transient failures + 1 success) across the wire, got %d:\n%s", got, calls)
 	}
 }
 
 // fakeInvoker is an in-process Invoker double — no plugin subprocess at all —
 // for asserting rpcBackend's verb+options mapping and output parsing in
-// isolation (the "at minimum" fallback the task allows, done here IN ADDITION
-// to the real-binary round trip above for extra coverage of every method).
+// isolation, IN ADDITION to the real-binary round trips above, for cheap
+// coverage of every method.
 type fakeInvoker struct {
 	calls []plugin.InvokeRequest
 	// outputs, keyed by verb; err, keyed by verb (checked first).
