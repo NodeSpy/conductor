@@ -87,6 +87,18 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			rollback()
 			return nil, fmt.Errorf("plugin %s: declared under connectors: but it describes itself as a %s — a %s cannot be wired as a connector", spec.Name, decl.Kind, decl.Kind)
 		}
+		// CAN'T-EXCEED-DECLARATION: every instance's `network:` must be covered
+		// by what the plugin says it needs. A config that widens a plugin's
+		// declared egress is a config error, not a silent grant.
+		for cname, cref := range cfg.ConnectorsMap {
+			if cref.TypeName() != spec.Name || len(cref.Network) == 0 {
+				continue
+			}
+			if err := plugin.CheckNetworkWithinManifest(cname, decl.Capabilities.Egress, cref.Network); err != nil {
+				rollback()
+				return nil, err
+			}
+		}
 		cl, _ := mgr.Client(spec.Key())
 		if _, err := connector.RegisterExternalConnector(cl, spec, decl); err != nil {
 			rollback()
