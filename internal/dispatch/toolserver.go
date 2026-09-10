@@ -67,7 +67,9 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 		args = append(args, "--number", strconv.Itoa(n))
 	}
 	out := &ToolServerSpec{Command: argv[0], Args: args}
-	if b := skill.Active(); b != nil && req.Step.Skill != nil {
+	// !req.AgentAuthored: same refusal as SkillEnv, at the MCP-injection face.
+	// A skill grant is minted only for a step the operator authored.
+	if b := skill.Active(); b != nil && req.Step.Skill != nil && !req.AgentAuthored {
 		claim, err := b.MintClaim(skill.Identity{
 			Agent:   req.Action.Agent,
 			Repo:    req.Trigger.Target.Repo,
@@ -92,6 +94,15 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 // the paseo/cli counterpart to BuildToolServer's MCP injection (ACP/opencode).
 func SkillEnv(req Request, endpoint string) map[string]string {
 	if req.Step.Skill == nil || endpoint == "" {
+		return nil
+	}
+	// Defense in depth at the READ point. flow strips skill: from every
+	// agent-authored dispatch before building the request, and both plan
+	// guards reject it at admission — but this is where a grant actually
+	// becomes a token, so it refuses independently. An agent-authored step
+	// carrying a skill: block got it from somewhere it shouldn't have; mint
+	// nothing rather than trust that the upstream strip ran.
+	if req.AgentAuthored {
 		return nil
 	}
 	b := skill.Active()

@@ -142,11 +142,12 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 			// diverts the review draft to an agent-nominated channel. guardPlan
 			// rejects both too — this validator refuses them independently so no
 			// plan path admits one (matching the gate: posture).
-			if step.Background {
-				return fmt.Errorf("%s: agent-authored steps may not set background:", w)
-			}
-			if step.Handoff != "" {
-				return fmt.Errorf("%s: agent-authored steps may not set handoff:", w)
+			// Same single list guardPlan uses (agentauthored_fields.go).
+			// This validator refuses independently so no plan path admits a
+			// step carrying an operator-owned field — including skill:, the
+			// capability grant an agent must never write for itself.
+			if err := checkAgentAuthoredFields(w, &step); err != nil {
+				return err
 			}
 			switch step.Form() {
 			case "verb":

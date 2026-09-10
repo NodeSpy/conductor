@@ -1435,10 +1435,20 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		spendRes = res
 	}
 	historySetInputs(ctx, id, map[string]any{"agent": identity, "prompt": clipText(act.Prompt, 4000)})
+	authored := agentAuthored(ctx)
+	if authored {
+		// Strip the inheritable grants at the point the dispatch is BUILT.
+		// The guards run at plan admission; a team role reference merges a
+		// config step in afterwards (roleStep → MergeStepInto) and could
+		// carry that step's skill: or isolation: into an agent-authored
+		// launch without any guard seeing it. One strip here covers every
+		// way the grant can arrive.
+		sanitizeAgentAuthoredStep(&step)
+	}
 	req := dispatch.Request{
 		Trigger: t, Action: act, Step: step, Identity: identity, Model: model, Tokens: tokens,
 		Shadow: shadow, Wait: !step.Background, Interactive: step.Background, Data: data,
-		AgentAuthored: agentAuthored(ctx),
+		AgentAuthored: authored,
 	}
 	ref, err := r.Agents.Dispatch(ctx, req)
 	switch {

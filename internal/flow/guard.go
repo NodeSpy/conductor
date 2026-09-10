@@ -84,11 +84,14 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 			// the ONLY gate path for agent-authored steps; the same holds for a
 			// team step's per-worker gate. (Config-authored steps keep setting
 			// their own — this guard only sees agent-authored plans.)
-			if step.Gate != nil {
-				return fmt.Errorf("%s: agent-authored steps may not set gate: — the inherited trigger/workflow gate is the only gate path for agent output", w)
-			}
-			if step.Team != nil && step.Team.Gate != nil {
-				return fmt.Errorf("%s: agent-authored team steps may not set team.gate: — the operator's configuration owns the checks on agent output", w)
+			// Every field an agent-authored step may not carry is listed in
+			// ONE place (agentauthored_fields.go) — gate:, team.gate:,
+			// background:, handoff:, skill:. Each is a capability the
+			// operator owns; a step that set its own would be widening its
+			// authority with output it wrote itself. A new such field is
+			// added there, not here, so no entry path can miss it.
+			if err := checkAgentAuthoredFields(w, step); err != nil {
+				return err
 			}
 			// Nor may an agent-authored step background itself or divert its
 			// review to a hand-off channel — both escape the gate the same way a
@@ -97,12 +100,6 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 			// output that never returns), and handoff: routes the review draft to
 			// an agent-nominated channel instead of the operator's gate. The
 			// operator opts into these in config; an emitted plan may not.
-			if step.Background {
-				return fmt.Errorf("%s: agent-authored steps may not set background: — a backgrounded agent runs outside the gate on agent output", w)
-			}
-			if step.Handoff != "" {
-				return fmt.Errorf("%s: agent-authored steps may not set handoff: — the review channel for agent output is the operator's to configure", w)
-			}
 			if !pol.TrustFull() {
 				switch {
 				case matchAny(pol.Approve, class):
