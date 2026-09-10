@@ -393,6 +393,21 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			}
 			go func() { _ = e.archiveAgent(context.Background(), agentID) }()
 		},
+		// The agents/hour cap, shared with the legacy steps: path so a flood
+		// through either is counted against one window.
+		CheckRate: func() error {
+			max := e.cfg.AgentsPerHour()
+			if max <= 0 {
+				return nil
+			}
+			if e.overAgentBudget(max) {
+				e.store.Audit(map[string]any{"event": "budget_shed",
+					"scope": "agents_per_hour", "reason": "rate", "limit": max})
+				return fmt.Errorf("agents_per_hour cap of %d reached in the last hour — shedding this dispatch", max)
+			}
+			e.recordAgentDispatch()
+			return nil
+		},
 		// The spend-budget layer (#36 §14): caps checked before each agent
 		// step dispatches, usage charged/audited after it returns.
 		CheckBudget: func(runtimeName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {

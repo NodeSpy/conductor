@@ -174,7 +174,9 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		if !s.Background {
 			outputs = extractOutputs(ref)
 			if s.Type == "agent" && err == nil && !shadow {
-				e.harvestMemory(t, s.Agent, run.ID, ref.Output, profile.Memory)
+				// Same resolved identity the dispatch and outcomes use, so a
+				// harvested memory's provenance names the step, not the label.
+				e.harvestMemory(t, identity, run.ID, ref.Output, profile.Memory)
 			}
 		}
 		stepsOut[id] = map[string]any{"outputs": outputs}
@@ -232,7 +234,13 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			// Without one (none configured, or resolution came up empty), keep today's
 			// behavior: tell you to drive the agent in paseo.
 			if handoffCh != nil && e.broker != nil && ref.AgentID != "" {
-				e.startReviewHandoff(ctx, t, id, s.Agent, profile, ref, handoffCh)
+				// The RESOLVED identity, not the raw `agent:` label: the
+				// hand-off records its decision under OutcomeKeyFor(identity),
+				// so passing s.Agent filed the outcome under a key nothing
+				// else uses — the step's track record silently never
+				// accumulated, and the memory/session machinery looked for it
+				// under the identity this step actually has.
+				e.startReviewHandoff(ctx, t, id, identity, profile, ref, handoffCh)
 			} else {
 				e.notif.Emit(ctx, notify.EventNeedsInput, t,
 					fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))

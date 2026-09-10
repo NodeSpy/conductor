@@ -95,6 +95,14 @@ type AgentServices struct {
 	// checks (a team's parallel workers) cannot overshoot a hard cap. A
 	// non-nil error sheds the dispatch. nil = no budget layer (tests).
 	CheckBudget func(runtime string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error)
+	// CheckRate vets an agent dispatch against the agents/hour cap and, when
+	// admitted, stamps it into the SAME rolling window the legacy engine path
+	// uses. Only the legacy path had this guard, so work arriving through the
+	// callable service faced no rate limit at all — a narrow token could flood
+	// the shared dispatch queue and starve every other consumer, while an
+	// identical flood through a trigger was shed. One window, both paths.
+	// nil = unlimited (no cap configured, or no engine wired).
+	CheckRate func() error
 	// RecordUsage charges one agent run's token/$ usage to its budget scopes
 	// (settling res) and the audit, and records the outcome engagement
 	// (#36 §18) — savedWF names the enclosing saved workflow ("" outside
@@ -1428,6 +1436,13 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	var spendRes *cost.Reservation
 	est := cost.Estimate(model, act.Prompt, "")
 	if !shadow {
+		// Rate first, then spend: the cheap counter sheds a flood before the
+		// spend layer reserves anything for it.
+		if r.Agents.CheckRate != nil {
+			if err := r.Agents.CheckRate(); err != nil {
+				return nil, "", err
+			}
+		}
 		res, berr := r.checkBudget(ctx, r.runtimeOf(step), est)
 		if berr != nil {
 			return nil, "", berr

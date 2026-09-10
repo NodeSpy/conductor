@@ -527,3 +527,11 @@ func (s *opencodeSession) Close(context.Context) error {
 	}
 	return nil
 }
+
+// CwdOf and RememberCwd expose the session→worktree map to the broker, which
+// persists it at bind time and hands it back before a post-restart resume —
+// the in-process map is empty after a restart, and resuming with no cwd would
+// root the agent at the daemon's own directory instead of the worktree.
+func (c *opencodeController) CwdOf(sessionID string) string { return c.cwdFor(sessionID) }
+
+func (c *opencodeController) RememberCwd(sessionID, cwd string) { c.rememberCwd(sessionID, cwd) }

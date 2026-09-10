@@ -237,3 +237,44 @@ func TestRunRecordCarriesCost(t *testing.T) {
 		t.Fatalf("workflow_cost audit: %+v", costs)
 	}
 }
+
+// A flood through the flow path must SHED, not queue. Only the legacy engine
+// path had the agents/hour guard, so work arriving through the callable
+// service faced no rate limit at all: a narrow token could flood the shared
+// dispatch queue and starve every other consumer, while an identical flood
+// through a trigger was shed. Both paths now count against one window.
+func TestAFloodShedsInsteadOfStarvingTheQueue(t *testing.T) {
+	const cap = 3
+	dispatched, admitted := 0, 0
+	cfg := loadConfig(t, budgetCfg)
+	rig := newTestRunner(t, cfg, buildRegistry(t, cfg))
+	rig.Agents.dispatchFunc = func(context.Context, dispatch.Request) (dispatch.RunRef, error) {
+		dispatched++
+		return dispatch.RunRef{AgentID: "a", Output: "{}"}, nil
+	}
+	rig.Runner.Agents.CheckRate = func() error {
+		if admitted >= cap {
+			return fmt.Errorf("agents_per_hour cap of %d reached in the last hour — shedding this dispatch", cap)
+		}
+		admitted++
+		return nil
+	}
+
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - { id: work, type: agent, prompt: "go" }
+`)
+	for i := 0; i < cap*3; i++ {
+		runTrigger(rig, newTrigger("ping", map[string]any{"n": i}), spec)
+	}
+
+	if dispatched > cap {
+		t.Fatalf("%d dispatches got through a cap of %d — an unrated flow path lets one "+
+			"consumer starve the shared dispatch queue", dispatched, cap)
+	}
+	if dispatched == 0 {
+		t.Fatal("nothing dispatched at all — the guard sheds everything, which would " +
+			"make the assertion above pass for the wrong reason")
+	}
+}

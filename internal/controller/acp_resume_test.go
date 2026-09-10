@@ -56,3 +56,66 @@ func TestACPResumeRefusedWithoutTheCapability(t *testing.T) {
 		t.Fatalf("no session/load should have been attempted, got %q", agent.loadedID)
 	}
 }
+
+// THE RESTART CASE. The controller's session→worktree map is in-process, so
+// after a daemon restart it is empty — and a resume that consulted only that
+// map re-rooted the agent at the daemon's own working directory instead of the
+// worktree, where it read and wrote the wrong tree. The cwd has to travel with
+// the PERSISTED session ref.
+//
+// This exercises exactly that: bind through one broker, then resolve through a
+// SECOND broker over a FRESH controller instance, with nothing shared but the
+// store.
+func TestAResumeAfterRestartStillRootsAtTheWorktree(t *testing.T) {
+	const (
+		prKey = "acme/api#7"
+		sid   = "sess-restart"
+		wt    = "/wt/acme-api-7"
+	)
+	st := newFakeStore()
+
+	// --- before the restart: a controller that opened the session in wt ---
+	before := newACPController("gem", config.ControllerConfig{Agent: "gemini"}, nil)
+	before.dial = dialFake(&fakeACPAgent{
+		sessionID:  sid,
+		initResult: acp.InitializeResult{AgentCapabilities: acp.AgentCapabilities{LoadSession: true}},
+	})
+	before.rememberCwd(sid, wt)
+
+	b1 := NewBroker(&Registry{controllers: map[string]Controller{"gem": before}}, st, nil)
+	b1.Bind(prKey, before, &stubSession{id: sid}, false)
+
+	if got := st.recs[prKey].Cwd; got != wt {
+		t.Fatalf("the bound session's cwd was not persisted: %q — after a restart there is "+
+			"nothing else that knows where the agent's worktree is", got)
+	}
+
+	// --- the restart: a FRESH controller, empty cwd map, new broker ---
+	agent := &fakeACPAgent{
+		sessionID:  sid,
+		initResult: acp.InitializeResult{AgentCapabilities: acp.AgentCapabilities{LoadSession: true}},
+	}
+	after := newACPController("gem", config.ControllerConfig{Agent: "gemini"}, nil)
+	after.dial = dialFake(agent)
+	if got := after.cwdFor(sid); got != "" {
+		t.Fatalf("test setup: the fresh controller should know nothing, got %q", got)
+	}
+
+	// NewBroker restores refs from the store — that IS the restart.
+	b2 := NewBroker(&Registry{controllers: map[string]Controller{"gem": after}}, st, nil)
+
+	if _, err := b2.Session(context.Background(), prKey, nil); err != nil {
+		t.Fatalf("Session after restart: %v", err)
+	}
+	agent.mu.Lock()
+	loaded, cwd := agent.loadedID, agent.gotCwd
+	agent.mu.Unlock()
+
+	if loaded != sid {
+		t.Fatalf("the restarted daemon did not load the persisted session, got %q", loaded)
+	}
+	if cwd != wt {
+		t.Fatalf("post-restart resume rooted the agent at %q, not its worktree %q — the agent "+
+			"would read and write the wrong tree", cwd, wt)
+	}
+}
