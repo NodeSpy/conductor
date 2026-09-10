@@ -301,6 +301,12 @@ var (
 
 // RegisterType makes a connector type available. Called from init() in each
 // type's file; panics on duplicates (programmer error).
+//
+// It also records the type as BUILTIN with the `use:` resolver, so a bare
+// `use: <type>` resolves in-binary instead of falling through to the official
+// plugin repo — and so a newly-bundled type cannot drift out of the resolver's
+// seed list. RegisterExternalType (plugin-backed) deliberately does NOT do this:
+// a plugin type is what `use:` fetches, not what it short-circuits.
 func RegisterType(decl *TypeDecl, b Builder) {
 	regMu.Lock()
 	defer regMu.Unlock()
@@ -309,6 +315,7 @@ func RegisterType(decl *TypeDecl, b Builder) {
 	}
 	typeReg[decl.Type] = decl
 	buildReg[decl.Type] = b
+	config.RegisterBuiltinConnector(decl.Type)
 }
 
 // Types lists registered connector types (sorted).
