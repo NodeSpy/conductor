@@ -137,6 +137,12 @@ type RuntimeConfig struct {
 	// Isolation wraps every launch this runtime performs (#36 §15). A
 	// profile's own isolation: wins over the runtime's.
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// Models is the OPTIONAL model policy for this runtime: which model it
+	// passes by default, how it ranks a choice, and what it may ever run.
+	// Absent = fully automatic (roster discovered, bare launch, no
+	// restrictions). See RuntimeModels and
+	// docs/design/runtimes-models-packs.md §1.2.
+	Models *RuntimeModels `yaml:"models,omitempty"`
 
 	// legacy holds a pre-`use:` `type:` value. NOT part of the schema — it is
 	// accepted by the decoder only so validateConnectors can name the migration
@@ -172,6 +178,116 @@ func (r *RuntimeConfig) UnmarshalYAML(n *yaml.Node) error {
 // legacyType returns a retired `type:` value this entry still carries, for the
 // migration diagnostic.
 func (r RuntimeConfig) legacyType() string { return r.legacy }
+
+// RuntimeSet is the `runtimes:` section. It is a map of named runtimes, but
+// the YAML accepts three shapes (docs/design/runtimes-models-packs.md §1.1) —
+// the common case is one word:
+//
+//	runtimes: paseo                  # scalar → one runtime
+//	runtimes: [paseo, claude]        # list   → several
+//	runtimes:                        # map    → named, with config
+//	  paseo: { models: { prefer: [claude-opus-5] } }
+//
+// In every shape a runtime's NAME implies its `use:` reference when they
+// match, so `runtimes: paseo` needs no `use:` line at all (filled by
+// applyRuntimeUseDefaults, which runs after `extends:` so an inherited `use:`
+// still wins over the implication).
+type RuntimeSet map[string]RuntimeConfig
+
+// UnmarshalYAML accepts the scalar, list, and map forms.
+func (s *RuntimeSet) UnmarshalYAML(n *yaml.Node) error {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		if n.Tag == "!!null" {
+			*s = nil
+			return nil
+		}
+		var name string
+		if err := n.Decode(&name); err != nil {
+			return fmt.Errorf("runtimes: must be a name, a list of names, or a map of named runtimes: %w", err)
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return fmt.Errorf("runtimes: empty runtime name")
+		}
+		*s = RuntimeSet{name: {}}
+		return nil
+	case yaml.SequenceNode:
+		out := RuntimeSet{}
+		for i, item := range n.Content {
+			name, rt, err := decodeRuntimeItem(i, item)
+			if err != nil {
+				return err
+			}
+			if _, dup := out[name]; dup {
+				return fmt.Errorf("runtimes[%d]: duplicate runtime %q — name them apart, or use the map form", i, name)
+			}
+			out[name] = rt
+		}
+		*s = out
+		return nil
+	case yaml.MappingNode:
+		out := RuntimeSet{}
+		type plain map[string]RuntimeConfig
+		var m plain
+		if err := n.Decode(&m); err != nil {
+			return err
+		}
+		for k, v := range m {
+			out[k] = v
+		}
+		*s = out
+		return nil
+	}
+	return fmt.Errorf("runtimes: must be a name, a list of names, or a map of named runtimes")
+}
+
+// decodeRuntimeItem decodes one entry of the LIST form: a bare name, or an
+// object that carries its own `use:` (from which the name is taken).
+func decodeRuntimeItem(i int, item *yaml.Node) (string, RuntimeConfig, error) {
+	if item.Kind == yaml.ScalarNode {
+		var name string
+		if err := item.Decode(&name); err != nil {
+			return "", RuntimeConfig{}, fmt.Errorf("runtimes[%d]: %w", i, err)
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return "", RuntimeConfig{}, fmt.Errorf("runtimes[%d]: empty runtime name", i)
+		}
+		return name, RuntimeConfig{}, nil
+	}
+	if item.Kind != yaml.MappingNode {
+		return "", RuntimeConfig{}, fmt.Errorf("runtimes[%d]: a list item is a runtime name or a { use: …, models: … } object", i)
+	}
+	var rt RuntimeConfig
+	if err := item.Decode(&rt); err != nil {
+		return "", RuntimeConfig{}, fmt.Errorf("runtimes[%d]: %w", i, err)
+	}
+	if rt.Use == "" {
+		return "", RuntimeConfig{}, fmt.Errorf("runtimes[%d]: an object list item needs `use:` to name what implements it (or write the map form, where the key is the name)", i)
+	}
+	u, err := ParseUse(UseKindRuntime, rt.Use)
+	if err != nil {
+		return "", RuntimeConfig{}, fmt.Errorf("runtimes[%d]: %w", i, err)
+	}
+	return u.Name, rt, nil
+}
+
+// applyRuntimeUseDefaults fills the key-implies-`use:` rule: a runtime that
+// names no implementation IS its own name. Runs from applyDefaults, i.e. AFTER
+// `extends:` resolution, so a child inheriting a parent's `use:` keeps it and
+// only a genuinely unset entry falls back to its key. An entry still carrying
+// the retired `type:` is left alone so validateConnectors can name the
+// migration instead of implying a reference the operator never wrote.
+func (c *Config) applyRuntimeUseDefaults() {
+	for name, rt := range c.Runtimes {
+		if rt.Use != "" || rt.legacy != "" || name == "" {
+			continue
+		}
+		rt.Use = name
+		c.Runtimes[name] = rt
+	}
+}
 
 // Resolved parses this entry's `use:` reference as a runtime.
 func (r RuntimeConfig) Resolved() (Use, error) { return ParseUse(UseKindRuntime, r.Use) }
@@ -600,7 +716,14 @@ type Step struct {
 	Type string `yaml:"type,omitempty"`
 
 	// agent form
-	Agent           string         `yaml:"agent,omitempty"`
+	Agent string `yaml:"agent,omitempty"`
+	// Model selects WHICH MODEL this step runs on: a named fleet from the
+	// top-level `models:` block, an exact model id, a wildcard, an inline list
+	// (sugar for `{ any: [...], required: false }`), or the full
+	// `{ any, required }` object. Unset → the runtime's `models.default:`, and
+	// failing that a BARE LAUNCH (no --model, the runtime's own default). See
+	// ModelSpec and docs/design/runtimes-models-packs.md §2.2.
+	Model           ModelSpec      `yaml:"model,omitempty"`
 	Prompt          string         `yaml:"prompt,omitempty"`
 	Checkout        string         `yaml:"checkout,omitempty"`
 	OutputSchema    map[string]any `yaml:"output_schema,omitempty"`

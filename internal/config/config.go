@@ -71,9 +71,15 @@ type Config struct {
 	// SecretRefs are the connectors-model schema (see connectors.go). They
 	// coexist with the legacy blocks: a config may carry either schema (or,
 	// mid-migration, both).
-	ConnectorsMap map[string]ConnectorRef  `yaml:"connectors"`
-	Runtimes      map[string]RuntimeConfig `yaml:"runtimes"`
-	Hosts         map[string]HostConfig    `yaml:"hosts"`
+	ConnectorsMap map[string]ConnectorRef `yaml:"connectors"`
+	Runtimes      RuntimeSet              `yaml:"runtimes"`
+	Hosts         map[string]HostConfig   `yaml:"hosts"`
+	// Models is the OPTIONAL top-level `models:` block — named FLEETS. A fleet
+	// is a ranked list of acceptable models plus a fallback posture
+	// (`{ any: [...], required: bool }`), so a step (or a pack) can name what
+	// it needs rather than hardcoding a model the consumer may not have. See
+	// FleetSpec and docs/design/runtimes-models-packs.md §2.
+	Models map[string]FleetSpec `yaml:"models,omitempty"`
 	// Stores are named data stores (boltdb/redis/http) addressed by the
 	// `store:` selector on kv.* verbs; nothing is implicit.
 	Stores map[string]StoreRef `yaml:"stores"`
@@ -1227,6 +1233,9 @@ func (c *Config) applyDefaults() {
 	if c.PaseoBin == "" {
 		c.PaseoBin = "paseo"
 	}
+	// A runtime's name implies its `use:` when it names no implementation.
+	// After resolveExtends, so an inherited use: still wins.
+	c.applyRuntimeUseDefaults()
 	// Back-compat: the top-level agent_guidance is now the GLOBAL scope of
 	// policy.guidance. Fold it in so connector/trigger-scoped guidance stacks
 	// on top of it through the normal policy cascade. policy.guidance (if set
@@ -1295,6 +1304,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validatePluginRefs(); err != nil {
+		return err
+	}
+	if err := c.validateModels(); err != nil {
 		return err
 	}
 	if err := c.validateStores(); err != nil {
