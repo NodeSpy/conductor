@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -174,7 +175,7 @@ func TestOnlyOneSiteBuildsAnAgentAuthoredDispatch(t *testing.T) {
 							continue
 						}
 						sites = append(sites, filepath.Base(path)+":"+
-							fset.Position(kv.Pos()).String()[strings.LastIndex(fset.Position(kv.Pos()).String(), ":")+1:])
+							strconv.Itoa(fset.Position(kv.Pos()).Line))
 					}
 				}
 				return true

@@ -390,6 +390,12 @@ func (s *Store) persist(marshal func() ([]byte, string, error)) error {
 	if err != nil {
 		return err
 	}
+	// An unconfigured state file is a no-op, not a write to ".tmp" in the
+	// working directory. Every caller used to check this for itself; doing
+	// it here means a new one cannot forget.
+	if path == "" {
+		return nil
+	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err

@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -109,7 +110,7 @@ func TestPreNormalizeReadersHandleBothTriggerForms(t *testing.T) {
 				}
 			}
 			offenders = append(offenders, filepath.Base(name)+":"+
-				itoa(pos.Line)+": "+line)
+				strconv.Itoa(pos.Line)+": "+line)
 			return true
 		})
 	}
@@ -131,18 +132,6 @@ func isBareOnRead(line string) bool {
 		}
 	}
 	return strings.Contains(line, ".On")
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	return string(b)
 }
 
 // Sources() is the accessor the window depends on; it must answer identically

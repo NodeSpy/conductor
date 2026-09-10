@@ -221,37 +221,25 @@ func (s *Store) outcomeStatsPath() string {
 }
 
 func (s *Store) saveEngagements() {
-	path := s.engagementsPath()
-	if path == "" {
-		return
-	}
-	s.mu.Lock()
-	b, err := json.MarshalIndent(s.engagements, "", " ")
-	s.mu.Unlock()
-	if err != nil {
-		return
-	}
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
-		_ = os.Rename(tmp, path)
-	}
+	// Through persist: it holds writeMu across marshal→write→rename,
+	// so a concurrent save of a DIFFERENT key cannot interleave and
+	// land a stale snapshot over a newer one. These three were the
+	// savers the round-2 fix missed.
+	_ = s.persist(func() ([]byte, string, error) {
+		b, err := json.MarshalIndent(s.engagements, "", " ")
+		return b, s.engagementsPath(), err
+	})
 }
 
 func (s *Store) saveOutcomeStats() {
-	path := s.outcomeStatsPath()
-	if path == "" {
-		return
-	}
-	s.mu.Lock()
-	b, err := json.MarshalIndent(s.outcomeStats, "", " ")
-	s.mu.Unlock()
-	if err != nil {
-		return
-	}
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
-		_ = os.Rename(tmp, path)
-	}
+	// Through persist: it holds writeMu across marshal→write→rename,
+	// so a concurrent save of a DIFFERENT key cannot interleave and
+	// land a stale snapshot over a newer one. These three were the
+	// savers the round-2 fix missed.
+	_ = s.persist(func() ([]byte, string, error) {
+		b, err := json.MarshalIndent(s.outcomeStats, "", " ")
+		return b, s.outcomeStatsPath(), err
+	})
 }
 
 func (s *Store) ciFailedPath() string {
@@ -262,20 +250,14 @@ func (s *Store) ciFailedPath() string {
 }
 
 func (s *Store) saveCIFailed() {
-	path := s.ciFailedPath()
-	if path == "" {
-		return
-	}
-	s.mu.Lock()
-	b, err := json.MarshalIndent(s.ciFailed, "", " ")
-	s.mu.Unlock()
-	if err != nil {
-		return
-	}
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
-		_ = os.Rename(tmp, path)
-	}
+	// Through persist: it holds writeMu across marshal→write→rename,
+	// so a concurrent save of a DIFFERENT key cannot interleave and
+	// land a stale snapshot over a newer one. These three were the
+	// savers the round-2 fix missed.
+	_ = s.persist(func() ([]byte, string, error) {
+		b, err := json.MarshalIndent(s.ciFailed, "", " ")
+		return b, s.ciFailedPath(), err
+	})
 }
 
 // loadOutcomeState loads the outcome files at Open (missing/corrupt = start fresh).
