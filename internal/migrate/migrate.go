@@ -13,8 +13,8 @@
 //
 // It operates on the RAW yaml — no environment expansion — so ${VAR} secret
 // references survive verbatim into the output. Blocks that carry through
-// unchanged (agents:, notify:, store:, update:, …) are lifted as their
-// original yaml nodes, preserving formatting and comments.
+// unchanged (notify:, store:, update:, …) are lifted as their original yaml
+// nodes, preserving formatting and comments.
 package migrate
 
 import (
@@ -124,6 +124,13 @@ func Transform(raw []byte) (*Result, error) {
 		// kind: into the single use: field.
 		if out, changed, err := applyUsePass(cur, &notes); err != nil {
 			return nil, fmt.Errorf("use migration: %w", err)
+		} else if changed {
+			cur, anyChanged = out, true
+		}
+		// The agents: pass runs after use:, so a budget it moves lands on a
+		// runtimes: entry that already carries its `use:`.
+		if out, changed, err := applyAgentsPass(cur, &notes); err != nil {
+			return nil, fmt.Errorf("agents migration: %w", err)
 		} else if changed {
 			cur, anyChanged = out, true
 		}
@@ -283,8 +290,8 @@ func Transform(raw []byte) (*Result, error) {
 			return nil, err
 		}
 	}
-	// agents: carried verbatim below; controller: references stay valid (the
-	// new schema accepts both controller: and runtime: on a profile).
+	// agents: is carried verbatim below and then decomposed into steps:
+	// templates by applyAgentsPass (which runs over this output).
 	if len(triggers) > 0 {
 		if err := out.set("triggers", triggers); err != nil {
 			return nil, err
@@ -318,6 +325,14 @@ func Transform(raw []byte) (*Result, error) {
 		return nil, fmt.Errorf("use migration: %w", uerr)
 	} else if uchanged {
 		b = uout
+	}
+	// …and the agents: pass over that output: the legacy transform carries
+	// agents: through verbatim, so it needs the same decomposition a
+	// hand-written connectors config does.
+	if aout, achanged, aerr := applyAgentsPass(b, &notes); aerr != nil {
+		return nil, fmt.Errorf("agents migration: %w", aerr)
+	} else if achanged {
+		b = aout
 	}
 	// The transform must produce a document the STRICT runtime loader accepts
 	// (belt and braces before the caller's full validation) — any key it
@@ -369,6 +384,13 @@ func unknownFields(err error) (fes []unknownField, ok bool) {
 
 // noteUnknown records one dropped key, once per (type, field).
 func noteUnknown(notes *[]string, seen map[string]bool, fe unknownField) {
+	// `agents:` left the schema but has a DEDICATED pass (applyAgentsPass)
+	// that decomposes it and reports what it did. Reporting it here as well
+	// would tell the operator their agents were dropped, which is the
+	// opposite of what happens.
+	if fe.field == "agents" && fe.typ == "config.Config" {
+		return
+	}
 	key := fe.typ + "." + fe.field
 	if seen[key] {
 		return

@@ -147,14 +147,19 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 		return nil, fmt.Errorf("opencode: create session: %w", err)
 	}
 
+	// opencode routes a turn by providerID + modelID. The resolved model is
+	// one id; when it carries opencode's own `provider/model` spelling the
+	// two halves split out, otherwise the model rides alone and opencode
+	// picks the provider itself.
+	provider, model := splitProviderModel(spec.Request.Model)
 	s := &opencodeSession{
 		id:       id,
 		cl:       cl,
 		cleanup:  cleanup,
 		cancel:   scancel,
 		ctx:      sctx,
-		provider: spec.Request.Profile.Provider,
-		model:    spec.Request.Profile.Model,
+		provider: provider,
+		model:    model,
 	}
 	s.startTurn(prompt)
 	return s, nil
@@ -331,6 +336,15 @@ func (c *opencodeClient) createSession(ctx context.Context, directory, title str
 }
 
 // prompt sends one prompt turn (POST /session/{id}/message) and returns the
+// splitProviderModel splits an opencode-style "provider/model" id. A bare
+// model id returns an empty provider — opencode then resolves it itself.
+func splitProviderModel(id string) (provider, model string) {
+	if p, m, ok := strings.Cut(id, "/"); ok && p != "" && m != "" {
+		return p, m
+	}
+	return "", id
+}
+
 // assistant's assembled text. provider/model route the turn when set.
 func (c *opencodeClient) prompt(ctx context.Context, sessionID, text, provider, model string) (string, error) {
 	body := map[string]any{

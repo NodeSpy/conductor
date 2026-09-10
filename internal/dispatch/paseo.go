@@ -32,12 +32,12 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	argv := []string{"run", prompt,
 		"--title", agentTitle(req),
 	}
-	p := req.Profile
-	if p.Provider != "" {
-		argv = append(argv, "--provider", p.Provider)
-	}
-	if p.Model != "" {
-		argv = append(argv, "--model", p.Model)
+	p := req.Step
+	// req.Model is the RESOLVED model (models.Resolver, design §2.3). Empty
+	// is a BARE LAUNCH — pass no --model at all and let the runtime use its
+	// own built-in default. That is a first-class outcome, not a gap.
+	if req.Model != "" {
+		argv = append(argv, "--model", req.Model)
 	}
 	if p.Thinking != "" {
 		argv = append(argv, "--thinking", p.Thinking)
@@ -219,7 +219,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// token in env (never argv, forwarded to the box paseo runs on); the injected
 	// prompt guidance tells it to run `conductor discover`/`call`. SkillEnv
 	// returns nil for a non-skill profile or when no endpoint is available.
-	if req.Profile.Skill != nil {
+	if req.Step.Skill != nil {
 		endpoint := ""
 		if d.remote() {
 			endpoint = d.remoteSkillEndpoint(ctx, req)
@@ -448,8 +448,8 @@ func checkoutArgs(ctx context.Context, req Request) []string {
 }
 
 func workspaceMode(req Request) string {
-	if req.Profile.Workspace != "" {
-		return req.Profile.Workspace
+	if req.Step.Workspace != "" {
+		return req.Step.Workspace
 	}
 	return "worktree"
 }
@@ -790,10 +790,10 @@ func labelArgs(req Request) []string {
 	if req.Trigger.Variant != "" {
 		labels = append(labels, "variant="+req.Trigger.Variant)
 	}
-	if req.Profile.ArchiveWhenDone {
+	if req.Step.ArchiveWhenDone {
 		labels = append(labels, "archive=1")
 	}
-	for k, v := range req.Profile.Labels {
+	for k, v := range req.Step.Labels {
 		labels = append(labels, k+"="+v)
 	}
 	for k, v := range req.Trigger.Labels {

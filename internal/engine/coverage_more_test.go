@@ -65,10 +65,10 @@ func TestToInt64AndWaitTimeout(t *testing.T) {
 	if toInt64(int64(5)) != 5 || toInt64(6) != 6 || toInt64(7.0) != 7 || toInt64("x") != 0 {
 		t.Fatal("toInt64 table")
 	}
-	if got := agentWaitTimeout(config.AgentProfile{}); got != time.Hour {
+	if got := agentWaitTimeout(config.Step{}); got != time.Hour {
 		t.Fatalf("default wait timeout: %v", got)
 	}
-	if got := agentWaitTimeout(config.AgentProfile{WaitTimeout: config.Duration(10 * time.Minute)}); got != 15*time.Minute {
+	if got := agentWaitTimeout(config.Step{WaitTimeout: config.Duration(10 * time.Minute)}); got != 15*time.Minute {
 		t.Fatalf("profile wait timeout + grace: %v", got)
 	}
 }
@@ -99,19 +99,19 @@ func TestRerunFailed(t *testing.T) {
 
 func TestControllerFor(t *testing.T) {
 	e, _ := newEng(t, baseCfg(), &fakeDispatcher{}, &fakeNotifier{}, nil)
-	if _, err := e.controllerFor(config.AgentProfile{}); err != nil {
+	if _, err := e.controllerFor(config.Step{}); err != nil {
 		t.Fatalf("default controller: %v", err)
 	}
-	if _, err := e.controllerFor(config.AgentProfile{Controller: "ghost"}); err == nil {
+	if _, err := e.controllerFor(config.Step{Runtime: "ghost"}); err == nil {
 		t.Fatal("unknown controller must error")
 	}
 	// #54 regression: a `runtime:`-only profile must route through RuntimeName()
 	// on the plain dispatch path (not just the affinity path). Before the fix,
-	// Controller:"" resolved to the default and this unknown name was ignored.
-	if _, err := e.controllerFor(config.AgentProfile{Runtime: "ghost-runtime"}); err == nil {
+	// Runtime:"" resolved to the default and this unknown name was ignored.
+	if _, err := e.controllerFor(config.Step{Runtime: "ghost-runtime"}); err == nil {
 		t.Fatal("unknown runtime: must error (RuntimeName routing)")
 	}
-	if _, err := e.runnerFor(config.AgentProfile{Runtime: "ghost-runtime"}); err == nil {
+	if _, err := e.runnerFor(config.Step{Runtime: "ghost-runtime"}); err == nil {
 		t.Fatal("runnerFor must honor runtime: and error on unknown name")
 	}
 }
@@ -138,15 +138,15 @@ func TestFlowAgentServices(t *testing.T) {
 
 	// Agent dispatch resolves the runner for the profile (unknown -> error).
 	if _, err := svcs.Dispatch(context.Background(), dispatch.Request{
-		Action:  config.Action{Type: "agent", Agent: "a", Prompt: "p"},
-		Profile: config.AgentProfile{Controller: "ghost"},
+		Action: config.Action{Type: "agent", Agent: "a", Prompt: "p"},
+		Step:   config.Step{Runtime: "ghost"},
 	}); err == nil {
 		t.Fatal("unknown controller must fail the agent dispatch")
 	}
 
 	// Background with no ask channel emits needs_input.
 	svcs.Background(context.Background(), flowTrigger("d-bg"), "review", "a",
-		config.AgentProfile{}, dispatch.RunRef{AgentID: "a-9"}, "")
+		config.Step{}, dispatch.RunRef{AgentID: "a-9"}, "")
 	notif.mu.Lock()
 	found := false
 	for _, ev := range notif.events {

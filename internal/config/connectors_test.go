@@ -35,15 +35,16 @@ func TestLoadNewSchemaMinimal(t *testing.T) {
 connectors:
   gh:
     use: github
-agents:
+steps:
   fixer:
-    provider: claude
+    type: agent
+    name: fixer
 triggers:
   - on: gh.new_comment
     steps:
       - id: respond
         type: agent
-        agent: fixer
+        extends: fixer
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -59,9 +60,10 @@ func TestLoadLegacyOnlyStillLoads(t *testing.T) {
 integrations:
   - type: github
     name: acme
-agents:
+steps:
   fixer:
-    provider: claude
+    type: agent
+    name: fixer
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -710,18 +712,15 @@ func TestGroupSpecDurations(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. AgentProfile.RuntimeName()
+// 9. Step.RuntimeName()
 // ---------------------------------------------------------------------------
 
-func TestAgentProfileRuntimeName(t *testing.T) {
-	if got := (AgentProfile{Runtime: "r1", Controller: "c1"}).RuntimeName(); got != "r1" {
-		t.Fatalf("Runtime should win over Controller, got %q", got)
+func TestStepRuntimeName(t *testing.T) {
+	if got := (Step{Runtime: "r1"}).Runtime; got != "r1" {
+		t.Fatalf("Runtime should carry through, got %q", got)
 	}
-	if got := (AgentProfile{Controller: "c1"}).RuntimeName(); got != "c1" {
-		t.Fatalf("should fall back to Controller when Runtime is unset, got %q", got)
-	}
-	if got := (AgentProfile{}).RuntimeName(); got != "" {
-		t.Fatalf("an empty profile should return empty, got %q", got)
+	if got := (Step{}).Runtime; got != "" {
+		t.Fatalf("an unpinned step should name no runtime, got %q", got)
 	}
 }
 
@@ -733,18 +732,18 @@ func connBaseCfg() *Config {
 	return &Config{ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}}}
 }
 
-func TestAgentRuntimeReferenceValid(t *testing.T) {
+func TestStepRuntimeReferenceValid(t *testing.T) {
 	c := connBaseCfg()
 	c.Runtimes = map[string]RuntimeConfig{"paseo1": {Use: "paseo"}}
-	c.Agents = map[string]AgentProfile{"fixer": {Runtime: "paseo1"}}
+	c.Steps = map[string]Step{"fixer": {Runtime: "paseo1"}}
 	if err := c.Validate(); err != nil {
-		t.Fatalf("an agent referencing a defined runtimes: entry should pass, got %v", err)
+		t.Fatalf("a step referencing a defined runtimes: entry should pass, got %v", err)
 	}
 }
 
-func TestAgentRuntimeReferenceUnknown(t *testing.T) {
+func TestStepRuntimeReferenceUnknown(t *testing.T) {
 	c := connBaseCfg()
-	c.Agents = map[string]AgentProfile{"fixer": {Runtime: "nope"}}
+	c.Steps = map[string]Step{"fixer": {Runtime: "nope"}}
 	err := c.Validate()
 	if err == nil || !strings.Contains(err.Error(), "unknown runtime") {
 		t.Fatalf("an agent referencing nothing should fail with 'unknown runtime', got %v", err)
@@ -753,7 +752,7 @@ func TestAgentRuntimeReferenceUnknown(t *testing.T) {
 
 func TestAgentHostReferenceUnknown(t *testing.T) {
 	c := connBaseCfg()
-	c.Agents = map[string]AgentProfile{"fixer": {Host: "nope"}}
+	c.Steps = map[string]Step{"fixer": {Host: "nope"}}
 	err := c.Validate()
 	if err == nil || !strings.Contains(err.Error(), `unknown host "nope"`) {
 		t.Fatalf("an agent referencing an unknown host should fail, got %v", err)
@@ -763,7 +762,7 @@ func TestAgentHostReferenceUnknown(t *testing.T) {
 func TestAgentLegacyControllerReferenceStillPasses(t *testing.T) {
 	c := connBaseCfg()
 	c.Controllers = map[string]ControllerConfig{"pae": {Type: "paseo"}}
-	c.Agents = map[string]AgentProfile{"fixer": {Runtime: "pae"}}
+	c.Steps = map[string]Step{"fixer": {Runtime: "pae"}}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("an agent referencing a legacy controllers: entry should still pass, got %v", err)
 	}

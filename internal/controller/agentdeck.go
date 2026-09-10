@@ -100,16 +100,15 @@ func (c *agentDeckController) NewSession(ctx context.Context, spec Spec, _ Handl
 	}
 	title := deckTitle(spec.Request)
 	group := deckGroup(spec.Request)
-	host := resolveHost(c.host, spec.Request.Profile.Host)
+	host := resolveHost(c.host, spec.Request.Step.Host)
 	opt := launchOptsFor(c.iso, spec.Request)
 
 	args := append([]string{"launch"}, c.args...)
 	args = append(args, "--title", title, "--group", group, "--prompt", prompt)
-	if p := spec.Request.Profile; p.Provider != "" {
-		args = append(args, "--provider", p.Provider)
-	}
-	if p := spec.Request.Profile; p.Model != "" {
-		args = append(args, "--model", p.Model)
+	// The RESOLVED model (empty = bare launch: pass nothing and let the tool
+	// use its own default).
+	if m := spec.Request.Model; m != "" {
+		args = append(args, "--model", m)
 	}
 
 	out, err := c.exec(ctx, host, spec.Cwd, env, opt, args...)

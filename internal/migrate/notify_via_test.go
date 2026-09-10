@@ -422,7 +422,7 @@ integrations:
               agent: fixer
               prompt: "fix"
 agents:
-  fixer: { provider: claude }
+  fixer: { type: agent, name: fixer }
 notify:
   slack_webhook_url: https://hooks.example/x
   on: [complete, digest]
@@ -465,7 +465,7 @@ integrations:
               agent: fixer
               prompt: "fix"
 agents:
-  fixer: { provider: claude }
+  fixer: { type: agent, name: fixer }
 notify:
   slack_webhook_url: https://hooks.example/x
   on: [digest]

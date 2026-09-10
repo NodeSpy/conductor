@@ -23,6 +23,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/memory"
+	"github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
@@ -80,8 +81,8 @@ type Store interface {
 	TakeEngagements(repo string, number int) []store.Engagement
 	PeekEngagements(repo string, number int) []store.Engagement
 	MarkCIFailure(repo string, number int, head string) bool
-	BumpOutcome(agent, outcome string)
-	AgentOutcomeStats(agent string) map[string]int
+	BumpOutcome(key, outcome string)
+	OutcomeStats(key string) map[string]int
 }
 
 // Engine is the central work loop.
@@ -124,6 +125,9 @@ type Engine struct {
 	// budget caps (#36 §14) — in-memory like agentDisp; the audit's
 	// agent_usage rows are the durable record.
 	meter *cost.Meter
+	// modelResolver walks the fleet ladder (design §2.3) per dispatch. nil
+	// = no model layer: every dispatch bare-launches.
+	modelResolver *models.Resolver
 }
 
 // overAgentBudget prunes agent-dispatch timestamps older than an hour and reports
@@ -311,11 +315,11 @@ func (e *Engine) gcLoop(ctx context.Context) {
 // conductor injects NO tone of its own. Layer 0 is the policy-resolved baseline
 // (global → connector → trigger, stacked by MergePolicy), or the unfolded
 // top-level agent_guidance (a config that never ran applyDefaults, e.g. a test).
-// The profile's own parts — carrying any extends: ancestor's, prepended during
+// The step's own parts — carrying any extends: ancestor's, prepended during
 // resolveExtends — stack on top as separate blocks. Nothing configured → no
 // guidance block at all. A profile `guidance: { replace: … }` drops layer 0 and
 // every inherited part; an explicit "" renders nothing (a deliberate disable).
-func (e *Engine) agentGuidance(profile config.AgentProfile, pol config.Policy) string {
+func (e *Engine) agentGuidance(profile config.Step, pol config.Policy) string {
 	spec := profile.Guidance
 	replace := spec != nil && spec.Replace
 
@@ -348,7 +352,7 @@ func (e *Engine) agentGuidance(profile config.AgentProfile, pol config.Policy) s
 // profiles on a runtime that cannot carry the MCP tools (#123): promising an
 // agent tools it doesn't have just makes it fail; `conductor validate` warns
 // the operator instead.
-func (e *Engine) skillGuidance(profile config.AgentProfile) string {
+func (e *Engine) skillGuidance(profile config.Step) string {
 	sk := profile.Skill
 	if sk == nil {
 		return ""
@@ -418,8 +422,8 @@ func (e *Engine) affinityOwns(agentID string) bool { return e.affinity.Owns(agen
 // memoryPrompt renders the opt-in shared-memory section for a dispatched
 // agent — the same append path as agentGuidance. A profile without
 // `memory:` (or with memory unconfigured) gets "" — no token cost.
-func (e *Engine) memoryPrompt(agentName string, profile config.AgentProfile, t core.Trigger) string {
-	sel := profile.Memory
+func (e *Engine) memoryPrompt(identity string, step config.Step, t core.Trigger, workflow string) string {
+	sel := step.Memory
 	if sel == nil || !sel.Enabled {
 		return ""
 	}
@@ -427,8 +431,14 @@ func (e *Engine) memoryPrompt(agentName string, profile config.AgentProfile, t c
 	if m == nil {
 		return ""
 	}
-	return m.PromptSection(memory.Filter{Scopes: sel.Scopes, Tags: sel.Tags, Limit: sel.Limit},
-		t.Target.Repo, agentName)
+	// The engine supplies the run's context keys as a CONVENTION; the memory
+	// core never interprets them (design §2).
+	keys := memory.ContextKeys(t.Target.Repo, workflow, identity)
+	f := memory.Filter{
+		Scopes: memory.ExpandScopeRefs(sel.Scopes, t.Target.Repo, workflow, identity),
+		Tags:   sel.Tags, Limit: sel.Limit,
+	}
+	return m.PromptSection(f, keys)
 }
 
 // harvestMemory applies the memory output contract to a finished agent's
@@ -438,17 +448,15 @@ func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string) {
 	if m == nil || strings.TrimSpace(output) == "" {
 		return
 	}
-	// Writing is opt-in per agent, exactly like reading (memoryPrompt): only an
-	// agent whose profile enables memory may harvest its output into the shared
-	// store. Otherwise any dispatched agent — including one an untrusted event
-	// steered — could poison shared memory via its output contract without the
-	// operator ever granting it memory access (#57 M8). No profile / memory off
-	// → nothing is written.
-	prof := e.cfg.Agents[agent]
-	if prof.Memory == nil || !prof.Memory.Enabled {
+	// Writing is opt-in per STEP, exactly like reading (memoryPrompt): only a
+	// step whose memory: is enabled may harvest its output into the shared
+	// store. Otherwise any dispatched agent — including one an untrusted
+	// event steered — could poison shared memory through its output contract
+	// without the operator ever granting it memory access (#57 M8).
+	if sel := e.cfg.Steps[agent].Memory; sel == nil || !sel.Enabled {
 		return
 	}
-	src := memory.Source{Agent: agent, Run: runID, Trigger: t.Kind, Repo: t.Target.Repo}
+	src := memory.Source{Step: agent, Run: runID, Trigger: t.Kind, Repo: t.Target.Repo}
 	entries, err := m.HarvestOutput(output, src)
 	if err != nil {
 		e.log("%s memory output contract: %v", tag(t), err)
@@ -736,14 +744,19 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		return
 	}
 
-	// Resolve profile, tokens, shadow.
-	var profile config.AgentProfile
+	// Resolve the step's behavior, tokens, shadow. A legacy (integrations:)
+	// Action carries no step block of its own, so its `agent:` names a
+	// `steps:` TEMPLATE — which is exactly what the migration emits for each
+	// retired profile, under the same name. That is what keeps a migrated
+	// box's behavior (and its memory/session/outcome keys) intact.
+	profile := e.cfg.Steps[act.Agent]
+	identity := act.Agent
+	model := e.resolveModel(ctx, profile)
 	if act.Type == "agent" {
-		profile = e.cfg.Agents[act.Agent]
 		if act.Prompt != "" {
 			act.Prompt += dispatch.WriteWrapperGuidance
 			act.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))
-			act.Prompt += e.memoryPrompt(act.Agent, profile, t)
+			act.Prompt += e.memoryPrompt(identity, profile, t, "")
 			if act.RerequestReview {
 				act.Prompt += dispatch.RerequestReviewGuidance
 			}
@@ -800,7 +813,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 
 	req := dispatch.Request{
-		Trigger: t, Action: act, Profile: profile,
+		Trigger: t, Action: act, Step: profile, Identity: identity, Model: model,
 		Tokens: dispatch.Tokens{App: appTok, User: userTok},
 		Author: e.author, Shadow: shadow, CatchUp: t.CatchUp,
 	}
@@ -844,7 +857,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		// record the attempt, retry when the rolling window frees, notify.
 		// An admitted dispatch RESERVES its estimated spend (settled or
 		// cancelled below).
-		res, berr := e.checkSpendBudget(act.Agent, nil, "", cost.Estimate(profile.Model, act.Prompt, ""))
+		res, berr := e.checkSpendBudget(e.runtimeOf(profile), nil, "", cost.Estimate(model, act.Prompt, ""))
 		if berr != nil {
 			e.shedForBudget(ctx, t, berr, shadow)
 			return
@@ -879,7 +892,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// lands in later accounting as approximate. Non-charging outcomes
 	// (skip/queue/error) cancel the reservation instead.
 	if act.Type == "agent" && err == nil && !ref.Skipped && !ref.Shadowed && !ref.Queued {
-		e.recordUsage(t, act.Agent, act.ID, "", "", spendRes, cost.FromRun(profile.Model, act.Prompt, ref.Output))
+		e.recordUsage(t, identity, e.runtimeOf(profile), act.ID, "", "", spendRes, cost.FromRun(model, act.Prompt, ref.Output))
 	} else {
 		e.meter.Cancel(spendRes)
 	}
@@ -1187,14 +1200,14 @@ func livenessGated(kind string) bool {
 // transport isn't runnable in this build — the caller escalates rather than
 // silently dispatching through the wrong runtime. For today's configs (no
 // `controllers:` block) this always resolves to the paseo dispatcher.
-func (e *Engine) runnerFor(profile config.AgentProfile) (Dispatcher, error) {
+func (e *Engine) runnerFor(profile config.Step) (Dispatcher, error) {
 	// RuntimeName() honors the connectors-model `runtime:` field (falling back
 	// to the legacy `controller:`). Reading `.Controller` directly here left a
 	// `runtime:`-only profile resolving to the default runtime on first
 	// dispatch, even though the session-affinity path already used
 	// RuntimeName() — so a plugin/ACP runtime selected via `runtime:` was
 	// silently skipped until a follow-up turn (#54).
-	run, err := e.controllers.RunnerFor(profile.RuntimeName())
+	run, err := e.controllers.RunnerFor(profile.Runtime)
 	if err != nil {
 		return nil, err
 	}
@@ -1204,8 +1217,8 @@ func (e *Engine) runnerFor(profile config.AgentProfile) (Dispatcher, error) {
 // controllerFor resolves the controller (not just its runner) that owns an
 // agent's sessions — the review hand-off needs it to open/resume a broker session
 // (NewSession/ResumeSession), not only the dispatch runner.
-func (e *Engine) controllerFor(profile config.AgentProfile) (controller.Controller, error) {
-	return e.controllers.Resolve(profile.RuntimeName())
+func (e *Engine) controllerFor(profile config.Step) (controller.Controller, error) {
+	return e.controllers.Resolve(profile.Runtime)
 }
 
 // acquire takes a concurrency slot, blocking until one is free (backpressure).
@@ -1284,7 +1297,7 @@ func (e *Engine) auditDispatch(t core.Trigger, ref dispatch.RunRef, err error) {
 // agentWaitTimeout bounds how long a slot is held waiting for an agent to idle,
 // so a stuck agent eventually frees its slot. Derived from the profile's
 // wait_timeout (plus grace), else a one-hour backstop.
-func agentWaitTimeout(p config.AgentProfile) time.Duration {
+func agentWaitTimeout(p config.Step) time.Duration {
 	if d := p.WaitTimeout.D(); d > 0 {
 		return d + 5*time.Minute
 	}

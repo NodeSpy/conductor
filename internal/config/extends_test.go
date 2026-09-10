@@ -8,16 +8,16 @@ import (
 
 func gspec(parts ...string) *GuidanceSpec { return &GuidanceSpec{Parts: parts} }
 
-func TestResolveExtendsAgents(t *testing.T) {
-	c := &Config{Agents: map[string]AgentProfile{
+func TestResolveExtendsStepTemplates(t *testing.T) {
+	c := &Config{Steps: map[string]Step{
 		"base": {
-			Provider: "claude", Model: "opus", Workspace: "worktree",
+			Model: ModelSpecOf("opus"), Workspace: "worktree",
 			Labels:   map[string]string{"team": "autopilot", "tier": "base"},
 			Guidance: gspec("house tone"),
 		},
 		"fixer": {
 			Extends:  "base",
-			Model:    "sonnet", // overrides base
+			Model:    ModelSpecOf("sonnet"), // overrides base
 			Labels:   map[string]string{"tier": "fixer", "role": "ci"},
 			Guidance: gspec("you fix CI"),
 		},
@@ -25,12 +25,9 @@ func TestResolveExtendsAgents(t *testing.T) {
 	if err := c.resolveExtends(); err != nil {
 		t.Fatalf("resolveExtends: %v", err)
 	}
-	f := c.Agents["fixer"]
-	if f.Provider != "claude" {
-		t.Errorf("scalar inherit: provider = %q, want claude", f.Provider)
-	}
-	if f.Model != "sonnet" {
-		t.Errorf("scalar override: model = %q, want sonnet", f.Model)
+	f := c.Steps["fixer"]
+	if f.Model.Ref != "sonnet" {
+		t.Errorf("scalar override: model = %q, want sonnet", f.Model.Ref)
 	}
 	if f.Workspace != "worktree" {
 		t.Errorf("scalar inherit: workspace = %q, want worktree", f.Workspace)
@@ -45,22 +42,22 @@ func TestResolveExtendsAgents(t *testing.T) {
 		t.Errorf("guidance stack = %v, want [house tone, you fix CI]", got)
 	}
 	// The base is untouched.
-	if b := c.Agents["base"]; b.Model != "opus" || len(b.Guidance.Parts) != 1 {
+	if b := c.Steps["base"]; b.Model.Ref != "opus" || len(b.Guidance.Parts) != 1 {
 		t.Errorf("base mutated: %+v", b)
 	}
 }
 
 func TestResolveExtendsChain(t *testing.T) {
-	c := &Config{Agents: map[string]AgentProfile{
-		"a": {Provider: "claude", Guidance: gspec("A")},
-		"b": {Extends: "a", Model: "opus", Guidance: gspec("B")},
+	c := &Config{Steps: map[string]Step{
+		"a": {Guidance: gspec("A")},
+		"b": {Extends: "a", Model: ModelSpecOf("opus"), Guidance: gspec("B")},
 		"c": {Extends: "b", Thinking: "hard", Guidance: gspec("C")},
 	}}
 	if err := c.resolveExtends(); err != nil {
 		t.Fatalf("resolveExtends: %v", err)
 	}
-	got := c.Agents["c"]
-	if got.Provider != "claude" || got.Model != "opus" || got.Thinking != "hard" {
+	got := c.Steps["c"]
+	if got.Model.Ref != "opus" || got.Thinking != "hard" {
 		t.Errorf("chain inherit: %+v", got)
 	}
 	if p := got.Guidance.Parts; !reflect.DeepEqual(p, []string{"A", "B", "C"}) {
@@ -69,7 +66,7 @@ func TestResolveExtendsChain(t *testing.T) {
 }
 
 func TestResolveExtendsGuidanceReplace(t *testing.T) {
-	c := &Config{Agents: map[string]AgentProfile{
+	c := &Config{Steps: map[string]Step{
 		"base":  {Guidance: gspec("house tone")},
 		"stark": {Extends: "base", Guidance: &GuidanceSpec{Parts: []string{"only mine"}, Replace: true}},
 	}}
@@ -77,13 +74,13 @@ func TestResolveExtendsGuidanceReplace(t *testing.T) {
 		t.Fatalf("resolveExtends: %v", err)
 	}
 	// { replace } does not inherit the parent's parts.
-	if p := c.Agents["stark"].Guidance.Parts; !reflect.DeepEqual(p, []string{"only mine"}) {
+	if p := c.Steps["stark"].Guidance.Parts; !reflect.DeepEqual(p, []string{"only mine"}) {
 		t.Errorf("replace should not inherit parent guidance, got %v", p)
 	}
 }
 
 func TestResolveExtendsCycle(t *testing.T) {
-	c := &Config{Agents: map[string]AgentProfile{
+	c := &Config{Steps: map[string]Step{
 		"a": {Extends: "b"},
 		"b": {Extends: "a"},
 	}}
@@ -93,7 +90,7 @@ func TestResolveExtendsCycle(t *testing.T) {
 }
 
 func TestResolveExtendsUnknownTarget(t *testing.T) {
-	c := &Config{Agents: map[string]AgentProfile{
+	c := &Config{Steps: map[string]Step{
 		"fixer": {Extends: "nope"},
 	}}
 	if err := c.resolveExtends(); err == nil || !strings.Contains(err.Error(), "unknown") {

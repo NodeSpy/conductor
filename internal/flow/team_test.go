@@ -16,11 +16,11 @@ import (
 const teamCfg = `
 connectors:
   svc: { use: fake }
-agents:
-  architect:   { model: m }
-  implementer: { model: m }
-  reviewer:    { model: m }
-  merger:      { model: m }
+steps:
+  architect: { type: agent, name: architect, model: m }
+  implementer: { type: agent, name: implementer, model: m }
+  reviewer: { type: agent, name: reviewer, model: m }
+  merger: { type: agent, name: merger, model: m }
 `
 
 var teamSpecYAML = `
@@ -80,7 +80,7 @@ func teamRig(t *testing.T) (*testRig, *fakeState, *teamDispatcher) {
 	td := &teamDispatcher{}
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
 		td.record(req)
-		switch req.Action.Agent {
+		switch req.Identity {
 		case "architect":
 			return dispatch.RunRef{AgentID: "plan-1", Output: plannerOutput("api", "ui")}, nil
 		case "implementer":
@@ -155,7 +155,7 @@ func TestTeamReconcileWorkerNotesRedacted(t *testing.T) {
 	rig.Runner.Secrets.Track(secret)
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
 		td.record(req)
-		switch req.Action.Agent {
+		switch req.Identity {
 		case "architect":
 			return dispatch.RunRef{AgentID: "plan-1", Output: plannerOutput("api")}, nil
 		case "implementer":
@@ -189,7 +189,7 @@ func TestTeamCriticGatesWorkers(t *testing.T) {
 	var mu sync.Mutex
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
 		td.record(req)
-		switch req.Action.Agent {
+		switch req.Identity {
 		case "architect":
 			return dispatch.RunRef{AgentID: "p", Output: plannerOutput("one")}, nil
 		case "implementer":
@@ -243,7 +243,7 @@ func TestTeamWorkerFailureFailsStep(t *testing.T) {
 	rig, _, td := teamRig(t)
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
 		td.record(req)
-		switch req.Action.Agent {
+		switch req.Identity {
 		case "architect":
 			return dispatch.RunRef{AgentID: "p", Output: plannerOutput("good", "bad")}, nil
 		case "implementer":
@@ -341,7 +341,7 @@ func TestTeamConfigValidation(t *testing.T) {
 		t.Fatalf("missing planner: %v", err)
 	}
 	if err := base(&config.TeamSpec{Planner: "architect", Worker: "ghost"}).Validate(); err == nil ||
-		!strings.Contains(err.Error(), "unknown agent") {
+		!strings.Contains(err.Error(), "unknown steps: template") {
 		t.Fatalf("unknown worker: %v", err)
 	}
 	if err := base(&config.TeamSpec{Planner: "architect", Worker: "implementer", MaxWorkers: 99}).Validate(); err == nil ||
@@ -372,7 +372,7 @@ func TestTeamCriticCannotBeShadowedByConfigCheck(t *testing.T) {
 	var mu sync.Mutex
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
 		td.record(req)
-		switch req.Action.Agent {
+		switch req.Identity {
 		case "architect":
 			return dispatch.RunRef{AgentID: "p", Output: plannerOutput("one")}, nil
 		case "implementer":
@@ -455,7 +455,7 @@ policy:
 		"    max_workers: 1\n" +
 		"```"
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
-		switch req.Action.Agent {
+		switch req.Identity {
 		case "reviewer": // the plan author
 			return dispatch.RunRef{AgentID: "auth", Output: plan}, nil
 		case "architect":
@@ -477,7 +477,7 @@ policy:
 on: svc.ping
 gate: { run: [ verdict ], max_revisions: 0 }
 steps:
-  - { id: author, type: agent, agent: reviewer, prompt: "plan the team" }
+  - { id: author, type: agent, extends: reviewer, prompt: "plan the team" }
 `)
 	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "m"}), spec)
 	failed, errStr := rig.workflowFailed()

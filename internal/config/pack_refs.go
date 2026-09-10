@@ -28,7 +28,7 @@ func newRefRewriter(ns string, man *PackManifest, inst PackInstance, env envBind
 		agentBind: map[string]string{},
 		env:       env,
 	}
-	for role, b := range inst.Agents {
+	for role, b := range inst.Steps {
 		if b.IsBind() {
 			rw.agentBind[role] = b.Bind
 		}
@@ -87,11 +87,10 @@ func (rw *refRewriter) rebindVerb(ref string) string {
 // rebindSource rewrites the connector of a trigger `on: conn.event` reference.
 func (rw *refRewriter) rebindSource(ref string) string { return rw.rebindVerb(ref) }
 
-// rebindAgent rewrites the environment references a pack agent profile carries:
-// the secret allowlist and the connector prefix of every skill.verbs pattern
-// (provider/model/runtime are left to the consumer default). Agent-to-agent
-// refs live on steps, not profiles.
-func (rw *refRewriter) rebindAgent(p *AgentProfile) {
+// rebindStep rewrites the environment references a pack step carries: the
+// secret allowlist and the connector prefix of every skill.verbs pattern
+// (model/runtime are left to the consumer default).
+func (rw *refRewriter) rebindStep(p *Step) {
 	if p.Skill == nil {
 		return
 	}
@@ -123,11 +122,16 @@ func (rw *refRewriter) rebindAgent(p *AgentProfile) {
 	}
 }
 
-// rewriteAgentExtends namespaces a pack agent's pack-local `extends:` target so
-// inheritance resolves within the pack, not against a consumer global.
-func (rw *refRewriter) rewriteAgentExtends(p *AgentProfile) {
+// rewriteStepExtends namespaces a pack step's pack-local `extends:` target so
+// inheritance resolves within the pack, not against a consumer global. The
+// step's identity-pinning `name:` is namespaced with it, so a pack's track
+// records/memory/sessions stay inside the instance's namespace.
+func (rw *refRewriter) rewriteStepExtends(p *Step) {
 	if p.Extends != "" {
 		p.Extends = rw.resolveAgentRef(p.Extends)
+	}
+	if p.Name != "" {
+		p.Name = rw.agentName(p.Name)
 	}
 }
 
@@ -203,6 +207,16 @@ func (rw *refRewriter) rewriteHook(h *Hook) {
 // step forms (compensate, parallel branches, step hooks).
 func (rw *refRewriter) rewriteStep(s *Step) {
 	s.Agent = rw.resolveAgentRef(s.Agent)
+	// A step reaching a pack-local template by `extends:` must resolve
+	// inside the pack's namespace, not against a consumer global — and its
+	// identity-pinning `name:` is namespaced with it, so the pack's memory /
+	// session / track records stay inside the instance.
+	if s.Extends != "" {
+		s.Extends = rw.resolveAgentRef(s.Extends)
+	}
+	if s.Name != "" {
+		s.Name = rw.agentName(s.Name)
+	}
 	s.Workflow = rw.resolveWorkflowRef(s.Workflow)
 	s.Uses = rw.rebindVerb(s.Uses)
 	if s.Handoff != "" {

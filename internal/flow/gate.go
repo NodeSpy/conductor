@@ -258,18 +258,23 @@ func (r *Runner) followUp(ctx context.Context, t core.Trigger, step config.Step,
 	if r.Agents.FollowUp == nil {
 		return "", false, nil
 	}
-	model := r.Cfg.Agents[step.Agent].Model
-	res, berr := r.checkBudget(ctx, step.Agent, cost.Estimate(model, prompt, ""))
+	identity := stepIdentity(ctx, step, id)
+	runtimeName := r.runtimeOf(step)
+	model := ""
+	if r.Agents.ResolveModel != nil {
+		model = r.Agents.ResolveModel(ctx, step)
+	}
+	res, berr := r.checkBudget(ctx, runtimeName, cost.Estimate(model, prompt, ""))
 	if berr != nil {
 		return "", false, berr
 	}
-	out, ok, err := r.Agents.FollowUp(ctx, ref.AgentID, step.Agent, t, prompt)
+	out, ok, err := r.Agents.FollowUp(ctx, ref.AgentID, identity, t, prompt)
 	if !ok || err != nil {
 		if r.Agents.CancelBudget != nil {
 			r.Agents.CancelBudget(res)
 		}
 		return out, ok, err
 	}
-	r.recordUsage(ctx, t, step.Agent, id+":revise", res, cost.FromRun(model, prompt, out))
+	r.recordUsage(ctx, t, identity, runtimeName, id+":revise", res, cost.FromRun(model, prompt, out))
 	return out, ok, err
 }

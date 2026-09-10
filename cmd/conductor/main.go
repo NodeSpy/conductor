@@ -40,6 +40,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/inbound"
 	"github.com/NodeSpy/conductor/internal/integrations/slack" // registers "slack"; also feeds hand-off replies (see wireSlackHandoffInbox)
 	"github.com/NodeSpy/conductor/internal/memory"
+	agentmodels "github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/secrets"
@@ -308,7 +309,7 @@ func cmdValidate(args []string) error {
 	}
 	if stack != nil {
 		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s), %d agent profile(s)",
-			len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows), len(cfg.Agents))
+			len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows), len(cfg.Steps))
 		if len(cfg.Integrations) > 0 {
 			fmt.Printf(" — plus %d legacy integration(s)", len(cfg.Integrations))
 		}
@@ -316,7 +317,7 @@ func cmdValidate(args []string) error {
 		return nil
 	}
 	fmt.Printf("ok: %d integration(s) configured (%d enabled), %d agent profile(s)\n",
-		len(cfg.Integrations), len(igs), len(cfg.Agents))
+		len(cfg.Integrations), len(igs), len(cfg.Steps))
 	return nil
 }
 
@@ -550,6 +551,11 @@ func cmdRun(args []string) error {
 		cost.SetPricing(models, def)
 	}
 	eng := engine.New(engOpts)
+	// Model selection (docs/design/runtimes-models-packs.md §2.3): the
+	// resolver owns the fleet ladder and the discovered rosters. Discovery
+	// is lazy and degrade-safe — a box that cannot enumerate simply bare
+	// launches — so wiring it costs nothing at boot.
+	eng.SetModelResolver(agentmodels.NewResolver(cfg, agentmodels.NewCatalog(config.StateDir())))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -630,7 +636,7 @@ func cmdRun(args []string) error {
 					if err != nil {
 						return memory.Source{}, 0, false
 					}
-					return memory.Source{Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger}, id.Number, true
+					return memory.Source{Step: id.Agent, Repo: id.Repo, Trigger: id.Trigger}, id.Number, true
 				}
 				// The verb-tool surface: catalog + execution, both bound to
 				// the token's real dispatch identity and its skill.verbs.
@@ -1631,11 +1637,8 @@ func printTrigger(cfg *config.Config, disp *dispatch.Dispatcher, t core.Trigger)
 }
 
 func printOneDispatch(cfg *config.Config, disp *dispatch.Dispatcher, t core.Trigger, act config.Action, indent string) {
-	var profile config.AgentProfile
-	if act.Type == "agent" {
-		profile = cfg.Agents[act.Agent]
-	}
-	req := dispatch.Request{Trigger: t, Action: act, Profile: profile, Author: gitAuthor(), Shadow: true, Wait: !act.Background}
+	req := dispatch.Request{Trigger: t, Action: act, Identity: act.Agent,
+		Author: gitAuthor(), Shadow: true, Wait: !act.Background}
 	ref, err := disp.Dispatch(context.Background(), req)
 	if err != nil {
 		fmt.Printf("%serror: %v\n", indent, err)
@@ -1693,12 +1696,13 @@ func envDuration(key string) time.Duration {
 }
 
 func anyArchive(cfg *config.Config) bool {
-	for _, p := range cfg.Agents {
-		if p.ArchiveWhenDone {
-			return true
+	found := false
+	cfg.WalkSteps(func(_ config.IdentityScope, _ int, s *config.Step) {
+		if s.ArchiveWhenDone {
+			found = true
 		}
-	}
-	return false
+	})
+	return found
 }
 
 // logRedact scrubs tracked secret values from every journal line. logf is

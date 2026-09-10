@@ -29,7 +29,7 @@ func TestACPSkillClaimInjection(t *testing.T) {
 	skill.SetActive(broker)
 	t.Cleanup(func() { skill.SetActive(nil) })
 
-	newSession := func(prof config.AgentProfile) []acp.McpServer {
+	newSession := func(prof config.Step) []acp.McpServer {
 		t.Helper()
 		agent := &fakeACPAgent{
 			initResult: acp.InitializeResult{ProtocolVersion: acp.ProtocolVersion},
@@ -39,7 +39,7 @@ func TestACPSkillClaimInjection(t *testing.T) {
 		c.dial = dialFake(agent)
 		req := makeReq("merge_conflict", "fix it")
 		req.Action.Agent = "deployer"
-		req.Profile = prof
+		req.Step = prof
 		sess, err := c.NewSession(context.Background(), Spec{Request: req, Cwd: "/wt"}, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -53,7 +53,7 @@ func TestACPSkillClaimInjection(t *testing.T) {
 		return agent.gotMcp
 	}
 
-	got := newSession(config.AgentProfile{Skill: &config.SkillPolicy{
+	got := newSession(config.Step{Skill: &config.SkillPolicy{
 		SecretsVia: "broker", AllowSecrets: []string{"house/deploy_key"},
 	}})
 	if len(got) != 1 {
@@ -98,7 +98,7 @@ func TestACPSkillClaimInjection(t *testing.T) {
 	}
 
 	// A profile without skill: gets no claim at all.
-	got = newSession(config.AgentProfile{})
+	got = newSession(config.Step{})
 	if len(got) != 1 {
 		t.Fatalf("mcp servers: %+v", got)
 	}

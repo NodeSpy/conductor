@@ -10,15 +10,15 @@ integrations:
         cron: "* * * * *"
         action:
           type: agent
-          agent: fixer
+          extends: fixer
           prompt: outer
           steps:
             - type: agent
-              agent: fixer
+              extends: fixer
               prompt: inner
               steps:
                 - type: command
                   command: [echo, nested]
 
-agents:
-  fixer: { provider: fake }
+steps:
+  fixer: { type: agent, name: fixer }

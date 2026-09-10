@@ -106,7 +106,8 @@ func TestOpencodeNewSessionPromptsInWorktree(t *testing.T) {
 	if title, _ := fs.createBody["title"].(string); title == "" {
 		t.Fatal("create session should carry a PR-identity title")
 	}
-	// Model routing from the profile reached the message call.
+	// Model routing from the RESOLVED model reached the message call: the
+	// "provider/model" spelling splits into opencode's two fields.
 	if fs.lastProvider != "anthropic" || fs.lastModel != "claude" {
 		t.Fatalf("model routing = %q/%q, want anthropic/claude", fs.lastProvider, fs.lastModel)
 	}

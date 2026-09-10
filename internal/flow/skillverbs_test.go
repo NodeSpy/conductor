@@ -158,8 +158,10 @@ func TestSkillVerbsCannotBypassApprove(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc: { use: fake }
-agents:
+steps:
   deployer:
+    type: agent
+    name: deployer
     model: x
     skill: { verbs: ["svc.*"] }
 policy:
@@ -176,8 +178,10 @@ policy:
 	ok := loadConfig(t, `
 connectors:
   svc: { use: fake }
-agents:
+steps:
   deployer:
+    type: agent
+    name: deployer
     model: x
     skill: { verbs: ["svc.ask"] }
 policy:
@@ -205,8 +209,8 @@ policy:
 	full := loadConfig(t, `
 connectors:
   svc: { use: fake }
-agents:
-  deployer: { model: x, skill: { verbs: ["svc.*"] } }
+steps:
+  deployer: { type: agent, name: deployer, model: x, skill: { verbs: ["svc.*"] } }
 policy:
   agent_authored: { trust: full, approve: [ svc.post ] }
 `)
@@ -305,8 +309,8 @@ func TestValidateSkillNoIdentityNeeded(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc: { use: fake }
-agents:
-  deployer: { model: x, skill: { verbs: ["svc.*"] } }
+steps:
+  deployer: { type: agent, name: deployer, model: x, skill: { verbs: ["svc.*"] } }
 `)
 	if err := Validate(cfg, buildRegistry(t, cfg)); err != nil {
 		t.Fatalf("write-capable skill profile without identity must now validate: %v", err)
@@ -328,8 +332,8 @@ func TestValidateSkillVerbPatterns(t *testing.T) {
 		cfg := loadConfig(t, `
 connectors:
   svc: { use: fake }
-agents:
-  a: { model: x, skill: { verbs: `+c.verbs+` } }
+steps:
+  a: { type: agent, name: a, model: x, skill: { verbs: `+c.verbs+` } }
 `)
 		err := Validate(cfg, buildRegistry(t, cfg))
 		if err == nil || !strings.Contains(err.Error(), c.wantErr) {
@@ -343,8 +347,8 @@ connectors:
   svc: { use: fake }
 runtimes:
   gem: { agent: gemini, default: true }
-agents:
-  a: { model: x, skill: { verbs: ["svc.nosuchverb"] } }
+steps:
+  a: { type: agent, name: a, model: x, skill: { verbs: ["svc.nosuchverb"] } }
 `)
 	reg := buildRegistry(t, cfg)
 	if err := Validate(cfg, reg); err != nil {
@@ -360,8 +364,8 @@ connectors:
   svc: { use: fake }
 runtimes:
   gem: { agent: gemini, default: true }
-agents:
-  a: { model: x, skill: { verbs: ["svc.*"] } }
+steps:
+  a: { type: agent, name: a, model: x, skill: { verbs: ["svc.*"] } }
 `)
 	regLive := buildRegistry(t, live)
 	if warns := SkillWarnings(live, regLive); len(warns) != 0 {
@@ -377,8 +381,8 @@ func TestSkillWarningsUnsupportedRuntime(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc: { use: fake }
-agents:
-  a: { model: x, skill: { verbs: ["svc.ask"] } }
+steps:
+  a: { type: agent, name: a, model: x, skill: { verbs: ["svc.ask"] } }
 `)
 	reg := buildRegistry(t, cfg)
 	for _, w := range SkillWarnings(cfg, reg) {
@@ -402,8 +406,8 @@ connectors:
   svc: { use: fake }
 runtimes:
   `+runtime+`
-agents:
-  a: { model: x, skill: { verbs: ["svc.ask"] } }
+steps:
+  a: { type: agent, name: a, model: x, skill: { verbs: ["svc.ask"] } }
 `)
 		for _, s := range SkillWarnings(y, buildRegistry(t, y)) {
 			if strings.Contains(s, "cannot reach the conductor skill surface") {

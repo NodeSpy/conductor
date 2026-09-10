@@ -55,45 +55,75 @@ type AgentServices struct {
 	Dispatch func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error)
 	// Tokens resolves the acts-as-you / App tokens for a trigger.
 	Tokens func(t core.Trigger) dispatch.Tokens
-	// Guidance is the house prompt guidance for a profile (the agent's name
-	// keys optional outcome-feedback tuning — #36 §18). pol is the trigger's
-	// resolved policy cascade — its Guidance is the scoped layer-0 baseline the
-	// profile's own guidance stacks onto.
-	Guidance func(agentName string, p config.AgentProfile, pol config.Policy) string
-	// Memory renders the shared-memory prompt section for an opted-in
-	// profile ("" otherwise) — appended through the same path Guidance uses.
-	Memory func(agentName string, p config.AgentProfile, t core.Trigger) string
+	// Guidance is the house prompt guidance for a step (its IDENTITY keys the
+	// optional outcome-feedback tuning — #36 §18). pol is the trigger's
+	// resolved policy cascade — its Guidance is the scoped layer-0 baseline
+	// the step's own guidance stacks onto.
+	Guidance func(identity string, s config.Step, pol config.Policy) string
+	// Memory renders the shared-memory prompt section for an opted-in step
+	// ("" otherwise) — appended through the same path Guidance uses. The
+	// engine supplies the run's opaque context keys; see
+	// docs/design/agents-removal.md §2.
+	Memory func(identity string, s config.Step, t core.Trigger, workflow string) string
+	// ResolveModel picks the model this step runs (the design §2.3 ladder).
+	// "" is a BARE LAUNCH — dispatch with no --model. nil = no model layer
+	// (tests): every dispatch bare-launches.
+	ResolveModel func(ctx context.Context, s config.Step) string
 	// Revise delivers a supervise-loop follow-up to the authoring agent's
 	// live session (§10) and returns the captured reply. ok=false when the
 	// agent has no bound session (or the runtime can't capture follow-up
 	// output) — the plan then escalates instead of revising.
-	Revise func(ctx context.Context, agentName string, t core.Trigger, prompt string) (output string, ok bool, err error)
+	Revise func(ctx context.Context, identity string, t core.Trigger, prompt string) (output string, ok bool, err error)
 	// Background is invoked after a background agent step launches: register
 	// the hold, and start the interactive review hand-off on handoffConn (an
 	// ask-capable connector name; "" = runtime-native).
-	Background func(ctx context.Context, t core.Trigger, stepID, agentName string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string)
+	Background func(ctx context.Context, t core.Trigger, stepID, identity string, s config.Step, ref dispatch.RunRef, handoffConn string)
 	// Archive soft-deletes a finished non-interactive agent.
 	Archive func(agentID string)
 	// CheckBudget vets an agent dispatch against the spend caps (#36 §14):
-	// global, the agent's profile, and the run's workflow-scope budget
+	// global, the RUNTIME it executes on (docs/design/agents-removal.md §1 —
+	// a budget caps execution cost on a backend), and the run's workflow-scope budget
 	// (wf/wfScope, resolved by the runner from the trigger's merged policy).
 	// An admitted dispatch holds a RESERVATION for est (#36 review H7) that
 	// RecordUsage settles or CancelBudget releases — concurrent under-cap
 	// checks (a team's parallel workers) cannot overshoot a hard cap. A
 	// non-nil error sheds the dispatch. nil = no budget layer (tests).
-	CheckBudget func(agentName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error)
+	CheckBudget func(runtime string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error)
 	// RecordUsage charges one agent run's token/$ usage to its budget scopes
 	// (settling res) and the audit, and records the outcome engagement
 	// (#36 §18) — savedWF names the enclosing saved workflow ("" outside
 	// one). nil = tests.
-	RecordUsage func(t core.Trigger, agentName, stepID, runID, wfScope, savedWF string, res *cost.Reservation, u cost.Usage)
+	RecordUsage func(t core.Trigger, identity, runtime, stepID, runID, wfScope, savedWF string, res *cost.Reservation, u cost.Usage)
 	// CancelBudget releases a reservation whose dispatch never charged
 	// (shadowed / skipped / queued / errored). nil = no budget layer.
 	CancelBudget func(res *cost.Reservation)
 	// FollowUp delivers a gate-revise prompt to a live agent and captures the
 	// reply (#36 §16): a bound session (§10) or a paseo send-capture. ok=false
 	// when the runtime can't take one — the gate then escalates.
-	FollowUp func(ctx context.Context, agentID, agentName string, t core.Trigger, prompt string) (string, bool, error)
+	FollowUp func(ctx context.Context, agentID, identity string, t core.Trigger, prompt string) (string, bool, error)
+}
+
+// identScopeKey carries the enclosing identity scope (the qualified trigger,
+// workflow, or check) so every step can resolve its stable identity — the
+// single key memory, sessions, and outcomes default to (design §5).
+type identScopeKey struct{}
+
+// withIdentityScope stamps the enclosing scope on the context.
+func withIdentityScope(ctx context.Context, scope config.IdentityScope) context.Context {
+	return context.WithValue(ctx, identScopeKey{}, scope)
+}
+
+// identityScopeFrom reads the enclosing scope (zero value outside one).
+func identityScopeFrom(ctx context.Context) config.IdentityScope {
+	sc, _ := ctx.Value(identScopeKey{}).(config.IdentityScope)
+	return sc
+}
+
+// stepIdentity resolves a step's stable identity in the current scope. slotID
+// is the runner's own step id (config `id:`, else "stepN") — already the
+// structural slot label.
+func stepIdentity(ctx context.Context, s config.Step, slotID string) string {
+	return config.IdentityFor(identityScopeFrom(ctx), s.Name, slotID, s.Fingerprint)
 }
 
 // savedWFKey stamps execution inside a SAVED workflow with its name, so
@@ -249,6 +279,15 @@ func (r *Runner) resolveBotReply(t core.Trigger, spec config.TriggerSpec) botRep
 }
 
 func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, batch *Batch, shadow bool) {
+	ctx = withIdentityScope(ctx, config.ScopeForTrigger(spec, 0))
+	// A spec that did not come through config.Load (a lowered legacy
+	// trigger, an agent-authored plan) may still name a `steps:` template.
+	// Idempotent — already-resolved steps are skipped.
+	if r.Cfg != nil {
+		if err := r.Cfg.ApplyStepTemplates(triggerLabel(spec), spec.Steps); err != nil {
+			r.Log("%s %v", flowTag(t), err)
+		}
+	}
 	ctx = context.WithValue(ctx, policyKey{}, r.resolvePolicy(spec))
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
 	ctx = withDefaultGate(ctx, spec.Gate)
@@ -1196,21 +1235,58 @@ func (r *Runner) hostTarget(step config.Step) (*hosts.Target, error) {
 	return &hosts.Target{Name: step.Host, Cfg: hc}, nil
 }
 
+// triggerLabel names a trigger for diagnostics.
+func triggerLabel(spec config.TriggerSpec) string {
+	if spec.Name != "" {
+		return "trigger " + spec.Name
+	}
+	return "trigger " + spec.On
+}
+
+// runtimeOf is the `runtimes:` entry a step executes on — its own pin, else
+// the fleet default. It is the budget anchor (design §1) and half the
+// session-affinity partition (§3).
+func (r *Runner) runtimeOf(step config.Step) string {
+	if step.Runtime != "" {
+		return step.Runtime
+	}
+	if r.Cfg != nil {
+		if def := r.Cfg.DefaultRuntimeName(); def != "" {
+			return def
+		}
+	}
+	return config.BuiltinPaseoRuntime
+}
+
 // execAgent dispatches a type: agent step through the engine-provided
 // services (runtime resolution, tokens, guidance, background hand-off).
 func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, string, error) {
-	// The agent profile name may be templated (e.g. agent: "{{.inputs.reviewer}}")
-	// so a workflow can pick which profile — and so which runtime — reviews or
-	// assesses per invocation, without editing the workflow. Resolve it before the
-	// profile lookup; step is a value copy, so every downstream use reads the
-	// resolved name. An unknown resolved name yields an empty profile and fails at
-	// dispatch with a clear error, same as a literal typo.
+	// `agent:` is retained as a free-form ATTRIBUTION label on the dispatch
+	// (it used to name a profile; profiles are gone — design §6). It may be
+	// templated, so render it before use; step is a value copy.
 	if strings.Contains(step.Agent, "{{") {
 		if rendered, err := render(step.Agent, data); err == nil {
 			step.Agent = strings.TrimSpace(rendered)
 		}
 	}
-	profile := r.Cfg.Agents[step.Agent]
+	// Resolve `extends:` here too, not only at load: team roles, plan
+	// sub-steps, and gate checks are SYNTHESIZED at runtime and may name a
+	// `steps:` template. Idempotent, so a load-resolved step is untouched.
+	if r.Cfg != nil && step.Extends != "" {
+		resolved := []config.Step{step}
+		if err := r.Cfg.ApplyStepTemplates(flowTag(t), resolved); err != nil {
+			return nil, "", err
+		}
+		step = resolved[0]
+	}
+	// The step IS the profile now (design §6), and its identity is the key
+	// memory, sessions, and outcomes use (§5).
+	identity := stepIdentity(ctx, step, id)
+	// The RESOLVED model — "" is a bare launch, a first-class outcome.
+	model := ""
+	if r.Agents.ResolveModel != nil {
+		model = r.Agents.ResolveModel(ctx, step)
+	}
 	// Crash resume: a persisted plan checkpoint for this run+step means the
 	// agent already ran and its plan was interrupted mid-way — resume the
 	// PLAN after its last committed step instead of re-dispatching the agent
@@ -1231,23 +1307,30 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		}
 	}
 	act := config.Action{
+		// Agent is the human ATTRIBUTION LABEL the operator wrote (it selects
+		// nothing — design §6). The stable key everything else uses travels
+		// as Request.Identity.
 		Type: "agent", ID: id, Agent: step.Agent,
 		Prompt: step.Prompt, Checkout: step.Checkout, WorkDir: step.WorkDir,
 		Env: step.Env, OutputSchema: step.OutputSchema, Background: step.Background,
 		Backend: step.Backend, RerequestReview: step.RerequestReview,
 	}
 	if step.Background {
-		profile.ArchiveWhenDone = false
+		// A background step hands off a live agent for you to drive and close
+		// yourself; it sits idle *because* it is waiting for you, so the
+		// reaper must never archive it — regardless of what the step says.
+		step.ArchiveWhenDone = false
 	}
 	if act.Prompt != "" {
 		act.Prompt += dispatch.WriteWrapperGuidance
 		if r.Agents.Guidance != nil {
-			act.Prompt += r.Agents.Guidance(step.Agent, profile, policyFrom(ctx))
+			act.Prompt += r.Agents.Guidance(identity, step, policyFrom(ctx))
 		}
-		// Opt-in shared memory rides the same append path as guidance; a
-		// profile without memory: gets nothing (no token cost).
+		// Opt-in shared memory rides the same append path as guidance; a step
+		// without memory: gets nothing (no token cost).
 		if r.Agents.Memory != nil {
-			act.Prompt += r.Agents.Memory(step.Agent, profile, t)
+			_, wfScope := budgetFrom(ctx)
+			act.Prompt += r.Agents.Memory(identity, step, t, wfScope)
 		}
 		// A bot author can't read pleasantries: under decline_only (the
 		// default) the agent fixes silently and replies only to decline.
@@ -1270,17 +1353,17 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// sweep/backoff machinery re-derives PR-kind work once the window frees).
 	// An admitted dispatch reserves its estimated spend (#36 review H7).
 	var spendRes *cost.Reservation
-	est := cost.Estimate(profile.Model, act.Prompt, "")
+	est := cost.Estimate(model, act.Prompt, "")
 	if !shadow {
-		res, berr := r.checkBudget(ctx, step.Agent, est)
+		res, berr := r.checkBudget(ctx, r.runtimeOf(step), est)
 		if berr != nil {
 			return nil, "", berr
 		}
 		spendRes = res
 	}
-	historySetInputs(ctx, id, map[string]any{"agent": step.Agent, "prompt": clipText(act.Prompt, 4000)})
+	historySetInputs(ctx, id, map[string]any{"agent": identity, "prompt": clipText(act.Prompt, 4000)})
 	req := dispatch.Request{
-		Trigger: t, Action: act, Profile: profile, Tokens: tokens,
+		Trigger: t, Action: act, Step: step, Identity: identity, Model: model, Tokens: tokens,
 		Shadow: shadow, Wait: !step.Background, Interactive: step.Background, Data: data,
 		AgentAuthored: agentAuthored(ctx),
 	}
@@ -1300,21 +1383,21 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		// against the caps until the meter's reservationMaxAge backstop reclaims
 		// it. The estimate is still tallied on the run record / history / audit
 		// as approximate so reporting shows a provisional charge, not nothing.
-		r.recordBackgroundEstimate(ctx, t, step.Agent, id, est)
+		r.recordBackgroundEstimate(ctx, t, identity, r.runtimeOf(step), id, est)
 	default:
-		r.recordUsage(ctx, t, step.Agent, id, spendRes, cost.FromRun(profile.Model, act.Prompt, ref.Output))
+		r.recordUsage(ctx, t, identity, r.runtimeOf(step), id, spendRes, cost.FromRun(model, act.Prompt, ref.Output))
 	}
 	if err != nil {
 		return nil, ref.Output, err
 	}
 	if step.Background {
 		if r.Agents.Background != nil {
-			r.Agents.Background(ctx, t, id, step.Agent, profile, ref, step.Handoff)
+			r.Agents.Background(ctx, t, id, identity, step, ref, step.Handoff)
 		}
 		return map[string]any{"agent_id": ref.AgentID, "background": true}, "", nil
 	}
 	if !shadow {
-		r.harvestMemory(ctx, t, step.Agent, ref.Output)
+		r.harvestMemory(ctx, t, identity, step, ref.Output)
 	}
 	outputs := extractOutputs(ref.Output)
 	outputs["agent_id"] = ref.AgentID
@@ -1350,7 +1433,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if plan, found, perr := ParsePlan(ref.Output); perr != nil {
 		return nil, ref.Output, perr
 	} else if found {
-		planOut, plErr := r.runPlan(ctx, t, step.Agent, runID, id, plan, shadow)
+		planOut, plErr := r.runPlan(ctx, t, identity, runID, id, plan, shadow)
 		if planOut != nil {
 			outputs["plan"] = planOut
 		}
@@ -1358,7 +1441,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 			return outputs, ref.Output, fmt.Errorf("agent plan: %w", plErr)
 		}
 	}
-	if profile.ArchiveWhenDone && ref.AgentID != "" && r.Agents.Archive != nil {
+	if step.ArchiveWhenDone && ref.AgentID != "" && r.Agents.Archive != nil {
 		r.Agents.Archive(ref.AgentID)
 	}
 	return outputs, ref.Output, nil
@@ -1368,13 +1451,22 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 // output: a `remember:` block (fenced or a JSON key) persists with the run's
 // provenance plus the agent's name. Best-effort — a malformed block is
 // logged and audited, never a step failure.
-func (r *Runner) harvestMemory(ctx context.Context, t core.Trigger, agent, output string) {
+func (r *Runner) harvestMemory(ctx context.Context, t core.Trigger, identity string, step config.Step, output string) {
 	m := memory.Active()
 	if m == nil || strings.TrimSpace(output) == "" {
 		return
 	}
+	// Writing is opt-in per STEP, exactly like reading: only a step whose
+	// memory: is enabled may harvest its output into the shared store.
+	// Otherwise any dispatched agent — including one an untrusted event
+	// steered — could poison shared memory via its output contract without
+	// the operator ever granting it memory access (#57 M8).
+	if step.Memory == nil || !step.Memory.Enabled {
+		return
+	}
+	agent := identity
 	src := memory.SourceFrom(ctx)
-	src.Agent = agent
+	src.Step = identity
 	entries, err := m.HarvestOutput(output, src)
 	if err != nil {
 		r.Log("%s memory output contract: %v", flowTag(t), err)

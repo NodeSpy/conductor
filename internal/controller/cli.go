@@ -98,7 +98,7 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 		return nil, fmt.Errorf("cli: render prompt: %w", err)
 	}
 
-	host := resolveHost(c.host, spec.Request.Profile.Host)
+	host := resolveHost(c.host, spec.Request.Step.Host)
 	opt := launchOptsFor(c.iso, spec.Request)
 	id := c.recipe.tool + "-" + strconv.FormatInt(c.seq.Add(1), 10)
 	sctx, scancel := context.WithCancel(context.Background())

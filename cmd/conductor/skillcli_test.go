@@ -117,8 +117,10 @@ connectors:
   gh:
     use: github
     identity: { write_token: me-sentinel }
-agents:
+steps:
   fixer:
+    type: agent
+    name: fixer
     model: x
     skill: { verbs: [gh.submit_review] }
 `)

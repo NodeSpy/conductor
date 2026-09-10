@@ -91,7 +91,7 @@ func tempStore(t *testing.T) *store.Store {
 }
 
 func baseCfg() *config.Config {
-	c := &config.Config{Agents: map[string]config.AgentProfile{"fixer": {Provider: "claude"}}}
+	c := &config.Config{Steps: map[string]config.Step{"fixer": {}}}
 	c.Control.Enabled = ptrBool(true)
 	return c
 }
@@ -553,9 +553,9 @@ func TestFixersDoNotGetAskGuidance(t *testing.T) {
 	// interactive questions, even when its profile is archive_when_done. Interactive
 	// "ask me" behavior is reserved for review hand-offs (background workflow steps).
 	// It still gets the write-token wrapper.
-	cfg := &config.Config{Agents: map[string]config.AgentProfile{
-		"archived": {Provider: "claude", ArchiveWhenDone: true},
-		"kept":     {Provider: "claude"},
+	cfg := &config.Config{Steps: map[string]config.Step{
+		"archived": {ArchiveWhenDone: true},
+		"kept":     {},
 	}}
 	cfg.Control.Enabled = ptrBool(true)
 
@@ -576,7 +576,7 @@ func TestFixersDoNotGetAskGuidance(t *testing.T) {
 func TestAgentGuidanceConfigOverride(t *testing.T) {
 	run := func(cfg *config.Config) string {
 		cfg.Control.Enabled = ptrBool(true)
-		cfg.Agents = map[string]config.AgentProfile{"fixer": {Provider: "claude"}}
+		cfg.Steps = map[string]config.Step{"fixer": {}}
 		d := &fakeDispatcher{}
 		e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
 		e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h", "s",
@@ -612,7 +612,7 @@ func TestNonBackgroundStepArchivedImmediately(t *testing.T) {
 		return dispatch.RunRef{AgentID: "agent-assess", Output: `{"decision":"auto"}`}, nil
 	}}
 	cfg := baseCfg()
-	cfg.Agents["fixer"] = config.AgentProfile{Provider: "claude", ArchiveWhenDone: true}
+	cfg.Steps["fixer"] = config.Step{ArchiveWhenDone: true}
 	e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
 	wf := config.Action{Steps: []config.Action{
 		{ID: "assess", Type: "agent", Agent: "fixer", Prompt: "decide"},
@@ -639,7 +639,7 @@ func TestNonBackgroundStepGetsNoAskGuidance(t *testing.T) {
 		return dispatch.RunRef{Output: `{"decision":"auto"}`}, nil
 	}}
 	cfg := baseCfg()
-	cfg.Agents["fixer"] = config.AgentProfile{Provider: "claude", ArchiveWhenDone: true}
+	cfg.Steps["fixer"] = config.Step{ArchiveWhenDone: true}
 	e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
 	wf := config.Action{Steps: []config.Action{
 		{ID: "assess", Type: "agent", Agent: "fixer", Prompt: "decide auto or manual",
@@ -722,9 +722,9 @@ func TestAdditiveGuidanceLayering(t *testing.T) {
 	global := "GLOBAL house style."
 	perAgent := "FIXER-only style."
 
-	run := func(profile config.AgentProfile, globalGuidance *string) string {
+	run := func(profile config.Step, globalGuidance *string) string {
 		cfg := &config.Config{AgentGuidance: globalGuidance,
-			Agents: map[string]config.AgentProfile{"fixer": profile}}
+			Steps: map[string]config.Step{"fixer": profile}}
 		cfg.Control.Enabled = ptrBool(true)
 		d := &fakeDispatcher{}
 		e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
@@ -732,10 +732,10 @@ func TestAdditiveGuidanceLayering(t *testing.T) {
 			config.Action{Type: "agent", Agent: "fixer", Prompt: "do it"}))
 		return d.reqs[0].Action.Prompt
 	}
-	prof := func(g config.GuidanceSpec) config.AgentProfile {
-		return config.AgentProfile{Provider: "claude", Guidance: &g}
+	prof := func(g config.GuidanceSpec) config.Step {
+		return config.Step{Guidance: &g}
 	}
-	base := config.AgentProfile{Provider: "claude"}
+	base := config.Step{}
 
 	// The core of this feature: per-agent guidance STACKS onto the global (layer 0)
 	// rather than replacing it — both must be present.
@@ -770,9 +770,9 @@ func TestAdditiveGuidanceLayering(t *testing.T) {
 
 	// policy.guidance is the scoped baseline (layer 0): the agent profile stacks
 	// on top of it, exactly like the top-level agent_guidance alias does.
-	runPol := func(profile config.AgentProfile, base *config.GuidanceSpec) string {
+	runPol := func(profile config.Step, base *config.GuidanceSpec) string {
 		cfg := &config.Config{Policy: &config.Policy{Guidance: base},
-			Agents: map[string]config.AgentProfile{"fixer": profile}}
+			Steps: map[string]config.Step{"fixer": profile}}
 		cfg.Control.Enabled = ptrBool(true)
 		d := &fakeDispatcher{}
 		e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
@@ -1121,7 +1121,7 @@ func TestLogTag(t *testing.T) {
 func TestAgentWithUnrunnableControllerEscalates(t *testing.T) {
 	cfg := baseCfg()
 	cfg.Controllers = map[string]config.ControllerConfig{"ocode": {Agent: "opencode"}}
-	cfg.Agents["fixer"] = config.AgentProfile{Provider: "claude", Controller: "ocode"}
+	cfg.Steps["fixer"] = config.Step{Runtime: "ocode"}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, cfg, d, n, nil)
 

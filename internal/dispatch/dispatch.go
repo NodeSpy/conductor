@@ -35,9 +35,20 @@ type Author struct {
 
 // Request is a fully-resolved unit of dispatch.
 type Request struct {
-	Trigger   core.Trigger
-	Action    config.Action
-	Profile   config.AgentProfile // populated for agent actions
+	Trigger core.Trigger
+	Action  config.Action
+	// Step carries the dispatch's behavior — model, runtime, guidance,
+	// skill, session, workspace, timeouts, isolation. It replaced the retired
+	// agent PROFILE (docs/design/agents-removal.md §6): the fields always
+	// described the step, so they live on it.
+	Step config.Step
+	// Identity is the step's stable identity (config.Step.Identity) — the key
+	// memory scoping, session affinity, and outcome tracking use. Never a
+	// per-run value.
+	Identity string
+	// Model is the RESOLVED model for this dispatch ("" = bare launch, the
+	// runtime's own default). It is part of the session-affinity partition.
+	Model     string
 	Tokens    Tokens
 	Author    Author
 	Workspace string // base workspace id/path to worktree from (optional)

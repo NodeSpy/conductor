@@ -74,8 +74,8 @@ integrations:
             type: command
             command: ["gh", "pr", "view", "{{.pr}}"]
 agents:
-  fixer: { provider: claude }
-  planner: { provider: claude }
+  fixer: { type: agent, name: fixer }
+  planner: { type: agent, name: planner }
 `
 
 func mustTransform(t *testing.T, raw string) (*Result, *config.Config) {
@@ -217,7 +217,9 @@ func TestGithubBehavioralEquivalence(t *testing.T) {
 				var idx int
 				fmt.Sscanf(act.FlowRef, "%d:", &idx)
 				st := compiled[idx].Spec.Steps[0]
-				work = st.Type + "|" + st.Agent + "|" + st.Prompt + "|" + strings.Join(st.Command, " ")
+				// The legacy `agent: <profile>` became `extends: <template>`
+				// — the same name, one field over (design §6).
+				work = st.Type + "|" + st.Extends + "|" + st.Prompt + "|" + strings.Join(st.Command, " ")
 			} else {
 				work = act.Type + "|" + act.Agent + "|" + act.Prompt + "|" + strings.Join(act.Command, " ")
 			}
@@ -370,13 +372,13 @@ integrations:
         ack: { react: eyes }
         on_done: { react: white_check_mark, say: "done!", in_thread: true }
         on_fail: { say: "failed", ephemeral: true }
-        actions: { type: agent, agent: fixer, prompt: "Do {{.slack.text}}" }
+        actions: { type: agent, extends: fixer, prompt: "Do {{.slack.text}}" }
       - on: reaction_added
         reaction: rocket
         actions: { type: command, command: ["echo", "hi"] }
       - on: slash_command
         command: /deploy
-        actions: { type: agent, agent: fixer, prompt: "deploy" }
+        actions: { type: agent, extends: fixer, prompt: "deploy" }
   - type: cron
     name: chores
     schedules:
@@ -395,7 +397,7 @@ integrations:
         title: "{{.body.name}}"
         dedup: "{{.body.id}}"
         repo: acme/infra
-        actions: { type: agent, agent: fixer, prompt: "investigate {{.body.name}}" }
+        actions: { type: agent, extends: fixer, prompt: "investigate {{.body.name}}" }
   - type: sentry
     name: errors
     listen: ":8098"
@@ -403,7 +405,7 @@ integrations:
     rules:
       - match: { projects: [backend], levels: [error, fatal] }
         repo: acme/backend
-        actions: { type: agent, agent: fixer, prompt: "fix {{.sentry.title}}" }
+        actions: { type: agent, extends: fixer, prompt: "fix {{.sentry.title}}" }
       - match: {}
         actions: { type: command, command: ["echo", "{{.sentry.title}}"] }
   - type: pagerduty
@@ -412,7 +414,7 @@ integrations:
     signing_secret: ${PD_SECRET}
     rules:
       - match: { event_types: [incident.triggered], urgencies: [high] }
-        actions: { type: agent, agent: fixer, prompt: "mitigate {{.pagerduty.title}}" }
+        actions: { type: agent, extends: fixer, prompt: "mitigate {{.pagerduty.title}}" }
   - type: rss
     name: upstream
     feeds:
@@ -420,7 +422,7 @@ integrations:
         url: https://example.com/feed.xml
         interval: 45m
         match: "(?i)security"
-        actions: { type: agent, agent: fixer, prompt: "read {{.item.link}}" }
+        actions: { type: agent, extends: fixer, prompt: "read {{.item.link}}" }
 handoffs:
   review:
     slack: { to: dm, user: U123, bot_token: ${SLACK_BOT_TOKEN} }
@@ -439,7 +441,7 @@ control:
   max_agents_per_hour: 40
 paseo_bin: /usr/local/bin/paseo
 agents:
-  fixer: { provider: claude, controller: gem }
+  fixer: { type: agent, name: fixer, controller: gem }
 notify:
   on: [escalate]
   slack_webhook_url: ${NOTIFY_HOOK}
@@ -546,7 +548,7 @@ func TestKitchenSinkTransform(t *testing.T) {
 	if out.ConnectorsMap["notify-slack"].TypeName() != "slack" {
 		t.Errorf("notify-slack connector missing: %v", out.ConnectorsMap["notify-slack"])
 	}
-	if _, ok := out.Agents["fixer"]; !ok {
+	if _, ok := out.Steps["fixer"]; !ok {
 		t.Errorf("agents block lost")
 	}
 	// Legacy keys gone.
@@ -800,8 +802,10 @@ integrations:
         cron: "* * * * *"
         action: { type: command, command: [x] }
 `), 0o600)
+	// BOTH files change now: the imported one carries integrations:, and the
+	// main one carries agents: (which the agents pass decomposes).
 	n, _, err := AutoMigrate(main, func() error { return nil }, nil)
-	if err != nil || n != 1 {
+	if err != nil || n != 2 {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 	migrated, _ := os.ReadFile(sub)
@@ -939,7 +943,7 @@ integrations:
               agent: fixer
               prompt: "fix"
 agents:
-  fixer: { provider: claude, controller: gpu }
+  fixer: { type: agent, name: fixer, controller: gpu }
 hosts:
   gpu-box: { host: gpu01.internal, user: ml }
 controllers:

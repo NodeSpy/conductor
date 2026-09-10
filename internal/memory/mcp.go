@@ -218,7 +218,7 @@ func memoryTools(str, strList map[string]any) []map[string]any {
 				"properties": map[string]any{
 					"text":  map[string]any{"type": "string", "description": "the note to keep"},
 					"tags":  strList,
-					"scope": map[string]any{"type": "string", "description": "global (default) | repo (this run's repo) | agent (your own notes) | repo:<owner/repo> | agent:<name>"},
+					"scope": map[string]any{"type": "string", "description": "the scope KEY to file this under — omit for the shared set, or name one of the keys listed in your prompt's shared-memory section (e.g. the repo, the workflow, or your own step)"},
 				},
 				"required": []string{"text"},
 			},

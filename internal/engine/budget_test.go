@@ -11,9 +11,21 @@ import (
 	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
-func budgetCfg(global, profile *config.BudgetPolicy) *config.Config {
+// The middle budget scope is the RUNTIME now (design §1), not an agent.
+func budgetCfg(global, runtimeBudget *config.BudgetPolicy) *config.Config {
 	c := baseCfg()
-	c.Agents["fixer"] = config.AgentProfile{Provider: "claude", Model: "claude-sonnet", Budget: profile}
+	if c.Runtimes == nil {
+		c.Runtimes = config.RuntimeSet{}
+	}
+	c.Runtimes["fixer"] = config.RuntimeConfig{Use: "paseo", Budget: runtimeBudget}
+	// The dispatch reaches that runtime through the step template its
+	// legacy `agent: fixer` names.
+	if c.Steps == nil {
+		c.Steps = map[string]config.Step{}
+	}
+	st := c.Steps["fixer"]
+	st.Runtime = "fixer"
+	c.Steps["fixer"] = st
 	if global != nil {
 		c.Policy = &config.Policy{Budget: global}
 	}
@@ -22,9 +34,9 @@ func budgetCfg(global, profile *config.BudgetPolicy) *config.Config {
 
 func TestCheckSpendBudgetScopes(t *testing.T) {
 	global := &config.BudgetPolicy{MaxCostUSD: 1}
-	profile := &config.BudgetPolicy{MaxTokens: 100}
+	runtimeBudget := &config.BudgetPolicy{MaxTokens: 100}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
-	e, _ := newEng(t, budgetCfg(global, profile), d, n, nil)
+	e, _ := newEng(t, budgetCfg(global, runtimeBudget), d, n, nil)
 
 	// Under every cap → nil (cancel the reservation so later checks are clean).
 	res, berr := e.checkSpendBudget("fixer", nil, "", cost.Usage{})
@@ -33,16 +45,16 @@ func TestCheckSpendBudgetScopes(t *testing.T) {
 	}
 	e.meter.Cancel(res)
 
-	// Charge the profile scope past its token cap.
-	e.meter.Record([]string{"profile:fixer"}, cost.Usage{TotalTokens: 100})
+	// Charge the runtime scope past its token cap.
+	e.meter.Record([]string{"runtime:fixer"}, cost.Usage{TotalTokens: 100})
 	_, berr = e.checkSpendBudget("fixer", nil, "", cost.Usage{})
-	if berr == nil || berr.Scope != "profile:fixer" || !strings.Contains(berr.Reason, "tokens") {
-		t.Fatalf("profile token cap: %+v", berr)
+	if berr == nil || berr.Scope != "runtime:fixer" || !strings.Contains(berr.Reason, "tokens") {
+		t.Fatalf("runtime token cap: %+v", berr)
 	}
-	// A different profile is untouched.
+	// A different runtime is untouched.
 	res, berr = e.checkSpendBudget("other", nil, "", cost.Usage{})
 	if berr != nil {
-		t.Fatalf("other profile: %v", berr)
+		t.Fatalf("other runtime: %v", berr)
 	}
 	e.meter.Cancel(res)
 
@@ -71,7 +83,7 @@ func TestSpendBudgetWindowFrees(t *testing.T) {
 	e, _ := newEng(t, budgetCfg(nil, profile), &fakeDispatcher{}, &fakeNotifier{}, nil)
 	now := time.Now()
 	e.meter.SetNow(func() time.Time { return now })
-	e.meter.Record([]string{"profile:fixer"}, cost.Usage{CostUSD: 1})
+	e.meter.Record([]string{"runtime:fixer"}, cost.Usage{CostUSD: 1})
 	if _, berr := e.checkSpendBudget("fixer", nil, "", cost.Usage{}); berr == nil {
 		t.Fatal("over cap")
 	}
@@ -86,7 +98,7 @@ func TestLegacyDispatchShedsOnBudget(t *testing.T) {
 	profile := &config.BudgetPolicy{MaxCostUSD: 1}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, budgetCfg(nil, profile), d, n, nil)
-	e.meter.Record([]string{"profile:fixer"}, cost.Usage{CostUSD: 2})
+	e.meter.Record([]string{"runtime:fixer"}, cost.Usage{CostUSD: 2})
 
 	tr := agentTrigger("merge_conflict", "o/r", 1, "h", "sig", config.Action{Type: "agent", Agent: "fixer"})
 	e.process(context.Background(), tr)
@@ -114,7 +126,7 @@ func TestLegacyDispatchRecordsUsage(t *testing.T) {
 	if len(d.reqs) != 1 {
 		t.Fatalf("dispatched: %d", len(d.reqs))
 	}
-	if tok, _ := e.meter.SpentIn("profile:fixer", time.Hour); tok != 15 {
+	if tok, _ := e.meter.SpentIn("runtime:fixer", time.Hour); tok != 15 {
 		t.Fatalf("metered profile usage: %d", tok)
 	}
 	if tok, _ := e.meter.SpentIn("global", time.Hour); tok != 15 {
@@ -147,7 +159,7 @@ func TestBudgetReservationClosesCheckThenActRace(t *testing.T) {
 	}
 	// Cancelling releases without charging.
 	e.meter.Cancel(res3)
-	if tok, usd := e.meter.SpentIn("profile:fixer", time.Hour); tok != 40 || usd != 0.2 {
+	if tok, usd := e.meter.SpentIn("runtime:fixer", time.Hour); tok != 40 || usd != 0.2 {
 		t.Fatalf("only the settled actual should remain: %d %v", tok, usd)
 	}
 

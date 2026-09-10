@@ -15,7 +15,7 @@ func TestSkillEnv(t *testing.T) {
 	t.Cleanup(func() { memory.SetToolCommand(nil); skill.SetActive(nil) })
 
 	req := Request{
-		Profile: config.AgentProfile{Skill: &config.SkillPolicy{Verbs: []string{"gh.*"}}},
+		Step:    config.Step{Skill: &config.SkillPolicy{Verbs: []string{"gh.*"}}},
 		Action:  config.Action{Agent: "fixer"},
 		Trigger: core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "o/r", Number: 7}},
 	}
@@ -45,7 +45,7 @@ func TestSkillEnv(t *testing.T) {
 
 	// No skill: block → nothing, even with an endpoint.
 	noskill := req
-	noskill.Profile.Skill = nil
+	noskill.Step.Skill = nil
 	if SkillEnv(noskill, "unix:///run/c/memory.sock") != nil {
 		t.Errorf("a non-skill profile must get no skill env")
 	}

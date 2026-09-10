@@ -105,11 +105,7 @@ func (memoryImpl) Invoke(ctx context.Context, verb string, opts map[string]any) 
 			}
 		}
 		if s := str("scope"); s != "" {
-			resolved, err := memory.ResolveScope(s, src)
-			if err != nil {
-				return nil, err
-			}
-			q.Scopes = []string{resolved}
+			q.Scopes = []string{memory.NormalizeScope(s)}
 		}
 		entries, err := m.Recall(q)
 		if err != nil {

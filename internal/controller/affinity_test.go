@@ -91,13 +91,13 @@ func newMemAffStore() *memAffStore { return &memAffStore{recs: map[string]Affini
 func (s *memAffStore) PutAffinity(r AffinityRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.recs[r.Agent+"\x00"+r.Key] = r
+	s.recs[r.Runtime+"\x00"+r.Model+"\x00"+r.Key] = r
 	return nil
 }
-func (s *memAffStore) DeleteAffinity(agent, key string) error {
+func (s *memAffStore) DeleteAffinity(runtime, model, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.recs, agent+"\x00"+key)
+	delete(s.recs, runtime+"\x00"+model+"\x00"+key)
 	return nil
 }
 func (s *memAffStore) Affinities() []AffinityRef {
@@ -117,8 +117,9 @@ func affReq(agent, kind, repo string, pr int, spec *config.SessionSpec) dispatch
 			Source: "github", Instance: "gh", Kind: kind,
 			Target: core.Target{Repo: repo, PR: pr, Number: pr},
 		},
-		Action:  config.Action{Type: "agent", Agent: agent, Prompt: "handle {{.kind}} on {{.repo}}#{{.pr}}"},
-		Profile: config.AgentProfile{Provider: "claude", Session: spec},
+		Action:   config.Action{Type: "agent", Agent: agent, Prompt: "handle {{.kind}} on {{.repo}}#{{.pr}}"},
+		Step:     config.Step{Session: spec},
+		Identity: agent,
 	}
 }
 
@@ -144,8 +145,8 @@ func newAffRig(t *testing.T, st *memAffStore, spec *config.SessionSpec) *affRig 
 		st = newMemAffStore()
 	}
 	rig := &affRig{runner: &affRunner{}, sender: &affSender{}, store: st, holds: map[string]bool{}}
-	rig.cfg = &config.Config{Agents: map[string]config.AgentProfile{
-		"reviewer": {Provider: "claude", Session: spec, ArchiveWhenDone: true},
+	rig.cfg = &config.Config{Steps: map[string]config.Step{
+		"reviewer": {Session: spec, ArchiveWhenDone: true},
 	}}
 	reg := NewRegistry(nil, "", rig.runner, rig.sender)
 	hold := func(id string) { rig.mu.Lock(); rig.holds[id] = true; rig.mu.Unlock() }
@@ -161,7 +162,7 @@ func (rig *affRig) dispatch(t *testing.T, req dispatch.Request) dispatch.RunRef 
 		t.Fatalf("affinity dispatch: %v", err)
 	}
 	if !handled {
-		t.Fatalf("affinity should own this dispatch: %+v", req.Profile.Session)
+		t.Fatalf("affinity should own this dispatch: %+v", req.Step.Session)
 	}
 	return ref
 }
@@ -473,7 +474,7 @@ func TestAffinityNotHandled(t *testing.T) {
 	// Non-persistent runtime: built-in paseo with NO follow-up sender.
 	runner := &affRunner{}
 	reg := NewRegistry(nil, "", runner, nil)
-	cfg := &config.Config{Agents: map[string]config.AgentProfile{"reviewer": {Session: spec}}}
+	cfg := &config.Config{Steps: map[string]config.Step{"reviewer": {Session: spec}}}
 	aff := NewAffinity(reg, newMemAffStore(), cfg, nil, nil, nil)
 	req = affReq("reviewer", "new_comment", "o/r", 7, spec)
 	if _, handled, _ := aff.Dispatch(context.Background(), runner, req); handled {
@@ -489,7 +490,7 @@ func TestAffinityNotHandled(t *testing.T) {
 
 	// A key that renders empty is a clear dispatch error.
 	req = affReq("reviewer", "new_comment", "", 0, &config.SessionSpec{Key: "{{.repo}}"})
-	req.Profile.Session = &config.SessionSpec{Key: "{{.repo}}"}
+	req.Step.Session = &config.SessionSpec{Key: "{{.repo}}"}
 	if _, handled, err := rig.aff.Dispatch(context.Background(), rig.runner, req); !handled || err == nil {
 		t.Fatalf("empty key must error: handled=%v err=%v", handled, err)
 	}
@@ -518,8 +519,8 @@ func TestAffinityFollowupCapture(t *testing.T) {
 	spec := affSpec()
 	runner := &affRunner{}
 	sender := &captureSender{reply: `{"plan":[]}`}
-	cfg := &config.Config{Agents: map[string]config.AgentProfile{
-		"reviewer": {Provider: "claude", Session: spec},
+	cfg := &config.Config{Steps: map[string]config.Step{
+		"reviewer": {Session: spec},
 	}}
 	reg := NewRegistry(nil, "", runner, sender)
 	aff := NewAffinity(reg, newMemAffStore(), cfg, nil, nil, nil)
@@ -528,7 +529,7 @@ func TestAffinityFollowupCapture(t *testing.T) {
 		Target: core.Target{Repo: "o/r", PR: 7, Number: 7}}
 
 	// No binding yet → ok=false (the plan escalates instead of revising).
-	if _, ok, err := aff.Followup(context.Background(), "reviewer", cfg.Agents["reviewer"], trig, "revise"); ok || err != nil {
+	if _, ok, err := aff.Followup(context.Background(), cfg.Steps["reviewer"], "reviewer", "", trig, "revise"); ok || err != nil {
 		t.Fatalf("no binding: ok=%v err=%v", ok, err)
 	}
 
@@ -537,12 +538,12 @@ func TestAffinityFollowupCapture(t *testing.T) {
 	if _, handled, err := aff.Dispatch(context.Background(), runner, req); !handled || err != nil {
 		t.Fatalf("bind: %v %v", handled, err)
 	}
-	out, ok, err := aff.Followup(context.Background(), "reviewer", cfg.Agents["reviewer"], trig, "step boom failed; revise")
+	out, ok, err := aff.Followup(context.Background(), cfg.Steps["reviewer"], "reviewer", "", trig, "step boom failed; revise")
 	if !ok || err != nil || out != `{"plan":[]}` {
 		t.Fatalf("followup capture: ok=%v err=%v out=%q", ok, err, out)
 	}
-	// A profile without session: is never consulted.
-	if _, ok, _ := aff.Followup(context.Background(), "reviewer", config.AgentProfile{}, trig, "x"); ok {
+	// A step without session: is never consulted.
+	if _, ok, _ := aff.Followup(context.Background(), config.Step{}, "reviewer", "", trig, "x"); ok {
 		t.Fatal("no session spec must be ok=false")
 	}
 }

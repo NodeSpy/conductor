@@ -37,7 +37,7 @@ type stepFake struct {
 	provider  map[string]string   // step id -> agent provider used
 	seenSteps map[string][]string // step id -> which prior step outputs were visible
 	waited    map[string]bool     // step id -> req.Wait
-	archive   map[string]bool     // step id -> req.Profile.ArchiveWhenDone (→ archive=1 label)
+	archive   map[string]bool     // step id -> req.Step.ArchiveWhenDone (→ archive=1 label)
 	prompts   map[string]string   // step id -> dispatched prompt (with guidance appended)
 }
 
@@ -45,9 +45,9 @@ func (f *stepFake) Dispatch(_ context.Context, req dispatch.Request) (dispatch.R
 	id := req.Action.ID
 	f.mu.Lock()
 	f.ran = append(f.ran, id)
-	f.provider[id] = req.Profile.Provider
+	f.provider[id] = req.Model
 	f.waited[id] = req.Wait
-	f.archive[id] = req.Profile.ArchiveWhenDone
+	f.archive[id] = req.Step.ArchiveWhenDone
 	f.prompts[id] = req.Action.Prompt
 	if s, ok := req.Data["steps"].(map[string]any); ok {
 		keys := []string{}
@@ -90,9 +90,9 @@ func triageAction() config.Action {
 }
 
 func stepEngine(t *testing.T, d *stepFake) *Engine {
-	cfg := &config.Config{Agents: map[string]config.AgentProfile{
-		"planner": {Provider: "claude-haiku"}, // cheap model to plan
-		"worker":  {Provider: "claude-opus"},  // strong model to do the work
+	cfg := &config.Config{Steps: map[string]config.Step{
+		"planner": {Model: config.ModelSpecOf("claude-haiku")}, // cheap model to plan
+		"worker":  {Model: config.ModelSpecOf("claude-opus")},  // strong model to do the work
 	}}
 	cfg.Control.Enabled = ptrBool(true)
 	return New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: &fakeNotifier{},
@@ -143,8 +143,8 @@ func TestWorkflowBranchNoContext(t *testing.T) {
 func TestWorkflowBackgroundStepHandsOff(t *testing.T) {
 	d := newStepFake()
 	n := &fakeNotifier{}
-	cfg := &config.Config{Agents: map[string]config.AgentProfile{
-		"interactive": {Provider: "claude-sonnet"},
+	cfg := &config.Config{Steps: map[string]config.Step{
+		"interactive": {},
 	}}
 	cfg.Control.Enabled = ptrBool(true)
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n,
@@ -180,9 +180,9 @@ func TestWorkflowBackgroundStepHandsOff(t *testing.T) {
 // it), even when its profile opts into archive_when_done.
 func TestWorkflowBackgroundStepNotReapable(t *testing.T) {
 	d := newStepFake()
-	cfg := &config.Config{Agents: map[string]config.AgentProfile{
+	cfg := &config.Config{Steps: map[string]config.Step{
 		// Profile mistakenly (or staleley) opts into archiving.
-		"interactive": {Provider: "claude-sonnet", ArchiveWhenDone: true},
+		"interactive": {ArchiveWhenDone: true},
 	}}
 	cfg.Control.Enabled = ptrBool(true)
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: &fakeNotifier{},
@@ -205,8 +205,8 @@ func TestWorkflowBackgroundStepNotReapable(t *testing.T) {
 func TestWorkflowBackgroundStepUnknownHandoffEscalates(t *testing.T) {
 	d := newStepFake()
 	n := &fakeNotifier{}
-	cfg := &config.Config{Agents: map[string]config.AgentProfile{
-		"interactive": {Provider: "claude-sonnet"},
+	cfg := &config.Config{Steps: map[string]config.Step{
+		"interactive": {},
 	}}
 	cfg.Control.Enabled = ptrBool(true)
 	reg := handoff.NewRegistry(nil, "", nil) // no entries at all
@@ -235,8 +235,8 @@ func TestWorkflowBackgroundStepUnknownHandoffEscalates(t *testing.T) {
 func TestWorkflowBackgroundStepHandoffResolvesButNoBrokerFallsBack(t *testing.T) {
 	d := newStepFake()
 	n := &fakeNotifier{}
-	cfg := &config.Config{Agents: map[string]config.AgentProfile{
-		"interactive": {Provider: "claude-sonnet"},
+	cfg := &config.Config{Steps: map[string]config.Step{
+		"interactive": {},
 	}}
 	cfg.Control.Enabled = ptrBool(true)
 	reg := handoff.NewRegistry(map[string]config.HandoffConfig{
@@ -272,8 +272,8 @@ func TestLogOutputs(t *testing.T) {
 func TestWorkflowResumesFromCheckpoint(t *testing.T) {
 	d := newStepFake()
 	st := tempStore(t)
-	cfg := &config.Config{Agents: map[string]config.AgentProfile{
-		"planner": {Provider: "claude-haiku"}, "worker": {Provider: "claude-opus"}}}
+	cfg := &config.Config{Steps: map[string]config.Step{
+		"planner": {}, "worker": {}}}
 	cfg.Control.Enabled = ptrBool(true)
 	e := New(Options{Config: cfg, Store: st, Dispatch: d, Notifier: &fakeNotifier{},
 		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil },

@@ -28,10 +28,11 @@ func TestPaseoAgentArgv(t *testing.T) {
 			Source: "github", Instance: "acme", Kind: "merge_conflict",
 			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5, HeadSHA: "deadbeef", BaseRef: "main"},
 		},
-		Action:  config.Action{Type: "agent", Agent: "fixer", Prompt: "fix {{.repo}}#{{.pr}} on {{.base}}"},
-		Profile: config.AgentProfile{Provider: "claude", Model: "claude-opus", Workspace: "worktree"},
-		Tokens:  Tokens{App: "APPTOK", User: "USERTOK"},
-		Author:  Author{Name: "Me", Email: "me@example.com"},
+		Action: config.Action{Type: "agent", Agent: "fixer", Prompt: "fix {{.repo}}#{{.pr}} on {{.base}}"},
+		Model:  "claude-opus",
+		Step:   config.Step{Model: config.ModelSpecOf("claude-opus"), Workspace: "worktree"},
+		Tokens: Tokens{App: "APPTOK", User: "USERTOK"},
+		Author: Author{Name: "Me", Email: "me@example.com"},
 	}
 	ref, err := d.Dispatch(context.Background(), req)
 	if err != nil {
@@ -43,7 +44,7 @@ func TestPaseoAgentArgv(t *testing.T) {
 	s := joined(ref.Argv)
 	for _, want := range []string{
 		"paseo run", "fix acme/w#5 on main",
-		"--provider claude", "--model claude-opus",
+		"--model claude-opus",
 		"--worktree-mode checkout-pr", "--pr-number 5", "--forge github",
 		// Agent acts as YOU: GH_TOKEN is the user token (writes post as you), App
 		// token is reads-only under PC_GH_APP_TOKEN.
@@ -69,8 +70,8 @@ func TestPaseoBranchOffForIssue(t *testing.T) {
 	req := Request{
 		Trigger: core.Trigger{Kind: "issue_assigned",
 			Target: core.Target{Repo: "acme/w", Issue: 9, Number: 9, BaseRef: "main"}},
-		Action:  config.Action{Type: "agent", Agent: "fixer", Checkout: "branch-off", Prompt: "start"},
-		Profile: config.AgentProfile{Workspace: "worktree"},
+		Action: config.Action{Type: "agent", Agent: "fixer", Checkout: "branch-off", Prompt: "start"},
+		Step:   config.Step{Workspace: "worktree"},
 	}
 	ref, _ := d.Dispatch(context.Background(), req)
 	s := joined(ref.Argv)
@@ -119,7 +120,7 @@ func TestPaseoCheckoutPRUsesResolvedCwd(t *testing.T) {
 		Trigger: core.Trigger{Kind: "merge_conflict",
 			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}},
 		Action:    config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"},
-		Profile:   config.AgentProfile{Workspace: "worktree"},
+		Step:      config.Step{Workspace: "worktree"},
 		Workspace: "wks_should_be_ignored", // must NOT combine with --new-workspace
 	}
 	ref, err := d.Dispatch(context.Background(), req)
@@ -150,8 +151,8 @@ func TestCheckoutUsesTargetProject(t *testing.T) {
 	req := Request{
 		Trigger: core.Trigger{Kind: "merge_conflict",
 			Target: core.Target{Repo: "AcmeCorp/Widget", Project: "acme/widget", PR: 5, Number: 5}},
-		Action:  config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"},
-		Profile: config.AgentProfile{Workspace: "worktree"},
+		Action: config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"},
+		Step:   config.Step{Workspace: "worktree"},
 	}
 	ref, err := d.Dispatch(context.Background(), req)
 	if err != nil {

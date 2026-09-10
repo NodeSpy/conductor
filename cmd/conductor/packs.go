@@ -139,9 +139,9 @@ func cmdPackAdd(args []string) error {
 	m := man.Pack
 	fmt.Printf("%s v%s — %s\n", m.Name, m.Version, m.Description)
 	fmt.Println("\ninstall review:")
-	for _, a := range sortedAgentNames(man.Agents) {
-		if s := man.Agents[a].Skill; s != nil && (len(s.Verbs) > 0 || len(s.AllowSecrets) > 0) {
-			fmt.Printf("  agent %s", a)
+	for _, a := range sortedAgentNames(man.Steps) {
+		if s := man.Steps[a].Skill; s != nil && (len(s.Verbs) > 0 || len(s.AllowSecrets) > 0) {
+			fmt.Printf("  step %s", a)
 			if len(s.Verbs) > 0 {
 				fmt.Printf("  !! skill: %s", strings.Join(s.Verbs, ", "))
 			}
@@ -270,7 +270,7 @@ func short(s string) string {
 	return s
 }
 
-func sortedAgentNames(m map[string]config.AgentProfile) []string {
+func sortedAgentNames(m map[string]config.Step) []string {
 	out := make([]string, 0, len(m))
 	for n := range m {
 		out = append(out, n)
@@ -343,10 +343,10 @@ func printPackPlan(cfg *config.Config) {
 		prefix := ns + "/"
 
 		var agents, workflows, checks []string
-		for name := range cfg.Agents {
+		for name := range cfg.Steps {
 			if strings.HasPrefix(name, prefix) {
 				grant := ""
-				if p := cfg.Agents[name]; p.Skill != nil {
+				if p := cfg.Steps[name]; p.Skill != nil {
 					if len(p.Skill.Verbs) > 0 {
 						grant += "  !! grants skill: " + strings.Join(p.Skill.Verbs, ", ")
 					}
@@ -483,7 +483,7 @@ func cmdPackShow(args []string) error {
 		sort.Strings(names)
 		fmt.Printf("\npresets: %s\n", strings.Join(names, ", "))
 	}
-	if len(man.Exports.Workflows) > 0 || len(man.Exports.Agents) > 0 {
+	if len(man.Exports.Workflows) > 0 || len(man.Exports.Steps) > 0 {
 		fmt.Println("\nexports (public, reference by qualified name):")
 		for _, w := range man.Exports.Workflows {
 			fmt.Printf("  workflow: <instance>/%s\n", w)

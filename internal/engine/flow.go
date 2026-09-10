@@ -336,7 +336,7 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 		Dispatch: func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
 			runner := Dispatcher(e.disp)
 			if req.Action.Type == "agent" {
-				r, err := e.runnerFor(req.Profile)
+				r, err := e.runnerFor(req.Step)
 				if err != nil {
 					return dispatch.RunRef{}, err
 				}
@@ -358,25 +358,30 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			}
 			return dispatch.Tokens{App: appTok, User: userTok}
 		},
-		Guidance: func(agentName string, p config.AgentProfile, pol config.Policy) string {
-			return e.agentGuidance(p, pol) + e.outcomeGuidance(agentName, p)
+		Guidance: func(identity string, p config.Step, pol config.Policy) string {
+			return e.agentGuidance(p, pol) + e.outcomeGuidance(identity, p)
 		},
-		Memory: e.memoryPrompt,
+		Memory:       e.memoryPrompt,
+		ResolveModel: e.resolveModel,
 		// Revise is the supervise loop's round-trip (#36 §11): the failure
 		// context goes to the authoring agent's bound session (§10) and the
 		// captured reply carries the revised plan. No affinity, no session:
 		// profile, or no binding → ok=false and the plan escalates instead.
-		Revise: func(ctx context.Context, agentName string, t core.Trigger, prompt string) (string, bool, error) {
+		Revise: func(ctx context.Context, identity string, t core.Trigger, prompt string) (string, bool, error) {
 			if e.affinity == nil {
 				return "", false, nil
 			}
-			return e.affinity.Followup(ctx, agentName, e.cfg.Agents[agentName], t, prompt)
+			step, model, ok := e.stepByIdentity(ctx, identity)
+			if !ok {
+				return "", false, nil
+			}
+			return e.affinity.Followup(ctx, step, identity, model, t, prompt)
 		},
-		Background: func(ctx context.Context, t core.Trigger, stepID, agentName string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string) {
+		Background: func(ctx context.Context, t core.Trigger, stepID, identity string, p config.Step, ref dispatch.RunRef, handoffConn string) {
 			e.hold.Add(ref.AgentID)
 			ch := e.askChannelFor(handoffConn)
 			if ch != nil && e.broker != nil && ref.AgentID != "" {
-				e.startReviewHandoff(ctx, t, stepID, agentName, p, ref, ch)
+				e.startReviewHandoff(ctx, t, stepID, identity, p, ref, ch)
 				return
 			}
 			e.notif.Emit(ctx, notify.EventNeedsInput, t,
@@ -390,22 +395,23 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 		},
 		// The spend-budget layer (#36 §14): caps checked before each agent
 		// step dispatches, usage charged/audited after it returns.
-		CheckBudget: func(agentName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
-			res, berr := e.checkSpendBudget(agentName, wf, wfScope, est)
+		CheckBudget: func(runtimeName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
+			res, berr := e.checkSpendBudget(runtimeName, wf, wfScope, est)
 			if berr != nil {
 				e.store.Audit(map[string]any{"event": "budget_shed",
-					"scope": berr.Scope, "reason": berr.Reason, "agent": agentName})
+					"scope": berr.Scope, "reason": berr.Reason, "runtime": runtimeName})
 				return nil, berr
 			}
 			return res, nil
 		},
 		CancelBudget: func(res *cost.Reservation) { e.meter.Cancel(res) },
-		RecordUsage: func(t core.Trigger, agentName, stepID, runID, wfScope, savedWF string, res *cost.Reservation, u cost.Usage) {
-			e.recordUsage(t, agentName, stepID, runID, wfScope, res, u)
-			// The outcome loop's engagement (#36 §18): this agent acted on
-			// this target; a later terminal signal resolves it.
+		RecordUsage: func(t core.Trigger, identity, runtimeName, stepID, runID, wfScope, savedWF string, res *cost.Reservation, u cost.Usage) {
+			e.recordUsage(t, identity, runtimeName, stepID, runID, wfScope, res, u)
+			// The outcome loop's engagement (#36 §18): this STEP acted on
+			// this target; a later terminal signal resolves it. The key is
+			// the step identity (design §4), which is stable across runs.
 			e.store.RecordEngagement(t.Target.Repo, t.Target.Number, store.Engagement{
-				Agent: agentName, Workflow: wfScope, SavedWorkflow: savedWF,
+				Key: identity, Runtime: runtimeName, Workflow: wfScope, SavedWorkflow: savedWF,
 				Kind: t.Kind, Run: runID, CostUSD: u.CostUSD, Tokens: u.TotalTokens,
 			})
 		},
@@ -424,10 +430,10 @@ type sendCapturer interface {
 // agent: a session-bound profile (§10) goes through affinity; a paseo agent
 // takes a captured follow-up turn. ok=false when neither applies — the gate
 // escalates instead of revising (an honest "this runtime can't revise").
-func (e *Engine) agentFollowUp(ctx context.Context, agentID, agentName string, t core.Trigger, prompt string) (string, bool, error) {
-	profile := e.cfg.Agents[agentName]
+func (e *Engine) agentFollowUp(ctx context.Context, agentID, identity string, t core.Trigger, prompt string) (string, bool, error) {
+	profile, model, _ := e.stepByIdentity(ctx, identity)
 	if e.affinity != nil && profile.Session != nil {
-		return e.affinity.Followup(ctx, agentName, profile, t, prompt)
+		return e.affinity.Followup(ctx, profile, identity, model, t, prompt)
 	}
 	if agentID == "" {
 		return "", false, nil

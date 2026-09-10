@@ -15,8 +15,8 @@ import (
 const histCfg = `
 connectors:
   svc: { use: fake }
-agents:
-  fixer: { model: claude-sonnet }
+steps:
+  fixer: { type: agent, name: fixer, model: claude-sonnet }
 `
 
 var histSpec = `
@@ -27,7 +27,7 @@ steps:
   - { id: skipme, if: "{{.msg}} == never", uses: svc.post, options: { text: x } }
   - id: fix
     type: agent
-    agent: fixer
+    extends: fixer
     prompt: "fix {{.msg}}"
 `
 

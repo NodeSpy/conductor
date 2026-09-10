@@ -14,15 +14,15 @@ func TestEngagementsLifecycle(t *testing.T) {
 	}
 	defer s.Close()
 
-	s.RecordEngagement("o/r", 5, Engagement{Agent: "fixer", Workflow: "gh.pr/x", CostUSD: 0.5})
-	s.RecordEngagement("o/r", 5, Engagement{Agent: "reviewer"})
-	s.RecordEngagement("o/r", 6, Engagement{Agent: "fixer"})
+	s.RecordEngagement("o/r", 5, Engagement{Key: "fixer", Workflow: "gh.pr/x", CostUSD: 0.5})
+	s.RecordEngagement("o/r", 5, Engagement{Key: "reviewer"})
+	s.RecordEngagement("o/r", 6, Engagement{Key: "fixer"})
 	// Guards: no repo / no number / no agent → dropped.
-	s.RecordEngagement("", 5, Engagement{Agent: "x"})
-	s.RecordEngagement("o/r", 0, Engagement{Agent: "x"})
+	s.RecordEngagement("", 5, Engagement{Key: "x"})
+	s.RecordEngagement("o/r", 0, Engagement{Key: "x"})
 	s.RecordEngagement("o/r", 7, Engagement{})
 
-	if got := s.PeekEngagements("o/r", 5); len(got) != 2 || got[0].Agent != "fixer" {
+	if got := s.PeekEngagements("o/r", 5); len(got) != 2 || got[0].Key != "fixer" {
 		t.Fatalf("peek: %+v", got)
 	}
 	// Peek doesn't consume.
@@ -56,16 +56,16 @@ func TestEngagementsCapAndAgePrune(t *testing.T) {
 	defer s.Close()
 
 	old := time.Now().Add(-60 * 24 * time.Hour)
-	s.RecordEngagement("o/r", 9, Engagement{Agent: "ancient", At: old})
+	s.RecordEngagement("o/r", 9, Engagement{Key: "ancient", At: old})
 	for i := 0; i < engagementCap+5; i++ {
-		s.RecordEngagement("o/r", 9, Engagement{Agent: "fixer"})
+		s.RecordEngagement("o/r", 9, Engagement{Key: "fixer"})
 	}
 	got := s.PeekEngagements("o/r", 9)
 	if len(got) != engagementCap {
 		t.Fatalf("cap: %d", len(got))
 	}
 	for _, e := range got {
-		if e.Agent == "ancient" {
+		if e.Key == "ancient" {
 			t.Fatal("aged engagement must be pruned")
 		}
 	}
@@ -129,11 +129,11 @@ func TestOutcomeStats(t *testing.T) {
 
 	s2, _ := Open(Options{StatePath: filepath.Join(dir, "s.json"), AuditPath: filepath.Join(dir, "a2.jsonl")})
 	defer s2.Close()
-	st := s2.AgentOutcomeStats("fixer")
+	st := s2.OutcomeStats("fixer")
 	if st["merged"] != 2 || st["reverted"] != 1 {
 		t.Fatalf("stats after reopen: %+v", st)
 	}
-	if len(s2.AgentOutcomeStats("ghost")) != 0 {
+	if len(s2.OutcomeStats("ghost")) != 0 {
 		t.Fatal("unknown agent stats")
 	}
 }

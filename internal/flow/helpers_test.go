@@ -268,9 +268,14 @@ func loadConfig(t *testing.T, y string) *config.Config {
 	if err := yaml.Unmarshal([]byte(y), &cfg); err != nil {
 		t.Fatalf("yaml unmarshal config: %v\n---\n%s", err, y)
 	}
-	// Mirror config.Load: multi-source on: lists expand before validation.
+	// Mirror config.Load: multi-source on: lists expand, then `extends:`
+	// resolves (including a step reaching a `steps:` template) before
+	// anything runs.
 	if err := cfg.NormalizeTriggers(); err != nil {
 		t.Fatalf("normalize triggers: %v\n---\n%s", err, y)
+	}
+	if err := cfg.ResolveExtends(); err != nil {
+		t.Fatalf("resolve extends: %v\n---\n%s", err, y)
 	}
 	return &cfg
 }
@@ -471,7 +476,7 @@ func (n *fakeNotifier) snapshot() []notifyEvent {
 type backgroundCall struct {
 	StepID  string
 	Handoff string
-	Profile config.AgentProfile
+	Profile config.Step
 	Ref     dispatch.RunRef
 }
 
@@ -499,7 +504,7 @@ func (a *fakeAgents) dispatch(ctx context.Context, req dispatch.Request) (dispat
 	return dispatch.RunRef{Output: "{}"}, nil
 }
 
-func (a *fakeAgents) background(ctx context.Context, t core.Trigger, stepID, agentName string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string) {
+func (a *fakeAgents) background(ctx context.Context, t core.Trigger, stepID, agentName string, p config.Step, ref dispatch.RunRef, handoffConn string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.backgroundCalls = append(a.backgroundCalls, backgroundCall{StepID: stepID, Handoff: handoffConn, Profile: p, Ref: ref})
@@ -542,7 +547,7 @@ func newTestRunner(t *testing.T, cfg *config.Config, reg *connector.Registry) *t
 		Agents: AgentServices{
 			Dispatch:   ag.dispatch,
 			Tokens:     func(t core.Trigger) dispatch.Tokens { return dispatch.Tokens{} },
-			Guidance:   func(agentName string, p config.AgentProfile, pol config.Policy) string { return "|G|" },
+			Guidance:   func(agentName string, p config.Step, pol config.Policy) string { return "|G|" },
 			Background: ag.background,
 			Archive:    ag.archive,
 		},

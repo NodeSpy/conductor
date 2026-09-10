@@ -220,34 +220,30 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 		// by live agents and must not persist tracked secret material.
 		if gerr := m.checkGuard(req.Text); gerr != nil {
 			aud(map[string]any{"event": "memory_remember", "via": "tool", "outcome": "blocked",
-				"agent": req.Source.Agent, "repo": req.Source.Repo, "error": gerr.Error()})
+				"agent": req.Source.Step, "repo": req.Source.Repo, "error": gerr.Error()})
 			return IPCResponse{Error: gerr.Error()}
 		}
 		e, err := m.Remember(req.Text, req.Tags, req.Scope, req.Source)
 		if err != nil {
 			aud(map[string]any{"event": "memory_remember", "via": "tool", "outcome": "failed",
-				"agent": req.Source.Agent, "repo": req.Source.Repo, "error": err.Error()})
+				"agent": req.Source.Step, "repo": req.Source.Repo, "error": err.Error()})
 			return IPCResponse{Error: err.Error()}
 		}
-		log("memory: agent %q remembered %s (scope %s)", req.Source.Agent, e.ID, e.Scope)
+		log("memory: step %q remembered %s (scope %s)", req.Source.Step, e.ID, e.Scope)
 		aud(map[string]any{"event": "memory_remember", "via": "tool", "outcome": "ok",
-			"agent": req.Source.Agent, "repo": req.Source.Repo, "id": e.ID, "scope": e.Scope})
+			"agent": req.Source.Step, "repo": req.Source.Repo, "id": e.ID, "scope": e.Scope})
 		return IPCResponse{OK: true, Entry: &e}
 	case "recall":
 		q := Query{Tags: req.Tags, Substring: req.Substring, Limit: req.Limit}
 		if req.Scope != "" {
-			resolved, err := ResolveScope(req.Scope, req.Source)
-			if err != nil {
-				return IPCResponse{Error: err.Error()}
-			}
-			q.Scopes = []string{resolved}
+			q.Scopes = []string{NormalizeScope(req.Scope)}
 		}
 		entries, err := m.Recall(q)
 		if err != nil {
 			return IPCResponse{Error: err.Error()}
 		}
 		aud(map[string]any{"event": "memory_recall", "via": "tool",
-			"agent": req.Source.Agent, "repo": req.Source.Repo, "count": len(entries)})
+			"agent": req.Source.Step, "repo": req.Source.Repo, "count": len(entries)})
 		// Recalled text goes straight into the calling agent's context:
 		// redact like the prompt-injection path.
 		for i := range entries {
@@ -265,11 +261,11 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 		out, err := ops.RunStep(context.Background(), req.Source, req.Number, req.Step)
 		if err != nil {
 			aud(map[string]any{"event": "plan_live_step", "via": "tool", "outcome": "failed",
-				"agent": req.Source.Agent, "repo": req.Source.Repo, "error": err.Error()})
+				"agent": req.Source.Step, "repo": req.Source.Repo, "error": err.Error()})
 			return IPCResponse{Error: err.Error()}
 		}
 		aud(map[string]any{"event": "plan_live_step", "via": "tool", "outcome": "ok",
-			"agent": req.Source.Agent, "repo": req.Source.Repo})
+			"agent": req.Source.Step, "repo": req.Source.Repo})
 		return IPCResponse{OK: true, Result: out}
 	case "workflow_list":
 		ops := getLiveOps()

@@ -27,8 +27,8 @@ const wfBase = `
 connectors:
   svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner: { model: x }
+steps:
+  planner: { type: agent, name: planner, model: x }
 workflows:
   greet:
     description: "post a greeting"
@@ -44,7 +44,7 @@ policy:
 func TestWorkflowListCatalog(t *testing.T) {
 	sw := tempSaved(t, "")
 	step := []config.Step{{Uses: "svc.post", Options: map[string]any{"text": "x"}}}
-	_, _ = sw.Save("healthy", "does good things", step, memory.Source{Agent: "planner"})
+	_, _ = sw.Save("healthy", "does good things", step, memory.Source{Step: "planner"})
 	_, _ = sw.Save("rotten", "used to work", step, memory.Source{})
 	_ = sw.Review("healthy")
 	_ = sw.Review("rotten")
@@ -386,7 +386,7 @@ steps:
 	// and refused under the current rules.
 	if _, err := sw.Save("laundered", "was fine once",
 		[]config.Step{{ID: "p", Uses: "svc.post", Options: map[string]any{"text": "x"}}},
-		memory.Source{Agent: "planner"}); err != nil {
+		memory.Source{Step: "planner"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sw.Review("laundered"); err != nil {
@@ -396,8 +396,8 @@ steps:
 connectors:
   svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner: { model: x }
+steps:
+  planner: { type: agent, name: planner, model: x }
 workflows: {}
 policy:
   agent_authored:
@@ -420,8 +420,8 @@ steps: [ { id: go, workflow: laundered } ]
 	nopol := loadConfig(t, `
 connectors:
   svc: { use: fake }
-agents:
-  planner: { model: x }
+steps:
+  planner: { type: agent, name: planner, model: x }
 `)
 	regN := buildRegistry(t, nopol)
 	rigN := newTestRunner(t, nopol, regN)
@@ -439,8 +439,8 @@ steps: [ { id: go, workflow: laundered } ]
 connectors:
   svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner: { model: x }
+steps:
+  planner: { type: agent, name: planner, model: x }
 policy:
   agent_authored:
     allow: [ svc.post ]
@@ -475,8 +475,8 @@ steps: [ { id: go, workflow: risky } ]
 connectors:
   svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner: { model: x }
+steps:
+  planner: { type: agent, name: planner, model: x }
 policy:
   agent_authored:
     allow: [ svc.post ]
@@ -516,7 +516,7 @@ func TestSavedWorkflowScopeCarriesNoSecrets(t *testing.T) {
 	// A promoted workflow that dumps its whole template root outward.
 	_, err := sw.Save("dump", "posts the root", []config.Step{
 		{ID: "leak", Uses: "svc.post", Options: map[string]any{"text": `{{printf "%v" $}}`}},
-	}, memory.Source{Agent: "planner"})
+	}, memory.Source{Step: "planner"})
 	if err != nil {
 		t.Fatal(err)
 	}

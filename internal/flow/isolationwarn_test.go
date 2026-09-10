@@ -13,7 +13,7 @@ import (
 // enforced.
 func TestIsolationWarningsHonestAboutUserMode(t *testing.T) {
 	cfg := &config.Config{
-		Agents: map[string]config.AgentProfile{
+		Steps: map[string]config.Step{
 			"a": {Isolation: &config.IsolationConfig{Mode: "user", User: "sbx",
 				Network: &config.IsolationNetwork{Egress: []string{"api.example.com:443"}}}},
 			"b": {Isolation: &config.IsolationConfig{Mode: "user", User: "sbx"}},
@@ -23,7 +23,7 @@ func TestIsolationWarningsHonestAboutUserMode(t *testing.T) {
 		},
 	}
 	warns := strings.Join(IsolationWarnings(cfg), "\n")
-	if !strings.Contains(warns, "agent a") || !strings.Contains(warns, "ADVISORY-ONLY") {
+	if !strings.Contains(warns, "step:a") || !strings.Contains(warns, "ADVISORY-ONLY") {
 		t.Fatalf("user-mode egress must be flagged advisory: %s", warns)
 	}
 	if !strings.Contains(warns, "not concurrent agents from each other") &&
@@ -38,7 +38,7 @@ func TestIsolationWarningsHonestAboutUserMode(t *testing.T) {
 	}
 
 	// namespace / container scopes produce no user-mode noise.
-	quiet := &config.Config{Agents: map[string]config.AgentProfile{
+	quiet := &config.Config{Steps: map[string]config.Step{
 		"c": {Isolation: &config.IsolationConfig{Mode: "namespace",
 			Network: &config.IsolationNetwork{Deny: true, Egress: []string{"a:443"}}}},
 	}}

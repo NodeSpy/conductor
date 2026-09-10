@@ -47,8 +47,8 @@ type ToolServerSpec struct {
 func BuildToolServer(req Request, host string) *ToolServerSpec {
 	argv := memory.ToolCommand()
 	effHost := host
-	if req.Profile.Host != "" {
-		effHost = req.Profile.Host
+	if req.Step.Host != "" {
+		effHost = req.Step.Host
 	}
 	if len(argv) == 0 || effHost != "" {
 		return nil
@@ -67,13 +67,13 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 		args = append(args, "--number", strconv.Itoa(n))
 	}
 	out := &ToolServerSpec{Command: argv[0], Args: args}
-	if b := skill.Active(); b != nil && req.Profile.Skill != nil {
+	if b := skill.Active(); b != nil && req.Step.Skill != nil {
 		claim, err := b.MintClaim(skill.Identity{
 			Agent:   req.Action.Agent,
 			Repo:    req.Trigger.Target.Repo,
 			Trigger: req.Trigger.Kind,
 			Number:  req.Trigger.Target.Number,
-			Policy:  *req.Profile.Skill,
+			Policy:  *req.Step.Skill,
 		})
 		if err == nil {
 			out.Env = map[string]string{"CONDUCTOR_SKILL_CLAIM": claim}
@@ -91,7 +91,7 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 // there is nothing to offer: no skill: on the profile, or no endpoint. This is
 // the paseo/cli counterpart to BuildToolServer's MCP injection (ACP/opencode).
 func SkillEnv(req Request, endpoint string) map[string]string {
-	if req.Profile.Skill == nil || endpoint == "" {
+	if req.Step.Skill == nil || endpoint == "" {
 		return nil
 	}
 	b := skill.Active()
@@ -107,7 +107,7 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 		Repo:    req.Trigger.Target.Repo,
 		Trigger: req.Trigger.Kind,
 		Number:  req.Trigger.Target.Number,
-		Policy:  *req.Profile.Skill,
+		Policy:  *req.Step.Skill,
 	}, uint32(os.Getuid()))
 	if err != nil {
 		return nil

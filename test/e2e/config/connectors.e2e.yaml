@@ -56,14 +56,16 @@ runtimes:
   # archive/clone/workspace) executes on selfbox over ssh.
   gpu: { use: paseo, bin: /usr/local/bin/fakepaseo, host: selfbox }
 
-agents:
+steps:
   fixer:
-    provider: fake
+    type: agent
+    name: fixer
     workspace: worktree
     archive_when_done: true
     wait_timeout: 5m
   remotefixer:
-    provider: fake
+    type: agent
+    name: remotefixer
     runtime: gpu
     workspace: worktree
     wait_timeout: 5m
@@ -76,7 +78,7 @@ triggers:
     steps:
       - id: fix
         type: agent
-        agent: fixer
+        extends: fixer
         prompt: "Resolve the conflict on {{.repo}}#{{.pr}} against {{.base}}: rebase, fix, push."
     hooks:
       - { at: start, uses: slack.post, options: { channel: C1, text: "K1-start {{.repo}}#{{.pr}}" } }
@@ -106,7 +108,7 @@ triggers:
     steps:
       - id: fix
         type: agent
-        agent: remotefixer
+        extends: remotefixer
         prompt: "Resolve the conflict on {{.repo}}#{{.pr}} against {{.base}}: rebase, fix, push."
     hooks:
       - { at: done, uses: slack.post, options: { channel: C6, text: "K6-done {{.repo}}#{{.pr}}" } }
@@ -160,7 +162,7 @@ triggers:
     steps:
       - id: fix
         type: agent
-        agent: fixer
+        extends: fixer
         prompt: "fix {{.repo}} [[usage in=1234 out=567 cost=0.0421]]"
 
   # N (§14 budget): a workflow spend cap smaller than one run's cost. The first
@@ -174,7 +176,7 @@ triggers:
     steps:
       - id: fix
         type: agent
-        agent: fixer
+        extends: fixer
         prompt: "fix {{.repo}} [[usage in=1234 out=567 cost=0.0421]]"
 
   # O (§16 gate — PASS): the agent's change is gated by a check that passes, so
@@ -185,7 +187,7 @@ triggers:
     steps:
       - id: fix
         type: agent
-        agent: fixer
+        extends: fixer
         prompt: "fix {{.repo}}"
         gate: { run: [always-pass], max_revisions: 1 }
       - id: promote
@@ -201,7 +203,7 @@ triggers:
     steps:
       - id: fix
         type: agent
-        agent: fixer
+        extends: fixer
         prompt: "fix {{.repo}}"
         gate: { run: [always-fail], max_revisions: 1 }
       - id: promote
@@ -236,7 +238,7 @@ triggers:
         code: "return { note: 'hist-prep' }"
       - id: fix
         type: agent
-        agent: fixer
+        extends: fixer
         prompt: "fix {{.repo}} note={{.prep.note}}"
       - id: tell
         uses: slack.post
@@ -251,7 +253,7 @@ triggers:
     steps:
       - id: fix
         type: agent
-        agent: fixer
+        extends: fixer
         prompt: "fix {{.repo}} [[dirty]]"
 
   # S (§13 callable): invoked over HTTP by an external orchestrator, not a

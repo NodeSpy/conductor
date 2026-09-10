@@ -19,10 +19,13 @@ func makeReq(kind, prompt string) dispatch.Request {
 			Kind:   kind,
 			Target: core.Target{Repo: "o/r", PR: 7, Number: 7},
 		},
-		Action:  config.Action{Type: "agent", Prompt: prompt},
-		Profile: config.AgentProfile{Provider: "anthropic", Model: "claude"},
-		Tokens:  dispatch.Tokens{User: "utok", App: "atok"},
-		Author:  dispatch.Author{Name: "Me", Email: "me@example.com"},
+		Action: config.Action{Type: "agent", Prompt: prompt},
+		Step:   config.Step{Model: config.ModelSpecOf("claude")},
+		// The RESOLVED model: opencode's "provider/model" spelling, which
+		// splits into its providerID/modelID fields.
+		Model:  "anthropic/claude",
+		Tokens: dispatch.Tokens{User: "utok", App: "atok"},
+		Author: dispatch.Author{Name: "Me", Email: "me@example.com"},
 	}
 }
 

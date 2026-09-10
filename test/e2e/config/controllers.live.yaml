@@ -45,15 +45,15 @@ integrations:
             You have push access to origin. Do this now, non-interactively.
     rules:
       - match: { repos: ["grpb/cliclaude"] }
-        actions: { merge_conflict: { type: agent, agent: fx_claude } }
+        actions: { merge_conflict: { type: agent, extends: fx_claude } }
       - match: { repos: ["grpb/clicodex"] }
-        actions: { merge_conflict: { type: agent, agent: fx_codex } }
+        actions: { merge_conflict: { type: agent, extends: fx_codex } }
       - match: { repos: ["grpb/acpgemini"] }
-        actions: { merge_conflict: { type: agent, agent: fx_gemini } }
+        actions: { merge_conflict: { type: agent, extends: fx_gemini } }
       - match: { repos: ["grpb/ocnative"] }
-        actions: { merge_conflict: { type: agent, agent: fx_omp } }
+        actions: { merge_conflict: { type: agent, extends: fx_omp } }
       - match: { repos: ["grpb/deck"] }
-        actions: { merge_conflict: { type: agent, agent: fx_deck } }
+        actions: { merge_conflict: { type: agent, extends: fx_deck } }
 
 controllers:
   # Explicit command: overrides so the agents run FULLY NON-INTERACTIVELY — an
@@ -83,12 +83,12 @@ controllers:
     command: [omp, acp]
   deck: { type: agent-deck }                            # → agent-deck launch …
 
-agents:
-  fx_claude: { provider: fake, controller: cli_claude, workspace: worktree, archive_when_done: true, wait_timeout: 10m }
-  fx_codex:  { provider: fake, controller: cli_codex,  workspace: worktree, archive_when_done: true, wait_timeout: 10m }
-  fx_gemini: { provider: fake, controller: acp_gemini, workspace: worktree, archive_when_done: true, wait_timeout: 10m }
-  fx_omp:    { provider: fake, controller: acp_omp,    workspace: worktree, archive_when_done: true, wait_timeout: 10m }
-  fx_deck:   { provider: fake, controller: deck,       workspace: worktree, archive_when_done: true, wait_timeout: 10m }
+steps:
+  fx_claude: { type: agent, name: fx_claude, controller: cli_claude, workspace: worktree, archive_when_done: true, wait_timeout: 10m }
+  fx_codex: { type: agent, name: fx_codex, controller: cli_codex,  workspace: worktree, archive_when_done: true, wait_timeout: 10m }
+  fx_gemini: { type: agent, name: fx_gemini, controller: acp_gemini, workspace: worktree, archive_when_done: true, wait_timeout: 10m }
+  fx_omp: { type: agent, name: fx_omp, controller: acp_omp,    workspace: worktree, archive_when_done: true, wait_timeout: 10m }
+  fx_deck: { type: agent, name: fx_deck, controller: deck,       workspace: worktree, archive_when_done: true, wait_timeout: 10m }
 
 control:
   enabled: true

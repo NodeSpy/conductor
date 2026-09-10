@@ -19,8 +19,8 @@ func TestValidateRejections(t *testing.T) {
 	base := `
 connectors:
   svc: { use: fake, options: { text: "default" } }
-agents:
-  fixer: { provider: claude }
+steps:
+  fixer: { type: agent, name: fixer }
 workflows:
   wf:
     inputs:
@@ -70,7 +70,7 @@ workflows:
 		},
 		{
 			"dangling template ref",
-			"- on: svc.ping\n  steps: [{id: a, type: agent, agent: fixer, prompt: 'do {{.nope}}'}]",
+			"- on: svc.ping\n  steps: [{id: a, type: agent, extends: fixer, prompt: 'do {{.nope}}'}]",
 			"{{.nope}} is not available",
 		},
 		{
@@ -89,13 +89,15 @@ workflows:
 			`no output "bogus"`,
 		},
 		{
-			"unknown agent profile",
-			"- on: svc.ping\n  steps: [{type: agent, agent: ghost, prompt: p}]",
-			`unknown agent profile "ghost"`,
+			// `agent:` selects nothing now (design §6) — it is an attribution
+			// label — so what an agent step must still have is a prompt.
+			"agent step with no prompt",
+			"- on: svc.ping\n  steps: [{type: agent, agent: ghost}]",
+			"needs a prompt",
 		},
 		{
 			"handoff on a non-ask connector",
-			"- on: svc.ping\n  steps: [{type: agent, agent: fixer, prompt: p, background: true, handoff: svc}]",
+			"- on: svc.ping\n  steps: [{type: agent, extends: fixer, prompt: p, background: true, handoff: svc}]",
 			"", // svc HAS an ask verb (Ask true) — this case asserts the positive; see below
 		},
 		{
@@ -143,8 +145,8 @@ func TestValidateScopedPositives(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc: { use: fake, options: { text: "covers-required" } }
-agents:
-  fixer: { provider: claude }
+steps:
+  fixer: { type: agent, name: fixer }
 triggers:
   - on: svc.ping
     group: { key: "{{.repo}}#{{.number}}", window: 5s }

@@ -1,7 +1,9 @@
 # conductor — example configuration (connectors model).
 #
 # Connect to services once (connectors:), declare where agents run (runtimes:)
-# and who they are (agents:), then wire events to work (triggers:). A trigger
+# and which models they may use (models:), then wire events to work
+# (triggers:). Behavior lives on the step that dispatches it, shared through
+# named templates in steps: — there is no `agents:` block. A trigger
 # is four keys — on / filters / steps / hooks — and a step can run an agent,
 # run a command, run inline code, call any connector's verb, or call a
 # reusable workflow. Everything here is optional except at least one trigger
@@ -388,7 +390,7 @@ hosts:
 # triggers:
 #   - on: gh.review_requested
 #     steps:
-#       - { id: fix, type: agent, agent: fixer, prompt: "…",
+#       - { id: fix, type: agent, extends: fixer, prompt: "…",
 #           gate: { run: [ test, lint, critic ], max_revisions: 2 } }
 
 # ---------------------------------------------------------------------------
@@ -564,26 +566,54 @@ models:
 #     isolation: { mode: namespace, network: { egress: ["your-org.atlassian.net:443"] } }
 
 # agents: — named profiles (provider/model/prompt posture), run on a runtime.
-agents:
-  # A profile can `extends:` another to inherit its fields — unset scalars fill,
-  # labels/maps deep-merge, and `guidance:` STACKS (parent tone under the child).
-  # Chains allowed; cycles/unknown targets are load errors. (wiki: Reuse)
-  #   base:  { provider: claude, workspace: worktree, guidance: "Terse and human." }
-  #   fixer: { extends: base, model: claude-opus-5, guidance: "You fix CI: verify, push." }
+# ---------------------------------------------------------------------------
+# steps: — NAMED, REUSABLE STEP TEMPLATES. This replaced `agents:`.
+#
+# A named agent profile was doing five different jobs. Each now has a home
+# that is not an agent (docs/design/agents-removal.md):
+#
+#   which model to run   -> model: (a fleet, above) on the step
+#   execution cost cap   -> budget: on the RUNTIME (a budget caps cost on a backend)
+#   private memory       -> an opaque scope key, defaulting to the step identity
+#   live-session pool    -> (runtime, model, key) — session: on the runtime or the step
+#   track record         -> an opaque outcome key, defaulting to the step identity
+#   behavior             -> the step itself, shared via extends:
+#
+# STEP IDENTITY is the one key memory, sessions, and outcomes all default to.
+# It is stable across restarts (never a per-run value):
+#
+#   1. an explicit `name:`  — author-pinned, and SHAREABLE: two steps with the
+#      same name share one memory namespace, session pool, and track record
+#   2. structural — the enclosing trigger/workflow + the step's slot
+#      (`github.pull_request/security`); editing a prompt does not rotate it
+#   3. a deterministic fingerprint of the step's definition
+#
+# A template's key IS its name, so every step that `extends:` it shares that
+# identity — which is exactly what `agent: fixer` used to give you.
+# ---------------------------------------------------------------------------
+steps:
+  # A template can `extends:` another to inherit its fields — unset scalars
+  # fill, labels/maps deep-merge, and `guidance:` STACKS (parent tone under
+  # the child). Chains allowed; cycles/unknown targets are load errors.
+  #   base:  { type: agent, workspace: worktree, guidance: "Terse and human." }
+  #   fixer: { extends: base, model: claude-opus-5, guidance: "You fix CI." }
   fixer:
-    # extends: base         # inherit another profile's fields (see wiki: Reuse)
-    provider: claude
-    model: claude-sonnet-5
+    type: agent
+    # extends: base         # inherit another template's fields (wiki: Reuse)
+    model: claude-sonnet-5  # a fleet name, a model id, a wildcard, or { any, required }
     workspace: worktree
     wait_timeout: 25m
     archive_when_done: true
     # guidance: "Reply in a sentence or two."  # STACKS on policy.guidance (layer 0);
     #                       #   a list or { replace: … } is also accepted (wiki: Reuse)
     # runtime: paseo        # explicit runtime (default: the default: true one)
-    # host: build-box       # pin this profile's runtime launches to a host
-    # memory: true          # inject shared memories (global + target repo + own scope)
-    #                       #   into this agent's prompts; or a filter:
-    #                       #   memory: { scopes: [global, repo], tags: [ci], limit: 10 }
+    # host: build-box       # pin this step's runtime launches to a host
+    # memory: true          # inject shared memories — the shared set plus this run's
+    #                       #   context keys (the repo, the workflow, this step). Scope
+    #                       #   keys are OPAQUE strings; there are no repo/agent TYPES:
+    #                       #   memory: { scopes: ["${repo}", "acme/api"], tags: [ci], limit: 10 }
+    # outcome_feedback: true # append this step's own track record to its prompt
+    # outcome_key: reviewers #   …or pool several steps onto one record
     # skill:                 # agent access back into conductor (default: none of it)
     #   secrets_via: broker  #   broker | env (deprecated) | none (default) — broker issues
     #   allow_secrets:       #   single-use, 60s-TTL, audited grants for EXACT vault entries
@@ -593,14 +623,13 @@ agents:
     #   # Identity is a per-verb concern, not a skill setting: a verb's own `as:`
     #   # option travels through as the agent supplies it, and each connector
     #   # applies its own default when it's absent (gh writes default to `me`).
-    # session:               # session affinity: one live session per key, shared across
-    #   key: "{{.repo}}#{{.pr}}"  #   ALL triggers using this agent — later same-key events
-    #   idle_ttl: 12h             #   arrive as follow-ups with full prior context. Persists
-    #   max_lifetime: 7d          #   across restarts; serialized per key. paseo/acp runtimes
-    #   end_on: [ gh._closed ]    # evict when the PR closes or merges (github reports both
-    #                             #   as the one internal close signal, kind `_closed`)
+    # session:               # THIS STEP'S OWN session pool, namespaced to its identity
+    #   key: "{{.repo}}#{{.pr}}"  #   (a session: on the RUNTIME instead is the shared,
+    #   idle_ttl: 12h             #    overall pool every step without one joins). A binding
+    #   max_lifetime: 7d          #    is (runtime, model, key) — you cannot resume a paseo
+    #   end_on: [ gh._closed ]    #    session on codex, nor an opus step into a haiku one.
   planner:
-    provider: claude
+    type: agent
     model: claude-haiku-4-5
     archive_when_done: true
 
@@ -620,7 +649,7 @@ workflows:
     steps:
       - id: triage
         type: agent
-        agent: planner
+        extends: planner
         checkout: none
         output_schema:
           type: object
@@ -748,7 +777,7 @@ triggers:
     steps:
       - id: audit
         type: agent
-        agent: fixer
+        extends: fixer
         model: reviewer          # a fleet from models: — runs on whatever you have
         prompt: |
           Audit {{.repo}} for {{.scope}} and summarize findings.
@@ -759,7 +788,7 @@ triggers:
     steps:
       - id: fix
         type: agent
-        agent: fixer
+        extends: fixer
         prompt: |
           {{.repo}}#{{.pr}} has a merge conflict against {{.base}}.
           Rebase or merge, resolve, verify the build, and push.
@@ -776,7 +805,7 @@ triggers:
     steps:
       - id: handle
         type: agent
-        agent: fixer
+        extends: fixer
         prompt: |
           Address the review comments on {{.repo}}#{{.pr}}:
           {{range .group.events}}- {{.comment_body}}
@@ -806,7 +835,7 @@ triggers:
     steps:
       - id: audit
         type: agent
-        agent: fixer
+        extends: fixer
         prompt: |
           Run the repo audit pass (scope: {{ .inputs.scope | default "changed" }}).
           {{ if .number }}Triggered by issue #{{.number}}.{{ end }}
@@ -855,7 +884,7 @@ triggers:
       - id: draft
         if: "{{.a.decision}} == auto"
         type: agent
-        agent: planner
+        extends: planner
         checkout: none
         prompt: "Draft the review for {{.repo}}#{{.pr}}."
       - id: review

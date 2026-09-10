@@ -88,15 +88,15 @@ func TestReplyToBotsDeclineOnlyGuidance(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc: { use: fake }
-agents:
-  fixer: { provider: claude }
+steps:
+  fixer: { type: agent, name: fixer }
 `)
 	reg := buildRegistry(t, cfg)
 	newFakeState(t, "svc")
 	base := `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, agent: fixer, prompt: "Handle the comment." }
+  - { id: fix, type: agent, extends: fixer, prompt: "Handle the comment." }
 `
 
 	prompt := func(t *testing.T, specYAML string, trig core.Trigger) string {

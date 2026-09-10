@@ -40,13 +40,13 @@ func startIPC(t *testing.T, m *Manager) (string, func() []map[string]any) {
 func TestIPCRememberRecallRoundTrip(t *testing.T) {
 	m := testManager(t, NewMemBackend())
 	sock, audits := startIPC(t, m)
-	src := Source{Agent: "gemini", Repo: "o/r", Trigger: "issue_matched"}
+	src := Source{Step: "gemini", Repo: "o/r", Trigger: "issue_matched"}
 
 	resp, err := IPCCall(sock, IPCRequest{Op: "remember", Text: "socket note", Tags: []string{"live"}, Scope: "repo", Source: src})
 	if err != nil || !resp.OK || resp.Entry == nil {
 		t.Fatalf("remember: %+v %v", resp, err)
 	}
-	if resp.Entry.Scope != "repo:o/r" || resp.Entry.Source.Agent != "gemini" {
+	if resp.Entry.Scope != "repo" || resp.Entry.Source.Step != "gemini" {
 		t.Fatalf("entry: %+v", resp.Entry)
 	}
 
@@ -129,7 +129,7 @@ func mcpPipe(t *testing.T, call MCPCaller, mc MCPConfig) (func(msg string), func
 
 func TestMCPServerLoop(t *testing.T) {
 	m := testManager(t, NewMemBackend())
-	src := Source{Agent: "gemini", Repo: "o/r"}
+	src := Source{Step: "gemini", Repo: "o/r"}
 	var gotReq IPCRequest
 	call := func(req IPCRequest) (IPCResponse, error) {
 		gotReq = req
@@ -169,11 +169,12 @@ func TestMCPServerLoop(t *testing.T) {
 	if r["isError"] != false {
 		t.Fatalf("remember call: %+v", r)
 	}
-	if gotReq.Op != "remember" || gotReq.Source.Agent != "gemini" || gotReq.Scope != "repo" {
+	if gotReq.Op != "remember" || gotReq.Source.Step != "gemini" || gotReq.Scope != "repo" {
 		t.Fatalf("caller request: %+v", gotReq)
 	}
 	text := r["content"].([]any)[0].(map[string]any)["text"].(string)
-	if !strings.Contains(text, "remembered ") || !strings.Contains(text, "repo:o/r") {
+	// The scope key is passed through verbatim — no `repo:` type expansion.
+	if !strings.Contains(text, "remembered ") || !strings.Contains(text, "(scope repo)") {
 		t.Fatalf("remember text: %q", text)
 	}
 	// tools/call memory_recall returns the entries as JSON text.
@@ -218,7 +219,7 @@ func TestMCPServerLoop(t *testing.T) {
 	}
 	SetLiveOps(LiveOps{
 		RunStep: func(_ context.Context, src Source, number int, step map[string]any) (map[string]any, error) {
-			if src.Agent != "gemini" || number != 7 || step["uses"] != "svc.post" {
+			if src.Step != "gemini" || number != 7 || step["uses"] != "svc.post" {
 				t.Errorf("run_step wiring: src=%+v number=%d step=%v", src, number, step)
 			}
 			return map[string]any{"executed": 1}, nil

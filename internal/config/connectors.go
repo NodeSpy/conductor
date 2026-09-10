@@ -143,6 +143,17 @@ type RuntimeConfig struct {
 	// restrictions). See RuntimeModels and
 	// docs/design/runtimes-models-packs.md §1.2.
 	Models *RuntimeModels `yaml:"models,omitempty"`
+	// Session is the OVERALL session-affinity pool for this runtime: one live
+	// agent per (runtime, model, rendered key), shared by every step that
+	// declares no session: of its own. A step's own session: is its own pool
+	// instead. See SessionSpec and docs/design/agents-removal.md §3.
+	Session *SessionSpec `yaml:"session,omitempty"`
+	// Budget is this runtime's hard $/token spend cap over a rolling window
+	// (#36 §14). A budget caps EXECUTION COST on a backend, and the runtime
+	// is the backend — so this is where per-agent budgets moved to
+	// (docs/design/agents-removal.md §1). Checked alongside the global and
+	// workflow-scope budgets; an over-cap dispatch sheds and notifies.
+	Budget *BudgetPolicy `yaml:"budget,omitempty"`
 
 	// legacy holds a pre-`use:` `type:` value. NOT part of the schema — it is
 	// accepted by the decoder only so validateConnectors can name the migration
@@ -711,7 +722,19 @@ type GroupSpec struct {
 // `run:` (code), `uses:` (verb), or `use:` (workflow call).
 type Step struct {
 	ID string `yaml:"id,omitempty"`
-	If string `yaml:"if,omitempty"`
+	// Name PINS this step's identity (docs/design/agents-removal.md §5). It is
+	// the key memory scoping, session affinity, and outcome tracking default
+	// to, and it is SHAREABLE: two steps with the same name share one memory
+	// namespace, one session pool, and one track record — which is how a
+	// migrated `agent: fixer` keeps the history it accumulated. Unset, a
+	// step's identity is structural (enclosing trigger/workflow + slot), which
+	// survives a prompt edit. Never a random value. See Step.Identity.
+	Name string `yaml:"name,omitempty"`
+	// Extends names an entry in the top-level `steps:` map this step inherits
+	// unset fields from — the reuse a named agent profile used to give. See
+	// resolveExtends.
+	Extends string `yaml:"extends,omitempty"`
+	If      string `yaml:"if,omitempty"`
 	// Type is agent | command for the do-work forms ("" for uses/run/use).
 	Type string `yaml:"type,omitempty"`
 
@@ -792,6 +815,62 @@ type Step struct {
 
 	Backend string `yaml:"backend,omitempty"` // dispatch backend override (carried from legacy)
 	Shadow  *bool  `yaml:"shadow,omitempty"`
+
+	// --- agent BEHAVIOR (docs/design/agents-removal.md §6) --------------
+	//
+	// These moved off the retired `agents:` profile onto the step that
+	// dispatches the work, because that is what they always described. Reuse
+	// them across triggers by putting them on an entry in the top-level
+	// `steps:` map and pointing `extends:` at it.
+
+	// Thinking and Mode are runtime-specific launch hints (a paseo thinking
+	// option, a session mode).
+	Thinking string `yaml:"thinking,omitempty"`
+	Mode     string `yaml:"mode,omitempty"`
+	// Workspace is local | worktree.
+	Workspace string `yaml:"workspace,omitempty"`
+	// WaitTimeout bounds a foreground dispatch.
+	WaitTimeout Duration `yaml:"wait_timeout,omitempty"`
+	// ArchiveWhenDone soft-deletes the agent once the step finishes. Forced
+	// off for a background (hand-off) step, which sits idle precisely because
+	// it is waiting for you.
+	ArchiveWhenDone bool `yaml:"archive_when_done,omitempty"`
+	// Labels are runtime labels stamped on the launch.
+	Labels map[string]string `yaml:"labels,omitempty"`
+	// Guidance layers house tone/format rules onto THIS step's prompt. It is
+	// additive: the policy cascade's guidance and any `extends:` ancestor's
+	// stack underneath it rather than being replaced. `{ replace: … }` resets.
+	Guidance *GuidanceSpec `yaml:"guidance,omitempty"`
+	// Memory opts this step into shared-memory prompt injection: true for the
+	// defaults (the shared no-key set plus the context keys the engine
+	// supplies), or a filter map { scopes, tags, limit } over arbitrary
+	// opaque keys. Absent → no injection, no token cost. See MemorySelector.
+	Memory *MemorySelector `yaml:"memory,omitempty"`
+	// Session binds this step's dispatches to a keyed live session (session
+	// affinity). A step-level session is its OWN pool, namespaced to the step
+	// identity; a step with no session: joins the runtime's overall pool when
+	// the runtime declares one. See SessionSpec and
+	// docs/design/agents-removal.md §3.
+	Session *SessionSpec `yaml:"session,omitempty"`
+	// Skill opts this step into the conductor skill (#36 §12): verbs-as-tools
+	// and the secret broker over the daemon socket. Absent → neither.
+	Skill *SkillPolicy `yaml:"skill,omitempty"`
+	// Isolation sandboxes this step's launches (#36 §15). Wins over the
+	// runtime's own isolation:.
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// OutcomeFeedback opts this step into guidance tuning (#36 §18): a
+	// one-line track-record summary for this step's identity is appended to
+	// its guidance.
+	OutcomeFeedback bool `yaml:"outcome_feedback,omitempty"`
+	// OutcomeKey overrides the track-record key (default: the step identity),
+	// so several steps can deliberately pool one record.
+	OutcomeKey string `yaml:"outcome_key,omitempty"`
+
+	// tmplApplied records that `extends:` has already been merged in, so a
+	// second pass is a no-op. It matters because guidance STACKS rather than
+	// filling: re-merging would duplicate the template's tone. Not part of
+	// the schema.
+	tmplApplied bool `yaml:"-"`
 }
 
 // GateSpec configures one quality gate (#36 §16): which checks run against
@@ -1318,6 +1397,9 @@ func (c *Config) validateConnectors() error {
 	for name, rt := range c.Runtimes {
 		if name == "" {
 			return fmt.Errorf("config: runtimes: empty runtime name")
+		}
+		if err := validateBudget("runtime "+name, rt.Budget); err != nil {
+			return err
 		}
 		if err := validateUseRef("runtime "+name, rt.Use, rt.legacyType(), UseKindRuntime); err != nil {
 			return err

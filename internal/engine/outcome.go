@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
@@ -24,11 +25,16 @@ import (
 //   - review hand-off decisions record approved / rejected;
 //   - gate results (§16) are already audited per round (`event: gate`).
 //
-// The rows feed three places: `conductor report`'s agent-quality view
-// (accept rate, revert rate, cost per merged change), shared memory (§9 — a
-// scoped note per terminal outcome), and saved-workflow delivery health
-// (§11 — merged-and-not-reverted beats "the run finished"). Per-agent
-// counters persist for the optional guidance tuning (`outcome_feedback`).
+// The rows feed three places: `conductor report`'s quality view (accept
+// rate, revert rate, cost per merged change), shared memory (§9 — a scoped
+// note per terminal outcome), and saved-workflow delivery health (§11 —
+// merged-and-not-reverted beats "the run finished"). Counters persist per
+// TRACK-RECORD KEY for the optional guidance tuning (`outcome_feedback`).
+//
+// The key is the STEP IDENTITY (or a step's explicit outcome_key), not an
+// agent name — docs/design/agents-removal.md §4. Because the identity is
+// stable across runs and restarts, feedback still matches future dispatches
+// to their past record.
 
 // observeOutcomeSignals inspects one incoming trigger for outcome facts.
 // Called early in process(), before any gate can drop the trigger.
@@ -122,11 +128,12 @@ func (e *Engine) recordRevert(ctx context.Context, repo string, n int, corrobora
 // recordOutcome writes one engagement's outcome row and feeds the loop.
 func (e *Engine) recordOutcome(ctx context.Context, repo string, number int, outcome string, g store.Engagement) {
 	e.store.Audit(map[string]any{"event": "outcome", "repo": repo, "number": number,
-		"outcome": outcome, "agent": g.Agent, "workflow": g.Workflow,
+		"outcome": outcome, "agent": g.Key, "step": g.Key, "runtime": g.Runtime,
+		"workflow":       g.Workflow,
 		"saved_workflow": g.SavedWorkflow, "kind": g.Kind, "run": g.Run,
 		"cost_usd": g.CostUSD, "tokens": g.Tokens})
-	e.store.BumpOutcome(g.Agent, outcome)
-	e.log("outcome: %s#%d %s (agent %s)", repo, number, outcome, g.Agent)
+	e.store.BumpOutcome(g.Key, outcome)
+	e.log("outcome: %s#%d %s (step %s)", repo, number, outcome, g.Key)
 
 	// Saved-workflow delivery health (§11): merged is a delivery; reverted
 	// takes one back. Non-terminal signals don't move it.
@@ -143,9 +150,11 @@ func (e *Engine) recordOutcome(ctx context.Context, repo string, number int, out
 	// memory-injected prompts can see what worked. Best-effort; respects the
 	// memory manager's own guards.
 	if m := memory.Active(); m != nil && (outcome == "merged" || outcome == "reverted" || outcome == "closed") {
-		text := fmt.Sprintf("outcome: %s#%d %s (agent %s, workflow %s)", repo, number, outcome, g.Agent, orNone(g.Workflow))
-		_, _ = m.Remember(text, []string{"outcome", outcome}, "repo:"+repo,
-			memory.Source{Trigger: "outcome", Repo: repo, Agent: g.Agent, Run: g.Run})
+		text := fmt.Sprintf("outcome: %s#%d %s (step %s, workflow %s)", repo, number, outcome, g.Key, orNone(g.Workflow))
+		// The scope key is the repo string itself — an opaque key by
+		// convention, with no `repo:` type prefix (design §2).
+		_, _ = m.Remember(text, []string{"outcome", outcome}, repo,
+			memory.Source{Trigger: "outcome", Repo: repo, Step: g.Key, Run: g.Run})
 	}
 }
 
@@ -158,7 +167,7 @@ func orNone(s string) string {
 
 // recordDecisionOutcome captures a review hand-off's terminal call (§17):
 // approve → approved, discard → rejected. Revisions aren't terminal.
-func (e *Engine) recordDecisionOutcome(t core.Trigger, agent, action string) {
+func (e *Engine) recordDecisionOutcome(t core.Trigger, key, action string) {
 	outcome := ""
 	switch action {
 	case "approve":
@@ -169,18 +178,22 @@ func (e *Engine) recordDecisionOutcome(t core.Trigger, agent, action string) {
 		return
 	}
 	e.store.Audit(map[string]any{"event": "outcome", "repo": t.Target.Repo,
-		"number": t.Target.Number, "outcome": outcome, "agent": agent, "kind": t.Kind})
-	e.store.BumpOutcome(agent, outcome)
+		"number": t.Target.Number, "outcome": outcome, "agent": key, "step": key,
+		"kind": t.Kind})
+	e.store.BumpOutcome(key, outcome)
 }
 
-// outcomeGuidance renders the optional per-profile tuning line (#36 §18):
-// a profile with `outcome_feedback: true` gets a one-line track-record
-// summary appended to its guidance, nudging the agent with its own history.
-func (e *Engine) outcomeGuidance(agentName string, profile config.AgentProfile) string {
-	if agentName == "" || !profile.OutcomeFeedback {
+// outcomeGuidance renders the optional per-step tuning line (#36 §18): a
+// step with `outcome_feedback: true` gets a one-line track-record summary
+// appended to its guidance, nudging the agent with its own history. The
+// record is looked up by the step's track-record key, which is stable across
+// runs — so the feedback matches the same step's past outcomes.
+func (e *Engine) outcomeGuidance(identity string, step config.Step) string {
+	key := OutcomeKeyFor(identity, step)
+	if key == "" || !step.OutcomeFeedback {
 		return ""
 	}
-	st := e.store.AgentOutcomeStats(agentName)
+	st := e.store.OutcomeStats(key)
 	merged, reverted := st["merged"], st["reverted"]
 	closed, rejected := st["closed"], st["rejected"]
 	total := merged + closed + rejected
@@ -193,4 +206,14 @@ func (e *Engine) outcomeGuidance(agentName string, profile config.AgentProfile) 
 		line += fmt.Sprintf(", and %d were later REVERTED — bias toward smaller, well-tested changes", reverted)
 	}
 	return line + "."
+}
+
+// OutcomeKeyFor is a step's track-record key: its explicit outcome_key when
+// set (so several steps can deliberately pool one record), else its stable
+// identity (docs/design/agents-removal.md §4).
+func OutcomeKeyFor(identity string, step config.Step) string {
+	if k := strings.TrimSpace(step.OutcomeKey); k != "" {
+		return k
+	}
+	return identity
 }

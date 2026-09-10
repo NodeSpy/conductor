@@ -78,7 +78,7 @@ You are the PLANNER of an agent team. Decompose the task above into at most %d
 independent subtasks that can be implemented in parallel by separate agents in
 separate worktrees (avoid overlapping files where possible). Output JSON:
 {"subtasks": [{"id": "short-slug", "prompt": "full instructions for one worker"}]}`, maxWorkers)
-	plannerStep := config.Step{Type: "agent", Agent: spec.Planner, Prompt: planPrompt,
+	plannerStep := config.Step{Type: "agent", Extends: spec.Planner, Agent: spec.Planner, Prompt: planPrompt,
 		Checkout: step.Checkout, WorkDir: step.WorkDir, Env: step.Env, OutputSchema: teamPlanSchema}
 	planOut, _, err := r.execAgent(ctx, t, plannerStep, id+":plan", data, shadow)
 	if err != nil {
@@ -127,7 +127,7 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 				"task":    step.Prompt,
 				"subtask": map[string]any{"id": st.ID, "prompt": st.Prompt},
 			}
-			wstep := config.Step{Type: "agent", Agent: spec.Worker,
+			wstep := config.Step{Type: "agent", Extends: spec.Worker, Agent: spec.Worker,
 				Prompt:   fmt.Sprintf("You are one WORKER of an agent team on this overall task:\n\n%s\n\nYOUR subtask (%s):\n\n%s\n\nWork only your subtask, in this worktree.", step.Prompt, st.ID, st.Prompt),
 				Checkout: step.Checkout, Env: step.Env, Gate: workerGate}
 			wctx := withTeamChecks(ctx, extraChecks)
@@ -187,7 +187,7 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 	if reconcilerGate == nil {
 		reconcilerGate = opGate
 	}
-	rstep := config.Step{Type: "agent", Agent: reconciler, Prompt: b.String(),
+	rstep := config.Step{Type: "agent", Extends: reconciler, Agent: reconciler, Prompt: b.String(),
 		Checkout: step.Checkout, WorkDir: step.WorkDir, Env: step.Env, Gate: reconcilerGate}
 	recOut, raw, err := r.execAgent(ctx, t, rstep, id+":reconcile", data, shadow)
 	if err != nil {
@@ -239,7 +239,7 @@ func (r *Runner) teamWorkerGate(spec *config.TeamSpec) (*config.GateSpec, map[st
 	}
 	extra := map[string]config.Step{}
 	if spec.Critic != "" {
-		extra[teamCriticCheck] = config.Step{Type: "agent", Agent: spec.Critic,
+		extra[teamCriticCheck] = config.Step{Type: "agent", Extends: spec.Critic, Agent: spec.Critic,
 			Prompt: "You are the CRITIC of an agent team. Review the worker's proposed change in {{.gate.workdir}} " +
 				"for its subtask:\n\n{{.team.subtask.prompt}}\n\nJudge correctness, scope discipline, and quality. " +
 				`Output JSON: {"pass": true|false, "reason": "…"}`,

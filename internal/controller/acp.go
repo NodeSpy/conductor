@@ -141,7 +141,7 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	// its own context, cancelled only by Close — not by the request ctx returning.
 	sctx, scancel := context.WithCancel(context.Background())
 	del := &acpDelegate{handler: h}
-	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Profile.Host, launchOptsFor(c.iso, spec.Request))
+	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Step.Host, launchOptsFor(c.iso, spec.Request))
 	if err != nil {
 		scancel()
 		return nil, err

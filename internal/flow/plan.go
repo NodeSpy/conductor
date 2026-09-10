@@ -180,10 +180,11 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 					}
 				}
 			case "agent":
-				if step.Agent != "" {
-					if _, ok := cfg.Agents[step.Agent]; !ok {
-						return fmt.Errorf("%s: unknown agent %q", w, step.Agent)
-					}
+				// `agent:` is a free-form attribution label now, not a
+				// profile reference — nothing to resolve. What a dispatchable
+				// agent step still needs is a prompt.
+				if strings.TrimSpace(step.Prompt) == "" && step.Team == nil {
+					return fmt.Errorf("%s: agent step has no prompt", w)
 				}
 			case "code":
 				if strings.TrimSpace(step.Run) == "" {
@@ -206,12 +207,12 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 				for _, ro := range roles {
 					if ro.name == "" {
 						if ro.role == "planner" || ro.role == "worker" {
-							return fmt.Errorf("%s: team needs `%s:` (an agents: profile)", w, ro.role)
+							return fmt.Errorf("%s: team needs `%s:` (a steps: template)", w, ro.role)
 						}
 						continue
 					}
-					if _, ok := cfg.Agents[ro.name]; !ok {
-						return fmt.Errorf("%s: team.%s names unknown agent %q", w, ro.role, ro.name)
+					if _, ok := cfg.Steps[ro.name]; !ok {
+						return fmt.Errorf("%s: team.%s names unknown steps: template %q", w, ro.role, ro.name)
 					}
 				}
 			case "parallel":
@@ -615,7 +616,7 @@ func (r *Runner) guardSavedWorkflow(ctx context.Context, t core.Trigger, name st
 	if err != nil {
 		return nil, fmt.Errorf("saved workflow %q: %w", name, err)
 	}
-	agent := saved.Source.Agent
+	agent := saved.Source.Step
 	if agent == "" {
 		agent = "saved"
 	}
@@ -667,7 +668,7 @@ func (r *Runner) RunLiveStep(ctx context.Context, src memory.Source, number int,
 		Source: "live", Instance: "live", Kind: src.Trigger,
 		Target: core.Target{Repo: src.Repo, Number: number, PR: number},
 	}
-	agent := src.Agent
+	agent := src.Step
 	if agent == "" {
 		agent = "live"
 	}

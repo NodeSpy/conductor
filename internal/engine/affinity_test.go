@@ -74,12 +74,12 @@ func affinityEngine(t *testing.T, cfg *config.Config, d *sendingDispatcher) *Eng
 }
 
 func affinityCfg() *config.Config {
-	cfg := &config.Config{Agents: map[string]config.AgentProfile{
-		"pr-agent": {Provider: "claude", Session: &config.SessionSpec{
+	cfg := &config.Config{Steps: map[string]config.Step{
+		"pr-agent": {Session: &config.SessionSpec{
 			Key:   "{{.repo}}#{{.number}}",
 			EndOn: []string{"i.pr_closed"},
 		}},
-		"fresh-agent": {Provider: "claude"},
+		"fresh-agent": {},
 	}}
 	cfg.Control.Enabled = ptrBool(true)
 	return cfg

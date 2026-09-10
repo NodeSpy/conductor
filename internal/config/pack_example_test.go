@@ -49,9 +49,10 @@ vaults:
   house:
     type: file
     dir: /tmp/pc-pack-vault
-agents:
+steps:
   my-opus:
-    provider: claude
+    type: agent
+    name: my-opus
     skill:
       verbs: [github.submit_review, github.comment]
 packs:
@@ -60,7 +61,7 @@ packs:
     preset: codex
     connectors: { github: gh }
     secrets:    { review_token: house/review }
-    agents:     { reviewer: my-opus }
+    steps:      { reviewer: my-opus }
     triggers:
       on_review_request:
         enabled: true
@@ -80,8 +81,8 @@ packs:
 	if !ok {
 		t.Fatalf("expected review/review-flow, have %v", workflowKeys(cfg))
 	}
-	if wf.Steps[0].Agent != "my-opus" {
-		t.Fatalf("bound reviewer should resolve to my-opus, got %q", wf.Steps[0].Agent)
+	if wf.Steps[0].Extends != "my-opus" {
+		t.Fatalf("bound reviewer should resolve to my-opus, got %q", wf.Steps[0].Extends)
 	}
 	// Preset codex applied: heavy_model=gpt-5-pro substituted into the prompt.
 	if !strings.Contains(wf.Steps[0].Prompt, "gpt-5-pro") {
@@ -89,7 +90,7 @@ packs:
 	}
 	// The bundled handoff agent's skill.verbs connector prefix is rebound
 	// github.* -> gh.* (the consumer's connector name).
-	if h, ok := cfg.Agents["review/handoff"]; !ok || h.Skill == nil {
+	if h, ok := cfg.Steps["review/handoff"]; !ok || h.Skill == nil {
 		t.Fatalf("expected review/handoff with a skill block")
 	} else {
 		for _, v := range h.Skill.Verbs {

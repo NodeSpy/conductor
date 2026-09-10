@@ -36,7 +36,7 @@ func outcomesFrom(st *flowGateStore) []string {
 func TestOutcomeLoopMergedAndReverted(t *testing.T) {
 	eng, st, _, _ := buildFlowEngine(t, gateCfg2())
 	// An agent acted on PR 5 (the engagement the flow service records).
-	st.RecordEngagement("o/r", 5, store.Engagement{Agent: "fixer", Workflow: "eg.ping", SavedWorkflow: "", CostUSD: 1.5})
+	st.RecordEngagement("o/r", 5, store.Engagement{Key: "fixer", Workflow: "eg.ping", SavedWorkflow: "", CostUSD: 1.5})
 
 	// Merge signal → terminal outcome, engagements consumed.
 	eng.process(context.Background(), closedTrigger("o/r", 5, true, nil))
@@ -68,7 +68,7 @@ func TestOutcomeLoopMergedAndReverted(t *testing.T) {
 
 func TestOutcomeLoopClosedUnmergedAndCI(t *testing.T) {
 	eng, st, _, _ := buildFlowEngine(t, gateCfg2())
-	st.RecordEngagement("o/r", 7, store.Engagement{Agent: "fixer"})
+	st.RecordEngagement("o/r", 7, store.Engagement{Key: "fixer"})
 
 	// A CI failure is non-terminal: outcome row, engagements kept.
 	ci := core.Trigger{Source: "github", Instance: "i", Kind: "failing_checks",
@@ -103,17 +103,17 @@ func TestDecisionOutcomeAndGuidance(t *testing.T) {
 	st.BumpOutcome("fixer", "merged")
 	st.BumpOutcome("fixer", "merged")
 	st.BumpOutcome("fixer", "reverted")
-	off := eng.outcomeGuidance("fixer", config.AgentProfile{})
+	off := eng.outcomeGuidance("fixer", config.Step{})
 	if off != "" {
 		t.Fatalf("opt-out must be empty: %q", off)
 	}
-	on := eng.outcomeGuidance("fixer", config.AgentProfile{OutcomeFeedback: true})
+	on := eng.outcomeGuidance("fixer", config.Step{OutcomeFeedback: true})
 	if !strings.Contains(on, "TRACK RECORD") || !strings.Contains(on, "2 merged") ||
 		!strings.Contains(on, "1 were later REVERTED") {
 		t.Fatalf("guidance: %q", on)
 	}
 	// No history → no line, even opted in.
-	if g := eng.outcomeGuidance("ghost", config.AgentProfile{OutcomeFeedback: true}); g != "" {
+	if g := eng.outcomeGuidance("ghost", config.Step{OutcomeFeedback: true}); g != "" {
 		t.Fatalf("no-history guidance: %q", g)
 	}
 }
@@ -126,7 +126,7 @@ func TestDecisionOutcomeAndGuidance(t *testing.T) {
 // ci_failed rows in ~70s for one head. A fresh push (new head) records anew.
 func TestCIFailedOncePerHead(t *testing.T) {
 	eng, st, _, _ := buildFlowEngine(t, gateCfg2())
-	st.RecordEngagement("o/r", 5376, store.Engagement{Agent: "fixer"})
+	st.RecordEngagement("o/r", 5376, store.Engagement{Key: "fixer"})
 
 	ciAt := func(head string) core.Trigger {
 		return core.Trigger{Source: "github", Instance: "i", Kind: "failing_checks",
@@ -178,7 +178,7 @@ triggers:
 // workflow rot.
 func TestUncorroboratedRevertClaimIsInert(t *testing.T) {
 	eng, st, _, _ := buildFlowEngine(t, gateCfg2())
-	st.RecordEngagement("o/r", 5, store.Engagement{Agent: "fixer", Workflow: "eg.ping"})
+	st.RecordEngagement("o/r", 5, store.Engagement{Key: "fixer", Workflow: "eg.ping"})
 
 	tr := closedTrigger("o/r", 90, true, []any{5})
 	tr.Context["reverts_corroborated"] = false

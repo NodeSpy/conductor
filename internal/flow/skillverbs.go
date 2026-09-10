@@ -132,15 +132,14 @@ func validateSkillProfiles(cfg *config.Config, reg *connector.Registry) error {
 		pol = cfg.Policy.AgentAuthored
 	}
 	approveActive := pol != nil && !pol.TrustFull() && len(pol.Approve) > 0
-	names := make([]string, 0, len(cfg.Agents))
-	for name := range cfg.Agents {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		p := cfg.Agents[name]
+	var ferr error
+	cfg.WalkSteps(func(scope config.IdentityScope, slot int, sp *config.Step) {
+		if ferr != nil {
+			return
+		}
+		name, p := config.StepLabel(scope, slot, *sp), *sp
 		if p.Skill == nil || len(p.Skill.Verbs) == 0 {
-			continue
+			return
 		}
 		// Fail-safe pattern shape checks (#122 R5a): a literal connector
 		// prefix must exist in the registry, and the surfaces the skill
@@ -151,14 +150,17 @@ func validateSkillProfiles(cfg *config.Config, reg *connector.Registry) error {
 				continue // a globbed connector half checks at match time
 			}
 			if !hasDot {
-				return fmt.Errorf("config: agent %q: skill.verbs pattern %q is not a verb — use connector.verb or a pattern like %q", name, pat, pat+".*")
+				ferr = fmt.Errorf("config: %s: skill.verbs pattern %q is not a verb — use connector.verb or a pattern like %q", name, pat, pat+".*")
+				return
 			}
 			switch connPart {
 			case "workflow", "conductor":
-				return fmt.Errorf("config: agent %q: skill.verbs pattern %q — %s.* is never served on the skill surface (agent-authored orchestration goes through run_step and its policy guard)", name, pat, connPart)
+				ferr = fmt.Errorf("config: %s: skill.verbs pattern %q — %s.* is never served on the skill surface (agent-authored orchestration goes through run_step and its policy guard)", name, pat, connPart)
+				return
 			}
 			if _, ok := reg.Get(connPart); !ok {
-				return fmt.Errorf("config: agent %q: skill.verbs pattern %q names unknown connector %q", name, pat, connPart)
+				ferr = fmt.Errorf("config: %s: skill.verbs pattern %q names unknown connector %q", name, pat, connPart)
+				return
 			}
 		}
 		for _, uses := range skillVerbUniverse(reg) {
@@ -166,11 +168,12 @@ func validateSkillProfiles(cfg *config.Config, reg *connector.Registry) error {
 				continue
 			}
 			if approveActive && matchAny(pol.Approve, uses) {
-				return fmt.Errorf("config: agent %q: skill.verbs admits %q, which policy.agent_authored.approve gates behind human approval — the skill tool surface has no approval hand-off, so this would silently skip the gate; remove it from skill.verbs (or from approve)", name, uses)
+				ferr = fmt.Errorf("config: %s: skill.verbs admits %q, which policy.agent_authored.approve gates behind human approval — the skill tool surface has no approval hand-off, so this would silently skip the gate; remove it from skill.verbs (or from approve)", name, uses)
+				return
 			}
 		}
-	}
-	return nil
+	})
+	return ferr
 }
 
 // SkillWarnings lints skill.verbs patterns that match NOTHING in the built
@@ -182,24 +185,19 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 		return nil
 	}
 	universe := skillVerbUniverse(reg)
-	names := make([]string, 0, len(cfg.Agents))
-	for name := range cfg.Agents {
-		names = append(names, name)
-	}
-	sort.Strings(names)
 	var warns []string
-	for _, name := range names {
-		p := cfg.Agents[name]
+	cfg.WalkSteps(func(scope config.IdentityScope, slot int, sp *config.Step) {
+		name, p := config.StepLabel(scope, slot, *sp), *sp
 		if p.Skill == nil {
-			continue
+			return
 		}
-		// A skill: profile on a runtime the surface can't reach (#123). Every
+		// A skill: step on a runtime the surface can't reach (#123). Every
 		// known runtime IS reachable — local paseo/agent-deck via the CLI face,
 		// opencode/acp via MCP tools, a remote host: via the SSH reverse tunnel
 		// — so this only fires for an unresolvable runtime, caught here rather
 		// than shipping a silently tool-less skill.
 		if rt, ok := cfg.SkillToolsSupported(p); !ok {
-			warns = append(warns, fmt.Sprintf("agent %q: skill: is configured but runtime %q cannot reach the conductor skill surface — the verb tools and secret broker will NOT reach this agent; point it at a defined runtime or drop the skill: block", name, rt))
+			warns = append(warns, fmt.Sprintf("%s: skill: is configured but runtime %q cannot reach the conductor skill surface — the verb tools and secret broker will NOT reach this agent; point it at a defined runtime or drop the skill: block", name, rt))
 		}
 		for _, pat := range p.Skill.Verbs {
 			matched := false
@@ -210,10 +208,10 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 				}
 			}
 			if !matched {
-				warns = append(warns, fmt.Sprintf("agent %q: skill.verbs pattern %q matches no verb on this daemon — the tool list it implies is empty (typo, or the connector is disabled)", name, pat))
+				warns = append(warns, fmt.Sprintf("%s: skill.verbs pattern %q matches no verb on this daemon — the tool list it implies is empty (typo, or the connector is disabled)", name, pat))
 			}
 		}
-	}
+	})
 	return warns
 }
 

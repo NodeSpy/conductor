@@ -134,8 +134,8 @@ connectors:
 memory: { type: memory }
 secrets:
   tok: env:FLOW_HANDLE_TEST_TOK
-agents:
-  planner: { model: x }
+steps:
+  planner: { type: agent, name: planner, model: x }
 policy:
   agent_authored:
     allow: [ svc.post ]
@@ -186,7 +186,7 @@ policy:
 	if _, err := sw.Save("relay", "d", []config.Step{{
 		ID: "s", Uses: "svc.post",
 		Options: map[string]any{"text": `try {{secret "tok"}}`},
-	}}, memory.Source{Agent: "planner"}); err != nil {
+	}}, memory.Source{Step: "planner"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sw.Review("relay"); err != nil {
@@ -328,8 +328,8 @@ func TestSecretInStepOutputDoesNotReachAgentPrompt(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc: { use: fake }
-agents:
-  fixer: { model: x }
+steps:
+  fixer: { type: agent, name: fixer, model: x }
 `)
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
@@ -342,7 +342,7 @@ steps:
     options: { text: seed }
   - id: fix
     type: agent
-    agent: fixer
+    extends: fixer
     prompt: "fix using {{.leaky.echo}}"
 `)
 	rig := newTestRunner(t, cfg, reg)

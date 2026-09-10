@@ -43,7 +43,8 @@ func TestPaseoDryRunArgvShape(t *testing.T) {
 		Action: config.Action{Type: "agent", Prompt: "review {{.repo}}#{{.pr}}", Checkout: "none",
 			OutputSchema: map[string]any{"type": "object"},
 			Env:          map[string]string{"SCOPE": "{{.kind}}"}},
-		Profile: config.AgentProfile{Provider: "claude", Model: "m1", Thinking: "high", Mode: "auto",
+		Model: "m1",
+		Step: config.Step{Model: config.ModelSpecOf("m1"), Thinking: "high", Mode: "auto",
 			WaitTimeout: config.Duration(5 * time.Minute)},
 		Tokens: Tokens{App: "at", User: "ut"},
 		Author: Author{Name: "Me", Email: "me@x"},
@@ -54,7 +55,7 @@ func TestPaseoDryRunArgvShape(t *testing.T) {
 	}
 	argv := strings.Join(ref.Argv, " ")
 	for _, want := range []string{
-		"review a/w#5", "--provider claude", "--model m1", "--thinking high", "--mode auto",
+		"review a/w#5", "--model m1", "--thinking high", "--mode auto",
 		"--env GH_TOKEN=ut", "--env PC_GH_APP_TOKEN=at",
 		"--env GIT_AUTHOR_NAME=Me", "--env GIT_COMMITTER_EMAIL=me@x",
 		"--env SCOPE=review_requested",

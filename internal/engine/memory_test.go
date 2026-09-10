@@ -24,24 +24,24 @@ func setupEngineMemory(t *testing.T) *memory.Manager {
 // non-opted profile gets nothing.
 func TestMemoryPromptOptIn(t *testing.T) {
 	m := setupEngineMemory(t)
-	src := memory.Source{Agent: "fixer", Repo: "a/w"}
-	if _, err := m.Remember("the deploy needs a warm cache", nil, "repo", src); err != nil {
+	src := memory.Source{Step: "fixer", Repo: "a/w"}
+	if _, err := m.Remember("the deploy needs a warm cache", nil, "a/w", src); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.Remember("global convention: squash merges", nil, "", src); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Remember("other repo's fact", nil, "repo:x/y", src); err != nil {
+	if _, err := m.Remember("other repo's fact", nil, "x/y", src); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := baseCfg()
 	houseTone := "HOUSE TONE: terse."
 	cfg.AgentGuidance = &houseTone // explicit guidance — conductor injects none by default
-	cfg.Agents = map[string]config.AgentProfile{
-		"opted":  {Provider: "claude", Memory: &config.MemorySelector{Enabled: true}},
-		"plain":  {Provider: "claude"},
-		"scoped": {Provider: "claude", Memory: &config.MemorySelector{Enabled: true, Scopes: []string{"global"}, Limit: 1}},
+	cfg.Steps = map[string]config.Step{
+		"opted":  {Memory: &config.MemorySelector{Enabled: true}},
+		"plain":  {},
+		"scoped": {Memory: &config.MemorySelector{Enabled: true, Scopes: []string{memory.GlobalScope}, Limit: 1}},
 	}
 	prompt := func(agent, sig string) string {
 		d := &fakeDispatcher{}
@@ -90,8 +90,8 @@ func TestMemoryPromptOptIn(t *testing.T) {
 func TestLegacyDispatchHarvestsOutput(t *testing.T) {
 	m := setupEngineMemory(t)
 	cfg := baseCfg()
-	cfg.Agents = map[string]config.AgentProfile{
-		"fixer": {Provider: "claude", Memory: &config.MemorySelector{Enabled: true}},
+	cfg.Steps = map[string]config.Step{
+		"fixer": {Memory: &config.MemorySelector{Enabled: true}},
 	}
 	d := &fakeDispatcher{ref: dispatch.RunRef{AgentID: "a1",
 		Output: "done\n```remember\n- text: PR titles use conventional commits\n  scope: repo\n```"}}
@@ -102,7 +102,7 @@ func TestLegacyDispatchHarvestsOutput(t *testing.T) {
 	if err != nil || len(all) != 1 {
 		t.Fatalf("harvest: %v %d", err, len(all))
 	}
-	if all[0].Scope != "repo:a/w" || all[0].Source.Agent != "fixer" || all[0].Source.Trigger != "new_comment" {
+	if all[0].Scope != "repo" || all[0].Source.Step != "fixer" || all[0].Source.Trigger != "new_comment" {
 		t.Fatalf("legacy harvest provenance: %+v", all[0])
 	}
 }
@@ -117,9 +117,9 @@ func TestLegacyDispatchHarvestsOutput(t *testing.T) {
 func TestHarvestGatedOnProfileOptIn(t *testing.T) {
 	m := setupEngineMemory(t)
 	cfg := baseCfg()
-	cfg.Agents = map[string]config.AgentProfile{
-		"reader": {Provider: "claude", Memory: &config.MemorySelector{Enabled: true}}, // reads, but does not run here
-		"plain":  {Provider: "claude"},                                                // no memory opt-in
+	cfg.Steps = map[string]config.Step{
+		"reader": {Memory: &config.MemorySelector{Enabled: true}}, // reads, but does not run here
+		"plain":  {},                                              // no memory opt-in
 	}
 	// A "plain" agent emits a well-formed remember block.
 	out := "done\n```remember\n- text: injected fact from an untrusted run\n  scope: repo\n```"

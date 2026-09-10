@@ -174,7 +174,7 @@ func (s *flowGateStore) BumpOutcome(agent, outcome string) {
 	s.bumps[agent][outcome]++
 }
 
-func (s *flowGateStore) AgentOutcomeStats(agent string) map[string]int {
+func (s *flowGateStore) OutcomeStats(agent string) map[string]int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := map[string]int{}

@@ -58,9 +58,13 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		}
 
 		s := step
-		var profile config.AgentProfile
+		// The step IS the profile (design §6). A legacy Action step names a
+		// `steps:` template with `agent:` — the shape the migration emits.
+		profile := e.cfg.Steps[s.Agent]
+		identity := s.Agent
+		model := ""
 		if s.Type == "agent" {
-			profile = e.cfg.Agents[s.Agent]
+			model = e.resolveModel(ctx, profile)
 			if s.Background {
 				// A background step hands off a live agent for you to drive and
 				// close yourself; it sits idle *because* it's waiting for you, so
@@ -72,7 +76,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			if s.Prompt != "" {
 				s.Prompt += dispatch.WriteWrapperGuidance
 				s.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))
-				s.Prompt += e.memoryPrompt(s.Agent, profile, t)
+				s.Prompt += e.memoryPrompt(identity, profile, t, "")
 				if s.RerequestReview {
 					s.Prompt += dispatch.RerequestReviewGuidance
 				}
@@ -86,7 +90,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			}
 		}
 		req := dispatch.Request{
-			Trigger: t, Action: s, Profile: profile,
+			Trigger: t, Action: s, Step: profile, Identity: identity, Model: model,
 			Tokens: dispatch.Tokens{App: appTok, User: userTok},
 			Author: e.author, Shadow: shadow, Wait: !s.Background, Interactive: s.Background, Data: data,
 		}
@@ -219,7 +223,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 // resolved or the agent can't be bound, it falls back to today's behavior
 // (notify you to open the agent in paseo). Only invoked when ch and the broker
 // are configured.
-func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID, agentName string, profile config.AgentProfile, ref dispatch.RunRef, ch handoff.Channel) {
+func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID, identity string, profile config.Step, ref dispatch.RunRef, ch handoff.Channel) {
 	agentID := ref.AgentID
 	fallback := func(reason string) {
 		if reason != "" {
@@ -280,8 +284,8 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID,
 		}
 		e.log("%s review hand-off for %q resolved: %s", tag(t), stepID, dec.Action)
 		// The outcome loop (#36 §18): the human's terminal call on this
-		// agent's work is a quality signal.
-		e.recordDecisionOutcome(t, agentName, dec.Action)
+		// step's work is a quality signal, keyed by its track record.
+		e.recordDecisionOutcome(t, OutcomeKeyFor(identity, profile), dec.Action)
 		if dec.Action == handoff.ActionDiscard {
 			e.broker.Close(ctx, prKey)
 		}

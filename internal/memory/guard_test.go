@@ -24,7 +24,7 @@ func TestWriteGuardBlocksHarvestAndIPCRemember(t *testing.T) {
 	// Harvest path: a remember block carrying the secret persists NOTHING
 	// (all or nothing — even the innocent note stays out).
 	out := "done.\n```remember\n- plain note\n- token is " + secret + "\n```"
-	entries, err := m.HarvestOutput(out, Source{Agent: "a"})
+	entries, err := m.HarvestOutput(out, Source{Step: "a"})
 	if err == nil || !strings.Contains(err.Error(), "refusing to persist") {
 		t.Fatalf("harvest of a secret must refuse: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestWriteGuardBlocksHarvestAndIPCRemember(t *testing.T) {
 
 	// IPC path: the remember op is refused and audited as blocked.
 	var audits []map[string]any
-	resp := handleIPC(m, IPCRequest{Op: "remember", Text: "key=" + secret, Source: Source{Agent: "a"}}, Peer{},
+	resp := handleIPC(m, IPCRequest{Op: "remember", Text: "key=" + secret, Source: Source{Step: "a"}}, Peer{},
 		func(e map[string]any) { audits = append(audits, e) }, nil)
 	if resp.OK || !strings.Contains(resp.Error, "refusing to persist") {
 		t.Fatalf("IPC remember of a secret must refuse: %+v", resp)
@@ -75,12 +75,12 @@ func TestRecalledMemoryRedactsSecrets(t *testing.T) {
 	const secret = "recalled-s3cr3t-XYZZY"
 	m := NewManager(NewMemBackend())
 	// Persist directly (simulating a pre-guard or trusted-path write).
-	if _, err := m.Remember("deploy key is "+secret, nil, "global", Source{Agent: "old"}); err != nil {
+	if _, err := m.Remember("deploy key is "+secret, nil, "global", Source{Step: "old"}); err != nil {
 		t.Fatal(err)
 	}
 	m.SetRedactor(func(s string) string { return strings.ReplaceAll(s, secret, "[redacted]") })
 
-	section := m.PromptSection(Filter{}, "acme/w", "fixer")
+	section := m.PromptSection(Filter{}, ContextKeys("acme/w", "", "fixer"))
 	if strings.Contains(section, secret) {
 		t.Fatalf("secret reached the injected prompt section: %s", section)
 	}
@@ -88,7 +88,7 @@ func TestRecalledMemoryRedactsSecrets(t *testing.T) {
 		t.Fatalf("prompt section must carry the placeholder: %s", section)
 	}
 
-	resp := handleIPC(m, IPCRequest{Op: "recall", Source: Source{Agent: "a"}}, Peer{}, nil, nil)
+	resp := handleIPC(m, IPCRequest{Op: "recall", Source: Source{Step: "a"}}, Peer{}, nil, nil)
 	if !resp.OK || len(resp.Entries) != 1 {
 		t.Fatalf("recall: %+v", resp)
 	}

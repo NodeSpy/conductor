@@ -44,7 +44,7 @@ integrations:
             agent: fixer
             prompt: "slow path {{.slack.text}}"
 agents:
-  fixer: { provider: claude }
+  fixer: { type: agent, name: fixer }
 `
 
 // TestSlackMultiVariantAggregationShape: a multi-variant rule becomes ONE

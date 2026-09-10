@@ -49,7 +49,7 @@ func cmdMCPMemory(args []string) error {
 		case "--socket":
 			socket = next()
 		case "--agent":
-			mc.Source.Agent = next()
+			mc.Source.Step = next()
 		case "--repo":
 			mc.Source.Repo = next()
 		case "--trigger":

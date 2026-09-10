@@ -24,9 +24,18 @@ import (
 //     records one ci_failed per push, not one per check event. Pruned by age
 //     like engagements; a terminal outcome clears it with them.
 
-// Engagement is one agent's recorded work on a target.
+// Engagement is one step's recorded work on a target.
+//
+// Key is the outcome TRACK-RECORD KEY: the step identity by default, or the
+// step's explicit outcome_key (docs/design/agents-removal.md §4). Its JSON
+// tag stays "agent" — the field it replaced — so engagements recorded before
+// the removal keep resolving, and a migrated config (whose steps carry the
+// old agent name as their `name:`) matches its accumulated history exactly.
 type Engagement struct {
-	Agent string `json:"agent"`
+	Key string `json:"agent"`
+	// Runtime is the backend the work executed on — the budget anchor (§1),
+	// carried so the report can attribute spend per runtime.
+	Runtime string `json:"runtime,omitempty"`
 	// Workflow is the trigger scope ("on[/name]"); SavedWorkflow the promoted
 	// workflow (#36 §11) the step ran inside, when it did — the outcome feeds
 	// that workflow's delivery health.
@@ -61,9 +70,9 @@ func targetKey(repo string, number int) string {
 	return fmt.Sprintf("%s#%d", repo, number)
 }
 
-// RecordEngagement notes that an agent acted on a target.
+// RecordEngagement notes that a step acted on a target.
 func (s *Store) RecordEngagement(repo string, number int, e Engagement) {
-	if repo == "" || number <= 0 || e.Agent == "" {
+	if repo == "" || number <= 0 || e.Key == "" {
 		return
 	}
 	if e.At.IsZero() {
@@ -168,29 +177,30 @@ func (s *Store) pruneCIFailedLocked() {
 	}
 }
 
-// BumpOutcome increments one agent's outcome counter.
-func (s *Store) BumpOutcome(agent, outcome string) {
-	if agent == "" || outcome == "" {
+// BumpOutcome increments one track-record key's outcome counter. The key is
+// a step identity (or an explicit outcome_key) — see Engagement.
+func (s *Store) BumpOutcome(key, outcome string) {
+	if key == "" || outcome == "" {
 		return
 	}
 	s.mu.Lock()
 	if s.outcomeStats == nil {
 		s.outcomeStats = map[string]map[string]int{}
 	}
-	if s.outcomeStats[agent] == nil {
-		s.outcomeStats[agent] = map[string]int{}
+	if s.outcomeStats[key] == nil {
+		s.outcomeStats[key] = map[string]int{}
 	}
-	s.outcomeStats[agent][outcome]++
+	s.outcomeStats[key][outcome]++
 	s.mu.Unlock()
 	s.saveOutcomeStats()
 }
 
-// AgentOutcomeStats returns a copy of one agent's outcome counters.
-func (s *Store) AgentOutcomeStats(agent string) map[string]int {
+// OutcomeStats returns a copy of one track-record key's outcome counters.
+func (s *Store) OutcomeStats(key string) map[string]int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := map[string]int{}
-	for k, v := range s.outcomeStats[agent] {
+	for k, v := range s.outcomeStats[key] {
 		out[k] = v
 	}
 	return out

@@ -103,7 +103,7 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	}
 	// The provisioned worktree is where gate checks run and the proposed
 	// diff is read (#36 §16/§17); remote-host launches have no local path.
-	if resolveHost(hostOf(r.c), req.Profile.Host) == "" {
+	if resolveHost(hostOf(r.c), req.Step.Host) == "" {
 		ref.Workdir = cwd
 	}
 

@@ -2,9 +2,9 @@
 //
 // The top level is integration-agnostic: control/notify/agents/dispatch/store
 // plus a list of raw integration entries. Each integration decodes its own
-// sub-config (see internal/integrations/*). Action and AgentProfile are shared
-// here because both the integration (which maps events→actions) and the
-// dispatch package (which executes them) need them.
+// sub-config (see internal/integrations/*). Action and Step are shared here
+// because both the integration (which maps events→actions) and the dispatch
+// package (which executes them) need them.
 package config
 
 import (
@@ -106,6 +106,14 @@ type Config struct {
 	// reference. Each check is one ordinary step (command / code / verb /
 	// critic agent) evaluated to pass/fail against the agent's worktree.
 	Checks map[string]Step `yaml:"checks"`
+	// Steps is the OPTIONAL `steps:` map of NAMED, REUSABLE step templates —
+	// the successor to the retired `agents:` profiles. A step in a trigger or
+	// workflow points `extends:` at one of these and inherits every field it
+	// leaves unset, which is exactly the reuse a named agent profile gave.
+	// The template's own key is also its identity default, so several triggers
+	// extending one template share its memory namespace, session pool, and
+	// track record. See Step and docs/design/agents-removal.md §6.
+	Steps map[string]Step `yaml:"steps,omitempty"`
 	// Pricing overrides the built-in model→$ table cost estimation uses
 	// (#36 §14). Model prices drift; the built-ins are coarse defaults and
 	// every estimated figure is marked approximate.
@@ -134,7 +142,6 @@ type Config struct {
 	// `handoff:` block), an interactive review stays paseo-native (you drive the
 	// agent in paseo), unchanged. See HandoffConfig and internal/handoff.
 	Handoffs map[string]HandoffConfig `yaml:"handoffs"`
-	Agents   map[string]AgentProfile  `yaml:"agents"`
 	// Controllers is an OPTIONAL map of named agent runtimes conductor can
 	// dispatch through (paseo, an ACP agent, opencode, …). Entirely optional: with
 	// no `controllers:` block, every agent uses the built-in paseo controller and
@@ -665,63 +672,6 @@ func (c *Config) DefaultHandoffName() string {
 	return ""
 }
 
-// AgentProfile is a reusable named agent config referenced by agent actions.
-type AgentProfile struct {
-	// Extends names another agents: profile this one inherits from. Unset fields
-	// are filled from the parent; guidance stacks (parent under child). See
-	// resolveExtends.
-	Extends  string `yaml:"extends,omitempty"`
-	Provider string `yaml:"provider"`
-	Model    string `yaml:"model"`
-	Thinking string `yaml:"thinking"`
-	Mode     string `yaml:"mode"`
-	// Controller names the controller (from top-level `controllers:`) that runs
-	// this agent. Empty falls through to the controller flagged default:true, then
-	// to the built-in paseo controller. See internal/controller resolution order.
-	Controller string `yaml:"controller"`
-	// Runtime is the connectors-model name for Controller (a `runtimes:` entry).
-	// When both are set, Runtime wins; use RuntimeName.
-	Runtime string `yaml:"runtime"`
-	// Host pins this agent's runtime invocations to a named `hosts:` SSH
-	// target, overriding (or standing in for) the runtime's own `host:`.
-	Host            string            `yaml:"host"`
-	Workspace       string            `yaml:"workspace"` // local | worktree
-	WaitTimeout     Duration          `yaml:"wait_timeout"`
-	ArchiveWhenDone bool              `yaml:"archive_when_done"`
-	Labels          map[string]string `yaml:"labels"`
-	// Guidance layers house tone/format rules onto THIS agent's prompt. It is
-	// additive: the top-level agent_guidance (layer 0) and any extends: ancestor's
-	// guidance stack underneath it, rather than being replaced (see GuidanceSpec).
-	// Unset (nil) → inherit the stack unchanged; `{ replace: … }` → reset it.
-	Guidance *GuidanceSpec `yaml:"guidance"`
-	// Memory opts this agent into shared-memory prompt injection: true for
-	// the defaults (global + target repo + own agent scope), or a filter map
-	// { scopes, tags, limit }. Absent → no injection, no token cost.
-	Memory *MemorySelector `yaml:"memory"`
-	// Session binds this agent's dispatches to a keyed live session (session
-	// affinity): every event whose rendered key matches reaches the same
-	// agent as a follow-up. Absent → a fresh agent per dispatch. See
-	// SessionSpec.
-	Session *SessionSpec `yaml:"session"`
-	// Skill opts this agent into the conductor skill (#36 §12): reaching back
-	// into conductor over the daemon socket for verbs-as-tools and the secret
-	// broker. Absent → the agent gets neither (deny by default).
-	Skill *SkillPolicy `yaml:"skill"`
-	// Isolation sandboxes this agent's launches (#36 §15): a low-privilege
-	// user, Linux namespaces/cgroups, or a container, plus the network egress
-	// policy. Wins over the runtime's own isolation:. Requires a runtime
-	// conductor launches itself (acp/cli/opencode/agent-deck — not paseo).
-	Isolation *IsolationConfig `yaml:"isolation"`
-	// Budget is this profile's hard $/token spend cap over a rolling window
-	// (#36 §14) — checked alongside the global and workflow-scope budgets;
-	// an over-cap dispatch sheds and notifies.
-	Budget *BudgetPolicy `yaml:"budget"`
-	// OutcomeFeedback opts this profile into guidance tuning (#36 §18): a
-	// one-line track-record summary (merged / closed / rejected / reverted
-	// counts) is appended to the agent's guidance.
-	OutcomeFeedback bool `yaml:"outcome_feedback"`
-}
-
 // SkillPolicy is the per-profile `skill:` block (#36 §12): which of
 // conductor's own capabilities a dispatched agent may reach back into over
 // the daemon socket. The zero value denies everything.
@@ -742,15 +692,6 @@ type SkillPolicy struct {
 	// MaxCalls caps verb executions per skill session (analogous to
 	// agent_authored.limits). 0 = the built-in default (256).
 	MaxCalls int `yaml:"max_calls"`
-}
-
-// RuntimeName returns the runtime/controller the profile selects (runtime
-// wins over the legacy controller key; "" = the default).
-func (p AgentProfile) RuntimeName() string {
-	if p.Runtime != "" {
-		return p.Runtime
-	}
-	return p.Controller
 }
 
 // Action is one (source,kind)→action mapping. Type is "agent" or "command".
@@ -1355,67 +1296,8 @@ func (c *Config) Validate() error {
 	if err := c.validateHandoffs(); err != nil {
 		return err
 	}
-	for name, p := range c.Agents {
-		if p.Workspace != "" && p.Workspace != "local" && p.Workspace != "worktree" {
-			return fmt.Errorf("config: agent %q: workspace must be local|worktree, got %q", name, p.Workspace)
-		}
-		if rn := p.RuntimeName(); rn != "" {
-			_, isController := c.Controllers[rn]
-			_, isRuntime := c.Runtimes[rn]
-			if !isController && !isRuntime {
-				return fmt.Errorf("config: agent %q: unknown runtime %q (defined: %s)", name, rn, c.runtimeNames())
-			}
-		}
-		if p.Host != "" {
-			if _, ok := c.Hosts[p.Host]; !ok {
-				return fmt.Errorf("config: agent %q: unknown host %q (defined: %s)", name, p.Host, c.hostNames())
-			}
-		}
-		if err := c.validateProfileIsolation(name, p); err != nil {
-			return err
-		}
-		if err := c.validateSkillIsolation(name, p); err != nil {
-			return err
-		}
-		if err := validateBudget("agent "+name, p.Budget); err != nil {
-			return err
-		}
-		if p.Skill != nil {
-			switch p.Skill.SecretsVia {
-			case "", "none", "env", "broker":
-			default:
-				return fmt.Errorf("config: agent %q: skill.secrets_via must be broker|env|none, got %q", name, p.Skill.SecretsVia)
-			}
-			if p.Skill.MaxCalls < 0 {
-				return fmt.Errorf("config: agent %q: skill.max_calls must be >= 0, got %d", name, p.Skill.MaxCalls)
-			}
-			// allow_secrets only works through the broker: the broker refuses to
-			// issue to a session whose secrets_via is not "broker" (default is
-			// "none"). An allow_secrets list without secrets_via: broker is a
-			// silent footgun — the grants would never resolve — so reject it.
-			if len(p.Skill.AllowSecrets) > 0 {
-				via := p.Skill.SecretsVia
-				if via == "" {
-					via = "none"
-				}
-				if via != "broker" {
-					return fmt.Errorf("config: agent %q: skill.allow_secrets is set but skill.secrets_via is %q — the broker only issues secrets to a session with secrets_via: broker, so these grants would never resolve; set secrets_via: broker", name, via)
-				}
-			}
-			for _, s := range p.Skill.AllowSecrets {
-				// The current model names a vault entry: "<vault>/<key>"
-				// (the key half resolves at issue time — non-listable vaults
-				// can't be checked statically). A bare name checks the
-				// retired named-secrets block for back-compat.
-				if vault, _, isVault := strings.Cut(s, "/"); isVault {
-					if _, ok := c.Vaults[vault]; !ok {
-						return fmt.Errorf("config: agent %q: skill.allow_secrets %q names unknown vault %q (defined: %s)", name, s, vault, c.vaultNames())
-					}
-				} else if _, ok := c.SecretRefs[s]; !ok {
-					return fmt.Errorf("config: agent %q: skill.allow_secrets names unknown secret %q — name a vault entry as \"<vault>/<key>\"", name, s)
-				}
-			}
-		}
+	if err := c.validateSteps(); err != nil {
+		return err
 	}
 	if err := c.validateCallable(); err != nil {
 		return err
@@ -1423,15 +1305,16 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// SkillEnabled reports whether any agent profile carries a skill: block —
-// the daemon serves the tool socket and builds the secret broker only then.
+// SkillEnabled reports whether any step carries a skill: block — the daemon
+// serves the tool socket and builds the secret broker only then.
 func (c *Config) SkillEnabled() bool {
-	for _, p := range c.Agents {
-		if p.Skill != nil {
-			return true
+	found := false
+	c.WalkSteps(func(_ IdentityScope, _ int, s *Step) {
+		if s.Skill != nil {
+			found = true
 		}
-	}
-	return false
+	})
+	return found
 }
 
 // Skill delivery modes: how a dispatched agent reaches the conductor skill
@@ -1450,8 +1333,8 @@ const (
 // in env). A REMOTE launch (a runtime/profile host:) can reach neither today —
 // the daemon socket isn't on that box — so it's SkillModeNone until the HTTP
 // endpoint lands.
-func (c *Config) SkillDelivery(p AgentProfile) (runtime, mode string) {
-	rn := p.RuntimeName()
+func (c *Config) SkillDelivery(p Step) (runtime, mode string) {
+	rn := p.Runtime
 	if rn == "" {
 		rn = c.DefaultRuntimeName()
 	}
@@ -1491,7 +1374,7 @@ func (c *Config) SkillDelivery(p AgentProfile) (runtime, mode string) {
 // SkillToolsSupported reports whether the skill surface reaches this profile's
 // agent at all (via MCP or the CLI). `conductor validate` warns when it does
 // not (a skill: profile that gets nothing — a remote launch today).
-func (c *Config) SkillToolsSupported(p AgentProfile) (runtime string, ok bool) {
+func (c *Config) SkillToolsSupported(p Step) (runtime string, ok bool) {
 	rn, mode := c.SkillDelivery(p)
 	return rn, mode != SkillModeNone
 }
@@ -1759,16 +1642,6 @@ func (c *Config) CheckAgentRefs(refs []ActionRef) error {
 }
 
 func (c *Config) checkAgentRef(where string, a Action) error {
-	if a.Type == "agent" {
-		if a.Agent == "" {
-			return fmt.Errorf("config: %s: agent action needs `agent: <profile>` (defined: %s)", where, c.agentNames())
-		}
-		// A templated agent ("{{.inputs.reviewer}}") resolves at dispatch; only a
-		// literal name is checked against the defined profiles at load.
-		if _, ok := c.Agents[a.Agent]; !ok && !strings.Contains(a.Agent, "{{") {
-			return fmt.Errorf("config: %s: unknown agent profile %q (defined: %s)", where, a.Agent, c.agentNames())
-		}
-	}
 	if a.Handoff != "" {
 		if _, ok := c.Handoffs[a.Handoff]; !ok {
 			return fmt.Errorf("config: %s: unknown handoff %q (defined: %s)", where, a.Handoff, c.handoffNames())
@@ -1784,19 +1657,6 @@ func (c *Config) checkAgentRef(where string, a Action) error {
 		}
 	}
 	return nil
-}
-
-// agentNames lists the defined profile names, sorted, for error messages.
-func (c *Config) agentNames() string {
-	if len(c.Agents) == 0 {
-		return "none"
-	}
-	names := make([]string, 0, len(c.Agents))
-	for n := range c.Agents {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return strings.Join(names, ", ")
 }
 
 func expandHome(p string) string {

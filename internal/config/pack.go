@@ -96,10 +96,19 @@ type PackInstance struct {
 
 	// Policy deep-merges onto the pack's bundled policy (behavior override).
 	Policy map[string]any `yaml:"policy,omitempty"`
-	// Agents satisfies each of the pack's agent roles: absent → bundled default,
-	// string → bind to one of your globals, map → override (deep-merged onto the
-	// bundle). See Binding.
-	Agents map[string]Binding `yaml:"agents,omitempty"`
+	// Steps satisfies each of the pack's step roles (what `agents:` used to
+	// be): absent → the bundled default, string → bind to one of your own
+	// `steps:` templates, map → override (deep-merged onto the bundle). See
+	// Binding.
+	Steps map[string]Binding `yaml:"steps,omitempty"`
+	// Models overrides the pack's named fleets by name — the top rung of the
+	// model resolution ladder (docs/design/runtimes-models-packs.md §2.3,
+	// §5.3). A string collapses the fleet to one model.
+	Models map[string]FleetSpec `yaml:"models,omitempty"`
+	// On overrides the pack's triggers by their qualified name, deep-merging
+	// onto what the pack ships (§5.3). It is the mirrored-section overlay:
+	// the keys are the pack's own trigger addresses.
+	On map[string]TriggerArm `yaml:"on,omitempty"`
 	// Triggers arms (and optionally overrides) the pack's DISARMED triggers,
 	// keyed by trigger name. Arming — enabled:true + a repo scope — is the
 	// environment binding that constitutes consent. See TriggerArm.
@@ -257,11 +266,12 @@ type PackManifest struct {
 	// Define-in-pack (behavior) — shipped, namespaced, overridable. (Agents may
 	// still opt INTO memory via their own `memory:` selector — that's behavior;
 	// the daemon-wide memory BACKEND below is not shippable.)
-	Agents    map[string]AgentProfile `yaml:"agents,omitempty"`
-	Workflows map[string]WorkflowDef  `yaml:"workflows,omitempty"`
-	Triggers  []TriggerSpec           `yaml:"triggers,omitempty"` // shipped DISARMED
-	Policy    *Policy                 `yaml:"policy,omitempty"`
-	Checks    map[string]Step         `yaml:"checks,omitempty"`
+	Steps     map[string]Step        `yaml:"steps,omitempty"`
+	Models    map[string]FleetSpec   `yaml:"models,omitempty"`
+	Workflows map[string]WorkflowDef `yaml:"workflows,omitempty"`
+	Triggers  TriggerList            `yaml:"triggers,omitempty"` // shipped DISARMED
+	Policy    *Policy                `yaml:"policy,omitempty"`
+	Checks    map[string]Step        `yaml:"checks,omitempty"`
 
 	// Bind-only sections — FORBIDDEN here. Captured as raw nodes so an offending
 	// pack is rejected by name (see (*PackManifest).checkNoEnvironment). The
@@ -309,12 +319,27 @@ type PackRequires struct {
 	Secrets    map[string]SecretReq  `yaml:"secrets,omitempty"`
 	Roles      map[string]RoleReq    `yaml:"roles,omitempty"`
 	Packs      map[string]PackDepReq `yaml:"packs,omitempty"`
+	// Sources names the connector SOURCE TYPES this pack's triggers bind to
+	// (github, gitlab, pagerduty…). Scope for each lives on the CONSUMER's
+	// connector of that type, never on the pack
+	// (docs/design/runtimes-models-packs.md §5.2). A source the consumer has
+	// no connector for leaves its triggers DORMANT with a load-time notice,
+	// unless the author marks it required.
+	Sources map[string]SourceReq `yaml:"sources,omitempty"`
 }
 
-// RoleReq declares an agent role the pack defines: a bound agent MUST provide
+// RoleReq declares a step role the pack defines: a bound step MUST provide
 // the listed skill capabilities (validated at install).
 type RoleReq struct {
 	Skill []string `yaml:"skill,omitempty"`
+}
+
+// SourceReq declares one connector source type a pack's triggers bind to.
+// Required turns the missing-connector notice into a hard error — for a pack
+// that is meaningless without that source.
+type SourceReq struct {
+	Desc     string `yaml:"desc,omitempty"`
+	Required bool   `yaml:"required,omitempty"`
 }
 
 // SecretReq documents a secret the pack needs (name/role, no value).
@@ -341,7 +366,7 @@ type SettingSpec struct {
 // breaking consumers. Empty → everything is addressable.
 type PackExports struct {
 	Workflows []string `yaml:"workflows,omitempty"`
-	Agents    []string `yaml:"agents,omitempty"`
+	Steps     []string `yaml:"steps,omitempty"`
 }
 
 // checkNoEnvironment enforces the security boundary: a manifest that ships any

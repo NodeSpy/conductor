@@ -28,8 +28,8 @@ func TestPaseoPreCreatesWorktreeAndPins(t *testing.T) {
 	req := Request{
 		Trigger: core.Trigger{Kind: "review_requested",
 			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}},
-		Action:  config.Action{Type: "agent", Agent: "a", Prompt: "review"},
-		Profile: config.AgentProfile{Workspace: "worktree"},
+		Action: config.Action{Type: "agent", Agent: "a", Prompt: "review"},
+		Step:   config.Step{Workspace: "worktree"},
 	}
 	ref, err := d.Dispatch(context.Background(), req)
 	if err != nil {
@@ -93,7 +93,7 @@ func TestInteractiveHandoffLaunchesFreshNotQueued(t *testing.T) {
 		Interactive: true, // background workflow hand-off (Wait defaults false)
 		Trigger:     core.Trigger{Kind: "review_requested", Target: pr},
 		Action:      config.Action{Type: "agent", Agent: "a", Checkout: "checkout-pr", Prompt: "review"},
-		Profile:     config.AgentProfile{Workspace: "worktree"},
+		Step:        config.Step{Workspace: "worktree"},
 	}
 	ref, err := mk().Dispatch(context.Background(), ih)
 	if err != nil {
@@ -160,7 +160,7 @@ func TestPaseoWorktreeCreateFailureIsLoud(t *testing.T) {
 	req := Request{
 		Trigger: core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
 		Action:  config.Action{Type: "agent", Agent: "a", Prompt: "fix"},
-		Profile: config.AgentProfile{Workspace: "worktree"},
+		Step:    config.Step{Workspace: "worktree"},
 	}
 	if _, err := d.Dispatch(context.Background(), req); err == nil {
 		t.Fatal("a worktree-creation failure must surface as an error, not a silent scratch fallback")
@@ -213,7 +213,7 @@ func TestInteractiveNeverPinsScratch(t *testing.T) {
 	// Interactive + PR + checkout:none → upgraded to a PR worktree (PR-centric).
 	preq := Request{Interactive: true, Action: config.Action{Type: "agent", Agent: "a", Checkout: "none", Prompt: "x"},
 		Trigger: core.Trigger{Kind: "handoff", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
-		Profile: config.AgentProfile{Workspace: "worktree"}}
+		Step:    config.Step{Workspace: "worktree"}}
 	pref, _ := mk().Dispatch(context.Background(), preq)
 	ps := strings.Join(pref.Argv, " ")
 	if !strings.Contains(ps, "--worktree-mode checkout-pr") || strings.Contains(ps, "--workspace scratch-1") {
@@ -356,8 +356,8 @@ func TestPaseoWorkdirCaptured(t *testing.T) {
 	req := Request{
 		Trigger: core.Trigger{Kind: "review_requested",
 			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}},
-		Action:  config.Action{Type: "agent", Agent: "a", Prompt: "review"},
-		Profile: config.AgentProfile{Workspace: "worktree"},
+		Action: config.Action{Type: "agent", Agent: "a", Prompt: "review"},
+		Step:   config.Step{Workspace: "worktree"},
 	}
 	ref, err := d.Dispatch(context.Background(), req)
 	if err != nil {

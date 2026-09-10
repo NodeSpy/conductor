@@ -17,8 +17,8 @@ import (
 const budgetCfg = `
 connectors:
   svc: { use: fake }
-agents:
-  fixer: { model: claude-sonnet }
+steps:
+  fixer: { type: agent, name: fixer, model: claude-sonnet }
 `
 
 var budgetSpecYAML = `
@@ -27,7 +27,7 @@ name: nightly
 steps:
   - id: fix
     type: agent
-    agent: fixer
+    extends: fixer
     prompt: "fix it"
 `
 
@@ -35,13 +35,13 @@ steps:
 func wireBudget(rig *testRig, checkErr error) (*[]string, *[]cost.Usage, *[]string) {
 	var checks, scopes []string
 	var usages []cost.Usage
-	rig.Runner.Agents.CheckBudget = func(agentName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
-		checks = append(checks, agentName+"|"+wfScope)
+	rig.Runner.Agents.CheckBudget = func(runtimeName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
+		checks = append(checks, runtimeName+"|"+wfScope)
 		return nil, checkErr
 	}
-	rig.Runner.Agents.RecordUsage = func(t core.Trigger, agentName, stepID, runID, wfScope, savedWF string, res *cost.Reservation, u cost.Usage) {
+	rig.Runner.Agents.RecordUsage = func(t core.Trigger, identity, runtimeName, stepID, runID, wfScope, savedWF string, res *cost.Reservation, u cost.Usage) {
 		usages = append(usages, u)
-		scopes = append(scopes, agentName+"|"+stepID+"|"+wfScope)
+		scopes = append(scopes, identity+"|"+stepID+"|"+wfScope)
 	}
 	return &checks, &usages, &scopes
 }
@@ -61,7 +61,7 @@ func TestAgentStepChecksAndRecordsBudget(t *testing.T) {
 		t.Fatalf("workflow failed: %s", errStr)
 	}
 	// No trigger/connector budget → no workflow scope in the check.
-	if len(*checks) != 1 || (*checks)[0] != "fixer|" {
+	if len(*checks) != 1 || (*checks)[0] != "paseo|" {
 		t.Fatalf("budget checks: %v", *checks)
 	}
 	if len(*usages) != 1 || (*usages)[0].TotalTokens != 150 || (*usages)[0].Approximate {
@@ -89,7 +89,9 @@ policy:
 	if failed, errStr := rig.workflowFailed(); failed {
 		t.Fatalf("workflow failed: %s", errStr)
 	}
-	want := "fixer|svc.ping/nightly"
+	// The budget CHECK is keyed by the runtime (design §1); the usage SCOPE
+	// is keyed by the step identity.
+	want := "paseo|svc.ping/nightly"
 	if len(*checks) != 1 || (*checks)[0] != want {
 		t.Fatalf("workflow-scope check: %v (want %s)", *checks, want)
 	}
@@ -111,7 +113,7 @@ policy:
 		return dispatch.RunRef{AgentID: "a1", Output: "done"}, nil
 	}
 	runTrigger(rig, newTrigger("ping", nil), mustSpec(t, budgetSpecYAML))
-	if len(*checks) != 1 || (*checks)[0] != "fixer|" {
+	if len(*checks) != 1 || (*checks)[0] != "paseo|" {
 		t.Fatalf("global-only budget leaked a workflow scope: %v", *checks)
 	}
 }
@@ -120,7 +122,7 @@ func TestOverBudgetShedsStep(t *testing.T) {
 	cfg := loadConfig(t, budgetCfg)
 	reg := buildRegistry(t, cfg)
 	rig := newTestRunner(t, cfg, reg)
-	wireBudget(rig, fmt.Errorf("spend budget: profile:fixer over cap ($2.00 of $2.00 in 24h0m0s) — shedding until the window frees"))
+	wireBudget(rig, fmt.Errorf("spend budget: runtime:paseo over cap ($2.00 of $2.00 in 24h0m0s) — shedding until the window frees"))
 	dispatched := false
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
 		dispatched = true
@@ -148,8 +150,8 @@ func TestBackgroundDispatchKeepsReservationOpen(t *testing.T) {
 	rig := newTestRunner(t, cfg, reg)
 
 	m := cost.NewMeter()
-	scopesFor := func(agent, wf string) []string {
-		s := []string{"global", "profile:" + agent}
+	scopesFor := func(runtimeName, wf string) []string {
+		s := []string{"global", "runtime:" + runtimeName}
 		if wf != "" {
 			s = append(s, "workflow:"+wf)
 		}
@@ -157,14 +159,14 @@ func TestBackgroundDispatchKeepsReservationOpen(t *testing.T) {
 	}
 	var settled []cost.Usage
 	var reservedUSD float64
-	rig.Runner.Agents.CheckBudget = func(agentName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
+	rig.Runner.Agents.CheckBudget = func(runtimeName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
 		reservedUSD = est.CostUSD
-		return m.Reserve(scopesFor(agentName, wfScope), est), nil
+		return m.Reserve(scopesFor(runtimeName, wfScope), est), nil
 	}
 	rig.Runner.Agents.CancelBudget = func(res *cost.Reservation) { m.Cancel(res) }
-	rig.Runner.Agents.RecordUsage = func(_ core.Trigger, agentName, _, _, wfScope, _ string, res *cost.Reservation, u cost.Usage) {
+	rig.Runner.Agents.RecordUsage = func(_ core.Trigger, _, runtimeName, _, _, wfScope, _ string, res *cost.Reservation, u cost.Usage) {
 		settled = append(settled, u)
-		m.Settle(res, scopesFor(agentName, wfScope), u)
+		m.Settle(res, scopesFor(runtimeName, wfScope), u)
 	}
 	// paseo returns a launch confirmation (the agent id), not a transcript —
 	// cost.FromRun would score this at ~0.
@@ -178,7 +180,7 @@ name: nightly
 steps:
   - id: handoff
     type: agent
-    agent: fixer
+    extends: fixer
     prompt: "take it from here"
     background: true
 `)
@@ -195,7 +197,7 @@ steps:
 		t.Fatal("test setup: prompt estimate should be > 0")
 	}
 	// The open reservation still holds the full estimate against the cap.
-	if _, usd := m.SpentIn("profile:fixer", 24*time.Hour); usd != reservedUSD {
+	if _, usd := m.SpentIn("runtime:paseo", 24*time.Hour); usd != reservedUSD {
 		t.Fatalf("open reservation must hold the estimate against the cap: spent=%v want=%v", usd, reservedUSD)
 	}
 	// And the estimate is surfaced as an approximate agent_usage row.

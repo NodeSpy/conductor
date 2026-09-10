@@ -27,8 +27,10 @@ pack:
   name: greedy
   version: 1.0.0
   requires: { conductor: ">=0.1" }
-agents:
+steps:
   a:
+    type: agent
+    name: a
     workspace: local
     skill:
       secrets_via: broker
@@ -48,18 +50,20 @@ packs:
 // A pack that pins named infrastructure (host/runtime/controller) on a bundled
 // agent must be rejected — that reaches into consumer infra unbound.
 func TestPackAgentMayNotPinInfrastructure(t *testing.T) {
-	for _, field := range []string{"host: prod", "runtime: gpu", "controller: acp1"} {
+	for _, field := range []string{"host: prod", "runtime: gpu", "runtime: acp1"} {
 		dir := t.TempDir()
 		writePackSource(t, dir, "src/p", `
 pack: { name: p, version: "1.0.0", requires: { conductor: ">=0.1" } }
-agents:
+steps:
   a:
+    type: agent
+    name: a
     workspace: local
     `+field+`
 `)
 		path := writeConsumer(t, dir, "packs:\n  p:\n    source: ./src/p\n")
 		_, err := resolveAndLoad(t, path)
-		if err == nil || !strings.Contains(err.Error(), "runtime/host/controller") {
+		if err == nil || !strings.Contains(err.Error(), "pins runtime/host") {
 			t.Fatalf("pinning %q should be rejected, got: %v", field, err)
 		}
 	}
@@ -145,10 +149,10 @@ workflows:
     steps:
       - id: s
         type: agent
-        agent: a
+        extends: a
         prompt: "${settings.greet}"
-agents:
-  a: { workspace: local }
+steps:
+  a: { type: agent, name: a, workspace: local }
 `)
 	path := writeConsumer(t, dir, "packs:\n  p:\n    source: ./src/p\n")
 	cfg, err := resolveAndLoad(t, path)
@@ -176,8 +180,8 @@ workflows:
 `)
 	body := `
 connectors: { gh: { use: github } }
-agents:
-  deploy-bot: { provider: claude }
+steps:
+  deploy-bot: { type: agent, name: deploy-bot }
 packs:
   p:
     source: ./src/p
@@ -237,8 +241,10 @@ memory: { type: memory }
 	dir2 := t.TempDir()
 	writePackSource(t, dir2, "src/ok", `
 pack: { name: ok, version: "1.0.0", requires: { conductor: ">=0.1" } }
-agents:
+steps:
   a:
+    type: agent
+    name: a
     workspace: local
     memory: { scopes: [repo, agent], limit: 5 }
 `)
@@ -247,8 +253,8 @@ agents:
 	if err != nil {
 		t.Fatalf("an agent memory opt-in should be allowed: %v", err)
 	}
-	if a := cfg.Agents["ok/a"]; a.Memory == nil || !a.Memory.Enabled {
-		t.Fatalf("agent memory opt-in should survive instantiation, got %+v", cfg.Agents["ok/a"].Memory)
+	if a := cfg.Steps["ok/a"]; a.Memory == nil || !a.Memory.Enabled {
+		t.Fatalf("agent memory opt-in should survive instantiation, got %+v", cfg.Steps["ok/a"].Memory)
 	}
 }
 

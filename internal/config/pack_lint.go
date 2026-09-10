@@ -50,8 +50,8 @@ func LintPackManifest(man *PackManifest) []string {
 			problems = append(problems, fmt.Sprintf("exports.workflows: %q names no workflow defined by the pack", w))
 		}
 	}
-	for _, a := range man.Exports.Agents {
-		if _, ok := man.Agents[a]; !ok {
+	for _, a := range man.Exports.Steps {
+		if _, ok := man.Steps[a]; !ok {
 			problems = append(problems, fmt.Sprintf("exports.agents: %q names no agent defined by the pack", a))
 		}
 	}
@@ -59,7 +59,7 @@ func LintPackManifest(man *PackManifest) []string {
 	// requires.roles should correspond to a bundled agent (so it can be
 	// defaulted / overridden / bound).
 	for role := range man.Pack.Requires.Roles {
-		if _, ok := man.Agents[role]; !ok {
+		if _, ok := man.Steps[role]; !ok {
 			problems = append(problems, fmt.Sprintf("requires.roles: %q has no bundled agent of that name", role))
 		}
 	}

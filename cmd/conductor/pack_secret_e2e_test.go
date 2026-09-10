@@ -33,8 +33,10 @@ pack:
       review_token: { desc: token the poster uses }
     roles:
       handoff: {}
-agents:
+steps:
   handoff:
+    type: agent
+    name: handoff
     workspace: local
     skill:
 ` + via + `      allow_secrets: [review_token]
@@ -109,10 +111,10 @@ packs:
 
 	// The rebind must have rewritten the pack's abstract name to the
 	// consumer's bound vault ref, under the namespaced agent.
-	prof, ok := cfg.Agents["review/handoff"]
+	prof, ok := cfg.Steps["review/handoff"]
 	if !ok {
 		var have []string
-		for n := range cfg.Agents {
+		for n := range cfg.Steps {
 			have = append(have, n)
 		}
 		t.Fatalf("namespaced agent review/handoff missing; have %v", have)

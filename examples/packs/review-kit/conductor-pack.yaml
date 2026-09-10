@@ -13,7 +13,7 @@
 #       preset: claude
 #       connectors: { github: gh }               # bind the pack's required github -> your connector
 #       secrets:    { review_token: house/review }
-#       agents:     { reviewer: my-opus }         # bind a role to your global (or omit for the default)
+#       steps:      { reviewer: my-opus }         # bind a role to your own steps: template (or omit for the default)
 #       triggers:
 #         on_review_request:
 #           enabled: true                         # arm it
@@ -70,19 +70,23 @@ presets:
 # can refactor everything else without breaking anyone.
 exports:
   workflows: [review-flow]
-  agents: [reviewer]
+  steps: [reviewer]
 
 # ---- Behavior the pack ships (namespaced under the instance name) ----
 
-agents:
+steps:
   # The reviewer role. No provider/model is pinned, so it falls through to the
   # consumer's default runtime — zero-config still runs (§6/§26).
   reviewer:
+    type: agent
+    name: reviewer
     workspace: worktree
     guidance: "Review only what the diff changes. Be concrete and cite file:line."
   # The hand-off role posts the review back. It needs the review_token secret,
   # referenced abstractly here and resolved by the broker at runtime.
   handoff:
+    type: agent
+    name: handoff
     workspace: local
     skill:
       verbs: [github.submit_review, github.comment]
@@ -104,7 +108,7 @@ workflows:
     steps:
       - id: review
         type: agent
-        agent: reviewer
+        extends: reviewer
         prompt: |
           Review {{.repo}}#{{.pr}} across these lenses: ${settings.lenses}.
           Use the ${settings.heavy_model} model hint. Return concise, actionable
@@ -114,7 +118,7 @@ workflows:
           max_revisions: 1
       - id: post
         type: agent
-        agent: handoff
+        extends: handoff
         prompt: "Post this review on {{.repo}}#{{.pr}}:\n\n{{.review.output}}"
 
 checks:

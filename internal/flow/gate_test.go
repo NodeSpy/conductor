@@ -18,16 +18,16 @@ import (
 const gateCfg = `
 connectors:
   svc: { use: fake }
-agents:
-  fixer:  { model: m }
-  critic: { model: m }
+steps:
+  fixer: { type: agent, name: fixer, model: m }
+  critic: { type: agent, name: critic, model: m }
 checks:
   verdict: { uses: svc.post, options: { text: "check {{.gate.attempt}}" } }
   scope:
     run: js
     code: |
       return { pass: ctx.gate.workdir.length > 0, detail: "wd=" + ctx.gate.workdir };
-  critic: { type: agent, agent: critic, prompt: "review the change in {{.gate.workdir}}" }
+  critic: { type: agent, extends: critic, prompt: "review the change in {{.gate.workdir}}" }
 `
 
 var gateSpecYAML = `
@@ -35,7 +35,7 @@ on: svc.ping
 steps:
   - id: fix
     type: agent
-    agent: fixer
+    extends: fixer
     prompt: "fix it"
     gate: { run: [ verdict ], max_revisions: %d }
 `
@@ -50,7 +50,7 @@ func gateRig(t *testing.T, cfgYAML string) (*testRig, *fakeState, *[]string) {
 	fake := newFakeState(t, "svc")
 	rig := newTestRunner(t, cfg, reg)
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
-		return dispatch.RunRef{AgentID: "a-" + req.Action.Agent, Output: "done", Workdir: t.TempDir()}, nil
+		return dispatch.RunRef{AgentID: "a-" + req.Identity, Output: "done", Workdir: t.TempDir()}, nil
 	}
 	var followUps []string
 	rig.Runner.Agents.FollowUp = func(_ context.Context, agentID, agentName string, _ core.Trigger, prompt string) (string, bool, error) {
@@ -137,7 +137,7 @@ func TestGateReviseTurnIsMetered(t *testing.T) {
 		checks = append(checks, agentName)
 		return nil, nil
 	}
-	rig.Runner.Agents.RecordUsage = func(_ core.Trigger, agentName, stepID, _, _, _ string, res *cost.Reservation, u cost.Usage) {
+	rig.Runner.Agents.RecordUsage = func(_ core.Trigger, agentName, _, stepID, _, _, _ string, res *cost.Reservation, u cost.Usage) {
 		recorded = append(recorded, stepID+"|"+strconv.Itoa(u.TotalTokens))
 	}
 
@@ -244,7 +244,7 @@ on: svc.ping
 steps:
   - id: fix
     type: agent
-    agent: fixer
+    extends: fixer
     prompt: "fix it"
     gate: { run: [ scope ] }
 `)
@@ -260,7 +260,7 @@ func TestGateCriticWithoutVerdictFails(t *testing.T) {
 	rig.Runner.Agents.FollowUp = nil
 	// The critic dispatch returns prose with no pass output.
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
-		if req.Action.Agent == "critic" {
+		if req.Identity == "critic" {
 			return dispatch.RunRef{AgentID: "c1", Output: "looks fine to me"}, nil
 		}
 		return dispatch.RunRef{AgentID: "a1", Output: "done", Workdir: t.TempDir()}, nil
@@ -268,7 +268,7 @@ func TestGateCriticWithoutVerdictFails(t *testing.T) {
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, agent: fixer, prompt: "fix", gate: { run: [ critic ], max_revisions: 0 } }
+  - { id: fix, type: agent, extends: fixer, prompt: "fix", gate: { run: [ critic ], max_revisions: 0 } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	failed, errStr := rig.workflowFailed()
@@ -281,7 +281,7 @@ func TestGateCriticVerdictPasses(t *testing.T) {
 	rig, _, _ := gateRig(t, gateCfg)
 	var criticReq dispatch.Request
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
-		if req.Action.Agent == "critic" {
+		if req.Identity == "critic" {
 			criticReq = req
 			return dispatch.RunRef{AgentID: "c1", Output: `{"pass": true, "reason": "clean"}`}, nil
 		}
@@ -290,7 +290,7 @@ func TestGateCriticVerdictPasses(t *testing.T) {
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, agent: fixer, prompt: "fix", gate: { run: [ critic ] } }
+  - { id: fix, type: agent, extends: fixer, prompt: "fix", gate: { run: [ critic ] } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	if failed, errStr := rig.workflowFailed(); failed {
@@ -319,7 +319,7 @@ func TestGateCriticOutputIsRedacted(t *testing.T) {
 	rig.Runner.Secrets.Track(secret)
 	var criticReq dispatch.Request
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
-		if req.Action.Agent == "critic" {
+		if req.Identity == "critic" {
 			criticReq = req
 			return dispatch.RunRef{AgentID: "c1", Output: `{"pass": true, "reason": "clean"}`}, nil
 		}
@@ -329,7 +329,7 @@ func TestGateCriticOutputIsRedacted(t *testing.T) {
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, agent: fixer, prompt: "fix", gate: { run: [ critic ] } }
+  - { id: fix, type: agent, extends: fixer, prompt: "fix", gate: { run: [ critic ] } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	if failed, errStr := rig.workflowFailed(); failed {
@@ -349,8 +349,8 @@ func TestGateNeedsWorkdirForCommandChecks(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc: { use: fake }
-agents:
-  fixer: { model: m }
+steps:
+  fixer: { type: agent, name: fixer, model: m }
 checks:
   build: { type: command, command: ["make", "build"] }
 `)
@@ -364,7 +364,7 @@ checks:
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, agent: fixer, prompt: "fix", gate: { run: [ build ], max_revisions: 0 } }
+  - { id: fix, type: agent, extends: fixer, prompt: "fix", gate: { run: [ build ], max_revisions: 0 } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	failed, errStr := rig.workflowFailed()
@@ -380,8 +380,8 @@ func TestTriggerLevelGateAppliesAndStepGateWins(t *testing.T) {
 on: svc.ping
 gate: { run: [ verdict ] }
 steps:
-  - { id: a, type: agent, agent: fixer, prompt: "one" }
-  - { id: b, type: agent, agent: fixer, prompt: "two", gate: { run: [ scope ] } }
+  - { id: a, type: agent, extends: fixer, prompt: "one" }
+  - { id: b, type: agent, extends: fixer, prompt: "two", gate: { run: [ scope ] } }
   - { id: c, uses: svc.post, options: { text: "not gated" } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
@@ -476,9 +476,9 @@ func TestInheritedDefaultGateGovernsPlanSubAgents(t *testing.T) {
 connectors:
   svc: { use: fake }
 memory: { type: memory }
-agents:
-  fixer:   { model: m }
-  planner: { model: m }
+steps:
+  fixer: { type: agent, name: fixer, model: m }
+  planner: { type: agent, name: planner, model: m }
 checks:
   verdict: { uses: svc.post, options: { text: "check" } }
 policy:
@@ -498,7 +498,7 @@ policy:
 	fake.mu.Unlock()
 	planOut := "```plan\n- id: sub\n  type: agent\n  agent: fixer\n  prompt: \"go\"\n```"
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
-		if req.Action.Agent == "planner" {
+		if req.Identity == "planner" {
 			return dispatch.RunRef{AgentID: "p1", Output: planOut}, nil
 		}
 		// The sub-agent ran — its gate round must FAIL.
@@ -512,7 +512,7 @@ policy:
 on: svc.ping
 gate: { run: [ verdict ], max_revisions: 0 }
 steps:
-  - { id: author, type: agent, agent: planner, prompt: "plan it" }
+  - { id: author, type: agent, extends: planner, prompt: "plan it" }
 `)
 	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "m"}), spec)
 	failed, errStr := rig.workflowFailed()
@@ -535,7 +535,7 @@ func TestGateCriticWithoutWorkdirFailsLoudly(t *testing.T) {
 	rig.Runner.Agents.FollowUp = nil
 	criticRan := false
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
-		if req.Action.Agent == "critic" {
+		if req.Identity == "critic" {
 			criticRan = true
 			return dispatch.RunRef{AgentID: "c1", Output: `{"pass": true}`}, nil
 		}
@@ -544,7 +544,7 @@ func TestGateCriticWithoutWorkdirFailsLoudly(t *testing.T) {
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
-  - { id: fix, type: agent, agent: fixer, prompt: "fix", gate: { run: [ critic ], max_revisions: 0 } }
+  - { id: fix, type: agent, extends: fixer, prompt: "fix", gate: { run: [ critic ], max_revisions: 0 } }
 `)
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	failed, errStr := rig.workflowFailed()

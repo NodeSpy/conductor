@@ -174,10 +174,10 @@ workflows:
     steps:
       - id: s
         type: agent
-        agent: a
+        extends: a
         prompt: "uses ${settings.nope}"
-agents:
-  a: { workspace: local }
+steps:
+  a: { type: agent, name: a, workspace: local }
 `)
 	problems, err := LintPackDir(filepath.Join(dir, "p"))
 	if err != nil {
@@ -192,11 +192,11 @@ agents:
 // semantics: a pack override REPLACES a bundled list (it does not append), so a
 // consumer can NARROW a bundled agent's skill.verbs — not only widen it.
 func TestApplyAgentOverrideReplacesLists(t *testing.T) {
-	base := AgentProfile{
+	base := Step{
 		Workspace: "worktree",
 		Skill:     &SkillPolicy{Verbs: []string{"gh.comment", "gh.submit_review"}},
 	}
-	out, err := applyAgentOverride(base, map[string]any{
+	out, err := applyStepOverride(base, map[string]any{
 		"skill": map[string]any{"verbs": []any{"gh.comment"}},
 	})
 	if err != nil {

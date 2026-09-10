@@ -31,8 +31,8 @@ connectors:
     schedules: { tick: { every: 1h } }
 hosts:
   build-box: { host: build01.internal, user: ci }
-agents:
-  fixer: { provider: claude }
+steps:
+  fixer: { type: agent, name: fixer, model: opus }
 workflows:
   review-flow:
     inputs: { pr: { type: integer, required: true } }
@@ -59,8 +59,8 @@ connectors:
   box: { use: command }
 hosts:
   imports: [conf.d/hosts.yaml]
-agents:
-  imports: [conf.d/agents.yaml]
+steps:
+  imports: [conf.d/steps.yaml]
 workflows:
   imports: [workflows/*.yaml]
 triggers:
@@ -81,8 +81,8 @@ timer:
 hosts:
   build-box: { host: build01.internal, user: ci }
 `,
-		"conf.d/agents.yaml": `
-fixer: { provider: claude }
+		"conf.d/steps.yaml": `
+fixer: { type: agent, name: fixer, model: opus }
 `,
 		"workflows/review.yaml": `
 workflows:
@@ -115,8 +115,8 @@ workflows:
 	if split.Hosts["build-box"].Host != mono.Hosts["build-box"].Host {
 		t.Errorf("hosts differ: %+v", split.Hosts)
 	}
-	if split.Agents["fixer"].Provider != "claude" {
-		t.Errorf("agents differ: %+v", split.Agents)
+	if split.Steps["fixer"].Model.Ref != "opus" {
+		t.Errorf("step templates differ: %+v", split.Steps)
 	}
 	if len(split.Workflows) != 1 || len(split.Workflows["review-flow"].Steps) != 1 {
 		t.Errorf("workflows differ: %+v", split.Workflows)
@@ -480,7 +480,7 @@ connectors:
     schedules: { tick: { every: 1h } }
 triggers: []
 `,
-		"conf.d/sub/extra.yaml": "agents:\n  fixer: { provider: claude }\n",
+		"conf.d/sub/extra.yaml": "steps:\n  fixer: { type: agent, name: fixer, model: opus }\n",
 	})
 	_, err := Load(filepath.Join(dir, "config.yaml"))
 	if err == nil || !strings.Contains(err.Error(), "`**` is not supported") {

@@ -59,10 +59,14 @@ hosts:
 workflows:
   imports: [conf.d/workflows/*.yaml]
 
-agents:
-  imports: [conf.d/agents/*.yaml]
+# steps: — named, reusable step templates. A trigger's step reaches one with
+# `extends: fixer` and inherits everything it leaves unset. The template's
+# name is also its stable IDENTITY: the key its memory namespace, session
+# pool, and outcome track record all use.
+steps:
+  imports: [conf.d/steps/*.yaml]
   fixer:
-    provider: claude
+    type: agent
     workspace: worktree
     archive_when_done: true
 

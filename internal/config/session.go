@@ -7,24 +7,40 @@ import (
 	"time"
 )
 
-// SessionSpec is an agent profile's `session:` block — session affinity.
-// By default each dispatch gets a fresh agent; with a session spec, a live
-// agent session binds to the rendered `key`, and every event resolving to
-// the same value reaches the SAME agent as a follow-up with full prior
-// context. Because it's declared on the agent, every trigger dispatching to
-// that agent shares one session pool:
+// SessionSpec is a `session:` block — session affinity. By default each
+// dispatch gets a fresh agent; with a session spec a live agent session binds
+// to the rendered `key`, and every event resolving to the same value reaches
+// the SAME agent as a follow-up with full prior context.
 //
-//	agents:
-//	  reviewer:
-//	    runtime: paseo
-//	    session:
-//	      key: "{{.repo}}#{{.pr}}"            # same value → same live session
-//	      idle_ttl: 12h                        # reap after this long idle
-//	      max_lifetime: 7d                     # hard cap on session age
-//	      end_on: [ gh.pr_closed, gh.merged ]  # evict when the work is done
+// A binding is `(runtime, resolvedModel, key)` — see
+// docs/design/agents-removal.md §3. Runtime and model are STRUCTURAL, not
+// identities: a running agent is one model on one runtime, and you can
+// resume neither a paseo session on codex nor an opus step into a haiku
+// session. Because a pack assigns a fleet per step, its model assignments
+// partition affinity for free.
+//
+// It is declarable at two scopes:
+//
+//	runtimes:                       # OVERALL affinity: one agent per key,
+//	  paseo:                        # shared across every step that has no
+//	    session:                    # session: of its own
+//	      key: "{{.repo}}#{{.pr}}"
+//	      idle_ttl: 12h
+//
+//	triggers:
+//	  github.pull_request:
+//	    steps:
+//	      - id: review              # STEP affinity: its own pool, namespaced
+//	        type: agent             # to the step identity, so an identical
+//	        session:                # key string is still a distinct session
+//	          key: "{{.repo}}#{{.pr}}"
+//	          end_on: [gh.pr_closed, gh.merged]
+//
+// Resolution per dispatch: the step's session: wins, else the runtime's, else
+// a fresh agent.
 type SessionSpec struct {
 	// Key is a template rendered against each dispatch's trigger context;
-	// equal values share one live session.
+	// equal values share one live session (within one runtime+model).
 	Key string `yaml:"key"`
 	// IdleTTL evicts a session idle this long (default 24h).
 	IdleTTL Duration `yaml:"idle_ttl"`
@@ -39,7 +55,7 @@ type SessionSpec struct {
 }
 
 // Session TTL defaults: bounded by default so an abandoned session never
-// lives forever even when the profile doesn't say so.
+// lives forever even when the spec doesn't say so.
 const (
 	DefaultSessionIdleTTL     = 24 * time.Hour
 	DefaultSessionMaxLifetime = 7 * 24 * time.Hour
@@ -72,23 +88,32 @@ func (s *SessionSpec) EndsOn(instance, source, kind string) bool {
 	return false
 }
 
-// validateSessions checks each profile's session: block at load time.
+// validateSessions checks every `session:` block at load time — on runtimes
+// (the overall pool) and on steps (their own).
 func (c *Config) validateSessions() error {
-	for name, p := range c.Agents {
-		s := p.Session
-		if s == nil {
-			continue
+	for _, name := range sortedNames(c.Runtimes) {
+		if err := validateStepSession("runtime "+name, c.Runtimes[name].Session); err != nil {
+			return err
 		}
-		if strings.TrimSpace(s.Key) == "" {
-			return fmt.Errorf("config: agent %q: session.key is required (e.g. \"{{.repo}}#{{.pr}}\")", name)
-		}
-		if _, err := template.New("k").Parse(s.Key); err != nil {
-			return fmt.Errorf("config: agent %q: session.key: %v", name, err)
-		}
-		for _, e := range s.EndOn {
-			if strings.TrimSpace(e) == "" {
-				return fmt.Errorf("config: agent %q: session.end_on: empty event", name)
-			}
+	}
+	// Step sessions are checked by validateSteps, which walks every step.
+	return nil
+}
+
+// validateStepSession checks one session: block's shape.
+func validateStepSession(where string, s *SessionSpec) error {
+	if s == nil {
+		return nil
+	}
+	if strings.TrimSpace(s.Key) == "" {
+		return fmt.Errorf("config: %s: session.key is required (e.g. \"{{.repo}}#{{.pr}}\")", where)
+	}
+	if _, err := template.New("k").Parse(s.Key); err != nil {
+		return fmt.Errorf("config: %s: session.key: %v", where, err)
+	}
+	for _, e := range s.EndOn {
+		if strings.TrimSpace(e) == "" {
+			return fmt.Errorf("config: %s: session.end_on: empty event", where)
 		}
 	}
 	return nil

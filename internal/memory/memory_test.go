@@ -54,29 +54,31 @@ func TestBackendConformance(t *testing.T) {
 	for name, b := range backends(t) {
 		t.Run(name, func(t *testing.T) {
 			m := testManager(t, b)
-			src := Source{Agent: "reviewer", Run: "flow:pr:1", Trigger: "pr_opened", Repo: "acme/api"}
+			src := Source{Step: "reviewer", Run: "flow:pr:1", Trigger: "pr_opened", Repo: "acme/api"}
 
 			// remember → recall round trip with provenance.
-			e1, err := m.Remember("prefer table-driven tests", []string{"style", "go"}, "repo", src)
+			// Scope keys are OPAQUE: the repo string is just a key the
+			// caller chose, with no privileged `repo:` type behind it.
+			e1, err := m.Remember("prefer table-driven tests", []string{"style", "go"}, "acme/api", src)
 			if err != nil {
 				t.Fatalf("remember: %v", err)
 			}
-			if e1.Scope != "repo:acme/api" {
-				t.Fatalf("scope resolution: got %q", e1.Scope)
+			if e1.Scope != "acme/api" {
+				t.Fatalf("scope key: got %q", e1.Scope)
 			}
 			e2, err := m.Remember("CI needs the fake clock", []string{"testing"}, "", src)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if e2.Scope != "global" {
-				t.Fatalf("default scope: got %q", e2.Scope)
+			if e2.Scope != GlobalScope {
+				t.Fatalf("empty scope is the shared set: got %q", e2.Scope)
 			}
-			e3, err := m.Remember("my own note", nil, "agent", src)
+			e3, err := m.Remember("my own note", nil, "reviewer", src)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if e3.Scope != "agent:reviewer" {
-				t.Fatalf("agent scope: got %q", e3.Scope)
+			if e3.Scope != "reviewer" {
+				t.Fatalf("step scope key: got %q", e3.Scope)
 			}
 
 			all, err := m.List()
@@ -102,7 +104,7 @@ func TestBackendConformance(t *testing.T) {
 			}
 
 			// Scope filtering.
-			got, err := m.Recall(Query{Scopes: []string{"repo:acme/api"}})
+			got, err := m.Recall(Query{Scopes: []string{"acme/api"}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -145,32 +147,53 @@ func TestBackendConformance(t *testing.T) {
 	}
 }
 
-func TestResolveScope(t *testing.T) {
-	src := Source{Agent: "a", Repo: "o/r"}
-	cases := []struct {
-		in, want string
-		wantErr  bool
-	}{
-		{"", "global", false},
-		{"global", "global", false},
-		{"repo", "repo:o/r", false},
-		{"agent", "agent:a", false},
-		{"repo:x/y", "repo:x/y", false},
-		{"agent:bob", "agent:bob", false},
-		{"bogus", "", true},
-		{"repo:", "", true},
+// Scope keys are opaque strings the memory core never interprets: there are
+// no `global`/`repo`/`agent` TYPES any more (design §2), so the only
+// normalization left is "empty means the shared set".
+func TestNormalizeScopeIsOpaque(t *testing.T) {
+	cases := map[string]string{
+		"":                GlobalScope,
+		"   ":             GlobalScope,
+		GlobalScope:       GlobalScope,
+		"acme/api":        "acme/api",
+		"reviewer":        "reviewer",
+		"repo":            "repo",  // no longer a type — just a key
+		"agent":           "agent", // ditto
+		"github.pr/audit": "github.pr/audit",
+		"anything at all": "anything at all",
 	}
-	for _, c := range cases {
-		got, err := ResolveScope(c.in, src)
-		if c.wantErr != (err != nil) || got != c.want {
-			t.Errorf("ResolveScope(%q) = %q, %v", c.in, got, err)
+	for in, want := range cases {
+		if got := NormalizeScope(in); got != want {
+			t.Errorf("NormalizeScope(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if _, err := ResolveScope("repo", Source{}); err == nil {
-		t.Error("repo scope without a source repo should error")
+}
+
+// A scope key is never rejected: the core does not interpret keys, so there
+// is nothing that could be invalid.
+func TestRememberAcceptsAnyScopeKey(t *testing.T) {
+	m := testManager(t, NewMemBackend())
+	for _, k := range []string{"", "repo:", "weird key with spaces", "🙂", "a/b/c"} {
+		if _, err := m.Remember("note", nil, k, Source{}); err != nil {
+			t.Errorf("scope %q rejected: %v", k, err)
+		}
 	}
-	if _, err := ResolveScope("agent", Source{}); err == nil {
-		t.Error("agent scope without a source agent should error")
+}
+
+// The empty key and the persisted global token are the same set.
+func TestGlobalScopeRecallsByEitherSpelling(t *testing.T) {
+	m := testManager(t, NewMemBackend())
+	if _, err := m.Remember("shared", nil, "", Source{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"", GlobalScope} {
+		got, err := m.Recall(Query{Scopes: []string{q}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if q == GlobalScope && len(got) != 1 {
+			t.Errorf("recall by %q: got %d", q, len(got))
+		}
 	}
 }
 
@@ -179,8 +202,9 @@ func TestRememberValidation(t *testing.T) {
 	if _, err := m.Remember("  ", nil, "", Source{}); err == nil {
 		t.Error("empty text should error")
 	}
-	if _, err := m.Remember("x", nil, "weird", Source{}); err == nil {
-		t.Error("bad scope should error")
+	// There is no such thing as a bad scope any more — keys are opaque.
+	if _, err := m.Remember("x", nil, "weird", Source{}); err != nil {
+		t.Errorf("an opaque scope key must be accepted: %v", err)
 	}
 	if _, err := m.Forget(""); err == nil {
 		t.Error("empty forget id should error")
@@ -201,8 +225,8 @@ func TestFileBackendFrontmatterRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := testManager(t, b)
-	src := Source{Agent: "fixer", Run: "r1", Trigger: "failing_checks", Repo: "acme/api"}
-	e, err := m.Remember("flaky: TestFoo needs -count=1", []string{"flaky", "ci"}, "repo", src)
+	src := Source{Step: "fixer", Run: "r1", Trigger: "failing_checks", Repo: "acme/api"}
+	e, err := m.Remember("flaky: TestFoo needs -count=1", []string{"flaky", "ci"}, "acme/api", src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +235,9 @@ func TestFileBackendFrontmatterRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(raw)
-	for _, want := range []string{"---\n", "id: " + e.ID, "scope: repo:acme/api", "agent: fixer", "trigger: failing_checks", "flaky: TestFoo needs -count=1"} {
+	// The provenance key stays `agent:` on disk so entries written before
+	// the agents: removal keep their attribution.
+	for _, want := range []string{"---\n", "id: " + e.ID, "scope: acme/api", "agent: fixer", "trigger: failing_checks", "flaky: TestFoo needs -count=1"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("file missing %q:\n%s", want, s)
 		}

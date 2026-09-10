@@ -71,11 +71,7 @@ func memInvoke(guard DataGuard, op string, args []any) (any, error) {
 				q.Tags = append(q.Tags, fmt.Sprint(t))
 			}
 			if s, ok := opts["scope"].(string); ok && s != "" {
-				resolved, err := memory.ResolveScope(s, memory.Source{})
-				if err != nil {
-					return nil, err
-				}
-				q.Scopes = []string{resolved}
+				q.Scopes = []string{memory.NormalizeScope(s)}
 			}
 			if s, ok := opts["substring"].(string); ok {
 				q.Substring = s

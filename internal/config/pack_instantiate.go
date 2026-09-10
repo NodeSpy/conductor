@@ -197,42 +197,58 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// environment references.
 	rw := newRefRewriter(ns, man, req.inst, env)
 
-	// ---- Agents: default / bind / override, then namespace. ----
-	for _, role := range sortedAgentKeys(man.Agents) {
-		bundled := man.Agents[role]
-		// A pack agent may not pin infrastructure (runtime/host/controller) — a
-		// pack defines behavior, not environment. Provider/model are allowed
-		// (they fall through to the consumer default runtime when empty).
-		if bundled.Host != "" || bundled.Runtime != "" || bundled.Controller != "" {
-			return fmt.Errorf("pack %q: agent %q pins runtime/host/controller — a pack defines behavior, not environment; leave it to the consumer's default runtime or bind the role to a global", ns, role)
+	// ---- Step templates: default / bind / override, then namespace. ----
+	for _, role := range sortedStepKeys(man.Steps) {
+		bundled := man.Steps[role]
+		// A pack step may not pin infrastructure (runtime/host) — a pack
+		// defines behavior, not environment. model: is allowed: it names a
+		// FLEET, which resolves against whatever the consumer actually has.
+		if bundled.Host != "" || bundled.Runtime != "" {
+			return fmt.Errorf("pack %q: step %q pins runtime/host — a pack defines behavior, not environment; leave it to the consumer's default runtime or bind the role to one of their steps:", ns, role)
 		}
 		base := bundled
-		b := req.inst.Agents[role]
+		b := req.inst.Steps[role]
 		switch {
 		case b.IsBind():
 			// Bound to a consumer global: refs to this role resolve to that
 			// global directly (no namespaced copy is emitted).
 			continue
 		case b.IsOverride():
-			merged, err := applyAgentOverride(base, b.Override)
+			merged, err := applyStepOverride(base, b.Override)
 			if err != nil {
-				return fmt.Errorf("pack %q: agent %q override: %w", ns, role, err)
+				return fmt.Errorf("pack %q: step %q override: %w", ns, role, err)
 			}
 			base = merged
 		}
-		// Secret-broker containment: a pack agent may only allow_secrets names it
-		// DECLARED in requires.secrets (and the consumer bound). Otherwise a pack
-		// could guess a consumer's secret names and have the broker issue them.
+		// Secret-broker containment: a pack step may only allow_secrets names
+		// it DECLARED in requires.secrets (and the consumer bound). Otherwise
+		// a pack could guess a consumer's secret names and have the broker
+		// issue them.
 		if base.Skill != nil {
-			for _, s := range base.Skill.AllowSecrets {
-				if _, ok := man.Pack.Requires.Secrets[s]; !ok {
-					return fmt.Errorf("pack %q: agent %q skill.allow_secrets %q is not a declared requires.secrets entry — a pack may only reach secrets it declares and the consumer binds", ns, role, s)
+			for _, sec := range base.Skill.AllowSecrets {
+				if _, ok := man.Pack.Requires.Secrets[sec]; !ok {
+					return fmt.Errorf("pack %q: step %q skill.allow_secrets %q is not a declared requires.secrets entry — a pack may only reach secrets it declares and the consumer binds", ns, role, sec)
 				}
 			}
 		}
-		rw.rebindAgent(&base)
-		rw.rewriteAgentExtends(&base)
-		st.cfg.setAgent(rw.agentName(role), base)
+		rw.rebindStep(&base)
+		rw.rewriteStepExtends(&base)
+		st.cfg.setStep(rw.agentName(role), base)
+	}
+
+	// ---- Fleets: the pack's named models, namespaced, with the consumer's
+	// per-fleet override applied (the top rung of the ladder, §2.3/§5.3). ----
+	for _, name := range sortedNames(man.Models) {
+		fleet := man.Models[name]
+		if over, ok := req.inst.Models[name]; ok && over.Set() {
+			fleet = over
+		}
+		st.cfg.setFleet(rw.agentName(name), fleet)
+	}
+	for name := range req.inst.Models {
+		if _, ok := man.Models[name]; !ok {
+			return fmt.Errorf("pack %q: models: %q names no fleet shipped by this pack (shipped: %s)", ns, name, sortedKeys(man.Models))
+		}
 	}
 
 	// ---- Checks: namespace names + rewrite refs. ----
@@ -383,15 +399,15 @@ func (st *packInstantiation) validateRequires(ns string, man *PackManifest, inst
 			return fmt.Errorf("pack %q: secret binding %s -> %q: %w", ns, name, bound, err)
 		}
 	}
-	// Roles: a bound agent must provide the required skill capabilities.
+	// Roles: a bound step must provide the required skill capabilities.
 	for role, rr := range req.Roles {
-		b := inst.Agents[role]
+		b := inst.Steps[role]
 		if !b.IsBind() {
-			continue // default/override use the pack's bundled agent (assumed to satisfy)
+			continue // default/override use the pack's bundled step (assumed to satisfy)
 		}
-		prof, ok := st.cfg.Agents[b.Bind]
+		prof, ok := st.cfg.Steps[b.Bind]
 		if !ok {
-			return fmt.Errorf("pack %q: role %q bound to agent %q which is not defined under agents:", ns, role, b.Bind)
+			return fmt.Errorf("pack %q: role %q bound to step %q which is not defined under steps:", ns, role, b.Bind)
 		}
 		for _, want := range rr.Skill {
 			// The requirement is written pack-side (github.submit_review); rebind
@@ -434,8 +450,8 @@ func (c *Config) checkSecretRef(ref string) error {
 	return fmt.Errorf("names no secrets: entry, vault, or reference form (env:… / <vault>/<key>)")
 }
 
-// agentGrantsSkill reports whether a profile's skill policy grants a verb.
-func agentGrantsSkill(p AgentProfile, want string) bool {
+// agentGrantsSkill reports whether a step's skill policy grants a verb.
+func agentGrantsSkill(p Step, want string) bool {
 	if p.Skill == nil {
 		return false
 	}
@@ -618,11 +634,18 @@ type envBindings struct {
 	conn, store, secret, handoff map[string]string
 }
 
-func (c *Config) setAgent(name string, p AgentProfile) {
-	if c.Agents == nil {
-		c.Agents = map[string]AgentProfile{}
+func (c *Config) setStep(name string, p Step) {
+	if c.Steps == nil {
+		c.Steps = map[string]Step{}
 	}
-	c.Agents[name] = p
+	c.Steps[name] = p
+}
+
+func (c *Config) setFleet(name string, f FleetSpec) {
+	if c.Models == nil {
+		c.Models = map[string]FleetSpec{}
+	}
+	c.Models[name] = f
 }
 
 func (c *Config) setWorkflow(name string, w WorkflowDef) {
@@ -639,7 +662,7 @@ func (c *Config) setCheck(name string, s Step) {
 	c.Checks[name] = s
 }
 
-func applyAgentOverride(base AgentProfile, override map[string]any) (AgentProfile, error) {
+func applyStepOverride(base Step, override map[string]any) (Step, error) {
 	var bm map[string]any
 	b, err := yaml.Marshal(base)
 	if err != nil {
@@ -656,7 +679,7 @@ func applyAgentOverride(base AgentProfile, override map[string]any) (AgentProfil
 	if err != nil {
 		return base, err
 	}
-	var out AgentProfile
+	var out Step
 	if err := strictUnmarshal(mb, &out); err != nil {
 		return base, err
 	}
@@ -840,7 +863,7 @@ func sortedJoin(ss []string) string {
 }
 
 func sortedPackKeys(m map[string]PackInstance) []string { s := mapKeys(m); sort.Strings(s); return s }
-func sortedAgentKeys(m map[string]AgentProfile) []string {
+func sortedAgentKeysUnused(m map[string]Step) []string {
 	s := mapKeys(m)
 	sort.Strings(s)
 	return s

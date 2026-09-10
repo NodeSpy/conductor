@@ -112,25 +112,25 @@ func budgetFrom(ctx context.Context) (b *config.BudgetPolicy, scope string) {
 
 // checkBudget vets one agent dispatch against every governing cap, holding a
 // reservation for est when admitted (#36 review H7).
-func (r *Runner) checkBudget(ctx context.Context, agentName string, est cost.Usage) (*cost.Reservation, error) {
+func (r *Runner) checkBudget(ctx context.Context, runtimeName string, est cost.Usage) (*cost.Reservation, error) {
 	if r.Agents.CheckBudget == nil {
 		return nil, nil
 	}
 	wf, scope := budgetFrom(ctx)
-	return r.Agents.CheckBudget(agentName, wf, scope, est)
+	return r.Agents.CheckBudget(runtimeName, wf, scope, est)
 }
 
 // recordUsage charges one agent run's usage: the run's own tally and history
 // record always accumulate; the engine's meter/audit service runs when wired,
 // settling the dispatch's reservation.
-func (r *Runner) recordUsage(ctx context.Context, t core.Trigger, agentName, stepID string, res *cost.Reservation, u cost.Usage) {
+func (r *Runner) recordUsage(ctx context.Context, t core.Trigger, identity, runtimeName, stepID string, res *cost.Reservation, u cost.Usage) {
 	costAccFrom(ctx).add(u)
 	historySetCost(ctx, stepID, u)
 	if r.Agents.RecordUsage == nil {
 		return
 	}
 	_, scope := budgetFrom(ctx)
-	r.Agents.RecordUsage(t, agentName, stepID, memory.SourceFrom(ctx).Run, scope, savedWFFrom(ctx), res, u)
+	r.Agents.RecordUsage(t, identity, runtimeName, stepID, memory.SourceFrom(ctx).Run, scope, savedWFFrom(ctx), res, u)
 }
 
 // recordBackgroundEstimate tallies a background/hand-off dispatch's ESTIMATED
@@ -142,13 +142,13 @@ func (r *Runner) recordUsage(ctx context.Context, t core.Trigger, agentName, ste
 // paseo launch-confirmation output. The open reservation already counts toward
 // the meter caps, so this path is deliberately meter-free — it would otherwise
 // double-charge the same estimate.
-func (r *Runner) recordBackgroundEstimate(ctx context.Context, t core.Trigger, agentName, stepID string, est cost.Usage) {
+func (r *Runner) recordBackgroundEstimate(ctx context.Context, t core.Trigger, identity, runtimeName, stepID string, est cost.Usage) {
 	est.Approximate = true
 	costAccFrom(ctx).add(est)
 	historySetCost(ctx, stepID, est)
 	_, scope := budgetFrom(ctx)
 	r.audit(map[string]any{"event": "agent_usage", "repo": t.Target.Repo,
-		"number": t.Target.Number, "kind": t.Kind, "agent": agentName, "step": stepID,
+		"number": t.Target.Number, "kind": t.Kind, "agent": identity, "runtime": runtimeName, "step": stepID,
 		"run": memory.SourceFrom(ctx).Run, "workflow": scope, "model": est.Model,
 		"input_tokens": est.InputTokens, "output_tokens": est.OutputTokens,
 		"tokens": est.TotalTokens, "cost_usd": est.CostUSD, "approximate": true,
