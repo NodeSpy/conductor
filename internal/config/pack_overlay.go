@@ -72,17 +72,21 @@ func (st *packInstantiation) applyTriggerOverlay(ns string, inst PackInstance, t
 // `enabled: false` disables a step: it is lowered to an `if: "false"` so the
 // runner skips it, which is how a step is turned off without restructuring
 // the pack's step list.
-func (st *packInstantiation) applyStepOverlay(ns string, inst PackInstance, steps map[string]Step) error {
-	for _, name := range sortedNames(inst.Steps) {
-		b := inst.Steps[name]
+func (st *packInstantiation) applyStepOverlay(ns string, inst PackInstance, man *PackManifest) error {
+	for _, ref := range sortedNames(inst.Steps) {
+		b := inst.Steps[ref]
+		if b.IsBind() {
+			return fmt.Errorf("pack %q: steps: %q: the bind form (`%s: %s`) is gone — there is no top-level steps: registry to name. Write an override instead, and reach your own config with a YAML anchor if you want to reuse it: steps: { %s: { <<: *%s } }",
+				ns, ref, ref, b.Bind, ref, b.Bind)
+		}
 		if !b.IsOverride() {
-			continue // a bind is handled where roles are resolved
+			continue
 		}
-		base, ok := steps[name]
-		if !ok {
-			return fmt.Errorf("pack %q: steps: %q addresses no step this pack ships (shipped: %s)",
-				ns, name, sortedJoin(mapKeys(steps)))
+		target, err := man.FindPackStep(ref)
+		if err != nil {
+			return fmt.Errorf("pack %q: steps: %w", ns, err)
 		}
+		base := *target
 		over := b.Override
 		// `enabled: false` is the disable spelling; it is not a Step field,
 		// so lower it before the struct merge sees it.
@@ -90,14 +94,14 @@ func (st *packInstantiation) applyStepOverlay(ns string, inst PackInstance, step
 		if v, has := over["enabled"]; has {
 			en, isBool := v.(bool)
 			if !isBool {
-				return fmt.Errorf("pack %q: steps.%s.enabled must be true or false", ns, name)
+				return fmt.Errorf("pack %q: steps.%s.enabled must be true or false", ns, ref)
 			}
 			disabled = !en
 			over = withoutKey(over, "enabled")
 		}
 		merged, err := applyStepOverride(base, over)
 		if err != nil {
-			return fmt.Errorf("pack %q: steps.%s override: %w", ns, name, err)
+			return fmt.Errorf("pack %q: steps.%s override: %w", ns, ref, err)
 		}
 		// Guidance is ADDITIVE: the consumer's line stacks under/over the
 		// pack's rather than replacing it, matching the extends: contract.
@@ -105,7 +109,7 @@ func (st *packInstantiation) applyStepOverlay(ns string, inst PackInstance, step
 		if disabled {
 			merged.If = "false"
 		}
-		steps[name] = merged
+		*target = merged
 	}
 	return nil
 }

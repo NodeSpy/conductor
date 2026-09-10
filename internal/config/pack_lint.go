@@ -51,8 +51,8 @@ func LintPackManifest(man *PackManifest) []string {
 		}
 	}
 	for _, a := range man.Exports.Steps {
-		if _, ok := man.Steps[a]; !ok {
-			problems = append(problems, fmt.Sprintf("exports.agents: %q names no agent defined by the pack", a))
+		if _, err := man.FindPackStep(a); err != nil {
+			problems = append(problems, fmt.Sprintf("exports.steps: %v", err))
 		}
 	}
 

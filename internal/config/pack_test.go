@@ -46,12 +46,12 @@ presets:
   codex: { heavy_model: gpt-5-pro }
 exports:
   workflows: [review-flow]
-steps:
-  reviewer:
+x-steps:
+  reviewer: &reviewer
     type: agent
     name: reviewer
     workspace: worktree
-  handoff:
+  handoff: &handoff
     type: agent
     name: handoff
     workspace: local
@@ -63,11 +63,14 @@ workflows:
     steps:
       - id: review
         type: agent
-        step: reviewer
+        <<: *reviewer
         prompt: "review with {{.repo}} using ${settings.heavy_model}"
       - id: post
         uses: github.comment
         options: { store: cache, text: "done" }
+      - id: handoff
+        <<: *handoff
+        prompt: "hand it off"
 checks:
   lint: { run: js, code: "return { pass: true }" }
 triggers:
@@ -81,8 +84,8 @@ triggers:
 `
 
 // baseConfigWithReview writes a consumer config that instantiates review-kit
-// from a local source, binding github->gh and the store/secret, binding the
-// reviewer role to a global and overriding handoff.
+// from a local source, binding github->gh and the store/secret, and
+// overriding two of the pack's workflow steps by reference.
 func baseConfigWithReview(t *testing.T, extraPackFields string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -99,8 +102,8 @@ vaults:
   house:
     type: file
     dir: /tmp/pc-pack-vault
-steps:
-  my-opus:
+x-steps:
+  my-opus: &my-opus
     type: agent
     name: my-opus
     skill:
@@ -114,8 +117,8 @@ packs:
     stores:     { cache: redis1 }
     secrets:    { api_token: house/foocorp }
     steps:
-      reviewer: my-opus
-      handoff:  { workspace: worktree }
+      review-flow/review:  { <<: *my-opus }
+      review-flow/handoff: { workspace: worktree }
     triggers:
       on_review_request:
         enabled: true
@@ -144,25 +147,18 @@ func TestPackInstantiateNamespaceAndBind(t *testing.T) {
 		t.Fatal("bare workflow name must not leak into the main namespace")
 	}
 
-	// Agent bind: reviewer -> my-opus (global), so the step ref resolves to the
-	// global and NO namespaced copy is emitted.
-	if _, leaked := cfg.Steps["review/reviewer"]; leaked {
-		t.Fatal("a bound role must not emit a namespaced agent copy")
+	// The consumer's override addressed review-flow/review and merged the
+	// fields of their own anchor onto the pack's step. The pack's identity
+	// is namespaced, and the consumer's grant came through.
+	if got := wf.Steps[0].Name; got != "review/my-opus" {
+		t.Fatalf("override should carry the consumer's name, namespaced; got %q", got)
 	}
-	// The role is resolved by load, so the workflow step carries the
-	// GLOBAL's identity and behavior rather than a dangling reference.
-	if got := wf.Steps[0].Name; got != "my-opus" {
-		t.Fatalf("bound role should take the global's identity, got %q", got)
-	}
-	if sk := wf.Steps[0].Skill; sk == nil || len(sk.Verbs) != 1 || sk.Verbs[0] != "github.submit_review" {
-		t.Fatalf("bound role should inherit the global's skill, got %+v", sk)
+	if sk := wf.Steps[0].Skill; sk == nil || len(sk.Verbs) != 1 || sk.Verbs[0] != "gh.submit_review" {
+		t.Fatalf("override should bring the consumer's grant, rebound; got %+v", sk)
 	}
 
-	// Agent override: handoff kept the bundle and merged the override.
-	h, ok := cfg.Steps["review/handoff"]
-	if !ok {
-		t.Fatalf("expected namespaced agent review/handoff, have %v", agentKeys(cfg))
-	}
+	// Step override: post kept the bundle and merged the override.
+	h := packStep(t, cfg, "review/review-flow/handoff")
 	if h.Workspace != "worktree" {
 		t.Fatalf("handoff override workspace=worktree, got %q", h.Workspace)
 	}
@@ -233,14 +229,12 @@ func TestPackTriggerDisarmedByDefault(t *testing.T) {
 connectors: { gh: { use: github } }
 stores: { redis1: { type: boltdb, path: /tmp/x.db } }
 vaults: { house: { type: file, dir: /tmp/pc-pack-vault } }
-steps: { my-opus: { type: agent, name: my-opus, skill: { verbs: [github.submit_review] } } }
 packs:
   review:
     source: ./src/review-kit
     connectors: { github: gh }
     stores: { cache: redis1 }
     secrets: { api_token: house/foocorp }
-    steps: { reviewer: my-opus }
 `
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -486,14 +480,12 @@ func TestPackMissingVendorErrorsClearly(t *testing.T) {
 connectors: { gh: { use: github } }
 stores: { redis1: { type: boltdb, path: /tmp/x.db } }
 vaults: { house: { type: file, dir: /tmp/pc-pack-vault } }
-steps: { my-opus: { type: agent, name: my-opus } }
 packs:
   review:
     source: ./src/review-kit
     connectors: { github: gh }
     stores: { cache: redis1 }
     secrets: { api_token: house/foocorp }
-    steps: { reviewer: my-opus }
 `
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -508,7 +500,6 @@ packs:
 // --- small accessors for assertions ---
 
 func workflowKeys(c *Config) []string { return mapKeys(c.Workflows) }
-func agentKeys(c *Config) []string    { return mapKeys(c.Steps) }
 func checkKeys(c *Config) []string    { return mapKeys(c.Checks) }
 
 func findTrigger(c *Config, name string) *TriggerSpec {

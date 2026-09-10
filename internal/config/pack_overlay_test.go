@@ -33,24 +33,24 @@ pack:
       pagerduty: { desc: "incident triage" }
 models:
   reviewer: { any: ["claude-opus-*"] }
-steps:
-  security:
+x-steps:
+  security: &security
     type: agent
     name: security
     guidance: "pack tone"
     model: reviewer
-  summarize:
+  summarize: &summarize
     type: agent
     name: summarize
 triggers:
   - name: github.pull_request
     on: github.pull_request
     steps:
-      - { id: sec, step: security, prompt: "review" }
+      - { id: sec, <<: *security, prompt: "review" }
   - name: pagerduty.incident
     on: pagerduty.incident
     steps:
-      - { id: tri, step: summarize, prompt: "triage" }
+      - { id: tri, <<: *summarize, prompt: "triage" }
 `
 
 // A consumer with only a github connector gets the github trigger bound to
@@ -186,7 +186,7 @@ packs:
       github.pull_request: { filters: { labels_not: [wip] } }
       pagerduty.incident:  { enabled: false }
     steps:
-      security: { guidance: "focus on authz + SSRF" }
+      github.pull_request/sec: { guidance: "focus on authz + SSRF" }
     models:
       reviewer: claude-opus-5
 `))
@@ -211,10 +211,7 @@ packs:
 		t.Errorf("enabled: false must disable the trigger: %+v", pd)
 	}
 	// steps: is ADDITIVE for guidance — the pack's tone survives underneath.
-	step, ok := cfg.Steps["multi/security"]
-	if !ok {
-		t.Fatalf("namespaced step missing, have %v", mapKeys(cfg.Steps))
-	}
+	step := packStep(t, cfg, "multi/github.pull_request/sec")
 	parts := step.Guidance.Parts
 	if len(parts) != 2 || parts[0] != "pack tone" || parts[1] != "focus on authz + SSRF" {
 		t.Fatalf("guidance should stack pack-then-consumer, got %v", parts)
@@ -234,7 +231,7 @@ packs:
 func TestPackOverlayTyposAreErrors(t *testing.T) {
 	cases := map[string]string{
 		"on":     "    on: { github.ghost: { enabled: false } }\n",
-		"steps":  "    steps: { ghost: { guidance: x } }\n",
+		"steps":  "    steps: { github.pull_request/ghost: { guidance: x } }\n",
 		"models": "    models: { ghost: claude-opus-5 }\n",
 	}
 	for section, overlay := range cases {
@@ -249,7 +246,7 @@ packs:
   multi:
     source: ./src/multi
 `+overlay))
-			if err == nil || !strings.Contains(err.Error(), "addresses no") {
+			if err == nil || !strings.Contains(err.Error(), "no step with id/name") && !strings.Contains(err.Error(), "addresses no") {
 				t.Fatalf("an unmatched %s overlay key must error, got %v", section, err)
 			}
 		})
@@ -269,12 +266,12 @@ packs:
   multi:
     source: ./src/multi
     steps:
-      summarize: { enabled: false }
+      pagerduty.incident/tri: { enabled: false }
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Steps["multi/summarize"].If; got != "false" {
+	if got := packStep(t, cfg, "multi/pagerduty.incident/tri").If; got != "false" {
 		t.Fatalf("a disabled step should be skipped via if:, got %q", got)
 	}
 }

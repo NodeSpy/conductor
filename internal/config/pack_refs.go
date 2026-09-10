@@ -15,44 +15,29 @@ import "strings"
 // resolves in the consumer namespace, not prefixed.
 type refRewriter struct {
 	ns string
-	// agentBind maps a pack agent role to a consumer global (bind form); refs to
-	// it resolve to the global directly, not to a namespaced copy.
-	agentBind map[string]string
 	// env rebinds required environment names to consumer globals.
 	env envBindings
 }
 
 func newRefRewriter(ns string, man *PackManifest, inst PackInstance, env envBindings) *refRewriter {
-	rw := &refRewriter{
-		ns:        ns,
-		agentBind: map[string]string{},
-		env:       env,
-	}
-	for role, b := range inst.Steps {
-		if b.IsBind() {
-			rw.agentBind[role] = b.Bind
-		}
-	}
-	return rw
+	return &refRewriter{ns: ns, env: env}
 }
 
 func (rw *refRewriter) agentName(role string) string    { return rw.ns + "/" + role }
 func (rw *refRewriter) workflowName(name string) string { return rw.ns + "/" + name }
 func (rw *refRewriter) checkName(name string) string    { return rw.ns + "/" + name }
 
-// resolveAgentRef maps a bare pack agent ref to its final name: a bound global,
-// else a name scoped under this instance. An UNDECLARED name (not a pack agent,
-// not a bound role) is deliberately namespaced too, so it becomes `<ns>/<name>`
-// and FAILS validation loudly rather than silently resolving to a consumer
-// global of the same name — that would be a privilege reach past `requires:`.
-func (rw *refRewriter) resolveAgentRef(ref string) string {
+// resolveStepRef scopes a pack-local step reference under this instance:
+// `review-flow/review` -> `<ns>/review-flow/review`. A pack writes its refs
+// BARE and they resolve pack-local; a ref that names nothing the pack ships
+// becomes `<ns>/…` and FAILS validation loudly rather than silently
+// resolving to a consumer workflow of the same name — that would be a
+// privilege reach past `requires:`.
+func (rw *refRewriter) resolveStepRef(ref string) string {
 	if ref == "" {
 		return ref
 	}
-	if g, ok := rw.agentBind[ref]; ok {
-		return g
-	}
-	return rw.ns + "/" + ref
+	return NamespaceStepRef(rw.ns, ref)
 }
 
 func (rw *refRewriter) resolveWorkflowRef(ref string) string {
@@ -131,16 +116,6 @@ func (rw *refRewriter) rewriteStepName(p *Step) {
 	}
 }
 
-// rewriteStepRef points a pack step's `step: <role>` at whatever the role
-// resolved to — the consumer's own step when they bound one, else the
-// pack's namespaced copy. Without this a pack would reach a consumer global
-// that happens to share the role's name.
-func (rw *refRewriter) rewriteStepRef(p *Step) {
-	if p.StepRef != "" {
-		p.StepRef = rw.resolveAgentRef(p.StepRef)
-	}
-}
-
 // deepOverride merges a pack OVERRIDE map onto a base map with replace
 // semantics: nested maps deep-merge, but scalars and LISTS are replaced (not
 // appended). This differs from mergeMaps (which appends lists) because a pack
@@ -212,9 +187,8 @@ func (rw *refRewriter) rewriteHook(h *Hook) {
 // rewriteStep rewrites every reference a step carries, recursing into nested
 // step forms (compensate, parallel branches, step hooks).
 func (rw *refRewriter) rewriteStep(s *Step) {
-	s.Agent = rw.resolveAgentRef(s.Agent)
-	rw.rewriteStepRef(s)
 	rw.rewriteStepName(s)
+	rw.rebindStep(s)
 	s.Workflow = rw.resolveWorkflowRef(s.Workflow)
 	s.Uses = rw.rebindVerb(s.Uses)
 	if s.Handoff != "" {
@@ -227,10 +201,10 @@ func (rw *refRewriter) rewriteStep(s *Step) {
 		rw.rewriteGate(s.Gate)
 	}
 	if s.Team != nil {
-		s.Team.Planner = rw.resolveAgentRef(s.Team.Planner)
-		s.Team.Worker = rw.resolveAgentRef(s.Team.Worker)
-		s.Team.Critic = rw.resolveAgentRef(s.Team.Critic)
-		s.Team.Reconcile = rw.resolveAgentRef(s.Team.Reconcile)
+		s.Team.Planner = rw.resolveStepRef(s.Team.Planner)
+		s.Team.Worker = rw.resolveStepRef(s.Team.Worker)
+		s.Team.Critic = rw.resolveStepRef(s.Team.Critic)
+		s.Team.Reconcile = rw.resolveStepRef(s.Team.Reconcile)
 		if s.Team.Gate != nil {
 			rw.rewriteGate(s.Team.Gate)
 		}

@@ -192,17 +192,27 @@ func packUseSource(ref string) (string, error) {
 // selects the strategy.
 //
 //	absent  -> the pack's bundled default
-//	string  -> BIND: swap in one of your own existing globals entirely
 //	map     -> OVERRIDE: keep the bundle, deep-merge changes onto it
+//
+// The scalar BIND form ("swap in one of my globals entirely") is gone with
+// the top-level steps: registry — there are no global steps left to name.
+// It is still PARSED, so the error can say what to write instead, which is
+// an override whose value is one of the consumer's own YAML anchors:
+//
+//	packs.review.steps:
+//	  review-flow/review: { <<: *my-reviewer }
+//
+// That reaches further than bind did: it composes with the pack's own
+// fields instead of replacing the whole step.
 type Binding struct {
-	// Bind, when non-empty, names a consumer global to substitute for the
-	// pack's bundled resource.
+	// Bind holds a scalar form, retained only to reject it by name.
 	Bind string
 	// Override, when non-nil, is deep-merged onto the pack's bundled resource.
 	Override map[string]any
 }
 
-// UnmarshalYAML accepts the string (bind) and map (override) forms.
+// UnmarshalYAML accepts the map (override) form, and captures the retired
+// scalar form so validation can name it.
 func (b *Binding) UnmarshalYAML(n *yaml.Node) error {
 	switch n.Kind {
 	case yaml.ScalarNode:
@@ -211,7 +221,7 @@ func (b *Binding) UnmarshalYAML(n *yaml.Node) error {
 		b.Override = map[string]any{}
 		return n.Decode(&b.Override)
 	default:
-		return fmt.Errorf("a pack binding is a string (bind to a global) or a map (override the bundle)")
+		return fmt.Errorf("a pack step binding is a map of overrides, e.g. { model: my-fleet } or { <<: *my-anchor }")
 	}
 }
 
@@ -266,7 +276,6 @@ type PackManifest struct {
 	// Define-in-pack (behavior) — shipped, namespaced, overridable. (Agents may
 	// still opt INTO memory via their own `memory:` selector — that's behavior;
 	// the daemon-wide memory BACKEND below is not shippable.)
-	Steps     map[string]Step        `yaml:"steps,omitempty"`
 	Models    map[string]FleetSpec   `yaml:"models,omitempty"`
 	Workflows map[string]WorkflowDef `yaml:"workflows,omitempty"`
 	Triggers  TriggerList            `yaml:"triggers,omitempty"` // shipped DISARMED
@@ -376,7 +385,10 @@ type SettingSpec struct {
 // breaking consumers. Empty → everything is addressable.
 type PackExports struct {
 	Workflows []string `yaml:"workflows,omitempty"`
-	Steps     []string `yaml:"steps,omitempty"`
+	// Steps are STEP REFERENCES — `<workflow>/<step-id>` or
+	// `<workflow>[<n>]` — naming steps of the pack's own workflows. There is
+	// no top-level steps: section to list instead.
+	Steps []string `yaml:"steps,omitempty"`
 }
 
 // checkNoEnvironment enforces the security boundary: a manifest that ships any

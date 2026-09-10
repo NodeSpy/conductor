@@ -49,8 +49,8 @@ vaults:
   house:
     type: file
     dir: /tmp/pc-pack-vault
-steps:
-  my-opus:
+x-steps:
+  my-opus: &my-opus
     type: agent
     name: my-opus
     skill:
@@ -61,7 +61,8 @@ packs:
     preset: codex
     connectors: { github: gh }
     secrets:    { review_token: house/review }
-    steps:      { reviewer: my-opus }
+    steps:
+      review-flow/review: { workspace: local }
     triggers:
       on_review_request:
         enabled: true
@@ -76,13 +77,14 @@ packs:
 		t.Fatalf("resolveAndLoad the example pack: %v", err)
 	}
 
-	// Namespaced workflow present; bound reviewer resolves to the global.
+	// Namespaced workflow present; the consumer's override reached the
+	// step it addressed by reference.
 	wf, ok := cfg.Workflows["review/review-flow"]
 	if !ok {
 		t.Fatalf("expected review/review-flow, have %v", workflowKeys(cfg))
 	}
-	if wf.Steps[0].Name != "my-opus" {
-		t.Fatalf("bound reviewer should resolve to my-opus, got %q", wf.Steps[0].Name)
+	if wf.Steps[0].Workspace != "local" {
+		t.Fatalf("the review-flow/review override should have applied, got %q", wf.Steps[0].Workspace)
 	}
 	// Preset codex applied: heavy_model=gpt-5-pro substituted into the prompt.
 	if !strings.Contains(wf.Steps[0].Prompt, "gpt-5-pro") {
@@ -90,8 +92,8 @@ packs:
 	}
 	// The bundled handoff agent's skill.verbs connector prefix is rebound
 	// github.* -> gh.* (the consumer's connector name).
-	if h, ok := cfg.Steps["review/handoff"]; !ok || h.Skill == nil {
-		t.Fatalf("expected review/handoff with a skill block")
+	if h := packStep(t, cfg, "review/review-flow/post"); h.Skill == nil {
+		t.Fatalf("expected review/review-flow/post to carry a skill block")
 	} else {
 		for _, v := range h.Skill.Verbs {
 			if strings.HasPrefix(v, "github.") {

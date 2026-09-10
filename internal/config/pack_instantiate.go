@@ -211,44 +211,44 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// ---- Mirrored-section overlay (§5.3): the consumer's steps:/models:
 	// blocks deep-merge onto the pack's members BY NAME before anything is
 	// namespaced, so the overrides address the pack's own vocabulary. ----
-	if err := st.applyStepOverlay(ns, req.inst, man.Steps); err != nil {
+	if err := st.applyStepOverlay(ns, req.inst, man); err != nil {
 		return err
 	}
 	if err := st.applyFleetOverlay(ns, req.inst, man.Models); err != nil {
 		return err
 	}
 
-	// ---- Step templates: default / bind / override, then namespace. ----
-	for _, role := range sortedStepKeys(man.Steps) {
-		bundled := man.Steps[role]
+	// ---- Containment checks on every step the pack ships. The steps
+	// themselves are namespaced and rebound with their workflow/trigger
+	// below; what runs here is what a pack is not ALLOWED to do. ----
+	var stepErr error
+	man.WalkPackSteps(func(where string, s *Step) {
+		if stepErr != nil {
+			return
+		}
 		// A pack step may not pin infrastructure (runtime/host) — a pack
 		// defines behavior, not environment. model: is allowed: it names a
 		// FLEET, which resolves against whatever the consumer actually has.
-		if bundled.Host != "" || bundled.Runtime != "" {
-			return fmt.Errorf("pack %q: step %q pins runtime/host — a pack defines behavior, not environment; leave it to the consumer's default runtime or bind the role to one of their steps:", ns, role)
+		if s.Host != "" || s.Runtime != "" {
+			stepErr = fmt.Errorf("pack %q: step %s pins runtime/host — a pack defines behavior, not environment; leave it to the consumer's default runtime, or override it from your packs: block", ns, where)
+			return
 		}
-		// An OVERRIDE was already merged by applyStepOverlay above (which is
-		// the single place it happens, so guidance stacks exactly once); a
-		// BIND swaps in one of the consumer's own templates and emits no
-		// namespaced copy.
-		base := bundled
-		if req.inst.Steps[role].IsBind() {
-			continue
+		// Secret-broker containment: a pack step may only allow_secrets
+		// names it DECLARED in requires.secrets (and the consumer bound).
+		// Otherwise a pack could guess a consumer's secret names and have
+		// the broker issue them.
+		if s.Skill == nil {
+			return
 		}
-		// Secret-broker containment: a pack step may only allow_secrets names
-		// it DECLARED in requires.secrets (and the consumer bound). Otherwise
-		// a pack could guess a consumer's secret names and have the broker
-		// issue them.
-		if base.Skill != nil {
-			for _, sec := range base.Skill.AllowSecrets {
-				if _, ok := man.Pack.Requires.Secrets[sec]; !ok {
-					return fmt.Errorf("pack %q: step %q skill.allow_secrets %q is not a declared requires.secrets entry — a pack may only reach secrets it declares and the consumer binds", ns, role, sec)
-				}
+		for _, sec := range s.Skill.AllowSecrets {
+			if _, ok := man.Pack.Requires.Secrets[sec]; !ok {
+				stepErr = fmt.Errorf("pack %q: step %s skill.allow_secrets %q is not a declared requires.secrets entry — a pack may only reach secrets it declares and the consumer binds", ns, where, sec)
+				return
 			}
 		}
-		rw.rebindStep(&base)
-		rw.rewriteStepName(&base)
-		st.cfg.setStep(rw.agentName(role), base)
+	})
+	if stepErr != nil {
+		return stepErr
 	}
 
 	// ---- Fleets: the pack's named models, namespaced, with the consumer's
@@ -636,13 +636,6 @@ func loadPackManifest(nodeDir string) (*PackManifest, error) {
 
 type envBindings struct {
 	conn, store, secret, handoff map[string]string
-}
-
-func (c *Config) setStep(name string, p Step) {
-	if c.Steps == nil {
-		c.Steps = map[string]Step{}
-	}
-	c.Steps[name] = p
 }
 
 func (c *Config) setFleet(name string, f FleetSpec) {

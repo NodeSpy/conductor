@@ -39,10 +39,10 @@ func lintPackSkillGrants(man *PackManifest) []string {
 		set[n] = true
 	}
 	var problems []string
-	for _, role := range sortedNames(man.Steps) {
-		sk := man.Steps[role].Skill
+	man.WalkPackSteps(func(role string, s *Step) {
+		sk := s.Skill
 		if sk == nil {
-			continue
+			return
 		}
 		for _, pat := range sk.Verbs {
 			conn := grantConnector(pat)
@@ -50,14 +50,14 @@ func lintPackSkillGrants(man *PackManifest) []string {
 			case conn == "": // "*" — bounded to the declared set at instantiate
 				if len(declared) == 0 {
 					problems = append(problems, fmt.Sprintf(
-						"steps.%s: skill.verbs %q grants everything but the pack declares no requires.connectors — a pack's wildcard is bounded by its declared connectors, so this grants nothing; declare what it needs", role, pat))
+						"step %s: skill.verbs %q grants everything but the pack declares no requires.connectors — a pack's wildcard is bounded by its declared connectors, so this grants nothing; declare what it needs", role, pat))
 				}
 			case !set[conn]:
 				problems = append(problems, fmt.Sprintf(
-					"steps.%s: skill.verbs %q names connector %q, which is not in requires.connectors (declared: %s) — a pack may only grant access to connectors it declares", role, pat, conn, orNone(declared)))
+					"step %s: skill.verbs %q names connector %q, which is not in requires.connectors (declared: %s) — a pack may only grant access to connectors it declares", role, pat, conn, orNone(declared)))
 			}
 		}
-	}
+	})
 	return problems
 }
 
@@ -143,26 +143,24 @@ func boundGrant(patterns, declared []string) (kept []string, dropped []string) {
 // grant exceeded its interface is visible rather than silently narrowed.
 func (st *packInstantiation) applyPackSkillBoundary(ns string, man *PackManifest) {
 	declared := man.Pack.Requires.ConnectorNames()
-	for _, role := range sortedNames(man.Steps) {
-		step := man.Steps[role]
+	man.WalkPackSteps(func(role string, step *Step) {
 		if step.Skill == nil || len(step.Skill.Verbs) == 0 {
-			continue
+			return
 		}
 		kept, dropped := boundGrant(step.Skill.Verbs, declared)
 		if len(dropped) > 0 {
-			st.warnf("pack %q: step %q skill.verbs %s dropped — a pack may only grant access to the connectors it declares in requires.connectors (declared: %s)",
+			st.warnf("pack %q: step %s skill.verbs %s dropped — a pack may only grant access to the connectors it declares in requires.connectors (declared: %s)",
 				ns, role, strings.Join(dropped, ", "), orNone(declared))
 		}
 		if len(kept) == len(step.Skill.Verbs) && sameOrder(kept, step.Skill.Verbs) {
-			continue
+			return
 		}
 		// Copy the policy before narrowing: the manifest's own value may be
 		// shared with the lint/show paths.
 		sk := *step.Skill
 		sk.Verbs = kept
 		step.Skill = &sk
-		man.Steps[role] = step
-	}
+	})
 }
 
 func sameOrder(a, b []string) bool {

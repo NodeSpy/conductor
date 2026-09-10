@@ -97,9 +97,9 @@ func TestLintRejectsGrantOutsideRequires(t *testing.T) {
 		Pack: PackMeta{Name: "p", Version: "1.0.0", Requires: PackRequires{
 			Conductor: ">=0.1", Connectors: ConnectorReqs{"github": AnyVersion},
 		}},
-		Steps: map[string]Step{
-			"reviewer": {Type: "agent", Skill: &SkillPolicy{Verbs: []string{"github.submit_review", "pagerduty.trigger"}}},
-		},
+		Workflows: map[string]WorkflowDef{"flow": {Steps: []Step{
+			{ID: "reviewer", Type: "agent", Skill: &SkillPolicy{Verbs: []string{"github.submit_review", "pagerduty.trigger"}}},
+		}}},
 	}
 	problems := strings.Join(LintPackManifest(man), "\n")
 	if !strings.Contains(problems, "pagerduty") {
@@ -108,7 +108,7 @@ func TestLintRejectsGrantOutsideRequires(t *testing.T) {
 	if !strings.Contains(problems, "requires.connectors") {
 		t.Fatalf("lint should name the boundary: %s", problems)
 	}
-	if !strings.Contains(problems, "steps.reviewer") {
+	if !strings.Contains(problems, "flow/reviewer") {
 		t.Fatalf("lint should name the step: %s", problems)
 	}
 	if strings.Contains(problems, "github.submit_review") {
@@ -121,10 +121,10 @@ func TestLintAcceptsGrantInsideRequires(t *testing.T) {
 		Pack: PackMeta{Name: "p", Version: "1.0.0", Requires: PackRequires{
 			Conductor: ">=0.1", Connectors: ConnectorReqs{"github": AnyVersion, "sentry": AnyVersion},
 		}},
-		Steps: map[string]Step{
-			"a": {Type: "agent", Skill: &SkillPolicy{Verbs: []string{"github.*", "sentry.issue"}}},
-			"b": {Type: "agent", Skill: &SkillPolicy{Verbs: []string{"*"}}}, // bounded at instantiate
-		},
+		Workflows: map[string]WorkflowDef{"flow": {Steps: []Step{
+			{ID: "a", Type: "agent", Skill: &SkillPolicy{Verbs: []string{"github.*", "sentry.issue"}}},
+			{ID: "b", Type: "agent", Skill: &SkillPolicy{Verbs: []string{"*"}}}, // bounded at instantiate
+		}}},
 	}
 	for _, p := range LintPackManifest(man) {
 		if strings.Contains(p, "skill.verbs") {
@@ -137,8 +137,10 @@ func TestLintAcceptsGrantInsideRequires(t *testing.T) {
 // because the author probably meant to declare something.
 func TestLintFlagsWildcardWithNoDeclaredConnectors(t *testing.T) {
 	man := &PackManifest{
-		Pack:  PackMeta{Name: "p", Version: "1.0.0", Requires: PackRequires{Conductor: ">=0.1"}},
-		Steps: map[string]Step{"a": {Type: "agent", Skill: &SkillPolicy{Verbs: []string{"*"}}}},
+		Pack: PackMeta{Name: "p", Version: "1.0.0", Requires: PackRequires{Conductor: ">=0.1"}},
+		Workflows: map[string]WorkflowDef{"flow": {Steps: []Step{
+			{ID: "a", Type: "agent", Skill: &SkillPolicy{Verbs: []string{"*"}}},
+		}}},
 	}
 	problems := strings.Join(LintPackManifest(man), "\n")
 	if !strings.Contains(problems, "declares no requires.connectors") {
@@ -155,12 +157,13 @@ pack:
   requires:
     conductor: ">=0.1"
     connectors: [github]
-steps:
-  reviewer:
-    type: agent
-    name: reviewer
-    skill:
-      verbs: ["*"]
+workflows:
+  flow:
+    steps:
+      - id: reviewer
+        type: agent
+        skill:
+          verbs: ["*"]
 `
 
 // A hand-authored pack that skipped lint still cannot exceed its interface:
@@ -181,10 +184,7 @@ packs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	step, ok := cfg.Steps["granty/reviewer"]
-	if !ok {
-		t.Fatalf("namespaced step missing, have %v", mapKeys(cfg.Steps))
-	}
+	step := packStep(t, cfg, "granty/flow/reviewer")
 	// `*` became the declared connector only, rebound gh.
 	if !reflect.DeepEqual(step.Skill.Verbs, []string{"gh.*"}) {
 		t.Fatalf("a pack wildcard must be bounded to its requires: got %v", step.Skill.Verbs)
@@ -214,7 +214,7 @@ packs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := cfg.Steps["granty/reviewer"].Skill.Verbs
+	got := packStep(t, cfg, "granty/flow/reviewer").Skill.Verbs
 	if !reflect.DeepEqual(got, []string{"gh.comment"}) {
 		t.Fatalf("the undeclared grant should be dropped, got %v", got)
 	}
@@ -232,11 +232,13 @@ pack:
   name: granty
   version: "1.0.0"
   requires: { conductor: ">=0.1" }
-steps:
-  reviewer:
-    type: agent
-    name: reviewer
-    skill: { verbs: ["*"] }
+workflows:
+  flow:
+    steps:
+      - id: reviewer
+        type: agent
+        prompt: p
+        skill: { verbs: ["*"] }
 `)
 	cfg, err := resolveAndLoad(t, writeDoc(t, dir, `
 connectors:
@@ -247,7 +249,7 @@ packs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Steps["granty/reviewer"].Skill.Verbs; len(got) != 0 {
+	if got := packStep(t, cfg, "granty/flow/reviewer").Skill.Verbs; len(got) != 0 {
 		t.Fatalf("a pack with no declared connectors must grant nothing, got %v", got)
 	}
 }
