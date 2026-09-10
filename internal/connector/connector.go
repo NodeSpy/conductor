@@ -74,8 +74,13 @@ type EventDecl struct {
 // VerbDecl declares one action verb: the name valid after `uses: <conn>.`,
 // its option schema, and its outputs (request-response verbs).
 type VerbDecl struct {
-	Name    string
-	Desc    string
+	Name string
+	Desc string
+	// Usage is an optional one-line WHAT/WHEN hint rendered into the
+	// capability card a skill-enabled agent is given, and into the MCP tool
+	// description. It lets a verb describe itself once rather than every
+	// workflow prompt re-explaining how to call it. Absent → Desc is used.
+	Usage   string
 	Options Schema
 	Outputs Schema
 	// Ask marks a request-response verb that presents to a human and blocks

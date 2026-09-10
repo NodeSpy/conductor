@@ -22,10 +22,11 @@ func TestSkillGuidance(t *testing.T) {
 		return p
 	}
 
-	// Absent by default: a profile without skill: gets only the house text.
+	// Absent by default: a step without skill: gets only the house text —
+	// the guidance RIDES THE GRANT (design §A).
 	plain := e.agentGuidance(config.Step{}, config.Policy{})
-	if strings.Contains(plain, "Conductor tools") {
-		t.Fatalf("skill guidance leaked into a plain profile: %q", plain)
+	if strings.Contains(plain, "CONDUCTOR VERBS") || strings.Contains(plain, "Conductor tools") {
+		t.Fatalf("skill guidance leaked into a step with no grant: %q", plain)
 	}
 
 	// Present when opted in, naming the verb patterns and broker secrets.
@@ -33,10 +34,16 @@ func TestSkillGuidance(t *testing.T) {
 		Verbs: []string{"gh.comment", "rest.*"}, SecretsVia: "broker", AllowSecrets: []string{"deploy_key"},
 	}})
 	got := e.agentGuidance(sk, config.Policy{})
-	for _, want := range []string{"Conductor tools", "gh.comment, rest.*", "secret_issue", "deploy_key", "single-use", "«secret:"} {
+	// Layer 0 (the generated mechanics preamble) plus the broker text. An
+	// MCP runtime gets NO verb listing in prose — the granted verbs arrive
+	// as native tool schemas instead.
+	for _, want := range []string{"CONDUCTOR VERBS", "attached to this session as tools", "secret_issue", "deploy_key", "single-use", "«secret:"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("guidance missing %q: %q", want, got)
 		}
+	}
+	if strings.Contains(got, "conductor call") {
+		t.Fatalf("an MCP runtime must not be told to shell the CLI: %q", got)
 	}
 	// secrets_via env/none never advertises the broker.
 	envProf := onACP(config.Step{Skill: &config.SkillPolicy{SecretsVia: "env", AllowSecrets: []string{"deploy_key"}}})

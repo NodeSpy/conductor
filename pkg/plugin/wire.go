@@ -79,8 +79,15 @@ type Schema map[string]Field
 
 // Verb is one action verb the plugin exposes.
 type Verb struct {
-	Name    string `json:"name"`
-	Desc    string `json:"desc,omitempty"`
+	Name string `json:"name"`
+	Desc string `json:"desc,omitempty"`
+	// Usage is an optional one-line WHAT/WHEN hint — "submit a pull-request
+	// review; use after the review is reconciled". It is rendered into the
+	// capability card conductor injects into a skill-enabled agent's prompt
+	// and into the MCP tool description, so a verb describes itself ONCE
+	// instead of every workflow prompt re-explaining it. Absent → the card
+	// falls back to Desc.
+	Usage   string `json:"usage,omitempty"`
 	Options Schema `json:"options,omitempty"`
 	Outputs Schema `json:"outputs,omitempty"`
 	Ask     bool   `json:"ask,omitempty"`

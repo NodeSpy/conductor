@@ -369,13 +369,15 @@ func (e *Engine) skillGuidance(profile config.Step) string {
 }
 
 // skillGuidanceMCP is the blurb for runtimes that carry the tool server as MCP
-// tools (ACP/opencode) — the agent calls the tools natively.
+// tools (ACP/opencode). Layer 0 only: the granted verbs arrive as native tool
+// schemas (SkillVerbCatalog, rendered from the same registry entries the CLI
+// card uses), so repeating them as prompt text would be redundant tokens.
 func (e *Engine) skillGuidanceMCP(sk *config.SkillPolicy) string {
 	var b strings.Builder
-	b.WriteString("Conductor tools are available on this session.")
 	if len(sk.Verbs) > 0 {
-		b.WriteString(fmt.Sprintf(" Prefer acting THROUGH conductor: the verb tools (matching: %s) run with conductor's own credentials, so no secret ever enters this session.",
-			strings.Join(sk.Verbs, ", ")))
+		b.WriteString(flow.CapabilityPreamble(false))
+	} else {
+		b.WriteString("Conductor tools are available on this session.")
 	}
 	if sk.SecretsVia == "broker" && len(sk.AllowSecrets) > 0 {
 		b.WriteString(fmt.Sprintf(" If a raw tool you must run itself needs a credential, request it via secret_issue/secret_redeem (allowed: %s) — grants are single-use, expire in about a minute, and every step is audited. Use the value immediately for the one action that needs it; never echo it, store it, or write it to disk.",
@@ -385,20 +387,42 @@ func (e *Engine) skillGuidanceMCP(sk *config.SkillPolicy) string {
 	return b.String()
 }
 
-// skillGuidanceCLI is the blurb for local runtimes with no MCP surface (paseo,
-// agent-deck, cli): the agent shells the `conductor` CLI. Progressive
-// disclosure — it names the discovery command, never the whole verb catalog, so
-// the prompt stays small regardless of how many verbs the profile allows.
+// skillGuidanceCLI is the blurb for local runtimes with no MCP surface
+// (paseo, agent-deck, cli): the agent shells the `conductor` CLI.
+//
+// Layer 0 (the generated mechanics preamble) plus Layer 1 (the CAPABILITY
+// CARD — the granted verbs with their options and call form, rendered from
+// the verb registry). The card is what lets a workflow prompt drop to intent
+// instead of hand-coding `conductor call <verb> --<opt> '<json>'`, and it
+// updates itself when a verb's signature changes.
+//
+// The card is scoped to exactly the grant and comes from the same resolution
+// as `conductor discover` and enforcement, so it can never promise a verb the
+// daemon would refuse. With no flow runner wired (no connectors), there is no
+// registry to render and the agent gets the discovery command instead.
 func (e *Engine) skillGuidanceCLI(sk *config.SkillPolicy) string {
 	var b strings.Builder
-	b.WriteString("Conductor is available on this machine via the `conductor` CLI (endpoint + a scoped token are already in your environment).")
-	b.WriteString(" Run `conductor discover` to see which connectors and verbs you may use, `conductor discover <connector>` or `conductor discover -s <term>` to narrow, and `conductor discover <connector.verb>` for a verb's options.")
-	b.WriteString(" Act THROUGH conductor with `conductor call <connector.verb> --opt value`: it runs server-side with conductor's own credentials, so no secret ever enters this session. `conductor memory recall|remember` is your shared memory.")
+	b.WriteString("Conductor is available on this machine via the `conductor` CLI (endpoint + a scoped token are already in your environment). ")
+	b.WriteString(flow.CapabilityPreamble(true))
+	b.WriteString(" `conductor memory recall|remember` is your shared memory.")
+	if card := e.capabilityCard(sk); card != "" {
+		b.WriteString("\n\n")
+		b.WriteString(card)
+	}
 	if sk.SecretsVia == "broker" && len(sk.AllowSecrets) > 0 {
 		b.WriteString(fmt.Sprintf(" If a raw tool you run yourself genuinely needs a credential, `conductor secret <name>` mints a single-use, ~1-minute, audited value (allowed: %s) — use it immediately for that one action; never echo, store, or write it to disk.",
 			strings.Join(sk.AllowSecrets, ", ")))
 	}
 	return b.String()
+}
+
+// capabilityCard renders the granted verbs for a CLI-transport agent ("" when
+// the grant admits nothing, or when no registry is wired).
+func (e *Engine) capabilityCard(sk *config.SkillPolicy) string {
+	if e.flow == nil || sk == nil || len(sk.Verbs) == 0 {
+		return ""
+	}
+	return e.flow.CapabilityCard(sk.Verbs)
 }
 
 // dispatchAgent routes one request through session affinity when the profile

@@ -40,7 +40,60 @@ type SkillIdentity struct {
 // conductor-internal orchestration stay off this surface — agent-authored
 // steps go through run_step and its policy guard instead.
 func (r *Runner) SkillVerbCatalog(patterns []string) []map[string]any {
-	var out []map[string]any
+	granted := r.GrantedVerbs(patterns)
+	out := make([]map[string]any, 0, len(granted))
+	for _, g := range granted {
+		out = append(out, map[string]any{
+			"name":        strings.ReplaceAll(g.Uses, ".", "_"),
+			"uses":        g.Uses,
+			"description": g.Description(),
+			"inputSchema": optionsJSONSchema(g.Decl),
+		})
+	}
+	return out
+}
+
+// GrantedVerb is one verb a grant admits, with the registry declaration it
+// was resolved from.
+type GrantedVerb struct {
+	// Uses is the "<connector>.<verb>" id, using the CONSUMER's connector
+	// instance name (what `conductor call` takes).
+	Uses string
+	// Connector is the instance name half of Uses.
+	Connector string
+	// Decl is the verb's registry declaration — options, outputs, usage.
+	Decl connector.VerbDecl
+}
+
+// Description is what the agent is told this verb is for: its Usage hint
+// when the verb author wrote one, else its Desc. This is the single place
+// that precedence is decided, so the capability card and the MCP tool
+// description can never disagree about it.
+func (g GrantedVerb) Description() string {
+	if u := strings.TrimSpace(g.Decl.Usage); u != "" {
+		return u
+	}
+	return g.Decl.Desc
+}
+
+// GrantedVerbs is THE resolution of a skill grant against the live verb
+// registry: every verb the patterns admit, in a stable order.
+//
+// It is the single source the three agent-facing surfaces are built from —
+// the capability card injected into the prompt (CapabilityCard), the MCP
+// tool list and `conductor discover` (SkillVerbCatalog → the verb_list op),
+// and, because RunSkillVerb enforces with the same matchAny over the same
+// patterns, what the daemon will actually run. A verb can therefore never
+// appear in one and be missing from another.
+//
+// An empty pattern list grants nothing: the surface is deny-by-default, and
+// a step with no `skill:` block has no grant at all.
+//
+// `workflow.*` and `conductor.*` are excluded here exactly as RunSkillVerb
+// refuses them — conductor's own orchestration is not reachable from the
+// skill surface at any breadth, so a `["*"]` grant cannot reach it either.
+func (r *Runner) GrantedVerbs(patterns []string) []GrantedVerb {
+	var out []GrantedVerb
 	if r.Conns == nil || len(patterns) == 0 {
 		return out
 	}
@@ -59,12 +112,7 @@ func (r *Runner) SkillVerbCatalog(patterns []string) []map[string]any {
 			if !matchAny(patterns, uses) {
 				continue
 			}
-			out = append(out, map[string]any{
-				"name":        strings.ReplaceAll(uses, ".", "_"),
-				"uses":        uses,
-				"description": vd.Desc,
-				"inputSchema": optionsJSONSchema(vd),
-			})
+			out = append(out, GrantedVerb{Uses: uses, Connector: connName, Decl: vd})
 		}
 	}
 	return out

@@ -53,7 +53,10 @@ var fakeDecl = &connector.TypeDecl{
 			Outputs: connector.Schema{"id": {Type: connector.TInt}},
 		},
 		{
-			Name: "ask", Desc: "a fake ask-capable verb", Ask: true,
+			// Carries a Usage hint: the card and the MCP tool description
+			// must both prefer it over Desc (design §A).
+			Name: "ask", Desc: "a fake ask-capable verb",
+			Usage: "ask a human and wait for their answer", Ask: true,
 			Options: connector.Schema{"prompt": {Type: connector.TString, Required: true}},
 			Outputs: connector.Schema{
 				"action": {Type: connector.TString},
