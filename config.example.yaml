@@ -431,13 +431,80 @@ hosts:
 # on a hosts: entry over SSH — a remote paseo runs its whole CLI there (put
 # its environment on the host entry's env:), an opencode server is reached
 # through an ssh -W forward, cli/acp/agent-deck wrap their launch.
+#
+# THREE SHAPES. The common case is one word — a runtime's NAME implies its
+# `use:` reference, so you only write use: when the name differs from the
+# implementation (or points at a plugin repo / URL / local path):
+#
+#   runtimes: paseo                 # scalar: one runtime, nothing to configure
+#   runtimes: [paseo, claude]       # list:   several
+#   runtimes:                       # map:    named, with config (below)
+#
+# MODELS. The optional models: block on a runtime says which model it passes
+# by default, how it ranks a choice, and what it may ever run. Omit it and the
+# runtime is fully automatic: its roster is discovered (see the
+# model-discovery wiki page), its default is a BARE LAUNCH, nothing is
+# restricted.
+#
+#   default:  the model to pass when nothing else resolves one. Its ABSENCE is
+#             meaningful — no default means bare launch (no --model at all,
+#             the runtime uses its own built-in default).
+#   prefer:   ranking among acceptable models; the consumer disposes.
+#   allow:    what this runtime may EVER run; the roster is filtered to it.
 # ---------------------------------------------------------------------------
 runtimes:
-  paseo: { use: paseo, bin: paseo, default: true }
+  paseo:
+    use: paseo
+    bin: paseo
+    default: true
+    # models:
+    #   default: claude-opus-5                  # omit -> bare launch
+    #   prefer:  [claude-opus-5, gpt-5.6-sol]   # ranking when a fleet offers a choice
+    #   allow:   ["claude-opus-*", "gpt-5.6-*"] # a hard ceiling on what may run
   gpu-paseo: { use: paseo, bin: /usr/local/bin/paseo, host: build-box }
-  # deck:   { type: agent-deck }
-  # gemini: { agent: gemini }                       # ACP transport
-  # remote: { type: cli, tool: claude-code, host: build-box }
+  # deck:   { use: agent-deck }
+  # gemini: { use: acp, agent: gemini }              # ACP transport
+  # remote: { use: cli, tool: claude-code, host: build-box }
+
+# ---------------------------------------------------------------------------
+# models: — named FLEETS (the spot-fleet model). A fleet is a ranked list of
+# ACCEPTABLE models plus a fallback posture, so a step (or a pack you install)
+# says what it NEEDS rather than hardcoding a model you may not have.
+#
+#   any:      acceptable, best-first. Literals and wildcards.
+#   required: true  -> nothing available is a HARD ERROR (don't quietly
+#                      downgrade a reviewer)
+#             false -> nothing available falls through to a bare launch
+#
+# WILDCARDS are globbed against the DISCOVERED roster, so one never conjures a
+# model you cannot run. Literals keep their listed priority; a wildcard
+# expands in place, newest-first, de-duped against literals already listed.
+#
+# YAML GOTCHA: a pattern that STARTS with * must be QUOTED — a bare * is a
+# YAML alias indicator. Quote "*", "*-mini", "*pro*".
+# ---------------------------------------------------------------------------
+models:
+  reviewer:
+    any: ["claude-opus-*", "gpt-5.6-*", "gemini-3.*-pro"]
+    # required: true      # uncomment to refuse to run at all rather than downgrade
+  summarizer:
+    any: ["claude-haiku-*", "*-mini", "gemini-2.5-flash*"]
+
+#
+# A step then names one — model: accepts a string, an array, or an object:
+#
+#   steps:
+#     - { id: architecture, type: agent, model: reviewer }               # a fleet
+#     - { id: security,     type: agent, model: ["claude-opus-*"] }      # inline fleet
+#     - { id: audit,        type: agent, model: { any: ["claude-opus-*"], required: true } }
+#     - { id: summarize,    type: agent, model: gemini-2.5-flash }       # exact pin
+#     - { id: lint,         type: agent, model: "*" }                    # any, honoring prefer
+#
+# A bare string is MAP-KEY-WINS: it is a fleet reference if it names a key in
+# models:, otherwise a model id or a wildcard.
+#
+# `model: "*"` and NO model: are different outcomes. `"*"` resolves to a
+# concrete model through prefer:; omitting model: entirely is a bare launch.
 
 # ---------------------------------------------------------------------------
 # use: — ONE field names what implements a connector or a runtime. There is no
@@ -635,6 +702,34 @@ callable:
         timestamp_header: X-Conductor-Timestamp  # header carrying the signed unix-seconds timestamp (default)
       workflows: [pr-summary]
 
+# ---------------------------------------------------------------------------
+# triggers: — the list form below, or a NAMED MAP where the key is each
+# trigger's stable address. A key that reads as <source>.<event> also implies
+# on:, which disambiguates across sources for free:
+#
+#   triggers:
+#     github.pull_request:  { steps: [architecture, security] }
+#     gitlab.merge_request: { steps: [architecture, security] }
+#     pagerduty.incident:   { steps: [triage] }
+#
+# Two triggers on the SAME source.event just take free names and set on:
+# explicitly — the key is the address, so it has to be unique:
+#
+#   triggers:
+#     review:    { on: github.pull_request, steps: [...] }
+#     autolabel: { on: github.pull_request, steps: [...] }
+#
+# A trigger's value is polymorphic: an object is ONE trigger, an ARRAY is
+# several INSTANCES that each fire independently. There is no instances:
+# keyword and no per-instance name — an instance's identity is its CONTENT
+# (its repos/filters are what make it distinct), so its dedup state stays put
+# when you reorder the list:
+#
+#   triggers:
+#     review:
+#       - { on: github.pull_request, filters: { repos: [me/app], labels: [ready] } }
+#       - { on: github.pull_request, filters: { repos: [me/api] } }
+# ---------------------------------------------------------------------------
 triggers:
   # Near-identical triggers can share a base: a trigger `extends: <name>` inherits
   # another's steps/filters/policy (filters deep-merge, steps replace), and a base
@@ -654,6 +749,7 @@ triggers:
       - id: audit
         type: agent
         agent: fixer
+        model: reviewer          # a fleet from models: — runs on whatever you have
         prompt: |
           Audit {{.repo}} for {{.scope}} and summarize findings.
           (inputs arrive under .inputs and at the top level)
@@ -883,6 +979,17 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 # ships BEHAVIOR (workflows/agents/policy/checks/disarmed triggers) only; you
 # BIND its environment (connectors/secrets/stores). Fetch + lock with
 # `conductor init`; preview with `conductor pack plan`. See docs/wiki/Packs.md.
+#
+# The KEY IS THE REFERENCE: `packs: { pr-review-team: {} }` resolves to the
+# official pack repo (github.com/NodeSpy/conductor-packs) with no source: or
+# use: line at all. Write `use:` only to point somewhere else:
+#
+# packs:
+#   pr-review-team: {}                            # official, by name
+#   house-style: { use: ./packs/house-style }     # a local folder
+#   kit:         { use: acme/conductor-packs/kit@^1.2 }   # an explicit repo
+#
+# The longer form, with everything spelled out:
 #
 # packs:
 #   review:                                       # instance name == the namespace

@@ -431,6 +431,53 @@ for review. Everything else above is settled.
 
 ---
 
+## Implementation status (branch `feat/runtimes-fleets-packs`)
+
+This section tracks what has actually landed against the design above. It is
+maintained with the code, not written ahead of it.
+
+**Landed**
+
+- §1 `runtimes:` scalar/list/map, key-implies-`use:` (applied after `extends:`),
+  the `models: { default, prefer, allow }` block — `internal/config/models.go`,
+  `connectors.go`.
+- §2 fleets, wildcards (incl. `"*"` and the YAML-quoting rule), `model:` as
+  string/array/object, `Config.ModelRefs()` — `internal/config/models.go`.
+- §3 per-runtime discovery adapters (paseo native, agent-deck via configured
+  tools, bare CLI live-then-catalog), models.dev catalog with a state-dir TTL
+  cache and step-by-step degradation, header-only credential use with
+  redaction — `internal/models/`.
+- §4 bare launch as a first-class `Decision` outcome, distinct from `"*"`.
+- §2.3 the resolution ladder — `internal/models/resolve.go`.
+- §5.1 `packs:` key-implies-`use:` (`UseKindPack`, `OfficialPacksRepo`, default
+  trust).
+- §5.4/§5.5 named/qualified trigger keys and array instances with
+  content-derived, reorder-stable handles — `internal/config/triggers.go`.
+- §7 docs: `config.example.yaml`, README, wiki Runtimes/Packs/Workflows, and
+  the new Model-Selection / Model-Discovery pages.
+
+**Two deliberate deviations, both to preserve the degraded-boot invariant**
+
+1. `required: true` (§2.3 rung 4) errors only when discovery actually
+   *answered*. A box that cannot reach its providers has learned nothing, not
+   that a model is gone; hard-failing there would crash-loop an auto-updating
+   fleet. `CheckRequired` therefore runs from validate/dispatch rather than
+   from `config.Load`, which must stay offline.
+2. An exact single-literal pin passes through when no configured runtime could
+   enumerate. Refusing an operator's explicit model because discovery is
+   unavailable would make an offline box less capable than before fleets
+   existed. When a roster *did* answer and does not offer the model, the ladder
+   is followed normally.
+
+**Not yet landed**
+
+- §5.2 connector-owned scope, missing-connector dormancy, `required` sources.
+- §5.3 the mirrored-section pack overlay (`packs.<n>.on:`/`steps:`/`models:`).
+- §6 removing `agents:`/`AgentProfile`, and §6's migration. The chosen
+  destination for the behavior fields is a top-level `steps:` map of named
+  reusable step templates reached via the existing `extends:` — see the PR
+  description. The `model:`/`runtime:` half of that move is already on `Step`.
+
 ## Evidence (validated on the maintainer's box — do not regress to paseo-only)
 
 - claude live discovery WORKS: `GET api.anthropic.com/v1/models` with the on-box

@@ -18,6 +18,8 @@ The model
 - [[Code-Steps]]
 - [[Stores]]
 - [[Runtimes]]
+- [[Model-Selection]]
+- [[Model-Discovery]]
 - [[Agents]]
 - [[Grouping]]
 - [[Memory]]

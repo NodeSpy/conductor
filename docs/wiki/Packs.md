@@ -17,6 +17,33 @@ cleanly updatable.**
 
 ## The `packs:` block
 
+### The key is the reference
+
+You do not normally write a source at all. A `packs:` **key is its own `use:`
+reference**: a bare name resolves to the official pack repo
+(`github.com/NodeSpy/conductor-packs`), which is trusted by default.
+
+```yaml
+packs:
+  pr-review-team: {}                          # official, by name
+  house-style: { use: ./packs/house-style }   # a local folder
+  kit:         { use: acme/conductor-packs/kit@^1.2 }   # an explicit repo
+```
+
+`use:` follows the same resolution as a connector's or runtime's — see
+[[Plugins]] — with one difference: packs are config rather than binaries, so a
+bare name lands in the packs repo, not the plugin repo.
+
+The implication applies to the top-level `packs:` block only. A **dependency's**
+source comes from its parent's `requires.packs.<alias>.source`; only if that is
+absent too does the alias imply a reference.
+
+`source:` (below) is the older, longer spelling. It still works and still wins
+when both are set, because it can express go-getter forms `use:` cannot
+(`git::ssh://…`).
+
+### The full surface
+
 ```yaml
 packs:
   review:                                      # instance name == the namespace

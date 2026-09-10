@@ -20,8 +20,10 @@ connectors:
   gh:        { type: github, app: { … }, me: { logins: [your-login] }, repos: ["your-org/*"] }
   slack-ops: { type: slack, app_token: ${SLACK_APP_TOKEN}, bot_token: ${SLACK_BOT_TOKEN} }
 
-runtimes:
-  paseo: { type: paseo, default: true }
+runtimes: paseo                      # the name implies use: — scalar, list, or map
+
+models:
+  fixer: ["claude-opus-*", "gpt-5.6-*"]   # a FLEET: what's acceptable, best-first
 
 agents:
   fixer: { provider: claude, workspace: worktree, archive_when_done: true }
@@ -29,7 +31,7 @@ agents:
 triggers:
   - on: gh.merge_conflict
     steps:
-      - { id: fix, type: agent, agent: fixer,
+      - { id: fix, type: agent, agent: fixer, model: fixer,
           prompt: "Resolve the conflict on {{.repo}}#{{.pr}} against {{.base}}." }
     hooks:
       - { at: start, uses: slack-ops.post, options: { text: "conflict on {{.repo}}#{{.pr}} — on it" } }
@@ -192,7 +194,7 @@ The **[wiki](https://github.com/NodeSpy/conductor/wiki)** is the complete refere
 
 - **Start here** — [Home](https://github.com/NodeSpy/conductor/wiki) · [Quickstart](https://github.com/NodeSpy/conductor/wiki/Quickstart) · [Installation](https://github.com/NodeSpy/conductor/wiki/Installation) · [Configuration](https://github.com/NodeSpy/conductor/wiki/Configuration) · [Commands](https://github.com/NodeSpy/conductor/wiki/Commands)
 - **The model** — [Connectors](https://github.com/NodeSpy/conductor/wiki/Connectors) · [Verbs](https://github.com/NodeSpy/conductor/wiki/Verbs) · [Workflows](https://github.com/NodeSpy/conductor/wiki/Workflows) · [Code Steps](https://github.com/NodeSpy/conductor/wiki/Code-Steps) · [Hosts](https://github.com/NodeSpy/conductor/wiki/Hosts) · [Grouping](https://github.com/NodeSpy/conductor/wiki/Grouping) · [Policy](https://github.com/NodeSpy/conductor/wiki/Policy)
-- **Agents** — [Runtimes](https://github.com/NodeSpy/conductor/wiki/Runtimes) · [Agents](https://github.com/NodeSpy/conductor/wiki/Agents) · [Teams](https://github.com/NodeSpy/conductor/wiki/Teams) · [Hand-offs](https://github.com/NodeSpy/conductor/wiki/Hand-offs) · [Agent Skill](https://github.com/NodeSpy/conductor/wiki/Agent-Skill)
+- **Agents** — [Runtimes](https://github.com/NodeSpy/conductor/wiki/Runtimes) · [Model Selection](https://github.com/NodeSpy/conductor/wiki/Model-Selection) · [Model Discovery](https://github.com/NodeSpy/conductor/wiki/Model-Discovery) · [Agents](https://github.com/NodeSpy/conductor/wiki/Agents) · [Teams](https://github.com/NodeSpy/conductor/wiki/Teams) · [Hand-offs](https://github.com/NodeSpy/conductor/wiki/Hand-offs) · [Agent Skill](https://github.com/NodeSpy/conductor/wiki/Agent-Skill)
 - **Governance** — [Gates](https://github.com/NodeSpy/conductor/wiki/Gates) · [Cost Accounting](https://github.com/NodeSpy/conductor/wiki/Cost-Accounting) · [Isolation](https://github.com/NodeSpy/conductor/wiki/Isolation) · [Secrets](https://github.com/NodeSpy/conductor/wiki/Secrets) · [Outcomes](https://github.com/NodeSpy/conductor/wiki/Outcomes)
 - **Data** — [Memory](https://github.com/NodeSpy/conductor/wiki/Memory) · [Binary Data](https://github.com/NodeSpy/conductor/wiki/Binary-Data)
 - **Operating** — [Runs](https://github.com/NodeSpy/conductor/wiki/Runs) · [Callable Service](https://github.com/NodeSpy/conductor/wiki/Callable-Service) · [Migration](https://github.com/NodeSpy/conductor/wiki/Migration)

@@ -23,6 +23,54 @@ triggers:
       - { at: fail,  uses: slack-ops.post, options: { text: "failed: {{.error}}" } }
 ```
 
+## Named and qualified triggers
+
+`triggers:` also takes a **map**, where the key is each trigger's stable
+address. A key that reads as `<source>.<event>` **implies `on:`**, which
+disambiguates across sources for free:
+
+```yaml
+triggers:
+  github.pull_request:  { steps: [ { id: review, type: agent, prompt: "…" } ] }
+  gitlab.merge_request: { steps: [ { id: review, type: agent, prompt: "…" } ] }
+  pagerduty.incident:   { steps: [ { id: triage, type: agent, prompt: "…" } ] }
+```
+
+A bare event name is not an identity — two connectors can publish the same
+event, and a pack needs each of its triggers addressable so you can override
+exactly one. The key is that address.
+
+For **two triggers on the same `source.event`**, give them free names and set
+`on:` explicitly:
+
+```yaml
+triggers:
+  review:    { on: github.pull_request, steps: [ … ] }
+  autolabel: { on: github.pull_request, steps: [ … ] }
+```
+
+A free-named key with no `on:` is an error: only a `source.event` key implies
+the event.
+
+### Instances: array instead of object
+
+A trigger's value is polymorphic. An **object** is one trigger; an **array** is
+several **instances** that each fire independently:
+
+```yaml
+triggers:
+  review:
+    - { on: github.pull_request, filters: { repos: [me/app], labels: [ready] } }
+    - { on: github.pull_request, filters: { repos: [me/api] } }
+```
+
+There is no `instances:` keyword and no per-instance name. An instance's
+identity is its **content** — its `repos:`/`filters:` are what make it distinct
+— so its internal handle is derived from that content. Reordering the array, or
+reordering keys within an entry, does not move an instance's dedup or attempt
+state. Two byte-identical entries are an error rather than one trigger silently
+written twice.
+
 ## Step forms
 
 A step is one of six forms (all share `id` and `if`):
@@ -32,6 +80,9 @@ A step is one of six forms (all share `id` and `if`):
   `rerequest_review`, `workdir`, `env`, and an optional `gate:` on the
   agent's proposed change ([[Gates]]). A foreground agent step with a local
   worktree also outputs its proposed `diff` and `workdir` ([[Runs]]).
+  It may also carry `model:` (a fleet, a model id, a wildcard, or an inline
+  `{ any, required }`) and `runtime:` (a `runtimes:` entry to pin it to) —
+  see [Model selection](Model-Selection.md).
 - `type: command` — a host command (POSIX sh semantics; argv list). With
   `host:` it runs over SSH and outputs `{stdout, stderr, exit_code}`.
 - `run:` — an inline code step ([[Code-Steps]]).
