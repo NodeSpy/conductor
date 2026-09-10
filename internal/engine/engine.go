@@ -780,7 +780,10 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if act.Backend != "" {
 		profile.Runtime = act.Backend
 	}
-	model := e.resolveModel(ctx, profile)
+	model, modelRuntime := e.resolveModel(ctx, profile)
+	if modelRuntime != "" && profile.Runtime == "" {
+		profile.Runtime = modelRuntime
+	}
 	if act.Type == "agent" {
 		if act.Prompt != "" {
 			act.Prompt += dispatch.WriteWrapperGuidance

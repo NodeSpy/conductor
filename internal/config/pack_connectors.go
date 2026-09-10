@@ -194,6 +194,12 @@ func (st *packInstantiation) checkConnectorVersions(ns string, reqs ConnectorReq
 			continue
 		}
 		if err := checkConductorConstraint(constraint, have); err != nil {
+			if Ungatable(err) {
+				// Same posture as an unknown version: surface it, do not
+				// crash-loop a box over a version string we cannot read.
+				st.warnf("pack %q: requires connector %q %s, but %v — %q is not gated", ns, name, constraint, err, bound)
+				continue
+			}
 			return fmt.Errorf("pack %q: requires connector %q %s, but %q is at %s — upgrade it, or use a pack release compatible with what you have",
 				ns, name, constraint, bound, have)
 		}

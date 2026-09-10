@@ -628,6 +628,24 @@ func (t TriggerSpec) Event() string {
 // manual-trigger naming rules. Load runs it before validation, so the rest of
 // the system only ever sees scalar-On triggers.
 func (c *Config) NormalizeTriggers() error {
+	// A name is IDENTITY now: the scope every step of the trigger hangs
+	// its memory, sessions, and track record off, and the handle both
+	// `extends:` and a step reference resolve. Two triggers sharing one
+	// collapse into a single identity, silently — so check before the
+	// expansion, which legitimately gives every variant of one fan-in
+	// trigger the author's single name.
+	nameAt := map[string]int{}
+	for i, t := range c.Triggers {
+		n := strings.TrimSpace(t.Name)
+		if n == "" {
+			continue
+		}
+		if j, dup := nameAt[n]; dup {
+			return fmt.Errorf("config: triggers[%d] and triggers[%d]: trigger name %q is not unique — a name is the identity its steps' memory, sessions, and outcomes key off, so two triggers cannot share one", j, i, n)
+		}
+		nameAt[n] = i
+	}
+
 	var out []TriggerSpec
 	for i, t := range c.Triggers {
 		if len(t.OnSources) == 0 {
@@ -679,19 +697,12 @@ func (c *Config) NormalizeTriggers() error {
 	}
 	c.Triggers = out
 
-	// A trigger reachable by `conductor run` needs a unique name to run it by.
-	manualAt := map[string]int{}
+	// A trigger reachable by `conductor run` additionally REQUIRES a name
+	// (uniqueness is already settled above).
 	for i, t := range c.Triggers {
-		if !t.Manual() {
-			continue
-		}
-		if t.Name == "" {
+		if t.Manual() && t.Name == "" {
 			return fmt.Errorf("config: triggers[%d]: a trigger reachable by `conductor run` (on: manual) requires a name:", i)
 		}
-		if j, dup := manualAt[t.Name]; dup {
-			return fmt.Errorf("config: triggers[%d] and triggers[%d]: manual trigger name %q is not unique — `conductor run` resolves triggers by name", j, i, t.Name)
-		}
-		manualAt[t.Name] = i
 	}
 	return nil
 }

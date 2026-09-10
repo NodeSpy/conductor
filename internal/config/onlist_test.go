@@ -174,7 +174,7 @@ triggers:
 		{"manual names must be unique", `
 triggers:
   - { name: deploy, on: manual, steps: [ { uses: svc.post } ] }
-  - { name: deploy, on: manual, steps: [ { uses: svc.post } ] }`, `manual trigger name "deploy" is not unique`},
+  - { name: deploy, on: manual, steps: [ { uses: svc.post } ] }`, `trigger name "deploy" is not unique`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

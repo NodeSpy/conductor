@@ -65,10 +65,13 @@ type AgentServices struct {
 	// engine supplies the run's opaque context keys; see
 	// docs/design/agents-removal.md §2.
 	Memory func(identity string, s config.Step, t core.Trigger, workflow string) string
-	// ResolveModel picks the model this step runs (the design §2.3 ladder).
+	// ResolveModel picks the model this step runs (the design §2.3 ladder)
+	// AND the runtime that offers it. A fleet can span runtimes, so the two
+	// are one decision: the second result is the runtime to dispatch on,
+	// or "" when the step already pinned one and the caller's stands.
 	// "" is a BARE LAUNCH — dispatch with no --model. nil = no model layer
 	// (tests): every dispatch bare-launches.
-	ResolveModel func(ctx context.Context, s config.Step) string
+	ResolveModel func(ctx context.Context, s config.Step) (model, runtime string)
 	// Revise delivers a supervise-loop follow-up to the authoring agent's
 	// live session (§10) and returns the captured reply. ok=false when the
 	// agent has no bound session (or the runtime can't capture follow-up
@@ -620,7 +623,7 @@ func (r *Runner) execStepWithFlow(ctx context.Context, t core.Trigger, step conf
 	// Parallel branches: run each branch's steps concurrently on a copy of
 	// the scope, then join and merge their step outputs back.
 	if step.Parallel != nil && len(step.Parallel.Branches) > 0 {
-		return r.execBranches(ctx, t, step, id, data, shadow)
+		return r.execBranches(ctx, t, step, id, slot, data, shadow)
 	}
 
 	if step.ForEach != "" {
@@ -631,7 +634,7 @@ func (r *Runner) execStepWithFlow(ctx context.Context, t core.Trigger, step conf
 }
 
 // execBranches runs `parallel: [[…],[…]]` branch lists concurrently.
-func (r *Runner) execBranches(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, error) {
+func (r *Runner) execBranches(ctx context.Context, t core.Trigger, step config.Step, id, slot string, data map[string]any, shadow bool) (map[string]any, error) {
 	// Same fan-out cap as for_each (#36 §146 F3): bound the number of branches
 	// a single parallel step spawns concurrently.
 	if r.Cfg != nil {
@@ -652,7 +655,12 @@ func (r *Runner) execBranches(ctx context.Context, t core.Trigger, step config.S
 			local := cloneData(data)
 			local["steps"] = map[string]any{}
 			var localRun store.WorkflowRun
-			err := r.runSteps(ctx, &localRun, t, branch, local, shadow, false)
+			// Each branch is its own identity scope — the same rule
+			// WalkSteps applies, so a branch step's session binds under the
+			// key the sweep will look for. config.BranchScope is the one
+			// place that rule lives.
+			bctx := withIdentityScope(ctx, config.BranchScope(identityScopeFrom(ctx), slot, bi))
+			err := r.runSteps(bctx, &localRun, t, branch, local, shadow, false)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -1313,7 +1321,14 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// The RESOLVED model — "" is a bare launch, a first-class outcome.
 	model := ""
 	if r.Agents.ResolveModel != nil {
-		model = r.Agents.ResolveModel(ctx, step)
+		var rt string
+		model, rt = r.Agents.ResolveModel(ctx, step)
+		if rt != "" && step.Runtime == "" {
+			// The fleet's winning model lives on that runtime and the step
+			// named none — dispatch where the model actually is, not on
+			// whichever runtime happens to be the default.
+			step.Runtime = rt
+		}
 	}
 	// Crash resume: a persisted plan checkpoint for this run+step means the
 	// agent already ran and its plan was interrupted mid-way — resume the

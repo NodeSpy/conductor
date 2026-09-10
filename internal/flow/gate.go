@@ -262,7 +262,12 @@ func (r *Runner) followUp(ctx context.Context, t core.Trigger, step config.Step,
 	runtimeName := r.runtimeOf(step)
 	model := ""
 	if r.Agents.ResolveModel != nil {
-		model = r.Agents.ResolveModel(ctx, step)
+		var rt string
+		model, rt = r.Agents.ResolveModel(ctx, step)
+		if rt != "" && step.Runtime == "" {
+			step.Runtime = rt
+			runtimeName = rt
+		}
 	}
 	res, berr := r.checkBudget(ctx, runtimeName, cost.Estimate(model, prompt, ""))
 	if berr != nil {

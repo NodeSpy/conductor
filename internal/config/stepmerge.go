@@ -223,6 +223,13 @@ func mergeValues(key string, base, child *yaml.Node) *yaml.Node {
 		return appendSequences(guidanceParts(base), guidanceParts(child))
 	}
 	switch {
+	case isArgvField(key):
+		// An argv is an ORDERED INVOCATION, not a set of permissions.
+		// Appending `["make","test"]` to `["go","build"]` produces
+		// `go build make test`, which is not a command anyone wrote. The
+		// sibling section extends: replaces the same field, so this also
+		// keeps the two spellings of the word agreeing.
+		return child
 	case base.Kind == yaml.SequenceNode && child.Kind == yaml.SequenceNode:
 		return appendSequences(base, child)
 	case base.Kind == yaml.MappingNode && child.Kind == yaml.MappingNode:
@@ -230,6 +237,15 @@ func mergeValues(key string, base, child *yaml.Node) *yaml.Node {
 	default:
 		return child
 	}
+}
+
+// isArgvField reports a list field whose items are a single ordered
+// invocation rather than an accumulating allow-list. Appending is right for
+// `network:` and `skill.verbs:` — more entries mean more reach, and a base
+// that granted something should keep granting it. It is wrong for argv,
+// where more entries mean a different command.
+func isArgvField(key string) bool {
+	return key == "command" || key == "args"
 }
 
 // appendSequences concatenates two sequences, base items first.

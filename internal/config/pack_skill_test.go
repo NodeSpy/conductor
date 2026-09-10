@@ -16,8 +16,10 @@ func TestGrantConnector(t *testing.T) {
 		"github.*":             "github",
 		"*":                    "", // the full wildcard names no connector
 		"":                     "",
-		"*.read":               "", // a globbed connector half can reach anything
-		"gh?.read":             "",
+		// A globbed connector half names no ONE connector — but see
+		// splitGrant/TestBoundGrant: the verb suffix is not lost with it.
+		"*.read":   "",
+		"gh?.read": "",
 	}
 	for in, want := range tests {
 		if got := grantConnector(in); got != want {
@@ -55,8 +57,21 @@ func TestBoundGrant(t *testing.T) {
 			wantKept: []string{"github.*"}, wantDroppedAny: true,
 		},
 		{
-			name:     "a globbed connector half is bounded like a wildcard",
-			patterns: []string{"*.read"}, declared: []string{"github"},
+			// A globbed connector half is bounded to the declared set, but
+			// the VERB restriction the author wrote survives. Expanding
+			// `*.read` to `github.*` handed a read-only grant full write.
+			name:     "a globbed connector half keeps its verb suffix",
+			patterns: []string{"*.read"}, declared: []string{"github", "sentry"},
+			wantKept: []string{"github.read", "sentry.read"},
+		},
+		{
+			name:     "the bare wildcard still opens every verb",
+			patterns: []string{"*"}, declared: []string{"github"},
+			wantKept: []string{"github.*"},
+		},
+		{
+			name:     "`*.*` is the bare wildcard spelled long",
+			patterns: []string{"*.*"}, declared: []string{"github"},
 			wantKept: []string{"github.*"},
 		},
 		{

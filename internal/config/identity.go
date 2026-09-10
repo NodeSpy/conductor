@@ -141,6 +141,23 @@ func StepIdentities(scope IdentityScope, steps []Step) []string {
 	return out
 }
 
+// BranchScope is the identity scope INSIDE one branch of a `parallel:`
+// step. Both the parent step's slot and the branch index fold in, because
+// neither alone is enough: without the branch index, same-position steps
+// in different branches collide; without the parent slot, branch 0 of two
+// different parallel steps in one workflow collide.
+//
+// Every path that computes an identity has to use this — the config walk
+// and the runner both — or a branch step binds a session under one key and
+// has it swept under another.
+func BranchScope(parent IdentityScope, parentSlot string, branch int) IdentityScope {
+	name := parent.Name
+	if name != "" {
+		name += "/"
+	}
+	return IdentityScope{Kind: parent.Kind, Name: fmt.Sprintf("%s%s[%d]", name, parentSlot, branch)}
+}
+
 // ScopeForTrigger is a trigger's identity scope: its Name when it has one
 // (the map form always sets it), else its `on:` plus position — so a
 // list-form trigger with no name still gets a stable prefix.

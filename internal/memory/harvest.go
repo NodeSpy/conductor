@@ -48,6 +48,11 @@ func (m *Manager) HarvestOutput(output string, src Source) ([]Entry, error) {
 		if gerr := m.checkGuard(n.Text); gerr != nil {
 			return nil, gerr
 		}
+		// The output contract is agent-authored, so the shared scope is
+		// not the agent's to write into (see CheckAgentScope).
+		if serr := CheckAgentScope(n.Scope); serr != nil {
+			return nil, serr
+		}
 	}
 	var out []Entry
 	for _, n := range notes {

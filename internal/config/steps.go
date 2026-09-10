@@ -44,8 +44,12 @@ func walkStepList(scope IdentityScope, steps []Step, fn func(IdentityScope, int,
 func walkStep(scope IdentityScope, slot int, s *Step, fn func(IdentityScope, int, *Step)) {
 	fn(scope, slot, s)
 	if s.Parallel != nil {
+		// Each branch is its own scope. Walking them all with the parent's
+		// scope and a slot restarting at 0 gave branch-0 steps in different
+		// branches ONE identity — one session pool, one track record, for
+		// work that is deliberately concurrent and unrelated.
 		for bi := range s.Parallel.Branches {
-			walkStepList(scope, s.Parallel.Branches[bi], fn)
+			walkStepList(BranchScope(scope, s.slotLabel(slot), bi), s.Parallel.Branches[bi], fn)
 		}
 	}
 	if s.Compensate != nil {

@@ -23,9 +23,15 @@ func checkConductorConstraint(constraint, version string) error {
 	if version == "" || version == "dev" {
 		return nil // unversioned local/dev build: don't gate
 	}
-	have, err := parseSemver(version)
+	have, err := parseSemver(trimVersionPrefix(version))
 	if err != nil {
-		return nil // unparseable running version: don't gate on it
+		// Deliberately NOT silent. Returning nil here meant an
+		// incompatible version loaded clean with no signal at all — which
+		// is worse than either gating or complaining. "" and dev builds
+		// are handled above; anything else that reaches here is a version
+		// string we were handed and cannot judge, and the operator should
+		// know that the constraint they wrote is not being enforced.
+		return errUngatableVersion{version: version, constraint: constraint}
 	}
 	for _, part := range strings.Fields(constraint) {
 		if err := checkOneConstraint(part, have, version, constraint); err != nil {
@@ -45,6 +51,34 @@ func checkOneConstraint(part string, have semver, version, full string) error {
 		return fmt.Errorf("requires conductor %s but this daemon is %s", full, version)
 	}
 	return nil
+}
+
+// errUngatableVersion reports a version string the resolver could not
+// parse, so a caller can decide between failing and warning. A pack load
+// warns (degraded-boot: an unjudgeable version must not crash-loop a box);
+// the message names the string so it can be fixed.
+type errUngatableVersion struct{ version, constraint string }
+
+func (e errUngatableVersion) Error() string {
+	return fmt.Sprintf("version %q cannot be parsed as semver, so the constraint %q is NOT enforced", e.version, e.constraint)
+}
+
+// Ungatable reports whether an error is the unparseable-version case.
+func Ungatable(err error) bool {
+	_, ok := err.(errUngatableVersion)
+	return ok
+}
+
+// trimVersionPrefix drops a monorepo tag's component prefix
+// ("jira-connector/v1.0.0" -> "v1.0.0"). A plugin released from a
+// subdirectory keeps that prefix in its tag, and without this the whole
+// version reads as unparseable — which is how an incompatible connector
+// slipped past its constraint entirely.
+func trimVersionPrefix(v string) string {
+	if i := strings.LastIndex(v, "/"); i >= 0 {
+		return v[i+1:]
+	}
+	return v
 }
 
 type semver struct{ major, minor, patch int }

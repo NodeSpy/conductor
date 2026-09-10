@@ -74,6 +74,28 @@ func NormalizeScope(scope string) string {
 	return s
 }
 
+// ErrReservedScope rejects an agent-supplied scope key that would land in
+// the shared bucket.
+var ErrReservedScope = fmt.Errorf("memory: %q is a reserved scope — it is the SHARED set, injected into every agent's prompt on this daemon. Name the thing you mean (a repo, a service, a team) so the note reaches the agents it is for", GlobalScope)
+
+// CheckAgentScope guards the scope key on an AGENT-supplied write.
+//
+// "" and "global" both normalize to the shared set, which is injected into
+// every opted-in agent's prompt regardless of repo or tenant. That is
+// correct for config- and engine-authored context, and wrong for anything
+// an agent chose: on a shared daemon it turns one repo's note into every
+// repo's context, which is a cross-tenant leak dressed up as a feature.
+//
+// Empty stays allowed — it means "the caller did not scope this", and the
+// callers here supply their own default. Only the explicit reserved token
+// is refused, so an agent has to name what it means.
+func CheckAgentScope(scope string) error {
+	if strings.EqualFold(strings.TrimSpace(scope), GlobalScope) {
+		return ErrReservedScope
+	}
+	return nil
+}
+
 // Map returns the entry as a JSON-shaped map (verb outputs, code bindings).
 func (e Entry) Map() map[string]any {
 	b, _ := json.Marshal(e)

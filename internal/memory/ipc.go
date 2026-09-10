@@ -223,6 +223,13 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 				"agent": req.Source.Step, "repo": req.Source.Repo, "error": gerr.Error()})
 			return IPCResponse{Error: gerr.Error()}
 		}
+		// This face is driven by a live agent, so the shared scope is not
+		// its to write into (see CheckAgentScope).
+		if serr := CheckAgentScope(req.Scope); serr != nil {
+			aud(map[string]any{"event": "memory_remember", "via": "tool", "outcome": "blocked",
+				"agent": req.Source.Step, "repo": req.Source.Repo, "error": serr.Error()})
+			return IPCResponse{Error: serr.Error()}
+		}
 		e, err := m.Remember(req.Text, req.Tags, req.Scope, req.Source)
 		if err != nil {
 			aud(map[string]any{"event": "memory_remember", "via": "tool", "outcome": "failed",

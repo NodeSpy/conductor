@@ -25,26 +25,39 @@ func (e *Engine) SetModelResolver(r *models.Resolver) { e.modelResolver = r }
 // `conductor validate` and boot-time CheckRequired, where an operator is
 // present; turning a transient discovery failure into a dropped trigger at
 // dispatch time would make the fleet less reliable than no fleets at all.
-func (e *Engine) resolveModel(ctx context.Context, step config.Step) string {
+// It returns the runtime alongside the model. A fleet can span runtimes —
+// "the best of these models, wherever it lives" — so the resolver's choice
+// of model and its choice of runtime are one decision. Returning only the
+// model meant a step with no pinned `runtime:` dispatched the chosen model
+// on the DEFAULT runtime, which may not offer it at all.
+//
+// The runtime is "" when the step pinned one (the caller's stays
+// authoritative) or when there was nothing to resolve.
+func (e *Engine) resolveModel(ctx context.Context, step config.Step) (model, runtime string) {
 	if e.modelResolver == nil {
 		// No model layer wired (a bare daemon, or a test). An EXACT PIN is
 		// still an operator instruction, not a preference — honor it rather
 		// than silently bare-launching something the config named. Anything
 		// needing a roster (a fleet, a wildcard) has nothing to resolve
 		// against and bare-launches.
-		return exactPin(step.Model)
+		return exactPin(step.Model), ""
 	}
 	d, err := e.modelResolver.Resolve(ctx, step.Model, step.Runtime)
 	if err != nil {
 		e.log("model resolution for step %q: %v — dispatching bare", step.Name, err)
 		e.store.Audit(map[string]any{"event": "model_unresolved",
 			"step": step.Name, "runtime": step.Runtime, "error": err.Error()})
-		return ""
+		return "", ""
 	}
 	if d.Notice != "" {
 		e.log("model: %s", d.Notice)
 	}
-	return d.Model
+	// A step that pinned a runtime keeps it — the resolver was asked to
+	// choose WITHIN that runtime, so echoing it back would be noise.
+	if step.Runtime != "" {
+		return d.Model, ""
+	}
+	return d.Model, d.Runtime
 }
 
 // stepByIdentity finds the configured step carrying an identity, plus the
@@ -69,7 +82,8 @@ func (e *Engine) stepByIdentity(ctx context.Context, identity string) (config.St
 	if !ok {
 		return config.Step{}, "", false
 	}
-	return found, e.resolveModel(ctx, found), true
+	m, _ := e.resolveModel(ctx, found)
+	return found, m, true
 }
 
 // exactPin returns the single literal model a spec names, if that is all it

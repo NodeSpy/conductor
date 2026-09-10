@@ -102,7 +102,7 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 	opt := launchOptsFor(c.iso, spec.Request)
 	id := c.recipe.tool + "-" + strconv.FormatInt(c.seq.Add(1), 10)
 	sctx, scancel := context.WithCancel(context.Background())
-	proc, err := c.launchOn(sctx, host, spec.Cwd, env, c.recipe.launch(prompt), opt)
+	proc, err := c.launchOn(sctx, host, spec.Cwd, env, c.recipe.argv(spec.Request.Model, prompt), opt)
 	if err != nil {
 		scancel()
 		return nil, fmt.Errorf("cli: launch %s: %w", c.recipe.tool, err)
@@ -271,6 +271,11 @@ type cliRecipe struct {
 	resume  func(toolSessionID, prompt string) []string
 	parseID func(output string) string
 	model   SessionModel
+	// modelArgs renders the RESOLVED model as this tool's own flag. nil
+	// means the recipe has no model flag we can speak — an operator-written
+	// `command:`, where they own the argv and conductor must not guess at
+	// a flag the binary may not accept.
+	modelArgs func(model string) []string
 }
 
 // cliRecipeFor selects a recipe from the config. An explicit `command:` yields a
@@ -300,6 +305,7 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 			launch: func(prompt string) []string {
 				return []string{"claude", "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"}
 			},
+			modelArgs: func(m string) []string { return []string{"--model", m} },
 			resume: func(id, prompt string) []string {
 				return []string{"claude", "-p", prompt, "--resume", id, "--output-format", "json", "--dangerously-skip-permissions"}
 			},
@@ -308,9 +314,10 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 		}
 	case "codex":
 		return cliRecipe{
-			tool:   "codex",
-			launch: func(prompt string) []string { return []string{"codex", "exec", prompt} },
-			model:  ModelOneshot,
+			tool:      "codex",
+			launch:    func(prompt string) []string { return []string{"codex", "exec", prompt} },
+			model:     ModelOneshot,
+			modelArgs: func(m string) []string { return []string{"--model", m} },
 		}
 	default:
 		bin := tool
@@ -323,6 +330,17 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 			model:  ModelOneshot,
 		}
 	}
+}
+
+// argv is the launch command with the RESOLVED model applied. An empty
+// model is a bare launch (pass nothing, let the tool default); a recipe
+// with no model flag leaves the argv alone rather than inventing one.
+func (r cliRecipe) argv(model, prompt string) []string {
+	base := r.launch(prompt)
+	if model == "" || r.modelArgs == nil {
+		return base
+	}
+	return append(base, r.modelArgs(model)...)
 }
 
 // parseClaudeSessionID pulls the session id out of `claude -p --output-format json`

@@ -50,51 +50,93 @@ func AutoMigrate(mainPath string, validate func() error, logf func(string, ...an
 		}
 	}
 
-	migrated := 0
-	var all []string
+	// Transform EVERY file first, then validate the tree ONCE, then commit.
+	//
+	// Validating after each individual write made the outcome depend on
+	// filename order: a file that REFERENCES an `agents:` profile sorts
+	// before the file that DEFINES it, so the mid-pass reload saw a tree
+	// that was half-migrated — an un-migrated `agents:` block against a
+	// schema that no longer has one — and aborted. The box then restored
+	// and never migrated, on every boot, forever.
+	//
+	// The fail-safe is unchanged in kind and stronger in reach: nothing is
+	// committed until the whole tree validates, and a failure restores
+	// every file, not just the one in hand.
+	type pending struct {
+		path, backup string
+		original     []byte
+		output       []byte
+		mode         os.FileMode
+		summary      []string
+	}
+	var todo []pending
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
-			return migrated, all, fmt.Errorf("read %s: %w", f, err)
+			return 0, nil, fmt.Errorf("read %s: %w", f, err)
 		}
 		res, err := TransformWith(raw, profiles)
 		if err != nil {
-			return migrated, all, fmt.Errorf("config %s needs manual migration: %w", f, err)
+			return 0, nil, fmt.Errorf("config %s needs manual migration: %w", f, err)
 		}
 		if !res.Changed {
 			continue
 		}
-		mode := fileMode(f)
-		backup := f + BackupSuffix
-		if _, err := os.Stat(backup); os.IsNotExist(err) {
-			if err := os.WriteFile(backup, raw, mode); err != nil {
-				return migrated, all, fmt.Errorf("write backup %s: %w", backup, err)
+		todo = append(todo, pending{
+			path: f, backup: f + BackupSuffix, original: raw,
+			output: res.Output, mode: fileMode(f), summary: res.Summary,
+		})
+	}
+	if len(todo) == 0 {
+		return 0, nil, nil
+	}
+
+	// Back up, then write every transformed file.
+	restoreAll := func() error {
+		var firstErr error
+		for _, p := range todo {
+			if err := os.WriteFile(p.path, p.original, p.mode); err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("restoring %s: %w", p.path, err)
+			}
+		}
+		return firstErr
+	}
+	for _, p := range todo {
+		if _, err := os.Stat(p.backup); os.IsNotExist(err) {
+			if err := os.WriteFile(p.backup, p.original, p.mode); err != nil {
+				return 0, nil, fmt.Errorf("write backup %s: %w", p.backup, err)
 			}
 			// WriteFile's mode is clamped by the umask; a secretful config
 			// must keep its exact permissions.
-			_ = os.Chmod(backup, mode)
+			_ = os.Chmod(p.backup, p.mode)
 		}
-		tmp := f + ".tmp"
-		if err := os.WriteFile(tmp, res.Output, mode); err != nil {
-			return migrated, all, err
+		tmp := p.path + ".tmp"
+		if err := os.WriteFile(tmp, p.output, p.mode); err != nil {
+			_ = restoreAll()
+			return 0, nil, err
 		}
-		_ = os.Chmod(tmp, mode)
-		if err := os.Rename(tmp, f); err != nil {
-			return migrated, all, err
+		_ = os.Chmod(tmp, p.mode)
+		if err := os.Rename(tmp, p.path); err != nil {
+			_ = restoreAll()
+			return 0, nil, err
 		}
-		if err := validate(); err != nil {
-			// Restore the original and stop: the box keeps running on the
-			// state that was valid a moment ago.
-			if werr := os.WriteFile(f, raw, fileMode(f)); werr != nil {
-				return migrated, all, fmt.Errorf("validation failed (%v) AND restoring %s failed (%v) — restore from %s by hand", err, f, werr, backup)
-			}
-			return migrated, all, fmt.Errorf("config %s needs manual migration: transformed config did not validate: %w (original restored; backup at %s)", f, err, backup)
+	}
+
+	// One validation, of the whole migrated tree.
+	if err := validate(); err != nil {
+		if werr := restoreAll(); werr != nil {
+			return 0, nil, fmt.Errorf("validation failed (%v) AND restoring failed (%v) — restore from the %s files by hand", err, werr, BackupSuffix)
 		}
-		migrated++
-		all = append(all, fmt.Sprintf("migrated %s (backup: %s)", f, backup))
-		all = append(all, res.Summary...)
+		return 0, nil, fmt.Errorf("config needs manual migration: the transformed tree did not validate: %w (originals restored; backups alongside as %s)", err, BackupSuffix)
+	}
+
+	migrated := len(todo)
+	var all []string
+	for _, p := range todo {
+		all = append(all, fmt.Sprintf("migrated %s (backup: %s)", p.path, p.backup))
+		all = append(all, p.summary...)
 		if logf != nil {
-			logf("config migrate: %s → connectors schema (backup %s)", f, backup)
+			logf("config migrate: %s → connectors schema (backup %s)", p.path, p.backup)
 		}
 	}
 	return migrated, all, nil

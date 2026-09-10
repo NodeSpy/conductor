@@ -70,7 +70,13 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		}
 		model := ""
 		if s.Type == "agent" {
-			model = e.resolveModel(ctx, profile)
+			var rt string
+			model, rt = e.resolveModel(ctx, profile)
+			if rt != "" && profile.Runtime == "" {
+				// The fleet's winning model lives on that runtime; the
+				// step named none, so dispatch where the model actually is.
+				profile.Runtime = rt
+			}
 			if s.Background {
 				// A background step hands off a live agent for you to drive and
 				// close yourself; it sits idle *because* it's waiting for you, so

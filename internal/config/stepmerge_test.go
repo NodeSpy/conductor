@@ -394,3 +394,51 @@ packs:
 		t.Fatalf("merged grant should still be rebound and bounded, got %v", got)
 	}
 }
+
+// H9: a list is not always an allow-list. `command:`/`args:` are one
+// ordered invocation, so appending produces a command nobody wrote — and
+// the sibling section `extends:` replaces the same field, so appending
+// here made one word mean two things.
+func TestExtendsReplacesArgvButAppendsAllowLists(t *testing.T) {
+	s := stepOf(t, `
+x-t:
+  base: &base
+    type: command
+    command: [go, build, ./...]
+    args: [--base]
+    skill: { verbs: [github.comment] }
+workflows:
+  w:
+    steps:
+      - extends: *base
+        id: a
+        command: [make, test]
+        args: [--mine]
+        skill: { verbs: [linear.create] }
+`)
+	if got := s.Command; !reflect.DeepEqual(got, []string{"make", "test"}) {
+		t.Errorf("command: is an invocation — the child's argv must REPLACE, got %v", got)
+	}
+	if got := s.Args; !reflect.DeepEqual(got, []string{"--mine"}) {
+		t.Errorf("args: must replace too, got %v", got)
+	}
+	if got := s.Skill.Verbs; !reflect.DeepEqual(got, []string{"github.comment", "linear.create"}) {
+		t.Errorf("skill.verbs is an allow-list and still appends, got %v", got)
+	}
+}
+
+// A base's argv still comes through when the child sets none.
+func TestExtendsInheritsArgvWhenChildSetsNone(t *testing.T) {
+	s := stepOf(t, `
+x-t:
+  base: &base { type: command, command: [go, build] }
+workflows:
+  w:
+    steps:
+      - extends: *base
+        id: a
+`)
+	if got := s.Command; !reflect.DeepEqual(got, []string{"go", "build"}) {
+		t.Fatalf("an unset argv still inherits, got %v", got)
+	}
+}

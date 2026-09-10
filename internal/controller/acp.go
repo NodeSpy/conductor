@@ -157,6 +157,10 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	res, err := client.NewSession(sctx, acp.NewSessionParams{
 		Cwd:        spec.Cwd,
 		McpServers: c.memoryServers(spec),
+		// The RESOLVED model. Empty is a bare launch — the field is
+		// omitted and the agent picks its own. Dropping it here meant an
+		// exact `model:` pin silently ran whatever the tool defaulted to.
+		Model: spec.Request.Model,
 	})
 	if err != nil {
 		cleanup()
