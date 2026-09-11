@@ -98,22 +98,60 @@ This is where the design has to be careful, because **a scope allowlist is a
 security check that happens to be a template**. Three rules follow, and they
 are non-negotiable:
 
-### The render context is trusted facts only
+### The render context is a CLOSED SET of platform-assigned facts
 
-`scopeRenderData` builds it from the dispatch: the target, the event, and the
-workflow's `inputs` (operator-authored plumbing for this run). What it
-deliberately excludes:
+`scopeFacts` is an allowlist, and that is the point. A scope entry may
+interpolate exactly these:
+
+| fact | why it is safe |
+|---|---|
+| `number` | the issue/PR number the platform allocated |
+| `owner` | the owner of the repo the event fired for |
+| `name` | that repo's name |
+| `repo` | `owner/name` |
+| `kind` | the trigger kind conductor itself resolved |
+
+The test for membership is one question: **can the author of a pull request
+choose this value?** If yes, it is not in the set.
+
+This started as a denylist — everything in the dispatch minus a few
+secret-bearing keys — and that was wrong in a way worth recording. `title`,
+`head_ref`, `comment_body`, `author` and `labels` are free text copied
+verbatim out of the webhook by whoever opened the PR. An operator writing the
+natural extension of the idioms above:
+
+```yaml
+allow_scopes:
+  channel: ["{{.head_ref}}"]      # FORGEABLE — and it was, until round 6
+```
+
+could be defeated by naming a branch after the channel the attacker wanted. A
+denylist also fails in the wrong direction over time: the next enriched
+context fact a connector publishes would have been silently interpolatable,
+and nobody reviews a new field for that.
+
+So the map is built from the trigger's structural fields directly, never from
+the dispatch scope minus deletions — a fact is absent by CONSTRUCTION.
+Everything else renders empty and, fail-closed, matches nothing. Also absent,
+each for its own reason:
 
 - **the option value being checked.** It is the thing matched, never a render
   source. If the agent's own value could influence what the allowlist renders
   to, the check would be checking the agent's claim against itself.
 - **previous-step outputs.** An agent step's output is agent-authored text; an
   allowlist that could be steered by it is not an allowlist.
-- **secret material.** The `secrets`/`vaults` scopes are absent (baseData is
-  built with no secrets map), credential-bearing trigger-context keys are
-  dropped by name, and the whole map goes through the secret redactor — so a
-  token that reached the trigger context under a name nobody thought to list
-  comes out as its redaction marker rather than its value.
+- **`inputs`.** A workflow input can carry event text verbatim, so it inherits
+  whatever forgeability its source had.
+- **secret material.** Nothing in the closed set should ever hold any — which
+  is exactly why the redactor pass is cheap to keep as a belt.
+
+### A rendered value matches LITERALLY
+
+The operator's glob intent lives in the static pattern they wrote, not in a
+fact the event supplied. So an entry that contained `{{ }}` matches its
+rendered result by equality: a value that renders to `*`, or to something
+carrying `?`/`[`, cannot widen the dimension it was meant to narrow. A fully
+static entry (`acme/*`) keeps its glob behavior.
 
 ### The function set is restricted
 

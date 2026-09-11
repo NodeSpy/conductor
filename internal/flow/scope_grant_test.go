@@ -198,11 +198,11 @@ policy:
 	pol := r.planPolicy()
 	t9 := newTrigger("ping", nil)
 	if err := r.checkVerbResources(pol, t9, "slack.post",
-		map[string]any{"channel": "#code-reviews", "text": "x"}, nil, nil); err != nil {
+		map[string]any{"channel": "#code-reviews", "text": "x"}, nil); err != nil {
 		t.Fatalf("allow_scopes.channel must admit the channel it names: %v", err)
 	}
 	err := r.checkVerbResources(pol, t9, "slack.post",
-		map[string]any{"channel": "#exec-private", "text": "x"}, nil, nil)
+		map[string]any{"channel": "#exec-private", "text": "x"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "allow_scopes.channel") {
 		t.Fatalf("an unlisted channel must be refused on the plan surface, got %v", err)
 	}
@@ -249,8 +249,8 @@ policy:
 		{map[string]any{"store": "other"}, true, "not listed"},
 	}
 	for _, c := range cases {
-		lerr := legacy.checkVerbResources(legacy.planPolicy(), trig, "svc.post", c.opts, nil, nil)
-		merr := modern.checkVerbResources(modern.planPolicy(), trig, "svc.post", c.opts, nil, nil)
+		lerr := legacy.checkVerbResources(legacy.planPolicy(), trig, "svc.post", c.opts, nil)
+		merr := modern.checkVerbResources(modern.planPolicy(), trig, "svc.post", c.opts, nil)
 		if (lerr != nil) != c.refused {
 			t.Errorf("legacy form: %v refused=%v, want %v (%s): %v", c.opts, lerr != nil, c.refused, c.why, lerr)
 		}
@@ -272,7 +272,7 @@ policy:
 `)
 	for _, repo := range []string{"legacy/a", "modern/b"} {
 		if err := both.checkVerbResources(both.planPolicy(), trig, "svc.post",
-			map[string]any{"repo": repo}, nil, nil); err != nil {
+			map[string]any{"repo": repo}, nil); err != nil {
 			t.Errorf("both spellings must apply together, %s was refused: %v", repo, err)
 		}
 	}
@@ -473,7 +473,7 @@ policy:
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// PLAN surface, runtime belt.
-			planErr := r.checkVerbResources(pol, trig, "svc.charge", tc.opts, nil, nil)
+			planErr := r.checkVerbResources(pol, trig, "svc.charge", tc.opts, nil)
 			if got := scopeRefused(planErr); got != tc.refused {
 				t.Errorf("PLAN surface: refused=%v want %v (err=%v)", got, tc.refused, planErr)
 			}

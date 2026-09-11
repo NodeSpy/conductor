@@ -360,8 +360,12 @@ hosts:
 #       path:    [ "/srv/artifacts/*" ]    #    allowed. An entry may be parameterized: ${settings.X}
 #                                          #    resolves at LOAD; an entry with {{ }} renders PER
 #                                          #    DISPATCH from that event's facts, e.g.
-#                                          #    repo: [ "{{.owner}}/docs" ] — restricted funcs, no
-#                                          #    secrets, no agent input, fail-closed.
+#                                          #    repo: [ "{{.owner}}/docs" ]. The interpolatable
+#                                          #    facts are a CLOSED SET — number, owner, name, repo,
+#                                          #    kind — because those are the ones a PR author
+#                                          #    cannot choose. title/head_ref/author/labels are
+#                                          #    NOT available (they would be forgeable); a rendered
+#                                          #    value matches literally, never as a glob.
 #     # allow_secrets / allow_stores / allow_targets are the legacy spellings of
 #     # allow_scopes.secret / .store / .repo — still supported, still unioned in.
 #     host: sandbox                      # a hosts: entry

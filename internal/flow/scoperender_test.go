@@ -55,10 +55,10 @@ policy:
 `)
 	trig := core.Trigger{Kind: "ping", Target: core.Target{Repo: "acme/app", Owner: "acme"}}
 	pol := r.planPolicy()
-	if err := r.checkVerbResources(pol, trig, "svc.post", map[string]any{"repo": "acme/docs"}, nil, nil); err != nil {
+	if err := r.checkVerbResources(pol, trig, "svc.post", map[string]any{"repo": "acme/docs"}, nil); err != nil {
 		t.Fatalf("the rendered entry must admit acme/docs: %v", err)
 	}
-	if err := r.checkVerbResources(pol, trig, "svc.post", map[string]any{"repo": "evil/docs"}, nil, nil); !scopeRefused(err) {
+	if err := r.checkVerbResources(pol, trig, "svc.post", map[string]any{"repo": "evil/docs"}, nil); !scopeRefused(err) {
 		t.Fatalf("another owner's docs must be refused, got %v", err)
 	}
 }
@@ -122,40 +122,109 @@ func TestScopeRenderNeverSeesSecrets(t *testing.T) {
 		t.Fatalf("the denial leaked secret material: %v", err)
 	}
 
-	// And the render data itself: no `secrets` key, no credential-bearing
-	// trigger-context key, no raw tracked value anywhere.
+	// And the render data itself is the CLOSED SET and nothing else — see
+	// TestScopeRenderContextIsAClosedSet below, which enumerates it.
+}
+
+// THE CLASS-CLOSER (round-6 A). The render context started as a DENYLIST:
+// baseData minus a few secret-bearing keys, everything else passed through.
+// That let PR-AUTHOR-CONTROLLED free text — head_ref, title, comment_body,
+// author, labels, copied verbatim out of the webhook — into a security
+// check's template, so `channel: ["{{.head_ref}}"]` could be FORGED by naming
+// a branch after the channel you wanted. It also meant the NEXT enriched
+// context fact a connector adds would be silently interpolatable.
+//
+// It is an allowlist now, and this enumerates it: exactly the platform-
+// assigned facts, nothing else, no matter what the trigger carries.
+func TestScopeRenderContextIsAClosedSet(t *testing.T) {
+	r := scopeRig(t, scopeBaseCfg)
+	r.Secrets.Track("s3kr1t-value")
+	// A trigger carrying every attacker-reachable fact conductor publishes,
+	// plus a credential and an arbitrary enriched fact.
 	trig := core.Trigger{
-		Target:  core.Target{Repo: "acme/app"},
-		Context: map[string]any{"slack_bot_token": "s3kr1t-value", "msg": "hello"},
+		Kind:  "review_requested",
+		Title: "attacker's title",
+		Target: core.Target{
+			Repo: "acme/app", Owner: "acme", Name: "app", Number: 42, PR: 42,
+			HeadSHA: "deadbeef", BaseRef: "main", HTMLURL: "https://example.com/pr/42",
+		},
+		Context: map[string]any{
+			"head_ref": "general", "author": "attacker", "comment_body": "#ops",
+			"labels": []any{"#ops"}, "title": "attacker's title",
+			"slack_bot_token":                     "s3kr1t-value",
+			"a_new_enriched_fact_nobody_reviewed": "general",
+		},
 	}
-	data := r.scopeRenderData(trig, map[string]any{
-		"inputs":  map[string]any{"org": "acme"},
-		"secrets": map[string]any{"token": "s3kr1t-value"},
-		"steps":   map[string]any{"a": map[string]any{"text": "agent output"}},
-	})
-	if _, bad := data["secrets"]; bad {
-		t.Error("the scope render context must not carry a `secrets` scope")
+	data := r.scopeRenderData(trig)
+
+	want := map[string]any{
+		"number": 42, "owner": "acme", "name": "app", "repo": "acme/app",
+		"kind": "review_requested",
 	}
-	if _, bad := data["vaults"]; bad {
-		t.Error("the scope render context must not carry a `vaults` scope")
-	}
-	if _, bad := data["slack_bot_token"]; bad {
-		t.Error("the scope render context must not carry a credential-bearing trigger-context key")
-	}
-	if _, bad := data["steps"]; bad {
-		t.Error("the scope render context must not carry previous-step outputs — an agent step's " +
-			"output is agent-authored, and an allowlist it could steer is not an allowlist")
-	}
-	if data["inputs"] == nil {
-		t.Error("the workflow's inputs SHOULD be available — they are operator-authored plumbing")
-	}
-	if data["repo"] != "acme/app" {
-		t.Errorf("the dispatch's own facts must be available, got %v", data["repo"])
-	}
-	for k, v := range data {
-		if s, ok := v.(string); ok && strings.Contains(s, "s3kr1t-value") {
-			t.Errorf("raw tracked secret survived into the render context under %q", k)
+	for k, v := range want {
+		if data[k] != v {
+			t.Errorf("safe fact %q: got %v, want %v — the facts an operator CAN key off must stay available", k, data[k], v)
 		}
+	}
+	for k := range data {
+		if _, ok := want[k]; !ok {
+			t.Errorf("key %q leaked into the scope render context. It is an ALLOWLIST: a fact "+
+				"reaches a security check's template only by being added to scopeFacts "+
+				"deliberately, with the question 'can a PR author choose this value?' answered", k)
+		}
+	}
+	// The specific forgeable ones, named, so a regression says which.
+	for _, forgeable := range []string{
+		"title", "head_ref", "author", "labels", "comment_body", "head", "base", "url",
+		"pr", "issue", "inputs", "secrets", "vaults", "slack_bot_token",
+		"a_new_enriched_fact_nobody_reviewed",
+	} {
+		if _, present := data[forgeable]; present {
+			t.Errorf("%q is interpolatable — it is author-controlled, or unreviewed, or both", forgeable)
+		}
+	}
+}
+
+// THE FORGE ATTEMPT, end to end. An operator writes the natural extension of
+// the documented idiom; an attacker names their branch after the channel they
+// want. The entry must render to nothing and admit nothing.
+func TestAuthorControlledFactsCannotForgeAnAllowlistMatch(t *testing.T) {
+	r := scopeRig(t, scopeBaseCfg)
+	for _, entry := range []string{
+		"{{.head_ref}}", "{{.title}}", "{{.comment_body}}", "{{.author}}", "{{.labels}}",
+		"#{{.head_ref}}", "{{.head_ref}}/prod",
+	} {
+		id := SkillIdentity{
+			Agent: "probe", Repo: "acme/app", Number: 42,
+			Verbs:  []string{"slack.post"},
+			Scopes: map[string]map[string][]string{"slack.post": {"channel": {entry}}},
+			// The attacker's own strings, exactly as the webhook delivered them.
+			Context: map[string]any{
+				"head_ref": "general", "title": "general", "comment_body": "general",
+				"author": "general", "labels": "general",
+			},
+		}
+		for _, guess := range []string{"general", "#general", "general/prod", ""} {
+			if guess == "" {
+				continue
+			}
+			_, err := r.RunSkillVerb(context.Background(), id, "slack.post",
+				map[string]any{"channel": guess, "text": "hi"})
+			if !scopeRefused(err) {
+				t.Errorf("entry %q + channel %q: an author-chosen fact forged an allowlist "+
+					"match — got %v", entry, guess, err)
+			}
+		}
+	}
+	// The platform-assigned facts still work, or the feature is gone.
+	ok := SkillIdentity{
+		Agent: "probe", Repo: "acme/app", Number: 42,
+		Verbs:  []string{"slack.post"},
+		Scopes: map[string]map[string][]string{"slack.post": {"channel": {"#pr-{{.number}}"}}},
+	}
+	if _, err := r.RunSkillVerb(context.Background(), ok, "slack.post",
+		map[string]any{"channel": "#pr-42", "text": "hi"}); err != nil {
+		t.Fatalf("a platform-assigned fact must still render and match: %v", err)
 	}
 }
 

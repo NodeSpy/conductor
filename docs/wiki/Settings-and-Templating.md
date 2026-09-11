@@ -85,9 +85,20 @@ On PR 42 the first grant means `#pr-42` and nothing else; on PR 99 it means
 `#pr-99`. One line, instead of one line per PR — or a wildcard you didn't want
 to write.
 
-Available facts are the dispatch's own: `repo`, `owner`, `name`, `number`,
-`pr`, `issue`, `head`, `base`, `kind`, `title`, the connector's event context,
-and a workflow's `inputs`. Entries with no `{{` are not rendered at all.
+**The available facts are a closed set**: `number`, `owner`, `name`, `repo`,
+`kind`. That is all of them, and the rule for the list is one question — *can
+the author of a pull request choose this value?*
+
+`title`, `head_ref`, `author`, `labels`, `comment_body` and the connector's
+enriched event context are therefore **not** available: they are free text the
+person who opened the PR writes, so an entry built from one could be forged by
+naming a branch (or a PR title) after the resource you wanted. `inputs` is out
+for the same reason — an input can carry event text verbatim. An entry
+referencing any of them renders empty and matches nothing.
+
+Entries with no `{{` are not rendered at all. A rendered value is matched
+**literally**: your glob intent belongs in the pattern you wrote (`acme/*`),
+not in a value the event supplied.
 
 ### What it deliberately cannot do
 

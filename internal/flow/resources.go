@@ -343,7 +343,7 @@ func (r *Runner) guardPlanResources(pol *config.AgentAuthoredPolicy, t core.Trig
 	if rp == nil {
 		return nil
 	}
-	rp.render = r.scopeRenderData(t, nil)
+	rp.render = r.scopeRenderData(t)
 	// scopedLiterals judges the literal values of one options map against the
 	// called verb's DECLARED scope options. A verb it cannot resolve is left
 	// to the runtime belt, which refuses rather than guesses.
@@ -456,14 +456,16 @@ func (r *Runner) checkVerbScopes(rp *resourcePolicy, uses string, opts map[strin
 }
 
 // checkVerbResources is the PLAN surface's entry into the shared walk: the
-// runtime belt for an agent-authored step's rendered options. stepData is the
-// step's own template scope, used ONLY to carry the workflow's inputs into a
-// templated allowlist entry (see scopeRenderData) — never to render the value
-// being checked.
-func (r *Runner) checkVerbResources(pol *config.AgentAuthoredPolicy, t core.Trigger, uses string, rendered map[string]any, grant map[string][]string, stepData map[string]any) error {
+// runtime belt for an agent-authored step's rendered options.
+//
+// It takes no step scope on purpose. A templated allowlist entry renders
+// against the closed set of platform-assigned facts and nothing else
+// (scopeRenderData), so there is no step data for this check to be handed —
+// and no parameter for a later caller to pass the wrong thing into.
+func (r *Runner) checkVerbResources(pol *config.AgentAuthoredPolicy, t core.Trigger, uses string, rendered map[string]any, grant map[string][]string) error {
 	rp := planResourcePolicy(pol, t)
 	if rp != nil {
-		rp.render = r.scopeRenderData(t, stepData)
+		rp.render = r.scopeRenderData(t)
 	}
 	return r.checkVerbScopes(rp, uses, rendered, grant)
 }
@@ -479,7 +481,7 @@ func (r *Runner) checkSkillVerbResources(pol *config.AgentAuthoredPolicy, t core
 	// token was minted for, which RunSkillVerb has already rebuilt into t
 	// (identity + captured trigger context). The agent's own options are NOT
 	// passed — they are what is being checked.
-	rp.render = r.scopeRenderData(t, nil)
+	rp.render = r.scopeRenderData(t)
 	return r.checkVerbScopes(rp, uses, options, grant)
 }
 

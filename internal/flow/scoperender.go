@@ -16,10 +16,10 @@ import (
 // not be steerable by what it is checking, must not read anything it could
 // leak, and must not do work.
 //
-//	CONTEXT   the dispatch's own trusted facts only (scopeRenderData): the
-//	          target, the event, the workflow's inputs. Never the option value
-//	          being checked — that is the thing matched, never a source — and
-//	          never secret material.
+//	CONTEXT   a CLOSED SET of platform-assigned facts (scopeFacts): the
+//	          number, owner, name, repo and kind. Not the option value being
+//	          checked — that is the thing matched, never a source — and not
+//	          any free text the PR author chose.
 //	FUNCS     default and coalesce, and nothing else. No kv, no vault, no
 //	          secret: an authorization check that performs a read is a check
 //	          that can be made to do work, and one that reads a secret is one
@@ -59,36 +59,66 @@ func renderScopePattern(pattern string, data map[string]any) (string, error) {
 	return out, nil
 }
 
-// secretBearingKeys are the template-scope keys that hold SECRET MATERIAL.
-// They are removed from the render data outright: `secrets`/`vaults` are the
-// declared scopes, and slack's `slack_bot_token` is the shape a connector's
-// own trigger context takes when it publishes a credential for a step to use.
-// Tracked values anywhere else are redacted separately, so this list is a
-// belt, not the whole trousers.
-var secretBearingKeys = []string{"secrets", "vaults", "slack_bot_token", "gh_token", "app_token"}
+// scopeFacts is the CLOSED SET of facts a scope allowlist entry may
+// interpolate. It is an allowlist, and that is the whole point of it.
+//
+// The first cut was a denylist — baseData minus a handful of secret-bearing
+// keys — which passed everything else through, including `head_ref`,
+// `title`, `comment_body`, `author` and `labels`. Those are free text the PR
+// AUTHOR chooses, copied verbatim out of the webhook. An operator writing the
+// natural extension of the documented idioms —
+//
+//	channel: ["{{.head_ref}}"]        # or repo: ["{{.head_ref}}/prod"]
+//
+// could then be FORGED: an attacker names their branch `general` and the
+// entry renders to a channel they were never granted. A denylist also fails
+// in the direction that hurts — the next enriched context fact a connector
+// adds is silently interpolatable, and nobody reviews a field for that.
+//
+// So: only facts the PLATFORM assigns, which the person who opened the PR
+// cannot choose.
+//
+//	number  the issue/PR number GitHub allocated
+//	owner   the repo's owner, from the repo the event fired for
+//	name    that repo's name
+//	repo    owner/name
+//	kind    the trigger kind conductor itself resolved (review_requested, …)
+//
+// Everything else renders empty and, fail-closed, matches nothing. Adding a
+// fact here is a deliberate act with one question attached: can the author of
+// a pull request choose this value? If yes, it does not belong.
+var scopeFacts = []string{"number", "owner", "name", "repo", "kind"}
 
-// scopeRenderData builds the data a templated allowlist entry renders against:
-// the dispatch's own facts, minus everything a security check must not see.
+// scopeRenderData builds the data a templated allowlist entry renders
+// against: the closed set above, and nothing else.
 //
-// It starts from baseData with NO secrets map, drops the secret-bearing keys a
-// trigger context can carry, adds the workflow's `inputs` when the caller has
-// them, and finally runs the whole map through the secret redactor — so even a
-// credential that reached the trigger context under a name nobody listed comes
-// out as its redaction marker rather than its value.
+// What it does NOT carry, each for its own reason:
 //
-// What it deliberately does NOT carry: the step scope's previous-step outputs
-// (an agent step's output is agent-authored text, and an allowlist that could
-// be steered by it would be steerable by the agent) and, above all, the option
-// value being checked.
-func (r *Runner) scopeRenderData(t core.Trigger, stepData map[string]any) map[string]any {
-	d := baseData(t, nil) // nil secrets → no `secrets` key at all
-	for _, k := range secretBearingKeys {
-		delete(d, k)
+//	title/head_ref/author/labels/comment_body   the PR author writes them
+//	url/head/base                               author-influenced, and not
+//	                                            a resource name anyway
+//	any enriched t.Context fact                 not reviewed for forgeability
+//	inputs                                      a workflow input can carry
+//	                                            event text verbatim
+//	previous-step outputs                       agent-authored
+//	the option value being checked               it is the thing matched
+//
+// The secret redactor still runs over the result. Nothing in the closed set
+// should ever hold secret material, which is exactly why it is cheap to keep
+// the belt on: if one ever does, the render shows its marker, not its value.
+func (r *Runner) scopeRenderData(t core.Trigger) map[string]any {
+	facts := map[string]any{
+		"number": t.Target.Number,
+		"owner":  t.Target.Owner,
+		"name":   t.Target.Name,
+		"repo":   t.Target.Repo,
+		"kind":   t.Kind,
 	}
-	// Workflow inputs are operator-authored plumbing for this run, so an
-	// allowlist may key off them: `repo: ["{{.inputs.org}}/*"]`.
-	if inputs, ok := stepData["inputs"]; ok {
-		d["inputs"] = inputs
+	// Built from the struct fields directly, never from baseData: a fact that
+	// is not in scopeFacts must be absent by CONSTRUCTION, not by deletion.
+	d := make(map[string]any, len(scopeFacts))
+	for _, k := range scopeFacts {
+		d[k] = facts[k]
 	}
 	if r != nil && r.Secrets != nil {
 		if red, ok := r.Secrets.RedactValue(d).(map[string]any); ok {

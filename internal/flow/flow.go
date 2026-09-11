@@ -971,7 +971,7 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 		// allowlist reads this to know an operator did not write the step,
 		// and which dispatch's own scope is therefore in scope.
 		ctx = memory.WithCaller(ctx, memory.Caller{Repo: t.Target.Repo})
-		if rerr := r.checkVerbResources(r.planPolicy(), t, step.Uses, rendered, nil, data); rerr != nil {
+		if rerr := r.checkVerbResources(r.planPolicy(), t, step.Uses, rendered, nil); rerr != nil {
 			rerr = fmt.Errorf("agent_authored allowlist: %w", rerr)
 			r.auditVerb(t, connName, verb, map[string]any{"barrier": "resource_allowlist"}, "blocked", rerr)
 			return nil, rerr
@@ -1749,7 +1749,7 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 			// verbs' scope allowlist reads this to know an operator did not
 			// write the step. Per hook, not per loop.
 			hctx = memory.WithCaller(ctx, memory.Caller{Repo: t.Target.Repo})
-			if rerr := r.checkVerbResources(r.planPolicy(), t, h.Uses, rendered, nil, data); rerr != nil {
+			if rerr := r.checkVerbResources(r.planPolicy(), t, h.Uses, rendered, nil); rerr != nil {
 				rerr = fmt.Errorf("agent_authored allowlist: %w", rerr)
 				r.Log("%s %s hook %s.%s blocked: %v", flowTag(t), where, connName, verb, rerr)
 				r.auditVerb(t, connName, verb, map[string]any{"barrier": "resource_allowlist"}, "blocked", rerr)

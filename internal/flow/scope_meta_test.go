@@ -182,7 +182,7 @@ func TestEveryScopedOptionIsEnforcedOnBothSurfaces(t *testing.T) {
 					opts := map[string]any{so.Name: tc.value}
 					where := fmt.Sprintf("%s option %q (dimension %q), %s", uses, so.Name, so.Dim, tc.name)
 
-					planErr := r.checkVerbResources(pol, trig, uses, opts, nil, nil)
+					planErr := r.checkVerbResources(pol, trig, uses, opts, nil)
 					if got := scopeRefused(planErr); got != tc.refused {
 						t.Errorf("PLAN surface: %s: refused=%v, want %v (err=%v)", where, got, tc.refused, planErr)
 					}
@@ -354,7 +354,7 @@ func TestScopeAllowlistsSupportSettingsAndTemplates(t *testing.T) {
 			opts := map[string]any{so.Name: tc.value}
 			where := fmt.Sprintf("%s option %q (dimension %q), %s", uses, so.Name, so.Dim, tc.name)
 
-			planErr := r.checkVerbResources(pol, trig, uses, opts, nil, nil)
+			planErr := r.checkVerbResources(pol, trig, uses, opts, nil)
 			if got := scopeRefused(planErr); got != tc.refused {
 				t.Errorf("PLAN surface: %s: refused=%v, want %v (err=%v)", where, got, tc.refused, planErr)
 			}
@@ -417,7 +417,7 @@ policy:
 		{"slack.react", "channel", "#trigger-channel"}, // …on every verb, not just post
 	} {
 		opts := map[string]any{tc.opt: tc.value}
-		if err := r.checkVerbResources(pol, trig, tc.uses, opts, nil, nil); err != nil {
+		if err := r.checkVerbResources(pol, trig, tc.uses, opts, nil); err != nil {
 			t.Errorf("PLAN surface refused the dispatch's own %s: %v", tc.opt, err)
 		}
 		id := SkillIdentity{
