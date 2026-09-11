@@ -116,6 +116,40 @@ if a new connector adds a scoped option that either surface forgets to enforce. 
 what stops the class from reopening (a future `jira.comment { project }` or
 `s3.put { bucket }` is covered the moment it declares `Scope`).
 
+## As built — one deviation, and what got tagged
+
+**`allow` → `allow_scopes`.** The plan-surface map above is spelled
+`policy.agent_authored.allow_scopes: {repo: …, channel: …}`, not `allow:`.
+`allow:` already exists and means the *other* axis — the verb/step-class access
+allowlist (`allow: [code, kv.*, gh.comment]`). Making it polymorphic would leave
+any config that needs BOTH access control and resource scoping unable to express
+one of them, which is the common case. The prose meaning is unchanged: read
+"allow.repo" as `allow_scopes.repo`. `allow_targets`/`allow_stores`/
+`allow_secrets` remain aliases of `.repo`/`.store`/`.secret`, unioned in.
+
+**Tagged** across the builtins: github `repo` (35 verbs), slack/discord
+`channel` and `user` (a DM is a destination too), kv/sql `store`, vault `key`
+(dimension `secret` — it answers to both `k` and the qualified `vault/k` that
+`allow_secrets` and `{{ vault … }}` already use), blob `path`, ntfy `topic`,
+the discord relay sink's `channel_id`.
+
+**Deliberately not tagged**, because a dimension nothing can answer is a
+dimension that denies every call rather than scoping it:
+- `webhook.post url` — arbitrary egress, not a resource inside a namespace the
+  connector owns; the SSRF guard and the egress machinery own that question.
+- `memory scope` — already has its own dimension and its own semantics
+  (`memoryScopeOK`: unscoped means deny, the triggering repo's scope is
+  implicit).
+- github gist ids, and repo-relative `path` on `file`/`put_file` — the repo
+  dimension already bounds the paths; gists are user-scoped with no dimension
+  defined yet. Both are one-line follow-ups now that the mechanism exists.
+
+`ContextScope` for the repo dimension is answered in core for every connector
+(`core.Trigger.Target.Repo`) rather than by a github-specific hook, so a
+`repo:` option on any connector gets the same treatment. Below the hook, a
+connector's own configured default option value is implicitly in scope — that
+is what makes "the configured default channel" work without per-connector code.
+
 ## Tests
 - `slack.post` skill grant with `channel: ["#x"]` → post to `#x` ok; post to `#y`
   refused; post to the dispatch's own channel ok with no list.

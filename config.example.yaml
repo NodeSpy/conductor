@@ -335,9 +335,13 @@ hosts:
 #     allow:   [ kv.*, memory.*, workflow, "workflow.*", gh.comment ]
 #     approve: [ cli, code, gh.merge ]
 #     approve_via: slack-ops
-#     allow_secrets: [ house/deploy_key ]  # secrets an agent-authored step may reference (deny-by-default;
-#     allow_stores:  [ cache ]             #   "*" = all of a kind; trust: full lifts all three lists)
-#     allow_targets: [ your-org/* ]        # repos beyond the TRIGGERING one (implicitly allowed)
+#     allow_scopes:                        # WHICH resource an agent-authored step may name, by the
+#       secret:  [ house/deploy_key ]      #   dimension the connector declares on the option
+#       store:   [ cache ]                 #   (deny-by-default; "*" = a whole dimension;
+#       repo:    [ your-org/* ]            #    trust: full lifts them all). The dispatch's OWN
+#       channel: [ "#code-reviews" ]       #    repo/channel/default is always implicitly allowed.
+#     # allow_secrets / allow_stores / allow_targets are the legacy spellings of
+#     # allow_scopes.secret / .store / .repo — still supported, still unioned in.
 #     host: sandbox                      # a hosts: entry
 #     identity: bot
 #     limits: { max_steps: 50, max_fan_out: 20, max_sub_agents: 5, timeout: 30m, tokens: 200k }
@@ -671,6 +675,18 @@ x-templates:
     #                       #     ["*"]  all verbs, all connectors
     #                       #     [gh.*] all verbs of one connector
     #                       #     [gh.*, sentry.*] / [gh.comment] — several / specific
+    #                       #   …or the MAP form, which also says WHICH resource a
+    #                       #   call may name, per verb (keys are that verb's own
+    #                       #   resource options — `conductor discover <verb>`):
+    #                       #     verbs:
+    #                       #       slack.post:      { channel: ["#code-reviews"] }
+    #                       #       gh.submit_review: {}     # repo pinned to the PR
+    #                       #       kv.*:            { store: [shared-kv] }
+    #                       #   An unlisted resource option stays pinned to the
+    #                       #   dispatch's own (its repo, the channel its event came
+    #                       #   from); listing WIDENS. No context and nothing listed
+    #                       #   = denied. A key the verb doesn'"'"'t declare as a
+    #                       #   resource is a LOAD ERROR (typo catch).
     #                       #   Reads are NOT open by default; breadth is an explicit
     #                       #   dial. conductor.*/workflow.* are unreachable at ANY
     #                       #   breadth (they go through run_step + agent_authored).

@@ -68,6 +68,33 @@ skill:
   # verbs: [github.submit_review] # specific verbs
 ```
 
+### Scoping the grant — which resource, not just which verb
+
+`verbs:` also takes a MAP, and that is where you say WHICH resource a call may
+name. The keys inside an entry are that verb's own resource options, so
+`channel` under `slack.post` and `repo` under `github.submit_review` never
+collide:
+
+```yaml
+skill:
+  verbs:
+    slack.post:           { channel: ["#code-reviews"] }  # only there (+ the dispatch's own)
+    github.submit_review: {}                              # repo pinned to the PR under review
+    kv.*:                 { store: ["shared-kv"] }        # a pattern scopes every verb it admits
+```
+
+- A resource option you **don't** list is limited to the dispatch's own
+  context — the repo the workflow fired for, the channel the event came from,
+  the connector's configured default. Listing **widens** it; it never narrows.
+- No context value and nothing listed → **denied**. A fixed-channel post from
+  a github trigger has to name the channel. That is deliberate: the default
+  is a refusal you fix with one line, not a footgun.
+- WHICH options are scopeable is the connector's own declaration, so
+  `conductor discover <verb>` is the source of truth. Naming an option the
+  verb doesn't declare as a resource (a typo, or `text:`) is a **load error**.
+- The operator's own [[Policy|`policy.agent_authored.allow_scopes`]] applies
+  on top, for dimensions you'd rather set once for every agent.
+
 Two properties worth being explicit about:
 
 - **Reads are not open by default.** A read verb outside the grant is denied
