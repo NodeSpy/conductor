@@ -99,3 +99,65 @@ func TestToolServerCarriesTargetProvenance(t *testing.T) {
 		})
 	}
 }
+
+// ROUND-12 #4. The argv path passes --dispatch, and skill.Identity has the
+// field, but neither mint site populated it — so a skill-enabled dispatch
+// with an UNTRUSTED target lost run_step's per-dispatch anchor and reverted
+// to the shared literal namespace (round-11 #2, reopened on the skill path).
+//
+// Both paths must carry the same daemon-assigned value: they are two ways
+// into the same socket for the same dispatch.
+func TestBothToolPathsCarryTheDispatchAnchor(t *testing.T) {
+	b := skill.NewBroker(func(string) (string, bool) { return "", false }, nil)
+	skill.SetActive(b)
+	t.Cleanup(func() { skill.SetActive(nil) })
+	memory.SetToolCommand([]string{"conductor", "mcp", "memory"})
+	t.Cleanup(func() { memory.SetToolCommand(nil) })
+
+	req := Request{
+		Trigger:    core.Trigger{Kind: "delivery", Target: core.Target{Repo: "victim/repo"}},
+		Action:     config.Action{Agent: "probe"},
+		Step:       config.Step{Skill: &config.SkillPolicy{Verbs: []string{"gh.comment"}}},
+		DispatchID: "run-abc:step1",
+	}
+
+	// ARGV path: the flag is on the subprocess's command line.
+	spec := BuildToolServer(req, "")
+	if spec == nil {
+		t.Fatal("no tool server built")
+	}
+	if !slices.Contains(spec.Args, "--dispatch") || !slices.Contains(spec.Args, "run-abc:step1") {
+		t.Errorf("the argv path lost the anchor: %v", spec.Args)
+	}
+	// …and the SKILL path: the claim it minted resolves to an identity
+	// carrying the same value.
+	code := spec.Env["CONDUCTOR_SKILL_CLAIM"]
+	if code == "" {
+		t.Fatal("no claim minted")
+	}
+	tok, err := b.ClaimSession(code, skill.Peer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := b.Authorize(tok, skill.Peer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id.Dispatch != "run-abc:step1" {
+		t.Errorf("the skill path lost the anchor: Dispatch=%q — a skill dispatch with an "+
+			"untrusted target would fall back to the namespace every run_step shares", id.Dispatch)
+	}
+
+	// The env/session path (paseo, CLI) carries it too.
+	env := SkillEnv(req, "unix:///tmp/x.sock")
+	if env == nil {
+		t.Fatal("no skill env built")
+	}
+	sid, err := b.Authorize(env["CONDUCTOR_SKILL_TOKEN"], skill.Peer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sid.Dispatch != "run-abc:step1" {
+		t.Errorf("the session path lost the anchor: Dispatch=%q", sid.Dispatch)
+	}
+}

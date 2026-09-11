@@ -93,6 +93,12 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 			Policy:        *req.Step.Skill,
 			Context:       req.Trigger.Context,
 			TargetTrusted: req.Trigger.TargetTrusted,
+			// The daemon's anchor for this dispatch, on the SKILL path too.
+			// The argv path passes --dispatch; without the same value here a
+			// skill-enabled dispatch with an untrusted target loses the
+			// cross-dispatch confinement run_step relies on and falls back to
+			// the shared literal namespace (round-12 #4).
+			Dispatch: req.DispatchID,
 		})
 		if err == nil {
 			out.Env = map[string]string{"CONDUCTOR_SKILL_CLAIM": claim}
@@ -138,6 +144,7 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 		Policy:        *req.Step.Skill,
 		Context:       req.Trigger.Context,
 		TargetTrusted: req.Trigger.TargetTrusted,
+		Dispatch:      req.DispatchID, // as above: both paths carry the anchor
 	}, uint32(os.Getuid()))
 	if err != nil {
 		return nil
