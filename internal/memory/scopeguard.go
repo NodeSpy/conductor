@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -25,9 +26,26 @@ import (
 //	policy.agent_authored.allow_memory_scopes — deny-by-default, with the
 //	triggering scope implicitly allowed, exactly like allow_stores.
 
-// ScopeGuard authorizes one memory op against a scope. op is
+// Caller is WHO is asking, for authorization. It is supplied per call — a
+// process-wide guard cannot know which dispatch is on the other end, and
+// "your own scope" is the whole point of the allowlist.
+//
+// AgentFacing is the trusted/untrusted split the rest of the system already
+// makes: an agent-authored plan step, a skill verb call, or the agent's own
+// memory tool. A CONFIG-AUTHORED `uses: memory.recall` step is not — the
+// operator wrote it with their own credential, and gating it would be a
+// different product.
+type Caller struct {
+	// Repo is the dispatch's target repo; its scope (repo:<repo>) is
+	// implicitly allowed. Empty when the caller has no target.
+	Repo string
+	// AgentFacing marks a call the operator did not write.
+	AgentFacing bool
+}
+
+// ScopeGuard authorizes one memory op against a scope, for one caller. op is
 // remember|recall|list|forget; scope is "" when the caller named none.
-type ScopeGuard func(op, scope string) error
+type ScopeGuard func(c Caller, op, scope string) error
 
 // SetScopeGuard installs the agent-facing scope allowlist. nil is ignored so
 // a caller cannot clear an installed guard by passing nothing.
@@ -56,7 +74,7 @@ func namesItsOwnScope(op string) bool { return op == "remember" }
 // rather than passed, and when a guard is installed an unscoped read is its
 // to accept or refuse (the flow guard refuses one, so a narrow grant can't
 // recall every tenant's entries by simply naming no scope).
-func (m *Manager) CheckOp(op, scope string) error {
+func (m *Manager) CheckOp(c Caller, op, scope string) error {
 	switch op {
 	case "remember", "recall", "list", "forget":
 	default:
@@ -70,8 +88,14 @@ func (m *Manager) CheckOp(op, scope string) error {
 			return err
 		}
 	}
+	// The operator's allowlist applies to AGENT-FACING callers only. A
+	// config-authored step passes the zero Caller and is not gated — the same
+	// trusted/untrusted split every other resource check makes.
+	if !c.AgentFacing {
+		return nil
+	}
 	if gp := m.scopeGuard.Load(); gp != nil {
-		return (*gp)(op, strings.TrimSpace(scope))
+		return (*gp)(c, op, strings.TrimSpace(scope))
 	}
 	return nil
 }
@@ -98,4 +122,30 @@ func (m *Manager) ScopeOf(id string) (scope string, found bool, err error) {
 		}
 	}
 	return "", false, nil
+}
+
+// callerKey carries the authorization caller for memory ops reached through a
+// connector, where the gate has no other channel to the flow layer.
+type callerKey struct{}
+
+// WithCaller marks ctx as carrying AGENT-FACING memory ops on behalf of one
+// dispatch. The flow layer stamps it at the point it decides the call is
+// agent-authored (or a skill tool call); the memory verbs read it back.
+//
+// The caller is stamped WHOLE — repo included — rather than being read back
+// out of the provenance Source. The two answer different questions (who to
+// record vs. who to authorize), they are stamped at different places, and an
+// authorization that depended on a stamp applied somewhere far away is the
+// kind of seam that let this allowlist go inert in the first place.
+func WithCaller(ctx context.Context, c Caller) context.Context {
+	c.AgentFacing = true
+	return context.WithValue(ctx, callerKey{}, c)
+}
+
+// CallerFrom reads the authorization caller back. The zero value — a
+// config-authored step, which stamps nothing — is not gated, which is
+// deliberate and is why the marker is explicit rather than inferred.
+func CallerFrom(ctx context.Context) Caller {
+	c, _ := ctx.Value(callerKey{}).(Caller)
+	return c
 }

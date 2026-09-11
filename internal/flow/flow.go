@@ -966,6 +966,11 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	// RENDERED options carry the concrete store/repo names the static guard
 	// couldn't evaluate — refuse + audit outside the allowlists.
 	if agentAuthored(ctx) {
+		// Mark the call agent-facing for the resource checks that live behind
+		// the connector rather than in front of it — the memory verbs' scope
+		// allowlist reads this to know an operator did not write the step,
+		// and which dispatch's own scope is therefore in scope.
+		ctx = memory.WithCaller(ctx, memory.Caller{Repo: t.Target.Repo})
 		if rerr := r.checkVerbResources(r.planPolicy(), t, step.Uses, rendered, nil, data); rerr != nil {
 			rerr = fmt.Errorf("agent_authored allowlist: %w", rerr)
 			r.auditVerb(t, connName, verb, map[string]any{"barrier": "resource_allowlist"}, "blocked", rerr)
@@ -1737,7 +1742,13 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 			r.auditVerb(t, connName, verb, rendered, "stubbed", nil)
 			continue
 		}
+		hctx := ctx
 		if agentAuthored(ctx) {
+			// Mark the call agent-facing for the resource checks that live
+			// behind the connector rather than in front of it — the memory
+			// verbs' scope allowlist reads this to know an operator did not
+			// write the step. Per hook, not per loop.
+			hctx = memory.WithCaller(ctx, memory.Caller{Repo: t.Target.Repo})
 			if rerr := r.checkVerbResources(r.planPolicy(), t, h.Uses, rendered, nil, data); rerr != nil {
 				rerr = fmt.Errorf("agent_authored allowlist: %w", rerr)
 				r.Log("%s %s hook %s.%s blocked: %v", flowTag(t), where, connName, verb, rerr)
@@ -1768,7 +1779,7 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 			}
 			final = rv.(map[string]any)
 		}
-		if _, err := in.InvokeFinal(ctx, verb, final); err != nil {
+		if _, err := in.InvokeFinal(hctx, verb, final); err != nil {
 			r.Log("%s %s hook %s.%s failed (best-effort): %v", flowTag(t), where, connName, verb, err)
 			r.auditVerb(t, connName, verb, rendered, "hook_failed", err)
 			continue

@@ -105,7 +105,12 @@ func (memoryImpl) Invoke(ctx context.Context, verb string, opts map[string]any) 
 			scope = s
 		}
 	}
-	if err := m.CheckOp(verb, scope); err != nil {
+	// WHO is asking rides the context: the flow layer marks an agent-authored
+	// step and every skill verb call as agent-facing and stamps the
+	// dispatch's own repo (memory.WithSource). A config-authored `uses:
+	// memory.recall` carries neither and is not gated — same split as every
+	// other resource check.
+	if err := m.CheckOp(memory.CallerFrom(ctx), verb, scope); err != nil {
 		return nil, err
 	}
 	switch verb {

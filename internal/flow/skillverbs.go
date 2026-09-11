@@ -9,6 +9,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/memory"
 )
 
 // The skill verb surface (#36 §12): conductor's own verbs served to a
@@ -480,6 +481,12 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 		Target:  core.Target{Repo: id.Repo, Number: id.Number, PR: id.Number},
 		Context: id.Context,
 	}
+	// EVERY call on this surface is agent-facing, and the dispatch it belongs
+	// to is the identity the token was minted for. Both are what the memory
+	// verbs' scope allowlist authorizes against (memory.CallerFrom), and the
+	// provenance stamp is also what a memory written here records.
+	ctx = memory.WithCaller(ctx, memory.Caller{Repo: id.Repo})
+	ctx = memory.WithSource(ctx, memory.Source{Step: id.Agent, Repo: id.Repo, Trigger: id.Trigger})
 	deny := func(reason string) (map[string]any, error) {
 		err := fmt.Errorf("skill verb %s: %s", uses, reason)
 		r.auditSkillVerb(t, id.Agent, uses, options, "denied", err)

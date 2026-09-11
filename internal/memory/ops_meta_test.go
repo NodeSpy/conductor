@@ -26,18 +26,18 @@ func TestEveryAgentFacingMemoryOpIsGuarded(t *testing.T) {
 
 			// Deny-by-default: with a guard installed that allows only
 			// "repo:acme/app", every op is refused for another scope.
-			m.SetScopeGuard(func(_, scope string) error {
+			m.SetScopeGuard(func(_ Caller, _, scope string) error {
 				if scope == "repo:acme/app" {
 					return nil
 				}
 				return &testDenied{scope}
 			})
 
-			if err := m.CheckOp(op, "repo:other/tenant"); err == nil {
+			if err := m.CheckOp(agentCaller, op, "repo:other/tenant"); err == nil {
 				t.Errorf("%s was permitted against a scope outside the allowlist — "+
 					"a narrow grant reaches another tenant's memories", op)
 			}
-			if err := m.CheckOp(op, "repo:acme/app"); err != nil {
+			if err := m.CheckOp(agentCaller, op, "repo:acme/app"); err != nil {
 				t.Errorf("%s refused for an ALLOWED scope: %v — the gate is too broad", op, err)
 			}
 		})
@@ -45,7 +45,7 @@ func TestEveryAgentFacingMemoryOpIsGuarded(t *testing.T) {
 
 	// An unknown op is refused, not passed through.
 	m := testManager(t, NewMemBackend())
-	if err := m.CheckOp("exfiltrate", "repo:acme/app"); err == nil {
+	if err := m.CheckOp(agentCaller, "exfiltrate", "repo:acme/app"); err == nil {
 		t.Error("an unrecognized memory op was permitted — the gate must deny by default")
 	}
 }
@@ -54,17 +54,17 @@ func TestEveryAgentFacingMemoryOpIsGuarded(t *testing.T) {
 // installed allowlist can grant it.
 func TestTheSharedBucketCannotBeGrantedByPolicy(t *testing.T) {
 	m := testManager(t, NewMemBackend())
-	m.SetScopeGuard(func(_, _ string) error { return nil }) // allow everything
+	m.SetScopeGuard(func(Caller, string, string) error { return nil }) // allow everything
 
 	for _, spelling := range []string{"global", "Global", "  global  "} {
-		if err := m.CheckOp("remember", spelling); err == nil {
+		if err := m.CheckOp(agentCaller, "remember", spelling); err == nil {
 			t.Errorf("remember into %q was permitted by an allow-all policy — the reserved "+
 				"bucket is injected into every opted-in agent's prompt and is never grantable", spelling)
 		}
 	}
 	// A named scope still writes under the same allow-all policy, so the
 	// assertion above can't pass by refusing everything.
-	if err := m.CheckOp("remember", "repo:acme/app"); err != nil {
+	if err := m.CheckOp(agentCaller, "remember", "repo:acme/app"); err != nil {
 		t.Errorf("a named scope was refused: %v", err)
 	}
 }
@@ -141,6 +141,27 @@ func TestBothAgentFacesCallTheSharedGate(t *testing.T) {
 			t.Errorf("%s calls CheckOp INSIDE the op switch — gate before it, or the next "+
 				"op added gets no guard (which is exactly how recall/list/forget stayed open)", rel)
 		}
+	}
+}
+
+// agentCaller is the caller shape every test here means: an agent-facing op
+// with no dispatch repo of its own, so only the allowlist can admit it.
+var agentCaller = Caller{AgentFacing: true}
+
+// A CONFIG-AUTHORED caller (the zero Caller) is not gated by the operator's
+// allowlist — that split is the point, and a guard that ignored it would gate
+// the operator's own `uses: memory.recall` steps.
+func TestConfigAuthoredCallersAreNotScopeGated(t *testing.T) {
+	m := testManager(t, NewMemBackend())
+	m.SetScopeGuard(func(Caller, string, string) error {
+		return &testDenied{"everything"}
+	})
+	if err := m.CheckOp(Caller{}, "recall", "repo:any/where"); err != nil {
+		t.Fatalf("a config-authored op must not be scope-gated: %v", err)
+	}
+	// …but the reserved bucket is still refused, for every caller.
+	if err := m.CheckOp(Caller{}, "remember", "global"); err == nil {
+		t.Error("the reserved bucket must be refused even for a config-authored caller")
 	}
 }
 

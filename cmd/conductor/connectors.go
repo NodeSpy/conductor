@@ -233,6 +233,12 @@ func configureMemory(cfg *config.Config, sec *secrets.Resolver) error {
 		// entries written before the guard existed may carry secrets.
 		mgr.SetRedactor(sec.Redact)
 	}
+	// The agent-facing scope allowlist (policy.agent_authored.allow_memory_scopes).
+	// This is the call that makes it real: without it CheckOp's guard is nil
+	// and every agent-facing memory op falls through to "allowed", whatever
+	// the operator listed. Installed for the daemon AND for every CLI path
+	// that builds a stack, so the two can't diverge.
+	mgr.SetScopeGuard(flow.MemoryScopeGuard(cfg))
 	memory.Configure(mgr)
 	return nil
 }

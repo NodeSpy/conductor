@@ -39,7 +39,11 @@ func memInvoke(guard DataGuard, op string, args []any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := m.CheckOp(op, scope); err != nil {
+	// The zero Caller: this face's allowlist enforcement rides the DataGuard
+	// below, which the flow layer installs per EXECUTION (so it knows whether
+	// the step was agent- or config-authored). CheckOp still applies the
+	// unconditional reserved-bucket rule to every caller.
+	if err := m.CheckOp(memory.Caller{}, op, scope); err != nil {
 		return nil, err
 	}
 	if guard != nil {
