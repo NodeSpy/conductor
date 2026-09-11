@@ -38,6 +38,8 @@ func TestOnlyAuditedSourcesClaimTargetTrust(t *testing.T) {
 		"internal/connector/conductor.go": "conductor's own lifecycle event",
 		"internal/connector/httpapi.go":   "a synthetic target named after the source and event, from config",
 		"cmd/conductor/main.go":           "an operator-invoked manual trigger",
+		"cmd/conductor/mcp.go": "the memory MCP subprocess parses --target-trusted, which the daemon " +
+			"emits from the dispatch it launched; absent means untrusted",
 		// Carriers, not claimants: they propagate a bit decided upstream.
 		"internal/flow/plan.go":       "run_step carries the launching dispatch's provenance",
 		"internal/flow/skillverbs.go": "the skill surface carries the dispatch's provenance",
@@ -45,8 +47,10 @@ func TestOnlyAuditedSourcesClaimTargetTrust(t *testing.T) {
 		"internal/engine/engine.go":   "the engine carries the trigger's provenance into memory.Source",
 		"internal/dispatch/toolserver.go": "the tool server carries the dispatch's provenance into the skill " +
 			"identity",
-		"internal/memory/memory.go": "memory.Source declares the field it carries alongside the Repo it describes",
-		"internal/skill/broker.go":  "skill.Identity declares the field it carries for a minted session",
+		"internal/memory/memory.go":     "memory.Source declares the field it carries alongside the Repo it describes",
+		"internal/memory/ipc.go":        "the MCP/CLI memory face applies the rule through NewAgentCaller",
+		"internal/memory/scopeguard.go": "memory.Caller applies the rule at construction so no face holds a raw repo",
+		"internal/skill/broker.go":      "skill.Identity declares the field it carries for a minted session",
 	}
 	root := repoRootFor(t)
 	claims := map[string]bool{}

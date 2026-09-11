@@ -223,7 +223,11 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 	// (resolved just above, never the request body), which is exactly the
 	// Caller the allowlist authorizes against.
 	if op := memoryOpOf(req.Op); op != "" {
-		if err := m.CheckOp(Caller{Repo: req.Source.Repo, AgentFacing: true}, op, req.Scope); err != nil {
+		// NewAgentCaller applies the own-repo rule (core.OwnRepo): a dispatch
+		// whose target the event's SENDER chose — a webhook `repo:` templated
+		// from the POST body — contributes no implicit own-scope here, the
+		// same as on the verb and code faces. This face used the raw repo.
+		if err := m.CheckOp(NewAgentCaller(req.Source.Repo, req.Source.TargetTrusted), op, req.Scope); err != nil {
 			aud(map[string]any{"event": "memory_" + op, "via": "tool", "outcome": "blocked",
 				"agent": req.Source.Step, "repo": req.Source.Repo, "error": err.Error()})
 			return IPCResponse{Error: err.Error()}

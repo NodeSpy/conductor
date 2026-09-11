@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 // The H8 write guard was added to `remember` and stopped there. recall, list
@@ -36,12 +38,26 @@ import (
 // operator wrote it with their own credential, and gating it would be a
 // different product.
 type Caller struct {
-	// Repo is the dispatch's target repo; its scope (repo:<repo>) is
-	// implicitly allowed. Empty when the caller has no target.
-	Repo string
+	// ownRepo is the repo whose scope (repo:<ownRepo>) is implicitly allowed
+	// — ALREADY FILTERED through core.OwnRepo, so a target the event's sender
+	// chose contributes nothing. It is unexported on purpose: a caller
+	// outside this package cannot write a raw repo into it, which is what the
+	// memory IPC face did for three rounds while every other face was being
+	// fixed. Build one with NewAgentCaller and the rule is applied for you.
+	ownRepo string
 	// AgentFacing marks a call the operator did not write.
 	AgentFacing bool
 }
+
+// NewAgentCaller builds the caller for an AGENT-FACING memory op from a
+// dispatch's raw target repo and its trust bit, applying core.OwnRepo — the
+// one rule — so no face can grant own-scope from a forged repo.
+func NewAgentCaller(repo string, targetTrusted bool) Caller {
+	return Caller{ownRepo: core.OwnRepo(repo, targetTrusted), AgentFacing: true}
+}
+
+// OwnRepo is the repo this caller implicitly owns ("" when it owns none).
+func (c Caller) OwnRepo() string { return c.ownRepo }
 
 // ScopeGuard authorizes one memory op against a scope, for one caller. op is
 // remember|recall|list|forget; scope is "" when the caller named none.
@@ -148,4 +164,10 @@ func WithCaller(ctx context.Context, c Caller) context.Context {
 func CallerFrom(ctx context.Context) Caller {
 	c, _ := ctx.Value(callerKey{}).(Caller)
 	return c
+}
+
+// WithAgentCaller is WithCaller for the common case: mark ctx agent-facing on
+// behalf of a dispatch, applying the own-repo rule to its target.
+func WithAgentCaller(ctx context.Context, repo string, targetTrusted bool) context.Context {
+	return WithCaller(ctx, NewAgentCaller(repo, targetTrusted))
 }

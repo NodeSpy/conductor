@@ -90,6 +90,32 @@ type Trigger struct {
 	HistoryID string
 }
 
+// OwnRepo is THE RULE for "which repo may this dispatch treat as its own",
+// and it exists because the answer had started being re-derived per struct.
+//
+// "The trusted dispatch" is represented three times — core.Trigger, the
+// provenance a live tool is handed (memory.Source), and the identity a skill
+// session stands for (flow.SkillIdentity) — and each carries a repo next to
+// the bit that says whether the event's SENDER chose it. Every own-scope
+// decision has to combine those two the same way; when the combining lived at
+// the call sites instead, one face was fixed per round and the next face kept
+// the raw repo. The memory IPC face granted implicit own-scope from a
+// webhook-forged repo for exactly that reason.
+//
+// So the combination is written once, here, and every representation exposes
+// it as an accessor rather than handing out its raw fields. "" means the
+// dispatch has no own repo — which is the correct, deny-by-default answer for
+// a target the sender picked.
+func OwnRepo(repo string, targetTrusted bool) string {
+	if !targetTrusted {
+		return ""
+	}
+	return repo
+}
+
+// OwnRepo is the repo this dispatch may treat as its own. See core.OwnRepo.
+func (t Trigger) OwnRepo() string { return OwnRepo(t.Target.Repo, t.TargetTrusted) }
+
 // Key returns the stable per-object key used by the dedup store.
 func (t Trigger) Key() string {
 	if t.Target.Repo == "" {

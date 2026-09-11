@@ -63,6 +63,14 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 	if kind := req.Trigger.Kind; kind != "" {
 		args = append(args, "--trigger", kind)
 	}
+	// The target's PROVENANCE travels with the repo it describes. Without it
+	// the memory MCP face would treat every dispatch's repo as its own — the
+	// bug — or, if it assumed the safe default, would refuse legitimate
+	// trusted dispatches. Neither is a default worth having: the daemon knows
+	// the answer, so it says it.
+	if req.Trigger.TargetTrusted {
+		args = append(args, "--target-trusted")
+	}
 	if n := req.Trigger.Target.Number; n > 0 {
 		args = append(args, "--number", strconv.Itoa(n))
 	}

@@ -32,7 +32,7 @@ func cmdMCP(args []string) error {
 // carries them.
 func cmdMCPMemory(args []string) error {
 	if len(args) < 1 || args[0] != "memory" {
-		return fmt.Errorf("usage: conductor mcp memory --socket <path> [--agent <name>] [--repo <owner/repo>] [--trigger <kind>] [--run <id>] [--number <n>] [--no-memory] (skill claim code via $CONDUCTOR_SKILL_CLAIM)")
+		return fmt.Errorf("usage: conductor mcp memory --socket <path> [--agent <name>] [--repo <owner/repo>] [--trigger <kind>] [--run <id>] [--number <n>] [--target-trusted] [--no-memory] (skill claim code via $CONDUCTOR_SKILL_CLAIM)")
 	}
 	var socket string
 	var mc memory.MCPConfig
@@ -58,6 +58,11 @@ func cmdMCPMemory(args []string) error {
 			mc.Source.Run = next()
 		case "--number":
 			fmt.Sscanf(next(), "%d", &mc.Number)
+		case "--target-trusted":
+			// The dispatch's target was assigned by its source, not taken
+			// from data the event's sender supplied. Absent means untrusted,
+			// which is the safe default (core.Trigger.TargetTrusted).
+			mc.Source.TargetTrusted = true
 		case "--no-memory":
 			mc.NoMemory = true
 		default:

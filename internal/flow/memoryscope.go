@@ -68,7 +68,10 @@ func MemoryScopeGuard(cfg *config.Config) memory.ScopeGuard {
 	return func(c memory.Caller, op, scope string) error {
 		// The caller's own repo is what makes its own scope implicitly
 		// allowed; everything else comes from the operator's list.
-		rp := &resourcePolicy{scopes: allow, trigger: c.Repo}
+		// c.OwnRepo() is already filtered through core.OwnRepo by whoever
+		// built the Caller, so the guard cannot accidentally trust a forged
+		// repo — there is no raw one to reach for.
+		rp := &resourcePolicy{scopes: allow, trigger: c.OwnRepo()}
 		if rp.memoryScopeOK(scope) {
 			return nil
 		}

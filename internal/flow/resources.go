@@ -122,18 +122,11 @@ func skillResourcePolicy(pol *config.AgentAuthoredPolicy, t core.Trigger) *resou
 	return rp
 }
 
-// trustedTargetRepo is the dispatch's own repo, or "" when the target came
-// from untrusted request data (core.Trigger.TargetUntrusted — a webhook whose
-// `repo:` templates from the POST body, where the sender picks it). It is the
-// ONE place the scope layer decides whether "your own target" means anything,
-// so the answer is the same for the repo dimension, the memory scope, the
-// render facts, and every surface that asks.
-func trustedTargetRepo(t core.Trigger) string {
-	if !t.TargetTrusted {
-		return ""
-	}
-	return t.Target.Repo
-}
+// trustedTargetRepo is core.OwnRepo under this package's name — the ONE rule
+// for "which repo may this dispatch treat as its own", kept as a named helper
+// because it reads better at the call sites and so that a grep for it finds
+// every own-scope decision in this package.
+func trustedTargetRepo(t core.Trigger) string { return t.OwnRepo() }
 
 // scopeOK is THE resource question, asked once for every dimension: may this
 // dispatch name this value in this dimension of this connector?

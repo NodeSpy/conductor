@@ -1,6 +1,7 @@
 package dispatch
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -54,5 +55,47 @@ func TestSkillEnv(t *testing.T) {
 	memory.SetToolCommand(nil)
 	if LocalSkillEndpoint() != "" {
 		t.Errorf("no tool command published → empty local endpoint")
+	}
+}
+
+// ROUND-10 #1, the argv half. The memory MCP subprocess authorizes scopes
+// against the dispatch it was launched for, so it needs the target's
+// PROVENANCE as well as its repo. Without the flag the subprocess has to
+// assume — and either assumption is wrong: assume trusted and a webhook-forged
+// repo gets implicit own-scope (the bug), assume untrusted and every
+// legitimate dispatch is over-refused.
+func TestToolServerCarriesTargetProvenance(t *testing.T) {
+	memory.SetToolCommand([]string{"conductor", "mcp", "memory"})
+	t.Cleanup(func() { memory.SetToolCommand(nil) })
+
+	for _, tc := range []struct {
+		name    string
+		trusted bool
+	}{
+		{"a platform-assigned target", true},
+		{"a target the request body chose", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := BuildToolServer(Request{
+				Trigger: core.Trigger{
+					Kind: "delivery", TargetTrusted: tc.trusted,
+					Target: core.Target{Repo: "acme/app", Number: 7},
+				},
+				Action: config.Action{Agent: "probe"},
+				Step:   config.Step{},
+			}, "")
+			if spec == nil {
+				t.Fatal("no tool server built")
+			}
+			got := slices.Contains(spec.Args, "--target-trusted")
+			if got != tc.trusted {
+				t.Fatalf("--target-trusted present=%v, want %v (args=%v)", got, tc.trusted, spec.Args)
+			}
+			// The repo travels either way — provenance qualifies it, it does
+			// not replace it.
+			if !slices.Contains(spec.Args, "acme/app") {
+				t.Errorf("the repo must still be passed: %v", spec.Args)
+			}
+		})
 	}
 }

@@ -51,6 +51,11 @@ type SkillIdentity struct {
 	Context map[string]any
 }
 
+// OwnRepo is the repo this grant's dispatch may treat as its own — the same
+// core.OwnRepo rule every other representation of a dispatch uses. Read this
+// rather than Repo when deciding what the grant implicitly owns.
+func (id SkillIdentity) OwnRepo() string { return core.OwnRepo(id.Repo, id.TargetTrusted) }
+
 // ScopesFor is the per-option allowlist this grant attaches to one verb,
 // merged over every pattern that admits it (`kv.*` constrains kv.get and
 // kv.set alike). It uses the SAME matcher the access gate does, so a grant
@@ -536,7 +541,7 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	// provenance stamp is also what a memory written here records.
 	// trustedTargetRepo, not id.Repo: a forged target owns no memory scope
 	// either. One decision, every consumer of "your own target".
-	ctx = memory.WithCaller(ctx, memory.Caller{Repo: trustedTargetRepo(t)})
+	ctx = memory.WithAgentCaller(ctx, t.Target.Repo, t.TargetTrusted)
 	ctx = memory.WithSource(ctx, memory.Source{Step: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
 		TargetTrusted: id.TargetTrusted})
 	deny := func(reason string) (map[string]any, error) {

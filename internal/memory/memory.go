@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/NodeSpy/conductor/internal/core"
 	"sort"
 	"strings"
 	"sync"
@@ -51,6 +52,11 @@ type Source struct {
 	// nothing gets the safe answer.
 	TargetTrusted bool `json:"target_trusted,omitempty" yaml:"target_trusted,omitempty"`
 }
+
+// OwnRepo is the repo this provenance may treat as its own — core.OwnRepo's
+// rule, not a second copy of it. Read this, never Repo, when deciding what a
+// dispatch implicitly owns.
+func (s Source) OwnRepo() string { return core.OwnRepo(s.Repo, s.TargetTrusted) }
 
 // Entry is one memory. Scope is the opaque key it was filed under, or
 // GlobalScope for the shared set.
