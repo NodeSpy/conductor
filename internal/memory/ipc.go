@@ -214,6 +214,21 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 			req.Source, req.Number = src, number
 		}
 	}
+	// EVERY memory op on this face goes through the shared gate first. This
+	// face is the MCP/CLI memory tool an agent drives directly — the third
+	// agent-facing face, alongside the run:code binding and the memory.*
+	// verbs — and it reached the store with only the reserved-bucket check on
+	// `remember`, so `allow_memory_scopes` and the own-scope rule did not
+	// apply to it at all. The identity here is the token-derived dispatch
+	// (resolved just above, never the request body), which is exactly the
+	// Caller the allowlist authorizes against.
+	if op := memoryOpOf(req.Op); op != "" {
+		if err := m.CheckOp(Caller{Repo: req.Source.Repo, AgentFacing: true}, op, req.Scope); err != nil {
+			aud(map[string]any{"event": "memory_" + op, "via": "tool", "outcome": "blocked",
+				"agent": req.Source.Step, "repo": req.Source.Repo, "error": err.Error()})
+			return IPCResponse{Error: err.Error()}
+		}
+	}
 	switch req.Op {
 	case "remember":
 		// The same write guard as the harvest path: the IPC tool is driven
@@ -364,4 +379,20 @@ func IPCCall(socket string, req IPCRequest) (IPCResponse, error) {
 		return IPCResponse{}, fmt.Errorf("memory: read tool response: %w", err)
 	}
 	return resp, nil
+}
+
+// memoryOpOf maps an IPC op name to the memory op the scope gate knows, or ""
+// for the non-memory ops this socket also serves (run_step, secret_issue, …),
+// which have their own authorization.
+//
+// It is a function rather than an inline switch so that adding a memory op to
+// the IPC face without adding it here is visible: TestEveryAgentFacingMemoryOp
+// IsGuarded enumerates the store-touching handlers and fails on one that
+// reaches the store ungated.
+func memoryOpOf(ipcOp string) string {
+	switch ipcOp {
+	case "remember", "recall", "list", "forget":
+		return ipcOp
+	}
+	return ""
 }

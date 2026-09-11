@@ -110,42 +110,104 @@ func TestEveryReadIsRedactedAtTheSource(t *testing.T) {
 	}
 }
 
-// Both agent-facing faces must route their ops through CheckOp. A face that
-// stops calling it silently reopens recall/list/forget, which is precisely the
-// regression this chokepoint exists to prevent.
-func TestBothAgentFacesCallTheSharedGate(t *testing.T) {
+// META-TEST, ENUMERATED BY DISCOVERY (round-7 #2). The previous version of
+// this test listed two files by hand — membind.go and connector/memory.go —
+// and asserted each calls CheckOp. There was a THIRD face: ipc.go, the
+// MCP/CLI memory tool an agent drives directly, which reached the store with
+// only the reserved-bucket check. A hand-written list of faces cannot fail
+// for a face nobody put on it.
+//
+// So the list is DISCOVERED: every file in the tree that reaches the store's
+// agent-reachable methods must also call CheckOp. A fourth face added
+// tomorrow is enumerated the moment it touches Remember/Recall/List/Forget.
+func TestEveryAgentFacingMemoryFaceCallsTheSharedGate(t *testing.T) {
 	root := repoRoot(t)
-	faces := map[string]string{
-		"internal/code/membind.go":     "the run: code binding (js/go-embed/risor/lua)",
-		"internal/connector/memory.go": "the memory.* verbs (skill grants / MCP)",
+	// The store methods an agent-facing face has to go through to read or
+	// write memories. A face is anything that calls one of these.
+	touches := regexp.MustCompile(`\bm\.(Remember|Recall|List|Forget)\(`)
+	// Where a face can live. internal/memory's own internals (the manager,
+	// the harvester, the prompt injector) are not agent-facing: they are the
+	// implementation the faces call, and the harvest path has its own guard.
+	faceDirs := []string{"internal/code", "internal/connector", "internal/memory"}
+	notAFace := map[string]bool{
+		"internal/memory/memory.go":     true, // the manager itself
+		"internal/memory/harvest.go":    true, // output-contract harvest (CheckAgentScope + write guard)
+		"internal/memory/prompt.go":     true, // prompt injection, no caller input
+		"internal/memory/peer.go":       true,
+		"internal/memory/scopeguard.go": true,
 	}
-	for rel, what := range faces {
+	found := 0
+	for _, dir := range faceDirs {
+		entries, err := os.ReadDir(filepath.Join(root, dir))
+		if err != nil {
+			t.Fatalf("read %s: %v", dir, err)
+		}
+		for _, e := range entries {
+			rel := filepath.Join(dir, e.Name())
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+				continue
+			}
+			if notAFace[filepath.ToSlash(rel)] {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(root, rel))
+			if err != nil {
+				t.Fatalf("read %s: %v", rel, err)
+			}
+			src := string(b)
+			if !touches.MatchString(src) {
+				continue // not a face
+			}
+			found++
+			if !strings.Contains(src, ".CheckOp(") {
+				t.Errorf("%s reaches the memory store (%s) but never calls CheckOp — every "+
+					"agent-facing face must authorize the scope it touches, or allow_memory_scopes "+
+					"is inert on it (which is exactly how the MCP/CLI face shipped)",
+					rel, touches.FindString(src))
+			}
+		}
+	}
+	if found < 3 {
+		t.Errorf("discovered only %d memory face(s); the run:code binding, the memory.* verbs "+
+			"and the MCP/CLI tool are all expected — if a face moved, this test has stopped "+
+			"looking where the faces are", found)
+	}
+}
+
+// …and the gate must come BEFORE the op switch on each face, not inside one
+// case: a per-case call is how `remember` ended up guarded alone.
+func TestTheSharedGateComesBeforeTheOpSwitch(t *testing.T) {
+	root := repoRoot(t)
+	for rel, what := range map[string]string{
+		"internal/code/membind.go":     "the run: code binding (js/go-embed/risor/lua)",
+		"internal/connector/memory.go": "the memory.* verbs (skill grants / plan steps)",
+		"internal/memory/ipc.go":       "the MCP/CLI memory tool",
+	} {
 		b, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
 			t.Fatalf("read %s: %v", rel, err)
 		}
 		src := string(b)
-		if !regexp.MustCompile(`\.CheckOp\(`).MatchString(src) {
-			t.Errorf("%s (%s) no longer calls memory.CheckOp — every op it dispatches "+
-				"is ungated", rel, what)
+		gate := strings.Index(src, ".CheckOp(")
+		if gate < 0 {
+			t.Errorf("%s (%s) no longer calls CheckOp", rel, what)
 			continue
 		}
-		// It must gate BEFORE the switch, not inside one case — a per-case
-		// call is how `remember` ended up guarded alone.
-		gate := strings.Index(src, ".CheckOp(")
-		sw := strings.Index(src, "switch verb {")
-		if sw < 0 {
-			sw = strings.Index(src, "switch op {")
+		sw := -1
+		for _, marker := range []string{"switch verb {", "switch op {", "switch req.Op {"} {
+			if i := strings.Index(src, marker); i >= 0 && (sw < 0 || i < sw) {
+				sw = i
+			}
 		}
 		if sw >= 0 && gate > sw {
-			t.Errorf("%s calls CheckOp INSIDE the op switch — gate before it, or the next "+
-				"op added gets no guard (which is exactly how recall/list/forget stayed open)", rel)
+			t.Errorf("%s calls CheckOp INSIDE the op switch — gate before it, or the next op "+
+				"added gets no guard", rel)
 		}
 	}
 }
 
-// agentCaller is the caller shape every test here means: an agent-facing op
-// with no dispatch repo of its own, so only the allowlist can admit it.
+// agentCaller is the caller shape these tests mean: an agent-facing op with
+// no dispatch repo of its own, so only the allowlist can admit it.
 var agentCaller = Caller{AgentFacing: true}
 
 // A CONFIG-AUTHORED caller (the zero Caller) is not gated by the operator's
