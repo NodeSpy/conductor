@@ -122,10 +122,18 @@ func (rw *refRewriter) rebindStep(p *Step) {
 	}
 	if len(p.Skill.Verbs) > 0 {
 		out := make([]string, len(p.Skill.Verbs))
+		scopes := make(map[string]map[string][]string, len(p.Skill.VerbScopes))
 		for i, v := range p.Skill.Verbs {
 			out[i] = rw.rebindVerb(v) // rebinds the connector prefix of conn.verb / conn.*
+			// A per-verb resource constraint is keyed by the same pattern,
+			// so it moves with it — or the grant would keep its access and
+			// silently lose its scope.
+			if c, ok := p.Skill.VerbScopes[v]; ok {
+				scopes[out[i]] = c
+			}
 		}
 		p.Skill.Verbs = out
+		p.Skill.VerbScopes = pruneVerbScopes(scopes, out)
 	}
 	// A session `end_on: [<connector>.<kind>]` eviction rule names connectors
 	// too — rebind their prefixes, or the rule would name a connector that does

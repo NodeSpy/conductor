@@ -66,9 +66,31 @@ type AgentAuthoredPolicy struct {
 	// steps may not reference that resource kind at all. "*" grants all of
 	// one kind; trust: full lifts all three. Config-authored steps are
 	// untouched by these lists.
+	//
+	// These three are LEGACY SPELLINGS of AllowScopes entries and are kept
+	// working forever: allow_secrets == allow_scopes.secret, allow_stores ==
+	// allow_scopes.store, allow_targets == allow_scopes.repo. Use
+	// allow_scopes: for anything new — it is the form that also reaches
+	// `channel`, `path`, and whatever dimension the next connector declares.
 	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
 	AllowStores  []string `yaml:"allow_stores,omitempty"`
 	AllowTargets []string `yaml:"allow_targets,omitempty"`
+	// AllowScopes is the GENERAL resource allowlist, keyed by the dimension
+	// a connector's option schema declares (docs/design/skill-verb-scope.md):
+	//
+	//	allow_scopes:
+	//	  repo:    ["org/docs"]     # gh verbs' repo: beyond the triggering one
+	//	  channel: ["#code-reviews"]
+	//	  store:   ["shared-kv"]
+	//	  path:    ["/srv/artifacts/*"]
+	//
+	// Same deny-by-default rule as the legacy trio, and the same implicit
+	// allowance: whatever the DISPATCH itself points at (its own repo, the
+	// channel its event came from, the operator's configured default) needs
+	// no entry. "*" grants a whole dimension; trust: full lifts all of them.
+	// Unknown dimensions are inert rather than an error — a connector that
+	// went disabled at boot must not turn a config into a load failure.
+	AllowScopes map[string][]string `yaml:"allow_scopes,omitempty"`
 	// AllowMemoryScopes is the same allowlist for shared memory: which
 	// memory scopes an agent-authored step may read, write or forget BEYOND
 	// its own triggering scope (implicitly allowed, as the triggering target
@@ -164,6 +186,43 @@ func (p *AgentAuthoredPolicy) EgressGated() bool {
 // TrustFull reports the deliberate lift-the-allowlist opt-in.
 func (p *AgentAuthoredPolicy) TrustFull() bool { return p != nil && p.Trust == "full" }
 
+// Scope dimension names the legacy allow_* lists are aliases for. They are
+// spelled out here, once, so the enforcement path never learns them: it asks
+// ScopeAllow for a dimension and gets whichever spelling the operator used.
+const (
+	DimRepo   = "repo"
+	DimStore  = "store"
+	DimSecret = "secret"
+)
+
+// ScopeAllow resolves the per-dimension resource allowlist: allow_scopes
+// unioned with the legacy allow_targets/allow_stores/allow_secrets aliases, so
+// an existing config behaves exactly as it did and a new one can name any
+// dimension a connector declares.
+func (p *AgentAuthoredPolicy) ScopeAllow() map[string][]string {
+	if p == nil {
+		return nil
+	}
+	out := make(map[string][]string, len(p.AllowScopes)+3)
+	for dim, list := range p.AllowScopes {
+		dim = strings.TrimSpace(dim)
+		if dim == "" {
+			continue
+		}
+		out[dim] = append(out[dim], list...)
+	}
+	for dim, legacy := range map[string][]string{
+		DimRepo:   p.AllowTargets,
+		DimStore:  p.AllowStores,
+		DimSecret: p.AllowSecrets,
+	} {
+		if len(legacy) > 0 {
+			out[dim] = append(out[dim], legacy...)
+		}
+	}
+	return out
+}
+
 // validateAgentAuthored checks the block's shape at load time.
 func validateAgentAuthored(where string, p *AgentAuthoredPolicy, hosts map[string]HostConfig) error {
 	if p == nil {
@@ -176,6 +235,16 @@ func validateAgentAuthored(where string, p *AgentAuthoredPolicy, hosts map[strin
 		for _, pat := range list {
 			if strings.TrimSpace(pat) == "" {
 				return fmt.Errorf("config: %s: agent_authored allow/approve: empty pattern", where)
+			}
+		}
+	}
+	for dim, list := range p.AllowScopes {
+		if strings.TrimSpace(dim) == "" {
+			return fmt.Errorf("config: %s: agent_authored.allow_scopes: empty dimension name (want a connector's scope dimension, e.g. repo/channel/store)", where)
+		}
+		for _, pat := range list {
+			if strings.TrimSpace(pat) == "" {
+				return fmt.Errorf("config: %s: agent_authored.allow_scopes.%s: empty pattern", where, dim)
 			}
 		}
 	}

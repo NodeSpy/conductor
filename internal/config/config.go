@@ -719,6 +719,22 @@ type SkillPolicy struct {
 	//	verbs: [github.*, sentry.*]     several connectors
 	//	verbs: [github.submit_review]   specific verbs
 	//
+	// The block also takes a MAP form — the same grant, per verb, with the
+	// RESOURCE each call may name (docs/design/skill-verb-scope.md):
+	//
+	//	verbs:
+	//	  slack.post:           { channel: ["#code-reviews"] }
+	//	  github.submit_review: {}
+	//	  kv.*:                 { store: ["shared-kv"] }
+	//
+	// The keys inside an entry are that verb's OWN scope-tagged options, so
+	// `channel` under slack.post and `repo` under github.submit_review never
+	// collide. A scoped option the entry does not list is limited to the
+	// dispatch's own context (its repo, the channel its event came from);
+	// listing widens it. Naming an option the verb doesn't declare as a
+	// resource is a load error. Both forms carry the same verb access — see
+	// VerbScopes.
+	//
 	// Empty (or no `skill:` block at all) → no surface: no tools, no card,
 	// nothing injected, everything denied. READS ARE NOT OPEN BY DEFAULT —
 	// a read verb outside the grant is refused like any other. Breadth is
@@ -729,6 +745,13 @@ type SkillPolicy struct {
 	// run_step under policy.agent_authored. Inside a PACK the grant is
 	// additionally bounded by requires.connectors (§C).
 	Verbs []string `yaml:"verbs"`
+	// VerbScopes carries the MAP form's per-verb resource constraints:
+	// verb pattern → option name → allowed values (exact or glob). It is
+	// derived from `verbs:` at decode time, never written directly, and is
+	// always a subset of Verbs' patterns — the list form leaves it empty,
+	// which means "every scoped option is limited to the dispatch's own
+	// context".
+	VerbScopes map[string]map[string][]string `yaml:"-"`
 	// SecretsVia picks how this agent obtains a credential it truly needs:
 	// "broker" (the audited single-use secret broker), "env" (DEPRECATED —
 	// template the secret into the step's env:, which puts the raw value in

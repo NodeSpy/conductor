@@ -201,6 +201,7 @@ func (st *packInstantiation) applyPackSkillBoundary(ns string, man *PackManifest
 		// shared with the lint/show paths.
 		sk := *step.Skill
 		sk.Verbs = kept
+		sk.VerbScopes = pruneVerbScopes(sk.VerbScopes, kept)
 		step.Skill = &sk
 	})
 }
