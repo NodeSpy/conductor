@@ -34,6 +34,7 @@ The model
 - [[Secrets]]
 - [[Hosts]]
 - [[Isolation]]
+- [[Trust-and-Isolation]]
 
 Connector types
 - [[Authoring-Connectors]]

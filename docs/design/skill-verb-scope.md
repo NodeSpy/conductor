@@ -1,5 +1,9 @@
 # Per-verb, connector-driven resource scoping (the `channel` gap, generalized)
 
+> Scope note: this scoping is a hard boundary against event authors and packs,
+> and defense in depth against an agent sharing the daemon's OS user. See
+> docs/wiki/Trust-and-Isolation.md.
+
 Round-3 flagged one item as not-built: an agent granted `slack.*` can post to **any**
 channel the token reaches. The reason it had no home is the real finding: conductor
 conflated two orthogonal axes and only had a mechanism for one.

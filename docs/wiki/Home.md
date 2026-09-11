@@ -130,7 +130,7 @@ Setup: [[Installation]] · [[Quickstart]] · [[GitHub-App-Setup]] ·
 The model: [[Connectors]] · [[Workflows]] · [[Reuse]] · [[Settings-and-Templating]] · [[Verbs]] · [[Code-Steps]] · [[Stores]] ·
 [[Runtimes]] · [[Steps]] · [[Grouping]] · [[Memory]] · [[Binary-Data]] ·
 [[Agent-Skill]] · [[Policy]] · [[Gates]] · [[Teams]] · [[Outcomes]] ·
-[[Cost-Accounting]] · [[Secrets]] · [[Hosts]] · [[Isolation]]
+[[Cost-Accounting]] · [[Secrets]] · [[Trust-and-Isolation]] · [[Hosts]] · [[Isolation]]
 
 Connector references: [[Authoring-Connectors]] · [[Integration-GitHub]] ·
 [[Integration-Slack]] · [[Integration-Cron]] · [[Integration-Webhook]] ·

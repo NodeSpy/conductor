@@ -97,12 +97,34 @@ func TestACPSkillClaimInjection(t *testing.T) {
 		t.Fatal("a spent claim code must be refused")
 	}
 
-	// A profile without skill: gets no claim at all.
+	// A profile WITHOUT skill: still gets a claim — the credential is the
+	// socket's authentication, not a capability (round-12 #1). What it must
+	// not get is a GRANT: the identity it resolves to carries the dispatch's
+	// provenance and an empty policy.
 	got = newSession(config.Step{})
 	if len(got) != 1 {
 		t.Fatalf("mcp servers: %+v", got)
 	}
-	if len(got[0].Env) != 0 {
-		t.Fatalf("claim minted for a profile without skill:: %+v", got[0].Env)
+	plain := ""
+	for _, e := range got[0].Env {
+		if e.Name == "CONDUCTOR_SKILL_CLAIM" {
+			plain = e.Value
+		}
+	}
+	if plain == "" {
+		t.Fatal("no credential minted for a profile without skill: — the memory/run_step ops " +
+			"would then have no way to authenticate, and the socket would be back to believing " +
+			"a Source off the wire")
+	}
+	tok, err := broker.ClaimSession(plain, skill.Peer{PID: 777, Valid: true})
+	if err != nil {
+		t.Fatalf("claim exchange: %v", err)
+	}
+	id, err := broker.Authorize(tok, skill.Peer{PID: 777, Valid: true})
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	if len(id.Policy.Verbs) != 0 || id.Policy.SecretsVia != "" {
+		t.Errorf("a credential without skill: must grant nothing, got %+v", id.Policy)
 	}
 }

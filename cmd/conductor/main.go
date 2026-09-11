@@ -618,10 +618,16 @@ func cmdRun(args []string) error {
 				ops.ListWorkflows = stack.Runner.WorkflowCatalog
 				logf("memory: live run_step/workflow_list tools enabled")
 			}
-			// The secret broker (#36 §12): built only when a profile opts in
-			// via skill:, authorized by the session tokens the dispatch path
-			// mints (skill.Active), never by client-asserted identity.
-			if cfg.SkillEnabled() {
+			// THE SOCKET'S AUTHENTICATION. The broker mints a per-dispatch
+			// credential for every tool subprocess and resolves it back to
+			// the dispatch's real provenance, so handleIPC never has to
+			// believe a Source off the wire. It is built whenever the socket
+			// is served — NOT only when a profile enables skill: — because
+			// the memory and run_step ops need the same authentication the
+			// skill ops always had (round-12 #1). A dispatch with no skill:
+			// block gets an identity carrying its provenance and an EMPTY
+			// grant: authentication, not capability.
+			{
 				// A broker name is a vault entry ("<vault>/<key>", read at
 				// issue time through the vaults registry, which taints the
 				// value for redaction); a bare name falls back to the
@@ -649,11 +655,16 @@ func cmdRun(args []string) error {
 				ops.ClaimToken = func(claim string, peer memory.Peer) (string, error) {
 					return sb.ClaimSession(claim, asPeer(peer))
 				}
-				ops.IssueSecret = func(token, name string, peer memory.Peer) (string, time.Time, error) {
-					return sb.Issue(token, name, asPeer(peer))
-				}
-				ops.RedeemSecret = func(token, grant string, peer memory.Peer) (string, error) {
-					return sb.Redeem(token, grant, asPeer(peer))
+				// The SECRET ops stay behind the skill gate: a credential
+				// authenticates a dispatch, it does not entitle it to
+				// secrets. Without a skill: block there is nothing to issue.
+				if cfg.SkillEnabled() {
+					ops.IssueSecret = func(token, name string, peer memory.Peer) (string, time.Time, error) {
+						return sb.Issue(token, name, asPeer(peer))
+					}
+					ops.RedeemSecret = func(token, grant string, peer memory.Peer) (string, error) {
+						return sb.Redeem(token, grant, asPeer(peer))
+					}
 				}
 				// Identify resolves a session token to its dispatch provenance
 				// so the CLI/remote memory + run_step ops bind their Source to
@@ -671,7 +682,9 @@ func cmdRun(args []string) error {
 				}
 				// The verb-tool surface: catalog + execution, both bound to
 				// the token's real dispatch identity and its skill.verbs.
-				if stack != nil {
+				// Skill-gated: an empty grant serves nothing anyway, but the
+				// gate keeps the surface off a daemon that never asked for it.
+				if stack != nil && cfg.SkillEnabled() {
 					runner := stack.Runner
 					ops.SkillVerbs = func(token string, peer memory.Peer) ([]map[string]any, error) {
 						id, err := sb.Authorize(token, asPeer(peer))
@@ -698,7 +711,11 @@ func cmdRun(args []string) error {
 						}, uses, options)
 					}
 				}
-				logf("skill: secret broker + verb tools enabled (per-profile skill: policy)")
+				if cfg.SkillEnabled() {
+					logf("skill: secret broker + verb tools enabled (per-profile skill: policy)")
+				} else {
+					logf("memory: per-dispatch tool credentials enabled (provenance is resolved daemon-side, never taken from the request)")
+				}
 			}
 			memory.SetLiveOps(ops)
 

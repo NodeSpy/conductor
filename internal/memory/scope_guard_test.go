@@ -41,8 +41,9 @@ func TestHarvestRefusesTheSharedScope(t *testing.T) {
 // …and the live skill/MCP tool.
 func TestIPCRememberRefusesTheSharedScope(t *testing.T) {
 	m := testManager(t, NewMemBackend())
+	authenticated(t, Source{Step: "s", Repo: "o/r", TargetTrusted: true}, 0)
 	resp := handleIPC(m, IPCRequest{Op: "remember", Text: "a fact", Scope: "global",
-		Source: Source{Step: "s"}}, Peer{}, func(map[string]any) {}, func(string, ...any) {})
+		Token: "test-credential"}, Peer{}, func(map[string]any) {}, func(string, ...any) {})
 	if resp.Error == "" || !strings.Contains(resp.Error, "reserved scope") {
 		t.Fatalf("memory_remember must refuse the shared scope, got %+v", resp)
 	}

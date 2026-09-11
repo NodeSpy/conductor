@@ -12,6 +12,7 @@ import (
 // durable shared memory, unlike the verb and code-binding write paths. Both
 // now pass the write guard.
 func TestWriteGuardBlocksHarvestAndIPCRemember(t *testing.T) {
+	authenticated(t, Source{Step: "a", Repo: "o/r", TargetTrusted: true}, 0)
 	const secret = "mem-s3cr3t-XYZZY"
 	m := NewManager(NewMemBackend())
 	m.SetWriteGuard(func(text string) error {
@@ -37,7 +38,7 @@ func TestWriteGuardBlocksHarvestAndIPCRemember(t *testing.T) {
 
 	// IPC path: the remember op is refused and audited as blocked.
 	var audits []map[string]any
-	resp := handleIPC(m, IPCRequest{Op: "remember", Text: "key=" + secret, Source: Source{Step: "a"}}, Peer{},
+	resp := handleIPC(m, IPCRequest{Op: "remember", Text: "key=" + secret, Token: "test-credential"}, Peer{},
 		func(e map[string]any) { audits = append(audits, e) }, nil)
 	if resp.OK || !strings.Contains(resp.Error, "refusing to persist") {
 		t.Fatalf("IPC remember of a secret must refuse: %+v", resp)
@@ -59,7 +60,7 @@ func TestWriteGuardBlocksHarvestAndIPCRemember(t *testing.T) {
 	if _, err := m.HarvestOutput("```remember\n- a plain fact\n```", Source{}); err != nil {
 		t.Fatalf("clean harvest must pass: %v", err)
 	}
-	if resp := handleIPC(m, IPCRequest{Op: "remember", Text: "another fact", Source: Source{}}, Peer{}, nil, nil); !resp.OK {
+	if resp := handleIPC(m, IPCRequest{Op: "remember", Text: "another fact", Token: "test-credential"}, Peer{}, nil, nil); !resp.OK {
 		t.Fatalf("clean IPC remember must pass: %+v", resp)
 	}
 	if all, _ := m.List(); len(all) != 2 {
@@ -72,6 +73,7 @@ func TestWriteGuardBlocksHarvestAndIPCRemember(t *testing.T) {
 // before the write guard existed came straight back into agent context. Both
 // read paths redact now.
 func TestRecalledMemoryRedactsSecrets(t *testing.T) {
+	authenticated(t, Source{Step: "a", Repo: "o/r", TargetTrusted: true}, 0)
 	const secret = "recalled-s3cr3t-XYZZY"
 	m := NewManager(NewMemBackend())
 	// Persist directly (simulating a pre-guard or trusted-path write).
@@ -88,7 +90,7 @@ func TestRecalledMemoryRedactsSecrets(t *testing.T) {
 		t.Fatalf("prompt section must carry the placeholder: %s", section)
 	}
 
-	resp := handleIPC(m, IPCRequest{Op: "recall", Source: Source{Step: "a"}}, Peer{}, nil, nil)
+	resp := handleIPC(m, IPCRequest{Op: "recall", Token: "test-credential"}, Peer{}, nil, nil)
 	if !resp.OK || len(resp.Entries) != 1 {
 		t.Fatalf("recall: %+v", resp)
 	}

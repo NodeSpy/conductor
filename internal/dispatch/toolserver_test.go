@@ -44,11 +44,14 @@ func TestSkillEnv(t *testing.T) {
 		t.Errorf("an empty endpoint must inject nothing")
 	}
 
-	// No skill: block → nothing, even with an endpoint.
+	// No skill: block → still a CREDENTIAL, because that is how the socket
+	// authenticates a tool request's provenance rather than believing the
+	// Source in it (round-12 #1). What it carries is an empty grant.
 	noskill := req
 	noskill.Step.Skill = nil
-	if SkillEnv(noskill, "unix:///run/c/memory.sock") != nil {
-		t.Errorf("a non-skill profile must get no skill env")
+	env := SkillEnv(noskill, "unix:///run/c/memory.sock")
+	if env == nil || env["CONDUCTOR_SKILL_TOKEN"] == "" {
+		t.Fatalf("a non-skill dispatch must still get a credential: %+v", env)
 	}
 
 	// No tool server published at boot → LocalSkillEndpoint is empty.

@@ -198,18 +198,41 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 	if m == nil && (req.Op == "remember" || req.Op == "recall") {
 		return IPCResponse{Error: "memory: not configured"}
 	}
-	// Provenance binding for the token-carrying faces (CLI / remote HTTP): the
-	// ops below trust the dispatched identity the broker holds for the token,
-	// never a Source in the request body. When a token is present and the
-	// broker can identify it, its provenance is authoritative; when the broker
-	// rejects the token, the op is denied rather than falling back to a
-	// spoofable body Source. A request with no token (the MCP tool subprocess,
-	// which bakes Source into its flags) keeps the body Source unchanged.
-	if req.Token != "" && (req.Op == "remember" || req.Op == "recall" || req.Op == "run_step") {
-		if ops := getLiveOps(); ops.Identify != nil {
+	// PROVENANCE IS RESOLVED DAEMON-SIDE, ALWAYS (round-12 #1).
+	//
+	// The socket is 0600 — same-uid — and a dispatched agent runs as the
+	// daemon's user by default (mandatorily, for paseo). So anything that
+	// arrives in the REQUEST BODY is agent-supplied: a Source on the wire
+	// said "I am this dispatch, my target is trusted, my repo is that one",
+	// and the daemon believed it. That self-granted own-repo memory scope for
+	// any repo and steered run_step's namespace onto another dispatch's
+	// session — defeating core.OwnRepo and the DispatchID anchor from the
+	// inside.
+	//
+	// It was only ever half-resolved: a token bound the Source to the
+	// broker's identity, but the binding ran only when a token was PRESENT
+	// and the resolver was wired, and the resolver was wired only when a
+	// profile enabled skill:. A memory-only daemon resolved nothing.
+	//
+	// Now: the ops that carry provenance take it from the credential or they
+	// do not run. A request may not supply its own.
+	//
+	// (See docs/wiki/Trust-and-Isolation.md for what this does and does not
+	// buy: it is a real boundary against an isolated runtime and a raised
+	// bar elsewhere, NOT a wall against a same-uid agent that can read the
+	// daemon's files and other dispatches' environments directly.)
+	if needsProvenance(req.Op) {
+		ops := getLiveOps()
+		if ops.Identify == nil {
+			// No resolver on this daemon: a request that asserts provenance
+			// cannot be checked, so it is refused rather than trusted.
+			if req.Source != (Source{}) || req.Number != 0 {
+				return IPCResponse{Error: "memory: this daemon cannot authenticate tool requests — refusing one that asserts its own provenance"}
+			}
+		} else {
 			src, number, ok := ops.Identify(req.Token, peer)
 			if !ok {
-				return IPCResponse{Error: "memory: unknown or unauthorized session token"}
+				return IPCResponse{Error: "memory: unknown or unauthorized session token (a tool request's provenance comes from its per-dispatch credential, never from the request)"}
 			}
 			req.Source, req.Number = src, number
 		}
@@ -399,4 +422,16 @@ func memoryOpOf(ipcOp string) string {
 		return ipcOp
 	}
 	return ""
+}
+
+// needsProvenance reports whether an op acts ON BEHALF OF a dispatch and so
+// must have its Source resolved from the caller's credential. The broker ops
+// (token_claim, secret_issue/redeem) authenticate by token themselves, and
+// the catalog ops act on behalf of nobody.
+func needsProvenance(op string) bool {
+	switch op {
+	case "remember", "recall", "list", "forget", "run_step":
+		return true
+	}
+	return false
 }

@@ -1,5 +1,10 @@
 # Policy
 
+> **What these gates are and are not.** Against event authors and packs they
+> are a security boundary. Against an AGENT that shares the daemon's OS user
+> they are defense in depth, not containment — see
+> [[Trust-and-Isolation]].
+
 `policy:` is one block that can appear at three scopes — **global**, on a
 **connector**, and on a **trigger** — with the most specific setting winning
 per key: trigger → connector → global. Quieting a single workflow is just a

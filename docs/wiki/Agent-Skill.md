@@ -5,6 +5,11 @@ conductor — its verbs, the live [[Memory]], and the secret broker — while it
 runs. It is **off by default**: a profile without a `skill:` block gets none
 of this, and every part of it denies unless config explicitly allows.
 
+
+> A skill grant bounds what an agent can do *through conductor*. It is not a
+> wall around an agent that shares the daemon's OS user — see
+> [[Trust-and-Isolation]].
+
 ## How the surface reaches the agent
 
 The agent reaches conductor one of two ways, chosen automatically from the
