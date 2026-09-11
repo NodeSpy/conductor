@@ -150,6 +150,28 @@ dimension that denies every call rather than scoping it:
 connector's own configured default option value is implicitly in scope — that
 is what makes "the configured default channel" work without per-connector code.
 
+## Round 4 — three fixes, and the semantics they pinned
+
+- **F3.** The skill surface enforced through the PLAN policy, which is nil
+  with no `policy.agent_authored` block (and under `trust: full`) — so a grant
+  spelling out `{channel: ["#x"]}` did no scoping at all in such a config. The
+  grant's scoping is intrinsic to the grant: it now resolves through
+  `skillResourcePolicy`, which is never nil. A policy only WIDENS. `trust:
+  full` is plan latitude and does not lift a constraint the operator wrote
+  onto a named verb; `allow_scopes` still widens under it, so the escape hatch
+  stays one line. The plan surface's nil path stays as it was and is moot —
+  `guardPlan` refuses an agent-authored plan outright with no policy block,
+  which `TestAgentAuthoredPlansNeedAPolicy` now pins.
+- **F2.** The override path deep-merges maps, so once `skill.verbs` grew a map
+  form a consumer could no longer NARROW a bundled grant — it failed open in
+  the new spelling only. Permission sets are now replaced whole whichever form
+  they take (`permissionSets` in pack_refs.go).
+- **F1.** A secret's identity is (vault, key). The flat `allow_scopes.secret`
+  list was matched bare, so `["house/prod-token"]` also authorized
+  `shared.read {key: "house/prod-token"}`. Secret matching is now
+  connector-bound: a qualified entry reaches only the vault it names; a bare
+  entry names a key within whichever vault is calling.
+
 ## Tests
 - `slack.post` skill grant with `channel: ["#x"]` → post to `#x` ok; post to `#y`
   refused; post to the dispatch's own channel ok with no list.

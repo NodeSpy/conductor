@@ -94,6 +94,11 @@ skill:
   verb doesn't declare as a resource (a typo, or `text:`) is a **load error**.
 - The operator's own [[Policy|`policy.agent_authored.allow_scopes`]] applies
   on top, for dimensions you'd rather set once for every agent.
+- **The grant scopes on its own terms.** It does not need a
+  `policy.agent_authored` block to take effect (that governs agent-authored
+  *plans*, a different surface), and `trust: full` does not lift it — a
+  constraint you wrote onto a named verb stays written. To open a dimension
+  here, say so here: `{channel: ["*"]}`, or list it in `allow_scopes`.
 
 Two properties worth being explicit about:
 
