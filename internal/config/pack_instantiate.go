@@ -591,8 +591,14 @@ func substituteSettings(nodeDir string, settings map[string]string) (*PackManife
 	}
 	// The SHARED substitutor (settings.go) — the same one the main config's
 	// own `settings:` block goes through, so the syntax, the iteration bound,
-	// and the leave-unknown-refs rule cannot drift between the two.
-	sub := substituteSettingsBody(raw, settings)
+	// the leave-unknown-refs rule, and above all the node-not-text
+	// substitution cannot drift between the two. A pack ships its own default
+	// setting values, which makes it exactly the place a booby-trapped value
+	// would come from.
+	sub, serr := substituteInBody(raw, settings)
+	if serr != nil {
+		return nil, serr
+	}
 	var man PackManifest
 	if err := strictUnmarshal(sub, &man); err != nil {
 		return nil, fmt.Errorf("parse manifest after settings substitution: %w", err)

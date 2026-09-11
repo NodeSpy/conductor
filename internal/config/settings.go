@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"regexp"
@@ -40,30 +41,175 @@ var envRefRE = regexp.MustCompile(`\$\{env\.([A-Za-z_][A-Za-z0-9_]*)\}`)
 // references itself terminates instead of looping.
 const maxSettingPasses = 8
 
-// substituteSettingsBody replaces every `${settings.NAME}` in a config body,
-// iterating so a setting whose VALUE itself contains a reference resolves too.
-// An unknown name is LEFT IN PLACE — it is caught after decode, by
+// substituteRefsInScalar replaces every `${settings.NAME}` in ONE scalar
+// value. An unknown name is LEFT IN PLACE — it is caught after decode, by
 // unknownSettingRefs, so a comment that merely mentions the syntax doesn't
 // fail a load while a real field that needs it does.
-func substituteSettingsBody(body []byte, settings map[string]string) []byte {
-	if len(settings) == 0 || !strings.Contains(string(body), "${settings.") {
-		return body
+func substituteRefsInScalar(v string, settings map[string]string) string {
+	if !strings.Contains(v, "${settings.") {
+		return v
 	}
-	sub := body
-	for i := 0; i < maxSettingPasses; i++ {
-		next := settingsRefRE.ReplaceAllFunc(sub, func(m []byte) []byte {
-			name := string(settingsRefRE.FindSubmatch(m)[1])
-			if val, ok := settings[name]; ok {
-				return []byte(val)
-			}
-			return m
-		})
-		if string(next) == string(sub) {
-			break
+	return settingsRefRE.ReplaceAllStringFunc(v, func(m string) string {
+		name := settingsRefRE.FindStringSubmatch(m)[1]
+		if val, ok := settings[name]; ok {
+			return val
 		}
-		sub = next
+		return m
+	})
+}
+
+// SubstituteRefs is THE substitution primitive: every `${…}` conductor
+// resolves into a config — settings and environment, main config and pack
+// manifest — goes through it, and it has one job beyond replacing text.
+//
+// A substituted value must be able to supply a VALUE and never STRUCTURE.
+//
+// The first implementation spliced into the raw config BYTES before the
+// parse, which made a setting value arbitrary document text:
+//
+//	settings: { chan: "ops\"\n    trust: full #" }
+//	policy: { agent_authored: { approve_via: "${settings.chan}" } }
+//
+// closed the quoted scalar, opened a SIBLING KEY, and commented out the
+// trailing quote. Load returned no error, `trust: full` was in effect, and no
+// `trust:` line appeared anywhere in the operator's config. A pack shipping a
+// booby-trapped default, or a value from a shared environment, owned the
+// consumer's policy.
+//
+// So substitution happens inside the PARSED tree, in scalar values only, and
+// the result is re-encoded — which quotes whatever the value turned out to
+// be. Three steps, because a reference can sit where the document does not
+// yet parse (`app: { secret: ${VAR} }` — a bare `${` opens a flow mapping):
+//
+//  1. replace each reference with an INERT TOKEN, so the document parses
+//     wherever the reference sat;
+//  2. parse, and replace tokens inside SCALAR VALUES with resolved values;
+//  3. re-encode, then restore any token the walk did not reach (one inside a
+//     comment) to its original reference text.
+//
+// resolve maps one matched reference to its replacement; reporting false
+// leaves the reference in place for a later pass, or for the unknown-reference
+// error to name.
+func SubstituteRefs(body []byte, re *regexp.Regexp, resolve func(ref string) (string, bool)) ([]byte, error) {
+	if !re.Match(body) {
+		return body, nil
 	}
-	return sub
+	// 1. Placeholders. The token is alphanumeric, so it is a legal plain
+	// scalar in every context a reference can appear in.
+	refs := map[string]string{}
+	i := 0
+	prefix := refTokenPrefix(body)
+	tokenized := re.ReplaceAllFunc(body, func(m []byte) []byte {
+		tok := fmt.Sprintf("%s%dZ", prefix, i)
+		i++
+		refs[tok] = string(m)
+		return []byte(tok)
+	})
+	var doc yaml.Node
+	if err := yaml.Unmarshal(tokenized, &doc); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	// 2. Scalars only.
+	var walk func(n *yaml.Node)
+	walk = func(n *yaml.Node) {
+		if n == nil || n.Kind == yaml.AliasNode {
+			return
+		}
+		if n.Kind == yaml.ScalarNode {
+			orig := n.Value
+			for tok, ref := range refs {
+				if !strings.Contains(n.Value, tok) {
+					continue
+				}
+				val, ok := resolve(ref)
+				if !ok {
+					val = ref // unknown: put the reference back, verbatim
+				}
+				n.Value = strings.ReplaceAll(n.Value, tok, val)
+			}
+			if n.Value != orig {
+				// A scalar that was ENTIRELY one reference re-infers its type,
+				// so `port: ${PORT}` still decodes as a number. Clearing the
+				// tag only lets the encoder choose between !!str/!!int/!!bool
+				// for the resolved value — it cannot make the value anything
+				// but a scalar.
+				if _, whole := refs[orig]; whole && n.Style == 0 {
+					n.Tag = ""
+				}
+			}
+			return
+		}
+		for _, c := range n.Content {
+			walk(c)
+		}
+	}
+	walk(&doc)
+	if doc.Kind == 0 {
+		return body, nil
+	}
+	out, err := encodeNode(&doc)
+	if err != nil {
+		return nil, err
+	}
+	// 3. A token the walk never reached sat in a comment; restore its text.
+	for tok, ref := range refs {
+		out = bytes.ReplaceAll(out, []byte(tok), []byte(ref))
+	}
+	return out, nil
+}
+
+// refTokenPrefix picks a placeholder prefix the body does not already
+// contain, so a config that happens to mention one cannot collide with it.
+func refTokenPrefix(body []byte) string {
+	base := "ZconductorRefZ"
+	for n := 0; ; n++ {
+		p := base
+		if n > 0 {
+			p = fmt.Sprintf("%s%dZ", base, n)
+		}
+		if !bytes.Contains(body, []byte(p)) {
+			return p
+		}
+	}
+}
+
+// encodeNode re-serializes a substituted tree.
+func encodeNode(n *yaml.Node) ([]byte, error) {
+	var b bytes.Buffer
+	enc := yaml.NewEncoder(&b)
+	enc.SetIndent(2)
+	if err := enc.Encode(n); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+// substituteInBody applies the declared settings to a config body.
+func substituteInBody(body []byte, settings map[string]string) ([]byte, error) {
+	if len(settings) == 0 {
+		return body, nil
+	}
+	// Iterated so a setting whose VALUE contains another reference resolves
+	// too; bounded so a self-referential value terminates.
+	out := body
+	for i := 0; i < maxSettingPasses; i++ {
+		next, err := SubstituteRefs(out, settingsRefRE, func(ref string) (string, bool) {
+			name := settingsRefRE.FindStringSubmatch(ref)[1]
+			v, ok := settings[name]
+			return v, ok
+		})
+		if err != nil {
+			return nil, err
+		}
+		if bytes.Equal(next, out) {
+			return out, nil
+		}
+		out = next
+	}
+	return out, nil
 }
 
 // unknownSettingRefs lists the `${settings.NAME}` references still present in a
@@ -130,7 +276,7 @@ func resolveSettingValues(raw map[string]string) (map[string]string, error) {
 	for i := 0; i < maxSettingPasses; i++ {
 		changed := false
 		for _, name := range names {
-			next := string(substituteSettingsBody([]byte(out[name]), out))
+			next := substituteRefsInScalar(out[name], out)
 			if next != out[name] {
 				out[name], changed = next, true
 			}
@@ -195,7 +341,7 @@ func ExpandSettings(body []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return substituteSettingsBody(body, resolved), nil
+	return substituteInBody(body, resolved)
 }
 
 // checkSettingRefs reports `${settings.X}` references that survived into the

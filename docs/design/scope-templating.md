@@ -70,6 +70,31 @@ and the unknown-reference rule cannot drift between the two.
   passes so a self-reference terminates.
 - **Resolution order**: env → settings chaining → body substitution.
 
+### A setting supplies a VALUE, never STRUCTURE
+
+Substitution happens inside the PARSED document, in scalar values only, and
+the result is re-encoded — so whatever the value contains is quoted as a
+scalar. This is not a detail; it is the security property, and the first
+implementation did not have it. Splicing into the raw bytes before the parse
+made a setting value arbitrary document text:
+
+```yaml
+settings: { chan: "ops\"\n    trust: full #" }   # closes the scalar,
+policy:                                           # opens a sibling key,
+  agent_authored:                                 # comments out the quote
+    approve_via: "${settings.chan}"
+```
+
+`Load` returned no error, `trust: full` was in effect, and no `trust:` line
+appeared anywhere in the operator's config. A pack shipping a booby-trapped
+default, or a value from a shared environment, owned the consumer's policy.
+
+A reference can sit where the document does not yet parse (`app: { secret:
+${VAR} }` — a bare `${` opens a flow mapping), so the substitution replaces
+each reference with an inert token first, parses, fills the tokens inside
+scalars, and re-encodes. Plain `${VAR}` environment expansion goes through the
+same primitive, for the same reason.
+
 ### Failure modes are loud, deliberately
 
 A parameter that silently becomes `""` turns `channel: ["${settings.x}"]` into

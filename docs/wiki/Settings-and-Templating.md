@@ -62,6 +62,12 @@ Unrelated syntax is untouched: the loader's own `${VAR}` environment expansion
 and a step's shell `${VAR}` have no `settings.` prefix, so they keep their
 meanings.
 
+A setting supplies a **value**, never structure. Substitution happens inside
+the parsed document rather than in its text, so a value containing newlines,
+quotes, `#` or `key:` lands as exactly that string — it cannot close a scalar
+and open a key you did not write. That matters most for a value you did not
+author yourself: a pack's default, or a variable from a shared environment.
+
 > Packs have had this all along ([[Packs]]) — a pack declares `settings:` and
 > you supply the values. This is the same mechanism for your own config.
 

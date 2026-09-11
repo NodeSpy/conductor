@@ -1153,11 +1153,13 @@ func loadMerged(p string, loaded map[string]bool, settings map[string]string) (m
 	if err != nil {
 		return nil, err
 	}
-	// Settings substitute per FILE, before this file is parsed — the same
-	// point the single-file path substitutes at, so an imported file behaves
-	// exactly like the config it was split out of. nil on pass 1 (the pass
-	// that discovers what `settings:` the graph declares).
-	expanded = substituteSettingsBody(expanded, settings)
+	// Settings substitute per FILE, through the shared primitive — a setting
+	// supplies a value, never document structure (see SubstituteRefs). nil on
+	// pass 1, the pass that discovers what `settings:` the graph declares.
+	expanded, serr := substituteInBody(expanded, settings)
+	if serr != nil {
+		return nil, fmt.Errorf("%s: %w", p, serr)
+	}
 	var m map[string]any
 	if err := yaml.Unmarshal(expanded, &m); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", p, err)
@@ -1258,28 +1260,38 @@ var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // Expansion runs per line on the code portion only: a ${VAR} inside a YAML
 // comment is left verbatim and never reported as missing, so the example config's
 // explanatory comments (which mention ${ENV}/${GH_PAT}) don't fail to load.
+// It substitutes into the PARSED tree, inside scalar values only, for the
+// same reason `${settings.X}` does (see substituteSettingsNode): an
+// environment variable supplies a VALUE. A value carrying a newline, a quote
+// or a `#` must not be able to close a scalar and open a sibling key — and on
+// a shared box the environment is not always the operator's alone.
+//
+// A reference inside a `#` comment is left alone, which is what the old
+// line-splitting implementation went out of its way to do and what a node
+// walk gets for free: comments are not scalar values.
 func expandEnv(path string, b []byte) ([]byte, error) {
 	var missing []string
 	seen := map[string]bool{}
-	lines := strings.Split(string(b), "\n")
-	for i, line := range lines {
-		code, comment := splitYAMLComment(line)
-		code = envRe.ReplaceAllStringFunc(code, func(m string) string {
-			name := envRe.FindStringSubmatch(m)[1]
-			v, ok := os.LookupEnv(name)
-			if !ok && !seen[name] {
+	out, err := SubstituteRefs(b, envRe, func(ref string) (string, bool) {
+		name := envRe.FindStringSubmatch(ref)[1]
+		v, ok := os.LookupEnv(name)
+		if !ok {
+			if !seen[name] {
 				seen[name] = true
 				missing = append(missing, name)
 			}
-			return v
-		})
-		lines[i] = code + comment
-	}
+			return "", true // substitute empty; the error below is the real answer
+		}
+		return v, true
+	})
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("config %s references undefined environment variable(s): %s (define them in %s or the environment)",
 			path, strings.Join(missing, ", "), filepath.Join(filepath.Dir(path), "conductor.env"))
 	}
-	return []byte(strings.Join(lines, "\n")), nil
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // splitYAMLComment splits a line into its code and trailing `#…` comment. A `#`
