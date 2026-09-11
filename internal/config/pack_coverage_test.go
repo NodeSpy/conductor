@@ -260,6 +260,74 @@ func TestApplyAgentOverrideNarrowsTheMapForm(t *testing.T) {
 	}
 }
 
+// …and at every DEPTH (round-5 #2). isPermissionSet matched the full path
+// exactly, so it recognized `skill.verbs` on a top-level step and nowhere
+// else: a `compensate.skill.verbs` (three segments) or a parallel branch's
+// (deeper still) fell through to the generic deep-merge, and the consumer
+// could not narrow a grant it inherited. Failing open, in the nesting a
+// reviewer is least likely to check.
+func TestApplyAgentOverrideNarrowsNestedGrants(t *testing.T) {
+	twoVerbs := func() *SkillPolicy {
+		return &SkillPolicy{
+			Verbs: []string{"gh.comment", "gh.merge"},
+			VerbScopes: map[string]map[string][]string{
+				"gh.comment": {"repo": {"acme/app"}}, "gh.merge": {"repo": {"acme/app"}},
+			},
+		}
+	}
+	narrowTo := map[string]any{"skill": map[string]any{"verbs": map[string]any{
+		"gh.comment": map[string]any{"repo": []any{"acme/app"}},
+	}}}
+
+	t.Run("compensate", func(t *testing.T) {
+		base := Step{Skill: twoVerbs(), Compensate: &Step{ID: "undo", Skill: twoVerbs()}}
+		out, err := applyStepOverride(base, map[string]any{
+			"skill":      narrowTo["skill"],
+			"compensate": narrowTo,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := out.Skill.Verbs; len(got) != 1 {
+			t.Fatalf("the top-level grant did not narrow: %v", got)
+		}
+		if out.Compensate == nil || out.Compensate.Skill == nil {
+			t.Fatal("the compensation step lost its skill block")
+		}
+		if got := out.Compensate.Skill.Verbs; len(got) != 1 || got[0] != "gh.comment" {
+			t.Fatalf("a compensation step's grant must narrow like any other; gh.merge survived: %v", got)
+		}
+	})
+
+	// A parallel branch reaches its steps through a LIST, and lists are
+	// replaced wholesale — so this nesting was already safe. It is here as a
+	// regression guard, and to record WHICH nestings the bug could reach: the
+	// map-valued ones (compensate, and anything else that hangs a step off a
+	// key rather than an index).
+	t.Run("parallel branch", func(t *testing.T) {
+		base := Step{Parallel: &ParallelSpec{Branches: [][]Step{{{ID: "b0", Skill: twoVerbs()}}}}}
+		// `parallel:` marshals as a list of branches, each a list of steps.
+		out, err := applyStepOverride(base, map[string]any{
+			"parallel": []any{
+				[]any{map[string]any{"id": "b0", "skill": narrowTo["skill"]}},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Parallel == nil || len(out.Parallel.Branches) != 1 || len(out.Parallel.Branches[0]) != 1 {
+			t.Fatalf("branch structure lost: %+v", out.Parallel)
+		}
+		sk := out.Parallel.Branches[0][0].Skill
+		if sk == nil {
+			t.Fatal("the branch step lost its skill block")
+		}
+		if got := sk.Verbs; len(got) != 1 || got[0] != "gh.comment" {
+			t.Fatalf("a parallel branch's grant must narrow like any other; gh.merge survived: %v", got)
+		}
+	})
+}
+
 // Narrowing must hold across the FORM BOUNDARY too — a map-form bundle
 // overridden by a list, and a list-form bundle overridden by a map. A
 // permission rule that depends on which spelling each side happened to use is

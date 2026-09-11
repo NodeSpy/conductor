@@ -174,15 +174,28 @@ var permissionSets = [][]string{
 	{"skill", "verbs"},
 }
 
-// isPermissionSet reports whether a key path names one.
+// isPermissionSet reports whether a key path names one — as a SUFFIX, so a
+// permission set is recognized wherever it nests.
+//
+// It used to match the full path exactly, which meant it recognized
+// `skill.verbs` on a top-level step and nowhere else. A step's
+// `compensate.skill.verbs` is three segments deep, a parallel branch's is
+// deeper still, and a for_each body's deeper again — each of those fell
+// through to the generic deep-merge, so a consumer override could not NARROW
+// a grant it inherited. It failed open, in exactly the places a reviewer is
+// least likely to look, and the doc above already claimed otherwise.
+//
+// Suffix matching is what "wherever it sits in the step" means. A key path
+// ending in skill/verbs IS the grant, whatever carried it there.
 func isPermissionSet(path []string) bool {
 	for _, p := range permissionSets {
-		if len(p) != len(path) {
+		if len(path) < len(p) {
 			continue
 		}
+		tail := path[len(path)-len(p):]
 		same := true
 		for i := range p {
-			if p[i] != path[i] {
+			if p[i] != tail[i] {
 				same = false
 				break
 			}
