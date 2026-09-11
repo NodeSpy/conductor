@@ -165,33 +165,43 @@ func (rp *resourcePolicy) scopeOK(in *connector.Instance, dim, value string, ext
 //     and is dropped from the list rather than matched. A pattern that can't
 //     be evaluated must deny, never admit — and an empty pattern that reached
 //     the matcher would be a near-miss away from matching anyway.
-func (rp *resourcePolicy) expand(allow []string) []string {
-	if len(allow) == 0 {
-		return allow
-	}
-	templated := false
-	for _, p := range allow {
-		if strings.Contains(p, "{{") {
-			templated = true
-			break
-		}
-	}
-	if !templated {
-		return allow // fast path: no rendering, byte-identical behavior
-	}
-	out := make([]string, 0, len(allow))
+func (rp *resourcePolicy) expand(allow []string) []scopePattern {
+	out := make([]scopePattern, 0, len(allow))
 	for _, p := range allow {
 		if !strings.Contains(p, "{{") {
-			out = append(out, p)
+			out = append(out, scopePattern{text: p})
 			continue
 		}
 		rendered, err := renderScopePattern(p, rp.render)
 		if err != nil || strings.TrimSpace(rendered) == "" {
 			continue // fail closed: this entry matches nothing
 		}
-		out = append(out, rendered)
+		out = append(out, scopePattern{text: rendered, literal: true})
 	}
 	return out
+}
+
+// scopePattern is one allowlist entry, ready to match, carrying HOW it must
+// be matched.
+//
+// A fully static entry keeps its glob: `acme/*` is the operator saying "that
+// family", and that is the feature. A RENDERED one does not. The operator's
+// glob intent lives in the pattern they wrote, never in a value the event
+// supplied — so a fact that renders to `*`, or to anything carrying `?`/`[`,
+// must not quietly widen the dimension the entry was meant to narrow. Round-6
+// B: defense in depth behind the closed fact set, because the cost of being
+// wrong about "no safe fact can contain a metachar" is the whole dimension.
+type scopePattern struct {
+	text    string
+	literal bool // rendered: match by equality, never as a glob
+}
+
+// matches reports whether this entry admits a candidate value.
+func (p scopePattern) matches(candidate string) bool {
+	if p.literal {
+		return p.text == candidate
+	}
+	return resourceAllowed([]string{p.text}, candidate)
 }
 
 // scopeListed reports whether an allowlist names this value in this dimension
@@ -216,18 +226,22 @@ func (rp *resourcePolicy) expand(allow []string) []string {
 //	  "shared/house/prod-token", which "house/prod-token" does not match;
 //	a BARE entry ("prod-token", "*") is a key within whichever vault is
 //	  calling, and is matched against the key alone.
-func scopeListed(in *connector.Instance, dim, value string, allow []string) bool {
-	if dim != config.DimSecret || in == nil || in.Name == "" {
-		return resourceAllowed(allow, value)
+func scopeListed(in *connector.Instance, dim, value string, allow []scopePattern) bool {
+	secret := dim == config.DimSecret && in != nil && in.Name != ""
+	qualified := ""
+	if secret {
+		qualified = in.Name + "/" + value
 	}
-	qualified := in.Name + "/" + value
 	for _, p := range allow {
-		p = strings.TrimSpace(p)
+		p.text = strings.TrimSpace(p.text)
 		target := value
-		if strings.Contains(p, "/") {
+		// A qualified entry is matched against the calling vault's own
+		// qualified spelling, so it can only ever authorize the vault it
+		// names (round-4 F1).
+		if secret && strings.Contains(p.text, "/") {
 			target = qualified
 		}
-		if resourceAllowed([]string{p}, target) {
+		if p.matches(target) {
 			return true
 		}
 	}

@@ -269,10 +269,87 @@ func TestUntemplatedEntriesAreNotRendered(t *testing.T) {
 	if got, err := renderScopePattern("#ops", map[string]any{"ops": "x"}); err != nil || got != "#ops" {
 		t.Fatalf("an untemplated entry must pass through untouched: %q %v", got, err)
 	}
+	// A static entry keeps its GLOB; only a rendered one is literal-only.
 	rp := &resourcePolicy{render: map[string]any{"number": 7}}
-	in := []string{"#a", "#b"}
-	out := rp.expand(in)
-	if &in[0] != &out[0] {
-		t.Error("a list with no templated entry should be returned as-is (no per-call allocation)")
+	out := rp.expand([]string{"#a", "acme/*", "#pr-{{.number}}"})
+	if len(out) != 3 {
+		t.Fatalf("expand dropped an entry: %+v", out)
+	}
+	for i, want := range []struct {
+		text    string
+		literal bool
+	}{{"#a", false}, {"acme/*", false}, {"#pr-7", true}} {
+		if out[i].text != want.text || out[i].literal != want.literal {
+			t.Errorf("entry %d: got %+v, want %+v", i, out[i], want)
+		}
+	}
+	if !out[1].matches("acme/app") {
+		t.Error("a STATIC glob must keep globbing — that is the operator's own intent")
+	}
+}
+
+// A value that came from a template matches LITERALLY (round-6 B). The
+// operator's glob intent lives in the pattern they wrote, not in a fact the
+// event supplied — so a rendered `*`, or a rendered value carrying glob
+// metacharacters, must not widen the dimension the entry was meant to narrow.
+func TestRenderedValuesMatchLiterallyNotAsGlobs(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		rendered string
+		probe    string
+		match    bool
+	}{
+		{"a bare star does not wildcard", "*", "anything/at-all", false},
+		{"…but still matches itself", "*", "*", true},
+		{"a trailing star does not glob", "acme/*", "acme/app", false},
+		{"…and matches its own text", "acme/*", "acme/*", true},
+		{"a question mark is literal", "ac?e", "acme", false},
+		{"a character class is literal", "[ab]cme", "acme", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rp := &resourcePolicy{render: map[string]any{"name": tc.rendered}}
+			out := rp.expand([]string{"{{.name}}"})
+			if len(out) != 1 || !out[0].literal {
+				t.Fatalf("expected one literal pattern, got %+v", out)
+			}
+			if got := out[0].matches(tc.probe); got != tc.match {
+				t.Errorf("rendered %q matching %q: got %v, want %v", tc.rendered, tc.probe, got, tc.match)
+			}
+			// The same text written STATICALLY keeps glob semantics.
+			static := rp.expand([]string{tc.rendered})
+			if static[0].literal {
+				t.Error("a static entry must not become literal-only")
+			}
+		})
+	}
+}
+
+// End to end, through RunSkillVerb: a fact that renders to "*" cannot open
+// the dimension.
+//
+// This is DEFENSE IN DEPTH and is written knowing it: with the closed fact
+// set (round-6 A) every interpolatable value is a platform-assigned repo,
+// owner, name, number or kind, and GitHub will not mint one containing a glob
+// metacharacter today. The property is pinned anyway, because "no safe fact
+// can ever contain a metachar" is an assumption about somebody else's naming
+// rules — and the cost of it being wrong once, for one future connector's
+// `kind` or one future fact, is the whole dimension.
+func TestARenderedStarCannotOpenADimension(t *testing.T) {
+	r := scopeRig(t, scopeBaseCfg)
+	id := SkillIdentity{
+		Agent: "probe", Repo: "*", Number: 1,
+		Verbs:  []string{"slack.post"},
+		Scopes: map[string]map[string][]string{"slack.post": {"channel": {"{{.repo}}"}}},
+	}
+	// The entry renders to "*". As a GLOB that admits every channel; as the
+	// literal it is, it admits a channel named "*" and nothing else.
+	_, err := r.RunSkillVerb(context.Background(), id, "slack.post",
+		map[string]any{"channel": "#exec-private", "text": "hi"})
+	if !scopeRefused(err) {
+		t.Fatalf("a rendered \"*\" wildcarded the dimension: %v", err)
+	}
+	if _, err := r.RunSkillVerb(context.Background(), id, "slack.post",
+		map[string]any{"channel": "*", "text": "hi"}); err != nil {
+		t.Fatalf("the literal value it rendered to must still match: %v", err)
 	}
 }
