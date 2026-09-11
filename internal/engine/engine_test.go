@@ -112,9 +112,12 @@ func newEng(t *testing.T, cfg *config.Config, d *fakeDispatcher, n *fakeNotifier
 func agentTrigger(kind, repo string, num int, head, sig string, act config.Action) core.Trigger {
 	return core.Trigger{
 		Source: "github", Instance: "i", Kind: kind, Dedup: sig,
-		Target:  core.Target{Repo: repo, PR: num, Number: num, HeadSHA: head},
-		Context: map[string]any{"app_token": "atok"},
-		Action:  act,
+		// A github dispatch: the platform assigned this target, which is what
+		// puts its key in the trusted namespace (core.Trigger.Key).
+		TargetTrusted: true,
+		Target:        core.Target{Repo: repo, PR: num, Number: num, HeadSHA: head},
+		Context:       map[string]any{"app_token": "atok"},
+		Action:        act,
 	}
 }
 
@@ -691,7 +694,7 @@ func TestRetryWhileDeferred(t *testing.T) {
 	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
 	rp := &config.StepRetry{WhileOutputMatches: "status: retry",
 		Interval: config.Duration(2 * time.Millisecond), Timeout: config.Duration(2 * time.Second)}
-	req := dispatch.Request{Trigger: core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "a/w", Number: 1}}}
+	req := dispatch.Request{Trigger: core.Trigger{Kind: "review_requested", TargetTrusted: true, Target: core.Target{Repo: "a/w", Number: 1}}}
 	deferred := dispatch.RunRef{Output: "status: retry"}
 
 	// The method releases/re-acquires the concurrency slot around each wait, so the
@@ -846,7 +849,7 @@ func TestClosedDeletesState(t *testing.T) {
 		t.Fatal("precondition: expected recorded state")
 	}
 	e.process(context.Background(), core.Trigger{Source: "github", Kind: core.KindClosed,
-		Target: core.Target{Repo: "a/w", PR: 6, Number: 6}})
+		TargetTrusted: true, Target: core.Target{Repo: "a/w", PR: 6, Number: 6}})
 	if st.LastSignature("a/w#6", "new_comment") != "" {
 		t.Fatal("closed trigger should delete state")
 	}

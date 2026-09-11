@@ -26,7 +26,8 @@ func TestPaseoAgentArgv(t *testing.T) {
 	req := Request{
 		Trigger: core.Trigger{
 			Source: "github", Instance: "acme", Kind: "merge_conflict",
-			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5, HeadSHA: "deadbeef", BaseRef: "main"},
+			TargetTrusted: true, // a signature-verified github payload
+			Target:        core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5, HeadSHA: "deadbeef", BaseRef: "main"},
 		},
 		Action: config.Action{Type: "agent", Agent: "fixer", Prompt: "fix {{.repo}}#{{.pr}} on {{.base}}"},
 		Model:  "claude-opus",
@@ -68,7 +69,7 @@ func TestPaseoAgentArgv(t *testing.T) {
 func TestPaseoBranchOffForIssue(t *testing.T) {
 	d := newDispatcher()
 	req := Request{
-		Trigger: core.Trigger{Kind: "issue_assigned",
+		Trigger: core.Trigger{Kind: "issue_assigned", TargetTrusted: true,
 			Target: core.Target{Repo: "acme/w", Issue: 9, Number: 9, BaseRef: "main"}},
 		Action: config.Action{Type: "agent", Agent: "fixer", Checkout: "branch-off", Prompt: "start"},
 		Step:   config.Step{Workspace: "worktree"},

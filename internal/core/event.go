@@ -122,12 +122,32 @@ func OwnRepo(repo string, targetTrusted bool) string {
 // OwnRepo is the repo this dispatch may treat as its own. See core.OwnRepo.
 func (t Trigger) OwnRepo() string { return OwnRepo(t.Target.Repo, t.TargetTrusted) }
 
-// Key returns the stable per-object key used by the dedup store.
+// Key returns the stable per-object key used by the dedup store, the session
+// broker (the live interactive review hand-off), the PR labels a dispatch
+// carries, and the run id.
+//
+// It is built from the TRUSTED repo. A dispatch whose target the event's
+// SENDER chose — a webhook `repo:` templated from the POST body — gets a key
+// in its own namespace instead, so it can never equal the key a real dispatch
+// for that repo produces (round-12 #3). Without that, a forged target landed
+// on the victim PR's broker binding and was handed its live review session;
+// it also shared the victim's dedup entry, which is the same reach wearing a
+// different hat.
+//
+// A trusted dispatch's key is unchanged — "owner/repo#7", the spelling every
+// existing store record uses.
 func (t Trigger) Key() string {
-	if t.Target.Repo == "" {
-		return t.Source + ":" + t.Instance
+	if repo := t.OwnRepo(); repo != "" {
+		return repo + "#" + itoa(t.Target.Number)
 	}
-	return t.Target.Repo + "#" + itoa(t.Target.Number)
+	if t.Target.Repo != "" {
+		// An untrusted target still needs a STABLE key — dedup and session
+		// reuse are what make a webhook source usable — so it keeps its repo
+		// and number, namespaced by the source that produced it. The sender
+		// picks what goes after the prefix; they do not pick the prefix.
+		return t.Source + ":" + t.Instance + ":" + t.Target.Repo + "#" + itoa(t.Target.Number)
+	}
+	return t.Source + ":" + t.Instance
 }
 
 // EmitFunc receives Triggers from an integration. It must be safe for

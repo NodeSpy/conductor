@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"github.com/NodeSpy/conductor/internal/core"
 	"strings"
 	"sync"
 	"testing"
@@ -384,6 +385,50 @@ func TestBrokerResumeKeepsAgentAuthoredDenyDefault(t *testing.T) {
 		}
 		if fc2.resumedAgentAuthored {
 			t.Fatal("config-authored resume must not inherit the deny default")
+		}
+	}
+}
+
+// ROUND-12 #3. The session broker keys on the trigger's per-object key, which
+// was built from the RAW Target.Repo — so a dispatch whose target the SENDER
+// chose (a webhook `repo:` templated from the POST body) produced exactly the
+// key a real dispatch for that PR produces, and was handed the victim's live
+// interactive review session.
+//
+// The key is trust-aware now (core.Trigger.Key), so this asserts the property
+// where it bites: two triggers naming the same repo and number land on
+// DIFFERENT broker bindings when one of them forged the name.
+func TestForgedTargetDoesNotReachARealPRsSession(t *testing.T) {
+	real := core.Trigger{
+		Source: "github", Instance: "gh", Kind: "review_requested",
+		TargetTrusted: true, Target: core.Target{Repo: "acme/app", Number: 42},
+	}
+	forged := core.Trigger{
+		Source: "webhook", Instance: "hooks", Kind: "delivery",
+		Target: core.Target{Repo: "acme/app", Number: 42},
+	}
+	if real.Key() == forged.Key() {
+		t.Fatalf("a forged target produced the real PR's broker key %q — its follow-ups would "+
+			"funnel into that PR's live review hand-off", real.Key())
+	}
+
+	b := NewBroker(nil, nil, func(string, ...any) {})
+	sess := &fakeSession{id: "victim-session"}
+	b.Bind(real.Key(), &fakeController{name: "c"}, sess, false)
+
+	// A follow-up on the victim's own key reaches the victim's session…
+	if ok, err := b.Followup(context.Background(), real.Key(), "hi", nil); err != nil || !ok {
+		t.Fatalf("the real PR must keep its binding: ok=%v err=%v", ok, err)
+	}
+	// …and one on the forged key reaches nothing.
+	if ok, _ := b.Followup(context.Background(), forged.Key(), "hijack", nil); ok {
+		t.Fatal("a forged target was delivered into a live review session")
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	for _, p := range sess.prompts {
+		if p == "hijack" {
+			t.Fatal("the forged dispatch's prompt reached the victim's session")
 		}
 	}
 }
