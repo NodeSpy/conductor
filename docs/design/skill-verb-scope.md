@@ -88,14 +88,26 @@ policy:
 documented as legacy). `channel` and any future dimension fall out of the same map with
 no new field.
 
-**Matching is ContextScope + literal/glob — NOT template variables.** The dispatch's own
-resource is allowed with *nothing listed*: `ContextScope` returns the trigger's target
-repo (and a connector's own event channel) and it's implicitly in scope. You never write
-`${trigger.repo}` — you list only *additional* destinations. Allowlist entries match
-exactly, as `*`, or as a `path.Match` glob (`acme/*`, `#team-*`). There is no `${…}` /
-`{{…}}` interpolation of allowlist values; a literal `${trigger.repo}` would match a repo
-named exactly that (i.e. never). Rely on ContextScope for the triggering resource; use a
-glob for a family.
+**The dispatch's own resource needs nothing listed.** `ContextScope` returns the
+trigger's target repo (and a connector's own event channel), and it is implicitly in
+scope — so you never write `${trigger.repo}`, you list only *additional* destinations.
+Entries then match exactly, as `*`, or as a `path.Match` glob (`acme/*`, `#team-*`).
+
+**Entries may be parameterized, two ways** (added in round 5 —
+docs/design/scope-templating.md; the earlier revision of this paragraph said they could
+not be, which is no longer true):
+
+- `${settings.NAME}` — substituted at LOAD from the config's own top-level `settings:`
+  block, the same mechanism packs have. Use it for a value that repeats.
+- `{{ .fact }}` — rendered PER DISPATCH from that event's trusted facts
+  (`repo: ["{{.owner}}/docs"]`, `channel: ["#pr-{{.number}}"]`). Use it for a value that
+  depends on the event. Restricted funcs (`default`/`coalesce` only), no secrets, no
+  agent-supplied input, and fail-closed: a template that errors or renders empty matches
+  nothing.
+
+Neither changes the matching itself — whatever the entry resolves to is matched exactly
+or as a glob, as before. And `${trigger.repo}` is still not a thing: the trigger's own
+repo is ContextScope's job, not an interpolation's.
 
 ### The chokepoint
 
@@ -159,16 +171,6 @@ dimension that denies every call rather than scoping it:
 `repo:` option on any connector gets the same treatment. Below the hook, a
 connector's own configured default option value is implicitly in scope — that
 is what makes "the configured default channel" work without per-connector code.
-
-## Round 5 — allowlist entries are parameterizable
-
-The doc above describes allowlist entries as literals, and they no longer are:
-an entry may carry `${settings.NAME}` (substituted at load from the main
-config's own top-level `settings:` block, the same mechanism packs had) or
-`{{ .fact }}` (rendered per dispatch against that event's trusted facts, with
-a restricted function set, no secrets, no agent input, and fail-closed).
-Matching is unchanged — literal or glob, on whatever the entry resolved to.
-See docs/design/scope-templating.md.
 
 ## Round 4 — three fixes, and the semantics they pinned
 
