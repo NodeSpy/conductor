@@ -77,15 +77,25 @@ allowlist — but generalized off the connector's dimensions instead of hardcode
 ```yaml
 policy:
   agent_authored:
-    allow:
-      repo:    ["${trigger.repo}", "org/docs"]
+    allow_scopes:
+      repo:    ["org/docs", "acme/*"]   # the trigger's OWN repo is allowed automatically
       channel: ["#code-reviews"]
       store:   ["shared-kv"]
 ```
 
-`allow_targets` → `allow.repo`, `allow_stores` → `allow.store`, `allow_secrets` →
-`allow.secret` become **back-compat aliases** (kept, documented as legacy). `channel`
-and any future dimension now fall out of the same map with no new field.
+`allow_targets` → `allow_scopes.repo`, `allow_stores` → `allow_scopes.store`,
+`allow_secrets` → `allow_scopes.secret` are **back-compat aliases** (kept, unioned in,
+documented as legacy). `channel` and any future dimension fall out of the same map with
+no new field.
+
+**Matching is ContextScope + literal/glob — NOT template variables.** The dispatch's own
+resource is allowed with *nothing listed*: `ContextScope` returns the trigger's target
+repo (and a connector's own event channel) and it's implicitly in scope. You never write
+`${trigger.repo}` — you list only *additional* destinations. Allowlist entries match
+exactly, as `*`, or as a `path.Match` glob (`acme/*`, `#team-*`). There is no `${…}` /
+`{{…}}` interpolation of allowlist values; a literal `${trigger.repo}` would match a repo
+named exactly that (i.e. never). Rely on ContextScope for the triggering resource; use a
+glob for a family.
 
 ### The chokepoint
 
