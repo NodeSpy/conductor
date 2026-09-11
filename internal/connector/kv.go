@@ -29,7 +29,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "get", Desc: "read a key",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"namespace": {Type: TString, Desc: "keyspace (default \"default\")"},
 				"default":   {Type: TAny, Desc: "value returned when the key is absent/expired"},
@@ -42,7 +42,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "set", Desc: "write a key (any JSON-serializable value)",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"value":     {Type: TAny, Required: true},
 				"namespace": {Type: TString},
@@ -53,7 +53,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "setnx", Desc: "write a key only if absent (create-once)",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"value":     {Type: TAny, Required: true},
 				"namespace": {Type: TString},
@@ -67,7 +67,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "merge", Desc: "shallow-merge an object into the object at key (upsert)",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"value":     {Type: TMap, Required: true},
 				"namespace": {Type: TString},
@@ -77,7 +77,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "delete", Desc: "remove a key",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"namespace": {Type: TString},
 			},
@@ -86,7 +86,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "append", Desc: "append to the list at key (created as [] if absent)",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"item":      {Type: TAny, Desc: "one value to append"},
 				"items":     {Type: TList, Desc: "several values to append"},
@@ -101,7 +101,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "remove", Desc: "remove all occurrences of item(s) from the list at key",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"item":      {Type: TAny},
 				"items":     {Type: TList},
@@ -115,7 +115,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "contains", Desc: "membership test on the list at key (false when absent)",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"item":      {Type: TAny, Required: true},
 				"namespace": {Type: TString},
@@ -125,7 +125,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "first", Desc: "first element of the list at key",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"namespace": {Type: TString},
 			},
@@ -134,7 +134,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "last", Desc: "last element of the list at key",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"namespace": {Type: TString},
 			},
@@ -143,7 +143,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "index", Desc: "element at index of the list at key (negative counts from the end)",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"index":     {Type: TInt, Required: true},
 				"namespace": {Type: TString},
@@ -153,7 +153,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "slice", Desc: "sub-list [start:end) of the list at key; negatives allowed, bounds clamp",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"start":     {Type: TInt, Desc: "default 0"},
 				"end":       {Type: TInt, Desc: "EXCLUSIVE; default = length"},
@@ -164,7 +164,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "len", Desc: "length of the list at key (0 when absent)",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"namespace": {Type: TString},
 			},
@@ -173,7 +173,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "pop", Desc: "atomically remove and return an element from an end of the list at key",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"from":      {Type: TString, Desc: "front | back (default back)"},
 				"namespace": {Type: TString},
@@ -187,7 +187,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "incr", Desc: "atomically add to a numeric key (absent = 0)",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"key":       {Type: TString, Required: true},
 				"by":        {Type: TInt, Desc: "amount to add (default 1)"},
 				"namespace": {Type: TString},
@@ -197,7 +197,7 @@ var kvDecl = &TypeDecl{
 		{
 			Name: "list", Desc: "live keys (and values) in a namespace",
 			Options: Schema{
-				"store":     {Type: TString, Required: true, Desc: "which stores: entry to use"},
+				"store":     {Type: TString, Required: true, Scope: "store", Desc: "which stores: entry to use"},
 				"namespace": {Type: TString},
 				"prefix":    {Type: TString, Desc: "key prefix filter"},
 				"limit":     {Type: TInt, Desc: "max keys to return (default 1000, the cap that keeps an unbounded namespace out of an agent's context)"},

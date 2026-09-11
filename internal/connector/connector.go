@@ -52,6 +52,12 @@ type Field struct {
 	Required bool
 	Enum     []string
 	Desc     string
+	// Scope, on a VERB OPTION, marks the option as naming a RESOURCE and
+	// names its dimension ("channel", "repo", "store", "secret", "path").
+	// Both agent-facing surfaces gate the value of every scoped option
+	// against what the dispatch may address; content options leave it empty
+	// and are never gated. See scope.go.
+	Scope string
 }
 
 // Schema is a set of named fields (option/filter/context/output schemas).

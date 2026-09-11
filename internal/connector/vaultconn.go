@@ -29,7 +29,7 @@ func vaultDecl(typ string, writable bool) *TypeDecl {
 			{
 				Name: "read", Desc: "read one secret (the value is tainted sensitive)",
 				Options: Schema{
-					"key": {Type: TString, Required: true, Desc: "the entry name / item path"},
+					"key": {Type: TString, Required: true, Scope: "secret", Desc: "the entry name / item path"},
 				},
 				Outputs: Schema{"value": {Type: TString}},
 			},
@@ -39,7 +39,7 @@ func vaultDecl(typ string, writable bool) *TypeDecl {
 		d.Verbs = append(d.Verbs, VerbDecl{
 			Name: "write", Desc: "store one secret",
 			Options: Schema{
-				"key":   {Type: TString, Required: true},
+				"key":   {Type: TString, Required: true, Scope: "secret"},
 				"value": {Type: TString, Required: true},
 			},
 			Outputs: Schema{},

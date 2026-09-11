@@ -135,7 +135,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "comment", Desc: "post an issue/PR conversation comment",
 			Options: Schema{
-				"repo":   {Type: TString, Required: true},
+				"repo":   {Type: TString, Required: true, Scope: "repo"},
 				"number": {Type: TInt, Desc: "issue or PR number (alias: pr)"},
 				"pr":     {Type: TInt},
 				"body":   {Type: TString, Required: true},
@@ -146,7 +146,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "reply", Desc: "reply to a PR review comment thread",
 			Options: Schema{
-				"repo":        {Type: TString, Required: true},
+				"repo":        {Type: TString, Required: true, Scope: "repo"},
 				"pr":          {Type: TInt, Required: true},
 				"in_reply_to": {Type: TInt, Required: true, Desc: "review comment id to reply to"},
 				"body":        {Type: TString, Required: true},
@@ -157,7 +157,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "request_review", Desc: "request review from users/teams on a PR (also re-requests one who already reviewed)",
 			Options: Schema{
-				"repo":           {Type: TString, Required: true},
+				"repo":           {Type: TString, Required: true, Scope: "repo"},
 				"pr":             {Type: TInt, Required: true},
 				"reviewers":      {Type: TList, Desc: "user logins"},
 				"team_reviewers": {Type: TList, Desc: "team slugs"},
@@ -172,7 +172,7 @@ var githubDecl = &TypeDecl{
 			// re-review-on-new-changes flow.
 			Name: "rerequest_review", Desc: "re-request review (alias of request_review)",
 			Options: Schema{
-				"repo":           {Type: TString, Required: true},
+				"repo":           {Type: TString, Required: true, Scope: "repo"},
 				"pr":             {Type: TInt, Required: true},
 				"reviewers":      {Type: TList, Desc: "logins"},
 				"team_reviewers": {Type: TList, Desc: "team slugs"},
@@ -183,7 +183,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "remove_reviewer", Desc: "cancel a pending review request (remove requested users/teams)",
 			Options: Schema{
-				"repo":           {Type: TString, Required: true},
+				"repo":           {Type: TString, Required: true, Scope: "repo"},
 				"pr":             {Type: TInt, Required: true},
 				"reviewers":      {Type: TList, Desc: "user logins to un-request"},
 				"team_reviewers": {Type: TList, Desc: "team slugs to un-request"},
@@ -194,7 +194,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "submit_review", Desc: "submit a PR review: a summary + verdict, with optional inline file:line comments",
 			Options: Schema{
-				"repo":  {Type: TString, Required: true},
+				"repo":  {Type: TString, Required: true, Scope: "repo"},
 				"pr":    {Type: TInt, Required: true},
 				"body":  {Type: TString, Desc: "the review summary (top-level comment)"},
 				"event": {Type: TString, Enum: []string{"APPROVE", "REQUEST_CHANGES", "COMMENT"}, Required: true},
@@ -209,7 +209,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "pr_diff", Desc: "the PR's unified diff (cached; GitHub caps the .diff media type around 300 files)",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"diff": {Type: TString}},
@@ -217,7 +217,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "pr_get", Desc: "PR metadata: title, body, state, author, base/head, line counts, labels",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{
@@ -230,7 +230,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "pr_files", Desc: "changed files: [{path, status, additions, deletions, changes}] (100/page; pass page for more)",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"all": {Type: TBool, Desc: "fetch every page (default: first 100)"},
 				"as":  {Type: TString, Enum: []string{"me", "bot"}},
 			},
@@ -239,7 +239,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "review_comments", Desc: "existing inline review comments on the PR: [{path, line, body, user, id}] (100/page)",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"all": {Type: TBool, Desc: "fetch every page (default: first 100)"},
 				"as":  {Type: TString, Enum: []string{"me", "bot"}},
 			},
@@ -248,7 +248,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "file", Desc: "a repo file's raw contents at a ref (cached; GitHub's raw media type caps at ~1 MiB)",
 			Options: Schema{
-				"repo":     {Type: TString, Required: true},
+				"repo":     {Type: TString, Required: true, Scope: "repo"},
 				"path":     {Type: TString, Required: true, Desc: "repo-relative file path"},
 				"ref":      {Type: TString, Desc: "branch / tag / sha (default: the repo's default branch)"},
 				"as":       {Type: TString, Enum: []string{"me", "bot"}},
@@ -259,7 +259,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "create_pr", Desc: "open a pull request",
 			Options: Schema{
-				"repo":  {Type: TString, Required: true},
+				"repo":  {Type: TString, Required: true, Scope: "repo"},
 				"title": {Type: TString, Required: true},
 				"head":  {Type: TString, Required: true, Desc: "the branch with your changes (owner:branch for a fork)"},
 				"base":  {Type: TString, Required: true, Desc: "the branch to merge into"},
@@ -272,7 +272,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "merge_pr", Desc: "merge a pull request",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"method":         {Type: TString, Enum: []string{"merge", "squash", "rebase"}, Desc: "default merge"},
 				"commit_title":   {Type: TString},
 				"commit_message": {Type: TString},
@@ -284,7 +284,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "update_pr", Desc: "edit a PR: state (open|closed → close/reopen), title, body, base",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"state": {Type: TString, Enum: []string{"open", "closed"}},
 				"title": {Type: TString}, "body": {Type: TString},
 				"base": {Type: TString, Desc: "retarget the PR onto this branch"},
@@ -295,7 +295,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "create_issue", Desc: "open an issue",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "title": {Type: TString, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "title": {Type: TString, Required: true},
 				"body":   {Type: TString},
 				"labels": {Type: TList}, "assignees": {Type: TList, Desc: "logins to assign"},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
@@ -305,7 +305,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "update_issue", Desc: "edit an issue: state (open|closed → close/reopen), state_reason, title, body",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "number": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "number": {Type: TInt, Required: true},
 				"state":        {Type: TString, Enum: []string{"open", "closed"}},
 				"state_reason": {Type: TString, Enum: []string{"completed", "not_planned", "reopened"}},
 				"title":        {Type: TString}, "body": {Type: TString},
@@ -316,7 +316,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "assign", Desc: "add and/or remove issue/PR assignees",
 			Options: Schema{
-				"repo":   {Type: TString, Required: true},
+				"repo":   {Type: TString, Required: true, Scope: "repo"},
 				"number": {Type: TInt, Desc: "issue or PR number (alias: pr)"}, "pr": {Type: TInt},
 				"add": {Type: TList, Desc: "logins to assign"}, "remove": {Type: TList, Desc: "logins to unassign"},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
@@ -326,7 +326,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "remove_label", Desc: "remove one label from an issue or PR",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "number": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "number": {Type: TInt, Required: true},
 				"label": {Type: TString, Required: true},
 				"as":    {Type: TString, Enum: []string{"me", "bot"}},
 			},
@@ -335,7 +335,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "get_issue", Desc: "read an issue: title, body, state, labels, assignees, author, url",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "number": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "number": {Type: TInt, Required: true},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{
@@ -346,7 +346,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "put_file", Desc: "create or update a file in one commit",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "path": {Type: TString, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "path": {Type: TString, Required: true},
 				"content": {Type: TString, Required: true, Desc: "the new file content (UTF-8 text; base64-encoded for the API automatically)"},
 				"message": {Type: TString, Required: true, Desc: "commit message"},
 				"branch":  {Type: TString, Desc: "branch to commit on (default: the repo's default branch)"},
@@ -358,7 +358,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "delete_file", Desc: "delete a file in one commit",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "path": {Type: TString, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "path": {Type: TString, Required: true},
 				"message": {Type: TString, Required: true},
 				"sha":     {Type: TString, Required: true, Desc: "blob sha of the file to delete"},
 				"branch":  {Type: TString},
@@ -369,7 +369,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "get_ref", Desc: "the commit sha a branch/tag/ref points at",
 			Options: Schema{
-				"repo": {Type: TString, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"},
 				"ref":  {Type: TString, Required: true, Desc: "branch, tag, or sha"},
 				"as":   {Type: TString, Enum: []string{"me", "bot"}},
 			},
@@ -378,7 +378,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "create_branch", Desc: "create a branch from another ref",
 			Options: Schema{
-				"repo":   {Type: TString, Required: true},
+				"repo":   {Type: TString, Required: true, Scope: "repo"},
 				"branch": {Type: TString, Required: true, Desc: "new branch name"},
 				"from":   {Type: TString, Desc: "source branch/tag/sha (default: the default branch's HEAD)"},
 				"as":     {Type: TString, Enum: []string{"me", "bot"}},
@@ -388,7 +388,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "dispatch_workflow", Desc: "trigger a workflow_dispatch run",
 			Options: Schema{
-				"repo":     {Type: TString, Required: true},
+				"repo":     {Type: TString, Required: true, Scope: "repo"},
 				"workflow": {Type: TString, Required: true, Desc: "workflow file name (ci.yml) or numeric id"},
 				"ref":      {Type: TString, Required: true, Desc: "branch or tag to run on"},
 				"inputs":   {Type: TMap, Desc: "workflow_dispatch inputs"},
@@ -399,7 +399,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "rerun_run", Desc: "re-run a workflow run (optionally only its failed jobs)",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "run_id": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "run_id": {Type: TInt, Required: true},
 				"failed_only": {Type: TBool, Desc: "re-run only failed jobs"},
 				"as":          {Type: TString, Enum: []string{"me", "bot"}},
 			},
@@ -408,7 +408,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "cancel_run", Desc: "cancel a workflow run",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "run_id": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "run_id": {Type: TInt, Required: true},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"ok": {Type: TBool}},
@@ -416,7 +416,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "list_runs", Desc: "recent workflow runs: [{id, name, status, conclusion, head_branch, head_sha, url}]",
 			Options: Schema{
-				"repo":     {Type: TString, Required: true},
+				"repo":     {Type: TString, Required: true, Scope: "repo"},
 				"branch":   {Type: TString, Desc: "filter to a branch"},
 				"status":   {Type: TString, Desc: "queued|in_progress|completed|success|failure|…"},
 				"per_page": {Type: TInt, Desc: "default 20, max 100"},
@@ -428,7 +428,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "create_release", Desc: "publish a release for a tag",
 			Options: Schema{
-				"repo":   {Type: TString, Required: true},
+				"repo":   {Type: TString, Required: true, Scope: "repo"},
 				"tag":    {Type: TString, Required: true, Desc: "the tag to release (created if it doesn't exist, on target)"},
 				"target": {Type: TString, Desc: "commitish the tag points at when created (default: default branch)"},
 				"name":   {Type: TString, Desc: "release title"}, "body": {Type: TString, Desc: "release notes"},
@@ -440,7 +440,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "upload_asset", Desc: "attach a file to a release",
 			Options: Schema{
-				"repo":         {Type: TString, Required: true},
+				"repo":         {Type: TString, Required: true, Scope: "repo"},
 				"release_id":   {Type: TInt, Required: true, Desc: "id from create_release"},
 				"name":         {Type: TString, Required: true, Desc: "asset file name"},
 				"content":      {Type: TString, Desc: "inline asset bytes (mutually exclusive with path)"},
@@ -453,7 +453,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "list_issues", Desc: "list issues (PRs excluded): [{number, title, state, labels, author, url}]",
 			Options: Schema{
-				"repo":     {Type: TString, Required: true},
+				"repo":     {Type: TString, Required: true, Scope: "repo"},
 				"state":    {Type: TString, Desc: "open|closed|all (default open)"},
 				"labels":   {Type: TList, Desc: "filter to issues with all these labels"},
 				"assignee": {Type: TString, Desc: "filter to this assignee (or * / none)"},
@@ -466,7 +466,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "search_issues", Desc: "search issues/PRs in this repo: [{number, title, state, is_pr, url}]",
 			Options: Schema{
-				"repo":     {Type: TString, Required: true},
+				"repo":     {Type: TString, Required: true, Scope: "repo"},
 				"q":        {Type: TString, Required: true, Desc: "GitHub search query (scoped to this repo automatically)"},
 				"per_page": {Type: TInt, Desc: "default 30, max 100"},
 				"all":      {Type: TBool, Desc: "fetch every page"},
@@ -477,7 +477,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "checks", Desc: "check-run status for a ref: [{name, status, conclusion, url}]",
 			Options: Schema{
-				"repo": {Type: TString, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"},
 				"ref":  {Type: TString, Required: true, Desc: "branch, tag, or sha"},
 				"as":   {Type: TString, Enum: []string{"me", "bot"}},
 			},
@@ -486,7 +486,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "ready_for_review", Desc: "mark a draft PR ready for review",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"ok": {Type: TBool}},
@@ -494,7 +494,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "convert_to_draft", Desc: "convert a PR back to a draft",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"ok": {Type: TBool}},
@@ -541,7 +541,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "add_labels", Desc: "add labels to an issue or PR",
 			Options: Schema{
-				"repo":   {Type: TString, Required: true},
+				"repo":   {Type: TString, Required: true, Scope: "repo"},
 				"number": {Type: TInt, Required: true},
 				"labels": {Type: TList, Required: true},
 				"as":     {Type: TString, Enum: []string{"me", "bot"}},

@@ -121,7 +121,11 @@ func mapSchema(s plugin.Schema) Schema {
 	}
 	out := make(Schema, len(s))
 	for k, f := range s {
-		out[k] = Field{Type: FieldType(f.Type), Required: f.Required, Enum: f.Enum, Desc: f.Desc}
+		// Scope crosses the wire verbatim: an external plugin declares a
+		// scoped option exactly like a bundled connector, and gets the same
+		// enforcement on both surfaces without conductor knowing the
+		// dimension's name.
+		out[k] = Field{Type: FieldType(f.Type), Required: f.Required, Enum: f.Enum, Desc: f.Desc, Scope: f.Scope}
 	}
 	return out
 }

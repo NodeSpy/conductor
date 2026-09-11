@@ -72,6 +72,15 @@ type Field struct {
 	Required bool     `json:"required,omitempty"`
 	Enum     []string `json:"enum,omitempty"`
 	Desc     string   `json:"desc,omitempty"`
+	// Scope, on a VERB OPTION, declares that the option names a RESOURCE
+	// rather than content, and names its dimension — "channel", "repo",
+	// "store", "path", or one the plugin invents ("project", "bucket").
+	// Conductor gates the VALUE of every scoped option on both agent-facing
+	// surfaces: a dispatch may name the resource its own trigger points at,
+	// plus whatever the operator allow-listed, and nothing else. Tagging an
+	// option is the whole opt-in — there is no other wiring to do, and an
+	// untagged option (text, body) is never gated.
+	Scope string `json:"scope,omitempty"`
 }
 
 // Schema is a set of named fields.

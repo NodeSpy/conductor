@@ -69,8 +69,8 @@ var slackDecl = &TypeDecl{
 		{
 			Name: "post", Desc: "post a message",
 			Options: Schema{
-				"channel":   {Type: TString, Desc: "channel id (or set user: for a DM)"},
-				"user":      {Type: TString, Desc: "user id to DM"},
+				"channel":   {Type: TString, Scope: "channel", Desc: "channel id (or set user: for a DM)"},
+				"user":      {Type: TString, Scope: "user", Desc: "user id to DM"},
 				"text":      {Type: TString, Required: true},
 				"thread_ts": {Type: TString, Desc: "post into this thread"},
 				"ephemeral": {Type: TBool, Desc: "visible only to user: (requires channel: and user:)"},
@@ -80,7 +80,7 @@ var slackDecl = &TypeDecl{
 		{
 			Name: "react", Desc: "add a reaction to a message",
 			Options: Schema{
-				"channel": {Type: TString, Required: true},
+				"channel": {Type: TString, Required: true, Scope: "channel"},
 				"ts":      {Type: TString, Required: true, Desc: "message timestamp to react to"},
 				"emoji":   {Type: TString, Required: true, Desc: "emoji name, no colons"},
 			},
@@ -90,8 +90,8 @@ var slackDecl = &TypeDecl{
 			Name: "ask", Desc: "present a question/draft and wait for the reply", Ask: true,
 			Options: mergeSchema(askOptionBase(), Schema{
 				"to":        {Type: TString, Enum: []string{"dm", "thread"}, Required: true},
-				"user":      {Type: TString, Desc: "user id (to: dm)"},
-				"channel":   {Type: TString, Desc: "channel id (to: thread)"},
+				"user":      {Type: TString, Scope: "user", Desc: "user id (to: dm)"},
+				"channel":   {Type: TString, Scope: "channel", Desc: "channel id (to: thread)"},
 				"approvers": {Type: TList, Desc: "to: thread — only these user ids may resolve the ask (default: anyone in the channel)"},
 			}),
 			Outputs: askOutputs(),
@@ -174,6 +174,31 @@ func (s *slackImpl) Validate() error {
 }
 
 func (s *slackImpl) DeclaredEvents() []string { return nil }
+
+// ContextScope is the resource-scoping adapter hook (scope.go): the channel
+// and user a slack-triggered dispatch may address WITHOUT an operator grant
+// are the ones the event itself came from — replying where you were spoken to
+// needs no config, while any other channel is a listed grant.
+//
+// The facts come from the trigger context the slack source publishes
+// (`{{.slack.channel}}`), so this reads the same values a step's template
+// would. A dispatch from another source carries none and returns "" — deny,
+// unless the operator listed a channel.
+func (s *slackImpl) ContextScope(dim string, t core.Trigger) string {
+	sctx, _ := t.Context["slack"].(map[string]any)
+	if sctx == nil {
+		return ""
+	}
+	switch dim {
+	case "channel":
+		v, _ := sctx["channel"].(string)
+		return v
+	case "user":
+		v, _ := sctx["user"].(string)
+		return v
+	}
+	return ""
+}
 
 // Inbox exposes the reply inbox so main wiring can feed Socket Mode replies
 // into pending asks (alongside the legacy handoffs inbox).

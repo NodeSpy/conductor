@@ -24,7 +24,7 @@ var sqlDecl = &TypeDecl{
 		{
 			Name: "query", Desc: "run a row-returning statement with bound args",
 			Options: Schema{
-				"store": {Type: TString, Required: true, Desc: "which SQL stores: entry to use"},
+				"store": {Type: TString, Required: true, Scope: "store", Desc: "which SQL stores: entry to use"},
 				"sql":   {Type: TString, Required: true, Desc: "the statement, with driver placeholders ($1 / ?)"},
 				"args":  {Type: TList, Desc: "values bound to the placeholders, in order"},
 				"limit": {Type: TInt, Desc: "max rows to return (default 1000, the cap that keeps an unbounded result set out of an agent's context)"},
@@ -38,7 +38,7 @@ var sqlDecl = &TypeDecl{
 		{
 			Name: "exec", Desc: "run a mutating statement with bound args",
 			Options: Schema{
-				"store": {Type: TString, Required: true, Desc: "which SQL stores: entry to use"},
+				"store": {Type: TString, Required: true, Scope: "store", Desc: "which SQL stores: entry to use"},
 				"sql":   {Type: TString, Required: true, Desc: "the statement, with driver placeholders ($1 / ?)"},
 				"args":  {Type: TList, Desc: "values bound to the placeholders, in order"},
 			},
