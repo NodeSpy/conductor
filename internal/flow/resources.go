@@ -69,6 +69,10 @@ type resourcePolicy struct {
 	// t is the dispatch the policy is being applied to — what a connector's
 	// ContextScope hook maps to its implicitly-allowed value per dimension.
 	t core.Trigger
+	// render is the data a TEMPLATED allowlist entry renders against: this
+	// dispatch's trusted facts, secret-free, with no agent-supplied value in
+	// it. Built by scopeRenderData; see expand().
+	render map[string]any
 }
 
 // planResourcePolicy resolves the allowlists for one PLAN, or nil when they
@@ -140,7 +144,54 @@ func (rp *resourcePolicy) scopeOK(in *connector.Instance, dim, value string, ext
 	if ctx := in.ContextScope(dim, rp.t); ctx != "" && ctx == value {
 		return true
 	}
-	return scopeListed(in, dim, value, rp.allow[dim]) || scopeListed(in, dim, value, extra)
+	return scopeListed(in, dim, value, rp.expand(rp.allow[dim])) ||
+		scopeListed(in, dim, value, rp.expand(extra))
+}
+
+// expand renders the `{{ }}` entries of one allowlist against THIS DISPATCH's
+// facts — the per-event counterpart to the load-time `${settings.X}`
+// substitution (docs/design/scope-templating.md). `channel: ["#pr-{{.number}}"]`
+// is one line that means a different channel per PR.
+//
+// Three rules hold it inside the trust boundary:
+//
+//   - Entries WITHOUT "{{" are returned untouched, so nothing an existing
+//     config does changes and the common path renders nothing at all.
+//   - The render data is rp.render — the dispatch's own trusted facts, with
+//     no secrets and no agent input in it (see scopeRenderData). The
+//     agent-supplied value being checked is never a render source; it is only
+//     ever the thing matched.
+//   - FAIL-CLOSED: a template that errors, or renders to empty, becomes ""
+//     and is dropped from the list rather than matched. A pattern that can't
+//     be evaluated must deny, never admit — and an empty pattern that reached
+//     the matcher would be a near-miss away from matching anyway.
+func (rp *resourcePolicy) expand(allow []string) []string {
+	if len(allow) == 0 {
+		return allow
+	}
+	templated := false
+	for _, p := range allow {
+		if strings.Contains(p, "{{") {
+			templated = true
+			break
+		}
+	}
+	if !templated {
+		return allow // fast path: no rendering, byte-identical behavior
+	}
+	out := make([]string, 0, len(allow))
+	for _, p := range allow {
+		if !strings.Contains(p, "{{") {
+			out = append(out, p)
+			continue
+		}
+		rendered, err := renderScopePattern(p, rp.render)
+		if err != nil || strings.TrimSpace(rendered) == "" {
+			continue // fail closed: this entry matches nothing
+		}
+		out = append(out, rendered)
+	}
+	return out
 }
 
 // scopeListed reports whether an allowlist names this value in this dimension
@@ -261,11 +312,13 @@ func verbScopedOptions(reg *connector.Registry, uses string) (*connector.Instanc
 // steps (parallel branches, compensations, and hooks included) and rejects
 // the plan when a literal reference falls outside the allowlists. Templated
 // names it can't evaluate fall through to the runtime belt.
-func guardPlanResources(reg *connector.Registry, pol *config.AgentAuthoredPolicy, t core.Trigger, steps []config.Step) error {
+func (r *Runner) guardPlanResources(pol *config.AgentAuthoredPolicy, t core.Trigger, steps []config.Step) error {
+	reg := r.Conns
 	rp := planResourcePolicy(pol, t)
 	if rp == nil {
 		return nil
 	}
+	rp.render = r.scopeRenderData(t, nil)
 	// scopedLiterals judges the literal values of one options map against the
 	// called verb's DECLARED scope options. A verb it cannot resolve is left
 	// to the runtime belt, which refuses rather than guesses.
@@ -378,9 +431,16 @@ func (r *Runner) checkVerbScopes(rp *resourcePolicy, uses string, opts map[strin
 }
 
 // checkVerbResources is the PLAN surface's entry into the shared walk: the
-// runtime belt for an agent-authored step's rendered options.
-func (r *Runner) checkVerbResources(pol *config.AgentAuthoredPolicy, t core.Trigger, uses string, rendered map[string]any, grant map[string][]string) error {
-	return r.checkVerbScopes(planResourcePolicy(pol, t), uses, rendered, grant)
+// runtime belt for an agent-authored step's rendered options. stepData is the
+// step's own template scope, used ONLY to carry the workflow's inputs into a
+// templated allowlist entry (see scopeRenderData) — never to render the value
+// being checked.
+func (r *Runner) checkVerbResources(pol *config.AgentAuthoredPolicy, t core.Trigger, uses string, rendered map[string]any, grant map[string][]string, stepData map[string]any) error {
+	rp := planResourcePolicy(pol, t)
+	if rp != nil {
+		rp.render = r.scopeRenderData(t, stepData)
+	}
+	return r.checkVerbScopes(rp, uses, rendered, grant)
 }
 
 // checkSkillVerbResources is the SKILL surface's entry into the same walk. It
@@ -389,7 +449,13 @@ func (r *Runner) checkVerbResources(pol *config.AgentAuthoredPolicy, t core.Trig
 // trust: full — still gets the grant's per-verb constraints and the
 // deny-by-default. See skillResourcePolicy.
 func (r *Runner) checkSkillVerbResources(pol *config.AgentAuthoredPolicy, t core.Trigger, uses string, options map[string]any, grant map[string][]string) error {
-	return r.checkVerbScopes(skillResourcePolicy(pol, t), uses, options, grant)
+	rp := skillResourcePolicy(pol, t)
+	// The skill surface has no step scope: its facts are the dispatch the
+	// token was minted for, which RunSkillVerb has already rebuilt into t
+	// (identity + captured trigger context). The agent's own options are NOT
+	// passed — they are what is being checked.
+	rp.render = r.scopeRenderData(t, nil)
+	return r.checkVerbScopes(rp, uses, options, grant)
 }
 
 // stepSecretRefs extracts every literal secret reference in a step's

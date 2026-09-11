@@ -336,7 +336,7 @@ func (r *Runner) runPlan(ctx context.Context, t core.Trigger, agentName, runID, 
 	}
 	// The resource allowlists (#124): deny-by-default gates on which
 	// secrets/stores/targets an agent-authored plan may reference.
-	if rerr := guardPlanResources(r.Conns, pol, t, plan); rerr != nil {
+	if rerr := r.guardPlanResources(pol, t, plan); rerr != nil {
 		r.auditPlan(t, agentName, "rejected", res, rerr)
 		return nil, rerr
 	}
@@ -640,7 +640,7 @@ func (r *Runner) guardSavedWorkflow(ctx context.Context, t core.Trigger, name st
 	}
 	// A saved workflow is agent-authored: the resource allowlists (#124)
 	// apply on every run, under the CURRENT policy.
-	if rerr := guardPlanResources(r.Conns, pol, t, steps); rerr != nil {
+	if rerr := r.guardPlanResources(pol, t, steps); rerr != nil {
 		r.auditPlan(t, agent, "rejected", res, fmt.Errorf("saved workflow %q: %w", name, rerr))
 		return nil, fmt.Errorf("saved workflow %q: %w", name, rerr)
 	}

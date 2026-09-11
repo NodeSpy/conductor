@@ -30,10 +30,21 @@ func everyConnectorYAML(t *testing.T) string {
 	var b strings.Builder
 	b.WriteString("connectors:\n")
 	for _, typ := range connector.Types() {
+		if reservedConnectorName[typ] {
+			continue // always in the registry; naming one is a config error
+		}
 		fmt.Fprintf(&b, "  %s: { use: %s }\n", typ, typ)
 	}
 	fmt.Fprintf(&b, "vaults:\n  housevault: { type: file, dir: %s }\n", t.TempDir())
 	return b.String()
+}
+
+// reservedConnectorName are the built-ins the registry always adds and the
+// loader refuses to see in `connectors:` — they are enumerated all the same,
+// because they are in the registry either way.
+var reservedConnectorName = map[string]bool{
+	"kv": true, "sql": true, "memory": true, "blob": true,
+	"workflow": true, "conductor": true, "manual": true,
 }
 
 // everyScopeDim is every dimension any registered connector declares.
@@ -171,7 +182,7 @@ func TestEveryScopedOptionIsEnforcedOnBothSurfaces(t *testing.T) {
 					opts := map[string]any{so.Name: tc.value}
 					where := fmt.Sprintf("%s option %q (dimension %q), %s", uses, so.Name, so.Dim, tc.name)
 
-					planErr := r.checkVerbResources(pol, trig, uses, opts, nil)
+					planErr := r.checkVerbResources(pol, trig, uses, opts, nil, nil)
 					if got := scopeRefused(planErr); got != tc.refused {
 						t.Errorf("PLAN surface: %s: refused=%v, want %v (err=%v)", where, got, tc.refused, planErr)
 					}
@@ -291,6 +302,70 @@ func TestSkillGrantScopesUnderEveryPolicyShape(t *testing.T) {
 	}
 }
 
+// META-TEST, THE THIRD AXIS: an allowlist entry may be PARAMETERIZED, two
+// ways, and both must be enforced for every scoped option of every connector.
+//
+//	${settings.X}   resolved at LOAD, from the config's own settings: block
+//	                (the same value for every dispatch)
+//	{{.fact}}       rendered at DISPATCH, from this event's trusted facts
+//	                (a different value per event)
+//
+// They are different mechanisms in different layers — a substitution before
+// the config is decoded, and a render inside the check — so a dimension can
+// support one and silently not the other. This runs both through the real
+// load path and the real check, for every option the connectors declare.
+func TestScopeAllowlistsSupportSettingsAndTemplates(t *testing.T) {
+	// ${settings.scoped_value} resolves to a literal; "{{.repo}}" renders to
+	// the dispatch's own repo. Both go in every dimension's list.
+	var pb strings.Builder
+	pb.WriteString("settings:\n  scoped_value: \"" + metaAllowed + "\"\n")
+	pb.WriteString("policy:\n  agent_authored:\n    allow: [\"**\"]\n    allow_scopes:\n")
+	for _, dim := range everyScopeDim() {
+		fmt.Fprintf(&pb, "      %s: [\"${settings.scoped_value}\", \"rendered-{{.number}}\"]\n", dim)
+	}
+	// Through the REAL loader, so the ${settings.X} half is what a config file
+	// would actually produce rather than what a test helper pretends.
+	cfg := loadConfigViaLoader(t, everyConnectorYAML(t)+pb.String())
+	r := newTestRunner(t, cfg, buildRegistry(t, cfg)).Runner
+	r.DryRun = true
+
+	trig := core.Trigger{
+		Source: "github", Kind: "review_requested",
+		Target: core.Target{Repo: "trigger/repo", Number: 7},
+	}
+	pol := cfg.Policy.AgentAuthored
+
+	eachScopedOption(t, r, func(uses string, so connector.ScopedOption) {
+		connName, _, _ := strings.Cut(uses, ".")
+		id := SkillIdentity{
+			Agent: "probe", Verbs: []string{connName + ".*"},
+			Repo: trig.Target.Repo, Number: 7,
+		}
+		for _, tc := range []struct {
+			name    string
+			value   string
+			refused bool
+		}{
+			{"the ${settings.X} entry", metaAllowed, false},
+			{"the {{.fact}} entry, rendered for THIS dispatch", "rendered-7", false},
+			{"the same entry rendered for another dispatch", "rendered-999", true},
+			{"neither", metaOutOfScope, true},
+		} {
+			opts := map[string]any{so.Name: tc.value}
+			where := fmt.Sprintf("%s option %q (dimension %q), %s", uses, so.Name, so.Dim, tc.name)
+
+			planErr := r.checkVerbResources(pol, trig, uses, opts, nil, nil)
+			if got := scopeRefused(planErr); got != tc.refused {
+				t.Errorf("PLAN surface: %s: refused=%v, want %v (err=%v)", where, got, tc.refused, planErr)
+			}
+			_, skillErr := r.RunSkillVerb(context.Background(), id, uses, opts)
+			if got := scopeRefused(skillErr); got != tc.refused {
+				t.Errorf("SKILL surface: %s: refused=%v, want %v (err=%v)", where, got, tc.refused, skillErr)
+			}
+		}
+	})
+}
+
 // The plan surface's nil-policy path is MOOT, and this is what makes saying so
 // legitimate: an agent-authored plan cannot run at all without a
 // policy.agent_authored block, so there is no unguarded plan for
@@ -342,7 +417,7 @@ policy:
 		{"slack.react", "channel", "#trigger-channel"}, // …on every verb, not just post
 	} {
 		opts := map[string]any{tc.opt: tc.value}
-		if err := r.checkVerbResources(pol, trig, tc.uses, opts, nil); err != nil {
+		if err := r.checkVerbResources(pol, trig, tc.uses, opts, nil, nil); err != nil {
 			t.Errorf("PLAN surface refused the dispatch's own %s: %v", tc.opt, err)
 		}
 		id := SkillIdentity{

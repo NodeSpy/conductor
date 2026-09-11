@@ -3,6 +3,8 @@ package flow
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -317,6 +319,23 @@ func loadConfig(t *testing.T, y string) *config.Config {
 
 // buildRegistry builds a connector.Registry from cfg using a stubbed secrets
 // resolver (LookupEnv backed by a plain map, no real env/process access).
+// loadConfigViaLoader writes the document to disk and loads it through the
+// REAL config.Load, so load-time machinery the lightweight helper skips —
+// `${settings.X}` substitution above all — is what the test sees.
+func loadConfigViaLoader(t *testing.T, y string) *config.Config {
+	t.Helper()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "conductor.yaml")
+	if err := os.WriteFile(p, []byte(y), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatalf("config.Load: %v\n---\n%s", err, y)
+	}
+	return cfg
+}
+
 func buildRegistry(t *testing.T, cfg *config.Config) *connector.Registry {
 	t.Helper()
 	reg, err := connector.Build(cfg, connector.Deps{Secrets: testSecrets(nil), Config: cfg})

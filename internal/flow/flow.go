@@ -966,7 +966,7 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	// RENDERED options carry the concrete store/repo names the static guard
 	// couldn't evaluate — refuse + audit outside the allowlists.
 	if agentAuthored(ctx) {
-		if rerr := r.checkVerbResources(r.planPolicy(), t, step.Uses, rendered, nil); rerr != nil {
+		if rerr := r.checkVerbResources(r.planPolicy(), t, step.Uses, rendered, nil, data); rerr != nil {
 			rerr = fmt.Errorf("agent_authored allowlist: %w", rerr)
 			r.auditVerb(t, connName, verb, map[string]any{"barrier": "resource_allowlist"}, "blocked", rerr)
 			return nil, rerr
@@ -1738,7 +1738,7 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 			continue
 		}
 		if agentAuthored(ctx) {
-			if rerr := r.checkVerbResources(r.planPolicy(), t, h.Uses, rendered, nil); rerr != nil {
+			if rerr := r.checkVerbResources(r.planPolicy(), t, h.Uses, rendered, nil, data); rerr != nil {
 				rerr = fmt.Errorf("agent_authored allowlist: %w", rerr)
 				r.Log("%s %s hook %s.%s blocked: %v", flowTag(t), where, connName, verb, rerr)
 				r.auditVerb(t, connName, verb, map[string]any{"barrier": "resource_allowlist"}, "blocked", rerr)
