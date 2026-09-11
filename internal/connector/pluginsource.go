@@ -75,6 +75,12 @@ func (p *pluginSourceIntegration) Start(ctx context.Context, emit core.EmitFunc)
 				continue
 			}
 			emit(ctx, core.Trigger{
+				// TargetTrusted stays FALSE, deliberately (round-8 #3). The
+				// target arrives on the wire from a third-party plugin, which
+				// built it from whatever payload it was handed — the same
+				// provenance as a webhook body, and not conductor's code. A
+				// plugin-sourced dispatch therefore gets no implicit own-repo
+				// trust; an operator scoping one lists the repos.
 				Source:   p.typ,
 				Instance: p.instance,
 				Kind:     kind,

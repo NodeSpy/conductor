@@ -424,9 +424,13 @@ func indentYAML(pad, y string) string {
 func newTrigger(kind string, ctx map[string]any) core.Trigger {
 	return core.Trigger{
 		Source: "fake", Instance: "fake", Kind: kind,
-		Target:  core.Target{Repo: "o/r", Number: 7},
-		Title:   "test trigger",
-		Context: ctx,
+		// A source that assigns its own target, like every real one except a
+		// body-templated webhook or a third-party plugin source. A test that
+		// means the forged case says so (see untrustedtarget_test.go).
+		TargetTrusted: true,
+		Target:        core.Target{Repo: "o/r", Number: 7},
+		Title:         "test trigger",
+		Context:       ctx,
 	}
 }
 

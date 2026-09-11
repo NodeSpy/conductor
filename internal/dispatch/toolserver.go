@@ -71,13 +71,13 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 	// A skill grant is minted only for a step the operator authored.
 	if b := skill.Active(); b != nil && req.Step.Skill != nil && !req.AgentAuthored {
 		claim, err := b.MintClaim(skill.Identity{
-			Agent:           req.Action.Agent,
-			Repo:            req.Trigger.Target.Repo,
-			Trigger:         req.Trigger.Kind,
-			Number:          req.Trigger.Target.Number,
-			Policy:          *req.Step.Skill,
-			Context:         req.Trigger.Context,
-			TargetUntrusted: req.Trigger.TargetUntrusted,
+			Agent:         req.Action.Agent,
+			Repo:          req.Trigger.Target.Repo,
+			Trigger:       req.Trigger.Kind,
+			Number:        req.Trigger.Target.Number,
+			Policy:        *req.Step.Skill,
+			Context:       req.Trigger.Context,
+			TargetTrusted: req.Trigger.TargetTrusted,
 		})
 		if err == nil {
 			out.Env = map[string]string{"CONDUCTOR_SKILL_CLAIM": claim}
@@ -116,13 +116,13 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 	// uid, so the uid check passes and provenance rests on the token — which is
 	// exactly why memory/run_step ops derive Source from the token, not the peer.
 	tok, err := b.MintSession(skill.Identity{
-		Agent:           req.Action.Agent,
-		Repo:            req.Trigger.Target.Repo,
-		Trigger:         req.Trigger.Kind,
-		Number:          req.Trigger.Target.Number,
-		Policy:          *req.Step.Skill,
-		Context:         req.Trigger.Context,
-		TargetUntrusted: req.Trigger.TargetUntrusted,
+		Agent:         req.Action.Agent,
+		Repo:          req.Trigger.Target.Repo,
+		Trigger:       req.Trigger.Kind,
+		Number:        req.Trigger.Target.Number,
+		Policy:        *req.Step.Skill,
+		Context:       req.Trigger.Context,
+		TargetTrusted: req.Trigger.TargetTrusted,
 	}, uint32(os.Getuid()))
 	if err != nil {
 		return nil

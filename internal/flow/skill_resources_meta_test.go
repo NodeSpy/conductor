@@ -31,7 +31,8 @@ policy:
 	r := newTestRunner(t, cfg, buildRegistry(t, cfg)).Runner
 
 	// The dispatch this grant was issued for.
-	id := SkillIdentity{Agent: "probe", Verbs: []string{"svc.*"}, Repo: "trigger/repo", Number: 7}
+	id := SkillIdentity{Agent: "probe", Verbs: []string{"svc.*"}, Repo: "trigger/repo", Number: 7,
+		TargetTrusted: true} // a platform-assigned target
 
 	call := func(t *testing.T, opts map[string]any) error {
 		t.Helper()

@@ -52,20 +52,25 @@ type Trigger struct {
 	Dedup    string            // dedup signature; empty => always act
 	Labels   map[string]string // extra labels to attach to dispatched work
 	Action   any               // integration-resolved action (engine asserts to config.Action)
-	// TargetUntrusted marks a dispatch whose TARGET was derived from
-	// UNTRUSTED REQUEST DATA rather than assigned by the platform — a webhook
-	// source whose `repo:` is templated from the POST body, where whoever
-	// sends the request chooses which repo the dispatch appears to be for.
+	// TargetTrusted marks a dispatch whose TARGET was assigned by the SOURCE
+	// ITSELF — a signature-verified github payload, a slack channel id, a
+	// synthetic target derived from the source's own configured name — rather
+	// than taken from data the sender of the event supplied.
 	//
-	// The scope layer reads it and withholds the trust it normally extends to
-	// a dispatch's own target: no implicit own-repo, no own memory scope, and
-	// none of the target-derived facts in a `{{ }}` allowlist entry. An
-	// operator scoping such a dispatch must list the repos explicitly, which
-	// is the only honest answer when the target is the attacker's to name.
+	// The zero value is UNTRUSTED, and that inversion is the point. Three
+	// separate findings in a row were the same shape: a Target built from
+	// payload data (a webhook `repo:` templated from the POST body, a plugin
+	// source's wire event, a run_step rebuilding its trigger) that nobody
+	// remembered to mark. A field whose safe state is the zero value cannot be
+	// forgotten — a new source that says nothing gets the safe answer, and
+	// claiming trust is a deliberate line of code with a reviewer's question
+	// attached: who chose this value?
 	//
-	// It rides on the trigger because that is what travels with the dispatch;
-	// every consumer that trusts Target has this next to it.
-	TargetUntrusted bool
+	// The scope layer reads it and extends "your own target needs no grant"
+	// only to a trusted one: a forged target gets no implicit own-repo, no own
+	// memory scope, none of the target-derived facts in a `{{ }}` allowlist
+	// entry, and no say in an agent-authored step's identity namespace.
+	TargetTrusted bool
 	// CatchUp marks a trigger emitted by the periodic sweep (re-derived state)
 	// rather than a fresh webhook event. When an agent is already working the PR,
 	// catch-up triggers are skipped (don't re-nudge) while fresh events are queued

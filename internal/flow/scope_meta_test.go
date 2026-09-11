@@ -143,7 +143,8 @@ func TestEveryScopedOptionIsEnforcedOnBothSurfaces(t *testing.T) {
 	// "trigger/repo" and its own slack channel is "#trigger-channel" — the
 	// values a grant does NOT have to name.
 	trig := core.Trigger{
-		Source: "github", Instance: "gh", Kind: "review_requested",
+		TargetTrusted: true, // a platform-assigned target
+		Source:        "github", Instance: "gh", Kind: "review_requested",
 		Target:  core.Target{Repo: "trigger/repo", Number: 7},
 		Context: map[string]any{"slack": map[string]any{"channel": "#trigger-channel", "user": "U-trigger"}},
 	}
@@ -168,7 +169,8 @@ func TestEveryScopedOptionIsEnforcedOnBothSurfaces(t *testing.T) {
 				// The grant an operator would write for this dispatch: the
 				// verb, with no per-option widening.
 				id := SkillIdentity{
-					Agent: "probe", Verbs: []string{connName + ".*"},
+					TargetTrusted: true,
+					Agent:         "probe", Verbs: []string{connName + ".*"},
 					Repo: trig.Target.Repo, Number: 7, Context: trig.Context,
 				}
 				for _, tc := range []struct {
@@ -265,7 +267,8 @@ func TestSkillGrantScopesUnderEveryPolicyShape(t *testing.T) {
 			eachScopedOption(t, r, func(uses string, so connector.ScopedOption) {
 				connName, _, _ := strings.Cut(uses, ".")
 				id := SkillIdentity{
-					Agent: "probe", Verbs: []string{connName + ".*"},
+					TargetTrusted: true,
+					Agent:         "probe", Verbs: []string{connName + ".*"},
 					Repo: "trigger/repo", Number: 7, Context: trigCtx,
 				}
 				call := func(value string, grant map[string]map[string][]string) error {
@@ -330,7 +333,8 @@ func TestScopeAllowlistsSupportSettingsAndTemplates(t *testing.T) {
 	r.DryRun = true
 
 	trig := core.Trigger{
-		Source: "github", Kind: "review_requested",
+		TargetTrusted: true, // a platform-assigned target
+		Source:        "github", Kind: "review_requested",
 		Target: core.Target{Repo: "trigger/repo", Number: 7},
 	}
 	pol := cfg.Policy.AgentAuthored
@@ -338,7 +342,8 @@ func TestScopeAllowlistsSupportSettingsAndTemplates(t *testing.T) {
 	eachScopedOption(t, r, func(uses string, so connector.ScopedOption) {
 		connName, _, _ := strings.Cut(uses, ".")
 		id := SkillIdentity{
-			Agent: "probe", Verbs: []string{connName + ".*"},
+			TargetTrusted: true,
+			Agent:         "probe", Verbs: []string{connName + ".*"},
 			Repo: trig.Target.Repo, Number: 7,
 		}
 		for _, tc := range []struct {
@@ -405,7 +410,8 @@ policy:
 	r := newTestRunner(t, cfg, reg).Runner
 	r.DryRun = true
 	trig := core.Trigger{
-		Source: "slack", Instance: "slack", Kind: "app_mention",
+		TargetTrusted: true, // a platform-assigned target
+		Source:        "slack", Instance: "slack", Kind: "app_mention",
 		Target:  core.Target{Repo: "trigger/repo"},
 		Context: map[string]any{"slack": map[string]any{"channel": "#trigger-channel"}},
 	}
@@ -421,7 +427,8 @@ policy:
 			t.Errorf("PLAN surface refused the dispatch's own %s: %v", tc.opt, err)
 		}
 		id := SkillIdentity{
-			Agent: "probe", Verbs: []string{"svc.*", "slack.*"},
+			TargetTrusted: true,
+			Agent:         "probe", Verbs: []string{"svc.*", "slack.*"},
 			Repo: "trigger/repo", Context: trig.Context,
 		}
 		if _, err := r.RunSkillVerb(context.Background(), id, tc.uses, opts); err != nil &&

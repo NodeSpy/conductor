@@ -68,7 +68,7 @@ policy:
 	}
 
 	t.Run("skill surface", func(t *testing.T) {
-		id := SkillIdentity{Agent: "probe", Repo: "trigger/repo", Verbs: []string{"memory.*"}}
+		id := SkillIdentity{Agent: "probe", Repo: "trigger/repo", TargetTrusted: true, Verbs: []string{"memory.*"}}
 		for _, tc := range refused {
 			_, err := r.RunSkillVerb(context.Background(), id, "memory."+tc.op, tc.opts)
 			if !memoryScopeRefusal(err) {
@@ -127,7 +127,7 @@ policy:
 `)
 	installTestMemory(t, cfg)
 	r := newTestRunner(t, cfg, buildRegistry(t, cfg)).Runner
-	id := SkillIdentity{Agent: "probe", Repo: "trigger/repo", Verbs: []string{"memory.*"}}
+	id := SkillIdentity{Agent: "probe", Repo: "trigger/repo", TargetTrusted: true, Verbs: []string{"memory.*"}}
 	if _, err := r.RunSkillVerb(context.Background(), id, "memory.remember",
 		map[string]any{"text": "anywhere", "scope": "repo:any/where"}); err != nil {
 		t.Fatalf("trust: full must lift the memory scope allowlist: %v", err)
@@ -146,7 +146,7 @@ memory:
 `)
 	installTestMemory(t, cfg)
 	r := newTestRunner(t, cfg, buildRegistry(t, cfg)).Runner
-	id := SkillIdentity{Agent: "probe", Repo: "trigger/repo", Verbs: []string{"memory.*"}}
+	id := SkillIdentity{Agent: "probe", Repo: "trigger/repo", TargetTrusted: true, Verbs: []string{"memory.*"}}
 	if _, err := r.RunSkillVerb(context.Background(), id, "memory.remember",
 		map[string]any{"text": "mine", "scope": "repo:trigger/repo"}); err != nil {
 		t.Fatalf("the dispatch's own scope must work with no policy block: %v", err)

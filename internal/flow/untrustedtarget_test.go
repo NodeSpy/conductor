@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/memory"
 )
 
 // ROUND-7 #3. A webhook source's `repo:` renders from the POST BODY — the
@@ -41,8 +42,8 @@ policy:
 		t.Run(tc.name, func(t *testing.T) {
 			trig := core.Trigger{
 				Kind: "delivery", Source: "webhook",
-				Target:          core.Target{Repo: "victim/secrets", Owner: "victim", Name: "secrets", Number: 7},
-				TargetUntrusted: tc.untrusted,
+				Target:        core.Target{Repo: "victim/secrets", Owner: "victim", Name: "secrets", Number: 7},
+				TargetTrusted: !tc.untrusted,
 			}
 			// PLAN surface.
 			err := r.checkVerbResources(pol, trig, "svc.post", map[string]any{"repo": "victim/secrets"}, nil)
@@ -52,7 +53,7 @@ policy:
 			// SKILL surface.
 			id := SkillIdentity{
 				Agent: "probe", Repo: "victim/secrets", Number: 7,
-				Verbs: []string{"svc.*"}, TargetUntrusted: tc.untrusted,
+				Verbs: []string{"svc.*"}, TargetTrusted: !tc.untrusted,
 			}
 			_, serr := r.RunSkillVerb(context.Background(), id, "svc.post",
 				map[string]any{"repo": "victim/secrets", "text": "x"})
@@ -74,9 +75,9 @@ policy:
 func TestForgedTargetFactsDoNotRender(t *testing.T) {
 	r := scopeRig(t, scopeBaseCfg)
 	trig := core.Trigger{
-		Kind:            "delivery",
-		Target:          core.Target{Repo: "victim/secrets", Owner: "victim", Name: "secrets", Number: 7},
-		TargetUntrusted: true,
+		Kind:          "delivery",
+		Target:        core.Target{Repo: "victim/secrets", Owner: "victim", Name: "secrets", Number: 7},
+		TargetTrusted: false, // the sender chose this target
 	}
 	data := r.scopeRenderData(trig)
 	for _, k := range []string{"repo", "owner", "name"} {
@@ -95,8 +96,8 @@ func TestForgedTargetFactsDoNotRender(t *testing.T) {
 	// End to end: the entry matches nothing.
 	id := SkillIdentity{
 		Agent: "probe", Repo: "victim/secrets", Verbs: []string{"svc.*"},
-		TargetUntrusted: true,
-		Scopes:          map[string]map[string][]string{"svc.*": {"repo": {"{{.repo}}"}}},
+		// the sender chose this target: TargetTrusted stays false
+		Scopes: map[string]map[string][]string{"svc.*": {"repo": {"{{.repo}}"}}},
 	}
 	_, err := r.RunSkillVerb(context.Background(), id, "svc.post",
 		map[string]any{"repo": "victim/secrets", "text": "x"})
@@ -123,7 +124,7 @@ policy:
 	r := newTestRunner(t, cfg, buildRegistry(t, cfg)).Runner
 	id := SkillIdentity{
 		Agent: "probe", Repo: "victim/secrets", Verbs: []string{"memory.*"},
-		TargetUntrusted: true,
+		// the sender chose this target: TargetTrusted stays false
 	}
 	_, err := r.RunSkillVerb(context.Background(), id, "memory.remember",
 		map[string]any{"text": "x", "scope": "repo:victim/secrets"})
@@ -133,9 +134,44 @@ policy:
 	// The same dispatch with a platform-assigned target owns its scope, so
 	// the assertion above cannot pass by refusing everything.
 	trusted := id
-	trusted.TargetUntrusted = false
+	trusted.TargetTrusted = true
 	if _, err := r.RunSkillVerb(context.Background(), trusted, "memory.remember",
 		map[string]any{"text": "x", "scope": "repo:victim/secrets"}); err != nil {
 		t.Fatalf("a real target must still own its memory scope: %v", err)
+	}
+}
+
+// ROUND-8 #2. run_step rebuilds a trigger from the launching dispatch's baked-in
+// provenance. It rebuilt everything BUT the target's provenance, so a
+// run_step invoked under a forged-target dispatch regained the own-repo and
+// own-memory-scope trust the dispatch itself had been denied — the guard was
+// there, and the reconstruction walked around it.
+func TestRunLiveStepCarriesTargetProvenance(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		trusted bool
+	}{
+		{"a platform-assigned target", true},
+		{"a target the request body chose", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := loadConfig(t, `
+connectors:
+  svc: { use: fake }
+policy:
+  agent_authored:
+    allow: ["**"]
+`)
+			rig := newTestRunner(t, cfg, buildRegistry(t, cfg))
+			src := memory.Source{Step: "probe", Trigger: "delivery",
+				Repo: "victim/secrets", TargetTrusted: tc.trusted}
+			_, err := rig.Runner.RunLiveStep(context.Background(), src, 7, map[string]any{
+				"uses": "svc.post", "options": map[string]any{"repo": "victim/secrets", "text": "x"},
+			})
+			refused := err != nil && strings.Contains(err.Error(), "allow_scopes.repo")
+			if refused == tc.trusted {
+				t.Fatalf("run_step under %s: refused=%v (err=%v)", tc.name, refused, err)
+			}
+		})
 	}
 }

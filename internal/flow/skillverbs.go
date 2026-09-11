@@ -38,11 +38,11 @@ type SkillIdentity struct {
 	// MAP form): verb pattern → option → allowed values. Empty means every
 	// scoped option stays pinned to the dispatch's own context.
 	Scopes map[string]map[string][]string
-	// TargetUntrusted rides from the originating dispatch: its target was
-	// derived from untrusted request data (a webhook `repo:` templated from
-	// the POST body), so this grant gets no implicit own-repo and no
-	// target-derived render facts. See core.Trigger.TargetUntrusted.
-	TargetUntrusted bool
+	// TargetTrusted rides from the originating dispatch: false — the zero
+	// value — means its target was derived from data the event's sender
+	// supplied, so this grant gets no implicit own-repo and no target-derived
+	// render facts. See core.Trigger.TargetTrusted.
+	TargetTrusted bool
 	// Context is the ORIGINATING trigger's context, captured at dispatch. It
 	// is what a connector's ContextScope hook reads to answer "which channel
 	// did this dispatch come from" — without it a slack-triggered agent could
@@ -526,9 +526,9 @@ func skillVerbUniverse(reg *connector.Registry) []string {
 func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string, options map[string]any) (map[string]any, error) {
 	t := core.Trigger{
 		Source: "skill", Instance: "skill", Kind: id.Trigger,
-		Target:          core.Target{Repo: id.Repo, Number: id.Number, PR: id.Number},
-		Context:         id.Context,
-		TargetUntrusted: id.TargetUntrusted,
+		Target:        core.Target{Repo: id.Repo, Number: id.Number, PR: id.Number},
+		Context:       id.Context,
+		TargetTrusted: id.TargetTrusted,
 	}
 	// EVERY call on this surface is agent-facing, and the dispatch it belongs
 	// to is the identity the token was minted for. Both are what the memory
@@ -537,7 +537,8 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	// trustedTargetRepo, not id.Repo: a forged target owns no memory scope
 	// either. One decision, every consumer of "your own target".
 	ctx = memory.WithCaller(ctx, memory.Caller{Repo: trustedTargetRepo(t)})
-	ctx = memory.WithSource(ctx, memory.Source{Step: id.Agent, Repo: id.Repo, Trigger: id.Trigger})
+	ctx = memory.WithSource(ctx, memory.Source{Step: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
+		TargetTrusted: id.TargetTrusted})
 	deny := func(reason string) (map[string]any, error) {
 		err := fmt.Errorf("skill verb %s: %s", uses, reason)
 		r.auditSkillVerb(t, id.Agent, uses, options, "denied", err)

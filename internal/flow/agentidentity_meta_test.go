@@ -41,7 +41,7 @@ func TestAgentAuthoredStepCannotAddressAnotherDispatchsSession(t *testing.T) {
 
 	// The attacker: an agent-authored step in a DIFFERENT dispatch, writing
 	// the same name and the same session key.
-	attacker := core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "attacker/sandbox"}}
+	attacker := core.Trigger{Kind: "review_requested", TargetTrusted: true, Target: core.Target{Repo: "attacker/sandbox"}}
 	ctx := markAgentAuthored(context.Background(), attacker)
 	attackerIdentity := stepIdentity(ctx, config.Step{Type: "agent", Name: victimName}, "steps[0]")
 	attackerBinding := controller.StepSessionKey(attackerIdentity, victimKey)
@@ -62,7 +62,7 @@ func TestAgentAuthoredStepCannotAddressAnotherDispatchsSession(t *testing.T) {
 	}
 
 	// A different dispatch of the same shape gets a different namespace.
-	other := core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "victim/repo"}}
+	other := core.Trigger{Kind: "review_requested", TargetTrusted: true, Target: core.Target{Repo: "victim/repo"}}
 	otherID := stepIdentity(markAgentAuthored(context.Background(), other),
 		config.Step{Type: "agent", Name: victimName}, "steps[0]")
 	if otherID == attackerIdentity {
@@ -82,8 +82,8 @@ func TestAgentAuthoredStepCannotAddressAnotherDispatchsSession(t *testing.T) {
 func TestAgentAuthoredNamespaceIgnoresAForgedTarget(t *testing.T) {
 	forged := core.Trigger{
 		Kind: "delivery", Source: "webhook", Instance: "hooks",
-		Target:          core.Target{Repo: "victim/repo"},
-		TargetUntrusted: true,
+		Target:        core.Target{Repo: "victim/repo"},
+		TargetTrusted: false, // the sender chose this target
 	}
 	id := stepIdentity(markAgentAuthored(context.Background(), forged),
 		config.Step{Type: "agent", Name: "review"}, "steps[0]")
@@ -103,7 +103,7 @@ func TestAgentAuthoredNamespaceIgnoresAForgedTarget(t *testing.T) {
 // step. A new field that reaches IdentityFor/StepSessionKey has to be added
 // here, and the assertion tells its author what the requirement is.
 func TestEveryIdentityAffectingFieldIsConfinedForAgentAuthoredSteps(t *testing.T) {
-	trusted := core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "own/repo"}}
+	trusted := core.Trigger{Kind: "review_requested", TargetTrusted: true, Target: core.Target{Repo: "own/repo"}}
 	ctx := markAgentAuthored(context.Background(), trusted)
 
 	// Each case sets ONE identity/session-affecting field to a value naming

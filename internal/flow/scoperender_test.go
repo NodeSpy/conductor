@@ -17,7 +17,8 @@ func TestScopeAllowlistRendersPerEvent(t *testing.T) {
 	r := scopeRig(t, scopeBaseCfg)
 	id := func(number int) SkillIdentity {
 		return SkillIdentity{
-			Agent: "reviewer", Repo: "acme/app", Number: number,
+			TargetTrusted: true,
+			Agent:         "reviewer", Repo: "acme/app", Number: number,
 			Verbs:  []string{"slack.post"},
 			Scopes: map[string]map[string][]string{"slack.post": {"channel": {"#pr-{{.number}}"}}},
 		}
@@ -53,7 +54,7 @@ policy:
     allow_scopes:
       repo: ["{{.owner}}/docs"]
 `)
-	trig := core.Trigger{Kind: "ping", Target: core.Target{Repo: "acme/app", Owner: "acme"}}
+	trig := core.Trigger{Kind: "ping", TargetTrusted: true, Target: core.Target{Repo: "acme/app", Owner: "acme"}}
 	pol := r.planPolicy()
 	if err := r.checkVerbResources(pol, trig, "svc.post", map[string]any{"repo": "acme/docs"}, nil); err != nil {
 		t.Fatalf("the rendered entry must admit acme/docs: %v", err)
@@ -78,7 +79,8 @@ func TestScopeTemplateFailsClosed(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id := SkillIdentity{
-				Agent: "probe", Repo: "acme/app", Number: 1,
+				TargetTrusted: true,
+				Agent:         "probe", Repo: "acme/app", Number: 1,
 				Verbs:  []string{"slack.post"},
 				Scopes: map[string]map[string][]string{"slack.post": {"channel": {tc.entry}}},
 			}
@@ -104,7 +106,8 @@ func TestScopeRenderNeverSeesSecrets(t *testing.T) {
 	r := scopeRig(t, scopeBaseCfg)
 	r.Secrets.Track("s3kr1t-value")
 	id := SkillIdentity{
-		Agent: "probe", Repo: "acme/app", Number: 1,
+		TargetTrusted: true,
+		Agent:         "probe", Repo: "acme/app", Number: 1,
 		Verbs:  []string{"slack.post"},
 		Scopes: map[string]map[string][]string{"slack.post": {"channel": {"#{{.secrets.token}}"}}},
 		// A trigger context carrying a credential, as slack's really does.
@@ -142,8 +145,9 @@ func TestScopeRenderContextIsAClosedSet(t *testing.T) {
 	// A trigger carrying every attacker-reachable fact conductor publishes,
 	// plus a credential and an arbitrary enriched fact.
 	trig := core.Trigger{
-		Kind:  "review_requested",
-		Title: "attacker's title",
+		Kind:          "review_requested",
+		TargetTrusted: true, // the TARGET is real; the context facts are not
+		Title:         "attacker's title",
 		Target: core.Target{
 			Repo: "acme/app", Owner: "acme", Name: "app", Number: 42, PR: 42,
 			HeadSHA: "deadbeef", BaseRef: "main", HTMLURL: "https://example.com/pr/42",
@@ -195,7 +199,8 @@ func TestAuthorControlledFactsCannotForgeAnAllowlistMatch(t *testing.T) {
 		"#{{.head_ref}}", "{{.head_ref}}/prod",
 	} {
 		id := SkillIdentity{
-			Agent: "probe", Repo: "acme/app", Number: 42,
+			TargetTrusted: true,
+			Agent:         "probe", Repo: "acme/app", Number: 42,
 			Verbs:  []string{"slack.post"},
 			Scopes: map[string]map[string][]string{"slack.post": {"channel": {entry}}},
 			// The attacker's own strings, exactly as the webhook delivered them.
@@ -218,7 +223,8 @@ func TestAuthorControlledFactsCannotForgeAnAllowlistMatch(t *testing.T) {
 	}
 	// The platform-assigned facts still work, or the feature is gone.
 	ok := SkillIdentity{
-		Agent: "probe", Repo: "acme/app", Number: 42,
+		TargetTrusted: true,
+		Agent:         "probe", Repo: "acme/app", Number: 42,
 		Verbs:  []string{"slack.post"},
 		Scopes: map[string]map[string][]string{"slack.post": {"channel": {"#pr-{{.number}}"}}},
 	}
@@ -234,7 +240,8 @@ func TestAuthorControlledFactsCannotForgeAnAllowlistMatch(t *testing.T) {
 func TestAgentOptionValueCannotSteerTheAllowlist(t *testing.T) {
 	r := scopeRig(t, scopeBaseCfg)
 	id := SkillIdentity{
-		Agent: "probe", Repo: "acme/app", Number: 7,
+		TargetTrusted: true,
+		Agent:         "probe", Repo: "acme/app", Number: 7,
 		Verbs:  []string{"slack.post"},
 		Scopes: map[string]map[string][]string{"slack.post": {"channel": {"#pr-{{.number}}"}}},
 	}
@@ -337,7 +344,8 @@ func TestRenderedValuesMatchLiterallyNotAsGlobs(t *testing.T) {
 func TestARenderedStarCannotOpenADimension(t *testing.T) {
 	r := scopeRig(t, scopeBaseCfg)
 	id := SkillIdentity{
-		Agent: "probe", Repo: "*", Number: 1,
+		TargetTrusted: true,
+		Agent:         "probe", Repo: "*", Number: 1,
 		Verbs:  []string{"slack.post"},
 		Scopes: map[string]map[string][]string{"slack.post": {"channel": {"{{.repo}}"}}},
 	}

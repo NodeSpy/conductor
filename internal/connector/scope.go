@@ -104,7 +104,7 @@ func (in *Instance) ContextScope(dim string, t core.Trigger) string {
 	// request data (a webhook whose `repo:` templates from the POST body).
 	// "Act on your own PR" is only a safe default while the platform decides
 	// which PR is yours; when the sender decides, there is no own.
-	if dim == DimRepo && t.Target.Repo != "" && !t.TargetUntrusted {
+	if dim == DimRepo && t.Target.Repo != "" && t.TargetTrusted {
 		return t.Target.Repo
 	}
 	return in.defaultScope(dim)

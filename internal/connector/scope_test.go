@@ -65,8 +65,9 @@ func TestBuiltinConnectorsTagTheirDestinations(t *testing.T) {
 
 func TestContextScopeResolutionOrder(t *testing.T) {
 	trig := core.Trigger{
-		Target:  core.Target{Repo: "acme/app"},
-		Context: map[string]any{"slack": map[string]any{"channel": "#from-event"}},
+		TargetTrusted: true, // a platform-assigned target
+		Target:        core.Target{Repo: "acme/app"},
+		Context:       map[string]any{"slack": map[string]any{"channel": "#from-event"}},
 	}
 
 	// 1. the implementation's hook.

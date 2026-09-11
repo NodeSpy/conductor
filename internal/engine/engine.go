@@ -578,7 +578,8 @@ func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string, sel 
 	if sel == nil || !sel.Enabled {
 		return
 	}
-	src := memory.Source{Step: agent, Run: runID, Trigger: t.Kind, Repo: t.Target.Repo}
+	src := memory.Source{Step: agent, Run: runID, Trigger: t.Kind, Repo: t.Target.Repo,
+		TargetTrusted: t.TargetTrusted}
 	entries, err := m.HarvestOutput(output, src)
 	if err != nil {
 		e.log("%s memory output contract: %v", tag(t), err)

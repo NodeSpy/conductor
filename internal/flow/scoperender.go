@@ -122,7 +122,7 @@ func (r *Runner) scopeRenderData(t core.Trigger) map[string]any {
 	// dispatch, so for such a trigger they are simply absent — an entry built
 	// from one renders empty and matches nothing. `kind` survives: it is the
 	// source's own event name, from the operator's config.
-	if t.TargetUntrusted {
+	if !t.TargetTrusted {
 		facts["number"], facts["owner"], facts["name"], facts["repo"] = 0, "", "", ""
 	}
 	// Built from the struct fields directly, never from baseData: a fact that

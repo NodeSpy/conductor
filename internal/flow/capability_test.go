@@ -80,7 +80,8 @@ func enforcedIDs(t *testing.T, r *Runner, patterns []string, universe []string) 
 	var out []string
 	for _, id := range universe {
 		_, err := r.RunSkillVerb(context.Background(), SkillIdentity{
-			Agent: "probe", Verbs: patterns, Repo: "o/r", Number: 1,
+			TargetTrusted: true,
+			Agent:         "probe", Verbs: patterns, Repo: "o/r", Number: 1,
 		}, id, map[string]any{})
 		denied := false
 		if err != nil {

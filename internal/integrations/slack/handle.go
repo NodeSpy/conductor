@@ -136,13 +136,15 @@ func (g *Integration) fire(ctx context.Context, emit core.EmitFunc, on string, m
 			}
 			act = inbound.ForceNoCheckout(act)
 			emit(ctx, core.Trigger{
-				Source:   "slack",
-				Instance: g.name,
-				Kind:     on,
-				Variant:  act.Name,
-				Target:   target,
-				Title:    title,
-				Dedup:    dedupKey,
+				// A synthetic target built from the channel id Slack assigned.
+				TargetTrusted: true,
+				Source:        "slack",
+				Instance:      g.name,
+				Kind:          on,
+				Variant:       act.Name,
+				Target:        target,
+				Title:         title,
+				Dedup:         dedupKey,
 				Context: map[string]any{
 					"slack":           sctx,
 					"slack_bot_token": g.cfg.BotToken, // so a command action can reply with {{.slack_bot_token}}

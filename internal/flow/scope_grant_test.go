@@ -44,7 +44,8 @@ func TestSkillGrantScopesSlackChannel(t *testing.T) {
 	//   verbs:
 	//     slack.post: { channel: ["#code-reviews"] }
 	granted := SkillIdentity{
-		Agent: "reviewer", Repo: "trigger/repo", Number: 3,
+		TargetTrusted: true,
+		Agent:         "reviewer", Repo: "trigger/repo", Number: 3,
 		Verbs:  []string{"slack.post"},
 		Scopes: map[string]map[string][]string{"slack.post": {"channel": {"#code-reviews"}}},
 		// A github-triggered dispatch: no slack context of its own.
@@ -65,7 +66,8 @@ func TestSkillGrantScopesSlackChannel(t *testing.T) {
 	// With NO channel list, the dispatch's own channel still works — and only
 	// that one. This is what makes the strong default usable.
 	own := SkillIdentity{
-		Agent: "responder", Verbs: []string{"slack.*"},
+		TargetTrusted: true,
+		Agent:         "responder", Verbs: []string{"slack.*"},
 		Context: map[string]any{"slack": map[string]any{"channel": "#ops"}},
 	}
 	if err := post(own, "#ops"); err != nil {
@@ -82,7 +84,8 @@ func TestSkillGrantScopesSlackChannel(t *testing.T) {
 func TestSkillGrantPinsRepoToTheDispatch(t *testing.T) {
 	r := scopeRig(t, scopeBaseCfg)
 	id := SkillIdentity{
-		Agent: "reviewer", Repo: "acme/app", Number: 42,
+		TargetTrusted: true,
+		Agent:         "reviewer", Repo: "acme/app", Number: 42,
 		Verbs:  []string{"gh.submit_review"},
 		Scopes: map[string]map[string][]string{"gh.submit_review": {}},
 	}
@@ -112,7 +115,8 @@ policy:
     allow: ["**"]
 `)
 	id := SkillIdentity{
-		Agent: "worker", Repo: "trigger/repo",
+		TargetTrusted: true,
+		Agent:         "worker", Repo: "trigger/repo",
 		Verbs:  []string{"kv.*"},
 		Scopes: map[string]map[string][]string{"kv.*": {"store": {"shared-kv"}}},
 	}
@@ -333,7 +337,8 @@ policy:
 	// reach another's.
 	grantRead := func(vault, key string) error {
 		id := SkillIdentity{
-			Agent: "probe", Repo: "trigger/repo", Verbs: []string{vault + ".*"},
+			TargetTrusted: true,
+			Agent:         "probe", Repo: "trigger/repo", Verbs: []string{vault + ".*"},
 			Scopes: map[string]map[string][]string{vault + ".*": {"key": {"house/prod-token"}}},
 		}
 		_, err := r.RunSkillVerb(context.Background(), id, vault+".read", map[string]any{"key": key})

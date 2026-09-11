@@ -686,6 +686,10 @@ func (r *Runner) RunLiveStep(ctx context.Context, src memory.Source, number int,
 	t := core.Trigger{
 		Source: "live", Instance: "live", Kind: src.Trigger,
 		Target: core.Target{Repo: src.Repo, Number: number, PR: number},
+		// Carried from the launching dispatch, not assumed (round-8 #2). A
+		// run_step under a dispatch whose target the sender chose must not
+		// regain own-repo or own-memory-scope trust by being rebuilt here.
+		TargetTrusted: src.TargetTrusted,
 	}
 	agent := src.Step
 	if agent == "" {

@@ -129,7 +129,7 @@ func skillResourcePolicy(pol *config.AgentAuthoredPolicy, t core.Trigger) *resou
 // so the answer is the same for the repo dimension, the memory scope, the
 // render facts, and every surface that asks.
 func trustedTargetRepo(t core.Trigger) string {
-	if t.TargetUntrusted {
+	if !t.TargetTrusted {
 		return ""
 	}
 	return t.Target.Repo

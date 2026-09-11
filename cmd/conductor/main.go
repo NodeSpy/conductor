@@ -663,7 +663,11 @@ func cmdRun(args []string) error {
 					if err != nil {
 						return memory.Source{}, 0, false
 					}
-					return memory.Source{Step: id.Agent, Repo: id.Repo, Trigger: id.Trigger}, id.Number, true
+					// TargetTrusted rides with the Repo it describes: run_step
+					// rebuilds a trigger from this, and must not hand back the
+					// own-repo trust the launching dispatch was denied.
+					return memory.Source{Step: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
+						TargetTrusted: id.TargetTrusted}, id.Number, true
 				}
 				// The verb-tool surface: catalog + execution, both bound to
 				// the token's real dispatch identity and its skill.verbs.
@@ -690,7 +694,7 @@ func cmdRun(args []string) error {
 							Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
 							Number: id.Number, Verbs: id.Policy.Verbs,
 							Scopes: id.Policy.VerbScopes, Context: id.Context,
-							TargetUntrusted: id.TargetUntrusted,
+							TargetTrusted: id.TargetTrusted,
 						}, uses, options)
 					}
 				}

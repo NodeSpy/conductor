@@ -373,7 +373,8 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	ctx, hist := r.beginHistory(ctx, run, t, spec, shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow))
 	// Stamp the run's provenance for memory writes: a `uses: memory.remember`
 	// step or hook records where the memory came from with no step plumbing.
-	ctx = memory.WithSource(ctx, memory.Source{Run: run.ID, Trigger: t.Kind, Repo: t.Target.Repo})
+	ctx = memory.WithSource(ctx, memory.Source{Run: run.ID, Trigger: t.Kind, Repo: t.Target.Repo,
+		TargetTrusted: t.TargetTrusted})
 	// Blobs are owned per EXECUTION, not per run-dedup key (H2): run.ID is stable
 	// across every trigger of a target, so keying blob refs on it means the first
 	// execution's ReleaseRun tombstones the id and the next trigger can never Put

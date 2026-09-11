@@ -42,6 +42,14 @@ type Source struct {
 	Run     string `json:"run,omitempty" yaml:"run,omitempty"`
 	Trigger string `json:"trigger,omitempty" yaml:"trigger,omitempty"`
 	Repo    string `json:"repo,omitempty" yaml:"repo,omitempty"`
+	// TargetTrusted carries the originating dispatch's target provenance
+	// (core.Trigger.TargetTrusted) alongside the Repo it describes. It travels
+	// here because this struct IS the dispatch provenance the live tools are
+	// handed: run_step reconstructs a trigger from it, and a reconstruction
+	// that dropped the bit would hand back the own-repo trust the original
+	// dispatch was denied. The zero value is untrusted, so a caller that says
+	// nothing gets the safe answer.
+	TargetTrusted bool `json:"target_trusted,omitempty" yaml:"target_trusted,omitempty"`
 }
 
 // Entry is one memory. Scope is the opaque key it was filed under, or

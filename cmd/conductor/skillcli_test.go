@@ -137,10 +137,12 @@ workflows:
 	// is what makes `--repo o/r` its own target rather than someone else's
 	// (resource scoping, docs/design/skill-verb-scope.md).
 	tok, err := b.MintSession(skill.Identity{
-		Agent:  "fixer",
-		Repo:   "o/r",
-		Number: 1,
-		Policy: config.SkillPolicy{Verbs: []string{"gh.submit_review"}},
+		Agent: "fixer",
+		Repo:  "o/r",
+		// A github dispatch: the platform assigned this target.
+		TargetTrusted: true,
+		Number:        1,
+		Policy:        config.SkillPolicy{Verbs: []string{"gh.submit_review"}},
 	}, uint32(os.Getuid()))
 	if err != nil {
 		t.Fatal(err)
@@ -160,6 +162,7 @@ workflows:
 				Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
 				Number: id.Number, Verbs: id.Policy.Verbs,
 				Scopes: id.Policy.VerbScopes, Context: id.Context,
+				TargetTrusted: id.TargetTrusted,
 			}, uses, opts)
 		},
 	})
