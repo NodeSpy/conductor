@@ -125,8 +125,38 @@ func checkPackConnectorRefs(man *PackManifest) []string {
 			"%s: %s %q names connector %q, which the pack does not declare in requires.connectors — a pack may only reach connectors its manifest names, or it could address whatever the consumer happens to have called %q; %s",
 			where, kind, ref, name, name, hint))
 	}
+	// checkBare is the same boundary for a reference that is a BARE connector
+	// name rather than `conn.verb` — handoff:, approve_via:, notify via:.
+	checkBare := func(where, kind, name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || strings.Contains(name, "{{") {
+			return
+		}
+		switch packNamespaces[name] {
+		case packOpenNamespace:
+			return
+		case packDeniedNamespace:
+			problems = append(problems, fmt.Sprintf(
+				"%s: %s %q — `%s` is daemon control and is never reachable from a pack",
+				where, kind, name, name))
+			return
+		}
+		if declared[name] {
+			return
+		}
+		problems = append(problems, fmt.Sprintf(
+			"%s: %s %q names connector %q, which the pack does not declare in requires.connectors — a pack may only reach connectors its manifest names; declare it: requires: { connectors: { %s: \"*\" } }",
+			where, kind, name, name, name))
+	}
 	man.WalkPackSteps(func(where string, s *Step) {
 		check(where, "uses:", s.Uses)
+		// `handoff: slack` is a BARE connector name — the ask-capable
+		// connector a background review is presented on. It is a connector
+		// reference with no dot, which is exactly why the first version of
+		// this walk missed it: every other site is `conn.something` (round-12
+		// #2). A pack naming the consumer's slack here reaches it as surely
+		// as `uses: slack.post` would.
+		checkBare(where, "handoff:", s.Handoff)
 		for i := range s.Hooks {
 			check(fmt.Sprintf("%s hook[%d]", where, i), "hook uses:", s.Hooks[i].Uses)
 		}
@@ -136,6 +166,13 @@ func checkPackConnectorRefs(man *PackManifest) []string {
 			}
 		}
 	})
+	// A pack may ship a `policy:` block, and approve_via names the
+	// ask-capable connector an approval is presented on — bare, like handoff.
+	if man.Policy != nil && man.Policy.AgentAuthored != nil {
+		checkBare("policy.agent_authored", "approve_via:", man.Policy.AgentAuthored.ApproveVia)
+	}
+	// (A pack manifest has no `notify:` block — notify.via lives on the
+	// consumer's Config, which is theirs — so there is no route to walk here.)
 	for ti := range man.Triggers {
 		t := &man.Triggers[ti]
 		label := t.Name

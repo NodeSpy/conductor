@@ -91,6 +91,16 @@ workflows:
 `,
 		},
 		{
+			name:   "a step's handoff: connector",
+			wantIn: `handoff: "slack"`,
+			manifest: `
+workflows:
+  flow:
+    steps:
+      - { id: s, type: agent, prompt: p, background: true, handoff: slack }
+`,
+		},
+		{
 			name:   "conductor.* is denied outright",
 			wantIn: "daemon control",
 			manifest: `
@@ -221,6 +231,16 @@ workflows:
 		"parallel branch Uses": `
 workflows:
   f: { steps: [ { id: s, parallel: [ [ { id: b, uses: undeclared.verb } ] ] } ] }`,
+		// A BARE connector name, which is why it was missed: every other site
+		// is `conn.something`, so a walk written around the dot skipped it.
+		"step.Handoff": `
+workflows:
+  f: { steps: [ { id: s, type: agent, prompt: p, background: true, handoff: undeclared } ] }`,
+		"policy.agent_authored.approve_via": `
+policy:
+  agent_authored: { allow: [code], approve: [cli], approve_via: undeclared }
+workflows:
+  f: { steps: [ { id: s, type: agent, prompt: p } ] }`,
 	}
 	for site, body := range sites {
 		t.Run(site, func(t *testing.T) {
