@@ -1481,6 +1481,12 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		Trigger: t, Action: act, Step: step, Identity: identity, Model: model, Tokens: tokens,
 		Shadow: shadow, Wait: !step.Background, Interactive: step.Background, Data: data,
 		AgentAuthored: authored,
+		// The daemon's own id for THIS dispatch — what a live tool's
+		// reconstructed trigger anchors to when the target cannot be
+		// trusted. The history id when the run is recorded (stable across
+		// this dispatch's tool calls), else a fresh random one, so the
+		// anchor exists even for an unrecorded run.
+		DispatchID: r.dispatchID(ctx, id),
 	}
 	ref, err := r.Agents.Dispatch(ctx, req)
 	switch {

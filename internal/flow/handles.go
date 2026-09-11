@@ -85,6 +85,15 @@ func agentAuthoredNamespace(ctx context.Context, t core.Trigger) string {
 		// assigns, and it travels with the repo whose trust it inherits.
 		return fmt.Sprintf("agent:%s#%s#%d", repo, t.Kind, t.Target.Number)
 	}
+	// A reconstructed trigger (run_step) carries the DAEMON-ASSIGNED id of the
+	// dispatch that launched it. That is the anchor for an untrusted target:
+	// the repo is the sender's to pick, this is not. Without it every
+	// run_step fell through to the literals below — Source and Instance are
+	// both "live" — so two dispatches' agent-authored steps collided onto one
+	// namespace, which is the round-10 #2 class reopened on this path.
+	if t.DispatchID != "" {
+		return "agent:dispatch:" + t.DispatchID
+	}
 	if h := histFrom(ctx); h != nil {
 		if id := h.runHistoryID(); id != "" {
 			return "agent:run:" + id

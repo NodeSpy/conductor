@@ -71,6 +71,12 @@ type Trigger struct {
 	// memory scope, none of the target-derived facts in a `{{ }}` allowlist
 	// entry, and no say in an agent-authored step's identity namespace.
 	TargetTrusted bool
+	// DispatchID is the daemon-assigned id of the dispatch this trigger was
+	// RECONSTRUCTED from, set only on the live-tool path (run_step). It is
+	// unique per launching dispatch and chosen by conductor — never by the
+	// event's sender, never by the agent — which is what makes it usable as a
+	// confinement anchor when the target cannot be trusted.
+	DispatchID string
 	// CatchUp marks a trigger emitted by the periodic sweep (re-derived state)
 	// rather than a fresh webhook event. When an agent is already working the PR,
 	// catch-up triggers are skipped (don't re-nudge) while fresh events are queued

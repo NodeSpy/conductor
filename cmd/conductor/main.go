@@ -667,7 +667,7 @@ func cmdRun(args []string) error {
 					// rebuilds a trigger from this, and must not hand back the
 					// own-repo trust the launching dispatch was denied.
 					return memory.Source{Step: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
-						TargetTrusted: id.TargetTrusted}, id.Number, true
+						TargetTrusted: id.TargetTrusted, Dispatch: id.Dispatch}, id.Number, true
 				}
 				// The verb-tool surface: catalog + execution, both bound to
 				// the token's real dispatch identity and its skill.verbs.

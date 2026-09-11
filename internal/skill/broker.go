@@ -86,6 +86,10 @@ type Identity struct {
 	// core.Trigger.TargetTrusted). False — the zero value — means the scope
 	// layer withholds own-target trust from this grant.
 	TargetTrusted bool
+	// Dispatch is the daemon-assigned id of this dispatch (see
+	// dispatch.Request.DispatchID): the anchor a live tool's reconstructed
+	// trigger is confined to when the target itself cannot be trusted.
+	Dispatch string
 	// Context is the originating trigger's context, held daemon-side for the
 	// session's lifetime. It exists for RESOURCE SCOPING: a connector's
 	// ContextScope hook reads it to decide which channel (repo, …) this

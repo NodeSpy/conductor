@@ -66,7 +66,13 @@ type Request struct {
 	// isolation names an explicit network policy, the launch is routed through
 	// the deny-all egress proxy.
 	AgentAuthored bool
-	Data          map[string]any // extra template vars (e.g. prior step outputs)
+	// DispatchID is a DAEMON-ASSIGNED id, unique to this dispatch. It is the
+	// anchor a live tool's reconstructed trigger is confined to when the
+	// dispatch's own target cannot be trusted (a webhook `repo:` the sender
+	// chose): the repo is theirs to pick, this is not. Never derived from
+	// event data, never chosen by the agent.
+	DispatchID string
+	Data       map[string]any // extra template vars (e.g. prior step outputs)
 }
 
 // RunRef is the outcome of a dispatch.

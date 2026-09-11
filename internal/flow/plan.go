@@ -690,6 +690,12 @@ func (r *Runner) RunLiveStep(ctx context.Context, src memory.Source, number int,
 		// run_step under a dispatch whose target the sender chose must not
 		// regain own-repo or own-memory-scope trust by being rebuilt here.
 		TargetTrusted: src.TargetTrusted,
+		// …and the daemon's id for that dispatch, which is what confines this
+		// reconstructed trigger's agent-authored steps when the target
+		// cannot (round-11 #2). Source/Instance are the literals "live", and
+		// an untrusted target contributes nothing, so without this every
+		// run_step in the daemon shared one namespace.
+		DispatchID: src.Dispatch,
 	}
 	agent := src.Step
 	if agent == "" {

@@ -5,7 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/memory"
 )
 
@@ -173,5 +176,88 @@ policy:
 				t.Fatalf("run_step under %s: refused=%v (err=%v)", tc.name, refused, err)
 			}
 		})
+	}
+}
+
+// ROUND-11 #2. run_step rebuilds a trigger with the literals Source="live",
+// Instance="live", and the IPC handler calls it on a BARE context (so there
+// is no history recorder either). For an UNTRUSTED target that left
+// agentAuthoredNamespace with nothing: OwnRepo() is "", histFrom is nil, and
+// the fallback is "agent:live:live:<kind>" — IDENTICAL for every run_step on
+// the daemon. Two different dispatches' agent-authored steps therefore shared
+// one session-binding namespace, which is the round-10 #2 class reopened on
+// the one path that had no repo to be confined by.
+//
+// The anchor is now the daemon-assigned dispatch id, carried on the
+// provenance the live tool was handed.
+func TestRunStepNamespacesPerLaunchingDispatch(t *testing.T) {
+	ns := func(dispatchID string) string {
+		// The trigger RunLiveStep builds: untrusted target, literal source.
+		trig := core.Trigger{
+			Source: "live", Instance: "live", Kind: "delivery",
+			Target:     core.Target{Repo: "victim/repo", Number: 7},
+			DispatchID: dispatchID,
+		}
+		return stepIdentity(markAgentAuthored(context.Background(), trig),
+			config.Step{Type: "agent", Name: "review"}, "steps[0]")
+	}
+	a, b := ns("run-abc:step1"), ns("run-xyz:step1")
+	if a == b {
+		t.Fatalf("two launching dispatches share an agent-authored namespace (%q) — one "+
+			"run_step's step can address the other's live session", a)
+	}
+	// The forged repo must not appear in either: it is not the wall.
+	for _, got := range []string{a, b} {
+		if strings.Contains(got, "victim/repo") {
+			t.Errorf("the namespace was built from a repo the sender chose: %q", got)
+		}
+	}
+	// Two steps of ONE launching dispatch still share, so continuity within a
+	// run_step plan — the legitimate use — survives.
+	if ns("run-abc:step1") != a {
+		t.Error("two steps of one dispatch must share a namespace")
+	}
+	// And the binding keys they produce differ, which is what the affinity
+	// registry actually matches on.
+	if controller.StepSessionKey(a, "shared") == controller.StepSessionKey(b, "shared") {
+		t.Fatal("the session binding keys collide across launching dispatches")
+	}
+}
+
+// The anchor must reach RunLiveStep from the provenance the tool was handed,
+// not be re-derived: the IPC handler calls it on a bare context precisely
+// because it has no run of its own.
+func TestRunLiveStepCarriesTheDispatchAnchor(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc: { use: fake }
+policy:
+  agent_authored:
+    allow: ["**"]
+`)
+	rig := newTestRunner(t, cfg, buildRegistry(t, cfg))
+	var seen []string
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		seen = append(seen, req.Identity)
+		return dispatch.RunRef{AgentID: "a", Output: "done"}, nil
+	}
+	run := func(dispatchID string) {
+		src := memory.Source{Step: "probe", Trigger: "delivery", Repo: "victim/repo", Dispatch: dispatchID}
+		_, _ = rig.Runner.RunLiveStep(context.Background(), src, 7,
+			map[string]any{"type": "agent", "name": "review", "model": "m", "prompt": "p"})
+	}
+	run("run-abc:step1")
+	run("run-xyz:step1")
+	if len(seen) != 2 {
+		t.Fatalf("expected two dispatches, got %v", seen)
+	}
+	if seen[0] == seen[1] {
+		t.Fatalf("two run_step launches produced the same agent identity %q — their sessions "+
+			"would bind to one key", seen[0])
+	}
+	for _, id := range seen {
+		if !strings.Contains(id, "agent:dispatch:") {
+			t.Errorf("the identity must be confined to the launching dispatch, got %q", id)
+		}
 	}
 }

@@ -71,6 +71,13 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 	if req.Trigger.TargetTrusted {
 		args = append(args, "--target-trusted")
 	}
+	// The daemon's id for this dispatch. A live tool (run_step) rebuilds a
+	// trigger from this provenance, and when the target is untrusted this is
+	// the only thing left that the event's sender did not choose — so it is
+	// what the rebuilt trigger's agent-authored steps are confined to.
+	if req.DispatchID != "" {
+		args = append(args, "--dispatch", req.DispatchID)
+	}
 	if n := req.Trigger.Target.Number; n > 0 {
 		args = append(args, "--number", strconv.Itoa(n))
 	}

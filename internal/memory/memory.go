@@ -51,6 +51,14 @@ type Source struct {
 	// dispatch was denied. The zero value is untrusted, so a caller that says
 	// nothing gets the safe answer.
 	TargetTrusted bool `json:"target_trusted,omitempty" yaml:"target_trusted,omitempty"`
+	// Dispatch is the DAEMON-ASSIGNED id of the launching dispatch: unique
+	// per dispatch, chosen by conductor, never by the event's sender or by
+	// the agent. It exists so a live tool that reconstructs a trigger
+	// (run_step) has something trustworthy to confine that trigger's
+	// agent-authored steps to — see flow.agentAuthoredNamespace. Without it,
+	// every run_step under an untrusted target shared one namespace, and two
+	// dispatches' agent steps collided onto one session binding.
+	Dispatch string `json:"dispatch,omitempty" yaml:"dispatch,omitempty"`
 }
 
 // OwnRepo is the repo this provenance may treat as its own — core.OwnRepo's
