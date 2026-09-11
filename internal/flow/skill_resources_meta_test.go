@@ -84,16 +84,9 @@ policy:
 	}
 }
 
-// The check must be the SHARED one. A private reimplementation on the skill
-// side is how the two surfaces drifted apart in the first place.
-func TestSkillSurfaceUsesTheSharedResourceCheck(t *testing.T) {
-	src := readSource(t, "skillverbs.go")
-	if !strings.Contains(src, "r.checkVerbResources(") {
-		t.Error("RunSkillVerb no longer calls checkVerbResources — the skill surface " +
-			"and the plan surface must enforce resource scoping from one function, or a " +
-			"grant means different things depending on which surface the agent uses")
-	}
-}
+// (The "both surfaces enforce from one shared walk" source guard now lives in
+// scope_meta_test.go's TestBothSurfacesCallTheSharedScopeCheck, which also
+// pins that the skill entry point builds the never-nil skillResourcePolicy.)
 
 // A vault's verbs read and write SECRET material. A broad `["*"]` grant is
 // written to mean "the ordinary connectors"; folding every vault into it hands

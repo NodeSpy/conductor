@@ -71,8 +71,12 @@ type resourcePolicy struct {
 	t core.Trigger
 }
 
-// planResourcePolicy resolves the allowlists for one trigger, or nil when
-// they don't apply (trust: full).
+// planResourcePolicy resolves the allowlists for one PLAN, or nil when they
+// don't apply: `trust: full` (the deliberate lift), or no policy at all —
+// which is moot on this surface, because guardPlan refuses an agent-authored
+// plan outright without a policy.agent_authored block, so there is no
+// unguarded plan for a nil to wave through. TestAgentAuthoredPlansNeedAPolicy
+// pins that, since this nil depends on it.
 func planResourcePolicy(pol *config.AgentAuthoredPolicy, t core.Trigger) *resourcePolicy {
 	if pol == nil || pol.TrustFull() {
 		return nil
@@ -83,6 +87,35 @@ func planResourcePolicy(pol *config.AgentAuthoredPolicy, t core.Trigger) *resour
 		trigger: t.Target.Repo,
 		t:       t,
 	}
+}
+
+// skillResourcePolicy is the SKILL surface's equivalent, and it is never nil.
+//
+// The difference is not an oversight, it is the whole point: on the skill
+// surface the scoping is INTRINSIC TO THE GRANT, not a plan-policy feature.
+// `skill.verbs: {slack.post: {channel: ["#x"]}}` is a sentence the operator
+// wrote about this agent; it means the same thing whether or not the config
+// also has a policy.agent_authored block, which governs a different surface
+// entirely (agent-authored plans). Resolving to nil here — as the plan
+// surface legitimately does — silently turned every per-verb constraint and
+// the deny-by-default itself into a no-op for any config without that block.
+//
+// So: the walk ALWAYS runs. A policy, when present, only ever WIDENS it
+// through allow_scopes.
+//
+// `trust: full` is read the same way. It is a plan-latitude knob — "let the
+// agent's own plans reach further" — and it does NOT lift a constraint the
+// operator wrote onto a named verb, nor the dispatch-context default. An
+// operator who wants a dimension open on the skill surface says so where the
+// surface is configured: `{channel: ["*"]}` on the grant, or allow_scopes
+// (which still widens under trust: full, so the escape hatch stays one line).
+func skillResourcePolicy(pol *config.AgentAuthoredPolicy, t core.Trigger) *resourcePolicy {
+	rp := &resourcePolicy{trigger: t.Target.Repo, t: t}
+	if pol != nil {
+		rp.allow = pol.ScopeAllow()
+		rp.scopes = pol.AllowMemoryScopes
+	}
+	return rp
 }
 
 // scopeOK is THE resource question, asked once for every dimension: may this
@@ -278,14 +311,19 @@ func guardPlanResources(reg *connector.Registry, pol *config.AgentAuthoredPolicy
 	return walk("plan", steps)
 }
 
-// checkVerbResources is THE CHOKEPOINT — the one function both agent-facing
-// surfaces run a verb call through: the plan surface (execVerb/hooks, where
-// the rendered options carry the CONCRETE names a template the static scan
+// checkVerbScopes is THE CHOKEPOINT — the one walk both agent-facing surfaces
+// run a verb call through: the plan surface (execVerb/hooks, where the
+// rendered options carry the CONCRETE names a template the static scan
 // couldn't evaluate has resolved into) and the skill surface (RunSkillVerb,
 // where the agent supplied the options literally). Neither names an option:
 // the walk comes from the CALLED verb's connector-declared Scope tags, so the
 // two surfaces cannot disagree about what a grant means, and a connector that
 // tags a new option is enforced on both at once.
+//
+// The two surfaces differ only in WHICH resourcePolicy they hand it — see
+// planResourcePolicy (nil when it doesn't apply) and skillResourcePolicy
+// (never nil, because the grant's own scoping is not the plan policy's to
+// switch off). Everything downstream of that is shared.
 //
 // grant is the calling skill grant's per-option allowlist (skill.verbs map
 // form), or nil on the plan surface. It only ever widens.
@@ -294,27 +332,41 @@ func guardPlanResources(reg *connector.Registry, pol *config.AgentAuthoredPolicy
 // resolve in agent-authored steps and the plan scope carries no secret values
 // — but a vault verb's key: option is an ordinary scoped option and is walked
 // here like any other.
-func (r *Runner) checkVerbResources(pol *config.AgentAuthoredPolicy, t core.Trigger, uses string, rendered map[string]any, grant map[string][]string) error {
-	rp := planResourcePolicy(pol, t)
+func (r *Runner) checkVerbScopes(rp *resourcePolicy, uses string, opts map[string]any, grant map[string][]string) error {
 	if rp == nil {
 		return nil
 	}
 	in, scoped, ok := verbScopedOptions(r.Conns, uses)
 	if !ok {
-		// A policy applies and the verb's declaration is out of reach (no
+		// Scoping applies and the verb's declaration is out of reach (no
 		// registry, unknown connector/verb), so its scoped options can't be
 		// known. Refuse: this is the belt, and a belt that can't see must
 		// not wave the call through.
-		return fmt.Errorf("%s: cannot resolve the verb's option schema to scope-check it — refusing under policy.agent_authored", uses)
+		return fmt.Errorf("%s: cannot resolve the verb's option schema to scope-check it — refusing", uses)
 	}
 	for _, so := range scoped {
-		val, _ := rendered[so.Name].(string)
+		val, _ := opts[so.Name].(string)
 		if rp.scopeOK(in, so.Dim, val, grant[so.Name]) {
 			continue
 		}
 		return scopeDenial(uses, uses, so.Name, so.Dim, strings.TrimSpace(val))
 	}
 	return nil
+}
+
+// checkVerbResources is the PLAN surface's entry into the shared walk: the
+// runtime belt for an agent-authored step's rendered options.
+func (r *Runner) checkVerbResources(pol *config.AgentAuthoredPolicy, t core.Trigger, uses string, rendered map[string]any, grant map[string][]string) error {
+	return r.checkVerbScopes(planResourcePolicy(pol, t), uses, rendered, grant)
+}
+
+// checkSkillVerbResources is the SKILL surface's entry into the same walk. It
+// exists as its own entry point for exactly one reason: the policy it builds
+// is never nil, so a config with no policy.agent_authored block — or one with
+// trust: full — still gets the grant's per-verb constraints and the
+// deny-by-default. See skillResourcePolicy.
+func (r *Runner) checkSkillVerbResources(pol *config.AgentAuthoredPolicy, t core.Trigger, uses string, options map[string]any, grant map[string][]string) error {
+	return r.checkVerbScopes(skillResourcePolicy(pol, t), uses, options, grant)
 }
 
 // stepSecretRefs extracts every literal secret reference in a step's

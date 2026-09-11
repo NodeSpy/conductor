@@ -133,8 +133,13 @@ workflows:
 	}
 
 	b := skill.NewBroker(func(string) (string, bool) { return "", false }, nil)
+	// A real dispatch: the identity carries the PR it was minted for, which
+	// is what makes `--repo o/r` its own target rather than someone else's
+	// (resource scoping, docs/design/skill-verb-scope.md).
 	tok, err := b.MintSession(skill.Identity{
 		Agent:  "fixer",
+		Repo:   "o/r",
+		Number: 1,
 		Policy: config.SkillPolicy{Verbs: []string{"gh.submit_review"}},
 	}, uint32(os.Getuid()))
 	if err != nil {
@@ -149,8 +154,12 @@ workflows:
 			if aerr != nil {
 				return nil, aerr
 			}
+			// Same construction main.go uses, so the fixture exercises the
+			// identity the daemon really hands in.
 			return stack.Runner.RunSkillVerb(ctx, flow.SkillIdentity{
-				Agent: id.Agent, Verbs: id.Policy.Verbs,
+				Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
+				Number: id.Number, Verbs: id.Policy.Verbs,
+				Scopes: id.Policy.VerbScopes, Context: id.Context,
 			}, uses, opts)
 		},
 	})

@@ -537,7 +537,13 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	// drift: the dispatch's own target/channel is implicitly allowed, the
 	// grant's own per-option lists widen it (skill.verbs map form), and
 	// anything beyond that needs policy.agent_authored.allow_scopes.
-	if err := r.checkVerbResources(r.planPolicy(), t, uses, options, id.ScopesFor(uses)); err != nil {
+	//
+	// This runs through checkSkillVerbResources, NOT the plan surface's
+	// entry: the grant's scoping is intrinsic to the grant, so it must not
+	// depend on the config also having a policy.agent_authored block (a
+	// different surface's knob), and trust: full must not lift a constraint
+	// the operator wrote onto a named verb here.
+	if err := r.checkSkillVerbResources(r.planPolicy(), t, uses, options, id.ScopesFor(uses)); err != nil {
 		return deny(r.redactErr(err))
 	}
 	// Identity is a per-verb concern: a verb's own `as:` option (when it has

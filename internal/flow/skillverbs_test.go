@@ -243,7 +243,11 @@ stores:
 	reg := buildRegistry(t, cfg)
 	rig := newTestRunner(t, cfg, reg)
 	rig.Runner.Secrets.Track("s3kr1t-value")
-	id := SkillIdentity{Agent: "a", Verbs: []string{"kv.*"}}
+	// The grant names the store: resource scoping is intrinsic to the skill
+	// surface now (it does not wait for a policy block), so a kv grant that
+	// named no store would be refused before this barrier is even reached.
+	id := SkillIdentity{Agent: "a", Verbs: []string{"kv.*"},
+		Scopes: map[string]map[string][]string{"kv.*": {"store": {"main"}}}}
 	_, err := rig.Runner.RunSkillVerb(context.Background(), id, "kv.set",
 		map[string]any{"store": "main", "namespace": "n", "key": "k", "value": "park s3kr1t-value"})
 	if err == nil || !strings.Contains(err.Error(), "refusing to write secret material") {
