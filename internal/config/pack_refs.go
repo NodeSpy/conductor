@@ -154,21 +154,73 @@ func (rw *refRewriter) rewriteStepName(p *Step) {
 	}
 }
 
+// permissionSets are the keys whose VALUE IS A SET OF PERMISSIONS, addressed
+// by their path from a step. The override's entry replaces the base's whole,
+// map form included: the set of keys the consumer wrote is the final set, so
+// omitting one REMOVES it.
+//
+// Without this, deep-merge quietly reverses the narrowing guarantee for any
+// permission key that grew a map form. `skill.verbs` did exactly that: the
+// list form narrowed correctly (lists replace), while the map form — same
+// key, same meaning, one extra dimension of detail — merged, so a consumer
+// override naming one verb kept every verb the pack bundled. It failed OPEN,
+// and it failed open only in the newer spelling, which is the worst place for
+// a permission rule to differ.
+//
+// Anything added here must be a permission set, not configuration: replace
+// semantics are right for "which verbs may this agent call" and wrong for
+// "what are this agent's settings".
+var permissionSets = [][]string{
+	{"skill", "verbs"},
+}
+
+// isPermissionSet reports whether a key path names one.
+func isPermissionSet(path []string) bool {
+	for _, p := range permissionSets {
+		if len(p) != len(path) {
+			continue
+		}
+		same := true
+		for i := range p {
+			if p[i] != path[i] {
+				same = false
+				break
+			}
+		}
+		if same {
+			return true
+		}
+	}
+	return false
+}
+
 // deepOverride merges a pack OVERRIDE map onto a base map with replace
 // semantics: nested maps deep-merge, but scalars and LISTS are replaced (not
-// appended). This differs from mergeMaps (which appends lists) because a pack
-// override must be able to NARROW a bundled list — e.g. restrict a bundled
+// appended), and a permissionSets path is replaced WHOLE whichever form it
+// takes. This differs from mergeMaps (which appends lists) because a pack
+// override must be able to NARROW a bundled grant — e.g. restrict a bundled
 // agent's skill.verbs — not only widen it. Security-relevant: an override that
-// appended could never remove a permission.
+// appended (or merged) could never remove a permission.
 func deepOverride(base, ov map[string]any) map[string]any {
+	return deepOverrideAt(base, ov, nil)
+}
+
+// deepOverrideAt is deepOverride tracking its path, so a permission set can be
+// recognized wherever it sits in the step.
+func deepOverrideAt(base, ov map[string]any, path []string) map[string]any {
 	out := map[string]any{}
 	for k, v := range base {
 		out[k] = v
 	}
 	for k, v := range ov {
+		here := append(append([]string(nil), path...), k)
+		if isPermissionSet(here) {
+			out[k] = v // the override's set is the final set
+			continue
+		}
 		if bm, ok := out[k].(map[string]any); ok {
 			if om, ok2 := v.(map[string]any); ok2 {
-				out[k] = deepOverride(bm, om)
+				out[k] = deepOverrideAt(bm, om, here)
 				continue
 			}
 		}

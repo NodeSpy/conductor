@@ -216,6 +216,85 @@ func TestApplyAgentOverrideReplacesLists(t *testing.T) {
 	}
 }
 
+// …and the MAP form narrows identically (round-4 F2). It did not: once
+// skill.verbs grew a map form, the override path's deep-merge copied every
+// base key the override omitted, so a consumer narrowing a bundled grant kept
+// the verbs it had just dropped — failing OPEN, in the newer spelling only.
+//
+// The rule is per FORM-INDEPENDENT: the set of verbs the override names is the
+// final set. Whatever a permission key looks like, omitting an entry removes
+// it.
+func TestApplyAgentOverrideNarrowsTheMapForm(t *testing.T) {
+	base := Step{
+		Workspace: "worktree",
+		Skill: &SkillPolicy{
+			Verbs: []string{"gh.comment", "gh.submit_review"},
+			VerbScopes: map[string]map[string][]string{
+				"gh.comment":       {"repo": {"acme/app", "acme/docs"}},
+				"gh.submit_review": {},
+			},
+		},
+	}
+	out, err := applyStepOverride(base, map[string]any{
+		"skill": map[string]any{"verbs": map[string]any{
+			"gh.comment": map[string]any{"repo": []any{"acme/docs"}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Skill.Verbs) != 1 || out.Skill.Verbs[0] != "gh.comment" {
+		t.Fatalf("the override named ONE verb, so the step must grant exactly that one; got %v "+
+			"— a consumer cannot narrow a bundled grant and the pack keeps a permission it was denied",
+			out.Skill.Verbs)
+	}
+	// The kept verb's own constraints are the override's, narrowed too.
+	if got := out.Skill.VerbScopes["gh.comment"]["repo"]; len(got) != 1 || got[0] != "acme/docs" {
+		t.Fatalf("the kept verb's per-option list must be the override's, got %v", got)
+	}
+	if _, dropped := out.Skill.VerbScopes["gh.submit_review"]; dropped {
+		t.Fatalf("a dropped verb must not keep constraints behind: %v", out.Skill.VerbScopes)
+	}
+	if out.Workspace != "worktree" {
+		t.Fatalf("non-overridden field should survive, got workspace=%q", out.Workspace)
+	}
+}
+
+// Narrowing must hold across the FORM BOUNDARY too — a map-form bundle
+// overridden by a list, and a list-form bundle overridden by a map. A
+// permission rule that depends on which spelling each side happened to use is
+// the same bug wearing different clothes.
+func TestApplyAgentOverrideNarrowsAcrossForms(t *testing.T) {
+	mapBase := &SkillPolicy{
+		Verbs: []string{"gh.comment", "gh.merge"},
+		VerbScopes: map[string]map[string][]string{
+			"gh.comment": {"repo": {"acme/app"}}, "gh.merge": {"repo": {"acme/app"}},
+		},
+	}
+	listBase := &SkillPolicy{Verbs: []string{"gh.comment", "gh.merge"}}
+
+	for _, tc := range []struct {
+		name     string
+		base     *SkillPolicy
+		override any
+	}{
+		{"map bundle, list override", mapBase, []any{"gh.comment"}},
+		{"list bundle, map override", listBase, map[string]any{"gh.comment": map[string]any{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sk := *tc.base
+			out, err := applyStepOverride(Step{Skill: &sk},
+				map[string]any{"skill": map[string]any{"verbs": tc.override}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(out.Skill.Verbs) != 1 || out.Skill.Verbs[0] != "gh.comment" {
+				t.Fatalf("gh.merge survived a narrowing override: %v", out.Skill.Verbs)
+			}
+		})
+	}
+}
+
 func containsSubstr(ss []string, sub string) bool {
 	for _, s := range ss {
 		if strings.Contains(s, sub) {
