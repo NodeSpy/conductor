@@ -142,7 +142,18 @@ func identityScopeFrom(ctx context.Context) config.IdentityScope {
 // which is a different job. Computing identity from it is how a session
 // came to be bound under `…/step1` and swept under `…/0`.
 func stepIdentity(ctx context.Context, s config.Step, slot string) string {
-	return config.IdentityFor(identityScopeFrom(ctx), s.Name, slot, s.Fingerprint)
+	id := config.IdentityFor(identityScopeFrom(ctx), s.Name, slot, s.Fingerprint)
+	// An AGENT-AUTHORED step's identity is confined to its own dispatch. The
+	// identity ladder's rung 1 returns a `name:` verbatim — which is correct
+	// for an operator, whose config is the trust boundary, and is a
+	// cross-tenant reach for an agent, whose step is output. See
+	// agentAuthoredNamespace. This is the single place identities are built
+	// for dispatch, so the confinement cannot be bypassed by a step field
+	// nobody thought to deny.
+	if ns := agentScopeFrom(ctx); ns != "" && id != "" {
+		return ns + "/" + id
+	}
+	return id
 }
 
 // savedWFKey stamps execution inside a SAVED workflow with its name, so
@@ -1179,7 +1190,7 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 		child["secrets"] = map[string]any{}
 		child["vaults"] = map[string]any{}
 		// And {{secret}} boundary handles never resolve in its steps.
-		ctx = markAgentAuthored(ctx)
+		ctx = markAgentAuthored(ctx, t)
 	}
 	child["inputs"] = inputs
 	child["steps"] = map[string]any{}

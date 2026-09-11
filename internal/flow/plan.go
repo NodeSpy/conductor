@@ -535,7 +535,7 @@ func dataValueWrite(kind, op string) bool {
 func (r *Runner) runPlanState(ctx context.Context, t core.Trigger, pol *config.AgentAuthoredPolicy, st *planState, res guardResult, runID, stepID string, shadow bool) (map[string]any, error) {
 	// Plan steps are agent-authored whatever the trust level: {{secret}}
 	// boundary handles never resolve inside them (see handles.go).
-	ctx = markAgentAuthored(ctx)
+	ctx = markAgentAuthored(ctx, t)
 	// The write barrier: an unapproved plan may not persist secret material
 	// into shared state (kv/sql/memory). Approved plans cleared the hand-off.
 	ctx = context.WithValue(ctx, planBarrierKey{},

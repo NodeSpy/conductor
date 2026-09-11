@@ -720,3 +720,14 @@ func (rig *testRig) workflowFailed() (bool, string) {
 	errStr, _ := last["error"].(string)
 	return true, errStr
 }
+
+// roleOf strips the agent-authored identity namespace, leaving the step's own
+// name. An agent-authored step's identity is confined to its dispatch
+// ("agent:<repo>#<kind>/<name>" — see agentAuthoredNamespace), so a test that
+// dispatches by role matches on the role.
+func roleOf(identity string) string {
+	if i := strings.LastIndex(identity, "/"); i >= 0 && strings.HasPrefix(identity, "agent:") {
+		return identity[i+1:]
+	}
+	return identity
+}

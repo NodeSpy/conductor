@@ -459,7 +459,10 @@ policy:
 		"    max_workers: 1\n" +
 		"```"
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
-		switch req.Identity {
+		// An agent-authored step's identity is NAMESPACED to its dispatch
+		// (agentAuthoredNamespace), so the team's roles arrive as
+		// "agent:<repo>#<kind>/architect". Match the role, not the prefix.
+		switch roleOf(req.Identity) {
 		case "reviewer": // the plan author
 			return dispatch.RunRef{AgentID: "auth", Output: plan}, nil
 		case "architect":

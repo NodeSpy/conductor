@@ -229,3 +229,15 @@ type retryOfKey struct{}
 func WithRetryOf(ctx context.Context, histID string) context.Context {
 	return context.WithValue(ctx, retryOfKey{}, histID)
 }
+
+// runHistoryID is this run's record id — a per-execution identifier the event
+// cannot choose. agentAuthoredNamespace uses it to confine a plan whose
+// target is untrusted.
+func (h *histRec) runHistoryID() string {
+	if h == nil {
+		return ""
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.rec.ID
+}

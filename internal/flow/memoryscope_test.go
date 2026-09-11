@@ -195,9 +195,9 @@ func installTestMemory(t *testing.T, cfg *config.Config) *memory.Manager {
 // plan step reaches a verb: execVerb, on a context marked agent-authored.
 func (r *Runner) runAgentAuthoredVerb(t *testing.T, uses string, opts map[string]any) error {
 	t.Helper()
-	ctx := markAgentAuthored(context.Background())
 	trig := newTrigger("ping", nil)
 	trig.Target.Repo = "trigger/repo"
+	ctx := markAgentAuthored(context.Background(), trig)
 	_, err := r.execVerb(ctx, trig, config.Step{Uses: uses, Options: opts}, "s", map[string]any{}, false)
 	return err
 }
