@@ -689,6 +689,7 @@ func cmdRun(args []string) error {
 						return runner.RunSkillVerb(vctx, flow.SkillIdentity{
 							Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
 							Number: id.Number, Verbs: id.Policy.Verbs,
+							Scopes: id.Policy.VerbScopes, Context: id.Context,
 						}, uses, options)
 					}
 				}

@@ -5,24 +5,37 @@ import (
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 )
 
-// Resource allowlists for AGENT-AUTHORED workflows (#124): plans (any entry
-// path — inline, live run_step, saved/promoted), never config-authored
-// steps. policy.agent_authored gains allow_secrets / allow_stores /
-// allow_targets, each DENY BY DEFAULT: an empty list means an agent-authored
-// step may not reference that resource kind at all, so an agent can't choose
-// to manage things the operator didn't intend it to manage. "*" grants all
-// of one kind, `trust: full` lifts all three, and the TRIGGERING target (the
-// repo the workflow fired for) is implicitly allowed — the target list only
-// constrains ADDITIONAL repos the agent picks.
+// Resource allowlists for AGENT-AUTHORED workflows (#124), generalized to
+// connector-declared dimensions (docs/design/skill-verb-scope.md): plans (any
+// entry path — inline, live run_step, saved/promoted) and skill grants, never
+// config-authored steps.
+//
+// policy.agent_authored carries allow_scopes (dimension → allowed values),
+// with allow_secrets / allow_stores / allow_targets kept as the legacy
+// spellings of the secret / store / repo dimensions. DENY BY DEFAULT: an
+// empty list means an agent-authored step may not reference that dimension at
+// all, so an agent can't choose to manage things the operator didn't intend
+// it to manage. "*" grants a whole dimension, `trust: full` lifts them all,
+// and whatever the DISPATCH itself points at — the repo it fired for, the
+// channel its event came from, the connector's configured default — is
+// implicitly in scope (connector.Instance.ContextScope). The lists only
+// constrain the ADDITIONAL resources an agent picks.
+//
+// WHICH options carry a resource is the connector's own declaration
+// (Field.Scope), never a name written here: scopeOK takes a dimension, and
+// checkVerbResources walks the called verb's scoped options to find them. A
+// connector that tags a new option is enforced on both surfaces the day it
+// ships, which is what the meta-test pins.
 //
 // Enforcement is two-layered: guardPlanResources rejects a plan statically
 // from the literal references it can see, and the runtime belt
-// (checkVerbResources in execVerb/hooks + the code-step DataGuard) refuses a
-// step whose RENDERED options reach outside the lists — the templated store
-// or repo name the static scan can't evaluate.
+// (checkVerbResources in execVerb/hooks/RunSkillVerb + the code-step
+// DataGuard) refuses a step whose RENDERED options reach outside the lists —
+// the templated store or repo name the static scan can't evaluate.
 
 // resourceAllowed reports whether one name matches an allowlist: exact,
 // path.Match glob ("house/*", "org/*"), or the whole-kind wildcard "*"
@@ -46,13 +59,16 @@ func resourceAllowed(patterns []string, name string) bool {
 // resourcePolicy is the resolved allowlist set for one plan execution. nil
 // (trust: full, or no policy — guardPlan already rejects that) = unrestricted.
 type resourcePolicy struct {
-	secrets []string
-	stores  []string
-	targets []string
-	scopes  []string // memory scopes (allow_memory_scopes)
+	// allow is the per-dimension allowlist (allow_scopes plus the legacy
+	// allow_targets/allow_stores/allow_secrets aliases).
+	allow  map[string][]string
+	scopes []string // memory scopes (allow_memory_scopes)
 	// trigger is the implicitly-allowed triggering repo ("" when the trigger
-	// has no repo context).
+	// has no repo context). Memory scopes derive from it.
 	trigger string
+	// t is the dispatch the policy is being applied to — what a connector's
+	// ContextScope hook maps to its implicitly-allowed value per dimension.
+	t core.Trigger
 }
 
 // planResourcePolicy resolves the allowlists for one trigger, or nil when
@@ -62,20 +78,64 @@ func planResourcePolicy(pol *config.AgentAuthoredPolicy, t core.Trigger) *resour
 		return nil
 	}
 	return &resourcePolicy{
-		secrets: pol.AllowSecrets,
-		stores:  pol.AllowStores,
-		targets: pol.AllowTargets,
+		allow:   pol.ScopeAllow(),
 		scopes:  pol.AllowMemoryScopes,
 		trigger: t.Target.Repo,
+		t:       t,
 	}
 }
 
-func (rp *resourcePolicy) secretOK(name string) bool {
-	return rp == nil || resourceAllowed(rp.secrets, name)
+// scopeOK is THE resource question, asked once for every dimension: may this
+// dispatch name this value in this dimension of this connector?
+//
+// Allowed = the connector's ContextScope for the dimension (the dispatch's own
+// repo / channel / configured default) ∪ the operator's allow list for it ∪
+// `extra` (the calling verb's own skill grant, which widens but never narrows).
+// Everything else is refused — including a dimension with no context value and
+// no list, which is the deliberate strong default: a fixed-channel post from a
+// non-slack trigger has to say which channel.
+//
+// An empty value means the option wasn't supplied, which names no resource.
+func (rp *resourcePolicy) scopeOK(in *connector.Instance, dim, value string, extra []string) bool {
+	if rp == nil {
+		return true
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	for _, cand := range scopeCandidates(in, dim, value) {
+		if ctx := in.ContextScope(dim, rp.t); ctx != "" && ctx == cand {
+			return true
+		}
+		if resourceAllowed(rp.allow[dim], cand) || resourceAllowed(extra, cand) {
+			return true
+		}
+	}
+	return false
 }
 
+// scopeCandidates are the spellings one value may be allow-listed under. For
+// every dimension that is the value itself; a vault entry additionally answers
+// to its QUALIFIED name ("house/k"), because that is how the same secret is
+// spelled in allow_secrets and in a {{ vault "house" "k" }} reference — one
+// secret, one entry, whichever way the plan reaches it.
+func scopeCandidates(in *connector.Instance, dim, value string) []string {
+	if dim == config.DimSecret && in != nil && in.Name != "" && !strings.Contains(value, "/") {
+		return []string{value, in.Name + "/" + value}
+	}
+	return []string{value}
+}
+
+func (rp *resourcePolicy) secretOK(name string) bool {
+	return rp == nil || resourceAllowed(rp.allow[config.DimSecret], name)
+}
+
+// storeOK is the CODE-step question (ctx.store(name) inside a run: js step):
+// a store touch with no verb and no connector behind it, so it asks the store
+// dimension straight rather than through a verb's option schema.
 func (rp *resourcePolicy) storeOK(name string) bool {
-	return rp == nil || resourceAllowed(rp.stores, name)
+	return rp == nil || resourceAllowed(rp.allow[config.DimStore], name)
 }
 
 // memoryScopeOK reports whether an agent-authored step may touch a memory
@@ -103,23 +163,68 @@ func (rp *resourcePolicy) memoryScopeOK(scope string) bool {
 // memoryScopeFor is the scope a repo's memories live under.
 func memoryScopeFor(repo string) string { return "repo:" + repo }
 
-func (rp *resourcePolicy) targetOK(repo string) bool {
-	if rp == nil || repo == "" {
-		return true
+// scopeDenial is the refusal one out-of-scope option value earns, phrased for
+// the operator who has to widen it. The legacy key name is named alongside the
+// general one for the three dimensions that have one, so an existing config's
+// error still points at the line it would edit.
+func scopeDenial(where, uses, opt, dim, value string) error {
+	key := "policy.agent_authored.allow_scopes." + dim
+	switch dim {
+	case config.DimRepo:
+		key += " (legacy: allow_targets)"
+	case config.DimStore:
+		key += " (legacy: allow_stores)"
+	case config.DimSecret:
+		key += " (legacy: allow_secrets)"
 	}
-	if rp.trigger != "" && repo == rp.trigger {
-		return true // the triggering target is always in scope
+	return fmt.Errorf("%s: %s names %s %q — not this dispatch's own %s and not in %s (trust: full lifts this)",
+		where, uses, opt, value, dim, key)
+}
+
+// verbScopedOptions resolves the scope-tagged options of the verb a step
+// calls: (connector instance, option→dimension). ok is false when the verb
+// can't be resolved — an unknown connector or verb, which the caller decides
+// how to treat (the static scan skips it; the runtime belt refuses).
+func verbScopedOptions(reg *connector.Registry, uses string) (*connector.Instance, []connector.ScopedOption, bool) {
+	connName, verb, cut := strings.Cut(strings.TrimSpace(uses), ".")
+	if !cut || reg == nil {
+		return nil, nil, false
 	}
-	return resourceAllowed(rp.targets, repo)
+	in, ok := reg.Get(connName)
+	if !ok || in.Decl == nil {
+		return nil, nil, false
+	}
+	vd, ok := in.Decl.Verb(verb)
+	if !ok {
+		return in, nil, false
+	}
+	return in, vd.ScopedOptions(), true
 }
 
 // guardPlanResources is the STATIC half: it walks an agent-authored plan's
 // steps (parallel branches, compensations, and hooks included) and rejects
 // the plan when a literal reference falls outside the allowlists. Templated
 // names it can't evaluate fall through to the runtime belt.
-func guardPlanResources(pol *config.AgentAuthoredPolicy, t core.Trigger, steps []config.Step) error {
+func guardPlanResources(reg *connector.Registry, pol *config.AgentAuthoredPolicy, t core.Trigger, steps []config.Step) error {
 	rp := planResourcePolicy(pol, t)
 	if rp == nil {
+		return nil
+	}
+	// scopedLiterals judges the literal values of one options map against the
+	// called verb's DECLARED scope options. A verb it cannot resolve is left
+	// to the runtime belt, which refuses rather than guesses.
+	scopedLiterals := func(where, uses string, opts map[string]any) error {
+		in, scoped, ok := verbScopedOptions(reg, uses)
+		if !ok {
+			return nil
+		}
+		for _, so := range scoped {
+			val := literalOption(opts, so.Name)
+			if val == "" || rp.scopeOK(in, so.Dim, val, nil) {
+				continue
+			}
+			return scopeDenial(where, uses, so.Name, so.Dim, val)
+		}
 		return nil
 	}
 	var walk func(where string, list []config.Step) error
@@ -138,12 +243,10 @@ func guardPlanResources(pol *config.AgentAuthoredPolicy, t core.Trigger, steps [
 					return fmt.Errorf("%s: references secret %q — not in policy.agent_authored.allow_secrets (agent-authored workflows may only touch listed secrets; trust: full lifts this)", w, name)
 				}
 			}
-			// Store and target references from literal option values.
-			if store := literalOption(step.Options, "store"); store != "" && !rp.storeOK(store) {
-				return fmt.Errorf("%s: touches store %q — not in policy.agent_authored.allow_stores (agent-authored workflows may only touch listed stores; trust: full lifts this)", w, store)
-			}
-			if repo := literalOption(step.Options, "repo"); repo != "" && !rp.targetOK(repo) {
-				return fmt.Errorf("%s: addresses %q — not the triggering target and not in policy.agent_authored.allow_targets (trust: full lifts this)", w, repo)
+			// Resource references from literal option values, by the called
+			// verb's own scope declaration.
+			if err := scopedLiterals(w, step.Uses, step.Options); err != nil {
+				return err
 			}
 			for hi := range step.Hooks {
 				h := &step.Hooks[hi]
@@ -153,11 +256,8 @@ func guardPlanResources(pol *config.AgentAuthoredPolicy, t core.Trigger, steps [
 						return fmt.Errorf("%s: references secret %q — not in policy.agent_authored.allow_secrets", hw, name)
 					}
 				}
-				if store := literalOption(h.Options, "store"); store != "" && !rp.storeOK(store) {
-					return fmt.Errorf("%s: touches store %q — not in policy.agent_authored.allow_stores", hw, store)
-				}
-				if repo := literalOption(h.Options, "repo"); repo != "" && !rp.targetOK(repo) {
-					return fmt.Errorf("%s: addresses %q — not the triggering target and not in policy.agent_authored.allow_targets", hw, repo)
+				if err := scopedLiterals(hw, h.Uses, h.Options); err != nil {
+					return err
 				}
 			}
 			if step.Parallel != nil {
@@ -178,21 +278,41 @@ func guardPlanResources(pol *config.AgentAuthoredPolicy, t core.Trigger, steps [
 	return walk("plan", steps)
 }
 
-// checkVerbResources is the RUNTIME belt for verb steps: the rendered
-// options carry the CONCRETE store/repo names (a template the static scan
-// couldn't evaluate has resolved by now). Secrets need no runtime half here
-// — handles never resolve in agent-authored steps and the plan scope carries
-// no secret values.
-func (r *Runner) checkVerbResources(pol *config.AgentAuthoredPolicy, t core.Trigger, uses string, rendered map[string]any) error {
+// checkVerbResources is THE CHOKEPOINT — the one function both agent-facing
+// surfaces run a verb call through: the plan surface (execVerb/hooks, where
+// the rendered options carry the CONCRETE names a template the static scan
+// couldn't evaluate has resolved into) and the skill surface (RunSkillVerb,
+// where the agent supplied the options literally). Neither names an option:
+// the walk comes from the CALLED verb's connector-declared Scope tags, so the
+// two surfaces cannot disagree about what a grant means, and a connector that
+// tags a new option is enforced on both at once.
+//
+// grant is the calling skill grant's per-option allowlist (skill.verbs map
+// form), or nil on the plan surface. It only ever widens.
+//
+// Secrets need no runtime half for the TEMPLATE spellings — handles never
+// resolve in agent-authored steps and the plan scope carries no secret values
+// — but a vault verb's key: option is an ordinary scoped option and is walked
+// here like any other.
+func (r *Runner) checkVerbResources(pol *config.AgentAuthoredPolicy, t core.Trigger, uses string, rendered map[string]any, grant map[string][]string) error {
 	rp := planResourcePolicy(pol, t)
 	if rp == nil {
 		return nil
 	}
-	if store, _ := rendered["store"].(string); store != "" && !rp.storeOK(store) {
-		return fmt.Errorf("%s: touches store %q — not in policy.agent_authored.allow_stores", uses, store)
+	in, scoped, ok := verbScopedOptions(r.Conns, uses)
+	if !ok {
+		// A policy applies and the verb's declaration is out of reach (no
+		// registry, unknown connector/verb), so its scoped options can't be
+		// known. Refuse: this is the belt, and a belt that can't see must
+		// not wave the call through.
+		return fmt.Errorf("%s: cannot resolve the verb's option schema to scope-check it — refusing under policy.agent_authored", uses)
 	}
-	if repo, _ := rendered["repo"].(string); repo != "" && !rp.targetOK(repo) {
-		return fmt.Errorf("%s: addresses %q — not the triggering target and not in policy.agent_authored.allow_targets", uses, repo)
+	for _, so := range scoped {
+		val, _ := rendered[so.Name].(string)
+		if rp.scopeOK(in, so.Dim, val, grant[so.Name]) {
+			continue
+		}
+		return scopeDenial(uses, uses, so.Name, so.Dim, strings.TrimSpace(val))
 	}
 	return nil
 }

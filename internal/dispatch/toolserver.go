@@ -76,6 +76,7 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 			Trigger: req.Trigger.Kind,
 			Number:  req.Trigger.Target.Number,
 			Policy:  *req.Step.Skill,
+			Context: req.Trigger.Context,
 		})
 		if err == nil {
 			out.Env = map[string]string{"CONDUCTOR_SKILL_CLAIM": claim}
@@ -119,6 +120,7 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 		Trigger: req.Trigger.Kind,
 		Number:  req.Trigger.Target.Number,
 		Policy:  *req.Step.Skill,
+		Context: req.Trigger.Context,
 	}, uint32(os.Getuid()))
 	if err != nil {
 		return nil

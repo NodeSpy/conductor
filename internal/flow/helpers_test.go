@@ -45,11 +45,15 @@ var fakeDecl = &connector.TypeDecl{
 			Name: "post",
 			Desc: "records an invocation and returns a canned id",
 			Options: connector.Schema{
-				"text":    {Type: connector.TString, Required: true},
-				"channel": {Type: connector.TString},
+				"text": {Type: connector.TString, Required: true},
+				// Scope-tagged destination options, one per dimension the
+				// real connectors use, so this package's tests exercise the
+				// generic walk rather than any one connector's spelling.
+				"channel": {Type: connector.TString, Scope: "channel"},
 				"as":      {Type: connector.TString},
 				"meta":    {Type: connector.TMap},
-				"repo":    {Type: connector.TString}, // a target selector (like gh verbs)
+				"repo":    {Type: connector.TString, Scope: "repo"},  // a target selector (like gh verbs)
+				"store":   {Type: connector.TString, Scope: "store"}, // a store selector (like kv verbs)
 			},
 			Outputs: connector.Schema{"id": {Type: connector.TInt}},
 		},

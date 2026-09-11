@@ -33,6 +33,30 @@ type SkillIdentity struct {
 	Number  int
 	// Verbs are the profile's skill.verbs patterns.
 	Verbs []string
+	// Scopes are the profile's per-verb resource constraints (the skill.verbs
+	// MAP form): verb pattern → option → allowed values. Empty means every
+	// scoped option stays pinned to the dispatch's own context.
+	Scopes map[string]map[string][]string
+	// Context is the ORIGINATING trigger's context, captured at dispatch. It
+	// is what a connector's ContextScope hook reads to answer "which channel
+	// did this dispatch come from" — without it a slack-triggered agent could
+	// not reply in its own channel without an explicit grant. Daemon-side
+	// only; it never crosses back to the agent.
+	Context map[string]any
+}
+
+// ScopesFor is the per-option allowlist this grant attaches to one verb,
+// merged over every pattern that admits it (`kv.*` constrains kv.get and
+// kv.set alike). It uses the SAME matcher the access gate does, so a grant
+// cannot scope one verb and admit another.
+func (id SkillIdentity) ScopesFor(uses string) map[string][]string {
+	if len(id.Scopes) == 0 {
+		return nil
+	}
+	sk := config.SkillPolicy{Verbs: id.Verbs, VerbScopes: id.Scopes}
+	return sk.ScopesFor(uses, func(pattern, u string) bool {
+		return matchAny([]string{pattern}, u)
+	})
 }
 
 // SkillVerbCatalog lists the verbs the given patterns expose, shaped as MCP
@@ -252,6 +276,15 @@ func validateSkillProfiles(cfg *config.Config, reg *connector.Registry) error {
 				return
 			}
 		}
+		// A per-verb resource constraint must name an option the verb
+		// actually declares as a resource (Field.Scope). `slack.post:
+		// {chanel: [...]}` or `{text: [...]}` would otherwise sit in the
+		// config looking like a restriction while constraining nothing —
+		// the typo class this catches at load rather than at 3am.
+		if err := validateVerbScopes(name, p.Skill, reg); err != nil {
+			ferr = err
+			return
+		}
 		for _, uses := range skillVerbUniverse(reg) {
 			if !matchAny(p.Skill.Verbs, uses) {
 				continue
@@ -265,6 +298,94 @@ func validateSkillProfiles(cfg *config.Config, reg *connector.Registry) error {
 	return ferr
 }
 
+// validateVerbScopes checks one profile's per-verb resource constraints
+// against the REAL verb schemas: every option key must be declared with a
+// Scope by at least one verb the pattern admits.
+//
+// "At least one" rather than "all", because a pattern is allowed to be
+// broader than the constraint: `github.*: {repo: [...]}` scopes every github
+// verb that takes a repo and leaves the gist verbs (which take none) alone.
+// What it refuses is a key NO admitted verb treats as a resource — a typo, or
+// a content option the author thought was one.
+//
+// A pattern that currently admits no verb at all is NOT an error here: a
+// connector disabled at boot (a credential that wouldn't resolve) empties its
+// verbs from the registry, and a config must not become unloadable because of
+// a runtime condition. SkillWarnings surfaces that case instead.
+func validateVerbScopes(where string, sk *config.SkillPolicy, reg *connector.Registry) error {
+	if sk == nil || len(sk.VerbScopes) == 0 {
+		return nil
+	}
+	universe := skillVerbUniverse(reg)
+	pats := make([]string, 0, len(sk.VerbScopes))
+	for pat := range sk.VerbScopes {
+		pats = append(pats, pat)
+	}
+	sort.Strings(pats) // a config error must not depend on map order
+	for _, pat := range pats {
+		cons := sk.VerbScopes[pat]
+		opts := make([]string, 0, len(cons))
+		for opt := range cons {
+			opts = append(opts, opt)
+		}
+		sort.Strings(opts)
+		matched := 0
+		scopedSomewhere := map[string]bool{}
+		var offered []string
+		for _, uses := range universe {
+			if !matchAny([]string{pat}, uses) {
+				continue
+			}
+			matched++
+			connName, verb, _ := strings.Cut(uses, ".")
+			in, ok := reg.Get(connName)
+			if !ok || in.Decl == nil {
+				continue
+			}
+			vd, ok := in.Decl.Verb(verb)
+			if !ok {
+				continue
+			}
+			for _, so := range vd.ScopedOptions() {
+				scopedSomewhere[so.Name] = true
+				offered = append(offered, so.Name)
+			}
+		}
+		if matched == 0 {
+			continue // a disabled/unknown connector: warned, not fatal
+		}
+		for _, opt := range opts {
+			if scopedSomewhere[opt] {
+				continue
+			}
+			return fmt.Errorf("config: %s: skill.verbs.%s constrains %q, which %s does not declare as a resource option — only a connector's scoped options can be scoped (%s offers: %s)",
+				where, pat, opt, pat, pat, orNoneList(dedupeSorted(offered)))
+		}
+	}
+	return nil
+}
+
+// dedupeSorted returns the sorted unique values of a list.
+func dedupeSorted(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func orNoneList(in []string) string {
+	if len(in) == 0 {
+		return "none"
+	}
+	return strings.Join(in, ", ")
+}
+
 // SkillWarnings lints skill.verbs patterns that match NOTHING in the built
 // registry (#122 R5a) — legal (a credential-disabled connector's verbs
 // vanish from the registry), but silent dead config the operator should see
@@ -275,6 +396,31 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 	}
 	universe := skillVerbUniverse(reg)
 	var warns []string
+	// An allow_scopes dimension no connector declares grants nothing — a
+	// typo'd `repos:` reads like a grant and denies everything. It is a
+	// WARNING, not a load error, for the same reason validateVerbScopes lets
+	// an unmatched pattern pass: a connector disabled at boot takes its
+	// dimensions out of the registry with it.
+	if cfg.Policy != nil && cfg.Policy.AgentAuthored != nil {
+		known := map[string]bool{connector.DimRepo: true}
+		for _, connName := range reg.Names() {
+			if in, ok := reg.Get(connName); ok {
+				for _, dim := range in.Decl.ScopeDims() {
+					known[dim] = true
+				}
+			}
+		}
+		var dims []string
+		for dim := range cfg.Policy.AgentAuthored.AllowScopes {
+			dims = append(dims, dim)
+		}
+		sort.Strings(dims)
+		for _, dim := range dims {
+			if !known[dim] {
+				warns = append(warns, fmt.Sprintf("policy.agent_authored.allow_scopes.%s: no connector on this daemon declares a %q resource dimension — this entry grants nothing (typo, or the connector is disabled)", dim, dim))
+			}
+		}
+	}
 	cfg.WalkSteps(func(scope config.IdentityScope, slot int, sp *config.Step) {
 		name, p := config.StepLabel(scope, slot, *sp), *sp
 		if p.Skill == nil {
@@ -331,7 +477,8 @@ func skillVerbUniverse(reg *connector.Registry) []string {
 func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string, options map[string]any) (map[string]any, error) {
 	t := core.Trigger{
 		Source: "skill", Instance: "skill", Kind: id.Trigger,
-		Target: core.Target{Repo: id.Repo, Number: id.Number, PR: id.Number},
+		Target:  core.Target{Repo: id.Repo, Number: id.Number, PR: id.Number},
+		Context: id.Context,
 	}
 	deny := func(reason string) (map[string]any, error) {
 		err := fmt.Errorf("skill verb %s: %s", uses, reason)
@@ -380,14 +527,17 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 		return deny("refusing to relay secret material to an external connector from an agent tool call")
 	}
 	// RESOURCE SCOPING. The gate above answers "may this profile call this
-	// verb"; it says nothing about WHICH repo or store the call names. The
-	// plan surface has always checked that (checkVerbResources), so a
-	// `skill.verbs: [gh.submit_review]` grant intended for the PR under
+	// verb"; it says nothing about WHICH repo, store, or CHANNEL the call
+	// names. The plan surface has always checked that (checkVerbResources),
+	// so a `skill.verbs: [gh.submit_review]` grant intended for the PR under
 	// review could be turned on any repo the connector could reach simply by
-	// passing a different `repo:` option. Same function, same allowlists, so
-	// the two surfaces cannot drift: the dispatch's own target is implicitly
-	// allowed and anything beyond it needs allow_targets/allow_stores.
-	if err := r.checkVerbResources(r.planPolicy(), t, uses, options); err != nil {
+	// passing a different `repo:` option — and a `slack.post` grant on any
+	// channel the token reached. Same function, same allowlists, walked from
+	// the same connector-declared Scope tags, so the two surfaces cannot
+	// drift: the dispatch's own target/channel is implicitly allowed, the
+	// grant's own per-option lists widen it (skill.verbs map form), and
+	// anything beyond that needs policy.agent_authored.allow_scopes.
+	if err := r.checkVerbResources(r.planPolicy(), t, uses, options, id.ScopesFor(uses)); err != nil {
 		return deny(r.redactErr(err))
 	}
 	// Identity is a per-verb concern: a verb's own `as:` option (when it has

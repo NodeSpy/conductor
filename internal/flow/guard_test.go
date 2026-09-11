@@ -340,6 +340,7 @@ policy:
 policy:
   agent_authored:
     allow: [ svc.post, "*.read" ]
+    allow_secrets: [ housevault/k ]
 vaults:
   housevault: { type: file, dir: /tmp/none }
 `)
