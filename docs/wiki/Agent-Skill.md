@@ -94,6 +94,11 @@ skill:
   verb doesn't declare as a resource (a typo, or `text:`) is a **load error**.
 - The operator's own [[Policy|`policy.agent_authored.allow_scopes`]] applies
   on top, for dimensions you'd rather set once for every agent.
+- An entry can be **parameterized** ([[Settings-and-Templating]]):
+  `${settings.review_channel}` is substituted at load from the config's own
+  `settings:` block, and `#pr-{{.number}}` is rendered per dispatch from that
+  event's facts — so one line can mean "this PR's channel" without enumerating
+  every PR.
 - **The grant scopes on its own terms.** It does not need a
   `policy.agent_authored` block to take effect (that governs agent-authored
   *plans*, a different surface), and `trust: full` does not lift it — a

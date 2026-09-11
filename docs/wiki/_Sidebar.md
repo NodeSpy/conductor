@@ -13,6 +13,7 @@ The model
 - [[Connectors]]
 - [[Workflows]]
 - [[Reuse]]
+- [[Settings-and-Templating]]
 - [[Packs]]
 - [[Verbs]]
 - [[Code-Steps]]

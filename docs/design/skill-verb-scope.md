@@ -150,6 +150,16 @@ dimension that denies every call rather than scoping it:
 connector's own configured default option value is implicitly in scope — that
 is what makes "the configured default channel" work without per-connector code.
 
+## Round 5 — allowlist entries are parameterizable
+
+The doc above describes allowlist entries as literals, and they no longer are:
+an entry may carry `${settings.NAME}` (substituted at load from the main
+config's own top-level `settings:` block, the same mechanism packs had) or
+`{{ .fact }}` (rendered per dispatch against that event's trusted facts, with
+a restricted function set, no secrets, no agent input, and fail-closed).
+Matching is unchanged — literal or glob, on whatever the entry resolved to.
+See docs/design/scope-templating.md.
+
 ## Round 4 — three fixes, and the semantics they pinned
 
 - **F3.** The skill surface enforced through the PLAN policy, which is nil

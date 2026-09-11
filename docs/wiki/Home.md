@@ -127,7 +127,7 @@ Work down this list and you go from zero to the most advanced setup:
 Setup: [[Installation]] · [[Quickstart]] · [[GitHub-App-Setup]] ·
 [[Configuration]] · [[Commands]] · [[Examples]]
 
-The model: [[Connectors]] · [[Workflows]] · [[Reuse]] · [[Verbs]] · [[Code-Steps]] · [[Stores]] ·
+The model: [[Connectors]] · [[Workflows]] · [[Reuse]] · [[Settings-and-Templating]] · [[Verbs]] · [[Code-Steps]] · [[Stores]] ·
 [[Runtimes]] · [[Steps]] · [[Grouping]] · [[Memory]] · [[Binary-Data]] ·
 [[Agent-Skill]] · [[Policy]] · [[Gates]] · [[Teams]] · [[Outcomes]] ·
 [[Cost-Accounting]] · [[Secrets]] · [[Hosts]] · [[Isolation]]
