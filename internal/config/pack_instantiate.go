@@ -498,8 +498,6 @@ func (c *Config) checkSecretRef(ref string) error {
 // Settings.
 // ---------------------------------------------------------------------------
 
-var settingsRefRE = regexp.MustCompile(`\$\{settings\.([A-Za-z0-9_.-]+)\}`)
-
 // envReachRE matches a {{ vault|secret|kv "NAME" … }} runtime env-access template
 // call. Structural refs (agents/workflows/connectors in uses/on/hooks/store/…)
 // are namespace-rebound, but these free-form template funcs are not: they resolve
@@ -591,22 +589,10 @@ func substituteSettings(nodeDir string, settings map[string]string) (*PackManife
 	if err != nil {
 		return nil, err
 	}
-	// Iterate so a declared setting whose VALUE itself contains ${settings.other}
-	// resolves too (bounded to avoid a self-referential loop).
-	sub := raw
-	for i := 0; i < 8; i++ {
-		next := settingsRefRE.ReplaceAllFunc(sub, func(m []byte) []byte {
-			name := string(settingsRefRE.FindSubmatch(m)[1])
-			if val, ok := settings[name]; ok {
-				return []byte(val)
-			}
-			return m // leave unknown refs; caught post-decode if in a real field
-		})
-		if string(next) == string(sub) {
-			break
-		}
-		sub = next
-	}
+	// The SHARED substitutor (settings.go) — the same one the main config's
+	// own `settings:` block goes through, so the syntax, the iteration bound,
+	// and the leave-unknown-refs rule cannot drift between the two.
+	sub := substituteSettingsBody(raw, settings)
 	var man PackManifest
 	if err := strictUnmarshal(sub, &man); err != nil {
 		return nil, fmt.Errorf("parse manifest after settings substitution: %w", err)
@@ -619,16 +605,7 @@ func substituteSettings(nodeDir string, settings map[string]string) (*PackManife
 	if err != nil {
 		return nil, err
 	}
-	var missing []string
-	for _, m := range settingsRefRE.FindAllSubmatch(body, -1) {
-		name := string(m[1])
-		if _, declared := settings[name]; !declared {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) > 0 {
-		missing = uniq(missing)
-		sort.Strings(missing)
+	if missing := unknownSettingRefs(body, settings); len(missing) > 0 {
 		return nil, fmt.Errorf("unknown setting reference(s): %s", strings.Join(missing, ", "))
 	}
 	return &man, nil

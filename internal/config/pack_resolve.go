@@ -714,7 +714,11 @@ func loadPacksBlock(path string) (map[string]PackInstance, *PackTrustConfig, err
 	}
 	var doc []byte
 	if hasAnyImports(probe) {
-		merged, err := loadMerged(path, map[string]bool{})
+		// Pack RESOLUTION only needs the `packs:` block, which cannot itself
+		// be settings-parameterized (a setting that decided which pack to
+		// fetch would make the lockfile depend on the environment), so this
+		// walk substitutes nothing.
+		merged, err := loadMerged(path, map[string]bool{}, nil)
 		if err != nil {
 			return nil, nil, err
 		}

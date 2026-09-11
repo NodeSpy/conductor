@@ -194,6 +194,29 @@ type Config struct {
 	// { replace: … }` drops this layer for that agent.
 	AgentGuidance *string `yaml:"agent_guidance"`
 
+	// Settings is the OPTIONAL top-level `settings:` block: named values
+	// substituted into `${settings.NAME}` references ANYWHERE in the config,
+	// across every imported file, before it is decoded.
+	//
+	//	settings:
+	//	  review_channel: "#code-reviews"
+	//	  org:            acme
+	//	  deploy_repo:    "${settings.org}/deploys"   # chains
+	//	  bot_channel:    "${env.BOT_CHANNEL}"        # from the environment
+	//
+	//	policy: { agent_authored: { allow_scopes: { channel: ["${settings.review_channel}"] } } }
+	//
+	// It is the same mechanism a PACK's `settings:` gives a pack manifest
+	// (pack.go), applied to the operator's own config: one place to change a
+	// channel, an org, a repo glob that appears in twenty fields. Resolved at
+	// LOAD — the same for every dispatch. For a value that varies per event,
+	// scope allowlists also render `{{ }}` at dispatch (see
+	// docs/design/scope-templating.md).
+	//
+	// A reference to an undeclared setting is a load error; a setting that
+	// resolves to empty is too. See settings.go.
+	Settings map[string]string `yaml:"settings,omitempty"`
+
 	// Packs is the OPTIONAL `packs:` block (issue #53): distributable, versioned,
 	// parameterized instances of reusable packs (Terraform-modules-for-conductor).
 	// Each entry is namespaced under its instance name and, once fetched by
@@ -1017,13 +1040,39 @@ func Load(path string) (*Config, error) {
 	var c Config
 	c.baseDir = filepath.Dir(path)
 	if !hasAnyImports(probe) {
+		// `${settings.NAME}` substitution happens on the BODY, before the
+		// decode, so a setting lands wherever it was referenced — including
+		// inside values the decode would otherwise have already fixed.
+		expanded, err = ExpandSettings(expanded)
+		if err != nil {
+			return nil, err
+		}
 		if err := strictUnmarshal(expanded, &c); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
 		}
 	} else {
-		merged, err := loadMerged(path, map[string]bool{})
+		// TWO PASSES over the same import traversal, so the settings a file
+		// declares reach every OTHER file's body and no traversal logic is
+		// duplicated: pass 1 merges with no substitution and tells us what
+		// `settings:` the graph declares; pass 2 re-runs it with those
+		// resolved, substituting each file's body as it is read.
+		merged, err := loadMerged(path, map[string]bool{}, nil)
 		if err != nil {
 			return nil, err
+		}
+		declared, err := settingsFromDoc(merged)
+		if err != nil {
+			return nil, err
+		}
+		if len(declared) > 0 {
+			resolved, rerr := resolveSettingValues(declared)
+			if rerr != nil {
+				return nil, rerr
+			}
+			merged, err = loadMerged(path, map[string]bool{}, resolved)
+			if err != nil {
+				return nil, err
+			}
 		}
 		out, err := yaml.Marshal(merged)
 		if err != nil {
@@ -1035,6 +1084,11 @@ func Load(path string) (*Config, error) {
 		if err := strictUnmarshal(out, &c); err != nil {
 			return nil, fmt.Errorf("parse merged config: %w", err)
 		}
+	}
+	// A `${settings.X}` that survived into a real field names nothing declared
+	// — the typo, caught here rather than as a mystery value at dispatch.
+	if err := checkSettingRefs(&c); err != nil {
+		return nil, err
 	}
 	// File-referencing `workflow:` forms (workflow:+import:, a bare file path) join
 	// the merged workflow set first — before packs add namespaced `review/flow`
@@ -1081,7 +1135,7 @@ func Load(path string) (*Config, error) {
 // the importing file's own keys overlay them, so: scalars/maps in the importer
 // win, lists concatenate (imported entries first), and each file is included at
 // most once (cycles and diamond imports are de-duped, not errors).
-func loadMerged(p string, loaded map[string]bool) (map[string]any, error) {
+func loadMerged(p string, loaded map[string]bool, settings map[string]string) (map[string]any, error) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return nil, err
@@ -1099,6 +1153,11 @@ func loadMerged(p string, loaded map[string]bool) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Settings substitute per FILE, before this file is parsed — the same
+	// point the single-file path substitutes at, so an imported file behaves
+	// exactly like the config it was split out of. nil on pass 1 (the pass
+	// that discovers what `settings:` the graph declares).
+	expanded = substituteSettingsBody(expanded, settings)
 	var m map[string]any
 	if err := yaml.Unmarshal(expanded, &m); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", p, err)
@@ -1134,7 +1193,7 @@ func loadMerged(p string, loaded map[string]bool) (map[string]any, error) {
 			return nil, fmt.Errorf("%s: import %q matched no files", p, imp)
 		}
 		for _, f := range matches {
-			sub, err := loadMerged(f, loaded)
+			sub, err := loadMerged(f, loaded, settings)
 			if err != nil {
 				return nil, err
 			}
