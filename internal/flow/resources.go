@@ -137,27 +137,50 @@ func (rp *resourcePolicy) scopeOK(in *connector.Instance, dim, value string, ext
 	if value == "" {
 		return true
 	}
-	for _, cand := range scopeCandidates(in, dim, value) {
-		if ctx := in.ContextScope(dim, rp.t); ctx != "" && ctx == cand {
-			return true
+	if ctx := in.ContextScope(dim, rp.t); ctx != "" && ctx == value {
+		return true
+	}
+	return scopeListed(in, dim, value, rp.allow[dim]) || scopeListed(in, dim, value, extra)
+}
+
+// scopeListed reports whether an allowlist names this value in this dimension
+// OF THIS CONNECTOR.
+//
+// For most dimensions that is a plain match. The SECRET dimension is the one
+// that has to think about who is asking, because its allowlist is flat while
+// its entries are vault-qualified: `allow_scopes.secret: ["house/prod-token"]`
+// means the prod-token in the vault named `house`, and nothing else.
+//
+// Matching the bare key against that list let a DIFFERENT vault claim the
+// entry — `shared.read {key: "house/prod-token"}` read "house/prod-token" out
+// of `shared` because the spelling matched. The vault an entry belongs to is
+// half of its identity; dropping that half made one grant authorize two
+// secrets (round-4 F1).
+//
+// So the secret dimension is matched CONNECTOR-BOUND:
+//
+//	a QUALIFIED entry ("house/*", "house/prod-token") is matched against the
+//	  calling vault's own qualified spelling of the key, so it can only ever
+//	  authorize the vault it names — from `shared` the candidate is
+//	  "shared/house/prod-token", which "house/prod-token" does not match;
+//	a BARE entry ("prod-token", "*") is a key within whichever vault is
+//	  calling, and is matched against the key alone.
+func scopeListed(in *connector.Instance, dim, value string, allow []string) bool {
+	if dim != config.DimSecret || in == nil || in.Name == "" {
+		return resourceAllowed(allow, value)
+	}
+	qualified := in.Name + "/" + value
+	for _, p := range allow {
+		p = strings.TrimSpace(p)
+		target := value
+		if strings.Contains(p, "/") {
+			target = qualified
 		}
-		if resourceAllowed(rp.allow[dim], cand) || resourceAllowed(extra, cand) {
+		if resourceAllowed([]string{p}, target) {
 			return true
 		}
 	}
 	return false
-}
-
-// scopeCandidates are the spellings one value may be allow-listed under. For
-// every dimension that is the value itself; a vault entry additionally answers
-// to its QUALIFIED name ("house/k"), because that is how the same secret is
-// spelled in allow_secrets and in a {{ vault "house" "k" }} reference — one
-// secret, one entry, whichever way the plan reaches it.
-func scopeCandidates(in *connector.Instance, dim, value string) []string {
-	if dim == config.DimSecret && in != nil && in.Name != "" && !strings.Contains(value, "/") {
-		return []string{value, in.Name + "/" + value}
-	}
-	return []string{value}
 }
 
 func (rp *resourcePolicy) secretOK(name string) bool {

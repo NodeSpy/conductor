@@ -277,6 +277,135 @@ policy:
 	}
 }
 
+// A secret's identity is (vault, key) — an allowlist entry names both, and one
+// grant must not authorize two different secrets (round-4 F1).
+//
+// `allow_scopes.secret: ["house/prod-token"]` is the prod-token in the vault
+// named `house`. Matching that flat list against the bare key let ANY vault
+// claim the entry: `shared.read {key: "house/prod-token"}` read a
+// "house/prod-token" entry out of `shared`, because the spelling matched and
+// nothing checked who was asking. Whether that second vault holds a secret by
+// that name is the attacker's problem, not the policy's.
+func TestSecretScopeIsBoundToTheCallingVault(t *testing.T) {
+	dir := t.TempDir()
+	r := scopeRig(t, `
+connectors:
+  svc: { use: fake }
+vaults:
+  house:  { type: file, dir: `+dir+`/house }
+  shared: { type: file, dir: `+dir+`/shared }
+policy:
+  agent_authored:
+    allow: ["**"]
+    allow_scopes:
+      secret: [ "house/prod-token" ]
+`)
+	read := func(vault, key string) error {
+		id := SkillIdentity{Agent: "probe", Repo: "trigger/repo", Verbs: []string{vault + ".*"}}
+		_, err := r.RunSkillVerb(context.Background(), id, vault+".read", map[string]any{"key": key})
+		return err
+	}
+	// THE BUG: the grant is for `house`, so `shared` must not serve it —
+	// under any spelling of the key.
+	for _, key := range []string{"house/prod-token", "prod-token"} {
+		if err := read("shared", key); !strings.Contains(errText(err), "allow_scopes.secret") {
+			t.Errorf("shared.read key=%q must be refused — the grant names the house vault, "+
+				"and a secret's vault is half its identity; got %v", key, err)
+		}
+	}
+	// The vault the entry actually names still works, in both the spelling
+	// the vault uses (the bare key) and the qualified one the allowlist and
+	// `{{ vault "house" "prod-token" }}` use.
+	for _, key := range []string{"prod-token"} {
+		if err := read("house", key); strings.Contains(errText(err), "allow_scopes.secret") {
+			t.Errorf("house.read key=%q must be admitted by allow_scopes.secret [house/prod-token]: %v", key, err)
+		}
+	}
+	// An unlisted key in the right vault is still refused: the entry grants
+	// one secret, not the vault.
+	if err := read("house", "other-token"); !strings.Contains(errText(err), "allow_scopes.secret") {
+		t.Errorf("house.read of an UNLISTED key must be refused, got %v", err)
+	}
+
+	// The same binding holds for the SKILL GRANT's own list — it is the same
+	// matcher, so a grant written on one vault's verb cannot be spelled to
+	// reach another's.
+	grantRead := func(vault, key string) error {
+		id := SkillIdentity{
+			Agent: "probe", Repo: "trigger/repo", Verbs: []string{vault + ".*"},
+			Scopes: map[string]map[string][]string{vault + ".*": {"key": {"house/prod-token"}}},
+		}
+		_, err := r.RunSkillVerb(context.Background(), id, vault+".read", map[string]any{"key": key})
+		return err
+	}
+	if err := grantRead("house", "prod-token"); strings.Contains(errText(err), "allow_scopes.secret") {
+		t.Errorf("a grant entry house/prod-token must admit house.read prod-token: %v", err)
+	}
+	if err := grantRead("shared", "house/prod-token"); !strings.Contains(errText(err), "allow_scopes.secret") {
+		t.Errorf("a grant entry house/prod-token must NOT admit the shared vault, got %v", err)
+	}
+
+	// A bare entry means "this key, in whichever vault is calling" — the
+	// spelling an operator uses when the key name is the whole point. It must
+	// still not leak across vaults: it names a key, so both vaults' copies of
+	// that key are in scope, and that is what the operator wrote.
+	rb := scopeRig(t, `
+connectors:
+  svc: { use: fake }
+vaults:
+  house:  { type: file, dir: `+dir+`/house2 }
+  shared: { type: file, dir: `+dir+`/shared2 }
+policy:
+  agent_authored:
+    allow: ["**"]
+    allow_scopes:
+      secret: [ "deploy-key" ]
+`)
+	readB := func(vault, key string) error {
+		id := SkillIdentity{Agent: "probe", Repo: "trigger/repo", Verbs: []string{vault + ".*"}}
+		_, err := rb.RunSkillVerb(context.Background(), id, vault+".read", map[string]any{"key": key})
+		return err
+	}
+	if err := readB("house", "deploy-key"); strings.Contains(errText(err), "allow_scopes.secret") {
+		t.Errorf("a bare entry names a key in the calling vault: %v", err)
+	}
+	if err := readB("house", "house/deploy-key"); !strings.Contains(errText(err), "allow_scopes.secret") {
+		t.Errorf("a bare entry must not authorize a qualified-looking key, got %v", err)
+	}
+
+	// A vault glob is bounded to its vault too.
+	rg := scopeRig(t, `
+connectors:
+  svc: { use: fake }
+vaults:
+  house:  { type: file, dir: `+dir+`/house3 }
+  shared: { type: file, dir: `+dir+`/shared3 }
+policy:
+  agent_authored:
+    allow: ["**"]
+    allow_scopes:
+      secret: [ "house/*" ]
+`)
+	readG := func(vault, key string) error {
+		id := SkillIdentity{Agent: "probe", Repo: "trigger/repo", Verbs: []string{vault + ".*"}}
+		_, err := rg.RunSkillVerb(context.Background(), id, vault+".read", map[string]any{"key": key})
+		return err
+	}
+	if err := readG("house", "anything"); strings.Contains(errText(err), "allow_scopes.secret") {
+		t.Errorf("house/* must admit any key in house: %v", err)
+	}
+	if err := readG("shared", "anything"); !strings.Contains(errText(err), "allow_scopes.secret") {
+		t.Errorf("house/* must NOT admit the shared vault, got %v", err)
+	}
+}
+
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 // Operator-authored `uses:` steps are NOT gated — the operator wrote the
 // config with their own credential. Only agent-authored plans and skill
 // grants are scoped, and that split must survive the generalization.
