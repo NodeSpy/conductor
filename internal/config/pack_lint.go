@@ -67,6 +67,13 @@ func LintPackManifest(man *PackManifest) []string {
 	// (§C): requires.connectors is the capability boundary, not just a list
 	// of sockets.
 	problems = append(problems, lintPackSkillGrants(man)...)
+	// …and the SAME boundary for every other reference a pack authors: a
+	// plain step's `uses:`, a hook's, a trigger's source, a session's
+	// end_on, a store selector. skill.verbs was bounded and these were not,
+	// so a pack could simply write `uses: gh.comment` and reach whatever the
+	// consumer called `gh`.
+	problems = append(problems, checkPackConnectorRefs(man)...)
+	problems = append(problems, checkPackStoreRefs(man)...)
 
 	problems = append(problems, lintSettingsRefs(man)...)
 	sort.Strings(problems)

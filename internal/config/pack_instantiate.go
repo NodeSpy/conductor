@@ -207,6 +207,17 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// that is theirs to decide and is visible in their config. What a pack
 	// can never do is reach a connector it did not declare. ----
 	st.applyPackSkillBoundary(ns, man)
+	// The same boundary for every OTHER pack-authored reference. This one is
+	// a hard error rather than a narrowing: a `uses:` naming an undeclared
+	// connector is not a grant to intersect, it is a step that would run
+	// against a connector the manifest never mentioned, and silently dropping
+	// the step would leave a pack that installs clean and does nothing.
+	for _, p := range checkPackConnectorRefs(man) {
+		return fmt.Errorf("pack %q: %s", ns, p)
+	}
+	for _, p := range checkPackStoreRefs(man) {
+		return fmt.Errorf("pack %q: %s", ns, p)
+	}
 
 	// ---- Mirrored-section overlay (§5.3): the consumer's steps:/models:
 	// blocks deep-merge onto the pack's members BY NAME before anything is
@@ -413,6 +424,14 @@ func (st *packInstantiation) validateRequires(ns string, man *PackManifest, inst
 	req := man.Pack.Requires
 	// Connectors: every required connector must be bound to a defined global.
 	for _, name := range req.Connectors.Names() {
+		// A built-in data namespace binds to ITSELF: it is always present,
+		// and `connectors:` refuses the reserved names, so there is nothing
+		// for the consumer to bind. Declaring it is still required — that is
+		// what puts "this pack touches your kv" in the manifest the consumer
+		// reads before installing.
+		if IsPackSelfBindingConnector(name) {
+			continue
+		}
 		bound, ok := env.conn[name]
 		if !ok {
 			// A declared connector is REQUIRED by default: the pack says

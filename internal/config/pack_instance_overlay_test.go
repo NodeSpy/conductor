@@ -15,7 +15,15 @@ func TestOverlayAddressesInstanceArrayTriggers(t *testing.T) {
 pack:
   name: kit
   version: "1.0.0"
-  requires: { conductor: ">=0.1" }
+  requires:
+    conductor: ">=0.1"
+    # Declared, and OPTIONAL: these tests are about what happens when a
+    # source is not bound (it goes dormant). The manifest still has to name
+    # what the pack reaches — that is the boundary — but naming it does not
+    # make binding mandatory.
+    connectors:
+      github:    { version: "*", required: false }
+      pagerduty: { version: "*", required: false }
 triggers:
   review:
     - { on: github.pull_request, filters: { repos: [a/one] }, steps: [{ id: s, type: agent, prompt: p }] }
@@ -55,7 +63,15 @@ func TestOverlayTypoStillErrorsWithInstances(t *testing.T) {
 pack:
   name: kit
   version: "1.0.0"
-  requires: { conductor: ">=0.1" }
+  requires:
+    conductor: ">=0.1"
+    # Declared, and OPTIONAL: these tests are about what happens when a
+    # source is not bound (it goes dormant). The manifest still has to name
+    # what the pack reaches — that is the boundary — but naming it does not
+    # make binding mandatory.
+    connectors:
+      github:    { version: "*", required: false }
+      pagerduty: { version: "*", required: false }
 triggers:
   review:
     - { on: github.pull_request, filters: { repos: [a/one] }, steps: [{ id: s, type: agent, prompt: p }] }

@@ -14,7 +14,15 @@ const listFormPack = `
 pack:
   name: multi
   version: "1.0.0"
-  requires: { conductor: ">=0.1" }
+  requires:
+    conductor: ">=0.1"
+    # Declared, and OPTIONAL: these tests are about what happens when a
+    # source is not bound (it goes dormant). The manifest still has to name
+    # what the pack reaches — that is the boundary — but naming it does not
+    # make binding mandatory.
+    connectors:
+      github:    { version: "*", required: false }
+      pagerduty: { version: "*", required: false }
 workflows:
   flow:
     steps: [{ id: s, type: agent, prompt: p }]
@@ -143,7 +151,15 @@ func TestListFormLeavesManualSourcesIntact(t *testing.T) {
 pack:
   name: mixed
   version: "1.0.0"
-  requires: { conductor: ">=0.1" }
+  requires:
+    conductor: ">=0.1"
+    # Declared, and OPTIONAL: these tests are about what happens when a
+    # source is not bound (it goes dormant). The manifest still has to name
+    # what the pack reaches — that is the boundary — but naming it does not
+    # make binding mandatory.
+    connectors:
+      github:    { version: "*", required: false }
+      pagerduty: { version: "*", required: false }
 workflows:
   flow:
     steps: [{ id: s, type: agent, prompt: p }]

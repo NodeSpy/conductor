@@ -31,6 +31,12 @@ pack:
     sources:
       github: { desc: "PR review" }
       pagerduty: { desc: "incident triage" }
+    # A sources: requirement says WHICH EVENTS the pack consumes; the
+    # connector boundary is a separate statement about what it may REACH.
+    # Optional here, because these tests exercise the unbound/dormant paths.
+    connectors:
+      github:    { version: "*", required: false }
+      pagerduty: { version: "*", required: false }
 models:
   reviewer: { any: ["claude-opus-*"] }
 x-steps:
