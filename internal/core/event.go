@@ -52,6 +52,20 @@ type Trigger struct {
 	Dedup    string            // dedup signature; empty => always act
 	Labels   map[string]string // extra labels to attach to dispatched work
 	Action   any               // integration-resolved action (engine asserts to config.Action)
+	// TargetUntrusted marks a dispatch whose TARGET was derived from
+	// UNTRUSTED REQUEST DATA rather than assigned by the platform — a webhook
+	// source whose `repo:` is templated from the POST body, where whoever
+	// sends the request chooses which repo the dispatch appears to be for.
+	//
+	// The scope layer reads it and withholds the trust it normally extends to
+	// a dispatch's own target: no implicit own-repo, no own memory scope, and
+	// none of the target-derived facts in a `{{ }}` allowlist entry. An
+	// operator scoping such a dispatch must list the repos explicitly, which
+	// is the only honest answer when the target is the attacker's to name.
+	//
+	// It rides on the trigger because that is what travels with the dispatch;
+	// every consumer that trusts Target has this next to it.
+	TargetUntrusted bool
 	// CatchUp marks a trigger emitted by the periodic sweep (re-derived state)
 	// rather than a fresh webhook event. When an agent is already working the PR,
 	// catch-up triggers are skipped (don't re-nudge) while fresh events are queued

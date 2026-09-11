@@ -170,6 +170,33 @@ each for its own reason:
 - **secret material.** Nothing in the closed set should ever hold any — which
   is exactly why the redactor pass is cheap to keep as a belt.
 
+### A forged target is not your own target
+
+The closed set is only as good as the facts in it, and one of them can be
+chosen by the person triggering the dispatch. A webhook source's `repo:`
+renders from the POST body — the only data it has — so
+
+```yaml
+sources:
+  - name: deploys
+    repo: "{{.body.owner}}/{{.body.name}}"   # the SENDER picks this
+```
+
+makes `Target.Repo/Owner/Name` attacker-chosen, and `number` with them (it is
+derived from a body-rendered dedup key). The scope layer's most basic rule —
+your own target needs no grant — would then hand an attacker scope for any
+repo they typed into a JSON body.
+
+So such a dispatch is marked (`core.Trigger.TargetUntrusted`) and the scope
+layer withholds own-target trust from it: no implicit own-repo in
+`ContextScope`, no own memory scope, and `repo`/`owner`/`name`/`number` absent
+from the render facts (`kind` survives — it is the source's own event name,
+from the config). Scoping such a dispatch is still possible; it just has to be
+explicit, which is the only honest answer when the target is not the
+platform's to assign. `conductor validate` warns when a webhook source
+templates `repo:`, because the consequence — "my agent can't reach its own
+repo" — is otherwise invisible in the scoping config.
+
 ### A rendered value matches LITERALLY
 
 The operator's glob intent lives in the static pattern they wrote, not in a

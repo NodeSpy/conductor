@@ -38,6 +38,11 @@ type SkillIdentity struct {
 	// MAP form): verb pattern → option → allowed values. Empty means every
 	// scoped option stays pinned to the dispatch's own context.
 	Scopes map[string]map[string][]string
+	// TargetUntrusted rides from the originating dispatch: its target was
+	// derived from untrusted request data (a webhook `repo:` templated from
+	// the POST body), so this grant gets no implicit own-repo and no
+	// target-derived render facts. See core.Trigger.TargetUntrusted.
+	TargetUntrusted bool
 	// Context is the ORIGINATING trigger's context, captured at dispatch. It
 	// is what a connector's ContextScope hook reads to answer "which channel
 	// did this dispatch come from" — without it a slack-triggered agent could
@@ -397,6 +402,7 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 	}
 	universe := skillVerbUniverse(reg)
 	var warns []string
+	warns = append(warns, untrustedTargetWarnings(cfg)...)
 	// An allow_scopes dimension no connector declares grants nothing — a
 	// typo'd `repos:` reads like a grant and denies everything. It is a
 	// WARNING, not a load error, for the same reason validateVerbScopes lets
@@ -451,6 +457,48 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 	return warns
 }
 
+// untrustedTargetWarnings surfaces a webhook source whose `repo:` is
+// TEMPLATED — rendered from the POST body, the only data that source has, so
+// whoever sends the request chooses the repo the dispatch claims to be for.
+//
+// The scope layer already refuses to trust such a target (it gets no implicit
+// own-repo and no target-derived render facts), which is the fix. The warning
+// exists because the CONSEQUENCE is surprising in the other direction: an
+// operator who scopes these dispatches will find their agent cannot reach
+// "its own" repo, and the reason is not visible in the scoping config. Better
+// to say it at load than to let them discover it as a refusal.
+func untrustedTargetWarnings(cfg *config.Config) []string {
+	var warns []string
+	for _, ref := range cfg.Integrations {
+		if ref.Type != "webhook" || !ref.IsEnabled() {
+			continue
+		}
+		var conn struct {
+			Sources []struct {
+				Name string `yaml:"name"`
+				Repo string `yaml:"repo"`
+			} `yaml:"sources"`
+		}
+		if err := ref.Decode(&conn); err != nil {
+			continue
+		}
+		for _, src := range conn.Sources {
+			if !strings.Contains(src.Repo, "{{") {
+				continue
+			}
+			warns = append(warns, fmt.Sprintf(
+				"webhook %q source %q: `repo:` is templated from the request body, so the SENDER "+
+					"chooses the target repo. Such a dispatch gets NO implicit own-repo trust: an "+
+					"agent-authored step or skill grant must name the repos it may touch in "+
+					"policy.agent_authored.allow_scopes.repo, and a `{{ }}` allowlist entry built "+
+					"from .repo/.owner/.name/.number renders empty for it",
+				ref.Name, src.Name))
+		}
+	}
+	sort.Strings(warns)
+	return warns
+}
+
 // skillVerbUniverse is every conn.verb class the skill surface could serve
 // (workflow/conductor are never served there).
 func skillVerbUniverse(reg *connector.Registry) []string {
@@ -478,14 +526,17 @@ func skillVerbUniverse(reg *connector.Registry) []string {
 func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string, options map[string]any) (map[string]any, error) {
 	t := core.Trigger{
 		Source: "skill", Instance: "skill", Kind: id.Trigger,
-		Target:  core.Target{Repo: id.Repo, Number: id.Number, PR: id.Number},
-		Context: id.Context,
+		Target:          core.Target{Repo: id.Repo, Number: id.Number, PR: id.Number},
+		Context:         id.Context,
+		TargetUntrusted: id.TargetUntrusted,
 	}
 	// EVERY call on this surface is agent-facing, and the dispatch it belongs
 	// to is the identity the token was minted for. Both are what the memory
 	// verbs' scope allowlist authorizes against (memory.CallerFrom), and the
 	// provenance stamp is also what a memory written here records.
-	ctx = memory.WithCaller(ctx, memory.Caller{Repo: id.Repo})
+	// trustedTargetRepo, not id.Repo: a forged target owns no memory scope
+	// either. One decision, every consumer of "your own target".
+	ctx = memory.WithCaller(ctx, memory.Caller{Repo: trustedTargetRepo(t)})
 	ctx = memory.WithSource(ctx, memory.Source{Step: id.Agent, Repo: id.Repo, Trigger: id.Trigger})
 	deny := func(reason string) (map[string]any, error) {
 		err := fmt.Errorf("skill verb %s: %s", uses, reason)

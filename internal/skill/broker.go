@@ -82,6 +82,10 @@ type Identity struct {
 	// Policy is the profile's skill: block at dispatch time. The zero value
 	// denies everything (secrets_via defaults to none).
 	Policy config.SkillPolicy
+	// TargetUntrusted marks a dispatch whose Repo above was derived from
+	// untrusted request data (see core.Trigger.TargetUntrusted). The scope
+	// layer withholds own-target trust for it.
+	TargetUntrusted bool
 	// Context is the originating trigger's context, held daemon-side for the
 	// session's lifetime. It exists for RESOURCE SCOPING: a connector's
 	// ContextScope hook reads it to decide which channel (repo, …) this

@@ -100,7 +100,11 @@ func (in *Instance) ContextScope(dim string, t core.Trigger) string {
 			return v
 		}
 	}
-	if dim == DimRepo && t.Target.Repo != "" {
+	// The dispatch's own repo — UNLESS the target was derived from untrusted
+	// request data (a webhook whose `repo:` templates from the POST body).
+	// "Act on your own PR" is only a safe default while the platform decides
+	// which PR is yours; when the sender decides, there is no own.
+	if dim == DimRepo && t.Target.Repo != "" && !t.TargetUntrusted {
 		return t.Target.Repo
 	}
 	return in.defaultScope(dim)

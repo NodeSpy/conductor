@@ -106,6 +106,15 @@ Entries with no `{{` are not rendered at all. A rendered value is matched
 **literally**: your glob intent belongs in the pattern you wrote (`acme/*`),
 not in a value the event supplied.
 
+### A webhook target is not a trust anchor
+
+If a webhook source builds its `repo:` from the request body
+(`repo: "{{.body.owner}}/{{.body.name}}"`), the sender chooses it. Conductor
+marks those dispatches and withholds the usual own-target trust: no implicit
+own-repo, no own memory scope, and `repo`/`owner`/`name`/`number` render empty
+in an allowlist entry. Scope them with explicit `allow_scopes.repo` entries —
+`conductor validate` warns so this is not a surprise.
+
 ### What it deliberately cannot do
 
 A scope allowlist is a **security check**, so the renderer is not the one steps

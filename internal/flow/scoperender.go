@@ -114,6 +114,17 @@ func (r *Runner) scopeRenderData(t core.Trigger) map[string]any {
 		"repo":   t.Target.Repo,
 		"kind":   t.Kind,
 	}
+	// A target derived from untrusted request data is not platform-assigned,
+	// whatever it looks like: a webhook source whose `repo:` templates from
+	// the POST body lets the SENDER choose repo/owner/name, and the number is
+	// derived from a body-rendered dedup key. The whole point of the closed
+	// set is that its members cannot be chosen by the person triggering the
+	// dispatch, so for such a trigger they are simply absent — an entry built
+	// from one renders empty and matches nothing. `kind` survives: it is the
+	// source's own event name, from the operator's config.
+	if t.TargetUntrusted {
+		facts["number"], facts["owner"], facts["name"], facts["repo"] = 0, "", "", ""
+	}
 	// Built from the struct fields directly, never from baseData: a fact that
 	// is not in scopeFacts must be absent by CONSTRUCTION, not by deletion.
 	d := make(map[string]any, len(scopeFacts))

@@ -88,7 +88,7 @@ func planResourcePolicy(pol *config.AgentAuthoredPolicy, t core.Trigger) *resour
 	return &resourcePolicy{
 		allow:   pol.ScopeAllow(),
 		scopes:  pol.AllowMemoryScopes,
-		trigger: t.Target.Repo,
+		trigger: trustedTargetRepo(t),
 		t:       t,
 	}
 }
@@ -114,12 +114,25 @@ func planResourcePolicy(pol *config.AgentAuthoredPolicy, t core.Trigger) *resour
 // surface is configured: `{channel: ["*"]}` on the grant, or allow_scopes
 // (which still widens under trust: full, so the escape hatch stays one line).
 func skillResourcePolicy(pol *config.AgentAuthoredPolicy, t core.Trigger) *resourcePolicy {
-	rp := &resourcePolicy{trigger: t.Target.Repo, t: t}
+	rp := &resourcePolicy{trigger: trustedTargetRepo(t), t: t}
 	if pol != nil {
 		rp.allow = pol.ScopeAllow()
 		rp.scopes = pol.AllowMemoryScopes
 	}
 	return rp
+}
+
+// trustedTargetRepo is the dispatch's own repo, or "" when the target came
+// from untrusted request data (core.Trigger.TargetUntrusted — a webhook whose
+// `repo:` templates from the POST body, where the sender picks it). It is the
+// ONE place the scope layer decides whether "your own target" means anything,
+// so the answer is the same for the repo dimension, the memory scope, the
+// render facts, and every surface that asks.
+func trustedTargetRepo(t core.Trigger) string {
+	if t.TargetUntrusted {
+		return ""
+	}
+	return t.Target.Repo
 }
 
 // scopeOK is THE resource question, asked once for every dimension: may this

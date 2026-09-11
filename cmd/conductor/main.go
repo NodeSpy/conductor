@@ -690,6 +690,7 @@ func cmdRun(args []string) error {
 							Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
 							Number: id.Number, Verbs: id.Policy.Verbs,
 							Scopes: id.Policy.VerbScopes, Context: id.Context,
+							TargetUntrusted: id.TargetUntrusted,
 						}, uses, options)
 					}
 				}
