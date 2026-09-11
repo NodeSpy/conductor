@@ -76,8 +76,14 @@ func agentScopeFrom(ctx context.Context) string {
 // attacker's to pick, so it cannot be the wall: the run id is used instead,
 // which confines such a plan to itself.
 func agentAuthoredNamespace(ctx context.Context, t core.Trigger) string {
-	if repo := trustedTargetRepo(t); repo != "" {
-		return "agent:" + repo + "#" + t.Kind
+	if repo := t.OwnRepo(); repo != "" {
+		// The TARGET, not just the repo. Two pull requests on one repo are
+		// two different untrusted contributors: a namespace of repo#kind put
+		// PR #42's agent-authored step and PR #99's in the same one, so a
+		// name or session.key chosen in either landed on the other's live
+		// session. The number is the per-dispatch discriminator the platform
+		// assigns, and it travels with the repo whose trust it inherits.
+		return fmt.Sprintf("agent:%s#%s#%d", repo, t.Kind, t.Target.Number)
 	}
 	if h := histFrom(ctx); h != nil {
 		if id := h.runHistoryID(); id != "" {

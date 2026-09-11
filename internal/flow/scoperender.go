@@ -107,23 +107,28 @@ var scopeFacts = []string{"number", "owner", "name", "repo", "kind"}
 // should ever hold secret material, which is exactly why it is cheap to keep
 // the belt on: if one ever does, the render shows its marker, not its value.
 func (r *Runner) scopeRenderData(t core.Trigger) map[string]any {
-	facts := map[string]any{
-		"number": t.Target.Number,
-		"owner":  t.Target.Owner,
-		"name":   t.Target.Name,
-		"repo":   t.Target.Repo,
-		"kind":   t.Kind,
+	// Derived from the OWN-REPO RULE (core.OwnRepo), not from the raw target
+	// with a correction applied afterwards. A dispatch whose target the
+	// event's SENDER chose — a webhook `repo:` templated from the POST body —
+	// has no own repo, and the facts derived from that target go with it:
+	// owner and name are its two halves, and the number comes from the same
+	// forgeable place (a body-rendered dedup key). `kind` survives, being the
+	// source's own event name from the operator's config.
+	//
+	// Raw-read-then-correct is the shape that let this class reappear in file
+	// after file: whoever reads the repo has to remember the second step.
+	// There is no raw read here to forget.
+	repo := t.OwnRepo()
+	owner, name, number := "", "", 0
+	if repo != "" {
+		owner, name, number = t.Target.Owner, t.Target.Name, t.Target.Number
 	}
-	// A target derived from untrusted request data is not platform-assigned,
-	// whatever it looks like: a webhook source whose `repo:` templates from
-	// the POST body lets the SENDER choose repo/owner/name, and the number is
-	// derived from a body-rendered dedup key. The whole point of the closed
-	// set is that its members cannot be chosen by the person triggering the
-	// dispatch, so for such a trigger they are simply absent — an entry built
-	// from one renders empty and matches nothing. `kind` survives: it is the
-	// source's own event name, from the operator's config.
-	if !t.TargetTrusted {
-		facts["number"], facts["owner"], facts["name"], facts["repo"] = 0, "", "", ""
+	facts := map[string]any{
+		"number": number,
+		"owner":  owner,
+		"name":   name,
+		"repo":   repo,
+		"kind":   t.Kind,
 	}
 	// Built from the struct fields directly, never from baseData: a fact that
 	// is not in scopeFacts must be absent by CONSTRUCTION, not by deletion.

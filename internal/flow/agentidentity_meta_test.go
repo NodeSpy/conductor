@@ -103,7 +103,8 @@ func TestAgentAuthoredNamespaceIgnoresAForgedTarget(t *testing.T) {
 // step. A new field that reaches IdentityFor/StepSessionKey has to be added
 // here, and the assertion tells its author what the requirement is.
 func TestEveryIdentityAffectingFieldIsConfinedForAgentAuthoredSteps(t *testing.T) {
-	trusted := core.Trigger{Kind: "review_requested", TargetTrusted: true, Target: core.Target{Repo: "own/repo"}}
+	trusted := core.Trigger{Kind: "review_requested", TargetTrusted: true,
+		Target: core.Target{Repo: "own/repo", Number: 7}}
 	ctx := markAgentAuthored(context.Background(), trusted)
 
 	// Each case sets ONE identity/session-affecting field to a value naming
@@ -123,7 +124,7 @@ func TestEveryIdentityAffectingFieldIsConfinedForAgentAuthoredSteps(t *testing.T
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			id := stepIdentity(ctx, tc.step, "steps[0]")
-			if !strings.HasPrefix(id, "agent:own/repo#review_requested/") {
+			if !strings.HasPrefix(id, "agent:own/repo#review_requested#7/") {
 				t.Fatalf("%s produced an unconfined identity %q — every field that feeds "+
 					"IdentityFor or StepSessionKey must be namespaced to the dispatch, or an "+
 					"agent can address another tenant's live session", tc.field, id)
@@ -131,9 +132,40 @@ func TestEveryIdentityAffectingFieldIsConfinedForAgentAuthoredSteps(t *testing.T
 			// …and the binding key that identity produces is likewise not one
 			// an operator step elsewhere could produce.
 			bound := controller.StepSessionKey(id, tc.key)
-			if !strings.Contains(bound, "agent:own/repo#review_requested/") {
+			if !strings.Contains(bound, "agent:own/repo#review_requested#7/") {
 				t.Fatalf("%s: the session binding key escaped the namespace: %q", tc.field, bound)
 			}
 		})
+	}
+}
+
+// ROUND-10 #2. The namespace was repo#kind — no per-dispatch discriminator —
+// so two pull requests on ONE repo shared it. Two untrusted contributors, one
+// namespace: an agent-authored step on PR #42 could name its way onto the
+// session running for PR #99. The repo wall was there; the wall between
+// contributors inside it was not.
+func TestAgentAuthoredNamespaceSeparatesTargetsInOneRepo(t *testing.T) {
+	ns := func(number int) string {
+		trig := core.Trigger{
+			Kind: "review_requested", TargetTrusted: true,
+			Target: core.Target{Repo: "acme/app", Number: number},
+		}
+		return stepIdentity(markAgentAuthored(context.Background(), trig),
+			config.Step{Type: "agent", Name: "review"}, "steps[0]")
+	}
+	pr42, pr99 := ns(42), ns(99)
+	if pr42 == pr99 {
+		t.Fatalf("two PRs on one repo share an agent-authored namespace (%q) — a step on one "+
+			"can address the other's live session", pr42)
+	}
+	// The binding keys they produce differ too, which is the thing the
+	// affinity registry actually matches on.
+	if controller.StepSessionKey(pr42, "shared-key") == controller.StepSessionKey(pr99, "shared-key") {
+		t.Fatal("the session binding keys collide across targets in one repo")
+	}
+	// …and the SAME target still shares, so continuity within a dispatch —
+	// the legitimate use — survives.
+	if ns(42) != pr42 {
+		t.Error("two steps of one dispatch must share a namespace")
 	}
 }
