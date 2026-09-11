@@ -288,6 +288,31 @@ func scopeDenial(where, uses, opt, dim, value string) error {
 		where, uses, opt, value, dim, key)
 }
 
+// scopedOptionValue reads one scoped option as the string the allowlist is
+// matched against. PRESENT means checked, whatever the type: a type assertion
+// to string yielded "" for an int, a bool or a list, and "" means "the option
+// wasn't supplied" — so a scoped option with a non-string value skipped the
+// check entirely (round-5 #3).
+//
+// No BUILT-IN connector could reach it (every scoped option is a string), but
+// declaring the schema is exactly what an external plugin does: `account:
+// {type: integer, scope: "account"}` and the gate was blind. A present value
+// must be matched — and if it cannot match, DENIED — never skipped.
+//
+// fmt.Sprint is the coercion, so 999 is matched as "999", which is also how a
+// YAML allowlist entry for it reads. An absent option is still "", which is
+// the one case that legitimately names no resource.
+func scopedOptionValue(opts map[string]any, name string) string {
+	v, ok := opts[name]
+	if !ok || v == nil {
+		return ""
+	}
+	if s, isStr := v.(string); isStr {
+		return s
+	}
+	return fmt.Sprint(v)
+}
+
 // verbScopedOptions resolves the scope-tagged options of the verb a step
 // calls: (connector instance, option→dimension). ok is false when the verb
 // can't be resolved — an unknown connector or verb, which the caller decides
@@ -421,7 +446,7 @@ func (r *Runner) checkVerbScopes(rp *resourcePolicy, uses string, opts map[strin
 		return fmt.Errorf("%s: cannot resolve the verb's option schema to scope-check it — refusing", uses)
 	}
 	for _, so := range scoped {
-		val, _ := opts[so.Name].(string)
+		val := scopedOptionValue(opts, so.Name)
 		if rp.scopeOK(in, so.Dim, val, grant[so.Name]) {
 			continue
 		}
@@ -551,7 +576,11 @@ func literalOption(opts map[string]any, key string) string {
 	if opts == nil {
 		return ""
 	}
-	s, _ := opts[key].(string)
+	// Through the same coercion the runtime belt uses, so a non-string
+	// scoped value (an int, a bool) is judged here too rather than reading as
+	// "absent" — the static half must not be blind to a class the belt
+	// catches (round-5 #3).
+	s := scopedOptionValue(opts, key)
 	if strings.Contains(s, "{{") {
 		return ""
 	}

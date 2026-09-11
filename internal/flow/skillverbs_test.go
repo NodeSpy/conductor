@@ -37,9 +37,9 @@ func TestSkillVerbCatalog(t *testing.T) {
 		t.Fatalf("required: %+v", schema)
 	}
 
-	// Globs expand (post/ask/fail/slow/download/upload); empty patterns
+	// Globs expand (post/ask/fail/slow/charge/download/upload); empty patterns
 	// expose nothing.
-	if got := rig.Runner.SkillVerbCatalog([]string{"svc.*"}); len(got) != 6 {
+	if got := rig.Runner.SkillVerbCatalog([]string{"svc.*"}); len(got) != 7 {
 		t.Fatalf("glob catalog: %d tools", len(got))
 	}
 	if got := rig.Runner.SkillVerbCatalog(nil); len(got) != 0 {

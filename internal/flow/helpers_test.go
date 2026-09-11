@@ -84,6 +84,20 @@ var fakeDecl = &connector.TypeDecl{
 			Outputs: connector.Schema{"done": {Type: connector.TBool}},
 		},
 		{
+			// A scoped option that is NOT a string — the shape an external
+			// plugin can declare (`account: {type: integer, scope: "account"}`)
+			// and which a string type-assertion silently read as absent
+			// (round-5 #3). No builtin has one, so the meta-test's coverage
+			// of every connector would never have reached this class.
+			Name: "charge", Desc: "a verb whose destination option is an integer",
+			Options: connector.Schema{
+				"account": {Type: connector.TInt, Required: true, Scope: "account"},
+				"cents":   {Type: connector.TInt},
+				"live":    {Type: connector.TBool, Scope: "mode"},
+			},
+			Outputs: connector.Schema{"ok": {Type: connector.TBool}},
+		},
+		{
 			Name: "download", Desc: "returns raw bytes as a declared binary output (#36 §21)",
 			Options:   connector.Schema{"url": {Type: connector.TString}},
 			Outputs:   connector.Schema{"body": {Type: connector.TAny}},
@@ -262,6 +276,8 @@ func (f *fakeImpl) Invoke(ctx context.Context, verb string, opts map[string]any)
 		return map[string]any{"action": "approve", "text": "ok", "ref": "ref-1"}, nil
 	case "slow":
 		return map[string]any{"done": true}, nil
+	case "charge":
+		return map[string]any{"ok": true}, nil
 	}
 	return map[string]any{}, nil
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/kv"
 )
 
@@ -432,5 +433,78 @@ steps:
 	runTrigger(rig, newTrigger("ping", nil), spec)
 	if failed, errStr := rig.workflowFailed(); failed {
 		t.Fatalf("a config-authored step must not be resource-scoped: %s", errStr)
+	}
+}
+
+// A scoped option whose value is NOT a string must still be checked
+// (round-5 #3). `val, _ := opts[name].(string)` yielded "" for an int, and ""
+// means "not supplied" — so the check was skipped and any value passed. No
+// builtin could reach it (every scoped option is a string), but declaring the
+// schema is exactly what an external plugin does, which is this PR's whole
+// point: `account: {type: integer, scope: "account"}`.
+func TestNonStringScopedOptionIsStillChecked(t *testing.T) {
+	r := scopeRig(t, `
+connectors:
+  svc: { use: fake }
+policy:
+  agent_authored:
+    allow: ["**"]
+    allow_scopes:
+      account: ["4242"]
+      mode: ["true"]
+`)
+	trig := newTrigger("ping", nil)
+	pol := r.planPolicy()
+	id := SkillIdentity{Agent: "probe", Repo: "trigger/repo", Verbs: []string{"svc.*"}}
+
+	for _, tc := range []struct {
+		name    string
+		opts    map[string]any
+		refused bool
+	}{
+		{"an allow-listed int", map[string]any{"account": 4242}, false},
+		{"an int nobody listed", map[string]any{"account": 999}, true},
+		{"an int64", map[string]any{"account": int64(999)}, true},
+		{"a float as YAML decodes it", map[string]any{"account": 999.0}, true},
+		{"an allow-listed bool", map[string]any{"account": 4242, "live": true}, false},
+		{"a bool nobody listed", map[string]any{"account": 4242, "live": false}, true},
+		{"absent — names no resource", map[string]any{"cents": 100}, false},
+		{"explicitly nil", map[string]any{"account": nil}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// PLAN surface, runtime belt.
+			planErr := r.checkVerbResources(pol, trig, "svc.charge", tc.opts, nil, nil)
+			if got := scopeRefused(planErr); got != tc.refused {
+				t.Errorf("PLAN surface: refused=%v want %v (err=%v)", got, tc.refused, planErr)
+			}
+			// SKILL surface.
+			_, skillErr := r.RunSkillVerb(context.Background(), id, "svc.charge", tc.opts)
+			if got := scopeRefused(skillErr); got != tc.refused {
+				t.Errorf("SKILL surface: refused=%v want %v (err=%v)", got, tc.refused, skillErr)
+			}
+		})
+	}
+}
+
+// …and the STATIC plan scan judges it too, rather than reading a non-string
+// literal as absent and leaving the whole question to the runtime belt.
+func TestNonStringScopedOptionIsCaughtStatically(t *testing.T) {
+	r := scopeRig(t, `
+connectors:
+  svc: { use: fake }
+policy:
+  agent_authored:
+    allow: ["**"]
+    allow_scopes:
+      account: ["4242"]
+`)
+	trig := newTrigger("ping", nil)
+	steps := []config.Step{{Uses: "svc.charge", Options: map[string]any{"account": 999}}}
+	if err := r.guardPlanResources(r.planPolicy(), trig, steps); !scopeRefused(err) {
+		t.Fatalf("the static scan must judge a non-string literal: %v", err)
+	}
+	ok := []config.Step{{Uses: "svc.charge", Options: map[string]any{"account": 4242}}}
+	if err := r.guardPlanResources(r.planPolicy(), trig, ok); err != nil {
+		t.Fatalf("an allow-listed value must pass the static scan: %v", err)
 	}
 }
