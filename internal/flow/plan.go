@@ -475,11 +475,17 @@ func (r *Runner) containsTrackedSecret(v map[string]any) bool {
 // full) vets every kv/sql touch against policy.agent_authored.allow_stores —
 // the runtime belt behind the static plan scan, catching `ctx.store(name)`
 // with a name no scan could see. nil for config-authored steps.
-func (r *Runner) planDataGuard(ctx context.Context) code.DataGuard {
+func (r *Runner) planDataGuard(ctx context.Context, t core.Trigger) code.DataGuard {
 	barrier := planBarrier(ctx)
 	var rp *resourcePolicy
 	if agentAuthored(ctx) {
-		rp = planResourcePolicy(r.planPolicy(), core.Trigger{})
+		// The REAL dispatch, not core.Trigger{} (round-6 C). With an empty
+		// trigger rp.trigger was "", so the dispatch's own repo scope was not
+		// implicitly allowed and a code step touching its OWN memory scope or
+		// its OWN target was refused unless the operator had listed it — the
+		// exact opposite of the rule every other surface applies, and a
+		// deny that reads like a bug to whoever hits it.
+		rp = planResourcePolicy(r.planPolicy(), t)
 	}
 	if !barrier && rp == nil {
 		return nil

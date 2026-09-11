@@ -1273,7 +1273,7 @@ func (r *Runner) execCode(ctx context.Context, t core.Trigger, step config.Step,
 		return nil, "", err
 	}
 	spec := code.Spec{Run: step.Run, Code: step.Code, Args: args, Env: env, WorkDir: workdir,
-		DataGuard: r.planDataGuard(ctx)}
+		DataGuard: r.planDataGuard(ctx, t)}
 	if target, terr := r.hostTarget(step); terr != nil {
 		return nil, "", terr
 	} else if target != nil {
