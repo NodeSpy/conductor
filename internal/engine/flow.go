@@ -425,7 +425,7 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			// The outcome loop's engagement (#36 §18): this STEP acted on
 			// this target; a later terminal signal resolves it. The key is
 			// the step identity (design §4), which is stable across runs.
-			e.store.RecordEngagement(t.Target.Repo, t.Target.Number, store.Engagement{
+			e.store.RecordEngagement(t.Key(), store.Engagement{
 				Key: identity, Runtime: runtimeName, Workflow: wfScope, SavedWorkflow: savedWF,
 				Kind: t.Kind, Run: runID, CostUSD: u.CostUSD, Tokens: u.TotalTokens,
 			})

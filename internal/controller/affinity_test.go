@@ -613,3 +613,51 @@ func TestStartupDropsUnreachableBindings(t *testing.T) {
 		}
 	}
 }
+
+// ROUND-13 #3. The operator idiom is `session.key: "{{.repo}}#{{.pr}}"`. It
+// rendered against the raw target, so a dispatch whose target the SENDER
+// chose rendered a REAL repo's pool key and its agent joined that pool —
+// sharing a live session with the repo it named.
+//
+// The key renders from the trusted view now, and an untrusted dispatch's key
+// is namespaced to itself outright, because an operator may key on `.head` or
+// `.title` just as easily as `.repo`.
+func TestSessionKeyDoesNotCollideAcrossTrust(t *testing.T) {
+	spec := &config.SessionSpec{Key: "{{.repo}}#{{.pr}}"}
+	a := &Affinity{}
+	req := func(trusted bool) dispatch.Request {
+		return dispatch.Request{
+			Identity: "reviewer",
+			Trigger: core.Trigger{
+				Source: "webhook", Instance: "hooks", Kind: "delivery",
+				TargetTrusted: trusted,
+				Target:        core.Target{Repo: "acme/app", Owner: "acme", Name: "app", PR: 42, Number: 42},
+			},
+		}
+	}
+	trusted, err := a.renderKey(spec, req(true), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged, err := a.renderKey(spec, req(false), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted == forged {
+		t.Fatalf("a forged target rendered a real pool's session key %q — its agent would join "+
+			"that repo's live session", trusted)
+	}
+	if trusted != "acme/app#42" {
+		t.Errorf("a trusted dispatch's key must be unchanged, got %q", trusted)
+	}
+	// Two forged dispatches for DIFFERENT targets still get distinct pools.
+	other := req(false)
+	other.Trigger.Target.Number, other.Trigger.Target.PR = 43, 43
+	o, err := a.renderKey(spec, other, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o == forged {
+		t.Error("untrusted keys must still discriminate per target")
+	}
+}

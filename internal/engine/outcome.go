@@ -39,6 +39,22 @@ import (
 // observeOutcomeSignals inspects one incoming trigger for outcome facts.
 // Called early in process(), before any gate can drop the trigger.
 func (e *Engine) observeOutcomeSignals(ctx context.Context, t core.Trigger) {
+	// OUTCOME SIGNALS COME FROM THE PLATFORM OR THEY DO NOT COUNT.
+	//
+	// `_closed` with merged/reverts, and `failing_checks`, are facts the
+	// github integration reads off a signature-verified payload. A trigger
+	// whose TARGET the sender chose is a trigger whose Context they wrote
+	// too: it could mark another PR merged, consume its engagements, and —
+	// worse — assert `reverts_corroborated`, which is the one bit that turns
+	// an attacker-editable revert claim into an actionable one (#36 review
+	// M9). The corroboration is meaningless if its carrier is forgeable.
+	//
+	// So an untrusted-target trigger observes nothing. Its own engagements
+	// still live under its own key (see Trigger.Key), so nothing it legitimately
+	// did is lost — it simply cannot speak about anybody else's.
+	if !t.TargetTrusted {
+		return
+	}
 	switch t.Kind {
 	case core.KindClosed:
 		e.observeClosed(ctx, t)
@@ -48,12 +64,12 @@ func (e *Engine) observeOutcomeSignals(ctx context.Context, t core.Trigger) {
 		// push — and this loop runs before any dedup gate. Record ci_failed on the
 		// first head only; a fresh push that fails again is a new head. Empty head
 		// falls back to per-event (MarkCIFailure's fail-safe).
-		if !e.store.MarkCIFailure(t.Target.Repo, t.Target.Number, t.Target.HeadSHA) {
+		if !e.store.MarkCIFailure(t.Key(), t.Target.HeadSHA) {
 			return
 		}
 		// Non-terminal: the PR lives on; the engagements stay for the
 		// terminal signal.
-		for _, g := range e.store.PeekEngagements(t.Target.Repo, t.Target.Number) {
+		for _, g := range e.store.PeekEngagements(t.Key()) {
 			e.recordOutcome(ctx, t.Target.Repo, t.Target.Number, "ci_failed", g)
 		}
 	}
@@ -67,7 +83,7 @@ func (e *Engine) observeClosed(ctx context.Context, t core.Trigger) {
 	if merged {
 		outcome = "merged"
 	}
-	for _, g := range e.store.TakeEngagements(t.Target.Repo, t.Target.Number) {
+	for _, g := range e.store.TakeEngagements(t.Key()) {
 		e.recordOutcome(ctx, t.Target.Repo, t.Target.Number, outcome, g)
 	}
 	// A merged revert PR closes the loop on the PRs it reverts — their
@@ -111,7 +127,11 @@ func (e *Engine) recordRevert(ctx context.Context, repo string, n int, corrobora
 		e.log("outcome: %s#%d revert claimed but not corroborated by its commits — ignored", repo, n)
 		return
 	}
-	gs := e.store.TakeEngagements(repo, n)
+	// The reverted PR's own engagements. Its key is the TRUSTED shape —
+	// recordRevert is only ever reached from a trusted-target `_closed`
+	// (observeOutcomeSignals refuses the rest), and the sibling PR it names
+	// lives in that same trusted repo.
+	gs := e.store.TakeEngagements(store.TargetKey(repo, n))
 	if len(gs) == 0 {
 		// Attribution happens at report time by joining this row to the PR's
 		// earlier merged rows (same repo#n).

@@ -120,32 +120,30 @@ func (s *flowGateStore) GetHistoryVerified(id string) (store.RunHistory, error) 
 	return rec, nil
 }
 
-func (s *flowGateStore) RecordEngagement(repo string, number int, e store.Engagement) {
+func (s *flowGateStore) RecordEngagement(key string, e store.Engagement) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.engagements == nil {
 		s.engagements = map[string][]store.Engagement{}
 	}
-	key := fmt.Sprintf("%s#%d", repo, number)
 	s.engagements[key] = append(s.engagements[key], e)
 }
 
-func (s *flowGateStore) TakeEngagements(repo string, number int) []store.Engagement {
+func (s *flowGateStore) TakeEngagements(key string) []store.Engagement {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := fmt.Sprintf("%s#%d", repo, number)
 	out := s.engagements[key]
 	delete(s.engagements, key)
 	return out
 }
 
-func (s *flowGateStore) PeekEngagements(repo string, number int) []store.Engagement {
+func (s *flowGateStore) PeekEngagements(key string) []store.Engagement {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]store.Engagement(nil), s.engagements[fmt.Sprintf("%s#%d", repo, number)]...)
+	return append([]store.Engagement(nil), s.engagements[key]...)
 }
 
-func (s *flowGateStore) MarkCIFailure(repo string, number int, head string) bool {
+func (s *flowGateStore) MarkCIFailure(key, head string) bool {
 	if head == "" {
 		return true // fail-safe: never dedup a headless signal
 	}
@@ -154,7 +152,6 @@ func (s *flowGateStore) MarkCIFailure(repo string, number int, head string) bool
 	if s.ciFailed == nil {
 		s.ciFailed = map[string]string{}
 	}
-	key := fmt.Sprintf("%s#%d", repo, number)
 	if s.ciFailed[key] == head {
 		return false
 	}

@@ -142,7 +142,8 @@ func TestEngineAffinityEndOnEvent(t *testing.T) {
 	// end_on "i.pr_closed"). It carries no action the engine would run;
 	// eviction happens at observe time.
 	closed := core.Trigger{Source: "github", Instance: "i", Kind: "pr_closed",
-		Target: core.Target{Repo: "a/w", PR: 1, Number: 1}}
+		TargetTrusted: true,
+		Target:        core.Target{Repo: "a/w", PR: 1, Number: 1}}
 	e.process(context.Background(), closed)
 	if e.affinityOwns("agent-1") {
 		t.Fatal("end_on event must evict the session")

@@ -65,17 +65,17 @@ func TestOutcomeGuidanceMatchesTheStepsOwnRecord(t *testing.T) {
 func TestEngagementCarriesKeyAndRuntime(t *testing.T) {
 	cfg := baseCfg()
 	e, _ := newEng(t, cfg, &fakeDispatcher{}, &fakeNotifier{}, nil)
-	e.store.RecordEngagement("o/r", 7, store.Engagement{
+	e.store.RecordEngagement(store.TargetKey("o/r", 7), store.Engagement{
 		Key: "github.pull_request/security", Runtime: "paseo", Kind: "pull_request",
 	})
-	got := e.store.PeekEngagements("o/r", 7)
+	got := e.store.PeekEngagements(store.TargetKey("o/r", 7))
 	if len(got) != 1 || got[0].Key != "github.pull_request/security" || got[0].Runtime != "paseo" {
 		t.Fatalf("engagement = %+v", got)
 	}
 	// An engagement with no key is not recorded (there would be nothing to
 	// attribute it to).
-	e.store.RecordEngagement("o/r", 8, store.Engagement{Runtime: "paseo"})
-	if n := len(e.store.PeekEngagements("o/r", 8)); n != 0 {
+	e.store.RecordEngagement(store.TargetKey("o/r", 8), store.Engagement{Runtime: "paseo"})
+	if n := len(e.store.PeekEngagements(store.TargetKey("o/r", 8))); n != 0 {
 		t.Fatalf("a keyless engagement must not record, got %d", n)
 	}
 }

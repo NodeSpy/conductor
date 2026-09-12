@@ -50,6 +50,7 @@ func TestOnlyAuditedSourcesClaimTargetTrust(t *testing.T) {
 		"internal/memory/memory.go":     "memory.Source declares the field it carries alongside the Repo it describes",
 		"internal/memory/ipc.go":        "the MCP/CLI memory face applies the rule through NewAgentCaller",
 		"internal/memory/scopeguard.go": "memory.Caller applies the rule at construction so no face holds a raw repo",
+		"internal/memory/harvest.go":    "the output-contract face applies the rule through NewAgentCaller",
 		"internal/skill/broker.go":      "skill.Identity declares the field it carries for a minted session",
 	}
 	root := repoRootFor(t)

@@ -66,13 +66,24 @@ type ciFailMark struct {
 	At   time.Time `json:"at"`
 }
 
+// targetKey is retained for the revert path, which addresses a repo#number
+// the CALLER already vetted (a corroborated revert names sibling PRs in the
+// same trusted repo). Everything driven by an incoming trigger passes
+// core.Trigger.Key() instead, which namespaces an untrusted target away from
+// a trusted one — see the key parameters below.
 func targetKey(repo string, number int) string {
 	return fmt.Sprintf("%s#%d", repo, number)
 }
 
+// TargetKey is the engagement key for a repo#number the caller has already
+// vetted — the trusted-repo spelling core.Trigger.Key produces for a
+// platform-assigned target. The revert path uses it to address a SIBLING PR
+// of the trusted repo it is already inside.
+func TargetKey(repo string, number int) string { return targetKey(repo, number) }
+
 // RecordEngagement notes that a step acted on a target.
-func (s *Store) RecordEngagement(repo string, number int, e Engagement) {
-	if repo == "" || number <= 0 || e.Key == "" {
+func (s *Store) RecordEngagement(key string, e Engagement) {
+	if key == "" || e.Key == "" {
 		return
 	}
 	if e.At.IsZero() {
@@ -82,7 +93,7 @@ func (s *Store) RecordEngagement(repo string, number int, e Engagement) {
 	if s.engagements == nil {
 		s.engagements = map[string][]Engagement{}
 	}
-	key := targetKey(repo, number)
+
 	list := append(s.engagements[key], e)
 	if len(list) > engagementCap {
 		list = list[len(list)-engagementCap:]
@@ -96,9 +107,9 @@ func (s *Store) RecordEngagement(repo string, number int, e Engagement) {
 // TakeEngagements returns and CLEARS a target's engagements (a terminal
 // outcome — merged/closed/reverted — consumes them). The target's ci_failed
 // marker is cleared with them.
-func (s *Store) TakeEngagements(repo string, number int) []Engagement {
+func (s *Store) TakeEngagements(key string) []Engagement {
 	s.mu.Lock()
-	key := targetKey(repo, number)
+
 	out := s.engagements[key]
 	delete(s.engagements, key)
 	_, hadMark := s.ciFailed[key]
@@ -115,10 +126,10 @@ func (s *Store) TakeEngagements(repo string, number int) []Engagement {
 
 // PeekEngagements returns a target's engagements without consuming them
 // (non-terminal signals: a CI failure on a still-open PR).
-func (s *Store) PeekEngagements(repo string, number int) []Engagement {
+func (s *Store) PeekEngagements(key string) []Engagement {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]Engagement(nil), s.engagements[targetKey(repo, number)]...)
+	return append([]Engagement(nil), s.engagements[key]...)
 }
 
 // pruneEngagementsLocked drops entries older than the retention window.
@@ -145,11 +156,11 @@ func (s *Store) pruneEngagementsLocked() {
 // fails, its siblings cancel) collapses to one ci_failed per push instead of one
 // per check event; a later push that fails again is a new head and records anew.
 // An empty head is never deduped (fail-safe: record rather than drop the signal).
-func (s *Store) MarkCIFailure(repo string, number int, head string) bool {
-	if repo == "" || number <= 0 || head == "" {
+func (s *Store) MarkCIFailure(key, head string) bool {
+	if key == "" || head == "" {
 		return true
 	}
-	key := targetKey(repo, number)
+
 	s.mu.Lock()
 	if s.ciFailed == nil {
 		s.ciFailed = map[string]ciFailMark{}

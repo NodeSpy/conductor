@@ -105,3 +105,39 @@ func RenderPrompt(req Request) (string, error) {
 func RenderField(s string, req Request) (string, error) {
 	return render(s, templateData(req))
 }
+
+// RenderSessionKey renders a session.key template — an IDENTITY, not display
+// text, so it renders against the TRUSTED view of the dispatch.
+//
+// The operator idiom is `session.key: "{{.repo}}#{{.pr}}"`, which on a
+// dispatch whose target the event's SENDER chose would render the pool of a
+// real repo and put the forged dispatch's agent in it. So `.repo`/`.owner`/
+// `.name` render from core.OwnRepo, and — because an operator may key on any
+// field, and `.head`, `.title` and the event context are attacker-influenced
+// too — the whole rendered key is prefixed with the trigger's own namespace
+// when the target is untrusted. The prefix is the guarantee; the accessor is
+// the part that reads correctly.
+func RenderSessionKey(s string, req Request) (string, error) {
+	data := templateData(req)
+	t := req.Trigger
+	if repo := t.OwnRepo(); repo == "" {
+		data["repo"], data["owner"], data["name"] = "", "", ""
+	}
+	return render(s, data)
+}
+
+// SessionKeyNamespace is the prefix an untrusted dispatch's session key
+// carries ("" for a trusted one). An operator may key on any field, and
+// `.head`, `.title` and the event context are attacker-influenced as surely
+// as `.repo` is — so rather than chase fields, a dispatch whose target the
+// sender chose gets its own pool namespace outright. Trigger.Key() is already
+// the source-namespaced form for such a target.
+//
+// Applied by the caller AFTER its empty-key check, so "the template rendered
+// nothing" stays the error it should be.
+func SessionKeyNamespace(req Request) string {
+	if req.Trigger.TargetTrusted {
+		return ""
+	}
+	return req.Trigger.Key() + "\x00"
+}

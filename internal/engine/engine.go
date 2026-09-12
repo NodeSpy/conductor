@@ -77,10 +77,14 @@ type Store interface {
 	GetHistoryVerified(id string) (store.RunHistory, error)
 	// Outcome-learning state (#36 §18): engagements awaiting a terminal
 	// signal, and the per-agent counters behind guidance tuning.
-	RecordEngagement(repo string, number int, e store.Engagement)
-	TakeEngagements(repo string, number int) []store.Engagement
-	PeekEngagements(repo string, number int) []store.Engagement
-	MarkCIFailure(repo string, number int, head string) bool
+	// The engagement store keys on an opaque TARGET KEY the caller supplies
+	// — core.Trigger.Key(), which namespaces a target the event's sender
+	// chose away from a real one. It used to key on a raw repo#number, so a
+	// forged trigger consumed and mutated a real dispatch's record.
+	RecordEngagement(key string, e store.Engagement)
+	TakeEngagements(key string) []store.Engagement
+	PeekEngagements(key string) []store.Engagement
+	MarkCIFailure(key, head string) bool
 	BumpOutcome(key, outcome string)
 	OutcomeStats(key string) map[string]int
 }
@@ -555,9 +559,14 @@ func (e *Engine) memoryPrompt(identity string, step config.Step, t core.Trigger,
 	}
 	// The engine supplies the run's context keys as a CONVENTION; the memory
 	// core never interprets them (design §2).
-	keys := memory.ContextKeys(t.Target.Repo, workflow, identity)
+	// OwnRepo, not the raw target: a forged webhook repo must not pull
+	// another repo's memories into this agent's prompt, which is both a
+	// cross-tenant READ and a prompt-injection vector (the recalled text goes
+	// straight into the model's context).
+	repo := t.OwnRepo()
+	keys := memory.ContextKeys(repo, workflow, identity)
 	f := memory.Filter{
-		Scopes: memory.ExpandScopeRefs(sel.Scopes, t.Target.Repo, workflow, identity),
+		Scopes: memory.ExpandScopeRefs(sel.Scopes, repo, workflow, identity),
 		Tags:   sel.Tags, Limit: sel.Limit,
 	}
 	return m.PromptSection(f, keys)
@@ -1459,8 +1468,17 @@ func agentWaitTimeout(p config.Step) time.Duration {
 // rerunFailed re-runs the failed jobs of a workflow run, as you. Returns the gh
 // error (with its output) when the rerun could not be requested.
 func (e *Engine) rerunFailed(ctx context.Context, t core.Trigger, runID int64) error {
+	// OwnRepo: this spends the OPERATOR'S token on a write to a named repo.
+	// The run id and repo are platform facts that arrive with a verified
+	// payload; a trigger whose target the sender chose would be asking
+	// conductor to re-run CI in a repo of the attacker's choosing, with the
+	// operator's credential (found by the round-13 enforcement sweep).
+	repo := t.OwnRepo()
+	if repo == "" {
+		return fmt.Errorf("refusing to re-run checks for %s: the dispatch's target was not assigned by its source, so the repo is not conductor's to act on", t.Key())
+	}
 	c := exec.CommandContext(ctx, "gh", "run", "rerun", fmt.Sprintf("%d", runID),
-		"--failed", "--repo", t.Target.Repo)
+		"--failed", "--repo", repo)
 	c.Env = append(os.Environ(), "GH_TOKEN="+e.userToken())
 	if out, err := c.CombinedOutput(); err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))

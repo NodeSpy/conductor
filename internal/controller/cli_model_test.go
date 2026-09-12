@@ -81,7 +81,9 @@ func TestSessionKeyRefusesTheScopeSeparator(t *testing.T) {
 	a := &Affinity{}
 	_, err := a.renderKey(&config.SessionSpec{Key: "{{.repo}}"}, dispatch.Request{
 		Identity: "s",
-		Trigger:  core.Trigger{Kind: "ping", Target: core.Target{Repo: "o\x1fr"}},
+		// A trusted target, so `.repo` renders at all — the point here is the
+		// SEPARATOR byte in the rendered value, not the trust rule.
+		Trigger: core.Trigger{Kind: "ping", TargetTrusted: true, Target: core.Target{Repo: "o\x1fr"}},
 	}, false)
 	if err == nil || !strings.Contains(err.Error(), "U+001F") {
 		t.Fatalf("a rendered key with the separator must be refused, got %v", err)

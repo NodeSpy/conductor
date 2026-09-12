@@ -367,7 +367,9 @@ func (a *Affinity) specFor(step config.Step, runtimeName string) (spec *config.S
 // renderKey renders a session key against the dispatch, namespacing it to the
 // step identity for a step-scoped session.
 func (a *Affinity) renderKey(spec *config.SessionSpec, req dispatch.Request, stepScoped bool) (string, error) {
-	key, err := dispatch.RenderField(spec.Key, req)
+	// RenderSessionKey, not RenderField: a session key is an IDENTITY, and
+	// an untrusted target must not render into a real pool's key.
+	key, err := dispatch.RenderSessionKey(spec.Key, req)
 	if err != nil {
 		return "", fmt.Errorf("step %q session.key: %w", req.Identity, err)
 	}
@@ -384,6 +386,9 @@ func (a *Affinity) renderKey(spec *config.SessionSpec, req dispatch.Request, ste
 	if strings.ContainsRune(key, keySep) {
 		return "", fmt.Errorf("step %q session.key rendered a value containing a control byte (U+001F), which is reserved as the scope separator — template a key from fields that cannot carry one", req.Identity)
 	}
+	// An untrusted target's pool is namespaced to itself, AFTER the checks
+	// above so an empty render is still the error it should be.
+	key = dispatch.SessionKeyNamespace(req) + key
 	if stepScoped {
 		key = StepSessionKey(req.Identity, key)
 	}
