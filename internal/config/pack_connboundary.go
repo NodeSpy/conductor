@@ -148,8 +148,33 @@ func checkPackConnectorRefs(man *PackManifest) []string {
 			"%s: %s %q names connector %q, which the pack does not declare in requires.connectors — a pack may only reach connectors its manifest names; declare it: requires: { connectors: { %s: \"*\" } }",
 			where, kind, name, name, name))
 	}
+	// INLINE STEP BODIES are refused outright rather than walked (round-13
+	// #5). `uses: workflow.run, options: {steps: [{uses: gh.comment}]}` put a
+	// step body in an OPTION PAYLOAD — an untyped map the boundary's walk
+	// cannot see — and reached an undeclared connector through it.
+	//
+	// Refusing is the right answer rather than parsing, for two reasons. The
+	// payload is `any`: for_each bodies, team role steps and compensations
+	// can each carry one, so walking means re-implementing the step decoder
+	// against untyped maps and getting it right forever. And a pack has no
+	// need for it: its own workflows are namespaced at instantiation and
+	// `workflow.run { name: … }` calls them, which is the form that keeps the
+	// pack's behavior visible in its manifest instead of buried in an option.
+	inlineSteps := func(where string, opts map[string]any) {
+		if opts == nil {
+			return
+		}
+		if v, ok := opts["steps"]; ok && v != nil {
+			problems = append(problems, fmt.Sprintf(
+				"%s: inline `steps:` in a pack-authored option payload — a pack calls its own workflows by name (`workflow.run { name: … }`), which its manifest and the requires.connectors boundary can both see; an embedded step body escapes that boundary", where))
+		}
+	}
 	man.WalkPackSteps(func(where string, s *Step) {
 		check(where, "uses:", s.Uses)
+		inlineSteps(where, s.Options)
+		for i := range s.Hooks {
+			inlineSteps(fmt.Sprintf("%s hook[%d]", where, i), s.Hooks[i].Options)
+		}
 		// `handoff: slack` is a BARE connector name — the ask-capable
 		// connector a background review is presented on. It is a connector
 		// reference with no dot, which is exactly why the first version of

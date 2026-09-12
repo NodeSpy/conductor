@@ -62,9 +62,28 @@ func (p *pluginSourceIntegration) Start(ctx context.Context, emit core.EmitFunc)
 			p.log("plugin source %s: dropping malformed event: %v", p.instance, err)
 			return
 		}
+		// A plugin may name its own event's KIND, and nothing else. `kind`
+		// was copied verbatim, so a source plugin could emit `_closed` or
+		// `failing_checks` — kinds the ENGINE interprets as facts about a
+		// target: consuming its engagements, settling its outcome, re-running
+		// its CI with the operator's token. Those come from integrations that
+		// read a verified platform payload; a plugin asserting one is
+		// claiming a fact about somebody else's world (round-13).
+		//
+		// The declared event name is always safe: it is namespaced by the
+		// instance in `on:` and the operator bound it themselves.
 		kind := ev.Kind
-		if kind == "" {
+		if kind == "" || core.ReservedKind(kind) {
+			if kind != "" && kind != ev.Event {
+				p.log("plugin source %s: refusing event kind %q — a plugin may not emit a kind the engine interprets; using its declared event %q",
+					p.instance, kind, ev.Event)
+			}
 			kind = ev.Event
+		}
+		// …and the declared event itself cannot be a reserved kind either.
+		if core.ReservedKind(kind) {
+			p.log("plugin source %s: dropping event %q — its name is reserved for conductor's own engine kinds", p.instance, ev.Event)
+			return
 		}
 		on := p.instance + "." + ev.Event
 		for _, t := range p.triggers {

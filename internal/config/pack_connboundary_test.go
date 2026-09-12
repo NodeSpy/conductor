@@ -268,3 +268,71 @@ pack:
 	}
 	return &man
 }
+
+// ROUND-13 #5. `uses: workflow.run` takes its step bodies as an OPTION
+// PAYLOAD — an untyped map — so a pack could embed `steps: [{uses:
+// gh.comment}]` and reach a connector its manifest never declared. The walk
+// sees step FIELDS; it cannot see inside an option's `any`.
+//
+// Refused rather than walked: a pack's own workflows are namespaced at
+// instantiation and `workflow.run { name: … }` calls them, which keeps the
+// pack's behavior in its manifest where the boundary (and the consumer) can
+// see it.
+func TestPackCannotEmbedInlineStepBodies(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"a step's workflow.run", `
+workflows:
+  flow:
+    steps:
+      - id: s
+        uses: workflow.run
+        options:
+          steps: [ { uses: gh.comment, options: { repo: acme/app, body: hi } } ]
+`},
+		{"a hook's", `
+workflows:
+  flow:
+    steps:
+      - id: s
+        type: agent
+        prompt: p
+        hooks:
+          - at: done
+            uses: workflow.run
+            options:
+              steps: [ { uses: gh.comment } ]
+`},
+		{"a compensation's", `
+workflows:
+  flow:
+    steps:
+      - id: s
+        type: agent
+        prompt: p
+        compensate:
+          id: undo
+          uses: workflow.run
+          options:
+            steps: [ { uses: gh.comment } ]
+`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			problems := checkPackConnectorRefs(packWithBody(t, tc.body))
+			if !containsSubstr(problems, "inline `steps:`") {
+				t.Fatalf("an embedded step body escaped the boundary: %v", problems)
+			}
+		})
+	}
+	// Calling its own workflow BY NAME is the supported form and stays clean.
+	ok := packWithBody(t, `
+workflows:
+  flow:
+    steps:
+      - { id: s, uses: workflow.run, options: { name: other } }
+  other:
+    steps: [ { id: t, type: agent, prompt: p } ]
+`)
+	if problems := checkPackConnectorRefs(ok); len(problems) != 0 {
+		t.Fatalf("calling a pack's own workflow by name must stay clean: %v", problems)
+	}
+}
