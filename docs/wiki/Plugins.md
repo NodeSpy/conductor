@@ -140,6 +140,10 @@ plugin_trust:
 "No policy configured" does not mean "any repo on the internet is fine" — a
 plugin is a binary conductor executes.
 
+The globs match exactly as [[Packs#writing-the-globs|`pack_trust`]] does: `*`
+stays inside one path segment and never crosses a `/`, so `github.com/acme/*`
+means *any repo under acme* and cannot reach `github.com/acme-evil/…`.
+
 ## Commands
 
 ```

@@ -388,14 +388,34 @@ trust surface the lockfile can't provide (the lockfile proves *unchanged*, not
 ```yaml
 pack_trust:
   allow:
-    - github.com/your-org/*
-    - github.com/acme/conductor-packs*
+    - github.com/your-org/*            # any repo under your-org
+    - github.com/acme/review-kit       # one specific repo
 ```
 
 With `pack_trust:` set, `conductor init` refuses any **remote** pack source — at
-any depth, including a dependency's — that matches no `allow:` glob (`*` matches
-any run of characters). Local sources (your own disk) are exempt. Override once
-with `conductor init --allow-unlisted`.
+any depth, including a dependency's — that matches no `allow:` glob. Local
+sources (your own disk) are exempt. Override once with
+`conductor init --allow-unlisted`.
+
+### Writing the globs
+
+**`*` does not cross a `/`.** It matches any run of characters *within one path
+segment*, the same rule as Go's `path.Match`. That is deliberate: an allowlist
+entry is the operator saying *this org*, or *this repo*, and a `*` that spanned
+the separator would quietly widen it to somebody else's org.
+
+Two forms cover almost everything:
+
+| Pattern | Matches | Does **not** match |
+|---|---|---|
+| `github.com/acme/review-kit` | that repo, plus `//subdir` and `@ref` of it | `…/review-kit-fork`, `…/review-kit2` |
+| `github.com/acme/*` | any repo under `acme` (and their `//subdir@ref`) | `github.com/acme-evil/anything` |
+
+Prefer those. A partial-name wildcard like `github.com/acme/conductor-packs*`
+still works, but it is a wider grant than it looks: it also admits
+`conductor-packs2` and `conductor-packs-old` in the same org. That takes write
+access under `acme` to exploit, so it is not a hole the way a cross-`/` match
+was — but if you mean one repo, name it, and if you mean the org, say `acme/*`.
 
 ## Security model
 

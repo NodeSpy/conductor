@@ -84,8 +84,40 @@ func (t *PackTrustConfig) PluginSourceAllowed(source string) bool {
 	return false
 }
 
-// globMatch reports whether s matches pattern, where `*` matches any run of
-// characters (including `/`). Anchored at both ends.
+// globMatch reports whether a pack/plugin SOURCE matches a trust pattern.
+//
+// `*` IS SEGMENT-BOUNDED: it does not match across a `/`, the same rule Go's
+// path.Match uses. That is the whole security property of this function, and
+// the wildcard branch did not have it — `*` was any run of characters,
+// including separators, so
+//
+//	pack_trust: { allow: ["github.com/trusted-org*"] }
+//
+// matched `github.com/trusted-org-evil/malicious-pack`: a DIFFERENT,
+// attacker-registered org, whose name merely continues the trusted one. The
+// daemon then fetched and executed it. The exact-match branch was anchored at
+// a delimiter for the same reason one commit earlier; this is its sibling.
+//
+// The two rules:
+//
+//	a `*` inside a segment matches within THAT segment only, so
+//	  `github.com/trusted-org*` can name an org and never a repo under a
+//	  different one;
+//	a BARE `*` as the final segment matches the remaining path, so
+//	  `github.com/acme/*` still means "any repo under acme" — including a
+//	  deeper host layout like a gitlab subgroup. It cannot escape the org,
+//	  because everything before it is literal.
+//
+// A source's `//subdir` and `@ref` are stripped before matching: a subdir or
+// ref OF a trusted repo is trusted, which is what the exact branch's
+// delimiter anchoring says too.
+//
+// RESIDUAL, deliberately: a mid-segment `*` still matches same-SEGMENT
+// continuations — `github.com/acme/conductor-packs*` admits
+// `github.com/acme/conductor-packs2`. That is inherent to asking for a
+// mid-segment wildcard, and registering that name needs write access under
+// `acme` already. The cross-`/`, cross-org escalation is the one that had to
+// close. The docs no longer recommend the mid-segment form.
 func globMatch(pattern, s string) bool {
 	// Fast paths.
 	if pattern == "*" {
@@ -107,20 +139,64 @@ func globMatch(pattern, s string) bool {
 		}
 		return false
 	}
-	// Anchor the first segment at the start.
-	if !strings.HasPrefix(s, parts[0]) {
+	// A trust pattern names a REPO or an ORG, so the source's subdir/ref
+	// continuation is stripped and the repo path is what gets matched.
+	return segmentMatch(pattern, sourceRepoPath(s))
+}
+
+// sourceRepoPath drops a source's `//subdir` and `@ref` continuation, leaving
+// the `host/org/repo` path a trust pattern names.
+func sourceRepoPath(s string) string {
+	if i := strings.Index(s, "//"); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.Index(s, "@"); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
+
+// segmentMatch matches a `*` pattern against a path, segment by segment, so a
+// `*` never crosses a `/`. A BARE `*` in the final pattern segment matches one
+// or more remaining path segments (the `org/*` form); every other `*` is
+// confined to its own segment.
+func segmentMatch(pattern, path string) bool {
+	pseg := strings.Split(pattern, "/")
+	sseg := strings.Split(path, "/")
+	for i, p := range pseg {
+		last := i == len(pseg)-1
+		if last && p == "*" {
+			// "any repo under here" — one or more segments, all of them
+			// below the literal prefix that precedes this `*`.
+			return len(sseg) > i
+		}
+		if i >= len(sseg) {
+			return false
+		}
+		if !segmentGlob(p, sseg[i]) {
+			return false
+		}
+	}
+	return len(pseg) == len(sseg)
+}
+
+// segmentGlob matches ONE path segment, where `*` is any run of characters
+// within that segment (never a `/`, since a segment contains none).
+func segmentGlob(pattern, seg string) bool {
+	parts := strings.Split(pattern, "*")
+	if len(parts) == 1 {
+		return pattern == seg
+	}
+	if !strings.HasPrefix(seg, parts[0]) {
 		return false
 	}
-	s = s[len(parts[0]):]
-	// Middle segments match in order.
-	for _, seg := range parts[1 : len(parts)-1] {
-		i := strings.Index(s, seg)
+	seg = seg[len(parts[0]):]
+	for _, mid := range parts[1 : len(parts)-1] {
+		i := strings.Index(seg, mid)
 		if i < 0 {
 			return false
 		}
-		s = s[i+len(seg):]
+		seg = seg[i+len(mid):]
 	}
-	// Anchor the last segment at the end (empty last => trailing `*` matches all).
-	last := parts[len(parts)-1]
-	return strings.HasSuffix(s, last)
+	return strings.HasSuffix(seg, parts[len(parts)-1])
 }
