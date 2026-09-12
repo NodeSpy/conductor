@@ -382,6 +382,15 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		}
 	}
 
+	// ---- Every workflow name the pack authored names a workflow it ships.
+	//
+	// Runs LAST, after every section (checks, workflows, triggers and their
+	// steps/hooks) has been through the rewriter, so rw.wfRefs is the complete
+	// set of workflow references this pack made. ----
+	if problems := rw.checkOwnedWorkflowRefs(man); len(problems) > 0 {
+		return fmt.Errorf("pack %q: %s", ns, strings.Join(problems, "; "))
+	}
+
 	// ---- Recurse into pack dependencies: every declared requires.packs dep
 	// (auto-pulled), plus any override the consumer supplied. ----
 	for _, alias := range depAliases(man.Pack.Requires.Packs, req.inst.Packs) {

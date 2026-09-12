@@ -1,6 +1,11 @@
 package config
 
-import "strings"
+import (
+	"fmt"
+	"slices"
+	"sort"
+	"strings"
+)
 
 // refRewriter namespaces a pack's internal names and rebinds its environment
 // references while instantiating it under an instance namespace.
@@ -15,6 +20,13 @@ import "strings"
 // resolves in the consumer namespace, not prefixed.
 type refRewriter struct {
 	ns string
+	// wfRefs collects every workflow name this rewriter namespaced, so the
+	// instantiator can prove each one names a workflow the pack actually
+	// ships. Recording HERE — at the single point that rewrites them — is
+	// what makes the check complete: a reference shape that is namespaced is
+	// checked, and one that is not namespaced is a bug this file's meta-test
+	// catches.
+	wfRefs []string
 	// fleets are the pack's OWN `models:` names, so a step's `model:` that
 	// refers to one can be namespaced with it. Anything else — an exact
 	// model id, a wildcard, a consumer fleet — is left alone.
@@ -70,11 +82,67 @@ func (rw *refRewriter) resolveStepRef(ref string) string {
 	return NamespaceStepRef(rw.ns, ref)
 }
 
+// resolveWorkflowRef namespaces a pack-authored WORKFLOW NAME to the pack's
+// own instance — the Terraform-module rule: a pack addresses only workflows it
+// ships.
+//
+// Prefixing happens even when the name is TEMPLATED (`{{.pick}}` becomes
+// `<ns>/{{.pick}}`), and that is the point: the confinement survives a name
+// chosen at runtime by an agent or an `if:`, because whatever the template
+// renders to lands under the pack's prefix and only the pack's own workflows
+// live there.
 func (rw *refRewriter) resolveWorkflowRef(ref string) string {
 	if ref == "" {
 		return ref
 	}
-	return rw.ns + "/" + ref
+	out := rw.ns + "/" + ref
+	rw.wfRefs = append(rw.wfRefs, out)
+	return out
+}
+
+// workflowNameOptions maps a VERB to the option keys whose value NAMES a
+// workflow, for the `uses:`-with-`options:` spelling of a workflow call.
+//
+// This table is the reason the meta-test exists. The step-call form
+// (`workflow: <name>`) was namespaced from the start; the verb form was not,
+// and the two are the same act written two ways:
+//
+//   - { workflow: review-flow }                        # namespaced
+//   - { uses: workflow.run, options: {name: review-flow} }   # WAS NOT
+//
+// `workflow` is a packOpenNamespace precisely BECAUSE a pack's workflow names
+// are namespaced to its instance (see packNamespaces) — so the open namespace
+// was resting on an invariant that the verb form broke. A pack could name the
+// consumer's `review-flow` and run it, connectors and all, with no
+// `requires.connectors` entry for anything inside it.
+//
+// Adding a workflow-naming verb without adding it here reopens that hole, so
+// TestEveryPackWorkflowRefShapeIsNamespaced enumerates the shapes and fails.
+var workflowNameOptions = map[string][]string{
+	// run: the name of the workflow to execute.
+	"workflow.run": {"name"},
+	// save: the name a promoted workflow is STORED under. Namespaced for the
+	// mirror-image reason — an un-namespaced save would let a pack plant a
+	// bare name in the shared saved-workflow registry for the consumer (or
+	// another pack) to later call. The pack can still call what it saved:
+	// its own workflow.run{name} is namespaced identically.
+	"workflow.save": {"name"},
+}
+
+// rewriteWorkflowRefOptions namespaces a workflow name carried in a verb's
+// options. Applied AFTER rebindVerb, so it keys on the verb that will actually
+// dispatch at runtime rather than the one the author typed.
+func (rw *refRewriter) rewriteWorkflowRefOptions(uses string, opts map[string]any) {
+	if opts == nil {
+		return
+	}
+	for _, key := range workflowNameOptions[uses] {
+		name, ok := opts[key].(string)
+		if !ok || name == "" {
+			continue
+		}
+		opts[key] = rw.resolveWorkflowRef(name)
+	}
 }
 
 func (rw *refRewriter) resolveCheckRef(ref string) string {
@@ -284,6 +352,9 @@ func (rw *refRewriter) rewriteGate(g *GateSpec) {
 
 func (rw *refRewriter) rewriteHook(h *Hook) {
 	h.Uses = rw.rebindVerb(h.Uses)
+	// A hook is a verb action unit, so it reaches workflow.run exactly as a
+	// step does — and is the easier place to overlook.
+	rw.rewriteWorkflowRefOptions(h.Uses, h.Options)
 	rw.rebindStore(h.Options)
 }
 
@@ -295,6 +366,7 @@ func (rw *refRewriter) rewriteStep(s *Step) {
 	rw.rebindStep(s)
 	s.Workflow = rw.resolveWorkflowRef(s.Workflow)
 	s.Uses = rw.rebindVerb(s.Uses)
+	rw.rewriteWorkflowRefOptions(s.Uses, s.Options)
 	if s.Handoff != "" {
 		if bound, ok := rw.env.handoff[s.Handoff]; ok {
 			s.Handoff = bound
@@ -339,4 +411,53 @@ func (rw *refRewriter) rebindStore(opts map[string]any) {
 			opts["store"] = bound
 		}
 	}
+}
+
+// checkOwnedWorkflowRefs proves every workflow name this rewriter namespaced
+// addresses a workflow the pack actually ships.
+//
+// Namespacing alone already makes a foreign reference UNRUNNABLE — `<ns>/x`
+// only ever resolves among the pack's own workflows. This turns that runtime
+// dead end into a LOAD error, so a pack that names the consumer's
+// `review-flow` fails at install the way an undeclared connector does, instead
+// of installing cleanly and dying the first time the step fires.
+//
+// A DECLARED DEPENDENCY counts as the pack's own: `requires.packs: {base: …}`
+// instantiates that pack at `<ns>/base`, so `base/fetch` namespaces to
+// `<ns>/base/fetch` and lands inside the dependency — the submodule call, and
+// one the consumer read in the manifest before installing. What stays closed
+// is the UNDECLARED reach: a bare name, or a sibling pack's namespace.
+//
+// A TEMPLATED name is skipped: it resolves at runtime, and the prefix already
+// confines whatever it renders to. The runtime unknown-name error covers it,
+// exactly as it does for a templated step-call name.
+func (rw *refRewriter) checkOwnedWorkflowRefs(man *PackManifest) []string {
+	owned := map[string]bool{}
+	for name := range man.Workflows {
+		owned[rw.workflowName(name)] = true
+	}
+	// Prefixes a declared dependency's workflows live under.
+	var depPrefixes []string
+	for alias := range man.Pack.Requires.Packs {
+		depPrefixes = append(depPrefixes, rw.ns+"/"+alias+"/")
+	}
+	seen, problems := map[string]bool{}, []string(nil)
+	for _, ref := range rw.wfRefs {
+		if owned[ref] || seen[ref] || strings.Contains(ref, "{{") {
+			continue
+		}
+		if slices.ContainsFunc(depPrefixes, func(p string) bool { return strings.HasPrefix(ref, p) }) {
+			continue
+		}
+		seen[ref] = true
+		problems = append(problems,
+			fmt.Sprintf("references workflow %q, which this pack does not ship (its workflows: %s; "+
+				"declared pack dependencies: %s) — a pack may call only its OWN workflows and those "+
+				"of a declared dependency, so a bare name resolves inside the pack, never against "+
+				"the consumer's config or another pack's",
+				strings.TrimPrefix(ref, rw.ns+"/"), sortedKeys(man.Workflows),
+				depNames(man.Pack.Requires.Packs)))
+	}
+	sort.Strings(problems)
+	return problems
 }
