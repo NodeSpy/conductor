@@ -1,5 +1,10 @@
 # Policy
 
+> **What these gates are and are not.** Against event authors and packs they
+> are a security boundary. Against an AGENT that shares the daemon's OS user
+> they are defense in depth, not containment — see
+> [[Trust-and-Isolation]].
+
 `policy:` is one block that can appear at three scopes — **global**, on a
 **connector**, and on a **trigger** — with the most specific setting winning
 per key: trigger → connector → global. Quieting a single workflow is just a
@@ -12,7 +17,7 @@ policy:                                   # global defaults
 
 connectors:
   gh:
-    type: github
+    use: github
     policy:
       ignore: { users: ["dependabot[bot]", your-login] }
       pause_label: "conductor:hold"
@@ -60,9 +65,12 @@ policy:
     limits: { max_steps: 50, max_fan_out: 20, max_sub_agents: 5, timeout: 30m, tokens: 200k }
     max_revisions: 3                          # supervise-loop cap → then needs_input
     no_secret_egress: true                    # secret-read + external-write in one plan needs approval
-    allow_secrets: [ house/deploy_key ]       # secrets an agent-authored step may REFERENCE (deny-by-default)
-    allow_stores:  [ cache ]                  # kv/sql stores it may touch (deny-by-default)
-    allow_targets: [ your-org/* ]             # repos beyond the triggering one (deny-by-default)
+    allow_scopes:                             # RESOURCE allowlists, by the dimension a connector declares
+      secret:  [ house/deploy_key ]           #   (deny-by-default; the dispatch's own is always in scope)
+      store:   [ cache ]
+      repo:    [ your-org/* ]
+      channel: [ "#code-reviews" ]
+    # allow_secrets / allow_stores / allow_targets  # legacy spellings of secret / store / repo — still work
     # trust: full                             # deliberate opt-out: lift allow/approve/host + the three allowlists (limits still bind)
 ```
 
@@ -75,8 +83,10 @@ policy:
 | `limits` | `max_steps` (declared, incl. branches/compensations/hooks — and CUMULATIVE executed units across nested plans), `max_fan_out` (parallel branches + runtime `for_each` size), `max_sub_agents` (declared + cumulative runtime units across nested plans), `timeout` (wall clock; a nested plan can't extend its parent's), `tokens` (approximate cumulative sub-agent budget, chars/4). Defaults 50/20/5/30m/200k. A sub-agent whose output is itself a plan shares the PARENT's budget — never a fresh one — and plan nesting is depth-capped (4). Exceed → halt + escalate, never spin |
 | `max_revisions` | supervision rounds before the plan compensates and escalates to a human (default 3). A revision is fully re-guarded; the classes the run's ORIGINAL approval granted stay usable, but new approval-gated work rejects mid-run |
 | `no_secret_egress` | default true, two layers. Static: a plan that reads secret material (a vault verb, `{{ vault … }}`, `.secrets`/`.vaults` refs — including the `{{index . "secrets" …}}` forms) AND either touches the outside world (any non-builtin verb, code, cli) or **writes durable shared state** (`kv.set/setnx/merge/append`, `memory.remember`, `sql.exec` — parking a secret where a later, individually-innocent plan could read it back out) is approval-gated. Runtime, for unapproved plans: an internal write (verb OR a code step's `ctx.store`/`ctx.sql`/`ctx.memory`) carrying a tracked secret is refused; an EXTERNAL verb whose rendered options carry one is refused (the read-and-relay path); and once any step's outputs carried tracked secret material the plan is tainted — every later outside-touching step refuses, even when the value was transformed in between |
-| `allow_secrets` / `allow_stores` / `allow_targets` | the RESOURCE allowlists (#124), applying to agent-authored workflows only (plans, live `run_step`, saved workflows — config-authored steps are untouched). **Deny by default**: an unset/empty list means an agent-authored step may not reference that resource kind at all. Entries are exact names or globs — secrets as vault entries (`house/deploy_key`, `house/*`) or legacy named secrets, stores by name, targets as `owner/repo` / `owner/*`; `"*"` grants all of one kind. **The triggering target is implicitly allowed** — `allow_targets` only constrains additional repos the agent picks. Enforced statically at plan admission (literal references, hooks/branches/compensations included) plus a runtime belt: a rendered verb option (`store:`/`repo:`) or a code step's `ctx.store`/`ctx.sql` name outside the lists is refused and audited (`barrier: resource_allowlist`) |
-| `trust: full` | lift allow/approve/host AND the three resource allowlists for this scope — a deliberate operator opt-in; limits and revision caps still bind, and the gate is audited as `trust` |
+| `allow_scopes` | the RESOURCE allowlists, keyed by the SCOPE DIMENSION a connector declares on a verb option (`repo`, `channel`, `store`, `secret`, `path`, and whatever the next connector invents). Applies to agent-authored workflows and skill grants only — config-authored `uses:` steps are untouched, since the operator wrote them with their own credential. **Deny by default**: an unset dimension means an agent-authored step may not name a resource in it at all. Entries are exact names or globs (`house/deploy_key`, `house/*`, `owner/*`, `#ops`); `"*"` grants a whole dimension. An entry may also be PARAMETERIZED two ways ([[Settings-and-Templating]]): `${settings.NAME}` is substituted at load from the top-level `settings:` block, and an entry containing `{{ }}` is rendered per dispatch against that event's trusted facts (`repo: ["{{.owner}}/docs"]`) — restricted funcs, no secrets, no agent input, and fail-closed (a template that errors or renders empty matches nothing). **Whatever the DISPATCH itself points at is implicitly allowed** — the repo it fired for, the channel its event came from, the connector's configured default option value — so the list only constrains the ADDITIONAL resources an agent picks. WHICH options are gated is the connector's own declaration (`Scope` on the option schema), never a name written into the enforcement path: one check walks the called verb's scoped options, so the plan surface and the skill surface can't disagree. Enforced statically at plan admission (literal references, hooks/branches/compensations included) plus a runtime belt: a rendered verb option outside the lists is refused and audited (`barrier: resource_allowlist`), as is a code step's `ctx.store`/`ctx.sql` name |
+| `allow_memory_scopes` | the same allowlist for SHARED MEMORY: which scopes an agent-facing memory op (`memory.*` verbs from a `skill.verbs` grant or an agent-authored `uses:` step, and `ctx.memory` in a code step) may read, write, or forget BEYOND the dispatch's own (`repo:<owner/repo>`, implicitly allowed). Deny-by-default, and an op that names NO scope is refused too — an unscoped recall would return every tenant's entries. `forget` is authorized against the STORED entry's scope, so ownership rides the same list. `"*"` grants all; `trust: full` lifts it. Config-authored steps are untouched. The reserved `global` bucket is never grantable here — it is refused unconditionally on write |
+| `allow_secrets` / `allow_stores` / `allow_targets` | LEGACY spellings of `allow_scopes.secret` / `.store` / `.repo`. Kept working; unioned with `allow_scopes` when both are present. New configs should use `allow_scopes`, which is the only form that reaches `channel`, `path`, and future dimensions |
+| `trust: full` | lift allow/approve/host AND every resource allowlist for this scope — for AGENT-AUTHORED PLANS. It does NOT lift a `skill.verbs` per-verb resource constraint or the skill surface's deny-by-default: that grant is the operator's own sentence about one agent, and plan latitude is not permission to ignore it (`allow_scopes` still widens the skill surface under `trust: full`) — a deliberate operator opt-in; limits and revision caps still bind, and the gate is audited as `trust` |
 
 Every plan's admission is audited — the gate (`allow`/`approve`/`trust`),
 the rejection reason, per-step outcomes, compensations, and the

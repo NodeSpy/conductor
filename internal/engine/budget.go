@@ -11,8 +11,15 @@ import (
 )
 
 // The spend-budget layer (#36 §14): hard $/token caps over rolling windows,
-// at three scopes — global (policy.budget), profile (agents.<name>.budget),
-// and workflow (a trigger-level policy.budget, resolved by the flow runner).
+// at three scopes — global (policy.budget), RUNTIME
+// (runtimes.<name>.budget), and workflow (a trigger-level policy.budget,
+// resolved by the flow runner).
+//
+// The middle scope was per-AGENT until `agents:` was removed
+// (docs/design/agents-removal.md §1). A budget caps EXECUTION COST on a
+// backend, and the runtime is the backend — so that is its natural anchor,
+// and spend is now attributed and reported per runtime. The mechanics below
+// (prospective reservation, shed-and-retry, settle) are unchanged.
 // Every scope with a cap must be under it for a dispatch to proceed; an
 // over-cap dispatch SHEDS exactly like the agents-per-hour budget: the
 // attempt is recorded (so backoff/sweep re-derives once the window frees),
@@ -22,7 +29,7 @@ import (
 
 // ErrBudget marks a dispatch shed by a spend cap.
 type ErrBudget struct {
-	Scope  string // "global" | "profile:<name>" | "workflow:<key>"
+	Scope  string // "global" | "runtime:<name>" | "workflow:<key>"
 	Reason string
 }
 
@@ -37,13 +44,13 @@ type budgetScope struct {
 }
 
 // budgetScopes resolves the (scope key, cap) pairs governing one dispatch.
-func (e *Engine) budgetScopes(agentName string, wf *config.BudgetPolicy, wfScope string) []budgetScope {
+func (e *Engine) budgetScopes(runtimeName string, wf *config.BudgetPolicy, wfScope string) []budgetScope {
 	var out []budgetScope
 	if e.cfg.Policy != nil && e.cfg.Policy.Budget != nil {
 		out = append(out, budgetScope{"global", e.cfg.Policy.Budget})
 	}
-	if p, ok := e.cfg.Agents[agentName]; ok && p.Budget != nil {
-		out = append(out, budgetScope{"profile:" + agentName, p.Budget})
+	if rt, ok := e.cfg.Runtimes[runtimeName]; ok && rt.Budget != nil {
+		out = append(out, budgetScope{"runtime:" + runtimeName, rt.Budget})
 	}
 	if wf != nil && wfScope != "" {
 		out = append(out, budgetScope{"workflow:" + wfScope, wf})
@@ -51,12 +58,27 @@ func (e *Engine) budgetScopes(agentName string, wf *config.BudgetPolicy, wfScope
 	return out
 }
 
+// runtimeOf is the `runtimes:` entry a step executes on — its own pin, else
+// the fleet default, else the built-in paseo. It is the budget anchor and
+// half the session-affinity partition.
+func (e *Engine) runtimeOf(step config.Step) string {
+	if step.Runtime != "" {
+		return step.Runtime
+	}
+	if e.cfg != nil {
+		if def := e.cfg.DefaultRuntimeName(); def != "" {
+			return def
+		}
+	}
+	return config.BuiltinPaseoRuntime
+}
+
 // chargeScopes is the scope set a dispatch's usage lands on (and a
 // reservation holds): global, the profile, and the workflow scope.
-func chargeScopes(agentName, wfScope string) []string {
+func chargeScopes(runtimeName, wfScope string) []string {
 	scopes := []string{"global"}
-	if agentName != "" {
-		scopes = append(scopes, "profile:"+agentName)
+	if runtimeName != "" {
+		scopes = append(scopes, "runtime:"+runtimeName)
 	}
 	if wfScope != "" {
 		scopes = append(scopes, "workflow:"+wfScope)
@@ -70,13 +92,13 @@ func chargeScopes(agentName, wfScope string) []string {
 // cap. The caller settles the reservation with the actual usage
 // (recordUsage) or cancels it when the dispatch never runs. spendMu makes
 // check+reserve one atomic step across goroutines.
-func (e *Engine) checkSpendBudget(agentName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, *ErrBudget) {
+func (e *Engine) checkSpendBudget(runtimeName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, *ErrBudget) {
 	if e.meter == nil {
 		return nil, nil
 	}
 	e.spendMu.Lock()
 	defer e.spendMu.Unlock()
-	for _, s := range e.budgetScopes(agentName, wf, wfScope) {
+	for _, s := range e.budgetScopes(runtimeName, wf, wfScope) {
 		tokens, usd := e.meter.SpentIn(s.key, s.b.WindowOrDefault())
 		// Prospective when an estimate is known: spent (charges + live
 		// reservations) plus THIS dispatch's estimate must fit under the cap,
@@ -91,7 +113,7 @@ func (e *Engine) checkSpendBudget(agentName string, wf *config.BudgetPolicy, wfS
 			return nil, &ErrBudget{Scope: s.key, Reason: fmt.Sprintf("%d of %d tokens in %s", tokens, max, s.b.WindowOrDefault())}
 		}
 	}
-	return e.meter.Reserve(chargeScopes(agentName, wfScope), est), nil
+	return e.meter.Reserve(chargeScopes(runtimeName, wfScope), est), nil
 }
 
 // shedForBudget records the shed (attempt + audit + notify) so the dispatch
@@ -110,10 +132,11 @@ func (e *Engine) shedForBudget(ctx context.Context, t core.Trigger, berr *ErrBud
 // (charging its budget scopes) and writes the agent_usage audit row — the
 // durable per-run cost record `conductor report` aggregates (per run /
 // workflow / repo / day). res nil degrades to a plain charge.
-func (e *Engine) recordUsage(t core.Trigger, agentName, stepID, runID, wfScope string, res *cost.Reservation, u cost.Usage) {
-	e.meter.Settle(res, chargeScopes(agentName, wfScope), u)
+func (e *Engine) recordUsage(t core.Trigger, identity, runtimeName, stepID, runID, wfScope string, res *cost.Reservation, u cost.Usage) {
+	e.meter.Settle(res, chargeScopes(runtimeName, wfScope), u)
 	e.store.Audit(map[string]any{"event": "agent_usage", "repo": t.Target.Repo,
-		"number": t.Target.Number, "kind": t.Kind, "agent": agentName, "step": stepID,
+		"number": t.Target.Number, "kind": t.Kind, "agent": identity,
+		"runtime": runtimeName, "step": stepID,
 		"run": runID, "workflow": wfScope, "model": u.Model,
 		"input_tokens": u.InputTokens, "output_tokens": u.OutputTokens,
 		"tokens": u.TotalTokens, "cost_usd": u.CostUSD, "approximate": u.Approximate})

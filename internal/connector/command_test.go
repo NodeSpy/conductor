@@ -10,7 +10,7 @@ import (
 )
 
 func TestCommandRunLocal(t *testing.T) {
-	reg := buildSinkRegistry(t, "connectors:\n  box: { type: command, env: { GREETING: hello } }\n")
+	reg := buildSinkRegistry(t, "connectors:\n  box: { use: command, env: { GREETING: hello } }\n")
 	in, _ := reg.Get("box")
 
 	// argv form
@@ -65,7 +65,7 @@ func TestCommandRunLocal(t *testing.T) {
 func TestCommandRunRemote(t *testing.T) {
 	cfgYAML := `
 connectors:
-  build-box: { type: command, host: build-box, cwd: /tmp, env: { CI: "1" } }
+  build-box: { use: command, host: build-box, cwd: /tmp, env: { CI: "1" } }
 hosts:
   build-box: { host: build01.internal, user: ci }
 `
@@ -119,12 +119,12 @@ hosts:
 }
 
 func TestCommandConnectionValidation(t *testing.T) {
-	reg := buildSinkRegistry(t, "connectors:\n  c: { type: command, host: nope }\n")
+	reg := buildSinkRegistry(t, "connectors:\n  c: { use: command, host: nope }\n")
 	in, _ := reg.Get("c")
 	if in.DisabledReason == "" || !strings.Contains(in.DisabledReason, `unknown host "nope"`) {
 		t.Fatalf("unknown host should disable: %q", in.DisabledReason)
 	}
-	reg = buildSinkRegistry(t, "connectors:\n  c: { type: command, host: a, ssh: { host: b } }\nhosts:\n  a: { host: x }\n")
+	reg = buildSinkRegistry(t, "connectors:\n  c: { use: command, host: a, ssh: { host: b } }\nhosts:\n  a: { host: x }\n")
 	in, _ = reg.Get("c")
 	if in.DisabledReason == "" || !strings.Contains(in.DisabledReason, "not both") {
 		t.Fatalf("host+ssh should disable: %q", in.DisabledReason)

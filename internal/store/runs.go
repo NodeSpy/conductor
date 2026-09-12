@@ -2,7 +2,6 @@ package store
 
 import (
 	"encoding/json"
-	"os"
 	"time"
 )
 
@@ -60,15 +59,8 @@ func (s *Store) PendingRuns() []WorkflowRun {
 
 // saveRuns persists the runs map (best-effort atomic via temp+rename).
 func (s *Store) saveRuns() error {
-	s.mu.Lock()
-	b, err := json.MarshalIndent(s.runs, "", "  ")
-	s.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	tmp := s.runsPath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.runsPath)
+	return s.persist(func() ([]byte, string, error) {
+		b, err := json.MarshalIndent(s.runs, "", "  ")
+		return b, s.runsPath, err
+	})
 }

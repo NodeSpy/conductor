@@ -61,12 +61,20 @@ func (c *Config) validateMemory() error {
 	return nil
 }
 
-// MemorySelector is an agent profile's `memory:` opt-in. `memory: true`
-// injects the defaults (global + the target repo + the agent's own scope,
-// newest first, capped); a map narrows it:
+// MemorySelector is a step's `memory:` opt-in. `memory: true` injects the
+// defaults — the shared (no-key) set plus the context keys the engine
+// supplies for the run: the repo string, the workflow name, and the step
+// identity. A map narrows it to specific scope keys:
 //
 //	memory: true
-//	memory: { scopes: [global, repo], tags: [ci], limit: 10 }
+//	memory: { scopes: ["", "acme/api"], tags: [ci], limit: 10 }
+//	memory: { scopes: ["${step}", "${workflow}"], tags: [ci] }
+//
+// SCOPE KEYS ARE OPAQUE (docs/design/agents-removal.md §2): the memory core
+// never interprets them, and there are no privileged `repo`/`agent` types.
+// The `${repo}` / `${workflow}` / `${step}` placeholders are a convenience
+// the ENGINE expands to the run's context keys before recall — they are
+// sugar for strings the operator could equally write out.
 //
 // Absent (nil) or false → no injection, no token cost.
 type MemorySelector struct {
@@ -96,22 +104,23 @@ func (s *MemorySelector) UnmarshalYAML(n *yaml.Node) error {
 	if body.Scope != "" {
 		scopes = append(scopes, body.Scope)
 	}
-	for _, sc := range scopes {
-		if !validMemoryScope(sc) {
-			return fmt.Errorf("memory: bad scope %q (global, repo, agent, repo:<owner/repo>, agent:<name>)", sc)
+	// Scope keys are opaque — there is deliberately nothing to validate. The
+	// one thing worth catching is a key that is only whitespace, which would
+	// silently read as the shared set instead of what the author meant.
+	for i, sc := range scopes {
+		if sc != "" && strings.TrimSpace(sc) == "" {
+			return fmt.Errorf("memory: scopes[%d] is blank — omit it for the shared set, or name a scope key", i)
 		}
 	}
 	*s = MemorySelector{Enabled: true, Scopes: scopes, Tags: body.Tags, Limit: body.Limit}
 	return nil
 }
 
-// validMemoryScope mirrors memory.ResolveScope's accepted forms (relative
-// forms resolve against the dispatch at runtime).
-func validMemoryScope(s string) bool {
-	switch s {
-	case "global", "repo", "agent":
-		return true
-	}
-	return (strings.HasPrefix(s, "repo:") && len(s) > len("repo:")) ||
-		(strings.HasPrefix(s, "agent:") && len(s) > len("agent:"))
-}
+// Memory scope placeholders the ENGINE expands to a run's context keys. They
+// are sugar: `${repo}` is the repo string, `${workflow}` the workflow name,
+// `${step}` the step identity. The memory core sees only the expansions.
+const (
+	MemoryScopeRepo     = "${repo}"
+	MemoryScopeWorkflow = "${workflow}"
+	MemoryScopeStep     = "${step}"
+)

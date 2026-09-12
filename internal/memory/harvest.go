@@ -44,9 +44,34 @@ func (m *Manager) HarvestOutput(output string, src Source) ([]Entry, error) {
 	// nothing): agent output is the least-trusted remember path, and without
 	// this a tracked secret in a ```remember block landed in durable shared
 	// memory verbatim — unlike the verb and code-binding paths.
+	// Secrets first, across ALL notes: a tracked secret anywhere in the block
+	// refuses the whole harvest, and that is the error worth showing.
 	for _, n := range notes {
 		if gerr := m.checkGuard(n.Text); gerr != nil {
 			return nil, gerr
+		}
+	}
+	for _, n := range notes {
+		// The output contract is agent-authored, so the shared scope is not
+		// the agent's to write into (CheckAgentScope, unconditional).
+		if serr := CheckAgentScope(n.Scope); serr != nil {
+			return nil, serr
+		}
+		// A note that NAMES a scope goes through the operator's allowlist
+		// too, exactly as the three other agent-facing faces do. This path
+		// had only the reserved-bucket half, so an agent's ```remember block
+		// could file under any scope it named — the allow_memory_scopes
+		// bypass the other faces closed one round at a time, surfaced here by
+		// the round-13 target-read sweep.
+		//
+		// An UNSCOPED note is left alone: it lands in the harvest's own
+		// default, names no tenant, and refusing it would break the output
+		// contract for every dispatch rather than close anything.
+		if strings.TrimSpace(n.Scope) == "" {
+			continue
+		}
+		if serr := m.CheckOp(NewAgentCaller(src.Repo, src.TargetTrusted), "remember", n.Scope); serr != nil {
+			return nil, serr
 		}
 	}
 	var out []Entry

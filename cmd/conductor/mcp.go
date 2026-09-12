@@ -32,7 +32,7 @@ func cmdMCP(args []string) error {
 // carries them.
 func cmdMCPMemory(args []string) error {
 	if len(args) < 1 || args[0] != "memory" {
-		return fmt.Errorf("usage: conductor mcp memory --socket <path> [--agent <name>] [--repo <owner/repo>] [--trigger <kind>] [--run <id>] [--number <n>] [--no-memory] (skill claim code via $CONDUCTOR_SKILL_CLAIM)")
+		return fmt.Errorf("usage: conductor mcp memory --socket <path> [--agent <name>] [--repo <owner/repo>] [--trigger <kind>] [--run <id>] [--number <n>] [--dispatch <id>] [--target-trusted] [--secrets] [--no-memory] (skill claim code via $CONDUCTOR_SKILL_CLAIM)")
 	}
 	var socket string
 	var mc memory.MCPConfig
@@ -49,7 +49,7 @@ func cmdMCPMemory(args []string) error {
 		case "--socket":
 			socket = next()
 		case "--agent":
-			mc.Source.Agent = next()
+			mc.Source.Step = next()
 		case "--repo":
 			mc.Source.Repo = next()
 		case "--trigger":
@@ -58,6 +58,18 @@ func cmdMCPMemory(args []string) error {
 			mc.Source.Run = next()
 		case "--number":
 			fmt.Sscanf(next(), "%d", &mc.Number)
+		case "--dispatch":
+			mc.Source.Dispatch = next()
+		case "--target-trusted":
+			// The dispatch's target was assigned by its source, not taken
+			// from data the event's sender supplied. Absent means untrusted,
+			// which is the safe default (core.Trigger.TargetTrusted).
+			mc.Source.TargetTrusted = true
+		case "--secrets":
+			// The profile's skill.secrets_via asked for the broker. Without
+			// it the secret tools are not advertised — every dispatch holds a
+			// credential now, and a credential is not an entitlement.
+			mc.Secrets = true
 		case "--no-memory":
 			mc.NoMemory = true
 		default:

@@ -21,13 +21,14 @@ import (
 // the PR identity (title + group), and polls agent-deck for liveness. Identity env
 // is applied to the exec'd process.
 type agentDeckController struct {
-	name string
-	bin  string   // agent-deck binary (default "agent-deck")
-	args []string // extra launch args from `command:` (after the bin)
-	prov Provisioner
-	run  deckRunner // injectable exec; nil → real subprocess
-	host string     // configured `host:`; "" = local (see resolveHost/prepareLaunch)
-	iso  *config.IsolationConfig
+	runner runnerMemo
+	name   string
+	bin    string   // agent-deck binary (default "agent-deck")
+	args   []string // extra launch args from `command:` (after the bin)
+	prov   Provisioner
+	run    deckRunner // injectable exec; nil → real subprocess
+	host   string     // configured `host:`; "" = local (see resolveHost/prepareLaunch)
+	iso    *config.IsolationConfig
 
 	pollInterval time.Duration
 }
@@ -84,7 +85,9 @@ func (c *agentDeckController) Initialize(context.Context) (Capabilities, error) 
 }
 
 func (c *agentDeckController) Runner() (Runner, error) {
-	return newControllerRunner(c, c.prov, nil), nil
+	// One runner per controller: its live-agent tracking is the state
+	// the engine's duplicate-dispatch gate reads (see runnerMemo).
+	return c.runner.get(func() Runner { return newControllerRunner(c, c.prov, nil) }), nil
 }
 
 // NewSession launches an agent-deck session in the worktree, tagged with the PR
@@ -100,16 +103,15 @@ func (c *agentDeckController) NewSession(ctx context.Context, spec Spec, _ Handl
 	}
 	title := deckTitle(spec.Request)
 	group := deckGroup(spec.Request)
-	host := resolveHost(c.host, spec.Request.Profile.Host)
+	host := resolveHost(c.host, spec.Request.Step.Host)
 	opt := launchOptsFor(c.iso, spec.Request)
 
 	args := append([]string{"launch"}, c.args...)
 	args = append(args, "--title", title, "--group", group, "--prompt", prompt)
-	if p := spec.Request.Profile; p.Provider != "" {
-		args = append(args, "--provider", p.Provider)
-	}
-	if p := spec.Request.Profile; p.Model != "" {
-		args = append(args, "--model", p.Model)
+	// The RESOLVED model (empty = bare launch: pass nothing and let the tool
+	// use its own default).
+	if m := spec.Request.Model; m != "" {
+		args = append(args, "--model", m)
 	}
 
 	out, err := c.exec(ctx, host, spec.Cwd, env, opt, args...)

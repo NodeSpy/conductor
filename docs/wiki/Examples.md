@@ -156,7 +156,7 @@ against the verb's own output schema, so read the source list — as above —
 rather than `{{.probe.count}}`; for_each over a code step has no schema and
 either read passes.)
 
-## One live agent per PR — session affinity ([[Agents]])
+## One live agent per PR — session affinity ([[Steps]])
 
 Every event on a PR — comments, review changes, failing checks — reaches the
 same live agent as a follow-up, so it keeps the whole conversation. `group:`
@@ -166,10 +166,10 @@ closes **or merges** (github reports both as the one internal close signal;
 it is eviction-only — you cannot trigger `on:` it):
 
 ```yaml
-agents:
-  pr-agent:
-    provider: claude
-    memory: true                             # inject repo memories on first spawn
+x-templates:
+  pr-agent: &pr-agent
+    type: agent
+    memory: true                             # inject the run's context memories
     session:
       key: "{{.repo}}#{{.pr}}"
       idle_ttl: 12h
@@ -230,16 +230,21 @@ guidance), and a planner/workers/critic team for issues labeled `epic`.
 checks:
   test: { type: command, command: ["make", "test"] }
 
-agents:
-  fixer:     { provider: claude, workspace: worktree, outcome_feedback: true,
-               budget: { window: 1h, max_cost_usd: 2 } }
-  architect: { provider: claude }
-  reviewer:  { provider: claude }
+x-templates:
+  fixer: &fixer { type: agent, workspace: worktree, outcome_feedback: true }
+
+# A team's roles are step REFERENCES, so the steps they name live in a
+# workflow — here one nothing calls directly.
+workflows:
+  roles:
+    steps:
+      - { id: architect, type: agent, model: claude-opus-5, prompt: "…" }
+      - { id: reviewer,  type: agent, prompt: "…" }
 
 triggers:
   - on: gh.failing_checks
     steps:
-      - { id: fix, type: agent, agent: fixer, prompt: "Fix the failing checks on {{.repo}}#{{.pr}}.",
+      - { <<: *fixer, id: fix, prompt: "Fix the failing checks on {{.repo}}#{{.pr}}.",
           gate: { run: [ test ], max_revisions: 2 } }
       - { id: ok, uses: slack-ops.ask,
           options: { to: dm, user: U0123ABCD, prompt: "Gate passed. Apply?\n{{.fix.diff}}" } }
@@ -251,7 +256,8 @@ triggers:
     steps:
       - id: feature
         prompt: "Implement the feature in {{.url}}."
-        team: { planner: architect, worker: fixer, critic: reviewer, max_workers: 4 }
+        team: { planner: roles/architect, worker: roles/architect,
+                critic: roles/reviewer, max_workers: 4 }
 ```
 
 Watch it live with `conductor watch`, inspect or retry afterwards with

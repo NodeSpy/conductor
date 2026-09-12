@@ -61,7 +61,7 @@ triggers:
     steps: [ { id: s, run: js, code: "return {}" } ]
 `)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   dep:
     source: ./src/dep
@@ -106,7 +106,7 @@ triggers:
 		dir := t.TempDir()
 		writePackSource(t, dir, "src", manifest)
 		body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   p:
     source: ./src
@@ -148,9 +148,14 @@ func TestLintPackManifestNegatives(t *testing.T) {
 			Pack:    PackMeta{Name: "p", Version: "1", Requires: PackRequires{Conductor: ">=0.1"}},
 			Exports: PackExports{Workflows: []string{"ghost"}},
 		}, "exports.workflows"},
-		{"role without agent", PackManifest{
-			Pack: PackMeta{Name: "p", Version: "1", Requires: PackRequires{Conductor: ">=0.1", Roles: map[string]RoleReq{"r": {}}}},
-		}, "requires.roles"},
+		// requires.roles is gone (§E); requires.connectors took over the
+		// "what must a binding be able to do" job by bounding the grant.
+		{"grant outside requires.connectors", PackManifest{
+			Pack: PackMeta{Name: "p", Version: "1", Requires: PackRequires{Conductor: ">=0.1", Connectors: ConnectorReqs{"github": {Version: AnyVersion, Required: true}}}},
+			Workflows: map[string]WorkflowDef{"f": {Steps: []Step{
+				{ID: "a", Type: "agent", Skill: &SkillPolicy{Verbs: []string{"pagerduty.trigger"}}},
+			}}},
+		}, "requires.connectors"},
 	}
 	for _, c := range cases {
 		problems := LintPackManifest(&c.man)
@@ -174,10 +179,8 @@ workflows:
     steps:
       - id: s
         type: agent
-        agent: a
+        workspace: local
         prompt: "uses ${settings.nope}"
-agents:
-  a: { workspace: local }
 `)
 	problems, err := LintPackDir(filepath.Join(dir, "p"))
 	if err != nil {
@@ -192,11 +195,11 @@ agents:
 // semantics: a pack override REPLACES a bundled list (it does not append), so a
 // consumer can NARROW a bundled agent's skill.verbs — not only widen it.
 func TestApplyAgentOverrideReplacesLists(t *testing.T) {
-	base := AgentProfile{
+	base := Step{
 		Workspace: "worktree",
 		Skill:     &SkillPolicy{Verbs: []string{"gh.comment", "gh.submit_review"}},
 	}
-	out, err := applyAgentOverride(base, map[string]any{
+	out, err := applyStepOverride(base, map[string]any{
 		"skill": map[string]any{"verbs": []any{"gh.comment"}},
 	})
 	if err != nil {
@@ -210,6 +213,153 @@ func TestApplyAgentOverrideReplacesLists(t *testing.T) {
 	// non-overridden scalar fields survive the deep-merge.
 	if out.Workspace != "worktree" {
 		t.Fatalf("non-overridden field should survive, got workspace=%q", out.Workspace)
+	}
+}
+
+// …and the MAP form narrows identically (round-4 F2). It did not: once
+// skill.verbs grew a map form, the override path's deep-merge copied every
+// base key the override omitted, so a consumer narrowing a bundled grant kept
+// the verbs it had just dropped — failing OPEN, in the newer spelling only.
+//
+// The rule is per FORM-INDEPENDENT: the set of verbs the override names is the
+// final set. Whatever a permission key looks like, omitting an entry removes
+// it.
+func TestApplyAgentOverrideNarrowsTheMapForm(t *testing.T) {
+	base := Step{
+		Workspace: "worktree",
+		Skill: &SkillPolicy{
+			Verbs: []string{"gh.comment", "gh.submit_review"},
+			VerbScopes: map[string]map[string][]string{
+				"gh.comment":       {"repo": {"acme/app", "acme/docs"}},
+				"gh.submit_review": {},
+			},
+		},
+	}
+	out, err := applyStepOverride(base, map[string]any{
+		"skill": map[string]any{"verbs": map[string]any{
+			"gh.comment": map[string]any{"repo": []any{"acme/docs"}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Skill.Verbs) != 1 || out.Skill.Verbs[0] != "gh.comment" {
+		t.Fatalf("the override named ONE verb, so the step must grant exactly that one; got %v "+
+			"— a consumer cannot narrow a bundled grant and the pack keeps a permission it was denied",
+			out.Skill.Verbs)
+	}
+	// The kept verb's own constraints are the override's, narrowed too.
+	if got := out.Skill.VerbScopes["gh.comment"]["repo"]; len(got) != 1 || got[0] != "acme/docs" {
+		t.Fatalf("the kept verb's per-option list must be the override's, got %v", got)
+	}
+	if _, dropped := out.Skill.VerbScopes["gh.submit_review"]; dropped {
+		t.Fatalf("a dropped verb must not keep constraints behind: %v", out.Skill.VerbScopes)
+	}
+	if out.Workspace != "worktree" {
+		t.Fatalf("non-overridden field should survive, got workspace=%q", out.Workspace)
+	}
+}
+
+// …and at every DEPTH (round-5 #2). isPermissionSet matched the full path
+// exactly, so it recognized `skill.verbs` on a top-level step and nowhere
+// else: a `compensate.skill.verbs` (three segments) or a parallel branch's
+// (deeper still) fell through to the generic deep-merge, and the consumer
+// could not narrow a grant it inherited. Failing open, in the nesting a
+// reviewer is least likely to check.
+func TestApplyAgentOverrideNarrowsNestedGrants(t *testing.T) {
+	twoVerbs := func() *SkillPolicy {
+		return &SkillPolicy{
+			Verbs: []string{"gh.comment", "gh.merge"},
+			VerbScopes: map[string]map[string][]string{
+				"gh.comment": {"repo": {"acme/app"}}, "gh.merge": {"repo": {"acme/app"}},
+			},
+		}
+	}
+	narrowTo := map[string]any{"skill": map[string]any{"verbs": map[string]any{
+		"gh.comment": map[string]any{"repo": []any{"acme/app"}},
+	}}}
+
+	t.Run("compensate", func(t *testing.T) {
+		base := Step{Skill: twoVerbs(), Compensate: &Step{ID: "undo", Skill: twoVerbs()}}
+		out, err := applyStepOverride(base, map[string]any{
+			"skill":      narrowTo["skill"],
+			"compensate": narrowTo,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := out.Skill.Verbs; len(got) != 1 {
+			t.Fatalf("the top-level grant did not narrow: %v", got)
+		}
+		if out.Compensate == nil || out.Compensate.Skill == nil {
+			t.Fatal("the compensation step lost its skill block")
+		}
+		if got := out.Compensate.Skill.Verbs; len(got) != 1 || got[0] != "gh.comment" {
+			t.Fatalf("a compensation step's grant must narrow like any other; gh.merge survived: %v", got)
+		}
+	})
+
+	// A parallel branch reaches its steps through a LIST, and lists are
+	// replaced wholesale — so this nesting was already safe. It is here as a
+	// regression guard, and to record WHICH nestings the bug could reach: the
+	// map-valued ones (compensate, and anything else that hangs a step off a
+	// key rather than an index).
+	t.Run("parallel branch", func(t *testing.T) {
+		base := Step{Parallel: &ParallelSpec{Branches: [][]Step{{{ID: "b0", Skill: twoVerbs()}}}}}
+		// `parallel:` marshals as a list of branches, each a list of steps.
+		out, err := applyStepOverride(base, map[string]any{
+			"parallel": []any{
+				[]any{map[string]any{"id": "b0", "skill": narrowTo["skill"]}},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Parallel == nil || len(out.Parallel.Branches) != 1 || len(out.Parallel.Branches[0]) != 1 {
+			t.Fatalf("branch structure lost: %+v", out.Parallel)
+		}
+		sk := out.Parallel.Branches[0][0].Skill
+		if sk == nil {
+			t.Fatal("the branch step lost its skill block")
+		}
+		if got := sk.Verbs; len(got) != 1 || got[0] != "gh.comment" {
+			t.Fatalf("a parallel branch's grant must narrow like any other; gh.merge survived: %v", got)
+		}
+	})
+}
+
+// Narrowing must hold across the FORM BOUNDARY too — a map-form bundle
+// overridden by a list, and a list-form bundle overridden by a map. A
+// permission rule that depends on which spelling each side happened to use is
+// the same bug wearing different clothes.
+func TestApplyAgentOverrideNarrowsAcrossForms(t *testing.T) {
+	mapBase := &SkillPolicy{
+		Verbs: []string{"gh.comment", "gh.merge"},
+		VerbScopes: map[string]map[string][]string{
+			"gh.comment": {"repo": {"acme/app"}}, "gh.merge": {"repo": {"acme/app"}},
+		},
+	}
+	listBase := &SkillPolicy{Verbs: []string{"gh.comment", "gh.merge"}}
+
+	for _, tc := range []struct {
+		name     string
+		base     *SkillPolicy
+		override any
+	}{
+		{"map bundle, list override", mapBase, []any{"gh.comment"}},
+		{"list bundle, map override", listBase, map[string]any{"gh.comment": map[string]any{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sk := *tc.base
+			out, err := applyStepOverride(Step{Skill: &sk},
+				map[string]any{"skill": map[string]any{"verbs": tc.override}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(out.Skill.Verbs) != 1 || out.Skill.Verbs[0] != "gh.comment" {
+				t.Fatalf("gh.merge survived a narrowing override: %v", out.Skill.Verbs)
+			}
+		})
 	}
 }
 
@@ -245,7 +395,7 @@ workflows:
         code: "return { s: '{{ vault \"house\" \"k\" }}' }"
 `)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 vaults: { house: { type: file, dir: /tmp/pc-reflint } }
 stores: { redis1: { type: boltdb, path: /tmp/pc-reflint.db } }
 packs:

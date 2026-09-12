@@ -82,6 +82,21 @@ type Identity struct {
 	// Policy is the profile's skill: block at dispatch time. The zero value
 	// denies everything (secrets_via defaults to none).
 	Policy config.SkillPolicy
+	// TargetTrusted carries the originating dispatch's target provenance (see
+	// core.Trigger.TargetTrusted). False — the zero value — means the scope
+	// layer withholds own-target trust from this grant.
+	TargetTrusted bool
+	// Dispatch is the daemon-assigned id of this dispatch (see
+	// dispatch.Request.DispatchID): the anchor a live tool's reconstructed
+	// trigger is confined to when the target itself cannot be trusted.
+	Dispatch string
+	// Context is the originating trigger's context, held daemon-side for the
+	// session's lifetime. It exists for RESOURCE SCOPING: a connector's
+	// ContextScope hook reads it to decide which channel (repo, …) this
+	// dispatch may address with no explicit grant. It is never handed to the
+	// agent and never leaves the daemon — the agent's own context comes from
+	// the prompt, not from here.
+	Context map[string]any
 }
 
 type session struct {

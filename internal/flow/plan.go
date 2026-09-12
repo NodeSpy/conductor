@@ -142,11 +142,12 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 			// diverts the review draft to an agent-nominated channel. guardPlan
 			// rejects both too — this validator refuses them independently so no
 			// plan path admits one (matching the gate: posture).
-			if step.Background {
-				return fmt.Errorf("%s: agent-authored steps may not set background:", w)
-			}
-			if step.Handoff != "" {
-				return fmt.Errorf("%s: agent-authored steps may not set handoff:", w)
+			// Same single list guardPlan uses (agentauthored_fields.go).
+			// This validator refuses independently so no plan path admits a
+			// step carrying an operator-owned field — including skill:, the
+			// capability grant an agent must never write for itself.
+			if err := checkAgentAuthoredFields(w, &step); err != nil {
+				return err
 			}
 			switch step.Form() {
 			case "verb":
@@ -180,10 +181,11 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 					}
 				}
 			case "agent":
-				if step.Agent != "" {
-					if _, ok := cfg.Agents[step.Agent]; !ok {
-						return fmt.Errorf("%s: unknown agent %q", w, step.Agent)
-					}
+				// `agent:` is a free-form attribution label now, not a
+				// profile reference — nothing to resolve. What a dispatchable
+				// agent step still needs is a prompt.
+				if strings.TrimSpace(step.Prompt) == "" && step.Team == nil {
+					return fmt.Errorf("%s: agent step has no prompt", w)
 				}
 			case "code":
 				if strings.TrimSpace(step.Run) == "" {
@@ -206,12 +208,12 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 				for _, ro := range roles {
 					if ro.name == "" {
 						if ro.role == "planner" || ro.role == "worker" {
-							return fmt.Errorf("%s: team needs `%s:` (an agents: profile)", w, ro.role)
+							return fmt.Errorf("%s: team needs `%s:` — a step reference, `<workflow>/<step-id>` or `<workflow>[<n>]`", w, ro.role)
 						}
 						continue
 					}
-					if _, ok := cfg.Agents[ro.name]; !ok {
-						return fmt.Errorf("%s: team.%s names unknown agent %q", w, ro.role, ro.name)
+					if _, err := cfg.FindStepRef(ro.name); err != nil {
+						return fmt.Errorf("%s: team.%s: %w", w, ro.role, err)
 					}
 				}
 			case "parallel":
@@ -334,7 +336,7 @@ func (r *Runner) runPlan(ctx context.Context, t core.Trigger, agentName, runID, 
 	}
 	// The resource allowlists (#124): deny-by-default gates on which
 	// secrets/stores/targets an agent-authored plan may reference.
-	if rerr := guardPlanResources(pol, t, plan); rerr != nil {
+	if rerr := r.guardPlanResources(pol, t, plan); rerr != nil {
 		r.auditPlan(t, agentName, "rejected", res, rerr)
 		return nil, rerr
 	}
@@ -473,11 +475,17 @@ func (r *Runner) containsTrackedSecret(v map[string]any) bool {
 // full) vets every kv/sql touch against policy.agent_authored.allow_stores —
 // the runtime belt behind the static plan scan, catching `ctx.store(name)`
 // with a name no scan could see. nil for config-authored steps.
-func (r *Runner) planDataGuard(ctx context.Context) code.DataGuard {
+func (r *Runner) planDataGuard(ctx context.Context, t core.Trigger) code.DataGuard {
 	barrier := planBarrier(ctx)
 	var rp *resourcePolicy
 	if agentAuthored(ctx) {
-		rp = planResourcePolicy(r.planPolicy(), core.Trigger{})
+		// The REAL dispatch, not core.Trigger{} (round-6 C). With an empty
+		// trigger rp.trigger was "", so the dispatch's own repo scope was not
+		// implicitly allowed and a code step touching its OWN memory scope or
+		// its OWN target was refused unless the operator had listed it — the
+		// exact opposite of the rule every other surface applies, and a
+		// deny that reads like a bug to whoever hits it.
+		rp = planResourcePolicy(r.planPolicy(), t)
 	}
 	if !barrier && rp == nil {
 		return nil
@@ -485,6 +493,18 @@ func (r *Runner) planDataGuard(ctx context.Context) code.DataGuard {
 	return func(kind, op, resource string, args []any) error {
 		if rp != nil && (kind == "kv" || kind == "sql") && !rp.storeOK(resource) {
 			return fmt.Errorf("agent_authored allowlist: code step touches store %q — not in policy.agent_authored.allow_stores (trust: full lifts this)", resource)
+		}
+		// Memory is a shared resource like a store, and gets the same
+		// deny-by-default treatment: an agent-authored step reads, writes
+		// and forgets in its own scope plus whatever allow_memory_scopes
+		// grants. `resource` is the scope the op touches — for forget, the
+		// stored entry's own scope, so ownership rides the same check.
+		if rp != nil && kind == "memory" && !rp.memoryScopeOK(resource) {
+			named := resource
+			if named == "" {
+				named = "(none named)"
+			}
+			return fmt.Errorf("agent_authored allowlist: code step %ss memory scope %s — not in policy.agent_authored.allow_memory_scopes, and not this run's own scope (trust: full lifts this)", op, named)
 		}
 		if barrier && dataValueWrite(kind, op) && r.containsTrackedSecret(map[string]any{"args": args}) {
 			return fmt.Errorf("no_secret_egress: refusing to write secret material into %s.%s from an agent plan code step — approval required", kind, op)
@@ -515,7 +535,7 @@ func dataValueWrite(kind, op string) bool {
 func (r *Runner) runPlanState(ctx context.Context, t core.Trigger, pol *config.AgentAuthoredPolicy, st *planState, res guardResult, runID, stepID string, shadow bool) (map[string]any, error) {
 	// Plan steps are agent-authored whatever the trust level: {{secret}}
 	// boundary handles never resolve inside them (see handles.go).
-	ctx = markAgentAuthored(ctx)
+	ctx = markAgentAuthored(ctx, t)
 	// The write barrier: an unapproved plan may not persist secret material
 	// into shared state (kv/sql/memory). Approved plans cleared the hand-off.
 	ctx = context.WithValue(ctx, planBarrierKey{},
@@ -615,7 +635,7 @@ func (r *Runner) guardSavedWorkflow(ctx context.Context, t core.Trigger, name st
 	if err != nil {
 		return nil, fmt.Errorf("saved workflow %q: %w", name, err)
 	}
-	agent := saved.Source.Agent
+	agent := saved.Source.Step
 	if agent == "" {
 		agent = "saved"
 	}
@@ -626,7 +646,7 @@ func (r *Runner) guardSavedWorkflow(ctx context.Context, t core.Trigger, name st
 	}
 	// A saved workflow is agent-authored: the resource allowlists (#124)
 	// apply on every run, under the CURRENT policy.
-	if rerr := guardPlanResources(pol, t, steps); rerr != nil {
+	if rerr := r.guardPlanResources(pol, t, steps); rerr != nil {
 		r.auditPlan(t, agent, "rejected", res, fmt.Errorf("saved workflow %q: %w", name, rerr))
 		return nil, fmt.Errorf("saved workflow %q: %w", name, rerr)
 	}
@@ -666,8 +686,18 @@ func (r *Runner) RunLiveStep(ctx context.Context, src memory.Source, number int,
 	t := core.Trigger{
 		Source: "live", Instance: "live", Kind: src.Trigger,
 		Target: core.Target{Repo: src.Repo, Number: number, PR: number},
+		// Carried from the launching dispatch, not assumed (round-8 #2). A
+		// run_step under a dispatch whose target the sender chose must not
+		// regain own-repo or own-memory-scope trust by being rebuilt here.
+		TargetTrusted: src.TargetTrusted,
+		// …and the daemon's id for that dispatch, which is what confines this
+		// reconstructed trigger's agent-authored steps when the target
+		// cannot (round-11 #2). Source/Instance are the literals "live", and
+		// an untrusted target contributes nothing, so without this every
+		// run_step in the daemon shared one namespace.
+		DispatchID: src.Dispatch,
 	}
-	agent := src.Agent
+	agent := src.Step
 	if agent == "" {
 		agent = "live"
 	}
@@ -781,7 +811,7 @@ func (r *Runner) executePlan(ctx context.Context, t core.Trigger, pol *config.Ag
 		// Plan-step hooks fire like any workflow step's (they were guarded
 		// with the plan — see guardPlan's hook walk).
 		r.runHooks(ctx, t, step.Hooks, "start", st.scope, "plan step "+id)
-		outputs, err := r.execStepWithFlow(ctx, t, step, "plan:"+id, st.scope, shadow)
+		outputs, err := r.execStepWithFlow(ctx, t, step, "plan:"+id, "plan:"+id, st.scope, shadow)
 		if err != nil {
 			errStr := r.redactErr(err)
 			fdata := cloneData(st.scope)
@@ -900,7 +930,7 @@ func (r *Runner) compensatePlan(ctx context.Context, t core.Trigger, st *planSta
 		}
 		comp := *c.step.Compensate
 		id := c.id + ".compensate"
-		_, err := r.execStepWithFlow(ctx, t, comp, "plan:"+id, st.scope, shadow)
+		_, err := r.execStepWithFlow(ctx, t, comp, "plan:"+id, "plan:"+id, st.scope, shadow)
 		outcome := "ok"
 		var errStr string
 		if err != nil {

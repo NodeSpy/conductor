@@ -198,20 +198,62 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 	if m == nil && (req.Op == "remember" || req.Op == "recall") {
 		return IPCResponse{Error: "memory: not configured"}
 	}
-	// Provenance binding for the token-carrying faces (CLI / remote HTTP): the
-	// ops below trust the dispatched identity the broker holds for the token,
-	// never a Source in the request body. When a token is present and the
-	// broker can identify it, its provenance is authoritative; when the broker
-	// rejects the token, the op is denied rather than falling back to a
-	// spoofable body Source. A request with no token (the MCP tool subprocess,
-	// which bakes Source into its flags) keeps the body Source unchanged.
-	if req.Token != "" && (req.Op == "remember" || req.Op == "recall" || req.Op == "run_step") {
-		if ops := getLiveOps(); ops.Identify != nil {
+	// PROVENANCE IS RESOLVED DAEMON-SIDE, ALWAYS (round-12 #1).
+	//
+	// The socket is 0600 — same-uid — and a dispatched agent runs as the
+	// daemon's user by default (mandatorily, for paseo). So anything that
+	// arrives in the REQUEST BODY is agent-supplied: a Source on the wire
+	// said "I am this dispatch, my target is trusted, my repo is that one",
+	// and the daemon believed it. That self-granted own-repo memory scope for
+	// any repo and steered run_step's namespace onto another dispatch's
+	// session — defeating core.OwnRepo and the DispatchID anchor from the
+	// inside.
+	//
+	// It was only ever half-resolved: a token bound the Source to the
+	// broker's identity, but the binding ran only when a token was PRESENT
+	// and the resolver was wired, and the resolver was wired only when a
+	// profile enabled skill:. A memory-only daemon resolved nothing.
+	//
+	// Now: the ops that carry provenance take it from the credential or they
+	// do not run. A request may not supply its own.
+	//
+	// (See docs/wiki/Trust-and-Isolation.md for what this does and does not
+	// buy: it is a real boundary against an isolated runtime and a raised
+	// bar elsewhere, NOT a wall against a same-uid agent that can read the
+	// daemon's files and other dispatches' environments directly.)
+	if needsProvenance(req.Op) {
+		ops := getLiveOps()
+		if ops.Identify == nil {
+			// No resolver on this daemon: a request that asserts provenance
+			// cannot be checked, so it is refused rather than trusted.
+			if req.Source != (Source{}) || req.Number != 0 {
+				return IPCResponse{Error: "memory: this daemon cannot authenticate tool requests — refusing one that asserts its own provenance"}
+			}
+		} else {
 			src, number, ok := ops.Identify(req.Token, peer)
 			if !ok {
-				return IPCResponse{Error: "memory: unknown or unauthorized session token"}
+				return IPCResponse{Error: "memory: unknown or unauthorized session token (a tool request's provenance comes from its per-dispatch credential, never from the request)"}
 			}
 			req.Source, req.Number = src, number
+		}
+	}
+	// EVERY memory op on this face goes through the shared gate first. This
+	// face is the MCP/CLI memory tool an agent drives directly — the third
+	// agent-facing face, alongside the run:code binding and the memory.*
+	// verbs — and it reached the store with only the reserved-bucket check on
+	// `remember`, so `allow_memory_scopes` and the own-scope rule did not
+	// apply to it at all. The identity here is the token-derived dispatch
+	// (resolved just above, never the request body), which is exactly the
+	// Caller the allowlist authorizes against.
+	if op := memoryOpOf(req.Op); op != "" {
+		// NewAgentCaller applies the own-repo rule (core.OwnRepo): a dispatch
+		// whose target the event's SENDER chose — a webhook `repo:` templated
+		// from the POST body — contributes no implicit own-scope here, the
+		// same as on the verb and code faces. This face used the raw repo.
+		if err := m.CheckOp(NewAgentCaller(req.Source.Repo, req.Source.TargetTrusted), op, req.Scope); err != nil {
+			aud(map[string]any{"event": "memory_" + op, "via": "tool", "outcome": "blocked",
+				"agent": req.Source.Step, "repo": req.Source.Repo, "error": err.Error()})
+			return IPCResponse{Error: err.Error()}
 		}
 	}
 	switch req.Op {
@@ -220,34 +262,37 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 		// by live agents and must not persist tracked secret material.
 		if gerr := m.checkGuard(req.Text); gerr != nil {
 			aud(map[string]any{"event": "memory_remember", "via": "tool", "outcome": "blocked",
-				"agent": req.Source.Agent, "repo": req.Source.Repo, "error": gerr.Error()})
+				"agent": req.Source.Step, "repo": req.Source.Repo, "error": gerr.Error()})
 			return IPCResponse{Error: gerr.Error()}
+		}
+		// This face is driven by a live agent, so the shared scope is not
+		// its to write into (see CheckAgentScope).
+		if serr := CheckAgentScope(req.Scope); serr != nil {
+			aud(map[string]any{"event": "memory_remember", "via": "tool", "outcome": "blocked",
+				"agent": req.Source.Step, "repo": req.Source.Repo, "error": serr.Error()})
+			return IPCResponse{Error: serr.Error()}
 		}
 		e, err := m.Remember(req.Text, req.Tags, req.Scope, req.Source)
 		if err != nil {
 			aud(map[string]any{"event": "memory_remember", "via": "tool", "outcome": "failed",
-				"agent": req.Source.Agent, "repo": req.Source.Repo, "error": err.Error()})
+				"agent": req.Source.Step, "repo": req.Source.Repo, "error": err.Error()})
 			return IPCResponse{Error: err.Error()}
 		}
-		log("memory: agent %q remembered %s (scope %s)", req.Source.Agent, e.ID, e.Scope)
+		log("memory: step %q remembered %s (scope %s)", req.Source.Step, e.ID, e.Scope)
 		aud(map[string]any{"event": "memory_remember", "via": "tool", "outcome": "ok",
-			"agent": req.Source.Agent, "repo": req.Source.Repo, "id": e.ID, "scope": e.Scope})
+			"agent": req.Source.Step, "repo": req.Source.Repo, "id": e.ID, "scope": e.Scope})
 		return IPCResponse{OK: true, Entry: &e}
 	case "recall":
 		q := Query{Tags: req.Tags, Substring: req.Substring, Limit: req.Limit}
 		if req.Scope != "" {
-			resolved, err := ResolveScope(req.Scope, req.Source)
-			if err != nil {
-				return IPCResponse{Error: err.Error()}
-			}
-			q.Scopes = []string{resolved}
+			q.Scopes = []string{NormalizeScope(req.Scope)}
 		}
 		entries, err := m.Recall(q)
 		if err != nil {
 			return IPCResponse{Error: err.Error()}
 		}
 		aud(map[string]any{"event": "memory_recall", "via": "tool",
-			"agent": req.Source.Agent, "repo": req.Source.Repo, "count": len(entries)})
+			"agent": req.Source.Step, "repo": req.Source.Repo, "count": len(entries)})
 		// Recalled text goes straight into the calling agent's context:
 		// redact like the prompt-injection path.
 		for i := range entries {
@@ -265,11 +310,11 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 		out, err := ops.RunStep(context.Background(), req.Source, req.Number, req.Step)
 		if err != nil {
 			aud(map[string]any{"event": "plan_live_step", "via": "tool", "outcome": "failed",
-				"agent": req.Source.Agent, "repo": req.Source.Repo, "error": err.Error()})
+				"agent": req.Source.Step, "repo": req.Source.Repo, "error": err.Error()})
 			return IPCResponse{Error: err.Error()}
 		}
 		aud(map[string]any{"event": "plan_live_step", "via": "tool", "outcome": "ok",
-			"agent": req.Source.Agent, "repo": req.Source.Repo})
+			"agent": req.Source.Step, "repo": req.Source.Repo})
 		return IPCResponse{OK: true, Result: out}
 	case "workflow_list":
 		ops := getLiveOps()
@@ -361,4 +406,32 @@ func IPCCall(socket string, req IPCRequest) (IPCResponse, error) {
 		return IPCResponse{}, fmt.Errorf("memory: read tool response: %w", err)
 	}
 	return resp, nil
+}
+
+// memoryOpOf maps an IPC op name to the memory op the scope gate knows, or ""
+// for the non-memory ops this socket also serves (run_step, secret_issue, …),
+// which have their own authorization.
+//
+// It is a function rather than an inline switch so that adding a memory op to
+// the IPC face without adding it here is visible: TestEveryAgentFacingMemoryOp
+// IsGuarded enumerates the store-touching handlers and fails on one that
+// reaches the store ungated.
+func memoryOpOf(ipcOp string) string {
+	switch ipcOp {
+	case "remember", "recall", "list", "forget":
+		return ipcOp
+	}
+	return ""
+}
+
+// needsProvenance reports whether an op acts ON BEHALF OF a dispatch and so
+// must have its Source resolved from the caller's credential. The broker ops
+// (token_claim, secret_issue/redeem) authenticate by token themselves, and
+// the catalog ops act on behalf of nobody.
+func needsProvenance(op string) bool {
+	switch op {
+	case "remember", "recall", "list", "forget", "run_step":
+		return true
+	}
+	return false
 }

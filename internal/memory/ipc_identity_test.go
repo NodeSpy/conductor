@@ -15,7 +15,7 @@ func TestHandleIPCTokenBindsSource(t *testing.T) {
 	SetLiveOps(LiveOps{
 		Identify: func(token string, _ Peer) (Source, int, bool) {
 			if token == "good" {
-				return Source{Agent: "fixer", Repo: "o/r", Trigger: "review"}, 7, true
+				return Source{Step: "fixer", Repo: "o/r", Trigger: "review"}, 7, true
 			}
 			return Source{}, 0, false
 		},
@@ -29,7 +29,7 @@ func TestHandleIPCTokenBindsSource(t *testing.T) {
 	// attributed to "fixer".
 	resp := handleIPC(m, IPCRequest{
 		Op: "remember", Token: "good", Text: "note",
-		Source: Source{Agent: "evil", Repo: "evil/repo"},
+		Source: Source{Step: "evil", Repo: "evil/repo"},
 	}, Peer{}, audit, nil)
 	if !resp.OK {
 		t.Fatalf("remember: %+v", resp)

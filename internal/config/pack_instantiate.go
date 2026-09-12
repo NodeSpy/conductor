@@ -50,6 +50,11 @@ func (c *Config) instantiatePacks(configDir string) error {
 	if len(c.Packs) == 0 {
 		return nil
 	}
+	// `packs:` key-implies-`use:`: fill each instance's source from its use:
+	// reference, or from the key itself (the official pack repo).
+	if err := applyPackSourceDefaults(c.Packs); err != nil {
+		return err
+	}
 	vendor := packVendorDir(configDir)
 	st := &packInstantiation{cfg: c}
 	for _, name := range sortedPackKeys(c.Packs) {
@@ -192,42 +197,84 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// environment references.
 	rw := newRefRewriter(ns, man, req.inst, env)
 
-	// ---- Agents: default / bind / override, then namespace. ----
-	for _, role := range sortedAgentKeys(man.Agents) {
-		bundled := man.Agents[role]
-		// A pack agent may not pin infrastructure (runtime/host/controller) — a
-		// pack defines behavior, not environment. Provider/model are allowed
-		// (they fall through to the consumer default runtime when empty).
-		if bundled.Host != "" || bundled.Runtime != "" || bundled.Controller != "" {
-			return fmt.Errorf("pack %q: agent %q pins runtime/host/controller — a pack defines behavior, not environment; leave it to the consumer's default runtime or bind the role to a global", ns, role)
+	// ---- The pack's skill grants are bounded by requires.connectors (§C).
+	//
+	// Runs in the pack's OWN vocabulary, before the ref rewriter maps
+	// connector prefixes onto the consumer's instance names — and before the
+	// overlay, deliberately: what this bounds is what the PACK grants. A
+	// consumer who writes `packs.<n>.steps.<role>.skill` in their own config
+	// is granting for themselves, exactly as they would on their own step;
+	// that is theirs to decide and is visible in their config. What a pack
+	// can never do is reach a connector it did not declare. ----
+	st.applyPackSkillBoundary(ns, man)
+	// The same boundary for every OTHER pack-authored reference. This one is
+	// a hard error rather than a narrowing: a `uses:` naming an undeclared
+	// connector is not a grant to intersect, it is a step that would run
+	// against a connector the manifest never mentioned, and silently dropping
+	// the step would leave a pack that installs clean and does nothing.
+	for _, p := range checkPackConnectorRefs(man) {
+		return fmt.Errorf("pack %q: %s", ns, p)
+	}
+	for _, p := range checkPackStoreRefs(man) {
+		return fmt.Errorf("pack %q: %s", ns, p)
+	}
+
+	// ---- Mirrored-section overlay (§5.3): the consumer's steps:/models:
+	// blocks deep-merge onto the pack's members BY NAME before anything is
+	// namespaced, so the overrides address the pack's own vocabulary. ----
+	if err := st.applyStepOverlay(ns, req.inst, man); err != nil {
+		return err
+	}
+	if err := st.applyFleetOverlay(ns, req.inst, man.Models); err != nil {
+		return err
+	}
+
+	// ---- Containment checks on every step the pack ships. The steps
+	// themselves are namespaced and rebound with their workflow/trigger
+	// below; what runs here is what a pack is not ALLOWED to do. ----
+	var stepErr error
+	man.WalkPackSteps(func(where string, s *Step) {
+		if stepErr != nil {
+			return
 		}
-		base := bundled
-		b := req.inst.Agents[role]
-		switch {
-		case b.IsBind():
-			// Bound to a consumer global: refs to this role resolve to that
-			// global directly (no namespaced copy is emitted).
-			continue
-		case b.IsOverride():
-			merged, err := applyAgentOverride(base, b.Override)
-			if err != nil {
-				return fmt.Errorf("pack %q: agent %q override: %w", ns, role, err)
+		// A pack step may not pin infrastructure (runtime/host) — a pack
+		// defines behavior, not environment. model: is allowed: it names a
+		// FLEET, which resolves against whatever the consumer actually has.
+		if s.Host != "" || s.Runtime != "" {
+			stepErr = fmt.Errorf("pack %q: step %s pins runtime/host — a pack defines behavior, not environment; leave it to the consumer's default runtime, or override it from your packs: block", ns, where)
+			return
+		}
+		// Secret-broker containment: a pack step may only allow_secrets
+		// names it DECLARED in requires.secrets (and the consumer bound).
+		// Otherwise a pack could guess a consumer's secret names and have
+		// the broker issue them.
+		if s.Skill == nil {
+			return
+		}
+		for _, sec := range s.Skill.AllowSecrets {
+			if _, ok := man.Pack.Requires.Secrets[sec]; !ok {
+				stepErr = fmt.Errorf("pack %q: step %s skill.allow_secrets %q is not a declared requires.secrets entry — a pack may only reach secrets it declares and the consumer binds", ns, where, sec)
+				return
 			}
-			base = merged
 		}
-		// Secret-broker containment: a pack agent may only allow_secrets names it
-		// DECLARED in requires.secrets (and the consumer bound). Otherwise a pack
-		// could guess a consumer's secret names and have the broker issue them.
-		if base.Skill != nil {
-			for _, s := range base.Skill.AllowSecrets {
-				if _, ok := man.Pack.Requires.Secrets[s]; !ok {
-					return fmt.Errorf("pack %q: agent %q skill.allow_secrets %q is not a declared requires.secrets entry — a pack may only reach secrets it declares and the consumer binds", ns, role, s)
-				}
-			}
+	})
+	if stepErr != nil {
+		return stepErr
+	}
+
+	// ---- Fleets: the pack's named models, namespaced, with the consumer's
+	// per-fleet override applied (the top rung of the ladder, §2.3/§5.3). ----
+	for _, name := range sortedNames(man.Models) {
+		fleet := man.Models[name]
+		if over, ok := req.inst.Models[name]; ok && over.Set() {
+			fleet = over
 		}
-		rw.rebindAgent(&base)
-		rw.rewriteAgentExtends(&base)
-		st.cfg.setAgent(rw.agentName(role), base)
+		st.cfg.setFleet(rw.agentName(name), fleet)
+	}
+	for name := range req.inst.Models {
+		if _, ok := man.Models[name]; !ok {
+			return fmt.Errorf("pack %q: models: %q names no fleet shipped by this pack (shipped: %s)", ns, name, sortedKeys(man.Models))
+		}
 	}
 
 	// ---- Checks: namespace names + rewrite refs. ----
@@ -252,7 +299,25 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// ---- Pack policy (overridden) folds onto the pack's own triggers. ----
 	packPolicyOverride := req.inst.Policy
 
-	// ---- Triggers: ship DISARMED; arm from the instance block. ----
+	// ---- Triggers ----
+	//
+	// Scope lives on the CONNECTOR, not the pack (§5.2): each trigger binds
+	// to the consumer's connector of its own source type, and a source they
+	// have none of goes dormant + surfaced rather than failing the load.
+	if err := st.validateSourceDeclarations(ns, man, req.inst, man.Triggers); err != nil {
+		return err
+	}
+	// The overlay addresses triggers by the name the PACK gave them, so it
+	// runs before source binding rewrites `on:`.
+	if err := st.applyTriggerOverlay(ns, req.inst, man.Triggers,
+		func(i int) string { return triggerOverlayName(man.Triggers[i]) }); err != nil {
+		return err
+	}
+	if err := st.bindPackSources(ns, man, req.inst, man.Triggers); err != nil {
+		return err
+	}
+
+	// Ship DISARMED; arm from the instance block.
 	for i := range man.Triggers {
 		tr := man.Triggers[i]
 		if tr.Name == "" {
@@ -261,7 +326,12 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		armName := tr.Name
 		tr.Name = ns + "/" + tr.Name
 		rw.rewriteTrigger(&tr)
-		// Disarm: pack triggers arrive inert regardless of what the manifest set.
+		// Disarm: pack triggers arrive inert regardless of what the manifest
+		// set. A trigger already parked by source dormancy (§5.2) or by an
+		// `on:` overlay's `enabled: false` stays parked — arming it would
+		// re-enable something the consumer cannot serve or explicitly
+		// switched off.
+		dormant := tr.Enabled != nil && !*tr.Enabled
 		disabled := false
 		tr.Enabled = &disabled
 		clearTriggerRepos(&tr)
@@ -274,7 +344,14 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 			tr.Policy = pol
 		}
 		// Arm from the instance block (consent = enabled + repos).
-		if arm, ok := req.inst.Triggers[armName]; ok {
+		// An instance-array trigger's name carries its content handle; the
+		// consumer arms the ADDRESS, which covers every instance of it.
+		armAddr, _ := SplitInstanceName(armName)
+		arm, ok := req.inst.Triggers[armName]
+		if !ok {
+			arm, ok = req.inst.Triggers[armAddr]
+		}
+		if ok && !dormant {
 			if err := applyTriggerArm(&tr, arm); err != nil {
 				return fmt.Errorf("pack %q: trigger %q: %w", ns, armName, err)
 			}
@@ -285,7 +362,14 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 			// on repos the consumer never granted THIS pack. The repo list is
 			// the pack's consent boundary, so its absence is a hard error, not
 			// a warning. (Non-repo sources like `manual`/`rss` are exempt.)
-			if arm.IsArmed() && !triggerScopesRepos(&tr) && st.sourceIsRepoScoped(tr.On) {
+			// Checked against EVERY source the trigger fires on, not just
+			// tr.On — a list-form `on:` leaves On empty until
+			// NormalizeTriggers (which runs after pack instantiation), so
+			// reading On alone silently found no repo-scoped source and
+			// skipped this consent check entirely. An armed list-form github
+			// trigger with no repos: was accepted and then matched EVERY repo
+			// the connector could see.
+			if arm.IsArmed() && !triggerScopesRepos(&tr) && st.anySourceIsRepoScoped(&tr) {
 				return fmt.Errorf("pack %q: trigger %q is armed (enabled: true) but names no repos — a github pack trigger must scope its repos (the repo list is the consent). Add e.g. triggers: { %s: { enabled: true, repos: [owner/repo] } }", ns, armName, armName)
 			}
 		}
@@ -296,6 +380,15 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		if !hasTrigger(man.Triggers, armName) {
 			return fmt.Errorf("pack %q: triggers: %q names no trigger shipped by this pack (shipped: %s)", ns, armName, triggerNames(man.Triggers))
 		}
+	}
+
+	// ---- Every workflow name the pack authored names a workflow it ships.
+	//
+	// Runs LAST, after every section (checks, workflows, triggers and their
+	// steps/hooks) has been through the rewriter, so rw.wfRefs is the complete
+	// set of workflow references this pack made. ----
+	if problems := rw.checkOwnedWorkflowRefs(man); len(problems) > 0 {
+		return fmt.Errorf("pack %q: %s", ns, strings.Join(problems, "; "))
 	}
 
 	// ---- Recurse into pack dependencies: every declared requires.packs dep
@@ -339,14 +432,38 @@ func (st *packInstantiation) warnf(format string, a ...any) {
 func (st *packInstantiation) validateRequires(ns string, man *PackManifest, inst PackInstance, env envBindings) error {
 	req := man.Pack.Requires
 	// Connectors: every required connector must be bound to a defined global.
-	for _, name := range req.Connectors {
+	for _, name := range req.Connectors.Names() {
+		// A built-in data namespace binds to ITSELF: it is always present,
+		// and `connectors:` refuses the reserved names, so there is nothing
+		// for the consumer to bind. Declaring it is still required — that is
+		// what puts "this pack touches your kv" in the manifest the consumer
+		// reads before installing.
+		if IsPackSelfBindingConnector(name) {
+			continue
+		}
 		bound, ok := env.conn[name]
 		if !ok {
+			// A declared connector is REQUIRED by default: the pack says
+			// it uses this, so an unbound one is a config mistake and
+			// failing loudly beats a pack that installs clean and then
+			// does nothing when the event arrives. An author who knows
+			// their pack degrades says `required: false`, and the source's
+			// triggers go dormant instead (bindPackSources, §5.2).
+			if !req.Connectors[name].Required {
+				st.warnf("pack %q: optional connector %q is not bound — the parts of the pack that use it are DORMANT. Bind it with connectors: { %s: <your-connector> } to arm them.", ns, name, name)
+				continue
+			}
 			return fmt.Errorf("pack %q: requires connector %q — bind it: connectors: { %s: <your-connector> }", ns, name, name)
 		}
 		if _, ok := st.cfg.ConnectorsMap[bound]; !ok {
 			return fmt.Errorf("pack %q: connector binding %s -> %q names no connector in your config (defined: %s)", ns, name, bound, connectorNames(st.cfg))
 		}
+	}
+	// …and satisfy the version constraint the pack declared for it (§D).
+	// This GATES, it never fetches: a connector is bind-only, so the only
+	// question is whether what the consumer already has is compatible.
+	if err := st.checkConnectorVersions(ns, req.Connectors, env); err != nil {
+		return err
 	}
 	// Stores.
 	for _, name := range req.Stores {
@@ -378,30 +495,6 @@ func (st *packInstantiation) validateRequires(ns string, man *PackManifest, inst
 			return fmt.Errorf("pack %q: secret binding %s -> %q: %w", ns, name, bound, err)
 		}
 	}
-	// Roles: a bound agent must provide the required skill capabilities.
-	for role, rr := range req.Roles {
-		b := inst.Agents[role]
-		if !b.IsBind() {
-			continue // default/override use the pack's bundled agent (assumed to satisfy)
-		}
-		prof, ok := st.cfg.Agents[b.Bind]
-		if !ok {
-			return fmt.Errorf("pack %q: role %q bound to agent %q which is not defined under agents:", ns, role, b.Bind)
-		}
-		for _, want := range rr.Skill {
-			// The requirement is written pack-side (github.submit_review); rebind
-			// its connector prefix to the consumer's before comparing to grants.
-			wantBound := want
-			if conn, verb, ok := strings.Cut(want, "."); ok {
-				if bound, ok := env.conn[conn]; ok {
-					wantBound = bound + "." + verb
-				}
-			}
-			if !agentGrantsSkill(prof, wantBound) {
-				st.warnf("pack %q: role %q is bound to agent %q, which does not grant skill %q the pack expects", ns, role, b.Bind, wantBound)
-			}
-		}
-	}
 	return nil
 }
 
@@ -429,27 +522,9 @@ func (c *Config) checkSecretRef(ref string) error {
 	return fmt.Errorf("names no secrets: entry, vault, or reference form (env:… / <vault>/<key>)")
 }
 
-// agentGrantsSkill reports whether a profile's skill policy grants a verb.
-func agentGrantsSkill(p AgentProfile, want string) bool {
-	if p.Skill == nil {
-		return false
-	}
-	for _, v := range p.Skill.Verbs {
-		if v == want || v == "*" {
-			return true
-		}
-		if ok, _ := filepath.Match(v, want); ok {
-			return true
-		}
-	}
-	return false
-}
-
 // ---------------------------------------------------------------------------
 // Settings.
 // ---------------------------------------------------------------------------
-
-var settingsRefRE = regexp.MustCompile(`\$\{settings\.([A-Za-z0-9_.-]+)\}`)
 
 // envReachRE matches a {{ vault|secret|kv "NAME" … }} runtime env-access template
 // call. Structural refs (agents/workflows/connectors in uses/on/hooks/store/…)
@@ -542,21 +617,15 @@ func substituteSettings(nodeDir string, settings map[string]string) (*PackManife
 	if err != nil {
 		return nil, err
 	}
-	// Iterate so a declared setting whose VALUE itself contains ${settings.other}
-	// resolves too (bounded to avoid a self-referential loop).
-	sub := raw
-	for i := 0; i < 8; i++ {
-		next := settingsRefRE.ReplaceAllFunc(sub, func(m []byte) []byte {
-			name := string(settingsRefRE.FindSubmatch(m)[1])
-			if val, ok := settings[name]; ok {
-				return []byte(val)
-			}
-			return m // leave unknown refs; caught post-decode if in a real field
-		})
-		if string(next) == string(sub) {
-			break
-		}
-		sub = next
+	// The SHARED substitutor (settings.go) — the same one the main config's
+	// own `settings:` block goes through, so the syntax, the iteration bound,
+	// the leave-unknown-refs rule, and above all the node-not-text
+	// substitution cannot drift between the two. A pack ships its own default
+	// setting values, which makes it exactly the place a booby-trapped value
+	// would come from.
+	sub, serr := substituteInBody(raw, settings)
+	if serr != nil {
+		return nil, serr
 	}
 	var man PackManifest
 	if err := strictUnmarshal(sub, &man); err != nil {
@@ -570,16 +639,7 @@ func substituteSettings(nodeDir string, settings map[string]string) (*PackManife
 	if err != nil {
 		return nil, err
 	}
-	var missing []string
-	for _, m := range settingsRefRE.FindAllSubmatch(body, -1) {
-		name := string(m[1])
-		if _, declared := settings[name]; !declared {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) > 0 {
-		missing = uniq(missing)
-		sort.Strings(missing)
+	if missing := unknownSettingRefs(body, settings); len(missing) > 0 {
 		return nil, fmt.Errorf("unknown setting reference(s): %s", strings.Join(missing, ", "))
 	}
 	return &man, nil
@@ -613,11 +673,11 @@ type envBindings struct {
 	conn, store, secret, handoff map[string]string
 }
 
-func (c *Config) setAgent(name string, p AgentProfile) {
-	if c.Agents == nil {
-		c.Agents = map[string]AgentProfile{}
+func (c *Config) setFleet(name string, f FleetSpec) {
+	if c.Models == nil {
+		c.Models = map[string]FleetSpec{}
 	}
-	c.Agents[name] = p
+	c.Models[name] = f
 }
 
 func (c *Config) setWorkflow(name string, w WorkflowDef) {
@@ -634,7 +694,7 @@ func (c *Config) setCheck(name string, s Step) {
 	c.Checks[name] = s
 }
 
-func applyAgentOverride(base AgentProfile, override map[string]any) (AgentProfile, error) {
+func applyStepOverride(base Step, override map[string]any) (Step, error) {
 	var bm map[string]any
 	b, err := yaml.Marshal(base)
 	if err != nil {
@@ -651,7 +711,7 @@ func applyAgentOverride(base AgentProfile, override map[string]any) (AgentProfil
 	if err != nil {
 		return base, err
 	}
-	var out AgentProfile
+	var out Step
 	if err := strictUnmarshal(mb, &out); err != nil {
 		return base, err
 	}
@@ -741,18 +801,37 @@ func triggerScopesRepos(tr *TriggerSpec) bool {
 // every repo", which makes an explicit repo scope load-bearing for consent.
 // Bare sources like the built-in `manual` (no ".") and non-github connectors
 // have no repo scope and are exempt.
+// anySourceIsRepoScoped reports whether the trigger fires on any repo-scoped
+// (github) source, in either `on:` form. This is the consent question: if even
+// one source is repo-scoped, an empty repo set means "every repo".
+func (st *packInstantiation) anySourceIsRepoScoped(tr *TriggerSpec) bool {
+	for _, src := range tr.Sources() {
+		if st.sourceIsRepoScoped(src) {
+			return true
+		}
+	}
+	return false
+}
+
 func (st *packInstantiation) sourceIsRepoScoped(on string) bool {
 	conn, _, ok := strings.Cut(on, ".")
 	if !ok {
 		return false
 	}
 	ref, ok := st.cfg.ConnectorsMap[conn]
-	return ok && ref.Type == "github"
+	return ok && ref.TypeName() == "github"
 }
 
+// hasTrigger reports whether a pack ships a trigger a consumer named.
+// An instance-array trigger carries a content-addressed name
+// (`review#a1b2c3d4`), so the author-facing ADDRESS matches too — that is
+// the only spelling a consumer can write.
 func hasTrigger(trs []TriggerSpec, name string) bool {
 	for _, t := range trs {
 		if t.Name == name {
+			return true
+		}
+		if addr, handle := SplitInstanceName(t.Name); handle != "" && addr == name {
 			return true
 		}
 	}
@@ -835,7 +914,7 @@ func sortedJoin(ss []string) string {
 }
 
 func sortedPackKeys(m map[string]PackInstance) []string { s := mapKeys(m); sort.Strings(s); return s }
-func sortedAgentKeys(m map[string]AgentProfile) []string {
+func sortedAgentKeysUnused(m map[string]Step) []string {
 	s := mapKeys(m)
 	sort.Strings(s)
 	return s

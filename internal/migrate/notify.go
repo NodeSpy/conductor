@@ -212,7 +212,7 @@ func notifyToTriggers(cfg *config.Config, connectors map[string]map[string]any, 
 // notify:.
 func applyNotifyPass(masked []byte, notes *[]string) (out []byte, changed bool, err error) {
 	var cfg config.Config
-	if err := yaml.Unmarshal(masked, &cfg); err != nil {
+	if err := decodeConfig(masked, &cfg); err != nil {
 		return nil, false, err
 	}
 	if !notifyConfigured(cfg.Notify) {

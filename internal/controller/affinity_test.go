@@ -91,13 +91,13 @@ func newMemAffStore() *memAffStore { return &memAffStore{recs: map[string]Affini
 func (s *memAffStore) PutAffinity(r AffinityRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.recs[r.Agent+"\x00"+r.Key] = r
+	s.recs[r.Runtime+"\x00"+r.Model+"\x00"+r.Key] = r
 	return nil
 }
-func (s *memAffStore) DeleteAffinity(agent, key string) error {
+func (s *memAffStore) DeleteAffinity(runtime, model, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.recs, agent+"\x00"+key)
+	delete(s.recs, runtime+"\x00"+model+"\x00"+key)
 	return nil
 }
 func (s *memAffStore) Affinities() []AffinityRef {
@@ -117,8 +117,9 @@ func affReq(agent, kind, repo string, pr int, spec *config.SessionSpec) dispatch
 			Source: "github", Instance: "gh", Kind: kind,
 			Target: core.Target{Repo: repo, PR: pr, Number: pr},
 		},
-		Action:  config.Action{Type: "agent", Agent: agent, Prompt: "handle {{.kind}} on {{.repo}}#{{.pr}}"},
-		Profile: config.AgentProfile{Provider: "claude", Session: spec},
+		Action:   config.Action{Type: "agent", Agent: agent, Prompt: "handle {{.kind}} on {{.repo}}#{{.pr}}"},
+		Step:     config.Step{Session: spec},
+		Identity: agent,
 	}
 }
 
@@ -144,8 +145,8 @@ func newAffRig(t *testing.T, st *memAffStore, spec *config.SessionSpec) *affRig 
 		st = newMemAffStore()
 	}
 	rig := &affRig{runner: &affRunner{}, sender: &affSender{}, store: st, holds: map[string]bool{}}
-	rig.cfg = &config.Config{Agents: map[string]config.AgentProfile{
-		"reviewer": {Provider: "claude", Session: spec, ArchiveWhenDone: true},
+	rig.cfg = &config.Config{Workflows: map[string]config.WorkflowDef{
+		"w": {Steps: []config.Step{{ID: "reviewer", Name: "reviewer", Session: spec, ArchiveWhenDone: true}}},
 	}}
 	reg := NewRegistry(nil, "", rig.runner, rig.sender)
 	hold := func(id string) { rig.mu.Lock(); rig.holds[id] = true; rig.mu.Unlock() }
@@ -161,7 +162,7 @@ func (rig *affRig) dispatch(t *testing.T, req dispatch.Request) dispatch.RunRef 
 		t.Fatalf("affinity dispatch: %v", err)
 	}
 	if !handled {
-		t.Fatalf("affinity should own this dispatch: %+v", req.Profile.Session)
+		t.Fatalf("affinity should own this dispatch: %+v", req.Step.Session)
 	}
 	return ref
 }
@@ -473,7 +474,7 @@ func TestAffinityNotHandled(t *testing.T) {
 	// Non-persistent runtime: built-in paseo with NO follow-up sender.
 	runner := &affRunner{}
 	reg := NewRegistry(nil, "", runner, nil)
-	cfg := &config.Config{Agents: map[string]config.AgentProfile{"reviewer": {Session: spec}}}
+	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{{ID: "reviewer", Session: spec}}}}}
 	aff := NewAffinity(reg, newMemAffStore(), cfg, nil, nil, nil)
 	req = affReq("reviewer", "new_comment", "o/r", 7, spec)
 	if _, handled, _ := aff.Dispatch(context.Background(), runner, req); handled {
@@ -489,7 +490,7 @@ func TestAffinityNotHandled(t *testing.T) {
 
 	// A key that renders empty is a clear dispatch error.
 	req = affReq("reviewer", "new_comment", "", 0, &config.SessionSpec{Key: "{{.repo}}"})
-	req.Profile.Session = &config.SessionSpec{Key: "{{.repo}}"}
+	req.Step.Session = &config.SessionSpec{Key: "{{.repo}}"}
 	if _, handled, err := rig.aff.Dispatch(context.Background(), rig.runner, req); !handled || err == nil {
 		t.Fatalf("empty key must error: handled=%v err=%v", handled, err)
 	}
@@ -518,9 +519,9 @@ func TestAffinityFollowupCapture(t *testing.T) {
 	spec := affSpec()
 	runner := &affRunner{}
 	sender := &captureSender{reply: `{"plan":[]}`}
-	cfg := &config.Config{Agents: map[string]config.AgentProfile{
-		"reviewer": {Provider: "claude", Session: spec},
-	}}
+	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
+		{ID: "reviewer", Session: spec},
+	}}}}
 	reg := NewRegistry(nil, "", runner, sender)
 	aff := NewAffinity(reg, newMemAffStore(), cfg, nil, nil, nil)
 
@@ -528,7 +529,7 @@ func TestAffinityFollowupCapture(t *testing.T) {
 		Target: core.Target{Repo: "o/r", PR: 7, Number: 7}}
 
 	// No binding yet → ok=false (the plan escalates instead of revising).
-	if _, ok, err := aff.Followup(context.Background(), "reviewer", cfg.Agents["reviewer"], trig, "revise"); ok || err != nil {
+	if _, ok, err := aff.Followup(context.Background(), cfg.Workflows["w"].Steps[0], "reviewer", "", trig, "revise"); ok || err != nil {
 		t.Fatalf("no binding: ok=%v err=%v", ok, err)
 	}
 
@@ -537,12 +538,12 @@ func TestAffinityFollowupCapture(t *testing.T) {
 	if _, handled, err := aff.Dispatch(context.Background(), runner, req); !handled || err != nil {
 		t.Fatalf("bind: %v %v", handled, err)
 	}
-	out, ok, err := aff.Followup(context.Background(), "reviewer", cfg.Agents["reviewer"], trig, "step boom failed; revise")
+	out, ok, err := aff.Followup(context.Background(), cfg.Workflows["w"].Steps[0], "reviewer", "", trig, "step boom failed; revise")
 	if !ok || err != nil || out != `{"plan":[]}` {
 		t.Fatalf("followup capture: ok=%v err=%v out=%q", ok, err, out)
 	}
-	// A profile without session: is never consulted.
-	if _, ok, _ := aff.Followup(context.Background(), "reviewer", config.AgentProfile{}, trig, "x"); ok {
+	// A step without session: is never consulted.
+	if _, ok, _ := aff.Followup(context.Background(), config.Step{}, "reviewer", "", trig, "x"); ok {
 		t.Fatal("no session spec must be ok=false")
 	}
 }
@@ -566,4 +567,97 @@ func TestAffinityLockMapDoesNotGrow(t *testing.T) {
 		Target: core.Target{Repo: "o/r", PR: 1, Number: 1},
 	})
 	waitFor(t, "post-eviction lock map empty", func() bool { return rig.aff.LockedKeys() == 0 })
+}
+
+// §20: a resume looked the controller up by NAME against the CURRENT
+// config, so editing `runtimes.<name>` to point at a different tool sent a
+// foreign session id to a program that had never heard of it.
+func TestResumeRefusesAReconfiguredController(t *testing.T) {
+	cfg := &config.Config{Runtimes: config.RuntimeSet{
+		"r": {Use: "acp", Agent: "gemini"},
+	}}
+	shapeThen := controllerShape(cfg, "r")
+	if shapeThen == "" {
+		t.Fatal("a configured runtime should have a shape")
+	}
+	// The operator repoints the same NAME at a different tool.
+	cfg.Runtimes["r"] = config.RuntimeConfig{Use: "acp", Agent: "opencode"}
+	if now := controllerShape(cfg, "r"); now == shapeThen {
+		t.Fatal("a different agent must produce a different shape")
+	}
+}
+
+// §24: a binding the current config can no longer produce is dead — its
+// runtime was deleted or renamed, so no dispatch will key to it again.
+// Holding it kept the agent alive (and the reaper away) until idle-out for
+// a session nothing could reach.
+func TestStartupDropsUnreachableBindings(t *testing.T) {
+	st := newMemAffStore()
+	_ = st.PutAffinity(AffinityRef{Runtime: "gone", Key: "k1", SessionID: "s1", Controller: "acp"})
+	_ = st.PutAffinity(AffinityRef{Runtime: "kept", Key: "k2", SessionID: "s2", Controller: "acp"})
+
+	var held []string
+	cfg := &config.Config{Runtimes: config.RuntimeSet{"kept": {Use: "acp", Agent: "gemini"}}}
+	a := NewAffinity(NewRegistry(nil, "", nil, nil), st, cfg,
+		func(id string) { held = append(held, id) }, func(string) {}, nil)
+
+	if a.Owns("s1") {
+		t.Error("a binding whose runtime is gone must not be restored")
+	}
+	if !a.Owns("s2") {
+		t.Error("a binding whose runtime still exists must be restored")
+	}
+	for _, id := range held {
+		if id == "s1" {
+			t.Error("an unreachable session must not be held against the reaper")
+		}
+	}
+}
+
+// ROUND-13 #3. The operator idiom is `session.key: "{{.repo}}#{{.pr}}"`. It
+// rendered against the raw target, so a dispatch whose target the SENDER
+// chose rendered a REAL repo's pool key and its agent joined that pool —
+// sharing a live session with the repo it named.
+//
+// The key renders from the trusted view now, and an untrusted dispatch's key
+// is namespaced to itself outright, because an operator may key on `.head` or
+// `.title` just as easily as `.repo`.
+func TestSessionKeyDoesNotCollideAcrossTrust(t *testing.T) {
+	spec := &config.SessionSpec{Key: "{{.repo}}#{{.pr}}"}
+	a := &Affinity{}
+	req := func(trusted bool) dispatch.Request {
+		return dispatch.Request{
+			Identity: "reviewer",
+			Trigger: core.Trigger{
+				Source: "webhook", Instance: "hooks", Kind: "delivery",
+				TargetTrusted: trusted,
+				Target:        core.Target{Repo: "acme/app", Owner: "acme", Name: "app", PR: 42, Number: 42},
+			},
+		}
+	}
+	trusted, err := a.renderKey(spec, req(true), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged, err := a.renderKey(spec, req(false), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted == forged {
+		t.Fatalf("a forged target rendered a real pool's session key %q — its agent would join "+
+			"that repo's live session", trusted)
+	}
+	if trusted != "acme/app#42" {
+		t.Errorf("a trusted dispatch's key must be unchanged, got %q", trusted)
+	}
+	// Two forged dispatches for DIFFERENT targets still get distinct pools.
+	other := req(false)
+	other.Trigger.Target.Number, other.Trigger.Target.PR = 43, 43
+	o, err := a.renderKey(spec, other, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o == forged {
+		t.Error("untrusted keys must still discriminate per target")
+	}
 }

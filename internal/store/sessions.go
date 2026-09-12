@@ -2,7 +2,6 @@ package store
 
 import (
 	"encoding/json"
-	"os"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/controller"
@@ -22,8 +21,12 @@ type SessionRecord struct {
 	Model      string `json:"model"`      // session_model (native|resumable|oneshot)
 	// AgentAuthored: the original dispatch's provenance — resume re-derives
 	// the deny-by-default egress from it (#36 iso-review H5).
-	AgentAuthored bool      `json:"agent_authored,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	AgentAuthored bool `json:"agent_authored,omitempty"`
+	// Cwd is the worktree the session was opened in — persisted so a resume
+	// AFTER A RESTART roots the agent there rather than at the daemon's own
+	// working directory.
+	Cwd       string    `json:"cwd,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // The store persists the broker's PR→session map. Assert *Store satisfies the
@@ -39,6 +42,7 @@ func (s *Store) PutSession(ref controller.SessionRef) error {
 		SessionID:     ref.SessionID,
 		Model:         string(ref.Model),
 		AgentAuthored: ref.AgentAuthored,
+		Cwd:           ref.Cwd,
 		UpdatedAt:     s.now(),
 	}
 	s.sessions[ref.PRKey] = rec
@@ -71,6 +75,7 @@ func (s *Store) Sessions() []controller.SessionRef {
 			SessionID:     r.SessionID,
 			Model:         controller.SessionModel(r.Model),
 			AgentAuthored: r.AgentAuthored,
+			Cwd:           r.Cwd,
 			UpdatedAt:     r.UpdatedAt,
 		})
 	}
@@ -79,15 +84,8 @@ func (s *Store) Sessions() []controller.SessionRef {
 
 // saveSessions persists the sessions map (best-effort atomic via temp+rename).
 func (s *Store) saveSessions() error {
-	s.mu.Lock()
-	b, err := json.MarshalIndent(s.sessions, "", "  ")
-	s.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	tmp := s.sessionsPath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.sessionsPath)
+	return s.persist(func() ([]byte, string, error) {
+		b, err := json.MarshalIndent(s.sessions, "", "  ")
+		return b, s.sessionsPath, err
+	})
 }

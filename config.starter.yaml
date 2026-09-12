@@ -17,7 +17,7 @@
 connectors:
   imports: [conf.d/connectors/*.yaml]
   gh:
-    type: github
+    use: github
     enabled: false # <- set true once the App + webhook below are configured
     app:
       app_id: 0 # <- your GitHub App id
@@ -51,7 +51,7 @@ triggers:
 
 runtimes:
   imports: [conf.d/runtimes/*.yaml]
-  paseo: { type: paseo, default: true }
+  paseo: { use: paseo, default: true }
 
 hosts:
   imports: [conf.d/hosts/*.yaml]
@@ -59,10 +59,18 @@ hosts:
 workflows:
   imports: [conf.d/workflows/*.yaml]
 
-agents:
-  imports: [conf.d/agents/*.yaml]
-  fixer:
-    provider: claude
+# Config shared between steps is a YAML anchor. Park the anchors under any
+# top-level `x-` key — the loader ignores those — and merge one into a step
+# with `<<: *fixer`. There is no top-level steps: section: a step lives in
+# the workflow or trigger that runs it.
+#
+# Anchors are file-local, so they do not cross the imports above. Something
+# that must POINT at a particular step (a `team:` role) addresses it where
+# it lives: `<workflow>/<step-id>`, or `<workflow>[<n>]` for a step with no
+# id: of its own.
+x-templates:
+  fixer: &fixer
+    type: agent
     workspace: worktree
     archive_when_done: true
 

@@ -10,13 +10,12 @@ import (
 func isoBase(t *testing.T) *Config {
 	t.Helper()
 	c := &Config{
-		ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+		ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 		Runtimes: map[string]RuntimeConfig{
-			"gemini": {Agent: "gemini"},
-			"pd":     {Type: "paseo"},
+			"gemini": {Use: "acp", Agent: "gemini"},
+			"pd":     {Use: "paseo"},
 		},
-		Hosts:  map[string]HostConfig{"sbx": {Host: "sandbox.internal"}},
-		Agents: map[string]AgentProfile{},
+		Hosts: map[string]HostConfig{"sbx": {Host: "sandbox.internal"}},
 		Triggers: []TriggerSpec{{On: "gh.release", Steps: []Step{
 			{Uses: "gh.comment"},
 		}}},
@@ -93,21 +92,21 @@ func TestProfileIsolationNeedsConductorLaunchedRuntime(t *testing.T) {
 	// No runtime at all → built-in paseo → rejected.
 	c := isoBase(t)
 	c.Runtimes = nil
-	c.Agents["fixer"] = AgentProfile{Isolation: iso}
+	setTestStep(c, "fixer", Step{Isolation: iso})
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "built-in paseo") {
 		t.Fatalf("builtin paseo: %v", err)
 	}
 
 	// A paseo runtime → rejected.
 	c = isoBase(t)
-	c.Agents["fixer"] = AgentProfile{Runtime: "pd", Isolation: iso}
+	setTestStep(c, "fixer", Step{Runtime: "pd", Isolation: iso})
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "paseo runtime") {
 		t.Fatalf("paseo runtime: %v", err)
 	}
 
 	// An acp runtime → fine.
 	c = isoBase(t)
-	c.Agents["fixer"] = AgentProfile{Runtime: "gemini", Isolation: iso}
+	setTestStep(c, "fixer", Step{Runtime: "gemini", Isolation: iso})
 	if err := c.Validate(); err != nil {
 		t.Fatalf("acp runtime: %v", err)
 	}
@@ -134,7 +133,7 @@ func TestRuntimeIsolationValidation(t *testing.T) {
 
 	// Opencode + structural deny severs the control channel → rejected.
 	c = isoBase(t)
-	c.Runtimes["oc"] = RuntimeConfig{Type: "opencode", Isolation: &IsolationConfig{
+	c.Runtimes["oc"] = RuntimeConfig{Use: "opencode", Isolation: &IsolationConfig{
 		Mode: "namespace", Network: &IsolationNetwork{Deny: true}}}
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "control channel") {
 		t.Fatalf("opencode deny: %v", err)
@@ -196,10 +195,11 @@ func TestBudgetInPolicyAndProfileValidated(t *testing.T) {
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "budget") {
 		t.Fatalf("global budget validation: %v", err)
 	}
+	// The per-agent budget scope became the RUNTIME (design §1).
 	c = isoBase(t)
-	c.Agents["fixer"] = AgentProfile{Budget: &BudgetPolicy{MaxTokens: -5}}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "agent fixer: budget") {
-		t.Fatalf("profile budget validation: %v", err)
+	c.Runtimes["capped"] = RuntimeConfig{Use: "paseo", Budget: &BudgetPolicy{MaxTokens: -5}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "runtime capped: budget") {
+		t.Fatalf("runtime budget validation: %v", err)
 	}
 }
 
@@ -257,18 +257,17 @@ func TestSkillRefusedUnderUserModeIsolation(t *testing.T) {
 	base := func() *Config {
 		return &Config{
 			Runtimes: map[string]RuntimeConfig{
-				"cc": {Type: "cli", Agent: "claude-code"},
+				"cc": {Use: "cli", Tool: "claude-code"},
 			},
-			Agents: map[string]AgentProfile{},
 		}
 	}
 
 	// Profile-level mode:user + skill → refused.
 	c := base()
-	c.Agents["fixer"] = AgentProfile{Runtime: "cc", Provider: "claude", Model: "m",
+	setTestStep(c, "fixer", Step{Runtime: "cc", Model: ModelSpecOf("m"),
 		Skill:     &SkillPolicy{},
-		Isolation: &IsolationConfig{Mode: "user", User: "sbx"}}
-	if err := c.validateSkillIsolation("fixer", c.Agents["fixer"]); err == nil ||
+		Isolation: &IsolationConfig{Mode: "user", User: "sbx"}})
+	if err := c.validateStepSkillIsolation("step fixer", c.Workflows["w"].Steps[0]); err == nil ||
 		!strings.Contains(err.Error(), "steals the claim") {
 		t.Fatalf("profile-level user isolation + skill must be refused: %v", err)
 	}
@@ -278,17 +277,17 @@ func TestSkillRefusedUnderUserModeIsolation(t *testing.T) {
 	rt := c.Runtimes["cc"]
 	rt.Isolation = &IsolationConfig{Mode: "user", User: "sbx"}
 	c.Runtimes["cc"] = rt
-	c.Agents["fixer"] = AgentProfile{Runtime: "cc", Provider: "claude", Model: "m", Skill: &SkillPolicy{}}
-	if err := c.validateSkillIsolation("fixer", c.Agents["fixer"]); err == nil {
+	setTestStep(c, "fixer", Step{Runtime: "cc", Model: ModelSpecOf("m"), Skill: &SkillPolicy{}})
+	if err := c.validateStepSkillIsolation("step fixer", c.Workflows["w"].Steps[0]); err == nil {
 		t.Fatal("runtime-level user isolation + skill must be refused")
 	}
 
 	// namespace isolation (separate /proc views) keeps skill available.
 	c = base()
-	c.Agents["fixer"] = AgentProfile{Runtime: "cc", Provider: "claude", Model: "m",
+	setTestStep(c, "fixer", Step{Runtime: "cc", Model: ModelSpecOf("m"),
 		Skill:     &SkillPolicy{},
-		Isolation: &IsolationConfig{Mode: "namespace"}}
-	if err := c.validateSkillIsolation("fixer", c.Agents["fixer"]); err != nil {
+		Isolation: &IsolationConfig{Mode: "namespace"}})
+	if err := c.validateStepSkillIsolation("step fixer", c.Workflows["w"].Steps[0]); err != nil {
 		t.Fatalf("namespace + skill must be fine: %v", err)
 	}
 	// And a profile's own non-user isolation overrides a user-mode runtime.
@@ -296,10 +295,10 @@ func TestSkillRefusedUnderUserModeIsolation(t *testing.T) {
 	rt = c.Runtimes["cc"]
 	rt.Isolation = &IsolationConfig{Mode: "user", User: "sbx"}
 	c.Runtimes["cc"] = rt
-	c.Agents["fixer"] = AgentProfile{Runtime: "cc", Provider: "claude", Model: "m",
+	setTestStep(c, "fixer", Step{Runtime: "cc", Model: ModelSpecOf("m"),
 		Skill:     &SkillPolicy{},
-		Isolation: &IsolationConfig{Mode: "namespace"}}
-	if err := c.validateSkillIsolation("fixer", c.Agents["fixer"]); err != nil {
+		Isolation: &IsolationConfig{Mode: "namespace"}})
+	if err := c.validateStepSkillIsolation("step fixer", c.Workflows["w"].Steps[0]); err != nil {
 		t.Fatalf("profile namespace overrides runtime user: %v", err)
 	}
 }

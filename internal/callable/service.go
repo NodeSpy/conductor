@@ -250,7 +250,15 @@ func (s *Service) handleRun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, "use GET /runs/<id>")
 		return
 	}
-	body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+	// Handled, not discarded: a truncated body silently became an EMPTY body,
+	// which authenticate then signed over — so an over-limit request could be
+	// authenticated against content nobody sent. Same treatment as
+	// handleInvoke.
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+	if err != nil {
+		writeErr(w, http.StatusRequestEntityTooLarge, "request body too large")
+		return
+	}
 	tok, ok := s.authenticate(r, body)
 	if !ok {
 		writeErr(w, http.StatusUnauthorized, "unauthorized")

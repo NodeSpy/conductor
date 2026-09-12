@@ -74,17 +74,16 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 	return nil
 }
 
-// validateProfileIsolation checks an agent profile's isolation against the
-// runtime it resolves to: only runtimes conductor launches itself can be
-// wrapped. A paseo runtime's agents are children of the paseo daemon —
-// conductor never holds that process, so an isolation: there would be a
-// silent no-op; it is rejected instead.
-func (c *Config) validateProfileIsolation(name string, p AgentProfile) error {
+// validateStepIsolation checks a step's isolation against the runtime it
+// resolves to: only runtimes conductor launches itself can be wrapped. A
+// paseo runtime's agents are children of the paseo daemon — conductor never
+// holds that process, so an isolation: there would be a silent no-op; it is
+// rejected instead.
+func (c *Config) validateStepIsolation(where string, p Step) error {
 	if p.Isolation == nil {
 		return nil
 	}
-	where := "agent " + name
-	rn := p.RuntimeName()
+	rn := p.Runtime
 	if rn == "" {
 		rn = c.DefaultRuntimeName()
 	}
@@ -93,7 +92,7 @@ func (c *Config) validateProfileIsolation(name string, p AgentProfile) error {
 	}
 	cc, ok := c.MergedControllers()[rn]
 	if !ok {
-		return nil // the unknown-runtime error is reported by the profile's own validation
+		return nil // the unknown-runtime error is reported by the step's own validation
 	}
 	if cc.Type == "paseo" {
 		return fmt.Errorf("config: %s: isolation cannot apply to paseo runtime %q (its agents are the paseo daemon's children) — use an acp/cli/opencode/agent-deck runtime, or paseo's own sandboxing", where, rn)
@@ -105,7 +104,7 @@ func (c *Config) validateProfileIsolation(name string, p AgentProfile) error {
 	return validateIsolationControlChannel(where, p.Isolation, cc)
 }
 
-// validateSkillIsolation refuses skill: on a profile whose EFFECTIVE
+// validateStepSkillIsolation refuses skill: on a step whose EFFECTIVE
 // isolation (its own, else its runtime's) is mode: user (#36 iso-review C3).
 // The skill's one-shot claim code rides the tool subprocess's environment;
 // under mode: user every dispatch of the scope shares one EUID, so a sibling
@@ -115,13 +114,13 @@ func (c *Config) validateProfileIsolation(name string, p AgentProfile) error {
 // itself. Safe default with no footgun: there is no override — use
 // namespace/container isolation (structurally separate /proc views) or drop
 // the isolation, both of which keep the claim private.
-func (c *Config) validateSkillIsolation(name string, p AgentProfile) error {
+func (c *Config) validateStepSkillIsolation(where string, p Step) error {
 	if p.Skill == nil {
 		return nil
 	}
 	iso := p.Isolation
 	if iso == nil {
-		rn := p.RuntimeName()
+		rn := p.Runtime
 		if rn == "" {
 			rn = c.DefaultRuntimeName()
 		}
@@ -130,7 +129,7 @@ func (c *Config) validateSkillIsolation(name string, p AgentProfile) error {
 		}
 	}
 	if iso != nil && iso.Mode == "user" {
-		return fmt.Errorf("config: agent %q: skill: cannot be combined with isolation mode user — the one-shot skill claim rides the tool server's environment, and every dispatch under the shared account %q has the same EUID (a sibling reads /proc/<pid>/environ and steals the claim). Use mode namespace or container, or drop skill: on this profile", name, iso.User)
+		return fmt.Errorf("config: %s: skill: cannot be combined with isolation mode user — the one-shot skill claim rides the tool server's environment, and every dispatch under the shared account %q has the same EUID (a sibling reads /proc/<pid>/environ and steals the claim). Use mode namespace or container, or drop skill: on this step", where, iso.User)
 	}
 	return nil
 }

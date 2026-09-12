@@ -350,14 +350,11 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 
 	switch step.Form() {
 	case "agent":
-		if step.Agent == "" {
-			return fmt.Errorf("%s: agent step needs `agent: <profile>`", w)
-		}
-		// A templated agent (agent: "{{.inputs.reviewer}}") is resolved at
-		// dispatch, not load — an unknown resolved name fails there. Only a
-		// literal name is checked against the defined profiles here.
-		if _, ok := cfg.Agents[step.Agent]; !ok && !strings.Contains(step.Agent, "{{") {
-			return fmt.Errorf("%s: unknown agent profile %q (defined: %s)", w, step.Agent, agentNames(cfg))
+		// There is nothing to resolve: a step carries its own behavior
+		// (design §6) and `agent:` is a free-form attribution label. What an
+		// agent step needs is a prompt.
+		if strings.TrimSpace(step.Prompt) == "" && step.Team == nil {
+			return fmt.Errorf("%s: agent step needs a prompt:", w)
 		}
 		if step.Handoff != "" {
 			if err := checkAskCapable(reg, w, step.Handoff); err != nil {
@@ -791,18 +788,6 @@ func validateWorkflowCycles(cfg *config.Config) error {
 		}
 	}
 	return nil
-}
-
-func agentNames(cfg *config.Config) string {
-	if len(cfg.Agents) == 0 {
-		return "none"
-	}
-	names := make([]string, 0, len(cfg.Agents))
-	for n := range cfg.Agents {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return strings.Join(names, ", ")
 }
 
 func inputNames(wf config.WorkflowDef) string {

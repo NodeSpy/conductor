@@ -40,19 +40,20 @@ pack:
     stores: [cache]
     secrets:
       api_token: { desc: token the review-poster uses }
-    roles:
-      handoff:  { skill: [github.submit_review] }
-      reviewer: {}
 settings:
   heavy_model: { type: string, default: default-heavy }
 presets:
   codex: { heavy_model: gpt-5-pro }
 exports:
   workflows: [review-flow]
-agents:
-  reviewer:
+x-steps:
+  reviewer: &reviewer
+    type: agent
+    name: reviewer
     workspace: worktree
-  handoff:
+  handoff: &handoff
+    type: agent
+    name: handoff
     workspace: local
     skill:
       secrets_via: broker
@@ -62,11 +63,14 @@ workflows:
     steps:
       - id: review
         type: agent
-        agent: reviewer
+        <<: *reviewer
         prompt: "review with {{.repo}} using ${settings.heavy_model}"
       - id: post
         uses: github.comment
         options: { store: cache, text: "done" }
+      - id: handoff
+        <<: *handoff
+        prompt: "hand it off"
 checks:
   lint: { run: js, code: "return { pass: true }" }
 triggers:
@@ -80,8 +84,8 @@ triggers:
 `
 
 // baseConfigWithReview writes a consumer config that instantiates review-kit
-// from a local source, binding github->gh and the store/secret, binding the
-// reviewer role to a global and overriding handoff.
+// from a local source, binding github->gh and the store/secret, and
+// overriding two of the pack's workflow steps by reference.
 func baseConfigWithReview(t *testing.T, extraPackFields string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -89,7 +93,7 @@ func baseConfigWithReview(t *testing.T, extraPackFields string) string {
 	body := `
 connectors:
   gh:
-    type: github
+    use: github
 stores:
   redis1:
     type: boltdb
@@ -98,9 +102,10 @@ vaults:
   house:
     type: file
     dir: /tmp/pc-pack-vault
-agents:
-  my-opus:
-    provider: claude
+x-steps:
+  my-opus: &my-opus
+    type: agent
+    name: my-opus
     skill:
       verbs: [github.submit_review]
 packs:
@@ -111,9 +116,9 @@ packs:
     connectors: { github: gh }
     stores:     { cache: redis1 }
     secrets:    { api_token: house/foocorp }
-    agents:
-      reviewer: my-opus
-      handoff:  { workspace: worktree }
+    steps:
+      review-flow/review:  { <<: *my-opus }
+      review-flow/handoff: { workspace: worktree }
     triggers:
       on_review_request:
         enabled: true
@@ -142,20 +147,18 @@ func TestPackInstantiateNamespaceAndBind(t *testing.T) {
 		t.Fatal("bare workflow name must not leak into the main namespace")
 	}
 
-	// Agent bind: reviewer -> my-opus (global), so the step ref resolves to the
-	// global and NO namespaced copy is emitted.
-	if _, leaked := cfg.Agents["review/reviewer"]; leaked {
-		t.Fatal("a bound role must not emit a namespaced agent copy")
+	// The consumer's override addressed review-flow/review and merged the
+	// fields of their own anchor onto the pack's step. The pack's identity
+	// is namespaced, and the consumer's grant came through.
+	if got := wf.Steps[0].Name; got != "review/my-opus" {
+		t.Fatalf("override should carry the consumer's name, namespaced; got %q", got)
 	}
-	if got := wf.Steps[0].Agent; got != "my-opus" {
-		t.Fatalf("bound agent ref should resolve to the global my-opus, got %q", got)
+	if sk := wf.Steps[0].Skill; sk == nil || len(sk.Verbs) != 1 || sk.Verbs[0] != "gh.submit_review" {
+		t.Fatalf("override should bring the consumer's grant, rebound; got %+v", sk)
 	}
 
-	// Agent override: handoff kept the bundle and merged the override.
-	h, ok := cfg.Agents["review/handoff"]
-	if !ok {
-		t.Fatalf("expected namespaced agent review/handoff, have %v", agentKeys(cfg))
-	}
+	// Step override: post kept the bundle and merged the override.
+	h := packStep(t, cfg, "review/review-flow/handoff")
 	if h.Workspace != "worktree" {
 		t.Fatalf("handoff override workspace=worktree, got %q", h.Workspace)
 	}
@@ -223,17 +226,15 @@ func TestPackTriggerDisarmedByDefault(t *testing.T) {
 	dir := t.TempDir()
 	writePackSource(t, dir, "src/review-kit", reviewKitManifest)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 stores: { redis1: { type: boltdb, path: /tmp/x.db } }
 vaults: { house: { type: file, dir: /tmp/pc-pack-vault } }
-agents: { my-opus: { provider: claude, skill: { verbs: [github.submit_review] } } }
 packs:
   review:
     source: ./src/review-kit
     connectors: { github: gh }
     stores: { cache: redis1 }
     secrets: { api_token: house/foocorp }
-    agents: { reviewer: my-opus }
 `
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -263,11 +264,11 @@ pack:
   version: 0.1.0
 connectors:
   smuggled:
-    type: github
+    use: github
     identity: { read_token: leaked }
 `)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   bad:
     source: ./src/bad
@@ -298,7 +299,7 @@ workflows:
 `)
 	// Instance does NOT bind github.
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   needs:
     source: ./src/needs
@@ -329,7 +330,7 @@ workflows:
   flow: { steps: [ { id: x, run: js, code: "return {}" } ] }
 `)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   np:
     source: ./src/newpack
@@ -476,17 +477,15 @@ func TestPackMissingVendorErrorsClearly(t *testing.T) {
 	dir := t.TempDir()
 	writePackSource(t, dir, "src/review-kit", reviewKitManifest)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 stores: { redis1: { type: boltdb, path: /tmp/x.db } }
 vaults: { house: { type: file, dir: /tmp/pc-pack-vault } }
-agents: { my-opus: { provider: claude } }
 packs:
   review:
     source: ./src/review-kit
     connectors: { github: gh }
     stores: { cache: redis1 }
     secrets: { api_token: house/foocorp }
-    agents: { reviewer: my-opus }
 `
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -501,7 +500,6 @@ packs:
 // --- small accessors for assertions ---
 
 func workflowKeys(c *Config) []string { return mapKeys(c.Workflows) }
-func agentKeys(c *Config) []string    { return mapKeys(c.Agents) }
 func checkKeys(c *Config) []string    { return mapKeys(c.Checks) }
 
 func findTrigger(c *Config, name string) *TriggerSpec {
@@ -519,4 +517,145 @@ func triggerNamesOf(c *Config) []string {
 		out = append(out, t.Name)
 	}
 	return out
+}
+
+// --- `packs:` key-implies-`use:` (design §5.1) -----------------------------
+
+func TestPackKeyImpliesUse(t *testing.T) {
+	tests := []struct {
+		name  string
+		packs map[string]PackInstance
+		want  map[string]string
+	}{
+		{
+			name:  "bare key resolves to the official pack repo",
+			packs: map[string]PackInstance{"pr-review-team": {}},
+			want:  map[string]string{"pr-review-team": "github.com/NodeSpy/conductor-packs//pr-review-team"},
+		},
+		{
+			name:  "use: a local folder",
+			packs: map[string]PackInstance{"house-style": {Use: "./packs/house-style"}},
+			want:  map[string]string{"house-style": "./packs/house-style"},
+		},
+		{
+			name:  "use: an explicit repo",
+			packs: map[string]PackInstance{"kit": {Use: "acme/conductor-packs/kit"}},
+			want:  map[string]string{"kit": "github.com/acme/conductor-packs//kit"},
+		},
+		{
+			name:  "use: carries a version suffix",
+			packs: map[string]PackInstance{"kit": {Use: "acme/packs/kit@~> 1.2"}},
+			want:  map[string]string{"kit": "github.com/acme/packs//kit@~> 1.2"},
+		},
+		{
+			name:  "an explicit source: still wins",
+			packs: map[string]PackInstance{"kit": {Use: "acme/packs/kit", Source: "git::ssh://git@x/y//kit"}},
+			want:  map[string]string{"kit": "git::ssh://git@x/y//kit"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := applyPackSourceDefaults(tc.packs); err != nil {
+				t.Fatal(err)
+			}
+			for name, want := range tc.want {
+				if got := tc.packs[name].Source; got != want {
+					t.Errorf("%s: source = %q, want %q", name, got, want)
+				}
+			}
+		})
+	}
+}
+
+// The key implication must not reach pack DEPENDENCIES: their source is
+// declared by the parent's requires.packs, which the resolver reads later.
+func TestPackKeyImplicationDoesNotTouchDependencies(t *testing.T) {
+	packs := map[string]PackInstance{
+		"kit": {Packs: map[string]PackInstance{"base": {}}},
+	}
+	if err := applyPackSourceDefaults(packs); err != nil {
+		t.Fatal(err)
+	}
+	if got := packs["kit"].Packs["base"].Source; got != "" {
+		t.Fatalf("dependency source was pre-filled with %q — it must come from requires.packs first", got)
+	}
+}
+
+// The official pack repo is trusted by default, exactly as the plugin repo is.
+func TestOfficialPackRepoIsTrustedByDefault(t *testing.T) {
+	var trust *PackTrustConfig // no operator allowlist configured
+	if !trust.SourceAllowed("github.com/NodeSpy/conductor-packs//pr-review-team") {
+		t.Error("the official pack repo should be trusted by default")
+	}
+	trust = &PackTrustConfig{Allow: []string{"github.com/acme/*"}}
+	if !trust.SourceAllowed("github.com/NodeSpy/conductor-packs//x") {
+		t.Error("an allowlist must not revoke the official pack repo")
+	}
+	if trust.SourceAllowed("github.com/stranger/packs//x") {
+		t.Error("a third-party source still needs an explicit entry")
+	}
+}
+
+func TestPackUseKindResolvesToItsOwnRepo(t *testing.T) {
+	u, err := ParseUse(UseKindPack, "pr-review-team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Repo != OfficialPacksRepo {
+		t.Errorf("repo = %q, want %q", u.Repo, OfficialPacksRepo)
+	}
+	// A pack sits at the root of the packs repo — not under a kind directory.
+	if u.Component != "pr-review-team" {
+		t.Errorf("component = %q", u.Component)
+	}
+	// A name that is a builtin RUNTIME is a perfectly good pack name: the
+	// connector/runtime confusion check must not fire across repos.
+	if _, err := ParseUse(UseKindPack, "paseo"); err != nil {
+		t.Errorf("a pack may be named after a builtin runtime: %v", err)
+	}
+}
+
+// §15: a pack's `models:` block IS instantiated as `<ns>/<name>` fleets,
+// but nothing rewrote a step's `model:` reference — so a pack step saying
+// `model: reviewer` resolved against the CONSUMER's globals. Silent
+// mis-resolution at best; a reach across the namespace boundary if the
+// consumer happens to have that name.
+func TestPackStepModelResolvesToThePacksOwnFleet(t *testing.T) {
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/kit", `
+pack:
+  name: kit
+  version: "1.0.0"
+  requires: { conductor: ">=0.1" }
+models:
+  reviewer: { any: ["claude-opus-*"] }
+workflows:
+  flow:
+    steps:
+      - { id: review, type: agent, prompt: p, model: reviewer }
+      - { id: pinned, type: agent, prompt: p, model: claude-opus-5 }
+`)
+	cfg, err := resolveAndLoad(t, writeDoc(t, dir, `
+connectors:
+  gh: { use: github, token: x }
+models:
+  reviewer: { any: ["a-consumer-model"] }
+packs:
+  kit: { source: ./src/kit }
+`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// The pack's own fleet, not the consumer's same-named one.
+	if got := packStep(t, cfg, "kit/flow/review").Model.Ref; got != "kit/reviewer" {
+		t.Fatalf("a pack step's fleet ref must resolve inside the pack, got %q", got)
+	}
+	if _, ok := cfg.Models["kit/reviewer"]; !ok {
+		t.Fatalf("the namespaced fleet should exist, have %v", mapKeys(cfg.Models))
+	}
+	// An exact pin is not a fleet name and must pass through untouched —
+	// `model:` is map-key-wins.
+	if got := packStep(t, cfg, "kit/flow/pinned").Model.Ref; got != "claude-opus-5" {
+		t.Fatalf("an exact model id must not be namespaced, got %q", got)
+	}
 }

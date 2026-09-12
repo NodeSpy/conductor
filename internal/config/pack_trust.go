@@ -37,6 +37,13 @@ func (t *PackTrustConfig) SourceAllowed(source string) bool {
 	if !remote {
 		return true
 	}
+	// The OFFICIAL pack repo is in the default allowlist, mirroring
+	// PluginSourceAllowed. A `packs:` key implies that repo (design §5.1), so
+	// an operator who adds an allowlist for third-party packs would otherwise
+	// silently break every official pack they already reference by name.
+	if s == OfficialPacksSource || strings.HasPrefix(s, OfficialPacksSource+"/") {
+		return true
+	}
 	for _, pat := range t.Allow {
 		if globMatch(strings.TrimSpace(pat), s) {
 			return true
@@ -45,33 +52,151 @@ func (t *PackTrustConfig) SourceAllowed(source string) bool {
 	return false
 }
 
-// globMatch reports whether s matches pattern, where `*` matches any run of
-// characters (including `/`). Anchored at both ends.
+// PluginSourceAllowed reports whether a PLUGIN source is permitted. It differs
+// from SourceAllowed in one way, and deliberately: the OFFICIAL plugin repo is
+// in the DEFAULT allowlist, and everything else remote is not.
+//
+// A plugin is a binary conductor executes, so "no policy configured" must not
+// mean "any repo on the internet is fine" — but requiring ceremony to install an
+// official plugin would defeat the whole app-extension model. So: official is
+// always allowed, a third-party repo needs an explicit `plugin_trust.allow`
+// entry (or `--allow-unlisted`), and a local path is the operator's own disk.
+func (t *PackTrustConfig) PluginSourceAllowed(source string) bool {
+	s := strings.TrimSpace(source)
+	if s == "" {
+		return true // local binary: the operator's own disk
+	}
+	// The official plugin and pack repos are trusted by default: naming an
+	// official component needs no ceremony, a third-party source still does.
+	for _, official := range []string{OfficialSource, OfficialPacksSource} {
+		if s == official || strings.HasPrefix(s, official+"/") {
+			return true
+		}
+	}
+	if t == nil {
+		return false
+	}
+	for _, pat := range t.Allow {
+		if globMatch(strings.TrimSpace(pat), s) {
+			return true
+		}
+	}
+	return false
+}
+
+// globMatch reports whether a pack/plugin SOURCE matches a trust pattern.
+//
+// `*` IS SEGMENT-BOUNDED: it does not match across a `/`, the same rule Go's
+// path.Match uses. That is the whole security property of this function, and
+// the wildcard branch did not have it — `*` was any run of characters,
+// including separators, so
+//
+//	pack_trust: { allow: ["github.com/trusted-org*"] }
+//
+// matched `github.com/trusted-org-evil/malicious-pack`: a DIFFERENT,
+// attacker-registered org, whose name merely continues the trusted one. The
+// daemon then fetched and executed it. The exact-match branch was anchored at
+// a delimiter for the same reason one commit earlier; this is its sibling.
+//
+// The two rules:
+//
+//	a `*` inside a segment matches within THAT segment only, so
+//	  `github.com/trusted-org*` can name an org and never a repo under a
+//	  different one;
+//	a BARE `*` as the final segment matches the remaining path, so
+//	  `github.com/acme/*` still means "any repo under acme" — including a
+//	  deeper host layout like a gitlab subgroup. It cannot escape the org,
+//	  because everything before it is literal.
+//
+// A source's `//subdir` and `@ref` are stripped before matching: a subdir or
+// ref OF a trusted repo is trusted, which is what the exact branch's
+// delimiter anchoring says too.
+//
+// RESIDUAL, deliberately: a mid-segment `*` still matches same-SEGMENT
+// continuations — `github.com/acme/conductor-packs*` admits
+// `github.com/acme/conductor-packs2`. That is inherent to asking for a
+// mid-segment wildcard, and registering that name needs write access under
+// `acme` already. The cross-`/`, cross-org escalation is the one that had to
+// close. The docs no longer recommend the mid-segment form.
 func globMatch(pattern, s string) bool {
 	// Fast paths.
 	if pattern == "*" {
 		return true
 	}
 	parts := strings.Split(pattern, "*")
-	// No wildcard: exact match OR prefix (so `github.com/acme/repo` matches
-	// `github.com/acme/repo//sub@ref`).
+	// No wildcard: exact match OR a prefix anchored at a source delimiter, so
+	// `github.com/acme/repo` matches `github.com/acme/repo//sub@ref` (a subdir
+	// or ref of the SAME repo) but NOT `github.com/acme/repo-evil-fork` (a
+	// different, attacker-registered repo whose name merely continues the
+	// trusted one — a typosquat/name-continuation supply-chain bypass).
 	if len(parts) == 1 {
-		return s == pattern || strings.HasPrefix(s, pattern)
-	}
-	// Anchor the first segment at the start.
-	if !strings.HasPrefix(s, parts[0]) {
+		if s == pattern {
+			return true
+		}
+		if strings.HasPrefix(s, pattern) {
+			rest := s[len(pattern):]
+			return strings.HasPrefix(rest, "/") || strings.HasPrefix(rest, "@")
+		}
 		return false
 	}
-	s = s[len(parts[0]):]
-	// Middle segments match in order.
-	for _, seg := range parts[1 : len(parts)-1] {
-		i := strings.Index(s, seg)
+	// A trust pattern names a REPO or an ORG, so the source's subdir/ref
+	// continuation is stripped and the repo path is what gets matched.
+	return segmentMatch(pattern, sourceRepoPath(s))
+}
+
+// sourceRepoPath drops a source's `//subdir` and `@ref` continuation, leaving
+// the `host/org/repo` path a trust pattern names.
+func sourceRepoPath(s string) string {
+	if i := strings.Index(s, "//"); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.Index(s, "@"); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
+
+// segmentMatch matches a `*` pattern against a path, segment by segment, so a
+// `*` never crosses a `/`. A BARE `*` in the final pattern segment matches one
+// or more remaining path segments (the `org/*` form); every other `*` is
+// confined to its own segment.
+func segmentMatch(pattern, path string) bool {
+	pseg := strings.Split(pattern, "/")
+	sseg := strings.Split(path, "/")
+	for i, p := range pseg {
+		last := i == len(pseg)-1
+		if last && p == "*" {
+			// "any repo under here" — one or more segments, all of them
+			// below the literal prefix that precedes this `*`.
+			return len(sseg) > i
+		}
+		if i >= len(sseg) {
+			return false
+		}
+		if !segmentGlob(p, sseg[i]) {
+			return false
+		}
+	}
+	return len(pseg) == len(sseg)
+}
+
+// segmentGlob matches ONE path segment, where `*` is any run of characters
+// within that segment (never a `/`, since a segment contains none).
+func segmentGlob(pattern, seg string) bool {
+	parts := strings.Split(pattern, "*")
+	if len(parts) == 1 {
+		return pattern == seg
+	}
+	if !strings.HasPrefix(seg, parts[0]) {
+		return false
+	}
+	seg = seg[len(parts[0]):]
+	for _, mid := range parts[1 : len(parts)-1] {
+		i := strings.Index(seg, mid)
 		if i < 0 {
 			return false
 		}
-		s = s[i+len(seg):]
+		seg = seg[i+len(mid):]
 	}
-	// Anchor the last segment at the end (empty last => trailing `*` matches all).
-	last := parts[len(parts)-1]
-	return strings.HasSuffix(s, last)
+	return strings.HasSuffix(seg, parts[len(parts)-1])
 }

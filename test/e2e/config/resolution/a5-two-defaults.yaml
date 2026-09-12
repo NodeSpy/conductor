@@ -10,7 +10,7 @@ integrations:
 controllers:
   one: { type: paseo, default: true }
   two: { type: paseo, default: true }
-agents:
-  fixer: { provider: fake }
+steps:
+  fixer: { type: agent, name: fixer }
 store: { state_file: /data/state.json, audit_log: /data/audit.jsonl }
 paseo_bin: /usr/local/bin/fakepaseo

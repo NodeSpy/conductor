@@ -29,12 +29,43 @@ import (
 // dialer starts `opencode serve` in the worktree with conductor's identity env, or
 // a test injects a server URL directly.
 type opencodeController struct {
-	name string
-	host string // hosts: entry the server launches on over SSH ("" = local)
-	iso  *config.IsolationConfig
-	prov Provisioner
-	dial opencodeDialer // injectable; nil → spawn `opencode serve`
-	hc   *http.Client
+	runner runnerMemo
+	name   string
+	host   string // hosts: entry the server launches on over SSH ("" = local)
+	iso    *config.IsolationConfig
+	prov   Provisioner
+	dial   opencodeDialer // injectable; nil → spawn `opencode serve`
+	hc     *http.Client
+
+	// cwds remembers the worktree each session was opened in, keyed by
+	// session id. ResumeSession is handed only an id — the Controller
+	// interface carries no Spec on that call — and it was rooting the
+	// resumed server at "" (the daemon's own cwd) instead of the
+	// checkout. A follow-up then read and edited the wrong tree, silently.
+	cwdMu sync.Mutex
+	cwds  map[string]string
+}
+
+// rememberCwd records where a session was opened, for ResumeSession.
+func (c *opencodeController) rememberCwd(id, cwd string) {
+	if id == "" || cwd == "" {
+		return
+	}
+	c.cwdMu.Lock()
+	defer c.cwdMu.Unlock()
+	if c.cwds == nil {
+		c.cwds = map[string]string{}
+	}
+	c.cwds[id] = cwd
+}
+
+// cwdFor returns a session's remembered worktree ("" when unknown — a
+// resume after a daemon restart, where the caller's own checkout logic
+// applies).
+func (c *opencodeController) cwdFor(id string) string {
+	c.cwdMu.Lock()
+	defer c.cwdMu.Unlock()
+	return c.cwds[id]
 }
 
 // opencodeDialer resolves a base URL for an opencode server rooted at cwd with env
@@ -89,7 +120,9 @@ func (c *opencodeController) Initialize(context.Context) (Capabilities, error) {
 }
 
 func (c *opencodeController) Runner() (Runner, error) {
-	return newControllerRunner(c, c.prov, nil), nil
+	// One runner per controller: its live-agent tracking is the state
+	// the engine's duplicate-dispatch gate reads (see runnerMemo).
+	return c.runner.get(func() Runner { return newControllerRunner(c, c.prov, nil) }), nil
 }
 
 // NewSession starts (or connects to) an opencode server rooted at the worktree,
@@ -147,15 +180,23 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 		return nil, fmt.Errorf("opencode: create session: %w", err)
 	}
 
+	// opencode routes a turn by providerID + modelID. The resolved model is
+	// one id; when it carries opencode's own `provider/model` spelling the
+	// two halves split out, otherwise the model rides alone and opencode
+	// picks the provider itself.
+	provider, model := splitProviderModel(spec.Request.Model)
 	s := &opencodeSession{
 		id:       id,
 		cl:       cl,
 		cleanup:  cleanup,
 		cancel:   scancel,
 		ctx:      sctx,
-		provider: spec.Request.Profile.Provider,
-		model:    spec.Request.Profile.Model,
+		provider: provider,
+		model:    model,
 	}
+	// Remember where this session lives, so a follow-up resumes into the
+	// same worktree rather than the daemon's cwd.
+	c.rememberCwd(id, spec.Cwd)
 	s.startTurn(prompt)
 	return s, nil
 }
@@ -163,7 +204,10 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 // ResumeSession re-binds an existing opencode session by id (resumable by id).
 func (c *opencodeController) ResumeSession(ctx context.Context, id string, agentAuthored bool, _ Handler) (Session, error) {
 	sctx, scancel := context.WithCancel(context.Background())
-	baseURL, cleanup, err := c.connect(sctx, "", nil, resumeOpts(c.iso, agentAuthored))
+	// Root the resumed server at the session's OWN worktree. Passing ""
+	// rooted it at the daemon's cwd, so a follow-up turn read and edited
+	// a different tree than the one the session had been working in.
+	baseURL, cleanup, err := c.connect(sctx, c.cwdFor(id), nil, resumeOpts(c.iso, agentAuthored))
 	if err != nil {
 		scancel()
 		return nil, err
@@ -331,6 +375,15 @@ func (c *opencodeClient) createSession(ctx context.Context, directory, title str
 }
 
 // prompt sends one prompt turn (POST /session/{id}/message) and returns the
+// splitProviderModel splits an opencode-style "provider/model" id. A bare
+// model id returns an empty provider — opencode then resolves it itself.
+func splitProviderModel(id string) (provider, model string) {
+	if p, m, ok := strings.Cut(id, "/"); ok && p != "" && m != "" {
+		return p, m
+	}
+	return "", id
+}
+
 // assistant's assembled text. provider/model route the turn when set.
 func (c *opencodeClient) prompt(ctx context.Context, sessionID, text, provider, model string) (string, error) {
 	body := map[string]any{
@@ -474,3 +527,11 @@ func (s *opencodeSession) Close(context.Context) error {
 	}
 	return nil
 }
+
+// CwdOf and RememberCwd expose the session→worktree map to the broker, which
+// persists it at bind time and hands it back before a post-restart resume —
+// the in-process map is empty after a restart, and resuming with no cwd would
+// root the agent at the daemon's own directory instead of the worktree.
+func (c *opencodeController) CwdOf(sessionID string) string { return c.cwdFor(sessionID) }
+
+func (c *opencodeController) RememberCwd(sessionID, cwd string) { c.rememberCwd(sessionID, cwd) }

@@ -12,14 +12,27 @@ import (
 	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
-// Session affinity (#36 §10). By default each dispatch gets a fresh agent;
-// an agent profile with a `session:` block instead binds a live session to
-// the rendered key, and every event resolving to that key — across ALL
-// triggers dispatching to that agent — reaches the same session as a
-// follow-up prompt with full prior context. One agent per PR, shared by a
-// comment, a check failure, and a review-change alike.
+// Session affinity (#36 §10, re-keyed by docs/design/agents-removal.md §3).
+// By default each dispatch gets a fresh agent; a `session:` block instead
+// binds a live session to the rendered key, and every event resolving to that
+// key reaches the same session as a follow-up prompt with full prior context.
+// One agent per PR, shared by a comment, a check failure, and a review-change
+// alike.
 //
-// The registry is keyed by (agent, key-value), serialized per key (at most
+// The binding is (RUNTIME, MODEL, key-value). Both extra dimensions are
+// STRUCTURAL rather than identities: a live agent is one model on one
+// runtime, so you can resume neither a paseo session on codex nor an opus
+// step into a haiku session. Because a pack assigns a fleet per step, its
+// model assignments partition affinity for free — same fleet + same key is
+// one agent, a different fleet is a different agent, with no policy needed.
+//
+// Two scopes share that binding shape: a `session:` on the RUNTIME is the
+// overall pool (its key is used as written, so steps share it), and a
+// `session:` on a STEP is its own pool (its key is namespaced to the step
+// identity, so an identical key string is still a distinct session). A step
+// with no session: joins the runtime's pool; with neither, dispatch is fresh.
+//
+// The registry is serialized per binding key (at most
 // one prompt in flight; concurrent same-key events queue on the key's lock —
 // the `group:` one-run-per-key guarantee extended across the session's
 // life), persisted in conductor's own state (affinity.json beside audit/
@@ -32,12 +45,23 @@ import (
 // sender, ACP); one-shot runtimes fall back to fresh-per-event and lean on
 // shared memory (§9) for continuity.
 
-// AffinityRef is one persisted (agent, key) → session binding.
+// AffinityRef is one persisted (runtime, model, key) → session binding.
 type AffinityRef struct {
-	Agent      string // agent profile name
-	Key        string // rendered session key value
-	Controller string // runtime that owns the session
+	// Runtime is the `runtimes:` entry the session lives on — one half of
+	// the structural partition.
+	Runtime string
+	// Model is the RESOLVED model the session runs (empty for a bare
+	// launch) — the other half. A bare-launch pool and a pinned-model pool
+	// are deliberately distinct.
+	Model string
+	// Key is the rendered session key value; for a step-scoped session it is
+	// already namespaced to the step identity (see StepSessionKey).
+	Key        string
+	Controller string // runtime implementation that owns the session
 	SessionID  string // the runtime's session/agent id
+	// Shape fingerprints the controller this session was opened on, so a
+	// resume can tell that `runtimes.<name>` now points somewhere else.
+	Shape string
 	// AgentAuthored: the original dispatch's provenance, replayed on resume
 	// so the deny-by-default egress survives restarts (#36 iso-review H5).
 	AgentAuthored bool
@@ -49,7 +73,7 @@ type AffinityRef struct {
 // satisfies it; tests inject an in-memory fake.
 type AffinityStore interface {
 	PutAffinity(AffinityRef) error
-	DeleteAffinity(agent, key string) error
+	DeleteAffinity(runtime, model, key string) error
 	Affinities() []AffinityRef
 }
 
@@ -68,7 +92,7 @@ func SupportsSessionPersistence(c Controller) bool {
 	return false
 }
 
-// Affinity owns the global (agent, key) → session registry.
+// Affinity owns the global (runtime, model, key) → session registry.
 type Affinity struct {
 	reg   *Registry
 	store AffinityStore
@@ -142,7 +166,22 @@ func NewAffinity(reg *Registry, st AffinityStore, cfg *config.Config, hold, rele
 	}
 	if st != nil {
 		for _, r := range st.Affinities() {
-			bk := bindingKey(r.Agent, r.Key)
+			// A binding that the CURRENT config can no longer produce is
+			// dead: its runtime was deleted or renamed, so no dispatch
+			// will ever key to it again. Holding it kept the agent alive
+			// (and the reaper away) until idle-out, for a session nothing
+			// could reach. Drop it at startup instead.
+			if !a.bindingStillReachable(r) {
+				if a.log != nil {
+					a.log("affinity: dropping binding %s/%s (session %s) — no runtime %q in the current config",
+						r.Runtime, r.Key, r.SessionID, r.Runtime)
+				}
+				if st != nil {
+					_ = st.DeleteAffinity(r.Runtime, r.Model, r.Key)
+				}
+				continue
+			}
+			bk := bindingKey(r.Runtime, r.Model, r.Key)
 			a.refs[bk] = r
 			a.owned[r.SessionID] = bk
 			if a.hold != nil {
@@ -153,7 +192,62 @@ func NewAffinity(reg *Registry, st AffinityStore, cfg *config.Config, hold, rele
 	return a
 }
 
-func bindingKey(agent, key string) string { return agent + "\x00" + key }
+// bindingStillReachable reports whether a persisted binding could still be
+// produced by the current config. With no config in hand (a bare
+// registry, a test) everything is kept — this prunes what it can prove
+// dead, and guesses at nothing.
+func (a *Affinity) bindingStillReachable(r AffinityRef) bool {
+	if a.cfg == nil {
+		return true
+	}
+	if r.Runtime == config.BuiltinPaseoRuntime {
+		return true
+	}
+	_, ok := a.cfg.Runtimes[r.Runtime]
+	return ok
+}
+
+// controllerShape is a fingerprint of the controller a session was opened
+// on: its implementation and the argv/agent that implementation launches.
+//
+// A resume looked the controller up by NAME against the CURRENT config, so
+// editing `runtimes.<name>` to point at a different tool — a different
+// binary, a different ACP agent — sent a foreign session id to a program
+// that had never heard of it. The failure is confusing at best and, if the
+// id happens to be meaningful to the new tool, wrong at worst.
+func controllerShape(cfg *config.Config, name string) string {
+	if cfg == nil {
+		return ""
+	}
+	rt, ok := cfg.Runtimes[name]
+	if !ok {
+		return ""
+	}
+	return strings.Join(append([]string{rt.Use, rt.Agent, rt.Tool, rt.Bin}, rt.Command...), "\x00")
+}
+
+// bindingKey is the registry key: the three structural dimensions joined by
+// a separator no rendered key can contain.
+func bindingKey(runtime, model, key string) string {
+	return runtime + "\x00" + model + "\x00" + key
+}
+
+// StepSessionKey namespaces a STEP-scoped session key to the step identity,
+// so a step's pool is distinct from the runtime's overall pool and from every
+// other step's — even when the human-written key string is identical
+// (docs/design/agents-removal.md §3).
+func StepSessionKey(stepIdentity, rendered string) string {
+	if stepIdentity == "" {
+		return rendered
+	}
+	return stepIdentity + string(keySep) + rendered
+}
+
+// keySep joins a step identity to its rendered key. A control byte, so it
+// cannot occur in a hand-written identity; renderKey refuses a RENDERED
+// key that contains one, since event data could otherwise choose which
+// pool a session lands in.
+const keySep = '\x1f'
 
 // Dispatch routes one agent request through session affinity. handled=false
 // means affinity doesn't apply (no session: spec, a non-persistent runtime,
@@ -162,25 +256,26 @@ func bindingKey(agent, key string) string { return agent + "\x00" + key }
 // (RunRef.Queued, same AgentID) or a fresh spawn via runner that is now
 // bound to the key.
 func (a *Affinity) Dispatch(ctx context.Context, runner Runner, req dispatch.Request) (dispatch.RunRef, bool, error) {
-	spec := req.Profile.Session
-	if a == nil || spec == nil || req.Action.Type != "agent" || req.Shadow {
+	if a == nil || req.Action.Type != "agent" || req.Shadow {
 		return dispatch.RunRef{}, false, nil
 	}
-	c, err := a.reg.Resolve(req.Profile.RuntimeName())
+	runtimeName := a.runtimeNameFor(req.Step.Runtime)
+	spec, stepScoped := a.specFor(req.Step, runtimeName)
+	if spec == nil {
+		return dispatch.RunRef{}, false, nil
+	}
+	c, err := a.reg.Resolve(req.Step.Runtime)
 	if err != nil {
 		return dispatch.RunRef{}, false, nil // the plain path surfaces resolution errors
 	}
 	if !SupportsSessionPersistence(c) {
 		return dispatch.RunRef{}, false, nil // fresh-per-event fallback (lean on memory)
 	}
-	key, err := dispatch.RenderField(spec.Key, req)
+	key, err := a.renderKey(spec, req, stepScoped)
 	if err != nil {
-		return dispatch.RunRef{}, true, fmt.Errorf("agent %q session.key: %w", req.Action.Agent, err)
+		return dispatch.RunRef{}, true, err
 	}
-	if key = strings.TrimSpace(key); key == "" {
-		return dispatch.RunRef{}, true, fmt.Errorf("agent %q session.key rendered empty for %s", req.Action.Agent, req.Trigger.Kind)
-	}
-	bk := bindingKey(req.Action.Agent, key)
+	bk := bindingKey(runtimeName, req.Model, key)
 
 	// Live-binding fast path, WITHOUT the key lock: the engine's single
 	// process goroutine calls Dispatch inline, and the key lock is held for a
@@ -236,25 +331,94 @@ func (a *Affinity) Dispatch(ctx context.Context, runner Runner, req dispatch.Req
 	if err != nil || runRef.AgentID == "" {
 		return runRef, true, err
 	}
-	a.bind(bk, req.Action.Agent, key, c.Name(), runRef.AgentID, req.AgentAuthored)
+	a.bind(bk, runtimeName, req.Model, key, c.Name(), runRef.AgentID, req.AgentAuthored)
 	return runRef, true, nil
 }
 
-// bind records a fresh (agent, key) → session binding and holds the agent
-// from the reaper.
-func (a *Affinity) bind(bk, agent, key, controllerName, sessionID string, agentAuthored bool) {
+// runtimeNameFor resolves the `runtimes:` entry a dispatch lands on: the
+// step's own pin, else the fleet default, else the built-in paseo.
+func (a *Affinity) runtimeNameFor(pinned string) string {
+	if pinned != "" {
+		return pinned
+	}
+	if a.cfg != nil {
+		if def := a.cfg.DefaultRuntimeName(); def != "" {
+			return def
+		}
+	}
+	return config.BuiltinPaseoRuntime
+}
+
+// specFor resolves which session policy governs a dispatch: the STEP's own
+// (its own pool, key namespaced to the step identity), else the RUNTIME's
+// (the overall pool, key as written), else none.
+func (a *Affinity) specFor(step config.Step, runtimeName string) (spec *config.SessionSpec, stepScoped bool) {
+	if step.Session != nil {
+		return step.Session, true
+	}
+	if a.cfg != nil {
+		if rt, ok := a.cfg.Runtimes[runtimeName]; ok && rt.Session != nil {
+			return rt.Session, false
+		}
+	}
+	return nil, false
+}
+
+// renderKey renders a session key against the dispatch, namespacing it to the
+// step identity for a step-scoped session.
+func (a *Affinity) renderKey(spec *config.SessionSpec, req dispatch.Request, stepScoped bool) (string, error) {
+	// RenderSessionKey, not RenderField: a session key is an IDENTITY, and
+	// an untrusted target must not render into a real pool's key.
+	key, err := dispatch.RenderSessionKey(spec.Key, req)
+	if err != nil {
+		return "", fmt.Errorf("step %q session.key: %w", req.Identity, err)
+	}
+	if key = strings.TrimSpace(key); key == "" {
+		return "", fmt.Errorf("step %q session.key rendered empty for %s", req.Identity, req.Trigger.Kind)
+	}
+	// The step-scope namespace is joined with \x1f, and specForRef reads
+	// the binding back by cutting on the FIRST one. A rendered key
+	// carrying that byte — it can arrive from event data, so it is not
+	// hypothetical — would make a runtime-pool key parse as step-scoped
+	// and be judged against the wrong session: spec, or a step's key
+	// parse with a truncated identity. Refuse it at the boundary rather
+	// than let it decide which pool a session joins.
+	if strings.ContainsRune(key, keySep) {
+		return "", fmt.Errorf("step %q session.key rendered a value containing a control byte (U+001F), which is reserved as the scope separator — template a key from fields that cannot carry one", req.Identity)
+	}
+	// An untrusted target's pool is namespaced to itself, AFTER the checks
+	// above so an empty render is still the error it should be.
+	key = dispatch.SessionKeyNamespace(req) + key
+	if stepScoped {
+		key = StepSessionKey(req.Identity, key)
+	}
+	return key, nil
+}
+
+// bind records a fresh (runtime, model, key) → session binding and holds the
+// agent from the reaper.
+func (a *Affinity) bind(bk, runtimeName, model, key, controllerName, sessionID string, agentAuthored bool) {
 	now := a.now()
 	ref := AffinityRef{
-		Agent: agent, Key: key,
+		Runtime: runtimeName, Model: model, Key: key,
 		Controller: controllerName, SessionID: sessionID,
 		AgentAuthored: agentAuthored,
+		Shape:         controllerShape(a.cfg, runtimeName),
 		Created:       now, LastUsed: now,
 	}
 	a.putRef(bk, ref)
 	if a.hold != nil {
 		a.hold(ref.SessionID) // idle between events must not mean reaped
 	}
-	a.log("affinity: %s bound to session %s (key %s)", ref.Agent, ref.SessionID, ref.Key)
+	a.log("affinity: %s bound to session %s (key %s)", ref.label(), ref.SessionID, ref.Key)
+}
+
+// label renders the binding's structural partition for logs.
+func (r AffinityRef) label() string {
+	if r.Model == "" {
+		return r.Runtime + "/(bare)"
+	}
+	return r.Runtime + "/" + r.Model
 }
 
 // deliver runs on the key's FIFO drainer (arrival order preserved): it takes
@@ -271,7 +435,7 @@ func (a *Affinity) deliver(ctx context.Context, runner Runner, req dispatch.Requ
 
 	ref, ok := a.refFor(bk)
 	if !ok {
-		a.log("affinity: %s session for key %q ended before its queued follow-up delivered — dropping the prompt", req.Action.Agent, key)
+		a.log("affinity: session for key %q ended before its queued follow-up delivered — dropping the prompt", key)
 		return
 	}
 	if _, err := a.followup(ctx, bk, ref, prompt, false); err == nil {
@@ -287,15 +451,15 @@ func (a *Affinity) deliver(ctx context.Context, runner Runner, req dispatch.Requ
 	} else {
 		// A dead/unreachable session is stale state, not a lost event: drop
 		// the binding and spawn fresh, binding the key to the new session.
-		a.log("affinity: %s/%s follow-up failed (%v) — starting fresh", ref.Agent, ref.Key, err)
+		a.log("affinity: %s/%s follow-up failed (%v) — starting fresh", ref.label(), ref.Key, err)
 		a.evictLocked(ctx, bk, ref, "follow-up failed")
 	}
 	runRef, err := runner.Dispatch(ctx, req)
 	if err != nil || runRef.AgentID == "" {
-		a.log("affinity: %s fresh dispatch after dead session failed: %v", req.Action.Agent, err)
+		a.log("affinity: %s fresh dispatch after dead session failed: %v", req.Identity, err)
 		return
 	}
-	a.bind(bk, req.Action.Agent, key, controllerName, runRef.AgentID, req.AgentAuthored)
+	a.bind(bk, ref.Runtime, ref.Model, key, controllerName, runRef.AgentID, req.AgentAuthored)
 }
 
 // followup delivers text to the bound session as a follow-up turn, resuming
@@ -311,6 +475,20 @@ func (a *Affinity) followup(ctx context.Context, bk string, ref AffinityRef, tex
 		c, err := a.reg.ByName(ref.Controller)
 		if err != nil {
 			return "", err
+		}
+		// The controller must still be the SHAPE the session was opened
+		// on. Resuming by name alone would hand a foreign session id to
+		// whatever `runtimes.<name>` now points at.
+		if want := ref.Shape; want != "" {
+			if now := controllerShape(a.cfg, ref.Runtime); now != want {
+				a.mu.Lock()
+				sess := a.unbind(bk, ref)
+				a.mu.Unlock()
+				if sess != nil {
+					_ = sess.Close(ctx)
+				}
+				return "", fmt.Errorf("affinity: runtime %q was reconfigured since session %s was opened — not resuming into a different tool", ref.Runtime, ref.SessionID)
+			}
 		}
 		if sess, err = c.ResumeSession(ctx, ref.SessionID, ref.AgentAuthored, nil); err != nil {
 			return "", err
@@ -332,7 +510,7 @@ func (a *Affinity) followup(ctx context.Context, bk string, ref AffinityRef, tex
 	if turnErr != nil {
 		return "", turnErr
 	}
-	a.log("affinity: %s follow-up delivered to session %s (key %s)", ref.Agent, ref.SessionID, ref.Key)
+	a.log("affinity: %s follow-up delivered to session %s (key %s)", ref.label(), ref.SessionID, ref.Key)
 	return out, nil
 }
 
@@ -341,16 +519,20 @@ func (a *Affinity) followup(ctx context.Context, bk string, ref AffinityRef, tex
 // loop's revise round-trip (#36 §11). ok=false when the agent keeps no
 // sessions or none is bound for this key (the plan then escalates instead
 // of revising). Serialized on the key's lock like any prompt.
-func (a *Affinity) Followup(ctx context.Context, agentName string, profile config.AgentProfile, t core.Trigger, text string) (string, bool, error) {
-	spec := profile.Session
-	if a == nil || spec == nil {
+func (a *Affinity) Followup(ctx context.Context, step config.Step, identity string, model string, t core.Trigger, text string) (string, bool, error) {
+	if a == nil {
 		return "", false, nil
 	}
-	key, err := dispatch.RenderField(spec.Key, dispatch.Request{Trigger: t})
-	if err != nil || strings.TrimSpace(key) == "" {
-		return "", false, err
+	runtimeName := a.runtimeNameFor(step.Runtime)
+	spec, stepScoped := a.specFor(step, runtimeName)
+	if spec == nil {
+		return "", false, nil
 	}
-	bk := bindingKey(agentName, strings.TrimSpace(key))
+	key, err := a.renderKey(spec, dispatch.Request{Trigger: t, Step: step, Identity: identity}, stepScoped)
+	if err != nil {
+		return "", false, nil
+	}
+	bk := bindingKey(runtimeName, model, key)
 	kl := a.acquireKey(bk)
 	defer a.releaseKey(bk, kl)
 	ref, ok := a.refFor(bk)
@@ -380,28 +562,58 @@ func (a *Affinity) ObserveEvent(ctx context.Context, t core.Trigger) {
 	if a == nil || a.cfg == nil {
 		return
 	}
-	for name, p := range a.cfg.Agents {
-		if p.Session == nil || !p.Session.EndsOn(t.Instance, t.Source, t.Kind) {
-			continue
+	// end_on is declared on a session: block, which now lives on a runtime
+	// (the overall pool) or a step (its own). Both are walked: the binding a
+	// rendered key resolves to is looked up across every live model, since
+	// the model dimension is structural and an eviction rule names none.
+	reason := "end_on " + t.Instance + "." + t.Kind
+	evict := func(spec *config.SessionSpec, runtimeName, identity string, stepScoped bool, step config.Step) {
+		if spec == nil || !spec.EndsOn(t.Instance, t.Source, t.Kind) {
+			return
 		}
-		key, err := dispatch.RenderField(p.Session.Key, dispatch.Request{Trigger: t})
-		if err != nil || strings.TrimSpace(key) == "" {
-			continue
+		key, err := a.renderKey(spec, dispatch.Request{Trigger: t, Step: step, Identity: identity}, stepScoped)
+		if err != nil {
+			return
 		}
-		bk := bindingKey(name, strings.TrimSpace(key))
-		ref, ok := a.refFor(bk)
-		if !ok {
-			continue
+		for _, bk := range a.bindingsFor(runtimeName, key) {
+			ref, ok := a.refFor(bk)
+			if !ok {
+				continue
+			}
+			sess := a.unbind(bk, ref)
+			a.log("affinity: evicted %s session %s (key %s): %s", ref.label(), ref.SessionID, ref.Key, reason)
+			go func(bk string, ref AffinityRef, sess Session) {
+				kl := a.acquireKey(bk)
+				defer a.releaseKey(bk, kl)
+				a.teardown(context.WithoutCancel(ctx), ref, sess)
+			}(bk, ref, sess)
 		}
-		reason := "end_on " + t.Instance + "." + t.Kind
-		sess := a.unbind(bk, ref)
-		a.log("affinity: evicted %s session %s (key %s): %s", ref.Agent, ref.SessionID, ref.Key, reason)
-		go func(bk string, ref AffinityRef, sess Session) {
-			kl := a.acquireKey(bk)
-			defer a.releaseKey(bk, kl)
-			a.teardown(context.WithoutCancel(ctx), ref, sess)
-		}(bk, ref, sess)
 	}
+	for name, rt := range a.cfg.Runtimes {
+		evict(rt.Session, name, "", false, config.Step{})
+	}
+	a.cfg.WalkSteps(func(scope config.IdentityScope, slot int, s *config.Step) {
+		if s.Session == nil {
+			return
+		}
+		rn := a.runtimeNameFor(s.Runtime)
+		evict(s.Session, rn, s.Identity(scope, slot), true, *s)
+	})
+}
+
+// bindingsFor lists the live binding keys for one runtime and rendered key,
+// across every model partition — an eviction rule names no model, so it ends
+// that key's session on whichever model it happens to be running.
+func (a *Affinity) bindingsFor(runtimeName, key string) []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var out []string
+	for bk, r := range a.refs {
+		if r.Runtime == runtimeName && r.Key == key {
+			out = append(out, bk)
+		}
+	}
+	return out
 }
 
 // EvictExpired reaps every binding past its idle_ttl or max_lifetime (or
@@ -418,8 +630,8 @@ func (a *Affinity) EvictExpired(ctx context.Context) int {
 	a.mu.Unlock()
 	n := 0
 	for bk, ref := range snapshot {
-		spec := a.specFor(ref.Agent)
-		reason := "profile no longer keeps sessions"
+		spec := a.specForRef(ref)
+		reason := "no session: policy governs this binding any more"
 		if spec != nil {
 			reason = a.expiredReason(ref, spec)
 		}
@@ -528,16 +740,36 @@ func (a *Affinity) putRef(bk string, ref AffinityRef) {
 	a.mu.Unlock()
 	if a.store != nil {
 		if err := a.store.PutAffinity(ref); err != nil {
-			a.log("affinity: persist %s/%s: %v", ref.Agent, ref.Key, err)
+			a.log("affinity: persist %s/%s: %v", ref.label(), ref.Key, err)
 		}
 	}
 }
 
-func (a *Affinity) specFor(agent string) *config.SessionSpec {
+// specForRef finds the session policy still governing a persisted binding:
+// the runtime's overall pool for a plain key, or the step whose identity
+// namespaces a step-scoped key. Nil means nothing declares it any more and
+// the binding is reaped.
+func (a *Affinity) specForRef(ref AffinityRef) *config.SessionSpec {
 	if a.cfg == nil {
 		return nil
 	}
-	return a.cfg.Agents[agent].Session
+	ident, _, stepScoped := strings.Cut(ref.Key, string(keySep))
+	if !stepScoped {
+		if rt, ok := a.cfg.Runtimes[ref.Runtime]; ok {
+			return rt.Session
+		}
+		return nil
+	}
+	var found *config.SessionSpec
+	a.cfg.WalkSteps(func(scope config.IdentityScope, slot int, s *config.Step) {
+		if found != nil || s.Session == nil {
+			return
+		}
+		if s.Identity(scope, slot) == ident {
+			found = s.Session
+		}
+	})
+	return found
 }
 
 // expiredReason reports why a binding is expired ("" = still live).
@@ -558,7 +790,7 @@ func (a *Affinity) expiredReason(ref AffinityRef, spec *config.SessionSpec) stri
 func (a *Affinity) evictLocked(ctx context.Context, bk string, ref AffinityRef, reason string) {
 	sess := a.unbind(bk, ref)
 	a.teardown(ctx, ref, sess)
-	a.log("affinity: evicted %s session %s (key %s): %s", ref.Agent, ref.SessionID, ref.Key, reason)
+	a.log("affinity: evicted %s session %s (key %s): %s", ref.label(), ref.SessionID, ref.Key, reason)
 }
 
 // unbind removes the binding from the in-memory maps and the persisted
@@ -573,16 +805,16 @@ func (a *Affinity) unbind(bk string, ref AffinityRef) Session {
 	delete(a.owned, ref.SessionID)
 	a.mu.Unlock()
 	if a.store != nil {
-		if err := a.store.DeleteAffinity(ref.Agent, ref.Key); err != nil {
-			a.log("affinity: delete %s/%s: %v", ref.Agent, ref.Key, err)
+		if err := a.store.DeleteAffinity(ref.Runtime, ref.Model, ref.Key); err != nil {
+			a.log("affinity: delete %s/%s: %v", ref.label(), ref.Key, err)
 		}
 	}
 	return sess
 }
 
-// teardown closes the live handle, releases the reaper hold, and archives
-// the agent when its profile wants finished agents archived. Callers that
-// might race an in-flight turn hold the key lock.
+// teardown closes the live handle, releases the reaper hold, and archives the
+// agent when the step that owned the binding wants finished agents archived.
+// Callers that might race an in-flight turn hold the key lock.
 func (a *Affinity) teardown(ctx context.Context, ref AffinityRef, sess Session) {
 	if sess != nil {
 		_ = sess.Close(ctx)
@@ -590,11 +822,31 @@ func (a *Affinity) teardown(ctx context.Context, ref AffinityRef, sess Session) 
 	if a.release != nil {
 		a.release(ref.SessionID)
 	}
-	if a.cfg != nil && a.cfg.Agents[ref.Agent].ArchiveWhenDone {
+	if a.archiveWanted(ref) {
 		if c, err := a.reg.ByName(ref.Controller); err == nil {
 			if runner, rerr := c.Runner(); rerr == nil {
 				_ = runner.Archive(ctx, ref.SessionID)
 			}
 		}
 	}
+}
+
+// archiveWanted reports whether the step owning a step-scoped binding asked
+// for its agent to be archived when done. A runtime-pool binding is shared,
+// so no single step's preference applies to it.
+func (a *Affinity) archiveWanted(ref AffinityRef) bool {
+	if a.cfg == nil {
+		return false
+	}
+	ident, _, stepScoped := strings.Cut(ref.Key, string(keySep))
+	if !stepScoped {
+		return false
+	}
+	want := false
+	a.cfg.WalkSteps(func(scope config.IdentityScope, slot int, s *config.Step) {
+		if s.Identity(scope, slot) == ident && s.ArchiveWhenDone {
+			want = true
+		}
+	})
+	return want
 }

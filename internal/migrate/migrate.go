@@ -13,8 +13,8 @@
 //
 // It operates on the RAW yaml — no environment expansion — so ${VAR} secret
 // references survive verbatim into the output. Blocks that carry through
-// unchanged (agents:, notify:, store:, update:, …) are lifted as their
-// original yaml nodes, preserving formatting and comments.
+// unchanged (notify:, store:, update:, …) are lifted as their original yaml
+// nodes, preserving formatting and comments.
 package migrate
 
 import (
@@ -32,6 +32,21 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 )
 
+// decodeConfig decodes raw YAML into a Config with anchors resolved first.
+//
+// Every pass that decodes bytes needs this: a custom UnmarshalYAML
+// re-encodes the node it is handed, so an alias whose anchor lives outside
+// that node cannot be read. The migration's own output carries anchors, so
+// without this a second run — which must be a no-op — is a hard error.
+// Callers keep the ORIGINAL bytes for the node tree they rewrite, so
+// anchors, comments, and formatting survive.
+func decodeConfig(b []byte, out *config.Config) error {
+	if resolved, err := config.ResolveAliasBytes(b); err == nil {
+		b = resolved
+	}
+	return yaml.Unmarshal(b, out)
+}
+
 // Result is one file's transform outcome.
 type Result struct {
 	// Output is the transformed YAML (nil when Changed is false).
@@ -40,6 +55,11 @@ type Result struct {
 	Summary []string
 	// Changed reports whether the file had legacy constructs to transform.
 	Changed bool
+	// InlinedProfiles names the `agents:` profiles this file resolved at
+	// least one referencing step for. A whole-tree caller unions these to
+	// tell a genuinely unreferenced profile from one whose reference is
+	// simply in another file — a distinction a per-file pass cannot make.
+	InlinedProfiles []string
 }
 
 // envTokenRe matches ${VAR} references; maskEnvRe reverses the masking.
@@ -62,8 +82,38 @@ func unmaskEnv(out []byte) []byte {
 
 // Transform converts one legacy config document. The raw bytes must be the
 // on-disk file (unexpanded); the output preserves ${VAR} references.
-func Transform(raw []byte) (*Result, error) {
+func Transform(raw []byte) (*Result, error) { return TransformWith(raw, nil, nil, "") }
+
+// TransformWith is Transform given the agent profiles declared ELSEWHERE in
+// the import tree. `agents:` commonly sat in the main config while the
+// triggers naming it sat in conf.d/*.yaml, and profile behavior is inlined
+// at each site now rather than parked in a registry — so a file holding only
+// triggers needs the table to inline from. AutoMigrate gathers it with
+// CollectProfiles before rewriting any file; a single-file caller passes nil
+// and gets the file's own profiles only.
+// runtimeNames/defaultRuntime describe the runtimes: the WHOLE tree
+// declares — an `agents.x.budget` and the runtime it belongs on routinely
+// live in different files, and a budget that cannot find its runtime used
+// to be dropped with a misleading "declares no runtimes" note.
+func TransformWith(raw []byte, profiles map[string]*yaml.Node, runtimeNames []string, defaultRuntime string) (*Result, error) {
+	var inlined []string
+	tree := treeRuntimes{names: map[string]bool{}, defaultName: defaultRuntime}
+	for _, n := range runtimeNames {
+		tree.names[n] = true
+	}
 	raw = maskEnv(raw)
+	// A file this migration has ALREADY produced carries anchors, and a
+	// strict/lenient decode of raw bytes cannot read those (a custom
+	// UnmarshalYAML re-encodes the node it is handed, and an alias whose
+	// anchor lives outside that node has nothing to point at). Decode from
+	// an alias-resolved rendering; the NODE tree below stays on the
+	// original bytes so a rewrite preserves the anchors, the comments, and
+	// the formatting. Without this, re-running the migration on its own
+	// output is a hard error instead of the no-op it must be.
+	flat := raw
+	if resolved, err := config.ResolveAliasBytes(raw); err == nil {
+		flat = resolved
+	}
 	var notes []string
 	droppedSeen := map[string]bool{}
 	// LENIENT decode, with a strict probe harvesting notes: this migration is
@@ -75,7 +125,7 @@ func Transform(raw []byte) (*Result, error) {
 	// field the legacy engine never read. The strict-output scrub at the end
 	// guarantees anything carried verbatim is gone from the result too.
 	{
-		dec := yaml.NewDecoder(bytes.NewReader(raw))
+		dec := yaml.NewDecoder(bytes.NewReader(flat))
 		dec.KnownFields(true)
 		var probe config.Config
 		if err := dec.Decode(&probe); err != nil && err != io.EOF {
@@ -88,7 +138,7 @@ func Transform(raw []byte) (*Result, error) {
 		}
 	}
 	var cfg config.Config
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+	if err := yaml.Unmarshal(flat, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w (note: config migrate reads the raw file — a ${VAR} in a numeric field can't be parsed; quote or inline it)", err)
 	}
 	var doc yaml.Node
@@ -119,6 +169,24 @@ func Transform(raw []byte) (*Result, error) {
 		} else if changed {
 			cur, anyChanged = out, true
 		}
+		// The use: pass runs LAST: it consumes the connectors:/runtimes: blocks
+		// the passes above may have produced, and folds plugins:/type:/source:/
+		// kind: into the single use: field.
+		if out, changed, err := applyUsePass(cur, &notes); err != nil {
+			return nil, fmt.Errorf("use migration: %w", err)
+		} else if changed {
+			cur, anyChanged = out, true
+		}
+		// The agents: pass runs after use:, so a budget it moves lands on a
+		// runtimes: entry that already carries its `use:`.
+		if out, changed, done, err := applyAgentsPass(cur, profiles, tree, &notes); err != nil {
+			return nil, fmt.Errorf("agents migration: %w", err)
+		} else {
+			inlined = append(inlined, done...)
+			if changed {
+				cur, anyChanged = out, true
+			}
+		}
 		if !anyChanged {
 			return &Result{Changed: false}, nil
 		}
@@ -126,7 +194,7 @@ func Transform(raw []byte) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &Result{Output: unmaskEnv(cur), Summary: notes, Changed: true}, nil
+		return &Result{Output: unmaskEnv(cur), Summary: notes, Changed: true, InlinedProfiles: inlined}, nil
 	}
 	if cfg.HasConnectors() {
 		return nil, fmt.Errorf("config already has connectors:/triggers: blocks alongside legacy ones — finish the migration by hand (mixed files are valid to RUN, but the automatic transform only handles fully-legacy files)")
@@ -155,10 +223,12 @@ func Transform(raw []byte) (*Result, error) {
 			conn, trs, err = cronTransform(ref.Name, ref, &notes)
 		case "webhook":
 			conn, trs, err = webhookTransform(ref.Name, ref, &notes)
-		case "sentry":
-			conn, trs, err = sentryTransform(ref.Name, ref, &notes)
-		case "pagerduty":
-			conn, trs, err = pagerdutyTransform(ref.Name, ref, &notes)
+		case "sentry", "pagerduty":
+			// Extracted to an external plugin — recognised, deliberately not
+			// transformed. See legacy_extracted.go for why an automatic
+			// transform would emit a config that never fires.
+			notes = append(notes, extractedNote(ref.Type, ref.Name))
+			continue
 		case "rss":
 			conn, trs, err = rssTransform(ref.Name, ref, &notes)
 		default:
@@ -214,7 +284,7 @@ func Transform(raw []byte) (*Result, error) {
 	runtimes := map[string]config.RuntimeConfig{}
 	for cname, cc := range cfg.Controllers {
 		runtimes[cname] = config.RuntimeConfig{
-			Type: cc.Type, Agent: cc.Agent, Transport: cc.Transport,
+			Use: runtimeUse(cc.Type, cc.Agent), Agent: cc.Agent, Transport: cc.Transport,
 			SessionModel: cc.SessionModel, Default: cc.Default,
 			Tool: cc.Tool, Command: cc.Command,
 			// Bin and Host are load-bearing (.Controller() carries them): a
@@ -227,7 +297,7 @@ func Transform(raw []byte) (*Result, error) {
 		if patched := patchPaseoBin(runtimes, cfg.PaseoBin); patched != "" {
 			notes = append(notes, fmt.Sprintf("paseo_bin → runtimes.%s.bin", patched))
 		} else {
-			runtimes["paseo"] = config.RuntimeConfig{Type: "paseo", Bin: cfg.PaseoBin}
+			runtimes["paseo"] = config.RuntimeConfig{Use: "paseo", Bin: cfg.PaseoBin}
 			notes = append(notes, "paseo_bin → runtimes.paseo.bin")
 		}
 	}
@@ -273,8 +343,8 @@ func Transform(raw []byte) (*Result, error) {
 			return nil, err
 		}
 	}
-	// agents: carried verbatim below; controller: references stay valid (the
-	// new schema accepts both controller: and runtime: on a profile).
+	// agents: is carried verbatim below and then decomposed into steps:
+	// templates by applyAgentsPass (which runs over this output).
 	if len(triggers) > 0 {
 		if err := out.set("triggers", triggers); err != nil {
 			return nil, err
@@ -301,6 +371,24 @@ func Transform(raw []byte) (*Result, error) {
 	} else if vchanged {
 		b = vout
 	}
+	// Same for the use: pass — the legacy transform emits connectors:/runtimes:
+	// entries in the pre-`use:` shape, so it folds them the same way it folds a
+	// hand-written connectors-schema file.
+	if uout, uchanged, uerr := applyUsePass(b, &notes); uerr != nil {
+		return nil, fmt.Errorf("use migration: %w", uerr)
+	} else if uchanged {
+		b = uout
+	}
+	// …and the agents: pass over that output: the legacy transform carries
+	// agents: through verbatim, so it needs the same decomposition a
+	// hand-written connectors config does.
+	aout, achanged, adone, aerr := applyAgentsPass(b, profiles, tree, &notes)
+	inlined = append(inlined, adone...)
+	if aerr != nil {
+		return nil, fmt.Errorf("agents migration: %w", aerr)
+	} else if achanged {
+		b = aout
+	}
 	// The transform must produce a document the STRICT runtime loader accepts
 	// (belt and braces before the caller's full validation) — any key it
 	// doesn't know (a retired legacy block carried verbatim) is scrubbed with
@@ -311,7 +399,7 @@ func Transform(raw []byte) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Output: unmaskEnv(b), Summary: notes, Changed: true}, nil
+	return &Result{Output: unmaskEnv(b), Summary: notes, Changed: true, InlinedProfiles: inlined}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -332,25 +420,43 @@ type unknownField struct {
 
 // unknownFields extracts the unknown-key entries from a strict decode error.
 // ok is true only when EVERY entry is a plain unknown-key entry — a mixed or
-// genuine parse error is not safely scrubbable.
+// genuine parse error is not safely scrubbable. An `ok` with no entries means
+// the whole error was top-level `x-` holders, which are not unknown keys at
+// all: the caller should treat the document as clean.
 func unknownFields(err error) (fes []unknownField, ok bool) {
 	var te *yaml.TypeError
 	if !errors.As(err, &te) {
 		return nil, false
 	}
+	parsed := 0
 	for _, e := range te.Errors {
 		m := fieldNotFoundRe.FindStringSubmatch(e)
 		if m == nil {
 			return nil, false
 		}
-		n, _ := strconv.Atoi(m[1])
-		fes = append(fes, unknownField{line: n, field: m[2], typ: m[3]})
+		parsed++
+		line, _ := strconv.Atoi(m[1])
+		fe := unknownField{line: line, field: m[2], typ: m[3]}
+		// A top-level `x-` holder is an anchor park, not an unknown key —
+		// the loader ignores it, so the migration must leave it in place
+		// rather than scrub the anchors a user's config depends on.
+		if fe.typ == "config.Config" && config.IsExtensionKey(fe.field) {
+			continue
+		}
+		fes = append(fes, fe)
 	}
-	return fes, len(fes) > 0
+	return fes, parsed > 0
 }
 
 // noteUnknown records one dropped key, once per (type, field).
 func noteUnknown(notes *[]string, seen map[string]bool, fe unknownField) {
+	// `agents:` left the schema but has a DEDICATED pass (applyAgentsPass)
+	// that decomposes it and reports what it did. Reporting it here as well
+	// would tell the operator their agents were dropped, which is the
+	// opposite of what happens.
+	if fe.field == "agents" && fe.typ == "config.Config" {
+		return
+	}
 	key := fe.typ + "." + fe.field
 	if seen[key] {
 		return
@@ -365,6 +471,32 @@ func noteUnknown(notes *[]string, seen map[string]bool, fe unknownField) {
 // e.g. a top-level dispatch: from an old backup) is removed with a note.
 // Anything that isn't a plain unknown-key error stays a hard error.
 func scrubUnknownKeys(b []byte, notes *[]string, seen map[string]bool) ([]byte, error) {
+	// The output may carry ANCHORS — the agents pass emits one when several
+	// steps in a file shared a profile. A strict decode cannot read those
+	// directly (a custom UnmarshalYAML re-encodes the node it is handed, and
+	// an alias whose anchor sits outside that node has nothing to point at),
+	// so the check runs against an alias-resolved rendering.
+	//
+	// When it comes back clean the ORIGINAL is returned, anchors intact.
+	// Only when something actually has to be scrubbed does the resolved
+	// rendering become the output — inlining an anchor is a cosmetic loss,
+	// and it beats refusing a migration over a document the loader would
+	// have accepted.
+	if resolved, err := config.ResolveAliasBytes(b); err == nil && !bytes.Equal(resolved, b) {
+		dec := yaml.NewDecoder(bytes.NewReader(resolved))
+		dec.KnownFields(true)
+		var check config.Config
+		err := dec.Decode(&check)
+		if err == nil || err == io.EOF {
+			return b, nil
+		}
+		// An error made up entirely of `x-` holders is not an error — those
+		// are anchor parks the loader ignores.
+		if fes, ok := unknownFields(err); ok && len(fes) == 0 {
+			return b, nil
+		}
+		b = resolved
+	}
 	for pass := 0; pass < 20; pass++ {
 		dec := yaml.NewDecoder(bytes.NewReader(b))
 		dec.KnownFields(true)
@@ -376,6 +508,9 @@ func scrubUnknownKeys(b []byte, notes *[]string, seen map[string]bool) ([]byte, 
 		fes, ok := unknownFields(err)
 		if !ok {
 			return nil, fmt.Errorf("transformed config does not re-parse: %w", err)
+		}
+		if len(fes) == 0 {
+			return b, nil // the only "unknowns" were x- holders
 		}
 		var doc yaml.Node
 		if err := yaml.Unmarshal(b, &doc); err != nil {
@@ -549,11 +684,25 @@ func controlPolicy(c config.Control) map[string]any {
 	return p
 }
 
+// runtimeUse maps a legacy controller's type:/agent: pair onto the single `use:`
+// field. A controller naming an `agent:` is driven over ACP, which is now spelt
+// `use: acp` with the agent alongside it. A controller naming neither (the
+// implicit default) becomes the paseo runtime it always was.
+func runtimeUse(ccType, ccAgent string) string {
+	if ccType != "" {
+		return ccType
+	}
+	if ccAgent != "" {
+		return "acp"
+	}
+	return "paseo"
+}
+
 // patchPaseoBin sets bin on an existing paseo-type runtime; returns its name
 // or "".
 func patchPaseoBin(runtimes map[string]config.RuntimeConfig, bin string) string {
 	for name, rt := range runtimes {
-		if rt.Type == "paseo" {
+		if rt.Use == "paseo" {
 			rt.Bin = bin
 			runtimes[name] = rt
 			return name

@@ -6,10 +6,26 @@ import (
 )
 
 // extends.go implements Docker-Compose-style `extends:` inheritance for the
-// map-of-named-entries config sections (agents, runtimes, workflows, handoffs).
-// A child entry names one parent in the SAME section and inherits every field it
-// leaves unset. Resolution runs once in Load, after imports merge and before
-// validation, so downstream only ever sees fully-resolved entries.
+// map-of-named-entries config sections (runtimes, workflows, handoffs) and for
+// triggers. A child entry names one parent in the SAME section and inherits
+// every field it leaves unset. Resolution runs once in Load, after imports
+// merge and before validation, so downstream only ever sees fully-resolved
+// entries.
+//
+// A STEP's `extends:` is a different thing that happens to share the word,
+// and it lives in stepmerge.go. It takes an anchor alias or an inline map
+// rather than a sibling key (there is no registry of steps), and it merges
+// the YAML NODES rather than the decoded values — which it must, because
+// its `!override` / `!reset` escape hatches are node TAGS and are gone by
+// the time reflection sees a struct. The two cannot share a mechanism;
+// they only share a policy, and where they overlap (scalars fill, maps
+// deep-merge, guidance stacks) both are written to agree.
+//
+// Steps also have `<<: *base` (anchors.go), which is plain YAML: dumb
+// override, resolved by the parser. See stepmerge.go for why both exist.
+// Where something must POINT at a particular step (a `team:` role, a pack
+// overlay), it addresses it where it lives: `<workflow>/<id>` or
+// `<workflow>[<n>]`. See stepref.go.
 //
 // Merge rules (see mergeStruct): scalars — child wins when set; pointers —
 // child wins when non-nil; maps (labels/env/inputs) — deep-merged, child keys
@@ -21,13 +37,14 @@ import (
 
 var guidanceSpecPtrType = reflect.TypeOf((*GuidanceSpec)(nil))
 
+// ResolveExtends is resolveExtends for callers that build a Config without
+// going through Load (the connectors-model lowering, test rigs).
+func (c *Config) ResolveExtends() error { return c.resolveExtends() }
+
 // resolveExtends resolves `extends:` across every section that supports it.
 // Connectors/stores/vaults are intentionally excluded — they decode via a
 // retained raw yaml.Node, which needs a different (node-level) merge.
 func (c *Config) resolveExtends() error {
-	if err := resolveExtendsSection(c.Agents, "agent", func(a AgentProfile) string { return a.Extends }); err != nil {
-		return err
-	}
 	if err := resolveExtendsSection(c.Runtimes, "runtime", func(r RuntimeConfig) string { return r.Extends }); err != nil {
 		return err
 	}
@@ -235,4 +252,14 @@ func mergeGuidance(dst, src reflect.Value) {
 	parent := src.Interface().(*GuidanceSpec)
 	merged := child.prepend(parent.Parts)
 	dst.Set(reflect.ValueOf(&merged))
+}
+
+// MergeStepInto fills dst's unset fields from base, using the same merge
+// policy as `extends:` — scalars fill, maps deep-merge, slices replace when
+// dst leaves them empty, and guidance STACKS (base's tone under dst's).
+//
+// Exported for the runtime, which synthesizes a team's role steps from the
+// workflow step the team references and has to join the two.
+func MergeStepInto(dst *Step, base Step) {
+	mergeStruct(reflect.ValueOf(dst).Elem(), reflect.ValueOf(base))
 }

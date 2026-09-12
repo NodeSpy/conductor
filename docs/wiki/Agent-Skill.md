@@ -5,6 +5,11 @@ conductor — its verbs, the live [[Memory]], and the secret broker — while it
 runs. It is **off by default**: a profile without a `skill:` block gets none
 of this, and every part of it denies unless config explicitly allows.
 
+
+> A skill grant bounds what an agent can do *through conductor*. It is not a
+> wall around an agent that shares the daemon's OS user — see
+> [[Trust-and-Isolation]].
+
 ## How the surface reaches the agent
 
 The agent reaches conductor one of two ways, chosen automatically from the
@@ -44,16 +49,119 @@ in an agent's prompt or env-at-rest.
 ## Enabling it
 
 ```yaml
-agents:
-  deployer:
-    provider: claude
+x-templates:
+  deployer: &deployer
+    type: agent
     model: claude-sonnet-5
     skill:
       secrets_via: broker          # broker | env (deprecated) | none (default)
       allow_secrets: [house/deploy_key]  # exact vault entries (<vault>/<key>) the broker may issue
-      verbs: [gh.comment, rest.*]  # verbs exposed as agent tools (see Verbs as tools)
+      verbs: [gh.comment, rest.*]  # the grant (see below)
       max_calls: 100               # per-session verb-call cap (default 256)
 ```
+
+## The grant — deny-by-default, with wildcards
+
+`skill.verbs` is a deny-by-default allowlist. No block → no surface: no
+tools, no injected guidance, everything denied.
+
+```yaml
+skill:
+  verbs: ["*"]                    # all verbs, all connectors
+  # verbs: [github.*]             # all verbs of one connector
+  # verbs: [github.*, sentry.*]   # several connectors
+  # verbs: [github.submit_review] # specific verbs
+```
+
+### Scoping the grant — which resource, not just which verb
+
+`verbs:` also takes a MAP, and that is where you say WHICH resource a call may
+name. The keys inside an entry are that verb's own resource options, so
+`channel` under `slack.post` and `repo` under `github.submit_review` never
+collide:
+
+```yaml
+skill:
+  verbs:
+    slack.post:           { channel: ["#code-reviews"] }  # only there (+ the dispatch's own)
+    github.submit_review: {}                              # repo pinned to the PR under review
+    kv.*:                 { store: ["shared-kv"] }        # a pattern scopes every verb it admits
+```
+
+- A resource option you **don't** list is limited to the dispatch's own
+  context — the repo the workflow fired for, the channel the event came from,
+  the connector's configured default. Listing **widens** it; it never narrows.
+- No context value and nothing listed → **denied**. A fixed-channel post from
+  a github trigger has to name the channel. That is deliberate: the default
+  is a refusal you fix with one line, not a footgun.
+- WHICH options are scopeable is the connector's own declaration, so
+  `conductor discover <verb>` is the source of truth. Naming an option the
+  verb doesn't declare as a resource (a typo, or `text:`) is a **load error**.
+- The operator's own [[Policy|`policy.agent_authored.allow_scopes`]] applies
+  on top, for dimensions you'd rather set once for every agent.
+- An entry can be **parameterized** ([[Settings-and-Templating]]):
+  `${settings.review_channel}` is substituted at load from the config's own
+  `settings:` block, and `#pr-{{.number}}` is rendered per dispatch from that
+  event's facts — so one line can mean "this PR's channel" without enumerating
+  every PR.
+- **The grant scopes on its own terms.** It does not need a
+  `policy.agent_authored` block to take effect (that governs agent-authored
+  *plans*, a different surface), and `trust: full` does not lift it — a
+  constraint you wrote onto a named verb stays written. To open a dimension
+  here, say so here: `{channel: ["*"]}`, or list it in `allow_scopes`.
+
+Two properties worth being explicit about:
+
+- **Reads are not open by default.** A read verb outside the grant is denied
+  exactly like a write. Breadth is a dial you turn (`github.*`, `*`), never
+  something you get for free.
+- **`conductor.*` and `workflow.*` are unreachable at any breadth**,
+  including `["*"]`. Conductor's own orchestration goes through `run_step`
+  under [[Policy|`policy.agent_authored`]], which has an approval hand-off;
+  the skill surface does not.
+
+This one list drives all three agent-facing surfaces — see below.
+
+## What the agent is told (capability injection)
+
+Conductor teaches the agent how to use it, so a workflow prompt states
+**intent** rather than hand-coding conductor's CLI. Both layers ride the
+grant: a step with no `skill:` is told nothing, because it can do nothing.
+
+- **Layer 0 — mechanics.** A generated preamble: act through conductor verbs
+  rather than shelling out; how to discover them; the call form. On an MCP
+  runtime it says the tools are attached instead of naming a CLI.
+- **Layer 1 — the capability card.** For a CLI-transport runtime, the granted
+  verbs rendered from the verb registry with their options and the exact
+  `conductor call` form:
+
+```
+## Conductor verbs available to you
+Act through these — do not shell out to git/gh/network for what they cover.
+Call as: conductor call <verb> --<option> <value>
+
+• github.submit_review — submit a pull-request review
+    --repo string (required)
+    --pr integer (required)
+    --event APPROVE|REQUEST_CHANGES|COMMENT (required)
+    --body string
+    --comments json
+```
+
+  An MCP runtime (paseo/opencode) gets the *same registry entries* as native
+  tool schemas, so the card would be redundant tokens there and is not sent.
+
+**The card, `conductor discover`, and enforcement are one source.** All three
+resolve the same grant against the same registry, so the card can never
+promise a verb the daemon would refuse, and a verb rename or signature change
+updates every agent's card on the next dispatch with zero workflow edits.
+
+A verb can carry a one-line `Usage` hint ("submit a pull-request review") that
+describes it once, for both the card and the MCP tool description — instead of
+every prompt re-explaining it.
+
+Inside a **pack**, the grant is additionally bounded by
+`requires.connectors` — see [[Packs]].
 
 Identity is **not** a skill setting. Each verb carries its own `as:` option (when
 it has one), and the connector applies its own default when the agent omits it —

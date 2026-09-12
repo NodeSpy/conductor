@@ -197,6 +197,14 @@ func (g *Integration) deliver(ctx context.Context, emit core.EmitFunc, s Source,
 
 	var target core.Target
 	synthetic := repo == ""
+	// A TEMPLATED `repo:` renders from the POST BODY — the only data this
+	// source has — so whoever sends the request chooses the repo this
+	// dispatch claims to be for. That is fine for routing and titles, and it
+	// is NOT a trust anchor: the scope layer must not extend own-target trust
+	// to a value the sender picked. A static `repo: acme/app` is the
+	// operator's own word, and a SYNTHETIC target is this source's own name —
+	// both are trusted.
+	trusted := synthetic || !strings.Contains(s.Repo, "{{")
 	if synthetic {
 		target = inbound.SyntheticTarget("webhook:"+s.Name, s.Name+dedup)
 	} else {
@@ -212,15 +220,16 @@ func (g *Integration) deliver(ctx context.Context, emit core.EmitFunc, s Source,
 			act = inbound.ForceNoCheckout(act)
 		}
 		emit(ctx, core.Trigger{
-			Source:   "webhook",
-			Instance: g.name,
-			Kind:     s.Name,
-			Variant:  act.Name,
-			Target:   target,
-			Title:    title,
-			Dedup:    dedup,
-			Context:  map[string]any{"body": parsed},
-			Action:   act,
+			TargetTrusted: trusted,
+			Source:        "webhook",
+			Instance:      g.name,
+			Kind:          s.Name,
+			Variant:       act.Name,
+			Target:        target,
+			Title:         title,
+			Dedup:         dedup,
+			Context:       map[string]any{"body": parsed},
+			Action:        act,
 		})
 	}
 }

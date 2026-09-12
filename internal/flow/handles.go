@@ -2,7 +2,9 @@ package flow
 
 import (
 	"context"
+
 	"fmt"
+	"github.com/NodeSpy/conductor/internal/core"
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/secrets"
@@ -30,9 +32,76 @@ import (
 // planBarrier, which is only active for unapproved+untrusted plans.
 type agentAuthoredKey struct{}
 
-// markAgentAuthored tags a context as executing agent-authored steps.
-func markAgentAuthored(ctx context.Context) context.Context {
-	return context.WithValue(ctx, agentAuthoredKey{}, true)
+// markAgentAuthored tags a context as executing agent-authored steps, and
+// stamps the TRUSTED SCOPE those steps' identities are namespaced under (see
+// agentAuthoredNamespace).
+func markAgentAuthored(ctx context.Context, t core.Trigger) context.Context {
+	ctx = context.WithValue(ctx, agentAuthoredKey{}, true)
+	return context.WithValue(ctx, agentScopeKey{}, agentAuthoredNamespace(ctx, t))
+}
+
+// agentScopeKey carries the namespace an agent-authored step's identity is
+// confined to.
+type agentScopeKey struct{}
+
+// agentScopeFrom reads it back ("" outside an agent-authored execution).
+func agentScopeFrom(ctx context.Context) string {
+	ns, _ := ctx.Value(agentScopeKey{}).(string)
+	return ns
+}
+
+// agentAuthoredNamespace is the scope an agent-authored step's identity — and
+// therefore its SESSION BINDING KEY — may address, and no further.
+//
+// A step's identity is author-pinned by `name:` (config.IdentityFor rung 1,
+// verbatim, with no scope of its own), and a session binding key is
+// (runtime, model, StepSessionKey(identity, rendered key)). Those are the
+// only inputs. So an agent-authored step writing
+//
+//	{type: agent, name: "review", session: {key: "acme/other-repo#42"}}
+//
+// computed exactly the key a legitimate operator step named "review" produces
+// in ANOTHER repo, and the affinity registry's live-binding fast path
+// delivered this agent's prompt into that repo's running session. Repo and PR
+// number are public; the step-name convention comes from a shared pack. An
+// agent could read and steer another tenant's agent by guessing neither.
+//
+// The identity of an agent-authored step is therefore prefixed with the
+// dispatch's own trusted scope, so a name it chooses can only ever collide
+// INSIDE its own dispatch — which is where session continuity is legitimate
+// and where every party is already the same one.
+//
+// The namespace is the trusted repo and trigger kind. When the target is NOT
+// trusted (a webhook `repo:` the sender chose — round-7 #3) the repo is the
+// attacker's to pick, so it cannot be the wall: the run id is used instead,
+// which confines such a plan to itself.
+func agentAuthoredNamespace(ctx context.Context, t core.Trigger) string {
+	if repo := t.OwnRepo(); repo != "" {
+		// The TARGET, not just the repo. Two pull requests on one repo are
+		// two different untrusted contributors: a namespace of repo#kind put
+		// PR #42's agent-authored step and PR #99's in the same one, so a
+		// name or session.key chosen in either landed on the other's live
+		// session. The number is the per-dispatch discriminator the platform
+		// assigns, and it travels with the repo whose trust it inherits.
+		return fmt.Sprintf("agent:%s#%s#%d", repo, t.Kind, t.Target.Number)
+	}
+	// A reconstructed trigger (run_step) carries the DAEMON-ASSIGNED id of the
+	// dispatch that launched it. That is the anchor for an untrusted target:
+	// the repo is the sender's to pick, this is not. Without it every
+	// run_step fell through to the literals below — Source and Instance are
+	// both "live" — so two dispatches' agent-authored steps collided onto one
+	// namespace, which is the round-10 #2 class reopened on this path.
+	if t.DispatchID != "" {
+		return "agent:dispatch:" + t.DispatchID
+	}
+	if h := histFrom(ctx); h != nil {
+		if id := h.runHistoryID(); id != "" {
+			return "agent:run:" + id
+		}
+	}
+	// Nothing trustworthy to anchor to: confine to the SOURCE's own identity,
+	// which the event's sender does not choose.
+	return "agent:" + t.Source + ":" + t.Instance + ":" + t.Kind
 }
 
 // agentAuthored reports whether this execution runs agent-authored steps.

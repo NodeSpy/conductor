@@ -27,17 +27,17 @@ func TestMemoryVerbs(t *testing.T) {
 	testMemory(t)
 	impl := memoryImpl{}
 	ctx := memory.WithSource(context.Background(), memory.Source{
-		Agent: "fixer", Run: "flow:x:1", Trigger: "failing_checks", Repo: "acme/api",
+		Step: "fixer", Run: "flow:x:1", Trigger: "failing_checks", Repo: "acme/api",
 	})
 
-	// remember resolves relative scope against the run context.
+	// The scope is an OPAQUE key, stored exactly as given.
 	out, err := impl.Invoke(ctx, "remember", map[string]any{
 		"text": "pin the linter version", "tags": []any{"ci", "lint"}, "scope": "repo",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out["scope"] != "repo:acme/api" || out["id"] == "" {
+	if out["scope"] != "repo" || out["id"] == "" {
 		t.Fatalf("remember outputs: %v", out)
 	}
 	id := out["id"].(string)
@@ -92,8 +92,9 @@ func TestMemoryVerbs(t *testing.T) {
 	if _, err := impl.Invoke(ctx, "remember", map[string]any{"text": ""}); err == nil {
 		t.Fatal("empty text should error")
 	}
-	if _, err := impl.Invoke(ctx, "recall", map[string]any{"scope": "bogus"}); err == nil {
-		t.Fatal("bad scope should error")
+	// Any string is a legal scope key — the core never interprets one.
+	if _, err := impl.Invoke(ctx, "recall", map[string]any{"scope": "bogus"}); err != nil {
+		t.Fatalf("an opaque scope key must be accepted: %v", err)
 	}
 	if _, err := impl.Invoke(ctx, "bogus", map[string]any{}); err == nil {
 		t.Fatal("unknown verb should error")
@@ -116,7 +117,7 @@ func TestMemoryVerbsUnconfigured(t *testing.T) {
 // TestMemoryBuiltinRegistered: the connector is always in a built registry
 // and its source face refuses triggers.
 func TestMemoryBuiltinRegistered(t *testing.T) {
-	reg := buildSinkRegistry(t, "connectors:\n  c: { type: command }\n")
+	reg := buildSinkRegistry(t, "connectors:\n  c: { use: command }\n")
 	in, ok := reg.Get("memory")
 	if !ok || in.Decl.Type != "memory" || !in.Enabled {
 		t.Fatalf("memory built-in missing: %+v", in)

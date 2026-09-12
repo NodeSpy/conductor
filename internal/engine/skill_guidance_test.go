@@ -17,29 +17,36 @@ func TestSkillGuidance(t *testing.T) {
 	// (#123): give the test an ACP runtime and pin the profiles to it.
 	cfg.Runtimes = map[string]config.RuntimeConfig{"gem": {Agent: "gemini"}}
 	e, _ := newEng(t, cfg, &fakeDispatcher{}, &fakeNotifier{}, nil)
-	onACP := func(p config.AgentProfile) config.AgentProfile {
+	onACP := func(p config.Step) config.Step {
 		p.Runtime = "gem"
 		return p
 	}
 
-	// Absent by default: a profile without skill: gets only the house text.
-	plain := e.agentGuidance(config.AgentProfile{}, config.Policy{})
-	if strings.Contains(plain, "Conductor tools") {
-		t.Fatalf("skill guidance leaked into a plain profile: %q", plain)
+	// Absent by default: a step without skill: gets only the house text —
+	// the guidance RIDES THE GRANT (design §A).
+	plain := e.agentGuidance(config.Step{}, config.Policy{})
+	if strings.Contains(plain, "CONDUCTOR VERBS") || strings.Contains(plain, "Conductor tools") {
+		t.Fatalf("skill guidance leaked into a step with no grant: %q", plain)
 	}
 
 	// Present when opted in, naming the verb patterns and broker secrets.
-	sk := onACP(config.AgentProfile{Skill: &config.SkillPolicy{
+	sk := onACP(config.Step{Skill: &config.SkillPolicy{
 		Verbs: []string{"gh.comment", "rest.*"}, SecretsVia: "broker", AllowSecrets: []string{"deploy_key"},
 	}})
 	got := e.agentGuidance(sk, config.Policy{})
-	for _, want := range []string{"Conductor tools", "gh.comment, rest.*", "secret_issue", "deploy_key", "single-use", "«secret:"} {
+	// Layer 0 (the generated mechanics preamble) plus the broker text. An
+	// MCP runtime gets NO verb listing in prose — the granted verbs arrive
+	// as native tool schemas instead.
+	for _, want := range []string{"CONDUCTOR VERBS", "attached to this session as tools", "secret_issue", "deploy_key", "single-use", "«secret:"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("guidance missing %q: %q", want, got)
 		}
 	}
+	if strings.Contains(got, "conductor call") {
+		t.Fatalf("an MCP runtime must not be told to shell the CLI: %q", got)
+	}
 	// secrets_via env/none never advertises the broker.
-	envProf := onACP(config.AgentProfile{Skill: &config.SkillPolicy{SecretsVia: "env", AllowSecrets: []string{"deploy_key"}}})
+	envProf := onACP(config.Step{Skill: &config.SkillPolicy{SecretsVia: "env", AllowSecrets: []string{"deploy_key"}}})
 	if g := e.agentGuidance(envProf, config.Policy{}); strings.Contains(g, "secret_issue") {
 		t.Fatalf("broker guidance without secrets_via broker: %q", g)
 	}
@@ -49,7 +56,7 @@ func TestSkillGuidance(t *testing.T) {
 	res.Track("s3kr1t-value")
 	e.secrets = res
 	leaky := config.GuidanceSpec{Parts: []string{"never say s3kr1t-value"}}
-	withLeak := onACP(config.AgentProfile{Guidance: &leaky, Skill: sk.Skill})
+	withLeak := onACP(config.Step{Guidance: &leaky, Skill: sk.Skill})
 	g := e.agentGuidance(withLeak, config.Policy{})
 	if strings.Contains(g, "s3kr1t-value") {
 		t.Fatalf("guidance leaked a tracked value: %q", g)
@@ -61,7 +68,7 @@ func TestSkillGuidance(t *testing.T) {
 	// #123: a runtime with no MCP launch surface (the built-in paseo default
 	// here) gets NO skill blurb — promising absent tools just breaks agents;
 	// validate warns the operator instead.
-	paseoProf := config.AgentProfile{Skill: sk.Skill}
+	paseoProf := config.Step{Skill: sk.Skill}
 	if g := e.agentGuidance(paseoProf, config.Policy{}); strings.Contains(g, "Conductor tools") {
 		t.Fatalf("skill guidance injected on a runtime without MCP tools: %q", g)
 	}

@@ -59,6 +59,28 @@ func (g *GuidanceSpec) UnmarshalYAML(n *yaml.Node) error {
 	}
 }
 
+// MarshalYAML emits the canonical authored form, so a GuidanceSpec survives
+// a marshal/unmarshal round-trip. Without it the struct rendered as
+// `{parts: […], replace: false}`, which UnmarshalYAML rejects by design —
+// and a pack step override round-trips its base through YAML (see
+// applyStepOverride), so the asymmetry turned "override a step that has
+// guidance" into a load error.
+func (g GuidanceSpec) MarshalYAML() (any, error) {
+	if g.Replace {
+		return map[string]any{"replace": partsValue(g.Parts)}, nil
+	}
+	return partsValue(g.Parts), nil
+}
+
+// partsValue renders a one-part stack as the scalar form and anything else
+// as the list form — the shapes a human would have written.
+func partsValue(parts []string) any {
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return parts
+}
+
 // decodeStringOrList fills dst from a scalar (one element) or a sequence node.
 func decodeStringOrList(n *yaml.Node, dst *[]string) error {
 	if n.Kind == yaml.ScalarNode {

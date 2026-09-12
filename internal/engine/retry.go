@@ -56,7 +56,7 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 	if act.FlowRef == "" {
 		return "", fmt.Errorf("run %s is not a connectors-model run — retry applies to flow runs", rec.ID)
 	}
-	spec, ok := e.flow.SpecFor(act.FlowRef)
+	spec, tidx, ok := e.flow.SpecFor(act.FlowRef)
 	if !ok {
 		return "", fmt.Errorf("run %s: its trigger is no longer in the config", rec.ID)
 	}
@@ -136,7 +136,7 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 	go func() {
 		defer e.recoverDispatch(rctx, t, run, "flow retry")
 		defer e.release()
-		e.flow.Run(rctx, run, t, spec, nil, false)
+		e.flow.Run(rctx, run, t, spec, tidx, nil, false)
 	}()
 	from := orTop(fromStep)
 	return fmt.Sprintf("retrying run %s from %s (recorded inputs pinned)", rec.ID, from), nil

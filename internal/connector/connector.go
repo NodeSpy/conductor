@@ -52,6 +52,12 @@ type Field struct {
 	Required bool
 	Enum     []string
 	Desc     string
+	// Scope, on a VERB OPTION, marks the option as naming a RESOURCE and
+	// names its dimension ("channel", "repo", "store", "secret", "path").
+	// Both agent-facing surfaces gate the value of every scoped option
+	// against what the dispatch may address; content options leave it empty
+	// and are never gated. See scope.go.
+	Scope string
 }
 
 // Schema is a set of named fields (option/filter/context/output schemas).
@@ -74,8 +80,13 @@ type EventDecl struct {
 // VerbDecl declares one action verb: the name valid after `uses: <conn>.`,
 // its option schema, and its outputs (request-response verbs).
 type VerbDecl struct {
-	Name    string
-	Desc    string
+	Name string
+	Desc string
+	// Usage is an optional one-line WHAT/WHEN hint rendered into the
+	// capability card a skill-enabled agent is given, and into the MCP tool
+	// description. It lets a verb describe itself once rather than every
+	// workflow prompt re-explaining how to call it. Absent → Desc is used.
+	Usage   string
 	Options Schema
 	Outputs Schema
 	// Ask marks a request-response verb that presents to a human and blocks
@@ -301,6 +312,12 @@ var (
 
 // RegisterType makes a connector type available. Called from init() in each
 // type's file; panics on duplicates (programmer error).
+//
+// It also records the type as BUILTIN with the `use:` resolver, so a bare
+// `use: <type>` resolves in-binary instead of falling through to the official
+// plugin repo — and so a newly-bundled type cannot drift out of the resolver's
+// seed list. RegisterExternalType (plugin-backed) deliberately does NOT do this:
+// a plugin type is what `use:` fetches, not what it short-circuits.
 func RegisterType(decl *TypeDecl, b Builder) {
 	regMu.Lock()
 	defer regMu.Unlock()
@@ -309,6 +326,7 @@ func RegisterType(decl *TypeDecl, b Builder) {
 	}
 	typeReg[decl.Type] = decl
 	buildReg[decl.Type] = b
+	config.RegisterBuiltinConnector(decl.Type)
 }
 
 // Types lists registered connector types (sorted).
@@ -363,9 +381,9 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 	sort.Strings(names)
 	for _, name := range names {
 		ref := cfg.ConnectorsMap[name]
-		decl, ok := TypeDeclFor(ref.Type)
+		decl, ok := TypeDeclFor(ref.TypeName())
 		if !ok {
-			return nil, fmt.Errorf("connector %q: unknown type %q (known: %s)", name, ref.Type, strings.Join(Types(), ", "))
+			return nil, fmt.Errorf("connector %q: unknown type %q (known: %s)", name, ref.TypeName(), strings.Join(Types(), ", "))
 		}
 		in := &Instance{
 			Name:           name,
@@ -377,7 +395,7 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 		if p := effectiveRateLimit(cfg.Policy, ref.Policy); p > 0 {
 			in.limiter = newRateLimiter(p)
 		}
-		impl, err := buildReg[ref.Type](name, ref, deps)
+		impl, err := buildReg[ref.TypeName()](name, ref, deps)
 		if err != nil {
 			// Runtime construction failure (an unresolvable secret, unreadable
 			// key file): disable the connector and keep booting.

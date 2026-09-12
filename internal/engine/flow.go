@@ -24,7 +24,7 @@ import (
 // schemas; here we add the flow-side filters, the scoped policy gates, and
 // group batching, then hand the run to the flow runner.
 func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Action, key, dkind, head string) {
-	spec, ok := e.flow.SpecFor(act.FlowRef)
+	spec, tidx, ok := e.flow.SpecFor(act.FlowRef)
 	if !ok {
 		e.log("%s stale flow ref %q — config changed; dropping", tag(t), act.FlowRef)
 		return
@@ -115,12 +115,12 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 		return
 	}
 	e.notif.Emit(ctx, notify.EventDispatch, t, "workflow")
-	e.startFlowRun(ctx, t, spec, nil, shadow)
+	e.startFlowRun(ctx, t, spec, tidx, nil, shadow)
 }
 
 // startFlowRun takes a concurrency slot and runs one flow (or batch) in its
 // own goroutine.
-func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.TriggerSpec, batch *flow.Batch, shadow bool) {
+func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.TriggerSpec, tidx int, batch *flow.Batch, shadow bool) {
 	if !shadow && !e.acquire(ctx) {
 		return
 	}
@@ -130,7 +130,7 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 		if !shadow {
 			defer e.release()
 		}
-		e.flow.Run(ctx, run, t, spec, batch, shadow)
+		e.flow.Run(ctx, run, t, spec, tidx, batch, shadow)
 	}()
 }
 
@@ -142,7 +142,7 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 	}
 	t := events[len(events)-1]
 	ref, gkey, _ := strings.Cut(fullKey, "\x00")
-	spec, ok := e.flow.SpecFor(ref)
+	spec, tidx, ok := e.flow.SpecFor(ref)
 	if !ok {
 		e.log("%s stale flow ref %q at batch fire — dropping %d events", tag(t), ref, len(events))
 		return
@@ -175,7 +175,7 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 	}
 	defer e.release()
 	run := e.newFlowRun(t, spec, false)
-	e.flow.Run(ctx, run, t, spec, &flow.Batch{Key: gkey, Events: events}, false)
+	e.flow.Run(ctx, run, t, spec, tidx, &flow.Batch{Key: gkey, Events: events}, false)
 }
 
 // recordBatch writes each grouped event's dedup/attempt/comment-mark state
@@ -228,7 +228,7 @@ func (e *Engine) policyFor(spec config.TriggerSpec) config.Policy {
 // legacy action (legacy integrations carry no policy of their own).
 func (e *Engine) retryPolicyFor(act config.Action) config.Policy {
 	if act.FlowRef != "" && e.flow != nil {
-		if spec, ok := e.flow.SpecFor(act.FlowRef); ok {
+		if spec, _, ok := e.flow.SpecFor(act.FlowRef); ok {
 			return e.policyFor(spec)
 		}
 	}
@@ -281,7 +281,7 @@ func (e *Engine) newFlowRun(t core.Trigger, spec config.TriggerSpec, shadow bool
 // ResumeWorkflows): re-find the spec, re-mint tokens, continue after the last
 // checkpointed step.
 func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.Trigger, act config.Action) {
-	spec, ok := e.flow.SpecFor(act.FlowRef)
+	spec, tidx, ok := e.flow.SpecFor(act.FlowRef)
 	if !ok {
 		e.log("engine: resume %s: trigger no longer in config — dropping", r.ID)
 		_ = e.store.DeleteRun(r.ID)
@@ -297,7 +297,7 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 	go func() {
 		defer e.recoverDispatch(ctx, t, r, "flow resume")
 		defer e.release()
-		e.flow.Run(ctx, r, t, spec, nil, false)
+		e.flow.Run(ctx, r, t, spec, tidx, nil, false)
 	}()
 }
 
@@ -336,7 +336,7 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 		Dispatch: func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
 			runner := Dispatcher(e.disp)
 			if req.Action.Type == "agent" {
-				r, err := e.runnerFor(req.Profile)
+				r, err := e.runnerFor(req.Step)
 				if err != nil {
 					return dispatch.RunRef{}, err
 				}
@@ -358,25 +358,30 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			}
 			return dispatch.Tokens{App: appTok, User: userTok}
 		},
-		Guidance: func(agentName string, p config.AgentProfile, pol config.Policy) string {
-			return e.agentGuidance(p, pol) + e.outcomeGuidance(agentName, p)
+		Guidance: func(identity string, p config.Step, pol config.Policy) string {
+			return e.agentGuidance(p, pol) + e.outcomeGuidance(identity, p)
 		},
-		Memory: e.memoryPrompt,
+		Memory:       e.memoryPrompt,
+		ResolveModel: e.resolveModel,
 		// Revise is the supervise loop's round-trip (#36 §11): the failure
 		// context goes to the authoring agent's bound session (§10) and the
 		// captured reply carries the revised plan. No affinity, no session:
 		// profile, or no binding → ok=false and the plan escalates instead.
-		Revise: func(ctx context.Context, agentName string, t core.Trigger, prompt string) (string, bool, error) {
+		Revise: func(ctx context.Context, identity string, t core.Trigger, prompt string) (string, bool, error) {
 			if e.affinity == nil {
 				return "", false, nil
 			}
-			return e.affinity.Followup(ctx, agentName, e.cfg.Agents[agentName], t, prompt)
+			step, model, ok := e.stepByIdentity(ctx, identity)
+			if !ok {
+				return "", false, nil
+			}
+			return e.affinity.Followup(ctx, step, identity, model, t, prompt)
 		},
-		Background: func(ctx context.Context, t core.Trigger, stepID, agentName string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string) {
+		Background: func(ctx context.Context, t core.Trigger, stepID, identity string, p config.Step, ref dispatch.RunRef, handoffConn string) {
 			e.hold.Add(ref.AgentID)
 			ch := e.askChannelFor(handoffConn)
 			if ch != nil && e.broker != nil && ref.AgentID != "" {
-				e.startReviewHandoff(ctx, t, stepID, agentName, p, ref, ch)
+				e.startReviewHandoff(ctx, t, stepID, identity, p, ref, ch)
 				return
 			}
 			e.notif.Emit(ctx, notify.EventNeedsInput, t,
@@ -386,26 +391,42 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			if e.affinityOwns(agentID) {
 				return // a keyed session outlives the step that used it
 			}
-			go func() { _ = e.disp.Archive(context.Background(), agentID) }()
+			go func() { _ = e.archiveAgent(context.Background(), agentID) }()
+		},
+		// The agents/hour cap, shared with the legacy steps: path so a flood
+		// through either is counted against one window.
+		CheckRate: func() error {
+			max := e.cfg.AgentsPerHour()
+			if max <= 0 {
+				return nil
+			}
+			if e.overAgentBudget(max) {
+				e.store.Audit(map[string]any{"event": "budget_shed",
+					"scope": "agents_per_hour", "reason": "rate", "limit": max})
+				return fmt.Errorf("agents_per_hour cap of %d reached in the last hour — shedding this dispatch", max)
+			}
+			e.recordAgentDispatch()
+			return nil
 		},
 		// The spend-budget layer (#36 §14): caps checked before each agent
 		// step dispatches, usage charged/audited after it returns.
-		CheckBudget: func(agentName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
-			res, berr := e.checkSpendBudget(agentName, wf, wfScope, est)
+		CheckBudget: func(runtimeName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
+			res, berr := e.checkSpendBudget(runtimeName, wf, wfScope, est)
 			if berr != nil {
 				e.store.Audit(map[string]any{"event": "budget_shed",
-					"scope": berr.Scope, "reason": berr.Reason, "agent": agentName})
+					"scope": berr.Scope, "reason": berr.Reason, "runtime": runtimeName})
 				return nil, berr
 			}
 			return res, nil
 		},
 		CancelBudget: func(res *cost.Reservation) { e.meter.Cancel(res) },
-		RecordUsage: func(t core.Trigger, agentName, stepID, runID, wfScope, savedWF string, res *cost.Reservation, u cost.Usage) {
-			e.recordUsage(t, agentName, stepID, runID, wfScope, res, u)
-			// The outcome loop's engagement (#36 §18): this agent acted on
-			// this target; a later terminal signal resolves it.
-			e.store.RecordEngagement(t.Target.Repo, t.Target.Number, store.Engagement{
-				Agent: agentName, Workflow: wfScope, SavedWorkflow: savedWF,
+		RecordUsage: func(t core.Trigger, identity, runtimeName, stepID, runID, wfScope, savedWF string, res *cost.Reservation, u cost.Usage) {
+			e.recordUsage(t, identity, runtimeName, stepID, runID, wfScope, res, u)
+			// The outcome loop's engagement (#36 §18): this STEP acted on
+			// this target; a later terminal signal resolves it. The key is
+			// the step identity (design §4), which is stable across runs.
+			e.store.RecordEngagement(t.Key(), store.Engagement{
+				Key: identity, Runtime: runtimeName, Workflow: wfScope, SavedWorkflow: savedWF,
 				Kind: t.Kind, Run: runID, CostUSD: u.CostUSD, Tokens: u.TotalTokens,
 			})
 		},
@@ -424,10 +445,10 @@ type sendCapturer interface {
 // agent: a session-bound profile (§10) goes through affinity; a paseo agent
 // takes a captured follow-up turn. ok=false when neither applies — the gate
 // escalates instead of revising (an honest "this runtime can't revise").
-func (e *Engine) agentFollowUp(ctx context.Context, agentID, agentName string, t core.Trigger, prompt string) (string, bool, error) {
-	profile := e.cfg.Agents[agentName]
+func (e *Engine) agentFollowUp(ctx context.Context, agentID, identity string, t core.Trigger, prompt string) (string, bool, error) {
+	profile, model, _ := e.stepByIdentity(ctx, identity)
 	if e.affinity != nil && profile.Session != nil {
-		return e.affinity.Followup(ctx, agentName, profile, t, prompt)
+		return e.affinity.Followup(ctx, profile, identity, model, t, prompt)
 	}
 	if agentID == "" {
 		return "", false, nil

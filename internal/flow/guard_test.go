@@ -340,6 +340,7 @@ policy:
 policy:
   agent_authored:
     allow: [ svc.post, "*.read" ]
+    allow_secrets: [ housevault/k ]
 vaults:
   housevault: { type: file, dir: /tmp/none }
 `)
@@ -368,13 +369,15 @@ func TestGuardKvExfilBlocked(t *testing.T) {
 	}
 	cfgYAML := `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   main: { type: boltdb }
 vaults:
   hv: { type: file, dir: ` + vaultDir + ` }
-agents:
-  planner: { model: x }
+workflows:
+  roles:
+    steps:
+      - { id: planner, type: agent, name: planner, prompt: p, model: x }
 policy:
   agent_authored:
     allow: [ svc.post, kv.*, "*.read" ]
@@ -569,12 +572,14 @@ func TestGuardReadAndRelayBarrier(t *testing.T) {
 	const secretVal = "parked-s3cr3t-XYZZY"
 	cfgYAML := `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   main: { type: boltdb }
   db:   { type: sqlite, path: ":memory:" }
-agents:
-  planner: { model: x }
+workflows:
+  roles:
+    steps:
+      - { id: planner, type: agent, name: planner, prompt: p, model: x }
 policy:
   agent_authored:
     allow: [ svc.post, kv.*, sql.*, "*.read" ]
@@ -686,12 +691,13 @@ func TestGuardCodeBindingWriteBarrier(t *testing.T) {
 	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   main: { type: boltdb }
-agents:
-  planner: { model: x }
 workflows:
+  roles:
+    steps:
+      - { id: planner, type: agent, name: planner, prompt: p, model: x }
   park:
     inputs: { v: { type: string, required: true } }
     steps:
@@ -753,7 +759,7 @@ func TestAuditRedactsErrorStrings(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: http://127.0.0.1:1
     verbs:
       ping: { method: GET, path: /x, query: { key: "url-borne-s3cr3t-XYZZY" } }

@@ -18,7 +18,7 @@ import (
 
 const handleCfg = `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 secrets:
   tok: env:FLOW_HANDLE_TEST_TOK
 `
@@ -130,12 +130,14 @@ steps:
 func TestSecretHandlePlanStepsStayOpaque(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 secrets:
   tok: env:FLOW_HANDLE_TEST_TOK
-agents:
-  planner: { model: x }
+workflows:
+  roles:
+    steps:
+      - { id: planner, type: agent, name: planner, prompt: p, model: x }
 policy:
   agent_authored:
     allow: [ svc.post ]
@@ -174,7 +176,7 @@ func dispatchPlanCfg(t *testing.T, cfg *config.Config, output string) (*testRig,
 func TestSecretHandleSavedWorkflowStaysOpaque(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 secrets:
   tok: env:FLOW_HANDLE_TEST_TOK
 policy:
@@ -186,7 +188,7 @@ policy:
 	if _, err := sw.Save("relay", "d", []config.Step{{
 		ID: "s", Uses: "svc.post",
 		Options: map[string]any{"text": `try {{secret "tok"}}`},
-	}}, memory.Source{Agent: "planner"}); err != nil {
+	}}, memory.Source{Step: "planner"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sw.Review("relay"); err != nil {
@@ -226,7 +228,7 @@ steps:
 func TestValidateSecretCallNames(t *testing.T) {
 	base := `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 secrets:
   tok: env:FLOW_HANDLE_TEST_TOK
 triggers:
@@ -299,7 +301,7 @@ steps:
 func TestValidateSecretCallVaultNames(t *testing.T) {
 	base := `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 vaults:
   house: { type: file, dir: /run/secrets }
 triggers:
@@ -327,9 +329,11 @@ triggers:
 func TestSecretInStepOutputDoesNotReachAgentPrompt(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
-agents:
-  fixer: { model: x }
+  svc: { use: fake }
+workflows:
+  roles:
+    steps:
+      - { id: fixer, type: agent, name: fixer, prompt: p, model: x }
 `)
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
@@ -342,7 +346,7 @@ steps:
     options: { text: seed }
   - id: fix
     type: agent
-    agent: fixer
+    <<: *fixer
     prompt: "fix using {{.leaky.echo}}"
 `)
 	rig := newTestRunner(t, cfg, reg)

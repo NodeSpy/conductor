@@ -44,7 +44,7 @@ integrations:
             agent: fixer
             prompt: "slow path {{.slack.text}}"
 agents:
-  fixer: { provider: claude }
+  fixer: { type: agent, name: fixer }
 `
 
 // TestSlackMultiVariantAggregationShape: a multi-variant rule becomes ONE
@@ -129,8 +129,12 @@ func TestSlackAggregationTimingGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	resolved, err := config.ResolveAliasBytes(res.Output)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var cfg config.Config
-	if err := yaml.Unmarshal(res.Output, &cfg); err != nil {
+	if err := yaml.Unmarshal(resolved, &cfg); err != nil {
 		t.Fatal(err)
 	}
 	sec := secrets.New()
@@ -176,7 +180,7 @@ func TestSlackAggregationTimingGolden(t *testing.T) {
 				},
 			},
 		})
-		runner.Run(context.Background(), store.WorkflowRun{}, trig, spec, nil, false)
+		runner.Run(context.Background(), store.WorkflowRun{}, trig, spec, runner.IndexOf(spec), nil, false)
 
 		mu.Lock()
 		defer mu.Unlock()

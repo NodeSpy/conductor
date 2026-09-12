@@ -19,7 +19,7 @@ func TestSQLVerbValidation(t *testing.T) {
 	t.Cleanup(func() { kv.ResetStores(); sqlstore.ResetStores(); kv.SetDataDir("") })
 	base := `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   main: { type: boltdb }
   db:   { type: sqlite, path: ":memory:" }
@@ -101,7 +101,7 @@ func TestSQLVerbSteps(t *testing.T) {
 	t.Cleanup(func() { kv.ResetStores(); sqlstore.ResetStores(); kv.SetDataDir("") })
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   db: { type: sqlite, path: ":memory:", code_access: write } # the js step execs through ctx.sql
 `)
@@ -157,7 +157,7 @@ func TestSQLTemplateInjectionRejected(t *testing.T) {
 	t.Cleanup(func() { kv.ResetStores(); sqlstore.ResetStores(); kv.SetDataDir("") })
 	base := `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   db: { type: sqlite, path: ":memory:" }
 `

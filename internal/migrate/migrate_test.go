@@ -74,8 +74,8 @@ integrations:
             type: command
             command: ["gh", "pr", "view", "{{.pr}}"]
 agents:
-  fixer: { provider: claude }
-  planner: { provider: claude }
+  fixer: { type: agent, name: fixer }
+  planner: { type: agent, name: planner }
 `
 
 func mustTransform(t *testing.T, raw string) (*Result, *config.Config) {
@@ -89,9 +89,20 @@ func mustTransform(t *testing.T, raw string) (*Result, *config.Config) {
 	}
 	// The output must parse as a config (with env refs masked, mirroring the
 	// production load which expands them first).
+	// Mirror config.Load: resolve anchors before decoding. A custom
+	// UnmarshalYAML re-encodes the node it is handed, so an alias whose
+	// anchor lives outside that node cannot be read directly — which is
+	// exactly why the loader resolves first.
+	resolved, rerr := config.ResolveAliasBytes(maskEnv(res.Output))
+	if rerr != nil {
+		t.Fatalf("migrated config does not parse: %v\n%s", rerr, res.Output)
+	}
 	var out config.Config
-	if err := yaml.Unmarshal(maskEnv(res.Output), &out); err != nil {
+	if err := yaml.Unmarshal(resolved, &out); err != nil {
 		t.Fatalf("migrated config does not parse: %v\n%s", err, res.Output)
+	}
+	if err := out.ResolveExtends(); err != nil {
+		t.Fatalf("migrated config does not resolve: %v\n%s", err, res.Output)
 	}
 	return res, &out
 }
@@ -101,8 +112,8 @@ func TestGithubTransformShape(t *testing.T) {
 	if len(out.ConnectorsMap) != 1 {
 		t.Fatalf("connectors: %d, want 1", len(out.ConnectorsMap))
 	}
-	if out.ConnectorsMap["gh"].Type != "github" {
-		t.Fatalf("gh connector type: %q", out.ConnectorsMap["gh"].Type)
+	if out.ConnectorsMap["gh"].TypeName() != "github" {
+		t.Fatalf("gh connector type: %q", out.ConnectorsMap["gh"].TypeName())
 	}
 	// rule1: merge_conflict + new_comment + review_requested×2 + failing_checks = 5
 	// rule2: merge_conflict = 1
@@ -217,7 +228,10 @@ func TestGithubBehavioralEquivalence(t *testing.T) {
 				var idx int
 				fmt.Sscanf(act.FlowRef, "%d:", &idx)
 				st := compiled[idx].Spec.Steps[0]
-				work = st.Type + "|" + st.Agent + "|" + st.Prompt + "|" + strings.Join(st.Command, " ")
+				// The legacy `agent: <profile>` became `step: <name>`, and
+				// load resolved it — the profile's name is now the step's
+				// identity (design §6).
+				work = st.Type + "|" + st.Name + "|" + st.Prompt + "|" + strings.Join(st.Command, " ")
 			} else {
 				work = act.Type + "|" + act.Agent + "|" + act.Prompt + "|" + strings.Join(act.Command, " ")
 			}
@@ -439,7 +453,7 @@ control:
   max_agents_per_hour: 40
 paseo_bin: /usr/local/bin/paseo
 agents:
-  fixer: { provider: claude, controller: gem }
+  fixer: { type: agent, name: fixer, controller: gem }
 notify:
   on: [escalate]
   slack_webhook_url: ${NOTIFY_HOOK}
@@ -452,16 +466,28 @@ update:
 func TestKitchenSinkTransform(t *testing.T) {
 	res, out := mustTransform(t, legacyKitchen)
 
-	// Every integration + both handoffs became connectors.
-	wantConns := []string{"ops", "chores", "hooks", "errors", "oncall", "upstream", "review", "page"}
+	// Every BUNDLED integration + both handoffs became connectors.
+	wantConns := []string{"ops", "chores", "hooks", "upstream", "review", "page"}
 	for _, n := range wantConns {
 		if _, ok := out.ConnectorsMap[n]; !ok {
 			t.Errorf("missing connector %q", n)
 		}
 	}
-	if out.ConnectorsMap["review"].Type != "slack" || out.ConnectorsMap["page"].Type != "web" {
+	// sentry[errors] and pagerduty[oncall] are extracted types: skipped with a
+	// note, not transformed (see legacy_extracted.go). The rest of this
+	// kitchen-sink file still migrates, which is the point.
+	for _, gone := range []string{"errors", "oncall"} {
+		if _, ok := out.ConnectorsMap[gone]; ok {
+			t.Errorf("connector %q must not be emitted for an extracted type", gone)
+		}
+	}
+	if joined := strings.Join(res.Summary, "\n"); !strings.Contains(joined, "sentry[errors]: NOT migrated") ||
+		!strings.Contains(joined, "pagerduty[oncall]: NOT migrated") {
+		t.Errorf("extracted integrations must be noted as skipped:\n%s", joined)
+	}
+	if out.ConnectorsMap["review"].TypeName() != "slack" || out.ConnectorsMap["page"].TypeName() != "web" {
 		t.Errorf("handoff connector types: review=%s page=%s",
-			out.ConnectorsMap["review"].Type, out.ConnectorsMap["page"].Type)
+			out.ConnectorsMap["review"].TypeName(), out.ConnectorsMap["page"].TypeName())
 	}
 	// Handoff target rides as default options.
 	if to := out.ConnectorsMap["review"].Options["to"]; to != "dm" {
@@ -531,10 +557,20 @@ func TestKitchenSinkTransform(t *testing.T) {
 	if fmt.Sprint(notifyTriggers) != "[conductor.escalate conductor.failed]" {
 		t.Fatalf("notify triggers: %v", notifyTriggers)
 	}
-	if out.ConnectorsMap["notify-slack"].Type != "slack" {
+	if out.ConnectorsMap["notify-slack"].TypeName() != "slack" {
 		t.Errorf("notify-slack connector missing: %v", out.ConnectorsMap["notify-slack"])
 	}
-	if _, ok := out.Agents["fixer"]; !ok {
+	// The agents block was inlined onto the steps that referenced it; the
+	// old name rides along as the step's identity.
+	found := false
+	for _, tr := range out.Triggers {
+		for _, st := range tr.Steps {
+			if st.Name == "fixer" {
+				found = true
+			}
+		}
+	}
+	if !found {
 		t.Errorf("agents block lost")
 	}
 	// Legacy keys gone.
@@ -543,7 +579,10 @@ func TestKitchenSinkTransform(t *testing.T) {
 			len(out.Integrations), len(out.Handoffs), len(out.Controllers), out.PaseoBin)
 	}
 
-	// The migrated config passes the FULL semantic validation.
+	// The migrated config passes the FULL semantic validation — with the
+	// extracted types' plugins installed, which the migrated config's own
+	// plugins: block now declares.
+	installExtractedPlugins(t)
 	sec := secrets.New()
 	sec.LookupEnv = func(string) (string, bool) { return "resolved", true }
 	reg, err := connector.Build(out, connector.Deps{Secrets: sec, Config: out})
@@ -561,68 +600,6 @@ func TestKitchenSinkTransform(t *testing.T) {
 	}
 	if res2.Changed {
 		t.Fatal("transform of a migrated config must be a no-op")
-	}
-}
-
-// TestSentryPrecedencePreservedViaExcludes: connectors-model triggers are
-// independent, so the migration reproduces legacy first-match-wins by giving
-// each later trigger an exclude of every earlier rule's match. The golden
-// proof drives BOTH triggers' filters against the same event contexts through
-// the flow-side evaluator: an event the first rule matched fires ONLY the
-// first trigger; an event only the second rule matched fires only the second.
-func TestSentryPrecedencePreservedViaExcludes(t *testing.T) {
-	_, out := mustTransform(t, legacyKitchen)
-	var sentryTriggers []config.TriggerSpec
-	for _, tr := range out.Triggers {
-		if tr.Connector() == "errors" {
-			sentryTriggers = append(sentryTriggers, tr)
-		}
-	}
-	if len(sentryTriggers) != 2 {
-		t.Fatalf("sentry triggers: %d, want 2", len(sentryTriggers))
-	}
-	first, second := sentryTriggers[0], sentryTriggers[1]
-	if !strings.Contains(fmt.Sprint(first.Filters["projects"]), "backend") {
-		t.Fatalf("first trigger should be the backend rule: %v", first.Filters)
-	}
-	if _, hasEx := first.Filters["exclude"]; hasEx {
-		t.Fatal("the first trigger must not exclude anything")
-	}
-	if _, hasEx := second.Filters["exclude"]; !hasEx {
-		t.Fatalf("the second trigger must exclude the first rule's match: %v", second.Filters)
-	}
-
-	sec := secrets.New()
-	sec.LookupEnv = func(string) (string, bool) { return "x", true }
-	reg, err := connector.Build(out, connector.Deps{Secrets: sec, Config: out})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runner := flow.New(flow.Runner{Cfg: out, Conns: reg})
-	evalBoth := func(sctx map[string]any) (bool, bool) {
-		trig := core.Trigger{Kind: "sentry_alert", Context: map[string]any{"sentry": sctx}}
-		m1, err1 := runner.FilterMatch(trig, first)
-		m2, err2 := runner.FilterMatch(trig, second)
-		if err1 != nil || err2 != nil {
-			t.Fatalf("filter errors: %v %v", err1, err2)
-		}
-		return m1, m2
-	}
-
-	// A backend error: legacy rule1 won; only trigger1 may fire.
-	m1, m2 := evalBoth(map[string]any{"project": "backend", "level": "error"})
-	if !m1 || m2 {
-		t.Fatalf("backend error: trigger1=%v trigger2=%v (want true,false)", m1, m2)
-	}
-	// A frontend warning: legacy fell through to rule2 (catch-all).
-	m1, m2 = evalBoth(map[string]any{"project": "frontend", "level": "warning"})
-	if m1 || !m2 {
-		t.Fatalf("frontend warning: trigger1=%v trigger2=%v (want false,true)", m1, m2)
-	}
-	// A backend warning: rule1 requires level error|fatal → rule2 won.
-	m1, m2 = evalBoth(map[string]any{"project": "backend", "level": "warning"})
-	if m1 || !m2 {
-		t.Fatalf("backend warning: trigger1=%v trigger2=%v (want false,true)", m1, m2)
 	}
 }
 
@@ -680,7 +657,7 @@ integrations:
 		},
 		{
 			"mixed schema",
-			"integrations:\n  - {type: cron, name: c, schedules: [{name: s, cron: '* * * * *', action: {type: command, command: [x]}}]}\nconnectors:\n  x: {type: slack}\n",
+			"integrations:\n  - {type: cron, name: c, schedules: [{name: s, cron: '* * * * *', action: {type: command, command: [x]}}]}\nconnectors:\n  x: {use: slack}\n",
 			"finish the migration by hand",
 		},
 		{
@@ -721,12 +698,33 @@ integrations:
 }
 
 func TestNoLegacyMeansNoChange(t *testing.T) {
-	res, err := Transform([]byte("connectors:\n  gh: {type: github}\ntriggers:\n  - on: gh.release\n    steps: [{type: command, command: [x]}]\n"))
+	// An ALREADY-migrated file (connectors schema, `use:` surface) changes
+	// nothing — migration is idempotent, which is what makes it safe to run on
+	// every boot.
+	res, err := Transform([]byte("connectors:\n  gh: {use: github}\ntriggers:\n  - on: gh.release\n    steps: [{type: command, command: [x]}]\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Changed {
-		t.Fatal("connectors-only config must be a no-op")
+		t.Fatal("an already-migrated config must be a no-op")
+	}
+}
+
+// A connectors-schema file still on `type:` is NOT a no-op: the use: pass folds
+// it, which is how a deployed box crosses this schema change without an edit.
+func TestConnectorsSchemaTypeIsMigrated(t *testing.T) {
+	res, err := Transform([]byte("connectors:\n  gh: {type: github}\nruntimes:\n  r: {type: paseo}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Changed {
+		t.Fatal("a config still on type: must migrate")
+	}
+	if !strings.Contains(string(res.Output), "use: github") || strings.Contains(string(res.Output), "type: github") {
+		t.Fatalf("type: not folded onto use::\n%s", res.Output)
+	}
+	if !strings.Contains(string(res.Output), "use: paseo") {
+		t.Fatalf("runtime type: not folded:\n%s", res.Output)
 	}
 }
 
@@ -745,13 +743,18 @@ func TestExampleConfigTransforms(t *testing.T) {
 	if !res.Changed {
 		t.Skip("example config already on the connectors schema")
 	}
+	resolved, err := config.ResolveAliasBytes(maskEnv(res.Output))
+	if err != nil {
+		t.Fatalf("migrated example config does not parse: %v", err)
+	}
 	var out config.Config
-	if err := yaml.Unmarshal(maskEnv(res.Output), &out); err != nil {
+	if err := yaml.Unmarshal(resolved, &out); err != nil {
 		t.Fatalf("migrated example config does not parse: %v", err)
 	}
 	if len(out.ConnectorsMap) == 0 || len(out.Triggers) == 0 {
 		t.Fatalf("example transform produced %d connectors / %d triggers", len(out.ConnectorsMap), len(out.Triggers))
 	}
+	installExtractedPlugins(t)
 	sec := secrets.New()
 	sec.LookupEnv = func(string) (string, bool) { return "resolved", true }
 	reg, err := connector.Build(&out, connector.Deps{Secrets: sec, Config: &out})
@@ -825,8 +828,10 @@ integrations:
         cron: "* * * * *"
         action: { type: command, command: [x] }
 `), 0o600)
+	// BOTH files change now: the imported one carries integrations:, and the
+	// main one carries agents: (which the agents pass decomposes).
 	n, _, err := AutoMigrate(main, func() error { return nil }, nil)
-	if err != nil || n != 1 {
+	if err != nil || n != 2 {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 	migrated, _ := os.ReadFile(sub)
@@ -964,7 +969,7 @@ integrations:
               agent: fixer
               prompt: "fix"
 agents:
-  fixer: { provider: claude, controller: gpu }
+  fixer: { type: agent, name: fixer, controller: gpu }
 hosts:
   gpu-box: { host: gpu01.internal, user: ml }
 controllers:

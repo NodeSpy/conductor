@@ -2,6 +2,8 @@ package flow
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"strconv"
 	"sync"
 	"time"
@@ -228,4 +230,37 @@ type retryOfKey struct{}
 // the execution it re-ran (the engine's RetryRun sets it).
 func WithRetryOf(ctx context.Context, histID string) context.Context {
 	return context.WithValue(ctx, retryOfKey{}, histID)
+}
+
+// runHistoryID is this run's record id — a per-execution identifier the event
+// cannot choose. agentAuthoredNamespace uses it to confine a plan whose
+// target is untrusted.
+func (h *histRec) runHistoryID() string {
+	if h == nil {
+		return ""
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.rec.ID
+}
+
+// dispatchID is the daemon's unique id for one dispatch: the run's history id
+// joined to the step's, so every dispatch of a run gets its own and it is
+// stable across that dispatch's tool calls. Falls back to a random id when
+// the run is not recorded (shadow, no store) — an anchor that exists is the
+// requirement; a readable one is a convenience.
+//
+// It is never derived from event data and never chosen by the agent, which is
+// what makes it usable as a confinement anchor (flow.agentAuthoredNamespace).
+func (r *Runner) dispatchID(ctx context.Context, stepID string) string {
+	if h := histFrom(ctx); h != nil {
+		if id := h.runHistoryID(); id != "" {
+			return id + ":" + stepID
+		}
+	}
+	var b [9]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "dispatch:" + stepID
+	}
+	return "dispatch:" + hex.EncodeToString(b[:])
 }

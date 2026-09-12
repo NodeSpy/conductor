@@ -18,10 +18,13 @@ import (
 func TestValidateRejections(t *testing.T) {
 	base := `
 connectors:
-  svc: { type: fake, options: { text: "default" } }
-agents:
-  fixer: { provider: claude }
+  svc: { use: fake, options: { text: "default" } }
+x-t:
+  fixer: &fixer { type: agent, name: fixer }
 workflows:
+  roles:
+    steps:
+      - { id: fixer, type: agent, name: fixer, prompt: p }
   wf:
     inputs:
       x: { type: string, required: true }
@@ -70,7 +73,7 @@ workflows:
 		},
 		{
 			"dangling template ref",
-			"- on: svc.ping\n  steps: [{id: a, type: agent, agent: fixer, prompt: 'do {{.nope}}'}]",
+			"- on: svc.ping\n  steps: [{id: a, type: agent, <<: *fixer, prompt: 'do {{.nope}}'}]",
 			"{{.nope}} is not available",
 		},
 		{
@@ -89,13 +92,15 @@ workflows:
 			`no output "bogus"`,
 		},
 		{
-			"unknown agent profile",
-			"- on: svc.ping\n  steps: [{type: agent, agent: ghost, prompt: p}]",
-			`unknown agent profile "ghost"`,
+			// `agent:` selects nothing now (design §6) — it is an attribution
+			// label — so what an agent step must still have is a prompt.
+			"agent step with no prompt",
+			"- on: svc.ping\n  steps: [{type: agent, agent: ghost}]",
+			"needs a prompt",
 		},
 		{
 			"handoff on a non-ask connector",
-			"- on: svc.ping\n  steps: [{type: agent, agent: fixer, prompt: p, background: true, handoff: svc}]",
+			"- on: svc.ping\n  steps: [{type: agent, <<: *fixer, prompt: p, background: true, handoff: svc}]",
 			"", // svc HAS an ask verb (Ask true) — this case asserts the positive; see below
 		},
 		{
@@ -142,9 +147,11 @@ workflows:
 func TestValidateScopedPositives(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake, options: { text: "covers-required" } }
-agents:
-  fixer: { provider: claude }
+  svc: { use: fake, options: { text: "covers-required" } }
+workflows:
+  roles:
+    steps:
+      - { id: fixer, type: agent, name: fixer, prompt: p }
 triggers:
   - on: svc.ping
     group: { key: "{{.repo}}#{{.number}}", window: 5s }
@@ -421,17 +428,17 @@ func TestInQuietWindow(t *testing.T) {
 func TestSpecFor(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 triggers:
   - on: svc.ping
     steps: [{uses: svc.post, options: {text: t}}]
 `)
 	r := New(Runner{Cfg: cfg})
-	if _, ok := r.SpecFor("0:svc.ping"); !ok {
-		t.Error("valid ref should resolve")
+	if _, idx, ok := r.SpecFor("0:svc.ping"); !ok || idx != 0 {
+		t.Errorf("valid ref should resolve at its index: idx=%d ok=%v", idx, ok)
 	}
 	for _, bad := range []string{"1:svc.ping", "0:svc.other", "garbage", "x:y", ""} {
-		if _, ok := r.SpecFor(bad); ok {
+		if _, _, ok := r.SpecFor(bad); ok {
 			t.Errorf("ref %q should not resolve", bad)
 		}
 	}
@@ -442,7 +449,7 @@ triggers:
 func TestRunWithBatchContext(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 triggers:
   - on: svc.ping
     steps:
@@ -457,7 +464,7 @@ triggers:
 	t1 := newTrigger("ping", map[string]any{"msg": "first-msg"})
 	t2 := newTrigger("ping", map[string]any{"msg": "last-msg"})
 	batch := &Batch{Key: "K", Events: []core.Trigger{t1, t2}}
-	rig.Runner.Run(context.Background(), emptyRun(), t2, spec, batch, false)
+	rig.Runner.Run(context.Background(), emptyRun(), t2, spec, rig.Runner.IndexOf(spec), batch, false)
 
 	calls := st.snapshot()
 	if len(calls) == 0 {
@@ -474,7 +481,7 @@ triggers:
 func TestValidateRejectsWorkflowCycle(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 workflows:
   a:
     steps: [ { id: sb, workflow: b } ]
@@ -499,7 +506,7 @@ triggers:
 	// A self-cycle is rejected too.
 	cfg = loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 workflows:
   loop:
     steps: [ { id: again, workflow: loop } ]
@@ -516,7 +523,7 @@ triggers:
 	// Diamond reuse (two paths to one workflow, no cycle) stays valid.
 	cfg = loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 workflows:
   top:
     steps:

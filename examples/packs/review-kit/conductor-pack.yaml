@@ -13,7 +13,8 @@
 #       preset: claude
 #       connectors: { github: gh }               # bind the pack's required github -> your connector
 #       secrets:    { review_token: house/review }
-#       agents:     { reviewer: my-opus }         # bind a role to your global (or omit for the default)
+#       steps:                                    # override a step of the pack, by reference
+#         review-flow/review: { model: my-fleet }
 #       triggers:
 #         on_review_request:
 #           enabled: true                         # arm it
@@ -33,16 +34,15 @@ pack:
     conductor: ">=0.1"
     # Bind-only environment the pack needs — the consumer wires these; the pack
     # never ships them.
+    # requires.connectors is the pack's CAPABILITY BOUNDARY as well as its
+    # socket list: the pack's skill.verbs may name no connector outside it,
+    # and its wildcards are bounded to it. Version-aware — a bare list means
+    # "any version"; `{ github: ">=2.0" }` gates the consumer's resolved
+    # connector at load.
     connectors: [github]
     secrets:
       review_token:
         desc: token the review-poster uses to submit the review comment
-    # Agent roles: any agent satisfies `reviewer`; a bound `handoff` must be
-    # able to submit a review.
-    roles:
-      reviewer: {}
-      handoff:
-        skill: [github.submit_review]
 
 # Typed settings with defaults, plus named presets the consumer can pick. The
 # consumer overrides these WITHOUT editing this file.
@@ -70,30 +70,26 @@ presets:
 # can refactor everything else without breaking anyone.
 exports:
   workflows: [review-flow]
-  agents: [reviewer]
+  # Step exports are REFERENCES — <workflow>/<step-id>, the same address a
+  # consumer writes to override one.
+  steps: [review-flow/review]
 
 # ---- Behavior the pack ships (namespaced under the instance name) ----
-
-agents:
-  # The reviewer role. No provider/model is pinned, so it falls through to the
-  # consumer's default runtime — zero-config still runs (§6/§26).
-  reviewer:
-    workspace: worktree
-    guidance: "Review only what the diff changes. Be concrete and cite file:line."
-  # The hand-off role posts the review back. It needs the review_token secret,
-  # referenced abstractly here and resolved by the broker at runtime.
-  handoff:
-    workspace: local
-    skill:
-      verbs: [github.submit_review, github.comment]
-      # secrets_via: broker is REQUIRED for allow_secrets to work — the broker
-      # only issues to a session whose skill.secrets_via is "broker" (the
-      # default is "none", which would silently refuse every issue).
-      secrets_via: broker
-      # The broker issues this secret to the hand-off agent (single-use,
-      # audited, redacted). Write verbs post as the connector's own write
-      # identity (a verb's `as:` option), never as the operator.
-      allow_secrets: [review_token]
+#
+# There is no top-level steps: section. A step lives in the workflow that
+# runs it, and config shared between steps is parked under a top-level `x-`
+# key — the loader ignores those (the docker-compose extension-field
+# convention). Anchors are file-local, so this house style stays inside the
+# pack.
+#
+# Two ways to pull one in, both used below:
+#   <<: *house       plain YAML. Dumb override — a copy of the base.
+#   extends: *house  conductor's merge. Lists append, guidance stacks.
+x-templates:
+  house: &house
+    type: agent
+    archive_when_done: true
+    guidance: "Stay inside the diff. Prefer the smallest correct change."
 
 workflows:
   review-flow:
@@ -102,9 +98,14 @@ workflows:
       repo: { type: string, required: true }
       pr: { type: integer, required: true }
     steps:
+      # A consumer addresses this step as `review-flow/review` in their
+      # packs: block — by its id:, which is also its identity slot.
       - id: review
-        type: agent
-        agent: reviewer
+        # extends: — the house guidance STACKS under this step's own, and
+        # a consumer's override would stack under both.
+        extends: *house
+        workspace: worktree
+        guidance: "Review only what the diff changes. Be concrete and cite file:line."
         prompt: |
           Review {{.repo}}#{{.pr}} across these lenses: ${settings.lenses}.
           Use the ${settings.heavy_model} model hint. Return concise, actionable
@@ -112,9 +113,23 @@ workflows:
         gate:
           run: [no-todos]
           max_revisions: 1
+      # The hand-off step posts the review back. It needs the review_token
+      # secret, referenced abstractly here and resolved by the broker at
+      # runtime.
       - id: post
-        type: agent
-        agent: handoff
+        # <<: — this step wants the house defaults verbatim, nothing added.
+        <<: *house
+        workspace: local
+        skill:
+          verbs: [github.submit_review, github.comment]
+          # secrets_via: broker is REQUIRED for allow_secrets to work — the
+          # broker only issues to a session whose skill.secrets_via is
+          # "broker" (the default is "none", which silently refuses).
+          secrets_via: broker
+          # The broker issues this secret to the hand-off agent (single-use,
+          # audited, redacted). Write verbs post as the connector's own write
+          # identity (a verb's `as:` option), never as the operator.
+          allow_secrets: [review_token]
         prompt: "Post this review on {{.repo}}#{{.pr}}:\n\n{{.review.output}}"
 
 checks:

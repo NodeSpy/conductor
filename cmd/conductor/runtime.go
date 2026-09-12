@@ -23,7 +23,7 @@ type paseoRuntimeDef struct {
 func paseoRuntimeDefs(cfg *config.Config) []paseoRuntimeDef {
 	var out []paseoRuntimeDef
 	for name, rt := range cfg.Runtimes {
-		if rt.Type == "paseo" {
+		if rt.BuiltinType() == "paseo" {
 			out = append(out, paseoRuntimeDef{Name: name, Bin: rt.Bin, Host: rt.Host, Default: rt.Default})
 		}
 	}

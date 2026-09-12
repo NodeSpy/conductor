@@ -204,6 +204,26 @@ Three access paths reach the same stores — see [[Code-Steps]] for the full `ct
     return { first_time: !prev };
 ```
 
+## Result bounds
+
+`kv.list` and `sql.query` return at most **1000** items by default. Pass `limit:` to ask for a
+different bound; the result carries `truncated: true` when more matched than were returned. The
+default exists because neither call has an inherent bound and both results cross into an agent's
+context — an uncapped `SELECT * FROM events` against a large table would otherwise be handed to
+the model whole. Check `truncated` before treating a result as the complete set.
+
+## Namespaces are organisation, not a security boundary
+
+A namespace partitions keys within a store; it is **not** a tenant wall. Anything that can reach
+the store can reach every namespace in it: the `kv.*`/`sql.*` verbs take the namespace as a plain
+option, so a grant for one namespace is a grant for all of them.
+
+The boundary that *is* enforced is the **store**: `policy.agent_authored.allow_scopes.store` (legacy
+spelling: `allow_stores`) gates which stores an agent-authored step may touch at all, deny-by-default,
+and a skill grant can pin one agent tighter still with `kv.*: { store: [...] }`. If two
+workloads must not see each other's data, give them **separate stores** — not separate namespaces
+in one store.
+
 ## See also
 
 - [[Code-Steps]] — the `ctx` surface (`ctx.store`, `ctx.sql`, `ctx.memory`) in each engine

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/risor-io/risor/object"
 	lua "github.com/yuin/gopher-lua"
@@ -20,11 +21,6 @@ import (
 // ("repo"/"agent") need their explicit forms here (repo:<owner/repo>,
 // agent:<name>).
 func memInvoke(guard DataGuard, op string, args []any) (any, error) {
-	if guard != nil && op == "remember" {
-		if err := guard("memory", op, "", args); err != nil {
-			return nil, err
-		}
-	}
 	m := memory.Active()
 	if m == nil {
 		return nil, fmt.Errorf("memory: not configured — add a top-level memory: section")
@@ -34,6 +30,26 @@ func memInvoke(guard DataGuard, op string, args []any) (any, error) {
 			return fmt.Sprint(args[i])
 		}
 		return ""
+	}
+	// EVERY op is gated, not just remember. The scope this op touches is
+	// resolved first (for forget that means the stored scope of the id it
+	// names — ownership is the same allowlist that governs reading), then
+	// authorized through the one gate both agent-facing faces share.
+	scope, err := memScopeOf(m, op, args, argStr)
+	if err != nil {
+		return nil, err
+	}
+	// The zero Caller: this face's allowlist enforcement rides the DataGuard
+	// below, which the flow layer installs per EXECUTION (so it knows whether
+	// the step was agent- or config-authored). CheckOp still applies the
+	// unconditional reserved-bucket rule to every caller.
+	if err := m.CheckOp(memory.Caller{}, op, scope); err != nil {
+		return nil, err
+	}
+	if guard != nil {
+		if err := guard("memory", op, scope, args); err != nil {
+			return nil, err
+		}
 	}
 	switch op {
 	case "remember":
@@ -55,6 +71,8 @@ func memInvoke(guard DataGuard, op string, args []any) (any, error) {
 				return nil, fmt.Errorf("memory.remember: tags must be a list, got %T", args[1])
 			}
 		}
+		// Scope already authorized above (memory.CheckOp → CheckAgentScope
+		// for the reserved bucket, plus the operator's scope allowlist).
 		e, err := m.Remember(argStr(0), tags, argStr(2), memory.Source{})
 		if err != nil {
 			return nil, err
@@ -71,11 +89,7 @@ func memInvoke(guard DataGuard, op string, args []any) (any, error) {
 				q.Tags = append(q.Tags, fmt.Sprint(t))
 			}
 			if s, ok := opts["scope"].(string); ok && s != "" {
-				resolved, err := memory.ResolveScope(s, memory.Source{})
-				if err != nil {
-					return nil, err
-				}
-				q.Scopes = []string{resolved}
+				q.Scopes = []string{memory.NormalizeScope(s)}
 			}
 			if s, ok := opts["substring"].(string); ok {
 				q.Substring = s
@@ -104,7 +118,9 @@ func memInvoke(guard DataGuard, op string, args []any) (any, error) {
 		}
 		return m.Forget(argStr(0))
 	case "list":
-		entries, err := m.List()
+		// Recall, not List: a scoped caller sees its own scope's entries,
+		// not the whole daemon's. memScopeOf resolved which that is.
+		entries, err := m.Recall(memory.Query{Scopes: memScopeList(scope)})
 		if err != nil {
 			return nil, err
 		}
@@ -287,4 +303,45 @@ func luaMemFn(L *lua.LState, guard DataGuard) *lua.LTable {
 		}))
 	}
 	return t
+}
+
+// memScopeOf resolves which scope an op touches, so one gate can authorize
+// them all. `forget` names an id rather than a scope, so its scope is the
+// stored entry's — that is what makes ownership enforceable.
+func memScopeOf(m *memory.Manager, op string, args []any, argStr func(int) string) (string, error) {
+	switch op {
+	case "remember":
+		return argStr(2), nil
+	case "recall":
+		if len(args) > 0 && args[0] != nil {
+			if opts, ok := args[0].(map[string]any); ok {
+				if s, ok := opts["scope"].(string); ok {
+					return s, nil
+				}
+			}
+		}
+		return "", nil
+	case "forget":
+		scope, found, err := m.ScopeOf(argStr(0))
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			// Unknown id: nothing to authorize, and the op reports
+			// not-found below rather than leaking whether it exists.
+			return "", nil
+		}
+		return scope, nil
+	}
+	return "", nil
+}
+
+// memScopeList turns a resolved scope into a Recall filter. An empty scope
+// means "no filter" — reachable only when no scope guard is installed, since
+// the flow guard refuses an unscoped read.
+func memScopeList(scope string) []string {
+	if strings.TrimSpace(scope) == "" {
+		return nil
+	}
+	return []string{memory.NormalizeScope(scope)}
 }

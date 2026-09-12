@@ -25,10 +25,8 @@ func tempSaved(t *testing.T, path string) *SavedStore {
 
 const wfBase = `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner: { model: x }
 workflows:
   greet:
     description: "post a greeting"
@@ -44,7 +42,7 @@ policy:
 func TestWorkflowListCatalog(t *testing.T) {
 	sw := tempSaved(t, "")
 	step := []config.Step{{Uses: "svc.post", Options: map[string]any{"text": "x"}}}
-	_, _ = sw.Save("healthy", "does good things", step, memory.Source{Agent: "planner"})
+	_, _ = sw.Save("healthy", "does good things", step, memory.Source{Step: "planner"})
 	_, _ = sw.Save("rotten", "used to work", step, memory.Source{})
 	_ = sw.Review("healthy")
 	_ = sw.Review("rotten")
@@ -386,7 +384,7 @@ steps:
 	// and refused under the current rules.
 	if _, err := sw.Save("laundered", "was fine once",
 		[]config.Step{{ID: "p", Uses: "svc.post", Options: map[string]any{"text": "x"}}},
-		memory.Source{Agent: "planner"}); err != nil {
+		memory.Source{Step: "planner"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sw.Review("laundered"); err != nil {
@@ -394,10 +392,8 @@ steps:
 	}
 	tight := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner: { model: x }
 workflows: {}
 policy:
   agent_authored:
@@ -419,9 +415,8 @@ steps: [ { id: go, workflow: laundered } ]
 	// And with NO agent_authored policy at all, a saved workflow refuses too.
 	nopol := loadConfig(t, `
 connectors:
-  svc: { type: fake }
-agents:
-  planner: { model: x }
+  svc: { use: fake }
+workflows:
 `)
 	regN := buildRegistry(t, nopol)
 	rigN := newTestRunner(t, nopol, regN)
@@ -437,10 +432,8 @@ steps: [ { id: go, workflow: laundered } ]
 	// run time (no approve_via here → dry-run + reject), even though it saved.
 	approveCfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner: { model: x }
 policy:
   agent_authored:
     allow: [ svc.post ]
@@ -473,10 +466,8 @@ steps: [ { id: go, workflow: risky } ]
 	// registry: an identity policy forces as: on the saved steps at run.
 	idCfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner: { model: x }
 policy:
   agent_authored:
     allow: [ svc.post ]
@@ -516,7 +507,7 @@ func TestSavedWorkflowScopeCarriesNoSecrets(t *testing.T) {
 	// A promoted workflow that dumps its whole template root outward.
 	_, err := sw.Save("dump", "posts the root", []config.Step{
 		{ID: "leak", Uses: "svc.post", Options: map[string]any{"text": `{{printf "%v" $}}`}},
-	}, memory.Source{Agent: "planner"})
+	}, memory.Source{Step: "planner"})
 	if err != nil {
 		t.Fatal(err)
 	}

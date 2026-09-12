@@ -33,7 +33,7 @@ integrations:
             type: command
             command: ["./rotate.sh", "{{.repo}}"]
 agents:
-  fixer: { provider: claude }
+  fixer: { type: agent, name: fixer }
 `)
 	byOn := map[string]config.TriggerSpec{}
 	for _, tr := range out.Triggers {
@@ -44,7 +44,7 @@ agents:
 		t.Fatalf("deployment_status trigger missing/wrong: %+v", dep)
 	}
 	da, ok := byOn["gh.dependabot_alert"]
-	if !ok || da.Steps[0].Agent != "fixer" {
+	if !ok || da.Steps[0].Name != "fixer" {
 		t.Fatalf("dependabot_alert trigger missing/wrong: %+v", da)
 	}
 	ssa, ok := byOn["gh.secret_scanning_alert"]
@@ -75,7 +75,7 @@ integrations:
             assignee: { logins: [octocat] }
             prompt: "Handle the issue"
 agents:
-  fixer: { provider: claude }
+  fixer: { type: agent, name: fixer }
 `)
 	byOn := map[string]config.TriggerSpec{}
 	for _, tr := range out.Triggers {
@@ -115,10 +115,10 @@ handoffs:
   disc:
     discord: { bot_token: ${DISCORD_TOKEN}, to: dm, user: "189" }
 agents:
-  fixer: { provider: claude }
+  fixer: { type: agent, name: fixer }
 `)
 	ref, ok := out.ConnectorsMap["disc"]
-	if !ok || ref.Type != "discord" {
+	if !ok || ref.TypeName() != "discord" {
 		t.Fatalf("discord handoff should become a discord connector, got %+v", out.ConnectorsMap)
 	}
 	// The hand-off target maps onto the connector's default options, which
@@ -251,7 +251,7 @@ handoffs:
   page:
     web: { base_url: "https://c.example.com" }
 agents:
-  fixer: { provider: claude }
+  fixer: { type: agent, name: fixer }
 `)
 	byOn := map[string]config.TriggerSpec{}
 	for _, tr := range out.Triggers {
@@ -295,7 +295,7 @@ integrations:
                 command: [make, fix]
                 retry: { while_output_matches: "not ready", interval: 1s, timeout: 5s }
 agents:
-  planner: { provider: claude }
+  planner: { type: agent, name: planner }
 `)
 	if len(out.Triggers) != 1 {
 		t.Fatalf("triggers: %d", len(out.Triggers))
@@ -305,7 +305,10 @@ agents:
 		t.Fatalf("steps: %d, want 2", len(steps))
 	}
 	plan := steps[0]
-	if plan.ID != "plan" || plan.Type != "agent" || plan.Agent != "planner" ||
+	// `agent: planner` became `step: planner` — the step now plays the
+	// migrated named step, which carries the old profile's behavior AND
+	// its name (so its memory/session/outcome history carries over).
+	if plan.ID != "plan" || plan.Type != "agent" || plan.Name != "planner" ||
 		plan.Checkout != "none" || plan.Prompt != "Plan the fix" {
 		t.Errorf("plan step fields lost: %+v", plan)
 	}

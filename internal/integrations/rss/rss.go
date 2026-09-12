@@ -205,15 +205,19 @@ func (g *Integration) emitItem(ctx context.Context, emit core.EmitFunc, f Feed, 
 			act = inbound.ForceNoCheckout(act)
 		}
 		emit(ctx, core.Trigger{
-			Source:   "rss",
-			Instance: g.name,
-			Kind:     f.Name,
-			Variant:  act.Name,
-			Target:   target,
-			Title:    it.Title,
-			Dedup:    dedup,
-			Context:  map[string]any{"item": item, "url": it.Link},
-			Action:   act,
+			// The target is the feed's CONFIGURED repo, or a synthetic one
+			// named after the feed — the operator's word either way, never
+			// the item's.
+			TargetTrusted: true,
+			Source:        "rss",
+			Instance:      g.name,
+			Kind:          f.Name,
+			Variant:       act.Name,
+			Target:        target,
+			Title:         it.Title,
+			Dedup:         dedup,
+			Context:       map[string]any{"item": item, "url": it.Link},
+			Action:        act,
 		})
 	}
 }

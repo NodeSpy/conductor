@@ -10,7 +10,7 @@ import (
 
 func skillRig(t *testing.T) (*testRig, *fakeState) {
 	t.Helper()
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	return newTestRunner(t, cfg, reg), st
@@ -37,9 +37,9 @@ func TestSkillVerbCatalog(t *testing.T) {
 		t.Fatalf("required: %+v", schema)
 	}
 
-	// Globs expand (post/ask/fail/slow/download/upload); empty patterns
+	// Globs expand (post/ask/fail/slow/charge/download/upload); empty patterns
 	// expose nothing.
-	if got := rig.Runner.SkillVerbCatalog([]string{"svc.*"}); len(got) != 6 {
+	if got := rig.Runner.SkillVerbCatalog([]string{"svc.*"}); len(got) != 7 {
 		t.Fatalf("glob catalog: %d tools", len(got))
 	}
 	if got := rig.Runner.SkillVerbCatalog(nil); len(got) != 0 {
@@ -157,11 +157,16 @@ func TestSkillVerbsCannotBypassApprove(t *testing.T) {
 	// Load-time: skill gh-wildcard vs an approve-listed concrete verb.
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
-agents:
-  deployer:
-    model: x
-    skill: { verbs: ["svc.*"] }
+  svc: { use: fake }
+workflows:
+  roles:
+    steps:
+      - id: deployer
+        type: agent
+        name: deployer
+        model: x
+        prompt: p
+        skill: { verbs: ["svc.*"] }
 policy:
   agent_authored:
     allow: [ svc.ask ]
@@ -175,11 +180,16 @@ policy:
 	// Non-overlapping skill.verbs validate fine.
 	ok := loadConfig(t, `
 connectors:
-  svc: { type: fake }
-agents:
-  deployer:
-    model: x
-    skill: { verbs: ["svc.ask"] }
+  svc: { use: fake }
+workflows:
+  roles:
+    steps:
+      - id: deployer
+        type: agent
+        name: deployer
+        model: x
+        prompt: p
+        skill: { verbs: ["svc.ask"] }
 policy:
   agent_authored:
     approve: [ svc.post ]
@@ -204,9 +214,11 @@ policy:
 	// trust: full lifts approve everywhere — the skill surface follows.
 	full := loadConfig(t, `
 connectors:
-  svc: { type: fake }
-agents:
-  deployer: { model: x, skill: { verbs: ["svc.*"] } }
+  svc: { use: fake }
+workflows:
+  roles:
+    steps:
+      - { id: deployer, type: agent, name: deployer, prompt: p, model: x, skill: { verbs: ["svc.*"] } }
 policy:
   agent_authored: { trust: full, approve: [ svc.post ] }
 `)
@@ -224,14 +236,18 @@ func TestRunSkillVerbSecretWriteBarrier(t *testing.T) {
 	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   main: { type: boltdb }
 `)
 	reg := buildRegistry(t, cfg)
 	rig := newTestRunner(t, cfg, reg)
 	rig.Runner.Secrets.Track("s3kr1t-value")
-	id := SkillIdentity{Agent: "a", Verbs: []string{"kv.*"}}
+	// The grant names the store: resource scoping is intrinsic to the skill
+	// surface now (it does not wait for a policy block), so a kv grant that
+	// named no store would be refused before this barrier is even reached.
+	id := SkillIdentity{Agent: "a", Verbs: []string{"kv.*"},
+		Scopes: map[string]map[string][]string{"kv.*": {"store": {"main"}}}}
 	_, err := rig.Runner.RunSkillVerb(context.Background(), id, "kv.set",
 		map[string]any{"store": "main", "namespace": "n", "key": "k", "value": "park s3kr1t-value"})
 	if err == nil || !strings.Contains(err.Error(), "refusing to write secret material") {
@@ -278,7 +294,7 @@ func TestSkillVerbIdentity(t *testing.T) {
 	// (that fallback is gone with the redesign).
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 policy:
   agent_authored: { identity: polbot }
 `)
@@ -304,9 +320,11 @@ policy:
 func TestValidateSkillNoIdentityNeeded(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
-agents:
-  deployer: { model: x, skill: { verbs: ["svc.*"] } }
+  svc: { use: fake }
+workflows:
+  roles:
+    steps:
+      - { id: deployer, type: agent, name: deployer, prompt: p, model: x, skill: { verbs: ["svc.*"] } }
 `)
 	if err := Validate(cfg, buildRegistry(t, cfg)); err != nil {
 		t.Fatalf("write-capable skill profile without identity must now validate: %v", err)
@@ -327,9 +345,11 @@ func TestValidateSkillVerbPatterns(t *testing.T) {
 	for _, c := range cases {
 		cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
-agents:
-  a: { model: x, skill: { verbs: `+c.verbs+` } }
+  svc: { use: fake }
+workflows:
+  roles:
+    steps:
+      - { id: a, type: agent, name: a, prompt: p, model: x, skill: { verbs: `+c.verbs+` } }
 `)
 		err := Validate(cfg, buildRegistry(t, cfg))
 		if err == nil || !strings.Contains(err.Error(), c.wantErr) {
@@ -340,11 +360,13 @@ agents:
 	// A well-formed pattern that matches nothing warns (not errors).
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 runtimes:
   gem: { agent: gemini, default: true }
-agents:
-  a: { model: x, skill: { verbs: ["svc.nosuchverb"] } }
+workflows:
+  roles:
+    steps:
+      - { id: a, type: agent, name: a, prompt: p, model: x, skill: { verbs: ["svc.nosuchverb"] } }
 `)
 	reg := buildRegistry(t, cfg)
 	if err := Validate(cfg, reg); err != nil {
@@ -357,11 +379,13 @@ agents:
 	// Live patterns warn nothing.
 	live := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 runtimes:
   gem: { agent: gemini, default: true }
-agents:
-  a: { model: x, skill: { verbs: ["svc.*"] } }
+workflows:
+  roles:
+    steps:
+      - { id: a, type: agent, name: a, prompt: p, model: x, skill: { verbs: ["svc.*"] } }
 `)
 	regLive := buildRegistry(t, live)
 	if warns := SkillWarnings(live, regLive); len(warns) != 0 {
@@ -376,9 +400,11 @@ func TestSkillWarningsUnsupportedRuntime(t *testing.T) {
 	// so no unreachable-endpoint warning.
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
-agents:
-  a: { model: x, skill: { verbs: ["svc.ask"] } }
+  svc: { use: fake }
+workflows:
+  roles:
+    steps:
+      - { id: a, type: agent, name: a, prompt: p, model: x, skill: { verbs: ["svc.ask"] } }
 `)
 	reg := buildRegistry(t, cfg)
 	for _, w := range SkillWarnings(cfg, reg) {
@@ -399,11 +425,13 @@ agents:
 	} {
 		y := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 runtimes:
   `+runtime+`
-agents:
-  a: { model: x, skill: { verbs: ["svc.ask"] } }
+workflows:
+  roles:
+    steps:
+      - { id: a, type: agent, name: a, prompt: p, model: x, skill: { verbs: ["svc.ask"] } }
 `)
 		for _, s := range SkillWarnings(y, buildRegistry(t, y)) {
 			if strings.Contains(s, "cannot reach the conductor skill surface") {

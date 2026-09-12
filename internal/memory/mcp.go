@@ -55,6 +55,11 @@ type MCPConfig struct {
 	// daemon would deny their calls anyway (deny by default, authorized by
 	// token + peer alone).
 	Token string
+	// Secrets advertises the broker tools (secret_issue/secret_redeem). It
+	// tracks the profile's skill.secrets_via, NOT the presence of a
+	// credential: every dispatch has a credential, and only some may ask for
+	// secrets.
+	Secrets bool
 	// NoMemory hides the memory tools when the daemon serves the socket for
 	// the skill surface without a memory: section.
 	NoMemory bool
@@ -202,7 +207,12 @@ func mcpTools(mc MCPConfig) []map[string]any {
 		tools = append(tools, memoryTools(str, strList)...)
 	}
 	tools = append(tools, liveTools()...)
-	if mc.Token != "" {
+	// The secret tools are advertised on the POLICY, not on the presence of a
+	// token. Every dispatch now holds a credential — that is how the socket
+	// authenticates provenance (round-12 #1) — so keying on the token would
+	// advertise a secret surface to every agent and have the daemon refuse
+	// every call to it. A tool an agent can see is a tool it will try.
+	if mc.Secrets {
 		tools = append(tools, brokerTools(str)...)
 	}
 	return tools
@@ -218,7 +228,7 @@ func memoryTools(str, strList map[string]any) []map[string]any {
 				"properties": map[string]any{
 					"text":  map[string]any{"type": "string", "description": "the note to keep"},
 					"tags":  strList,
-					"scope": map[string]any{"type": "string", "description": "global (default) | repo (this run's repo) | agent (your own notes) | repo:<owner/repo> | agent:<name>"},
+					"scope": map[string]any{"type": "string", "description": "the scope KEY to file this under — omit for the shared set, or name one of the keys listed in your prompt's shared-memory section (e.g. the repo, the workflow, or your own step)"},
 				},
 				"required": []string{"text"},
 			},

@@ -11,52 +11,72 @@ import (
 
 // Manager owns the set of external plugin Clients for one loaded config and
 // their lifetime. Bundled connectors/runtimes are NOT here — the manager only
-// holds the `plugins:` entries.
+// holds the plugins derived from non-builtin `use:` references
+// (config.PluginRefs), keyed by "<kind-dir>/<name>".
 type Manager struct {
 	clients map[string]*Client
 	specs   map[string]Spec
 	order   []string
 }
 
-// SpecFromRef resolves one config.PluginRef into a runnable Spec, making the
-// source path absolute relative to configDir. It performs no I/O on the binary
-// (verification happens at Start).
-func SpecFromRef(name string, ref config.PluginRef, configDir string) Spec {
-	bin := ref.Source
-	if !filepath.IsAbs(bin) {
-		bin = filepath.Join(configDir, bin)
+// SpecFromRef resolves one derived config.PluginRef into a runnable Spec.
+//
+//   - A LOCAL reference (`use: ./bin/conductor-jira`) points straight at the
+//     operator's own binary, made absolute against configDir. There is no sha to
+//     pin: a development binary changes on every build, so the guarantee here is
+//     the safe-permissions check (an attacker-swappable path is still refused),
+//     not a pin.
+//   - A REMOTE reference is served from local install state, which carries the
+//     verified sha recorded when it was fetched. With no install state the
+//     BinPath is empty and Start reports "not installed — run conductor init"
+//     rather than trying to exec a URL.
+//
+// It performs no I/O on the binary (verification happens at Start).
+func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool) Spec {
+	s := Spec{
+		Name:         ref.Name,
+		Kind:         Kind(ref.Kind()),
+		Provides:     ref.Name,
+		Version:      ref.Version(),
+		Isolation:    ref.Isolation,
+		Network:      ref.Network,
+		AllowSecrets: ref.AllowSecrets,
+		Use:          ref.Use,
 	}
-	return Spec{
-		Name:             name,
-		Kind:             Kind(ref.Kind),
-		Provides:         ref.ProvidesName(name),
-		Version:          ref.Version,
-		BinPath:          bin,
-		Args:             ref.Args,
-		Sha256:           ref.Sha256,
-		AllowUnverified:  ref.AllowUnverified,
-		Isolation:        ref.Isolation,
-		AllowUnsandboxed: ref.AllowUnsandboxed,
-		AllowSecrets:     ref.AllowSecrets,
+	if ref.Use.Origin == config.OriginLocal {
+		bin := ref.Use.Path
+		if !filepath.IsAbs(bin) {
+			bin = filepath.Join(configDir, bin)
+		}
+		s.BinPath, s.Local = bin, true
+		return s
 	}
+	if ok {
+		s.BinPath, s.Sha256, s.Resolved = inst.Path, inst.Sha256, inst.Resolved
+		s.Manifest = inst.Manifest
+	}
+	return s
 }
 
-// NewManager builds a Manager from the config's plugins: block. configDir is
-// the directory the config file lives in (for resolving relative sources).
-// deps is shared by every client. It does not start any subprocess.
-func NewManager(plugins map[string]config.PluginRef, configDir string, deps Deps) *Manager {
+// NewManager builds a Manager from the config's derived plugin set. configDir is
+// the directory the config file lives in (for resolving local paths); state
+// supplies each remote plugin's installed binary. deps is shared by every
+// client. It does not start any subprocess.
+func NewManager(plugins map[string]config.PluginRef, configDir string, state *InstallState, deps Deps) *Manager {
 	m := &Manager{
 		clients: make(map[string]*Client, len(plugins)),
 		specs:   make(map[string]Spec, len(plugins)),
 	}
-	for name := range plugins {
-		m.order = append(m.order, name)
+	for key := range plugins {
+		m.order = append(m.order, key)
 	}
 	sort.Strings(m.order)
-	for _, name := range m.order {
-		spec := SpecFromRef(name, plugins[name], configDir)
-		m.specs[name] = spec
-		m.clients[name] = NewClient(spec, deps)
+	for _, key := range m.order {
+		ref := plugins[key]
+		inst, ok := state.Get(key)
+		spec := SpecFromRef(ref, configDir, inst, ok)
+		m.specs[key] = spec
+		m.clients[key] = NewClient(spec, deps)
 	}
 	return m
 }

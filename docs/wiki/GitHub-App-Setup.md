@@ -76,7 +76,7 @@ After granting permissions and events:
 ```yaml
 connectors:
   gh:
-    type: github
+    use: github
     app:
       app_id: 123456                                    # the App's numeric id
       private_key_path: ~/.config/conductor/github-app.pem  # the generated .pem

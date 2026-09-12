@@ -2,9 +2,9 @@
 //
 // The top level is integration-agnostic: control/notify/agents/dispatch/store
 // plus a list of raw integration entries. Each integration decodes its own
-// sub-config (see internal/integrations/*). Action and AgentProfile are shared
-// here because both the integration (which maps events→actions) and the
-// dispatch package (which executes them) need them.
+// sub-config (see internal/integrations/*). Action and Step are shared here
+// because both the integration (which maps events→actions) and the dispatch
+// package (which executes them) need them.
 package config
 
 import (
@@ -26,7 +26,39 @@ import (
 // strictUnmarshal decodes data into v rejecting unknown keys, so a typo'd
 // config key (known_hostss, filtres, …) is a named load error instead of a
 // silently dropped setting.
-func strictUnmarshal(data []byte, v any) error {
+//
+// Before the strict pass the document is prepared for YAML-anchor reuse
+// (see anchors.go): aliases are expanded into their content and top-level
+// `x-` extension keys are dropped. Everything else is judged exactly as
+// strictly as before — `x-` is the whole exemption.
+func strictUnmarshal(data []byte, v any) error { return strictDecode(data, v, true) }
+
+// strictDecode is strictUnmarshal with the `x-` exemption made explicit.
+// topLevel is true only for a whole config document; see prepareStrict.
+func strictDecode(data []byte, v any, topLevel bool) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return err
+	}
+	prepared := prepareStrict(&doc, topLevel)
+	if prepared == nil {
+		return nil // an empty document decodes to the zero value
+	}
+	var b bytes.Buffer
+	enc := yaml.NewEncoder(&b)
+	enc.SetIndent(2)
+	if err := enc.Encode(prepared); err != nil {
+		return err
+	}
+	if err := enc.Close(); err != nil {
+		return err
+	}
+	return strictDecodeBytes(b.Bytes(), v)
+}
+
+// strictDecodeBytes is the strict decode itself, over a document already
+// prepared by prepareStrict.
+func strictDecodeBytes(data []byte, v any) error {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(v); err != nil {
@@ -41,6 +73,11 @@ func strictUnmarshal(data []byte, v any) error {
 // strictNodeDecode is strictUnmarshal for custom UnmarshalYAML(*yaml.Node)
 // implementations: yaml.v3 does not propagate KnownFields into them, so the
 // node is re-encoded and run through a strict decoder.
+//
+// It is NOT the document top level, so the `x-` exemption does not apply:
+// an `x-note` on a step or a runtime is an unknown key, exactly like any
+// other typo. The exemption exists so a document has somewhere to park
+// anchors — a step has no such need.
 func strictNodeDecode(n *yaml.Node, v any) error {
 	var b bytes.Buffer
 	enc := yaml.NewEncoder(&b)
@@ -50,7 +87,7 @@ func strictNodeDecode(n *yaml.Node, v any) error {
 	if err := enc.Close(); err != nil {
 		return err
 	}
-	return strictUnmarshal(b.Bytes(), v)
+	return strictDecode(b.Bytes(), v, false)
 }
 
 // Config is the whole config file.
@@ -71,17 +108,22 @@ type Config struct {
 	// SecretRefs are the connectors-model schema (see connectors.go). They
 	// coexist with the legacy blocks: a config may carry either schema (or,
 	// mid-migration, both).
-	ConnectorsMap map[string]ConnectorRef  `yaml:"connectors"`
-	Runtimes      map[string]RuntimeConfig `yaml:"runtimes"`
-	Hosts         map[string]HostConfig    `yaml:"hosts"`
+	ConnectorsMap map[string]ConnectorRef `yaml:"connectors"`
+	Runtimes      RuntimeSet              `yaml:"runtimes"`
+	Hosts         map[string]HostConfig   `yaml:"hosts"`
+	// Models is the OPTIONAL top-level `models:` block — named FLEETS. A fleet
+	// is a ranked list of acceptable models plus a fallback posture
+	// (`{ any: [...], required: bool }`), so a step (or a pack) can name what
+	// it needs rather than hardcoding a model the consumer may not have. See
+	// FleetSpec and docs/design/runtimes-models-packs.md §2.
+	Models map[string]FleetSpec `yaml:"models,omitempty"`
 	// Stores are named data stores (boltdb/redis/http) addressed by the
 	// `store:` selector on kv.* verbs; nothing is implicit.
 	Stores map[string]StoreRef `yaml:"stores"`
-	// Plugins is the OPTIONAL `plugins:` block (#54): EXTERNAL plugins the
-	// daemon runs out-of-process to acquire connector types / runtime names
-	// without recompiling. Bundled connectors/runtimes are NOT listed here.
-	// Entirely optional; strict-decode-safe. See PluginRef and internal/plugin.
-	Plugins map[string]PluginRef `yaml:"plugins"`
+	// (There is no `plugins:` block. An external plugin is declared by the
+	// `use:` reference on the connectors:/runtimes: entry that uses it — see
+	// PluginRefs and docs/design/use-unification.md.)
+
 	// Vaults are named secret stores (conductor/onepassword/pass/file/
 	// hashicorp) addressed by {{ vault "<name>" "<key>" }} references and
 	// per-vault read/write verbs; env stays the implicit baseline.
@@ -91,8 +133,12 @@ type Config struct {
 	// opted-in agent prompts. Nil = memory not configured (no default).
 	Memory    *MemoryConfig          `yaml:"memory"`
 	Workflows map[string]WorkflowDef `yaml:"workflows"`
-	Triggers  []TriggerSpec          `yaml:"triggers"`
-	Policy    *Policy                `yaml:"policy"`
+	// Triggers is the `triggers:` section. It decodes from the list form or
+	// the named/qualified MAP form, where the key is the trigger's stable
+	// address and a `source.event` key implies `on:` — see TriggerList and
+	// docs/design/runtimes-models-packs.md §5.4.
+	Triggers TriggerList `yaml:"triggers"`
+	Policy   *Policy     `yaml:"policy"`
 	// Checks are the named quality-gate checks (#36 §16) `gate: run:` lists
 	// reference. Each check is one ordinary step (command / code / verb /
 	// critic agent) evaluated to pass/fail against the agent's worktree.
@@ -125,7 +171,6 @@ type Config struct {
 	// `handoff:` block), an interactive review stays paseo-native (you drive the
 	// agent in paseo), unchanged. See HandoffConfig and internal/handoff.
 	Handoffs map[string]HandoffConfig `yaml:"handoffs"`
-	Agents   map[string]AgentProfile  `yaml:"agents"`
 	// Controllers is an OPTIONAL map of named agent runtimes conductor can
 	// dispatch through (paseo, an ACP agent, opencode, …). Entirely optional: with
 	// no `controllers:` block, every agent uses the built-in paseo controller and
@@ -149,6 +194,29 @@ type Config struct {
 	// { replace: … }` drops this layer for that agent.
 	AgentGuidance *string `yaml:"agent_guidance"`
 
+	// Settings is the OPTIONAL top-level `settings:` block: named values
+	// substituted into `${settings.NAME}` references ANYWHERE in the config,
+	// across every imported file, before it is decoded.
+	//
+	//	settings:
+	//	  review_channel: "#code-reviews"
+	//	  org:            acme
+	//	  deploy_repo:    "${settings.org}/deploys"   # chains
+	//	  bot_channel:    "${env.BOT_CHANNEL}"        # from the environment
+	//
+	//	policy: { agent_authored: { allow_scopes: { channel: ["${settings.review_channel}"] } } }
+	//
+	// It is the same mechanism a PACK's `settings:` gives a pack manifest
+	// (pack.go), applied to the operator's own config: one place to change a
+	// channel, an org, a repo glob that appears in twenty fields. Resolved at
+	// LOAD — the same for every dispatch. For a value that varies per event,
+	// scope allowlists also render `{{ }}` at dispatch (see
+	// docs/design/scope-templating.md).
+	//
+	// A reference to an undeclared setting is a load error; a setting that
+	// resolves to empty is too. See settings.go.
+	Settings map[string]string `yaml:"settings,omitempty"`
+
 	// Packs is the OPTIONAL `packs:` block (issue #53): distributable, versioned,
 	// parameterized instances of reusable packs (Terraform-modules-for-conductor).
 	// Each entry is namespaced under its instance name and, once fetched by
@@ -163,6 +231,13 @@ type Config struct {
 	// `allow:` source globs, unless the operator passes `--allow-unlisted`. Absent
 	// → no restriction. See pack_trust.go.
 	PackTrust *PackTrustConfig `yaml:"pack_trust,omitempty"`
+
+	// PluginTrust is the OPTIONAL operator-level provenance allowlist for REMOTE
+	// plugin sources (#59), the exact analogue of PackTrust: when set, resolving
+	// a remote plugin (`conductor init` / `plugin update`) refuses any source not
+	// matching an `allow:` glob unless `--allow-unlisted`. Absent → no
+	// restriction. Reuses the pack-trust matcher. See pack_trust.go.
+	PluginTrust *PackTrustConfig `yaml:"plugin_trust,omitempty"`
 
 	// packWarnings holds non-fatal notices raised while instantiating packs
 	// (deprecations, armed-but-unscoped triggers). Not serialized. See PackWarnings.
@@ -179,6 +254,16 @@ type Update struct {
 	// emit conductor.update_available so a trigger drives the update with
 	// pre/post steps around `uses: conductor.update`).
 	Apply ApplyMode `yaml:"apply"`
+	// Deps, when true, also re-resolves `packs:` and `plugins:` on each
+	// auto-update cycle — pulling the newest release each dependency's `version:`
+	// constraint allows, re-vendoring, and (if anything changed and the resulting
+	// config still validates) restarting to load them. Default false: dependency
+	// versions move only on an explicit `conductor init` / `pack update` /
+	// `plugin update`. Per-item `hold: true` freezes one dependency even when this
+	// is on. A dep refresh that fails to validate is discarded — the running
+	// config stands — the same fail-safe as a bad binary release. Every change and
+	// every hold is logged.
+	Deps bool `yaml:"deps"`
 }
 
 // ShouldApply reports whether to re-exec after a successful update (default true).
@@ -639,71 +724,57 @@ func (c *Config) DefaultHandoffName() string {
 	return ""
 }
 
-// AgentProfile is a reusable named agent config referenced by agent actions.
-type AgentProfile struct {
-	// Extends names another agents: profile this one inherits from. Unset fields
-	// are filled from the parent; guidance stacks (parent under child). See
-	// resolveExtends.
-	Extends  string `yaml:"extends,omitempty"`
-	Provider string `yaml:"provider"`
-	Model    string `yaml:"model"`
-	Thinking string `yaml:"thinking"`
-	Mode     string `yaml:"mode"`
-	// Controller names the controller (from top-level `controllers:`) that runs
-	// this agent. Empty falls through to the controller flagged default:true, then
-	// to the built-in paseo controller. See internal/controller resolution order.
-	Controller string `yaml:"controller"`
-	// Runtime is the connectors-model name for Controller (a `runtimes:` entry).
-	// When both are set, Runtime wins; use RuntimeName.
-	Runtime string `yaml:"runtime"`
-	// Host pins this agent's runtime invocations to a named `hosts:` SSH
-	// target, overriding (or standing in for) the runtime's own `host:`.
-	Host            string            `yaml:"host"`
-	Workspace       string            `yaml:"workspace"` // local | worktree
-	WaitTimeout     Duration          `yaml:"wait_timeout"`
-	ArchiveWhenDone bool              `yaml:"archive_when_done"`
-	Labels          map[string]string `yaml:"labels"`
-	// Guidance layers house tone/format rules onto THIS agent's prompt. It is
-	// additive: the top-level agent_guidance (layer 0) and any extends: ancestor's
-	// guidance stack underneath it, rather than being replaced (see GuidanceSpec).
-	// Unset (nil) → inherit the stack unchanged; `{ replace: … }` → reset it.
-	Guidance *GuidanceSpec `yaml:"guidance"`
-	// Memory opts this agent into shared-memory prompt injection: true for
-	// the defaults (global + target repo + own agent scope), or a filter map
-	// { scopes, tags, limit }. Absent → no injection, no token cost.
-	Memory *MemorySelector `yaml:"memory"`
-	// Session binds this agent's dispatches to a keyed live session (session
-	// affinity): every event whose rendered key matches reaches the same
-	// agent as a follow-up. Absent → a fresh agent per dispatch. See
-	// SessionSpec.
-	Session *SessionSpec `yaml:"session"`
-	// Skill opts this agent into the conductor skill (#36 §12): reaching back
-	// into conductor over the daemon socket for verbs-as-tools and the secret
-	// broker. Absent → the agent gets neither (deny by default).
-	Skill *SkillPolicy `yaml:"skill"`
-	// Isolation sandboxes this agent's launches (#36 §15): a low-privilege
-	// user, Linux namespaces/cgroups, or a container, plus the network egress
-	// policy. Wins over the runtime's own isolation:. Requires a runtime
-	// conductor launches itself (acp/cli/opencode/agent-deck — not paseo).
-	Isolation *IsolationConfig `yaml:"isolation"`
-	// Budget is this profile's hard $/token spend cap over a rolling window
-	// (#36 §14) — checked alongside the global and workflow-scope budgets;
-	// an over-cap dispatch sheds and notifies.
-	Budget *BudgetPolicy `yaml:"budget"`
-	// OutcomeFeedback opts this profile into guidance tuning (#36 §18): a
-	// one-line track-record summary (merged / closed / rejected / reverted
-	// counts) is appended to the agent's guidance.
-	OutcomeFeedback bool `yaml:"outcome_feedback"`
-}
-
 // SkillPolicy is the per-profile `skill:` block (#36 §12): which of
 // conductor's own capabilities a dispatched agent may reach back into over
 // the daemon socket. The zero value denies everything.
 type SkillPolicy struct {
-	// Verbs are the connector verbs exposed to this agent as MCP tools —
-	// path.Match patterns like policy.agent_authored uses ("gh.comment",
-	// "rest.*"). Empty → no verb tools.
+	// Verbs is the DENY-BY-DEFAULT allowlist of connector verbs this step may
+	// call — the one list that drives all three agent-facing surfaces: the
+	// capability card injected into the prompt, `conductor discover` / the
+	// MCP tool list, and what the daemon enforces
+	// (docs/design/skill-capability-and-pack-interface.md §A/§B).
+	//
+	// Grant forms (path.Match patterns, same matcher policy.agent_authored
+	// uses):
+	//
+	//	verbs: ["*"]                    all verbs of all connectors
+	//	verbs: [github.*]               all verbs of one connector
+	//	verbs: [github.*, sentry.*]     several connectors
+	//	verbs: [github.submit_review]   specific verbs
+	//
+	// The block also takes a MAP form — the same grant, per verb, with the
+	// RESOURCE each call may name (docs/design/skill-verb-scope.md):
+	//
+	//	verbs:
+	//	  slack.post:           { channel: ["#code-reviews"] }
+	//	  github.submit_review: {}
+	//	  kv.*:                 { store: ["shared-kv"] }
+	//
+	// The keys inside an entry are that verb's OWN scope-tagged options, so
+	// `channel` under slack.post and `repo` under github.submit_review never
+	// collide. A scoped option the entry does not list is limited to the
+	// dispatch's own context (its repo, the channel its event came from);
+	// listing widens it. Naming an option the verb doesn't declare as a
+	// resource is a load error. Both forms carry the same verb access — see
+	// VerbScopes.
+	//
+	// Empty (or no `skill:` block at all) → no surface: no tools, no card,
+	// nothing injected, everything denied. READS ARE NOT OPEN BY DEFAULT —
+	// a read verb outside the grant is refused like any other. Breadth is
+	// an explicit dial, never a default.
+	//
+	// `conductor.*` and `workflow.*` are never reachable here at ANY
+	// breadth, including `["*"]`: conductor's own orchestration goes through
+	// run_step under policy.agent_authored. Inside a PACK the grant is
+	// additionally bounded by requires.connectors (§C).
 	Verbs []string `yaml:"verbs"`
+	// VerbScopes carries the MAP form's per-verb resource constraints:
+	// verb pattern → option name → allowed values (exact or glob). It is
+	// derived from `verbs:` at decode time, never written directly, and is
+	// always a subset of Verbs' patterns — the list form leaves it empty,
+	// which means "every scoped option is limited to the dispatch's own
+	// context".
+	VerbScopes map[string]map[string][]string `yaml:"-"`
 	// SecretsVia picks how this agent obtains a credential it truly needs:
 	// "broker" (the audited single-use secret broker), "env" (DEPRECATED —
 	// template the secret into the step's env:, which puts the raw value in
@@ -716,15 +787,6 @@ type SkillPolicy struct {
 	// MaxCalls caps verb executions per skill session (analogous to
 	// agent_authored.limits). 0 = the built-in default (256).
 	MaxCalls int `yaml:"max_calls"`
-}
-
-// RuntimeName returns the runtime/controller the profile selects (runtime
-// wins over the legacy controller key; "" = the default).
-func (p AgentProfile) RuntimeName() string {
-	if p.Runtime != "" {
-		return p.Runtime
-	}
-	return p.Controller
 }
 
 // Action is one (source,kind)→action mapping. Type is "agent" or "command".
@@ -978,13 +1040,39 @@ func Load(path string) (*Config, error) {
 	var c Config
 	c.baseDir = filepath.Dir(path)
 	if !hasAnyImports(probe) {
+		// `${settings.NAME}` substitution happens on the BODY, before the
+		// decode, so a setting lands wherever it was referenced — including
+		// inside values the decode would otherwise have already fixed.
+		expanded, err = ExpandSettings(expanded)
+		if err != nil {
+			return nil, err
+		}
 		if err := strictUnmarshal(expanded, &c); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
 		}
 	} else {
-		merged, err := loadMerged(path, map[string]bool{})
+		// TWO PASSES over the same import traversal, so the settings a file
+		// declares reach every OTHER file's body and no traversal logic is
+		// duplicated: pass 1 merges with no substitution and tells us what
+		// `settings:` the graph declares; pass 2 re-runs it with those
+		// resolved, substituting each file's body as it is read.
+		merged, err := loadMerged(path, map[string]bool{}, nil)
 		if err != nil {
 			return nil, err
+		}
+		declared, err := settingsFromDoc(merged)
+		if err != nil {
+			return nil, err
+		}
+		if len(declared) > 0 {
+			resolved, rerr := resolveSettingValues(declared)
+			if rerr != nil {
+				return nil, rerr
+			}
+			merged, err = loadMerged(path, map[string]bool{}, resolved)
+			if err != nil {
+				return nil, err
+			}
 		}
 		out, err := yaml.Marshal(merged)
 		if err != nil {
@@ -996,6 +1084,11 @@ func Load(path string) (*Config, error) {
 		if err := strictUnmarshal(out, &c); err != nil {
 			return nil, fmt.Errorf("parse merged config: %w", err)
 		}
+	}
+	// A `${settings.X}` that survived into a real field names nothing declared
+	// — the typo, caught here rather than as a mystery value at dispatch.
+	if err := checkSettingRefs(&c); err != nil {
+		return nil, err
 	}
 	// File-referencing `workflow:` forms (workflow:+import:, a bare file path) join
 	// the merged workflow set first — before packs add namespaced `review/flow`
@@ -1042,7 +1135,7 @@ func Load(path string) (*Config, error) {
 // the importing file's own keys overlay them, so: scalars/maps in the importer
 // win, lists concatenate (imported entries first), and each file is included at
 // most once (cycles and diamond imports are de-duped, not errors).
-func loadMerged(p string, loaded map[string]bool) (map[string]any, error) {
+func loadMerged(p string, loaded map[string]bool, settings map[string]string) (map[string]any, error) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return nil, err
@@ -1060,6 +1153,13 @@ func loadMerged(p string, loaded map[string]bool) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Settings substitute per FILE, through the shared primitive — a setting
+	// supplies a value, never document structure (see SubstituteRefs). nil on
+	// pass 1, the pass that discovers what `settings:` the graph declares.
+	expanded, serr := substituteInBody(expanded, settings)
+	if serr != nil {
+		return nil, fmt.Errorf("%s: %w", p, serr)
+	}
 	var m map[string]any
 	if err := yaml.Unmarshal(expanded, &m); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", p, err)
@@ -1067,6 +1167,11 @@ func loadMerged(p string, loaded map[string]bool) (map[string]any, error) {
 	if m == nil {
 		m = map[string]any{}
 	}
+	// `x-` holders are per-file anchor parks (anchors.go). The decode above
+	// already resolved this file's aliases into values, so only the holder
+	// itself needs dropping — and dropping it HERE, per file, is what keeps
+	// anchors file-local: a holder never merges into another file's scope.
+	StripExtensionKeys(m)
 	// Section-scoped imports expand per file, so their globs resolve against
 	// THIS file's directory and a duplicate entry names both sources.
 	if err := expandSectionImports(p, m); err != nil {
@@ -1090,7 +1195,7 @@ func loadMerged(p string, loaded map[string]bool) (map[string]any, error) {
 			return nil, fmt.Errorf("%s: import %q matched no files", p, imp)
 		}
 		for _, f := range matches {
-			sub, err := loadMerged(f, loaded)
+			sub, err := loadMerged(f, loaded, settings)
 			if err != nil {
 				return nil, err
 			}
@@ -1155,28 +1260,38 @@ var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // Expansion runs per line on the code portion only: a ${VAR} inside a YAML
 // comment is left verbatim and never reported as missing, so the example config's
 // explanatory comments (which mention ${ENV}/${GH_PAT}) don't fail to load.
+// It substitutes into the PARSED tree, inside scalar values only, for the
+// same reason `${settings.X}` does (see substituteSettingsNode): an
+// environment variable supplies a VALUE. A value carrying a newline, a quote
+// or a `#` must not be able to close a scalar and open a sibling key — and on
+// a shared box the environment is not always the operator's alone.
+//
+// A reference inside a `#` comment is left alone, which is what the old
+// line-splitting implementation went out of its way to do and what a node
+// walk gets for free: comments are not scalar values.
 func expandEnv(path string, b []byte) ([]byte, error) {
 	var missing []string
 	seen := map[string]bool{}
-	lines := strings.Split(string(b), "\n")
-	for i, line := range lines {
-		code, comment := splitYAMLComment(line)
-		code = envRe.ReplaceAllStringFunc(code, func(m string) string {
-			name := envRe.FindStringSubmatch(m)[1]
-			v, ok := os.LookupEnv(name)
-			if !ok && !seen[name] {
+	out, err := SubstituteRefs(b, envRe, func(ref string) (string, bool) {
+		name := envRe.FindStringSubmatch(ref)[1]
+		v, ok := os.LookupEnv(name)
+		if !ok {
+			if !seen[name] {
 				seen[name] = true
 				missing = append(missing, name)
 			}
-			return v
-		})
-		lines[i] = code + comment
-	}
+			return "", true // substitute empty; the error below is the real answer
+		}
+		return v, true
+	})
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("config %s references undefined environment variable(s): %s (define them in %s or the environment)",
 			path, strings.Join(missing, ", "), filepath.Join(filepath.Dir(path), "conductor.env"))
 	}
-	return []byte(strings.Join(lines, "\n")), nil
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // splitYAMLComment splits a line into its code and trailing `#…` comment. A `#`
@@ -1211,6 +1326,9 @@ func (c *Config) applyDefaults() {
 	if c.PaseoBin == "" {
 		c.PaseoBin = "paseo"
 	}
+	// A runtime's name implies its `use:` when it names no implementation.
+	// After resolveExtends, so an inherited use: still wins.
+	c.applyRuntimeUseDefaults()
 	// Back-compat: the top-level agent_guidance is now the GLOBAL scope of
 	// policy.guidance. Fold it in so connector/trigger-scoped guidance stacks
 	// on top of it through the normal policy cascade. policy.guidance (if set
@@ -1278,7 +1396,10 @@ func (c *Config) Validate() error {
 	if err := c.validateConnectors(); err != nil {
 		return err
 	}
-	if err := c.validatePlugins(); err != nil {
+	if err := c.validatePluginRefs(); err != nil {
+		return err
+	}
+	if err := c.validateModels(); err != nil {
 		return err
 	}
 	if err := c.validateStores(); err != nil {
@@ -1323,67 +1444,8 @@ func (c *Config) Validate() error {
 	if err := c.validateHandoffs(); err != nil {
 		return err
 	}
-	for name, p := range c.Agents {
-		if p.Workspace != "" && p.Workspace != "local" && p.Workspace != "worktree" {
-			return fmt.Errorf("config: agent %q: workspace must be local|worktree, got %q", name, p.Workspace)
-		}
-		if rn := p.RuntimeName(); rn != "" {
-			_, isController := c.Controllers[rn]
-			_, isRuntime := c.Runtimes[rn]
-			if !isController && !isRuntime {
-				return fmt.Errorf("config: agent %q: unknown runtime %q (defined: %s)", name, rn, c.runtimeNames())
-			}
-		}
-		if p.Host != "" {
-			if _, ok := c.Hosts[p.Host]; !ok {
-				return fmt.Errorf("config: agent %q: unknown host %q (defined: %s)", name, p.Host, c.hostNames())
-			}
-		}
-		if err := c.validateProfileIsolation(name, p); err != nil {
-			return err
-		}
-		if err := c.validateSkillIsolation(name, p); err != nil {
-			return err
-		}
-		if err := validateBudget("agent "+name, p.Budget); err != nil {
-			return err
-		}
-		if p.Skill != nil {
-			switch p.Skill.SecretsVia {
-			case "", "none", "env", "broker":
-			default:
-				return fmt.Errorf("config: agent %q: skill.secrets_via must be broker|env|none, got %q", name, p.Skill.SecretsVia)
-			}
-			if p.Skill.MaxCalls < 0 {
-				return fmt.Errorf("config: agent %q: skill.max_calls must be >= 0, got %d", name, p.Skill.MaxCalls)
-			}
-			// allow_secrets only works through the broker: the broker refuses to
-			// issue to a session whose secrets_via is not "broker" (default is
-			// "none"). An allow_secrets list without secrets_via: broker is a
-			// silent footgun — the grants would never resolve — so reject it.
-			if len(p.Skill.AllowSecrets) > 0 {
-				via := p.Skill.SecretsVia
-				if via == "" {
-					via = "none"
-				}
-				if via != "broker" {
-					return fmt.Errorf("config: agent %q: skill.allow_secrets is set but skill.secrets_via is %q — the broker only issues secrets to a session with secrets_via: broker, so these grants would never resolve; set secrets_via: broker", name, via)
-				}
-			}
-			for _, s := range p.Skill.AllowSecrets {
-				// The current model names a vault entry: "<vault>/<key>"
-				// (the key half resolves at issue time — non-listable vaults
-				// can't be checked statically). A bare name checks the
-				// retired named-secrets block for back-compat.
-				if vault, _, isVault := strings.Cut(s, "/"); isVault {
-					if _, ok := c.Vaults[vault]; !ok {
-						return fmt.Errorf("config: agent %q: skill.allow_secrets %q names unknown vault %q (defined: %s)", name, s, vault, c.vaultNames())
-					}
-				} else if _, ok := c.SecretRefs[s]; !ok {
-					return fmt.Errorf("config: agent %q: skill.allow_secrets names unknown secret %q — name a vault entry as \"<vault>/<key>\"", name, s)
-				}
-			}
-		}
+	if err := c.validateSteps(); err != nil {
+		return err
 	}
 	if err := c.validateCallable(); err != nil {
 		return err
@@ -1391,15 +1453,16 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// SkillEnabled reports whether any agent profile carries a skill: block —
-// the daemon serves the tool socket and builds the secret broker only then.
+// SkillEnabled reports whether any step carries a skill: block — the daemon
+// serves the tool socket and builds the secret broker only then.
 func (c *Config) SkillEnabled() bool {
-	for _, p := range c.Agents {
-		if p.Skill != nil {
-			return true
+	found := false
+	c.WalkSteps(func(_ IdentityScope, _ int, s *Step) {
+		if s.Skill != nil {
+			found = true
 		}
-	}
-	return false
+	})
+	return found
 }
 
 // Skill delivery modes: how a dispatched agent reaches the conductor skill
@@ -1418,8 +1481,8 @@ const (
 // in env). A REMOTE launch (a runtime/profile host:) can reach neither today —
 // the daemon socket isn't on that box — so it's SkillModeNone until the HTTP
 // endpoint lands.
-func (c *Config) SkillDelivery(p AgentProfile) (runtime, mode string) {
-	rn := p.RuntimeName()
+func (c *Config) SkillDelivery(p Step) (runtime, mode string) {
+	rn := p.Runtime
 	if rn == "" {
 		rn = c.DefaultRuntimeName()
 	}
@@ -1459,7 +1522,7 @@ func (c *Config) SkillDelivery(p AgentProfile) (runtime, mode string) {
 // SkillToolsSupported reports whether the skill surface reaches this profile's
 // agent at all (via MCP or the CLI). `conductor validate` warns when it does
 // not (a skill: profile that gets nothing — a remote launch today).
-func (c *Config) SkillToolsSupported(p AgentProfile) (runtime string, ok bool) {
+func (c *Config) SkillToolsSupported(p Step) (runtime string, ok bool) {
 	rn, mode := c.SkillDelivery(p)
 	return rn, mode != SkillModeNone
 }
@@ -1727,16 +1790,6 @@ func (c *Config) CheckAgentRefs(refs []ActionRef) error {
 }
 
 func (c *Config) checkAgentRef(where string, a Action) error {
-	if a.Type == "agent" {
-		if a.Agent == "" {
-			return fmt.Errorf("config: %s: agent action needs `agent: <profile>` (defined: %s)", where, c.agentNames())
-		}
-		// A templated agent ("{{.inputs.reviewer}}") resolves at dispatch; only a
-		// literal name is checked against the defined profiles at load.
-		if _, ok := c.Agents[a.Agent]; !ok && !strings.Contains(a.Agent, "{{") {
-			return fmt.Errorf("config: %s: unknown agent profile %q (defined: %s)", where, a.Agent, c.agentNames())
-		}
-	}
 	if a.Handoff != "" {
 		if _, ok := c.Handoffs[a.Handoff]; !ok {
 			return fmt.Errorf("config: %s: unknown handoff %q (defined: %s)", where, a.Handoff, c.handoffNames())
@@ -1752,19 +1805,6 @@ func (c *Config) checkAgentRef(where string, a Action) error {
 		}
 	}
 	return nil
-}
-
-// agentNames lists the defined profile names, sorted, for error messages.
-func (c *Config) agentNames() string {
-	if len(c.Agents) == 0 {
-		return "none"
-	}
-	names := make([]string, 0, len(c.Agents))
-	for n := range c.Agents {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return strings.Join(names, ", ")
 }
 
 func expandHome(p string) string {
@@ -1785,9 +1825,28 @@ func expandHome(p string) string {
 // built in memory rather than loaded from disk).
 func (c *Config) BaseDir() string { return c.baseDir }
 
-// StateDir returns the state directory to use for the default StateFile/AuditLog
-// paths: ~/.local/state/conductor.
+// stateDirOverride is set by --state-dir, for a CLI invocation or a test
+// that must not touch the real install state.
+var stateDirOverride string
+
+// SetStateDir overrides the state directory for this process.
+func SetStateDir(dir string) { stateDirOverride = dir }
+
+// StateDir returns the state directory for the default StateFile/AuditLog
+// paths, honouring the override, then XDG_STATE_HOME, then the
+// spec's default of ~/.local/state.
+//
+// The XDG variable is the whole point of the XDG path it was hardwiring:
+// hardcoding $HOME/.local/state meant a box that redirects its state — a
+// container, a multi-tenant host, a test — silently wrote install state
+// somewhere it did not expect, and read a different box's back.
 func StateDir() string {
+	if stateDirOverride != "" {
+		return stateDirOverride
+	}
+	if x := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); x != "" {
+		return filepath.Join(x, "conductor")
+	}
 	h, err := os.UserHomeDir()
 	if err != nil {
 		return ""

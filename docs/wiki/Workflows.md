@@ -13,25 +13,79 @@ into the same steps — each item a bare `conn.event` or a one-key map
 [[Configuration]] for the list grammar and merge semantics.
 
 ```yaml
+x-templates:
+  fixer: &fixer { type: agent, workspace: worktree }
+
 triggers:
   - on: gh.merge_conflict
     steps:
-      - { id: fix, type: agent, agent: fixer, prompt: "Resolve the conflict on {{.repo}}#{{.pr}}." }
+      - { <<: *fixer, id: fix, prompt: "Resolve the conflict on {{.repo}}#{{.pr}}." }
     hooks:
       - { at: start, uses: slack-ops.post, options: { text: "on it: {{.repo}}#{{.pr}}" } }
       - { at: done,  uses: slack-ops.post, options: { text: "resolved {{.repo}}#{{.pr}}" } }
       - { at: fail,  uses: slack-ops.post, options: { text: "failed: {{.error}}" } }
 ```
 
+## Named and qualified triggers
+
+`triggers:` also takes a **map**, where the key is each trigger's stable
+address. A key that reads as `<source>.<event>` **implies `on:`**, which
+disambiguates across sources for free:
+
+```yaml
+triggers:
+  github.pull_request:  { steps: [ { id: review, type: agent, prompt: "…" } ] }
+  gitlab.merge_request: { steps: [ { id: review, type: agent, prompt: "…" } ] }
+  pagerduty.incident:   { steps: [ { id: triage, type: agent, prompt: "…" } ] }
+```
+
+A bare event name is not an identity — two connectors can publish the same
+event, and a pack needs each of its triggers addressable so you can override
+exactly one. The key is that address.
+
+For **two triggers on the same `source.event`**, give them free names and set
+`on:` explicitly:
+
+```yaml
+triggers:
+  review:    { on: github.pull_request, steps: [ … ] }
+  autolabel: { on: github.pull_request, steps: [ … ] }
+```
+
+A free-named key with no `on:` is an error: only a `source.event` key implies
+the event.
+
+### Instances: array instead of object
+
+A trigger's value is polymorphic. An **object** is one trigger; an **array** is
+several **instances** that each fire independently:
+
+```yaml
+triggers:
+  review:
+    - { on: github.pull_request, filters: { repos: [me/app], labels: [ready] } }
+    - { on: github.pull_request, filters: { repos: [me/api] } }
+```
+
+There is no `instances:` keyword and no per-instance name. An instance's
+identity is its **content** — its `repos:`/`filters:` are what make it distinct
+— so its internal handle is derived from that content. Reordering the array, or
+reordering keys within an entry, does not move an instance's dedup or attempt
+state. Two byte-identical entries are an error rather than one trigger silently
+written twice.
+
 ## Step forms
 
 A step is one of six forms (all share `id` and `if`):
 
-- `type: agent` — run an agent profile: `agent`, `prompt`, `checkout`,
+- `type: agent` — dispatch an agent: `prompt`, `checkout`,
   `output_schema`, `background` (+ `handoff`, see [[Hand-offs]]),
   `rerequest_review`, `workdir`, `env`, and an optional `gate:` on the
   agent's proposed change ([[Gates]]). A foreground agent step with a local
   worktree also outputs its proposed `diff` and `workdir` ([[Runs]]).
+  It may also carry `model:` (a fleet, a model id, a wildcard, or an inline
+  `{ any, required }`) and `runtime:` (a `runtimes:` entry to pin it to) —
+  see [Model selection](Model-Selection.md).
 - `type: command` — a host command (POSIX sh semantics; argv list). With
   `host:` it runs over SSH and outputs `{stdout, stderr, exit_code}`.
 - `run:` — an inline code step ([[Code-Steps]]).
@@ -43,19 +97,27 @@ A step is one of six forms (all share `id` and `if`):
 - `team:` — one task split across a planner, parallel workers in isolated
   worktrees, an optional critic, and a reconciler ([[Teams]]).
 
+An agent step carries its own BEHAVIOR — guidance, skill, memory opt-in,
+workspace, timeouts, isolation, model, runtime — and shares it with other
+steps through a YAML anchor (`<<: *base`, parked under a top-level `x-`
+key). There is no top-level `steps:` section and no `agents:` block: a step
+lives where it runs, and anything that must POINT at one — a `team:` role,
+a pack overlay — addresses it as `<workflow>/<step-id>` (or
+`<workflow>[<n>]`). See [[Steps]] and [[Reuse]].
+
 Agent steps have two extra memory hooks (when a `memory:` section is
 configured): a `remember:` block in the agent's final output persists
 post-run with the run's provenance (the output contract), and an opted-in
-profile (`memory: true`) gets the scoped memories injected into its prompt —
-see [[Memory]].
+step (`memory: true`) gets the scoped memories injected into its prompt. The
+opt-in gates BOTH directions — a step that did not ask for memory cannot
+write to it either. See [[Memory]].
 
-An agent step whose profile carries a `session:` block participates in
-**session affinity**: events rendering the same key reach one live agent as
-follow-up prompts instead of fresh spawns, across every trigger using that
-agent — see [[Agents]]. A follow-up returns `{ agent_id, ... }` like any
-agent step; on paseo its output is empty (the prompt is queued to the live
-agent), so steps that read the agent's structured output should not assume a
-keyed session.
+An agent step carrying a `session:` block (or running on a runtime that has
+one) participates in **session affinity**: events rendering the same key
+reach one live agent as follow-up prompts instead of fresh spawns — see
+[[Steps]]. A follow-up returns `{ agent_id, ... }` like any agent step; on
+paseo its output is empty (the prompt is queued to the live agent), so steps
+that read the agent's structured output should not assume a keyed session.
 
 ## Context and scope
 

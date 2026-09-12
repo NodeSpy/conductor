@@ -27,7 +27,7 @@ func TestCronConnector(t *testing.T) {
 	reg := buildSinkRegistry(t, `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules:
       tick:    { every: 1h }
       nightly: { cron: "0 4 * * *", run_on_start: true }
@@ -85,7 +85,7 @@ func TestRSSConnector(t *testing.T) {
 	reg := buildSinkRegistry(t, `
 connectors:
   news:
-    type: rss
+    use: rss
     feeds:
       rel:  { url: "https://example.com/releases.atom", interval: 30m }
       blog: { url: "https://example.com/blog.rss" }
@@ -146,142 +146,6 @@ func TestRSSFilter(t *testing.T) {
 			}
 			continue
 		}
-		if err != nil || got != c.want {
-			t.Errorf("%s: got %v, %v; want %v", c.name, got, err, c.want)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// sentry
-// ---------------------------------------------------------------------------
-
-func TestSentryConnector(t *testing.T) {
-	// Neither listen nor smee_url → disabled at build with the naming error.
-	reg := buildSinkRegistry(t, "connectors:\n  errs: { type: sentry }\n")
-	in, _ := reg.Get("errs")
-	if in.DisabledReason == "" || !strings.Contains(in.DisabledReason, "set listen and/or smee_url") {
-		t.Fatalf("transportless sentry should disable, got %q", in.DisabledReason)
-	}
-
-	reg = buildSinkRegistry(t, "connectors:\n  errs: { type: sentry, listen: \":0\", client_secret: s3 }\n")
-	in, _ = reg.Get("errs")
-	if in.DisabledReason != "" {
-		t.Fatalf("sentry with listen should build: %q", in.DisabledReason)
-	}
-	if got := in.Impl.DeclaredEvents(); got != nil {
-		t.Fatalf("sentry events are static, got %v", got)
-	}
-	src, err := in.Impl.Source([]CompiledTrigger{
-		{Index: 0, Spec: specOn(t, "on: errs.alert\nrepo: o/r")},
-		{Index: 1, Spec: specOn(t, "on: errs.alert\nname: page")},
-	})
-	if err != nil || src == nil {
-		t.Fatalf("Source: %v (src=%v)", err, src)
-	}
-	if err := src.Validate(); err != nil {
-		t.Fatalf("lowered sentry integration invalid: %v", err)
-	}
-	if src, err := in.Impl.Source(nil); err != nil || src != nil {
-		t.Fatalf("empty Source should be nil, got %v, %v", src, err)
-	}
-	if _, err := in.Impl.Invoke(context.Background(), "post", nil); err == nil || !strings.Contains(err.Error(), "no verbs") {
-		t.Fatalf("Invoke should refuse: %v", err)
-	}
-}
-
-func TestSentryFilter(t *testing.T) {
-	ctx := map[string]any{"sentry": map[string]any{
-		"project": "api", "level": "error", "environment": "prod",
-	}}
-	cases := []struct {
-		name    string
-		filters map[string]any
-		want    bool
-	}{
-		{"empty matches all", map[string]any{}, true},
-		{"project match (case-insensitive)", map[string]any{"projects": []any{"API"}}, true},
-		{"project mismatch", map[string]any{"projects": []any{"web"}}, false},
-		{"level + environment", map[string]any{"levels": []any{"error"}, "environments": []any{"prod"}}, true},
-		{"level mismatch", map[string]any{"levels": []any{"warning"}}, false},
-		{"exclude drops a match", map[string]any{
-			"projects": []any{"api"},
-			"exclude":  []any{map[string]any{"environments": []any{"prod"}}},
-		}, false},
-		{"exclude that misses keeps the match", map[string]any{
-			"projects": []any{"api"},
-			"exclude":  []any{map[string]any{"environments": []any{"staging"}}},
-		}, true},
-	}
-	for _, c := range cases {
-		got, err := sentryFilter("alert", c.filters, ctx)
-		if err != nil || got != c.want {
-			t.Errorf("%s: got %v, %v; want %v", c.name, got, err, c.want)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// pagerduty
-// ---------------------------------------------------------------------------
-
-func TestPagerdutyConnector(t *testing.T) {
-	reg := buildSinkRegistry(t, "connectors:\n  pd: { type: pagerduty }\n")
-	in, _ := reg.Get("pd")
-	if in.DisabledReason == "" || !strings.Contains(in.DisabledReason, "set listen and/or smee_url") {
-		t.Fatalf("transportless pagerduty should disable, got %q", in.DisabledReason)
-	}
-
-	reg = buildSinkRegistry(t, "connectors:\n  pd: { type: pagerduty, smee_url: \"https://smee.io/x\", signing_secret: s }\n")
-	in, _ = reg.Get("pd")
-	if in.DisabledReason != "" {
-		t.Fatalf("pagerduty with smee should build: %q", in.DisabledReason)
-	}
-	if got := in.Impl.DeclaredEvents(); got != nil {
-		t.Fatalf("pagerduty events are static, got %v", got)
-	}
-	src, err := in.Impl.Source([]CompiledTrigger{
-		{Index: 0, Spec: specOn(t, "on: pd.incident\nrepo: o/r")},
-	})
-	if err != nil || src == nil {
-		t.Fatalf("Source: %v (src=%v)", err, src)
-	}
-	if err := src.Validate(); err != nil {
-		t.Fatalf("lowered pagerduty integration invalid: %v", err)
-	}
-	if src, err := in.Impl.Source(nil); err != nil || src != nil {
-		t.Fatalf("empty Source should be nil, got %v, %v", src, err)
-	}
-	if _, err := in.Impl.Invoke(context.Background(), "page", nil); err == nil || !strings.Contains(err.Error(), "no verbs") {
-		t.Fatalf("Invoke should refuse: %v", err)
-	}
-}
-
-func TestPagerdutyFilter(t *testing.T) {
-	ctx := map[string]any{"pagerduty": map[string]any{
-		"event_type": "incident.triggered", "service": "checkout",
-		"service_id": "PSVC1", "urgency": "high", "priority": "P1",
-	}}
-	cases := []struct {
-		name    string
-		filters map[string]any
-		want    bool
-	}{
-		{"empty matches all", map[string]any{}, true},
-		{"event type", map[string]any{"event_types": []any{"incident.triggered"}}, true},
-		{"event type mismatch", map[string]any{"event_types": []any{"incident.resolved"}}, false},
-		{"service by summary", map[string]any{"services": []any{"Checkout"}}, true},
-		{"service by id", map[string]any{"services": []any{"PSVC1"}}, true},
-		{"service mismatch", map[string]any{"services": []any{"billing"}}, false},
-		{"urgency + priority", map[string]any{"urgencies": []any{"high"}, "priorities": []any{"p1"}}, true},
-		{"priority mismatch", map[string]any{"priorities": []any{"P3"}}, false},
-		{"exclude drops", map[string]any{
-			"urgencies": []any{"high"},
-			"exclude":   []any{map[string]any{"services": []any{"checkout"}}},
-		}, false},
-	}
-	for _, c := range cases {
-		got, err := pagerdutyFilter("incident", c.filters, ctx)
 		if err != nil || got != c.want {
 			t.Errorf("%s: got %v, %v; want %v", c.name, got, err, c.want)
 		}

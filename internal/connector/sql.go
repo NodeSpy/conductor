@@ -24,19 +24,21 @@ var sqlDecl = &TypeDecl{
 		{
 			Name: "query", Desc: "run a row-returning statement with bound args",
 			Options: Schema{
-				"store": {Type: TString, Required: true, Desc: "which SQL stores: entry to use"},
+				"store": {Type: TString, Required: true, Scope: "store", Desc: "which SQL stores: entry to use"},
 				"sql":   {Type: TString, Required: true, Desc: "the statement, with driver placeholders ($1 / ?)"},
 				"args":  {Type: TList, Desc: "values bound to the placeholders, in order"},
+				"limit": {Type: TInt, Desc: "max rows to return (default 1000, the cap that keeps an unbounded result set out of an agent's context)"},
 			},
 			Outputs: Schema{
-				"rows":  {Type: TList, Desc: "one {column: value} object per row"},
-				"count": {Type: TInt},
+				"rows":      {Type: TList, Desc: "one {column: value} object per row"},
+				"count":     {Type: TInt},
+				"truncated": {Type: TBool, Desc: "more rows matched than the limit returned"},
 			},
 		},
 		{
 			Name: "exec", Desc: "run a mutating statement with bound args",
 			Options: Schema{
-				"store": {Type: TString, Required: true, Desc: "which SQL stores: entry to use"},
+				"store": {Type: TString, Required: true, Scope: "store", Desc: "which SQL stores: entry to use"},
 				"sql":   {Type: TString, Required: true, Desc: "the statement, with driver placeholders ($1 / ?)"},
 				"args":  {Type: TList, Desc: "values bound to the placeholders, in order"},
 			},
@@ -97,11 +99,22 @@ func (s sqlImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (
 		if err != nil {
 			return nil, err
 		}
+		// `SELECT * FROM events` has no inherent bound and the rows cross
+		// into an agent's context. Cap by default; `truncated` distinguishes
+		// a partial answer from a complete one.
+		limit := sqlQueryDefaultLimit
+		if n, ok := kvInt(opts["limit"]); ok && n > 0 {
+			limit = n
+		}
+		truncated := false
+		if len(rows) > limit {
+			rows, truncated = rows[:limit], true
+		}
 		out := make([]any, len(rows))
 		for i, r := range rows {
 			out[i] = r
 		}
-		return map[string]any{"rows": out, "count": len(rows)}, nil
+		return map[string]any{"rows": out, "count": len(rows), "truncated": truncated}, nil
 	case "exec":
 		n, id, err := st.Exec(ctx, query, args)
 		if err != nil {
@@ -283,3 +296,6 @@ func joinTypes(types []string) string {
 	}
 	return out
 }
+
+// sqlQueryDefaultLimit bounds sql.query when the caller names no limit.
+const sqlQueryDefaultLimit = 1000

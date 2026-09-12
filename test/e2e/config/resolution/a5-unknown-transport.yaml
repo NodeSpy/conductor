@@ -9,7 +9,7 @@ integrations:
     rules: [ { match: { repos: ["acme/*"] } } ]
 controllers:
   bad: { agent: gemini, transport: carrier-pigeon }
-agents:
-  fixer: { provider: fake }
+steps:
+  fixer: { type: agent, name: fixer }
 store: { state_file: /data/state.json, audit_log: /data/audit.jsonl }
 paseo_bin: /usr/local/bin/fakepaseo

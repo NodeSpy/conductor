@@ -36,18 +36,18 @@ func TestPackGitFetchEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	body := `
 connectors:
-  gh: { type: github }
+  gh: { use: github }
 vaults:
   house: { type: file, dir: /tmp/pc-pack-vault }
-agents:
-  my-opus: { provider: claude, skill: { verbs: [github.submit_review] } }
+x-steps:
+  my-opus: &my-opus { type: agent, name: my-opus, skill: { verbs: [github.submit_review] } }
 packs:
   review:
     source: git::file://` + repo + `//review-kit
     connectors: { github: gh }
     stores: { cache: redis1 }
     secrets: { api_token: house/foocorp }
-    agents: { reviewer: my-opus }
+    steps: { review-flow/review: { workspace: local } }
     triggers:
       on_review_request: { enabled: true, repos: [acme/app] }
 stores:

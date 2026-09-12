@@ -26,69 +26,66 @@ func transformYAML(t *testing.T, legacy string) (map[string]any, *Result) {
 	return doc, res
 }
 
-// TestPagerdutyPrecedenceAndUnreachable: the pd rule chain migrates like
-// sentry's — later rules exclude earlier matches, a rule after a catch-all
-// is unreachable and generates no trigger (noted, never silent) — and the
-// connection block carries every transport field.
-func TestPagerdutyPrecedenceAndUnreachable(t *testing.T) {
+// TestExtractedTypesAreSkippedNotTransformed: sentry and pagerduty are no
+// longer bundled connectors, so the migration must NOT emit a connector for
+// them (an auto-transform would produce triggers that never fire — see
+// legacy_extracted.go). It skips them with an actionable note and migrates the
+// REST of the file normally, so one extracted integration does not block a
+// user's whole migration.
+func TestExtractedTypesAreSkippedNotTransformed(t *testing.T) {
 	doc, res := transformYAML(t, `
 integrations:
   - type: pagerduty
     name: pd
     listen: ":8097"
-    smee_url: https://smee.io/pd
-    path: /hooks/pd
     signing_secret: ${PD_SECRET}
     rules:
-      - match: { services: [payments], urgencies: [high], event_types: [incident.triggered], priorities: [P1] }
+      - match: { services: [payments], urgencies: [high] }
         repo: acme/payments
         actions: { name: page, type: command, command: [true] }
-      - match: {}                       # catch-all: everything else lands here
-        actions:
-          - { name: triage, type: command, command: [true] }
-          - { name: log, type: command, command: [true] }
-      - match: { services: [ignored] }  # after the catch-all: unreachable
-        actions: { name: never, type: command, command: [true] }
+  - type: sentry
+    name: errs
+    listen: ":9099"
+    rules:
+      - match: { levels: [error] }
+        actions: { name: fix, type: command, command: [true] }
+  - type: cron
+    name: chores
+    schedules:
+      - name: tidy
+        cron: "0 4 * * *"
+        action: { type: command, command: [make, tidy] }
 `)
-	conn := doc["connectors"].(map[string]any)["pd"].(map[string]any)
-	for k, want := range map[string]string{
-		"listen": ":8097", "smee_url": "https://smee.io/pd",
-		"path": "/hooks/pd", "signing_secret": "${PD_SECRET}",
-	} {
-		if conn[k] != want {
-			t.Errorf("conn.%s = %v, want %s", k, conn[k], want)
+	conns, _ := doc["connectors"].(map[string]any)
+	for _, gone := range []string{"pd", "errs"} {
+		if _, ok := conns[gone]; ok {
+			t.Errorf("connector %q must NOT be emitted for an extracted type: %v", gone, conns[gone])
 		}
 	}
-	trigs := doc["triggers"].([]any)
-	if len(trigs) != 3 {
-		t.Fatalf("triggers: %d, want 3 (page, triage, log — never is unreachable)", len(trigs))
+	// The non-extracted integration still migrates.
+	if _, ok := conns["chores"]; !ok {
+		t.Fatalf("cron[chores] must still migrate alongside skipped types: %v", conns)
 	}
-	// Rule 1: its own match, no exclude, repo pinned.
-	first := trigs[0].(map[string]any)
-	f := first["filters"].(map[string]any)
-	if f["exclude"] != nil || first["repo"] != "acme/payments" {
-		t.Fatalf("rule 1: %v", first)
-	}
-	if u := f["urgencies"].([]any); u[0] != "high" {
-		t.Fatalf("rule 1 filters: %v", f)
-	}
-	// Rule 2 (both actions): excludes rule 1's match to preserve first-match.
-	for i := 1; i <= 2; i++ {
-		tr := trigs[i].(map[string]any)
-		ex, ok := tr["filters"].(map[string]any)["exclude"].([]any)
-		if !ok || len(ex) != 1 {
-			t.Fatalf("rule 2 trigger %d exclude: %v", i, tr["filters"])
-		}
-		if ex[0].(map[string]any)["services"].([]any)[0] != "payments" {
-			t.Fatalf("rule 2 exclude content: %v", ex)
+	// No dangling triggers for the skipped integrations.
+	for _, tr := range doc["triggers"].([]any) {
+		on, _ := tr.(map[string]any)["on"].(string)
+		if strings.HasPrefix(on, "pd.") || strings.HasPrefix(on, "errs.") {
+			t.Errorf("trigger %q references a skipped integration", on)
 		}
 	}
+
 	joined := strings.Join(res.Summary, "\n")
-	if !strings.Contains(joined, "unreachable in legacy") {
-		t.Fatalf("unreachable rule must be noted:\n%s", joined)
-	}
-	if !strings.Contains(joined, "preserve legacy first-match precedence") {
-		t.Fatalf("exclusion note missing:\n%s", joined)
+	for _, want := range []string{
+		"pagerduty[pd]: NOT migrated",
+		"sentry[errs]: NOT migrated",
+		"no longer bundled",
+		"conductor-plugins//pagerduty",
+		"conductor-plugins//sentry",
+		"exclude:",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the skip note must mention %q; notes:\n%s", want, joined)
+		}
 	}
 }
 
@@ -208,7 +205,7 @@ handoffs:
         account: true
 `)
 	hoff := doc["connectors"].(map[string]any)["hoff"].(map[string]any)
-	if hoff["type"] != "web" || hoff["base_url"] != "https://c.example.com" || hoff["ttl"] != "45m0s" {
+	if hoff["use"] != "web" || hoff["base_url"] != "https://c.example.com" || hoff["ttl"] != "45m0s" {
 		t.Fatalf("web connector: %v", hoff)
 	}
 	tun := hoff["tunnel"].(map[string]any)
@@ -268,7 +265,7 @@ integrations:
 	if !ok || p["bin"] != "/opt/paseo/bin/paseo" {
 		t.Fatalf("synthesized paseo runtime: %v", rts)
 	}
-	if deck := rts["deck"].(map[string]any); deck["type"] != "agent-deck" {
+	if deck := rts["deck"].(map[string]any); deck["use"] != "agent-deck" {
 		t.Fatalf("carried controller: %v", rts)
 	}
 	if !strings.Contains(strings.Join(res.Summary, "\n"), "paseo_bin → runtimes.paseo.bin") {

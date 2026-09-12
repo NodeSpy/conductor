@@ -49,14 +49,11 @@ func IsolationWarnings(cfg *config.Config) []string {
 		warn(fmt.Sprintf("%s: isolation mode user isolates the agent from the DAEMON, not concurrent agents from each other — dispatches sharing user %q have the same EUID and can read each other's /proc/<pid>/environ (tokens included). Use a distinct `user:` per concurrent scope, or mode namespace/container, for agent-vs-agent isolation.", where, iso.User))
 	}
 
-	names := make([]string, 0, len(cfg.Agents))
-	for n := range cfg.Agents {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		check("agent "+n, cfg.Agents[n].Isolation)
-	}
+	cfg.WalkSteps(func(scope config.IdentityScope, slot int, s *config.Step) {
+		if s.Isolation != nil {
+			check(config.StepLabel(scope, slot, *s), s.Isolation)
+		}
+	})
 	rts := make([]string, 0, len(cfg.Runtimes))
 	for n := range cfg.Runtimes {
 		rts = append(rts, n)

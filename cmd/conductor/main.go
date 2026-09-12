@@ -40,6 +40,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/inbound"
 	"github.com/NodeSpy/conductor/internal/integrations/slack" // registers "slack"; also feeds hand-off replies (see wireSlackHandoffInbox)
 	"github.com/NodeSpy/conductor/internal/memory"
+	agentmodels "github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/secrets"
@@ -47,12 +48,10 @@ import (
 	"github.com/NodeSpy/conductor/internal/store"
 	"github.com/NodeSpy/conductor/internal/vaults"
 
-	_ "github.com/NodeSpy/conductor/internal/integrations/cron"      // register "cron"
-	_ "github.com/NodeSpy/conductor/internal/integrations/github"    // register "github"
-	_ "github.com/NodeSpy/conductor/internal/integrations/pagerduty" // register "pagerduty"
-	_ "github.com/NodeSpy/conductor/internal/integrations/rss"       // register "rss"
-	_ "github.com/NodeSpy/conductor/internal/integrations/sentry"    // register "sentry"
-	_ "github.com/NodeSpy/conductor/internal/integrations/webhook"   // register "webhook"
+	_ "github.com/NodeSpy/conductor/internal/integrations/cron"    // register "cron"
+	_ "github.com/NodeSpy/conductor/internal/integrations/github"  // register "github"
+	_ "github.com/NodeSpy/conductor/internal/integrations/rss"     // register "rss"
+	_ "github.com/NodeSpy/conductor/internal/integrations/webhook" // register "webhook"
 )
 
 var version = "dev"
@@ -62,8 +61,12 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
-	// Let pack requires.conductor constraints check against the running version.
+	// Let pack requires.conductor constraints check against the running
+	// version, and requires.connectors constraints against each installed
+	// plugin connector's resolved release (a builtin connector's version IS
+	// the daemon version — see config.resolvedConnectorVersion).
 	config.SetRuntimeVersion(version)
+	publishConnectorVersions()
 	cmd := os.Args[1]
 	args := os.Args[2:]
 	var err error
@@ -192,13 +195,21 @@ usage:
 }
 
 // configPath extracts --config from args (default configDir()/config.yaml —
-// ~/.config/conductor).
+// ~/.config/conductor). It also consumes --state-dir, which redirects the
+// install-state directory for this process: the same isolation
+// XDG_STATE_HOME gives, reachable from a single command without exporting
+// anything.
 func configPath(args []string) (string, []string) {
 	def := filepath.Join(configDir(), "config.yaml")
 	rest := []string{}
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--config" && i+1 < len(args) {
 			def = args[i+1]
+			i++
+			continue
+		}
+		if args[i] == "--state-dir" && i+1 < len(args) {
+			config.SetStateDir(args[i+1])
 			i++
 			continue
 		}
@@ -303,22 +314,37 @@ func cmdValidate(args []string) error {
 	for _, w := range flow.IsolationWarnings(cfg) {
 		fmt.Printf("warning: %s\n", w)
 	}
+	// The `required: true` guardrail (§12). It lives HERE and not at
+	// dispatch on purpose: an operator is present to read the error, and a
+	// box whose providers are briefly unreachable must keep dispatching
+	// (degraded, bare-launching) rather than crash-loop an auto-updating
+	// fleet. CheckRequired itself errors only when discovery actually
+	// ANSWERED — an unreachable provider has taught it nothing.
+	{
+		res := agentmodels.NewResolver(cfg, agentmodels.NewCatalog(config.StateDir()))
+		rctx, rcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := res.CheckRequired(rctx)
+		rcancel()
+		if err != nil {
+			return err
+		}
+	}
 	if stack != nil {
 		for _, w := range flow.SkillWarnings(cfg, stack.Registry) {
 			fmt.Printf("warning: %s\n", w)
 		}
 	}
 	if stack != nil {
-		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s), %d agent profile(s)",
-			len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows), len(cfg.Agents))
+		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s)",
+			len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows))
 		if len(cfg.Integrations) > 0 {
 			fmt.Printf(" — plus %d legacy integration(s)", len(cfg.Integrations))
 		}
 		fmt.Println()
 		return nil
 	}
-	fmt.Printf("ok: %d integration(s) configured (%d enabled), %d agent profile(s)\n",
-		len(cfg.Integrations), len(igs), len(cfg.Agents))
+	fmt.Printf("ok: %d integration(s) configured (%d enabled)\n",
+		len(cfg.Integrations), len(igs))
 	return nil
 }
 
@@ -552,6 +578,11 @@ func cmdRun(args []string) error {
 		cost.SetPricing(models, def)
 	}
 	eng := engine.New(engOpts)
+	// Model selection (docs/design/runtimes-models-packs.md §2.3): the
+	// resolver owns the fleet ladder and the discovered rosters. Discovery
+	// is lazy and degrade-safe — a box that cannot enumerate simply bare
+	// launches — so wiring it costs nothing at boot.
+	eng.SetModelResolver(agentmodels.NewResolver(cfg, agentmodels.NewCatalog(config.StateDir())))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -587,10 +618,16 @@ func cmdRun(args []string) error {
 				ops.ListWorkflows = stack.Runner.WorkflowCatalog
 				logf("memory: live run_step/workflow_list tools enabled")
 			}
-			// The secret broker (#36 §12): built only when a profile opts in
-			// via skill:, authorized by the session tokens the dispatch path
-			// mints (skill.Active), never by client-asserted identity.
-			if cfg.SkillEnabled() {
+			// THE SOCKET'S AUTHENTICATION. The broker mints a per-dispatch
+			// credential for every tool subprocess and resolves it back to
+			// the dispatch's real provenance, so handleIPC never has to
+			// believe a Source off the wire. It is built whenever the socket
+			// is served — NOT only when a profile enables skill: — because
+			// the memory and run_step ops need the same authentication the
+			// skill ops always had (round-12 #1). A dispatch with no skill:
+			// block gets an identity carrying its provenance and an EMPTY
+			// grant: authentication, not capability.
+			{
 				// A broker name is a vault entry ("<vault>/<key>", read at
 				// issue time through the vaults registry, which taints the
 				// value for redaction); a bare name falls back to the
@@ -618,11 +655,16 @@ func cmdRun(args []string) error {
 				ops.ClaimToken = func(claim string, peer memory.Peer) (string, error) {
 					return sb.ClaimSession(claim, asPeer(peer))
 				}
-				ops.IssueSecret = func(token, name string, peer memory.Peer) (string, time.Time, error) {
-					return sb.Issue(token, name, asPeer(peer))
-				}
-				ops.RedeemSecret = func(token, grant string, peer memory.Peer) (string, error) {
-					return sb.Redeem(token, grant, asPeer(peer))
+				// The SECRET ops stay behind the skill gate: a credential
+				// authenticates a dispatch, it does not entitle it to
+				// secrets. Without a skill: block there is nothing to issue.
+				if cfg.SkillEnabled() {
+					ops.IssueSecret = func(token, name string, peer memory.Peer) (string, time.Time, error) {
+						return sb.Issue(token, name, asPeer(peer))
+					}
+					ops.RedeemSecret = func(token, grant string, peer memory.Peer) (string, error) {
+						return sb.Redeem(token, grant, asPeer(peer))
+					}
 				}
 				// Identify resolves a session token to its dispatch provenance
 				// so the CLI/remote memory + run_step ops bind their Source to
@@ -632,11 +674,17 @@ func cmdRun(args []string) error {
 					if err != nil {
 						return memory.Source{}, 0, false
 					}
-					return memory.Source{Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger}, id.Number, true
+					// TargetTrusted rides with the Repo it describes: run_step
+					// rebuilds a trigger from this, and must not hand back the
+					// own-repo trust the launching dispatch was denied.
+					return memory.Source{Step: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
+						TargetTrusted: id.TargetTrusted, Dispatch: id.Dispatch}, id.Number, true
 				}
 				// The verb-tool surface: catalog + execution, both bound to
 				// the token's real dispatch identity and its skill.verbs.
-				if stack != nil {
+				// Skill-gated: an empty grant serves nothing anyway, but the
+				// gate keeps the surface off a daemon that never asked for it.
+				if stack != nil && cfg.SkillEnabled() {
 					runner := stack.Runner
 					ops.SkillVerbs = func(token string, peer memory.Peer) ([]map[string]any, error) {
 						id, err := sb.Authorize(token, asPeer(peer))
@@ -658,10 +706,16 @@ func cmdRun(args []string) error {
 						return runner.RunSkillVerb(vctx, flow.SkillIdentity{
 							Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
 							Number: id.Number, Verbs: id.Policy.Verbs,
+							Scopes: id.Policy.VerbScopes, Context: id.Context,
+							TargetTrusted: id.TargetTrusted,
 						}, uses, options)
 					}
 				}
-				logf("skill: secret broker + verb tools enabled (per-profile skill: policy)")
+				if cfg.SkillEnabled() {
+					logf("skill: secret broker + verb tools enabled (per-profile skill: policy)")
+				} else {
+					logf("memory: per-dispatch tool credentials enabled (provenance is resolved daemon-side, never taken from the request)")
+				}
 			}
 			memory.SetLiveOps(ops)
 
@@ -845,7 +899,7 @@ func cmdRun(args []string) error {
 	// Periodic self-update. `stop` lets it trigger a graceful shutdown so the
 	// service manager relaunches into the new binary.
 	if cfg.Update.Auto {
-		go autoUpdateLoop(ctx, cfg.Update, notifier, stop)
+		go autoUpdateLoop(ctx, cfg.Update, cfgFile, notifier, stop)
 	}
 	// conductor.updated fires on the first boot of a new release.
 	go emitUpdatedOnBoot(cfg, notifier)
@@ -1088,7 +1142,7 @@ func cmdReplay(args []string) error {
 					printTrigger(cfg, disp, t)
 					continue
 				}
-				spec, ok := stack.Runner.SpecFor(act.FlowRef)
+				spec, tidx, ok := stack.Runner.SpecFor(act.FlowRef)
 				if !ok {
 					continue
 				}
@@ -1102,7 +1156,7 @@ func cmdReplay(args []string) error {
 				fmt.Printf("• %s %s#%d [workflow: %d steps] (dry-run)\n",
 					t.Kind, t.Target.Repo, t.Target.Number, len(spec.Steps))
 				stack.Runner.Run(context.Background(),
-					store.WorkflowRun{Outputs: map[string]map[string]any{}}, t, spec, nil, true)
+					store.WorkflowRun{Outputs: map[string]map[string]any{}}, t, spec, tidx, nil, true)
 			}
 		}
 	}
@@ -1477,7 +1531,7 @@ func cmdForce(args []string) error {
 func hasPositional(args []string) bool {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--config", "--input", "--json":
+		case "--config", "--input", "--json", "--state-dir":
 			i++ // skip the flag's value
 		default:
 			if !strings.HasPrefix(args[i], "--") {
@@ -1633,11 +1687,8 @@ func printTrigger(cfg *config.Config, disp *dispatch.Dispatcher, t core.Trigger)
 }
 
 func printOneDispatch(cfg *config.Config, disp *dispatch.Dispatcher, t core.Trigger, act config.Action, indent string) {
-	var profile config.AgentProfile
-	if act.Type == "agent" {
-		profile = cfg.Agents[act.Agent]
-	}
-	req := dispatch.Request{Trigger: t, Action: act, Profile: profile, Author: gitAuthor(), Shadow: true, Wait: !act.Background}
+	req := dispatch.Request{Trigger: t, Action: act, Identity: act.Agent,
+		Author: gitAuthor(), Shadow: true, Wait: !act.Background}
 	ref, err := disp.Dispatch(context.Background(), req)
 	if err != nil {
 		fmt.Printf("%serror: %v\n", indent, err)
@@ -1695,12 +1746,13 @@ func envDuration(key string) time.Duration {
 }
 
 func anyArchive(cfg *config.Config) bool {
-	for _, p := range cfg.Agents {
-		if p.ArchiveWhenDone {
-			return true
+	found := false
+	cfg.WalkSteps(func(_ config.IdentityScope, _ int, s *config.Step) {
+		if s.ArchiveWhenDone {
+			found = true
 		}
-	}
-	return false
+	})
+	return found
 }
 
 // logRedact scrubs tracked secret values from every journal line. logf is

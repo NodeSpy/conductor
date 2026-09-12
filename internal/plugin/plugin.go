@@ -25,42 +25,77 @@
 //     restart backoff that cannot crash-loop (manager.go).
 package plugin
 
-import "github.com/NodeSpy/conductor/internal/config"
+import (
+	"fmt"
+
+	"github.com/NodeSpy/conductor/internal/config"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
+)
+
+// The wire schema is defined once in the PUBLIC SDK (pkg/plugin) and aliased
+// here, so a plugin built against the SDK is byte-identical to what the daemon
+// expects — there is no second copy to drift. The daemon's own integration
+// tests drive an SDK-built reference plugin over the real transport to prove it.
 
 // ProtocolVersion is the plugin wire-protocol version the daemon speaks. A
 // plugin reports its own in Describe; the daemon refuses a plugin whose major
 // version it does not understand (graceful degradation, not a crash).
-const ProtocolVersion = 1
+const ProtocolVersion = sdk.ProtocolVersion
 
 // Wire method names.
 const (
-	MethodDescribe = "plugin.describe"
-	MethodInvoke   = "plugin.invoke"
+	MethodDescribe    = sdk.MethodDescribe
+	MethodInvoke      = sdk.MethodInvoke
+	MethodStartSource = sdk.MethodStartSource
+	MethodEvent       = sdk.MethodEvent
 )
 
 // Kind is what a plugin provides.
-type Kind string
+type Kind = sdk.Kind
 
 const (
-	KindConnector Kind = "connector"
-	KindRuntime   Kind = "runtime"
+	KindConnector = sdk.KindConnector
+	KindRuntime   = sdk.KindRuntime
 )
 
-// Spec is a resolved plugin ready to run: config.PluginRef with its source
-// resolved to an absolute path. Construction (and path resolution) is in
-// manager.go.
+// Spec is a resolved plugin ready to run: a derived config.PluginRef joined
+// with local install state, its binary resolved to an absolute path.
+// Construction is in manager.go.
 type Spec struct {
-	Name             string
-	Kind             Kind
-	Provides         string
-	Version          string
-	BinPath          string // absolute path to the executable
-	Args             []string
-	Sha256           string
-	AllowUnverified  bool
-	Isolation        *config.IsolationConfig
-	AllowUnsandboxed bool
-	AllowSecrets     []string
+	// Name is the implementation name (connector type / runtime name).
+	Name string
+	// Kind is what it provides, derived from the block that referenced it.
+	Kind Kind
+	// Provides is the registered name — the same as Name.
+	Provides string
+	// Version is the `@…` constraint from the reference, if any.
+	Version string
+	// Resolved is the concrete release tag the installed build came from.
+	Resolved string
+	// Use is the parsed reference, for origin display and re-resolution.
+	Use config.Use
+	// BinPath is the absolute path to the executable. Empty means "referenced
+	// but not installed" — Start says so rather than exec'ing nothing.
+	BinPath string
+	// Args are extra argv appended at spawn. NOT settable from config: the old
+	// `plugins:` block had an `args:` key, and the `use:` surface deliberately
+	// does not — a plugin's configuration arrives over the RPC transport, per
+	// instance, not as process arguments shared by all of them. Retained for
+	// internal callers and tests that drive a reference plugin's modes.
+	Args []string
+	// Local marks a development binary the operator pointed at directly. There
+	// is no sha to pin (it changes on every build); safe-permissions still applies.
+	Local bool
+	// Sha256 is the verified sha recorded at install, checked before every exec.
+	Sha256 string
+	// Manifest is the permission manifest recorded at install.
+	Manifest Manifest
+	// Network is the referencing connector's declared egress.
+	Network []string
+	// Isolation is OPTIONAL OS hardening. nil is the normal case.
+	Isolation *config.IsolationConfig
+	// AllowSecrets optionally tightens which secret refs may cross the boundary.
+	AllowSecrets []string
 }
 
 // Ref is the `plugin@version` attribution string carried on audit records and
@@ -72,70 +107,33 @@ func (s Spec) Ref() string {
 	return s.Name + "@" + s.Version
 }
 
-// --- wire schema (maps 1:1 to connector.TypeDecl on the connector side) ---
-
-// Field mirrors connector.Field on the wire.
-type Field struct {
-	Type     string   `json:"type"`
-	Required bool     `json:"required,omitempty"`
-	Enum     []string `json:"enum,omitempty"`
-	Desc     string   `json:"desc,omitempty"`
+// Key is the plugin's identity in install state: "<kind-dir>/<name>".
+func (s Spec) Key() string {
+	if s.Kind == KindRuntime {
+		return "runtimes/" + s.Name
+	}
+	return "connectors/" + s.Name
 }
 
-// Schema is a set of named fields.
-type Schema map[string]Field
+// Installed reports whether a binary is available to run.
+func (s Spec) Installed() bool { return s.BinPath != "" }
 
-// Verb is one action verb the plugin exposes.
-type Verb struct {
-	Name    string `json:"name"`
-	Desc    string `json:"desc,omitempty"`
-	Options Schema `json:"options,omitempty"`
-	Outputs Schema `json:"outputs,omitempty"`
-	Ask     bool   `json:"ask,omitempty"`
+// NotInstalledError is the error a not-yet-fetched plugin produces — a
+// direction, not a stack trace.
+func (s Spec) NotInstalledError() error {
+	return fmt.Errorf("plugin %s (%s) is referenced by your config but not installed — run `conductor init` (or `conductor plugin update %s`) to fetch it", s.Name, s.Use.String(), s.Name)
 }
 
-// Event is one source event the plugin exposes (declared; live streaming of
-// events — StartSource — is a documented follow-up, see docs/wiki/Plugins.md).
-type Event struct {
-	Name    string `json:"name"`
-	Desc    string `json:"desc,omitempty"`
-	Filters Schema `json:"filters,omitempty"`
-	Context Schema `json:"context,omitempty"`
-	Options Schema `json:"options,omitempty"`
-	Dynamic bool   `json:"dynamic,omitempty"`
-}
+// --- wire schema (aliased from pkg/plugin; maps 1:1 to connector.TypeDecl) ---
 
-// Capabilities is the plugin's DECLARED privilege manifest (§8.3): what it says
-// it needs. The operator GRANTS these via the isolation: block; `plugin show`
-// prints declared-vs-granted so a mismatch is visible before install.
-type Capabilities struct {
-	Egress []string `json:"egress,omitempty"` // network hosts the plugin says it needs
-	FS     []string `json:"fs,omitempty"`     // filesystem paths it says it needs
-	Spawns bool     `json:"spawns,omitempty"` // whether it spawns child processes
-}
-
-// Decl is a plugin's full self-description, returned by Describe.
-type Decl struct {
-	ProtocolVersion int          `json:"protocol_version"`
-	Type            string       `json:"type"`
-	Desc            string       `json:"desc,omitempty"`
-	Connection      Schema       `json:"connection,omitempty"`
-	Verbs           []Verb       `json:"verbs,omitempty"`
-	Events          []Event      `json:"events,omitempty"`
-	Capabilities    Capabilities `json:"capabilities,omitempty"`
-}
-
-// InvokeRequest is the daemon→plugin verb call. Connection carries ONLY the
-// calling instance's resolved credentials (least privilege, own-type-only);
-// the plugin holds no cross-instance state by protocol design.
-type InvokeRequest struct {
-	Instance   string         `json:"instance"`
-	Verb       string         `json:"verb"`
-	Options    map[string]any `json:"options,omitempty"`
-	Connection map[string]any `json:"connection,omitempty"`
-}
-
-// InvokeResult is the plugin→daemon verb response.
-type InvokeResult struct {
-	Outputs map[string]any `json:"outputs,omitempty"`
-}
+type (
+	Field              = sdk.Field
+	Schema             = sdk.Schema
+	Verb               = sdk.Verb
+	Event              = sdk.Event
+	Capabilities       = sdk.Capabilities
+	Decl               = sdk.Decl
+	InvokeRequest      = sdk.InvokeRequest
+	InvokeResult       = sdk.InvokeResult
+	StartSourceRequest = sdk.StartSourceRequest
+)

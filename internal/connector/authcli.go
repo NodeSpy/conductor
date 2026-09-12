@@ -36,8 +36,8 @@ func authConfigFor(cfg *config.Config, name string) (authConfig, error) {
 	if !ok {
 		return authConfig{}, fmt.Errorf("no connector %q configured", name)
 	}
-	if ref.Type != "rest" && ref.Type != "graphql" {
-		return authConfig{}, fmt.Errorf("connector %q is type %q — `connector auth` applies to rest/graphql oauth2 connectors", name, ref.Type)
+	if ref.TypeName() != "rest" && ref.TypeName() != "graphql" {
+		return authConfig{}, fmt.Errorf("connector %q is type %q — `connector auth` applies to rest/graphql oauth2 connectors", name, ref.TypeName())
 	}
 	var conn struct {
 		Auth authConfig `yaml:"auth"`
@@ -243,7 +243,7 @@ type AuthStatus struct {
 func AuthList(ctx context.Context, cfg *config.Config, deps Deps) ([]AuthStatus, error) {
 	names := make([]string, 0, len(cfg.ConnectorsMap))
 	for n, ref := range cfg.ConnectorsMap {
-		if ref.Type == "rest" || ref.Type == "graphql" {
+		if ref.TypeName() == "rest" || ref.TypeName() == "graphql" {
 			names = append(names, n)
 		}
 	}

@@ -64,9 +64,9 @@ the runtime itself reported) selects the row.
 ```yaml
 policy:
   budget: { window: 24h, max_cost_usd: 25 }
-agents:
-  fixer:
-    budget: { window: 1h, max_tokens: 500k }
+runtimes:
+  paseo:
+    budget: { window: 1h, max_tokens: 500k }   # a budget caps cost on a BACKEND
 triggers:
   - on: gh.review_requested
     policy:
@@ -102,4 +102,4 @@ The plan-level token cap (`policy.agent_authored.limits.tokens`, #36 §11)
 bounds ONE agent-authored plan's size at guard time. `budget:` meters real
 spend across runs over time. They compose; neither replaces the other.
 
-Related: [[Policy]] · [[Agents]] · [[Commands]] · [[Outcomes]]
+Related: [[Policy]] · [[Steps]] · [[Commands]] · [[Outcomes]]

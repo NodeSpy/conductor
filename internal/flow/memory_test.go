@@ -27,7 +27,7 @@ func tempMemory(t *testing.T) *memory.Manager {
 
 const memBase = `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
 `
 
@@ -74,11 +74,11 @@ hooks:
 		t.Fatalf("want 2 memories (step + hook), got %d: %+v", len(all), all)
 	}
 	// Newest first: the hook wrote last.
-	if all[0].Text != "workflow finished for o/r" || all[0].Scope != "global" {
+	if all[0].Text != "workflow finished for o/r" || all[0].Scope != memory.GlobalScope {
 		t.Errorf("hook write: %+v", all[0])
 	}
 	step := all[1]
-	if step.Text != "note about inv-9" || step.Scope != "repo:o/r" {
+	if step.Text != "note about inv-9" || step.Scope != "repo" {
 		t.Errorf("step write: %+v", step)
 	}
 	// Provenance stamped by the runner, not the step.
@@ -120,7 +120,7 @@ triggers:
 	if err := valid(memBase, ok); err != nil {
 		t.Fatalf("memory verbs must validate with a memory: section: %v", err)
 	}
-	noMem := "\nconnectors:\n  svc: { type: fake }\n"
+	noMem := "\nconnectors:\n  svc: { use: fake }\n"
 	if err := valid(noMem, ok); err == nil || !strings.Contains(err.Error(), "memory: section") {
 		t.Fatalf("memory verbs without memory: must fail load: %v", err)
 	}
@@ -158,13 +158,18 @@ triggers:
 
 // TestMemoryOutputContractHarvest: an agent step whose final output carries a
 // ```remember fence persists the notes with full provenance (including the
-// agent profile name) and audits the write; a malformed block audits a
-// failure without failing the step.
+// step identity) and audits the write; a malformed block audits a failure
+// without failing the step. Harvesting is opt-in per step, exactly like
+// reading, so the step enables memory:.
 func TestMemoryOutputContractHarvest(t *testing.T) {
 	mem := tempMemory(t)
 	cfg := loadConfig(t, memBase+`
-agents:
-  fixer: { model: x }
+x-t:
+  fixer: &fixer { type: agent, name: fixer, model: x, memory: true }
+workflows:
+  roles:
+    steps:
+      - { id: fixer, type: agent, name: fixer, prompt: p, model: x, memory: true }
 `)
 	reg := buildRegistry(t, cfg)
 	spec := mustSpec(t, `
@@ -172,7 +177,7 @@ on: svc.ping
 steps:
   - id: fix
     type: agent
-    agent: fixer
+    <<: *fixer
     prompt: "fix it"
 `)
 	rig := newTestRunner(t, cfg, reg)
@@ -191,10 +196,10 @@ steps:
 		t.Fatalf("want 1 harvested memory, got %d", len(all))
 	}
 	e := all[0]
-	if e.Text != "tests need -count=1" || e.Scope != "repo:o/r" {
+	if e.Text != "tests need -count=1" || e.Scope != "repo" {
 		t.Errorf("harvested entry: %+v", e)
 	}
-	if e.Source.Agent != "fixer" || e.Source.Run != "flow:ping:o/r#7" || e.Source.Trigger != "ping" {
+	if e.Source.Step != "fixer" || e.Source.Run != "flow:ping:o/r#7" || e.Source.Trigger != "ping" {
 		t.Errorf("harvest provenance: %+v", e.Source)
 	}
 	audits := rig.Store.auditsWithEvent("memory_remember")
@@ -227,8 +232,8 @@ steps:
 // Memory keeps prompts unchanged.
 func TestMemoryPromptInjectionSeam(t *testing.T) {
 	cfg := loadConfig(t, memBase+`
-agents:
-  opted: { model: x }
+x-t:
+  opted: &opted { type: agent, name: opted, model: x }
 `)
 	reg := buildRegistry(t, cfg)
 	spec := mustSpec(t, `
@@ -236,12 +241,12 @@ on: svc.ping
 steps:
   - id: fix
     type: agent
-    agent: opted
+    <<: *opted
     prompt: "do it"
 `)
 	rig2 := newTestRunner(t, cfg, reg)
 	var gotName string
-	rig2.Runner.Agents.Memory = func(name string, p config.AgentProfile, tr core.Trigger) string {
+	rig2.Runner.Agents.Memory = func(name string, p config.Step, tr core.Trigger, wf string) string {
 		gotName = name
 		return "\n\n---\nShared memory: remembered fact"
 	}
@@ -277,12 +282,12 @@ func TestMemoryTemplateFunc(t *testing.T) {
 	src := memory.Source{Repo: "o/r"}
 	_, _ = mem.Remember("older global", nil, "", src)
 	_, _ = mem.Remember("newer global", nil, "global", src)
-	_, _ = mem.Remember("repo-scoped", nil, "repo", src)
+	_, _ = mem.Remember("repo-scoped", nil, "o/r", src)
 
 	cases := []struct{ tmpl, want string }{
 		{`{{ memory "global" 0 }}`, "- newer global\n- older global"},
 		{`{{ memory "global" 1 }}`, "- newer global"},
-		{`{{ memory "repo:o/r" 0 }}`, "- repo-scoped"},
+		{`{{ memory "o/r" 0 }}`, "- repo-scoped"},
 		{`{{ memory "" 0 }}`, "- repo-scoped\n- newer global\n- older global"},
 		{`{{ memory "repo:none/none" 0 }}`, ""},
 	}
@@ -298,8 +303,9 @@ func TestMemoryTemplateFunc(t *testing.T) {
 	if _, err := render(`{{ memory "global" }}`, nil); err == nil {
 		t.Fatal("memory with one arg must error (scope, limit)")
 	}
-	if _, err := render(`{{ memory "repo" 1 }}`, nil); err == nil {
-		t.Fatal("relative scope must error in templates")
+	// Every key is opaque, so nothing here can be rejected as a "bad scope".
+	if _, err := render(`{{ memory "repo" 1 }}`, nil); err != nil {
+		t.Fatalf("an opaque scope key must be accepted in templates: %v", err)
 	}
 	memory.Reset()
 	if _, err := render(`{{ memory "global" 1 }}`, nil); err == nil || !strings.Contains(err.Error(), "not configured") {

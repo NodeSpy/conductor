@@ -34,16 +34,17 @@ func TestLoadNewSchemaMinimal(t *testing.T) {
 	path := writeTestConfig(t, `
 connectors:
   gh:
-    type: github
-agents:
-  fixer:
-    provider: claude
+    use: github
+x-steps:
+  fixer: &fixer
+    type: agent
+    name: fixer
 triggers:
   - on: gh.new_comment
     steps:
       - id: respond
         type: agent
-        agent: fixer
+        <<: *fixer
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -59,9 +60,10 @@ func TestLoadLegacyOnlyStillLoads(t *testing.T) {
 integrations:
   - type: github
     name: acme
-agents:
-  fixer:
-    provider: claude
+x-steps:
+  fixer: &fixer
+    type: agent
+    name: fixer
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -104,38 +106,50 @@ func TestValidateConnectorsStructural(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name: "connector missing type",
+			name: "connector missing use:",
 			build: func() *Config {
 				return &Config{ConnectorsMap: map[string]ConnectorRef{"gh": {}}}
 			},
-			wantErr: `connector "gh": missing type`,
+			wantErr: `connector gh: missing use:`,
 		},
 		{
-			name: "runtime with both type and agent",
+			// `agent:` is the ACP runtime's own field; on any other
+			// implementation it would be a silent no-op.
+			name: "runtime with agent: on a non-acp use:",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
-					Runtimes:      map[string]RuntimeConfig{"r1": {Type: "paseo", Agent: "gemini"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Runtimes:      map[string]RuntimeConfig{"r1": {Use: "paseo", Agent: "gemini"}},
 				}
 			},
-			wantErr: `runtime "r1": set exactly one of`,
+			wantErr: "`agent:` applies to `use: acp` only",
 		},
 		{
-			name: "runtime with neither type nor agent",
+			name: "acp runtime without an agent",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Runtimes:      map[string]RuntimeConfig{"r1": {Use: "acp"}},
+				}
+			},
+			wantErr: "`use: acp` needs `agent:`",
+		},
+		{
+			name: "runtime with no use:",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Runtimes:      map[string]RuntimeConfig{"r1": {}},
 				}
 			},
-			wantErr: `runtime "r1": set exactly one of`,
+			wantErr: `runtime r1: missing use:`,
 		},
 		{
 			name: "runtime unknown host",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
-					Runtimes:      map[string]RuntimeConfig{"r1": {Type: "paseo", Host: "nope"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Runtimes:      map[string]RuntimeConfig{"r1": {Use: "paseo", Host: "nope"}},
 				}
 			},
 			wantErr: `runtime "r1": unknown host "nope"`,
@@ -144,8 +158,8 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "more than one default across runtimes and controllers combined",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
-					Runtimes:      map[string]RuntimeConfig{"r1": {Type: "paseo", Default: true}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Runtimes:      map[string]RuntimeConfig{"r1": {Use: "paseo", Default: true}},
 					Controllers:   map[string]ControllerConfig{"c1": {Type: "paseo", Default: true}},
 				}
 			},
@@ -155,8 +169,8 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "same name in runtimes and controllers",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
-					Runtimes:      map[string]RuntimeConfig{"dup": {Type: "paseo"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Runtimes:      map[string]RuntimeConfig{"dup": {Use: "paseo"}},
 					Controllers:   map[string]ControllerConfig{"dup": {Type: "paseo"}},
 				}
 			},
@@ -166,7 +180,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "host missing address",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Hosts:         map[string]HostConfig{"h1": {}},
 				}
 			},
@@ -176,7 +190,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "trigger missing on",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers:      []TriggerSpec{{}},
 				}
 			},
@@ -186,7 +200,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "on without dot",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers:      []TriggerSpec{{On: "nodot"}},
 				}
 			},
@@ -196,7 +210,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "on references unknown connector",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers:      []TriggerSpec{{On: "unknown.event", Steps: []Step{validCmdStep}}},
 				}
 			},
@@ -206,7 +220,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "trigger with no steps",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers:      []TriggerSpec{{On: "gh.event"}},
 				}
 			},
@@ -216,7 +230,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "duplicate step ids",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers: []TriggerSpec{validTrigger([]Step{
 						{ID: "a", Type: "command", Command: []string{"true"}},
 						{ID: "a", Type: "command", Command: []string{"true"}},
@@ -229,7 +243,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "step with no form",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers:      []TriggerSpec{validTrigger([]Step{{ID: "s1"}}, nil)},
 				}
 			},
@@ -239,7 +253,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "step with two forms (uses + run)",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers:      []TriggerSpec{validTrigger([]Step{{ID: "s1", Uses: "gh.verb", Run: "sh"}}, nil)},
 				}
 			},
@@ -249,7 +263,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "uses without dot",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers:      []TriggerSpec{validTrigger([]Step{{ID: "s1", Uses: "nodot"}}, nil)},
 				}
 			},
@@ -259,7 +273,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "run without code",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers:      []TriggerSpec{validTrigger([]Step{{ID: "s1", Run: "sh"}}, nil)},
 				}
 			},
@@ -269,7 +283,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "step with both host and ssh",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers: []TriggerSpec{validTrigger([]Step{{
 						ID: "s1", Run: "sh", Code: "echo hi",
 						Host: "h1", SSH: &HostConfig{Host: "1.2.3.4"},
@@ -282,7 +296,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "step host references unknown hosts entry",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers: []TriggerSpec{validTrigger([]Step{{
 						ID: "s1", Run: "sh", Code: "echo hi", Host: "nope",
 					}}, nil)},
@@ -294,7 +308,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "inline ssh missing host address",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers: []TriggerSpec{validTrigger([]Step{{
 						ID: "s1", Run: "sh", Code: "echo hi", SSH: &HostConfig{},
 					}}, nil)},
@@ -306,7 +320,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "run: js with host: is local-only",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Hosts:         map[string]HostConfig{"h1": {Host: "1.2.3.4"}},
 					Triggers: []TriggerSpec{validTrigger([]Step{{
 						ID: "s1", Run: "js", Code: "1+1", Host: "h1",
@@ -319,7 +333,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "run: go-embed with ssh: is local-only",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers: []TriggerSpec{validTrigger([]Step{{
 						ID: "s1", Run: "go-embed", Code: "package main",
 						SSH: &HostConfig{Host: "1.2.3.4"},
@@ -332,7 +346,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "workflow: references unknown workflow",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers:      []TriggerSpec{validTrigger([]Step{{ID: "s1", Workflow: "nope"}}, nil)},
 				}
 			},
@@ -342,7 +356,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "hook with bad at:",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers: []TriggerSpec{validTrigger([]Step{validCmdStep}, []Hook{
 						{At: "nope", Uses: "gh.verb"},
 					})},
@@ -354,7 +368,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "hook without uses:",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers: []TriggerSpec{validTrigger([]Step{validCmdStep}, []Hook{
 						{At: "start"},
 					})},
@@ -366,7 +380,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "hook uses without dot",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers: []TriggerSpec{validTrigger([]Step{validCmdStep}, []Hook{
 						{At: "start", Uses: "nodot"},
 					})},
@@ -378,7 +392,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "workflow with no steps",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Workflows:     map[string]WorkflowDef{"wf1": {}},
 				}
 			},
@@ -388,7 +402,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "workflow input with unknown type",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Workflows: map[string]WorkflowDef{"wf1": {
 						Steps:  []Step{validCmdStep},
 						Inputs: map[string]InputSpec{"x": {Type: "weird"}},
@@ -401,7 +415,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			name: "parallel branches combined with another form",
 			build: func() *Config {
 				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}},
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
 					Triggers: []TriggerSpec{validTrigger([]Step{{
 						ID: "s1", Uses: "gh.verb",
 						Parallel: &ParallelSpec{Branches: [][]Step{{
@@ -698,18 +712,15 @@ func TestGroupSpecDurations(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. AgentProfile.RuntimeName()
+// 9. Step.RuntimeName()
 // ---------------------------------------------------------------------------
 
-func TestAgentProfileRuntimeName(t *testing.T) {
-	if got := (AgentProfile{Runtime: "r1", Controller: "c1"}).RuntimeName(); got != "r1" {
-		t.Fatalf("Runtime should win over Controller, got %q", got)
+func TestStepRuntimeName(t *testing.T) {
+	if got := (Step{Runtime: "r1"}).Runtime; got != "r1" {
+		t.Fatalf("Runtime should carry through, got %q", got)
 	}
-	if got := (AgentProfile{Controller: "c1"}).RuntimeName(); got != "c1" {
-		t.Fatalf("should fall back to Controller when Runtime is unset, got %q", got)
-	}
-	if got := (AgentProfile{}).RuntimeName(); got != "" {
-		t.Fatalf("an empty profile should return empty, got %q", got)
+	if got := (Step{}).Runtime; got != "" {
+		t.Fatalf("an unpinned step should name no runtime, got %q", got)
 	}
 }
 
@@ -718,21 +729,21 @@ func TestAgentProfileRuntimeName(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func connBaseCfg() *Config {
-	return &Config{ConnectorsMap: map[string]ConnectorRef{"gh": {Type: "github"}}}
+	return &Config{ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}}}
 }
 
-func TestAgentRuntimeReferenceValid(t *testing.T) {
+func TestStepRuntimeReferenceValid(t *testing.T) {
 	c := connBaseCfg()
-	c.Runtimes = map[string]RuntimeConfig{"paseo1": {Type: "paseo"}}
-	c.Agents = map[string]AgentProfile{"fixer": {Runtime: "paseo1"}}
+	c.Runtimes = map[string]RuntimeConfig{"paseo1": {Use: "paseo"}}
+	setTestStep(c, "fixer", Step{Runtime: "paseo1"})
 	if err := c.Validate(); err != nil {
-		t.Fatalf("an agent referencing a defined runtimes: entry should pass, got %v", err)
+		t.Fatalf("a step referencing a defined runtimes: entry should pass, got %v", err)
 	}
 }
 
-func TestAgentRuntimeReferenceUnknown(t *testing.T) {
+func TestStepRuntimeReferenceUnknown(t *testing.T) {
 	c := connBaseCfg()
-	c.Agents = map[string]AgentProfile{"fixer": {Runtime: "nope"}}
+	setTestStep(c, "fixer", Step{Runtime: "nope"})
 	err := c.Validate()
 	if err == nil || !strings.Contains(err.Error(), "unknown runtime") {
 		t.Fatalf("an agent referencing nothing should fail with 'unknown runtime', got %v", err)
@@ -741,7 +752,7 @@ func TestAgentRuntimeReferenceUnknown(t *testing.T) {
 
 func TestAgentHostReferenceUnknown(t *testing.T) {
 	c := connBaseCfg()
-	c.Agents = map[string]AgentProfile{"fixer": {Host: "nope"}}
+	setTestStep(c, "fixer", Step{Host: "nope"})
 	err := c.Validate()
 	if err == nil || !strings.Contains(err.Error(), `unknown host "nope"`) {
 		t.Fatalf("an agent referencing an unknown host should fail, got %v", err)
@@ -751,7 +762,7 @@ func TestAgentHostReferenceUnknown(t *testing.T) {
 func TestAgentLegacyControllerReferenceStillPasses(t *testing.T) {
 	c := connBaseCfg()
 	c.Controllers = map[string]ControllerConfig{"pae": {Type: "paseo"}}
-	c.Agents = map[string]AgentProfile{"fixer": {Runtime: "pae"}}
+	setTestStep(c, "fixer", Step{Runtime: "pae"})
 	if err := c.Validate(); err != nil {
 		t.Fatalf("an agent referencing a legacy controllers: entry should still pass, got %v", err)
 	}

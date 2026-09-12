@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -42,16 +43,35 @@ import (
 // The block IS the override surface. Every field is optional; a pack authored
 // for the zero-config 80% case (§26) runs with near-nothing bound.
 type PackInstance struct {
+	// Use names WHERE this pack comes from, in the same one-field form
+	// connectors and runtimes use (docs/design/runtimes-models-packs.md §5.1).
+	// It is rarely written: the `packs:` KEY IS the reference, so
+	// `packs: { pr-review-team: {} }` resolves to the official pack repo
+	// (OfficialPacksRepo) with no `use:` line at all. Write `use:` only to
+	// point somewhere else — `use: ./packs/house-style`, `use: acme/packs/x`.
+	//
+	// Source (below) is the older, longer spelling and still wins when both
+	// are set; applyPackSourceDefaults lowers Use (and the key) onto it, so
+	// resolution and the lockfile have one field to read.
+	Use string `yaml:"use,omitempty"`
 	// Source locates the pack: a go-getter/Terraform-style
 	// `github.com/org/repo//subdir@ref`, an SSH form
 	// `git::ssh://git@github.com/…`, or a local path (`./packs/review-kit`,
 	// relative to the config file) for vendored/example packs.
 	Source string `yaml:"source"`
-	// Version is metadata only — it does NOT pin a git ref. It is recorded in
+	// Version is a semver constraint (Terraform/gems-style: ">= 1.2, < 2.0",
+	// "~> 1.1", "^1.0", "1.0"). An unpinned git source resolves to the highest
+	// tag satisfying it (a monorepo tags components "<subdir>/vX.Y.Z"). A hard
+	// @ref in Source overrides it; an empty constraint tracks HEAD. Recorded in
 	// the lockfile and used as the default `version:` for a child dependency
 	// that omits its own. To pin, append `@<tag|branch|sha>` to Source; the
 	// lockfile then records the resolved sha for reproducibility.
 	Version string `yaml:"version,omitempty"`
+	// Hold, when true, freezes this instance at its currently-locked revision:
+	// auto-update (`update.deps: true`) will not re-resolve it. An explicit
+	// `conductor init` / `pack update` still moves it. No effect on the first
+	// resolve (nothing to hold yet). Mirrors a plugin's `hold:`.
+	Hold bool `yaml:"hold,omitempty"`
 	// Auth is an OPTIONAL fetch credential for a private source, resolved
 	// through the consumer's secrets:/vaults: (redacted, never written into a
 	// pack). Absent → the box's ambient `gh`/git auth. Bind-environment: the
@@ -76,10 +96,19 @@ type PackInstance struct {
 
 	// Policy deep-merges onto the pack's bundled policy (behavior override).
 	Policy map[string]any `yaml:"policy,omitempty"`
-	// Agents satisfies each of the pack's agent roles: absent → bundled default,
-	// string → bind to one of your globals, map → override (deep-merged onto the
-	// bundle). See Binding.
-	Agents map[string]Binding `yaml:"agents,omitempty"`
+	// Steps satisfies each of the pack's step roles (what `agents:` used to
+	// be): absent → the bundled default, string → bind to one of your own
+	// `steps:` templates, map → override (deep-merged onto the bundle). See
+	// Binding.
+	Steps map[string]Binding `yaml:"steps,omitempty"`
+	// Models overrides the pack's named fleets by name — the top rung of the
+	// model resolution ladder (docs/design/runtimes-models-packs.md §2.3,
+	// §5.3). A string collapses the fleet to one model.
+	Models map[string]FleetSpec `yaml:"models,omitempty"`
+	// On overrides the pack's triggers by their qualified name, deep-merging
+	// onto what the pack ships (§5.3). It is the mirrored-section overlay:
+	// the keys are the pack's own trigger addresses.
+	On map[string]TriggerArm `yaml:"on,omitempty"`
 	// Triggers arms (and optionally overrides) the pack's DISARMED triggers,
 	// keyed by trigger name. Arming — enabled:true + a repo scope — is the
 	// environment binding that constitutes consent. See TriggerArm.
@@ -90,21 +119,100 @@ type PackInstance struct {
 	Packs map[string]PackInstance `yaml:"packs,omitempty"`
 }
 
+// applyPackSourceDefaults lowers the `use:` reference — and, failing that, the
+// instance KEY — onto Source, so everything downstream (resolve, the trust
+// allowlist, the lockfile) keeps reading one field.
+//
+// Precedence: an explicit Source wins (it is the pre-`use:` spelling and may
+// carry a go-getter form `use:` cannot express), then `use:`, then the key.
+//
+// It deliberately does NOT recurse into pack DEPENDENCIES. A dependency's
+// source is declared by its parent's `requires.packs.<alias>.source`, which
+// the resolver reads at the point it descends; implying one from the alias up
+// front would shadow the author's declaration. The resolver applies the same
+// implication for a dependency only after that declaration comes up empty
+// (see packDependencySource).
+func applyPackSourceDefaults(packs map[string]PackInstance) error {
+	for _, name := range sortedPackKeys(packs) {
+		inst := packs[name]
+		if inst.Source == "" {
+			src, err := packDependencySource(name, inst.Use)
+			if err != nil {
+				return err
+			}
+			inst.Source = src
+		}
+		packs[name] = inst
+	}
+	return nil
+}
+
+// packDependencySource resolves one instance's source from its `use:` (or, if
+// that is empty too, from its key/alias).
+func packDependencySource(name, use string) (string, error) {
+	ref := strings.TrimSpace(use)
+	if ref == "" {
+		ref = name
+	}
+	src, err := packUseSource(ref)
+	if err != nil {
+		return "", fmt.Errorf("pack %q: %w", name, err)
+	}
+	return src, nil
+}
+
+// packUseSource turns a pack `use:` reference into the `source:` string the
+// resolver understands. A local path passes through; anything else resolves
+// through the shared use: search path, with a bare name landing in the
+// official pack repo.
+func packUseSource(ref string) (string, error) {
+	u, err := ParseUse(UseKindPack, ref)
+	if err != nil {
+		return "", err
+	}
+	switch u.Origin {
+	case OriginLocal:
+		return u.Path, nil
+	case OriginBuiltin:
+		// There are no builtin packs, so ParseUse cannot produce this; guard
+		// rather than emit an empty source if that ever changes.
+		return "", fmt.Errorf("use: %q resolves to a builtin, which is not a pack", ref)
+	}
+	src := u.Host + "/" + u.Repo
+	if u.Component != "" {
+		src += "//" + u.Component
+	}
+	if u.Version != "" {
+		src += "@" + u.Version
+	}
+	return src, nil
+}
+
 // Binding is the polymorphic satisfy-a-resource value (§4): its YAML shape
 // selects the strategy.
 //
 //	absent  -> the pack's bundled default
-//	string  -> BIND: swap in one of your own existing globals entirely
 //	map     -> OVERRIDE: keep the bundle, deep-merge changes onto it
+//
+// The scalar BIND form ("swap in one of my globals entirely") is gone with
+// the top-level steps: registry — there are no global steps left to name.
+// It is still PARSED, so the error can say what to write instead, which is
+// an override whose value is one of the consumer's own YAML anchors:
+//
+//	packs.review.steps:
+//	  review-flow/review: { <<: *my-reviewer }
+//
+// That reaches further than bind did: it composes with the pack's own
+// fields instead of replacing the whole step.
 type Binding struct {
-	// Bind, when non-empty, names a consumer global to substitute for the
-	// pack's bundled resource.
+	// Bind holds a scalar form, retained only to reject it by name.
 	Bind string
 	// Override, when non-nil, is deep-merged onto the pack's bundled resource.
 	Override map[string]any
 }
 
-// UnmarshalYAML accepts the string (bind) and map (override) forms.
+// UnmarshalYAML accepts the map (override) form, and captures the retired
+// scalar form so validation can name it.
 func (b *Binding) UnmarshalYAML(n *yaml.Node) error {
 	switch n.Kind {
 	case yaml.ScalarNode:
@@ -113,7 +221,7 @@ func (b *Binding) UnmarshalYAML(n *yaml.Node) error {
 		b.Override = map[string]any{}
 		return n.Decode(&b.Override)
 	default:
-		return fmt.Errorf("a pack binding is a string (bind to a global) or a map (override the bundle)")
+		return fmt.Errorf("a pack step binding is a map of overrides, e.g. { model: my-fleet } or { <<: *my-anchor }")
 	}
 }
 
@@ -168,11 +276,11 @@ type PackManifest struct {
 	// Define-in-pack (behavior) — shipped, namespaced, overridable. (Agents may
 	// still opt INTO memory via their own `memory:` selector — that's behavior;
 	// the daemon-wide memory BACKEND below is not shippable.)
-	Agents    map[string]AgentProfile `yaml:"agents,omitempty"`
-	Workflows map[string]WorkflowDef  `yaml:"workflows,omitempty"`
-	Triggers  []TriggerSpec           `yaml:"triggers,omitempty"` // shipped DISARMED
-	Policy    *Policy                 `yaml:"policy,omitempty"`
-	Checks    map[string]Step         `yaml:"checks,omitempty"`
+	Models    map[string]FleetSpec   `yaml:"models,omitempty"`
+	Workflows map[string]WorkflowDef `yaml:"workflows,omitempty"`
+	Triggers  TriggerList            `yaml:"triggers,omitempty"` // shipped DISARMED
+	Policy    *Policy                `yaml:"policy,omitempty"`
+	Checks    map[string]Step        `yaml:"checks,omitempty"`
 
 	// Bind-only sections — FORBIDDEN here. Captured as raw nodes so an offending
 	// pack is rejected by name (see (*PackManifest).checkNoEnvironment). The
@@ -205,27 +313,52 @@ type PackMeta struct {
 	Deprecated string `yaml:"deprecated,omitempty"`
 }
 
-// PackRequires is the pack's interface (§5): the resources it needs and, for
-// roles, the capabilities a binding must satisfy. It does double duty — the
-// "sockets you plug in" list AND the allowlist of global names the pack may
-// reach. Anything NOT in requires: is pack-local.
+// PackRequires is the pack's interface (§5): the resources it needs. It does
+// double duty — the "sockets you plug in" list AND the allowlist of global
+// names the pack may reach. Anything NOT in requires: is pack-local.
+//
+// There is deliberately no `roles:` here. It was vestigial after the agents
+// removal: "which model/agent fills this role" is answered by fleets + the
+// runtime roster + the mirrored overlay, and "what capabilities must a
+// binding satisfy" is answered by requires.connectors, which bounds every
+// grant the pack can make (docs/design/skill-capability-and-pack-interface.md
+// §C/§E).
 type PackRequires struct {
 	// Conductor is the daemon-version constraint (§16) — REQUIRED for the
 	// auto-updating fleet. Loading a pack outside its range is a named error,
 	// never a crash. Mirrors Terraform required_version.
-	Conductor  string                `yaml:"conductor,omitempty"`
-	Connectors []string              `yaml:"connectors,omitempty"`
-	Stores     []string              `yaml:"stores,omitempty"`
-	Handoffs   []string              `yaml:"handoffs,omitempty"`
-	Secrets    map[string]SecretReq  `yaml:"secrets,omitempty"`
-	Roles      map[string]RoleReq    `yaml:"roles,omitempty"`
-	Packs      map[string]PackDepReq `yaml:"packs,omitempty"`
+	Conductor string `yaml:"conductor,omitempty"`
+	// Connectors is the pack's connector interface AND its capability
+	// boundary: version-aware (`{ jira: ">=2.0" }`), with a bare list as
+	// sugar for "any version". A pack's skill.verbs may name no connector
+	// outside it (§C), and each constraint is gated at instantiate against
+	// the consumer's resolved connector (§D).
+	Connectors ConnectorReqs `yaml:"connectors,omitempty"`
+
+	Stores   []string              `yaml:"stores,omitempty"`
+	Handoffs []string              `yaml:"handoffs,omitempty"`
+	Secrets  map[string]SecretReq  `yaml:"secrets,omitempty"`
+	Packs    map[string]PackDepReq `yaml:"packs,omitempty"`
+	// Sources names the connector SOURCE TYPES this pack's triggers bind to
+	// (github, gitlab, pagerduty…). Scope for each lives on the CONSUMER's
+	// connector of that type, never on the pack
+	// (docs/design/runtimes-models-packs.md §5.2). A source the consumer has
+	// no connector for leaves its triggers DORMANT with a load-time notice,
+	// unless the author marks it required.
+	Sources map[string]SourceReq `yaml:"sources,omitempty"`
 }
 
-// RoleReq declares an agent role the pack defines: a bound agent MUST provide
-// the listed skill capabilities (validated at install).
-type RoleReq struct {
-	Skill []string `yaml:"skill,omitempty"`
+// ConnectorNames lists the connectors the pack declares, sorted. This is
+// the pack's capability boundary: its `skill.verbs` may name no connector
+// outside it (docs/design/skill-capability-and-pack-interface.md §C).
+func (r PackRequires) ConnectorNames() []string { return r.Connectors.Names() }
+
+// SourceReq declares one connector source type a pack's triggers bind to.
+// Required turns the missing-connector notice into a hard error — for a pack
+// that is meaningless without that source.
+type SourceReq struct {
+	Desc     string `yaml:"desc,omitempty"`
+	Required bool   `yaml:"required,omitempty"`
 }
 
 // SecretReq documents a secret the pack needs (name/role, no value).
@@ -252,7 +385,10 @@ type SettingSpec struct {
 // breaking consumers. Empty → everything is addressable.
 type PackExports struct {
 	Workflows []string `yaml:"workflows,omitempty"`
-	Agents    []string `yaml:"agents,omitempty"`
+	// Steps are STEP REFERENCES — `<workflow>/<step-id>` or
+	// `<workflow>[<n>]` — naming steps of the pack's own workflows. There is
+	// no top-level steps: section to list instead.
+	Steps []string `yaml:"steps,omitempty"`
 }
 
 // checkNoEnvironment enforces the security boundary: a manifest that ships any

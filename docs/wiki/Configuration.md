@@ -14,11 +14,12 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 
 | key | what | reference |
 |---|---|---|
-| `connectors:` | named service connections: type, credentials, `me:`, default `repos:`, default `options:`, `enabled:`, per-connector `policy:` | [[Connectors]] |
+| `connectors:` | named service connections: `use:` (what implements it), credentials, `network:` (declared egress), `me:`, default `repos:`, default `options:`, `enabled:`, per-connector `policy:`, optional `isolation:` | [[Connectors]], [[Plugins]] |
 | `triggers:` | the workflows: `on` / `filters` / `steps` / `hooks` (+ `group`, `policy`, `gate`, `name`, `enabled`, `options`, `repo`, `shadow`) | [[Workflows]], [[Grouping]], [[Gates]] |
-| `runtimes:` | where agents run: `type`/`agent`, `transport`, `bin`, `host`, `isolation`, `default` | [[Runtimes]], [[Isolation]] |
-| `plugins:` | acquire connector **types** and **runtimes** from external binaries: `source`, `kind` (connector\|runtime), `provides`, `sha256`, `args`, `isolation`, `allow_unverified`/`allow_unsandboxed`, `allow_secrets` | [[Plugins]] |
-| `agents:` | named profiles: `provider`, `model`, `thinking`, `mode`, `runtime`, `workspace`, `wait_timeout`, `archive_when_done`, `labels`, `guidance`, `host`, `memory`, `session`, `skill`, `isolation`, `budget`, `outcome_feedback` | [[Agents]], [[Agent-Skill]], [[Isolation]], [[Cost-Accounting]], [[Outcomes]] |
+| `runtimes:` | where agents run: `use:` (what implements it), `agent` (with `use: acp`), `transport`, `bin`, `host`, `isolation`, `default` | [[Runtimes]], [[Isolation]] |
+| `plugin_trust:` | where remote plugins may come from: `allow:` source globs. The official plugin repo is trusted by default; anything else remote needs an entry | [[Plugins]] |
+| `steps:` | named, reusable STEP TEMPLATES (this replaced `agents:`): `name`, `model`, `runtime`, `thinking`, `mode`, `workspace`, `wait_timeout`, `archive_when_done`, `labels`, `guidance`, `host`, `memory`, `session`, `skill`, `isolation`, `outcome_feedback`, `outcome_key` | [[Steps]], [[Agent-Skill]], [[Isolation]], [[Outcomes]] |
+| `models:` | named FLEETS — ranked acceptable-model lists `{ any, required }` a step's `model:` can name | [[Model-Selection]] |
 | `hosts:` | named SSH targets: `host`, `user`, `port`, `key`, `known_hosts`, `cwd`, `env`, `isolation` | [[Hosts]], [[Isolation]] |
 | `stores:` | named data stores — KV (`boltdb`/`redis`/`http`) served by `kv.*`, SQL (`postgres`/`mysql`/`sqlite`) served by `sql.*`; addressed by the required `store:` selector | below |
 | `memory:` | shared agent memory: `store:` (a KV `stores:` entry) \| `dir:` (Markdown files) \| `type: memory` (ephemeral) — served by `memory.*` | [[Memory]] |
@@ -31,7 +32,7 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 | `store:` | `state_file`, `audit_log`, `state_ttl`, `max_tracked_prs`, `audit_max_size`, `history_retention`, `history_max_runs` | [[Runs]] |
 | `update:` | `auto`, `interval`, `apply` — self-update; migration runs on the new binary's first boot | |
 | `dry_run:` | stub every dispatch and verb | |
-| `agent_guidance:` | house prompt guidance appended to every agent (per-profile `guidance:` overrides) | [[Agents]] |
+| `agent_guidance:` | house prompt guidance appended to every agent (per-profile `guidance:` overrides) | [[Steps]] |
 | `adopt_open_workspaces:` | route PR feedback to a workspace already on the branch | |
 
 ## The trigger grammar in brief
@@ -63,7 +64,7 @@ nothing else (`steps:` stay trigger-level, shared):
 
 ```yaml
 connectors:
-  timer: { type: cron, schedules: { nightly: { cron: "0 2 * * *" } } }
+  timer: { use: cron, schedules: { nightly: { cron: "0 2 * * *" } } }
 
 triggers:
   - name: clone-invoice              # names the trigger (required for `conductor run`)
@@ -162,7 +163,7 @@ and rate-limited like any other verb.
 ```yaml
 connectors:
   xero:
-    type: rest
+    use: rest
     base_url: https://api.xero.com/api.xro/2.0
     auth: { … }                        # shared auth block, below
     headers: { Accept: application/json }   # defaults, templated
@@ -214,7 +215,7 @@ raw `{{.item}}` are published to the trigger scope.
 ```yaml
 connectors:
   shop:
-    type: graphql
+    use: graphql
     endpoint: https://myshop.myshopify.com/admin/api/2025-01/graphql.json
     auth: { type: header, name: X-Shopify-Access-Token, value: '{{ vault "house" "shopify-token" }}' }
     verbs:
@@ -346,15 +347,15 @@ the write paths: [[Memory]].
 
 ## Session affinity (an agent's `session:`)
 
-An `agents:` profile may carry a `session:` block — session affinity. The
-agent's dispatches bind one live session per rendered key, shared across
-every trigger using that agent: a comment, a check failure, and a
+A `session:` block — on a **runtime** (the overall pool) or on a **step**
+(its own) — is session affinity. Dispatches bind one live session per
+`(runtime, model, rendered key)`, so a comment, a check failure, and a
 review-change on the same PR all reach the SAME agent as follow-up prompts
 with full prior context.
 
 ```yaml
-agents:
-  reviewer:
+x-templates:
+  reviewer: &reviewer
     provider: claude
     session:
       key: "{{.repo}}#{{.pr}}"
@@ -368,7 +369,7 @@ map persists in conductor's own state and resumes across restarts/
 auto-updates, and sessions evict on idle/age/end_on. Needs a
 session-persistent runtime (paseo/ACP); one-shot runtimes stay
 fresh-per-event and lean on [[Memory]]. Full behavior and the worked
-one-agent-per-PR example: [[Agents]].
+one-agent-per-PR example: [[Steps]].
 
 ## Agent-driven workflows (`workflow.*`, `policy.agent_authored`)
 
@@ -453,7 +454,7 @@ workflow step ref.
 ```yaml
 connectors:
   imports: [conf.d/connectors/*.yaml]        # entries from these files join the section
-  gh: { type: github, … }                    # inline entries mix in
+  gh: { use: github, … }                    # inline entries mix in
   pd: { import: ./conf.d/pagerduty.yaml }    # a named entry's BODY from its own file
 workflows:
   imports: [workflows/*.yaml]

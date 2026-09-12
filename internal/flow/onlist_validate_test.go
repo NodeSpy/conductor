@@ -11,9 +11,9 @@ import (
 // key `only`; a rest connector's polled event declares no filter keys at all.
 const onListBase = `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
   api:
-    type: rest
+    use: rest
     base_url: http://api.invalid
     verbs:
       noop: { method: GET, path: / }

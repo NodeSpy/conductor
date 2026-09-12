@@ -88,6 +88,31 @@ func (memoryImpl) Invoke(ctx context.Context, verb string, opts map[string]any) 
 	}
 	str := func(k string) string { s, _ := opts[k].(string); return s }
 	src := memory.SourceFrom(ctx)
+	// EVERY verb is gated, not just remember. This face is reachable by any
+	// `skill.verbs: [memory.*]` grant, so recall/list/forget were as open as
+	// remember was before the H8 guard landed on it — a grant could read the
+	// shared bucket it could not write, list every tenant's entries, and
+	// delete an id belonging to another scope. memory.CheckOp is the one gate
+	// this and the run:code binding share; for forget the scope is the stored
+	// entry's, which is how ownership is enforced.
+	scope := str("scope")
+	if verb == "forget" {
+		s, found, err := m.ScopeOf(str("id"))
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			scope = s
+		}
+	}
+	// WHO is asking rides the context: the flow layer marks an agent-authored
+	// step and every skill verb call as agent-facing and stamps the
+	// dispatch's own repo (memory.WithSource). A config-authored `uses:
+	// memory.recall` carries neither and is not gated — same split as every
+	// other resource check.
+	if err := m.CheckOp(memory.CallerFrom(ctx), verb, scope); err != nil {
+		return nil, err
+	}
 	switch verb {
 	case "remember":
 		e, err := m.Remember(str("text"), stringList(opts["tags"]), str("scope"), src)
@@ -105,12 +130,11 @@ func (memoryImpl) Invoke(ctx context.Context, verb string, opts map[string]any) 
 			}
 		}
 		if s := str("scope"); s != "" {
-			resolved, err := memory.ResolveScope(s, src)
-			if err != nil {
-				return nil, err
-			}
-			q.Scopes = []string{resolved}
+			q.Scopes = []string{memory.NormalizeScope(s)}
 		}
+		// `list` shares this branch: with a scope named it is a scoped
+		// read like recall, and without one it is bounded by whatever the
+		// installed scope guard permits (CheckOp above), not by nothing.
 		entries, err := m.Recall(q)
 		if err != nil {
 			return nil, err

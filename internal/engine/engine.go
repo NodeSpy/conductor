@@ -23,6 +23,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/memory"
+	"github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
@@ -76,19 +77,28 @@ type Store interface {
 	GetHistoryVerified(id string) (store.RunHistory, error)
 	// Outcome-learning state (#36 §18): engagements awaiting a terminal
 	// signal, and the per-agent counters behind guidance tuning.
-	RecordEngagement(repo string, number int, e store.Engagement)
-	TakeEngagements(repo string, number int) []store.Engagement
-	PeekEngagements(repo string, number int) []store.Engagement
-	MarkCIFailure(repo string, number int, head string) bool
-	BumpOutcome(agent, outcome string)
-	AgentOutcomeStats(agent string) map[string]int
+	// The engagement store keys on an opaque TARGET KEY the caller supplies
+	// — core.Trigger.Key(), which namespaces a target the event's sender
+	// chose away from a real one. It used to key on a raw repo#number, so a
+	// forged trigger consumed and mutated a real dispatch's record.
+	RecordEngagement(key string, e store.Engagement)
+	TakeEngagements(key string) []store.Engagement
+	PeekEngagements(key string) []store.Engagement
+	MarkCIFailure(key, head string) bool
+	BumpOutcome(key, outcome string)
+	OutcomeStats(key string) map[string]int
 }
 
 // Engine is the central work loop.
 type Engine struct {
-	cfg         *config.Config
-	store       Store
-	disp        Dispatcher
+	cfg   *config.Config
+	store Store
+	disp  Dispatcher
+	// owner maps a live agent id → the runner that dispatched it, so
+	// archive_when_done closes the session on the transport that opened it
+	// rather than always on paseo. See archiveAgent.
+	ownerMu     sync.Mutex
+	owner       map[string]Dispatcher
 	controllers *controller.Registry // resolves which controller runs each agent
 	broker      *controller.Broker   // owns one live session per PR (interactive hand-off); nil = disabled
 	handoffs    *handoff.Registry    // resolves a step's hand-off channel by name; nil = paseo-native hand-off
@@ -124,6 +134,37 @@ type Engine struct {
 	// budget caps (#36 §14) — in-memory like agentDisp; the audit's
 	// agent_usage rows are the durable record.
 	meter *cost.Meter
+	// modelResolver walks the fleet ladder (design §2.3) per dispatch. nil
+	// = no model layer: every dispatch bare-launches.
+	modelResolver *models.Resolver
+}
+
+// hasLiveAgentFor asks the controller that would actually RUN this work
+// whether an agent for this PR+kind is already open.
+//
+// It used to ask e.disp — the paseo dispatcher — unconditionally, so on
+// every other transport the answer came from a tracker that had never seen
+// the dispatch and was always "no". A second review event for an in-flight
+// PR then spawned a duplicate agent against the same worktree. (The other
+// half of that bug was every non-paseo Runner() returning a FRESH tracker
+// per call; see controller.runnerMemo.)
+//
+// It falls back to e.disp when the controller cannot be resolved or has no
+// runner: an unanswerable question should not silently become "yes" and
+// block the work.
+func (e *Engine) hasLiveAgentFor(ctx context.Context, act config.Action, key, kind string) bool {
+	profile, _ := e.actionProfile(act.Agent)
+	if act.Backend != "" {
+		profile.Runtime = act.Backend
+	}
+	if r, err := e.runnerFor(profile); err == nil && r != nil {
+		if lr, ok := r.(interface {
+			HasLiveAgent(context.Context, string, string) bool
+		}); ok {
+			return lr.HasLiveAgent(ctx, key, kind)
+		}
+	}
+	return e.disp.HasLiveAgent(ctx, key, kind)
 }
 
 // overAgentBudget prunes agent-dispatch timestamps older than an hour and reports
@@ -229,6 +270,7 @@ func New(o Options) *Engine {
 	}
 	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,
+		owner:  map[string]Dispatcher{},
 		broker: o.Broker, handoffs: o.Handoffs,
 		author: o.Author, userTok: o.UserToken, readTok: o.ReadToken, log: log,
 		hold:      o.Hold,
@@ -311,11 +353,11 @@ func (e *Engine) gcLoop(ctx context.Context) {
 // conductor injects NO tone of its own. Layer 0 is the policy-resolved baseline
 // (global → connector → trigger, stacked by MergePolicy), or the unfolded
 // top-level agent_guidance (a config that never ran applyDefaults, e.g. a test).
-// The profile's own parts — carrying any extends: ancestor's, prepended during
+// The step's own parts — carrying any extends: ancestor's, prepended during
 // resolveExtends — stack on top as separate blocks. Nothing configured → no
 // guidance block at all. A profile `guidance: { replace: … }` drops layer 0 and
 // every inherited part; an explicit "" renders nothing (a deliberate disable).
-func (e *Engine) agentGuidance(profile config.AgentProfile, pol config.Policy) string {
+func (e *Engine) agentGuidance(profile config.Step, pol config.Policy) string {
 	spec := profile.Guidance
 	replace := spec != nil && spec.Replace
 
@@ -348,7 +390,7 @@ func (e *Engine) agentGuidance(profile config.AgentProfile, pol config.Policy) s
 // profiles on a runtime that cannot carry the MCP tools (#123): promising an
 // agent tools it doesn't have just makes it fail; `conductor validate` warns
 // the operator instead.
-func (e *Engine) skillGuidance(profile config.AgentProfile) string {
+func (e *Engine) skillGuidance(profile config.Step) string {
 	sk := profile.Skill
 	if sk == nil {
 		return ""
@@ -365,13 +407,15 @@ func (e *Engine) skillGuidance(profile config.AgentProfile) string {
 }
 
 // skillGuidanceMCP is the blurb for runtimes that carry the tool server as MCP
-// tools (ACP/opencode) — the agent calls the tools natively.
+// tools (ACP/opencode). Layer 0 only: the granted verbs arrive as native tool
+// schemas (SkillVerbCatalog, rendered from the same registry entries the CLI
+// card uses), so repeating them as prompt text would be redundant tokens.
 func (e *Engine) skillGuidanceMCP(sk *config.SkillPolicy) string {
 	var b strings.Builder
-	b.WriteString("Conductor tools are available on this session.")
 	if len(sk.Verbs) > 0 {
-		b.WriteString(fmt.Sprintf(" Prefer acting THROUGH conductor: the verb tools (matching: %s) run with conductor's own credentials, so no secret ever enters this session.",
-			strings.Join(sk.Verbs, ", ")))
+		b.WriteString(flow.CapabilityPreamble(false))
+	} else {
+		b.WriteString("Conductor tools are available on this session.")
 	}
 	if sk.SecretsVia == "broker" && len(sk.AllowSecrets) > 0 {
 		b.WriteString(fmt.Sprintf(" If a raw tool you must run itself needs a credential, request it via secret_issue/secret_redeem (allowed: %s) — grants are single-use, expire in about a minute, and every step is audited. Use the value immediately for the one action that needs it; never echo it, store it, or write it to disk.",
@@ -381,20 +425,42 @@ func (e *Engine) skillGuidanceMCP(sk *config.SkillPolicy) string {
 	return b.String()
 }
 
-// skillGuidanceCLI is the blurb for local runtimes with no MCP surface (paseo,
-// agent-deck, cli): the agent shells the `conductor` CLI. Progressive
-// disclosure — it names the discovery command, never the whole verb catalog, so
-// the prompt stays small regardless of how many verbs the profile allows.
+// skillGuidanceCLI is the blurb for local runtimes with no MCP surface
+// (paseo, agent-deck, cli): the agent shells the `conductor` CLI.
+//
+// Layer 0 (the generated mechanics preamble) plus Layer 1 (the CAPABILITY
+// CARD — the granted verbs with their options and call form, rendered from
+// the verb registry). The card is what lets a workflow prompt drop to intent
+// instead of hand-coding `conductor call <verb> --<opt> '<json>'`, and it
+// updates itself when a verb's signature changes.
+//
+// The card is scoped to exactly the grant and comes from the same resolution
+// as `conductor discover` and enforcement, so it can never promise a verb the
+// daemon would refuse. With no flow runner wired (no connectors), there is no
+// registry to render and the agent gets the discovery command instead.
 func (e *Engine) skillGuidanceCLI(sk *config.SkillPolicy) string {
 	var b strings.Builder
-	b.WriteString("Conductor is available on this machine via the `conductor` CLI (endpoint + a scoped token are already in your environment).")
-	b.WriteString(" Run `conductor discover` to see which connectors and verbs you may use, `conductor discover <connector>` or `conductor discover -s <term>` to narrow, and `conductor discover <connector.verb>` for a verb's options.")
-	b.WriteString(" Act THROUGH conductor with `conductor call <connector.verb> --opt value`: it runs server-side with conductor's own credentials, so no secret ever enters this session. `conductor memory recall|remember` is your shared memory.")
+	b.WriteString("Conductor is available on this machine via the `conductor` CLI (endpoint + a scoped token are already in your environment). ")
+	b.WriteString(flow.CapabilityPreamble(true))
+	b.WriteString(" `conductor memory recall|remember` is your shared memory.")
+	if card := e.capabilityCard(sk); card != "" {
+		b.WriteString("\n\n")
+		b.WriteString(card)
+	}
 	if sk.SecretsVia == "broker" && len(sk.AllowSecrets) > 0 {
 		b.WriteString(fmt.Sprintf(" If a raw tool you run yourself genuinely needs a credential, `conductor secret <name>` mints a single-use, ~1-minute, audited value (allowed: %s) — use it immediately for that one action; never echo, store, or write it to disk.",
 			strings.Join(sk.AllowSecrets, ", ")))
 	}
 	return b.String()
+}
+
+// capabilityCard renders the granted verbs for a CLI-transport agent ("" when
+// the grant admits nothing, or when no registry is wired).
+func (e *Engine) capabilityCard(sk *config.SkillPolicy) string {
+	if e.flow == nil || sk == nil || len(sk.Verbs) == 0 {
+		return ""
+	}
+	return e.flow.CapabilityCard(sk.Verbs)
 }
 
 // dispatchAgent routes one request through session affinity when the profile
@@ -405,10 +471,74 @@ func (e *Engine) skillGuidanceCLI(sk *config.SkillPolicy) string {
 func (e *Engine) dispatchAgent(ctx context.Context, runner Dispatcher, req dispatch.Request) (dispatch.RunRef, error) {
 	if e.affinity != nil {
 		if ref, handled, err := e.affinity.Dispatch(ctx, runner, req); handled {
+			e.rememberDispatcher(ref.AgentID, runner)
 			return ref, err
 		}
 	}
-	return runner.Dispatch(ctx, req)
+	ref, err := runner.Dispatch(ctx, req)
+	e.rememberDispatcher(ref.AgentID, runner)
+	return ref, err
+}
+
+// rememberDispatcher records which runner opened an agent so archiving can
+// reach it later. Every agent dispatch funnels through dispatchAgent, which
+// makes this the one place the association is knowable.
+func (e *Engine) rememberDispatcher(agentID string, runner Dispatcher) {
+	// A paseo-dispatched agent needs no record: archiveAgent's fallback is
+	// e.disp, which is already the right answer for it. Skipping those keeps
+	// the table to the non-paseo minority it exists for.
+	if agentID == "" || runner == nil || runner == e.disp {
+		return
+	}
+	e.ownerMu.Lock()
+	defer e.ownerMu.Unlock()
+	// Entries are dropped on archive, but an agent that is never archived
+	// (reaped by its transport, or lost to a crash) would linger. Bound the
+	// table: evicting only costs the fallback path, which is the behaviour
+	// this whole record replaced, so an over-long-lived agent degrades to
+	// exactly what it did before rather than to a leak.
+	if len(e.owner) >= maxTrackedOwners {
+		for k := range e.owner {
+			delete(e.owner, k)
+			if len(e.owner) < maxTrackedOwners {
+				break
+			}
+		}
+	}
+	e.owner[agentID] = runner
+}
+
+// maxTrackedOwners caps the agent→runner table. Far above any plausible count
+// of concurrently-live non-paseo sessions; it exists so a pathological daemon
+// uptime can't grow the map without limit.
+const maxTrackedOwners = 4096
+
+// archiveAgent closes a finished agent through the runner that OPENED it.
+//
+// Both archive sites used to call e.disp.Archive — the paseo dispatcher —
+// regardless of which transport actually ran the step. On ACP, opencode and
+// the CLI recipes that meant `archive_when_done: true` closed nothing: the
+// session stayed open and its subprocess stayed resident until the transport
+// idled it out on its own, if it ever did. Archiving through the recorded
+// owner is what makes the flag mean the same thing on every transport.
+//
+// Falls back to e.disp for an id we have no record of (a session adopted
+// across a daemon restart, say) — the old behaviour, which is right for the
+// paseo-dispatched majority and harmless elsewhere.
+func (e *Engine) archiveAgent(ctx context.Context, agentID string) error {
+	if agentID == "" {
+		return nil
+	}
+	e.ownerMu.Lock()
+	runner := e.owner[agentID]
+	delete(e.owner, agentID)
+	e.ownerMu.Unlock()
+	if a, ok := runner.(interface {
+		Archive(context.Context, string) error
+	}); ok {
+		return a.Archive(ctx, agentID)
+	}
+	return e.disp.Archive(ctx, agentID)
 }
 
 // affinityOwns reports whether an agent id is a bound keyed session — the
@@ -418,8 +548,8 @@ func (e *Engine) affinityOwns(agentID string) bool { return e.affinity.Owns(agen
 // memoryPrompt renders the opt-in shared-memory section for a dispatched
 // agent — the same append path as agentGuidance. A profile without
 // `memory:` (or with memory unconfigured) gets "" — no token cost.
-func (e *Engine) memoryPrompt(agentName string, profile config.AgentProfile, t core.Trigger) string {
-	sel := profile.Memory
+func (e *Engine) memoryPrompt(identity string, step config.Step, t core.Trigger, workflow string) string {
+	sel := step.Memory
 	if sel == nil || !sel.Enabled {
 		return ""
 	}
@@ -427,28 +557,38 @@ func (e *Engine) memoryPrompt(agentName string, profile config.AgentProfile, t c
 	if m == nil {
 		return ""
 	}
-	return m.PromptSection(memory.Filter{Scopes: sel.Scopes, Tags: sel.Tags, Limit: sel.Limit},
-		t.Target.Repo, agentName)
+	// The engine supplies the run's context keys as a CONVENTION; the memory
+	// core never interprets them (design §2).
+	// OwnRepo, not the raw target: a forged webhook repo must not pull
+	// another repo's memories into this agent's prompt, which is both a
+	// cross-tenant READ and a prompt-injection vector (the recalled text goes
+	// straight into the model's context).
+	repo := t.OwnRepo()
+	keys := memory.ContextKeys(repo, workflow, identity)
+	f := memory.Filter{
+		Scopes: memory.ExpandScopeRefs(sel.Scopes, repo, workflow, identity),
+		Tags:   sel.Tags, Limit: sel.Limit,
+	}
+	return m.PromptSection(f, keys)
 }
 
 // harvestMemory applies the memory output contract to a finished agent's
 // output (see memory.HarvestOutput): best-effort, audited, never a failure.
-func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string) {
+func (e *Engine) harvestMemory(t core.Trigger, agent, runID, output string, sel *config.MemorySelector) {
 	m := memory.Active()
 	if m == nil || strings.TrimSpace(output) == "" {
 		return
 	}
-	// Writing is opt-in per agent, exactly like reading (memoryPrompt): only an
-	// agent whose profile enables memory may harvest its output into the shared
-	// store. Otherwise any dispatched agent — including one an untrusted event
-	// steered — could poison shared memory via its output contract without the
-	// operator ever granting it memory access (#57 M8). No profile / memory off
-	// → nothing is written.
-	prof := e.cfg.Agents[agent]
-	if prof.Memory == nil || !prof.Memory.Enabled {
+	// Writing is opt-in per STEP, exactly like reading (memoryPrompt): only a
+	// step whose memory: is enabled may harvest its output into the shared
+	// store. Otherwise any dispatched agent — including one an untrusted
+	// event steered — could poison shared memory through its output contract
+	// without the operator ever granting it memory access (#57 M8).
+	if sel == nil || !sel.Enabled {
 		return
 	}
-	src := memory.Source{Agent: agent, Run: runID, Trigger: t.Kind, Repo: t.Target.Repo}
+	src := memory.Source{Step: agent, Run: runID, Trigger: t.Kind, Repo: t.Target.Repo,
+		TargetTrusted: t.TargetTrusted}
 	entries, err := m.HarvestOutput(output, src)
 	if err != nil {
 		e.log("%s memory output contract: %v", tag(t), err)
@@ -665,7 +805,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		// A review workflow shouldn't re-run while its agent is parked for you.
 		// Single-action fixers instead fall through to dispatch, which queues new
 		// work to the agent already on this PR (or spawns one) — see paseo.go.
-		if len(act.Steps) > 0 && e.disp.HasLiveAgent(ctx, key, t.Kind) {
+		if len(act.Steps) > 0 && e.hasLiveAgentFor(ctx, act, key, t.Kind) {
 			// Exception: a review re-request on a NEW head. If we've never dispatched
 			// review_requested at the current head, the parked agent is reviewing stale
 			// code — re-engage on the new head instead of being blocked indefinitely by
@@ -736,14 +876,27 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		return
 	}
 
-	// Resolve profile, tokens, shadow.
-	var profile config.AgentProfile
+	// Resolve the step's behavior, tokens, shadow. A legacy (integrations:)
+	// Action carries no behavior fields of its own, so `agent:` is where it
+	// points at some: a STEP REFERENCE (`<workflow>/<step-id>`) naming a
+	// step in the operator's own workflows. Anything else is a plain
+	// attribution label and the dispatch runs on the policy baseline alone
+	// — deny-by-default, so no Action inherits memory access or a skill
+	// grant nobody wrote down. Either way `agent:` supplies the IDENTITY,
+	// so a box's memory/session/outcome keys are unchanged.
+	profile, identity := e.actionProfile(act.Agent)
+	if act.Backend != "" {
+		profile.Runtime = act.Backend
+	}
+	model, modelRuntime := e.resolveModel(ctx, profile)
+	if modelRuntime != "" && profile.Runtime == "" {
+		profile.Runtime = modelRuntime
+	}
 	if act.Type == "agent" {
-		profile = e.cfg.Agents[act.Agent]
 		if act.Prompt != "" {
 			act.Prompt += dispatch.WriteWrapperGuidance
 			act.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))
-			act.Prompt += e.memoryPrompt(act.Agent, profile, t)
+			act.Prompt += e.memoryPrompt(identity, profile, t, "")
 			if act.RerequestReview {
 				act.Prompt += dispatch.RerequestReviewGuidance
 			}
@@ -800,7 +953,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 
 	req := dispatch.Request{
-		Trigger: t, Action: act, Profile: profile,
+		Trigger: t, Action: act, Step: profile, Identity: identity, Model: model,
 		Tokens: dispatch.Tokens{App: appTok, User: userTok},
 		Author: e.author, Shadow: shadow, CatchUp: t.CatchUp,
 	}
@@ -844,7 +997,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		// record the attempt, retry when the rolling window frees, notify.
 		// An admitted dispatch RESERVES its estimated spend (settled or
 		// cancelled below).
-		res, berr := e.checkSpendBudget(act.Agent, nil, "", cost.Estimate(profile.Model, act.Prompt, ""))
+		res, berr := e.checkSpendBudget(e.runtimeOf(profile), nil, "", cost.Estimate(model, act.Prompt, ""))
 		if berr != nil {
 			e.shedForBudget(ctx, t, berr, shadow)
 			return
@@ -879,7 +1032,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// lands in later accounting as approximate. Non-charging outcomes
 	// (skip/queue/error) cancel the reservation instead.
 	if act.Type == "agent" && err == nil && !ref.Skipped && !ref.Shadowed && !ref.Queued {
-		e.recordUsage(t, act.Agent, act.ID, "", "", spendRes, cost.FromRun(profile.Model, act.Prompt, ref.Output))
+		e.recordUsage(t, identity, e.runtimeOf(profile), act.ID, "", "", spendRes, cost.FromRun(model, act.Prompt, ref.Output))
 	} else {
 		e.meter.Cancel(spendRes)
 	}
@@ -942,7 +1095,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// Single-action dispatches have no WorkflowRun record; the agent id is the
 	// run identity that provenance (Source.Run) can trace back.
 	if act.Type == "agent" && !shadow && !ref.Queued {
-		e.harvestMemory(t, act.Agent, ref.AgentID, ref.Output)
+		e.harvestMemory(t, act.Agent, ref.AgentID, ref.Output, profile.Memory)
 	}
 
 	if ref.Queued {
@@ -1187,25 +1340,46 @@ func livenessGated(kind string) bool {
 // transport isn't runnable in this build — the caller escalates rather than
 // silently dispatching through the wrong runtime. For today's configs (no
 // `controllers:` block) this always resolves to the paseo dispatcher.
-func (e *Engine) runnerFor(profile config.AgentProfile) (Dispatcher, error) {
+func (e *Engine) runnerFor(profile config.Step) (Dispatcher, error) {
 	// RuntimeName() honors the connectors-model `runtime:` field (falling back
 	// to the legacy `controller:`). Reading `.Controller` directly here left a
 	// `runtime:`-only profile resolving to the default runtime on first
 	// dispatch, even though the session-affinity path already used
 	// RuntimeName() — so a plugin/ACP runtime selected via `runtime:` was
 	// silently skipped until a follow-up turn (#54).
-	run, err := e.controllers.RunnerFor(profile.RuntimeName())
+	run, err := e.controllers.RunnerFor(profile.Runtime)
 	if err != nil {
 		return nil, err
 	}
 	return run, nil
 }
 
+// actionProfile resolves a legacy Action's `agent:` to the step it points at
+// and that step's identity. Deny-by-default: a reference that names nothing
+// yields an empty step, so an Action can never inherit memory access or a
+// skill grant the operator did not write down somewhere addressable — and
+// the raw string stays the identity, so nothing about its history moves.
+//
+// When the reference DOES resolve, the identity is the referenced step's,
+// which is what the session sweep computes when it walks the config looking
+// for an `end_on:` to honor. Two different answers there would bind a
+// session under one key and try to evict it under another.
+func (e *Engine) actionProfile(ref string) (config.Step, string) {
+	if e.cfg == nil || ref == "" {
+		return config.Step{}, ref
+	}
+	s, identity, err := e.cfg.FindStepIdentity(ref)
+	if err != nil {
+		return config.Step{}, ref
+	}
+	return *s, identity
+}
+
 // controllerFor resolves the controller (not just its runner) that owns an
 // agent's sessions — the review hand-off needs it to open/resume a broker session
 // (NewSession/ResumeSession), not only the dispatch runner.
-func (e *Engine) controllerFor(profile config.AgentProfile) (controller.Controller, error) {
-	return e.controllers.Resolve(profile.RuntimeName())
+func (e *Engine) controllerFor(profile config.Step) (controller.Controller, error) {
+	return e.controllers.Resolve(profile.Runtime)
 }
 
 // acquire takes a concurrency slot, blocking until one is free (backpressure).
@@ -1284,7 +1458,7 @@ func (e *Engine) auditDispatch(t core.Trigger, ref dispatch.RunRef, err error) {
 // agentWaitTimeout bounds how long a slot is held waiting for an agent to idle,
 // so a stuck agent eventually frees its slot. Derived from the profile's
 // wait_timeout (plus grace), else a one-hour backstop.
-func agentWaitTimeout(p config.AgentProfile) time.Duration {
+func agentWaitTimeout(p config.Step) time.Duration {
 	if d := p.WaitTimeout.D(); d > 0 {
 		return d + 5*time.Minute
 	}
@@ -1294,8 +1468,17 @@ func agentWaitTimeout(p config.AgentProfile) time.Duration {
 // rerunFailed re-runs the failed jobs of a workflow run, as you. Returns the gh
 // error (with its output) when the rerun could not be requested.
 func (e *Engine) rerunFailed(ctx context.Context, t core.Trigger, runID int64) error {
+	// OwnRepo: this spends the OPERATOR'S token on a write to a named repo.
+	// The run id and repo are platform facts that arrive with a verified
+	// payload; a trigger whose target the sender chose would be asking
+	// conductor to re-run CI in a repo of the attacker's choosing, with the
+	// operator's credential (found by the round-13 enforcement sweep).
+	repo := t.OwnRepo()
+	if repo == "" {
+		return fmt.Errorf("refusing to re-run checks for %s: the dispatch's target was not assigned by its source, so the repo is not conductor's to act on", t.Key())
+	}
 	c := exec.CommandContext(ctx, "gh", "run", "rerun", fmt.Sprintf("%d", runID),
-		"--failed", "--repo", t.Target.Repo)
+		"--failed", "--repo", repo)
 	c.Env = append(os.Environ(), "GH_TOKEN="+e.userToken())
 	if out, err := c.CombinedOutput(); err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))

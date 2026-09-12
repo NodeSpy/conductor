@@ -23,7 +23,9 @@ func TestMigrateDryRunValidatesLikeRealPath(t *testing.T) {
 	}
 
 	// A legacy config whose transform PARSES but fails semantic validation:
-	// the action names an agent no profile defines.
+	// the profile pins a runtime nothing defines. (`agent:` no longer names
+	// anything resolvable — design §6 — so an unknown profile is not the
+	// failure it used to be; an unknown RUNTIME still is.)
 	t.Setenv("GH_WEBHOOK_SECRET", "dummy")
 	keyPath := writeTempRSAKey(t)
 	bad := write(t, `
@@ -37,8 +39,10 @@ integrations:
         actions:
           merge_conflict:
             - type: agent
-              agent: ghost-profile
+              agent: fixer
               prompt: "fix"
+agents:
+  fixer: { runtime: ghost-runtime }
 `)
 	err := cmdConfigMigrate([]string{"--config", bad, "--dry-run"})
 	if err == nil || !strings.Contains(err.Error(), "FAILS validation") {
@@ -66,7 +70,7 @@ integrations:
               agent: fixer
               prompt: "fix"
 agents:
-  fixer: { provider: claude }
+  fixer: { type: agent, name: fixer }
 `)
 	if err := cmdConfigMigrate([]string{"--config", good, "--dry-run"}); err != nil {
 		t.Fatalf("valid dry-run must pass: %v", err)
@@ -93,7 +97,7 @@ integrations:
     type: github
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 dispatch:
   identity: { read_token: app }
@@ -141,7 +145,7 @@ triggers:
 	fixed := `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 triggers:
   - on: timer.tick
@@ -176,7 +180,7 @@ func TestBootHoldsDegradedOnConnectorsSchemaUnknownKey(t *testing.T) {
 	broken := `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 bogus_unknown_key: true
 triggers:
@@ -226,7 +230,7 @@ triggers:
 	fixed := `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 triggers:
   - on: timer.tick
@@ -260,7 +264,7 @@ func TestResolveBootConfigHoldsGateOnUnknownKey(t *testing.T) {
 	broken := `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 bogus_unknown_key: true
 triggers:
@@ -295,7 +299,7 @@ triggers:
 	fixed := `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 triggers:
   - on: timer.tick

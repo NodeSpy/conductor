@@ -10,7 +10,7 @@ import (
 // consumerBody wraps a packs: block in a minimal valid consumer config.
 func writeConsumer(t *testing.T, dir, packsBlock string) string {
 	t.Helper()
-	body := "connectors: { gh: { type: github } }\n" + packsBlock
+	body := "connectors: { gh: { use: github } }\n" + packsBlock
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -27,12 +27,16 @@ pack:
   name: greedy
   version: 1.0.0
   requires: { conductor: ">=0.1" }
-agents:
-  a:
-    workspace: local
-    skill:
-      secrets_via: broker
-      allow_secrets: [github_token, aws_prod_key]   # never declared in requires.secrets
+workflows:
+  flow:
+    steps:
+      - id: a
+        type: agent
+        workspace: local
+        prompt: p
+        skill:
+          secrets_via: broker
+          allow_secrets: [github_token, aws_prod_key]   # never declared in requires.secrets
 `)
 	path := writeConsumer(t, dir, `
 packs:
@@ -48,18 +52,22 @@ packs:
 // A pack that pins named infrastructure (host/runtime/controller) on a bundled
 // agent must be rejected — that reaches into consumer infra unbound.
 func TestPackAgentMayNotPinInfrastructure(t *testing.T) {
-	for _, field := range []string{"host: prod", "runtime: gpu", "controller: acp1"} {
+	for _, field := range []string{"host: prod", "runtime: gpu", "runtime: acp1"} {
 		dir := t.TempDir()
 		writePackSource(t, dir, "src/p", `
 pack: { name: p, version: "1.0.0", requires: { conductor: ">=0.1" } }
-agents:
-  a:
-    workspace: local
-    `+field+`
+workflows:
+  flow:
+    steps:
+      - id: a
+        type: agent
+        workspace: local
+        prompt: p
+        `+field+`
 `)
 		path := writeConsumer(t, dir, "packs:\n  p:\n    source: ./src/p\n")
 		_, err := resolveAndLoad(t, path)
-		if err == nil || !strings.Contains(err.Error(), "runtime/host/controller") {
+		if err == nil || !strings.Contains(err.Error(), "pins runtime/host") {
 			t.Fatalf("pinning %q should be rejected, got: %v", field, err)
 		}
 	}
@@ -145,10 +153,8 @@ workflows:
     steps:
       - id: s
         type: agent
-        agent: a
+        workspace: local
         prompt: "${settings.greet}"
-agents:
-  a: { workspace: local }
 `)
 	path := writeConsumer(t, dir, "packs:\n  p:\n    source: ./src/p\n")
 	cfg, err := resolveAndLoad(t, path)
@@ -171,13 +177,17 @@ workflows:
   flow:
     steps:
       - id: s
-        type: agent
-        agent: deploy-bot     # a consumer global; NOT a pack agent, NOT a bound role
+        type: team
+        prompt: split it up
+        team:
+          planner: roles/deploy-bot   # a consumer workflow; NOT one the pack ships
+          worker: roles/deploy-bot
 `)
 	body := `
-connectors: { gh: { type: github } }
-agents:
-  deploy-bot: { provider: claude }
+connectors: { gh: { use: github } }
+workflows:
+  roles:
+    steps: [{ id: deploy-bot, type: agent, prompt: deploy }]
 packs:
   p:
     source: ./src/p
@@ -186,12 +196,12 @@ packs:
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := resolveAndLoad(t, path)
-	if err != nil {
-		t.Fatalf("resolveAndLoad: %v", err)
-	}
-	if got := cfg.Workflows["p/flow"].Steps[0].Agent; got != "p/deploy-bot" {
-		t.Fatalf("an undeclared ref must be namespaced (p/deploy-bot), not reach the consumer global; got %q", got)
+	// The pack's team role names a workflow the CONSUMER has and the pack
+	// does not. Namespacing it makes that a loud load failure instead of a
+	// silent reach past requires:.
+	_, err := resolveAndLoad(t, path)
+	if err == nil || !strings.Contains(err.Error(), "p/roles") {
+		t.Fatalf("an undeclared ref must be namespaced to p/roles and fail loudly, got %v", err)
 	}
 }
 
@@ -237,18 +247,21 @@ memory: { type: memory }
 	dir2 := t.TempDir()
 	writePackSource(t, dir2, "src/ok", `
 pack: { name: ok, version: "1.0.0", requires: { conductor: ">=0.1" } }
-agents:
-  a:
-    workspace: local
-    memory: { scopes: [repo, agent], limit: 5 }
+workflows:
+  flow:
+    steps:
+      - id: a
+        type: agent
+        workspace: local
+        memory: { scopes: [repo, agent], limit: 5 }
 `)
 	path2 := writeConsumer(t, dir2, "packs:\n  ok:\n    source: ./src/ok\n")
 	cfg, err := resolveAndLoad(t, path2)
 	if err != nil {
 		t.Fatalf("an agent memory opt-in should be allowed: %v", err)
 	}
-	if a := cfg.Agents["ok/a"]; a.Memory == nil || !a.Memory.Enabled {
-		t.Fatalf("agent memory opt-in should survive instantiation, got %+v", cfg.Agents["ok/a"].Memory)
+	if a := packStep(t, cfg, "ok/flow/a"); a.Memory == nil || !a.Memory.Enabled {
+		t.Fatalf("agent memory opt-in should survive instantiation, got %+v", a.Memory)
 	}
 }
 
@@ -300,7 +313,7 @@ workflows:
   flow: { steps: [ { id: s, run: js, code: "return {}" } ] }
 `)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 pack_trust:
   allow: [github.com/trusted/*]
 packs:

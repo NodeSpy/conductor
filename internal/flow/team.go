@@ -78,9 +78,12 @@ You are the PLANNER of an agent team. Decompose the task above into at most %d
 independent subtasks that can be implemented in parallel by separate agents in
 separate worktrees (avoid overlapping files where possible). Output JSON:
 {"subtasks": [{"id": "short-slug", "prompt": "full instructions for one worker"}]}`, maxWorkers)
-	plannerStep := config.Step{Type: "agent", Agent: spec.Planner, Prompt: planPrompt,
-		Checkout: step.Checkout, WorkDir: step.WorkDir, Env: step.Env, OutputSchema: teamPlanSchema}
-	planOut, _, err := r.execAgent(ctx, t, plannerStep, id+":plan", data, shadow)
+	plannerStep, err := r.roleStep(spec.Planner, config.Step{Type: "agent", Agent: spec.Planner, Prompt: planPrompt,
+		Checkout: step.Checkout, WorkDir: step.WorkDir, Env: step.Env, OutputSchema: teamPlanSchema})
+	if err != nil {
+		return nil, "", err
+	}
+	planOut, _, err := r.execAgent(ctx, t, plannerStep, id+":plan", id+":plan", data, shadow)
 	if err != nil {
 		return nil, "", fmt.Errorf("team plan: %w", err)
 	}
@@ -93,7 +96,10 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 		"kind": t.Kind, "step": id, "phase": "plan", "planner": spec.Planner, "subtasks": len(subtasks)})
 
 	// ---- work (parallel, gated) ---------------------------------------
-	workerGate, extraChecks := r.teamWorkerGate(spec)
+	workerGate, extraChecks, err := r.teamWorkerGate(spec)
+	if err != nil {
+		return nil, "", err
+	}
 	if workerGate == nil {
 		// No team-declared gate or critic: the operator's default gate still
 		// governs each worker's change rather than leaving it ungated (F4).
@@ -127,15 +133,19 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 				"task":    step.Prompt,
 				"subtask": map[string]any{"id": st.ID, "prompt": st.Prompt},
 			}
-			wstep := config.Step{Type: "agent", Agent: spec.Worker,
+			wstep, rerr := r.roleStep(spec.Worker, config.Step{Type: "agent", Agent: spec.Worker,
 				Prompt:   fmt.Sprintf("You are one WORKER of an agent team on this overall task:\n\n%s\n\nYOUR subtask (%s):\n\n%s\n\nWork only your subtask, in this worktree.", step.Prompt, st.ID, st.Prompt),
-				Checkout: step.Checkout, Env: step.Env, Gate: workerGate}
+				Checkout: step.Checkout, Env: step.Env, Gate: workerGate})
+			if rerr != nil {
+				results[i] = workerResult{Subtask: st, Err: rerr}
+				return
+			}
 			wctx := withTeamChecks(ctx, extraChecks)
 			// A precomputed, collision-free suffix keeps each worker's
 			// branch/worktree distinct even when subtask ids sanitize to the
 			// same (or an empty) slug (#36 §146 F6, review M10).
 			wctx = dispatch.WithBranchSuffix(wctx, branchSuffixes[i])
-			out, _, werr := r.execAgent(wctx, t, wstep, fmt.Sprintf("%s:%s", id, st.ID), local, shadow)
+			out, _, werr := r.execAgent(wctx, t, wstep, fmt.Sprintf("%s:%s", id, st.ID), fmt.Sprintf("%s:%s", id, st.ID), local, shadow)
 			results[i] = workerResult{Subtask: st, Outputs: out, Err: werr}
 		}(i, st)
 	}
@@ -187,9 +197,12 @@ separate worktrees (avoid overlapping files where possible). Output JSON:
 	if reconcilerGate == nil {
 		reconcilerGate = opGate
 	}
-	rstep := config.Step{Type: "agent", Agent: reconciler, Prompt: b.String(),
-		Checkout: step.Checkout, WorkDir: step.WorkDir, Env: step.Env, Gate: reconcilerGate}
-	recOut, raw, err := r.execAgent(ctx, t, rstep, id+":reconcile", data, shadow)
+	rstep, err := r.roleStep(reconciler, config.Step{Type: "agent", Agent: reconciler, Prompt: b.String(),
+		Checkout: step.Checkout, WorkDir: step.WorkDir, Env: step.Env, Gate: reconcilerGate})
+	if err != nil {
+		return outputs, "", err
+	}
+	recOut, raw, err := r.execAgent(ctx, t, rstep, id+":reconcile", id+":reconcile", data, shadow)
 	if err != nil {
 		return outputs, raw, fmt.Errorf("team reconcile: %w", err)
 	}
@@ -230,7 +243,7 @@ func teamBranchSuffixes(subs []teamSubtask) []string {
 // teamWorkerGate composes each worker's gate: the team's explicit checks
 // plus, when a critic is set, the implicit critic check (a §16 agent check
 // with a mandatory pass verdict) injected via the ctx check registry.
-func (r *Runner) teamWorkerGate(spec *config.TeamSpec) (*config.GateSpec, map[string]config.Step) {
+func (r *Runner) teamWorkerGate(spec *config.TeamSpec) (*config.GateSpec, map[string]config.Step, error) {
 	var run []string
 	var maxRev *int
 	if spec.Gate != nil {
@@ -239,18 +252,62 @@ func (r *Runner) teamWorkerGate(spec *config.TeamSpec) (*config.GateSpec, map[st
 	}
 	extra := map[string]config.Step{}
 	if spec.Critic != "" {
-		extra[teamCriticCheck] = config.Step{Type: "agent", Agent: spec.Critic,
+		critic, err := r.roleStep(spec.Critic, config.Step{Type: "agent", Agent: spec.Critic,
 			Prompt: "You are the CRITIC of an agent team. Review the worker's proposed change in {{.gate.workdir}} " +
 				"for its subtask:\n\n{{.team.subtask.prompt}}\n\nJudge correctness, scope discipline, and quality. " +
 				`Output JSON: {"pass": true|false, "reason": "…"}`,
 			OutputSchema: map[string]any{"type": "object", "required": []any{"pass"},
-				"properties": map[string]any{"pass": map[string]any{"type": "boolean"}}}}
+				"properties": map[string]any{"pass": map[string]any{"type": "boolean"}}}})
+		if err != nil {
+			return nil, nil, err
+		}
+		extra[teamCriticCheck] = critic
 		run = append(run, teamCriticCheck)
 	}
 	if len(run) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return &config.GateSpec{Run: run, MaxRevisions: maxRev}, extra
+	return &config.GateSpec{Run: run, MaxRevisions: maxRev}, extra, nil
+}
+
+// roleStep fills a synthesized role step in from the workflow step the team
+// references (`<workflow>/<step-id>`, or `<workflow>[<n>]` for a step with
+// no id). The fields set here win; the rest — model, workspace, skill,
+// memory, guidance — come from the referenced step.
+//
+// IDENTITY. The role takes the referenced step's identity: its `name:` if
+// it pins one, else the reference itself, which is that step's structural
+// identity written out. Either way every team pointing at the same step
+// shares one memory namespace, session pool, and track record — the point
+// of pointing at a step rather than inlining one.
+//
+// A reference that resolves to nothing is a load-time error in both
+// validateTeam and guardPlan, so reaching that here means something built a
+// team spec that went through neither. Fail rather than silently dispatch a
+// bare agent.
+func (r *Runner) roleStep(role string, s config.Step) (config.Step, error) {
+	role = strings.TrimSpace(role)
+	if r.Cfg == nil || role == "" {
+		return s, nil
+	}
+	base, err := r.Cfg.FindStepRef(role)
+	if err != nil {
+		return s, err
+	}
+	pinned := strings.TrimSpace(s.Name)
+	config.MergeStepInto(&s, *base)
+	switch {
+	case pinned != "":
+		s.Name = pinned
+	case strings.TrimSpace(base.Name) != "":
+		s.Name = base.Name
+	default:
+		s.Name = role
+	}
+	// The role runs as the team's planner/worker/critic, not in the
+	// workflow the base step sits in — its own id would be misleading.
+	s.ID = ""
+	return s, nil
 }
 
 // teamCriticCheck is the implicit critic check's registry name.

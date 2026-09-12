@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/kv"
+	"github.com/NodeSpy/conductor/internal/memory"
 )
 
 // The agent-authored resource allowlists (#124). The trigger in every case
@@ -259,7 +260,7 @@ func TestResourceAllowlistsConfigStepsUnaffected(t *testing.T) {
 	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   main: { type: boltdb }
 policy:
@@ -285,5 +286,93 @@ steps:
 	}
 	if calls := st.snapshot(); len(calls) != 1 {
 		t.Fatalf("calls: %+v", calls)
+	}
+}
+
+// ROUND-6 C. planDataGuard built its resource policy from core.Trigger{} — an
+// EMPTY trigger — so rp.trigger was "" and the dispatch's own scope was not
+// implicitly allowed on the code face. A `run: js` step touching its own
+// repo's memory scope, or its own target, was refused unless the operator had
+// listed it: the opposite of the rule the verb surfaces apply, and a refusal
+// that reads like a bug to whoever hits it.
+func TestCodeStepReachesItsOwnScopeWithNoAllowlist(t *testing.T) {
+	pol := `
+policy:
+  agent_authored:
+    allow: [ workflow, code ]
+stores:
+  main: { type: boltdb }
+workflows:
+  touch:
+    inputs: { scope: { type: string, required: true } }
+    steps:
+      - id: w
+        run: js
+        code: 'return ctx.memory.remember("note", [], ctx.inputs.scope);'
+`
+	kv.SetDataDir(t.TempDir())
+	kv.ResetStores()
+	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
+	mgr, err := memory.Build(memory.Options{Type: "memory"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory.Configure(mgr)
+	t.Cleanup(func() { memory.Configure(nil) })
+
+	// newTrigger targets o/r, so the run's own scope is repo:o/r.
+	rig, _ := resourcePlan(t, pol, `- id: c
+  workflow: touch
+  with: { scope: "repo:o/r" }`)
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("a code step must reach the dispatch's OWN memory scope with no allowlist: %s", errStr)
+	}
+
+	// …and another tenant's scope is still refused.
+	rig, _ = resourcePlan(t, pol, `- id: c
+  workflow: touch
+  with: { scope: "repo:victim/other" }`)
+	failed, errStr := rig.workflowFailed()
+	if !failed || !strings.Contains(errStr, "allow_memory_scopes") {
+		t.Fatalf("another tenant's scope must still be refused: %v %q", failed, errStr)
+	}
+}
+
+// The same for a STORE: a code step reaching the store its own dispatch
+// targets is not what allow_stores exists to stop.
+func TestCodeStepOwnTargetStoreStillNeedsListing(t *testing.T) {
+	pol := `
+policy:
+  agent_authored:
+    allow: [ workflow ]
+    allow_stores: [ main ]
+stores:
+  main: { type: boltdb }
+  other: { type: boltdb }
+workflows:
+  touch:
+    inputs: { which: { type: string, required: true } }
+    steps:
+      - id: w
+        run: js
+        code: 'return ctx.store(ctx.inputs.which).get("ns", "k");'
+`
+	kv.SetDataDir(t.TempDir())
+	kv.ResetStores()
+	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
+
+	// A store is not a per-dispatch resource — there is no "own store" — so
+	// the listed one works and an unlisted one does not, unchanged by C.
+	rig, _ := resourcePlan(t, pol, `- id: c
+  workflow: touch
+  with: { which: main }`)
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("the listed store must work: %s", errStr)
+	}
+	rig, _ = resourcePlan(t, pol, `- id: c
+  workflow: touch
+  with: { which: other }`)
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "allow_stores") {
+		t.Fatalf("an unlisted store must still be refused: %v %q", failed, errStr)
 	}
 }

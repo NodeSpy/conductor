@@ -5,7 +5,7 @@
 // section including the triggers: list; `import:` (singular) loads exactly
 // one file, only as a named-entry body or a workflow step ref.
 //
-//   - Map sections (connectors:/runtimes:/hosts:/agents:/workflows:) take an
+//   - Map sections (connectors:/runtimes:/hosts:/steps:/workflows:/models:/checks:) take an
 //     `imports:` key listing files or globs whose entries join that section,
 //     alongside inline entries. A duplicate name across files is a load
 //     error naming the key and both files — merge, never last-wins.
@@ -37,7 +37,7 @@ import (
 )
 
 // sectionMaps are the map-shaped sections that accept an `imports:` key.
-var sectionMaps = []string{"connectors", "runtimes", "hosts", "agents", "workflows"}
+var sectionMaps = []string{"connectors", "runtimes", "hosts", "steps", "workflows", "models", "checks"}
 
 // hasAnyImports reports whether the raw config document uses any import form
 // — the probe that routes Load through the merge machinery.
