@@ -92,10 +92,20 @@ func globMatch(pattern, s string) bool {
 		return true
 	}
 	parts := strings.Split(pattern, "*")
-	// No wildcard: exact match OR prefix (so `github.com/acme/repo` matches
-	// `github.com/acme/repo//sub@ref`).
+	// No wildcard: exact match OR a prefix anchored at a source delimiter, so
+	// `github.com/acme/repo` matches `github.com/acme/repo//sub@ref` (a subdir
+	// or ref of the SAME repo) but NOT `github.com/acme/repo-evil-fork` (a
+	// different, attacker-registered repo whose name merely continues the
+	// trusted one — a typosquat/name-continuation supply-chain bypass).
 	if len(parts) == 1 {
-		return s == pattern || strings.HasPrefix(s, pattern)
+		if s == pattern {
+			return true
+		}
+		if strings.HasPrefix(s, pattern) {
+			rest := s[len(pattern):]
+			return strings.HasPrefix(rest, "/") || strings.HasPrefix(rest, "@")
+		}
+		return false
 	}
 	// Anchor the first segment at the start.
 	if !strings.HasPrefix(s, parts[0]) {
