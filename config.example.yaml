@@ -615,7 +615,11 @@ models:
 #     isolation: { mode: namespace, network: { egress: ["your-org.atlassian.net:443"] } }
 
 # ---------------------------------------------------------------------------
-# steps: — NAMED, REUSABLE STEP TEMPLATES. This replaced `agents:`.
+# STEPS — where an agent's behavior lives now. This replaced `agents:`.
+#
+# There is NO top-level steps: section (see the end of this block). A step
+# lives in the workflow or trigger that runs it; config shared between steps
+# is parked under a top-level `x-` key and pulled in with `<<:` or `extends:`.
 #
 # A named agent profile was doing five different jobs. Each now has a home
 # that is not an agent (docs/design/agents-removal.md):
@@ -1116,7 +1120,7 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 # ---------------------------------------------------------------------------
 # packs: — distributable, reusable config bundles (issue #53). Each entry
 # instantiates a versioned pack, namespaced under its instance name. A pack
-# ships BEHAVIOR (workflows/agents/policy/checks/disarmed triggers) only; you
+# ships BEHAVIOR (workflows + their steps/policy/checks/disarmed triggers) only; you
 # BIND its environment (connectors/secrets/stores). Fetch + lock with
 # `conductor init`; preview with `conductor pack plan`. See docs/wiki/Packs.md.
 #
@@ -1142,21 +1146,31 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #     connectors: { github: gh }                  # BIND the pack's required github -> your connector
 #     secrets:    { review_token: house/review }  # BIND a required secret -> your vault ref
 #     policy:     { budget: { max_cost_usd: 5 } } # deep-merges onto the pack's bundled policy
-#     steps:
-#       reviewer: my-opus                         # BIND a role to one of your named steps…
-#       handoff:  { workspace: local }            # …or OVERRIDE the bundled one (deep-merge)
+#     steps:                                       # OVERRIDE a pack step, BY REFERENCE
+#       review-flow/review: { model: my-fleet }   #   <workflow>/<step-id> (deep-merge)
+#       review-flow/post:   { workspace: local }  #   …or <workflow>[<n>] for a step with no id:
 #     models:
 #       reviewer: claude-opus-5                   # OVERRIDE a bundled fleet
 #     on:                                          # its triggers, by qualified name
 #       github.pull_request: { filters: { labels_not: [wip] } }
 #     # Scope lives on the CONNECTOR, not the pack: each trigger binds to your
-#     # connector of its own source type. Two of a type -> disambiguate with
-#     # connectors: { github: work-github }; none of a type -> those triggers
-#     # go DORMANT with a load notice and the rest of the pack still runs.
+#     # connector of its own source type. You need write the binding above only
+#     # when the choice is real: exactly ONE connector of a required type is
+#     # AUTO-BOUND (matching by `use:` type, not name); TWO OR MORE is a load
+#     # error naming them; NONE leaves those triggers DORMANT with a load notice
+#     # and the rest of the pack still runs. An explicit binding always wins.
 #     triggers:
+#       "*": { enabled: true, repos: [your-org/app] }  # arm EVERY trigger the pack ships, one consent
 #       on_review_request:                         # the pack ships this DISARMED
 #         enabled: true                            # you arm it…
 #         repos:   [your-org/app]                  # required for a github trigger — the repo scope IS the consent
+#       deploy:                                    # an ARRAY arms the SAME trigger N times
+#         - { repos: [team-a/*], gate: { run: [review/no-todos] } }
+#         - { repos: [team-b/*], filters: { labels: [urgent] } }
+#       # Each array entry is one instance with its own dedup/session/outcome
+#       # state, keyed by its CONTENT — so reordering the list changes nothing,
+#       # and there is no instance id to write. Two identical entries are a
+#       # load error. Consent is per entry: each armed one needs its own repos.
 #   # Reference an exported pack workflow from your own trigger:
 #   #   triggers:
 #   #     - on: gh.pull_request
@@ -1169,5 +1183,9 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #
 # pack_trust:
 #   allow:
-#     - github.com/your-org/*
-#     - github.com/acme/conductor-packs*
+#     - your-org/*                    # host may be omitted — github.com is implied
+#     - acme/review-kit               # one specific repo
+#     - gitlab.com/team/*             # a written host is used as-is
+#   # `*` never crosses a `/`, so `your-org/*` cannot reach `your-org-evil/…`.
+#   # Prefer an exact repo or an org-scoped `org/*` over a partial name like
+#   # `conductor-packs*`, which also admits `conductor-packs2` in that org.

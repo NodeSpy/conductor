@@ -414,6 +414,24 @@ github trigger **cannot be armed at all** without explicitly scoping its repos.
 
 - **Workflows are addressable by qualified name** (`review/review-flow`) — call
   them from your own triggers or nest them in your own workflows.
+- **A pack calls only its OWN workflows.** Every workflow reference a pack
+  authors is namespaced to the pack at install, so a bare name inside a pack
+  resolves inside that pack — never against your config, and never against
+  another pack's. This holds for every spelling of a call: the step form
+  (`workflow: review-flow`), the verb form (`uses: workflow.run, options:
+  {name: review-flow}`), `workflow.save`, and any of those nested in a
+  `compensate:`, a `parallel:` branch, or a step `hooks:` entry. It holds for a
+  TEMPLATED name too — `{{ .pick }}` is namespaced before it renders, so a
+  runtime-chosen workflow still lands inside the pack.
+
+  Naming a workflow the pack does not ship is a **load error**, like an
+  undeclared connector. A DECLARED dependency counts as its own:
+  `requires.packs: {base: …}` installs at `<ns>/base`, so `base/fetch` is the
+  submodule call you read in the manifest.
+
+  This is what makes `requires.connectors` hold. Without it a pack could ship
+  `uses: workflow.run, options: {name: review-flow}` and run YOUR `review-flow`
+  — every connector inside it — while declaring none of them.
 - **Pack dependencies** (`requires.packs`) are satisfied by the same recursive
   `packs:` instance block. Behavior can be overridden at any depth; environment
   can only be **forwarded** down — the concrete binding to a real credential/repo
