@@ -7,9 +7,9 @@ integrations:
     webhook: { listen: "0.0.0.0:8792" }
     defaults: { me: { logins: [conductor-user] } }
     rules: [ { match: { repos: ["acme/*"] } } ]
+# Validates the controllers: block itself — there is no top-level steps:
+# section to reference it from (a step lives in the trigger that runs it).
 controllers:
   deflt: { type: paseo, default: true }
-steps:
-  fixer: { type: agent, name: fixer, controller: deflt }
 store: { state_file: /data/state.json, audit_log: /data/audit.jsonl }
 paseo_bin: /usr/local/bin/fakepaseo
