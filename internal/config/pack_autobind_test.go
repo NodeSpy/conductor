@@ -144,3 +144,82 @@ packs:
 		t.Fatal("the pack trigger did not instantiate")
 	}
 }
+
+// Candidates are counted by resolved TYPE, not by the raw `use:` string.
+//
+// A version pin is a spelling of the same type, so string comparison saw ONE
+// sentry connector where there are two — and silently auto-bound to it instead
+// of raising the ambiguity. Conductor would be choosing, on the operator's
+// behalf, between two connectors that may hold different credentials and point
+// at different projects.
+func TestAutoBindCountsCandidatesByTypeNotRawUse(t *testing.T) {
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/p", `
+pack:
+  name: p
+  version: "1.0.0"
+  requires: { conductor: ">=0.1", connectors: [sentry] }
+workflows:
+  flow:
+    steps: [{ id: s, type: agent, prompt: p }]
+`)
+	_, err := resolveAndLoad(t, writeDoc(t, dir, `
+connectors:
+  sentry1: { use: "sentry@^2.0" }
+  sentry2: { use: sentry }
+packs:
+  p: { source: ./src/p }
+`))
+	if err == nil {
+		t.Fatal("a pinned connector is still a connector of that type — two sentry " +
+			"connectors must be an ambiguity, not a silent bind to whichever one " +
+			"happened to be spelled without a pin")
+	}
+	for _, want := range []string{"ambiguous", "sentry1", "sentry2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error must contain %q: %v", want, err)
+		}
+	}
+}
+
+// …and a SINGLE pinned connector still auto-binds: resolving the type must not
+// have made the pin invisible in the other direction. (A BUILTIN cannot carry a
+// pin at all — `use: github@^1.0` is refused by ParseUse — so this uses a
+// plugin type, which is where pins are legal and where the bug lived.)
+func TestASolePinnedConnectorStillAutoBinds(t *testing.T) {
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/p", `
+pack:
+  name: p
+  version: "1.0.0"
+  requires: { conductor: ">=0.1", connectors: [sentry] }
+workflows:
+  flow:
+    steps: [{ id: s, type: agent, prompt: p }]
+`)
+	if _, err := resolveAndLoad(t, writeDoc(t, dir, `
+connectors:
+  gh:      { use: github, token: x }
+  sentry1: { use: "sentry@^2.0" }
+packs:
+  p: { source: ./src/p }
+`)); err != nil {
+		t.Fatalf("a sole PINNED connector of the required type must still bind: %v", err)
+	}
+}
+
+// The types themselves resolve as expected — the unit behind both cases above.
+func TestConnectorTypeStripsThePin(t *testing.T) {
+	for _, tc := range []struct{ use, want string }{
+		{"sentry", "sentry"},
+		{"sentry@^2.0", "sentry"},
+		{"github", "github"},
+		{"github.com/acme/conductor-plugins//sentry", "sentry"},
+		{"github.com/acme/conductor-plugins//sentry@v2", "sentry"},
+	} {
+		if got := connectorType(ConnectorRef{Use: tc.use}); got != tc.want {
+			t.Errorf("connectorType(%q) = %q, want %q — a pin or an explicit path is a "+
+				"SPELLING of the type, not a different type", tc.use, got, tc.want)
+		}
+	}
+}

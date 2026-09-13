@@ -270,9 +270,40 @@ func (st *packInstantiation) checkConnectorVersions(ns string, reqs ConnectorReq
 // the instance's `use:` type, not its name, so a connector called `gh` is
 // found for a pack that requires `github`.
 //
+// Candidates are counted by resolved TYPE, never by the raw `use:` string —
+// see connectorType. Comparing raw text made a pinned connector invisible, and
+// an invisible candidate is an ambiguity that never gets raised.
+//
 // This is connector PLUMBING, not consent. Trigger arming (`repos:`) stays
 // explicit — a pack that can now reach your github connector still fires on no
 // repo until you say which.
+// connectorType resolves a connector instance's TYPE through the canonical
+// `use:` parser — the same one the connector registry uses — rather than
+// reading the raw string.
+//
+// The raw string is not the type. `use: sentry@^2.0`, `use: sentry`, and
+// `use: github.com/acme/conductor-plugins//sentry` are three spellings of one
+// type, and a version pin or an explicit path must not hide a same-type
+// connector from the ambiguity check:
+//
+//	connectors: {sentry1: {use: "sentry@^2.0"}, sentry2: {use: sentry}}
+//
+// counted ONE candidate under string comparison, so a pack requiring `sentry`
+// was silently auto-bound to sentry2 instead of being told the choice was
+// ambiguous — conductor picking, for the operator, between two connectors
+// that may hold different credentials and point at different projects.
+//
+// A `use:` that will not parse resolves to no type and matches nothing; the
+// load fails on it in connector validation, with a better message than this
+// function could give.
+func connectorType(ref ConnectorRef) string {
+	u, err := ref.Resolved()
+	if err != nil {
+		return ""
+	}
+	return u.Name
+}
+
 func (st *packInstantiation) autoBindConnectors(ns string, reqs ConnectorReqs, env envBindings) error {
 	for _, name := range reqs.Names() {
 		if _, already := env.conn[name]; already {
@@ -283,7 +314,7 @@ func (st *packInstantiation) autoBindConnectors(ns string, reqs ConnectorReqs, e
 		}
 		var candidates []string
 		for instName, ref := range st.cfg.ConnectorsMap {
-			if strings.TrimSpace(ref.Use) == name {
+			if connectorType(ref) == name {
 				candidates = append(candidates, instName)
 			}
 		}
