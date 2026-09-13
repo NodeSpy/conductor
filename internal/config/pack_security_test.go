@@ -274,8 +274,8 @@ func TestPackTrustAllowlist(t *testing.T) {
 		"github.com/your-org/kit//review@v1",
 		"git::github.com/your-org/anything",
 		"github.com/acme/packs//x",
-		"./local/path",       // local always allowed
-		"git::file:///tmp/r", // local file transport not in the remote set
+		"./local/path",     // local always allowed
+		"file:///abs/pack", // file:// without git:: is an absolute local path
 	}
 	for _, s := range allow {
 		if !tr.SourceAllowed(s) {
@@ -286,6 +286,10 @@ func TestPackTrustAllowlist(t *testing.T) {
 		"github.com/evil/kit",
 		"https://gitlab.com/x/y",
 		"git@github.com:someone/else",
+		// `git::file://` CLONES a repo on disk — it is a fetch, and a hostile
+		// parent pack picks the path, so it is governed like any other fetch.
+		// (Plain `file://` above stays exempt: that one is read as a directory.)
+		"git::file:///tmp/r",
 	}
 	for _, s := range deny {
 		if tr.SourceAllowed(s) {

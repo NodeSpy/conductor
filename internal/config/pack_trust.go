@@ -25,10 +25,13 @@ func (t *PackTrustConfig) SourceAllowed(source string) bool {
 	if t == nil {
 		return true
 	}
-	s := strings.TrimPrefix(strings.TrimSpace(source), "git::")
 	// Local sources are the operator's own disk (and nested locals are confined
-	// to the config dir elsewhere), so the allowlist governs remote sources only.
-	if !isRemoteTrustRef(s) {
+	// to the config dir elsewhere), so the allowlist governs remote sources
+	// only — and "remote" is whatever the RESOLVER would fetch, asked of the
+	// resolver's own classifier rather than re-derived here. See
+	// RemoteSourceRef: the two used to disagree, and the gap was a bypass.
+	s, remote := RemoteSourceRef(source)
+	if !remote {
 		return true
 	}
 	// The OFFICIAL pack repo is in the default allowlist, mirroring
@@ -44,35 +47,6 @@ func (t *PackTrustConfig) SourceAllowed(source string) bool {
 		}
 	}
 	return false
-}
-
-// isRemoteTrustRef reports whether a source is REMOTE, and so governed by the
-// allowlist at all.
-//
-// This used to test a fixed prefix list — github.com/, git@, and the four
-// schemes — which meant a source on any OTHER forge fell through to "local"
-// and skipped the allowlist entirely:
-//
-//	pack_trust: {allow: [github.com/acme/*]}
-//	packs: {x: {source: gitlab.com/evil/pack}}   # was allowed
-//
-// `use:` resolves that source perfectly well (a first segment with a dot is a
-// host), so it was reachable, and being unlisted made it MORE permitted rather
-// than less. Host detection now uses the same rule as the resolver, so every
-// forge is governed and a local path stays exempt.
-func isRemoteTrustRef(s string) bool {
-	for _, p := range []string{"./", "../", "/", "~"} {
-		if strings.HasPrefix(s, p) {
-			return false // the operator's own disk
-		}
-	}
-	for _, p := range []string{"git@", "ssh://", "https://", "http://", "git://"} {
-		if strings.HasPrefix(s, p) {
-			return true
-		}
-	}
-	first, _, _ := strings.Cut(s, "/")
-	return namesAHost(first)
 }
 
 // trustMatch is the one comparison both allowlists make: canonicalize the
@@ -101,9 +75,14 @@ func trustMatch(pattern, source string) bool {
 // always allowed, a third-party repo needs an explicit `plugin_trust.allow`
 // entry (or `--allow-unlisted`), and a local path is the operator's own disk.
 func (t *PackTrustConfig) PluginSourceAllowed(source string) bool {
-	s := strings.TrimSpace(source)
-	if s == "" {
+	if strings.TrimSpace(source) == "" {
 		return true // local binary: the operator's own disk
+	}
+	// Same classifier as the pack surface and the resolver. A local path is
+	// the operator's own disk; anything fetchable needs listing.
+	s, remote := RemoteSourceRef(source)
+	if !remote {
+		return true
 	}
 	// The official plugin and pack repos are trusted by default: naming an
 	// official component needs no ceremony, a third-party source still does.
@@ -189,8 +168,13 @@ func sourceRepoPath(s string) string {
 	if i := strings.Index(s, "//"); i >= 0 {
 		s = s[:i]
 	}
-	if i := strings.Index(s, "@"); i >= 0 {
-		s = s[:i]
+	// Peel a trailing `@ref` by the SAME rule parseSource peels it: only when
+	// the tail carries no path separator. An scp-form source
+	// (`user@host:org/repo`) has an `@` near the front that is a USER
+	// separator, not a ref — cutting there left "user", which no pattern an
+	// operator could write would ever match, so an scp source was unlistable.
+	if at := strings.LastIndex(s, "@"); at >= 0 && !strings.ContainsAny(s[at+1:], "/:") {
+		s = s[:at]
 	}
 	return s
 }

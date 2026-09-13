@@ -70,17 +70,10 @@ func parseSource(src, baseDir string) (sourceSpec, error) {
 	if s == "" {
 		return sourceSpec{}, fmt.Errorf("empty pack source")
 	}
-	forceGit := false
-	if rest, ok := strings.CutPrefix(s, "git::"); ok {
-		forceGit = true
+	rest, isGit := RemoteSourceRef(s)
+	if isGit {
 		s = rest
 	}
-	isGit := forceGit ||
-		strings.HasPrefix(s, "github.com/") ||
-		strings.HasPrefix(s, "git@") ||
-		strings.HasPrefix(s, "ssh://") ||
-		strings.HasPrefix(s, "https://") ||
-		strings.HasPrefix(s, "http://")
 	if !isGit {
 		// Local path source.
 		p := strings.TrimPrefix(s, "file://")
@@ -131,6 +124,52 @@ func parseSource(src, baseDir string) (sourceSpec, error) {
 		return sourceSpec{}, fmt.Errorf("pack source %q: unsupported git transport — use https://, ssh://, file://, or git@host:path (plaintext http:// and git:// are refused — an unauthenticated fetch can't be safely sha-pinned)", src)
 	}
 	return spec, nil
+}
+
+// RemoteSourceRef is THE classifier for "would conductor FETCH this source,
+// and what reference does that fetch name" — used by the resolver to decide
+// whether to clone, and by the pack_trust/plugin_trust allowlists to decide
+// whether the source needs permission. ONE function, two callers, so the two
+// answers cannot disagree.
+//
+// They did disagree, and it was a bypass. The trust check used to strip
+// `git::` and re-classify with its own prefix list; the resolver FORCE-GITS
+// anything prefixed `git::` and its transport allowlist accepts any scp-form
+// `user@host:path`. So:
+//
+//	git::attacker@shorthost:org/evil-payload
+//
+// was "not remote → allowlist skipped → allowed" by trust, and a cloneable
+// SSH URL to the resolver. A hostile pack's requires.packs.<alias>.source rode
+// straight past pack_trust.
+//
+// FAIL CLOSED. Only a source that is UNAMBIGUOUSLY a local path is exempt:
+//
+//	./x  ../x  /abs/x  ~/x  file:///abs/x
+//
+// Everything else is remote — the known schemes and shorthands, the scp form,
+// and any shape this function does not recognize. An unrecognized remote must
+// end up MORE restricted, never less, so "I don't know what this is" resolves
+// to "it needs to be on the allowlist" rather than "let it through".
+//
+// `file://` without `git::` is an absolute local path (the resolver strips the
+// prefix and reads the directory); `git::file://` is a real clone of a repo on
+// disk, so it is remote and needs listing like any other fetch.
+func RemoteSourceRef(src string) (ref string, remote bool) {
+	s := strings.TrimSpace(src)
+	if s == "" {
+		return "", false
+	}
+	// Force-git wins over everything, exactly as the resolver applies it.
+	if rest, ok := strings.CutPrefix(s, "git::"); ok {
+		return strings.TrimSpace(rest), true
+	}
+	for _, p := range []string{"./", "../", "/", "~", "file://"} {
+		if strings.HasPrefix(s, p) {
+			return "", false
+		}
+	}
+	return s, true
 }
 
 // safeGitTransport reports whether a git URL uses an allowed transport. Only

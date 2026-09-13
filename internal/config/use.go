@@ -145,6 +145,13 @@ func CanonicalRemoteRef(ref string) string {
 		}
 	}
 	first, _, _ := strings.Cut(s, "/")
+	// An scp-form ref (`user@host:path`) names its own host in a shape that has
+	// no leading scheme and no dot requirement. Prepending a default host would
+	// mangle it into something no source could ever equal — which would leave
+	// an operator unable to write an allowlist entry for an scp source at all.
+	if strings.Contains(first, "@") && strings.Contains(first, ":") {
+		return s
+	}
 	// A leading bare wildcard is host-AGNOSTIC on purpose: `*` in a trust
 	// allowlist means "anywhere", and defaulting it to github.com would
 	// silently narrow a pattern the operator wrote to mean everything.
