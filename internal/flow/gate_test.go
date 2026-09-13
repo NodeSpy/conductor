@@ -417,7 +417,7 @@ func TestAgentAuthoredStepsCannotCarryTheirOwnGate(t *testing.T) {
 	cfg := loadConfig(t, gateCfg+`
 policy:
   agent_authored:
-    allow: [ agent, team, svc.post ]
+    verbs: [ agent, team, svc.post ]
 `)
 	reg := buildRegistry(t, cfg)
 	pol := cfg.Policy.AgentAuthored
@@ -453,7 +453,7 @@ func TestAgentAuthoredStepsCannotBackgroundOrHandoff(t *testing.T) {
 	cfg := loadConfig(t, gateCfg+`
 policy:
   agent_authored:
-    allow: [ agent, team, svc.post ]
+    verbs: [ agent, team, svc.post ]
 `)
 	reg := buildRegistry(t, cfg)
 	pol := cfg.Policy.AgentAuthored
@@ -496,7 +496,7 @@ checks:
   verdict: { uses: svc.post, options: { text: "check" } }
 policy:
   agent_authored:
-    allow: [ agent, svc.post ]
+    verbs: [ agent, svc.post ]
 `)
 	reg := buildRegistry(t, cfg)
 	fake := newFakeState(t, "svc")

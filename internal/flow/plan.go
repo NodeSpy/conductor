@@ -472,9 +472,11 @@ func (r *Runner) containsTrackedSecret(v map[string]any) bool {
 // for tracked secret material — without it, an agent plan's code step could
 // park secret material that `uses: kv.set` would have refused. The resource
 // allowlist (#124, active for ALL agent-authored execution unless trust:
-// full) vets every kv/sql touch against policy.agent_authored.allow_stores —
+// full) vets every kv/sql touch against the `code:` entry's store: list —
 // the runtime belt behind the static plan scan, catching `ctx.store(name)`
-// with a name no scan could see. nil for config-authored steps.
+// with a name no scan could see. A code step names no verb, so its reach
+// comes from the step class it IS: `verbs: {code: {store: […], scope: […]}}`.
+// nil for config-authored steps.
 func (r *Runner) planDataGuard(ctx context.Context, t core.Trigger) code.DataGuard {
 	barrier := planBarrier(ctx)
 	var rp *resourcePolicy
@@ -492,19 +494,19 @@ func (r *Runner) planDataGuard(ctx context.Context, t core.Trigger) code.DataGua
 	}
 	return func(kind, op, resource string, args []any) error {
 		if rp != nil && (kind == "kv" || kind == "sql") && !rp.storeOK(resource) {
-			return fmt.Errorf("agent_authored allowlist: code step touches store %q — not in policy.agent_authored.allow_stores (trust: full lifts this)", resource)
+			return fmt.Errorf("agent_authored allowlist: code step touches store %q — not in policy.agent_authored.verbs.code.store (trust: full lifts this)", resource)
 		}
 		// Memory is a shared resource like a store, and gets the same
 		// deny-by-default treatment: an agent-authored step reads, writes
-		// and forgets in its own scope plus whatever allow_memory_scopes
-		// grants. `resource` is the scope the op touches — for forget, the
-		// stored entry's own scope, so ownership rides the same check.
+		// and forgets in its own scope plus whatever `verbs: {code: {scope:
+		// […]}}` grants. `resource` is the scope the op touches — for forget,
+		// the stored entry's own scope, so ownership rides the same check.
 		if rp != nil && kind == "memory" && !rp.memoryScopeOK(resource) {
 			named := resource
 			if named == "" {
 				named = "(none named)"
 			}
-			return fmt.Errorf("agent_authored allowlist: code step %ss memory scope %s — not in policy.agent_authored.allow_memory_scopes, and not this run's own scope (trust: full lifts this)", op, named)
+			return fmt.Errorf("agent_authored allowlist: code step %ss memory scope %s — not in policy.agent_authored.verbs.code.scope, and not this run's own scope (trust: full lifts this)", op, named)
 		}
 		if barrier && dataValueWrite(kind, op) && r.containsTrackedSecret(map[string]any{"args": args}) {
 			return fmt.Errorf("no_secret_egress: refusing to write secret material into %s.%s from an agent plan code step — approval required", kind, op)

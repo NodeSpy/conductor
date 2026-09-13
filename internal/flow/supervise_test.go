@@ -52,7 +52,7 @@ func TestSuperviseReviseSpliceResume(t *testing.T) {
 	rr := newReviseRig(t, `
 policy:
   agent_authored:
-    allow: [ svc.* ]
+    verbs: [ svc.* ]
 `, plan, []string{revision})
 	runTrigger(rr.testRig, newTrigger("ping", nil), mustSpec(t, planSpec))
 	if failed, errStr := rr.workflowFailed(); failed {
@@ -108,7 +108,7 @@ func TestSuperviseRevisionCapEscalates(t *testing.T) {
 	rr := newReviseRig(t, `
 policy:
   agent_authored:
-    allow: [ svc.* ]
+    verbs: [ svc.* ]
     max_revisions: 2
 `, plan, []string{stillBroken, stillBroken, stillBroken, stillBroken})
 	runTrigger(rr.testRig, newTrigger("ping", nil), mustSpec(t, planSpec))
@@ -146,7 +146,7 @@ func TestSuperviseNoSessionEscalatesDirectly(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.* ]
+    verbs: [ svc.* ]
 `)
 	rig, _ := dispatchPlan(t, cfg, "```plan\n- id: boom\n  uses: svc.fail\n  options: {}\n```")
 	if failed, _ := rig.workflowFailed(); !failed {
@@ -162,7 +162,7 @@ func TestSuperviseRevisionReguarded(t *testing.T) {
 	rr := newReviseRig(t, `
 policy:
   agent_authored:
-    allow: [ svc.post, svc.fail ]
+    verbs: [ svc.post, svc.fail ]
     max_revisions: 1
 `, plan, []string{sneaky})
 	runTrigger(rr.testRig, newTrigger("ping", nil), mustSpec(t, planSpec))
@@ -191,7 +191,7 @@ func TestSuperviseCheckIn(t *testing.T) {
 	rr := newReviseRig(t, `
 policy:
   agent_authored:
-    allow: [ svc.post ]
+    verbs: [ svc.post ]
 `, plan, []string{newTail})
 	runTrigger(rr.testRig, newTrigger("ping", nil), mustSpec(t, planSpec))
 	if failed, errStr := rr.workflowFailed(); failed {
@@ -219,7 +219,7 @@ func TestSuperviseCheckInContinuesWithoutPlan(t *testing.T) {
 	rr := newReviseRig(t, `
 policy:
   agent_authored:
-    allow: [ svc.post ]
+    verbs: [ svc.post ]
 `, plan, []string{"looks good, carry on"})
 	runTrigger(rr.testRig, newTrigger("ping", nil), mustSpec(t, planSpec))
 	if failed, errStr := rr.workflowFailed(); failed {
@@ -239,7 +239,7 @@ func TestSuperviseBadEscalateTo(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.post ]
+    verbs: [ svc.post ]
 `)
 	rig, _ := dispatchPlan(t, cfg, "```plan\n- id: s\n  escalate_to: human\n  uses: svc.post\n  options: { text: t }\n```")
 	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "escalate_to") {
@@ -258,7 +258,7 @@ func TestSuperviseApprovedPlanRevises(t *testing.T) {
 	pol := `
 policy:
   agent_authored:
-    allow: [ svc.post, svc.fail ]
+    verbs: [ svc.post, svc.fail ]
     approve: [ svc.ask, svc.slow ]
     approve_via: svc
 `

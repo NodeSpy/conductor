@@ -26,9 +26,9 @@ connectors:
   svc: { use: fake }
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_scopes:
-      repo: ["listed/repo"]
+    verbs:
+      "**": {repo: ["listed/repo"]}
+      code: {repo: ["listed/repo"]}
 `)
 	pol := r.planPolicy()
 
@@ -119,7 +119,7 @@ memory:
   type: memory
 policy:
   agent_authored:
-    allow: ["**"]
+    verbs: ["**"]
 `)
 	installTestMemory(t, cfg)
 	// No DryRun here: the memory verb has to actually reach CheckOp, and the
@@ -131,7 +131,7 @@ policy:
 	}
 	_, err := r.RunSkillVerb(context.Background(), id, "memory.remember",
 		map[string]any{"text": "x", "scope": "repo:victim/secrets"})
-	if err == nil || !strings.Contains(err.Error(), "allow_memory_scopes") {
+	if err == nil || !strings.Contains(err.Error(), ".scope") {
 		t.Fatalf("a forged target must not own a memory scope, got %v", err)
 	}
 	// The same dispatch with a platform-assigned target owns its scope, so
@@ -163,7 +163,7 @@ connectors:
   svc: { use: fake }
 policy:
   agent_authored:
-    allow: ["**"]
+    verbs: ["**"]
 `)
 			rig := newTestRunner(t, cfg, buildRegistry(t, cfg))
 			src := memory.Source{Step: "probe", Trigger: "delivery",
@@ -171,7 +171,7 @@ policy:
 			_, err := rig.Runner.RunLiveStep(context.Background(), src, 7, map[string]any{
 				"uses": "svc.post", "options": map[string]any{"repo": "victim/secrets", "text": "x"},
 			})
-			refused := err != nil && strings.Contains(err.Error(), "allow_scopes.repo")
+			refused := err != nil && strings.Contains(err.Error(), ".repo")
 			if refused == tc.trusted {
 				t.Fatalf("run_step under %s: refused=%v (err=%v)", tc.name, refused, err)
 			}
@@ -233,7 +233,7 @@ connectors:
   svc: { use: fake }
 policy:
   agent_authored:
-    allow: ["**"]
+    verbs: ["**"]
 `)
 	rig := newTestRunner(t, cfg, buildRegistry(t, cfg))
 	var seen []string

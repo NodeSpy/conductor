@@ -298,7 +298,7 @@ func TestTeamGuardedInPlans(t *testing.T) {
 	cfg := loadConfig(t, teamCfg+`
 policy:
   agent_authored:
-    allow: [ team, agent ]
+    verbs: [ team, agent ]
     limits: { max_sub_agents: 5 }
 `)
 	steps := []config.Step{{ID: "t", Prompt: "go", Team: &config.TeamSpec{
@@ -321,11 +321,11 @@ policy:
 	cfg2 := loadConfig(t, teamCfg+`
 policy:
   agent_authored:
-    allow: [ agent ]
+    verbs: [ agent ]
 `)
 	steps[0].Team.MaxWorkers = 2
 	if _, err := guardPlan(cfg2, buildRegistry(t, cfg2), cfg2.Policy.AgentAuthored, steps); err == nil ||
-		!strings.Contains(err.Error(), `"team" is not in policy.agent_authored.allow`) {
+		!strings.Contains(err.Error(), `"team" is not in policy.agent_authored.verbs`) {
 		t.Fatalf("disallowed team: %v", err)
 	}
 }
@@ -435,7 +435,7 @@ checks:
   verdict: { uses: svc.post, options: { text: "check" } }
 policy:
   agent_authored:
-    allow: [ team, agent ]
+    verbs: [ team, agent ]
     limits: { max_sub_agents: 5 }
 `)
 	reg := buildRegistry(t, cfg)

@@ -44,7 +44,7 @@ packs:
     source: ./src/greedy
 `)
 	_, err := resolveAndLoad(t, path)
-	if err == nil || !strings.Contains(err.Error(), "allow_secrets") {
+	if err == nil || !strings.Contains(err.Error(), ".secret") {
 		t.Fatalf("a pack allow_secrets outside requires.secrets must be rejected, got: %v", err)
 	}
 }
@@ -315,7 +315,7 @@ workflows:
 	body := `
 connectors: { gh: { use: github } }
 pack_trust:
-  allow: [github.com/trusted/*]
+  verbs: [github.com/trusted/*]
 packs:
   kit:
     source: ./src/kit

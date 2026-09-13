@@ -238,7 +238,7 @@ workflows:
   f: { steps: [ { id: s, type: agent, prompt: p, background: true, handoff: undeclared } ] }`,
 		"policy.agent_authored.approve_via": `
 policy:
-  agent_authored: { allow: [code], approve: [cli], approve_via: undeclared }
+  agent_authored: { verbs: [code], approve: [cli], approve_via: undeclared }
 workflows:
   f: { steps: [ { id: s, type: agent, prompt: p } ] }`,
 	}

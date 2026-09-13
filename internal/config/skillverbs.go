@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -57,7 +56,7 @@ func (p *SkillPolicy) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	*p = SkillPolicy(q)
-	pats, scopes, err := decodeVerbGrant(verbs)
+	pats, scopes, err := decodeVerbGrant("skill.verbs", verbs)
 	if err != nil {
 		return err
 	}
@@ -66,7 +65,7 @@ func (p *SkillPolicy) UnmarshalYAML(n *yaml.Node) error {
 }
 
 // decodeVerbGrant reads the list or map form into (patterns, per-verb scopes).
-func decodeVerbGrant(n *yaml.Node) ([]string, map[string]map[string][]string, error) {
+func decodeVerbGrant(where string, n *yaml.Node) ([]string, map[string]map[string][]string, error) {
 	if n == nil || (n.Kind == yaml.ScalarNode && n.Tag == "!!null") {
 		return nil, nil, nil
 	}
@@ -74,11 +73,11 @@ func decodeVerbGrant(n *yaml.Node) ([]string, map[string]map[string][]string, er
 	case yaml.SequenceNode:
 		var pats []string
 		if err := n.Decode(&pats); err != nil {
-			return nil, nil, fmt.Errorf("skill.verbs: list form takes verb patterns (e.g. [gh.comment, kv.*]): %w", err)
+			return nil, nil, fmt.Errorf("%s: list form takes verb patterns (e.g. [gh.comment, kv.*]): %w", where, err)
 		}
 		for _, p := range pats {
 			if strings.TrimSpace(p) == "" {
-				return nil, nil, fmt.Errorf("skill.verbs: empty verb pattern")
+				return nil, nil, fmt.Errorf("%s: empty verb pattern", where)
 			}
 		}
 		return pats, nil, nil
@@ -88,12 +87,12 @@ func decodeVerbGrant(n *yaml.Node) ([]string, map[string]map[string][]string, er
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			pat := strings.TrimSpace(n.Content[i].Value)
 			if pat == "" {
-				return nil, nil, fmt.Errorf("skill.verbs: empty verb pattern")
+				return nil, nil, fmt.Errorf("%s: empty verb pattern", where)
 			}
 			if _, dup := scopes[pat]; dup {
-				return nil, nil, fmt.Errorf("skill.verbs: duplicate verb %q", pat)
+				return nil, nil, fmt.Errorf("%s: duplicate verb %q", where, pat)
 			}
-			cons, err := decodeVerbConstraints(pat, n.Content[i+1])
+			cons, err := decodeVerbConstraints(where, pat, n.Content[i+1])
 			if err != nil {
 				return nil, nil, err
 			}
@@ -102,26 +101,26 @@ func decodeVerbGrant(n *yaml.Node) ([]string, map[string]map[string][]string, er
 		}
 		return pats, scopes, nil
 	}
-	return nil, nil, fmt.Errorf("skill.verbs: want a list of verb patterns or a map of verb -> {option: [values]}, got a %s", nodeKindName(n))
+	return nil, nil, fmt.Errorf("%s: want a list of verb patterns or a map of verb -> {option: [values]}, got a %s", where, nodeKindName(n))
 }
 
 // decodeVerbConstraints reads one map entry's per-option allowlists. An empty
 // or null value is a grant with no widening — the common `verb: {}` case.
-func decodeVerbConstraints(pat string, v *yaml.Node) (map[string][]string, error) {
+func decodeVerbConstraints(where, pat string, v *yaml.Node) (map[string][]string, error) {
 	if v == nil || (v.Kind == yaml.ScalarNode && v.Tag == "!!null") {
 		return map[string][]string{}, nil
 	}
 	if v.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("skill.verbs.%s: want {option: [allowed values]} (or {} for access only), got a %s", pat, nodeKindName(v))
+		return nil, fmt.Errorf("%s.%s: want {option: [allowed values]} (or {} for access only), got a %s", where, pat, nodeKindName(v))
 	}
 	out := make(map[string][]string, len(v.Content)/2)
 	for i := 0; i+1 < len(v.Content); i += 2 {
 		opt := strings.TrimSpace(v.Content[i].Value)
 		if opt == "" {
-			return nil, fmt.Errorf("skill.verbs.%s: empty option name", pat)
+			return nil, fmt.Errorf("%s.%s: empty option name", where, pat)
 		}
 		if _, dup := out[opt]; dup {
-			return nil, fmt.Errorf("skill.verbs.%s: duplicate option %q", pat, opt)
+			return nil, fmt.Errorf("%s.%s: duplicate option %q", where, pat, opt)
 		}
 		var vals []string
 		val := v.Content[i+1]
@@ -130,19 +129,19 @@ func decodeVerbConstraints(pat string, v *yaml.Node) (map[string][]string, error
 			// A bare value is the one-element list — `channel: "#ops"`.
 			var one string
 			if err := val.Decode(&one); err != nil {
-				return nil, fmt.Errorf("skill.verbs.%s.%s: want a value or a list of values: %w", pat, opt, err)
+				return nil, fmt.Errorf("%s.%s.%s: want a value or a list of values: %w", where, pat, opt, err)
 			}
 			vals = []string{one}
 		case yaml.SequenceNode:
 			if err := val.Decode(&vals); err != nil {
-				return nil, fmt.Errorf("skill.verbs.%s.%s: want a list of allowed values: %w", pat, opt, err)
+				return nil, fmt.Errorf("%s.%s.%s: want a list of allowed values: %w", where, pat, opt, err)
 			}
 		default:
-			return nil, fmt.Errorf("skill.verbs.%s.%s: want a value or a list of values, got a %s", pat, opt, nodeKindName(val))
+			return nil, fmt.Errorf("%s.%s.%s: want a value or a list of values, got a %s", where, pat, opt, nodeKindName(val))
 		}
 		for _, s := range vals {
 			if strings.TrimSpace(s) == "" {
-				return nil, fmt.Errorf("skill.verbs.%s.%s: empty value", pat, opt)
+				return nil, fmt.Errorf("%s.%s.%s: empty value", where, pat, opt)
 			}
 		}
 		out[opt] = vals
@@ -208,25 +207,8 @@ func pruneVerbScopes(scopes map[string]map[string][]string, keep []string) map[s
 // therefore constrains kv.get and kv.set alike, and a verb named twice (by a
 // pattern and by its own name) gets the union — listing only ever widens.
 func (p *SkillPolicy) ScopesFor(uses string, match func(pattern, uses string) bool) map[string][]string {
-	if p == nil || len(p.VerbScopes) == 0 {
+	if p == nil {
 		return nil
 	}
-	pats := make([]string, 0, len(p.VerbScopes))
-	for pat := range p.VerbScopes {
-		pats = append(pats, pat)
-	}
-	sort.Strings(pats) // deterministic merge order
-	var out map[string][]string
-	for _, pat := range pats {
-		if !match(pat, uses) {
-			continue
-		}
-		for opt, vals := range p.VerbScopes[pat] {
-			if out == nil {
-				out = map[string][]string{}
-			}
-			out[opt] = append(out[opt], vals...)
-		}
-	}
-	return out
+	return scopesFor(p.VerbScopes, uses, match)
 }

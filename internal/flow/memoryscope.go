@@ -9,7 +9,7 @@ import (
 
 // MEMORY SCOPE, on every agent-facing face (round-5 #1).
 //
-// `policy.agent_authored.allow_memory_scopes` was enforced in exactly one
+// The agent-facing memory scope allowlist was enforced in exactly one
 // place: the `run: code` binding's DataGuard. The memory VERBS — reachable
 // from `skill.verbs: [mem.*]` and from an agent-authored `uses: memory.*`
 // step — went through memory.CheckOp, which layers the unconditional
@@ -47,9 +47,10 @@ import (
 //	                       F3), and memory is no exception. An agent-authored
 //	                       PLAN cannot run without a policy block at all, so
 //	                       this case is really about the skill surface.
-//	otherwise            → own scope ∪ allow_memory_scopes, deny by default,
-//	                       and an UNSCOPED op refused (a recall naming no
-//	                       scope would read every tenant's entries).
+//	otherwise            → own scope ∪ the `scope:` entries of whichever
+//	                       `verbs:` patterns admit this memory verb, deny by
+//	                       default, and an UNSCOPED op refused (a recall
+//	                       naming no scope would read every tenant's entries).
 //
 // The reserved `global` bucket is refused before this runs and no allowlist
 // can open it (memory.CheckAgentScope).
@@ -61,11 +62,14 @@ func MemoryScopeGuard(cfg *config.Config) memory.ScopeGuard {
 	if pol.TrustFull() {
 		return func(memory.Caller, string, string) error { return nil }
 	}
-	var allow []string
-	if pol != nil {
-		allow = pol.AllowMemoryScopes
-	}
 	return func(c memory.Caller, op, scope string) error {
+		// The guard is per-OP, and a memory op IS a memory verb
+		// (remember|recall|list|forget — memory.ScopeGuard's contract), so
+		// the allowlist resolves per-verb like every other call rather than
+		// unioning the whole memory namespace. `memory.*: {scope: […]}`
+		// covers them all; `memory.forget: {scope: […]}` covers just that
+		// one, and means it.
+		allow := policyScopesFor(pol, "memory."+op)[config.DimScope]
 		// The caller's own repo is what makes its own scope implicitly
 		// allowed; everything else comes from the operator's list.
 		// c.OwnRepo() is already filtered through core.OwnRepo by whoever
@@ -79,6 +83,6 @@ func MemoryScopeGuard(cfg *config.Config) memory.ScopeGuard {
 		if named == "" {
 			named = "(none named)"
 		}
-		return fmt.Errorf("agent_authored allowlist: %s memory scope %s — not in policy.agent_authored.allow_memory_scopes, and not this dispatch's own scope (trust: full lifts this)", op, named)
+		return fmt.Errorf("agent_authored allowlist: %s memory scope %s — not in policy.agent_authored.verbs.\"memory.%s\".scope, and not this dispatch's own scope (trust: full lifts this)", op, named, op)
 	}
 }

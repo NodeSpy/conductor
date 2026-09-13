@@ -106,11 +106,11 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 					res.needsApproval = true
 					res.approvalWhy = append(res.approvalWhy, fmt.Sprintf("%s: %q is approve-gated", w, class))
 					res.approvalClasses[class] = true
-				case matchAny(pol.Allow, class):
+				case matchAny(pol.Verbs, class):
 					// admitted freely
 				default:
-					return fmt.Errorf("%s: %q is not in policy.agent_authored.allow (allowed: %s)",
-						w, class, patternList(pol.Allow, pol.Approve))
+					return fmt.Errorf("%s: %q is not in policy.agent_authored.verbs (allowed: %s)",
+						w, class, patternList(pol.Verbs, pol.Approve))
 				}
 				// Agent code/cli never runs on the main box: force the
 				// sandbox host, or reject when none is configured.
@@ -167,11 +167,11 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 						res.needsApproval = true
 						res.approvalWhy = append(res.approvalWhy, fmt.Sprintf("%s: %q is approve-gated", hw, h.Uses))
 						res.approvalClasses[h.Uses] = true
-					case matchAny(pol.Allow, h.Uses):
+					case matchAny(pol.Verbs, h.Uses):
 						// admitted freely
 					default:
-						return fmt.Errorf("%s: %q is not in policy.agent_authored.allow (allowed: %s)",
-							hw, h.Uses, patternList(pol.Allow, pol.Approve))
+						return fmt.Errorf("%s: %q is not in policy.agent_authored.verbs (allowed: %s)",
+							hw, h.Uses, patternList(pol.Verbs, pol.Approve))
 					}
 				}
 				if pol.Identity != "" {

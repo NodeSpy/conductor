@@ -1,6 +1,6 @@
 # Trust and isolation — what conductor's scoping is, and what it isn't
 
-Conductor has a lot of scoping: [[Policy|`allow_scopes`]], `allow_memory_scopes`,
+Conductor has a lot of scoping: [[Policy|`policy.agent_authored.verbs`]],
 per-verb [[Agent-Skill|skill grants]], session confinement, the pack
 [[Packs|`requires.connectors`]] boundary. It is worth being exact about which
 of those are **walls** and which are **seatbelts**, because the answer differs
@@ -51,7 +51,7 @@ does not name. `conductor.*` (daemon control) is refused outright.
 By default a dispatched agent runs as the same OS user as the daemon. For the
 `paseo` runtime this is not a default, it is mandatory. When that is true,
 conductor's agent-facing scoping — memory scopes, session confinement,
-`allow_scopes`, skill grants — is **defense in depth, not a security
+`policy.agent_authored.verbs`, skill grants — is **defense in depth, not a security
 boundary**.
 
 A process running as your user can, regardless of anything conductor checks:
@@ -100,7 +100,7 @@ Read the manifest before installing, the same way you would read a pack's.
 
 ## Practical guidance
 
-- Treat `allow_scopes`/`allow_memory_scopes` as **damage control and
+- Treat the `policy.agent_authored.verbs` scopes as **damage control and
   intent**, not as containment of a hostile agent.
 - Put an agent you do not fully trust on an isolated runtime, or on a
   different machine ([[Hosts]]).
@@ -113,7 +113,7 @@ Read the manifest before installing, the same way you would read a pack's.
 ## See also
 
 - [[Isolation]] — the per-runtime isolation conductor can enforce
-- [[Policy]] — `policy.agent_authored`, `allow_scopes`, `allow_memory_scopes`
+- [[Policy]] — `policy.agent_authored`, its `verbs:` map and per-verb scopes
 - [[Agent-Skill]] — per-verb grants and what the skill surface hands an agent
 - [[Packs]] — the pack capability manifest
 - [[Secrets]] — the broker, and why acting *through* conductor beats holding a

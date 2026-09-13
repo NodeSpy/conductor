@@ -50,9 +50,9 @@ connectors:
   svc: { use: fake }
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_scopes:
-      repo: ["{{.owner}}/docs"]
+    verbs:
+      "**": {repo: ["{{.owner}}/docs"]}
+      code: {repo: ["{{.owner}}/docs"]}
 `)
 	trig := core.Trigger{Kind: "ping", TargetTrusted: true, Target: core.Target{Repo: "acme/app", Owner: "acme"}}
 	pol := r.planPolicy()

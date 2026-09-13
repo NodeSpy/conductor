@@ -17,9 +17,9 @@ settings:
 
 policy:
   agent_authored:
-    allow_scopes:
-      channel: ["${settings.review_channel}"]
-      repo:    ["${settings.deploy_repo}", "{{.owner}}/docs"]
+    verbs:
+      slack.post:       { channel: ["${settings.review_channel}"] }
+      gh.submit_review: { repo: ["${settings.deploy_repo}", "{{.owner}}/docs"] }
 ```
 
 ## `settings:` — one place to change it
@@ -83,8 +83,8 @@ skill:
 
 policy:
   agent_authored:
-    allow_scopes:
-      repo: ["{{.owner}}/docs"]                    # this org's docs repo
+    verbs:
+      gh.submit_review: { repo: ["{{.owner}}/docs"] }   # this org's docs repo
 ```
 
 On PR 42 the first grant means `#pr-42` and nothing else; on PR 99 it means
@@ -112,7 +112,7 @@ If a webhook source builds its `repo:` from the request body
 (`repo: "{{.body.owner}}/{{.body.name}}"`), the sender chooses it. Conductor
 marks those dispatches and withholds the usual own-target trust: no implicit
 own-repo, no own memory scope, and `repo`/`owner`/`name`/`number` render empty
-in an allowlist entry. Scope them with explicit `allow_scopes.repo` entries —
+in an allowlist entry. Scope them with explicit `verbs.<verb>.repo` entries —
 `conductor validate` warns so this is not a surprise.
 
 ### What it deliberately cannot do
@@ -140,7 +140,7 @@ use:
 
 ## See also
 
-- [[Policy]] — `allow_scopes` and the rest of `policy.agent_authored`
+- [[Policy]] — `verbs:` and the rest of `policy.agent_authored`
 - [[Agent-Skill]] — per-verb grants (`skill.verbs`) and their scoping
 - [[Packs]] — a pack's own `settings:` block
 - [[Configuration]] — `imports:`, `conductor.env`, and the load order

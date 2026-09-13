@@ -32,8 +32,9 @@ memory:
   type: memory
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_memory_scopes: ["repo:only/this-one"]
+    verbs:
+      "**": {scope: ["repo:only/this-one"]}
+      code: {scope: ["repo:only/this-one"]}
 `
 	cfg := loadConfig(t, cfgYAML)
 	// The production installer, not a test seam: exactly what the daemon runs
@@ -174,7 +175,7 @@ func TestProductionInstallsTheMemoryScopeGuard(t *testing.T) {
 // memoryScopeRefusal reports a refusal by the memory scope allowlist
 // specifically, not by something downstream.
 func memoryScopeRefusal(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "allow_memory_scopes")
+	return err != nil && strings.Contains(err.Error(), ".scope")
 }
 
 // installTestMemory builds a real memory manager for cfg and installs the

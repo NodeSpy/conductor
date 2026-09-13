@@ -341,33 +341,41 @@ hosts:
 # exists). An agent may emit a plan: of ordinary steps (validated + guarded
 # structurally before anything runs), choose a workflow from the
 # workflow.list catalog, and promote patterns with workflow.save (reviewed
-# via `conductor workflows review` before unattended reuse). allow: admits
-# step classes freely; approve: needs a dry-run + hand-off approval on
+# via `conductor workflows review` before unattended reuse). verbs: admits
+# verbs and step classes, and scopes each to the resources it may name;
+# approve: needs a dry-run + hand-off approval on
 # approve_via; host: is the sandbox agent code/cli is FORCED onto; limits
 # bound size/time/tokens; no_secret_egress gates the read-secret+write-out
 # combo; trust: full is the deliberate lift-everything opt-in.
 # ---------------------------------------------------------------------------
 # policy:
 #   agent_authored:
-#     allow:   [ kv.*, memory.*, workflow, "workflow.*", gh.comment ]
-#     approve: [ cli, code, gh.merge ]
+#     verbs:                               # WHICH VERBS, ON WHAT — access and resource scope
+#       gh.comment:  {}                    #   in one place, the same list-or-map shape
+#       gh.submit_review:                  #   skill.verbs uses. A bare list grants access only:
+#         repo: [ "${settings.org}/*" ]    #     verbs: [ kv.*, gh.comment, code ]
+#       slack.post:                        #   The map form adds WHICH resource each call may
+#         channel: [ "${settings.review_channel}" ]  # name, per verb, keyed by the option or
+#       kv.*:      { store: [ cache ] }    #   the dimension the connector declares on it
+#       memory.*:  { scope: [ "repo:acme/shared" ] }  # (deny-by-default; "*" = a whole
+#       vault.read: { secret: [ house/deploy_key ] }  #  dimension; trust: full lifts them all).
+#       blob.put:  { path: [ "/srv/artifacts/*" ] }
+#       code:                              #   A step CLASS is a key too. `code` is the one that
+#         store: [ cache ]                 #   carries resource scope: these two are the
+#         scope: [ "repo:acme/shared" ]    #   run:code ctx.kv / ctx.memory data allowlists.
+#       cli:       {}
+#                                          # The dispatch's OWN repo/channel/default is always
+#                                          #   implicitly allowed. An entry may be parameterized:
+#                                          #   ${settings.X} resolves at LOAD; an entry with {{ }}
+#                                          #   renders PER DISPATCH from that event's facts, e.g.
+#                                          #   repo: [ "{{.owner}}/docs" ]. The interpolatable
+#                                          #   facts are a CLOSED SET — number, owner, name, repo,
+#                                          #   kind — because those are the ones a PR author
+#                                          #   cannot choose. title/head_ref/author/labels are
+#                                          #   NOT available (they would be forgeable); a rendered
+#                                          #   value matches literally, never as a glob.
+#     approve: [ cli, code, gh.merge ]     # a SEPARATE axis: needs a dry-run + hand-off approval
 #     approve_via: slack-ops
-#     allow_scopes:                        # WHICH resource an agent-authored step may name, by the
-#       secret:  [ house/deploy_key ]      #   dimension the connector declares on the option
-#       store:   [ cache ]                 #   (deny-by-default; "*" = a whole dimension;
-#       repo:    [ "${settings.org}/*" ]   #    trust: full lifts them all). The dispatch's OWN
-#       channel: [ "${settings.review_channel}" ]  # repo/channel/default is always implicitly
-#       path:    [ "/srv/artifacts/*" ]    #    allowed. An entry may be parameterized: ${settings.X}
-#                                          #    resolves at LOAD; an entry with {{ }} renders PER
-#                                          #    DISPATCH from that event's facts, e.g.
-#                                          #    repo: [ "{{.owner}}/docs" ]. The interpolatable
-#                                          #    facts are a CLOSED SET — number, owner, name, repo,
-#                                          #    kind — because those are the ones a PR author
-#                                          #    cannot choose. title/head_ref/author/labels are
-#                                          #    NOT available (they would be forgeable); a rendered
-#                                          #    value matches literally, never as a glob.
-#     # allow_secrets / allow_stores / allow_targets are the legacy spellings of
-#     # allow_scopes.secret / .store / .repo — still supported, still unioned in.
 #     host: sandbox                      # a hosts: entry
 #     identity: bot
 #     limits: { max_steps: 50, max_fan_out: 20, max_sub_agents: 5, timeout: 30m, tokens: 200k }

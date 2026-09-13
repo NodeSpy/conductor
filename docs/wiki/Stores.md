@@ -218,8 +218,9 @@ A namespace partitions keys within a store; it is **not** a tenant wall. Anythin
 the store can reach every namespace in it: the `kv.*`/`sql.*` verbs take the namespace as a plain
 option, so a grant for one namespace is a grant for all of them.
 
-The boundary that *is* enforced is the **store**: `policy.agent_authored.allow_scopes.store` (legacy
-spelling: `allow_stores`) gates which stores an agent-authored step may touch at all, deny-by-default,
+The boundary that *is* enforced is the **store**: a `policy.agent_authored.verbs` entry's `store:`
+list (`kv.*: {store: [cache]}`, or `code: {store: [cache]}` for a `run: code` step's `ctx.kv`/`ctx.sql`)
+gates which stores an agent-authored step may touch at all, deny-by-default,
 and a skill grant can pin one agent tighter still with `kv.*: { store: [...] }`. If two
 workloads must not see each other's data, give them **separate stores** — not separate namespaces
 in one store.

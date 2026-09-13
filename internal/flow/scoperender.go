@@ -10,7 +10,7 @@ import (
 
 // Rendering a SCOPE ALLOWLIST entry (docs/design/scope-templating.md).
 //
-// `allow_scopes: {channel: ["#pr-{{.number}}"]}` is a security check that
+// `verbs: {slack.post: {channel: ["#pr-{{.number}}"]}}` is a security check that
 // happens to be a template, which makes it a different job from rendering a
 // step's options — and the differences all point the same way: a check must
 // not be steerable by what it is checking, must not read anything it could

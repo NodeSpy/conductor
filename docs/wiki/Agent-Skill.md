@@ -97,7 +97,7 @@ skill:
 - WHICH options are scopeable is the connector's own declaration, so
   `conductor discover <verb>` is the source of truth. Naming an option the
   verb doesn't declare as a resource (a typo, or `text:`) is a **load error**.
-- The operator's own [[Policy|`policy.agent_authored.allow_scopes`]] applies
+- The operator's own [[Policy|`policy.agent_authored.verbs`]] scopes apply
   on top, for dimensions you'd rather set once for every agent.
 - An entry can be **parameterized** ([[Settings-and-Templating]]):
   `${settings.review_channel}` is substituted at load from the config's own
@@ -108,7 +108,7 @@ skill:
   `policy.agent_authored` block to take effect (that governs agent-authored
   *plans*, a different surface), and `trust: full` does not lift it — a
   constraint you wrote onto a named verb stays written. To open a dimension
-  here, say so here: `{channel: ["*"]}`, or list it in `allow_scopes`.
+  here, say so here: `{channel: ["*"]}`, or widen it in `policy.agent_authored.verbs`.
 
 Two properties worth being explicit about:
 
@@ -360,10 +360,9 @@ The secret **value** never appears in audit entries, logs, or notifications
 
 The skill governs how an agent reaches back into conductor mid-session. The
 workflows an agent AUTHORS (plans, live `run_step`, saved workflows) are
-separately bounded by `policy.agent_authored`'s resource allowlists —
-`allow_secrets` / `allow_stores` / `allow_targets`, deny-by-default with the
-triggering repo implicitly allowed and `trust: full` as the lift-everything
-escape. See [[Policy]].
+separately bounded by `policy.agent_authored`'s own `verbs:` map — the same
+per-verb shape, deny-by-default with the triggering repo implicitly allowed
+and `trust: full` as the lift-everything escape. See [[Policy]].
 
 ## Scope and limitations
 

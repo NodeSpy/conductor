@@ -34,7 +34,7 @@ x-t:
 const allowPolicy = `
 policy:
   agent_authored:
-    allow: [ kv.*, memory.*, svc.post, workflow, agent ]
+    verbs: [kv.*, memory.*, svc.post, workflow, agent]
 `
 
 // planSpec is a trigger whose single agent step emits whatever the fake
@@ -155,7 +155,7 @@ func TestPlanAllowlistRejection(t *testing.T) {
 	out := "```plan\n- uses: svc.post\n  options: { text: ok }\n- uses: svc.ask\n  options: { prompt: p }\n```"
 	rig, fake := dispatchPlan(t, cfg, out)
 	failed, errStr := rig.workflowFailed()
-	if !failed || !strings.Contains(errStr, `"svc.ask" is not in policy.agent_authored.allow`) {
+	if !failed || !strings.Contains(errStr, `"svc.ask" is not in policy.agent_authored.verbs`) {
 		t.Fatalf("allowlist rejection: %v %q", failed, errStr)
 	}
 	if calls := fake.snapshot(); len(calls) != 0 {
@@ -194,7 +194,7 @@ func TestPlanLimits(t *testing.T) {
 	pol := `
 policy:
   agent_authored:
-    allow: [ svc.post, agent, code ]
+    verbs: [svc.post, agent, code]
     host: sandbox
     limits: { max_steps: 2, max_sub_agents: 1, max_fan_out: 2 }
 hosts:
@@ -237,8 +237,9 @@ func TestPlanScopeHasNoSecrets(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.post ]
-    allow_secrets: ["*"]
+    verbs:
+      svc.post: {secret: ["*"]}
+      code: {secret: ["*"]}
     no_secret_egress: false
 `)
 	out := "```plan\n- id: leak\n  uses: svc.post\n  options: { text: \"tok={{.secrets.tok}}.\" }\n```"
@@ -260,7 +261,7 @@ func TestPlanContinueOnErrorAndIf(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.* ]
+    verbs: [svc.*]
 `)
 	out := "```plan\n" +
 		"- id: skipme\n  if: \"kind == 'nope'\"\n  uses: svc.post\n  options: { text: skipped }\n" +
@@ -290,7 +291,7 @@ func TestPlanFailureCompensatesAndEscalates(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.* ]
+    verbs: [svc.*]
 `)
 	out := "```plan\n" +
 		"- id: one\n  uses: svc.post\n  options: { text: one }\n  compensate: { uses: svc.post, options: { text: undo-one } }\n" +
@@ -336,7 +337,7 @@ func TestPlanHybridClassification(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.post, agent ]
+    verbs: [svc.post, agent]
 `)
 	out := "```plan\n- id: sub\n  type: agent\n  agent: helper\n  prompt: \"go\"\n- id: done\n  uses: svc.post\n  options: { text: \"sub said {{.sub.done}}\" }\n```"
 	rig, fake := dispatchPlan(t, cfg, out)
@@ -383,7 +384,7 @@ func TestRunLiveStep(t *testing.T) {
 	// The guard applies identically.
 	_, err = rig.Runner.RunLiveStep(context.Background(), src, 7,
 		map[string]any{"uses": "svc.ask", "options": map[string]any{"prompt": "p"}})
-	if err == nil || !strings.Contains(err.Error(), "not in policy.agent_authored.allow") {
+	if err == nil || !strings.Contains(err.Error(), "not in policy.agent_authored.verbs") {
 		t.Fatalf("live guard: %v", err)
 	}
 	// And the audit attributes the plan to the live agent.
@@ -403,7 +404,7 @@ func TestPlanResumeIdempotency(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.* ]
+    verbs: [svc.*]
 `)
 	reg := buildRegistry(t, cfg)
 	newFakeState(t, "svc")
@@ -487,7 +488,7 @@ policy:
 	tight := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ kv.* ]
+    verbs: [kv.*]
 `)
 	regT := buildRegistry(t, tight)
 	rig3 := newTestRunner(t, tight, regT)
@@ -499,7 +500,7 @@ policy:
 	run3 := emptyRun()
 	run3.ID = "flow:ping:o/r#7"
 	runTriggerWithRun(rig3, run3, newTrigger("ping", nil), mustSpec(t, planSpec))
-	if failed, errStr := rig3.workflowFailed(); !failed || !strings.Contains(errStr, "not in policy.agent_authored.allow") {
+	if failed, errStr := rig3.workflowFailed(); !failed || !strings.Contains(errStr, "not in policy.agent_authored.verbs") {
 		t.Fatalf("resume must re-guard: %v %q", failed, errStr)
 	}
 }
@@ -634,7 +635,7 @@ workflows:
       - { id: recurser, type: agent, name: recurser, prompt: p, model: z }
 policy:
   agent_authored:
-    allow: [ svc.post, agent ]
+    verbs: [svc.post, agent]
     limits: { max_sub_agents: 2, max_steps: 50 }
 `)
 	reg := buildRegistry(t, cfg)
@@ -680,7 +681,7 @@ workflows:
       - { id: recurser, type: agent, name: recurser, prompt: p, model: z }
 policy:
   agent_authored:
-    allow: [ svc.post, agent ]
+    verbs: [svc.post, agent]
     limits: { max_sub_agents: 50, max_steps: 100 }
 `)
 	regDeep := buildRegistry(t, cfgDeep)
@@ -713,7 +714,7 @@ workflows:
       - { id: helper, type: agent, name: helper, prompt: p, model: y }
 policy:
   agent_authored:
-    allow: [ svc.post, agent ]
+    verbs: [svc.post, agent]
     limits: { max_steps: 4, max_sub_agents: 5 }
 `)
 	regSteps := buildRegistry(t, cfgSteps)
@@ -755,7 +756,7 @@ workflows:
       - { id: implementer, type: agent, name: implementer, prompt: p, model: b }
 policy:
   agent_authored:
-    allow: [ svc.post, agent, team ]
+    verbs: [svc.post, agent, team]
     limits: { max_sub_agents: 3, max_steps: 50 }
 `)
 	reg := buildRegistry(t, cfg)
@@ -797,7 +798,7 @@ func TestPlanSubAgentDispatchMarkedAgentAuthored(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.post, agent ]
+    verbs: [svc.post, agent]
 `)
 	out := "```plan\n- id: sub\n  type: agent\n  agent: helper\n  prompt: \"go\"\n```"
 	reg := buildRegistry(t, cfg)

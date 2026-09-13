@@ -23,9 +23,9 @@ connectors:
   svc: { use: fake }
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_targets: ["allowed/repo"]
-    allow_stores: ["allowed-store"]
+    verbs:
+      "**": {repo: ["allowed/repo"], store: ["allowed-store"]}
+      code: {repo: ["allowed/repo"], store: ["allowed-store"]}
 `
 	cfg := loadConfig(t, cfgYAML)
 	r := newTestRunner(t, cfg, buildRegistry(t, cfg)).Runner
@@ -42,8 +42,8 @@ policy:
 	// scoped reports whether the call was refused by the RESOURCE check
 	// specifically, not by some later failure (an unroutable fake connector).
 	scoped := func(err error) bool {
-		return err != nil && (strings.Contains(err.Error(), "allow_targets") ||
-			strings.Contains(err.Error(), "allow_stores"))
+		return err != nil && (strings.Contains(err.Error(), ".repo") ||
+			strings.Contains(err.Error(), ".store"))
 	}
 
 	for _, tc := range []struct {

@@ -408,7 +408,7 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 	universe := skillVerbUniverse(reg)
 	var warns []string
 	warns = append(warns, untrustedTargetWarnings(cfg)...)
-	// An allow_scopes dimension no connector declares grants nothing — a
+	// A `verbs:` scope key no connector declares grants nothing — a
 	// typo'd `repos:` reads like a grant and denies everything. It is a
 	// WARNING, not a load error, for the same reason validateVerbScopes lets
 	// an unmatched pattern pass: a connector disabled at boot takes its
@@ -422,15 +422,36 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 				}
 			}
 		}
-		var dims []string
-		for dim := range cfg.Policy.AgentAuthored.AllowScopes {
-			dims = append(dims, dim)
-		}
-		sort.Strings(dims)
-		for _, dim := range dims {
-			if !known[dim] {
-				warns = append(warns, fmt.Sprintf("policy.agent_authored.allow_scopes.%s: no connector on this daemon declares a %q resource dimension — this entry grants nothing (typo, or the connector is disabled)", dim, dim))
+		// memory's `scope` is memory's own dimension, not a connector-declared
+		// one (see MemoryScopeGuard), so it is known without a connector.
+		known[config.DimScope] = true
+		// A key may name an OPTION rather than a dimension (scopeListFor
+		// honours both), so collect the option names too before warning —
+		// warning about `channel_id:` because no connector declares a
+		// "channel_id" DIMENSION would be a false alarm about a working line.
+		for _, connName := range reg.Names() {
+			if in, ok := reg.Get(connName); ok {
+				for _, vn := range in.Decl.VerbNames() {
+					if vd, ok := in.Decl.Verb(vn); ok {
+						for _, so := range vd.ScopedOptions() {
+							known[so.Name] = true
+						}
+					}
+				}
 			}
+		}
+		var keys []string
+		for pat, cons := range cfg.Policy.AgentAuthored.VerbScopes {
+			for opt := range cons {
+				if !known[opt] {
+					keys = append(keys, pat+"."+opt)
+				}
+			}
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			opt := k[strings.LastIndex(k, ".")+1:]
+			warns = append(warns, fmt.Sprintf("policy.agent_authored.verbs.%s: no connector on this daemon declares a %q resource option or dimension — this entry grants nothing (typo, or the connector is disabled)", k, opt))
 		}
 	}
 	cfg.WalkSteps(func(scope config.IdentityScope, slot int, sp *config.Step) {
@@ -495,7 +516,7 @@ func untrustedTargetWarnings(cfg *config.Config) []string {
 				"webhook %q source %q: `repo:` is templated from the request body, so the SENDER "+
 					"chooses the target repo. Such a dispatch gets NO implicit own-repo trust: an "+
 					"agent-authored step or skill grant must name the repos it may touch in "+
-					"policy.agent_authored.allow_scopes.repo, and a `{{ }}` allowlist entry built "+
+					"policy.agent_authored.verbs.<verb>.repo, and a `{{ }}` allowlist entry built "+
 					"from .repo/.owner/.name/.number renders empty for it",
 				ref.Name, src.Name))
 		}
@@ -600,7 +621,7 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	// the same connector-declared Scope tags, so the two surfaces cannot
 	// drift: the dispatch's own target/channel is implicitly allowed, the
 	// grant's own per-option lists widen it (skill.verbs map form), and
-	// anything beyond that needs policy.agent_authored.allow_scopes.
+	// anything beyond that needs a policy.agent_authored.verbs entry.
 	//
 	// This runs through checkSkillVerbResources, NOT the plan surface's
 	// entry: the grant's scoping is intrinsic to the grant, so it must not

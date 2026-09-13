@@ -204,7 +204,7 @@ triggers:
 	cfg := loadConfig(t, base+`
 policy:
   agent_authored:
-    allow: [ sql.* ]
+    verbs: [ sql.* ]
 `)
 	reg := buildRegistry(t, cfg)
 	perr := ValidatePlanSteps(cfg, reg, []config.Step{{

@@ -95,8 +95,12 @@ func eachScopedOption(t *testing.T, r *Runner, fn func(uses string, so connector
 
 // scopeRefused reports a refusal BY THE RESOURCE CHECK, not by something
 // downstream (a disabled connector, a missing required option).
+// scopeRefused recognizes a resource-scope denial. It keys on the config path
+// the denial names — `policy.agent_authored.verbs.` — because that string is
+// the thing an operator is told to go edit, so a refusal that stopped naming
+// it would be a refusal that stopped being actionable.
 func scopeRefused(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "allow_scopes")
+	return err != nil && strings.Contains(err.Error(), "policy.agent_authored.verbs.")
 }
 
 // THE META-TEST (docs/design/skill-verb-scope.md). Verb ACCESS and resource
@@ -127,9 +131,12 @@ func TestEveryScopedOptionIsEnforcedOnBothSurfaces(t *testing.T) {
 	// the allowlists apply (no trust: full) and lists every dimension for the
 	// POSITIVE half.
 	var pb strings.Builder
-	pb.WriteString("policy:\n  agent_authored:\n    allow: [\"**\"]\n    allow_scopes:\n")
+	// `verbs:` map form: one `**` entry granting every verb, carrying every
+	// dimension — the per-verb shape's way of saying what `allow: ["**"]` +
+	// a flat `allow_scopes:` used to say.
+	pb.WriteString("policy:\n  agent_authored:\n    verbs:\n      \"**\":\n")
 	for _, dim := range everyScopeDim() {
-		fmt.Fprintf(&pb, "      %s: [\"%s\"]\n", dim, allowed)
+		fmt.Fprintf(&pb, "        %s: [\"%s\"]\n", dim, allowed)
 	}
 	cfg := loadConfig(t, everyConnectorYAML(t)+pb.String())
 	reg := buildRegistry(t, cfg)
@@ -227,7 +234,7 @@ func TestSkillGrantScopesUnderEveryPolicyShape(t *testing.T) {
 	shapes := []struct {
 		name    string
 		policy  string
-		widens  bool // does allow_scopes widen under this shape?
+		widens  bool // does a policy `verbs:` scope widen under this shape?
 		because string
 	}{
 		{
@@ -247,8 +254,8 @@ func TestSkillGrantScopesUnderEveryPolicyShape(t *testing.T) {
 		},
 		{
 			name:   "a policy that widens",
-			policy: "policy:\n  agent_authored:\n    allow: [\"**\"]\n    allow_scopes:\n",
-			widens: true, because: "allow_scopes is the operator's own widening, and it applies",
+			policy: "policy:\n  agent_authored:\n    verbs:\n      \"**\":\n",
+			widens: true, because: "a policy `verbs:` entry is the operator's own widening, and it applies",
 		},
 	}
 	for _, shape := range shapes {
@@ -256,7 +263,7 @@ func TestSkillGrantScopesUnderEveryPolicyShape(t *testing.T) {
 			pol := shape.policy
 			if shape.widens {
 				for _, dim := range everyScopeDim() {
-					pol += fmt.Sprintf("      %s: [\"%s\"]\n", dim, metaAllowed)
+					pol += fmt.Sprintf("        %s: [\"%s\"]\n", dim, metaAllowed)
 				}
 			}
 			cfg := loadConfig(t, everyConnectorYAML(t)+pol)
@@ -293,10 +300,10 @@ func TestSkillGrantScopesUnderEveryPolicyShape(t *testing.T) {
 					t.Errorf("%s option %q (%q): the grant's own list did not widen under %s (err=%v)",
 						uses, so.Name, so.Dim, shape.name, err)
 				}
-				// And the policy's allow_scopes widens when there is one.
+				// And the policy's own `verbs:` scope widens when there is one.
 				if shape.widens {
 					if err := call(metaAllowed, nil); scopeRefused(err) {
-						t.Errorf("%s option %q (%q): allow_scopes did not widen under %s (err=%v)",
+						t.Errorf("%s option %q (%q): the policy verbs scope did not widen under %s (err=%v)",
 							uses, so.Name, so.Dim, shape.name, err)
 					}
 				}
@@ -322,9 +329,9 @@ func TestScopeAllowlistsSupportSettingsAndTemplates(t *testing.T) {
 	// the dispatch's own repo. Both go in every dimension's list.
 	var pb strings.Builder
 	pb.WriteString("settings:\n  scoped_value: \"" + metaAllowed + "\"\n")
-	pb.WriteString("policy:\n  agent_authored:\n    allow: [\"**\"]\n    allow_scopes:\n")
+	pb.WriteString("policy:\n  agent_authored:\n    verbs:\n      \"**\":\n")
 	for _, dim := range everyScopeDim() {
-		fmt.Fprintf(&pb, "      %s: [\"${settings.scoped_value}\", \"rendered-{{.number}}\"]\n", dim)
+		fmt.Fprintf(&pb, "        %s: [\"${settings.scoped_value}\", \"rendered-{{.number}}\"]\n", dim)
 	}
 	// Through the REAL loader, so the ${settings.X} half is what a config file
 	// would actually produce rather than what a test helper pretends.
@@ -404,7 +411,7 @@ connectors:
   slack: { use: slack, bot_token: x }
 policy:
   agent_authored:
-    allow: ["**"]
+    verbs: ["**"]
 `)
 	reg := buildRegistry(t, cfg)
 	r := newTestRunner(t, cfg, reg).Runner

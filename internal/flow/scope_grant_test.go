@@ -33,7 +33,7 @@ connectors:
   gh: { use: github, token: x }
 policy:
   agent_authored:
-    allow: ["**"]
+    verbs: ["**"]
 `
 
 // THE CHANNEL GAP, closed. A grant for one channel does not reach another —
@@ -59,7 +59,7 @@ func TestSkillGrantScopesSlackChannel(t *testing.T) {
 		t.Fatalf("the granted channel must be reachable: %v", err)
 	}
 	err := post(granted, "#exec-private")
-	if err == nil || !strings.Contains(err.Error(), "allow_scopes.channel") {
+	if err == nil || !strings.Contains(err.Error(), ".channel") {
 		t.Fatalf("a grant for #code-reviews must not reach #exec-private, got %v", err)
 	}
 
@@ -73,7 +73,7 @@ func TestSkillGrantScopesSlackChannel(t *testing.T) {
 	if err := post(own, "#ops"); err != nil {
 		t.Fatalf("the channel the dispatch came from must need no grant: %v", err)
 	}
-	if err := post(own, "#exec-private"); err == nil || !strings.Contains(err.Error(), "allow_scopes.channel") {
+	if err := post(own, "#exec-private"); err == nil || !strings.Contains(err.Error(), ".channel") {
 		t.Fatalf("an ungranted channel must be refused even for a slack dispatch, got %v", err)
 	}
 }
@@ -97,7 +97,7 @@ func TestSkillGrantPinsRepoToTheDispatch(t *testing.T) {
 	if err := call("acme/app"); err != nil {
 		t.Fatalf("the PR under review must be reachable with no list: %v", err)
 	}
-	if err := call("acme/secrets"); err == nil || !strings.Contains(err.Error(), "allow_scopes.repo") {
+	if err := call("acme/secrets"); err == nil || !strings.Contains(err.Error(), ".repo") {
 		t.Fatalf("a review grant for acme/app must not reach acme/secrets, got %v", err)
 	}
 }
@@ -112,7 +112,7 @@ stores:
   shared-kv: { type: boltdb }
 policy:
   agent_authored:
-    allow: ["**"]
+    verbs: ["**"]
 `)
 	id := SkillIdentity{
 		TargetTrusted: true,
@@ -127,7 +127,7 @@ policy:
 		}
 		_, err := r.RunSkillVerb(context.Background(), id, verb,
 			map[string]any{"store": "someone-elses", "key": "k", "value": "v"})
-		if err == nil || !strings.Contains(err.Error(), "allow_scopes.store") {
+		if err == nil || !strings.Contains(err.Error(), ".store") {
 			t.Errorf("%s must not reach an ungranted store, got %v", verb, err)
 		}
 	}
@@ -195,9 +195,9 @@ connectors:
   slack: { use: slack, bot_token: x }
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_scopes:
-      channel: ["#code-reviews"]
+    verbs:
+      "**": {channel: ["#code-reviews"]}
+      code: {channel: ["#code-reviews"]}
 `)
 	pol := r.planPolicy()
 	t9 := newTrigger("ping", nil)
@@ -207,7 +207,7 @@ policy:
 	}
 	err := r.checkVerbResources(pol, t9, "slack.post",
 		map[string]any{"channel": "#exec-private", "text": "x"}, nil)
-	if err == nil || !strings.Contains(err.Error(), "allow_scopes.channel") {
+	if err == nil || !strings.Contains(err.Error(), ".channel") {
 		t.Fatalf("an unlisted channel must be refused on the plan surface, got %v", err)
 	}
 }
@@ -224,9 +224,9 @@ stores:
   main: { type: boltdb }
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_targets: [ "friendly/*" ]
-    allow_stores: [ main ]
+    verbs:
+      "**": {repo: ["friendly/*"], store: [main]}
+      code: {repo: ["friendly/*"], store: [main]}
 `)
 	modern := scopeRig(t, `
 connectors:
@@ -235,10 +235,9 @@ stores:
   main: { type: boltdb }
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_scopes:
-      repo: [ "friendly/*" ]
-      store: [ main ]
+    verbs:
+      "**": {repo: ["friendly/*"], store: [main]}
+      code: {repo: ["friendly/*"], store: [main]}
 `)
 	trig := newTrigger("ping", nil) // targets o/r
 	cases := []struct {
@@ -269,10 +268,9 @@ connectors:
   svc: { use: fake }
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_targets: [ "legacy/*" ]
-    allow_scopes:
-      repo: [ "modern/*" ]
+    verbs:
+      "**": {repo: ["legacy/*", "modern/*"]}
+      code: {repo: ["legacy/*", "modern/*"]}
 `)
 	for _, repo := range []string{"legacy/a", "modern/b"} {
 		if err := both.checkVerbResources(both.planPolicy(), trig, "svc.post",
@@ -301,9 +299,9 @@ vaults:
   shared: { type: file, dir: `+dir+`/shared }
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_scopes:
-      secret: [ "house/prod-token" ]
+    verbs:
+      "**": {secret: ["house/prod-token"]}
+      code: {secret: ["house/prod-token"]}
 `)
 	read := func(vault, key string) error {
 		id := SkillIdentity{Agent: "probe", Repo: "trigger/repo", Verbs: []string{vault + ".*"}}
@@ -313,7 +311,7 @@ policy:
 	// THE BUG: the grant is for `house`, so `shared` must not serve it —
 	// under any spelling of the key.
 	for _, key := range []string{"house/prod-token", "prod-token"} {
-		if err := read("shared", key); !strings.Contains(errText(err), "allow_scopes.secret") {
+		if err := read("shared", key); !strings.Contains(errText(err), ".secret") {
 			t.Errorf("shared.read key=%q must be refused — the grant names the house vault, "+
 				"and a secret's vault is half its identity; got %v", key, err)
 		}
@@ -322,13 +320,13 @@ policy:
 	// the vault uses (the bare key) and the qualified one the allowlist and
 	// `{{ vault "house" "prod-token" }}` use.
 	for _, key := range []string{"prod-token"} {
-		if err := read("house", key); strings.Contains(errText(err), "allow_scopes.secret") {
+		if err := read("house", key); strings.Contains(errText(err), ".secret") {
 			t.Errorf("house.read key=%q must be admitted by allow_scopes.secret [house/prod-token]: %v", key, err)
 		}
 	}
 	// An unlisted key in the right vault is still refused: the entry grants
 	// one secret, not the vault.
-	if err := read("house", "other-token"); !strings.Contains(errText(err), "allow_scopes.secret") {
+	if err := read("house", "other-token"); !strings.Contains(errText(err), ".secret") {
 		t.Errorf("house.read of an UNLISTED key must be refused, got %v", err)
 	}
 
@@ -344,10 +342,10 @@ policy:
 		_, err := r.RunSkillVerb(context.Background(), id, vault+".read", map[string]any{"key": key})
 		return err
 	}
-	if err := grantRead("house", "prod-token"); strings.Contains(errText(err), "allow_scopes.secret") {
+	if err := grantRead("house", "prod-token"); strings.Contains(errText(err), ".secret") {
 		t.Errorf("a grant entry house/prod-token must admit house.read prod-token: %v", err)
 	}
-	if err := grantRead("shared", "house/prod-token"); !strings.Contains(errText(err), "allow_scopes.secret") {
+	if err := grantRead("shared", "house/prod-token"); !strings.Contains(errText(err), ".secret") {
 		t.Errorf("a grant entry house/prod-token must NOT admit the shared vault, got %v", err)
 	}
 
@@ -363,19 +361,19 @@ vaults:
   shared: { type: file, dir: `+dir+`/shared2 }
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_scopes:
-      secret: [ "deploy-key" ]
+    verbs:
+      "**": {secret: ["deploy-key"]}
+      code: {secret: ["deploy-key"]}
 `)
 	readB := func(vault, key string) error {
 		id := SkillIdentity{Agent: "probe", Repo: "trigger/repo", Verbs: []string{vault + ".*"}}
 		_, err := rb.RunSkillVerb(context.Background(), id, vault+".read", map[string]any{"key": key})
 		return err
 	}
-	if err := readB("house", "deploy-key"); strings.Contains(errText(err), "allow_scopes.secret") {
+	if err := readB("house", "deploy-key"); strings.Contains(errText(err), ".secret") {
 		t.Errorf("a bare entry names a key in the calling vault: %v", err)
 	}
-	if err := readB("house", "house/deploy-key"); !strings.Contains(errText(err), "allow_scopes.secret") {
+	if err := readB("house", "house/deploy-key"); !strings.Contains(errText(err), ".secret") {
 		t.Errorf("a bare entry must not authorize a qualified-looking key, got %v", err)
 	}
 
@@ -388,19 +386,19 @@ vaults:
   shared: { type: file, dir: `+dir+`/shared3 }
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_scopes:
-      secret: [ "house/*" ]
+    verbs:
+      "**": {secret: ["house/*"]}
+      code: {secret: ["house/*"]}
 `)
 	readG := func(vault, key string) error {
 		id := SkillIdentity{Agent: "probe", Repo: "trigger/repo", Verbs: []string{vault + ".*"}}
 		_, err := rg.RunSkillVerb(context.Background(), id, vault+".read", map[string]any{"key": key})
 		return err
 	}
-	if err := readG("house", "anything"); strings.Contains(errText(err), "allow_scopes.secret") {
+	if err := readG("house", "anything"); strings.Contains(errText(err), ".secret") {
 		t.Errorf("house/* must admit any key in house: %v", err)
 	}
-	if err := readG("shared", "anything"); !strings.Contains(errText(err), "allow_scopes.secret") {
+	if err := readG("shared", "anything"); !strings.Contains(errText(err), ".secret") {
 		t.Errorf("house/* must NOT admit the shared vault, got %v", err)
 	}
 }
@@ -421,9 +419,9 @@ connectors:
   slack: { use: slack, bot_token: x }
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_scopes:
-      channel: ["#code-reviews"]
+    verbs:
+      "**": {channel: ["#code-reviews"]}
+      code: {channel: ["#code-reviews"]}
 `)
 	reg := buildRegistry(t, cfg)
 	rig := newTestRunner(t, cfg, reg)
@@ -453,10 +451,9 @@ connectors:
   svc: { use: fake }
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_scopes:
-      account: ["4242"]
-      mode: ["true"]
+    verbs:
+      "**": {account: ["4242"], mode: ["true"]}
+      code: {account: ["4242"], mode: ["true"]}
 `)
 	trig := newTrigger("ping", nil)
 	pol := r.planPolicy()
@@ -499,9 +496,9 @@ connectors:
   svc: { use: fake }
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_scopes:
-      account: ["4242"]
+    verbs:
+      "**": {account: ["4242"]}
+      code: {account: ["4242"]}
 `)
 	trig := newTrigger("ping", nil)
 	steps := []config.Step{{Uses: "svc.charge", Options: map[string]any{"account": 999}}}

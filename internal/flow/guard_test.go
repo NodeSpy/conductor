@@ -27,7 +27,7 @@ func TestGuardApproveGate(t *testing.T) {
 	pol := `
 policy:
   agent_authored:
-    allow: [ svc.post ]
+    verbs: [svc.post]
     approve: [ svc.ask ]
     approve_via: svc
 `
@@ -91,7 +91,7 @@ func TestGuardApproveWithoutChannel(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.post ]
+    verbs: [svc.post]
     approve: [ svc.ask ]
 `)
 	plan := "```plan\n- uses: svc.ask\n  options: { prompt: p }\n```"
@@ -151,7 +151,7 @@ func TestGuardSandboxHost(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ code, cli ]
+    verbs: [code, cli]
 `)
 	rig, _ := dispatchPlan(t, cfg, "```plan\n- run: js\n  code: \"return 1;\"\n```")
 	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "refusing to run on the main box") {
@@ -167,7 +167,7 @@ policy:
 	cfg2 := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ code ]
+    verbs: [code]
     host: sandbox
 hosts:
   sandbox: { addr: sandbox.example }
@@ -188,7 +188,7 @@ func TestGuardIdentityInjection(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.post ]
+    verbs: [svc.post]
     identity: bot
 `)
 	plan := "```plan\n- uses: svc.post\n  options: { text: t, as: me }\n```"
@@ -212,9 +212,11 @@ func TestGuardSecretEgress(t *testing.T) {
 	base := `
 policy:
   agent_authored:
-    allow: [ svc.post, kv.*, "*.read" ]
-    allow_secrets: ["*"]
-    allow_stores: ["*"]
+    verbs:
+      svc.post: {secret: ["*"], store: ["*"]}
+      kv.*: {secret: ["*"], store: ["*"]}
+      "*.read": {secret: ["*"], store: ["*"]}
+      code: {secret: ["*"], store: ["*"]}
 %s
 vaults:
   housevault: { type: file, dir: /tmp/none }
@@ -268,7 +270,7 @@ func TestGuardPlanStepHooks(t *testing.T) {
 	pol := `
 policy:
   agent_authored:
-    allow: [ svc.post ]
+    verbs: [svc.post]
     approve: [ svc.ask ]
 `
 	cfg := planCfg(t, pol)
@@ -277,7 +279,7 @@ policy:
 	smuggle := "```plan\n- id: ok\n  uses: svc.post\n  options: { text: fine }\n  hooks:\n    - { at: done, uses: svc.fail, options: {} }\n```"
 	rig, fake := dispatchPlan(t, cfg, smuggle)
 	failed, errStr := rig.workflowFailed()
-	if !failed || !strings.Contains(errStr, `hook[0]: "svc.fail" is not in policy.agent_authored.allow`) {
+	if !failed || !strings.Contains(errStr, `hook[0]: "svc.fail" is not in policy.agent_authored.verbs`) {
 		t.Fatalf("hook smuggling must be rejected: %v %q", failed, errStr)
 	}
 	if len(fake.snapshot()) != 0 {
@@ -308,7 +310,7 @@ policy:
 	cfgLim := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.post ]
+    verbs: [svc.post]
     limits: { max_steps: 2 }
 `)
 	many := "```plan\n- id: ok\n  uses: svc.post\n  options: { text: fine }\n  hooks:\n    - { at: done, uses: svc.post, options: { text: a } }\n    - { at: done, uses: svc.post, options: { text: b } }\n```"
@@ -322,7 +324,7 @@ policy:
 	cfgID := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.post ]
+    verbs: [svc.post]
     identity: bot
 `)
 	firing := "```plan\n- id: main\n  uses: svc.post\n  options: { text: step }\n  hooks:\n    - { at: done, uses: svc.post, options: { text: hooked } }\n```"
@@ -339,8 +341,10 @@ policy:
 	cfgEg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.post, "*.read" ]
-    allow_secrets: [ housevault/k ]
+    verbs:
+      svc.post: {secret: [housevault/k]}
+      "*.read": {secret: [housevault/k]}
+      code: {secret: [housevault/k]}
 vaults:
   housevault: { type: file, dir: /tmp/none }
 `)
@@ -380,9 +384,11 @@ workflows:
       - { id: planner, type: agent, name: planner, prompt: p, model: x }
 policy:
   agent_authored:
-    allow: [ svc.post, kv.*, "*.read" ]
-    allow_secrets: ["*"]
-    allow_stores: [main]
+    verbs:
+      svc.post: {secret: ["*"], store: [main]}
+      kv.*: {secret: ["*"], store: [main]}
+      "*.read": {secret: ["*"], store: [main]}
+      code: {secret: ["*"], store: [main]}
 `
 	cfg := loadConfig(t, cfgYAML)
 	shared := testSecrets(nil)
@@ -462,8 +468,9 @@ policy:
 		t.Fatalf("plain kv writes must pass: %s", errStr)
 	}
 	// memory.remember parking is gated the same way statically.
-	memCfg := loadConfig(t, strings.Replace(cfgYAML, "allow: [ svc.post, kv.*, \"*.read\" ]",
-		"allow: [ svc.post, kv.*, memory.*, \"*.read\" ]", 1)+"memory: { type: memory }\n")
+	memCfg := loadConfig(t, strings.Replace(cfgYAML,
+		`      "*.read": {secret: ["*"], store: [main]}`,
+		"      \"*.read\": {secret: [\"*\"], store: [main]}\n      memory.*: {secret: [\"*\"], store: [main], scope: [\"*\"]}", 1)+"memory: { type: memory }\n")
 	regM, err := connector.Build(memCfg, connector.Deps{Secrets: shared, Config: memCfg})
 	if err != nil {
 		t.Fatal(err)
@@ -504,7 +511,7 @@ func TestGuardSecretEgressIndexEvasion(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.post, "*.read" ]
+    verbs: [svc.post, "*.read"]
 vaults:
   housevault: { type: file, dir: /tmp/none }
 `)
@@ -527,7 +534,7 @@ func TestGuardWildcardNeverAdmitsConductorVerbs(t *testing.T) {
 		cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ `+allow+` ]
+    verbs: [`+allow+`]
 `)
 		return cfg, buildRegistry(t, cfg)
 	}
@@ -582,8 +589,12 @@ workflows:
       - { id: planner, type: agent, name: planner, prompt: p, model: x }
 policy:
   agent_authored:
-    allow: [ svc.post, kv.*, sql.*, "*.read" ]
-    allow_stores: [main, db]
+    verbs:
+      svc.post: {store: [main, db]}
+      kv.*: {store: [main, db]}
+      sql.*: {store: [main, db]}
+      "*.read": {store: [main, db]}
+      code: {store: [main, db]}
 `
 	kv.SetDataDir(t.TempDir())
 	kv.ResetStores()
@@ -708,8 +719,10 @@ workflows:
           return 1;
 policy:
   agent_authored:
-    allow: [ workflow, svc.post ]
-    allow_stores: [main]
+    verbs:
+      workflow: {store: [main]}
+      svc.post: {store: [main]}
+      code: {store: [main]}
 `)
 	shared := testSecrets(nil)
 	shared.Track(secretVal)

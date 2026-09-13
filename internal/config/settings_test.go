@@ -114,14 +114,14 @@ settings:
   deploy_repo: "${settings.org}/deploys"
 policy:
   agent_authored:
-    allow: ["**"]
-    allow_scopes:
-      repo: ["${settings.deploy_repo}"]
+    verbs:
+      "**": {repo: ["${settings.deploy_repo}"]}
+      code: {repo: ["${settings.deploy_repo}"]}
 `})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Policy.AgentAuthored.AllowScopes["repo"]; !reflect.DeepEqual(got, []string{"acme/deploys"}) {
+	if got := c.Policy.AgentAuthored.VerbScopes["**"]["repo"]; !reflect.DeepEqual(got, []string{"acme/deploys"}) {
 		t.Fatalf("settings must chain, got %v", got)
 	}
 }
@@ -175,8 +175,8 @@ settings:
   review_channel: "#ok"
 policy:
   agent_authored:
-    allow_scopes:
-      channel: ["${settings.revue_channel}"]
+    verbs:
+      slack.post: { channel: ["${settings.revue_channel}"] }
 `,
 		},
 		{
@@ -276,7 +276,7 @@ settings:
   chan: ` + quoteYAML(tc.value) + `
 policy:
   agent_authored:
-    allow: [ kv.* ]
+    verbs: [kv.*]
     approve: [ cli ]
     approve_via: "${settings.chan}"
 `})
@@ -305,7 +305,7 @@ connectors:
   slack: { use: slack, bot_token: x }
 policy:
   agent_authored:
-    allow: [ kv.* ]
+    verbs: [kv.*]
     approve: [ cli ]
     approve_via: "${EVIL}"
 `})
@@ -334,7 +334,7 @@ triggers:
     steps: [ { id: s, run: js, code: "return {}" } ]
 policy:
   agent_authored:
-    allow: [ kv.* ]
+    verbs: [kv.*]
     approve_via: "${settings.chan}"
 `)
 	body := `

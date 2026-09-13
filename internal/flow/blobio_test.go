@@ -194,7 +194,7 @@ workflows:
       - { id: planner, type: agent, name: planner, prompt: p, model: x }
 policy:
   agent_authored:
-    allow: [ blob.put, agent ]
+    verbs: [ blob.put, agent ]
 `)
 	reg := buildRegistry(t, cfg)
 	newFakeState(t, "svc")

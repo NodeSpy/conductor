@@ -153,8 +153,12 @@ func TestScopesForMergesMatchingPatterns(t *testing.T) {
 	}
 }
 
-// allow_scopes and the legacy allow_* lists are one map with two spellings.
-func TestScopeAllowUnionsLegacyAliases(t *testing.T) {
+// The PLAN surface's `verbs:` parses through the same code as skill.verbs and
+// resolves per-verb — the rename's whole point. `allow:` + a flat
+// `allow_scopes:` map used to apply one scope set to every verb in the policy;
+// now a scope belongs to the verb it was written under, and a verb the entry
+// does not admit gets nothing from it.
+func TestPolicyVerbsResolvePerVerb(t *testing.T) {
 	var cfg struct {
 		Policy struct {
 			AgentAuthored *AgentAuthoredPolicy `yaml:"agent_authored"`
@@ -163,33 +167,51 @@ func TestScopeAllowUnionsLegacyAliases(t *testing.T) {
 	if err := strictUnmarshal([]byte(`
 policy:
   agent_authored:
-    allow: [ kv.* ]
-    allow_targets: [ "legacy/*" ]
-    allow_stores: [ legacy-store ]
-    allow_secrets: [ house/k ]
-    allow_scopes:
-      repo: [ "modern/*" ]
-      channel: [ "#ops" ]
+    verbs:
+      kv.*:      { store: [shared-kv] }
+      kv.set:    { store: [writable] }
+      gh.comment: { repo: ["acme/docs"] }
+      code:      { store: [cache], scope: ["repo:acme/shared"] }
 `), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	got := cfg.Policy.AgentAuthored.ScopeAllow()
-	for dim, want := range map[string][]string{
-		DimRepo:   {"modern/*", "legacy/*"},
-		DimStore:  {"legacy-store"},
-		DimSecret: {"house/k"},
-		"channel": {"#ops"},
-	} {
-		g := append([]string(nil), got[dim]...)
-		sort.Strings(g)
-		w := append([]string(nil), want...)
-		sort.Strings(w)
-		if !reflect.DeepEqual(g, w) {
-			t.Errorf("dimension %q: got %v, want %v", dim, g, w)
-		}
+	pol := cfg.Policy.AgentAuthored
+	match := func(pattern, uses string) bool {
+		return pattern == uses || strings.HasSuffix(pattern, ".*") &&
+			strings.HasPrefix(uses, strings.TrimSuffix(pattern, "*"))
 	}
-	// `allow:` keeps meaning verb access — the two axes stay separate.
-	if !reflect.DeepEqual(cfg.Policy.AgentAuthored.Allow, []string{"kv.*"}) {
-		t.Errorf("allow: must still be the verb allowlist, got %v", cfg.Policy.AgentAuthored.Allow)
+
+	// Both patterns that admit kv.set contribute; kv.get sees only the one
+	// that admits it.
+	got := pol.ScopesFor("kv.set", match)["store"]
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, []string{"shared-kv", "writable"}) {
+		t.Fatalf("kv.set must union both matching patterns: %v", got)
+	}
+	if got := pol.ScopesFor("kv.get", match)["store"]; !reflect.DeepEqual(got, []string{"shared-kv"}) {
+		t.Fatalf("kv.get sees only kv.*: %v", got)
+	}
+	// THE RENAME'S POINT: a scope written under one verb does not leak to
+	// another. Under the old flat allow_scopes, `repo: [acme/docs]` applied
+	// to every verb with a repo: option.
+	if got := pol.ScopesFor("kv.set", match)["repo"]; len(got) != 0 {
+		t.Fatalf("gh.comment's repo scope must not reach kv.set: %v", got)
+	}
+	if got := pol.ScopesFor("gh.comment", match)["repo"]; !reflect.DeepEqual(got, []string{"acme/docs"}) {
+		t.Fatalf("gh.comment keeps its own repo scope: %v", got)
+	}
+	// A step CLASS is a key like any other, and `code` carries the run:code
+	// ctx.kv / ctx.memory data allowlists.
+	code := pol.ScopesFor("code", match)
+	if !reflect.DeepEqual(code["store"], []string{"cache"}) ||
+		!reflect.DeepEqual(code["scope"], []string{"repo:acme/shared"}) {
+		t.Fatalf("code: carries the ctx.* data scopes: %v", code)
+	}
+	// `verbs:` is still the ACCESS list too — the map's keys are the grant.
+	want := []string{"code", "gh.comment", "kv.*", "kv.set"}
+	got = append([]string(nil), pol.Verbs...)
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("verbs: must be the access list as well as the scope map, got %v", got)
 	}
 }

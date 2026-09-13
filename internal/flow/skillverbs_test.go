@@ -169,7 +169,7 @@ workflows:
         skill: { verbs: ["svc.*"] }
 policy:
   agent_authored:
-    allow: [ svc.ask ]
+    verbs: [ svc.ask ]
     approve: [ svc.post ]
 `)
 	err := Validate(cfg, buildRegistry(t, cfg))
