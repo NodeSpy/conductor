@@ -55,8 +55,17 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// fresh worktree it never launched an agent into, which paseo keeps as an
 	// orphan (…-1, …-2). Now the worktree is created only when we actually launch.
 	// Real-daemon only (a preview can't query the daemon); interactive hand-offs
-	// keep their dedicated worktree and never queue.
-	if !req.Wait && !req.Interactive && !d.DryRun && !req.Shadow {
+	// keep their dedicated worktree and never queue; a step whose OutputSchema a
+	// later step reads must actually dispatch and capture real output — queueing
+	// would hand it back the canned "queued to live agent" string instead.
+	//
+	// req.Wait deliberately does NOT gate this (it used to, back when only a
+	// genuine multi-step workflow ever set it): the agents:→flow migration
+	// made every dispatch — even a single-step autonomous fixer — a
+	// "foreground, Wait" request (the #60 foreground-wait fix), so excluding
+	// Wait here would silently stop deduping the exact one-worker-per-PR
+	// burst-of-feedback case this exists for (D1).
+	if !req.Interactive && !d.DryRun && !req.Shadow && len(req.Action.OutputSchema) == 0 {
 		if ref, handled, err := d.queueOrAdopt(ctx, req, prompt); handled || err != nil {
 			return ref, err
 		}

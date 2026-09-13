@@ -72,6 +72,7 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"auditDispatch", "an audit row records what was DISPATCHED, forged target included — " +
 			"that is the point of an audit, and `conductor report` reads these rows"},
 		{"auditDispatchDeferred", "as above, for a dispatch a gate held back"},
+		{"auditBudgetShed", "as above, for a dispatch a spend cap held back before it reached a runtime"},
 	},
 	"internal/flow/flow.go": {
 		{"flowTag", "a log prefix"},

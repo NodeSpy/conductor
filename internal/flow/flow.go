@@ -1478,6 +1478,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		}
 		res, berr := r.checkBudget(ctx, r.runtimeOf(step), est)
 		if berr != nil {
+			r.auditBudgetShed(t, id, identity, berr)
 			r.auditDispatchDeferred(t, id, "budget", berr)
 			return nil, "", berr
 		}

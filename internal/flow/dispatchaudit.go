@@ -1,7 +1,10 @@
 package flow
 
 import (
+	"errors"
+
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
@@ -88,4 +91,25 @@ func (r *Runner) auditDispatchDeferred(t core.Trigger, step, reason string, err 
 		"kind": t.Kind, "step": step, "backend": "", "outcome": "deferred",
 		"reason": reason, "error": r.redactErr(err),
 	})
+}
+
+// auditBudgetShed records a workflow/runtime/global spend cap tripping BEFORE
+// the step's agent ever dispatches (#36 §14). This is the flow-side half of
+// the engine's spend-budget contract (internal/engine/budget.go): the
+// engine's CheckBudget seam knows only the runtime and the resolved scope/
+// reason, not which target/step/agent got shed, so the flow runner — which
+// has all of that in scope at the call site — writes the one rich row. err's
+// scope/reason are read off it via cost.BudgetError when present; a CheckBudget
+// stub that returns a plain error (tests) still gets a row, just without them.
+func (r *Runner) auditBudgetShed(t core.Trigger, step, identity string, err error) {
+	entry := map[string]any{
+		"event": "budget_shed", "repo": t.Target.Repo, "number": t.Target.Number,
+		"kind": t.Kind, "step": step, "agent": identity,
+	}
+	var be *cost.BudgetError
+	if errors.As(err, &be) {
+		entry["scope"] = be.Scope
+		entry["reason"] = be.Reason
+	}
+	r.audit(entry)
 }

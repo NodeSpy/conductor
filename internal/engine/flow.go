@@ -411,12 +411,14 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			return nil
 		},
 		// The spend-budget layer (#36 §14): caps checked before each agent
-		// step dispatches, usage charged/audited after it returns.
+		// step dispatches, usage charged/audited after it returns. The shed
+		// audit row is NOT written here — this seam carries no target/step/
+		// agent context (just the runtime and the resolved scope/reason), so
+		// the flow runner (which has that context) writes the one rich
+		// `budget_shed` row itself (auditBudgetShed) when this returns an error.
 		CheckBudget: func(runtimeName string, wf *config.BudgetPolicy, wfScope string, est cost.Usage) (*cost.Reservation, error) {
 			res, berr := e.checkSpendBudget(runtimeName, wf, wfScope, est)
 			if berr != nil {
-				e.store.Audit(map[string]any{"event": "budget_shed",
-					"scope": berr.Scope, "reason": berr.Reason, "runtime": runtimeName})
 				return nil, berr
 			}
 			return res, nil

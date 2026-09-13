@@ -414,7 +414,28 @@ func cmdRun(args []string) error {
 	}
 	defer st.Close()
 
-	retry, writeTok, readTok := dispatchTuning(igs)
+	notifier := notify.New(cfg.Notify, logf, st.Audit)
+	// Every lifecycle event feeds the conductor.* source (ordinary triggers
+	// alert on them); the source's loop guard keeps a notification
+	// workflow's own events from re-feeding.
+	notifier.SetPublisher(connector.EmitLifecycle)
+
+	// The connectors-model stack: secret resolution, the connector registry,
+	// the flow runner, and the lowered source integrations. nil when the
+	// config has no connectors: block — everything below then behaves exactly
+	// as before. Built BEFORE dispatchTuning so a connectors-model github
+	// connector's identity.write_token/read_token is discoverable: dispatchTuning
+	// only sees dispatchTuner integrations that are already in `igs`, and a
+	// pure connectors-model config (no legacy integrations: block) has none
+	// until this stack's lowered integrations are appended (#60 — otherwise the
+	// acts-as-the-user write silently fell back to a bare `gh auth token`).
+	stack, err := buildFlowStack(cfg, st, notifier, cfg.DryRun)
+	if err != nil {
+		return err
+	}
+	defer stack.Close() // stop plugin subprocesses on daemon shutdown (#54)
+
+	igs, retry, writeTok, readTok := resolveDispatchIdentity(igs, stack)
 	paseoBin, err := resolvePaseoBin(cfg)
 	if err != nil {
 		return err
@@ -422,11 +443,6 @@ func cmdRun(args []string) error {
 	disp := dispatch.New(paseoBin, retry, cfg.DryRun)
 	disp.AdoptOpenWorkspaces = cfg.AdoptOpenWorkspaces
 	preflightPATH(disp.PaseoBin)
-	notifier := notify.New(cfg.Notify, logf, st.Audit)
-	// Every lifecycle event feeds the conductor.* source (ordinary triggers
-	// alert on them); the source's loop guard keeps a notification
-	// workflow's own events from re-feeding.
-	notifier.SetPublisher(connector.EmitLifecycle)
 	// Controller registry (paseo is the built-in default) + the session broker that
 	// owns one live session per PR — so an interactive hand-off survives a restart
 	// and follow-ups funnel to the live session instead of a duplicate agent. Built
@@ -513,18 +529,9 @@ func cmdRun(args []string) error {
 	// review hand-off keeps today's paseo-native behavior.
 	handoffs := handoff.NewRegistry(cfg.Handoffs, cfg.DefaultHandoffName(), logf)
 
-	// The connectors-model stack: secret resolution, the connector registry,
-	// the flow runner, and the lowered source integrations. nil when the
-	// config has no connectors: block — everything below then behaves exactly
-	// as before.
-	stack, err := buildFlowStack(cfg, st, notifier, cfg.DryRun)
-	if err != nil {
-		return err
-	}
-	defer stack.Close() // stop plugin subprocesses on daemon shutdown (#54)
-	if stack != nil {
-		igs = append(igs, stack.Integrations...)
-	}
+	// The connectors-model stack (secret resolution, connector registry, flow
+	// runner, lowered source integrations) was already built above, before
+	// dispatchTuning, so its identity tokens are discoverable.
 	// A legacy config (no connectors: block) can still carry a memory:
 	// section — buildFlowStack didn't run, so wire it here.
 	if stack == nil {
@@ -1043,6 +1050,28 @@ func anySlackIntegration(cfg *config.Config) bool {
 		}
 	}
 	return false
+}
+
+// resolveDispatchIdentity assembles the FULL integration set — the legacy
+// `integrations:` block plus the connectors-model stack's lowered source
+// integrations — and derives the dispatch retry/write/read token resolvers
+// from it. The connectors-model integrations MUST be folded in before
+// dispatchTuning runs: dispatchTuning only inspects dispatchTuner integrations
+// already present in the slice it's given, and a pure connectors-model config
+// (no legacy integrations: block — every test/e2e config and most real ones)
+// has NONE until stack.Integrations is appended. Call this exactly once, right
+// after building both `igs` and `stack`, rather than calling dispatchTuning
+// directly: getting the order backwards is how a connectors-model github
+// connector's identity.write_token/read_token silently stopped being seen at
+// all, and every acts-as-the-user write fell back to a bare `gh auth token`
+// (#60) — a security-relevant identity regression with no error, no log line,
+// just the wrong token on the wire.
+func resolveDispatchIdentity(igs []core.Integration, stack *flowStack) (all []core.Integration, retry config.Retry, write, read func() (string, error)) {
+	if stack != nil {
+		igs = append(igs, stack.Integrations...)
+	}
+	retry, write, read = dispatchTuning(igs)
+	return igs, retry, write, read
 }
 
 // dispatchTuner is implemented by an integration that carries dispatch-level

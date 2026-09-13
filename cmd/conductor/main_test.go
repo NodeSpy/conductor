@@ -91,3 +91,50 @@ func TestDispatchTuning(t *testing.T) {
 		t.Fatal("write resolver should never be nil")
 	}
 }
+
+// GUARD (#60, I1): a pure connectors-model config (no legacy integrations:
+// block) must still have its github connector's identity.write_token reach
+// dispatchTuning — otherwise the acts-as-the-user write silently falls back
+// to a bare `gh auth token`. buildIntegrations alone (the legacy path) sees
+// nothing; resolveDispatchIdentity must fold the connectors-model stack's
+// lowered integrations in before deriving the token resolvers.
+func TestResolveDispatchIdentitySeesConnectorsModelWriteToken(t *testing.T) {
+	cfg := loadConfigDoc(t, `
+connectors:
+  github:
+    use: github
+    identity:
+      write_token: e2e-user-write-token
+      read_token: app
+    webhook:
+      listen: 0.0.0.0:8787
+      secret: test-webhook-secret
+triggers:
+  - on: github.merge_conflict
+    steps: [{ id: fix, type: agent, prompt: "fix" }]
+`)
+	igs, err := buildIntegrations(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(igs) != 0 {
+		t.Fatalf("a config with no legacy integrations: block must build zero legacy "+
+			"integrations, got %d — this test's premise (the connectors-model stack is "+
+			"the ONLY source of the write token) doesn't hold", len(igs))
+	}
+	stack, err := buildFlowStack(cfg, nil, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, _, write, _ := resolveDispatchIdentity(igs, stack)
+	if len(all) == 0 {
+		t.Fatal("resolveDispatchIdentity must fold the connectors-model stack's lowered " +
+			"integrations into the returned set")
+	}
+	got, _ := write()
+	if got != "e2e-user-write-token" {
+		t.Fatalf("write token = %q, want the connector's identity.write_token "+
+			"(e2e-user-write-token) — dispatchTuning never saw the connectors-model "+
+			"integration, so it fell back to a bare `gh auth token`", got)
+	}
+}

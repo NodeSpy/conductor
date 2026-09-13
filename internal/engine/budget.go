@@ -27,15 +27,12 @@ import (
 // the agent-count window — the durable record is the audit's agent_usage
 // rows.
 
-// ErrBudget marks a dispatch shed by a spend cap.
-type ErrBudget struct {
-	Scope  string // "global" | "runtime:<name>" | "workflow:<key>"
-	Reason string
-}
-
-func (e *ErrBudget) Error() string {
-	return fmt.Sprintf("spend budget: %s over cap (%s) — shedding until the window frees", e.Scope, e.Reason)
-}
+// ErrBudget marks a dispatch shed by a spend cap. It is a type alias for
+// cost.BudgetError (not a distinct type) so the flow runner — which owns the
+// full target/step/agent audit context this engine-side accounting doesn't
+// have — can type-assert a CheckBudget error against it without importing
+// internal/engine (see cost.BudgetError).
+type ErrBudget = cost.BudgetError
 
 // budgetScope pairs a meter scope key with the cap governing it.
 type budgetScope struct {

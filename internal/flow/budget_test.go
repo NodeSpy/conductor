@@ -143,6 +143,53 @@ func TestOverBudgetShedsStep(t *testing.T) {
 	}
 }
 
+// GUARD (#60, N): an over-cap workflow dispatch must emit a `budget_shed`
+// audit row carrying the WORKFLOW scope and the step's agent identity, and
+// the runtime must never be invoked. The engine's CheckBudget seam only
+// knows the runtime and the resolved scope/reason (not the target/step/
+// agent) — the flow runner owns writing the one rich row from that context.
+func TestOverBudgetEmitsBudgetShedAuditWithWorkflowScopeAndNeverDispatches(t *testing.T) {
+	cfg := loadConfig(t, budgetCfg)
+	reg := buildRegistry(t, cfg)
+	rig := newTestRunner(t, cfg, reg)
+	wireBudget(rig, &cost.BudgetError{
+		Scope: "workflow:svc.ping/nightly", Reason: "$0.04 of $0.03 in 8s",
+	})
+	dispatched := false
+	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		dispatched = true
+		return dispatch.RunRef{}, nil
+	}
+
+	spec := mustSpec(t, budgetSpecYAML+`
+policy:
+  budget: { max_cost_usd: 0.03, window: 8s }
+`)
+	runTrigger(rig, newTrigger("ping", nil), spec)
+
+	if dispatched {
+		t.Fatal("a shed dispatch must never invoke the runtime")
+	}
+	rows := rig.Store.auditsWithEvent("budget_shed")
+	if len(rows) != 1 {
+		t.Fatalf("want exactly one budget_shed row, got %d: %+v", len(rows), rows)
+	}
+	row := rows[0]
+	if got, _ := row["scope"].(string); got != "workflow:svc.ping/nightly" {
+		t.Errorf("scope = %q, want the workflow scope", got)
+	}
+	if got, _ := row["reason"].(string); !strings.Contains(got, "of $0.03 in 8s") {
+		t.Errorf("reason = %q, want it to name the cap", got)
+	}
+	if got, _ := row["agent"].(string); got != "fixer" {
+		t.Errorf(`agent = %q, want "fixer" — the step's identity, so an operator can `+
+			"tell which agent got shed, not just that a cap tripped", got)
+	}
+	if got, _ := row["kind"].(string); got != "ping" {
+		t.Errorf("kind = %q, want the trigger kind", got)
+	}
+}
+
 // TestBackgroundDispatchKeepsReservationOpen is the F1 regression (#36 §146):
 // a background/hand-off dispatch must NOT settle its reservation with the
 // launch-confirmation output (which cost.FromRun scores at ~0). Wired to a real

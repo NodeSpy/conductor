@@ -14,11 +14,28 @@ package cost
 
 import (
 	"encoding/json"
+	"fmt"
 	"path"
 	"strings"
 	"sync"
 	"time"
 )
+
+// BudgetError marks a dispatch shed by a spend cap (#36 §14). It is shared
+// between the engine (which owns the meter/reservation accounting in
+// internal/engine/budget.go) and the flow runner (which owns the full
+// target/step/agent audit context for a shed dispatch, since the engine's
+// CheckBudget seam carries none of it) so both sides of that seam agree on
+// what a shed error carries, without the flow package importing
+// internal/engine.
+type BudgetError struct {
+	Scope  string // "global" | "runtime:<name>" | "workflow:<key>"
+	Reason string
+}
+
+func (e *BudgetError) Error() string {
+	return fmt.Sprintf("spend budget: %s over cap (%s) — shedding until the window frees", e.Scope, e.Reason)
+}
 
 // Usage is one agent run's token/$ accounting, stored on the run record and
 // in the audit.
