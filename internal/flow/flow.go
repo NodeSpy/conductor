@@ -406,15 +406,30 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 		fdata["error"] = err.Error()
 		fdata["failed_step"] = failedStepID(err)
 		r.runHooks(ctx, t, spec.Hooks, "fail", fdata, "workflow")
-		if r.Notif != nil {
-			// "failed" is the run-errored lifecycle event (conductor.failed);
-			// "escalate" stays the engine's gave-up-after-retries signal.
-			r.Notif.Emit(ctx, "failed", t, fmt.Sprintf("workflow failed: %v", err))
+		if dispatch.IsUnrecoverable(err) {
+			// The step's dispatch never reached a working runtime (an
+			// unknown/unrunnable controller, a worktree/workspace that never
+			// came up, or an agent that crashed before doing anything) — the
+			// engine's own gave-up-after-retries signal, restored on the flow
+			// path (#60). Distinct from an ORDINARY step failure (a gate
+			// discard, a command's own non-zero exit): those stay
+			// workflow_failed below.
+			if r.Notif != nil {
+				r.Notif.Emit(ctx, "escalate", t, fmt.Sprintf("workflow gave up: %v", err))
+			}
+			r.audit(map[string]any{"event": "escalate", "repo": t.Target.Repo,
+				"number": t.Target.Number, "kind": t.Kind, "error": err.Error(), "failed_step": failedStepID(err)})
+		} else {
+			if r.Notif != nil {
+				// "failed" is the run-errored lifecycle event (conductor.failed);
+				// "escalate" is the gave-up-after-retries signal, above.
+				r.Notif.Emit(ctx, "failed", t, fmt.Sprintf("workflow failed: %v", err))
+			}
+			// A partial failure stays visible: the audit records where it stopped,
+			// and the run is removed (the sweep/backoff machinery re-derives).
+			r.audit(map[string]any{"event": "workflow_failed", "repo": t.Target.Repo,
+				"number": t.Target.Number, "kind": t.Kind, "error": err.Error(), "failed_step": failedStepID(err)})
 		}
-		// A partial failure stays visible: the audit records where it stopped,
-		// and the run is removed (the sweep/backoff machinery re-derives).
-		r.audit(map[string]any{"event": "workflow_failed", "repo": t.Target.Repo,
-			"number": t.Target.Number, "kind": t.Kind, "error": err.Error(), "failed_step": failedStepID(err)})
 		r.auditRunCost(t, run.ID, runCost)
 		hist.finish("failed", r.redactErr(err), failedStepID(err), runCost)
 		r.finishRun(ctx, run)

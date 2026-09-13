@@ -338,7 +338,9 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			if req.Action.Type == "agent" {
 				r, err := e.runnerFor(req.Step)
 				if err != nil {
-					return dispatch.RunRef{}, err
+					// Unknown/unrunnable controller — the flow runner escalates
+					// rather than treating it as an ordinary step failure (#60).
+					return dispatch.RunRef{}, dispatch.Unrecoverable(err)
 				}
 				runner = r
 			}

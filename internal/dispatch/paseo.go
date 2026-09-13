@@ -85,7 +85,11 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 			proj := req.Trigger.Target.CheckoutRepo()
 			dir, err := d.resolveCheckoutDir(ctx, proj)
 			if err != nil {
-				return RunRef{}, fmt.Errorf("resolve checkout dir for %s: %w", proj, err)
+				// The workspace never came up — an operator issue (a genuinely
+				// unresolvable repo, network partition), not something a step's
+				// own retry fixes. Escalate rather than an ordinary step
+				// failure (#60).
+				return RunRef{}, Unrecoverable(fmt.Errorf("resolve checkout dir for %s: %w", proj, err))
 			}
 			// Create the isolated worktree up front and pin the agent into it. This
 			// avoids `paseo run --new-workspace worktree`, which can silently fall the
@@ -98,7 +102,12 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 			if d.WorktreeCreator != nil || (!d.DryRun && !req.Shadow) {
 				id, wcwd, err := d.createWorktree(ctx, req, dir)
 				if err != nil {
-					return RunRef{}, fmt.Errorf("create worktree for %s: %w", proj, err)
+					// `workspace create` creates-or-errors (see the comment
+					// above) — a real failure here means the runtime never got
+					// a working directory, so the dispatch never reached a
+					// backend. Escalate rather than an ordinary step failure
+					// (J2, #60).
+					return RunRef{}, Unrecoverable(fmt.Errorf("create worktree for %s: %w", proj, err))
 				}
 				worktreeWS = id
 				worktreeCwd = wcwd

@@ -93,6 +93,77 @@ func TestControllerRunnerDispatchProvisionsAndOpens(t *testing.T) {
 	}
 }
 
+// CLASS-CLOSER (#60): every controller here (cli, acp, opencode, agent-deck)
+// opens its session and drives the first turn in a BACKGROUND goroutine —
+// Session.Wait is how a caller blocks for it (see stubSession/cliSession). A
+// foreground dispatch (dispatch.Request.Wait, set by a workflow/flow step —
+// as opposed to a background hand-off) must behave like the paseo backend's
+// own foreground launch: the turn runs to completion before Dispatch
+// returns. Without that, the caller checkpoints the step "done" and, when
+// archive_when_done is set, archives the session immediately — Close cancels
+// the session's context, racing the still-running turn and killing it
+// mid-edit/commit/push. That is exactly how the e2e's Group B fixer (and
+// every b_controller_row) lost its push: the commit landed, sometimes not
+// even that, before the session got cancelled out from under it.
+func TestControllerRunnerForegroundDispatchWaitsForTurnToFinish(t *testing.T) {
+	release := make(chan struct{})
+	sess := &stubSession{id: "s1", waitDone: release}
+	ctl := &fakeSessCtl{transport: TransportCLI, sess: sess}
+	r := newControllerRunner(ctl, &fakeProv{}, nil)
+
+	req := makeReq("merge_conflict", "fix it")
+	req.Wait = true // a foreground workflow/flow step, not a background hand-off
+
+	done := make(chan struct{})
+	var dispatchErr error
+	go func() {
+		_, dispatchErr = r.Dispatch(context.Background(), req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("Dispatch returned before the foreground turn finished — a caller that " +
+			"archives immediately after a successful dispatch would race Close's cancel() " +
+			"against the still-running turn")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release) // the turn "finishes"
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Dispatch did not return after the turn finished")
+	}
+	if dispatchErr != nil {
+		t.Fatal(dispatchErr)
+	}
+}
+
+// A background hand-off (Interactive, Wait=false) must NOT block — the whole
+// point is to hand back a LIVE session for you to drive and close yourself.
+func TestControllerRunnerBackgroundDispatchDoesNotWait(t *testing.T) {
+	release := make(chan struct{}) // never closed
+	sess := &stubSession{id: "s1", waitDone: release}
+	ctl := &fakeSessCtl{transport: TransportACP, sess: sess}
+	r := newControllerRunner(ctl, &fakeProv{}, nil)
+
+	req := makeReq("review_requested", "review")
+	req.Interactive = true
+
+	done := make(chan struct{})
+	go func() {
+		if _, err := r.Dispatch(context.Background(), req); err != nil {
+			t.Error(err)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a background/interactive dispatch must return immediately, not wait for the turn")
+	}
+}
+
 func TestControllerRunnerShadowSkipsLaunch(t *testing.T) {
 	ctl := &fakeSessCtl{transport: TransportCLI, sess: &stubSession{id: "x"}}
 	prov := &fakeProv{}
