@@ -152,6 +152,14 @@ packs:
 	if !strings.Contains(err.Error(), evil) {
 		t.Errorf("the refusal should name the offending source: %v", err)
 	}
+	// It must be a TRUST refusal, not a FETCH failure. Without this, the test
+	// would pass even if trust failed OPEN: the clone of a bogus host errors
+	// anyway and also names the source, so `err != nil` proves nothing about
+	// the allowlist. Pin the trust-specific message so a fail-open regression
+	// is caught here, not masked by the fetch dying downstream.
+	if !strings.Contains(err.Error(), "not in pack_trust") {
+		t.Errorf("must be refused BY TRUST (before any fetch), not by a fetch failure: %v", err)
+	}
 	// …and listing it is what makes it resolvable (it then fails at FETCH,
 	// not at trust — which is the correct order).
 	dir2 := t.TempDir()
