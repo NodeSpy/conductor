@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -46,9 +47,15 @@ func TestParallelBranchDispatchIdentityMatchesLookup(t *testing.T) {
 	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	rig := newTestRunner(t, cfg, reg)
+	// Parallel branches dispatch concurrently (execBranches spawns goroutines),
+	// so the recorder must be synchronized — the -race detector flags a bare
+	// slice append from two branch goroutines.
+	var mu sync.Mutex
 	var got []string
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		mu.Lock()
 		got = append(got, req.Identity)
+		mu.Unlock()
 		return dispatch.RunRef{AgentID: "a1", Output: "done"}, nil
 	}
 	spec := mustSpec(t, `
