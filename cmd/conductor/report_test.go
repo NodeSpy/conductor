@@ -107,3 +107,45 @@ func TestTallyQuality(t *testing.T) {
 		t.Fatalf("reviewer cell: %+v", q["reviewer"])
 	}
 }
+
+// The rows the FLOW runner writes must tally, because flow is the only
+// dispatch path there is.
+//
+// `conductor report`'s dispatch table reads `{"event":"dispatch", kind,
+// outcome}`. That contract was written against the engine's action path; when
+// `agents:` was removed, every agent step moved to internal/flow, which wrote
+// `agent_usage` and `step` rows and no `dispatch` row — so this table silently
+// went empty for the only model that still exists. This asserts the shape flow
+// now emits is the shape this file reads, including the outcomes the engine
+// never recorded.
+func TestTallyAuditReadsFlowDispatchRows(t *testing.T) {
+	now := time.Now().UTC()
+	ts := now.Add(-time.Hour).Format(time.RFC3339)
+	// Verbatim shape from flow.Runner.auditDispatch / auditDispatchDeferred.
+	lines := strings.Join([]string{
+		`{"event":"dispatch","repo":"acme/web","number":1,"kind":"merge_conflict","backend":"paseo","step":"fix","shadow":false,"agent_id":"a1","outcome":"ok","ts":"` + ts + `"}`,
+		`{"event":"dispatch","repo":"acme/web","number":2,"kind":"merge_conflict","backend":"acp","step":"fix","shadow":false,"agent_id":"a2","outcome":"queued","ts":"` + ts + `"}`,
+		`{"event":"dispatch","repo":"acme/web","number":3,"kind":"merge_conflict","backend":"cli","step":"fix","shadow":false,"agent_id":"","outcome":"failed","error":"boom","ts":"` + ts + `"}`,
+		`{"event":"dispatch","repo":"acme/web","number":4,"kind":"new_comment","step":"fix","backend":"","outcome":"deferred","reason":"budget","ts":"` + ts + `"}`,
+		// The rows flow already wrote must NOT be counted as dispatches.
+		`{"event":"agent_usage","kind":"merge_conflict","runtime":"paseo","ts":"` + ts + `"}`,
+		`{"event":"step","kind":"merge_conflict","step":"fix","ts":"` + ts + `"}`,
+	}, "\n")
+
+	dispatch, _, err := tallyAudit(strings.NewReader(lines), now.Add(-24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc := dispatch["merge_conflict"]
+	if mc["ok"] != 1 || mc["queued"] != 1 || mc["failed"] != 1 {
+		t.Fatalf("flow dispatch rows must tally per outcome, got %+v — if this is empty, "+
+			"the report's dispatch table is empty for every run on the current model", mc)
+	}
+	if len(mc) != 3 {
+		t.Errorf("agent_usage/step rows must not be counted as dispatches: %+v", mc)
+	}
+	if got := dispatch["new_comment"]["deferred"]; got != 1 {
+		t.Errorf("a gate-deferred dispatch must tally too (%d) — a budget eating a "+
+			"repo's work should be visible, not absent", got)
+	}
+}

@@ -1457,11 +1457,13 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		// spend layer reserves anything for it.
 		if r.Agents.CheckRate != nil {
 			if err := r.Agents.CheckRate(); err != nil {
+				r.auditDispatchDeferred(t, id, "rate", err)
 				return nil, "", err
 			}
 		}
 		res, berr := r.checkBudget(ctx, r.runtimeOf(step), est)
 		if berr != nil {
+			r.auditDispatchDeferred(t, id, "budget", berr)
 			return nil, "", berr
 		}
 		spendRes = res
@@ -1489,6 +1491,10 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		DispatchID: r.dispatchID(ctx, id),
 	}
 	ref, err := r.Agents.Dispatch(ctx, req)
+	// The dispatch row `conductor report` and the e2e read. Emitted for EVERY
+	// outcome including failure, before the error return below — a dispatch
+	// that failed is exactly the one an operator is looking for.
+	r.auditDispatch(t, id, ref, err)
 	switch {
 	case shadow || ref.Shadowed || ref.Skipped || ref.Queued || err != nil:
 		if r.Agents.CancelBudget != nil {
@@ -1624,6 +1630,9 @@ func (r *Runner) execCommand(ctx context.Context, t core.Trigger, step config.St
 		Shadow: shadow, Wait: true, Data: data,
 	}
 	ref, err := r.Agents.Dispatch(ctx, req)
+	// A `type: command` step is a dispatch too, and the engine's action path
+	// audited it the same way — so the report's per-kind counts stay whole.
+	r.auditDispatch(t, id, ref, err)
 	if err != nil {
 		return nil, ref.Output, err
 	}
