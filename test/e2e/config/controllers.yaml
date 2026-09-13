@@ -1,187 +1,245 @@
-# Second daemon config: the controller-heavy one. It exercises
-#   - RESOLUTION (group A): explicit `controller:` > `default:true` > built-in paseo.
-#   - EACH non-paseo controller runs a real fixer (group B): cli (claude-code / codex),
-#     acp (gemini / codex-adapter / opencode-acp), opencode-native, agent-deck — every
-#     row drives its fake runtime through conductor's REAL controller code, which
-#     provisions a PR worktree and the acts-as-you identity; the fake does the
-#     edit+commit+push, so a commit lands on the local forge per controller.
-#   - session_model resumable + restart survival (C/D2), capability degradation (F),
-#     and an ACP mid-session crash → escalate (J3), via the interactive review
-#     hand-off over the web channel.
+# The controller-matrix conductor: an explicit `runtimes:` block per backend, so
+# group A/C/E can assert which one a dispatch resolved to.
 #
-# Stub mode pins each controller's runtime to its hermetic fake via an explicit
-# `command:` (acp) or the on-PATH fake tool names (cli/opencode/agent-deck). Live
-# mode swaps in the real CLIs (docker-compose.live.yml + controllers.live.yaml).
-
-integrations:
-  - type: github
-    name: github
-    enabled: true
+# Migrated from the legacy `integrations:` + `agents:` schema by
+# `conductor config migrate`; agent behavior moved onto the steps, with `name:`
+# pinning each old profile's identity.
+x-migrated:
+  fx_acp_gemini: &fx_acp_gemini
+    name: fx_acp_gemini
+    type: agent
+    workspace: worktree
+    archive_when_done: true
+    runtime: acp_gemini
+  fx_cli_claude: &fx_cli_claude
+    name: fx_cli_claude
+    type: agent
+    workspace: worktree
+    archive_when_done: true
+    runtime: cli_claude
+connectors:
+  default:
+    use: web
+    base_url: http://localhost:8099
+    listen: 0.0.0.0:8099
+  github:
+    use: github
     app:
       app_id: 123456
       private_key_path: /etc/conductor/github-app.pem
-      webhook_secret: e2e-webhook-secret
       verify_signature: false
-    webhook:
-      listen: "0.0.0.0:8788"          # required by validation; unused (force only)
-    sweep:
-      enabled: false
+      webhook_secret: e2e-webhook-secret
     identity:
+      commit_author: self
       read_token: app
       write_token: e2e-user-write-token
-      commit_author: self
-    defaults:
-      me: { logins: [conductor-user] }
-    rules:
-      # ---- Group A: resolution / precedence -------------------------------------
-      - match: { repos: ["a2/*"] }
-        actions:
-          merge_conflict:
-            type: agent
-            agent: fixer_explicit
-            prompt: "Resolve {{.repo}}#{{.pr}} (explicit controller)."
-      - match: { repos: ["a3/*"] }
-        actions:
-          merge_conflict:
-            type: agent
-            agent: fixer_default
-            prompt: "Resolve {{.repo}}#{{.pr}} (default controller)."
-      - match: { repos: ["a4/*"] }
-        actions:
-          merge_conflict:
-            type: agent
-            agent: fixer_stub
-            prompt: "Resolve {{.repo}}#{{.pr}} (non-runnable controller)."
-
-      # ---- Group B: one repo per non-paseo controller ---------------------------
-      - match: { repos: ["grpb/cliclaude"] }
-        actions: { merge_conflict: { type: agent, agent: fx_cli_claude,
-          prompt: "Resolve {{.repo}}#{{.pr}} (cli:claude-code)." } }
-      - match: { repos: ["grpb/clicodex"] }
-        actions: { merge_conflict: { type: agent, agent: fx_cli_codex,
-          prompt: "Resolve {{.repo}}#{{.pr}} (cli:codex)." } }
-      - match: { repos: ["grpb/acpgemini"] }
-        actions: { merge_conflict: { type: agent, agent: fx_acp_gemini,
-          prompt: "Resolve {{.repo}}#{{.pr}} (acp:gemini)." } }
-      - match: { repos: ["grpb/acpcodex"] }
-        actions: { merge_conflict: { type: agent, agent: fx_acp_codex,
-          prompt: "Resolve {{.repo}}#{{.pr}} (acp:codex-adapter)." } }
-      - match: { repos: ["grpb/ocacp"] }
-        actions: { merge_conflict: { type: agent, agent: fx_oc_acp,
-          prompt: "Resolve {{.repo}}#{{.pr}} (opencode-acp)." } }
-      - match: { repos: ["grpb/ocnative"] }
-        actions: { merge_conflict: { type: agent, agent: fx_oc_native,
-          prompt: "Resolve {{.repo}}#{{.pr}} (opencode-native)." } }
-      - match: { repos: ["grpb/deck"] }
-        actions: { merge_conflict: { type: agent, agent: fx_deck,
-          prompt: "Resolve {{.repo}}#{{.pr}} (agent-deck)." } }
-
-      # ---- Group C/D2/E (bare runner): resumable ACP interactive hand-off --------
-      - match: { repos: ["grpc/*"] }
-        actions:
-          review_requested:
-            steps:
-              - id: review
-                type: agent
-                agent: fx_acp_gemini
-                background: true
-                prompt: "Draft a review of {{.repo}}#{{.pr}} and wait for approve/revise/discard."
-
-      # ---- Group F1: a controller lacking interactive-handoff still reviews -------
-      # cli:claude-code reports InteractiveHandoff:false yet completes the review over
-      # the portable web channel (the Review loop only needs Session.Prompt).
-      - match: { repos: ["grpf/*"] }
-        actions:
-          review_requested:
-            steps:
-              - id: review
-                type: agent
-                agent: fx_cli_claude
-                background: true
-                prompt: "Draft a review of {{.repo}}#{{.pr}} and wait for approve/revise/discard."
-
-      # ---- Group J3: ACP agent crashes mid-session → escalate --------------------
-      # FAKE_ACP_CRASH is injected per-route via the action env, so only this row's
-      # fakeacp exits mid-turn — the other ACP rows keep working.
-      - match: { repos: ["grpj/*"] }
-        actions:
-          merge_conflict:
-            type: agent
-            agent: fx_acp_gemini
-            env: { FAKE_ACP_CRASH: "1" }
-            prompt: "Resolve {{.repo}}#{{.pr}} (acp crash)."
-
-controllers:
-  # Group A resolution stubs.
-  pae:
-    type: paseo
-  deflt:
-    type: paseo
-    default: true
-  # Explicit non-runnable controller for A4/J1: `agent: gemini` builds an ACP
-  # controller, but no `gemini` binary is on PATH in stub mode (unlike acp_gemini,
-  # which pins `command: [fakeacp]`), so selecting it fails to spawn → loud escalate.
-  stub:
-    agent: gemini
-
-  # ---- Group B controllers --------------------------------------------------
-  cli_claude:            # cli transport, claude-code recipe (→ `claude -p …`)
-    agent: claude-code
-    transport: cli
-  cli_codex:             # cli transport, codex recipe (→ `codex exec …`)
-    agent: codex
-    transport: cli
-  # The fake ACP agents advertise loadSession → they are resumable; declare it so
-  # the broker persists session_model=resumable (group C). (Controller.Initialize
-  # would negotiate this at runtime, but the dispatch path binds from the static
-  # model, so it's set in config.)
-  acp_gemini:            # acp transport; pinned to the fake ACP agent in stub mode
-    agent: gemini
-    session_model: resumable
-    command: [fakeacp]
-  acp_codex:             # acp transport (codex-adapter)
+    me:
+      logins:
+        - conductor-user
+    policy:
+      reply_to_bots: decline_only
+    webhook:
+      listen: 0.0.0.0:8788
+runtimes:
+  acp_codex:
+    use: acp
     agent: codex
     transport: acp
     session_model: resumable
-    command: [fakeacp]
-  oc_acp:                # opencode over acp
+    command:
+      - fakeacp
+  acp_gemini:
+    use: acp
+    agent: gemini
+    session_model: resumable
+    command:
+      - fakeacp
+  cli_claude:
+    use: acp
+    agent: claude-code
+    transport: cli
+  cli_codex:
+    use: acp
+    agent: codex
+    transport: cli
+  deck:
+    use: agent-deck
+  deflt:
+    use: paseo
+    default: true
+  oc_acp:
+    use: acp
     agent: opencode
     transport: acp
     session_model: resumable
-    command: [fakeacp]
-  oc_native:             # opencode native HTTP server (`opencode serve`)
-    type: opencode
-  deck:                  # agent-deck CLI orchestrator
-    type: agent-deck
-
-agents:
-  # Group A.
-  fixer_explicit: { provider: fake, controller: pae, workspace: worktree, archive_when_done: true }
-  fixer_default:  { provider: fake, workspace: worktree, archive_when_done: true }
-  fixer_stub:     { provider: fake, controller: stub, workspace: worktree }
-  # Group B (one agent per controller).
-  fx_cli_claude:  { provider: fake, controller: cli_claude, workspace: worktree, archive_when_done: true }
-  fx_cli_codex:   { provider: fake, controller: cli_codex,  workspace: worktree, archive_when_done: true }
-  fx_acp_gemini:  { provider: fake, controller: acp_gemini, workspace: worktree, archive_when_done: true }
-  fx_acp_codex:   { provider: fake, controller: acp_codex,  workspace: worktree, archive_when_done: true }
-  fx_oc_acp:      { provider: fake, controller: oc_acp,     workspace: worktree, archive_when_done: true }
-  fx_oc_native:   { provider: fake, controller: oc_native,  workspace: worktree, archive_when_done: true }
-  fx_deck:        { provider: fake, controller: deck,       workspace: worktree, archive_when_done: true }
-
-# Portable interactive-review hand-off channel (M2), so C/D2/E/F run on the
-# non-paseo controllers too. Same web draft page as the main daemon; base_url is
-# localhost so the runner can curl it from inside this container.
-handoff:
-  web:
-    base_url: "http://localhost:8099"
-    listen: "0.0.0.0:8099"
-
-control:
-  enabled: true
-  max_concurrent_agents: 8
-
+    command:
+      - fakeacp
+  oc_native:
+    use: opencode
+  pae:
+    use: paseo
+    bin: /usr/local/bin/fakepaseo
+  stub:
+    use: acp
+    agent: gemini
+triggers:
+  - "on": github.merge_conflict
+    filters:
+      exclude_repos:
+        - grpc/*
+        - grpf/*
+        - grpj/*
+      repos:
+        - a2/*
+    steps:
+      - type: agent
+        prompt: Resolve {{.repo}}#{{.pr}} (explicit controller).
+        name: fixer_explicit
+        workspace: worktree
+        archive_when_done: true
+        runtime: pae
+  - "on": github.merge_conflict
+    filters:
+      exclude_repos:
+        - a2/*
+        - grpc/*
+        - grpf/*
+        - grpj/*
+      repos:
+        - a3/*
+    steps:
+      - type: agent
+        prompt: Resolve {{.repo}}#{{.pr}} (default controller).
+        name: fixer_default
+        workspace: worktree
+        archive_when_done: true
+  - "on": github.merge_conflict
+    filters:
+      exclude_repos:
+        - a2/*
+        - a3/*
+        - grpc/*
+        - grpf/*
+        - grpj/*
+      repos:
+        - a4/*
+    steps:
+      - type: agent
+        prompt: Resolve {{.repo}}#{{.pr}} (non-runnable controller).
+        name: fixer_stub
+        workspace: worktree
+        runtime: stub
+  - "on": github.merge_conflict
+    filters:
+      repos:
+        - grpb/cliclaude
+    steps:
+      - !!merge <<: *fx_cli_claude
+        type: agent
+        prompt: Resolve {{.repo}}#{{.pr}} (cli:claude-code).
+  - "on": github.merge_conflict
+    filters:
+      repos:
+        - grpb/clicodex
+    steps:
+      - type: agent
+        prompt: Resolve {{.repo}}#{{.pr}} (cli:codex).
+        name: fx_cli_codex
+        workspace: worktree
+        archive_when_done: true
+        runtime: cli_codex
+  - "on": github.merge_conflict
+    filters:
+      repos:
+        - grpb/acpgemini
+    steps:
+      - !!merge <<: *fx_acp_gemini
+        type: agent
+        prompt: Resolve {{.repo}}#{{.pr}} (acp:gemini).
+  - "on": github.merge_conflict
+    filters:
+      repos:
+        - grpb/acpcodex
+    steps:
+      - type: agent
+        prompt: Resolve {{.repo}}#{{.pr}} (acp:codex-adapter).
+        name: fx_acp_codex
+        workspace: worktree
+        archive_when_done: true
+        runtime: acp_codex
+  - "on": github.merge_conflict
+    filters:
+      repos:
+        - grpb/ocacp
+    steps:
+      - type: agent
+        prompt: Resolve {{.repo}}#{{.pr}} (opencode-acp).
+        name: fx_oc_acp
+        workspace: worktree
+        archive_when_done: true
+        runtime: oc_acp
+  - "on": github.merge_conflict
+    filters:
+      repos:
+        - grpb/ocnative
+    steps:
+      - type: agent
+        prompt: Resolve {{.repo}}#{{.pr}} (opencode-native).
+        name: fx_oc_native
+        workspace: worktree
+        archive_when_done: true
+        runtime: oc_native
+  - "on": github.merge_conflict
+    filters:
+      repos:
+        - grpb/deck
+    steps:
+      - type: agent
+        prompt: Resolve {{.repo}}#{{.pr}} (agent-deck).
+        name: fx_deck
+        workspace: worktree
+        archive_when_done: true
+        runtime: deck
+  - "on": github.review_requested
+    filters:
+      repos:
+        - grpc/*
+    steps:
+      - !!merge <<: *fx_acp_gemini
+        id: review
+        type: agent
+        prompt: Draft a review of {{.repo}}#{{.pr}} and wait for approve/revise/discard.
+        background: true
+        handoff: default
+  - "on": github.review_requested
+    filters:
+      exclude_repos:
+        - grpc/*
+      repos:
+        - grpf/*
+    steps:
+      - !!merge <<: *fx_cli_claude
+        id: review
+        type: agent
+        prompt: Draft a review of {{.repo}}#{{.pr}} and wait for approve/revise/discard.
+        background: true
+        handoff: default
+  - "on": github.merge_conflict
+    filters:
+      exclude_repos:
+        - grpc/*
+        - grpf/*
+      repos:
+        - grpj/*
+    steps:
+      - !!merge <<: *fx_acp_gemini
+        type: agent
+        prompt: Resolve {{.repo}}#{{.pr}} (acp crash).
+        env:
+          FAKE_ACP_CRASH: "1"
+policy:
+  concurrency:
+    max_agents: 8
 store:
   state_file: /data/state.json
   audit_log: /data/audit.jsonl
-
-paseo_bin: /usr/local/bin/fakepaseo
