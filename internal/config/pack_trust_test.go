@@ -148,3 +148,102 @@ func TestTrustDefaultsSurviveTheStricterGlob(t *testing.T) {
 		t.Error("a third-party plugin source must not be allowed without an allowlist")
 	}
 }
+
+// HOST-OMITTED TRUST GLOBS (docs/design/config-surface-refinements.md §4).
+// `pack_trust`/`plugin_trust` entries take the same host default the
+// `use:`/source resolver applies, through the SAME canonicalizer — so
+// `your-org/*` means what it obviously means, and the two cannot drift.
+//
+// This is normalization only. The segment-anchored `*` is preserved, so a
+// host-omitted pattern rejects exactly the typosquats its written-out form
+// does — the cases marked BYPASS below are the round-14 class, re-asserted
+// through the shorter spelling.
+func TestTrustGlobsMayOmitTheHost(t *testing.T) {
+	for _, tc := range []struct {
+		pattern string
+		source  string
+		allow   bool
+		why     string
+	}{
+		{"acme/review-kit", "github.com/acme/review-kit", true,
+			"a host-omitted exact repo defaults to github.com"},
+		{"acme/review-kit", "acme/review-kit", true,
+			"…and both sides normalize, so an unqualified source matches too"},
+		{"acme/review-kit", "github.com/acme/review-kit//sub@v1", true,
+			"subdir/ref continuation still resolves"},
+		{"your-org/*", "github.com/your-org/anything", true,
+			"the org-scoped form, host omitted"},
+		{"your-org/*", "github.com/your-org-evil/anything", false,
+			"BYPASS: the literal prefix ends at the `/`, so a continued org is a different org"},
+		{"acme/review-kit", "github.com/acme/review-kit-evil-fork", false,
+			"BYPASS: name continuation, through the short spelling"},
+		{"trusted-org*", "github.com/trusted-org-evil/malicious-pack", false,
+			"BYPASS: `*` still does not cross a `/` after normalization"},
+		{"gitlab.com/team/*", "gitlab.com/team/repo", true,
+			"a written host is used as-is"},
+		{"gitlab.com/team/*", "github.com/team/repo", false,
+			"…and is not confused with the default"},
+		{"acme/review-kit", "gitlab.com/acme/review-kit", false,
+			"a host-omitted pattern means github.com, not any host"},
+		{"*", "gitlab.com/anyone/anything", true,
+			"a bare `*` stays host-AGNOSTIC — defaulting it would silently narrow " +
+				"a pattern the operator wrote to mean everything"},
+	} {
+		t.Run(tc.pattern+" vs "+tc.source, func(t *testing.T) {
+			cfg := PackTrustConfig{Allow: []string{tc.pattern}}
+			if got := cfg.SourceAllowed(tc.source); got != tc.allow {
+				t.Errorf("SourceAllowed(%q) with allow %q = %v, want %v — %s",
+					tc.source, tc.pattern, got, tc.allow, tc.why)
+			}
+			if got := cfg.PluginSourceAllowed(tc.source); got != tc.allow {
+				t.Errorf("PluginSourceAllowed(%q) with allow %q = %v, want %v — %s",
+					tc.source, tc.pattern, got, tc.allow, tc.why)
+			}
+		})
+	}
+}
+
+// The trust allowlist and the `use:` resolver must agree about which host a
+// host-omitted reference means, or an operator writes a pattern that reads as
+// covering the source they are installing and silently does not. One
+// canonicalizer, asserted against the resolver's own output.
+func TestTrustCanonicalizerAgreesWithTheUseResolver(t *testing.T) {
+	for _, ref := range []string{"acme/review-kit", "your-org/packs", "gitlab.com/team/repo"} {
+		u, err := ParseUse(UseKindPack, ref)
+		if err != nil {
+			t.Fatalf("ParseUse(%q): %v", ref, err)
+		}
+		src := u.Source()
+		if got := CanonicalRemoteRef(ref); got != src {
+			t.Errorf("the trust canonicalizer and the use: resolver disagree about %q: "+
+				"trust says %q, use: resolves to %q — a trust pattern that does not mean "+
+				"what the source means is a check that silently misses", ref, got, src)
+		}
+	}
+}
+
+// A source on a forge OTHER than github used to skip the allowlist entirely:
+// the remote test was a fixed prefix list, so anything it did not recognize
+// fell through to "local" and was exempt. Being unlisted made a source MORE
+// permitted, not less.
+func TestANonGithubForgeIsGovernedByTheAllowlist(t *testing.T) {
+	cfg := PackTrustConfig{Allow: []string{"github.com/acme/*"}}
+	if cfg.SourceAllowed("gitlab.com/evil/pack") {
+		t.Error("a gitlab source must be governed by pack_trust, not exempt from it")
+	}
+	if cfg.SourceAllowed("git.corp.example/team/pack") {
+		t.Error("a self-hosted forge must be governed too")
+	}
+	// …while the operator's own disk stays exempt, which is the point of the
+	// remote test in the first place.
+	for _, local := range []string{"./src/kit", "../shared/kit", "/opt/packs/kit", "~/packs/kit"} {
+		if !cfg.SourceAllowed(local) {
+			t.Errorf("a local path must stay exempt: %q", local)
+		}
+	}
+	// An explicitly-listed other-forge source resolves.
+	ok := PackTrustConfig{Allow: []string{"gitlab.com/team/*"}}
+	if !ok.SourceAllowed("gitlab.com/team/pack") {
+		t.Error("a listed gitlab source must resolve")
+	}
+}

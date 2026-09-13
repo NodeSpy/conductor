@@ -408,8 +408,9 @@ trust surface the lockfile can't provide (the lockfile proves *unchanged*, not
 ```yaml
 pack_trust:
   allow:
-    - github.com/your-org/*            # any repo under your-org
-    - github.com/acme/review-kit       # one specific repo
+    - your-org/*                       # any repo under your-org (github.com implied)
+    - acme/review-kit                  # one specific repo
+    - gitlab.com/team/*                # a written host is used as-is
 ```
 
 With `pack_trust:` set, `conductor init` refuses any **remote** pack source — at
@@ -418,6 +419,11 @@ sources (your own disk) are exempt. Override once with
 `conductor init --allow-unlisted`.
 
 ### Writing the globs
+
+**The host may be omitted.** An entry with no host defaults to `github.com/`,
+through the same rule `use:` and pack sources use — a first segment containing
+a `.` is a hostname, anything else is an owner. Write `gitlab.com/team/*` to
+mean gitlab. A bare `*` stays host-agnostic and means everywhere.
 
 **`*` does not cross a `/`.** It matches any run of characters *within one path
 segment*, the same rule as Go's `path.Match`. That is deliberate: an allowlist
@@ -428,8 +434,8 @@ Two forms cover almost everything:
 
 | Pattern | Matches | Does **not** match |
 |---|---|---|
-| `github.com/acme/review-kit` | that repo, plus `//subdir` and `@ref` of it | `…/review-kit-fork`, `…/review-kit2` |
-| `github.com/acme/*` | any repo under `acme` (and their `//subdir@ref`) | `github.com/acme-evil/anything` |
+| `github.com/acme/review-kit` (or `acme/review-kit`) | that repo, plus `//subdir` and `@ref` of it | `…/review-kit-fork`, `…/review-kit2` |
+| `github.com/acme/*` (or `acme/*`) | any repo under `acme` (and their `//subdir@ref`) | `github.com/acme-evil/anything`, `gitlab.com/acme/anything` |
 
 Prefer those. A partial-name wildcard like `github.com/acme/conductor-packs*`
 still works, but it is a wider grant than it looks: it also admits

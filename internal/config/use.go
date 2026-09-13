@@ -117,6 +117,46 @@ const OfficialSource = "github.com/" + OfficialRepo
 // defaultHost is assumed whenever a remote reference names no host.
 const defaultHost = "github.com"
 
+// namesAHost reports whether a reference's FIRST segment is a hostname rather
+// than an owner. The rule is the dot: `git.corp.example/team/repo` names a
+// host, `acme/repo` does not and gets defaultHost.
+//
+// This is THE host-default rule, in one place, because `use:`/source
+// resolution and the pack_trust/plugin_trust allowlist have to agree about it
+// exactly. If they drifted, an operator could write a trust pattern that
+// looks like it covers the source they are installing and does not — a trust
+// check that silently misses is worse than one that is merely strict.
+func namesAHost(seg string) bool { return strings.Contains(seg, ".") }
+
+// CanonicalRemoteRef applies the host default to a whole reference, for
+// callers that need to COMPARE two references rather than parse one (the
+// trust allowlists). A ref that already names a host, carries a scheme, or is
+// a local path is returned untouched.
+func CanonicalRemoteRef(ref string) string {
+	s := strings.TrimSpace(ref)
+	if s == "" {
+		return s
+	}
+	// A scheme or scp-style ref names its own host; a local path is not a
+	// remote reference at all.
+	for _, p := range []string{"git::", "ssh://", "https://", "http://", "git://", "git@", "./", "../", "/", "~"} {
+		if strings.HasPrefix(s, p) {
+			return s
+		}
+	}
+	first, _, _ := strings.Cut(s, "/")
+	// A leading bare wildcard is host-AGNOSTIC on purpose: `*` in a trust
+	// allowlist means "anywhere", and defaulting it to github.com would
+	// silently narrow a pattern the operator wrote to mean everything.
+	if first == "*" || first == "**" {
+		return s
+	}
+	if namesAHost(first) {
+		return s
+	}
+	return defaultHost + "/" + s
+}
+
 // Use is a parsed, resolved `use:` reference.
 type Use struct {
 	// Raw is the reference exactly as written, for diagnostics.
@@ -275,7 +315,7 @@ func ParseUse(kind UseKind, ref string) (Use, error) {
 	// implied. This is what separates `git.corp.example/team/repo//x` from
 	// `acme/repo/x`.
 	host := defaultHost
-	if strings.Contains(segs[0], ".") {
+	if namesAHost(segs[0]) {
 		host, segs = segs[0], segs[1:]
 	} else if scheme != "" {
 		return Use{}, fmt.Errorf("use: %q: a %s reference must name a host", raw, strings.TrimSuffix(scheme, "://"))

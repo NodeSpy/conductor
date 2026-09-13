@@ -28,13 +28,7 @@ func (t *PackTrustConfig) SourceAllowed(source string) bool {
 	s := strings.TrimPrefix(strings.TrimSpace(source), "git::")
 	// Local sources are the operator's own disk (and nested locals are confined
 	// to the config dir elsewhere), so the allowlist governs remote sources only.
-	remote := strings.HasPrefix(s, "github.com/") ||
-		strings.HasPrefix(s, "git@") ||
-		strings.HasPrefix(s, "ssh://") ||
-		strings.HasPrefix(s, "https://") ||
-		strings.HasPrefix(s, "http://") ||
-		strings.HasPrefix(s, "git://")
-	if !remote {
+	if !isRemoteTrustRef(s) {
 		return true
 	}
 	// The OFFICIAL pack repo is in the default allowlist, mirroring
@@ -45,11 +39,56 @@ func (t *PackTrustConfig) SourceAllowed(source string) bool {
 		return true
 	}
 	for _, pat := range t.Allow {
-		if globMatch(strings.TrimSpace(pat), s) {
+		if trustMatch(pat, s) {
 			return true
 		}
 	}
 	return false
+}
+
+// isRemoteTrustRef reports whether a source is REMOTE, and so governed by the
+// allowlist at all.
+//
+// This used to test a fixed prefix list — github.com/, git@, and the four
+// schemes — which meant a source on any OTHER forge fell through to "local"
+// and skipped the allowlist entirely:
+//
+//	pack_trust: {allow: [github.com/acme/*]}
+//	packs: {x: {source: gitlab.com/evil/pack}}   # was allowed
+//
+// `use:` resolves that source perfectly well (a first segment with a dot is a
+// host), so it was reachable, and being unlisted made it MORE permitted rather
+// than less. Host detection now uses the same rule as the resolver, so every
+// forge is governed and a local path stays exempt.
+func isRemoteTrustRef(s string) bool {
+	for _, p := range []string{"./", "../", "/", "~"} {
+		if strings.HasPrefix(s, p) {
+			return false // the operator's own disk
+		}
+	}
+	for _, p := range []string{"git@", "ssh://", "https://", "http://", "git://"} {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	first, _, _ := strings.Cut(s, "/")
+	return namesAHost(first)
+}
+
+// trustMatch is the one comparison both allowlists make: canonicalize the
+// pattern AND the source through the SAME host default the `use:`/source
+// resolver applies, then match segment by segment.
+//
+// Normalizing both sides is what lets an operator write `your-org/*` and mean
+// what they obviously mean. Normalizing only one would be worse than neither:
+// a pattern that reads as covering the source it is installed against, and
+// silently does not.
+//
+// This is normalization, not loosening. The `*` stays segment-anchored (it
+// never crosses a `/`), so a host-omitted pattern rejects the same typosquat
+// its written-out form does.
+func trustMatch(pattern, source string) bool {
+	return globMatch(CanonicalRemoteRef(strings.TrimSpace(pattern)), CanonicalRemoteRef(source))
 }
 
 // PluginSourceAllowed reports whether a PLUGIN source is permitted. It differs
@@ -77,7 +116,7 @@ func (t *PackTrustConfig) PluginSourceAllowed(source string) bool {
 		return false
 	}
 	for _, pat := range t.Allow {
-		if globMatch(strings.TrimSpace(pat), s) {
+		if trustMatch(pat, s) {
 			return true
 		}
 	}
