@@ -1,14 +1,20 @@
-# Main hermetic conductor config. Deliberately has NO `runtimes:` block — the
-# paseo backend is reached through the top-level `paseo_bin:` default, which is
-# what group A1 (backward compat) asserts: an unconfigured dispatch resolves to
-# the built-in paseo controller. Points at the mock GitHub API and the
+# Main hermetic conductor config. Points at the mock GitHub API and the
 # sink-catcher; commits/pushes go to the local git:// forge. No secrets, no LLM.
+#
+# Group A1 (backward compat) asserts that a step naming NO runtime resolves to
+# paseo: the `runtimes:` block below declares paseo only so the fake binary can
+# be pointed at, and no step names it.
 #
 # Migrated from the legacy `integrations:` + `agents:` schema by
 # `conductor config migrate`. Agent behavior now lives ON the steps: profiles
 # used by more than one step are parked under `x-migrated:` and pulled in with
 # `<<:`, and the `name:` each one carries pins the identity the old profile
 # name had, so memory/session/outcome history keeps matching.
+#
+# NOTE: the legacy `paseo_bin:` top-level key is deliberately NOT kept. A
+# legacy key alongside connectors:/triggers: makes the file MIXED, and the
+# boot-time migration escalates rather than transforming it — which is how
+# this fixture failed A1 during the port.
 x-migrated:
   fixer: &fixer
     name: fixer
@@ -63,6 +69,10 @@ connectors:
   notify-slack:
     use: slack
     webhook_url: http://sink-catcher:8080/slack
+runtimes:
+  paseo:
+    use: paseo
+    bin: /usr/local/bin/fakepaseo
 triggers:
   - "on": github.changes_requested
     filters:
@@ -259,5 +269,3 @@ policy:
 store:
   state_file: /data/state.json
   audit_log: /data/audit.jsonl
-
-paseo_bin: /usr/local/bin/fakepaseo
