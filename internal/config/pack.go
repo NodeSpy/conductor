@@ -112,7 +112,11 @@ type PackInstance struct {
 	// Triggers arms (and optionally overrides) the pack's DISARMED triggers,
 	// keyed by trigger name. Arming — enabled:true + a repo scope — is the
 	// environment binding that constitutes consent. See TriggerArm.
-	Triggers map[string]TriggerArm `yaml:"triggers,omitempty"`
+	//
+	// A value may be an OBJECT (one instance, the common shape) or an ARRAY
+	// (N instances of the same trigger, each with its own repos/filters/gate).
+	// See TriggerArms.
+	Triggers map[string]TriggerArms `yaml:"triggers,omitempty"`
 
 	// Packs instantiates the pack's own pack dependencies (requires.packs),
 	// recursively — the identical default/override/bind surface, one level down.
@@ -254,6 +258,42 @@ type TriggerArm struct {
 
 // IsArmed reports whether the consumer armed this trigger (enabled:true).
 func (t TriggerArm) IsArmed() bool { return t.Enabled != nil && *t.Enabled }
+
+// TriggerArms is one trigger's arming: an OBJECT for a single instance, or an
+// ARRAY to arm the SAME pack trigger more than once with different repos,
+// filters or gates.
+//
+//	triggers:
+//	  review: { repos: [team/app] }            # object -> ONE instance
+//	  deploy:                                  # array  -> N instances
+//	    - { repos: [team-a/*], gate: { run: [strict] } }
+//	    - { repos: [team-b/*], filters: { labels: [urgent] } }
+//
+// One pack trigger, armed for two teams with different gates, without the
+// pack author having to ship two near-identical triggers or the operator
+// having to fork the pack.
+type TriggerArms []TriggerArm
+
+// UnmarshalYAML accepts the object form and the array form.
+func (a *TriggerArms) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.SequenceNode {
+		var list []TriggerArm
+		if err := n.Decode(&list); err != nil {
+			return fmt.Errorf("triggers: array form takes a list of arming blocks: %w", err)
+		}
+		if len(list) == 0 {
+			return fmt.Errorf("triggers: an empty array arms nothing — omit the key, or write one arming block")
+		}
+		*a = list
+		return nil
+	}
+	var one TriggerArm
+	if err := n.Decode(&one); err != nil {
+		return err
+	}
+	*a = TriggerArms{one}
+	return nil
+}
 
 // ArmAll is the wildcard `triggers:` key — arming defaults that apply to EVERY
 // trigger the pack ships, so an operator consents once instead of repeating a

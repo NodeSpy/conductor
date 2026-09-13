@@ -94,6 +94,34 @@ operator must be able to narrow what `"*"` granted, not only widen it.
 `"*"` supplies consent; it does not bypass it. An armed trigger with no repo
 list is still refused.
 
+### Arming one trigger more than once
+
+A `triggers.<name>` value may be an **object** (one instance) or an **array**
+(N instances of the SAME trigger, each with its own arming). One pack trigger,
+armed for two teams with different gates, without the pack author shipping two
+near-identical triggers or you forking the pack:
+
+```yaml
+packs:
+  review:
+    triggers:
+      review: { repos: [team/app] }              # object -> ONE instance
+      deploy:                                    # array  -> N instances
+        - { repos: [team-a/*], gate: { run: [review/strict] } }
+        - { repos: [team-b/*], filters: { labels: [urgent] } }
+```
+
+Each instance gets a distinct identity (`review/deploy#0`, `review/deploy#1`)
+feeding dedup, session and outcome state, so the two armings never suppress
+each other on an event they both match. The object form keeps the plain
+trigger name, so nothing about a single-instance config changes.
+
+**Consent is per instance.** An armed instance with no repo list is refused on
+its own account — giving instance 0 repos does not let instance 1 through.
+
+Address one instance in an `on:` overlay by its position — `deploy[1]` — and
+the bare name applies to all of them.
+
 > **A floating version range picks up new triggers.** With `version: "^1.2"`,
 > a trigger added in a later pack release is armed on your consented repos at
 > the next `init`/update — that is what "every trigger the pack ships" means,

@@ -41,17 +41,35 @@ func (st *packInstantiation) applyTriggerOverlay(ns string, inst PackInstance, t
 		return nil
 	}
 	matched := map[string]bool{}
+	// Ordinal of each trigger among the ones sharing its address, so a
+	// fanned-out trigger's instances are addressable as `deploy[0]`,
+	// `deploy[1]`, … A pack-authored instance ARRAY names its instances by a
+	// content hash (`deploy#a1b2c3d4`) that no consumer can predict or would
+	// want to write, which left those instances unaddressable (round-1 M4).
+	// The position in the array is the thing the operator can actually see.
+	ordinal := make([]int, len(trs))
+	seen := map[string]int{}
+	for i := range trs {
+		addr, _ := SplitInstanceName(armName(i))
+		ordinal[i] = seen[addr]
+		seen[addr]++
+	}
 	for i := range trs {
 		name := armName(i)
-		// A trigger written as an instance ARRAY carries a
-		// content-addressed name (`review#a1b2c3d4`), which no consumer
-		// can predict or would want to write. The overlay is keyed on the
-		// address the author WROTE, and applies to every instance of it —
-		// they are one trigger fanned out, so a filter meant for it is
-		// meant for all of them.
 		addr, _ := SplitInstanceName(name)
+		indexed := fmt.Sprintf("%s[%d]", addr, ordinal[i])
 		ov, ok := inst.On[name]
 		if !ok {
+			// ONE instance of a fanned-out trigger, by its position.
+			if byIndex, found := inst.On[indexed]; found {
+				ov, ok = byIndex, true
+				name = indexed
+			}
+		}
+		if !ok {
+			// The address the author WROTE applies to every instance of it —
+			// they are one trigger fanned out, so a filter meant for it is
+			// meant for all of them.
 			ov, ok = inst.On[addr]
 			name = addr
 		}

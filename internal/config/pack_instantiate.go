@@ -354,17 +354,44 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		// An instance-array trigger's name carries its content handle; the
 		// consumer arms the ADDRESS, which covers every instance of it.
 		armAddr, _ := SplitInstanceName(armName)
-		arm, ok := req.inst.Triggers[armName]
+		arms, ok := req.inst.Triggers[armName]
 		if !ok {
-			arm, ok = req.inst.Triggers[armAddr]
+			arms, ok = req.inst.Triggers[armAddr]
 		}
 		// `"*"` supplies arming defaults to EVERY shipped trigger; a named
-		// entry refines that one. The operator consents once.
+		// entry refines that one. The operator consents once. An array under
+		// the name refines it once PER INSTANCE.
 		if star, hasStar := req.inst.Triggers[ArmAll]; hasStar {
-			arm, ok = mergeArm(star, arm), true
+			base := star[0]
+			if len(arms) == 0 {
+				arms, ok = TriggerArms{base}, true
+			} else {
+				merged := make(TriggerArms, len(arms))
+				for i, a := range arms {
+					merged[i] = mergeArm(base, a)
+				}
+				arms, ok = merged, true
+			}
 		}
-		if ok && !dormant {
-			if err := applyTriggerArm(&tr, arm); err != nil {
+		if !ok || dormant {
+			st.cfg.Triggers = append(st.cfg.Triggers, tr)
+			continue
+		}
+		// ONE ARM, the common shape: the trigger keeps its own name, so
+		// nothing about an existing config changes.
+		// N ARMS: the same pack trigger armed N times, each instance getting
+		// its own identity so two instances never collide on dedup, session,
+		// or outcome state.
+		for idx, arm := range arms {
+			inst := tr
+			if len(arms) > 1 {
+				var err error
+				if inst, err = cloneTriggerSpec(tr); err != nil {
+					return fmt.Errorf("pack %q: trigger %q instance %d: %w", ns, armName, idx, err)
+				}
+				inst.Name = InstanceName(tr.Name, strconv.Itoa(idx))
+			}
+			if err := applyTriggerArm(&inst, arm); err != nil {
 				return fmt.Errorf("pack %q: trigger %q: %w", ns, armName, err)
 			}
 			// Fail closed: an armed trigger on a repo-scoped (github) source
@@ -381,11 +408,19 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 			// skipped this consent check entirely. An armed list-form github
 			// trigger with no repos: was accepted and then matched EVERY repo
 			// the connector could see.
-			if arm.IsArmed() && !triggerScopesRepos(&tr) && st.anySourceIsRepoScoped(&tr) {
-				return fmt.Errorf("pack %q: trigger %q is armed (enabled: true) but names no repos — a github pack trigger must scope its repos (the repo list is the consent). Add e.g. triggers: { %s: { enabled: true, repos: [owner/repo] } }", ns, armName, armName)
+			//
+			// Per INSTANCE: arming three instances and giving two of them
+			// repos must not let the third through on the others' consent.
+			if arm.IsArmed() && !triggerScopesRepos(&inst) && st.anySourceIsRepoScoped(&inst) {
+				where := armName
+				if len(arms) > 1 {
+					where = fmt.Sprintf("%s[%d]", armName, idx)
+				}
+				return fmt.Errorf("pack %q: trigger %q is armed (enabled: true) but names no repos — a github pack trigger must scope its repos (the repo list is the consent). Add e.g. triggers: { %s: { enabled: true, repos: [owner/repo] } }", ns, where, armName)
 			}
+			st.cfg.Triggers = append(st.cfg.Triggers, inst)
 		}
-		st.cfg.Triggers = append(st.cfg.Triggers, tr)
+		continue
 	}
 	// An arm that names no shipped trigger is a config error.
 	for armName := range req.inst.Triggers {
@@ -943,3 +978,19 @@ func sortedWorkflowKeys(m map[string]WorkflowDef) []string {
 	return s
 }
 func sortedStepKeys(m map[string]Step) []string { s := mapKeys(m); sort.Strings(s); return s }
+
+// cloneTriggerSpec deep-copies a trigger so two instances of one pack trigger
+// share no slice or map. A shallow copy would have them mutating each other's
+// filters — which is exactly the state the per-instance identity exists to
+// keep apart.
+func cloneTriggerSpec(t TriggerSpec) (TriggerSpec, error) {
+	b, err := yaml.Marshal(t)
+	if err != nil {
+		return TriggerSpec{}, err
+	}
+	var out TriggerSpec
+	if err := yaml.Unmarshal(b, &out); err != nil {
+		return TriggerSpec{}, err
+	}
+	return out, nil
+}
