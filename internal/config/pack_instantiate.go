@@ -358,6 +358,11 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		if !ok {
 			arm, ok = req.inst.Triggers[armAddr]
 		}
+		// `"*"` supplies arming defaults to EVERY shipped trigger; a named
+		// entry refines that one. The operator consents once.
+		if star, hasStar := req.inst.Triggers[ArmAll]; hasStar {
+			arm, ok = mergeArm(star, arm), true
+		}
 		if ok && !dormant {
 			if err := applyTriggerArm(&tr, arm); err != nil {
 				return fmt.Errorf("pack %q: trigger %q: %w", ns, armName, err)
@@ -384,6 +389,9 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	}
 	// An arm that names no shipped trigger is a config error.
 	for armName := range req.inst.Triggers {
+		if armName == ArmAll {
+			continue // names every trigger by construction
+		}
 		if !hasTrigger(man.Triggers, armName) {
 			return fmt.Errorf("pack %q: triggers: %q names no trigger shipped by this pack (shipped: %s)", ns, armName, triggerNames(man.Triggers))
 		}
@@ -777,6 +785,9 @@ func applyTriggerArm(tr *TriggerSpec, arm TriggerArm) error {
 			return err
 		}
 		tr.Policy = pol
+	}
+	if arm.Gate != nil {
+		tr.Gate = arm.Gate
 	}
 	return nil
 }

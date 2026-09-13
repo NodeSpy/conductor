@@ -65,10 +65,41 @@ packs:
     on:
       github.pull_request: { filters: { labels_not: [wip] } }   # override a trigger by name
     triggers:
+      "*":       { enabled: true, repos: [your-org/app] }  # arm EVERY shipped trigger, one consent
       on_review_request:                        # the pack ships this DISARMED
         enabled: true                           # you arm it
         repos:   [your-org/app]                 # required for a github trigger — this IS the consent
 ```
+
+### `"*"` — arm every trigger with one consent
+
+A pack that ships six triggers should not make you paste the same repo list
+six times. The `"*"` key supplies arming defaults (`enabled`, `repos`,
+`filters`, `policy`, `gate`) to **every** trigger the pack ships; a named key
+refines that one.
+
+```yaml
+packs:
+  review:
+    triggers:
+      "*":     { enabled: true, repos: [your-org/app] }   # all of them, here
+      deploy:  { repos: [your-org/infra] }                # …except this one
+      nightly: { enabled: false }                         # …and not this one at all
+```
+
+Named wins field by field, and anything it leaves unset keeps the wildcard's
+value. **`repos:` REPLACES** rather than appends — repos are the consent, so an
+operator must be able to narrow what `"*"` granted, not only widen it.
+
+`"*"` supplies consent; it does not bypass it. An armed trigger with no repo
+list is still refused.
+
+> **A floating version range picks up new triggers.** With `version: "^1.2"`,
+> a trigger added in a later pack release is armed on your consented repos at
+> the next `init`/update — that is what "every trigger the pack ships" means,
+> and the lockfile diff is where you see it. Pin exactly (`version: "1.2.3"`)
+> to freeze the set. Conductor does not enforce a pin for `"*"` today; read the
+> lockfile diff on update.
 
 The block **is** the override surface — no separate drop-in files. `policy:`
 deep-merges in order bundled pack policy <- instance `policy:` <- a trigger

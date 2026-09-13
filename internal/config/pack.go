@@ -247,10 +247,48 @@ type TriggerArm struct {
 	Filters map[string]any `yaml:"filters,omitempty"`
 	// Policy deep-merges onto the shipped trigger's policy (behavior override).
 	Policy map[string]any `yaml:"policy,omitempty"`
+	// Gate replaces the shipped trigger's gate. The OPERATOR setting a gate is
+	// the point — it is their check that runs before the pack's steps land.
+	Gate *GateSpec `yaml:"gate,omitempty"`
 }
 
 // IsArmed reports whether the consumer armed this trigger (enabled:true).
 func (t TriggerArm) IsArmed() bool { return t.Enabled != nil && *t.Enabled }
+
+// ArmAll is the wildcard `triggers:` key — arming defaults that apply to EVERY
+// trigger the pack ships, so an operator consents once instead of repeating a
+// repo list per trigger.
+//
+//	triggers:
+//	  "*":    { enabled: true, repos: [your-org/app] }
+//	  deploy: { repos: [your-org/infra] }     # refines that one
+const ArmAll = "*"
+
+// mergeArm layers a NAMED arm over the `"*"` defaults. Named wins field by
+// field; anything it leaves unset keeps the wildcard's value.
+//
+// Repos REPLACE rather than append, because repos are the consent: an operator
+// who names repos for one trigger is saying "this one, here" and must be able
+// to narrow, not only widen, what `"*"` granted.
+func mergeArm(star, named TriggerArm) TriggerArm {
+	out := star
+	if named.Enabled != nil {
+		out.Enabled = named.Enabled
+	}
+	if len(named.Repos) > 0 {
+		out.Repos = named.Repos
+	}
+	if named.Filters != nil {
+		out.Filters = deepOverride(star.Filters, named.Filters)
+	}
+	if named.Policy != nil {
+		out.Policy = deepOverride(star.Policy, named.Policy)
+	}
+	if named.Gate != nil {
+		out.Gate = named.Gate
+	}
+	return out
+}
 
 // ---------------------------------------------------------------------------
 // Pack manifest (conductor-pack.yaml) — the pack's own definition.
