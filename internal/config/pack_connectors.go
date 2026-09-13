@@ -251,3 +251,63 @@ func (st *packInstantiation) checkConnectorVersions(ns string, reqs ConnectorReq
 	}
 	return nil
 }
+
+// AUTO-BIND THE SOLE CONNECTOR OF A REQUIRED TYPE.
+//
+// A pack's `requires.connectors: {github: "*"}` names a connector TYPE. When
+// the consumer has exactly one connector of that type, asking them to write
+// `connectors: {github: gh}` is ceremony that carries no decision: there is
+// nothing else it could mean. Two or more, and the choice is real, so it stays
+// theirs.
+//
+//	0 candidates  → unchanged (required → error, optional → dormant)
+//	1 candidate   → bound automatically, and it must satisfy the version
+//	                constraint — an incompatible sole candidate is an error,
+//	                never a silent bind
+//	2+ candidates → the explicit binding is required, and the error names them
+//
+// An explicit binding always wins; this only ever fills a gap. Matching is by
+// the instance's `use:` type, not its name, so a connector called `gh` is
+// found for a pack that requires `github`.
+//
+// This is connector PLUMBING, not consent. Trigger arming (`repos:`) stays
+// explicit — a pack that can now reach your github connector still fires on no
+// repo until you say which.
+func (st *packInstantiation) autoBindConnectors(ns string, reqs ConnectorReqs, env envBindings) error {
+	for _, name := range reqs.Names() {
+		if _, already := env.conn[name]; already {
+			continue // explicit wins
+		}
+		if IsPackSelfBindingConnector(name) {
+			continue // binds to itself; there is nothing to choose
+		}
+		var candidates []string
+		for instName, ref := range st.cfg.ConnectorsMap {
+			if strings.TrimSpace(ref.Use) == name {
+				candidates = append(candidates, instName)
+			}
+		}
+		sort.Strings(candidates)
+		switch len(candidates) {
+		case 0:
+			// Leave it: validateRequires reports the required-vs-optional
+			// case, with the message that already explains binding.
+		case 1:
+			sole := candidates[0]
+			// Never silently bind something the pack said it cannot use.
+			if constraint := strings.TrimSpace(reqs[name].Version); constraint != "" && constraint != AnyVersion {
+				if have, known := resolvedConnectorVersion(sole, st.cfg.ConnectorsMap[sole]); known {
+					if err := checkConductorConstraint(constraint, have); err != nil && !Ungatable(err) {
+						return fmt.Errorf("pack %q: requires connector %q %s and your only %s connector (%q) is at %s — upgrade it, or bind a compatible one explicitly: connectors: { %s: <your-connector> }",
+							ns, name, constraint, name, sole, have, name)
+					}
+				}
+			}
+			env.conn[name] = sole
+		default:
+			return fmt.Errorf("pack %q: connector %q is ambiguous — your config has %d of type %s (%s), so which one this pack should use is a real choice and yours to make: connectors: { %s: <your-connector> }",
+				ns, name, len(candidates), name, strings.Join(candidates, ", "), name)
+		}
+	}
+	return nil
+}

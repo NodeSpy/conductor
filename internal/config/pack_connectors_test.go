@@ -270,9 +270,13 @@ workflows:
   flow:
     steps: [{ id: s, type: agent, prompt: p }]
 `)
+	// NO connector of the required type: nothing to auto-bind, so the
+	// declared-but-unbound path is the one under test. (With exactly one
+	// github connector the binding carries no decision and is filled in —
+	// TestSoleConnectorOfARequiredTypeIsAutoBound.)
 	_, err := resolveAndLoad(t, writeDoc(t, dir, `
 connectors:
-  gh: { use: github, token: x }
+  sl: { use: slack, bot_token: x }
 packs:
   p: { source: ./src/p }
 `))
@@ -295,9 +299,11 @@ workflows:
   flow:
     steps: [{ id: s, type: agent, prompt: p }]
 `)
+	// As above: no github connector, so there is nothing to auto-bind and
+	// the optional-unbound path is what runs.
 	cfg, err := resolveAndLoad(t, writeDoc(t, dir, `
 connectors:
-  gh: { use: github, token: x }
+  sl: { use: slack, bot_token: x }
 packs:
   p: { source: ./src/p }
 `))

@@ -280,6 +280,26 @@ packs:
 > An unbound optional connector is a load notice, and the parts of the pack
 > that use it go dormant.
 
+### Binding is automatic when there is only one candidate
+
+You do not write a binding that carries no decision. For each
+`requires.connectors` entry you did not bind explicitly:
+
+| your config has | what happens |
+|---|---|
+| **exactly one** connector of that type | bound automatically |
+| **two or more** | a load error naming them — which one is a real choice, and yours |
+| **none** | unchanged: required → load error, `required: false` → dormant |
+
+Matching is by the instance's `use:` type, not its name, so a connector called
+`gh` is found for a pack that requires `github`. An explicit
+`packs.<name>.connectors:` binding always wins. A sole candidate that does not
+satisfy the pack's version constraint is an error, never a silent bind.
+
+**This is plumbing, not consent.** A pack that can now reach your github
+connector still fires on no repo until you arm its triggers and name them —
+the repo list is the consent, and auto-binding never supplies it.
+
 ## Overriding pack internals
 
 `packs.<name>:` **mirrors the pack's own sections**, and keys deep-merge onto

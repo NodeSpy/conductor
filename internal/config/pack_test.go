@@ -297,9 +297,11 @@ pack:
 workflows:
   flow: { steps: [ { id: x, run: js, code: "return {}" } ] }
 `)
-	// Instance does NOT bind github.
+	// Instance does NOT bind github, and the consumer has no github
+	// connector to auto-bind either — so the required-but-unbound path is
+	// what this exercises.
 	body := `
-connectors: { gh: { use: github } }
+connectors: { sl: { use: slack, bot_token: x } }
 packs:
   needs:
     source: ./src/needs

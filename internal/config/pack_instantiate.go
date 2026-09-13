@@ -188,6 +188,13 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		handoff: mergeStrMaps(req.handoffForward, req.inst.Handoffs),
 	}
 
+	// Fill in the bindings that carry no decision: a required connector type
+	// the consumer has exactly one of. Runs BEFORE validateRequires so the
+	// auto-bound entry is validated like an explicit one.
+	if err := st.autoBindConnectors(ns, man.Pack.Requires.Connectors, env); err != nil {
+		return err
+	}
+
 	// Validate the instance satisfies the pack interface (requires:).
 	if err := st.validateRequires(ns, man, req.inst, env); err != nil {
 		return err
