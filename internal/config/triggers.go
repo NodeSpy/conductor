@@ -195,6 +195,33 @@ func instanceHandle(n *yaml.Node) (string, error) {
 	if err := n.Decode(&body); err != nil {
 		return "", err
 	}
+	return contentHandle(body)
+}
+
+// contentHandle is the identity scheme ITSELF, shared by main-config trigger
+// instances (instanceHandle, from a YAML node) and pack trigger instances
+// (from a decoded TriggerArm). One scheme, so the two cannot drift about what
+// makes two instances the same instance.
+//
+// The value is re-marshalled through a plain map — yaml.v3 sorts a Go map's
+// keys — so the handle depends only on CONTENT: it survives a reorder of the
+// array and a reordering of keys within an entry.
+//
+// This handle is INTERNAL. It keys dedup, session and outcome state so two
+// instances of one trigger never collide; it is not an address, appears in no
+// config, and is not something an operator writes or reads. An instance is
+// edited where it lives — in the array the operator wrote.
+func contentHandle(v any) (string, error) {
+	b, err := yaml.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	// Round-trip through a map so a struct and an equivalent node canonicalize
+	// identically (sorted keys, no struct field order).
+	var body map[string]any
+	if err := yaml.Unmarshal(b, &body); err != nil {
+		return "", err
+	}
 	canon, err := yaml.Marshal(body)
 	if err != nil {
 		return "", err

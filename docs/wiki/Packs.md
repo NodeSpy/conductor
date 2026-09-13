@@ -111,16 +111,24 @@ packs:
         - { repos: [team-b/*], filters: { labels: [urgent] } }
 ```
 
-Each instance gets a distinct identity (`review/deploy#0`, `review/deploy#1`)
-feeding dedup, session and outcome state, so the two armings never suppress
-each other on an event they both match. The object form keeps the plain
-trigger name, so nothing about a single-instance config changes.
+Each instance keeps its own dedup, session and outcome state, so the two
+armings never suppress each other on an event they both match. The object form
+is one instance and changes nothing about a single-instance config.
 
-**Consent is per instance.** An armed instance with no repo list is refused on
-its own account — giving instance 0 repos does not let instance 1 through.
+**There is no instance id.** An instance is just an entry in the array you
+wrote — edit it where it sits. Conductor derives the per-instance state key
+from the entry's CONTENT, which means **reordering the array changes nothing**:
+each arming keeps its own history because that history was never tied to its
+position. Editing an entry, on the other hand, makes it a different arming with
+its own state — which is the same rule read the other way.
 
-Address one instance in an `on:` overlay by its position — `deploy[1]` — and
-the bare name applies to all of them.
+Two byte-identical entries are one arming written twice, and a load error.
+
+**Consent is per instance.** An armed entry with no repo list is refused on its
+own account — giving one entry repos does not let another through.
+
+An `on:` overlay addresses the trigger by name and applies to all of its
+instances.
 
 > **A floating version range picks up new triggers.** With `version: "^1.2"`,
 > a trigger added in a later pack release is armed on your consented repos at

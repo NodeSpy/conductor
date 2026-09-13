@@ -70,7 +70,7 @@ func TestArrayTriggerYieldsNDistinctInstances(t *testing.T) {
 			t.Errorf("instance %d keeps the trigger's address, got %q", i, addr)
 		}
 		if handle == "" {
-			t.Errorf("instance %d carries no instance handle: %q", i, tr.Name)
+			t.Errorf("instance %d carries no internal instance key: %q", i, tr.Name)
 		}
 	}
 	// Each instance carries its OWN arming.
@@ -144,8 +144,11 @@ packs:
 	if err == nil || !strings.Contains(err.Error(), "names no repos") {
 		t.Fatalf("an armed instance with no repos must be refused on its own account: %v", err)
 	}
-	if err != nil && !strings.Contains(err.Error(), "deploy[1]") {
-		t.Errorf("the error should name WHICH instance: %v", err)
+	// The diagnostic points at the entry by its POSITION in the operator's own
+	// file. That is a pointer, not an address — there is no syntax for naming
+	// an instance, and the internal content key must never leak into it.
+	if err != nil && !strings.Contains(err.Error(), "instance 2 of 2") {
+		t.Errorf("the error should point at WHICH entry: %v", err)
 	}
 }
 
@@ -191,5 +194,150 @@ packs:
 `))
 	if err == nil || !strings.Contains(err.Error(), "empty array") {
 		t.Fatalf("an empty arming array must be refused: %v", err)
+	}
+}
+
+// THE POINT OF CONTENT-KEYING: reordering the array is a NO-OP for state.
+//
+// Each instance's internal key is derived from its own content, so an operator
+// who moves an entry up or down keeps that entry's dedup, session and outcome
+// history. Under index-keyed identity a reorder silently re-points every
+// instance's state at a different arming — the kind of breakage that shows up
+// as "why did it re-run everything" days later.
+func TestReorderingTheInstanceArrayKeepsEachKeyStable(t *testing.T) {
+	first := instancesOf(t, `
+    triggers:
+      deploy:
+        - { enabled: true, repos: [team-a/*] }
+        - { enabled: true, repos: [team-b/*], filters: { labels: [urgent] } }
+`)
+	// The same two armings, written in the other order.
+	second := instancesOf(t, `
+    triggers:
+      deploy:
+        - { enabled: true, repos: [team-b/*], filters: { labels: [urgent] } }
+        - { enabled: true, repos: [team-a/*] }
+`)
+	keyOf := func(trs []TriggerSpec, repo string) string {
+		t.Helper()
+		for _, tr := range trs {
+			if r := repoList(tr); len(r) == 1 && r[0] == repo {
+				return tr.Name
+			}
+		}
+		t.Fatalf("no instance for %q", repo)
+		return ""
+	}
+	for _, repo := range []string{"team-a/*", "team-b/*"} {
+		before, after := keyOf(first, repo), keyOf(second, repo)
+		if before != after {
+			t.Errorf("the %s instance changed key across a reorder (%q -> %q) — its "+
+				"dedup/session/outcome state would be orphaned. Identity must be "+
+				"CONTENT, not position.", repo, before, after)
+		}
+	}
+}
+
+// …and an EDIT to an instance is a new instance, which is the same rule read
+// the other way: the state belongs to the arming, not to the slot.
+func TestEditingAnInstanceChangesItsKey(t *testing.T) {
+	a := instancesOf(t, `
+    triggers:
+      deploy:
+        - { enabled: true, repos: [team-a/*] }
+        - { enabled: true, repos: [team-b/*] }
+`)
+	b := instancesOf(t, `
+    triggers:
+      deploy:
+        - { enabled: true, repos: [team-a/*] }
+        - { enabled: true, repos: [team-c/*] }
+`)
+	if a[0].Name != b[0].Name {
+		t.Errorf("the untouched instance must keep its key: %q vs %q", a[0].Name, b[0].Name)
+	}
+	if a[1].Name == b[1].Name {
+		t.Error("an edited instance is a different arming and must get its own key")
+	}
+}
+
+// Two byte-identical entries collapse to one content key, so they are one
+// arming written twice — a config mistake, not a silent deduplication.
+func TestIdenticalInstancesAreALoadError(t *testing.T) {
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/review", instancePack)
+	_, err := resolveAndLoad(t, writeDoc(t, dir, `
+connectors:
+  gh: { use: github, token: x }
+packs:
+  review:
+    source: ./src/review
+    triggers:
+      deploy:
+        - { enabled: true, repos: [team-a/*] }
+        - { enabled: true, repos: [team-a/*] }
+`))
+	if err == nil || !strings.Contains(err.Error(), "duplicate trigger instance") {
+		t.Fatalf("two identical arm entries must be a load error: %v", err)
+	}
+	// Key order within an entry is not content: these are still identical.
+	dir2 := t.TempDir()
+	writePackSource(t, dir2, "src/review", instancePack)
+	_, err = resolveAndLoad(t, writeDoc(t, dir2, `
+connectors:
+  gh: { use: github, token: x }
+packs:
+  review:
+    source: ./src/review
+    triggers:
+      deploy:
+        - { enabled: true, repos: [team-a/*] }
+        - { repos: [team-a/*], enabled: true }
+`))
+	if err == nil || !strings.Contains(err.Error(), "duplicate trigger instance") {
+		t.Fatalf("key order within an entry is not content — still a duplicate: %v", err)
+	}
+}
+
+// NO USER-FACING INSTANCE ID. The internal content key must not appear in any
+// config surface: there is no `deploy#<hash>` or `deploy[1]` to write, and an
+// `on:` overlay addresses the trigger by the name the author wrote, applying
+// to every instance of it.
+func TestThereIsNoWayToAddressOneInstance(t *testing.T) {
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/review", instancePack)
+	for _, attempt := range []string{"deploy[1]", "deploy#0", "deploy#abcd1234"} {
+		_, err := resolveAndLoad(t, writeDoc(t, dir, `
+connectors:
+  gh: { use: github, token: x }
+packs:
+  review:
+    source: ./src/review
+    on:
+      "`+attempt+`": { filters: { labels: [x] } }
+    triggers:
+      deploy:
+        - { enabled: true, repos: [team-a/*] }
+        - { enabled: true, repos: [team-b/*] }
+`))
+		if err == nil || !strings.Contains(err.Error(), "addresses no trigger") {
+			t.Errorf("%q must not address an instance — instances are array entries, "+
+				"edited where they sit: %v", attempt, err)
+		}
+	}
+	// The trigger's own name still overlays ALL of its instances.
+	cfg := instancesOf(t, `
+    on:
+      deploy: { filters: { labels: [everywhere] } }
+    triggers:
+      deploy:
+        - { enabled: true, repos: [team-a/*] }
+        - { enabled: true, repos: [team-b/*] }
+`)
+	for i, tr := range cfg {
+		l, _ := tr.Filters["labels"].([]any)
+		if len(l) != 1 || l[0] != "everywhere" {
+			t.Errorf("instance %d did not receive the trigger-wide overlay: %v", i, tr.Filters)
+		}
 	}
 }

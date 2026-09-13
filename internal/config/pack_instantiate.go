@@ -380,16 +380,31 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		// ONE ARM, the common shape: the trigger keeps its own name, so
 		// nothing about an existing config changes.
 		// N ARMS: the same pack trigger armed N times, each instance getting
-		// its own identity so two instances never collide on dedup, session,
-		// or outcome state.
+		// its own INTERNAL identity so two instances never collide on dedup,
+		// session, or outcome state.
+		//
+		// That identity is the instance's CONTENT, through the same
+		// contentHandle main-config trigger instances use — so reordering the
+		// array is a no-op for state: each entry keeps its own history because
+		// its history was never tied to where it sat. There is no user-facing
+		// id here; an instance is edited where it lives, in the array.
+		handles := make(map[string]int, len(arms))
 		for idx, arm := range arms {
 			inst := tr
 			if len(arms) > 1 {
-				var err error
+				h, err := contentHandle(arm)
+				if err != nil {
+					return fmt.Errorf("pack %q: trigger %q instance %d: %w", ns, armName, idx, err)
+				}
+				if prev, dup := handles[h]; dup {
+					return fmt.Errorf("pack %q: trigger %q: duplicate trigger instance — entries %d and %d are identical, so they are one arming written twice (an instance's identity is its content: repos/filters/gate). Delete one, or make them differ.",
+						ns, armName, prev+1, idx+1)
+				}
+				handles[h] = idx
 				if inst, err = cloneTriggerSpec(tr); err != nil {
 					return fmt.Errorf("pack %q: trigger %q instance %d: %w", ns, armName, idx, err)
 				}
-				inst.Name = InstanceName(tr.Name, strconv.Itoa(idx))
+				inst.Name = InstanceName(tr.Name, h)
 			}
 			if err := applyTriggerArm(&inst, arm); err != nil {
 				return fmt.Errorf("pack %q: trigger %q: %w", ns, armName, err)
@@ -414,7 +429,10 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 			if arm.IsArmed() && !triggerScopesRepos(&inst) && st.anySourceIsRepoScoped(&inst) {
 				where := armName
 				if len(arms) > 1 {
-					where = fmt.Sprintf("%s[%d]", armName, idx)
+					// Point at the entry the operator wrote, by its position
+					// in their own file. This is a diagnostic, not an address:
+					// there is no syntax for naming one instance.
+					where = fmt.Sprintf("%s (instance %d of %d)", armName, idx+1, len(arms))
 				}
 				return fmt.Errorf("pack %q: trigger %q is armed (enabled: true) but names no repos — a github pack trigger must scope its repos (the repo list is the consent). Add e.g. triggers: { %s: { enabled: true, repos: [owner/repo] } }", ns, where, armName)
 			}

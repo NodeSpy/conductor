@@ -14,26 +14,27 @@ import (
 // would mean instance 0 handling an event SUPPRESSES instance 1's handling of
 // the same event, silently, and only for events both instances match.
 //
-// The chain: a trigger spec's Name becomes core.Trigger.Variant, and the
-// engine keys dedup on `kind#variant`. Distinct instance names therefore give
-// distinct dedup state — this pins that the chain actually holds, rather than
-// trusting that the names differ.
+// The chain: a trigger spec's Name carries an INTERNAL content-derived
+// instance key, that Name becomes core.Trigger.Variant, and the engine keys
+// dedup on `kind#variant`. This pins that the chain actually holds end to end,
+// rather than trusting that the keys differ somewhere upstream.
 func TestTriggerInstancesKeepSeparateDedupState(t *testing.T) {
 	dir := t.TempDir()
 	st, err := store.Open(store.Options{StatePath: dir + "/s.json", AuditPath: dir + "/a.jsonl"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The two instances as the instantiator names them.
+	// The two instances as the instantiator names them: one address, two
+	// content-derived keys (opaque, internal — never written by an operator).
 	a := core.Trigger{
 		Source: "github", Instance: "gh", Kind: "push",
-		Variant:       config.InstanceName("review/deploy", "0"),
+		Variant:       config.InstanceName("review/deploy", "a1b2c3d4"),
 		TargetTrusted: true,
 		Target:        core.Target{Repo: "team/app", Number: 7},
 		Dedup:         "same-event-signature",
 	}
 	b := a
-	b.Variant = config.InstanceName("review/deploy", "1")
+	b.Variant = config.InstanceName("review/deploy", "e5f60718")
 
 	dkindOf := func(t core.Trigger) string {
 		if t.Variant == "" {
