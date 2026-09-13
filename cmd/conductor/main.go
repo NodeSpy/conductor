@@ -199,6 +199,18 @@ usage:
 // install-state directory for this process: the same isolation
 // XDG_STATE_HOME gives, reachable from a single command without exporting
 // anything.
+// usedConfigFlag reports whether --config was passed, so a command can tell an
+// explicit config path from the default and refuse an ambiguous mix of
+// --config and a bare positional.
+func usedConfigFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--config" {
+			return true
+		}
+	}
+	return false
+}
+
 func configPath(args []string) (string, []string) {
 	def := filepath.Join(configDir(), "config.yaml")
 	rest := []string{}
@@ -289,7 +301,25 @@ func validateAll(cfg *config.Config, igs []core.Integration) error {
 }
 
 func cmdValidate(args []string) error {
-	cfg, _, err := loadConfig(args)
+	// `conductor validate <path>` validates THAT file. A bare positional path
+	// used to be silently dropped (configPath only consumed --config), so the
+	// command validated the DEFAULT config instead — a footgun that hid a bad
+	// file behind an "ok" for a different one. Honor the positional; refuse an
+	// ambiguous invocation rather than pick one silently.
+	path, rest := configPath(args)
+	switch len(rest) {
+	case 0:
+		// --config <path> or the default; use as-is.
+	case 1:
+		if usedConfigFlag(args) {
+			return fmt.Errorf("validate: pass the config once — either `--config %s` or a bare `%s`, not both", path, rest[0])
+		}
+		path = rest[0]
+	default:
+		return fmt.Errorf("validate takes a single config path; got %d positional arguments: %s", len(rest), strings.Join(rest, " "))
+	}
+	loadEnvFile(filepath.Join(filepath.Dir(path), "conductor.env"))
+	cfg, err := config.Load(path)
 	if err != nil {
 		return err
 	}
