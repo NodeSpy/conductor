@@ -161,6 +161,22 @@ group_A_resolution() {
     bad "A2 explicit controller:" A A2 "no dispatch for a2/web2"
   fi
 
+  # A2b: fixer_explicit pins a model (config: model: claude-opus-5-e2e) that
+  # fakepaseo's provider roster confirms. Real `paseo run` REJECTS --model
+  # with no --provider (MISSING_PROVIDER, exit 1) — this is the v0.9.0
+  # regression: the resolver knew the model's provider but dispatch never
+  # threaded it through. fakepaseo now enforces the same contract, so an
+  # "ok" outcome here (not just backend=paseo, which a FAILED dispatch row
+  # also carries) proves --provider actually reached `paseo run`.
+  if wait_for 30 audit_match conductor-ctrl '"repo":"a2/web2"' '"event":"dispatch"' '"outcome":"ok"'; then
+    ok "A2b model-pinned dispatch succeeds (--provider threaded to paseo run)" A A2b
+  else
+    bad "A2b model-pinned dispatch" A A2b "no ok dispatch for a2/web2 (MISSING_PROVIDER?)"
+  fi
+  local ev_a2; ev_a2="$(cexec conductor-ctrl cat /data/fakepaseo/events.log 2>/dev/null)"
+  assert_contains "$ev_a2" "--model claude-opus-5-e2e" A A2c "A2c argv carries --model"
+  assert_contains "$ev_a2" "--provider e2e-claude" A A2d "A2d argv carries --provider"
+
   if wait_for 30 audit_match conductor-ctrl '"repo":"a3/web3"' '"event":"dispatch"' '"backend":"paseo"'; then
     ok "A3 default:true controller dispatches (no explicit controller)" A A3
   else

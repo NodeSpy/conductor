@@ -77,6 +77,47 @@ func TestPaseoDryRunArgvShape(t *testing.T) {
 	}
 }
 
+// TestPaseoProviderFlag: a Request carrying a resolved Provider alongside its
+// Model must pass BOTH --provider and --model to `paseo run` — real paseo
+// rejects a model-pinned run with --model but no --provider
+// (MISSING_PROVIDER, exit 1); --model alone is not enough. Regression guard
+// for the v0.9.0 dispatch bug: the resolver knew the model's provider
+// (models.Decision) but dispatch never threaded it through to argv.
+func TestPaseoProviderFlag(t *testing.T) {
+	d := &Dispatcher{PaseoBin: "paseo", DryRun: true, repoDirs: map[string]string{}}
+	req := Request{
+		Wait:     true,
+		Trigger:  core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "a/w", PR: 1, Number: 1}},
+		Action:   config.Action{Type: "agent", Prompt: "fix it", Checkout: "none"},
+		Model:    "claude-opus-4-8[1m]",
+		Provider: "claude",
+	}
+	ref, err := d.paseo(context.Background(), req)
+	if err != nil {
+		t.Fatalf("dry-run: %v", err)
+	}
+	argv := strings.Join(ref.Argv, " ")
+	if !strings.Contains(argv, "--provider claude") {
+		t.Fatalf("argv missing --provider claude (real paseo requires it alongside --model): %s", argv)
+	}
+	if !strings.Contains(argv, "--model claude-opus-4-8[1m]") {
+		t.Fatalf("argv missing --model: %s", argv)
+	}
+
+	// A bare launch (no resolved model/provider) must still omit both flags —
+	// the runtime's own default, unaffected by this fix.
+	bare := req
+	bare.Model, bare.Provider = "", ""
+	ref, err = d.paseo(context.Background(), bare)
+	if err != nil {
+		t.Fatalf("dry-run bare: %v", err)
+	}
+	argv = strings.Join(ref.Argv, " ")
+	if strings.Contains(argv, "--provider") || strings.Contains(argv, "--model") {
+		t.Fatalf("bare launch must pass neither --provider nor --model: %s", argv)
+	}
+}
+
 func TestPaseoCatchUpSkipsAndQueueFailure(t *testing.T) {
 	bin, dir := fakePaseoDir(t)
 	put(t, dir, "ls.json", `[{"id":"a-live"}]`)

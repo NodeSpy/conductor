@@ -38,6 +38,11 @@ type Decision struct {
 	// caller's own runtime selection alone (bare launch, or a pass-through
 	// pin that no roster confirmed).
 	Runtime string
+	// Provider is the catalog provider Model belongs to (paseo run --provider),
+	// taken from the roster entry that confirmed the pick. Empty for a genuine
+	// BARE launch or a pass-through pin no roster verified — the runtime (or
+	// paseo itself) then falls back to its own default provider resolution.
+	Provider string
 	// Bare reports the bare-launch outcome explicitly, so a caller never has
 	// to infer it from an empty Model.
 	Bare bool
@@ -103,7 +108,7 @@ func (r *Resolver) Resolve(ctx context.Context, spec config.ModelSpec, runtimeHi
 		if over, ok := r.Overrides[fleetName]; ok && strings.TrimSpace(over) != "" {
 			rt := r.runtimeOffering(ctx, over, rts)
 			return Decision{
-				Model: over, Runtime: rt,
+				Model: over, Runtime: rt, Provider: r.providerFor(ctx, rt, over),
 				Reason: fmt.Sprintf("consumer override of fleet %q", fleetName),
 			}, nil
 		}
@@ -115,8 +120,8 @@ func (r *Resolver) Resolve(ctx context.Context, spec config.ModelSpec, runtimeHi
 	}
 
 	// 2. Intersect with the union of the rosters, ranked by prefer:.
-	if best, rt, ok := r.bestAcceptable(ctx, acceptable, rts); ok {
-		return Decision{Model: best, Runtime: rt, Reason: r.reasonFor(fleetName, acceptable)}, nil
+	if best, rt, prov, ok := r.bestAcceptable(ctx, acceptable, rts); ok {
+		return Decision{Model: best, Runtime: rt, Provider: prov, Reason: r.reasonFor(fleetName, acceptable)}, nil
 	}
 
 	// An EXACT PIN nothing could confirm or deny passes through. When no
@@ -175,12 +180,13 @@ func (r *Resolver) deref(spec config.ModelSpec) (fleet string, resolved config.M
 //   - ties on the runtime side broken by `default: true`, then name order
 //     (a YAML map has no declaration order to appeal to, so name order is the
 //     deterministic stand-in).
-func (r *Resolver) bestAcceptable(ctx context.Context, acceptable []string, rts []string) (model, runtime string, ok bool) {
+func (r *Resolver) bestAcceptable(ctx context.Context, acceptable []string, rts []string) (model, runtime, provider string, ok bool) {
 	type cand struct {
 		model    string
 		fleetPos int
 		rank     int
 		runtime  string
+		provider string
 	}
 	best := map[string]*cand{}
 	var order []string
@@ -196,14 +202,14 @@ func (r *Resolver) bestAcceptable(ctx context.Context, acceptable []string, rts 
 			rank := preferRank(m, prefer)
 			c, seen := best[m]
 			if !seen {
-				best[m] = &cand{model: m, fleetPos: pos, rank: rank, runtime: name}
+				best[m] = &cand{model: m, fleetPos: pos, rank: rank, runtime: name, provider: providerOf(roster, m)}
 				order = append(order, m)
 				continue
 			}
 			// Same model on several runtimes: keep the better prefer rank,
 			// then the better runtime.
 			if rank < c.rank || (rank == c.rank && r.runtimeBeats(name, c.runtime)) {
-				c.rank, c.runtime = rank, name
+				c.rank, c.runtime, c.provider = rank, name, providerOf(roster, m)
 			}
 			if pos < c.fleetPos {
 				c.fleetPos = pos
@@ -211,7 +217,7 @@ func (r *Resolver) bestAcceptable(ctx context.Context, acceptable []string, rts 
 		}
 	}
 	if len(order) == 0 {
-		return "", "", false
+		return "", "", "", false
 	}
 	sort.SliceStable(order, func(i, j int) bool {
 		a, b := best[order[i]], best[order[j]]
@@ -221,7 +227,26 @@ func (r *Resolver) bestAcceptable(ctx context.Context, acceptable []string, rts 
 		return a.fleetPos < b.fleetPos
 	})
 	w := best[order[0]]
-	return w.model, w.runtime, true
+	return w.model, w.runtime, w.provider, true
+}
+
+// providerOf looks up model's provider in an already-discovered roster,
+// confirming the pick — "" when the roster doesn't carry it (or doesn't say).
+func providerOf(roster Roster, model string) string {
+	if m, ok := roster.Find(model); ok {
+		return m.Provider
+	}
+	return ""
+}
+
+// providerFor is providerOf, discovering runtime's roster first. "" when
+// runtime is unset (nothing confirmed the pick) or the roster doesn't carry
+// the model.
+func (r *Resolver) providerFor(ctx context.Context, runtime, model string) string {
+	if runtime == "" || model == "" {
+		return ""
+	}
+	return providerOf(r.allowedRoster(ctx, runtime), model)
 }
 
 // runtimeDefault answers a step that named no model: the runtime's explicit
@@ -233,7 +258,9 @@ func (r *Resolver) runtimeDefault(ctx context.Context, rts []string) Decision {
 			continue
 		}
 		if rt.Models.Default != "" {
-			return Decision{Model: rt.Models.Default, Runtime: name, Reason: "runtime " + name + " models.default"}
+			return Decision{Model: rt.Models.Default, Runtime: name,
+				Provider: r.providerFor(ctx, name, rt.Models.Default),
+				Reason:   "runtime " + name + " models.default"}
 		}
 	}
 	// A resolved prefer: hit is the effective default when nothing is
@@ -243,8 +270,10 @@ func (r *Resolver) runtimeDefault(ctx context.Context, rts []string) Decision {
 		if len(prefer) == 0 {
 			continue
 		}
-		if hit := config.ExpandModelPatterns(prefer, r.allowedRoster(ctx, name).IDs()); len(hit) > 0 {
-			return Decision{Model: hit[0], Runtime: name, Reason: "runtime " + name + " models.prefer"}
+		roster := r.allowedRoster(ctx, name)
+		if hit := config.ExpandModelPatterns(prefer, roster.IDs()); len(hit) > 0 {
+			return Decision{Model: hit[0], Runtime: name, Provider: providerOf(roster, hit[0]),
+				Reason: "runtime " + name + " models.prefer"}
 		}
 	}
 	return Decision{Bare: true, Reason: "no model declared — bare launch (the runtime's own default)"}

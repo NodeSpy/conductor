@@ -263,7 +263,7 @@ func (r *Runner) followUp(ctx context.Context, t core.Trigger, step config.Step,
 	model := ""
 	if r.Agents.ResolveModel != nil {
 		var rt string
-		model, rt = r.Agents.ResolveModel(ctx, step)
+		model, rt, _ = r.Agents.ResolveModel(ctx, step)
 		if rt != "" && step.Runtime == "" {
 			step.Runtime = rt
 			runtimeName = rt

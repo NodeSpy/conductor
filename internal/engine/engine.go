@@ -888,7 +888,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if act.Backend != "" {
 		profile.Runtime = act.Backend
 	}
-	model, modelRuntime := e.resolveModel(ctx, profile)
+	model, modelRuntime, modelProvider := e.resolveModel(ctx, profile)
 	if modelRuntime != "" && profile.Runtime == "" {
 		profile.Runtime = modelRuntime
 	}
@@ -953,7 +953,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 
 	req := dispatch.Request{
-		Trigger: t, Action: act, Step: profile, Identity: identity, Model: model,
+		Trigger: t, Action: act, Step: profile, Identity: identity, Model: model, Provider: modelProvider,
 		Tokens: dispatch.Tokens{App: appTok, User: userTok},
 		Author: e.author, Shadow: shadow, CatchUp: t.CatchUp,
 	}

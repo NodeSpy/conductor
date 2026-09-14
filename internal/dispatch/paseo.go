@@ -36,6 +36,16 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// req.Model is the RESOLVED model (models.Resolver, design §2.3). Empty
 	// is a BARE LAUNCH — pass no --model at all and let the runtime use its
 	// own built-in default. That is a first-class outcome, not a gap.
+	//
+	// req.Provider is the model's resolved catalog provider. Real `paseo run`
+	// REQUIRES --provider whenever --model is given (MISSING_PROVIDER
+	// otherwise) — --model alone is not enough. Provider is only ever set
+	// alongside a roster-confirmed Model (see models.Resolver), so gating on
+	// it independently is equivalent to gating on "confirmed pin" and keeps
+	// the bare-launch path (both empty) untouched.
+	if req.Provider != "" {
+		argv = append(argv, "--provider", req.Provider)
+	}
 	if req.Model != "" {
 		argv = append(argv, "--model", req.Model)
 	}
