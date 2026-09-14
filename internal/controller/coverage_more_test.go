@@ -19,7 +19,7 @@ import (
 func TestACPResumePromptCancelClose(t *testing.T) {
 	agent := &fakeACPAgent{
 		sessionID:  "sess-9",
-		initResult: acp.InitializeResult{},
+		initResult: acp.InitializeResult{AgentCapabilities: acp.AgentCapabilities{LoadSession: true}},
 		onPrompt: func(ctx context.Context, a *fakeACPAgent, p acp.PromptParams) acp.PromptResult {
 			if p.SessionID != "sess-9" {
 				t.Errorf("prompt on wrong session: %q", p.SessionID)
@@ -67,7 +67,7 @@ func TestACPResumePromptCancelClose(t *testing.T) {
 func TestACPRefusalTurn(t *testing.T) {
 	agent := &fakeACPAgent{
 		sessionID:  "sess-r",
-		initResult: acp.InitializeResult{},
+		initResult: acp.InitializeResult{AgentCapabilities: acp.AgentCapabilities{LoadSession: true}},
 		onPrompt: func(context.Context, *fakeACPAgent, acp.PromptParams) acp.PromptResult {
 			return acp.PromptResult{StopReason: acp.StopReasonRefusal}
 		},

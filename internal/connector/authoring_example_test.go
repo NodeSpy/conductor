@@ -157,7 +157,7 @@ func TestAuthoringExampleRoundTrip(t *testing.T) {
 	reg := buildSinkRegistry(t, `
 connectors:
   hello:
-    type: authoring-example
+    use: authoring-example
     greeting: howdy                  # a connection field (ref.Decode)
     options: { shout: false }        # connector-default verb options; calls merge over them
 `)

@@ -26,12 +26,12 @@ secrets:
   ghv: vault:gh
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: http://x
     auth: { type: bearer, token: vault:gh }
     verbs: { v: { method: GET, path: / } }
   xero:
-    type: rest
+    use: rest
     base_url: http://y
     auth:
       type: oauth2
@@ -42,7 +42,7 @@ connectors:
       refresh_token: vault:xero_rt
     verbs: { v: { method: GET, path: / } }
   chat:
-    type: slack
+    use: slack
     app_token: pass:conductor/slack-app
     bot_token: file:/run/secrets/slack-bot
 stores:
@@ -117,7 +117,7 @@ func TestVaultsPassLeftoverSecretsUseErrors(t *testing.T) {
 secrets:
   pat: env:MY_PAT
 connectors:
-  box: { type: command }
+  box: { use: command }
 triggers:
   - on: manual
     steps:
@@ -138,12 +138,12 @@ vaults:
   secretdir: { type: file, dir: /run/secrets }
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: http://x
     auth: { type: bearer, token: vault:gh }
     verbs: { v: { method: GET, path: / } }
   chat:
-    type: slack
+    use: slack
     app_token: file:/run/secrets/app
     bot_token: file:/other/dir/bot
 `
@@ -240,17 +240,17 @@ secrets:
   pat: env:MY_PAT
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: http://x.invalid
     auth: { type: bearer, token: vault:gh }
     verbs: { v: { method: GET, path: / } }
   opapi:
-    type: rest
+    use: rest
     base_url: http://y.invalid
     auth: { type: bearer, token: op://Private/GitHub/token }
     verbs: { v: { method: GET, path: / } }
   chat:
-    type: slack
+    use: slack
     app_token: file:` + secDir + `/slack-bot
     bot_token: file:` + secDir + `/slack-bot
 triggers:

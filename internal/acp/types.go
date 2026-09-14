@@ -87,6 +87,18 @@ type AuthMethod struct {
 type NewSessionParams struct {
 	Cwd        string      `json:"cwd"`
 	McpServers []McpServer `json:"mcpServers"`
+	// Model is the resolved model for the session. Omitted when empty —
+	// a bare launch, where the agent uses its own default.
+	Model string `json:"model,omitempty"`
+}
+
+// LoadSessionParams asks the agent to re-attach to a prior session
+// (`session/load`). The agent replays the conversation to the client as
+// session/update notifications and then answers.
+type LoadSessionParams struct {
+	SessionID  string      `json:"sessionId"`
+	Cwd        string      `json:"cwd"`
+	McpServers []McpServer `json:"mcpServers"`
 }
 
 // McpServer is a stdio MCP server the agent should connect for the session.

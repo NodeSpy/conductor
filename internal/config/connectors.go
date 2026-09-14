@@ -24,30 +24,62 @@ import (
 // the raw node so the concrete connector type can decode its own connection
 // fields (tokens, app creds, schedules, feeds, …).
 type ConnectorRef struct {
-	Type    string `yaml:"type,omitempty"`
-	Enabled *bool  `yaml:"enabled,omitempty"`
+	// Use names WHAT IMPLEMENTS this connector — a builtin type (`github`), a
+	// bare name resolved from the official plugin repo (`sentry`), an explicit
+	// repo (`acme/plugins/jira`), or a local binary (`./bin/conductor-jira`).
+	// It replaced the old `type:` field plus the whole `plugins:` block; the
+	// kind (connector) comes from this block, never from the operator. See
+	// ParseUse and docs/design/use-unification.md.
+	Use string `yaml:"use,omitempty"`
+	// Network is this instance's DECLARED EGRESS — the "host:port" targets it
+	// is allowed to reach. It is the visible half of the permission manifest:
+	// what the operator accepts when they add the connector. It may not exceed
+	// the implementation's own declared egress.
+	Network []string `yaml:"network,omitempty"`
+	Enabled *bool    `yaml:"enabled,omitempty"`
 	// Options are the connector's default verb options; each `uses:` call's
 	// options merge over these (the call wins). Identity (`as:`) lives here.
 	Options map[string]any `yaml:"options,omitempty"`
 	// Policy is the connector-scoped policy block (ignore/rate_limits/backoff/
 	// pause_label live here; quiet_hours/concurrency may override the global).
 	Policy *Policy `yaml:"policy,omitempty"`
-	raw    yaml.Node
+	// Isolation is OPTIONAL hardening for a plugin-backed connector: the OS
+	// confinement layer (#36 §15) applied to the plugin's subprocess. Absent is
+	// the NORMAL case — the default model is the permission manifest above, not
+	// a jail. Set this on a locked-down box where OS confinement is wanted on
+	// top. Ignored for a builtin connector (nothing separate to confine).
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// AllowSecrets optionally tightens which secret refs may cross the process
+	// boundary to a plugin-backed connector — an EXACT-match allowlist (no
+	// globs). Empty = no extra restriction beyond the structural guarantee that
+	// an implementation only ever receives its own instances' credentials.
+	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
+	raw          yaml.Node
+	// legacyType holds a pre-`use:` `type:` value. It is NOT part of the schema
+	// — it exists only so validateConnectors can emit a migration-specific error
+	// instead of the silent "missing use:" a dropped field would produce.
+	legacyType string
 }
 
 // UnmarshalYAML captures the header fields and retains the raw node.
 func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 	type hdr struct {
-		Type    string         `yaml:"type,omitempty"`
+		Use     string         `yaml:"use,omitempty"`
+		Network []string       `yaml:"network,omitempty"`
 		Enabled *bool          `yaml:"enabled,omitempty"`
 		Options map[string]any `yaml:"options,omitempty"`
 		Policy  *Policy        `yaml:"policy,omitempty"`
+		// Type is the retired field, read for diagnostics only (see legacyType).
+		Type         string           `yaml:"type,omitempty"`
+		Isolation    *IsolationConfig `yaml:"isolation,omitempty"`
+		AllowSecrets []string         `yaml:"allow_secrets,omitempty"`
 	}
 	var h hdr
 	if err := n.Decode(&h); err != nil {
 		return err
 	}
-	r.Type, r.Enabled, r.Options, r.Policy, r.raw = h.Type, h.Enabled, h.Options, h.Policy, *n
+	r.Use, r.Network, r.Enabled, r.Options, r.Policy = h.Use, h.Network, h.Enabled, h.Options, h.Policy
+	r.Isolation, r.AllowSecrets, r.legacyType, r.raw = h.Isolation, h.AllowSecrets, h.Type, *n
 	return nil
 }
 
@@ -57,17 +89,35 @@ func (r ConnectorRef) Decode(v any) error { return r.raw.Decode(v) }
 // IsEnabled reports whether the connector is enabled (default true).
 func (r ConnectorRef) IsEnabled() bool { return r.Enabled == nil || *r.Enabled }
 
+// Resolved parses this entry's `use:` reference as a connector.
+func (r ConnectorRef) Resolved() (Use, error) { return ParseUse(UseKindConnector, r.Use) }
+
+// TypeName is the connector TYPE this entry implements — the name the connector
+// registry is keyed by. For a builtin it is the `use:` name itself; for a plugin
+// it is the component leaf (`acme/plugins/jira` → "jira"). Empty when `use:`
+// does not parse; validateConnectors reports that as a config error.
+func (r ConnectorRef) TypeName() string {
+	u, err := r.Resolved()
+	if err != nil {
+		return ""
+	}
+	return u.Name
+}
+
 // RuntimeConfig is one entry in the `runtimes:` map — where agents run
 // (today's controllers, renamed, plus launch config that used to be global).
 type RuntimeConfig struct {
 	// Extends names another runtimes: entry this one inherits unset fields from
 	// (see resolveExtends) — e.g. several cli runtimes sharing host/isolation.
 	Extends string `yaml:"extends,omitempty"`
-	// Type is a built-in runtime kind: paseo | agent-deck | opencode | cli.
-	// Mutually exclusive with Agent.
-	Type string `yaml:"type,omitempty"`
-	// Agent names an agent runtime driven over a transport (gemini, opencode,
-	// …). Mutually exclusive with Type; implies transport acp unless overridden.
+	// Use names WHAT IMPLEMENTS this runtime — a builtin (`paseo`, `acp`,
+	// `opencode`, `agent-deck`, `cli`), a bare name resolved from the official
+	// plugin repo (`modal`), an explicit repo, or a local binary. It replaced
+	// the old `type:` field plus the whole `plugins:` block; the kind (runtime)
+	// comes from this block. See ParseUse.
+	Use string `yaml:"use,omitempty"`
+	// Agent names the agent driven over the ACP transport (gemini, opencode,
+	// …). Valid only with `use: acp`, which it is required by.
 	Agent string `yaml:"agent,omitempty"`
 	// Transport is how conductor talks to the runtime: acp | native | cli.
 	Transport string `yaml:"transport,omitempty"`
@@ -87,13 +137,196 @@ type RuntimeConfig struct {
 	// Isolation wraps every launch this runtime performs (#36 §15). A
 	// profile's own isolation: wins over the runtime's.
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// Models is the OPTIONAL model policy for this runtime: which model it
+	// passes by default, how it ranks a choice, and what it may ever run.
+	// Absent = fully automatic (roster discovered, bare launch, no
+	// restrictions). See RuntimeModels and
+	// docs/design/runtimes-models-packs.md §1.2.
+	Models *RuntimeModels `yaml:"models,omitempty"`
+	// Session is the OVERALL session-affinity pool for this runtime: one live
+	// agent per (runtime, model, rendered key), shared by every step that
+	// declares no session: of its own. A step's own session: is its own pool
+	// instead. See SessionSpec and docs/design/agents-removal.md §3.
+	Session *SessionSpec `yaml:"session,omitempty"`
+	// Budget is this runtime's hard $/token spend cap over a rolling window
+	// (#36 §14). A budget caps EXECUTION COST on a backend, and the runtime
+	// is the backend — so this is where per-agent budgets moved to
+	// (docs/design/agents-removal.md §1). Checked alongside the global and
+	// workflow-scope budgets; an over-cap dispatch sheds and notifies.
+	Budget *BudgetPolicy `yaml:"budget,omitempty"`
+
+	// legacy holds a pre-`use:` `type:` value. NOT part of the schema — it is
+	// accepted by the decoder only so validateConnectors can name the migration
+	// instead of the strict decoder emitting "field type not found", which
+	// would be an opaque wall for every not-yet-migrated config on a box that
+	// auto-updates. See UnmarshalYAML.
+	legacy string
+}
+
+// runtimeFields is RuntimeConfig without its UnmarshalYAML method, so the strict
+// decode below does not recurse. The retired `type:` rides alongside it, read
+// for diagnostics only.
+type runtimeFields RuntimeConfig
+
+type runtimeDecode struct {
+	runtimeFields `yaml:",inline"`
+	Type          string `yaml:"type,omitempty"`
+}
+
+// UnmarshalYAML strict-decodes the runtime entry (so a typo is still an error)
+// while tolerating the retired `type:` key, which is captured for the migration
+// diagnostic in validateConnectors rather than rejected here.
+func (r *RuntimeConfig) UnmarshalYAML(n *yaml.Node) error {
+	var d runtimeDecode
+	if err := strictNodeDecode(n, &d); err != nil {
+		return err
+	}
+	*r = RuntimeConfig(d.runtimeFields)
+	r.legacy = d.Type
+	return nil
+}
+
+// legacyType returns a retired `type:` value this entry still carries, for the
+// migration diagnostic.
+func (r RuntimeConfig) legacyType() string { return r.legacy }
+
+// RuntimeSet is the `runtimes:` section. It is a map of named runtimes, but
+// the YAML accepts three shapes (docs/design/runtimes-models-packs.md §1.1) —
+// the common case is one word:
+//
+//	runtimes: paseo                  # scalar → one runtime
+//	runtimes: [paseo, claude]        # list   → several
+//	runtimes:                        # map    → named, with config
+//	  paseo: { models: { prefer: [claude-opus-5] } }
+//
+// In every shape a runtime's NAME implies its `use:` reference when they
+// match, so `runtimes: paseo` needs no `use:` line at all (filled by
+// applyRuntimeUseDefaults, which runs after `extends:` so an inherited `use:`
+// still wins over the implication).
+type RuntimeSet map[string]RuntimeConfig
+
+// UnmarshalYAML accepts the scalar, list, and map forms.
+func (s *RuntimeSet) UnmarshalYAML(n *yaml.Node) error {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		if n.Tag == "!!null" {
+			*s = nil
+			return nil
+		}
+		var name string
+		if err := n.Decode(&name); err != nil {
+			return fmt.Errorf("runtimes: must be a name, a list of names, or a map of named runtimes: %w", err)
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return fmt.Errorf("runtimes: empty runtime name")
+		}
+		*s = RuntimeSet{name: {}}
+		return nil
+	case yaml.SequenceNode:
+		out := RuntimeSet{}
+		for i, item := range n.Content {
+			name, rt, err := decodeRuntimeItem(i, item)
+			if err != nil {
+				return err
+			}
+			if _, dup := out[name]; dup {
+				return fmt.Errorf("runtimes[%d]: duplicate runtime %q — name them apart, or use the map form", i, name)
+			}
+			out[name] = rt
+		}
+		*s = out
+		return nil
+	case yaml.MappingNode:
+		out := RuntimeSet{}
+		type plain map[string]RuntimeConfig
+		var m plain
+		if err := n.Decode(&m); err != nil {
+			return err
+		}
+		for k, v := range m {
+			out[k] = v
+		}
+		*s = out
+		return nil
+	}
+	return fmt.Errorf("runtimes: must be a name, a list of names, or a map of named runtimes")
+}
+
+// decodeRuntimeItem decodes one entry of the LIST form: a bare name, or an
+// object that carries its own `use:` (from which the name is taken).
+func decodeRuntimeItem(i int, item *yaml.Node) (string, RuntimeConfig, error) {
+	if item.Kind == yaml.ScalarNode {
+		var name string
+		if err := item.Decode(&name); err != nil {
+			return "", RuntimeConfig{}, fmt.Errorf("runtimes[%d]: %w", i, err)
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return "", RuntimeConfig{}, fmt.Errorf("runtimes[%d]: empty runtime name", i)
+		}
+		return name, RuntimeConfig{}, nil
+	}
+	if item.Kind != yaml.MappingNode {
+		return "", RuntimeConfig{}, fmt.Errorf("runtimes[%d]: a list item is a runtime name or a { use: …, models: … } object", i)
+	}
+	var rt RuntimeConfig
+	if err := item.Decode(&rt); err != nil {
+		return "", RuntimeConfig{}, fmt.Errorf("runtimes[%d]: %w", i, err)
+	}
+	if rt.Use == "" {
+		return "", RuntimeConfig{}, fmt.Errorf("runtimes[%d]: an object list item needs `use:` to name what implements it (or write the map form, where the key is the name)", i)
+	}
+	u, err := ParseUse(UseKindRuntime, rt.Use)
+	if err != nil {
+		return "", RuntimeConfig{}, fmt.Errorf("runtimes[%d]: %w", i, err)
+	}
+	return u.Name, rt, nil
+}
+
+// applyRuntimeUseDefaults fills the key-implies-`use:` rule: a runtime that
+// names no implementation IS its own name. Runs from applyDefaults, i.e. AFTER
+// `extends:` resolution, so a child inheriting a parent's `use:` keeps it and
+// only a genuinely unset entry falls back to its key. An entry still carrying
+// the retired `type:` is left alone so validateConnectors can name the
+// migration instead of implying a reference the operator never wrote.
+func (c *Config) applyRuntimeUseDefaults() {
+	for name, rt := range c.Runtimes {
+		if rt.Use != "" || rt.legacy != "" || name == "" {
+			continue
+		}
+		rt.Use = name
+		c.Runtimes[name] = rt
+	}
+}
+
+// Resolved parses this entry's `use:` reference as a runtime.
+func (r RuntimeConfig) Resolved() (Use, error) { return ParseUse(UseKindRuntime, r.Use) }
+
+// BuiltinType is the built-in controller kind this runtime maps onto — paseo |
+// opencode | agent-deck | cli — or "" for `use: acp` (driven by Agent) and for a
+// PLUGIN runtime (whose ControllerConfig is synthesized at boot once the binary
+// is verified, in cmd/conductor).
+func (r RuntimeConfig) BuiltinType() string {
+	u, err := r.Resolved()
+	if err != nil || !u.IsBuiltin() || u.Name == "acp" {
+		return ""
+	}
+	return u.Name
+}
+
+// IsPlugin reports whether this runtime is implemented by an external plugin
+// rather than compiled into the daemon.
+func (r RuntimeConfig) IsPlugin() bool {
+	u, err := r.Resolved()
+	return err == nil && !u.IsBuiltin()
 }
 
 // Controller converts a runtime entry to the legacy controller shape the
 // controller registry consumes, carrying Bin, Host, and Isolation through.
 func (r RuntimeConfig) Controller() ControllerConfig {
 	return ControllerConfig{
-		Type: r.Type, Agent: r.Agent, Transport: r.Transport,
+		Type: r.BuiltinType(), Agent: r.Agent, Transport: r.Transport,
 		SessionModel: r.SessionModel, Default: r.Default,
 		Tool: r.Tool, Command: r.Command,
 		Bin: r.Bin, Host: r.Host, Isolation: r.Isolation,
@@ -233,6 +466,12 @@ type OnSource struct {
 	Filters map[string]any
 	Policy  *Policy
 	Hooks   []Hook
+	// dormant marks a source a pack shipped that this config cannot serve
+	// (no connector of its type). The expansion below turns it into a
+	// disabled variant, so ONE unservable source of a fan-in trigger does
+	// not take the servable ones down with it. Set by bindPackSources; not
+	// part of the schema.
+	dormant bool
 }
 
 // UnmarshalYAML accepts the bare-scalar and event-keyed one-key map forms,
@@ -383,12 +622,61 @@ func (t TriggerSpec) Event() string {
 	return e
 }
 
+// Sources returns every "<connector>.<event>" this trigger fires on, in
+// either form.
+//
+// THE PRE-NORMALIZE WINDOW. A list-form `on:` decodes into OnSources and
+// leaves On EMPTY until NormalizeTriggers expands it (config.go: Load runs
+// instantiatePacks first, NormalizeTriggers after). So every consumer that
+// runs before normalization — all of internal/config/pack_*.go — sees On==""
+// for a list-form trigger. Reading On directly there doesn't misbehave
+// loudly; it silently treats the trigger as having no source at all, which
+// is how an armed list-form pack trigger slipped past its repo-consent check.
+//
+// Sources() is the one accessor that answers the question correctly for both
+// forms. Anything in that window that asks "what does this trigger fire on"
+// goes through it, and TestPreNormalizeReadersHandleBothTriggerForms fails
+// the build if a raw On read is added back.
+//
+// After NormalizeTriggers every trigger is scalar and Sources() returns the
+// single On — so it is also correct, and safe, downstream.
+func (t TriggerSpec) Sources() []string {
+	if t.On != "" {
+		return []string{t.On}
+	}
+	out := make([]string, 0, len(t.OnSources))
+	for _, src := range t.OnSources {
+		if src.Source != "" {
+			out = append(out, src.Source)
+		}
+	}
+	return out
+}
+
 // NormalizeTriggers expands multi-source `on:` lists — one internal trigger
 // per source, sharing steps/hooks/group, each with the shared base filters
 // merged under its per-source block (per-source keys win) — and enforces the
 // manual-trigger naming rules. Load runs it before validation, so the rest of
 // the system only ever sees scalar-On triggers.
 func (c *Config) NormalizeTriggers() error {
+	// A name is IDENTITY now: the scope every step of the trigger hangs
+	// its memory, sessions, and track record off, and the handle both
+	// `extends:` and a step reference resolve. Two triggers sharing one
+	// collapse into a single identity, silently — so check before the
+	// expansion, which legitimately gives every variant of one fan-in
+	// trigger the author's single name.
+	nameAt := map[string]int{}
+	for i, t := range c.Triggers {
+		n := strings.TrimSpace(t.Name)
+		if n == "" {
+			continue
+		}
+		if j, dup := nameAt[n]; dup {
+			return fmt.Errorf("config: triggers[%d] and triggers[%d]: trigger name %q is not unique — a name is the identity its steps' memory, sessions, and outcomes key off, so two triggers cannot share one", j, i, n)
+		}
+		nameAt[n] = i
+	}
+
 	var out []TriggerSpec
 	for i, t := range c.Triggers {
 		if len(t.OnSources) == 0 {
@@ -431,24 +719,21 @@ func (c *Config) NormalizeTriggers() error {
 				v.Hooks = hooks
 			}
 			v.FanSources = fan
+			if src.dormant {
+				off := false
+				v.Enabled = &off
+			}
 			out = append(out, v)
 		}
 	}
 	c.Triggers = out
 
-	// A trigger reachable by `conductor run` needs a unique name to run it by.
-	manualAt := map[string]int{}
+	// A trigger reachable by `conductor run` additionally REQUIRES a name
+	// (uniqueness is already settled above).
 	for i, t := range c.Triggers {
-		if !t.Manual() {
-			continue
-		}
-		if t.Name == "" {
+		if t.Manual() && t.Name == "" {
 			return fmt.Errorf("config: triggers[%d]: a trigger reachable by `conductor run` (on: manual) requires a name:", i)
 		}
-		if j, dup := manualAt[t.Name]; dup {
-			return fmt.Errorf("config: triggers[%d] and triggers[%d]: manual trigger name %q is not unique — `conductor run` resolves triggers by name", j, i, t.Name)
-		}
-		manualAt[t.Name] = i
 	}
 	return nil
 }
@@ -489,12 +774,35 @@ type GroupSpec struct {
 // `run:` (code), `uses:` (verb), or `use:` (workflow call).
 type Step struct {
 	ID string `yaml:"id,omitempty"`
-	If string `yaml:"if,omitempty"`
+	// Name PINS this step's identity (docs/design/agents-removal.md §5). It is
+	// the key memory scoping, session affinity, and outcome tracking default
+	// to, and it is SHAREABLE: two steps with the same name share one memory
+	// namespace, one session pool, and one track record — which is how a
+	// migrated `agent: fixer` keeps the history it accumulated. Unset, a
+	// step's identity is structural (enclosing trigger/workflow + slot), which
+	// survives a prompt edit. Never a random value. See Step.Identity.
+	//
+	// Sharing CONFIG is a different thing and needs no field: that is a YAML
+	// anchor (`<<: *base`, see anchors.go), which copies fields at parse time
+	// and leaves identity alone.
+	Name string `yaml:"name,omitempty"`
+	If   string `yaml:"if,omitempty"`
 	// Type is agent | command for the do-work forms ("" for uses/run/use).
 	Type string `yaml:"type,omitempty"`
 
 	// agent form
-	Agent           string         `yaml:"agent,omitempty"`
+	Agent string `yaml:"agent,omitempty"`
+	// Model selects WHICH MODEL this step runs on: a named fleet from the
+	// top-level `models:` block, an exact model id, a wildcard, an inline list
+	// (sugar for `{ any: [...], required: false }`), or the full
+	// `{ any, required }` object. Unset → the runtime's `models.default:`, and
+	// failing that a BARE LAUNCH (no --model, the runtime's own default). See
+	// ModelSpec and docs/design/runtimes-models-packs.md §2.2.
+	Model ModelSpec `yaml:"model,omitempty"`
+	// Runtime pins WHERE this step runs — a `runtimes:` entry. Unset lets
+	// model resolution pick the runtime that offers the chosen model, falling
+	// back to the runtime flagged `default: true`.
+	Runtime         string         `yaml:"runtime,omitempty"`
 	Prompt          string         `yaml:"prompt,omitempty"`
 	Checkout        string         `yaml:"checkout,omitempty"`
 	OutputSchema    map[string]any `yaml:"output_schema,omitempty"`
@@ -559,6 +867,56 @@ type Step struct {
 
 	Backend string `yaml:"backend,omitempty"` // dispatch backend override (carried from legacy)
 	Shadow  *bool  `yaml:"shadow,omitempty"`
+
+	// --- agent BEHAVIOR (docs/design/agents-removal.md §6) --------------
+	//
+	// These moved off the retired `agents:` profile onto the step that
+	// dispatches the work, because that is what they always described. Reuse
+	// them across triggers by putting them on an entry in the top-level
+	// `steps:` map and pointing `extends:` at it.
+
+	// Thinking and Mode are runtime-specific launch hints (a paseo thinking
+	// option, a session mode).
+	Thinking string `yaml:"thinking,omitempty"`
+	Mode     string `yaml:"mode,omitempty"`
+	// Workspace is local | worktree.
+	Workspace string `yaml:"workspace,omitempty"`
+	// WaitTimeout bounds a foreground dispatch.
+	WaitTimeout Duration `yaml:"wait_timeout,omitempty"`
+	// ArchiveWhenDone soft-deletes the agent once the step finishes. Forced
+	// off for a background (hand-off) step, which sits idle precisely because
+	// it is waiting for you.
+	ArchiveWhenDone bool `yaml:"archive_when_done,omitempty"`
+	// Labels are runtime labels stamped on the launch.
+	Labels map[string]string `yaml:"labels,omitempty"`
+	// Guidance layers house tone/format rules onto THIS step's prompt. It is
+	// additive: the policy cascade's guidance and any `extends:` ancestor's
+	// stack underneath it rather than being replaced. `{ replace: … }` resets.
+	Guidance *GuidanceSpec `yaml:"guidance,omitempty"`
+	// Memory opts this step into shared-memory prompt injection: true for the
+	// defaults (the shared no-key set plus the context keys the engine
+	// supplies), or a filter map { scopes, tags, limit } over arbitrary
+	// opaque keys. Absent → no injection, no token cost. See MemorySelector.
+	Memory *MemorySelector `yaml:"memory,omitempty"`
+	// Session binds this step's dispatches to a keyed live session (session
+	// affinity). A step-level session is its OWN pool, namespaced to the step
+	// identity; a step with no session: joins the runtime's overall pool when
+	// the runtime declares one. See SessionSpec and
+	// docs/design/agents-removal.md §3.
+	Session *SessionSpec `yaml:"session,omitempty"`
+	// Skill opts this step into the conductor skill (#36 §12): verbs-as-tools
+	// and the secret broker over the daemon socket. Absent → neither.
+	Skill *SkillPolicy `yaml:"skill,omitempty"`
+	// Isolation sandboxes this step's launches (#36 §15). Wins over the
+	// runtime's own isolation:.
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// OutcomeFeedback opts this step into guidance tuning (#36 §18): a
+	// one-line track-record summary for this step's identity is appended to
+	// its guidance.
+	OutcomeFeedback bool `yaml:"outcome_feedback,omitempty"`
+	// OutcomeKey overrides the track-record key (default: the step identity),
+	// so several steps can deliberately pool one record.
+	OutcomeKey string `yaml:"outcome_key,omitempty"`
 }
 
 // GateSpec configures one quality gate (#36 §16): which checks run against
@@ -1060,8 +1418,23 @@ func (c *Config) validateConnectors() error {
 		if name == "blob" {
 			return fmt.Errorf("config: connectors: %q is reserved (the built-in artifact verbs — always available, nothing to configure)", name)
 		}
-		if ref.Type == "" {
-			return fmt.Errorf("config: connector %q: missing type", name)
+		if err := validateUseRef("connector "+name, ref.Use, ref.legacyType, UseKindConnector); err != nil {
+			return err
+		}
+		if ref.Isolation != nil {
+			if err := validateIsolation("connector "+name, ref.Isolation, false); err != nil {
+				return err
+			}
+		}
+		for _, s := range ref.AllowSecrets {
+			if strings.ContainsAny(s, "*?") {
+				return fmt.Errorf("config: connector %q: allow_secrets entries are exact names, no globs (%q)", name, s)
+			}
+		}
+		for _, n := range ref.Network {
+			if err := validateEgressTarget("connector "+name+" network", n); err != nil {
+				return err
+			}
 		}
 		if err := validatePolicyBlock("connector "+name+" policy", ref.Policy); err != nil {
 			return err
@@ -1071,14 +1444,27 @@ func (c *Config) validateConnectors() error {
 		if name == "" {
 			return fmt.Errorf("config: runtimes: empty runtime name")
 		}
-		if (rt.Type == "") == (rt.Agent == "") {
-			return fmt.Errorf("config: runtime %q: set exactly one of `type` or `agent`", name)
+		if err := validateBudget("runtime "+name, rt.Budget); err != nil {
+			return err
 		}
-		if err := c.checkRemoteHostSupport("runtime", name, rt.Host, rt.Type, rt.Agent, rt.Controller().EffectiveTransport()); err != nil {
+		if err := validateUseRef("runtime "+name, rt.Use, rt.legacyType(), UseKindRuntime); err != nil {
+			return err
+		}
+		// `agent:` is the ACP runtime's own field: it names the agent the ACP
+		// transport drives. It is meaningless on any other implementation, and
+		// `use: acp` without it has nothing to drive.
+		u, _ := rt.Resolved()
+		if u.IsBuiltin() && u.Name == "acp" && rt.Agent == "" {
+			return fmt.Errorf("config: runtime %q: `use: acp` needs `agent:` (the agent the ACP transport drives, e.g. gemini)", name)
+		}
+		if rt.Agent != "" && !(u.IsBuiltin() && u.Name == "acp") {
+			return fmt.Errorf("config: runtime %q: `agent:` applies to `use: acp` only (got use: %s)", name, rt.Use)
+		}
+		if err := c.checkRemoteHostSupport("runtime", name, rt.Host, rt.BuiltinType(), rt.Agent, rt.Controller().EffectiveTransport()); err != nil {
 			return err
 		}
 		if rt.Isolation != nil {
-			if rt.Type == "paseo" {
+			if rt.BuiltinType() == "paseo" {
 				return fmt.Errorf("config: runtime %q: isolation cannot apply to a paseo runtime (its agents are the paseo daemon's children) — use an acp/cli/opencode/agent-deck runtime, or paseo's own sandboxing", name)
 			}
 			if err := validateIsolation("runtime "+name, rt.Isolation, rt.Host != ""); err != nil {
@@ -1117,6 +1503,16 @@ func (c *Config) validateConnectors() error {
 				return fmt.Errorf("config: %s: `on: %s` must be <connector>.<event> (or the built-in `manual`)", where, t.On)
 			}
 			if _, okc := c.ConnectorsMap[conn]; !okc && conn != "conductor" {
+				// A DISABLED trigger naming a connector this config does not
+				// have is the dormant-source case (a pack bundling a
+				// pagerduty trigger for a consumer who has no pagerduty —
+				// docs/design/runtimes-models-packs.md §5.2). It can never
+				// fire, it was already surfaced as a load notice, and
+				// failing the boot over it would defeat the whole point of
+				// degrading rather than refusing.
+				if !t.IsEnabled() {
+					continue
+				}
 				// "conductor" is the built-in lifecycle source (always
 				// available, like the manual source).
 				return fmt.Errorf("config: %s: unknown connector %q in `on: %s` (defined: %s)", where, conn, t.On, c.connectorNames())

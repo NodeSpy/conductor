@@ -199,13 +199,13 @@ func TestVaultNameValidation(t *testing.T) {
 	for _, c := range []struct{ name, yaml, want string }{
 		{"collides with connector", `
 connectors:
-  gh: { type: command }
+  gh: { use: command }
 vaults:
   gh: { type: pass }
 `, "collides with a connector"},
-		{"reserved kv", "connectors: { c: { type: command } }\nvaults:\n  kv: { type: pass }\n", "reserved"},
-		{"reserved sql", "connectors: { c: { type: command } }\nvaults:\n  sql: { type: pass }\n", "reserved"},
-		{"missing type", "connectors: { c: { type: command } }\nvaults:\n  x: {}\n", "missing type"},
+		{"reserved kv", "connectors: { c: { use: command } }\nvaults:\n  kv: { type: pass }\n", "reserved"},
+		{"reserved sql", "connectors: { c: { use: command } }\nvaults:\n  sql: { type: pass }\n", "reserved"},
+		{"missing type", "connectors: { c: { use: command } }\nvaults:\n  x: {}\n", "missing type"},
 	} {
 		var cfg config.Config
 		if err := yaml.Unmarshal([]byte(c.yaml), &cfg); err != nil {
@@ -224,7 +224,7 @@ func TestConnectorCredentialFromVault(t *testing.T) {
 	reg, _ := buildVaultRegistry(t, `
 connectors:
   api:
-    type: rest
+    use: rest
     base_url: http://x.example
     auth: { type: bearer, token: '{{ vault "house" "gh" }}' }
     verbs: { v: { method: GET, path: / } }

@@ -18,10 +18,10 @@ func TestChatWebhookURLTracked(t *testing.T) {
 	cfg := mustDecodeConfig(t, `
 connectors:
   sl:
-    type: slack
+    use: slack
     webhook_url: `+slackHook+`
   dc:
-    type: discord
+    use: discord
     webhook_url: `+discordHook+`
 `)
 	sec := secrets.New()

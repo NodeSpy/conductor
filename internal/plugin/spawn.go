@@ -25,7 +25,19 @@ func spawnBaseEnv() []string {
 // returning the daemon-side unix socket, a per-launch credential, and a revoke
 // closure. Wired from main (sandbox.ProxyManager.UnixEndpoint); nil in contexts
 // with no proxy manager (tests), where enforced egress is unavailable.
+//
+// The unix form is for a launch inside a MOUNT NAMESPACE, where an in-sandbox
+// forwarder bridges a fixed loopback address to this socket. The default
+// (manifest-confined, un-namespaced) launch has no forwarder and needs a plain
+// loopback address instead — that is EgressAddrFunc.
 type EgressUnixFunc func(allow []string) (sock, cred string, revoke func(), err error)
+
+// EgressAddrFunc mints a LOOPBACK egress proxy endpoint for an allowlist. It is
+// what confines a plugin to its declared network on the default path, where
+// there is no namespace and therefore no forwarder. Wired from main
+// (sandbox.ProxyManager.Endpoint); nil leaves the declared network unenforced
+// (and the caller says so rather than pretending).
+type EgressAddrFunc func(allow []string) (addr, cred string, revoke func(), err error)
 
 // SandboxDeps carries the daemon-side sandbox wiring a plugin launch reuses
 // (the #36 §15 layer). All fields are optional: with none set, a plugin with an
@@ -34,7 +46,8 @@ type EgressUnixFunc func(allow []string) (sock, cred string, revoke func(), err 
 type SandboxDeps struct {
 	Self       string         // conductor's own executable (os.Executable()) — the in-sandbox forwarder
 	MaskPaths  []string       // daemon paths hidden inside the plugin's mount namespace
-	EgressUnix EgressUnixFunc // enforced-egress endpoint minter
+	EgressUnix EgressUnixFunc // enforced-egress endpoint minter (namespaced launch)
+	EgressAddr EgressAddrFunc // enforced-egress endpoint minter (default launch)
 }
 
 // buildCommand prepares the (possibly sandbox-wrapped) *exec.Cmd for a plugin,
@@ -49,16 +62,20 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 
 	spec := sandbox.FromConfig(s.Isolation)
 	if spec == nil {
-		// No isolation block means NO OS confinement — a same-uid process with
-		// a full filesystem view can read ~/.config/conductor, App keys, and
-		// other on-disk secrets. Deny by default (§8.3): refuse unless the
-		// operator has explicitly, knowingly opted in.
-		if !s.AllowUnsandboxed {
-			return nil, nil, false, fmt.Errorf("plugin %s: no isolation block — refusing to launch an unsandboxed external plugin (add an isolation: block, or allow_unsandboxed: true to run it with NO OS confinement — insecure, never for third-party plugins)", s.Name)
+		// NO isolation block is the NORMAL case under the app-extension model:
+		// conductor is a privileged app the operator chose to run, and a plugin
+		// they added is one too. The default confinement is the permission
+		// manifest — the plugin's declared commands and egress, surfaced when it
+		// is added and enforced here — not an OS jail. `isolation:` on the
+		// referencing entry is opt-in hardening for a locked-down box.
+		//
+		// Env scrubbing, per-call credential delivery, verify-before-execute,
+		// size-bounded responses, and supervision all still apply.
+		env, cleanup, err = confineToManifest(s, env, sd)
+		if err != nil {
+			return nil, nil, false, err
 		}
-		// Explicit opt-in: run directly with a scrubbed env. The operator is
-		// told (loudly, by the manager) that OS confinement is off.
-		c := exec.Command(argv[0], argv[1:]...) //nolint:gosec // path is verified (verify.go) and operator-opted-in
+		c := exec.Command(argv[0], argv[1:]...) //nolint:gosec // path is verified (verify.go); confinement is the declared manifest
 		c.Env = env
 		return c, cleanup, false, nil
 	}
@@ -95,6 +112,54 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 	c := exec.Command(wrapped[0], wrapped[1:]...) //nolint:gosec // verified binary, sandbox-wrapped
 	c.Env = env
 	return c, cleanup, true, nil
+}
+
+// confineToManifest applies the DEFAULT (non-isolation) confinement: the
+// plugin's effective permission manifest.
+//
+//   - Egress: when the plugin declared hosts (narrowed by the connector's
+//     `network:`), the child is pointed at conductor's egress proxy with an
+//     allowlist of exactly that set. This is the same enforced path the
+//     isolation: block uses — the confinement is real.
+//   - Commands: PATH is replaced with a directory holding links to exactly the
+//     declared commands, so an undeclared tool is not resolvable by name. See
+//     manifest.go for what this does and does not stop.
+//
+// A plugin that declares nothing is confined to nothing beyond the scrubbed
+// env: it declared no needs, so there is no allowlist to build, and inventing
+// one would break plugins that predate the manifest.
+func confineToManifest(s Spec, env []string, sd SandboxDeps) ([]string, func(), error) {
+	cleanup := func() {}
+	m := s.EffectiveManifest()
+
+	if len(m.Egress) > 0 && sd.EgressAddr != nil {
+		addr, cred, revoke, err := sd.EgressAddr(m.Egress)
+		if err != nil {
+			return nil, nil, fmt.Errorf("plugin %s: egress proxy for declared network (%s): %w", s.Name, strings.Join(m.Egress, ", "), err)
+		}
+		env = append(env, sandbox.ProxyEnv(addr, cred)...)
+		cleanup = revoke
+	}
+
+	if dir, err := commandPathDir(s); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("plugin %s: confining declared commands: %w", s.Name, err)
+	} else if dir != "" {
+		env = replaceEnv(env, "PATH", dir)
+	}
+	return env, cleanup, nil
+}
+
+// replaceEnv sets key=val in a KEY=VALUE list, replacing any existing entry.
+func replaceEnv(env []string, key, val string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		if k, _, ok := strings.Cut(kv, "="); ok && k == key {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, key+"="+val)
 }
 
 // envKeys returns just the KEY parts of KEY=VALUE env lines (container mode

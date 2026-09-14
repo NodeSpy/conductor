@@ -85,7 +85,7 @@ func startConductorSource(t *testing.T, y string) (func() []core.Trigger, func()
 
 const conductorTriggerYAML = `
 connectors:
-  box: { type: command }
+  box: { use: command }
 triggers:
   - name: alert
     on: [ conductor.escalate, conductor.needs_input ]
@@ -186,7 +186,7 @@ func TestEmitLifecycleNoSource(t *testing.T) {
 // config with no conductor triggers lowers no source.
 func TestConductorReservedAndSourceless(t *testing.T) {
 	var cfg config.Config
-	if err := yaml.Unmarshal([]byte("connectors:\n  conductor: { type: command }\n"), &cfg); err != nil {
+	if err := yaml.Unmarshal([]byte("connectors:\n  conductor: { use: command }\n"), &cfg); err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "reserved") {
@@ -267,7 +267,7 @@ func TestGHSweepVerb(t *testing.T) {
 	t.Cleanup(func() { SetSweepHook(nil) })
 	reg := buildAPIRegistry(t, `
 connectors:
-  gh: { type: github, token: x, repos: ["o/r"] }
+  gh: { use: github, token: x, repos: ["o/r"] }
 `, secrets.New())
 	in, _ := reg.Get("gh")
 	out, err := in.Invoke(context.Background(), "sweep", nil)

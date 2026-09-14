@@ -16,6 +16,11 @@ import (
 // and the captured audit entries.
 func startIPC(t *testing.T, m *Manager) (string, func() []map[string]any) {
 	t.Helper()
+	// The socket authenticates every provenance-carrying op against a
+	// per-dispatch credential (round-12 #1) — a request may not supply its
+	// own Source. These tests therefore present one, exactly as a real tool
+	// subprocess does; the resolver stands in for the daemon's broker.
+	authenticated(t, Source{Step: "gemini", Repo: "o/r", Trigger: "issue_matched", TargetTrusted: true}, 0)
 	sock := filepath.Join(t.TempDir(), "memory.sock")
 	l, err := ListenSocket(sock)
 	if err != nil {
@@ -40,23 +45,23 @@ func startIPC(t *testing.T, m *Manager) (string, func() []map[string]any) {
 func TestIPCRememberRecallRoundTrip(t *testing.T) {
 	m := testManager(t, NewMemBackend())
 	sock, audits := startIPC(t, m)
-	src := Source{Agent: "gemini", Repo: "o/r", Trigger: "issue_matched"}
+	src := Source{Step: "gemini", Repo: "o/r", Trigger: "issue_matched"}
 
-	resp, err := IPCCall(sock, IPCRequest{Op: "remember", Text: "socket note", Tags: []string{"live"}, Scope: "repo", Source: src})
+	resp, err := IPCCall(sock, IPCRequest{Op: "remember", Text: "socket note", Tags: []string{"live"}, Scope: "repo", Source: src, Token: "test-credential"})
 	if err != nil || !resp.OK || resp.Entry == nil {
 		t.Fatalf("remember: %+v %v", resp, err)
 	}
-	if resp.Entry.Scope != "repo:o/r" || resp.Entry.Source.Agent != "gemini" {
+	if resp.Entry.Scope != "repo" || resp.Entry.Source.Step != "gemini" {
 		t.Fatalf("entry: %+v", resp.Entry)
 	}
 
-	resp, err = IPCCall(sock, IPCRequest{Op: "recall", Tags: []string{"live"}, Scope: "repo", Limit: 5, Source: src})
+	resp, err = IPCCall(sock, IPCRequest{Op: "recall", Tags: []string{"live"}, Scope: "repo", Limit: 5, Source: src, Token: "test-credential"})
 	if err != nil || !resp.OK || len(resp.Entries) != 1 || resp.Entries[0].Text != "socket note" {
 		t.Fatalf("recall: %+v %v", resp, err)
 	}
 
 	// Errors come back in-band.
-	resp, err = IPCCall(sock, IPCRequest{Op: "remember", Source: src})
+	resp, err = IPCCall(sock, IPCRequest{Op: "remember", Source: src, Token: "test-credential"})
 	if err != nil || resp.OK || !strings.Contains(resp.Error, "text is required") {
 		t.Fatalf("bad remember: %+v %v", resp, err)
 	}
@@ -128,8 +133,9 @@ func mcpPipe(t *testing.T, call MCPCaller, mc MCPConfig) (func(msg string), func
 }
 
 func TestMCPServerLoop(t *testing.T) {
+	authenticated(t, Source{Step: "a", Repo: "o/r", TargetTrusted: true}, 0)
 	m := testManager(t, NewMemBackend())
-	src := Source{Agent: "gemini", Repo: "o/r"}
+	src := Source{Step: "gemini", Repo: "o/r"}
 	var gotReq IPCRequest
 	call := func(req IPCRequest) (IPCResponse, error) {
 		gotReq = req
@@ -140,7 +146,10 @@ func TestMCPServerLoop(t *testing.T) {
 		gotReq = req
 		return handleIPC(m, req, Peer{}, nil, nil), nil
 	}
-	send, recv := mcpPipe(t, call, MCPConfig{Source: src, Number: 7})
+	// The credential authenticates the dispatch; it grants no secrets, so the
+	// secret tools stay off and the tool list is the memory pair + the plan
+	// surface (round-12 #1: authentication is not capability).
+	send, recv := mcpPipe(t, call, MCPConfig{Source: src, Number: 7, Token: "test-credential"})
 
 	// initialize handshake echoes the client's protocol version.
 	send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientCapabilities":{}}}`)
@@ -169,11 +178,12 @@ func TestMCPServerLoop(t *testing.T) {
 	if r["isError"] != false {
 		t.Fatalf("remember call: %+v", r)
 	}
-	if gotReq.Op != "remember" || gotReq.Source.Agent != "gemini" || gotReq.Scope != "repo" {
+	if gotReq.Op != "remember" || gotReq.Source.Step != "gemini" || gotReq.Scope != "repo" {
 		t.Fatalf("caller request: %+v", gotReq)
 	}
 	text := r["content"].([]any)[0].(map[string]any)["text"].(string)
-	if !strings.Contains(text, "remembered ") || !strings.Contains(text, "repo:o/r") {
+	// The scope key is passed through verbatim — no `repo:` type expansion.
+	if !strings.Contains(text, "remembered ") || !strings.Contains(text, "(scope repo)") {
 		t.Fatalf("remember text: %q", text)
 	}
 	// tools/call memory_recall returns the entries as JSON text.
@@ -218,12 +228,17 @@ func TestMCPServerLoop(t *testing.T) {
 	}
 	SetLiveOps(LiveOps{
 		RunStep: func(_ context.Context, src Source, number int, step map[string]any) (map[string]any, error) {
-			if src.Agent != "gemini" || number != 7 || step["uses"] != "svc.post" {
+			if src.Step != "gemini" || number != 7 || step["uses"] != "svc.post" {
 				t.Errorf("run_step wiring: src=%+v number=%d step=%v", src, number, step)
 			}
 			return map[string]any{"executed": 1}, nil
 		},
 		ListWorkflows: func() map[string]any { return map[string]any{"count": 2} },
+		// The resolver stays wired: run_step carries provenance, so it is
+		// authenticated like every other op (round-12 #1).
+		Identify: func(token string, _ Peer) (Source, int, bool) {
+			return Source{Step: "gemini", Repo: "o/r", TargetTrusted: true}, 7, token == "test-credential"
+		},
 	})
 	t.Cleanup(func() { SetLiveOps(LiveOps{}) })
 	send(`{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"run_step","arguments":{"step":{"uses":"svc.post"}}}}`)
@@ -302,7 +317,7 @@ func TestMCPBrokerTools(t *testing.T) {
 		}
 		return IPCResponse{Error: "unexpected op " + req.Op}, nil
 	}
-	send, recv := mcpPipe(t, call, MCPConfig{Token: "tok-1", NoMemory: true})
+	send, recv := mcpPipe(t, call, MCPConfig{Token: "tok-1", Secrets: true, NoMemory: true})
 
 	send(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	names := map[string]bool{}
@@ -408,7 +423,7 @@ func TestMCPVerbTools(t *testing.T) {
 		}
 		return IPCResponse{Error: "unexpected op " + req.Op}, nil
 	}
-	send, recv := mcpPipe(t, call, MCPConfig{Token: "tok-1", NoMemory: true})
+	send, recv := mcpPipe(t, call, MCPConfig{Token: "tok-1", Secrets: true, NoMemory: true})
 
 	send(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	names := map[string]bool{}
@@ -498,9 +513,11 @@ func TestMCPClaimsAtStartup(t *testing.T) {
 		}
 		return IPCResponse{Error: "unexpected op " + req.Op}, nil
 	}
-	send, recv := mcpPipe(t, call, MCPConfig{Claim: "code-1", NoMemory: true})
+	send, recv := mcpPipe(t, call, MCPConfig{Claim: "code-1", Secrets: true, NoMemory: true})
 
-	// The broker tools are advertised (the claim succeeded → token present).
+	// The broker tools are advertised because the PROFILE asked for them
+	// (skill.secrets_via: broker → --secrets). Every dispatch holds a
+	// credential now, so the claim alone no longer implies a secret surface.
 	send(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	names := map[string]bool{}
 	for _, tool := range recv()["result"].(map[string]any)["tools"].([]any) {

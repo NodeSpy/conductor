@@ -1,32 +1,48 @@
-# Sentry connector
+# Sentry connector (plugin)
 
-Sentry Integration-Platform webhooks (issue / error / metric alerts) in; one
-event, `alert`.
+Sentry Integration-Platform webhooks in — issue, error, and metric alerts.
+
+**Sentry is not bundled.** It is a plugin from the official repo
+([conductor-plugins](https://github.com/NodeSpy/conductor-plugins), at
+`connectors/sentry`). Naming it in `use:` is the whole installation:
+`conductor init` fetches, checksum-verifies, and installs it. See [[Plugins]].
 
 ```yaml
 connectors:
   errors:
-    type: sentry
-    listen: ":8098"                       # and/or smee_url:
-    # path: /sentry                       # default /sentry
+    use: sentry                            # bare name → the official plugin repo
+    listen: ":9099"
+    # path: /sentry                        # default /sentry
     client_secret: ${SENTRY_CLIENT_SECRET} # Sentry-Hook-Signature HMAC
 
 triggers:
-  - on: errors.alert
+  - on: errors.issue_alert
     filters: { projects: [backend], levels: [error, fatal], environments: [production] }
-    repo: acme/backend                    # optional checkout target
+    repo: acme/backend                     # optional checkout target
     steps:
-      - { id: dig, type: agent, agent: fixer, prompt: "Investigate {{.sentry.title}} ({{.sentry.url}})." }
+      - { id: dig, type: agent, agent: fixer, prompt: "Investigate {{.title}} ({{.url}})." }
 ```
 
-Filters: `projects`, `levels`, `environments` (case-insensitive lists; empty
-= any). Context: `sentry.resource`, `sentry.action`, `sentry.title`,
-`sentry.level`, `sentry.environment`, `sentry.culprit`, `sentry.short_id`,
-`sentry.project`, `sentry.url`, plus `url`.
+**Events:** `issue_alert`, `error_alert`, `event_alert` — one per Sentry alert
+resource. (The retired bundled connector had a single `alert` event covering all
+three; a config that still says `on: errors.alert` names an event nothing
+emits.)
 
-Filters also accept `exclude:` — a list of match-maps an event must NOT
-match. Triggers are independent (every matching trigger fires); the migration
-generates `exclude:` entries from earlier legacy rules so the legacy
-first-match winner is preserved exactly.
+**Filters:** `projects`, `levels`, `environments` (lists), and the singular
+`project`, `level`, `environment`.
 
-Related: [[Connectors]] · [[Migration]]
+**Context is FLAT**, not nested under `sentry.`: `resource`, `action`, `title`,
+`level`, `environment`, `culprit`, `short_id`, `project`, `url`. A prompt
+templating `{{.sentry.title}}` renders empty — use `{{.title}}`.
+
+**Permissions.** The plugin declares an empty manifest: it *listens*, it never
+dials out, and it spawns nothing. `conductor plugin show sentry` prints this.
+
+> **Migrating from the bundled connector?** `conductor config migrate`
+> deliberately does **not** transform a legacy `integrations: - type: sentry`
+> block, and says so loudly. The event names, the context shape, and `exclude:`
+> support all differ, so an automatic transform would emit a config that looks
+> migrated but whose triggers never fire and whose prompts render empty. Write
+> the connector and triggers by hand against the contract above.
+
+Related: [[Plugins]] · [[Connectors]] · [[Migration]]

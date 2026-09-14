@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/migrate"
 )
 
 // TestExampleConfigValidates proves the shipped connectors-model example
@@ -83,8 +84,11 @@ func TestExampleConfigValidates(t *testing.T) {
 	}
 }
 
-// TestLegacyExampleConfigStillLoads: the retained legacy example must keep
-// loading unchanged (dual-schema back-compat).
+// TestLegacyExampleConfigStillLoads: the retained legacy example must still
+// reach a loadable, valid config through the boot path — which now means
+// MIGRATION FIRST. `agents:` left the schema (docs/design/agents-removal.md),
+// so a file carrying it is exactly the case autoMigrateOnBoot exists for; the
+// point of this test is that the legacy example never dead-ends.
 func TestLegacyExampleConfigStillLoads(t *testing.T) {
 	raw, err := os.ReadFile("../../config.example.legacy.yaml")
 	if err != nil {
@@ -104,12 +108,19 @@ func TestLegacyExampleConfigStillLoads(t *testing.T) {
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Boot migrates before it loads.
+	res, err := migrate.Transform([]byte(doc))
+	if err != nil {
+		t.Fatalf("legacy example must migrate: %v", err)
+	}
+	if res.Changed {
+		if err := os.WriteFile(path, res.Output, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	cfg, err := config.Load(path)
 	if err != nil {
-		t.Fatalf("legacy example must keep loading: %v", err)
-	}
-	if cfg.HasConnectors() {
-		t.Fatal("legacy example unexpectedly has connectors blocks")
+		t.Fatalf("legacy example must load after migration: %v", err)
 	}
 	igs, err := buildIntegrations(cfg)
 	if err != nil {
@@ -163,18 +174,18 @@ func TestPaseoRuntimeWithHost(t *testing.T) {
 	doc := `
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules: { tick: { every: 1h } }
 hosts:
   gpu-box: { host: gpu01.internal, user: ml }
 runtimes:
-  paseo:     { type: paseo, bin: /usr/local/bin/paseo, default: true }
-  gpu-paseo: { type: paseo, bin: /opt/paseo, host: gpu-box }
-agents:
-  fixer: { provider: claude, runtime: gpu-paseo }
+  paseo:     { use: paseo, bin: /usr/local/bin/paseo, default: true }
+  gpu-paseo: { use: paseo, bin: /opt/paseo, host: gpu-box }
+x-steps:
+  fixer: &fixer { type: agent, name: fixer, runtime: gpu-paseo }
 triggers:
   - on: timer.tick
-    steps: [{ type: agent, agent: fixer, checkout: none, prompt: p }]
+    steps: [{ type: agent, <<: *fixer, checkout: none, prompt: p }]
 `
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
@@ -240,7 +251,7 @@ func TestStarterConfigFreshSeedLayout(t *testing.T) {
 	}
 
 	// Drop a connector file in — it joins the section on the next load.
-	dropped := "timer:\n  type: cron\n  schedules: { tick: { every: 1h } }\n"
+	dropped := "timer:\n  use: cron\n  schedules: { tick: { every: 1h } }\n"
 	if err := os.WriteFile(filepath.Join(dir, "conf.d/connectors/timer.yaml"), []byte(dropped), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +263,7 @@ func TestStarterConfigFreshSeedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("drop-in load: %v", err)
 	}
-	if cfg.ConnectorsMap["timer"].Type != "cron" {
+	if cfg.ConnectorsMap["timer"].TypeName() != "cron" {
 		t.Fatalf("dropped connector not picked up: %+v", cfg.ConnectorsMap)
 	}
 	var found bool

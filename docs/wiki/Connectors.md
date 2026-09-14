@@ -11,7 +11,9 @@ The same name addresses both directions. Slack is configured once and is both
 ```yaml
 connectors:
   gh:
-    type: github
+    use: github                    # WHAT implements it — see [[Plugins]] for the
+                                   # full resolution path (builtin → official
+                                   # plugin repo → an explicit repo → a local binary)
     app: { app_id: 123456, private_key_path: ~/.config/conductor/github-app.pem, webhook_secret: ${GH_WEBHOOK_SECRET} }
     webhook: { smee_url: ${GH_SMEE_URL} }
     me: { logins: [your-login] }
@@ -21,7 +23,7 @@ connectors:
       ignore: { users: ["dependabot[bot]"] }
       rate_limits: { per_minute: 60 }
   slack-ops:
-    type: slack
+    use: slack
     app_token: ${SLACK_APP_TOKEN}
     bot_token: ${SLACK_BOT_TOKEN}
     options: { channel: C0123456789 }

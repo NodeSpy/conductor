@@ -31,7 +31,7 @@ func TestRetryDefaults(t *testing.T) {
 func TestMergedControllersAndDefaultRuntime(t *testing.T) {
 	c := &Config{
 		Controllers: map[string]ControllerConfig{"legacy": {Type: "cli", Tool: "codex"}},
-		Runtimes:    map[string]RuntimeConfig{"rt": {Type: "paseo", Bin: "/x", Default: true}},
+		Runtimes:    map[string]RuntimeConfig{"rt": {Use: "paseo", Bin: "/x", Default: true}},
 	}
 	merged := c.MergedControllers()
 	if len(merged) != 2 || merged["rt"].Bin != "/x" || merged["legacy"].Tool != "codex" {

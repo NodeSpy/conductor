@@ -24,18 +24,17 @@ func planCfg(t *testing.T, policyYAML string) *config.Config {
 	t.Helper()
 	return loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner: { model: x }
-  helper:  { model: y }
+x-t:
+  planner: &planner { type: agent, name: planner, model: x }
 `+policyYAML)
 }
 
 const allowPolicy = `
 policy:
   agent_authored:
-    allow: [ kv.*, memory.*, svc.post, workflow, agent ]
+    verbs: [kv.*, memory.*, svc.post, workflow, agent]
 `
 
 // planSpec is a trigger whose single agent step emits whatever the fake
@@ -45,7 +44,7 @@ on: svc.ping
 steps:
   - id: author
     type: agent
-    agent: planner
+    <<: *planner
     prompt: "plan it"
 `
 
@@ -57,7 +56,7 @@ func dispatchPlan(t *testing.T, cfg *config.Config, output string) (*testRig, *f
 	fake := newFakeState(t, "svc")
 	rig := newTestRunner(t, cfg, reg)
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
-		if req.Action.Agent == "planner" {
+		if req.Identity == "planner" {
 			return dispatch.RunRef{AgentID: "a1", Output: output}, nil
 		}
 		return dispatch.RunRef{AgentID: "sub", Output: `{"done":true}`}, nil
@@ -156,7 +155,7 @@ func TestPlanAllowlistRejection(t *testing.T) {
 	out := "```plan\n- uses: svc.post\n  options: { text: ok }\n- uses: svc.ask\n  options: { prompt: p }\n```"
 	rig, fake := dispatchPlan(t, cfg, out)
 	failed, errStr := rig.workflowFailed()
-	if !failed || !strings.Contains(errStr, `"svc.ask" is not in policy.agent_authored.allow`) {
+	if !failed || !strings.Contains(errStr, `"svc.ask" is not in policy.agent_authored.verbs`) {
 		t.Fatalf("allowlist rejection: %v %q", failed, errStr)
 	}
 	if calls := fake.snapshot(); len(calls) != 0 {
@@ -173,7 +172,8 @@ func TestPlanSchemaValidation(t *testing.T) {
 		{"unknown connector", "- uses: ghost.post\n  options: {}", `unknown connector "ghost"`},
 		{"bad option", "- uses: svc.post\n  options: { text: t, nope: 1 }", `"nope"`},
 		{"missing required option", "- uses: svc.post\n  options: {}", `"text"`},
-		{"unknown agent", "- type: agent\n  agent: ghost\n  prompt: p", `unknown agent "ghost"`},
+		// `agent:` names nothing resolvable now; a plan step still needs a prompt.
+		{"agent step with no prompt", "- type: agent\n  agent: ghost", "no prompt"},
 		{"formless step", "- id: what", "no recognizable step form"},
 		{"unknown workflow", "- workflow: ghost", `unknown workflow "ghost"`},
 	}
@@ -194,7 +194,7 @@ func TestPlanLimits(t *testing.T) {
 	pol := `
 policy:
   agent_authored:
-    allow: [ svc.post, agent, code ]
+    verbs: [svc.post, agent, code]
     host: sandbox
     limits: { max_steps: 2, max_sub_agents: 1, max_fan_out: 2 }
 hosts:
@@ -213,7 +213,7 @@ hosts:
 	}
 
 	// Too many declared sub-agents.
-	agents := "```plan\n- {type: agent, agent: helper, prompt: a}\n- {type: agent, agent: helper, prompt: b}\n```"
+	agents := "```plan\n- {type: agent, name: helper, model: y, prompt: a}\n- {type: agent, name: helper, model: y, prompt: b}\n```"
 	rig, _ = dispatchPlan(t, cfg, agents)
 	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "max_sub_agents") {
 		t.Fatalf("max_sub_agents: %v %q", failed, errStr)
@@ -237,8 +237,9 @@ func TestPlanScopeHasNoSecrets(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.post ]
-    allow_secrets: ["*"]
+    verbs:
+      svc.post: {secret: ["*"]}
+      code: {secret: ["*"]}
     no_secret_egress: false
 `)
 	out := "```plan\n- id: leak\n  uses: svc.post\n  options: { text: \"tok={{.secrets.tok}}.\" }\n```"
@@ -260,7 +261,7 @@ func TestPlanContinueOnErrorAndIf(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.* ]
+    verbs: [svc.*]
 `)
 	out := "```plan\n" +
 		"- id: skipme\n  if: \"kind == 'nope'\"\n  uses: svc.post\n  options: { text: skipped }\n" +
@@ -290,7 +291,7 @@ func TestPlanFailureCompensatesAndEscalates(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.* ]
+    verbs: [svc.*]
 `)
 	out := "```plan\n" +
 		"- id: one\n  uses: svc.post\n  options: { text: one }\n  compensate: { uses: svc.post, options: { text: undo-one } }\n" +
@@ -336,7 +337,7 @@ func TestPlanHybridClassification(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.post, agent ]
+    verbs: [svc.post, agent]
 `)
 	out := "```plan\n- id: sub\n  type: agent\n  agent: helper\n  prompt: \"go\"\n- id: done\n  uses: svc.post\n  options: { text: \"sub said {{.sub.done}}\" }\n```"
 	rig, fake := dispatchPlan(t, cfg, out)
@@ -367,7 +368,7 @@ func TestRunLiveStep(t *testing.T) {
 	reg := buildRegistry(t, cfg)
 	fake := newFakeState(t, "svc")
 	rig := newTestRunner(t, cfg, reg)
-	src := memory.Source{Agent: "planner", Repo: "o/r", Trigger: "new_comment"}
+	src := memory.Source{Step: "planner", Repo: "o/r", Trigger: "new_comment"}
 
 	out, err := rig.Runner.RunLiveStep(context.Background(), src, 7,
 		map[string]any{"id": "hi", "uses": "svc.post", "options": map[string]any{"text": "live {{.repo}}#{{.pr}}"}})
@@ -383,7 +384,7 @@ func TestRunLiveStep(t *testing.T) {
 	// The guard applies identically.
 	_, err = rig.Runner.RunLiveStep(context.Background(), src, 7,
 		map[string]any{"uses": "svc.ask", "options": map[string]any{"prompt": "p"}})
-	if err == nil || !strings.Contains(err.Error(), "not in policy.agent_authored.allow") {
+	if err == nil || !strings.Contains(err.Error(), "not in policy.agent_authored.verbs") {
 		t.Fatalf("live guard: %v", err)
 	}
 	// And the audit attributes the plan to the live agent.
@@ -403,7 +404,7 @@ func TestPlanResumeIdempotency(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.* ]
+    verbs: [svc.*]
 `)
 	reg := buildRegistry(t, cfg)
 	newFakeState(t, "svc")
@@ -487,7 +488,7 @@ policy:
 	tight := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ kv.* ]
+    verbs: [kv.*]
 `)
 	regT := buildRegistry(t, tight)
 	rig3 := newTestRunner(t, tight, regT)
@@ -499,7 +500,7 @@ policy:
 	run3 := emptyRun()
 	run3.ID = "flow:ping:o/r#7"
 	runTriggerWithRun(rig3, run3, newTrigger("ping", nil), mustSpec(t, planSpec))
-	if failed, errStr := rig3.workflowFailed(); !failed || !strings.Contains(errStr, "not in policy.agent_authored.allow") {
+	if failed, errStr := rig3.workflowFailed(); !failed || !strings.Contains(errStr, "not in policy.agent_authored.verbs") {
 		t.Fatalf("resume must re-guard: %v %q", failed, errStr)
 	}
 }
@@ -517,7 +518,7 @@ func TestCheckpointNeverPersistsVaultValues(t *testing.T) {
 	}
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 vaults:
   hv: { type: file, dir: `+vaultDir+` }
 `)
@@ -624,15 +625,17 @@ steps: [ { id: echoer, uses: svc.post, options: { text: t } } ]
 func TestNestedPlansShareBudget(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner:  { model: x }
-  helper:   { model: y }
-  recurser: { model: z }
+workflows:
+  roles:
+    steps:
+      - { id: planner, type: agent, name: planner, prompt: p, model: x }
+      - { id: helper, type: agent, name: helper, prompt: p, model: y }
+      - { id: recurser, type: agent, name: recurser, prompt: p, model: z }
 policy:
   agent_authored:
-    allow: [ svc.post, agent ]
+    verbs: [svc.post, agent]
     limits: { max_sub_agents: 2, max_steps: 50 }
 `)
 	reg := buildRegistry(t, cfg)
@@ -642,13 +645,13 @@ policy:
 	// with two more sub-agent steps — 3 cumulative > max_sub_agents 2.
 	// Before the fix the child re-entered with a fresh budget and all ran.
 	parent := "```plan\n- id: sub\n  type: agent\n  agent: helper\n  prompt: go\n- id: after\n  uses: svc.post\n  options: { text: parent-after }\n```"
-	child := "```plan\n- {id: c1, type: agent, agent: recurser, prompt: a}\n- {id: c2, type: agent, agent: recurser, prompt: b}\n```"
+	child := "```plan\n- {id: c1, type: agent, name: recurser, model: z, prompt: a}\n- {id: c2, type: agent, name: recurser, model: z, prompt: b}\n```"
 	rig := newTestRunner(t, cfg, reg)
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
-		switch req.Action.Agent {
-		case "planner":
+		if req.Identity == "planner" {
 			return dispatch.RunRef{AgentID: "p", Output: parent}, nil
-		case "helper":
+		}
+		if req.Action.Agent == "helper" {
 			return dispatch.RunRef{AgentID: "h", Output: child}, nil
 		}
 		return dispatch.RunRef{AgentID: "r", Output: "leaf"}, nil
@@ -669,19 +672,21 @@ policy:
 	// depth trips first).
 	cfgDeep := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner:  { model: x }
-  recurser: { model: z }
+workflows:
+  roles:
+    steps:
+      - { id: planner, type: agent, name: planner, prompt: p, model: x }
+      - { id: recurser, type: agent, name: recurser, prompt: p, model: z }
 policy:
   agent_authored:
-    allow: [ svc.post, agent ]
+    verbs: [svc.post, agent]
     limits: { max_sub_agents: 50, max_steps: 100 }
 `)
 	regDeep := buildRegistry(t, cfgDeep)
 	newFakeState(t, "svc")
-	recurse := "```plan\n- {id: again, type: agent, agent: recurser, prompt: deeper}\n```"
+	recurse := "```plan\n- {id: again, type: agent, name: recurser, model: z, prompt: deeper}\n```"
 	rig2 := newTestRunner(t, cfgDeep, regDeep)
 	depthSeen := 0
 	rig2.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
@@ -700,23 +705,25 @@ policy:
 	// Cumulative step budget across the tree.
 	cfgSteps := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner: { model: x }
-  helper:  { model: y }
+workflows:
+  roles:
+    steps:
+      - { id: planner, type: agent, name: planner, prompt: p, model: x }
+      - { id: helper, type: agent, name: helper, prompt: p, model: y }
 policy:
   agent_authored:
-    allow: [ svc.post, agent ]
+    verbs: [svc.post, agent]
     limits: { max_steps: 4, max_sub_agents: 5 }
 `)
 	regSteps := buildRegistry(t, cfgSteps)
 	newFakeState(t, "svc")
-	parent3 := "```plan\n- {id: a, uses: svc.post, options: {text: a}}\n- {id: sub, type: agent, agent: helper, prompt: go}\n```"
+	parent3 := "```plan\n- {id: a, uses: svc.post, options: {text: a}}\n- {id: sub, type: agent, name: helper, model: y, prompt: go}\n```"
 	child3 := "```plan\n- {id: b, uses: svc.post, options: {text: b}}\n- {id: c, uses: svc.post, options: {text: c}}\n- {id: d, uses: svc.post, options: {text: d}}\n```"
 	rig3 := newTestRunner(t, cfgSteps, regSteps)
 	rig3.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
-		if req.Action.Agent == "planner" {
+		if req.Identity == "planner" {
 			return dispatch.RunRef{AgentID: "p", Output: parent3}, nil
 		}
 		return dispatch.RunRef{AgentID: "h", Output: child3}, nil
@@ -738,16 +745,18 @@ policy:
 func TestNestedPlanTeamCountsAgainstBudget(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner:     { model: x }
-  helper:      { model: y }
-  architect:   { model: a }
-  implementer: { model: b }
+workflows:
+  roles:
+    steps:
+      - { id: planner, type: agent, name: planner, prompt: p, model: x }
+      - { id: helper, type: agent, name: helper, prompt: p, model: y }
+      - { id: architect, type: agent, name: architect, prompt: p, model: a }
+      - { id: implementer, type: agent, name: implementer, prompt: p, model: b }
 policy:
   agent_authored:
-    allow: [ svc.post, agent, team ]
+    verbs: [svc.post, agent, team]
     limits: { max_sub_agents: 3, max_steps: 50 }
 `)
 	reg := buildRegistry(t, cfg)
@@ -758,18 +767,18 @@ policy:
 	// Helper's output is a NESTED plan whose single team step's fleet is
 	// 2 + max_workers(1) = 3 — passing the child's OWN guard (3 ≤ 3), but the
 	// tree cumulative is 1 + 3 = 4 > 3.
-	child := "```plan\n- {id: tm, prompt: go, team: {planner: architect, worker: implementer, max_workers: 1}}\n```"
+	child := "```plan\n- {id: tm, prompt: go, team: {planner: roles/architect, worker: roles/implementer, max_workers: 1}}\n```"
 	rig := newTestRunner(t, cfg, reg)
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
-		switch req.Action.Agent {
-		case "planner":
+		if req.Identity == "planner" {
 			return dispatch.RunRef{AgentID: "p", Output: parent}, nil
-		case "helper":
+		}
+		if req.Action.Agent == "helper" {
 			return dispatch.RunRef{AgentID: "h", Output: child}, nil
 		}
 		// architect/implementer must never be reached — the budget halts the
 		// child team before execTeam dispatches its planner.
-		t.Errorf("team fleet dispatched despite over-budget: %s", req.Action.Agent)
+		t.Errorf("team fleet dispatched despite over-budget: %s", req.Identity)
 		return dispatch.RunRef{AgentID: "x", Output: "leaf"}, nil
 	}
 	runTrigger(rig, newTrigger("ping", nil), mustSpec(t, planSpec))
@@ -789,7 +798,7 @@ func TestPlanSubAgentDispatchMarkedAgentAuthored(t *testing.T) {
 	cfg := planCfg(t, `
 policy:
   agent_authored:
-    allow: [ svc.post, agent ]
+    verbs: [svc.post, agent]
 `)
 	out := "```plan\n- id: sub\n  type: agent\n  agent: helper\n  prompt: \"go\"\n```"
 	reg := buildRegistry(t, cfg)
@@ -797,8 +806,12 @@ policy:
 	rig := newTestRunner(t, cfg, reg)
 	flags := map[string]bool{}
 	rig.Agents.dispatchFunc = func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
-		flags[req.Action.Agent] = req.AgentAuthored
-		if req.Action.Agent == "planner" {
+		if req.Identity == "planner" {
+			flags["planner"] = req.AgentAuthored
+		} else {
+			flags[req.Action.Agent] = req.AgentAuthored
+		}
+		if req.Identity == "planner" {
 			return dispatch.RunRef{AgentID: "a1", Output: out}, nil
 		}
 		return dispatch.RunRef{AgentID: "sub", Output: `{"done":true}`}, nil

@@ -3,6 +3,9 @@ package flow
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -44,16 +47,23 @@ var fakeDecl = &connector.TypeDecl{
 			Name: "post",
 			Desc: "records an invocation and returns a canned id",
 			Options: connector.Schema{
-				"text":    {Type: connector.TString, Required: true},
-				"channel": {Type: connector.TString},
+				"text": {Type: connector.TString, Required: true},
+				// Scope-tagged destination options, one per dimension the
+				// real connectors use, so this package's tests exercise the
+				// generic walk rather than any one connector's spelling.
+				"channel": {Type: connector.TString, Scope: "channel"},
 				"as":      {Type: connector.TString},
 				"meta":    {Type: connector.TMap},
-				"repo":    {Type: connector.TString}, // a target selector (like gh verbs)
+				"repo":    {Type: connector.TString, Scope: "repo"},  // a target selector (like gh verbs)
+				"store":   {Type: connector.TString, Scope: "store"}, // a store selector (like kv verbs)
 			},
 			Outputs: connector.Schema{"id": {Type: connector.TInt}},
 		},
 		{
-			Name: "ask", Desc: "a fake ask-capable verb", Ask: true,
+			// Carries a Usage hint: the card and the MCP tool description
+			// must both prefer it over Desc (design §A).
+			Name: "ask", Desc: "a fake ask-capable verb",
+			Usage: "ask a human and wait for their answer", Ask: true,
 			Options: connector.Schema{"prompt": {Type: connector.TString, Required: true}},
 			Outputs: connector.Schema{
 				"action": {Type: connector.TString},
@@ -72,6 +82,20 @@ var fakeDecl = &connector.TypeDecl{
 			Desc:    "sleeps a test-configured duration before returning",
 			Options: connector.Schema{},
 			Outputs: connector.Schema{"done": {Type: connector.TBool}},
+		},
+		{
+			// A scoped option that is NOT a string — the shape an external
+			// plugin can declare (`account: {type: integer, scope: "account"}`)
+			// and which a string type-assertion silently read as absent
+			// (round-5 #3). No builtin has one, so the meta-test's coverage
+			// of every connector would never have reached this class.
+			Name: "charge", Desc: "a verb whose destination option is an integer",
+			Options: connector.Schema{
+				"account": {Type: connector.TInt, Required: true, Scope: "account"},
+				"cents":   {Type: connector.TInt},
+				"live":    {Type: connector.TBool, Scope: "mode"},
+			},
+			Outputs: connector.Schema{"ok": {Type: connector.TBool}},
 		},
 		{
 			Name: "download", Desc: "returns raw bytes as a declared binary output (#36 §21)",
@@ -252,6 +276,8 @@ func (f *fakeImpl) Invoke(ctx context.Context, verb string, opts map[string]any)
 		return map[string]any{"action": "approve", "text": "ok", "ref": "ref-1"}, nil
 	case "slow":
 		return map[string]any{"done": true}, nil
+	case "charge":
+		return map[string]any{"ok": true}, nil
 	}
 	return map[string]any{}, nil
 }
@@ -262,21 +288,70 @@ func (f *fakeImpl) Invoke(ctx context.Context, verb string, opts map[string]any)
 
 // loadConfig parses a YAML document directly into a config.Config (no file
 // I/O, no import/env expansion — just the structural shape flow needs).
+// lastConfigYAML is the document loadConfig most recently parsed. mustSpec
+// prepends it so a trigger spec written in a test can merge an anchor the
+// config document defines — anchors are FILE-local, and a rig that parses
+// the two halves separately would otherwise be unable to express what a
+// real single-file config can. No test here runs in parallel.
+var lastConfigYAML string
+
+// commonAnchors is a fallback anchor preamble for the trigger specs in this
+// package. Anchors are FILE-local, and the rig parses a config document and
+// a trigger spec through separate helpers — so a spec that merges `<<:
+// *fixer` needs the definition in scope. A config document that defines its
+// own overrides these, since it is spliced in after.
+const commonAnchors = `x-rig:
+  critic: &critic { type: agent, name: critic, model: m }
+  deployer: &deployer { type: agent, name: deployer, model: x }
+  fixer: &fixer { type: agent, name: fixer, model: m }
+  opted: &opted { type: agent }
+  planner: &planner { type: agent, name: planner, model: x }
+  reviewer: &reviewer { type: agent, name: reviewer, model: m }
+`
+
 func loadConfig(t *testing.T, y string) *config.Config {
 	t.Helper()
+	lastConfigYAML = y
+	// Resolve anchors the way config.Load does, with the rig preamble in
+	// scope so a config document may merge one it did not define itself.
+	if flat, err := config.ResolveAliasBytes([]byte(commonAnchors + "\n" + y)); err == nil {
+		y = string(flat)
+	}
 	var cfg config.Config
 	if err := yaml.Unmarshal([]byte(y), &cfg); err != nil {
 		t.Fatalf("yaml unmarshal config: %v\n---\n%s", err, y)
 	}
-	// Mirror config.Load: multi-source on: lists expand before validation.
+	// Mirror config.Load: multi-source on: lists expand, then `extends:`
+	// resolves (including a step reaching a `steps:` template) before
+	// anything runs.
 	if err := cfg.NormalizeTriggers(); err != nil {
 		t.Fatalf("normalize triggers: %v\n---\n%s", err, y)
+	}
+	if err := cfg.ResolveExtends(); err != nil {
+		t.Fatalf("resolve extends: %v\n---\n%s", err, y)
 	}
 	return &cfg
 }
 
 // buildRegistry builds a connector.Registry from cfg using a stubbed secrets
 // resolver (LookupEnv backed by a plain map, no real env/process access).
+// loadConfigViaLoader writes the document to disk and loads it through the
+// REAL config.Load, so load-time machinery the lightweight helper skips —
+// `${settings.X}` substitution above all — is what the test sees.
+func loadConfigViaLoader(t *testing.T, y string) *config.Config {
+	t.Helper()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "conductor.yaml")
+	if err := os.WriteFile(p, []byte(y), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatalf("config.Load: %v\n---\n%s", err, y)
+	}
+	return cfg
+}
+
 func buildRegistry(t *testing.T, cfg *config.Config) *connector.Registry {
 	t.Helper()
 	reg, err := connector.Build(cfg, connector.Deps{Secrets: testSecrets(nil), Config: cfg})
@@ -301,11 +376,47 @@ func testSecrets(env map[string]string) *secrets.Resolver {
 // config.TriggerSpec.
 func mustSpec(t *testing.T, y string) config.TriggerSpec {
 	t.Helper()
-	var s config.TriggerSpec
-	if err := yaml.Unmarshal([]byte(y), &s); err != nil {
-		t.Fatalf("yaml unmarshal trigger spec: %v\n---\n%s", err, y)
+	// Parse the spec in the same DOCUMENT as the config that set the scene,
+	// so `<<: *fixer` resolves the way it would in a real config file. The
+	// spec is a one-entry `triggers:` list inside that document.
+	doc := commonAnchors + "\n" + lastConfigYAML + "\ntriggers:\n" + indentYAML("  ", "- "+strings.TrimPrefix(strings.TrimSpace(y), "- "))
+	// …and resolve the anchors first, exactly as config.Load does: a custom
+	// UnmarshalYAML re-encodes the node it is handed, so an alias pointing
+	// outside that node cannot be read directly.
+	flat, rerr := config.ResolveAliasBytes([]byte(doc))
+	if rerr != nil {
+		flat = []byte(doc)
 	}
-	return s
+	var whole struct {
+		Triggers []config.TriggerSpec `yaml:"triggers"`
+	}
+	if err := yaml.Unmarshal(flat, &whole); err != nil || len(whole.Triggers) != 1 {
+		// Fall back to the spec alone — a test that set no config, or one
+		// whose spec is not list-shaped.
+		var s config.TriggerSpec
+		if err2 := yaml.Unmarshal([]byte(y), &s); err2 != nil {
+			t.Fatalf("yaml unmarshal trigger spec: %v\n---\n%s", err2, y)
+		}
+		return s
+	}
+	return whole.Triggers[0]
+}
+
+// indentYAML re-indents a block, leaving the first line's own "- " marker in
+// place so a mapping becomes one sequence entry.
+func indentYAML(pad, y string) string {
+	lines := strings.Split(y, "\n")
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		if i == 0 {
+			lines[i] = pad + l
+			continue
+		}
+		lines[i] = pad + "  " + l
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 // newTrigger builds a minimal core.Trigger for a test: a repo/number target
@@ -313,9 +424,13 @@ func mustSpec(t *testing.T, y string) config.TriggerSpec {
 func newTrigger(kind string, ctx map[string]any) core.Trigger {
 	return core.Trigger{
 		Source: "fake", Instance: "fake", Kind: kind,
-		Target:  core.Target{Repo: "o/r", Number: 7},
-		Title:   "test trigger",
-		Context: ctx,
+		// A source that assigns its own target, like every real one except a
+		// body-templated webhook or a third-party plugin source. A test that
+		// means the forged case says so (see untrustedtarget_test.go).
+		TargetTrusted: true,
+		Target:        core.Target{Repo: "o/r", Number: 7},
+		Title:         "test trigger",
+		Context:       ctx,
 	}
 }
 
@@ -471,7 +586,7 @@ func (n *fakeNotifier) snapshot() []notifyEvent {
 type backgroundCall struct {
 	StepID  string
 	Handoff string
-	Profile config.AgentProfile
+	Profile config.Step
 	Ref     dispatch.RunRef
 }
 
@@ -499,7 +614,7 @@ func (a *fakeAgents) dispatch(ctx context.Context, req dispatch.Request) (dispat
 	return dispatch.RunRef{Output: "{}"}, nil
 }
 
-func (a *fakeAgents) background(ctx context.Context, t core.Trigger, stepID, agentName string, p config.AgentProfile, ref dispatch.RunRef, handoffConn string) {
+func (a *fakeAgents) background(ctx context.Context, t core.Trigger, stepID, agentName string, p config.Step, ref dispatch.RunRef, handoffConn string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.backgroundCalls = append(a.backgroundCalls, backgroundCall{StepID: stepID, Handoff: handoffConn, Profile: p, Ref: ref})
@@ -542,7 +657,7 @@ func newTestRunner(t *testing.T, cfg *config.Config, reg *connector.Registry) *t
 		Agents: AgentServices{
 			Dispatch:   ag.dispatch,
 			Tokens:     func(t core.Trigger) dispatch.Tokens { return dispatch.Tokens{} },
-			Guidance:   func(agentName string, p config.AgentProfile, pol config.Policy) string { return "|G|" },
+			Guidance:   func(agentName string, p config.Step, pol config.Policy) string { return "|G|" },
 			Background: ag.background,
 			Archive:    ag.archive,
 		},
@@ -574,24 +689,28 @@ func emptyRun() store.WorkflowRun {
 	return store.WorkflowRun{Outputs: map[string]map[string]any{}}
 }
 
+// The rig resolves the trigger's index the way production does rather
+// than assuming 0 — that assumption WAS the bug (C1), so a test rig that
+// hardcodes it cannot catch a regression.
+
 // runTrigger runs one trigger (no batch, no checkpoint) to completion.
 func runTrigger(rig *testRig, trig core.Trigger, spec config.TriggerSpec) {
-	rig.Runner.Run(context.Background(), emptyRun(), trig, spec, nil, false)
+	rig.Runner.Run(context.Background(), emptyRun(), trig, spec, rig.Runner.IndexOf(spec), nil, false)
 }
 
 // runTriggerCtx is runTrigger with an explicit context (timeout tests).
 func runTriggerCtx(ctx context.Context, rig *testRig, trig core.Trigger, spec config.TriggerSpec) {
-	rig.Runner.Run(ctx, emptyRun(), trig, spec, nil, false)
+	rig.Runner.Run(ctx, emptyRun(), trig, spec, rig.Runner.IndexOf(spec), nil, false)
 }
 
 // runTriggerBatch runs one trigger with a grouped batch.
 func runTriggerBatch(rig *testRig, trig core.Trigger, spec config.TriggerSpec, batch *Batch) {
-	rig.Runner.Run(context.Background(), emptyRun(), trig, spec, batch, false)
+	rig.Runner.Run(context.Background(), emptyRun(), trig, spec, rig.Runner.IndexOf(spec), batch, false)
 }
 
 // runTriggerWithRun runs a (possibly checkpointed) WorkflowRun.
 func runTriggerWithRun(rig *testRig, run store.WorkflowRun, trig core.Trigger, spec config.TriggerSpec) {
-	rig.Runner.Run(context.Background(), run, trig, spec, nil, false)
+	rig.Runner.Run(context.Background(), run, trig, spec, rig.Runner.IndexOf(spec), nil, false)
 }
 
 // workflowFailed reports whether the run just executed logged a
@@ -604,4 +723,15 @@ func (rig *testRig) workflowFailed() (bool, string) {
 	last := entries[len(entries)-1]
 	errStr, _ := last["error"].(string)
 	return true, errStr
+}
+
+// roleOf strips the agent-authored identity namespace, leaving the step's own
+// name. An agent-authored step's identity is confined to its dispatch
+// ("agent:<repo>#<kind>/<name>" — see agentAuthoredNamespace), so a test that
+// dispatches by role matches on the role.
+func roleOf(identity string) string {
+	if i := strings.LastIndex(identity, "/"); i >= 0 && strings.HasPrefix(identity, "agent:") {
+		return identity[i+1:]
+	}
+	return identity
 }

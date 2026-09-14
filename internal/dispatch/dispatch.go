@@ -35,9 +35,20 @@ type Author struct {
 
 // Request is a fully-resolved unit of dispatch.
 type Request struct {
-	Trigger   core.Trigger
-	Action    config.Action
-	Profile   config.AgentProfile // populated for agent actions
+	Trigger core.Trigger
+	Action  config.Action
+	// Step carries the dispatch's behavior — model, runtime, guidance,
+	// skill, session, workspace, timeouts, isolation. It replaced the retired
+	// agent PROFILE (docs/design/agents-removal.md §6): the fields always
+	// described the step, so they live on it.
+	Step config.Step
+	// Identity is the step's stable identity (config.Step.Identity) — the key
+	// memory scoping, session affinity, and outcome tracking use. Never a
+	// per-run value.
+	Identity string
+	// Model is the RESOLVED model for this dispatch ("" = bare launch, the
+	// runtime's own default). It is part of the session-affinity partition.
+	Model     string
 	Tokens    Tokens
 	Author    Author
 	Workspace string // base workspace id/path to worktree from (optional)
@@ -55,7 +66,13 @@ type Request struct {
 	// isolation names an explicit network policy, the launch is routed through
 	// the deny-all egress proxy.
 	AgentAuthored bool
-	Data          map[string]any // extra template vars (e.g. prior step outputs)
+	// DispatchID is a DAEMON-ASSIGNED id, unique to this dispatch. It is the
+	// anchor a live tool's reconstructed trigger is confined to when the
+	// dispatch's own target cannot be trusted (a webhook `repo:` the sender
+	// chose): the repo is theirs to pick, this is not. Never derived from
+	// event data, never chosen by the agent.
+	DispatchID string
+	Data       map[string]any // extra template vars (e.g. prior step outputs)
 }
 
 // RunRef is the outcome of a dispatch.
@@ -130,9 +147,33 @@ type Dispatcher struct {
 	// fresh worktree. Opt-in; set from top-level config.
 	AdoptOpenWorkspaces bool
 
+	// backendImpl is the paseo-daemon Backend this Dispatcher drives. nil (the
+	// default, and every existing construction path) uses cliBackend — the
+	// CLI-shelling implementation that is behavior-identical to the
+	// pre-Backend-interface Dispatcher. Set to an rpcBackend to run paseo
+	// through a conductor-paseo plugin instead. Use SetBackend to configure it;
+	// the field stays unexported so every call site goes through backend(),
+	// which supplies the cliBackend default.
+	backendImpl Backend
+
 	mu        sync.Mutex
 	repoDirs  map[string]string // repo -> resolved checkout cwd (memoized)
 	scratchWS string            // memoized scratch workspace id
+}
+
+// SetBackend configures the Backend this Dispatcher drives paseo through. nil
+// (or never calling SetBackend) keeps the default cliBackend — the bundled,
+// CLI-shelling path. Not safe to call concurrently with dispatch in progress.
+func (d *Dispatcher) SetBackend(b Backend) { d.backendImpl = b }
+
+// backend returns the configured Backend, defaulting to cliBackend (the
+// CLI-shelling implementation wrapping this Dispatcher's own PaseoBin/Remote/
+// Retry/Secrets config) when none was set.
+func (d *Dispatcher) backend() Backend {
+	if d.backendImpl != nil {
+		return d.backendImpl
+	}
+	return newDispatcherCLIBackend(d)
 }
 
 // redactText scrubs tracked secret values from stderr-derived detail text.
@@ -166,7 +207,7 @@ func (d *Dispatcher) WaitForAgent(ctx context.Context, id string, timeout time.D
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	_ = d.paseoCmd(ctx, "wait", id).Run()
+	_ = d.backend().Wait(ctx, id)
 }
 
 // Send queues a follow-up prompt to an existing live agent (paseo's native
@@ -182,17 +223,14 @@ func (d *Dispatcher) Send(ctx context.Context, id, prompt string) error {
 // output — the same capture shape as `paseo run --json`. The supervise loop
 // (#36 §11) reads the agent's revised plan out of it.
 func (d *Dispatcher) SendCapture(ctx context.Context, id, prompt string) (string, error) {
-	cmd := d.paseoCmd(ctx, "send", id, prompt, "--json")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	res, err := d.backend().Send(ctx, SendOptions{ID: id, Prompt: prompt, JSON: true})
 	if err != nil {
-		if s := strings.TrimSpace(stderr.String()); s != "" {
+		if s := strings.TrimSpace(res.Stderr); s != "" {
 			return "", fmt.Errorf("%w: %s", err, d.redactText(truncate(s, 300)))
 		}
 		return "", err
 	}
-	return string(out), nil
+	return res.Output, nil
 }
 
 // Dispatch selects the backend for the action and runs it.

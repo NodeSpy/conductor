@@ -9,7 +9,7 @@ import (
 )
 
 func TestSessionSpecParseAndDefaults(t *testing.T) {
-	var p AgentProfile
+	var p Step
 	y := `
 session:
   key: "{{.repo}}#{{.pr}}"
@@ -33,7 +33,7 @@ session:
 		t.Fatalf("defaults: %v %v", bare.IdleTTLOrDefault(), bare.MaxLifetimeOrDefault())
 	}
 	// No session: block → nil.
-	var p2 AgentProfile
+	var p2 Step
 	if err := yaml.Unmarshal([]byte("model: x"), &p2); err != nil || p2.Session != nil {
 		t.Fatalf("absent session: %+v %v", p2.Session, err)
 	}
@@ -58,23 +58,36 @@ func TestSessionEndsOn(t *testing.T) {
 	}
 }
 
+// A session: block is legal at two scopes now (design §3): on a RUNTIME (the
+// overall pool) and on a STEP (its own). Both go through the same check.
 func TestValidateSessions(t *testing.T) {
-	base := func(s *SessionSpec) *Config {
-		return &Config{Agents: map[string]AgentProfile{"a": {Session: s}}}
+	step := func(s *SessionSpec) *Config {
+		return &Config{Workflows: map[string]WorkflowDef{"w": {Steps: []Step{{ID: "a", Session: s}}}}}
 	}
-	if err := base(nil).validateSessions(); err != nil {
-		t.Fatalf("nil session: %v", err)
+	runtime := func(s *SessionSpec) *Config {
+		return &Config{Runtimes: RuntimeSet{"paseo": {Use: "paseo", Session: s}}}
 	}
-	if err := base(&SessionSpec{Key: "{{.repo}}#{{.pr}}"}).validateSessions(); err != nil {
-		t.Fatalf("valid: %v", err)
-	}
-	if err := base(&SessionSpec{}).validateSessions(); err == nil || !strings.Contains(err.Error(), "session.key is required") {
-		t.Fatalf("missing key: %v", err)
-	}
-	if err := base(&SessionSpec{Key: "{{.repo"}).validateSessions(); err == nil {
-		t.Fatal("bad template must error")
-	}
-	if err := base(&SessionSpec{Key: "k", EndOn: []string{""}}).validateSessions(); err == nil {
-		t.Fatal("empty end_on entry must error")
+	for name, base := range map[string]func(*SessionSpec) *Config{"step": step, "runtime": runtime} {
+		check := func(c *Config) error {
+			if err := c.validateSessions(); err != nil {
+				return err
+			}
+			return c.validateSteps()
+		}
+		if err := check(base(nil)); err != nil {
+			t.Fatalf("%s nil session: %v", name, err)
+		}
+		if err := check(base(&SessionSpec{Key: "{{.repo}}#{{.pr}}"})); err != nil {
+			t.Fatalf("%s valid: %v", name, err)
+		}
+		if err := check(base(&SessionSpec{})); err == nil || !strings.Contains(err.Error(), "session.key is required") {
+			t.Fatalf("%s missing key: %v", name, err)
+		}
+		if err := check(base(&SessionSpec{Key: "{{.repo"})); err == nil {
+			t.Fatalf("%s bad template must error", name)
+		}
+		if err := check(base(&SessionSpec{Key: "k", EndOn: []string{""}})); err == nil {
+			t.Fatalf("%s empty end_on entry must error", name)
+		}
 	}
 }

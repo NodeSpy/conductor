@@ -58,14 +58,14 @@ func TestCtxMemoryRisor(t *testing.T) {
 	tempMem(t)
 	e := &Executor{}
 	out, err := e.Exec(context.Background(), Spec{Run: "risor", Code: `
-kept := memory.remember("risor note", ["infra"], "global")
+kept := memory.remember("risor note", ["infra"], "acme/infra")
 hits := memory.recall({"tags": ["infra"]})
 {"scope": kept["scope"], "n": len(hits), "text": hits[0]["text"], "gone": memory.forget(kept["id"])}
 `}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out["scope"] != "global" || out["text"] != "risor note" || out["gone"] != true {
+	if out["scope"] != "acme/infra" || out["text"] != "risor note" || out["gone"] != true {
 		t.Fatalf("risor memory: %+v", out)
 	}
 }
@@ -135,8 +135,10 @@ func TestMemInvokeValidation(t *testing.T) {
 	if _, err := memInvoke(nil, "recall", []any{"not a map"}); err == nil {
 		t.Error("non-map recall options must error")
 	}
-	if _, err := memInvoke(nil, "recall", []any{map[string]any{"scope": "repo"}}); err == nil {
-		t.Error("relative scope without a run must error in code")
+	// A scope key is opaque — there is no relative form to fail on any more
+	// (design §2), so this is simply a recall against the key "repo".
+	if _, err := memInvoke(nil, "recall", []any{map[string]any{"scope": "repo"}}); err != nil {
+		t.Errorf("an opaque scope key must be accepted: %v", err)
 	}
 	if _, err := memInvoke(nil, "forget", nil); err == nil {
 		t.Error("forget without id must error")

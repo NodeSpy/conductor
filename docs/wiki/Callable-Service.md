@@ -323,6 +323,16 @@ still crosses the daemon's same-user control socket — the same privilege bound
 }
 ```
 
+> **Audit attribution caveat.** `--token <name>` names a token; it does not *prove* the
+> caller holds its secret. The MCP face is reached over the daemon's same-user control
+> socket, so the privilege boundary is the OS user — anyone who can already talk to that
+> socket can pass any token name and be recorded under it. The scope check is still real
+> (a name that isn't scoped to the workflow is refused, so the name cannot *widen*
+> reach), but for a same-user caller the `callable_invoke` audit records an
+> **asserted** identity, not an authenticated one. Treat it as attribution between
+> cooperating clients, not as evidence against the user who owns the daemon. The HTTP
+> surface is different: there the token secret is presented and verified.
+
 To opt out — expose every `callable: true` workflow with no token and no audit,
 trusting the same-user control socket alone — set `mcp_local: true` in the
 `callable:` block and drop `--token`. This is the old behavior and should be used

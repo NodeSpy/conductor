@@ -25,7 +25,7 @@ workflows:
 		t.Fatal(err)
 	}
 	cfg := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   kit:
     source: ./src/kit

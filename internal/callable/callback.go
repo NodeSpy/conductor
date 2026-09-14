@@ -110,7 +110,11 @@ func (c *callbackPoster) post(ctx context.Context, rawURL string, body []byte) e
 		return err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
+	// Bounded: the body is drained only to let the connection be reused, and
+	// the receiver is a third party. Without a limit a hostile or broken
+	// endpoint could stream indefinitely into io.Discard and pin this
+	// goroutine for as long as it liked.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxCallbackDrain))
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("callback returned %d", resp.StatusCode)
 	}
@@ -161,3 +165,7 @@ func (c *callbackPoster) safeDial(ctx context.Context, network, addr string) (ne
 	}
 	return nil, errCallbackBadURL
 }
+
+// maxCallbackDrain bounds how much of a callback response we read to make the
+// connection reusable. The content is not used.
+const maxCallbackDrain = 1 << 20

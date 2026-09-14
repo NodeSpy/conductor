@@ -24,9 +24,18 @@ import (
 //     records one ci_failed per push, not one per check event. Pruned by age
 //     like engagements; a terminal outcome clears it with them.
 
-// Engagement is one agent's recorded work on a target.
+// Engagement is one step's recorded work on a target.
+//
+// Key is the outcome TRACK-RECORD KEY: the step identity by default, or the
+// step's explicit outcome_key (docs/design/agents-removal.md §4). Its JSON
+// tag stays "agent" — the field it replaced — so engagements recorded before
+// the removal keep resolving, and a migrated config (whose steps carry the
+// old agent name as their `name:`) matches its accumulated history exactly.
 type Engagement struct {
-	Agent string `json:"agent"`
+	Key string `json:"agent"`
+	// Runtime is the backend the work executed on — the budget anchor (§1),
+	// carried so the report can attribute spend per runtime.
+	Runtime string `json:"runtime,omitempty"`
 	// Workflow is the trigger scope ("on[/name]"); SavedWorkflow the promoted
 	// workflow (#36 §11) the step ran inside, when it did — the outcome feeds
 	// that workflow's delivery health.
@@ -57,13 +66,24 @@ type ciFailMark struct {
 	At   time.Time `json:"at"`
 }
 
+// targetKey is retained for the revert path, which addresses a repo#number
+// the CALLER already vetted (a corroborated revert names sibling PRs in the
+// same trusted repo). Everything driven by an incoming trigger passes
+// core.Trigger.Key() instead, which namespaces an untrusted target away from
+// a trusted one — see the key parameters below.
 func targetKey(repo string, number int) string {
 	return fmt.Sprintf("%s#%d", repo, number)
 }
 
-// RecordEngagement notes that an agent acted on a target.
-func (s *Store) RecordEngagement(repo string, number int, e Engagement) {
-	if repo == "" || number <= 0 || e.Agent == "" {
+// TargetKey is the engagement key for a repo#number the caller has already
+// vetted — the trusted-repo spelling core.Trigger.Key produces for a
+// platform-assigned target. The revert path uses it to address a SIBLING PR
+// of the trusted repo it is already inside.
+func TargetKey(repo string, number int) string { return targetKey(repo, number) }
+
+// RecordEngagement notes that a step acted on a target.
+func (s *Store) RecordEngagement(key string, e Engagement) {
+	if key == "" || e.Key == "" {
 		return
 	}
 	if e.At.IsZero() {
@@ -73,7 +93,7 @@ func (s *Store) RecordEngagement(repo string, number int, e Engagement) {
 	if s.engagements == nil {
 		s.engagements = map[string][]Engagement{}
 	}
-	key := targetKey(repo, number)
+
 	list := append(s.engagements[key], e)
 	if len(list) > engagementCap {
 		list = list[len(list)-engagementCap:]
@@ -87,9 +107,9 @@ func (s *Store) RecordEngagement(repo string, number int, e Engagement) {
 // TakeEngagements returns and CLEARS a target's engagements (a terminal
 // outcome — merged/closed/reverted — consumes them). The target's ci_failed
 // marker is cleared with them.
-func (s *Store) TakeEngagements(repo string, number int) []Engagement {
+func (s *Store) TakeEngagements(key string) []Engagement {
 	s.mu.Lock()
-	key := targetKey(repo, number)
+
 	out := s.engagements[key]
 	delete(s.engagements, key)
 	_, hadMark := s.ciFailed[key]
@@ -106,10 +126,10 @@ func (s *Store) TakeEngagements(repo string, number int) []Engagement {
 
 // PeekEngagements returns a target's engagements without consuming them
 // (non-terminal signals: a CI failure on a still-open PR).
-func (s *Store) PeekEngagements(repo string, number int) []Engagement {
+func (s *Store) PeekEngagements(key string) []Engagement {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]Engagement(nil), s.engagements[targetKey(repo, number)]...)
+	return append([]Engagement(nil), s.engagements[key]...)
 }
 
 // pruneEngagementsLocked drops entries older than the retention window.
@@ -136,11 +156,11 @@ func (s *Store) pruneEngagementsLocked() {
 // fails, its siblings cancel) collapses to one ci_failed per push instead of one
 // per check event; a later push that fails again is a new head and records anew.
 // An empty head is never deduped (fail-safe: record rather than drop the signal).
-func (s *Store) MarkCIFailure(repo string, number int, head string) bool {
-	if repo == "" || number <= 0 || head == "" {
+func (s *Store) MarkCIFailure(key, head string) bool {
+	if key == "" || head == "" {
 		return true
 	}
-	key := targetKey(repo, number)
+
 	s.mu.Lock()
 	if s.ciFailed == nil {
 		s.ciFailed = map[string]ciFailMark{}
@@ -168,29 +188,30 @@ func (s *Store) pruneCIFailedLocked() {
 	}
 }
 
-// BumpOutcome increments one agent's outcome counter.
-func (s *Store) BumpOutcome(agent, outcome string) {
-	if agent == "" || outcome == "" {
+// BumpOutcome increments one track-record key's outcome counter. The key is
+// a step identity (or an explicit outcome_key) — see Engagement.
+func (s *Store) BumpOutcome(key, outcome string) {
+	if key == "" || outcome == "" {
 		return
 	}
 	s.mu.Lock()
 	if s.outcomeStats == nil {
 		s.outcomeStats = map[string]map[string]int{}
 	}
-	if s.outcomeStats[agent] == nil {
-		s.outcomeStats[agent] = map[string]int{}
+	if s.outcomeStats[key] == nil {
+		s.outcomeStats[key] = map[string]int{}
 	}
-	s.outcomeStats[agent][outcome]++
+	s.outcomeStats[key][outcome]++
 	s.mu.Unlock()
 	s.saveOutcomeStats()
 }
 
-// AgentOutcomeStats returns a copy of one agent's outcome counters.
-func (s *Store) AgentOutcomeStats(agent string) map[string]int {
+// OutcomeStats returns a copy of one track-record key's outcome counters.
+func (s *Store) OutcomeStats(key string) map[string]int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := map[string]int{}
-	for k, v := range s.outcomeStats[agent] {
+	for k, v := range s.outcomeStats[key] {
 		out[k] = v
 	}
 	return out
@@ -211,37 +232,25 @@ func (s *Store) outcomeStatsPath() string {
 }
 
 func (s *Store) saveEngagements() {
-	path := s.engagementsPath()
-	if path == "" {
-		return
-	}
-	s.mu.Lock()
-	b, err := json.MarshalIndent(s.engagements, "", " ")
-	s.mu.Unlock()
-	if err != nil {
-		return
-	}
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
-		_ = os.Rename(tmp, path)
-	}
+	// Through persist: it holds writeMu across marshal→write→rename,
+	// so a concurrent save of a DIFFERENT key cannot interleave and
+	// land a stale snapshot over a newer one. These three were the
+	// savers the round-2 fix missed.
+	_ = s.persist(func() ([]byte, string, error) {
+		b, err := json.MarshalIndent(s.engagements, "", " ")
+		return b, s.engagementsPath(), err
+	})
 }
 
 func (s *Store) saveOutcomeStats() {
-	path := s.outcomeStatsPath()
-	if path == "" {
-		return
-	}
-	s.mu.Lock()
-	b, err := json.MarshalIndent(s.outcomeStats, "", " ")
-	s.mu.Unlock()
-	if err != nil {
-		return
-	}
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
-		_ = os.Rename(tmp, path)
-	}
+	// Through persist: it holds writeMu across marshal→write→rename,
+	// so a concurrent save of a DIFFERENT key cannot interleave and
+	// land a stale snapshot over a newer one. These three were the
+	// savers the round-2 fix missed.
+	_ = s.persist(func() ([]byte, string, error) {
+		b, err := json.MarshalIndent(s.outcomeStats, "", " ")
+		return b, s.outcomeStatsPath(), err
+	})
 }
 
 func (s *Store) ciFailedPath() string {
@@ -252,20 +261,14 @@ func (s *Store) ciFailedPath() string {
 }
 
 func (s *Store) saveCIFailed() {
-	path := s.ciFailedPath()
-	if path == "" {
-		return
-	}
-	s.mu.Lock()
-	b, err := json.MarshalIndent(s.ciFailed, "", " ")
-	s.mu.Unlock()
-	if err != nil {
-		return
-	}
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
-		_ = os.Rename(tmp, path)
-	}
+	// Through persist: it holds writeMu across marshal→write→rename,
+	// so a concurrent save of a DIFFERENT key cannot interleave and
+	// land a stale snapshot over a newer one. These three were the
+	// savers the round-2 fix missed.
+	_ = s.persist(func() ([]byte, string, error) {
+		b, err := json.MarshalIndent(s.ciFailed, "", " ")
+		return b, s.ciFailedPath(), err
+	})
 }
 
 // loadOutcomeState loads the outcome files at Open (missing/corrupt = start fresh).

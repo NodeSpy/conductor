@@ -13,7 +13,7 @@ import (
 )
 
 func TestFilterMatch(t *testing.T) {
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	r := New(Runner{Cfg: cfg, Conns: reg})
 
@@ -38,7 +38,7 @@ func TestFilterMatch(t *testing.T) {
 // TestCommandStepThroughRun: a type: command step dispatches with Wait and
 // its JSON output becomes step outputs (extractOutputs unwrapping).
 func TestCommandStepThroughRun(t *testing.T) {
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	rig := newTestRunner(t, cfg, reg)
@@ -70,7 +70,7 @@ steps:
 func TestDryRunStubsVerbCodeAndRemoteCommand(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 hosts:
   box: { host: b.internal }
 `)
@@ -156,7 +156,7 @@ func TestSmallHelpers(t *testing.T) {
 func TestValidateNotifyVia(t *testing.T) {
 	base := `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 notify:
   via:
     - ROUTE
@@ -207,7 +207,7 @@ func TestGrouperRealClock(t *testing.T) {
 func TestRemoteCommandStep(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 hosts:
   box: { host: b.internal, user: ci }
 `)
@@ -256,7 +256,7 @@ steps: [ { id: run, type: command, command: [false], host: box } ]
 // TestForEachParallelFanout: parallel: true fans iterations concurrently and
 // a failing item fails the step.
 func TestForEachParallelFanout(t *testing.T) {
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	rig := newTestRunner(t, cfg, reg)
@@ -290,7 +290,7 @@ steps:
 // TestDeferRetryWhileOutputMatches: the defer-retry loop re-runs while the
 // output matches, then completes.
 func TestDeferRetryWhileOutputMatches(t *testing.T) {
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	_ = newFakeState(t, "svc")
 	rig := newTestRunner(t, cfg, reg)

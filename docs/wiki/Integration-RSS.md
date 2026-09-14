@@ -6,7 +6,7 @@ no credentials.
 ```yaml
 connectors:
   upstream:
-    type: rss
+    use: rss
     feeds:
       changelog: { url: https://example.com/releases.atom, interval: 30m }
 

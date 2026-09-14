@@ -115,12 +115,17 @@ func TestSkillCLISubmitReviewRoundTrip(t *testing.T) {
 	cfg := loadConfigDoc(t, `
 connectors:
   gh:
-    type: github
+    use: github
     identity: { write_token: me-sentinel }
-agents:
-  fixer:
-    model: x
-    skill: { verbs: [gh.submit_review] }
+workflows:
+  w:
+    steps:
+      - id: fixer
+        type: agent
+        name: fixer
+        model: x
+        prompt: p
+        skill: { verbs: [gh.submit_review] }
 `)
 	stack, err := buildFlowStack(cfg, nil, nil, false) // dryRun=false → really invoke
 	if err != nil || stack == nil {
@@ -128,9 +133,16 @@ agents:
 	}
 
 	b := skill.NewBroker(func(string) (string, bool) { return "", false }, nil)
+	// A real dispatch: the identity carries the PR it was minted for, which
+	// is what makes `--repo o/r` its own target rather than someone else's
+	// (resource scoping, docs/design/skill-verb-scope.md).
 	tok, err := b.MintSession(skill.Identity{
-		Agent:  "fixer",
-		Policy: config.SkillPolicy{Verbs: []string{"gh.submit_review"}},
+		Agent: "fixer",
+		Repo:  "o/r",
+		// A github dispatch: the platform assigned this target.
+		TargetTrusted: true,
+		Number:        1,
+		Policy:        config.SkillPolicy{Verbs: []string{"gh.submit_review"}},
 	}, uint32(os.Getuid()))
 	if err != nil {
 		t.Fatal(err)
@@ -144,8 +156,13 @@ agents:
 			if aerr != nil {
 				return nil, aerr
 			}
+			// Same construction main.go uses, so the fixture exercises the
+			// identity the daemon really hands in.
 			return stack.Runner.RunSkillVerb(ctx, flow.SkillIdentity{
-				Agent: id.Agent, Verbs: id.Policy.Verbs,
+				Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
+				Number: id.Number, Verbs: id.Policy.Verbs,
+				Scopes: id.Policy.VerbScopes, Context: id.Context,
+				TargetTrusted: id.TargetTrusted,
 			}, uses, opts)
 		},
 	})

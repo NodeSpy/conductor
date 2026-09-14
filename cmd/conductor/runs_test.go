@@ -21,8 +21,8 @@ func TestCmdRunsSurfacesRecordedRuns(t *testing.T) {
 store:
   state_file: `+filepath.Join(dir, "state.json")+`
 connectors:
-  timer: { type: cron, schedules: { tick: { every: 1h } } }
-  box: { type: command }
+  timer: { use: cron, schedules: { tick: { every: 1h } } }
+  box: { use: command }
 triggers:
   - on: timer.tick
     steps: [{ id: t, uses: box.run, options: { command: "true" } }]

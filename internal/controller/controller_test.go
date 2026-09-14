@@ -189,7 +189,7 @@ func TestBuiltinRunnerIsRealDispatcher(t *testing.T) {
 	req := dispatch.Request{
 		Trigger: core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "a/w", PR: 5, Number: 5}},
 		Action:  config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"},
-		Profile: config.AgentProfile{Workspace: "worktree"},
+		Step:    config.Step{Workspace: "worktree"},
 	}
 	ref, err := r.Dispatch(context.Background(), req)
 	if err != nil {

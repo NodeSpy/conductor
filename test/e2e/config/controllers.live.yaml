@@ -1,101 +1,133 @@
-# Live-mode conductor config (manual, `make e2e-live`). Same shape as
-# controllers.yaml, but every controller drives a REAL agent CLI installed on the
-# host (mounted in via docker-compose.live.yml) instead of a hermetic fake. fakepaseo
-# still provisions the PR worktree (a real git clone/worktree from the forge — no
-# LLM); the REAL agent then makes the edit, commits as you, and pushes to the forge.
+# The live-provider conductor config (docker-compose.live.yml): real backends,
+# opt-in, not part of the hermetic CI run.
 #
-# Wired for the tools present on this box:
-#   grpb/cliclaude → cli:claude-code (claude -p …, via the TeamClaude wrapper)
-#   grpb/clicodex  → cli:codex       (codex exec …)
-#   grpb/acpgemini → acp:gemini      (gemini --acp)
-#   grpb/ocnative  → acp:omp         (omp acp)          [repurposed repo for omp]
-#   grpb/deck      → agent-deck
-# NOT installed here (skipped in run.sh's live matrix with a note): opencode, copilot,
-# and codex-acp (the acp:codex-adapter binary).
-
-integrations:
-  - type: github
-    name: github
-    enabled: true
+# Migrated from the legacy `integrations:` + `agents:` schema by
+# `conductor config migrate`; agent behavior moved onto the steps, with `name:`
+# pinning each old profile's identity.
+connectors:
+  github:
+    use: github
     app:
       app_id: 123456
       private_key_path: /etc/conductor/github-app.pem
-      webhook_secret: e2e-webhook-secret
       verify_signature: false
-    webhook:
-      listen: "0.0.0.0:8788"
-    sweep:
-      enabled: false
+      webhook_secret: e2e-webhook-secret
     identity:
+      commit_author: self
       read_token: app
       write_token: e2e-user-write-token
-      commit_author: self
-    defaults:
-      me: { logins: [conductor-user] }
-      # A crisp, agent-agnostic instruction: do the work in the checked-out worktree
-      # and push it back. Real agents vary; keep it explicit and imperative.
-      actions:
-        merge_conflict:
-          type: agent
-          agent: fx_codex          # base agent; each rule overrides it per repo
-          prompt: >-
-            You are in a git worktree for {{.repo}} PR #{{.pr}} (the current
-            directory). Make a minimal edit to a file, then run `git add -A`,
-            `git commit -m "resolve {{.repo}}#{{.pr}}"`, and `git push origin HEAD`.
-            You have push access to origin. Do this now, non-interactively.
-    rules:
-      - match: { repos: ["grpb/cliclaude"] }
-        actions: { merge_conflict: { type: agent, agent: fx_claude } }
-      - match: { repos: ["grpb/clicodex"] }
-        actions: { merge_conflict: { type: agent, agent: fx_codex } }
-      - match: { repos: ["grpb/acpgemini"] }
-        actions: { merge_conflict: { type: agent, agent: fx_gemini } }
-      - match: { repos: ["grpb/ocnative"] }
-        actions: { merge_conflict: { type: agent, agent: fx_omp } }
-      - match: { repos: ["grpb/deck"] }
-        actions: { merge_conflict: { type: agent, agent: fx_deck } }
-
-controllers:
-  # Explicit command: overrides so the agents run FULLY NON-INTERACTIVELY — an
-  # unattended fixer must edit+commit+push with no approval prompt. The prompt is
-  # appended as the final argv by the cli controller (oneshot).
-  cli_claude:                                            # → claude -p … <prompt>
-    agent: claude-code
-    transport: cli
-    command: [claude, -p, --dangerously-skip-permissions, --output-format, json]
-  cli_codex:                                             # → codex exec … <prompt>
-    agent: codex
-    transport: cli
-    command: [codex, exec, --dangerously-bypass-approvals-and-sandbox, --skip-git-repo-check]
-  acp_gemini:                                           # → gemini --acp (stdio ACP)
+    me:
+      logins:
+        - conductor-user
+    policy:
+      reply_to_bots: decline_only
+    webhook:
+      listen: 0.0.0.0:8788
+runtimes:
+  acp_gemini:
+    use: acp
     agent: gemini
     session_model: resumable
-    # Pin an available model: the installed gemini-cli defaults to gemini-2.5-pro,
-    # which this account's Gemini backend returns 404 for (deprecated). Verified on
-    # this account's key (2026-09-03): gemini-2.5-flash → 404, gemini-flash-latest →
-    # intermittently unreachable, gemini-flash-lite-latest → clean 200 completion. Pin
-    # the one that reliably responds. (Auth = GEMINI_API_KEY + GEMINI_CLI_TRUST_WORKSPACE
-    # from the compose env.)
-    command: [gemini, --acp, -m, gemini-flash-lite-latest]
-  acp_omp:                                              # → omp acp (stdio ACP)
+    command:
+      - gemini
+      - --acp
+      - -m
+      - gemini-flash-lite-latest
+  acp_omp:
+    use: acp
     agent: omp
     session_model: resumable
-    command: [omp, acp]
-  deck: { type: agent-deck }                            # → agent-deck launch …
-
-agents:
-  fx_claude: { provider: fake, controller: cli_claude, workspace: worktree, archive_when_done: true, wait_timeout: 10m }
-  fx_codex:  { provider: fake, controller: cli_codex,  workspace: worktree, archive_when_done: true, wait_timeout: 10m }
-  fx_gemini: { provider: fake, controller: acp_gemini, workspace: worktree, archive_when_done: true, wait_timeout: 10m }
-  fx_omp:    { provider: fake, controller: acp_omp,    workspace: worktree, archive_when_done: true, wait_timeout: 10m }
-  fx_deck:   { provider: fake, controller: deck,       workspace: worktree, archive_when_done: true, wait_timeout: 10m }
-
-control:
-  enabled: true
-  max_concurrent_agents: 4
-
+    command:
+      - omp
+      - acp
+  cli_claude:
+    use: acp
+    agent: claude-code
+    transport: cli
+    command:
+      - claude
+      - -p
+      - --dangerously-skip-permissions
+      - --output-format
+      - json
+  cli_codex:
+    use: acp
+    agent: codex
+    transport: cli
+    command:
+      - codex
+      - exec
+      - --dangerously-bypass-approvals-and-sandbox
+      - --skip-git-repo-check
+  deck:
+    use: agent-deck
+  paseo:
+    use: paseo
+    bin: /usr/local/bin/fakepaseo
+triggers:
+  - "on": github.merge_conflict
+    filters:
+      repos:
+        - grpb/cliclaude
+    steps:
+      - type: agent
+        prompt: 'You are in a git worktree for {{.repo}} PR #{{.pr}} (the current directory). Make a minimal edit to a file, then run `git add -A`, `git commit -m "resolve {{.repo}}#{{.pr}}"`, and `git push origin HEAD`. You have push access to origin. Do this now, non-interactively.'
+        name: fx_claude
+        workspace: worktree
+        wait_timeout: 10m
+        archive_when_done: true
+        runtime: cli_claude
+  - "on": github.merge_conflict
+    filters:
+      repos:
+        - grpb/clicodex
+    steps:
+      - type: agent
+        prompt: 'You are in a git worktree for {{.repo}} PR #{{.pr}} (the current directory). Make a minimal edit to a file, then run `git add -A`, `git commit -m "resolve {{.repo}}#{{.pr}}"`, and `git push origin HEAD`. You have push access to origin. Do this now, non-interactively.'
+        name: fx_codex
+        workspace: worktree
+        wait_timeout: 10m
+        archive_when_done: true
+        runtime: cli_codex
+  - "on": github.merge_conflict
+    filters:
+      repos:
+        - grpb/acpgemini
+    steps:
+      - type: agent
+        prompt: 'You are in a git worktree for {{.repo}} PR #{{.pr}} (the current directory). Make a minimal edit to a file, then run `git add -A`, `git commit -m "resolve {{.repo}}#{{.pr}}"`, and `git push origin HEAD`. You have push access to origin. Do this now, non-interactively.'
+        name: fx_gemini
+        workspace: worktree
+        wait_timeout: 10m
+        archive_when_done: true
+        runtime: acp_gemini
+  - "on": github.merge_conflict
+    filters:
+      repos:
+        - grpb/ocnative
+    steps:
+      - type: agent
+        prompt: 'You are in a git worktree for {{.repo}} PR #{{.pr}} (the current directory). Make a minimal edit to a file, then run `git add -A`, `git commit -m "resolve {{.repo}}#{{.pr}}"`, and `git push origin HEAD`. You have push access to origin. Do this now, non-interactively.'
+        name: fx_omp
+        workspace: worktree
+        wait_timeout: 10m
+        archive_when_done: true
+        runtime: acp_omp
+  - "on": github.merge_conflict
+    filters:
+      repos:
+        - grpb/deck
+    steps:
+      - type: agent
+        prompt: 'You are in a git worktree for {{.repo}} PR #{{.pr}} (the current directory). Make a minimal edit to a file, then run `git add -A`, `git commit -m "resolve {{.repo}}#{{.pr}}"`, and `git push origin HEAD`. You have push access to origin. Do this now, non-interactively.'
+        name: fx_deck
+        workspace: worktree
+        wait_timeout: 10m
+        archive_when_done: true
+        runtime: deck
+policy:
+  concurrency:
+    max_agents: 4
 store:
   state_file: /data/state.json
   audit_log: /data/audit.jsonl
-
-paseo_bin: /usr/local/bin/fakepaseo

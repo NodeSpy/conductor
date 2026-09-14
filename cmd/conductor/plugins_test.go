@@ -9,12 +9,13 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/plugin"
 )
 
 func tempExecutable(t *testing.T) (path, sum string) {
 	t.Helper()
 	dir := t.TempDir()
-	p := filepath.Join(dir, "rt-plugin")
+	p := filepath.Join(dir, "conductor-my-runtime")
 	data := []byte("#!/bin/true\n")
 	if err := os.WriteFile(p, data, 0o755); err != nil {
 		t.Fatal(err)
@@ -23,14 +24,21 @@ func tempExecutable(t *testing.T) (path, sum string) {
 	return p, hex.EncodeToString(h[:])
 }
 
+// runtimeCfg declares a plugin runtime the app-extension way: one `use:` on a
+// runtimes: entry, pointing at a local development binary.
+func runtimeCfg(bin string) *config.Config {
+	return &config.Config{
+		Runtimes: map[string]config.RuntimeConfig{
+			"my-runtime": {Use: bin},
+		},
+	}
+}
+
 func TestPluginRuntimeControllers(t *testing.T) {
 	bin, sum := tempExecutable(t)
 
-	t.Run("verified runtime becomes an acp controller", func(t *testing.T) {
-		cfg := &config.Config{Plugins: map[string]config.PluginRef{
-			"myrt": {Source: bin, Kind: config.PluginKindRuntime, Provides: "my-runtime", Sha256: sum, Version: "1.0"},
-		}}
-		merged, err := mergedControllersWithPlugins(cfg)
+	t.Run("a use: runtime becomes an acp controller", func(t *testing.T) {
+		merged, err := mergedControllersWithPlugins(runtimeCfg(bin))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -39,43 +47,35 @@ func TestPluginRuntimeControllers(t *testing.T) {
 			t.Fatalf("runtime not registered: %+v", merged)
 		}
 		// The command routes through the plugin-exec re-verify wrapper and ends
-		// at the real binary (details asserted in the dedicated subtest below).
+		// at the real binary.
 		if cc.Transport != "acp" || len(cc.Command) == 0 || cc.Command[len(cc.Command)-1] != bin {
 			t.Fatalf("unexpected controller config: %+v", cc)
 		}
-	})
-
-	t.Run("bad sha refuses (fail-closed)", func(t *testing.T) {
-		cfg := &config.Config{Plugins: map[string]config.PluginRef{
-			"myrt": {Source: bin, Kind: config.PluginKindRuntime, Provides: "my-runtime", Sha256: strings.Repeat("0", 64)},
-		}}
-		if _, err := mergedControllersWithPlugins(cfg); err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
-			t.Fatalf("want sha256 refusal, got %v", err)
+		if !cc.ScrubEnv {
+			t.Fatal("a runtime plugin must not inherit the daemon's environment")
 		}
 	})
 
-	t.Run("collision with configured runtime refused", func(t *testing.T) {
-		cfg := &config.Config{
-			Runtimes: map[string]config.RuntimeConfig{"my-runtime": {Type: "paseo"}},
-			Plugins: map[string]config.PluginRef{
-				"myrt": {Source: bin, Kind: config.PluginKindRuntime, Provides: "my-runtime", Sha256: sum},
-			},
-		}
-		if _, err := mergedControllersWithPlugins(cfg); err == nil || !strings.Contains(err.Error(), "collides") {
-			t.Fatalf("want collision refusal, got %v", err)
-		}
-	})
-
-	t.Run("runtime command routes through the re-verify wrapper", func(t *testing.T) {
-		cfg := &config.Config{Plugins: map[string]config.PluginRef{
-			"myrt": {Source: bin, Kind: config.PluginKindRuntime, Provides: "my-runtime", Sha256: sum},
+	t.Run("the runtimes: name wins over the reference leaf", func(t *testing.T) {
+		cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{
+			"gpu": {Use: bin},
 		}}
 		merged, err := mergedControllersWithPlugins(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
+		if _, ok := merged["gpu"]; !ok {
+			t.Fatalf("runtime not keyed by its runtimes: name: %+v", merged)
+		}
+	})
+
+	t.Run("runtime command routes through the re-verify wrapper", func(t *testing.T) {
+		merged, err := mergedControllersWithPlugins(runtimeCfg(bin))
+		if err != nil {
+			t.Fatal(err)
+		}
 		cc := merged["my-runtime"]
-		if len(cc.Command) < 5 || cc.Command[1] != "plugin-exec" || cc.Command[2] != "--sha" || cc.Command[3] != sum {
+		if len(cc.Command) < 4 || cc.Command[1] != "plugin-exec" || cc.Command[2] != "--sha" {
 			t.Fatalf("expected plugin-exec re-verify wrapper, got %v", cc.Command)
 		}
 		if cc.Command[len(cc.Command)-1] != bin {
@@ -88,18 +88,50 @@ func TestPluginRuntimeControllers(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
 			t.Fatalf("want re-verify refusal, got %v", err)
 		}
+		// The real sha passes verification (exec is not reached here because
+		// VerifyOnly is what we are exercising).
+		if err := plugin.VerifyOnly(plugin.Spec{Name: "r", BinPath: bin, Sha256: sum}); err != nil {
+			t.Fatalf("the correct sha must verify: %v", err)
+		}
 	})
 
 	t.Run("connector plugins are ignored here", func(t *testing.T) {
-		cfg := &config.Config{Plugins: map[string]config.PluginRef{
-			"conn": {Source: bin, Kind: config.PluginKindConnector, Provides: "x", Sha256: sum},
+		cfg := &config.Config{ConnectorsMap: map[string]config.ConnectorRef{
+			"conn": {Use: bin},
 		}}
 		merged, err := mergedControllersWithPlugins(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := merged["x"]; ok {
-			t.Fatal("connector plugin must not register a runtime")
+		if _, ok := merged["my-runtime"]; ok {
+			t.Fatal("a connector plugin must not register a runtime")
 		}
 	})
+
+	t.Run("builtin runtimes need no plugin", func(t *testing.T) {
+		cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{
+			"local": {Use: "paseo"},
+		}}
+		merged, err := mergedControllersWithPlugins(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if merged["local"].Type != "paseo" {
+			t.Fatalf("builtin paseo runtime lost: %+v", merged["local"])
+		}
+		if len(merged["local"].Command) != 0 {
+			t.Fatalf("a builtin runtime must not be wrapped: %+v", merged["local"])
+		}
+	})
+}
+
+// A referenced-but-uninstalled plugin runtime reports a DIRECTION, not a crash.
+func TestPluginRuntimeNotInstalled(t *testing.T) {
+	cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{
+		"modal": {Use: "acme/plugins/modal"},
+	}}
+	_, err := mergedControllersWithPlugins(cfg)
+	if err == nil || !strings.Contains(err.Error(), "conductor init") {
+		t.Fatalf("want a not-installed direction, got %v", err)
+	}
 }

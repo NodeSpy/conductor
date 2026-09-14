@@ -17,8 +17,11 @@ func closedTrigger(repo string, n int, merged bool, reverts []any) core.Trigger 
 		ctx["reverts"] = reverts
 		ctx["reverts_corroborated"] = true
 	}
+	// A github `_closed`: a signature-verified payload assigned this target,
+	// which is what makes its outcome signals actionable at all (round-13).
 	return core.Trigger{Source: "github", Instance: "i", Kind: core.KindClosed,
-		Target: core.Target{Repo: repo, PR: n, Number: n}, Context: ctx}
+		TargetTrusted: true,
+		Target:        core.Target{Repo: repo, PR: n, Number: n}, Context: ctx}
 }
 
 func outcomesFrom(st *flowGateStore) []string {
@@ -36,7 +39,7 @@ func outcomesFrom(st *flowGateStore) []string {
 func TestOutcomeLoopMergedAndReverted(t *testing.T) {
 	eng, st, _, _ := buildFlowEngine(t, gateCfg2())
 	// An agent acted on PR 5 (the engagement the flow service records).
-	st.RecordEngagement("o/r", 5, store.Engagement{Agent: "fixer", Workflow: "eg.ping", SavedWorkflow: "", CostUSD: 1.5})
+	st.RecordEngagement(store.TargetKey("o/r", 5), store.Engagement{Key: "fixer", Workflow: "eg.ping", SavedWorkflow: "", CostUSD: 1.5})
 
 	// Merge signal → terminal outcome, engagements consumed.
 	eng.process(context.Background(), closedTrigger("o/r", 5, true, nil))
@@ -46,7 +49,7 @@ func TestOutcomeLoopMergedAndReverted(t *testing.T) {
 	if st.bumps["fixer"]["merged"] != 1 {
 		t.Fatalf("stats: %+v", st.bumps)
 	}
-	if len(st.TakeEngagements("o/r", 5)) != 0 {
+	if len(st.TakeEngagements(store.TargetKey("o/r", 5))) != 0 {
 		t.Fatal("terminal outcome must consume engagements")
 	}
 
@@ -68,16 +71,17 @@ func TestOutcomeLoopMergedAndReverted(t *testing.T) {
 
 func TestOutcomeLoopClosedUnmergedAndCI(t *testing.T) {
 	eng, st, _, _ := buildFlowEngine(t, gateCfg2())
-	st.RecordEngagement("o/r", 7, store.Engagement{Agent: "fixer"})
+	st.RecordEngagement(store.TargetKey("o/r", 7), store.Engagement{Key: "fixer"})
 
 	// A CI failure is non-terminal: outcome row, engagements kept.
 	ci := core.Trigger{Source: "github", Instance: "i", Kind: "failing_checks",
-		Target: core.Target{Repo: "o/r", PR: 7, Number: 7}, Context: map[string]any{}}
+		TargetTrusted: true,
+		Target:        core.Target{Repo: "o/r", PR: 7, Number: 7}, Context: map[string]any{}}
 	eng.observeOutcomeSignals(context.Background(), ci)
 	if got := outcomesFrom(st); len(got) != 1 || got[0] != "ci_failed:fixer" {
 		t.Fatalf("ci outcomes: %v", got)
 	}
-	if len(st.PeekEngagements("o/r", 7)) != 1 {
+	if len(st.PeekEngagements(store.TargetKey("o/r", 7))) != 1 {
 		t.Fatal("ci_failed must not consume engagements")
 	}
 
@@ -103,17 +107,17 @@ func TestDecisionOutcomeAndGuidance(t *testing.T) {
 	st.BumpOutcome("fixer", "merged")
 	st.BumpOutcome("fixer", "merged")
 	st.BumpOutcome("fixer", "reverted")
-	off := eng.outcomeGuidance("fixer", config.AgentProfile{})
+	off := eng.outcomeGuidance("fixer", config.Step{})
 	if off != "" {
 		t.Fatalf("opt-out must be empty: %q", off)
 	}
-	on := eng.outcomeGuidance("fixer", config.AgentProfile{OutcomeFeedback: true})
+	on := eng.outcomeGuidance("fixer", config.Step{OutcomeFeedback: true})
 	if !strings.Contains(on, "TRACK RECORD") || !strings.Contains(on, "2 merged") ||
 		!strings.Contains(on, "1 were later REVERTED") {
 		t.Fatalf("guidance: %q", on)
 	}
 	// No history → no line, even opted in.
-	if g := eng.outcomeGuidance("ghost", config.AgentProfile{OutcomeFeedback: true}); g != "" {
+	if g := eng.outcomeGuidance("ghost", config.Step{OutcomeFeedback: true}); g != "" {
 		t.Fatalf("no-history guidance: %q", g)
 	}
 }
@@ -126,12 +130,13 @@ func TestDecisionOutcomeAndGuidance(t *testing.T) {
 // ci_failed rows in ~70s for one head. A fresh push (new head) records anew.
 func TestCIFailedOncePerHead(t *testing.T) {
 	eng, st, _, _ := buildFlowEngine(t, gateCfg2())
-	st.RecordEngagement("o/r", 5376, store.Engagement{Agent: "fixer"})
+	st.RecordEngagement(store.TargetKey("o/r", 5376), store.Engagement{Key: "fixer"})
 
 	ciAt := func(head string) core.Trigger {
 		return core.Trigger{Source: "github", Instance: "i", Kind: "failing_checks",
-			Target:  core.Target{Repo: "o/r", PR: 5376, Number: 5376, HeadSHA: head},
-			Context: map[string]any{}}
+			TargetTrusted: true,
+			Target:        core.Target{Repo: "o/r", PR: 5376, Number: 5376, HeadSHA: head},
+			Context:       map[string]any{}}
 	}
 
 	// 23 failing_checks on the same head → exactly one ci_failed row / one bump.
@@ -155,7 +160,7 @@ func TestCIFailedOncePerHead(t *testing.T) {
 	}
 
 	// ci_failed is non-terminal: engagements are never consumed.
-	if len(st.PeekEngagements("o/r", 5376)) != 1 {
+	if len(st.PeekEngagements(store.TargetKey("o/r", 5376))) != 1 {
 		t.Fatal("ci_failed must not consume engagements")
 	}
 }
@@ -164,7 +169,7 @@ func TestCIFailedOncePerHead(t *testing.T) {
 func gateCfg2() string {
 	return `
 connectors:
-  eg: { type: enginegate }
+  eg: { use: enginegate }
 triggers:
   - on: eg.ping
     steps:
@@ -178,7 +183,7 @@ triggers:
 // workflow rot.
 func TestUncorroboratedRevertClaimIsInert(t *testing.T) {
 	eng, st, _, _ := buildFlowEngine(t, gateCfg2())
-	st.RecordEngagement("o/r", 5, store.Engagement{Agent: "fixer", Workflow: "eg.ping"})
+	st.RecordEngagement(store.TargetKey("o/r", 5), store.Engagement{Key: "fixer", Workflow: "eg.ping"})
 
 	tr := closedTrigger("o/r", 90, true, []any{5})
 	tr.Context["reverts_corroborated"] = false
@@ -210,7 +215,7 @@ func TestUncorroboratedRevertClaimIsInert(t *testing.T) {
 	if bumped != 0 {
 		t.Fatalf("uncorroborated claim must not bump agent stats: %d", bumped)
 	}
-	if len(st.PeekEngagements("o/r", 5)) != 1 {
+	if len(st.PeekEngagements(store.TargetKey("o/r", 5))) != 1 {
 		t.Fatal("uncorroborated claim must not consume engagements")
 	}
 }

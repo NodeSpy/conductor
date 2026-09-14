@@ -154,7 +154,9 @@ func TestCLIOneshotRunInWorktree(t *testing.T) {
 	if call.dir != "/wt/o-r-7" {
 		t.Fatalf("cli cwd = %q, want the worktree", call.dir)
 	}
-	if joinArgs(call.argv) != "codex exec fix the bug" {
+	// The RESOLVED model rides the argv — a `use: cli` runtime used to
+	// drop it, so an exact pin silently launched the tool's default.
+	if joinArgs(call.argv) != "codex exec fix the bug --model anthropic/claude" {
 		t.Fatalf("codex argv = %v", call.argv)
 	}
 	if !envHas(call.env, "GH_TOKEN", "utok") {

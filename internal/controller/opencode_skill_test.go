@@ -40,7 +40,7 @@ func TestOpencodeSkillToolInjection(t *testing.T) {
 
 	req := makeReq("merge_conflict", "fix it")
 	req.Action.Agent = "deployer"
-	req.Profile = config.AgentProfile{Skill: &config.SkillPolicy{Verbs: []string{"gh.comment"}}}
+	req.Step = config.Step{Skill: &config.SkillPolicy{Verbs: []string{"gh.comment"}}}
 	sess, err := c.NewSession(context.Background(), Spec{Request: req, Cwd: "/wt"}, nil)
 	if err != nil {
 		t.Fatal(err)

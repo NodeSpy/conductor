@@ -6,19 +6,19 @@ inline code, and any connector's verbs, crossing service boundaries freely.
 
 ```yaml
 connectors:
-  gh:        { type: github, app: {…}, me: { logins: [your-login] }, repos: ["your-org/*"] }
-  slack-ops: { type: slack, app_token: ${SLACK_APP_TOKEN}, bot_token: ${SLACK_BOT_TOKEN} }
+  gh:        { use: github, app: {…}, me: { logins: [your-login] }, repos: ["your-org/*"] }
+  slack-ops: { use: slack, app_token: ${SLACK_APP_TOKEN}, bot_token: ${SLACK_BOT_TOKEN} }
 
 runtimes:
-  paseo: { type: paseo, default: true }
+  paseo: { use: paseo, default: true }
 
-agents:
-  fixer: { provider: claude, workspace: worktree }
+x-templates:
+  fixer: &fixer { type: agent, workspace: worktree }
 
 triggers:
   - on: gh.merge_conflict
     steps:
-      - { id: fix, type: agent, agent: fixer, prompt: "Resolve the conflict on {{.repo}}#{{.pr}}." }
+      - { <<: *fixer, id: fix, prompt: "Resolve the conflict on {{.repo}}#{{.pr}}." }
     hooks:
       - { at: done, uses: slack-ops.post, options: { text: "resolved {{.repo}}#{{.pr}}" } }
 ```
@@ -49,8 +49,8 @@ Another orchestrator (n8n and the like) can also call conductor's authenticated
   (`uses:`), self-describing schemas, and per-connector policy. Anything
   without a built-in type is a `rest` / `graphql` connector declared in
   config.
-- **[[Runtimes]] + [[Agents]]** — where agents run and who they are; an
-  agent profile's `session:` binds one live agent per key ([[Agents]]).
+- **[[Runtimes]] + [[Steps]]** — where agents run and who they are; an
+  agent profile's `session:` binds one live agent per key ([[Steps]]).
 - **[[Workflows]]** — the trigger grammar: `on` / `filters` / `steps` /
   `hooks`, position-scoped context, control flow, reusable workflows, and
   agent-authored plans.
@@ -100,14 +100,14 @@ Work down this list and you go from zero to the most advanced setup:
    [[Integration-Webhook]] · [[Integration-Sentry]] ·
    [[Integration-PagerDuty]] · [[Integration-RSS]]; anything else via the
    `rest`/`graphql` types in [[Configuration]].
-4. **Agents** — [[Runtimes]], [[Agents]] (profiles, checkout, guidance),
+4. **Agents** — [[Runtimes]], [[Steps]] (profiles, checkout, guidance),
    [[Hand-offs]] (`ask` verbs), and [[Notifications]] (the `conductor.*`
    lifecycle source).
 5. **Composition** — reusable workflows with inputs/outputs ([[Workflows]]),
-   `extends:` inheritance + layered guidance ([[Reuse]]), [[Grouping]],
+   YAML anchors, `extends:` inheritance + layered guidance ([[Reuse]]), [[Grouping]],
    [[Code-Steps]], [[Hosts]], and file splitting (`imports:`, [[Configuration]]).
 6. **State** — `stores:` + the `kv.*`/`sql.*` verbs ([[Stores]]),
-   [[Memory]], and session affinity ([[Agents]]).
+   [[Memory]], and session affinity ([[Steps]]).
 7. **Hardening** — [[Secrets]] (vaults, OAuth2 logins, unlock), [[Policy]]
    (quiet hours, rate limits, bots), and dry-run/replay ([[Commands]]).
 8. **Advanced** — agent-driven workflows and `policy.agent_authored`
@@ -127,10 +127,10 @@ Work down this list and you go from zero to the most advanced setup:
 Setup: [[Installation]] · [[Quickstart]] · [[GitHub-App-Setup]] ·
 [[Configuration]] · [[Commands]] · [[Examples]]
 
-The model: [[Connectors]] · [[Workflows]] · [[Reuse]] · [[Verbs]] · [[Code-Steps]] · [[Stores]] ·
-[[Runtimes]] · [[Agents]] · [[Grouping]] · [[Memory]] · [[Binary-Data]] ·
+The model: [[Connectors]] · [[Workflows]] · [[Reuse]] · [[Settings-and-Templating]] · [[Verbs]] · [[Code-Steps]] · [[Stores]] ·
+[[Runtimes]] · [[Steps]] · [[Grouping]] · [[Memory]] · [[Binary-Data]] ·
 [[Agent-Skill]] · [[Policy]] · [[Gates]] · [[Teams]] · [[Outcomes]] ·
-[[Cost-Accounting]] · [[Secrets]] · [[Hosts]] · [[Isolation]]
+[[Cost-Accounting]] · [[Secrets]] · [[Trust-and-Isolation]] · [[Hosts]] · [[Isolation]]
 
 Connector references: [[Authoring-Connectors]] · [[Integration-GitHub]] ·
 [[Integration-Slack]] · [[Integration-Cron]] · [[Integration-Webhook]] ·

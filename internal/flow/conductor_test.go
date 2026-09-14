@@ -16,7 +16,7 @@ import (
 func TestConductorTriggerRunsSteps(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 triggers:
   - name: alert
     on: conductor.escalate
@@ -59,7 +59,7 @@ triggers:
 func TestConductorTriggerRefValidation(t *testing.T) {
 	base := `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 triggers:
 `
 	valid := func(y string) error {
@@ -82,7 +82,7 @@ triggers:
 func TestConductorUpdateStepWithHooks(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 triggers:
   - name: gated-update
     on: conductor.update_available

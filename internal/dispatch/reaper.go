@@ -2,7 +2,6 @@ package dispatch
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +12,15 @@ import (
 
 // Reaper archives conductor agents that requested archive-when-done once they
 // go idle. It polls the local daemon only (`paseo ls`) — no GitHub API.
+//
+// Scope: paseo agents, and only those. `paseo ls` is the idle signal, and no
+// other transport has an equivalent — ACP exposes no roster, opencode's lives
+// behind its server API, and a CLI recipe is just a process. On those
+// transports `archive_when_done` is closed deterministically instead, by the
+// engine archiving through the runner that opened the session the moment the
+// step finishes (see engine.archiveAgent); the backstop the reaper provides
+// for paseo is the controller's own session lifetime. A cross-transport reaper
+// would need a per-transport idle probe and is deliberately not built here.
 // reaperGraceDefault is the startup grace: an agent younger than this is never
 // reaped. A freshly launched agent reports "idle" before the model engages, so a
 // reaper tick landing in that window would kill it before it does any work.
@@ -39,6 +47,32 @@ type Reaper struct {
 	// even after the question is answered and the pending permission clears. Pruned
 	// when the agent is no longer listed (the user archived it).
 	held map[string]bool
+
+	// backendImpl is the paseo-daemon Backend this Reaper queries and archives
+	// through. nil (the default, and every existing construction path) uses
+	// cliBackend over this Reaper's own PaseoBin/Remote — byte-identical argv
+	// to the pre-Backend-interface reaper. Set to an rpcBackend to reap through
+	// a conductor-paseo plugin instead. Unexported so every call site goes
+	// through backend(), which supplies the default.
+	//
+	// Only the paseo-CLI HOW lives behind it: the reap POLICY (which agents are
+	// idle, the hold-marker/HoldSet checks, the startup grace, worktree-vs-agent
+	// archive choice, scratch culling) stays in this file.
+	backendImpl Backend
+}
+
+// SetBackend configures the Backend this Reaper drives paseo through. nil (or
+// never calling SetBackend) keeps the default cliBackend — the bundled,
+// CLI-shelling path. Not safe to call concurrently with a reap in progress.
+func (r *Reaper) SetBackend(b Backend) { r.backendImpl = b }
+
+// backend returns the configured Backend, defaulting to a cliBackend built
+// from this Reaper's own PaseoBin/Remote (the same exec seam paseoCmd used).
+func (r *Reaper) backend() Backend {
+	if r.backendImpl != nil {
+		return r.backendImpl
+	}
+	return newReaperCLIBackend(r)
 }
 
 // markAndSpare records whether an agent has entered user interaction and reports
@@ -76,24 +110,17 @@ func (r *Reaper) Run(ctx context.Context) {
 }
 
 func (r *Reaper) reap(ctx context.Context) {
-	// Filter on archive=1 only. `paseo ls` treats repeated --label as LAST-WINS
-	// (not AND), so a second --label would just override the first — and archive=1
-	// is set exclusively by the conductor, and only for archive_when_done agents,
-	// so it already implies conductor=1 and is exactly the reap set. Interactive
+	// Filter on archive=1 only — one label, so this renders the single
+	// `--label archive=1` it always did. `paseo ls` treats repeated --label as
+	// LAST-WINS (not AND), so a second one would just override the first — and
+	// archive=1 is set exclusively by the conductor, and only for
+	// archive_when_done agents, so it already implies conductor=1 and is exactly
+	// the reap set. Interactive
 	// hand-off agents shouldn't carry this label — but that's protection by absence;
 	// the authoritative guard is the engine-registered Held set, checked per agent
 	// below, so a hand-off survives even if it somehow lands in this list.
-	out, err := r.paseoCmd(ctx, "ls", "--json",
-		"--label", "archive=1").Output()
+	agents, err := r.backend().ListAgents(ctx, map[string]string{"archive": "1"})
 	if err != nil {
-		return
-	}
-	var agents []struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
-		Cwd    string `json:"cwd"`
-	}
-	if err := json.Unmarshal(out, &agents); err != nil {
 		return
 	}
 	type idleAgent struct{ id, cwd string }
@@ -153,14 +180,14 @@ func (r *Reaper) reap(ctx context.Context) {
 				continue
 			}
 			if wksID := worktrees[normCwd(a.cwd)]; wksID != "" {
-				if err := r.paseoCmd(ctx, "workspace", "archive", wksID).Run(); err == nil && r.Log != nil {
+				if err := r.backend().ArchiveWorkspace(ctx, wksID); err == nil && r.Log != nil {
 					r.Log("reaper: archived idle agent %s + worktree %s", a.id, wksID)
 				}
 				continue
 			}
 			// No isolated worktree (e.g. checkout: none in a shared workspace): the
 			// agent has nothing to reclaim beyond itself.
-			if err := r.paseoCmd(ctx, "archive", a.id).Run(); err == nil && r.Log != nil {
+			if err := r.backend().ArchiveAgent(ctx, a.id); err == nil && r.Log != nil {
 				r.Log("reaper: archived idle agent %s", a.id)
 			}
 		}
@@ -183,14 +210,8 @@ func (r *Reaper) reap(ctx context.Context) {
 
 // presentIDs is the set of all non-archived agent ids on the local daemon.
 func (r *Reaper) presentIDs(ctx context.Context) map[string]bool {
-	out, err := r.paseoCmd(ctx, "ls", "--json").Output()
+	a, err := r.backend().ListAgents(ctx, nil)
 	if err != nil {
-		return nil
-	}
-	var a []struct {
-		ID string `json:"id"`
-	}
-	if json.Unmarshal(out, &a) != nil {
 		return nil
 	}
 	ids := make(map[string]bool, len(a))
@@ -217,24 +238,15 @@ func (r *Reaper) cullScratch(ctx context.Context) {
 			return // in use — leave it
 		}
 	}
-	if err := r.paseoCmd(ctx, "workspace", "archive", id).Run(); err == nil && r.Log != nil {
+	if err := r.backend().ArchiveWorkspace(ctx, id); err == nil && r.Log != nil {
 		r.Log("reaper: archived idle scratch workspace %s (recreated on demand)", id)
 	}
 }
 
 // findScratch returns the shared scratch workspace's id and cwd, or ""s if absent.
 func (r *Reaper) findScratch(ctx context.Context) (id, cwd string) {
-	out, err := r.paseoCmd(ctx, "workspace", "ls", "--json").Output()
+	wl, err := r.backend().ListWorkspaces(ctx)
 	if err != nil {
-		return "", ""
-	}
-	var wl []struct {
-		WorkspaceID string `json:"workspaceId"`
-		Name        string `json:"name"`
-		Isolation   string `json:"isolation"`
-		Cwd         string `json:"cwd"`
-	}
-	if json.Unmarshal(out, &wl) != nil {
 		return "", ""
 	}
 	for _, w := range wl {
@@ -247,14 +259,8 @@ func (r *Reaper) findScratch(ctx context.Context) (id, cwd string) {
 
 // activeAgentCwds lists the cwds of non-archived agents on the local daemon.
 func (r *Reaper) activeAgentCwds(ctx context.Context) []string {
-	out, err := r.paseoCmd(ctx, "ls", "--json").Output()
+	a, err := r.backend().ListAgents(ctx, nil)
 	if err != nil {
-		return nil
-	}
-	var a []struct {
-		Cwd string `json:"cwd"`
-	}
-	if json.Unmarshal(out, &a) != nil {
 		return nil
 	}
 	cwds := make([]string, 0, len(a))
@@ -280,16 +286,8 @@ func (r *Reaper) idleState(ctx context.Context, id, cwd string) (needsUser bool,
 	if r.holdMarkerPresent(cwd) {
 		needsUser = true
 	}
-	out, err := r.paseoCmd(ctx, "inspect", id, "--json").Output()
+	d, err := r.backend().Inspect(ctx, id)
 	if err != nil {
-		return needsUser, time.Time{}, false
-	}
-	var d struct {
-		PendingPermissions []json.RawMessage `json:"PendingPermissions"`
-		CreatedAt          string            `json:"CreatedAt"`
-		LastUsage          string            `json:"LastUsage"`
-	}
-	if json.Unmarshal(out, &d) != nil {
 		return needsUser, time.Time{}, false
 	}
 	if len(d.PendingPermissions) > 0 {
@@ -329,31 +327,11 @@ func (r *Reaper) holdMarkerPresent(cwd string) bool {
 // worktreeWorkspaces maps workspace cwd -> id for worktree-isolation workspaces
 // only, so the reaper never archives a shared or base checkout.
 func (r *Reaper) worktreeWorkspaces(ctx context.Context) map[string]string {
-	out, err := r.paseoCmd(ctx, "workspace", "ls", "--json").Output()
+	wl, err := r.backend().ListWorkspaces(ctx)
 	if err != nil {
 		return nil
 	}
-	return parseWorktreeWorkspaces(out)
-}
-
-// parseWorktreeWorkspaces builds the cwd->id map from `paseo workspace ls --json`,
-// keeping only worktree-isolation entries.
-func parseWorktreeWorkspaces(data []byte) map[string]string {
-	var wl []struct {
-		WorkspaceID string `json:"workspaceId"`
-		Cwd         string `json:"cwd"`
-		Isolation   string `json:"isolation"`
-	}
-	if json.Unmarshal(data, &wl) != nil {
-		return nil
-	}
-	m := map[string]string{}
-	for _, w := range wl {
-		if w.Isolation == "worktree" && w.Cwd != "" && w.WorkspaceID != "" {
-			m[normCwd(w.Cwd)] = w.WorkspaceID
-		}
-	}
-	return m
+	return worktreeWorkspaceMap(wl)
 }
 
 // normCwd canonicalizes a workspace/agent path so they compare equal regardless

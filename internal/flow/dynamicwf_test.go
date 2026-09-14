@@ -10,7 +10,7 @@ import (
 
 const dynBase = `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 workflows:
   greet:
     description: "post a greeting"
@@ -77,7 +77,7 @@ steps:
 func TestDynamicWorkflowDepthGuard(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 workflows:
   loop:
     steps:
@@ -108,7 +108,7 @@ func TestWorkflowDescriptionParses(t *testing.T) {
 	// Static cycles still caught at load.
 	cyc := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 workflows:
   a: { steps: [ { id: s, workflow: b } ] }
   b: { steps: [ { id: s, workflow: a } ] }

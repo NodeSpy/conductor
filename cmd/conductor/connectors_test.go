@@ -31,11 +31,11 @@ func TestDisabledConnectorSourceSuppressed(t *testing.T) {
 	cfg := loadConfigDoc(t, `
 connectors:
   timer:
-    type: cron
+    use: cron
     enabled: false
     schedules: { tick: { every: 1h } }
   box:
-    type: command
+    use: command
 triggers:
   - on: timer.tick
     steps: [{ id: hi, uses: box.run, options: { command: "true" } }]
@@ -71,11 +71,11 @@ func TestConnectorCredFailureNotifies(t *testing.T) {
 	cfg := loadConfigDoc(t, `
 connectors:
   slack-ops:
-    type: slack
+    use: slack
     app_token: file:/nonexistent/pc-test-app-token
     bot_token: file:/nonexistent/pc-test-bot-token
   box:
-    type: command
+    use: command
 triggers:
   - on: slack-ops.app_mention
     steps: [{ id: hi, uses: box.run, options: { command: "true" } }]

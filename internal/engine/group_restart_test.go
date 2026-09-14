@@ -39,7 +39,7 @@ func buildFlowEngineOn(t *testing.T, cfgYAML string, st *flowGateStore) *Engine 
 
 const groupRestartCfg = `
 connectors:
-  eg: { type: enginegate }
+  eg: { use: enginegate }
 triggers:
   - on: eg.ping
     group: { key: "{{.repo}}", window: 40ms }

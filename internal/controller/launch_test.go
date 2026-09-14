@@ -201,7 +201,7 @@ func TestLaunchOptsResolution(t *testing.T) {
 		t.Fatalf("runtime iso: %+v", opt)
 	}
 	// The profile's own isolation wins.
-	req := dispatch.Request{Profile: config.AgentProfile{Isolation: profIso}, AgentAuthored: true}
+	req := dispatch.Request{Step: config.Step{Isolation: profIso}, AgentAuthored: true}
 	opt = launchOptsFor(rtIso, req)
 	if opt.iso != profIso || !opt.agentAuthored {
 		t.Fatalf("profile iso must win: %+v", opt)

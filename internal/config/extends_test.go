@@ -8,95 +8,73 @@ import (
 
 func gspec(parts ...string) *GuidanceSpec { return &GuidanceSpec{Parts: parts} }
 
-func TestResolveExtendsAgents(t *testing.T) {
-	c := &Config{Agents: map[string]AgentProfile{
-		"base": {
-			Provider: "claude", Model: "opus", Workspace: "worktree",
-			Labels:   map[string]string{"team": "autopilot", "tier": "base"},
-			Guidance: gspec("house tone"),
-		},
-		"fixer": {
-			Extends:  "base",
-			Model:    "sonnet", // overrides base
-			Labels:   map[string]string{"tier": "fixer", "role": "ci"},
-			Guidance: gspec("you fix CI"),
-		},
-	}}
-	if err := c.resolveExtends(); err != nil {
-		t.Fatalf("resolveExtends: %v", err)
+// A team role is a REFERENCE to a workflow step, so the runtime has to join
+// the synthesized role step to the step it addresses. That join uses the
+// same merge policy as every `extends:` — this is where those rules are
+// pinned for steps, which have no `extends:` of their own.
+func TestMergeStepIntoPolicy(t *testing.T) {
+	base := Step{
+		Model: ModelSpecOf("opus"), Workspace: "worktree",
+		Labels:   map[string]string{"team": "autopilot", "tier": "base"},
+		Guidance: gspec("house tone"),
 	}
-	f := c.Agents["fixer"]
-	if f.Provider != "claude" {
-		t.Errorf("scalar inherit: provider = %q, want claude", f.Provider)
+	role := Step{
+		Model:    ModelSpecOf("sonnet"), // the caller's value wins
+		Labels:   map[string]string{"tier": "fixer", "role": "ci"},
+		Guidance: gspec("you fix CI"),
 	}
-	if f.Model != "sonnet" {
-		t.Errorf("scalar override: model = %q, want sonnet", f.Model)
+	MergeStepInto(&role, base)
+	if role.Model.Ref != "sonnet" {
+		t.Errorf("scalar override: model = %q, want sonnet", role.Model.Ref)
 	}
-	if f.Workspace != "worktree" {
-		t.Errorf("scalar inherit: workspace = %q, want worktree", f.Workspace)
+	if role.Workspace != "worktree" {
+		t.Errorf("scalar inherit: workspace = %q, want worktree", role.Workspace)
 	}
-	// Labels deep-merge: child keys win, parent's missing keys added.
+	// Labels deep-merge: caller's keys win, the base's missing ones added.
 	want := map[string]string{"team": "autopilot", "tier": "fixer", "role": "ci"}
-	if !reflect.DeepEqual(f.Labels, want) {
-		t.Errorf("labels deep-merge = %v, want %v", f.Labels, want)
+	if !reflect.DeepEqual(role.Labels, want) {
+		t.Errorf("labels deep-merge = %v, want %v", role.Labels, want)
 	}
-	// Guidance stacks: parent under child.
-	if got := f.Guidance.Parts; !reflect.DeepEqual(got, []string{"house tone", "you fix CI"}) {
+	// Guidance stacks: the referenced step's tone under the role's own.
+	if got := role.Guidance.Parts; !reflect.DeepEqual(got, []string{"house tone", "you fix CI"}) {
 		t.Errorf("guidance stack = %v, want [house tone, you fix CI]", got)
 	}
 	// The base is untouched.
-	if b := c.Agents["base"]; b.Model != "opus" || len(b.Guidance.Parts) != 1 {
-		t.Errorf("base mutated: %+v", b)
+	if base.Model.Ref != "opus" || len(base.Guidance.Parts) != 1 {
+		t.Errorf("base mutated: %+v", base)
 	}
 }
 
-func TestResolveExtendsChain(t *testing.T) {
-	c := &Config{Agents: map[string]AgentProfile{
-		"a": {Provider: "claude", Guidance: gspec("A")},
-		"b": {Extends: "a", Model: "opus", Guidance: gspec("B")},
-		"c": {Extends: "b", Thinking: "hard", Guidance: gspec("C")},
+func TestMergeStepIntoGuidanceReplace(t *testing.T) {
+	role := Step{Guidance: &GuidanceSpec{Parts: []string{"only mine"}, Replace: true}}
+	MergeStepInto(&role, Step{Guidance: gspec("house tone")})
+	// { replace } does not inherit the base's parts.
+	if p := role.Guidance.Parts; !reflect.DeepEqual(p, []string{"only mine"}) {
+		t.Errorf("replace should not inherit, got %v", p)
+	}
+}
+
+func TestResolveExtendsChainAndCycle(t *testing.T) {
+	// A chain resolves root→leaf across a generic map section.
+	c := &Config{Runtimes: map[string]RuntimeConfig{
+		"a": {Use: "cli", Command: []string{"claude"}},
+		"b": {Extends: "a", Host: "build-box"},
+		"c": {Extends: "b", Bin: "/usr/bin/claude"},
 	}}
 	if err := c.resolveExtends(); err != nil {
 		t.Fatalf("resolveExtends: %v", err)
 	}
-	got := c.Agents["c"]
-	if got.Provider != "claude" || got.Model != "opus" || got.Thinking != "hard" {
+	if got := c.Runtimes["c"]; got.Use != "cli" || got.Host != "build-box" || got.Bin != "/usr/bin/claude" {
 		t.Errorf("chain inherit: %+v", got)
 	}
-	if p := got.Guidance.Parts; !reflect.DeepEqual(p, []string{"A", "B", "C"}) {
-		t.Errorf("chain guidance = %v, want [A B C]", p)
-	}
-}
-
-func TestResolveExtendsGuidanceReplace(t *testing.T) {
-	c := &Config{Agents: map[string]AgentProfile{
-		"base":  {Guidance: gspec("house tone")},
-		"stark": {Extends: "base", Guidance: &GuidanceSpec{Parts: []string{"only mine"}, Replace: true}},
-	}}
-	if err := c.resolveExtends(); err != nil {
-		t.Fatalf("resolveExtends: %v", err)
-	}
-	// { replace } does not inherit the parent's parts.
-	if p := c.Agents["stark"].Guidance.Parts; !reflect.DeepEqual(p, []string{"only mine"}) {
-		t.Errorf("replace should not inherit parent guidance, got %v", p)
-	}
-}
-
-func TestResolveExtendsCycle(t *testing.T) {
-	c := &Config{Agents: map[string]AgentProfile{
-		"a": {Extends: "b"},
-		"b": {Extends: "a"},
-	}}
-	if err := c.resolveExtends(); err == nil || !strings.Contains(err.Error(), "cycle") {
+	// A cycle is a load error, not a hang.
+	cyc := &Config{Runtimes: map[string]RuntimeConfig{"a": {Extends: "b"}, "b": {Extends: "a"}}}
+	if err := cyc.resolveExtends(); err == nil || !strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("expected a cycle error, got %v", err)
 	}
-}
-
-func TestResolveExtendsUnknownTarget(t *testing.T) {
-	c := &Config{Agents: map[string]AgentProfile{
-		"fixer": {Extends: "nope"},
-	}}
-	if err := c.resolveExtends(); err == nil || !strings.Contains(err.Error(), "unknown") {
+	// So is an unknown parent.
+	unk := &Config{Runtimes: map[string]RuntimeConfig{"a": {Extends: "nope"}}}
+	if err := unk.resolveExtends(); err == nil || !strings.Contains(err.Error(), "unknown") {
 		t.Fatalf("expected an unknown-target error, got %v", err)
 	}
 }
@@ -173,7 +151,7 @@ func TestResolveTriggerExtendsErrors(t *testing.T) {
 
 func TestResolveExtendsRuntime(t *testing.T) {
 	c := &Config{Runtimes: map[string]RuntimeConfig{
-		"remote": {Type: "cli", Host: "build-box", Command: []string{"gemini"}},
+		"remote": {Use: "cli", Host: "build-box", Command: []string{"gemini"}},
 		"remote2": {
 			Extends: "remote",
 			Command: []string{"codex"}, // slice replaces
@@ -183,7 +161,7 @@ func TestResolveExtendsRuntime(t *testing.T) {
 		t.Fatalf("resolveExtends: %v", err)
 	}
 	r := c.Runtimes["remote2"]
-	if r.Type != "cli" || r.Host != "build-box" {
+	if r.Use != "cli" || r.Host != "build-box" {
 		t.Errorf("runtime inherit: %+v", r)
 	}
 	if !reflect.DeepEqual(r.Command, []string{"codex"}) {

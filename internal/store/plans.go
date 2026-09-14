@@ -2,7 +2,6 @@ package store
 
 import (
 	"encoding/json"
-	"os"
 )
 
 // PlanRecord is one in-flight agent plan's checkpoint (#36 §11): the plan's
@@ -41,7 +40,22 @@ func (s *Store) GetPlan(runID, stepID string) (PlanRecord, bool) {
 	if !ok {
 		return PlanRecord{}, false
 	}
-	return *rec, true
+	// Copy the Outputs map, not just the struct. A shallow copy hands the
+	// caller the SAME map the store keeps, so a caller mutating its own
+	// result silently rewrites persisted state — and the next save writes
+	// the mutation out as if it had been recorded.
+	out := *rec
+	if rec.Outputs != nil {
+		out.Outputs = make(map[string]map[string]any, len(rec.Outputs))
+		for k, v := range rec.Outputs {
+			inner := make(map[string]any, len(v))
+			for ik, iv := range v {
+				inner[ik] = iv
+			}
+			out.Outputs[k] = inner
+		}
+	}
+	return out, true
 }
 
 // DeletePlan removes a finished (or terminally failed) plan's checkpoint.
@@ -59,15 +73,8 @@ func (s *Store) DeletePlan(runID, stepID string) error {
 // savePlans persists the checkpoint map (atomic temp+rename; 0600 — plan
 // outputs are workflow data).
 func (s *Store) savePlans() error {
-	s.mu.Lock()
-	b, err := json.MarshalIndent(s.plans, "", "  ")
-	s.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	tmp := s.plansPath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.plansPath)
+	return s.persist(func() ([]byte, string, error) {
+		b, err := json.MarshalIndent(s.plans, "", "  ")
+		return b, s.plansPath, err
+	})
 }

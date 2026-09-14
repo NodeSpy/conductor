@@ -1,21 +1,10 @@
 package connector
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"hash/fnv"
-	"io"
 	"net/http"
-	"net/url"
-	"os"
-	"os/exec"
 	"sort"
-	"strconv"
-	"strings"
-	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -23,6 +12,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	gh "github.com/NodeSpy/conductor/internal/integrations/github"
+	"github.com/NodeSpy/conductor/pkg/githubkit"
 )
 
 // baseGithubFilters are the filter keys every github event accepts.
@@ -145,7 +135,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "comment", Desc: "post an issue/PR conversation comment",
 			Options: Schema{
-				"repo":   {Type: TString, Required: true},
+				"repo":   {Type: TString, Required: true, Scope: "repo"},
 				"number": {Type: TInt, Desc: "issue or PR number (alias: pr)"},
 				"pr":     {Type: TInt},
 				"body":   {Type: TString, Required: true},
@@ -156,7 +146,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "reply", Desc: "reply to a PR review comment thread",
 			Options: Schema{
-				"repo":        {Type: TString, Required: true},
+				"repo":        {Type: TString, Required: true, Scope: "repo"},
 				"pr":          {Type: TInt, Required: true},
 				"in_reply_to": {Type: TInt, Required: true, Desc: "review comment id to reply to"},
 				"body":        {Type: TString, Required: true},
@@ -167,7 +157,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "request_review", Desc: "request review from users/teams on a PR (also re-requests one who already reviewed)",
 			Options: Schema{
-				"repo":           {Type: TString, Required: true},
+				"repo":           {Type: TString, Required: true, Scope: "repo"},
 				"pr":             {Type: TInt, Required: true},
 				"reviewers":      {Type: TList, Desc: "user logins"},
 				"team_reviewers": {Type: TList, Desc: "team slugs"},
@@ -182,7 +172,7 @@ var githubDecl = &TypeDecl{
 			// re-review-on-new-changes flow.
 			Name: "rerequest_review", Desc: "re-request review (alias of request_review)",
 			Options: Schema{
-				"repo":           {Type: TString, Required: true},
+				"repo":           {Type: TString, Required: true, Scope: "repo"},
 				"pr":             {Type: TInt, Required: true},
 				"reviewers":      {Type: TList, Desc: "logins"},
 				"team_reviewers": {Type: TList, Desc: "team slugs"},
@@ -193,7 +183,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "remove_reviewer", Desc: "cancel a pending review request (remove requested users/teams)",
 			Options: Schema{
-				"repo":           {Type: TString, Required: true},
+				"repo":           {Type: TString, Required: true, Scope: "repo"},
 				"pr":             {Type: TInt, Required: true},
 				"reviewers":      {Type: TList, Desc: "user logins to un-request"},
 				"team_reviewers": {Type: TList, Desc: "team slugs to un-request"},
@@ -204,7 +194,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "submit_review", Desc: "submit a PR review: a summary + verdict, with optional inline file:line comments",
 			Options: Schema{
-				"repo":  {Type: TString, Required: true},
+				"repo":  {Type: TString, Required: true, Scope: "repo"},
 				"pr":    {Type: TInt, Required: true},
 				"body":  {Type: TString, Desc: "the review summary (top-level comment)"},
 				"event": {Type: TString, Enum: []string{"APPROVE", "REQUEST_CHANGES", "COMMENT"}, Required: true},
@@ -219,7 +209,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "pr_diff", Desc: "the PR's unified diff (cached; GitHub caps the .diff media type around 300 files)",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"diff": {Type: TString}},
@@ -227,7 +217,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "pr_get", Desc: "PR metadata: title, body, state, author, base/head, line counts, labels",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{
@@ -240,7 +230,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "pr_files", Desc: "changed files: [{path, status, additions, deletions, changes}] (100/page; pass page for more)",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"all": {Type: TBool, Desc: "fetch every page (default: first 100)"},
 				"as":  {Type: TString, Enum: []string{"me", "bot"}},
 			},
@@ -249,7 +239,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "review_comments", Desc: "existing inline review comments on the PR: [{path, line, body, user, id}] (100/page)",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"all": {Type: TBool, Desc: "fetch every page (default: first 100)"},
 				"as":  {Type: TString, Enum: []string{"me", "bot"}},
 			},
@@ -258,7 +248,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "file", Desc: "a repo file's raw contents at a ref (cached; GitHub's raw media type caps at ~1 MiB)",
 			Options: Schema{
-				"repo":     {Type: TString, Required: true},
+				"repo":     {Type: TString, Required: true, Scope: "repo"},
 				"path":     {Type: TString, Required: true, Desc: "repo-relative file path"},
 				"ref":      {Type: TString, Desc: "branch / tag / sha (default: the repo's default branch)"},
 				"as":       {Type: TString, Enum: []string{"me", "bot"}},
@@ -269,7 +259,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "create_pr", Desc: "open a pull request",
 			Options: Schema{
-				"repo":  {Type: TString, Required: true},
+				"repo":  {Type: TString, Required: true, Scope: "repo"},
 				"title": {Type: TString, Required: true},
 				"head":  {Type: TString, Required: true, Desc: "the branch with your changes (owner:branch for a fork)"},
 				"base":  {Type: TString, Required: true, Desc: "the branch to merge into"},
@@ -282,7 +272,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "merge_pr", Desc: "merge a pull request",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"method":         {Type: TString, Enum: []string{"merge", "squash", "rebase"}, Desc: "default merge"},
 				"commit_title":   {Type: TString},
 				"commit_message": {Type: TString},
@@ -294,7 +284,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "update_pr", Desc: "edit a PR: state (open|closed → close/reopen), title, body, base",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"state": {Type: TString, Enum: []string{"open", "closed"}},
 				"title": {Type: TString}, "body": {Type: TString},
 				"base": {Type: TString, Desc: "retarget the PR onto this branch"},
@@ -305,7 +295,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "create_issue", Desc: "open an issue",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "title": {Type: TString, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "title": {Type: TString, Required: true},
 				"body":   {Type: TString},
 				"labels": {Type: TList}, "assignees": {Type: TList, Desc: "logins to assign"},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
@@ -315,7 +305,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "update_issue", Desc: "edit an issue: state (open|closed → close/reopen), state_reason, title, body",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "number": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "number": {Type: TInt, Required: true},
 				"state":        {Type: TString, Enum: []string{"open", "closed"}},
 				"state_reason": {Type: TString, Enum: []string{"completed", "not_planned", "reopened"}},
 				"title":        {Type: TString}, "body": {Type: TString},
@@ -326,7 +316,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "assign", Desc: "add and/or remove issue/PR assignees",
 			Options: Schema{
-				"repo":   {Type: TString, Required: true},
+				"repo":   {Type: TString, Required: true, Scope: "repo"},
 				"number": {Type: TInt, Desc: "issue or PR number (alias: pr)"}, "pr": {Type: TInt},
 				"add": {Type: TList, Desc: "logins to assign"}, "remove": {Type: TList, Desc: "logins to unassign"},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
@@ -336,7 +326,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "remove_label", Desc: "remove one label from an issue or PR",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "number": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "number": {Type: TInt, Required: true},
 				"label": {Type: TString, Required: true},
 				"as":    {Type: TString, Enum: []string{"me", "bot"}},
 			},
@@ -345,7 +335,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "get_issue", Desc: "read an issue: title, body, state, labels, assignees, author, url",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "number": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "number": {Type: TInt, Required: true},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{
@@ -356,7 +346,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "put_file", Desc: "create or update a file in one commit",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "path": {Type: TString, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "path": {Type: TString, Required: true},
 				"content": {Type: TString, Required: true, Desc: "the new file content (UTF-8 text; base64-encoded for the API automatically)"},
 				"message": {Type: TString, Required: true, Desc: "commit message"},
 				"branch":  {Type: TString, Desc: "branch to commit on (default: the repo's default branch)"},
@@ -368,7 +358,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "delete_file", Desc: "delete a file in one commit",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "path": {Type: TString, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "path": {Type: TString, Required: true},
 				"message": {Type: TString, Required: true},
 				"sha":     {Type: TString, Required: true, Desc: "blob sha of the file to delete"},
 				"branch":  {Type: TString},
@@ -379,7 +369,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "get_ref", Desc: "the commit sha a branch/tag/ref points at",
 			Options: Schema{
-				"repo": {Type: TString, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"},
 				"ref":  {Type: TString, Required: true, Desc: "branch, tag, or sha"},
 				"as":   {Type: TString, Enum: []string{"me", "bot"}},
 			},
@@ -388,7 +378,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "create_branch", Desc: "create a branch from another ref",
 			Options: Schema{
-				"repo":   {Type: TString, Required: true},
+				"repo":   {Type: TString, Required: true, Scope: "repo"},
 				"branch": {Type: TString, Required: true, Desc: "new branch name"},
 				"from":   {Type: TString, Desc: "source branch/tag/sha (default: the default branch's HEAD)"},
 				"as":     {Type: TString, Enum: []string{"me", "bot"}},
@@ -398,7 +388,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "dispatch_workflow", Desc: "trigger a workflow_dispatch run",
 			Options: Schema{
-				"repo":     {Type: TString, Required: true},
+				"repo":     {Type: TString, Required: true, Scope: "repo"},
 				"workflow": {Type: TString, Required: true, Desc: "workflow file name (ci.yml) or numeric id"},
 				"ref":      {Type: TString, Required: true, Desc: "branch or tag to run on"},
 				"inputs":   {Type: TMap, Desc: "workflow_dispatch inputs"},
@@ -409,7 +399,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "rerun_run", Desc: "re-run a workflow run (optionally only its failed jobs)",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "run_id": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "run_id": {Type: TInt, Required: true},
 				"failed_only": {Type: TBool, Desc: "re-run only failed jobs"},
 				"as":          {Type: TString, Enum: []string{"me", "bot"}},
 			},
@@ -418,7 +408,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "cancel_run", Desc: "cancel a workflow run",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "run_id": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "run_id": {Type: TInt, Required: true},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"ok": {Type: TBool}},
@@ -426,7 +416,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "list_runs", Desc: "recent workflow runs: [{id, name, status, conclusion, head_branch, head_sha, url}]",
 			Options: Schema{
-				"repo":     {Type: TString, Required: true},
+				"repo":     {Type: TString, Required: true, Scope: "repo"},
 				"branch":   {Type: TString, Desc: "filter to a branch"},
 				"status":   {Type: TString, Desc: "queued|in_progress|completed|success|failure|…"},
 				"per_page": {Type: TInt, Desc: "default 20, max 100"},
@@ -438,7 +428,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "create_release", Desc: "publish a release for a tag",
 			Options: Schema{
-				"repo":   {Type: TString, Required: true},
+				"repo":   {Type: TString, Required: true, Scope: "repo"},
 				"tag":    {Type: TString, Required: true, Desc: "the tag to release (created if it doesn't exist, on target)"},
 				"target": {Type: TString, Desc: "commitish the tag points at when created (default: default branch)"},
 				"name":   {Type: TString, Desc: "release title"}, "body": {Type: TString, Desc: "release notes"},
@@ -450,7 +440,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "upload_asset", Desc: "attach a file to a release",
 			Options: Schema{
-				"repo":         {Type: TString, Required: true},
+				"repo":         {Type: TString, Required: true, Scope: "repo"},
 				"release_id":   {Type: TInt, Required: true, Desc: "id from create_release"},
 				"name":         {Type: TString, Required: true, Desc: "asset file name"},
 				"content":      {Type: TString, Desc: "inline asset bytes (mutually exclusive with path)"},
@@ -463,7 +453,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "list_issues", Desc: "list issues (PRs excluded): [{number, title, state, labels, author, url}]",
 			Options: Schema{
-				"repo":     {Type: TString, Required: true},
+				"repo":     {Type: TString, Required: true, Scope: "repo"},
 				"state":    {Type: TString, Desc: "open|closed|all (default open)"},
 				"labels":   {Type: TList, Desc: "filter to issues with all these labels"},
 				"assignee": {Type: TString, Desc: "filter to this assignee (or * / none)"},
@@ -476,7 +466,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "search_issues", Desc: "search issues/PRs in this repo: [{number, title, state, is_pr, url}]",
 			Options: Schema{
-				"repo":     {Type: TString, Required: true},
+				"repo":     {Type: TString, Required: true, Scope: "repo"},
 				"q":        {Type: TString, Required: true, Desc: "GitHub search query (scoped to this repo automatically)"},
 				"per_page": {Type: TInt, Desc: "default 30, max 100"},
 				"all":      {Type: TBool, Desc: "fetch every page"},
@@ -487,7 +477,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "checks", Desc: "check-run status for a ref: [{name, status, conclusion, url}]",
 			Options: Schema{
-				"repo": {Type: TString, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"},
 				"ref":  {Type: TString, Required: true, Desc: "branch, tag, or sha"},
 				"as":   {Type: TString, Enum: []string{"me", "bot"}},
 			},
@@ -496,7 +486,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "ready_for_review", Desc: "mark a draft PR ready for review",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"ok": {Type: TBool}},
@@ -504,7 +494,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "convert_to_draft", Desc: "convert a PR back to a draft",
 			Options: Schema{
-				"repo": {Type: TString, Required: true}, "pr": {Type: TInt, Required: true},
+				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{"ok": {Type: TBool}},
@@ -551,7 +541,7 @@ var githubDecl = &TypeDecl{
 		{
 			Name: "add_labels", Desc: "add labels to an issue or PR",
 			Options: Schema{
-				"repo":   {Type: TString, Required: true},
+				"repo":   {Type: TString, Required: true, Scope: "repo"},
 				"number": {Type: TInt, Required: true},
 				"labels": {Type: TList, Required: true},
 				"as":     {Type: TString, Enum: []string{"me", "bot"}},
@@ -598,27 +588,10 @@ type githubImpl struct {
 	conn githubConn
 	deps Deps
 
-	appTokens *gh.AppTokens // nil when App-less
-	httpc     *http.Client
-
-	// ghToken is injectable for tests (defaults to `gh auth token`).
-	ghToken func() (string, error)
-
-	// GET response cache (reads only) + last-seen rate-limit state, so a
-	// fan-out of reviewers/verifiers that all want the same diff/metadata hits
-	// GitHub once and backs off gracefully near the limit. Guarded by mu.
-	mu          sync.Mutex
-	getCache    map[string]*ghCacheEntry
-	cacheTTL    time.Duration // how long a GET body is served without revalidating
-	rlRemaining int           // X-RateLimit-Remaining from the last response (-1 = unknown)
-	rlReset     time.Time     // when the primary limit resets
-}
-
-// ghCacheEntry is one cached GET body + its ETag (for cheap revalidation).
-type ghCacheEntry struct {
-	etag    string
-	body    []byte
-	fetched time.Time
+	// kit is the daemon-agnostic GitHub client (pkg/githubkit) that every verb
+	// call delegates to — credentials, HTTP mechanics, caching, rate-limit
+	// handling, and the verb switch all live there now.
+	kit *githubkit.Client
 }
 
 func newGithubImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
@@ -646,36 +619,18 @@ func newGithubImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error
 	if conn.Token != "" {
 		deps.Secrets.Track(conn.Token)
 	}
-	g := &githubImpl{
-		name: name, conn: conn, deps: deps,
-		httpc:       &http.Client{Timeout: 20 * time.Second},
-		ghToken:     ghAuthToken,
-		getCache:    map[string]*ghCacheEntry{},
-		cacheTTL:    defaultCacheTTL,
-		rlRemaining: -1,
+	kitCfg := githubkit.Config{
+		Token:      conn.Token,
+		WriteToken: conn.Identity.WriteToken,
 	}
 	if conn.App.AppID > 0 && conn.App.PrivateKeyPath != "" {
-		at, err := gh.NewAppTokens(conn.App.AppID, conn.App.PrivateKeyPath)
-		if err != nil {
-			return nil, fmt.Errorf("app credentials: %w", err)
-		}
-		g.appTokens = at
+		kitCfg.App = &githubkit.AppConfig{AppID: conn.App.AppID, PrivateKeyPath: conn.App.PrivateKeyPath}
 	}
-	return g, nil
-}
-
-// ghAuthToken shells out to `gh auth token` — the last link of the
-// app → token → gh credential chain.
-func ghAuthToken() (string, error) {
-	out, err := exec.Command("gh", "auth", "token").Output()
+	kit, err := githubkit.NewClient(kitCfg)
 	if err != nil {
-		return "", fmt.Errorf("gh auth token: %w", err)
+		return nil, err
 	}
-	tok := strings.TrimSpace(string(out))
-	if tok == "" {
-		return "", fmt.Errorf("gh auth token returned empty")
-	}
-	return tok, nil
+	return &githubImpl{name: name, conn: conn, deps: deps, kit: kit}, nil
 }
 
 func (g *githubImpl) Validate() error {
@@ -792,41 +747,11 @@ func (g *githubImpl) lowerTrigger(t CompiledTrigger) (config.Action, error) {
 	return act, nil
 }
 
-// tokenFor resolves the identity a verb call acts as. `me` follows the
-// connector's write-token policy (gh auth token by default, a literal
-// write_token otherwise, the PAT as a fallback when gh isn't available);
-// `bot` requires App credentials and posts as the App's bot user.
-func (g *githubImpl) tokenFor(ctx context.Context, as, repo string) (string, error) {
-	switch as {
-	case "", "me":
-		wt := g.conn.Identity.WriteToken
-		if wt != "" && wt != "gh_auth" {
-			return wt, nil // literal token (already ${ENV}-expanded / secret-resolved)
-		}
-		tok, err := g.ghToken()
-		if err == nil {
-			return tok, nil
-		}
-		if g.conn.Token != "" {
-			return g.conn.Token, nil
-		}
-		return "", fmt.Errorf("as: me — no write credential: %v (configure identity.write_token, token:, or log in with gh)", err)
-	case "bot":
-		if g.appTokens == nil {
-			return "", fmt.Errorf("as: bot needs GitHub App credentials (app:) on connector %q", g.name)
-		}
-		owner, name, ok := strings.Cut(repo, "/")
-		if !ok {
-			return "", fmt.Errorf("as: bot needs a repo in owner/name form, got %q", repo)
-		}
-		return g.appTokens.TokenForRepo(ctx, owner, name)
-	}
-	return "", fmt.Errorf("as: must be me|bot, got %q", as)
-}
-
+// Invoke runs a github verb. sweep is daemon-global (no repo/token involved)
+// and is intercepted here; every other verb delegates to the daemon-agnostic
+// githubkit.Client, which resolves the `as: me|bot` identity, issues the
+// authenticated API call, and returns its outputs.
 func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
-	// sweep is daemon-global (no repo/token): nudge the running catch-up
-	// sweep now, exactly like SIGUSR1 / `conductor sweep --now`.
 	if verb == "sweep" {
 		nudged, err := runSweepHook(ctx)
 		if err != nil {
@@ -834,1297 +759,19 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 		}
 		return map[string]any{"nudged": nudged}, nil
 	}
-	repo, _ := opts["repo"].(string)
-	// Gists are user-scoped, not repo-scoped — they don't require a repo.
-	if repo == "" && !isGistVerb(verb) {
-		return nil, fmt.Errorf("github.%s: options.repo is required", verb)
-	}
-	as, _ := opts["as"].(string)
-	tok, err := g.tokenFor(ctx, as, repo)
-	if err != nil {
-		return nil, fmt.Errorf("github.%s: %w", verb, err)
-	}
-	number := toInt(opts["number"])
-	if number == 0 {
-		number = toInt(opts["pr"])
-	}
-	base := gh.APIBaseURL()
-	switch verb {
-	case "comment":
-		if number == 0 {
-			return nil, fmt.Errorf("github.comment: options.number (or pr) is required")
-		}
-		var out struct {
-			ID      int64  `json:"id"`
-			HTMLURL string `json:"html_url"`
-		}
-		err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/issues/%d/comments", base, repo, number),
-			map[string]any{"body": opts["body"]}, &out)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"id": out.ID, "url": out.HTMLURL}, nil
-	case "reply":
-		id := toInt(opts["in_reply_to"])
-		if number == 0 || id == 0 {
-			return nil, fmt.Errorf("github.reply: options.pr and options.in_reply_to are required")
-		}
-		var out struct {
-			ID      int64  `json:"id"`
-			HTMLURL string `json:"html_url"`
-		}
-		err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d/comments/%d/replies", base, repo, number, id),
-			map[string]any{"body": opts["body"]}, &out)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"id": out.ID, "url": out.HTMLURL}, nil
-	case "request_review", "rerequest_review", "remove_reviewer":
-		if number == 0 {
-			return nil, fmt.Errorf("github.%s: options.pr is required", verb)
-		}
-		body := map[string]any{}
-		if rs := toStrings(opts["reviewers"]); len(rs) > 0 {
-			body["reviewers"] = rs
-		}
-		if ts := toStrings(opts["team_reviewers"]); len(ts) > 0 {
-			body["team_reviewers"] = ts
-		}
-		if len(body) == 0 {
-			return nil, fmt.Errorf("github.%s: set options.reviewers and/or team_reviewers", verb)
-		}
-		u := fmt.Sprintf("%s/repos/%s/pulls/%d/requested_reviewers", base, repo, number)
-		// Same endpoint: POST requests reviewers (and re-requests a prior one),
-		// DELETE cancels a pending request.
-		var err error
-		if verb == "remove_reviewer" {
-			err = g.del(ctx, tok, u, body)
-		} else {
-			err = g.post(ctx, tok, u, body, nil)
-		}
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"ok": true}, nil
-	case "submit_review":
-		if number == 0 {
-			return nil, fmt.Errorf("github.submit_review: options.pr is required")
-		}
-		event, _ := opts["event"].(string)
-		if event == "" {
-			return nil, fmt.Errorf("github.submit_review: options.event (APPROVE|REQUEST_CHANGES|COMMENT) is required")
-		}
-		var out struct {
-			ID int64 `json:"id"`
-		}
-		body := map[string]any{"event": event}
-		if b, _ := opts["body"].(string); b != "" {
-			body["body"] = b
-		}
-		comments, err := reviewComments(opts["comments"])
-		if err != nil {
-			return nil, err
-		}
-		if len(comments) > 0 {
-			body["comments"] = comments
-		}
-		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d/reviews", base, repo, number), body, &out); err != nil {
-			return nil, err
-		}
-		return map[string]any{"id": out.ID, "comments": len(comments)}, nil
-	case "pr_diff":
-		if number == 0 {
-			return nil, fmt.Errorf("github.pr_diff: options.pr is required")
-		}
-		diff, err := g.getText(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d", base, repo, number), "application/vnd.github.diff")
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"diff": diff}, nil
-	case "pr_get":
-		if number == 0 {
-			return nil, fmt.Errorf("github.pr_get: options.pr is required")
-		}
-		var pr struct {
-			Title        string `json:"title"`
-			Body         string `json:"body"`
-			State        string `json:"state"`
-			Draft        bool   `json:"draft"`
-			Merged       bool   `json:"merged"`
-			Mergeable    *bool  `json:"mergeable"`
-			Additions    int    `json:"additions"`
-			Deletions    int    `json:"deletions"`
-			ChangedFiles int    `json:"changed_files"`
-			HTMLURL      string `json:"html_url"`
-			User         struct {
-				Login string `json:"login"`
-			} `json:"user"`
-			Base struct {
-				Ref string `json:"ref"`
-			} `json:"base"`
-			Head struct {
-				Ref string `json:"ref"`
-				SHA string `json:"sha"`
-			} `json:"head"`
-			Labels []struct {
-				Name string `json:"name"`
-			} `json:"labels"`
-		}
-		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d", base, repo, number), &pr); err != nil {
-			return nil, err
-		}
-		labels := make([]string, 0, len(pr.Labels))
-		for _, l := range pr.Labels {
-			labels = append(labels, l.Name)
-		}
-		res := map[string]any{
-			"title": pr.Title, "body": pr.Body, "state": pr.State, "draft": pr.Draft,
-			"merged": pr.Merged, "author": pr.User.Login, "base": pr.Base.Ref,
-			"head": pr.Head.Ref, "head_sha": pr.Head.SHA, "additions": pr.Additions,
-			"deletions": pr.Deletions, "changed_files": pr.ChangedFiles, "labels": labels, "url": pr.HTMLURL,
-		}
-		if pr.Mergeable != nil {
-			res["mergeable"] = *pr.Mergeable
-		}
-		return res, nil
-	case "pr_files":
-		if number == 0 {
-			return nil, fmt.Errorf("github.pr_files: options.pr is required")
-		}
-		all, _ := opts["all"].(bool)
-		files := []any{}
-		err := g.listAll(ctx, tok, all, 100, func(page int) string {
-			return fmt.Sprintf("%s/repos/%s/pulls/%d/files?per_page=100&page=%d", base, repo, number, page)
-		}, func(b []byte) (int, error) {
-			var raw []struct {
-				Filename  string `json:"filename"`
-				Status    string `json:"status"`
-				Additions int    `json:"additions"`
-				Deletions int    `json:"deletions"`
-				Changes   int    `json:"changes"`
-			}
-			if err := json.Unmarshal(b, &raw); err != nil {
-				return 0, err
-			}
-			for _, f := range raw {
-				files = append(files, map[string]any{
-					"path": f.Filename, "status": f.Status,
-					"additions": f.Additions, "deletions": f.Deletions, "changes": f.Changes,
-				})
-			}
-			return len(raw), nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"files": files}, nil
-	case "review_comments":
-		if number == 0 {
-			return nil, fmt.Errorf("github.review_comments: options.pr is required")
-		}
-		all, _ := opts["all"].(bool)
-		comments := []any{}
-		err := g.listAll(ctx, tok, all, 100, func(page int) string {
-			return fmt.Sprintf("%s/repos/%s/pulls/%d/comments?per_page=100&page=%d", base, repo, number, page)
-		}, func(b []byte) (int, error) {
-			var raw []struct {
-				ID           int64  `json:"id"`
-				Path         string `json:"path"`
-				Line         int    `json:"line"`
-				OriginalLine int    `json:"original_line"`
-				Body         string `json:"body"`
-				User         struct {
-					Login string `json:"login"`
-				} `json:"user"`
-			}
-			if err := json.Unmarshal(b, &raw); err != nil {
-				return 0, err
-			}
-			for _, c := range raw {
-				line := c.Line
-				if line == 0 {
-					line = c.OriginalLine
-				}
-				comments = append(comments, map[string]any{
-					"id": c.ID, "path": c.Path, "line": line, "body": c.Body, "user": c.User.Login,
-				})
-			}
-			return len(raw), nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"comments": comments}, nil
-	case "file":
-		path, _ := opts["path"].(string)
-		if path == "" {
-			return nil, fmt.Errorf("github.file: options.path is required")
-		}
-		u := fmt.Sprintf("%s/repos/%s/contents/%s", base, repo, path)
-		if ref, _ := opts["ref"].(string); ref != "" {
-			u += "?ref=" + url.QueryEscape(ref)
-		}
-		text, err := g.getText(ctx, tok, u, "application/vnd.github.raw")
-		if err != nil {
-			// optional: a missing file (404) is not an error — return empty
-			// text so a workflow can inline convention files that may not exist
-			// without a failed step in the logs.
-			if opt, _ := opts["optional"].(bool); opt && strings.Contains(err.Error(), "HTTP 404") {
-				return map[string]any{"text": ""}, nil
-			}
-			return nil, err
-		}
-		return map[string]any{"text": text}, nil
-	case "create_pr":
-		title, _ := opts["title"].(string)
-		head, _ := opts["head"].(string)
-		baseRef, _ := opts["base"].(string)
-		if title == "" || head == "" || baseRef == "" {
-			return nil, fmt.Errorf("github.create_pr: title, head and base are required")
-		}
-		reqBody := map[string]any{"title": title, "head": head, "base": baseRef}
-		if b, _ := opts["body"].(string); b != "" {
-			reqBody["body"] = b
-		}
-		if d, _ := opts["draft"].(bool); d {
-			reqBody["draft"] = true
-		}
-		var out struct {
-			Number  int64  `json:"number"`
-			HTMLURL string `json:"html_url"`
-		}
-		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls", base, repo), reqBody, &out); err != nil {
-			return nil, err
-		}
-		return map[string]any{"number": out.Number, "url": out.HTMLURL}, nil
-	case "merge_pr":
-		if number == 0 {
-			return nil, fmt.Errorf("github.merge_pr: options.pr is required")
-		}
-		reqBody := map[string]any{}
-		if m, _ := opts["method"].(string); m != "" {
-			reqBody["merge_method"] = m
-		}
-		if s, _ := opts["commit_title"].(string); s != "" {
-			reqBody["commit_title"] = s
-		}
-		if s, _ := opts["commit_message"].(string); s != "" {
-			reqBody["commit_message"] = s
-		}
-		if s, _ := opts["sha"].(string); s != "" {
-			reqBody["sha"] = s
-		}
-		var out struct {
-			Merged bool   `json:"merged"`
-			SHA    string `json:"sha"`
-		}
-		if err := g.put(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d/merge", base, repo, number), reqBody, &out); err != nil {
-			return nil, err
-		}
-		return map[string]any{"merged": out.Merged, "sha": out.SHA}, nil
-	case "update_pr":
-		if number == 0 {
-			return nil, fmt.Errorf("github.update_pr: options.pr is required")
-		}
-		reqBody := stringFields(opts, "state", "title", "body", "base")
-		if len(reqBody) == 0 {
-			return nil, fmt.Errorf("github.update_pr: nothing to change (set state/title/body/base)")
-		}
-		var out struct {
-			Number int64  `json:"number"`
-			State  string `json:"state"`
-		}
-		if err := g.patch(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d", base, repo, number), reqBody, &out); err != nil {
-			return nil, err
-		}
-		return map[string]any{"number": out.Number, "state": out.State}, nil
-	case "create_issue":
-		title, _ := opts["title"].(string)
-		if title == "" {
-			return nil, fmt.Errorf("github.create_issue: options.title is required")
-		}
-		reqBody := map[string]any{"title": title}
-		if b, _ := opts["body"].(string); b != "" {
-			reqBody["body"] = b
-		}
-		if l := toStrings(opts["labels"]); len(l) > 0 {
-			reqBody["labels"] = l
-		}
-		if a := toStrings(opts["assignees"]); len(a) > 0 {
-			reqBody["assignees"] = a
-		}
-		var out struct {
-			Number  int64  `json:"number"`
-			HTMLURL string `json:"html_url"`
-		}
-		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/issues", base, repo), reqBody, &out); err != nil {
-			return nil, err
-		}
-		return map[string]any{"number": out.Number, "url": out.HTMLURL}, nil
-	case "update_issue":
-		if number == 0 {
-			return nil, fmt.Errorf("github.update_issue: options.number is required")
-		}
-		reqBody := stringFields(opts, "state", "state_reason", "title", "body")
-		if len(reqBody) == 0 {
-			return nil, fmt.Errorf("github.update_issue: nothing to change")
-		}
-		var out struct {
-			Number int64  `json:"number"`
-			State  string `json:"state"`
-		}
-		if err := g.patch(ctx, tok, fmt.Sprintf("%s/repos/%s/issues/%d", base, repo, number), reqBody, &out); err != nil {
-			return nil, err
-		}
-		return map[string]any{"number": out.Number, "state": out.State}, nil
-	case "assign":
-		if number == 0 {
-			return nil, fmt.Errorf("github.assign: options.number (or pr) is required")
-		}
-		add, rem := toStrings(opts["add"]), toStrings(opts["remove"])
-		if len(add) == 0 && len(rem) == 0 {
-			return nil, fmt.Errorf("github.assign: set add and/or remove")
-		}
-		var out struct {
-			Assignees []struct {
-				Login string `json:"login"`
-			} `json:"assignees"`
-		}
-		u := fmt.Sprintf("%s/repos/%s/issues/%d/assignees", base, repo, number)
-		if len(add) > 0 {
-			if err := g.send(ctx, http.MethodPost, tok, u, map[string]any{"assignees": add}, &out); err != nil {
-				return nil, err
-			}
-		}
-		if len(rem) > 0 {
-			if err := g.send(ctx, http.MethodDelete, tok, u, map[string]any{"assignees": rem}, &out); err != nil {
-				return nil, err
-			}
-		}
-		logins := make([]string, 0, len(out.Assignees))
-		for _, a := range out.Assignees {
-			logins = append(logins, a.Login)
-		}
-		return map[string]any{"assignees": logins}, nil
-	case "remove_label":
-		if number == 0 {
-			return nil, fmt.Errorf("github.remove_label: options.number is required")
-		}
-		label, _ := opts["label"].(string)
-		if label == "" {
-			return nil, fmt.Errorf("github.remove_label: options.label is required")
-		}
-		u := fmt.Sprintf("%s/repos/%s/issues/%d/labels/%s", base, repo, number, url.PathEscape(label))
-		if err := g.del(ctx, tok, u, nil); err != nil {
-			return nil, err
-		}
-		return map[string]any{"ok": true}, nil
-	case "get_issue":
-		if number == 0 {
-			return nil, fmt.Errorf("github.get_issue: options.number is required")
-		}
-		var iss struct {
-			Title   string `json:"title"`
-			Body    string `json:"body"`
-			State   string `json:"state"`
-			HTMLURL string `json:"html_url"`
-			User    struct {
-				Login string `json:"login"`
-			} `json:"user"`
-			Labels []struct {
-				Name string `json:"name"`
-			} `json:"labels"`
-			Assignees []struct {
-				Login string `json:"login"`
-			} `json:"assignees"`
-		}
-		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/issues/%d", base, repo, number), &iss); err != nil {
-			return nil, err
-		}
-		labels := make([]string, 0, len(iss.Labels))
-		for _, l := range iss.Labels {
-			labels = append(labels, l.Name)
-		}
-		assignees := make([]string, 0, len(iss.Assignees))
-		for _, a := range iss.Assignees {
-			assignees = append(assignees, a.Login)
-		}
-		return map[string]any{
-			"title": iss.Title, "body": iss.Body, "state": iss.State,
-			"labels": labels, "assignees": assignees, "author": iss.User.Login, "url": iss.HTMLURL,
-		}, nil
-	case "put_file":
-		path, _ := opts["path"].(string)
-		content, _ := opts["content"].(string)
-		message, _ := opts["message"].(string)
-		if path == "" || message == "" {
-			return nil, fmt.Errorf("github.put_file: path and message are required")
-		}
-		reqBody := map[string]any{"message": message, "content": base64.StdEncoding.EncodeToString([]byte(content))}
-		if b, _ := opts["branch"].(string); b != "" {
-			reqBody["branch"] = b
-		}
-		if s, _ := opts["sha"].(string); s != "" {
-			reqBody["sha"] = s
-		}
-		var out struct {
-			Content struct {
-				SHA string `json:"sha"`
-			} `json:"content"`
-			Commit struct {
-				SHA string `json:"sha"`
-			} `json:"commit"`
-		}
-		if err := g.put(ctx, tok, fmt.Sprintf("%s/repos/%s/contents/%s", base, repo, path), reqBody, &out); err != nil {
-			return nil, err
-		}
-		return map[string]any{"commit": out.Commit.SHA, "sha": out.Content.SHA}, nil
-	case "delete_file":
-		path, _ := opts["path"].(string)
-		message, _ := opts["message"].(string)
-		sha, _ := opts["sha"].(string)
-		if path == "" || message == "" || sha == "" {
-			return nil, fmt.Errorf("github.delete_file: path, message and sha are required")
-		}
-		reqBody := map[string]any{"message": message, "sha": sha}
-		if b, _ := opts["branch"].(string); b != "" {
-			reqBody["branch"] = b
-		}
-		var out struct {
-			Commit struct {
-				SHA string `json:"sha"`
-			} `json:"commit"`
-		}
-		if err := g.send(ctx, http.MethodDelete, tok, fmt.Sprintf("%s/repos/%s/contents/%s", base, repo, path), reqBody, &out); err != nil {
-			return nil, err
-		}
-		return map[string]any{"commit": out.Commit.SHA}, nil
-	case "get_ref":
-		ref, _ := opts["ref"].(string)
-		if ref == "" {
-			return nil, fmt.Errorf("github.get_ref: options.ref is required")
-		}
-		var out struct {
-			SHA string `json:"sha"`
-		}
-		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/commits/%s", base, repo, url.PathEscape(ref)), &out); err != nil {
-			return nil, err
-		}
-		return map[string]any{"sha": out.SHA}, nil
-	case "create_branch":
-		newBranch, _ := opts["branch"].(string)
-		if newBranch == "" {
-			return nil, fmt.Errorf("github.create_branch: options.branch is required")
-		}
-		from, _ := opts["from"].(string)
-		if from == "" {
-			from = "HEAD"
-		}
-		var src struct {
-			SHA string `json:"sha"`
-		}
-		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/commits/%s", base, repo, url.PathEscape(from)), &src); err != nil {
-			return nil, err
-		}
-		if src.SHA == "" {
-			return nil, fmt.Errorf("github.create_branch: could not resolve %q", from)
-		}
-		var out struct {
-			Object struct {
-				SHA string `json:"sha"`
-			} `json:"object"`
-		}
-		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/git/refs", base, repo),
-			map[string]any{"ref": "refs/heads/" + newBranch, "sha": src.SHA}, &out); err != nil {
-			return nil, err
-		}
-		return map[string]any{"sha": out.Object.SHA}, nil
-	case "dispatch_workflow":
-		wf, _ := opts["workflow"].(string)
-		ref, _ := opts["ref"].(string)
-		if wf == "" || ref == "" {
-			return nil, fmt.Errorf("github.dispatch_workflow: workflow and ref are required")
-		}
-		reqBody := map[string]any{"ref": ref}
-		if in, ok := opts["inputs"].(map[string]any); ok && len(in) > 0 {
-			reqBody["inputs"] = in
-		}
-		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/actions/workflows/%s/dispatches", base, repo, url.PathEscape(wf)), reqBody, nil); err != nil {
-			return nil, err
-		}
-		return map[string]any{"ok": true}, nil
-	case "rerun_run":
-		runID := toInt(opts["run_id"])
-		if runID == 0 {
-			return nil, fmt.Errorf("github.rerun_run: options.run_id is required")
-		}
-		endpoint := "rerun"
-		if f, _ := opts["failed_only"].(bool); f {
-			endpoint = "rerun-failed-jobs"
-		}
-		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/actions/runs/%d/%s", base, repo, runID, endpoint), nil, nil); err != nil {
-			return nil, err
-		}
-		return map[string]any{"ok": true}, nil
-	case "cancel_run":
-		runID := toInt(opts["run_id"])
-		if runID == 0 {
-			return nil, fmt.Errorf("github.cancel_run: options.run_id is required")
-		}
-		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/actions/runs/%d/cancel", base, repo, runID), nil, nil); err != nil {
-			return nil, err
-		}
-		return map[string]any{"ok": true}, nil
-	case "list_runs":
-		all, _ := opts["all"].(bool)
-		perPage := toInt(opts["per_page"])
-		if perPage <= 0 {
-			perPage = 20
-		}
-		if all {
-			perPage = 100
-		}
-		runs := []any{}
-		err := g.listAll(ctx, tok, all, perPage, func(page int) string {
-			q := url.Values{"per_page": {strconv.Itoa(perPage)}, "page": {strconv.Itoa(page)}}
-			if b, _ := opts["branch"].(string); b != "" {
-				q.Set("branch", b)
-			}
-			if s, _ := opts["status"].(string); s != "" {
-				q.Set("status", s)
-			}
-			return fmt.Sprintf("%s/repos/%s/actions/runs?%s", base, repo, q.Encode())
-		}, func(b []byte) (int, error) {
-			var out struct {
-				Runs []struct {
-					ID         int64  `json:"id"`
-					Name       string `json:"name"`
-					Status     string `json:"status"`
-					Conclusion string `json:"conclusion"`
-					HeadBranch string `json:"head_branch"`
-					HeadSHA    string `json:"head_sha"`
-					HTMLURL    string `json:"html_url"`
-				} `json:"workflow_runs"`
-			}
-			if err := json.Unmarshal(b, &out); err != nil {
-				return 0, err
-			}
-			for _, r := range out.Runs {
-				runs = append(runs, map[string]any{
-					"id": r.ID, "name": r.Name, "status": r.Status, "conclusion": r.Conclusion,
-					"head_branch": r.HeadBranch, "head_sha": r.HeadSHA, "url": r.HTMLURL,
-				})
-			}
-			return len(out.Runs), nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"runs": runs}, nil
-	case "create_release":
-		tag, _ := opts["tag"].(string)
-		if tag == "" {
-			return nil, fmt.Errorf("github.create_release: options.tag is required")
-		}
-		reqBody := map[string]any{"tag_name": tag}
-		if s, _ := opts["target"].(string); s != "" {
-			reqBody["target_commitish"] = s
-		}
-		if s, _ := opts["name"].(string); s != "" {
-			reqBody["name"] = s
-		}
-		if s, _ := opts["body"].(string); s != "" {
-			reqBody["body"] = s
-		}
-		if b, _ := opts["draft"].(bool); b {
-			reqBody["draft"] = true
-		}
-		if b, _ := opts["prerelease"].(bool); b {
-			reqBody["prerelease"] = true
-		}
-		var out struct {
-			ID        int64  `json:"id"`
-			HTMLURL   string `json:"html_url"`
-			UploadURL string `json:"upload_url"`
-		}
-		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/releases", base, repo), reqBody, &out); err != nil {
-			return nil, err
-		}
-		return map[string]any{"id": out.ID, "url": out.HTMLURL, "upload_url": out.UploadURL}, nil
-	case "upload_asset":
-		relID := toInt(opts["release_id"])
-		name, _ := opts["name"].(string)
-		if relID == 0 || name == "" {
-			return nil, fmt.Errorf("github.upload_asset: release_id and name are required")
-		}
-		var data []byte
-		if c, ok := opts["content"].(string); ok && c != "" {
-			data = []byte(c)
-		} else if p, _ := opts["path"].(string); p != "" {
-			b, err := os.ReadFile(p)
-			if err != nil {
-				return nil, fmt.Errorf("github.upload_asset: read %s: %w", p, err)
-			}
-			data = b
-		} else {
-			return nil, fmt.Errorf("github.upload_asset: set content or path")
-		}
-		var rel struct {
-			UploadURL string `json:"upload_url"`
-		}
-		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/releases/%d", base, repo, relID), &rel); err != nil {
-			return nil, err
-		}
-		up := rel.UploadURL
-		if i := strings.IndexByte(up, '{'); i >= 0 { // strip the {?name,label} template
-			up = up[:i]
-		}
-		if up == "" {
-			return nil, fmt.Errorf("github.upload_asset: release %d has no upload URL", relID)
-		}
-		up += "?name=" + url.QueryEscape(name)
-		ct, _ := opts["content_type"].(string)
-		if ct == "" {
-			ct = "application/octet-stream"
-		}
-		var out struct {
-			ID                 int64  `json:"id"`
-			BrowserDownloadURL string `json:"browser_download_url"`
-		}
-		if err := g.postRaw(ctx, tok, up, ct, data, &out); err != nil {
-			return nil, err
-		}
-		return map[string]any{"id": out.ID, "url": out.BrowserDownloadURL}, nil
-	case "list_issues":
-		all, _ := opts["all"].(bool)
-		pp := toInt(opts["per_page"])
-		if pp <= 0 {
-			pp = 30
-		}
-		if all {
-			pp = 100
-		}
-		issues := []any{}
-		err := g.listAll(ctx, tok, all, pp, func(page int) string {
-			q := url.Values{"per_page": {strconv.Itoa(pp)}, "page": {strconv.Itoa(page)}}
-			if s, _ := opts["state"].(string); s != "" {
-				q.Set("state", s)
-			}
-			if l := toStrings(opts["labels"]); len(l) > 0 {
-				q.Set("labels", strings.Join(l, ","))
-			}
-			if s, _ := opts["assignee"].(string); s != "" {
-				q.Set("assignee", s)
-			}
-			return fmt.Sprintf("%s/repos/%s/issues?%s", base, repo, q.Encode())
-		}, func(b []byte) (int, error) {
-			var raw []struct {
-				Number  int64  `json:"number"`
-				Title   string `json:"title"`
-				State   string `json:"state"`
-				HTMLURL string `json:"html_url"`
-				User    struct {
-					Login string `json:"login"`
-				} `json:"user"`
-				Labels []struct {
-					Name string `json:"name"`
-				} `json:"labels"`
-				PullRequest *struct{} `json:"pull_request"`
-			}
-			if err := json.Unmarshal(b, &raw); err != nil {
-				return 0, err
-			}
-			for _, i := range raw {
-				if i.PullRequest != nil { // the issues endpoint returns PRs too — drop them
-					continue
-				}
-				labels := make([]string, 0, len(i.Labels))
-				for _, l := range i.Labels {
-					labels = append(labels, l.Name)
-				}
-				issues = append(issues, map[string]any{
-					"number": i.Number, "title": i.Title, "state": i.State,
-					"author": i.User.Login, "labels": labels, "url": i.HTMLURL,
-				})
-			}
-			return len(raw), nil // count includes PRs, so pagination still advances correctly
-		})
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"issues": issues}, nil
-	case "search_issues":
-		query, _ := opts["q"].(string)
-		if query == "" {
-			return nil, fmt.Errorf("github.search_issues: options.q is required")
-		}
-		all, _ := opts["all"].(bool)
-		pp := toInt(opts["per_page"])
-		if pp <= 0 {
-			pp = 30
-		}
-		if all {
-			pp = 100
-		}
-		scoped := url.QueryEscape(query + " repo:" + repo)
-		items := []any{}
-		total := 0
-		err := g.listAll(ctx, tok, all, pp, func(page int) string {
-			return fmt.Sprintf("%s/search/issues?q=%s&per_page=%d&page=%d", base, scoped, pp, page)
-		}, func(b []byte) (int, error) {
-			var out struct {
-				TotalCount int `json:"total_count"`
-				Items      []struct {
-					Number      int64     `json:"number"`
-					Title       string    `json:"title"`
-					State       string    `json:"state"`
-					HTMLURL     string    `json:"html_url"`
-					PullRequest *struct{} `json:"pull_request"`
-				} `json:"items"`
-			}
-			if err := json.Unmarshal(b, &out); err != nil {
-				return 0, err
-			}
-			total = out.TotalCount
-			for _, it := range out.Items {
-				items = append(items, map[string]any{
-					"number": it.Number, "title": it.Title, "state": it.State,
-					"is_pr": it.PullRequest != nil, "url": it.HTMLURL,
-				})
-			}
-			return len(out.Items), nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"total": total, "items": items}, nil
-	case "checks":
-		ref, _ := opts["ref"].(string)
-		if ref == "" {
-			return nil, fmt.Errorf("github.checks: options.ref is required")
-		}
-		var out struct {
-			CheckRuns []struct {
-				Name       string `json:"name"`
-				Status     string `json:"status"`
-				Conclusion string `json:"conclusion"`
-				HTMLURL    string `json:"html_url"`
-			} `json:"check_runs"`
-		}
-		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/commits/%s/check-runs", base, repo, url.PathEscape(ref)), &out); err != nil {
-			return nil, err
-		}
-		checks := make([]any, 0, len(out.CheckRuns))
-		for _, c := range out.CheckRuns {
-			checks = append(checks, map[string]any{
-				"name": c.Name, "status": c.Status, "conclusion": c.Conclusion, "url": c.HTMLURL,
-			})
-		}
-		return map[string]any{"checks": checks}, nil
-	case "ready_for_review", "convert_to_draft":
-		if number == 0 {
-			return nil, fmt.Errorf("github.%s: options.pr is required", verb)
-		}
-		var pr struct {
-			NodeID string `json:"node_id"`
-		}
-		if err := g.get(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d", base, repo, number), &pr); err != nil {
-			return nil, err
-		}
-		if pr.NodeID == "" {
-			return nil, fmt.Errorf("github.%s: could not resolve the PR's node id", verb)
-		}
-		mutation := "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){clientMutationId}}"
-		if verb == "convert_to_draft" {
-			mutation = "mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){clientMutationId}}"
-		}
-		if err := g.graphql(ctx, tok, mutation, map[string]any{"id": pr.NodeID}, nil); err != nil {
-			return nil, err
-		}
-		return map[string]any{"ok": true}, nil
-	case "create_gist":
-		files := gistFiles(opts["files"])
-		if len(files) == 0 {
-			return nil, fmt.Errorf("github.create_gist: options.files is required ({filename: content})")
-		}
-		reqBody := map[string]any{"files": files}
-		if d, _ := opts["description"].(string); d != "" {
-			reqBody["description"] = d
-		}
-		if p, _ := opts["public"].(bool); p {
-			reqBody["public"] = true
-		}
-		var out struct {
-			ID      string `json:"id"`
-			HTMLURL string `json:"html_url"`
-		}
-		if err := g.post(ctx, tok, base+"/gists", reqBody, &out); err != nil {
-			return nil, err
-		}
-		return map[string]any{"id": out.ID, "url": out.HTMLURL}, nil
-	case "get_gist":
-		id, _ := opts["id"].(string)
-		if id == "" {
-			return nil, fmt.Errorf("github.get_gist: options.id is required")
-		}
-		var out struct {
-			HTMLURL     string `json:"html_url"`
-			Description string `json:"description"`
-			Public      bool   `json:"public"`
-			Files       map[string]struct {
-				Content string `json:"content"`
-			} `json:"files"`
-		}
-		if err := g.get(ctx, tok, base+"/gists/"+url.PathEscape(id), &out); err != nil {
-			return nil, err
-		}
-		files := make(map[string]any, len(out.Files))
-		for name, f := range out.Files {
-			files[name] = f.Content
-		}
-		return map[string]any{"files": files, "description": out.Description, "public": out.Public, "url": out.HTMLURL}, nil
-	case "update_gist":
-		id, _ := opts["id"].(string)
-		if id == "" {
-			return nil, fmt.Errorf("github.update_gist: options.id is required")
-		}
-		reqBody := map[string]any{}
-		if files := gistFiles(opts["files"]); len(files) > 0 {
-			reqBody["files"] = files
-		}
-		if d, _ := opts["description"].(string); d != "" {
-			reqBody["description"] = d
-		}
-		if len(reqBody) == 0 {
-			return nil, fmt.Errorf("github.update_gist: set files and/or description")
-		}
-		var out struct {
-			ID      string `json:"id"`
-			HTMLURL string `json:"html_url"`
-		}
-		if err := g.patch(ctx, tok, base+"/gists/"+url.PathEscape(id), reqBody, &out); err != nil {
-			return nil, err
-		}
-		return map[string]any{"id": out.ID, "url": out.HTMLURL}, nil
-	case "delete_gist":
-		id, _ := opts["id"].(string)
-		if id == "" {
-			return nil, fmt.Errorf("github.delete_gist: options.id is required")
-		}
-		if err := g.del(ctx, tok, base+"/gists/"+url.PathEscape(id), nil); err != nil {
-			return nil, err
-		}
-		return map[string]any{"ok": true}, nil
-	case "list_gists":
-		all, _ := opts["all"].(bool)
-		perPage := toInt(opts["per_page"])
-		if perPage <= 0 {
-			perPage = 30
-		}
-		if all {
-			perPage = 100
-		}
-		path := "/gists"
-		if user, _ := opts["user"].(string); user != "" {
-			path = "/users/" + url.PathEscape(user) + "/gists"
-		}
-		gists := []any{}
-		err := g.listAll(ctx, tok, all, perPage, func(page int) string {
-			return fmt.Sprintf("%s%s?per_page=%d&page=%d", base, path, perPage, page)
-		}, func(b []byte) (int, error) {
-			var raw []struct {
-				ID          string `json:"id"`
-				HTMLURL     string `json:"html_url"`
-				Description string `json:"description"`
-				Public      bool   `json:"public"`
-			}
-			if err := json.Unmarshal(b, &raw); err != nil {
-				return 0, err
-			}
-			for _, gg := range raw {
-				gists = append(gists, map[string]any{"id": gg.ID, "description": gg.Description, "public": gg.Public, "url": gg.HTMLURL})
-			}
-			return len(raw), nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"gists": gists}, nil
-	case "add_labels":
-		if number == 0 {
-			return nil, fmt.Errorf("github.add_labels: options.number is required")
-		}
-		labels := toStrings(opts["labels"])
-		if len(labels) == 0 {
-			return nil, fmt.Errorf("github.add_labels: options.labels is required")
-		}
-		if err := g.post(ctx, tok, fmt.Sprintf("%s/repos/%s/issues/%d/labels", base, repo, number),
-			map[string]any{"labels": labels}, nil); err != nil {
-			return nil, err
-		}
-		return map[string]any{"ok": true}, nil
-	}
-	return nil, fmt.Errorf("github: unknown verb %q", verb)
+	return g.kit.Invoke(ctx, verb, opts)
 }
 
 // post/patch/put/del are the write verbs' authenticated JSON requests.
-func (g *githubImpl) post(ctx context.Context, token, url string, body, out any) error {
-	return g.send(ctx, http.MethodPost, token, url, body, out)
-}
-func (g *githubImpl) patch(ctx context.Context, token, url string, body, out any) error {
-	return g.send(ctx, http.MethodPatch, token, url, body, out)
-}
-func (g *githubImpl) put(ctx context.Context, token, url string, body, out any) error {
-	return g.send(ctx, http.MethodPut, token, url, body, out)
-}
-func (g *githubImpl) del(ctx context.Context, token, url string, body any) error {
-	return g.send(ctx, http.MethodDelete, token, url, body, nil)
-}
+// isRateLimited/retryAfter are thin wrappers over githubkit's exported
+// helpers, kept as package-level functions in `connector` for existing test
+// call sites (github_test.go calls them unqualified).
+func isRateLimited(resp *http.Response) bool       { return githubkit.IsRateLimited(resp) }
+func retryAfter(resp *http.Response) time.Duration { return githubkit.RetryAfter(resp) }
 
-// send issues one authenticated JSON request of any method. A nil body sends no
-// content. Any successful write invalidates the read cache, so a mutate-then-
-// read (e.g. merge_pr then pr_get) never serves the pre-write copy.
-func (g *githubImpl) send(ctx context.Context, method, token, url string, body, out any) error {
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		rdr = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, url, rdr)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := g.httpc.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	g.noteRateLimit(resp)
-	if resp.StatusCode/100 != 2 {
-		if isRateLimited(resp) {
-			return g.rateLimitError()
-		}
-		return ghHTTPError(method, url, resp)
-	}
-	g.invalidateCache() // a write may have changed what a cached read returns
-	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
-	}
-	return nil
-}
-
-// invalidateCache drops every cached GET body (called after a successful write).
-func (g *githubImpl) invalidateCache() {
-	g.mu.Lock()
-	g.getCache = map[string]*ghCacheEntry{}
-	g.mu.Unlock()
-}
-
-// graphql runs one GraphQL (v4) query/mutation. GraphQL returns 200 even on
-// query errors, so those are surfaced from the response body, not the status.
-func (g *githubImpl) graphql(ctx context.Context, token, query string, variables map[string]any, out any) error {
-	reqBody := map[string]any{"query": query}
-	if len(variables) > 0 {
-		reqBody["variables"] = variables
-	}
-	var resp struct {
-		Data   json.RawMessage `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-	if err := g.post(ctx, token, gh.APIBaseURL()+"/graphql", reqBody, &resp); err != nil {
-		return err
-	}
-	if len(resp.Errors) > 0 {
-		return fmt.Errorf("github graphql: %s", resp.Errors[0].Message)
-	}
-	if out != nil && len(resp.Data) > 0 {
-		return json.Unmarshal(resp.Data, out)
-	}
-	return nil
-}
-
-// postRaw uploads a raw body (a release asset) with a caller-set content type —
-// release assets go to a separate uploads host, so the caller passes the full
-// upload URL. Invalidates the read cache like any write.
-func (g *githubImpl) postRaw(ctx context.Context, token, url, contentType string, body []byte, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	resp, err := g.httpc.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	g.noteRateLimit(resp)
-	if resp.StatusCode/100 != 2 {
-		if isRateLimited(resp) {
-			return g.rateLimitError()
-		}
-		return ghHTTPError("POST", url, resp)
-	}
-	g.invalidateCache()
-	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
-	}
-	return nil
-}
-
-const (
-	// maxReadBytes caps a raw text read (a diff, a repo file) so a pathologically
-	// large response can't exhaust memory. A body over the limit is truncated.
-	maxReadBytes = 16 << 20 // 16 MiB
-	// defaultCacheTTL is how long a GET body is served without revalidating —
-	// long enough that a review fan-out (6 reviewers + verifiers, same PR) hits
-	// the API once, short enough that a read after a write sees fresh data soon.
-	defaultCacheTTL = 45 * time.Second
-	// maxCacheEntries bounds the read cache over the daemon's lifetime.
-	maxCacheEntries = 1024
-	// maxRateWait caps how long a single GET will block waiting out a rate
-	// limit before giving up (and serving stale, or erroring).
-	maxRateWait = 30 * time.Second
-)
-
-// get issues an authenticated JSON GET (cached) and decodes into out.
-func (g *githubImpl) get(ctx context.Context, token, url string, out any) error {
-	b, err := g.cachedGet(ctx, token, url, "application/vnd.github+json")
-	if err != nil {
-		return err
-	}
-	if out != nil {
-		return json.Unmarshal(b, out)
-	}
-	return nil
-}
-
-// getText issues an authenticated GET (cached) with a caller-supplied Accept
-// (the diff or raw media type) and returns the body as a string.
-func (g *githubImpl) getText(ctx context.Context, token, url, accept string) (string, error) {
-	b, err := g.cachedGet(ctx, token, url, accept)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-// cachedGet is the read path shared by every GET verb: an in-process TTL cache
-// with ETag revalidation, and rate-limit awareness. A fresh entry is served
-// without a round-trip; a stale one revalidates conditionally (a 304 costs no
-// body). On a rate-limit response it waits out a short Retry-After once, then
-// falls back to a stale cached body if it has one, else errors with the reset.
-func (g *githubImpl) cachedGet(ctx context.Context, token, url, accept string) ([]byte, error) {
-	key := cacheKey(token, accept, url)
-	now := time.Now()
-
-	g.mu.Lock()
-	e := g.getCache[key]
-	if e != nil && now.Sub(e.fetched) < g.cacheTTL {
-		body := e.body
-		g.mu.Unlock()
-		return body, nil
-	}
-	etag := ""
-	if e != nil {
-		etag = e.etag
-	}
-	g.mu.Unlock()
-
-	for attempt := 0; ; attempt++ {
-		resp, err := g.getRaw(ctx, token, url, accept, etag)
-		if err != nil {
-			return nil, err
-		}
-		g.noteRateLimit(resp)
-
-		switch {
-		case resp.StatusCode == http.StatusNotModified:
-			resp.Body.Close()
-			g.mu.Lock()
-			if e := g.getCache[key]; e != nil {
-				e.fetched = time.Now()
-				body := e.body
-				g.mu.Unlock()
-				return body, nil
-			}
-			g.mu.Unlock()
-			etag = "" // cache was evicted under us — refetch unconditionally
-			continue
-
-		case resp.StatusCode/100 == 2:
-			b, rerr := io.ReadAll(io.LimitReader(resp.Body, maxReadBytes))
-			newEtag := resp.Header.Get("ETag")
-			resp.Body.Close()
-			if rerr != nil {
-				return nil, rerr
-			}
-			g.storeCache(key, newEtag, b)
-			return b, nil
-
-		case isRateLimited(resp):
-			wait := retryAfter(resp)
-			resp.Body.Close()
-			if attempt == 0 && wait > 0 && wait <= maxRateWait {
-				if err := sleepCtx(ctx, wait); err != nil {
-					return nil, err
-				}
-				continue // one retry after the window
-			}
-			// Prefer stale data over failing the caller — a review shouldn't
-			// die because the limit blipped when we already hold the diff.
-			g.mu.Lock()
-			if e := g.getCache[key]; e != nil {
-				body := e.body
-				g.mu.Unlock()
-				return body, nil
-			}
-			g.mu.Unlock()
-			return nil, g.rateLimitError()
-
-		default:
-			err := ghHTTPError("GET", url, resp)
-			resp.Body.Close()
-			return nil, err
-		}
-	}
-}
-
-// getRaw builds and sends an authenticated GET; the caller reads/closes the
-// body. A non-empty etag makes it a conditional request (If-None-Match).
-func (g *githubImpl) getRaw(ctx context.Context, token, url, accept, etag string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", accept)
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if etag != "" {
-		req.Header.Set("If-None-Match", etag)
-	}
-	return g.httpc.Do(req)
-}
-
-func (g *githubImpl) storeCache(key, etag string, body []byte) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if len(g.getCache) >= maxCacheEntries {
-		now := time.Now()
-		for k, e := range g.getCache { // drop expired first
-			if now.Sub(e.fetched) >= g.cacheTTL {
-				delete(g.getCache, k)
-			}
-		}
-		if len(g.getCache) >= maxCacheEntries {
-			g.getCache = map[string]*ghCacheEntry{} // still full: reset
-		}
-	}
-	g.getCache[key] = &ghCacheEntry{etag: etag, body: body, fetched: time.Now()}
-}
-
-// noteRateLimit records the primary rate-limit state from a response's headers.
-func (g *githubImpl) noteRateLimit(resp *http.Response) {
-	rem, err := strconv.Atoi(resp.Header.Get("X-RateLimit-Remaining"))
-	if err != nil {
-		return
-	}
-	g.mu.Lock()
-	g.rlRemaining = rem
-	if s, err := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil {
-		g.rlReset = time.Unix(s, 0)
-	}
-	g.mu.Unlock()
-}
-
-func (g *githubImpl) rateLimitError() error {
-	g.mu.Lock()
-	reset := g.rlReset
-	g.mu.Unlock()
-	if !reset.IsZero() {
-		return fmt.Errorf("github: rate limit reached; resets in %s", time.Until(reset).Round(time.Second))
-	}
-	return fmt.Errorf("github: rate limit reached")
-}
-
-// isRateLimited reports whether a response is a GitHub rate-limit refusal —
-// primary (403 with X-RateLimit-Remaining: 0) or secondary (403/429 with a
-// Retry-After).
-func isRateLimited(resp *http.Response) bool {
-	if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusTooManyRequests {
-		return false
-	}
-	if resp.Header.Get("Retry-After") != "" {
-		return true
-	}
-	return resp.Header.Get("X-RateLimit-Remaining") == "0"
-}
-
-// retryAfter is how long to wait before retrying a rate-limited response, from
-// Retry-After (seconds) or the X-RateLimit-Reset epoch, clamped to a sane bound.
-func retryAfter(resp *http.Response) time.Duration {
-	if ra := resp.Header.Get("Retry-After"); ra != "" {
-		if n, err := strconv.Atoi(strings.TrimSpace(ra)); err == nil && n >= 0 {
-			return time.Duration(n) * time.Second
-		}
-	}
-	if rs := resp.Header.Get("X-RateLimit-Reset"); rs != "" {
-		if s, err := strconv.ParseInt(rs, 10, 64); err == nil {
-			if d := time.Until(time.Unix(s, 0)); d > 0 {
-				return d
-			}
-		}
-	}
-	return 0
-}
-
-func sleepCtx(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-t.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// cacheKey namespaces a cached GET by token (so as:me and as:bot never share)
-// without storing the secret, plus the Accept (diff vs json vs raw differ) and
-// the URL.
-func cacheKey(token, accept, url string) string {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(token))
-	return strconv.FormatUint(h.Sum64(), 36) + "\x00" + accept + "\x00" + url
-}
-
-// ghHTTPError renders a non-2xx GitHub response into an error, surfacing the
-// API's own message when present.
-func ghHTTPError(method, url string, resp *http.Response) error {
-	var msg struct {
-		Message string `json:"message"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&msg)
-	if msg.Message != "" {
-		return fmt.Errorf("%s %s: HTTP %d: %s", method, url, resp.StatusCode, msg.Message)
-	}
-	return fmt.Errorf("%s %s: HTTP %d", method, url, resp.StatusCode)
-}
+// reviewComments is a thin wrapper over githubkit.ReviewComments, kept as a
+// package-level function for github_test.go's direct unit test.
+func reviewComments(v any) ([]map[string]any, error) { return githubkit.ReviewComments(v) }
 
 // --- shared option/filter coercion helpers ---
 
@@ -2164,110 +811,6 @@ func toActors(v any) config.Actors {
 }
 
 // toInt coerces YAML integer shapes.
-// reviewComments coerces the submit_review `comments` option into GitHub review
-// comment objects. Each needs a path + body; line/side/start_line/start_side are
-// passed through when set (a line-based comment defaults to side RIGHT — the new
-// version of the file). GitHub requires every commented line to fall within the
-// PR's diff; a comment outside it makes the whole review 422, so callers should
-// only comment on changed lines. nil/empty is fine — a review with no inline
-// comments, just a summary + verdict.
-func reviewComments(v any) ([]map[string]any, error) {
-	if v == nil {
-		return nil, nil
-	}
-	raw, ok := v.([]any)
-	if !ok {
-		return nil, fmt.Errorf("github.submit_review: comments must be a list of {path, line, body}, got %T", v)
-	}
-	out := make([]map[string]any, 0, len(raw))
-	for i, e := range raw {
-		m, ok := e.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("github.submit_review: comments[%d] must be an object {path, line, body}, got %T", i, e)
-		}
-		path, _ := m["path"].(string)
-		cbody, _ := m["body"].(string)
-		if path == "" || cbody == "" {
-			return nil, fmt.Errorf("github.submit_review: comments[%d] needs a non-empty path and body", i)
-		}
-		c := map[string]any{"path": path, "body": cbody}
-		if n := toInt(m["line"]); n > 0 {
-			c["line"] = n
-		}
-		if s, _ := m["side"].(string); s != "" {
-			c["side"] = s
-		}
-		if n := toInt(m["start_line"]); n > 0 {
-			c["start_line"] = n
-		}
-		if s, _ := m["start_side"].(string); s != "" {
-			c["start_side"] = s
-		}
-		out = append(out, c)
-	}
-	return out, nil
-}
-
-// listAll gathers items across pages of urlFor(page): each page's body goes to
-// add (which decodes + appends and returns that page's item count). It stops on
-// a short page or the page cap. all=false fetches just page 1.
-func (g *githubImpl) listAll(ctx context.Context, token string, all bool, perPage int, urlFor func(page int) string, add func(body []byte) (int, error)) error {
-	maxPages := 1
-	if all {
-		maxPages = 50 // backstop: ~5000 items at perPage 100
-	}
-	for page := 1; page <= maxPages; page++ {
-		b, err := g.cachedGet(ctx, token, urlFor(page), "application/vnd.github+json")
-		if err != nil {
-			return err
-		}
-		n, err := add(b)
-		if err != nil {
-			return err
-		}
-		if n < perPage {
-			return nil
-		}
-	}
-	return nil
-}
-
-// isGistVerb reports whether a verb operates on gists (user-scoped, no repo).
-func isGistVerb(verb string) bool {
-	switch verb {
-	case "create_gist", "get_gist", "update_gist", "delete_gist", "list_gists":
-		return true
-	}
-	return false
-}
-
-// gistFiles turns a {name: content} option map into the gist API's
-// {name: {content}} shape. Returns nil for an empty/absent map.
-func gistFiles(v any) map[string]any {
-	m, ok := v.(map[string]any)
-	if !ok || len(m) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(m))
-	for name, content := range m {
-		s, _ := content.(string)
-		out[name] = map[string]any{"content": s}
-	}
-	return out
-}
-
-// stringFields collects the named options that are present and non-empty into a
-// request body — the shape of a partial PATCH (only send what's being changed).
-func stringFields(opts map[string]any, keys ...string) map[string]any {
-	out := map[string]any{}
-	for _, k := range keys {
-		if s, _ := opts[k].(string); s != "" {
-			out[k] = s
-		}
-	}
-	return out
-}
-
 func toInt(v any) int {
 	switch x := v.(type) {
 	case int:

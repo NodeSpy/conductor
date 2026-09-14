@@ -41,8 +41,9 @@ it is written. Fields the legacy engine never read (rule `workspace:`,
 action `project:`/`method:`, `match.project`/`match.status`) and notify
 events with no delivery sink drop with notes the same way. `${VAR}`
 references survive verbatim (the transform masks them around parsing;
-secrets are never inlined). Carried blocks (`agents:`, `store:`, `update:`,
-…) keep their original YAML, comments included.
+secrets are never inlined). Carried blocks (`store:`, `update:`, …) keep
+their original YAML, comments included; `agents:` is not carried — it is
+converted (see the table below).
 
 If the migration still cannot produce a loadable config, boot **holds
 degraded** instead of crash-looping: the process stays alive, logs the
@@ -69,7 +70,8 @@ binary) unblocks it.
 | `paseo_bin` | the paseo runtime's `bin:` |
 | `control:` (shadow/pause_label/max_concurrent_agents/max_agents_per_hour) | the global `policy:`; an explicit `enabled: false` refuses to migrate (the kill switch is now only the runtime `conductor pause`) |
 | `notify:` (on/via/sinks/digest/push) | triggers on the `conductor.*` lifecycle events, one per enabled event (legacy `escalate` → `conductor.escalate` + `conductor.failed`), whose steps are the sink verbs — generated connectors (`notify-slack`, `notify-ntfy`, …) with byte-identical wire payloads; `digest` → a grouped `conductor.complete` trigger (`group: { window }`); the inert `push` is dropped with a note. The block itself is retired (a standalone pass also rewrites it on already-migrated files) |
-| `agents:`, `store:`, `update:`, `imports:`, `dry_run`, `adopt_open_workspaces` | carried through unchanged |
+| `agents:` | **removed** — the block no longer exists. Each of the five jobs `agents.<name>` was doing moves to a home that is not an agent: `provider`+`model` → `model:` on the step (an exact pin; the migration never invents a fleet), `budget` → the runtime the agent ran on, and the behavior/memory/session/outcome fields → **onto each step that referenced the profile**. There is no registry to move a profile into, so the behavior is INLINED at every site that named it; sites in one file share a YAML anchor parked under `x-migrated:`, sites in different files each get a copy (anchors do not cross `imports:`). The profile table is gathered from the whole import tree first, so a `conf.d/*.yaml` file with references but no `agents:` block of its own still gets them inlined. **Track record survives**: the template is emitted under the OLD agent name, and every step extending it inherits that name as its identity — so outcome stats, engagements and `agent:<name>` memory scopes keep matching what is already on disk |
+| `store:`, `update:`, `imports:`, `dry_run`, `adopt_open_workspaces` | carried through unchanged |
 | `agent_guidance` | folded into `policy.guidance` (the global scope of the guidance cascade) by a standalone pass — see [[Reuse]]; the top-level alias stays accepted |
 
 ## The vaults pass

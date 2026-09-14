@@ -27,8 +27,9 @@ profile to a runtime conductor launches.
 ## Modes
 
 ```yaml
-agents:
-  risky-fixer:
+x-templates:
+  risky-fixer: &risky-fixer
+    type: agent
     runtime: gemini
     isolation:
       mode: user | namespace | container

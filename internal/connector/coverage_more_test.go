@@ -44,8 +44,8 @@ func TestScalarCoercions(t *testing.T) {
 func TestRegistryNamesAndDeclHelpers(t *testing.T) {
 	reg := buildSinkRegistry(t, `
 connectors:
-  b-conn: { type: command }
-  a-conn: { type: cron, schedules: { tick: { every: 1h } } }
+  b-conn: { use: command }
+  a-conn: { use: cron, schedules: { tick: { every: 1h } } }
 `)
 	// The two configured connectors plus the always-on built-ins (kv, sql,
 	// memory, workflow, conductor, blob).
@@ -103,11 +103,11 @@ func TestValidateCallOptions(t *testing.T) {
 func TestVerbOnlyDeclaredEventsAndSources(t *testing.T) {
 	reg := buildSinkRegistry(t, `
 connectors:
-  box: { type: command }
-  alerts: { type: ntfy, topic: t }
-  pager: { type: pushover, token: x, user: u }
-  relay: { type: notifiarr, api_key: k }
-  disc: { type: discord, bot_token: b }
+  box: { use: command }
+  alerts: { use: ntfy, topic: t }
+  pager: { use: pushover, token: x, user: u }
+  relay: { use: notifiarr, api_key: k }
+  disc: { use: discord, bot_token: b }
 `)
 	for _, name := range []string{"box", "alerts", "pager", "relay", "disc"} {
 		in, ok := reg.Get(name)

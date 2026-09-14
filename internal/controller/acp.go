@@ -28,6 +28,7 @@ import (
 // session_model is negotiated: an agent that advertises loadSession is resumable
 // (a session survives by id), otherwise native. Transport is always acp.
 type acpController struct {
+	runner   runnerMemo
 	name     string
 	command  []string // launch argv for the agent subprocess (best-effort default; overridable via `command:`)
 	prov     Provisioner
@@ -38,6 +39,28 @@ type acpController struct {
 
 	mu    sync.Mutex
 	model SessionModel // cached negotiated model (native until an Initialize proves loadSession)
+	// cwds remembers each session's worktree, so session/load can re-root
+	// the agent where the session was working. ResumeSession is handed
+	// only an id — the Controller interface carries no Spec there.
+	cwds map[string]string
+}
+
+func (c *acpController) rememberCwd(id, cwd string) {
+	if id == "" || cwd == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cwds == nil {
+		c.cwds = map[string]string{}
+	}
+	c.cwds[id] = cwd
+}
+
+func (c *acpController) cwdFor(id string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cwds[id]
 }
 
 // acpDialer opens a connection to an ACP agent and returns a Client wired to the
@@ -120,7 +143,9 @@ func (c *acpController) Initialize(ctx context.Context) (Capabilities, error) {
 
 // Runner returns the engine-facing dispatch surface for this controller.
 func (c *acpController) Runner() (Runner, error) {
-	return newControllerRunner(c, c.prov, nil), nil
+	// One runner per controller: its live-agent tracking is the state
+	// the engine's duplicate-dispatch gate reads (see runnerMemo).
+	return c.runner.get(func() Runner { return newControllerRunner(c, c.prov, nil) }), nil
 }
 
 // NewSession launches an ACP agent in the conductor-provisioned worktree, opens a
@@ -141,7 +166,7 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	// its own context, cancelled only by Close — not by the request ctx returning.
 	sctx, scancel := context.WithCancel(context.Background())
 	del := &acpDelegate{handler: h}
-	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Profile.Host, launchOptsFor(c.iso, spec.Request))
+	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Step.Host, launchOptsFor(c.iso, spec.Request))
 	if err != nil {
 		scancel()
 		return nil, err
@@ -157,6 +182,10 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	res, err := client.NewSession(sctx, acp.NewSessionParams{
 		Cwd:        spec.Cwd,
 		McpServers: c.memoryServers(spec),
+		// The RESOLVED model. Empty is a bare launch — the field is
+		// omitted and the agent picks its own. Dropping it here meant an
+		// exact `model:` pin silently ran whatever the tool defaulted to.
+		Model: spec.Request.Model,
 	})
 	if err != nil {
 		cleanup()
@@ -164,6 +193,9 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 		return nil, fmt.Errorf("acp: session/new: %w", err)
 	}
 
+	// Remember where this session lives, so session/load can re-root the
+	// agent in the same worktree on resume.
+	c.rememberCwd(res.SessionID, spec.Cwd)
 	s := &acpSession{
 		id:      res.SessionID,
 		client:  client,
@@ -205,12 +237,33 @@ func (c *acpController) ResumeSession(ctx context.Context, id string, agentAutho
 		scancel()
 		return nil, err
 	}
-	if _, err := client.Initialize(sctx, acp.DefaultInitializeParams(acp.Implementation{
+	init, err := client.Initialize(sctx, acp.DefaultInitializeParams(acp.Implementation{
 		Name: "conductor",
-	})); err != nil {
+	}))
+	if err != nil {
 		cleanup()
 		scancel()
 		return nil, fmt.Errorf("acp: initialize: %w", err)
+	}
+	// THE resume. Without it this function spawned a fresh agent, ran
+	// initialize, and handed back a session id the agent had never been
+	// told about — so every "resumed" turn started from an empty context
+	// while conductor reported the session as continuous. An agent that
+	// does not advertise loadSession cannot be resumed at all, and saying
+	// so beats returning a session that silently forgets.
+	if !init.AgentCapabilities.LoadSession {
+		cleanup()
+		scancel()
+		return nil, fmt.Errorf("acp: %s does not support session/load, so a prior session cannot be resumed: %w", c.name, ErrNoFollowup)
+	}
+	if err := client.LoadSession(sctx, acp.LoadSessionParams{
+		SessionID:  id,
+		Cwd:        c.cwdFor(id),
+		McpServers: []acp.McpServer{},
+	}); err != nil {
+		cleanup()
+		scancel()
+		return nil, fmt.Errorf("acp: session/load %s: %w", id, err)
 	}
 	return &acpSession{id: id, client: client, del: del, cleanup: cleanup, cancel: scancel, ctx: sctx}, nil
 }
@@ -510,3 +563,11 @@ func sendUpdate(ch chan<- Update, u Update) {
 	default:
 	}
 }
+
+// CwdOf and RememberCwd expose the session→worktree map to the broker, which
+// persists it at bind time and hands it back before a post-restart resume —
+// the in-process map is empty after a restart, and resuming with no cwd would
+// root the agent at the daemon's own directory instead of the worktree.
+func (c *acpController) CwdOf(sessionID string) string { return c.cwdFor(sessionID) }
+
+func (c *acpController) RememberCwd(sessionID, cwd string) { c.rememberCwd(sessionID, cwd) }

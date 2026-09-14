@@ -31,7 +31,7 @@ var blobDecl = &TypeDecl{
 		{
 			Name: "put", Desc: "store a file (or inline text) as a run-scoped blob",
 			Options: Schema{
-				"path":       {Type: TString, Desc: "local file to ingest (mutually exclusive with text)"},
+				"path":       {Type: TString, Scope: "path", Desc: "local file to ingest (mutually exclusive with text)"},
 				"text":       {Type: TString, Desc: "inline content to store"},
 				"name":       {Type: TString, Desc: "artifact name (defaults to the file's base name)"},
 				"media_type": {Type: TString, Desc: "MIME type (informational)"},
@@ -46,7 +46,7 @@ var blobDecl = &TypeDecl{
 			Name: "get", Desc: "write a blob's bytes to a local path (e.g. into an agent's worktree)",
 			Options: Schema{
 				"blob": {Type: TAny, Required: true, Desc: "a blob handle (or its sha256:… digest)"},
-				"path": {Type: TString, Required: true, Desc: "destination file (parent dirs created)"},
+				"path": {Type: TString, Required: true, Scope: "path", Desc: "destination file (parent dirs created)"},
 			},
 			Outputs: Schema{
 				"path": {Type: TString},

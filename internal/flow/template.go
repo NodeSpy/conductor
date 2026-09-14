@@ -88,11 +88,7 @@ var templateFuncs = template.FuncMap{
 		}
 		q := memory.Query{}
 		if s := fmt.Sprint(args[0]); s != "" {
-			resolved, err := memory.ResolveScope(s, memory.Source{})
-			if err != nil {
-				return "", err
-			}
-			q.Scopes = []string{resolved}
+			q.Scopes = []string{memory.NormalizeScope(s)}
 		}
 		switch n := args[1].(type) {
 		case int:

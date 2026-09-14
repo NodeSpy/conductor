@@ -50,10 +50,17 @@ engagement consumed, no workflow rot.
   across restarts; the line is omitted while there is no history.
 
 ```yaml
-agents:
-  fixer:
-    outcome_feedback: true
+x-templates:
+  fixer: &fixer
+    type: agent
+    outcome_feedback: true      # append THIS step's track record to its prompt
+    # outcome_key: reviewers    # …or pool several steps onto one record
 ```
+
+The record is keyed by the step's stable **identity** (or an explicit
+`outcome_key`), not by an agent name — see [[Steps]]. Because the identity
+survives restarts and prompt edits, the feedback still matches a step to its
+own past outcomes.
 
 ## The agent-quality view
 

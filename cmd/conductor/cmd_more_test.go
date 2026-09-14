@@ -28,8 +28,8 @@ func TestCmdValidate(t *testing.T) {
 	// A connectors config validates through the flow stack too.
 	os.WriteFile(path, []byte(`
 connectors:
-  timer: { type: cron, schedules: { tick: { every: 1h } } }
-  box: { type: command }
+  timer: { use: cron, schedules: { tick: { every: 1h } } }
+  box: { use: command }
 triggers:
   - on: timer.tick
     steps: [{ id: t, uses: box.run, options: { command: "true" } }]
@@ -40,7 +40,7 @@ triggers:
 	// A broken reference fails.
 	os.WriteFile(path, []byte(`
 connectors:
-  timer: { type: cron, schedules: { tick: { every: 1h } } }
+  timer: { use: cron, schedules: { tick: { every: 1h } } }
 triggers:
   - on: timer.nope
     steps: [{ id: t, type: command, command: [x] }]

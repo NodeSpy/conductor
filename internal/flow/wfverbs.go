@@ -153,13 +153,13 @@ func (r *Runner) workflowSave(ctx context.Context, t core.Trigger, opts map[stri
 		return map[string]any{"name": name, "reviewed": false, "stubbed": true}, nil
 	}
 	src := memory.SourceFrom(ctx)
-	src.Agent = planAuthor(data)
+	src.Step = planAuthor(data)
 	w, err := st.Save(name, desc, steps, src)
 	if err != nil {
 		return nil, err
 	}
 	r.audit(map[string]any{"event": "workflow_save", "repo": t.Target.Repo, "number": t.Target.Number,
-		"kind": t.Kind, "agent": src.Agent, "workflow": w.Name, "version": w.Version, "steps": len(steps)})
+		"kind": t.Kind, "agent": src.Step, "workflow": w.Name, "version": w.Version, "steps": len(steps)})
 	return map[string]any{"name": w.Name, "version": w.Version, "reviewed": w.Reviewed}, nil
 }
 

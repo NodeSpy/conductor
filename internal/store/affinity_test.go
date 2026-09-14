@@ -22,13 +22,13 @@ func TestAffinityPersistence(t *testing.T) {
 	s := open()
 	created := time.Date(2026, 9, 5, 10, 0, 0, 0, time.UTC)
 	ref := controller.AffinityRef{
-		Agent: "reviewer", Key: "o/r#7", Controller: "paseo", SessionID: "agent-9",
+		Runtime: "reviewer", Key: "o/r#7", Controller: "paseo", SessionID: "agent-9",
 		Created: created, LastUsed: created.Add(time.Hour),
 	}
 	if err := s.PutAffinity(ref); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutAffinity(controller.AffinityRef{Agent: "reviewer", Key: "o/r#8", Controller: "paseo", SessionID: "agent-10", Created: created, LastUsed: created}); err != nil {
+	if err := s.PutAffinity(controller.AffinityRef{Runtime: "reviewer", Key: "o/r#8", Controller: "paseo", SessionID: "agent-10", Created: created, LastUsed: created}); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -49,10 +49,10 @@ func TestAffinityPersistence(t *testing.T) {
 	}
 
 	// Delete persists too.
-	if err := s.DeleteAffinity("reviewer", "o/r#7"); err != nil {
+	if err := s.DeleteAffinity("reviewer", "", "o/r#7"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteAffinity("reviewer", "nope"); err != nil {
+	if err := s.DeleteAffinity("reviewer", "", "nope"); err != nil {
 		t.Fatal(err) // absent delete is a no-op
 	}
 	s.Close()

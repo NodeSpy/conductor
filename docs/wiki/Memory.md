@@ -113,14 +113,21 @@ stamps `run`/`trigger`/`repo` on every step and hook.
 An agent gets memory in its prompt only when its profile asks:
 
 ```yaml
-agents:
-  fixer:
-    provider: claude
-    memory: true                                    # defaults: global + target repo + own agent scope
-  reviewer:
-    provider: claude
-    memory: { scopes: [global, repo], tags: [ci], limit: 10 }
+x-templates:
+  fixer: &fixer
+    type: agent
+    memory: true                                    # the shared set + this run's context keys
+  reviewer: &reviewer
+    type: agent
+    memory: { scopes: ["${repo}", "${step}"], tags: [ci], limit: 10 }
 ```
+
+Scope keys are **opaque strings** the memory core never interprets — there
+are no `repo`/`agent` scope TYPES. The engine supplies the run's context keys
+by convention (the repo string, the workflow name, the step identity), and
+`${repo}` / `${workflow}` / `${step}` are sugar it expands. The opt-in gates
+writing as well as reading: a step that did not ask for memory cannot harvest
+its output into the shared store.
 
 `memory: true` injects the global, target-repo, and the agent's own scoped
 memories (newest first, capped at 20) through the same append path

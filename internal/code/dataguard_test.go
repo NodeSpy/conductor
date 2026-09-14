@@ -57,9 +57,12 @@ func run(ctx map[string]any) (any, error) {
 	}
 
 	// memory via risor: remember with the secret is refused.
+	// A NAMED scope, so this exercises the secret barrier specifically —
+	// "global" would be refused one layer earlier by the reserved-bucket
+	// rule and the assertion below would pass without the guard running.
 	tempMem(t)
 	_, err = e.Exec(context.Background(), Spec{Run: "risor", DataGuard: guard, Code: `
-memory.remember(ctx.leak, [], "global")`}, map[string]any{"leak": secret})
+memory.remember(ctx.leak, [], "acme/infra")`}, map[string]any{"leak": secret})
 	if err == nil || !strings.Contains(err.Error(), "no_secret_egress") {
 		t.Fatalf("risor memory.remember of a secret must be refused: %v", err)
 	}

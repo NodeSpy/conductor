@@ -25,9 +25,9 @@ func LintPackDir(dir string) ([]string, error) {
 
 // LintPackManifest checks a pack is well-formed (§18) and returns a list of
 // human-readable problems (empty when clean). It validates: identity present,
-// no bind-only sections shipped, requires.conductor declared, exports resolve,
-// requires.roles correspond to bundled agents, triggers are named, and every
-// ${settings.NAME} reference is a declared setting.
+// no bind-only sections shipped, requires.conductor declared, exports
+// resolve, skill grants stay inside requires.connectors, triggers are named,
+// and every ${settings.NAME} reference is a declared setting.
 func LintPackManifest(man *PackManifest) []string {
 	var problems []string
 
@@ -50,17 +50,9 @@ func LintPackManifest(man *PackManifest) []string {
 			problems = append(problems, fmt.Sprintf("exports.workflows: %q names no workflow defined by the pack", w))
 		}
 	}
-	for _, a := range man.Exports.Agents {
-		if _, ok := man.Agents[a]; !ok {
-			problems = append(problems, fmt.Sprintf("exports.agents: %q names no agent defined by the pack", a))
-		}
-	}
-
-	// requires.roles should correspond to a bundled agent (so it can be
-	// defaulted / overridden / bound).
-	for role := range man.Pack.Requires.Roles {
-		if _, ok := man.Agents[role]; !ok {
-			problems = append(problems, fmt.Sprintf("requires.roles: %q has no bundled agent of that name", role))
+	for _, a := range man.Exports.Steps {
+		if _, err := man.FindPackStep(a); err != nil {
+			problems = append(problems, fmt.Sprintf("exports.steps: %v", err))
 		}
 	}
 
@@ -70,6 +62,18 @@ func LintPackManifest(man *PackManifest) []string {
 			problems = append(problems, fmt.Sprintf("triggers[%d]: a shipped trigger must have a name (so it can be armed)", i))
 		}
 	}
+
+	// A pack may only grant its agents access to connectors it DECLARED
+	// (§C): requires.connectors is the capability boundary, not just a list
+	// of sockets.
+	problems = append(problems, lintPackSkillGrants(man)...)
+	// …and the SAME boundary for every other reference a pack authors: a
+	// plain step's `uses:`, a hook's, a trigger's source, a session's
+	// end_on, a store selector. skill.verbs was bounded and these were not,
+	// so a pack could simply write `uses: gh.comment` and reach whatever the
+	// consumer called `gh`.
+	problems = append(problems, checkPackConnectorRefs(man)...)
+	problems = append(problems, checkPackStoreRefs(man)...)
 
 	problems = append(problems, lintSettingsRefs(man)...)
 	sort.Strings(problems)

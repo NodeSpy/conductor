@@ -20,7 +20,10 @@ import (
 // tamper-evident on `update` (§11).
 const LockfileName = "conductor.lock.yaml"
 
-// Lockfile is the resolved pack graph.
+// Lockfile is the resolved pack graph. It records PACKS only: a pack is config,
+// and config belongs in the repo. Plugins are installed BINARIES, and which
+// build is installed is a property of the machine — that lives in local install
+// state under the state dir instead (internal/plugin.InstallState).
 type Lockfile struct {
 	Version int         `yaml:"version"`
 	Packs   []LockEntry `yaml:"packs"`
@@ -67,17 +70,10 @@ func parseSource(src, baseDir string) (sourceSpec, error) {
 	if s == "" {
 		return sourceSpec{}, fmt.Errorf("empty pack source")
 	}
-	forceGit := false
-	if rest, ok := strings.CutPrefix(s, "git::"); ok {
-		forceGit = true
+	rest, isGit := RemoteSourceRef(s)
+	if isGit {
 		s = rest
 	}
-	isGit := forceGit ||
-		strings.HasPrefix(s, "github.com/") ||
-		strings.HasPrefix(s, "git@") ||
-		strings.HasPrefix(s, "ssh://") ||
-		strings.HasPrefix(s, "https://") ||
-		strings.HasPrefix(s, "http://")
 	if !isGit {
 		// Local path source.
 		p := strings.TrimPrefix(s, "file://")
@@ -128,6 +124,52 @@ func parseSource(src, baseDir string) (sourceSpec, error) {
 		return sourceSpec{}, fmt.Errorf("pack source %q: unsupported git transport — use https://, ssh://, file://, or git@host:path (plaintext http:// and git:// are refused — an unauthenticated fetch can't be safely sha-pinned)", src)
 	}
 	return spec, nil
+}
+
+// RemoteSourceRef is THE classifier for "would conductor FETCH this source,
+// and what reference does that fetch name" — used by the resolver to decide
+// whether to clone, and by the pack_trust/plugin_trust allowlists to decide
+// whether the source needs permission. ONE function, two callers, so the two
+// answers cannot disagree.
+//
+// They did disagree, and it was a bypass. The trust check used to strip
+// `git::` and re-classify with its own prefix list; the resolver FORCE-GITS
+// anything prefixed `git::` and its transport allowlist accepts any scp-form
+// `user@host:path`. So:
+//
+//	git::attacker@shorthost:org/evil-payload
+//
+// was "not remote → allowlist skipped → allowed" by trust, and a cloneable
+// SSH URL to the resolver. A hostile pack's requires.packs.<alias>.source rode
+// straight past pack_trust.
+//
+// FAIL CLOSED. Only a source that is UNAMBIGUOUSLY a local path is exempt:
+//
+//	./x  ../x  /abs/x  ~/x  file:///abs/x
+//
+// Everything else is remote — the known schemes and shorthands, the scp form,
+// and any shape this function does not recognize. An unrecognized remote must
+// end up MORE restricted, never less, so "I don't know what this is" resolves
+// to "it needs to be on the allowlist" rather than "let it through".
+//
+// `file://` without `git::` is an absolute local path (the resolver strips the
+// prefix and reads the directory); `git::file://` is a real clone of a repo on
+// disk, so it is remote and needs listing like any other fetch.
+func RemoteSourceRef(src string) (ref string, remote bool) {
+	s := strings.TrimSpace(src)
+	if s == "" {
+		return "", false
+	}
+	// Force-git wins over everything, exactly as the resolver applies it.
+	if rest, ok := strings.CutPrefix(s, "git::"); ok {
+		return strings.TrimSpace(rest), true
+	}
+	for _, p := range []string{"./", "../", "/", "~", "file://"} {
+		if strings.HasPrefix(s, p) {
+			return "", false
+		}
+	}
+	return s, true
 }
 
 // safeGitTransport reports whether a git URL uses an allowed transport. Only
@@ -238,11 +280,25 @@ func resolvePacks(configPath string, allowUnlisted bool) (*Lockfile, error) {
 	if len(packs) == 0 {
 		return &Lockfile{Version: 1}, nil
 	}
+	// `packs:` key-implies-`use:` — the same lowering config.Load does, so
+	// resolve and instantiate see identical sources.
+	if err := applyPackSourceDefaults(packs); err != nil {
+		return nil, err
+	}
 	vendor := packVendorDir(dir)
 	if err := os.MkdirAll(vendor, 0o755); err != nil {
 		return nil, err
 	}
-	r := &resolver{configDir: dir, lock: &Lockfile{Version: 1}, trust: trust, allowUnlisted: allowUnlisted}
+	// Carry forward the previous lock: its plugin section is preserved (packs
+	// don't own it) and its pack revisions back per-instance `hold:`.
+	prevLock, _ := ReadLockfile(dir)
+	prev := map[string]LockEntry{}
+	if prevLock != nil {
+		for _, e := range prevLock.Packs {
+			prev[e.Instance] = e
+		}
+	}
+	r := &resolver{configDir: dir, lock: &Lockfile{Version: 1}, trust: trust, allowUnlisted: allowUnlisted, prev: prev}
 	for _, name := range sortedPackKeys(packs) {
 		if !validPackAlias(name) {
 			return nil, fmt.Errorf("pack instance name %q is invalid (letters, digits, '-', '_' only)", name)
@@ -252,6 +308,8 @@ func resolvePacks(configPath string, allowUnlisted bool) (*Lockfile, error) {
 		}
 	}
 	sort.Slice(r.lock.Packs, func(i, j int) bool { return r.lock.Packs[i].Instance < r.lock.Packs[j].Instance })
+	if prevLock != nil {
+	}
 	if err := writeLockfile(dir, r.lock); err != nil {
 		return nil, err
 	}
@@ -264,6 +322,7 @@ type resolver struct {
 	total         int
 	trust         *PackTrustConfig
 	allowUnlisted bool
+	prev          map[string]LockEntry // previous lock, by instance — for `hold:`
 }
 
 func (r *resolver) resolve(chain, nameChain []string, inst PackInstance, destDir string) error {
@@ -291,6 +350,28 @@ func (r *resolver) resolve(chain, nameChain []string, inst PackInstance, destDir
 	if len(chain) > 1 && !spec.git {
 		if !withinDir(r.configDir, spec.local) {
 			return fmt.Errorf("pack %q: dependency local source %q escapes the config directory — use a remote source or a path inside the project", ns, inst.Source)
+		}
+	}
+	// Version constraints (#59): an unpinned git source (no @ref) with a
+	// `version:` constraint resolves to the highest matching tag. A hard @ref
+	// pin wins; a bare unpinned/unconstrained source still tracks HEAD. A held
+	// instance re-pins to its previously-locked revision instead of re-resolving,
+	// so auto-update leaves it frozen (an explicit `pack update` clears the hold
+	// path by carrying no prior lock for a changed source).
+	if spec.git && spec.ref == "" {
+		if inst.Hold {
+			if p, ok := r.prev[ns]; ok && p.Resolved != "" && p.Resolved != "local" {
+				spec.ref = p.Resolved
+			}
+		}
+		if spec.ref == "" {
+			if c := strings.TrimSpace(inst.Version); c != "" {
+				tag, err := resolveVersionTag(spec, c)
+				if err != nil {
+					return fmt.Errorf("pack %q: %w", ns, err)
+				}
+				spec.ref = tag
+			}
 		}
 	}
 	resolved := "local"
@@ -348,7 +429,14 @@ func (r *resolver) resolve(chain, nameChain []string, inst PackInstance, destDir
 			}
 		}
 		if child.Source == "" {
-			return fmt.Errorf("pack %q: dependency %q has no source (set packs.%s.source or requires.packs.%s.source)", ns, alias, alias, alias)
+			// Neither the instance block nor the parent's requires.packs
+			// named a source: fall back to the dependency's own `use:`, then
+			// to its alias (the official pack repo).
+			src, err := packDependencySource(alias, child.Use)
+			if err != nil {
+				return fmt.Errorf("pack %q: dependency %q: %w (set packs.%s.use or requires.packs.%s.source)", ns, alias, err, alias, alias)
+			}
+			child.Source = src
 		}
 		if err := r.resolve(
 			append(append([]string{}, chain...), alias),
@@ -377,6 +465,42 @@ func fetchLocal(spec sourceSpec, destDir string) error {
 		return err
 	}
 	return copyTree(src, destDir)
+}
+
+// resolveVersionTag lists the source repo's tags and returns the highest one
+// satisfying the version constraint. For a //subdir source the tags are
+// component-prefixed (`<subdir>/vX.Y.Z`, so one monorepo can version many
+// packs); otherwise they are plain (`vX.Y.Z`).
+func resolveVersionTag(spec sourceSpec, constraint string) (string, error) {
+	out, err := runGit("", "ls-remote", "--tags", "--refs", "--", spec.gitURL)
+	if err != nil {
+		return "", fmt.Errorf("list tags for %s: %s", spec.gitURL, strings.TrimSpace(out))
+	}
+	prefix := ""
+	if spec.subdir != "" {
+		prefix = spec.subdir + "/"
+	}
+	tags := parseLsRemoteTags(out)
+	tag, ok := bestMatch(tags, prefix, constraint)
+	if !ok {
+		return "", fmt.Errorf("no tag satisfies version %q (looked for %q<semver> among %d tags at %s)", constraint, prefix, len(tags), spec.gitURL)
+	}
+	return tag, nil
+}
+
+// parseLsRemoteTags extracts tag names from `git ls-remote --tags --refs`
+// output (lines of "<sha>\trefs/tags/<name>").
+func parseLsRemoteTags(out string) []string {
+	const marker = "refs/tags/"
+	var tags []string
+	for _, line := range strings.Split(out, "\n") {
+		if i := strings.Index(line, marker); i >= 0 {
+			if name := strings.TrimSpace(line[i+len(marker):]); name != "" {
+				tags = append(tags, name)
+			}
+		}
+	}
+	return tags
 }
 
 // fetchGit clones a pack with the minimal-fetch flags (repo hygiene / §12) and
@@ -629,7 +753,11 @@ func loadPacksBlock(path string) (map[string]PackInstance, *PackTrustConfig, err
 	}
 	var doc []byte
 	if hasAnyImports(probe) {
-		merged, err := loadMerged(path, map[string]bool{})
+		// Pack RESOLUTION only needs the `packs:` block, which cannot itself
+		// be settings-parameterized (a setting that decided which pack to
+		// fetch would make the lockfile depend on the environment), so this
+		// walk substitutes nothing.
+		merged, err := loadMerged(path, map[string]bool{}, nil)
 		if err != nil {
 			return nil, nil, err
 		}

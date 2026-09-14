@@ -25,11 +25,16 @@ runtime:
 runtimes:
   gemini: { agent: gemini }            # isolation applies to runtimes conductor launches itself
 
-agents:
-  architect:   { provider: claude, model: claude-opus-4 }
-  implementer: { runtime: gemini, workspace: worktree,
-                 isolation: { mode: namespace, network: { egress: ["api.github.com:443"] } } }
-  reviewer:    { provider: claude }
+# A team's roles are STEP REFERENCES, so the steps they name have to live
+# somewhere addressable. A workflow nothing calls is the usual home — the
+# roles are dispatched by the team, not by the workflow.
+workflows:
+  roles:
+    steps:
+      - { id: architect,   type: agent, model: claude-opus-5, prompt: "…" }
+      - { id: implementer, type: agent, runtime: gemini, workspace: worktree, prompt: "…",
+          isolation: { mode: namespace, network: { egress: ["api.github.com:443"] } } }
+      - { id: reviewer,    type: agent, prompt: "…" }
 
 triggers:
   - on: gh.issue_matched
@@ -38,10 +43,10 @@ triggers:
       - id: feature
         prompt: "Implement the feature described in {{.url}}: {{.title}}"
         team:
-          planner: architect
-          worker: implementer
-          critic: reviewer            # optional judge per worker (gate machinery)
-          reconcile: architect        # optional; defaults to the planner
+          planner: roles/architect
+          worker: roles/implementer
+          critic: roles/reviewer      # optional judge per worker (gate machinery)
+          reconcile: roles/architect  # optional; defaults to the planner
           max_workers: 4              # subtask cap AND parallelism bound (1..16)
           gate: { run: [ test ] }     # optional explicit checks per worker
         gate: { run: [ test, lint ] } # the STEP's gate applies to the reconciler's merged change

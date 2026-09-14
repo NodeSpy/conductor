@@ -55,7 +55,7 @@ func TestNtfyPublish(t *testing.T) {
 	var cap sinkCapture
 	srv := sinkServer(&cap)
 	defer srv.Close()
-	reg := buildSinkRegistry(t, "connectors:\n  n: { type: ntfy, server: "+srv.URL+", topic: alerts }\n")
+	reg := buildSinkRegistry(t, "connectors:\n  n: { use: ntfy, server: "+srv.URL+", topic: alerts }\n")
 	in, _ := reg.Get("n")
 	out, err := in.Invoke(context.Background(), "publish", map[string]any{"title": "conductor", "message": "hello"})
 	if err != nil || out["ok"] != true {
@@ -72,7 +72,7 @@ func TestNtfyPublish(t *testing.T) {
 		t.Fatalf("topic override: %s", cap.path)
 	}
 	// No topic anywhere: a clear error.
-	reg2 := buildSinkRegistry(t, "connectors:\n  n: { type: ntfy, server: "+srv.URL+" }\n")
+	reg2 := buildSinkRegistry(t, "connectors:\n  n: { use: ntfy, server: "+srv.URL+" }\n")
 	in2, _ := reg2.Get("n")
 	if _, err := in2.Invoke(context.Background(), "publish", map[string]any{"message": "x"}); err == nil || !strings.Contains(err.Error(), "no topic") {
 		t.Fatalf("want no-topic error, got %v", err)
@@ -84,7 +84,7 @@ func TestPushoverNotify(t *testing.T) {
 	srv := sinkServer(&cap)
 	defer srv.Close()
 	t.Setenv("PC_PUSHOVER_URL", srv.URL+"/msg")
-	reg := buildSinkRegistry(t, "connectors:\n  p: { type: pushover, token: tok1, user: usr1 }\n")
+	reg := buildSinkRegistry(t, "connectors:\n  p: { use: pushover, token: tok1, user: usr1 }\n")
 	in, _ := reg.Get("p")
 	if _, err := in.Invoke(context.Background(), "notify", map[string]any{"message": "hi there"}); err != nil {
 		t.Fatal(err)
@@ -96,7 +96,7 @@ func TestPushoverNotify(t *testing.T) {
 		t.Fatalf("content type: %s", cap.ctype)
 	}
 	// Missing creds → disabled connector via Validate.
-	reg2 := buildSinkRegistry(t, "connectors:\n  p: { type: pushover }\n")
+	reg2 := buildSinkRegistry(t, "connectors:\n  p: { use: pushover }\n")
 	in2, _ := reg2.Get("p")
 	if in2.DisabledReason == "" {
 		t.Fatal("token/user-less pushover should be disabled")
@@ -108,7 +108,7 @@ func TestNotifiarrNotify(t *testing.T) {
 	srv := sinkServer(&cap)
 	defer srv.Close()
 	t.Setenv("PC_NOTIFIARR_URL", srv.URL)
-	reg := buildSinkRegistry(t, "connectors:\n  nf: { type: notifiarr, api_key: key9, channel_id: \"42\" }\n")
+	reg := buildSinkRegistry(t, "connectors:\n  nf: { use: notifiarr, api_key: key9, channel_id: \"42\" }\n")
 	in, _ := reg.Get("nf")
 	if _, err := in.Invoke(context.Background(), "notify", map[string]any{"text": "alert body"}); err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestSlackWebhookOnlyPost(t *testing.T) {
 	var cap sinkCapture
 	srv := sinkServer(&cap)
 	defer srv.Close()
-	reg := buildSinkRegistry(t, "connectors:\n  s: { type: slack, webhook_url: "+srv.URL+"/hook }\n")
+	reg := buildSinkRegistry(t, "connectors:\n  s: { use: slack, webhook_url: "+srv.URL+"/hook }\n")
 	in, _ := reg.Get("s")
 	if in.DisabledReason != "" {
 		t.Fatalf("webhook-only slack should validate: %s", in.DisabledReason)
@@ -151,7 +151,7 @@ func TestDiscordWebhookOnlyPost(t *testing.T) {
 	var cap sinkCapture
 	srv := sinkServer(&cap)
 	defer srv.Close()
-	reg := buildSinkRegistry(t, "connectors:\n  d: { type: discord, webhook_url: "+srv.URL+"/hook }\n")
+	reg := buildSinkRegistry(t, "connectors:\n  d: { use: discord, webhook_url: "+srv.URL+"/hook }\n")
 	in, _ := reg.Get("d")
 	if in.DisabledReason != "" {
 		t.Fatalf("webhook-only discord should validate: %s", in.DisabledReason)

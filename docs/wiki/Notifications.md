@@ -25,8 +25,8 @@ originating work's kind), `{{.title}}`; the update events add
 
 ```yaml
 connectors:
-  alerts: { type: ntfy, topic: your-topic }
-  pager:  { type: pushover, token: ${PUSHOVER_TOKEN}, user: ${PUSHOVER_USER} }
+  alerts: { use: ntfy, topic: your-topic }
+  pager:  { use: pushover, token: ${PUSHOVER_TOKEN}, user: ${PUSHOVER_USER} }
 
 triggers:
   - name: act-now

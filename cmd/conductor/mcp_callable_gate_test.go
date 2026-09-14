@@ -22,7 +22,7 @@ func gateCfg(t *testing.T) *config.Config {
 	doc := `
 store: { state_file: ` + filepath.Join(dir, "state.json") + ` }
 connectors:
-  box: { type: command }
+  box: { use: command }
 triggers:
   - name: deploy
     on: manual

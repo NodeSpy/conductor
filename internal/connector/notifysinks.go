@@ -32,7 +32,7 @@ var ntfyDecl = &TypeDecl{
 	Verbs: []VerbDecl{{
 		Name: "publish", Desc: "publish a message to a topic",
 		Options: Schema{
-			"topic":   {Type: TString, Desc: "topic (default: the connection's)"},
+			"topic":   {Type: TString, Scope: "topic", Desc: "topic (default: the connection's)"},
 			"title":   {Type: TString, Desc: "the Title header"},
 			"message": {Type: TString, Required: true},
 		},
@@ -68,7 +68,7 @@ var notifiarrDecl = &TypeDecl{
 		Name: "notify", Desc: "send a passthrough notification",
 		Options: Schema{
 			"text":       {Type: TString, Required: true},
-			"channel_id": {Type: TString, Desc: "Discord channel id (default: the connection's)"},
+			"channel_id": {Type: TString, Scope: "channel", Desc: "Discord channel id (default: the connection's)"},
 		},
 		Outputs: Schema{"ok": {Type: TBool}},
 	}},

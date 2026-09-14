@@ -42,7 +42,7 @@ func writeVaultCLIConfig(t *testing.T) (cfgPath, vaultPath string) {
 	cfgPath = filepath.Join(dir, "config.yaml")
 	doc := `
 connectors:
-  box: { type: command }
+  box: { use: command }
 vaults:
   house: { type: conductor, path: ` + vaultPath + `, unlock: { key: "cli-test-passphrase" } }
   files: { type: file, dir: ` + fdir + ` }

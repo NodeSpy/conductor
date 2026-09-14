@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/plugin"
 )
 
 // cmdInit resolves everything declared in `packs:` (fetch sources, recurse
@@ -32,23 +33,66 @@ func cmdInit(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(lock.Packs) == 0 {
-		fmt.Println("no packs: block — nothing to initialize")
+	// Resolve remote plugins (release-asset fetch) in the same step.
+	nPlugins, err := resolvePluginsForInit(path, allowUnlisted)
+	if err != nil {
+		return err
+	}
+	if len(lock.Packs) == 0 && nPlugins == 0 {
+		fmt.Println("no packs: or remote plugins: block — nothing to initialize")
 		return nil
 	}
-	fmt.Printf("resolved %d pack(s) into %s\n", len(lock.Packs), config.LockfileName)
-	for _, e := range lock.Packs {
-		fmt.Printf("  %-24s %s@%s (%s)\n", e.Instance, e.Name, orNone(e.Version), e.Resolved)
+	if len(lock.Packs) > 0 {
+		fmt.Printf("resolved %d pack(s) into %s\n", len(lock.Packs), config.LockfileName)
+		for _, e := range lock.Packs {
+			fmt.Printf("  %-24s %s@%s (%s)\n", e.Instance, e.Name, orNone(e.Version), e.Resolved)
+		}
+		fmt.Println()
 	}
-	fmt.Println()
 	// Load the config so the instantiated effect can be previewed.
 	cfg, err := config.Load(path)
 	if err != nil {
-		return fmt.Errorf("packs resolved, but loading the instantiated config failed: %w", err)
+		return fmt.Errorf("resolved, but loading the config failed: %w", err)
 	}
-	printPackPlan(cfg)
+	if len(lock.Packs) > 0 {
+		printPackPlan(cfg)
+	}
 	fmt.Println("\nnext: arm a pack trigger (enabled + repos) in your config, then `conductor validate`")
 	return nil
+}
+
+// resolvePluginsForInit reconciles local install state against every plugin the
+// config references (`use:` that did not resolve to a builtin): fetches what is
+// missing, re-resolves what is not pinned, records each permission manifest, and
+// prints a line per plugin. Returns the count it touched.
+//
+// This is the app-extension "declare it and it is there" step: the operator
+// wrote `use: sentry` and ran `conductor init`; everything else is conductor's
+// job.
+func resolvePluginsForInit(path string, allowUnlisted bool) (int, error) {
+	cfg, err := config.Load(path)
+	if err != nil {
+		return 0, err
+	}
+	results, err := reconcilePlugins(cfg, plugin.Options{AllowUnlisted: allowUnlisted, Log: logf})
+	if err != nil {
+		return 0, err
+	}
+	if len(results) > 0 {
+		if perr := printResolutions(results); perr != nil {
+			return len(results), perr
+		}
+		fmt.Println()
+	}
+	return len(results), nil
+}
+
+// shortSha abbreviates a hex sha for a preview line.
+func shortSha(s string) string {
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
 }
 
 // cmdPack is the author/operator surface: list | plan | lint | show.
@@ -95,9 +139,9 @@ func cmdPackAdd(args []string) error {
 	m := man.Pack
 	fmt.Printf("%s v%s — %s\n", m.Name, m.Version, m.Description)
 	fmt.Println("\ninstall review:")
-	for _, a := range sortedAgentNames(man.Agents) {
-		if s := man.Agents[a].Skill; s != nil && (len(s.Verbs) > 0 || len(s.AllowSecrets) > 0) {
-			fmt.Printf("  agent %s", a)
+	man.WalkPackSteps(func(where string, st *config.Step) {
+		if s := st.Skill; s != nil && (len(s.Verbs) > 0 || len(s.AllowSecrets) > 0) {
+			fmt.Printf("  step %s", where)
 			if len(s.Verbs) > 0 {
 				fmt.Printf("  !! skill: %s", strings.Join(s.Verbs, ", "))
 			}
@@ -106,7 +150,7 @@ func cmdPackAdd(args []string) error {
 			}
 			fmt.Println()
 		}
-	}
+	})
 	for _, tr := range man.Triggers {
 		fmt.Printf("  ships trigger %q on:%s (disarmed — you arm it)\n", tr.Name, tr.On)
 	}
@@ -117,7 +161,7 @@ func cmdPackAdd(args []string) error {
 	if m.Version != "" {
 		fmt.Printf("    version: %s\n", m.Version)
 	}
-	for _, c := range m.Requires.Connectors {
+	for _, c := range m.Requires.Connectors.Names() {
 		fmt.Printf("    connectors: { %s: <your-connector> }\n", c)
 	}
 	for _, s := range m.Requires.Stores {
@@ -226,7 +270,7 @@ func short(s string) string {
 	return s
 }
 
-func sortedAgentNames(m map[string]config.AgentProfile) []string {
+func sortedAgentNames(m map[string]config.Step) []string {
 	out := make([]string, 0, len(m))
 	for n := range m {
 		out = append(out, n)
@@ -298,19 +342,29 @@ func printPackPlan(cfg *config.Config) {
 		fmt.Printf("pack %q adds:\n", ns)
 		prefix := ns + "/"
 
+		// A pack's steps live in its workflows now, so its grants are
+		// reported per addressable step rather than per registry entry.
 		var agents, workflows, checks []string
-		for name := range cfg.Agents {
-			if strings.HasPrefix(name, prefix) {
-				grant := ""
-				if p := cfg.Agents[name]; p.Skill != nil {
-					if len(p.Skill.Verbs) > 0 {
-						grant += "  !! grants skill: " + strings.Join(p.Skill.Verbs, ", ")
-					}
-					if len(p.Skill.AllowSecrets) > 0 {
-						grant += "  !! may read secrets: " + strings.Join(p.Skill.AllowSecrets, ", ")
-					}
+		for name := range cfg.Workflows {
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			wf := cfg.Workflows[name]
+			for i := range wf.Steps {
+				p := wf.Steps[i]
+				if p.Skill == nil {
+					continue
 				}
-				agents = append(agents, name+grant)
+				grant := ""
+				if len(p.Skill.Verbs) > 0 {
+					grant += "  !! grants skill: " + strings.Join(p.Skill.Verbs, ", ")
+				}
+				if len(p.Skill.AllowSecrets) > 0 {
+					grant += "  !! may read secrets: " + strings.Join(p.Skill.AllowSecrets, ", ")
+				}
+				if grant != "" {
+					agents = append(agents, name+"/"+config.StepSlot(p, i)+grant)
+				}
 			}
 		}
 		for name := range cfg.Workflows {
@@ -403,21 +457,23 @@ func cmdPackShow(args []string) error {
 	if m.Requires.Conductor != "" {
 		fmt.Printf("  conductor: %s\n", m.Requires.Conductor)
 	}
-	if len(m.Requires.Connectors) > 0 {
-		fmt.Printf("  connectors: %s\n", strings.Join(m.Requires.Connectors, ", "))
+	for _, n := range m.Requires.Connectors.Names() {
+		c := m.Requires.Connectors[n]
+		note := ""
+		if !c.Required {
+			note = "  (optional — its triggers go dormant if unbound)"
+		}
+		if c.Version != "" && c.Version != config.AnyVersion {
+			fmt.Printf("  connector %s: %s%s\n", n, c.Version, note)
+		} else {
+			fmt.Printf("  connector %s%s\n", n, note)
+		}
 	}
 	if len(m.Requires.Stores) > 0 {
 		fmt.Printf("  stores: %s\n", strings.Join(m.Requires.Stores, ", "))
 	}
 	for name, s := range m.Requires.Secrets {
 		fmt.Printf("  secret %s: %s\n", name, s.Desc)
-	}
-	for role, r := range m.Requires.Roles {
-		if len(r.Skill) > 0 {
-			fmt.Printf("  role %s (needs skill: %s)\n", role, strings.Join(r.Skill, ", "))
-		} else {
-			fmt.Printf("  role %s\n", role)
-		}
 	}
 	if len(man.Settings) > 0 {
 		fmt.Println("\nsettings (override in the instance block):")
@@ -439,7 +495,7 @@ func cmdPackShow(args []string) error {
 		sort.Strings(names)
 		fmt.Printf("\npresets: %s\n", strings.Join(names, ", "))
 	}
-	if len(man.Exports.Workflows) > 0 || len(man.Exports.Agents) > 0 {
+	if len(man.Exports.Workflows) > 0 || len(man.Exports.Steps) > 0 {
 		fmt.Println("\nexports (public, reference by qualified name):")
 		for _, w := range man.Exports.Workflows {
 			fmt.Printf("  workflow: <instance>/%s\n", w)
@@ -447,8 +503,8 @@ func cmdPackShow(args []string) error {
 	}
 	fmt.Println("\nexample:")
 	fmt.Printf("  packs:\n    %s:\n      source: <source>\n", m.Name)
-	if len(m.Requires.Connectors) > 0 {
-		fmt.Printf("      connectors: { %s: <your-connector> }\n", m.Requires.Connectors[0])
+	if names := m.Requires.Connectors.Names(); len(names) > 0 {
+		fmt.Printf("      connectors: { %s: <your-connector> }\n", names[0])
 	}
 	return nil
 }

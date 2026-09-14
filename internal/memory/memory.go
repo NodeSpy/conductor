@@ -1,10 +1,19 @@
 // Package memory is the durable memory agents share across runs — what one
-// agent learns is available to the next. Entries are structured, with
-// provenance (which agent/run/trigger/repo wrote it) and a scope (global /
-// per-repo / per-agent). Three backends hold the entries — a `stores:` KV
-// entry, a directory of Markdown-with-frontmatter files, or an in-process
-// map — behind one Backend contract; the verbs, prompt injection, code
-// bindings, and recall are identical across them.
+// run learns is available to the next. Entries are structured, with
+// provenance (which step/run/trigger/repo wrote it) and a SCOPE KEY.
+//
+// A scope is either GLOBAL — no key, the shared set everything can see — or
+// an arbitrary OPAQUE STRING this package never interprets
+// (docs/design/agents-removal.md §2). There are no privileged scope TYPES:
+// `repo:` would bake a GitHub concept into the memory core and `agent:` would
+// bake in an identity that no longer exists. The engine supplies concrete
+// keys from run context as a CONVENTION — the repo string, the workflow name,
+// the step identity — and they are just keys.
+//
+// Three backends hold the entries — a `stores:` KV entry, a directory of
+// Markdown-with-frontmatter files, or an in-process map — behind one Backend
+// contract; the verbs, prompt injection, code bindings, and recall are
+// identical across them.
 //
 // Recall (v1) is tags + scope + recency: filter by tags/scope/substring,
 // newest first, limited — pure Go and deterministic. Ranking can layer on
@@ -17,6 +26,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/NodeSpy/conductor/internal/core"
 	"sort"
 	"strings"
 	"sync"
@@ -24,15 +34,40 @@ import (
 	"time"
 )
 
-// Source is an entry's provenance: who learned it and from where.
+// Source is an entry's provenance: what learned it and from where. Step is
+// the step identity that wrote it (docs/design/agents-removal.md §5); the
+// JSON/YAML tag stays "agent" so entries written by earlier versions keep
+// their attribution rather than silently losing it on the first read.
 type Source struct {
-	Agent   string `json:"agent,omitempty" yaml:"agent,omitempty"`
+	Step    string `json:"agent,omitempty" yaml:"agent,omitempty"`
 	Run     string `json:"run,omitempty" yaml:"run,omitempty"`
 	Trigger string `json:"trigger,omitempty" yaml:"trigger,omitempty"`
 	Repo    string `json:"repo,omitempty" yaml:"repo,omitempty"`
+	// TargetTrusted carries the originating dispatch's target provenance
+	// (core.Trigger.TargetTrusted) alongside the Repo it describes. It travels
+	// here because this struct IS the dispatch provenance the live tools are
+	// handed: run_step reconstructs a trigger from it, and a reconstruction
+	// that dropped the bit would hand back the own-repo trust the original
+	// dispatch was denied. The zero value is untrusted, so a caller that says
+	// nothing gets the safe answer.
+	TargetTrusted bool `json:"target_trusted,omitempty" yaml:"target_trusted,omitempty"`
+	// Dispatch is the DAEMON-ASSIGNED id of the launching dispatch: unique
+	// per dispatch, chosen by conductor, never by the event's sender or by
+	// the agent. It exists so a live tool that reconstructs a trigger
+	// (run_step) has something trustworthy to confine that trigger's
+	// agent-authored steps to — see flow.agentAuthoredNamespace. Without it,
+	// every run_step under an untrusted target shared one namespace, and two
+	// dispatches' agent steps collided onto one session binding.
+	Dispatch string `json:"dispatch,omitempty" yaml:"dispatch,omitempty"`
 }
 
-// Entry is one memory.
+// OwnRepo is the repo this provenance may treat as its own — core.OwnRepo's
+// rule, not a second copy of it. Read this, never Repo, when deciding what a
+// dispatch implicitly owns.
+func (s Source) OwnRepo() string { return core.OwnRepo(s.Repo, s.TargetTrusted) }
+
+// Entry is one memory. Scope is the opaque key it was filed under, or
+// GlobalScope for the shared set.
 type Entry struct {
 	ID      string    `json:"id"`
 	Text    string    `json:"text"`
@@ -40,6 +75,47 @@ type Entry struct {
 	Scope   string    `json:"scope"`
 	Source  Source    `json:"source,omitempty"`
 	Created time.Time `json:"created"`
+}
+
+// GlobalScope is how the no-key (shared) set is spelled on disk. It is a
+// STORAGE detail, not a keyword: callers pass "" for global, and Recall
+// treats "" and GlobalScope alike. Persisting a concrete token keeps every
+// backend's on-disk shape unchanged and keeps entries written by earlier
+// versions readable.
+const GlobalScope = "global"
+
+// NormalizeScope canonicalizes a scope key: empty (or the global token) is
+// the shared set; anything else is passed through verbatim, trimmed. It never
+// rejects a key — the memory core does not interpret keys, so there is
+// nothing to be invalid.
+func NormalizeScope(scope string) string {
+	s := strings.TrimSpace(scope)
+	if s == "" {
+		return GlobalScope
+	}
+	return s
+}
+
+// ErrReservedScope rejects an agent-supplied scope key that would land in
+// the shared bucket.
+var ErrReservedScope = fmt.Errorf("memory: %q is a reserved scope — it is the SHARED set, injected into every agent's prompt on this daemon. Name the thing you mean (a repo, a service, a team) so the note reaches the agents it is for", GlobalScope)
+
+// CheckAgentScope guards the scope key on an AGENT-supplied write.
+//
+// "" and "global" both normalize to the shared set, which is injected into
+// every opted-in agent's prompt regardless of repo or tenant. That is
+// correct for config- and engine-authored context, and wrong for anything
+// an agent chose: on a shared daemon it turns one repo's note into every
+// repo's context, which is a cross-tenant leak dressed up as a feature.
+//
+// Empty stays allowed — it means "the caller did not scope this", and the
+// callers here supply their own default. Only the explicit reserved token
+// is refused, so an agent has to name what it means.
+func CheckAgentScope(scope string) error {
+	if strings.EqualFold(strings.TrimSpace(scope), GlobalScope) {
+		return ErrReservedScope
+	}
+	return nil
 }
 
 // Map returns the entry as a JSON-shaped map (verb outputs, code bindings).
@@ -64,7 +140,8 @@ type Backend interface {
 type Query struct {
 	// Tags an entry must ALL carry.
 	Tags []string
-	// Scopes the entry's scope must be one of (canonical form); empty = all.
+	// Scopes the entry's scope key must be one of; empty = every scope. An
+	// entry in the global set matches the empty key or GlobalScope.
 	Scopes []string
 	// Substring is a case-insensitive text filter.
 	Substring string
@@ -83,8 +160,9 @@ type Manager struct {
 	// refuse tracked secret material. The verb/code write paths carry the
 	// plan write barrier separately. Atomic: set once at boot, read from
 	// engine and flow goroutines.
-	guard    atomic.Pointer[WriteGuard]
-	redactor atomic.Pointer[Redactor]
+	guard      atomic.Pointer[WriteGuard]
+	redactor   atomic.Pointer[Redactor]
+	scopeGuard atomic.Pointer[ScopeGuard]
 }
 
 // WriteGuard vets one to-be-remembered text; a non-nil error refuses it.
@@ -148,17 +226,14 @@ func (m *Manager) SetClock(now func() time.Time, newID func() string) {
 	}
 }
 
-// Remember persists one memory: the text, normalized tags, the scope resolved
-// against the source (see ResolveScope), and provenance.
+// Remember persists one memory: the text, normalized tags, the opaque scope
+// key ("" = global), and provenance.
 func (m *Manager) Remember(text string, tags []string, scope string, src Source) (Entry, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return Entry{}, fmt.Errorf("memory: text is required")
 	}
-	resolved, err := ResolveScope(scope, src)
-	if err != nil {
-		return Entry{}, err
-	}
+	resolved := NormalizeScope(scope)
 	e := Entry{
 		ID:      m.newID(),
 		Text:    text,
@@ -181,8 +256,8 @@ func (m *Manager) Recall(q Query) ([]Entry, error) {
 	}
 	scopes := map[string]bool{}
 	for _, s := range q.Scopes {
-		if s != "" {
-			scopes[s] = true
+		if s = strings.TrimSpace(s); s != "" {
+			scopes[NormalizeScope(s)] = true
 		}
 	}
 	sub := strings.ToLower(strings.TrimSpace(q.Substring))
@@ -208,6 +283,17 @@ func (m *Manager) Recall(q Query) ([]Entry, error) {
 	if q.Limit > 0 && len(out) > q.Limit {
 		out = out[:q.Limit]
 	}
+	// Redact HERE, not at the call sites. Memories written before the write
+	// guard existed (or by a conductor-authored path the guard does not
+	// cover) can hold tracked secret values, and every read face — the
+	// prompt injection, the IPC recall, the code binding, the connector verb
+	// — had to remember to scrub them. The prompt and IPC paths did; the
+	// code binding and the connector's recall/list verbs did not. Doing it
+	// inside the one function they all funnel through means a new read face
+	// cannot forget.
+	for i := range out {
+		out[i].Text = m.redactText(out[i].Text)
+	}
 	return out, nil
 }
 
@@ -224,32 +310,6 @@ func (m *Manager) List() ([]Entry, error) { return m.Recall(Query{}) }
 
 // Close releases the backend.
 func (m *Manager) Close() error { return m.backend.Close() }
-
-// ResolveScope canonicalizes a scope against an entry's source: "" or
-// "global" → global; "repo" → repo:<source repo>; "agent" → agent:<source
-// agent>; an explicit "repo:<name>"/"agent:<name>" passes through.
-func ResolveScope(scope string, src Source) (string, error) {
-	switch s := strings.TrimSpace(scope); {
-	case s == "" || s == "global":
-		return "global", nil
-	case s == "repo":
-		if src.Repo == "" {
-			return "", fmt.Errorf("memory: scope \"repo\" needs a repo in the run context — use an explicit repo:<owner/repo>")
-		}
-		return "repo:" + src.Repo, nil
-	case s == "agent":
-		if src.Agent == "" {
-			return "", fmt.Errorf("memory: scope \"agent\" needs an agent in the run context — use an explicit agent:<name>")
-		}
-		return "agent:" + src.Agent, nil
-	case strings.HasPrefix(s, "repo:") && len(s) > len("repo:"):
-		return s, nil
-	case strings.HasPrefix(s, "agent:") && len(s) > len("agent:"):
-		return s, nil
-	default:
-		return "", fmt.Errorf("memory: unknown scope %q (global, repo, agent, repo:<owner/repo>, agent:<name>)", scope)
-	}
-}
 
 func normTags(tags []string) []string {
 	var out []string

@@ -1,8 +1,8 @@
 # Packs
 
 **Packs** make a conductor configuration **distributable**. A pack is a
-self-contained, versioned bundle of behavior — workflows, agents, policy, checks,
-and (disarmed) triggers — that anyone can install from a source, parameterize,
+self-contained, versioned bundle of behavior — workflows, named steps,
+fleets, policy, checks, and (disarmed) triggers — that anyone can install from a source, parameterize,
 override, and compose. The model is **Terraform-modules-for-conductor**: a
 top-level `packs:` block where each entry is a sourced, versioned, parameterized
 *instance* of a pack, namespaced under its instance name.
@@ -17,6 +17,33 @@ cleanly updatable.**
 
 ## The `packs:` block
 
+### The key is the reference
+
+You do not normally write a source at all. A `packs:` **key is its own `use:`
+reference**: a bare name resolves to the official pack repo
+(`github.com/NodeSpy/conductor-packs`), which is trusted by default.
+
+```yaml
+packs:
+  pr-review-team: {}                          # official, by name
+  house-style: { use: ./packs/house-style }   # a local folder
+  kit:         { use: acme/conductor-packs/kit@^1.2 }   # an explicit repo
+```
+
+`use:` follows the same resolution as a connector's or runtime's — see
+[[Plugins]] — with one difference: packs are config rather than binaries, so a
+bare name lands in the packs repo, not the plugin repo.
+
+The implication applies to the top-level `packs:` block only. A **dependency's**
+source comes from its parent's `requires.packs.<alias>.source`; only if that is
+absent too does the alias imply a reference.
+
+`source:` (below) is the older, longer spelling. It still works and still wins
+when both are set, because it can express go-getter forms `use:` cannot
+(`git::ssh://…`).
+
+### The full surface
+
 ```yaml
 packs:
   review:                                      # instance name == the namespace
@@ -30,14 +57,85 @@ packs:
     connectors: { github: gh }                 # BIND the pack's required github -> your gh
     secrets:    { review_token: house/review } # BIND a required secret -> your vault ref
     policy:     { budget: { max_cost_usd: 5 } } # deep-merges onto the pack's bundled policy
-    agents:
-      reviewer: my-opus                        # BIND a role to your global agent
-      handoff:  { workspace: local }           # OVERRIDE the bundled agent (deep-merge)
+    steps:                                     # OVERRIDE a pack step, by reference
+      review-flow/review: { model: my-fleet }
+      handoff:  { workspace: local }           # OVERRIDE the bundled step (deep-merge)
+    models:
+      reviewer: claude-opus-5                  # OVERRIDE a bundled fleet
+    on:
+      github.pull_request: { filters: { labels_not: [wip] } }   # override a trigger by name
     triggers:
+      "*":       { enabled: true, repos: [your-org/app] }  # arm EVERY shipped trigger, one consent
       on_review_request:                        # the pack ships this DISARMED
         enabled: true                           # you arm it
         repos:   [your-org/app]                 # required for a github trigger — this IS the consent
 ```
+
+### `"*"` — arm every trigger with one consent
+
+A pack that ships six triggers should not make you paste the same repo list
+six times. The `"*"` key supplies arming defaults (`enabled`, `repos`,
+`filters`, `policy`, `gate`) to **every** trigger the pack ships; a named key
+refines that one.
+
+```yaml
+packs:
+  review:
+    triggers:
+      "*":     { enabled: true, repos: [your-org/app] }   # all of them, here
+      deploy:  { repos: [your-org/infra] }                # …except this one
+      nightly: { enabled: false }                         # …and not this one at all
+```
+
+Named wins field by field, and anything it leaves unset keeps the wildcard's
+value. **`repos:` REPLACES** rather than appends — repos are the consent, so an
+operator must be able to narrow what `"*"` granted, not only widen it.
+
+`"*"` supplies consent; it does not bypass it. An armed trigger with no repo
+list is still refused.
+
+### Arming one trigger more than once
+
+A `triggers.<name>` value may be an **object** (one instance) or an **array**
+(N instances of the SAME trigger, each with its own arming). One pack trigger,
+armed for two teams with different gates, without the pack author shipping two
+near-identical triggers or you forking the pack:
+
+```yaml
+packs:
+  review:
+    triggers:
+      review: { repos: [team/app] }              # object -> ONE instance
+      deploy:                                    # array  -> N instances
+        - { repos: [team-a/*], gate: { run: [review/strict] } }
+        - { repos: [team-b/*], filters: { labels: [urgent] } }
+```
+
+Each instance keeps its own dedup, session and outcome state, so the two
+armings never suppress each other on an event they both match. The object form
+is one instance and changes nothing about a single-instance config.
+
+**There is no instance id.** An instance is just an entry in the array you
+wrote — edit it where it sits. Conductor derives the per-instance state key
+from the entry's CONTENT, which means **reordering the array changes nothing**:
+each arming keeps its own history because that history was never tied to its
+position. Editing an entry, on the other hand, makes it a different arming with
+its own state — which is the same rule read the other way.
+
+Two byte-identical entries are one arming written twice, and a load error.
+
+**Consent is per instance.** An armed entry with no repo list is refused on its
+own account — giving one entry repos does not let another through.
+
+An `on:` overlay addresses the trigger by name and applies to all of its
+instances.
+
+> **A floating version range picks up new triggers.** With `version: "^1.2"`,
+> a trigger added in a later pack release is armed on your consented repos at
+> the next `init`/update — that is what "every trigger the pack ships" means,
+> and the lockfile diff is where you see it. Pin exactly (`version: "1.2.3"`)
+> to freeze the set. Conductor does not enforce a pin for `"*"` today; read the
+> lockfile diff on update.
 
 The block **is** the override surface — no separate drop-in files. `policy:`
 deep-merges in order bundled pack policy <- instance `policy:` <- a trigger
@@ -47,8 +145,9 @@ arm's own `policy:` (most specific wins).
 
 This single rule decides what a pack may *ship* vs must *bind*:
 
-- **Define-in-pack** (shipped, namespaced, overridable): `agents:`, `workflows:`,
-  `policy:`, `checks:`, `memory:`, and its disarmed `triggers:`. Pure behavior.
+- **Define-in-pack** (shipped, namespaced, overridable): `workflows:`, `models:`
+  (fleets), `workflows:`, `policy:`, `checks:`, and its disarmed `triggers:`.
+  Pure behavior.
 - **Bind-only** (declared in `requires:`, wired in the block, **never shipped**):
   `connectors:`, `secrets:`, `vaults:`, `stores:`, `runtimes:`, `hosts:`,
   `handoffs:`. Anything carrying credentials, endpoints, or infra identity.
@@ -61,12 +160,12 @@ install**.
 ## Namespacing
 
 Everything a pack defines is auto-scoped under the instance name:
-`agents.handoff` → `review/handoff`, `workflows.review-flow` →
+`steps.handoff` → `review/handoff`, `workflows.review-flow` →
 `review/review-flow`. Two packs can both define `reviewer` and never collide.
 
 Refs **inside** the pack are written **bare** and resolve pack-local — the author
 writes no prefixes. The loader scopes them. The one boundary that reaches global
-names is `requires:`: a required connector/store/secret/handoff, or an agent role
+names is `requires:`: a required connector/store/secret/handoff
 **bound** to a global, resolves in the consumer namespace. You reference a pack's
 entry point qualified: `workflow: review/review-flow`.
 
@@ -78,44 +177,118 @@ shape:
 | shape   | meaning  |
 |---------|----------|
 | absent  | the pack's bundled default |
-| string  | **bind**: swap in one of your existing globals entirely |
 | map      | **override**: keep the bundle, deep-merge changes onto it |
 
+A step is addressed by REFERENCE — `<workflow>/<step-id>`, or
+`<workflow>[<n>]` for a step with no `id:` — in the pack's own
+(un-namespaced) vocabulary:
+
 ```yaml
-agents:
-  reviewer: my-opus            # bind
-  handoff:  { workspace: local } # override
-  # (omit a role entirely to keep the bundled default)
+steps:
+  review-flow/review: { model: my-fleet }
+  review-flow/post:   { workspace: local }
+  # (omit a step entirely to keep the bundled default)
 ```
+
+> **The scalar bind form is gone.** It named a top-level `steps:` entry to
+> swap in wholesale, and there is no such section any more. Reach your own
+> config with a YAML anchor instead — `review-flow/review: { <<: *my-reviewer }`
+> — which composes with the pack's own fields rather than replacing the
+> whole step.
 
 Override deep-merges with **replace** semantics: nested maps merge recursively,
 but scalars and **list fields are replaced**, not appended. So an override of a
-bundled agent's `skill.verbs` fully replaces the bundled list — you can *narrow*
-a bundled agent's capabilities, not only widen them. (This differs from
+bundled step's `skill.verbs` fully replaces the bundled list — you can *narrow*
+a bundled step's capabilities, not only widen them. (This differs from
 `imports:`, where lists concatenate; a pack override is a deliberate restriction
 surface.)
 
+### Sharing config inside a manifest
+
+A pack's own steps share configuration the same way the main config does —
+a **YAML anchor** under a top-level `x-` key, merged with `<<:`. Anchors are
+file-local, so a pack's house style stays inside the pack and cannot be
+reached (or clobbered) by the consumer:
+
+```yaml
+x-templates:
+  house: &house { type: agent, archive_when_done: true }
+
+workflows:
+  review-flow:
+    steps:
+      - <<: *house
+        id: review
+        workspace: worktree
+        guidance: "Review only what the diff changes."
+        prompt: "Review {{.repo}}#{{.pr}}."
+```
+
+A pack's overridable surface is its **workflow steps**, addressed by
+reference. Give each an `id:` — that is what a consumer writes, and it is
+also the step's identity slot, so a rename moves both together. A step
+with no `id:` is still addressable by index (`review-flow[1]`), but that
+shifts when you insert a step above it, which is a poor thing to ask of
+your consumers.
+
 ## `requires:` — the interface
 
-A pack manifest declares the resources it needs and, for roles, the capabilities
-a binding must satisfy:
+A pack manifest declares the resources it needs:
 
 ```yaml
 requires:
   conductor: ">=0.8"                        # daemon-version compat (the fleet auto-updates)
-  connectors: [github]
+  connectors:                               # sockets AND the capability boundary
+    github: "*"                             #   any version
+    jira:   ">=2.0"                         #   a plugin connector at a compatible release
+  # connectors: [github]                    # sugar for { github: "*" }
   stores:     [cache]
   secrets:
     review_token: { desc: "token the review-poster uses" }
-  roles:
-    handoff:  { skill: [github.submit_review] }  # a bound agent MUST provide this
-    reviewer: {}
   packs:
     base: { source: github.com/your-org/base-kit, version: "^2.0" }
 ```
 
-`conductor init` checks each socket is satisfied and warns when a bound agent
-lacks a required skill.
+`conductor init` checks each socket is satisfied.
+
+### `requires.connectors` is the capability boundary
+
+It is not only a list of things to bind. A pack's `skill.verbs` may name **no
+connector outside it**, and a wildcard inside a pack means *"all verbs of my
+required connectors"*:
+
+```yaml
+requires: { connectors: { github: "*" } }
+workflows:
+  review-flow:
+    steps:
+      - id: review
+        skill: { verbs: ["*"] }           # => github.* only
+        # skill: { verbs: [github.*] }    # fine — declared
+        # skill: { verbs: [pagerduty.*] } # LINT ERROR — not declared
+```
+
+Enforced twice: `conductor pack lint` errors on a pattern naming an
+undeclared connector (so the author sees it while authoring), and instantiate
+**intersects** the grant as a belt (so a hand-authored pack that never ran
+lint still cannot exceed its interface, with anything dropped surfaced as a
+load notice). This is what makes a pack from a stranger safe to install: it
+can only ever hand an agent the connectors it declared — never quietly scope
+onto your pagerduty or your secrets connector.
+
+### Versions
+
+Each constraint is checked at instantiate against the connector's **resolved**
+version — the installed release for a plugin connector, the daemon version for
+a builtin. It **gates, it does not fetch** (connectors are bind-only), and a
+mismatch is a clear load error naming pack + connector + required-vs-actual.
+An unknown version (a dev build, a plugin not yet installed) warns and skips
+the gate rather than failing the box.
+
+> There is no `requires.roles`. It was vestigial once `agents:` was removed:
+> "which model fills this role" is answered by [[Model-Selection|fleets]] and
+> the mirrored overlay, and "what must a binding be able to do" is answered by
+> `requires.connectors`, which bounds every grant the pack can make.
 
 ## Settings and presets
 
@@ -128,8 +301,95 @@ templated fields at instantiate time with `${settings.NAME}`.
 > **string-valued** field (a prompt, an option, guidance) — not a numeric field
 > like a gate's `max_revisions`.
 
-Agents that omit provider/model fall through to your **default runtime**, so a
-well-made pack runs with near-nothing bound.
+A pack step that omits `model:` falls through to your **default runtime**, and
+one that names a FLEET resolves against whatever models you actually have — so
+a well-made pack runs with near-nothing bound. See [[Model-Selection]].
+
+## Scope lives on the connector, not the pack
+
+A pack can bundle triggers from several sources (github, gitlab, pagerduty).
+`repos:` is meaningless to a pagerduty trigger, so scope is **not** a
+pack-level field: each trigger binds to your connector **of its own source
+type**, and the scope lives there, configured once.
+
+```yaml
+connectors:
+  github:    { repos: [me/app, me/api] }   # scopes the github-sourced triggers
+  pagerduty: { service: PROD }             # scopes the pagerduty one
+
+packs:
+  incident-responder: {}                   # each trigger finds its own connector
+```
+
+- **More than one connector of a type** is ambiguous, and conductor says so
+  rather than guessing: disambiguate with
+  `packs.<name>.connectors: { github: work-github }`.
+- **No connector of a type** leaves those triggers **dormant**, surfaced as a
+  load notice. The rest of the pack runs — a consumer without pagerduty still
+  gets the github half. A pack author whose pack is meaningless without a
+  source marks it `requires.sources.<type>.required` and gets a hard error
+  instead.
+
+> **`requires.connectors` is different, and stricter.** The dormancy above is
+> for a source a pack merely *uses*. A connector the pack **declares** is
+> required by default: leaving it unbound is a load error, because a pack that
+> installs clean and then does nothing when the event arrives is worse than one
+> that says what is missing. An author whose pack genuinely degrades opts in
+> per connector:
+>
+> ```yaml
+> requires:
+>   connectors:
+>     github: "*"                              # required (the default)
+>     pagerduty: { version: "*", required: false }   # optional — dormant if unbound
+> ```
+>
+> An unbound optional connector is a load notice, and the parts of the pack
+> that use it go dormant.
+
+### Binding is automatic when there is only one candidate
+
+You do not write a binding that carries no decision. For each
+`requires.connectors` entry you did not bind explicitly:
+
+| your config has | what happens |
+|---|---|
+| **exactly one** connector of that type | bound automatically |
+| **two or more** | a load error naming them — which one is a real choice, and yours |
+| **none** | unchanged: required → load error, `required: false` → dormant |
+
+Matching is by the instance's `use:` type, not its name, so a connector called
+`gh` is found for a pack that requires `github`. An explicit
+`packs.<name>.connectors:` binding always wins. A sole candidate that does not
+satisfy the pack's version constraint is an error, never a silent bind.
+
+**This is plumbing, not consent.** A pack that can now reach your github
+connector still fires on no repo until you arm its triggers and name them —
+the repo list is the consent, and auto-binding never supplies it.
+
+## Overriding pack internals
+
+`packs.<name>:` **mirrors the pack's own sections**, and keys deep-merge onto
+its members by name — no pack-specific override language:
+
+```yaml
+packs:
+  pr-review-team:
+    on:                                        # its triggers, by name
+      github.pull_request: { filters: { labels_not: [wip] } }   # ADD a filter
+      gitlab.merge_request: { enabled: false }                  # turn one off
+    steps:                                     # its steps, by reference
+      github.pull_request/sec: { guidance: "focus on authz + SSRF" }  # ADDITIVE
+      review-flow/summarize:   { enabled: false }
+    models:                                    # its fleets, by name
+      reviewer: claude-opus-5
+    connectors: { github: work-github }        # instance disambiguation
+```
+
+`guidance:` is appended rather than replaced, `enabled: false` turns a trigger
+or step off, and the consumer wins on conflict. Only **named** members are
+addressable, so a pack must name what it wants you to be able to reach — and
+an overlay key that matches nothing is an error, not silent dead config.
 
 ## Triggers ship disarmed — consent is load-bearing
 
@@ -154,6 +414,24 @@ github trigger **cannot be armed at all** without explicitly scoping its repos.
 
 - **Workflows are addressable by qualified name** (`review/review-flow`) — call
   them from your own triggers or nest them in your own workflows.
+- **A pack calls only its OWN workflows.** Every workflow reference a pack
+  authors is namespaced to the pack at install, so a bare name inside a pack
+  resolves inside that pack — never against your config, and never against
+  another pack's. This holds for every spelling of a call: the step form
+  (`workflow: review-flow`), the verb form (`uses: workflow.run, options:
+  {name: review-flow}`), `workflow.save`, and any of those nested in a
+  `compensate:`, a `parallel:` branch, or a step `hooks:` entry. It holds for a
+  TEMPLATED name too — `{{ .pick }}` is namespaced before it renders, so a
+  runtime-chosen workflow still lands inside the pack.
+
+  Naming a workflow the pack does not ship is a **load error**, like an
+  undeclared connector. A DECLARED dependency counts as its own:
+  `requires.packs: {base: …}` installs at `<ns>/base`, so `base/fetch` is the
+  submodule call you read in the manifest.
+
+  This is what makes `requires.connectors` hold. Without it a pack could ship
+  `uses: workflow.run, options: {name: review-flow}` and run YOUR `review-flow`
+  — every connector inside it — while declaring none of them.
 - **Pack dependencies** (`requires.packs`) are satisfied by the same recursive
   `packs:` instance block. Behavior can be overridden at any depth; environment
   can only be **forwarded** down — the concrete binding to a real credential/repo
@@ -168,11 +446,14 @@ resolved graph, each node pinned by a resolved revision and a tree digest. Commi
 it: `conductor init` on another machine yields a byte-identical setup, and a
 changed remote is tamper-evident on the next `init`.
 
-The instance block's `version:` does **not** select a ref — it is metadata,
-recorded in the lockfile and used as the default `version:` for a child
-dependency that omits its own. The real pin is `@<tag|branch|sha>` appended to
-`source:` (e.g. `source: github.com/your-org/packs//review-kit@v1.0.0`); the
-lockfile's `resolved:` sha is what actually reproduces the fetch.
+The instance block's `version:` is a **semver constraint** (Terraform/gems
+style: `">= 1.2, < 2.0"`, `"~> 1.1"`, `"^1.0"`, `"1.0"`). An unpinned git source
+resolves to the **highest tag** that satisfies it — a monorepo tags its
+components `"<subdir>/vX.Y.Z"` so one repo can version many packs. Precedence: a
+hard `@<tag|branch|sha>` on `source:` wins over any constraint; a constraint
+selects a tag; a bare source with no constraint tracks the default branch. The
+lockfile's `resolved:` sha is what actually reproduces the fetch, and re-running
+`conductor init` re-resolves within the constraint.
 
 ## CLI
 
@@ -212,14 +493,40 @@ trust surface the lockfile can't provide (the lockfile proves *unchanged*, not
 ```yaml
 pack_trust:
   allow:
-    - github.com/your-org/*
-    - github.com/acme/conductor-packs*
+    - your-org/*                       # any repo under your-org (github.com implied)
+    - acme/review-kit                  # one specific repo
+    - gitlab.com/team/*                # a written host is used as-is
 ```
 
 With `pack_trust:` set, `conductor init` refuses any **remote** pack source — at
-any depth, including a dependency's — that matches no `allow:` glob (`*` matches
-any run of characters). Local sources (your own disk) are exempt. Override once
-with `conductor init --allow-unlisted`.
+any depth, including a dependency's — that matches no `allow:` glob. Local
+sources (your own disk) are exempt. Override once with
+`conductor init --allow-unlisted`.
+
+### Writing the globs
+
+**The host may be omitted.** An entry with no host defaults to `github.com/`,
+through the same rule `use:` and pack sources use — a first segment containing
+a `.` is a hostname, anything else is an owner. Write `gitlab.com/team/*` to
+mean gitlab. A bare `*` stays host-agnostic and means everywhere.
+
+**`*` does not cross a `/`.** It matches any run of characters *within one path
+segment*, the same rule as Go's `path.Match`. That is deliberate: an allowlist
+entry is the operator saying *this org*, or *this repo*, and a `*` that spanned
+the separator would quietly widen it to somebody else's org.
+
+Two forms cover almost everything:
+
+| Pattern | Matches | Does **not** match |
+|---|---|---|
+| `github.com/acme/review-kit` (or `acme/review-kit`) | that repo, plus `//subdir` and `@ref` of it | `…/review-kit-fork`, `…/review-kit2` |
+| `github.com/acme/*` (or `acme/*`) | any repo under `acme` (and their `//subdir@ref`) | `github.com/acme-evil/anything`, `gitlab.com/acme/anything` |
+
+Prefer those. A partial-name wildcard like `github.com/acme/conductor-packs*`
+still works, but it is a wider grant than it looks: it also admits
+`conductor-packs2` and `conductor-packs-old` in the same org. That takes write
+access under `acme` to exploit, so it is not a hole the way a cross-`/` match
+was — but if you mean one repo, name it, and if you mean the org, say `acme/*`.
 
 ## Security model
 
@@ -242,7 +549,7 @@ The following are **not yet** implemented and are called out honestly:
 - **Ref-rewriting** covers agent/workflow/check refs, connector prefixes in
   `uses`/`on`/hooks (scalar and list-form), the `store:` selector, team roles,
   `skill.verbs`, `skill.allow_secrets`, `session.end_on`, and pack-local
-  `extends:` — but **not** the free-form runtime env-access templates
+  team-role step references — but **not** the free-form runtime env-access templates
   `{{ vault … }}`, `{{ secret … }}`, and `{{ kv … }}`. Those are not rebound:
   they resolve the consumer's *global* vault/secret/store by name, so a pack can
   reach undeclared environment through them. The loader **warns** on every such

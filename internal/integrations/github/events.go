@@ -521,7 +521,11 @@ func (g *Integration) pullRequestTriggers(ctx context.Context, repo string, p gh
 			corroborated = g.corroborateRevert(ctx, p, pr.Number)
 		}
 		return []core.Trigger{{Source: "github", Instance: g.name, Kind: core.KindClosed,
-			Target: g.prTarget(repo, pr),
+			// GitHub assigns the repo and number, and the delivery is
+			// signature-verified: the target is the platform's, not the
+			// sender's (core.Trigger.TargetTrusted).
+			TargetTrusted: true,
+			Target:        g.prTarget(repo, pr),
 			Context: map[string]any{
 				"merged":               pr.Merged,
 				"title":                pr.Title,
@@ -948,7 +952,10 @@ func (g *Integration) emit(repo, kind string, t core.Target, title, dedup string
 			ctxMap[k] = v
 		}
 		out = append(out, core.Trigger{
-			Source: "github", Instance: g.name, Kind: kind, Variant: act.Name, Target: t,
+			// As above: a signature-verified payload's repo/number are
+			// GitHub's to assign.
+			TargetTrusted: true,
+			Source:        "github", Instance: g.name, Kind: kind, Variant: act.Name, Target: t,
 			Title: title, Dedup: dedup, Context: ctxMap, Action: act,
 		})
 	}

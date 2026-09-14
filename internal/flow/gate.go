@@ -73,7 +73,7 @@ type gateCheckResult struct {
 // runGate runs one agent step's gate to a verdict. nil = promoted (all
 // checks pass, possibly after revisions); an error discards the step.
 // rounds reports how many revise rounds it took.
-func (r *Runner) runGate(ctx context.Context, t core.Trigger, step config.Step, id string, spec *config.GateSpec, ref dispatch.RunRef, data map[string]any) (rounds int, err error) {
+func (r *Runner) runGate(ctx context.Context, t core.Trigger, step config.Step, id, slot string, spec *config.GateSpec, ref dispatch.RunRef, data map[string]any) (rounds int, err error) {
 	ctx = context.WithValue(ctx, inGateKey{}, true)
 	maxRev := spec.MaxRevisionsOrDefault()
 	for round := 0; ; round++ {
@@ -92,7 +92,7 @@ func (r *Runner) runGate(ctx context.Context, t core.Trigger, step config.Step, 
 		if round >= maxRev {
 			return round, r.escalateGate(ctx, t, step, id, failures, round)
 		}
-		out, ok, ferr := r.followUp(ctx, t, step, id, ref, r.revisePrompt(failures, round, maxRev))
+		out, ok, ferr := r.followUp(ctx, t, step, id, slot, ref, r.revisePrompt(failures, round, maxRev))
 		if ferr != nil || !ok {
 			if ferr != nil {
 				r.Log("%s gate %s: revise follow-up failed: %v", flowTag(t), id, ferr)
@@ -198,7 +198,7 @@ func (r *Runner) execCheck(ctx context.Context, t core.Trigger, stepID, name str
 		// secret straddling the clip point can't survive in the discarded tail.
 		"output": clipText(r.redactText(ref.Output), 4000),
 	}
-	outputs, err := r.execStepWithFlow(ctx, t, chk, "gate:"+name, cdata, false)
+	outputs, err := r.execStepWithFlow(ctx, t, chk, "gate:"+name, "gate:"+name, cdata, false)
 	if err != nil {
 		return gateCheckResult{Name: name, Detail: r.redactErr(err)}
 	}
@@ -254,22 +254,32 @@ func (r *Runner) redactText(s string) string {
 // the captured revise output IS a transcript, so cost.FromRun parses it —
 // settles after. An over-cap revise sheds (the budget error propagates, and
 // the gate escalates rather than promoting an unmetered change).
-func (r *Runner) followUp(ctx context.Context, t core.Trigger, step config.Step, id string, ref dispatch.RunRef, prompt string) (string, bool, error) {
+func (r *Runner) followUp(ctx context.Context, t core.Trigger, step config.Step, id, slot string, ref dispatch.RunRef, prompt string) (string, bool, error) {
 	if r.Agents.FollowUp == nil {
 		return "", false, nil
 	}
-	model := r.Cfg.Agents[step.Agent].Model
-	res, berr := r.checkBudget(ctx, step.Agent, cost.Estimate(model, prompt, ""))
+	identity := stepIdentity(ctx, step, slot)
+	runtimeName := r.runtimeOf(step)
+	model := ""
+	if r.Agents.ResolveModel != nil {
+		var rt string
+		model, rt = r.Agents.ResolveModel(ctx, step)
+		if rt != "" && step.Runtime == "" {
+			step.Runtime = rt
+			runtimeName = rt
+		}
+	}
+	res, berr := r.checkBudget(ctx, runtimeName, cost.Estimate(model, prompt, ""))
 	if berr != nil {
 		return "", false, berr
 	}
-	out, ok, err := r.Agents.FollowUp(ctx, ref.AgentID, step.Agent, t, prompt)
+	out, ok, err := r.Agents.FollowUp(ctx, ref.AgentID, identity, t, prompt)
 	if !ok || err != nil {
 		if r.Agents.CancelBudget != nil {
 			r.Agents.CancelBudget(res)
 		}
 		return out, ok, err
 	}
-	r.recordUsage(ctx, t, step.Agent, id+":revise", res, cost.FromRun(model, prompt, out))
+	r.recordUsage(ctx, t, identity, runtimeName, id+":revise", res, cost.FromRun(model, prompt, out))
 	return out, ok, err
 }

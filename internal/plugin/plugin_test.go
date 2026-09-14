@@ -44,15 +44,15 @@ func TestVerify(t *testing.T) {
 			t.Fatalf("want mismatch error, got %v", err)
 		}
 	})
-	t.Run("unpinned refused without opt-in", func(t *testing.T) {
+	t.Run("a fetched plugin with no recorded sha is refused", func(t *testing.T) {
 		_, err := verify(Spec{Name: "p", BinPath: bin})
-		if err == nil || !strings.Contains(err.Error(), "no sha256 pin") {
-			t.Fatalf("want unpinned refusal, got %v", err)
+		if err == nil || !strings.Contains(err.Error(), "no verified sha recorded") {
+			t.Fatalf("want no-recorded-sha refusal, got %v", err)
 		}
 	})
-	t.Run("unpinned allowed with opt-in", func(t *testing.T) {
-		if _, err := verify(Spec{Name: "p", BinPath: bin, AllowUnverified: true}); err != nil {
-			t.Fatalf("opt-in should pass: %v", err)
+	t.Run("a local development binary needs no sha", func(t *testing.T) {
+		if _, err := verify(Spec{Name: "p", BinPath: bin, Local: true}); err != nil {
+			t.Fatalf("a local build should verify on permissions alone: %v", err)
 		}
 	})
 	t.Run("world-writable refused", func(t *testing.T) {
@@ -210,7 +210,7 @@ func fakeDial(conn *fakeConn) func(context.Context, Spec, Deps) (transport, func
 }
 
 func connectorSpec() Spec {
-	return Spec{Name: "jira", Kind: KindConnector, Provides: "jira", BinPath: "/bin/true", AllowUnverified: true}
+	return Spec{Name: "jira", Kind: KindConnector, Provides: "jira", BinPath: "/bin/true", Local: true}
 }
 
 func TestClientDescribeInvoke(t *testing.T) {
@@ -303,24 +303,76 @@ func TestClientRestartBackoff(t *testing.T) {
 	}
 }
 
-// TestUnsandboxedExternalRefused proves H1: an external plugin with no
-// isolation block refuses to launch unless allow_unsandboxed is set.
-func TestUnsandboxedExternalRefused(t *testing.T) {
+// TestNoIsolationIsTheDefaultPath proves the app-extension posture: a plugin
+// with NO isolation: block launches. OS confinement is opt-in hardening, not a
+// precondition — the default confinement is the declared permission manifest.
+func TestNoIsolationIsTheDefaultPath(t *testing.T) {
 	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
-	base := Spec{Name: "p", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, AllowUnverified: true}
+	base := Spec{Name: "p", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Local: true}
 
-	// No isolation, no opt-in → refused at buildCommand.
-	_, _, _, err := buildCommand(base, SandboxDeps{})
-	if err == nil || !strings.Contains(err.Error(), "unsandboxed") {
-		t.Fatalf("want unsandboxed refusal, got %v", err)
+	cmd, cleanup, sandboxed, err := buildCommand(base, SandboxDeps{})
+	if err != nil || cmd == nil {
+		t.Fatalf("a plugin with no isolation must launch: cmd=%v err=%v", cmd, err)
 	}
+	defer cleanup()
+	if sandboxed {
+		t.Fatal("no isolation block should report sandboxed=false")
+	}
+	// The env is still scrubbed — the daemon's credential-bearing environment
+	// is never forwarded, isolation or not.
+	for _, kv := range cmd.Env {
+		if strings.HasPrefix(kv, "CONDUCTOR_SECRET") {
+			t.Fatalf("daemon env leaked to the plugin: %q", kv)
+		}
+	}
+}
 
-	// Explicit opt-in → allowed (runs directly, sandboxed=false).
-	opted := base
-	opted.AllowUnsandboxed = true
-	cmd, _, sandboxed, err := buildCommand(opted, SandboxDeps{})
-	if err != nil || cmd == nil || sandboxed {
-		t.Fatalf("opt-in should allow an unsandboxed launch: cmd=%v sandboxed=%v err=%v", cmd, sandboxed, err)
+// TestManifestConfinesCommands proves the declared-commands half of the
+// permission manifest: PATH is replaced with a directory holding exactly the
+// declared commands, so an undeclared tool is not resolvable by name.
+func TestManifestConfinesCommands(t *testing.T) {
+	dir := t.TempDir()
+	bin := writeBin(t, dir, "b", []byte("x"), 0o755)
+	s := Spec{
+		Name: "p", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Local: true,
+		Manifest: Manifest{Commands: []string{"sh"}},
+	}
+	cmd, cleanup, _, err := buildCommand(s, SandboxDeps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	var path string
+	for _, kv := range cmd.Env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			path = v
+		}
+	}
+	if path == "" {
+		t.Fatal("declared commands did not produce a confined PATH")
+	}
+	if _, err := os.Stat(filepath.Join(path, "sh")); err != nil {
+		t.Fatalf("declared command not linked into the confined PATH: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(path, "curl")); err == nil {
+		t.Fatal("an undeclared command is present in the confined PATH")
+	}
+}
+
+// A plugin that declares NOTHING gets no PATH rewrite: it declared no needs, so
+// there is no allowlist to build, and inventing one would break plugins that
+// predate the manifest.
+func TestNoManifestLeavesPathAlone(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	s := Spec{Name: "p", Kind: KindConnector, BinPath: bin, Local: true}
+	cmd, cleanup, _, err := buildCommand(s, SandboxDeps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	base := spawnBaseEnv()
+	if len(cmd.Env) != len(base) {
+		t.Fatalf("env changed for a plugin that declared nothing: %v vs %v", cmd.Env, base)
 	}
 }
 

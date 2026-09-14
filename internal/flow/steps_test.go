@@ -11,7 +11,7 @@ func TestStepsScopingAndChaining(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc:
-    type: fake
+    use: fake
 `)
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
@@ -70,7 +70,7 @@ func TestOptionsMerge(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   svc:
-    type: fake
+    use: fake
     options:
       channel: C
       as: me
@@ -153,7 +153,7 @@ func TestCodeCtxStripsSecretScopes(t *testing.T) {
 func TestCodeStepCannotReadVaults(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 `)
 	reg := buildRegistry(t, cfg)
 	fake := newFakeState(t, "svc")

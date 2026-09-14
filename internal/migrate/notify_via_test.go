@@ -300,7 +300,7 @@ notify:
 func TestNotifyPassStandalone(t *testing.T) {
 	pre := `
 connectors:
-  alerts: { type: ntfy, topic: t }
+  alerts: { use: ntfy, topic: t }
 triggers:
   - name: ping
     on: manual
@@ -422,7 +422,7 @@ integrations:
               agent: fixer
               prompt: "fix"
 agents:
-  fixer: { provider: claude }
+  fixer: { type: agent, name: fixer }
 notify:
   slack_webhook_url: https://hooks.example/x
   on: [complete, digest]
@@ -465,7 +465,7 @@ integrations:
               agent: fixer
               prompt: "fix"
 agents:
-  fixer: { provider: claude }
+  fixer: { type: agent, name: fixer }
 notify:
   slack_webhook_url: https://hooks.example/x
   on: [digest]

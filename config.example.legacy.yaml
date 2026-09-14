@@ -273,37 +273,13 @@ integrations:
           agent: fixer
           prompt: "CloudWatch alarm {{.body.detail.alarmName}} fired — investigate {{.repo}}."
 
-  # Sentry alerts → an agent root-causes against the affected repo. Knows Sentry's
-  # payload shape (no field mapping); verifies the Sentry-Hook-Signature HMAC.
-  - type: sentry
-    name: prod
-    # smee_url: ${SENTRY_SMEE_URL}
-    listen: ":8098"
-    client_secret: ${SENTRY_CLIENT_SECRET}
-    rules:                             # first matching rule wins; empty filter = match-any
-      - match: { projects: [yourapp], levels: [error, fatal], environments: [production] }
-        repo: YourOrg/YourApp          # investigated + checked out
-        actions:
-          type: agent
-          agent: fixer
-          checkout: branch-off
-          prompt: "Sentry {{.sentry.short_id}}: {{.sentry.title}} ({{.sentry.culprit}}). Root-cause in {{.repo}} — see {{.url}}."
-
-  # PagerDuty incidents → an agent starts triage. Consumes V3 webhook subscriptions;
-  # verifies the X-PagerDuty-Signature HMAC (accepts multiple v1= during rotation).
-  - type: pagerduty
-    name: oncall
-    # smee_url: ${PAGERDUTY_SMEE_URL}
-    listen: ":8097"
-    signing_secret: ${PAGERDUTY_SIGNING_SECRET}
-    rules:                             # first matching rule wins; empty filter = match-any
-      - match: { event_types: [incident.triggered, incident.escalated], urgencies: [high], services: [YourApp API] }
-        repo: YourOrg/YourApp          # triaged + checked out
-        actions:
-          type: agent
-          agent: fixer
-          checkout: branch-off
-          prompt: "PagerDuty {{.pagerduty.title}} ({{.pagerduty.priority}}/{{.pagerduty.urgency}}) on {{.pagerduty.service}} — {{.url}}. Start triage in {{.repo}}."
+  # Sentry alerts and PagerDuty incidents USED to be bundled `type: sentry` /
+  # `type: pagerduty` integrations here. They are no longer in the conductor
+  # binary — they ship as external plugins from the conductor-plugins repo, so
+  # this legacy file cannot declare them (the loader rejects the type) and
+  # `conductor config migrate` skips them with instructions rather than
+  # emitting a connector that would never fire. Configure them in the
+  # connectors model instead — see config.example.yaml and the Plugins wiki.
 
   # Poll RSS/Atom feeds; new items → an agent assesses impact. Stdlib parsing.
   # First poll seeds silently (no backlog flood); later polls emit new items only.

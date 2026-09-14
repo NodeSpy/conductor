@@ -18,8 +18,8 @@ integrations:
     webhook: { smee_url: https://smee.io/abc }
 control: { pause_label: "conductor:off" }
 notify: { push: true, on: [dispatch, escalate] }
-agents:
-  fixer: { provider: claude, workspace: worktree, wait_timeout: 30m, archive_when_done: true }
+x-steps:
+  fixer: &fixer { type: agent, name: fixer, workspace: worktree, wait_timeout: 30m, archive_when_done: true }
 store:
   state_ttl: 720h
   audit_max_size: 50MB
@@ -179,7 +179,7 @@ integrations:
 		t.Fatal(err)
 	}
 	main := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(main, []byte("imports: [gh.yaml]\nagents:\n  fixer: { provider: claude }\n"), 0o644); err != nil {
+	if err := os.WriteFile(main, []byte("imports: [gh.yaml]\nsteps:\n  fixer: { type: agent, name: fixer }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, err := Load(main)
@@ -215,8 +215,9 @@ integrations:
 integrations:
   - type: rss
     name: feeds
-agents:
-  planner: { provider: claude }
+workflows:
+  plan:
+    steps: [{ id: p, type: agent, prompt: plan }]
 `)
 	main := write("config.yaml", `
 imports:
@@ -224,8 +225,9 @@ imports:
 integrations:
   - type: cron
     name: chores
-agents:
-  fixer: { provider: claude, workspace: worktree }
+workflows:
+  fix:
+    steps: [{ id: f, type: agent, prompt: fix, workspace: worktree }]
 paseo_bin: /custom/paseo    # importer scalar must win over any imported default
 `)
 
@@ -244,12 +246,12 @@ paseo_bin: /custom/paseo    # importer scalar must win over any imported default
 	if !names["gh"] || !names["feeds"] || !names["chores"] {
 		t.Fatalf("missing an integration after merge: %v", names)
 	}
-	// Maps merge: agents from both the import and the main file.
-	if _, ok := cfg.Agents["fixer"]; !ok {
-		t.Fatal("main-file agent 'fixer' missing")
+	// Maps merge: workflows from both the import and the main file.
+	if _, ok := cfg.Workflows["fix"]; !ok {
+		t.Fatal("main-file workflow 'fix' missing")
 	}
-	if _, ok := cfg.Agents["planner"]; !ok {
-		t.Fatal("imported agent 'planner' missing")
+	if _, ok := cfg.Workflows["plan"]; !ok {
+		t.Fatal("imported workflow 'plan' missing")
 	}
 	// Importer scalar wins.
 	if cfg.PaseoBin != "/custom/paseo" {
@@ -327,45 +329,20 @@ func TestActionSetUnmarshal(t *testing.T) {
 	}
 }
 
-func TestCheckAgentRefs(t *testing.T) {
-	c := &Config{Agents: map[string]AgentProfile{"opus": {Provider: "claude"}, "sonnet": {Provider: "claude"}}}
-	step := func(id, agent string) Action { return Action{Type: "agent", ID: id, Agent: agent} }
-
-	// Defined profiles at the top level and in nested steps pass; command
-	// actions/steps never need a profile.
-	ok := []ActionRef{
-		{Where: "a", Action: Action{Type: "agent", Agent: "opus"}},
-		{Where: "b", Action: Action{Type: "command", Command: []string{"true"}}},
-		{Where: "c", Action: Action{Steps: []Action{step("assess", "sonnet"), {Type: "command"}, step("handoff", "opus")}}},
-	}
+// CheckAgentRefs no longer resolves an agent PROFILE (there are none —
+// design §6); what it still guards is a step's `handoff:` reference.
+func TestCheckHandoffRefs(t *testing.T) {
+	c := &Config{Handoffs: map[string]HandoffConfig{"web": {}}}
+	ok := []ActionRef{{Where: "gh rules[0].actions.review_requested",
+		Action: Action{Steps: []Action{{Type: "agent", Handoff: "web"}}}}}
 	if err := c.CheckAgentRefs(ok); err != nil {
-		t.Fatalf("valid refs rejected: %v", err)
+		t.Fatalf("valid handoff ref rejected: %v", err)
 	}
-
-	// An unknown profile in a workflow step is the MISSING_PROVIDER-at-dispatch
-	// bug: it must fail up front and say where.
-	bad := []ActionRef{{Where: "github[x] rules[0].actions.review_requested",
-		Action: Action{Steps: []Action{step("assess", "sonnet"), step("handoff", "sonnet-interactive")}}}}
+	bad := []ActionRef{{Where: "gh rules[0].actions.review_requested",
+		Action: Action{Steps: []Action{{Type: "agent", Handoff: "nope"}}}}}
 	err := c.CheckAgentRefs(bad)
-	if err == nil {
-		t.Fatal("unknown step profile should fail")
-	}
-	for _, want := range []string{"review_requested step handoff", `"sonnet-interactive"`, "opus, sonnet"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q should mention %q", err, want)
-		}
-	}
-
-	// A top-level agent action with no profile at all is rejected too.
-	if err := c.CheckAgentRefs([]ActionRef{{Where: "cron[x] schedule \"nightly\"", Action: Action{Type: "agent"}}}); err == nil ||
-		!strings.Contains(err.Error(), "needs `agent:") {
-		t.Fatalf("agent action without profile should fail, got %v", err)
-	}
-
-	// Unnamed steps report the engine's positional default id.
-	err = c.CheckAgentRefs([]ActionRef{{Where: "w", Action: Action{Steps: []Action{step("", "nope")}}}})
-	if err == nil || !strings.Contains(err.Error(), "w step step1") {
-		t.Fatalf("unnamed step should report step1, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), `unknown handoff "nope"`) {
+		t.Fatalf("unknown handoff should fail, got %v", err)
 	}
 }
 
@@ -400,7 +377,7 @@ func TestControllersValidBlock(t *testing.T) {
 		"gem":   {Agent: "gemini"},
 		"ocode": {Agent: "opencode", Transport: "native", SessionModel: "resumable"},
 	}
-	c.Agents = map[string]AgentProfile{"reviewer": {Controller: "gem"}}
+	setTestStep(c, "reviewer", Step{Runtime: "gem"})
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid controllers block should pass, got %v", err)
 	}
@@ -449,7 +426,7 @@ func TestControllerBadTransportAndModel(t *testing.T) {
 func TestAgentUnknownControllerRejected(t *testing.T) {
 	c := ctrlBaseCfg()
 	c.Controllers = map[string]ControllerConfig{"pae": {Type: "paseo"}}
-	c.Agents = map[string]AgentProfile{"fixer": {Controller: "does-not-exist"}}
+	setTestStep(c, "fixer", Step{Runtime: "does-not-exist"})
 	if err := c.Validate(); err == nil {
 		t.Fatal("an agent referencing an undefined controller must be rejected")
 	}

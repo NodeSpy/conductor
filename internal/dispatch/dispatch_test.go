@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,12 +26,14 @@ func TestPaseoAgentArgv(t *testing.T) {
 	req := Request{
 		Trigger: core.Trigger{
 			Source: "github", Instance: "acme", Kind: "merge_conflict",
-			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5, HeadSHA: "deadbeef", BaseRef: "main"},
+			TargetTrusted: true, // a signature-verified github payload
+			Target:        core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5, HeadSHA: "deadbeef", BaseRef: "main"},
 		},
-		Action:  config.Action{Type: "agent", Agent: "fixer", Prompt: "fix {{.repo}}#{{.pr}} on {{.base}}"},
-		Profile: config.AgentProfile{Provider: "claude", Model: "claude-opus", Workspace: "worktree"},
-		Tokens:  Tokens{App: "APPTOK", User: "USERTOK"},
-		Author:  Author{Name: "Me", Email: "me@example.com"},
+		Action: config.Action{Type: "agent", Agent: "fixer", Prompt: "fix {{.repo}}#{{.pr}} on {{.base}}"},
+		Model:  "claude-opus",
+		Step:   config.Step{Model: config.ModelSpecOf("claude-opus"), Workspace: "worktree"},
+		Tokens: Tokens{App: "APPTOK", User: "USERTOK"},
+		Author: Author{Name: "Me", Email: "me@example.com"},
 	}
 	ref, err := d.Dispatch(context.Background(), req)
 	if err != nil {
@@ -42,7 +45,7 @@ func TestPaseoAgentArgv(t *testing.T) {
 	s := joined(ref.Argv)
 	for _, want := range []string{
 		"paseo run", "fix acme/w#5 on main",
-		"--provider claude", "--model claude-opus",
+		"--model claude-opus",
 		"--worktree-mode checkout-pr", "--pr-number 5", "--forge github",
 		// Agent acts as YOU: GH_TOKEN is the user token (writes post as you), App
 		// token is reads-only under PC_GH_APP_TOKEN.
@@ -66,10 +69,10 @@ func TestPaseoAgentArgv(t *testing.T) {
 func TestPaseoBranchOffForIssue(t *testing.T) {
 	d := newDispatcher()
 	req := Request{
-		Trigger: core.Trigger{Kind: "issue_assigned",
+		Trigger: core.Trigger{Kind: "issue_assigned", TargetTrusted: true,
 			Target: core.Target{Repo: "acme/w", Issue: 9, Number: 9, BaseRef: "main"}},
-		Action:  config.Action{Type: "agent", Agent: "fixer", Checkout: "branch-off", Prompt: "start"},
-		Profile: config.AgentProfile{Workspace: "worktree"},
+		Action: config.Action{Type: "agent", Agent: "fixer", Checkout: "branch-off", Prompt: "start"},
+		Step:   config.Step{Workspace: "worktree"},
 	}
 	ref, _ := d.Dispatch(context.Background(), req)
 	s := joined(ref.Argv)
@@ -118,7 +121,7 @@ func TestPaseoCheckoutPRUsesResolvedCwd(t *testing.T) {
 		Trigger: core.Trigger{Kind: "merge_conflict",
 			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}},
 		Action:    config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"},
-		Profile:   config.AgentProfile{Workspace: "worktree"},
+		Step:      config.Step{Workspace: "worktree"},
 		Workspace: "wks_should_be_ignored", // must NOT combine with --new-workspace
 	}
 	ref, err := d.Dispatch(context.Background(), req)
@@ -149,8 +152,8 @@ func TestCheckoutUsesTargetProject(t *testing.T) {
 	req := Request{
 		Trigger: core.Trigger{Kind: "merge_conflict",
 			Target: core.Target{Repo: "AcmeCorp/Widget", Project: "acme/widget", PR: 5, Number: 5}},
-		Action:  config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"},
-		Profile: config.AgentProfile{Workspace: "worktree"},
+		Action: config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"},
+		Step:   config.Step{Workspace: "worktree"},
 	}
 	ref, err := d.Dispatch(context.Background(), req)
 	if err != nil {
@@ -249,7 +252,7 @@ func TestParseWorktreeWorkspaces(t *testing.T) {
 	  {"workspaceId":"wks_base","project":"a/w","isolation":"local","cwd":"/home/me/w"},
 	  {"workspaceId":"wks_nocwd","isolation":"worktree","cwd":""}
 	]`)
-	m := parseWorktreeWorkspaces(data)
+	m := worktreeWorkspaceMap(decodeWorkspaces(t, data))
 	if m["/wt/one"] != "wks_wt" {
 		t.Errorf("worktree should map: %v", m)
 	}
@@ -327,10 +330,21 @@ func TestNormCwdMatchesTildeAndAbsolute(t *testing.T) {
 	// `paseo workspace ls` gives absolute; `paseo ls` gives `~/…`. They must match.
 	abs := filepath.Join(home, ".paseo/worktrees/x/branch")
 	data := []byte(`[{"workspaceId":"wks_wt","isolation":"worktree","cwd":` + strconv.Quote(abs) + `}]`)
-	m := parseWorktreeWorkspaces(data)
+	m := worktreeWorkspaceMap(decodeWorkspaces(t, data))
 	if m[normCwd("~/.paseo/worktrees/x/branch")] != "wks_wt" {
 		t.Fatalf("tilde agent cwd must map to the absolute workspace: %v", m)
 	}
+}
+
+// decodeWorkspaces parses raw `paseo workspace ls --json` output the way the
+// Backend does, so these tests still cover the wire field names.
+func decodeWorkspaces(t *testing.T, data []byte) []WorkspaceInfo {
+	t.Helper()
+	var wl []WorkspaceInfo
+	if err := json.Unmarshal(data, &wl); err != nil {
+		t.Fatalf("workspace ls fixture: %v", err)
+	}
+	return wl
 }
 
 func TestLocalCommandArgv(t *testing.T) {

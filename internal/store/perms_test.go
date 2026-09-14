@@ -28,7 +28,7 @@ func TestStateFilesAre0600(t *testing.T) {
 	if err := s.PutSession(controller.SessionRef{PRKey: "p", SessionID: "s"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutAffinity(controller.AffinityRef{Agent: "a", Key: "k", SessionID: "s"}); err != nil {
+	if err := s.PutAffinity(controller.AffinityRef{Runtime: "a", Key: "k", SessionID: "s"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.PutPlan(PlanRecord{RunID: "r1", StepID: "s1"}); err != nil {

@@ -16,7 +16,7 @@ import (
 // retry must PIN the recorded output instead of re-running step one.
 const retryCfg = `
 connectors:
-  eg: { type: enginegate }
+  eg: { use: enginegate }
 triggers:
   - on: eg.ping
     steps:

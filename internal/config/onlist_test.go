@@ -174,7 +174,7 @@ triggers:
 		{"manual names must be unique", `
 triggers:
   - { name: deploy, on: manual, steps: [ { uses: svc.post } ] }
-  - { name: deploy, on: manual, steps: [ { uses: svc.post } ] }`, `manual trigger name "deploy" is not unique`},
+  - { name: deploy, on: manual, steps: [ { uses: svc.post } ] }`, `trigger name "deploy" is not unique`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -192,7 +192,7 @@ triggers:
 func TestManualValidate(t *testing.T) {
 	base := `
 connectors:
-  timer: { type: cron, schedules: { nightly: { cron: "0 2 * * *" } } }
+  timer: { use: cron, schedules: { nightly: { cron: "0 2 * * *" } } }
 `
 	var c Config
 	if err := yaml.Unmarshal([]byte(base+`
@@ -211,7 +211,7 @@ triggers:
 	var c2 Config
 	if err := yaml.Unmarshal([]byte(`
 connectors:
-  manual: { type: cron, schedules: { s: { every: 1h } } }
+  manual: { use: cron, schedules: { s: { every: 1h } } }
 triggers:
   - { on: manual.s, steps: [ { uses: manual.x, options: {} } ] }
 `), &c2); err != nil {

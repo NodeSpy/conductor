@@ -87,4 +87,4 @@ Every round is audited (`event: gate`, outcome `pass` / `fail` / `revise` /
 `escalated`) — the outcome loop (§18) and `conductor report` read these —
 and a passing step's outputs carry `gate: { passed: true, rounds: N }`.
 
-Related: [[Workflows]] · [[Agents]] · [[Policy]] · [[Runs]]
+Related: [[Workflows]] · [[Steps]] · [[Policy]] · [[Runs]]

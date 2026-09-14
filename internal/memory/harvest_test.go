@@ -7,7 +7,7 @@ import (
 
 func TestHarvestFencedBlock(t *testing.T) {
 	m := testManager(t, NewMemBackend())
-	src := Source{Agent: "fixer", Run: "r9", Trigger: "failing_checks", Repo: "acme/api"}
+	src := Source{Step: "fixer", Run: "r9", Trigger: "failing_checks", Repo: "acme/api"}
 	out := "Fixed the flaky test by pinning the clock.\n\n" +
 		"```remember\n" +
 		"- text: TestPoll needs a fake clock — real time flakes on CI\n" +
@@ -22,10 +22,10 @@ func TestHarvestFencedBlock(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("want 2 entries, got %d", len(entries))
 	}
-	if entries[0].Scope != "repo:acme/api" || entries[0].Tags[0] != "flaky" {
+	if entries[0].Scope != "repo" || entries[0].Tags[0] != "flaky" {
 		t.Errorf("first entry: %+v", entries[0])
 	}
-	if entries[1].Scope != "global" || entries[1].Text != "plain global note" {
+	if entries[1].Scope != GlobalScope || entries[1].Text != "plain global note" {
 		t.Errorf("second entry: %+v", entries[1])
 	}
 	if entries[0].Source != src {
@@ -40,7 +40,7 @@ func TestHarvestFencedBlock(t *testing.T) {
 
 func TestHarvestJSONOutput(t *testing.T) {
 	m := testManager(t, NewMemBackend())
-	src := Source{Agent: "assess", Repo: "acme/api"}
+	src := Source{Step: "assess", Repo: "acme/api"}
 
 	// String form.
 	entries, err := m.HarvestOutput(`{"verdict":"ok","remember":"the deploy takes 10 minutes"}`, src)
@@ -52,7 +52,7 @@ func TestHarvestJSONOutput(t *testing.T) {
 	if err != nil || len(entries) != 2 {
 		t.Fatalf("wrapped list form: %v %+v", err, entries)
 	}
-	if entries[0].Scope != "repo:acme/api" || entries[1].Scope != "global" {
+	if entries[0].Scope != "repo" || entries[1].Scope != GlobalScope {
 		t.Errorf("scopes: %q %q", entries[0].Scope, entries[1].Scope)
 	}
 	// JSON without a remember key harvests nothing.
@@ -99,14 +99,16 @@ func TestHarvestEdgeCases(t *testing.T) {
 
 func TestPromptSection(t *testing.T) {
 	m := testManager(t, NewMemBackend())
-	src := Source{Agent: "reviewer", Repo: "acme/api"}
-	_, _ = m.Remember("global fact", []string{"a"}, "global", src)
-	_, _ = m.Remember("repo fact", nil, "repo", src)
-	_, _ = m.Remember("my fact", nil, "agent", src)
-	_, _ = m.Remember("other repo fact", nil, "repo:other/repo", src)
-	_, _ = m.Remember("other agent fact", nil, "agent:other", src)
+	src := Source{Step: "reviewer", Repo: "acme/api"}
+	// Opaque keys: the shared set, the repo string, the step identity, and
+	// two keys this run's context does NOT include.
+	_, _ = m.Remember("global fact", []string{"a"}, "", src)
+	_, _ = m.Remember("repo fact", nil, "acme/api", src)
+	_, _ = m.Remember("my fact", nil, "reviewer", src)
+	_, _ = m.Remember("other repo fact", nil, "other/repo", src)
+	_, _ = m.Remember("other agent fact", nil, "other-step", src)
 
-	s := m.PromptSection(Filter{}, "acme/api", "reviewer")
+	s := m.PromptSection(Filter{}, ContextKeys("acme/api", "", "reviewer"))
 	for _, want := range []string{"global fact", "repo fact", "my fact", "Shared memory", "```remember"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("section missing %q:\n%s", want, s)
@@ -122,16 +124,16 @@ func TestPromptSection(t *testing.T) {
 		t.Errorf("ordering wrong:\n%s", s)
 	}
 	// Scope filter + limit narrow the section.
-	s = m.PromptSection(Filter{Scopes: []string{"global"}, Limit: 1}, "acme/api", "reviewer")
+	s = m.PromptSection(Filter{Scopes: []string{GlobalScope}, Limit: 1}, ContextKeys("acme/api", "", "reviewer"))
 	if !strings.Contains(s, "global fact") || strings.Contains(s, "repo fact") {
 		t.Errorf("scoped section:\n%s", s)
 	}
 	// Nothing matching → empty (no token cost).
-	if s = m.PromptSection(Filter{Tags: []string{"nope"}}, "acme/api", "reviewer"); s != "" {
+	if s = m.PromptSection(Filter{Tags: []string{"nope"}}, ContextKeys("acme/api", "", "reviewer")); s != "" {
 		t.Errorf("empty section should be \"\": %q", s)
 	}
-	// No repo/agent in the dispatch: relative scopes drop, globals still come.
-	if s = m.PromptSection(Filter{}, "", ""); !strings.Contains(s, "global fact") {
+	// No repo/step in the dispatch: those context keys drop, the shared set stays.
+	if s = m.PromptSection(Filter{}, ContextKeys("", "", "")); !strings.Contains(s, "global fact") {
 		t.Errorf("global-only section:\n%s", s)
 	}
 }

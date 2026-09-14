@@ -9,7 +9,7 @@ import (
 // TestForEachFansOverList: for_each maps one step over a context list with
 // {{.item}}/{{.index}} in scope; outputs land under {items, count}.
 func TestForEachFansOverList(t *testing.T) {
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	spec := mustSpec(t, `
@@ -45,7 +45,7 @@ steps:
 // TestParallelBranchesJoin: both branches run, and the join publishes each
 // branch step's outputs into the parent scope for later steps.
 func TestParallelBranchesJoin(t *testing.T) {
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	st.outputs["post"] = map[string]any{"id": 9}
@@ -83,7 +83,7 @@ steps:
 
 // TestParallelBranchFailureFailsWorkflow: a failing branch fails the join.
 func TestParallelBranchFailureFailsWorkflow(t *testing.T) {
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	newFakeState(t, "svc")
 	spec := mustSpec(t, `
@@ -105,7 +105,7 @@ steps:
 // TestStepTimeout: a step's timeout: bounds a slow verb — the workflow fails
 // promptly with the deadline error instead of waiting the verb out.
 func TestStepTimeout(t *testing.T) {
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	st.slowMS["slow"] = 5 * time.Second
@@ -130,7 +130,7 @@ steps:
 // TestStepIfSkips: a false if: skips the step (no invocation, no failure);
 // later steps still run.
 func TestStepIfSkips(t *testing.T) {
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	spec := mustSpec(t, `
@@ -153,7 +153,7 @@ steps:
 // TestStepRetrySucceedsAfterFlakes: retry.max re-runs a flaky verb until it
 // succeeds; the workflow completes.
 func TestStepRetrySucceedsAfterFlakes(t *testing.T) {
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	st.failTimes["post"] = 2
@@ -178,7 +178,7 @@ steps:
 
 // TestStepRetryExhaustedFails: more failures than retry.max fails the step.
 func TestStepRetryExhaustedFails(t *testing.T) {
-	cfg := loadConfig(t, "connectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	st.failTimes["post"] = 5
@@ -207,7 +207,7 @@ steps:
 // than spawning an unbounded number of dispatches over a data-driven list
 // (#36 §146 F3).
 func TestForEachFanOutCapRefused(t *testing.T) {
-	cfg := loadConfig(t, "policy: { max_fan_out: 2 }\nconnectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "policy: { max_fan_out: 2 }\nconnectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	spec := mustSpec(t, `
@@ -236,7 +236,7 @@ steps:
 // TestParallelFanOutCapRefused mirrors the for_each cap for a parallel step's
 // branch count (#36 §146 F3).
 func TestParallelFanOutCapRefused(t *testing.T) {
-	cfg := loadConfig(t, "policy: { max_fan_out: 1 }\nconnectors:\n  svc: { type: fake }\n")
+	cfg := loadConfig(t, "policy: { max_fan_out: 1 }\nconnectors:\n  svc: { use: fake }\n")
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	spec := mustSpec(t, `

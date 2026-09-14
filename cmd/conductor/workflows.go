@@ -59,7 +59,7 @@ func cmdWorkflows(args []string) error {
 					health += " [FLAGGED: rotting]"
 				}
 			}
-			fmt.Printf("  %-24s v%-3d by %s (%s)%s — %s\n", w.Name, w.Version, orDash(w.Source.Agent), state, health, w.Description)
+			fmt.Printf("  %-24s v%-3d by %s (%s)%s — %s\n", w.Name, w.Version, orDash(w.Source.Step), state, health, w.Description)
 		}
 		return nil
 	}
@@ -76,7 +76,7 @@ func cmdWorkflows(args []string) error {
 			return fmt.Errorf("no saved workflow %q", rest[1])
 		}
 		fmt.Printf("workflow %q v%d — promoted by %s (trigger %s, repo %s)\n",
-			w.Name, w.Version, orDash(w.Source.Agent), orDash(w.Source.Trigger), orDash(w.Source.Repo))
+			w.Name, w.Version, orDash(w.Source.Step), orDash(w.Source.Trigger), orDash(w.Source.Repo))
 		if w.Description != "" {
 			fmt.Printf("description: %s\n", w.Description)
 		}

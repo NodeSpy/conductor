@@ -7,7 +7,7 @@ event.
 ```yaml
 connectors:
   hooks:
-    type: webhook
+    use: webhook
     listen: ":8099"                  # direct receiver (shared per address)
     # smee_url: ${SMEE_URL}          # and/or a smee channel; `match` routes shared channels
     sources:

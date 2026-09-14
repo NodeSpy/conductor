@@ -392,7 +392,7 @@ func TestLabelArgsAndSlug(t *testing.T) {
 		Trigger: core.Trigger{Source: "github", Instance: "gh", Kind: "new_comment", Variant: "v",
 			Target: core.Target{Repo: "a/w", PR: 3, Number: 3, HeadSHA: "h"},
 			Labels: map[string]string{"t": "1"}},
-		Profile: config.AgentProfile{ArchiveWhenDone: true, Labels: map[string]string{"p": "2"}},
+		Step: config.Step{ArchiveWhenDone: true, Labels: map[string]string{"p": "2"}},
 	}
 	labels := strings.Join(labelArgs(req), " ")
 	for _, want := range []string{"conductor=1", "variant=v", "archive=1", "p=2", "t=1", "kind=new_comment"} {

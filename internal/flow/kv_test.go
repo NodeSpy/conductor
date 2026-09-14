@@ -75,7 +75,7 @@ func TestKVStepsAndCodeShareOneStore(t *testing.T) {
 	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   main: { type: boltdb }
 `)
@@ -131,7 +131,7 @@ func TestKVVerbValidation(t *testing.T) {
 	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
 	base := `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   main: { type: boltdb }
 `

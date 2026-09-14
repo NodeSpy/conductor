@@ -25,10 +25,8 @@ func tempSaved(t *testing.T, path string) *SavedStore {
 
 const wfBase = `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner: { model: x }
 workflows:
   greet:
     description: "post a greeting"
@@ -36,7 +34,7 @@ workflows:
     steps: [ { id: post, uses: svc.post, options: { text: "hi {{.inputs.who}}" } } ]
 policy:
   agent_authored:
-    allow: [ svc.post, workflow, "workflow.*", kv.* ]
+    verbs: [ svc.post, workflow, "workflow.*", kv.* ]
 `
 
 // TestWorkflowListCatalog: config + saved entries with descriptions, health,
@@ -44,7 +42,7 @@ policy:
 func TestWorkflowListCatalog(t *testing.T) {
 	sw := tempSaved(t, "")
 	step := []config.Step{{Uses: "svc.post", Options: map[string]any{"text": "x"}}}
-	_, _ = sw.Save("healthy", "does good things", step, memory.Source{Agent: "planner"})
+	_, _ = sw.Save("healthy", "does good things", step, memory.Source{Step: "planner"})
 	_, _ = sw.Save("rotten", "used to work", step, memory.Source{})
 	_ = sw.Review("healthy")
 	_ = sw.Review("rotten")
@@ -157,7 +155,7 @@ steps:
     options:
       steps: [ { uses: svc.ask, options: { prompt: p } } ]
 `))
-	if failed, errStr := rig2.workflowFailed(); !failed || !strings.Contains(errStr, "not in policy.agent_authored.allow") {
+	if failed, errStr := rig2.workflowFailed(); !failed || !strings.Contains(errStr, "not in policy.agent_authored.verbs") {
 		t.Fatalf("inline guard: %v %q", failed, errStr)
 	}
 }
@@ -362,7 +360,7 @@ steps:
   - uses: workflow.save
     options: { name: sneak, steps: [ { uses: svc.ask, options: { prompt: p } } ] }
 `))
-	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "not in policy.agent_authored.allow") {
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "not in policy.agent_authored.verbs") {
 		t.Fatalf("gated step must be rejected at save: %v %q", failed, errStr)
 	}
 	if _, ok := sw.Get("sneak"); ok {
@@ -377,7 +375,7 @@ steps:
   - uses: workflow.save
     options: { name: shell, steps: [ { type: command, command: [rm, -rf, /] } ] }
 `))
-	if failed, errStr := rig2.workflowFailed(); !failed || !strings.Contains(errStr, "not in policy.agent_authored.allow") {
+	if failed, errStr := rig2.workflowFailed(); !failed || !strings.Contains(errStr, "not in policy.agent_authored.verbs") {
 		t.Fatalf("command step outside allow must reject at save: %v %q", failed, errStr)
 	}
 
@@ -386,7 +384,7 @@ steps:
 	// and refused under the current rules.
 	if _, err := sw.Save("laundered", "was fine once",
 		[]config.Step{{ID: "p", Uses: "svc.post", Options: map[string]any{"text": "x"}}},
-		memory.Source{Agent: "planner"}); err != nil {
+		memory.Source{Step: "planner"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sw.Review("laundered"); err != nil {
@@ -394,14 +392,12 @@ steps:
 	}
 	tight := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner: { model: x }
 workflows: {}
 policy:
   agent_authored:
-    allow: [ kv.* ]           # svc.post no longer allowed
+    verbs: [ kv.* ]           # svc.post no longer allowed
 `)
 	regT := buildRegistry(t, tight)
 	rigT := newTestRunner(t, tight, regT)
@@ -410,7 +406,7 @@ on: svc.ping
 steps: [ { id: go, workflow: laundered } ]
 `))
 	failed, errStr := rigT.workflowFailed()
-	if !failed || !strings.Contains(errStr, `"svc.post" is not in policy.agent_authored.allow`) {
+	if !failed || !strings.Contains(errStr, `"svc.post" is not in policy.agent_authored.verbs`) {
 		t.Fatalf("reviewed-but-now-disallowed workflow must refuse: %v %q", failed, errStr)
 	}
 	if len(fake.snapshot()) != 0 {
@@ -419,9 +415,8 @@ steps: [ { id: go, workflow: laundered } ]
 	// And with NO agent_authored policy at all, a saved workflow refuses too.
 	nopol := loadConfig(t, `
 connectors:
-  svc: { type: fake }
-agents:
-  planner: { model: x }
+  svc: { use: fake }
+workflows:
 `)
 	regN := buildRegistry(t, nopol)
 	rigN := newTestRunner(t, nopol, regN)
@@ -437,13 +432,11 @@ steps: [ { id: go, workflow: laundered } ]
 	// run time (no approve_via here → dry-run + reject), even though it saved.
 	approveCfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner: { model: x }
 policy:
   agent_authored:
-    allow: [ svc.post ]
+    verbs: [ svc.post ]
     approve: [ svc.ask ]
 `)
 	regA := buildRegistry(t, approveCfg)
@@ -473,13 +466,11 @@ steps: [ { id: go, workflow: risky } ]
 	// registry: an identity policy forces as: on the saved steps at run.
 	idCfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 memory: { type: memory }
-agents:
-  planner: { model: x }
 policy:
   agent_authored:
-    allow: [ svc.post ]
+    verbs: [ svc.post ]
     identity: bot
 `)
 	regI := buildRegistry(t, idCfg)
@@ -516,7 +507,7 @@ func TestSavedWorkflowScopeCarriesNoSecrets(t *testing.T) {
 	// A promoted workflow that dumps its whole template root outward.
 	_, err := sw.Save("dump", "posts the root", []config.Step{
 		{ID: "leak", Uses: "svc.post", Options: map[string]any{"text": `{{printf "%v" $}}`}},
-	}, memory.Source{Agent: "planner"})
+	}, memory.Source{Step: "planner"})
 	if err != nil {
 		t.Fatal(err)
 	}

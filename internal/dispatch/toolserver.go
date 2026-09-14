@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/skill"
 )
@@ -47,8 +48,8 @@ type ToolServerSpec struct {
 func BuildToolServer(req Request, host string) *ToolServerSpec {
 	argv := memory.ToolCommand()
 	effHost := host
-	if req.Profile.Host != "" {
-		effHost = req.Profile.Host
+	if req.Step.Host != "" {
+		effHost = req.Step.Host
 	}
 	if len(argv) == 0 || effHost != "" {
 		return nil
@@ -63,17 +64,59 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 	if kind := req.Trigger.Kind; kind != "" {
 		args = append(args, "--trigger", kind)
 	}
+	// The target's PROVENANCE travels with the repo it describes. Without it
+	// the memory MCP face would treat every dispatch's repo as its own — the
+	// bug — or, if it assumed the safe default, would refuse legitimate
+	// trusted dispatches. Neither is a default worth having: the daemon knows
+	// the answer, so it says it.
+	if req.Trigger.TargetTrusted {
+		args = append(args, "--target-trusted")
+	}
+	// The daemon's id for this dispatch. A live tool (run_step) rebuilds a
+	// trigger from this provenance, and when the target is untrusted this is
+	// the only thing left that the event's sender did not choose — so it is
+	// what the rebuilt trigger's agent-authored steps are confined to.
+	if req.DispatchID != "" {
+		args = append(args, "--dispatch", req.DispatchID)
+	}
+	// The secret tools are advertised only when the profile asked for the
+	// broker. The credential below is minted for every dispatch; what it
+	// GRANTS is the difference.
+	if sk := req.Step.Skill; sk != nil && sk.SecretsVia == "broker" {
+		args = append(args, "--secrets")
+	}
 	if n := req.Trigger.Target.Number; n > 0 {
 		args = append(args, "--number", strconv.Itoa(n))
 	}
 	out := &ToolServerSpec{Command: argv[0], Args: args}
-	if b := skill.Active(); b != nil && req.Profile.Skill != nil {
+	// EVERY tool subprocess gets a per-dispatch credential, not only a step
+	// with a skill: block (round-12 #1). The socket resolves a request's
+	// provenance from it rather than believing a Source off the wire, so a
+	// memory-only dispatch needs one exactly as much as a skill one — the
+	// difference is what the identity GRANTS, not whether it exists.
+	//
+	// !req.AgentAuthored: same refusal as SkillEnv. A grant is minted only
+	// for a step the operator authored; an agent-authored step gets no
+	// credential and therefore no tool socket identity at all.
+	if b := skill.Active(); b != nil && !req.AgentAuthored {
+		policy := config.SkillPolicy{} // no skill: block → authentication with an EMPTY grant
+		if req.Step.Skill != nil {
+			policy = *req.Step.Skill
+		}
 		claim, err := b.MintClaim(skill.Identity{
-			Agent:   req.Action.Agent,
-			Repo:    req.Trigger.Target.Repo,
-			Trigger: req.Trigger.Kind,
-			Number:  req.Trigger.Target.Number,
-			Policy:  *req.Profile.Skill,
+			Agent:         req.Action.Agent,
+			Repo:          req.Trigger.Target.Repo,
+			Trigger:       req.Trigger.Kind,
+			Number:        req.Trigger.Target.Number,
+			Policy:        policy,
+			Context:       req.Trigger.Context,
+			TargetTrusted: req.Trigger.TargetTrusted,
+			// The daemon's anchor for this dispatch, on the SKILL path too.
+			// The argv path passes --dispatch; without the same value here a
+			// skill-enabled dispatch with an untrusted target loses the
+			// cross-dispatch confinement run_step relies on and falls back to
+			// the shared literal namespace (round-12 #4).
+			Dispatch: req.DispatchID,
 		})
 		if err == nil {
 			out.Env = map[string]string{"CONDUCTOR_SKILL_CLAIM": claim}
@@ -91,7 +134,16 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 // there is nothing to offer: no skill: on the profile, or no endpoint. This is
 // the paseo/cli counterpart to BuildToolServer's MCP injection (ACP/opencode).
 func SkillEnv(req Request, endpoint string) map[string]string {
-	if req.Profile.Skill == nil || endpoint == "" {
+	if endpoint == "" {
+		return nil
+	}
+	// Defense in depth at the READ point. flow strips skill: from every
+	// agent-authored dispatch before building the request, and both plan
+	// guards reject it at admission — but this is where a grant actually
+	// becomes a token, so it refuses independently. An agent-authored step
+	// carrying a skill: block got it from somewhere it shouldn't have; mint
+	// nothing rather than trust that the upstream strip ran.
+	if req.AgentAuthored {
 		return nil
 	}
 	b := skill.Active()
@@ -102,12 +154,19 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 	// SSH-forwarded socket the peer is the ssh relay running as the daemon's own
 	// uid, so the uid check passes and provenance rests on the token — which is
 	// exactly why memory/run_step ops derive Source from the token, not the peer.
+	envPolicy := config.SkillPolicy{} // as in BuildToolServer: credential first, grant maybe
+	if req.Step.Skill != nil {
+		envPolicy = *req.Step.Skill
+	}
 	tok, err := b.MintSession(skill.Identity{
-		Agent:   req.Action.Agent,
-		Repo:    req.Trigger.Target.Repo,
-		Trigger: req.Trigger.Kind,
-		Number:  req.Trigger.Target.Number,
-		Policy:  *req.Profile.Skill,
+		Agent:         req.Action.Agent,
+		Repo:          req.Trigger.Target.Repo,
+		Trigger:       req.Trigger.Kind,
+		Number:        req.Trigger.Target.Number,
+		Policy:        envPolicy,
+		Context:       req.Trigger.Context,
+		TargetTrusted: req.Trigger.TargetTrusted,
+		Dispatch:      req.DispatchID, // as above: both paths carry the anchor
 	}, uint32(os.Getuid()))
 	if err != nil {
 		return nil

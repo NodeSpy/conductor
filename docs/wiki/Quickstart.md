@@ -13,7 +13,7 @@ Replace the seeded `~/.config/conductor/config.yaml` with (or just read along
 ```yaml
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules:
       hourly: { every: 1h }
 
@@ -68,7 +68,7 @@ interpreter needed (`js` runs in a WASM sandbox inside conductor):
 ```yaml
 connectors:
   timer:
-    type: cron
+    use: cron
     schedules:
       nightly: { cron: "0 2 * * *" }
 
@@ -97,19 +97,20 @@ Follow the **learning path** on [[Home]]. The immediate next steps:
   [[Integration-GitHub]]: events like `gh.merge_conflict` /
   `gh.failing_checks` replace the cron tick, and verbs like `gh.comment`
   replace `echo`.
-- **Run an agent** — add a `runtimes:` + `agents:` profile and a
-  `type: agent` step ([[Runtimes]], [[Agents]]); the seeded starter's
-  triggers show the shape:
+- **Run an agent** — add a `runtimes:` entry and a `type: agent` step
+  ([[Runtimes]], [[Steps]]); the seeded starter's triggers show the shape.
+  Shared step config goes in a YAML anchor under a top-level `x-` key, which
+  the loader ignores:
 
   ```yaml
   runtimes:
-    paseo: { type: paseo, default: true }
-  agents:
-    fixer: { provider: claude, workspace: worktree, archive_when_done: true }
+    paseo: { use: paseo, default: true }
+  x-templates:
+    fixer: &fixer { type: agent, workspace: worktree, archive_when_done: true }
   triggers:
     - on: gh.merge_conflict
       steps:
-        - { id: fix, type: agent, agent: fixer,
+        - { <<: *fixer, id: fix,
             prompt: "Resolve the conflict on {{.repo}}#{{.pr}} against {{.base}}." }
   ```
 

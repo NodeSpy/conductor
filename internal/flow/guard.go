@@ -84,11 +84,14 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 			// the ONLY gate path for agent-authored steps; the same holds for a
 			// team step's per-worker gate. (Config-authored steps keep setting
 			// their own — this guard only sees agent-authored plans.)
-			if step.Gate != nil {
-				return fmt.Errorf("%s: agent-authored steps may not set gate: — the inherited trigger/workflow gate is the only gate path for agent output", w)
-			}
-			if step.Team != nil && step.Team.Gate != nil {
-				return fmt.Errorf("%s: agent-authored team steps may not set team.gate: — the operator's configuration owns the checks on agent output", w)
+			// Every field an agent-authored step may not carry is listed in
+			// ONE place (agentauthored_fields.go) — gate:, team.gate:,
+			// background:, handoff:, skill:. Each is a capability the
+			// operator owns; a step that set its own would be widening its
+			// authority with output it wrote itself. A new such field is
+			// added there, not here, so no entry path can miss it.
+			if err := checkAgentAuthoredFields(w, step); err != nil {
+				return err
 			}
 			// Nor may an agent-authored step background itself or divert its
 			// review to a hand-off channel — both escape the gate the same way a
@@ -97,23 +100,17 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 			// output that never returns), and handoff: routes the review draft to
 			// an agent-nominated channel instead of the operator's gate. The
 			// operator opts into these in config; an emitted plan may not.
-			if step.Background {
-				return fmt.Errorf("%s: agent-authored steps may not set background: — a backgrounded agent runs outside the gate on agent output", w)
-			}
-			if step.Handoff != "" {
-				return fmt.Errorf("%s: agent-authored steps may not set handoff: — the review channel for agent output is the operator's to configure", w)
-			}
 			if !pol.TrustFull() {
 				switch {
 				case matchAny(pol.Approve, class):
 					res.needsApproval = true
 					res.approvalWhy = append(res.approvalWhy, fmt.Sprintf("%s: %q is approve-gated", w, class))
 					res.approvalClasses[class] = true
-				case matchAny(pol.Allow, class):
+				case matchAny(pol.Verbs, class):
 					// admitted freely
 				default:
-					return fmt.Errorf("%s: %q is not in policy.agent_authored.allow (allowed: %s)",
-						w, class, patternList(pol.Allow, pol.Approve))
+					return fmt.Errorf("%s: %q is not in policy.agent_authored.verbs (allowed: %s)",
+						w, class, patternList(pol.Verbs, pol.Approve))
 				}
 				// Agent code/cli never runs on the main box: force the
 				// sandbox host, or reject when none is configured.
@@ -170,11 +167,11 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 						res.needsApproval = true
 						res.approvalWhy = append(res.approvalWhy, fmt.Sprintf("%s: %q is approve-gated", hw, h.Uses))
 						res.approvalClasses[h.Uses] = true
-					case matchAny(pol.Allow, h.Uses):
+					case matchAny(pol.Verbs, h.Uses):
 						// admitted freely
 					default:
-						return fmt.Errorf("%s: %q is not in policy.agent_authored.allow (allowed: %s)",
-							hw, h.Uses, patternList(pol.Allow, pol.Approve))
+						return fmt.Errorf("%s: %q is not in policy.agent_authored.verbs (allowed: %s)",
+							hw, h.Uses, patternList(pol.Verbs, pol.Approve))
 					}
 				}
 				if pol.Identity != "" {
@@ -256,7 +253,12 @@ func stepClass(cfg *config.Config, step *config.Step) string {
 }
 
 // matchAny reports whether class matches any pattern: exact, path-glob
-// ("kv.*", "*.write"), or the "cli" alias for command steps.
+// ("kv.*", "*.write", bare "*"), or the "cli" alias for command steps.
+//
+// It is the single matcher behind BOTH the agent-authored plan allowlist
+// and the skill grant (config.SkillPolicy.Verbs), which is what lets the
+// capability card, `conductor discover`, and the enforcement point agree by
+// construction — see internal/flow/capability.go.
 //
 // conductor.* verbs are EXACT-match only: they operate the daemon itself
 // (update/pause/resume/restart/reload/run), so a broad `allow: ["*"]` — or

@@ -120,32 +120,30 @@ func (s *flowGateStore) GetHistoryVerified(id string) (store.RunHistory, error) 
 	return rec, nil
 }
 
-func (s *flowGateStore) RecordEngagement(repo string, number int, e store.Engagement) {
+func (s *flowGateStore) RecordEngagement(key string, e store.Engagement) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.engagements == nil {
 		s.engagements = map[string][]store.Engagement{}
 	}
-	key := fmt.Sprintf("%s#%d", repo, number)
 	s.engagements[key] = append(s.engagements[key], e)
 }
 
-func (s *flowGateStore) TakeEngagements(repo string, number int) []store.Engagement {
+func (s *flowGateStore) TakeEngagements(key string) []store.Engagement {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := fmt.Sprintf("%s#%d", repo, number)
 	out := s.engagements[key]
 	delete(s.engagements, key)
 	return out
 }
 
-func (s *flowGateStore) PeekEngagements(repo string, number int) []store.Engagement {
+func (s *flowGateStore) PeekEngagements(key string) []store.Engagement {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]store.Engagement(nil), s.engagements[fmt.Sprintf("%s#%d", repo, number)]...)
+	return append([]store.Engagement(nil), s.engagements[key]...)
 }
 
-func (s *flowGateStore) MarkCIFailure(repo string, number int, head string) bool {
+func (s *flowGateStore) MarkCIFailure(key, head string) bool {
 	if head == "" {
 		return true // fail-safe: never dedup a headless signal
 	}
@@ -154,7 +152,6 @@ func (s *flowGateStore) MarkCIFailure(repo string, number int, head string) bool
 	if s.ciFailed == nil {
 		s.ciFailed = map[string]string{}
 	}
-	key := fmt.Sprintf("%s#%d", repo, number)
 	if s.ciFailed[key] == head {
 		return false
 	}
@@ -174,7 +171,7 @@ func (s *flowGateStore) BumpOutcome(agent, outcome string) {
 	s.bumps[agent][outcome]++
 }
 
-func (s *flowGateStore) AgentOutcomeStats(agent string) map[string]int {
+func (s *flowGateStore) OutcomeStats(agent string) map[string]int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := map[string]int{}
@@ -292,7 +289,7 @@ func flowTrigger(dedup string) core.Trigger {
 
 const gateCfg = `
 connectors:
-  eg: { type: enginegate }
+  eg: { use: enginegate }
 triggers:
   - on: eg.ping
     steps:
@@ -332,7 +329,7 @@ func TestFlowBranchRunsAndConsumesDedup(t *testing.T) {
 }
 
 func TestFlowPolicyIgnoreUsers(t *testing.T) {
-	cfg := strings.Replace(gateCfg, "type: enginegate }", "type: enginegate, policy: { ignore: { users: [spammer] } } }", 1)
+	cfg := strings.Replace(gateCfg, "use: enginegate }", "use: enginegate, policy: { ignore: { users: [spammer] } } }", 1)
 	eng, st, _, _ := buildFlowEngine(t, cfg)
 	before := gateCalls()
 	eng.process(context.Background(), flowTrigger("d2"))
@@ -419,8 +416,8 @@ func TestFlowGroupBatches(t *testing.T) {
 func TestFlowFanInFiresOncePerEvent(t *testing.T) {
 	eng, _, _, cfg := buildFlowEngine(t, `
 connectors:
-  eg:  { type: enginegate }
-  eg2: { type: enginegate }
+  eg:  { use: enginegate }
+  eg2: { use: enginegate }
 triggers:
   - name: fan
     on: [eg.ping, eg2.ping]
@@ -458,7 +455,7 @@ triggers:
 func TestFlowManualTriggerRuns(t *testing.T) {
 	eng, _, _, _ := buildFlowEngine(t, `
 connectors:
-  eg: { type: enginegate }
+  eg: { use: enginegate }
 triggers:
   - name: adhoc
     on: manual
@@ -488,8 +485,8 @@ triggers:
 func TestFlowPerSourceHooksScoped(t *testing.T) {
 	eng, _, _, cfg := buildFlowEngine(t, `
 connectors:
-  eg:  { type: enginegate }
-  eg2: { type: enginegate }
+  eg:  { use: enginegate }
+  eg2: { use: enginegate }
 triggers:
   - name: fan
     on:

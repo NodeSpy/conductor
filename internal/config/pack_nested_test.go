@@ -49,7 +49,7 @@ func TestPackNestedDependency(t *testing.T) {
 	writePackSource(t, dir, "src/kit", kitManifest)
 	writePackSource(t, dir, "src/base", baseManifest)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   kit:
     source: ./src/kit
@@ -111,7 +111,7 @@ workflows:
 	writePackSource(t, dir, "src/kit", kit)
 	writePackSource(t, dir, "src/base", baseManifestNoConn)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   kit:
     source: ./src/kit
@@ -159,7 +159,7 @@ workflows:
 `
 	writePackSource(t, dir, "src/kit", kit)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   kit:
     source: ./src/kit
@@ -190,7 +190,7 @@ workflows:
 	writePackSource(t, dir, "src/kit", kit)
 	writePackSource(t, dir, "src/base", baseManifestNoConn)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   kit:
     source: ./src/kit
@@ -224,7 +224,7 @@ workflows:
 `)
 	writePackSource(t, dir, "src/child", baseManifestNoConn2)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   p:
     source: ./src/parent
@@ -274,7 +274,7 @@ workflows:
   flow: { steps: [ { id: s, run: js, code: "return {}" } ] }
 `)
 	body := `
-connectors: { gh: { type: github } }
+connectors: { gh: { use: github } }
 packs:
   x:
     source: ./src/alpha

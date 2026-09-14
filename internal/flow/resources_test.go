@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/kv"
+	"github.com/NodeSpy/conductor/internal/memory"
 )
 
 // The agent-authored resource allowlists (#124). The trigger in every case
@@ -24,7 +25,7 @@ func TestResourceAllowlistsDenyByDefault(t *testing.T) {
 	base := `
 policy:
   agent_authored:
-    allow: [ svc.post, kv.* ]
+    verbs: [svc.post, kv.*]
 vaults:
   house: { type: file, dir: /tmp/none }
 stores:
@@ -35,17 +36,17 @@ stores:
 	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
 	cases := []struct{ name, plan, want string }{
 		{"secret handle", `- uses: svc.post
-  options: { text: '{{secret "house/k"}}' }`, "allow_secrets"},
+  options: { text: '{{secret "house/k"}}' }`, ".secret"},
 		{"vault call", `- uses: svc.post
-  options: { text: '{{ vault "house" "k" }}' }`, "allow_secrets"},
+  options: { text: '{{ vault "house" "k" }}' }`, ".secret"},
 		{"vault field", `- uses: svc.post
-  options: { text: "{{.vaults.house.k}}" }`, "allow_secrets"},
+  options: { text: "{{.vaults.house.k}}" }`, ".secret"},
 		{"secrets field", `- uses: svc.post
-  options: { text: "{{.secrets.tok}}" }`, "allow_secrets"},
+  options: { text: "{{.secrets.tok}}" }`, ".secret"},
 		{"store", `- uses: kv.get
-  options: { store: main, key: k }`, "allow_stores"},
+  options: { store: main, key: k }`, ".store"},
 		{"foreign target", `- uses: svc.post
-  options: { text: hi, repo: other/repo }`, "allow_targets"},
+  options: { text: hi, repo: other/repo }`, ".repo"},
 	}
 	for _, c := range cases {
 		rig, fake := resourcePlan(t, base, c.plan)
@@ -65,10 +66,10 @@ func TestResourceAllowlistsAdmit(t *testing.T) {
 	pol := `
 policy:
   agent_authored:
-    allow: [ svc.post, kv.* ]
-    allow_secrets: [ house/k ]
-    allow_stores: [ main ]
-    allow_targets: [ friendly/* ]
+    verbs:
+      svc.post: {secret: [house/k], store: [main], repo: [friendly/*]}
+      kv.*: {secret: [house/k], store: [main], repo: [friendly/*]}
+      code: {secret: [house/k], store: [main], repo: [friendly/*]}
 vaults:
   house: { type: file, dir: /tmp/none }
 stores:
@@ -99,11 +100,11 @@ stores:
 	// An unlisted sibling secret still fails.
 	rig, _ = resourcePlan(t, pol, `- uses: svc.post
   options: { text: '{{secret "house/other"}}' }`)
-	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "allow_secrets") {
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, ".secret") {
 		t.Fatalf("unlisted secret must be denied: %v %q", failed, errStr)
 	}
 	// A vault glob admits the whole vault.
-	globPol := strings.Replace(pol, "allow_secrets: [ house/k ]", `allow_secrets: [ "house/*" ]`, 1)
+	globPol := strings.ReplaceAll(pol, "secret: [house/k]", `secret: ["house/*"]`)
 	rig, _ = resourcePlan(t, globPol, `- uses: svc.post
   options: { text: '{{secret "house/anything"}}' }`)
 	if failed, errStr := rig.workflowFailed(); failed {
@@ -116,8 +117,9 @@ func TestResourceAllowlistWildcardPerKind(t *testing.T) {
 	pol := `
 policy:
   agent_authored:
-    allow: [ svc.post ]
-    allow_secrets: ["*"]
+    verbs:
+      svc.post: {secret: ["*"]}
+      code: {secret: ["*"]}
     no_secret_egress: false
 vaults:
   house: { type: file, dir: /tmp/none }
@@ -133,9 +135,9 @@ stores:
 		t.Fatalf("wildcard secrets must admit: %s", errStr)
 	}
 	// …but stores stay denied.
-	rig, _ = resourcePlan(t, strings.Replace(pol, "allow: [ svc.post ]", "allow: [ svc.post, kv.* ]", 1),
+	rig, _ = resourcePlan(t, strings.Replace(pol, "      svc.post: {secret: [\"*\"]}", "      svc.post: {secret: [\"*\"]}\n      kv.*: {secret: [\"*\"]}", 1),
 		"- uses: kv.get\n  options: { store: main, key: k }")
-	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "allow_stores") {
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, ".store") {
 		t.Fatalf("wildcard secrets must not lift stores: %v %q", failed, errStr)
 	}
 }
@@ -174,9 +176,10 @@ func TestResourceAllowlistRuntimeBelt(t *testing.T) {
 	pol := `
 policy:
   agent_authored:
-    allow: [ svc.post, kv.* ]
-    allow_stores: [ main ]
-    allow_targets: [ friendly/* ]
+    verbs:
+      svc.post: {store: [main], repo: [friendly/*]}
+      kv.*: {store: [main], repo: [friendly/*]}
+      code: {store: [main], repo: [friendly/*]}
 stores:
   main: { type: boltdb }
 `
@@ -192,7 +195,7 @@ stores:
 	rig := newTestRunner(t, cfg, reg)
 	rig.Agents.dispatchFunc = planDispatch("```plan\n- uses: svc.post\n  options: { text: hi, repo: \"{{.msg}}\" }\n```")
 	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "evil/repo"}), mustSpec(t, planSpec))
-	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "allow_targets") {
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, ".repo") {
 		t.Fatalf("templated foreign target must be refused at runtime: %v %q", failed, errStr)
 	}
 	if len(fake.snapshot()) != 0 {
@@ -220,8 +223,9 @@ func TestResourceAllowlistCodeStores(t *testing.T) {
 	pol := `
 policy:
   agent_authored:
-    allow: [ workflow ]
-    allow_stores: [ main ]
+    verbs:
+      workflow: {store: [main]}
+      code: {store: [main]}
 stores:
   main: { type: boltdb }
   other: { type: boltdb }
@@ -240,7 +244,7 @@ workflows:
   workflow: touch
   with: { which: other }`)
 	failed, errStr := rig.workflowFailed()
-	if !failed || !strings.Contains(errStr, "allow_stores") {
+	if !failed || !strings.Contains(errStr, ".store") {
 		t.Fatalf("code-step touch of an unlisted store must be refused: %v %q", failed, errStr)
 	}
 	rig, _ = resourcePlan(t, pol, `- id: c
@@ -259,12 +263,12 @@ func TestResourceAllowlistsConfigStepsUnaffected(t *testing.T) {
 	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
 	cfg := loadConfig(t, `
 connectors:
-  svc: { type: fake }
+  svc: { use: fake }
 stores:
   main: { type: boltdb }
 policy:
   agent_authored:
-    allow: [ svc.post ]
+    verbs: [svc.post]
 `)
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
@@ -285,5 +289,94 @@ steps:
 	}
 	if calls := st.snapshot(); len(calls) != 1 {
 		t.Fatalf("calls: %+v", calls)
+	}
+}
+
+// ROUND-6 C. planDataGuard built its resource policy from core.Trigger{} — an
+// EMPTY trigger — so rp.trigger was "" and the dispatch's own scope was not
+// implicitly allowed on the code face. A `run: js` step touching its own
+// repo's memory scope, or its own target, was refused unless the operator had
+// listed it: the opposite of the rule the verb surfaces apply, and a refusal
+// that reads like a bug to whoever hits it.
+func TestCodeStepReachesItsOwnScopeWithNoAllowlist(t *testing.T) {
+	pol := `
+policy:
+  agent_authored:
+    verbs: [workflow, code]
+stores:
+  main: { type: boltdb }
+workflows:
+  touch:
+    inputs: { scope: { type: string, required: true } }
+    steps:
+      - id: w
+        run: js
+        code: 'return ctx.memory.remember("note", [], ctx.inputs.scope);'
+`
+	kv.SetDataDir(t.TempDir())
+	kv.ResetStores()
+	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
+	mgr, err := memory.Build(memory.Options{Type: "memory"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory.Configure(mgr)
+	t.Cleanup(func() { memory.Configure(nil) })
+
+	// newTrigger targets o/r, so the run's own scope is repo:o/r.
+	rig, _ := resourcePlan(t, pol, `- id: c
+  workflow: touch
+  with: { scope: "repo:o/r" }`)
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("a code step must reach the dispatch's OWN memory scope with no allowlist: %s", errStr)
+	}
+
+	// …and another tenant's scope is still refused.
+	rig, _ = resourcePlan(t, pol, `- id: c
+  workflow: touch
+  with: { scope: "repo:victim/other" }`)
+	failed, errStr := rig.workflowFailed()
+	if !failed || !strings.Contains(errStr, ".scope") {
+		t.Fatalf("another tenant's scope must still be refused: %v %q", failed, errStr)
+	}
+}
+
+// The same for a STORE: a code step reaching the store its own dispatch
+// targets is not what allow_stores exists to stop.
+func TestCodeStepOwnTargetStoreStillNeedsListing(t *testing.T) {
+	pol := `
+policy:
+  agent_authored:
+    verbs:
+      workflow: {store: [main]}
+      code: {store: [main]}
+stores:
+  main: { type: boltdb }
+  other: { type: boltdb }
+workflows:
+  touch:
+    inputs: { which: { type: string, required: true } }
+    steps:
+      - id: w
+        run: js
+        code: 'return ctx.store(ctx.inputs.which).get("ns", "k");'
+`
+	kv.SetDataDir(t.TempDir())
+	kv.ResetStores()
+	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
+
+	// A store is not a per-dispatch resource — there is no "own store" — so
+	// the listed one works and an unlisted one does not, unchanged by C.
+	rig, _ := resourcePlan(t, pol, `- id: c
+  workflow: touch
+  with: { which: main }`)
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("the listed store must work: %s", errStr)
+	}
+	rig, _ = resourcePlan(t, pol, `- id: c
+  workflow: touch
+  with: { which: other }`)
+	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, ".store") {
+		t.Fatalf("an unlisted store must still be refused: %v %q", failed, errStr)
 	}
 }

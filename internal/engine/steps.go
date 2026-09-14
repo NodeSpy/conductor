@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/cost"
+
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
@@ -58,21 +60,38 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		}
 
 		s := step
-		var profile config.AgentProfile
+		// A legacy Action step carries no behavior fields of its own, so
+		// `agent:` is where it points at some: a STEP REFERENCE
+		// (`<workflow>/<step-id>`) naming a step in the operator's own
+		// workflows. Anything else is a plain attribution label, and the
+		// dispatch runs on the policy baseline alone — deny-by-default, so
+		// no Action can inherit memory or a grant nobody wrote down.
+		profile, identity := e.actionProfile(s.Agent)
+		if s.Backend != "" {
+			profile.Runtime = s.Backend
+		}
+		model := ""
 		if s.Type == "agent" {
-			profile = e.cfg.Agents[s.Agent]
+			var rt string
+			model, rt = e.resolveModel(ctx, profile)
+			if rt != "" && profile.Runtime == "" {
+				// The fleet's winning model lives on that runtime; the
+				// step named none, so dispatch where the model actually is.
+				profile.Runtime = rt
+			}
 			if s.Background {
 				// A background step hands off a live agent for you to drive and
 				// close yourself; it sits idle *because* it's waiting for you, so
 				// the reaper must never archive it. Force this regardless of the
-				// profile — a stale-on-disk or mistaken archive_when_done: true
-				// must not be able to reap an interactive hand-off out from under you.
+				// referenced step — a stale-on-disk or mistaken
+				// archive_when_done: true must not reap an interactive hand-off
+				// out from under you.
 				profile.ArchiveWhenDone = false
 			}
 			if s.Prompt != "" {
 				s.Prompt += dispatch.WriteWrapperGuidance
 				s.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))
-				s.Prompt += e.memoryPrompt(s.Agent, profile, t)
+				s.Prompt += e.memoryPrompt(identity, profile, t, "")
 				if s.RerequestReview {
 					s.Prompt += dispatch.RerequestReviewGuidance
 				}
@@ -86,7 +105,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			}
 		}
 		req := dispatch.Request{
-			Trigger: t, Action: s, Profile: profile,
+			Trigger: t, Action: s, Step: profile, Identity: identity, Model: model,
 			Tokens: dispatch.Tokens{App: appTok, User: userTok},
 			Author: e.author, Shadow: shadow, Wait: !s.Background, Interactive: s.Background, Data: data,
 		}
@@ -107,6 +126,29 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			}
 			runner = r
 		}
+		// Both budget layers, which this path skipped entirely: a legacy
+		// `steps:` workflow could dispatch unbounded agents and unbounded
+		// spend while the single-action path next door was capped. The
+		// runaway guard exists to protect the box from a webhook flood;
+		// a workflow is the EASIEST way to produce one.
+		var spendRes *cost.Reservation
+		if s.Type == "agent" && !shadow {
+			if max := e.cfg.AgentsPerHour(); max > 0 && e.overAgentBudget(max) {
+				e.log("%s step %s: agent budget reached (%d/hr) — shedding, will retry later", tag(t), id, max)
+				e.store.Audit(map[string]any{"event": "step_shed", "repo": t.Target.Repo,
+					"number": t.Target.Number, "kind": t.Kind, "step": id, "reason": "agents_per_hour"})
+				e.finishRun(run)
+				return
+			}
+			res, berr := e.checkSpendBudget(e.runtimeOf(profile), nil, "", cost.Estimate(model, s.Prompt, ""))
+			if berr != nil {
+				e.shedForBudget(ctx, t, berr, shadow)
+				e.finishRun(run)
+				return
+			}
+			spendRes = res
+			e.recordAgentDispatch()
+		}
 		e.log("%s step %s running (%s)", tag(t), id, actionDesc(s))
 		start := time.Now()
 		ref, err := e.dispatchAgent(ctx, runner, req)
@@ -117,13 +159,24 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			ref = e.retryWhileDeferred(ctx, req, ref, s.Retry)
 		}
 		took := time.Since(start).Round(time.Second)
+		// Settle the reservation with what the step actually spent, so the
+		// rolling window reflects reality rather than the estimate.
+		if spendRes != nil {
+			if err != nil {
+				e.meter.Cancel(spendRes)
+			} else {
+				e.recordUsage(t, identity, e.runtimeOf(profile), id, run.ID, "", spendRes, cost.FromRun(model, s.Prompt, ref.Output))
+			}
+		}
 		// A background step launches a live agent and returns immediately; there's
 		// no captured output to fold into later steps.
 		outputs := map[string]any{}
 		if !s.Background {
 			outputs = extractOutputs(ref)
 			if s.Type == "agent" && err == nil && !shadow {
-				e.harvestMemory(t, s.Agent, run.ID, ref.Output)
+				// Same resolved identity the dispatch and outcomes use, so a
+				// harvested memory's provenance names the step, not the label.
+				e.harvestMemory(t, identity, run.ID, ref.Output, profile.Memory)
 			}
 		}
 		stepsOut[id] = map[string]any{"outputs": outputs}
@@ -181,7 +234,13 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			// Without one (none configured, or resolution came up empty), keep today's
 			// behavior: tell you to drive the agent in paseo.
 			if handoffCh != nil && e.broker != nil && ref.AgentID != "" {
-				e.startReviewHandoff(ctx, t, id, s.Agent, profile, ref, handoffCh)
+				// The RESOLVED identity, not the raw `agent:` label: the
+				// hand-off records its decision under OutcomeKeyFor(identity),
+				// so passing s.Agent filed the outcome under a key nothing
+				// else uses — the step's track record silently never
+				// accumulated, and the memory/session machinery looked for it
+				// under the identity this step actually has.
+				e.startReviewHandoff(ctx, t, id, identity, profile, ref, handoffCh)
 			} else {
 				e.notif.Emit(ctx, notify.EventNeedsInput, t,
 					fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
@@ -203,7 +262,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		// until the reaper's next poll. Fire-and-forget; the reaper is the backstop.
 		// A keyed session (affinity) is shared across events — never archived here.
 		if s.Type == "agent" && profile.ArchiveWhenDone && ref.AgentID != "" && !e.affinityOwns(ref.AgentID) {
-			go func(id string) { _ = e.disp.Archive(context.Background(), id) }(ref.AgentID)
+			go func(id string) { _ = e.archiveAgent(context.Background(), id) }(ref.AgentID)
 		}
 	}
 	e.notif.Emit(ctx, notify.EventComplete, t, "workflow")
@@ -219,7 +278,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 // resolved or the agent can't be bound, it falls back to today's behavior
 // (notify you to open the agent in paseo). Only invoked when ch and the broker
 // are configured.
-func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID, agentName string, profile config.AgentProfile, ref dispatch.RunRef, ch handoff.Channel) {
+func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID, identity string, profile config.Step, ref dispatch.RunRef, ch handoff.Channel) {
 	agentID := ref.AgentID
 	fallback := func(reason string) {
 		if reason != "" {
@@ -280,8 +339,8 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID,
 		}
 		e.log("%s review hand-off for %q resolved: %s", tag(t), stepID, dec.Action)
 		// The outcome loop (#36 §18): the human's terminal call on this
-		// agent's work is a quality signal.
-		e.recordDecisionOutcome(t, agentName, dec.Action)
+		// step's work is a quality signal, keyed by its track record.
+		e.recordDecisionOutcome(t, OutcomeKeyFor(identity, profile), dec.Action)
 		if dec.Action == handoff.ActionDiscard {
 			e.broker.Close(ctx, prKey)
 		}

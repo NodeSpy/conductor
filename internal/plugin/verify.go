@@ -70,13 +70,17 @@ func verify(s Spec) (digest string, err error) {
 	digest = hex.EncodeToString(h.Sum(nil))
 
 	if s.Sha256 == "" {
-		if s.AllowUnverified {
-			// Explicit, insecure dev opt-in: no pin to check against. The
-			// caller logs a prominent warning; we still return the digest so
-			// it can be shown/pinned.
+		if s.Local {
+			// A LOCAL development binary (`use: ./bin/conductor-jira`): the
+			// operator typed this path and rebuilds it constantly, so there is
+			// no meaningful sha to pin it to. The safe-permissions checks above
+			// still hold — that is what actually closes the swap window — and
+			// the caller logs the digest for attribution.
 			return digest, nil
 		}
-		return "", fmt.Errorf("plugin %s: no sha256 pin configured (set sha256: %s, or allow_unverified: true for dev)", s.Name, digest)
+		// A fetched plugin ALWAYS has a recorded sha; missing one means install
+		// state and the binary have diverged. Refuse rather than guess.
+		return "", fmt.Errorf("plugin %s: no verified sha recorded for the installed binary — re-run `conductor plugin update %s` to reinstall and re-record it", s.Name, s.Name)
 	}
 	if !strings.EqualFold(digest, s.Sha256) {
 		return "", fmt.Errorf("plugin %s: sha256 mismatch — refusing to execute (pinned %s, on disk %s)", s.Name, strings.ToLower(s.Sha256), digest)

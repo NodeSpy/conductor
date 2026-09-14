@@ -12,6 +12,7 @@ import (
 // durable shared memory, unlike the verb and code-binding write paths. Both
 // now pass the write guard.
 func TestWriteGuardBlocksHarvestAndIPCRemember(t *testing.T) {
+	authenticated(t, Source{Step: "a", Repo: "o/r", TargetTrusted: true}, 0)
 	const secret = "mem-s3cr3t-XYZZY"
 	m := NewManager(NewMemBackend())
 	m.SetWriteGuard(func(text string) error {
@@ -24,7 +25,7 @@ func TestWriteGuardBlocksHarvestAndIPCRemember(t *testing.T) {
 	// Harvest path: a remember block carrying the secret persists NOTHING
 	// (all or nothing — even the innocent note stays out).
 	out := "done.\n```remember\n- plain note\n- token is " + secret + "\n```"
-	entries, err := m.HarvestOutput(out, Source{Agent: "a"})
+	entries, err := m.HarvestOutput(out, Source{Step: "a"})
 	if err == nil || !strings.Contains(err.Error(), "refusing to persist") {
 		t.Fatalf("harvest of a secret must refuse: %v", err)
 	}
@@ -37,7 +38,7 @@ func TestWriteGuardBlocksHarvestAndIPCRemember(t *testing.T) {
 
 	// IPC path: the remember op is refused and audited as blocked.
 	var audits []map[string]any
-	resp := handleIPC(m, IPCRequest{Op: "remember", Text: "key=" + secret, Source: Source{Agent: "a"}}, Peer{},
+	resp := handleIPC(m, IPCRequest{Op: "remember", Text: "key=" + secret, Token: "test-credential"}, Peer{},
 		func(e map[string]any) { audits = append(audits, e) }, nil)
 	if resp.OK || !strings.Contains(resp.Error, "refusing to persist") {
 		t.Fatalf("IPC remember of a secret must refuse: %+v", resp)
@@ -59,7 +60,7 @@ func TestWriteGuardBlocksHarvestAndIPCRemember(t *testing.T) {
 	if _, err := m.HarvestOutput("```remember\n- a plain fact\n```", Source{}); err != nil {
 		t.Fatalf("clean harvest must pass: %v", err)
 	}
-	if resp := handleIPC(m, IPCRequest{Op: "remember", Text: "another fact", Source: Source{}}, Peer{}, nil, nil); !resp.OK {
+	if resp := handleIPC(m, IPCRequest{Op: "remember", Text: "another fact", Token: "test-credential"}, Peer{}, nil, nil); !resp.OK {
 		t.Fatalf("clean IPC remember must pass: %+v", resp)
 	}
 	if all, _ := m.List(); len(all) != 2 {
@@ -72,15 +73,16 @@ func TestWriteGuardBlocksHarvestAndIPCRemember(t *testing.T) {
 // before the write guard existed came straight back into agent context. Both
 // read paths redact now.
 func TestRecalledMemoryRedactsSecrets(t *testing.T) {
+	authenticated(t, Source{Step: "a", Repo: "o/r", TargetTrusted: true}, 0)
 	const secret = "recalled-s3cr3t-XYZZY"
 	m := NewManager(NewMemBackend())
 	// Persist directly (simulating a pre-guard or trusted-path write).
-	if _, err := m.Remember("deploy key is "+secret, nil, "global", Source{Agent: "old"}); err != nil {
+	if _, err := m.Remember("deploy key is "+secret, nil, "global", Source{Step: "old"}); err != nil {
 		t.Fatal(err)
 	}
 	m.SetRedactor(func(s string) string { return strings.ReplaceAll(s, secret, "[redacted]") })
 
-	section := m.PromptSection(Filter{}, "acme/w", "fixer")
+	section := m.PromptSection(Filter{}, ContextKeys("acme/w", "", "fixer"))
 	if strings.Contains(section, secret) {
 		t.Fatalf("secret reached the injected prompt section: %s", section)
 	}
@@ -88,7 +90,7 @@ func TestRecalledMemoryRedactsSecrets(t *testing.T) {
 		t.Fatalf("prompt section must carry the placeholder: %s", section)
 	}
 
-	resp := handleIPC(m, IPCRequest{Op: "recall", Source: Source{Agent: "a"}}, Peer{}, nil, nil)
+	resp := handleIPC(m, IPCRequest{Op: "recall", Token: "test-credential"}, Peer{}, nil, nil)
 	if !resp.OK || len(resp.Entries) != 1 {
 		t.Fatalf("recall: %+v", resp)
 	}
@@ -96,8 +98,16 @@ func TestRecalledMemoryRedactsSecrets(t *testing.T) {
 		t.Fatalf("secret reached the recall tool response: %s", resp.Entries[0].Text)
 	}
 	// The stored entry itself is untouched — redaction is read-side only.
-	all, _ := m.List()
+	// Read the BACKEND, not m.List(): Recall now redacts on the way out (so
+	// no read face can forget to), which is the property under test two
+	// assertions up. Going straight to storage is what "stored" means here.
+	all, _ := m.backend.List()
 	if len(all) != 1 || !strings.Contains(all[0].Text, secret) {
 		t.Fatalf("storage must keep the original (read-side redaction only): %v", all)
+	}
+	// And the read face does redact, for every op — not just the IPC one.
+	via, _ := m.List()
+	if len(via) != 1 || strings.Contains(via[0].Text, secret) {
+		t.Fatalf("List() must redact like every other read face: %v", via)
 	}
 }

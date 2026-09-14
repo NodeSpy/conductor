@@ -43,7 +43,8 @@ func TestPaseoDryRunArgvShape(t *testing.T) {
 		Action: config.Action{Type: "agent", Prompt: "review {{.repo}}#{{.pr}}", Checkout: "none",
 			OutputSchema: map[string]any{"type": "object"},
 			Env:          map[string]string{"SCOPE": "{{.kind}}"}},
-		Profile: config.AgentProfile{Provider: "claude", Model: "m1", Thinking: "high", Mode: "auto",
+		Model: "m1",
+		Step: config.Step{Model: config.ModelSpecOf("m1"), Thinking: "high", Mode: "auto",
 			WaitTimeout: config.Duration(5 * time.Minute)},
 		Tokens: Tokens{App: "at", User: "ut"},
 		Author: Author{Name: "Me", Email: "me@x"},
@@ -54,7 +55,7 @@ func TestPaseoDryRunArgvShape(t *testing.T) {
 	}
 	argv := strings.Join(ref.Argv, " ")
 	for _, want := range []string{
-		"review a/w#5", "--provider claude", "--model m1", "--thinking high", "--mode auto",
+		"review a/w#5", "--model m1", "--thinking high", "--mode auto",
 		"--env GH_TOKEN=ut", "--env PC_GH_APP_TOKEN=at",
 		"--env GIT_AUTHOR_NAME=Me", "--env GIT_COMMITTER_EMAIL=me@x",
 		"--env SCOPE=review_requested",
@@ -100,6 +101,41 @@ func TestPaseoCatchUpSkipsAndQueueFailure(t *testing.T) {
 	ref, err = d.paseo(context.Background(), req)
 	if err != nil || !ref.Queued || ref.AgentID != "a-live" {
 		t.Fatalf("queue success: %v %+v", err, ref)
+	}
+}
+
+// GUARD (#60, D1): every migrated flow step — even a single-step autonomous
+// fixer, not just a genuine multi-step workflow — dispatches with Wait=true
+// now (the #60 foreground-wait fix). The one-worker-per-PR dedup must not
+// have quietly stopped applying to it: a second event on a PR that already
+// has a live agent must queue onto it (RunRef.Queued=true), not spawn a
+// fresh one, regardless of Wait. A step whose OutputSchema a later step
+// reads is the one exception — it must actually dispatch and capture real
+// output, since queueing hands back a canned string instead of the schema.
+func TestPaseoForegroundWaitDispatchStillQueuesOntoLiveAgent(t *testing.T) {
+	bin, dir := fakePaseoDir(t)
+	put(t, dir, "ls-label.json", `[{"id":"a-live"}]`)
+	d := &Dispatcher{PaseoBin: bin, repoDirs: map[string]string{}}
+	req := Request{
+		Wait: true, // foreground — what flow now sets for every non-background step
+		Trigger: core.Trigger{Kind: "new_comment",
+			Target: core.Target{Repo: "grpd/burst", PR: 1, Number: 1}},
+		Action: config.Action{Type: "agent", Prompt: "p", Checkout: "none"},
+	}
+	ref, err := d.paseo(context.Background(), req)
+	if err != nil || !ref.Queued || ref.AgentID != "a-live" {
+		t.Fatalf("a foreground (Wait=true) dispatch onto a PR with a live agent "+
+			"should queue, not spawn a fresh one: %v %+v", err, ref)
+	}
+
+	req.Action.OutputSchema = map[string]any{"type": "object"}
+	ref, err = d.paseo(context.Background(), req)
+	if err != nil {
+		t.Fatalf("output-schema dispatch: %v", err)
+	}
+	if ref.Queued {
+		t.Fatal("a step with an OutputSchema must actually dispatch — queueing would " +
+			"hand it a canned \"queued to live agent\" string instead of the schema it declared")
 	}
 }
 

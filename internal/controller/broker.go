@@ -19,7 +19,22 @@ type SessionRef struct {
 	// post-restart resume re-derives the deny-by-default egress
 	// (#36 iso-review H5) instead of relaunching unrestricted.
 	AgentAuthored bool
-	UpdatedAt     time.Time
+	// Cwd is the worktree the session was opened in. It has to be PERSISTED,
+	// not just held in the controller's in-process map: after a daemon
+	// restart that map is empty, so a resume rooted the agent's server at ""
+	// (the daemon's own working directory) instead of the worktree — the
+	// agent then read and wrote the wrong tree. "" for transports that have
+	// no local path (a remote-host launch).
+	Cwd       string
+	UpdatedAt time.Time
+}
+
+// cwdKnower is implemented by controllers whose sessions are rooted in a
+// local worktree (ACP, opencode). The broker uses it to persist that path at
+// bind time and hand it back before a post-restart resume.
+type cwdKnower interface {
+	CwdOf(sessionID string) string
+	RememberCwd(sessionID, cwd string)
 }
 
 // SessionStore persists the broker's PR→session map so an interactive hand-off
@@ -107,6 +122,11 @@ func (b *Broker) Bind(prKey string, c Controller, sess Session, agentAuthored bo
 		Model:         c.Model(),
 		AgentAuthored: agentAuthored,
 	}
+	// Ask the controller where it opened the session, so the cwd survives a
+	// restart. Transports with no local path don't implement this.
+	if cp, ok := c.(cwdKnower); ok {
+		ref.Cwd = cp.CwdOf(sess.ID())
+	}
 	b.mu.Lock()
 	b.live[prKey] = sess
 	b.refs[prKey] = ref
@@ -157,6 +177,12 @@ func (b *Broker) Session(ctx context.Context, prKey string, h Handler) (Session,
 	c, err := b.reg.ByName(ref.Controller)
 	if err != nil {
 		return nil, err
+	}
+	// Seed the controller's cwd map from the PERSISTED ref before resuming.
+	// After a restart the in-process map is empty, and a resume with no cwd
+	// roots the agent at the daemon's own directory rather than the worktree.
+	if cp, ok := c.(cwdKnower); ok && ref.Cwd != "" {
+		cp.RememberCwd(ref.SessionID, ref.Cwd)
 	}
 	sess, err := c.ResumeSession(ctx, ref.SessionID, ref.AgentAuthored, h)
 	if err != nil {

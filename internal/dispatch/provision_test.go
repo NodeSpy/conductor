@@ -20,8 +20,8 @@ func TestProvisionWorktreeCreatesForPR(t *testing.T) {
 	req := Request{
 		Trigger: core.Trigger{Kind: "review_requested",
 			Target: core.Target{Repo: "o/r", PR: 7, Number: 7}},
-		Action:  config.Action{Type: "agent", Prompt: "review"},
-		Profile: config.AgentProfile{Workspace: "worktree"},
+		Action: config.Action{Type: "agent", Prompt: "review"},
+		Step:   config.Step{Workspace: "worktree"},
 	}
 	id, cwd, err := d.ProvisionWorktree(context.Background(), req)
 	if err != nil {

@@ -3,12 +3,35 @@
 // Integration interface + type registry the engine uses to start them.
 package core
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // KindClosed is a reserved kind an integration emits when the underlying object
 // (e.g. a PR) reaches a terminal state, so the engine drops its dedup state. It
 // never dispatches an action.
 const KindClosed = "_closed"
+
+// ReservedKind reports whether a kind is one the ENGINE itself interprets —
+// a fact it acts on rather than a name it routes by. `_closed` consumes a
+// target's engagements and settles its outcome; `failing_checks` records CI
+// failure and can re-run checks with the operator's token.
+//
+// A source that did not DECLARE such an event may not emit it. The bundled
+// integrations produce these from platform payloads they verified; a
+// third-party plugin emitting one is claiming a fact about somebody else's
+// world (round-13). Any kind beginning with `_` is reserved for the engine.
+func ReservedKind(kind string) bool {
+	if strings.HasPrefix(kind, "_") {
+		return true
+	}
+	switch kind {
+	case "failing_checks", "merge_conflict", "review_requested", "new_comment":
+		return true
+	}
+	return false
+}
 
 // Target identifies the GitHub (or future-source) object a Trigger concerns.
 // Fields are populated best-effort from the webhook payload; zero values mean
@@ -52,6 +75,31 @@ type Trigger struct {
 	Dedup    string            // dedup signature; empty => always act
 	Labels   map[string]string // extra labels to attach to dispatched work
 	Action   any               // integration-resolved action (engine asserts to config.Action)
+	// TargetTrusted marks a dispatch whose TARGET was assigned by the SOURCE
+	// ITSELF — a signature-verified github payload, a slack channel id, a
+	// synthetic target derived from the source's own configured name — rather
+	// than taken from data the sender of the event supplied.
+	//
+	// The zero value is UNTRUSTED, and that inversion is the point. Three
+	// separate findings in a row were the same shape: a Target built from
+	// payload data (a webhook `repo:` templated from the POST body, a plugin
+	// source's wire event, a run_step rebuilding its trigger) that nobody
+	// remembered to mark. A field whose safe state is the zero value cannot be
+	// forgotten — a new source that says nothing gets the safe answer, and
+	// claiming trust is a deliberate line of code with a reviewer's question
+	// attached: who chose this value?
+	//
+	// The scope layer reads it and extends "your own target needs no grant"
+	// only to a trusted one: a forged target gets no implicit own-repo, no own
+	// memory scope, none of the target-derived facts in a `{{ }}` allowlist
+	// entry, and no say in an agent-authored step's identity namespace.
+	TargetTrusted bool
+	// DispatchID is the daemon-assigned id of the dispatch this trigger was
+	// RECONSTRUCTED from, set only on the live-tool path (run_step). It is
+	// unique per launching dispatch and chosen by conductor — never by the
+	// event's sender, never by the agent — which is what makes it usable as a
+	// confinement anchor when the target cannot be trusted.
+	DispatchID string
 	// CatchUp marks a trigger emitted by the periodic sweep (re-derived state)
 	// rather than a fresh webhook event. When an agent is already working the PR,
 	// catch-up triggers are skipped (don't re-nudge) while fresh events are queued
@@ -71,12 +119,58 @@ type Trigger struct {
 	HistoryID string
 }
 
-// Key returns the stable per-object key used by the dedup store.
-func (t Trigger) Key() string {
-	if t.Target.Repo == "" {
-		return t.Source + ":" + t.Instance
+// OwnRepo is THE RULE for "which repo may this dispatch treat as its own",
+// and it exists because the answer had started being re-derived per struct.
+//
+// "The trusted dispatch" is represented three times — core.Trigger, the
+// provenance a live tool is handed (memory.Source), and the identity a skill
+// session stands for (flow.SkillIdentity) — and each carries a repo next to
+// the bit that says whether the event's SENDER chose it. Every own-scope
+// decision has to combine those two the same way; when the combining lived at
+// the call sites instead, one face was fixed per round and the next face kept
+// the raw repo. The memory IPC face granted implicit own-scope from a
+// webhook-forged repo for exactly that reason.
+//
+// So the combination is written once, here, and every representation exposes
+// it as an accessor rather than handing out its raw fields. "" means the
+// dispatch has no own repo — which is the correct, deny-by-default answer for
+// a target the sender picked.
+func OwnRepo(repo string, targetTrusted bool) string {
+	if !targetTrusted {
+		return ""
 	}
-	return t.Target.Repo + "#" + itoa(t.Target.Number)
+	return repo
+}
+
+// OwnRepo is the repo this dispatch may treat as its own. See core.OwnRepo.
+func (t Trigger) OwnRepo() string { return OwnRepo(t.Target.Repo, t.TargetTrusted) }
+
+// Key returns the stable per-object key used by the dedup store, the session
+// broker (the live interactive review hand-off), the PR labels a dispatch
+// carries, and the run id.
+//
+// It is built from the TRUSTED repo. A dispatch whose target the event's
+// SENDER chose — a webhook `repo:` templated from the POST body — gets a key
+// in its own namespace instead, so it can never equal the key a real dispatch
+// for that repo produces (round-12 #3). Without that, a forged target landed
+// on the victim PR's broker binding and was handed its live review session;
+// it also shared the victim's dedup entry, which is the same reach wearing a
+// different hat.
+//
+// A trusted dispatch's key is unchanged — "owner/repo#7", the spelling every
+// existing store record uses.
+func (t Trigger) Key() string {
+	if repo := t.OwnRepo(); repo != "" {
+		return repo + "#" + itoa(t.Target.Number)
+	}
+	if t.Target.Repo != "" {
+		// An untrusted target still needs a STABLE key — dedup and session
+		// reuse are what make a webhook source usable — so it keeps its repo
+		// and number, namespaced by the source that produced it. The sender
+		// picks what goes after the prefix; they do not pick the prefix.
+		return t.Source + ":" + t.Instance + ":" + t.Target.Repo + "#" + itoa(t.Target.Number)
+	}
+	return t.Source + ":" + t.Instance
 }
 
 // EmitFunc receives Triggers from an integration. It must be safe for

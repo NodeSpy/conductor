@@ -91,7 +91,7 @@ func tempStore(t *testing.T) *store.Store {
 }
 
 func baseCfg() *config.Config {
-	c := &config.Config{Agents: map[string]config.AgentProfile{"fixer": {Provider: "claude"}}}
+	c := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{{ID: "fixer"}}}}}
 	c.Control.Enabled = ptrBool(true)
 	return c
 }
@@ -112,9 +112,12 @@ func newEng(t *testing.T, cfg *config.Config, d *fakeDispatcher, n *fakeNotifier
 func agentTrigger(kind, repo string, num int, head, sig string, act config.Action) core.Trigger {
 	return core.Trigger{
 		Source: "github", Instance: "i", Kind: kind, Dedup: sig,
-		Target:  core.Target{Repo: repo, PR: num, Number: num, HeadSHA: head},
-		Context: map[string]any{"app_token": "atok"},
-		Action:  act,
+		// A github dispatch: the platform assigned this target, which is what
+		// puts its key in the trusted namespace (core.Trigger.Key).
+		TargetTrusted: true,
+		Target:        core.Target{Repo: repo, PR: num, Number: num, HeadSHA: head},
+		Context:       map[string]any{"app_token": "atok"},
+		Action:        act,
 	}
 }
 
@@ -127,7 +130,7 @@ func TestRuntimePauseSkips(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e := New(Options{Config: baseCfg(), Store: tempStore(t), Dispatch: d, Notifier: n,
 		UserToken: func() (string, error) { return "u", nil }, PausePath: pauseFile})
-	tr := agentTrigger("merge_conflict", "a/w", 1, "h", "sig", config.Action{Type: "agent", Agent: "fixer"})
+	tr := agentTrigger("merge_conflict", "a/w", 1, "h", "sig", config.Action{Type: "agent", Agent: "w/fixer"})
 
 	e.process(context.Background(), tr)
 	if len(d.reqs) != 0 {
@@ -148,14 +151,14 @@ func TestPauseLabelSkips(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, cfg, d, n, nil)
 
-	off := agentTrigger("merge_conflict", "a/w", 1, "h", "sig", config.Action{Type: "agent", Agent: "fixer"})
+	off := agentTrigger("merge_conflict", "a/w", 1, "h", "sig", config.Action{Type: "agent", Agent: "w/fixer"})
 	off.Context["labels"] = []string{"needs-work", "conductor:off"}
 	e.process(context.Background(), off)
 	if len(d.reqs) != 0 {
 		t.Fatalf("a pause-labeled object should be skipped, got %d", len(d.reqs))
 	}
 
-	on := agentTrigger("merge_conflict", "a/w", 2, "h2", "sig2", config.Action{Type: "agent", Agent: "fixer"})
+	on := agentTrigger("merge_conflict", "a/w", 2, "h2", "sig2", config.Action{Type: "agent", Agent: "w/fixer"})
 	on.Context["labels"] = []string{"needs-work"}
 	e.process(context.Background(), on)
 	if len(d.reqs) != 1 {
@@ -168,7 +171,7 @@ func TestAgentBudgetShedsOverCap(t *testing.T) {
 	cfg.Control.MaxAgentsPerHour = 2
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, cfg, d, n, nil)
-	act := config.Action{Type: "agent", Agent: "fixer"}
+	act := config.Action{Type: "agent", Agent: "w/fixer"}
 
 	// First two agent dispatches go through; the third is shed (over the hourly cap).
 	for i := 0; i < 3; i++ {
@@ -188,7 +191,7 @@ func TestAgentBudgetShedsOverCap(t *testing.T) {
 func TestDispatchAndRecord(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, baseCfg(), d, n, nil)
-	act := config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"}
+	act := config.Action{Type: "agent", Agent: "w/fixer", Prompt: "fix"}
 	tr := agentTrigger("new_comment", "a/w", 1, "h1", "sig1", act)
 
 	e.process(context.Background(), tr)
@@ -211,7 +214,7 @@ func TestDispatchAndRecord(t *testing.T) {
 func TestDedupSkipsRepeat(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, baseCfg(), d, n, nil)
-	act := config.Action{Type: "agent", Agent: "fixer"}
+	act := config.Action{Type: "agent", Agent: "w/fixer"}
 	tr := agentTrigger("new_comment", "a/w", 2, "h", "same", act)
 	e.process(context.Background(), tr)
 	e.process(context.Background(), tr)
@@ -240,7 +243,7 @@ func reviewCommentTrigger(repo string, num int, id int64, sig string, act config
 func TestCommentHWMAdvancesOnDispatch(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, baseCfg(), d, n, nil)
-	act := config.Action{Type: "agent", Agent: "fixer"}
+	act := config.Action{Type: "agent", Agent: "w/fixer"}
 
 	// A fresh comment dispatches and raises the high-water mark to its id.
 	e.process(context.Background(), commentTrigger("a/w", 1, 100, "c100", act))
@@ -255,7 +258,7 @@ func TestCommentHWMAdvancesOnDispatch(t *testing.T) {
 func TestCommentHWMSkipsAlreadyHandled(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, baseCfg(), d, n, nil)
-	act := config.Action{Type: "agent", Agent: "fixer"}
+	act := config.Action{Type: "agent", Agent: "w/fixer"}
 	if err := st.AdvanceCommentID("a/w#1", store.CommentKindIssue, 200); err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +285,7 @@ func TestCommentHWMSkipsAlreadyHandled(t *testing.T) {
 func TestCommentHWMIsPerKind(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, baseCfg(), d, n, nil)
-	act := config.Action{Type: "agent", Agent: "fixer"}
+	act := config.Action{Type: "agent", Agent: "w/fixer"}
 
 	// 1. github-actions[bot] posts a test report (issue comment, high id).
 	e.process(context.Background(), commentTrigger("a/w", 1, 5515854542, "c5515854542", act))
@@ -311,7 +314,7 @@ func TestCommentHWMIsPerKind(t *testing.T) {
 func TestCommentHWMKindDefaultsToIssue(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, baseCfg(), d, n, nil)
-	act := config.Action{Type: "agent", Agent: "fixer"}
+	act := config.Action{Type: "agent", Agent: "w/fixer"}
 	if err := st.AdvanceCommentID("a/w#1", store.CommentKindIssue, 200); err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +334,7 @@ func TestBackoffThenRetry(t *testing.T) {
 	e := New(Options{Config: baseCfg(), Store: st, Dispatch: d, Notifier: n,
 		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
 
-	act := config.Action{Type: "agent", Agent: "fixer", MaxAttemptsPerHead: 1}
+	act := config.Action{Type: "agent", Agent: "w/fixer", MaxAttemptsPerHead: 1}
 	// 1st: below soft → dispatches, records an attempt (attemptAt = clock).
 	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s1", act))
 	if len(d.reqs) != 1 {
@@ -374,7 +377,7 @@ func TestPolicyBackoffOverridesCadence(t *testing.T) {
 	e := New(Options{Config: cfg, Store: st, Dispatch: d, Notifier: n,
 		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
 
-	act := config.Action{Type: "agent", Agent: "fixer"} // no per-action threshold
+	act := config.Action{Type: "agent", Agent: "w/fixer"} // no per-action threshold
 	// 1st: below the policy's soft threshold → dispatches, records the attempt.
 	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s1", act))
 	if len(d.reqs) != 1 {
@@ -401,7 +404,7 @@ func TestReviewWorkflowSkippedWhenAgentParked(t *testing.T) {
 	dLive := &fakeDispatcher{liveAgent: true}
 	e, st := newEng(t, baseCfg(), dLive, &fakeNotifier{}, nil)
 	_ = st.RecordAttempt("a/w#10", "review_requested", "h")
-	wf := config.Action{Steps: []config.Action{{ID: "assess", Type: "agent", Agent: "fixer", Prompt: "x"}}}
+	wf := config.Action{Steps: []config.Action{{ID: "assess", Type: "agent", Agent: "w/fixer", Prompt: "x"}}}
 	e.process(context.Background(), agentTrigger("review_requested", "a/w", 10, "h", "reviewreq@h", wf))
 	time.Sleep(30 * time.Millisecond) // the workflow would spawn async; assert it didn't
 	if len(dLive.reqs) != 0 {
@@ -420,7 +423,7 @@ func TestReviewRequestReengagesOnNewHead(t *testing.T) {
 	dLive := &fakeDispatcher{liveAgent: true}
 	e, st := newEng(t, baseCfg(), dLive, &fakeNotifier{}, nil)
 	_ = st.RecordAttempt("a/w#12", "review_requested", "h1") // agent parked on old head h1
-	wf := config.Action{Steps: []config.Action{{ID: "assess", Type: "agent", Agent: "fixer", Prompt: "x"}}}
+	wf := config.Action{Steps: []config.Action{{ID: "assess", Type: "agent", Agent: "w/fixer", Prompt: "x"}}}
 
 	// Re-request on new head h2 → re-engage despite the parked agent (records h2).
 	e.process(ctx, agentTrigger("review_requested", "a/w", 12, "h2", "reviewreq@h2", wf))
@@ -475,7 +478,7 @@ func TestFailedDispatchRetriesUntilCap(t *testing.T) {
 	d := &fakeDispatcher{err: fmt.Errorf("WORKSPACE_CREATE_FAILED")}
 	n := &fakeNotifier{}
 	e, st := newEng(t, baseCfg(), d, n, nil)
-	act := config.Action{Type: "agent", Agent: "fixer", MaxAttemptsPerHead: 2}
+	act := config.Action{Type: "agent", Agent: "w/fixer", MaxAttemptsPerHead: 2}
 	tr := agentTrigger("merge_conflict", "a/w", 20, "h", "sig", act)
 
 	e.process(context.Background(), tr) // attempt 1 fails
@@ -511,7 +514,7 @@ func TestCompletionHookInvokedAfterOutcome(t *testing.T) {
 
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, baseCfg(), d, n, nil)
-	act := config.Action{Type: "agent", Agent: "fixer"}
+	act := config.Action{Type: "agent", Agent: "w/fixer"}
 	e.process(context.Background(), agentTrigger("new_comment", "a/w", 50, "h", "sig-ok", act))
 
 	fd, _ := newEng(t, baseCfg(), &fakeDispatcher{err: fmt.Errorf("boom")}, &fakeNotifier{}, nil)
@@ -533,7 +536,7 @@ func TestRerequestReviewGuidance(t *testing.T) {
 	d := &fakeDispatcher{}
 	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
 	e.process(context.Background(), agentTrigger("changes_requested", "a/w", 30, "h", "s",
-		config.Action{Type: "agent", Agent: "fixer", Prompt: "fix it"}))
+		config.Action{Type: "agent", Agent: "w/fixer", Prompt: "fix it"}))
 	if strings.Contains(d.reqs[0].Action.Prompt, "Re-request review ONLY") {
 		t.Fatal("re-request guidance must be opt-in")
 	}
@@ -542,7 +545,7 @@ func TestRerequestReviewGuidance(t *testing.T) {
 	d2 := &fakeDispatcher{}
 	e2, _ := newEng(t, baseCfg(), d2, &fakeNotifier{}, nil)
 	e2.process(context.Background(), agentTrigger("changes_requested", "a/w", 31, "h", "s",
-		config.Action{Type: "agent", Agent: "fixer", Prompt: "fix it", RerequestReview: true}))
+		config.Action{Type: "agent", Agent: "w/fixer", Prompt: "fix it", RerequestReview: true}))
 	if !strings.Contains(d2.reqs[0].Action.Prompt, "Re-request review ONLY") {
 		t.Fatalf("expected re-request guidance, got: %q", d2.reqs[0].Action.Prompt)
 	}
@@ -553,10 +556,10 @@ func TestFixersDoNotGetAskGuidance(t *testing.T) {
 	// interactive questions, even when its profile is archive_when_done. Interactive
 	// "ask me" behavior is reserved for review hand-offs (background workflow steps).
 	// It still gets the write-token wrapper.
-	cfg := &config.Config{Agents: map[string]config.AgentProfile{
-		"archived": {Provider: "claude", ArchiveWhenDone: true},
-		"kept":     {Provider: "claude"},
-	}}
+	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
+		{ID: "archived", ArchiveWhenDone: true},
+		{ID: "kept"},
+	}}}}
 	cfg.Control.Enabled = ptrBool(true)
 
 	for _, agent := range []string{"archived", "kept"} {
@@ -576,11 +579,10 @@ func TestFixersDoNotGetAskGuidance(t *testing.T) {
 func TestAgentGuidanceConfigOverride(t *testing.T) {
 	run := func(cfg *config.Config) string {
 		cfg.Control.Enabled = ptrBool(true)
-		cfg.Agents = map[string]config.AgentProfile{"fixer": {Provider: "claude"}}
 		d := &fakeDispatcher{}
 		e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
 		e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h", "s",
-			config.Action{Type: "agent", Agent: "fixer", Prompt: "do it"}))
+			config.Action{Type: "agent", Agent: "w/fixer", Prompt: "do it"}))
 		return d.reqs[0].Action.Prompt
 	}
 
@@ -612,10 +614,10 @@ func TestNonBackgroundStepArchivedImmediately(t *testing.T) {
 		return dispatch.RunRef{AgentID: "agent-assess", Output: `{"decision":"auto"}`}, nil
 	}}
 	cfg := baseCfg()
-	cfg.Agents["fixer"] = config.AgentProfile{Provider: "claude", ArchiveWhenDone: true}
+	cfg.Workflows["w"] = config.WorkflowDef{Steps: []config.Step{{ID: "fixer", ArchiveWhenDone: true}}}
 	e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
 	wf := config.Action{Steps: []config.Action{
-		{ID: "assess", Type: "agent", Agent: "fixer", Prompt: "decide"},
+		{ID: "assess", Type: "agent", Agent: "w/fixer", Prompt: "decide"},
 	}}
 	e.process(context.Background(), agentTrigger("review_requested", "a/w", 1, "h", "reviewreq@h", wf))
 
@@ -639,10 +641,9 @@ func TestNonBackgroundStepGetsNoAskGuidance(t *testing.T) {
 		return dispatch.RunRef{Output: `{"decision":"auto"}`}, nil
 	}}
 	cfg := baseCfg()
-	cfg.Agents["fixer"] = config.AgentProfile{Provider: "claude", ArchiveWhenDone: true}
 	e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
 	wf := config.Action{Steps: []config.Action{
-		{ID: "assess", Type: "agent", Agent: "fixer", Prompt: "decide auto or manual",
+		{ID: "assess", Type: "agent", Agent: "w/fixer", Prompt: "decide auto or manual",
 			OutputSchema: map[string]any{"decision": map[string]any{"type": "string"}}},
 	}}
 	e.process(context.Background(), agentTrigger("review_requested", "a/w", 1, "h", "reviewreq@h", wf))
@@ -663,7 +664,7 @@ func TestNonBackgroundStepGetsNoAskGuidance(t *testing.T) {
 func TestForceBypassesDedup(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, baseCfg(), d, n, nil)
-	act := config.Action{Type: "agent", Agent: "fixer"}
+	act := config.Action{Type: "agent", Agent: "w/fixer"}
 	tr := agentTrigger("new_comment", "a/w", 1, "h", "sig", act)
 
 	e.process(context.Background(), tr) // 1: dispatches, records the signature
@@ -693,7 +694,7 @@ func TestRetryWhileDeferred(t *testing.T) {
 	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
 	rp := &config.StepRetry{WhileOutputMatches: "status: retry",
 		Interval: config.Duration(2 * time.Millisecond), Timeout: config.Duration(2 * time.Second)}
-	req := dispatch.Request{Trigger: core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "a/w", Number: 1}}}
+	req := dispatch.Request{Trigger: core.Trigger{Kind: "review_requested", TargetTrusted: true, Target: core.Target{Repo: "a/w", Number: 1}}}
 	deferred := dispatch.RunRef{Output: "status: retry"}
 
 	// The method releases/re-acquires the concurrency slot around each wait, so the
@@ -722,20 +723,19 @@ func TestAdditiveGuidanceLayering(t *testing.T) {
 	global := "GLOBAL house style."
 	perAgent := "FIXER-only style."
 
-	run := func(profile config.AgentProfile, globalGuidance *string) string {
-		cfg := &config.Config{AgentGuidance: globalGuidance,
-			Agents: map[string]config.AgentProfile{"fixer": profile}}
+	// The layering is a property of the STEP, so it is exercised on the step
+	// directly — a legacy Action has no behavior fields of its own and there
+	// is no registry left to borrow them from.
+	run := func(profile config.Step, globalGuidance *string) string {
+		cfg := &config.Config{AgentGuidance: globalGuidance}
 		cfg.Control.Enabled = ptrBool(true)
-		d := &fakeDispatcher{}
-		e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
-		e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h", "s",
-			config.Action{Type: "agent", Agent: "fixer", Prompt: "do it"}))
-		return d.reqs[0].Action.Prompt
+		e, _ := newEng(t, cfg, &fakeDispatcher{}, &fakeNotifier{}, nil)
+		return e.agentGuidance(profile, config.Policy{})
 	}
-	prof := func(g config.GuidanceSpec) config.AgentProfile {
-		return config.AgentProfile{Provider: "claude", Guidance: &g}
+	prof := func(g config.GuidanceSpec) config.Step {
+		return config.Step{Guidance: &g}
 	}
-	base := config.AgentProfile{Provider: "claude"}
+	base := config.Step{}
 
 	// The core of this feature: per-agent guidance STACKS onto the global (layer 0)
 	// rather than replacing it — both must be present.
@@ -770,15 +770,11 @@ func TestAdditiveGuidanceLayering(t *testing.T) {
 
 	// policy.guidance is the scoped baseline (layer 0): the agent profile stacks
 	// on top of it, exactly like the top-level agent_guidance alias does.
-	runPol := func(profile config.AgentProfile, base *config.GuidanceSpec) string {
-		cfg := &config.Config{Policy: &config.Policy{Guidance: base},
-			Agents: map[string]config.AgentProfile{"fixer": profile}}
+	runPol := func(profile config.Step, base *config.GuidanceSpec) string {
+		cfg := &config.Config{Policy: &config.Policy{Guidance: base}}
 		cfg.Control.Enabled = ptrBool(true)
-		d := &fakeDispatcher{}
-		e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
-		e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h", "s",
-			config.Action{Type: "agent", Agent: "fixer", Prompt: "do it"}))
-		return d.reqs[0].Action.Prompt
+		e, _ := newEng(t, cfg, &fakeDispatcher{}, &fakeNotifier{}, nil)
+		return e.agentGuidance(profile, config.Policy{Guidance: base})
 	}
 	if p := runPol(prof(config.GuidanceSpec{Parts: []string{perAgent}}), &config.GuidanceSpec{Parts: []string{"POLICY base"}}); !strings.Contains(p, "POLICY base") || !strings.Contains(p, perAgent) {
 		t.Fatalf("policy.guidance should be layer 0 with the profile stacked on top, got: %q", p)
@@ -790,7 +786,7 @@ func TestLiveGatedKindNotAbandonedOnDispatch(t *testing.T) {
 	// must NOT record a done/dedup flag — otherwise a culled/incomplete agent
 	// leaves the work marked done and the sweep never retries it. It should
 	// re-fire until the underlying condition clears (or an agent is working it).
-	act := config.Action{Type: "agent", Agent: "fixer"}
+	act := config.Action{Type: "agent", Agent: "w/fixer"}
 	d := &fakeDispatcher{} // dispatch succeeds, no lingering agent
 	e, st := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
 	tr := agentTrigger("changes_requested", "a/w", 50, "h", "threads:h:2:abc", act)
@@ -823,7 +819,7 @@ func TestKillSwitch(t *testing.T) {
 	cfg.Control.Enabled = ptrBool(false)
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, cfg, d, n, nil)
-	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 4, "h", "s", config.Action{Type: "agent", Agent: "fixer"}))
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 4, "h", "s", config.Action{Type: "agent", Agent: "w/fixer"}))
 	if len(d.reqs) != 0 {
 		t.Fatal("kill switch should block dispatch")
 	}
@@ -834,7 +830,7 @@ func TestShadowPropagates(t *testing.T) {
 	cfg.Control.Shadow = true
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, cfg, d, n, nil)
-	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 5, "h", "s", config.Action{Type: "agent", Agent: "fixer"}))
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 5, "h", "s", config.Action{Type: "agent", Agent: "w/fixer"}))
 	if len(d.reqs) != 1 || !d.reqs[0].Shadow {
 		t.Fatalf("shadow not propagated: %+v", d.reqs)
 	}
@@ -848,12 +844,12 @@ func TestShadowPropagates(t *testing.T) {
 func TestClosedDeletesState(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, baseCfg(), d, n, nil)
-	e.process(context.Background(), agentTrigger("new_comment", "a/w", 6, "h", "s", config.Action{Type: "agent", Agent: "fixer"}))
+	e.process(context.Background(), agentTrigger("new_comment", "a/w", 6, "h", "s", config.Action{Type: "agent", Agent: "w/fixer"}))
 	if st.LastSignature("a/w#6", "new_comment") == "" {
 		t.Fatal("precondition: expected recorded state")
 	}
 	e.process(context.Background(), core.Trigger{Source: "github", Kind: core.KindClosed,
-		Target: core.Target{Repo: "a/w", PR: 6, Number: 6}})
+		TargetTrusted: true, Target: core.Target{Repo: "a/w", PR: 6, Number: 6}})
 	if st.LastSignature("a/w#6", "new_comment") != "" {
 		t.Fatal("closed trigger should delete state")
 	}
@@ -862,7 +858,7 @@ func TestClosedDeletesState(t *testing.T) {
 func TestDisabledActionSkipped(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, baseCfg(), d, n, nil)
-	act := config.Action{Type: "agent", Agent: "fixer", Enabled: ptrBool(false)}
+	act := config.Action{Type: "agent", Agent: "w/fixer", Enabled: ptrBool(false)}
 	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 7, "h", "s", act))
 	if len(d.reqs) != 0 {
 		t.Fatal("disabled action should not dispatch")
@@ -907,7 +903,7 @@ func TestConcurrencyCapBlocksSecondAgent(t *testing.T) {
 	g := &gateFake{waitCh: make(chan struct{})}
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: g, Notifier: &fakeNotifier{},
 		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
-	act := config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"}
+	act := config.Action{Type: "agent", Agent: "w/fixer", Prompt: "fix"}
 
 	// First agent takes the only slot; its WaitForAgent blocks, holding it.
 	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 1, "h1", "s1", act))
@@ -943,7 +939,7 @@ func TestPolicyConcurrencyCapsAgents(t *testing.T) {
 	g := &gateFake{waitCh: make(chan struct{})}
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: g, Notifier: &fakeNotifier{},
 		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
-	act := config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"}
+	act := config.Action{Type: "agent", Agent: "w/fixer", Prompt: "fix"}
 
 	// First agent takes the only slot; its WaitForAgent blocks, holding it.
 	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 1, "h1", "s1", act))
@@ -974,7 +970,7 @@ func TestFlakyRerunBeforeDispatch(t *testing.T) {
 	rerun := func(_ context.Context, _ core.Trigger, id int64) error { reran = append(reran, id); return nil }
 	e, _ := newEng(t, baseCfg(), d, n, rerun)
 
-	act := config.Action{Type: "agent", Agent: "fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
+	act := config.Action{Type: "agent", Agent: "w/fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
 	tr := agentTrigger("failing_checks", "a/w", 8, "h", "fail@h", act)
 	tr.Context["run_id"] = int64(555)
 
@@ -1008,7 +1004,7 @@ func TestFlakyRerunFailureNotCounted(t *testing.T) {
 		return nil
 	}
 	e, _ := newEng(t, baseCfg(), d, n, rerun)
-	act := config.Action{Type: "agent", Agent: "fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
+	act := config.Action{Type: "agent", Agent: "w/fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
 	tr := agentTrigger("failing_checks", "a/w", 8, "h", "fail@h", act)
 	tr.Context["run_id"] = int64(555)
 
@@ -1034,7 +1030,7 @@ func TestFlakyRerunWaitsForRunToFinish(t *testing.T) {
 	e, _ := newEng(t, baseCfg(), d, n, func(context.Context, core.Trigger, int64) error { reran++; return nil })
 	status := "in_progress"
 	e.runStatus = func(context.Context, core.Trigger, int64) (string, error) { return status, nil }
-	act := config.Action{Type: "agent", Agent: "fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
+	act := config.Action{Type: "agent", Agent: "w/fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
 	tr := agentTrigger("failing_checks", "a/w", 8, "h", "fail@h", act)
 	tr.Context["run_id"] = int64(555)
 
@@ -1060,7 +1056,7 @@ func TestFlakyRerunSkippedWithoutRunID(t *testing.T) {
 		t.Fatal("run status should not be looked up without a run id")
 		return "", nil
 	}
-	act := config.Action{Type: "agent", Agent: "fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
+	act := config.Action{Type: "agent", Agent: "w/fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
 	tr := agentTrigger("failing_checks", "a/w", 8, "h", "fail@h", act)
 	tr.Context["run_id"] = int64(0)
 
@@ -1073,7 +1069,7 @@ func TestFlakyRerunSkippedWithoutRunID(t *testing.T) {
 func TestVariantDedupIsolation(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, baseCfg(), d, n, nil)
-	act := config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"}
+	act := config.Action{Type: "agent", Agent: "w/fixer", Prompt: "fix"}
 
 	// Variant "a" acts on a comment; its dedup is keyed new_comment#a.
 	ta := agentTrigger("new_comment", "a/w", 5, "h", "sig", act)
@@ -1121,11 +1117,12 @@ func TestLogTag(t *testing.T) {
 func TestAgentWithUnrunnableControllerEscalates(t *testing.T) {
 	cfg := baseCfg()
 	cfg.Controllers = map[string]config.ControllerConfig{"ocode": {Agent: "opencode"}}
-	cfg.Agents["fixer"] = config.AgentProfile{Provider: "claude", Controller: "ocode"}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, cfg, d, n, nil)
 
-	act := config.Action{Type: "agent", Agent: "fixer", Prompt: "go"}
+	// A legacy Action names its runtime with `backend:` — there is no step
+	// registry left to carry a `runtime:` on its behalf.
+	act := config.Action{Type: "agent", Agent: "w/fixer", Backend: "ocode", Prompt: "go"}
 	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 5, "h", "sig", act))
 
 	if len(d.reqs) != 0 {
@@ -1142,7 +1139,7 @@ func TestAgentWithUnrunnableControllerEscalates(t *testing.T) {
 func TestAgentDefaultControllerDispatchesThroughPaseo(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, baseCfg(), d, n, nil)
-	act := config.Action{Type: "agent", Agent: "fixer", Prompt: "go"}
+	act := config.Action{Type: "agent", Agent: "w/fixer", Prompt: "go"}
 	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 5, "h", "sig", act))
 	if len(d.reqs) != 1 {
 		t.Fatalf("default config must dispatch through paseo exactly once, got %d", len(d.reqs))

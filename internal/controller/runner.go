@@ -93,17 +93,23 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	)
 	if r.prov != nil {
 		if wsID, cwd, err = r.prov.ProvisionWorktree(ctx, req); err != nil {
-			return ref, err
+			// The workspace/worktree never came up — the dispatch never
+			// reached a working runtime. Escalate rather than an ordinary
+			// step failure (#60).
+			return ref, dispatch.Unrecoverable(err)
 		}
 	}
 
 	sess, err := r.c.NewSession(ctx, Spec{Request: req, Cwd: cwd, WorkspaceID: wsID}, r.h)
 	if err != nil {
-		return ref, err
+		// The session never opened — including a runtime that crashed before
+		// its first turn (ACP session/new failing mid-launch, J3). Same class
+		// as a failed provision: escalate (#60).
+		return ref, dispatch.Unrecoverable(err)
 	}
 	// The provisioned worktree is where gate checks run and the proposed
 	// diff is read (#36 §16/§17); remote-host launches have no local path.
-	if resolveHost(hostOf(r.c), req.Profile.Host) == "" {
+	if resolveHost(hostOf(r.c), req.Step.Host) == "" {
 		ref.Workdir = cwd
 	}
 
@@ -116,6 +122,25 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	r.mu.Unlock()
 
 	ref.AgentID = id
+
+	// A foreground dispatch (a workflow/flow step — as opposed to a background
+	// hand-off, which returns immediately so you can drive the live session)
+	// must behave like the paseo backend's own foreground launch: the first
+	// turn runs to completion before Dispatch returns. Every controller here
+	// opens its session and drives that turn in a background goroutine
+	// (Session.Wait is how a caller blocks for it) — without this, the caller
+	// checkpoints the step "done" and, when archive_when_done is set, archives
+	// the session immediately: Close cancels the session's context, racing the
+	// still-running turn and killing it mid-edit/commit/push (#60).
+	if req.Wait && !req.Interactive {
+		if w, ok := sess.(waiter); ok {
+			timeout := time.Hour
+			if d := req.Step.WaitTimeout.D(); d > 0 {
+				timeout = d + 5*time.Minute
+			}
+			w.Wait(ctx, timeout)
+		}
+	}
 	return ref, nil
 }
 
