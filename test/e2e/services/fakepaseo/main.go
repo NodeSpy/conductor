@@ -43,6 +43,8 @@ func main() {
 		cmdLs(os.Args[2:])
 	case "inspect":
 		cmdInspect(os.Args[2:])
+	case "logs":
+		cmdLogs(os.Args[2:])
 	case "send":
 		cmdSend(os.Args[2:])
 	case "archive":
@@ -77,6 +79,12 @@ type agent struct {
 	CreatedAt time.Time         `json:"created_at"`
 	LastUsage time.Time         `json:"last_usage"`
 	Sends     []string          `json:"sends"`
+	// Prompt/Reply mirror real paseo's timeline: `paseo run` returns only the
+	// launch envelope, and the agent's answer is recovered from `paseo logs`.
+	// The output_schema SOFT path reads it that way, so the fake stores the
+	// (schema-augmented) prompt echo and the canned reply here for `cmdLogs`.
+	Prompt string `json:"prompt"`
+	Reply  string `json:"reply"`
 }
 
 type workspace struct {
@@ -308,6 +316,9 @@ func cmdRun(args []string) {
 		postComment(p)
 	}
 
+	// The canned final answer (a `[[reply {...}]]` directive). Stored on the
+	// agent for `paseo logs` (the SOFT capture path) regardless of schema mode.
+	replyRaw, hasReply := replyDirective(prompt)
 	id := ""
 	withState(func(s *state) {
 		s.Seq++
@@ -316,6 +327,7 @@ func cmdRun(args []string) {
 		s.Agents[id] = &agent{
 			ID: id, Cwd: cwd, Status: "idle", Title: p.title,
 			Labels: p.labels, CreatedAt: now, LastUsage: now,
+			Prompt: prompt, Reply: string(replyRaw),
 		}
 	})
 	// Conductor parses the launched agent id off stdout JSON AND reads runtime-
@@ -334,14 +346,41 @@ func cmdRun(args []string) {
 	// scenario prompt drive both the native attempt (schema flag present,
 	// answered structurally) and the soft fallback (schema injected as text,
 	// answered identically) with the same canned JSON.
-	if raw, ok := replyDirective(prompt); ok {
+	// NATIVE path only: real paseo's --output-schema returns the structured
+	// answer on stdout, so echo it here when the schema flag was present. The
+	// SOFT path (no schema flag) must NOT — real `paseo run` returns only the
+	// envelope, and conductor reads the answer back via `paseo logs` (cmdLogs).
+	if p.hasSchema && hasReply {
 		var v any
-		if err := json.Unmarshal(raw, &v); err == nil {
+		if err := json.Unmarshal(replyRaw, &v); err == nil {
 			resp["output"] = v
 		}
 	}
 	b, _ := json.Marshal(resp)
 	fmt.Println(string(b))
+}
+
+// ---- logs -------------------------------------------------------------------
+
+// cmdLogs mirrors `paseo logs <id> [--tail n]`: the `[User]` prompt echo (which
+// for a soft run carries the injected schema document) followed by the agent's
+// message. The output_schema SOFT path reads the answer from here because
+// `paseo run` returns only the launch envelope.
+func cmdLogs(args []string) {
+	id := ""
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			id = a
+			break
+		}
+	}
+	s := readState()
+	ag, ok := s.Agents[id]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "fakepaseo: unknown agent %q\n", id)
+		os.Exit(1)
+	}
+	fmt.Printf("[User] %s\n%s\n", ag.Prompt, ag.Reply)
 }
 
 // replyDirective extracts a `[[reply {...json...}]]` marker from the prompt —
