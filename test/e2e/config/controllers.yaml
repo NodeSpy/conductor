@@ -98,6 +98,14 @@ triggers:
         workspace: worktree
         archive_when_done: true
         runtime: pae
+        # A2b: model-pinned dispatch — fakepaseo's `provider ls`/`provider
+        # models` roster confirms this exact pin, so the resolver's Decision
+        # carries its Provider (models.Resolver, design §2.3) and dispatch
+        # must pass BOTH --model and --provider to `paseo run`. Regression
+        # coverage for the v0.9.0 MISSING_PROVIDER bug: fakepaseo now rejects
+        # --model without --provider (see services/fakepaseo), so this
+        # scenario fails loudly if the fix regresses.
+        model: claude-opus-5-e2e
   - "on": github.merge_conflict
     filters:
       exclude_repos:

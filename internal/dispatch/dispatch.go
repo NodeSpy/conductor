@@ -48,7 +48,12 @@ type Request struct {
 	Identity string
 	// Model is the RESOLVED model for this dispatch ("" = bare launch, the
 	// runtime's own default). It is part of the session-affinity partition.
-	Model     string
+	Model string
+	// Provider is the resolved model's catalog provider (models.Decision.
+	// Provider), passed to `paseo run --provider`. Empty means bare launch or
+	// an unconfirmed pass-through pin — paseo/the runtime falls back to its
+	// own default provider resolution in that case.
+	Provider  string
 	Tokens    Tokens
 	Author    Author
 	Workspace string // base workspace id/path to worktree from (optional)

@@ -70,10 +70,10 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		if s.Backend != "" {
 			profile.Runtime = s.Backend
 		}
-		model := ""
+		model, modelProvider := "", ""
 		if s.Type == "agent" {
 			var rt string
-			model, rt = e.resolveModel(ctx, profile)
+			model, rt, modelProvider = e.resolveModel(ctx, profile)
 			if rt != "" && profile.Runtime == "" {
 				// The fleet's winning model lives on that runtime; the
 				// step named none, so dispatch where the model actually is.
@@ -105,7 +105,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			}
 		}
 		req := dispatch.Request{
-			Trigger: t, Action: s, Step: profile, Identity: identity, Model: model,
+			Trigger: t, Action: s, Step: profile, Identity: identity, Model: model, Provider: modelProvider,
 			Tokens: dispatch.Tokens{App: appTok, User: userTok},
 			Author: e.author, Shadow: shadow, Wait: !s.Background, Interactive: s.Background, Data: data,
 		}

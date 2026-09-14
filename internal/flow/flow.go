@@ -73,8 +73,10 @@ type AgentServices struct {
 	// are one decision: the second result is the runtime to dispatch on,
 	// or "" when the step already pinned one and the caller's stands.
 	// "" is a BARE LAUNCH — dispatch with no --model. nil = no model layer
-	// (tests): every dispatch bare-launches.
-	ResolveModel func(ctx context.Context, s config.Step) (model, runtime string)
+	// (tests): every dispatch bare-launches. The third result is the
+	// resolved model's provider (models.Decision.Provider) — "" for a bare
+	// launch or an unconfirmed pass-through pin.
+	ResolveModel func(ctx context.Context, s config.Step) (model, runtime, provider string)
 	// Revise delivers a supervise-loop follow-up to the authoring agent's
 	// live session (§10) and returns the captured reply. ok=false when the
 	// agent has no bound session (or the runtime can't capture follow-up
@@ -1389,10 +1391,10 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// memory, sessions, and outcomes use (§5).
 	identity := stepIdentity(ctx, step, slot)
 	// The RESOLVED model — "" is a bare launch, a first-class outcome.
-	model := ""
+	model, provider := "", ""
 	if r.Agents.ResolveModel != nil {
 		var rt string
-		model, rt = r.Agents.ResolveModel(ctx, step)
+		model, rt, provider = r.Agents.ResolveModel(ctx, step)
 		if rt != "" && step.Runtime == "" {
 			// The fleet's winning model lives on that runtime and the step
 			// named none — dispatch where the model actually is, not on
@@ -1496,7 +1498,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		sanitizeAgentAuthoredStep(&step)
 	}
 	req := dispatch.Request{
-		Trigger: t, Action: act, Step: step, Identity: identity, Model: model, Tokens: tokens,
+		Trigger: t, Action: act, Step: step, Identity: identity, Model: model, Provider: provider, Tokens: tokens,
 		Shadow: shadow, Wait: !step.Background, Interactive: step.Background, Data: data,
 		AgentAuthored: authored,
 		// The daemon's own id for THIS dispatch — what a live tool's

@@ -33,21 +33,28 @@ func (e *Engine) SetModelResolver(r *models.Resolver) { e.modelResolver = r }
 //
 // The runtime is "" when the step pinned one (the caller's stays
 // authoritative) or when there was nothing to resolve.
-func (e *Engine) resolveModel(ctx context.Context, step config.Step) (model, runtime string) {
+//
+// provider is the resolved model's catalog provider (models.Decision.
+// Provider) — "" for a bare launch or a pass-through pin no roster
+// confirmed. It travels alongside model regardless of whether the runtime
+// echo is suppressed: dispatch needs it (`paseo run --provider`) even when
+// the step already pinned its own runtime.
+func (e *Engine) resolveModel(ctx context.Context, step config.Step) (model, runtime, provider string) {
 	if e.modelResolver == nil {
 		// No model layer wired (a bare daemon, or a test). An EXACT PIN is
 		// still an operator instruction, not a preference — honor it rather
 		// than silently bare-launching something the config named. Anything
 		// needing a roster (a fleet, a wildcard) has nothing to resolve
-		// against and bare-launches.
-		return exactPin(step.Model), ""
+		// against and bare-launches. No roster means no confirmed provider
+		// either.
+		return exactPin(step.Model), "", ""
 	}
 	d, err := e.modelResolver.Resolve(ctx, step.Model, step.Runtime)
 	if err != nil {
 		e.log("model resolution for step %q: %v — dispatching bare", step.Name, err)
 		e.store.Audit(map[string]any{"event": "model_unresolved",
 			"step": step.Name, "runtime": step.Runtime, "error": err.Error()})
-		return "", ""
+		return "", "", ""
 	}
 	if d.Notice != "" {
 		e.log("model: %s", d.Notice)
@@ -55,9 +62,9 @@ func (e *Engine) resolveModel(ctx context.Context, step config.Step) (model, run
 	// A step that pinned a runtime keeps it — the resolver was asked to
 	// choose WITHIN that runtime, so echoing it back would be noise.
 	if step.Runtime != "" {
-		return d.Model, ""
+		return d.Model, "", d.Provider
 	}
-	return d.Model, d.Runtime
+	return d.Model, d.Runtime, d.Provider
 }
 
 // stepByIdentity finds the configured step carrying an identity, plus the
@@ -82,7 +89,7 @@ func (e *Engine) stepByIdentity(ctx context.Context, identity string) (config.St
 	if !ok {
 		return config.Step{}, "", false
 	}
-	m, _ := e.resolveModel(ctx, found)
+	m, _, _ := e.resolveModel(ctx, found)
 	return found, m, true
 }
 

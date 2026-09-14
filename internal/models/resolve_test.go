@@ -70,6 +70,34 @@ func withFakeCLI(t *testing.T, byRuntime map[string][]string) {
 	})
 }
 
+// withFakeCLIRoster is withFakeCLI's provider-carrying variant: byRuntime
+// gives full Model entries (with Provider set) instead of bare ids, for
+// tests asserting Decision.Provider — the field a roster-confirmed pick
+// carries through to `paseo run --provider` (the v0.9.0 regression: the
+// roster always knew a model's provider, but Decision discarded it).
+func withFakeCLIRoster(t *testing.T, byRuntime map[string]Roster) {
+	t.Helper()
+	registryMu.RLock()
+	prev, had := registry["cli"]
+	registryMu.RUnlock()
+	Register("cli", func(rt Runtime, _ *Catalog) Lister {
+		roster, ok := byRuntime[rt.Name]
+		if !ok {
+			return &fakeLister{err: ErrNoDiscovery}
+		}
+		return &fakeLister{roster: roster}
+	})
+	t.Cleanup(func() {
+		registryMu.Lock()
+		if had {
+			registry["cli"] = prev
+		} else {
+			delete(registry, "cli")
+		}
+		registryMu.Unlock()
+	})
+}
+
 func mustResolve(t *testing.T, r *Resolver, spec config.ModelSpec, hint string) Decision {
 	t.Helper()
 	d, err := r.Resolve(context.Background(), spec, hint)
@@ -110,6 +138,28 @@ func TestResolveFleetOrderWinsWithoutPrefer(t *testing.T) {
 	d := mustResolve(t, NewResolver(cfg, nil), config.ModelSpecOf("reviewer"), "")
 	if d.Model != "claude-opus-5" {
 		t.Fatalf("decision = %#v", d)
+	}
+}
+
+// REGRESSION (v0.9.0): the resolver's roster ALWAYS knew a model's provider
+// (paseoLister/catalog build Model{Provider: ...}), but Decision had no
+// Provider field, so it never reached dispatch's `paseo run --provider`.
+// Every dispatch to real paseo with a fleet-resolved model then failed
+// MISSING_PROVIDER. This asserts the rung-2 (bestAcceptable) path carries
+// the winning model's provider through.
+func TestResolveFleetDecisionCarriesProvider(t *testing.T) {
+	withFakeCLIRoster(t, map[string]Roster{
+		"main": {
+			{ID: "claude-opus-5", Provider: "anthropic"},
+			{ID: "gpt-5.6-sol", Provider: "openai"},
+		},
+	})
+	cfg := testCfg(t, map[string]config.RuntimeConfig{"main": {}}, map[string]config.FleetSpec{
+		"reviewer": config.FleetOf(false, "claude-opus-*", "gpt-5.6-*"),
+	})
+	d := mustResolve(t, NewResolver(cfg, nil), config.ModelSpecOf("reviewer"), "")
+	if d.Model != "claude-opus-5" || d.Provider != "anthropic" {
+		t.Fatalf("decision = %#v, want Model=claude-opus-5 Provider=anthropic", d)
 	}
 }
 
@@ -224,6 +274,24 @@ func TestResolveConsumerOverrideBeatsTheFleet(t *testing.T) {
 	}
 }
 
+// Rung 1 (consumer override) is the other roster-confirmed path — the
+// override names a literal model, and runtimeOffering finds it in the
+// roster, so the provider is confirmable there too.
+func TestResolveConsumerOverrideDecisionCarriesProvider(t *testing.T) {
+	withFakeCLIRoster(t, map[string]Roster{
+		"main": {{ID: "claude-opus-5", Provider: "anthropic"}, {ID: "gpt-5.6-sol", Provider: "openai"}},
+	})
+	cfg := testCfg(t, map[string]config.RuntimeConfig{"main": {}}, map[string]config.FleetSpec{
+		"reviewer": config.FleetOf(true, "gpt-5.6-*"),
+	})
+	r := NewResolver(cfg, nil)
+	r.Overrides = map[string]string{"reviewer": "claude-opus-5"}
+	d := mustResolve(t, r, config.ModelSpecOf("reviewer"), "")
+	if d.Model != "claude-opus-5" || d.Provider != "anthropic" {
+		t.Fatalf("override decision = %#v, want Provider=anthropic", d)
+	}
+}
+
 func TestResolveOverrideOnlyAppliesToNamedFleets(t *testing.T) {
 	withFakeCLI(t, map[string][]string{"main": {"claude-opus-5", "gpt-5.6-sol"}})
 	cfg := testCfg(t, map[string]config.RuntimeConfig{"main": {}}, nil)
@@ -271,6 +339,28 @@ func TestResolveNoModelUsesRuntimeDefaultThenPrefer(t *testing.T) {
 	}, nil)
 	if d := mustResolve(t, NewResolver(cfg, nil), config.ModelSpec{}, ""); !d.Bare {
 		t.Fatalf("unsatisfiable prefer: should bare-launch: %#v", d)
+	}
+}
+
+// Rung 3 (runtimeDefault) has TWO roster-confirmable sub-paths — models.
+// default and the models.prefer fallback — both must carry Provider.
+func TestResolveRuntimeDefaultDecisionCarriesProvider(t *testing.T) {
+	withFakeCLIRoster(t, map[string]Roster{
+		"main": {{ID: "claude-sonnet-5", Provider: "anthropic"}, {ID: "claude-opus-5", Provider: "anthropic"}},
+	})
+
+	cfg := testCfg(t, map[string]config.RuntimeConfig{
+		"main": {Models: &config.RuntimeModels{Default: "claude-sonnet-5"}},
+	}, nil)
+	if d := mustResolve(t, NewResolver(cfg, nil), config.ModelSpec{}, ""); d.Model != "claude-sonnet-5" || d.Provider != "anthropic" {
+		t.Fatalf("models.default decision = %#v, want Provider=anthropic", d)
+	}
+
+	cfg = testCfg(t, map[string]config.RuntimeConfig{
+		"main": {Models: &config.RuntimeModels{Prefer: []string{"claude-opus-*"}}},
+	}, nil)
+	if d := mustResolve(t, NewResolver(cfg, nil), config.ModelSpec{}, ""); d.Model != "claude-opus-5" || d.Provider != "anthropic" {
+		t.Fatalf("models.prefer decision = %#v, want Provider=anthropic", d)
 	}
 }
 
@@ -341,6 +431,19 @@ func TestExactPinPassesThroughWhenNothingCanEnumerate(t *testing.T) {
 	d := mustResolve(t, NewResolver(cfg, nil), config.ModelSpecOf("some-private-model"), "")
 	if d.Bare || d.Model != "some-private-model" {
 		t.Fatalf("an exact pin must survive an un-enumerable runtime: %#v", d)
+	}
+}
+
+// An exact pin no roster could confirm or deny (nothing enumerates) must
+// leave Provider empty — conductor is not the authority here, and a made-up
+// provider would be worse than none (paseo/the runtime falls back to its
+// own default resolution for a bare/unconfirmed launch).
+func TestExactPinPassThroughHasNoProvider(t *testing.T) {
+	withFakeCLI(t, nil) // no runtime enumerates
+	cfg := testCfg(t, map[string]config.RuntimeConfig{"main": {}}, nil)
+	d := mustResolve(t, NewResolver(cfg, nil), config.ModelSpecOf("some-private-model"), "")
+	if d.Provider != "" {
+		t.Fatalf("unconfirmed pin must not carry a guessed provider: %#v", d)
 	}
 }
 

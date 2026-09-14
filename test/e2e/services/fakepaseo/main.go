@@ -53,6 +53,8 @@ func main() {
 		cmdClone(os.Args[2:])
 	case "workspace":
 		cmdWorkspace(os.Args[2:])
+	case "provider":
+		cmdProvider(os.Args[2:])
 	case "version":
 		fmt.Println("fakepaseo 0.0.0")
 	default:
@@ -153,6 +155,8 @@ type parsed struct {
 	path        string // --path (workspace create base dir)
 	isolation   string
 	dir         string // --clone dir
+	model       string // --model
+	provider    string // --provider
 	background  bool
 	labels      map[string]string
 	env         map[string]string
@@ -208,6 +212,10 @@ func parseFlags(args []string) parsed {
 				p.isolation = v
 			case "--dir":
 				p.dir = v
+			case "--model":
+				p.model = v
+			case "--provider":
+				p.provider = v
 			}
 		case strings.HasPrefix(a, "--"):
 			// Unknown bare flag; ignore.
@@ -235,6 +243,16 @@ func cmdRun(args []string) {
 		os.Exit(1)
 	}
 	p := parseFlags(args)
+	// Mirror real paseo's contract: --model with no --provider is rejected
+	// (MISSING_PROVIDER, exit 1) — --model alone is not enough. A v0.9.0
+	// conductor regression passed --model without --provider on every
+	// model-pinned dispatch, and this fake originally accepted it, hiding
+	// the bug from the e2e suite. A bare launch (no --model) is untouched:
+	// other scenarios rely on it needing neither flag.
+	if p.model != "" && p.provider == "" {
+		fmt.Println(`{"error":{"code":"MISSING_PROVIDER","message":"Provider is required"}}`)
+		os.Exit(1)
+	}
 	prompt := ""
 	if len(p.positionals) > 0 {
 		prompt = p.positionals[0]
@@ -565,6 +583,41 @@ func wsCreate(args []string) {
 		s.Workspaces[id] = &workspace{ID: id, Cwd: dir, Project: base, Isolation: "worktree"}
 	})
 	emitJSON(map[string]any{"workspaceId": id, "cwd": dir})
+}
+
+// ---- provider ls / provider models -------------------------------------------
+//
+// Backs conductor's models.Resolver discovery (internal/models/paseo.go),
+// which shells out to `paseo provider ls --json` then `paseo provider models
+// <provider> --json` per available provider. A fixed, single-provider roster
+// is enough to let an e2e scenario pin a model and prove the resolved
+// Provider reaches `paseo run --provider` (the v0.9.0 regression this harness
+// closes the gap on).
+const (
+	fakeProviderID    = "e2e-claude"
+	fakeProviderModel = "claude-opus-5-e2e"
+)
+
+func cmdProvider(args []string) {
+	if len(args) < 1 {
+		fail("provider: need a subcommand")
+	}
+	switch args[0] {
+	case "ls":
+		emitJSON([]map[string]string{
+			{"provider": fakeProviderID, "label": "E2E Claude", "status": "available", "enabled": "true"},
+		})
+	case "models":
+		if len(args) < 2 || args[1] != fakeProviderID {
+			emitJSON([]any{})
+			return
+		}
+		emitJSON([]map[string]string{
+			{"model": "Opus 5 (e2e)", "id": fakeProviderModel},
+		})
+	default:
+		os.Exit(0)
+	}
 }
 
 // ---- helpers ----------------------------------------------------------------
