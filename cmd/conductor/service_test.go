@@ -102,6 +102,12 @@ func TestUnitContentAndSync(t *testing.T) {
 	// Redirect HOME so we never touch the real unit files.
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	// Inject a stable non-test ExecStart: under `go test` the real selfExe is a
+	// .test binary the writer now refuses (see the safety guard), so exercising
+	// the write path requires a realistic exe.
+	origExe := selfExe
+	selfExe = func() string { return "/usr/local/bin/conductor" }
+	t.Cleanup(func() { selfExe = origExe })
 
 	path, content := unitPathAndContent()
 	if path == "" || content == "" {
@@ -143,5 +149,38 @@ func TestUnitContentAndSync(t *testing.T) {
 	got, _ := os.ReadFile(path)
 	if string(got) != content {
 		t.Fatal("sync should restore the rendered content")
+	}
+}
+
+// TestWriteUnitRefusesTestBinaryExecStart guards the crash that took a live box
+// down twice: under `go test` selfExe is a throwaway /tmp/go-build/*.test binary
+// that is deleted when the run ends, and the update/auto-update paths call
+// writeUnitIfChanged — writing that into the real unit 203/EXEC crashloops the
+// service. The writer must REFUSE a test-binary ExecStart and write nothing.
+func TestWriteUnitRefusesTestBinaryExecStart(t *testing.T) {
+	if serviceKind() == "" {
+		t.Skip("no service manager on this OS")
+	}
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	origExe := selfExe
+	selfExe = func() string { return filepath.Join(tmp, "go-build123", "conductor.test") }
+	t.Cleanup(func() { selfExe = origExe })
+
+	path, changed, err := writeUnitIfChanged()
+	if err == nil {
+		t.Fatal("writeUnitIfChanged must REFUSE a test-binary ExecStart")
+	}
+	if changed {
+		t.Fatal("no unit may be written when ExecStart is a test binary")
+	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		t.Fatalf("the unit at %s must NOT have been created", path)
+	}
+	if !isTestBinary("/x/conductor.test") || !isTestBinary("/tmp/go-build9/x") {
+		t.Fatal("isTestBinary must catch .test basenames and go-build paths")
+	}
+	if isTestBinary("/usr/local/bin/conductor") {
+		t.Fatal("isTestBinary must NOT flag a normal install path")
 	}
 }

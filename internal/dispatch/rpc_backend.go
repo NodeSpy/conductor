@@ -111,6 +111,19 @@ func (b *rpcBackend) Inspect(ctx context.Context, id string) (AgentDetail, error
 	return det, nil
 }
 
+// AgentLog forwards `paseo logs <id> --tail n` to the remote plugin. The
+// output_schema SOFT path reads the agent's final message from this (paseo run
+// returns only the launch envelope). A remote plugin that predates this verb
+// will error, which surfaces as a soft-path failure on that runtime — local
+// (cliBackend) deployments are unaffected.
+func (b *rpcBackend) AgentLog(ctx context.Context, id string, tail int) (string, error) {
+	out, err := b.invoke(ctx, "logs", map[string]any{"id": id, "tail": tail})
+	if err != nil {
+		return "", err
+	}
+	return rpcStr(out["output"]), nil
+}
+
 func (b *rpcBackend) ArchiveAgent(ctx context.Context, id string) error {
 	_, err := b.invoke(ctx, "archive_agent", map[string]any{"id": id})
 	return err

@@ -1,0 +1,31 @@
+{
+  "action": "synchronize",
+  "installation": {
+    "id": 42
+  },
+  "repository": {
+    "full_name": "func/schemasoft",
+    "name": "schemasoft",
+    "default_branch": "main",
+    "owner": {
+      "login": "func"
+    }
+  },
+  "pull_request": {
+    "number": 1,
+    "state": "open",
+    "draft": false,
+    "title": "func/schemasoft PR under test",
+    "html_url": "https://forge.test/func/schemasoft/pull/1",
+    "head": {
+      "sha": "canned-head-schemasoft-1",
+      "ref": "pr-1"
+    },
+    "base": {
+      "ref": "main"
+    },
+    "user": {
+      "login": "conductor-user"
+    }
+  }
+}

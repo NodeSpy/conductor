@@ -69,6 +69,13 @@ type Backend interface {
 
 	// Wait blocks until an agent goes idle (`paseo wait <id>`).
 	Wait(ctx context.Context, id string) error
+
+	// AgentLog returns an agent's recent timeline text (`paseo logs <id>
+	// --tail n`). It is how the output_schema SOFT path reads an agent's final
+	// message: `paseo run` returns only the launch envelope (agentId/status),
+	// never the answer, so the answer is recovered from the log tail. Works for
+	// providers whose native --output-schema does not (the claude ACP relay).
+	AgentLog(ctx context.Context, id string, tail int) (string, error)
 }
 
 // AgentInfo is the subset of `paseo ls --json` the dispatcher needs: identity,

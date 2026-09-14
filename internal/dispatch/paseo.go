@@ -262,7 +262,20 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// Run (with bounded retries on transient git-lock/timeout failures — common
 	// when a sweep fans out worktree creations onto one shared repo) via the
 	// configured Backend — cliBackend by default, shelling to `paseo run`.
-	res, err := d.backend().RunAgent(ctx, RunAgentOptions{Args: argv, Cwd: cwd})
+	//
+	// output_schema is a CONDUCTOR-owned contract (v0.9.2): a foreground step
+	// carrying OutputSchema (argv above already has --output-schema appended)
+	// always tries paseo's native flag first, UNLESS the capability cache
+	// already learned this runtime|provider|model can't do it — then it goes
+	// straight to the SOFT fallback (schema injected into the prompt, JSON
+	// extracted + validated conductor-side). Every other dispatch is
+	// byte-for-byte unchanged. See output_schema.go.
+	var res RunAgentResult
+	if len(req.Action.OutputSchema) > 0 && req.Wait {
+		res, err = d.dispatchOutputSchema(ctx, req, argv, prompt, cwd, &ref)
+	} else {
+		res, err = d.backend().RunAgent(ctx, RunAgentOptions{Args: argv, Cwd: cwd})
+	}
 	ref.Output = res.Output
 	if err != nil {
 		return ref, err
