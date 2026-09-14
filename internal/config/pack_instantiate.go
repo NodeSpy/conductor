@@ -226,6 +226,24 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		return fmt.Errorf("pack %q: %s", ns, p)
 	}
 
+	// ---- Infrastructure containment, checked against the PRISTINE manifest
+	// (before the consumer overlay). A pack may not pin runtime/host on a step
+	// it SHIPS — that reaches into consumer environment unbound. But routing a
+	// pack step to one of your OWN runtimes is the consumer's prerogative (it
+	// owns the environment), delivered via the steps: overlay below — so the
+	// ban is on what the pack ships, not on the merged result. Checking here,
+	// pre-overlay, is what lets `steps: { review/x: { runtime: … } }` work while
+	// still rejecting a pack that hardcodes infra. ----
+	var packPinErr error
+	man.WalkPackSteps(func(where string, s *Step) {
+		if packPinErr == nil && (s.Host != "" || s.Runtime != "") {
+			packPinErr = fmt.Errorf("pack %q: step %s pins runtime/host — a pack defines behavior, not environment; leave it to the consumer's default runtime, or override it from your packs: block", ns, where)
+		}
+	})
+	if packPinErr != nil {
+		return packPinErr
+	}
+
 	// ---- Mirrored-section overlay (§5.3): the consumer's steps:/models:
 	// blocks deep-merge onto the pack's members BY NAME before anything is
 	// namespaced, so the overrides address the pack's own vocabulary. ----
@@ -236,19 +254,14 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		return err
 	}
 
-	// ---- Containment checks on every step the pack ships. The steps
-	// themselves are namespaced and rebound with their workflow/trigger
-	// below; what runs here is what a pack is not ALLOWED to do. ----
+	// ---- Secret-broker containment on every step the pack ships (checked
+	// post-overlay so a consumer's own allow_secrets bindings are seen too).
+	// The steps themselves are namespaced and rebound with their
+	// workflow/trigger below; what runs here is what a pack is not ALLOWED to
+	// do. Infrastructure (runtime/host) was already checked pre-overlay above. ----
 	var stepErr error
 	man.WalkPackSteps(func(where string, s *Step) {
 		if stepErr != nil {
-			return
-		}
-		// A pack step may not pin infrastructure (runtime/host) — a pack
-		// defines behavior, not environment. model: is allowed: it names a
-		// FLEET, which resolves against whatever the consumer actually has.
-		if s.Host != "" || s.Runtime != "" {
-			stepErr = fmt.Errorf("pack %q: step %s pins runtime/host — a pack defines behavior, not environment; leave it to the consumer's default runtime, or override it from your packs: block", ns, where)
 			return
 		}
 		// Secret-broker containment: a pack step may only allow_secrets

@@ -232,6 +232,36 @@ packs:
 	}
 }
 
+// A consumer MAY route a pack step to one of its OWN runtimes via the steps:
+// overlay — runtime is environment, the consumer's prerogative. The pack ships
+// no runtime pin (that stays forbidden, TestPackAgentMayNotPinInfrastructure),
+// so the ban is on what the pack ships, checked pre-overlay. Regression guard
+// for the v0.9.4 fix: previously the containment check ran post-overlay and
+// wrongly rejected the consumer's own override.
+func TestPackConsumerMayRouteStepToRuntime(t *testing.T) {
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/multi", multiSourcePack)
+	cfg, err := resolveAndLoad(t, writeDoc(t, dir, `
+runtimes:
+  claude: { use: cli, tool: claude-code }
+connectors:
+  gh: { use: github, token: x }
+  pd: { use: pagerduty, token: y }
+packs:
+  multi:
+    source: ./src/multi
+    steps:
+      github.pull_request/sec: { runtime: claude }
+`))
+	if err != nil {
+		t.Fatalf("routing a pack step to a consumer runtime must load, got: %v", err)
+	}
+	step := packStep(t, cfg, "multi/github.pull_request/sec")
+	if step.Runtime != "claude" {
+		t.Fatalf("consumer runtime override did not take: step.Runtime = %q, want claude", step.Runtime)
+	}
+}
+
 // An overlay key that addresses nothing is an error: targeted override is
 // the whole point, and a typo that silently does nothing is the worst case.
 func TestPackOverlayTyposAreErrors(t *testing.T) {
