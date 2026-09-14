@@ -96,7 +96,21 @@ func AgentEnv(req Request) ([]string, error) {
 // use it so the prompt a non-paseo runtime receives matches the paseo path
 // (guidance wrappers are already baked into Action.Prompt by the engine).
 func RenderPrompt(req Request) (string, error) {
-	return render(req.Action.Prompt, templateData(req))
+	p, err := render(req.Action.Prompt, templateData(req))
+	if err != nil {
+		return "", err
+	}
+	// A controller runtime (cli/acp/opencode) has no native --output-schema, so
+	// conductor enforces the contract in software (v0.9.3): inject the schema
+	// directive here so the agent emits the JSON object, and the
+	// controllerRunner extracts + validates it afterward. RenderPrompt is used
+	// ONLY by controllers — the paseo dispatcher builds its own prompt and owns
+	// its own native+soft path — so this stays controller-only by construction
+	// and never double-injects on paseo.
+	if len(req.Action.OutputSchema) > 0 {
+		p += schemaDirective(req.Action.OutputSchema)
+	}
+	return p, nil
 }
 
 // RenderField renders an arbitrary template string against a request's

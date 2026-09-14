@@ -26,7 +26,7 @@ func TestSkillCLIEndToEnd(t *testing.T) {
 	tok, err := b.MintSession(skill.Identity{
 		Agent:  "fixer",
 		Policy: config.SkillPolicy{Verbs: []string{"gh.*"}, SecretsVia: "broker", AllowSecrets: []string{"deploy_key"}},
-	}, uint32(os.Getuid()))
+	}, uint32(os.Getuid()), skill.SessionTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ workflows:
 		TargetTrusted: true,
 		Number:        1,
 		Policy:        config.SkillPolicy{Verbs: []string{"gh.submit_review"}},
-	}, uint32(os.Getuid()))
+	}, uint32(os.Getuid()), skill.SessionTTL)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -313,3 +313,71 @@ func TestOutputSchemaUnrelatedFailureDoesNotFallBack(t *testing.T) {
 		t.Fatal("an unrelated failure must not poison the capability cache")
 	}
 }
+
+// EnforceSchema is the runtime-agnostic sibling of the paseo soft path used by
+// the controller runtimes (cli/acp/opencode): it operates on an already-
+// produced answer plus a "run one more turn" primitive, and owns the
+// extract/validate/canonicalize + single-corrective-retry contract.
+func TestEnforceSchemaFirstAnswerValidates(t *testing.T) {
+	schema := map[string]any{"type": "object", "required": []any{"decision"},
+		"properties": map[string]any{"decision": map[string]any{"type": "string"}}}
+	// The answer wraps the object in prose and even echoes the schema doc; the
+	// LAST validating object is the agent's real reply.
+	answer := "Here is my verdict.\n" + `{"type":"object"}` + "\n" + `{"decision":"approve"}`
+	retries := 0
+	retry := func(context.Context, string) (string, error) { retries++; return "", nil }
+
+	out, err := EnforceSchema(context.Background(), schema, "base prompt", answer, retry)
+	if err != nil {
+		t.Fatalf("EnforceSchema: %v", err)
+	}
+	if retries != 0 {
+		t.Fatalf("a valid first answer must not trigger a corrective turn, got %d", retries)
+	}
+	var got map[string]any
+	if json.Unmarshal([]byte(out), &got); got["decision"] != "approve" {
+		t.Fatalf("expected canonical JSON of the validated object, got %q", out)
+	}
+}
+
+func TestEnforceSchemaOneCorrectiveTurnThenSucceeds(t *testing.T) {
+	schema := map[string]any{"type": "object", "required": []any{"decision"}}
+	var gotPrompt string
+	retry := func(_ context.Context, p string) (string, error) {
+		gotPrompt = p
+		return `{"decision":"reject"}`, nil
+	}
+	out, err := EnforceSchema(context.Background(), schema, "base prompt", "not json at all", retry)
+	if err != nil {
+		t.Fatalf("EnforceSchema: %v", err)
+	}
+	if !strings.Contains(gotPrompt, "base prompt") || !strings.Contains(gotPrompt, "Return ONLY the JSON object") {
+		t.Fatalf("corrective prompt must re-send the base prompt and the reason: %q", gotPrompt)
+	}
+	if !strings.Contains(out, "reject") {
+		t.Fatalf("expected the corrective turn's object, got %q", out)
+	}
+}
+
+func TestEnforceSchemaHardErrorAfterOneRetry(t *testing.T) {
+	schema := map[string]any{"type": "object", "required": []any{"decision"}}
+	calls := 0
+	retry := func(context.Context, string) (string, error) { calls++; return "still not json", nil }
+	_, err := EnforceSchema(context.Background(), schema, "base", "nope", retry)
+	if err == nil || !strings.Contains(err.Error(), "output_schema") {
+		t.Fatalf("expected a hard output_schema error after one failed retry, got %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("exactly one corrective turn (no unbounded loop), got %d", calls)
+	}
+}
+
+func TestEnforceSchemaNilRetryIsSingleShot(t *testing.T) {
+	schema := map[string]any{"type": "object", "required": []any{"decision"}}
+	if _, err := EnforceSchema(context.Background(), schema, "base", "nope", nil); err == nil {
+		t.Fatal("a nil retry must turn a first miss straight into an error")
+	}
+	if out, err := EnforceSchema(context.Background(), schema, "base", `{"decision":"ok"}`, nil); err != nil || !strings.Contains(out, "ok") {
+		t.Fatalf("a nil retry must still accept a valid first answer: out=%q err=%v", out, err)
+	}
+}

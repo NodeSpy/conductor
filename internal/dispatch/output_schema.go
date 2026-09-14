@@ -259,6 +259,39 @@ func extractSchemaMatch(text string, schema map[string]any) (map[string]any, boo
 	return nil, false
 }
 
+// EnforceSchema applies the conductor output_schema contract to a CONTROLLER
+// runtime's already-produced answer — the runtime-agnostic sibling of the
+// paseo dispatcher's own soft path (the pure extract/validate/canonicalize
+// helpers are shared; only the "run a turn" primitive differs per runtime).
+//
+// If `answer` already carries a schema-validating object, EnforceSchema returns
+// that object's canonical JSON. Otherwise it runs ONE corrective turn via
+// `retry` — a fresh turn told exactly why the last reply missed — and validates
+// that. A second miss is a hard error; there is no unbounded retry loop.
+//
+// `basePrompt` is the already-rendered prompt (schema directive included) that
+// produced `answer`; the corrective turn re-sends it with an appended reason so
+// the agent has the full contract in front of it. A nil `retry` disables the
+// corrective turn (used where a second turn isn't available), turning a first
+// miss straight into the error.
+func EnforceSchema(ctx context.Context, schema map[string]any, basePrompt, answer string, retry func(context.Context, string) (string, error)) (string, error) {
+	if obj, ok := extractSchemaMatch(answer, schema); ok {
+		return marshalCanonical(obj), nil
+	}
+	if retry == nil {
+		return "", fmt.Errorf("output_schema: response is not valid JSON matching the schema")
+	}
+	corrective := basePrompt + "\n\nYour previous reply was not valid JSON matching the schema. Return ONLY the JSON object."
+	text, err := retry(ctx, corrective)
+	if err != nil {
+		return "", err
+	}
+	if obj, ok := extractSchemaMatch(text, schema); ok {
+		return marshalCanonical(obj), nil
+	}
+	return "", fmt.Errorf("output_schema: response is not valid JSON matching the schema after one corrective retry")
+}
+
 // stripOutputSchemaFlag removes a "--output-schema <value>" pair from argv, if
 // present, leaving everything else (including --json) untouched.
 func stripOutputSchemaFlag(argv []string) []string {

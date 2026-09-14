@@ -227,6 +227,17 @@ type Sender interface {
 	Send(ctx context.Context, id, prompt string) error
 }
 
+// OutputCapturer is an optional Session capability: after a FOREGROUND turn
+// completes (Wait has returned), Output yields that turn's final text. The
+// controllerRunner reads it into RunRef.Output so a foreground controller step
+// feeds the flow's output extraction and the output_schema contract — the same
+// RunRef.Output the paseo dispatcher populates directly. A session that can't
+// capture its turn omits it, and the runner leaves RunRef.Output empty (the
+// prior behavior).
+type OutputCapturer interface {
+	Output() string
+}
+
 // CaptureSender is an optional Sender upgrade: deliver a follow-up AND wait
 // for the turn, returning its output. paseo implements it via
 // `paseo send --json`; sessions on senders without it emit follow-up turns

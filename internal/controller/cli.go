@@ -279,6 +279,12 @@ type cliRecipe struct {
 	// `command:`, where they own the argv and conductor must not guess at
 	// a flag the binary may not accept.
 	modelArgs func(model string) []string
+	// answer extracts the agent's final message text from the tool's raw
+	// stdout — e.g. `claude -p --output-format json` wraps the reply in an
+	// envelope whose `result` field is the text. nil → the raw stdout IS the
+	// answer (a plain oneshot). Used for foreground output capture so a
+	// controller step's RunRef.Output is the reply, not the transport envelope.
+	answer func(raw string) string
 }
 
 // cliRecipeFor selects a recipe from the config. An explicit `command:` yields a
@@ -313,6 +319,7 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 				return []string{"claude", "-p", prompt, "--resume", id, "--output-format", "json", "--dangerously-skip-permissions"}
 			},
 			parseID: parseClaudeSessionID,
+			answer:  parseClaudeResult,
 			model:   ModelResumable,
 		}
 	case "codex":
@@ -359,6 +366,21 @@ func parseClaudeSessionID(output string) string {
 		}
 	}
 	return ""
+}
+
+// parseClaudeResult pulls the agent's final message out of `claude -p
+// --output-format json` stdout — the reply lives in the envelope's `result`
+// field. Falls back to the raw text when the envelope can't be parsed or
+// carries no result, so a non-JSON or errored run still yields something.
+func parseClaudeResult(output string) string {
+	var obj map[string]any
+	if json.Unmarshal([]byte(strings.TrimSpace(output)), &obj) != nil {
+		return output
+	}
+	if r, ok := obj["result"].(string); ok && r != "" {
+		return r
+	}
+	return output
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -469,6 +491,21 @@ func (s *cliSession) Wait(ctx context.Context, timeout time.Duration) {
 	case <-done:
 	case <-ctx.Done():
 	}
+}
+
+// Output returns the completed turn's final message text (OutputCapturer). It
+// reads the captured raw stdout under lock and runs the recipe's answer
+// extractor so a foreground step's RunRef.Output is the agent's reply, not the
+// tool's transport envelope. Call after Wait; before the turn finishes it
+// returns whatever has been captured so far (empty for an unfinished run).
+func (s *cliSession) Output() string {
+	s.mu.Lock()
+	raw := s.out
+	s.mu.Unlock()
+	if s.c != nil && s.c.recipe.answer != nil {
+		return s.c.recipe.answer(raw)
+	}
+	return raw
 }
 
 // Cancel kills the in-flight process.

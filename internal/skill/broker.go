@@ -28,6 +28,13 @@ import (
 )
 
 const (
+	// HandoffSessionTTL is the session-token life for an INTERACTIVE hand-off
+	// dispatch. Such an agent is held by the reaper (never culled) and waits on
+	// a human who may not get to it for hours or days, so a 2h dispatch window
+	// leaves its conductor creds (how it auths `conductor call …` to the broker)
+	// dead by the time the human engages it. A week is plenty for a real
+	// hand-off and still bounds a scraped token.
+	HandoffSessionTTL = 7 * 24 * time.Hour
 	// SessionTTL bounds a dispatch token's life — roughly a dispatch's
 	// lifetime (typical wait_timeouts are minutes; 2h leaves slack for slow
 	// runs). A long-lived affinity session whose token ages out simply loses
@@ -198,13 +205,16 @@ func (b *Broker) MintClaim(id Identity) (string, error) {
 // endpoint (no peer creds) the bearer token authorizes alone. Called by the
 // daemon at dispatch time only. Short TTL + verb-allowlist scope + audit bound
 // the exposure of a token scraped from env.
-func (b *Broker) MintSession(id Identity, uid uint32) (string, error) {
+func (b *Broker) MintSession(id Identity, uid uint32, ttl time.Duration) (string, error) {
+	if ttl <= 0 {
+		ttl = SessionTTL
+	}
 	tok, err := b.randomID(32)
 	if err != nil {
 		return "", fmt.Errorf("skill: mint session token: %w", err)
 	}
 	b.mu.Lock()
-	b.sessions[tok] = session{id: id, expires: b.now().Add(SessionTTL), uidBound: true, boundUID: uid}
+	b.sessions[tok] = session{id: id, expires: b.now().Add(ttl), uidBound: true, boundUID: uid}
 	b.mu.Unlock()
 	return tok, nil
 }
