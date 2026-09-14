@@ -296,6 +296,7 @@ triggers:
       - id: assess
         type: agent
         <<: *fixer
+        checkout: none          # read-only triage reads the diff from the prompt — no clone/worktree
         prompt: >-
           assess {{.repo}}#{{.pr}} [[reply {"decision":"approve"}]]
         output_schema:
@@ -325,6 +326,7 @@ triggers:
       - id: assess
         type: agent
         <<: *fixer
+        checkout: none          # read-only triage reads the diff from the prompt — no clone/worktree
         env: { FAKE_PASEO_NO_NATIVE_SCHEMA: "1" }
         prompt: >-
           assess {{.repo}}#{{.pr}} [[reply {"decision":"approve"}]]
