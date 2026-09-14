@@ -47,7 +47,10 @@ func launchedByServiceManager() bool {
 	return false
 }
 
-func selfExe() string {
+// selfExe resolves conductor's own executable for the unit's ExecStart. It is
+// a var so a test exercising the writer can inject a stable non-test path (the
+// real value under `go test` is a throwaway .test binary the writer refuses).
+var selfExe = func() string {
 	p, err := os.Executable()
 	if err != nil {
 		return "conductor"
@@ -61,6 +64,17 @@ func selfExe() string {
 func home() string {
 	h, _ := os.UserHomeDir()
 	return h
+}
+
+// isTestBinary reports whether exe looks like a `go test` binary — a path under
+// a go-build cache, or a basename ending in `.test`. A service unit's ExecStart
+// must never be one of these: it is deleted when the test run ends, so the
+// service 203/EXEC crashloops. Used to guard writeUnitIfChanged.
+func isTestBinary(exe string) bool {
+	base := filepath.Base(exe)
+	return strings.Contains(exe, "/go-build") ||
+		strings.HasSuffix(base, ".test") ||
+		strings.HasSuffix(base, ".test.exe")
 }
 
 func launchdLog() string { return filepath.Join(home(), "Library/Logs/conductor.log") }
@@ -169,6 +183,16 @@ func writeUnitIfChanged() (path string, changed bool, err error) {
 	path, content := unitPathAndContent()
 	if path == "" {
 		return "", false, fmt.Errorf("unsupported OS for a service unit")
+	}
+	// SAFETY (regression guard). Never write a unit whose ExecStart points at a
+	// go-test binary. Under `go test`, selfExe()/os.Executable() is a throwaway
+	// /tmp/go-build.../<pkg>.test that is deleted when the run ends — installing
+	// it 203/EXEC crashloops the real user service. The update/auto-update paths
+	// call this, so a bare `go test ./...` on the machine running the daemon (or
+	// an in-process test exercising update) would otherwise clobber the live
+	// unit. This has taken a production box down twice; fail loudly instead.
+	if exe := selfExe(); isTestBinary(exe) {
+		return path, false, fmt.Errorf("refusing to write service unit: ExecStart would point at a test binary %q (running under `go test`?)", exe)
 	}
 	if old, err := os.ReadFile(path); err == nil && string(old) == content {
 		return path, false, nil
