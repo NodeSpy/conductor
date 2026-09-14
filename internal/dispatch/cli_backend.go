@@ -105,6 +105,22 @@ func (b *cliBackend) RunAgent(ctx context.Context, opts RunAgentOptions) (RunAge
 	return RunAgentResult{Output: string(out)}, fmt.Errorf("paseo run: %w", err)
 }
 
+// AgentLog runs `paseo logs <id> --tail n` and returns its raw text. The
+// output_schema SOFT path parses the agent's final message out of it (paseo
+// run only yields the launch envelope). stdout is returned even on error so a
+// caller can still try to salvage a partial tail.
+func (b *cliBackend) AgentLog(ctx context.Context, id string, tail int) (string, error) {
+	args := []string{"logs", id}
+	if tail > 0 {
+		args = append(args, "--tail", fmt.Sprintf("%d", tail))
+	}
+	out, err := b.exec.paseoCmd(ctx, args...).Output()
+	if err != nil {
+		return string(out), fmt.Errorf("paseo logs %s: %w", id, err)
+	}
+	return string(out), nil
+}
+
 // ListAgents runs `paseo ls --json`, optionally with `--label k=v` per entry
 // (sorted by key for deterministic argv, no behavioral difference — paseo ls
 // AND-filters exact-match labels regardless of order).

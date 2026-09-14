@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -158,6 +159,7 @@ type parsed struct {
 	model       string // --model
 	provider    string // --provider
 	background  bool
+	hasSchema   bool // --output-schema was passed (value itself unused by the fake)
 	labels      map[string]string
 	env         map[string]string
 }
@@ -216,6 +218,8 @@ func parseFlags(args []string) parsed {
 				p.model = v
 			case "--provider":
 				p.provider = v
+			case "--output-schema":
+				p.hasSchema = true
 			}
 		case strings.HasPrefix(a, "--"):
 			// Unknown bare flag; ignore.
@@ -243,6 +247,19 @@ func cmdRun(args []string) {
 		os.Exit(1)
 	}
 	p := parseFlags(args)
+	// output_schema group (conductor v0.9.2): a step's `env: { FAKE_PASEO_NO_NATIVE_SCHEMA:
+	// "1" }` marks this runtime/provider as one whose NATIVE --output-schema
+	// support is broken — mirroring the real claude ACP relay's
+	// OUTPUT_SCHEMA_FAILED / "Failed to handle agent.timeline.list_prompts.request".
+	// Conductor's capability-cache AUTO logic must catch this, fall back to
+	// re-running WITHOUT --output-schema (the schema injected into the prompt
+	// instead), and thereafter skip native entirely for this key. We only ever
+	// fail the NATIVE attempt (schema flag present); a soft re-run (no schema
+	// flag) always falls through to the normal reply path below.
+	if p.env["FAKE_PASEO_NO_NATIVE_SCHEMA"] == "1" && p.hasSchema {
+		fmt.Println(`{"error":{"code":"OUTPUT_SCHEMA_FAILED","message":"Failed to handle agent.timeline.list_prompts.request"}}`)
+		os.Exit(1)
+	}
 	// Mirror real paseo's contract: --model with no --provider is rejected
 	// (MISSING_PROVIDER, exit 1) — --model alone is not enough. A v0.9.0
 	// conductor regression passed --model without --provider on every
@@ -305,8 +322,38 @@ func cmdRun(args []string) {
 	// reported token/cost usage from the same object (§14). Emitting an explicit
 	// `usage` + `total_cost_usd` makes the meter charge REPORTED (not estimated)
 	// numbers, so the e2e can assert exact token counts and approximate:false.
-	fmt.Printf("{\"id\":%q,\"usage\":{\"input_tokens\":%d,\"output_tokens\":%d},\"total_cost_usd\":%s}\n",
-		id, dir.inTokens, dir.outTokens, dir.costUSD)
+	resp := map[string]any{
+		"id":             id,
+		"usage":          map[string]any{"input_tokens": dir.inTokens, "output_tokens": dir.outTokens},
+		"total_cost_usd": json.Number(dir.costUSD),
+	}
+	// output_schema group: a `[[reply {...}]]` directive anywhere in the
+	// (possibly schema-augmented) prompt is the fake agent's canned final
+	// answer, surfaced under the same "output" envelope key conductor's
+	// tolerant extraction/flow.extractOutputs already unwrap. Lets one
+	// scenario prompt drive both the native attempt (schema flag present,
+	// answered structurally) and the soft fallback (schema injected as text,
+	// answered identically) with the same canned JSON.
+	if raw, ok := replyDirective(prompt); ok {
+		var v any
+		if err := json.Unmarshal(raw, &v); err == nil {
+			resp["output"] = v
+		}
+	}
+	b, _ := json.Marshal(resp)
+	fmt.Println(string(b))
+}
+
+// replyDirective extracts a `[[reply {...json...}]]` marker from the prompt —
+// the fake agent's scripted structured answer for output_schema scenarios.
+var replyDirectiveRe = regexp.MustCompile(`(?s)\[\[reply (\{.*?\})\]\]`)
+
+func replyDirective(prompt string) (json.RawMessage, bool) {
+	m := replyDirectiveRe.FindStringSubmatch(prompt)
+	if m == nil {
+		return nil, false
+	}
+	return json.RawMessage(m[1]), true
 }
 
 // runDirectives are the deterministic signals a scenario embeds in the agent

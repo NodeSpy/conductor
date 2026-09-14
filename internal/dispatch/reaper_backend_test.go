@@ -63,6 +63,9 @@ func (f *fakeReaperBackend) ListWorkspaces(context.Context) ([]WorkspaceInfo, er
 func (f *fakeReaperBackend) RunAgent(context.Context, RunAgentOptions) (RunAgentResult, error) {
 	return RunAgentResult{}, errors.New("reaper must not run agents")
 }
+func (f *fakeReaperBackend) AgentLog(context.Context, string, int) (string, error) {
+	return "", errors.New("reaper must not read agent logs")
+}
 
 func (f *fakeReaperBackend) CreateWorktree(context.Context, CreateWorktreeOptions) (CreateWorktreeResult, error) {
 	return CreateWorktreeResult{}, errors.New("reaper must not create worktrees")

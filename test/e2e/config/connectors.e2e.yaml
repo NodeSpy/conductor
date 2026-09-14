@@ -283,6 +283,61 @@ triggers:
         uses: slack.post
         options: { channel: CCALL, text: "CALLABLE-scoped-LEAKED" }
 
+  # T (output_schema, conductor v0.9.2 — NATIVE): a step whose provider's
+  # native --output-schema just works. Rides the same worktree checkout every
+  # other fixer-shaped scenario in this file uses — the fake agent's
+  # `[[reply {...}]]` marker is its canned structured answer. The slack post
+  # reads {{.assess.decision}} straight out of the step's outputs, proving
+  # the schema-conforming JSON landed there.
+  - on: gh.merge_conflict
+    name: schemanative
+    filters: { repos: ["func/schemanative"] }
+    steps:
+      - id: assess
+        type: agent
+        <<: *fixer
+        prompt: >-
+          assess {{.repo}}#{{.pr}} [[reply {"decision":"approve"}]]
+        output_schema:
+          type: object
+          required: [decision]
+          additionalProperties: false
+          properties:
+            decision: { type: string, enum: [approve, reject] }
+      - id: tell
+        uses: slack.post
+        options: { channel: CSCHEMA, text: "SCHEMA-NATIVE decision={{.assess.decision}}" }
+
+  # T (output_schema — SOFT fallback, the real-contract guard): the step's
+  # env pins FAKE_PASEO_NO_NATIVE_SCHEMA=1, so the fake agent answers
+  # OUTPUT_SCHEMA_FAILED / "Failed to handle agent.timeline.list_prompts.request"
+  # whenever --output-schema is passed — exactly the claude ACP relay failure
+  # this feature exists for. Conductor owns the contract: it must catch that,
+  # re-run WITHOUT --output-schema (the schema injected into the prompt
+  # instead), and still land {{.assess.decision}} for the downstream step. If
+  # the AUTO native→soft fallback regresses, this step fails outright (the
+  # native attempt always errors for this provider) and no SCHEMA-SOFT post
+  # ever appears — there is no other way for this scenario to pass.
+  - on: gh.merge_conflict
+    name: schemasoft
+    filters: { repos: ["func/schemasoft"] }
+    steps:
+      - id: assess
+        type: agent
+        <<: *fixer
+        env: { FAKE_PASEO_NO_NATIVE_SCHEMA: "1" }
+        prompt: >-
+          assess {{.repo}}#{{.pr}} [[reply {"decision":"approve"}]]
+        output_schema:
+          type: object
+          required: [decision]
+          additionalProperties: false
+          properties:
+            decision: { type: string, enum: [approve, reject] }
+      - id: tell
+        uses: slack.post
+        options: { channel: CSCHEMA, text: "SCHEMA-SOFT decision={{.assess.decision}}" }
+
 checks:
   # A code check that always passes / always fails — a crisp pass/fail verdict
   # with no external dependency, so the §16 gate machinery is what's under test.

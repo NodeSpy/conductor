@@ -1365,6 +1365,33 @@ group_S_callable() {
   fi
 }
 
+# T — v0.9.2 output_schema: conductor OWNS the native/soft contract, not paseo.
+# schemanative proves the ordinary (working) native path is untouched;
+# schemasoft's provider ALWAYS fails native (FAKE_PASEO_NO_NATIVE_SCHEMA=1 —
+# the fake's stand-in for the real claude ACP relay's OUTPUT_SCHEMA_FAILED),
+# so a SCHEMA-SOFT post can only appear if conductor caught that failure,
+# re-ran with the schema injected into the prompt instead of --output-schema,
+# and validated the result conductor-side — there is no other way for this
+# scenario to produce that text. This is the real-contract guard: gut the
+# fallback and this step fails outright instead of silently degrading.
+group_T_output_schema() {
+  banner "Group T — v0.9.2 output_schema (conductor-owned native/soft contract)"
+  func_reset_sink
+  post_webhook_to conductor-conn pull_request func_schemanative_conflict.json >/dev/null
+  if wait_for 30 slack_sink_has "SCHEMA-NATIVE decision=approve"; then
+    ok "T native --output-schema still works end to end" T T-native
+  else
+    bad "T native --output-schema path" T T-native "no SCHEMA-NATIVE decision=approve capture"
+  fi
+
+  post_webhook_to conductor-conn pull_request func_schemasoft_conflict.json >/dev/null
+  if wait_for 30 slack_sink_has "SCHEMA-SOFT decision=approve"; then
+    ok "T a provider whose native schema always fails is served via the SOFT fallback (schema-in-prompt, validated conductor-side)" T T-soft
+  else
+    bad "T soft fallback on native schema failure" T T-soft "no SCHEMA-SOFT decision=approve capture"
+  fi
+}
+
 main() {
   trap teardown EXIT
   setup
@@ -1397,6 +1424,7 @@ main() {
   group_Q_history
   group_R_watch
   group_S_callable
+  group_T_output_schema
   print_matrix
   [ "$FAIL" -eq 0 ]
 }

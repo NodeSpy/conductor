@@ -86,6 +86,18 @@ A step is one of six forms (all share `id` and `if`):
   It may also carry `model:` (a fleet, a model id, a wildcard, or an inline
   `{ any, required }`) and `runtime:` (a `runtimes:` entry to pin it to) —
   see [Model selection](Model-Selection.md).
+
+  **`output_schema` is a conductor-owned contract, not a passthrough to the
+  runtime's own structured-output flag.** It first tries the runtime's
+  native support; if that provider can't do it (or returns something that
+  doesn't validate), conductor transparently re-runs with the schema
+  injected into the prompt instead, extracts and validates the JSON itself,
+  and gives the model one corrective retry if the first reply doesn't
+  parse. Once a given runtime/provider/model is seen failing native
+  support, later dispatches for it skip straight to that fallback. This is
+  always on — there is no config to disable or select it — so the step's
+  outputs are populated identically either way; the only visible
+  difference is the number of turns a slow/incapable provider takes.
 - `type: command` — a host command (POSIX sh semantics; argv list). With
   `host:` it runs over SSH and outputs `{stdout, stderr, exit_code}`.
 - `run:` — an inline code step ([[Code-Steps]]).

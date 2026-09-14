@@ -164,6 +164,14 @@ type Dispatcher struct {
 	mu        sync.Mutex
 	repoDirs  map[string]string // repo -> resolved checkout cwd (memoized)
 	scratchWS string            // memoized scratch workspace id
+
+	// nativeSchemaUnsupported is the output_schema capability cache (v0.9.2):
+	// keyed by "runtime|provider|model", present+true means a prior dispatch
+	// already learned paseo's native --output-schema fails for that triple, so
+	// every later dispatch for it skips the native attempt and goes straight to
+	// the SOFT fallback. Absent (the zero value, nil map reads fine) means
+	// "unknown — try native first". Guarded by mu. See output_schema.go.
+	nativeSchemaUnsupported map[string]bool
 }
 
 // SetBackend configures the Backend this Dispatcher drives paseo through. nil
