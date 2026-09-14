@@ -103,6 +103,29 @@ func TestResolveExplicitWinsAndDefaultFlag(t *testing.T) {
 	}
 }
 
+// A `use: cli` runtime lowers to ControllerConfig{Type:"cli"} with no
+// transport (EffectiveTransport() then reports "native"), so the registry must
+// dispatch on the TYPE — else it silently degrades to a stub and every step
+// pinned to it escalates. Regression guard for the v0.9.3 e2e T-cli failure.
+func TestUseCLIRuntimeIsRunnable(t *testing.T) {
+	run := &recordRunner{}
+	cfgs := map[string]config.ControllerConfig{
+		"clijudge": {Type: "cli", Tool: "claude-code"}, // exactly what RuntimeConfig.Controller() yields for `use: cli`
+	}
+	reg := NewRegistry(cfgs, "", run, nil)
+
+	c, err := reg.Resolve("clijudge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Transport() != TransportCLI {
+		t.Fatalf("a use:cli runtime must report cli transport, got %q", c.Transport())
+	}
+	if _, err := c.Runner(); err != nil {
+		t.Fatalf("a use:cli runtime must be runnable (not a stub), got %v", err)
+	}
+}
+
 func TestResolveUnknownController(t *testing.T) {
 	reg := NewRegistry(nil, "", &recordRunner{}, nil)
 	if _, err := reg.Resolve("nope"); err == nil {
