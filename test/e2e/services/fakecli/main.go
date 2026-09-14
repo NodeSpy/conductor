@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/NodeSpy/conductor/test/e2e/services/fixer"
@@ -46,9 +47,32 @@ func main() {
 			runtime = "cli:claude-code(resume)"
 		}
 		_ = fixer.Apply(cwd, runtime, prompt)
-		// The controller parses session_id off this JSON to `--resume` a follow-up.
-		fmt.Printf("{\"session_id\":%q,\"result\":\"claude: done\"}\n", "claude-session-1")
+		// A `[[reply {...}]]` marker is the scripted structured answer for the
+		// output_schema-on-cli scenario (Group T): echo it into the `result`
+		// field so conductor's controller path extracts + validates it, exactly
+		// as it would a real claude reply. Absent the marker, the ordinary
+		// fixer-shaped "done" result. The controller parses session_id off this
+		// JSON to `--resume` a follow-up.
+		result := "claude: done"
+		if r, ok := replyDirective(prompt); ok {
+			result = r
+		}
+		fmt.Printf("{\"session_id\":%q,\"result\":%q}\n", "claude-session-1", result)
 	}
+}
+
+// replyDirective extracts a `[[reply {...json...}]]` marker from the prompt —
+// the fake agent's scripted structured answer for output_schema scenarios,
+// matching fakepaseo's own marker so a scenario reads identically on either
+// runtime.
+var replyDirectiveRe = regexp.MustCompile(`(?s)\[\[reply (\{.*?\})\]\]`)
+
+func replyDirective(prompt string) (string, bool) {
+	m := replyDirectiveRe.FindStringSubmatch(prompt)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
 }
 
 func parseClaude(args []string) (prompt, resume string) {

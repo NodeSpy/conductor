@@ -204,7 +204,11 @@ Two binding shapes, matching the two delivery paths:
   many short-lived `conductor` processes one dispatch runs. On the local
   socket the daemon reads the caller's kernel uid (`SO_PEERCRED`) and refuses
   a token presented from a **different uid** — a token scraped from one
-  agent's env is useless to a process running as someone else.
+  agent's env is useless to a process running as someone else. The token
+  lasts a dispatch window (2h) for an ordinary step; an **interactive
+  hand-off** — held for a human who may not engage it for hours or days —
+  gets a longer life (7 days) so its `conductor call …` still authenticates
+  when the human finally drives it.
 - **MCP face (one-shot claim, process-bound).** The injected MCP server
   receives a single-use **claim code** (env, ~2-minute TTL) and exchanges it
   over the socket for the session token; the exchange binds the session to

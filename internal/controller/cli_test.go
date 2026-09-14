@@ -232,3 +232,109 @@ func TestCLICustomCommandRecipe(t *testing.T) {
 		t.Fatalf("custom recipe argv = %v", l.call(0).argv)
 	}
 }
+
+func TestParseClaudeResult(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`{"type":"result","result":"the answer","session_id":"x"}`, "the answer"},
+		{`{"result":"{\"decision\":\"approve\"}"}`, `{"decision":"approve"}`},
+		{"not json at all", "not json at all"},     // non-envelope → raw
+		{`{"type":"result"}`, `{"type":"result"}`}, // no result field → raw
+	}
+	for _, c := range cases {
+		if got := parseClaudeResult(c.in); got != c.want {
+			t.Errorf("parseClaudeResult(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// A foreground claude-code turn's reply is captured via OutputCapturer, decoded
+// out of the --output-format json envelope to the bare result text.
+func TestCLISessionOutputCapturesResult(t *testing.T) {
+	l := &fakeLauncher{out: func([]string) (string, error) {
+		return `{"session_id":"s1","result":"the verdict"}`, nil
+	}}
+	c := newCLIController("cc", config.ControllerConfig{Transport: "cli", Tool: "claude-code"}, nil)
+	c.launch = l.launch
+
+	sess, err := c.NewSession(context.Background(), Spec{Request: makeReq("review", "go"), Cwd: "/wt"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitSession(t, sess)
+	oc, ok := sess.(OutputCapturer)
+	if !ok {
+		t.Fatal("cliSession must implement OutputCapturer")
+	}
+	if got := oc.Output(); got != "the verdict" {
+		t.Fatalf("Output() = %q, want the decoded result text", got)
+	}
+}
+
+// End to end on the cli runtime: a foreground output_schema step gets the
+// directive injected into its prompt, and its reply is extracted + validated +
+// canonicalized into RunRef.Output — the conductor-owned contract on a runtime
+// with no native --output-schema.
+func TestControllerRunnerAppliesOutputSchema(t *testing.T) {
+	schema := map[string]any{"type": "object", "required": []any{"decision"},
+		"properties": map[string]any{"decision": map[string]any{"type": "string"}}}
+	l := &fakeLauncher{out: func(argv []string) (string, error) {
+		// The prompt must carry the injected schema directive.
+		pi := argIndex(argv, "-p")
+		if pi < 0 || !strings.Contains(argv[pi+1], "JSON") {
+			t.Errorf("prompt should carry the schema directive: %v", argv)
+		}
+		return `{"result":"my call is {\"decision\":\"approve\"}"}`, nil
+	}}
+	c := newCLIController("cc", config.ControllerConfig{Transport: "cli", Tool: "claude-code"}, nil)
+	c.launch = l.launch
+	r := newControllerRunner(c, nil, nil)
+
+	req := makeReq("review", "judge this")
+	req.Wait = true
+	req.Action.OutputSchema = schema
+	req.Step.OutputSchema = schema
+
+	ref, err := r.Dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if !strings.Contains(ref.Output, `"decision"`) || !strings.Contains(ref.Output, "approve") {
+		t.Fatalf("RunRef.Output should be the canonical validated object, got %q", ref.Output)
+	}
+	if strings.Contains(ref.Output, "my call is") {
+		t.Fatalf("Output should be the object alone, not the surrounding prose: %q", ref.Output)
+	}
+}
+
+// When the first reply misses, the runner opens ONE fresh corrective turn; a
+// valid reply there is accepted.
+func TestControllerRunnerSchemaCorrectiveRetry(t *testing.T) {
+	schema := map[string]any{"type": "object", "required": []any{"decision"}}
+	var n int
+	l := &fakeLauncher{out: func([]string) (string, error) {
+		n++
+		if n == 1 {
+			return `{"result":"no structured answer here"}`, nil
+		}
+		return `{"result":"{\"decision\":\"reject\"}"}`, nil
+	}}
+	c := newCLIController("cc", config.ControllerConfig{Transport: "cli", Tool: "claude-code"}, nil)
+	c.launch = l.launch
+	r := newControllerRunner(c, nil, nil)
+
+	req := makeReq("review", "judge this")
+	req.Wait = true
+	req.Action.OutputSchema = schema
+	req.Step.OutputSchema = schema
+
+	ref, err := r.Dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("expected exactly one corrective turn (2 launches), got %d", n)
+	}
+	if !strings.Contains(ref.Output, "reject") {
+		t.Fatalf("expected the corrective turn's object, got %q", ref.Output)
+	}
+}

@@ -51,6 +51,7 @@ func (r *Registry) OverridePaseo(name string, runner Runner, sender Sender) {
 //   - type: paseo                          → the built-in paseo runner
 //   - type: opencode / agent:opencode+native → opencode native HTTP controller
 //   - type: agent-deck                     → agent-deck CLI controller
+//   - type: cli (use: cli)                 → bare-cli controller
 //   - transport: acp (the default for an agent runtime) → ACP controller
 //   - transport: cli                       → bare-cli fallback controller
 //   - anything else                        → a stub reporting ErrNotRunnable
@@ -68,6 +69,15 @@ func buildController(name string, cc config.ControllerConfig, paseoRunner Runner
 		return newOpencodeController(name, cc, prov)
 	case cc.Type == "agent-deck":
 		return newAgentDeckController(name, cc, prov)
+	case cc.Type == "cli":
+		// `use: cli` (the connectors-model runtime) carries Type "cli" but no
+		// transport, so EffectiveTransport() reports "native" and the
+		// transport-keyed case below never fires. Dispatch on the type as
+		// opencode/agent-deck already do — else a `use: cli` runtime silently
+		// degrades to a stub (ErrNotRunnable) and every step pinned to it
+		// escalates. The legacy `transport: cli` spelling still resolves via
+		// the transport case.
+		return newCLIController(name, cc, prov)
 	case cc.Agent == "opencode" && transport == TransportNative:
 		return newOpencodeController(name, cc, prov)
 	case transport == TransportACP:

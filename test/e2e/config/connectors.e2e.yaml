@@ -55,6 +55,10 @@ runtimes:
   # K6: a paseo runtime on an SSH host — every paseo CLI call (run/ls/send/
   # archive/clone/workspace) executes on selfbox over ssh.
   gpu: { use: paseo, bin: /usr/local/bin/fakepaseo, host: selfbox }
+  # T (output_schema on a CONTROLLER runtime, v0.9.3): a bare-CLI runtime that
+  # execs `claude` on PATH (= fakecli). It has no native --output-schema, so the
+  # conductor-owned contract must extract + validate the reply conductor-side.
+  clijudge: { use: cli, tool: claude-code }
 
 x-templates:
   fixer: &fixer
@@ -339,6 +343,36 @@ triggers:
       - id: tell
         uses: slack.post
         options: { channel: CSCHEMA, text: "SCHEMA-SOFT decision={{.assess.decision}}" }
+
+  # T (output_schema on a CONTROLLER runtime, v0.9.3 — "AUTO in all paths"): the
+  # assess step runs on the `clijudge` cli runtime (execs `claude` = fakecli),
+  # which has NO native --output-schema. Conductor injects the schema directive
+  # into the prompt, the agent replies with the object, and the controllerRunner
+  # extracts + validates + canonicalizes it into {{.assess.decision}} — the same
+  # contract the paseo native/soft paths honor, now on a bare-CLI runtime. If the
+  # controller-path enforcement regresses, {{.assess.decision}} is empty and no
+  # SCHEMA-CLI post appears.
+  - on: gh.merge_conflict
+    name: schemacli
+    filters: { repos: ["func/schemacli"] }
+    steps:
+      - id: assess
+        type: agent
+        name: fixer
+        runtime: clijudge
+        checkout: none          # read-only triage — no clone/worktree
+        wait_timeout: 5m
+        prompt: >-
+          assess {{.repo}}#{{.pr}} [[reply {"decision":"approve"}]]
+        output_schema:
+          type: object
+          required: [decision]
+          additionalProperties: false
+          properties:
+            decision: { type: string, enum: [approve, reject] }
+      - id: tell
+        uses: slack.post
+        options: { channel: CSCHEMA, text: "SCHEMA-CLI decision={{.assess.decision}}" }
 
 checks:
   # A code check that always passes / always fails — a crisp pass/fail verdict

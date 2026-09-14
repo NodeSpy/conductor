@@ -158,6 +158,13 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 	if req.Step.Skill != nil {
 		envPolicy = *req.Step.Skill
 	}
+	// An interactive hand-off waits on a human and is held (never culled), so
+	// its creds must outlive the 2h dispatch window — else the agent's
+	// `conductor call …` is dead by the time the human gets to it.
+	sessTTL := skill.SessionTTL
+	if req.Interactive {
+		sessTTL = skill.HandoffSessionTTL
+	}
 	tok, err := b.MintSession(skill.Identity{
 		Agent:         req.Action.Agent,
 		Repo:          req.Trigger.Target.Repo,
@@ -167,7 +174,7 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 		Context:       req.Trigger.Context,
 		TargetTrusted: req.Trigger.TargetTrusted,
 		Dispatch:      req.DispatchID, // as above: both paths carry the anchor
-	}, uint32(os.Getuid()))
+	}, uint32(os.Getuid()), sessTTL)
 	if err != nil {
 		return nil
 	}

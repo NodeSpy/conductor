@@ -88,16 +88,21 @@ A step is one of six forms (all share `id` and `if`):
   see [Model selection](Model-Selection.md).
 
   **`output_schema` is a conductor-owned contract, not a passthrough to the
-  runtime's own structured-output flag.** It first tries the runtime's
-  native support; if that provider can't do it (or returns something that
-  doesn't validate), conductor transparently re-runs with the schema
-  injected into the prompt instead, extracts and validates the JSON itself,
-  and gives the model one corrective retry if the first reply doesn't
-  parse. Once a given runtime/provider/model is seen failing native
-  support, later dispatches for it skip straight to that fallback. This is
-  always on — there is no config to disable or select it — so the step's
-  outputs are populated identically either way; the only visible
-  difference is the number of turns a slow/incapable provider takes.
+  runtime's own structured-output flag.** On the paseo runtime it first
+  tries paseo's native support; if that provider can't do it (or returns
+  something that doesn't validate), conductor transparently re-runs with the
+  schema injected into the prompt instead, extracts and validates the JSON
+  itself, and gives the model one corrective retry if the first reply
+  doesn't parse. Once a given runtime/provider/model is seen failing native
+  support, later dispatches for it skip straight to that fallback. On a
+  controller runtime (`cli`, `acp`, `opencode` — which have no native
+  structured-output flag) conductor injects the directive into the prompt
+  from the start and does the same conductor-side extract/validate/retry.
+  Either way the contract is identical and always on — there is no config to
+  disable or select it — so the step's outputs are populated the same; the
+  only visible difference is the number of turns a slow/incapable provider
+  takes. This means an AUTO review judge can run directly on a bare-CLI
+  runtime and still hand structured outputs to the next step.
 - `type: command` — a host command (POSIX sh semantics; argv list). With
   `host:` it runs over SSH and outputs `{stdout, stderr, exit_code}`.
 - `run:` — an inline code step ([[Code-Steps]]).

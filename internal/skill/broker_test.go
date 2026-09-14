@@ -414,9 +414,59 @@ func TestVerbCallCap(t *testing.T) {
 // bound to a uid, authorized across many short-lived (different-PID) processes
 // of that uid, refused for a different uid, and bearer-only when the transport
 // carries no peer creds (remote HTTP).
+// A custom TTL (as an interactive hand-off passes HandoffSessionTTL) governs
+// when the session token expires — a hand-off held for days must still auth
+// its `conductor call …` well past the 2h dispatch default.
+func TestMintSessionCustomTTL(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	clk := base
+	b := NewBroker(func(string) (string, bool) { return "", false }, nil)
+	b.now = func() time.Time { return clk }
+
+	short, err := b.MintSession(Identity{Agent: "reviewer"}, 1000, SessionTTL)
+	if err != nil {
+		t.Fatalf("MintSession short: %v", err)
+	}
+	long, err := b.MintSession(Identity{Agent: "handoff"}, 1000, HandoffSessionTTL)
+	if err != nil {
+		t.Fatalf("MintSession long: %v", err)
+	}
+
+	// Advance past the 2h default but well inside the hand-off week.
+	clk = base.Add(6 * time.Hour)
+	peer := Peer{PID: 1, UID: 1000, Valid: true}
+	if _, err := b.Authorize(short, peer); err == nil {
+		t.Fatal("default-TTL token must be expired after 6h")
+	}
+	if _, err := b.Authorize(long, peer); err != nil {
+		t.Fatalf("hand-off token must still authorize after 6h: %v", err)
+	}
+
+	// Past the week, the hand-off token expires too.
+	clk = base.Add(HandoffSessionTTL + time.Hour)
+	if _, err := b.Authorize(long, peer); err == nil {
+		t.Fatal("hand-off token must expire past HandoffSessionTTL")
+	}
+
+	// A zero/negative ttl falls back to the default.
+	clk = base
+	def, err := b.MintSession(Identity{Agent: "x"}, 1000, 0)
+	if err != nil {
+		t.Fatalf("MintSession zero-ttl: %v", err)
+	}
+	clk = base.Add(SessionTTL - time.Minute)
+	if _, err := b.Authorize(def, peer); err != nil {
+		t.Fatalf("zero-ttl should behave as SessionTTL: %v", err)
+	}
+	clk = base.Add(SessionTTL + time.Minute)
+	if _, err := b.Authorize(def, peer); err == nil {
+		t.Fatal("zero-ttl token must expire at SessionTTL")
+	}
+}
+
 func TestMintSessionUIDBound(t *testing.T) {
 	b := NewBroker(func(string) (string, bool) { return "", false }, nil)
-	tok, err := b.MintSession(Identity{Agent: "fixer"}, 1000)
+	tok, err := b.MintSession(Identity{Agent: "fixer"}, 1000, SessionTTL)
 	if err != nil {
 		t.Fatalf("MintSession: %v", err)
 	}

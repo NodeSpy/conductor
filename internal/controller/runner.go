@@ -132,16 +132,69 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	// checkpoints the step "done" and, when archive_when_done is set, archives
 	// the session immediately: Close cancels the session's context, racing the
 	// still-running turn and killing it mid-edit/commit/push (#60).
+	timeout := time.Hour
+	if d := req.Step.WaitTimeout.D(); d > 0 {
+		timeout = d + 5*time.Minute
+	}
 	if req.Wait && !req.Interactive {
 		if w, ok := sess.(waiter); ok {
-			timeout := time.Hour
-			if d := req.Step.WaitTimeout.D(); d > 0 {
-				timeout = d + 5*time.Minute
-			}
 			w.Wait(ctx, timeout)
+		}
+		// Capture the foreground turn's reply into RunRef.Output so the flow's
+		// output extraction and output_schema contract see it — the same
+		// RunRef.Output the paseo dispatcher populates directly. Sessions that
+		// can't capture leave it empty (the prior behavior).
+		if oc, ok := sess.(OutputCapturer); ok {
+			ref.Output = oc.Output()
+		}
+		// A controller runtime has no native --output-schema; conductor enforces
+		// the contract in software (v0.9.3). The schema directive was injected
+		// into the prompt (RenderPrompt) so the agent emitted the object; here
+		// we extract + validate it, with ONE corrective turn on a fresh session.
+		if len(req.Action.OutputSchema) > 0 {
+			out, serr := r.enforceSchema(ctx, req, cwd, wsID, timeout, ref.Output)
+			if serr != nil {
+				return ref, serr
+			}
+			ref.Output = out
 		}
 	}
 	return ref, nil
+}
+
+// enforceSchema applies the runtime-agnostic output_schema contract to a
+// foreground controller turn's reply. It delegates the extract/validate/
+// canonicalize work to dispatch.EnforceSchema, supplying a corrective-turn
+// primitive that opens a FRESH session on this controller with the corrective
+// prompt (a fresh turn, not a --resume, so a oneshot recipe works too). Returns
+// the canonical JSON on success, or the schema error after one failed retry.
+func (r *controllerRunner) enforceSchema(ctx context.Context, req dispatch.Request, cwd, wsID string, timeout time.Duration, answer string) (string, error) {
+	basePrompt, err := dispatch.RenderPrompt(req)
+	if err != nil {
+		return "", err
+	}
+	retry := func(ctx context.Context, prompt string) (string, error) {
+		req2 := req
+		// The corrective prompt already carries the schema directive (basePrompt
+		// included it); clear OutputSchema so RenderPrompt does not append it a
+		// second time, and set the literal prompt as the turn's text.
+		req2.Action.Prompt = prompt
+		req2.Action.OutputSchema = nil
+		req2.Step.OutputSchema = nil
+		s2, err := r.c.NewSession(ctx, Spec{Request: req2, Cwd: cwd, WorkspaceID: wsID}, r.h)
+		if err != nil {
+			return "", err
+		}
+		defer s2.Close(ctx)
+		if w, ok := s2.(waiter); ok {
+			w.Wait(ctx, timeout)
+		}
+		if oc, ok := s2.(OutputCapturer); ok {
+			return oc.Output(), nil
+		}
+		return "", nil
+	}
+	return dispatch.EnforceSchema(ctx, req.Action.OutputSchema, basePrompt, answer, retry)
 }
 
 // WaitForAgent blocks until the session's turn finishes (or ctx/timeout fires),

@@ -1390,6 +1390,17 @@ group_T_output_schema() {
   else
     bad "T soft fallback on native schema failure" T T-soft "no SCHEMA-SOFT decision=approve capture"
   fi
+
+  # v0.9.3: the SAME contract on a CONTROLLER runtime (cli → fakecli), which has
+  # no native --output-schema at all. A SCHEMA-CLI post can only appear if the
+  # controllerRunner injected the directive, captured the reply, and validated
+  # it conductor-side — "AUTO in all paths".
+  post_webhook_to conductor-conn pull_request func_schemacli_conflict.json >/dev/null
+  if wait_for 30 slack_sink_has "SCHEMA-CLI decision=approve"; then
+    ok "T output_schema enforced on a cli controller runtime (directive-in-prompt, validated conductor-side)" T T-cli
+  else
+    bad "T output_schema on cli controller runtime" T T-cli "no SCHEMA-CLI decision=approve capture"
+  fi
 }
 
 main() {
