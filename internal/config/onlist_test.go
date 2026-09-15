@@ -162,7 +162,7 @@ triggers:
 triggers:
   - name: x
     on: [ { gh.new_comment: 5 } ]
-    steps: [ { uses: svc.post } ]`, "is a block {filters, policy, hooks}"},
+    steps: [ { uses: svc.post } ]`, "is a block {filter, filters, policy, hooks}"},
 		{"manual needs a name", `
 triggers:
   - on: [manual, gh.new_comment]
