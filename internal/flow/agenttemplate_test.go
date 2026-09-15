@@ -2,7 +2,6 @@ package flow
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/dispatch"
@@ -97,10 +96,10 @@ triggers:
 		t.Fatalf("templated agent should validate, got: %v", err)
 	}
 
-	// `agent:` names nothing resolvable now, so an arbitrary label is fine.
-	// What an agent step still needs is a PROMPT — that is the check that
-	// replaced the profile lookup.
-	bad := loadConfig(t, `
+	// `agent:` names nothing resolvable now, so an arbitrary label is fine —
+	// and a prompt is OPTIONAL: a promptless agent step is dispatched against
+	// the event itself (dispatch.EventPrompt), so it must VALIDATE.
+	ok := loadConfig(t, `
 connectors:
   svc: { use: fake }
 triggers:
@@ -109,8 +108,7 @@ triggers:
     steps:
       - { id: r, type: agent, agent: nope }
 `)
-	err := Validate(bad, buildRegistry(t, bad))
-	if err == nil || !strings.Contains(err.Error(), "needs a prompt") {
-		t.Fatalf("an agent step with no prompt must fail validation, got %v", err)
+	if err := Validate(ok, buildRegistry(t, ok)); err != nil {
+		t.Fatalf("a promptless agent step must validate (dispatch synthesizes the event prompt), got %v", err)
 	}
 }

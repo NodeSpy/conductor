@@ -350,12 +350,11 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 
 	switch step.Form() {
 	case "agent":
-		// There is nothing to resolve: a step carries its own behavior
-		// (design §6) and `agent:` is a free-form attribution label. What an
-		// agent step needs is a prompt.
-		if strings.TrimSpace(step.Prompt) == "" && step.Team == nil {
-			return fmt.Errorf("%s: agent step needs a prompt:", w)
-		}
+		// A step carries its own behavior (design §6); `agent:` is a free-form
+		// attribution label, nothing to resolve.
+		// A prompt is OPTIONAL: a step with none is dispatched against the
+		// event itself (dispatch.EventPrompt synthesizes the task from the
+		// trigger), so there is nothing to require here.
 		if step.Handoff != "" {
 			if err := checkAskCapable(reg, w, step.Handoff); err != nil {
 				return err
