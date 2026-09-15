@@ -26,9 +26,30 @@ var eventPromptExcludedContext = map[string]bool{
 // appropriate response with whatever this environment actually provides. An
 // explicit step prompt always overrides it.
 //
+// `group` is the flow's grouped-run render data (data["group"] — key/count/
+// events) when the trigger has a `group:` block that batched several events
+// into this run; nil for an ordinary single-event dispatch. When it holds more
+// than one event they are included (credential-stripped) so the agent sees the
+// WHOLE batch, not just the freshest event.
+//
 // json.Marshal sorts map keys, so the serialized event (and thus the prompt) is
 // deterministic for a given trigger.
-func EventPrompt(t core.Trigger) string {
+func EventPrompt(t core.Trigger, group map[string]any) string {
+	ev := eventObject(t)
+	if g := groupEvents(group); g != nil {
+		ev["group"] = g
+	}
+	body, err := json.MarshalIndent(ev, "", "  ")
+	if err != nil {
+		// A trigger that can't marshal is pathological; a bare instruction
+		// still beats dispatching an empty prompt.
+		return "Act on this event."
+	}
+	return "Act on this event:\n\n" + string(body)
+}
+
+// eventObject is the connector-neutral view of one trigger.
+func eventObject(t core.Trigger) map[string]any {
 	ev := map[string]any{}
 	if t.Source != "" {
 		ev["source"] = t.Source
@@ -45,16 +66,53 @@ func EventPrompt(t core.Trigger) string {
 	if tgt := eventTarget(t.Target); len(tgt) > 0 {
 		ev["target"] = tgt
 	}
-	if ctx := eventContext(t.Context); len(ctx) > 0 {
+	if ctx := stripCredentials(t.Context); len(ctx) > 0 {
 		ev["context"] = ctx
 	}
-	body, err := json.MarshalIndent(ev, "", "  ")
-	if err != nil {
-		// A trigger that can't marshal is pathological; a bare instruction
-		// still beats dispatching an empty prompt.
-		return "Act on this event."
+	return ev
+}
+
+// groupEvents turns the flow's grouped render data into a credential-safe batch
+// object — {count, events:[…]} — for the event prompt. Returns nil when there
+// is no real batch (no group:, or a single event the top-level already is), so
+// an ungrouped run's prompt is unchanged. Each grouped event is the flow's flat
+// per-event data with the credential/plumbing keys stripped.
+func groupEvents(group map[string]any) map[string]any {
+	if group == nil {
+		return nil
 	}
-	return "Act on this event:\n\n" + string(body)
+	raw, _ := group["events"].([]any)
+	if len(raw) <= 1 {
+		return nil
+	}
+	events := make([]any, 0, len(raw))
+	for _, re := range raw {
+		m, ok := re.(map[string]any)
+		if !ok {
+			continue
+		}
+		events = append(events, stripCredentials(m))
+	}
+	if len(events) <= 1 {
+		return nil
+	}
+	return map[string]any{"count": len(events), "events": events}
+}
+
+// stripCredentials copies a flat event map minus credential/plumbing keys and
+// empty values.
+func stripCredentials(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if eventPromptExcludedContext[k] {
+			continue
+		}
+		if v == nil || v == "" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // eventTarget is the non-empty subset of a target's fields.
@@ -86,22 +144,6 @@ func eventTarget(t core.Target) map[string]any {
 	}
 	if t.HTMLURL != "" {
 		out["url"] = t.HTMLURL
-	}
-	return out
-}
-
-// eventContext is the trigger context minus credential/plumbing keys and empty
-// values — the event data an agent may legitimately see.
-func eventContext(ctx map[string]any) map[string]any {
-	out := map[string]any{}
-	for k, v := range ctx {
-		if eventPromptExcludedContext[k] {
-			continue
-		}
-		if v == nil || v == "" {
-			continue
-		}
-		out[k] = v
 	}
 	return out
 }

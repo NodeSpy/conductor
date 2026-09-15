@@ -25,7 +25,7 @@ func TestEventPromptShapeAndStripsCredentials(t *testing.T) {
 			"nilv":            nil,
 		},
 	}
-	p := EventPrompt(tr)
+	p := EventPrompt(tr, nil)
 
 	if !strings.HasPrefix(p, "Act on this event:\n\n{") {
 		t.Fatalf("prompt should lead with the imperative + JSON, got: %.40q", p)
@@ -71,7 +71,67 @@ func TestEventPromptShapeAndStripsCredentials(t *testing.T) {
 func TestEventPromptDeterministic(t *testing.T) {
 	tr := core.Trigger{Source: "github", Kind: "merge_conflict", Target: core.Target{Repo: "o/r", Number: 3},
 		Context: map[string]any{"b": 2, "a": 1, "c": 3}}
-	if EventPrompt(tr) != EventPrompt(tr) {
+	if EventPrompt(tr, nil) != EventPrompt(tr, nil) {
 		t.Fatal("EventPrompt must be stable for a given trigger (json sorts map keys)")
+	}
+}
+
+// When a group: batched several events into the run, the promptless event
+// prompt must carry the WHOLE batch (credential-stripped), not just the
+// freshest event — otherwise grouping + promptless silently loses N-1 events.
+func TestEventPromptIncludesGroupBatch(t *testing.T) {
+	tr := core.Trigger{Source: "github", Kind: "new_comment",
+		Target: core.Target{Repo: "o/r", PR: 7, Number: 7}}
+	// The flow's group render data: flat per-event maps (baseData), carrying a
+	// credential the batch view must strip.
+	group := map[string]any{
+		"key":   "o/r#7",
+		"count": 3,
+		"events": []any{
+			map[string]any{"author": "a1", "comment_body": "one", "app_token": "SECRET"},
+			map[string]any{"author": "a2", "comment_body": "two", "gh_token": "SECRET"},
+			map[string]any{"author": "a3", "comment_body": "three"},
+		},
+	}
+	p := EventPrompt(tr, group)
+	body := p[strings.Index(p, "{"):]
+	var ev map[string]any
+	if err := json.Unmarshal([]byte(body), &ev); err != nil {
+		t.Fatalf("not valid JSON: %v\n%s", err, body)
+	}
+	g, ok := ev["group"].(map[string]any)
+	if !ok {
+		t.Fatalf("grouped run must include a group object, got: %+v", ev)
+	}
+	if g["count"].(float64) != 3 {
+		t.Fatalf("group count = %v, want 3", g["count"])
+	}
+	evs, _ := g["events"].([]any)
+	if len(evs) != 3 {
+		t.Fatalf("group must carry all 3 events, got %d", len(evs))
+	}
+	// All three authors present; no credential leaked.
+	for _, banned := range []string{"SECRET", "app_token", "gh_token"} {
+		if strings.Contains(p, banned) {
+			t.Errorf("credential %q leaked into a grouped event", banned)
+		}
+	}
+	for _, want := range []string{"a1", "a2", "a3", "one", "two", "three"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("grouped event data %q missing from the prompt", want)
+		}
+	}
+}
+
+// A single-event "group" (count 1, or nil) adds no group object — an ungrouped
+// run's prompt is unchanged.
+func TestEventPromptSingleEventNoGroup(t *testing.T) {
+	tr := core.Trigger{Source: "github", Kind: "new_comment", Target: core.Target{Repo: "o/r", PR: 7}}
+	if strings.Contains(EventPrompt(tr, nil), `"group"`) {
+		t.Error("nil group must not add a group object")
+	}
+	one := map[string]any{"count": 1, "events": []any{map[string]any{"author": "a1"}}}
+	if strings.Contains(EventPrompt(tr, one), `"group"`) {
+		t.Error("a single-event batch must not add a group object")
 	}
 }
