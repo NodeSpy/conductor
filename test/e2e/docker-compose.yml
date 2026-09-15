@@ -70,6 +70,9 @@ services:
       HOME: /home/conductor
       PC_GITHUB_API_BASE: "http://mock-github:8080"
       FORGE_BASE: "git://forge/"
+      # The cli runtime clones its own base checkout with plain git
+      # (internal/gitwt); point it at the hermetic forge instead of github.
+      CONDUCTOR_GIT_REMOTE_BASE: "git://forge/"
       FAKE_PASEO_STATE: /data/fakepaseo
       FAKE_PASEO_POST_COMMENT: "1"
       PC_PUSHOVER_URL: "http://sink-catcher:8080/pushover"
@@ -89,7 +92,12 @@ services:
       HOME: /home/conductor
       PC_GITHUB_API_BASE: "http://mock-github:8080"
       FORGE_BASE: "git://forge/"
+      # The cli runtime clones its own base checkout with plain git
+      # (internal/gitwt); point it at the hermetic forge instead of github.
+      CONDUCTOR_GIT_REMOTE_BASE: "git://forge/"
       FAKE_PASEO_STATE: /data/fakepaseo
+      PC_GIT_WORKTREE_REAP_INTERVAL: "5s"   # testability hook: the cli git-worktree orphan reaper
+      PC_GIT_WORKTREE_MIN_AGE: "30s"
     volumes:
       - ./config:/etc/conductor:ro
     command: ["bash", "/etc/conductor/entrypoint.sh", "/etc/conductor/controllers.yaml"]
@@ -105,6 +113,9 @@ services:
       PC_GITHUB_API_BASE: "http://mock-github:8080"
       PC_SLACK_API_URL: "http://sink-catcher:8080/slackapi"
       FORGE_BASE: "git://forge/"
+      # The cli runtime clones its own base checkout with plain git
+      # (internal/gitwt); point it at the hermetic forge instead of github.
+      CONDUCTOR_GIT_REMOTE_BASE: "git://forge/"
       FAKE_PASEO_STATE: /data/fakepaseo
       PC_REAPER_INTERVAL: "2s"
       PC_REAPER_MIN_AGE: "1s"
@@ -122,6 +133,9 @@ services:
       HOME: /home/conductor
       PC_GITHUB_API_BASE: "http://mock-github:8080"
       FORGE_BASE: "git://forge/"
+      # The cli runtime clones its own base checkout with plain git
+      # (internal/gitwt); point it at the hermetic forge instead of github.
+      CONDUCTOR_GIT_REMOTE_BASE: "git://forge/"
       FAKE_PASEO_STATE: /data/fakepaseo
     volumes:
       - ./config:/etc/conductor:ro
@@ -137,6 +151,9 @@ services:
       HOME: /home/conductor
       PC_GITHUB_API_BASE: "http://mock-github:8080"
       FORGE_BASE: "git://forge/"
+      # The cli runtime clones its own base checkout with plain git
+      # (internal/gitwt); point it at the hermetic forge instead of github.
+      CONDUCTOR_GIT_REMOTE_BASE: "git://forge/"
       FAKE_PASEO_STATE: /data/fakepaseo
       FAKE_PASEO_FAIL_WORKSPACE: "1"
     volumes:
