@@ -12,8 +12,10 @@ arbitrary local-looking string.
 ## Commit
 
 ```
-<COMMIT_SHA>
+f63f129  Name the official pack registry: conductor-packs/<name>
 ```
+
+(This report is committed on top of it, in a separate commit.)
 
 ## Resolution table — the five reference forms (`UseKindPack`)
 
