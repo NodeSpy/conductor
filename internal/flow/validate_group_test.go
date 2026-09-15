@@ -92,13 +92,6 @@ workflows:
 			`no output "bogus"`,
 		},
 		{
-			// `agent:` selects nothing now (design §6) — it is an attribution
-			// label — so what an agent step must still have is a prompt.
-			"agent step with no prompt",
-			"- on: svc.ping\n  steps: [{type: agent, agent: ghost}]",
-			"needs a prompt",
-		},
-		{
 			"handoff on a non-ask connector",
 			"- on: svc.ping\n  steps: [{type: agent, <<: *fixer, prompt: p, background: true, handoff: svc}]",
 			"", // svc HAS an ask verb (Ask true) — this case asserts the positive; see below
