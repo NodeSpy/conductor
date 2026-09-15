@@ -1124,14 +1124,22 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 # BIND its environment (connectors/secrets/stores). Fetch + lock with
 # `conductor init`; preview with `conductor pack plan`. See docs/wiki/Packs.md.
 #
-# The KEY IS THE REFERENCE: `packs: { pr-review-team: {} }` resolves to the
-# official pack repo (github.com/NodeSpy/conductor-packs) with no source: or
-# use: line at all. Write `use:` only to point somewhere else:
+# EVERY ENTRY SAYS WHERE IT COMES FROM, via `use:` (or the longer `source:`).
+# `conductor-packs/<name>` is a RESERVED namespace naming the official pack
+# registry (github.com/NodeSpy/conductor-packs) — trusted by default, and
+# obvious at the reference site that it is a fetch from a conductor-operated
+# repo rather than some local name:
 #
 # packs:
-#   pr-review-team: {}                            # official, by name
-#   house-style: { use: ./packs/house-style }     # a local folder
-#   kit:         { use: acme/conductor-packs/kit@^1.2 }   # an explicit repo
+#   pr-review-team: { use: conductor-packs/pr-review-team }  # the OFFICIAL registry
+#   house-style:    { use: ./packs/house-style }             # a local folder
+#   kit:            { use: acme/conductor-packs/kit@^1.2 }   # a third-party repo
+#
+# A BARE pack name (`use: pr-review-team`, or an entry with no use: at all) is
+# an ERROR: packs have no builtins, so it could only have meant the official
+# registry — say so with `conductor-packs/`. If your third-party pack really
+# lives under a github org named conductor-packs, write the host out:
+# `use: github.com/conductor-packs/<repo>/<name>`.
 #
 # The longer form, with everything spelled out:
 #

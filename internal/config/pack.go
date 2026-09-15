@@ -45,14 +45,21 @@ import (
 type PackInstance struct {
 	// Use names WHERE this pack comes from, in the same one-field form
 	// connectors and runtimes use (docs/design/runtimes-models-packs.md §5.1).
-	// It is rarely written: the `packs:` KEY IS the reference, so
-	// `packs: { pr-review-team: {} }` resolves to the official pack repo
-	// (OfficialPacksRepo) with no `use:` line at all. Write `use:` only to
-	// point somewhere else — `use: ./packs/house-style`, `use: acme/packs/x`.
+	// It is REQUIRED (unless Source is set): every pack entry says out loud
+	// where it comes from, in one of three shapes —
+	//
+	//	use: conductor-packs/pr-review-team   # the official registry
+	//	use: acme/packs/kit@^1.2              # a third-party repo
+	//	use: ./packs/house-style              # a local folder
+	//
+	// The key USED to imply the reference, landing a bare key in the official
+	// pack repo. That made a blessed-registry fetch and an arbitrary name look
+	// identical, so it is gone: naming the registry is now explicit
+	// (PacksNamespaceAlias).
 	//
 	// Source (below) is the older, longer spelling and still wins when both
-	// are set; applyPackSourceDefaults lowers Use (and the key) onto it, so
-	// resolution and the lockfile have one field to read.
+	// are set; applyPackSourceDefaults lowers Use onto it, so resolution and
+	// the lockfile have one field to read.
 	Use string `yaml:"use,omitempty"`
 	// Source locates the pack: a go-getter/Terraform-style
 	// `github.com/org/repo//subdir@ref`, an SSH form
@@ -123,19 +130,20 @@ type PackInstance struct {
 	Packs map[string]PackInstance `yaml:"packs,omitempty"`
 }
 
-// applyPackSourceDefaults lowers the `use:` reference — and, failing that, the
-// instance KEY — onto Source, so everything downstream (resolve, the trust
-// allowlist, the lockfile) keeps reading one field.
+// applyPackSourceDefaults lowers the `use:` reference onto Source, so
+// everything downstream (resolve, the trust allowlist, the lockfile) keeps
+// reading one field.
 //
 // Precedence: an explicit Source wins (it is the pre-`use:` spelling and may
-// carry a go-getter form `use:` cannot express), then `use:`, then the key.
+// carry a go-getter form `use:` cannot express), then `use:`. There is no
+// third rung: an entry with NEITHER is an error, not a bare-name lookup in the
+// official repo.
 //
 // It deliberately does NOT recurse into pack DEPENDENCIES. A dependency's
 // source is declared by its parent's `requires.packs.<alias>.source`, which
-// the resolver reads at the point it descends; implying one from the alias up
-// front would shadow the author's declaration. The resolver applies the same
-// implication for a dependency only after that declaration comes up empty
-// (see packDependencySource).
+// the resolver reads at the point it descends; filling one in up front would
+// shadow the author's declaration. The resolver calls packDependencySource
+// only after that declaration comes up empty.
 func applyPackSourceDefaults(packs map[string]PackInstance) error {
 	for _, name := range sortedPackKeys(packs) {
 		inst := packs[name]
@@ -151,12 +159,15 @@ func applyPackSourceDefaults(packs map[string]PackInstance) error {
 	return nil
 }
 
-// packDependencySource resolves one instance's source from its `use:` (or, if
-// that is empty too, from its key/alias).
+// packDependencySource resolves one instance's source from its `use:`. An
+// empty `use:` is an error naming both remote routes: the key used to imply a
+// bare name (→ the official repo), which is exactly the ambiguity the reserved
+// `conductor-packs/` namespace replaced.
 func packDependencySource(name, use string) (string, error) {
 	ref := strings.TrimSpace(use)
 	if ref == "" {
-		ref = name
+		return "", fmt.Errorf("pack %q: no use: — a pack entry must name where it comes from: write %q for the official registry, %q for a third-party pack, or a local path such as %q",
+			name, "use: "+PacksNamespaceAlias+"/"+name, "use: owner/repo/"+name, "use: ./packs/"+name)
 	}
 	src, err := packUseSource(ref)
 	if err != nil {
@@ -167,8 +178,8 @@ func packDependencySource(name, use string) (string, error) {
 
 // packUseSource turns a pack `use:` reference into the `source:` string the
 // resolver understands. A local path passes through; anything else resolves
-// through the shared use: search path, with a bare name landing in the
-// official pack repo.
+// through the shared use: search path, with `conductor-packs/<name>` landing
+// in the official pack repo.
 func packUseSource(ref string) (string, error) {
 	u, err := ParseUse(UseKindPack, ref)
 	if err != nil {

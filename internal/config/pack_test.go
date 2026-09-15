@@ -521,18 +521,28 @@ func triggerNamesOf(c *Config) []string {
 	return out
 }
 
-// --- `packs:` key-implies-`use:` (design §5.1) -----------------------------
+// --- `packs:` `use:` lowering (design §5.1) --------------------------------
 
-func TestPackKeyImpliesUse(t *testing.T) {
+func TestPackUseLowersToSource(t *testing.T) {
 	tests := []struct {
 		name  string
 		packs map[string]PackInstance
 		want  map[string]string
 	}{
 		{
-			name:  "bare key resolves to the official pack repo",
-			packs: map[string]PackInstance{"pr-review-team": {}},
+			name:  "the reserved namespace resolves to the official pack repo",
+			packs: map[string]PackInstance{"pr-review-team": {Use: "conductor-packs/pr-review-team"}},
 			want:  map[string]string{"pr-review-team": "github.com/NodeSpy/conductor-packs//pr-review-team"},
+		},
+		{
+			name:  "…and the instance name need not match the pack name",
+			packs: map[string]PackInstance{"review": {Use: "conductor-packs/pr-review-team"}},
+			want:  map[string]string{"review": "github.com/NodeSpy/conductor-packs//pr-review-team"},
+		},
+		{
+			name:  "the official repo spelled out still works",
+			packs: map[string]PackInstance{"review": {Use: "NodeSpy/conductor-packs/pr-review-team"}},
+			want:  map[string]string{"review": "github.com/NodeSpy/conductor-packs//pr-review-team"},
 		},
 		{
 			name:  "use: a local folder",
@@ -548,6 +558,11 @@ func TestPackKeyImpliesUse(t *testing.T) {
 			name:  "use: carries a version suffix",
 			packs: map[string]PackInstance{"kit": {Use: "acme/packs/kit@~> 1.2"}},
 			want:  map[string]string{"kit": "github.com/acme/packs//kit@~> 1.2"},
+		},
+		{
+			name:  "the reserved namespace carries a version suffix too",
+			packs: map[string]PackInstance{"kit": {Use: "conductor-packs/kit@^1.2"}},
+			want:  map[string]string{"kit": "github.com/NodeSpy/conductor-packs//kit@^1.2"},
 		},
 		{
 			name:  "an explicit source: still wins",
@@ -569,11 +584,33 @@ func TestPackKeyImpliesUse(t *testing.T) {
 	}
 }
 
-// The key implication must not reach pack DEPENDENCIES: their source is
+// A `packs:` entry with neither `use:` nor `source:` used to fall through to
+// the entry KEY, treated as a bare name — i.e. a silent fetch from the
+// official registry. That is the ambiguity `conductor-packs/<name>` replaced,
+// so it is now an error that names both routes.
+func TestPackEntryWithoutUseIsAnError(t *testing.T) {
+	packs := map[string]PackInstance{"pr-review-team": {}}
+	err := applyPackSourceDefaults(packs)
+	if err == nil {
+		t.Fatalf("a pack entry with no use: must not resolve (got source %q)", packs["pr-review-team"].Source)
+	}
+	for _, want := range []string{
+		`pack "pr-review-team"`,
+		`use: conductor-packs/pr-review-team`,
+		`use: owner/repo/pr-review-team`,
+		`use: ./packs/pr-review-team`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error must name %q, got: %v", want, err)
+		}
+	}
+}
+
+// The `use:` lowering must not reach pack DEPENDENCIES: their source is
 // declared by the parent's requires.packs, which the resolver reads later.
-func TestPackKeyImplicationDoesNotTouchDependencies(t *testing.T) {
+func TestPackUseLoweringDoesNotTouchDependencies(t *testing.T) {
 	packs := map[string]PackInstance{
-		"kit": {Packs: map[string]PackInstance{"base": {}}},
+		"kit": {Use: "acme/packs/kit", Packs: map[string]PackInstance{"base": {}}},
 	}
 	if err := applyPackSourceDefaults(packs); err != nil {
 		t.Fatal(err)
@@ -598,22 +635,199 @@ func TestOfficialPackRepoIsTrustedByDefault(t *testing.T) {
 	}
 }
 
-func TestPackUseKindResolvesToItsOwnRepo(t *testing.T) {
-	u, err := ParseUse(UseKindPack, "pr-review-team")
+// The blessed `conductor-packs/<name>` form must be default-trusted with no
+// allowlist ceremony — that is the whole point of naming the registry rather
+// than making operators spell out NodeSpy/conductor-packs and then list it.
+// Asserted through the RESOLVER's own output, so the alias and the trust check
+// cannot drift: a trust check that silently misses is worse than a strict one.
+func TestPacksNamespaceAliasIsDefaultTrusted(t *testing.T) {
+	src, err := packUseSource(PacksNamespaceAlias + "/pr-review-team")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if want := OfficialPacksSource + "//pr-review-team"; src != want {
+		t.Fatalf("source = %q, want %q", src, want)
+	}
+	var none *PackTrustConfig // no operator allowlist configured at all
+	if !none.SourceAllowed(src) {
+		t.Errorf("%q must be trusted with no pack_trust block", src)
+	}
+	// An operator who adds an allowlist for their own packs must not thereby
+	// revoke the official registry.
+	scoped := &PackTrustConfig{Allow: []string{"github.com/acme/*"}}
+	if !scoped.SourceAllowed(src) {
+		t.Errorf("%q must survive an unrelated allowlist", src)
+	}
+	if !scoped.PluginSourceAllowed(src) {
+		t.Errorf("%q must be trusted on the plugin surface too", src)
+	}
+
+	// …while a third-party pack still needs an explicit entry.
+	third, err := packUseSource("stranger/packs/foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scoped.SourceAllowed(third) {
+		t.Errorf("%q must require an allowlist entry", third)
+	}
+	listed := &PackTrustConfig{Allow: []string{"stranger/packs"}}
+	if !listed.SourceAllowed(third) {
+		t.Errorf("%q must resolve once listed", third)
+	}
+}
+
+// The reserved `conductor-packs/<name>` namespace is the blessed form: it
+// resolves exactly where a bare name used to, but the operator has NAMED the
+// registry, so a network fetch from a conductor-operated repo reads as one.
+func TestPackNamespaceAliasResolvesToTheOfficialRepo(t *testing.T) {
+	u, err := ParseUse(UseKindPack, "conductor-packs/pr-review-team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Origin != OriginOfficial {
+		t.Errorf("origin = %q, want %q", u.Origin, OriginOfficial)
+	}
+	if u.Host != "github.com" {
+		t.Errorf("host = %q, want github.com", u.Host)
 	}
 	if u.Repo != OfficialPacksRepo {
 		t.Errorf("repo = %q, want %q", u.Repo, OfficialPacksRepo)
 	}
 	// A pack sits at the root of the packs repo — not under a kind directory.
 	if u.Component != "pr-review-team" {
-		t.Errorf("component = %q", u.Component)
+		t.Errorf("component = %q, want pr-review-team", u.Component)
+	}
+	if u.Name != "pr-review-team" {
+		t.Errorf("name = %q, want pr-review-team", u.Name)
+	}
+	// The source string is what pack_trust and the lockfile compare against.
+	if got, want := u.Source(), OfficialPacksSource+"//pr-review-team"; got != want {
+		t.Errorf("source = %q, want %q", got, want)
 	}
 	// A name that is a builtin RUNTIME is a perfectly good pack name: the
-	// connector/runtime confusion check must not fire across repos.
-	if _, err := ParseUse(UseKindPack, "paseo"); err != nil {
-		t.Errorf("a pack may be named after a builtin runtime: %v", err)
+	// connector/runtime confusion check must not fire across repos. Nor may
+	// the CONNECTOR registry claim one — `builtinFor` falls through to
+	// connectors for any non-runtime kind, so `conductor-packs/github` must
+	// not come back as an in-binary connector.
+	for _, name := range []string{"paseo", "github", "slack"} {
+		u, err := ParseUse(UseKindPack, PacksNamespaceAlias+"/"+name)
+		if err != nil {
+			t.Errorf("a pack may share a builtin's name: %v", err)
+			continue
+		}
+		if u.Origin != OriginOfficial {
+			t.Errorf("%s: origin = %q, want %q — a pack has no builtins", name, u.Origin, OriginOfficial)
+		}
+	}
+}
+
+// The reserved namespace takes a version suffix and a multi-segment component,
+// and rejects being written with no pack after it.
+func TestPackNamespaceAliasEdges(t *testing.T) {
+	u, err := ParseUse(UseKindPack, "conductor-packs/pr-review-team@^1.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Version != "^1.2" || u.Component != "pr-review-team" {
+		t.Errorf("version = %q, component = %q", u.Version, u.Component)
+	}
+	// The `//` component separator is accepted here as it is everywhere else.
+	u, err = ParseUse(UseKindPack, "conductor-packs//pr-review-team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Repo != OfficialPacksRepo || u.Component != "pr-review-team" {
+		t.Errorf("repo = %q, component = %q", u.Repo, u.Component)
+	}
+	// The alias alone names a registry and no pack.
+	if _, err := ParseUse(UseKindPack, "conductor-packs"); err == nil {
+		t.Error("the alias with no pack after it must not resolve")
+	} else if !strings.Contains(err.Error(), "conductor-packs/<name>") {
+		t.Errorf("the error should say what to write, got: %v", err)
+	}
+	// An org LITERALLY named conductor-packs is still reachable — with the
+	// host written out, which is the documented escape from the reservation.
+	u, err = ParseUse(UseKindPack, "github.com/conductor-packs/kit/foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Repo != "conductor-packs/kit" || u.Origin != OriginGitHub {
+		t.Errorf("repo = %q, origin = %q — the host-qualified form must stay third-party", u.Repo, u.Origin)
+	}
+}
+
+// A bare pack name is no longer a lookup in the official repo: packs have no
+// builtins, so it could only ever have meant that, and a blessed-registry
+// fetch must not look like an arbitrary name.
+func TestBarePackNameIsAmbiguous(t *testing.T) {
+	_, err := ParseUse(UseKindPack, "pr-review-team")
+	if err == nil {
+		t.Fatal("a bare pack name must not resolve")
+	}
+	for _, want := range []string{
+		"a bare pack name is ambiguous",
+		`"conductor-packs/pr-review-team"`,
+		`"owner/repo/pr-review-team"`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error must name %q, got: %v", want, err)
+		}
+	}
+}
+
+// …and the blast radius stops at packs. Connectors and runtimes HAVE builtins,
+// so a bare name there asks a real question and keeps its official fallback.
+func TestBareNameResolutionIsUnchangedForConnectorsAndRuntimes(t *testing.T) {
+	for _, tc := range []struct {
+		kind       UseKind
+		ref        string
+		wantOrigin UseOrigin
+		wantComp   string
+	}{
+		{UseKindConnector, "github", OriginBuiltin, ""},
+		{UseKindRuntime, "paseo", OriginBuiltin, ""},
+		{UseKindConnector, "linear", OriginOfficial, "connectors/linear"},
+		{UseKindRuntime, "aider", OriginOfficial, "runtimes/aider"},
+	} {
+		u, err := ParseUse(tc.kind, tc.ref)
+		if err != nil {
+			t.Errorf("ParseUse(%s, %q): %v", tc.kind, tc.ref, err)
+			continue
+		}
+		if u.Origin != tc.wantOrigin || u.Component != tc.wantComp {
+			t.Errorf("ParseUse(%s, %q) = origin %q component %q, want %q / %q",
+				tc.kind, tc.ref, u.Origin, u.Component, tc.wantOrigin, tc.wantComp)
+		}
+		if tc.wantOrigin == OriginOfficial && u.Repo != OfficialRepo {
+			t.Errorf("ParseUse(%s, %q): repo = %q, want the PLUGIN repo %q",
+				tc.kind, tc.ref, u.Repo, OfficialRepo)
+		}
+	}
+	// The reserved pack namespace is pack-only: for a connector it is just an
+	// owner/repo pair on github.com, as it always was.
+	u, err := ParseUse(UseKindConnector, "conductor-packs/whatever")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Origin != OriginGitHub || u.Repo != "conductor-packs/whatever" {
+		t.Errorf("connector origin = %q repo = %q — the pack alias must not leak across kinds", u.Origin, u.Repo)
+	}
+}
+
+// A third-party pack is untouched by all of this.
+func TestThirdPartyPackStillResolves(t *testing.T) {
+	u, err := ParseUse(UseKindPack, "acme/my-packs/foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Origin != OriginGitHub {
+		t.Errorf("origin = %q, want %q", u.Origin, OriginGitHub)
+	}
+	if u.Repo != "acme/my-packs" || u.Component != "foo" || u.Name != "foo" {
+		t.Errorf("repo = %q component = %q name = %q", u.Repo, u.Component, u.Name)
+	}
+	if got, want := u.Source(), "github.com/acme/my-packs//foo"; got != want {
+		t.Errorf("source = %q, want %q", got, want)
 	}
 }
 

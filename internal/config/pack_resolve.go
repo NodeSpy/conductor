@@ -430,8 +430,9 @@ func (r *resolver) resolve(chain, nameChain []string, inst PackInstance, destDir
 		}
 		if child.Source == "" {
 			// Neither the instance block nor the parent's requires.packs
-			// named a source: fall back to the dependency's own `use:`, then
-			// to its alias (the official pack repo).
+			// named a source: fall back to the dependency's own `use:`. If
+			// that is empty too there is nothing left to infer — the alias no
+			// longer implies the official repo — so this errors.
 			src, err := packDependencySource(alias, child.Use)
 			if err != nil {
 				return fmt.Errorf("pack %q: dependency %q: %w (set packs.%s.use or requires.packs.%s.source)", ns, alias, err, alias, alias)

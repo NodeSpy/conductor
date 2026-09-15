@@ -26,6 +26,13 @@ import (
 //
 // Builtin beats official on a name clash; an explicit path is never a bare name
 // so it never enters cases 1–2.
+//
+// PACKS are the one kind that does not take cases 1–2. There are no builtin
+// packs, so a bare pack name could only ever have meant the official pack
+// repo — and a reference that reaches the blessed registry over the network
+// should SAY so. A pack names that registry with the reserved leading segment
+// PacksNamespaceAlias: `use: conductor-packs/pr-review-team`. A bare pack name
+// is an error naming both routes.
 
 // UseKind is what a reference must resolve to — derived from the block the
 // reference appears in, never written by hand.
@@ -36,8 +43,9 @@ const (
 	UseKindConnector UseKind = "connector"
 	UseKindRuntime   UseKind = "runtime"
 	// UseKindPack is a distributable config pack. Packs live in their own
-	// official repo (they are config, not a binary), so a bare pack name
-	// resolves to OfficialPacksRepo rather than the plugin repo.
+	// official repo (they are config, not a binary), named at the reference
+	// site by the reserved PacksNamespaceAlias segment rather than by a bare
+	// name.
 	UseKindPack UseKind = "pack"
 )
 
@@ -55,8 +63,9 @@ func (k UseKind) Dir() string {
 	}
 }
 
-// officialRepoFor is the repo a bare, non-builtin name of this kind resolves
-// to.
+// officialRepoFor is the repo an official reference of this kind resolves to:
+// a bare, non-builtin name for a connector/runtime, the reserved
+// `conductor-packs/<name>` namespace for a pack.
 func (k UseKind) officialRepoFor() string {
 	if k == UseKindPack {
 		return OfficialPacksRepo
@@ -100,9 +109,32 @@ const (
 // OfficialRepo is the plugin repo a bare, non-builtin name resolves to.
 const OfficialRepo = "NodeSpy/conductor-plugins"
 
-// OfficialPacksRepo is the pack repo a bare `packs:` key resolves to. Packs
-// are config rather than binaries, so they have their own repo.
+// OfficialPacksRepo is the pack repo the reserved `conductor-packs/<name>`
+// namespace resolves to. Packs are config rather than binaries, so they have
+// their own repo.
 const OfficialPacksRepo = "NodeSpy/conductor-packs"
+
+// PacksNamespaceAlias is the RESERVED leading segment that names the official
+// pack registry at the reference site: `use: conductor-packs/pr-review-team`
+// resolves to OfficialPacksRepo, component `pr-review-team`.
+//
+// It exists so that reaching the blessed registry over the network LOOKS like
+// it: the old spelling was a bare name, indistinguishable from any other
+// unqualified string, so `use: pr-review-team` read as "some name" when it was
+// a fetch from a conductor-operated repo. Naming the registry costs one
+// segment and removes the ambiguity entirely.
+//
+// The reservation is deliberate and it does cost something: an operator whose
+// THIRD-PARTY pack really lives under a github org literally named
+// `conductor-packs` cannot spell it `conductor-packs/<repo>/<name>` — they must
+// write the host out, `github.com/conductor-packs/<repo>/<name>`, which lands
+// in case 4 and is unambiguous. That collision is rare; mistaking the official
+// registry for a random name was not.
+//
+// It applies to UseKindPack only. Connectors and runtimes keep bare-name →
+// official resolution: they HAVE builtins, so a bare name there is already a
+// meaningful first question ("is this in the binary?").
+const PacksNamespaceAlias = "conductor-packs"
 
 // OfficialPacksSource is the `pack_trust` source form of the official pack
 // repo — in the DEFAULT allowlist, so naming an official pack needs no
@@ -318,6 +350,31 @@ func ParseUse(kind UseKind, ref string) (Use, error) {
 		return Use{}, fmt.Errorf("use: %q: empty reference", raw)
 	}
 
+	// The reserved pack namespace. Checked BEFORE the host/owner split, because
+	// `conductor-packs` carries no dot and would otherwise parse as an owner —
+	// sending `conductor-packs/pr-review-team` to github.com/conductor-packs,
+	// a repo nobody named, instead of the registry the operator obviously meant.
+	// Scheme'd and host-qualified references never reach here with the alias
+	// first, so `github.com/conductor-packs/repo/name` stays an ordinary case-4
+	// reference.
+	if kind == UseKindPack && scheme == "" && segs[0] == PacksNamespaceAlias {
+		rest := segs[1:]
+		if comp != "" {
+			rest = append(rest, splitSegments(comp)...)
+		}
+		if len(rest) == 0 {
+			return Use{}, fmt.Errorf("use: %q: %q names the official pack registry but no pack — write %q", raw, PacksNamespaceAlias, PacksNamespaceAlias+"/<name>")
+		}
+		u.Origin = OriginOfficial
+		u.Host, u.Repo = defaultHost, OfficialPacksRepo
+		u.Component = strings.Join(rest, "/")
+		u.Name = rest[len(rest)-1]
+		if err := checkUseName(u.Name); err != nil {
+			return Use{}, fmt.Errorf("use: %q: %w", raw, err)
+		}
+		return u, nil
+	}
+
 	// A first segment containing a "." is a HOSTNAME; otherwise github.com is
 	// implied. This is what separates `git.corp.example/team/repo//x` from
 	// `acme/repo/x`.
@@ -337,6 +394,14 @@ func ParseUse(kind UseKind, ref string) (Use, error) {
 		name := segs[0]
 		if err := checkUseName(name); err != nil {
 			return Use{}, fmt.Errorf("use: %q: %w", raw, err)
+		}
+		// Packs have no builtins, so a bare pack name could only ever have
+		// meant the official registry — the exact ambiguity the reserved
+		// namespace removes. Reject it here, before the builtin lookup, which
+		// for a pack would consult the CONNECTOR registry and wrongly claim a
+		// pack named `github` or `slack` ships in the binary.
+		if kind == UseKindPack {
+			return Use{}, barePackNameErr(raw, name)
 		}
 		if builtinFor(kind, name) {
 			if version != "" {
@@ -385,6 +450,14 @@ func ParseUse(kind UseKind, ref string) (Use, error) {
 		return Use{}, fmt.Errorf("use: %q: %w", raw, err)
 	}
 	return u, nil
+}
+
+// barePackNameErr is the one message for "you wrote a pack name with nothing
+// around it". It names BOTH routes, because the operator's next keystroke is
+// one of exactly two things and guessing which is not the error's job.
+func barePackNameErr(raw, name string) error {
+	return fmt.Errorf("use: %q: a bare pack name is ambiguous — write %q for the official registry, or %q for a third-party pack",
+		raw, PacksNamespaceAlias+"/"+name, "owner/repo/"+name)
 }
 
 // splitUseVersion peels an "@<constraint>" suffix off the LAST path segment. A
