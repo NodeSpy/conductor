@@ -295,9 +295,11 @@ func cmdRun(args []string) {
 		}
 	}
 	if cwd == "" {
-		// checkout:none with no workspace — run in a scratch dir so we still record
-		// an agent (assess-style steps).
-		cwd = filepath.Join(stateDir(), "scratch")
+		// No workspace and no --cwd. Conductor normally pins every checkout: none
+		// dispatch into a workspace (a pin, or the ephemeral one it just made), so
+		// this is the fallback for a dispatch that resolved neither — still record
+		// an agent rather than failing the scenario.
+		cwd = filepath.Join(stateDir(), "unpinned")
 		_ = os.MkdirAll(cwd, 0o755)
 	}
 
@@ -619,12 +621,37 @@ func cmdWorkspace(args []string) {
 }
 
 func wsCreate(args []string) {
+	p := parseFlags(args)
+	// A plain LOCAL workspace: no git involved, just a registered directory.
+	// Conductor creates one of these per un-pinned checkout: none dispatch (its
+	// ephemeral per-run workspace), so this path has to work for every
+	// assess/triage scenario. Real paseo requires the directory to already
+	// exist, and errors if it doesn't — mirror that, because conductor's
+	// mkdir-before-create depends on it.
+	if p.isolation == "local" {
+		if p.path == "" {
+			fail("workspace create: --path is required")
+		}
+		if st, err := os.Stat(p.path); err != nil || !st.IsDir() {
+			fmt.Fprintf(os.Stderr, "fakepaseo: WORKSPACE_CREATE_FAILED Directory not found: %s\n", p.path)
+			os.Exit(1)
+		}
+		var id string
+		withState(func(s *state) {
+			s.Seq++
+			id = fmt.Sprintf("ws-%d", s.Seq)
+			s.Workspaces[id] = &workspace{ID: id, Cwd: p.path, Isolation: "local"}
+		})
+		emitJSON(map[string]any{"workspaceId": id, "cwd": p.path})
+		return
+	}
 	if os.Getenv("FAKE_PASEO_FAIL_WORKSPACE") != "" {
-		// A hard worktree-creation failure → conductor escalates loudly (group J2).
+		// A hard WORKTREE-creation failure → conductor escalates loudly (group
+		// J2). Scoped to the worktree path so it can't also break the
+		// checkout: none run workspaces other scenarios need.
 		fmt.Fprintln(os.Stderr, "fakepaseo: WORKSPACE_CREATE_FAILED (forced)")
 		os.Exit(1)
 	}
-	p := parseFlags(args)
 	base := p.path
 	if base == "" || !isGitRepo(base) {
 		fail("workspace create: --path must be a git checkout, got %q", base)

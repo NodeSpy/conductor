@@ -358,32 +358,61 @@ func TestResolveCheckoutDirReuseCloneAndMemo(t *testing.T) {
 	}
 }
 
-func TestScratchWorkspaceResolution(t *testing.T) {
+func TestRunWorkspaceCreation(t *testing.T) {
 	bin, dir := fakePaseoDir(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	d := &Dispatcher{PaseoBin: bin, repoDirs: map[string]string{}}
+	req := Request{Trigger: core.Trigger{Kind: "cron", Target: core.Target{Repo: "acme/w", Number: 7}}}
 
-	// Found by title.
-	put(t, dir, "workspaces.json", `[{"workspaceId":"wks_s","name":"conductor-scratch","isolation":"local"}]`)
-	id, err := d.resolveScratchWorkspace(context.Background())
-	if err != nil || id != "wks_s" {
-		t.Fatalf("find by title: %q %v", id, err)
+	put(t, dir, "wscreate.json", `{"workspaceId":"wks_run"}`)
+	id, err := d.runWorkspace(context.Background(), req)
+	if err != nil || id != "wks_run" {
+		t.Fatalf("create run workspace: %q %v", id, err)
 	}
-	// Not found → created.
-	put(t, dir, "workspaces.json", `[]`)
-	put(t, dir, "wscreate.json", `{"workspaceId":"wks_created"}`)
-	id, err = d.resolveScratchWorkspace(context.Background())
-	if err != nil || id != "wks_created" {
-		t.Fatalf("create: %q %v", id, err)
+	calls := callsLog(t, dir)
+	if !strings.Contains(calls, "--isolation local") {
+		t.Fatalf("a checkout:none run workspace is a plain local one: %s", calls)
 	}
-	if !strings.Contains(callsLog(t, dir), "--title conductor-scratch") {
-		t.Fatal("scratch create argv missing title")
+	if !strings.Contains(calls, "--title "+runWorkspacePrefix) {
+		t.Fatalf("run workspace must carry the conductor-run- title prefix (it is what makes it reclaimable): %s", calls)
 	}
-	// Fallback id key.
-	put(t, dir, "wscreate.json", `{"id":"wks_alt"}`)
-	if id, _ := d.createScratchWorkspace(context.Background()); id != "wks_alt" {
-		t.Fatalf("id fallback: %q", id)
+	// The directory has to exist before `paseo workspace create --path` sees it,
+	// and it must be the run's OWN directory under ~/.conductor/runs.
+	runs := filepath.Join(home, ".conductor", runWorkspaceDirs)
+	ents, err := os.ReadDir(runs)
+	if err != nil || len(ents) != 1 {
+		t.Fatalf("expected one per-run dir under %s: %v %v", runs, ents, err)
+	}
+	if !strings.Contains(calls, filepath.Join(runs, ents[0].Name())) {
+		t.Fatalf("create argv should point --path at the run dir: %s", calls)
+	}
+
+	// A second run gets a DIFFERENT directory — shared directories would make the
+	// cwd→workspace reclaim map ambiguous.
+	put(t, dir, "wscreate.json", `{"id":"wks_alt"}`) // also covers the id-key fallback
+	if id, err := d.runWorkspace(context.Background(), req); err != nil || id != "wks_alt" {
+		t.Fatalf("second run: %q %v", id, err)
+	}
+	if ents, _ := os.ReadDir(runs); len(ents) != 2 {
+		t.Fatalf("each run needs its own directory, got %d", len(ents))
+	}
+}
+
+func TestRunWorkspaceSlugIsUniqueAndTraceable(t *testing.T) {
+	req := Request{Trigger: core.Trigger{Kind: "review_requested",
+		Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}}}
+	a, b := runWorkspaceSlug(req), runWorkspaceSlug(req)
+	if a == b {
+		t.Fatalf("two runs of the same trigger must not share a slug: %q", a)
+	}
+	if !strings.HasPrefix(a, "review_requested-") {
+		t.Fatalf("slug should name the trigger it came from: %q", a)
+	}
+	// A trigger with nothing sanitizable still yields a usable name.
+	empty := runWorkspaceSlug(Request{})
+	if strings.TrimSpace(empty) == "" || strings.HasPrefix(empty, "-") {
+		t.Fatalf("empty trigger should still slug: %q", empty)
 	}
 }
 

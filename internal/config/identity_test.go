@@ -173,7 +173,7 @@ triggers:
 	var ids []string
 	for i, tr := range c.Triggers {
 		s := tr.Steps[0]
-		if s.Workspace != "worktree" || !s.ArchiveWhenDone || s.Model.Ref != "claude-opus-5" {
+		if s.Workspace.Isolation != "worktree" || !s.ArchiveWhenDone || s.Model.Ref != "claude-opus-5" {
 			t.Fatalf("trigger %d: anchored behavior not merged: %+v", i, s)
 		}
 		ids = append(ids, s.Identity(ScopeForTrigger(tr, i), 0))
@@ -234,7 +234,7 @@ triggers:
 		t.Fatal(err)
 	}
 	s := c.Triggers[0].Steps[0]
-	if s.Workspace != "worktree" {
+	if s.Workspace.Isolation != "worktree" {
 		t.Fatal("the rest of the merge should still apply")
 	}
 	if got := s.Identity(TriggerScope("t"), 0); got != "special" {

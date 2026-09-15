@@ -57,7 +57,7 @@ type Reaper struct {
 	//
 	// Only the paseo-CLI HOW lives behind it: the reap POLICY (which agents are
 	// idle, the hold-marker/HoldSet checks, the startup grace, worktree-vs-agent
-	// archive choice, scratch culling) stays in this file.
+	// archive choice) stays in this file.
 	backendImpl Backend
 }
 
@@ -143,10 +143,11 @@ func (r *Reaper) reap(ctx context.Context) {
 	}
 
 	if len(idle) > 0 {
-		// Map agent cwd -> its worktree workspace so we can archive the *workspace*
-		// (which reclaims the worktree AND the agent it owns). Only worktree-isolation
-		// workspaces are archivable — never a shared/base checkout.
-		worktrees := r.worktreeWorkspaces(ctx)
+		// Map agent cwd -> the workspace conductor created for its run, so we can
+		// archive the *workspace* (which reclaims the directory AND the agent it
+		// owns). Covers both an isolated worktree and an un-pinned checkout:none
+		// run's ephemeral workspace — never a pinned or base checkout.
+		reclaimable := r.reclaimableWorkspaces(ctx)
 		for _, a := range idle {
 			// Explicit hand-off hold (engine-registered at launch): never reap,
 			// regardless of labels/markers. This is the deterministic protection for
@@ -179,14 +180,14 @@ func (r *Reaper) reap(ctx context.Context) {
 			if withinStartupGrace(engaged, created, time.Now(), r.minAge()) {
 				continue
 			}
-			if wksID := worktrees[normCwd(a.cwd)]; wksID != "" {
+			if wksID := reclaimable[normCwd(a.cwd)]; wksID != "" {
 				if err := r.backend().ArchiveWorkspace(ctx, wksID); err == nil && r.Log != nil {
-					r.Log("reaper: archived idle agent %s + worktree %s", a.id, wksID)
+					r.Log("reaper: archived idle agent %s + workspace %s", a.id, wksID)
 				}
 				continue
 			}
-			// No isolated worktree (e.g. checkout: none in a shared workspace): the
-			// agent has nothing to reclaim beyond itself.
+			// Nothing of ours to reclaim (a PINNED workspace, or a base checkout):
+			// the workspace outlives the run by design, so archive just the agent.
 			if err := r.backend().ArchiveAgent(ctx, a.id); err == nil && r.Log != nil {
 				r.Log("reaper: archived idle agent %s", a.id)
 			}
@@ -203,9 +204,6 @@ func (r *Reaper) reap(ctx context.Context) {
 	// hand-off carries no archive=1, so it's absent from `present` above — pruning
 	// against that would wrongly drop it). It's forgotten only once you archive it.
 	r.Held.keepOnly(r.presentIDs(ctx))
-
-	// Tidy the shared checkout:none scratch workspace when nothing is running in it.
-	r.cullScratch(ctx)
 }
 
 // presentIDs is the set of all non-archived agent ids on the local daemon.
@@ -223,52 +221,15 @@ func (r *Reaper) presentIDs(ctx context.Context) map[string]bool {
 	return ids
 }
 
-// cullScratch archives the shared checkout:none scratch workspace when no agent is
-// running in it. It's recreated on demand (resolveScratchWorkspace re-resolves by
-// title), so culling just keeps an idle conductor tidy. Skipped when any active
-// agent's cwd matches the scratch cwd — archiving the workspace would take a
-// running assess agent down with it.
-func (r *Reaper) cullScratch(ctx context.Context) {
-	id, cwd := r.findScratch(ctx)
-	if id == "" {
-		return
-	}
-	for _, ac := range r.activeAgentCwds(ctx) {
-		if normCwd(ac) == normCwd(cwd) {
-			return // in use — leave it
-		}
-	}
-	if err := r.backend().ArchiveWorkspace(ctx, id); err == nil && r.Log != nil {
-		r.Log("reaper: archived idle scratch workspace %s (recreated on demand)", id)
-	}
-}
-
-// findScratch returns the shared scratch workspace's id and cwd, or ""s if absent.
-func (r *Reaper) findScratch(ctx context.Context) (id, cwd string) {
-	wl, err := r.backend().ListWorkspaces(ctx)
-	if err != nil {
-		return "", ""
-	}
-	for _, w := range wl {
-		if w.Isolation == "local" && w.Name == scratchWorkspaceTitle && w.WorkspaceID != "" {
-			return w.WorkspaceID, w.Cwd
-		}
-	}
-	return "", ""
-}
-
-// activeAgentCwds lists the cwds of non-archived agents on the local daemon.
-func (r *Reaper) activeAgentCwds(ctx context.Context) []string {
-	a, err := r.backend().ListAgents(ctx, nil)
-	if err != nil {
-		return nil
-	}
-	cwds := make([]string, 0, len(a))
-	for _, x := range a {
-		cwds = append(cwds, x.Cwd)
-	}
-	return cwds
-}
+// ORPHAN EPHEMERAL RUN WORKSPACES. The reaper reclaims a run's workspace by
+// walking from its still-listed AGENT (above), which covers the normal case and
+// the crashed-mid-run case alike. It deliberately does NOT sweep
+// conductor-run-* workspaces that have no agent: an ephemeral workspace exists
+// for exactly as long as its agent does, so "no agent" means either the agent
+// was already archived WITH its workspace (nothing left to do) or the workspace
+// is being created right now for an agent that has not launched yet — and
+// archiving that one would pull the directory out from under a starting run.
+// The agent-anchored walk has no such window.
 
 // minAge is the startup grace, defaulting to reaperGraceDefault.
 func (r *Reaper) minAge() time.Duration {
@@ -324,14 +285,17 @@ func (r *Reaper) holdMarkerPresent(cwd string) bool {
 	return err == nil
 }
 
-// worktreeWorkspaces maps workspace cwd -> id for worktree-isolation workspaces
-// only, so the reaper never archives a shared or base checkout.
-func (r *Reaper) worktreeWorkspaces(ctx context.Context) map[string]string {
+// reclaimableWorkspaces maps workspace cwd -> id for the workspaces conductor
+// created for a run and may therefore archive — isolated worktrees and the
+// ephemeral per-run workspaces of un-pinned checkout:none dispatches (see
+// reclaimableWorkspaceMap). A pinned workspace, a base checkout, and anything
+// you made yourself are excluded, so the reaper can never take one down.
+func (r *Reaper) reclaimableWorkspaces(ctx context.Context) map[string]string {
 	wl, err := r.backend().ListWorkspaces(ctx)
 	if err != nil {
 		return nil
 	}
-	return worktreeWorkspaceMap(wl)
+	return reclaimableWorkspaceMap(wl)
 }
 
 // normCwd canonicalizes a workspace/agent path so they compare equal regardless

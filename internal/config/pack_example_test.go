@@ -83,7 +83,7 @@ packs:
 	if !ok {
 		t.Fatalf("expected review/review-flow, have %v", workflowKeys(cfg))
 	}
-	if wf.Steps[0].Workspace != "local" {
+	if wf.Steps[0].Workspace.Isolation != "local" {
 		t.Fatalf("the review-flow/review override should have applied, got %q", wf.Steps[0].Workspace)
 	}
 	// Preset codex applied: heavy_model=gpt-5-pro substituted into the prompt.

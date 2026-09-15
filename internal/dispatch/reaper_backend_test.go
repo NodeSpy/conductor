@@ -89,19 +89,23 @@ func (f *fakeReaperBackend) Wait(context.Context, string) error {
 
 // TestReapThroughInjectedBackend runs the TestReapScenario population through a
 // non-CLI Backend and asserts the identical outcome: the finished worktree
-// agent loses its workspace, the plain finished agent is archived, the
-// hand-off / question-asker / spinning-up / running agents survive, and the
-// idle scratch workspace is culled.
+// agent loses its workspace, the finished checkout:none agent loses its
+// EPHEMERAL per-run workspace (the reaper is the backstop for a run that never
+// reached Dispatcher.Archive), an agent in a PINNED workspace loses only
+// itself, and the hand-off / question-asker / spinning-up / running agents
+// survive.
 func TestReapThroughInjectedBackend(t *testing.T) {
 	old := "2020-01-01T00:00:00Z"
 	fresh := time.Now().UTC().Format(time.RFC3339)
-	wt, scratch := "/wt/pr5", "/scratch"
+	wt, runDir, pinDir := "/wt/pr5", "/home/me/.conductor/runs/cron-7-a1b2c3", "/home/me/triage"
 
 	fb := &fakeReaperBackend{
 		agents: []AgentInfo{
 			{ID: "a-held", Status: "idle"},
 			{ID: "a-ask", Status: "idle"},
 			{ID: "a-done", Status: "idle", Cwd: wt},
+			{ID: "a-run", Status: "idle", Cwd: runDir},
+			{ID: "a-pinned", Status: "idle", Cwd: pinDir},
 			{ID: "a-plain", Status: "completed", Cwd: "/elsewhere"},
 			{ID: "a-young", Status: "idle"},
 			{ID: "a-running", Status: "running"},
@@ -109,13 +113,16 @@ func TestReapThroughInjectedBackend(t *testing.T) {
 		},
 		workspaces: []WorkspaceInfo{
 			{WorkspaceID: "wks_wt", Cwd: wt, Isolation: "worktree"},
-			{WorkspaceID: "wks_scratch", Name: scratchWorkspaceTitle, Isolation: "local", Cwd: scratch},
+			{WorkspaceID: "wks_run", Name: runWorkspacePrefix + "cron-7-a1b2c3", Isolation: "local", Cwd: runDir},
+			{WorkspaceID: "wks_pin", Name: "triage", Isolation: "local", Cwd: pinDir},
 		},
 		details: map[string]AgentDetail{
-			"a-ask":   {PendingPermissions: []json.RawMessage{[]byte(`{"q":1}`)}, CreatedAt: old, LastUsage: old},
-			"a-done":  {CreatedAt: old, LastUsage: old},
-			"a-plain": {CreatedAt: old, LastUsage: old},
-			"a-young": {CreatedAt: fresh},
+			"a-ask":    {PendingPermissions: []json.RawMessage{[]byte(`{"q":1}`)}, CreatedAt: old, LastUsage: old},
+			"a-done":   {CreatedAt: old, LastUsage: old},
+			"a-run":    {CreatedAt: old, LastUsage: old},
+			"a-pinned": {CreatedAt: old, LastUsage: old},
+			"a-plain":  {CreatedAt: old, LastUsage: old},
+			"a-young":  {CreatedAt: fresh},
 		},
 	}
 
@@ -126,12 +133,12 @@ func TestReapThroughInjectedBackend(t *testing.T) {
 	r.reap(context.Background())
 
 	got := strings.Join(fb.archives, " ")
-	for _, want := range []string{"workspace:wks_wt", "agent:a-plain", "workspace:wks_scratch"} {
+	for _, want := range []string{"workspace:wks_wt", "workspace:wks_run", "agent:a-plain", "agent:a-pinned"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %s in archives: %v", want, fb.archives)
 		}
 	}
-	for _, never := range []string{"agent:a-held", "agent:a-ask", "agent:a-young", "agent:a-running", "agent:a-done"} {
+	for _, never := range []string{"agent:a-held", "agent:a-ask", "agent:a-young", "agent:a-running", "agent:a-done", "agent:a-run", "workspace:wks_pin"} {
 		if strings.Contains(got, never) {
 			t.Errorf("must not archive %s: %v", never, fb.archives)
 		}

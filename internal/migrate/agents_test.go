@@ -78,7 +78,7 @@ triggers:
 		t.Fatalf("migrated identity = %q, want fixer", got)
 	}
 	// Behavior moved verbatim.
-	if tmpl.Workspace != "worktree" || !tmpl.ArchiveWhenDone || !tmpl.OutcomeFeedback {
+	if tmpl.Workspace.Isolation != "worktree" || !tmpl.ArchiveWhenDone || !tmpl.OutcomeFeedback {
 		t.Fatalf("behavior lost: %+v", tmpl)
 	}
 	if tmpl.Memory == nil || !tmpl.Memory.Enabled {
@@ -113,7 +113,7 @@ triggers:
 	}
 	for i, tr := range out.Triggers {
 		s := tr.Steps[0]
-		if s.Name != "fixer" || s.Workspace != "worktree" {
+		if s.Name != "fixer" || s.Workspace.Isolation != "worktree" {
 			t.Fatalf("trigger %d did not inherit the shared named step: %+v", i, s)
 		}
 		if got := s.Identity(config.ScopeForTrigger(tr, i), 0); got != "fixer" {

@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +32,7 @@ func TestPaseoAgentArgv(t *testing.T) {
 		},
 		Action: config.Action{Type: "agent", Agent: "fixer", Prompt: "fix {{.repo}}#{{.pr}} on {{.base}}"},
 		Model:  "claude-opus",
-		Step:   config.Step{Model: config.ModelSpecOf("claude-opus"), Workspace: "worktree"},
+		Step:   config.Step{Model: config.ModelSpecOf("claude-opus"), Workspace: config.Workspace{Isolation: "worktree"}},
 		Tokens: Tokens{App: "APPTOK", User: "USERTOK"},
 		Author: Author{Name: "Me", Email: "me@example.com"},
 	}
@@ -72,7 +73,7 @@ func TestPaseoBranchOffForIssue(t *testing.T) {
 		Trigger: core.Trigger{Kind: "issue_assigned", TargetTrusted: true,
 			Target: core.Target{Repo: "acme/w", Issue: 9, Number: 9, BaseRef: "main"}},
 		Action: config.Action{Type: "agent", Agent: "fixer", Checkout: "branch-off", Prompt: "start"},
-		Step:   config.Step{Workspace: "worktree"},
+		Step:   config.Step{Workspace: config.Workspace{Isolation: "worktree"}},
 	}
 	ref, _ := d.Dispatch(context.Background(), req)
 	s := joined(ref.Argv)
@@ -121,7 +122,7 @@ func TestPaseoCheckoutPRUsesResolvedCwd(t *testing.T) {
 		Trigger: core.Trigger{Kind: "merge_conflict",
 			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}},
 		Action:    config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"},
-		Step:      config.Step{Workspace: "worktree"},
+		Step:      config.Step{Workspace: config.Workspace{Isolation: "worktree"}},
 		Workspace: "wks_should_be_ignored", // must NOT combine with --new-workspace
 	}
 	ref, err := d.Dispatch(context.Background(), req)
@@ -153,7 +154,7 @@ func TestCheckoutUsesTargetProject(t *testing.T) {
 		Trigger: core.Trigger{Kind: "merge_conflict",
 			Target: core.Target{Repo: "AcmeCorp/Widget", Project: "acme/widget", PR: 5, Number: 5}},
 		Action: config.Action{Type: "agent", Agent: "fixer", Prompt: "fix"},
-		Step:   config.Step{Workspace: "worktree"},
+		Step:   config.Step{Workspace: config.Workspace{Isolation: "worktree"}},
 	}
 	ref, err := d.Dispatch(context.Background(), req)
 	if err != nil {
@@ -167,26 +168,82 @@ func TestCheckoutUsesTargetProject(t *testing.T) {
 	}
 }
 
-func TestPaseoNoneUsesScratchWorkspace(t *testing.T) {
-	// checkout:none with no pinned workspace reuses the shared scratch workspace
-	// instead of letting paseo spawn (and leak) a throwaway one.
+func TestPaseoNoneGetsItsOwnRunWorkspace(t *testing.T) {
+	// checkout:none with no pin gets an EPHEMERAL workspace created for this run
+	// alone — never a shared one carried over from the last run, and never an
+	// implicit paseo workspace we couldn't reclaim afterwards.
 	d := newDispatcher()
-	called := 0
-	d.ScratchWorkspace = func(context.Context) (string, error) { called++; return "wks_scratch", nil }
+	var seen []Request
+	d.RunWorkspace = func(_ context.Context, req Request) (string, error) {
+		seen = append(seen, req)
+		return fmt.Sprintf("wks_run_%d", len(seen)), nil
+	}
 	req := Request{
 		Trigger: core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "acme/w", PR: 6, Number: 6}},
 		Action:  config.Action{Type: "agent", Agent: "assess", Checkout: "none", Prompt: "assess"},
 	}
 	ref, _ := d.Dispatch(context.Background(), req)
 	s := joined(ref.Argv)
-	if !strings.Contains(s, "--workspace wks_scratch") {
-		t.Fatalf("checkout:none should reuse the scratch workspace, got: %s", s)
+	if !strings.Contains(s, "--workspace wks_run_1") {
+		t.Fatalf("checkout:none should run in its own per-run workspace, got: %s", s)
 	}
 	if strings.Contains(s, "--new-workspace") {
 		t.Fatalf("checkout:none must not create a worktree: %s", s)
 	}
-	if called != 1 {
-		t.Fatalf("scratch resolver should be consulted once, got %d", called)
+	// A second dispatch must NOT reuse the first one's workspace — that sharing
+	// is exactly what the retired conductor-scratch did.
+	ref2, _ := d.Dispatch(context.Background(), req)
+	if s2 := joined(ref2.Argv); !strings.Contains(s2, "--workspace wks_run_2") {
+		t.Fatalf("each checkout:none run needs its OWN workspace, got: %s", s2)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("run-workspace creator should be consulted once per dispatch, got %d", len(seen))
+	}
+}
+
+func TestPaseoNonePinSkipsRunWorkspace(t *testing.T) {
+	// A pinned workspace is reused across runs, so no ephemeral one is created
+	// (and, per TestArchivePinnedWorkspaceSurvives, none is reclaimed either).
+	for _, tc := range []struct {
+		name string
+		req  Request
+	}{
+		{"request pin", Request{Workspace: "wks_pinned"}},
+		{"step config pin", Request{Step: config.Step{
+			Workspace: config.Workspace{Pin: "wks_pinned"}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newDispatcher()
+			d.RunWorkspace = func(context.Context, Request) (string, error) {
+				t.Fatal("a pinned dispatch must not create an ephemeral workspace")
+				return "", nil
+			}
+			req := tc.req
+			req.Trigger = core.Trigger{Kind: "review_requested",
+				Target: core.Target{Repo: "acme/w", PR: 6, Number: 6}}
+			req.Action = config.Action{Type: "agent", Agent: "assess", Checkout: "none", Prompt: "assess"}
+			ref, _ := d.Dispatch(context.Background(), req)
+			if s := joined(ref.Argv); !strings.Contains(s, "--workspace wks_pinned") {
+				t.Fatalf("a pin should pin: %s", s)
+			}
+		})
+	}
+}
+
+func TestPaseoNoneRequestPinBeatsStepPin(t *testing.T) {
+	// A caller that resolved a workspace for THIS dispatch knows more than the
+	// step's config does, so Request.Workspace wins.
+	d := newDispatcher()
+	req := Request{
+		Trigger:   core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "acme/w", PR: 6, Number: 6}},
+		Action:    config.Action{Type: "agent", Agent: "assess", Checkout: "none", Prompt: "assess"},
+		Step:      config.Step{Workspace: config.Workspace{Pin: "wks_step"}},
+		Workspace: "wks_request",
+	}
+	ref, _ := d.Dispatch(context.Background(), req)
+	s := joined(ref.Argv)
+	if !strings.Contains(s, "--workspace wks_request") || strings.Contains(s, "wks_step") {
+		t.Fatalf("Request.Workspace should win over the step pin, got: %s", s)
 	}
 }
 
@@ -246,21 +303,33 @@ func TestPaseoErrDetail(t *testing.T) {
 	}
 }
 
-func TestParseWorktreeWorkspaces(t *testing.T) {
+func TestReclaimableWorkspaceMap(t *testing.T) {
+	// Exactly the workspaces conductor created for a run are archivable: an
+	// isolated worktree, and an ephemeral conductor-run-* workspace. A base
+	// checkout, a workspace you named with a pin, and one you made yourself are
+	// all meant to outlive their agents.
 	data := []byte(`[
 	  {"workspaceId":"wks_wt","project":"a/w","isolation":"worktree","cwd":"/wt/one"},
+	  {"workspaceId":"wks_run","name":"conductor-run-cron-tick-a1b2c3","isolation":"local","cwd":"/home/me/.conductor/runs/cron-tick-a1b2c3"},
 	  {"workspaceId":"wks_base","project":"a/w","isolation":"local","cwd":"/home/me/w"},
+	  {"workspaceId":"wks_pin","name":"triage","isolation":"local","cwd":"/home/me/triage"},
 	  {"workspaceId":"wks_nocwd","isolation":"worktree","cwd":""}
 	]`)
-	m := worktreeWorkspaceMap(decodeWorkspaces(t, data))
+	m := reclaimableWorkspaceMap(decodeWorkspaces(t, data))
 	if m["/wt/one"] != "wks_wt" {
 		t.Errorf("worktree should map: %v", m)
+	}
+	if m["/home/me/.conductor/runs/cron-tick-a1b2c3"] != "wks_run" {
+		t.Errorf("ephemeral run workspace should map (else it leaks): %v", m)
 	}
 	if _, ok := m["/home/me/w"]; ok {
 		t.Errorf("base (local) checkout must not be archivable: %v", m)
 	}
-	if len(m) != 1 {
-		t.Errorf("only the valid worktree should be kept: %v", m)
+	if _, ok := m["/home/me/triage"]; ok {
+		t.Errorf("a pinned workspace must not be archivable: %v", m)
+	}
+	if len(m) != 2 {
+		t.Errorf("only the two conductor-created workspaces should be kept: %v", m)
 	}
 }
 
@@ -330,7 +399,7 @@ func TestNormCwdMatchesTildeAndAbsolute(t *testing.T) {
 	// `paseo workspace ls` gives absolute; `paseo ls` gives `~/…`. They must match.
 	abs := filepath.Join(home, ".paseo/worktrees/x/branch")
 	data := []byte(`[{"workspaceId":"wks_wt","isolation":"worktree","cwd":` + strconv.Quote(abs) + `}]`)
-	m := worktreeWorkspaceMap(decodeWorkspaces(t, data))
+	m := reclaimableWorkspaceMap(decodeWorkspaces(t, data))
 	if m[normCwd("~/.paseo/worktrees/x/branch")] != "wks_wt" {
 		t.Fatalf("tilde agent cwd must map to the absolute workspace: %v", m)
 	}

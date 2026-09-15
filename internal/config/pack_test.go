@@ -159,7 +159,7 @@ func TestPackInstantiateNamespaceAndBind(t *testing.T) {
 
 	// Step override: post kept the bundle and merged the override.
 	h := packStep(t, cfg, "review/review-flow/handoff")
-	if h.Workspace != "worktree" {
+	if h.Workspace.Isolation != "worktree" {
 		t.Fatalf("handoff override workspace=worktree, got %q", h.Workspace)
 	}
 	// Secret rebind on the overridden agent: api_token -> house/foocorp.

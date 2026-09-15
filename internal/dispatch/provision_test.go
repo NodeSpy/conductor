@@ -21,7 +21,7 @@ func TestProvisionWorktreeCreatesForPR(t *testing.T) {
 		Trigger: core.Trigger{Kind: "review_requested",
 			Target: core.Target{Repo: "o/r", PR: 7, Number: 7}},
 		Action: config.Action{Type: "agent", Prompt: "review"},
-		Step:   config.Step{Workspace: "worktree"},
+		Step:   config.Step{Workspace: config.Workspace{Isolation: "worktree"}},
 	}
 	id, cwd, err := d.ProvisionWorktree(context.Background(), req)
 	if err != nil {

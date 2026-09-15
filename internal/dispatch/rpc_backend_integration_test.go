@@ -225,7 +225,9 @@ func TestRPCBackendVerbAndOptionMapping(t *testing.T) {
 		t.Fatalf("CreateWorktree options = %#v", fi.last().Options)
 	}
 
-	ws, err := b.CreateWorkspace(ctx, CreateWorkspaceOptions{Isolation: "local", Path: "/home", Title: "conductor-scratch"})
+	ws, err := b.CreateWorkspace(ctx, CreateWorkspaceOptions{
+		Isolation: "local", Path: "/home/u/.conductor/runs/cron-7-a1b2c3",
+		Title: runWorkspacePrefix + "cron-7-a1b2c3"})
 	if err != nil || ws.WorkspaceID != "wks_2" {
 		t.Fatalf("CreateWorkspace: %v %+v", err, ws)
 	}

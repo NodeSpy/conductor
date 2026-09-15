@@ -519,11 +519,11 @@ group_J_failure() {
     bad "J1 non-runnable controller escalates" J J1 "no escalate for a4/web4"
   fi
 
-  # J2: worktree creation fails → a LOUD escalate (never a silent scratch fallback).
+  # J2: worktree creation fails → a LOUD escalate (never a silent $HOME fallback).
   netcurl -X POST http://sink-catcher:8080/_reset >/dev/null
   force conductor-fail merge_conflict acme/web#1 /etc/conductor/conductor.yaml >/dev/null
   if wait_for 30 audit_match conductor-fail '"repo":"acme/web"' '"event":"escalate"'; then
-    ok "J2 worktree creation failure → loud escalate (not silent scratch)" J J2
+    ok "J2 worktree creation failure → loud escalate (not a silent fallback)" J J2
   else
     bad "J2 worktree failure escalates" J J2 "no escalate on conductor-fail"
   fi

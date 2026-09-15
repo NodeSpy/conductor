@@ -58,7 +58,7 @@ agents:
 	if err != nil {
 		t.Fatalf("migrated tree must load: %v", err)
 	}
-	if got := cfg.Triggers[0].Steps[0].Workspace; got != "worktree" {
+	if got := cfg.Triggers[0].Steps[0].Workspace.Isolation; got != "worktree" {
 		t.Fatalf("the cross-file profile did not inline: workspace=%q", got)
 	}
 	if got := cfg.Triggers[0].Steps[0].Name; got != "fixer" {

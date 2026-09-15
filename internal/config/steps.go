@@ -111,8 +111,12 @@ func (c *Config) validateSteps() error {
 			return
 		}
 		where := StepLabel(scope, slot, *s)
-		if s.Workspace != "" && s.Workspace != "local" && s.Workspace != "worktree" {
-			fail(fmt.Errorf("config: %s: workspace must be local|worktree, got %q", where, s.Workspace))
+		if err := s.Workspace.Validate(where); err != nil {
+			fail(err)
+			return
+		}
+		if err := validateWorkspacePin(where, *s); err != nil {
+			fail(err)
 			return
 		}
 		if s.Runtime != "" {
@@ -147,6 +151,35 @@ func (c *Config) validateSteps() error {
 		}
 	})
 	return firstErr
+}
+
+// validateWorkspacePin rejects a `workspace: { pin: … }` on a step that asks
+// for a repo checkout.
+//
+// A pin and a repo checkout want opposite things. A pin is ONE workspace reused
+// by every run of the step; `checkout: checkout-pr` / `branch-off` gives each
+// dispatch a FRESH isolated worktree, which is the isolation that lets two PRs
+// be worked at once. Honouring both is impossible, and quietly honouring one is
+// worse than saying so: silently ignoring the pin leaves an operator believing
+// their agent has a durable home, while silently ignoring the checkout would
+// run every PR's work in one shared directory.
+//
+// Only an EXPLICIT repo checkout is rejected. A step that leaves `checkout:`
+// unset derives its strategy from the trigger (a PR → checkout-pr, otherwise
+// none), so the pin applies on the runs that have no repo context and is
+// ignored on the ones that get a worktree — see effectiveStrategy. That is
+// worth documenting, not worth refusing a config over.
+func validateWorkspacePin(where string, s Step) error {
+	if s.Workspace.Pin == "" {
+		return nil
+	}
+	switch s.Checkout {
+	case "checkout-pr", "branch-off":
+		return fmt.Errorf("config: %s: workspace.pin (%q) cannot be combined with checkout: %s — "+
+			"a pin reuses one workspace across runs, a repo checkout gives each run its own worktree; "+
+			"drop the pin, or set checkout: none", where, s.Workspace.Pin, s.Checkout)
+	}
+	return nil
 }
 
 // validateStepSkill checks a step's `skill:` block.
