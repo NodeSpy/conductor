@@ -24,17 +24,36 @@ type Registry struct {
 // paseoRunner also satisfies Provisioner (the real *dispatch.Dispatcher does), the
 // non-paseo controllers reuse it to check out the conductor-supplied worktree.
 // Config is assumed already validated (see config.Config.Validate).
-func NewRegistry(cfgs map[string]config.ControllerConfig, defaultName string, paseoRunner Runner, paseoSender Sender) *Registry {
+func NewRegistry(cfgs map[string]config.ControllerConfig, defaultName string, paseoRunner Runner, paseoSender Sender, opts ...RegistryOption) *Registry {
 	prov, _ := paseoRunner.(Provisioner)
+	var o registryOpts
+	for _, opt := range opts {
+		opt(&o)
+	}
 	r := &Registry{
 		controllers: make(map[string]Controller, len(cfgs)),
 		defaultName: defaultName,
 		builtin:     newPaseoController(BuiltinPaseo, paseoRunner, paseoSender),
 	}
 	for name, cc := range cfgs {
-		r.controllers[name] = buildController(name, cc, paseoRunner, paseoSender, prov)
+		r.controllers[name] = buildController(name, cc, paseoRunner, paseoSender, prov, o.cliProv)
 	}
 	return r
+}
+
+// RegistryOption tunes registry construction without churning every call site.
+type RegistryOption func(*registryOpts)
+
+type registryOpts struct{ cliProv Provisioner }
+
+// WithCLIProvisioner injects the checkout provisioner the CLI controllers use
+// for LOCAL launches — the git-native one (internal/gitwt), which creates a
+// plain worktree under conductor's state dir and removes it when the session
+// closes. Unset, the cli path keeps using the paseo-backed provisioner. Only
+// the cli controllers take it: acp/opencode/agent-deck stay on paseo (phase 1,
+// docs/design/cli-git-worktrees.md).
+func WithCLIProvisioner(p Provisioner) RegistryOption {
+	return func(o *registryOpts) { o.cliProv = p }
 }
 
 // OverridePaseo rebinds a paseo-type entry to its OWN dispatch surface — a
@@ -57,9 +76,11 @@ func (r *Registry) OverridePaseo(name string, runner Runner, sender Sender) {
 //   - anything else                        → a stub reporting ErrNotRunnable
 //
 // prov is the worktree provisioner the non-paseo controllers use (nil-tolerant);
-// an unrecognized type/transport stays a stub so a future runtime is
-// forward-compatible in config without changing behavior today.
-func buildController(name string, cc config.ControllerConfig, paseoRunner Runner, paseoSender Sender, prov Provisioner) Controller {
+// cliProv is the git-native provisioner the CLI controllers prefer for a local
+// launch (nil → they use prov too). An unrecognized type/transport stays a stub
+// so a future runtime is forward-compatible in config without changing behavior
+// today.
+func buildController(name string, cc config.ControllerConfig, paseoRunner Runner, paseoSender Sender, prov, cliProv Provisioner) Controller {
 	if cc.Type == BuiltinPaseo {
 		return newPaseoController(name, paseoRunner, paseoSender)
 	}
@@ -77,13 +98,13 @@ func buildController(name string, cc config.ControllerConfig, paseoRunner Runner
 		// degrades to a stub (ErrNotRunnable) and every step pinned to it
 		// escalates. The legacy `transport: cli` spelling still resolves via
 		// the transport case.
-		return newCLIController(name, cc, prov)
+		return newCLIController(name, cc, cliProvisioner(cc, prov, cliProv))
 	case cc.Agent == "opencode" && transport == TransportNative:
 		return newOpencodeController(name, cc, prov)
 	case transport == TransportACP:
 		return newACPController(name, cc, prov)
 	case transport == TransportCLI:
-		return newCLIController(name, cc, prov)
+		return newCLIController(name, cc, cliProvisioner(cc, prov, cliProv))
 	}
 	// Unknown type/transport: keep it registered as a stub (negotiates the intended
 	// shape, refuses to run) until a later milestone teaches conductor to drive it.
@@ -96,6 +117,17 @@ func buildController(name string, cc config.ControllerConfig, paseoRunner Runner
 		model:     model,
 		transport: transport,
 	}
+}
+
+// cliProvisioner is the checkout provisioner one cli controller gets: the
+// git-native one for local launches with the paseo one held in reserve for a
+// `host:`-pinned dispatch, or — when no git provisioner is wired (tests, and
+// any build that doesn't opt in) — plain paseo, exactly as before.
+func cliProvisioner(cc config.ControllerConfig, paseoProv, gitProv Provisioner) Provisioner {
+	if gitProv == nil {
+		return paseoProv
+	}
+	return newRoutedProvisioner(cc.Host, gitProv, paseoProv)
 }
 
 // Resolve returns the controller that should run an agent, applying the

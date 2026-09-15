@@ -35,11 +35,17 @@ type fakeProv struct {
 	id, cwd string
 	err     error
 	got     []dispatch.Request
+	removed []string // ids handed to RemoveWorktree, in order
 }
 
 func (p *fakeProv) ProvisionWorktree(_ context.Context, req dispatch.Request) (string, string, error) {
 	p.got = append(p.got, req)
 	return p.id, p.cwd, p.err
+}
+
+func (p *fakeProv) RemoveWorktree(_ context.Context, id string) error {
+	p.removed = append(p.removed, id)
+	return nil
 }
 
 // waitSession blocks on a session's waiter (all controller sessions implement it),

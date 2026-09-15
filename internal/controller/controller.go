@@ -167,6 +167,11 @@ type Spec struct {
 	// the checkout up front (empty otherwise), retained so a controller can release
 	// it on Close.
 	WorkspaceID string
+	// ReuseWorkspace marks a session opened on a checkout ANOTHER live session
+	// owns — today the corrective output_schema turn, which re-runs in the
+	// first session's worktree. Such a session must NOT release the worktree on
+	// Close; the session that provisioned it does.
+	ReuseWorkspace bool
 }
 
 // Session is a live agent conversation (ACP session): native = a launched paseo

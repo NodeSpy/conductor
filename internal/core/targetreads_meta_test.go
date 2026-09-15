@@ -237,6 +237,14 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"labelArgs", "display labels; the PR label goes through Trigger.Key()"},
 		{"adoptAgentForBranch", "matches the branch label written above"},
 	},
+	// The git-native checkout path, doing exactly what paseo.go's entries above
+	// do for the paseo one: a sender-chosen repo/PR only decides WHICH checkout
+	// the agent gets, inside conductor's own state dir. Nothing authorizes off
+	// it, and the branch name it derives is validated before it reaches git.
+	"internal/gitwt/gitwt.go": {
+		{"addPR", "the PR ref to fetch for that checkout"},
+		{"prBranch", "a branch name for the work (safeBranch validates it first)"},
+	},
 
 	// ---- CLI display.
 	"cmd/conductor/main.go": {

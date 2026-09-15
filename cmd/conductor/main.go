@@ -35,6 +35,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/engine"
 	"github.com/NodeSpy/conductor/internal/flow"
+	"github.com/NodeSpy/conductor/internal/gitwt"
 	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/hosts"
 	"github.com/NodeSpy/conductor/internal/inbound"
@@ -506,7 +507,15 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	reg := controller.NewRegistry(mergedControllers, cfg.DefaultRuntimeName(), disp, paseoSender)
+	// The cli runtime provisions its OWN checkout: a plain git worktree under
+	// <state>/worktrees, removed when the session closes (docs/design/
+	// cli-git-worktrees.md). Only the cli controllers take it — paseo/acp/
+	// opencode keep the dispatcher-backed provisioner — and a cli launch pinned
+	// to a `host:` falls back to paseo, since these paths are local-box only.
+	gitProv := gitwt.New(stateDir)
+	gitProv.Log = logf
+	reg := controller.NewRegistry(mergedControllers, cfg.DefaultRuntimeName(), disp, paseoSender,
+		controller.WithCLIProvisioner(gitProv))
 	// Paseo runtimes with their own bin: — or a host:, whose paseo CLI runs
 	// over SSH — get dedicated dispatchers; the registry rebinds them so an
 	// agent's `runtime:` selection launches on the right box.
@@ -932,6 +941,19 @@ func cmdRun(args []string) error {
 			go r.Run(ctx)
 		}
 	}
+
+	// Orphan reaper for the cli runtime's git worktrees: a daemon killed
+	// mid-dispatch leaves a checkout no session will ever close, so sweep at
+	// startup and on a tick. It only ever removes direct children of
+	// <state>/worktrees that no live session claims. Same testability hooks as
+	// the paseo reaper, so the hermetic harness need not wait out the defaults.
+	if d := envDuration("PC_GIT_WORKTREE_REAP_INTERVAL"); d > 0 {
+		gitProv.Interval = d
+	}
+	if d := envDuration("PC_GIT_WORKTREE_MIN_AGE"); d > 0 {
+		gitProv.MinAge = d
+	}
+	go gitProv.Run(ctx)
 
 	// Periodic self-update. `stop` lets it trigger a graceful shutdown so the
 	// service manager relaunches into the new binary.
