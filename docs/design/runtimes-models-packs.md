@@ -245,18 +245,36 @@ Contrast with `model: "*"` (§2.1), which resolves to a concrete preferred model
 
 Builds on the existing packs implementation (issue #53, `pack*.go`). Changes:
 
-### 5.1 Reference a pack once, via the `packs:` key (key-implies-`use:`)
+### 5.1 Reference a pack once, via `use:`
 
-No separate top-level `use:` list for packs. The `packs:` map key IS the reference
-(official lookup `NodeSpy/conductor-packs/<name>`); `use:` only to point elsewhere.
+No separate top-level `use:` list for packs — the instance block carries its own
+`use:`. The official registry is named by the RESERVED `conductor-packs/`
+namespace, which resolves to `NodeSpy/conductor-packs`.
 
 ```yaml
 packs:
-  pr-review-team:              # key ⇒ use: pr-review-team (official)
+  pr-review-team:
+    use: conductor-packs/pr-review-team   # the OFFICIAL registry
     # …consumer overlay (below)
+  kit:
+    use: acme/packs/kit@^1.2              # a third-party repo
   house-style:
-    use: ./packs/house-style   # local folder
+    use: ./packs/house-style              # local folder
 ```
+
+> **Superseded.** This section originally specified key-implies-`use:`: the
+> `packs:` map key WAS the reference, and a bare key resolved to the official
+> pack repo. That is withdrawn. Packs have no builtins, so a bare name could
+> only ever have meant the official repo — which made a blessed-registry fetch
+> over the network indistinguishable from an arbitrary local-looking name.
+> A bare pack name, and a `packs:` entry with no `use:`, are now errors naming
+> both routes (`conductor-packs/<name>` / `owner/repo/<name>`). An org
+> literally named `conductor-packs` is still reachable host-qualified:
+> `github.com/conductor-packs/<repo>/<name>`.
+>
+> The trust story is unchanged: `conductor-packs/<name>` resolves to the source
+> `github.com/NodeSpy/conductor-packs//<name>`, which is in the DEFAULT
+> `pack_trust` allowlist, so the blessed form still needs no ceremony.
 
 ### 5.2 Scope lives on the CONNECTOR, not the pack
 
@@ -271,7 +289,8 @@ connectors:
   pagerduty: { service: PROD }             # scopes the pagerduty-sourced trigger
 
 packs:
-  incident-responder: {}                   # each trigger auto-binds to its source's connector
+  incident-responder:                      # each trigger auto-binds to its source's connector
+    use: conductor-packs/incident-responder
 ```
 
 - **Disambiguation** when the consumer has >1 connector of a type:
@@ -449,8 +468,10 @@ maintained with the code, not written ahead of it.
   redaction — `internal/models/`.
 - §4 bare launch as a first-class `Decision` outcome, distinct from `"*"`.
 - §2.3 the resolution ladder — `internal/models/resolve.go`.
-- §5.1 `packs:` key-implies-`use:` (`UseKindPack`, `OfficialPacksRepo`, default
-  trust).
+- §5.1 the pack `use:` reference (`UseKindPack`, `PacksNamespaceAlias`,
+  `OfficialPacksRepo`, default trust). Shipped as key-implies-`use:`; the key
+  implication was later withdrawn for the explicit `conductor-packs/<name>`
+  namespace — see the note in §5.1.
 - §5.4/§5.5 named/qualified trigger keys and array instances with
   content-derived, reorder-stable handles — `internal/config/triggers.go`.
 - §7 docs: `config.example.yaml`, README, wiki Runtimes/Packs/Workflows, and

@@ -17,26 +17,56 @@ cleanly updatable.**
 
 ## The `packs:` block
 
-### The key is the reference
+### Every pack says where it comes from
 
-You do not normally write a source at all. A `packs:` **key is its own `use:`
-reference**: a bare name resolves to the official pack repo
-(`github.com/NodeSpy/conductor-packs`), which is trusted by default.
+A pack entry carries a `use:` naming its origin. There are three shapes, and
+the first one is how you name a **conductor-blessed** pack:
 
 ```yaml
 packs:
-  pr-review-team: {}                          # official, by name
-  house-style: { use: ./packs/house-style }   # a local folder
-  kit:         { use: acme/conductor-packs/kit@^1.2 }   # an explicit repo
+  pr-review-team:
+    use: conductor-packs/pr-review-team       # the OFFICIAL registry
+  kit:
+    use: acme/conductor-packs/kit@^1.2        # a third-party repo
+  house-style:
+    use: ./packs/house-style                  # a local folder
 ```
 
-`use:` follows the same resolution as a connector's or runtime's — see
-[[Plugins]] — with one difference: packs are config rather than binaries, so a
-bare name lands in the packs repo, not the plugin repo.
+`conductor-packs/` is a **reserved namespace**, not an org: it resolves to
+`github.com/NodeSpy/conductor-packs`, the official pack registry, which is
+[trusted by default](#trusted-sources). Writing it costs one segment
+and buys the thing that matters — you can see, at the reference site, that this
+pack is fetched from a conductor-operated repo rather than being some local
+name. Everything after the namespace is the pack's path in that repo, and an
+`@constraint` suffix works as it does everywhere else.
 
-The implication applies to the top-level `packs:` block only. A **dependency's**
-source comes from its parent's `requires.packs.<alias>.source`; only if that is
-absent too does the alias imply a reference.
+`use:` otherwise follows the same resolution as a connector's or runtime's —
+see [[Plugins]] — with two differences, both because packs are config rather
+than binaries:
+
+- there are no **builtin** packs, so a pack reference never resolves in-binary;
+- and therefore a **bare pack name is an error**. `use: pr-review-team` could
+  only ever have meant the official registry, which made a blessed-registry
+  fetch and an arbitrary string look identical. The loader rejects it and names
+  both routes:
+
+  ```
+  use: "pr-review-team": a bare pack name is ambiguous — write
+  "conductor-packs/pr-review-team" for the official registry, or
+  "owner/repo/pr-review-team" for a third-party pack
+  ```
+
+  The same error, keyed to the entry name, comes back for a `packs:` entry with
+  no `use:` line at all — the key used to imply a bare name, and no longer does.
+
+> **The reservation has one cost, deliberately.** If your third-party pack
+> really does live under a GitHub org literally named `conductor-packs`, write
+> the host out: `use: github.com/conductor-packs/<repo>/<name>`. That is an
+> ordinary host-qualified reference and is unambiguous.
+
+`use:` is required only at the **top level**. A **dependency's** source comes
+from its parent's `requires.packs.<alias>.source`; the dependency's own `use:`
+is consulted only if that is absent.
 
 `source:` (below) is the older, longer spelling. It still works and still wins
 when both are set, because it can express go-getter forms `use:` cannot
@@ -375,6 +405,7 @@ its members by name — no pack-specific override language:
 ```yaml
 packs:
   pr-review-team:
+    use: conductor-packs/pr-review-team
     on:                                        # its triggers, by name
       github.pull_request: { filters: { labels_not: [wip] } }   # ADD a filter
       gitlab.merge_request: { enabled: false }                  # turn one off
@@ -502,6 +533,15 @@ With `pack_trust:` set, `conductor init` refuses any **remote** pack source — 
 any depth, including a dependency's — that matches no `allow:` glob. Local
 sources (your own disk) are exempt. Override once with
 `conductor init --allow-unlisted`.
+
+**The official registry is in the default allowlist.** A
+`use: conductor-packs/<name>` reference resolves to
+`github.com/NodeSpy/conductor-packs//<name>`, which is trusted with or without a
+`pack_trust:` block — so adding an allowlist for your own packs never silently
+breaks the blessed ones you already reference. Note the allowlist matches
+resolved **sources**, not `use:` spellings: a pattern is written
+`github.com/NodeSpy/conductor-packs`, never `conductor-packs/*` (which, as a
+pattern, would mean a github org of that name).
 
 ### Writing the globs
 

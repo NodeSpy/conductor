@@ -110,7 +110,8 @@ that hard-crashed would crash-loop an auto-updating fleet, so:
 ## B. `use:` resolution
 
 One kind-aware search path. First match wins. `kind` is the block the ref
-appears in: `connectors:` → connector, `runtimes:` → runtime.
+appears in: `connectors:` → connector, `runtimes:` → runtime, `packs:` → pack
+(see the pack carve-out below).
 
 | # | Shape | Resolves to |
 | --- | --- | --- |
@@ -122,6 +123,40 @@ appears in: `connectors:` → connector, `runtimes:` → runtime.
 
 Precedence: builtin beats official on a name clash; an explicit path beats a
 bare name (it is not a bare name, so it never enters cases 1–2).
+
+### Packs: cases 1–2 are replaced by a reserved namespace
+
+`packs:` is the third kind through this resolver, and the one kind with **no
+builtins**. Case 1 therefore never fires, and case 2 — bare name → official —
+was the *only* thing a bare pack name could mean. That made
+`use: pr-review-team` read like an arbitrary local name while actually fetching
+from a conductor-operated repo over the network. For packs, those two rows are
+replaced by one:
+
+| # | Shape | Resolves to |
+| --- | --- | --- |
+| 1–2 | bare name | **error** — ambiguous; the message names both routes below |
+| 2p | `conductor-packs/<name>` | **official** — `NodeSpy/conductor-packs`, component `<name>` |
+
+`conductor-packs` is a RESERVED first segment (`config.PacksNamespaceAlias`),
+matched before the host/owner split and only for `UseKindPack`. Cases 3–5 are
+unchanged: `owner/repo/<name>` is a third-party pack, `host.tld/…` an explicit
+forge, `./p` a local folder.
+
+Trust is unaffected: `conductor-packs/<name>` yields the source
+`github.com/NodeSpy/conductor-packs//<name>`, which the default `pack_trust`
+allowlist already covers (`OfficialPacksSource`), so the blessed form needs no
+allowlist entry while a third-party pack still does. Note the allowlist matches
+resolved sources, never `use:` spellings — a `pack_trust` pattern is written
+`github.com/NodeSpy/conductor-packs`, and a pattern `conductor-packs/*` would
+mean a github ORG of that name.
+
+The reservation's cost, accepted deliberately: a third-party pack under a
+github org literally named `conductor-packs` must be written host-qualified,
+`github.com/conductor-packs/<repo>/<name>` (case 4).
+
+Connectors and runtimes keep cases 1–2 exactly as above — they have builtins,
+so a bare name there asks a real question first.
 
 Builtin connectors: `github`, `slack`, `cron`, `webhook`, `rss`, `kv`, `sql`,
 `rest`, `graphql`, `web`, `command`, `conductor`, `discord`, `blob`, `memory`,
