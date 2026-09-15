@@ -1,0 +1,40 @@
+{
+  "action": "review_requested",
+  "installation": {
+    "id": 42
+  },
+  "repository": {
+    "full_name": "func/filterskip",
+    "name": "filterskip",
+    "default_branch": "main",
+    "owner": {
+      "login": "func"
+    }
+  },
+  "requested_reviewer": {
+    "login": "conductor-user"
+  },
+  "pull_request": {
+    "number": 1,
+    "state": "open",
+    "draft": false,
+    "title": "Release 2.4.0",
+    "html_url": "https://forge.test/func/filterskip/pull/1",
+    "head": {
+      "sha": "canned-head-filterskip-1",
+      "ref": "staging"
+    },
+    "base": {
+      "ref": "main"
+    },
+    "user": {
+      "login": "someone-else"
+    },
+    "requested_reviewers": [
+      {
+        "login": "conductor-user"
+      }
+    ],
+    "labels": []
+  }
+}

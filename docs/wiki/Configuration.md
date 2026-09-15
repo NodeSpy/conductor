@@ -40,7 +40,8 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 ```yaml
 triggers:
   - on: <connector>.<event>       # what fires it — one source, a list, or `manual`
-    filters: { … }                # whether it fires (event-schema keys, AND-ed)
+    filter: …                     # whether it fires — one composable predicate
+    filters: { … }                # the older per-key block (event-schema keys, AND-ed)
     group: { key: …, window: 15s }# optional burst batching
     steps: [ … ]                  # agent | command | run: code | uses: verb | workflow: name | team:
     hooks: [ {at: start|done|fail, uses: <conn>.<verb>, options: {…}} ]
@@ -54,12 +55,75 @@ outputs (`{{.<id>.<field>}}`), vault reads (`{{ vault "house" "gh" }}` /
 `contains()`, `exists()`, `default()`, and `coalesce()`; templates may also
 call `default`/`coalesce` (`{{.sev | default "low"}}`). See [[Workflows]].
 
+### `filter:` — one composable predicate
+
+`filter:` states in one key whether a trigger fires. Its **YAML shape IS its
+boolean structure**:
+
+| shape | meaning |
+|---|---|
+| **string** | a condition over the event's facts (the same syntax as a step `if:`) |
+| **map** | its keys **AND**-ed together |
+| **list** | its entries **OR**-ed together |
+
+```yaml
+# string — the full boolean, and the escape hatch
+filter: "!is_draft && !contains(title, 'Release')"
+
+# map — AND of structured keys
+filter: { not_draft: true, authors: [dependabot] }
+
+# list — OR of alternatives; nest freely (a list of maps is an OR of ANDs)
+filter:
+  - { authors: [dependabot], not_draft: true }   # a ready bot PR …
+  - { labels_any: [urgent, security] }           # … OR anything urgent …
+  - "!is_draft && !contains(title, 'Release')"   # … OR the general case
+```
+
+A map may carry the one reserved key **`expr:`** — a condition string AND-ed
+with its siblings, so a negation needs no separate `exclude:` concept:
+
+```yaml
+filter: { not_draft: true, expr: "!contains(title, 'Release')" }
+```
+
+**Facts are per connector.** github publishes `head_branch`, `base_branch`,
+`title`, `labels`, `is_draft`, `author` and, where the event has them,
+`merge_state`, `review_decision`, `non_author_approval`, `threads_resolved`,
+`sole_assignee`, `comment_author`, `comment_body`, `reviewer`, `author_is_bot`.
+`conductor validate` checks every fact and key a `filter:` names against the
+event that will evaluate it, so a typo is a load error rather than a filter
+that quietly never matches — `conductor schema gh` lists what each event
+publishes.
+
+**Why one key.** The older `filters:` block mixes three inconsistent
+combination rules for the same idea: `exclude:` is an OR denylist, `gates:` is
+an AND of requirements, and each match key bakes in its own rule. You could not
+say "skip a review only when it is a release PR **and** on a release branch"
+without reverse-engineering which block ORs and which ANDs — and `exclude.title`
+is a case-insensitive **substring**, so `['Release ']` also skipped a PR titled
+"changelog: publish each **release** entry…". With `filter:` you write the
+sentence:
+
+```yaml
+filter: "!is_draft && !( (head_branch == 'staging' || head_branch == 'prod') && contains(title, 'Release ') )"
+```
+
+Prefer `startswith(title, 'Release ')` to the substring `title:` match key when
+you mean a prefix.
+
+A trigger states its predicate **one way**: setting both `filter:` and a legacy
+`filters:` predicate key is a load error. The routing keys `repos:` /
+`exclude_repos:` are not predicates and stay legal alongside `filter:`.
+Existing `filters:` blocks keep working unchanged — they are lowered into the
+same evaluator.
+
 ### Multiple sources, per-source filters, and manual runs
 
 `on:` takes one event **or a list** — a trigger fans in from several sources
 into the same `steps:`. Each list item is a bare `conn.event`, or a one-key
 map `conn.event: { … }` whose value is a per-source block scoped to events
-from that source. The block takes `filters:`, `policy:`, and `hooks:` —
+from that source. The block takes `filter:`, `filters:`, `policy:`, and `hooks:` —
 nothing else (`steps:` stay trigger-level, shared):
 
 ```yaml
@@ -86,6 +150,10 @@ triggers:
   top-level `filters:` is a shared base applied to every listed source, so
   each of its keys must be one every source accepts (the intersection); a
   per-source key **overrides** the base for that source.
+- **Per-source `filter:`** validates against that source's facts, like
+  `filters:` — but it **replaces** the trigger's `filter:` outright rather
+  than merging: the shape is the boolean structure, so there is nothing
+  coherent to merge key-by-key.
 - **Per-source `policy:`** is the innermost policy scope: per-source →
   trigger → connector → global, most specific wins.
 - **Per-source `hooks:`** append after the trigger's shared `hooks:` (shared

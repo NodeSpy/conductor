@@ -1,0 +1,20 @@
+{
+  "number": 1,
+  "state": "open",
+  "draft": false,
+  "mergeable_state": "clean",
+  "mergeable": true,
+  "title": "changelog: publish each release entry as its own file",
+  "html_url": "https://forge.test/func/filterfire/pull/1",
+  "user": {
+    "login": "someone-else"
+  },
+  "head": {
+    "sha": "canned-head-filterfire-1",
+    "ref": "codex-changelog"
+  },
+  "base": {
+    "ref": "main"
+  },
+  "labels": []
+}

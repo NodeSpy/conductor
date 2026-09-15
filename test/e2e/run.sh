@@ -1403,6 +1403,59 @@ group_T_output_schema() {
   fi
 }
 
+# U — the unified `filter:` (docs/design/unified-filter.md). ONE trigger, ONE
+# filter, TWO PRs that the LEGACY spelling could not tell apart:
+#
+#   filters: { exclude: { branches: [staging, prod], title: ['Release '] } }
+#
+# is an OR denylist whose title arm is a case-insensitive SUBSTRING, so it
+# skipped both the real release PR AND a changelog PR whose title merely
+# contained the word "release" (RosterStream#5590). The unified filter says
+# what was meant — skip only a release-titled PR ON a release branch — and the
+# two fixtures split:
+#
+#   func/filterfire  head=codex-changelog, title="…each release entry…" → FIRES
+#   func/filterskip  head=staging,         title="Release 2.4.0"        → SKIPPED
+#
+# Both halves are load-bearing. A filter that failed to parse fails closed, so
+# NEITHER would fire and U-fire catches it; a filter that lost the parenthesis
+# grouping (the negation binding only to its first term) fires BOTH, and
+# U-skip catches that. Together they can only pass if the grammar, the facts,
+# and the evaluator all work.
+group_U_filter() {
+  banner "Group U — the unified filter: (one composable trigger filter)"
+  func_reset_sink
+
+  post_webhook_to conductor-conn pull_request func_filter_fire.json >/dev/null
+  if wait_for 30 slack_sink_has "U-FILTER fired func/filterfire#1"; then
+    ok "U filter: fires on the #5590 PR (release in the title, not a release branch)" U U-fire
+  else
+    bad "U filter: fires on the #5590 PR" U U-fire "no U-FILTER capture for func/filterfire"
+  fi
+
+  post_webhook_to conductor-conn pull_request func_filter_skip.json >/dev/null
+  # Give the skipped delivery the same budget the fired one got, so "nothing
+  # arrived" means skipped rather than merely slower.
+  sleep 5
+  if slack_sink_has "U-FILTER fired func/filterskip"; then
+    bad "U filter: skips a real release PR on a release branch" U U-skip "func/filterskip fired"
+  else
+    ok "U filter: skips a real release PR on a release branch (the inner AND held)" U U-skip
+  fi
+
+  # A filter's failure mode is SILENCE: a typo'd fact resolves to nil (falsy),
+  # so `!is_drafft` is always true and the operator's filter quietly does
+  # nothing. Load-time validation against the event's declared facts is what
+  # turns that into a refusal.
+  local out rc
+  out="$(cexec conductor-conn conductor validate --config /etc/conductor/bad-filter.yaml 2>&1)" && rc=0 || rc=$?
+  if [ "${rc:-0}" -ne 0 ] && printf '%s' "$out" | grep -q 'is_drafft'; then
+    ok "U validate refuses a filter: referencing an undeclared fact (names the typo)" U U-validate
+  else
+    bad "U validate refuses an undeclared fact" U U-validate "rc=${rc:-0} out=$(printf '%s' "$out" | head -1)"
+  fi
+}
+
 main() {
   trap teardown EXIT
   setup
@@ -1436,6 +1489,7 @@ main() {
   group_R_watch
   group_S_callable
   group_T_output_schema
+  group_U_filter
   print_matrix
   [ "$FAIL" -eq 0 ]
 }
