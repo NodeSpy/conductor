@@ -531,26 +531,6 @@ func TestCompletionHookInvokedAfterOutcome(t *testing.T) {
 	}
 }
 
-func TestRerequestReviewGuidance(t *testing.T) {
-	// Off by default: no re-request guidance in the prompt.
-	d := &fakeDispatcher{}
-	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
-	e.process(context.Background(), agentTrigger("changes_requested", "a/w", 30, "h", "s",
-		config.Action{Type: "agent", Agent: "w/fixer", Prompt: "fix it"}))
-	if strings.Contains(d.reqs[0].Action.Prompt, "Re-request review ONLY") {
-		t.Fatal("re-request guidance must be opt-in")
-	}
-
-	// With rerequest_review: guidance appended so the agent closes the loop.
-	d2 := &fakeDispatcher{}
-	e2, _ := newEng(t, baseCfg(), d2, &fakeNotifier{}, nil)
-	e2.process(context.Background(), agentTrigger("changes_requested", "a/w", 31, "h", "s",
-		config.Action{Type: "agent", Agent: "w/fixer", Prompt: "fix it", RerequestReview: true}))
-	if !strings.Contains(d2.reqs[0].Action.Prompt, "Re-request review ONLY") {
-		t.Fatalf("expected re-request guidance, got: %q", d2.reqs[0].Action.Prompt)
-	}
-}
-
 func TestFixersDoNotGetAskGuidance(t *testing.T) {
 	// A top-level single-action fixer is autonomous: it must NOT be told to ask
 	// interactive questions, even when its profile is archive_when_done. Interactive

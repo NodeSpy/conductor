@@ -80,9 +80,11 @@ A step is one of six forms (all share `id` and `if`):
 
 - `type: agent` — dispatch an agent: `prompt`, `checkout`,
   `output_schema`, `background` (+ `handoff`, see [[Hand-offs]]),
-  `rerequest_review`, `workdir`, `env`, and an optional `gate:` on the
+  `workdir`, `env`, and an optional `gate:` on the
   agent's proposed change ([[Gates]]). A foreground agent step with a local
-  worktree also outputs its proposed `diff` and `workdir` ([[Runs]]).
+  worktree also outputs its proposed `diff` and `workdir` ([[Runs]]). To
+  re-request a reviewer after a fix, add a `uses: <conn>.rerequest_review`
+  step (see [[Verbs]]) rather than a field on the agent step.
   It may also carry `model:` (a fleet, a model id, a wildcard, or an inline
   `{ any, required }`) and `runtime:` (a `runtimes:` entry to pin it to) —
   see [Model selection](Model-Selection.md).

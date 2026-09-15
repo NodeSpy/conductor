@@ -897,9 +897,6 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			act.Prompt += dispatch.WriteWrapperGuidance
 			act.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))
 			act.Prompt += e.memoryPrompt(identity, profile, t, "")
-			if act.RerequestReview {
-				act.Prompt += dispatch.RerequestReviewGuidance
-			}
 			// NOTE: no HoldGuidance here. A top-level single-action agent is an
 			// autonomous fixer (new_comment/changes_requested/merge_conflict/
 			// failing_checks/issue_matched) — it should make the best decision and

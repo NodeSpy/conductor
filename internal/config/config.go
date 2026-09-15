@@ -803,9 +803,6 @@ type Action struct {
 	// agent-type fields
 	Agent  string `yaml:"agent"` // agent profile name
 	Prompt string `yaml:"prompt"`
-	// RerequestReview: after the agent addresses feedback and pushes, re-request
-	// review from the reviewer(s) who requested changes (closes the review loop).
-	RerequestReview bool `yaml:"rerequest_review"`
 	// Exclude skips PRs matching these criteria (e.g. release PRs).
 	Exclude Exclude `yaml:"exclude"`
 

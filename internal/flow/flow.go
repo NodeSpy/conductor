@@ -1428,7 +1428,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		Type: "agent", ID: id, Agent: step.Agent,
 		Prompt: step.Prompt, Checkout: step.Checkout, WorkDir: step.WorkDir,
 		Env: step.Env, OutputSchema: step.OutputSchema, Background: step.Background,
-		Backend: step.Backend, RerequestReview: step.RerequestReview,
+		Backend: step.Backend,
 	}
 	if step.Background {
 		// A background step hands off a live agent for you to drive and close
@@ -1451,9 +1451,6 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		// default) the agent fixes silently and replies only to decline.
 		if st, ok := botReply(ctx); ok && st.authorIsBot && st.mode == config.ReplyToBotsDeclineOnly {
 			act.Prompt += dispatch.BotReplyGuidance
-		}
-		if act.RerequestReview {
-			act.Prompt += dispatch.RerequestReviewGuidance
 		}
 		if step.Background {
 			act.Prompt += dispatch.HandoffGuidance
