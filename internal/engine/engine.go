@@ -894,9 +894,11 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 	if act.Type == "agent" {
 		// No prompt of its own → act on the event itself (connector-neutral
-		// event object), synthesized before the guidance stack.
+		// event object), synthesized before the guidance stack. This legacy
+		// single-action path is never a grouped batch (grouping is a flow
+		// feature), so no group rides along.
 		if act.Prompt == "" {
-			act.Prompt = dispatch.EventPrompt(t)
+			act.Prompt = dispatch.EventPrompt(t, nil)
 		}
 		if act.Prompt != "" {
 			act.Prompt += dispatch.WriteWrapperGuidance

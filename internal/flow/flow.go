@@ -1432,10 +1432,13 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	}
 	// A step with no prompt of its own is dispatched against the event itself:
 	// conductor hands the agent the connector-neutral event object and lets it
-	// infer the task. Synthesized BEFORE the guidance stack so the identity /
+	// infer the task. When a `group:` batched several events into this run, the
+	// whole batch (data["group"]) rides along so the agent sees all of them, not
+	// just the freshest. Synthesized BEFORE the guidance stack so the identity /
 	// memory / hand-off wrappers still apply.
 	if act.Prompt == "" {
-		act.Prompt = dispatch.EventPrompt(t)
+		group, _ := data["group"].(map[string]any)
+		act.Prompt = dispatch.EventPrompt(t, group)
 	}
 	if step.Background {
 		// A background step hands off a live agent for you to drive and close

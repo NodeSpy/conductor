@@ -89,9 +89,11 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				profile.ArchiveWhenDone = false
 			}
 			// No prompt of its own → act on the event itself (connector-neutral
-			// event object), synthesized before the guidance stack.
+			// event object), synthesized before the guidance stack. This legacy
+			// single-action path is never a grouped batch (grouping is a flow
+			// feature), so no group rides along.
 			if s.Prompt == "" {
-				s.Prompt = dispatch.EventPrompt(t)
+				s.Prompt = dispatch.EventPrompt(t, nil)
 			}
 			if s.Prompt != "" {
 				s.Prompt += dispatch.WriteWrapperGuidance
