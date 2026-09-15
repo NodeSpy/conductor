@@ -3,6 +3,8 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -114,7 +116,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 			// avoids `paseo run --new-workspace worktree`, which can silently fall the
 			// agent back to $HOME with no PR checked out (exit 0, no worktree) on a
 			// transient hiccup — the failure mode that stranded interactive review
-			// hand-offs in the scratch workspace. `workspace create` creates-or-errors,
+			// hand-offs in $HOME. `workspace create` creates-or-errors,
 			// so a real failure escalates + retries instead of parking a checkout-less
 			// agent. In a preview (dry/shadow) we can't touch the daemon, so keep the
 			// old inline `--cwd` + `--new-workspace` argv shape for assertion.
@@ -143,22 +145,35 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	}
 
 	// Existing-workspace mode only applies when NOT creating a worktree: paseo
-	// forbids --workspace together with --new-workspace. For checkout:none we pin a
-	// workspace — an explicit one if configured, else the shared scratch workspace —
-	// otherwise paseo spins up a throwaway workspace per run that never gets
-	// reclaimed. The shared scratch is for AUTO, NON-INTERACTIVE triage (e.g. the
-	// assess step); an interactive hand-off is never pinned to it — it gets its own
-	// dedicated workspace (and the reaper's hold-set keeps that from being culled).
+	// forbids --workspace together with --new-workspace.
+	//
+	// A checkout:none dispatch has no repo context to build a worktree from, so it
+	// needs a plain workspace, and which one it gets is the whole of this branch:
+	//
+	//  1. A PIN (`workspace: { pin: … }`, or a caller-set Request.Workspace) names a
+	//     workspace to run in and REUSE across every run of the step. It is
+	//     deliberately long-lived: never reclaimed on finish, never reaped.
+	//  2. Otherwise the run gets its OWN EPHEMERAL workspace, created here and
+	//     archived when it finishes. Conductor creates it rather than letting paseo
+	//     do so implicitly because paseo exposes no agent→workspace handle (`paseo
+	//     ls`/`inspect` report a cwd, not a workspace id), and every implicit
+	//     workspace lands on the SAME cwd ($HOME) — so nothing could tell one
+	//     finished run's workspace from another live one's, and they would pile up
+	//     unreclaimed. Owning the creation is what buys a unique per-run directory,
+	//     which is the join key both Archive and the reaper already reclaim by. See
+	//     runWorkspace / docs/design/workspace-pin.md.
+	//
+	// An interactive hand-off takes the same two paths: pinned if configured, else
+	// its own workspace — the reaper's hold-set is what keeps that one alive.
 	if strat == "none" {
-		switch {
-		case req.Workspace != "":
-			argv = append(argv, "--workspace", req.Workspace)
-		case req.Interactive:
-			// no shared-scratch pin — paseo gives this hand-off its own workspace
-		case cwd == "" && (d.ScratchWorkspace != nil || (!d.DryRun && !req.Shadow)):
-			// The built-in resolver may create a workspace and needs a live daemon,
-			// so skip it during a preview; an injected resolver is pure.
-			if id, err := d.resolveScratchWorkspace(ctx); err == nil && id != "" {
+		switch pin := pinnedWorkspace(req); {
+		case pin != "":
+			argv = append(argv, "--workspace", pin)
+		case cwd == "" && (d.RunWorkspace != nil || (!d.DryRun && !req.Shadow)):
+			// The built-in resolver creates a workspace and needs a live daemon, so
+			// skip it during a preview; an injected resolver is pure. A preview
+			// therefore renders the un-pinned argv, which is what it always did.
+			if id, err := d.runWorkspace(ctx, req); err == nil && id != "" {
 				argv = append(argv, "--workspace", id)
 			}
 		}
@@ -367,10 +382,11 @@ func truncate(s string, n int) string {
 // effectiveStrategy resolves the action's checkout strategy, defaulting from the
 // trigger target when unset: a PR → checkout-pr, any repo → branch-off, else none.
 func effectiveStrategy(req Request) string {
-	// An interactive hand-off must never share the auto scratch workspace. When it
-	// has repo context, give it a PR/branch worktree (PR-centric) even if the step
-	// was configured checkout:none — the scratch is for non-interactive triage only.
-	// With no repo context it still avoids the shared scratch (see the pin below).
+	// An interactive hand-off is something you drive in a real checkout. When it has
+	// repo context, give it a PR/branch worktree (PR-centric) even if the step was
+	// configured checkout:none — you asked to look at a PR, so it should be on disk.
+	// With no repo context there is nothing to check out and it falls through to the
+	// ordinary checkout:none workspace choice.
 	if req.Interactive && (req.Action.Checkout == "" || req.Action.Checkout == "none") {
 		return repoStrategy(req)
 	}
@@ -403,7 +419,7 @@ func requestedWorktree(req Request) bool {
 // launched agent even when `--worktree-mode checkout-pr` couldn't create the
 // worktree (e.g. a flaky-network git fetch), falling the agent back to the base/
 // home workspace — so an interactive review hand-off (or a fix agent) ends up with
-// no PR checked out. We detect it by the agent's cwd landing in $HOME (the scratch
+// no PR checked out. We detect it by the agent's cwd landing in $HOME (the
 // fallback; the `Worktree` inspect field is unreliable — null even for real worktree
 // agents). On detection we archive the broken agent and return an error, so the
 // engine escalates and re-derives the work (sweep/backoff) once the network is
@@ -430,7 +446,7 @@ func (d *Dispatcher) verifyWorktree(ctx context.Context, req Request, ref *RunRe
 		effectiveStrategy(req), id)
 }
 
-// agentInHome reports whether an agent's cwd is the home/scratch fallback (i.e. it
+// agentInHome reports whether an agent's cwd is the home fallback (i.e. it
 // did not get an isolated worktree). Returns false when it can't tell, so a flaky
 // inspect never wrongly fails a good dispatch.
 func (d *Dispatcher) agentInHome(ctx context.Context, id string) bool {
@@ -489,8 +505,8 @@ func checkoutArgs(ctx context.Context, req Request) []string {
 }
 
 func workspaceMode(req Request) string {
-	if req.Step.Workspace != "" {
-		return req.Step.Workspace
+	if m := req.Step.Workspace.Isolation; m != "" {
+		return m
 	}
 	return "worktree"
 }
@@ -501,7 +517,7 @@ func workspaceMode(req Request) string {
 // silently fell back to $HOME with no worktree, `workspace create` either
 // produces a real worktree or fails — so a genuine failure surfaces as an error
 // the engine can escalate + retry, instead of a checkout-less agent stranded in
-// the scratch workspace. baseDir is the repo's stable local checkout paseo derives
+// $HOME. baseDir is the repo's stable local checkout paseo derives
 // the forge repo from.
 func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir string) (string, string, error) {
 	if d.WorktreeCreator != nil {
@@ -537,7 +553,7 @@ func stderrTail(b *bytes.Buffer) string {
 	return ": " + s
 }
 
-// isHomeDir reports whether path is the user's home directory (the scratch/base
+// isHomeDir reports whether path is the user's home directory (the base
 // fallback location). Returns false when home can't be determined.
 func isHomeDir(path string) bool {
 	home, err := os.UserHomeDir()
@@ -759,63 +775,112 @@ func (d *Dispatcher) cloneParentDir() (string, error) {
 	return dir, nil
 }
 
-// scratchWorkspaceTitle marks the single shared workspace reused by checkout:none
-// agents, so they don't each leak a throwaway home workspace.
-const scratchWorkspaceTitle = "conductor-scratch"
+// runWorkspacePrefix namespaces the EPHEMERAL per-run workspaces conductor
+// creates for un-pinned checkout:none dispatches. It is the ownership marker:
+// only conductor creates a workspace with this title prefix, so only such a
+// workspace is ever a candidate for automatic reclaim (isEphemeralRunWorkspace).
+// A workspace you made yourself, and a `pin:`ed one, can never match.
+const runWorkspacePrefix = "conductor-run-"
 
-// resolveScratchWorkspace returns a reusable local workspace id for checkout:none
-// agents: an injected resolver, else a memoized find-by-title, else create one.
-func (d *Dispatcher) resolveScratchWorkspace(ctx context.Context) (string, error) {
-	if d.ScratchWorkspace != nil {
-		return d.ScratchWorkspace(ctx)
+// runWorkspaceDirs is where the per-run directories live, under the same
+// ~/.conductor root as the clone cache. Each run gets its OWN directory: that
+// uniqueness is load-bearing, because a workspace's cwd is the only join key
+// paseo gives us from an agent back to its workspace (see the Archive doc).
+const runWorkspaceDirs = "runs"
+
+// runWorkspace creates the ephemeral workspace for one un-pinned checkout:none
+// dispatch and returns its id. The caller pins the agent into it, and it is
+// archived when the agent finishes (Dispatcher.Archive), with the reaper as the
+// backstop for a run that crashed before it could be.
+//
+// Per-run, never shared: this replaced the single `conductor-scratch` workspace
+// every checkout:none agent used to pile into, where one agent's leftovers were
+// the next one's starting state.
+func (d *Dispatcher) runWorkspace(ctx context.Context, req Request) (string, error) {
+	if d.RunWorkspace != nil {
+		return d.RunWorkspace(ctx, req)
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock() // held across resolve so concurrent callers don't each create one
-	// Re-resolve by title every time (don't trust a memoized id): the reaper may
-	// have archived an idle scratch, so a stale memo would point at a dead
-	// workspace. findWorkspaceByTitle returns the current one, or "" → recreate.
-	if id := d.findWorkspaceByTitle(ctx, scratchWorkspaceTitle); id != "" {
-		d.scratchWS = id
-		return id, nil
-	}
-	id, err := d.createScratchWorkspace(ctx)
+	slug := runWorkspaceSlug(req)
+	dir, err := d.makeRunDir(ctx, slug)
 	if err != nil {
 		return "", err
 	}
-	d.scratchWS = id
-	return id, nil
-}
-
-// findWorkspaceByTitle returns the id of a local workspace whose name matches
-// title, or "" if none.
-func (d *Dispatcher) findWorkspaceByTitle(ctx context.Context, title string) string {
-	wl, err := d.backend().ListWorkspaces(ctx)
-	if err != nil {
-		return ""
-	}
-	for _, w := range wl {
-		if w.Isolation == "local" && w.Name == title && w.WorkspaceID != "" {
-			return w.WorkspaceID
-		}
-	}
-	return ""
-}
-
-// createScratchWorkspace makes the shared local scratch workspace at $HOME.
-func (d *Dispatcher) createScratchWorkspace(ctx context.Context) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
-	if d.remote() {
-		home = "." // the remote command's working directory (remote home / host cwd:)
-	}
 	res, err := d.backend().CreateWorkspace(ctx, CreateWorkspaceOptions{
-		Isolation: "local", Path: home, Title: scratchWorkspaceTitle})
+		Isolation: "local", Path: dir, Title: runWorkspacePrefix + slug})
 	if err != nil {
-		return "", fmt.Errorf("paseo workspace create scratch: %w", err)
+		return "", fmt.Errorf("paseo workspace create run workspace: %w", err)
 	}
 	return res.WorkspaceID, nil
+}
+
+// makeRunDir creates this run's working directory and returns the path to hand
+// paseo. `paseo workspace create --path` requires the directory to already
+// exist (it errors WORKSPACE_CREATE_FAILED "Directory not found" otherwise), so
+// we make it first — over SSH for a remote runtime, where the path is relative
+// to the host's `cwd:` exactly as the old scratch's "." was.
+func (d *Dispatcher) makeRunDir(ctx context.Context, slug string) (string, error) {
+	if d.remote() {
+		dir := filepath.Join(".conductor", runWorkspaceDirs, slug)
+		if err := d.remoteMkdirAll(ctx, dir); err != nil {
+			return "", err
+		}
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir for run workspace: %w", err)
+	}
+	dir := filepath.Join(home, ".conductor", runWorkspaceDirs, slug)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create run workspace dir %s: %w", dir, err)
+	}
+	return dir, nil
+}
+
+// runWorkspaceSlug names one run's directory and workspace: the trigger it came
+// from (so `paseo workspace ls` and a stray directory are both traceable back to
+// it) plus random bytes for uniqueness. The random tail is what guarantees each
+// run a directory of its own even when two dispatches share a trigger — never
+// drop it in favour of a "nicer" deterministic name.
+func runWorkspaceSlug(req Request) string {
+	base := SanitizeBranchSuffix(req.Trigger.Kind + "-" + req.Trigger.Key())
+	if base == "" {
+		base = "run"
+	}
+	var b [6]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failing is not survivable as "reuse a name" — a collision
+		// here means two live runs sharing a directory. Fall back to the
+		// nanosecond clock, which is unique enough at dispatch rates.
+		return fmt.Sprintf("%s-%d", base, time.Now().UnixNano())
+	}
+	return base + "-" + hex.EncodeToString(b[:])
+}
+
+// isEphemeralRunWorkspace reports whether a workspace is one conductor created
+// for a single un-pinned checkout:none run, and may therefore be archived once
+// that run is done. Title-prefix ownership, not isolation mode: a `local`
+// workspace you created, and a pinned one, are both meant to outlive their
+// agents and must never be reclaimed.
+func isEphemeralRunWorkspace(w WorkspaceInfo) bool {
+	return w.WorkspaceID != "" && strings.HasPrefix(w.Name, runWorkspacePrefix)
+}
+
+// pinnedWorkspace resolves the workspace this dispatch is PINNED to, or "" when
+// it is un-pinned (and therefore gets a reclaimed-on-finish ephemeral one).
+//
+// Two producers, one meaning — "run in this named workspace, and keep it":
+//
+//   - Request.Workspace, set by a caller that resolved a workspace itself. It
+//     WINS, because it is the more specific decision: a caller that named a
+//     workspace for this one dispatch knows something the step's config does not.
+//   - Step.Workspace.Pin, the config surface (`workspace: { pin: … }`), which is
+//     how the pin is normally written and applies to every run of the step.
+func pinnedWorkspace(req Request) string {
+	if req.Workspace != "" {
+		return req.Workspace
+	}
+	return req.Step.Workspace.Pin
 }
 
 func labelArgs(req Request) []string {
@@ -912,30 +977,35 @@ func (d *Dispatcher) HasLiveAgent(ctx context.Context, prKey, kind string) bool 
 // non-interactive workflow step's agent the instant it finishes rather than
 // leaving it for the reaper's next poll. A blank id is a no-op.
 //
-// When the agent lives in an isolated worktree WE created, it archives the whole
-// WORKSPACE instead — which reclaims the worktree AND the agent it owns in one
-// shot. Archiving only the agent would strand the worktree: once the agent is
-// archived it drops out of `paseo ls`, so the reaper (which reclaims a worktree
-// by mapping a still-listed agent to its workspace) can never see it again, and
-// the empty worktree lingers forever. A shared/base checkout (checkout:none in
-// the scratch workspace) is never a worktree, so those still archive just the
-// agent — the scratch is left for cullScratch. Best-effort: if the workspace
-// lookup fails, fall back to archiving the agent.
+// When the agent lives in a workspace WE created for this run — an isolated
+// worktree (checkout-pr/branch-off), or the ephemeral per-run workspace of an
+// un-pinned checkout:none dispatch — it archives the whole WORKSPACE instead,
+// which reclaims the directory AND the agent it owns in one shot. Archiving
+// only the agent would strand the workspace: once the agent is archived it
+// drops out of `paseo ls`, so the reaper (which reclaims by mapping a
+// still-listed agent to its workspace) can never see it again, and the empty
+// workspace lingers forever. That is the pile-up this path exists to prevent,
+// and it is why BOTH kinds of conductor-created workspace go through it.
+//
+// A workspace we did NOT create for this run is left alone and only the agent
+// is archived: a PINNED workspace (`workspace: { pin: … }`) is meant to persist
+// and be reused by the next run, and a base checkout is yours. Best-effort: if
+// the workspace lookup fails, fall back to archiving the agent.
 func (d *Dispatcher) Archive(ctx context.Context, agentID string) error {
 	if agentID == "" {
 		return nil
 	}
-	if wksID := d.agentWorktreeWorkspace(ctx, agentID); wksID != "" {
+	if wksID := d.agentOwnedWorkspace(ctx, agentID); wksID != "" {
 		return d.backend().ArchiveWorkspace(ctx, wksID)
 	}
 	return d.backend().ArchiveAgent(ctx, agentID)
 }
 
-// agentWorktreeWorkspace returns the id of the isolated-worktree workspace the
-// agent lives in, or "" when the agent isn't in one (a shared/base checkout, or
-// it's already gone). It reads the agent's cwd from `paseo ls` and maps it to a
-// worktree via `paseo workspace ls` — the same worktree filter the reaper uses.
-func (d *Dispatcher) agentWorktreeWorkspace(ctx context.Context, agentID string) string {
+// agentOwnedWorkspace returns the id of the conductor-created workspace the
+// agent lives in, or "" when it isn't in one (a pinned or base checkout, or
+// it's already gone). It reads the agent's cwd from `paseo ls` and maps it via
+// `paseo workspace ls` — the same map the reaper reclaims by.
+func (d *Dispatcher) agentOwnedWorkspace(ctx context.Context, agentID string) string {
 	cwd := d.agentCwd(ctx, agentID)
 	if cwd == "" {
 		return ""
@@ -944,16 +1014,28 @@ func (d *Dispatcher) agentWorktreeWorkspace(ctx context.Context, agentID string)
 	if err != nil {
 		return ""
 	}
-	return worktreeWorkspaceMap(wl)[normCwd(cwd)]
+	return reclaimableWorkspaceMap(wl)[normCwd(cwd)]
 }
 
-// worktreeWorkspaceMap builds the cwd->id map from a Backend workspace list,
-// keeping only worktree-isolation entries so neither the dispatcher nor the
-// reaper can archive a shared or base checkout.
-func worktreeWorkspaceMap(list []WorkspaceInfo) map[string]string {
+// reclaimableWorkspaceMap builds the cwd->id map of workspaces conductor
+// created and may archive: isolated worktrees, and the ephemeral per-run
+// workspaces of un-pinned checkout:none dispatches. Everything else — a
+// pinned workspace, a base checkout, a workspace you made — is excluded, so
+// neither the dispatcher nor the reaper can reclaim something meant to last.
+//
+// cwd is the key because it is the ONLY handle paseo gives from an agent back
+// to its workspace: `paseo ls` and `paseo inspect` both report a working
+// directory and no workspace id. That is exactly why conductor creates a run's
+// workspace on a directory of its own (runWorkspace) rather than letting paseo
+// put every un-pinned run in $HOME — sharing a cwd would make this map
+// ambiguous, and an ambiguous entry here archives the wrong workspace.
+func reclaimableWorkspaceMap(list []WorkspaceInfo) map[string]string {
 	m := map[string]string{}
 	for _, w := range list {
-		if w.Isolation == "worktree" && w.Cwd != "" && w.WorkspaceID != "" {
+		if w.Cwd == "" || w.WorkspaceID == "" {
+			continue
+		}
+		if w.Isolation == "worktree" || isEphemeralRunWorkspace(w) {
 			m[normCwd(w.Cwd)] = w.WorkspaceID
 		}
 	}
@@ -990,8 +1072,8 @@ func (d *Dispatcher) agentCwd(ctx context.Context, agentID string) string {
 //
 // Interactive hand-offs are excluded by the caller: a review hand-off must get
 // its own dedicated worktree and never queue onto another agent (its just-
-// finished assess agent can still be alive, and queuing there would run in the
-// scratch workspace with no PR checked out).
+// finished assess agent can still be alive, and queuing there would run in that
+// agent's checkout-less workspace with no PR checked out).
 func (d *Dispatcher) queueOrAdopt(ctx context.Context, req Request, prompt string) (RunRef, bool, error) {
 	ref := RunRef{Backend: "paseo", Kind: req.Trigger.Kind}
 	if id := d.liveAgentForPR(ctx, req.Trigger.Key()); id != "" {

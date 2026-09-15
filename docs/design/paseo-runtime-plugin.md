@@ -66,17 +66,19 @@ protocol itself has no `ls`/`inspect`/`workspace` verbs — it has
    in the `Controller`/`Session` contract to say "check the runtime's global
    state before deciding whether to launch anything."
 
-2. **Shared scratch-workspace pooling across unrelated dispatches** —
-   `resolveScratchWorkspace` / `findWorkspaceByTitle` /
-   `createScratchWorkspace` (`internal/dispatch/paseo.go:786-855`). For
-   `checkout: none` triage steps, conductor reuses (or lazily (re)creates) one
-   shared paseo *workspace* by title, memoized under a mutex
-   (`internal/dispatch/paseo.go:790-798`) and re-resolved every time in case
-   the reaper archived it. This is state paseo's daemon owns (a workspace,
-   independent of any one agent/session) and that many separate `Dispatch`
-   calls, over the process's whole lifetime, coordinate through. An ACP
-   subprocess has no notion of "workspace" at all — cwd is just an argument to
-   `exec.Command`, freshly re-derived every spawn
+2. **Per-run workspace creation and reclaim across unrelated dispatches** —
+   `runWorkspace` / `reclaimableWorkspaceMap` (`internal/dispatch/paseo.go`).
+   For `checkout: none` steps, conductor creates a paseo *workspace* per
+   dispatch and archives it when the agent finishes, with the reaper as the
+   backstop; a `workspace: { pin: … }` step instead REUSES one named workspace
+   across every run. Both are state paseo's daemon owns (a workspace,
+   independent of any one agent/session) that many separate `Dispatch` calls,
+   over the process's whole lifetime, coordinate through — and the reclaim
+   half only works because conductor, not paseo, chose the directory. (Until
+   v0.10.1 this was instead one SHARED `conductor-scratch` workspace every
+   such agent piled into; see `docs/design/workspace-pin.md` for why that was
+   retired.) An ACP subprocess has no notion of "workspace" at all — cwd is
+   just an argument to `exec.Command`, freshly re-derived every spawn
    (`internal/controller/acp.go:144, 240`).
 
 3. **The reaper's daemon-wide idle sweep, decoupled from any session
@@ -150,8 +152,8 @@ protocol itself has no `ls`/`inspect`/`workspace` verbs — it has
 8. **Interactive hand-off's worktree pinning and reaper-hold interlock** —
    `effectiveStrategy` (`internal/dispatch/paseo.go:349-363`) special-cases
    `req.Interactive` to force a dedicated PR/branch worktree even for
-   `checkout: none` steps, and explicitly *never* pins it to the shared
-   scratch (`internal/dispatch/paseo.go:128-129` `case req.Interactive:`).
+   `checkout: none` steps; with no repo context it falls through to the
+   ordinary checkout:none choice (a pin, else its own ephemeral workspace).
    The `HoldSet` (`internal/dispatch/hold.go`) then keeps the reaper's hands
    off it, **persisted to disk** so the protection survives a conductor
    restart (`internal/dispatch/hold.go:16-19`). This composes worktree
@@ -175,7 +177,8 @@ integration were "spawn one process, one turn, one worktree, done" — the
 shape opencode/gemini/agent-deck already have — this would be a genuinely thin
 wrapper, exactly like `plugins/conductor-github`. It is items 1–8 above,
 specifically the **cross-dispatch, daemon-wide, restart-surviving** state
-(dedup, scratch pooling, the reaper, hand-off/hold persistence) that don't
+(dedup, workspace creation/reclaim, the reaper, hand-off/hold persistence)
+that don't
 fit — because paseo, uniquely among today's runtimes, *is* a persistent
 multi-agent daemon conductor talks to statelessly across many independent
 invocations, not a process conductor spawns and owns for one conversation.
@@ -208,9 +211,9 @@ task's brief; nothing in this repo currently exercises it, so its actual
 session/worktree/lifecycle semantics are unverified here). Ship it as an
 **opt-in alternative** runtime (`runtime: paseo-acp` or similar), explicitly
 documented as dropping: cross-profile dedup (each dispatch always opens a
-fresh subprocess — no `queueOrAdopt`), scratch-workspace reuse (no pooling —
-paseo would have to create/reclaim its own workspace per spawn, if it even
-can outside its normal CLI-driven lifecycle), the reaper (idle ACP
+fresh subprocess — no `queueOrAdopt`), workspace pinning and reclaim (paseo
+would have to create/reclaim its own workspace per spawn, if it even can
+outside its normal CLI-driven lifecycle), the reaper (idle ACP
 subprocesses are just killed by `Session.Close`/timeout, not swept with
 hold-marker/pending-permission awareness), and restart-surviving hand-off
 protection (the `HoldSet` has nothing to protect once the agent isn't a

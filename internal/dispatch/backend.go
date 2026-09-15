@@ -53,8 +53,9 @@ type Backend interface {
 	// (`paseo workspace create --isolation ... --mode ...`).
 	CreateWorktree(ctx context.Context, opts CreateWorktreeOptions) (CreateWorktreeResult, error)
 
-	// CreateWorkspace creates a plain (non-worktree) workspace, e.g. the
-	// shared scratch workspace (`paseo workspace create --isolation local ...`).
+	// CreateWorkspace creates a plain (non-worktree) workspace, e.g. an
+	// un-pinned checkout:none run's ephemeral per-run workspace
+	// (`paseo workspace create --isolation local ...`).
 	CreateWorkspace(ctx context.Context, opts CreateWorkspaceOptions) (CreateWorkspaceResult, error)
 
 	// ListWorkspaces lists every workspace (`paseo workspace ls --json`).

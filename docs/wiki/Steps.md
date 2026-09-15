@@ -42,6 +42,7 @@ x-templates:
     thinking: ""                      # runtime launch hint (optional)
     mode: ""                          # runtime session mode (optional)
     workspace: worktree               # local | worktree
+    # workspace: { isolation: local, pin: triage }   # …or reuse a NAMED workspace
     wait_timeout: 30m
     archive_when_done: true           # reaper archives the agent once it idles
     labels: { team: autopilot }
@@ -191,6 +192,16 @@ it lives on the **runtime** ([[Cost-Accounting]]).
   (`checkout-pr` | `branch-off` | `none`) governs what git state that checkout
   is put into. Independent knobs — a `workspace: worktree` step can still run
   `checkout: none` for triage.
+- `workspace` also takes an object, `{ isolation: local|worktree, pin: <name> }`.
+  `pin:` names a runtime workspace the step ALWAYS runs in — created on first
+  use, reused by every later run — so a long-lived triage or chat agent finds
+  its working directory as it left it. Without a pin, a `checkout: none` step
+  gets a fresh workspace per dispatch that is archived when the run finishes.
+  A pin cannot be combined with an explicit `checkout: checkout-pr` or
+  `branch-off` (`conductor validate` rejects it): those give each dispatch its
+  own worktree, which is the opposite of reusing one. With `checkout:` unset the
+  strategy comes from the trigger, so the pin applies to the runs with no repo
+  context and is ignored on the ones that get a worktree.
 - `archive_when_done: true` steps are still protected from premature cleanup:
   the reaper skips one paused on a permission prompt, and an agent can hold
   itself alive with a `.paseo-hold` marker in its worktree.

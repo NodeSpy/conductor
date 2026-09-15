@@ -909,8 +909,10 @@ type Step struct {
 	// option, a session mode).
 	Thinking string `yaml:"thinking,omitempty"`
 	Mode     string `yaml:"mode,omitempty"`
-	// Workspace is local | worktree.
-	Workspace string `yaml:"workspace,omitempty"`
+	// Workspace is the isolation mode (`local | worktree`), or the object
+	// form `{ isolation, pin }` that also names a workspace to reuse across
+	// every run of this step. See the Workspace type.
+	Workspace Workspace `yaml:"workspace,omitempty"`
 	// WaitTimeout bounds a foreground dispatch.
 	WaitTimeout Duration `yaml:"wait_timeout,omitempty"`
 	// ArchiveWhenDone soft-deletes the agent once the step finishes. Forced

@@ -12,13 +12,13 @@ import (
 
 // TestReapScenario drives one reap tick over a mixed agent population:
 // a held hand-off survives, a question-asker becomes sticky-held, an engaged
-// finished agent's worktree workspace is archived, a plain finished agent is
-// archived directly, a spinning-up agent rides the startup grace, and the idle
-// scratch workspace is culled.
+// finished agent's worktree workspace is archived, a finished checkout:none
+// agent's EPHEMERAL per-run workspace is archived, a plain finished agent is
+// archived directly, and a spinning-up agent rides the startup grace.
 func TestReapScenario(t *testing.T) {
 	bin, dir := fakePaseoDir(t)
 	wt := filepath.Join(dir, "wt-pr5")
-	scratch := filepath.Join(dir, "scratch")
+	runDir := filepath.Join(dir, "runs", "cron-7-a1b2c3")
 	old := "2020-01-01T00:00:00Z"
 	fresh := time.Now().UTC().Format(time.RFC3339)
 
@@ -26,17 +26,19 @@ func TestReapScenario(t *testing.T) {
 	  {"id":"a-held","status":"idle"},
 	  {"id":"a-ask","status":"idle"},
 	  {"id":"a-done","status":"idle","cwd":%q},
+	  {"id":"a-run","status":"idle","cwd":%q},
 	  {"id":"a-plain","status":"completed","cwd":"/elsewhere"},
 	  {"id":"a-young","status":"idle"},
 	  {"id":"a-running","status":"running"},
 	  {"id":""}
-	]`, wt))
+	]`, wt, runDir))
 	put(t, dir, "workspaces.json", fmt.Sprintf(`[
 	  {"workspaceId":"wks_wt","cwd":%q,"isolation":"worktree"},
-	  {"workspaceId":"wks_scratch","name":"conductor-scratch","isolation":"local","cwd":%q}
-	]`, wt, scratch))
+	  {"workspaceId":"wks_run","name":"conductor-run-cron-7-a1b2c3","isolation":"local","cwd":%q}
+	]`, wt, runDir))
 	put(t, dir, "inspect-a-ask.json", `{"PendingPermissions":[{"q":1}],"CreatedAt":"`+old+`","LastUsage":"`+old+`"}`)
 	put(t, dir, "inspect-a-done.json", `{"CreatedAt":"`+old+`","LastUsage":"`+old+`"}`)
+	put(t, dir, "inspect-a-run.json", `{"CreatedAt":"`+old+`","LastUsage":"`+old+`"}`)
 	put(t, dir, "inspect-a-plain.json", `{"CreatedAt":"`+old+`","LastUsage":"`+old+`"}`)
 	put(t, dir, "inspect-a-young.json", `{"CreatedAt":"`+fresh+`"}`)
 
@@ -58,8 +60,11 @@ func TestReapScenario(t *testing.T) {
 		strings.Contains(calls, "archive a-young") || strings.Contains(calls, "archive a-running") {
 		t.Fatalf("held/asking/young/running agents must survive:\n%s", calls)
 	}
-	if !strings.Contains(calls, "workspace archive wks_scratch") {
-		t.Fatalf("idle scratch should be culled:\n%s", calls)
+	if !strings.Contains(calls, "workspace archive wks_run") {
+		t.Fatalf("finished checkout:none agent should archive its per-run workspace (else it leaks):\n%s", calls)
+	}
+	if strings.Contains(calls, "archive a-run\n") {
+		t.Fatalf("the run workspace archive already reclaims its agent:\n%s", calls)
 	}
 	if !r.held["a-ask"] {
 		t.Fatal("question-asker should be sticky-held")
@@ -84,21 +89,27 @@ func TestReapScenario(t *testing.T) {
 	}
 }
 
-// TestCullScratchInUse: an active agent inside the scratch cwd blocks the cull.
-func TestCullScratchInUse(t *testing.T) {
+// TestReapLeavesUnclaimedRunWorkspaceAlone: an ephemeral run workspace whose
+// agent is still RUNNING (or has not launched yet) must survive the tick. The
+// reaper reclaims only by walking from a finished agent, never by sweeping
+// conductor-run-* workspaces — that sweep would race a starting dispatch.
+func TestReapLeavesUnclaimedRunWorkspaceAlone(t *testing.T) {
 	bin, dir := fakePaseoDir(t)
-	scratch := filepath.Join(dir, "scratch")
+	runDir := filepath.Join(dir, "runs", "cron-1-ffff")
 	put(t, dir, "workspaces.json", fmt.Sprintf(
-		`[{"workspaceId":"wks_scratch","name":"conductor-scratch","isolation":"local","cwd":%q}]`, scratch))
-	put(t, dir, "ls.json", fmt.Sprintf(`[{"id":"a-1","cwd":%q}]`, scratch))
+		`[{"workspaceId":"wks_run","name":"conductor-run-cron-1-ffff","isolation":"local","cwd":%q}]`, runDir))
+	put(t, dir, "ls.json", fmt.Sprintf(`[{"id":"a-1","status":"running","cwd":%q}]`, runDir))
 	r := &Reaper{PaseoBin: bin, Held: NewHoldSet(filepath.Join(dir, "h.json"))}
-	r.cullScratch(context.Background())
+	r.reap(context.Background())
 	if strings.Contains(callsLog(t, dir), "workspace archive") {
-		t.Fatal("scratch in use must not be culled")
+		t.Fatal("a run workspace with a live agent must not be reclaimed")
 	}
-	// No scratch registered → no-op.
-	put(t, dir, "workspaces.json", `[]`)
-	r.cullScratch(context.Background())
+	// No agent at all (mid-creation, or already reclaimed) → still a no-op.
+	put(t, dir, "ls.json", `[]`)
+	r.reap(context.Background())
+	if strings.Contains(callsLog(t, dir), "workspace archive") {
+		t.Fatal("an agentless run workspace must not be swept (it may be mid-launch)")
+	}
 }
 
 // TestReaperRunLoop: the interval loop ticks and stops on cancel.

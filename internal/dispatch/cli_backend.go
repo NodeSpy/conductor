@@ -218,7 +218,7 @@ func (b *cliBackend) CreateWorktree(ctx context.Context, opts CreateWorktreeOpti
 }
 
 // CreateWorkspace runs `paseo workspace create` for a plain (non-worktree)
-// workspace, e.g. the shared scratch workspace.
+// workspace, e.g. an un-pinned checkout:none run's ephemeral per-run workspace.
 func (b *cliBackend) CreateWorkspace(ctx context.Context, opts CreateWorkspaceOptions) (CreateWorkspaceResult, error) {
 	out, err := b.exec.paseoCmd(ctx, "workspace", "create",
 		"--isolation", opts.Isolation, "--path", opts.Path, "--title", opts.Title, "--json").Output()

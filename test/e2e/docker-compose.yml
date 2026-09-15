@@ -142,8 +142,8 @@ services:
       - ./fixtures:/fixtures:ro
     command: ["bash", "/etc/conductor/entrypoint-migrate.sh"]
 
-  # A daemon whose fake paseo fails `workspace create` — group J2 (worktree
-  # creation fails → loud escalate, never a silent scratch fallback).
+  # A daemon whose fake paseo fails a WORKTREE `workspace create` — group J2
+  # (worktree creation fails → loud escalate, never a silent $HOME fallback).
   conductor-fail:
     <<: *image
     depends_on: [forge, mock-github, sink-catcher]

@@ -53,17 +53,24 @@ type Request struct {
 	// Provider), passed to `paseo run --provider`. Empty means bare launch or
 	// an unconfirmed pass-through pin — paseo/the runtime falls back to its
 	// own default provider resolution in that case.
-	Provider  string
-	Tokens    Tokens
-	Author    Author
-	Workspace string // base workspace id/path to worktree from (optional)
-	Shadow    bool   // skip the terminal side effect, just log what would run
-	Wait      bool   // run foreground and capture output (for workflow steps)
-	CatchUp   bool   // sweep re-derivation (skip if an agent is already on the PR)
+	Provider string
+	Tokens   Tokens
+	Author   Author
+	// Workspace PINS this dispatch to an existing runtime workspace by id or
+	// name: the base workspace to worktree from under checkout-pr/branch-off,
+	// and under checkout:none the workspace the agent runs in directly. A pinned
+	// workspace is never reclaimed when the run finishes — it is meant to be
+	// reused. Empty (the usual case) leaves the choice to the step's
+	// `workspace: { pin: … }`, and failing that to a per-run ephemeral
+	// workspace. See pinnedWorkspace.
+	Workspace string
+	Shadow    bool // skip the terminal side effect, just log what would run
+	Wait      bool // run foreground and capture output (for workflow steps)
+	CatchUp   bool // sweep re-derivation (skip if an agent is already on the PR)
 	// Interactive marks a hand-off dispatch — a background workflow step you drive
-	// and close yourself. Such an agent never shares the auto scratch workspace: it
-	// gets a PR/branch worktree when there's repo context (PR-centric), else its own
-	// dedicated workspace.
+	// and close yourself. It gets a PR/branch worktree when there's repo context
+	// (PR-centric), else the same workspace any checkout:none dispatch gets: a pin
+	// if one is configured, otherwise its own ephemeral per-run workspace.
 	Interactive bool
 	// AgentAuthored marks a dispatch that came out of an agent-authored plan
 	// (#36 §11) rather than operator config. Conductor-launched runtimes give
@@ -124,10 +131,11 @@ type Dispatcher struct {
 	// Injectable for tests.
 	CheckoutDir func(ctx context.Context, repo string) (string, error)
 
-	// ScratchWorkspace resolves a single reusable workspace id for checkout:none
-	// agents (so triage agents don't each leak a throwaway workspace). nil uses
-	// the built-in resolver (find-by-title, else create). Injectable for tests.
-	ScratchWorkspace func(ctx context.Context) (string, error)
+	// RunWorkspace creates the EPHEMERAL per-run workspace an un-pinned
+	// checkout:none dispatch runs in, returning its id. It is created per
+	// dispatch and archived when the agent finishes — see runWorkspace and
+	// Archive. nil uses the built-in creator. Injectable for tests.
+	RunWorkspace func(ctx context.Context, req Request) (string, error)
 
 	// WorktreeCreator creates an isolated PR/branch worktree workspace up front and
 	// returns its id and cwd. We create the worktree with `paseo workspace create`
@@ -161,9 +169,8 @@ type Dispatcher struct {
 	// which supplies the cliBackend default.
 	backendImpl Backend
 
-	mu        sync.Mutex
-	repoDirs  map[string]string // repo -> resolved checkout cwd (memoized)
-	scratchWS string            // memoized scratch workspace id
+	mu       sync.Mutex
+	repoDirs map[string]string // repo -> resolved checkout cwd (memoized)
 
 	// nativeSchemaUnsupported is the output_schema capability cache (v0.9.2):
 	// keyed by "runtime|provider|model", present+true means a prior dispatch

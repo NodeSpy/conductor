@@ -196,7 +196,7 @@ workflows:
 // consumer can NARROW a bundled agent's skill.verbs — not only widen it.
 func TestApplyAgentOverrideReplacesLists(t *testing.T) {
 	base := Step{
-		Workspace: "worktree",
+		Workspace: Workspace{Isolation: "worktree"},
 		Skill:     &SkillPolicy{Verbs: []string{"gh.comment", "gh.submit_review"}},
 	}
 	out, err := applyStepOverride(base, map[string]any{
@@ -211,7 +211,7 @@ func TestApplyAgentOverrideReplacesLists(t *testing.T) {
 		t.Fatalf("override should REPLACE the bundled list (narrowing), got %v", out.Skill.Verbs)
 	}
 	// non-overridden scalar fields survive the deep-merge.
-	if out.Workspace != "worktree" {
+	if out.Workspace.Isolation != "worktree" {
 		t.Fatalf("non-overridden field should survive, got workspace=%q", out.Workspace)
 	}
 }
@@ -226,7 +226,7 @@ func TestApplyAgentOverrideReplacesLists(t *testing.T) {
 // it.
 func TestApplyAgentOverrideNarrowsTheMapForm(t *testing.T) {
 	base := Step{
-		Workspace: "worktree",
+		Workspace: Workspace{Isolation: "worktree"},
 		Skill: &SkillPolicy{
 			Verbs: []string{"gh.comment", "gh.submit_review"},
 			VerbScopes: map[string]map[string][]string{
@@ -255,7 +255,7 @@ func TestApplyAgentOverrideNarrowsTheMapForm(t *testing.T) {
 	if _, dropped := out.Skill.VerbScopes["gh.submit_review"]; dropped {
 		t.Fatalf("a dropped verb must not keep constraints behind: %v", out.Skill.VerbScopes)
 	}
-	if out.Workspace != "worktree" {
+	if out.Workspace.Isolation != "worktree" {
 		t.Fatalf("non-overridden field should survive, got workspace=%q", out.Workspace)
 	}
 }

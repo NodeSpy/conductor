@@ -126,8 +126,8 @@ func TestFindStepRef(t *testing.T) {
 	}
 	// The pointer is live: a caller reads the step as configured.
 	s, _ := c.FindStepRef("review/plan")
-	s.Workspace = "worktree"
-	if c.Workflows["review"].Steps[0].Workspace != "worktree" {
+	s.Workspace = Workspace{Isolation: "worktree"}
+	if c.Workflows["review"].Steps[0].Workspace.Isolation != "worktree" {
 		t.Fatal("FindStepRef must return a pointer into the config")
 	}
 }

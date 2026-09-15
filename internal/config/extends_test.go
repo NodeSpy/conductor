@@ -14,7 +14,7 @@ func gspec(parts ...string) *GuidanceSpec { return &GuidanceSpec{Parts: parts} }
 // pinned for steps, which have no `extends:` of their own.
 func TestMergeStepIntoPolicy(t *testing.T) {
 	base := Step{
-		Model: ModelSpecOf("opus"), Workspace: "worktree",
+		Model: ModelSpecOf("opus"), Workspace: Workspace{Isolation: "worktree"},
 		Labels:   map[string]string{"team": "autopilot", "tier": "base"},
 		Guidance: gspec("house tone"),
 	}
@@ -27,7 +27,7 @@ func TestMergeStepIntoPolicy(t *testing.T) {
 	if role.Model.Ref != "sonnet" {
 		t.Errorf("scalar override: model = %q, want sonnet", role.Model.Ref)
 	}
-	if role.Workspace != "worktree" {
+	if role.Workspace.Isolation != "worktree" {
 		t.Errorf("scalar inherit: workspace = %q, want worktree", role.Workspace)
 	}
 	// Labels deep-merge: caller's keys win, the base's missing ones added.

@@ -692,7 +692,16 @@ x-templates:
   fixer: &fixer
     type: agent
     model: claude-sonnet-5  # a fleet name, a model id, a wildcard, or { any, required }
-    workspace: worktree
+    workspace: worktree     # local | worktree — the isolation mode for this step's
+                            #   workspace. The OBJECT form also names a workspace to
+                            #   REUSE across every run of the step:
+                            #     workspace: { isolation: local, pin: triage }
+                            #   `pin:` suits a long-lived checkout: none agent that
+                            #   should find its working directory as it left it.
+                            #   Without a pin, a checkout: none run gets a fresh
+                            #   workspace that is archived when it finishes. A pin
+                            #   cannot be combined with checkout: checkout-pr or
+                            #   branch-off (each of those wants its own worktree).
     wait_timeout: 25m
     archive_when_done: true
     # guidance: "Reply in a sentence or two."  # STACKS on policy.guidance (layer 0);
@@ -766,6 +775,13 @@ workflows:
         type: agent
         <<: *planner
         checkout: none
+        # The OBJECT form of `workspace:`. `pin:` reuses ONE named workspace for
+        # every run of this step, so the triage agent keeps its working
+        # directory (and whatever it left there) between dispatches. Without it
+        # a checkout: none step gets a fresh workspace per run, archived when
+        # the run finishes. A pin can't be combined with checkout: checkout-pr
+        # or branch-off — those want a fresh worktree each time.
+        workspace: { isolation: local, pin: conductor-triage }
         output_schema:
           type: object
           required: [decision]

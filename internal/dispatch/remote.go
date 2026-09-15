@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 
 	"github.com/NodeSpy/conductor/internal/hosts"
@@ -42,6 +43,30 @@ func envPairs(env map[string]string) []string {
 // paseoCmd is the Dispatcher's exec seam for the paseo CLI.
 func (d *Dispatcher) paseoCmd(ctx context.Context, args ...string) *exec.Cmd {
 	return paseoCommand(ctx, d.PaseoBin, d.Remote, args...)
+}
+
+// remoteMkdirAll creates a directory on the box a remote paseo runs on, so
+// `paseo workspace create --path` (which requires the directory to already
+// exist) can be pointed at it. dir is interpreted on the remote side — a
+// relative path resolves against the host's `cwd:`, the same way the workspace
+// path always has for a remote runtime.
+func (d *Dispatcher) remoteMkdirAll(ctx context.Context, dir string) error {
+	if d.Remote == nil || dir == "" {
+		return fmt.Errorf("remote mkdir %q: no remote host", dir)
+	}
+	client := d.HostClient
+	if client == nil {
+		client = &hosts.Client{}
+	}
+	script := "mkdir -p " + hosts.ShellJoin([]string{dir})
+	res, err := client.Script(ctx, *d.Remote, script, nil, nil, d.Remote.Cfg.Cwd)
+	if err != nil {
+		return fmt.Errorf("remote mkdir %s: %w", dir, err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("remote mkdir %s: exit %d", dir, res.ExitCode)
+	}
+	return nil
 }
 
 // remote reports whether this dispatcher drives a paseo on another box. Local

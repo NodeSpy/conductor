@@ -82,7 +82,7 @@ workflows:
 		t.Fatalf("steps = %+v", steps)
 	}
 	s := steps[0]
-	if s.Type != "agent" || s.Workspace != "worktree" || s.Model.Ref != "claude-opus-5" {
+	if s.Type != "agent" || s.Workspace.Isolation != "worktree" || s.Model.Ref != "claude-opus-5" {
 		t.Fatalf("merged fields missing: %+v", s)
 	}
 	if s.ID != "review" || s.Prompt != "look at the diff" {
@@ -110,7 +110,7 @@ workflows:
 		t.Fatal(err)
 	}
 	s := c.Workflows["w"].Steps[0]
-	if s.Workspace != "local" {
+	if s.Workspace.Isolation != "local" {
 		t.Fatalf("the step's own workspace must win, got %q", s.Workspace)
 	}
 	if s.Model.Ref != "heavy" {
@@ -140,7 +140,7 @@ workflows:
 		t.Fatal(err)
 	}
 	merged := c.Workflows["w"].Steps[0]
-	if merged.Workspace != "worktree" || merged.Model.Ref != "heavy" {
+	if merged.Workspace.Isolation != "worktree" || merged.Model.Ref != "heavy" {
 		t.Fatalf("a merge sequence should combine both: %+v", merged)
 	}
 	aliased := c.Workflows["w"].Steps[1]
@@ -203,7 +203,7 @@ triggers:
 		t.Fatalf("Load: %v", err)
 	}
 	s := cfg.Triggers[0].Steps[0]
-	if s.Type != "agent" || s.Workspace != "worktree" || s.ID != "review" {
+	if s.Type != "agent" || s.Workspace.Isolation != "worktree" || s.ID != "review" {
 		t.Fatalf("merged step = %+v", s)
 	}
 }
@@ -237,7 +237,7 @@ workflows:
 		t.Fatalf("Load: %v", err)
 	}
 	s := cfg.Workflows["w"].Steps[0]
-	if s.Workspace != "worktree" || s.ID != "a" {
+	if s.Workspace.Isolation != "worktree" || s.ID != "a" {
 		t.Fatalf("the imported file's anchor did not resolve: %+v", s)
 	}
 }
@@ -301,7 +301,7 @@ packs:
 	if !ok {
 		t.Fatalf("workflow missing, have %v", mapKeys(cfg.Workflows))
 	}
-	if s := wf.Steps[0]; s.Workspace != "worktree" || s.ID != "review" {
+	if s := wf.Steps[0]; s.Workspace.Isolation != "worktree" || s.ID != "review" {
 		t.Fatalf("pack anchor did not resolve: %+v", s)
 	}
 }
@@ -369,7 +369,7 @@ workflows:
 `), &c); err != nil {
 		t.Fatalf("the top-level holder must still be exempt: %v", err)
 	}
-	if got := c.Workflows["w"].Steps[0].Workspace; got != "worktree" {
+	if got := c.Workflows["w"].Steps[0].Workspace.Isolation; got != "worktree" {
 		t.Fatalf("the anchor should still merge: %q", got)
 	}
 }

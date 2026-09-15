@@ -29,7 +29,7 @@ func TestPaseoPreCreatesWorktreeAndPins(t *testing.T) {
 		Trigger: core.Trigger{Kind: "review_requested",
 			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}},
 		Action: config.Action{Type: "agent", Agent: "a", Prompt: "review"},
-		Step:   config.Step{Workspace: "worktree"},
+		Step:   config.Step{Workspace: config.Workspace{Isolation: "worktree"}},
 	}
 	ref, err := d.Dispatch(context.Background(), req)
 	if err != nil {
@@ -93,7 +93,7 @@ func TestInteractiveHandoffLaunchesFreshNotQueued(t *testing.T) {
 		Interactive: true, // background workflow hand-off (Wait defaults false)
 		Trigger:     core.Trigger{Kind: "review_requested", Target: pr},
 		Action:      config.Action{Type: "agent", Agent: "a", Checkout: "checkout-pr", Prompt: "review"},
-		Step:        config.Step{Workspace: "worktree"},
+		Step:        config.Step{Workspace: config.Workspace{Isolation: "worktree"}},
 	}
 	ref, err := mk().Dispatch(context.Background(), ih)
 	if err != nil {
@@ -160,7 +160,7 @@ func TestPaseoWorktreeCreateFailureIsLoud(t *testing.T) {
 	req := Request{
 		Trigger: core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
 		Action:  config.Action{Type: "agent", Agent: "a", Prompt: "fix"},
-		Step:    config.Step{Workspace: "worktree"},
+		Step:    config.Step{Workspace: config.Workspace{Isolation: "worktree"}},
 	}
 	if _, err := d.Dispatch(context.Background(), req); err == nil {
 		t.Fatal("a worktree-creation failure must surface as an error, not a silent scratch fallback")
@@ -190,34 +190,43 @@ func TestEffectiveStrategyInteractive(t *testing.T) {
 	}
 }
 
-func TestInteractiveNeverPinsScratch(t *testing.T) {
+func TestCheckoutNoneWorkspacePerRun(t *testing.T) {
+	// Every un-pinned checkout:none dispatch — interactive or not — gets its own
+	// ephemeral workspace. Nothing is shared between runs any more (the retired
+	// conductor-scratch was the one exception, and it is gone).
+	runs := 0
 	mk := func() *Dispatcher {
 		d := newDispatcher() // DryRun: builds argv, no exec
-		d.ScratchWorkspace = func(context.Context) (string, error) { return "scratch-1", nil }
+		d.RunWorkspace = func(context.Context, Request) (string, error) {
+			runs++
+			return fmt.Sprintf("run-%d", runs), nil
+		}
 		return d
 	}
-	// Non-interactive checkout:none with no repo → pinned to the shared scratch.
 	nreq := Request{Action: config.Action{Type: "agent", Agent: "a", Checkout: "none", Prompt: "x"},
 		Trigger: core.Trigger{Kind: "cron", Target: core.Target{}}}
 	nref, _ := mk().Dispatch(context.Background(), nreq)
-	if !strings.Contains(strings.Join(nref.Argv, " "), "--workspace scratch-1") {
-		t.Fatalf("non-interactive checkout:none should pin the shared scratch; got: %s", strings.Join(nref.Argv, " "))
+	if !strings.Contains(strings.Join(nref.Argv, " "), "--workspace run-1") {
+		t.Fatalf("non-interactive checkout:none should get its own workspace; got: %s", strings.Join(nref.Argv, " "))
 	}
-	// Interactive checkout:none with no repo → its OWN workspace, never the scratch.
+	// An interactive hand-off with no repo context takes the same path, and must
+	// get a DIFFERENT workspace from the auto run above.
 	ireq := Request{Interactive: true, Action: config.Action{Type: "agent", Agent: "a", Checkout: "none", Prompt: "x"},
 		Trigger: core.Trigger{Kind: "handoff", Target: core.Target{}}}
 	iref, _ := mk().Dispatch(context.Background(), ireq)
-	if strings.Contains(strings.Join(iref.Argv, " "), "--workspace scratch-1") {
-		t.Fatalf("interactive hand-off must NOT use the shared scratch; got: %s", strings.Join(iref.Argv, " "))
+	is := strings.Join(iref.Argv, " ")
+	if !strings.Contains(is, "--workspace run-2") || strings.Contains(is, "--workspace run-1") {
+		t.Fatalf("an interactive hand-off must not inherit another run's workspace; got: %s", is)
 	}
-	// Interactive + PR + checkout:none → upgraded to a PR worktree (PR-centric).
+	// Interactive + PR + checkout:none → upgraded to a PR worktree (PR-centric),
+	// so no ephemeral workspace is involved at all.
 	preq := Request{Interactive: true, Action: config.Action{Type: "agent", Agent: "a", Checkout: "none", Prompt: "x"},
 		Trigger: core.Trigger{Kind: "handoff", Target: core.Target{Repo: "acme/w", PR: 5, Number: 5}},
-		Step:    config.Step{Workspace: "worktree"}}
+		Step:    config.Step{Workspace: config.Workspace{Isolation: "worktree"}}}
 	pref, _ := mk().Dispatch(context.Background(), preq)
 	ps := strings.Join(pref.Argv, " ")
-	if !strings.Contains(ps, "--worktree-mode checkout-pr") || strings.Contains(ps, "--workspace scratch-1") {
-		t.Fatalf("interactive PR hand-off should get a PR worktree, not scratch; got: %s", ps)
+	if !strings.Contains(ps, "--worktree-mode checkout-pr") || strings.Contains(ps, "--workspace run-") {
+		t.Fatalf("interactive PR hand-off should get a PR worktree; got: %s", ps)
 	}
 }
 
@@ -357,7 +366,7 @@ func TestPaseoWorkdirCaptured(t *testing.T) {
 		Trigger: core.Trigger{Kind: "review_requested",
 			Target: core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5}},
 		Action: config.Action{Type: "agent", Agent: "a", Prompt: "review"},
-		Step:   config.Step{Workspace: "worktree"},
+		Step:   config.Step{Workspace: config.Workspace{Isolation: "worktree"}},
 	}
 	ref, err := d.Dispatch(context.Background(), req)
 	if err != nil {

@@ -55,7 +55,7 @@ workflows:
 	if s.Model.Ref != "light" {
 		t.Errorf("scalar override: model = %q", s.Model.Ref)
 	}
-	if s.Workspace != "worktree" {
+	if s.Workspace.Isolation != "worktree" {
 		t.Errorf("an unset key still comes from the base: workspace = %q", s.Workspace)
 	}
 	if got := s.Skill.Verbs; !reflect.DeepEqual(got, []string{"github.submit_review"}) {
@@ -86,7 +86,7 @@ workflows:
 	if s.Model.Ref != "light" {
 		t.Errorf("scalar: child overrides, got %q", s.Model.Ref)
 	}
-	if s.Workspace != "worktree" {
+	if s.Workspace.Isolation != "worktree" {
 		t.Errorf("scalar: unset inherits, got %q", s.Workspace)
 	}
 	want := []string{"github.comment", "linear.create"}
@@ -278,7 +278,7 @@ workflows:
 	if got := s.Guidance.Parts; !reflect.DeepEqual(got, want) {
 		t.Fatalf("guidance = %v, want %v (<<: resolves first, extends: layers under it)", got, want)
 	}
-	if s.Model.Ref != "m1" || s.Workspace != "worktree" {
+	if s.Model.Ref != "m1" || s.Workspace.Isolation != "worktree" {
 		t.Fatalf("both layers should contribute: %+v", s)
 	}
 }
