@@ -127,6 +127,9 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 			return err
 		}
 	}
+	if err := connector.ValidateFilter(where, in.Name, ev, spec.Filter); err != nil {
+		return err
+	}
 	if len(spec.Options) > 0 {
 		if err := connector.ValidateSchema(where+" options", ev.Options, spec.Options); err != nil {
 			return err
