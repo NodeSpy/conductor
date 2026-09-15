@@ -581,9 +581,6 @@ func mergeAction(base, over config.Action) config.Action {
 	if !over.Exclude.Empty() {
 		base.Exclude = over.Exclude
 	}
-	if over.RerequestReview {
-		base.RerequestReview = over.RerequestReview
-	}
 	if over.Background {
 		base.Background = over.Background
 	}

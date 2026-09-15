@@ -59,7 +59,6 @@ func oneStep(where string, a config.Action, notes *[]string) (config.Step, error
 		st.OutputSchema = a.OutputSchema
 		st.Background = a.Background
 		st.Handoff = a.Handoff
-		st.RerequestReview = a.RerequestReview
 	case "command":
 		st.Type = "command"
 		st.Command = a.Command

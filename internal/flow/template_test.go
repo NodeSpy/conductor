@@ -1,6 +1,36 @@
 package flow
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+// renderOptions must template values INSIDE a list, so a verb step like
+//
+//	uses: gh.rerequest_review
+//	options: { reviewers: ["{{.author}}"] }
+//
+// resolves to the reviewer login. Guards the pattern the changes_requested
+// re-request step depends on (the retired rerequest_review: field's replacement).
+func TestRenderOptionsTemplatesListElements(t *testing.T) {
+	data := map[string]any{"author": "octocat", "repo": "o/r", "pr": 7}
+	opts := map[string]any{
+		"repo":      "{{.repo}}",
+		"pr":        "{{.pr}}",
+		"reviewers": []any{"{{.author}}"},
+	}
+	got, err := renderOptions(opts, data)
+	if err != nil {
+		t.Fatalf("renderOptions error: %v", err)
+	}
+	if !reflect.DeepEqual(got["reviewers"], []any{"octocat"}) {
+		t.Fatalf("reviewers = %#v, want [octocat]", got["reviewers"])
+	}
+	// A sole {{.pr}} ref keeps its underlying int type (soleFieldRef path).
+	if got["pr"] != 7 {
+		t.Fatalf("pr = %#v, want int 7", got["pr"])
+	}
+}
 
 func TestTemplateDefaultCoalesce(t *testing.T) {
 	data := map[string]any{"sev": "high", "empty": "", "n": 0}

@@ -802,13 +802,12 @@ type Step struct {
 	// Runtime pins WHERE this step runs — a `runtimes:` entry. Unset lets
 	// model resolution pick the runtime that offers the chosen model, falling
 	// back to the runtime flagged `default: true`.
-	Runtime         string         `yaml:"runtime,omitempty"`
-	Prompt          string         `yaml:"prompt,omitempty"`
-	Checkout        string         `yaml:"checkout,omitempty"`
-	OutputSchema    map[string]any `yaml:"output_schema,omitempty"`
-	Background      bool           `yaml:"background,omitempty"`
-	Handoff         string         `yaml:"handoff,omitempty"` // ask-capable connector for a background review
-	RerequestReview bool           `yaml:"rerequest_review,omitempty"`
+	Runtime      string         `yaml:"runtime,omitempty"`
+	Prompt       string         `yaml:"prompt,omitempty"`
+	Checkout     string         `yaml:"checkout,omitempty"`
+	OutputSchema map[string]any `yaml:"output_schema,omitempty"`
+	Background   bool           `yaml:"background,omitempty"`
+	Handoff      string         `yaml:"handoff,omitempty"` // ask-capable connector for a background review
 
 	// command form (also carries workdir/env for agent/code forms)
 	Command []string          `yaml:"command,omitempty"`

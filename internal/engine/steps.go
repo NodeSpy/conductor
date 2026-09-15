@@ -92,9 +92,6 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				s.Prompt += dispatch.WriteWrapperGuidance
 				s.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))
 				s.Prompt += e.memoryPrompt(identity, profile, t, "")
-				if s.RerequestReview {
-					s.Prompt += dispatch.RerequestReviewGuidance
-				}
 				// Only the interactive hand-off (a background step) is told to ask. A
 				// non-background step runs autonomously — especially a schema step like
 				// `assess`, which MUST produce its structured output and must never pause
