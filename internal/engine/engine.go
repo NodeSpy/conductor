@@ -893,6 +893,11 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		profile.Runtime = modelRuntime
 	}
 	if act.Type == "agent" {
+		// No prompt of its own → act on the event itself (connector-neutral
+		// event object), synthesized before the guidance stack.
+		if act.Prompt == "" {
+			act.Prompt = dispatch.EventPrompt(t)
+		}
 		if act.Prompt != "" {
 			act.Prompt += dispatch.WriteWrapperGuidance
 			act.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))
