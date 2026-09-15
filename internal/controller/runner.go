@@ -15,6 +15,12 @@ import (
 // Provisioner is tolerated — the session then runs in the runtime's default dir.
 type Provisioner interface {
 	ProvisionWorktree(ctx context.Context, req dispatch.Request) (id, cwd string, err error)
+	// RemoveWorktree releases the worktree ProvisionWorktree returned, by the
+	// id it returned. Called when the session that owns the checkout closes —
+	// without it a runtime that provisions its own checkout leaks one per
+	// dispatch (docs/design/cli-git-worktrees.md). Must be idempotent, and a
+	// no-op for an empty id or an id this provisioner did not hand out.
+	RemoveWorktree(ctx context.Context, id string) error
 }
 
 // Assert the concrete dispatcher satisfies Provisioner, so a signature drift fails
@@ -181,7 +187,11 @@ func (r *controllerRunner) enforceSchema(ctx context.Context, req dispatch.Reque
 		req2.Action.Prompt = prompt
 		req2.Action.OutputSchema = nil
 		req2.Step.OutputSchema = nil
-		s2, err := r.c.NewSession(ctx, Spec{Request: req2, Cwd: cwd, WorkspaceID: wsID}, r.h)
+		// ReuseWorkspace: the corrective turn runs in the FIRST session's
+		// checkout, which that session still owns — closing this one must not
+		// tear the worktree down under it (the quality gate and the proposed-
+		// diff read still have to happen there).
+		s2, err := r.c.NewSession(ctx, Spec{Request: req2, Cwd: cwd, WorkspaceID: wsID, ReuseWorkspace: true}, r.h)
 		if err != nil {
 			return "", err
 		}

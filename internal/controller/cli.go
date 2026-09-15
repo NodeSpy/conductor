@@ -120,6 +120,11 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 		opt:    opt,
 		cancel: scancel,
 		ctx:    sctx,
+		wsID:   spec.WorkspaceID,
+		// This session OWNS the checkout conductor provisioned for it unless it
+		// was opened on another live session's worktree (the corrective
+		// output_schema turn) — see Close.
+		ownsWT: spec.WorkspaceID != "" && !spec.ReuseWorkspace,
 	}
 	c.mu.Lock()
 	c.live[id] = s
@@ -406,11 +411,13 @@ type cliSession struct {
 	opt    launchOpts // resolved isolation policy, reused for resume turns
 	cancel context.CancelFunc
 	ctx    context.Context
+	wsID   string // the checkout conductor provisioned for this session ("" = none)
 
 	mu     sync.Mutex
 	done   chan struct{}
 	toolID string // the tool's own session id, captured for --resume
 	out    string
+	ownsWT bool // this session must release wsID on Close
 }
 
 func (s *cliSession) ID() string { return s.id }
@@ -514,9 +521,31 @@ func (s *cliSession) Cancel(context.Context) error {
 	return nil
 }
 
-// Close cancels the process and drops the session from the state table.
-func (s *cliSession) Close(context.Context) error {
+// Close cancels the process, drops the session from the state table, and
+// releases the checkout conductor provisioned for it.
+//
+// That last step is the one the cli path used to skip: every dispatch got a
+// fresh worktree (a paseo workspace before this, a git worktree now) and
+// nothing ever removed it, so cli fixers and judges piled up checkouts for as
+// long as the daemon ran (docs/design/cli-git-worktrees.md). Removal happens
+// AFTER the engine has read the proposed diff and run the quality gate — those
+// run while the session is still live; Close is the archive step.
+func (s *cliSession) Close(ctx context.Context) error {
 	s.cancel()
 	s.c.forget(s.id)
-	return nil
+	return s.releaseWorktree(ctx)
+}
+
+// releaseWorktree hands the provisioned checkout back to whoever made it, once.
+// A session that only borrowed another's worktree (ReuseWorkspace), a resumed
+// session, and a checkout-less run all no-op here.
+func (s *cliSession) releaseWorktree(ctx context.Context) error {
+	s.mu.Lock()
+	owns, id := s.ownsWT, s.wsID
+	s.ownsWT = false
+	s.mu.Unlock()
+	if !owns || id == "" || s.c == nil || s.c.prov == nil {
+		return nil
+	}
+	return s.c.prov.RemoveWorktree(ctx, id)
 }

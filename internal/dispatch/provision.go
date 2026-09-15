@@ -3,6 +3,8 @@ package dispatch
 import (
 	"context"
 	"fmt"
+
+	"github.com/NodeSpy/conductor/internal/core"
 )
 
 // This file exposes the pieces of the paseo dispatch path that the non-paseo
@@ -24,13 +26,10 @@ import (
 // test can provision without touching a live paseo daemon. *Dispatcher satisfies
 // the controller package's Provisioner via this method.
 func (d *Dispatcher) ProvisionWorktree(ctx context.Context, req Request) (id, cwd string, err error) {
-	data := templateData(req)
-	if req.Action.WorkDir != "" {
-		wd, err := render(req.Action.WorkDir, data)
-		if err != nil {
-			return "", "", err
-		}
-		return "", expandTilde(wd), nil
+	if wd, err := WorkDir(req); err != nil {
+		return "", "", err
+	} else if wd != "" {
+		return "", wd, nil
 	}
 	switch effectiveStrategy(req) {
 	case "checkout-pr", "branch-off":
@@ -50,6 +49,40 @@ func (d *Dispatcher) ProvisionWorktree(ctx context.Context, req Request) (id, cw
 		return "", "", nil
 	}
 }
+
+// RemoveWorktree releases a worktree returned by ProvisionWorktree. For the
+// paseo path it is deliberately a NO-OP: a paseo workspace's lifetime is owned
+// by Dispatcher.Archive (which archives the whole worktree workspace when the
+// agent finishes) and by the paseo reaper — removing it here as well would
+// archive a workspace out from under an agent the engine still considers live.
+// The method exists so *Dispatcher keeps satisfying controller.Provisioner; the
+// git-native provisioner (internal/gitwt) is the one that really removes.
+func (d *Dispatcher) RemoveWorktree(context.Context, string) error { return nil }
+
+// WorkDir renders a dispatch's explicit action work_dir, tilde-expanded, or ""
+// when the action names none. Shared with the git-native provisioner so an
+// operator-supplied workdir means the same thing on either checkout path.
+func WorkDir(req Request) (string, error) {
+	if req.Action.WorkDir == "" {
+		return "", nil
+	}
+	wd, err := render(req.Action.WorkDir, templateData(req))
+	if err != nil {
+		return "", err
+	}
+	return expandTilde(wd), nil
+}
+
+// EffectiveStrategy exposes the checkout-strategy resolution (an explicit
+// checkout:, else derived from the trigger's repo/PR context) to provisioners
+// outside this package, so a non-paseo checkout path can never drift from the
+// strategy the paseo one would have picked.
+func EffectiveStrategy(req Request) string { return effectiveStrategy(req) }
+
+// BranchSlug exposes the conductor branch name a branch-off dispatch cuts
+// ("conductor/<kind>-<number>", plus any per-dispatch suffix in ctx), so every
+// checkout path names its branch identically.
+func BranchSlug(ctx context.Context, t core.Trigger) string { return branchSlug(ctx, t) }
 
 // AgentEnv returns the acts-as-user environment every controller must hand to the
 // runtime it drives, identical to what the paseo backend passes via `--env`:
