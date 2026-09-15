@@ -6,12 +6,14 @@
 //   - equality/inequality against literals:       x == true, x != "question"
 //   - numeric ordering against literals:          score > 7, score <= 3.5
 //   - truthiness of a bare path (and negation):   x   /   !x
-//   - boolean combinators (no parentheses):       a && b || c
-//   - functions: contains(x, y), exists(path), and the value-producing
-//     default(x, fallback) / coalesce(a, b, …) — usable bare (truthiness)
-//     or as a comparison's left side: default(sev, "low") == "high"
+//   - boolean combinators:                        a && b || c
+//   - parenthesised grouping (and its negation):  !(a && (b || c))
+//   - functions: contains(x, y), startswith(x, y), endswith(x, y),
+//     exists(path), and the value-producing default(x, fallback) /
+//     coalesce(a, b, …) — usable bare (truthiness) or as a comparison's left
+//     side: default(sev, "low") == "high"
 //
-// Precedence: ! / comparison > && > ||.
+// Precedence: ! / comparison > && > ||; parentheses override it.
 package expr
 
 import (
@@ -29,14 +31,27 @@ import (
 // to bare paths before evaluation, so a missing value stays nil/falsy instead
 // of rendering to text first.
 func Eval(cond string, data map[string]any) (bool, error) {
-	cond = strings.TrimSpace(stripTemplateTokens(cond))
+	return eval(stripTemplateTokens(cond), data, 0)
+}
+
+// maxGroupDepth bounds parenthesis nesting. Real conditions nest two or three
+// deep; a deeper run is pathological input, and refusing it keeps a term like
+// "((((…))))" from recursing far enough to overflow the stack.
+const maxGroupDepth = 32
+
+// eval is Eval's recursive core; depth counts the parenthesis groups entered.
+func eval(cond string, data map[string]any, depth int) (bool, error) {
+	if depth > maxGroupDepth {
+		return false, fmt.Errorf("condition nests parentheses more than %d deep", maxGroupDepth)
+	}
+	cond = strings.TrimSpace(cond)
 	if cond == "" {
 		return true, nil
 	}
 	for _, or := range splitTop(cond, "||") { // OR: any true
 		all := true
 		for _, and := range splitTop(or, "&&") { // AND: all true
-			ok, err := atom(strings.TrimSpace(and), data)
+			ok, err := atom(strings.TrimSpace(and), data, depth)
 			if err != nil {
 				return false, err
 			}
@@ -61,14 +76,14 @@ var comparators = []string{"==", "!=", ">=", "<=", ">", "<"}
 // enough to overflow the stack.
 const maxNegations = 64
 
-func atom(a string, data map[string]any) (bool, error) {
+func atom(a string, data map[string]any, depth int) (bool, error) {
 	if a == "" {
 		return false, fmt.Errorf("empty condition term")
 	}
 	// Fold leading `!` negations iteratively (not by recursion), tracking parity.
 	neg := false
-	for depth := 0; strings.HasPrefix(a, "!"); depth++ {
-		if depth >= maxNegations {
+	for n := 0; strings.HasPrefix(a, "!"); n++ {
+		if n >= maxNegations {
 			return false, fmt.Errorf("too many '!' negations in condition term (max %d)", maxNegations)
 		}
 		neg = !neg
@@ -78,11 +93,54 @@ func atom(a string, data map[string]any) (bool, error) {
 		}
 	}
 
+	// A parenthesised group is a full sub-condition: `!(a && b)` negates the
+	// whole thing rather than just `a`.
+	if inner, ok := group(a); ok {
+		res, err := eval(inner, data, depth+1)
+		if err != nil {
+			return false, err
+		}
+		return res != neg, nil
+	}
+
 	res, err := evalTerm(a, data)
 	if err != nil {
 		return false, err
 	}
 	return res != neg, nil
+}
+
+// group returns the contents of a term wrapped in ONE pair of parentheses —
+// "(a && b)" → "a && b". A function call (`contains(x, y)`) is not a group:
+// text precedes the paren. Neither is "(a) && (b)": the opening paren closes
+// before the end, so it is left to splitTop.
+func group(a string) (string, bool) {
+	if len(a) < 2 || a[0] != '(' || a[len(a)-1] != ')' {
+		return "", false
+	}
+	depth := 0
+	var quote byte
+	for i := 0; i < len(a); i++ {
+		switch c := a[i]; {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+			if depth == 0 && i != len(a)-1 {
+				return "", false // closed early: "(a) && (b)"
+			}
+		}
+	}
+	if depth != 0 {
+		return "", false // unbalanced — let the term fail on its own terms
+	}
+	return strings.TrimSpace(a[1 : len(a)-1]), true
 }
 
 // evalTerm evaluates a single term with any leading negations already stripped:
@@ -92,7 +150,7 @@ func evalTerm(a string, data map[string]any) (bool, error) {
 		return ok, err
 	}
 	for _, op := range comparators {
-		if i := strings.Index(a, op); i >= 0 {
+		if i := indexTop(a, op); i >= 0 {
 			l := strings.TrimSpace(a[:i])
 			r := strings.TrimSpace(a[i+len(op):])
 			lv, err := sideValue(l, data)
@@ -135,6 +193,17 @@ func function(a string, data map[string]any) (ok, handled bool, err error) {
 		hay := resolveTerm(args[0], data)
 		needle := resolveTerm(args[1], data)
 		return containsValue(hay, needle), true, nil
+	case "startswith", "endswith":
+		args := splitArgs(argstr)
+		if len(args) != 2 {
+			return false, true, fmt.Errorf("%s() takes two arguments, got %d", name, len(args))
+		}
+		s := asString(resolveTerm(args[0], data))
+		affix := asString(resolveTerm(args[1], data))
+		if name == "startswith" {
+			return strings.HasPrefix(s, affix), true, nil
+		}
+		return strings.HasSuffix(s, affix), true, nil
 	case "default", "coalesce":
 		v, _, err := valueFunction(a, data)
 		return truthy(v), true, err
@@ -313,13 +382,63 @@ func compare(v any, l lit, op string) bool {
 	return false
 }
 
-// splitTop splits on sep at the top level (no nesting/quotes in conditions).
+// splitTop splits on sep at the top level: outside quotes and outside
+// parentheses, so a grouped sub-condition and a function call's argument list
+// survive intact.
 func splitTop(s, sep string) []string {
-	parts := strings.Split(s, sep)
-	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
+	var parts []string
+	last := 0
+	scanTop(s, func(i int) bool {
+		if !strings.HasPrefix(s[i:], sep) {
+			return false
+		}
+		parts = append(parts, strings.TrimSpace(s[last:i]))
+		last = i + len(sep)
+		return true // skip past sep
+	}, len(sep))
+	return append(parts, strings.TrimSpace(s[last:]))
+}
+
+// indexTop returns the index of the first occurrence of op outside quotes and
+// parentheses, or -1.
+func indexTop(s, op string) int {
+	found := -1
+	scanTop(s, func(i int) bool {
+		if found >= 0 || !strings.HasPrefix(s[i:], op) {
+			return false
+		}
+		found = i
+		return true
+	}, len(op))
+	return found
+}
+
+// scanTop walks s, calling hit at every byte offset that sits outside quotes
+// and at parenthesis depth zero. hit returns true when it consumed a token of
+// skip bytes starting there, which the scan then steps over. An unmatched ')'
+// is ignored rather than driving the depth negative, so a stray one cannot
+// hide the rest of the string.
+func scanTop(s string, hit func(i int) bool, skip int) {
+	depth := 0
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '(':
+			depth++
+		case c == ')':
+			if depth > 0 {
+				depth--
+			}
+		case depth == 0 && hit(i):
+			i += skip - 1
+		}
 	}
-	return parts
 }
 
 // resolve walks a dotted path through nested maps.

@@ -805,6 +805,13 @@ type Action struct {
 	Prompt string `yaml:"prompt"`
 	// Exclude skips PRs matching these criteria (e.g. release PRs).
 	Exclude Exclude `yaml:"exclude"`
+	// Filter is the unified composable filter (docs/design/unified-filter.md).
+	// When set it REPLACES the legacy exclude/gates/match-key conjuncts at
+	// every keep-condition site that evaluates them; when unset each site
+	// lowers its own legacy fields into the same IR, so both paths run one
+	// evaluator. A trigger may set `filter:` or the legacy `filters:` block,
+	// never both (checked at load — see Config.validateTriggerFilters).
+	Filter *Filter `yaml:"filter,omitempty"`
 
 	// command-type fields
 	Command []string `yaml:"command"`
@@ -1112,6 +1119,11 @@ func Load(path string) (*Config, error) {
 	// Multi-source `on:` lists expand into one trigger per source before
 	// anything downstream sees them.
 	if err := c.NormalizeTriggers(); err != nil {
+		return nil, err
+	}
+	// One filter per trigger: the unified `filter:` or the legacy `filters:`
+	// predicate keys, never both.
+	if err := c.validateTriggerFilters(); err != nil {
 		return nil, err
 	}
 	// `extends:` inheritance across map sections resolves before defaults fold

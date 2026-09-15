@@ -1,0 +1,40 @@
+{
+  "action": "review_requested",
+  "installation": {
+    "id": 42
+  },
+  "repository": {
+    "full_name": "func/filterfire",
+    "name": "filterfire",
+    "default_branch": "main",
+    "owner": {
+      "login": "func"
+    }
+  },
+  "requested_reviewer": {
+    "login": "conductor-user"
+  },
+  "pull_request": {
+    "number": 1,
+    "state": "open",
+    "draft": false,
+    "title": "changelog: publish each release entry as its own file",
+    "html_url": "https://forge.test/func/filterfire/pull/1",
+    "head": {
+      "sha": "canned-head-filterfire-1",
+      "ref": "codex-changelog"
+    },
+    "base": {
+      "ref": "main"
+    },
+    "user": {
+      "login": "someone-else"
+    },
+    "requested_reviewers": [
+      {
+        "login": "conductor-user"
+      }
+    ],
+    "labels": []
+  }
+}

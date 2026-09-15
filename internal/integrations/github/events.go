@@ -281,7 +281,12 @@ func (g *Integration) reviewTriggers(ctx context.Context, repo string, p ghPaylo
 			map[string]any{"head_ref": p.PullRequest.Head.Ref,
 				"author": p.Review.User.Login, "author_is_bot": reviewerIsBot},
 			func(act config.Action) bool {
-				return authorBotMatch(act.AuthorBot, reviewerIsBot)
+				facts := prFilterFacts(p.PullRequest.Head.Ref, p.PullRequest.Base.Ref,
+					p.PullRequest.Title, p.PullRequest.User.Login,
+					prLabelNames(p.PullRequest), p.PullRequest.Draft)
+				facts["reviewer"] = p.Review.User.Login
+				facts["author_is_bot"] = reviewerIsBot
+				return g.filterPasses(act, "changes_requested "+repo, facts, lowerChangesRequested(act))
 			})...)
 	}
 	// Any submitted review may have made the PR merge-ready.
@@ -369,13 +374,21 @@ func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []cor
 	return g.emit(repo, "new_comment", t,
 		fmt.Sprintf("new comment by %s on %s#%d", p.Comment.User.Login, repo, num),
 		fmt.Sprintf("comment:%d", p.Comment.ID), extra, func(act config.Action) bool {
-			return commentAuthorAllowed(act, author) && authorBotMatch(act.AuthorBot, authorIsBot)
+			return g.filterPasses(act, "new_comment "+repo,
+				commentFilterFacts(p.Comment.User.Login, p.Comment.Body, authorIsBot),
+				lowerComment(act, true))
 		})
 }
 
 // commentAuthorAllowed reports whether a comment by author should trigger this
 // new_comment variant: allowed by from_users (empty = any) AND not on ignore_users
 // (e.g. CI report bots like github-actions[bot]). ignore wins over allow.
+//
+// The keep-condition now reaches this logic through the lowered filter IR
+// (lowerComment → matchFilterKey) rather than calling it directly. It is kept
+// as the ORACLE the legacy-parity test checks that lowering against — see
+// TestLegacyLoweringParity in filter_parity_test.go. Change it and the
+// lowering must change with it, or the parity test fails.
 func commentAuthorAllowed(act config.Action, author string) bool {
 	return fromUsersMatch(act.FromUsers, author) && !loginMatch(act.IgnoreUsers, author)
 }
@@ -538,9 +551,14 @@ func (g *Integration) pullRequestTriggers(ctx context.Context, repo string, p gh
 		return g.emit(repo, "review_requested", t,
 			fmt.Sprintf("review requested on %s#%d", repo, pr.Number),
 			"reviewreq@"+pr.Head.SHA, nil, func(act config.Action) bool {
+				// `reviewer` resolves against the connector's `me` identity
+				// rather than a published fact, so it stays outside the
+				// filter; everything else this site used to check inline is
+				// the one filter below.
 				return g.reviewerRequestedMatches(repo, act, p) &&
-					!draftGate(act, pr.Draft) &&
-					!act.Exclude.Matches(pr.Head.Ref, pr.Title, labels)
+					g.filterPasses(act, "review_requested "+repo, prFilterFacts(
+						pr.Head.Ref, pr.Base.Ref, pr.Title, pr.User.Login, labels, pr.Draft),
+						lowerReviewRequested(act))
 			})
 	case "opened", "reopened", "synchronize", "ready_for_review":
 		trs := g.mergeStateTriggers(ctx, repo, p, pr)
@@ -588,43 +606,53 @@ func (g *Integration) mergeReadyTriggers(ctx context.Context, repo string, numbe
 	return g.emit(repo, "merge_ready", t,
 		fmt.Sprintf("merge-ready %s#%d", repo, number), "mergeready@"+gate.HeadSHA, nil,
 		func(act config.Action) bool {
-			if act.RequireLabel != "" && !containsFold(gate.Labels, act.RequireLabel) {
-				return false
-			}
-			return mergeGatePasses(gate, act.Gates)
+			return g.filterPasses(act, "merge_ready "+repo,
+				mergeReadyFilterFacts(gate), lowerMergeReady(act))
 		})
+}
+
+// mergeGateKeys are the merge-ready gate toggles, in the order
+// mergeGatePasses checks them (also the lowering's Match order).
+var mergeGateKeys = []string{"not_draft", "merge_state", "review_decision", "non_author_approval", "threads_resolved"}
+
+// mergeGateOn reads one merge-ready gate toggle. These gates are opt-OUT: an
+// absent key is ENFORCED, and only an explicit false (or "false"/"no"/"")
+// relaxes it — the opposite of gateEnabled's opt-in reading, so the two stay
+// separate functions even though both consume the same `gates:` map.
+func mergeGateOn(gates map[string]any, key string) bool {
+	v, ok := gates[key]
+	if !ok {
+		return true
+	}
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		return x != "" && x != "false" && x != "no"
+	default:
+		return true
+	}
 }
 
 // mergeGatePasses applies the standard gate, honoring explicit `false` toggles
 // in the action's `gates` map to relax individual checks (default: all on).
+//
+// Reached through the lowered filter IR now (lowerMergeReady → matchFilterKey);
+// kept as that lowering's parity oracle, like commentAuthorAllowed.
 func mergeGatePasses(g *mergeGate, gates map[string]any) bool {
-	on := func(key string) bool {
-		v, ok := gates[key]
-		if !ok {
-			return true
-		}
-		switch x := v.(type) {
-		case bool:
-			return x
-		case string:
-			return x != "" && x != "false" && x != "no"
-		default:
-			return true
-		}
-	}
-	if on("not_draft") && g.IsDraft {
+	if mergeGateOn(gates, "not_draft") && g.IsDraft {
 		return false
 	}
-	if on("merge_state") && g.MergeStateStatus != "CLEAN" {
+	if mergeGateOn(gates, "merge_state") && g.MergeStateStatus != "CLEAN" {
 		return false
 	}
-	if on("review_decision") && g.ReviewDecision != "APPROVED" {
+	if mergeGateOn(gates, "review_decision") && g.ReviewDecision != "APPROVED" {
 		return false
 	}
-	if on("non_author_approval") && !g.NonAuthorApprove {
+	if mergeGateOn(gates, "non_author_approval") && !g.NonAuthorApprove {
 		return false
 	}
-	if on("threads_resolved") && !g.ThreadsResolved {
+	if mergeGateOn(gates, "threads_resolved") && !g.ThreadsResolved {
 		return false
 	}
 	return true
@@ -829,28 +857,16 @@ type issueMatchState struct {
 }
 
 // cheapMatch evaluates one issue_matched variant's payload filters (no API):
-// assignee (default: assigned to you), sole-assignee, labels any/all, none-of +
-// title exclude, and author allowlist.
+// assignee (default: assigned to you), then the one filter covering
+// sole-assignee, labels any/all, none-of + title exclude, and the author
+// allowlist. `assignee` resolves against the connector's `me` identity rather
+// than a published fact, so it has no match key and stays out here.
 func (g *Integration) cheapMatch(repo string, act config.Action, st issueMatchState) bool {
 	if !g.issueAssigneeMatch(repo, act, st.assignees) {
 		return false
 	}
-	if act.SoleAssignee && !g.soleSelf(st.assignees) {
-		return false
-	}
-	if len(act.LabelsAny) > 0 && !anyFold(st.labels, act.LabelsAny) {
-		return false
-	}
-	if len(act.LabelsAll) > 0 && !allFold(st.labels, act.LabelsAll) {
-		return false
-	}
-	if act.Exclude.Matches("", st.title, st.labels) { // none-of + title exclude
-		return false
-	}
-	if len(act.Authors) > 0 && !containsFold(act.Authors, st.author) {
-		return false
-	}
-	return true
+	return g.filterPasses(act, "issue_matched "+repo,
+		issueFilterFacts(st, g.soleSelf(st.assignees)), lowerIssueMatch(act))
 }
 
 // gatesPass runs the GraphQL-backed gates (no_branch, project) if any are set;
@@ -1051,6 +1067,10 @@ func (g *Integration) reviewerRequestedMatches(repo string, act config.Action, p
 
 // draftGate reports whether a variant's opt-in `not_draft` gate should suppress it
 // because the PR is still a draft (off unless configured).
+//
+// Reached through the lowered filter IR now (lowerReviewRequested →
+// matchFilterKey "not_draft"); kept as that lowering's parity oracle, like
+// commentAuthorAllowed.
 func draftGate(act config.Action, isDraft bool) bool {
 	return isDraft && gateEnabled(act.Gates, "not_draft")
 }
@@ -1108,7 +1128,9 @@ func (g *Integration) readyReviewTriggers(ctx context.Context, repo string, p gh
 		fmt.Sprintf("ready for review on %s#%d", repo, pr.Number), "reviewreq@"+pr.Head.SHA, nil,
 		func(act config.Action) bool {
 			return g.reviewerInList(g.reviewerFor(repo, act), logins, slugs) &&
-				!act.Exclude.Matches(pr.Head.Ref, pr.Title, labels)
+				g.filterPasses(act, "ready_for_review "+repo, prFilterFacts(
+					pr.Head.Ref, pr.Base.Ref, pr.Title, pr.User.Login, labels, pr.Draft),
+					lowerReadyReview(act))
 		})
 }
 

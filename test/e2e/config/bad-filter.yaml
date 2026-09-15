@@ -1,0 +1,24 @@
+# Group U: a config `conductor validate` must REFUSE, because its `filter:`
+# references a fact the github review_requested event does not publish
+# ("is_drafft"). Without the check this loads fine and the typo resolves to
+# nil — falsy — so `!is_drafft` is always true and the operator's filter
+# silently does nothing. The point of validating a filter at load is that a
+# filter's failure mode is silence.
+connectors:
+  gh:
+    use: github
+    token: e2e-dummy-token
+    repos: ["func/badfilter"]
+
+  slack:
+    use: slack
+    bot_token: xoxb-e2e-dummy
+
+triggers:
+  - on: gh.review_requested
+    name: typo-filter
+    filter: "!is_drafft"
+    steps:
+      - id: tell
+        uses: slack.post
+        options: { channel: CBAD, text: "never reached" }

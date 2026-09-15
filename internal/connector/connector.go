@@ -72,6 +72,14 @@ type EventDecl struct {
 	Filters Schema
 	Context Schema
 	Options Schema
+	// Facts are the values a unified `filter:` may reference BY NAME inside an
+	// expr string ("!is_draft && contains(title, 'Release')"). MatchKeys are
+	// the structured keys legal as an object key in the same `filter:`. Both
+	// empty means the event has no filter surface — a `filter:` on it is a
+	// load error rather than a silently ignored block.
+	// See docs/design/unified-filter.md.
+	Facts     Schema
+	MatchKeys Schema
 	// Dynamic marks event names that come from connection config (cron
 	// schedules, webhook sources, rss feeds) rather than a fixed set.
 	Dynamic bool

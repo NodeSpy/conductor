@@ -581,6 +581,9 @@ func mergeAction(base, over config.Action) config.Action {
 	if !over.Exclude.Empty() {
 		base.Exclude = over.Exclude
 	}
+	if over.Filter != nil {
+		base.Filter = over.Filter
+	}
 	if over.Background {
 		base.Background = over.Background
 	}

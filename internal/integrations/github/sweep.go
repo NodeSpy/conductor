@@ -415,7 +415,14 @@ func (g *Integration) sweepMissedComments(ctx context.Context, instID int64, own
 		trs := g.emit(repo, "new_comment", t,
 			fmt.Sprintf("sweep: comment by %s on %s#%d", c.User.Login, repo, t.Number),
 			fmt.Sprintf("comment:%d", c.ID), extra, func(act config.Action) bool {
-				return commentAuthorAllowed(act, author)
+				// The comment LISTING carries no account type, so bot-ness is
+				// the login convention alone — which is why the legacy
+				// lowering here omits author_bot (see lowerComment). A
+				// hand-written `filter:` may still read author_is_bot; it
+				// just sees the weaker signal on this path.
+				return g.filterPasses(act, "sweep new_comment "+repo,
+					commentFilterFacts(c.User.Login, c.Body, isBotLogin(c.User.Login)),
+					lowerComment(act, false))
 			})
 		out = append(out, trs...)
 	}
@@ -482,7 +489,9 @@ func (g *Integration) sweepReviewRequested(repo string, pr prListItem, st *sweep
 		fmt.Sprintf("sweep: review requested on %s#%d", repo, pr.Number),
 		"reviewreq@"+pr.Head.SHA, map[string]any{"labels": labels}, func(act config.Action) bool {
 			return g.prReviewerMatches(g.reviewerFor(repo, act), pr) &&
-				!draftGate(act, pr.Draft) && !act.Exclude.Matches(pr.Head.Ref, pr.Title, labels)
+				g.filterPasses(act, "sweep review_requested "+repo, prFilterFacts(
+					pr.Head.Ref, pr.Base.Ref, pr.Title, pr.User.Login, labels, pr.Draft),
+					lowerReviewRequested(act))
 		})
 	if len(trs) == 0 { // pending, but every matching variant is gated out
 		if pr.Draft {

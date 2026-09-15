@@ -374,6 +374,36 @@ triggers:
         uses: slack.post
         options: { channel: CSCHEMA, text: "SCHEMA-CLI decision={{.assess.decision}}" }
 
+  # U — the unified `filter:` (docs/design/unified-filter.md): ONE key whose
+  # YAML SHAPE is its boolean structure, replacing the exclude/gates/match-key
+  # grab-bag. This is the RosterStream#5590 condition, spelled out: skip a
+  # release PR only when it is BOTH release-titled AND on a release branch.
+  #
+  # The legacy spelling of the same intent —
+  #   filters: { exclude: { branches: [staging, prod], title: ['Release '] } }
+  # — is an OR denylist whose `title` arm is a case-insensitive SUBSTRING, so
+  # it silently skipped a changelog PR whose title merely contained the word
+  # "release". That is the bug this grammar exists to end, and the two fixtures
+  # below are exactly the two PRs that told them apart:
+  #
+  #   func/filterfire  head=codex-changelog, title="changelog: publish each
+  #                    release entry …"  → the inner AND is false → FIRES
+  #   func/filterskip  head=staging, title="Release 2.4.0"
+  #                    → the inner AND is true → SKIPPED
+  #
+  # Parentheses, `!` over a group, `contains()` and a fact comparison all have
+  # to work for the fire/skip split to come out right — a filter that failed to
+  # parse would fail closed and neither would fire, and one that dropped the
+  # grouping would fire both.
+  - on: gh.review_requested
+    name: unified-filter
+    filters: { repos: ["func/filterfire", "func/filterskip"] }
+    filter: "!is_draft && !( (head_branch == 'staging' || head_branch == 'prod') && contains(title, 'Release ') )"
+    steps:
+      - id: tell
+        uses: slack.post
+        options: { channel: CFILTER, text: "U-FILTER fired {{.repo}}#{{.pr}}" }
+
 checks:
   # A code check that always passes / always fails — a crisp pass/fail verdict
   # with no external dependency, so the §16 gate machinery is what's under test.

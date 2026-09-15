@@ -49,7 +49,33 @@ func githubEvent(name, desc string, filters, contextExtra, options Schema) Event
 	for k, v := range options {
 		o[k] = v
 	}
-	return EventDecl{Name: name, Desc: desc, Filters: f, Context: c, Options: o}
+	return EventDecl{
+		Name: name, Desc: desc, Filters: f, Context: c, Options: o,
+		Facts:     filterSchema(gh.FilterFacts(name)),
+		MatchKeys: filterSchema(gh.FilterMatchKeys(name)),
+	}
+}
+
+// filterSchema converts the github integration's filter surface (the one place
+// facts and match keys are defined, next to the code that computes and
+// evaluates them) into this package's Schema, so a fact cannot be declared
+// here without being published there.
+func filterSchema(kinds map[string]string) Schema {
+	if len(kinds) == 0 {
+		return nil
+	}
+	s := make(Schema, len(kinds))
+	for name, kind := range kinds {
+		switch kind {
+		case gh.FilterBool:
+			s[name] = Field{Type: TBool}
+		case gh.FilterList:
+			s[name] = Field{Type: TList}
+		default:
+			s[name] = Field{Type: TString}
+		}
+	}
+	return s
 }
 
 var githubDecl = &TypeDecl{
@@ -697,6 +723,10 @@ func (g *githubImpl) lowerTrigger(t CompiledTrigger) (config.Action, error) {
 		Enabled: t.Spec.Enabled,
 		Shadow:  t.Spec.Shadow,
 		FlowRef: t.Ref(),
+		// The unified filter rides through as the IR. When set it replaces the
+		// legacy exclude/gates/match-key conjuncts at every keep-condition
+		// site; load validation has already refused a trigger that set both.
+		Filter: t.Spec.Filter,
 	}
 	act.Repos = toStrings(f["repos"])
 	if len(act.Repos) == 0 {
