@@ -465,9 +465,20 @@ func printTypeDecl(d *connector.TypeDecl, dynamicEvents []string) {
 			fmt.Printf(" — %s", ev.Desc)
 		}
 		fmt.Println()
-		if len(ev.Filters) > 0 {
-			fmt.Println("  filters:")
-			printSchema(ev.Filters, "    ")
+		// The `filter:` surface: the match keys legal as object keys, and the
+		// facts an expr string may read. FilterKeys/FilterFacts pick the
+		// connector's own surface where it declares one and fall back to the
+		// generic filters:/context: schemas otherwise, so this prints what
+		// `conductor validate` will actually check a filter against.
+		if keys := ev.FilterKeys(); len(keys) > 0 {
+			fmt.Printf("  filter match keys (each also legal as %s<key>):\n", config.FilterNotPrefix)
+			printSchema(keys, "    ")
+		}
+		// Only when they are their OWN set: a connector with no declared facts
+		// filters over its context:, which is printed below anyway.
+		if len(ev.Facts) > 0 {
+			fmt.Println("  filter facts (readable from an expr string):")
+			printSchema(ev.Facts, "    ")
 		}
 		if len(ev.Options) > 0 {
 			fmt.Println("  options:")

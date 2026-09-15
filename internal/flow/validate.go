@@ -122,11 +122,6 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 				where, in.Name, in.Decl.Type, spec.Event(), strings.Join(declared, ", "))
 		}
 	}
-	if len(spec.Filters) > 0 {
-		if err := connector.ValidateSchema(where+" filters", ev.Filters, spec.Filters); err != nil {
-			return err
-		}
-	}
 	if err := connector.ValidateFilter(where, in.Name, ev, spec.Filter); err != nil {
 		return err
 	}
@@ -226,12 +221,12 @@ func checkStoreSelector(cfg *config.Config, w, connName string, opts map[string]
 }
 
 // validateManualTrigger checks an `on: manual` trigger: it publishes no
-// event schema (its context is the `conductor run` inputs), so filters and
+// event schema (its context is the `conductor run` inputs), so a filter and
 // source options have nothing to bind to, and step references validate in an
 // open scope with `inputs` addressable.
 func validateManualTrigger(cfg *config.Config, reg *connector.Registry, where string, spec config.TriggerSpec) error {
-	if len(spec.Filters) > 0 {
-		return fmt.Errorf("%s: the manual source accepts no filters (a shared base filters: must be a key every listed source accepts)", where)
+	if spec.Filter != nil {
+		return fmt.Errorf("%s: the manual source accepts no filter (a shared `filter:` on a fan-in trigger must be one every listed source can evaluate)", where)
 	}
 	if len(spec.Options) > 0 {
 		return fmt.Errorf("%s: the manual source accepts no options", where)

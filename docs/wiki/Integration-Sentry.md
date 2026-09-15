@@ -17,7 +17,7 @@ connectors:
 
 triggers:
   - on: errors.issue_alert
-    filters: { projects: [backend], levels: [error, fatal], environments: [production] }
+    filter: { projects: [backend], levels: [error, fatal], environments: [production] }
     repo: acme/backend                     # optional checkout target
     steps:
       - { id: dig, type: agent, agent: fixer, prompt: "Investigate {{.title}} ({{.url}})." }

@@ -20,8 +20,8 @@ func normTriggers(t *testing.T, y string) (*Config, error) {
 }
 
 // TestOnListExpansion: a multi-source on: expands into one trigger per source
-// with shared steps and per-source filters merged over the shared base
-// (per-source keys win).
+// with shared steps, and a per-source `filter:` REPLACING the shared one for
+// that source only.
 func TestOnListExpansion(t *testing.T) {
 	c, err := normTriggers(t, `
 triggers:
@@ -29,9 +29,9 @@ triggers:
     on:
       - timer.nightly
       - gh.issue_matched:
-          filters: { labels_any: [billing], state: open }
+          filter: { label_any: [billing] }
       - manual
-    filters: { state: closed, actor: me }
+    filter: { state: closed }
     steps: [ { uses: svc.post, options: { text: t } } ]
 `)
 	if err != nil {
@@ -49,21 +49,16 @@ triggers:
 			t.Fatalf("triggers[%d] lost shared config: %+v", i, tr)
 		}
 	}
-	// Bare source: the shared base only.
-	if f := c.Triggers[0].Filters; f["state"] != "closed" || f["actor"] != "me" || len(f) != 2 {
-		t.Fatalf("bare-source filters: %v", f)
+	// Sources with no per-source block get the shared filter as written.
+	for _, i := range []int{0, 2} {
+		if got := c.Triggers[i].Filter.String(); got != `and(match(state,closed))` {
+			t.Fatalf("triggers[%d] shared filter: %s", i, got)
+		}
 	}
-	// Per-source block: its keys override the base, other base keys remain.
-	f := c.Triggers[1].Filters
-	if f["state"] != "open" || f["actor"] != "me" {
-		t.Fatalf("per-source override: %v", f)
-	}
-	if la, ok := f["labels_any"].([]any); !ok || la[0] != "billing" {
-		t.Fatalf("per-source own key: %v", f)
-	}
-	// The base map itself is untouched by the merge.
-	if c.Triggers[0].Filters["state"] != "closed" {
-		t.Fatalf("shared base mutated: %v", c.Triggers[0].Filters)
+	// The source that wrote its own gets ONLY its own: the shape of a filter
+	// is its boolean structure, so there is nothing to merge into.
+	if got := c.Triggers[1].Filter.String(); got != `and(match(label_any,[billing]))` {
+		t.Fatalf("per-source filter should replace the shared one, got %s", got)
 	}
 }
 
@@ -120,14 +115,14 @@ func TestOnListScalarUnchanged(t *testing.T) {
 	c, err := normTriggers(t, `
 triggers:
   - on: gh.new_comment
-    filters: { author_bot: false }
+    filter: { author_bot: false }
     steps: [ { uses: svc.post, options: { text: t } } ]
 `)
 	if err != nil {
 		t.Fatal(err)
 	}
 	tr := c.Triggers[0]
-	if tr.On != "gh.new_comment" || len(tr.OnSources) != 0 || tr.Filters["author_bot"] != false {
+	if tr.On != "gh.new_comment" || len(tr.OnSources) != 0 || tr.Filter.String() != `and(match(author_bot,false))` {
 		t.Fatalf("scalar on: %+v", tr)
 	}
 }
@@ -149,7 +144,7 @@ triggers:
 triggers:
   - name: x
     on:
-      - gh.new_comment: { filters: { author_bot: false } }
+      - gh.new_comment: { filter: { author_bot: false } }
         gh.release: {}
     steps: [ { uses: svc.post } ]`, "one-key map"},
 		{"disallowed per-source key", `
@@ -162,7 +157,14 @@ triggers:
 triggers:
   - name: x
     on: [ { gh.new_comment: 5 } ]
-    steps: [ { uses: svc.post } ]`, "is a block {filter, filters, policy, hooks}"},
+    steps: [ { uses: svc.post } ]`, "is a block {filter, policy, hooks}"},
+		{"a per-source `filters:` names the key that replaced it", `
+triggers:
+  - name: x
+    on:
+      - gh.new_comment:
+          filters: { author_bot: false }
+    steps: [ { uses: svc.post } ]`, "`filters:` was removed"},
 		{"manual needs a name", `
 triggers:
   - on: [manual, gh.new_comment]

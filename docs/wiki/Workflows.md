@@ -1,15 +1,15 @@
 # Workflows: triggers, steps, hooks
 
-A trigger is four keys: `on:` (what fires it), `filters:` (whether it fires —
-keys from the event's schema, all AND-ed), `steps:` (the workflow), and
-`hooks:` (lifecycle actions). Plus optional `group:` ([[Grouping]]),
+A trigger is four keys: `on:` (what fires it), `filter:` (whether it fires, and
+for which repos — one composable predicate whose YAML shape is its boolean
+structure), `steps:` (the workflow), and `hooks:` (lifecycle actions). Plus optional `group:` ([[Grouping]]),
 `policy:` ([[Policy]]), `name:` (a variant label for dedup state; required
 for `conductor run`), and `enabled:`.
 
 `on:` takes one `<connector>.<event>`, the built-in `manual` source
 (`conductor run <name>` fires it on demand), or a **list** of sources fanning
 into the same steps — each item a bare `conn.event` or a one-key map
-`conn.event: { filters, policy, hooks }` scoped to that source. See
+`conn.event: { filter, policy, hooks }` scoped to that source. See
 [[Configuration]] for the list grammar and merge semantics.
 
 ```yaml
@@ -63,12 +63,12 @@ several **instances** that each fire independently:
 ```yaml
 triggers:
   review:
-    - { on: github.pull_request, filters: { repos: [me/app], labels: [ready] } }
-    - { on: github.pull_request, filters: { repos: [me/api] } }
+    - { on: github.pull_request, filter: { repo: [me/app], label_any: [ready] } }
+    - { on: github.pull_request, filter: { repo: [me/api] } }
 ```
 
 There is no `instances:` keyword and no per-instance name. An instance's
-identity is its **content** — its `repos:`/`filters:` are what make it distinct
+identity is its **content** — its `filter:` is what makes it distinct
 — so its internal handle is derived from that content. Reordering the array, or
 reordering keys within an entry, does not move an instance's dedup or attempt
 state. Two byte-identical entries are an error rather than one trigger silently

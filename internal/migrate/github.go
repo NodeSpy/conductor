@@ -164,10 +164,18 @@ func githubTransform(name string, ref config.IntegrationRef, notes *[]string) (m
 					return nil, nil, err
 				}
 				noteInertActionFields(awhere, act, notes)
-				filters := actionFilters(act)
-				filters["repos"] = strSlice(rule.Match.Repos)
+				noteDroppedGates(awhere, act, notes)
+				// One `filter:`: the rule's repo scope as the routing key, the
+				// exclusions replicating most-specific-rule-wins as its
+				// negation, and the action's own predicate keys alongside.
+				fm := actionFilter(kind, act)
+				fm["repo"] = strSlice(rule.Match.Repos)
 				if len(exclude) > 0 {
-					filters["exclude_repos"] = strSlice(exclude)
+					fm["not_repo"] = strSlice(exclude)
+				}
+				filter, err := config.FilterFromValue(fm)
+				if err != nil {
+					return nil, nil, fmt.Errorf("%s: %w", awhere, err)
 				}
 				// The merged rule's reviewer/assignee apply when the action
 				// itself set none (legacy gates read the ACTION's fields,
@@ -178,7 +186,7 @@ func githubTransform(name string, ref config.IntegrationRef, notes *[]string) (m
 					Name:    act.Name,
 					Enabled: act.Enabled,
 					Shadow:  act.Shadow,
-					Filters: filters,
+					Filter:  filter,
 					Steps:   steps,
 				}
 				if o := actionOptions(act); len(o) > 0 {

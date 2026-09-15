@@ -33,22 +33,23 @@ a literal) unless a verb sets `as: bot` — which requires App credentials.
 
 ## Events (`on: gh.<event>`)
 
-All events accept `repos:` / `exclude_repos:` filters (globs; default: the
-connector's `repos:`) and publish the base context (`repo`, `owner`, `name`,
-`pr`, `issue`, `number`, `head`, `base`, `url`, `kind`, `title`, `labels`).
+All events accept the routing keys `repo:` / `not_repo:` in their `filter:`
+(globs; default: the connector's `repos:`) and publish the base context
+(`repo`, `owner`, `name`, `pr`, `issue`, `number`, `head`, `base`, `url`,
+`kind`, `title`, `labels`). Every match key is also legal as `not_<key>`.
 Per-event additions:
 
-| event | extra filters | extra context / options |
+| event | extra `filter:` match keys | extra context / options |
 |---|---|---|
-| `review_requested` | `reviewer: {logins, teams}`, `gates: {not_draft}`, `exclude: {branches, labels, title}` | |
-| `changes_requested` | | `head_ref` |
-| `new_comment` | `from_users`, `ignore_users` | `author`, `comment_body`, `comment_id`, `comment_kind`, `head_ref` |
-| `merge_conflict`, `pr_behind`, `self_review` | | |
-| `failing_checks` | `ignore_checks` | `failing_check`, `run_id` (the Actions *workflow run* id, resolved from a `check_run`/`check_suite`; `0` for a non-Actions check); options `flaky_rerun: {enabled, max}` — reruns the failed run once it has finished, before the fixer; a rerun that couldn't be requested isn't counted toward `max` |
-| `stuck_checks` | | `run_id`, `run_name`, `run_status`; options `stuck_after`, `poll_interval` |
-| `merge_ready` | `require_label`, `gates: {not_draft, merge_state, review_decision, non_author_approval, threads_resolved}` | |
-| `issue_matched` | `assignee`, `sole_assignee`, `labels_any`, `labels_all`, `authors`, `exclude`, `gates: {no_branch, project}` | |
-| `release` | `include_prereleases` | `tag_name`, `prerelease`, `draft` |
+| `review_requested` | `branch`, `base_branch`, `title`, `label_any`, `label_all`, `require_label`, `author`, `draft` | option `reviewer: {logins, teams}` |
+| `changes_requested` | `branch`, `base_branch`, `title`, `label_any`, `label_all`, `author`, `author_bot` | `head_ref`, `author`, `author_is_bot` |
+| `new_comment` | `comment_author`, `author_bot` | `author`, `comment_body`, `comment_id`, `comment_kind`, `head_ref` |
+| `merge_conflict`, `pr_behind`, `self_review` | *(routing only)* | |
+| `failing_checks` | *(routing only)* | `failing_check`, `run_id` (the Actions *workflow run* id, resolved from a `check_run`/`check_suite`; `0` for a non-Actions check); options `ignore_checks`, `flaky_rerun: {enabled, max}` — reruns the failed run once it has finished, before the fixer; a rerun that couldn't be requested isn't counted toward `max` |
+| `stuck_checks` | *(routing only)* | `run_id`, `run_name`, `run_status`; options `stuck_after`, `poll_interval` |
+| `merge_ready` | `require_label`, `label_any`, `label_all`, `author`, `draft`, `merge_state`, `review_decision`, `non_author_approval`, `threads_resolved` | the last five are opt-OUT gates: all enforced unless the trigger's `filter:` says otherwise |
+| `issue_matched` | `sole_assignee`, `label_any`, `label_all`, `require_label`, `title`, `author` | option `assignee: {logins}` |
+| `release` | *(routing only)* | `tag_name`, `prerelease`, `draft`; option `include_prereleases` |
 | `deployment_status` | | `state`, `environment`, `description` |
 | `dependabot_alert` | | `severity`, `package`, `summary` |
 | `secret_scanning_alert` | | `secret_type` |
@@ -140,7 +141,8 @@ comment on changed lines. Output `comments` is the count posted.
 ## Legacy
 
 The legacy `integrations: - type: github` block with its `rules:`/`defaults:`
-model still loads unchanged; [[Migration]] flattens it into per-trigger
-filters with the same most-specific-repo winner.
+model still loads unchanged; [[Migration]] flattens it into a per-trigger
+`filter:` with the same most-specific-repo winner (the losing repos become a
+top-level `not_repo:`).
 
 Related: [[Connectors]] · [[GitHub-App-Setup]] · [[Workflows]] · [[Migration]]

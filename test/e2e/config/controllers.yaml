@@ -84,12 +84,12 @@ runtimes:
     agent: gemini
 triggers:
   - "on": github.merge_conflict
-    filters:
-      exclude_repos:
+    filter:
+      not_repo:
         - grpc/*
         - grpf/*
         - grpj/*
-      repos:
+      repo:
         - a2/*
     steps:
       - type: agent
@@ -107,13 +107,13 @@ triggers:
         # scenario fails loudly if the fix regresses.
         model: claude-opus-5-e2e
   - "on": github.merge_conflict
-    filters:
-      exclude_repos:
+    filter:
+      not_repo:
         - a2/*
         - grpc/*
         - grpf/*
         - grpj/*
-      repos:
+      repo:
         - a3/*
     steps:
       - type: agent
@@ -122,14 +122,14 @@ triggers:
         workspace: worktree
         archive_when_done: true
   - "on": github.merge_conflict
-    filters:
-      exclude_repos:
+    filter:
+      not_repo:
         - a2/*
         - a3/*
         - grpc/*
         - grpf/*
         - grpj/*
-      repos:
+      repo:
         - a4/*
     steps:
       - type: agent
@@ -138,16 +138,16 @@ triggers:
         workspace: worktree
         runtime: stub
   - "on": github.merge_conflict
-    filters:
-      repos:
+    filter:
+      repo:
         - grpb/cliclaude
     steps:
       - !!merge <<: *fx_cli_claude
         type: agent
         prompt: Resolve {{.repo}}#{{.pr}} (cli:claude-code).
   - "on": github.merge_conflict
-    filters:
-      repos:
+    filter:
+      repo:
         - grpb/clicodex
     steps:
       - type: agent
@@ -157,16 +157,16 @@ triggers:
         archive_when_done: true
         runtime: cli_codex
   - "on": github.merge_conflict
-    filters:
-      repos:
+    filter:
+      repo:
         - grpb/acpgemini
     steps:
       - !!merge <<: *fx_acp_gemini
         type: agent
         prompt: Resolve {{.repo}}#{{.pr}} (acp:gemini).
   - "on": github.merge_conflict
-    filters:
-      repos:
+    filter:
+      repo:
         - grpb/acpcodex
     steps:
       - type: agent
@@ -176,8 +176,8 @@ triggers:
         archive_when_done: true
         runtime: acp_codex
   - "on": github.merge_conflict
-    filters:
-      repos:
+    filter:
+      repo:
         - grpb/ocacp
     steps:
       - type: agent
@@ -187,8 +187,8 @@ triggers:
         archive_when_done: true
         runtime: oc_acp
   - "on": github.merge_conflict
-    filters:
-      repos:
+    filter:
+      repo:
         - grpb/ocnative
     steps:
       - type: agent
@@ -198,8 +198,8 @@ triggers:
         archive_when_done: true
         runtime: oc_native
   - "on": github.merge_conflict
-    filters:
-      repos:
+    filter:
+      repo:
         - grpb/deck
     steps:
       - type: agent
@@ -209,8 +209,8 @@ triggers:
         archive_when_done: true
         runtime: deck
   - "on": github.review_requested
-    filters:
-      repos:
+    filter:
+      repo:
         - grpc/*
     steps:
       - !!merge <<: *fx_acp_gemini
@@ -220,10 +220,10 @@ triggers:
         background: true
         handoff: default
   - "on": github.review_requested
-    filters:
-      exclude_repos:
+    filter:
+      not_repo:
         - grpc/*
-      repos:
+      repo:
         - grpf/*
     steps:
       - !!merge <<: *fx_cli_claude
@@ -233,11 +233,11 @@ triggers:
         background: true
         handoff: default
   - "on": github.merge_conflict
-    filters:
-      exclude_repos:
+    filter:
+      not_repo:
         - grpc/*
         - grpf/*
-      repos:
+      repo:
         - grpj/*
     steps:
       - !!merge <<: *fx_acp_gemini

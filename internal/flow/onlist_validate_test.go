@@ -24,15 +24,15 @@ connectors:
         id: "{{.item.ID}}"
 `
 
-// TestOnListPerSourceFilterValidation: each per-source filters: block is
-// checked against ITS source's schema only — a key legal on one source
-// doesn't have to be legal on the others.
+// TestOnListPerSourceFilterValidation: each per-source `filter:` is checked
+// against ITS source's schema only — a key legal on one source doesn't have to
+// be legal on the others.
 func TestOnListPerSourceFilterValidation(t *testing.T) {
 	cfg := loadConfig(t, onListBase+`
 triggers:
   - name: fan-in
     on:
-      - svc.ping: { filters: { only: hello } }
+      - svc.ping: { filter: { only: hello } }
       - api.new_thing
     steps: [ { uses: svc.post, options: { text: t } } ]
 `)
@@ -47,7 +47,7 @@ triggers:
   - name: fan-in
     on:
       - svc.ping
-      - api.new_thing: { filters: { only: hello } }
+      - api.new_thing: { filter: { only: hello } }
     steps: [ { uses: svc.post, options: { text: t } } ]
 `)
 	reg = buildRegistry(t, cfg)
@@ -56,15 +56,15 @@ triggers:
 	}
 }
 
-// TestOnListSharedBaseIntersection: a top-level filters: base applies to
-// every listed source, so a base key one source doesn't accept is a load
-// error (the intersection rule).
+// TestOnListSharedBaseIntersection: a top-level `filter:` applies to every
+// listed source, so a base key one source doesn't accept is a load error (the
+// intersection rule).
 func TestOnListSharedBaseIntersection(t *testing.T) {
 	cfg := loadConfig(t, onListBase+`
 triggers:
   - name: fan-in
     on: [svc.ping, api.new_thing]
-    filters: { only: hello }
+    filter: { only: hello }
     steps: [ { uses: svc.post, options: { text: t } } ]
 `)
 	reg := buildRegistry(t, cfg)
@@ -73,31 +73,31 @@ triggers:
 		t.Fatalf("base key outside the intersection must fail naming the source: %v", err)
 	}
 
-	// manual accepts no filters, so a base over [x, manual] fails too.
+	// manual accepts no filter, so a base over [x, manual] fails too.
 	cfg = loadConfig(t, onListBase+`
 triggers:
   - name: fan-in
     on: [svc.ping, manual]
-    filters: { only: hello }
+    filter: { only: hello }
     steps: [ { uses: svc.post, options: { text: t } } ]
 `)
 	reg = buildRegistry(t, cfg)
-	if err := Validate(cfg, reg); err == nil || !strings.Contains(err.Error(), "manual source accepts no filters") {
-		t.Fatalf("base filters over manual must fail: %v", err)
+	if err := Validate(cfg, reg); err == nil || !strings.Contains(err.Error(), "manual source accepts no filter") {
+		t.Fatalf("a base filter over manual must fail: %v", err)
 	}
 }
 
-// TestOnListFilterPrecedence: at runtime, a per-source filters: key overrides
-// the shared base for that source — the expanded triggers carry the merged
-// blocks FilterMatch evaluates.
+// TestOnListFilterPrecedence: at runtime, a per-source `filter:` REPLACES the
+// shared base for that source — the expanded triggers carry the filter
+// FilterMatch evaluates.
 func TestOnListFilterPrecedence(t *testing.T) {
 	cfg := loadConfig(t, onListBase+`
 triggers:
   - name: fan-in
     on:
       - svc.ping
-      - svc2.ping: { filters: { only: beta } }
-    filters: { only: alpha }
+      - svc2.ping: { filter: { only: beta } }
+    filter: { only: alpha }
     steps: [ { uses: svc.post, options: { text: t } } ]
 `)
 	// Second fake instance so both sources have the `only` schema.

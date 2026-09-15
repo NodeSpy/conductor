@@ -121,11 +121,13 @@ packs:
       review: { repos: [team/app] }         # object → ONE instance (today's shape)
       deploy:                               # array → N instances of the SAME trigger
         - { repos: [team-a/*], gate: { approve: true } }
-        - { repos: [team-b/*], gate: { approve: false }, filters: { labels: [urgent] } }
+        - { repos: [team-b/*], gate: { approve: false }, filter: { label_any: [urgent] } }
 ```
 - `packs.<name>.triggers.<name>` value is polymorphic: **object** (one instance)
   or **array** (N instances). Detect array-vs-object at unmarshal. Each instance =
-  `repos`/`filters`/`gate` layered on the pack's base trigger definition.
+  `repos`/`filter`/`gate` layered on the pack's base trigger definition.
+  (`filters:` was the key when this was written; it is `filter:` as shipped —
+  see unified-filter-phase2.md.)
 - **Per-instance identity by index** — each instance gets a distinct identity
   (`<pack-ns>/<trigger>#<i>`) feeding `Trigger.Key`/dedup/session/outcome, so two
   instances of one trigger never collide. (Additive to the hardened `Trigger.Key`

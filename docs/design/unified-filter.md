@@ -1,11 +1,13 @@
 # Unified `filter:` — one composable trigger filter
 
-Status: design / phase 1 in progress. This is the implementation contract.
+Status: implemented. This describes the grammar as shipped. The decisions that
+removed the legacy `filters:` block are recorded in
+[unified-filter-phase2.md](unified-filter-phase2.md).
 
 ## Why
 
-A trigger's `filters:` is a grab-bag with three inconsistent shapes of the same
-idea (a predicate over the event/PR):
+A trigger's `filters:` was a grab-bag with three inconsistent shapes of the
+same idea (a predicate over the event/PR):
 
 - `exclude` — a denylist, **OR** across `branches`/`labels`/`title`, negated.
 - `gates` — readiness requirements, **AND** across `not_draft`/`merge_state`/….
@@ -13,15 +15,17 @@ idea (a predicate over the event/PR):
   `from_users`, `ignore_users`, `author_bot`, `sole_assignee`, `require_label`,
   `reviewer`, … — each with its own baked-in combination rule.
 
-You cannot say "skip a review only when it is a release PR **and** on a release
-branch" without the operator reverse-engineering which block ANDs and which ORs.
+You could not say "skip a review only when it is a release PR **and** on a
+release branch" without reverse-engineering which block ANDs and which ORs.
 This bit us live: `exclude.title: ['Release ']` is a case-insensitive
 **substring** match, so it silently skipped RosterStream#5590 ("changelog:
 publish each **release** entry…").
 
 The fix is not another key. It is **one** key, `filter:`, whose *shape* is its
 composition, evaluated on the `expr` engine that already powers step `if:`
-(`internal/expr`). `exclude`, `gates`, `when` all dissolve into it.
+(`internal/expr`). `exclude`, `gates`, `when` all dissolve into it — and so
+does the repo routing, which is why `filters:` could be deleted outright rather
+than deprecated.
 
 ## The grammar
 
@@ -41,26 +45,34 @@ key, a string anywhere a leaf is allowed.
 filter: "!is_draft && !contains(title, 'Release')"
 
 # object — AND of structured keys
-filter: { not_draft: true, authors: [dependabot] }
+filter: { not_draft: true, author: [dependabot] }
 
 # array — OR of branches
 filter:
-  - { authors: [dependabot], not_draft: true }     # a ready bot PR …
-  - { labels_any: [urgent, security] }             # … OR anything urgent/security …
+  - { author: [dependabot], not_draft: true }      # a ready bot PR …
+  - { label_any: [urgent, security] }              # … OR anything urgent/security …
   - "!is_draft && !contains(title, 'Release')"     # … OR the general case minus releases
 ```
 
-### The object `expr:` escape
+### The object `expr:` escape, and the `not_` prefix
 
-An object AND-s its keys. To keep negation ("skip if…") from needing a separate
-`exclude` concept, an object may carry a reserved **`expr:`** string key,
-AND-ed with its siblings:
+An object ANDs its keys. Two of them are the grammar's own rather than a
+connector's:
+
+- **`expr:`** — a condition string, AND-ed with its siblings.
+- **`not_<anything>`** — negation. `not_expr:` negates a condition;
+  `not_<matchkey>:` negates that match key. The prefix produces a `Not` around
+  exactly what the un-prefixed key would have produced, so a connector declares
+  one key and gets both spellings; its matcher only ever sees BASE keys.
 
 ```yaml
-filter: { not_draft: true, expr: "!contains(title, 'Release')" }
+filter: { not_draft: true, not_expr: "contains(title, 'Release')" }
 ```
 
-`expr:` is the only reserved key; every other key is a connector match key.
+A key and its `not_` twin are distinct keys: both in one object is legal and
+they AND. That is how `from_users` + `ignore_users` collapsed into
+`comment_author` + `not_comment_author` — one key, and the relationship between
+the two spellings is visible in their names.
 
 ## Facts
 
@@ -69,105 +81,92 @@ filtered. The **string** form (`expr`) reads them by name; the **object** match
 keys are evaluated against the same values. Facts are per-connector — the
 grammar is universal, the fact *names* are not.
 
-**github facts (phase 1):** `head_branch`, `base_branch`, `title`,
-`labels` (`[]string`), `is_draft` (bool), `merge_state` (string, e.g. `CLEAN`),
-`review_decision` (string, e.g. `APPROVED`), `non_author_approval` (bool),
-`threads_resolved` (bool), `author` (login). Event-specific where present:
-`comment_author`, `comment_body`, `reviewer`. These are exactly the values
-`draftGate`/`mergeGatePasses`/the sweep already compute in
+**github facts:** `head_branch`, `base_branch`, `title`, `labels` (`[]string`),
+`is_draft` (bool), `merge_state` (string, e.g. `CLEAN`), `review_decision`
+(string, e.g. `APPROVED`), `non_author_approval` (bool), `threads_resolved`
+(bool), `author` (login). Event-specific where present: `comment_author`,
+`comment_body`, `reviewer`, `sole_assignee`, `author_is_bot`. These are exactly
+the values `draftGate`/`mergeGatePasses`/the sweep already compute in
 `internal/integrations/github` — this design only *exposes* them.
+
+Five github events publish predicate facts (`review_requested`,
+`changes_requested`, `new_comment`, `issue_matched`, `merge_ready`); the rest
+publish none and accept only the routing keys.
 
 ## The Filter IR
 
-Decode `filter:` into a small tree, then evaluate against a facts map. Keep the
-IR connector-agnostic; only `Match` and the fact map are connector-aware.
+Decode `filter:` into a small tree, then evaluate against a facts map. The IR
+is connector-agnostic; only `Match` and the fact map are connector-aware.
 
 ```
 Filter =
   | And([]Filter)          // object, and array-of-… when combined
   | Or([]Filter)           // array
-  | Not(Filter)            // used by legacy exclude lowering; also `!` inside expr
+  | Not(Filter)            // the `not_` prefix; also the exclude lowering
   | Expr(string)           // string form / object `expr:` key → expr.Eval
-  | Match(key, value)      // one structured object key (labels_any, not_draft, …)
+  | Match(key, value)      // one structured object key (label_any, draft, …)
 ```
 
 **Decode:**
 - string → `Expr(s)`
 - array `[e1, e2, …]` → `Or([decode(e1), decode(e2), …])`
-- object `{k1: v1, …}` → `And([...])` where each non-`expr` key → `Match(k, v)`
-  and an `expr:` key → `Expr(v)`. Key order does not matter (AND is commutative);
-  decode deterministically (sort keys) so errors and any serialization are stable.
+- object `{k1: v1, …}` → `And([...])` where each key → `Match(k, v)`, an `expr:`
+  key → `Expr(v)`, and a `not_`-prefixed key → `Not(…)` of either. Key order
+  does not matter (AND is commutative); decode deterministically (sort keys) so
+  errors and any serialization are stable.
 
 **Evaluate `(f Filter, facts map[string]any) (bool, error)`:**
 - `And` → all children true (short-circuit false)
 - `Or` → any child true (short-circuit true)
 - `Not` → negate child
 - `Expr(s)` → `expr.Eval(s, facts)`
-- `Match(k, v)` → the github match predicate for `k` (below)
+- `Match(k, v)` → the connector's match predicate for `k`
 
-An empty/absent `filter:` is `true` (fires).
+An empty/absent `filter:` is `true` (fires). An evaluation error fails CLOSED.
 
-### github `Match` predicates (phase 1)
+### github `Match` predicates
 
-Port the existing semantics exactly (so lowering is behavior-identical):
+No key carries a baked polarity — negation is the grammar's. The full table,
+with what each reads and what it means, is in
+[unified-filter-phase2.md §The github match keys](unified-filter-phase2.md).
+Each predicate's body is the existing helper (`config.Exclude.Matches`,
+`draftGate`/`mergeGatePasses`'s readers, `matchRepo`, the labels/authors
+matchers) rather than a reimplementation.
 
-| key | value | true when |
-|---|---|---|
-| `branches` | `[]glob` | `path.Match(glob, head_branch)` for any glob |
-| `base_branches` | `[]glob` | same against `base_branch` |
-| `title` | `[]string` | `head_branch`… no — `contains(lower(title), lower(s))` for any `s` (substring — the legacy behavior; document the footgun and point new configs at `expr` + `startswith`/`contains`) |
-| `labels_any` | `[]string` | PR has ANY (case-insensitive) |
-| `labels_all` | `[]string` | PR has ALL |
-| `authors` | `[]login` | `author` ∈ set |
-| `from_users` | `[]login` | comment/review author ∈ set |
-| `ignore_users` | `[]login` | comment/review author ∉ set |
-| `author_bot` | bool | author-is-bot == value |
-| `sole_assignee` | bool | you are the only assignee |
-| `require_label` | string | PR has that label |
-| `not_draft` | bool | value ? `!is_draft` : true |
-| `merge_state` | bool | value ? `merge_state == CLEAN` : true |
-| `review_decision` | bool | value ? `review_decision == APPROVED` : true |
-| `non_author_approval` | bool | value ? `non_author_approval` : true |
-| `threads_resolved` | bool | value ? `threads_resolved` : true |
+`repo` / `not_repo` are special: they are **routing**, hoisted out of the
+filter into the structural repo gate and the sweep's scope, and legal on every
+github event because they need no fact. See phase 2 §2.
 
-Reuse the existing helpers (`config.Exclude.Matches`, `draftGate`,
-`mergeGatePasses`, `prReviewerMatches`, the labels/authors matchers) as the
-bodies of these predicates rather than reimplementing them.
+## Intrinsic defaults
 
-## Legacy lowering (back-compat — non-negotiable)
+Every keep-condition site evaluates exactly ONE filter: the trigger's own when
+it states a predicate, otherwise the event's **intrinsic default**, lowered into
+the same IR by `lowerX` in `internal/integrations/github/filter.go`. The
+defaults that matter:
 
-The current `filters: { … }` block **lowers into a Filter IR** so existing
-configs are bit-identical. The block is an implicit AND of:
+- `merge_ready` keeps its five opt-out gates enforced.
+- `ready_for_review` deliberately skips the draft gate — the PR just left
+  draft.
+- everything else defaults to "fire".
 
-- `exclude: {branches, labels, title}` → `Not(Or([Match(branches,…), Match(labels_any,…)?, Match(title,…)]))`
-  (exclude is an OR-denylist; "not excluded" is `Not(Or(...))`). Honor the
-  opt-in `exclude.match: all` too if it exists — but that field is superseded by
-  the new grammar and need not be added if not already present.
-- `gates: {not_draft, merge_state, …}` → `And([Match(not_draft,true), …])`
-- match keys (`labels_any`, `authors`, `from_users`, `ignore_users`,
-  `author_bot`, `reviewer`, …) → `And([Match(k, v), …])`
-
-i.e. the whole legacy block → `And([ Not(excludeOr), gates…, matches… ])`.
-
-Wire it so the github keep-conditions (`sweep.go:485`, `events.go:543/847/1111`)
-call **one** IR evaluator built from either the new `filter:` or the lowered
-legacy block — the old `Exclude.Matches`/`draftGate`/`mergeGatePasses` call sites
-are replaced by the single IR eval, but their *logic* is reused inside `Match`.
-
-**Parity is the acceptance test:** a table of representative legacy configs must
-evaluate identically before and after (same keep/skip for the same PR facts).
+A trigger that states a predicate takes that decision over, which is what
+waiving a gate (`merge_state: false`) has always meant.
 
 ## Validation
 
 At load time, reject a `filter:` that references something the connector does
 not provide:
 
-- Every fact path a string/`expr:` references must be a declared github fact.
-- Every object key must be a declared github match key (or `expr:`).
-- Type-check values (`labels_any` is a list, `not_draft` is a bool, …).
+- Every fact path a string/`expr:` references must be a declared fact for that
+  event.
+- Every object key must be a declared match key (or `expr:`); `not_<key>` is
+  checked as `<key>`.
+- Type-check values (`label_any` is a list, `draft` is a bool, …).
+- An event with no facts and no match keys refuses `filter:` outright.
 
-Surface the connector's fact/key set from its schema (`internal/connector/github.go`),
-next to the existing filter-schema entries.
+The surface comes from the connector's own schema
+(`internal/connector/github.go` reading `gh.FilterFacts`/`gh.FilterMatchKeys`),
+so a fact cannot be declared without being published.
 
 ## Worked example — the #5590 fix
 
@@ -181,25 +180,36 @@ Unified — says exactly what was meant, AND across the two:
 ```yaml
 filter: "!is_draft && !( (head_branch == 'staging' || head_branch == 'prod') && contains(title, 'Release ') )"
 ```
-`codex-changelog` ≠ staging/prod → the inner AND is false → not excluded → #5590
-reviews. A real `Release 2.4.0` PR on `staging` → inner AND true → skipped.
-
-## Scope
-
-**Phase 1 (this work):** the grammar + IR + evaluator; github facts + `Match`
-predicates; the legacy-block lowering (behavior-identical); load-time
-validation; unit tests (grammar, IR eval, **legacy parity**, the #5590 case);
-one docker e2e scenario using `filter:`; user docs. `filter:` and `filters:`
-coexist — a trigger may set at most one.
-
-**Phase 2 (later):** other connectors' fact models (slack/sentry/pagerduty);
-`conductor config migrate` rewriting `filters:` → `filter:`; deprecation of the
-`filters:` block once configs have migrated.
+…or in structured form, negating the conjunction rather than each arm:
+```yaml
+filter:
+  not_draft: true
+  not_expr: "(head_branch == 'staging' || head_branch == 'prod') && contains(title, 'Release ')"
+```
+`codex-changelog` ≠ staging/prod → the inner AND is false → not excluded →
+#5590 reviews. A real `Release 2.4.0` PR on `staging` → inner AND true →
+skipped.
 
 ## Non-goals
 
 - No new expression language — reuse `internal/expr` (`&&`, `||`, `!`, `==`,
-  `contains`, comparisons). If the design needs `startswith`/`in`, add them to
-  `expr` as small, additive, separately-tested helpers.
-- No behavior change for any existing config — lowering must be a no-op in
-  observable behavior.
+  `contains`, `startswith`, comparisons).
+- No behavior change for a trigger that states no predicate — the intrinsic
+  defaults are the pre-filter keep-conditions, and the parity tests
+  (`filter_parity_test.go`) call the shipped legacy predicates as their oracle.
+
+## Scope
+
+**Shipped (phase 1):** the grammar + IR + evaluator; github facts and `Match`
+predicates; load-time validation; unit tests including legacy parity and the
+#5590 case; a docker e2e scenario.
+
+**Shipped (phase 2):** the universal `not_` prefix; `repo`/`not_repo` routing;
+polarity-free match-key names; `ignore_checks`/`reviewer`/`assignee`/
+`include_prereleases` moved to `options:`; `filters:` deleted from the schema;
+`conductor config migrate` emitting `filter:`; the grammar generalised to the
+generic source connectors. See
+[unified-filter-phase2.md](unified-filter-phase2.md).
+
+**Later:** richer fact models for slack/sentry/pagerduty (they currently filter
+over their declared context keys).

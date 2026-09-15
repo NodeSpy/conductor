@@ -314,7 +314,7 @@ integrations:
 		t.Fatalf("feed: %v", rel)
 	}
 	tr := doc["triggers"].([]any)[0].(map[string]any)
-	if tr["on"] != "upstream.releases" || tr["filters"].(map[string]any)["match"] != "v[0-9]+" {
+	if tr["on"] != "upstream.releases" || tr["filter"].(map[string]any)["match"] != "v[0-9]+" {
 		t.Fatalf("trigger: %v", tr)
 	}
 

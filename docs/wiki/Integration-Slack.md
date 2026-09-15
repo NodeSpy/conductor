@@ -20,7 +20,7 @@ commands), and the relevant event subscriptions.
 
 ## Events (`on: slack-ops.<event>`)
 
-| event | filters | context |
+| event | `filter:` match keys | context |
 |---|---|---|
 | `app_mention` | `channel`, `users` | `slack.channel`, `slack.user`, `slack.text`, `slack.ts`, `slack.thread_ts` |
 | `reaction_added` | `reaction`, `channel`, `users` | + `slack.reaction` |

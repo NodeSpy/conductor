@@ -1404,7 +1404,8 @@ group_T_output_schema() {
 }
 
 # U — the unified `filter:` (docs/design/unified-filter.md). ONE trigger, ONE
-# filter, TWO PRs that the LEGACY spelling could not tell apart:
+# filter — carrying both its repo scope and its condition, since phase 2 left
+# no second filter key — and TWO PRs the RETIRED spelling could not tell apart:
 #
 #   filters: { exclude: { branches: [staging, prod], title: ['Release '] } }
 #

@@ -67,22 +67,59 @@ type Schema map[string]Field
 // the filter keys legal for it, the context facts it publishes, and any
 // source-side per-trigger options.
 type EventDecl struct {
-	Name    string
-	Desc    string
+	Name string
+	Desc string
+	// Filters are the match keys a GENERIC source's `filter:` object accepts —
+	// the keys TypeDecl.Filter evaluates against the emitted event's context
+	// (slack's channel/users, rss's match, a plugin source's own keys). A
+	// connector with a richer surface declares Facts/MatchKeys instead; see
+	// FilterKeys/FilterFacts below for which one a filter is checked against.
 	Filters Schema
 	Context Schema
 	Options Schema
-	// Facts are the values a unified `filter:` may reference BY NAME inside an
-	// expr string ("!is_draft && contains(title, 'Release')"). MatchKeys are
-	// the structured keys legal as an object key in the same `filter:`. Both
-	// empty means the event has no filter surface — a `filter:` on it is a
-	// load error rather than a silently ignored block.
-	// See docs/design/unified-filter.md.
+	// Facts are the values a `filter:` may reference BY NAME inside an expr
+	// string ("!is_draft && contains(title, 'Release')"). MatchKeys are the
+	// structured keys legal as an object key in the same `filter:`, base keys
+	// only (the grammar's `not_` prefix negates any of them). Both empty falls
+	// back to the generic Filters/Context surface.
+	// See docs/design/unified-filter.md, docs/design/unified-filter-phase2.md.
 	Facts     Schema
 	MatchKeys Schema
 	// Dynamic marks event names that come from connection config (cron
 	// schedules, webhook sources, rss feeds) rather than a fixed set.
 	Dynamic bool
+}
+
+// FilterKeys returns the match keys legal as an object key in this event's
+// `filter:`; FilterFacts returns the values its expr strings may read.
+//
+// A connector that declares EITHER Facts or MatchKeys owns its whole filter
+// surface, and the generic schemas are not consulted — a github event with
+// routing keys but no predicate facts must reject an expr, not quietly
+// validate it against a context map nothing evaluates a filter with.
+//
+// A connector that declares NEITHER is a generic source: its `filters:` schema
+// is its match-key set and its context is its facts, so it gets the unified
+// grammar (AND/OR nesting, `not_`, `expr:`) over what it already declared
+// without restating any of it.
+func (e EventDecl) FilterKeys() Schema {
+	if e.hasUnifiedSurface() {
+		return e.MatchKeys
+	}
+	return e.Filters
+}
+
+// FilterFacts returns the values this event's `filter:` expr strings may read
+// (see FilterKeys for the fallback rule).
+func (e EventDecl) FilterFacts() Schema {
+	if e.hasUnifiedSurface() {
+		return e.Facts
+	}
+	return e.Context
+}
+
+func (e EventDecl) hasUnifiedSurface() bool {
+	return len(e.Facts) > 0 || len(e.MatchKeys) > 0
 }
 
 // VerbDecl declares one action verb: the name valid after `uses: <conn>.`,
@@ -123,11 +160,13 @@ type TypeDecl struct {
 	Verbs      []VerbDecl
 	Connection Schema // documented connection fields, for `conductor schema`
 
-	// Filter, when non-nil, evaluates a trigger's `filters:` against an
-	// emitted event's context in the flow runner — the uniform path for
-	// synthetic sources (slack, rss). nil means the lowered integration
-	// evaluates filters itself (github's live-API gates, sentry/pagerduty's
-	// rule matching), so the flow runner skips re-evaluation.
+	// Filter, when non-nil, evaluates match keys against an emitted event's
+	// context in the flow runner — the uniform path for synthetic sources
+	// (slack, rss). The runner calls it one key at a time, driven by the
+	// trigger's `filter:` IR, so the boolean structure is the grammar's and
+	// the connector only answers "does THIS key hold". nil means the lowered
+	// integration filters for itself (github's live-API gates,
+	// sentry/pagerduty's rule matching) and the runner skips re-evaluation.
 	Filter func(event string, filters, trigCtx map[string]any) (bool, error)
 }
 

@@ -23,7 +23,7 @@ triggers.
 
 ```yaml
 - on: gh.release
-  filters: { include_prereleases: false }
+  options: { include_prereleases: false }
   steps:
     - { id: announce, uses: slack-ops.post,
         options: { channel: "#releases", text: "released {{.tag_name}}: {{.url}}" } }
@@ -33,7 +33,7 @@ triggers.
 
 ```yaml
 - on: gh.new_comment
-  filters: { ignore_users: ["ci-bot"] }
+  filter: { not_comment_author: ["ci-bot"] }
   group: { key: "{{.repo}}#{{.pr}}", window: 15s }
   steps:
     - id: handle
@@ -62,7 +62,7 @@ triggers.
 
 ```yaml
 - on: oncall.incident
-  filters: { event_types: [incident.triggered] }
+  filter: { event_types: [incident.triggered] }
   steps:
     - { id: dig, type: agent, agent: planner, checkout: none,
         prompt: "Research {{.pagerduty.title}} ({{.pagerduty.url}}); return severity + summary.",
@@ -78,7 +78,8 @@ triggers.
 
 ```yaml
 - on: gh.review_requested
-  filters: { reviewer: { logins: [your-login] }, exclude: { branches: ["release/*"] } }
+  filter: { not_branch: ["release/*"] }
+  options: { reviewer: { logins: [your-login] } }
   steps:
     - { id: a, workflow: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
     - { id: draft, if: "{{.a.decision}} == auto", type: agent, agent: planner,
@@ -204,7 +205,7 @@ Requires a `policy.agent_authored` block — without one, plans are rejected:
 
 ```yaml
 - on: gh.issue_matched
-  filters: { labels_any: [auto] }
+  filter: { label_any: [auto] }
   steps:
     - id: triage
       type: agent
@@ -252,7 +253,7 @@ triggers:
           command: ["git", "-C", "{{.fix.workdir}}", "push"] }
 
   - on: gh.issue_matched
-    filters: { labels_any: [epic] }
+    filter: { label_any: [epic] }
     steps:
       - id: feature
         prompt: "Implement the feature in {{.url}}."

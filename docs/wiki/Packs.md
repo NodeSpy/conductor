@@ -93,7 +93,7 @@ packs:
     models:
       reviewer: claude-opus-5                  # OVERRIDE a bundled fleet
     on:
-      github.pull_request: { filters: { labels_not: [wip] } }   # override a trigger by name
+      github.pull_request: { filter: { not_label_any: [wip] } }  # add a filter to a trigger, by name
     triggers:
       "*":       { enabled: true, repos: [your-org/app] }  # arm EVERY shipped trigger, one consent
       on_review_request:                        # the pack ships this DISARMED
@@ -105,8 +105,9 @@ packs:
 
 A pack that ships six triggers should not make you paste the same repo list
 six times. The `"*"` key supplies arming defaults (`enabled`, `repos`,
-`filters`, `policy`, `gate`) to **every** trigger the pack ships; a named key
-refines that one.
+`filter`, `policy`, `gate`) to **every** trigger the pack ships; a named key
+refines that one (its `repos:`/`filter:` REPLACE the wildcard's, so you can
+narrow as well as widen).
 
 ```yaml
 packs:
@@ -138,7 +139,7 @@ packs:
       review: { repos: [team/app] }              # object -> ONE instance
       deploy:                                    # array  -> N instances
         - { repos: [team-a/*], gate: { run: [review/strict] } }
-        - { repos: [team-b/*], filters: { labels: [urgent] } }
+        - { repos: [team-b/*], filter: { label_any: [urgent] } }
 ```
 
 Each instance keeps its own dedup, session and outcome state, so the two
@@ -407,7 +408,7 @@ packs:
   pr-review-team:
     use: conductor-packs/pr-review-team
     on:                                        # its triggers, by name
-      github.pull_request: { filters: { labels_not: [wip] } }   # ADD a filter
+      github.pull_request: { filter: { not_label_any: [wip] } }  # ADD a filter
       gitlab.merge_request: { enabled: false }                  # turn one off
     steps:                                     # its steps, by reference
       github.pull_request/sec: { guidance: "focus on authz + SSRF" }  # ADDITIVE

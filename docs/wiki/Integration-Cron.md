@@ -16,7 +16,7 @@ triggers:
       - { id: tidy, type: command, command: [make, tidy], workdir: ~/src/infra }
 ```
 
-Context: `schedule` (the name), `kind`, `title`. No filters, no verbs. One
+Context: `schedule` (the name), `kind`, `title`. No filter keys, no verbs. One
 trigger per schedule (a second trigger on the same schedule is a validation
 error — declare another schedule). Scheduled work usually wants
 `checkout: none` on agent steps, or an explicit `workdir:`.

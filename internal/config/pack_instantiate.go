@@ -410,7 +410,7 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 					return fmt.Errorf("pack %q: trigger %q instance %d: %w", ns, armName, idx, err)
 				}
 				if prev, dup := handles[h]; dup {
-					return fmt.Errorf("pack %q: trigger %q: duplicate trigger instance — entries %d and %d are identical, so they are one arming written twice (an instance's identity is its content: repos/filters/gate). Delete one, or make them differ.",
+					return fmt.Errorf("pack %q: trigger %q: duplicate trigger instance — entries %d and %d are identical, so they are one arming written twice (an instance's identity is its content: repos/filter/gate). Delete one, or make them differ.",
 						ns, armName, prev+1, idx+1)
 				}
 				handles[h] = idx
@@ -829,22 +829,29 @@ func mergePolicy(bundled *Policy, override map[string]any, triggerPolicy *Policy
 	return &out, nil
 }
 
+// applyTriggerArm arms one shipped pack trigger from the consumer's block.
+//
+// The three filter inputs — the arm's repo scope (the consent), the trigger's
+// own shipped `filter:`, and the arm's `filter:` override — all have to hold,
+// so they compose as an AND. There is no surface spelling for "AND of two
+// arbitrary filters" (an object ANDs keys, a list ORs), which is exactly why
+// Filter carries an internal marshal form; a single live operand is passed
+// through untouched so the common case keeps the author's own YAML.
 func applyTriggerArm(tr *TriggerSpec, arm TriggerArm) error {
 	tr.Enabled = arm.Enabled
-	if tr.Filters == nil {
-		tr.Filters = map[string]any{}
-	}
-	// Repos are the consent: they populate the trigger's repos filter.
+	var scope *Filter
 	if len(arm.Repos) > 0 {
 		repos := make([]any, len(arm.Repos))
 		for i, r := range arm.Repos {
 			repos[i] = r
 		}
-		tr.Filters["repos"] = repos
+		f, err := FilterFromValue(map[string]any{githubRepoKey: repos})
+		if err != nil {
+			return err
+		}
+		scope = f
 	}
-	if arm.Filters != nil {
-		tr.Filters = deepOverride(tr.Filters, arm.Filters)
-	}
+	tr.Filter = andFilters(scope, tr.Filter, arm.Filter)
 	if arm.Policy != nil {
 		pol, err := mergePolicy(nil, arm.Policy, tr.Policy)
 		if err != nil {
@@ -858,26 +865,103 @@ func applyTriggerArm(tr *TriggerSpec, arm TriggerArm) error {
 	return nil
 }
 
-func clearTriggerRepos(tr *TriggerSpec) {
-	if tr.Filters != nil {
-		delete(tr.Filters, "repos")
+// githubRepoKey is the routing match key a pack's repo consent lowers into.
+// Named here because arming has to write it before any connector is resolved;
+// the github integration owns its meaning (internal/integrations/github).
+const githubRepoKey = "repo"
+
+// andFilters ANDs the live operands, returning a lone survivor as-is (so its
+// authored YAML round-trips verbatim) and nil when none are set.
+//
+// An operand that is itself an And is SPLICED rather than nested. And is
+// associative, so this changes no meaning — but it keeps every conjunct of the
+// result a conjunct of its ROOT, which is what the structural reads (the repo
+// consent check, the routing hoist) look at. Nesting them would make an armed
+// trigger's repo scope invisible to the very check that enforces it.
+func andFilters(fs ...*Filter) *Filter {
+	live := make([]*Filter, 0, len(fs))
+	for _, f := range fs {
+		switch {
+		case f == nil:
+		case f.Op == FilterOpAnd:
+			live = append(live, f.Kids...)
+		default:
+			live = append(live, f)
+		}
 	}
+	switch len(live) {
+	case 0:
+		return nil
+	case 1:
+		return live[0]
+	}
+	return FilterAnd(live...)
 }
 
-// triggerScopesRepos reports whether tr carries a non-empty repos filter.
+// clearTriggerRepos strips a shipped pack trigger's own repo scope, so the
+// consent is only ever the consumer's: a pack that shipped `filter: {repo: …}`
+// pointing at the author's repos must not arrive pre-scoped to them.
+//
+// Only a TOP-LEVEL repo scope is stripped, matching where arming puts one. A
+// `repo` inside an OR arm is part of the pack's predicate, not a scope, and
+// removing it would change what the trigger means; the consent check below
+// then refuses to arm such a trigger until the consumer names repos of their
+// own, which is the fail-closed direction.
+func clearTriggerRepos(tr *TriggerSpec) {
+	f := tr.Filter
+	if f == nil {
+		return
+	}
+	if f.Op != FilterOpAnd {
+		if f.Op == FilterOpMatch && f.Key == githubRepoKey {
+			tr.Filter = nil
+		}
+		return
+	}
+	kept := make([]*Filter, 0, len(f.Kids))
+	for _, k := range f.Kids {
+		if k != nil && k.Op == FilterOpMatch && k.Key == githubRepoKey {
+			continue
+		}
+		kept = append(kept, k)
+	}
+	if len(kept) == len(f.Kids) {
+		return
+	}
+	if len(kept) == 0 {
+		tr.Filter = nil
+		return
+	}
+	tr.Filter = FilterAnd(kept...)
+}
+
+// triggerScopesRepos reports whether tr's filter names a top-level repo scope.
+// Top-level only: the consent question is "does this trigger hold for a
+// bounded set of repos no matter what else the event looks like", and only a
+// conjunct of the root answers yes.
 func triggerScopesRepos(tr *TriggerSpec) bool {
-	v, ok := tr.Filters["repos"]
-	if !ok {
-		return false
+	return len(TriggerRepoScope(tr.Filter)) > 0
+}
+
+// TriggerRepoScope returns the repo globs a trigger's filter scopes it to: the
+// values of every top-level `repo` match. Empty means unscoped — which the
+// github matcher reads as "every repo the connector can see", the reason pack
+// arming treats its absence as missing consent.
+func TriggerRepoScope(f *Filter) []string {
+	if f == nil {
+		return nil
 	}
-	switch r := v.(type) {
-	case []any:
-		return len(r) > 0
-	case []string:
-		return len(r) > 0
-	default:
-		return false
+	kids := f.Kids
+	if f.Op != FilterOpAnd {
+		kids = []*Filter{f}
 	}
+	var out []string
+	for _, k := range kids {
+		if k != nil && k.Op == FilterOpMatch && k.Key == githubRepoKey {
+			out = append(out, FilterValueStrings(k.Val)...)
+		}
+	}
+	return out
 }
 
 // sourceIsRepoScoped reports whether a trigger's `on:` names a github-type

@@ -53,36 +53,68 @@ func TestFilterDecodeShapes(t *testing.T) {
 	}{
 		{"string is an expr", `filter: "!is_draft"`, `expr("!is_draft")`},
 		{"list is an OR", `filter: ["a", "b"]`, `or(expr("a"),expr("b"))`},
-		{"map is an AND", `filter: {not_draft: true}`, `and(match(not_draft,true))`},
+		{"map is an AND", `filter: {draft: false}`, `and(match(draft,false))`},
 		{
 			"map keys AND in SORTED order, not source order",
-			`filter: {not_draft: true, authors: [dependabot], base_branches: [main]}`,
-			`and(match(authors,[dependabot]),match(base_branches,[main]),match(not_draft,true))`,
+			`filter: {draft: false, author: [dependabot], base_branch: [main]}`,
+			`and(match(author,[dependabot]),match(base_branch,[main]),match(draft,false))`,
 		},
 		{
 			"the same map written in a different order decodes identically",
-			`filter: {base_branches: [main], authors: [dependabot], not_draft: true}`,
-			`and(match(authors,[dependabot]),match(base_branches,[main]),match(not_draft,true))`,
+			`filter: {base_branch: [main], author: [dependabot], draft: false}`,
+			`and(match(author,[dependabot]),match(base_branch,[main]),match(draft,false))`,
 		},
 		{
 			"the reserved expr: key is an Expr AND-ed with its siblings",
-			`filter: {not_draft: true, expr: "!contains(title, 'Release')"}`,
-			`and(expr("!contains(title, 'Release')"),match(not_draft,true))`,
+			`filter: {draft: false, expr: "!contains(title, 'Release')"}`,
+			`and(match(draft,false),expr("!contains(title, 'Release')"))`,
 		},
 		{
 			"an array of objects is an OR of ANDs",
-			"filter:\n  - {authors: [dependabot], not_draft: true}\n  - {labels_any: [urgent]}",
-			`or(and(match(authors,[dependabot]),match(not_draft,true)),and(match(labels_any,[urgent])))`,
+			"filter:\n  - {author: [dependabot], draft: false}\n  - {label_any: [urgent]}",
+			`or(and(match(author,[dependabot]),match(draft,false)),and(match(label_any,[urgent])))`,
 		},
 		{
 			"a string leaf sits anywhere a leaf is allowed",
-			"filter:\n  - {labels_any: [urgent]}\n  - \"!is_draft\"",
-			`or(and(match(labels_any,[urgent])),expr("!is_draft"))`,
+			"filter:\n  - {label_any: [urgent]}\n  - \"!is_draft\"",
+			`or(and(match(label_any,[urgent])),expr("!is_draft"))`,
 		},
 		{
 			"an object may hold an array-valued nested filter position",
-			"filter:\n  not_draft: true\n  labels_any: [a, b]",
-			`and(match(labels_any,[a b]),match(not_draft,true))`,
+			"filter:\n  draft: false\n  label_any: [a, b]",
+			`and(match(draft,false),match(label_any,[a b]))`,
+		},
+
+		// --- the universal `not_` prefix (phase 2) ---
+		{
+			"not_<matchkey> is a Not around the BASE key",
+			`filter: {not_draft: true}`,
+			`and(not(match(draft,true)))`,
+		},
+		{
+			"not_expr negates a condition string",
+			`filter: {not_expr: "contains(title, 'Release')"}`,
+			`and(not(expr("contains(title, 'Release')")))`,
+		},
+		{
+			"not_repo is the routing exclusion",
+			`filter: {repo: [org/*], not_repo: [org/legacy]}`,
+			`and(not(match(repo,[org/legacy])),match(repo,[org/*]))`,
+		},
+		{
+			"a key and its not_ twin are distinct keys and AND together",
+			`filter: {comment_author: [alice, ci-bot], not_comment_author: [ci-bot]}`,
+			`and(match(comment_author,[alice ci-bot]),not(match(comment_author,[ci-bot])))`,
+		},
+		{
+			"not_ nests under an OR arm like any other key",
+			"filter:\n  - {not_branch: [staging]}\n  - \"!is_draft\"",
+			`or(and(not(match(branch,[staging]))),expr("!is_draft"))`,
+		},
+		{
+			"a bare not_ is not a prefix — it stays a match key",
+			`filter: {not_: true}`,
+			`and(match(not_,true))`,
 		},
 	}
 	for _, c := range cases {
@@ -204,7 +236,8 @@ func TestFilterEvalEmptyIsTrue(t *testing.T) {
 	}
 }
 
-// TestFilterEvalNot covers the node the legacy exclude lowering is built from.
+// TestFilterEvalNot covers the node both the `not_` prefix and the exclude
+// lowering are built from.
 func TestFilterEvalNot(t *testing.T) {
 	facts := map[string]any{"urgent": true}
 	cases := []struct {
@@ -248,7 +281,7 @@ func TestFilterEvalShortCircuits(t *testing.T) {
 }
 
 func TestFilterEvalNoMatcher(t *testing.T) {
-	if _, err := FilterMatch("labels_any", []string{"x"}).Eval(nil, nil); err == nil {
+	if _, err := FilterMatch("label_any", []string{"x"}).Eval(nil, nil); err == nil {
 		t.Fatal("a Match with no matcher should error, not evaluate false")
 	}
 }
@@ -259,9 +292,10 @@ func TestFilterEvalNoMatcher(t *testing.T) {
 func TestFilterYAMLRoundTrip(t *testing.T) {
 	docs := []string{
 		`filter: "!is_draft && !contains(title, 'Release')"`,
-		`filter: {not_draft: true, authors: [dependabot]}`,
-		"filter:\n  - {authors: [dependabot], not_draft: true}\n  - {labels_any: [urgent, security]}\n  - \"!is_draft\"",
+		`filter: {not_draft: true, author: [dependabot]}`,
+		"filter:\n  - {author: [dependabot], not_draft: true}\n  - {label_any: [urgent, security]}\n  - \"!is_draft\"",
 		`filter: {not_draft: true, expr: "!contains(title, 'Release')"}`,
+		`filter: {repo: [org/app], not_repo: [org/legacy], not_expr: "is_draft"}`,
 	}
 	for _, doc := range docs {
 		orig := mustDecodeFilter(t, doc)
@@ -276,20 +310,129 @@ func TestFilterYAMLRoundTrip(t *testing.T) {
 	}
 }
 
-// TestFilterMarshalProgrammaticNode: the legacy lowering's Not/And trees have
-// no surface syntax. Marshalling one is a bug, and must say so loudly rather
-// than emit null and silently drop the filter.
+// TestFilterMarshalProgrammaticNode: a filter COMPOSED in code — pack arming
+// ANDs an arm's repo scope with the shipped trigger's own filter — has no
+// surface spelling, because an object ANDs keys and a list ORs. It still has
+// to survive the internal round trips (cloneTriggerSpec, buildIntegration), so
+// it marshals through the x_filter_* internal form and reads back identically.
 func TestFilterMarshalProgrammaticNode(t *testing.T) {
-	built := FilterNot(FilterOr(FilterMatch("branches", []string{"release/*"})))
-	if _, err := yaml.Marshal(map[string]any{"filter": built}); err == nil {
-		t.Fatal("marshalling a programmatically built filter should error")
+	built := FilterAnd(
+		FilterNot(FilterOr(FilterMatch("branch", []string{"release/*"}))),
+		mustDecodeFilter(t, `filter: {repo: [org/app], expr: "!is_draft"}`),
+	)
+	out, err := yaml.Marshal(map[string]any{"filter": built})
+	if err != nil {
+		t.Fatalf("marshal a composed filter: %v", err)
+	}
+	again := mustDecodeFilter(t, string(out))
+	if got, want := again.String(), built.String(); got != want {
+		t.Errorf("composed filter round trip:\n got %s\nwant %s", got, want)
+	}
+	// And again, so the internal form is itself round-trippable.
+	out2, err := yaml.Marshal(map[string]any{"filter": again})
+	if err != nil {
+		t.Fatalf("re-marshal: %v", err)
+	}
+	if got := mustDecodeFilter(t, string(out2)).String(); got != built.String() {
+		t.Errorf("second round trip:\n got %s\nwant %s", got, built.String())
+	}
+}
+
+// TestFilterRoutingQueries covers the structural reads the github lowering
+// does: the repo union that becomes a trigger's scope, the top-level
+// exclusions, and the routing-only test that decides whether a filter has
+// stated a predicate at all.
+func TestFilterRoutingQueries(t *testing.T) {
+	cases := []struct {
+		name  string
+		doc   string
+		union string
+		excl  string
+		only  bool // OnlyKeys(repo): nothing but repo keys anywhere
+		flat  bool // FlatConjunctionOf(repo): and in a shape a pre-gate can carry
+	}{
+		{"top-level repo", `filter: {repo: [org/a, org/b]}`, "org/a,org/b", "", true, true},
+		{"scalar shorthand", `filter: {repo: org/a}`, "org/a", "", true, true},
+		{"not_repo excludes and is not a scope", `filter: {repo: [org/*], not_repo: [org/old]}`, "org/*", "org/old", true, true},
+		{
+			// A union is only an APPROXIMATION of an Or, so this is not flat:
+			// the filter has to stay and decide per event.
+			"an OR of repo sets unions for scope but is not flat",
+			"filter:\n  - {repo: [org/a]}\n  - {repo: [org/b]}",
+			"org/a,org/b", "", true, false,
+		},
+		{
+			"a nested not_repo is NOT hoisted — only a root conjunct is",
+			"filter:\n  - {not_repo: [org/old]}\n  - {repo: [org/a]}",
+			"org/a", "", true, false,
+		},
+		{"a predicate key is neither", `filter: {repo: [org/a], not_draft: true}`, "org/a", "", false, false},
+		{"an expr is neither", `filter: {repo: [org/a], expr: "!is_draft"}`, "org/a", "", false, false},
+		{"a bare expr has no routing at all", `filter: "!is_draft"`, "", "", false, false},
+		{"duplicate repo values dedupe, in first-seen order", "filter:\n  - {repo: [b, a]}\n  - {repo: [a, c]}", "b,a,c", "", true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := mustDecodeFilter(t, c.doc)
+			if got := strings.Join(f.MatchUnion("repo"), ","); got != c.union {
+				t.Errorf("MatchUnion = %q, want %q", got, c.union)
+			}
+			if got := strings.Join(f.TopLevelNegated("repo"), ","); got != c.excl {
+				t.Errorf("TopLevelNegated = %q, want %q", got, c.excl)
+			}
+			if got := f.OnlyKeys("repo"); got != c.only {
+				t.Errorf("OnlyKeys(repo) = %v, want %v", got, c.only)
+			}
+			if got := f.FlatConjunctionOf("repo"); got != c.flat {
+				t.Errorf("FlatConjunctionOf(repo) = %v, want %v", got, c.flat)
+			}
+		})
+	}
+	// A nil filter answers all of them without a special case at the call site.
+	var absent *Filter
+	if len(absent.MatchUnion("repo")) != 0 || len(absent.TopLevelNegated("repo")) != 0 ||
+		!absent.OnlyKeys("repo") || !absent.FlatConjunctionOf("repo") {
+		t.Error("a nil filter should read as no routing and no predicate")
+	}
+}
+
+// TestFilterFromValue: the synthesising producers (`conductor config migrate`,
+// pack arming) go through the same decoder as YAML, so they cannot invent a
+// shape the grammar would refuse — and what they build marshals back out.
+func TestFilterFromValue(t *testing.T) {
+	f, err := FilterFromValue(map[string]any{
+		"repo":      []any{"org/a"},
+		"not_draft": true,
+		"expr":      "!contains(title, 'Release')",
+	})
+	if err != nil {
+		t.Fatalf("FilterFromValue: %v", err)
+	}
+	if got := f.String(); !strings.Contains(got, "match(repo,[org/a])") ||
+		!strings.Contains(got, "not(match(draft,true))") ||
+		!strings.Contains(got, `expr("!contains(title, 'Release')")`) {
+		t.Fatalf("FilterFromValue lost a conjunct: %s", got)
+	}
+	out, err := yaml.Marshal(map[string]any{"filter": f})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if got := mustDecodeFilter(t, string(out)).String(); got != f.String() {
+		t.Errorf("round trip:\n got %s\nwant %s", got, f.String())
+	}
+	// A string and a list build too — the same three shapes YAML accepts.
+	if f, err := FilterFromValue("!is_draft"); err != nil || f.String() != `expr("!is_draft")` {
+		t.Errorf("string form: %v %v", f, err)
+	}
+	if f, err := FilterFromValue([]any{"a", "b"}); err != nil || f.String() != `or(expr("a"),expr("b"))` {
+		t.Errorf("list form: %v %v", f, err)
 	}
 }
 
 func TestFilterMatchKeysAndFactRefs(t *testing.T) {
-	f := mustDecodeFilter(t, "filter:\n  - {labels_any: [urgent], expr: \"!is_draft\"}\n  - {authors: [bot], expr: \"head_branch == 'main'\"}")
+	f := mustDecodeFilter(t, "filter:\n  - {label_any: [urgent], expr: \"!is_draft\"}\n  - {not_author: [bot], expr: \"head_branch == 'main'\"}")
 	gotKeys := strings.Join(f.MatchKeys(), ",")
-	if want := "authors,labels_any"; gotKeys != want {
+	if want := "author,label_any"; gotKeys != want {
 		t.Errorf("MatchKeys = %q, want %q", gotKeys, want)
 	}
 	gotRefs := strings.Join(f.FactRefs(), ",")

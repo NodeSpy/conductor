@@ -15,7 +15,7 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 | key | what | reference |
 |---|---|---|
 | `connectors:` | named service connections: `use:` (what implements it), credentials, `network:` (declared egress), `me:`, default `repos:`, default `options:`, `enabled:`, per-connector `policy:`, optional `isolation:` | [[Connectors]], [[Plugins]] |
-| `triggers:` | the workflows: `on` / `filters` / `steps` / `hooks` (+ `group`, `policy`, `gate`, `name`, `enabled`, `options`, `repo`, `shadow`) | [[Workflows]], [[Grouping]], [[Gates]] |
+| `triggers:` | the workflows: `on` / `filter` / `steps` / `hooks` (+ `group`, `policy`, `gate`, `name`, `enabled`, `options`, `repo`, `shadow`) | [[Workflows]], [[Grouping]], [[Gates]] |
 | `runtimes:` | where agents run: `use:` (what implements it), `agent` (with `use: acp`), `transport`, `bin`, `host`, `isolation`, `default` | [[Runtimes]], [[Isolation]] |
 | `plugin_trust:` | where remote plugins may come from: `allow:` source globs. The official plugin repo is trusted by default; anything else remote needs an entry | [[Plugins]] |
 | `steps:` | named, reusable STEP TEMPLATES (this replaced `agents:`): `name`, `model`, `runtime`, `thinking`, `mode`, `workspace`, `wait_timeout`, `archive_when_done`, `labels`, `guidance`, `host`, `memory`, `session`, `skill`, `isolation`, `outcome_feedback`, `outcome_key` | [[Steps]], [[Agent-Skill]], [[Isolation]], [[Outcomes]] |
@@ -40,8 +40,7 @@ boot — see [[Migration]] and `config.example.legacy.yaml`.
 ```yaml
 triggers:
   - on: <connector>.<event>       # what fires it — one source, a list, or `manual`
-    filter: …                     # whether it fires — one composable predicate
-    filters: { … }                # the older per-key block (event-schema keys, AND-ed)
+    filter: …                     # whether it fires, and where — the one filter key
     group: { key: …, window: 15s }# optional burst batching
     steps: [ … ]                  # agent | command | run: code | uses: verb | workflow: name | team:
     hooks: [ {at: start|done|fail, uses: <conn>.<verb>, options: {…}} ]
@@ -55,10 +54,12 @@ outputs (`{{.<id>.<field>}}`), vault reads (`{{ vault "house" "gh" }}` /
 `contains()`, `exists()`, `default()`, and `coalesce()`; templates may also
 call `default`/`coalesce` (`{{.sev | default "low"}}`). See [[Workflows]].
 
-### `filter:` — one composable predicate
+### `filter:` — the one filter key
 
-`filter:` states in one key whether a trigger fires. Its **YAML shape IS its
-boolean structure**:
+`filter:` states in one key whether a trigger fires and which repos it applies
+to. It is the **only** filter key: the older `filters:` block is gone from the
+schema, and a config still carrying it is a load error naming `filter:`. Its
+**YAML shape IS its boolean structure**:
 
 | shape | meaning |
 |---|---|
@@ -71,39 +72,69 @@ boolean structure**:
 filter: "!is_draft && !contains(title, 'Release')"
 
 # map — AND of structured keys
-filter: { not_draft: true, authors: [dependabot] }
+filter: { not_draft: true, author: [dependabot] }
 
 # list — OR of alternatives; nest freely (a list of maps is an OR of ANDs)
 filter:
-  - { authors: [dependabot], not_draft: true }   # a ready bot PR …
-  - { labels_any: [urgent, security] }           # … OR anything urgent …
+  - { author: [dependabot], not_draft: true }    # a ready bot PR …
+  - { label_any: [urgent, security] }            # … OR anything urgent …
   - "!is_draft && !contains(title, 'Release')"   # … OR the general case
 ```
 
-A map may carry the one reserved key **`expr:`** — a condition string AND-ed
-with its siblings, so a negation needs no separate `exclude:` concept:
+A map may carry the reserved key **`expr:`** — a condition string AND-ed with
+its siblings — and **any** key may take a `not_` prefix to negate it, so a
+denylist needs no separate `exclude:` concept:
 
 ```yaml
 filter: { not_draft: true, expr: "!contains(title, 'Release')" }
+filter: { not_branch: [staging, prod], not_label_any: [wip] }
+filter: { not_expr: "contains(title, 'Release')" }
+```
+
+`not_<key>` is the same key negated — nothing a connector declares separately —
+so `comment_author:` / `not_comment_author:` replace what used to be two
+unrelated keys (`from_users` / `ignore_users`). Writing both in one map is
+legal and they AND.
+
+**Repo scope lives in the filter too.** `repo:` / `not_repo:` route a github
+trigger to repositories (globs; default: the connector's `repos:`). They are
+legal on **every** github event, including those that publish no facts, and a
+filter that is nothing but `repo:`/`not_repo:` leaves the event's own default
+behaviour alone — scoping a trigger is not stating an opinion about the event:
+
+```yaml
+filter: { repo: ["org/*"], not_repo: [org/legacy] }        # routing only
+filter: { repo: ["org/*"], not_draft: true }               # routing + predicate
 ```
 
 **Facts are per connector.** github publishes `head_branch`, `base_branch`,
 `title`, `labels`, `is_draft`, `author` and, where the event has them,
 `merge_state`, `review_decision`, `non_author_approval`, `threads_resolved`,
 `sole_assignee`, `comment_author`, `comment_body`, `reviewer`, `author_is_bot`.
-`conductor validate` checks every fact and key a `filter:` names against the
-event that will evaluate it, so a typo is a load error rather than a filter
-that quietly never matches — `conductor schema gh` lists what each event
-publishes.
+Five github events publish predicate facts (`review_requested`,
+`changes_requested`, `new_comment`, `issue_matched`, `merge_ready`); the rest
+take routing only. `conductor validate` checks every fact and key a `filter:`
+names against the event that will evaluate it, so a typo is a load error rather
+than a filter that quietly never matches — `conductor schema gh` lists what each
+event publishes.
 
-**Why one key.** The older `filters:` block mixes three inconsistent
-combination rules for the same idea: `exclude:` is an OR denylist, `gates:` is
-an AND of requirements, and each match key bakes in its own rule. You could not
+The github match keys: `repo`, `branch`, `base_branch`, `title`, `label_any`,
+`label_all`, `require_label`, `author`, `comment_author`, `author_bot`,
+`draft`, `sole_assignee`, `merge_state`, `review_decision`,
+`non_author_approval`, `threads_resolved` — each also legal as `not_<key>`.
+A few former `filters:` keys are NOT predicates over the event and live in
+`options:` instead: `ignore_checks` (failing_checks), `reviewer`
+(review_requested), `assignee` (issue_matched), `include_prereleases`
+(release).
+
+**Why one key.** The retired `filters:` block mixed three inconsistent
+combination rules for the same idea: `exclude:` was an OR denylist, `gates:` an
+AND of requirements, and each match key baked in its own rule. You could not
 say "skip a review only when it is a release PR **and** on a release branch"
-without reverse-engineering which block ORs and which ANDs — and `exclude.title`
-is a case-insensitive **substring**, so `['Release ']` also skipped a PR titled
-"changelog: publish each **release** entry…". With `filter:` you write the
-sentence:
+without reverse-engineering which block ORed and which ANDed — and
+`exclude.title` is a case-insensitive **substring**, so `['Release ']` also
+skipped a PR titled "changelog: publish each **release** entry…". With
+`filter:` you write the sentence:
 
 ```yaml
 filter: "!is_draft && !( (head_branch == 'staging' || head_branch == 'prod') && contains(title, 'Release ') )"
@@ -112,19 +143,28 @@ filter: "!is_draft && !( (head_branch == 'staging' || head_branch == 'prod') && 
 Prefer `startswith(title, 'Release ')` to the substring `title:` match key when
 you mean a prefix.
 
-A trigger states its predicate **one way**: setting both `filter:` and a legacy
-`filters:` predicate key is a load error. The routing keys `repos:` /
-`exclude_repos:` are not predicates and stay legal alongside `filter:`.
-Existing `filters:` blocks keep working unchanged — they are lowered into the
-same evaluator.
+**Migrating from `filters:`.** `conductor config migrate` rewrites a legacy
+config; by hand, the mapping is `repos`→`repo`, `exclude_repos`→`not_repo`,
+`exclude: {branches, labels, title}`→`not_branch`/`not_label_any`/`not_title`,
+`gates: {not_draft: true}`→`not_draft: true`, `labels_any`→`label_any`,
+`labels_all`→`label_all`, `authors`→`author`, `from_users`→`comment_author`,
+`ignore_users`→`not_comment_author`, and `ignore_checks`/`reviewer`/`assignee`/
+`include_prereleases` into `options:`. A gate that was set to `false` (waived)
+is simply a conjunct you do not write.
 
-### Multiple sources, per-source filters, and manual runs
+One thing to know when migrating a `merge_ready` trigger: its five gates
+(`not_draft`, `merge_state`, `review_decision`, `non_author_approval`,
+`threads_resolved`) are enforced **by default**, and a `filter:` that states any
+predicate replaces that default. A routing-only `filter: {repo: […]}` leaves it
+in place; anything more, and spell the gates you still want.
+
+### Multiple sources, per-source filter, and manual runs
 
 `on:` takes one event **or a list** — a trigger fans in from several sources
 into the same `steps:`. Each list item is a bare `conn.event`, or a one-key
 map `conn.event: { … }` whose value is a per-source block scoped to events
-from that source. The block takes `filter:`, `filters:`, `policy:`, and `hooks:` —
-nothing else (`steps:` stay trigger-level, shared):
+from that source. The block takes `filter:`, `policy:`, and `hooks:` — nothing
+else (`steps:` stay trigger-level, shared):
 
 ```yaml
 connectors:
@@ -136,7 +176,7 @@ triggers:
       - timer.nightly                # a cron schedule — no filter
       - manual                       # `conductor run clone-invoice`
       - gh.issue_matched:              # a per-source block
-          filters: { labels_any: [billing] }
+          filter: { label_any: [billing] }
           policy:  { reply_to_bots: off }
           hooks:
             - { at: start, uses: gh.react, options: { emoji: eyes } }
@@ -145,15 +185,12 @@ triggers:
           with: { contact_id: '{{ .issue.number | default .inputs.contact_id }}' } }
 ```
 
-- **Per-source `filters:`** validate against **that** source's schema only —
-  no lowest-common-denominator restriction across sources. An optional
-  top-level `filters:` is a shared base applied to every listed source, so
-  each of its keys must be one every source accepts (the intersection); a
-  per-source key **overrides** the base for that source.
-- **Per-source `filter:`** validates against that source's facts, like
-  `filters:` — but it **replaces** the trigger's `filter:` outright rather
-  than merging: the shape is the boolean structure, so there is nothing
-  coherent to merge key-by-key.
+- **Per-source `filter:`** validates against **that** source's facts only —
+  no lowest-common-denominator restriction across sources. It **replaces** the
+  trigger's shared `filter:` outright rather than merging: the shape is the
+  boolean structure, so there is nothing coherent to merge key-by-key. An
+  optional top-level `filter:` is a shared base applied to every listed source,
+  so every key it names must be one every source accepts (the intersection).
 - **Per-source `policy:`** is the innermost policy scope: per-source →
   trigger → connector → global, most specific wins.
 - **Per-source `hooks:`** append after the trigger's shared `hooks:` (shared
@@ -175,15 +212,15 @@ triggers:
 
   CLI values land in the trigger context — under `{{.inputs.*}}` and as
   top-level keys — and flow to workflow `inputs:` via `with:`. `--input k=v`
-  entries are strings and overlay `--json`. `manual` accepts no `filters:`.
+  entries are strings and overlay `--json`. `manual` accepts no `filter:`.
 - **`name:`** is optional for ordinary triggers, **required and unique** for
   any trigger reachable by `conductor run` (a load error otherwise).
 
 ### Sharing config across triggers (`extends:` / `abstract:`)
 
-Near-identical triggers (the same `steps:`/`filters:` repeated per repo or org) can share a base.
-A trigger `extends: <name>` inherits another trigger's config — `filters:`/`options:` deep-merge,
-`steps:`/`hooks:` replace when set, `policy:`/`gate:` fill if unset. A base marked
+Near-identical triggers (the same `steps:`/`filter:` repeated per repo or org) can share a base.
+A trigger `extends: <name>` inherits another trigger's config — `options:` deep-merge,
+`filter:`/`steps:`/`hooks:` replace when set, `policy:`/`gate:` fill if unset. A base marked
 `abstract: true` never fires and is stripped after resolution, so it needs no `on:`:
 
 ```yaml
@@ -192,8 +229,8 @@ triggers:
     abstract: true
     steps:
       - { id: r, type: agent, agent: reviewer, prompt: "Review {{.repo}}#{{.pr}}." }
-  - { on: gh.review_requested, extends: review-base, filters: { repos: [org/api] } }
-  - { on: gh.review_requested, extends: review-base, filters: { repos: [org/web] } }
+  - { on: gh.review_requested, extends: review-base, filter: { repo: [org/api] } }
+  - { on: gh.review_requested, extends: review-base, filter: { repo: [org/web] } }
 ```
 
 Full semantics (chains, cycles, the merge rules, and layered guidance) are in [[Reuse]].
@@ -204,7 +241,7 @@ The github comment/review events (`new_comment`, `changes_requested`)
 publish `author` and `author_is_bot` in their context — true when the
 webhook's actor account type is `Bot` or the login ends in `[bot]`
 (dependabot[bot], cursor[bot]). The matching `author_bot` filter gates a
-trigger on it: `filters: { author_bot: false }` fires only for humans,
+trigger on it: `filter: { author_bot: false }` fires only for humans,
 `true` only for bots, absent for either.
 
 `policy.reply_to_bots` (github connector `policy:`, trigger-overridable,
@@ -561,7 +598,7 @@ backup.
   misplaced `approve:`) fails the load naming the key and line, instead of
   silently not applying. Type-specific connection/store bodies keep their
   own builder-side validation.
-- `conductor validate` (and boot) resolve every `on:` kind, `filters:` key,
+- `conductor validate` (and boot) resolve every `on:` kind, `filter:` key,
   `uses:` verb, option map, workflow input/output, and `{{…}}`/`if:`
   reference against the connectors' published schemas AND the scope at that
   position. A config that validates cannot reference a value that will not

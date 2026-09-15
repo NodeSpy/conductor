@@ -286,15 +286,16 @@ func sameSteps(a, b []config.Step) bool {
 	return bytes.Equal(ay, by)
 }
 
-// FilterMatch evaluates a trigger's flow-side filters (connector types whose
-// declaration provides a Filter func) against a fired event's context. Types
-// whose lowered integration already evaluated filters return true.
+// FilterMatch evaluates a trigger's flow-side `filter:` (connector types whose
+// declaration provides a Filter func) against a fired event's context. The
+// grammar evaluates the boolean structure and the connector answers one match
+// key at a time. Types whose lowered integration already filtered return true.
 func (r *Runner) FilterMatch(t core.Trigger, spec config.TriggerSpec) (bool, error) {
 	in, ok := r.Conns.Get(spec.Connector())
-	if !ok || in.Decl.Filter == nil || len(spec.Filters) == 0 {
+	if !ok || in.Decl.Filter == nil || spec.Filter == nil {
 		return true, nil
 	}
-	return in.Decl.Filter(spec.Event(), spec.Filters, t.Context)
+	return spec.Filter.Eval(t.Context, connector.GenericFilterMatcher(in.Decl, spec.Event()))
 }
 
 // Batch is one grouped firing: the resolved group key and the burst of events

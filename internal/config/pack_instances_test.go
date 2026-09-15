@@ -52,7 +52,7 @@ func TestArrayTriggerYieldsNDistinctInstances(t *testing.T) {
     triggers:
       deploy:
         - { enabled: true, repos: [team-a/*] }
-        - { enabled: true, repos: [team-b/*], filters: { labels: [urgent] } }
+        - { enabled: true, repos: [team-b/*], filter: { label_any: [urgent] } }
 `)
 	if len(got) != 2 {
 		t.Fatalf("an array of 2 arms must yield 2 instances, got %d", len(got))
@@ -80,9 +80,9 @@ func TestArrayTriggerYieldsNDistinctInstances(t *testing.T) {
 	if r := repoList(got[1]); len(r) != 1 || r[0] != "team-b/*" {
 		t.Errorf("instance 1 repos: %v", r)
 	}
-	if _, ok := got[0].Filters["labels"]; ok {
-		t.Error("instance 0 must not see instance 1's filters — a shallow copy " +
-			"would have them sharing the map")
+	if hasMatchKey(got[0].Filter, "label_any") {
+		t.Error("instance 0 must not see instance 1's filter — a shallow copy " +
+			"would have them sharing the node")
 	}
 }
 
@@ -160,7 +160,7 @@ func TestInstancesComposeWithArmAll(t *testing.T) {
       "*": { enabled: true, repos: [org/default] }
       deploy:
         - { repos: [team-a/*] }
-        - { filters: { labels: [urgent] } }
+        - { filter: { label_any: [urgent] } }
 `)
 	if len(got) != 2 {
 		t.Fatalf("want 2 instances, got %d", len(got))
@@ -209,13 +209,13 @@ func TestReorderingTheInstanceArrayKeepsEachKeyStable(t *testing.T) {
     triggers:
       deploy:
         - { enabled: true, repos: [team-a/*] }
-        - { enabled: true, repos: [team-b/*], filters: { labels: [urgent] } }
+        - { enabled: true, repos: [team-b/*], filter: { label_any: [urgent] } }
 `)
 	// The same two armings, written in the other order.
 	second := instancesOf(t, `
     triggers:
       deploy:
-        - { enabled: true, repos: [team-b/*], filters: { labels: [urgent] } }
+        - { enabled: true, repos: [team-b/*], filter: { label_any: [urgent] } }
         - { enabled: true, repos: [team-a/*] }
 `)
 	keyOf := func(trs []TriggerSpec, repo string) string {
@@ -314,7 +314,7 @@ packs:
   review:
     source: ./src/review
     on:
-      "`+attempt+`": { filters: { labels: [x] } }
+      "`+attempt+`": { filter: { label_any: [x] } }
     triggers:
       deploy:
         - { enabled: true, repos: [team-a/*] }
@@ -328,16 +328,16 @@ packs:
 	// The trigger's own name still overlays ALL of its instances.
 	cfg := instancesOf(t, `
     on:
-      deploy: { filters: { labels: [everywhere] } }
+      deploy: { filter: { label_any: [everywhere] } }
     triggers:
       deploy:
         - { enabled: true, repos: [team-a/*] }
         - { enabled: true, repos: [team-b/*] }
 `)
 	for i, tr := range cfg {
-		l, _ := tr.Filters["labels"].([]any)
+		l := tr.Filter.MatchUnion("label_any")
 		if len(l) != 1 || l[0] != "everywhere" {
-			t.Errorf("instance %d did not receive the trigger-wide overlay: %v", i, tr.Filters)
+			t.Errorf("instance %d did not receive the trigger-wide overlay: %v", i, tr.Filter)
 		}
 	}
 }

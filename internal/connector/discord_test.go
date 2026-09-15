@@ -214,7 +214,7 @@ func TestDiscordSourceNoTriggersReturnsNil(t *testing.T) {
 
 func TestDiscordSourceWithTriggersErrors(t *testing.T) {
 	impl := newDiscordTestImpl(&fakeDiscordPoster{})
-	trig := CompiledTrigger{Index: 0, Spec: mkTriggerSpec("discord.whatever", "", nil)}
+	trig := CompiledTrigger{Index: 0, Spec: mkTriggerSpec(t, "discord.whatever", "", "")}
 	_, err := impl.Source([]CompiledTrigger{trig})
 	if err == nil || !strings.Contains(err.Error(), "has no source events") {
 		t.Fatalf("got %v", err)

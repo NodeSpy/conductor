@@ -36,12 +36,16 @@ func slackTransform(name string, ref config.IntegrationRef, notes *[]string) (ma
 	var triggers []config.TriggerSpec
 	for ri, rule := range cfg.Rules {
 		where := fmt.Sprintf("slack[%s] triggers[%d]", name, ri)
-		filters := map[string]any{}
+		fm := map[string]any{}
 		if rule.Reaction != "" {
-			filters["reaction"] = rule.Reaction
+			fm["reaction"] = rule.Reaction
 		}
 		if rule.Command != "" {
-			filters["command"] = rule.Command
+			fm["command"] = rule.Command
+		}
+		filter, err := filterOf(fm)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", where, err)
 		}
 		hooks := slackFeedbackHooks(name, rule, where)
 		if len(rule.Actions) <= 1 {
@@ -56,7 +60,7 @@ func slackTransform(name string, ref config.IntegrationRef, notes *[]string) (ma
 				triggers = append(triggers, config.TriggerSpec{
 					On: name + "." + rule.On, Name: act.Name,
 					Enabled: act.Enabled, Shadow: act.Shadow,
-					Filters: copyMap(filters), Steps: steps, Hooks: hooks,
+					Filter: filter, Steps: steps, Hooks: hooks,
 				})
 			}
 			continue
@@ -91,8 +95,8 @@ func slackTransform(name string, ref config.IntegrationRef, notes *[]string) (ma
 		}
 		*notes = append(*notes, fmt.Sprintf("%s: %d variants merged into parallel branches — on_done/on_fail fire once after all complete, matching legacy aggregation", where, len(branches)))
 		triggers = append(triggers, config.TriggerSpec{
-			On:      name + "." + rule.On,
-			Filters: copyMap(filters),
+			On:     name + "." + rule.On,
+			Filter: filter,
 			Steps: []config.Step{{
 				ID:       "variants",
 				Parallel: &config.ParallelSpec{Branches: branches},
@@ -319,9 +323,13 @@ func rssTransform(name string, ref config.IntegrationRef, notes *[]string) (map[
 			fd["interval"] = f.Interval.String()
 		}
 		feeds[f.Name] = fd
-		filters := map[string]any{}
+		fm := map[string]any{}
 		if f.Match != "" {
-			filters["match"] = f.Match
+			fm["match"] = f.Match
+		}
+		filter, err := filterOf(fm)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", where, err)
 		}
 		for vi, act := range f.Actions {
 			awhere := fmt.Sprintf("%s actions[%d]", where, vi)
@@ -333,12 +341,22 @@ func rssTransform(name string, ref config.IntegrationRef, notes *[]string) (map[
 			triggers = append(triggers, config.TriggerSpec{
 				On: name + "." + f.Name, Name: act.Name,
 				Enabled: act.Enabled, Shadow: act.Shadow,
-				Filters: copyMap(filters), Repo: f.Repo, Steps: steps,
+				Filter: filter, Repo: f.Repo, Steps: steps,
 			})
 		}
 	}
 	conn := map[string]any{"type": "rss", "feeds": feeds}
 	return conn, triggers, nil
+}
+
+// filterOf builds a trigger's `filter:` from the match keys a legacy source
+// rule carried, or nil when it carried none (an absent filter fires for every
+// event, which is what an empty legacy filter block meant).
+func filterOf(m map[string]any) (*config.Filter, error) {
+	if len(m) == 0 {
+		return nil, nil
+	}
+	return config.FilterFromValue(m)
 }
 
 func copyMap(m map[string]any) map[string]any {

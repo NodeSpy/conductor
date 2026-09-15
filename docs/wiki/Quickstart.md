@@ -47,7 +47,7 @@ dispatched manual trigger "hello"
 
 The daemon log shows the run; the schedule fires the same steps every hour.
 `conductor validate` is the contract: it resolves every `on:` kind,
-`filters:` key, `uses:` verb, option, and `{{…}}` reference against the
+`filter:` key, `uses:` verb, option, and `{{…}}` reference against the
 connectors' published schemas **before** anything runs — a typo fails here,
 not at 3am.
 

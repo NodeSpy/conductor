@@ -420,7 +420,7 @@ func (g *Integration) sweepMissedComments(ctx context.Context, instID int64, own
 				// lowering here omits author_bot (see lowerComment). A
 				// hand-written `filter:` may still read author_is_bot; it
 				// just sees the weaker signal on this path.
-				return g.filterPasses(act, "sweep new_comment "+repo,
+				return g.filterPasses(act, "sweep new_comment", repo,
 					commentFilterFacts(c.User.Login, c.Body, isBotLogin(c.User.Login)),
 					lowerComment(act, false))
 			})
@@ -489,7 +489,7 @@ func (g *Integration) sweepReviewRequested(repo string, pr prListItem, st *sweep
 		fmt.Sprintf("sweep: review requested on %s#%d", repo, pr.Number),
 		"reviewreq@"+pr.Head.SHA, map[string]any{"labels": labels}, func(act config.Action) bool {
 			return g.prReviewerMatches(g.reviewerFor(repo, act), pr) &&
-				g.filterPasses(act, "sweep review_requested "+repo, prFilterFacts(
+				g.filterPasses(act, "sweep review_requested", repo, prFilterFacts(
 					pr.Head.Ref, pr.Base.Ref, pr.Title, pr.User.Login, labels, pr.Draft),
 					lowerReviewRequested(act))
 		})

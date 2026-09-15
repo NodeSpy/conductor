@@ -53,7 +53,7 @@ into agent work. You describe, in YAML:
   (`on:`) and callable **verbs** (`uses:`). Built in: GitHub, Slack, Sentry,
   PagerDuty, RSS, cron, generic webhook, durable stores, and secret vaults —
   plus generic **REST** and **GraphQL** connectors for any other API.
-- **Triggers** — `on:` a source, optional `filters:`, then `steps:` and lifecycle
+- **Triggers** — `on:` a source, an optional `filter:`, then `steps:` and lifecycle
   `hooks:`. Steps run **agents**, host or SSH **commands**, inline **code**
   (js / lua / risor / go, sandboxed), or any connector verb — mixing services in
   one flow.
@@ -87,7 +87,7 @@ like) can call conductor's authenticated `/invoke` API for the agent work it doe
 ## What it can do
 
 **The model**
-- Uniform trigger grammar — `on:` sources + `uses:` verbs, with `filters:`,
+- Uniform trigger grammar — `on:` sources + `uses:` verbs, with one `filter:`,
   `steps:`, and `hooks:` — [Connectors](https://github.com/NodeSpy/conductor/wiki/Connectors) · [Verbs](https://github.com/NodeSpy/conductor/wiki/Verbs)
 - Control flow (`if` / `for_each` / `parallel` / `retry` / `timeout`) and event
   grouping / fan-in — [Workflows](https://github.com/NodeSpy/conductor/wiki/Workflows) · [Grouping](https://github.com/NodeSpy/conductor/wiki/Grouping)

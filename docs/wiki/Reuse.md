@@ -1,7 +1,7 @@
 # Configuration reuse: `<<:`, `extends:`, and layered guidance
 
 Real configs repeat themselves: steps share a model and a tone, and near-identical triggers repeat
-the same `repos:`/`steps:`/`filters:` per team.
+the same `filter:`/`steps:` per team.
 
 A step has **two** ways to reuse a chunk of config, and they differ in one thing — *when* they
 happen:
@@ -148,8 +148,9 @@ runtimes:
 | --- | --- |
 | scalars (`provider`, `model`, `host`, …) | child wins when set; otherwise inherited |
 | pointers / blocks (`isolation`, `session`, `policy`, …) | child wins when present; otherwise inherited |
-| maps (`labels`, `env`, `inputs`, trigger `filters`/`options`) | deep-merged per key — child keys override, the parent's other keys are kept |
+| maps (`labels`, `env`, `inputs`, trigger `options`) | deep-merged per key — child keys override, the parent's other keys are kept |
 | slices (`command`, trigger `steps`/`hooks`) | child **replaces** when it sets a non-empty value; otherwise inherited |
+| trigger `filter` | child **replaces** when set; otherwise inherited. Its shape is its boolean structure, so there is no key-wise merge to do |
 | `guidance` | **stacks** (parent parts, then child parts) — see below |
 
 Chains are allowed (`c → b → a`, resolved root→leaf). A **cycle** or an **unknown `extends:`
@@ -164,7 +165,7 @@ strings, so this rarely bites.
 
 ## `extends:` on triggers, and `abstract:` bases
 
-Triggers reference a parent by its `name:`. Filters and options deep-merge; steps and hooks replace;
+Triggers reference a parent by its `name:`. Options deep-merge; `filter`, steps and hooks replace;
 `policy`/`gate`/`group` fill if unset. A base that exists only to be extended is marked
 `abstract: true`: it never fires and is stripped after resolution, so it needs no `on:`.
 
@@ -172,22 +173,21 @@ Triggers reference a parent by its `name:`. Filters and options deep-merge; step
 triggers:
   - name: review-base            # a base, not a live trigger
     abstract: true
-    filters:
-      gates: { not_draft: true }
+    filter: { not_draft: true }
     steps:
       - { id: r, type: agent, agent: reviewer, prompt: "Review {{.repo}}#{{.pr}}." }
 
   - on: gh.review_requested
     extends: review-base
-    filters: { repos: [org/api] }   # merges with the base's gates
+    filter: { repo: [org/api], not_draft: true }   # replaces the base's — restate what you keep
 
   - on: gh.review_requested
-    extends: review-base
-    filters: { repos: [org/web] }
+    extends: review-base                           # no filter of its own: inherits the base's
 ```
 
-Both children inherit the base's `steps` and `not_draft` gate; each adds its own `repos`. The base is
-gone from the running config. Trigger `extends:` resolves **before** the multi-source `on:` list
+Both children inherit the base's `steps`. A child that writes its own `filter:` owns it whole — the
+shape of a filter is its boolean structure, so a key-wise merge would have no defined meaning; a
+child that writes none takes the base's as-is. The base is gone from the running config. Trigger `extends:` resolves **before** the multi-source `on:` list
 expansion, so a child may also inherit a base's `on:`. An `abstract: true` base cannot be
 `on: manual` (it is never a `conductor run` target).
 

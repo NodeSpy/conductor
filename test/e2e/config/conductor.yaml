@@ -75,8 +75,8 @@ runtimes:
     bin: /usr/local/bin/fakepaseo
 triggers:
   - "on": github.changes_requested
-    filters:
-      repos:
+    filter:
+      repo:
         - acme/*
         - grpe/*
     steps:
@@ -84,19 +84,20 @@ triggers:
         type: agent
         prompt: Address the requested changes on {{.repo}}#{{.pr}}, commit and push.
   - "on": github.failing_checks
-    filters:
-      ignore_checks:
-        - title-validation
-      repos:
+    filter:
+      repo:
         - acme/*
         - grpe/*
+    options:
+      ignore_checks:
+        - title-validation
     steps:
       - !!merge <<: *fixer
         type: agent
         prompt: Fix the failing checks on {{.repo}}#{{.pr}}, commit and push.
   - "on": github.merge_conflict
-    filters:
-      repos:
+    filter:
+      repo:
         - acme/*
         - grpe/*
     steps:
@@ -104,8 +105,8 @@ triggers:
         type: agent
         prompt: Resolve the merge conflict on {{.repo}}#{{.pr}} against {{.base}}, commit and push.
   - "on": github.new_comment
-    filters:
-      repos:
+    filter:
+      repo:
         - acme/*
         - grpe/*
     steps:
@@ -113,8 +114,8 @@ triggers:
         type: agent
         prompt: Address the new comment on {{.repo}}#{{.pr}}, commit and push.
   - "on": github.review_requested
-    filters:
-      repos:
+    filter:
+      repo:
         - acme/*
         - grpe/*
     steps:
@@ -125,46 +126,47 @@ triggers:
         background: true
         handoff: default
   - "on": github.changes_requested
-    filters:
-      exclude_repos:
+    filter:
+      not_repo:
         - acme/*
         - grpe/*
-      repos:
+      repo:
         - grpd/*
     steps:
       - !!merge <<: *fixer
         type: agent
         prompt: Address the requested changes on {{.repo}}#{{.pr}}, commit and push.
   - "on": github.failing_checks
-    filters:
-      exclude_repos:
+    filter:
+      not_repo:
         - acme/*
         - grpe/*
+      repo:
+        - grpd/*
+    options:
       ignore_checks:
         - title-validation
-      repos:
-        - grpd/*
     steps:
       - !!merge <<: *fixer
         type: agent
         prompt: Fix the failing checks on {{.repo}}#{{.pr}}, commit and push.
   - "on": github.merge_conflict
-    filters:
-      exclude_repos:
+    filter:
+      not_repo:
         - acme/*
         - grpe/*
-      repos:
+      repo:
         - grpd/*
     steps:
       - !!merge <<: *fixer
         type: agent
         prompt: Resolve the merge conflict on {{.repo}}#{{.pr}} against {{.base}}, commit and push.
   - "on": github.new_comment
-    filters:
-      exclude_repos:
+    filter:
+      not_repo:
         - acme/*
         - grpe/*
-      repos:
+      repo:
         - grpd/*
     steps:
       - type: agent
@@ -174,11 +176,11 @@ triggers:
         wait_timeout: 5m
         archive_when_done: false
   - "on": github.review_requested
-    filters:
-      exclude_repos:
+    filter:
+      not_repo:
         - acme/*
         - grpe/*
-      repos:
+      repo:
         - grpd/*
     steps:
       - !!merge <<: *interactive

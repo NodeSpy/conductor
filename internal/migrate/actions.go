@@ -4,10 +4,11 @@ import (
 	"fmt"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	gh "github.com/NodeSpy/conductor/internal/integrations/github"
 )
 
 // actionSteps maps one legacy action's WORK — its steps list, or the action
-// itself — onto new-schema steps. Trigger-level concerns (filters, options,
+// itself — onto new-schema steps. Trigger-level concerns (filter, options,
 // name, enabled, shadow) are extracted by the caller from the top action; a
 // filter field set on a nested step was inert in the legacy engine and is
 // dropped with a summary note, never silently.
@@ -103,65 +104,113 @@ func noteInertStepFilters(where string, a config.Action, notes *[]string) {
 	}
 }
 
-// actionFilters extracts a top-level github action's filter fields into the
-// trigger's filters map.
-func actionFilters(a config.Action) map[string]any {
+// actionFilter rewrites a top-level github action's filter fields as the one
+// unified `filter:` object (docs/design/unified-filter-phase2.md): renamed
+// match keys, `exclude:` arms as `not_…` denials, and the `gates:` map as
+// explicit conjuncts.
+//
+// Two translations are worth spelling out.
+//
+// A legacy gate set to FALSE waived it. There is nothing to write for that
+// now: a filter REPLACES the event's intrinsic default, so a waived gate is
+// simply a conjunct the filter does not carry.
+//
+// merge_ready's gates are the mirror image — absent meant ENFORCED — so every
+// on-gate is emitted explicitly whenever that kind gets a filter at all.
+// Leaving them implicit would be a silent relaxation of the one event whose
+// default is not "fire".
+func actionFilter(kind string, a config.Action) map[string]any {
 	f := map[string]any{}
-	if len(a.Reviewer.Logins) > 0 || len(a.Reviewer.Teams) > 0 {
-		f["reviewer"] = actorsMap(a.Reviewer)
-	}
-	if len(a.Assignee.Logins) > 0 || len(a.Assignee.Teams) > 0 {
-		f["assignee"] = actorsMap(a.Assignee)
-	}
 	if a.SoleAssignee {
 		f["sole_assignee"] = true
 	}
 	if len(a.LabelsAny) > 0 {
-		f["labels_any"] = strSlice(a.LabelsAny)
+		f["label_any"] = strSlice(a.LabelsAny)
 	}
 	if len(a.LabelsAll) > 0 {
-		f["labels_all"] = strSlice(a.LabelsAll)
+		f["label_all"] = strSlice(a.LabelsAll)
 	}
 	if len(a.Authors) > 0 {
-		f["authors"] = strSlice(a.Authors)
+		f["author"] = strSlice(a.Authors)
 	}
 	if len(a.FromUsers) > 0 {
-		f["from_users"] = strSlice(a.FromUsers)
+		f["comment_author"] = strSlice(a.FromUsers)
 	}
 	if len(a.IgnoreUsers) > 0 {
-		f["ignore_users"] = strSlice(a.IgnoreUsers)
-	}
-	if len(a.IgnoreChecks) > 0 {
-		f["ignore_checks"] = strSlice(a.IgnoreChecks)
+		f["not_comment_author"] = strSlice(a.IgnoreUsers)
 	}
 	if a.RequireLabel != "" {
 		f["require_label"] = a.RequireLabel
 	}
-	if a.IncludePrereleases {
-		f["include_prereleases"] = true
+	if kind == "merge_ready" {
+		for _, k := range gh.MergeGateKeys() {
+			if !gh.MergeGateOn(a.Gates, k) {
+				continue
+			}
+			if k == "not_draft" {
+				f["not_draft"] = true
+			} else {
+				f[k] = true
+			}
+		}
+	} else if gateTruthy(a.Gates["not_draft"]) {
+		f["not_draft"] = true
 	}
-	if len(a.Gates) > 0 {
-		f["gates"] = a.Gates
+	if len(a.Exclude.Branches) > 0 {
+		f["not_branch"] = strSlice(a.Exclude.Branches)
 	}
-	if !a.Exclude.Empty() {
-		ex := map[string]any{}
-		if len(a.Exclude.Branches) > 0 {
-			ex["branches"] = strSlice(a.Exclude.Branches)
-		}
-		if len(a.Exclude.Labels) > 0 {
-			ex["labels"] = strSlice(a.Exclude.Labels)
-		}
-		if len(a.Exclude.Title) > 0 {
-			ex["title"] = strSlice(a.Exclude.Title)
-		}
-		f["exclude"] = ex
+	if len(a.Exclude.Labels) > 0 {
+		f["not_label_any"] = strSlice(a.Exclude.Labels)
+	}
+	if len(a.Exclude.Title) > 0 {
+		f["not_title"] = strSlice(a.Exclude.Title)
 	}
 	return f
 }
 
-// actionOptions extracts a top-level github action's source-side options.
+// gateTruthy mirrors the legacy opt-in gate reading (absent or an explicit
+// false/no/"" is off).
+func gateTruthy(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		return x != "" && x != "false" && x != "no"
+	default:
+		return false
+	}
+}
+
+// noteDroppedGates records `gates:` keys with no unified spelling. The
+// GraphQL-backed issue gates are the only ones: they read an enrichment query
+// rather than a published fact, so they are not expressible as a filter key
+// and no connectors-model config could set them.
+func noteDroppedGates(where string, a config.Action, notes *[]string) {
+	for _, k := range []string{"no_branch", "project"} {
+		if _, ok := a.Gates[k]; ok {
+			*notes = append(*notes, fmt.Sprintf("%s: gates.%s has no unified `filter:` spelling (it reads a GraphQL enrichment, not a published fact) — dropped", where, k))
+		}
+	}
+}
+
+// actionOptions extracts a top-level github action's source-side options —
+// including the four former `filters:` keys that were never predicates over
+// the event: the reviewer/assignee identity gates, per-check suppression, and
+// the release prerelease switch.
 func actionOptions(a config.Action) map[string]any {
 	o := map[string]any{}
+	if len(a.Reviewer.Logins) > 0 || len(a.Reviewer.Teams) > 0 {
+		o["reviewer"] = actorsMap(a.Reviewer)
+	}
+	if len(a.Assignee.Logins) > 0 || len(a.Assignee.Teams) > 0 {
+		o["assignee"] = actorsMap(a.Assignee)
+	}
+	if len(a.IgnoreChecks) > 0 {
+		o["ignore_checks"] = strSlice(a.IgnoreChecks)
+	}
+	if a.IncludePrereleases {
+		o["include_prereleases"] = true
+	}
 	if a.MaxAttemptsPerHead != 0 {
 		o["max_attempts_per_head"] = a.MaxAttemptsPerHead
 	}

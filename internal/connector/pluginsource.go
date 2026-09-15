@@ -90,7 +90,15 @@ func (p *pluginSourceIntegration) Start(ctx context.Context, emit core.EmitFunc)
 			if t.Spec.On != on {
 				continue
 			}
-			if !filterMatch(t.Spec.Filters, ev.Context) {
+			// A plugin source's `filter:` runs here rather than in the flow
+			// runner: the runner's pass is keyed on the connector TYPE's
+			// declaration, and a plugin's event keys come from its own
+			// manifest. filterMatch is the match-key body either way, so the
+			// two paths agree on what a key means.
+			if keep, err := t.Spec.Filter.Eval(ev.Context, pluginFilterMatch); err != nil {
+				p.log("plugin source %s: trigger %q: filter not evaluated (%v) — not firing", p.instance, t.Spec.Name, err)
+				continue
+			} else if !keep {
 				continue
 			}
 			emit(ctx, core.Trigger{
@@ -113,6 +121,13 @@ func (p *pluginSourceIntegration) Start(ctx context.Context, emit core.EmitFunc)
 			})
 		}
 	})
+}
+
+// pluginFilterMatch evaluates one match key of a plugin source's `filter:`.
+// The grammar handles the boolean structure; this is just filterMatch's
+// single-key case, so an AND of keys means exactly what the whole map used to.
+func pluginFilterMatch(key string, val any, ctx map[string]any) (bool, error) {
+	return filterMatch(map[string]any{key: val}, ctx), nil
 }
 
 // filterMatch is the generic, connector-agnostic filter evaluator for plugin

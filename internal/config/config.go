@@ -803,14 +803,22 @@ type Action struct {
 	// agent-type fields
 	Agent  string `yaml:"agent"` // agent profile name
 	Prompt string `yaml:"prompt"`
-	// Exclude skips PRs matching these criteria (e.g. release PRs).
+	// Exclude skips PRs matching these criteria (e.g. release PRs). No config
+	// surface sets it any more (the `filters: {exclude: …}` block is gone —
+	// write `not_branch`/`not_label_any`/`not_title` in `filter:` instead); it
+	// remains because a legacy integration config decodes straight into Action
+	// and its lowering is what gives an event its intrinsic default.
 	Exclude Exclude `yaml:"exclude"`
-	// Filter is the unified composable filter (docs/design/unified-filter.md).
-	// When set it REPLACES the legacy exclude/gates/match-key conjuncts at
-	// every keep-condition site that evaluates them; when unset each site
-	// lowers its own legacy fields into the same IR, so both paths run one
-	// evaluator. A trigger may set `filter:` or the legacy `filters:` block,
-	// never both (checked at load — see Config.validateTriggerFilters).
+	// Filter is the unified composable filter (docs/design/unified-filter.md,
+	// docs/design/unified-filter-phase2.md) — the trigger's whole predicate.
+	// When set it REPLACES the event's intrinsic default keep-condition at
+	// every site that evaluates one; when unset each site lowers its own
+	// defaults into the same IR, so both paths run one evaluator.
+	//
+	// A routing-ONLY filter (nothing but `repo`/`not_repo`) does not count as
+	// set: it says where the trigger applies, not what it wants of the event,
+	// so the intrinsic default still stands. See the lowering in
+	// internal/connector.githubImpl.lowerTrigger.
 	Filter *Filter `yaml:"filter,omitempty"`
 
 	// command-type fields
@@ -1119,11 +1127,6 @@ func Load(path string) (*Config, error) {
 	// Multi-source `on:` lists expand into one trigger per source before
 	// anything downstream sees them.
 	if err := c.NormalizeTriggers(); err != nil {
-		return nil, err
-	}
-	// One filter per trigger: the unified `filter:` or the legacy `filters:`
-	// predicate keys, never both.
-	if err := c.validateTriggerFilters(); err != nil {
 		return nil, err
 	}
 	// `extends:` inheritance across map sections resolves before defaults fold

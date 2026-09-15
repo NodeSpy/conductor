@@ -12,7 +12,7 @@ connectors:
 
 triggers:
   - on: upstream.changelog
-    filters: { match: "(?i)security|breaking" }   # regex over title + summary
+    filter: { match: "(?i)security|breaking" }    # regex over title + summary
     steps:
       - { id: read, type: agent, agent: planner, checkout: none,
           prompt: "Read {{.item.link}} and summarize what affects us." }

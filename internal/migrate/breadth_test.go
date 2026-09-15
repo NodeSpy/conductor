@@ -53,8 +53,10 @@ agents:
 	}
 }
 
-// TestGithubIssueFilterFieldsTransform (D2): labels_any / labels_all /
-// authors / sole_assignee / assignee land on the migrated trigger's filters.
+// TestGithubIssueFilterFieldsTransform (D2): the legacy issue predicate fields
+// land on the migrated trigger's one `filter:` under their unified names, and
+// `assignee` — an identity gate against the connector's `me:`, not a predicate
+// over a published fact — lands in `options:`.
 func TestGithubIssueFilterFieldsTransform(t *testing.T) {
 	_, out := mustTransform(t, `
 integrations:
@@ -81,15 +83,25 @@ agents:
 	for _, tr := range out.Triggers {
 		byOn[tr.On] = tr
 	}
-	f := byOn["gh.issue_matched"].Filters
-	if fmt.Sprint(f["labels_any"]) != "[bug p1]" || fmt.Sprint(f["labels_all"]) != "[triaged]" {
-		t.Errorf("label filters lost: %v", f)
+	tr := byOn["gh.issue_matched"]
+	f := tr.Filter
+	if f == nil {
+		t.Fatal("no filter on the migrated trigger")
 	}
-	if fmt.Sprint(f["authors"]) != "[alice]" || f["sole_assignee"] != true {
-		t.Errorf("authors/sole_assignee lost: %v", f)
+	if got := fmt.Sprint(f.MatchUnion("label_any")); got != "[bug p1]" {
+		t.Errorf("label_any lost: %s", f)
 	}
-	if f["assignee"] == nil || !strings.Contains(fmt.Sprint(f["assignee"]), "octocat") {
-		t.Errorf("assignee filter lost: %v", f)
+	if got := fmt.Sprint(f.MatchUnion("label_all")); got != "[triaged]" {
+		t.Errorf("label_all lost: %s", f)
+	}
+	if got := fmt.Sprint(f.MatchUnion("author")); got != "[alice]" {
+		t.Errorf("author lost: %s", f)
+	}
+	if !strings.Contains(f.String(), "match(sole_assignee,true)") {
+		t.Errorf("sole_assignee lost: %s", f)
+	}
+	if tr.Options["assignee"] == nil || !strings.Contains(fmt.Sprint(tr.Options["assignee"]), "octocat") {
+		t.Errorf("assignee should land in options: %v", tr.Options)
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 
 // Force builds and emits trigger(s) for `kind` on repo#number on demand (the
 // `force` command). It bypasses the usual applicability filters (reviewer match,
-// draft gate, exclude, from_users) and — via Trigger.Force — the engine's
+// draft gate, exclude, comment_author) and — via Trigger.Force — the engine's
 // dedup/liveness/backoff gates, so the action runs now even if conductor thinks
 // the state is already handled.
 //
