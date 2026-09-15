@@ -189,7 +189,7 @@ packs:
   multi:
     source: ./src/multi
     on:
-      github.pull_request: { filters: { labels_not: [wip] } }
+      github.pull_request: { filter: { not_label_any: [wip] } }
       pagerduty.incident:  { enabled: false }
     steps:
       github.pull_request/sec: { guidance: "focus on authz + SSRF" }
@@ -199,7 +199,7 @@ packs:
 	if err != nil {
 		t.Fatalf("overlay load: %v", err)
 	}
-	// on: deep-merges onto the shipped trigger's filters…
+	// on: ANDs its filter onto the shipped trigger's…
 	var gh, pd *TriggerSpec
 	for i := range cfg.Triggers {
 		switch {
@@ -209,8 +209,8 @@ packs:
 			pd = &cfg.Triggers[i]
 		}
 	}
-	if gh == nil || gh.Filters["labels_not"] == nil {
-		t.Fatalf("the overlay filter did not merge: %+v", gh)
+	if gh == nil || !hasMatchKey(gh.Filter, "label_any") {
+		t.Fatalf("the overlay filter did not compose in: %+v", gh)
 	}
 	// …and `enabled: false` turns one off.
 	if pd == nil || pd.IsEnabled() {

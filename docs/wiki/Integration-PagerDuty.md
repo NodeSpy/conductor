@@ -17,7 +17,7 @@ connectors:
 
 triggers:
   - on: oncall.incident
-    filters: { event_types: [incident.triggered], urgencies: [high] }
+    filter: { event_types: [incident.triggered], urgencies: [high] }
     steps:
       - { id: triage, type: agent, agent: fixer, checkout: none,
           prompt: "Research incident {{.title}} ({{.url}}) and summarize likely causes." }

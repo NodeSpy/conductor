@@ -26,8 +26,8 @@ pack:
       pagerduty: { version: "*", required: false }
 triggers:
   review:
-    - { on: github.pull_request, filters: { repos: [a/one] }, steps: [{ id: s, type: agent, prompt: p }] }
-    - { on: github.pull_request, filters: { repos: [a/two] }, steps: [{ id: s, type: agent, prompt: p }] }
+    - { on: github.pull_request, filter: { repo: [a/one] }, steps: [{ id: s, type: agent, prompt: p }] }
+    - { on: github.pull_request, filter: { repo: [a/two] }, steps: [{ id: s, type: agent, prompt: p }] }
 `)
 	cfg, err := resolveAndLoad(t, writeDoc(t, dir, `
 connectors:
@@ -36,7 +36,7 @@ packs:
   kit:
     source: ./src/kit
     on:
-      review: { filters: { labels_not: [wip] } }
+      review: { filter: { not_label_any: [wip] } }
 `))
 	if err != nil {
 		t.Fatalf("an overlay on the authored address must apply: %v", err)
@@ -47,7 +47,7 @@ packs:
 			continue
 		}
 		n++
-		if tr.Filters["labels_not"] == nil {
+		if !hasMatchKey(tr.Filter, "label_any") {
 			t.Errorf("the overlay should reach every instance of the address: %+v", tr)
 		}
 	}
@@ -74,7 +74,7 @@ pack:
       pagerduty: { version: "*", required: false }
 triggers:
   review:
-    - { on: github.pull_request, filters: { repos: [a/one] }, steps: [{ id: s, type: agent, prompt: p }] }
+    - { on: github.pull_request, filter: { repo: [a/one] }, steps: [{ id: s, type: agent, prompt: p }] }
 `)
 	_, err := resolveAndLoad(t, writeDoc(t, dir, `
 connectors:
@@ -83,7 +83,7 @@ packs:
   kit:
     source: ./src/kit
     on:
-      ghost: { filters: { labels_not: [wip] } }
+      ghost: { filter: { not_label_any: [wip] } }
 `))
 	if err == nil || !strings.Contains(err.Error(), "addresses no trigger") {
 		t.Fatalf("an unmatched overlay key must still error, got %v", err)

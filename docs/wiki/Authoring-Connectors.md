@@ -24,10 +24,12 @@ var myDecl = &connector.TypeDecl{
     Connection: connector.Schema{ /* documented connection keys */ },
     Events: []connector.EventDecl{{
         Name:    "thing_happened",
-        Filters: connector.Schema{...},  // legal `filters:` keys for this event
+        Filters: connector.Schema{...},  // match keys legal in this event's `filter:`
         Context: connector.Schema{...},  // facts published into templates
         Options: connector.Schema{...},  // source-side per-trigger options
     }},
+    // Called ONE match key at a time: the `filter:` grammar owns AND/OR/NOT
+    // (and the `not_` prefix), you answer "does this key hold".
     Filter: func(event string, filters, trigCtx map[string]any) (bool, error) { ... },
     Verbs: []connector.VerbDecl{{
         Name:    "do_thing",
@@ -49,7 +51,7 @@ func init() { connector.RegisterType(myDecl, newMyImpl) }
 
 ### The declaration is load-bearing
 
-`conductor validate` checks every `on:` kind, `filters:` key, `uses:` verb,
+`conductor validate` checks every `on:` kind, `filter:` key, `uses:` verb,
 option name/type, and `{{…}}` reference against the schemas;
 `conductor schema <conn>` prints them; the flow runner stubs dry-run outputs
 from `Outputs`. An option you don't declare is a **load error for the user**;

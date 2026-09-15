@@ -3,7 +3,7 @@
 // The connectors model replaces the per-integration `integrations:` list with
 // four cooperating blocks — `connectors:` (external services: sources +
 // verbs), `runtimes:`/`agents:` (where work runs and named profiles),
-// `triggers:` (the on/filters/steps/hooks grammar), and optional `hosts:`,
+// `triggers:` (the on/filter/steps/hooks grammar), and optional `hosts:`,
 // `workflows:`, `policy:`, `secrets:`. Both schemas coexist: a file may carry
 // either (or, during migration, both); Config.HasConnectors reports which
 // world a load is in. Structural validation lives here; semantic validation
@@ -12,6 +12,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -449,25 +450,23 @@ type InputSpec struct {
 
 // OnSource is one item of a multi-source `on:` list: a bare "conn.event"
 // scalar, or a single-key mapping keyed by the event name whose value is a
-// per-source block — `filters:`, `policy:`, `hooks:` — scoped to events from
+// per-source block — `filter:`, `policy:`, `hooks:` — scoped to events from
 // that source:
 //
 //	on:
 //	  - timer.nightly
 //	  - manual
 //	  - gh.issue_matched:
-//	      filters: { labels_any: [billing] }  # merged over the shared base (per-source wins)
+//	      filter: { label_any: [billing] }    # replaces the shared `filter:` for this source
 //	      policy:  { reply_to_bots: off }     # innermost policy scope
 //	      hooks:   [ {at: start, uses: gh.react, options: {emoji: eyes}} ]  # appended after the shared hooks
 //
 // Steps stay trigger-level (shared); a per-source block takes nothing else.
 type OnSource struct {
-	Source  string
-	Filters map[string]any
-	// Filter is the per-source unified filter. Unlike Filters (which merges
-	// key-by-key over the shared base), a per-source `filter:` REPLACES the
-	// trigger's — the shape IS the boolean structure, so there is nothing
-	// coherent to merge into.
+	Source string
+	// Filter is the per-source unified filter. It REPLACES the trigger's
+	// outright — the shape IS the boolean structure, so there is nothing
+	// coherent to merge key-by-key into.
 	Filter *Filter
 	Policy *Policy
 	Hooks  []Hook
@@ -492,7 +491,7 @@ func (o *OnSource) UnmarshalYAML(n *yaml.Node) error {
 				keys = append(keys, n.Content[i].Value)
 			}
 		}
-		return fmt.Errorf("an `on:` list item is a bare \"conn.event\" or a one-key map `conn.event: {filters, policy, hooks}` — got keys: %s", strings.Join(keys, ", "))
+		return fmt.Errorf("an `on:` list item is a bare \"conn.event\" or a one-key map `conn.event: {filter, policy, hooks}` — got keys: %s", strings.Join(keys, ", "))
 	}
 	if err := n.Content[0].Decode(&o.Source); err != nil {
 		return err
@@ -502,27 +501,61 @@ func (o *OnSource) UnmarshalYAML(n *yaml.Node) error {
 	case val.Kind == yaml.MappingNode:
 		for i := 0; i+1 < len(val.Content); i += 2 {
 			switch k := val.Content[i].Value; k {
-			case "filter", "filters", "policy", "hooks":
+			case "filter", "policy", "hooks":
+			case legacyFiltersKey:
+				return fmt.Errorf("on: %s: %w", o.Source, errLegacyFiltersKey)
 			default:
-				return fmt.Errorf("on: %s: unknown per-source key %q — a per-source block takes filter, filters, policy, hooks (steps stay on the trigger)", o.Source, k)
+				return fmt.Errorf("on: %s: unknown per-source key %q — a per-source block takes filter, policy, hooks (steps stay on the trigger)", o.Source, k)
 			}
 		}
 		var block struct {
-			Filters map[string]any `yaml:"filters"`
-			Filter  *Filter        `yaml:"filter"`
-			Policy  *Policy        `yaml:"policy"`
-			Hooks   []Hook         `yaml:"hooks"`
+			Filter *Filter `yaml:"filter"`
+			Policy *Policy `yaml:"policy"`
+			Hooks  []Hook  `yaml:"hooks"`
 		}
 		if err := val.Decode(&block); err != nil {
 			return err
 		}
-		o.Filters, o.Filter, o.Policy, o.Hooks = block.Filters, block.Filter, block.Policy, block.Hooks
+		o.Filter, o.Policy, o.Hooks = block.Filter, block.Policy, block.Hooks
 		return nil
 	case val.Kind == yaml.ScalarNode && val.Tag == "!!null":
 		return nil // `- conn.event:` with an empty block
 	default:
-		return fmt.Errorf("on: %s: the per-source value is a block {filter, filters, policy, hooks}", o.Source)
+		return fmt.Errorf("on: %s: the per-source value is a block {filter, policy, hooks}", o.Source)
 	}
+}
+
+// legacyFiltersKey is the retired `filters:` block. Phase 2 of the unified
+// filter removed it: routing AND predicates are both expressible in the one
+// `filter:`, and two keys one letter apart was the ambiguity the unification
+// existed to end (docs/design/unified-filter-phase2.md).
+//
+// The strict parser would reject it as an unknown field anyway. It is named
+// here so the error says what to write instead — a config that still carries
+// `filters:` is not a typo, it is a config from before the rename, and it
+// needs a migration rather than a spell-check.
+const legacyFiltersKey = "filters"
+
+var errLegacyFiltersKey = errors.New("`filters:` was removed — state the whole predicate in the one `filter:` key " +
+	"(`filters: {repos: [o/r]}` → `filter: {repo: [o/r]}`, `exclude: {branches: [x]}` → `not_branch: [x]`, " +
+	"`ignore_users:` → `not_comment_author:`, `gates: {not_draft: true}` → `not_draft: true`, " +
+	"`labels_any:` → `label_any:`; `ignore_checks:` moved to `options:`). " +
+	"Run `conductor config migrate`, or see docs/design/unified-filter-phase2.md")
+
+// rejectLegacyFilters fails a mapping node that still carries `filters:`.
+// yaml.v3's KnownFields does not reach into a custom unmarshaler, and even
+// where it does its "field not found" message reads like a typo — so every
+// surface that used to accept the block checks for it by name first.
+func rejectLegacyFilters(n *yaml.Node) error {
+	if n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == legacyFiltersKey {
+			return errLegacyFiltersKey
+		}
+	}
+	return nil
 }
 
 // ManualSource is the built-in `on:` source with no connector: a trigger
@@ -551,8 +584,8 @@ type TriggerSpec struct {
 	// Required (and unique) for triggers reachable by `conductor run`, and the
 	// handle an `extends:` child references a base by.
 	Name string `yaml:"name,omitempty"`
-	// Extends names another trigger (by Name) this one inherits from: filters
-	// and options deep-merge, steps/hooks replace when set, policy/gate/group
+	// Extends names another trigger (by Name) this one inherits from: options
+	// deep-merge, filter/steps/hooks replace when set, policy/gate/group
 	// fill if unset. Resolved before NormalizeTriggers. See resolveTriggerExtends.
 	Extends string `yaml:"extends,omitempty"`
 	// Abstract marks a base that exists only to be extended: it never fires and
@@ -560,13 +593,11 @@ type TriggerSpec struct {
 	// target cannot be abstract.
 	Abstract bool  `yaml:"abstract,omitempty"`
 	Enabled  *bool `yaml:"enabled,omitempty"`
-	// Filters gate whether the trigger fires; legal keys come from the event's
-	// filter schema. All AND-ed.
-	Filters map[string]any `yaml:"filters,omitempty"`
-	// Filter is the unified composable filter that supersedes the Filters
-	// grab-bag: its YAML SHAPE is its boolean structure (string = expr,
-	// map = AND, list = OR — see Filter). A trigger sets `filter:` or
-	// `filters:`, never both.
+	// Filter is the trigger's ONE filter — the sole filter key there is. Its
+	// YAML SHAPE is its boolean structure (string = expr, map = AND, list =
+	// OR; any key negatable with `not_` — see Filter), and it carries both the
+	// event PREDICATE and the ROUTING keys (github's `repo`/`not_repo`) that
+	// the retired `filters:` block used to hold separately.
 	Filter *Filter `yaml:"filter,omitempty"`
 	// Group batches a burst of related events into one run (debounce).
 	Group *GroupSpec `yaml:"group,omitempty"`
@@ -608,6 +639,9 @@ func (t *TriggerSpec) UnmarshalYAML(n *yaml.Node) error {
 			}
 			break
 		}
+	}
+	if err := rejectLegacyFilters(n); err != nil {
+		return err
 	}
 	type plain TriggerSpec
 	// Strict: KnownFields does not reach into custom unmarshalers, so a
@@ -665,10 +699,10 @@ func (t TriggerSpec) Sources() []string {
 }
 
 // NormalizeTriggers expands multi-source `on:` lists — one internal trigger
-// per source, sharing steps/hooks/group, each with the shared base filters
-// merged under its per-source block (per-source keys win) — and enforces the
-// manual-trigger naming rules. Load runs it before validation, so the rest of
-// the system only ever sees scalar-On triggers.
+// per source, sharing steps/hooks/group, each taking its per-source `filter:`
+// over the shared one — and enforces the manual-trigger naming rules. Load
+// runs it before validation, so the rest of the system only ever sees
+// scalar-On triggers.
 func (c *Config) NormalizeTriggers() error {
 	// A name is IDENTITY now: the scope every step of the trigger hangs
 	// its memory, sessions, and track record off, and the handle both
@@ -704,7 +738,7 @@ func (c *Config) NormalizeTriggers() error {
 		}
 		for _, src := range t.OnSources {
 			if src.Source == "" {
-				return fmt.Errorf("config: triggers[%d]: an `on:` list item is a bare \"conn.event\" or a one-key map `conn.event: {filters, policy, hooks}`", i)
+				return fmt.Errorf("config: triggers[%d]: an `on:` list item is a bare \"conn.event\" or a one-key map `conn.event: {filter, policy, hooks}`", i)
 			}
 			if seen[src.Source] {
 				return fmt.Errorf("config: triggers[%d]: duplicate source %q in the `on:` list", i, src.Source)
@@ -713,10 +747,9 @@ func (c *Config) NormalizeTriggers() error {
 			v := t
 			v.OnSources = nil
 			v.On = src.Source
-			v.Filters = mergeFilterMaps(t.Filters, src.Filters)
 			// A per-source `filter:` replaces the shared one outright — its
-			// shape is its boolean structure, so key-wise merging (what
-			// mergeFilterMaps does for the legacy block) has no meaning.
+			// shape is its boolean structure, so there is no coherent
+			// key-by-key merge to do.
 			if src.Filter != nil {
 				v.Filter = src.Filter
 			}
@@ -753,59 +786,6 @@ func (c *Config) NormalizeTriggers() error {
 		}
 	}
 	return nil
-}
-
-// filterRoutingKeys are the `filters:` keys that do not gate the EVENT — they
-// route the trigger to repositories. They stay legal alongside a unified
-// `filter:` because phase 1 gives the grammar no repo facts; everything else
-// in `filters:` is a predicate the one `filter:` must now express.
-var filterRoutingKeys = map[string]bool{"repos": true, "exclude_repos": true}
-
-// validateTriggerFilters enforces the one-filter rule: a trigger states its
-// predicate in the unified `filter:` or in the legacy `filters:` block, never
-// both. Two predicates would leave the reader guessing whether they AND or
-// which one wins — the exact grab-bag ambiguity `filter:` exists to end.
-//
-// Runs after NormalizeTriggers, so it sees every expanded per-source variant
-// with its own merged filters.
-func (c *Config) validateTriggerFilters() error {
-	for i, t := range c.Triggers {
-		if t.Filter == nil {
-			continue
-		}
-		legacy := make([]string, 0, len(t.Filters))
-		for k := range t.Filters {
-			if !filterRoutingKeys[k] {
-				legacy = append(legacy, k)
-			}
-		}
-		if len(legacy) == 0 {
-			continue
-		}
-		sort.Strings(legacy)
-		return fmt.Errorf("config: trigger %s: sets both `filter:` and the legacy `filters:` key(s) %s — a trigger states its predicate ONE way; fold the legacy keys into the `filter:` (docs/design/unified-filter.md)",
-			triggerRef(t, i), strings.Join(legacy, ", "))
-	}
-	return nil
-}
-
-// mergeFilterMaps overlays a per-source filter block over the shared base;
-// a per-source key overrides the base for that source.
-func mergeFilterMaps(base, over map[string]any) map[string]any {
-	if len(base) == 0 {
-		return over
-	}
-	if len(over) == 0 {
-		return base
-	}
-	m := make(map[string]any, len(base)+len(over))
-	for k, v := range base {
-		m[k] = v
-	}
-	for k, v := range over {
-		m[k] = v
-	}
-	return m
 }
 
 // GroupSpec batches events: key groups them, window debounces.

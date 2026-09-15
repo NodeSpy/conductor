@@ -141,7 +141,7 @@ func TestLegacyParityReviewRequested(t *testing.T) {
 		for _, pr := range prCases {
 			want := !draftGate(act, pr.draft) && !act.Exclude.Matches(pr.head, pr.title, pr.labels)
 			facts := prFilterFacts(pr.head, pr.base, pr.title, pr.author, pr.labels, pr.draft)
-			got := g.filterPasses(act, "test", facts, lowerReviewRequested(act))
+			got := g.filterPasses(act, "test", "o/r", facts, lowerReviewRequested(act))
 			if got != want {
 				t.Errorf("review_requested [%s] on %q: lowered=%v legacy=%v\n  filter: %s\n  facts:  %+v",
 					name, pr.name, got, want, lowerReviewRequested(act), facts)
@@ -158,7 +158,7 @@ func TestLegacyParityReadyReview(t *testing.T) {
 		for _, pr := range prCases {
 			want := !act.Exclude.Matches(pr.head, pr.title, pr.labels)
 			facts := prFilterFacts(pr.head, pr.base, pr.title, pr.author, pr.labels, pr.draft)
-			got := g.filterPasses(act, "test", facts, lowerReadyReview(act))
+			got := g.filterPasses(act, "test", "o/r", facts, lowerReadyReview(act))
 			if got != want {
 				t.Errorf("ready_for_review [%s] on %q: lowered=%v legacy=%v\n  filter: %s",
 					name, pr.name, got, want, lowerReadyReview(act))
@@ -208,7 +208,7 @@ func TestLegacyParityIssueMatch(t *testing.T) {
 				want = false
 			}
 			facts := issueFilterFacts(st, g.soleSelf(st.assignees))
-			got := g.filterPasses(act, "test", facts, lowerIssueMatch(act))
+			got := g.filterPasses(act, "test", "o/r", facts, lowerIssueMatch(act))
 			if got != want {
 				t.Errorf("issue_matched [%s] on %q: lowered=%v legacy=%v\n  filter: %s\n  facts:  %+v",
 					name, ic.name, got, want, lowerIssueMatch(act), facts)
@@ -249,7 +249,7 @@ func TestLegacyParityMergeReady(t *testing.T) {
 			gate := gc.gate
 			want := !(act.RequireLabel != "" && !containsFold(gate.Labels, act.RequireLabel)) &&
 				mergeGatePasses(&gate, act.Gates)
-			got := g.filterPasses(act, "test", mergeReadyFilterFacts(&gate), lowerMergeReady(act))
+			got := g.filterPasses(act, "test", "o/r", mergeReadyFilterFacts(&gate), lowerMergeReady(act))
 			if got != want {
 				t.Errorf("merge_ready [%s] on %q: lowered=%v legacy=%v\n  filter: %s",
 					name, gc.name, got, want, lowerMergeReady(act))
@@ -281,13 +281,13 @@ func TestLegacyParityNewComment(t *testing.T) {
 			facts := commentFilterFacts(cc.author, cc.body, cc.isBot)
 
 			wantWebhook := commentAuthorAllowed(act, cc.author) && authorBotMatch(act.AuthorBot, cc.isBot)
-			if got := g.filterPasses(act, "test", facts, lowerComment(act, true)); got != wantWebhook {
+			if got := g.filterPasses(act, "test", "o/r", facts, lowerComment(act, true)); got != wantWebhook {
 				t.Errorf("new_comment webhook [%s] on %q: lowered=%v legacy=%v\n  filter: %s",
 					name, cc.name, got, wantWebhook, lowerComment(act, true))
 			}
 
 			wantSweep := commentAuthorAllowed(act, cc.author)
-			if got := g.filterPasses(act, "test", facts, lowerComment(act, false)); got != wantSweep {
+			if got := g.filterPasses(act, "test", "o/r", facts, lowerComment(act, false)); got != wantSweep {
 				t.Errorf("new_comment sweep [%s] on %q: lowered=%v legacy=%v\n  filter: %s",
 					name, cc.name, got, wantSweep, lowerComment(act, false))
 			}
@@ -304,7 +304,7 @@ func TestLegacyParityChangesRequested(t *testing.T) {
 			facts := prFilterFacts("h", "main", "t", "alice", nil, false)
 			facts["author_is_bot"] = isBot
 			facts["reviewer"] = "someone"
-			got := g.filterPasses(act, "test", facts, lowerChangesRequested(act))
+			got := g.filterPasses(act, "test", "o/r", facts, lowerChangesRequested(act))
 			if got != want {
 				t.Errorf("changes_requested [%s] bot=%v: lowered=%v legacy=%v", name, isBot, got, want)
 			}
@@ -332,7 +332,7 @@ func TestIssue5590(t *testing.T) {
 		Exclude: config.Exclude{Branches: []string{"staging", "prod"}, Title: []string{"Release "}},
 		Gates:   map[string]any{"not_draft": true},
 	}
-	if g.filterPasses(legacy, "test", facts, lowerReviewRequested(legacy)) {
+	if g.filterPasses(legacy, "test", "o/r", facts, lowerReviewRequested(legacy)) {
 		t.Fatal("the legacy config is expected to WRONGLY skip #5590 — if it now fires, " +
 			"the lowering changed behaviour rather than preserving it")
 	}
@@ -346,23 +346,23 @@ func TestIssue5590(t *testing.T) {
 	if act.Filter == nil {
 		t.Fatal("filter: did not decode onto the action")
 	}
-	if !g.filterPasses(act, "test", facts, nil) {
+	if !g.filterPasses(act, "test", "o/r", facts, nil) {
 		t.Errorf("#5590 must NOT be excluded by the unified filter (head=%q title=%q)", head, title)
 	}
 
 	// …and a REAL release PR on a release branch still is skipped.
 	real := prFilterFacts("staging", "main", "Release 2.4.0", "bot", nil, false)
-	if g.filterPasses(act, "test", real, nil) {
+	if g.filterPasses(act, "test", "o/r", real, nil) {
 		t.Error("a real `Release 2.4.0` PR on staging must still be skipped")
 	}
 	// A release-titled PR on an ordinary branch is NOT skipped (the AND holds).
 	ordinary := prFilterFacts("feature/x", "main", "Release 2.4.0", "bot", nil, false)
-	if !g.filterPasses(act, "test", ordinary, nil) {
+	if !g.filterPasses(act, "test", "o/r", ordinary, nil) {
 		t.Error("a release-titled PR on a non-release branch should fire (the inner AND is false)")
 	}
 	// A draft is still skipped by the leading !is_draft.
 	draft := prFilterFacts(head, "main", title, "alice", nil, true)
-	if g.filterPasses(act, "test", draft, nil) {
+	if g.filterPasses(act, "test", "o/r", draft, nil) {
 		t.Error("a draft must still be skipped by !is_draft")
 	}
 }
@@ -378,7 +378,7 @@ func TestUnifiedFilterReplacesLegacy(t *testing.T) {
 		Filter: config.FilterExpr("!is_draft"),
 	}
 	facts := prFilterFacts("feature/x", "main", "t", "alice", nil, false)
-	if !g.filterPasses(act, "test", facts, lowerReviewRequested(act)) {
+	if !g.filterPasses(act, "test", "o/r", facts, lowerReviewRequested(act)) {
 		t.Error("the unified filter should REPLACE the legacy lowering, not AND with it")
 	}
 }
@@ -387,11 +387,11 @@ func TestUnifiedFilterReplacesLegacy(t *testing.T) {
 func TestFilterFailsClosed(t *testing.T) {
 	g := testIntegration()
 	act := config.Action{Filter: config.FilterMatch("no_such_key", true)}
-	if g.filterPasses(act, "test", prFilterFacts("h", "b", "t", "a", nil, false), nil) {
+	if g.filterPasses(act, "test", "o/r", prFilterFacts("h", "b", "t", "a", nil, false), nil) {
 		t.Error("an unevaluable filter must fail closed (not fire)")
 	}
-	act = config.Action{Filter: config.FilterMatch("labels_any", 42)} // wrong type
-	if g.filterPasses(act, "test", prFilterFacts("h", "b", "t", "a", nil, false), nil) {
+	act = config.Action{Filter: config.FilterMatch("label_any", 42)} // wrong type
+	if g.filterPasses(act, "test", "o/r", prFilterFacts("h", "b", "t", "a", nil, false), nil) {
 		t.Error("a mistyped match value must fail closed")
 	}
 }

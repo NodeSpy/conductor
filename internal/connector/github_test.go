@@ -14,10 +14,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	ghint "github.com/NodeSpy/conductor/internal/integrations/github"
@@ -26,7 +29,12 @@ import (
 
 // --- github lowering ---
 
-func TestGithubSourceLowersTriggerFilters(t *testing.T) {
+// TestGithubSourceLowersTriggerFilter: the trigger's one `filter:` lowers onto
+// the Action the github integration evaluates — the predicate riding through
+// as the IR, the `repo`/`not_repo` routing keys HOISTED out of it into the
+// structural gates, and the former `filters:` non-predicates read from
+// `options:` (docs/design/unified-filter-phase2.md).
+func TestGithubSourceLowersTriggerFilter(t *testing.T) {
 	cfg := mustDecodeConfig(t, `
 connectors:
   gh:
@@ -45,15 +53,15 @@ connectors:
 	}
 	trig := CompiledTrigger{
 		Index: 0,
-		Spec: mkTriggerSpec("gh.review_requested", "myvariant", map[string]any{
-			"repos":      []any{"org/repo1"},
-			"reviewer":   map[string]any{"logins": []any{"alice"}},
-			"gates":      map[string]any{"not_draft": false},
-			"exclude":    map[string]any{"branches": []any{"release/*"}, "labels": []any{"wip"}, "title": []any{"WIP"}},
-			"from_users": []any{"bob"},
-		}),
+		Spec: mkTriggerSpec(t, "gh.review_requested", "myvariant", `
+      repo: [org/repo1]
+      not_repo: [org/repo1-archive]
+      not_branch: [release/*]
+      not_label_any: [wip]
+      comment_author: [bob]`),
 	}
 	trig.Spec.Options = map[string]any{
+		"reviewer":    map[string]any{"logins": []any{"alice"}},
 		"flaky_rerun": map[string]any{"enabled": true, "max": 3},
 		"stuck_after": "45m",
 	}
@@ -76,20 +84,28 @@ connectors:
 	if act.FlowRef != trig.Ref() {
 		t.Fatalf("act.FlowRef = %q, want %q", act.FlowRef, trig.Ref())
 	}
+	// `repo`/`not_repo` are hoisted into the structural gates emit() and the
+	// sweep read — they are routing, not a predicate over the event.
 	if len(act.Repos) != 1 || act.Repos[0] != "org/repo1" {
 		t.Fatalf("act.Repos = %v, want [org/repo1]", act.Repos)
 	}
+	if len(act.ExcludeRepos) != 1 || act.ExcludeRepos[0] != "org/repo1-archive" {
+		t.Fatalf("act.ExcludeRepos = %v, want [org/repo1-archive]", act.ExcludeRepos)
+	}
+	// The filter itself rides through whole (the hoist is a READ, not a move:
+	// the keep-condition still evaluates every conjunct precisely).
+	if act.Filter == nil {
+		t.Fatal("act.Filter should carry the trigger's predicate")
+	}
+	for _, key := range []string{"repo", "branch", "label_any", "comment_author"} {
+		if !slices.Contains(act.Filter.MatchKeys(), key) {
+			t.Errorf("act.Filter lost the %q conjunct: %s", key, act.Filter)
+		}
+	}
+	// The former `filters:` keys that were never predicates now come from
+	// options:.
 	if len(act.Reviewer.Logins) != 1 || act.Reviewer.Logins[0] != "alice" {
 		t.Fatalf("act.Reviewer = %+v", act.Reviewer)
-	}
-	if len(act.FromUsers) != 1 || act.FromUsers[0] != "bob" {
-		t.Fatalf("act.FromUsers = %v", act.FromUsers)
-	}
-	if act.Gates["not_draft"] != false {
-		t.Fatalf("act.Gates = %v", act.Gates)
-	}
-	if len(act.Exclude.Branches) != 1 || act.Exclude.Branches[0] != "release/*" {
-		t.Fatalf("act.Exclude.Branches = %v", act.Exclude.Branches)
 	}
 	if !act.FlakyRerun.Enabled || act.FlakyRerun.Max != 3 {
 		t.Fatalf("act.FlakyRerun = %+v", act.FlakyRerun)
@@ -118,7 +134,7 @@ connectors:
 	}
 	in, _ := reg.Get("gh")
 	result, err := in.Impl.Source([]CompiledTrigger{{
-		Spec: mkTriggerSpec("gh.release", "rel", nil),
+		Spec: mkTriggerSpec(t, "gh.release", "rel", ""),
 	}})
 	if err != nil {
 		t.Fatalf("Source: %v", err)
@@ -147,7 +163,7 @@ connectors:
 		t.Fatalf("Build: %v", err)
 	}
 	in, _ := reg.Get("gh")
-	trig := CompiledTrigger{Index: 0, Spec: mkTriggerSpec("gh.self_review", "", nil)}
+	trig := CompiledTrigger{Index: 0, Spec: mkTriggerSpec(t, "gh.self_review", "", "")}
 	result, err := in.Impl.Source([]CompiledTrigger{trig})
 	if err != nil {
 		t.Fatalf("Source: %v", err)
@@ -177,9 +193,23 @@ connectors:
 
 // --- github verb HTTP tests ---
 
-// mkTriggerSpec builds a minimal config.TriggerSpec for lowering tests.
-func mkTriggerSpec(on, name string, filters map[string]any) config.TriggerSpec {
-	return config.TriggerSpec{On: on, Name: name, Filters: filters}
+// mkTriggerSpec builds a minimal config.TriggerSpec for lowering tests. The
+// filter is given as the YAML an operator writes, decoded through the real
+// grammar, so a lowering test cannot assert against an IR shape the parser
+// would never produce.
+func mkTriggerSpec(t *testing.T, on, name, filterYAML string) config.TriggerSpec {
+	t.Helper()
+	spec := config.TriggerSpec{On: on, Name: name}
+	if strings.TrimSpace(filterYAML) != "" {
+		var wrap struct {
+			Filter *config.Filter `yaml:"filter"`
+		}
+		if err := yaml.Unmarshal([]byte("filter:\n"+filterYAML), &wrap); err != nil {
+			t.Fatalf("decode filter: %v", err)
+		}
+		spec.Filter = wrap.Filter
+	}
+	return spec
 }
 
 func newGithubTestImpl(t *testing.T, extraYAML string) *githubImpl {

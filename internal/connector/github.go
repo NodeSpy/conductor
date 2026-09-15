@@ -15,14 +15,6 @@ import (
 	"github.com/NodeSpy/conductor/pkg/githubkit"
 )
 
-// baseGithubFilters are the filter keys every github event accepts.
-func baseGithubFilters() Schema {
-	return Schema{
-		"repos":         {Type: TList, Desc: "repo globs this trigger fires for (default: the connector's repos:)"},
-		"exclude_repos": {Type: TList, Desc: "repo globs this trigger never fires for"},
-	}
-}
-
 // baseGithubContext are the context facts every github event publishes.
 func baseGithubContext() Schema {
 	return Schema{
@@ -34,11 +26,15 @@ func baseGithubContext() Schema {
 }
 
 // githubEvent builds one event declaration on the shared base.
-func githubEvent(name, desc string, filters, contextExtra, options Schema) EventDecl {
-	f := baseGithubFilters()
-	for k, v := range filters {
-		f[k] = v
-	}
+//
+// It declares no Filters schema: github's whole filter surface is the unified
+// `filter:`, whose facts and match keys come from the integration that computes
+// and evaluates them (gh.FilterFacts / gh.FilterMatchKeys). What used to sit in
+// `filters:` and is NOT a predicate over the event — repo routing, the
+// reviewer/assignee identity gates, per-check suppression, the release
+// prerelease switch — is declared in Options instead, next to the other
+// source-side knobs.
+func githubEvent(name, desc string, contextExtra, options Schema) EventDecl {
 	c := baseGithubContext()
 	for k, v := range contextExtra {
 		c[k] = v
@@ -50,7 +46,7 @@ func githubEvent(name, desc string, filters, contextExtra, options Schema) Event
 		o[k] = v
 	}
 	return EventDecl{
-		Name: name, Desc: desc, Filters: f, Context: c, Options: o,
+		Name: name, Desc: desc, Context: c, Options: o,
 		Facts:     filterSchema(gh.FilterFacts(name)),
 		MatchKeys: filterSchema(gh.FilterMatchKeys(name)),
 	}
@@ -87,7 +83,7 @@ var githubDecl = &TypeDecl{
 		"webhook":         {Type: TMap, Desc: "event transport: smee_url and/or listen (+ path)"},
 		"sweep":           {Type: TMap, Desc: "catch-up sweep: enabled, interval, min_interval, repos"},
 		"me":              {Type: TMap, Desc: "your GitHub login(s): { logins: [...] } — defines \"you\""},
-		"repos":           {Type: TList, Desc: "default repo globs for triggers with no repos filter"},
+		"repos":           {Type: TList, Desc: "default repo globs for triggers whose filter names no repo"},
 		"identity":        {Type: TMap, Desc: "credential policy: read_token, write_token, commit_author"},
 		"retry":           {Type: TMap, Desc: "transient dispatch retry: max, backoff"},
 		"project_map":     {Type: TMap, Desc: "repo -> paseo project checkout remap"},
@@ -95,67 +91,55 @@ var githubDecl = &TypeDecl{
 	},
 	Events: []EventDecl{
 		githubEvent("review_requested", "your review was requested on a PR",
+			nil,
 			Schema{
-				"reviewer": {Type: TMap, Desc: "whose requested review triggers: { logins: [...], teams: [...] }"},
-				"gates":    {Type: TMap, Desc: "opt-out toggles, e.g. { not_draft: false }"},
-				"exclude":  {Type: TMap, Desc: "skip PRs: { branches: [...], labels: [...], title: [...] }"},
-			}, nil, nil),
+				"reviewer": {Type: TMap, Desc: "whose requested review triggers: { logins: [...], teams: [...] } (default: the connector's me:) — an identity gate, not a fact predicate"},
+			}),
 		githubEvent("changes_requested", "a review requested changes on your PR (or threads went unresolved)",
-			Schema{
-				"author_bot": {Type: TBool, Desc: "true = only bot reviewers trigger, false = only humans (absent = either)"},
-			},
 			Schema{
 				"head_ref": {Type: TString},
 				"author":   {Type: TString}, "author_is_bot": {Type: TBool, Desc: "the reviewer is an automated bot (account type Bot, or a [bot] login)"},
 			}, nil),
 		githubEvent("new_comment", "a new comment on your PR",
 			Schema{
-				"from_users":   {Type: TList, Desc: "only these commenters trigger (empty = any)"},
-				"ignore_users": {Type: TList, Desc: "never trigger on these commenters"},
-				"author_bot":   {Type: TBool, Desc: "true = only bot comments trigger, false = only humans (absent = either)"},
-			},
-			Schema{
 				"author": {Type: TString}, "author_is_bot": {Type: TBool, Desc: "the commenter is an automated bot (account type Bot, or a [bot] login)"},
 				"comment_body": {Type: TString}, "head_ref": {Type: TString},
 				"comment_id": {Type: TInt}, "comment_kind": {Type: TString},
 			}, nil),
-		githubEvent("merge_conflict", "your PR became unmergeable", nil, nil, nil),
-		githubEvent("pr_behind", "your PR fell behind its base", nil, nil, nil),
+		githubEvent("merge_conflict", "your PR became unmergeable", nil, nil),
+		githubEvent("pr_behind", "your PR fell behind its base", nil, nil),
 		githubEvent("failing_checks", "CI concluded failing on your PR",
-			Schema{"ignore_checks": {Type: TList, Desc: "check names that never trigger"}},
 			Schema{"failing_check": {Type: TString}, "run_id": {Type: TInt}},
-			Schema{"flaky_rerun": {Type: TMap, Desc: "rerun failed jobs once before dispatching: { enabled, max }"}}),
+			Schema{
+				"flaky_rerun": {Type: TMap, Desc: "rerun failed jobs once before dispatching: { enabled, max }"},
+				// Per-CHECK suppression, not a trigger predicate: it decides
+				// which failing check counts as an event at all, one check at
+				// a time, before any trigger is consulted. That is the same
+				// kind of thing flaky_rerun is, so it lives beside it.
+				"ignore_checks": {Type: TList, Desc: "check names that never trigger"},
+			}),
 		githubEvent("stuck_checks", "a CI run has been running too long on your PR",
-			nil,
 			Schema{"run_id": {Type: TInt}, "run_name": {Type: TString}, "run_status": {Type: TString}},
 			Schema{
 				"stuck_after":   {Type: TDuration, Desc: "how long a run may take before it is stuck (default 30m)"},
 				"poll_interval": {Type: TDuration, Desc: "poller cadence (default 15m)"},
 			}),
-		githubEvent("merge_ready", "your PR turned all-green",
-			Schema{
-				"require_label": {Type: TString, Desc: "only fire when the PR carries this label"},
-				"gates":         {Type: TMap, Desc: "opt-out toggles: not_draft, merge_state, review_decision, non_author_approval, threads_resolved"},
-			}, nil, nil),
-		githubEvent("self_review", "you opened/updated your own PR", nil, nil, nil),
+		githubEvent("merge_ready", "your PR turned all-green", nil, nil),
+		githubEvent("self_review", "you opened/updated your own PR", nil, nil),
 		githubEvent("issue_matched", "an issue matches your criteria",
+			nil,
 			Schema{
-				"assignee":      {Type: TMap, Desc: "whose assignment triggers: { logins: [...] }"},
-				"sole_assignee": {Type: TBool, Desc: "only when you are the ONLY assignee"},
-				"labels_any":    {Type: TList}, "labels_all": {Type: TList},
-				"authors": {Type: TList, Desc: "only issues opened by these logins"},
-				"exclude": {Type: TMap, Desc: "skip issues: { labels: [...], title: [...] }"},
-				"gates":   {Type: TMap, Desc: "no_branch, project: { field: value }"},
-			}, nil, nil),
+				"assignee": {Type: TMap, Desc: "whose assignment triggers: { logins: [...] } (default: the connector's me:) — an identity gate, not a fact predicate"},
+			}),
 		githubEvent("release", "a release was published",
-			Schema{"include_prereleases": {Type: TBool}},
-			Schema{"tag_name": {Type: TString}, "prerelease": {Type: TBool}, "draft": {Type: TBool}}, nil),
+			Schema{"tag_name": {Type: TString}, "prerelease": {Type: TBool}, "draft": {Type: TBool}},
+			Schema{"include_prereleases": {Type: TBool, Desc: "also fire on prereleases (default: skip them)"}}),
 		githubEvent("deployment_status", "a deployment failed or errored",
-			nil, Schema{"state": {Type: TString}, "environment": {Type: TString}, "description": {Type: TString}}, nil),
+			Schema{"state": {Type: TString}, "environment": {Type: TString}, "description": {Type: TString}}, nil),
 		githubEvent("dependabot_alert", "a new Dependabot alert",
-			nil, Schema{"severity": {Type: TString}, "package": {Type: TString}, "summary": {Type: TString}}, nil),
+			Schema{"severity": {Type: TString}, "package": {Type: TString}, "summary": {Type: TString}}, nil),
 		githubEvent("secret_scanning_alert", "a new secret-scanning alert",
-			nil, Schema{"secret_type": {Type: TString}}, nil),
+			Schema{"secret_type": {Type: TString}}, nil),
 	},
 	Verbs: []VerbDecl{
 		{
@@ -671,9 +655,9 @@ func (g *githubImpl) DeclaredEvents() []string { return nil }
 
 // Source lowers the connector's triggers into a github integration instance.
 // Every trigger becomes a variant of its event kind on the Defaults rule; the
-// per-variant repos/exclude_repos gates carry each trigger's repo filter, so
-// triggers stay independent (all matching triggers fire) while the existing
-// integration code evaluates every other filter exactly as legacy configs do.
+// per-variant repo gates carry the `repo`/`not_repo` scope hoisted out of each
+// trigger's filter, so triggers stay independent (all matching triggers fire)
+// while the integration evaluates the rest of the filter per event.
 func (g *githubImpl) Source(triggers []CompiledTrigger) (core.Integration, error) {
 	if len(triggers) == 0 {
 		return nil, nil
@@ -705,7 +689,7 @@ func (g *githubImpl) Source(triggers []CompiledTrigger) (core.Integration, error
 		Defaults:       gh.Rule{Me: g.conn.Me},
 		// One catch-all rule carries every trigger as a variant: the legacy
 		// resolve() only matches explicit rules (defaults never fire on their
-		// own), and per-variant repos/exclude_repos gates scope each trigger.
+		// own), and the per-variant repo gates scope each trigger.
 		Rules: []gh.Rule{{
 			Match:   gh.Match{Repos: []string{"*/*"}},
 			Actions: actions,
@@ -714,50 +698,48 @@ func (g *githubImpl) Source(triggers []CompiledTrigger) (core.Integration, error
 	return buildIntegration("github", g.name, cfg)
 }
 
-// lowerTrigger maps one trigger spec's filters/options onto the legacy Action
-// fields the github integration's matchers evaluate.
+// lowerTrigger maps one trigger spec's filter/options onto the Action fields
+// the github integration evaluates.
+//
+// The trigger's whole predicate is its `filter:`, which rides through as the
+// IR untouched. Two things are read OUT of it here, because they are answered
+// structurally rather than per event:
+//
+//   - `repo` scopes the trigger (Action.Repos). emit() gates on it before any
+//     keep-condition, and the stuck_checks poller and the sweep derive their
+//     repo scope from it — neither of which has an event to evaluate against.
+//     The union across the WHOLE filter is taken, so an OR of repo sets is a
+//     superset rather than a miss; the filter itself still decides precisely.
+//   - top-level `not_repo` excludes (Action.ExcludeRepos).
+//
+// A filter that is nothing but a flat conjunction of those two routing keys
+// leaves Action.Filter nil, so the event's intrinsic default keep-condition
+// still applies. `filter: {repo: […]}` is the replacement for
+// `filters: {repos: […]}`, and that never waived merge_ready's gates or any
+// other default — stating where a trigger applies is not stating what it wants
+// of the event. The shape has to be FLAT for that: an Or of repo sets is more
+// than the pre-gate can carry, so it stays in the filter and is evaluated.
 func (g *githubImpl) lowerTrigger(t CompiledTrigger) (config.Action, error) {
-	f := t.Spec.Filters
 	act := config.Action{
 		Name:    t.Spec.Name,
 		Enabled: t.Spec.Enabled,
 		Shadow:  t.Spec.Shadow,
 		FlowRef: t.Ref(),
-		// The unified filter rides through as the IR. When set it replaces the
-		// legacy exclude/gates/match-key conjuncts at every keep-condition
-		// site; load validation has already refused a trigger that set both.
-		Filter: t.Spec.Filter,
 	}
-	act.Repos = toStrings(f["repos"])
+	f := t.Spec.Filter
+	if !f.FlatConjunctionOf(gh.FilterRepoKey) {
+		act.Filter = f
+	}
+	act.Repos = f.MatchUnion(gh.FilterRepoKey)
 	if len(act.Repos) == 0 {
 		act.Repos = g.conn.Repos
 	}
-	act.ExcludeRepos = toStrings(f["exclude_repos"])
-	act.Reviewer = toActors(f["reviewer"])
-	act.Assignee = toActors(f["assignee"])
-	act.SoleAssignee, _ = f["sole_assignee"].(bool)
-	act.LabelsAny = toStrings(f["labels_any"])
-	act.LabelsAll = toStrings(f["labels_all"])
-	act.Authors = toStrings(f["authors"])
-	act.FromUsers = toStrings(f["from_users"])
-	act.IgnoreUsers = toStrings(f["ignore_users"])
-	if b, ok := f["author_bot"].(bool); ok {
-		act.AuthorBot = &b
-	}
-	act.IgnoreChecks = toStrings(f["ignore_checks"])
-	act.RequireLabel, _ = f["require_label"].(string)
-	act.IncludePrereleases, _ = f["include_prereleases"].(bool)
-	if m, ok := f["gates"].(map[string]any); ok {
-		act.Gates = m
-	}
-	if m, ok := f["exclude"].(map[string]any); ok {
-		act.Exclude = config.Exclude{
-			Branches: toStrings(m["branches"]),
-			Labels:   toStrings(m["labels"]),
-			Title:    toStrings(m["title"]),
-		}
-	}
+	act.ExcludeRepos = f.TopLevelNegated(gh.FilterRepoKey)
 	o := t.Spec.Options
+	act.Reviewer = toActors(o["reviewer"])
+	act.Assignee = toActors(o["assignee"])
+	act.IgnoreChecks = toStrings(o["ignore_checks"])
+	act.IncludePrereleases, _ = o["include_prereleases"].(bool)
 	if n := toInt(o["max_attempts_per_head"]); n > 0 {
 		act.MaxAttemptsPerHead = n
 	}

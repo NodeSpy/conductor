@@ -392,7 +392,7 @@ func printPackPlan(cfg *config.Config) {
 			armed := "DISARMED (inert)"
 			if tr.Enabled != nil && *tr.Enabled {
 				repos := "no repos — matches nothing"
-				if r, ok := tr.Filters["repos"]; ok {
+				if r := config.TriggerRepoScope(tr.Filter); len(r) > 0 {
 					repos = "repos: " + fmt.Sprintf("%v", r)
 				}
 				armed = "ARMED — " + repos

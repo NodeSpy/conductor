@@ -149,8 +149,8 @@ func TestTriggerInstancesFanOut(t *testing.T) {
 	src := `
 triggers:
   review:
-    - { on: github.pull_request, filters: { repos: [me/app] } }
-    - { on: github.pull_request, filters: { repos: [me/api] } }
+    - { on: github.pull_request, filter: { repo: [me/app] } }
+    - { on: github.pull_request, filter: { repo: [me/api] } }
 `
 	var c Config
 	if err := strictUnmarshal([]byte(src), &c); err != nil {
@@ -182,14 +182,14 @@ func TestInstanceHandlesAreStableAcrossReorder(t *testing.T) {
 	a := `
 triggers:
   review:
-    - { on: github.pull_request, filters: { repos: [me/app] } }
-    - { on: github.pull_request, filters: { repos: [me/api] } }
+    - { on: github.pull_request, filter: { repo: [me/app] } }
+    - { on: github.pull_request, filter: { repo: [me/api] } }
 `
 	b := `
 triggers:
   review:
-    - { filters: { repos: [me/api] }, on: github.pull_request }
-    - { filters: { repos: [me/app] }, on: github.pull_request }
+    - { filter: { repo: [me/api] }, on: github.pull_request }
+    - { filter: { repo: [me/app] }, on: github.pull_request }
 `
 	names := func(src string) map[string]bool {
 		var c Config
@@ -211,8 +211,8 @@ func TestIdenticalInstancesAreRejected(t *testing.T) {
 	src := `
 triggers:
   review:
-    - { on: github.pull_request, filters: { repos: [me/app] } }
-    - { on: github.pull_request, filters: { repos: [me/app] } }
+    - { on: github.pull_request, filter: { repo: [me/app] } }
+    - { on: github.pull_request, filter: { repo: [me/app] } }
 `
 	var c Config
 	err := strictUnmarshal([]byte(src), &c)
@@ -223,7 +223,7 @@ triggers:
 
 func TestSingleElementInstanceListIsOneTrigger(t *testing.T) {
 	var c Config
-	src := "triggers:\n  github.pull_request:\n    - { filters: { repos: [me/app] } }\n"
+	src := "triggers:\n  github.pull_request:\n    - { filter: { repo: [me/app] } }\n"
 	if err := strictUnmarshal([]byte(src), &c); err != nil {
 		t.Fatal(err)
 	}

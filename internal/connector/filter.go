@@ -7,10 +7,10 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 )
 
-// ValidateFilter checks one trigger's unified `filter:` against the event's
-// declared surface (docs/design/unified-filter.md §Validation):
+// ValidateFilter checks one trigger's `filter:` against the event's declared
+// surface (docs/design/unified-filter.md §Validation):
 //
-//   - an event with no surface rejects `filter:` outright, rather than
+//   - an event with no surface at all rejects `filter:` outright, rather than
 //     accepting a block nothing will ever evaluate;
 //   - every fact an expr string READS must be one the event publishes, so
 //     `!is_drafft` fails at load instead of quietly resolving to nil (falsy)
@@ -18,20 +18,25 @@ import (
 //   - every object key must be a declared match key (or the reserved `expr:`);
 //   - each key's value must be the declared type.
 //
+// Only BASE keys are ever checked: the grammar turns `not_<key>` into a Not
+// around `<key>`, so a connector declares one key and both spellings validate
+// (and neither can drift from the other).
+//
 // where names the config location for the error; connName is the configured
 // connector instance, for an error an operator can act on.
 func ValidateFilter(where, connName string, ev EventDecl, f *config.Filter) error {
 	if f == nil {
 		return nil
 	}
-	if len(ev.Facts) == 0 && len(ev.MatchKeys) == 0 {
-		return fmt.Errorf("%s: `filter:` is not supported on %s.%s — the event publishes no filter facts; use `filters:` here",
+	keys, facts := ev.FilterKeys(), ev.FilterFacts()
+	if len(keys) == 0 && len(facts) == 0 {
+		return fmt.Errorf("%s: `filter:` is not supported on %s.%s — the event publishes no facts and declares no match keys",
 			where, connName, ev.Name)
 	}
 	for _, ref := range f.FactRefs() {
-		if _, ok := ev.Facts[ref]; !ok {
+		if _, ok := facts[ref]; !ok {
 			return fmt.Errorf("%s: filter: %s.%s publishes no fact %q (facts: %s)",
-				where, connName, ev.Name, ref, strings.Join(sortedFilterKeys(ev.Facts), ", "))
+				where, connName, ev.Name, ref, orNone(sortedFilterKeys(facts)))
 		}
 	}
 	var bad error
@@ -39,11 +44,11 @@ func ValidateFilter(where, connName string, ev EventDecl, f *config.Filter) erro
 		if bad != nil || n.Op != config.FilterOpMatch {
 			return
 		}
-		field, ok := ev.MatchKeys[n.Key]
+		field, ok := keys[n.Key]
 		if !ok {
-			bad = fmt.Errorf("%s: filter: %s.%s has no match key %q (keys: %s — or %q for a condition string)",
-				where, connName, ev.Name, n.Key,
-				strings.Join(sortedFilterKeys(ev.MatchKeys), ", "), config.FilterExprKey)
+			bad = fmt.Errorf("%s: filter: %s.%s has no match key %q (keys: %s — each also legal as %s%s, or %q for a condition string)",
+				where, connName, ev.Name, n.Key, orNone(sortedFilterKeys(keys)),
+				config.FilterNotPrefix, "<key>", config.FilterExprKey)
 			return
 		}
 		if err := checkType(n.Val, field); err != nil {
@@ -51,4 +56,27 @@ func ValidateFilter(where, connName string, ev EventDecl, f *config.Filter) erro
 		}
 	})
 	return bad
+}
+
+// orNone renders an empty key set as "none" rather than an empty tail, so the
+// error reads as a statement about the event instead of a truncated list.
+func orNone(keys []string) string {
+	if len(keys) == 0 {
+		return "none"
+	}
+	return strings.Join(keys, ", ")
+}
+
+// GenericFilterMatcher adapts a connector's TypeDecl.Filter to the one-key
+// FilterMatcher the IR evaluates with: the grammar owns AND/OR/NOT and hands
+// the connector a single key at a time. A connector that declares no Filter
+// func has no generic keys, so any Match on its events is a load error and
+// this never runs.
+func GenericFilterMatcher(decl *TypeDecl, event string) config.FilterMatcher {
+	return func(key string, val any, facts map[string]any) (bool, error) {
+		if decl == nil || decl.Filter == nil {
+			return false, fmt.Errorf("filter: %s declares no match keys", event)
+		}
+		return decl.Filter(event, map[string]any{key: val}, facts)
+	}
 }

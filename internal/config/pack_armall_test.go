@@ -48,14 +48,22 @@ packs:
 	return out
 }
 
+// repoList reads a trigger's repo consent back out of its `filter:` — arming
+// lowers `repos:` into a top-level `repo` match, so this is where it lands.
 func repoList(tr TriggerSpec) []string {
-	raw, _ := tr.Filters["repos"].([]any)
-	out := make([]string, 0, len(raw))
-	for _, r := range raw {
-		s, _ := r.(string)
-		out = append(out, s)
+	return TriggerRepoScope(tr.Filter)
+}
+
+// hasMatchKey reports whether a filter uses the given match key anywhere,
+// negated or not — for the overlay tests, which only care that the operator's
+// key reached the composed filter.
+func hasMatchKey(f *Filter, key string) bool {
+	for _, k := range f.MatchKeys() {
+		if k == key {
+			return true
+		}
 	}
-	return out
+	return false
 }
 
 // `triggers: {"*": …}` arms EVERY trigger the pack ships with one consent

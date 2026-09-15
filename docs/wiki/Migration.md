@@ -55,11 +55,11 @@ binary) unblocks it.
 | legacy | connectors model |
 |---|---|
 | `integrations: - type: github` (app/webhook/sweep/identity/retry/project_map/project_rewrite/me) | a `connectors:` entry, fields carried |
-| github `rules:`/`defaults:` (most-specific repo wins) | per-trigger `filters.repos` + computed `filters.exclude_repos`, the same winner per repo; the defaults merge is flattened into each trigger |
-| every github kind + its action filters (`labels_any/labels_all/authors/assignee/sole_assignee/reviewer/from_users/ignore_users/ignore_checks/require_label/include_prereleases/gates/exclude`) and variants | `on: <conn>.<kind>` triggers, `name:` = variant, filters mapped 1:1 |
+| github `rules:`/`defaults:` (most-specific repo wins) | a per-trigger `filter: {repo: …}` + computed `not_repo:`, the same winner per repo; the defaults merge is flattened into each trigger |
+| every github kind + its action filters (`labels_any/labels_all/authors/assignee/sole_assignee/reviewer/from_users/ignore_users/ignore_checks/require_label/include_prereleases/gates/exclude`) and variants | `on: <conn>.<kind>` triggers, `name:` = variant; the predicate keys map into one `filter:` under their unified names (`label_any`, `author`, `comment_author`/`not_comment_author`, `not_branch`/`not_label_any`/`not_title`, `not_draft`), and `reviewer`/`assignee`/`ignore_checks`/`include_prereleases` into `options:` |
 | `flaky_rerun` / `stuck_after` / `poll_interval` / `max_attempts_per_head` | trigger `options:` |
 | action `steps:` (id/if/type/agent/prompt/checkout/workdir/env/output_schema/background/handoff/retry/backend) | `steps:` carried field-for-field (the legacy `rerequest_review:` field is retired — use a `uses: <conn>.rerequest_review` step) |
-| slack `triggers:` (on/reaction/command) | `on: <conn>.<event>` + filters; a multi-variant rule merges into ONE trigger whose step is parallel branches (ids variant-prefixed, intra-variant references rewritten), so the feedback aggregation point is the join |
+| slack `triggers:` (on/reaction/command) | `on: <conn>.<event>` + a `filter:`; a multi-variant rule merges into ONE trigger whose step is parallel branches (ids variant-prefixed, intra-variant references rewritten), so the feedback aggregation point is the join |
 | slack `ack` / `on_done` / `on_fail` | hooks `at: start/done/fail` using `<conn>.react` / `<conn>.post` — `on_done` fires once after ALL variants complete and `on_fail` once when any failed, identical to the legacy aggregation |
 | cron `schedules:` | connection `schedules:` + one trigger per schedule |
 | webhook `sources:` (path/sign/match/title/dedup/repo) | connection `sources:` + one trigger per source (`repo:` on the trigger) |

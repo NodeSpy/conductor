@@ -66,8 +66,8 @@ runtimes:
     bin: /usr/local/bin/fakepaseo
 triggers:
   - "on": github.merge_conflict
-    filters:
-      repos:
+    filter:
+      repo:
         - grpb/cliclaude
     steps:
       - type: agent
@@ -78,8 +78,8 @@ triggers:
         archive_when_done: true
         runtime: cli_claude
   - "on": github.merge_conflict
-    filters:
-      repos:
+    filter:
+      repo:
         - grpb/clicodex
     steps:
       - type: agent
@@ -90,8 +90,8 @@ triggers:
         archive_when_done: true
         runtime: cli_codex
   - "on": github.merge_conflict
-    filters:
-      repos:
+    filter:
+      repo:
         - grpb/acpgemini
     steps:
       - type: agent
@@ -102,8 +102,8 @@ triggers:
         archive_when_done: true
         runtime: acp_gemini
   - "on": github.merge_conflict
-    filters:
-      repos:
+    filter:
+      repo:
         - grpb/ocnative
     steps:
       - type: agent
@@ -114,8 +114,8 @@ triggers:
         archive_when_done: true
         runtime: acp_omp
   - "on": github.merge_conflict
-    filters:
-      repos:
+    filter:
+      repo:
         - grpb/deck
     steps:
       - type: agent

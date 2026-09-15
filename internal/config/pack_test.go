@@ -204,9 +204,9 @@ func TestPackDisarmedTriggerArming(t *testing.T) {
 		t.Fatal("trigger should be armed (enabled:true) by the instance block")
 	}
 	// Repo scope is the consent.
-	repos, _ := tr.Filters["repos"].([]any)
+	repos := TriggerRepoScope(tr.Filter)
 	if len(repos) != 2 {
-		t.Fatalf("trigger repos should be [acme/app acme/api], got %v", tr.Filters["repos"])
+		t.Fatalf("trigger repos should be [acme/app acme/api], got %v", repos)
 	}
 	// Connector rebind on the trigger source and hook.
 	if tr.On != "gh.review_requested" {
@@ -251,7 +251,7 @@ packs:
 	if tr.Enabled != nil && *tr.Enabled {
 		t.Fatal("an un-armed shipped trigger must be disabled (inert)")
 	}
-	if _, ok := tr.Filters["repos"]; ok {
+	if len(TriggerRepoScope(tr.Filter)) > 0 {
 		t.Fatal("an un-armed shipped trigger must carry no repo scope")
 	}
 }

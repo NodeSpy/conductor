@@ -43,12 +43,12 @@ workflows:
 		},
 		{
 			"unknown filter key",
-			"- on: svc.ping\n  filters: {bogus: 1}\n  steps: [{uses: svc.post, options: {text: t}}]",
-			`unknown key "bogus"`,
+			"- on: svc.ping\n  filter: {bogus: 1}\n  steps: [{uses: svc.post, options: {text: t}}]",
+			`has no match key "bogus"`,
 		},
 		{
 			"filter type mismatch",
-			"- on: svc.ping\n  filters: {only: [a]}\n  steps: [{uses: svc.post, options: {text: t}}]",
+			"- on: svc.ping\n  filter: {only: [a]}\n  steps: [{uses: svc.post, options: {text: t}}]",
 			"want string",
 		},
 		{

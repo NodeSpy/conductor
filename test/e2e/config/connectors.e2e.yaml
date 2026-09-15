@@ -78,7 +78,7 @@ triggers:
   # K1: cross-boundary workflow — an agent fixes the conflict while slack
   # hooks announce start and completion.
   - on: gh.merge_conflict
-    filters: { repos: ["conn/cweb"] }
+    filter: { repo: ["conn/cweb"] }
     steps:
       - id: fix
         type: agent
@@ -93,7 +93,7 @@ triggers:
   # selfbox (this container's sshd), its output flowing into a slack post.
   - on: gh.merge_conflict
     name: remote
-    filters: { repos: ["conn/cweb"] }
+    filter: { repo: ["conn/cweb"] }
     steps:
       - id: remote
         run: sh
@@ -108,7 +108,7 @@ triggers:
   # (clone, worktree, run, wait) rides the ssh channel.
   - on: gh.merge_conflict
     name: remote-agent
-    filters: { repos: ["conn/rweb"] }
+    filter: { repo: ["conn/rweb"] }
     steps:
       - id: fix
         type: agent
@@ -119,7 +119,7 @@ triggers:
 
   # K2: a js code step reshapes the comment, a verb posts the result.
   - on: gh.new_comment
-    filters: { repos: ["conn/csvc"] }
+    filter: { repo: ["conn/csvc"] }
     steps:
       - id: shape
         run: js
@@ -131,7 +131,7 @@ triggers:
   # K7: request-response — web.ask presents a draft page per decision and the
   # workflow reads each answer; a slack post reports all three outcomes.
   - on: gh.new_comment
-    filters: { repos: ["conn/cask"] }
+    filter: { repo: ["conn/cask"] }
     steps:
       - { id: a1, uses: page.ask, options: { prompt: "K7 approve this?", draft: "{{.comment_body}}", timeout: 120s } }
       - { id: a2, uses: page.ask, options: { prompt: "K7 revise this?", draft: "v1", timeout: 120s } }
@@ -143,7 +143,7 @@ triggers:
   # K3: grouping — a burst of comments on one PR becomes ONE run.
   - on: gh.new_comment
     name: grouped
-    filters: { repos: ["conn/csvc"] }
+    filter: { repo: ["conn/csvc"] }
     group: { key: "{{.repo}}#{{.number}}", window: 2s }
     steps:
       - id: batch
@@ -162,7 +162,7 @@ triggers:
   # figure (not an estimate) and writes an agent_usage audit row + report spend.
   - on: gh.merge_conflict
     name: cost
-    filters: { repos: ["func/cost"] }
+    filter: { repo: ["func/cost"] }
     steps:
       - id: fix
         type: agent
@@ -174,7 +174,7 @@ triggers:
   # agent step never pushes; after the window frees, a third event runs again.
   - on: gh.merge_conflict
     name: budget
-    filters: { repos: ["func/budget1", "func/budget2", "func/budget3"] }
+    filter: { repo: ["func/budget1", "func/budget2", "func/budget3"] }
     policy:
       budget: { max_cost_usd: 0.03, window: 8s }
     steps:
@@ -187,7 +187,7 @@ triggers:
   # the downstream promote step fires.
   - on: gh.merge_conflict
     name: gatepass
-    filters: { repos: ["func/gatepass"] }
+    filter: { repo: ["func/gatepass"] }
     steps:
       - id: fix
         type: agent
@@ -203,7 +203,7 @@ triggers:
   # downstream promote step is suppressed — gutting the gate would let it fire.
   - on: gh.merge_conflict
     name: gatefail
-    filters: { repos: ["func/gatefail"] }
+    filter: { repo: ["func/gatefail"] }
     steps:
       - id: fix
         type: agent
@@ -219,7 +219,7 @@ triggers:
   # the digest (content addressing) and the round-tripped text.
   - on: gh.new_comment
     name: blob
-    filters: { repos: ["func/blob"] }
+    filter: { repo: ["func/blob"] }
     steps:
       - id: put
         uses: blob.put
@@ -235,7 +235,7 @@ triggers:
   # inputs/outputs; run.sh lists it, inspects it, and retries from a step.
   - on: gh.merge_conflict
     name: hist
-    filters: { repos: ["func/hist"] }
+    filter: { repo: ["func/hist"] }
     steps:
       - id: prep
         run: js
@@ -253,7 +253,7 @@ triggers:
   # event and asserts the live event stream AND the diff text in the history JSON.
   - on: gh.merge_conflict
     name: watch
-    filters: { repos: ["func/watch"] }
+    filter: { repo: ["func/watch"] }
     steps:
       - id: fix
         type: agent
@@ -295,7 +295,7 @@ triggers:
   # the schema-conforming JSON landed there.
   - on: gh.merge_conflict
     name: schemanative
-    filters: { repos: ["func/schemanative"] }
+    filter: { repo: ["func/schemanative"] }
     steps:
       - id: assess
         type: agent
@@ -325,7 +325,7 @@ triggers:
   # ever appears — there is no other way for this scenario to pass.
   - on: gh.merge_conflict
     name: schemasoft
-    filters: { repos: ["func/schemasoft"] }
+    filter: { repo: ["func/schemasoft"] }
     steps:
       - id: assess
         type: agent
@@ -354,7 +354,7 @@ triggers:
   # SCHEMA-CLI post appears.
   - on: gh.merge_conflict
     name: schemacli
-    filters: { repos: ["func/schemacli"] }
+    filter: { repo: ["func/schemacli"] }
     steps:
       - id: assess
         type: agent
@@ -374,13 +374,16 @@ triggers:
         uses: slack.post
         options: { channel: CSCHEMA, text: "SCHEMA-CLI decision={{.assess.decision}}" }
 
-  # U — the unified `filter:` (docs/design/unified-filter.md): ONE key whose
-  # YAML SHAPE is its boolean structure, replacing the exclude/gates/match-key
-  # grab-bag. This is the RosterStream#5590 condition, spelled out: skip a
-  # release PR only when it is BOTH release-titled AND on a release branch.
+  # U — the unified `filter:` (docs/design/unified-filter.md): the ONE filter
+  # key, whose YAML SHAPE is its boolean structure. Phase 2 folded routing in
+  # too, so the `repo` scope and the condition are conjuncts of one object —
+  # there is no second filter key left to put either in.
+  #
+  # This is the RosterStream#5590 condition, spelled out: skip a release PR
+  # only when it is BOTH release-titled AND on a release branch.
   #
   # The legacy spelling of the same intent —
-  #   filters: { exclude: { branches: [staging, prod], title: ['Release '] } }
+  #   filters: { exclude: { branches: [staging, prod], title: ['Release '] } }   # retired
   # — is an OR denylist whose `title` arm is a case-insensitive SUBSTRING, so
   # it silently skipped a changelog PR whose title merely contained the word
   # "release". That is the bug this grammar exists to end, and the two fixtures
@@ -397,8 +400,9 @@ triggers:
   # grouping would fire both.
   - on: gh.review_requested
     name: unified-filter
-    filters: { repos: ["func/filterfire", "func/filterskip"] }
-    filter: "!is_draft && !( (head_branch == 'staging' || head_branch == 'prod') && contains(title, 'Release ') )"
+    filter:
+      repo: ["func/filterfire", "func/filterskip"]
+      expr: "!is_draft && !( (head_branch == 'staging' || head_branch == 'prod') && contains(title, 'Release ') )"
     steps:
       - id: tell
         uses: slack.post

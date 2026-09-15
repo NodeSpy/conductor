@@ -43,13 +43,17 @@ var exampleDecl = &TypeDecl{
 	Events: []EventDecl{{
 		Name: "waved",
 		Desc: "someone waved at us",
-		// filters: keys legal under a trigger's `filters:` for this event.
+		// filters: the match keys legal inside a trigger's `filter:` object
+		// for this event. The unified grammar (AND/OR nesting, `not_`,
+		// `expr:`) comes for free over whatever is declared here.
 		Filters: Schema{"from": {Type: TString, Desc: "only waves from this sender"}},
 		// context: the facts the event publishes into the template scope.
 		Context: Schema{"sender": {Type: TString}, "emphatic": {Type: TBool}},
 	}},
-	// Filter makes `filters:` evaluate uniformly in the flow runner. Types
-	// whose lowered integration evaluates its own filters leave this nil.
+	// Filter makes `filter:` evaluate uniformly in the flow runner: it is
+	// called one match key at a time, so the connector answers "does this key
+	// hold" and the grammar owns the boolean structure. Types whose lowered
+	// integration filters for itself leave this nil.
 	Filter: func(event string, filters, trigCtx map[string]any) (bool, error) {
 		if want, _ := filters["from"].(string); want != "" {
 			got, _ := trigCtx["sender"].(string)
@@ -203,7 +207,7 @@ func TestAuthoringExampleSchemas(t *testing.T) {
 		t.Fatal("type mismatch must fail validation")
 	}
 
-	// Filters evaluate through the declared Filter func.
+	// A `filter:`'s match keys evaluate through the declared Filter func.
 	ev, _ := decl.Event("waved")
 	if ev.Name != "waved" {
 		t.Fatalf("event: %+v", ev)

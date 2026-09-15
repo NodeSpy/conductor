@@ -84,11 +84,11 @@ func TestResolveTriggerExtends(t *testing.T) {
 		{
 			Name:     "review-base",
 			Abstract: true,
-			Filters:  map[string]any{"gates": map[string]any{"not_draft": true}},
+			Filter:   mustDecodeFilter(t, `filter: {not_draft: true}`),
 			Steps:    []Step{{ID: "r", Type: "agent", Agent: "reviewer", Prompt: "review"}},
 		},
-		{On: "gh.review_requested", Extends: "review-base", Filters: map[string]any{"repos": []any{"org/a"}}},
-		{On: "gh.review_requested", Extends: "review-base", Filters: map[string]any{"repos": []any{"org/b"}}},
+		{On: "gh.review_requested", Extends: "review-base", Filter: mustDecodeFilter(t, `filter: {repo: [org/a]}`)},
+		{On: "gh.review_requested", Extends: "review-base"},
 	}}
 	if err := c.resolveTriggerExtends(); err != nil {
 		t.Fatalf("resolveTriggerExtends: %v", err)
@@ -105,13 +105,15 @@ func TestResolveTriggerExtends(t *testing.T) {
 		if len(tr.Steps) != 1 || tr.Steps[0].Agent != "reviewer" {
 			t.Errorf("child should inherit base steps, got %+v", tr.Steps)
 		}
-		// Filters deep-merge: base's gates + the child's own repos.
-		if _, ok := tr.Filters["gates"]; !ok {
-			t.Errorf("child should inherit base filter 'gates', got %v", tr.Filters)
-		}
-		if _, ok := tr.Filters["repos"]; !ok {
-			t.Errorf("child should keep its own filter 'repos', got %v", tr.Filters)
-		}
+	}
+	// `filter:` REPLACES rather than merges — its shape is its boolean
+	// structure, so there is no key-wise merge to do. The child that wrote one
+	// keeps its own; the child that wrote none inherits the base's.
+	if got := c.Triggers[0].Filter.String(); got != `and(match(repo,[org/a]))` {
+		t.Errorf("child with its own filter should keep it, got %s", got)
+	}
+	if got := c.Triggers[1].Filter.String(); got != `and(not(match(draft,true)))` {
+		t.Errorf("child with no filter should inherit the base's, got %s", got)
 	}
 }
 

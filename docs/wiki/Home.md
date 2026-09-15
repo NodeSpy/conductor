@@ -51,7 +51,7 @@ Another orchestrator (n8n and the like) can also call conductor's authenticated
   config.
 - **[[Runtimes]] + [[Steps]]** — where agents run and who they are; an
   agent profile's `session:` binds one live agent per key ([[Steps]]).
-- **[[Workflows]]** — the trigger grammar: `on` / `filters` / `steps` /
+- **[[Workflows]]** — the trigger grammar: `on` / `filter` / `steps` /
   `hooks`, position-scoped context, control flow, reusable workflows, and
   agent-authored plans.
 - **[[Verbs]]** — the shared action unit, option merging, `as:` identity,

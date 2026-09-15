@@ -9,16 +9,23 @@ import (
 )
 
 // This file is the github half of the unified `filter:`
-// (docs/design/unified-filter.md): the FACTS each filterable event publishes,
-// the MATCH predicate for each structured key, and the lowering that turns the
-// legacy `filters: {exclude, gates, labels_any, …}` block into the same IR.
+// (docs/design/unified-filter.md, docs/design/unified-filter-phase2.md): the
+// FACTS each filterable event publishes, the MATCH predicate for each
+// structured key, and the lowering that expresses each event's INTRINSIC
+// DEFAULT keep-condition in the same IR.
 //
-// Every keep-condition site now evaluates exactly ONE filter — the trigger's
-// own `filter:` when it set one, otherwise its legacy fields lowered here. The
-// legacy path must stay bit-identical, so each Match predicate's BODY is the
-// matcher that site already called (config.Exclude.Matches, anyFold/allFold,
-// containsFold, loginMatch, authorBotMatch, the gate readers) rather than a
-// reimplementation, and each site lowers only the conjuncts IT evaluated.
+// Every keep-condition site evaluates exactly ONE filter — the trigger's own
+// `filter:` when it set a predicate, otherwise the event's default lowered
+// here. The default path must stay bit-identical to the pre-filter engine, so
+// each Match predicate's BODY is the matcher that site already called
+// (config.Exclude.Matches, anyFold/allFold, containsFold, loginMatch,
+// authorBotMatch, the gate readers) rather than a reimplementation, and each
+// site lowers only the conjuncts IT evaluated.
+//
+// The match keys carry NO baked polarity: negation is the grammar's universal
+// `not_` prefix (config.FilterNotPrefix), which decodes to a Not around the
+// BASE key. So there is one `draft` matcher and `not_draft:` comes free — and
+// no key can mean the opposite of what its name says.
 
 // Fact and match-key value kinds, as internal/connector turns them into its
 // own schema types. Plain strings because internal/connector imports this
@@ -64,25 +71,38 @@ var filterFacts = map[string]map[string]string{
 	},
 }
 
+// FilterRepoKey routes a trigger to repositories: the one-key replacement for
+// the retired `filters: {repos, exclude_repos}`. It is STRUCTURAL, not a
+// predicate — `internal/connector` hoists a trigger's top-level `repo` /
+// `not_repo` into Action.Repos / Action.ExcludeRepos, which gate emit() before
+// any keep-condition runs and give the sweep its repo scope.
+//
+// Because the gate is structural it needs no per-event fact declaration, so
+// `filter: {repo: […]}` works on every github event — including the four
+// (failing_checks, merge_conflict, stuck_checks, pr_behind) that publish no
+// predicate facts at all and whose keep-conditions evaluate nothing.
+const FilterRepoKey = "repo"
+
 // matchKeyFacts maps each structured match key to the fact it reads and the
 // type of value it takes. A key is legal for an event exactly when that event
 // publishes the fact it reads, so the two surfaces cannot drift apart.
+//
+// FilterRepoKey is absent deliberately: it reads no declared fact (see above).
 var matchKeyFacts = map[string]struct {
 	fact string
 	typ  string
 }{
-	"branches":            {"head_branch", FilterList},
-	"base_branches":       {"base_branch", FilterList},
+	"branch":              {"head_branch", FilterList},
+	"base_branch":         {"base_branch", FilterList},
 	"title":               {"title", FilterList},
-	"labels_any":          {"labels", FilterList},
-	"labels_all":          {"labels", FilterList},
+	"label_any":           {"labels", FilterList},
+	"label_all":           {"labels", FilterList},
 	"require_label":       {"labels", FilterString},
-	"authors":             {"author", FilterList},
-	"from_users":          {"comment_author", FilterList},
-	"ignore_users":        {"comment_author", FilterList},
+	"author":              {"author", FilterList},
+	"comment_author":      {"comment_author", FilterList},
 	"author_bot":          {"author_is_bot", FilterBool},
 	"sole_assignee":       {"sole_assignee", FilterBool},
-	"not_draft":           {"is_draft", FilterBool},
+	"draft":               {"is_draft", FilterBool},
 	"merge_state":         {"merge_state", FilterBool},
 	"review_decision":     {"review_decision", FilterBool},
 	"non_author_approval": {"non_author_approval", FilterBool},
@@ -90,8 +110,8 @@ var matchKeyFacts = map[string]struct {
 }
 
 // FilterFacts returns the facts the named event publishes to a `filter:`
-// (fact name → value kind), or nil when the event has no filter surface —
-// phase 1 wires the five events whose keep-conditions evaluate a predicate.
+// (fact name → value kind), or nil when the event publishes none. An event
+// with no facts still takes a `filter:` — a routing-only one (FilterRepoKey).
 func FilterFacts(event string) map[string]string {
 	out := make(map[string]string, len(filterFacts[event]))
 	for k, v := range filterFacts[event] {
@@ -105,13 +125,14 @@ func FilterFacts(event string) map[string]string {
 
 // FilterMatchKeys returns the structured match keys legal inside a `filter:`
 // object for the named event (key → value kind): every key whose underlying
-// fact the event publishes.
+// fact the event publishes, plus the routing key every event accepts.
+//
+// Only BASE keys are listed. The `not_` twin of each is produced by the
+// grammar (config.FilterNotPrefix) as a Not around the base key, so it never
+// reaches a match-key check and never needs declaring.
 func FilterMatchKeys(event string) map[string]string {
+	out := map[string]string{FilterRepoKey: FilterList}
 	facts := filterFacts[event]
-	if len(facts) == 0 {
-		return nil
-	}
-	out := map[string]string{}
 	for key, m := range matchKeyFacts {
 		if _, ok := facts[m.fact]; ok {
 			out[key] = m.typ
@@ -120,8 +141,7 @@ func FilterMatchKeys(event string) map[string]string {
 	return out
 }
 
-// FilterEvents lists the events that accept a `filter:`, sorted — for the
-// error a trigger gets when it puts one on an event that has none.
+// FilterEvents lists the events that publish predicate facts, sorted.
 func FilterEvents() []string {
 	out := make([]string, 0, len(filterFacts))
 	for e := range filterFacts {
@@ -134,40 +154,59 @@ func FilterEvents() []string {
 // --- evaluation ------------------------------------------------------------
 
 // filterPasses evaluates the one filter gating a keep-condition: the action's
-// unified `filter:` when it set one, else the legacy conjuncts that site
-// already evaluated, lowered into the same IR by the caller.
+// `filter:` when it stated a predicate, else the event's intrinsic default,
+// lowered into the same IR by the caller.
+//
+// repo is injected as a fact rather than declared, so a nested `repo` (one
+// inside an OR arm, which the structural hoist in internal/connector can only
+// treat as a superset) still evaluates exactly here. It is not readable from
+// an expr string: the routing key is the supported way to ask.
 //
 // An evaluation error fails CLOSED — a filter that cannot be evaluated is not
 // a filter that passed — and is logged with where it came from, since a
-// silently non-firing trigger is otherwise invisible. The legacy lowering is
+// silently non-firing trigger is otherwise invisible. A lowered default is
 // built from typed config fields and cannot error, so this only ever bites a
 // hand-written `filter:`.
-func (g *Integration) filterPasses(act config.Action, where string, facts map[string]any, legacy *config.Filter) bool {
+func (g *Integration) filterPasses(act config.Action, kind, repo string, facts map[string]any, deflt *config.Filter) bool {
 	f := act.Filter
 	if f == nil {
-		f = legacy
+		f = deflt
+	}
+	if facts != nil {
+		facts[FilterRepoKey] = repo
 	}
 	ok, err := f.Eval(facts, matchFilterKey)
 	if err != nil {
-		log.Printf("github[%s]: %s: filter not evaluated (%v) — not firing", g.name, where, err)
+		log.Printf("github[%s]: %s %s: filter not evaluated (%v) — not firing", g.name, kind, repo, err)
 		return false
 	}
 	return ok
 }
 
 // matchFilterKey evaluates one structured match key against the event's facts.
-// Each case delegates to the matcher the legacy call site used, so a lowered
-// legacy block and a hand-written `filter:` share one implementation.
+// Each case delegates to the matcher the pre-filter call site used, so a
+// lowered default and a hand-written `filter:` share one implementation.
+//
+// Only BASE keys appear here. A `not_<key>` is a Not node wrapping the base
+// key's Match (config.FilterNotPrefix), so negation never reaches this switch.
 func matchFilterKey(key string, val any, facts map[string]any) (bool, error) {
 	switch key {
-	// --- denylist-shaped keys: the config.Exclude matchers, one arm each ---
-	case "branches":
+	// --- routing ---
+	case FilterRepoKey:
+		globs, err := filterStrings(key, val)
+		if err != nil {
+			return false, err
+		}
+		return matchRepo(globs, factString(facts, FilterRepoKey)), nil
+
+	// --- glob / substring keys: the config.Exclude matchers, one arm each ---
+	case "branch":
 		globs, err := filterStrings(key, val)
 		if err != nil {
 			return false, err
 		}
 		return config.Exclude{Branches: globs}.Matches(factString(facts, "head_branch"), "", nil), nil
-	case "base_branches":
+	case "base_branch":
 		globs, err := filterStrings(key, val)
 		if err != nil {
 			return false, err
@@ -184,13 +223,13 @@ func matchFilterKey(key string, val any, facts map[string]any) (bool, error) {
 		return config.Exclude{Title: subs}.Matches("", factString(facts, "title"), nil), nil
 
 	// --- label / login sets ---
-	case "labels_any":
+	case "label_any":
 		want, err := filterStrings(key, val)
 		if err != nil {
 			return false, err
 		}
 		return anyFold(factStrings(facts, "labels"), want), nil
-	case "labels_all":
+	case "label_all":
 		want, err := filterStrings(key, val)
 		if err != nil {
 			return false, err
@@ -202,24 +241,21 @@ func matchFilterKey(key string, val any, facts map[string]any) (bool, error) {
 			return false, err
 		}
 		return containsFold(factStrings(facts, "labels"), label), nil
-	case "authors":
+	case "author":
 		want, err := filterStrings(key, val)
 		if err != nil {
 			return false, err
 		}
 		return containsFold(want, factString(facts, "author")), nil
-	case "from_users":
+	case "comment_author":
+		// The COMMENTER, not the PR author. `comment_author:` is the old
+		// `from_users:`; `not_comment_author:` is the old `ignore_users:`,
+		// which is now visibly the same key negated rather than a second one.
 		want, err := filterStrings(key, val)
 		if err != nil {
 			return false, err
 		}
 		return loginMatch(want, factString(facts, "comment_author")), nil
-	case "ignore_users":
-		deny, err := filterStrings(key, val)
-		if err != nil {
-			return false, err
-		}
-		return !loginMatch(deny, factString(facts, "comment_author")), nil
 	case "author_bot":
 		want, err := filterBool(key, val)
 		if err != nil {
@@ -227,11 +263,18 @@ func matchFilterKey(key string, val any, facts map[string]any) (bool, error) {
 		}
 		return authorBotMatch(&want, factBool(facts, "author_is_bot")), nil
 
+	// --- draft: a plain equality, so `not_draft: true` reads as "require NOT
+	// draft" through the generic negation rather than through a second key ---
+	case "draft":
+		want, err := filterBool(key, val)
+		if err != nil {
+			return false, err
+		}
+		return factBool(facts, "is_draft") == want, nil
+
 	// --- opt-out toggles: false relaxes the check, true (or absent) enforces ---
 	case "sole_assignee":
 		return gatedBy(key, val, func() bool { return factBool(facts, "sole_assignee") })
-	case "not_draft":
-		return gatedBy(key, val, func() bool { return !factBool(facts, "is_draft") })
 	case "merge_state":
 		return gatedBy(key, val, func() bool { return factString(facts, "merge_state") == "CLEAN" })
 	case "review_decision":
@@ -313,13 +356,26 @@ func factStrings(facts map[string]any, key string) []string {
 	return v
 }
 
-// --- legacy lowering -------------------------------------------------------
+// --- intrinsic-default lowering --------------------------------------------
+//
+// These lower each event's DEFAULT keep-condition — what it evaluates when the
+// trigger states no predicate. They read Action's legacy predicate fields,
+// which no config surface populates any more (`filters:` is gone), so in the
+// connectors model every one of them is zero and the lowering collapses to the
+// event's built-in behavior: merge_ready's five opt-out gates stay enforced,
+// ready_for_review still skips the draft gate, everything else is unfiltered.
+//
+// The fields are still read rather than assumed zero because a legacy
+// integration config (internal/integrations/github's own `rules:`/`actions:`
+// YAML, which core.Build decodes straight into config.Action) can still set
+// them — and because "no behavior change when a trigger sets no filter" is
+// only demonstrable if the same code path produces both.
 
 // matchIf emits a Match node only for a non-empty list. Emptiness is why the
-// lowering cannot be a blanket "one Match per key": `labels_any: []` means "no
-// constraint" in the legacy block but "has any of nothing" (false) as a
-// predicate, so an unset legacy key must produce NO node rather than an empty
-// one. FilterAnd/FilterOr drop the nils.
+// lowering cannot be a blanket "one Match per key": `label_any: []` means "no
+// constraint" as a config field but "has any of nothing" (false) as a
+// predicate, so an unset field must produce NO node rather than an empty one.
+// FilterAnd/FilterOr drop the nils.
 func matchIf(key string, vals []string) *config.Filter {
 	if len(vals) == 0 {
 		return nil
@@ -327,26 +383,42 @@ func matchIf(key string, vals []string) *config.Filter {
 	return config.FilterMatch(key, vals)
 }
 
-// lowerExclude lowers a legacy `exclude:` denylist. It is an OR across its
-// arms, and "not excluded" is the negation of that OR — so an empty exclude
-// lowers to nothing (Or of no arms is false, Not of that is true), matching
+// lowerExclude lowers an `exclude:` denylist. It is an OR across its arms, and
+// "not excluded" is the negation of that OR — so an empty exclude lowers to
+// nothing (Or of no arms is false, Not of that is true), matching
 // config.Exclude.Matches returning false for an empty Exclude.
+//
+// This is the shape an author now writes directly, one key per arm:
+// `not_branch:`, `not_label_any:`, `not_title:` — which also lets them be
+// AND-ed instead, the distinction the old single `exclude:` block could not
+// express (docs/design/unified-filter.md §the #5590 fix).
 func lowerExclude(e config.Exclude) *config.Filter {
 	if e.Empty() {
 		return nil
 	}
 	return config.FilterNot(config.FilterOr(
-		matchIf("branches", e.Branches),
-		matchIf("labels_any", e.Labels),
+		matchIf("branch", e.Branches),
+		matchIf("label_any", e.Labels),
 		matchIf("title", e.Title),
 	))
 }
 
+// notDraftIf emits the "require not draft" conjunct when the gate is on, and
+// nothing when it is off — nothing rather than a vacuously-true node, because
+// `draft` is now a plain equality with no waiving value to pass it.
+func notDraftIf(on bool) *config.Filter {
+	if !on {
+		return nil
+	}
+	return config.FilterNot(config.FilterMatch("draft", true))
+}
+
 // lowerReviewRequested lowers what a review_requested keep-condition
 // evaluated inline: the opt-IN `gates.not_draft` toggle AND "not excluded".
+// Both are zero in the connectors model, so the default is "always keep".
 func lowerReviewRequested(act config.Action) *config.Filter {
 	return config.FilterAnd(
-		config.FilterMatch("not_draft", gateEnabled(act.Gates, "not_draft")),
+		notDraftIf(gateEnabled(act.Gates, "not_draft")),
 		lowerExclude(act.Exclude),
 	)
 }
@@ -368,17 +440,23 @@ func lowerIssueMatch(act config.Action) *config.Filter {
 	}
 	return config.FilterAnd(
 		sole,
-		matchIf("labels_any", act.LabelsAny),
-		matchIf("labels_all", act.LabelsAll),
+		matchIf("label_any", act.LabelsAny),
+		matchIf("label_all", act.LabelsAll),
 		lowerExclude(act.Exclude),
-		matchIf("authors", act.Authors),
+		matchIf("author", act.Authors),
 	)
 }
 
 // lowerMergeReady lowers merge_ready's `require_label` plus its `gates:` map.
 // These gates are opt-OUT (absent means enforced — mergeGateOn), the opposite
-// of the opt-IN not_draft toggle draftGate reads, which is why the same
-// `not_draft` match key is lowered from a different reader here.
+// of the opt-IN toggle draftGate reads, which is why the draft conjunct is
+// lowered from a different reader here.
+//
+// This is the one lowering that is NOT vacuous in the connectors model: with a
+// zero `gates:` map mergeGateOn says true for all five, so merge_ready keeps
+// its full all-green requirement by default. A trigger that states its own
+// predicate takes that over — which is what `merge_state: false` (waive one
+// gate) has always meant, and is why the toggles keep their opt-out reading.
 func lowerMergeReady(act config.Action) *config.Filter {
 	var require *config.Filter
 	if act.RequireLabel != "" {
@@ -386,7 +464,12 @@ func lowerMergeReady(act config.Action) *config.Filter {
 	}
 	gates := make([]*config.Filter, 0, len(mergeGateKeys))
 	for _, k := range mergeGateKeys {
-		gates = append(gates, config.FilterMatch(k, mergeGateOn(act.Gates, k)))
+		on := mergeGateOn(act.Gates, k)
+		if k == "not_draft" {
+			gates = append(gates, notDraftIf(on))
+			continue
+		}
+		gates = append(gates, config.FilterMatch(k, on))
 	}
 	return config.FilterAnd(require, config.FilterAnd(gates...))
 }
@@ -401,9 +484,13 @@ func lowerComment(act config.Action, withAuthorBot bool) *config.Filter {
 	if withAuthorBot && act.AuthorBot != nil {
 		bot = config.FilterMatch("author_bot", *act.AuthorBot)
 	}
+	var ignore *config.Filter
+	if m := matchIf("comment_author", act.IgnoreUsers); m != nil {
+		ignore = config.FilterNot(m)
+	}
 	return config.FilterAnd(
-		matchIf("from_users", act.FromUsers),
-		matchIf("ignore_users", act.IgnoreUsers),
+		matchIf("comment_author", act.FromUsers),
+		ignore,
 		bot,
 	)
 }

@@ -286,7 +286,7 @@ func (g *Integration) reviewTriggers(ctx context.Context, repo string, p ghPaylo
 					prLabelNames(p.PullRequest), p.PullRequest.Draft)
 				facts["reviewer"] = p.Review.User.Login
 				facts["author_is_bot"] = reviewerIsBot
-				return g.filterPasses(act, "changes_requested "+repo, facts, lowerChangesRequested(act))
+				return g.filterPasses(act, "changes_requested", repo, facts, lowerChangesRequested(act))
 			})...)
 	}
 	// Any submitted review may have made the PR merge-ready.
@@ -374,7 +374,7 @@ func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []cor
 	return g.emit(repo, "new_comment", t,
 		fmt.Sprintf("new comment by %s on %s#%d", p.Comment.User.Login, repo, num),
 		fmt.Sprintf("comment:%d", p.Comment.ID), extra, func(act config.Action) bool {
-			return g.filterPasses(act, "new_comment "+repo,
+			return g.filterPasses(act, "new_comment", repo,
 				commentFilterFacts(p.Comment.User.Login, p.Comment.Body, authorIsBot),
 				lowerComment(act, true))
 		})
@@ -556,7 +556,7 @@ func (g *Integration) pullRequestTriggers(ctx context.Context, repo string, p gh
 				// filter; everything else this site used to check inline is
 				// the one filter below.
 				return g.reviewerRequestedMatches(repo, act, p) &&
-					g.filterPasses(act, "review_requested "+repo, prFilterFacts(
+					g.filterPasses(act, "review_requested", repo, prFilterFacts(
 						pr.Head.Ref, pr.Base.Ref, pr.Title, pr.User.Login, labels, pr.Draft),
 						lowerReviewRequested(act))
 			})
@@ -606,7 +606,7 @@ func (g *Integration) mergeReadyTriggers(ctx context.Context, repo string, numbe
 	return g.emit(repo, "merge_ready", t,
 		fmt.Sprintf("merge-ready %s#%d", repo, number), "mergeready@"+gate.HeadSHA, nil,
 		func(act config.Action) bool {
-			return g.filterPasses(act, "merge_ready "+repo,
+			return g.filterPasses(act, "merge_ready", repo,
 				mergeReadyFilterFacts(gate), lowerMergeReady(act))
 		})
 }
@@ -614,6 +614,17 @@ func (g *Integration) mergeReadyTriggers(ctx context.Context, repo string, numbe
 // mergeGateKeys are the merge-ready gate toggles, in the order
 // mergeGatePasses checks them (also the lowering's Match order).
 var mergeGateKeys = []string{"not_draft", "merge_state", "review_decision", "non_author_approval", "threads_resolved"}
+
+// MergeGateKeys and MergeGateOn expose the merge-ready gate reading to
+// `conductor config migrate`, which has to rewrite a legacy `gates:` map as
+// explicit `filter:` conjuncts. They are the same values the lowering uses, so
+// a migrated config and an unmigrated one cannot disagree about which gates
+// were on.
+func MergeGateKeys() []string { return append([]string(nil), mergeGateKeys...) }
+
+// MergeGateOn reports whether one merge-ready gate is enforced (opt-out:
+// absent means yes).
+func MergeGateOn(gates map[string]any, key string) bool { return mergeGateOn(gates, key) }
 
 // mergeGateOn reads one merge-ready gate toggle. These gates are opt-OUT: an
 // absent key is ENFORCED, and only an explicit false (or "false"/"no"/"")
@@ -865,7 +876,7 @@ func (g *Integration) cheapMatch(repo string, act config.Action, st issueMatchSt
 	if !g.issueAssigneeMatch(repo, act, st.assignees) {
 		return false
 	}
-	return g.filterPasses(act, "issue_matched "+repo,
+	return g.filterPasses(act, "issue_matched", repo,
 		issueFilterFacts(st, g.soleSelf(st.assignees)), lowerIssueMatch(act))
 }
 
@@ -1128,7 +1139,7 @@ func (g *Integration) readyReviewTriggers(ctx context.Context, repo string, p gh
 		fmt.Sprintf("ready for review on %s#%d", repo, pr.Number), "reviewreq@"+pr.Head.SHA, nil,
 		func(act config.Action) bool {
 			return g.reviewerInList(g.reviewerFor(repo, act), logins, slugs) &&
-				g.filterPasses(act, "ready_for_review "+repo, prFilterFacts(
+				g.filterPasses(act, "ready_for_review", repo, prFilterFacts(
 					pr.Head.Ref, pr.Base.Ref, pr.Title, pr.User.Login, labels, pr.Draft),
 					lowerReadyReview(act))
 		})

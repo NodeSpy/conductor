@@ -34,8 +34,9 @@ connectors:
 Every connector type is self-describing. It declares:
 
 1. **Events** — the kinds valid after `on: <conn>.`, each with a **filter
-   schema** (the legal `filters:` keys and how they evaluate) and a **context
-   schema** (the facts the event publishes into templates).
+   schema** (the match keys legal inside a trigger's `filter:` and how they
+   evaluate) and a **context schema** (the facts the event publishes into
+   templates, which its `filter:` expr strings also read).
 2. **Verbs** — the actions valid after `uses: <conn>.`, each with an **option
    schema** and, for request-response verbs, an **output schema**.
 3. **Connection** — credentials, identity (`me:`), default match (`repos:`),
@@ -43,7 +44,7 @@ Every connector type is self-describing. It declares:
 
 `conductor connectors ls` lists every configured connector's state, events,
 and verbs; `conductor schema <conn>` prints the full schemas. `conductor
-validate` checks every `on:` kind, `filters:` key, `uses:` verb, option, and
+validate` checks every `on:` kind, `filter:` key, `uses:` verb, option, and
 template reference against these declarations at load time.
 
 ## Enable / disable, and failure posture
@@ -74,8 +75,8 @@ for that verb.
 | `web` | — | `ask` | approve/revise/discard page on the inbound listener; [[Hand-offs]] tunnels |
 | `cron` | one per declared schedule | — | `schedules:` on the connection |
 | `webhook` | one per declared source | `post` (generic outbound HTTP) | `sources:` with signing/match/title/dedup |
-| `sentry` | `alert` | — | filters: projects/levels/environments |
-| `pagerduty` | `incident` | — | filters: event_types/services/urgencies/priorities |
+| `sentry` | `alert` | — | filter keys: projects/levels/environments |
+| `pagerduty` | `incident` | — | filter keys: event_types/services/urgencies/priorities |
 | `rss` | one per declared feed | — | per-trigger `match:` regex filter |
 | `command` | — | `run` | commands local or over SSH via `host:`/`ssh:`; outputs `stdout`/`stderr`/`exit_code` |
 | `rest` | user-declared polled `events:` | user-declared `verbs:` | any HTTP API from config: `base_url` + shared `auth:` (incl. oauth2 w/ refresh rotation) — see [[Configuration]] |
@@ -94,9 +95,9 @@ types) and `write` (writable types) verbs — values read there are tainted
 sensitive and redacted from logs/audit. See [[Secrets]].
 
 Trigger matching is uniform across every connector: triggers are
-**independent** — every trigger whose filters match an event fires. (Legacy
+**independent** — every trigger whose `filter:` matches an event fires. (Legacy
 sentry/pagerduty rules were first-match-wins; the migration reproduces that
-winner exactly by generating `exclude:` filters on later triggers, so nothing
+winner exactly by generating negated keys on later triggers, so nothing
 double-fires after a migration.)
 
 ## Adding a connector type

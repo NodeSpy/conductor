@@ -38,7 +38,7 @@ workflows:
 
 triggers:
   - on: gh.issue_matched
-    filters: { labels_any: [epic] }
+    filter: { label_any: [epic] }
     steps:
       - id: feature
         prompt: "Implement the feature described in {{.url}}: {{.title}}"

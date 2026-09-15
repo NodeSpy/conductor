@@ -119,7 +119,7 @@ func TestGithubTransformShape(t *testing.T) {
 	// rule2: merge_conflict = 1
 	if len(out.Triggers) != 6 {
 		for _, tr := range out.Triggers {
-			t.Logf("trigger on=%s name=%s filters=%v", tr.On, tr.Name, tr.Filters)
+			t.Logf("trigger on=%s name=%s filter=%s", tr.On, tr.Name, tr.Filter)
 		}
 		t.Fatalf("triggers: %d, want 6", len(out.Triggers))
 	}
@@ -136,13 +136,14 @@ func TestGithubTransformShape(t *testing.T) {
 	if got := mc[0].Steps[0].Prompt; !strings.Contains(got, "Fix the conflict") {
 		t.Errorf("inherited default prompt lost: %q", got)
 	}
-	// The glob rule's triggers exclude the more specific rule's repo.
-	if got := fmt.Sprint(mc[0].Filters["exclude_repos"]); !strings.Contains(got, "acme/special") {
-		t.Errorf("exclude_repos missing: %v", mc[0].Filters)
+	// The glob rule's triggers exclude the more specific rule's repo, as a
+	// top-level `not_repo` the lowering hoists back into Action.ExcludeRepos.
+	if got := fmt.Sprint(mc[0].Filter.TopLevelNegated("repo")); !strings.Contains(got, "acme/special") {
+		t.Errorf("not_repo missing: %s", mc[0].Filter)
 	}
 	// The specific rule's trigger has no exclusions.
-	if _, has := mc[1].Filters["exclude_repos"]; has {
-		t.Errorf("specific rule should not exclude: %v", mc[1].Filters)
+	if got := mc[1].Filter.TopLevelNegated("repo"); len(got) > 0 {
+		t.Errorf("specific rule should not exclude: %v", got)
 	}
 	if mc[1].Steps[0].Type != "command" {
 		t.Errorf("specific rule step type: %q", mc[1].Steps[0].Type)
@@ -152,18 +153,26 @@ func TestGithubTransformShape(t *testing.T) {
 	if len(rr) != 2 || rr[0].Name != "triage" || rr[1].Name != "full" {
 		t.Fatalf("review_requested variants: %+v", rr)
 	}
-	// Filters mapped.
-	f := rr[0].Filters
-	if fmt.Sprint(f["reviewer"]) == "" || f["gates"] == nil || f["exclude"] == nil {
-		t.Errorf("triage filters incomplete: %v", f)
+	// The legacy filter fields mapped: the predicate into `filter:`, the
+	// reviewer identity gate and per-check suppression into `options:`.
+	f := rr[0].Filter
+	if f == nil || !strings.Contains(f.String(), "not(match(draft,true))") ||
+		!strings.Contains(f.String(), "not(match(branch,") {
+		t.Errorf("triage filter incomplete: %s", f)
 	}
-	nc := byOn["gh.new_comment"][0].Filters
-	if fmt.Sprint(nc["from_users"]) != "[alice]" || fmt.Sprint(nc["ignore_users"]) != "[bot[bot]]" {
-		t.Errorf("comment filters: %v", nc)
+	if rr[0].Options["reviewer"] == nil {
+		t.Errorf("reviewer should land in options: %v", rr[0].Options)
+	}
+	nc := byOn["gh.new_comment"][0].Filter
+	if got := fmt.Sprint(nc.MatchUnion("comment_author")); got != "[alice]" {
+		t.Errorf("comment_author: %s", nc)
+	}
+	if got := fmt.Sprint(nc.TopLevelNegated("comment_author")); got != "[bot[bot]]" {
+		t.Errorf("not_comment_author: %s", nc)
 	}
 	fc := byOn["gh.failing_checks"][0]
-	if fmt.Sprint(fc.Filters["ignore_checks"]) != "[nightly]" {
-		t.Errorf("ignore_checks: %v", fc.Filters)
+	if fmt.Sprint(fc.Options["ignore_checks"]) != "[nightly]" {
+		t.Errorf("ignore_checks should land in options: %v", fc.Options)
 	}
 	if fc.Options["max_attempts_per_head"] != 5 {
 		t.Errorf("options: %v", fc.Options)

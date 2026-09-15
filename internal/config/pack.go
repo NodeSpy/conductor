@@ -257,14 +257,34 @@ type TriggerArm struct {
 	Enabled *bool `yaml:"enabled,omitempty"`
 	// Repos scopes the trigger to the consumer's repositories (the consent). An
 	// armed trigger with no repos matches nothing.
+	//
+	// It stays a field of its own rather than folding into Filter (§7): the
+	// repo list is the SECURITY boundary an operator grants a third-party
+	// pack, and a boundary you can only state one way is a boundary you can
+	// audit. Arming lowers it into the trigger's `filter:` as a `repo` match
+	// AND-ed with everything else, so nothing downstream needs to know.
 	Repos []string `yaml:"repos,omitempty"`
-	// Filters deep-merges onto the shipped trigger's filters (behavior override).
-	Filters map[string]any `yaml:"filters,omitempty"`
+	// Filter is the consumer's predicate override, AND-ed with the shipped
+	// trigger's own `filter:` (and with the arm's repo scope). It ANDs rather
+	// than replaces because an arm is a NARROWING: a pack's trigger already
+	// says what it is for, and an operator adding a filter is adding a
+	// condition to it, not taking the pack's off.
+	Filter *Filter `yaml:"filter,omitempty"`
 	// Policy deep-merges onto the shipped trigger's policy (behavior override).
 	Policy map[string]any `yaml:"policy,omitempty"`
 	// Gate replaces the shipped trigger's gate. The OPERATOR setting a gate is
 	// the point — it is their check that runs before the pack's steps land.
 	Gate *GateSpec `yaml:"gate,omitempty"`
+}
+
+// UnmarshalYAML decodes an arming block, naming the retired `filters:` key
+// rather than letting it read as an unknown field.
+func (t *TriggerArm) UnmarshalYAML(n *yaml.Node) error {
+	if err := rejectLegacyFilters(n); err != nil {
+		return err
+	}
+	type plain TriggerArm
+	return strictNodeDecode(n, (*plain)(t))
 }
 
 // IsArmed reports whether the consumer armed this trigger (enabled:true).
@@ -278,7 +298,7 @@ func (t TriggerArm) IsArmed() bool { return t.Enabled != nil && *t.Enabled }
 //	  review: { repos: [team/app] }            # object -> ONE instance
 //	  deploy:                                  # array  -> N instances
 //	    - { repos: [team-a/*], gate: { run: [strict] } }
-//	    - { repos: [team-b/*], filters: { labels: [urgent] } }
+//	    - { repos: [team-b/*], filter: { label_any: [urgent] } }
 //
 // One pack trigger, armed for two teams with different gates, without the
 // pack author having to ship two near-identical triggers or the operator
@@ -329,8 +349,12 @@ func mergeArm(star, named TriggerArm) TriggerArm {
 	if len(named.Repos) > 0 {
 		out.Repos = named.Repos
 	}
-	if named.Filters != nil {
-		out.Filters = deepOverride(star.Filters, named.Filters)
+	// A named arm's `filter:` REPLACES the wildcard's rather than ANDing with
+	// it, for the same reason Repos does: the operator who writes a filter on
+	// one trigger is saying "this one, this way", and must be able to loosen
+	// what `"*"` set, not only tighten it.
+	if named.Filter != nil {
+		out.Filter = named.Filter
 	}
 	if named.Policy != nil {
 		out.Policy = deepOverride(star.Policy, named.Policy)

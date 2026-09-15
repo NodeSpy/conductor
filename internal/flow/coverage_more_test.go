@@ -17,7 +17,7 @@ func TestFilterMatch(t *testing.T) {
 	reg := buildRegistry(t, cfg)
 	r := New(Runner{Cfg: cfg, Conns: reg})
 
-	spec := mustSpec(t, "on: svc.ping\nfilters: { only: \"deploy\" }")
+	spec := mustSpec(t, "on: svc.ping\nfilter: { only: \"deploy\" }")
 	ok, err := r.FilterMatch(newTrigger("ping", map[string]any{"msg": "deploy started"}), spec)
 	if err != nil || !ok {
 		t.Fatalf("matching filter: %v %v", ok, err)
@@ -26,12 +26,32 @@ func TestFilterMatch(t *testing.T) {
 	if ok {
 		t.Fatal("non-matching filter must not match")
 	}
-	// No filters, and an unknown connector: both pass through.
+	// No filter, and an unknown connector: both pass through.
 	if ok, _ := r.FilterMatch(newTrigger("ping", nil), mustSpec(t, "on: svc.ping")); !ok {
-		t.Fatal("no filters → true")
+		t.Fatal("no filter → true")
 	}
-	if ok, _ := r.FilterMatch(newTrigger("ping", nil), mustSpec(t, "on: ghost.ping\nfilters: {x: 1}")); !ok {
+	if ok, _ := r.FilterMatch(newTrigger("ping", nil), mustSpec(t, "on: ghost.ping\nfilter: {x: 1}")); !ok {
 		t.Fatal("unknown connector → true")
+	}
+
+	// A generic source gets the whole grammar over the keys it declared: the
+	// connector answers one key at a time and the IR does the boolean work.
+	// `not_only` needs no declaration — the prefix is the grammar's.
+	neg := mustSpec(t, "on: svc.ping\nfilter: { not_only: \"deploy\" }")
+	if ok, _ := r.FilterMatch(newTrigger("ping", map[string]any{"msg": "deploy started"}), neg); ok {
+		t.Error("not_only must negate the connector's own match key")
+	}
+	if ok, err := r.FilterMatch(newTrigger("ping", map[string]any{"msg": "other"}), neg); err != nil || !ok {
+		t.Errorf("not_only should hold for a non-matching event: %v %v", ok, err)
+	}
+	or := mustSpec(t, "on: svc.ping\nfilter: [ { only: \"deploy\" }, { only: \"rollback\" } ]")
+	for _, msg := range []string{"deploy started", "rollback started"} {
+		if ok, err := r.FilterMatch(newTrigger("ping", map[string]any{"msg": msg}), or); err != nil || !ok {
+			t.Errorf("an OR of match keys should hold for %q: %v %v", msg, ok, err)
+		}
+	}
+	if ok, _ := r.FilterMatch(newTrigger("ping", map[string]any{"msg": "other"}), or); ok {
+		t.Error("an OR of match keys must not hold when no arm does")
 	}
 }
 

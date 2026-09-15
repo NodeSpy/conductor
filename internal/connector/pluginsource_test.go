@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/plugin"
@@ -21,9 +23,22 @@ func (f fakeSourcer) StartSource(ctx context.Context, _ plugin.StartSourceReques
 	return nil
 }
 
+// mustFilter decodes a `filter:` body the way a trigger does, so a test
+// exercises the real grammar rather than a hand-built IR.
+func mustFilter(t *testing.T, body string) *config.Filter {
+	t.Helper()
+	var wrap struct {
+		Filter *config.Filter `yaml:"filter"`
+	}
+	if err := yaml.Unmarshal([]byte("filter:\n  "+body), &wrap); err != nil {
+		t.Fatalf("decode filter %q: %v", body, err)
+	}
+	return wrap.Filter
+}
+
 // TestPluginSourceMatchesAndResolvesAction proves the daemon-side adapter: a
 // source plugin's streamed events are matched against the configured triggers
-// (on: + filters) and lowered to a core.Trigger with the action resolved on the
+// (on: + filter) and lowered to a core.Trigger with the action resolved on the
 // DAEMON side — the plugin never carries the action.
 func TestPluginSourceMatchesAndResolvesAction(t *testing.T) {
 	enabled := true
@@ -31,7 +46,7 @@ func TestPluginSourceMatchesAndResolvesAction(t *testing.T) {
 		On:      "sentry1.issue_alert",
 		Name:    "",
 		Enabled: &enabled,
-		Filters: map[string]any{"level": []any{"error", "fatal"}},
+		Filter:  mustFilter(t, "level: [error, fatal]"),
 	}}
 	src := fakeSourcer{events: []map[string]any{
 		{ // matches: level error, and correct event

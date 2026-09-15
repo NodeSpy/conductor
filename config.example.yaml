@@ -460,7 +460,7 @@ hosts:
 # ---------------------------------------------------------------------------
 # triggers:
 #   - on: gh.issue_matched
-#     filters: { labels_any: [epic] }
+#     filter: { label_any: [epic] }
 #     steps:
 #       - id: feature
 #         prompt: "Implement the feature described in {{.url}}"
@@ -866,21 +866,22 @@ callable:
 # A trigger's value is polymorphic: an object is ONE trigger, an ARRAY is
 # several INSTANCES that each fire independently. There is no instances:
 # keyword and no per-instance name — an instance's identity is its CONTENT
-# (its repos/filters are what make it distinct), so its dedup state stays put
-# when you reorder the list:
+# (its repo scope and filter are what make it distinct), so its dedup state
+# stays put when you reorder the list:
 #
 #   triggers:
 #     review:
-#       - { on: github.pull_request, filters: { repos: [me/app], labels: [ready] } }
-#       - { on: github.pull_request, filters: { repos: [me/api] } }
+#       - { on: github.pull_request, filter: { repo: [me/app], label_any: [ready] } }
+#       - { on: github.pull_request, filter: { repo: [me/api] } }
 # ---------------------------------------------------------------------------
 triggers:
   # Near-identical triggers can share a base: a trigger `extends: <name>` inherits
-  # another's steps/filters/policy (filters deep-merge, steps replace), and a base
-  # marked `abstract: true` never fires and is stripped after resolution:
+  # another's steps/filter/policy/options (options deep-merge; filter and steps
+  # replace when set), and a base marked `abstract: true` never fires and is
+  # stripped after resolution:
   #   - { name: review-base, abstract: true, steps: [ { id: r, type: agent, agent: reviewer, prompt: "Review {{.repo}}#{{.pr}}." } ] }
-  #   - { on: gh.review_requested, extends: review-base, filters: { repos: [org/api] } }
-  #   - { on: gh.review_requested, extends: review-base, filters: { repos: [org/web] } }
+  #   - { on: gh.review_requested, extends: review-base, filter: { repo: [org/api] } }
+  #   - { on: gh.review_requested, extends: review-base, filter: { repo: [org/web] } }
   # (wiki: Reuse)
   #
   # A callable manual workflow: reachable at POST /invoke/pr-summary for any
@@ -915,7 +916,7 @@ triggers:
   # A poster's comment burst becomes ONE run (debounce; window resets per
   # event, fires when quiet; at most one run per key is in flight).
   - on: gh.new_comment
-    filters: { ignore_users: ["ci-bot"] }
+    filter: { not_comment_author: ["ci-bot"] }
     group: { key: "{{.repo}}#{{.pr}}", window: 15s }
     steps:
       - id: handle
@@ -932,9 +933,11 @@ triggers:
   # Multiple sources fan into one step list: a cron schedule, on-demand runs
   # (`conductor run repo-audit --input scope=all`), and a filtered GitHub
   # event. Each on: item is a bare conn.event or a one-key map whose value
-  # is a per-source block: filters (validated against THAT source's schema
-  # only; keys override the shared top-level filters:), policy (innermost
-  # scope), hooks (appended after the shared hooks, for that source only).
+  # is a per-source block: filter (validated against THAT source's schema
+  # only; it REPLACES the shared top-level `filter:` for that source — its
+  # shape is its boolean structure, so there is no key-wise merge), policy
+  # (innermost scope), hooks (appended after the shared hooks, that source
+  # only).
   # Steps stay trigger-level. The trigger fires once per matching event from
   # any listed source; reference
   # source-specific fields defensively ({{.number | default ""}}). A trigger
@@ -944,7 +947,7 @@ triggers:
       - timer.weekly-audit
       - manual
       - gh.issue_matched:
-          filters: { labels_any: [audit] }
+          filter: { label_any: [audit] }
           hooks:
             - { at: start, uses: gh.comment, options: { repo: "{{.repo}}", number: "{{.number}}", body: "auditing…" } }
     steps:
@@ -991,9 +994,14 @@ triggers:
 
   # Review triage through the reusable workflow + a request-response ask.
   - on: gh.review_requested
-    filters:
+    # ONE filter key, whose YAML shape is its boolean structure. Any key takes
+    # a `not_` prefix, so a denylist is the negation of the allowlist rather
+    # than a separate `exclude:` concept with its own combination rule.
+    filter: { not_branch: ["release/*"], not_label_any: [hold] }
+    # `reviewer:` is an identity gate against the connector's `me:`, not a
+    # predicate over a published fact, so it is an option.
+    options:
       reviewer: { logins: [your-login] }
-      exclude: { branches: ["release/*"], labels: [hold] }
     steps:
       - { id: a, workflow: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
       - id: draft
@@ -1038,7 +1046,7 @@ triggers:
 
   # Post release notes to Slack — a cross-boundary one-liner.
   - on: gh.release
-    filters: { include_prereleases: false }
+    options: { include_prereleases: false }
     steps:
       - { id: announce, uses: slack-ops.post, options: { text: "released {{.tag_name}}: {{.url}}" } }
 
@@ -1160,7 +1168,7 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #     models:
 #       reviewer: claude-opus-5                   # OVERRIDE a bundled fleet
 #     on:                                          # its triggers, by qualified name
-#       github.pull_request: { filters: { labels_not: [wip] } }
+#       github.pull_request: { filter: { not_label_any: [wip] } }
 #     # Scope lives on the CONNECTOR, not the pack: each trigger binds to your
 #     # connector of its own source type. You need write the binding above only
 #     # when the choice is real: exactly ONE connector of a required type is
@@ -1174,7 +1182,7 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #         repos:   [your-org/app]                  # required for a github trigger — the repo scope IS the consent
 #       deploy:                                    # an ARRAY arms the SAME trigger N times
 #         - { repos: [team-a/*], gate: { run: [review/no-todos] } }
-#         - { repos: [team-b/*], filters: { labels: [urgent] } }
+#         - { repos: [team-b/*], filter: { label_any: [urgent] } }
 #       # Each array entry is one instance with its own dedup/session/outcome
 #       # state, keyed by its CONTENT — so reordering the list changes nothing,
 #       # and there is no instance id to write. Two identical entries are a

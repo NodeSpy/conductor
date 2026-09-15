@@ -313,7 +313,7 @@ pack by name, using the EXISTING `extends:`/additive-guidance merge machinery
 packs:
   pr-review-team:
     on:                                        # its triggers, by qualified name (§5.4)
-      github.pull_request: { filters: { labels_not: [wip] } }   # ADD a filter (merge)
+      github.pull_request: { filter: { not_label_any: [wip] } }  # ADD a filter (AND-ed)
       gitlab.merge_request: { enabled: false }                  # turn one off
     steps:                                     # its steps, by name
       security:  { guidance: "focus on authz + SSRF" }          # ADDITIVE — appended
@@ -369,14 +369,14 @@ packs:
   pr-review-team:
     triggers:
       review:
-        - { repos: [me/app, me/payments], filters: { labels: [ready] } }
+        - { repos: [me/app, me/payments], filter: { label_any: [ready] } }
         - { repos: [me/api] }
 ```
 
 - **No `instances:` keyword. No `extends:`/`abstract:` ceremony for this. No names.**
-  An instance's identity is its CONTENT (its `repos:`/`filters:`) — that is what
+  An instance's identity is its CONTENT (its `repos:`/`filter:`) — that is what
   makes it distinct. Dedup keys off the event + that scope, not a label.
-- Instance `repos:`/`filters:` are a NARROWING within the connector's scope — they
+- Instance `repos:`/`filter:` are a NARROWING within the connector's scope — they
   can only subset what the connector covers, never widen it.
 - Cross-connector variation is the same shape: an instance that sets
   `connectors: { github: work-github }`.
