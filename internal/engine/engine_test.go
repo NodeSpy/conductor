@@ -531,6 +531,29 @@ func TestCompletionHookInvokedAfterOutcome(t *testing.T) {
 	}
 }
 
+// A type: agent step with no prompt of its own is dispatched against the event
+// itself — conductor synthesizes the connector-neutral event prompt.
+func TestEmptyPromptGetsEventPrompt(t *testing.T) {
+	d := &fakeDispatcher{}
+	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
+	e.process(context.Background(), agentTrigger("failing_checks", "a/w", 30, "h", "s",
+		config.Action{Type: "agent", Agent: "w/fixer", Prompt: ""}))
+	if len(d.reqs) != 1 {
+		t.Fatalf("expected one dispatch, got %d", len(d.reqs))
+	}
+	p := d.reqs[0].Action.Prompt
+	if !strings.HasPrefix(p, "Act on this event:") {
+		t.Fatalf("empty-prompt agent step must dispatch the event prompt, got: %.60q", p)
+	}
+	if !strings.Contains(p, "failing_checks") {
+		t.Fatalf("event prompt must carry the event kind, got: %.200q", p)
+	}
+	// The credential channel in the trigger context must not reach the agent.
+	if strings.Contains(p, "atok") || strings.Contains(p, "app_token") {
+		t.Fatalf("credential leaked into the event prompt: %.300q", p)
+	}
+}
+
 func TestFixersDoNotGetAskGuidance(t *testing.T) {
 	// A top-level single-action fixer is autonomous: it must NOT be told to ask
 	// interactive questions, even when its profile is archive_when_done. Interactive

@@ -81,7 +81,11 @@ A step is one of six forms (all share `id` and `if`):
 - `type: agent` — dispatch an agent: `prompt`, `checkout`,
   `output_schema`, `background` (+ `handoff`, see [[Hand-offs]]),
   `workdir`, `env`, and an optional `gate:` on the
-  agent's proposed change ([[Gates]]). A foreground agent step with a local
+  agent's proposed change ([[Gates]]). **`prompt` is optional**: omit it and
+  conductor hands the agent the event itself — a connector-neutral JSON object
+  (source, kind, target, and the event's context) under a bare "Act on this
+  event:" — and the agent infers the task. Write an explicit `prompt` only when
+  you want to steer it. A foreground agent step with a local
   worktree also outputs its proposed `diff` and `workdir` ([[Runs]]). To
   re-request a reviewer after a fix, add a `uses: <conn>.rerequest_review`
   step (see [[Verbs]]) rather than a field on the agent step.

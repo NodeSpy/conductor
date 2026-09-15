@@ -88,6 +88,11 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				// out from under you.
 				profile.ArchiveWhenDone = false
 			}
+			// No prompt of its own → act on the event itself (connector-neutral
+			// event object), synthesized before the guidance stack.
+			if s.Prompt == "" {
+				s.Prompt = dispatch.EventPrompt(t)
+			}
 			if s.Prompt != "" {
 				s.Prompt += dispatch.WriteWrapperGuidance
 				s.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))

@@ -117,7 +117,10 @@ func TestLegacyDispatchRecordsUsage(t *testing.T) {
 	n := &fakeNotifier{}
 	e, _ := newEng(t, budgetCfg(nil, nil), d, n, nil)
 
-	tr := agentTrigger("merge_conflict", "o/r", 1, "h", "sig", config.Action{Type: "agent", Agent: "w/fixer"})
+	// Explicit prompt: this test is about recording the agent's REPORTED usage,
+	// not the synthesized event prompt (whose length would make a 10-token
+	// report look under-reported and flip cost.FromRun to its estimate).
+	tr := agentTrigger("merge_conflict", "o/r", 1, "h", "sig", config.Action{Type: "agent", Agent: "w/fixer", Prompt: "fix it"})
 	e.process(context.Background(), tr)
 	if len(d.reqs) != 1 {
 		t.Fatalf("dispatched: %d", len(d.reqs))
