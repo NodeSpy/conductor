@@ -171,11 +171,12 @@ A step sets exactly one form — what it does:
 Two of those spellings moved, and both old ones still parse:
 
 - **`use:` selects the code ENGINE.** It resolves like a connector's or a
-  runtime's `use:` — builtin (`cli`, `js`, `go-embed`, `risor`, `lua`), then
-  the official plugin repo's `engines/<name>`, then an explicit repo or
-  path — and it also takes a host interpreter by name (`bash`, `python3`) or
-  by path. **`run:` is the same key** and every `run: js` / `run: bash`
-  config keeps working; set one or the other, not both.
+  runtime's `use:` — the builtin (`cli`), then the official plugin repo's
+  `engines/<name>`, which is where the scripting engines (`js`, `go-embed`,
+  `risor`, `lua`) now live, then an explicit repo or path — and it also takes
+  a host interpreter by name (`bash`, `python3`) or by path. **`run:` is the
+  same key** and every `run: js` / `run: bash` config keeps working; set one
+  or the other, not both.
 - **`call:` is the workflow call.** A step-level `use:` used to mean this.
   `conductor config migrate` (and the boot auto-migration) rewrites every
   `use: <workflow>` to `call: <workflow>`; `workflow:` remains valid as the

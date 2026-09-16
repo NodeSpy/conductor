@@ -12,158 +12,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/hosts"
 )
 
-// ---- run: js ---------------------------------------------------------------
-
-func TestExecJS_ReturnsObject(t *testing.T) {
-	e := &Executor{}
-	out, err := e.Exec(context.Background(), Spec{Run: "js", Code: `return {a: 1, b: "two"};`}, nil)
-	if err != nil {
-		t.Fatalf("Exec: %v", err)
-	}
-	want := map[string]any{"a": float64(1), "b": "two"}
-	if !reflect.DeepEqual(out, want) {
-		t.Errorf("out = %#v, want %#v", out, want)
-	}
-}
-
-func TestExecJS_ReturnsScalar(t *testing.T) {
-	e := &Executor{}
-	out, err := e.Exec(context.Background(), Spec{Run: "js", Code: `return 42;`}, nil)
-	if err != nil {
-		t.Fatalf("Exec: %v", err)
-	}
-	want := map[string]any{"value": float64(42)}
-	if !reflect.DeepEqual(out, want) {
-		t.Errorf("out = %#v, want %#v", out, want)
-	}
-}
-
-func TestExecJS_ReadsCtx(t *testing.T) {
-	e := &Executor{}
-	data := map[string]any{"a": map[string]any{"b": 2}}
-	out, err := e.Exec(context.Background(), Spec{Run: "js", Code: `return {sum: ctx.a.b + 1};`}, data)
-	if err != nil {
-		t.Fatalf("Exec: %v", err)
-	}
-	want := map[string]any{"sum": float64(3)}
-	if !reflect.DeepEqual(out, want) {
-		t.Errorf("out = %#v, want %#v", out, want)
-	}
-}
-
-func TestExecJS_SyntaxError(t *testing.T) {
-	e := &Executor{}
-	_, err := e.Exec(context.Background(), Spec{Run: "js", Code: `this is not valid js {{{`}, nil)
-	if err == nil {
-		t.Fatal("expected a syntax error")
-	}
-}
-
-func TestExecJS_NoReturn(t *testing.T) {
-	e := &Executor{}
-	out, err := e.Exec(context.Background(), Spec{Run: "js", Code: `let x = 1;`}, nil)
-	if err != nil {
-		t.Fatalf("Exec: %v", err)
-	}
-	if len(out) != 0 {
-		t.Errorf("out = %#v, want empty", out)
-	}
-}
-
-// ---- run: go-embed ----------------------------------------------------------
-
-func TestExecGoEmbed_AnySignature(t *testing.T) {
-	e := &Executor{}
-	code := `
-import "strings"
-
-func run(ctx map[string]any) any {
-	return map[string]any{"upper": strings.ToUpper(ctx["name"].(string))}
-}
-`
-	out, err := e.Exec(context.Background(), Spec{Run: "go-embed", Code: code}, map[string]any{"name": "alice"})
-	if err != nil {
-		t.Fatalf("Exec: %v", err)
-	}
-	want := map[string]any{"upper": "ALICE"}
-	if !reflect.DeepEqual(out, want) {
-		t.Errorf("out = %#v, want %#v", out, want)
-	}
-}
-
-func TestExecGoEmbed_AnyErrorSignature_Success(t *testing.T) {
-	e := &Executor{}
-	code := `
-import "encoding/json"
-
-func run(ctx map[string]any) (any, error) {
-	b, err := json.Marshal(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"json": string(b)}, nil
-}
-`
-	out, err := e.Exec(context.Background(), Spec{Run: "go-embed", Code: code}, map[string]any{"x": float64(1)})
-	if err != nil {
-		t.Fatalf("Exec: %v", err)
-	}
-	if out["json"] != `{"x":1}` {
-		t.Errorf("out = %#v", out)
-	}
-}
-
-func TestExecGoEmbed_ErrorBranchPropagates(t *testing.T) {
-	e := &Executor{}
-	code := `
-import "errors"
-
-func run(ctx map[string]any) (any, error) {
-	return nil, errors.New("boom")
-}
-`
-	_, err := e.Exec(context.Background(), Spec{Run: "go-embed", Code: code}, nil)
-	if err == nil || !strings.Contains(err.Error(), "boom") {
-		t.Fatalf("expected error containing %q, got %v", "boom", err)
-	}
-}
-
-func TestExecGoEmbed_SandboxBlocksOS(t *testing.T) {
-	e := &Executor{}
-	code := `
-import "os"
-
-func run(ctx map[string]any) any {
-	return os.Getenv("HOME")
-}
-`
-	_, err := e.Exec(context.Background(), Spec{Run: "go-embed", Code: code}, nil)
-	if err == nil {
-		t.Fatal("expected importing \"os\" to fail (sandboxed)")
-	}
-}
-
-func TestExecGoEmbed_MissingRun(t *testing.T) {
-	e := &Executor{}
-	_, err := e.Exec(context.Background(), Spec{Run: "go-embed", Code: `var x = 1`}, nil)
-	if err == nil || !strings.Contains(err.Error(), goEmbedContractMsg) {
-		t.Fatalf("expected contract error, got %v", err)
-	}
-}
-
-func TestExecGoEmbed_WrongSignature(t *testing.T) {
-	e := &Executor{}
-	code := `
-func run(ctx map[string]any) string {
-	return "nope"
-}
-`
-	_, err := e.Exec(context.Background(), Spec{Run: "go-embed", Code: code}, nil)
-	if err == nil || !strings.Contains(err.Error(), goEmbedContractMsg) {
-		t.Fatalf("expected contract error, got %v", err)
-	}
-}
-
 // ---- run: go -----------------------------------------------------------------
 
 const goProgram = `
@@ -384,15 +232,35 @@ func TestExecRemote_InterpreterNotFound(t *testing.T) {
 	}
 }
 
-func TestExecRemote_JSAndGoEmbedRejected(t *testing.T) {
+// The scripting engines are PLUGINS now, so `host:` + one of them is
+// refused on the plugin branch rather than by a builtin-engine case: a
+// plugin is a subprocess of THIS daemon and its ctx callbacks cannot cross
+// the ssh hop. Same refusal, one rung further out.
+func TestExecRemote_PluginEngineRejected(t *testing.T) {
 	e := &Executor{}
 	tgt := &hosts.Target{Name: "box", Cfg: config.HostConfig{Host: "unused"}}
-	for _, run := range []string{"js", "go-embed", "risor", "lua"} {
-		_, err := e.Exec(context.Background(), Spec{Run: run, Code: "x", Host: tgt}, nil)
+	for _, run := range []string{"js", "go-embed", "risor", "lua", "acme-engine"} {
+		_, err := e.Exec(context.Background(), Spec{Run: run, Plugin: true, Code: "x", Host: tgt}, nil)
 		if err == nil || !strings.Contains(err.Error(), "local-only") {
-			t.Errorf("run %q: expected local-only rejection, got %v", run, err)
+			t.Errorf("use %q: expected local-only rejection, got %v", run, err)
 		}
 	}
+}
+
+// toIntT reads a number out of a step's outputs regardless of which numeric
+// Go type it arrived as (JSON gives float64, a store gives int64).
+func toIntT(t *testing.T, v any) int {
+	t.Helper()
+	switch x := v.(type) {
+	case int:
+		return x
+	case int64:
+		return int(x)
+	case float64:
+		return int(x)
+	}
+	t.Fatalf("not a number: %T %v", v, v)
+	return 0
 }
 
 // ---- ParseOutputs -------------------------------------------------------------

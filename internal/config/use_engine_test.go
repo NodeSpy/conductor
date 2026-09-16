@@ -17,10 +17,30 @@ func TestParseUseEngineResolutionTable(t *testing.T) {
 		source    string
 	}{
 		{ref: "cli", origin: OriginBuiltin, name: "cli"},
-		{ref: "js", origin: OriginBuiltin, name: "js"},
-		{ref: "go-embed", origin: OriginBuiltin, name: "go-embed"},
-		{ref: "risor", origin: OriginBuiltin, name: "risor"},
-		{ref: "lua", origin: OriginBuiltin, name: "lua"},
+		// The scripting engines are no longer in the binary, so a bare name
+		// resolves them the way it resolves any other official component:
+		// conductor-plugins//engines/<name>, fetched and verified. This IS
+		// the back-compat path for every deployed `use: js` / `run: js`.
+		{
+			ref: "js", origin: OriginOfficial, name: "js",
+			repo: OfficialRepo, component: "engines/js",
+			source: "github.com/" + OfficialRepo + "//engines/js",
+		},
+		{
+			ref: "go-embed", origin: OriginOfficial, name: "go-embed",
+			repo: OfficialRepo, component: "engines/go-embed",
+			source: "github.com/" + OfficialRepo + "//engines/go-embed",
+		},
+		{
+			ref: "risor", origin: OriginOfficial, name: "risor",
+			repo: OfficialRepo, component: "engines/risor",
+			source: "github.com/" + OfficialRepo + "//engines/risor",
+		},
+		{
+			ref: "lua", origin: OriginOfficial, name: "lua",
+			repo: OfficialRepo, component: "engines/lua",
+			source: "github.com/" + OfficialRepo + "//engines/lua",
+		},
 		{
 			ref: "foo", origin: OriginOfficial, name: "foo",
 			repo: OfficialRepo, component: "engines/foo",
@@ -83,17 +103,20 @@ func TestEngineKindDirAndInstallKey(t *testing.T) {
 }
 
 func TestBuiltinEngineRegistry(t *testing.T) {
-	for _, n := range []string{"cli", "js", "go-embed", "risor", "lua"} {
-		if !BuiltinEngine(n) {
-			t.Errorf("%s is not registered as a builtin engine", n)
+	if !BuiltinEngine("cli") {
+		t.Error("cli is not registered as a builtin engine")
+	}
+	// `cli` is the ONLY builtin. The scripting engines moved out to
+	// conductor-plugins; claiming one here would make `use: js` resolve to a
+	// builtin this binary cannot run.
+	for _, n := range []string{"js", "go-embed", "risor", "lua", "wasm"} {
+		if BuiltinEngine(n) {
+			t.Errorf("%s must not be a builtin engine", n)
 		}
 	}
-	if BuiltinEngine("wasm") {
-		t.Error("wasm must not be a builtin engine")
-	}
 	got := strings.Join(BuiltinNames(UseKindEngine), ",")
-	if got != "cli,go-embed,js,lua,risor" {
-		t.Fatalf("BuiltinNames(engine) = %q", got)
+	if got != "cli" {
+		t.Fatalf("BuiltinNames(engine) = %q, want cli", got)
 	}
 	RegisterBuiltinEngine("zz-test-engine")
 	if !BuiltinEngine("zz-test-engine") {

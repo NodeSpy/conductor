@@ -12,12 +12,15 @@ import (
 // subprocess the daemon already spawns and supervises (internal/plugin),
 // driven here through one `plugin.run` call.
 //
-// It is the third shape of the SAME code-step ABI, and deliberately the least
-// new thing possible:
+// It is the second shape of the SAME code-step ABI, and deliberately the
+// least new thing possible:
 //
-//	in-process (js, lua, …)   ctx is a binding      outputs are a returned value
-//	cli                       ctx is JSON on stdin  outputs are parsed stdout
-//	PLUGIN                    ctx is RunRequest     outputs are RunResult
+//	cli / host interpreter   ctx is JSON on stdin  outputs are parsed stdout
+//	PLUGIN                   ctx is RunRequest     outputs are RunResult
+//
+// It is also how the scripting languages arrive now: `use: js` names no
+// builtin, so it resolves to conductor-plugins//engines/js and comes through
+// here.
 //
 // and the data plane — the part that actually decides what a step may touch —
 // is not a third implementation at all. `use: cli` puts a unix socket in front

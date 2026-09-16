@@ -109,18 +109,21 @@ func TestStepUseCLINeedsCommand(t *testing.T) {
 	}
 }
 
-// `run:` is unchanged in every respect: the engines it named still resolve
-// to the same classes, and its historic permissiveness (any unknown name is
-// a host interpreter) is intact.
+// `run:` still selects the same ENGINE it always did. The four scripting
+// engines are plugins now rather than in-process builtins, so their class
+// changed — but `run: js` must still mean "the js engine", never a PATH
+// lookup for a program called `js`, which is what the alias's historic
+// unknown-name-is-a-host-interpreter rule would otherwise do to it. That
+// permissiveness is intact for every name conductor does not know.
 func TestRunAliasUnchanged(t *testing.T) {
 	for _, tc := range []struct {
 		run   string
 		class EngineClass
 	}{
-		{"js", EngineInProcess},
-		{"go-embed", EngineInProcess},
-		{"risor", EngineInProcess},
-		{"lua", EngineInProcess},
+		{"js", EnginePlugin},
+		{"go-embed", EnginePlugin},
+		{"risor", EnginePlugin},
+		{"lua", EnginePlugin},
 		{"bash", EngineHost},
 		{"go", EngineHost},
 		{"python3", EngineHost},
@@ -149,8 +152,8 @@ func TestUseSelectsSameEnginesAsRun(t *testing.T) {
 		use   string
 		class EngineClass
 	}{
-		{"js", EngineInProcess},
-		{"lua", EngineInProcess},
+		{"js", EnginePlugin},
+		{"lua", EnginePlugin},
 		{"bash", EngineHost},
 		{"python3", EngineHost},
 		{"./venv/bin/python", EngineHost},
@@ -199,7 +202,7 @@ func TestStepUseUnknownEngineErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unresolvable engine must not load")
 	}
-	for _, want := range []string{"names no engine conductor can run", "cli, go-embed, js, lua, risor", "`call:`"} {
+	for _, want := range []string{"names no engine conductor can run", "the builtins are cli", "`call:`"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error is missing %q: %v", want, err)
 		}
@@ -272,8 +275,10 @@ func TestUseAndRunTogetherRejected(t *testing.T) {
 	}
 }
 
-// An in-process engine is local-only under either spelling.
-func TestInProcessEngineRejectsHost(t *testing.T) {
+// An engine that runs in a subprocess of THIS daemon is local-only under
+// either spelling — js was in-process and is now a plugin, and it is
+// rejected with `host:` either way.
+func TestPluginEngineRejectsHost(t *testing.T) {
 	for _, key := range []string{"use", "run"} {
 		_, err := loadYAML(t, `
 hosts:

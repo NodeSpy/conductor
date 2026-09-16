@@ -847,10 +847,11 @@ type Step struct {
 	WorkDir string            `yaml:"workdir,omitempty"`
 	Env     map[string]string `yaml:"env,omitempty"`
 
-	// code form. Use names the ENGINE that executes this step — a builtin
-	// (`cli`, `js`, `go-embed`, `risor`, `lua`), a host interpreter (`bash`,
-	// `python3`, or a path to one), or a plugin-backed engine. It resolves
-	// through UseKindEngine, exactly as a connector's `use:` resolves.
+	// code form. Use names the ENGINE that executes this step — the builtin
+	// (`cli`), a host interpreter (`bash`, `python3`, or a path to one), or a
+	// plugin-backed engine, which is what the scripting languages (`js`,
+	// `lua`, `risor`, `go-embed`) now are. It resolves through
+	// UseKindEngine, exactly as a connector's `use:` resolves.
 	//
 	// Run is the ORIGINAL spelling of the same selection and stays a full
 	// alias — `run: js` and `use: js` are one step. See engines.go for what

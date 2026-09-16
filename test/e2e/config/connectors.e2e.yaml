@@ -2,7 +2,7 @@
 # receiving signed fixture webhooks, a slack connector whose Web API base is
 # the sink-catcher (PC_SLACK_API_URL), an SSH host looping back to this
 # container's own sshd, and triggers exercising cross-boundary steps, hooks,
-# js code steps, grouping, and remote execution. Hermetic — no egress.
+# code steps, grouping, and remote execution. Hermetic — no egress.
 
 connectors:
   gh:
@@ -117,13 +117,18 @@ triggers:
     hooks:
       - { at: done, uses: slack.post, options: { channel: C6, text: "K6-done {{.repo}}#{{.pr}}" } }
 
-  # K2: a js code step reshapes the comment, a verb posts the result.
+  # K2: a code step reshapes the comment, a verb posts the result. `use: cli`
+  # is the one BUILTIN engine — the scripting engines (js, lua, …) are plugins
+  # now and this stack fetches nothing, so the engine-plugin path is proven by
+  # group V against the seeded acme-engine instead.
   - on: gh.new_comment
     filter: { repo: ["conn/csvc"] }
     steps:
       - id: shape
-        run: js
-        code: "return { msg: 'seen ' + ctx.comment_body }"
+        use: cli
+        command: [sh]
+        env: { BODY: "{{.comment_body}}" }
+        code: 'printf %s "{\"msg\": \"seen $BODY\"}"'
       - id: post
         uses: slack.post
         options: { channel: C2, text: "K2 {{.shape.msg}}" }
@@ -326,8 +331,8 @@ triggers:
     filter: { repo: ["func/hist"] }
     steps:
       - id: prep
-        run: js
-        code: "return { note: 'hist-prep' }"
+        use: cli
+        command: [sh, -c, 'printf %s "{\"note\": \"hist-prep\"}"']
       - id: fix
         type: agent
         <<: *fixer
@@ -352,14 +357,16 @@ triggers:
   # webhook. `callable: true` opts the trigger into the invoke surface; the
   # n8n-e2e token (below) scopes it. A js step echoes the caller's input (proving
   # inputs flow in under .who / .inputs.who) and a slack post makes the async run
-  # observable; the js output surfaces in the structured GET /runs result.
+  # observable; the step output surfaces in the structured GET /runs result.
   - on: manual
     name: callable-summary
     callable: true
     steps:
       - id: echo
-        run: js
-        code: "return { greeting: 'hi ' + (ctx.who || 'nobody') }"
+        use: cli
+        command: [sh]
+        env: { WHO: "{{.who}}" }
+        code: 'printf %s "{\"greeting\": \"hi ${WHO:-nobody}\"}"'
       - id: tell
         uses: slack.post
         options: { channel: CCALL, text: "CALLABLE-done who={{.who}} greeting={{.echo.greeting}}" }
@@ -499,8 +506,8 @@ triggers:
 checks:
   # A code check that always passes / always fails — a crisp pass/fail verdict
   # with no external dependency, so the §16 gate machinery is what's under test.
-  always-pass: { run: js, code: "return { pass: true, reason: 'ok' }" }
-  always-fail: { run: js, code: "return { pass: false, reason: 'still broken' }" }
+  always-pass: { use: cli, command: [sh, -c, 'printf %s "{\"pass\": true, \"reason\": \"ok\"}"'] }
+  always-fail: { use: cli, command: [sh, -c, 'printf %s "{\"pass\": false, \"reason\": \"still broken\"}"'] }
 
 policy:
   concurrency: { max_agents: 3 }

@@ -178,7 +178,7 @@ connectors:
 triggers:
   - on: gh.review_requested
     steps:
-      - { id: shape, run: js, code: "return { ok: true }" }
+      - { id: shape, run: sh, code: "echo '{\"ok\": true}'" }
       - { id: notecmd, uses: box.run, options: { command: "true" } }
 `
 	if err := os.WriteFile(cfgPath, []byte(cfgDoc), 0o600); err != nil {
@@ -210,7 +210,7 @@ triggers:
 	}
 	for _, want := range []string{
 		"review_requested AcmeCorp/Widget#5300 [workflow: 2 steps] (dry-run)",
-		"would run code step (js)",
+		"would run code step (sh)",
 		"would invoke box.run",
 	} {
 		if !strings.Contains(out, want) {

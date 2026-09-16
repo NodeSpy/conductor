@@ -31,129 +31,60 @@ func tempSQL(t *testing.T) *sqlstore.Store {
 	return st
 }
 
-// TestCtxSQLJS: ctx.sql from run: js — exec's counters come back, query
-// returns row objects, a bound hostile arg stays a literal, and a statement
-// error throws.
-func TestCtxSQLJS(t *testing.T) {
+// The ctx.sql SURFACE, through the one dispatcher every engine reaches it
+// by (CtxHandler → sqlInvoke). Replaces the four per-engine faces that used
+// to assert this same contract through js/go-embed/risor/lua bindings.
+
+// TestCtxSQLOpSurface: exec's counters come back, query returns row objects,
+// a hostile bound value stays a literal, and a bad statement is an error.
+func TestCtxSQLOpSurface(t *testing.T) {
 	st := tempSQL(t)
-	e := &Executor{}
-	out, err := e.Exec(context.Background(), Spec{Run: "js", Code: `
-const db = ctx.sql("db");
-const ins = db.exec("INSERT INTO events (body) VALUES (?)", ["hello"]);
-const hostile = "'; DROP TABLE events; --";
-db.exec("INSERT INTO events (body) VALUES (?)", [hostile]);
-const rows = db.query("SELECT id, body FROM events ORDER BY id");
-const back = db.query("SELECT body FROM events WHERE body = ?", [hostile]);
-return {
-  affected: ins.rows_affected,
-  id: ins.last_insert_id,
-  count: rows.length,
-  first: rows[0].body,
-  hostile_back: back[0].body === hostile,
-};`}, nil)
-	if err != nil {
-		t.Fatal(err)
+	h := CtxHandler{}
+	sqlCall := func(op string, args ...any) any {
+		t.Helper()
+		res := h.Invoke(CtxRequest{Kind: CtxKindSQL, Op: op, Resource: "db", Args: args})
+		if !res.OK {
+			t.Fatalf("sql.%s: %s", op, res.Error)
+		}
+		return res.Value
 	}
-	if out["affected"] != float64(1) || out["id"] != float64(1) ||
-		out["count"] != float64(2) || out["first"] != "hello" || out["hostile_back"] != true {
-		t.Fatalf("js sql: %#v", out)
-	}
-	// The writes landed in the shared store — and the table survived the
-	// hostile value.
-	rows, err := st.Query(context.Background(), `SELECT COUNT(*) AS n FROM events`, nil)
-	if err != nil || rows[0]["n"] != int64(2) {
-		t.Fatalf("store after js: %v %v", rows, err)
-	}
-	// A statement error surfaces as a thrown JS error.
-	_, err = e.Exec(context.Background(), Spec{Run: "js", Code: `ctx.sql("db").query("SELECT * FROM nope"); return 1`}, nil)
-	if err == nil || !strings.Contains(err.Error(), "nope") {
-		t.Fatalf("js sql error: %v", err)
-	}
-	// An undefined store names the defined ones.
-	_, err = e.Exec(context.Background(), Spec{Run: "js", Code: `ctx.sql("ghost").query("SELECT 1"); return 1`}, nil)
-	if err == nil || !strings.Contains(err.Error(), `no SQL store named "ghost"`) {
-		t.Fatalf("js unknown store: %v", err)
-	}
-}
 
-// TestCtxSQLGoEmbed: the `import "conductor/sql"` virtual package in
-// run: go-embed.
-func TestCtxSQLGoEmbed(t *testing.T) {
-	tempSQL(t)
-	e := &Executor{}
-	out, err := e.Exec(context.Background(), Spec{Run: "go-embed", Code: `
-import "conductor/sql"
+	ins, _ := sqlCall("exec", "INSERT INTO events (body) VALUES (?)", []any{"hello"}).(map[string]any)
+	if ins["rows_affected"] != int64(1) || ins["last_insert_id"] != int64(1) {
+		t.Fatalf("exec counters = %#v", ins)
+	}
 
-func run(ctx map[string]any) (any, error) {
-	db, err := sql.Use("db")
-	if err != nil {
-		return nil, err
+	// Values BIND; they never reach the statement text. The classic injection
+	// payload has to come back out as the literal string it went in as, and
+	// the table has to survive it.
+	const hostile = "'; DROP TABLE events; --"
+	sqlCall("exec", "INSERT INTO events (body) VALUES (?)", []any{hostile})
+	rows, _ := sqlCall("query", "SELECT id, body FROM events ORDER BY id").([]any)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %#v", rows)
 	}
-	ins, err := db.Exec("INSERT INTO events (body) VALUES (?)", []any{"embed"})
-	if err != nil {
-		return nil, err
+	if first, _ := rows[0].(map[string]any); first["body"] != "hello" {
+		t.Errorf("first row = %#v", rows[0])
 	}
-	rows, err := db.Query("SELECT body FROM events WHERE body = ?", []any{"embed"})
-	if err != nil {
-		return nil, err
+	back, _ := sqlCall("query", "SELECT body FROM events WHERE body = ?", []any{hostile}).([]any)
+	if len(back) != 1 {
+		t.Fatalf("the hostile value did not round-trip as a literal: %#v", back)
 	}
-	return map[string]any{
-		"affected": ins["rows_affected"],
-		"count":    len(rows),
-		"body":     rows[0].(map[string]any)["body"],
-	}, nil
-}`}, nil)
-	if err != nil {
-		t.Fatal(err)
+	got, err := st.Query(context.Background(), `SELECT COUNT(*) AS n FROM events`, nil)
+	if err != nil || got[0]["n"] != int64(2) {
+		t.Fatalf("store after the run: %v %v", got, err)
 	}
-	if out["affected"] != int64(1) || out["count"] != 1 || out["body"] != "embed" {
-		t.Fatalf("go-embed sql: %#v", out)
-	}
-}
 
-// TestCtxSQLRisor: the top-level sql() builtin in run: risor.
-func TestCtxSQLRisor(t *testing.T) {
-	tempSQL(t)
-	e := &Executor{}
-	out, err := e.Exec(context.Background(), Spec{Run: "risor", Code: `
-db := sql("db")
-ins := db.exec("INSERT INTO events (body) VALUES (?)", ["risor"])
-rows := db.query("SELECT body FROM events")
-{
-  "affected": ins.rows_affected,
-  "count": len(rows),
-  "body": rows[0].body,
-}`}, nil)
-	if err != nil {
-		t.Fatal(err)
+	// A statement error and an undefined store are errors, not refusals.
+	res := h.Invoke(CtxRequest{Kind: CtxKindSQL, Op: "query", Resource: "db",
+		Args: []any{"SELECT * FROM nope"}})
+	if res.OK || res.Refused || !strings.Contains(res.Error, "nope") {
+		t.Fatalf("bad statement: %#v", res)
 	}
-	if out["affected"] != int64(1) || out["count"] != int64(1) || out["body"] != "risor" {
-		t.Fatalf("risor sql: %#v", out)
-	}
-}
-
-// TestCtxSQLLua: the ctx.sql table in run: lua, including an error raise.
-func TestCtxSQLLua(t *testing.T) {
-	tempSQL(t)
-	e := &Executor{}
-	out, err := e.Exec(context.Background(), Spec{Run: "lua", Code: `
-local db = ctx.sql("db")
-local ins = db.exec("INSERT INTO events (body) VALUES (?)", {"lua"})
-local rows = db.query("SELECT body FROM events")
-return {
-  affected = ins.rows_affected,
-  count = #rows,
-  body = rows[1].body,
-}`}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out["affected"] != int64(1) || out["count"] != int64(1) || out["body"] != "lua" {
-		t.Fatalf("lua sql: %#v", out)
-	}
-	_, err = e.Exec(context.Background(), Spec{Run: "lua", Code: `ctx.sql("db").query("SELECT * FROM nope")`}, nil)
-	if err == nil || !strings.Contains(err.Error(), "nope") {
-		t.Fatalf("lua sql error: %v", err)
+	res = h.Invoke(CtxRequest{Kind: CtxKindSQL, Op: "query", Resource: "ghost",
+		Args: []any{"SELECT 1"}})
+	if res.OK || !strings.Contains(res.Error, `no SQL store named "ghost"`) {
+		t.Fatalf("undefined store must name itself: %#v", res)
 	}
 }
 

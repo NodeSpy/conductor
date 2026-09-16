@@ -19,7 +19,7 @@ func TestPackCLILifecycle(t *testing.T) {
 	manifest := `
 pack: { name: kit, version: "1.0.0", requires: { conductor: ">=0.1" } }
 workflows:
-  flow: { steps: [ { id: s, run: js, code: "return {}" } ] }
+  flow: { steps: [ { id: s, run: sh, code: "echo '{}'" } ] }
 `
 	if err := os.WriteFile(filepath.Join(packDir, "conductor-pack.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
@@ -89,7 +89,7 @@ pack:
 triggers:
   - name: on_thing
     on: github.review_requested
-    steps: [ { id: s, run: js, code: "return {}" } ]
+    steps: [ { id: s, run: sh, code: "echo '{}'" } ]
 `
 	if err := os.WriteFile(filepath.Join(packDir, "conductor-pack.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)

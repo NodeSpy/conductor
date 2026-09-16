@@ -153,7 +153,7 @@ policy:
   agent_authored:
     verbs: [code, cli]
 `)
-	rig, _ := dispatchPlan(t, cfg, "```plan\n- run: js\n  code: \"return 1;\"\n```")
+	rig, _ := dispatchPlan(t, cfg, "```plan\n- run: sh\n  code: \"echo 1\"\n```")
 	if failed, errStr := rig.workflowFailed(); !failed || !strings.Contains(errStr, "refusing to run on the main box") {
 		t.Fatalf("hostless code: %v %q", failed, errStr)
 	}
@@ -700,6 +700,7 @@ func TestGuardCodeBindingWriteBarrier(t *testing.T) {
 	kv.SetDataDir(t.TempDir())
 	kv.ResetStores()
 	t.Cleanup(func() { kv.ResetStores(); kv.SetDataDir("") })
+	helper := ctxHelper(t)
 	cfg := loadConfig(t, `
 connectors:
   svc: { use: fake }
@@ -713,10 +714,10 @@ workflows:
     inputs: { v: { type: string, required: true } }
     steps:
       - id: w
-        run: js
-        code: |
-          ctx.store("main").set("ns", "loot", ctx.inputs.v);
-          return 1;
+        use: cli
+        command: [sh]
+        env: { HELPER: "`+helper+`", CONDUCTOR_FLOW_CTX_TEST_CLIENT: "1", V: "{{.inputs.v}}" }
+        code: '"$HELPER" ctx kv main set ns loot "$V"'
 policy:
   agent_authored:
     verbs:

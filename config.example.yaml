@@ -1048,13 +1048,29 @@ triggers:
   - on: hooks.cloudwatch
     steps:
       - id: shape
-        # `use:` names the ENGINE: builtins js | go-embed | risor | lua | cli,
-        # or a host interpreter (go | sh | node | python3 | a path). `run:` is
-        # the same key, kept for every config already written in it.
-        use: js # QuickJS in-process (wazero)
+        # `use:` names the ENGINE. Three kinds, and only the first needs
+        # nothing installed:
+        #
+        #   cli                     the one BUILTIN — run an argv (below)
+        #   sh|node|python3|go|path a HOST INTERPRETER, i.e. a program on
+        #                           this box; nothing is fetched
+        #   js|lua|risor|go-embed   an official ENGINE PLUGIN, fetched from
+        #                           conductor-plugins on `conductor init`
+        #
+        # `run:` is the same key, kept for every config already written in
+        # it — `run: js` and `use: js` are one step.
+        #
+        # This example uses a host interpreter so it runs with nothing
+        # installed. For `use: js` (the sandboxed in-process feel, no
+        # interpreter needed on the box), run `conductor init` first to fetch
+        # the engine — a config naming an engine plugin will not start until
+        # it is installed.
+        use: python3
         code: |
-          return { sev: ctx.body.detail.severity || "low",
-                   name: ctx.body.detail.alarmName };
+          import json, sys
+          d = json.load(sys.stdin).get("body", {}).get("detail", {})
+          print(json.dumps({"sev": d.get("severity") or "low",
+                            "name": d.get("alarmName")}))
       - id: page
         if: "{{.shape.sev}} == high"
         uses: slack-ops.post

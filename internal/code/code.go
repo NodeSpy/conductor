@@ -1,29 +1,38 @@
-// Package code executes `run:`-form code steps: short snippets of script
-// attached directly to a trigger/workflow instead of a full `type: agent` or
-// `uses: <connector>.<verb>` step. Two engines run baked into the conductor
-// binary (`js` via an embedded QuickJS, `go-embed` via the yaegi Go
-// interpreter) — both in-process, sandboxed, and therefore LOCAL ONLY: they
-// share this process's fate (crash it, hang it, exhaust its memory) so they
-// must never be handed to a remote box conductor doesn't control the
-// lifecycle of. A third builtin, `cli`, runs the step's own `command:` argv
+// Package code executes `run:`/`use:`-form code steps: short snippets of
+// script attached directly to a trigger/workflow instead of a full `type:
+// agent` or `uses: <connector>.<verb>` step.
+//
+// NOTHING interprets a language in this process any more. There is exactly
+// ONE builtin engine, `cli` (cli.go): it runs the step's own `command:` argv
 // as a subprocess — local or remote — and is the general form of the host
-// interpreter (see cli.go). Everything else (`sh`, `bash`, `node`,
-// `python`, a bare
-// `go`, or an absolute/relative interpreter path) shells out to a real
-// interpreter on PATH — locally, or on a named `hosts:`/inline `ssh:` target
-// over internal/hosts when the step sets `host:`.
+// interpreter. Everything else is out of this binary:
+//
+//	cli                    a subprocess of this daemon, local or over host:
+//	sh/bash/node/python/…   a real interpreter on PATH (hostinterp.go), or a
+//	                        path to one; `go` compiles through the host
+//	                        toolchain (gorun.go)
+//	js/lua/risor/go-embed/… an ENGINE PLUGIN — a verified subprocess fetched
+//	                        from conductor-plugins//engines/<name> and driven
+//	                        over the plugin wire (engineplugin.go)
+//
+// The four scripting engines used to be linked in (QuickJS, gopher-lua,
+// Risor, yaegi). They are now official engine plugins, which is why a config
+// that says `use: js` still works: the name resolves as a non-builtin engine
+// and dispatches through plugin.run instead of an in-process interpreter.
+// The interpreters, their sandboxes, and their ~20 MB of dependencies left
+// the binary with them.
 //
 // Every engine shares the same calling convention: the step's template
-// context is exposed to the code as `ctx` (a JS global, a Go map argument, a
-// JSON document on stdin — whichever fits the engine), and the code's
-// result becomes the step's outputs via the shared ParseOutputs contract, so
-// a trigger's `if:`/templates can reference `{{.steps.<id>.outputs.foo}}`
-// the same way regardless of which `run:` engine produced it.
+// context reaches the code as `ctx` (a JSON document on stdin for cli and
+// host interpreters, the RunRequest inputs for a plugin), and the code's
+// result becomes the step's outputs — ParseOutputs over stdout, or the
+// plugin's RunResult — so a trigger's `if:`/templates can reference
+// `{{.steps.<id>.outputs.foo}}` the same way regardless of which engine
+// produced it.
 package code
 
 import (
 	"context"
-	"fmt"
 	"os/exec"
 	"strings"
 
@@ -35,11 +44,12 @@ import (
 // Code is the literal script/program text (or, for a host interpreter whose
 // Run field is a path, the interpreter path is Run itself — see Exec).
 type Spec struct {
-	// Run selects the engine: "cli" | "js" | "go-embed" | "risor" | "lua" |
-	// "go" | a host interpreter name (sh, bash, ruby, node, python, perl,
-	// php, …) | an absolute or relative path to one (anything containing
-	// '/'). It carries the step's `use:` when the step wrote that spelling —
-	// the two are one selection (internal/config engines.go).
+	// Run selects the engine: "cli" | "go" | a host interpreter name (sh,
+	// bash, ruby, node, python, perl, php, …) | an absolute or relative path
+	// to one (anything containing '/') | the name of an ENGINE PLUGIN (js,
+	// lua, …), in which case Plugin is set. It carries the step's `use:`
+	// when the step wrote that spelling — the two are one selection
+	// (internal/config engines.go).
 	Run string
 	// Command is the argv the "cli" engine runs. Ignored by every other
 	// engine, which take their work as Code. See cli.go for how the two
@@ -55,7 +65,8 @@ type Spec struct {
 	// Code is the script/program source.
 	Code string
 	// Args are extra argv entries after the code file, for host
-	// interpreters (ignored by js/go-embed, which have no argv).
+	// interpreters and the cli engine; an engine plugin receives them on the
+	// RunRequest and decides for itself what they mean.
 	Args []string
 	// Env are extra environment variables for host interpreters. Locally
 	// they're appended after os.Environ(); remotely they're `export`ed
@@ -66,11 +77,12 @@ type Spec struct {
 	// dir; remote: falls back to the target's configured Cwd).
 	WorkDir string
 	// Host is nil for a local step, or the resolved target for a step that
-	// set `host:`/inline `ssh:`. Only host interpreters may run remotely —
-	// js/go-embed are local-only (see Exec).
+	// set `host:`/inline `ssh:`. Only host interpreters and `cli` may run
+	// remotely — a plugin engine is a subprocess of THIS daemon and is
+	// local-only (see Exec).
 	Host *hosts.Target
 	// DataGuard, when non-nil, is consulted before every DURABLE WRITE the
-	// in-process data bindings perform (ctx.store set/setnx/merge/append,
+	// ctx data plane performs (ctx.store set/setnx/merge/append,
 	// ctx.sql exec, ctx.memory remember) — the code-sandbox face of the plan
 	// write barrier: without it, an agent plan's code step could park secret
 	// material that `uses: kv.set` would have refused.
@@ -121,17 +133,16 @@ func (e *Executor) sshClient() *hosts.Client {
 }
 
 // Exec runs spec, exposing data to the code as `ctx` and returning the
-// step's outputs (see ParseOutputs / the in-process wrapValue for the exact
-// per-engine contract). Dispatch is: a remote spec (Host != nil) goes over
-// SSH through the cli or host-interpreter path (js/go-embed/risor/lua reject
-// remote — see execRemote); a local spec dispatches on Run to `cli` or to
-// the matching in-process engine, falling through to the local
-// host-interpreter path for anything else.
+// step's outputs (see ParseOutputs for the exact contract). Dispatch is: a
+// PLUGIN engine goes out over the plugin wire (local-only); a remote spec
+// (Host != nil) goes over SSH through the cli or host-interpreter path; a
+// local spec dispatches on Run to `cli` or the Go toolchain, falling through
+// to the local host-interpreter path for anything else.
 func (e *Executor) Exec(ctx context.Context, spec Spec, data map[string]any) (map[string]any, error) {
 	// A plugin engine is checked BEFORE the host/remote split: it runs in a
 	// subprocess of THIS daemon holding a JSON-RPC transport back to it, so
-	// there is nothing to ship over ssh (its ctx callbacks would have to come
-	// back across the hop), exactly as for the in-process engines.
+	// there is nothing to ship over ssh — its ctx callbacks would have to come
+	// back across the hop.
 	if spec.Plugin {
 		if spec.Host != nil {
 			return nil, errRemotePluginEngine(spec.Run)
@@ -144,36 +155,10 @@ func (e *Executor) Exec(ctx context.Context, spec Spec, data map[string]any) (ma
 	switch spec.Run {
 	case "cli":
 		return e.execCLILocal(ctx, spec, data)
-	case "js":
-		return e.execJS(ctx, spec, data)
-	case "go-embed":
-		return e.execGoEmbed(ctx, spec, data)
-	case "risor":
-		return e.execRisor(ctx, spec, data)
-	case "lua":
-		return e.execLua(ctx, spec, data)
 	case "go":
 		return e.execGoToolchain(ctx, spec, data)
 	default:
 		return e.execHostLocal(ctx, spec, data)
-	}
-}
-
-// wrapValue applies the in-process (js/go-embed) half of the output
-// contract to a decoded/returned Go value: an object (map) becomes the
-// outputs map as-is (its keys are the step's named outputs); nil (JS
-// null/undefined, or a bare `return` in either engine) becomes no outputs;
-// anything else (a string, number, bool, slice, …) is not a map of named
-// outputs, so it becomes the step's single `value` output instead of being
-// silently dropped or erroring.
-func wrapValue(v any) map[string]any {
-	switch t := v.(type) {
-	case nil:
-		return map[string]any{}
-	case map[string]any:
-		return t
-	default:
-		return map[string]any{"value": v}
 	}
 }
 
@@ -194,15 +179,4 @@ func hostLabel(t *hosts.Target) string {
 		return t.Name
 	}
 	return t.Cfg.Host
-}
-
-// errRemoteInProcessEngine is returned by execRemote for js/go-embed: those
-// engines run the code inside conductor's own WASM/interpreter sandbox in
-// *this* process, so there is nothing meaningful to ship to a remote host —
-// the config validator (internal/config) already rejects this combination
-// structurally, but Exec guards it too since callers can construct a Spec
-// directly (e.g. from a workflow call expansion) without going through
-// config validation.
-func errRemoteInProcessEngine(run string) error {
-	return fmt.Errorf("code: run: %s executes inside conductor's own process and is local-only — use a host interpreter (e.g. run: node/run: sh) for remote code", run)
 }

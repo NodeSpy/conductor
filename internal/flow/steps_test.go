@@ -163,9 +163,14 @@ connectors:
 on: svc.ping
 steps:
   - id: peek
-    run: js
+    use: cli
+    command: [sh]
     code: |
-      return { leaked: (ctx.vaults === undefined) ? "no" : JSON.stringify(ctx.vaults) };
+      ctx=$(cat)
+      case "$ctx" in
+        *'"vaults"'*) printf '{"leaked": "yes"}' ;;
+        *)            printf '{"leaked": "no"}'  ;;
+      esac
   - id: post
     uses: svc.post
     options: { text: "leak={{.peek.leaked}}" }

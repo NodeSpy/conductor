@@ -2,6 +2,7 @@ package flow
 
 import (
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -23,8 +24,8 @@ func lastPostText(t *testing.T, st *fakeState) string {
 }
 
 // Step dispatch by engine: a step whose resolved engine is `cli` runs its
-// argv; `js` still runs in-process; a bare host-interpreter name still
-// shells out — one `execCode` path, three destinations.
+// argv; a bare host-interpreter name shells out; a name that is neither goes
+// to the PLUGIN path — one `execCode` path, three destinations.
 
 func TestExecCodeRoutesByEngine(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
@@ -42,20 +43,56 @@ on: svc.ping
 steps:
   - { id: argv,  use: cli, command: [sh, -c, "echo '{\"who\": \"cli\"}'"] }
   - { id: piped, use: cli, command: [sh, -c, cat] }
-  - { id: inproc, use: js, code: "return { who: 'js' }" }
   - { id: host, run: sh, code: "echo '{\"who\": \"host\"}'" }
   - id: after
     uses: svc.post
     options:
-      text: "{{.argv.who}}/{{.piped.msg}}/{{.inproc.who}}/{{.host.who}}"
+      text: "{{.argv.who}}/{{.piped.msg}}/{{.host.who}}"
 `)
 	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "ctx-reached-stdin"}), spec)
 	if failed, errStr := rig.workflowFailed(); failed {
 		t.Fatalf("run failed: %s", errStr)
 	}
 	got := lastPostText(t, st)
-	if got != "cli/ctx-reached-stdin/js/host" {
+	if got != "cli/ctx-reached-stdin/host" {
 		t.Fatalf("engine routing: %q", got)
+	}
+}
+
+// The third destination: a name that is neither a builtin nor an
+// interpreter is an ENGINE PLUGIN, and reaches internal/code's plugin path
+// rather than a PATH lookup. This rig wires no engine plugins, so the proof
+// is the error it fails with — "not loaded"/"no plugin engines", never
+// "not found on PATH", which is what a host-interpreter route would say.
+//
+// `js` is the case that matters for back-compat: it was a builtin engine,
+// so a deployed config says `run: js`, and it must still be an ENGINE.
+func TestExecCodeRoutesRetiredEnginesToThePluginPath(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc: { use: fake }
+`)
+	reg := buildRegistry(t, cfg)
+	for _, key := range []string{"use", "run"} {
+		for _, name := range []string{"js", "lua", "risor", "go-embed"} {
+			rig := newTestRunner(t, cfg, reg)
+			spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - { id: c, `+key+`: `+name+`, code: "whatever" }
+`)
+			runTrigger(rig, newTrigger("ping", nil), spec)
+			failed, errStr := rig.workflowFailed()
+			if !failed {
+				t.Fatalf("%s: %s: expected the step to fail with no engine installed", key, name)
+			}
+			if !strings.Contains(errStr, "plugin") {
+				t.Errorf("%s: %s: must route to the plugin path, got %q", key, name, errStr)
+			}
+			if strings.Contains(errStr, "not found on PATH") {
+				t.Errorf("%s: %s: routed to a PATH lookup instead of an engine: %q", key, name, errStr)
+			}
+		}
 	}
 }
 

@@ -90,10 +90,10 @@ triggers:
 }
 
 // TestSQLVerbSteps: an end-to-end step chain over one sqlite :memory: store —
-// sql.exec writes (rows_affected / last_insert_id flow into scope), a run: js
-// step writes through ctx.sql("db"), sql.query reads both rows back, and the
-// templated outputs land in a downstream verb: verbs and code hit ONE
-// defined store.
+// sql.exec writes (rows_affected / last_insert_id flow into scope), a CODE
+// step writes through ctx.sql("db") over the data plane, sql.query reads
+// both rows back, and the templated outputs land in a downstream verb:
+// verbs and code hit ONE defined store.
 func TestSQLVerbSteps(t *testing.T) {
 	kv.SetDataDir(t.TempDir())
 	kv.ResetStores()
@@ -103,11 +103,12 @@ func TestSQLVerbSteps(t *testing.T) {
 connectors:
   svc: { use: fake }
 stores:
-  db: { type: sqlite, path: ":memory:", code_access: write } # the js step execs through ctx.sql
+  db: { type: sqlite, path: ":memory:", code_access: write } # the code step execs through ctx.sql
 `)
 	reg := buildRegistry(t, cfg) // buildStores registers "db"
 	fake := newFakeState(t, "svc")
 
+	helper := ctxHelper(t)
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
@@ -120,12 +121,14 @@ steps:
       store: db
       sql: "INSERT INTO events (body) VALUES (?)"
       args: [ "{{.msg}}" ]
-  - id: js
-    run: js
+  - id: code
+    use: cli
+    command: [sh]
+    env: { HELPER: "`+helper+`", CONDUCTOR_FLOW_CTX_TEST_CLIENT: "1", MSG: "{{.msg}}" }
     code: |
-      const db = ctx.sql("db");
-      db.exec("INSERT INTO events (body) VALUES (?)", [ctx.msg + "-js"]);
-      return { total: db.query("SELECT COUNT(*) AS n FROM events")[0].n };
+      "$HELPER" ctx sql db exec "INSERT INTO events (body) VALUES (?)" "[\"$MSG-code\"]" >/dev/null || exit 1
+      rows=$("$HELPER" ctx sql db query "SELECT COUNT(*) AS n FROM events") || exit 1
+      printf '{"total": %s}' "$(printf '%s' "$rows" | tr -cd '0-9')"
   - id: read
     uses: sql.query
     options:
@@ -133,7 +136,7 @@ steps:
       sql: "SELECT id, body FROM events ORDER BY id"
   - id: post
     uses: svc.post
-    options: { text: "n={{.ins.rows_affected}} id={{.ins.last_insert_id}} total={{.js.total}} count={{.read.count}} body={{ (index .read.rows 1).body }}" }
+    options: { text: "n={{.ins.rows_affected}} id={{.ins.last_insert_id}} total={{.code.total}} count={{.read.count}} body={{ (index .read.rows 1).body }}" }
 `)
 	rig := newTestRunner(t, cfg, reg)
 	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "inv-77"}), spec)
@@ -141,7 +144,7 @@ steps:
 		t.Fatalf("workflow failed: %s", errStr)
 	}
 	calls := fake.snapshot()
-	if len(calls) != 1 || calls[0].Opts["text"] != "n=1 id=1 total=2 count=2 body=inv-77-js" {
+	if len(calls) != 1 || calls[0].Opts["text"] != "n=1 id=1 total=2 count=2 body=inv-77-code" {
 		t.Fatalf("calls: %+v", calls)
 	}
 }

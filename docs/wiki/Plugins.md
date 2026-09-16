@@ -44,7 +44,7 @@ A third block uses the same field without being a block at all: a **code step's
 
 ```yaml
 steps:
-  - { id: shape, use: js, code: "return { n: 1 }" }   # a builtin engine
+  - { id: shape, use: cli, command: [make, test] }    # the builtin engine
   - { id: build, use: wasmtime, code: "…" }           # an ENGINE PLUGIN
 ```
 
@@ -395,7 +395,7 @@ on the same stdio.
   (unknown method, params that will not decode).
 - **Enforcement is host-side, always.** `host.*` lands in the same handler, with
   the same guard, that `ctx.store`/`ctx.sql`/`ctx.memory` go through for a
-  `run: js` step. The engine never receives a store handle, a connection string,
+  `use: cli` step. The engine never receives a store handle, a connection string,
   or a capability — only the ability to ask, one op at a time.
 
 ### Authoring an engine plugin

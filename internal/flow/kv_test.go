@@ -82,18 +82,21 @@ stores:
 	reg := buildRegistry(t, cfg) // buildStores registers "main"
 	fake := newFakeState(t, "svc")
 
+	helper := ctxHelper(t)
 	spec := mustSpec(t, `
 on: svc.ping
 steps:
   - id: write
-    run: js
+    use: cli
+    command: [sh]
+    env: { HELPER: "`+helper+`", CONDUCTOR_FLOW_CTX_TEST_CLIENT: "1", MSG: "{{.msg}}" }
     code: |
-      const kv = ctx.store("main");
-      const prev = kv.get("billing", "last-invoice");
-      kv.set("billing", "last-invoice", ctx.msg);
-      const n = kv.incr("billing", "writes");
-      kv.append("billing", "history", ctx.msg);
-      return { first_time: !prev, writes: n };
+      prev=$("$HELPER" ctx kv main get billing last-invoice) || exit 1
+      "$HELPER" ctx kv main set billing last-invoice "$MSG" >/dev/null || exit 1
+      n=$("$HELPER" ctx kv main incr billing writes) || exit 1
+      "$HELPER" ctx kv main append billing history "$MSG" >/dev/null || exit 1
+      first=false; [ "$prev" = "null" ] && first=true
+      printf '{"first_time": %s, "writes": %s}' "$first" "$n"
   - id: gate
     uses: kv.get
     options: { store: main, namespace: billing, key: last-invoice }

@@ -102,7 +102,7 @@ hosts:
 on: svc.ping
 steps:
   - { id: v, uses: svc.post, options: { text: hi } }
-  - { id: c, run: js, code: "return {}" }
+  - { id: c, run: sh, code: "echo '{}'" }
   - { id: r, type: command, command: [make, deploy], host: box }
   - { id: after, uses: svc.post, options: { text: "id={{.v.id}} stub={{.v.stubbed}}" } }
 `)

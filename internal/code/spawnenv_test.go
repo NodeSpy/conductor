@@ -2,8 +2,6 @@ package code
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -36,35 +34,5 @@ func TestSpawnedInterpreterEnvAllowlisted(t *testing.T) {
 	}
 	if parts[2] == "" {
 		t.Fatal("allowlisted HOME missing from the child env")
-	}
-}
-
-// A go-embed snippet must not be able to import interpreted SOURCE from the
-// host's GOPATH — only the Use()-registered allowlist resolves.
-func TestGoEmbedIgnoresHostGopath(t *testing.T) {
-	dir := t.TempDir()
-	// A package sitting where a default-GoPath yaegi would find it.
-	writeGoPathPkg(t, dir, "evilpkg", `package evilpkg
-func Gimme() string { return "host source" }`)
-	t.Setenv("GOPATH", dir)
-	e := &Executor{}
-	_, err := e.Exec(context.Background(), Spec{Run: "go-embed", Code: `
-import "evilpkg"
-
-func run(ctx map[string]any) any { return evilpkg.Gimme() }
-`}, nil)
-	if err == nil {
-		t.Fatal("go-embed imported interpreted source from the host GOPATH")
-	}
-}
-
-func writeGoPathPkg(t *testing.T, gopath, name, src string) {
-	t.Helper()
-	dir := filepath.Join(gopath, "src", name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, name+".go"), []byte(src), 0o600); err != nil {
-		t.Fatal(err)
 	}
 }

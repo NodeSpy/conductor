@@ -29,9 +29,12 @@ workflows:
 checks:
   verdict: { uses: svc.post, options: { text: "check {{.gate.attempt}}" } }
   scope:
-    run: js
+    use: cli
+    command: [sh]
+    env: { WD: "{{.gate.workdir}}" }
     code: |
-      return { pass: ctx.gate.workdir.length > 0, detail: "wd=" + ctx.gate.workdir };
+      pass=false; [ -n "$WD" ] && pass=true
+      printf '{"pass": %s, "detail": "wd=%s"}' "$pass" "$WD"
   critic: { type: agent, <<: *critic, prompt: "review the change in {{.gate.workdir}}" }
 `
 
