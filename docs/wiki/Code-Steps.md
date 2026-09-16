@@ -99,9 +99,9 @@ steps:
 - **`host:`/`ssh:`** work exactly as they do for a host interpreter: the argv
   is shell-quoted into a generated remote script, `code:` travels base64-
   framed, ctx goes over stdin, and a missing program is a distinct error.
-- A cli step runs in a **separate process**, so it has no `ctx.store`/
-  `ctx.sql`/`ctx.memory` handles — use the `kv.*`/`sql.*`/`memory.*` verbs in
-  surrounding steps, as with any host interpreter.
+- A **local** cli step reaches `ctx.store`/`ctx.sql`/`ctx.memory` over a
+  per-run socket — see [the ctx data plane](#the-ctx-data-plane-cli) below.
+  A **remote** (`host:`) one does not.
 
 `type: command` is the older, agent-dispatch-flavored way to run a program
 and still works unchanged. `use: cli, command: […]` is the code-step
@@ -143,9 +143,9 @@ The spelling differs by engine but the surface is identical:
 | **risor** | `store("x")` (builtin) | `sql("x")` | `memory` |
 | **go-embed** | `import "conductor/store"` → `store.Use("x")` | `import "conductor/sql"` → `sql.Use("x")` | `import "conductor/memory"` |
 
-**`cli` and host interpreters** (`use: cli`, `use: sh/node/python3/…`) run in a separate process —
-they have no `ctx` handles; use the `kv.*` / `sql.*` / `memory.*` **verbs** in surrounding steps
-instead.
+**Host interpreters** (`use: sh/node/python3/…`) run in a separate process and have no `ctx`
+handles; use the `kv.*` / `sql.*` / `memory.*` **verbs** in surrounding steps instead. A **local
+`use: cli`** step reaches the same three faces through [the ctx data plane](#the-ctx-data-plane-cli).
 
 ```yaml
 - use: js
@@ -157,6 +157,98 @@ instead.
       "SELECT count(*) AS c FROM incidents WHERE day = $1", [ctx.inputs.day]);
     return { first_time: !seen, total: n[0].c };
 ```
+
+### The ctx data plane (`cli`)
+
+A subprocess cannot hold a Go binding, so a **local `use: cli`** step gets the
+same three faces over a **per-run unix socket**: it *asks* conductor to
+perform each op, and conductor decides. The step never receives a store
+handle, a connection string, or a credential — **every op is authorized
+host-side**, through the identical guards an in-process `ctx.store(…)` call
+goes through (the store/scope allowlist for agent-authored steps, the
+`no_secret_egress` write barrier, `code_access:` on SQL stores, reserved
+memory buckets).
+
+It is **opt-in**: a command that ignores the environment below is the
+inputs-and-outputs step it always was.
+
+#### The helper
+
+conductor's own binary is the reference client, exported to the command as
+`$CONDUCTOR_CTX_HELPER`:
+
+```yaml
+- id: bump
+  use: cli
+  command: [bash]
+  code: |
+    seen=$("$CONDUCTOR_CTX_HELPER" ctx kv state contains pd incidents "$(jq -r .incident.id)")
+    n=$("$CONDUCTOR_CTX_HELPER" ctx kv state incr pd attempts 1)
+    "$CONDUCTOR_CTX_HELPER" ctx sql analytics query 'SELECT count(*) AS c FROM incidents WHERE day = ?' '[3]'
+    "$CONDUCTOR_CTX_HELPER" ctx memory remember "retried twice" '["ci"]' 'repo:acme/api'
+    printf '{"seen": %s, "attempts": %s}' "$seen" "$n"
+```
+
+```
+conductor ctx kv     <store> <op> [arg...]     # ns/key positional, as ctx.store(…)
+conductor ctx sql    <store> <op> <sql> [args] # args is a JSON list of bind values
+conductor ctx memory <op> [arg...]             # remember | recall | forget | list
+```
+
+Each argument is read as **JSON when it parses** and as a plain string when it
+does not, so `3` is a number, `'{"a":1}'` an object, and `hello` the string.
+The result value is printed as **JSON on stdout** — capture it with `$(…)`;
+feeding it straight back to `set` round-trips the value with its type intact.
+Exit codes: **0** ok · **1** error · **2** usage · **3** refused by policy, so
+a step can branch on "conductor will not let me do this" without parsing text.
+
+#### The wire protocol
+
+Nothing about the helper is privileged — a step that would rather speak the
+protocol itself (Python's `json` + `socket`, Go's `net.Dial`) gets exactly the
+same treatment. The socket is **JSON Lines** in both directions: one request
+object per line, one response per line, in order; a connection may carry many.
+
+```
+CONDUCTOR_CTX_SOCK     the unix socket path
+CONDUCTOR_CTX_TOKEN    a 256-bit random token, required on EVERY request
+CONDUCTOR_CTX_HELPER   conductor's binary — the client above
+```
+
+```jsonc
+--> {"token":"…","kind":"kv","op":"set","resource":"cache","args":["ns","k",{"v":1}]}
+<-- {"ok":true}
+--> {"token":"…","kind":"kv","op":"get","resource":"cache","args":["ns","k"]}
+<-- {"ok":true,"value":{"v":1}}
+--> {"token":"…","kind":"kv","op":"set","resource":"secrets-parking","args":["ns","k","…"]}
+<-- {"ok":false,"refused":true,"error":"no_secret_egress: refusing to write secret material…"}
+```
+
+| field | meaning |
+|---|---|
+| `token` | the per-run token; a wrong or absent one is refused before any guard or store is consulted |
+| `kind` | `kv` · `sql` · `memory` |
+| `op` | the operation, spelled as in the tables above |
+| `resource` | the **defined** store (`kv`/`sql`); omitted for `memory`, which has no store dimension |
+| `args` | positional, exactly as the in-process `ctx.store(ns, key, …)` call takes them |
+| `ok` / `value` | success and its JSON result (an absent read is `null`, not an error) |
+| `error` / `refused` | the failure; `refused` marks a **policy** denial rather than a malfunction |
+
+**Auth and isolation.** The socket lives in a fresh `0700` directory with a
+random name, and the token is minted **per run**. Another user on the box
+cannot reach the socket; another *run* has a different socket and a different
+token, so one step's capability can never name another's data plane. There is
+no daemon-wide credential. The socket, its directory and the token die with
+the step — on success, on failure, on timeout and on cancellation alike — so a
+backgrounded grandchild that kept the environment finds a path that no longer
+exists.
+
+**Local only.** A `host:`-remote cli step gets **no** data plane: the socket is
+on the daemon's box and the callback cannot cross the ssh hop. The variables
+are simply absent there (the step keeps its inputs and outputs), and the
+helper fails with *"no ctx data plane in this environment"* rather than
+silently reading a different store. A remote step that needs durable state
+uses the `kv.*` / `sql.*` / `memory.*` verbs in surrounding steps.
 
 ### Outputs
 
@@ -201,6 +293,11 @@ imports from the host GOPATH (only the registered stdlib subset exists).
 `cli` and host interpreters have full host power (that is their point) — but they
 inherit an allowlisted base environment (PATH/HOME/locale/GO*) plus the
 step's own `env:`, never the daemon's full environment; pass an ambient
-variable explicitly if a step needs it.
+variable explicitly if a step needs it. A cli step's [ctx data
+plane](#the-ctx-data-plane-cli) does not widen that: it hands over no store
+handle, only the ability to ask, and conductor applies the same guards it
+applies to an in-process engine. The socket address and token are appended
+**after** the step's `env:`, so a step cannot point its own data plane
+somewhere else.
 
 Related: [[Hosts]] · [[Workflows]] · [[Connectors]]
