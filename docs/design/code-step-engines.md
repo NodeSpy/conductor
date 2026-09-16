@@ -1,10 +1,57 @@
 # Code-step engines as plugins
 
-Status: **proposal** (for review). Owner-driven. No code yet.
+Status: **SHIPPED** as v0.11.0 (PRs #79, #80, #81). The body below is the design
+exploration that drove the build and is kept as the rationale record (threat
+model §7, alternatives §13). The **As built** section immediately below is the
+authoritative account of what actually shipped; where the two disagree, As built
+wins. The user-facing reference is the wiki (`Steps` / `Code-Steps` / `Plugins`).
 
-Every question this design can answer is answered as a **proposal with
-rationale** the owner can override; three genuinely owner-level choices remain
-open at the end (§14).
+## As built (v0.11.0)
+
+Shipped in three additive increments; the live config loads unchanged on each, so
+the box auto-updates with no migration.
+
+- **1 — engine kind + `cli` engine** (#79). A new `UseKindEngine` resolves
+  **connector-style** (builtin → `conductor-plugins/engines/<name>` → `owner/repo`
+  → local), builtin registry `{cli, js, go-embed, risor, lua}`. A step selects its
+  engine with `use: <engine>`; `run:` stays a back-compat alias; `command:` is the
+  argv; the built-in **`cli`** engine runs a command with inputs on stdin +
+  outputs via `ParseOutputs`.
+- **2 — `cli` ctx data-plane** (#80). `internal/code/ctxhost.go` `CtxHandler` is
+  the single host-side authorize+execute core (reusing `kvInvoke`/`sqlInvoke`/
+  `memInvoke` behind the step's `DataGuard`); `cli` reaches `ctx.store/sql/memory`
+  over a per-run, 0700, token-authenticated unix socket, with `conductor ctx` as
+  the reference client.
+- **3 — plugin engine protocol** (#81). `KindStep`, `plugin.run`, and the
+  plugin→daemon `host.kv/sql/memory` callback channel, all routed back into the
+  same `CtxHandler`. A reference engine (`test/plugins/acme-engine`) proves the
+  out-of-process transport.
+
+**Two premises in the exploration below were overturned by the build:**
+
+1. **Resolution is connector-style, not pack-style.** §1 argues for a reserved
+   namespace / no bare-name→official fetch. The owner chose "same as connectors
+   and runtimes," so a bare engine name resolves to the official
+   `conductor-plugins/engines/<name>` — the accidental-fetch worry is moot because
+   `cli` is the blessed zero-plugin default (`use: cli, command: ruby` reaches a
+   PATH interpreter).
+2. **The surface is additive; there is no breaking `use:`→`call:` rename.**
+   Step-level `use:` was never a real key (a stale doc comment claimed it); the
+   workflow-call field is `workflow:`, which still works. So `use:` = engine was a
+   free slot, and `call:` shipped as an additional alias for `workflow:` — nothing
+   broke, no config-first deploy was needed.
+
+**Versioning:** the engine ABI is negotiated by a new `Decl.ABI`, NOT a
+`ProtocolVersion` bump — `internal/plugin/client.go` compares `ProtocolVersion`
+for exact equality, so a bump would refuse every installed connector/runtime
+plugin. `ProtocolVersion` stays 1; existing plugins are unaffected (proved by
+`TestExistingPluginsLoadUnchanged` / `TestConnectorWireIsUnchangedByTheEngineAdditions`).
+
+---
+
+Every question the exploration below can answer is answered as a **proposal with
+rationale**; the three owner-level choices at §14 were resolved as: selection =
+`use:` (additive), `host:` engines deferred, full ctx op surface shipped.
 
 Read `docs/design/use-unification.md` first (especially §D, the honest account
 of what the permission manifest does and does not enforce). The resolution
