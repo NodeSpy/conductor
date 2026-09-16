@@ -44,7 +44,7 @@ func (st *packInstantiation) lintPackRefs(ns string, man *PackManifest, env envB
 			}
 		}
 		// Bound names inside a code body.
-		if s.Run != "" && s.Code != "" {
+		if s.EngineSelector() != "" && s.Code != "" {
 			for name := range names {
 				if containsIdentifier(s.Code, name) {
 					codeHits[name] = true

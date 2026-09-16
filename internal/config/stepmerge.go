@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -65,6 +66,16 @@ func (s *Step) UnmarshalYAML(n *yaml.Node) error {
 	var p plain
 	if err := strictNodeDecode(merged, &p); err != nil {
 		return err
+	}
+	// `call:` and `workflow:` are one field. Folding here — before any
+	// validation, walk, or pack rewrite runs — means the rest of the
+	// codebase keeps reading Step.Workflow and cannot be surprised by which
+	// key an operator happened to write.
+	if c := strings.TrimSpace(p.Call); c != "" {
+		if w := strings.TrimSpace(p.Workflow); w != "" && w != c {
+			return fmt.Errorf("step sets both `call: %s` and `workflow: %s` — they are the same field (call: is the current spelling)", c, w)
+		}
+		p.Workflow, p.Call = c, ""
 	}
 	*s = Step(p)
 	return nil

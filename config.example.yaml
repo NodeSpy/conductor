@@ -62,8 +62,8 @@
 # (entries merge; a duplicate name across files is a load error); a named
 # entry loads its body from a file (`pd: { import: ./conf.d/pd.yaml }`); the
 # triggers: list takes the same plural key as items (`- imports: [globs]`). A step pulls one workflow straight
-# from a file: `workflow: name, import: ./workflows/review.yaml`, or a bare
-# `workflow: ./workflows/review.yaml` when the file defines a single workflow.
+# from a file: `call: name, import: ./workflows/review.yaml`, or a bare
+# `call: ./workflows/review.yaml` when the file defines a single workflow.
 # ---------------------------------------------------------------------------
 connectors:
   # imports: [conf.d/connectors/*.yaml]   # split entries across files
@@ -764,7 +764,9 @@ x-templates:
 
 # ---------------------------------------------------------------------------
 # workflows: — named, parameterized step lists with declared inputs/outputs,
-# called from triggers via { workflow: <name>, with: {…} }.
+# called from triggers via { call: <name>, with: {…} }. (`workflow:` is the
+# older spelling of the same key and still parses; a step-level `use:` now
+# selects the code ENGINE — see Code-Steps.)
 # ---------------------------------------------------------------------------
 workflows:
   assess-and-post:
@@ -1024,7 +1026,7 @@ triggers:
     options:
       reviewer: { logins: [your-login] }
     steps:
-      - { id: a, workflow: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
+      - { id: a, call: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
       - id: draft
         if: "{{.a.decision}} == auto"
         type: agent
@@ -1046,7 +1048,10 @@ triggers:
   - on: hooks.cloudwatch
     steps:
       - id: shape
-        run: js # QuickJS in-process (wazero); go-embed | go | sh | node | … also work
+        # `use:` names the ENGINE: builtins js | go-embed | risor | lua | cli,
+        # or a host interpreter (go | sh | node | python3 | a path). `run:` is
+        # the same key, kept for every config already written in it.
+        use: js # QuickJS in-process (wazero)
         code: |
           return { sev: ctx.body.detail.severity || "low",
                    name: ctx.body.detail.alarmName };
@@ -1062,8 +1067,12 @@ triggers:
   # Scheduled work; a command step's stdout becomes its outputs.
   - on: timer.nightly-tidy
     steps:
-      - { id: tidy, type: command, command: [make, tidy], workdir: ~/src/infra }
-      # - { id: remote, run: sh, host: build-box, code: "make deploy" }
+      # `use: cli` runs an argv as a subprocess with the code-step ABI: ctx
+      # arrives as JSON on its stdin, its stdout becomes the step's outputs.
+      - { id: tidy, use: cli, command: [make, tidy], workdir: ~/src/infra }
+      # - { id: legacy, type: command, command: [make, tidy] }   # still valid
+      # - { id: remote, use: sh, host: build-box, code: "make deploy" }
+      # - { id: remote-argv, use: cli, command: [make, deploy], host: build-box }
 
   # Post release notes to Slack — a cross-boundary one-liner.
   - on: gh.release
@@ -1211,7 +1220,7 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #   # Reference an exported pack workflow from your own trigger:
 #   #   triggers:
 #   #     - on: gh.pull_request
-#   #       steps: [ { workflow: review/review-flow } ]
+#   #       steps: [ { call: review/review-flow } ]
 
 # pack_trust: — OPTIONAL provenance allowlist for pack sources (#53 §21). With
 # this set, `conductor init` refuses any REMOTE pack source (at any depth) that

@@ -7,8 +7,9 @@ import (
 	"sync"
 )
 
-// `use:` resolution — one kind-aware search path shared by `connectors:` and
-// `runtimes:` (docs/design/use-unification.md §B).
+// `use:` resolution — one kind-aware search path shared by `connectors:`,
+// `runtimes:` and a code step's `use:` engine (docs/design/use-unification.md
+// §B).
 //
 // A `use:` reference answers exactly one question: WHAT IMPLEMENTS THIS? It
 // replaces the old `plugins:` block plus `type:`/`source:`/`kind:`. The kind is
@@ -42,6 +43,11 @@ type UseKind string
 const (
 	UseKindConnector UseKind = "connector"
 	UseKindRuntime   UseKind = "runtime"
+	// UseKindEngine is what EXECUTES a code step — the third plugin kind,
+	// mechanically identical to a connector: builtin first, then the official
+	// repo's `engines/<name>` component, then an explicit repo/host/path. It
+	// is the kind a step's `use:` (and its `run:` alias) resolves in.
+	UseKindEngine UseKind = "engine"
 	// UseKindPack is a distributable config pack. Packs live in their own
 	// official repo (they are config, not a binary), named at the reference
 	// site by the reserved PacksNamespaceAlias segment rather than by a bare
@@ -49,13 +55,16 @@ const (
 	UseKindPack UseKind = "pack"
 )
 
-// Dir is the official repo's directory for this kind ("connectors", "runtimes")
-// and the prefix on its release tags ("connectors/sentry/v1.0.0"). A pack sits
-// at the root of its own repo, so its Dir is only the block name.
+// Dir is the official repo's directory for this kind ("connectors",
+// "runtimes", "engines") and the prefix on its release tags
+// ("connectors/sentry/v1.0.0"). A pack sits at the root of its own repo, so
+// its Dir is only the block name.
 func (k UseKind) Dir() string {
 	switch k {
 	case UseKindRuntime:
 		return "runtimes"
+	case UseKindEngine:
+		return "engines"
 	case UseKindPack:
 		return "packs"
 	default:
@@ -64,7 +73,7 @@ func (k UseKind) Dir() string {
 }
 
 // officialRepoFor is the repo an official reference of this kind resolves to:
-// a bare, non-builtin name for a connector/runtime, the reserved
+// a bare, non-builtin name for a connector/runtime/engine, the reserved
 // `conductor-packs/<name>` namespace for a pack.
 func (k UseKind) officialRepoFor() string {
 	if k == UseKindPack {
@@ -74,8 +83,8 @@ func (k UseKind) officialRepoFor() string {
 }
 
 // officialComponentFor is the path within the official repo. Plugins are laid
-// out by kind (`connectors/sentry`); a pack is a top-level directory of the
-// packs repo (`pr-review-team`).
+// out by kind (`connectors/sentry`, `engines/wasm`); a pack is a top-level
+// directory of the packs repo (`pr-review-team`).
 func (k UseKind) officialComponentFor(name string) string {
 	if k == UseKindPack {
 		return name
@@ -588,8 +597,15 @@ func firstN(s []string, n int) []string {
 }
 
 // otherKind is the kind a name could be confused with. Only connectors and
-// runtimes share the plugin repo and can be mis-declared for one another; a
-// pack is config in its own repo, so it has no counterpart.
+// runtimes share the plugin repo AND a naming space in which a clash is
+// always a mistake, so only they get the cross-kind hint.
+//
+// An ENGINE deliberately has none. `cli` is both a builtin runtime (the
+// one-shot agent launcher) and the builtin engine that runs a `command:` —
+// two different things that share a name on purpose — so "a runtime can
+// never be wired as an engine" would be a confident lie in the one case it
+// would actually fire. A pack is config in its own repo and has no
+// counterpart either.
 func otherKind(k UseKind) UseKind {
 	switch k {
 	case UseKindConnector:
@@ -628,6 +644,40 @@ var (
 	}
 )
 
+// builtinEngines are the code-step engines compiled into the daemon. Like
+// builtinConnectors the map is SEEDED here rather than derived from
+// internal/code, so a config-only build (every test in this package) resolves
+// them, and RegisterBuiltinEngine lets a newly-bundled engine register itself
+// at init without the two lists drifting apart.
+//
+//	cli        run a `command:` argv as a subprocess (local or over host:)
+//	js         QuickJS/wazero, in-process
+//	go-embed   yaegi, in-process
+//	risor      Risor, in-process
+//	lua        gopher-lua, in-process
+//
+// A HOST INTERPRETER (`bash`, `python3`, `/opt/py/bin/python`) is not an
+// engine and is deliberately absent: it names a program on the box, not an
+// implementation conductor ships or fetches. See Step.StepEngine.
+var builtinEngines = map[string]bool{
+	"cli": true, "js": true, "go-embed": true, "risor": true, "lua": true,
+}
+
+// RegisterBuiltinEngine records a code-step engine as bundled, so a bare
+// `use:` naming it resolves in-binary instead of reaching for the plugin repo.
+func RegisterBuiltinEngine(name string) {
+	builtinMu.Lock()
+	defer builtinMu.Unlock()
+	builtinEngines[name] = true
+}
+
+// BuiltinEngine reports whether a name is a bundled code-step engine.
+func BuiltinEngine(name string) bool {
+	builtinMu.RLock()
+	defer builtinMu.RUnlock()
+	return builtinEngines[name]
+}
+
 // RegisterBuiltinConnector records a connector type as bundled, so a bare `use:`
 // naming it resolves in-binary instead of reaching for the plugin repo. Called
 // from internal/connector.RegisterType at init.
@@ -651,11 +701,18 @@ func BuiltinRuntime(name string) bool { return builtinRuntimes[name] }
 // messages and `plugin list`.
 func BuiltinNames(kind UseKind) []string {
 	var out []string
-	if kind == UseKindRuntime {
+	switch kind {
+	case UseKindRuntime:
 		for n := range builtinRuntimes {
 			out = append(out, n)
 		}
-	} else {
+	case UseKindEngine:
+		builtinMu.RLock()
+		for n := range builtinEngines {
+			out = append(out, n)
+		}
+		builtinMu.RUnlock()
+	default:
 		builtinMu.RLock()
 		for n := range builtinConnectors {
 			out = append(out, n)
@@ -667,8 +724,11 @@ func BuiltinNames(kind UseKind) []string {
 }
 
 func builtinFor(kind UseKind, name string) bool {
-	if kind == UseKindRuntime {
+	switch kind {
+	case UseKindRuntime:
 		return BuiltinRuntime(name)
+	case UseKindEngine:
+		return BuiltinEngine(name)
 	}
 	return BuiltinConnector(name)
 }

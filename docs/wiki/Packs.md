@@ -198,7 +198,7 @@ Refs **inside** the pack are written **bare** and resolve pack-local — the aut
 writes no prefixes. The loader scopes them. The one boundary that reaches global
 names is `requires:`: a required connector/store/secret/handoff
 **bound** to a global, resolves in the consumer namespace. You reference a pack's
-entry point qualified: `workflow: review/review-flow`.
+entry point qualified: `call: review/review-flow`.
 
 ## Satisfy a resource: default / override / bind
 
@@ -450,7 +450,7 @@ github trigger **cannot be armed at all** without explicitly scoping its repos.
   authors is namespaced to the pack at install, so a bare name inside a pack
   resolves inside that pack — never against your config, and never against
   another pack's. This holds for every spelling of a call: the step form
-  (`workflow: review-flow`), the verb form (`uses: workflow.run, options:
+  (`call: review-flow`), the verb form (`uses: workflow.run, options:
   {name: review-flow}`), `workflow.save`, and any of those nested in a
   `compensate:`, a `parallel:` branch, or a step `hooks:` entry. It holds for a
   TEMPLATED name too — `{{ .pick }}` is namespaced before it renders, so a

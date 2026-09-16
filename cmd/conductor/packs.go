@@ -498,7 +498,7 @@ func cmdPackShow(args []string) error {
 	if len(man.Exports.Workflows) > 0 || len(man.Exports.Steps) > 0 {
 		fmt.Println("\nexports (public, reference by qualified name):")
 		for _, w := range man.Exports.Workflows {
-			fmt.Printf("  workflow: <instance>/%s\n", w)
+			fmt.Printf("  call: <instance>/%s\n", w)
 		}
 	}
 	fmt.Println("\nexample:")

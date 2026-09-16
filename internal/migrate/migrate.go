@@ -169,6 +169,13 @@ func TransformWith(raw []byte, profiles map[string]*yaml.Node, runtimeNames []st
 		} else if changed {
 			cur, anyChanged = out, true
 		}
+		// A step's `use:` is the code ENGINE now; the workflow call it used
+		// to spell is `call:`. Unconditional — see applyStepCallPass.
+		if out, changed, err := applyStepCallPass(cur, &notes); err != nil {
+			return nil, fmt.Errorf("step call migration: %w", err)
+		} else if changed {
+			cur, anyChanged = out, true
+		}
 		// The use: pass runs LAST: it consumes the connectors:/runtimes: blocks
 		// the passes above may have produced, and folds plugins:/type:/source:/
 		// kind: into the single use: field.
@@ -370,6 +377,14 @@ func TransformWith(raw []byte, profiles map[string]*yaml.Node, runtimeNames []st
 		return nil, fmt.Errorf("vaults migration: %w", verr)
 	} else if vchanged {
 		b = vout
+	}
+	// The step call: pass over the same output. A legacy file cannot itself
+	// contain a step-level `use:` (the legacy grammar had no such key), but
+	// a verbatim-carried block can, and the pass is a cheap no-op otherwise.
+	if sout, schanged, serr := applyStepCallPass(b, &notes); serr != nil {
+		return nil, fmt.Errorf("step call migration: %w", serr)
+	} else if schanged {
+		b = sout
 	}
 	// Same for the use: pass — the legacy transform emits connectors:/runtimes:
 	// entries in the pre-`use:` shape, so it folds them the same way it folds a

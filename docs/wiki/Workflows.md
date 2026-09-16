@@ -111,12 +111,15 @@ A step is one of six forms (all share `id` and `if`):
   runtime and still hand structured outputs to the next step.
 - `type: command` — a host command (POSIX sh semantics; argv list). With
   `host:` it runs over SSH and outputs `{stdout, stderr, exit_code}`.
-- `run:` — an inline code step ([[Code-Steps]]).
+- `use: <engine>` — an inline code step ([[Code-Steps]]); `use: cli` +
+  `command:` runs an argv. `run:` is the same key.
 - `uses: <conn>.<verb>` — a service verb ([[Verbs]]). This includes the
   always-on data, memory, and artifact verbs: `kv.*`/`sql.*` over `stores:`,
   `memory.*` over the `memory:` section ([[Memory]]), and `blob.*`
   ([[Binary-Data]]).
-- `workflow: <name>` — a reusable workflow call (below).
+- `call: <name>` — a reusable workflow call (below). `workflow:` is the
+  older spelling of the same field and still parses; a step-level `use:`
+  used to mean this and is migrated to `call:`.
 - `team:` — one task split across a planner, parallel workers in isolated
   worktrees, an optional critic, and a reconciler ([[Teams]]).
 
@@ -240,7 +243,7 @@ workflows:
 triggers:
   - on: gh.review_requested
     steps:
-      - { id: a, workflow: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
+      - { id: a, call: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
       - { id: auto, if: "{{.a.decision}} == auto", uses: gh.submit_review, options: { … } }
 ```
 
@@ -254,7 +257,7 @@ do not exist.
 A workflow may carry a `description:` — with its declared inputs/outputs it
 is self-describing (`conductor schema`, `workflow.list`, and a choosing
 agent all read it). `workflow:` may also be a **templated name**
-(`workflow: "{{.pick}}"`) resolved at runtime against the workflow set
+(`call: "{{.pick}}"`) resolved at runtime against the workflow set
 (config + saved): the static checks don't apply to a dynamic name, so it's
 guarded by a runtime depth cap (8) and a clear unknown-name error naming the
 set.
@@ -355,17 +358,17 @@ approximate token spend bounded by `limits.tokens`).
 
 ## File-based references
 
-A `workflow:` resolves three ways; all are checked at load:
+A `call:` resolves three ways; all are checked at load:
 
 ```yaml
-- { workflow: review-flow }                                     # by name — defined inline or in any imported file
-- { workflow: review-flow, import: ./workflows/review.yaml }    # name + the file it lives in (no section import needed)
-- { workflow: ./workflows/review.yaml }                         # a bare file path, when the file defines ONE workflow
+- { call: review-flow }                                     # by name — defined inline or in any imported file
+- { call: review-flow, import: ./workflows/review.yaml }    # name + the file it lives in (no section import needed)
+- { call: ./workflows/review.yaml }                         # a bare file path, when the file defines ONE workflow
 ```
 
 A referenced file holds a `workflows:` block or bare name→definition
 entries; relative paths resolve against the config file's directory. The
-bare-path form errors on a multi-workflow file (name one with `workflow:` +
+bare-path form errors on a multi-workflow file (name one with `call:` +
 `import:`). A workflow can also keep its name in the config with its body in
 its own file — `workflows: { review-flow: { import: ./workflows/review.yaml } }`
 — and section-level splitting (`workflows: { imports: [...] }`) is

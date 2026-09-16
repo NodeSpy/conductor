@@ -290,6 +290,12 @@ func cmdPluginList(args []string) error {
 	for _, r := range config.BuiltinNames(config.UseKindRuntime) {
 		fmt.Printf("%-18s %-10s %-9s %-14s %s\n", r, "runtime", "builtin", version, "bundled")
 	}
+	// Engines are the third plugin kind. `cli` is listed twice on purpose —
+	// the one-shot runtime and the code-step engine are different things that
+	// share a name.
+	for _, e := range config.BuiltinNames(config.UseKindEngine) {
+		fmt.Printf("%-18s %-10s %-9s %-14s %s\n", e, "engine", "builtin", version, "bundled")
+	}
 
 	refs := cfg.PluginRefs()
 	keys := make([]string, 0, len(refs))
