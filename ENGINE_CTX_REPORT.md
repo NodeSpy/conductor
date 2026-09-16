@@ -6,8 +6,8 @@ per-run authenticated unix socket, with **every op authorized host-side** by
 the same guards an in-process `run: js` step goes through.
 
 Branch `feat/engines-cli-ctx`, based on `main` @ `27f020f`. Commit sha for
-this increment: **`__COMMIT_SHA__`** (this file is part of it; the sha is the
-commit it lands in — see `git log -1` on the branch).
+this increment: **`2c22394`**. This report is the follow-on commit, so that it
+could carry the sha of the commit it describes.
 
 ---
 
