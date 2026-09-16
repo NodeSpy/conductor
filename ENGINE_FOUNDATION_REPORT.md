@@ -8,7 +8,7 @@ alias), and the built-in `cli` engine wired for **inputs + outputs only**. The
 plugin wire protocol (`pkg/plugin/wire.go`, `internal/plugin`) and the
 ctx-over-socket data plane are untouched — next increment.
 
-- **Commit:** `__COMMIT_SHA__`
+- **Commit:** `95a510dae469cb26e38ab026f4af3a640cff8d45`
 
 ---
 
