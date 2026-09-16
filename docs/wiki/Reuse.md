@@ -175,7 +175,7 @@ triggers:
     abstract: true
     filter: { not_draft: true }
     steps:
-      - { id: r, type: agent, agent: reviewer, prompt: "Review {{.repo}}#{{.pr}}." }
+      - { id: r, type: agent, name: reviewer, prompt: "Review {{.repo}}#{{.pr}}." }
 
   - on: gh.review_requested
     extends: review-base

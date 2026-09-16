@@ -327,14 +327,14 @@ The full loop — plan, choose from the catalog, supervise, promote — is in
 
 ## Explanation
 
-An agent and a runtime answer different questions. The **agent** profile answers "what should
-run" — which provider, which model, what tone, what workspace lifecycle. The **runtime** answers
-"how is it run" — which process or API actually executes it. A `fixer` profile with
-`provider: claude` can run on the built-in `paseo` dispatcher, on `agent-deck`, or through
-opencode's HTTP API, unchanged, just by pointing `runtime:` at a different entry — the provider
-and model still route through whichever runtime is selected. The one place this decouples is an
-**ACP** or **cli** runtime: there, the runtime's own `agent:`/`command:` names the tool directly
-(e.g. `gemini` over ACP), so the profile's `provider`/`model` fields have nothing to route and are
-ignored. With no `runtimes:` configured at all, every agent profile runs on `paseo`, so this
+A step and a runtime answer different questions. The **step** answers "what should run" — which
+model, what tone, what workspace lifecycle. The **runtime** answers "how is it run" — which
+process or API actually executes it. There is no `provider:`: a backend was never a property of
+the work, so a step with `model: claude-opus-5` can run on the built-in `paseo` dispatcher, on
+`agent-deck`, or through opencode's HTTP API, unchanged, just by pointing `runtime:` at a
+different entry — the model still routes through whichever runtime is selected. The one place
+this decouples is an **ACP** or **cli** runtime: there, the runtime's own `agent:`/`command:`
+names the tool directly (e.g. `gemini` over ACP), so the step's `model:` has nothing to route and
+is ignored. With no `runtimes:` configured at all, every agent step runs on `paseo`, so this
 distinction is invisible until you actually introduce a second runtime. See [[Runtimes]] for the
 full resolution order and runtime kinds ([[Controllers]] is the legacy name).

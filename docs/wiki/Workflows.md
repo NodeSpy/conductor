@@ -231,7 +231,7 @@ workflows:
     outputs:
       decision: "{{.triage.decision}}"
     steps:
-      - { id: triage, type: agent, agent: planner, checkout: none,
+      - { id: triage, type: agent, name: planner, checkout: none,
           output_schema: { type: object, required: [decision], properties: { decision: { enum: [auto, manual] } } },
           prompt: "Assess {{.inputs.repo}}#{{.inputs.pr}}." }
       - { id: ping, if: "{{.triage.decision}} == manual",
@@ -290,7 +290,7 @@ triggers:
     steps:
       - id: triage
         type: agent
-        agent: planner
+        name: planner
         prompt: |
           Goal: handle "{{.title}}". Consult the workflow catalog and prior
           memory; if a workflow fits, run it and say why. Only author fresh
@@ -338,7 +338,7 @@ triggers:
     steps:
       - id: fixer
         type: agent
-        agent: planner              # session: on the profile → supervised revisions
+        name: planner               # session: on the step → supervised revisions
         prompt: |
           CI failed on {{.repo}}#{{.pr}}. Emit a ```plan that diagnoses and
           fixes it (allowed verbs only; compensate: where a step has an undo).

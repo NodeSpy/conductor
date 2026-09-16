@@ -42,7 +42,7 @@ fire-once-after-all-variants timing):
 ```yaml
 triggers:
   - on: slack-ops.app_mention
-    steps: [{ id: work, type: agent, agent: fixer, prompt: "{{.slack.text}}" }]
+    steps: [{ id: work, type: agent, name: fixer, prompt: "{{.slack.text}}" }]
     hooks:
       - { at: start, uses: slack-ops.react, options: { channel: "{{.slack.channel}}", ts: "{{.slack.ts}}", emoji: eyes } }
       - { at: done,  uses: slack-ops.react, options: { channel: "{{.slack.channel}}", ts: "{{.slack.ts}}", emoji: white_check_mark } }

@@ -2,7 +2,7 @@
 
 Worked trigger recipes in the connectors schema, roughly in order of depth.
 All assume connectors named `gh` (github), `slack-ops` (slack), `timer`
-(cron), and `hoff` (web), the `fixer`/`planner` agents, and the defaults from
+(cron), and `hoff` (web), steps named `fixer`/`planner`, and the defaults from
 `config.example.yaml`. Start with [[Quickstart]] if these are your first
 triggers.
 
@@ -11,7 +11,7 @@ triggers.
 ```yaml
 - on: gh.merge_conflict
   steps:
-    - { id: fix, type: agent, agent: fixer,
+    - { id: fix, type: agent, name: fixer,
         prompt: "Resolve the conflict on {{.repo}}#{{.pr}} against {{.base}}, verify, push." }
   hooks:
     - { at: start, uses: slack-ops.post, options: { text: "conflict on {{.repo}}#{{.pr}} — on it" } }
@@ -38,7 +38,7 @@ triggers.
   steps:
     - id: handle
       type: agent
-      agent: fixer
+      name: fixer
       prompt: |
         Address the comments on {{.repo}}#{{.pr}}:
         {{range .group.events}}- {{.comment_body}}
@@ -64,7 +64,7 @@ triggers.
 - on: oncall.incident
   filter: { event_types: [incident.triggered] }
   steps:
-    - { id: dig, type: agent, agent: planner, checkout: none,
+    - { id: dig, type: agent, name: planner, checkout: none,
         prompt: "Research {{.pagerduty.title}} ({{.pagerduty.url}}); return severity + summary.",
         output_schema: { type: object, required: [sev, summary],
                          properties: { sev: { enum: [low, high] }, summary: { type: string } } } }
@@ -82,7 +82,7 @@ triggers.
   options: { reviewer: { logins: [your-login] } }
   steps:
     - { id: a, workflow: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
-    - { id: draft, if: "{{.a.decision}} == auto", type: agent, agent: planner,
+    - { id: draft, if: "{{.a.decision}} == auto", type: agent, name: planner,
         checkout: none, prompt: "Draft the review for {{.repo}}#{{.pr}}." }
     - { id: review, if: "{{.a.decision}} == auto", uses: hoff.ask,
         options: { prompt: "Submit this review?", draft: "{{.draft.text}}", timeout: 2h } }
@@ -179,8 +179,7 @@ x-templates:
 triggers:
   - on: [ gh.new_comment, gh.changes_requested, gh.failing_checks ]
     steps:
-      - type: agent
-        agent: pr-agent
+      - <<: *pr-agent
         prompt: "New activity ({{.kind}}) on {{.repo}}#{{.pr}} — continue where you left off."
     hooks:
       - { at: done, uses: memory.remember,
@@ -209,7 +208,7 @@ Requires a `policy.agent_authored` block — without one, plans are rejected:
   steps:
     - id: triage
       type: agent
-      agent: planner
+      name: planner
       checkout: none
       prompt: |
         Goal: handle "{{.title}}". Consult the workflow catalog; if a
