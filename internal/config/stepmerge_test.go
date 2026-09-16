@@ -416,7 +416,7 @@ workflows:
         args: [--mine]
         skill: { verbs: [linear.create] }
 `)
-	if got := s.Command; !reflect.DeepEqual(got, []string{"make", "test"}) {
+	if got := []string(s.Command); !reflect.DeepEqual(got, []string{"make", "test"}) {
 		t.Errorf("command: is an invocation — the child's argv must REPLACE, got %v", got)
 	}
 	if got := s.Args; !reflect.DeepEqual(got, []string{"--mine"}) {
@@ -438,7 +438,7 @@ workflows:
       - extends: *base
         id: a
 `)
-	if got := s.Command; !reflect.DeepEqual(got, []string{"go", "build"}) {
+	if got := []string(s.Command); !reflect.DeepEqual(got, []string{"go", "build"}) {
 		t.Fatalf("an unset argv still inherits, got %v", got)
 	}
 }

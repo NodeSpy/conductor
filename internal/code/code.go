@@ -5,7 +5,10 @@
 // interpreter) — both in-process, sandboxed, and therefore LOCAL ONLY: they
 // share this process's fate (crash it, hang it, exhaust its memory) so they
 // must never be handed to a remote box conductor doesn't control the
-// lifecycle of. Everything else (`sh`, `bash`, `node`, `python`, a bare
+// lifecycle of. A third builtin, `cli`, runs the step's own `command:` argv
+// as a subprocess — local or remote — and is the general form of the host
+// interpreter (see cli.go). Everything else (`sh`, `bash`, `node`,
+// `python`, a bare
 // `go`, or an absolute/relative interpreter path) shells out to a real
 // interpreter on PATH — locally, or on a named `hosts:`/inline `ssh:` target
 // over internal/hosts when the step sets `host:`.
@@ -32,10 +35,16 @@ import (
 // Code is the literal script/program text (or, for a host interpreter whose
 // Run field is a path, the interpreter path is Run itself — see Exec).
 type Spec struct {
-	// Run selects the engine: "js" | "go-embed" | "go" | a host interpreter
-	// name (sh, bash, ruby, node, python, perl, php, …) | an absolute or
-	// relative path to one (anything containing '/').
+	// Run selects the engine: "cli" | "js" | "go-embed" | "risor" | "lua" |
+	// "go" | a host interpreter name (sh, bash, ruby, node, python, perl,
+	// php, …) | an absolute or relative path to one (anything containing
+	// '/'). It carries the step's `use:` when the step wrote that spelling —
+	// the two are one selection (internal/config engines.go).
 	Run string
+	// Command is the argv the "cli" engine runs. Ignored by every other
+	// engine, which take their work as Code. See cli.go for how the two
+	// compose when a cli step sets both.
+	Command []string
 	// Code is the script/program source.
 	Code string
 	// Args are extra argv entries after the code file, for host
@@ -101,16 +110,18 @@ func (e *Executor) sshClient() *hosts.Client {
 
 // Exec runs spec, exposing data to the code as `ctx` and returning the
 // step's outputs (see ParseOutputs / the in-process wrapValue for the exact
-// per-engine contract). Dispatch is: a remote spec (Host != nil) always goes
-// through the host-interpreter path over SSH (js/go-embed reject remote —
-// see execRemote); a local spec dispatches on Run to the matching in-process
-// engine, falling through to the local host-interpreter path for anything
-// else.
+// per-engine contract). Dispatch is: a remote spec (Host != nil) goes over
+// SSH through the cli or host-interpreter path (js/go-embed/risor/lua reject
+// remote — see execRemote); a local spec dispatches on Run to `cli` or to
+// the matching in-process engine, falling through to the local
+// host-interpreter path for anything else.
 func (e *Executor) Exec(ctx context.Context, spec Spec, data map[string]any) (map[string]any, error) {
 	if spec.Host != nil {
 		return e.execRemote(ctx, spec, data)
 	}
 	switch spec.Run {
+	case "cli":
+		return e.execCLILocal(ctx, spec, data)
 	case "js":
 		return e.execJS(ctx, spec, data)
 	case "go-embed":

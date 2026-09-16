@@ -257,9 +257,12 @@ func planSummary(agent string, plan []config.Step, res guardResult) string {
 		desc := s.Uses
 		switch {
 		case s.Workflow != "":
-			desc = "workflow " + s.Workflow
-		case s.Run != "":
-			desc = "run: " + s.Run
+			desc = "call: " + s.Workflow
+		case s.EngineSelector() != "":
+			desc = "use: " + s.EngineSelector()
+			if len(s.Command) > 0 {
+				desc += " " + strings.Join(s.Command, " ")
+			}
 		case s.Type != "":
 			desc = "type: " + s.Type
 		}

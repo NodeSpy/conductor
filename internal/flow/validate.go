@@ -405,8 +405,11 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 			}
 		}
 	case "code":
-		if step.Run != "js" && step.Run != "go-embed" && step.Run != "go" && strings.TrimSpace(step.Run) == "" {
-			return fmt.Errorf("%s: empty run:", w)
+		// `use:` and `run:` are one selection (config.Step.StepEngine); which
+		// engine it names, and whether the step brought the body that engine
+		// needs, is the loader's business (config.validateStepEngine).
+		if step.EngineSelector() == "" {
+			return fmt.Errorf("%s: empty use:", w)
 		}
 	case "parallel":
 		// Branch step ids merge into the parent scope after the join; they

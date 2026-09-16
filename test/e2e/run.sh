@@ -840,6 +840,14 @@ group_K_connectors() {
   else
     bad "K2 js code step per comment" K K2-js "missing K2 captures"
   fi
+  # K9 rides the same burst: the cli engine gets ctx on stdin (echoed back
+  # through `sh` + cat) and its argv-only sibling's stdout becomes outputs.
+  if wait_for 20 slack_sink_has "K9 first burst comment via cli-engine"; then
+    ok "K9 cli engine bridged ctx-on-stdin and stdout outputs" K K9-cli
+  else
+    bad "K9 cli engine" K K9-cli "missing K9 capture"
+  fi
+
   if wait_for 30 slack_sink_has "K3-batch 2 last=second burst comment"; then
     ok "K3 grouped burst → ONE run with group.count=2 and the last event's context" K K3-group
   else

@@ -42,7 +42,7 @@ triggers:
   - on: <connector>.<event>       # what fires it — one source, a list, or `manual`
     filter: …                     # whether it fires, and where — the one filter key
     group: { key: …, window: 15s }# optional burst batching
-    steps: [ … ]                  # agent | command | run: code | uses: verb | workflow: name | team:
+    steps: [ … ]                  # agent | command | use: engine | uses: verb | call: workflow | team:
     hooks: [ {at: start|done|fail, uses: <conn>.<verb>, options: {…}} ]
     policy: { … }                 # trigger-scoped overrides
 ```
@@ -181,7 +181,7 @@ triggers:
           hooks:
             - { at: start, uses: gh.react, options: { emoji: eyes } }
     steps:
-      - { workflow: clone-latest-invoice,
+      - { call: clone-latest-invoice,
           with: { contact_id: '{{ .issue.number | default .inputs.contact_id }}' } }
 ```
 
@@ -566,7 +566,7 @@ workflows:
 triggers:
   - imports: [triggers/*.yaml]               # spliced at this position
   - on: gh.review_requested                  # inline triggers mix in
-    steps: [ { workflow: review-flow } ]
+    steps: [ { call: review-flow } ]
 ```
 
 An imported section file holds bare entries (`timer: { type: cron, … }`) or

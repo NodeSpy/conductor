@@ -81,7 +81,7 @@ triggers.
   filter: { not_branch: ["release/*"] }
   options: { reviewer: { logins: [your-login] } }
   steps:
-    - { id: a, workflow: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
+    - { id: a, call: assess-and-post, with: { repo: "{{.repo}}", pr: "{{.pr}}" } }
     - { id: draft, if: "{{.a.decision}} == auto", type: agent, name: planner,
         checkout: none, prompt: "Draft the review for {{.repo}}#{{.pr}}." }
     - { id: review, if: "{{.a.decision}} == auto", uses: hoff.ask,

@@ -147,7 +147,7 @@ triggers:
     on: github.review_requested
     steps:
       - id: run
-        workflow: review-flow
+        call: review-flow
         with: { repo: "{{.repo}}", pr: "{{.number}}" }
     hooks:
       - at: start

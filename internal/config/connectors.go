@@ -802,7 +802,8 @@ type GroupSpec struct {
 
 // Step is one entry in a `steps:` list (and the body of hooks' action units).
 // Exactly one of the step forms must be set: `type: agent`, `type: command`,
-// `run:` (code), `uses:` (verb), or `use:` (workflow call).
+// `use:`/`run:` (code, on the named engine), `uses:` (verb), or `call:`
+// (workflow call).
 type Step struct {
 	ID string `yaml:"id,omitempty"`
 	// Name PINS this step's identity (docs/design/agents-removal.md §5). It is
@@ -840,12 +841,22 @@ type Step struct {
 	Background   bool           `yaml:"background,omitempty"`
 	Handoff      string         `yaml:"handoff,omitempty"` // ask-capable connector for a background review
 
-	// command form (also carries workdir/env for agent/code forms)
-	Command []string          `yaml:"command,omitempty"`
+	// command form (also carries workdir/env for agent/code forms), and the
+	// argv the `cli` engine runs. A list of words, or one string (see Argv).
+	Command Argv              `yaml:"command,omitempty"`
 	WorkDir string            `yaml:"workdir,omitempty"`
 	Env     map[string]string `yaml:"env,omitempty"`
 
-	// code form: run: js | go-embed | risor | lua | go | sh | bash | ruby | node | …
+	// code form. Use names the ENGINE that executes this step — a builtin
+	// (`cli`, `js`, `go-embed`, `risor`, `lua`), a host interpreter (`bash`,
+	// `python3`, or a path to one), or a plugin-backed engine. It resolves
+	// through UseKindEngine, exactly as a connector's `use:` resolves.
+	//
+	// Run is the ORIGINAL spelling of the same selection and stays a full
+	// alias — `run: js` and `use: js` are one step. See engines.go for what
+	// separates them (`run:` treats every unrecognized name as a host
+	// interpreter; `use:` will not guess). Setting both is an error.
+	Use  string   `yaml:"use,omitempty"`
 	Run  string   `yaml:"run,omitempty"`
 	Code string   `yaml:"code,omitempty"`
 	Args []string `yaml:"args,omitempty"`
@@ -858,11 +869,17 @@ type Step struct {
 	Uses    string         `yaml:"uses,omitempty"`
 	Options map[string]any `yaml:"options,omitempty"`
 
-	// workflow-call form. Workflow names a reusable workflow (defined inline
-	// or in any imported file), or is a bare file path when that file defines
-	// exactly one workflow; Import names the file a `workflow: <name>` lives
-	// in without a section-level import. File forms are materialized into
+	// workflow-call form. Call names a reusable workflow (defined inline or
+	// in any imported file), or is a bare file path when that file defines
+	// exactly one workflow; Import names the file a `call: <name>` lives in
+	// without a section-level import. File forms are materialized into
 	// cfg.Workflows at load (see resolveWorkflowFiles).
+	//
+	// `call:` is the spelling; `workflow:` is the older one and still
+	// parses. Both land in Workflow — UnmarshalYAML folds Call into it
+	// before anything downstream looks — so there is exactly one field to
+	// read and a config may use either key.
+	Call     string         `yaml:"call,omitempty"`
 	Workflow string         `yaml:"workflow,omitempty"`
 	Import   string         `yaml:"import,omitempty"`
 	With     map[string]any `yaml:"with,omitempty"`
@@ -1029,7 +1046,10 @@ func (s Step) Form() string {
 		return "verb"
 	case s.Workflow != "":
 		return "workflow"
-	case s.Run != "":
+	// An engine selection is checked before the command form: `use: cli`
+	// with a `command:` is a CODE step whose engine happens to run an argv,
+	// not the legacy `type: command` dispatch.
+	case s.Use != "" || s.Run != "":
 		return "code"
 	case s.Type == "agent" || (s.Type == "" && s.Agent != ""):
 		return "agent"
@@ -1640,9 +1660,11 @@ func validateSteps(where string, steps []Step, c *Config) error {
 func validateStep(w string, s Step, c *Config) error {
 	forms := 0
 	for _, set := range []bool{
-		s.Uses != "", s.Workflow != "", s.Run != "", s.Team != nil,
+		s.Uses != "", s.Workflow != "", s.Use != "" || s.Run != "", s.Team != nil,
 		s.Type == "agent" || (s.Type == "" && s.Agent != "" && s.Uses == "" && s.Workflow == "" && s.Team == nil),
-		s.Type == "command" || (s.Type == "" && len(s.Command) > 0),
+		// A bare `command:` is the command form ONLY when no engine claimed
+		// it: with `use: cli` the same key is that engine's argv.
+		s.Type == "command" || (s.Type == "" && len(s.Command) > 0 && s.Use == "" && s.Run == ""),
 	} {
 		if set {
 			forms++
@@ -1660,10 +1682,10 @@ func validateStep(w string, s Step, c *Config) error {
 		return validateHooks(w, s.Hooks)
 	}
 	if forms == 0 {
-		return fmt.Errorf("config: %s: set one of `type: agent`, `type: command`, `run:`, `uses:`, or `workflow:`", w)
+		return fmt.Errorf("config: %s: set one of `type: agent`, `type: command`, `use:` (an engine, with `code:`/`command:`), `uses:`, or `call:`", w)
 	}
 	if forms > 1 {
-		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/run/uses/workflow)", w)
+		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/use/uses/call)", w)
 	}
 	if c != nil {
 		if err := c.validateStepGate(w, s); err != nil {
@@ -1679,8 +1701,8 @@ func validateStep(w string, s Step, c *Config) error {
 			return fmt.Errorf("config: %s: `uses: %s` must be <connector>.<verb>", w, s.Uses)
 		}
 	}
-	if s.Run != "" && strings.TrimSpace(s.Code) == "" {
-		return fmt.Errorf("config: %s: `run: %s` needs `code:`", w, s.Run)
+	if err := validateStepEngine(w, s, c); err != nil {
+		return err
 	}
 	if s.Host != "" && s.SSH != nil {
 		return fmt.Errorf("config: %s: set `host:` or inline `ssh:`, not both", w)
@@ -1693,14 +1715,8 @@ func validateStep(w string, s Step, c *Config) error {
 	if s.SSH != nil && s.SSH.Host == "" {
 		return fmt.Errorf("config: %s: inline ssh: needs `host:` (the address)", w)
 	}
-	switch s.Run {
-	case "js", "go-embed", "risor", "lua":
-		if s.Host != "" || s.SSH != nil {
-			return fmt.Errorf("config: %s: `run: %s` executes inside conductor's own process and is local-only — use a host interpreter (e.g. `run: node`/`run: sh`) for remote code", w, s.Run)
-		}
-	}
 	if s.Import != "" && s.Workflow == "" {
-		return fmt.Errorf("config: %s: a step-level `import:` needs `workflow: <name>` naming the workflow in that file", w)
+		return fmt.Errorf("config: %s: a step-level `import:` needs `call: <name>` naming the workflow in that file", w)
 	}
 	if s.Workflow != "" && c != nil {
 		if _, ok := c.Workflows[s.Workflow]; !ok {

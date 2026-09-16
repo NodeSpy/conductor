@@ -1272,11 +1272,13 @@ func (r *Runner) workflowNames() string {
 	return strings.Join(names, ", ")
 }
 
-// execCode runs a run: code step through internal/code, remotely when the
+// execCode runs a code step (`use:`/`run:` — one engine selection, resolved
+// by config.Step.StepEngine) through internal/code, remotely when the
 // step names a host.
 func (r *Runner) execCode(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, string, error) {
+	engine, _ := step.StepEngine()
 	if shadow {
-		r.Log("%s [dry-run] would run code step (%s)", flowTag(t), step.Run)
+		r.Log("%s [dry-run] would run code step (%s)", flowTag(t), engine)
 		return map[string]any{"stubbed": true}, "", nil
 	}
 	env, err := renderStringMap(step.Env, data)
@@ -1287,14 +1289,22 @@ func (r *Runner) execCode(ctx context.Context, t core.Trigger, step config.Step,
 	if err != nil {
 		return nil, "", err
 	}
+	// The `cli` engine's argv is templated like every other execution input.
+	command, err := renderStrings(step.Command, data)
+	if err != nil {
+		return nil, "", err
+	}
 	// The {{secret}} egress boundary for code steps: conductor executes the
-	// code itself, so eligible handles in env/args resolve here — never for
-	// agent-authored steps (see handles.go).
-	if eligible := secretCallsIn(step.Env, step.Args); len(eligible) > 0 {
+	// code itself, so eligible handles in env/args/command resolve here —
+	// never for agent-authored steps (see handles.go).
+	if eligible := secretCallsIn(step.Env, step.Args, step.Command); len(eligible) > 0 {
 		if env, err = r.resolveHandleStringMap(ctx, env, eligible); err != nil {
 			return nil, "", err
 		}
 		if args, err = r.resolveHandleStrings(ctx, args, eligible); err != nil {
+			return nil, "", err
+		}
+		if command, err = r.resolveHandleStrings(ctx, command, eligible); err != nil {
 			return nil, "", err
 		}
 	}
@@ -1302,7 +1312,7 @@ func (r *Runner) execCode(ctx context.Context, t core.Trigger, step config.Step,
 	if err != nil {
 		return nil, "", err
 	}
-	spec := code.Spec{Run: step.Run, Code: step.Code, Args: args, Env: env, WorkDir: workdir,
+	spec := code.Spec{Run: engine, Command: command, Code: step.Code, Args: args, Env: env, WorkDir: workdir,
 		DataGuard: r.planDataGuard(ctx, t)}
 	if target, terr := r.hostTarget(step); terr != nil {
 		return nil, "", terr

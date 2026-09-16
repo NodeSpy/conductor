@@ -188,8 +188,15 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 					return fmt.Errorf("%s: agent step has no prompt", w)
 				}
 			case "code":
-				if strings.TrimSpace(step.Run) == "" {
-					return fmt.Errorf("%s: empty run:", w)
+				sel, class := step.StepEngine()
+				if sel == "" {
+					return fmt.Errorf("%s: empty use:", w)
+				}
+				if class == config.EnginePlugin {
+					return fmt.Errorf("%s: `use: %s` names no engine conductor can run", w, sel)
+				}
+				if class == config.EngineCLI && len(step.Command) == 0 {
+					return fmt.Errorf("%s: `use: cli` step has no command", w)
 				}
 			case "command":
 				if len(step.Command) == 0 {

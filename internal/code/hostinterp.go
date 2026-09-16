@@ -80,7 +80,9 @@ const remoteNotFoundExit = 127
 
 // execRemote runs a host-interpreter spec on spec.Host over SSH.
 // js/go-embed/risor/lua are rejected outright: they execute inside conductor's own
-// process (see errRemoteInProcessEngine) and have no remote equivalent.
+// process (see errRemoteInProcessEngine) and have no remote equivalent; a
+// `cli` spec hands off to execCLIRemote, which is this same script shape with
+// an argv instead of one interpreter name.
 //
 // The remote side is a single generated `sh` script (run through
 // hosts.Client.Script, which already handles the target's env/cwd wrapping
@@ -103,6 +105,8 @@ func (e *Executor) execRemote(ctx context.Context, spec Spec, data map[string]an
 	switch spec.Run {
 	case "js", "go-embed", "risor", "lua":
 		return nil, errRemoteInProcessEngine(spec.Run)
+	case "cli":
+		return e.execCLIRemote(ctx, spec, data)
 	}
 
 	dataJSON, err := json.Marshal(data)

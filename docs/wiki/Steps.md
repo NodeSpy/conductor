@@ -156,12 +156,47 @@ a step that has neither a `name:` nor an `id:` — give it one to pin it.
 > track record. Instead `id:` supplies the structural **slot**, which is what
 > makes structural identity survive reordering.
 
+## Step forms
+
+A step sets exactly one form — what it does:
+
+| Form | Spelling |
+| --- | --- |
+| dispatch an agent | `type: agent` (or a bare `prompt:` with `agent:`) |
+| call a connector verb | `uses: <connector>.<verb>` + `options:` |
+| run code | **`use: <engine>`** + `code:`, or `use: cli` + `command:` — see [[Code-Steps]] |
+| run a program | `type: command` + `command:` |
+| call a workflow | **`call: <workflow>`** + `with:` — see [[Workflows]] |
+
+Two of those spellings moved, and both old ones still parse:
+
+- **`use:` selects the code ENGINE.** It resolves like a connector's or a
+  runtime's `use:` — builtin (`cli`, `js`, `go-embed`, `risor`, `lua`), then
+  the official plugin repo's `engines/<name>`, then an explicit repo or
+  path — and it also takes a host interpreter by name (`bash`, `python3`) or
+  by path. **`run:` is the same key** and every `run: js` / `run: bash`
+  config keeps working; set one or the other, not both.
+- **`call:` is the workflow call.** A step-level `use:` used to mean this.
+  `conductor config migrate` (and the boot auto-migration) rewrites every
+  `use: <workflow>` to `call: <workflow>`; `workflow:` remains valid as the
+  older spelling of the same field.
+
+```yaml
+steps:
+  - { id: triage, use: js,  code: "return { sev: ctx.body.severity }" }
+  - { id: build,  use: cli, command: [make, -C, ./svc, release] }
+  - { id: review, call: review-flow, with: { pr: "{{.pr}}" } }
+```
+
 ## Fields
 
 | Field | Meaning |
 | --- | --- |
 | `name` | Pins the step's identity (see above). Shareable on purpose. |
 | `id` | The step's slot: how outputs are addressed (`steps.<id>.outputs.*`), what a step reference points at, and — absent a `name:` — the structural half of its identity. |
+| `use` | The code ENGINE this step runs on (`run:` is the same key). See [[Code-Steps]]. |
+| `command` | The argv for `use: cli` and for `type: command` — a list of words, or one string split on whitespace (quotes honored, no shell). |
+| `call` | A workflow to run as this step, with `with:` for its inputs. See [[Workflows]]. |
 | `model` | Which model to run: a fleet name, a model id, a wildcard, an inline list, or `{ any, required }`. Unset → the runtime's `models.default:`, then a bare launch. See [[Model-Selection]]. |
 | `runtime` | A `runtimes.<name>` entry to run on (default: the `default: true` runtime, else the built-in paseo). See [[Runtimes]]. |
 | `thinking` / `mode` | Runtime launch hints, passed through where the runtime supports them. |

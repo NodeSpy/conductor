@@ -245,6 +245,14 @@ func stepClass(cfg *config.Config, step *config.Step) string {
 	case "command":
 		return "command"
 	case "code":
+		// The `cli` ENGINE runs an argv, so it classes as "command" — the
+		// thing an operator writing `allow: [command]` (or its `cli` alias)
+		// is deciding about. Classing it "code" would have split one
+		// capability across two names AND made the existing `cli` pattern
+		// mean the opposite of what it now reads as.
+		if _, class := step.StepEngine(); class == config.EngineCLI {
+			return "command"
+		}
 		return "code"
 	case "verb":
 		return step.Uses

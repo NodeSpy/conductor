@@ -128,6 +128,26 @@ triggers:
         uses: slack.post
         options: { channel: C2, text: "K2 {{.shape.msg}}" }
 
+  # K9: the `cli` ENGINE. `use: cli` runs the step's own argv as a subprocess
+  # with the code-step ABI around it — the ctx document as JSON on its stdin,
+  # its stdout parsed into the step's outputs. `echoed` proves the input half
+  # (it hands ctx straight back), `argv` the output half from a pure argv with
+  # no code: at all.
+  - on: gh.new_comment
+    name: cli-engine
+    filter: { repo: ["conn/csvc"] }
+    steps:
+      - id: echoed
+        use: cli
+        command: [sh]
+        code: "cat"
+      - id: argv
+        use: cli
+        command: [sh, -c, "printf '{\"who\":\"cli-engine\"}'"]
+      - id: tell
+        uses: slack.post
+        options: { channel: C9, text: "K9 {{.echoed.comment_body}} via {{.argv.who}}" }
+
   # K7: request-response — web.ask presents a draft page per decision and the
   # workflow reads each answer; a slack post reports all three outcomes.
   - on: gh.new_comment
