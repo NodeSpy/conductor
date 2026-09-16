@@ -47,6 +47,7 @@ Connector types
 - [[Integration-RSS]]
 
 Operations
+- [[One-Shot]]
 - [[Callable-Service]]
 - [[Runs]]
 - [[Hand-offs]]

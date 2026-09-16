@@ -254,6 +254,11 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	"cmd/conductor/workflows.go": {
 		{"cmdWorkflows", "prints a run listing"},
 	},
+	"cmd/conductor/once.go": {
+		{"runOnce", "the one-shot run record's display fields, exactly as engine.newRun — " +
+			"the run ID it also builds goes through Trigger.Key(), which is trust-aware"},
+		{"onceTargetLabel", "a job-log line an operator reads in the Actions output"},
+	},
 }
 
 func TestEveryDispatchTargetReadIsAuditedOrRouted(t *testing.T) {

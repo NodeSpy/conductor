@@ -3,6 +3,8 @@
 ```
 conductor run [--config PATH]              start the daemon
 conductor run <name> [--input k=v ...] [--json '{…}']  fire a manual trigger via the running daemon
+conductor once <trigger> [--event PATH] [--event-name NAME] [--fail-on LIST] [--require-match]
+                                           run ONE event through ONE trigger, for real, no daemon; exit = outcome
 conductor validate [--config PATH]         load & validate config (both schemas), then exit
 conductor replay <event.json>              run a saved webhook through the pipeline, verbs stubbed
 conductor sweep [--now]                    one catch-up sweep (dry-run print / signal the daemon)
@@ -48,6 +50,13 @@ conductor version
   (one structured object; `--input` overlays it) land in the trigger context
   as `{{.inputs.*}}`. The connectors-model successor to `force`. Errors
   clearly when the daemon is down or the name is unknown.
+- **once `<trigger>`** — the no-daemon entry point ([[One-Shot]]): takes ONE
+  event (`--event`, default `$GITHUB_EVENT_PATH`), matches it to the named
+  trigger, and runs that trigger's steps **for real** in this process, to
+  completion — with none of the daemon's background loops. Exit `0` on success
+  or a non-match, `3` on a `--fail-on` outcome, `1` when it could not run.
+  Built for GitHub Actions; `--fixture` takes a `replay` fixture for local
+  testing. paseo and interactive hand-offs are refused up front.
 - **replay** — reads a `{"event": …, "body": {…}}` fixture (see `testdata/`),
   translates it, and prints what would dispatch; connectors-model triggers run
   with every outbound verb stubbed and agents mocked, so a workflow can be

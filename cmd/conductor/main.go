@@ -3,9 +3,10 @@
 // smee, Slack, cron, sentry, …) into triggers whose steps dispatch coding
 // agents, verbs, code, and commands.
 //
-// Subcommands: run | validate | replay | sweep | force | status | report |
-// runs | watch | pause | resume | update | service | connectors | connector |
-// schema | secrets | vault | unlock | config | mcp | workflows | version.
+// Subcommands: run | once | validate | replay | sweep | force | status |
+// report | runs | watch | pause | resume | update | service | connectors |
+// connector | schema | secrets | vault | unlock | config | mcp | workflows |
+// version.
 package main
 
 import (
@@ -84,6 +85,12 @@ func main() {
 		os.Exit(runCtx(args))
 	case "run":
 		err = cmdRun(args)
+	case "once":
+		// One-shot, no-daemon execution: ONE event through ONE trigger, for
+		// real, then exit with the outcome (once.go). A dedicated verb, not a
+		// mode of `run` — `run` already means "start the daemon" / "fire via
+		// the daemon", and this is neither.
+		err = cmdOnce(args)
 	case "validate":
 		err = cmdValidate(args)
 	case "replay":
@@ -152,6 +159,16 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
+		// A command may ask for a specific exit status (`once` maps the run's
+		// outcome onto one — see onceExitOutcome). An empty message means the
+		// command already told the story on stdout/stderr and an "error:" line
+		// would only repeat it.
+		if ex, ok := err.(*exitError); ok {
+			if ex.msg != "" {
+				fmt.Fprintln(os.Stderr, "error:", ex.msg)
+			}
+			os.Exit(ex.code)
+		}
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
@@ -163,6 +180,7 @@ func usage() {
 usage:
   conductor run [--config PATH]         start the daemon
   conductor run <name> [--input k=v ...] [--json '{…}']  fire a manual trigger via the running daemon
+  conductor once <trigger> [--event PATH] [--event-name NAME]  run ONE event through ONE trigger, no daemon, exit = outcome
   conductor validate [--config PATH]    load & validate config, then exit
   conductor replay <event.json> [--config PATH]  run a saved webhook through the pipeline (dry-run)
   conductor sweep [--config PATH]       one catch-up sweep (dry-run print)
