@@ -847,6 +847,15 @@ group_K_connectors() {
   else
     bad "K9 cli engine" K K9-cli "missing K9 capture"
   fi
+  # K9ctx: the same cli engine reaching the ctx data plane over its per-run
+  # socket — a write that round-trips through a real store, plus two refusals
+  # the DAEMON issues (code_access: none, and an undefined store). "ok" means
+  # all three.
+  if wait_for 20 slack_sink_has "K9ctx ok"; then
+    ok "K9ctx cli engine round-tripped ctx data over the per-run socket, guards enforced host-side" K K9-ctx
+  else
+    bad "K9ctx cli ctx data plane" K K9-ctx "no 'K9ctx ok' capture"
+  fi
 
   if wait_for 30 slack_sink_has "K3-batch 2 last=second burst comment"; then
     ok "K3 grouped burst → ONE run with group.count=2 and the last event's context" K K3-group

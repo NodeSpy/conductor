@@ -25,17 +25,28 @@ import (
 // choose word for word, instead of being one interpreter name that conductor
 // then decides how to invoke.
 //
-// The two halves of the ABI it bridges in this increment are INPUTS and
-// OUTPUTS only:
+// The three halves of the ABI it bridges:
 //
 //	inputs   the rendered ctx document, as JSON on the command's stdin
 //	outputs  ParseOutputs over the command's stdout (see outputs.go)
+//	data     ctx.store/ctx.sql/ctx.memory over a per-run socket (ctxsock.go)
 //
-// A `cli` step has no ctx.store/ctx.sql/ctx.memory: those are in-process
-// bindings held by the in-process engines, and reaching them from a
-// subprocess needs a data plane over the plugin socket that does not exist
-// yet. Use the `kv.*`/`sql.*`/`memory.*` verbs in surrounding steps, exactly
-// as a host-interpreter step does.
+// The data plane is what an in-process engine gets as a Go binding and a
+// subprocess cannot: the command is handed a socket path and a token in its
+// environment (CONDUCTOR_CTX_SOCK/CONDUCTOR_CTX_TOKEN/CONDUCTOR_CTX_HELPER)
+// and asks conductor to perform each kv/sql/memory op on its behalf. It
+// never holds a store — enforcement stays host-side, in the same
+// kvInvoke/sqlInvoke/memInvoke behind the same Spec.DataGuard the js engine
+// goes through (see CtxHandler). It is opt-in from the command's side: a
+// command that ignores those variables is the inputs+outputs step it always
+// was.
+//
+// LOCAL ONLY. A `host:`-remote cli step gets no socket, because the callback
+// would have to cross the ssh hop to come back to this daemon; the variables
+// are simply absent there and the reference client says so plainly rather
+// than a remote step silently reading a different store. A remote step that
+// needs durable state uses the `kv.*`/`sql.*`/`memory.*` verbs in
+// surrounding steps, as a host-interpreter step does.
 //
 // How `command:` and `code:` compose — ONE rule, no special cases:
 //
@@ -103,12 +114,25 @@ func (e *Executor) execCLILocal(ctx context.Context, spec Spec, data map[string]
 		return nil, fmt.Errorf("code: cli: marshal ctx: %w", err)
 	}
 
+	// The ctx data plane, for the whole life of this step and no longer. The
+	// deferred Close is what makes teardown unconditional: it runs on a clean
+	// exit, a non-zero exit, a context timeout, a cancellation, and on every
+	// error return below it.
+	ctxSrv, err := startCtxServer(CtxHandler{Guard: spec.DataGuard})
+	if err != nil {
+		return nil, err
+	}
+	defer ctxSrv.Close()
+
 	argv := cliArgv(spec.Command[1:], codePath, spec.Args)
 	cmd := exec.CommandContext(ctx, prog, argv...)
 	cmd.Dir = spec.WorkDir
 	// Allowlisted base env only — the daemon's own environment carries
-	// secrets a spawned step must not inherit (see spawnBaseEnv).
+	// secrets a spawned step must not inherit (see spawnBaseEnv). The ctx
+	// variables go LAST: os/exec lets later entries win, so a step's own
+	// `env:` cannot shadow the socket address or the token with one it chose.
 	cmd.Env = append(spawnBaseEnv(), envSlice(spec.Env)...)
+	cmd.Env = append(cmd.Env, ctxSrv.env(conductorBinary())...)
 	cmd.Stdin = bytes.NewReader(dataJSON)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -123,6 +147,16 @@ func (e *Executor) execCLILocal(ctx context.Context, spec Spec, data map[string]
 // host-interpreter remote path with an argv in place of an interpreter name:
 // same generated sh script, same base64 code frame, same ctx-on-stdin, same
 // exit-127 "not found" convention.
+//
+// No ctx data plane: the socket is a local unix socket on the DAEMON's box,
+// and a callback from the remote side would have to come back across the ssh
+// hop to reach it. Rather than refuse the step (which would break every
+// remote cli step that never wanted the data plane, and which conductor
+// cannot decide anyway — nothing in the config DECLARES that a command
+// intends to use ctx), the variables are simply absent and the reference
+// client fails with "no ctx data plane in this environment". The step keeps
+// its inputs and outputs; a remote step that needs durable state reaches it
+// through `kv.*`/`sql.*`/`memory.*` verbs in surrounding steps.
 func (e *Executor) execCLIRemote(ctx context.Context, spec Spec, data map[string]any) (map[string]any, error) {
 	if len(spec.Command) == 0 {
 		return nil, errCLINoCommand

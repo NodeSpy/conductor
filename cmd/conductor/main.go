@@ -77,6 +77,11 @@ func main() {
 		// Launched by conductor itself inside a namespace/container; not a
 		// user-facing command.
 		os.Exit(runSandboxNet(args))
+	case "ctx":
+		// The ctx data-plane client for `use: cli` steps (ctxcmd.go). Reached
+		// through $CONDUCTOR_CTX_HELPER from inside a step, not typed by
+		// operators at a prompt.
+		os.Exit(runCtx(args))
 	case "run":
 		err = cmdRun(args)
 	case "validate":

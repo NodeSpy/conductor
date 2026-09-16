@@ -144,9 +144,40 @@ triggers:
       - id: argv
         use: cli
         command: [sh, -c, "printf '{\"who\":\"cli-engine\"}'"]
+      # K9ctx: the ctx DATA PLANE. The subprocess holds no store — it asks
+      # conductor over the per-run socket ($CONDUCTOR_CTX_SOCK, authenticated
+      # by $CONDUCTOR_CTX_TOKEN), and conductor authorizes every op host-side.
+      # A write round-trips through a real store; the two refusals prove the
+      # daemon, not the snippet, is what says no — k9locked is code_access:
+      # none, and `nostore` is not defined at all.
+      - id: ctxrw
+        use: cli
+        command: [sh]
+        env: { BODY: "{{.comment_body}}" }
+        code: |
+          H="$CONDUCTOR_CTX_HELPER"
+          "$H" ctx sql k9sql exec 'CREATE TABLE IF NOT EXISTS seen (body TEXT)' >/dev/null || exit 1
+          "$H" ctx sql k9sql exec 'INSERT INTO seen (body) VALUES (?)' "[\"$BODY\"]" >/dev/null || exit 1
+          rows=$("$H" ctx sql k9sql query 'SELECT body FROM seen WHERE body = ?' "[\"$BODY\"]") || exit 1
+          "$H" ctx sql k9locked query 'SELECT 1' >/dev/null 2>&1
+          locked=$?
+          "$H" ctx kv nostore get ns k >/dev/null 2>&1
+          nostore=$?
+          case "$rows" in
+            *"$BODY"*) got=yes ;;
+            *) got=no ;;
+          esac
+          if [ "$got" = yes ] && [ "$locked" != 0 ] && [ "$nostore" != 0 ]; then
+            printf '{"ctx":"ok"}'
+          else
+            printf '{"ctx":"FAIL rows=%s locked=%s nostore=%s"}' "$rows" "$locked" "$nostore"
+          fi
       - id: tell
         uses: slack.post
         options: { channel: C9, text: "K9 {{.echoed.comment_body}} via {{.argv.who}}" }
+      - id: tellctx
+        uses: slack.post
+        options: { channel: C9, text: "K9ctx {{.ctxrw.ctx}}" }
 
   # K7: request-response — web.ask presents a draft page per decision and the
   # workflow reads each answer; a slack post reports all three outcomes.
@@ -463,3 +494,18 @@ callable:
 store:
   state_file: /data/state.json
   audit_log: /data/audit.jsonl
+
+# K9ctx: the two stores the `cli` engine's ctx data plane reaches over its
+# per-run socket. k9sql takes the round trip; k9locked exists to be REFUSED —
+# code_access: none is a host-side gate, so a cli step asking for it gets a
+# denial from the daemon rather than a connection.
+#
+# Both are sqlite rather than boltdb because this same config is what K4's
+# `conductor connectors ls` loads in this container: boltdb holds an
+# exclusive file lock for the running daemon's lifetime, so any CLI
+# subcommand that builds the stores would block on it. (A property of boltdb,
+# not of the data plane — the kv face is covered by the ctx socket's own
+# subprocess tests, and by the undefined-store refusal below.)
+stores:
+  k9sql: { type: sqlite, code_access: write }
+  k9locked: { type: sqlite, code_access: none }
