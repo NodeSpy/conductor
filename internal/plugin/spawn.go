@@ -132,10 +132,26 @@ func confineToManifest(s Spec, env []string, sd SandboxDeps) ([]string, func(), 
 	cleanup := func() {}
 	m := s.EffectiveManifest()
 
-	if len(m.Egress) > 0 && sd.EgressAddr != nil {
-		addr, cred, revoke, err := sd.EgressAddr(m.Egress)
+	// A STEP ENGINE that declares no egress gets an EMPTY allowlist rather
+	// than no allowlist: deny-by-default, because an engine's job is to
+	// execute the operator's own code against conductor's data plane, and
+	// "reach the internet as well" is a thing it should have to say out loud.
+	//
+	// Connectors keep the opposite default, and must: a connector that
+	// predates the manifest declares nothing and calls the service it exists
+	// to call, so an empty allowlist there would break plugins in the field.
+	// Engines have no field to break — this is their first release.
+	//
+	// Honest about what this is: the proxy is delivered as HTTP(S)_PROXY, so
+	// it confines a cooperating client, which is the same manifest-level
+	// confinement every non-isolation: plugin gets (see the package doc). An
+	// `isolation:` block is what turns it into an OS-enforced wall.
+	allow := m.Egress
+	confine := len(allow) > 0 || s.Kind == KindStep
+	if confine && sd.EgressAddr != nil {
+		addr, cred, revoke, err := sd.EgressAddr(allow)
 		if err != nil {
-			return nil, nil, fmt.Errorf("plugin %s: egress proxy for declared network (%s): %w", s.Name, strings.Join(m.Egress, ", "), err)
+			return nil, nil, fmt.Errorf("plugin %s: egress proxy for declared network (%s): %w", s.Name, strings.Join(allow, ", "), err)
 		}
 		env = append(env, sandbox.ProxyEnv(addr, cred)...)
 		cleanup = revoke

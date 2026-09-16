@@ -167,14 +167,37 @@ func TestUseSelectsSameEnginesAsRun(t *testing.T) {
 	}
 }
 
-// A `use:` naming something conductor cannot run says so, names the
-// builtins, and points at `call:` — which is the thing the author probably
-// wanted if the name is a workflow.
+// A bare non-builtin engine name is a PLUGIN reference — the official repo's
+// `engines/<name>` component — exactly as a bare connector name is. It loads,
+// and it derives the plugin the daemon must fetch and drive over plugin.run.
+func TestStepUseNonBuiltinEngineIsAPlugin(t *testing.T) {
+	c, err := loadYAML(t, engineWF+`      - { id: x, use: wasmtime, code: "x" }
+`)
+	if err != nil {
+		t.Fatalf("a plugin-backed engine must load: %v", err)
+	}
+	sel, class := c.Workflows["w"].Steps[0].StepEngine()
+	if sel != "wasmtime" || class != EnginePlugin {
+		t.Fatalf("engine = %q/%s, want wasmtime/%s", sel, class, EnginePlugin)
+	}
+	ref, ok := c.PluginRefs()["engines/wasmtime"]
+	if !ok {
+		t.Fatalf("no derived plugin for the engine; got %v", keysOf(c.PluginRefs()))
+	}
+	if ref.Use.Component != "engines/wasmtime" || ref.Use.Origin != OriginOfficial {
+		t.Fatalf("engine ref resolved to %+v", ref.Use)
+	}
+}
+
+// A `use:` that is not a builtin, not an interpreter, not a path, and does
+// not parse as a plugin reference either says so, names the builtins, and
+// points at `call:` — which is the thing the author probably wanted if the
+// name is a workflow.
 func TestStepUseUnknownEngineErrors(t *testing.T) {
-	_, err := loadYAML(t, engineWF+`      - { id: x, use: wasmtime, code: "x" }
+	_, err := loadYAML(t, engineWF+`      - { id: x, use: "wasm engine!", code: "x" }
 `)
 	if err == nil {
-		t.Fatal("an unknown engine must not load")
+		t.Fatal("an unresolvable engine must not load")
 	}
 	for _, want := range []string{"names no engine conductor can run", "cli, go-embed, js, lua, risor", "`call:`"} {
 		if !strings.Contains(err.Error(), want) {

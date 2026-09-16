@@ -179,6 +179,43 @@ triggers:
         uses: slack.post
         options: { channel: C9, text: "K9ctx {{.ctxrw.ctx}}" }
 
+  # V: the PLUGIN ENGINE. `use: acme-engine` is a bare, non-builtin engine
+  # name, so it resolves to an INSTALLED plugin binary — here the reference
+  # engine from test/plugins/acme-engine, recorded in install state by
+  # entrypoint-conn.sh (the e2e has no network, so the fetch is the only part
+  # skipped; resolution, verify-before-execute and spawn are the real ones).
+  # The step is then driven over the plugin wire (plugin.run) instead of by
+  # anything compiled into the daemon.
+  #
+  # Three things have to hold at once for the assertion to pass, and they are
+  # the three halves of the code-step ABI over a transport that did not exist
+  # before: the rendered ctx reaches the subprocess as `inputs`, its
+  # `outputs` come back as the step's outputs, and its ctx data-plane calls
+  # are answered by CONDUCTOR over the host.* callbacks — authorized
+  # host-side, exactly as the K9ctx socket calls are. `deny_sql` names
+  # k9locked (code_access: none), so `denied` can only be true if the DAEMON
+  # said no; the engine holds no store and cannot decide anything.
+  - on: gh.new_comment
+    name: plugin-engine
+    filter: { repo: ["conn/cengine"] }
+    steps:
+      - id: eng
+        use: acme-engine
+        code: "# the body crosses the wire verbatim"
+        args: [alpha, beta]
+        env:
+          SQL_STORE: k9sql
+          SQL_TABLE: engine_kv
+          KEY: "{{.repo}}#{{.number}}"
+          VALUE: "{{.comment_body}}"
+          DENY_SQL: k9locked
+          ECHO: comment_body
+      - id: tell
+        uses: slack.post
+        options:
+          channel: CV
+          text: "V-ENGINE {{.eng.engine}} roundtrip={{.eng.roundtrip}} echo={{.eng.echo}} denied={{.eng.denied}} code_len={{.eng.code_len}}"
+
   # K7: request-response — web.ask presents a draft page per decision and the
   # workflow reads each answer; a slack post reports all three outcomes.
   - on: gh.new_comment

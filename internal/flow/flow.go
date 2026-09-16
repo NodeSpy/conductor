@@ -1276,7 +1276,7 @@ func (r *Runner) workflowNames() string {
 // by config.Step.StepEngine) through internal/code, remotely when the
 // step names a host.
 func (r *Runner) execCode(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, string, error) {
-	engine, _ := step.StepEngine()
+	engine, class := step.StepEngine()
 	if shadow {
 		r.Log("%s [dry-run] would run code step (%s)", flowTag(t), engine)
 		return map[string]any{"stubbed": true}, "", nil
@@ -1312,7 +1312,11 @@ func (r *Runner) execCode(ctx context.Context, t core.Trigger, step config.Step,
 	if err != nil {
 		return nil, "", err
 	}
-	spec := code.Spec{Run: engine, Command: command, Code: step.Code, Args: args, Env: env, WorkDir: workdir,
+	// Whether the engine is a PLUGIN is the config layer's classification, not
+	// a second reading of the name here — internal/code takes the answer
+	// rather than re-deriving it (see code.Spec.Plugin).
+	spec := code.Spec{Run: engine, Plugin: class == config.EnginePlugin,
+		Command: command, Code: step.Code, Args: args, Env: env, WorkDir: workdir,
 		DataGuard: r.planDataGuard(ctx, t)}
 	if target, terr := r.hostTarget(step); terr != nil {
 		return nil, "", terr

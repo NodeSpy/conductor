@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/code"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/controller"
@@ -109,6 +110,53 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			spec.Ref(), spec.Provides, len(decl.Verbs), spec.EffectiveManifest().Summary())
 	}
 	return mgr, nil
+}
+
+// loadEnginePlugins starts and describes every STEP-ENGINE plugin the config
+// references (a code step's `use:` that resolved to neither a builtin nor a
+// program on the box) and returns the lookup internal/code drives them
+// through.
+//
+// It is deliberately the connector path with a different kind word: the same
+// manager, the same verify-before-execute, the same sandbox/manifest spawn,
+// the same fail-closed boot. What it adds is the two questions only an engine
+// has an answer to — is this really an engine, and does it speak an ABI this
+// daemon drives — asked once here rather than on every step.
+func loadEnginePlugins(mgr *plugin.Manager) (code.EngineLookup, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), pluginBootTimeout)
+	defer cancel()
+	engines := map[string]*plugin.Client{}
+	for _, spec := range mgr.EngineSpecs() {
+		decl, err := mgr.StartAndDescribe(ctx, spec.Key())
+		if err != nil {
+			return nil, fmt.Errorf("engine plugin %s: %w", spec.Name, err)
+		}
+		// KIND ENFORCEMENT at the point of use, as for connectors: whatever
+		// install state recorded, the running binary must still describe
+		// itself as an engine. A runtime or connector accepted here would be
+		// handed a step's ctx data plane it was never granted.
+		if decl.Kind != plugin.KindStep {
+			kind := string(decl.Kind)
+			if kind == "" {
+				kind = "an unspecified kind"
+			}
+			return nil, fmt.Errorf("engine plugin %s: referenced as a code-step engine but it describes itself as %s — refusing", spec.Name, kind)
+		}
+		cl, _ := mgr.Client(spec.Key())
+		engines[spec.Name] = cl
+		logf("plugin %s: registered code-step engine %q (ABI %d); permissions: %s",
+			spec.Ref(), spec.Name, decl.ABI, spec.EffectiveManifest().Summary())
+	}
+	if len(engines) == 0 {
+		return nil, nil
+	}
+	return func(name string) (code.PluginEngine, bool) {
+		c, ok := engines[name]
+		if !ok {
+			return nil, false
+		}
+		return c, true
+	}, nil
 }
 
 // pluginBootTimeout bounds a single connector plugin's verify+spawn+describe at
@@ -386,7 +434,7 @@ func cmdPluginAdd(args []string) error {
 		return err
 	}
 	if len(rest) != 1 {
-		return fmt.Errorf("usage: conductor plugin add <ref> [--runtime] [--as <name>]")
+		return fmt.Errorf("usage: conductor plugin add <ref> [--runtime|--engine] [--as <name>]")
 	}
 	kind := config.UseKindConnector
 	instance := ""
@@ -395,6 +443,8 @@ func cmdPluginAdd(args []string) error {
 		switch a {
 		case "--runtime":
 			kind = config.UseKindRuntime
+		case "--engine":
+			kind = config.UseKindEngine
 		case "--allow-unlisted":
 			allowUnlisted = true
 		case "--as":
@@ -410,7 +460,7 @@ func cmdPluginAdd(args []string) error {
 	}
 	if u.IsBuiltin() {
 		fmt.Printf("%s is a builtin %s — nothing to install.\n\n", u.Name, kind)
-		fmt.Printf("%s:\n  %s: { use: %s }\n", kind.Block(), orDefault(instance, u.Name), u.Name)
+		fmt.Print(useSnippet(kind, orDefault(instance, u.Name), u.Name))
 		return nil
 	}
 	if instance == "" {
@@ -436,11 +486,21 @@ func cmdPluginAdd(args []string) error {
 	}
 	fmt.Printf("\n%s declares these permissions:\n  %s\n", u.Name, inst.Manifest.Summary())
 	fmt.Println("\nAdd it to your config:")
-	fmt.Printf("\n%s:\n  %s:\n    use: %s\n", kind.Block(), instance, ref)
+	fmt.Print("\n" + useSnippet(kind, instance, ref))
 	if kind == config.UseKindConnector && len(inst.Manifest.Egress) > 0 {
 		fmt.Printf("    network: [%s]\n", strings.Join(inst.Manifest.Egress, ", "))
 	}
 	return nil
+}
+
+// useSnippet is the config the operator should paste. Connectors and runtimes
+// have a block; an ENGINE does not — its reference lives on the step that runs
+// it, so printing `engines:` would name a block that does not exist.
+func useSnippet(kind config.UseKind, instance, ref string) string {
+	if kind == config.UseKindEngine {
+		return fmt.Sprintf("steps:\n  - { id: <step>, use: %s, code: \"…\" }\n", ref)
+	}
+	return fmt.Sprintf("%s:\n  %s:\n    use: %s\n", kind.Block(), instance, ref)
 }
 
 // cmdPluginShow prints one implementation's surface. For a builtin it prints the
@@ -504,13 +564,21 @@ func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 		fmt.Printf("    plus OPT-IN OS isolation: mode %s\n", ref.Isolation.Mode)
 	}
 	fmt.Println("\n  DISCLOSURE: this plugin is code the daemon executes out-of-process.")
-	if ref.Kind() == config.PluginKindConnector {
+	switch ref.Kind() {
+	case config.PluginKindConnector:
 		fmt.Println("  A connector plugin RECEIVES the credentials of every instance you")
 		fmt.Println("  configure for it. Install only plugins you trust.")
-	} else {
+	case config.PluginKindEngine:
+		fmt.Println("  An engine plugin EXECUTES your code steps, and may ask conductor to")
+		fmt.Println("  perform kv/sql/memory ops on their behalf (every one authorized")
+		fmt.Println("  host-side). Install only engines you trust.")
+	default:
 		fmt.Println("  A runtime plugin EXECUTES your agents (spawns processes, runs tool")
 		fmt.Println("  calls). It is the highest-trust plugin — install only ones you trust.")
 	}
+	// Only a connector's verb surface is worth spawning the binary to print:
+	// a runtime has none, and an engine's contract is its code step rather
+	// than a Decl of verbs.
 	if ref.Kind() != config.PluginKindConnector || !spec.Installed() {
 		return nil
 	}

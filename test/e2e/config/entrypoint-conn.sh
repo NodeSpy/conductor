@@ -31,4 +31,29 @@ for i in $(seq 1 20); do
   sleep 0.5
 done
 
+# Group V: pre-seed install state for the reference ENGINE plugin, which is
+# what `conductor init` would have written after fetching it. The step refers
+# to it by bare name (`use: acme-engine`), so the daemon needs a record saying
+# where the binary is and which sha it verified — and the sha is computed here
+# rather than baked in, because the binary is rebuilt with the image.
+#
+# The e2e fetches nothing (there is no network), so this is the one honest way
+# to exercise the INSTALLED-plugin path: same resolution, same
+# verify-before-execute, same spawn. Only the download is skipped.
+PLUGIN_DIR="$HOME/.local/state/conductor/plugins"
+ENGINE_BIN=/usr/local/bin/conductor-acme-engine
+mkdir -p "$PLUGIN_DIR"
+cat > "$PLUGIN_DIR/installed.yaml" <<EOF
+version: 1
+plugins:
+  - key: engines/acme-engine
+    kind: engine
+    name: acme-engine
+    use: acme-engine
+    source: github.com/NodeSpy/conductor-plugins//engines/acme-engine
+    resolved: engines/acme-engine/v1.0.0
+    sha256: $(sha256sum "$ENGINE_BIN" | cut -d' ' -f1)
+    path: $ENGINE_BIN
+EOF
+
 exec conductor run --config "$CONFIG"

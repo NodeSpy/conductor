@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/blob"
+	"github.com/NodeSpy/conductor/internal/code"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
@@ -175,12 +176,22 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		igs = append(igs, src)
 	}
 
+	// Step-engine plugins are started from the SAME manager the connectors
+	// came from, and the lookup is handed to the code executor — a `use:
+	// <engine>` step then dispatches through plugin.run with its ctx data
+	// plane served by the same CtxHandler a `use: cli` step gets.
+	engines, err := loadEnginePlugins(pluginMgr)
+	if err != nil {
+		return nil, err
+	}
+
 	events := flow.NewEventHub()
 	runner := flow.New(flow.Runner{
 		Cfg: cfg, Conns: reg, Secrets: sec, SecretVals: vals,
 		VaultVals: vaults.PreloadListable(context.Background()),
 		Store:     flowStore, Notif: flowNotif, Log: logf, DryRun: dryRun,
 		Blobs: blobs, Events: events,
+		Code: &code.Executor{Engines: engines},
 	})
 	stackOK = true // ownership of pluginMgr passes to the returned stack
 	return &flowStack{

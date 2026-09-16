@@ -45,6 +45,13 @@ type Spec struct {
 	// engine, which take their work as Code. See cli.go for how the two
 	// compose when a cli step sets both.
 	Command []string
+	// Plugin marks Run as naming an out-of-process PLUGIN engine rather than
+	// a builtin or a host interpreter. It is a classification the CONFIG
+	// layer already made (config.EnginePlugin — a `use:` that is neither a
+	// builtin nor a path nor a known interpreter name), carried here so this
+	// package does not have to re-derive it from the string and reach a
+	// different answer than the validator did.
+	Plugin bool
 	// Code is the script/program source.
 	Code string
 	// Args are extra argv entries after the code file, for host
@@ -92,6 +99,11 @@ type Executor struct {
 	// exec.LookPath). Overridable so tests can simulate "not installed"
 	// without mutating PATH.
 	LookPath func(string) (string, error)
+	// Engines resolves a PLUGIN engine name to the running plugin that
+	// implements it (internal/plugin's Manager, wired in cmd). nil means this
+	// build has no plugin engines, and a `use: <plugin>` step says so rather
+	// than falling through to a PATH lookup for a program nobody named.
+	Engines EngineLookup
 }
 
 func (e *Executor) lookPath() func(string) (string, error) {
@@ -116,6 +128,16 @@ func (e *Executor) sshClient() *hosts.Client {
 // the matching in-process engine, falling through to the local
 // host-interpreter path for anything else.
 func (e *Executor) Exec(ctx context.Context, spec Spec, data map[string]any) (map[string]any, error) {
+	// A plugin engine is checked BEFORE the host/remote split: it runs in a
+	// subprocess of THIS daemon holding a JSON-RPC transport back to it, so
+	// there is nothing to ship over ssh (its ctx callbacks would have to come
+	// back across the hop), exactly as for the in-process engines.
+	if spec.Plugin {
+		if spec.Host != nil {
+			return nil, errRemotePluginEngine(spec.Run)
+		}
+		return e.execPluginEngine(ctx, spec, data)
+	}
 	if spec.Host != nil {
 		return e.execRemote(ctx, spec, data)
 	}
