@@ -19,6 +19,7 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -402,11 +403,32 @@ type Registry struct {
 	order  []string
 }
 
+// configError marks an Impl construction failure as a CONFIG-SHAPE error —
+// a retired or moved key — rather than a runtime one. The distinction decides
+// whether Build disables the connector or fails the load: a secret that will
+// not resolve today may resolve on the next retry, a key the schema no longer
+// has never will.
+type configError struct{ err error }
+
+func (e configError) Error() string { return e.err.Error() }
+func (e configError) Unwrap() error { return e.err }
+
+// ConfigErr marks err as a config-shape failure. An Impl constructor wraps a
+// migration error with it so the message reaches the operator as a load
+// failure naming the new key, not as a quietly disabled connector.
+func ConfigErr(err error) error { return configError{err} }
+
+// isConfigErr reports whether err, or anything it wraps, is a config error.
+func isConfigErr(err error) bool {
+	var c configError
+	return errors.As(err, &c)
+}
+
 // Build constructs every configured connector. A connector whose secrets or
 // connection config fail to resolve is DISABLED (with the reason recorded)
 // rather than failing the boot — a bad connector must not crash-loop the box.
-// Structural errors (unknown type) still fail: they are config bugs, not
-// runtime conditions.
+// Structural errors (unknown type) and config-shape errors (a moved key — see
+// ConfigErr) still fail: they are config bugs, not runtime conditions.
 func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 	r := &Registry{byName: map[string]*Instance{}}
 	// Vaults build FIRST: connector credentials may hold {{ vault … }}
@@ -444,6 +466,14 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 		}
 		impl, err := buildReg[ref.TypeName()](name, ref, deps)
 		if err != nil {
+			// A CONFIG-SHAPE failure is a load error, not a disabled
+			// connector: the file names a key the schema no longer has, and
+			// booting past it would run the connector on a setting the
+			// operator believes is in effect. Retrying cannot fix it either —
+			// which is the whole difference from the case below.
+			if isConfigErr(err) {
+				return nil, err
+			}
 			// Runtime construction failure (an unresolvable secret, unreadable
 			// key file): disable the connector and keep booting.
 			in.DisabledReason = err.Error()

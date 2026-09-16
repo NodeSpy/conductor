@@ -55,6 +55,7 @@ binary) unblocks it.
 | legacy | connectors model |
 |---|---|
 | `integrations: - type: github` (app/webhook/sweep/identity/retry/project_map/project_rewrite/me) | a `connectors:` entry, fields carried |
+| github `app.webhook_secret` / `app.verify_signature` | `webhook.secret` / `webhook.verify_signature` — verification describes the RECEIVER, not App auth, and an App-less config parked them under `app:` with nothing else in it. The old keys are **refused at load** with a message naming the new ones; `app:` keeps only `app_id`/`private_key_path`, and disappears entirely when it held nothing else |
 | github `rules:`/`defaults:` (most-specific repo wins) | a per-trigger `filter: {repo: …}` + computed `not_repo:`, the same winner per repo; the defaults merge is flattened into each trigger |
 | every github kind + its action filters (`labels_any/labels_all/authors/assignee/sole_assignee/reviewer/from_users/ignore_users/ignore_checks/require_label/include_prereleases/gates/exclude`) and variants | `on: <conn>.<kind>` triggers, `name:` = variant; the predicate keys map into one `filter:` under their unified names (`label_any`, `author`, `comment_author`/`not_comment_author`, `not_branch`/`not_label_any`/`not_title`, `not_draft`), and `reviewer`/`assignee`/`ignore_checks`/`include_prereleases` into `options:` |
 | `flaky_rerun` / `stuck_after` / `poll_interval` / `max_attempts_per_head` | trigger `options:` |

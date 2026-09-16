@@ -46,7 +46,7 @@ func changesRequestedBody() string {
 func TestHandleSmeeData(t *testing.T) {
 	g := newTestIntegration(t, richConfig()) // verify defaults true, but we set it below
 	off := false
-	g.cfg.App.VerifySig = &off
+	g.cfg.Webhook.VerifySig = &off
 
 	var got []core.Trigger
 	emit := func(_ context.Context, tr core.Trigger) { got = append(got, tr) }
@@ -72,8 +72,8 @@ func TestHandleSmeeData(t *testing.T) {
 func TestHandleSmeeSignature(t *testing.T) {
 	g := newTestIntegration(t, richConfig())
 	on := true
-	g.cfg.App.VerifySig = &on
-	g.cfg.App.WebhookSecret = "s3cr3t"
+	g.cfg.Webhook.VerifySig = &on
+	g.cfg.Webhook.Secret = "s3cr3t"
 	body := changesRequestedBody()
 
 	var got []core.Trigger

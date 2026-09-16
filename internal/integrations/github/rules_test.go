@@ -28,8 +28,8 @@ func TestMatchRepo(t *testing.T) {
 
 func TestResolveMostSpecificWinsAndMerge(t *testing.T) {
 	cfg := Config{
-		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
-		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
 		Defaults: Rule{
 			Reviewer: config.Actors{Logins: []string{"me"}},
 			Assignee: config.Actors{Logins: []string{"me"}},
@@ -77,8 +77,8 @@ func TestResolveMostSpecificWinsAndMerge(t *testing.T) {
 // have wrongly picked the general rule).
 func TestResolveMostSpecificIgnoresOrder(t *testing.T) {
 	cfg := Config{
-		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
-		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
 		Rules: []Rule{
 			{Match: Match{Repos: []string{"AcmeCorp/*"}}, // general FIRST
 				Actions: as1(map[string]config.Action{"new_comment": {Type: "agent", Agent: "general"}})},

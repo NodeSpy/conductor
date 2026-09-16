@@ -78,9 +78,9 @@ var githubDecl = &TypeDecl{
 	Type: "github",
 	Desc: "GitHub: PR/issue/check/release events in; comments, reviews, and review requests out.",
 	Connection: Schema{
-		"app":             {Type: TMap, Desc: "GitHub App credentials: app_id, private_key_path, webhook_secret, verify_signature"},
+		"app":             {Type: TMap, Desc: "GitHub App credentials: app_id, private_key_path"},
 		"token":           {Type: TString, Desc: "PAT used when no App is configured (chain: app → token → gh auth token)"},
-		"webhook":         {Type: TMap, Desc: "event transport: smee_url and/or listen (+ path)"},
+		"webhook":         {Type: TMap, Desc: "event transport and delivery auth: smee_url and/or listen (+ path), secret, verify_signature"},
 		"sweep":           {Type: TMap, Desc: "catch-up sweep: enabled, interval, min_interval, repos"},
 		"me":              {Type: TMap, Desc: "your GitHub login(s): { logins: [...] } — defines \"you\""},
 		"repos":           {Type: TList, Desc: "default repo globs for triggers whose filter names no repo"},
@@ -583,14 +583,16 @@ type githubConn struct {
 	ProjectRewrite gh.ProjectRewrite `yaml:"project_rewrite"`
 }
 
-// githubWebhook mirrors gh.WebhookConfig plus a `secret:` alias so an
-// App-less connector doesn't have to configure an `app:` block just to hold
-// the webhook secret.
+// githubWebhook mirrors gh.WebhookConfig: transport (smee_url/listen/path) and
+// delivery authentication (secret/verify_signature). Both halves are webhook
+// concerns — an App-less connector verifies deliveries without ever naming an
+// `app:` block.
 type githubWebhook struct {
-	SmeeURL string `yaml:"smee_url"`
-	Listen  string `yaml:"listen"`
-	Path    string `yaml:"path"`
-	Secret  string `yaml:"secret"`
+	SmeeURL   string `yaml:"smee_url"`
+	Listen    string `yaml:"listen"`
+	Path      string `yaml:"path"`
+	Secret    string `yaml:"secret"`
+	VerifySig *bool  `yaml:"verify_signature"`
 }
 
 type githubImpl struct {
@@ -609,6 +611,12 @@ func newGithubImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error
 	if err := ref.Decode(&conn); err != nil {
 		return nil, fmt.Errorf("connector %q: decode github connection: %w", name, err)
 	}
+	// The connection node is decoded non-strictly (ConnectorRef retains a raw
+	// node), so the retired app-block webhook keys would otherwise be dropped
+	// in silence — taking the operator's secret with them. Name the new home.
+	if conn.App.LegacyWebhookKeys() {
+		return nil, ConfigErr(fmt.Errorf("connector %q: %w", name, gh.ErrAppWebhookMoved))
+	}
 	// Resolve secret references in credential fields. An unresolvable secret
 	// disables the connector (the registry handles that) rather than failing
 	// the boot.
@@ -617,14 +625,8 @@ func newGithubImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error
 	if conn.Token, err = deps.Secrets.Resolve(ctx, conn.Token); err != nil {
 		return nil, fmt.Errorf("token: %w", err)
 	}
-	if conn.App.WebhookSecret, err = deps.Secrets.Resolve(ctx, conn.App.WebhookSecret); err != nil {
-		return nil, fmt.Errorf("app.webhook_secret: %w", err)
-	}
 	if conn.Webhook.Secret, err = deps.Secrets.Resolve(ctx, conn.Webhook.Secret); err != nil {
 		return nil, fmt.Errorf("webhook.secret: %w", err)
-	}
-	if conn.App.WebhookSecret == "" {
-		conn.App.WebhookSecret = conn.Webhook.Secret
 	}
 	if conn.Token != "" {
 		deps.Secrets.Track(conn.Token)
@@ -680,6 +682,7 @@ func (g *githubImpl) Source(triggers []CompiledTrigger) (core.Integration, error
 		Token: g.conn.Token,
 		Webhook: gh.WebhookConfig{
 			SmeeURL: g.conn.Webhook.SmeeURL, Listen: g.conn.Webhook.Listen, Path: g.conn.Webhook.Path,
+			Secret: g.conn.Webhook.Secret, VerifySig: g.conn.Webhook.VerifySig,
 		},
 		Sweep:          sweep,
 		Identity:       g.conn.Identity,

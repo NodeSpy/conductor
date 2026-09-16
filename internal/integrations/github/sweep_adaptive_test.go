@@ -67,8 +67,8 @@ func TestSmeeReconnectSignalsRenew(t *testing.T) {
 	defer srv.Close()
 
 	g := newTestIntegration(t, Config{
-		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
-		Webhook: WebhookConfig{SmeeURL: srv.URL},
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
+		Webhook: WebhookConfig{SmeeURL: srv.URL, Secret: "s"},
 	})
 	renew := make(chan struct{}, 1)
 	ctx, cancel := context.WithCancel(context.Background())

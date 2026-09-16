@@ -10,11 +10,11 @@ connectors:
     app:
       app_id: 123456
       private_key_path: /etc/conductor/github-app.pem
-      webhook_secret: e2e-webhook-secret
-      verify_signature: true
     webhook:
       listen: "0.0.0.0:8787"
       path: /webhook
+      secret: e2e-webhook-secret
+      verify_signature: true
     sweep: { enabled: false }
     me: { logins: [conductor-user] }
     identity:

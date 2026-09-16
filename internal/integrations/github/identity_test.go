@@ -8,8 +8,8 @@ import (
 
 func identityConfig(me, reviewer []string) Config {
 	return Config{
-		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
-		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
 		Rules: []Rule{{
 			Match:    Match{Repos: []string{"acme/*"}},
 			Me:       config.Actors{Logins: me},
@@ -69,8 +69,8 @@ func TestIdentityFallsBackToReviewer(t *testing.T) {
 func TestActionLevelActors(t *testing.T) {
 	// reviewer lives on review_requested; assignee on issue_matched. No rule-level actors.
 	cfg := Config{
-		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
-		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
 		Rules: []Rule{{
 			Match: Match{Repos: []string{"acme/*"}},
 			Actions: as1(map[string]config.Action{
@@ -109,8 +109,8 @@ func TestActionLevelActors(t *testing.T) {
 func TestActorsDefaultToMe(t *testing.T) {
 	// Only `me` is set — reviewer/assignee are NOT specified on the actions.
 	cfg := Config{
-		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
-		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
 		Rules: []Rule{{
 			Match: Match{Repos: []string{"acme/*"}},
 			Me:    config.Actors{Logins: []string{"me"}},

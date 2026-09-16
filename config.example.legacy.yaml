@@ -20,15 +20,15 @@ integrations:
     app:
       app_id: 123456
       private_key_path: ~/.config/conductor/github-app.pem
-      webhook_secret: ${GH_WEBHOOK_SECRET}
-      # smee re-serializes the JSON body, so HMAC often won't match — leave this
-      # false with smee. With a DIRECT `listen` receiver the raw body is intact,
-      # so set it true there.
-      verify_signature: false
     webhook:
       # Use smee.io (no inbound port) and/or a direct HTTP listener — set either
       # or both. A direct listener is ideal behind your own tunnel (e.g. pangolin).
       smee_url: ${GH_SMEE_URL}       # https://smee.io/<channel>
+      secret: ${GH_WEBHOOK_SECRET}   # verification is a webhook concern, not App auth
+      # smee re-serializes the JSON body, so HMAC often won't match — leave this
+      # false with smee. With a DIRECT `listen` receiver the raw body is intact,
+      # so set it true there.
+      verify_signature: false
       # listen: 127.0.0.1:8787        # direct receiver; point the App webhook (or your tunnel) here
       # path: /webhook                # default
     sweep:

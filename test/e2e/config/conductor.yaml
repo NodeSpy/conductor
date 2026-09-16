@@ -37,8 +37,6 @@ connectors:
     app:
       app_id: 123456
       private_key_path: /etc/conductor/github-app.pem
-      verify_signature: true
-      webhook_secret: e2e-webhook-secret
     identity:
       commit_author: self
       read_token: app
@@ -51,6 +49,8 @@ connectors:
     webhook:
       listen: 0.0.0.0:8787
       path: /webhook
+      secret: e2e-webhook-secret
+      verify_signature: true
   notify-discord:
     use: discord
     webhook_url: http://sink-catcher:8080/discord
