@@ -62,6 +62,12 @@ program on the box, and `use:` takes it by name or by path.
 - `use: cli` — run the step's own **`command:`** argv as a subprocess. See
   [`cli`](#the-cli-engine) below.
 
+**Plugin engines (fetched, out-of-process):**
+
+- `use: <any other name>` — an **engine plugin**: a verified, sandboxed
+  subprocess conductor spawns and drives over the plugin wire. See
+  [Engine plugins](#engine-plugins) below.
+
 **Host interpreters (bring your own):**
 
 - `use: go` — the host `go run`: full fidelity (generics, cgo, third-party
@@ -250,6 +256,76 @@ helper fails with *"no ctx data plane in this environment"* rather than
 silently reading a different store. A remote step that needs durable state
 uses the `kv.*` / `sql.*` / `memory.*` verbs in surrounding steps.
 
+### The ctx data plane (engine plugins)
+
+An engine plugin is also a subprocess, and gets the same three faces the same
+way — by asking. The only thing that differs is the pipe: instead of a unix
+socket it uses the **plugin wire it is already on**, as `host.kv` / `host.sql` /
+`host.memory` requests issued back at the daemon *during* its `plugin.run`.
+
+```jsonc
+--> {"id":1,"method":"plugin.run","params":{"run_id":"9f3c…","code":"…","inputs":{…}}}
+<-- {"id":"h1","method":"host.kv","params":{"run_id":"9f3c…","kind":"kv","op":"get",
+                                            "resource":"cache","args":["run","attempts"]}}
+--> {"id":"h1","result":{"ok":true,"value":3}}
+<-- {"id":1,"result":{"outputs":{"attempts":3}}}
+```
+
+`run_id` is the plugin wire's `CONDUCTOR_CTX_TOKEN`: 32 random bytes minted per
+run, valid only while that run is in flight, checked in constant time, revoked
+the instant the step ends. The request and response shapes are the socket's
+`{kind, op, resource, args}` / `{ok, value, error, refused}` field for field,
+and they reach the **same handler with the same guard** — a plugin engine's
+reach into kv/sql/memory is, op for op, the reach a `use: js` step has.
+
+An engine author writes ops, not JSON-RPC:
+
+```go
+v, err := host.KV().Get(ctx, "cache", "run", "attempts")
+if plugin.IsRefused(err) { /* conductor's policy said no */ }
+```
+
+See [Plugins → Authoring an engine plugin](Plugins#authoring-an-engine-plugin).
+
+### Engine plugins
+
+A step's `use:` that names neither a builtin nor a program on the box is an
+**engine plugin** — the same `use:` grammar connectors and runtimes use,
+resolved into `engines/<name>` of the plugin repo (or an explicit
+`owner/repo/engine`):
+
+```yaml
+steps:
+  - id: build
+    use: wasmtime            # engines/wasmtime from the official plugin repo
+    code: |
+      (module (func (export "run") …))
+    args: [--opt, "2"]
+    env:
+      TARGET: wasm32-wasi
+```
+
+What the engine receives is the code step, whole: `code`, `args`, `env`, and the
+rendered ctx document as `inputs`. What it returns becomes the step's outputs.
+Beyond that, the engine defines its own contract — conductor does not require a
+`code:` body for one, because an engine driven entirely by `args:`/`env:` is a
+legitimate engine and the loader cannot tell which kind it is looking at.
+
+Notes:
+
+- **Local-only.** An engine plugin is a subprocess of *this* daemon holding a
+  transport back to it, so `host:` is refused rather than silently run locally —
+  its ctx callbacks could not cross the ssh hop. Use `use: cli` or a host
+  interpreter for remote code.
+- **Installed before it runs.** The reference must be in your config so
+  `conductor init` fetches and records it; a step naming an engine that is not
+  loaded fails with that, not with a PATH lookup.
+- **Agent-authored plans may only use engines your config already references.**
+  Otherwise a plan could name any engine in the plugin repo and have conductor
+  fetch and execute it — a supply-chain decision that belongs to a human.
+- **Deny-by-default egress.** An engine that declares no `egress` in its
+  capabilities gets *none*.
+
 ### Outputs
 
 The return value / stdout becomes the step's outputs: a JSON **object** as-is (referenced as
@@ -299,5 +375,14 @@ handle, only the ability to ask, and conductor applies the same guards it
 applies to an in-process engine. The socket address and token are appended
 **after** the step's `env:`, so a step cannot point its own data plane
 somewhere else.
+
+An **engine plugin** is third-party code the daemon executes, so it carries the
+whole plugin security model (verify-before-execute, scrubbed environment,
+declared-permission manifest, supervision — see [[Plugins]]) *plus* the same
+data-plane posture: no store handle, only the ability to ask, authorized
+host-side against this step's guard, on a token that is minted per run and dies
+with the step. Its process environment is the scrubbed minimal one; a step's
+`env:` reaches it as call data over the transport, never as process env, so an
+engine cannot be pointed at another run's data plane by anything a step writes.
 
 Related: [[Hosts]] · [[Workflows]] · [[Connectors]]

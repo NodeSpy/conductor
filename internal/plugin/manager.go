@@ -96,9 +96,13 @@ func (m *Manager) Client(name string) (*Client, bool) {
 	return c, ok
 }
 
-// ConnectorSpecs / RuntimeSpecs list the plugins of each kind.
+// ConnectorSpecs / RuntimeSpecs / EngineSpecs list the plugins of each kind.
 func (m *Manager) ConnectorSpecs() []Spec { return m.specsOfKind(KindConnector) }
 func (m *Manager) RuntimeSpecs() []Spec   { return m.specsOfKind(KindRuntime) }
+
+// EngineSpecs lists the step-engine plugins — the ones a code step's `use:`
+// resolved to.
+func (m *Manager) EngineSpecs() []Spec { return m.specsOfKind(KindStep) }
 
 func (m *Manager) specsOfKind(k Kind) []Spec {
 	var out []Spec

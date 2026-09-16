@@ -1,4 +1,4 @@
-# Plugins (external connectors & runtimes)
+# Plugins (external connectors, runtimes & engines)
 
 conductor has one idea for extending its capabilities: **there is no "built-in"
 vs "plugin" — there are only plugins.** Some are **bundled** (they ship in the
@@ -7,14 +7,16 @@ agent-deck) and some are **external** (a subprocess binary the daemon fetches
 and runs out-of-process). One registry, one config surface, one
 `conductor plugin list` / `show`.
 
-And there is one field: **`use:`**. It names what implements a connector or a
-runtime, and it is the *only* thing you write. Adding a plugin should feel like
-adding a browser extension — you name it, it arrives, it stays current.
+And there is one field: **`use:`**. It names what implements a connector, a
+runtime, or a **code-step engine**, and it is the *only* thing you write.
+Adding a plugin should feel like adding a browser extension — you name it, it
+arrives, it stays current.
 
 > **An external plugin is code the daemon executes.** A connector plugin also
 > *receives your credentials* (it makes the API call); a runtime plugin
-> *executes your agents*. Read [Security](#security) before adding a
-> third-party plugin.
+> *executes your agents*; an engine plugin *executes your code steps* and can
+> ask conductor to touch your stores on their behalf. Read
+> [Security](#security) before adding a third-party plugin.
 
 ## `use:`
 
@@ -37,14 +39,28 @@ x-templates:
 That is the whole surface. There is no `plugins:` block, no `source:`, no
 `kind:`, and no `type:` — `use:` replaced all four.
 
+A third block uses the same field without being a block at all: a **code step's
+`use:`** names its engine, and a name that is not builtin is an engine plugin.
+
+```yaml
+steps:
+  - { id: shape, use: js, code: "return { n: 1 }" }   # a builtin engine
+  - { id: build, use: wasmtime, code: "…" }           # an ENGINE PLUGIN
+```
+
+See [Code-Steps → Engine plugins](Code-Steps#engine-plugins) for what an engine
+does with a step, and [Authoring an engine plugin](#authoring-an-engine-plugin)
+below for how to write one.
+
 ### How a reference resolves
 
-One search path, shared by `connectors:` and `runtimes:`. **First match wins.**
+One search path, shared by `connectors:`, `runtimes:` and a step's engine
+`use:`. **First match wins.**
 
 | You write | It resolves to |
 |---|---|
 | `use: github` | a **builtin** — compiled into the daemon |
-| `use: sentry` | not builtin → the **official repo**, `NodeSpy/conductor-plugins`, at `connectors/sentry` |
+| `use: sentry` | not builtin → the **official repo**, `NodeSpy/conductor-plugins`, at `connectors/sentry` (an engine reference looks in `engines/<name>` instead) |
 | `use: acme/plugins/jira` | an explicit **github** repo (github.com is implied) |
 | `use: git.corp.example/team/p//jira` | an explicit **non-github** host |
 | `use: ./bin/conductor-jira` | a **local** binary, for developing one |
@@ -62,23 +78,26 @@ component. `acme/repo//jira` and `acme/repo/jira` parse identically.
 
 ### The kind is derived, never written
 
-The kind is **the block the reference appears in**: `connectors:` means
-connector, `runtimes:` means runtime. You never hand-author it, and it is
-enforced twice —
+The kind is **where the reference appears**: `connectors:` means connector,
+`runtimes:` means runtime, a code step's `use:` means engine. You never
+hand-author it, and it is enforced twice —
 
 1. **At load.** `connectors: { x: { use: paseo } }` is a config error, because
    `paseo` is a builtin *runtime*.
 2. **Against the plugin itself.** The kind the plugin reports in its own
-   `describe` must match the block it was referenced from, checked at install
-   and again before it is registered.
+   `describe` must match where it was referenced from, checked at install and
+   again before it is registered.
 
-**A connector can never be wired as a runtime.** A runtime executes your agents;
-accepting one where you asked for a connector would silently escalate what you
-agreed to.
+**A connector can never be wired as a runtime**, and neither can be wired as an
+engine. A runtime executes your agents; an engine executes your code steps *and*
+is handed a callback into your stores. Accepting one where you asked for another
+would silently escalate what you agreed to.
 
 (A plugin built against an older SDK reports no kind at all. That is treated as
 *unspecified* and trusted to its block, rather than refused — an additive wire
-change should not break working plugins.)
+change should not break working plugins. An ENGINE is the one exception: it must
+say `kind: engine`, because it is a new kind and there are no older engine
+plugins to be compatible with.)
 
 ### Versions
 
@@ -245,6 +264,12 @@ Stated plainly, because a security claim you cannot check is worse than none:
 - **A plugin that declares nothing** is confined to nothing beyond the scrubbed
   environment. It declared no needs; inventing an allowlist for it would break
   plugins that predate the manifest.
+- **An ENGINE that declares nothing is confined to NO egress** — the opposite
+  default, deliberately. An engine's job is to execute your code against
+  conductor's data plane; "and reach the internet too" is a thing it should have
+  to say out loud. There are no engine plugins predating the manifest, so there
+  is no field to break. (Same mechanism, same limits: it confines a cooperating
+  client, not a determined one. An `isolation:` block is what makes it a wall.)
 
 ### What is kept, unchanged
 
@@ -307,6 +332,128 @@ See `test/plugins/acme-echo/` for a reference connector plugin, and
 **Runtime plugin:** an ACP-speaking subprocess. conductor verifies it, then
 drives it through the existing ACP controller — session create/resume, streamed
 status/output, cancel/cleanup.
+
+**Engine plugin:**
+
+- `plugin.run {instance, run_id, code, args, env, inputs} → {outputs}` — one
+  code step, out of process.
+- `host.kv` / `host.sql` / `host.memory` — the plugin→daemon direction, valid
+  only while one of its own `plugin.run` calls is in flight.
+
+### Versioning: `protocol_version` never moves, `abi` does
+
+`protocol_version` is **1**, and the daemon compares it for *exact equality*.
+Bumping it would refuse every plugin already installed — including ones a newer
+daemon understands perfectly — so it does not move for an addition.
+
+New surface negotiates through a separate `Decl.abi` field instead:
+
+```jsonc
+// a connector built before engines existed — unchanged, and still accepted
+{"protocol_version": 1, "type": "acme-echo", "verbs": [...]}
+
+// an engine
+{"protocol_version": 1, "kind": "engine", "abi": 1, "type": "wasmtime"}
+```
+
+`abi` is **absent/zero on every existing plugin**, and the daemon reads it *only
+for `kind: engine`*. A connector or runtime that sets it is describing something
+nobody asks about. That is the whole negotiation, and it is deliberately boring:
+a new field whose zero value means "the old thing" cannot break an old plugin,
+because an old plugin never emits it and the daemon never requires it.
+
+### The host callbacks
+
+Until engines, traffic was one-way: the daemon called the plugin, and a *source*
+plugin sent one-way event notifications back. An engine adds the missing
+direction — a **request the plugin issues and the daemon answers**, multiplexed
+on the same stdio.
+
+```jsonc
+--> {"id":1,"method":"plugin.run","params":{"run_id":"9f3c…","code":"…","inputs":{…}}}
+<-- {"id":"h1","method":"host.kv","params":{"run_id":"9f3c…","kind":"kv","op":"get",
+                                            "resource":"cache","args":["run","attempts"]}}
+--> {"id":"h1","result":{"ok":true,"value":3}}
+<-- {"id":1,"result":{"outputs":{"attempts":3}}}
+```
+
+- **`run_id` is a capability, not a name.** conductor mints 32 random bytes per
+  run, hands them over in that run's `plugin.run`, and answers a `host.*` request
+  only while that run is in flight — checked in constant time, revoked the
+  instant the run returns. A stale token, a guessed token, or a token from
+  another run is refused before any policy is consulted. It is the plugin wire's
+  spelling of `CONDUCTOR_CTX_TOKEN` (the `cli` engine's socket), with the same
+  rules: do not log it, do not persist it.
+- **A connector plugin gets nothing from this.** It is never given a
+  `plugin.run`, so it holds no token, so every `host.*` call it could make is
+  refused.
+- **The method is the kind.** A `host.kv` request whose body claims `sql` is
+  refused rather than reconciled.
+- **Refusals are in-band.** `{"ok":false,"refused":true,"error":"…"}` means
+  *conductor will not let this step do that*; a plain `{"ok":false,"error":"…"}`
+  means the op failed. JSON-RPC errors are kept for the transport's own problems
+  (unknown method, params that will not decode).
+- **Enforcement is host-side, always.** `host.*` lands in the same handler, with
+  the same guard, that `ctx.store`/`ctx.sql`/`ctx.memory` go through for a
+  `run: js` step. The engine never receives a store handle, a connection string,
+  or a capability — only the ability to ask, one op at a time.
+
+### Authoring an engine plugin
+
+The SDK gives you `EngineFunc` (the mirror of `ConnectorFunc`) and a typed
+`*Host`, so you write ops rather than JSON-RPC:
+
+```go
+package main
+
+import (
+	"context"
+	"github.com/NodeSpy/conductor/pkg/plugin"
+)
+
+func main() {
+	plugin.Serve(plugin.EngineFunc(
+		func() plugin.Decl {
+			return plugin.Decl{
+				Kind: plugin.KindStep,   // wire value "engine"
+				ABI:  plugin.EngineABI,
+				Type: "wasmtime",        // must equal the name the step uses
+				Capabilities: plugin.Capabilities{}, // declare egress if you need it
+			}
+		},
+		func(ctx context.Context, req plugin.RunRequest, host *plugin.Host) (plugin.RunResult, error) {
+			n, err := host.KV().Get(ctx, "cache", "run", "attempts")
+			if plugin.IsRefused(err) {
+				// conductor's policy said no — surface it, do not retry
+				return plugin.RunResult{}, err
+			}
+			return plugin.RunResult{Outputs: map[string]any{
+				"attempts": n,
+				"saw":      req.Inputs["repo"],
+			}}, nil
+		},
+	))
+}
+```
+
+Points worth knowing:
+
+- **`Type` must equal the engine name the step writes.** conductor refuses a
+  plugin that claims a different one (identity anti-forgery), the same rule a
+  connector's `type:` follows.
+- **`host` is per run.** It stops answering when `Run` returns; do not stash it.
+  `host.Available()` is false when the run was granted no data plane — behave
+  like a remote `use: cli` step rather than failing.
+- **`Run` may be called concurrently**, once per step in flight.
+- **`env:` is your step configuration**, delivered per-call over the transport.
+  An engine's own process environment is the scrubbed minimal one every plugin
+  gets; a step's `env:` never joins it.
+- **Declare egress if you make network calls.** An engine that declares none is
+  confined to *none* — deny-by-default, unlike a connector (see
+  [the manifest](#the-manifest)).
+
+See `test/plugins/acme-engine/` for a complete reference engine, including both
+denial paths.
 
 ## Migrating from `plugins:`
 

@@ -40,7 +40,16 @@ import (
 // ProtocolVersion is the plugin wire-protocol version the daemon speaks. A
 // plugin reports its own in Describe; the daemon refuses a plugin whose major
 // version it does not understand (graceful degradation, not a crash).
+//
+// It has NOT moved for the step-engine surface and must not: Describe compares
+// it for exact equality, so a bump refuses every plugin already installed. The
+// engine additions negotiate through Decl.ABI instead (EngineABI below), which
+// an older plugin simply does not send.
 const ProtocolVersion = sdk.ProtocolVersion
+
+// EngineABI is the step-engine ABI revision the daemon drives. Read ONLY for
+// a KindStep plugin; a connector's or runtime's ABI is not consulted at all.
+const EngineABI = sdk.EngineABI
 
 // Wire method names.
 const (
@@ -48,6 +57,12 @@ const (
 	MethodInvoke      = sdk.MethodInvoke
 	MethodStartSource = sdk.MethodStartSource
 	MethodEvent       = sdk.MethodEvent
+	MethodRun         = sdk.MethodRun
+	// The host.* callbacks are the one direction the daemon ANSWERS rather
+	// than issues. See Client.handleRequest.
+	MethodHostKV     = sdk.MethodHostKV
+	MethodHostSQL    = sdk.MethodHostSQL
+	MethodHostMemory = sdk.MethodHostMemory
 )
 
 // Kind is what a plugin provides.
@@ -56,6 +71,9 @@ type Kind = sdk.Kind
 const (
 	KindConnector = sdk.KindConnector
 	KindRuntime   = sdk.KindRuntime
+	// KindStep is a step-engine plugin (wire value "engine" — the config
+	// block it is declared in).
+	KindStep = sdk.KindStep
 )
 
 // Spec is a resolved plugin ready to run: a derived config.PluginRef joined
@@ -107,10 +125,15 @@ func (s Spec) Ref() string {
 	return s.Name + "@" + s.Version
 }
 
-// Key is the plugin's identity in install state: "<kind-dir>/<name>".
+// Key is the plugin's identity in install state: "<kind-dir>/<name>". It
+// matches config.Use.InstallKey by construction — the two index the same
+// state file.
 func (s Spec) Key() string {
-	if s.Kind == KindRuntime {
+	switch s.Kind {
+	case KindRuntime:
 		return "runtimes/" + s.Name
+	case KindStep:
+		return "engines/" + s.Name
 	}
 	return "connectors/" + s.Name
 }
@@ -136,4 +159,8 @@ type (
 	InvokeRequest      = sdk.InvokeRequest
 	InvokeResult       = sdk.InvokeResult
 	StartSourceRequest = sdk.StartSourceRequest
+	RunRequest         = sdk.RunRequest
+	RunResult          = sdk.RunResult
+	HostRequest        = sdk.HostRequest
+	HostResult         = sdk.HostResult
 )

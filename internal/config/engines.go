@@ -118,18 +118,25 @@ func (s Step) StepEngine() (string, EngineClass) {
 	return sel, EnginePlugin
 }
 
+// engineIsWorkflowErr is the message for the single most likely way a config
+// lands on an engine name it did not mean: it was written before engines
+// existed, when a step-level `use:` meant a WORKFLOW CALL. Checked before
+// anything else, so the operator is told what they actually wrote rather than
+// sent to a plugin repo for a workflow that is right there in the file.
+func engineIsWorkflowErr(w, sel string) error {
+	return fmt.Errorf("config: %s: `use: %s` selects a code ENGINE, but %q is a workflow — write `call: %s` (a step-level `use:` used to mean the workflow call; `conductor config migrate` rewrites it)", w, sel, sel, sel)
+}
+
 // engineUnknownErr is the message for a step `use:` that names no engine
-// conductor can run. It carries the `call:` pointer because the single most
-// likely way to land here is a config written before engines existed, when a
-// step-level `use:` meant a WORKFLOW CALL — so the first thing it does is
-// check whether the name is in fact a workflow and say so outright.
+// conductor can run — a reference that is not a builtin, not an interpreter,
+// not a path, and does not parse as a plugin reference either.
 func engineUnknownErr(w, sel string, c *Config) error {
 	if c != nil {
 		if _, ok := c.Workflows[sel]; ok {
-			return fmt.Errorf("config: %s: `use: %s` selects a code ENGINE, but %q is a workflow — write `call: %s` (a step-level `use:` used to mean the workflow call; `conductor config migrate` rewrites it)", w, sel, sel, sel)
+			return engineIsWorkflowErr(w, sel)
 		}
 	}
-	base := fmt.Errorf("config: %s: `use: %s` names no engine conductor can run — the builtins are %s, or name a host interpreter (bash, node, python3, …) or a path to one; plugin-backed engines are not wired up yet. To CALL a workflow, use `call:`", w, sel, strings.Join(BuiltinNames(UseKindEngine), ", "))
+	base := fmt.Errorf("config: %s: `use: %s` names no engine conductor can run — the builtins are %s; or name a host interpreter (bash, node, python3, …) or a path to one, or an engine PLUGIN (a bare name, owner/repo/engine, or ./path/to/binary). To CALL a workflow, use `call:`", w, sel, strings.Join(BuiltinNames(UseKindEngine), ", "))
 	if _, err := ParseUse(UseKindEngine, sel); err != nil {
 		return fmt.Errorf("%w (%v)", base, err)
 	}
@@ -147,7 +154,28 @@ func validateStepEngine(w string, s Step, c *Config) error {
 		return nil
 	}
 	if class == EnginePlugin {
-		return engineUnknownErr(w, sel, c)
+		// A plugin-backed engine: an out-of-process binary conductor fetches
+		// and drives over the plugin protocol (pkg/plugin's plugin.run). It
+		// is a legitimate reference now, so the only things left to check are
+		// that it is not a workflow the author meant to `call:`, and that it
+		// parses as a reference at all.
+		if c != nil {
+			if _, ok := c.Workflows[sel]; ok {
+				return engineIsWorkflowErr(w, sel)
+			}
+		}
+		if _, err := ParseUse(UseKindEngine, sel); err != nil {
+			return engineUnknownErr(w, sel, c)
+		}
+		if len(s.Command) > 0 {
+			return fmt.Errorf("config: %s: `command:` is the `cli` engine's argv, but this step selects the plugin engine `%s` — write `use: cli` to run a command, or drop `command:`", w, sel)
+		}
+		// NO `code:` requirement, unlike the builtin engines. An engine plugin
+		// declares its own contract: one may take the step's `code:` as a
+		// script, another may be entirely driven by `inputs:` and `args:`, and
+		// conductor cannot tell which from here. The engine says so itself —
+		// on the wire, at run time — rather than the loader guessing.
+		return nil
 	}
 	// An in-process engine shares the daemon's process, so there is nothing
 	// meaningful to ship to another box.

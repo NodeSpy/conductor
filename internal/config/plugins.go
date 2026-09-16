@@ -39,6 +39,7 @@ type PluginRef struct {
 const (
 	PluginKindConnector = string(UseKindConnector)
 	PluginKindRuntime   = string(UseKindRuntime)
+	PluginKindEngine    = string(UseKindEngine)
 )
 
 // Kind is what this plugin provides, derived from the block it was referenced
@@ -123,6 +124,29 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		p := PluginRef{Name: name, Instance: name, Use: u, Isolation: rt.Isolation}
 		out[u.InstallKey()] = p
 	}
+
+	// ENGINES have no block of their own: a step's `use:` IS the reference, so
+	// the derived set is read off the steps themselves. Everything else about
+	// them is a connector's path — same install key shape ("engines/<name>"),
+	// same trust allowlist, same spawn — which is the point of deriving them
+	// here rather than giving engines a parallel mechanism.
+	//
+	// A step carries no `isolation:`/`network:`, so an engine plugin gets the
+	// defaults: no OS hardening, and (because it declares no egress) the
+	// deny-by-default network its kind gets at spawn.
+	c.WalkSteps(func(_ IdentityScope, _ int, s *Step) {
+		sel, class := s.StepEngine()
+		if class != EnginePlugin {
+			return
+		}
+		u, err := ParseUse(UseKindEngine, sel)
+		if err != nil || u.IsBuiltin() {
+			return // validateStepEngine reports an unparseable reference
+		}
+		if _, seen := out[u.InstallKey()]; !seen {
+			out[u.InstallKey()] = PluginRef{Name: u.Name, Instance: sel, Use: u}
+		}
+	})
 	return out
 }
 
@@ -171,7 +195,19 @@ func (c *Config) validatePluginRefs() error {
 			return err
 		}
 	}
-	return nil
+	// Engine references live on steps; two steps naming the same engine from
+	// different sources is the same conflict a pair of connectors would be —
+	// one binary would serve both, and which one is whichever step loaded
+	// first.
+	var engErr error
+	c.WalkSteps(func(_ IdentityScope, _ int, s *Step) {
+		sel, class := s.StepEngine()
+		if class != EnginePlugin || engErr != nil {
+			return
+		}
+		engErr = check(UseKindEngine, sel, sel)
+	})
+	return engErr
 }
 
 func errConflict(kind UseKind, name, aInst, aSrc, bInst, bSrc string) error {

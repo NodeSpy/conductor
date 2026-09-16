@@ -3,6 +3,9 @@ package plugin
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +13,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/acp"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // DefaultCallTimeout bounds a single plugin RPC. A hung plugin must not hang the
@@ -55,6 +59,12 @@ type Deps struct {
 	// onNotify routes a plugin→daemon notification (e.g. a source plugin's
 	// streamed events) to the owning Client. Set by NewClient.
 	onNotify func(method string, params json.RawMessage)
+
+	// onRequest answers a plugin→daemon REQUEST (the host.* data-plane
+	// callbacks an engine issues during a run). Set by NewClient. nil would
+	// mean "the daemon exposes no callbacks", which is what every caller got
+	// before engines existed.
+	onRequest func(ctx context.Context, method string, params json.RawMessage) (any, *acp.RPCError)
 }
 
 // Client is one external plugin: a verified, sandboxed subprocess reached over
@@ -73,7 +83,29 @@ type Client struct {
 	downUntil   time.Time
 	closed      bool
 	onEvent     func(json.RawMessage) // current source-event sink (set by StartSource)
+	// runs are the step-engine runs currently in flight on this plugin, keyed
+	// by the capability token minted for each. It is the daemon half of the
+	// run_id model: a host.* callback is answered only while the run it names
+	// is in this map, which is exactly the span of the plugin.run call that
+	// authorized it. Empty for every connector and runtime plugin, and empty
+	// again the instant a run returns — so a plugin that keeps a token, or
+	// guesses one, has nothing to present it to.
+	runs map[string]RunHost
 }
+
+// RunHost authorizes and executes ONE data-plane op on behalf of a run. It is
+// the seam between this package (which owns the transport and the token) and
+// internal/code (which owns the policy): the daemon passes
+// code.CtxHandler.InvokeHost, so a plugin engine's ctx.store call lands in the
+// same kvInvoke/sqlInvoke/memInvoke behind the same Spec.DataGuard a `use: js`
+// step goes through. Nothing in this package decides what a step may touch.
+//
+// An ALIAS rather than a defined type, deliberately: internal/code declares
+// the same seam in its own words (code.PluginEngine) and cannot import this
+// package, so the two have to be the identical type for *Client to satisfy
+// that interface — a defined type here would be a near-miss the compiler
+// reports as "wrong type for method Run".
+type RunHost = func(HostRequest) HostResult
 
 // NewClient builds a Client for spec. It does not start the subprocess; call
 // Start (or the first Describe/Invoke) to launch it.
@@ -90,8 +122,9 @@ func NewClient(spec Spec, deps Deps) *Client {
 	if deps.dial == nil {
 		deps.dial = realDial
 	}
-	c := &Client{spec: spec}
+	c := &Client{spec: spec, runs: map[string]RunHost{}}
 	deps.onNotify = c.handleNotify
+	deps.onRequest = c.handleRequest
 	c.deps = deps
 	return c
 }
@@ -128,6 +161,123 @@ func (c *Client) StartSource(ctx context.Context, req StartSourceRequest, emit f
 	conn := c.conn
 	c.mu.Unlock()
 	return conn.Call(ctx, MethodStartSource, req, &struct{}{})
+}
+
+// runIDBytes is the run token's entropy, matching the ctx socket's token
+// (internal/code/ctxsock.go): 32 bytes is far past guessing, and the token
+// only ever travels between conductor and a plugin it spawned.
+const runIDBytes = 32
+
+// Run executes ONE code step on a step-engine plugin and returns its outputs.
+//
+// It is the plugin wire's answer to what startCtxServer does for the `cli`
+// engine, and the security model is deliberately the same shape:
+//
+//   - A per-run capability token (req.RunID) is minted here, handed to the
+//     plugin as part of THIS call, and registered for exactly the duration of
+//     the call. Run B's token presented during run A is simply a wrong token;
+//     there is no daemon-wide credential and no way for one step's capability
+//     to name another step's data plane.
+//   - host authorizes every callback. This package checks the token and
+//     nothing else — authentication belongs to the transport, authorization
+//     to the handler — and hands the request straight to host, which is
+//     internal/code's CtxHandler carrying this step's DataGuard.
+//   - The registration is torn down on EVERY exit path (defer), including a
+//     timeout, a cancellation, and a transport failure. A plugin that keeps
+//     the token and calls back later finds a run nobody is holding.
+//
+// host may be nil for a step granted no data plane (the engine then gets an
+// empty run_id and its host.* calls are refused, exactly as a remote `use:
+// cli` step finds no socket).
+//
+// Unlike a verb call, a run carries NO per-call timeout: a code step is the
+// operator's own work and may legitimately take minutes, so its bound is the
+// caller's ctx (the step's timeout, the run's cancellation, daemon shutdown)
+// rather than DefaultCallTimeout — the same choice StartSource makes for the
+// same reason. A transport failure still tears the subprocess down.
+func (c *Client) Run(ctx context.Context, req RunRequest, host RunHost) (map[string]any, error) {
+	if host != nil {
+		tok := make([]byte, runIDBytes)
+		if _, err := rand.Read(tok); err != nil {
+			return nil, fmt.Errorf("plugin %s: run token: %w", c.spec.Name, err)
+		}
+		runID := hex.EncodeToString(tok)
+		req.RunID = runID
+		c.mu.Lock()
+		c.runs[runID] = host
+		c.mu.Unlock()
+		defer func() {
+			c.mu.Lock()
+			delete(c.runs, runID)
+			c.mu.Unlock()
+		}()
+	} else {
+		req.RunID = ""
+	}
+	var res RunResult
+	if err := c.callFor(ctx, 0, MethodRun, req, &res); err != nil {
+		return nil, err
+	}
+	return res.Outputs, nil
+}
+
+// handleRequest answers a plugin→daemon request. The ONLY callable surface is
+// the ctx data plane, and only from inside a run that is holding its token.
+//
+// Authentication happens FIRST and is the whole of this function's security
+// job: an unauthenticated caller has no policy to evaluate it against, so the
+// guard is never consulted and no store is ever touched. The comparison is
+// constant-time over the registered runs, mirroring ctxsock.go's answer().
+//
+// A connector or runtime plugin reaching this method has no run registered —
+// it never received a token, because it is never given a plugin.run — so
+// every call it could make is refused here.
+func (c *Client) handleRequest(_ context.Context, method string, params json.RawMessage) (any, *acp.RPCError) {
+	kind := sdk.HostKindFor(method)
+	if kind == "" {
+		return nil, acp.NewRPCError(acp.CodeMethodNotFound,
+			"daemon exposes no plugin callbacks other than "+MethodHostKV+"/"+MethodHostSQL+"/"+MethodHostMemory)
+	}
+	var req HostRequest
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, acp.NewRPCError(acp.CodeInvalidParams, err.Error())
+		}
+	}
+	// The METHOD is the kind. A body naming a different one is refused rather
+	// than reconciled: `host.kv` carrying a sql op would make the method name
+	// a lie to every reader of a log or an audit row.
+	if req.Kind != "" && req.Kind != kind {
+		return nil, acp.NewRPCError(acp.CodeInvalidParams,
+			fmt.Sprintf("%s carries kind %q — the method is the kind", method, req.Kind))
+	}
+	req.Kind = kind
+
+	host := c.runFor(req.RunID)
+	if host == nil {
+		c.deps.Log("plugin %s: %s refused — no run holds that run_id", c.spec.Name, method)
+		return HostResult{OK: false, Refused: true, Error: "host: bad or missing run_id"}, nil
+	}
+	return host(req), nil
+}
+
+// runFor returns the handler for a presented token, or nil. The scan is
+// constant-time per candidate (subtle.ConstantTimeCompare) so a token cannot
+// be recovered a byte at a time from response latency; an empty token matches
+// nothing, since a registered run always has 32 random bytes behind it.
+func (c *Client) runFor(token string) RunHost {
+	if token == "" {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var match RunHost
+	for id, h := range c.runs {
+		if subtle.ConstantTimeCompare([]byte(id), []byte(token)) == 1 {
+			match = h
+		}
+	}
+	return match
 }
 
 // Digest is the verified SHA-256 of the running binary (empty until started).
@@ -233,10 +383,19 @@ func (c *Client) Describe(ctx context.Context) (*Decl, error) {
 	if decl.Type == "" {
 		return nil, fmt.Errorf("plugin %s: describe returned empty type", c.spec.Name)
 	}
-	// Identity anti-forgery (§8.2): the type a connector plugin serves is the
-	// operator's configured name, not whatever the plugin claims.
-	if c.spec.Kind == KindConnector && decl.Type != c.spec.Provides {
+	// Identity anti-forgery (§8.2): the type a connector or engine plugin
+	// serves is the operator's configured name, not whatever the plugin
+	// claims. (A runtime is exempt: its name is the runtimes: map key, which
+	// the operator chose independently of the reference leaf.)
+	if (c.spec.Kind == KindConnector || c.spec.Kind == KindStep) && decl.Type != c.spec.Provides {
 		return nil, fmt.Errorf("plugin %s: describe claims type %q but is configured to provide %q — refusing (identity forgery)", c.spec.Name, decl.Type, c.spec.Provides)
+	}
+	// ABI is read HERE and only here, and only for a step engine. A connector
+	// or runtime never reaches this branch, which is why adding the field
+	// cannot change what any existing plugin means: its ABI is zero and
+	// nobody asks.
+	if decl.Kind == KindStep && decl.ABI != EngineABI {
+		return nil, fmt.Errorf("plugin %s: step-engine ABI %d, daemon speaks %d — rebuild the engine against a matching SDK (the wire protocol itself is unchanged at version %d)", c.spec.Name, decl.ABI, EngineABI, ProtocolVersion)
 	}
 	return &decl, nil
 }
@@ -255,6 +414,12 @@ func (c *Client) Invoke(ctx context.Context, req InvokeRequest) (map[string]any,
 // call ensures the subprocess is up, applies the per-call timeout, and on a
 // transport failure tears down so a later call can restart.
 func (c *Client) call(ctx context.Context, method string, params, result any) error {
+	return c.callFor(ctx, c.deps.CallTimeout, method, params, result)
+}
+
+// callFor is call with an explicit bound: timeout <= 0 means the call is
+// bounded by ctx alone (plugin.run — see Run).
+func (c *Client) callFor(ctx context.Context, timeout time.Duration, method string, params, result any) error {
 	c.mu.Lock()
 	if err := c.ensureLocked(ctx); err != nil {
 		c.mu.Unlock()
@@ -263,8 +428,12 @@ func (c *Client) call(ctx context.Context, method string, params, result any) er
 	conn := c.conn
 	c.mu.Unlock()
 
-	cctx, cancel := context.WithTimeout(ctx, c.deps.CallTimeout)
-	defer cancel()
+	cctx := ctx
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		cctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	err := conn.Call(cctx, method, params, result)
 	if err != nil {
 		// transport/timeout failure: drop the connection so the plugin is
@@ -321,7 +490,7 @@ func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
 	go pumpStderr(stderr, s.Ref(), d)
 
 	bounded := newBoundedReader(stdout, d.MaxMessageBytes)
-	conn := acp.NewConn(bounded, stdin, pluginHandler{onNotify: d.onNotify})
+	conn := acp.NewConn(bounded, stdin, pluginHandler{onNotify: d.onNotify, onRequest: d.onRequest})
 
 	var once sync.Once
 	kill := func() {
@@ -356,16 +525,23 @@ func pumpStderr(r io.Reader, ref string, d Deps) {
 	}
 }
 
-// pluginHandler handles peer-initiated traffic from a plugin. The daemon exposes
-// no callable methods (a plugin never Calls the daemon), but a SOURCE plugin
-// streams events as one-way notifications — routed to the owning Client via
-// onNotify. onNotify may be nil (verb-only clients).
+// pluginHandler handles peer-initiated traffic from a plugin: a SOURCE
+// plugin's streamed events (one-way notifications, routed via onNotify) and a
+// STEP ENGINE's host.* data-plane callbacks (requests, routed via onRequest —
+// the one direction the daemon answers).
+//
+// Both are nil-safe, and nil is the pre-engines behavior exactly: no
+// callbacks, every request answered with method-not-found.
 type pluginHandler struct {
-	onNotify func(method string, params json.RawMessage)
+	onNotify  func(method string, params json.RawMessage)
+	onRequest func(ctx context.Context, method string, params json.RawMessage) (any, *acp.RPCError)
 }
 
-func (pluginHandler) HandleRequest(context.Context, string, json.RawMessage) (any, *acp.RPCError) {
-	return nil, acp.NewRPCError(acp.CodeMethodNotFound, "daemon exposes no plugin callbacks")
+func (h pluginHandler) HandleRequest(ctx context.Context, method string, params json.RawMessage) (any, *acp.RPCError) {
+	if h.onRequest == nil {
+		return nil, acp.NewRPCError(acp.CodeMethodNotFound, "daemon exposes no plugin callbacks")
+	}
+	return h.onRequest(ctx, method, params)
 }
 func (h pluginHandler) HandleNotification(_ context.Context, method string, params json.RawMessage) {
 	if h.onNotify != nil {

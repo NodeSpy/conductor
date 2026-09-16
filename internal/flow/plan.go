@@ -192,8 +192,21 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 				if sel == "" {
 					return fmt.Errorf("%s: empty use:", w)
 				}
+				// A PLUGIN engine is a binary the operator installed, and an
+				// agent-authored plan may reach one — but only one the
+				// OPERATOR'S CONFIG already references. Without that, an
+				// agent could name any engine in the official repo (or any
+				// owner/repo it invented) and have conductor fetch and
+				// execute it, which is the plan surface acquiring a
+				// code-supply-chain decision that belongs to a human.
 				if class == config.EnginePlugin {
-					return fmt.Errorf("%s: `use: %s` names no engine conductor can run", w, sel)
+					u, err := config.ParseUse(config.UseKindEngine, sel)
+					if err != nil {
+						return fmt.Errorf("%s: `use: %s` names no engine conductor can run", w, sel)
+					}
+					if _, ok := cfg.PluginRefs()[u.InstallKey()]; !ok {
+						return fmt.Errorf("%s: `use: %s` is a plugin engine this config does not reference — an agent-authored plan may only use engines the operator already installed", w, sel)
+					}
 				}
 				if class == config.EngineCLI && len(step.Command) == 0 {
 					return fmt.Errorf("%s: `use: cli` step has no command", w)

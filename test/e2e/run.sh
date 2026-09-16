@@ -1474,6 +1474,50 @@ group_U_filter() {
   fi
 }
 
+# V — the PLUGIN ENGINE. A step's `use:` names an out-of-process binary
+# (test/plugins/acme-engine, built into the image) and conductor drives it over
+# the plugin wire: plugin.run out, the engine's host.* callbacks back.
+#
+# Every assertion here is one the daemon has to earn, because the engine is a
+# separate process that holds nothing:
+#
+#   roundtrip  the value came back out of a REAL store — the engine wrote it
+#              by asking conductor, since it has no store handle to write with
+#   echo       the rendered ctx document reached the subprocess with its values
+#   denied     a store the step may not touch (k9locked, code_access: none) was
+#              refused HOST-SIDE; the engine reported the denial, it did not
+#              make it
+#   code_len   the step's `code:` body crossed the wire byte-for-byte
+#
+# If the engine had been allowed to decide any of this for itself, `denied`
+# would be the assertion that catches it.
+group_V_engine_plugin() {
+  banner "Group V — plugin-backed code-step engine (out-of-process, host-authorized ctx)"
+  func_reset_sink
+
+  post_webhook_to conductor-conn issue_comment conn_engine_comment.json >/dev/null
+  if wait_for 30 slack_sink_has "V-ENGINE acme-engine roundtrip=engine-plugin payload"; then
+    ok "V a use: <plugin> step ran OUT OF PROCESS and its outputs flowed back" V V-run
+  else
+    bad "V plugin engine ran and returned outputs" V V-run "no V-ENGINE capture with the round-tripped value"
+  fi
+  if wait_for 20 slack_sink_has "echo=engine-plugin payload"; then
+    ok "V the rendered ctx document reached the engine subprocess as inputs" V V-inputs
+  else
+    bad "V ctx reached the engine" V V-inputs "no echo= capture"
+  fi
+  if wait_for 20 slack_sink_has "denied=true"; then
+    ok "V the engine's ctx.store callback is HOST-authorized — a gated store was denied by the daemon" V V-guard
+  else
+    bad "V host-side authorization of the engine's callbacks" V V-guard "the gated store was not denied"
+  fi
+  if wait_for 20 slack_sink_has "code_len=36"; then
+    ok "V the step's code: body crossed the plugin wire intact" V V-code
+  else
+    bad "V code body crossed intact" V V-code "no code_len=36 capture"
+  fi
+}
+
 main() {
   trap teardown EXIT
   setup
@@ -1508,6 +1552,7 @@ main() {
   group_S_callable
   group_T_output_schema
   group_U_filter
+  group_V_engine_plugin
   print_matrix
   [ "$FAIL" -eq 0 ]
 }
