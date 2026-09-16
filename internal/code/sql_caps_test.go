@@ -10,6 +10,13 @@ import (
 	"github.com/NodeSpy/conductor/internal/sqlstore"
 )
 
+// codeSQL runs one ctx.sql op the way a code step reaches it — through the
+// data plane every engine shares (CtxHandler → sqlInvoke).
+func codeSQL(op, store, query string, args []any) CtxResponse {
+	return CtxHandler{}.Invoke(CtxRequest{Kind: CtxKindSQL, Op: op,
+		Resource: store, Args: []any{query, args}})
+}
+
 // capsSQL registers one sqlite :memory: store named "db" with the given
 // code_access mode ("" = the default).
 func capsSQL(t *testing.T, mode string) *sqlstore.Store {
@@ -37,12 +44,9 @@ func capsSQL(t *testing.T, mode string) *sqlstore.Store {
 func TestCodeStepAttachRefused(t *testing.T) {
 	capsSQL(t, "write")
 	target := filepath.Join(t.TempDir(), "evil.db")
-	e := &Executor{}
-	_, err := e.Exec(context.Background(), Spec{Run: "js", Code: `
-ctx.sql("db").exec("ATTACH DATABASE '` + target + `' AS evil", []);
-return 1`}, nil)
-	if err == nil || !strings.Contains(err.Error(), "ATTACH is not allowed") {
-		t.Fatalf("ATTACH from a code step was not refused: %v", err)
+	res := codeSQL("exec", "db", "ATTACH DATABASE '"+target+"' AS evil", nil)
+	if res.OK || !strings.Contains(res.Error, "ATTACH is not allowed") {
+		t.Fatalf("ATTACH from a code step was not refused: %#v", res)
 	}
 	if _, statErr := os.Stat(target); statErr == nil {
 		t.Fatalf("ATTACH created %s despite the refusal", target)
@@ -70,29 +74,27 @@ func TestCodeStepExecRequiresWriteCapability(t *testing.T) {
 		`CREATE TABLE events (id INTEGER PRIMARY KEY, body TEXT)`, nil); err != nil {
 		t.Fatal(err)
 	}
-	e := &Executor{}
-
 	// exec from code: refused under the default.
-	_, err := e.Exec(context.Background(), Spec{Run: "js", Code: `
-ctx.sql("db").exec("INSERT INTO events (body) VALUES (?)", ["x"]);
-return 1`}, nil)
-	if err == nil || !strings.Contains(err.Error(), "query-only from code steps") {
-		t.Fatalf("exec from code under default code_access was not refused: %v", err)
+	res := codeSQL("exec", "db", "INSERT INTO events (body) VALUES (?)", []any{"x"})
+	if res.OK || !strings.Contains(res.Error, "query-only from code steps") {
+		t.Fatalf("exec from code under default code_access was not refused: %#v", res)
 	}
 
 	// query from code: allowed under the default.
-	out, err := e.Exec(context.Background(), Spec{Run: "js", Code: `
-return { n: ctx.sql("db").query("SELECT COUNT(*) AS n FROM events")[0].n }`}, nil)
-	if err != nil || out["n"] != float64(0) {
-		t.Fatalf("query from code under default code_access: %v %v", out, err)
+	res = codeSQL("query", "db", "SELECT COUNT(*) AS n FROM events", nil)
+	rows, _ := res.Value.([]any)
+	if !res.OK || len(rows) != 1 {
+		t.Fatalf("query from code under default code_access: %#v", res)
+	}
+	if row, _ := rows[0].(map[string]any); row["n"] != int64(0) {
+		t.Fatalf("query result = %#v", rows[0])
 	}
 
 	// code_access: none refuses even query.
 	capsSQL(t, "none")
-	_, err = e.Exec(context.Background(), Spec{Run: "js", Code: `
-ctx.sql("db").query("SELECT 1"); return 1`}, nil)
-	if err == nil || !strings.Contains(err.Error(), "code_access: none") {
-		t.Fatalf("query under code_access none was not refused: %v", err)
+	res = codeSQL("query", "db", "SELECT 1", nil)
+	if res.OK || !strings.Contains(res.Error, "code_access: none") {
+		t.Fatalf("query under code_access none was not refused: %#v", res)
 	}
 }
 

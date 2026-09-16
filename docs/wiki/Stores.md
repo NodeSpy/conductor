@@ -190,12 +190,13 @@ Three access paths reach the same stores — see [[Code-Steps]] for the full `ct
 1. **Verbs** — `uses: kv.*` / `sql.*` in steps and hooks (tables above), audited like any verb call.
 2. **Templates** (read-only, store first): `{{ kv "cache" "runs" (print .pr) | default 0 }}` and
    `{{ kvContains "cache" "pd" "seen" .incident.id }}`. The template surface never mutates.
-3. **`ctx.store("<name>")` / `ctx.sql("<name>")` in `run:` code** — the in-process engines (js, lua,
-   risor, go-embed) resolve a defined store to a handle with the full method set. Host-interpreter
+3. **`ctx.store("<name>")` / `ctx.sql("<name>")` in `run:` code** — the engine plugins (js, lua,
+   risor, go-embed) and a local `use: cli` step resolve a defined store to a handle with the full
+   method set; every op is authorized host-side. Host-interpreter
    steps (`run: sh/node/python/…`) run in a separate process — they use the `kv.*`/`sql.*` verbs.
 
 ```yaml
-- run: js
+- use: js          # an engine plugin; `use: cli` reaches the same faces
   code: |
     const kv = ctx.store("cache");
     const key = "last-invoice-" + ctx.inputs.contact_id;

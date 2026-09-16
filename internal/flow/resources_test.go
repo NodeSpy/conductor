@@ -220,6 +220,7 @@ stores:
 // the plan reaches code the same way the laundering path does — through a
 // config workflow.)
 func TestResourceAllowlistCodeStores(t *testing.T) {
+	helper := ctxHelper(t)
 	pol := `
 policy:
   agent_authored:
@@ -234,8 +235,10 @@ workflows:
     inputs: { which: { type: string, required: true } }
     steps:
       - id: w
-        run: js
-        code: 'return ctx.store(ctx.inputs.which).get("ns", "k");'
+        use: cli
+        command: [sh]
+        env: { HELPER: "` + helper + `", CONDUCTOR_FLOW_CTX_TEST_CLIENT: "1", WHICH: "{{.inputs.which}}" }
+        code: '"$HELPER" ctx kv "$WHICH" get ns k'
 `
 	kv.SetDataDir(t.TempDir())
 	kv.ResetStores()
@@ -299,6 +302,7 @@ steps:
 // listed it: the opposite of the rule the verb surfaces apply, and a refusal
 // that reads like a bug to whoever hits it.
 func TestCodeStepReachesItsOwnScopeWithNoAllowlist(t *testing.T) {
+	helper := ctxHelper(t)
 	pol := `
 policy:
   agent_authored:
@@ -310,8 +314,10 @@ workflows:
     inputs: { scope: { type: string, required: true } }
     steps:
       - id: w
-        run: js
-        code: 'return ctx.memory.remember("note", [], ctx.inputs.scope);'
+        use: cli
+        command: [sh]
+        env: { HELPER: "` + helper + `", CONDUCTOR_FLOW_CTX_TEST_CLIENT: "1", SCOPE: "{{.inputs.scope}}" }
+        code: '"$HELPER" ctx memory remember note "[]" "$SCOPE"'
 `
 	kv.SetDataDir(t.TempDir())
 	kv.ResetStores()
@@ -344,6 +350,7 @@ workflows:
 // The same for a STORE: a code step reaching the store its own dispatch
 // targets is not what allow_stores exists to stop.
 func TestCodeStepOwnTargetStoreStillNeedsListing(t *testing.T) {
+	helper := ctxHelper(t)
 	pol := `
 policy:
   agent_authored:
@@ -358,8 +365,10 @@ workflows:
     inputs: { which: { type: string, required: true } }
     steps:
       - id: w
-        run: js
-        code: 'return ctx.store(ctx.inputs.which).get("ns", "k");'
+        use: cli
+        command: [sh]
+        env: { HELPER: "` + helper + `", CONDUCTOR_FLOW_CTX_TEST_CLIENT: "1", WHICH: "{{.inputs.which}}" }
+        code: '"$HELPER" ctx kv "$WHICH" get ns k'
 `
 	kv.SetDataDir(t.TempDir())
 	kv.ResetStores()

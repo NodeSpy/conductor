@@ -446,7 +446,7 @@ connectors:
 triggers:
   - on: svc.ping
     steps:
-      - { id: n, run: js, code: "return {total: ctx.group.events.length}" }
+      - { id: n, use: cli, command: [sh, -c, "printf '{\"total\": %s}' \"$TOTAL\""], env: { TOTAL: "{{len .group.events}}" } }
       - { id: p, uses: svc.post, options: { text: "{{.group.key}} has {{.n.total}} (first {{.group.first.msg}}, last {{.group.last.msg}})" } }
 `)
 	reg := buildRegistry(t, cfg)

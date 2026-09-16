@@ -78,16 +78,24 @@ triggers:
     steps:
       - { id: disk, type: command, command: [df, -h, /] }
       - id: shape
-        run: js
+        use: cli
+        command: [sh]
+        env: { DISK: "{{.disk.stdout}}" }
         code: |
-          const lines = ctx.disk.stdout.trim().split("\n");
-          return { summary: lines[lines.length - 1] };
+          # stdout becomes this step's outputs, parsed as JSON.
+          printf '{"summary": "%s"}' "$(printf %s "$DISK" | tail -n 1)"
       - { id: say, type: command, command: [echo, "disk: {{.shape.summary}}"] }
 ```
 
-`ctx` inside code is the same scope templates see: `ctx.disk.stdout` is the
-first step's output, and the returned object becomes `{{.shape.summary}}`
-for the third. `conductor run disk-report` fires it on demand.
+`use: cli` is conductor's one **built-in** engine — it runs the argv you give
+it with the code-step contract wrapped around it (ctx as JSON on stdin,
+stdout parsed into outputs), so this works on a fresh install with nothing
+fetched. The returned object becomes `{{.shape.summary}}` for the third step.
+`conductor run disk-report` fires it on demand.
+
+> Prefer writing this in JavaScript, Lua, Risor or Go? Those are **engine
+> plugins** — `use: js` and friends work the same way, once `conductor init`
+> has fetched them. See [[Code-Steps]].
 
 ## 4. Where to go next
 

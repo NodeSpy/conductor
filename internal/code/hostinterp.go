@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-// execHostLocal runs any `run:` value that isn't js/go-embed/go by shelling
+// execHostLocal runs any `run:` value that isn't `cli` or `go` by shelling
 // out to a real interpreter on this machine: spec.Run is itself the
 // interpreter (sh, bash, ruby, node, python, perl, php, …) or, if it
 // contains a '/', a path to one — used verbatim instead of a PATH lookup so
@@ -78,11 +78,11 @@ func (e *Executor) execHostLocal(ctx context.Context, spec Spec, data map[string
 // (internal/hosts).
 const remoteNotFoundExit = 127
 
-// execRemote runs a host-interpreter spec on spec.Host over SSH.
-// js/go-embed/risor/lua are rejected outright: they execute inside conductor's own
-// process (see errRemoteInProcessEngine) and have no remote equivalent; a
-// `cli` spec hands off to execCLIRemote, which is this same script shape with
-// an argv instead of one interpreter name.
+// execRemote runs a host-interpreter spec on spec.Host over SSH. A `cli`
+// spec hands off to execCLIRemote, which is this same script shape with an
+// argv instead of one interpreter name. (A PLUGIN engine never reaches here:
+// Exec refuses `host:` for one before the remote split, because its ctx
+// callbacks belong to this daemon's subprocess.)
 //
 // The remote side is a single generated `sh` script (run through
 // hosts.Client.Script, which already handles the target's env/cwd wrapping
@@ -102,10 +102,7 @@ const remoteNotFoundExit = 127
 // is the stdin hosts.Client.Script attaches, exactly like the local host
 // path, so it never touches argv or the generated script text.
 func (e *Executor) execRemote(ctx context.Context, spec Spec, data map[string]any) (map[string]any, error) {
-	switch spec.Run {
-	case "js", "go-embed", "risor", "lua":
-		return nil, errRemoteInProcessEngine(spec.Run)
-	case "cli":
+	if spec.Run == "cli" {
 		return e.execCLIRemote(ctx, spec, data)
 	}
 

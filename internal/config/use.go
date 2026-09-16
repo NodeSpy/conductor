@@ -650,17 +650,22 @@ var (
 // them, and RegisterBuiltinEngine lets a newly-bundled engine register itself
 // at init without the two lists drifting apart.
 //
-//	cli        run a `command:` argv as a subprocess (local or over host:)
-//	js         QuickJS/wazero, in-process
-//	go-embed   yaegi, in-process
-//	risor      Risor, in-process
-//	lua        gopher-lua, in-process
+//	cli   run a `command:` argv as a subprocess (local or over host:)
+//
+// `cli` is the ONLY one. The scripting engines that used to be here — js,
+// lua, risor, go-embed — are now official ENGINE PLUGINS living in
+// conductor-plugins//engines/<name>, so their interpreters are not linked
+// into this binary. Leaving them out of this map is precisely what routes
+// `use: js` to the plugin: the name fails builtinFor, resolves as an
+// official-repo engine reference, and dispatches through plugin.run like any
+// third-party engine. Do not re-add one here without also linking an
+// implementation, or `use:` will claim a builtin that cannot run.
 //
 // A HOST INTERPRETER (`bash`, `python3`, `/opt/py/bin/python`) is not an
-// engine and is deliberately absent: it names a program on the box, not an
-// implementation conductor ships or fetches. See Step.StepEngine.
+// engine and is deliberately absent either way: it names a program on the
+// box, not an implementation conductor ships or fetches. See Step.StepEngine.
 var builtinEngines = map[string]bool{
-	"cli": true, "js": true, "go-embed": true, "risor": true, "lua": true,
+	"cli": true,
 }
 
 // RegisterBuiltinEngine records a code-step engine as bundled, so a bare

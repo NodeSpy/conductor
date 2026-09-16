@@ -13,10 +13,10 @@ import (
 // A step names its engine with `use:` — the same reference grammar
 // connectors and runtimes use, resolved as UseKindEngine:
 //
-//	use: js                 a builtin, in-binary
-//	use: cli                the builtin subprocess engine (+ `command:`)
+//	use: cli                the ONE builtin engine (+ `command:`)
 //	use: bash               a host interpreter on the box (or a path to one)
-//	use: acme/wasm-engine   a plugin-backed engine (NOT wired up yet)
+//	use: js                 an official engine PLUGIN (conductor-plugins)
+//	use: acme/wasm-engine   a third-party engine plugin
 //
 // `run:` is the ORIGINAL spelling and stays as an alias for exactly the same
 // selection, because every deployed config is written in it. `run: js` and
@@ -41,25 +41,19 @@ type EngineClass string
 const (
 	// EngineNone means the step selected no engine (it is not a code step).
 	EngineNone EngineClass = ""
-	// EngineInProcess is a builtin engine that runs inside the daemon's own
-	// process (js, go-embed, risor, lua). Local-only: it shares this
-	// process's fate, so it can never be shipped to a `host:`.
-	EngineInProcess EngineClass = "in-process"
 	// EngineCLI is the builtin `cli` engine: run `command:` as a subprocess,
-	// ctx on stdin, outputs from stdout.
+	// ctx on stdin, outputs from stdout. It is the only builtin left — the
+	// in-process interpreters (js, go-embed, risor, lua) are engine PLUGINS
+	// now and classify as EnginePlugin.
 	EngineCLI EngineClass = "cli"
 	// EngineHost is a host interpreter — a program on the box, named
 	// (`bash`, `python3`) or pathed (`/opt/py/bin/python`).
 	EngineHost EngineClass = "host"
-	// EnginePlugin is an engine that would have to be fetched. Parsed and
-	// classified so the error can say so; not executable in this build.
+	// EnginePlugin is an engine conductor fetches and drives out of process
+	// over the plugin protocol — a third-party one, or an official one such
+	// as `js`/`lua`/`risor`/`go-embed`.
 	EnginePlugin EngineClass = "plugin"
 )
-
-// inProcessEngines are the builtin engines that run inside the daemon.
-var inProcessEngines = map[string]bool{
-	"js": true, "go-embed": true, "risor": true, "lua": true,
-}
 
 // hostInterpreters are the interpreter names `use:` accepts as "a program on
 // the box" rather than as a plugin reference.
@@ -81,6 +75,26 @@ var hostInterpreters = map[string]bool{
 	"pwsh": true, "powershell": true, "tclsh": true, "awk": true,
 }
 
+// retiredInProcessEngines are the scripting engines that USED to be linked
+// into the daemon and are now official engine PLUGINS
+// (conductor-plugins//engines/<name>).
+//
+// They are named here for one reason: `run:` treats every name it does not
+// recognize as a host interpreter, with no allowlist. Without this set, a
+// deployed `run: js` would stop being an engine selection at all and quietly
+// become a PATH lookup for a program called `js` — failing on a box that has
+// none, and running something entirely unrelated on a box that does. Listing
+// them pins both spellings to the same answer they have always had: this is
+// the js ENGINE, fetch it and run the step on it.
+//
+// `use:` would reach EnginePlugin for these anyway (they are neither
+// builtins, nor paths, nor interpreter names), so this set changes nothing
+// for it — it is written once and consulted for both so the two spellings
+// cannot drift.
+var retiredInProcessEngines = map[string]bool{
+	"js": true, "go-embed": true, "risor": true, "lua": true,
+}
+
 // EngineSelector is the step's engine reference as written: `use:` when set,
 // else the `run:` alias. Empty when the step selects no engine.
 func (s Step) EngineSelector() string {
@@ -99,11 +113,14 @@ func (s Step) StepEngine() (string, EngineClass) {
 	if sel == "" {
 		return "", EngineNone
 	}
-	switch {
-	case sel == "cli":
+	if sel == "cli" {
 		return sel, EngineCLI
-	case inProcessEngines[sel]:
-		return sel, EngineInProcess
+	}
+	// A retired in-process engine is a PLUGIN under BOTH spellings — checked
+	// before the `run:`/`use:` split below, because that split would hand
+	// `run: js` to a PATH lookup instead of to the js engine.
+	if retiredInProcessEngines[sel] {
+		return sel, EnginePlugin
 	}
 	// From here the two spellings part ways: `run:` treats every remaining
 	// value as a host interpreter (its historic behavior, preserved
@@ -153,6 +170,15 @@ func validateStepEngine(w string, s Step, c *Config) error {
 	if class == EngineNone {
 		return nil
 	}
+	// A plugin engine is a SUBPROCESS OF THIS DAEMON holding a transport back
+	// to it, so `host:` has no meaning that preserves the ctx callbacks —
+	// they would have to come back across the ssh hop. Rejected at load, as
+	// it was when js/go-embed/risor/lua were in-process and this said "inside
+	// conductor's own process": same configs, same refusal, same reason one
+	// level out. internal/code.Exec guards it again for specs built directly.
+	if class == EnginePlugin && (s.Host != "" || s.SSH != nil) {
+		return fmt.Errorf("config: %s: `%s: %s` runs in a subprocess of this daemon and is local-only — use a host interpreter (e.g. `use: node`/`use: sh`) or `use: cli` for remote code", w, engineKey(s), sel)
+	}
 	if class == EnginePlugin {
 		// A plugin-backed engine: an out-of-process binary conductor fetches
 		// and drives over the plugin protocol (pkg/plugin's plugin.run). It
@@ -176,11 +202,6 @@ func validateStepEngine(w string, s Step, c *Config) error {
 		// conductor cannot tell which from here. The engine says so itself —
 		// on the wire, at run time — rather than the loader guessing.
 		return nil
-	}
-	// An in-process engine shares the daemon's process, so there is nothing
-	// meaningful to ship to another box.
-	if class == EngineInProcess && (s.Host != "" || s.SSH != nil) {
-		return fmt.Errorf("config: %s: `use: %s` executes inside conductor's own process and is local-only — use a host interpreter (e.g. `use: node`/`use: sh`) for remote code", w, sel)
 	}
 	if class == EngineCLI {
 		if len(s.Command) == 0 {

@@ -49,10 +49,13 @@ triggers.
 
 ## Alarm webhook → reshape in js → act
 
+`js` is an engine plugin — `conductor init` fetches it ([[Code-Steps]]). Swap
+in `use: cli, command: [sh]` to stay on the builtin.
+
 ```yaml
 - on: hooks.cloudwatch
   steps:
-    - { id: shape, run: js,
+    - { id: shape, use: js,
         code: "return { sev: ctx.body.detail.severity || 'low', name: ctx.body.detail.alarmName }" }
     - { id: page, if: "{{.shape.sev}} == high", uses: slack-ops.post,
         options: { text: "ALARM {{.shape.name}} — {{.url}}" } }

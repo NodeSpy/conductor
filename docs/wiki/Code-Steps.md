@@ -7,15 +7,24 @@ script engines, `command:` for `cli`.
 
 ```yaml
 steps:
+  - { id: build,  use: cli,      command: [make, -C, ./svc, release] } # the builtin
   - { id: shape,  use: js,       code: "return { sev: ctx.body.detail.severity }" }
-  - { id: calc,   use: go-embed, code: "…" }                          # yaegi, install-free
-  - { id: score,  use: risor,    code: '{"sev": ctx["level"]}' }      # Risor, install-free
-  - { id: pick,   use: lua,      code: "return { sev = ctx.level }" } # Lua 5.1, install-free
-  - { id: build,  use: cli,      command: [make, -C, ./svc, release] }
+  - { id: calc,   use: go-embed, code: "…" }                          # engine plugin
+  - { id: score,  use: risor,    code: '{"sev": ctx["level"]}' }      # engine plugin
+  - { id: pick,   use: lua,      code: "return { sev = ctx.level }" } # engine plugin
   - { id: heavy,  use: go,       code: "…" }                          # host go run
   - { id: deploy, use: sh,   host: build-box, code: "make deploy" }   # sh on build01
   - { id: enrich, use: ruby, host: build-box, code: "…" }             # build01's ruby
 ```
+
+> **The scripting engines are plugins.** `js`, `lua`, `risor` and `go-embed`
+> used to be compiled into conductor. They now live in
+> [conductor-plugins](https://github.com/NodeSpy/conductor-plugins) under
+> `engines/<name>` and are **fetched on `conductor init`**, like any other
+> official component. Every existing `use: js` / `run: js` config keeps
+> working and keeps meaning the js engine — but the daemon will not start a
+> config that names one until it is installed, and it tells you to run
+> `conductor init`. Only **`cli`** is built in.
 
 `use:` resolves exactly like a connector's or a runtime's: a **builtin**
 first, then the official plugin repo's `engines/<name>`, then an explicit
@@ -36,16 +45,27 @@ program on the box, and `use:` takes it by name or by path.
 
 ## Engines
 
-**Baked-in, sandboxed (zero-install, local-only):**
+**Built in (the only one):**
+
+- `use: cli` — run the step's own **`command:`** argv as a subprocess. See
+  [`cli`](#the-cli-engine) below. Nothing to install, works local or over
+  `host:`.
+
+**Official engine plugins (fetched on `conductor init`, out-of-process):**
+
+Each is a verified, sandboxed subprocess conductor spawns and drives over the
+plugin wire — see [Engine plugins](#engine-plugins). They need no interpreter
+on the box (the engine binary carries its own), which is what makes them the
+drop-in for the old in-binary engines.
 
 - `use: js` — QuickJS compiled to WASM, executed in wazero (pure Go, no CGo).
   A true WASM sandbox, identical on every OS. The code body is a function
   body: `return` its result.
-- `use: go-embed` — yaegi, a Go interpreter written in Go, in-process. No
-  toolchain needed; sandboxed by a stdlib import allowlist (strings, strconv,
-  fmt, encoding/json, time, math, regexp, sort, …; no os, os/exec, net,
-  syscall, unsafe). The code must define
-  `func run(ctx map[string]any) (any, error)` (or `… any`).
+- `use: go-embed` — yaegi, a Go interpreter written in Go. No toolchain
+  needed; sandboxed by a stdlib import allowlist (strings, strconv, fmt,
+  encoding/json, time, math, regexp, sort, …; no os, os/exec, net, syscall,
+  unsafe). The code must define `func run(ctx map[string]any) (any, error)`
+  (or `… any`).
 - `use: risor` — [Risor](https://github.com/risor-io/risor), a Go-flavored
   scripting language interpreted in pure Go. The script's final expression is
   its result. Sandboxed by an explicit global allowlist: the core builtins
@@ -57,23 +77,17 @@ program on the box, and `use:` takes it by name or by path.
   debug, or package — and the file/chunk loaders (`dofile`, `loadfile`,
   `load`, `loadstring`) are removed.
 
-**Baked-in, subprocess:**
+**Third-party engine plugins:**
 
-- `use: cli` — run the step's own **`command:`** argv as a subprocess. See
-  [`cli`](#the-cli-engine) below.
-
-**Plugin engines (fetched, out-of-process):**
-
-- `use: <any other name>` — an **engine plugin**: a verified, sandboxed
-  subprocess conductor spawns and drives over the plugin wire. See
-  [Engine plugins](#engine-plugins) below.
+- `use: <any other name>` / `use: owner/repo/engine` / `use: ./path/to/binary`
+  — the same mechanism, from somewhere other than the official repo.
 
 **Host interpreters (bring your own):**
 
 - `use: go` — the host `go run`: full fidelity (generics, cgo, third-party
   modules). The code is a complete program reading the ctx JSON on stdin and
   printing its result JSON on stdout. `go` resolves via PATH; a clear error
-  names the `go-embed` fallback when absent.
+  says so when the toolchain is absent.
 - `use: ruby | node | python3 | php | perl | sh | bash | /usr/bin/…` —
   resolved by name on PATH or by explicit path. conductor writes `code:` to a
   private temp file and invokes it (`args:` appends extra argv); the ctx JSON
@@ -118,7 +132,7 @@ stdout becomes structured outputs.
 
 Everything a code step gets arrives as `ctx` — a global in js, risor, and lua; the `run(ctx)`
 argument in go-embed; JSON on stdin for `cli` and host interpreters. It carries the same scope your templates
-see, **plus** live handles to stores and memory in the in-process engines.
+see, **plus** access to stores and memory in every engine that has a data plane.
 
 ### Data (read-only)
 
@@ -133,7 +147,7 @@ see, **plus** live handles to stores and memory in the in-process engines.
 Named `secrets`/vault values are **NOT** in `ctx` — pass one explicitly via a step's `env:` or
 `args:` template when code genuinely needs it (see [[Secrets]]).
 
-### Bindings (in-process engines only — js, go-embed, risor, lua)
+### Bindings (engine plugins — js, go-embed, risor, lua — and `cli`)
 
 | binding | shape | notes |
 |---|---|---|
@@ -149,9 +163,15 @@ The spelling differs by engine but the surface is identical:
 | **risor** | `store("x")` (builtin) | `sql("x")` | `memory` |
 | **go-embed** | `import "conductor/store"` → `store.Use("x")` | `import "conductor/sql"` → `sql.Use("x")` | `import "conductor/memory"` |
 
-**Host interpreters** (`use: sh/node/python3/…`) run in a separate process and have no `ctx`
-handles; use the `kv.*` / `sql.*` / `memory.*` **verbs** in surrounding steps instead. A **local
-`use: cli`** step reaches the same three faces through [the ctx data plane](#the-ctx-data-plane-cli).
+Every engine here is a **subprocess**, so none of them holds a store handle:
+each op is a request back to conductor, which authorizes it. The engines
+present it as a binding; the mechanism underneath is the same one `cli` uses
+([the ctx data plane](#the-ctx-data-plane-cli)), and so are the guards.
+
+**Host interpreters** (`use: sh/node/python3/…`) get no `ctx` faces at all —
+conductor hands them a script and a stdin document, with no channel back. Use
+the `kv.*` / `sql.*` / `memory.*` **verbs** in surrounding steps instead, or
+`use: cli`, which does have the channel.
 
 ```yaml
 - use: js
@@ -170,8 +190,8 @@ A subprocess cannot hold a Go binding, so a **local `use: cli`** step gets the
 same three faces over a **per-run unix socket**: it *asks* conductor to
 perform each op, and conductor decides. The step never receives a store
 handle, a connection string, or a credential — **every op is authorized
-host-side**, through the identical guards an in-process `ctx.store(…)` call
-goes through (the store/scope allowlist for agent-authored steps, the
+host-side**, through the identical guards an engine plugin's `ctx.store(…)`
+call goes through (the store/scope allowlist for agent-authored steps, the
 `no_secret_egress` write barrier, `code_access:` on SQL stores, reserved
 memory buckets).
 
@@ -236,7 +256,7 @@ CONDUCTOR_CTX_HELPER   conductor's binary — the client above
 | `kind` | `kv` · `sql` · `memory` |
 | `op` | the operation, spelled as in the tables above |
 | `resource` | the **defined** store (`kv`/`sql`); omitted for `memory`, which has no store dimension |
-| `args` | positional, exactly as the in-process `ctx.store(ns, key, …)` call takes them |
+| `args` | positional, exactly as an engine's `ctx.store(ns, key, …)` call takes them |
 | `ok` / `value` | success and its JSON result (an absent read is `null`, not an error) |
 | `error` / `refused` | the failure; `refused` marks a **policy** denial rather than a malfunction |
 
@@ -336,12 +356,12 @@ The return value / stdout becomes the step's outputs: a JSON **object** as-is (r
 
 A code step runs where conductor runs. `host: <name>` (a [[Hosts]] entry) or
 an inline `ssh: {…}` runs a **`cli` or host-interpreter** step on that box —
-the code travels as a base64 frame, the ctx JSON on
-stdin, and a missing program is a distinct clear error. The in-process
-engines (`js`, `go-embed`, `risor`, `lua`) execute inside conductor's own
-process and are **local-only**; `conductor validate` rejects `host:` on them
-and names the alternatives (run `node` there, or run a conductor on that
-box).
+the code travels as a base64 frame, the ctx JSON on stdin, and a missing
+program is a distinct clear error. An **engine plugin** (`js`, `go-embed`,
+`risor`, `lua`, or a third-party one) is a subprocess of *this* daemon
+holding a channel back to it, so it is **local-only**; `conductor validate`
+rejects `host:` on one and names the alternatives (run `node` there, or run a
+conductor on that box).
 
 ### `ctx.sql` capabilities
 
@@ -354,25 +374,26 @@ statements reach the host filesystem/engine, not your schema.
 
 ## Timeouts
 
-A step's `timeout:` binds actual execution in every engine: QuickJS halts
-the WASM module at the deadline (and its heap is capped at 256MB), yaegi
-and Lua interrupt their interpreter loops, risor honors the context
-natively, and `cli`/host interpreters are killed with the subprocess. A
+A step's `timeout:` binds actual execution in every engine: `cli` and host
+interpreters are killed with the subprocess, and an engine plugin is a
+subprocess too — conductor cancels the run and tears the process down. A
 `while(1)` costs you the step, not the daemon.
 
 ## Trust boundary
 
-WASM (`js`) is memory-isolated. yaegi (`go-embed`), Risor, and Lua are
-in-process behind their allowlists — appropriate for operator-authored
-config, not untrusted input. go-embed's interpreter never resolves source
-imports from the host GOPATH (only the registered stdlib subset exists).
+Nothing conductor runs for a code step shares the daemon's process any more:
+`cli`, host interpreters, and engine plugins are all subprocesses, so a
+runaway or a crash costs the step rather than the daemon. Each engine keeps
+its own internal sandbox on top of that (js is memory-isolated WASM; go-embed,
+Risor and Lua run behind import/global allowlists) — appropriate for
+operator-authored config, not untrusted input.
 `cli` and host interpreters have full host power (that is their point) — but they
 inherit an allowlisted base environment (PATH/HOME/locale/GO*) plus the
 step's own `env:`, never the daemon's full environment; pass an ambient
 variable explicitly if a step needs it. A cli step's [ctx data
 plane](#the-ctx-data-plane-cli) does not widen that: it hands over no store
 handle, only the ability to ask, and conductor applies the same guards it
-applies to an in-process engine. The socket address and token are appended
+applies to an engine plugin's callbacks. The socket address and token are appended
 **after** the step's `env:`, so a step cannot point its own data plane
 somewhere else.
 

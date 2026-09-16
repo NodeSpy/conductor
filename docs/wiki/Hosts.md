@@ -40,8 +40,12 @@ travels as a base64 frame with the ctx JSON on stdin.
 
 ## What does not
 
-- `run: js`, `run: go-embed`, `run: risor`, and `run: lua` execute inside
-  conductor's own process — local-only by construction.
+- `use: js`, `use: go-embed`, `use: risor`, and `use: lua` are engine
+  plugins — subprocesses of *this* daemon, holding a ctx channel back to it,
+  so shipping one to another box would strand its callbacks. Local-only, and
+  `conductor validate` says so at load. (They used to run inside conductor's
+  own process, which made them local-only for a different reason; the answer
+  for a config has not changed.)
 
 Notes on remote runtimes: a remote paseo skips this box's local-filesystem
 fast paths (stale-lock clearing, git revalidation of memoized checkouts, the

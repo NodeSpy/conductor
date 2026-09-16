@@ -129,7 +129,12 @@ func parseCtxArgs(args []string) (CtxRequest, error) {
 	switch req.Kind {
 	case CtxKindKV, CtxKindSQL:
 		if len(rest) < 2 {
-			return CtxRequest{}, fmt.Errorf("%s wants a store and an op, e.g. `ctx %s <store> get …`", req.Kind, req.Kind)
+			ops := kvOps
+			if req.Kind == CtxKindSQL {
+				ops = sqlOps
+			}
+			return CtxRequest{}, fmt.Errorf("%s wants a store and an op (%s), e.g. `ctx %s <store> %s …`",
+				req.Kind, strings.Join(ops, ", "), req.Kind, ops[0])
 		}
 		req.Resource, req.Op, rest = rest[0], rest[1], rest[2:]
 	case CtxKindMemory:

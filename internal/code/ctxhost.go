@@ -5,21 +5,22 @@ import (
 	"fmt"
 )
 
-// The ctx DATA PLANE for out-of-process engines.
+// The ctx DATA PLANE for out-of-process engines — which, since the scripting
+// interpreters became engine plugins, is ALL of them.
 //
-// The in-process engines (js/go-embed/risor/lua) reach ctx.store/ctx.sql/
-// ctx.memory by holding a Go binding that calls kvInvoke/sqlInvoke/memInvoke
-// directly (kvbind.go, sqlbind.go, membind.go). A subprocess cannot hold a
-// binding, so it gets the same three dispatchers over a socket instead — and
-// the thing on the other end of that socket is CtxHandler.
+// A subprocess cannot hold a Go binding, so it reaches ctx.store/ctx.sql/
+// ctx.memory by asking for each op over a transport, and the thing on the
+// other end of that transport is CtxHandler. It calls the same three
+// dispatchers (kvbind.go, sqlbind.go, membind.go) that a linked-in engine
+// would have called directly.
 //
 // The invariant this file exists to keep: ENFORCEMENT IS HOST-SIDE. The
 // subprocess never receives a store handle, a connection string, or a
 // capability — only the ability to ASK, one op at a time, with conductor
 // deciding each time. Every request lands in CtxHandler.Invoke, which calls
-// the exact same kvInvoke/sqlInvoke/memInvoke an in-process engine calls,
-// carrying the exact same Spec.DataGuard. So a `use: cli` step's reach into
-// kv/sql/memory is, op for op, the reach a `run: js` step has:
+// kvInvoke/sqlInvoke/memInvoke carrying this step's Spec.DataGuard. So a
+// `use: cli` step's reach into kv/sql/memory is, op for op, the reach a
+// `use: js` plugin step has:
 //
 //	kvInvoke   → DataGuard → kv.Use → kv.CheckCapability        (kvbind.go)
 //	sqlInvoke  → DataGuard → sqlstore.Use → CheckCodeAccess     (sqlbind.go)
@@ -33,9 +34,9 @@ import (
 //
 // CtxHandler is deliberately transport-free: it takes a decoded request and
 // returns a response. ctxsock.go puts a per-run authenticated unix socket in
-// front of it for the `cli` engine; the out-of-process PLUGIN engine's
-// host.kv/host.sql/host.memory methods will put the plugin JSON-RPC wire in
-// front of the same handler without re-deciding anything.
+// front of it for the `cli` engine; a PLUGIN engine's host.kv/host.sql/
+// host.memory methods put the plugin JSON-RPC wire in front of the same
+// handler (engineplugin.go InvokeHost) without re-deciding anything.
 
 // Ctx kinds — the three data-plane faces, named as they are on the wire.
 const (
@@ -88,8 +89,7 @@ type CtxResponse struct {
 
 // CtxHandler executes one ctx data-plane op on behalf of an out-of-process
 // engine. Guard is the step's Spec.DataGuard — nil for a config-authored
-// step, exactly as it is nil for an in-process engine's bindings, in which
-// case only the store-level gates apply.
+// step, in which case only the store-level gates apply.
 type CtxHandler struct {
 	Guard DataGuard
 }
@@ -141,8 +141,7 @@ func (h CtxHandler) Invoke(req CtxRequest) CtxResponse {
 		res.Refused = refused
 		return res
 	}
-	// The value has to survive the wire. A binding handed an in-process
-	// engine any Go value it liked; a socket can only carry JSON, so an
+	// The value has to survive the wire: a socket can only carry JSON, so an
 	// unencodable result is reported here rather than corrupting the stream
 	// with a half-written response.
 	if _, merr := json.Marshal(v); merr != nil {

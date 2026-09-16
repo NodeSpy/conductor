@@ -1,13 +1,20 @@
 package code
 
 import (
-	"context"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/kv"
 )
+
+// The ctx.store SURFACE, exercised through the one dispatcher every engine
+// reaches it by. These used to be four near-identical tests — one per
+// in-process engine face (js/go-embed/risor/lua) — asserting the same ops
+// through four bindings. The bindings are gone with the engines; the
+// dispatcher they all called is not, so the op contract is tested where it
+// actually lives, once. Both surviving callers land here: the `cli` engine's
+// socket and a plugin engine's host.kv both go through CtxHandler.Invoke.
 
 // tempKV registers one boltdb store named "s" for a test and returns it.
 func tempKV(t *testing.T) kv.KVBackend {
@@ -25,179 +32,123 @@ func tempKV(t *testing.T) kv.KVBackend {
 	return st
 }
 
-// TestCtxKVJS: the full ctx.kv surface from run: js — writes are visible in
-// the shared store afterwards, absent reads are null, errors throw.
-func TestCtxKVJS(t *testing.T) {
-	st := tempKV(t)
-	_, _ = st.Append("q", "jobs", []any{"a", "b", "c", "d"}, false)
+// kvCall runs one kv op through the data plane and fails the test if it did
+// not succeed — the common case, so the assertions below read as values.
+func kvCall(t *testing.T, h CtxHandler, op string, args ...any) any {
+	t.Helper()
+	res := h.Invoke(CtxRequest{Kind: CtxKindKV, Op: op, Resource: "s", Args: args})
+	if !res.OK {
+		t.Fatalf("kv.%s%v: %s", op, args, res.Error)
+	}
+	return res.Value
+}
 
-	e := &Executor{}
-	out, err := e.Exec(context.Background(), Spec{Run: "js", Code: `
-const kv = ctx.store("s");
-const missing = kv.get("ns", "nope");
-kv.set("ns", "obj", { deep: [1, "two"] });
-const nx = kv.setnx("ns", "obj", "loser");
-const merged = kv.merge("ns", "obj", { extra: true });
-const n = kv.incr("ns", "count", 5);
-kv.append("ns", "tags", ["x", "y", "x"], true);
-kv.remove("ns", "tags", "y");
-return {
-  missing: missing,
-  created: nx.created,
-  merged: merged.extra,
-  n: n,
-  has: kv.contains("ns", "tags", "x"),
-  first: kv.first("q", "jobs"),
-  last: kv.last("q", "jobs"),
-  at: kv.index("q", "jobs", -2),
-  mid: kv.slice("q", "jobs", 1, 3),
-  len: kv.len("q", "jobs"),
-  popped: kv.pop("q", "jobs", "front"),
-  keys: kv.list("ns").keys,
-};`}, nil)
-	if err != nil {
+// TestCtxKVOpSurface: the whole ctx.store method set, and the writes landing
+// in the shared store rather than being echoed back.
+func TestCtxKVOpSurface(t *testing.T) {
+	st := tempKV(t)
+	if _, err := st.Append("q", "jobs", []any{"a", "b", "c", "d"}, false); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]any{
-		"missing": nil, "created": false, "merged": true, "n": float64(5),
-		"has": true, "first": "a", "last": "d", "at": "c",
-		"len": float64(4), "popped": "a",
+	h := CtxHandler{}
+
+	// An absent read folds "not found" into a null value, so dynamic code can
+	// write `if (!v) …` without a second return value.
+	if v := kvCall(t, h, "get", "ns", "nope"); v != nil {
+		t.Errorf("absent get = %#v, want nil", v)
 	}
-	for k, w := range want {
-		if !reflect.DeepEqual(out[k], w) {
-			t.Errorf("%s = %#v, want %#v", k, out[k], w)
+
+	kvCall(t, h, "set", "ns", "obj", map[string]any{"deep": []any{float64(1), "two"}})
+	nx, _ := kvCall(t, h, "setnx", "ns", "obj", "loser").(map[string]any)
+	if nx["created"] != false {
+		t.Errorf("setnx over an existing key: %#v", nx)
+	}
+	merged, _ := kvCall(t, h, "merge", "ns", "obj", map[string]any{"extra": true}).(map[string]any)
+	if merged["extra"] != true {
+		t.Errorf("merge = %#v", merged)
+	}
+	if n := kvCall(t, h, "incr", "ns", "count", 5); n != int64(5) {
+		t.Errorf("incr = %#v", n)
+	}
+	kvCall(t, h, "append", "ns", "tags", []any{"x", "y", "x"}, true)
+	kvCall(t, h, "remove", "ns", "tags", "y")
+	if has := kvCall(t, h, "contains", "ns", "tags", "x"); has != true {
+		t.Errorf("contains = %#v", has)
+	}
+
+	// The list ops, against the seeded queue.
+	for _, c := range []struct {
+		op   string
+		args []any
+		want any
+	}{
+		{"first", []any{"q", "jobs"}, "a"},
+		{"last", []any{"q", "jobs"}, "d"},
+		{"index", []any{"q", "jobs", -2}, "c"},
+		{"len", []any{"q", "jobs"}, 4},
+		{"pop", []any{"q", "jobs", "front"}, "a"},
+	} {
+		if got := kvCall(t, h, c.op, c.args...); got != c.want {
+			t.Errorf("%s = %#v, want %#v", c.op, got, c.want)
 		}
 	}
-	if mid, ok := out["mid"].([]any); !ok || !reflect.DeepEqual(mid, []any{"b", "c"}) {
-		t.Errorf("mid = %#v", out["mid"])
+	if mid, ok := kvCall(t, h, "slice", "q", "jobs", 0, 2).([]any); !ok ||
+		!reflect.DeepEqual(mid, []any{"b", "c"}) {
+		t.Errorf("slice after pop = %#v", mid)
 	}
-	if keys, ok := out["keys"].([]any); !ok || len(keys) != 3 { // obj, count, tags
-		t.Errorf("keys = %#v", out["keys"])
+	listed, _ := kvCall(t, h, "list", "ns").(map[string]any)
+	if keys, ok := listed["keys"].([]any); !ok || len(keys) != 3 { // obj, count, tags
+		t.Errorf("list keys = %#v", listed["keys"])
 	}
-	// The writes landed in the shared store.
+
+	// The writes are really in the shared store, with their types intact.
 	v, _, _ := st.Get("ns", "obj")
-	obj := v.(map[string]any)
+	obj, _ := v.(map[string]any)
 	if obj["extra"] != true || !reflect.DeepEqual(obj["deep"], []any{float64(1), "two"}) {
-		t.Fatalf("js writes: %v", v)
+		t.Fatalf("store after the run: %#v", v)
 	}
-	tags, _, _ := st.Get("ns", "tags")
-	if !reflect.DeepEqual(tags, []any{"x"}) {
-		t.Fatalf("tags: %v", tags)
+	if tags, _, _ := st.Get("ns", "tags"); !reflect.DeepEqual(tags, []any{"x"}) {
+		t.Fatalf("tags: %#v", tags)
 	}
 	if n, _ := st.Len("q", "jobs"); n != 3 {
-		t.Fatalf("pop persisted: %d", n)
-	}
-	// A kv type error surfaces as a thrown JS error.
-	_, err = e.Exec(context.Background(), Spec{Run: "js", Code: `ctx.store("s").merge("ns", "count", {a: 1}); return 1`}, nil)
-	if err == nil || !strings.Contains(err.Error(), "not an object") {
-		t.Fatalf("js kv error: %v", err)
+		t.Fatalf("pop did not persist: %d", n)
 	}
 }
 
-// TestCtxKVGoEmbed: the `import "conductor/store"` virtual package in
-// run: go-embed — store.Use resolves a defined store to a typed handle.
-func TestCtxKVGoEmbed(t *testing.T) {
-	st := tempKV(t)
-	e := &Executor{}
-	out, err := e.Exec(context.Background(), Spec{Run: "go-embed", Code: `
-import "conductor/store"
-
-func run(ctx map[string]any) (any, error) {
-	kv, err := store.Use("s")
-	if err != nil {
-		return nil, err
-	}
-	if err := kv.Set("ns", "who", "embed"); err != nil {
-		return nil, err
-	}
-	n, err := kv.Incr("ns", "count", 2)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := kv.Append("ns", "l", []any{"a", "b"}, false); err != nil {
-		return nil, err
-	}
-	last, err := kv.Last("ns", "l")
-	if err != nil {
-		return nil, err
-	}
-	popped, err := kv.Pop("ns", "l", "back")
-	if err != nil {
-		return nil, err
-	}
-	ok, err := kv.Contains("ns", "l", "a")
-	if err != nil {
-		return nil, err
-	}
-	v, err := kv.Get("ns", "who")
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"v": v, "n": n, "last": last, "popped": popped, "ok": ok}, nil
-}`}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out["v"] != "embed" || out["n"] != int64(2) || out["last"] != "b" || out["popped"] != "b" || out["ok"] != true {
-		t.Fatalf("go-embed kv: %#v", out)
-	}
-	if v, _, _ := st.Get("ns", "who"); v != "embed" {
-		t.Fatalf("store: %v", v)
+// A type error from the store is an ERROR, not a policy refusal — the
+// distinction a client branches on.
+func TestCtxKVTypeErrorIsNotARefusal(t *testing.T) {
+	tempKV(t)
+	h := CtxHandler{}
+	kvCall(t, h, "incr", "ns", "count", 1)
+	res := h.Invoke(CtxRequest{Kind: CtxKindKV, Op: "merge", Resource: "s",
+		Args: []any{"ns", "count", map[string]any{"a": 1}}})
+	if res.OK || res.Refused || !strings.Contains(res.Error, "not an object") {
+		t.Fatalf("merge onto a number: %#v", res)
 	}
 }
 
-// TestCtxKVRisor: the top-level kv module in run: risor.
-func TestCtxKVRisor(t *testing.T) {
-	st := tempKV(t)
-	e := &Executor{}
-	out, err := e.Exec(context.Background(), Spec{Run: "risor", Code: `
-s := store("s")
-s.set("ns", "who", "risor")
-s.append("ns", "l", ["x", "y"])
-{
-  "v": s.get("ns", "who"),
-  "n": s.incr("ns", "count", 3),
-  "first": s.first("ns", "l"),
-  "len": s.len("ns", "l"),
-  "missing": s.get("ns", "nope"),
-}`}, nil)
-	if err != nil {
-		t.Fatal(err)
+// TestKVInvokeArity: the dispatcher's own argument contract — an op called
+// with too few args says so instead of indexing off the end.
+func TestKVInvokeArity(t *testing.T) {
+	tempKV(t)
+	for _, c := range []struct {
+		op   string
+		args []any
+	}{
+		{"get", []any{"ns"}},
+		{"set", []any{"ns", "k"}},
+		{"merge", []any{"ns", "k"}},
+		{"append", []any{"ns", "k"}},
+		{"index", []any{"ns", "k"}},
+	} {
+		if _, err := kvInvoke(nil, "s", c.op, c.args); err == nil ||
+			!strings.Contains(err.Error(), "want") {
+			t.Errorf("%s %v: want an arity error, got %v", c.op, c.args, err)
+		}
 	}
-	if out["v"] != "risor" || out["n"] != int64(3) || out["first"] != "x" || out["len"] != int64(2) || out["missing"] != nil {
-		t.Fatalf("risor kv: %#v", out)
-	}
-	if v, _, _ := st.Get("ns", "who"); v != "risor" {
-		t.Fatalf("store: %v", v)
-	}
-}
-
-// TestCtxKVLua: the ctx.kv table in run: lua, including an error raise.
-func TestCtxKVLua(t *testing.T) {
-	st := tempKV(t)
-	e := &Executor{}
-	out, err := e.Exec(context.Background(), Spec{Run: "lua", Code: `
-local kv = ctx.store("s")
-kv.set("ns", "who", "lua")
-kv.append("ns", "l", {"a", "b", "c"})
-return {
-  v = kv.get("ns", "who"),
-  n = kv.incr("ns", "count", 4),
-  popped = kv.pop("ns", "l", "front"),
-  len = kv.len("ns", "l"),
-  missing = kv.get("ns", "nope") == nil,
-}`}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out["v"] != "lua" || out["n"] != int64(4) || out["popped"] != "a" || out["len"] != int64(2) || out["missing"] != true {
-		t.Fatalf("lua kv: %#v", out)
-	}
-	if v, _, _ := st.Get("ns", "who"); v != "lua" {
-		t.Fatalf("store: %v", v)
-	}
-	_, err = e.Exec(context.Background(), Spec{Run: "lua", Code: `ctx.store("s").incr("ns", "who")`}, nil)
-	if err == nil || !strings.Contains(err.Error(), "not a number") {
-		t.Fatalf("lua kv error: %v", err)
+	if _, err := kvInvoke(nil, "s", "nosuch", nil); err == nil ||
+		!strings.Contains(err.Error(), `no operation "nosuch"`) {
+		t.Errorf("unknown op: %v", err)
 	}
 }

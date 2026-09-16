@@ -144,7 +144,8 @@ changing this surface.
 
 ## Code and templates
 
-- **Code steps** (js / go-embed / risor / lua) get `ctx.memory` mirroring the
+- **Code steps** (the js / go-embed / risor / lua engine plugins, and a local
+  `use: cli` step) get `ctx.memory` mirroring the
   verbs: `ctx.memory.remember(text, tags?, scope?)`, `.recall({tags, scope,
   substring, limit})`, `.forget(id)`, `.list()` (risor: a top-level `memory`
   module; go-embed: `import "conductor/memory"`). Code writes carry no run

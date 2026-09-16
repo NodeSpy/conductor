@@ -22,7 +22,8 @@ triggers:
   - on: hooks.cloudwatch
     repo: acme/infra                 # optional: a real repo enables checkout
     steps:
-      - { id: shape, run: js, code: "return { sev: ctx.body.detail.severity }" }
+      # `js` is an engine PLUGIN — `conductor init` fetches it. See [[Code-Steps]].
+      - { id: shape, use: js, code: "return { sev: ctx.body.detail.severity }" }
 ```
 
 Context: `body` (the parsed JSON payload; templates dig with

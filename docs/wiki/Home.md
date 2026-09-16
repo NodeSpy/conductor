@@ -56,7 +56,7 @@ Another orchestrator (n8n and the like) can also call conductor's authenticated
   agent-authored plans.
 - **[[Verbs]]** — the shared action unit, option merging, `as:` identity,
   and request-response `ask` ([[Hand-offs]]).
-- **[[Code-Steps]]** — sandboxed in-process engines (`js`, `go-embed`,
+- **[[Code-Steps]]** — the builtin `cli` engine, sandboxed engine plugins (`js`, `go-embed`,
   `risor`, `lua`) and host interpreters; **[[Hosts]]** for SSH remote
   execution.
 - **[[Stores]] & [[Memory]]** — named `stores:` (KV + SQL) behind the always-on

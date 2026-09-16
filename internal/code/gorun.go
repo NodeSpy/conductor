@@ -13,22 +13,22 @@ import (
 
 // execGoToolchain runs `run: go` by writing Code out as a real main.go and
 // invoking the host's own `go run` on it — the "I need the full language and
-// I'm fine requiring the Go toolchain be installed" engine, as opposed to
-// `run: go-embed` (yaegi, sandboxed, install-free, subset-of-Go) or `run:
-// go-embed`'s remote unavailability. It only ever runs locally here; a
+// I'm fine requiring the Go toolchain be installed" engine. It is a HOST
+// INTERPRETER in everything but name (the toolchain is a program on the box,
+// like python3 or node), which is why it only ever runs locally here; a
 // remote `run: go` step goes through execRemote/hostinterp.go instead,
 // which treats "go" as just another interpreter name on the target host.
 //
 // The program is a complete, ordinary Go program: it must read the step's
 // ctx as JSON from stdin and print its result as JSON on stdout (there is no
-// injected `ctx` variable the way js/go-embed provide one — `go run` runs an
-// arbitrary compiled binary, which has no hook into conductor's process to
-// inject anything through besides stdin/env/args). Non-JSON or blank stdout
-// still produces outputs via the shared ParseOutputs contract; a non-zero
-// exit is an error that includes the program's stderr.
+// injected `ctx` variable — `go run` runs an arbitrary compiled binary,
+// which has no hook into conductor's process to inject anything through
+// besides stdin/env/args). Non-JSON or blank stdout still produces outputs
+// via the shared ParseOutputs contract; a non-zero exit is an error that
+// includes the program's stderr.
 func (e *Executor) execGoToolchain(ctx context.Context, spec Spec, data map[string]any) (map[string]any, error) {
 	if _, err := e.lookPath()("go"); err != nil {
-		return nil, fmt.Errorf("code: go not found on PATH — run: go needs the Go toolchain; use run: go-embed for the install-free interpreter")
+		return nil, fmt.Errorf("code: go not found on PATH — run: go needs the Go toolchain installed on this box")
 	}
 
 	tmpDir, err := os.MkdirTemp("", "conductor-code-go-*")
