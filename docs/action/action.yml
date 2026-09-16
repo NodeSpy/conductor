@@ -1,0 +1,79 @@
+# conductor-action — run ONE conductor trigger against the event that fired
+# this job (docs/design/conductor-in-github-actions.md, "Packaging").
+#
+# This is a SCAFFOLD, demonstrating how the one-shot mode is wrapped. The
+# deliverable is `conductor once`; this file is the thinnest honest thing that
+# calls it. A published action would live in its own repo (so `uses:` can
+# reference a tag) and ship a prebuilt image rather than building one per job.
+#
+#   - uses: actions/checkout@v4
+#   - uses: ./docs/action                # or NodeSpy/conductor-action@v1
+#     with:
+#       config: .conductor/ci.yaml
+#       trigger: review
+#     env:
+#       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+#       GITHUB_TOKEN: ${{ github.token }}
+#
+# The job's step passes or fails on the run's outcome: `conductor once` exits 0
+# on success or a non-match, 3 when a --fail-on outcome fired, 1 when conductor
+# could not run at all.
+name: conductor
+description: Run a named conductor trigger against this job's event, in-process, to completion.
+author: NodeSpy
+
+inputs:
+  config:
+    description: Path to the conductor config, relative to the workspace.
+    required: true
+    default: .conductor/config.yaml
+  trigger:
+    description: The `name:` of the trigger to run.
+    required: true
+  event:
+    description: >-
+      Path to the event payload. Defaults to $GITHUB_EVENT_PATH — the payload
+      Actions already wrote for this job — so you normally leave this alone.
+    required: false
+    default: ""
+  event-name:
+    description: >-
+      The webhook event name (pull_request, issue_comment, …). Defaults to
+      $GITHUB_EVENT_NAME.
+    required: false
+    default: ""
+  fail-on:
+    description: >-
+      Comma-separated outcomes that fail the step: step-error, gate-reject, or
+      none. Default is every category.
+    required: false
+    default: step-error,gate-reject
+  require-match:
+    description: >-
+      Fail the step when the event does not match the trigger. Default false —
+      a job that fired but whose trigger predicate did not hold is a pass.
+    required: false
+    default: "false"
+  engines:
+    description: >-
+      Space-separated engine plugin references to bake into the image at build
+      time (e.g. "js lua"), so the job needs no network to run its code steps.
+      Empty installs nothing; `conductor init` still fetches what the config
+      references at job time.
+    required: false
+    default: ""
+
+runs:
+  using: docker
+  image: Dockerfile
+  args:
+    - ${{ inputs.config }}
+    - ${{ inputs.trigger }}
+    - ${{ inputs.event }}
+    - ${{ inputs.event-name }}
+    - ${{ inputs.fail-on }}
+    - ${{ inputs.require-match }}
+
+branding:
+  icon: git-pull-request
+  color: purple

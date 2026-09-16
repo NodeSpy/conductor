@@ -350,3 +350,6 @@ run itself then leaves the usual §20 history record, readable with
 - [[Runs]] — the execution history the invoke surface hands back.
 - [[Policy]] — quiet-hours / budget / concurrency, which apply to every invoke.
 - [[Configuration]] — the full `callable:` schema.
+- [[One-Shot]] — the *other* non-daemon entry point. Callable reaches a running
+  daemon over HTTP; `conductor once` is the runtime itself, for one event, in
+  an ephemeral runner. Same run→outcome plumbing, no HTTP surface, no daemon.
