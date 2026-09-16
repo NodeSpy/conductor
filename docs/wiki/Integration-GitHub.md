@@ -23,6 +23,37 @@ connectors:
     policy: { ignore: { users: ["dependabot[bot]"] }, pause_label: "conductor:hold" }
 ```
 
+## Setting up the GitHub App
+
+conductor reads GitHub as a **GitHub App** and receives events through the App's
+webhook. Here's the short version; the full walkthrough — screenshots-level detail
+plus running **without** an App — is on **[[GitHub-App-Setup]]**.
+
+1. **Register the App** at
+   [github.com/settings/apps/new](https://github.com/settings/apps/new) (personal)
+   or `https://github.com/organizations/<your-org>/settings/apps/new` (org). The App
+   **name** becomes the bot login you list under `me:`.
+2. **Permissions** — set these *before* events (GitHub only lists events for
+   permissions you've granted): Contents **Read & write**, Pull requests
+   **Read & write**, Issues **Read & write**, Checks **Read-only**, Metadata
+   **Read-only**, and Organization → Projects **Read-only** (org installs only —
+   this is what surfaces `projects_v2_item`).
+3. **Subscribe to events**: `pull_request`, `pull_request_review`,
+   `pull_request_review_comment`, `pull_request_review_thread`, `issue_comment`,
+   `check_run`, `check_suite`, `workflow_run`, `push`, `issues`, `projects_v2_item`.
+4. **Webhook** — point the App's Webhook URL at a [smee.io](https://smee.io) channel
+   (no inbound port needed) or your own listener, and set a **Webhook secret**
+   (`openssl rand -hex 32`). These become `webhook.smee_url` (or `webhook.listen`)
+   and `webhook.secret` in the config above.
+5. **Private key** — generate one, download the `.pem`, point `app.private_key_path`
+   at it, and put the numeric App ID in `app.app_id`.
+6. **Install** the App on the repositories (or the whole org) conductor should act on.
+
+> **No App?** conductor runs fully App-less on just your `gh`/PAT credentials plus a
+> webhook — see [Running without an App](GitHub-App-Setup#running-without-an-app) and
+> the App-less note below. Webhook verification (`webhook.secret` /
+> `webhook.verify_signature`) lives under `webhook:`, never `app:`.
+
 ## Credentials: app → token → gh
 
 Reads resolve a GitHub App installation token when `app:` is configured, else
