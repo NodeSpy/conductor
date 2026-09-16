@@ -22,7 +22,21 @@ func githubTransform(name string, ref config.IntegrationRef, notes *[]string) (m
 	where := "github[" + name + "]"
 
 	conn := map[string]any{"type": "github"}
-	if cfg.App.AppID != 0 || cfg.App.PrivateKeyPath != "" || cfg.App.WebhookSecret != "" || cfg.App.VerifySig != nil {
+	// app: carries App AUTH only. The webhook secret and the signature switch
+	// moved to webhook: — they describe the receiver, not the credential, and
+	// an App-less legacy config parked them under `app:` with nothing else in
+	// it. An explicit value already under webhook: wins over the legacy one.
+	secret, verify := cfg.Webhook.Secret, cfg.Webhook.VerifySig
+	if secret == "" {
+		secret = cfg.App.LegacyWebhookSecret
+	}
+	if verify == nil {
+		verify = cfg.App.LegacyVerifySig
+	}
+	if cfg.App.LegacyWebhookKeys() {
+		*notes = append(*notes, fmt.Sprintf("%s: app.webhook_secret/app.verify_signature → webhook.secret/webhook.verify_signature (webhook verification is not App auth)", where))
+	}
+	if cfg.App.AppID != 0 || cfg.App.PrivateKeyPath != "" {
 		app := map[string]any{}
 		if cfg.App.AppID != 0 {
 			app["app_id"] = cfg.App.AppID
@@ -30,18 +44,12 @@ func githubTransform(name string, ref config.IntegrationRef, notes *[]string) (m
 		if cfg.App.PrivateKeyPath != "" {
 			app["private_key_path"] = cfg.App.PrivateKeyPath
 		}
-		if cfg.App.WebhookSecret != "" {
-			app["webhook_secret"] = cfg.App.WebhookSecret
-		}
-		if cfg.App.VerifySig != nil {
-			app["verify_signature"] = *cfg.App.VerifySig
-		}
 		conn["app"] = app
 	}
 	if cfg.Token != "" {
 		conn["token"] = cfg.Token
 	}
-	if cfg.Webhook.SmeeURL != "" || cfg.Webhook.Listen != "" || cfg.Webhook.Path != "" {
+	if cfg.Webhook.SmeeURL != "" || cfg.Webhook.Listen != "" || cfg.Webhook.Path != "" || secret != "" || verify != nil {
 		wh := map[string]any{}
 		if cfg.Webhook.SmeeURL != "" {
 			wh["smee_url"] = cfg.Webhook.SmeeURL
@@ -51,6 +59,12 @@ func githubTransform(name string, ref config.IntegrationRef, notes *[]string) (m
 		}
 		if cfg.Webhook.Path != "" {
 			wh["path"] = cfg.Webhook.Path
+		}
+		if secret != "" {
+			wh["secret"] = secret
+		}
+		if verify != nil {
+			wh["verify_signature"] = *verify
 		}
 		conn["webhook"] = wh
 	}

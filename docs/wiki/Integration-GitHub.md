@@ -7,10 +7,11 @@ connectors:
     app:                                   # GitHub App credentials (optional — see App-less below)
       app_id: 123456
       private_key_path: ~/.config/conductor/github-app.pem
-      webhook_secret: ${GH_WEBHOOK_SECRET}
-      verify_signature: true               # default true
     # token: ${GH_PAT}                     # App-less read credential
-    webhook: { smee_url: ${GH_SMEE_URL} }  # and/or listen: + path:
+    webhook:                               # transport AND delivery auth
+      smee_url: ${GH_SMEE_URL}             # and/or listen: + path:
+      secret: ${GH_WEBHOOK_SECRET}
+      verify_signature: true               # default true
     sweep: { enabled: true, repos: ["your-org/*"] }
     me: { logins: [your-login] }           # defines "you"
     repos: ["your-org/*"]                  # default trigger scope
@@ -26,7 +27,7 @@ connectors:
 
 Reads resolve a GitHub App installation token when `app:` is configured, else
 the `token:` PAT, else the `gh` CLI's stored login. **App-less operation
-works**: events arrive via a plain webhook (+ `webhook_secret`) or the sweep
+works**: events arrive via a plain webhook (+ `webhook.secret`) or the sweep
 (explicit repos — glob expansion is an App endpoint), and reads use the PAT /
 gh token. Writes are always you (`identity.write_token`: `gh_auth` default or
 a literal) unless a verb sets `as: bot` — which requires App credentials.

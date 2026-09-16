@@ -70,8 +70,8 @@ func TestSweepReviewRequested(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 1024)
 
 	cfg := Config{
-		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
-		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
 		Sweep:   SweepConfig{Enabled: true, Repos: []string{"acme/widget"}},
 		Rules: []Rule{{
 			Match:    Match{Repos: []string{"acme/widget"}},
@@ -119,8 +119,8 @@ func TestSweepUnresolvedComments(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 1024)
 
 	cfg := Config{
-		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
-		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
 		Sweep:   SweepConfig{Enabled: true, Repos: []string{"acme/widget"}},
 		Rules: []Rule{{
 			Match:   Match{Repos: []string{"acme/widget"}},
@@ -184,8 +184,8 @@ func TestSweepMissedCommentsKindsAndWindow(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 1024)
 
 	cfg := Config{
-		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
-		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
 		Sweep:   SweepConfig{Enabled: true, Repos: []string{"acme/widget"}},
 		Rules: []Rule{{
 			Match:   Match{Repos: []string{"acme/widget"}},
@@ -226,8 +226,8 @@ func TestSweepMissedCommentsKindsAndWindow(t *testing.T) {
 
 func TestSweepOrgGlob(t *testing.T) {
 	cfg := Config{
-		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
-		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
 		Sweep:   SweepConfig{Enabled: true, Repos: []string{"acme/*"}},
 		Rules: []Rule{{
 			Match:    Match{Repos: []string{"acme/*"}},

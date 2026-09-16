@@ -80,12 +80,12 @@ connectors:
     app:
       app_id: 123456                                    # the App's numeric id
       private_key_path: ~/.config/conductor/github-app.pem  # the generated .pem
-      webhook_secret: ${GH_WEBHOOK_SECRET}               # from conductor.env
-      verify_signature: false                            # see Transports below
     webhook:
       smee_url: ${GH_SMEE_URL}       # https://smee.io/<channel> — and/or a direct listener:
       # listen: 127.0.0.1:8787
       # path: /webhook
+      secret: ${GH_WEBHOOK_SECRET}   # from conductor.env
+      verify_signature: false        # see Transports below
     me: { logins: [your-login] }
     repos: ["your-org/*"]
 ```
@@ -97,11 +97,17 @@ connectors:
 | --- | --- |
 | `app.app_id` | The App's numeric id. |
 | `app.private_key_path` | Path to the App's generated `.pem` private key, used to mint installation tokens. |
-| `app.webhook_secret` | The secret configured on the App's webhook — verifies delivery authenticity when `verify_signature: true`. |
-| `app.verify_signature` | Whether to check the `X-Hub-Signature-256` HMAC on each delivery. `false` with smee (see below), `true` behind a direct listener. |
 | `webhook.smee_url` | A smee.io channel URL — conductor connects to it itself; no inbound port needed. |
 | `webhook.listen` | A direct HTTP listen address (e.g. `127.0.0.1:8787`) for a plain webhook receiver. |
 | `webhook.path` | HTTP path for the direct listener. Default `/webhook`. |
+| `webhook.secret` | The secret configured on the App's (or the repo's) webhook — verifies delivery authenticity when `verify_signature: true`. |
+| `webhook.verify_signature` | Whether to check the `X-Hub-Signature-256` HMAC on each delivery. Default `true`. `false` with smee (see below), `true` behind a direct listener. |
+
+Verification lives under `webhook:`, not `app:`: it describes the receiver, not
+the credential — an App-less instance verifies its deliveries just the same.
+Configs that still carry `app.webhook_secret` / `app.verify_signature` are
+refused at load with a message naming the new keys; `conductor config migrate`
+rewrites them.
 
 An **installation id** is implicit — conductor resolves it from the App's
 installations at startup rather than taking it as a separate config field; the
@@ -122,7 +128,7 @@ conductor subscribes to your channel itself (auto-reconnecting) and receives the
 forwarded deliveries — there is nothing else to start.
 
 Caveat: smee re-serializes the JSON body in transit, so HMAC verification usually
-won't match the original payload bytes. Keep `verify_signature: false` when using
+won't match the original payload bytes. Keep `webhook.verify_signature: false` when using
 smee — the unguessable channel URL itself is the shared secret.
 
 ### Direct HTTP
@@ -132,8 +138,9 @@ smee — the unguessable channel URL itself is the shared secret.
 App's Webhook URL at it — typically via your own tunnel (e.g. pangolin) if the
 box has no public address of its own.
 
-Because the raw body reaches conductor intact here, set `app.verify_signature:
-true` so deliveries are checked against `webhook_secret`.
+Because the raw body reaches conductor intact here, leave
+`webhook.verify_signature: true` (the default) so deliveries are checked
+against `webhook.secret`.
 
 ## Behavior
 
@@ -153,7 +160,7 @@ true` so deliveries are checked against `webhook_secret`.
 
 Splitting the transport from the App registration means the same App
 credentials work whether the box has a public address or not — swap
-`webhook.smee_url` for `webhook.listen` (and flip `verify_signature`) without
+`webhook.smee_url` for `webhook.listen` (and flip `webhook.verify_signature`) without
 touching permissions, events, or the private key. Multiple `type: github`
 entries can each register a separate App (e.g. one per org), each with its own
 transport choice.
@@ -168,7 +175,7 @@ An App is not required. The github connector's credentials resolve
 
 - Events arrive via a **plain repository/organization webhook** pointed at
   `webhook.listen` (set the same secret in the webhook and in
-  `app.webhook_secret`), or by **polling** — enable the sweep with explicit
+  `webhook.secret` — no `app:` block anywhere), or by **polling** — enable the sweep with explicit
   repos (`owner/*` glob expansion is an App-only endpoint).
 - Reads use the PAT / gh token; writes are you, as always.
 - `as: bot` verb calls need App credentials and fail with a clear error

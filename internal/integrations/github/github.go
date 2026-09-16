@@ -8,6 +8,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -83,24 +84,57 @@ type ProjectRewrite struct {
 // active reports whether the rewrite changes anything.
 func (r ProjectRewrite) active() bool { return r.Org != "" }
 
-// AppConfig holds the GitHub App credentials.
+// AppConfig holds the GitHub App credentials — and ONLY those. Webhook
+// verification (the secret and the signature switch) is a property of the
+// receiver, not of App auth: an App-less instance verifies deliveries too, and
+// writing `app: { webhook_secret: … }` with no App at all was the tell. Both
+// keys live on WebhookConfig now.
 type AppConfig struct {
 	AppID          int64  `yaml:"app_id"`
 	PrivateKeyPath string `yaml:"private_key_path"`
-	WebhookSecret  string `yaml:"webhook_secret"`
-	VerifySig      *bool  `yaml:"verify_signature"`
+
+	// LegacyWebhookSecret and LegacyVerifySig are the retired app-block webhook
+	// keys. They are NOT part of the schema — nothing reads them for behavior.
+	// They are retained so a config that still carries them fails naming the
+	// new location (see ErrAppWebhookMoved) instead of dying on a generic
+	// unknown-field error or, worse, having the key silently dropped by a
+	// non-strict decode and verification quietly fall back to its default. The
+	// migrator reads them to rewrite the block.
+	LegacyWebhookSecret string `yaml:"webhook_secret"`
+	LegacyVerifySig     *bool  `yaml:"verify_signature"`
 }
 
-// Verify reports whether HMAC signature verification is on (default true).
-func (a AppConfig) Verify() bool { return a.VerifySig == nil || *a.VerifySig }
+// LegacyWebhookKeys reports whether the retired app-block webhook keys are set
+// — the detection behind ErrAppWebhookMoved.
+func (a AppConfig) LegacyWebhookKeys() bool {
+	return a.LegacyWebhookSecret != "" || a.LegacyVerifySig != nil
+}
+
+// ErrAppWebhookMoved is the migration-specific rejection for a config still
+// carrying the webhook keys under `app:`. Every layer that decodes an AppConfig
+// wraps it with its own instance prefix, so the message names both the old and
+// the new home rather than reading like a typo.
+var ErrAppWebhookMoved = errors.New("app.webhook_secret moved to webhook.secret " +
+	"(and app.verify_signature → webhook.verify_signature) — run 'conductor config migrate'")
 
 // WebhookConfig configures how webhooks arrive: via a smee.io channel, a direct
-// HTTP listener, or both.
+// HTTP listener, or both — and how a delivery is authenticated once it does.
 type WebhookConfig struct {
 	SmeeURL string `yaml:"smee_url"` // subscribe to a smee.io SSE channel
 	Listen  string `yaml:"listen"`   // bind a direct HTTP receiver, e.g. "127.0.0.1:8787"
 	Path    string `yaml:"path"`     // HTTP path (default "/webhook")
+	// Secret is the webhook secret GitHub signs each delivery with (the same
+	// value configured on the App's or the repo's webhook). Required whenever
+	// verification is on.
+	Secret string `yaml:"secret"`
+	// VerifySig switches HMAC verification of X-Hub-Signature-256. Nil means
+	// on: a webhook receiver that does not check its signatures accepts
+	// anything that reaches the port, so the default has to be the safe one.
+	VerifySig *bool `yaml:"verify_signature"`
 }
+
+// Verify reports whether HMAC signature verification is on (default true).
+func (w WebhookConfig) Verify() bool { return w.VerifySig == nil || *w.VerifySig }
 
 // SweepConfig configures the optional catch-up sweep.
 type SweepConfig struct {
@@ -167,6 +201,9 @@ func newIntegration(name string, decode func(any) error) (core.Integration, erro
 	var cfg Config
 	if err := decode(&cfg); err != nil {
 		return nil, fmt.Errorf("github[%s]: decode config: %w", name, err)
+	}
+	if cfg.App.LegacyWebhookKeys() {
+		return nil, fmt.Errorf("github[%s]: %w", name, ErrAppWebhookMoved)
 	}
 	if cfg.Identity.ReadToken == "" {
 		cfg.Identity.ReadToken = "app"
@@ -311,8 +348,8 @@ func (g *Integration) Validate() error {
 		}
 	}
 	hasWebhook := g.cfg.Webhook.SmeeURL != "" || g.cfg.Webhook.Listen != ""
-	if hasWebhook && g.cfg.App.Verify() && g.cfg.App.WebhookSecret == "" {
-		return fmt.Errorf("github[%s]: webhook_secret required when verify_signature is on", g.name)
+	if hasWebhook && g.cfg.Webhook.Verify() && g.cfg.Webhook.Secret == "" {
+		return fmt.Errorf("github[%s]: webhook.secret required when webhook.verify_signature is on", g.name)
 	}
 	if !hasWebhook && !(appless && g.cfg.Sweep.Enabled) {
 		return fmt.Errorf("github[%s]: set webhook.smee_url and/or webhook.listen (or, App-less, enable the sweep for polling)", g.name)

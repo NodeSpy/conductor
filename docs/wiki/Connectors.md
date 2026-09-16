@@ -14,8 +14,8 @@ connectors:
     use: github                    # WHAT implements it — see [[Plugins]] for the
                                    # full resolution path (builtin → official
                                    # plugin repo → an explicit repo → a local binary)
-    app: { app_id: 123456, private_key_path: ~/.config/conductor/github-app.pem, webhook_secret: ${GH_WEBHOOK_SECRET} }
-    webhook: { smee_url: ${GH_SMEE_URL} }
+    app: { app_id: 123456, private_key_path: ~/.config/conductor/github-app.pem }
+    webhook: { smee_url: ${GH_SMEE_URL}, secret: ${GH_WEBHOOK_SECRET} }
     me: { logins: [your-login] }
     repos: ["your-org/*"]
     options: { as: me }            # default verb options — every call merges over these

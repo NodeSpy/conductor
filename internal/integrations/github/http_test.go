@@ -13,8 +13,8 @@ import (
 func TestWebhookHandlerDirect(t *testing.T) {
 	g := newTestIntegration(t, richConfig())
 	on := true
-	g.cfg.App.VerifySig = &on
-	g.cfg.App.WebhookSecret = "s3cr3t"
+	g.cfg.Webhook.VerifySig = &on
+	g.cfg.Webhook.Secret = "s3cr3t"
 
 	var got []core.Trigger
 	emit := func(_ context.Context, tr core.Trigger) { got = append(got, tr) }

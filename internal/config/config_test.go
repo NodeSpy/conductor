@@ -14,8 +14,8 @@ const sample = `
 integrations:
   - type: github
     name: acme
-    app: { app_id: 123, private_key_path: ~/key.pem, webhook_secret: ${TEST_WH_SECRET} }
-    webhook: { smee_url: https://smee.io/abc }
+    app: { app_id: 123, private_key_path: ~/key.pem }
+    webhook: { smee_url: https://smee.io/abc, secret: ${TEST_WH_SECRET} }
 control: { pause_label: "conductor:off" }
 notify: { push: true, on: [dispatch, escalate] }
 x-steps:
@@ -48,15 +48,15 @@ func TestLoadAndExpand(t *testing.T) {
 
 	// Env expansion reached the raw node.
 	var gh struct {
-		App struct {
-			WebhookSecret string `yaml:"webhook_secret"`
-		} `yaml:"app"`
+		Webhook struct {
+			Secret string `yaml:"secret"`
+		} `yaml:"webhook"`
 	}
 	if err := cfg.Integrations[0].Decode(&gh); err != nil {
 		t.Fatal(err)
 	}
-	if gh.App.WebhookSecret != "shhh" {
-		t.Fatalf("env not expanded: %q", gh.App.WebhookSecret)
+	if gh.Webhook.Secret != "shhh" {
+		t.Fatalf("env not expanded: %q", gh.Webhook.Secret)
 	}
 
 	if cfg.Store.StateTTL.D() != 720*time.Hour {
@@ -173,8 +173,8 @@ func TestImportsUndefinedEnvVarFails(t *testing.T) {
 integrations:
   - type: github
     name: gh
-    app: { app_id: 1, private_key_path: ~/k.pem, webhook_secret: ${TEST_IMPORTED_SECRET} }
-    webhook: { smee_url: https://smee.io/x }
+    app: { app_id: 1, private_key_path: ~/k.pem }
+    webhook: { smee_url: https://smee.io/x, secret: ${TEST_IMPORTED_SECRET} }
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -208,8 +208,8 @@ func TestImportsMergeAndConcat(t *testing.T) {
 integrations:
   - type: github
     name: gh
-    app: { app_id: 1, private_key_path: ~/k.pem, webhook_secret: ${TEST_WH_SECRET} }
-    webhook: { smee_url: https://smee.io/x }
+    app: { app_id: 1, private_key_path: ~/k.pem }
+    webhook: { smee_url: https://smee.io/x, secret: ${TEST_WH_SECRET} }
 `)
 	write("conf.d/rss.yaml", `
 integrations:
@@ -259,9 +259,9 @@ paseo_bin: /custom/paseo    # importer scalar must win over any imported default
 	}
 	// Env expansion reached an imported integration's raw node.
 	var gh struct {
-		App struct {
-			WebhookSecret string `yaml:"webhook_secret"`
-		} `yaml:"app"`
+		Webhook struct {
+			Secret string `yaml:"secret"`
+		} `yaml:"webhook"`
 	}
 	for _, ig := range cfg.Integrations {
 		if ig.Name == "gh" {
@@ -270,8 +270,8 @@ paseo_bin: /custom/paseo    # importer scalar must win over any imported default
 			}
 		}
 	}
-	if gh.App.WebhookSecret != "shhh" {
-		t.Fatalf("env not expanded in imported file: %q", gh.App.WebhookSecret)
+	if gh.Webhook.Secret != "shhh" {
+		t.Fatalf("env not expanded in imported file: %q", gh.Webhook.Secret)
 	}
 }
 

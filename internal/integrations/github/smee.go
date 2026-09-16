@@ -43,9 +43,9 @@ func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 	if err := g.ensureClients(); err != nil {
 		return err
 	}
-	if g.cfg.App.Verify() && g.cfg.Webhook.SmeeURL != "" {
+	if g.cfg.Webhook.Verify() && g.cfg.Webhook.SmeeURL != "" {
 		log.Printf("github[%s]: signature verification ON — note the smee re-serialization caveat; "+
-			"set verify_signature:false if valid deliveries are being dropped", g.name)
+			"set webhook.verify_signature:false if valid deliveries are being dropped", g.name)
 	}
 	// g.renew (created in the constructor) nudges the sweep to run now and reset its
 	// adaptive cadence — on a smee reconnect (dropped-webhook window) and on a manual
@@ -133,8 +133,8 @@ func (g *Integration) deliver(ctx context.Context, emit core.EmitFunc, seen *del
 	if delivery != "" && !seen.add(delivery) {
 		return // duplicate (smee reconnect redelivery, or a retried POST)
 	}
-	if g.cfg.App.Verify() {
-		if !verifySignature(g.cfg.App.WebhookSecret, body, sig) {
+	if g.cfg.Webhook.Verify() {
+		if !verifySignature(g.cfg.Webhook.Secret, body, sig) {
 			log.Printf("github[%s]: signature mismatch for delivery %s (dropped)", g.name, delivery)
 			return
 		}

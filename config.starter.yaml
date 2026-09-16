@@ -22,10 +22,10 @@ connectors:
     app:
       app_id: 0 # <- your GitHub App id
       private_key_path: ~/.config/conductor/github-app.pem
-      webhook_secret: ${GH_WEBHOOK_SECRET}
-      verify_signature: false # keep false with smee; true with a direct `listen` receiver
     webhook:
       smee_url: ${GH_SMEE_URL} # https://smee.io/<channel>   (or use `listen:` for direct HTTP)
+      secret: ${GH_WEBHOOK_SECRET} # a webhook setting, not App auth — App-less configs verify too
+      verify_signature: false # keep false with smee; true with a direct `listen` receiver
     me: { logins: [] } # <- your GitHub login(s), e.g. [octocat] — defines "you"
     repos: ["OWNER/*"] # <- your org/user, e.g. ["octocat/*"] — the default trigger scope
 

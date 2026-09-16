@@ -28,8 +28,7 @@ integrations:
   - type: github
     name: gh
     token: ${GH_PAT}
-    webhook: { listen: ":8787" }
-    app: { webhook_secret: ${GH_WEBHOOK_SECRET} }
+    webhook: { listen: ":8787", secret: ${GH_WEBHOOK_SECRET} }
     identity: { write_token: gh_auth }
     retry: { max: 2, backoff: 5s }
     defaults:

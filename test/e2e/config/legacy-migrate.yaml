@@ -6,6 +6,11 @@ integrations:
   - type: github
     name: gh
     enabled: true
+    # DELIBERATELY on the retired app-block webhook keys: this fixture exists
+    # to be auto-migrated in place at boot, so it also proves the
+    # app.webhook_secret/verify_signature → webhook.secret/verify_signature
+    # rewrite end to end. The runtime refuses these keys, so a boot that does
+    # not migrate them dead-ends — which is exactly what group L1 asserts.
     app:
       app_id: 123456
       private_key_path: /etc/conductor/github-app.pem

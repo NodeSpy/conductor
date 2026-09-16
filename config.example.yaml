@@ -76,12 +76,17 @@ connectors:
     app:
       app_id: 123456
       private_key_path: ~/.config/conductor/github-app.pem
-      webhook_secret: ${GH_WEBHOOK_SECRET}
     # token: ${GH_PAT}                  # the App-less alternative
     webhook:
       smee_url: ${GH_SMEE_URL} # and/or a direct listener:
       # listen: "127.0.0.1:8787"
       # path: /webhook
+      # The secret and the signature switch are WEBHOOK settings, not App auth
+      # — an App-less instance verifies deliveries just the same.
+      secret: ${GH_WEBHOOK_SECRET}
+      # verify_signature: false         # default true; smee re-serializes the
+      #                                 # body so the HMAC can miss — flip it
+      #                                 # off there, keep it on behind `listen`
     sweep: { enabled: true, repos: ["your-org/*"] }
     me: { logins: [your-login] } # defines "you" (your PRs, your reviews)
     repos: ["your-org/*"] # default repo scope for triggers with no repos filter

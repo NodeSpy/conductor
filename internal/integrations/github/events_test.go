@@ -33,8 +33,8 @@ func newTestIntegration(t *testing.T, cfg Config) *Integration {
 
 func baseConfig() Config {
 	return Config{
-		App:     AppConfig{AppID: 1, PrivateKeyPath: "x", WebhookSecret: "s"},
-		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x"},
+		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
+		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
 		Rules: []Rule{{
 			Match:    Match{Repos: []string{"acme/*"}},
 			Reviewer: config.Actors{Logins: []string{"me"}},
