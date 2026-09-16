@@ -42,7 +42,7 @@ triggers:
     steps:
       - { id: art, uses: blob.put, options: { path: "{{.body.artifact_path}}", media_type: "application/gzip" } }
       - { id: fetch, uses: blob.get, options: { blob: "{{.art.blob}}", path: "/srv/agents/wt/input.tar.gz" } }
-      - { id: fix, type: agent, agent: fixer,
+      - { id: fix, type: agent, name: fixer,
           prompt: "The build artifact is at input.tar.gz in your worktree ({{.art.size}} bytes). …" }
 ```
 

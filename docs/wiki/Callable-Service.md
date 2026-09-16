@@ -76,7 +76,7 @@ triggers:
     steps:
       - id: summarize
         type: agent
-        agent: fixer
+        name: fixer
         prompt: "Summarize {{.repo}}#{{.pr}} for the release notes."
 ```
 

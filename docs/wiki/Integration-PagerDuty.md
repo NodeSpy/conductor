@@ -19,7 +19,7 @@ triggers:
   - on: oncall.incident
     filter: { event_types: [incident.triggered], urgencies: [high] }
     steps:
-      - { id: triage, type: agent, agent: fixer, checkout: none,
+      - { id: triage, type: agent, name: fixer, checkout: none,
           prompt: "Research incident {{.title}} ({{.url}}) and summarize likely causes." }
       - { id: page, uses: slack-ops.post, options: { channel: "#outage", text: "{{.triage.text}}" } }
 ```

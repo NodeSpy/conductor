@@ -228,7 +228,7 @@ triggers:
   - name: review-base
     abstract: true
     steps:
-      - { id: r, type: agent, agent: reviewer, prompt: "Review {{.repo}}#{{.pr}}." }
+      - { id: r, type: agent, name: reviewer, prompt: "Review {{.repo}}#{{.pr}}." }
   - { on: gh.review_requested, extends: review-base, filter: { repo: [org/api] } }
   - { on: gh.review_requested, extends: review-base, filter: { repo: [org/web] } }
 ```
@@ -461,7 +461,7 @@ with full prior context.
 ```yaml
 x-templates:
   reviewer: &reviewer
-    provider: claude
+    type: agent
     session:
       key: "{{.repo}}#{{.pr}}"
       idle_ttl: 12h

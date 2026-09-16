@@ -17,7 +17,7 @@ checks:                                # named checks — each is ONE ordinary s
   lint:   { run: sh, code: "golangci-lint run ./..." }        # non-error = pass
   critic:                                                     # agent verdict
     type: agent
-    agent: reviewer
+    name: reviewer
     prompt: |
       Review the proposed change in {{.gate.workdir}} (git diff HEAD).
       Output JSON: { "pass": true|false, "reason": "…" }
@@ -29,7 +29,7 @@ triggers:
     steps:
       - id: fix
         type: agent
-        agent: fixer
+        name: fixer
         prompt: "Address the review comments…"
         gate:                           # this step's own gate wins
           run: [ test, lint, critic ]

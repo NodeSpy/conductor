@@ -8,7 +8,7 @@ implementation of those verbs.
 
 ```yaml
 steps:
-  - { id: draft,  type: agent, agent: critique, checkout: none,
+  - { id: draft,  type: agent, name: critique, checkout: none,
       prompt: "Draft the review for {{.repo}}#{{.pr}}." }
   - { id: review, uses: slack-ops.ask,
       options: { to: dm, user: U0123ABCD, prompt: "Submit this review?", draft: "{{.draft.text}}", timeout: 2h } }

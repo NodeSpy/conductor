@@ -20,7 +20,7 @@ triggers:
     filter: { projects: [backend], levels: [error, fatal], environments: [production] }
     repo: acme/backend                     # optional checkout target
     steps:
-      - { id: dig, type: agent, agent: fixer, prompt: "Investigate {{.title}} ({{.url}})." }
+      - { id: dig, type: agent, name: fixer, prompt: "Investigate {{.title}} ({{.url}})." }
 ```
 
 **Events:** `issue_alert`, `error_alert`, `event_alert` — one per Sentry alert

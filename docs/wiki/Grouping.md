@@ -9,7 +9,7 @@ set `group:` to batch a burst of related events into one run:
   steps:
     - id: handle
       type: agent
-      agent: fixer
+      name: fixer
       prompt: |
         Address the comments on {{.group.key}}:
         {{range .group.events}}- {{.comment_body}}
