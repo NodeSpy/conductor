@@ -6,7 +6,7 @@ plugins to `conductor-plugins` (`engines/{js,go-embed,risor,lua}`, released
 `use: js` resolves to the official engine plugin and the interpreters leave
 the binary.
 
-**Commit:** `__COMMIT_SHA__`
+**Commit:** `71c037b2f5e4261b8c873dc116ec80205dd3a061`
 
 ---
 
