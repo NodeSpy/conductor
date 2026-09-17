@@ -62,6 +62,10 @@ type authConfig struct {
 	RedirectURI   string   `yaml:"redirect_uri"`    // authorization_code bootstrap (default http://localhost:8400/callback)
 	DeviceAuthURL string   `yaml:"device_auth_url"` // device grant: the device-authorization endpoint
 	Scopes        []string `yaml:"scopes"`
+	// AuthParams are extra consent-URL query params (e.g. Google's
+	// access_type=offline). A plugin bakes them into Decl.Auth; an operator may
+	// also set auth_params: in the auth block.
+	AuthParams map[string]string `yaml:"auth_params"`
 }
 
 // tokenVaultKeys returns the fixed key set a connector's tokens live under

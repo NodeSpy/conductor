@@ -267,6 +267,11 @@ type AuthSpec struct {
 	AuthURL       string   `json:"auth_url,omitempty" yaml:"auth_url,omitempty"`               // consent endpoint (authorization_code)
 	DeviceAuthURL string   `json:"device_auth_url,omitempty" yaml:"device_auth_url,omitempty"` // device-authorization endpoint (device grant)
 	Scopes        []string `json:"scopes,omitempty" yaml:"scopes,omitempty"`                   // default scopes if the operator sets none
+	// AuthParams are extra query parameters the plugin needs appended to the
+	// authorization_code CONSENT URL — e.g. Google requires
+	// {"access_type":"offline","prompt":"consent"} to return a refresh token.
+	// Baked into the plugin so the operator needn't know provider quirks.
+	AuthParams map[string]string `json:"auth_params,omitempty" yaml:"auth_params,omitempty"`
 }
 
 // AccessTokenKey is the reserved InvokeRequest.Connection key under which the
