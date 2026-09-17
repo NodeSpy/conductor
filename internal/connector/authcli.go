@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/plugin"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/vaults"
 )
@@ -36,19 +37,55 @@ func authConfigFor(cfg *config.Config, name string) (authConfig, error) {
 	if !ok {
 		return authConfig{}, fmt.Errorf("no connector %q configured", name)
 	}
-	if ref.TypeName() != "rest" && ref.TypeName() != "graphql" {
-		return authConfig{}, fmt.Errorf("connector %q is type %q — `connector auth` applies to rest/graphql oauth2 connectors", name, ref.TypeName())
-	}
+	// The `auth:` block (rest/graphql, or a plugin connector's operator-supplied
+	// credentials) decodes best-effort — a connector without one just yields a
+	// zero authConfig.
 	var conn struct {
 		Auth authConfig `yaml:"auth"`
 	}
-	if err := ref.Decode(&conn); err != nil {
-		return authConfig{}, fmt.Errorf("connector %q: decode auth: %w", name, err)
+	_ = ref.Decode(&conn)
+	a := conn.Auth
+	// A plugin connector BAKES IN its OAuth2 endpoints (Decl.Auth), recorded in
+	// its install manifest — so the operator supplies only client_id/secret +
+	// grant + token_vault. Config values still win over the declared defaults.
+	if da := pluginDeclAuth(ref); da != nil {
+		if a.Type == "" {
+			a.Type = "oauth2"
+		}
+		if a.TokenURL == "" {
+			a.TokenURL = da.TokenURL
+		}
+		if a.AuthURL == "" {
+			a.AuthURL = da.AuthURL
+		}
+		if a.DeviceAuthURL == "" {
+			a.DeviceAuthURL = da.DeviceAuthURL
+		}
+		if len(a.Scopes) == 0 {
+			a.Scopes = append([]string(nil), da.Scopes...)
+		}
 	}
-	if conn.Auth.Type != "oauth2" {
-		return authConfig{}, fmt.Errorf("connector %q: auth type is %q — `connector auth` applies to oauth2", name, conn.Auth.Type)
+	if a.Type != "oauth2" {
+		return authConfig{}, fmt.Errorf("connector %q: `conductor connector auth` applies to oauth2 connectors — a rest/graphql connector with `auth: {type: oauth2}`, or a plugin connector that declares OAuth2", name)
 	}
-	return conn.Auth, nil
+	return a, nil
+}
+
+// pluginDeclAuth returns a plugin connector's declared OAuth2 endpoints, read
+// from its install manifest (recorded at install time from Decl.Auth), or nil
+// for a builtin/rest/graphql connector or an uninstalled plugin. It lets
+// `conductor connector auth` run the interactive login from the CLI without
+// respawning the plugin to re-Describe it.
+func pluginDeclAuth(ref config.ConnectorRef) *plugin.AuthSpec {
+	typ := ref.TypeName()
+	if typ == "" || typ == "rest" || typ == "graphql" {
+		return nil
+	}
+	st := plugin.LoadInstallState(plugin.InstallDir())
+	if inst, ok := st.Get("connectors/" + typ); ok {
+		return inst.Manifest.Auth
+	}
+	return nil
 }
 
 // AuthBootstrap is the one-time interactive OAuth2 login behind
@@ -242,10 +279,8 @@ type AuthStatus struct {
 // reading the token_vault directly (no daemon needed).
 func AuthList(ctx context.Context, cfg *config.Config, deps Deps) ([]AuthStatus, error) {
 	names := make([]string, 0, len(cfg.ConnectorsMap))
-	for n, ref := range cfg.ConnectorsMap {
-		if ref.TypeName() == "rest" || ref.TypeName() == "graphql" {
-			names = append(names, n)
-		}
+	for n := range cfg.ConnectorsMap {
+		names = append(names, n)
 	}
 	sort.Strings(names)
 	var out []AuthStatus

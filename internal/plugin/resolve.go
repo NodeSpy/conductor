@@ -269,6 +269,10 @@ func manifestFromDecl(decl *Decl) Manifest {
 		Commands: append([]string(nil), c.Commands...),
 		FS:       append([]string(nil), c.FS...),
 		Spawns:   c.Spawns || len(c.Commands) > 0,
+		// Auth (the plugin's declared OAuth2 endpoints) is recorded so
+		// `conductor connector auth <name>` can run the interactive login
+		// WITHOUT respawning the plugin to re-Describe it.
+		Auth: decl.Auth,
 	}
 }
 
