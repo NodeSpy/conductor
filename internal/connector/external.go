@@ -216,6 +216,9 @@ func buildManagedAuth(name string, declAuth *plugin.AuthSpec, ref config.Connect
 		if len(a.Scopes) == 0 {
 			a.Scopes = append([]string(nil), declAuth.Scopes...)
 		}
+		if len(a.AuthParams) == 0 {
+			a.AuthParams = declAuth.AuthParams
+		}
 	}
 	if a.Type == "" || a.Type == "none" {
 		return nil, nil // no managed auth

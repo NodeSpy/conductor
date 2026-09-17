@@ -64,6 +64,9 @@ func authConfigFor(cfg *config.Config, name string) (authConfig, error) {
 		if len(a.Scopes) == 0 {
 			a.Scopes = append([]string(nil), da.Scopes...)
 		}
+		if len(a.AuthParams) == 0 {
+			a.AuthParams = da.AuthParams
+		}
 	}
 	if a.Type != "oauth2" {
 		return authConfig{}, fmt.Errorf("connector %q: `conductor connector auth` applies to oauth2 connectors — a rest/graphql connector with `auth: {type: oauth2}`, or a plugin connector that declares OAuth2", name)
@@ -423,6 +426,11 @@ func consentURL(a authConfig, state, challenge string) string {
 	}
 	if len(a.Scopes) > 0 {
 		q.Set("scope", strings.Join(a.Scopes, " "))
+	}
+	// Provider-specific consent params (e.g. Google's access_type=offline &
+	// prompt=consent, without which no refresh token is returned).
+	for k, v := range a.AuthParams {
+		q.Set(k, v)
 	}
 	sep := "?"
 	if strings.Contains(a.AuthURL, "?") {
