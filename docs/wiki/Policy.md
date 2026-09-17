@@ -44,7 +44,7 @@ triggers:
 | `reply_to_bots` | gate the conversational reply back to a bot author: `decline_only` (default — the agent replies only to decline a suggestion), `off` (comment/reply verbs to the bot are skipped), `full` (ungated). Fixes always run. See [[Configuration]] | any |
 | `guidance` | the scoped house-tone baseline (layer 0) appended to every agent this scope governs — a string, a list of blocks, or `{ replace: … }`. Scopes **stack** (a trigger's guidance adds under the global tone); `{ replace }` resets the cascade from that scope down. An agent profile's own `guidance` stacks on top. The top-level `agent_guidance` folds into the global scope. See [[Reuse]] | any |
 | `shadow` | preview instead of dispatching | any |
-| `max_attempts_per_head` | soft attempt threshold before backoff | any |
+| `max_attempts_per_head` | soft attempt threshold before backoff; at **2×** this a struggling `(pr, kind, head)` is PARKED — retries stop entirely until a new commit (a fresh head auto-resumes it) — so a stuck fixer isn't re-attempted hourly forever | any |
 
 ## Agent-authored plans (`agent_authored`)
 

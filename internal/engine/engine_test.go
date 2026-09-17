@@ -1192,3 +1192,44 @@ func TestRetryBackoffCeilingIsBounded(t *testing.T) {
 		t.Fatalf("retryBackoffMax = %s — keep the retry ceiling ≤ 1h (per-connector policy.backoff.max can raise it deliberately)", retryBackoffMax)
 	}
 }
+
+// TestParkAfterAttempts: past the park ceiling (parkAfter = 2×soft) a struggling
+// (pr,kind,head) is PARKED — no more dispatches — and a NEW head auto-resumes it.
+func TestParkAfterAttempts(t *testing.T) {
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	st := tempStore(t)
+	clock := time.Unix(1_700_000_000, 0)
+	st.SetNow(func() time.Time { return clock })
+	e := New(Options{Config: baseCfg(), Store: st, Dispatch: d, Notifier: n,
+		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+	act := config.Action{Type: "agent", Agent: "w/fixer", MaxAttemptsPerHead: 1} // soft=1 → parkAfter=2
+	adv := func() { clock = clock.Add(2 * time.Hour) }                           // clear any backoff cooldown
+
+	// Two dispatches (n=0 then n=1), then PARK at n=2.
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s1", act))
+	adv()
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s2", act))
+	if len(d.reqs) != 2 {
+		t.Fatalf("want 2 dispatches before park, got %d", len(d.reqs))
+	}
+	adv()
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s3", act))
+	if len(d.reqs) != 2 {
+		t.Fatalf("should be parked at the ceiling, got %d dispatches", len(d.reqs))
+	}
+	if !st.IsStuck("a/w#3", "merge_conflict", "h") {
+		t.Fatal("expected the tuple to be marked stuck")
+	}
+	// Still parked on the next pass (idempotent).
+	adv()
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h", "s4", act))
+	if len(d.reqs) != 2 {
+		t.Fatalf("should stay parked, got %d dispatches", len(d.reqs))
+	}
+	// A NEW head is a fresh key → un-parked, dispatches again.
+	adv()
+	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 3, "h2", "s5", act))
+	if len(d.reqs) != 3 {
+		t.Fatalf("a new head must un-park and dispatch, got %d", len(d.reqs))
+	}
+}

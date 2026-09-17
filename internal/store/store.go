@@ -20,6 +20,7 @@ type Record struct {
 	Acted     map[string]string    `json:"acted,omitempty"`      // kind -> last acted dedup signature
 	Attempts  map[string]int       `json:"attempts,omitempty"`   // "kind@head" -> count
 	AttemptAt map[string]time.Time `json:"attempt_at,omitempty"` // "kind@head" -> last attempt time (for backoff)
+	Stuck     map[string]bool      `json:"stuck,omitempty"`      // "kind@head" -> parked (stop retrying until head changes)
 	// LastComIDs is the per-comment-kind high-water mark ("issue" / "review" ->
 	// newest handled id). The two kinds are separate GitHub id sequences (issue
 	// comment ids run far ahead of review comment ids), so one shared mark would
@@ -311,6 +312,30 @@ func (s *Store) RecordAttempt(key, kind, head string) error {
 	r.UpdatedAt = s.now()
 	s.mu.Unlock()
 	return s.save()
+}
+
+// MarkStuck parks a (pr,kind,head): the engine stops retrying it entirely until
+// the head changes — a new commit is a fresh "kind@head" key, so it auto-resumes.
+// Set when a fixer keeps making no progress past the retry ceiling, so a struggling
+// item is not re-attempted into the void hourly forever.
+func (s *Store) MarkStuck(key, kind, head string) error {
+	s.mu.Lock()
+	r := s.rec(key)
+	if r.Stuck == nil {
+		r.Stuck = map[string]bool{}
+	}
+	r.Stuck[kind+"@"+head] = true
+	r.UpdatedAt = s.now()
+	s.mu.Unlock()
+	return s.save()
+}
+
+// IsStuck reports whether this (pr,kind,head) is parked.
+func (s *Store) IsStuck(key, kind, head string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.recs[key]
+	return r != nil && r.Stuck[kind+"@"+head]
 }
 
 // SetNow overrides the clock — for tests exercising time-dependent behavior
