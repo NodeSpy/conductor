@@ -32,7 +32,7 @@ What it does:
 
 After installing, fill in `~/.config/conductor/config.yaml` and
 `~/.config/conductor/conductor.env`, then run `conductor validate` before starting
-the service — see [[Configuration]] and [GitHub App setup](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github-app-setup.md).
+the service — see [[Configuration]] and [GitHub App setup](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github.md#setup).
 
 ### Updating
 
