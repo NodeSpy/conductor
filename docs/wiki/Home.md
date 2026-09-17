@@ -95,7 +95,7 @@ Work down this list and you go from zero to the most advanced setup:
    a credential-free config, `conductor validate`, and a `manual` run.
 2. **Core concepts** — [[Connectors]] (events vs verbs), [[Workflows]]
    (triggers, steps, hooks, context scope), [[Verbs]] (options + identity).
-3. **Connect real services** — [[GitHub-App-Setup]] for GitHub, then browse the
+3. **Connect real services** — [GitHub App setup](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github-app-setup.md) for GitHub, then browse the
    [connector catalog](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md)
    (each with its own setup) and the built-in types in [[Connectors]]; anything
    not yet typed via `rest`/`graphql` in [[Configuration]].
@@ -123,7 +123,7 @@ Work down this list and you go from zero to the most advanced setup:
 
 ## Pages
 
-Setup: [[Installation]] · [[Quickstart]] · [[GitHub-App-Setup]] ·
+Setup: [[Installation]] · [[Quickstart]] · [GitHub App setup ↗](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github-app-setup.md) ·
 [[Configuration]] · [[Commands]] · [[Examples]]
 
 The model: [[Connectors]] · [[Workflows]] · [[Reuse]] · [[Settings-and-Templating]] · [[Verbs]] · [[Code-Steps]] · [[Stores]] ·
@@ -131,7 +131,7 @@ The model: [[Connectors]] · [[Workflows]] · [[Reuse]] · [[Settings-and-Templa
 [[Agent-Skill]] · [[Policy]] · [[Gates]] · [[Teams]] · [[Outcomes]] ·
 [[Cost-Accounting]] · [[Secrets]] · [[Trust-and-Isolation]] · [[Hosts]] · [[Isolation]]
 
-Connector references: [[Connectors]] · [[GitHub-App-Setup]] · [[Authoring-Connectors]] ·
+Connector references: [[Connectors]] · [[Authoring-Connectors]] ·
 [connector catalog ↗](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md)
 
 Operations: [[Runs]] · [[Notifications]] · [[Hand-offs]] · [[Migration]]

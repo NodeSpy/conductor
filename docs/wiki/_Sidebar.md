@@ -4,7 +4,7 @@ Setup
 - [[Installation]]
 - [[Docker]]
 - [[Quickstart]]
-- [[GitHub-App-Setup]]
+- [GitHub App setup ↗](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github-app-setup.md)
 - [[Configuration]]
 - [[Commands]]
 - [[Examples]]
@@ -39,7 +39,6 @@ The model
 Connectors
 - [[Connectors]]
 - [Plugin catalog ↗](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md)
-- [[GitHub-App-Setup]]
 - [[Authoring-Connectors]]
 
 Operations
