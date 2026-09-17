@@ -17,7 +17,7 @@ x-templates:
 ```
 
 `use:` resolves a runtime exactly like a connector or an engine — a **built-in**
-first (`paseo`, `agent-deck`, `acp`, `cli`), then the **official plugin repo**
+first (`paseo`, `agent-deck`, `acp`, `opencode`, `cli`), then the **official plugin repo**
 (`runtimes/<name>`, e.g. `modal`), then an explicit repo (`use: acme/plugins/modal`)
 or a local binary. The official runtimes live in the catalog:
 **[conductor-plugins/docs/runtimes](https://github.com/NodeSpy/conductor-plugins/tree/main/docs/runtimes)**
