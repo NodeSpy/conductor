@@ -29,6 +29,13 @@ connectors:
     options: { channel: C0123456789 }
 ```
 
+> **Per-connector setup lives with the plugin.** Where to get each service's
+> token / OAuth app, the exact settings-page path, and a minimal config block are
+> documented on that connector's page in the conductor-plugins repo —
+> **[docs/connectors](https://github.com/NodeSpy/conductor-plugins/tree/main/docs/connectors)**
+> (start at the [index](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md)).
+> For GitHub specifically, see [[GitHub-App-Setup]].
+
 ## The contract
 
 Every connector type is self-describing. It declares:
