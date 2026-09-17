@@ -63,6 +63,8 @@ type Store interface {
 	RetryReady(key, kind, head string, soft int, base time.Duration, factor int, max time.Duration) (bool, time.Duration)
 	Record(key, kind, sig, head string) error
 	RecordAttempt(key, kind, head string) error
+	MarkStuck(key, kind, head string) error
+	IsStuck(key, kind, head string) bool
 	LastCommentID(key, kind string) int64
 	AdvanceCommentID(key, kind string, id int64) error
 	Audit(entry map[string]any)
@@ -850,7 +852,23 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 	}
 	if soft > 0 && !t.Force {
-		if n := e.store.Attempts(key, dkind, head); n >= soft {
+		n := e.store.Attempts(key, dkind, head)
+		// PARK: once already parked, or once the attempts pass the ceiling, stop
+		// retrying this (pr,kind,head) entirely rather than backing off into the
+		// void forever. Because attempt/park state is keyed "kind@head", a NEW
+		// commit is a fresh key and auto-resumes. Escalate once when we park.
+		if e.store.IsStuck(key, dkind, head) {
+			e.log("%s parked — %d attempts at %s, awaiting new commits", tag(t), n, short(head))
+			return
+		}
+		if n >= soft {
+			if n >= parkAfter(soft) {
+				_ = e.store.MarkStuck(key, dkind, head)
+				e.notif.Emit(ctx, notify.EventEscalate, t,
+					fmt.Sprintf("parked after %d tries at %s — no progress; needs a human or new commits", n, short(head)))
+				e.log("%s parked after %d attempts at %s — no progress", tag(t), n, short(head))
+				return
+			}
 			if ready, wait := e.store.RetryReady(key, dkind, head, soft, base, retryBackoffFactor, max); !ready {
 				e.log("%s in backoff — %d attempts at %s, next retry in ~%s",
 					tag(t), n, short(head), wait.Round(time.Minute))
@@ -859,7 +877,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			if n == soft { // first time past the threshold and now eligible — say so, once
 				// notif.Emit audits the escalate for status/report (no separate row here).
 				e.notif.Emit(ctx, notify.EventEscalate, t,
-					fmt.Sprintf("still failing after %d tries at %s — backing off, will keep retrying periodically", soft, short(head)))
+					fmt.Sprintf("still failing after %d tries at %s — backing off", soft, short(head)))
 			}
 		}
 	}
@@ -1288,7 +1306,15 @@ const (
 	// an action doesn't set max_attempts_per_head. new_comment is exempt — distinct
 	// comments share a kind@head attempt key, so a cap there would throttle real work.
 	defaultMaxAttempts = 3
+	// parkAttemptMultiple sets the PARK ceiling as a multiple of the soft threshold:
+	// a struggling (pr,kind,head) gets ~soft quick tries, then backoff-retries up to
+	// this multiple, then is PARKED (stop entirely; resumes on new commits). Bounds
+	// the hourly-forever retry a stuck fixer would otherwise sit in.
+	parkAttemptMultiple = 2
 )
+
+// parkAfter is the attempt count at which a (pr,kind,head) is parked.
+func parkAfter(soft int) int { return soft * parkAttemptMultiple }
 
 // tag is a stable log prefix tying a line to its integration + target + kind, so
 // all work for one PR/issue is greppable: engine[<instance> <repo>#<num> <kind>#<variant>].

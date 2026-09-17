@@ -306,3 +306,24 @@ func TestOpenToleratesCorruptState(t *testing.T) {
 		t.Fatal("fresh runs map expected")
 	}
 }
+
+// TestStuckParkState: MarkStuck/IsStuck are keyed "kind@head", so a new head or a
+// different kind is NOT parked — which is how a parked item auto-resumes on a push.
+func TestStuckParkState(t *testing.T) {
+	s := newTestStore(t, time.Hour, 100)
+	if s.IsStuck("k", "merge_conflict", "h") {
+		t.Fatal("a fresh tuple is not stuck")
+	}
+	if err := s.MarkStuck("k", "merge_conflict", "h"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.IsStuck("k", "merge_conflict", "h") {
+		t.Fatal("should be stuck after MarkStuck")
+	}
+	if s.IsStuck("k", "merge_conflict", "h2") {
+		t.Fatal("a new head must NOT be stuck (auto-resume)")
+	}
+	if s.IsStuck("k", "failing_checks", "h") {
+		t.Fatal("a different kind must NOT be stuck")
+	}
+}

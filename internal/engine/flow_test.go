@@ -26,6 +26,7 @@ type flowGateStore struct {
 	attempts    []string
 	audits      []map[string]any
 	runs        map[string]bool
+	stuck       map[string]bool
 	sigs        map[string]string
 	history     map[string]store.RunHistory
 	engagements map[string][]store.Engagement
@@ -71,6 +72,22 @@ func (s *flowGateStore) RecordAttempt(key, kind, head string) error {
 	defer s.mu.Unlock()
 	s.attempts = append(s.attempts, key+"|"+kind)
 	return nil
+}
+
+func (s *flowGateStore) MarkStuck(key, kind, head string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stuck == nil {
+		s.stuck = map[string]bool{}
+	}
+	s.stuck[key+"|"+kind+"@"+head] = true
+	return nil
+}
+
+func (s *flowGateStore) IsStuck(key, kind, head string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stuck[key+"|"+kind+"@"+head]
 }
 func (s *flowGateStore) LastCommentID(string, string) int64           { return 0 }
 func (s *flowGateStore) AdvanceCommentID(string, string, int64) error { return nil }
