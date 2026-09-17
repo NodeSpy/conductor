@@ -305,6 +305,7 @@ to execute belongs here.
 | `runtime` | A `runtimes.<name>` entry to run on (default: the `default: true` runtime, else the built-in paseo). See [[Runtimes]]. |
 | `thinking` / `mode` | Runtime launch hints, passed through where the runtime supports them. |
 | `workspace` | `local` or `worktree` — the existing checkout, or a fresh git worktree. |
+| `expect_push` | Mark a fixer step that must LAND a change on the target. A clean run that leaves work unlanded (a non-empty proposed diff never pushed) becomes a `no_progress` failure instead of a silent success — see [[Workflows]] hooks. Leave off for a review/judge step. |
 | `wait_timeout` | How long a foreground dispatch waits before giving up. |
 | `archive_when_done` | Whether the reaper archives the agent once it idles. Forced off for a `background:` hand-off step. |
 | `labels` | Extra `key=value` labels on the dispatched agent. |

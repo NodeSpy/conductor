@@ -208,9 +208,14 @@ lifecycle moment, so a handler parses the same shape regardless of phase:
 | `hook.failure` | `fail` | the failure sub-object (below) |
 
 On `fail`, `hook.failure` carries `{ kind, error, step, gave_up }` — `kind` is
-`ordinary` or `gave_up` (retries exhausted); `gave_up` is the same signal as the
-`escalate` lifecycle event. The legacy flat `{{.error}}` / `{{.failed_step}}`
-stay populated for back-compat. A handler branches on it, e.g.:
+`ordinary`, `gave_up` (retries exhausted; the same signal as the `escalate`
+event), or **`no_progress`**. A `no_progress` failure is a fixer step marked
+**`expect_push: true`** that ran cleanly but left its work *unlanded* — a
+non-empty proposed diff that never reached the remote, so the PR didn't move and
+the fix didn't take. It also carries `hook.failure.agent_summary` (the agent's
+own reasoning) and `hook.failure.diff`, so a handler can decide (close the dead
+PR, comment the reason, escalate). The legacy flat `{{.error}}` /
+`{{.failed_step}}` stay populated for back-compat. A handler branches on it, e.g.:
 
 ```yaml
 hooks:

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -407,9 +408,8 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	err := r.runSteps(ctx, &run, t, spec.Steps, data, shadow, true)
 	if err != nil {
 		r.Log("%s workflow failed: %v", flowTag(t), err)
-		gaveUp := dispatch.IsUnrecoverable(err)
 		r.fireHooks(ctx, t, spec.Hooks, "fail", "failed", run.ID, "",
-			data, failureCtx(err.Error(), failedStepID(err), gaveUp), "workflow")
+			data, failureCtx(err, err.Error(), failedStepID(err)), "workflow")
 		if dispatch.IsUnrecoverable(err) {
 			// The step's dispatch never reached a working runtime (an
 			// unknown/unrunnable controller, a worktree/workspace that never
@@ -539,9 +539,8 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 			// a REST secret in a URL query rides url.Error verbatim. Redact
 			// before the string reaches hooks' template scope or disk.
 			errStr := r.redactErr(err)
-			gaveUp := dispatch.IsUnrecoverable(err)
 			r.fireHooks(ctx, t, step.Hooks, "fail", "failed", run.ID, id, data,
-				failureCtx(errStr, id, gaveUp), "step "+id)
+				failureCtx(err, errStr, id), "step "+id)
 			r.audit(map[string]any{"event": "step_error", "repo": t.Target.Repo,
 				"number": t.Target.Number, "kind": t.Kind, "step": id, "error": errStr})
 			if step.ContinueOnError {
@@ -1617,6 +1616,17 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if step.ArchiveWhenDone && ref.AgentID != "" && r.Agents.Archive != nil {
 		r.Agents.Archive(ref.AgentID)
 	}
+	// no_progress: an `expect_push` step whose agent left a non-empty proposed diff
+	// (uncommitted / committed-not-pushed) never got its work onto the remote — the
+	// PR did not move, so the fix did NOT take. Record it as a failure rather than a
+	// silent success, carrying the agent's own reasoning + the diff, so it flows
+	// through failure handling (`at: fail`, retry, gave-up) instead of looping unseen.
+	if step.ExpectPush && !shadow && !step.Background && !inGate(ctx) {
+		if diff, _ := outputs["diff"].(string); diff != "" {
+			summary, _ := outputs["text"].(string)
+			return outputs, ref.Output, &noProgressError{step: id, summary: summary, diff: diff}
+		}
+	}
 	return outputs, ref.Output, nil
 }
 
@@ -1790,15 +1800,41 @@ func hookData(base map[string]any, phase, status, runID, stepID string, failure 
 	return d
 }
 
+// noProgressError marks a fixer (`expect_push`) step whose agent ran cleanly but left
+// its work unlanded — a non-empty proposed diff that never reached the remote, so the PR
+// did not move. It is a real step failure (flows through failure handling), carrying the
+// agent's own reasoning + the diff so a handler can decide (close/comment/escalate).
+type noProgressError struct {
+	step, summary, diff string
+}
+
+func (e *noProgressError) Error() string {
+	return fmt.Sprintf("step %q ran but landed no pushable change (fixer made no progress)", e.step)
+}
+
 // failureCtx builds the `hook.failure` sub-object. `kind` classifies the failure so a
 // handler can branch on it; `gave_up` reports retries exhausted (dispatch.IsUnrecoverable).
-// The caller passes an already-redacted error string.
-func failureCtx(errStr, stepID string, gaveUp bool) map[string]any {
+// A no_progress failure additionally carries the agent's summary + the unlanded diff. The
+// caller passes an already-redacted error string.
+func failureCtx(err error, errStr, stepID string) map[string]any {
+	gaveUp := dispatch.IsUnrecoverable(err)
 	kind := "ordinary"
 	if gaveUp {
 		kind = "gave_up"
 	}
-	return map[string]any{"kind": kind, "error": errStr, "step": stepID, "gave_up": gaveUp}
+	fc := map[string]any{"error": errStr, "step": stepID, "gave_up": gaveUp}
+	var np *noProgressError
+	if errors.As(err, &np) {
+		kind = "no_progress"
+		if np.summary != "" {
+			fc["agent_summary"] = np.summary
+		}
+		if np.diff != "" {
+			fc["diff"] = np.diff
+		}
+	}
+	fc["kind"] = kind
+	return fc
 }
 
 // fireHooks builds the hook contract and runs the matching hooks. It skips the data clone

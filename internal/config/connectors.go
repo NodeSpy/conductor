@@ -919,6 +919,15 @@ type Step struct {
 	Retry           *RetrySpec    `yaml:"retry,omitempty"`
 	Timeout         Duration      `yaml:"timeout,omitempty"`
 	ContinueOnError bool          `yaml:"continue_on_error,omitempty"`
+	// ExpectPush marks an agent step whose job is to LAND a change on the target
+	// (a fixer: resolve the conflict, fix the checks, push the fix). When it runs
+	// cleanly but leaves work unlanded — a non-empty proposed diff that never
+	// reached the remote — that is NOT a success: the fix didn't take. conductor
+	// then records a `no_progress` FAILURE (carrying the agent's reasoning + the
+	// diff) so it flows through failure handling (`at: fail`, retry, gave-up)
+	// instead of a silent success that loops forever. Leave it off for a
+	// review/judge step, whose proposed diff is its normal output, not a push.
+	ExpectPush bool `yaml:"expect_push,omitempty"`
 
 	// agent-authored plan fields (#36 §11; honored inside plans)
 	// EscalateTo: "agent" routes this step back to the authoring agent's
