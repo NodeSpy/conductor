@@ -920,7 +920,7 @@ func (r *Runner) execStep(ctx context.Context, t core.Trigger, step config.Step,
 	// — no identity, no runtime, no connector — so they branch once, here,
 	// rather than adding an arm to this switch each time. See helpers.go.
 	if step.IsHelper() {
-		return r.execHelper(ctx, t, step, id, shadow)
+		return r.execHelper(ctx, t, step, id, data, shadow)
 	}
 	switch step.Form() {
 	case "verb":

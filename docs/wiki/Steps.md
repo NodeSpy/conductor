@@ -167,7 +167,7 @@ A step sets exactly one form — what it does:
 | run code | **`use: <engine>`** + `code:`, or `use: cli` + `command:` — see [[Code-Steps]] |
 | run a program | `type: command` + `command:` |
 | call a workflow | **`call: <workflow>`** + `with:` — see [[Workflows]] |
-| wait | **`sleep: <duration>`** — a [helper step](#helper-steps), below |
+| a [helper step](#helper-steps) | **`sleep:`**, **`log:`**, **`set:`**, **`assert:`**, **`fail:`**, **`wait_for:`** — conductor's own flow control, below |
 
 Two of those spellings moved, and both old ones still parse:
 
@@ -197,49 +197,94 @@ connector, no command behind it. There is nothing to dispatch, nothing to
 install and nothing to grant — which is the point, because the alternative
 was a `use: cli` step shelling out to a coreutil just to pause a flow.
 
-**`sleep: <duration>`** is the first of them, and today the only one. It
-pauses the flow for the duration, then the run continues:
+The family, each a form in its own right:
+
+| Helper | Does |
+| --- | --- |
+| `sleep: <duration>` | Pause the flow for a positive duration. |
+| `log: <message>` | Render a message (templated) into the run log — a breadcrumb. |
+| `set: {<key>: <value>}` | Publish computed values as this step's outputs, read downstream as `{{.<id>.<key>}}`. |
+| `assert: <expr>` | Fail the run unless the condition is truthy — the same grammar as `if:`. |
+| `fail: <message>` | Stop the run with a rendered message; guard it with `if:` for a conditional abort. |
+| `wait_for: {…}` | Poll a read verb until a condition holds, or a timeout — [below](#wait_for). |
+
+Each is mutually exclusive with `type:` / `use:` / `uses:` / `call:` and with
+the other helpers — a step does one thing — and each takes `id:`, `if:`,
+`for_each:` and step hooks like any other step, appears in the run timeline,
+and runs the same under [[One-Shot|`conductor once`]] as on the daemon.
+
+### `sleep`, `log`, `set`, `assert`, `fail`
 
 ```yaml
 steps:
-  - id: cancel
-    uses: gh.cancel_run
-    options: { repo: "{{.repo}}", run_id: "{{.run_id}}" }
-  - sleep: 5s                      # let the cancellation land
-  - id: rerun
-    uses: gh.rerun_run
-    options: { repo: "{{.repo}}", run_id: "{{.run_id}}" }
+  - log: "addressing {{.repo}}#{{.pr}}"          # a breadcrumb in the run log
+  - { id: bail, if: "!run_id", fail: "no run_id on this event" }
+  - assert: "checks_passed && !draft"            # stop unless the guard holds
+  - id: vars
+    set: { branch: "fix/{{.pr}}", attempts: 1 }  # {{.vars.branch}} downstream
+  - sleep: 5s                                    # pause, cancellation-aware
 ```
 
 What to know:
 
-- **The duration is the same one every other field takes** — `500ms`, `5s`,
-  `30m`, `6h`, `7d`, `1d12h` ([[Configuration]]). It must be **positive**;
-  `sleep: 0` and a negative duration are refused at load, because a wait of
-  no time is a typo rather than an instruction.
-- **It is a step form**, so it is mutually exclusive with `type:` / `use:` /
-  `uses:` / `call:` — a step sleeps or it does something, never both — and it
-  takes `id:`, `if:`, `for_each:` and step hooks like any other step. It
-  appears in the run timeline with its own duration, and its outputs are
-  empty (`{{.steps.<id>.outputs}}` is an empty map).
-- **Cancellation cuts it short.** The wait is raced against the run's
-  context, so a daemon shutdown, a step `timeout:`, or a budget cut-off
-  leaves a `sleep: 30m` immediately — it never holds a run open for a wait
-  nobody is waiting on.
-- **A dry run does not wait.** `conductor replay` prints
-  `[dry-run] would sleep 5s` and moves on, so replaying a flow with long
-  waits in it stays instant.
-- **It runs the same in [[One-Shot|`conductor once`]]** as on the daemon.
-  Helper steps need none of the daemon's machinery, so there is no one-shot
-  caveat to remember.
-- **In an [agent-authored plan](#agent-driven-workflows)** `sleep` is a class
-  like any other: an agent may only emit one if the operator listed `sleep`
-  in `policy.agent_authored.verbs`. It reaches nothing outside conductor, but
-  it does spend the run's wall clock, so admitting it stays a decision.
+- **`sleep`'s duration** is the one every other field takes — `500ms`, `5s`,
+  `30m`, `7d`, `1d12h` ([[Configuration]]) — and must be **positive**;
+  `sleep: 0` and a negative are refused at load. **Cancellation cuts it
+  short**: a shutdown, a step `timeout:`, or a budget cut-off leaves a
+  `sleep: 30m` at once. A dry run prints `[dry-run] would sleep 5s` and moves
+  on.
+- **`set` values keep their type.** `attempts: 1` reads back as the number
+  `1`, not `"1"`, and a value lifted from an earlier step's list/map arrives
+  intact. Give the step an `id:` — that is how the values are addressed.
+- **`assert` and `fail` both stop the run** on failure, the same way any step
+  error does (the run reports `workflow_failed`). `assert` is the conditional
+  form — it fails unless the expr is truthy — and `fail` is unconditional, so
+  it usually sits behind an `if:`. Both render/evaluate in a dry run too, the
+  way `if:` does.
+- **In an [agent-authored plan](#agent-driven-workflows)** each helper is a
+  class an agent may only emit if the operator listed it in
+  `policy.agent_authored.verbs`. They reach nothing outside conductor, but
+  they still spend the run — admitting one stays a decision.
 
-The family exists so the next one — a `log:`, a `noop:` — is a small,
-predictable addition rather than a new subsystem. Anything that needs no
-agent, engine, verb or command to execute belongs here.
+### `wait_for`
+
+Polls a **read verb** until its output satisfies a condition, or a timeout
+elapses. It is the principled form of a bare `sleep:` before a step that
+depends on state settling — instead of guessing how long a cancellation takes
+to land, wait for the run to actually reach a terminal state:
+
+```yaml
+steps:
+  - uses: gh.cancel_run
+    options: { repo: "{{.repo}}", run_id: "{{.run_id}}" }
+  - wait_for:
+      uses: gh.get_run                            # the read verb to poll
+      options: { repo: "{{.repo}}", run_id: "{{.run_id}}" }
+      until: "status == 'completed'"              # condition over its outputs
+      every: 10s                                  # poll interval (default 10s)
+      timeout: 2m                                  # give up after this — required
+    id: settle
+  - uses: gh.rerun_run
+    options: { repo: "{{.repo}}", run_id: "{{.run_id}}" }
+```
+
+- **`until:` reads the polled verb's outputs at the top level** — a
+  `gh.get_run` returns `status`, `conclusion`, … so `until: "status ==
+  'completed'"` sees them directly, alongside every fact (`{{.repo}}`) and
+  prior-step output. Same expression grammar as `if:`.
+- **The verb's `options:` are re-templated each poll**, exactly as a `uses:`
+  step would render them.
+- **On success the last poll's outputs become the step's outputs**, so a
+  later step reads `{{.settle.conclusion}}`. **On timeout the step fails** —
+  soften a flow that should continue anyway with `continue_on_error: true`.
+- **`timeout:` is required and positive**; `every:` defaults to `10s`. The
+  whole wait is cancellation-aware — a shutdown drops out immediately, and
+  the timeout is just another deadline on the same context. A dry run does
+  one stubbed poll, says `[dry-run] would poll …`, and does not wait.
+
+The family exists so the next helper is a small, predictable addition rather
+than a new subsystem. Anything that needs no agent, engine, verb or command
+to execute belongs here.
 
 ## Fields
 
@@ -250,7 +295,12 @@ agent, engine, verb or command to execute belongs here.
 | `use` | The code ENGINE this step runs on (`run:` is the same key). See [[Code-Steps]]. |
 | `command` | The argv for `use: cli` and for `type: command` — a list of words, or one string split on whitespace (quotes honored, no shell). |
 | `call` | A workflow to run as this step, with `with:` for its inputs. See [[Workflows]]. |
-| `sleep` | Pause the flow for a positive duration — the helper step form, above. |
+| `sleep` | Pause the flow for a positive duration — a [helper step](#helper-steps), above. |
+| `log` | Render a message into the run log — a helper step. |
+| `set` | Publish computed values as the step's outputs (`{{.<id>.<key>}}`) — a helper step. |
+| `assert` | Fail the run unless the expr is truthy — a helper step. |
+| `fail` | Stop the run with a rendered message — a helper step. |
+| `wait_for` | Poll a read verb (`uses:`) until `until:` holds or `timeout:` — a helper step. |
 | `model` | Which model to run: a fleet name, a model id, a wildcard, an inline list, or `{ any, required }`. Unset → the runtime's `models.default:`, then a bare launch. See [[Model-Selection]]. |
 | `runtime` | A `runtimes.<name>` entry to run on (default: the `default: true` runtime, else the built-in paseo). See [[Runtimes]]. |
 | `thinking` / `mode` | Runtime launch hints, passed through where the runtime supports them. |

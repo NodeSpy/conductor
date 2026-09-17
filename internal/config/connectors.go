@@ -885,13 +885,33 @@ type Step struct {
 	Import   string         `yaml:"import,omitempty"`
 	With     map[string]any `yaml:"with,omitempty"`
 
-	// helper form (helpers.go). Sleep pauses the flow for a duration,
-	// interrupted by cancellation — the first of the built-in HELPER steps,
-	// the forms conductor runs itself with no agent, engine, verb or command
-	// behind them. A literal duration is the normal spelling; the value is
-	// not templated (see Step.UnmarshalYAML on why `sleep: 0` is rejected
-	// there rather than here).
+	// helper form (helpers.go) — the forms conductor runs itself with no
+	// agent, engine, verb or command behind them. Each is a field no other
+	// form reads, so a step is recognized as a helper (and which one) purely
+	// from which of these is set; see Step.HelperForm.
+	//
+	// Sleep pauses the flow for a duration, interrupted by cancellation. A
+	// literal duration is the normal spelling; the value is not templated (see
+	// Step.UnmarshalYAML on why `sleep: 0` is rejected there rather than here).
 	Sleep Duration `yaml:"sleep,omitempty"`
+	// Log renders a message (templated) into the run log — a flow's own
+	// breadcrumb, no connector behind it. `log: "cancelled {{.run_id}}"`.
+	Log string `yaml:"log,omitempty"`
+	// Set publishes computed values as this step's outputs, addressable
+	// downstream as {{.<id>.<key>}} (so a `set:` step wants an `id:`). Each
+	// value is templated with types preserved. `set: { url: "…{{.pr}}" }`.
+	Set map[string]any `yaml:"set,omitempty"`
+	// Assert fails the step (and the run) unless the expr is truthy — the
+	// same expression grammar and truthiness as `if:` (internal/expr).
+	// `assert: "checks_passed && !draft"`. Pairs with nothing; it IS the guard.
+	Assert string `yaml:"assert,omitempty"`
+	// Fail stops the run with a rendered message, unconditionally. Guard it
+	// with `if:` for a conditional abort. `fail: "no run_id on event"`.
+	Fail string `yaml:"fail,omitempty"`
+	// WaitFor polls a read verb until a condition holds (or a timeout). It is
+	// the principled form of a bare `sleep:` before a state-dependent step —
+	// see WaitSpec. `until:` is its condition clause, not a standalone form.
+	WaitFor *WaitSpec `yaml:"wait_for,omitempty"`
 
 	// control flow
 	ForEach         string        `yaml:"for_each,omitempty"` // template resolving to a list; {{.item}} in scope
@@ -975,6 +995,31 @@ type Step struct {
 	// OutcomeKey overrides the track-record key (default: the step identity),
 	// so several steps can deliberately pool one record.
 	OutcomeKey string `yaml:"outcome_key,omitempty"`
+}
+
+// WaitSpec is the `wait_for:` helper: poll a READ verb until a condition holds
+// or a timeout elapses. It is self-contained — `until:` lives here, not as a
+// sibling step field, so it is unambiguously the wait's clause and never
+// collides with the step-level `timeout:`.
+//
+// Each poll runs Uses/Options exactly as a `uses:` step would; the verb's
+// outputs are overlaid onto the run scope so the condition reads them at the
+// top level (`until: "status == 'completed'"` sees a get_run's `status`). On
+// success the last poll's outputs are recorded under the step id, so a later
+// step can read `{{.<id>.conclusion}}`. On timeout the step errors — soften
+// per-flow with `continue_on_error:`.
+type WaitSpec struct {
+	// Uses is the read verb to poll, <connector>.<verb>, e.g. gh.get_run.
+	Uses string `yaml:"uses"`
+	// Options are the verb's options, templated per poll like any verb step.
+	Options map[string]any `yaml:"options,omitempty"`
+	// Until is the condition (expr grammar, same as `if:`) evaluated against
+	// the run scope overlaid with each poll's outputs. Required.
+	Until string `yaml:"until"`
+	// Every is the poll interval. Default 10s.
+	Every Duration `yaml:"every,omitempty"`
+	// Timeout bounds the whole wait. Required, positive.
+	Timeout Duration `yaml:"timeout"`
 }
 
 // GateSpec configures one quality gate (#36 §16): which checks run against
@@ -1701,10 +1746,10 @@ func validateStep(w string, s Step, c *Config) error {
 		return validateHooks(w, s.Hooks)
 	}
 	if forms == 0 {
-		return fmt.Errorf("config: %s: set one of `type: agent`, `type: command`, `use:` (an engine, with `code:`/`command:`), `uses:`, `call:`, or a helper (`sleep:`)", w)
+		return fmt.Errorf("config: %s: set one of `type: agent`, `type: command`, `use:` (an engine, with `code:`/`command:`), `uses:`, `call:`, or a helper (`sleep:`/`log:`/`set:`/`assert:`/`fail:`/`wait_for:`)", w)
 	}
 	if forms > 1 {
-		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/use/uses/call/sleep)", w)
+		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/use/uses/call or a helper: sleep/log/set/assert/fail/wait_for)", w)
 	}
 	if err := validateHelperStep(w, s); err != nil {
 		return err

@@ -118,3 +118,97 @@ checks:
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// TestBatch2HelperForms: log/set/assert/fail/wait_for each parse to their own
+// step form and are recognized as helpers from the field they set alone.
+func TestBatch2HelperForms(t *testing.T) {
+	c, err := loadYAML(t, engineWF+`      - { id: a, log: "hi {{.repo}}" }
+      - { id: b, set: { url: "u", n: 3 } }
+      - { id: c, assert: "n == 3" }
+      - id: d
+        wait_for: { uses: gh.get_run, options: { repo: "o/r", run_id: 1 }, until: "status == done", every: 10s, timeout: 2m }
+      - { id: e, if: "false", fail: "boom" }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := c.Workflows["w"].Steps
+	want := []struct {
+		form   string
+		helper string
+	}{
+		{"log", HelperLog}, {"set", HelperSet}, {"assert", HelperAssert},
+		{"wait_for", HelperWaitFor}, {"fail", HelperFail},
+	}
+	for i, w := range want {
+		if got := steps[i].Form(); got != w.form {
+			t.Fatalf("step %d form = %q, want %q", i, got, w.form)
+		}
+		if !steps[i].IsHelper() || steps[i].HelperForm() != w.helper {
+			t.Fatalf("step %d helper = %q, want %q", i, steps[i].HelperForm(), w.helper)
+		}
+		if _, class := steps[i].StepEngine(); class != EngineNone {
+			t.Fatalf("step %d engine class = %s, want %s", i, class, EngineNone)
+		}
+	}
+	// set values are carried verbatim (typed), and wait_for's clause is parsed.
+	if steps[1].Set["n"] != 3 {
+		t.Fatalf("set n = %v, want int 3", steps[1].Set["n"])
+	}
+	if wf := steps[3].WaitFor; wf == nil || wf.Uses != "gh.get_run" || wf.Until != "status == done" || wf.Timeout.D() != 2*time.Minute || wf.Every.D() != 10*time.Second {
+		t.Fatalf("wait_for spec: %+v", steps[3].WaitFor)
+	}
+}
+
+// TestWaitForValidation: the wait's required clauses are enforced with messages
+// that say which one is missing.
+func TestWaitForValidation(t *testing.T) {
+	for _, tc := range []struct{ name, spec, want string }{
+		{"no uses", `{ until: "x", timeout: 1m }`, "needs `uses:`"},
+		{"bad uses", `{ uses: nodot, until: "x", timeout: 1m }`, "<connector>.<verb>"},
+		{"no until", `{ uses: gh.get_run, timeout: 1m }`, "needs `until:`"},
+		{"no timeout", `{ uses: gh.get_run, until: "x" }`, "POSITIVE `timeout:`"},
+		{"zero timeout", `{ uses: gh.get_run, until: "x", timeout: 0 }`, "POSITIVE `timeout:`"},
+		{"negative every", `{ uses: gh.get_run, until: "x", timeout: 1m, every: -1s }`, "must not be negative"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadYAML(t, engineWF+`      - { id: w, wait_for: `+tc.spec+` }
+`)
+			if err == nil {
+				t.Fatalf("wait_for %s accepted", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestSetRejectsEmpty: `set: {}` sets nothing and is refused, rather than
+// reading as a formless step.
+func TestSetRejectsEmpty(t *testing.T) {
+	_, err := loadYAML(t, engineWF+`      - { id: v, set: {} }
+`)
+	if err == nil || !strings.Contains(err.Error(), "needs at least one") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// TestBatch2HelpersExclusive: a new helper is a form like any other — pairing
+// one with another form is the same mutual-exclusion error sleep gets.
+func TestBatch2HelpersExclusive(t *testing.T) {
+	for _, tc := range []struct{ name, spec string }{
+		{"log + verb", `log: "x", uses: gh.comment`},
+		{"set + agent", `set: { a: 1 }, type: agent, prompt: p`},
+		{"assert + fail", `assert: "x", fail: "y"`},
+		{"wait_for + sleep", `wait_for: { uses: gh.get_run, until: "x", timeout: 1m }, sleep: 2s`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadYAML(t, engineWF+`      - { id: s, `+tc.spec+` }
+`)
+			if err == nil || !strings.Contains(err.Error(), "step forms are mutually exclusive") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
