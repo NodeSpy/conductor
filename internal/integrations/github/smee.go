@@ -51,8 +51,12 @@ func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 	// adaptive cadence — on a smee reconnect (dropped-webhook window) and on a manual
 	// `sweep` (SweepNow). Buffered+coalescing. The sweepLoop drains it only when the
 	// sweep is enabled; the smee reconnect nudge is harmless otherwise.
-	if g.cfg.Sweep.Enabled {
-		go g.sweepLoop(ctx, emit, g.renew)
+	if g.cfg.Sweep.IsEnabled() {
+		if g.cfg.Webhook.Configured() {
+			go g.sweepLoop(ctx, emit, g.renew) // adaptive: catch-up behind the webhook
+		} else {
+			go g.fixedSweepLoop(ctx, emit, g.renew) // fixed: the sweep is the event source
+		}
 	}
 	// Stuck-check detection is its own periodic watcher — NOT part of the sweep. It
 	// runs on a fixed cadence (poll_interval on the stuck_checks action, independent
@@ -73,8 +77,8 @@ func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 		started++
 		go func() { errc <- g.serveHTTP(ctx, emit, seen) }()
 	}
-	if started == 0 {
-		return fmt.Errorf("github[%s]: no webhook transport configured", g.name)
+	if started == 0 && !g.cfg.Sweep.IsEnabled() {
+		return fmt.Errorf("github[%s]: no event source — configure a webhook transport or leave the sweep enabled", g.name)
 	}
 
 	select {

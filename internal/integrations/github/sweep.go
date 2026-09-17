@@ -26,6 +26,7 @@ import (
 // fires.
 func (g *Integration) sweepLoop(ctx context.Context, emit core.EmitFunc, renew <-chan struct{}) {
 	min, max := sweepBounds(g.cfg.Sweep)
+	log.Printf("github[%s]: sweep enabled — adaptive %s→%s (webhook carries real-time)", g.name, min, max)
 	runSweep := func() {
 		if err := g.sweep(ctx, emit); err != nil {
 			log.Printf("github[%s]: sweep error: %v", g.name, err)
@@ -55,23 +56,75 @@ func (g *Integration) sweepLoop(ctx context.Context, emit core.EmitFunc, renew <
 	}
 }
 
-// sweepBounds resolves the tight floor and the ceiling from config (defaults: 10m
-// floor, 6h ceiling; the floor is clamped to never exceed the ceiling). Note the
+// sweepFloor is the hard minimum for any sweep cadence (adaptive floor or the
+// no-webhook fixed interval), so a mistyped `min_interval: 5s` across a whole App
+// installation can't flood the API.
+const sweepFloor = 1 * time.Minute
+
+// sweepBounds resolves the tight floor and the ceiling from config (defaults: 2m
+// floor, 1h ceiling; the floor is clamped to [sweepFloor, ceiling]). Note the
 // sweep runs immediately on startup and on a reconnect renewal regardless of the
 // floor — the floor only sets the follow-up rhythm.
 func sweepBounds(s SweepConfig) (min, max time.Duration) {
 	max = s.Interval.D()
 	if max <= 0 {
-		max = 6 * time.Hour
+		max = 1 * time.Hour
 	}
 	min = s.MinInterval.D()
 	if min <= 0 {
-		min = 10 * time.Minute
+		min = 2 * time.Minute
+	}
+	if min < sweepFloor {
+		min = sweepFloor
 	}
 	if min > max {
 		min = max
 	}
 	return min, max
+}
+
+// fixedSweepInterval is the no-webhook cadence: the sweep is the sole event source,
+// so it polls steadily at min_interval (default 2m, floored) with no backoff.
+func fixedSweepInterval(s SweepConfig) time.Duration {
+	iv := s.MinInterval.D()
+	if iv <= 0 {
+		iv = 2 * time.Minute
+	}
+	if iv < sweepFloor {
+		iv = sweepFloor
+	}
+	return iv
+}
+
+// fixedSweepLoop runs the sweep on a FIXED cadence — the mode when no webhook is
+// configured, so the sweep IS the event source and must poll predictably rather
+// than back off toward a slow ceiling (which would leave events unseen for up to an
+// Interval). Mirrors stuckLoop. `renew` (a manual SweepNow) triggers an immediate
+// sweep without changing the cadence.
+func (g *Integration) fixedSweepLoop(ctx context.Context, emit core.EmitFunc, renew <-chan struct{}) {
+	iv := fixedSweepInterval(g.cfg.Sweep)
+	log.Printf("github[%s]: sweep enabled — fixed %s (no webhook; the sweep is the event source)", g.name, iv)
+	runSweep := func() {
+		if err := g.sweep(ctx, emit); err != nil {
+			log.Printf("github[%s]: sweep error: %v", g.name, err)
+		}
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	runSweep() // once on start — reconcile anything missed while offline
+	t := time.NewTicker(iv)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-renew:
+			runSweep()
+		case <-t.C:
+			runSweep()
+		}
+	}
 }
 
 // backoffInterval doubles cur, capped at max.
@@ -102,12 +155,47 @@ func resetTimer(t *time.Timer, d time.Duration) {
 // recovering feedback that no live webhook picked up.
 func (g *Integration) sweep(ctx context.Context, emit core.EmitFunc) error {
 	st := &sweepStats{}
-	log.Printf("github[%s]: sweep starting (%d repo entr%s)", g.name, len(g.cfg.Sweep.Repos), plural(len(g.cfg.Sweep.Repos)))
-	g.eachRepo(ctx, "sweep", g.cfg.Sweep.Repos, func(instID int64, owner, name, repo string) {
+	cb := func(instID int64, owner, name, repo string) {
 		g.sweepRepo(ctx, emit, instID, owner, name, repo, st)
-	})
+	}
+	if len(g.cfg.Sweep.Repos) == 0 {
+		// No explicit repos → sweep every repo the App is installed on. In
+		// App-less (static-token) mode there is no installation to enumerate, so
+		// this warns and sweeps nothing rather than erroring the daemon; an
+		// App-less operator lists `repos:` explicitly.
+		if err := g.sweepAllInstalled(ctx, cb); err != nil {
+			log.Printf("github[%s]: sweep: %v", g.name, err)
+		}
+	} else {
+		log.Printf("github[%s]: sweep starting (%d repo entr%s)", g.name, len(g.cfg.Sweep.Repos), plural(len(g.cfg.Sweep.Repos)))
+		g.eachRepo(ctx, "sweep", g.cfg.Sweep.Repos, cb)
+	}
 	log.Printf("github[%s]: sweep done — repos=%d prs=%d review_requested=%d (skipped draft=%d, excluded=%d) merge_conflict=%d pr_behind=%d changes_requested=%d new_comment=%d",
 		g.name, st.repos, st.prs, st.review, st.reviewDraft, st.reviewExcluded, st.conflict, st.behind, st.comments, st.newComments)
+	return nil
+}
+
+// sweepAllInstalled enumerates every App installation and every repo within it,
+// invoking fn per repo. It is the default when no `repos:` is configured: the App
+// installation is already the event boundary (webhooks arrive for exactly these
+// repos), so sweeping all of them ingests nothing new — action stays gated by the
+// trigger filters. Returns an error in App-less mode (no installations concept).
+func (g *Integration) sweepAllInstalled(ctx context.Context, fn func(instID int64, owner, name, repo string)) error {
+	instIDs, err := g.app.listInstallations(ctx)
+	if err != nil {
+		return err
+	}
+	log.Printf("github[%s]: sweep starting (all installed repos across %d installation%s)", g.name, len(instIDs), plural(len(instIDs)))
+	for _, instID := range instIDs {
+		repos, err := g.rest.listInstallationRepos(ctx, instID)
+		if err != nil {
+			log.Printf("github[%s]: sweep: installation %d: %v", g.name, instID, err)
+			continue
+		}
+		for _, r := range repos {
+			fn(instID, r.Owner.Login, r.Name, r.FullName)
+		}
+	}
 	return nil
 }
 

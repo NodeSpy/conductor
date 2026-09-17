@@ -120,6 +120,52 @@ func (a *appAuth) accountInstallationID(ctx context.Context, account string) (in
 	return a.installationIDByURL(ctx, fmt.Sprintf("%s/users/%s/installation", a.apiBase, account))
 }
 
+// listInstallations enumerates every installation of this App (paginated
+// GET /app/installations), for the default "sweep all installed repos" when no
+// explicit repos/globs are configured. It authenticates with the App JWT — an
+// App-level endpoint, no installation id yet. Not available in App-less
+// static-token mode, which has no installations concept.
+func (a *appAuth) listInstallations(ctx context.Context) ([]int64, error) {
+	if a.static != "" {
+		return nil, fmt.Errorf("sweeping all installed repos needs a GitHub App; list repos explicitly when using token/gh credentials")
+	}
+	jwtStr, err := a.appJWT()
+	if err != nil {
+		return nil, err
+	}
+	var ids []int64
+	for page := 1; ; page++ {
+		url := fmt.Sprintf("%s/app/installations?per_page=100&page=%d", a.apiBase, page)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		req.Header.Set("Authorization", "Bearer "+jwtStr)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+		resp, err := a.httpc.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode/100 != 2 {
+			resp.Body.Close()
+			return nil, fmt.Errorf("list installations: HTTP %d", resp.StatusCode)
+		}
+		var batch []struct {
+			ID int64 `json:"id"`
+		}
+		derr := json.NewDecoder(resp.Body).Decode(&batch)
+		resp.Body.Close()
+		if derr != nil {
+			return nil, derr
+		}
+		for _, inst := range batch {
+			ids = append(ids, inst.ID)
+		}
+		if len(batch) < 100 {
+			break
+		}
+	}
+	return ids, nil
+}
+
 func (a *appAuth) installationIDByURL(ctx context.Context, url string) (int64, error) {
 	jwtStr, err := a.appJWT()
 	if err != nil {

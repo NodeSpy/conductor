@@ -136,17 +136,35 @@ type WebhookConfig struct {
 // Verify reports whether HMAC signature verification is on (default true).
 func (w WebhookConfig) Verify() bool { return w.VerifySig == nil || *w.VerifySig }
 
-// SweepConfig configures the optional catch-up sweep.
+// Configured reports whether a webhook transport is set up — a smee channel or a
+// direct listener. It is the switch between the two sweep cadences: with a webhook
+// carrying real-time, the sweep is catch-up and backs off; without one, the sweep
+// IS the event source and polls at a fixed cadence.
+func (w WebhookConfig) Configured() bool { return w.SmeeURL != "" || w.Listen != "" }
+
+// SweepConfig configures the catch-up sweep. Every field is optional: an omitted
+// sweep block is on by default (see IsEnabled), covering every repo the App is
+// installed on, at a cadence chosen by whether a webhook is configured.
 type SweepConfig struct {
-	Enabled bool `yaml:"enabled"`
+	// Enabled defaults TRUE (nil → on). Without a webhook the sweep is the only
+	// event source, so on-by-default is what makes conductor work out of the box;
+	// set it false to turn polling off.
+	Enabled *bool `yaml:"enabled"`
 	// Interval is the CEILING of the adaptive cadence — the cadence a quiet,
-	// connected daemon settles at (default 1h). MinInterval is the tight floor the
-	// cadence resets to after startup or a connectivity renewal (a smee reconnect),
-	// then it backs off ×2 toward Interval (default 2m).
-	Interval    config.Duration `yaml:"interval"`
+	// webhook-connected daemon settles at (default 1h). Only used in webhook mode.
+	Interval config.Duration `yaml:"interval"`
+	// MinInterval is the tight cadence (default 2m): the floor the adaptive cadence
+	// resets to on startup/reconnect in webhook mode, AND the fixed poll interval in
+	// no-webhook mode (where there is nothing to back off from).
 	MinInterval config.Duration `yaml:"min_interval"`
-	Repos       []string        `yaml:"repos"`
+	// Repos optionally NARROWS the sweep to specific repos or owner-globs
+	// (`acme/*`). Omitted → every repo across every App installation.
+	Repos []string `yaml:"repos"`
 }
+
+// IsEnabled reports whether the sweep runs. Absent (nil) means yes — the sweep is
+// on by default so a conductor with no webhook still receives events.
+func (s SweepConfig) IsEnabled() bool { return s.Enabled == nil || *s.Enabled }
 
 // Rule is one entry in the instance's `rules` list (or the `defaults` block).
 type Rule struct {
@@ -187,7 +205,7 @@ type Integration struct {
 // when the sweep is enabled. Non-blocking and coalescing. Returns false if the
 // sweep isn't enabled for this integration.
 func (g *Integration) SweepNow() bool {
-	if !g.cfg.Sweep.Enabled || g.renew == nil {
+	if !g.cfg.Sweep.IsEnabled() || g.renew == nil {
 		return false
 	}
 	select {
@@ -351,8 +369,8 @@ func (g *Integration) Validate() error {
 	if hasWebhook && g.cfg.Webhook.Verify() && g.cfg.Webhook.Secret == "" {
 		return fmt.Errorf("github[%s]: webhook.secret required when webhook.verify_signature is on", g.name)
 	}
-	if !hasWebhook && !(appless && g.cfg.Sweep.Enabled) {
-		return fmt.Errorf("github[%s]: set webhook.smee_url and/or webhook.listen (or, App-less, enable the sweep for polling)", g.name)
+	if !hasWebhook && !g.cfg.Sweep.IsEnabled() {
+		return fmt.Errorf("github[%s]: no event source — set webhook.smee_url/webhook.listen, or leave the sweep enabled to poll", g.name)
 	}
 	if appless {
 		for _, r := range g.cfg.Sweep.Repos {

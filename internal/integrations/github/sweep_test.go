@@ -72,7 +72,7 @@ func TestSweepReviewRequested(t *testing.T) {
 	cfg := Config{
 		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
 		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
-		Sweep:   SweepConfig{Enabled: true, Repos: []string{"acme/widget"}},
+		Sweep:   SweepConfig{Enabled: boolp(true), Repos: []string{"acme/widget"}},
 		Rules: []Rule{{
 			Match:    Match{Repos: []string{"acme/widget"}},
 			Reviewer: config.Actors{Logins: []string{"me"}},
@@ -121,7 +121,7 @@ func TestSweepUnresolvedComments(t *testing.T) {
 	cfg := Config{
 		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
 		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
-		Sweep:   SweepConfig{Enabled: true, Repos: []string{"acme/widget"}},
+		Sweep:   SweepConfig{Enabled: boolp(true), Repos: []string{"acme/widget"}},
 		Rules: []Rule{{
 			Match:   Match{Repos: []string{"acme/widget"}},
 			Me:      config.Actors{Logins: []string{"me"}},
@@ -186,7 +186,7 @@ func TestSweepMissedCommentsKindsAndWindow(t *testing.T) {
 	cfg := Config{
 		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
 		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
-		Sweep:   SweepConfig{Enabled: true, Repos: []string{"acme/widget"}},
+		Sweep:   SweepConfig{Enabled: boolp(true), Repos: []string{"acme/widget"}},
 		Rules: []Rule{{
 			Match:   Match{Repos: []string{"acme/widget"}},
 			Me:      config.Actors{Logins: []string{"me"}},
@@ -228,7 +228,7 @@ func TestSweepOrgGlob(t *testing.T) {
 	cfg := Config{
 		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
 		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
-		Sweep:   SweepConfig{Enabled: true, Repos: []string{"acme/*"}},
+		Sweep:   SweepConfig{Enabled: boolp(true), Repos: []string{"acme/*"}},
 		Rules: []Rule{{
 			Match:    Match{Repos: []string{"acme/*"}},
 			Reviewer: config.Actors{Logins: []string{"me"}}, // makes "me" a self login
@@ -248,9 +248,12 @@ func TestSweepOrgGlob(t *testing.T) {
 	}
 }
 
+// boolp returns a pointer to b — for the *bool sweep.enabled field.
+func boolp(b bool) *bool { return &b }
+
 func TestSweepNow(t *testing.T) {
 	// Enabled: signals renew, non-blocking and coalescing.
-	g := &Integration{cfg: Config{Sweep: SweepConfig{Enabled: true}}, renew: make(chan struct{}, 1)}
+	g := &Integration{cfg: Config{Sweep: SweepConfig{Enabled: boolp(true)}}, renew: make(chan struct{}, 1)}
 	if !g.SweepNow() {
 		t.Fatal("SweepNow should return true when the sweep is enabled")
 	}
@@ -264,7 +267,7 @@ func TestSweepNow(t *testing.T) {
 	g.SweepNow()
 
 	// Disabled: no-op, returns false.
-	g2 := &Integration{cfg: Config{Sweep: SweepConfig{Enabled: false}}, renew: make(chan struct{}, 1)}
+	g2 := &Integration{cfg: Config{Sweep: SweepConfig{Enabled: boolp(false)}}, renew: make(chan struct{}, 1)}
 	if g2.SweepNow() {
 		t.Fatal("SweepNow should return false when the sweep is disabled")
 	}

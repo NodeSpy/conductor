@@ -687,7 +687,7 @@ func (g *githubImpl) Source(triggers []CompiledTrigger) (core.Integration, error
 		actions[kind] = append(actions[kind], act)
 	}
 	sweep := g.conn.Sweep
-	if sweep.Enabled && len(sweep.Repos) == 0 {
+	if sweep.IsEnabled() && len(sweep.Repos) == 0 {
 		sweep.Repos = g.conn.Repos
 	}
 	cfg := gh.Config{
