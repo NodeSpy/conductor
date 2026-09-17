@@ -604,6 +604,27 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 			return nil, err
 		}
 		return map[string]any{"runs": runs}, nil
+	case "get_run":
+		runID := toInt(opts["run_id"])
+		if runID == 0 {
+			return nil, fmt.Errorf("github.get_run: options.run_id is required")
+		}
+		var run struct {
+			ID         int64  `json:"id"`
+			Name       string `json:"name"`
+			Status     string `json:"status"`
+			Conclusion string `json:"conclusion"`
+			HeadBranch string `json:"head_branch"`
+			HeadSHA    string `json:"head_sha"`
+			HTMLURL    string `json:"html_url"`
+		}
+		if err := c.get(ctx, tok, fmt.Sprintf("%s/repos/%s/actions/runs/%d", base, repo, runID), &run); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"run_id": run.ID, "name": run.Name, "status": run.Status, "conclusion": run.Conclusion,
+			"head_branch": run.HeadBranch, "head_sha": run.HeadSHA, "url": run.HTMLURL,
+		}, nil
 	case "create_release":
 		tag, _ := opts["tag"].(string)
 		if tag == "" {

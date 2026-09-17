@@ -726,6 +726,9 @@ func TestGithubWriteAndActionVerbs(t *testing.T) {
 		"commit":        map[string]any{"sha": "c1"},
 		"object":        map[string]any{"sha": "ref1"},
 		"workflow_runs": []any{map[string]any{"id": 9, "name": "CI", "status": "completed", "conclusion": "success", "head_branch": "main", "head_sha": "h", "html_url": "ru"}},
+		// Top-level run fields let get_run (a single-object GET) decode from the
+		// same superset body; no other verb here reads these top-level keys.
+		"id": 9, "status": "completed", "conclusion": "success", "head_branch": "main", "head_sha": "h",
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var b map[string]any
@@ -847,6 +850,15 @@ func TestGithubWriteAndActionVerbs(t *testing.T) {
 		t.Fatalf("list_runs: %v", err)
 	} else if runs, _ := out["runs"].([]any); len(runs) != 1 || runs[0].(map[string]any)["conclusion"] != "success" {
 		t.Fatalf("list_runs out: %v", out)
+	}
+	// get_run (single run by id → GET .../actions/runs/<id>, decoded flat)
+	if out, err := impl.Invoke(ctx, "get_run", map[string]any{"repo": "o/r", "run_id": 99}); err != nil {
+		t.Fatalf("get_run: %v", err)
+	} else if out["status"] != "completed" || out["conclusion"] != "success" || out["run_id"] != int64(9) {
+		t.Fatalf("get_run out: %v", out)
+	}
+	if r := last(); r.method != "GET" || r.path != "/repos/o/r/actions/runs/99" {
+		t.Fatalf("get_run req: %+v", r)
 	}
 }
 

@@ -84,6 +84,21 @@ var fakeDecl = &connector.TypeDecl{
 			Outputs: connector.Schema{"done": {Type: connector.TBool}},
 		},
 		{
+			// A read verb whose outputs a test scripts per call (via
+			// fakeState.outputsFn) — the shape wait_for polls: run_id in,
+			// status/conclusion out. Declared so those fields survive any
+			// output coercion against the schema.
+			Name: "poll", Desc: "a read verb for wait_for tests",
+			Options: connector.Schema{
+				"repo":   {Type: connector.TString, Scope: "repo"},
+				"run_id": {Type: connector.TInt},
+			},
+			Outputs: connector.Schema{
+				"status":     {Type: connector.TString},
+				"conclusion": {Type: connector.TString},
+			},
+		},
+		{
 			// A scoped option that is NOT a string — the shape an external
 			// plugin can declare (`account: {type: integer, scope: "account"}`)
 			// and which a string type-assertion silently read as absent
@@ -149,6 +164,11 @@ type fakeState struct {
 	failIf map[string]func(opts map[string]any) bool
 	// outputs[verb] overrides the default canned outputs for verb.
 	outputs map[string]map[string]any
+	// outputsFn[verb], when set, COMPUTES the output for each call from its
+	// 0-based per-verb call index — how a test scripts a value that changes
+	// across polls (a run's status: in_progress → completed) for wait_for.
+	// Takes precedence over outputs[verb].
+	outputsFn map[string]func(callIndex int, opts map[string]any) map[string]any
 	// slowMS[verb] sleeps that long (bounded by ctx) before returning.
 	slowMS map[string]time.Duration
 }
@@ -163,6 +183,7 @@ func newFakeStateEmpty() *fakeState {
 		failTimes: map[string]int{},
 		failIf:    map[string]func(map[string]any) bool{},
 		outputs:   map[string]map[string]any{},
+		outputsFn: map[string]func(int, map[string]any) map[string]any{},
 		slowMS:    map[string]time.Duration{},
 	}
 }
@@ -231,12 +252,20 @@ func (f *fakeImpl) Invoke(ctx context.Context, verb string, opts map[string]any)
 	st := getOrCreateFakeState(f.name)
 	st.mu.Lock()
 	st.calls = append(st.calls, fakeCall{Verb: verb, Opts: opts})
+	// 0-based index of THIS call among calls to the same verb (for outputsFn).
+	callIdx := -1
+	for _, c := range st.calls {
+		if c.Verb == verb {
+			callIdx++
+		}
+	}
 	remaining := st.failTimes[verb]
 	if remaining > 0 {
 		st.failTimes[verb] = remaining - 1
 	}
 	pred := st.failIf[verb]
 	slow := st.slowMS[verb]
+	outFn := st.outputsFn[verb]
 	out, hasOut := st.outputs[verb]
 	st.mu.Unlock()
 
@@ -258,6 +287,11 @@ func (f *fakeImpl) Invoke(ctx context.Context, verb string, opts map[string]any)
 			return nil, ctx.Err()
 		}
 	}
+	if outFn != nil {
+		// A fresh map per call, computed from the call index — the scripted
+		// path for values that change across polls.
+		return outFn(callIdx, opts), nil
+	}
 	if hasOut {
 		// Return a fresh copy: a real connector mints a new output map per call,
 		// and the runner mutates it in place (binary-out → handle). Sharing the
@@ -276,6 +310,8 @@ func (f *fakeImpl) Invoke(ctx context.Context, verb string, opts map[string]any)
 		return map[string]any{"action": "approve", "text": "ok", "ref": "ref-1"}, nil
 	case "slow":
 		return map[string]any{"done": true}, nil
+	case "poll":
+		return map[string]any{"status": "completed"}, nil
 	case "charge":
 		return map[string]any{"ok": true}, nil
 	}

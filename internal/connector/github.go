@@ -436,6 +436,19 @@ var githubDecl = &TypeDecl{
 			Outputs: Schema{"runs": {Type: TList}},
 		},
 		{
+			Name: "get_run", Desc: "one workflow run by id: {run_id, name, status, conclusion, head_branch, head_sha, url}",
+			Options: Schema{
+				"repo":   {Type: TString, Required: true, Scope: "repo"},
+				"run_id": {Type: TInt, Required: true},
+				"as":     {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{
+				"run_id": {Type: TInt}, "name": {Type: TString}, "status": {Type: TString},
+				"conclusion": {Type: TString}, "head_branch": {Type: TString},
+				"head_sha": {Type: TString}, "url": {Type: TString},
+			},
+		},
+		{
 			Name: "create_release", Desc: "publish a release for a tag",
 			Options: Schema{
 				"repo":   {Type: TString, Required: true, Scope: "repo"},
