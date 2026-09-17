@@ -190,6 +190,37 @@ its own failure. A failing step fires its own `at: fail` hooks, then (unless
 it sets `continue_on_error`) the workflow's. Hook verbs are best-effort:
 logged and audited, never fatal.
 
+A hook's `uses:` may be a connector verb OR **`workflow.run`** (`options: { name:
+<workflow>, with: {…} }`, or inline `options: { steps: [ … ] }`) — so a hook can
+run a whole ordered workflow, with `if:`, agents and helpers, not just one verb.
+
+### The `hook` contract
+
+Every hook — at every phase — receives a uniform `hook` object describing the
+lifecycle moment, so a handler parses the same shape regardless of phase:
+
+| field | when | meaning |
+| --- | --- | --- |
+| `hook.phase` | all | `start` \| `done` \| `fail` |
+| `hook.status` | all | `running` \| `ok` \| `failed` |
+| `hook.run_id` | all | the workflow run id |
+| `hook.step` | step-level | the step the hook is scoped to |
+| `hook.failure` | `fail` | the failure sub-object (below) |
+
+On `fail`, `hook.failure` carries `{ kind, error, step, gave_up }` — `kind` is
+`ordinary` or `gave_up` (retries exhausted); `gave_up` is the same signal as the
+`escalate` lifecycle event. The legacy flat `{{.error}}` / `{{.failed_step}}`
+stay populated for back-compat. A handler branches on it, e.g.:
+
+```yaml
+hooks:
+  - at: fail
+    uses: workflow.run
+    options:
+      name: on-failure
+      with: { failure: "{{.hook.failure}}", repo: "{{.repo}}", pr: "{{.pr}}" }
+```
+
 ## Control flow
 
 - `if:` — skip the step when false (skips are audited).

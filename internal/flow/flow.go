@@ -402,15 +402,14 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	}
 
 	shadow = shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow)
-	r.runHooks(ctx, t, spec.Hooks, "start", data, "workflow")
+	r.fireHooks(ctx, t, spec.Hooks, "start", "running", run.ID, "", data, nil, "workflow")
 
 	err := r.runSteps(ctx, &run, t, spec.Steps, data, shadow, true)
 	if err != nil {
 		r.Log("%s workflow failed: %v", flowTag(t), err)
-		fdata := cloneData(data)
-		fdata["error"] = err.Error()
-		fdata["failed_step"] = failedStepID(err)
-		r.runHooks(ctx, t, spec.Hooks, "fail", fdata, "workflow")
+		gaveUp := dispatch.IsUnrecoverable(err)
+		r.fireHooks(ctx, t, spec.Hooks, "fail", "failed", run.ID, "",
+			data, failureCtx(err.Error(), failedStepID(err), gaveUp), "workflow")
 		if dispatch.IsUnrecoverable(err) {
 			// The step's dispatch never reached a working runtime (an
 			// unknown/unrunnable controller, a worktree/workspace that never
@@ -440,7 +439,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 		r.finishRun(ctx, run)
 		return
 	}
-	r.runHooks(ctx, t, spec.Hooks, "done", data, "workflow")
+	r.fireHooks(ctx, t, spec.Hooks, "done", "ok", run.ID, "", data, nil, "workflow")
 	if r.Notif != nil {
 		r.Notif.Emit(ctx, "complete", t, "workflow")
 	}
@@ -532,7 +531,7 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 			}
 		}
 
-		r.runHooks(ctx, t, step.Hooks, "start", data, "step "+id)
+		r.fireHooks(ctx, t, step.Hooks, "start", "running", run.ID, id, data, nil, "step "+id)
 		hist.stepStart(id, i)
 		outputs, err := r.execStepWithFlow(ctx, t, step, id, slot, data, shadow)
 		if err != nil {
@@ -540,10 +539,9 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 			// a REST secret in a URL query rides url.Error verbatim. Redact
 			// before the string reaches hooks' template scope or disk.
 			errStr := r.redactErr(err)
-			fdata := cloneData(data)
-			fdata["error"] = errStr
-			fdata["failed_step"] = id
-			r.runHooks(ctx, t, step.Hooks, "fail", fdata, "step "+id)
+			gaveUp := dispatch.IsUnrecoverable(err)
+			r.fireHooks(ctx, t, step.Hooks, "fail", "failed", run.ID, id, data,
+				failureCtx(errStr, id, gaveUp), "step "+id)
 			r.audit(map[string]any{"event": "step_error", "repo": t.Target.Repo,
 				"number": t.Target.Number, "kind": t.Kind, "step": id, "error": errStr})
 			if step.ContinueOnError {
@@ -566,7 +564,7 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 		}
 		r.audit(entry)
 		// Step-done hooks see the step's own output (position-scoped).
-		r.runHooks(ctx, t, step.Hooks, "done", data, "step "+id)
+		r.fireHooks(ctx, t, step.Hooks, "done", "ok", run.ID, id, data, nil, "step "+id)
 		r.checkpoint(ctx, run, i, id, step, outputs, checkpoint)
 	}
 	return nil
@@ -1769,6 +1767,50 @@ func extractOutputs(out string) map[string]any {
 // runHooks fires the hooks of one phase, in order, best-effort: a failing
 // hook is logged and audited but never fails the workflow (matching the
 // legacy slack-feedback semantics).
+// hookData layers the uniform `hook` lifecycle contract (docs/wiki/Workflows.md) onto a
+// COPY of the run scope for a hook phase, leaving the shared scope untouched. EVERY phase
+// gets `hook.{phase,status,run_id,step}`; the `fail` phase adds `hook.failure`. The flat
+// event context (repo/pr/…) and prior step outputs stay in scope alongside `hook`, and a
+// failure keeps the legacy flat `error`/`failed_step` so existing hooks don't break.
+func hookData(base map[string]any, phase, status, runID, stepID string, failure map[string]any) map[string]any {
+	d := cloneData(base)
+	hook := map[string]any{"phase": phase, "status": status}
+	if runID != "" {
+		hook["run_id"] = runID
+	}
+	if stepID != "" {
+		hook["step"] = stepID
+	}
+	if failure != nil {
+		hook["failure"] = failure
+		d["error"] = failure["error"]      // back-compat: {{.error}}
+		d["failed_step"] = failure["step"] // back-compat: {{.failed_step}}
+	}
+	d["hook"] = hook
+	return d
+}
+
+// failureCtx builds the `hook.failure` sub-object. `kind` classifies the failure so a
+// handler can branch on it; `gave_up` reports retries exhausted (dispatch.IsUnrecoverable).
+// The caller passes an already-redacted error string.
+func failureCtx(errStr, stepID string, gaveUp bool) map[string]any {
+	kind := "ordinary"
+	if gaveUp {
+		kind = "gave_up"
+	}
+	return map[string]any{"kind": kind, "error": errStr, "step": stepID, "gave_up": gaveUp}
+}
+
+// fireHooks builds the hook contract and runs the matching hooks. It skips the data clone
+// entirely when a scope declares no hooks — the common case — so the contract costs
+// nothing where it isn't used.
+func (r *Runner) fireHooks(ctx context.Context, t core.Trigger, hooks []config.Hook, phase, status, runID, stepID string, base, failure map[string]any, where string) {
+	if len(hooks) == 0 {
+		return
+	}
+	r.runHooks(ctx, t, hooks, phase, hookData(base, phase, status, runID, stepID, failure), where)
+}
+
 func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Hook, phase string, data map[string]any, where string) {
 	for i, h := range hooks {
 		if h.At != phase {
