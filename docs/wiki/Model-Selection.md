@@ -8,8 +8,8 @@ This matters because a config is portable and a model list is not. A pack that
 hardcodes `claude-opus-5` is broken for someone running codex; a pack that asks
 for "a strong reviewer model" runs for both.
 
-See also: [Model discovery](Model-Discovery.md) (where the available list comes
-from) and [Runtimes](Runtimes.md).
+See also: [Model discovery](Model-Discovery) (where the available list comes
+from) and [Runtimes](Runtimes).
 
 ## The three places a model can be decided
 
