@@ -95,11 +95,10 @@ Work down this list and you go from zero to the most advanced setup:
    a credential-free config, `conductor validate`, and a `manual` run.
 2. **Core concepts** — [[Connectors]] (events vs verbs), [[Workflows]]
    (triggers, steps, hooks, context scope), [[Verbs]] (options + identity).
-3. **Connect real services** — [[GitHub-App-Setup]] + [[Integration-GitHub]],
-   then [[Integration-Slack]] · [[Integration-Cron]] ·
-   [[Integration-Webhook]] · [[Integration-Sentry]] ·
-   [[Integration-PagerDuty]] · [[Integration-RSS]]; anything else via the
-   `rest`/`graphql` types in [[Configuration]].
+3. **Connect real services** — [[GitHub-App-Setup]] for GitHub, then browse the
+   [connector catalog](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md)
+   (each with its own setup) and the built-in types in [[Connectors]]; anything
+   not yet typed via `rest`/`graphql` in [[Configuration]].
 4. **Agents** — [[Runtimes]], [[Steps]] (profiles, checkout, guidance),
    [[Hand-offs]] (`ask` verbs), and [[Notifications]] (the `conductor.*`
    lifecycle source).
@@ -132,9 +131,8 @@ The model: [[Connectors]] · [[Workflows]] · [[Reuse]] · [[Settings-and-Templa
 [[Agent-Skill]] · [[Policy]] · [[Gates]] · [[Teams]] · [[Outcomes]] ·
 [[Cost-Accounting]] · [[Secrets]] · [[Trust-and-Isolation]] · [[Hosts]] · [[Isolation]]
 
-Connector references: [[Authoring-Connectors]] · [[Integration-GitHub]] ·
-[[Integration-Slack]] · [[Integration-Cron]] · [[Integration-Webhook]] ·
-[[Integration-Sentry]] · [[Integration-PagerDuty]] · [[Integration-RSS]]
+Connector references: [[Connectors]] · [[GitHub-App-Setup]] · [[Authoring-Connectors]] ·
+[connector catalog ↗](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md)
 
 Operations: [[Runs]] · [[Notifications]] · [[Hand-offs]] · [[Migration]]
 (the legacy schema still loads and auto-migrates)

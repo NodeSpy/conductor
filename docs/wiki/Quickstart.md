@@ -101,10 +101,10 @@ fetched. The returned object becomes `{{.shape.summary}}` for the third step.
 
 Follow the **learning path** on [[Home]]. The immediate next steps:
 
-- **Connect a real service** — [[GitHub-App-Setup]] then
-  [[Integration-GitHub]]: events like `gh.merge_conflict` /
-  `gh.failing_checks` replace the cron tick, and verbs like `gh.comment`
-  replace `echo`.
+- **Connect a real service** — [[GitHub-App-Setup]]: events like
+  `gh.merge_conflict` / `gh.failing_checks` replace the cron tick, and verbs
+  like `gh.comment` replace `echo`. Other services are in the
+  [connector catalog](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md).
 - **Run an agent** — add a `runtimes:` entry and a `type: agent` step
   ([[Runtimes]], [[Steps]]); the seeded starter's triggers show the shape.
   Shared step config goes in a YAML anchor under a top-level `x-` key, which

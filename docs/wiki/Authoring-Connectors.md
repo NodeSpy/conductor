@@ -149,8 +149,8 @@ SQL stores are the precedent).
   happen in the shared `Instance` wrapper — don't reimplement them.
 - Reserved names (`kv`, `sql`, `memory`, `workflow`, `conductor`, `blob`)
   are enforced by config validation; pick another type name.
-- Ship docs with the connector: a `Integration-<Type>` (connector) wiki page
-  and, when config surface is added, a `config.example.yaml` block — same
-  commit.
+- Ship docs with the connector: a `docs/connectors/<name>.md` page in the
+  plugin repo (Setup → Connection → Verbs), and, when config surface is added, a
+  `config.example.yaml` block — same commit.
 
 Related: [[Connectors]] · [[Verbs]] · [[Binary-Data]] · [[Configuration]] · [[Plugins]]
