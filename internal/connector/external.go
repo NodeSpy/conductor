@@ -78,12 +78,21 @@ func RegisterExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin
 		if log == nil {
 			log = func(string, ...any) {}
 		}
+		// Managed OAuth2: when the plugin declares Auth (endpoints) and/or the
+		// instance carries an `auth:` block, conductor owns the token exchange
+		// and injects the bearer per-call. nil au = the plugin authenticates
+		// itself from its own connection fields (unchanged behavior).
+		au, err := buildManagedAuth(name, decl.Auth, ref, deps)
+		if err != nil {
+			return nil, err
+		}
 		return &externalImpl{
 			client:     cl,
 			source:     cl, // *plugin.Client also satisfies pluginSourcer
 			instance:   name,
 			decl:       td,
 			conn:       conn,
+			auth:       au,
 			secretRefs: refs,
 			pluginRef:  spec.Ref(),
 			pluginType: spec.Provides,
@@ -131,8 +140,10 @@ func mapSchema(s plugin.Schema) Schema {
 }
 
 // reservedConnKeys are the ConnectorRef header fields — not part of the
-// plugin's connection config.
-var reservedConnKeys = map[string]bool{"type": true, "enabled": true, "options": true, "policy": true}
+// plugin's connection config. `auth` is the daemon-managed OAuth2 block (see
+// buildManagedAuth): conductor runs the token exchange and injects the bearer,
+// so the block never crosses to the plugin as a connection field.
+var reservedConnKeys = map[string]bool{"type": true, "enabled": true, "options": true, "policy": true, "auth": true}
 
 // resolveConnection decodes an instance's connection block, resolves every
 // secret reference (env:/vault), and returns the connection map to hand the
@@ -174,6 +185,47 @@ func resolveConnection(ref config.ConnectorRef, sec *secrets.Resolver, allow map
 	return conn, refs, nil
 }
 
+// buildManagedAuth wires conductor's OAuth2 authenticator for a plugin
+// connector. The plugin's declared AuthSpec (declAuth) supplies the provider
+// endpoints + default scopes; the instance's `auth:` config block supplies the
+// grant, client_id/client_secret, token_vault, and any refresh_token seed. When
+// neither asks for managed auth, it returns (nil, nil) and the plugin keeps
+// authenticating from its own connection fields.
+func buildManagedAuth(name string, declAuth *plugin.AuthSpec, ref config.ConnectorRef, deps Deps) (*authenticator, error) {
+	var wrap struct {
+		Auth authConfig `yaml:"auth"`
+	}
+	if err := ref.Decode(&wrap); err != nil {
+		return nil, fmt.Errorf("connector %q: decode auth block: %w", name, err)
+	}
+	a := wrap.Auth
+	if declAuth != nil {
+		// The plugin bakes in the endpoints; the operator supplies only creds.
+		if a.Type == "" {
+			a.Type = "oauth2"
+		}
+		if a.TokenURL == "" {
+			a.TokenURL = declAuth.TokenURL
+		}
+		if a.AuthURL == "" {
+			a.AuthURL = declAuth.AuthURL
+		}
+		if a.DeviceAuthURL == "" {
+			a.DeviceAuthURL = declAuth.DeviceAuthURL
+		}
+		if len(a.Scopes) == 0 {
+			a.Scopes = append([]string(nil), declAuth.Scopes...)
+		}
+	}
+	if a.Type == "" || a.Type == "none" {
+		return nil, nil // no managed auth
+	}
+	if err := a.validate(fmt.Sprintf("connector %q", name)); err != nil {
+		return nil, err
+	}
+	return newAuthenticator(context.Background(), name, a, deps.Secrets, deps.Log)
+}
+
 // pluginInvoker is the subset of *plugin.Client externalImpl drives (the seam
 // lets tests inject a fake without a live subprocess).
 type pluginInvoker interface {
@@ -188,6 +240,7 @@ type externalImpl struct {
 	instance   string
 	decl       *TypeDecl
 	conn       map[string]any
+	auth       *authenticator // managed OAuth2, nil when the plugin self-authenticates
 	secretRefs []string
 	pluginRef  string
 	pluginType string
@@ -245,8 +298,23 @@ func (e *externalImpl) Invoke(ctx context.Context, verb string, opts map[string]
 			}
 		})
 	}
+	conn := e.conn
+	if e.auth != nil {
+		// Managed OAuth2: mint/refresh the token and inject it into a per-call
+		// COPY of the connection (never mutate the shared map). The plugin reads
+		// it via plugin.AccessToken and does no token handling itself.
+		tok, err := e.auth.accessToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("connector %q: oauth2: %w", e.instance, err)
+		}
+		conn = make(map[string]any, len(e.conn)+1)
+		for k, v := range e.conn {
+			conn[k] = v
+		}
+		conn[plugin.AccessTokenKey] = tok
+	}
 	out, err := e.client.Invoke(ctx, plugin.InvokeRequest{
-		Instance: e.instance, Verb: verb, Options: opts, Connection: e.conn,
+		Instance: e.instance, Verb: verb, Options: opts, Connection: conn,
 	})
 	if err != nil {
 		return nil, err

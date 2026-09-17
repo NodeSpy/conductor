@@ -50,6 +50,11 @@ type Manifest struct {
 	// Spawns records the legacy boolean for a plugin that declares it spawns
 	// children without naming them.
 	Spawns bool `yaml:"spawns,omitempty"`
+	// Auth records the plugin's declared OAuth2 endpoints (Decl.Auth) so
+	// `conductor connector auth <name>` can run the one-time interactive login
+	// from the CLI without respawning the plugin to re-Describe it. nil for a
+	// plugin that declares no managed auth.
+	Auth *AuthSpec `yaml:"auth,omitempty"`
 }
 
 // IsZero reports whether the plugin declared no capabilities at all.

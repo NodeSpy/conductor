@@ -165,6 +165,22 @@ connectors:
   #   use: pagerduty
   #   listen: ":8097"
   #   signing_secret: ${PAGERDUTY_SIGNING_SECRET}
+  #
+  # A plugin connector can use conductor's MANAGED OAuth2: the plugin bakes in
+  # the provider's endpoints, you supply only credentials + grant + token_vault
+  # in an `auth:` block, and conductor runs the token exchange and injects the
+  # bearer into the plugin per-call — the plugin never sees the client secret.
+  # Log in once with `conductor connector auth <name>` (authorization_code opens
+  # a browser + captures the localhost redirect; device prints a code); tokens
+  # are stored and rotated in the token_vault. Same `auth:` block as rest/graphql.
+  # books:
+  #   use: xero
+  #   tenant_id: ${XERO_TENANT_ID}
+  #   auth:
+  #     grant: authorization_code            # or refresh_token | device | client_credentials
+  #     client_id: ${XERO_CLIENT_ID}
+  #     client_secret: '{{ vault "house" "xero-client-secret" }}'
+  #     token_vault: house                   # captured tokens + rotations persist here
   # upstream:
   #   type: rss
   #   feeds:

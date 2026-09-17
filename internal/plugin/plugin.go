@@ -156,6 +156,7 @@ type (
 	Event              = sdk.Event
 	Capabilities       = sdk.Capabilities
 	Decl               = sdk.Decl
+	AuthSpec           = sdk.AuthSpec
 	InvokeRequest      = sdk.InvokeRequest
 	InvokeResult       = sdk.InvokeResult
 	StartSourceRequest = sdk.StartSourceRequest
@@ -164,3 +165,7 @@ type (
 	HostRequest        = sdk.HostRequest
 	HostResult         = sdk.HostResult
 )
+
+// AccessTokenKey is the reserved connection key under which the daemon injects a
+// managed OAuth2 bearer token for a plugin connector that declares Decl.Auth.
+const AccessTokenKey = sdk.AccessTokenKey

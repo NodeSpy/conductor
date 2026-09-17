@@ -242,6 +242,45 @@ type Decl struct {
 	Verbs        []Verb       `json:"verbs,omitempty"`
 	Events       []Event      `json:"events,omitempty"`
 	Capabilities Capabilities `json:"capabilities,omitempty"`
+	// Auth, when set, declares that this connector authenticates via conductor's
+	// MANAGED OAuth2: the plugin bakes in the provider's endpoints + default
+	// scopes here, the operator supplies client_id/client_secret + grant +
+	// token_vault in the connector's `auth:` config block, and the daemon runs
+	// its own OAuth2 authenticator for the connector — so `conductor connector
+	// auth <name>` performs the one-time login and the daemon injects a fresh,
+	// auto-rotated bearer token into each InvokeRequest.Connection under
+	// AccessTokenKey. The plugin never performs the token exchange itself.
+	//
+	// Zero value (nil) means "no managed auth" — the connector authenticates
+	// however its own connection fields say — so this is back-compatible: an old
+	// plugin never emits it and an old daemon never reads it.
+	Auth *AuthSpec `json:"auth,omitempty"`
+}
+
+// AuthSpec is a connector's baked-in OAuth2 provider description (see Decl.Auth).
+// Endpoints and default scopes live here so the operator only supplies
+// credentials; the shared authConfig grants (client_credentials | refresh_token
+// | authorization_code | device) are what Grants lists.
+type AuthSpec struct {
+	Grants        []string `json:"grants,omitempty" yaml:"grants,omitempty"`                   // supported grants, e.g. ["authorization_code","refresh_token"]
+	TokenURL      string   `json:"token_url,omitempty" yaml:"token_url,omitempty"`             // OAuth2 token endpoint
+	AuthURL       string   `json:"auth_url,omitempty" yaml:"auth_url,omitempty"`               // consent endpoint (authorization_code)
+	DeviceAuthURL string   `json:"device_auth_url,omitempty" yaml:"device_auth_url,omitempty"` // device-authorization endpoint (device grant)
+	Scopes        []string `json:"scopes,omitempty" yaml:"scopes,omitempty"`                   // default scopes if the operator sets none
+}
+
+// AccessTokenKey is the reserved InvokeRequest.Connection key under which the
+// daemon injects the managed OAuth2 bearer token for a connector that declares
+// Decl.Auth. Plugins read it verbatim (see AccessToken); operators must not use
+// it as one of their own connection fields.
+const AccessTokenKey = "access_token"
+
+// AccessToken returns the managed OAuth2 bearer token the daemon injected into a
+// verb's connection map, or "" if none was injected (the connector declares no
+// Auth, or the daemon is older than this field). A convenience for plugins.
+func AccessToken(conn map[string]any) string {
+	s, _ := conn[AccessTokenKey].(string)
+	return s
 }
 
 // InvokeRequest is the daemon→plugin verb call. Connection carries ONLY the
