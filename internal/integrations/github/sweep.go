@@ -185,7 +185,11 @@ func (g *Integration) sweepAllInstalled(ctx context.Context, fn func(instID int6
 	if err != nil {
 		return err
 	}
-	log.Printf("github[%s]: sweep starting (all installed repos across %d installation%s)", g.name, len(instIDs), plural(len(instIDs)))
+	insts := "s"
+	if len(instIDs) == 1 {
+		insts = ""
+	}
+	log.Printf("github[%s]: sweep starting (all installed repos across %d installation%s)", g.name, len(instIDs), insts)
 	for _, instID := range instIDs {
 		repos, err := g.rest.listInstallationRepos(ctx, instID)
 		if err != nil {
