@@ -88,9 +88,11 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// of the target repo, because paseo derives the forge owner/repo from the
 	// working directory — not from a flag. Without it, paseo resolves the wrong
 	// repo and fails with WORKSPACE_CREATE_FAILED.
-	cwd := ""         // --cwd: a base checkout paseo derives the forge repo from
-	worktreeWS := ""  // pre-created isolated worktree workspace id (pinned via --workspace)
-	worktreeCwd := "" // that worktree's local path (RunRef.Workdir for gates/diffs)
+	cwd := ""                // --cwd: a base checkout paseo derives the forge repo from
+	worktreeWS := ""         // pre-created isolated worktree workspace id (pinned via --workspace)
+	worktreeCwd := ""        // that worktree's local path (RunRef.Workdir for gates/diffs)
+	ephemeralWS := ""        // un-pinned checkout:none run's own ephemeral workspace id
+	worktreeCreated := false // true only when THIS dispatch created worktreeWS (vs adopted an existing one — Fix D); gates the teardown below so a reused workspace is never archived out from under it
 	if req.Action.WorkDir != "" {
 		wd, err := render(req.Action.WorkDir, data)
 		if err != nil {
@@ -121,7 +123,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 			// agent. In a preview (dry/shadow) we can't touch the daemon, so keep the
 			// old inline `--cwd` + `--new-workspace` argv shape for assertion.
 			if d.WorktreeCreator != nil || (!d.DryRun && !req.Shadow) {
-				id, wcwd, err := d.createWorktree(ctx, req, dir)
+				id, wcwd, created, err := d.createWorktree(ctx, req, dir)
 				if err != nil {
 					// `workspace create` creates-or-errors (see the comment
 					// above) — a real failure here means the runtime never got
@@ -132,6 +134,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 				}
 				worktreeWS = id
 				worktreeCwd = wcwd
+				worktreeCreated = created
 			} else {
 				cwd = dir
 			}
@@ -175,6 +178,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 			// therefore renders the un-pinned argv, which is what it always did.
 			if id, err := d.runWorkspace(ctx, req); err == nil && id != "" {
 				argv = append(argv, "--workspace", id)
+				ephemeralWS = id
 			}
 		}
 	}
@@ -293,6 +297,21 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	}
 	ref.Output = res.Output
 	if err != nil {
+		// The launch failed before any agent came up (res.AgentID empty — e.g.
+		// paseo returned MISSING_PROVIDER, or any pre-agent error). A workspace
+		// this dispatch CREATED for the run would otherwise orphan: agent-less,
+		// so the reaper's agent-anchored walk can't see it, and its deterministic
+		// branch name collides with the next retry. Tear those down here (Fix A).
+		// A worktree we ADOPTED (worktreeCreated=false, Fix D) is left alone — it
+		// may hold another live agent, and it isn't ours to reclaim. The reaper's
+		// orphan sweep is the backstop for anything this misses.
+		if res.AgentID == "" {
+			toArchive := []string{ephemeralWS}
+			if worktreeCreated {
+				toArchive = append(toArchive, worktreeWS)
+			}
+			d.archiveOrphanWorkspaces(ctx, toArchive...)
+		}
 		return ref, err
 	}
 	ref.AgentID = res.AgentID
@@ -350,6 +369,11 @@ func clearStaleGitLock(ctx context.Context, paseoBin, cwd string) {
 	}
 }
 
+// missingProviderHelp is the conductor-native rewrite of paseo's
+// MISSING_PROVIDER (Fix B): it names the two conductor knobs that fix it rather
+// than paseo's provider vocabulary, which conductor doesn't expose.
+const missingProviderHelp = "paseo could not choose a model to run this agent — set `model:` on the step, or `models.default:` on the paseo runtime. Conductor passes no model on a bare launch, and paseo has no default provider configured."
+
 // paseoErrDetail extracts a human-readable reason from a failed `paseo run`.
 // With --json paseo prints its error object to stdout ({"error":{code,message}});
 // non-JSON diagnostics land on stderr. Prefer whichever carries signal.
@@ -361,6 +385,15 @@ func paseoErrDetail(stdout, stderr []byte) string {
 		} `json:"error"`
 	}
 	if json.Unmarshal(stdout, &e) == nil && e.Error.Message != "" {
+		// Translate paseo's provider vocabulary into conductor's (Fix B). paseo
+		// returns MISSING_PROVIDER when a run carries no model and paseo has no
+		// default provider configured — but conductor has no "providers" concept,
+		// so the raw code is a dead end for the operator. A bare (model-less)
+		// launch is deliberately valid (runtimes-models-packs.md §4), so this
+		// can't be a static config check; the boundary is here.
+		if e.Error.Code == "MISSING_PROVIDER" {
+			return missingProviderHelp
+		}
 		if e.Error.Code != "" {
 			return e.Error.Code + ": " + e.Error.Message
 		}
@@ -519,9 +552,14 @@ func workspaceMode(req Request) string {
 // the engine can escalate + retry, instead of a checkout-less agent stranded in
 // $HOME. baseDir is the repo's stable local checkout paseo derives
 // the forge repo from.
-func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir string) (string, string, error) {
+// The returned `created` bool is true only when this call CREATED the worktree;
+// false when it ADOPTED an existing one (Fix D). The caller uses it to decide
+// whether a failed dispatch may archive the workspace (it may only reclaim what
+// it created — never a workspace it reused).
+func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir string) (id, cwd string, created bool, err error) {
 	if d.WorktreeCreator != nil {
-		return d.WorktreeCreator(ctx, req, baseDir)
+		id, cwd, err = d.WorktreeCreator(ctx, req, baseDir)
+		return id, cwd, err == nil && id != "", err
 	}
 	strat := effectiveStrategy(req)
 	opts := CreateWorktreeOptions{Isolation: workspaceMode(req), Path: baseDir, Strategy: strat}
@@ -532,12 +570,59 @@ func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir st
 	case "branch-off":
 		opts.NewBranch = branchSlug(ctx, req.Trigger)
 		opts.BaseRef = req.Trigger.Target.BaseRef
+		// Reuse, don't collide (Fix D). The branch is deterministic per (PR,
+		// kind), so a prior run's worktree for it may still exist and `workspace
+		// create` is create-or-error. paseo names a branch-off worktree workspace
+		// after its branch, so adopt the one on this branch and launch a fresh
+		// agent into it — a live agent gains a second worker on the PR; an
+		// agent-less orphan is taken over — rather than erroring the retry. The
+		// operator asked for exactly this: "if the workspace exists ... just
+		// launch another in the same workspace."
+		if wsID, wcwd := d.existingWorktree(ctx, opts.NewBranch); wsID != "" {
+			return wsID, wcwd, false, nil
+		}
 	}
 	res, err := d.backend().CreateWorktree(ctx, opts)
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
-	return res.WorkspaceID, res.Cwd, nil
+	return res.WorkspaceID, res.Cwd, true, nil
+}
+
+// existingWorktree returns the id and local cwd of a conductor branch-off
+// worktree already on `branch` (paseo sets a branch-off workspace's name to its
+// branch), or "","" if none. It is the adopt-instead-of-collide lookup for
+// createWorktree (Fix D). The match is deliberately exact and worktree-scoped:
+// `branch` is always a conductor-owned `conductor/<kind>-<n>` slug, so it can
+// never resolve a workspace the operator made by hand.
+func (d *Dispatcher) existingWorktree(ctx context.Context, branch string) (id, cwd string) {
+	if branch == "" {
+		return "", ""
+	}
+	wl, err := d.backend().ListWorkspaces(ctx)
+	if err != nil {
+		return "", ""
+	}
+	for _, w := range wl {
+		if w.Isolation == "worktree" && w.Name == branch && w.WorkspaceID != "" && w.Cwd != "" {
+			return w.WorkspaceID, w.Cwd
+		}
+	}
+	return "", ""
+}
+
+// archiveOrphanWorkspaces tears down workspaces THIS dispatch created when the
+// agent launch that would own them never came up (Fix A). Left behind, such a
+// workspace orphans: agent-less, so the reaper's agent-anchored walk can't see
+// it, and (for a branch-off worktree) its deterministic branch name collides
+// with the next retry. Best-effort — a failed archive is not worth failing the
+// already-failing dispatch over; the reaper's orphan sweep is the backstop.
+func (d *Dispatcher) archiveOrphanWorkspaces(ctx context.Context, ids ...string) {
+	for _, id := range ids {
+		if id != "" {
+			_ = d.backend().ArchiveWorkspace(ctx, id)
+		}
+	}
 }
 
 // stderrTail returns a short, prefixed tail of captured stderr for an error
@@ -781,6 +866,26 @@ func (d *Dispatcher) cloneParentDir() (string, error) {
 // workspace is ever a candidate for automatic reclaim (isEphemeralRunWorkspace).
 // A workspace you made yourself, and a `pin:`ed one, can never match.
 const runWorkspacePrefix = "conductor-run-"
+
+// conductorBranchPrefix is the branch namespace every branch-off worktree
+// conductor cuts lives under ("conductor/<kind>-<n>", branchSlug). paseo names a
+// branch-off workspace after its branch, so this prefix on a workspace name is a
+// second ownership marker — the one the orphan reaper and the create-collision
+// adopt path key on for worktrees (isConductorOwnedWorkspace / existingWorktree).
+const conductorBranchPrefix = "conductor/"
+
+// isConductorOwnedWorkspace reports whether a workspace is one conductor itself
+// created for a run and may therefore reclaim automatically: an ephemeral
+// checkout:none run workspace (conductor-run- title) or a branch-off worktree on
+// a conductor/ branch. Deliberately STRICTER than reclaimableWorkspaceMap's
+// isolation==worktree test, which the agent-anchored reaper can afford because it
+// only ever archives a worktree matched to an idle conductor AGENT: the orphan
+// sweep has no agent to anchor on, so it must never match a worktree the operator
+// created by hand (whose name is a prompt title, not a conductor/ branch).
+func isConductorOwnedWorkspace(w WorkspaceInfo) bool {
+	return strings.HasPrefix(w.Name, runWorkspacePrefix) ||
+		strings.HasPrefix(w.Name, conductorBranchPrefix)
+}
 
 // runWorkspaceDirs is where the per-run directories live, under the same
 // ~/.conductor root as the clone cache. Each run gets its OWN directory: that

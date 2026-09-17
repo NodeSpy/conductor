@@ -95,6 +95,16 @@ entry → the built-in paseo. A step's own `host:` overrides the runtime's
 with its own `bin:` or a `host:` gets a dedicated dispatcher and reaper; the
 default local one is the primary that command steps and provisioning share.
 
+The reaper archives finished agents *and* their workspaces. It walks from the
+live agent list, so it also sweeps a **workspace whose agent never launched** —
+a dispatch that failed before the agent came up (e.g. a bare launch paseo
+rejected) tears its own workspace down immediately, and any that slips through
+(a crash between create and teardown) is archived once it has sat agent-less past
+a ~30-minute grace. This is local-only; a remote runtime's workspaces are
+reclaimed through its own agent walk. A retry that finds a prior run's
+`conductor/<kind>-<n>` worktree still present **reuses** it (launching another
+agent into it) rather than colliding on the deterministic branch name.
+
 Everything else — session models, the session broker, capability
 degradation, interactive hand-offs — carries over from the controllers
 design unchanged; a runtime that owns an interactive surface is the default
