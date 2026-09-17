@@ -1,0 +1,58 @@
+# Publish the wiki. GitHub serves github.com/<owner>/<repo>/wiki from a SEPARATE
+# git repo (<repo>.wiki.git); nothing syncs it automatically. docs/wiki/ is the
+# source of truth (reviewed in PRs), and this workflow mirrors it into the wiki
+# repo on every push to main that touches docs/wiki/** — so merging a docs/wiki
+# change is all it takes to update the live wiki. Also runnable on demand.
+name: wiki-sync
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs/wiki/**']
+  workflow_dispatch: {}
+
+# The wiki lives under the same repo's permissions; contents:write lets the
+# built-in GITHUB_TOKEN push to <repo>.wiki.git.
+permissions:
+  contents: write
+
+# Never let two syncs race the wiki repo; don't cancel an in-flight publish.
+concurrency:
+  group: wiki-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mirror docs/wiki/ into the wiki repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          wiki="$(mktemp -d)"
+          git clone --depth 1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" "$wiki"
+
+          # Copy every source page in. Then drop wiki .md pages that no longer
+          # exist in the source, so renames/removals propagate — but never touch
+          # non-.md files (images) or the .git dir, so wiki-only assets survive.
+          cp docs/wiki/*.md "$wiki"/
+          for f in "$wiki"/*.md; do
+            base="$(basename "$f")"
+            [ -f "docs/wiki/$base" ] || rm -f "$f"
+          done
+
+          cd "$wiki"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki already up to date."
+            exit 0
+          fi
+          git commit -m "Sync wiki from docs/wiki @ ${GITHUB_SHA}"
+          git push origin HEAD
+          echo "Wiki updated from docs/wiki @ ${GITHUB_SHA}."
