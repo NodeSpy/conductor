@@ -72,6 +72,18 @@ type Options struct {
 	// GapsOnly installs what is missing and leaves everything installed alone.
 	// This is the BOOT posture: never re-resolve on the hot path.
 	GapsOnly bool
+	// Prune authorizes dropping install-state records the refs map does not
+	// name. It is OPT-IN because the prune is only correct when refs is the
+	// COMPLETE desired set — which is a promise only the CALLER can make.
+	//
+	// Reconcile cannot tell a whole-config refs map from a deliberately partial
+	// one (`plugin add` resolves exactly one reference), and guessing wrong
+	// uninstalls working plugins. In particular an ENGINE used only inside a
+	// pack is absent from any refs map built without instantiating that pack,
+	// so an unguarded prune silently removes it and the next `validate` fails
+	// with "plugin js: not installed". Leave this false unless refs came from
+	// config.PluginRefs on a config whose PluginRefsComplete reports true.
+	Prune bool
 	// Force re-resolves even an exact pin (`plugin update --force`).
 	Force bool
 	// AllowUnlisted bypasses the plugin-source trust allowlist.
@@ -120,7 +132,12 @@ func Reconcile(refs map[string]config.PluginRef, state *InstallState, trust *con
 	// state does not accumulate forever. The BINARY is left on disk: removing
 	// it is `plugin remove`'s job, and a reference removed by mistake should be
 	// cheap to restore.
-	if opts.Only == "" && !opts.GapsOnly {
+	//
+	// Only ever prune what we can PROVE is unreferenced: the caller must opt in
+	// (see Options.Prune), the pass must not be scoped to one plugin, and a
+	// gaps-only pass touches nothing. A partial refs map is a subset of the
+	// desired set, and "absent from a subset" is not evidence of "unused".
+	if opts.Prune && opts.Only == "" && !opts.GapsOnly {
 		for _, k := range state.Keys() {
 			if _, still := refs[k]; !still {
 				state.Delete(k)

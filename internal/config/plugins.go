@@ -150,6 +150,25 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 	return out
 }
 
+// PluginRefsComplete reports whether PluginRefs may be treated as the COMPLETE
+// desired set — the question anything that PRUNES install state has to answer
+// before it removes a record.
+//
+// It is false for a config that DECLARES `packs:` but has not had them
+// instantiated. A pack's steps only reach c.Workflows/c.Triggers/c.Checks at
+// instantiate (see instantiatePacks), and a step's `use:`/`run:` IS the engine
+// reference — so before that point a pack-internal `run: js` is invisible to
+// PluginRefs and the derived set is a subset, not the answer. Pruning against a
+// subset drops plugins that are very much still needed.
+//
+// Load always instantiates (and hard-fails if it cannot), so a loaded config is
+// complete. This exists so a caller that did NOT go through Load cannot
+// silently get a destructive prune. Nothing here touches the network:
+// instantiation reads the already-vendored pack tree.
+func (c *Config) PluginRefsComplete() bool {
+	return len(c.Packs) == 0 || c.packsInstantiated
+}
+
 // validatePluginRefs checks the derived plugin set for the conflicts the
 // per-entry validation cannot see: two connectors claiming the same
 // implementation name from different sources would silently route one

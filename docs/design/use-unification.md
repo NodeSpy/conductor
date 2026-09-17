@@ -238,6 +238,35 @@ Consequences:
   hard-crashes — the degraded-boot fail-safe already covers the config half of
   this; the plugin half degrades the same way.
 
+### Pruning: only what is provably unreferenced
+
+A reconcile also drops install-state records the config no longer references, so
+`installed.yaml` does not grow forever. The binary is left on disk; deleting it
+is `plugin remove`'s job.
+
+That prune is **opt-in** (`plugin.Options.Prune`), because "absent from the refs
+map" only means "unused" when the refs map is the *complete* desired set — and
+only the caller knows whether it is. Two things make a refs map incomplete:
+
+- **A partial pass.** `conductor plugin add <ref>` resolves exactly one
+  reference and says nothing about the rest of the config. It never prunes.
+- **Un-instantiated packs.** An ENGINE has no block of its own — a step's
+  `use:`/`run:` *is* the reference — so an engine used only inside a pack
+  becomes visible to `PluginRefs` only once that pack is instantiated and its
+  steps are part of the effective config. A config that merely *declares*
+  `packs:` reports `PluginRefsComplete() == false` and does not authorize a
+  prune.
+
+So **a pack-used engine counts as referenced**: a config using
+`packs: { team: … }` whose pack internally runs `run: js` keeps `engines/js`
+installed, even though the consumer's own file never names an engine. A
+genuinely unreferenced plugin — engines included — is still pruned by
+`conductor init` and `conductor plugin update`.
+
+This costs no network. Pack instantiation reads the already-vendored tree, and
+`config.Load` performs it (hard-failing if it cannot), so every reconcile driven
+by a loaded config gets the complete set offline.
+
 ### Stay-current
 
 Default is stay-current: an unpinned entry is re-resolved by `conductor init`,
