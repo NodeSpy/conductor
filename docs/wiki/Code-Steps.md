@@ -62,7 +62,10 @@ program on the box, and `use:` takes it by name or by path.
 Each is a verified, sandboxed subprocess conductor spawns and drives over the
 plugin wire — see [Engine plugins](#engine-plugins). They need no interpreter
 on the box (the engine binary carries its own), which is what makes them the
-drop-in for the old in-binary engines.
+drop-in for the old in-binary engines. Full reference, sandbox notes, and
+examples for every engine are in the catalog:
+**[conductor-plugins/docs/engines](https://github.com/NodeSpy/conductor-plugins/tree/main/docs/engines)**
+(and the [index](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md)).
 
 - `use: js` — QuickJS compiled to WASM, executed in wazero (pure Go, no CGo).
   A true WASM sandbox, identical on every OS. The code body is a function
@@ -82,6 +85,20 @@ drop-in for the old in-binary engines.
   Only the base, table, string, and math libraries are opened — no os, io,
   debug, or package — and the file/chunk loaders (`dofile`, `loadfile`,
   `load`, `loadstring`) are removed.
+- `use: starlark` — [Starlark](https://github.com/google/starlark-go), a small
+  **deterministic Python dialect**; the script assigns its result. No I/O,
+  clock, or randomness — the same input always yields the same output.
+- `use: cel` — [CEL](https://cel.dev) (cel-go): a **single expression** for a
+  computed field or condition; the expression's value is the step's output.
+- `use: jq` — [jq](https://github.com/itchyny/gojq) on gojq (pure Go): the step
+  inputs **are** the jq input document and the program's results become the
+  outputs. The step's `env:` crosses as `$NAME` variables (like `jq --arg`).
+- `use: yq` — [yq](https://github.com/mikefarah/yq) on yqlib: the YAML
+  counterpart of `jq`, and it also emits a `yaml` output with the result
+  rendered back to YAML **text** (comments/anchors/key-order preserved).
+- `use: wasm` — any **WebAssembly** module (any language compiled to `.wasm`),
+  executed in wazero: the ctx goes in, the module's result comes out. The way
+  to run a language conductor has no dedicated engine for.
 
 **Third-party engine plugins:**
 

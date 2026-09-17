@@ -16,6 +16,14 @@ x-templates:
   fixer: &fixer { type: agent, runtime: paseo }           # a step pins its backend
 ```
 
+`use:` resolves a runtime exactly like a connector or an engine — a **built-in**
+first (`paseo`, `agent-deck`, `acp`, `cli`), then the **official plugin repo**
+(`runtimes/<name>`, e.g. `modal`), then an explicit repo (`use: acme/plugins/modal`)
+or a local binary. The official runtimes live in the catalog:
+**[conductor-plugins/docs/runtimes](https://github.com/NodeSpy/conductor-plugins/tree/main/docs/runtimes)**
+(and the [index](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md)) —
+each with its own setup and config reference. See [[Plugins]] for versioning and trust.
+
 ## Three shapes, and the name implies `use:`
 
 The common case is one word. A runtime's **name is its `use:` reference** when
