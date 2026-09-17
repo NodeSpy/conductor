@@ -92,69 +92,61 @@ func TestDispatchTeardownArchivesCreatedWorkspaceOnFailure(t *testing.T) {
 	}
 }
 
-// Fix D + A: when a same-branch worktree already exists, the dispatch ADOPTS it
-// (no CreateWorktree) and launches into it — and if THAT launch fails, the
-// adopted workspace is left alone (it isn't ours to reclaim; it may hold another
-// live agent). The reaper's orphan sweep is the backstop for a truly dead one.
-func TestDispatchReusesExistingWorkspaceAndSpareItOnFailure(t *testing.T) {
+// A + Reused: when the backend reports it REUSED a worktree (Result.Reused), a
+// failed launch must leave that workspace alone — it isn't ours to reclaim; it
+// may hold another live agent. Only a workspace we created is torn down.
+func TestDispatchSparesReusedWorkspaceOnFailure(t *testing.T) {
 	fb := &fakeDispatchBackend{
-		workspaces: []WorkspaceInfo{
-			{WorkspaceID: "wks_existing", Name: "conductor/merge_conflict-7",
-				Isolation: "worktree", Cwd: t.TempDir()},
-		},
-		runErr: errors.New("paseo run: boom"),
+		createResult: CreateWorktreeResult{WorkspaceID: "wks_existing", Cwd: t.TempDir(), Reused: true},
+		runErr:       errors.New("paseo run: boom"),
 	}
 	d := dispatcherWith(fb, t.TempDir())
 
 	if _, err := d.paseo(context.Background(), branchOffReq()); err == nil {
 		t.Fatal("expected the failed launch to surface an error")
 	}
-	if fb.createCalls != 0 {
-		t.Fatalf("an existing same-branch worktree must be adopted, not re-created (createCalls=%d)", fb.createCalls)
-	}
 	if len(fb.archives) != 0 {
 		t.Fatalf("a reused workspace must never be archived on our failure, got %v", fb.archives)
 	}
 }
 
-// Fix D (unit): createWorktree adopts an existing conductor worktree whose paseo
-// workspace name matches the deterministic branch, returning it with
-// created=false and issuing no CreateWorktree call.
-func TestCreateWorktreeAdoptsExistingBranchWorkspace(t *testing.T) {
+// Reuse lives in the backend now (Backend.CreateWorktree), not the orchestration:
+// cliBackend adopts an existing branch-off worktree (paseo names it after its
+// branch) and reports Reused, issuing no `workspace create`. createWorktree maps
+// Reused→created=false. A no-match (and a same-named LOCAL workspace, which must
+// not match the worktree filter) falls through to a real create.
+func TestCreateWorktreeReusesExistingBranchWorktree(t *testing.T) {
 	req := Request{Trigger: core.Trigger{Kind: "issue_matched",
 		Target: core.Target{Repo: "a/w", Number: 9, BaseRef: "main"}},
 		Action: config.Action{Checkout: "branch-off"}}
 
-	// Match present → adopt.
-	fb := &fakeDispatchBackend{workspaces: []WorkspaceInfo{
-		{WorkspaceID: "wks_adopt", Name: "conductor/issue_matched-9", Isolation: "worktree", Cwd: "/wt/9"},
-	}}
-	d := &Dispatcher{}
-	d.SetBackend(fb)
+	// A worktree already on the branch → adopt it, no `workspace create`.
+	bin, dir := fakePaseoDir(t)
+	put(t, dir, "workspaces.json",
+		`[{"workspaceId":"wks_adopt","name":"conductor/issue_matched-9","isolation":"worktree","cwd":"/wt/9"}]`)
+	d := &Dispatcher{PaseoBin: bin}
 	id, cwd, created, err := d.createWorktree(context.Background(), req, "/base")
 	if err != nil || id != "wks_adopt" || cwd != "/wt/9" || created {
 		t.Fatalf("adopt: id=%q cwd=%q created=%v err=%v", id, cwd, created, err)
 	}
-	if fb.createCalls != 0 {
-		t.Fatalf("adopt must not call CreateWorktree (calls=%d)", fb.createCalls)
+	if strings.Contains(callsLog(t, dir), "workspace create") {
+		t.Fatalf("adopt must not create a worktree: %s", callsLog(t, dir))
 	}
 
-	// No match (wrong branch, and a local workspace named the same) → create.
-	fb2 := &fakeDispatchBackend{
-		workspaces: []WorkspaceInfo{
-			{WorkspaceID: "wks_other", Name: "conductor/issue_matched-42", Isolation: "worktree", Cwd: "/wt/42"},
-			{WorkspaceID: "wks_local", Name: "conductor/issue_matched-9", Isolation: "local", Cwd: "/x"},
-		},
-		createResult: CreateWorktreeResult{WorkspaceID: "wks_fresh", Cwd: "/wt/new"},
-	}
-	d2 := &Dispatcher{}
-	d2.SetBackend(fb2)
+	// No worktree match (wrong branch; a LOCAL workspace on the same name must
+	// not match) → fall through to a real create, created=true.
+	bin2, dir2 := fakePaseoDir(t)
+	put(t, dir2, "workspaces.json",
+		`[{"workspaceId":"wks_other","name":"conductor/issue_matched-42","isolation":"worktree","cwd":"/wt/42"},`+
+			`{"workspaceId":"wks_local","name":"conductor/issue_matched-9","isolation":"local","cwd":"/x"}]`)
+	put(t, dir2, "wscreate.json", `{"workspaceId":"wks_fresh","cwd":"`+dir2+`/wt"}`)
+	d2 := &Dispatcher{PaseoBin: bin2}
 	id, cwd, created, err = d2.createWorktree(context.Background(), req, "/base")
-	if err != nil || id != "wks_fresh" || cwd != "/wt/new" || !created {
+	if err != nil || id != "wks_fresh" || created != true {
 		t.Fatalf("create: id=%q cwd=%q created=%v err=%v", id, cwd, created, err)
 	}
-	if fb2.createCalls != 1 {
-		t.Fatalf("no worktree match must fall through to one CreateWorktree (calls=%d)", fb2.createCalls)
+	if !strings.Contains(callsLog(t, dir2), "workspace create") {
+		t.Fatalf("no match must fall through to a real create: %s", callsLog(t, dir2))
 	}
 }
 
