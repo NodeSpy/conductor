@@ -140,7 +140,7 @@ connectors:
 		t.Fatalf("Source: %v", err)
 	}
 	sw := result.(*ghint.Integration).SweepSettings()
-	if !sw.Enabled {
+	if !sw.IsEnabled() {
 		t.Fatal("sweep.enabled lost in lowering")
 	}
 	if sw.Interval.D() != 10*time.Minute {

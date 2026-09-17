@@ -68,8 +68,13 @@ func githubTransform(name string, ref config.IntegrationRef, notes *[]string) (m
 		}
 		conn["webhook"] = wh
 	}
-	if cfg.Sweep.Enabled || len(cfg.Sweep.Repos) > 0 || cfg.Sweep.Interval != 0 || cfg.Sweep.MinInterval != 0 {
-		sw := map[string]any{"enabled": cfg.Sweep.Enabled}
+	if cfg.Sweep.Enabled != nil || len(cfg.Sweep.Repos) > 0 || cfg.Sweep.Interval != 0 || cfg.Sweep.MinInterval != 0 {
+		sw := map[string]any{}
+		// enabled defaults true now, so carry it only when it was explicitly set
+		// (an omitted key means "on" and needs no line).
+		if cfg.Sweep.Enabled != nil {
+			sw["enabled"] = *cfg.Sweep.Enabled
+		}
 		if cfg.Sweep.Interval != 0 {
 			sw["interval"] = cfg.Sweep.Interval.String()
 		}
@@ -79,7 +84,9 @@ func githubTransform(name string, ref config.IntegrationRef, notes *[]string) (m
 		if len(cfg.Sweep.Repos) > 0 {
 			sw["repos"] = strSlice(cfg.Sweep.Repos)
 		}
-		conn["sweep"] = sw
+		if len(sw) > 0 {
+			conn["sweep"] = sw
+		}
 	}
 	if cfg.Identity.ReadToken != "" || cfg.Identity.WriteToken != "" || cfg.Identity.CommitAuthor != "" {
 		id := map[string]any{}

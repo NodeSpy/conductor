@@ -32,7 +32,9 @@ func TestAccessorsAndTranslate(t *testing.T) {
 	if g.RetryPolicy().Max != 2 {
 		t.Fatal("RetryPolicy passthrough")
 	}
-	if g.SweepSettings().Enabled {
+	// Passthrough: baseConfig sets no sweep, so the raw pointer stays nil (the
+	// accessor injects no default — IsEnabled() applies the default-on later).
+	if g.SweepSettings().Enabled != nil {
 		t.Fatal("SweepSettings passthrough")
 	}
 	r, w, a := g.IdentityTokens()

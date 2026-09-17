@@ -14,15 +14,20 @@ import (
 )
 
 func TestSweepBounds(t *testing.T) {
-	// Defaults when unset: 10m floor, 6h ceiling.
+	// Defaults when unset: 2m floor, 1h ceiling.
 	min, max := sweepBounds(SweepConfig{})
-	if min != 10*time.Minute || max != 6*time.Hour {
+	if min != 2*time.Minute || max != time.Hour {
 		t.Fatalf("defaults wrong: min=%s max=%s", min, max)
 	}
 	// Configured values honored.
 	min, max = sweepBounds(SweepConfig{Interval: dur(t, "30m"), MinInterval: dur(t, "1m")})
 	if min != time.Minute || max != 30*time.Minute {
 		t.Fatalf("configured wrong: min=%s max=%s", min, max)
+	}
+	// A below-floor min_interval is clamped up to sweepFloor (no API flood).
+	min, _ = sweepBounds(SweepConfig{MinInterval: dur(t, "5s")})
+	if min != sweepFloor {
+		t.Fatalf("floor clamp: min=%s, want %s", min, sweepFloor)
 	}
 	// Floor clamped to never exceed the ceiling.
 	min, max = sweepBounds(SweepConfig{Interval: dur(t, "1m"), MinInterval: dur(t, "10m")})

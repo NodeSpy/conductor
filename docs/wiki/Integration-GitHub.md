@@ -12,7 +12,7 @@ connectors:
       smee_url: ${GH_SMEE_URL}             # and/or listen: + path:
       secret: ${GH_WEBHOOK_SECRET}
       verify_signature: true               # default true
-    sweep: { enabled: true, repos: ["your-org/*"] }
+    sweep: { repos: ["your-org/*"] }        # optional — on by default, all installed repos; see Sweep below
     me: { logins: [your-login] }           # defines "you"
     repos: ["your-org/*"]                  # default trigger scope
     identity: { read_token: app, write_token: gh_auth, commit_author: self }
@@ -62,6 +62,39 @@ works**: events arrive via a plain webhook (+ `webhook.secret`) or the sweep
 (explicit repos — glob expansion is an App endpoint), and reads use the PAT /
 gh token. Writes are always you (`identity.write_token`: `gh_auth` default or
 a literal) unless a verb sets `as: bot` — which requires App credentials.
+
+## Sweep (catch-up polling)
+
+The **sweep** polls GitHub for state your webhooks might have missed — a PR that
+went unmergeable, a review request, unresolved threads — and emits the same
+events a webhook would, through the same trigger `filter:`. **It is on by
+default and every field is optional**: an omitted `sweep:` block still sweeps.
+
+```yaml
+sweep:
+  enabled: true            # default true — set false to turn polling off
+  repos: [your-org/*]      # OPTIONAL: narrow to these; omit → all installed repos
+  min_interval: 2m         # default 2m
+  interval: 1h             # default 1h
+```
+
+- **Scope — omit `repos:` and the sweep covers every repo the App is installed
+  on** (it enumerates the App's installations). Set `repos:` (exact names or
+  `owner/*` globs) to narrow it. The App installation is already your event
+  boundary — webhooks arrive for exactly these repos — so a broad sweep ingests
+  nothing new; what conductor *acts* on is still gated by each trigger's
+  `filter:`. (App-less/token mode can't enumerate installations, so there list
+  `repos:` explicitly.)
+- **Cadence depends on whether a webhook is configured**, chosen automatically:
+  - **With a webhook** (`smee_url`/`listen`) the sweep is catch-up, so it runs
+    on an **adaptive** cadence — tight after startup or a reconnect
+    (`min_interval`, 2m), backing off ×2 toward the ceiling (`interval`, 1h)
+    while quiet.
+  - **Without a webhook** the sweep *is* your event source, so it runs on a
+    **fixed** cadence at `min_interval` (2m) — no backoff, so events are never
+    left unseen for up to an `interval`. This is what makes a webhook-less
+    conductor work out of the box.
+- A `sweep` verb (`conductor sweep --now`) triggers an immediate pass.
 
 ## Events (`on: gh.<event>`)
 
