@@ -120,6 +120,31 @@ func (a *appAuth) accountInstallationID(ctx context.Context, account string) (in
 	return a.installationIDByURL(ctx, fmt.Sprintf("%s/users/%s/installation", a.apiBase, account))
 }
 
+// githubWhoami returns the login of the account a token authenticates as
+// (GET /user). Used to auto-discover `me:` from the write identity — your write
+// credential is you, so whoami on it names you.
+func githubWhoami(ctx context.Context, httpc *http.Client, apiBase, token string) (string, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/user", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	resp, err := httpc.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return "", fmt.Errorf("GET /user: HTTP %d", resp.StatusCode)
+	}
+	var out struct {
+		Login string `json:"login"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	return out.Login, nil
+}
+
 // listInstallations enumerates every installation of this App (paginated
 // GET /app/installations), for the default "sweep all installed repos" when no
 // explicit repos/globs are configured. It authenticates with the App JWT — an
