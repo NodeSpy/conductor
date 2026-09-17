@@ -14,8 +14,9 @@ verb/event reference are documented alongside the plugin:
 - **[GitHub App Setup](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github-app-setup.md)** — register the App and wire up webhooks.
 - **[`github` connector reference](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github.md)** — connection keys, verbs, and source events.
 
-See [[Integration-GitHub]] for the conductor-side model of what each subscribed
-event becomes once it reaches the engine.
+See the [`github` connector reference](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github.md#source-events)
+for what each subscribed event becomes, and [[Connectors]] for the built-in
+`github` type's events and verbs.
 
 ## Running without an App
 

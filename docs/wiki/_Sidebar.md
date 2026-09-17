@@ -41,13 +41,6 @@ Connectors
 - [Plugin catalog ↗](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md)
 - [[GitHub-App-Setup]]
 - [[Authoring-Connectors]]
-- [[Integration-GitHub]]
-- [[Integration-Slack]]
-- [[Integration-Cron]]
-- [[Integration-Webhook]]
-- [[Integration-Sentry]]
-- [[Integration-PagerDuty]]
-- [[Integration-RSS]]
 
 Operations
 - [[One-Shot]]
