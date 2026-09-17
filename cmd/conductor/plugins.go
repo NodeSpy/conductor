@@ -469,6 +469,11 @@ func cmdPluginAdd(args []string) error {
 
 	pr := config.PluginRef{Name: u.Name, Instance: instance, Use: u}
 	state := plugin.LoadInstallState(plugin.InstallDir())
+	// ADD ONE, TOUCH NOTHING ELSE. The refs map here names a single reference —
+	// the one being added — and says nothing about the rest of the config, so it
+	// must never authorize a prune (Options.Prune stays false). It also is not
+	// the config's set at all: the operator has not pasted the `use:` stub yet,
+	// so even the plugin being added is not referenced anywhere.
 	results, err := plugin.Reconcile(
 		map[string]config.PluginRef{u.InstallKey(): pr}, state, cfg.PluginTrust,
 		plugin.GHReleaseAPI{},
@@ -657,10 +662,16 @@ func cmdPluginRemove(args []string) error {
 // reconcilePlugins brings install state in line with the config's referenced
 // plugins. It is the single path `init`, `plugin update`, and the boot gap-fill
 // share.
+//
+// This is the one caller that passes the WHOLE desired set, so it is the one
+// that may authorize a prune — and only once the config confirms its packs were
+// instantiated, because a pack's internal `run: <engine>` is part of that set
+// and is invisible until then (see config.PluginRefsComplete).
 func reconcilePlugins(cfg *config.Config, opts plugin.Options) ([]plugin.Resolution, error) {
 	if opts.Describe == nil {
 		opts.Describe = describeForInstall(cfg)
 	}
+	opts.Prune = cfg.PluginRefsComplete()
 	state := plugin.LoadInstallState(plugin.InstallDir())
 	return plugin.Reconcile(cfg.PluginRefs(), state, cfg.PluginTrust, plugin.GHReleaseAPI{}, opts)
 }

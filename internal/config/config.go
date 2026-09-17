@@ -242,6 +242,12 @@ type Config struct {
 	// packWarnings holds non-fatal notices raised while instantiating packs
 	// (deprecations, armed-but-unscoped triggers). Not serialized. See PackWarnings.
 	packWarnings []string `yaml:"-"`
+
+	// packsInstantiated records that instantiatePacks ran to completion, so a
+	// caller can tell a config whose packs have been expanded into steps from
+	// one that merely DECLARES packs. Only the former can answer "which
+	// plugins does this config need?" completely — see PluginRefsComplete.
+	packsInstantiated bool `yaml:"-"`
 }
 
 // Update configures periodic self-update checks.

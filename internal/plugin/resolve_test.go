@@ -360,20 +360,67 @@ func TestReconcileRecordsManifestAndEnforcesKind(t *testing.T) {
 }
 
 // A reference dropped from the config drops out of install state, so the record
-// does not grow forever.
+// does not grow forever. This is the prune doing its job, and it stays: the
+// caller passed the whole desired set and opted in.
 func TestReconcileDropsUnreferenced(t *testing.T) {
 	st := stateAt(t)
 	ref := refFor(t, config.UseKindConnector, "acme/plugins/jira")
 	trust := &config.PackTrustConfig{Allow: []string{"github.com/acme/*"}}
 
-	if _, err := Reconcile(map[string]config.PluginRef{ref.Key(): ref}, st, trust, stubFor("jira", "jira/v1.0.0"), Options{}); err != nil {
+	if _, err := Reconcile(map[string]config.PluginRef{ref.Key(): ref}, st, trust, stubFor("jira", "jira/v1.0.0"), Options{Prune: true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Reconcile(map[string]config.PluginRef{}, st, trust, stubFor("jira"), Options{}); err != nil {
+	if _, err := Reconcile(map[string]config.PluginRef{}, st, trust, stubFor("jira"), Options{Prune: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := st.Get("connectors/jira"); ok {
 		t.Fatal("an unreferenced plugin stayed in install state")
+	}
+}
+
+// An ENGINE is prunable too when it is genuinely unreferenced — the fix for the
+// pack-engine bug narrows WHEN the prune may run, it does not make engines
+// permanent.
+func TestReconcileDropsUnreferencedEngine(t *testing.T) {
+	st := stateAt(t)
+	ref := refFor(t, config.UseKindEngine, "acme/plugins/js")
+	trust := &config.PackTrustConfig{Allow: []string{"github.com/acme/*"}}
+
+	if _, err := Reconcile(map[string]config.PluginRef{ref.Key(): ref}, st, trust, stubFor("js", "js/v1.0.0"), Options{Prune: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reconcile(map[string]config.PluginRef{}, st, trust, stubFor("js"), Options{Prune: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.Get("engines/js"); ok {
+		t.Fatal("an engine nothing references stayed in install state")
+	}
+}
+
+// THE BOX BUG, at the prune site. `conductor plugin add <x>` resolves exactly
+// ONE reference, so its refs map is a deliberate SUBSET of the desired set.
+// Treating that subset as authoritative uninstalled everything else — on the
+// live box, the engines/js a pack's internal `run: js` depends on, after which
+// `conductor validate` failed with "plugin js: not installed".
+func TestReconcilePartialRefsNeverPrunes(t *testing.T) {
+	st := stateAt(t)
+	trust := &config.PackTrustConfig{Allow: []string{"github.com/acme/*"}}
+
+	js := refFor(t, config.UseKindEngine, "acme/plugins/js")
+	if _, err := Reconcile(map[string]config.PluginRef{js.Key(): js}, st, trust, stubFor("js", "js/v1.0.0"), Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// `conductor plugin add jira` — one reference, no claim about the rest.
+	jira := refFor(t, config.UseKindConnector, "acme/plugins/jira")
+	if _, err := Reconcile(map[string]config.PluginRef{jira.Key(): jira}, st, trust, stubFor("jira", "jira/v1.0.0"), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.Get("engines/js"); !ok {
+		t.Fatalf("an unrelated single-plugin install pruned engines/js; state = %v", st.Keys())
+	}
+	if _, ok := st.Get("connectors/jira"); !ok {
+		t.Fatalf("the plugin being added was not recorded; state = %v", st.Keys())
 	}
 }
 

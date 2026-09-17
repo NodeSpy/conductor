@@ -48,6 +48,7 @@ func (c *Config) PackWarnings() []string { return c.packWarnings }
 // configs without packs load byte-for-byte unchanged.
 func (c *Config) instantiatePacks(configDir string) error {
 	if len(c.Packs) == 0 {
+		c.packsInstantiated = true // nothing to expand: the config is already whole
 		return nil
 	}
 	// `packs:` key-implies-`use:`: fill each instance's source from its use:
@@ -75,6 +76,10 @@ func (c *Config) instantiatePacks(configDir string) error {
 	// crash-loops the daemon.
 	st.verifyLockDigests(configDir, vendor)
 	c.packWarnings = st.warnings
+	// Every pack expanded: the effective config now carries their steps, so the
+	// derived plugin set is complete (a pack's internal `run: <engine>` is
+	// visible to PluginRefs only from here on).
+	c.packsInstantiated = true
 	return nil
 }
 

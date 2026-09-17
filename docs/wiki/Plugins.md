@@ -182,7 +182,14 @@ connector plugin to print its real contract.
 
 `plugin add` deliberately **prints** the config stub rather than editing your
 config. The config is your file; a tool that silently rewrites it is a tool you
-stop trusting.
+stop trusting. It also only ever *adds*: installing one plugin never disturbs
+the records of the others.
+
+`init` and `plugin update` additionally drop install-state records nothing in
+the config references any more, so `installed.yaml` does not grow forever (the
+binary stays on disk — removing it is `plugin remove`'s job). An engine used
+**inside a pack** counts as referenced: if a pack's own steps `run: js`, your
+config keeps `engines/js` installed even though you never wrote `js` anywhere.
 
 `plugin remove` does not touch your config either — the reference *is* the
 declaration, so deleting it is your edit to make. It says so if you forget.
