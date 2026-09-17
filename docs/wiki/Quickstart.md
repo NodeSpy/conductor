@@ -101,7 +101,7 @@ fetched. The returned object becomes `{{.shape.summary}}` for the third step.
 
 Follow the **learning path** on [[Home]]. The immediate next steps:
 
-- **Connect a real service** — [[GitHub-App-Setup]]: events like
+- **Connect a real service** — [GitHub App setup](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github-app-setup.md): events like
   `gh.merge_conflict` / `gh.failing_checks` replace the cron tick, and verbs
   like `gh.comment` replace `echo`. Other services are in the
   [connector catalog](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md).

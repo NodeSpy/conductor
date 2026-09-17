@@ -138,7 +138,7 @@ is the durable memory, not the daemon's local state file.
   Actions, `${{ github.token }}` or a PAT the workflow provides.
 - **App auth is optional and usually unnecessary.** The token is present and the
   event was delivered by Actions, so the App-less mode
-  ([[GitHub-App-Setup]] → "Running without an App") is the natural fit: no
+  ([GitHub App setup → "Running without an App"](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github-app-setup.md#running-without-an-app)) is the natural fit: no
   webhook, no smee, no installation token to mint.
 - **Agent credentials** (`ANTHROPIC_API_KEY`, …) come from Actions secrets into
   the runtime's environment, gated by the runtime's normal env-scrub rules.
