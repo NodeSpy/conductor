@@ -42,7 +42,7 @@ triggers:
   - on: <connector>.<event>       # what fires it — one source, a list, or `manual`
     filter: …                     # whether it fires, and where — the one filter key
     group: { key: …, window: 15s }# optional burst batching
-    steps: [ … ]                  # agent | command | use: engine | uses: verb | call: workflow | team:
+    steps: [ … ]                  # agent | command | use: engine | uses: verb | call: workflow | team: | helper (sleep/log/set/assert/fail/wait_for)
     hooks: [ {at: start|done|fail, uses: <conn>.<verb>, options: {…}} ]
     policy: { … }                 # trigger-scoped overrides
 ```

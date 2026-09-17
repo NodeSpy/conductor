@@ -156,6 +156,7 @@ keeps their dedup state separate).
 | `rerun_run` | `repo`*, `run_id`*, `failed_only`, `as` | `ok` |
 | `cancel_run` | `repo`*, `run_id`*, `as` | `ok` |
 | `list_runs` | `repo`*, `branch`, `status`, `per_page`, `all`, `as` | `runs` — recent workflow runs |
+| `get_run` | `repo`*, `run_id`*, `as` | `run_id`, `name`, `status`, `conclusion`, `head_branch`, `head_sha`, `url` — one workflow run by id (poll it from a `wait_for:` step) |
 | `checks` | `repo`*, `ref`*, `as` | `checks` — check-run status for a ref |
 | `create_release` | `repo`*, `tag`*, `target`, `name`, `body`, `draft`, `prerelease`, `as` | `id`, `url`, `upload_url` |
 | `upload_asset` | `repo`*, `release_id`*, `name`*, `content`/`path`, `content_type`, `as` | `id`, `url` |
