@@ -885,6 +885,14 @@ type Step struct {
 	Import   string         `yaml:"import,omitempty"`
 	With     map[string]any `yaml:"with,omitempty"`
 
+	// helper form (helpers.go). Sleep pauses the flow for a duration,
+	// interrupted by cancellation — the first of the built-in HELPER steps,
+	// the forms conductor runs itself with no agent, engine, verb or command
+	// behind them. A literal duration is the normal spelling; the value is
+	// not templated (see Step.UnmarshalYAML on why `sleep: 0` is rejected
+	// there rather than here).
+	Sleep Duration `yaml:"sleep,omitempty"`
+
 	// control flow
 	ForEach         string        `yaml:"for_each,omitempty"` // template resolving to a list; {{.item}} in scope
 	Parallel        *ParallelSpec `yaml:"parallel,omitempty"`
@@ -1038,9 +1046,15 @@ func (g *GateSpec) MaxRevisionsOrDefault() int {
 }
 
 // Form returns the step's form keyword: "agent", "command", "code", "verb",
-// "workflow", "parallel", or "" when indeterminate.
+// "workflow", "parallel", a HELPER keyword ("sleep"), or "" when
+// indeterminate.
 func (s Step) Form() string {
 	switch {
+	// Helpers first, and by delegation: a helper carries a field no other
+	// form reads, so it can never be ambiguous with one, and listing them
+	// here by name would be the second place a new helper has to be added.
+	case s.IsHelper():
+		return s.HelperForm()
 	case s.Team != nil:
 		return "team"
 	case s.Uses != "":
@@ -1666,6 +1680,10 @@ func validateStep(w string, s Step, c *Config) error {
 		// A bare `command:` is the command form ONLY when no engine claimed
 		// it: with `use: cli` the same key is that engine's argv.
 		s.Type == "command" || (s.Type == "" && len(s.Command) > 0 && s.Use == "" && s.Run == ""),
+		// Every helper counts as ONE form, so `sleep:` beside a `uses:` is the
+		// same error as `uses:` beside a `call:` — and a new helper inherits
+		// the rule without touching this list.
+		s.IsHelper(),
 	} {
 		if set {
 			forms++
@@ -1683,10 +1701,13 @@ func validateStep(w string, s Step, c *Config) error {
 		return validateHooks(w, s.Hooks)
 	}
 	if forms == 0 {
-		return fmt.Errorf("config: %s: set one of `type: agent`, `type: command`, `use:` (an engine, with `code:`/`command:`), `uses:`, or `call:`", w)
+		return fmt.Errorf("config: %s: set one of `type: agent`, `type: command`, `use:` (an engine, with `code:`/`command:`), `uses:`, `call:`, or a helper (`sleep:`)", w)
 	}
 	if forms > 1 {
-		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/use/uses/call)", w)
+		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/use/uses/call/sleep)", w)
+	}
+	if err := validateHelperStep(w, s); err != nil {
+		return err
 	}
 	if c != nil {
 		if err := c.validateStepGate(w, s); err != nil {

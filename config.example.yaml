@@ -1102,6 +1102,11 @@ triggers:
       # `use: cli` runs an argv as a subprocess with the code-step ABI: ctx
       # arrives as JSON on its stdin, its stdout becomes the step's outputs.
       - { id: tidy, use: cli, command: [make, tidy], workdir: ~/src/infra }
+      # `sleep:` is a HELPER step — a form conductor runs itself, with no
+      # agent, engine, verb or command behind it. It waits the given positive
+      # duration, drops out early if the run is cancelled, and is skipped
+      # outright by a dry run. Use it instead of shelling out to `sleep(1)`.
+      - sleep: 2s
       # - { id: legacy, type: command, command: [make, tidy] }   # still valid
       # - { id: remote, use: sh, host: build-box, code: "make deploy" }
       # - { id: remote-argv, use: cli, command: [make, deploy], host: build-box }

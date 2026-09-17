@@ -77,6 +77,14 @@ func (s *Step) UnmarshalYAML(n *yaml.Node) error {
 		}
 		p.Workflow, p.Call = c, ""
 	}
+	// `sleep: 0` is the one helper value that survives the decode looking
+	// exactly like an absent key, so it is caught HERE, on the node, where
+	// the key is still visible — otherwise the step would read as formless
+	// and the operator would be told to pick a step form they already picked.
+	// (A negative duration is visible after the decode and is validateHelperStep's.)
+	if v := valueAt(merged, "sleep"); v != nil && p.Sleep == 0 {
+		return fmt.Errorf("`sleep: %s` must be a POSITIVE duration (e.g. `sleep: 5s`)", v.Value)
+	}
 	*s = Step(p)
 	return nil
 }

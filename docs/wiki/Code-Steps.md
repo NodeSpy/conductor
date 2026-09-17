@@ -42,6 +42,12 @@ program on the box, and `use:` takes it by name or by path.
 > **`use:` is not a workflow call.** That is **`call:`** ([[Workflows]]).
 > A step-level `use:` used to mean the call; `conductor config migrate`
 > rewrites those to `call:`, and the loader says so if one slips through.
+>
+> **Don't reach for `use: cli` to wait.** `use: cli, command: [sleep, "5s"]`
+> spawns a subprocess, needs the binary on the box (and a `host:` sandbox in
+> an agent-authored plan), and blocks the run through a shutdown. `sleep: 5s`
+> is a built-in [helper step](Steps#helper-steps) that does the same thing
+> ctx-aware and for free.
 
 ## Engines
 

@@ -233,8 +233,16 @@ func guardPlan(cfg *config.Config, reg *connector.Registry, pol *config.AgentAut
 }
 
 // stepClass names a step for allow/approve matching: "workflow", "agent",
-// "command", "code", or "<connector>.<verb>".
+// "command", "code", a helper keyword ("sleep"), or "<connector>.<verb>".
 func stepClass(cfg *config.Config, step *config.Step) string {
+	// A helper classes as its own keyword rather than being waved through.
+	// It reaches nothing outside conductor, but `sleep:` in an emitted plan
+	// still spends the run's wall clock, so admitting one stays an operator
+	// decision made by naming it in policy.agent_authored.verbs — the same
+	// rule every other class follows, and one a new helper inherits.
+	if step.IsHelper() {
+		return step.HelperForm()
+	}
 	switch step.Form() {
 	case "workflow":
 		return "workflow"
