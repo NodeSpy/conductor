@@ -43,6 +43,9 @@ func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 	if err := g.ensureClients(); err != nil {
 		return err
 	}
+	// Auto-discover me: from the write identity when it wasn't set (best-effort;
+	// runs before the sweep so `self` is populated for its first pass).
+	g.discoverSelf(ctx)
 	if g.cfg.Webhook.Verify() && g.cfg.Webhook.SmeeURL != "" {
 		log.Printf("github[%s]: signature verification ON — note the smee re-serialization caveat; "+
 			"set webhook.verify_signature:false if valid deliveries are being dropped", g.name)

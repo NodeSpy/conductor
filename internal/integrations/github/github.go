@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path"
@@ -308,6 +309,38 @@ func ghAuthToken() (string, error) {
 		return "", fmt.Errorf("gh auth token returned empty")
 	}
 	return tok, nil
+}
+
+// discoverSelf auto-fills the `self` identity (`me:`) from the WRITE credential
+// when nothing else identified you — so `me.logins` is optional. Your writes run
+// as you (identity.write_token: `gh_auth` or a literal token, never the App), so
+// `GET /user` on that token returns your login. Runs only when `self` is otherwise
+// empty (an explicit `me:`, or a reviewer/assignee fallback, still wins), and is
+// best-effort: a failure leaves `self` empty (the prior behavior) with a hint,
+// never an error. Set `me.logins` to override — multiple accounts, or a write
+// credential that isn't the human whose PRs/reviews you want tracked.
+func (g *Integration) discoverSelf(ctx context.Context) {
+	if len(g.self) > 0 || g.app == nil {
+		return
+	}
+	tok := g.cfg.Identity.WriteToken
+	if tok == "" || tok == "gh_auth" {
+		t, err := ghAuthToken()
+		if err != nil {
+			log.Printf("github[%s]: me: not set and auto-discovery unavailable (%v) — set me.logins to identify your PRs/reviews", g.name, err)
+			return
+		}
+		tok = t
+	}
+	login, err := githubWhoami(ctx, g.app.httpc, g.app.apiBase, tok)
+	if err != nil {
+		log.Printf("github[%s]: me: auto-discovery failed (%v) — set me.logins to identify your PRs/reviews", g.name, err)
+		return
+	}
+	if login != "" {
+		g.self[strings.ToLower(login)] = true
+		log.Printf("github[%s]: me: auto-discovered as %q from the write identity — set me.logins to override", g.name, login)
+	}
 }
 
 // Translate maps a raw webhook event to Triggers. Exported for the `replay`

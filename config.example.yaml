@@ -92,7 +92,8 @@ connectors:
     # `owner/*`) only to NARROW it. Cadence auto-picks: adaptive (min_interval→
     # interval) with a webhook, fixed `min_interval` (default 2m) without.
     sweep: { repos: ["your-org/*"] }   # `enabled: true` is the default; omit it
-    me: { logins: [your-login] } # defines "you" (your PRs, your reviews)
+    # me: { logins: [your-login] } # optional — auto-discovered from your write
+    #                              # identity (GET /user); set only to override
     repos: ["your-org/*"] # default repo scope for triggers with no repos filter
     identity: { read_token: app, write_token: gh_auth, commit_author: self }
     # Default verb options: every gh verb call merges over these (call wins).

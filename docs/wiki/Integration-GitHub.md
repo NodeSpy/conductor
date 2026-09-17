@@ -13,7 +13,7 @@ connectors:
       secret: ${GH_WEBHOOK_SECRET}
       verify_signature: true               # default true
     sweep: { repos: ["your-org/*"] }        # optional — on by default, all installed repos; see Sweep below
-    me: { logins: [your-login] }           # defines "you"
+    # me: { logins: [your-login] }         # optional — auto-discovered from your write identity; set to override
     repos: ["your-org/*"]                  # default trigger scope
     identity: { read_token: app, write_token: gh_auth, commit_author: self }
     project_map: { Org/Repo: paseo/project }
@@ -62,6 +62,13 @@ works**: events arrive via a plain webhook (+ `webhook.secret`) or the sweep
 (explicit repos — glob expansion is an App endpoint), and reads use the PAT /
 gh token. Writes are always you (`identity.write_token`: `gh_auth` default or
 a literal) unless a verb sets `as: bot` — which requires App credentials.
+
+**`me:` (who "you" are — your PRs, your reviews, your own comments to ignore) is
+auto-discovered** and optional. Your write credential *is* you, so at startup
+conductor calls `GET /user` on it and takes that login as `me`. Set `me.logins`
+only to override — several accounts, or a write credential that isn't the human
+you want tracked. If the whoami can't run (no `gh`, offline), it logs a hint and
+leaves `me` unset rather than failing.
 
 ## Sweep (catch-up polling)
 
