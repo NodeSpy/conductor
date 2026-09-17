@@ -570,45 +570,18 @@ func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir st
 	case "branch-off":
 		opts.NewBranch = branchSlug(ctx, req.Trigger)
 		opts.BaseRef = req.Trigger.Target.BaseRef
-		// Reuse, don't collide (Fix D). The branch is deterministic per (PR,
-		// kind), so a prior run's worktree for it may still exist and `workspace
-		// create` is create-or-error. paseo names a branch-off worktree workspace
-		// after its branch, so adopt the one on this branch and launch a fresh
-		// agent into it — a live agent gains a second worker on the PR; an
-		// agent-less orphan is taken over — rather than erroring the retry. The
-		// operator asked for exactly this: "if the workspace exists ... just
-		// launch another in the same workspace."
-		if wsID, wcwd := d.existingWorktree(ctx, opts.NewBranch); wsID != "" {
-			return wsID, wcwd, false, nil
-		}
 	}
+	// The backend adopts an existing worktree for this branch when one exists
+	// (Result.Reused) rather than colliding on the deterministic name —
+	// recognizing "already exists" is the runtime's job, behind the Backend
+	// seam (a conductor-paseo plugin owns its own recognition). `created` is the
+	// inverse of Reused: only a worktree this dispatch actually made may be
+	// reclaimed if its launch then fails; a reused one is left alone.
 	res, err := d.backend().CreateWorktree(ctx, opts)
 	if err != nil {
 		return "", "", false, err
 	}
-	return res.WorkspaceID, res.Cwd, true, nil
-}
-
-// existingWorktree returns the id and local cwd of a conductor branch-off
-// worktree already on `branch` (paseo sets a branch-off workspace's name to its
-// branch), or "","" if none. It is the adopt-instead-of-collide lookup for
-// createWorktree (Fix D). The match is deliberately exact and worktree-scoped:
-// `branch` is always a conductor-owned `conductor/<kind>-<n>` slug, so it can
-// never resolve a workspace the operator made by hand.
-func (d *Dispatcher) existingWorktree(ctx context.Context, branch string) (id, cwd string) {
-	if branch == "" {
-		return "", ""
-	}
-	wl, err := d.backend().ListWorkspaces(ctx)
-	if err != nil {
-		return "", ""
-	}
-	for _, w := range wl {
-		if w.Isolation == "worktree" && w.Name == branch && w.WorkspaceID != "" && w.Cwd != "" {
-			return w.WorkspaceID, w.Cwd
-		}
-	}
-	return "", ""
+	return res.WorkspaceID, res.Cwd, !res.Reused, nil
 }
 
 // archiveOrphanWorkspaces tears down workspaces THIS dispatch created when the

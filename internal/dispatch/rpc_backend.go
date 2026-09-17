@@ -142,7 +142,11 @@ func (b *rpcBackend) CreateWorktree(ctx context.Context, opts CreateWorktreeOpti
 	if err != nil {
 		return CreateWorktreeResult{}, err
 	}
-	return CreateWorktreeResult{WorkspaceID: rpcStr(out["workspaceId"]), Cwd: rpcStr(out["cwd"])}, nil
+	return CreateWorktreeResult{
+		WorkspaceID: rpcStr(out["workspaceId"]),
+		Cwd:         rpcStr(out["cwd"]),
+		Reused:      rpcBool(out["reused"]),
+	}, nil
 }
 
 func (b *rpcBackend) CreateWorkspace(ctx context.Context, opts CreateWorkspaceOptions) (CreateWorkspaceResult, error) {
@@ -192,6 +196,13 @@ func (b *rpcBackend) Wait(ctx context.Context, id string) error {
 func rpcStr(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// rpcBool extracts a bool output field, tolerating a missing/non-bool/nil value
+// (a plugin that predates a field, or its zero value, reads as false).
+func rpcBool(v any) bool {
+	b, _ := v.(bool)
+	return b
 }
 
 // stringMapToAny widens a label map to map[string]any for an InvokeRequest's

@@ -182,6 +182,18 @@ func (b *cliBackend) ArchiveWorkspace(ctx context.Context, id string) error {
 // worktree. Mirrors the pre-extraction createWorktree body exactly (argv
 // shape and error wording), including the belt-and-suspenders $HOME check.
 func (b *cliBackend) CreateWorktree(ctx context.Context, opts CreateWorktreeOptions) (CreateWorktreeResult, error) {
+	// Adopt-don't-collide (create-or-reuse). A branch-off worktree's paseo
+	// workspace is named after its branch, and that branch is deterministic per
+	// (PR, kind) — so a prior run's worktree for it may still exist, and
+	// `workspace create` is create-or-error. Recognizing "already exists" is
+	// paseo-specific knowledge that belongs in this backend: the orchestration
+	// just asks for a worktree on this branch, and gets the existing one when
+	// there is one (launching another agent into it), or a fresh one otherwise.
+	if opts.Strategy == "branch-off" {
+		if w, ok := b.worktreeOnBranch(ctx, opts.NewBranch); ok {
+			return CreateWorktreeResult{WorkspaceID: w.WorkspaceID, Cwd: w.Cwd, Reused: true}, nil
+		}
+	}
 	args := []string{"workspace", "create", "--isolation", opts.Isolation,
 		"--path", opts.Path, "--mode", opts.Strategy, "--json"}
 	switch opts.Strategy {
@@ -215,6 +227,28 @@ func (b *cliBackend) CreateWorktree(ctx context.Context, opts CreateWorktreeOpti
 		return CreateWorktreeResult{}, fmt.Errorf("paseo workspace create (%s) produced no worktree (cwd=%q)", opts.Strategy, w.Cwd)
 	}
 	return CreateWorktreeResult{WorkspaceID: w.WorkspaceID, Cwd: w.Cwd}, nil
+}
+
+// worktreeOnBranch returns the worktree workspace already on `branch`, if any —
+// the create-or-reuse lookup for CreateWorktree. paseo names a branch-off
+// workspace after its branch, so the match is exact on that. `branch` is always
+// a conductor-owned `conductor/<kind>-<n>` slug, so it can never resolve a
+// workspace made by hand. A listing failure is treated as "none" — the create
+// then runs and surfaces the real error, rather than this masking it.
+func (b *cliBackend) worktreeOnBranch(ctx context.Context, branch string) (WorkspaceInfo, bool) {
+	if branch == "" {
+		return WorkspaceInfo{}, false
+	}
+	wl, err := b.ListWorkspaces(ctx)
+	if err != nil {
+		return WorkspaceInfo{}, false
+	}
+	for _, w := range wl {
+		if w.Isolation == "worktree" && w.Name == branch && w.WorkspaceID != "" && w.Cwd != "" {
+			return w, true
+		}
+	}
+	return WorkspaceInfo{}, false
 }
 
 // CreateWorkspace runs `paseo workspace create` for a plain (non-worktree)
