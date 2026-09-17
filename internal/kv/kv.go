@@ -43,6 +43,20 @@ type Store struct {
 	stop    chan struct{}
 	wg      sync.WaitGroup
 	closeMu sync.Once
+
+	// now is the clock every TTL read/write and the sweep consult. nil means the
+	// real wall clock (nowT). A test injects a controllable clock so expiry is
+	// deterministic — no sleeping past a real TTL, which raced on a loaded runner
+	// (a 20ms TTL could lapse between Set and the very next Get).
+	now func() time.Time
+}
+
+// nowT is the store's clock — the injected one if set, else the wall clock.
+func (s *Store) nowT() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 // Open opens (creating if absent) the store at path and starts the TTL
@@ -93,7 +107,7 @@ func (s *Store) Set(namespace, key string, value any, ttl time.Duration) error {
 	}
 	e := entry{V: raw}
 	if ttl > 0 {
-		e.E = time.Now().Add(ttl).UnixNano()
+		e.E = s.nowT().Add(ttl).UnixNano()
 	}
 	buf, err := json.Marshal(e)
 	if err != nil {
@@ -126,7 +140,7 @@ func (s *Store) Get(namespace, key string) (value any, found bool, err error) {
 		if err := json.Unmarshal(raw, &e); err != nil {
 			return fmt.Errorf("kv: get %s/%s: corrupt entry: %w", namespace, key, err)
 		}
-		if e.expired(time.Now()) {
+		if e.expired(s.nowT()) {
 			return nil
 		}
 		var v any
@@ -173,7 +187,7 @@ func (s *Store) Incr(namespace, key string, by int64) (int64, error) {
 			if err := json.Unmarshal(raw, &e); err != nil {
 				return fmt.Errorf("kv: incr %s/%s: corrupt entry: %w", namespace, key, err)
 			}
-			if !e.expired(time.Now()) {
+			if !e.expired(s.nowT()) {
 				// A JSON number decodes as float64; reject non-numbers.
 				var v any
 				if err := json.Unmarshal(e.V, &v); err != nil {
@@ -264,7 +278,7 @@ func (s *Store) SetNX(namespace, key string, value any, ttl time.Duration) (out 
 		if err != nil {
 			return err
 		}
-		cur, _, found, err := liveEntry(b, namespace, key, time.Now())
+		cur, _, found, err := liveEntry(b, namespace, key, s.nowT())
 		if err != nil {
 			return err
 		}
@@ -274,7 +288,7 @@ func (s *Store) SetNX(namespace, key string, value any, ttl time.Duration) (out 
 		}
 		var exp int64
 		if ttl > 0 {
-			exp = time.Now().Add(ttl).UnixNano()
+			exp = s.nowT().Add(ttl).UnixNano()
 		}
 		if err := putValue(b, key, value, exp); err != nil {
 			return err
@@ -298,7 +312,7 @@ func (s *Store) Merge(namespace, key string, patch map[string]any) (map[string]a
 		if err != nil {
 			return err
 		}
-		cur, e, found, err := liveEntry(b, namespace, key, time.Now())
+		cur, e, found, err := liveEntry(b, namespace, key, s.nowT())
 		if err != nil {
 			return err
 		}
@@ -354,7 +368,7 @@ func (s *Store) Append(namespace, key string, items []any, unique bool) ([]any, 
 		if err != nil {
 			return err
 		}
-		lst, e, err := listAt(b, namespace, key, time.Now())
+		lst, e, err := listAt(b, namespace, key, s.nowT())
 		if err != nil {
 			return fmt.Errorf("%w (append)", err)
 		}
@@ -395,7 +409,7 @@ func (s *Store) Remove(namespace, key string, items []any) ([]any, error) {
 		if err != nil {
 			return err
 		}
-		lst, e, err := listAt(b, namespace, key, time.Now())
+		lst, e, err := listAt(b, namespace, key, s.nowT())
 		if err != nil {
 			return fmt.Errorf("%w (remove)", err)
 		}
@@ -433,7 +447,7 @@ func (s *Store) Contains(namespace, key string, item any) (bool, error) {
 		if b == nil {
 			return nil
 		}
-		lst, _, err := listAt(b, namespace, key, time.Now())
+		lst, _, err := listAt(b, namespace, key, s.nowT())
 		if err != nil {
 			return fmt.Errorf("%w (contains)", err)
 		}
@@ -461,7 +475,7 @@ func (s *Store) readList(namespace, key, op string) ([]any, error) {
 			lst = []any{}
 			return nil
 		}
-		l, _, err := listAt(b, namespace, key, time.Now())
+		l, _, err := listAt(b, namespace, key, s.nowT())
 		if err != nil {
 			return fmt.Errorf("%w (%s)", err, op)
 		}
@@ -559,7 +573,7 @@ func (s *Store) Pop(namespace, key string, front bool) (value any, found bool, l
 		if b == nil {
 			return nil
 		}
-		lst, e, err := listAt(b, namespace, key, time.Now())
+		lst, e, err := listAt(b, namespace, key, s.nowT())
 		if err != nil {
 			return fmt.Errorf("%w (pop)", err)
 		}
@@ -586,7 +600,7 @@ func (s *Store) List(namespace, prefix string) (keys []string, entries map[strin
 		if b == nil {
 			return nil
 		}
-		now := time.Now()
+		now := s.nowT()
 		c := b.Cursor()
 		p := []byte(prefix)
 		for k, raw := c.Seek(p); k != nil && bytes.HasPrefix(k, p); k, raw = c.Next() {
@@ -618,7 +632,7 @@ func (s *Store) sweepLoop() {
 		case <-s.stop:
 			return
 		case <-t.C:
-			_ = s.Sweep(time.Now())
+			_ = s.Sweep(s.nowT())
 		}
 	}
 }
