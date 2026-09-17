@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 )
@@ -613,5 +614,42 @@ func TestOnceStartsNoDaemonSurfaces(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("once.go should execute for real: missing %q", want)
 		}
+	}
+}
+
+// TestOnceSleepHelperStep: the `sleep:` helper runs in one-shot mode exactly
+// as it does on the daemon — the steps on either side of it really execute,
+// and the job takes at least the duration it was told to wait. There is no
+// daemon-only machinery behind a helper step (no dispatch, no runtime), which
+// is precisely what this asserts.
+func TestOnceSleepHelperStep(t *testing.T) {
+	dir := t.TempDir()
+	before := filepath.Join(dir, "before.txt")
+	after := filepath.Join(dir, "after.txt")
+	cfg, fixture := writeOnceCase(t, `
+triggers:
+  - on: gh.review_requested
+    name: review
+    steps:
+      - { id: before, use: cli, command: ["sh", "-c", "printf ok > `+before+`"] }
+      - { id: nap, sleep: 150ms }
+      - { id: after, use: cli, command: ["sh", "-c", "printf ok > `+after+`"] }
+`)
+	start := time.Now()
+	out, err := onceRun(t, cfg, onceOptions{trigger: "review", fixturePath: fixture})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("once: %v\n%s", err, out)
+	}
+	for _, m := range []string{before, after} {
+		if _, rerr := os.Stat(m); rerr != nil {
+			t.Fatalf("step around the sleep did not run (%s): %v\n%s", m, rerr, out)
+		}
+	}
+	if elapsed < 140*time.Millisecond {
+		t.Fatalf("one-shot run took %s — the sleep step did not wait\n%s", elapsed, out)
+	}
+	if !strings.Contains(out, "outcome: ok") {
+		t.Errorf("job log:\n%s", out)
 	}
 }

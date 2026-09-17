@@ -167,6 +167,7 @@ A step sets exactly one form — what it does:
 | run code | **`use: <engine>`** + `code:`, or `use: cli` + `command:` — see [[Code-Steps]] |
 | run a program | `type: command` + `command:` |
 | call a workflow | **`call: <workflow>`** + `with:` — see [[Workflows]] |
+| wait | **`sleep: <duration>`** — a [helper step](#helper-steps), below |
 
 Two of those spellings moved, and both old ones still parse:
 
@@ -189,6 +190,57 @@ steps:
   - { id: review, call: review-flow, with: { pr: "{{.pr}}" } }
 ```
 
+## Helper steps
+
+A **helper step** is a form conductor runs itself: no agent, no engine, no
+connector, no command behind it. There is nothing to dispatch, nothing to
+install and nothing to grant — which is the point, because the alternative
+was a `use: cli` step shelling out to a coreutil just to pause a flow.
+
+**`sleep: <duration>`** is the first of them, and today the only one. It
+pauses the flow for the duration, then the run continues:
+
+```yaml
+steps:
+  - id: cancel
+    uses: gh.cancel_run
+    options: { repo: "{{.repo}}", run_id: "{{.run_id}}" }
+  - sleep: 5s                      # let the cancellation land
+  - id: rerun
+    uses: gh.rerun_run
+    options: { repo: "{{.repo}}", run_id: "{{.run_id}}" }
+```
+
+What to know:
+
+- **The duration is the same one every other field takes** — `500ms`, `5s`,
+  `30m`, `6h`, `7d`, `1d12h` ([[Configuration]]). It must be **positive**;
+  `sleep: 0` and a negative duration are refused at load, because a wait of
+  no time is a typo rather than an instruction.
+- **It is a step form**, so it is mutually exclusive with `type:` / `use:` /
+  `uses:` / `call:` — a step sleeps or it does something, never both — and it
+  takes `id:`, `if:`, `for_each:` and step hooks like any other step. It
+  appears in the run timeline with its own duration, and its outputs are
+  empty (`{{.steps.<id>.outputs}}` is an empty map).
+- **Cancellation cuts it short.** The wait is raced against the run's
+  context, so a daemon shutdown, a step `timeout:`, or a budget cut-off
+  leaves a `sleep: 30m` immediately — it never holds a run open for a wait
+  nobody is waiting on.
+- **A dry run does not wait.** `conductor replay` prints
+  `[dry-run] would sleep 5s` and moves on, so replaying a flow with long
+  waits in it stays instant.
+- **It runs the same in [[One-Shot|`conductor once`]]** as on the daemon.
+  Helper steps need none of the daemon's machinery, so there is no one-shot
+  caveat to remember.
+- **In an [agent-authored plan](#agent-driven-workflows)** `sleep` is a class
+  like any other: an agent may only emit one if the operator listed `sleep`
+  in `policy.agent_authored.verbs`. It reaches nothing outside conductor, but
+  it does spend the run's wall clock, so admitting it stays a decision.
+
+The family exists so the next one — a `log:`, a `noop:` — is a small,
+predictable addition rather than a new subsystem. Anything that needs no
+agent, engine, verb or command to execute belongs here.
+
 ## Fields
 
 | Field | Meaning |
@@ -198,6 +250,7 @@ steps:
 | `use` | The code ENGINE this step runs on (`run:` is the same key). See [[Code-Steps]]. |
 | `command` | The argv for `use: cli` and for `type: command` — a list of words, or one string split on whitespace (quotes honored, no shell). |
 | `call` | A workflow to run as this step, with `with:` for its inputs. See [[Workflows]]. |
+| `sleep` | Pause the flow for a positive duration — the helper step form, above. |
 | `model` | Which model to run: a fleet name, a model id, a wildcard, an inline list, or `{ any, required }`. Unset → the runtime's `models.default:`, then a bare launch. See [[Model-Selection]]. |
 | `runtime` | A `runtimes.<name>` entry to run on (default: the `default: true` runtime, else the built-in paseo). See [[Runtimes]]. |
 | `thinking` / `mode` | Runtime launch hints, passed through where the runtime supports them. |

@@ -192,7 +192,9 @@ type Runner struct {
 	Events *EventHub
 	// DryRun stubs every outbound verb and agent/command dispatch (replay).
 	DryRun bool
-	// sleep is injectable for retry tests.
+	// sleep is the runner's one ctx-aware wait — retry backoff/interval and
+	// the `sleep:` helper step both go through it, so neither can block a
+	// shutdown. Injectable for retry tests.
 	sleep func(ctx context.Context, d time.Duration) error
 }
 
@@ -914,6 +916,12 @@ func retryTimeout(rs *config.RetrySpec) time.Duration {
 // execStep runs one step form once. raw is the unparsed output (for
 // while_output_matches).
 func (r *Runner) execStep(ctx context.Context, t core.Trigger, step config.Step, id, slot string, data map[string]any, shadow bool) (map[string]any, string, error) {
+	// Helper steps (`sleep:`, and whatever joins it) are conductor's own work
+	// — no identity, no runtime, no connector — so they branch once, here,
+	// rather than adding an arm to this switch each time. See helpers.go.
+	if step.IsHelper() {
+		return r.execHelper(ctx, t, step, id, shadow)
+	}
 	switch step.Form() {
 	case "verb":
 		out, err := r.execVerb(ctx, t, step, id, data, shadow)

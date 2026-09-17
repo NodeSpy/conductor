@@ -239,6 +239,12 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 			case "parallel":
 				// Branches are validated by the step.Parallel recursion below.
 			default:
+				// A helper step (`sleep:`) names nothing to resolve — the
+				// loader already rejected a non-positive duration, and whether
+				// a plan may carry one at all is guardPlan's allowlist call.
+				if step.IsHelper() {
+					break
+				}
 				return fmt.Errorf("%s: no recognizable step form", w)
 			}
 			if step.Parallel != nil {
