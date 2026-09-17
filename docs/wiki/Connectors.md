@@ -29,12 +29,40 @@ connectors:
     options: { channel: C0123456789 }
 ```
 
-> **Per-connector setup lives with the plugin.** Where to get each service's
-> token / OAuth app, the exact settings-page path, and a minimal config block are
-> documented on that connector's page in the conductor-plugins repo —
-> **[docs/connectors](https://github.com/NodeSpy/conductor-plugins/tree/main/docs/connectors)**
-> (start at the [index](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md)).
-> For GitHub specifically, see [[GitHub-App-Setup]].
+## Where connectors come from
+
+`use:` names what implements a connector, and conductor resolves it in one
+order — **first match wins** (full rules in [[Plugins]]):
+
+| `use:` value | resolves to |
+|---|---|
+| `use: github` | a **built-in** — compiled into the daemon (see [Built-in connector types](#built-in-connector-types)) |
+| `use: sonarr` | not built-in → the **official plugin repo** `NodeSpy/conductor-plugins`, at `connectors/sonarr` |
+| `use: acme/plugins/jira` | an explicit **GitHub** repo (`github.com` implied) |
+| `use: git.corp.example/team/p//jira` | an explicit **non-GitHub** host (`//` separates the repo from the component) |
+| `use: ./bin/conductor-jira` | a **local** binary, for developing one |
+
+**Built-in beats official** — `use: github` is always the in-binary connector,
+never the plugin repo. A plugin stays current by default; pin an exact build
+with `use: sonarr@v1.2.3` (or a range, `@^1.2`). Built-ins and local binaries
+have no version to pin. See [[Plugins]] for versioning, the trust/allowlist
+model, and the `conductor plugin` commands.
+
+### The plugin catalog
+
+The official plugins — **69 connectors** (the Servarr apps, the Google
+Workspace set, proxmox, unifi, grafana, home-assistant, and many more), plus
+code engines and agent runtimes — live in
+**[conductor-plugins](https://github.com/NodeSpy/conductor-plugins)**. Browse
+them, with a reference **and setup walkthrough** for each (how to get the
+service's token / OAuth app, the exact settings-page path, and a minimal config
+block), under
+**[docs/connectors](https://github.com/NodeSpy/conductor-plugins/tree/main/docs/connectors)**
+— start at the
+**[catalog index](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md)**.
+You don't clone the repo: name one in `connectors:` and run `conductor init`,
+and conductor downloads it, verifies the checksum, and runs it as a sandboxed
+subprocess. For GitHub App setup specifically, see [[GitHub-App-Setup]].
 
 ## The contract
 
@@ -72,7 +100,12 @@ Identity is an option like any other: `as: me` (default — acts as you) or
 A connector-wide default that a particular verb does not declare is ignored
 for that verb.
 
-## Types
+## Built-in connector types
+
+These ship **compiled into the daemon** — no download, always available by name.
+(The [plugin catalog](#the-plugin-catalog) adds ~69 more as sandboxed
+subprocesses; several — `github`, `sentry`, `pagerduty`, `ntfy`, `pushover`,
+`notifiarr` — exist as both, and the built-in wins the name.)
 
 | type | events | verbs | notes |
 |---|---|---|---|
