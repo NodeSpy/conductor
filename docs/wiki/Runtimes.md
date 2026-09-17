@@ -65,9 +65,9 @@ runtimes:
 ```
 
 Omit the block and the runtime is fully automatic: roster discovered, nothing
-restricted, default = bare launch. See [Model selection](Model-Selection.md)
+restricted, default = bare launch. See [Model selection](Model-Selection)
 for fleets and the resolution ladder, and
-[Model discovery](Model-Discovery.md) for where the roster comes from.
+[Model discovery](Model-Discovery) for where the roster comes from.
 
 ## Fields
 
@@ -78,7 +78,7 @@ runtimes sharing a `host:`/`isolation:` — the child overrides only `command`).
 |---|---|
 | `extends` | inherit unset fields from another `runtimes:` entry (see [[Reuse]]) |
 | `use` | **what implements it**: a builtin — `paseo` \| `acp` \| `agent-deck` \| `opencode` \| `cli` — or a plugin reference. Same resolution as a connector's `use:`; see [[Plugins]]. **Defaults to the entry's own name**, so `paseo: {}` needs no `use:` |
-| `models` | optional model policy — `{ default, prefer, allow }`; see [Model selection](Model-Selection.md) |
+| `models` | optional model policy — `{ default, prefer, allow }`; see [Model selection](Model-Selection) |
 | `agent` | the agent the ACP transport drives (gemini, …). Valid **only** with `use: acp`, and required by it |
 | `transport` | `acp` \| `native` \| `cli` |
 | `session_model` | `native` \| `resumable` \| `oneshot` |

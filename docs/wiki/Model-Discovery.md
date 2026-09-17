@@ -10,7 +10,7 @@ adapter capability — each runtime answers however it can, and a runtime that
 cannot answer still works.
 
 **Nothing here is required for conductor to run.** Every path degrades to a
-[bare launch](Model-Selection.md#bare-launch).
+[bare launch](Model-Selection#bare-launch).
 
 ## Per-runtime strategies
 

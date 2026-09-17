@@ -91,7 +91,7 @@ A step is one of seven forms (all share `id` and `if`):
   step (see [[Verbs]]) rather than a field on the agent step.
   It may also carry `model:` (a fleet, a model id, a wildcard, or an inline
   `{ any, required }`) and `runtime:` (a `runtimes:` entry to pin it to) —
-  see [Model selection](Model-Selection.md).
+  see [Model selection](Model-Selection).
 
   **`output_schema` is a conductor-owned contract, not a passthrough to the
   runtime's own structured-output flag.** On the paseo runtime it first
