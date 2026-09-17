@@ -828,8 +828,8 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 
 	// Past the soft threshold (max_attempts_per_head), gate retries behind a GROWING
 	// backoff instead of a hard cap — a struggling (pr,kind,head) keeps getting
-	// periodic retries with widening gaps (10m→30m→…→24h) rather than being abandoned
-	// forever. Escalate once, when it first crosses the threshold. The cadence
+	// periodic retries with widening gaps (10m→30m→1h, then capped) rather than
+	// being abandoned forever. Escalate once, when it first crosses the threshold. The cadence
 	// and threshold come from the trigger's merged policy (scoped for flow
 	// triggers, global otherwise); the constants are the defaults.
 	pol := e.retryPolicyFor(act)
@@ -1279,7 +1279,11 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 const (
 	retryBackoffBase   = 10 * time.Minute
 	retryBackoffFactor = 3
-	retryBackoffMax    = 24 * time.Hour
+	// retryBackoffMax caps the gap between retries of a struggling (pr,kind,head).
+	// Kept to an hour so a stuck item is re-attempted promptly once whatever
+	// blocked it clears — a day-long ceiling meant a fixable state could sit
+	// unretried for ~24h. Per-connector overridable via policy.backoff.max.
+	retryBackoffMax = 1 * time.Hour
 	// defaultMaxAttempts is the soft threshold (retries before backoff begins) when
 	// an action doesn't set max_attempts_per_head. new_comment is exempt — distinct
 	// comments share a kind@head attempt key, so a cap there would throttle real work.

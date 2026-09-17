@@ -1183,3 +1183,12 @@ func TestDispatchGoroutinePanicRecovered(t *testing.T) {
 	waitFor(t, func() bool { return atomic.LoadInt32(&calls) >= 2 })
 	waitFor(t, func() bool { return len(st.PendingRuns()) == 0 })
 }
+
+// TestRetryBackoffCeilingIsBounded locks the retry backoff ceiling small. It was
+// 24h, which left a fixable (pr,kind,head) unretried for ~a day (the user-reported
+// ~21h gap). Keep it ≤ 1h so a struggling item retries promptly once unblocked.
+func TestRetryBackoffCeilingIsBounded(t *testing.T) {
+	if retryBackoffMax > time.Hour {
+		t.Fatalf("retryBackoffMax = %s — keep the retry ceiling ≤ 1h (per-connector policy.backoff.max can raise it deliberately)", retryBackoffMax)
+	}
+}
