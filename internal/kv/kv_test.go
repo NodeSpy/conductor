@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,16 +97,23 @@ func TestIncrAtomicity(t *testing.T) {
 }
 
 // TestTTL: an expired key reads absent, is skipped by list, and the sweep
-// physically deletes it.
+// physically deletes it. Time is driven through the store's injected clock so
+// expiry is deterministic — sleeping past a real TTL raced on a loaded runner (a
+// 20ms TTL could lapse between Set and the very next Get).
 func TestTTL(t *testing.T) {
 	s := openTemp(t)
+	var nanos atomic.Int64
+	nanos.Store(time.Unix(1_000_000, 0).UnixNano())
+	s.now = func() time.Time { return time.Unix(0, nanos.Load()) }
+
 	if err := s.Set("", "ephemeral", "x", 20*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
 	if _, found, _ := s.Get("", "ephemeral"); !found {
 		t.Fatal("fresh ttl key must be readable")
 	}
-	time.Sleep(30 * time.Millisecond)
+	// Advance the clock past the TTL — deterministic, no sleep, no race.
+	nanos.Add(int64(30 * time.Millisecond))
 	if _, found, _ := s.Get("", "ephemeral"); found {
 		t.Fatal("expired key must read absent")
 	}
