@@ -76,7 +76,7 @@ written twice.
 
 ## Step forms
 
-A step is one of six forms (all share `id` and `if`):
+A step is one of seven forms (all share `id` and `if`):
 
 - `type: agent` — dispatch an agent: `prompt`, `checkout`,
   `output_schema`, `background` (+ `handoff`, see [[Hand-offs]]),
@@ -122,6 +122,11 @@ A step is one of six forms (all share `id` and `if`):
   used to mean this and is migrated to `call:`.
 - `team:` — one task split across a planner, parallel workers in isolated
   worktrees, an optional critic, and a reconciler ([[Teams]]).
+- a **helper step** — conductor's own flow control, no agent/engine/verb/command
+  behind it: `sleep:` (pause), `log:` (a run-log breadcrumb), `set:` (publish
+  values as outputs), `assert:` (fail unless an expr holds), `fail:` (stop with a
+  message), `wait_for:` (poll a read verb until a condition or timeout). See
+  [[Steps]].
 
 An agent step carries its own BEHAVIOR — guidance, skill, memory opt-in,
 workspace, timeouts, isolation, model, runtime — and shares it with other

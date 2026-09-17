@@ -87,7 +87,11 @@ connectors:
       # verify_signature: false         # default true; smee re-serializes the
       #                                 # body so the HMAC can miss — flip it
       #                                 # off there, keep it on behind `listen`
-    sweep: { enabled: true, repos: ["your-org/*"] }
+    # Catch-up polling. ON by default and fully optional — omit the whole block
+    # and it sweeps every repo the App is installed on. List `repos:` (names or
+    # `owner/*`) only to NARROW it. Cadence auto-picks: adaptive (min_interval→
+    # interval) with a webhook, fixed `min_interval` (default 2m) without.
+    sweep: { repos: ["your-org/*"] }   # `enabled: true` is the default; omit it
     me: { logins: [your-login] } # defines "you" (your PRs, your reviews)
     repos: ["your-org/*"] # default repo scope for triggers with no repos filter
     identity: { read_token: app, write_token: gh_auth, commit_author: self }
@@ -385,6 +389,9 @@ hosts:
 #         store: [ cache ]                 #   carries resource scope: these two are the
 #         scope: [ "repo:acme/shared" ]    #   run:code ctx.kv / ctx.memory data allowlists.
 #       cli:       {}
+#       wait_for:  {}                      #   Helper keywords are classes too — list any of
+#                                          #   sleep/log/set/assert/fail/wait_for to let an
+#                                          #   agent-authored plan emit that helper.
 #                                          # The dispatch's OWN repo/channel/default is always
 #                                          #   implicitly allowed. An entry may be parameterized:
 #                                          #   ${settings.X} resolves at LOAD; an entry with {{ }}
@@ -1107,6 +1114,19 @@ triggers:
       # duration, drops out early if the run is cancelled, and is skipped
       # outright by a dry run. Use it instead of shelling out to `sleep(1)`.
       - sleep: 2s
+      # The rest of the HELPER family (same idea — no agent/engine/verb/command):
+      - log: "tidied {{.repo}}"                          # a run-log breadcrumb
+      - { id: vars, set: { branch: "fix/{{.pr}}" } }     # {{.vars.branch}} later
+      # assert: fail the run unless a condition (same grammar as `if:`) holds.
+      # - assert: "checks_passed && !draft"
+      # fail: stop with a rendered message — usually behind an `if:`.
+      # - { if: "!run_id", fail: "no run_id on this event" }
+      # wait_for: poll a READ verb until `until:` holds or `timeout:` — the
+      # principled pause before a state-dependent step (cancel a run, wait for it
+      # to actually finish, then rerun) instead of guessing a `sleep:`.
+      # - { id: settle, wait_for: { uses: gh.get_run,
+      #     options: { repo: "{{.repo}}", run_id: "{{.run_id}}" },
+      #     until: "status == 'completed'", every: 5s, timeout: 2m } }
       # - { id: legacy, type: command, command: [make, tidy] }   # still valid
       # - { id: remote, use: sh, host: build-box, code: "make deploy" }
       # - { id: remote-argv, use: cli, command: [make, deploy], host: build-box }

@@ -175,8 +175,9 @@ An App is not required. The github connector's credentials resolve
 
 - Events arrive via a **plain repository/organization webhook** pointed at
   `webhook.listen` (set the same secret in the webhook and in
-  `webhook.secret` — no `app:` block anywhere), or by **polling** — enable the sweep with explicit
-  repos (`owner/*` glob expansion is an App-only endpoint).
+  `webhook.secret` — no `app:` block anywhere), or by **polling** — the sweep is on by
+  default, but App-less mode can't enumerate installations, so set `repos:` explicitly
+  (`owner/*` glob expansion is an App-only endpoint).
 - Reads use the PAT / gh token; writes are you, as always.
 - `as: bot` verb calls need App credentials and fail with a clear error
   without them.
