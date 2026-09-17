@@ -38,7 +38,7 @@ func (d *Dispatcher) ProvisionWorktree(ctx context.Context, req Request) (id, cw
 		if err != nil {
 			return "", "", fmt.Errorf("resolve checkout dir for %s: %w", proj, err)
 		}
-		wsID, wcwd, err := d.createWorktree(ctx, req, dir)
+		wsID, wcwd, _, err := d.createWorktree(ctx, req, dir)
 		if err != nil {
 			return "", "", fmt.Errorf("create worktree for %s: %w", proj, err)
 		}

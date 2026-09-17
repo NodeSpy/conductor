@@ -110,7 +110,14 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	if err != nil {
 		// The session never opened — including a runtime that crashed before
 		// its first turn (ACP session/new failing mid-launch, J3). Same class
-		// as a failed provision: escalate (#60).
+		// as a failed provision: escalate (#60). The worktree we just
+		// provisioned would otherwise leak — no session ever bound it (Fix A).
+		// Release it best-effort: the git-native provisioner removes the
+		// worktree; the paseo one is a no-op, and its reaper's orphan sweep is
+		// the backstop there.
+		if r.prov != nil && wsID != "" {
+			_ = r.prov.RemoveWorktree(ctx, wsID)
+		}
 		return ref, dispatch.Unrecoverable(err)
 	}
 	// The provisioned worktree is where gate checks run and the proposed

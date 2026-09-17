@@ -26,14 +26,23 @@ import (
 // reaper tick landing in that window would kill it before it does any work.
 const reaperGraceDefault = 3 * time.Minute
 
+// orphanGraceDefault is how long a conductor-owned workspace must sit agent-less
+// before the orphan sweep archives it (Fix C). It is FAR longer than the startup
+// grace because the sweep has no agent to anchor on: the only thing separating "a
+// leaked workspace whose agent never launched" from "a workspace being created
+// right now for an agent about to launch" is age, so the window must comfortably
+// exceed how long create→launch ever takes.
+const orphanGraceDefault = 30 * time.Minute
+
 type Reaper struct {
 	PaseoBin string
 	// Remote runs the reaper's paseo invocations on an SSH host — one reaper
 	// per remote paseo runtime (its agents live on that box). nil = local.
-	Remote   *hosts.Target
-	Interval time.Duration
-	MinAge   time.Duration // don't reap agents younger than this (default reaperGraceDefault)
-	Log      func(string, ...any)
+	Remote       *hosts.Target
+	Interval     time.Duration
+	MinAge       time.Duration // don't reap agents younger than this (default reaperGraceDefault)
+	OrphanMinAge time.Duration // don't sweep an agent-less workspace younger than this (default orphanGraceDefault)
+	Log          func(string, ...any)
 
 	// Held is the conductor's explicit "never reap" set — agent ids handed off for
 	// you to drive (background workflow steps). The engine populates it at launch.
@@ -194,6 +203,10 @@ func (r *Reaper) reap(ctx context.Context) {
 		}
 	}
 
+	// Sweep conductor workspaces no agent ever bound — the orphan case the
+	// agent-anchored walk above structurally cannot see (Fix C).
+	r.reapOrphanWorkspaces(ctx)
+
 	// Forget held agents no longer listed (you archived them), keeping the set bounded.
 	for id := range r.held {
 		if !present[id] {
@@ -221,15 +234,68 @@ func (r *Reaper) presentIDs(ctx context.Context) map[string]bool {
 	return ids
 }
 
-// ORPHAN EPHEMERAL RUN WORKSPACES. The reaper reclaims a run's workspace by
-// walking from its still-listed AGENT (above), which covers the normal case and
-// the crashed-mid-run case alike. It deliberately does NOT sweep
-// conductor-run-* workspaces that have no agent: an ephemeral workspace exists
-// for exactly as long as its agent does, so "no agent" means either the agent
-// was already archived WITH its workspace (nothing left to do) or the workspace
-// is being created right now for an agent that has not launched yet — and
-// archiving that one would pull the directory out from under a starting run.
-// The agent-anchored walk has no such window.
+// reapOrphanWorkspaces archives conductor-owned workspaces no agent ever bound.
+// The agent-anchored walk above reclaims a run's workspace via its still-listed
+// AGENT, which covers the normal and crashed-mid-run cases — but NOT a workspace
+// whose agent never launched at all (a dispatch that errored before RunAgent
+// returned an id: MISSING_PROVIDER, or a crash between create and Fix A's
+// in-dispatch teardown). Such a workspace is agent-less forever, so the walk
+// can't see it; without this sweep it lingers and (for a branch-off worktree)
+// its deterministic branch collides with every retry. This is the backstop that
+// makes the failure path self-healing — and the one that clears a pile that
+// accumulated before Fix A shipped.
+//
+// The one hazard is racing a workspace being created RIGHT NOW for an agent
+// about to launch. Age is what separates the two: an orphan's directory mtime is
+// frozen at creation, while a just-created one is fresh — so only workspaces idle
+// past orphanGrace are swept. Local only: the mtime probe is a filesystem stat,
+// and a remote runtime's worktree lives on its own box (holdMarkerPresent takes
+// the same local-only stance); the agent-anchored walk still runs there.
+func (r *Reaper) reapOrphanWorkspaces(ctx context.Context) {
+	if r.Remote != nil {
+		return
+	}
+	wl, err := r.backend().ListWorkspaces(ctx)
+	if err != nil {
+		return
+	}
+	agents, err := r.backend().ListAgents(ctx, nil)
+	if err != nil {
+		return
+	}
+	live := make(map[string]bool, len(agents))
+	for _, a := range agents {
+		if a.Cwd != "" {
+			live[normCwd(a.Cwd)] = true
+		}
+	}
+	grace := r.orphanMinAge()
+	now := time.Now()
+	for _, w := range wl {
+		if w.WorkspaceID == "" || w.Cwd == "" || !isConductorOwnedWorkspace(w) {
+			continue
+		}
+		if live[normCwd(w.Cwd)] {
+			continue // an agent is in it — the agent-anchored walk owns its lifetime
+		}
+		fi, err := os.Stat(normCwd(w.Cwd))
+		if err != nil || now.Sub(fi.ModTime()) < grace {
+			continue // already gone, or too fresh to be sure it isn't mid-create
+		}
+		if err := r.backend().ArchiveWorkspace(ctx, w.WorkspaceID); err == nil && r.Log != nil {
+			r.Log("reaper: archived orphan workspace %s (%s) — no agent, idle %s",
+				w.WorkspaceID, w.Name, now.Sub(fi.ModTime()).Round(time.Minute))
+		}
+	}
+}
+
+// orphanMinAge is the agent-less-workspace grace, defaulting to orphanGraceDefault.
+func (r *Reaper) orphanMinAge() time.Duration {
+	if r.OrphanMinAge > 0 {
+		return r.OrphanMinAge
+	}
+	return orphanGraceDefault
+}
 
 // minAge is the startup grace, defaulting to reaperGraceDefault.
 func (r *Reaper) minAge() time.Duration {

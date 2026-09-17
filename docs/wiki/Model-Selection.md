@@ -124,6 +124,21 @@ when:
 `model: "*"` is **not** bare launch. `"*"` resolves to a *concrete* model
 through `prefer:`; bare launch passes no model at all.
 
+**Bare launch needs the runtime to *have* a default.** It leans entirely on the
+runtime's own built-in default model/provider — so a runtime that has none
+rejects the launch. The **paseo** runtime is the common case: with no provider
+configured, `paseo run` with no model fails, and conductor surfaces it as
+
+> paseo could not choose a model to run this agent — set `model:` on the step,
+> or `models.default:` on the paseo runtime.
+
+(The raw paseo error is `MISSING_PROVIDER`; conductor translates it, since it has
+no "providers" concept of its own.) Set `model:` on the step or `models.default:`
+on the runtime to give it a concrete pick. This can't be caught at config-load
+time — a bare launch is deliberately valid, and conductor can't know paseo's
+provider state ahead of the run — but the bare-launch decision does emit a
+`notice` naming this risk, visible in run logs and `conductor validate`.
+
 ## Two behaviours worth knowing
 
 **An exact pin survives an un-enumerable runtime.** If you write

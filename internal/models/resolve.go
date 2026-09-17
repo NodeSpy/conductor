@@ -276,7 +276,15 @@ func (r *Resolver) runtimeDefault(ctx context.Context, rts []string) Decision {
 				Reason: "runtime " + name + " models.prefer"}
 		}
 	}
-	return Decision{Bare: true, Reason: "no model declared — bare launch (the runtime's own default)"}
+	// Bare launch: nothing declared and no prefer: confirmed. Surface a non-fatal
+	// notice so the operator sees, proactively in run logs and `conductor
+	// validate`, that this run leans entirely on the runtime's own default — a
+	// runtime without one (paseo with no provider configured) rejects the launch
+	// with MISSING_PROVIDER. Fix B translates that error after the fact; this is
+	// the ahead-of-time hint (#12092).
+	return Decision{Bare: true,
+		Reason: "no model declared — bare launch (the runtime's own default)",
+		Notice: "no model declared for this runtime — dispatching bare; the runtime must supply its own default (a paseo runtime with no provider will fail with MISSING_PROVIDER — set `model:` or `models.default:`)"}
 }
 
 // candidateRuntimes is the ordered set of runtimes to search: the hinted one
