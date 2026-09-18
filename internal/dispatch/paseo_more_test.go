@@ -274,9 +274,9 @@ func TestCreateWorktreeStrategies(t *testing.T) {
 	d := &Dispatcher{PaseoBin: bin}
 	prReq := Request{Trigger: core.Trigger{Target: core.Target{Repo: "a/w", PR: 5, Number: 5, BaseRef: "main"}},
 		Action: config.Action{Checkout: "checkout-pr"}}
-	id, cwd, created, err := d.createWorktree(context.Background(), prReq, "/base")
-	if err != nil || id != "wks_new" || cwd == "" || !created {
-		t.Fatalf("checkout-pr: %v %q %q created=%v", err, id, cwd, created)
+	id, cwd, err := d.createWorktree(context.Background(), prReq, "/base")
+	if err != nil || id != "wks_new" || cwd == "" {
+		t.Fatalf("checkout-pr: %v %q %q", err, id, cwd)
 	}
 	if !strings.Contains(callsLog(t, dir), "--mode checkout-pr --json --pr-number 5 --forge github") {
 		t.Fatalf("pr argv: %s", callsLog(t, dir))
@@ -284,7 +284,7 @@ func TestCreateWorktreeStrategies(t *testing.T) {
 
 	brReq := Request{Trigger: core.Trigger{Kind: "issue_matched", Target: core.Target{Repo: "a/w", Number: 9, BaseRef: "main"}},
 		Action: config.Action{Checkout: "branch-off"}}
-	if _, _, _, err := d.createWorktree(context.Background(), brReq, "/base"); err != nil {
+	if _, _, err := d.createWorktree(context.Background(), brReq, "/base"); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(callsLog(t, dir), "--new-branch conductor/issue_matched-9 --base main") {
@@ -293,7 +293,7 @@ func TestCreateWorktreeStrategies(t *testing.T) {
 
 	// checkout "none" is an unexpected strategy here.
 	noneReq := Request{Action: config.Action{Checkout: "none"}}
-	if _, _, _, err := d.createWorktree(context.Background(), noneReq, "/base"); err == nil {
+	if _, _, err := d.createWorktree(context.Background(), noneReq, "/base"); err == nil {
 		t.Fatal("none strategy must error")
 	}
 
@@ -301,12 +301,12 @@ func TestCreateWorktreeStrategies(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	put(t, dir, "wscreate.json", `{"workspaceId":"wks_h","cwd":"`+home+`"}`)
-	if _, _, _, err := d.createWorktree(context.Background(), prReq, "/base"); err == nil || !strings.Contains(err.Error(), "produced no worktree") {
+	if _, _, err := d.createWorktree(context.Background(), prReq, "/base"); err == nil || !strings.Contains(err.Error(), "produced no worktree") {
 		t.Fatalf("home cwd should fail: %v", err)
 	}
 	// Unparseable output.
 	put(t, dir, "wscreate.json", `nope`)
-	if _, _, _, err := d.createWorktree(context.Background(), prReq, "/base"); err == nil || !strings.Contains(err.Error(), "unparseable") {
+	if _, _, err := d.createWorktree(context.Background(), prReq, "/base"); err == nil || !strings.Contains(err.Error(), "unparseable") {
 		t.Fatalf("bad json: %v", err)
 	}
 }

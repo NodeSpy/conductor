@@ -88,11 +88,9 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// of the target repo, because paseo derives the forge owner/repo from the
 	// working directory — not from a flag. Without it, paseo resolves the wrong
 	// repo and fails with WORKSPACE_CREATE_FAILED.
-	cwd := ""                // --cwd: a base checkout paseo derives the forge repo from
-	worktreeWS := ""         // pre-created isolated worktree workspace id (pinned via --workspace)
-	worktreeCwd := ""        // that worktree's local path (RunRef.Workdir for gates/diffs)
-	ephemeralWS := ""        // un-pinned checkout:none run's own ephemeral workspace id
-	worktreeCreated := false // true only when THIS dispatch created worktreeWS (vs adopted an existing one — Fix D); gates the teardown below so a reused workspace is never archived out from under it
+	cwd := ""         // --cwd: a base checkout paseo derives the forge repo from
+	worktreeWS := ""  // pre-created isolated worktree workspace id (pinned via --workspace)
+	worktreeCwd := "" // that worktree's local path (RunRef.Workdir for gates/diffs)
 	if req.Action.WorkDir != "" {
 		wd, err := render(req.Action.WorkDir, data)
 		if err != nil {
@@ -123,18 +121,15 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 			// agent. In a preview (dry/shadow) we can't touch the daemon, so keep the
 			// old inline `--cwd` + `--new-workspace` argv shape for assertion.
 			if d.WorktreeCreator != nil || (!d.DryRun && !req.Shadow) {
-				id, wcwd, created, err := d.createWorktree(ctx, req, dir)
+				id, wcwd, err := d.createWorktree(ctx, req, dir)
 				if err != nil {
-					// `workspace create` creates-or-errors (see the comment
-					// above) — a real failure here means the runtime never got
-					// a working directory, so the dispatch never reached a
-					// backend. Escalate rather than an ordinary step failure
-					// (J2, #60).
+					// The runtime never produced a working directory (create or
+					// reuse both failed), so the dispatch never reached a backend.
+					// Escalate rather than an ordinary step failure (J2, #60).
 					return RunRef{}, Unrecoverable(fmt.Errorf("create worktree for %s: %w", proj, err))
 				}
 				worktreeWS = id
 				worktreeCwd = wcwd
-				worktreeCreated = created
 			} else {
 				cwd = dir
 			}
@@ -178,7 +173,6 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 			// therefore renders the un-pinned argv, which is what it always did.
 			if id, err := d.runWorkspace(ctx, req); err == nil && id != "" {
 				argv = append(argv, "--workspace", id)
-				ephemeralWS = id
 			}
 		}
 	}
@@ -297,21 +291,12 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	}
 	ref.Output = res.Output
 	if err != nil {
-		// The launch failed before any agent came up (res.AgentID empty — e.g.
-		// paseo returned MISSING_PROVIDER, or any pre-agent error). A workspace
-		// this dispatch CREATED for the run would otherwise orphan: agent-less,
-		// so the reaper's agent-anchored walk can't see it, and its deterministic
-		// branch name collides with the next retry. Tear those down here (Fix A).
-		// A worktree we ADOPTED (worktreeCreated=false, Fix D) is left alone — it
-		// may hold another live agent, and it isn't ours to reclaim. The reaper's
-		// orphan sweep is the backstop for anything this misses.
-		if res.AgentID == "" {
-			toArchive := []string{ephemeralWS}
-			if worktreeCreated {
-				toArchive = append(toArchive, worktreeWS)
-			}
-			d.archiveOrphanWorkspaces(ctx, toArchive...)
-		}
+		// A launch that failed before any agent came up can leave an agent-less
+		// workspace behind. Conductor does NOT reclaim it here: the runtime may
+		// have REUSED an existing workspace (which could hold another live agent),
+		// and conductor deliberately can't tell created from reused — that's the
+		// runtime's concern. Cleanup of a genuinely orphaned (agent-less) one is
+		// the reaper's orphan sweep, which only ever touches agent-less workspaces.
 		return ref, err
 	}
 	ref.AgentID = res.AgentID
@@ -552,14 +537,13 @@ func workspaceMode(req Request) string {
 // the engine can escalate + retry, instead of a checkout-less agent stranded in
 // $HOME. baseDir is the repo's stable local checkout paseo derives
 // the forge repo from.
-// The returned `created` bool is true only when this call CREATED the worktree;
-// false when it ADOPTED an existing one (Fix D). The caller uses it to decide
-// whether a failed dispatch may archive the workspace (it may only reclaim what
-// it created — never a workspace it reused).
-func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir string) (id, cwd string, created bool, err error) {
+// Whether it creates a fresh worktree or adopts an existing one for the branch
+// is entirely the runtime's decision (Backend.CreateWorktree) — conductor asks
+// for a worktree and gets a working one back, blind to which. A runtime that
+// knows paseo can reuse; one that can't just creates.
+func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir string) (id, cwd string, err error) {
 	if d.WorktreeCreator != nil {
-		id, cwd, err = d.WorktreeCreator(ctx, req, baseDir)
-		return id, cwd, err == nil && id != "", err
+		return d.WorktreeCreator(ctx, req, baseDir)
 	}
 	strat := effectiveStrategy(req)
 	opts := CreateWorktreeOptions{Isolation: workspaceMode(req), Path: baseDir, Strategy: strat}
@@ -571,31 +555,11 @@ func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir st
 		opts.NewBranch = branchSlug(ctx, req.Trigger)
 		opts.BaseRef = req.Trigger.Target.BaseRef
 	}
-	// The backend adopts an existing worktree for this branch when one exists
-	// (Result.Reused) rather than colliding on the deterministic name —
-	// recognizing "already exists" is the runtime's job, behind the Backend
-	// seam (a conductor-paseo plugin owns its own recognition). `created` is the
-	// inverse of Reused: only a worktree this dispatch actually made may be
-	// reclaimed if its launch then fails; a reused one is left alone.
 	res, err := d.backend().CreateWorktree(ctx, opts)
 	if err != nil {
-		return "", "", false, err
+		return "", "", err
 	}
-	return res.WorkspaceID, res.Cwd, !res.Reused, nil
-}
-
-// archiveOrphanWorkspaces tears down workspaces THIS dispatch created when the
-// agent launch that would own them never came up (Fix A). Left behind, such a
-// workspace orphans: agent-less, so the reaper's agent-anchored walk can't see
-// it, and (for a branch-off worktree) its deterministic branch name collides
-// with the next retry. Best-effort — a failed archive is not worth failing the
-// already-failing dispatch over; the reaper's orphan sweep is the backstop.
-func (d *Dispatcher) archiveOrphanWorkspaces(ctx context.Context, ids ...string) {
-	for _, id := range ids {
-		if id != "" {
-			_ = d.backend().ArchiveWorkspace(ctx, id)
-		}
-	}
+	return res.WorkspaceID, res.Cwd, nil
 }
 
 // stderrTail returns a short, prefixed tail of captured stderr for an error

@@ -50,16 +50,13 @@ type Backend interface {
 	ArchiveWorkspace(ctx context.Context, id string) error
 
 	// CreateWorktree ensures an isolated PR/branch worktree workspace and
-	// returns it (`paseo workspace create --isolation ... --mode ...`). For a
-	// branch-off strategy the branch name is deterministic per (PR, kind), so a
-	// prior run's worktree for it may still exist; the backend ADOPTS that one
-	// (Result.Reused = true) rather than colliding on `workspace create`, which
-	// is create-or-error. Knowing HOW a runtime recognizes "already exists"
-	// (paseo names a branch-off workspace after its branch) is the backend's
-	// job, not the orchestration's — a conductor-paseo plugin owns its own
-	// recognition. The caller only reads Reused, to decide whether a failed
-	// launch may reclaim the workspace (it may reclaim one it created, never one
-	// it reused).
+	// returns a working one (`paseo workspace create --isolation ... --mode ...`).
+	// Whether it creates a fresh worktree or ADOPTS an existing one for the branch
+	// is entirely the runtime's decision: a runtime that knows its tool can reuse
+	// (the paseo plugin, recognizing that paseo names a branch-off workspace after
+	// its branch) may do so; one that can't just creates. Conductor asks for a
+	// worktree and gets one back — it neither knows nor cares which happened, so
+	// reuse never leaks into the orchestration.
 	CreateWorktree(ctx context.Context, opts CreateWorktreeOptions) (CreateWorktreeResult, error)
 
 	// CreateWorkspace creates a plain (non-worktree) workspace, e.g. an
@@ -152,10 +149,6 @@ type CreateWorktreeOptions struct {
 type CreateWorktreeResult struct {
 	WorkspaceID string
 	Cwd         string
-	// Reused is true when the backend ADOPTED an existing worktree for this
-	// branch instead of creating a new one. A failed launch may reclaim a
-	// created workspace, never a reused one (it may hold another live agent).
-	Reused bool
 }
 
 // CreateWorkspaceOptions is the input to Backend.CreateWorkspace.
