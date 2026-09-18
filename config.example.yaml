@@ -1201,11 +1201,11 @@ policy:
 #           - { at: fail,  uses: slack-ops.post, options: { text: "conductor update FAILED: {{.error}}" } }
 #       - { uses: build-box.run, options: { command: "smoke-test.sh" } }
 
-update: { auto: true } # self-update (auto-applies by default); auto-migration runs on the new binary's first boot
-# update: { auto: true, deps: true } # ALSO keep packs: and `use:` plugins current each cycle (opt-in);
-#                                     # a changed dep that still validates restarts to apply; every change is logged
-#                                     # with the sha it moved from. Freeze a pack with `hold: true`; freeze a plugin
-#                                     # by pinning an exact version (use: <ref>@v1.2.3).
+update: { auto: true } # self-update (auto-applies by default); auto-migration runs on the new binary's first boot.
+#                      # deps follows auto: packs: and `use:` plugins are kept current on the same cycle — a changed
+#                      # dep that still validates restarts to apply, every change logged with the sha it moved from.
+# update: { auto: true, deps: false } # keep the BINARY current but freeze deps to explicit init/pack update/plugin update.
+#                                     # (Freeze one pack with `hold: true`; freeze one plugin by pinning use: <ref>@v1.2.3.)
 # store:
 #   state_file: ~/.local/state/conductor/state.json
 #   audit_log:  ~/.local/state/conductor/audit.jsonl

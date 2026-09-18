@@ -201,9 +201,14 @@ plugin update` — or automatically, alongside the daemon's own self-update:
 
 ```yaml
 update:
-  auto: true      # the daemon self-updates from its release feed
-  deps: true      # ALSO keep packs: and use: plugins current each cycle (opt-in)
+  auto: true       # the daemon self-updates from its release feed
+                   # deps follows auto: packs: and use: plugins are kept current on the same cycle
+# update: { auto: true, deps: false }  # keep the binary current but freeze deps to explicit updates
 ```
+
+`deps` defaults to whatever `auto` is: turning on unattended binary updates opts
+you into unattended dependency updates too. Set `deps: false` to move plugins and
+packs only on an explicit `conductor init` / `plugin update` / `pack update`.
 
 Every change is logged:
 
