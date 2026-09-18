@@ -442,7 +442,9 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 	cfgFile, _ := configPath(nil)
 	controller.DaemonMaskPaths = []string{stateDir, filepath.Dir(cfgFile)}
 
-	mergedControllers, err := mergedControllersWithPlugins(cfg)
+	// One-shot mode doesn't wire Backend-RPC runtime plugins (no long-lived
+	// dispatcher/reaper here); ACP runtime plugins still resolve as before.
+	mergedControllers, err := mergedControllersWithPlugins(cfg, nil)
 	if err != nil {
 		return err
 	}

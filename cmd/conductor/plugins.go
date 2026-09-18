@@ -177,7 +177,7 @@ const pluginBootTimeout = 30 * time.Second
 // Their environment IS scrubbed — ScrubEnv (set below) makes acp.go's spawnACP
 // seed the child from sandbox.MinimalEnv() instead of the daemon's os.Environ(),
 // so a runtime plugin does not inherit env:-resolved secrets.
-func pluginRuntimeControllers(cfg *config.Config) (map[string]config.ControllerConfig, error) {
+func pluginRuntimeControllers(cfg *config.Config, skip map[string]bool) (map[string]config.ControllerConfig, error) {
 	out := map[string]config.ControllerConfig{}
 	state := plugin.LoadInstallState(plugin.InstallDir())
 	refs := cfg.PluginRefs()
@@ -189,6 +189,12 @@ func pluginRuntimeControllers(cfg *config.Config) (map[string]config.ControllerC
 	for _, key := range keys {
 		ref := refs[key]
 		if ref.Kind() != config.PluginKindRuntime {
+			continue
+		}
+		// A Backend-RPC-dialect runtime plugin (loadRuntimePlugins already
+		// adopted it, driving it through rpcBackend on its own dispatcher) must
+		// NOT also be wrapped as an ACP subprocess — the two paths are disjoint.
+		if skip[ref.Name] {
 			continue
 		}
 		inst, ok := state.Get(key)
@@ -227,9 +233,22 @@ func pluginRuntimeControllers(cfg *config.Config) (map[string]config.ControllerC
 // plugins. A plugin runtime's ControllerConfig REPLACES the placeholder
 // MergedControllers derived from its runtimes: entry (which carries no builtin
 // type, because the implementation is the plugin binary).
-func mergedControllersWithPlugins(cfg *config.Config) (map[string]config.ControllerConfig, error) {
+func mergedControllersWithPlugins(cfg *config.Config, backendRPC map[string]runtimePluginBackend) (map[string]config.ControllerConfig, error) {
 	merged := cfg.MergedControllers()
-	prt, err := pluginRuntimeControllers(cfg)
+	// A Backend-RPC runtime plugin is driven as a `type: paseo` runtime whose
+	// dispatcher main wiring rebinds to the plugin's rpcBackend (reg.OverridePaseo).
+	// Give it a clean paseo slot here (carrying through its runtimes: placement)
+	// and skip it in the ACP path below so it isn't double-wired.
+	skip := make(map[string]bool, len(backendRPC))
+	for name := range backendRPC {
+		cc := config.ControllerConfig{Type: "paseo"}
+		if prev, ok := merged[name]; ok {
+			cc.SessionModel, cc.Default, cc.Host = prev.SessionModel, prev.Default, prev.Host
+		}
+		merged[name] = cc
+		skip[name] = true
+	}
+	prt, err := pluginRuntimeControllers(cfg, skip)
 	if err != nil {
 		return nil, err
 	}

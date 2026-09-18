@@ -1,0 +1,109 @@
+package main
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/plugin"
+	"github.com/NodeSpy/conductor/internal/secrets"
+)
+
+// runtimePluginBackend is a runtime plugin that speaks Backend-RPC (the paseo
+// plugin dialect): its live *plugin.Client wrapped as a dispatch.Backend, ready
+// to drive a dedicated Dispatcher/Reaper for that runtime name.
+type runtimePluginBackend struct {
+	Name    string
+	Backend dispatch.Backend
+	Bin     string // the runtime's bin: (paseo_bin passed to the plugin), for the dispatcher's own PaseoBin display
+}
+
+// loadRuntimePlugins starts and describes every runtimes:-kind plugin, then
+// classifies each by dialect. A plugin whose Describe() declares the full
+// Backend-RPC verb set (SpeaksBackendRPC) is kept RUNNING and returned wrapped
+// as a dispatch.Backend — the caller gives it a dedicated Dispatcher + Reaper
+// via reg.OverridePaseo, so it drives paseo dispatch instead of the builtin
+// cliBackend. A plugin that does NOT (an ACP-dialect runtime) has its probe
+// client closed here and is left for pluginRuntimeControllers to wrap as an ACP
+// subprocess — the two paths are disjoint, so a name is claimed by exactly one.
+//
+// Fail-closed, same posture as loadConnectorPlugins/loadEnginePlugins: a start,
+// describe, or kind mismatch stops boot rather than degrading (a bad plugin is
+// an operator/security condition, not a transient).
+func loadRuntimePlugins(mgr *plugin.Manager, cfg *config.Config, retry config.Retry) (map[string]runtimePluginBackend, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), pluginBootTimeout)
+	defer cancel()
+
+	out := map[string]runtimePluginBackend{}
+	for _, spec := range mgr.RuntimeSpecs() {
+		decl, err := mgr.StartAndDescribe(ctx, spec.Key())
+		if err != nil {
+			return nil, fmt.Errorf("runtime plugin %s: %w", spec.Name, err)
+		}
+		// KIND ENFORCEMENT at the point of use, as for connectors/engines: the
+		// running binary must still describe itself as a runtime. A connector or
+		// engine accepted here would be driven with agent-launch verbs it never
+		// agreed to.
+		if decl.Kind != "" && decl.Kind != plugin.KindRuntime {
+			return nil, fmt.Errorf("runtime plugin %s: referenced under runtimes: but it describes itself as %s — refusing", spec.Name, decl.Kind)
+		}
+		if !dispatch.SpeaksBackendRPC(decl) {
+			// ACP-dialect runtime plugin: the real session is a fresh
+			// `conductor plugin-exec` subprocess spawned per session, NOT this
+			// probe client — close it and let pluginRuntimeControllers wrap it.
+			if cl, ok := mgr.Client(spec.Key()); ok {
+				_ = cl.Close()
+			}
+			continue
+		}
+		rt := cfg.Runtimes[spec.Name]
+		if rt.Host != "" {
+			// A Backend-RPC plugin runs as a local-stdio subprocess of this
+			// daemon; there is no remoting story for its plugin.Client yet.
+			return nil, fmt.Errorf("runtime plugin %s: host: is not yet supported for a Backend-RPC runtime plugin (remove host:, or use a builtin paseo runtime with host:)", spec.Name)
+		}
+		cl, ok := mgr.Client(spec.Key())
+		if !ok {
+			return nil, fmt.Errorf("runtime plugin %s: no client after describe (internal)", spec.Name)
+		}
+		conn := map[string]any{}
+		if rt.Bin != "" {
+			conn["paseo_bin"] = rt.Bin
+		}
+		backend := dispatch.NewRPCBackend(cl, spec.Name, conn, retry.Attempts(), retry.BackoffDur())
+		out[spec.Name] = runtimePluginBackend{Name: spec.Name, Backend: backend, Bin: rt.Bin}
+		logf("plugin %s: registered runtime %q (backend-rpc); permissions: %s",
+			spec.Ref(), spec.Name, spec.EffectiveManifest().Summary())
+	}
+	return out, nil
+}
+
+// reaperFor builds the archive-when-done reaper for one paseo dispatch surface.
+// A Backend-RPC plugin runtime's reaper drives the SAME plugin (via its
+// rpcBackend) — ListAgents/ArchiveAgent/ArchiveWorkspace all round-trip to the
+// plugin — rather than shelling a local `paseo` binary that runtime has none of.
+// A builtin/own-bin/remote paseo runtime keeps the CLI reaper (PaseoBin/Remote).
+func reaperFor(name string, pd *dispatch.Dispatcher, backends map[string]runtimePluginBackend, log func(string, ...any), held *dispatch.HoldSet) *dispatch.Reaper {
+	r := &dispatch.Reaper{Log: log, Held: held}
+	if rb, ok := backends[name]; ok {
+		r.SetBackend(rb.Backend)
+	} else {
+		r.PaseoBin, r.Remote = pd.PaseoBin, pd.Remote
+	}
+	return r
+}
+
+// runtimePluginManager returns the *plugin.Manager loadRuntimePlugins should
+// use. In the common case it reuses stack.Plugins (which already built a Client
+// for every runtimes/* ref and is Closed by the daemon's `defer stack.Close()`).
+// A config with no connectors:/triggers: block makes buildFlowStack return a nil
+// stack, yet cfg.PluginRefs() can still reference a plugin runtime — so build a
+// standalone Manager there and return its own closer.
+func runtimePluginManager(stack *flowStack, cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any)) (*plugin.Manager, func()) {
+	if stack != nil && stack.Plugins != nil {
+		return stack.Plugins, func() {}
+	}
+	m := pluginManagerFor(cfg, sec, audit)
+	return m, func() { _ = m.Close() }
+}

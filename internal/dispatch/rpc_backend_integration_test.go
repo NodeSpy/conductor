@@ -61,21 +61,9 @@ func TestRPCBackendRoundTripsListAgentsAndArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Every operation the Backend interface needs must be declared, or
-	// rpcBackend has nothing to call.
-	wantVerbs := map[string]bool{
-		"run": false, "list_agents": false, "inspect": false, "archive_agent": false,
-		"archive_workspace": false, "create_worktree": false, "create_workspace": false,
-		"list_workspaces": false, "clone": false, "send": false, "wait": false,
-	}
-	for _, v := range decl.Verbs {
-		if _, ok := wantVerbs[v.Name]; ok {
-			wantVerbs[v.Name] = true
-		}
-	}
-	for name, seen := range wantVerbs {
-		if !seen {
-			t.Errorf("decl missing verb %q", name)
-		}
+	// rpcBackend has nothing to call — the same set SpeaksBackendRPC gates on.
+	if !SpeaksBackendRPC(decl) {
+		t.Errorf("acme-runtime must declare the full Backend-RPC verb set %v; got %v", RequiredVerbs, decl.Verbs)
 	}
 
 	conn := map[string]any{
