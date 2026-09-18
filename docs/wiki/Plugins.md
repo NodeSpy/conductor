@@ -225,6 +225,15 @@ update:
 you into unattended dependency updates too. Set `deps: false` to move plugins and
 packs only on an explicit `conductor init` / `plugin update` / `pack update`.
 
+**A moved plugin is applied by a hot-reload — no daemon restart — when it can be.**
+The daemon swaps the plugin's subprocess in place (draining in-flight calls first)
+whenever the new build's interface is unchanged (same verbs, ABI, kind, and
+permissions). It falls back to a full restart when the interface changed, a
+**pack** moved, or the plugin can't be swapped live (a source connector, or an
+ACP runtime plugin) — so a reload is never less safe than the restart it replaces.
+`update.reload` defaults to follow `deps`; set `reload: false` to force
+restart-always (the fleet kill-switch).
+
 Every change is logged:
 
 ```
