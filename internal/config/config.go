@@ -260,16 +260,30 @@ type Update struct {
 	// emit conductor.update_available so a trigger drives the update with
 	// pre/post steps around `uses: conductor.update`).
 	Apply ApplyMode `yaml:"apply"`
-	// Deps, when true, also re-resolves `packs:` and `plugins:` on each
-	// auto-update cycle — pulling the newest release each dependency's `version:`
+	// Deps controls whether each auto-update cycle also re-resolves `packs:` and
+	// `plugins:` — pulling the newest release each dependency's `version:`
 	// constraint allows, re-vendoring, and (if anything changed and the resulting
-	// config still validates) restarting to load them. Default false: dependency
-	// versions move only on an explicit `conductor init` / `pack update` /
+	// config still validates) restarting to load them. **Unset, it follows
+	// `auto`**: turning on unattended binary updates opts you into unattended
+	// dependency updates too, because wanting one but silently freezing the other
+	// is rarely intended. Set `deps: false` to keep the binary current while
+	// pinning dependencies to explicit `conductor init` / `pack update` /
 	// `plugin update`. Per-item `hold: true` freezes one dependency even when this
-	// is on. A dep refresh that fails to validate is discarded — the running
-	// config stands — the same fail-safe as a bad binary release. Every change and
-	// every hold is logged.
-	Deps bool `yaml:"deps"`
+	// is on; pinning a plugin to an exact `@version` freezes it. A dep refresh
+	// that fails to validate is discarded — the running config stands, the same
+	// fail-safe as a bad binary release. Every change and every hold is logged.
+	Deps *bool `yaml:"deps"`
+}
+
+// DepsEnabled reports whether the auto-update cycle should also refresh packs and
+// plugins. Unset follows Auto (see Deps): `auto: true` implies dependency updates
+// unless `deps: false` says otherwise. The loop itself only runs when Auto is on,
+// so an unset Deps is off exactly when nothing is auto-updating anyway.
+func (u Update) DepsEnabled() bool {
+	if u.Deps != nil {
+		return *u.Deps
+	}
+	return u.Auto
 }
 
 // ShouldApply reports whether to re-exec after a successful update (default true).

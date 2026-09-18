@@ -145,10 +145,10 @@ func autoUpdateLoop(ctx context.Context, u config.Update, cfgFile string, notifi
 	if iv <= 0 {
 		iv = 10 * time.Minute
 	}
-	if u.Deps {
+	if u.DepsEnabled() {
 		logf("auto-update: enabled, checking every %s (packs + plugins included)", iv)
 	} else {
-		logf("auto-update: enabled, checking every %s", iv)
+		logf("auto-update: enabled, checking every %s (binary only; deps: false)", iv)
 	}
 	checker := &releaseChecker{}
 	t := time.NewTicker(iv)
@@ -161,7 +161,7 @@ func autoUpdateLoop(ctx context.Context, u config.Update, cfgFile string, notifi
 		case <-t.C:
 			// Dependency refresh first: a changed pack/plugin restarts to load it,
 			// same as a new binary. Opt-in (update.deps) — off, this is a no-op.
-			if u.Deps && refreshDeps(cfgFile) {
+			if u.DepsEnabled() && refreshDeps(cfgFile) {
 				logf("auto-update: dependency change validated — restarting to apply")
 				applyRelease(stop)
 				return
