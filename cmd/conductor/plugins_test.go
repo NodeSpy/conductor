@@ -38,7 +38,7 @@ func TestPluginRuntimeControllers(t *testing.T) {
 	bin, sum := tempExecutable(t)
 
 	t.Run("a use: runtime becomes an acp controller", func(t *testing.T) {
-		merged, err := mergedControllersWithPlugins(runtimeCfg(bin))
+		merged, err := mergedControllersWithPlugins(runtimeCfg(bin), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -60,7 +60,7 @@ func TestPluginRuntimeControllers(t *testing.T) {
 		cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{
 			"gpu": {Use: bin},
 		}}
-		merged, err := mergedControllersWithPlugins(cfg)
+		merged, err := mergedControllersWithPlugins(cfg, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -70,7 +70,7 @@ func TestPluginRuntimeControllers(t *testing.T) {
 	})
 
 	t.Run("runtime command routes through the re-verify wrapper", func(t *testing.T) {
-		merged, err := mergedControllersWithPlugins(runtimeCfg(bin))
+		merged, err := mergedControllersWithPlugins(runtimeCfg(bin), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -99,7 +99,7 @@ func TestPluginRuntimeControllers(t *testing.T) {
 		cfg := &config.Config{ConnectorsMap: map[string]config.ConnectorRef{
 			"conn": {Use: bin},
 		}}
-		merged, err := mergedControllersWithPlugins(cfg)
+		merged, err := mergedControllersWithPlugins(cfg, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -112,7 +112,7 @@ func TestPluginRuntimeControllers(t *testing.T) {
 		cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{
 			"local": {Use: "paseo"},
 		}}
-		merged, err := mergedControllersWithPlugins(cfg)
+		merged, err := mergedControllersWithPlugins(cfg, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -130,7 +130,7 @@ func TestPluginRuntimeNotInstalled(t *testing.T) {
 	cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{
 		"modal": {Use: "acme/plugins/modal"},
 	}}
-	_, err := mergedControllersWithPlugins(cfg)
+	_, err := mergedControllersWithPlugins(cfg, nil)
 	if err == nil || !strings.Contains(err.Error(), "conductor init") {
 		t.Fatalf("want a not-installed direction, got %v", err)
 	}

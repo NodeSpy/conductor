@@ -523,10 +523,23 @@ func cmdRun(args []string) error {
 		return (&hosts.Client{}).DialVia(ctx, hosts.Target{Name: name, Cfg: hc}, addr)
 	}
 	var paseoSender controller.Sender = disp
+	// Backend-RPC runtime plugins (the paseo-plugin dialect): start + describe
+	// each runtimes: plugin, and for those that speak the full dispatch.Backend
+	// verb set, keep the client running and wrap it as a Backend (a dedicated
+	// dispatcher/reaper is bound below via reg.OverridePaseo). ACP-dialect
+	// runtime plugins are left for mergedControllersWithPlugins to wrap as ACP
+	// subprocesses. Reuses stack's plugin manager (or a standalone one when a
+	// connectorless config still references a plugin runtime).
+	rtMgr, closeRtMgr := runtimePluginManager(stack, cfg, secrets.New(), st.Audit)
+	defer closeRtMgr()
+	runtimeBackends, err := loadRuntimePlugins(rtMgr, cfg, retry)
+	if err != nil {
+		return err
+	}
 	// External runtime plugins (#54) are verified (fail-closed) and merged into
 	// the controller set as sandboxed ACP subprocesses, selectable via a
 	// profile's runtime:.
-	mergedControllers, err := mergedControllersWithPlugins(cfg)
+	mergedControllers, err := mergedControllersWithPlugins(cfg, runtimeBackends)
 	if err != nil {
 		return err
 	}
@@ -553,6 +566,16 @@ func cmdRun(args []string) error {
 			where += " on host " + pd.Remote.Name
 		}
 		logf("runtime %s: dedicated paseo dispatcher (%s)", name, where)
+	}
+	// Backend-RPC runtime plugins get their own dispatcher too — one whose
+	// backend() is the plugin's rpcBackend rather than the local paseo CLI — and
+	// join paseoOverrides so the reaper loop builds a matching reaper for each.
+	for name, rb := range runtimeBackends {
+		d := dispatch.New(rb.Bin, retry, cfg.DryRun)
+		d.SetBackend(rb.Backend)
+		paseoOverrides[name] = d
+		reg.OverridePaseo(name, d, d)
+		logf("runtime %s: dedicated paseo dispatcher (backend-rpc plugin)", name)
 	}
 	broker := controller.NewBroker(reg, st, logf)
 	// Hand-off registry: resolves the named `handoffs:` map (config.Load already
@@ -947,8 +970,8 @@ func cmdRun(args []string) error {
 		// dedicated (own-bin / remote) runtime — their agents live where their
 		// paseo does.
 		reapers := []*dispatch.Reaper{{PaseoBin: disp.PaseoBin, Log: logf, Held: hold}}
-		for _, pd := range paseoOverrides {
-			reapers = append(reapers, &dispatch.Reaper{PaseoBin: pd.PaseoBin, Remote: pd.Remote, Log: logf, Held: hold})
+		for name, pd := range paseoOverrides {
+			reapers = append(reapers, reaperFor(name, pd, runtimeBackends, logf, hold))
 		}
 		for _, r := range reapers {
 			// Testability hook (test/e2e/): shrink the reaper cadence/grace so the

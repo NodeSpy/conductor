@@ -39,6 +39,21 @@ x-templates:
 That is the whole surface. There is no `plugins:` block, no `source:`, no
 `kind:`, and no `type:` — `use:` replaced all four.
 
+**Two kinds of runtime plugin, auto-detected.** A `runtimes:` plugin is driven
+one of two ways, chosen from what it declares at describe time (not from config):
+
+- a **dispatch (paseo-style) runtime** declares the agent-lifecycle verbs
+  (`run`, `list_agents`, `create_worktree`, `send`, `wait`, …) — conductor drives
+  it as its dispatch backend (it launches/monitors agents in *its own* daemon,
+  e.g. paseo), giving it a dedicated dispatcher + archive-when-done reaper. It
+  coexists with the builtin `use: paseo` (they don't interfere).
+- an **ACP runtime** declares no such verbs — conductor speaks ACP to a fresh,
+  re-verified subprocess per session (wrap a coding-agent CLI as a runtime).
+
+You don't choose; the declared verbs decide. One current limit: a dispatch-style
+runtime plugin can't yet take a `host:` (it runs as a local subprocess of the
+daemon) — use the builtin `use: paseo` with `host:` for a remote paseo.
+
 A third block uses the same field without being a block at all: a **code step's
 `use:`** names its engine, and a name that is not builtin is an engine plugin.
 
