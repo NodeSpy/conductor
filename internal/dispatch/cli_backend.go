@@ -191,7 +191,7 @@ func (b *cliBackend) CreateWorktree(ctx context.Context, opts CreateWorktreeOpti
 	// there is one (launching another agent into it), or a fresh one otherwise.
 	if opts.Strategy == "branch-off" {
 		if w, ok := b.worktreeOnBranch(ctx, opts.NewBranch); ok {
-			return CreateWorktreeResult{WorkspaceID: w.WorkspaceID, Cwd: w.Cwd, Reused: true}, nil
+			return CreateWorktreeResult{WorkspaceID: w.WorkspaceID, Cwd: w.Cwd}, nil
 		}
 	}
 	args := []string{"workspace", "create", "--isolation", opts.Isolation,
