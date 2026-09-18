@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"github.com/NodeSpy/conductor/internal/config"
 )
@@ -14,9 +15,22 @@ import (
 // holds the plugins derived from non-builtin `use:` references
 // (config.PluginRefs), keyed by "<kind-dir>/<name>".
 type Manager struct {
-	clients map[string]*Client
-	specs   map[string]Spec
-	order   []string
+	clients map[string]*Client // immutable after NewManager (pointers; a client's process is swapped in place by Reload)
+	order   []string           // immutable after NewManager
+
+	// mu guards specs + decls — the maps mutated after construction (Reload
+	// updates a plugin's binary-identity fields; StartAndDescribe records its
+	// self-description). clients/order are built once and read-only thereafter.
+	mu sync.RWMutex
+	// specs are the resolved specs, keyed by "<kind>/<name>".
+	specs map[string]Spec
+	// decls records each plugin's Decl from its FIRST StartAndDescribe — the
+	// surface the daemon's registrations were built against, captured at boot
+	// BEFORE any auto-update overwrites the binary in place. hot-reload compares
+	// a new build's Decl against this to decide swap-in-place vs restart
+	// (SameReloadSurface); re-describing the running client is unsafe because the
+	// binary at its (stable) path may already be the new build.
+	decls map[string]*Decl
 }
 
 // SpecFromRef resolves one derived config.PluginRef into a runnable Spec.
@@ -66,6 +80,7 @@ func NewManager(plugins map[string]config.PluginRef, configDir string, state *In
 	m := &Manager{
 		clients: make(map[string]*Client, len(plugins)),
 		specs:   make(map[string]Spec, len(plugins)),
+		decls:   make(map[string]*Decl, len(plugins)),
 	}
 	for key := range plugins {
 		m.order = append(m.order, key)
@@ -86,6 +101,8 @@ func (m *Manager) Names() []string { return append([]string(nil), m.order...) }
 
 // Spec returns a plugin's resolved spec.
 func (m *Manager) Spec(name string) (Spec, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	s, ok := m.specs[name]
 	return s, ok
 }
@@ -105,6 +122,8 @@ func (m *Manager) RuntimeSpecs() []Spec   { return m.specsOfKind(KindRuntime) }
 func (m *Manager) EngineSpecs() []Spec { return m.specsOfKind(KindStep) }
 
 func (m *Manager) specsOfKind(k Kind) []Spec {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var out []Spec
 	for _, name := range m.order {
 		if m.specs[name].Kind == k {
@@ -112,6 +131,29 @@ func (m *Manager) specsOfKind(k Kind) []Spec {
 		}
 	}
 	return out
+}
+
+// Reload swaps one plugin's subprocess to newSpec's binary IN PLACE (see
+// Client.Reload) and updates its recorded binary-identity fields. The same
+// *Client pointer stays in clients, so every consumer keeps driving the new
+// build with no re-registration. client.Reload can block draining in-flight
+// calls, so it runs OUTSIDE m.mu. Returns Client.Reload's error
+// (ErrReloadUnsupported/ErrReloadBusy) for the caller to map to a restart.
+func (m *Manager) Reload(key string, newSpec Spec) error {
+	c, ok := m.clients[key] // clients is immutable post-construction; no lock
+	if !ok {
+		return fmt.Errorf("plugin %q not found", key)
+	}
+	if err := c.Reload(newSpec); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	if s, ok := m.specs[key]; ok {
+		s.BinPath, s.Sha256, s.Resolved = newSpec.BinPath, newSpec.Sha256, newSpec.Resolved
+		m.specs[key] = s
+	}
+	m.mu.Unlock()
+	return nil
 }
 
 // Close stops every plugin subprocess.
@@ -134,5 +176,26 @@ func (m *Manager) StartAndDescribe(ctx context.Context, name string) (*Decl, err
 	if err := c.Start(ctx); err != nil {
 		return nil, err
 	}
-	return c.Describe(ctx)
+	decl, err := c.Describe(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Record the boot surface once — the first successful describe — so hot-
+	// reload can compare a new build against what the registrations were built
+	// from. Don't overwrite a prior record (StartAndDescribe is idempotent).
+	m.mu.Lock()
+	if _, seen := m.decls[name]; !seen {
+		m.decls[name] = decl
+	}
+	m.mu.Unlock()
+	return decl, nil
+}
+
+// Decl returns the self-description recorded at a plugin's first
+// StartAndDescribe (the surface its registrations were built against), or nil.
+func (m *Manager) Decl(name string) (*Decl, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	d, ok := m.decls[name]
+	return d, ok
 }

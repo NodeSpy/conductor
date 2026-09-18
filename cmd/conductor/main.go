@@ -44,6 +44,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/memory"
 	agentmodels "github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/plugin"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/skill"
@@ -1004,7 +1005,12 @@ func cmdRun(args []string) error {
 	// Periodic self-update. `stop` lets it trigger a graceful shutdown so the
 	// service manager relaunches into the new binary.
 	if cfg.Update.Auto {
-		go autoUpdateLoop(ctx, cfg.Update, cfgFile, notifier, stop)
+		// In-place plugin hot-reload: a dep refresh tries to swap a moved
+		// plugin's process (rtMgr holds every live plugin client + its boot
+		// Decl) without restarting the daemon; unhandled cases fall back to a
+		// restart inside autoUpdateLoop.
+		reload := func(moved []plugin.Resolution) bool { return reloadMoved(cfg, rtMgr, moved) }
+		go autoUpdateLoop(ctx, cfg.Update, cfgFile, notifier, stop, reload)
 	}
 	// conductor.updated fires on the first boot of a new release.
 	go emitUpdatedOnBoot(cfg, notifier)

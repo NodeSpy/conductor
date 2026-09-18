@@ -1206,6 +1206,8 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #                      # dep that still validates restarts to apply, every change logged with the sha it moved from.
 # update: { auto: true, deps: false } # keep the BINARY current but freeze deps to explicit init/pack update/plugin update.
 #                                     # (Freeze one pack with `hold: true`; freeze one plugin by pinning use: <ref>@v1.2.3.)
+#                                     # A moved plugin whose interface is unchanged hot-reloads in place (no daemon restart);
+#                                     # reload: false forces restart-always. deps/reload default to follow auto.
 # store:
 #   state_file: ~/.local/state/conductor/state.json
 #   audit_log:  ~/.local/state/conductor/audit.jsonl

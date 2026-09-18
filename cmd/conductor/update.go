@@ -140,7 +140,13 @@ func doUpdate(force bool, pinTag string) (updated bool, tag string, err error) {
 // running conductor, with no webhook or per-operator setup. GitHub exposes no
 // release push a non-admin consumer can subscribe to, so a near-free conditional
 // poll is the portable stand-in.
-func autoUpdateLoop(ctx context.Context, u config.Update, cfgFile string, notifier *notify.Notifier, stop func()) {
+// reloadFunc attempts to apply the moved plugins IN PLACE (no daemon restart)
+// and returns true only if it handled ALL of them. nil disables in-place reload
+// (always restart on a dep change). Built in cmdRun so it can reach the live
+// plugin manager.
+type reloadFunc func(moved []plugin.Resolution) bool
+
+func autoUpdateLoop(ctx context.Context, u config.Update, cfgFile string, notifier *notify.Notifier, stop func(), reload reloadFunc) {
 	iv := u.Interval.D()
 	if iv <= 0 {
 		iv = 10 * time.Minute
@@ -159,12 +165,22 @@ func autoUpdateLoop(ctx context.Context, u config.Update, cfgFile string, notifi
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			// Dependency refresh first: a changed pack/plugin restarts to load it,
-			// same as a new binary. Opt-in (update.deps) — off, this is a no-op.
-			if u.DepsEnabled() && refreshDeps(cfgFile) {
-				logf("auto-update: dependency change validated — restarting to apply")
-				applyRelease(stop)
-				return
+			// Dependency refresh first: a changed pack/plugin normally restarts to
+			// load it, same as a new binary. Opt-in (update.deps) — off, no-op.
+			if u.DepsEnabled() {
+				packMoved, moved, act := refreshDeps(cfgFile)
+				if act {
+					// Try in-place plugin hot-reload when enabled and no pack moved
+					// (packs aren't process-swappable). If it handles every moved
+					// plugin, skip the restart; otherwise restart to apply.
+					if u.ReloadEnabled() && !packMoved && reload != nil && reload(moved) {
+						logf("auto-update: plugins hot-reloaded in place — no restart")
+					} else {
+						logf("auto-update: dependency change validated — restarting to apply")
+						applyRelease(stop)
+						return
+					}
+				}
 			}
 			tag, changed, err := checker.check()
 			if err != nil {
@@ -190,13 +206,13 @@ func autoUpdateLoop(ctx context.Context, u config.Update, cfgFile string, notifi
 // logged and reported as no-change: the running daemon stands, and the
 // degraded-boot fail-safe covers the (now newer) on-disk lockfile on the next
 // manual restart. Network errors are logged and swallowed (transient).
-func refreshDeps(cfgFile string) (changed bool) {
+func refreshDeps(cfgFile string) (packMoved bool, pluginRes []plugin.Resolution, act bool) {
 	dir := filepath.Dir(cfgFile)
 	before, _ := config.ReadLockfile(dir)
 
 	if _, err := config.ResolvePacks(cfgFile); err != nil {
 		logf("auto-update: pack refresh failed (keeping current): %v", err)
-		return false
+		return false, nil, false
 	}
 	// Plugins stay current on the same cycle. Their install state is LOCAL, so
 	// (unlike packs) nothing about this lands in the repo: the reconcile logs
@@ -206,24 +222,25 @@ func refreshDeps(cfgFile string) (changed bool) {
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
 		logf("auto-update: config load failed (keeping current): %v", err)
-		return false
+		return false, nil, false
 	}
-	pluginsMoved, err := refreshPlugins(cfg)
+	pluginsMoved, results, err := refreshPlugins(cfg)
 	if err != nil {
 		logf("auto-update: plugin refresh failed (keeping current): %v", err)
-		return false
+		return false, nil, false
 	}
 
 	after, _ := config.ReadLockfile(dir)
-	if !logDepChanges(before, after) && !pluginsMoved {
-		return false // nothing moved
+	packMoved = logDepChanges(before, after)
+	if !packMoved && !pluginsMoved {
+		return false, nil, false // nothing moved
 	}
 	// A dependency moved — only apply if the new graph still loads.
 	if _, err := config.Load(cfgFile); err != nil {
 		logf("auto-update: dependency update does NOT validate — NOT applying: %v", err)
-		return false
+		return false, nil, false
 	}
-	return true
+	return packMoved, results, true
 }
 
 // logDepChanges logs each pack/plugin whose resolved revision changed between
@@ -254,10 +271,10 @@ func logDepChanges(before, after *config.Lockfile) bool {
 // whether any plugin actually moved. A per-plugin fetch failure is NOT an
 // error: Reconcile keeps the installed build and records the failure, so one
 // unreachable plugin never blocks the update or the daemon.
-func refreshPlugins(cfg *config.Config) (bool, error) {
+func refreshPlugins(cfg *config.Config) (bool, []plugin.Resolution, error) {
 	results, err := reconcilePlugins(cfg, plugin.Options{Log: logf})
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	moved := false
 	for _, r := range results {
@@ -268,7 +285,7 @@ func refreshPlugins(cfg *config.Config) (bool, error) {
 			logf("auto-update: plugin %s: %v", r.Name, r.Err)
 		}
 	}
-	return moved, nil
+	return moved, results, nil
 }
 
 // installRelease and applyRelease are the install/restart seams —
