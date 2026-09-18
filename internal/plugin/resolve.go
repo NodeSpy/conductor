@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -276,6 +277,61 @@ func checkDeclKind(ref config.PluginRef, decl *Decl) error {
 
 // manifestFromDecl lifts the plugin's declared capabilities into the recorded
 // permission manifest.
+// SameReloadSurface reports whether a new build's Decl is compatible enough with
+// the running one to be hot-swapped IN PLACE (Client.Reload) rather than requiring
+// a full daemon restart. The running registrations describe the OLD Decl — its
+// kind, ABI, verb/event surface, and permission manifest — so any of those
+// changing means a stale registration and forces a restart. A pure
+// implementation/bugfix build (same interface) passes and reloads live.
+func SameReloadSurface(oldD, newD *Decl) bool {
+	if oldD == nil || newD == nil {
+		return false
+	}
+	if oldD.Kind != newD.Kind || oldD.ABI != newD.ABI || oldD.Type != newD.Type {
+		return false
+	}
+	if !sameVerbs(oldD.Verbs, newD.Verbs) || !sameEvents(oldD.Events, newD.Events) {
+		return false
+	}
+	// Permissions must be identical — a widened egress/command/fs set is a new
+	// grant the operator must re-consent to at (re)install, never silently live.
+	return reflect.DeepEqual(manifestFromDecl(oldD), manifestFromDecl(newD))
+}
+
+// sameVerbs / sameEvents compare by name (order-insensitive — a rebuild may emit
+// them in a different order) plus full shape (options/outputs schemas).
+func sameVerbs(a, b []Verb) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	m := make(map[string]Verb, len(a))
+	for _, v := range a {
+		m[v.Name] = v
+	}
+	for _, v := range b {
+		if av, ok := m[v.Name]; !ok || !reflect.DeepEqual(av, v) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameEvents(a, b []Event) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	m := make(map[string]Event, len(a))
+	for _, e := range a {
+		m[e.Name] = e
+	}
+	for _, e := range b {
+		if ae, ok := m[e.Name]; !ok || !reflect.DeepEqual(ae, e) {
+			return false
+		}
+	}
+	return true
+}
+
 func manifestFromDecl(decl *Decl) Manifest {
 	if decl == nil {
 		return Manifest{}

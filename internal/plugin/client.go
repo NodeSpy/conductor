@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -83,6 +84,16 @@ type Client struct {
 	downUntil   time.Time
 	closed      bool
 	onEvent     func(json.RawMessage) // current source-event sink (set by StartSource)
+
+	// reloading is set for the brief window of a Reload (drain → teardown →
+	// swap spec). New bounded calls park on reloadCond until it clears, then
+	// re-dial the NEW binary; inflight counts the bounded calls Reload waits to
+	// drain before it tears the old process down. StartSource is deliberately
+	// NOT counted (it only returns on teardown; draining it would deadlock) —
+	// a client that ever sourced refuses in-place reload (onEvent != nil).
+	reloading  bool
+	reloadCond *sync.Cond
+	inflight   sync.WaitGroup
 	// runs are the step-engine runs currently in flight on this plugin, keyed
 	// by the capability token minted for each. It is the daemon half of the
 	// run_id model: a host.* callback is answered only while the run it names
@@ -123,6 +134,7 @@ func NewClient(spec Spec, deps Deps) *Client {
 		deps.dial = realDial
 	}
 	c := &Client{spec: spec, runs: map[string]RunHost{}}
+	c.reloadCond = sync.NewCond(&c.mu)
 	deps.onNotify = c.handleNotify
 	deps.onRequest = c.handleRequest
 	c.deps = deps
@@ -421,11 +433,20 @@ func (c *Client) call(ctx context.Context, method string, params, result any) er
 // bounded by ctx alone (plugin.run — see Run).
 func (c *Client) callFor(ctx context.Context, timeout time.Duration, method string, params, result any) error {
 	c.mu.Lock()
+	// Park while a Reload is swapping the process, then re-dial the new binary.
+	for c.reloading {
+		c.reloadCond.Wait()
+	}
 	if err := c.ensureLocked(ctx); err != nil {
 		c.mu.Unlock()
 		return err
 	}
 	conn := c.conn
+	// Count this bounded call so Reload can drain it before teardown. Add under
+	// mu, before unlock, so a Reload that observes reloading=false is guaranteed
+	// to see this in inflight (and vice-versa) — no lost call across the swap.
+	c.inflight.Add(1)
+	defer c.inflight.Done()
 	c.mu.Unlock()
 
 	cctx := ctx
@@ -453,6 +474,89 @@ func (c *Client) Close() error {
 	defer c.mu.Unlock()
 	c.closed = true
 	c.teardownLocked()
+	return nil
+}
+
+// reloadDrainTimeout bounds how long Reload waits for in-flight bounded calls to
+// finish before giving up (and letting the caller restart instead of force-
+// killing a live call). A var so tests can shrink it.
+var reloadDrainTimeout = 30 * time.Second
+
+// ErrReloadUnsupported means this client can't be swapped in place — it holds a
+// live source stream (StartSource), which only ends on teardown, so there is
+// nothing to drain toward. The caller falls back to a full restart.
+var ErrReloadUnsupported = errors.New("plugin: in-place reload unsupported (live source)")
+
+// ErrReloadBusy means in-flight calls did not drain within reloadDrainTimeout
+// (or a reload is already running). The caller falls back to a full restart
+// rather than tearing a process down under a live call.
+var ErrReloadBusy = errors.New("plugin: in-place reload busy (calls did not drain)")
+
+// Reload swaps this client's subprocess to newSpec's binary IN PLACE — same
+// *Client pointer, so every consumer (engine lookup, connector impl, rpcBackend)
+// transparently drives the new build with no re-registration. It drains bounded
+// calls first, then tears the old process down and points spec at the new one;
+// the next call lazily re-dials (verify-before-execute runs against newSpec).
+//
+// The caller must have already confirmed the new build's Decl surface is
+// compatible (SameReloadSurface) — Reload does not re-validate registrations.
+func (c *Client) Reload(newSpec Spec) error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return fmt.Errorf("plugin %s: closed", c.spec.Name)
+	}
+	if c.onEvent != nil {
+		c.mu.Unlock()
+		return ErrReloadUnsupported
+	}
+	if c.reloading {
+		c.mu.Unlock()
+		return ErrReloadBusy
+	}
+	c.reloading = true
+	c.mu.Unlock()
+
+	// Drain bounded in-flight calls (new ones now park on reloadCond, so the
+	// count only falls). Bounded so a stuck/long call can't wedge the reload —
+	// on timeout we abort and the caller restarts instead.
+	done := make(chan struct{})
+	go func() { c.inflight.Wait(); close(done) }()
+	drained := false
+	select {
+	case <-done:
+		drained = true
+	case <-time.After(reloadDrainTimeout):
+	}
+
+	c.mu.Lock()
+	defer func() {
+		c.reloading = false
+		c.reloadCond.Broadcast()
+		c.mu.Unlock()
+	}()
+	if !drained {
+		return ErrReloadBusy
+	}
+	// Swap. teardown the old process; point at the new binary; reset the
+	// crash-loop bookkeeping — a deliberate reload is not a crash and must not
+	// count against the burst/lifetime caps. Lazy re-dial on the next call.
+	//
+	// Only the binary-identity fields are mutated (all read exclusively under
+	// mu, in ensureLocked/verify/dial). The invariant fields — Name, Kind,
+	// Provides, Local, Manifest — are UNCHANGED (a compatible reload is the same
+	// plugin+permissions, guaranteed by the caller's SameReloadSurface check) and
+	// are the only ones read lock-free (handleRequest/Run/Describe), so leaving
+	// them untouched keeps those reads race-free without a whole-struct write.
+	c.teardownLocked()
+	c.spec.BinPath = newSpec.BinPath
+	c.spec.Sha256 = newSpec.Sha256
+	c.spec.Resolved = newSpec.Resolved
+	c.digest = ""
+	c.starts = nil
+	c.totalStart = 0
+	c.downForGood = false
+	c.downUntil = time.Time{}
 	return nil
 }
 

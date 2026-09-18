@@ -273,6 +273,25 @@ type Update struct {
 	// that fails to validate is discarded — the running config stands, the same
 	// fail-safe as a bad binary release. Every change and every hold is logged.
 	Deps *bool `yaml:"deps"`
+
+	// Reload controls whether a dependency refresh applies a moved plugin by
+	// hot-swapping its subprocess IN PLACE (no daemon restart) when the new
+	// build's Decl surface is unchanged, falling back to a restart otherwise.
+	// Unset follows Deps (so it's on wherever dependency auto-update is). Set
+	// `reload: false` to force restart-always — the fleet kill-switch if
+	// in-place reload ever misbehaves. A reload that can't be done in place
+	// (source connector, ACP runtime, changed Decl/permissions, drain timeout)
+	// restarts regardless, so this is never less safe than a plain restart.
+	Reload *bool `yaml:"reload"`
+}
+
+// ReloadEnabled reports whether a dependency refresh should try in-place plugin
+// hot-reload before falling back to a restart. Unset follows DepsEnabled.
+func (u Update) ReloadEnabled() bool {
+	if u.Reload != nil {
+		return *u.Reload
+	}
+	return u.DepsEnabled()
 }
 
 // DepsEnabled reports whether the auto-update cycle should also refresh packs and
