@@ -164,3 +164,40 @@ func TestBothToolPathsCarryTheDispatchAnchor(t *testing.T) {
 		t.Errorf("the session path lost the anchor: Dispatch=%q", sid.Dispatch)
 	}
 }
+
+func TestEffectiveSkillPolicyAutoGrantsHandoffDone(t *testing.T) {
+	// A non-interactive step gets exactly its own grant.
+	base := Request{Step: config.Step{Skill: &config.SkillPolicy{Verbs: []string{"gh.pr_get"}}}}
+	if got := effectiveSkillPolicy(base).Verbs; !slices.Equal(got, []string{"gh.pr_get"}) {
+		t.Fatalf("non-interactive: got %v, want [gh.pr_get]", got)
+	}
+
+	// An interactive hand-off auto-gets handoff.done on top of its grant...
+	inter := Request{Interactive: true, Step: config.Step{Skill: &config.SkillPolicy{Verbs: []string{"gh.pr_get"}}}}
+	if got := effectiveSkillPolicy(inter).Verbs; !slices.Contains(got, "handoff.done") || !slices.Contains(got, "gh.pr_get") {
+		t.Fatalf("interactive: got %v, want gh.pr_get + handoff.done", got)
+	}
+	// ...without mutating the shared config.Step.Skill.Verbs.
+	if got := inter.Step.Skill.Verbs; !slices.Equal(got, []string{"gh.pr_get"}) {
+		t.Fatalf("original grant mutated: %v", got)
+	}
+
+	// An interactive hand-off with NO skill: block still gets handoff.done.
+	bare := Request{Interactive: true}
+	if got := effectiveSkillPolicy(bare).Verbs; !slices.Equal(got, []string{"handoff.done"}) {
+		t.Fatalf("bare interactive: got %v, want [handoff.done]", got)
+	}
+
+	// Idempotent: an operator who already granted it doesn't get a duplicate.
+	dup := Request{Interactive: true, Step: config.Step{Skill: &config.SkillPolicy{Verbs: []string{"handoff.done"}}}}
+	if got := effectiveSkillPolicy(dup).Verbs; !slices.Equal(got, []string{"handoff.done"}) {
+		t.Fatalf("duplicate grant: got %v, want [handoff.done]", got)
+	}
+
+	if !wantsSkillCreds(bare) {
+		t.Fatal("interactive hand-off should want skill creds even without skill:")
+	}
+	if wantsSkillCreds(Request{}) {
+		t.Fatal("a plain non-interactive step wants no skill creds")
+	}
+}

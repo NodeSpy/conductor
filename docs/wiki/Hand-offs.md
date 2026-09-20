@@ -117,12 +117,13 @@ it.
 When the conversation is genuinely over, the hand-off should release its
 workspace rather than sit held until you archive it by hand. Two paths:
 
-- **`handoff.done`** — an agent skill verb. Grant it (`skill: { verbs:
-  [handoff.done] }`) and the hand-off agent calls it the moment it has nothing
-  more for you; the guidance appended to every hand-off tells it to. It ends
+- **`handoff.done`** — an agent skill verb, **auto-granted to every hand-off**:
+  the agent calls it the moment it has nothing more for you (the guidance
+  appended to every hand-off tells it to), no `skill:` block required. It ends
   the review, closes the draft, and drops the reaper hold on the agent's own
-  hand-off (the caller can only release its own — the daemon resolves the
-  target from the token identity, never a name the agent passes).
+  hand-off — the caller can only release its own, since the daemon resolves the
+  target from the token identity, never a name the agent passes. (An explicit
+  `skill: { verbs: [handoff.done] }` is harmless and de-duplicated.)
 - **`idle_timeout: <duration>`** on the step — the backstop for a hand-off
   nobody closed. Still open after this long → released the same way. Off unless
   set; independent of `watch:`.
@@ -132,8 +133,7 @@ workspace rather than sit held until you archive it by hand. Two paths:
   agent: reviewer
   background: true
   handoff: slack
-  idle_timeout: 12h
-  skill: { verbs: [handoff.done] }
+  idle_timeout: 12h   # handoff.done is auto-granted; the agent releases early
 ```
 
 ## Legacy `handoffs:`

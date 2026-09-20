@@ -260,7 +260,9 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// token in env (never argv, forwarded to the box paseo runs on); the injected
 	// prompt guidance tells it to run `conductor discover`/`call`. SkillEnv
 	// returns nil for a non-skill profile or when no endpoint is available.
-	if req.Step.Skill != nil {
+	// A skill: profile OR any interactive hand-off (which auto-gets handoff.done)
+	// is handed CLI creds so the agent can `conductor call`.
+	if wantsSkillCreds(req) {
 		endpoint := ""
 		if d.remote() {
 			endpoint = d.remoteSkillEndpoint(ctx, req)
