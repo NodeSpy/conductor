@@ -52,6 +52,50 @@ hand-off stays runtime-native — the notification tells you to open the live
 agent (paseo's interactive surface). The agent is held from the reaper either
 way.
 
+## Reactive watch (`watch:`)
+
+A hand-off is held open until a human closes it — but the world can make it
+moot first (the PR merges, someone else approves). A `watch:` block on the
+step lets the hand-off tear itself down when the reason it existed goes away,
+so you don't click through a stale draft.
+
+```yaml
+- id: review
+  agent: reviewer
+  background: true
+  handoff: slack
+  watch:
+    uses: gh.pr_get        # a read verb, polled every `every` (default 60s)
+    every: 60s
+    on:
+      - if: "pr.merged == true"
+        uses: handoff.bail
+        options: { notify: "PR merged — closing the review" }
+      - if: 'pr.review_decision == "APPROVED"'
+        uses: handoff.bail
+        options: { notify: "approved elsewhere — closing" }
+```
+
+The read runs once at hand-off creation to freeze a snapshot, then every
+`every`. Each rule's `if:` sees the latest read under its object name (`pr`
+by default; set `as:` to rename) and the frozen snapshot under
+`handoff.<as>` (e.g. `handoff.pr.head_sha`) — so a rule can compare now
+against then. The first rule whose `if:` holds fires its action; a broken
+condition is skipped, never fired.
+
+`handoff.bail` cancels the live agent's review loop, closes the draft, and
+releases the reaper hold so the workspace is reclaimed. The poll target
+(repo/PR) is defaulted from the trigger only when the platform assigned it;
+for a sender-chosen target, name `repo`/`pr` in `options:` explicitly.
+
+`watch:` is subject-agnostic — the only PR-specific choice is the read verb
+you name in `uses:`. It is operator-owned: an agent-authored step may not set
+it.
+
+> `handoff.refresh` (re-run the producer when the subject moves) and
+> `handoff.done` (release when the conversation concludes) are declared but
+> not yet wired into `watch:`; they land in a later increment.
+
 ## Legacy `handoffs:`
 
 The legacy named `handoffs:` block still loads and resolves exactly as
