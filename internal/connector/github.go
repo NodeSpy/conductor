@@ -225,16 +225,20 @@ var githubDecl = &TypeDecl{
 			Outputs: Schema{"diff": {Type: TString}},
 		},
 		{
-			Name: "pr_get", Desc: "PR metadata: title, body, state, author, base/head, line counts, labels",
+			Name: "pr_get", Desc: "PR metadata + review status: state, merged, base/head, line counts, labels, and the current review decision/approvals",
 			Options: Schema{
 				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"as": {Type: TString, Enum: []string{"me", "bot"}},
 			},
 			Outputs: Schema{
 				"title": {Type: TString}, "body": {Type: TString}, "state": {Type: TString},
-				"draft": {Type: TBool}, "author": {Type: TString}, "base": {Type: TString},
+				"draft": {Type: TBool}, "merged": {Type: TBool}, "mergeable": {Type: TBool},
+				"author": {Type: TString}, "base": {Type: TString},
 				"head": {Type: TString}, "head_sha": {Type: TString}, "additions": {Type: TInt},
 				"deletions": {Type: TInt}, "changed_files": {Type: TInt}, "labels": {Type: TList}, "url": {Type: TString},
+				"review_decision": {Type: TString, Desc: "APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED, derived from the latest review per reviewer"},
+				"approvals":       {Type: TInt, Desc: "count of reviewers whose latest review is APPROVED"},
+				"approvers":       {Type: TList, Desc: "logins of reviewers whose latest review is APPROVED"},
 			},
 		},
 		{
