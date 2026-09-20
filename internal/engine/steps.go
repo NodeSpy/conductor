@@ -469,11 +469,17 @@ func (e *Engine) readWatch(ctx context.Context, t core.Trigger, w *config.WatchS
 		return nil, fmt.Errorf("watch: unknown connector %q", conn)
 	}
 	opts := map[string]any{}
-	if t.Target.Repo != "" {
-		opts["repo"] = t.Target.Repo
-	}
-	if t.Target.Number != 0 {
-		opts["pr"] = t.Target.Number
+	// Default the poll target from the trigger ONLY when the platform assigned
+	// it (TargetTrusted). For a sender-chosen target we don't auto-point the
+	// watch at it — the operator must name repo/pr in watch.Options explicitly,
+	// so a forged target can't drive a bail off a PR the sender picked.
+	if t.TargetTrusted {
+		if t.Target.Repo != "" {
+			opts["repo"] = t.Target.Repo
+		}
+		if t.Target.Number != 0 {
+			opts["pr"] = t.Target.Number
+		}
 	}
 	for k, v := range w.Options {
 		opts[k] = v

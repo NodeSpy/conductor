@@ -45,6 +45,8 @@ func TestOnlyAuditedSourcesClaimTargetTrust(t *testing.T) {
 		"internal/flow/skillverbs.go": "the skill surface carries the dispatch's provenance",
 		"internal/flow/flow.go":       "the runner carries the trigger's provenance into memory.Source",
 		"internal/engine/engine.go":   "the engine carries the trigger's provenance into memory.Source",
+		"internal/engine/steps.go": "readWatch CONSUMES the bit as a guard — it defaults the watch " +
+			"poll's target only when trusted; it never sets the bit",
 		"internal/dispatch/toolserver.go": "the tool server carries the dispatch's provenance into the skill " +
 			"identity",
 		"internal/memory/memory.go":     "memory.Source declares the field it carries alongside the Repo it describes",

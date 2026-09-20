@@ -113,7 +113,7 @@ func TestHandoffWatchBails(t *testing.T) {
 		broker:     controller.NewBroker(nil, nil, func(string, ...any) {}),
 		connectors: reg,
 	}
-	trig := core.Trigger{Target: core.Target{Repo: "o/r", Number: 7}}
+	trig := core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "o/r", Number: 7}}
 	profile := config.Step{Watch: &config.WatchSpec{
 		Uses:  "fp.pr_get",
 		As:    "pr",
