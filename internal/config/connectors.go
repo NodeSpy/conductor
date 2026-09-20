@@ -921,6 +921,14 @@ type Step struct {
 	// alongside the live read. Only meaningful on a `handoff:` step.
 	Watch *WatchSpec `yaml:"watch,omitempty"`
 
+	// IdleTimeout releases an interactive hand-off that is still open after this
+	// long, so its workspace is reclaimed instead of lingering: the agent is
+	// unheld and the reaper archives it. The agent should call `handoff.done`
+	// the moment it has nothing more for the reviewer (that is the precise
+	// signal — see HandoffGuidance); this timeout is the backstop for a hand-off
+	// nobody closed. Off (0) unless set. Independent of `watch:`.
+	IdleTimeout Duration `yaml:"idle_timeout,omitempty"`
+
 	// control flow
 	ForEach         string        `yaml:"for_each,omitempty"` // template resolving to a list; {{.item}} in scope
 	Parallel        *ParallelSpec `yaml:"parallel,omitempty"`
@@ -1865,11 +1873,13 @@ func validateWatch(where string, w *WatchSpec) error {
 			return fmt.Errorf("config: %s: a watch rule needs `uses: handoff.<verb>`", rw)
 		}
 		switch rule.Uses {
-		case "handoff.bail":
-		case "handoff.refresh", "handoff.done":
-			return fmt.Errorf("config: %s: %q in a watch rule is not wired yet", rw, rule.Uses)
+		case "handoff.bail", "handoff.refresh":
+		case "handoff.done":
+			// `done` is a conclusion signal (agent-called, or idle_timeout), not
+			// a condition-driven watch action.
+			return fmt.Errorf("config: %s: handoff.done is not a watch action — use idle_timeout: or let the agent call handoff.done", rw)
 		default:
-			return fmt.Errorf("config: %s: watch rule `uses:` must be a handoff verb (handoff.bail), got %q", rw, rule.Uses)
+			return fmt.Errorf("config: %s: watch rule `uses:` must be handoff.bail or handoff.refresh, got %q", rw, rule.Uses)
 		}
 	}
 	return nil

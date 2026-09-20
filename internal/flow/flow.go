@@ -85,8 +85,9 @@ type AgentServices struct {
 	Revise func(ctx context.Context, identity string, t core.Trigger, prompt string) (output string, ok bool, err error)
 	// Background is invoked after a background agent step launches: register
 	// the hold, and start the interactive review hand-off on handoffConn (an
-	// ask-capable connector name; "" = runtime-native).
-	Background func(ctx context.Context, t core.Trigger, stepID, identity string, s config.Step, ref dispatch.RunRef, handoffConn string)
+	// ask-capable connector name; "" = runtime-native). redispatch re-runs this
+	// same producer dispatch on the current state (handoff.refresh calls it).
+	Background func(ctx context.Context, t core.Trigger, stepID, identity string, s config.Step, ref dispatch.RunRef, handoffConn string, redispatch func(context.Context) (dispatch.RunRef, error))
 	// Archive soft-deletes a finished non-interactive agent.
 	Archive func(agentID string)
 	// CheckBudget vets an agent dispatch against the spend caps (#36 §14):
@@ -1564,7 +1565,12 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	}
 	if step.Background {
 		if r.Agents.Background != nil {
-			r.Agents.Background(ctx, t, id, identity, step, ref, step.Handoff)
+			// refresh re-runs THIS dispatch on the current head. Capture req by
+			// value so a later refresh dispatches the same step afresh.
+			redispatch := func(c context.Context) (dispatch.RunRef, error) {
+				return r.Agents.Dispatch(c, req)
+			}
+			r.Agents.Background(ctx, t, id, identity, step, ref, step.Handoff, redispatch)
 		}
 		return map[string]any{"agent_id": ref.AgentID, "background": true}, "", nil
 	}

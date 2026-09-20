@@ -80,21 +80,61 @@ The read runs once at hand-off creation to freeze a snapshot, then every
 `every`. Each rule's `if:` sees the latest read under its object name (`pr`
 by default; set `as:` to rename) and the frozen snapshot under
 `handoff.<as>` (e.g. `handoff.pr.head_sha`) — so a rule can compare now
-against then. The first rule whose `if:` holds fires its action; a broken
-condition is skipped, never fired.
+against then (a comparison's right side may itself be a data path). The first
+rule whose `if:` holds fires its action; a broken condition is skipped, never
+fired.
 
-`handoff.bail` cancels the live agent's review loop, closes the draft, and
-releases the reaper hold so the workspace is reclaimed. The poll target
-(repo/PR) is defaulted from the trigger only when the platform assigned it;
-for a sender-chosen target, name `repo`/`pr` in `options:` explicitly.
+The two watch actions:
+
+- **`handoff.bail`** — the reason is gone. Cancels the live agent's review
+  loop, closes the draft, and releases the reaper hold so the workspace is
+  reclaimed. Use it for `pr.merged`, `pr.state == "closed"`, or approved-
+  elsewhere.
+- **`handoff.refresh`** — the subject moved. Re-runs the **producer** on the
+  current state: it tears the stale review down (archiving that agent and its
+  workspace), re-dispatches the step on a fresh worktree at the new head, and
+  starts a new hand-off with the watch re-armed. A review can't just be
+  re-presented — the assessment runs again before handing off anew. Typical
+  condition: `pr.head_sha != handoff.pr.head_sha`.
+
+```yaml
+    on:
+      - if: "pr.head_sha != handoff.pr.head_sha"
+        uses: handoff.refresh
+        options: { notify: "new commits — re-reviewing" }
+```
+
+The poll target (repo/PR) is defaulted from the trigger only when the platform
+assigned it; for a sender-chosen target, name `repo`/`pr` in `options:`
+explicitly.
 
 `watch:` is subject-agnostic — the only PR-specific choice is the read verb
 you name in `uses:`. It is operator-owned: an agent-authored step may not set
 it.
 
-> `handoff.refresh` (re-run the producer when the subject moves) and
-> `handoff.done` (release when the conversation concludes) are declared but
-> not yet wired into `watch:`; they land in a later increment.
+## Cleaning up a finished hand-off (`handoff.done` / `idle_timeout`)
+
+When the conversation is genuinely over, the hand-off should release its
+workspace rather than sit held until you archive it by hand. Two paths:
+
+- **`handoff.done`** — an agent skill verb. Grant it (`skill: { verbs:
+  [handoff.done] }`) and the hand-off agent calls it the moment it has nothing
+  more for you; the guidance appended to every hand-off tells it to. It ends
+  the review, closes the draft, and drops the reaper hold on the agent's own
+  hand-off (the caller can only release its own — the daemon resolves the
+  target from the token identity, never a name the agent passes).
+- **`idle_timeout: <duration>`** on the step — the backstop for a hand-off
+  nobody closed. Still open after this long → released the same way. Off unless
+  set; independent of `watch:`.
+
+```yaml
+- id: review
+  agent: reviewer
+  background: true
+  handoff: slack
+  idle_timeout: 12h
+  skill: { verbs: [handoff.done] }
+```
 
 ## Legacy `handoffs:`
 

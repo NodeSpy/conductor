@@ -244,7 +244,11 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				// else uses — the step's track record silently never
 				// accumulated, and the memory/session machinery looked for it
 				// under the identity this step actually has.
-				e.startReviewHandoff(ctx, t, id, identity, profile, ref, handoffCh)
+				// refresh re-runs this same producer dispatch on the current head.
+				redispatch := func(c context.Context) (dispatch.RunRef, error) {
+					return e.dispatchAgent(c, runner, req)
+				}
+				e.startReviewHandoff(ctx, t, id, identity, profile, ref, handoffCh, redispatch)
 			} else {
 				e.notif.Emit(ctx, notify.EventNeedsInput, t,
 					fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
@@ -282,7 +286,12 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 // resolved or the agent can't be bound, it falls back to today's behavior
 // (notify you to open the agent in paseo). Only invoked when ch and the broker
 // are configured.
-func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID, identity string, profile config.Step, ref dispatch.RunRef, ch handoff.Channel) {
+// redispatchFn re-runs the producer that created a hand-off (a fresh dispatch of
+// the same step), returning the new agent. handoff.refresh calls it to re-review
+// on the current state. nil when the caller can't re-dispatch.
+type redispatchFn func(context.Context) (dispatch.RunRef, error)
+
+func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID, identity string, profile config.Step, ref dispatch.RunRef, ch handoff.Channel, redispatch redispatchFn) {
 	agentID := ref.AgentID
 	fallback := func(reason string) {
 		if reason != "" {
@@ -332,16 +341,24 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID,
 			d.Body += "\n\n--- proposed diff (live) ---\n" + e.redact(diff)
 		}
 	}
-	// Reactive hand-off (watch:): the review loop runs under a cancelable ctx so
-	// a watch rule can BAIL it — cancel → Review's Await returns → the loop ends.
-	runCtx := ctx
+	// The review loop runs under a cancelable ctx so the hand-off can be ended out
+	// of band: a watch rule (bail/refresh), the agent calling handoff.done, or the
+	// idle timeout — each cancels → Review's Await returns → the loop ends. The
+	// live-hand-off registry lets handoff.done and the idle timer find THIS one.
+	runCtx, cancel := context.WithCancel(ctx)
+	e.registerLiveHandoff(agentID, cancel, prKey, stepID)
 	if profile.Watch != nil {
-		var cancel context.CancelFunc
-		runCtx, cancel = context.WithCancel(ctx)
-		e.startHandoffWatch(ctx, runCtx, cancel, t, stepID, agentID, prKey, profile)
+		e.startHandoffWatch(ctx, runCtx, cancel, t, stepID, identity, agentID, prKey, profile, ch, redispatch)
+	}
+	if d := time.Duration(profile.IdleTimeout); d > 0 {
+		e.startIdleTimer(ctx, runCtx, t, stepID, agentID, d)
 	}
 	go func() {
 		defer e.recoverDispatch(ctx, t, store.WorkflowRun{}, "review hand-off")
+		// On ANY exit (resolved, bailed, refreshed, done, idle) stop the watch/
+		// idle goroutines and drop the registry entry.
+		defer cancel()
+		defer e.deregisterLiveHandoff(agentID)
 		dec, rerr := handoff.Review(runCtx, sess, ch, draft, notifyRef, refresh)
 		if rerr != nil {
 			if runCtx.Err() == nil {
@@ -366,7 +383,7 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID,
 // The loop owns THIS hand-off directly (it has cancel/prKey/agentID in closure), so
 // a `handoff.bail` tears it down inline — no ops indirection needed. The loop ends
 // when its ctx is cancelled (the hand-off resolved normally) or a bail fires.
-func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel context.CancelFunc, t core.Trigger, stepID, agentID, prKey string, profile config.Step) {
+func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel context.CancelFunc, t core.Trigger, stepID, identity, agentID, prKey string, profile config.Step, ch handoff.Channel, redispatch redispatchFn) {
 	w := profile.Watch
 	as := w.As
 	if as == "" {
@@ -425,13 +442,54 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 				}
 				bail(reason, msg)
 				return
+			case "handoff.refresh":
+				msg, _ := rule.Options["notify"].(string)
+				e.refreshReviewHandoff(parent, cancel, t, stepID, identity, profile, ch, agentID, prKey, redispatch, msg)
+				return
 			default:
-				// refresh/done via watch land in later increments; a config
-				// validation gate keeps them out of watch rules for now.
+				// validateWatch keeps other verbs out of watch rules; log defensively.
 				e.log("%s hand-off %q watch: unsupported action %q (ignored)", tag(t), stepID, rule.Uses)
 			}
 		}
 	}()
+}
+
+// refreshReviewHandoff supersedes a hand-off whose subject moved: it ends the
+// current review, tears down the stale agent/workspace, re-runs the PRODUCER on
+// the current state (a fresh dispatch → new head → new draft), and starts a new
+// hand-off with the watch re-armed. The user was explicit that a review can't
+// just be re-presented — the assessment must run again before handing off anew.
+func (e *Engine) refreshReviewHandoff(parent context.Context, cancel context.CancelFunc, t core.Trigger, stepID, identity string, profile config.Step, ch handoff.Channel, oldAgentID, prKey string, redispatch redispatchFn, msg string) {
+	if redispatch == nil {
+		e.log("%s hand-off %q refresh requested but no redispatch available — leaving as-is", tag(t), stepID)
+		return
+	}
+	if msg == "" {
+		msg = fmt.Sprintf("re-reviewing %q on the new changes", stepID)
+	}
+	e.notif.Emit(parent, notify.EventNeedsInput, t, msg)
+	// Tear the current cycle down before re-dispatching: end the review loop,
+	// close the draft, release + archive the stale agent/workspace.
+	cancel()
+	if e.broker != nil {
+		e.broker.Close(parent, prKey)
+	}
+	e.hold.Remove(oldAgentID)
+	e.deregisterLiveHandoff(oldAgentID)
+	if oldAgentID != "" && !e.affinityOwns(oldAgentID) {
+		go func(id string) { _ = e.archiveAgent(context.Background(), id) }(oldAgentID)
+	}
+	// Re-run the producer on the current head. A fresh dispatch gets a fresh
+	// worktree at the latest state — the whole point of a refresh.
+	newRef, err := redispatch(parent)
+	if err != nil {
+		e.log("%s hand-off %q refresh dispatch failed: %v", tag(t), stepID, err)
+		e.notif.Emit(parent, notify.EventEscalate, t,
+			fmt.Sprintf("review for %q: re-review dispatch failed: %v", stepID, e.redact(err.Error())))
+		return
+	}
+	e.hold.Add(newRef.AgentID)
+	e.startReviewHandoff(parent, t, stepID, identity, profile, newRef, ch, redispatch)
 }
 
 // matchWatch returns the first watch rule whose `if:` holds against scope (an

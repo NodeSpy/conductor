@@ -146,7 +146,7 @@ func TestFlowAgentServices(t *testing.T) {
 
 	// Background with no ask channel emits needs_input.
 	svcs.Background(context.Background(), flowTrigger("d-bg"), "review", "a",
-		config.Step{}, dispatch.RunRef{AgentID: "a-9"}, "")
+		config.Step{}, dispatch.RunRef{AgentID: "a-9"}, "", nil)
 	notif.mu.Lock()
 	found := false
 	for _, ev := range notif.events {

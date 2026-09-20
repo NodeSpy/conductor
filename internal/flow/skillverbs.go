@@ -631,6 +631,13 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	if err := r.checkSkillVerbResources(r.planPolicy(), t, uses, options, id.ScopesFor(uses)); err != nil {
 		return deny(r.redactErr(err))
 	}
+	// handoff.* acts on the CALLER's own live hand-off: inject the token-bound
+	// agent id so `handoff.done` releases the hand-off this agent is holding,
+	// never one it names. The agent cannot set this itself (a leading-underscore
+	// option is daemon-internal); we overwrite unconditionally.
+	if connName == "handoff" {
+		options["__handoff_agent"] = id.Agent
+	}
 	// Identity is a per-verb concern: a verb's own `as:` option (when it has
 	// one) travels through as the agent supplied it, and the connector applies
 	// its own default when it's absent — e.g. gh writes default to `me`
