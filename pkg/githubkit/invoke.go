@@ -169,6 +169,57 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 		if pr.Mergeable != nil {
 			res["mergeable"] = *pr.Mergeable
 		}
+		// Review status: fold the review list into the current decision. GitHub's
+		// REST API has no reviewDecision field, so derive it from the LATEST review
+		// per reviewer — APPROVED/CHANGES_REQUESTED/DISMISSED count, COMMENTED/PENDING
+		// don't change a reviewer's standing. (Required-reviewer/CODEOWNERS gating is
+		// GraphQL-only and not modelled here; this is "did a human approve / request
+		// changes", which is what a review hand-off watches.)
+		latest := map[string]string{}
+		order := []string{}
+		err := c.listAll(ctx, tok, true, 100, func(page int) string {
+			return fmt.Sprintf("%s/repos/%s/pulls/%d/reviews?per_page=100&page=%d", base, repo, number, page)
+		}, func(b []byte) (int, error) {
+			var raw []struct {
+				User  struct{ Login string } `json:"user"`
+				State string                 `json:"state"`
+			}
+			if uerr := json.Unmarshal(b, &raw); uerr != nil {
+				return 0, uerr
+			}
+			for _, rv := range raw {
+				switch rv.State {
+				case "APPROVED", "CHANGES_REQUESTED", "DISMISSED":
+					if _, seen := latest[rv.User.Login]; !seen {
+						order = append(order, rv.User.Login)
+					}
+					latest[rv.User.Login] = rv.State
+				}
+			}
+			return len(raw), nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		approvers := []string{}
+		changesRequested := false
+		for _, login := range order {
+			switch latest[login] {
+			case "APPROVED":
+				approvers = append(approvers, login)
+			case "CHANGES_REQUESTED":
+				changesRequested = true
+			}
+		}
+		decision := "REVIEW_REQUIRED"
+		if changesRequested {
+			decision = "CHANGES_REQUESTED"
+		} else if len(approvers) > 0 {
+			decision = "APPROVED"
+		}
+		res["approvers"] = approvers
+		res["approvals"] = len(approvers)
+		res["review_decision"] = decision
 		return res, nil
 	case "pr_files":
 		if number == 0 {

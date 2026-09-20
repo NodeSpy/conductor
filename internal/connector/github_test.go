@@ -567,6 +567,12 @@ func TestGithubReadVerbs(t *testing.T) {
 				"head":   map[string]any{"ref": "feat", "sha": "abc"},
 				"labels": []any{map[string]any{"name": "bug"}},
 			})
+		case r.URL.Path == "/repos/org/repo/pulls/7/reviews":
+			json.NewEncoder(w).Encode([]any{
+				map[string]any{"user": map[string]any{"login": "carol"}, "state": "COMMENTED"},
+				map[string]any{"user": map[string]any{"login": "carol"}, "state": "APPROVED"},
+				map[string]any{"user": map[string]any{"login": "dave"}, "state": "CHANGES_REQUESTED"},
+			})
 		case r.URL.Path == "/repos/org/repo/pulls/7/files":
 			json.NewEncoder(w).Encode([]any{
 				map[string]any{"filename": "x.go", "status": "modified", "additions": 2, "deletions": 1, "changes": 3},
@@ -596,6 +602,17 @@ func TestGithubReadVerbs(t *testing.T) {
 	}
 	if labels, _ := meta["labels"].([]string); len(labels) != 1 || labels[0] != "bug" {
 		t.Fatalf("pr_get labels = %v", meta["labels"])
+	}
+	// Review status derived from the /reviews list: carol's latest is APPROVED,
+	// dave requested changes → decision CHANGES_REQUESTED, one approver (carol).
+	if meta["review_decision"] != "CHANGES_REQUESTED" {
+		t.Fatalf("pr_get review_decision = %v (want CHANGES_REQUESTED)", meta["review_decision"])
+	}
+	if meta["approvals"] != 1 {
+		t.Fatalf("pr_get approvals = %v (want 1)", meta["approvals"])
+	}
+	if ap, _ := meta["approvers"].([]string); len(ap) != 1 || ap[0] != "carol" {
+		t.Fatalf("pr_get approvers = %v (want [carol])", meta["approvers"])
 	}
 	files, err := impl.Invoke(ctx, "pr_files", map[string]any{"repo": "org/repo", "pr": 7})
 	fl, _ := files["files"].([]any)
