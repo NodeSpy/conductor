@@ -4,6 +4,7 @@
 // Supported:
 //   - dotted paths resolved against the data map: steps.evaluate.outputs.has_context
 //   - equality/inequality against literals:       x == true, x != "question"
+//   - equality/ordering against another path:     pr.head_sha != handoff.pr.head_sha
 //   - numeric ordering against literals:          score > 7, score <= 3.5
 //   - truthiness of a bare path (and negation):   x   /   !x
 //   - boolean combinators:                        a && b || c
@@ -156,6 +157,15 @@ func evalTerm(a string, data map[string]any) (bool, error) {
 			lv, err := sideValue(l, data)
 			if err != nil {
 				return false, err
+			}
+			// A right side that is itself a dotted data path (unquoted,
+			// non-numeric, resolving to a real value) is compared value-to-value
+			// — this is what lets a condition compare two facts, e.g.
+			// `pr.head_sha != handoff.pr.head_sha`. Anything else (a quoted
+			// string, bool, number, or a bare word that resolves to nothing)
+			// stays a literal, so existing conditions are unchanged.
+			if rv, ok := rhsPathValue(r, data); ok {
+				return compareValues(lv, rv, op), nil
 			}
 			return compare(lv, literal(r), op), nil
 		}
@@ -358,6 +368,71 @@ func stripTemplateTokens(s string) string {
 
 // compare applies an operator between a resolved value and a literal. Ordering
 // operators (>, <, >=, <=) require both sides to be numeric, else false.
+// rhsPathValue treats the right side of a comparison as a data path and returns
+// its resolved value — but only when it is unmistakably a path: unquoted, dot-
+// separated, made of path characters, not a number, and resolving to a non-nil
+// value. Everything else returns ok=false so the caller falls back to literal
+// parsing (a quoted string, bool, number, or a bare word that names nothing).
+func rhsPathValue(r string, data map[string]any) (any, bool) {
+	if len(r) >= 2 && (r[0] == '"' || r[0] == '\'') {
+		return nil, false // a quoted string is a literal
+	}
+	if !strings.Contains(r, ".") {
+		return nil, false // a bare word / bool / int is a literal
+	}
+	if _, err := strconv.ParseFloat(r, 64); err == nil {
+		return nil, false // a decimal number (e.g. 3.5) is a literal
+	}
+	for _, c := range r {
+		if c != '.' && c != '_' && c != '-' &&
+			!(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') {
+			return nil, false // not a plain path token
+		}
+	}
+	v := resolve(r, data)
+	if v == nil {
+		return nil, false
+	}
+	return v, true
+}
+
+// compareValues compares two resolved values (both sides are data). Equality
+// coerces numerically when both are numeric, else by string — mirroring how a
+// literal comparison treats numbers and strings; ordering needs both numeric.
+func compareValues(a, b any, op string) bool {
+	switch op {
+	case "==":
+		return equalValues(a, b)
+	case "!=":
+		return !equalValues(a, b)
+	}
+	fa, oka := asFloat(a)
+	fb, okb := asFloat(b)
+	if !oka || !okb {
+		return false
+	}
+	switch op {
+	case ">":
+		return fa > fb
+	case "<":
+		return fa < fb
+	case ">=":
+		return fa >= fb
+	case "<=":
+		return fa <= fb
+	}
+	return false
+}
+
+func equalValues(a, b any) bool {
+	if fa, ok := asFloat(a); ok {
+		if fb, ok := asFloat(b); ok {
+			return fa == fb
+		}
+	}
+	return asString(a) == asString(b)
+}
+
 func compare(v any, l lit, op string) bool {
 	switch op {
 	case "==":

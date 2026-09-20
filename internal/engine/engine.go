@@ -112,9 +112,11 @@ type Engine struct {
 	runStatus   func(context.Context, core.Trigger, int64) (string, error) // workflow run status (completed|in_progress|queued|…)
 	refreshTok  func(core.Trigger) (string, error)                         // re-mint the App token on resume
 	log         func(string, ...any)
-	hold        *dispatch.HoldSet    // agent ids handed off to the user; the reaper never touches these
-	affinity    *controller.Affinity // keyed live sessions (session:); nil = every dispatch fresh
-	pausePath   string               // control file; present = paused (toggled by pause/resume, no restart)
+	hold        *dispatch.HoldSet       // agent ids handed off to the user; the reaper never touches these
+	liveHOMu    sync.Mutex              // guards liveHO
+	liveHO      map[string]*liveHandoff // open interactive hand-offs by agent id (handoff.done + idle timer act through this)
+	affinity    *controller.Affinity    // keyed live sessions (session:); nil = every dispatch fresh
+	pausePath   string                  // control file; present = paused (toggled by pause/resume, no restart)
 	ch          chan core.Trigger
 	secrets     *secrets.Resolver // redacts argv/errors/output tails on audit + log surfaces
 	sem         chan struct{}     // concurrent-agent cap; nil = unlimited

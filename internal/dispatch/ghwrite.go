@@ -62,4 +62,6 @@ const HandoffGuidance = "\n\n---\n" +
 	"briefly summarize what you produced and offer clear next-step choices (for a review, " +
 	"e.g. post as-is / revise / discard), then WAIT for my answer. Do this every time you " +
 	"need me — including after each revision — so I'm always alerted. Never end your turn " +
-	"idle while you still need a decision from me."
+	"idle while you still need a decision from me. " +
+	"When we are COMPLETELY finished and you have nothing more for me, if a `handoff.done` " +
+	"tool is available to you, call it — that releases your workspace so it doesn't linger."

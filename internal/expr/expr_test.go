@@ -66,6 +66,43 @@ func TestEval(t *testing.T) {
 	}
 }
 
+func TestPathVsPathComparison(t *testing.T) {
+	d := map[string]any{
+		"pr": map[string]any{"head_sha": "bbb", "additions": float64(10)},
+		"handoff": map[string]any{
+			"pr": map[string]any{"head_sha": "aaa", "additions": float64(3)},
+		},
+		"same": map[string]any{"a": "x"},
+		"also": map[string]any{"a": "x"},
+	}
+	cases := []struct {
+		cond string
+		want bool
+	}{
+		{"pr.head_sha != handoff.pr.head_sha", true},  // moved
+		{"pr.head_sha == handoff.pr.head_sha", false}, // not equal
+		{"same.a == also.a", true},                    // equal strings by path
+		{"same.a != also.a", false},
+		{"pr.additions > handoff.pr.additions", true}, // numeric path ordering
+		{"pr.additions < handoff.pr.additions", false},
+		{"pr.additions >= handoff.pr.additions", true},
+		// A dotted RHS that resolves to nothing falls back to literal, so this is
+		// "bbb" vs the literal string "handoff.pr.missing" → not equal.
+		{"pr.head_sha == handoff.pr.missing", false},
+		// A quoted RHS containing a dot stays a literal, never a path.
+		{`pr.head_sha == "handoff.pr.head_sha"`, false},
+	}
+	for _, c := range cases {
+		got, err := Eval(c.cond, d)
+		if err != nil {
+			t.Fatalf("Eval(%q) error: %v", c.cond, err)
+		}
+		if got != c.want {
+			t.Errorf("Eval(%q) = %v, want %v", c.cond, got, c.want)
+		}
+	}
+}
+
 func TestDefaultAndCoalesce(t *testing.T) {
 	d := data()
 	d["empty"] = ""

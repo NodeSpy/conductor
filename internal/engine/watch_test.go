@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -125,7 +126,7 @@ func TestHandoffWatchBails(t *testing.T) {
 	e.hold.Add("agent-1")
 
 	runCtx, cancel := context.WithCancel(context.Background())
-	e.startHandoffWatch(context.Background(), runCtx, cancel, trig, "review", "agent-1", trig.Key(), profile)
+	e.startHandoffWatch(context.Background(), runCtx, cancel, trig, "review", "rev", "agent-1", trig.Key(), profile, nil, nil)
 
 	waitFor(t, func() bool { return !e.hold.Has("agent-1") })
 	select {
@@ -136,4 +137,93 @@ func TestHandoffWatchBails(t *testing.T) {
 	if nf.count() == 0 {
 		t.Fatal("bail did not notify the channel")
 	}
+}
+
+func TestHandoffDoneReleases(t *testing.T) {
+	e := &Engine{
+		log:    func(string, ...any) {},
+		hold:   dispatch.NewHoldSet(""),
+		broker: controller.NewBroker(nil, nil, func(string, ...any) {}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	e.hold.Add("a1")
+	e.registerLiveHandoff("a1", cancel, "o/r#1", "review")
+
+	if err := e.handoffDone(context.Background(), "a1", "test"); err != nil {
+		t.Fatalf("handoffDone: %v", err)
+	}
+	if e.hold.Has("a1") {
+		t.Fatal("done did not release the reaper hold")
+	}
+	if ctx.Err() == nil {
+		t.Fatal("done did not cancel the review ctx")
+	}
+	if e.lookupLiveHandoff("a1") != nil {
+		t.Fatal("done did not deregister the live hand-off")
+	}
+	if err := e.handoffDone(context.Background(), "a1", "again"); err == nil {
+		t.Fatal("a second done on a released hand-off should error")
+	}
+}
+
+func TestIdleTimerReleases(t *testing.T) {
+	nf := &fakeNotif{}
+	e := &Engine{
+		log:    func(string, ...any) {},
+		notif:  nf,
+		hold:   dispatch.NewHoldSet(""),
+		broker: controller.NewBroker(nil, nil, func(string, ...any) {}),
+	}
+	runCtx, cancel := context.WithCancel(context.Background())
+	e.hold.Add("a2")
+	e.registerLiveHandoff("a2", cancel, "o/r#2", "review")
+	e.startIdleTimer(context.Background(), runCtx, core.Trigger{}, "review", "a2", 5*time.Millisecond)
+
+	waitFor(t, func() bool { return !e.hold.Has("a2") })
+	if nf.count() == 0 {
+		t.Fatal("idle release did not notify")
+	}
+}
+
+func TestHandoffWatchRefresh(t *testing.T) {
+	fakePRSingleton = &fakePRImpl{states: []map[string]any{
+		{"head_sha": "aaa"}, // snapshot
+		{"head_sha": "bbb"}, // moved → refresh
+	}}
+	reg, err := connector.Build(&config.Config{
+		ConnectorsMap: map[string]config.ConnectorRef{"fp": {Use: "fakepr"}},
+	}, connector.Deps{Log: func(string, ...any) {}})
+	if err != nil {
+		t.Fatalf("build registry: %v", err)
+	}
+	nf := &fakeNotif{}
+	e := &Engine{
+		log:        func(string, ...any) {},
+		notif:      nf,
+		hold:       dispatch.NewHoldSet(""),
+		broker:     controller.NewBroker(nil, nil, func(string, ...any) {}),
+		connectors: reg,
+		disp:       &stepFake{}, // archive of the stale agent lands here
+	}
+	trig := core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "o/r", Number: 7}}
+	profile := config.Step{Watch: &config.WatchSpec{
+		Uses:  "fp.pr_get",
+		As:    "pr",
+		Every: config.Duration(2 * time.Millisecond),
+		On: []config.WatchRule{
+			{If: "pr.head_sha != handoff.pr.head_sha", Uses: "handoff.refresh"},
+		},
+	}}
+	e.hold.Add("old")
+	var redispatched int32
+	redispatch := func(context.Context) (dispatch.RunRef, error) {
+		atomic.AddInt32(&redispatched, 1)
+		return dispatch.RunRef{}, fmt.Errorf("no dispatcher in test")
+	}
+	runCtx, cancel := context.WithCancel(context.Background())
+	e.registerLiveHandoff("old", cancel, trig.Key(), "review")
+	e.startHandoffWatch(context.Background(), runCtx, cancel, trig, "review", "rev", "old", trig.Key(), profile, nil, redispatch)
+
+	waitFor(t, func() bool { return atomic.LoadInt32(&redispatched) > 0 })
+	waitFor(t, func() bool { return !e.hold.Has("old") })
 }

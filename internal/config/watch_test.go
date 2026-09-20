@@ -35,12 +35,12 @@ func TestValidateWatch(t *testing.T) {
 			true,
 		},
 		{
-			"refresh not wired yet",
-			&WatchSpec{Uses: "gh.pr_get", On: []WatchRule{{Uses: "handoff.refresh"}}},
-			true,
+			"refresh rule ok",
+			&WatchSpec{Uses: "gh.pr_get", On: []WatchRule{{If: "pr.head_sha != handoff.pr.head_sha", Uses: "handoff.refresh"}}},
+			false,
 		},
 		{
-			"done not wired yet",
+			"done is not a watch action",
 			&WatchSpec{Uses: "gh.pr_get", On: []WatchRule{{Uses: "handoff.done"}}},
 			true,
 		},
