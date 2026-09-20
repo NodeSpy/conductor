@@ -308,7 +308,8 @@ to execute belongs here.
 | `expect_push` | Mark a fixer step that must LAND a change on the target. A clean run that leaves work unlanded (a non-empty proposed diff never pushed) becomes a `no_progress` failure instead of a silent success — see [[Workflows]] hooks. Leave off for a review/judge step. |
 | `wait_timeout` | How long a foreground dispatch waits before giving up. |
 | `archive_when_done` | Whether the reaper archives the agent once it idles. Forced off for a `background:` hand-off step. |
-| `watch` | Reactive hand-off: poll a read verb (`uses:`) every `every:` and run a hand-off action (`handoff.bail`) when an `on:` rule's `if:` holds — tear the review down when its reason is gone. Operator-owned. See [[Hand-offs]]. |
+| `watch` | Reactive hand-off: poll a read verb (`uses:`) every `every:` and run a hand-off action when an `on:` rule's `if:` holds — `handoff.bail` (reason gone → tear down) or `handoff.refresh` (subject moved → re-run the producer). Operator-owned. See [[Hand-offs]]. |
+| `idle_timeout` | Release an interactive hand-off still open after this long (drop the reaper hold → workspace reclaimed). The backstop for one nobody closed; the agent calling `handoff.done` is the precise signal. Off unless set. See [[Hand-offs]]. |
 | `labels` | Extra `key=value` labels on the dispatched agent. |
 | `host` | A [[Hosts]] SSH target this step's runtime launches on, overriding the runtime's own. |
 | `guidance` | Tone/format that **stacks on** the scoped baseline ([[Policy\|`policy.guidance`]]) rather than replacing it. A string, a list, or `{ replace: … }`. See [[Reuse]]. |
