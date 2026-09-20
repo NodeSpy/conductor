@@ -41,6 +41,10 @@ func forbiddenAgentAuthoredField(s *config.Step) (field, why string) {
 		return "background:", "a backgrounded agent runs outside the gate on agent output"
 	case s.Handoff != "":
 		return "handoff:", "the review channel for agent output is the operator's to configure"
+	case s.Watch != nil:
+		// watch: drives a hand-off's reactive lifecycle (bail/refresh/done). An
+		// agent-authored watch could tear down or refresh its own review.
+		return "watch:", "a hand-off's reactive watch is the operator's to configure"
 	case s.Skill != nil:
 		// The one that motivated this file. `skill:` is a CAPABILITY GRANT:
 		// it mints a broker claim/session token naming the verbs the agent
