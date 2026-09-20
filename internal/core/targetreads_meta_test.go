@@ -167,6 +167,9 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"runSteps", "audit rows and step template data"},
 		{"stepBaseData", "template data"},
 		{"startReviewHandoff", "the hand-off DRAFT's display fields; its broker binding uses Trigger.Key()"},
+		{"readWatch", "defaults the watch poll's repo/pr from the target ONLY inside the " +
+			"TargetTrusted branch; a sender-chosen target won't auto-arm the watch, so a forged " +
+			"target can't drive a bail off a PR the sender picked"},
 	},
 	"internal/dispatch/dispatch.go": {
 		{"templateData", "the prompt/command template scope. RenderSessionKey builds the trusted view for identity rendering; this one is display"},

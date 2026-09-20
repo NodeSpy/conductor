@@ -913,6 +913,14 @@ type Step struct {
 	// see WaitSpec. `until:` is its condition clause, not a standalone form.
 	WaitFor *WaitSpec `yaml:"wait_for,omitempty"`
 
+	// Watch makes an interactive hand-off REACTIVE: while it waits for a human,
+	// conductor polls a read verb and, when a rule's condition holds, runs a
+	// handoff.* action — bail (the reason went away: PR merged/closed), refresh
+	// (the subject moved: new commits → re-run the producer), or done. The rule
+	// conditions see `.handoff` (the watched object frozen at hand-off creation)
+	// alongside the live read. Only meaningful on a `handoff:` step.
+	Watch *WatchSpec `yaml:"watch,omitempty"`
+
 	// control flow
 	ForEach         string        `yaml:"for_each,omitempty"` // template resolving to a list; {{.item}} in scope
 	Parallel        *ParallelSpec `yaml:"parallel,omitempty"`
@@ -1017,6 +1025,39 @@ type Step struct {
 // success the last poll's outputs are recorded under the step id, so a later
 // step can read `{{.<id>.conclusion}}`. On timeout the step errors — soften
 // per-flow with `continue_on_error:`.
+// WatchSpec is the `watch:` block on a reactive hand-off: poll a read verb on a
+// cadence and, when a rule fires, run a handoff.* action. Unlike WaitSpec it does
+// not end on a single condition — it runs for the hand-off's lifetime, evaluating
+// every rule each tick. Rule conditions see the frozen `.handoff` snapshot plus
+// the live read overlaid.
+type WatchSpec struct {
+	// Uses is the read verb polled each tick, <connector>.<verb> (e.g. gh.pr_get).
+	Uses string `yaml:"uses"`
+	// As names the object the read is nested under, so conditions read
+	// `{{ .pr.merged }}` (live) and `{{ .handoff.pr.head_sha }}` (the frozen
+	// snapshot at hand-off creation). Default "pr". The snapshot is always the
+	// same shape as the live read, under `.handoff.<as>`.
+	As string `yaml:"as,omitempty"`
+	// Options are the verb's options, templated per poll.
+	Options map[string]any `yaml:"options,omitempty"`
+	// Every is the poll interval. Default 60s.
+	Every Duration `yaml:"every,omitempty"`
+	// On is the ordered rule set; the FIRST rule whose `if:` holds fires this
+	// tick (a fired bail/done ends the watch; refresh re-arms it).
+	On []WatchRule `yaml:"on,omitempty"`
+}
+
+// WatchRule is one condition→action in a WatchSpec.
+type WatchRule struct {
+	// If is the condition (expr grammar, same as step `if:`) over the scope
+	// (`.handoff` snapshot + live read). Empty = always (an unconditional action).
+	If string `yaml:"if,omitempty"`
+	// Uses is the action verb — a handoff.* verb (bail | refresh | done).
+	Uses string `yaml:"uses"`
+	// Options are the action's options (e.g. bail's `notify:`), templated.
+	Options map[string]any `yaml:"options,omitempty"`
+}
+
 type WaitSpec struct {
 	// Uses is the read verb to poll, <connector>.<verb>, e.g. gh.get_run.
 	Uses string `yaml:"uses"`
@@ -1799,7 +1840,39 @@ func validateStep(w string, s Step, c *Config) error {
 			return fmt.Errorf("config: %s: unknown workflow %q (defined: %s)", w, s.Workflow, c.workflowNames())
 		}
 	}
+	if err := validateWatch(w, s.Watch); err != nil {
+		return err
+	}
 	return validateHooks(w, s.Hooks)
+}
+
+// validateWatch checks a reactive hand-off's watch block: a read verb to poll and
+// rules whose actions are hand-off verbs. Only `handoff.bail` is wired today;
+// refresh/done in a watch rule are rejected until their increments land.
+func validateWatch(where string, w *WatchSpec) error {
+	if w == nil {
+		return nil
+	}
+	if conn, verb, ok := strings.Cut(w.Uses, "."); w.Uses == "" || !ok || conn == "" || verb == "" {
+		return fmt.Errorf("config: %s: watch needs `uses: <connector>.<verb>` (the read to poll)", where)
+	}
+	if len(w.On) == 0 {
+		return fmt.Errorf("config: %s: watch needs at least one `on:` rule", where)
+	}
+	for i, rule := range w.On {
+		rw := fmt.Sprintf("%s watch.on[%d]", where, i)
+		if rule.Uses == "" {
+			return fmt.Errorf("config: %s: a watch rule needs `uses: handoff.<verb>`", rw)
+		}
+		switch rule.Uses {
+		case "handoff.bail":
+		case "handoff.refresh", "handoff.done":
+			return fmt.Errorf("config: %s: %q in a watch rule is not wired yet", rw, rule.Uses)
+		default:
+			return fmt.Errorf("config: %s: watch rule `uses:` must be a handoff verb (handoff.bail), got %q", rw, rule.Uses)
+		}
+	}
+	return nil
 }
 
 // validateHooks checks hook phases and that each hook is a verb action unit.
