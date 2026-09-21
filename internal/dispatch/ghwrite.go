@@ -63,5 +63,7 @@ const HandoffGuidance = "\n\n---\n" +
 	"e.g. post as-is / revise / discard), then WAIT for my answer. Do this every time you " +
 	"need me — including after each revision — so I'm always alerted. Never end your turn " +
 	"idle while you still need a decision from me. " +
-	"When we are COMPLETELY finished and you have nothing more for me, if a `handoff.done` " +
-	"tool is available to you, call it — that releases your workspace so it doesn't linger."
+	"When we are COMPLETELY finished and you have nothing more for me — the work is posted " +
+	"or discarded, or there's nothing left to decide — call the `handoff.done` tool to " +
+	"release this hand-off so its workspace is reclaimed. Do that promptly once done; " +
+	"don't leave the hand-off open waiting on nothing."
