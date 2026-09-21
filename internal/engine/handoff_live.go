@@ -7,7 +7,6 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
-	"github.com/NodeSpy/conductor/internal/notify"
 )
 
 // liveHandoff is a currently-open interactive hand-off the daemon can act on out
@@ -77,8 +76,7 @@ func (e *Engine) startIdleTimer(parent, runCtx context.Context, t core.Trigger, 
 		case <-runCtx.Done():
 			return // resolved or torn down before the timeout
 		case <-timer.C:
-			e.notif.Emit(parent, notify.EventNeedsInput, t,
-				fmt.Sprintf("review for %q auto-released after %s idle", stepID, d))
+			e.log("hand-off %q idle %s — releasing", stepID, d)
 			_ = e.handoffDone(parent, agentID, "idle timeout")
 		}
 	}()

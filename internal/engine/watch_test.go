@@ -105,10 +105,8 @@ func TestHandoffWatchBails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build registry: %v", err)
 	}
-	nf := &fakeNotif{}
 	e := &Engine{
 		log:        func(string, ...any) {},
-		notif:      nf,
 		hold:       dispatch.NewHoldSet(""),
 		broker:     controller.NewBroker(nil, nil, func(string, ...any) {}),
 		connectors: reg,
@@ -118,7 +116,7 @@ func TestHandoffWatchBails(t *testing.T) {
 		Every: config.Duration(2 * time.Millisecond),
 		Steps: []config.Step{
 			{ID: "pr", Uses: "fp.pr_get"},
-			{If: "pr.merged == true", Uses: "handoff.bail", Options: map[string]any{"notify": "PR merged — closing review"}},
+			{If: "pr.merged == true", Uses: "handoff.bail"},
 		},
 	}}
 	e.hold.Add("agent-1")
@@ -131,9 +129,6 @@ func TestHandoffWatchBails(t *testing.T) {
 	case <-runCtx.Done():
 	default:
 		t.Fatal("bail did not cancel the review ctx")
-	}
-	if nf.count() == 0 {
-		t.Fatal("bail did not notify the channel")
 	}
 }
 
@@ -165,10 +160,8 @@ func TestHandoffDoneReleases(t *testing.T) {
 }
 
 func TestIdleTimerReleases(t *testing.T) {
-	nf := &fakeNotif{}
 	e := &Engine{
 		log:    func(string, ...any) {},
-		notif:  nf,
 		hold:   dispatch.NewHoldSet(""),
 		broker: controller.NewBroker(nil, nil, func(string, ...any) {}),
 	}
@@ -177,10 +170,8 @@ func TestIdleTimerReleases(t *testing.T) {
 	e.registerLiveHandoff("a2", cancel, "o/r#2", "review")
 	e.startIdleTimer(context.Background(), runCtx, core.Trigger{}, "review", "a2", 5*time.Millisecond)
 
+	// idle elapses → the hand-off is released (hold dropped).
 	waitFor(t, func() bool { return !e.hold.Has("a2") })
-	if nf.count() == 0 {
-		t.Fatal("idle release did not notify")
-	}
 }
 
 // TestHandoffWatchSupersede drives a head change through both supersede actions
