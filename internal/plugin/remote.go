@@ -150,12 +150,36 @@ func checksumFor(path, asset string) (string, bool) {
 	return "", false
 }
 
+// copyExecutable installs src's bytes at dst atomically: it writes a sibling
+// temp file and renames it over dst. Rename, unlike an in-place O_TRUNC open,
+// replaces dst even while dst is a currently-executing binary — Linux returns
+// ETXTBSY ("text file busy") if you open a running executable for writing, but a
+// rename just repoints the path (the running process keeps its now-unlinked
+// inode). This is what lets an engine plugin be refreshed while it is loaded;
+// the old in-place write failed every reconcile for any live engine.
 func copyExecutable(src, dst string) error {
 	b, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, b, 0o755)
+	tmp, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".new-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename below has consumed it
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o755); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, dst)
 }
 
 // GHReleaseAPI implements ReleaseAPI via the gh CLI — conductor's release
