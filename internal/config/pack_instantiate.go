@@ -864,6 +864,12 @@ func applyTriggerArm(tr *TriggerSpec, arm TriggerArm) error {
 		}
 		tr.Policy = pol
 	}
+	if arm.Options != nil {
+		// The consumer's per-instance options deep-merge onto the pack's shipped
+		// defaults (consumer wins on a key), so an operator can tune knobs like
+		// ignore_checks / flaky_rerun without the pack hard-coding their env.
+		tr.Options = deepOverride(tr.Options, arm.Options)
+	}
 	if arm.Gate != nil {
 		tr.Gate = arm.Gate
 	}
