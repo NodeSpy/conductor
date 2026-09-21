@@ -85,12 +85,10 @@ type AgentServices struct {
 	Revise func(ctx context.Context, identity string, t core.Trigger, prompt string) (output string, ok bool, err error)
 	// Background is invoked after a background agent step launches: register
 	// the hold, and start the interactive review hand-off on handoffConn (an
-	// ask-capable connector name; "" = runtime-native). reproduce re-runs what
-	// produced this hand-off and lands a fresh one on the current state — the
-	// OWNING WORKFLOW when the step is inside one (so a review is re-assessed,
-	// not just re-presented), else a fresh dispatch of this step. handoff.refresh
-	// calls it.
-	Background func(ctx context.Context, t core.Trigger, stepID, identity string, s config.Step, ref dispatch.RunRef, handoffConn string, reproduce func(context.Context) error)
+	// ask-capable connector name; "" = runtime-native). actions carries the
+	// generalized "supersede this hand-off" operations a watch rule can fire —
+	// rerun this step, or run a named workflow (see HandoffActions).
+	Background func(ctx context.Context, t core.Trigger, stepID, identity string, s config.Step, ref dispatch.RunRef, handoffConn string, actions dispatch.HandoffActions)
 	// Archive soft-deletes a finished non-interactive agent.
 	Archive func(agentID string)
 	// CheckBudget vets an agent dispatch against the spend caps (#36 §14):
@@ -1137,20 +1135,6 @@ const MaxWorkflowDepth = 8
 // child scope seeded with the trigger context + declared inputs; the caller
 // reads the workflow's declared outputs off this step's id. The name may be
 // templated ("{{.pick}}"), resolved at runtime against the workflow set.
-// ownerRerunKey carries a closure that re-runs the innermost owning workflow, so
-// a background hand-off deep in its step loop can reproduce itself on
-// handoff.refresh without threading the workflow context through every frame.
-type ownerRerunKey struct{}
-
-func withOwnerRerun(ctx context.Context, fn func(context.Context) error) context.Context {
-	return context.WithValue(ctx, ownerRerunKey{}, fn)
-}
-
-func ownerRerun(ctx context.Context) func(context.Context) error {
-	fn, _ := ctx.Value(ownerRerunKey{}).(func(context.Context) error)
-	return fn
-}
-
 func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step config.Step, id string, data map[string]any, shadow bool) (map[string]any, error) {
 	name, err := render(step.Workflow, data)
 	if err != nil {
@@ -1254,28 +1238,6 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	if saved != nil {
 		stepCtx = context.WithValue(stepCtx, savedWFKey{}, name)
 	}
-	// A background hand-off inside this workflow can re-run the WHOLE workflow on
-	// handoff.refresh (re-assess, don't just re-present): rebuild fresh child
-	// data — steps re-fetch the PR live, so this reads the new head — and
-	// re-execute the steps, which reach the hand-off step again and land a fresh
-	// hand-off. Captured in ctx so the deep step-execution frame can reach it.
-	rerun := func(rc context.Context) error {
-		fresh := baseData(t, r.SecretVals)
-		addVaultData(fresh, r.VaultVals)
-		if saved != nil {
-			fresh = baseData(t, nil)
-			fresh["secrets"] = map[string]any{}
-			fresh["vaults"] = map[string]any{}
-		}
-		fresh["inputs"] = inputs
-		fresh["steps"] = map[string]any{}
-		if g, ok := data["group"]; ok {
-			fresh["group"] = g
-		}
-		var freshRun store.WorkflowRun
-		return r.runSteps(stepCtx, &freshRun, t, steps, fresh, shadow, false)
-	}
-	stepCtx = withOwnerRerun(stepCtx, rerun)
 	runErr := r.runSteps(stepCtx, &childRun, t, steps, child, shadow, false)
 	if saved != nil && !shadow {
 		SavedWorkflows().RecordOutcome(name, runErr == nil)
@@ -1604,26 +1566,30 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	}
 	if step.Background {
 		if r.Agents.Background != nil {
-			// refresh reproduces the hand-off on the current head. If this step
-			// runs inside a workflow, reproduce = re-run that whole workflow (so
-			// the review is re-assessed, not just re-presented) — captured in ctx
-			// by execWorkflowCall. Otherwise (a trigger's direct step) fall back
-			// to re-dispatching this step and re-handing-off, self-referential so
-			// the fresh hand-off is itself refreshable.
-			reproduce := ownerRerun(ctx)
-			if reproduce == nil {
-				var redispatch func(context.Context) error
-				redispatch = func(c context.Context) error {
-					nref, derr := r.Agents.Dispatch(c, req)
+			// The generalized supersede operations a watch rule can fire. Both
+			// re-establish a fresh hand-off (RerunStep re-enters Background;
+			// RunWorkflow's target workflow does via its own background step), so
+			// the replacement is itself watchable.
+			var actions dispatch.HandoffActions
+			actions = dispatch.HandoffActions{
+				RerunStep: func(c context.Context, extraPrompt string) error {
+					r2 := req
+					if strings.TrimSpace(extraPrompt) != "" {
+						r2.Action.Prompt = strings.TrimRight(r2.Action.Prompt, "\n") + "\n\n" + extraPrompt
+					}
+					nref, derr := r.Agents.Dispatch(c, r2)
 					if derr != nil {
 						return derr
 					}
-					r.Agents.Background(c, t, id, identity, step, nref, step.Handoff, redispatch)
+					r.Agents.Background(c, t, id, identity, step, nref, step.Handoff, actions)
 					return nil
-				}
-				reproduce = redispatch
+				},
+				RunWorkflow: func(c context.Context, workflow string, with map[string]any) error {
+					_, err := r.execWorkflowCall(c, t, config.Step{Workflow: workflow, With: with}, id, data, shadow)
+					return err
+				},
 			}
-			r.Agents.Background(ctx, t, id, identity, step, ref, step.Handoff, reproduce)
+			r.Agents.Background(ctx, t, id, identity, step, ref, step.Handoff, actions)
 		}
 		return map[string]any{"agent_id": ref.AgentID, "background": true}, "", nil
 	}

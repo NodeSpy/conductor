@@ -11,9 +11,10 @@ import (
 
 // The handoff connector exposes a hand-off's reactive lifecycle as verbs and
 // events. Its verbs are the actions a `watch:` rule runs — `bail` (tear the
-// hand-off down; the reason went away), `refresh` (re-run the producer on the
-// new state), `done` (the interaction concluded; release it so the reaper
-// reclaims the workspace). `done` is deliberately reachable from the SKILL
+// hand-off down; the reason went away), `rerun_step` (re-run the same step on
+// the new state), `run_workflow` (run a named workflow — re-review, or a
+// different workflow in a chain), and `done` (the interaction concluded; release
+// it so the reaper reclaims the workspace). `done` is deliberately reachable from the SKILL
 // surface too, so a hand-off agent can `conductor call handoff.done` when it has
 // nothing more for the reviewer, instead of the workspace lingering until a
 // manual archive. Its events (`bailed`/`refreshed`/`done`) let a trigger react
@@ -31,19 +32,24 @@ var handoffDecl = &TypeDecl{
 	Desc: "A hand-off's reactive lifecycle: bail/refresh/done as verbs, bailed/refreshed/done as events. Always available; used from a step's watch: rules and (for done) the agent skill surface.",
 	Events: []EventDecl{
 		{Name: "bailed", Desc: "a hand-off was torn down because its reason went away", Context: handoffContext},
-		{Name: "refreshed", Desc: "a hand-off's producer was re-run on new state", Context: handoffContext},
+		{Name: "superseded", Desc: "a hand-off was replaced by a re-run (step or workflow) on new state", Context: handoffContext},
 		{Name: "done", Desc: "a hand-off's interaction concluded and it was released", Context: handoffContext},
 	},
 	Verbs: []VerbDecl{
 		{
-			Name: "bail", Desc: "tear down this hand-off (cancel the agent, close the draft, release it) — the reason it existed is gone",
+			Name: "bail", Desc: "tear down this hand-off (cancel the agent, close the draft, release it) — the reason it existed is gone. A watch-rule action.",
 			Options: Schema{"notify": {Type: TString, Desc: "message to post on the hand-off channel as it closes"}},
 			Outputs: Schema{"bailed": {Type: TBool}},
 		},
 		{
-			Name: "refresh", Desc: "supersede this hand-off: re-run the step that produced it on the current state, replacing the stale draft",
-			Options: Schema{"notify": {Type: TString}},
-			Outputs: Schema{"refreshed": {Type: TBool}},
+			Name: "rerun_step", Desc: "supersede this hand-off by re-running the SAME step on the current state (surface-agnostic). A watch-rule action.",
+			Options: Schema{"notify": {Type: TString}, "prompt": {Type: TString, Desc: "extra text appended to the step's prompt on the re-run"}},
+			Outputs: Schema{"superseded": {Type: TBool}},
+		},
+		{
+			Name: "run_workflow", Desc: "supersede this hand-off by running a NAMED workflow with `with` inputs (re-review, or a different workflow in a chain). A watch-rule action.",
+			Options: Schema{"notify": {Type: TString}, "workflow": {Type: TString, Required: true, Desc: "the workflow to run"}, "with": {Type: TMap, Desc: "inputs for the workflow"}},
+			Outputs: Schema{"superseded": {Type: TBool}},
 		},
 		{
 			Name: "done", Desc: "the interaction is finished — release this hand-off so its workspace is reclaimed (agent-callable when it has nothing more for the reviewer)",
@@ -64,12 +70,11 @@ var handoffContext = Schema{
 	"reason": {Type: TString, Desc: "why (e.g. \"pr merged\")"},
 }
 
-// HandoffOps is the daemon-side surface the handoff verbs act through, wired at
-// boot. Each takes the target hand-off's session key (resolved by the caller —
-// the engine for a watch rule, the skill session identity for an agent call).
+// HandoffOps is the daemon-side surface the SKILL-reachable handoff verbs act
+// through, wired at boot. Only `done` is agent-callable; bail/rerun_step/
+// run_workflow are watch-rule actions the engine performs directly (it holds the
+// hand-off in scope), so they are not routed through here.
 type HandoffOps struct {
-	Bail    func(ctx context.Context, sessionKey, notify string) error
-	Refresh func(ctx context.Context, sessionKey, notify string) error
 	// Done releases the hand-off owning the given AGENT (skill identity), so the
 	// reaper reclaims it. Empty agentID means "the caller's own session."
 	Done func(ctx context.Context, agentID string) error
@@ -112,36 +117,18 @@ func (handoffImpl) Source(triggers []CompiledTrigger) (core.Integration, error) 
 }
 
 func (handoffImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
-	ops := handoffOps()
-	if ops == nil {
-		return nil, fmt.Errorf("handoff.%s: only runs inside a live daemon's hand-off", verb)
-	}
-	notify, _ := opts["notify"].(string)
-	// sessionKey/agent target is injected by the caller (the engine watch loop
-	// sets it; the skill path resolves it from the caller's identity).
-	key, _ := opts["__handoff_session"].(string)
-	agent, _ := opts["__handoff_agent"].(string)
 	switch verb {
-	case "bail":
-		if ops.Bail == nil {
-			return nil, fmt.Errorf("handoff.bail: not wired in this daemon")
-		}
-		if err := ops.Bail(ctx, key, notify); err != nil {
-			return nil, err
-		}
-		return map[string]any{"bailed": true}, nil
-	case "refresh":
-		if ops.Refresh == nil {
-			return nil, fmt.Errorf("handoff.refresh: not wired in this daemon")
-		}
-		if err := ops.Refresh(ctx, key, notify); err != nil {
-			return nil, err
-		}
-		return map[string]any{"refreshed": true}, nil
+	case "bail", "rerun_step", "run_workflow":
+		// Watch-rule actions: the engine performs these directly (it holds the
+		// hand-off in scope). They are not reachable through the skill surface.
+		return nil, fmt.Errorf("handoff.%s runs from a watch rule, not as a direct call", verb)
 	case "done":
-		if ops.Done == nil {
-			return nil, fmt.Errorf("handoff.done: not wired in this daemon")
+		ops := handoffOps()
+		if ops == nil || ops.Done == nil {
+			return nil, fmt.Errorf("handoff.done: only runs inside a live daemon's hand-off")
 		}
+		// The agent target is injected by the skill path from the caller identity.
+		agent, _ := opts["__handoff_agent"].(string)
 		if err := ops.Done(ctx, agent); err != nil {
 			return nil, err
 		}

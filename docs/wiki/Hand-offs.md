@@ -84,29 +84,40 @@ against then (a comparison's right side may itself be a data path). The first
 rule whose `if:` holds fires its action; a broken condition is skipped, never
 fired.
 
-The two watch actions:
+The watch actions:
 
 - **`handoff.bail`** — the reason is gone. Cancels the live agent's review
   loop, closes the draft, and releases the reaper hold so the workspace is
   reclaimed. Use it for `pr.merged`, `pr.state == "closed"`, or approved-
   elsewhere.
-- **`handoff.refresh`** — the subject moved. Tears the stale review down
-  (archiving that agent and its workspace) and **re-runs what produced it** on
-  the current state, landing a fresh hand-off with the watch re-armed. When the
-  hand-off step lives inside a workflow, refresh re-runs that **whole workflow**
-  — so a review whose draft was assembled by earlier steps is re-assessed on the
-  new head, not re-presented stale (a review can't just be re-shown; the
-  assessment runs again). For a trigger's direct hand-off step it re-dispatches
-  that step. Typical condition: `pr.head_sha != handoff.pr.head_sha`. Fires only
-  on a real head change of an in-flight hand-off, so the re-review cost is
-  bounded to hand-offs actually in progress.
+- **`handoff.rerun_step`** — the subject moved and re-running *this step* is
+  enough. Tears the stale hand-off down, then re-dispatches the same step on the
+  current state (surface-agnostic — agent, Slack, Discord). An optional
+  `prompt:` is appended to the step's prompt ("here's what changed"). Use when
+  the hand-off step is itself the producer.
+- **`handoff.run_workflow`** — the subject moved and the review must be **done
+  again** from scratch. Tears the stale hand-off down, then runs the named
+  `workflow:` with `with:` inputs (rendered against the trigger scope) — run the
+  same flow again, or a different one in a chain. Use when the draft was
+  assembled *upstream* (as in pr-review-team), so re-running just the hand-off
+  step would re-present a stale draft.
 
 ```yaml
     on:
       - if: "pr.head_sha != handoff.pr.head_sha"
-        uses: handoff.refresh
-        options: { notify: "new commits — re-reviewing" }
+        uses: handoff.run_workflow
+        options:
+          workflow: review-flow
+          with: { repo: "{{.repo}}", pr: "{{.pr}}", title: "{{.title}}" }
+          notify: "New commits — re-reviewing on the new head."
 ```
+
+Both **tear the current hand-off down first** (no stale draft coexists with its
+replacement), and a fresh hand-off arms automatically if the target produces
+one. Typical condition: `pr.head_sha != handoff.pr.head_sha`. They fire only on
+a real change of an in-flight hand-off, so the re-run cost is bounded to
+hand-offs actually in progress. `handoff.done` is a conclusion signal, not a
+watch action (see below).
 
 The poll target (repo/PR) is defaulted from the trigger only when the platform
 assigned it; for a sender-chosen target, name `repo`/`pr` in `options:`
