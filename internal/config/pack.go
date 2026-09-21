@@ -272,6 +272,12 @@ type TriggerArm struct {
 	Filter *Filter `yaml:"filter,omitempty"`
 	// Policy deep-merges onto the shipped trigger's policy (behavior override).
 	Policy map[string]any `yaml:"policy,omitempty"`
+	// Options deep-merges onto the shipped trigger's `options:` — the per-trigger
+	// knobs (e.g. flaky_rerun, ignore_checks, poll cadences). Like Policy, this is
+	// an OVERRIDE the operator tunes per instance: a pack ships sensible defaults,
+	// the consumer adjusts them for their environment (e.g. an ignore_checks name
+	// that's specific to their repos, not the pack's business).
+	Options map[string]any `yaml:"options,omitempty"`
 	// Gate replaces the shipped trigger's gate. The OPERATOR setting a gate is
 	// the point — it is their check that runs before the pack's steps land.
 	Gate *GateSpec `yaml:"gate,omitempty"`
@@ -358,6 +364,9 @@ func mergeArm(star, named TriggerArm) TriggerArm {
 	}
 	if named.Policy != nil {
 		out.Policy = deepOverride(star.Policy, named.Policy)
+	}
+	if named.Options != nil {
+		out.Options = deepOverride(star.Options, named.Options)
 	}
 	if named.Gate != nil {
 		out.Gate = named.Gate
