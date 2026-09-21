@@ -19,6 +19,37 @@ import (
 // because the paseo dispatcher can't import controller (controller imports
 // dispatch).
 
+// handoffSelfServiceVerb is auto-granted to every interactive hand-off so the
+// agent can release its OWN hand-off (handoff.done) without the operator writing
+// a skill: block for it. It is minimal authority — the connector resolves the
+// target from the caller's token identity, so the agent can only release the
+// hand-off it is holding, never one it names.
+const handoffSelfServiceVerb = "handoff.done"
+
+// effectiveSkillPolicy is the grant a dispatch's tool credential carries: the
+// step's own skill: block, plus handoff.done auto-granted for an interactive
+// hand-off. It copies the verb slice so the shared config.Step is never mutated.
+func effectiveSkillPolicy(req Request) config.SkillPolicy {
+	var p config.SkillPolicy
+	if req.Step.Skill != nil {
+		p = *req.Step.Skill
+	}
+	if req.Interactive {
+		for _, v := range p.Verbs {
+			if v == handoffSelfServiceVerb {
+				return p // already granted; nothing to add
+			}
+		}
+		p.Verbs = append(append([]string(nil), p.Verbs...), handoffSelfServiceVerb)
+	}
+	return p
+}
+
+// wantsSkillCreds reports whether a dispatch should be handed CLI skill creds: a
+// step with a skill: block, or ANY interactive hand-off (which auto-gets
+// handoff.done). Non-interactive steps without skill: get none.
+func wantsSkillCreds(req Request) bool { return req.Step.Skill != nil || req.Interactive }
+
 // ToolServerSpec is one dispatch's conductor tool server: the subprocess to
 // launch, its argv, and the environment to set on it.
 type ToolServerSpec struct {
@@ -99,10 +130,9 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 	// for a step the operator authored; an agent-authored step gets no
 	// credential and therefore no tool socket identity at all.
 	if b := skill.Active(); b != nil && !req.AgentAuthored {
-		policy := config.SkillPolicy{} // no skill: block → authentication with an EMPTY grant
-		if req.Step.Skill != nil {
-			policy = *req.Step.Skill
-		}
+		// no skill: block → an EMPTY grant (credential still minted for
+		// provenance); an interactive hand-off also auto-gets handoff.done.
+		policy := effectiveSkillPolicy(req)
 		claim, err := b.MintClaim(skill.Identity{
 			Agent:         req.Action.Agent,
 			Repo:          req.Trigger.Target.Repo,
@@ -154,10 +184,7 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 	// SSH-forwarded socket the peer is the ssh relay running as the daemon's own
 	// uid, so the uid check passes and provenance rests on the token — which is
 	// exactly why memory/run_step ops derive Source from the token, not the peer.
-	envPolicy := config.SkillPolicy{} // as in BuildToolServer: credential first, grant maybe
-	if req.Step.Skill != nil {
-		envPolicy = *req.Step.Skill
-	}
+	envPolicy := effectiveSkillPolicy(req) // step's grant + auto handoff.done for a hand-off
 	// An interactive hand-off waits on a human and is held (never culled), so
 	// its creds must outlive the 2h dispatch window — else the agent's
 	// `conductor call …` is dead by the time the human gets to it.
