@@ -409,12 +409,8 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 			factSteps = append(factSteps, st)
 		}
 	}
-	bail := func(reason, msg string) {
+	bail := func(reason string) {
 		e.log("%s hand-off %q bailing: %s", tag(t), stepID, reason)
-		if msg == "" {
-			msg = fmt.Sprintf("review for %q auto-closed — %s", stepID, reason)
-		}
-		e.notif.Emit(parent, notify.EventNeedsInput, t, msg)
 		cancel()                      // ends Review's Await → the loop goroutine returns
 		e.broker.Close(parent, prKey) // close the draft/presentation
 		e.hold.Remove(agentID)        // release the reaper hold → workspace reclaimed
@@ -451,7 +447,6 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 			if !matched {
 				continue
 			}
-			msg, _ := st.Options["notify"].(string)
 			switch {
 			case st.Workflow != "":
 				if actions.RunWorkflow == nil {
@@ -459,7 +454,7 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 					continue
 				}
 				wf, with := st.Workflow, st.With
-				e.supersedeHandoff(parent, cancel, t, stepID, agentID, prKey, msg,
+				e.supersedeHandoff(parent, cancel, t, stepID, agentID, prKey,
 					func(c context.Context) error { return actions.RunWorkflow(c, wf, with) })
 				return
 			case st.Uses == "handoff.bail":
@@ -467,7 +462,7 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 				if reason == "" {
 					reason = "watch condition met"
 				}
-				bail(reason, msg)
+				bail(reason)
 				return
 			case st.Uses == "handoff.rerun":
 				if actions.RerunStep == nil {
@@ -475,7 +470,7 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 					continue
 				}
 				prompt, _ := st.Options["prompt"].(string)
-				e.supersedeHandoff(parent, cancel, t, stepID, agentID, prKey, msg,
+				e.supersedeHandoff(parent, cancel, t, stepID, agentID, prKey,
 					func(c context.Context) error { return actions.RerunStep(c, prompt) })
 				return
 			default:
@@ -492,11 +487,8 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 // re-establishes a fresh hand-off itself. The teardown happens FIRST for every
 // supersede action (the user's call), so a stale draft never coexists with its
 // replacement.
-func (e *Engine) supersedeHandoff(parent context.Context, cancel context.CancelFunc, t core.Trigger, stepID, oldAgentID, prKey, msg string, run func(context.Context) error) {
-	if msg == "" {
-		msg = fmt.Sprintf("re-running %q on the new changes", stepID)
-	}
-	e.notif.Emit(parent, notify.EventNeedsInput, t, msg)
+func (e *Engine) supersedeHandoff(parent context.Context, cancel context.CancelFunc, t core.Trigger, stepID, oldAgentID, prKey string, run func(context.Context) error) {
+	e.log("%s hand-off %q superseding on new state", tag(t), stepID)
 	// Tear the current cycle down before running the replacement: end the review
 	// loop, close the draft, release + archive the stale agent/workspace.
 	cancel()
@@ -510,9 +502,7 @@ func (e *Engine) supersedeHandoff(parent context.Context, cancel context.CancelF
 	}
 	// Run the replacement on the current state — lands a fresh hand-off.
 	if err := run(parent); err != nil {
-		e.log("%s hand-off %q supersede failed: %v", tag(t), stepID, err)
-		e.notif.Emit(parent, notify.EventEscalate, t,
-			fmt.Sprintf("review for %q: re-run failed: %v", stepID, e.redact(err.Error())))
+		e.log("%s hand-off %q supersede failed: %v", tag(t), stepID, e.redact(err.Error()))
 	}
 }
 

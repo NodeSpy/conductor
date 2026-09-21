@@ -38,12 +38,12 @@ var handoffDecl = &TypeDecl{
 	Verbs: []VerbDecl{
 		{
 			Name: "bail", Desc: "tear down this hand-off (cancel the agent, close the draft, release it) — the reason it existed is gone. A watch-step action.",
-			Options: Schema{"notify": {Type: TString, Desc: "message to post on the hand-off channel as it closes"}},
+			Options: Schema{},
 			Outputs: Schema{"bailed": {Type: TBool}},
 		},
 		{
 			Name: "rerun", Desc: "supersede this hand-off by re-running the SAME step on the current state (surface-agnostic). A watch-step action. To run a DIFFERENT workflow, use a `workflow:` step instead.",
-			Options: Schema{"notify": {Type: TString}, "prompt": {Type: TString, Desc: "extra text appended to the step's prompt on the re-run"}},
+			Options: Schema{"prompt": {Type: TString, Desc: "extra text appended to the step's prompt on the re-run"}},
 			Outputs: Schema{"superseded": {Type: TBool}},
 		},
 		{

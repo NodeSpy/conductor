@@ -76,7 +76,6 @@ vocabulary used everywhere else.
         uses: gh.pr_get
       - if: 'pr.merged || pr.state == "closed"'
         uses: handoff.bail           # tear down, stop watching
-        options: { notify: "PR merged/closed — closing the review" }
       - if: 'pr.review_decision == "APPROVED"'
         uses: handoff.bail
       - if: 'pr.head_sha != handoff.pr.head_sha'
