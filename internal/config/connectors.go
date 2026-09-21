@@ -1033,37 +1033,79 @@ type Step struct {
 // success the last poll's outputs are recorded under the step id, so a later
 // step can read `{{.<id>.conclusion}}`. On timeout the step errors — soften
 // per-flow with `continue_on_error:`.
-// WatchSpec is the `watch:` block on a reactive hand-off: poll a read verb on a
-// cadence and, when a rule fires, run a handoff.* action. Unlike WaitSpec it does
-// not end on a single condition — it runs for the hand-off's lifetime, evaluating
-// every rule each tick. Rule conditions see the frozen `.handoff` snapshot plus
-// the live read overlaid.
+// WatchSpec is the `watch:` block on a reactive hand-off: run a small workflow on
+// a cadence for the hand-off's lifetime. Its Steps are ordinary steps — fact
+// steps gather state (a read verb under an `id:`), if-guarded action steps react.
+// It is not a trigger; it is "run these steps every `every`". Conditions see each
+// fact step's output by id plus the frozen `.handoff.<id>` snapshot captured at
+// hand-off creation, so a rule can compare now against then.
+//
+// Action steps:
+//   - `uses: handoff.bail` — tear the hand-off down and stop watching.
+//   - `uses: handoff.rerun` — SUPERSEDE: tear down, re-dispatch THIS hand-off
+//     step on the current state (optional `options.prompt` appended), re-arm.
+//   - `workflow: <name>` + `with:` — SUPERSEDE: tear down, run that workflow
+//     (which lands a fresh hand-off), re-arm. The native step form, not a verb.
+//   - `uses: handoff.done` — release (rare in a watch; usually the agent/idle).
+//
+// The first action step whose `if:` holds fires each tick; plain fact steps never
+// tear the hand-off down.
 type WatchSpec struct {
-	// Uses is the read verb polled each tick, <connector>.<verb> (e.g. gh.pr_get).
-	Uses string `yaml:"uses"`
-	// As names the object the read is nested under, so conditions read
-	// `{{ .pr.merged }}` (live) and `{{ .handoff.pr.head_sha }}` (the frozen
-	// snapshot at hand-off creation). Default "pr". The snapshot is always the
-	// same shape as the live read, under `.handoff.<as>`.
-	As string `yaml:"as,omitempty"`
-	// Options are the verb's options, templated per poll.
-	Options map[string]any `yaml:"options,omitempty"`
 	// Every is the poll interval. Default 60s.
 	Every Duration `yaml:"every,omitempty"`
-	// On is the ordered rule set; the FIRST rule whose `if:` holds fires this
-	// tick (a fired bail/done ends the watch; refresh re-arms it).
-	On []WatchRule `yaml:"on,omitempty"`
+	// Steps is the mini-workflow run each tick (fact steps + if-guarded actions).
+	Steps []Step `yaml:"steps,omitempty"`
+
+	// --- DEPRECATED old shape (uses/as/options/on), normalized into Steps at
+	// load so a pack still pinned to it parses. Remove once no tagged pack uses
+	// it. Do not write these in new config — use `steps:`. ---
+	Uses    string         `yaml:"uses,omitempty"`
+	As      string         `yaml:"as,omitempty"`
+	Options map[string]any `yaml:"options,omitempty"`
+	On      []WatchRule    `yaml:"on,omitempty"`
 }
 
-// WatchRule is one condition→action in a WatchSpec.
+// WatchRule is one condition→action in the DEPRECATED old watch shape. Retained
+// only so an older pack parses; normalize() rewrites it into a Step.
 type WatchRule struct {
-	// If is the condition (expr grammar, same as step `if:`) over the scope
-	// (`.handoff` snapshot + live read). Empty = always (an unconditional action).
-	If string `yaml:"if,omitempty"`
-	// Uses is the action verb — a handoff.* verb (bail | refresh | done).
-	Uses string `yaml:"uses"`
-	// Options are the action's options (e.g. bail's `notify:`), templated.
+	If      string         `yaml:"if,omitempty"`
+	Uses    string         `yaml:"uses"`
 	Options map[string]any `yaml:"options,omitempty"`
+}
+
+// normalize rewrites the deprecated old watch shape (uses/as/on) into the new
+// Steps form, so the engine and validation only ever see `steps:`. A no-op when
+// Steps is already set or there is no old-shape `uses:`.
+func (w *WatchSpec) normalize() {
+	if w == nil || len(w.Steps) > 0 || w.Uses == "" {
+		return
+	}
+	as := w.As
+	if as == "" {
+		as = "pr"
+	}
+	steps := []Step{{ID: as, Uses: w.Uses, Options: w.Options}} // the poll → a fact step
+	for _, r := range w.On {
+		st := Step{If: r.If, Options: r.Options}
+		switch r.Uses {
+		case "handoff.run_workflow":
+			// old verb → native workflow: step.
+			wf, _ := r.Options["workflow"].(string)
+			with, _ := r.Options["with"].(map[string]any)
+			st.Uses, st.Workflow, st.With = "", wf, with
+			st.Options = map[string]any{}
+			if n, ok := r.Options["notify"]; ok {
+				st.Options["notify"] = n
+			}
+		case "handoff.refresh", "handoff.rerun_step":
+			st.Uses = "handoff.rerun" // old aliases → the rerun verb
+		default:
+			st.Uses = r.Uses // handoff.bail / handoff.done pass through
+		}
+		steps = append(steps, st)
+	}
+	w.Steps = steps
+	w.Uses, w.As, w.Options, w.On = "", "", nil, nil
 }
 
 type WaitSpec struct {
@@ -1848,46 +1890,40 @@ func validateStep(w string, s Step, c *Config) error {
 			return fmt.Errorf("config: %s: unknown workflow %q (defined: %s)", w, s.Workflow, c.workflowNames())
 		}
 	}
-	if err := validateWatch(w, s.Watch); err != nil {
+	if err := validateWatch(w, s.Watch, c); err != nil {
 		return err
 	}
 	return validateHooks(w, s.Hooks)
 }
 
-// validateWatch checks a reactive hand-off's watch block: a read verb to poll and
-// rules whose actions are hand-off verbs. Only `handoff.bail` is wired today;
-// refresh/done in a watch rule are rejected until their increments land.
-func validateWatch(where string, w *WatchSpec) error {
+// validateWatch checks a reactive hand-off's watch block. The old shape is
+// normalized into Steps first; then the steps are validated as an ordinary
+// mini-workflow, with the extra rule that a handoff.* action step must be
+// handoff.bail or handoff.rerun (done isn't a watch action; the old
+// run_workflow/rerun_step/refresh verbs are normalized away, and rejected if
+// written raw — use a `workflow:` step or handoff.rerun).
+func validateWatch(where string, w *WatchSpec, c *Config) error {
 	if w == nil {
 		return nil
 	}
-	if conn, verb, ok := strings.Cut(w.Uses, "."); w.Uses == "" || !ok || conn == "" || verb == "" {
-		return fmt.Errorf("config: %s: watch needs `uses: <connector>.<verb>` (the read to poll)", where)
+	w.normalize()
+	if len(w.Steps) == 0 {
+		return fmt.Errorf("config: %s: watch needs `steps:` — fact reads plus if-guarded handoff.bail / handoff.rerun / workflow: actions", where)
 	}
-	if len(w.On) == 0 {
-		return fmt.Errorf("config: %s: watch needs at least one `on:` rule", where)
+	if err := validateSteps(where+" watch", w.Steps, c); err != nil {
+		return err
 	}
-	for i, rule := range w.On {
-		rw := fmt.Sprintf("%s watch.on[%d]", where, i)
-		if rule.Uses == "" {
-			return fmt.Errorf("config: %s: a watch rule needs `uses: handoff.<verb>`", rw)
+	for i, st := range w.Steps {
+		if !strings.HasPrefix(st.Uses, "handoff.") {
+			continue // a fact step (read verb) or a workflow: action
 		}
-		switch rule.Uses {
-		case "handoff.bail", "handoff.rerun_step":
-		case "handoff.refresh":
-			// DEPRECATED alias for handoff.rerun_step, accepted so a pack pinned
-			// to the older verb still validates during rollout. Remove once no
-			// deployed config references it.
-		case "handoff.run_workflow":
-			if wf, _ := rule.Options["workflow"].(string); strings.TrimSpace(wf) == "" {
-				return fmt.Errorf("config: %s: handoff.run_workflow needs a `workflow:` option naming the workflow to run", rw)
-			}
+		sw := fmt.Sprintf("%s watch.steps[%d]", where, i)
+		switch st.Uses {
+		case "handoff.bail", "handoff.rerun":
 		case "handoff.done":
-			// `done` is a conclusion signal (agent-called, or idle_timeout), not
-			// a condition-driven watch action.
-			return fmt.Errorf("config: %s: handoff.done is not a watch action — use idle_timeout: or let the agent call handoff.done", rw)
+			return fmt.Errorf("config: %s: handoff.done is not a watch action — use idle_timeout: or let the agent call it", sw)
 		default:
-			return fmt.Errorf("config: %s: watch rule `uses:` must be handoff.bail, handoff.rerun_step, or handoff.run_workflow, got %q", rw, rule.Uses)
+			return fmt.Errorf("config: %s: %q is not a watch action — use handoff.bail, handoff.rerun, or a `workflow:` step", sw, st.Uses)
 		}
 	}
 	return nil

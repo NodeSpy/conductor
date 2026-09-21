@@ -11,10 +11,10 @@ import (
 
 // The handoff connector exposes a hand-off's reactive lifecycle as verbs and
 // events. Its verbs are the actions a `watch:` rule runs — `bail` (tear the
-// hand-off down; the reason went away), `rerun_step` (re-run the same step on
-// the new state), `run_workflow` (run a named workflow — re-review, or a
-// different workflow in a chain), and `done` (the interaction concluded; release
-// it so the reaper reclaims the workspace). `done` is deliberately reachable from the SKILL
+// hand-off down; the reason went away), `rerun` (re-run the same step on the new
+// state), and `done` (the interaction concluded; release it so the reaper
+// reclaims the workspace). To re-run a DIFFERENT workflow, a watch uses a native
+// `workflow:` step, not a verb. `done` is deliberately reachable from the SKILL
 // surface too, so a hand-off agent can `conductor call handoff.done` when it has
 // nothing more for the reviewer, instead of the workspace lingering until a
 // manual archive. Its events (`bailed`/`refreshed`/`done`) let a trigger react
@@ -37,18 +37,13 @@ var handoffDecl = &TypeDecl{
 	},
 	Verbs: []VerbDecl{
 		{
-			Name: "bail", Desc: "tear down this hand-off (cancel the agent, close the draft, release it) — the reason it existed is gone. A watch-rule action.",
+			Name: "bail", Desc: "tear down this hand-off (cancel the agent, close the draft, release it) — the reason it existed is gone. A watch-step action.",
 			Options: Schema{"notify": {Type: TString, Desc: "message to post on the hand-off channel as it closes"}},
 			Outputs: Schema{"bailed": {Type: TBool}},
 		},
 		{
-			Name: "rerun_step", Desc: "supersede this hand-off by re-running the SAME step on the current state (surface-agnostic). A watch-rule action.",
+			Name: "rerun", Desc: "supersede this hand-off by re-running the SAME step on the current state (surface-agnostic). A watch-step action. To run a DIFFERENT workflow, use a `workflow:` step instead.",
 			Options: Schema{"notify": {Type: TString}, "prompt": {Type: TString, Desc: "extra text appended to the step's prompt on the re-run"}},
-			Outputs: Schema{"superseded": {Type: TBool}},
-		},
-		{
-			Name: "run_workflow", Desc: "supersede this hand-off by running a NAMED workflow with `with` inputs (re-review, or a different workflow in a chain). A watch-rule action.",
-			Options: Schema{"notify": {Type: TString}, "workflow": {Type: TString, Required: true, Desc: "the workflow to run"}, "with": {Type: TMap, Desc: "inputs for the workflow"}},
 			Outputs: Schema{"superseded": {Type: TBool}},
 		},
 		{
@@ -118,10 +113,10 @@ func (handoffImpl) Source(triggers []CompiledTrigger) (core.Integration, error) 
 
 func (handoffImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
 	switch verb {
-	case "bail", "rerun_step", "run_workflow":
-		// Watch-rule actions: the engine performs these directly (it holds the
+	case "bail", "rerun":
+		// Watch-step actions: the engine performs these directly (it holds the
 		// hand-off in scope). They are not reachable through the skill surface.
-		return nil, fmt.Errorf("handoff.%s runs from a watch rule, not as a direct call", verb)
+		return nil, fmt.Errorf("handoff.%s runs from a watch step, not as a direct call", verb)
 	case "done":
 		ops := handoffOps()
 		if ops == nil || ops.Done == nil {

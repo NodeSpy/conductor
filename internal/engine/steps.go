@@ -386,22 +386,28 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID,
 	}()
 }
 
-// startHandoffWatch runs a hand-off's reactive watch loop: it captures a frozen
-// snapshot of the subject at hand-off creation (under `.handoff.<as>`), then polls
-// the watch read verb every `every`, exposing the latest read live under `.<as>`.
-// Each tick it evaluates the `on:` rules in order; the first match fires its action.
-// The loop owns THIS hand-off directly (it has cancel/prKey/agentID in closure), so
-// a `handoff.bail` tears it down inline — no ops indirection needed. The loop ends
-// when its ctx is cancelled (the hand-off resolved normally) or a bail fires.
+// startHandoffWatch runs a hand-off's reactive watch: a small workflow on a
+// cadence. Each tick it runs the FACT steps (read verbs, stored by id), then
+// evaluates the ACTION steps in order (handoff.bail / handoff.rerun / a
+// `workflow:` step, each `if:`-guarded); the first whose condition holds fires.
+// Conditions see each fact step's output by id plus the frozen `.handoff.<id>`
+// snapshot captured once at hand-off creation, so a rule can compare now vs then.
+// bail tears the hand-off down and ends the loop; rerun/workflow SUPERSEDE it
+// (tear down, then run, and the fresh run re-arms its own watch). The loop ends
+// when its ctx is cancelled (the hand-off resolved) or an action fires.
 func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel context.CancelFunc, t core.Trigger, stepID, identity, agentID, prKey string, profile config.Step, ch handoff.Channel, actions dispatch.HandoffActions) {
 	w := profile.Watch
-	as := w.As
-	if as == "" {
-		as = "pr"
-	}
 	every := time.Duration(w.Every)
 	if every <= 0 {
 		every = 60 * time.Second
+	}
+	var factSteps, actionSteps []config.Step
+	for _, st := range w.Steps {
+		if st.Workflow != "" || strings.HasPrefix(st.Uses, "handoff.") {
+			actionSteps = append(actionSteps, st)
+		} else {
+			factSteps = append(factSteps, st)
+		}
 	}
 	bail := func(reason, msg string) {
 		e.log("%s hand-off %q bailing: %s", tag(t), stepID, reason)
@@ -415,9 +421,9 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 	}
 	go func() {
 		defer e.recoverDispatch(parent, t, store.WorkflowRun{}, "hand-off watch")
-		snap, err := e.readWatch(runCtx, t, w)
+		snap, err := e.runWatchFacts(runCtx, t, factSteps)
 		if err != nil {
-			// No baseline snapshot → comparisons against `.handoff.<as>` can't be
+			// No baseline snapshot → comparisons against `.handoff.*` can't be
 			// trusted; skip the watch rather than fire on a half-read.
 			e.log("%s hand-off %q watch disabled: snapshot read failed: %v", tag(t), stepID, err)
 			return
@@ -430,55 +436,51 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 				return
 			case <-tk.C:
 			}
-			live, err := e.readWatch(runCtx, t, w)
+			facts, err := e.runWatchFacts(runCtx, t, factSteps)
 			if err != nil {
 				continue // transient read failure — try again next tick
 			}
 			scope := e.stepBaseData(t)
-			scope[as] = live
-			scope["handoff"] = map[string]any{as: snap}
-			rule, matched := matchWatch(w.On, scope, func(cond string, err error) {
-				e.log("%s hand-off %q watch rule %q eval error: %v", tag(t), stepID, cond, err)
+			for id, out := range facts {
+				scope[id] = out
+			}
+			scope["handoff"] = snap
+			st, matched := matchWatch(actionSteps, scope, func(cond string, err error) {
+				e.log("%s hand-off %q watch step %q eval error: %v", tag(t), stepID, cond, err)
 			})
 			if !matched {
 				continue
 			}
-			switch rule.Uses {
-			case "handoff.bail":
-				msg, _ := rule.Options["notify"].(string)
-				reason := rule.If
+			msg, _ := st.Options["notify"].(string)
+			switch {
+			case st.Workflow != "":
+				if actions.RunWorkflow == nil {
+					e.log("%s hand-off %q watch: workflow action unavailable here (ignored)", tag(t), stepID)
+					continue
+				}
+				wf, with := st.Workflow, st.With
+				e.supersedeHandoff(parent, cancel, t, stepID, agentID, prKey, msg,
+					func(c context.Context) error { return actions.RunWorkflow(c, wf, with) })
+				return
+			case st.Uses == "handoff.bail":
+				reason := st.If
 				if reason == "" {
 					reason = "watch condition met"
 				}
 				bail(reason, msg)
 				return
-			case "handoff.rerun_step", "handoff.refresh":
-				if rule.Uses == "handoff.refresh" {
-					e.log("%s hand-off %q watch: handoff.refresh is deprecated — use handoff.rerun_step", tag(t), stepID)
-				}
-				msg, _ := rule.Options["notify"].(string)
-				prompt, _ := rule.Options["prompt"].(string)
+			case st.Uses == "handoff.rerun":
 				if actions.RerunStep == nil {
-					e.log("%s hand-off %q watch: rerun_step unavailable here (ignored)", tag(t), stepID)
+					e.log("%s hand-off %q watch: rerun unavailable here (ignored)", tag(t), stepID)
 					continue
 				}
+				prompt, _ := st.Options["prompt"].(string)
 				e.supersedeHandoff(parent, cancel, t, stepID, agentID, prKey, msg,
 					func(c context.Context) error { return actions.RerunStep(c, prompt) })
 				return
-			case "handoff.run_workflow":
-				msg, _ := rule.Options["notify"].(string)
-				wf, _ := rule.Options["workflow"].(string)
-				with, _ := rule.Options["with"].(map[string]any)
-				if actions.RunWorkflow == nil {
-					e.log("%s hand-off %q watch: run_workflow unavailable here (ignored)", tag(t), stepID)
-					continue
-				}
-				e.supersedeHandoff(parent, cancel, t, stepID, agentID, prKey, msg,
-					func(c context.Context) error { return actions.RunWorkflow(c, wf, with) })
-				return
 			default:
-				// validateWatch keeps other verbs out of watch rules; log defensively.
-				e.log("%s hand-off %q watch: unsupported action %q (ignored)", tag(t), stepID, rule.Uses)
+				// validateWatch keeps other actions out; log defensively.
+				e.log("%s hand-off %q watch: unsupported action %q (ignored)", tag(t), stepID, st.Uses)
 			}
 		}
 	}()
@@ -514,45 +516,62 @@ func (e *Engine) supersedeHandoff(parent context.Context, cancel context.CancelF
 	}
 }
 
-// matchWatch returns the first watch rule whose `if:` holds against scope (an
-// empty `if:` always holds). An eval error skips that rule (reported via onErr)
+// matchWatch returns the first action step whose `if:` holds against scope (an
+// empty `if:` always holds). An eval error skips that step (reported via onErr)
 // rather than firing it — a broken condition must never tear a hand-off down.
-func matchWatch(rules []config.WatchRule, scope map[string]any, onErr func(cond string, err error)) (config.WatchRule, bool) {
-	for _, rule := range rules {
-		if strings.TrimSpace(rule.If) == "" {
-			return rule, true
+func matchWatch(steps []config.Step, scope map[string]any, onErr func(cond string, err error)) (config.Step, bool) {
+	for _, st := range steps {
+		if strings.TrimSpace(st.If) == "" {
+			return st, true
 		}
-		ok, err := expr.Eval(rule.If, scope)
+		ok, err := expr.Eval(st.If, scope)
 		if err != nil {
 			if onErr != nil {
-				onErr(rule.If, err)
+				onErr(st.If, err)
 			}
 			continue
 		}
 		if ok {
-			return rule, true
+			return st, true
 		}
 	}
-	return config.WatchRule{}, false
+	return config.Step{}, false
 }
 
-// readWatch runs the watch's read verb once and returns its outputs. It defaults
-// repo/pr from the trigger target so a hand-off `watch: { uses: gh.pr_get }` needs
-// no explicit options; watch.Options override the defaults.
-func (e *Engine) readWatch(ctx context.Context, t core.Trigger, w *config.WatchSpec) (map[string]any, error) {
-	conn, verb, ok := strings.Cut(w.Uses, ".")
+// runWatchFacts runs the watch's fact steps (read verbs) and returns their
+// outputs keyed by step id — the map exposed to conditions (and, captured once
+// at creation, as the frozen `.handoff` snapshot). A read failure fails the tick
+// so a half-read never drives an action.
+func (e *Engine) runWatchFacts(ctx context.Context, t core.Trigger, facts []config.Step) (map[string]any, error) {
+	out := map[string]any{}
+	for _, st := range facts {
+		o, err := e.readVerb(ctx, t, st.Uses, st.Options)
+		if err != nil {
+			return nil, fmt.Errorf("watch fact %q: %w", st.ID, err)
+		}
+		id := st.ID
+		if id == "" {
+			id = st.Uses
+		}
+		out[id] = o
+	}
+	return out, nil
+}
+
+// readVerb invokes a read verb for a watch fact step. It defaults repo/pr from
+// the trigger target ONLY when the platform assigned it (TargetTrusted) — a
+// forged target can't drive a watch off a PR the sender picked; the step's own
+// options override the defaults.
+func (e *Engine) readVerb(ctx context.Context, t core.Trigger, uses string, options map[string]any) (map[string]any, error) {
+	conn, verb, ok := strings.Cut(uses, ".")
 	if !ok || conn == "" || verb == "" {
-		return nil, fmt.Errorf("watch.uses %q must be connector.verb", w.Uses)
+		return nil, fmt.Errorf("watch fact `uses: %s` must be connector.verb", uses)
 	}
 	inst, found := e.connectors.Get(conn)
 	if !found || inst == nil {
 		return nil, fmt.Errorf("watch: unknown connector %q", conn)
 	}
 	opts := map[string]any{}
-	// Default the poll target from the trigger ONLY when the platform assigned
-	// it (TargetTrusted). For a sender-chosen target we don't auto-point the
-	// watch at it — the operator must name repo/pr in watch.Options explicitly,
-	// so a forged target can't drive a bail off a PR the sender picked.
 	if t.TargetTrusted {
 		if t.Target.Repo != "" {
 			opts["repo"] = t.Target.Repo
@@ -561,7 +580,7 @@ func (e *Engine) readWatch(ctx context.Context, t core.Trigger, w *config.WatchS
 			opts["pr"] = t.Target.Number
 		}
 	}
-	for k, v := range w.Options {
+	for k, v := range options {
 		opts[k] = v
 	}
 	return inst.Invoke(ctx, verb, opts)

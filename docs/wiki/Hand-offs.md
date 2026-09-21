@@ -59,73 +59,64 @@ moot first (the PR merges, someone else approves). A `watch:` block on the
 step lets the hand-off tear itself down when the reason it existed goes away,
 so you don't click through a stale draft.
 
+`watch:` is not a trigger — it's **"run these steps every `every`"**. The steps
+are an ordinary mini-workflow: a **fact step** gathers state (a read verb under
+an `id:`), and later **action steps** react, guarded by `if:` — exactly the step
+vocabulary used everywhere else.
+
 ```yaml
 - id: review
   agent: reviewer
   background: true
   handoff: slack
   watch:
-    uses: gh.pr_get        # a read verb, polled every `every` (default 60s)
     every: 60s
-    on:
-      - if: "pr.merged == true"
-        uses: handoff.bail
-        options: { notify: "PR merged — closing the review" }
+    steps:
+      - id: pr                       # a fact step: read the subject → .pr
+        uses: gh.pr_get
+      - if: 'pr.merged || pr.state == "closed"'
+        uses: handoff.bail           # tear down, stop watching
+        options: { notify: "PR merged/closed — closing the review" }
       - if: 'pr.review_decision == "APPROVED"'
         uses: handoff.bail
-        options: { notify: "approved elsewhere — closing" }
+      - if: 'pr.head_sha != handoff.pr.head_sha'
+        workflow: review-flow        # SUPERSEDE: tear down, re-run this workflow
+        with: { repo: "{{.repo}}", pr: "{{.number}}" }
 ```
 
-The read runs once at hand-off creation to freeze a snapshot, then every
-`every`. Each rule's `if:` sees the latest read under its object name (`pr`
-by default; set `as:` to rename) and the frozen snapshot under
-`handoff.<as>` (e.g. `handoff.pr.head_sha`) — so a rule can compare now
-against then (a comparison's right side may itself be a data path). The first
-rule whose `if:` holds fires its action; a broken condition is skipped, never
-fired.
+Each tick runs the fact steps (their outputs land under their `id:`), then the
+action steps in order — the first whose `if:` holds fires. Conditions see each
+fact step's output by id (`.pr`) and the frozen **`.handoff.<id>`** snapshot
+captured once at hand-off creation (`.handoff.pr.head_sha`), so a rule can
+compare now against then (a comparison's right side may itself be a data path).
+A broken condition is skipped, never fired. A fact step's read target
+(repo/PR) is defaulted from the trigger only when the platform assigned it
+(TargetTrusted); for a sender-chosen target, name `repo`/`pr` in its `options:`.
 
-The watch actions:
+The action steps:
 
-- **`handoff.bail`** — the reason is gone. Cancels the live agent's review
-  loop, closes the draft, and releases the reaper hold so the workspace is
-  reclaimed. Use it for `pr.merged`, `pr.state == "closed"`, or approved-
-  elsewhere.
-- **`handoff.rerun_step`** — the subject moved and re-running *this step* is
-  enough. Tears the stale hand-off down, then re-dispatches the same step on the
-  current state (surface-agnostic — agent, Slack, Discord). An optional
-  `prompt:` is appended to the step's prompt ("here's what changed"). Use when
-  the hand-off step is itself the producer.
-- **`handoff.run_workflow`** — the subject moved and the review must be **done
-  again** from scratch. Tears the stale hand-off down, then runs the named
-  `workflow:` with `with:` inputs (rendered against the trigger scope) — run the
-  same flow again, or a different one in a chain. Use when the draft was
-  assembled *upstream* (as in pr-review-team), so re-running just the hand-off
-  step would re-present a stale draft.
+- **`uses: handoff.bail`** — the reason is gone. Tears the hand-off down (cancel
+  the agent, close the draft, release the reaper hold) and stops watching. Use
+  it for `pr.merged`, `pr.state == "closed"`, or approved-elsewhere.
+- **`uses: handoff.rerun`** — re-running *this step* is enough. **Supersedes**:
+  tears down, then re-dispatches the same step on the current state (surface-
+  agnostic — agent, Slack, Discord). Optional `options.prompt` is appended to the
+  step's prompt ("here's what changed"). Use when the hand-off step is itself the
+  producer.
+- **`workflow: <name>` + `with:`** — the review must be **done again**. Supersedes:
+  tears down, then runs that workflow (a fresh hand-off arms from its own
+  background step). The native step form — not a verb — so it's "run whatever you
+  want," including a different workflow in a chain. Use when the draft was
+  assembled *upstream* (as in pr-review-team), where re-running just this step
+  would re-present a stale draft.
 
-```yaml
-    on:
-      - if: "pr.head_sha != handoff.pr.head_sha"
-        uses: handoff.run_workflow
-        options:
-          workflow: review-flow
-          with: { repo: "{{.repo}}", pr: "{{.pr}}", title: "{{.title}}" }
-          notify: "New commits — re-reviewing on the new head."
-```
+Every superseding action **tears the current hand-off down first** — no stale
+draft coexists with its replacement — and fires only on a real change of an
+in-flight hand-off, so the re-run cost is bounded. `handoff.done` is a conclusion
+signal, not a watch action (see below).
 
-Both **tear the current hand-off down first** (no stale draft coexists with its
-replacement), and a fresh hand-off arms automatically if the target produces
-one. Typical condition: `pr.head_sha != handoff.pr.head_sha`. They fire only on
-a real change of an in-flight hand-off, so the re-run cost is bounded to
-hand-offs actually in progress. `handoff.done` is a conclusion signal, not a
-watch action (see below).
-
-The poll target (repo/PR) is defaulted from the trigger only when the platform
-assigned it; for a sender-chosen target, name `repo`/`pr` in `options:`
-explicitly.
-
-`watch:` is subject-agnostic — the only PR-specific choice is the read verb
-you name in `uses:`. It is operator-owned: an agent-authored step may not set
-it.
+`watch:` is subject-agnostic (the fact step names whatever read verb fits) and
+operator-owned: an agent-authored step may not set it.
 
 ## Cleaning up a finished hand-off (`handoff.done` / `idle_timeout`)
 
