@@ -90,12 +90,16 @@ The two watch actions:
   loop, closes the draft, and releases the reaper hold so the workspace is
   reclaimed. Use it for `pr.merged`, `pr.state == "closed"`, or approved-
   elsewhere.
-- **`handoff.refresh`** — the subject moved. Re-runs the **producer** on the
-  current state: it tears the stale review down (archiving that agent and its
-  workspace), re-dispatches the step on a fresh worktree at the new head, and
-  starts a new hand-off with the watch re-armed. A review can't just be
-  re-presented — the assessment runs again before handing off anew. Typical
-  condition: `pr.head_sha != handoff.pr.head_sha`.
+- **`handoff.refresh`** — the subject moved. Tears the stale review down
+  (archiving that agent and its workspace) and **re-runs what produced it** on
+  the current state, landing a fresh hand-off with the watch re-armed. When the
+  hand-off step lives inside a workflow, refresh re-runs that **whole workflow**
+  — so a review whose draft was assembled by earlier steps is re-assessed on the
+  new head, not re-presented stale (a review can't just be re-shown; the
+  assessment runs again). For a trigger's direct hand-off step it re-dispatches
+  that step. Typical condition: `pr.head_sha != handoff.pr.head_sha`. Fires only
+  on a real head change of an in-flight hand-off, so the re-review cost is
+  bounded to hand-offs actually in progress.
 
 ```yaml
     on:
