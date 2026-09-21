@@ -395,6 +395,12 @@ func (rw *refRewriter) rewriteStep(s *Step) {
 			}
 		}
 	}
+	if s.Watch != nil {
+		s.Watch.normalize()
+		for i := range s.Watch.Steps {
+			rw.rewriteStep(&s.Watch.Steps[i])
+		}
+	}
 	for i := range s.Hooks {
 		rw.rewriteHook(&s.Hooks[i])
 	}

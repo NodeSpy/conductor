@@ -90,6 +90,9 @@ func walkSteps(steps []Step, fn func(*Step)) {
 				walkSteps(s.Parallel.Branches[bi], fn)
 			}
 		}
+		if s.Watch != nil {
+			walkSteps(s.Watch.Steps, fn)
+		}
 	}
 }
 

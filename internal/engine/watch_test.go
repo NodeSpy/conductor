@@ -21,34 +21,34 @@ func TestMatchWatch(t *testing.T) {
 		},
 	}
 	t.Run("literal match fires", func(t *testing.T) {
-		rule, ok := matchWatch([]config.WatchRule{{If: "pr.merged == true", Uses: "handoff.bail"}}, scope, nil)
-		if !ok || rule.Uses != "handoff.bail" {
-			t.Fatalf("want bail, got %v ok=%v", rule, ok)
+		st, ok := matchWatch([]config.Step{{If: "pr.merged == true", Uses: "handoff.bail"}}, scope, nil)
+		if !ok || st.Uses != "handoff.bail" {
+			t.Fatalf("want bail, got %v ok=%v", st, ok)
 		}
 	})
-	t.Run("first matching rule wins", func(t *testing.T) {
-		rule, ok := matchWatch([]config.WatchRule{
+	t.Run("first matching step wins", func(t *testing.T) {
+		st, ok := matchWatch([]config.Step{
 			{If: "pr.state == \"closed\"", Uses: "handoff.first"},
 			{If: "pr.review_decision == \"APPROVED\"", Uses: "handoff.second"},
 		}, scope, nil)
-		if !ok || rule.Uses != "handoff.second" {
-			t.Fatalf("want second, got %v ok=%v", rule, ok)
+		if !ok || st.Uses != "handoff.second" {
+			t.Fatalf("want second, got %v ok=%v", st, ok)
 		}
 	})
 	t.Run("empty if always matches", func(t *testing.T) {
-		rule, ok := matchWatch([]config.WatchRule{{Uses: "handoff.always"}}, scope, nil)
-		if !ok || rule.Uses != "handoff.always" {
-			t.Fatalf("want always, got %v ok=%v", rule, ok)
+		st, ok := matchWatch([]config.Step{{Uses: "handoff.always"}}, scope, nil)
+		if !ok || st.Uses != "handoff.always" {
+			t.Fatalf("want always, got %v ok=%v", st, ok)
 		}
 	})
 	t.Run("no match", func(t *testing.T) {
-		if _, ok := matchWatch([]config.WatchRule{{If: "pr.merged == false", Uses: "x"}}, scope, nil); ok {
+		if _, ok := matchWatch([]config.Step{{If: "pr.merged == false", Uses: "x"}}, scope, nil); ok {
 			t.Fatal("did not expect a match")
 		}
 	})
-	t.Run("eval error skips the rule, does not fire", func(t *testing.T) {
+	t.Run("eval error skips the step, does not fire", func(t *testing.T) {
 		var gotErr bool
-		_, ok := matchWatch([]config.WatchRule{{If: "contains(pr.state)", Uses: "handoff.bail"}}, scope,
+		_, ok := matchWatch([]config.Step{{If: "contains(pr.state)", Uses: "handoff.bail"}}, scope,
 			func(string, error) { gotErr = true })
 		if ok {
 			t.Fatal("a broken condition must never fire an action")
@@ -115,10 +115,9 @@ func TestHandoffWatchBails(t *testing.T) {
 	}
 	trig := core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "o/r", Number: 7}}
 	profile := config.Step{Watch: &config.WatchSpec{
-		Uses:  "fp.pr_get",
-		As:    "pr",
 		Every: config.Duration(2 * time.Millisecond),
-		On: []config.WatchRule{
+		Steps: []config.Step{
+			{ID: "pr", Uses: "fp.pr_get"},
 			{If: "pr.merged == true", Uses: "handoff.bail", Options: map[string]any{"notify": "PR merged — closing review"}},
 		},
 	}}
@@ -190,12 +189,12 @@ func TestIdleTimerReleases(t *testing.T) {
 func TestHandoffWatchSupersede(t *testing.T) {
 	cases := []struct {
 		name    string
-		rule    config.WatchRule
+		action  config.Step
 		actions func(hit *int32) dispatch.HandoffActions
 	}{
 		{
-			name: "run_workflow",
-			rule: config.WatchRule{If: "pr.head_sha != handoff.pr.head_sha", Uses: "handoff.run_workflow", Options: map[string]any{"workflow": "review-flow"}},
+			name:   "workflow step",
+			action: config.Step{If: "pr.head_sha != handoff.pr.head_sha", Workflow: "review-flow"},
 			actions: func(hit *int32) dispatch.HandoffActions {
 				return dispatch.HandoffActions{RunWorkflow: func(_ context.Context, wf string, _ map[string]any) error {
 					if wf == "review-flow" {
@@ -206,8 +205,8 @@ func TestHandoffWatchSupersede(t *testing.T) {
 			},
 		},
 		{
-			name: "rerun_step",
-			rule: config.WatchRule{If: "pr.head_sha != handoff.pr.head_sha", Uses: "handoff.rerun_step"},
+			name:   "rerun",
+			action: config.Step{If: "pr.head_sha != handoff.pr.head_sha", Uses: "handoff.rerun"},
 			actions: func(hit *int32) dispatch.HandoffActions {
 				return dispatch.HandoffActions{RerunStep: func(_ context.Context, _ string) error {
 					atomic.AddInt32(hit, 1)
@@ -238,8 +237,8 @@ func TestHandoffWatchSupersede(t *testing.T) {
 			}
 			trig := core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "o/r", Number: 7}}
 			profile := config.Step{Watch: &config.WatchSpec{
-				Uses: "fp.pr_get", As: "pr", Every: config.Duration(2 * time.Millisecond),
-				On: []config.WatchRule{tc.rule},
+				Every: config.Duration(2 * time.Millisecond),
+				Steps: []config.Step{{ID: "pr", Uses: "fp.pr_get"}, tc.action},
 			}}
 			e.hold.Add("old")
 			var hit int32
