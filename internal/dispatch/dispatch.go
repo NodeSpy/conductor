@@ -105,6 +105,25 @@ type RunRef struct {
 	Output  string `json:"-"`
 }
 
+// HandoffActions are the generalized "supersede this hand-off" operations a
+// reactive watch rule can fire. The engine's watch loop tears the current
+// hand-off down first, then runs one of these; a fresh hand-off arms
+// automatically if the target produces one.
+//
+//   - RerunStep re-dispatches the SAME step on the current state — surface-
+//     agnostic (agent, Slack, Discord, …), since it just redoes what the step
+//     does. extraPrompt (may be "") is appended to the step's prompt.
+//   - RunWorkflow runs a NAMED workflow with `with` inputs (rendered against the
+//     trigger scope) — "run whatever you want," including a different workflow
+//     in a chain. nil on the legacy engine path (no workflow surface there).
+//
+// A nil field means the caller can't perform that action; the watch loop logs
+// and skips it rather than firing.
+type HandoffActions struct {
+	RerunStep   func(ctx context.Context, extraPrompt string) error
+	RunWorkflow func(ctx context.Context, workflow string, with map[string]any) error
+}
+
 // Dispatcher routes requests to a backend.
 type Dispatcher struct {
 	PaseoBin string

@@ -650,7 +650,7 @@ func (a *fakeAgents) dispatch(ctx context.Context, req dispatch.Request) (dispat
 	return dispatch.RunRef{Output: "{}"}, nil
 }
 
-func (a *fakeAgents) background(ctx context.Context, t core.Trigger, stepID, agentName string, p config.Step, ref dispatch.RunRef, handoffConn string, reproduce func(context.Context) error) {
+func (a *fakeAgents) background(ctx context.Context, t core.Trigger, stepID, agentName string, p config.Step, ref dispatch.RunRef, handoffConn string, actions dispatch.HandoffActions) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.backgroundCalls = append(a.backgroundCalls, backgroundCall{StepID: stepID, Handoff: handoffConn, Profile: p, Ref: ref})

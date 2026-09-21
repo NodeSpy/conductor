@@ -35,7 +35,24 @@ func TestValidateWatch(t *testing.T) {
 			true,
 		},
 		{
-			"refresh rule ok",
+			"rerun_step rule ok",
+			&WatchSpec{Uses: "gh.pr_get", On: []WatchRule{{If: "pr.head_sha != handoff.pr.head_sha", Uses: "handoff.rerun_step"}}},
+			false,
+		},
+		{
+			"run_workflow rule ok with workflow option",
+			&WatchSpec{Uses: "gh.pr_get", On: []WatchRule{{If: "pr.head_sha != handoff.pr.head_sha", Uses: "handoff.run_workflow", Options: map[string]any{"workflow": "review-flow"}}}},
+			false,
+		},
+		{
+			"run_workflow without workflow option rejected",
+			&WatchSpec{Uses: "gh.pr_get", On: []WatchRule{{Uses: "handoff.run_workflow"}}},
+			true,
+		},
+		{
+			// Fleet-safety: a pack pinned to the old verb must still validate on
+			// a daemon that has moved to rerun_step/run_workflow.
+			"deprecated handoff.refresh still accepted",
 			&WatchSpec{Uses: "gh.pr_get", On: []WatchRule{{If: "pr.head_sha != handoff.pr.head_sha", Uses: "handoff.refresh"}}},
 			false,
 		},

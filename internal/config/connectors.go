@@ -1873,13 +1873,21 @@ func validateWatch(where string, w *WatchSpec) error {
 			return fmt.Errorf("config: %s: a watch rule needs `uses: handoff.<verb>`", rw)
 		}
 		switch rule.Uses {
-		case "handoff.bail", "handoff.refresh":
+		case "handoff.bail", "handoff.rerun_step":
+		case "handoff.refresh":
+			// DEPRECATED alias for handoff.rerun_step, accepted so a pack pinned
+			// to the older verb still validates during rollout. Remove once no
+			// deployed config references it.
+		case "handoff.run_workflow":
+			if wf, _ := rule.Options["workflow"].(string); strings.TrimSpace(wf) == "" {
+				return fmt.Errorf("config: %s: handoff.run_workflow needs a `workflow:` option naming the workflow to run", rw)
+			}
 		case "handoff.done":
 			// `done` is a conclusion signal (agent-called, or idle_timeout), not
 			// a condition-driven watch action.
 			return fmt.Errorf("config: %s: handoff.done is not a watch action — use idle_timeout: or let the agent call handoff.done", rw)
 		default:
-			return fmt.Errorf("config: %s: watch rule `uses:` must be handoff.bail or handoff.refresh, got %q", rw, rule.Uses)
+			return fmt.Errorf("config: %s: watch rule `uses:` must be handoff.bail, handoff.rerun_step, or handoff.run_workflow, got %q", rw, rule.Uses)
 		}
 	}
 	return nil

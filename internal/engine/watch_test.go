@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -126,7 +125,7 @@ func TestHandoffWatchBails(t *testing.T) {
 	e.hold.Add("agent-1")
 
 	runCtx, cancel := context.WithCancel(context.Background())
-	e.startHandoffWatch(context.Background(), runCtx, cancel, trig, "review", "rev", "agent-1", trig.Key(), profile, nil, nil)
+	e.startHandoffWatch(context.Background(), runCtx, cancel, trig, "review", "rev", "agent-1", trig.Key(), profile, nil, dispatch.HandoffActions{})
 
 	waitFor(t, func() bool { return !e.hold.Has("agent-1") })
 	select {
@@ -185,47 +184,73 @@ func TestIdleTimerReleases(t *testing.T) {
 	}
 }
 
-func TestHandoffWatchRefresh(t *testing.T) {
-	fakePRSingleton = &fakePRImpl{states: []map[string]any{
-		{"head_sha": "aaa"}, // snapshot
-		{"head_sha": "bbb"}, // moved → refresh
-	}}
-	reg, err := connector.Build(&config.Config{
-		ConnectorsMap: map[string]config.ConnectorRef{"fp": {Use: "fakepr"}},
-	}, connector.Deps{Log: func(string, ...any) {}})
-	if err != nil {
-		t.Fatalf("build registry: %v", err)
-	}
-	nf := &fakeNotif{}
-	e := &Engine{
-		log:        func(string, ...any) {},
-		notif:      nf,
-		hold:       dispatch.NewHoldSet(""),
-		broker:     controller.NewBroker(nil, nil, func(string, ...any) {}),
-		connectors: reg,
-		disp:       &stepFake{}, // archive of the stale agent lands here
-	}
-	trig := core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "o/r", Number: 7}}
-	profile := config.Step{Watch: &config.WatchSpec{
-		Uses:  "fp.pr_get",
-		As:    "pr",
-		Every: config.Duration(2 * time.Millisecond),
-		On: []config.WatchRule{
-			{If: "pr.head_sha != handoff.pr.head_sha", Uses: "handoff.refresh"},
+// TestHandoffWatchSupersede drives a head change through both supersede actions
+// (run_workflow and rerun_step) and asserts each tears the stale hand-off down
+// and invokes the matching HandoffActions closure.
+func TestHandoffWatchSupersede(t *testing.T) {
+	cases := []struct {
+		name    string
+		rule    config.WatchRule
+		actions func(hit *int32) dispatch.HandoffActions
+	}{
+		{
+			name: "run_workflow",
+			rule: config.WatchRule{If: "pr.head_sha != handoff.pr.head_sha", Uses: "handoff.run_workflow", Options: map[string]any{"workflow": "review-flow"}},
+			actions: func(hit *int32) dispatch.HandoffActions {
+				return dispatch.HandoffActions{RunWorkflow: func(_ context.Context, wf string, _ map[string]any) error {
+					if wf == "review-flow" {
+						atomic.AddInt32(hit, 1)
+					}
+					return nil
+				}}
+			},
 		},
-	}}
-	e.hold.Add("old")
-	var reproduced int32
-	reproduce := func(context.Context) error {
-		atomic.AddInt32(&reproduced, 1)
-		return fmt.Errorf("reproduce failed in test")
+		{
+			name: "rerun_step",
+			rule: config.WatchRule{If: "pr.head_sha != handoff.pr.head_sha", Uses: "handoff.rerun_step"},
+			actions: func(hit *int32) dispatch.HandoffActions {
+				return dispatch.HandoffActions{RerunStep: func(_ context.Context, _ string) error {
+					atomic.AddInt32(hit, 1)
+					return nil
+				}}
+			},
+		},
 	}
-	runCtx, cancel := context.WithCancel(context.Background())
-	e.registerLiveHandoff("old", cancel, trig.Key(), "review")
-	e.startHandoffWatch(context.Background(), runCtx, cancel, trig, "review", "rev", "old", trig.Key(), profile, nil, reproduce)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakePRSingleton = &fakePRImpl{states: []map[string]any{
+				{"head_sha": "aaa"}, // snapshot
+				{"head_sha": "bbb"}, // moved → supersede
+			}}
+			reg, err := connector.Build(&config.Config{
+				ConnectorsMap: map[string]config.ConnectorRef{"fp": {Use: "fakepr"}},
+			}, connector.Deps{Log: func(string, ...any) {}})
+			if err != nil {
+				t.Fatalf("build registry: %v", err)
+			}
+			e := &Engine{
+				log:        func(string, ...any) {},
+				notif:      &fakeNotif{},
+				hold:       dispatch.NewHoldSet(""),
+				broker:     controller.NewBroker(nil, nil, func(string, ...any) {}),
+				connectors: reg,
+				disp:       &stepFake{}, // archive of the stale agent lands here
+			}
+			trig := core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "o/r", Number: 7}}
+			profile := config.Step{Watch: &config.WatchSpec{
+				Uses: "fp.pr_get", As: "pr", Every: config.Duration(2 * time.Millisecond),
+				On: []config.WatchRule{tc.rule},
+			}}
+			e.hold.Add("old")
+			var hit int32
+			runCtx, cancel := context.WithCancel(context.Background())
+			e.registerLiveHandoff("old", cancel, trig.Key(), "review")
+			e.startHandoffWatch(context.Background(), runCtx, cancel, trig, "review", "rev", "old", trig.Key(), profile, nil, tc.actions(&hit))
 
-	// The head moved → refresh fires: it tears the stale hand-off down (hold
-	// released) and calls reproduce to re-run the review.
-	waitFor(t, func() bool { return atomic.LoadInt32(&reproduced) > 0 })
-	waitFor(t, func() bool { return !e.hold.Has("old") })
+			// head moved → supersede fires: tears the stale hand-off down (hold
+			// released) and invokes the action closure.
+			waitFor(t, func() bool { return atomic.LoadInt32(&hit) > 0 })
+			waitFor(t, func() bool { return !e.hold.Has("old") })
+		})
+	}
 }

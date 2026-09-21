@@ -244,21 +244,26 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				// else uses — the step's track record silently never
 				// accumulated, and the memory/session machinery looked for it
 				// under the identity this step actually has.
-				// refresh reproduces this hand-off: re-dispatch the same step on
-				// the current head and re-hand-off (the legacy path has no owning
-				// workflow to re-run). Self-referential so the fresh hand-off is
-				// itself refreshable.
-				var reproduce reproduceFn
-				reproduce = func(c context.Context) error {
-					nref, derr := e.dispatchAgent(c, runner, req)
-					if derr != nil {
-						return derr
-					}
-					e.hold.Add(nref.AgentID)
-					e.startReviewHandoff(c, t, id, identity, profile, nref, handoffCh, reproduce)
-					return nil
+				// The legacy path can rerun_step (re-dispatch this step +
+				// re-hand-off, self-referential so the replacement is itself
+				// watchable); it has no workflow surface, so RunWorkflow is nil.
+				var actions dispatch.HandoffActions
+				actions = dispatch.HandoffActions{
+					RerunStep: func(c context.Context, extraPrompt string) error {
+						r2 := req
+						if strings.TrimSpace(extraPrompt) != "" {
+							r2.Action.Prompt = strings.TrimRight(r2.Action.Prompt, "\n") + "\n\n" + extraPrompt
+						}
+						nref, derr := e.dispatchAgent(c, runner, r2)
+						if derr != nil {
+							return derr
+						}
+						e.hold.Add(nref.AgentID)
+						e.startReviewHandoff(c, t, id, identity, profile, nref, handoffCh, actions)
+						return nil
+					},
 				}
-				e.startReviewHandoff(ctx, t, id, identity, profile, ref, handoffCh, reproduce)
+				e.startReviewHandoff(ctx, t, id, identity, profile, ref, handoffCh, actions)
 			} else {
 				e.notif.Emit(ctx, notify.EventNeedsInput, t,
 					fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
@@ -296,14 +301,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 // resolved or the agent can't be bound, it falls back to today's behavior
 // (notify you to open the agent in paseo). Only invoked when ch and the broker
 // are configured.
-// reproduceFn re-runs whatever PRODUCED a hand-off and establishes a fresh one
-// in its place — for the flow runner, a re-run of the OWNING WORKFLOW (so a
-// review is re-assessed, not just re-presented); for the legacy path, a fresh
-// dispatch of the same step that then re-hands-off. handoff.refresh calls it.
-// nil when the caller can't reproduce (refresh then no-ops with a log).
-type reproduceFn func(context.Context) error
-
-func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID, identity string, profile config.Step, ref dispatch.RunRef, ch handoff.Channel, reproduce reproduceFn) {
+func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID, identity string, profile config.Step, ref dispatch.RunRef, ch handoff.Channel, actions dispatch.HandoffActions) {
 	agentID := ref.AgentID
 	fallback := func(reason string) {
 		if reason != "" {
@@ -360,7 +358,7 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID,
 	runCtx, cancel := context.WithCancel(ctx)
 	e.registerLiveHandoff(agentID, cancel, prKey, stepID)
 	if profile.Watch != nil {
-		e.startHandoffWatch(ctx, runCtx, cancel, t, stepID, identity, agentID, prKey, profile, ch, reproduce)
+		e.startHandoffWatch(ctx, runCtx, cancel, t, stepID, identity, agentID, prKey, profile, ch, actions)
 	}
 	if d := time.Duration(profile.IdleTimeout); d > 0 {
 		e.startIdleTimer(ctx, runCtx, t, stepID, agentID, d)
@@ -395,7 +393,7 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID,
 // The loop owns THIS hand-off directly (it has cancel/prKey/agentID in closure), so
 // a `handoff.bail` tears it down inline — no ops indirection needed. The loop ends
 // when its ctx is cancelled (the hand-off resolved normally) or a bail fires.
-func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel context.CancelFunc, t core.Trigger, stepID, identity, agentID, prKey string, profile config.Step, ch handoff.Channel, reproduce reproduceFn) {
+func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel context.CancelFunc, t core.Trigger, stepID, identity, agentID, prKey string, profile config.Step, ch handoff.Channel, actions dispatch.HandoffActions) {
 	w := profile.Watch
 	as := w.As
 	if as == "" {
@@ -454,9 +452,29 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 				}
 				bail(reason, msg)
 				return
-			case "handoff.refresh":
+			case "handoff.rerun_step", "handoff.refresh":
+				if rule.Uses == "handoff.refresh" {
+					e.log("%s hand-off %q watch: handoff.refresh is deprecated — use handoff.rerun_step", tag(t), stepID)
+				}
 				msg, _ := rule.Options["notify"].(string)
-				e.refreshReviewHandoff(parent, cancel, t, stepID, agentID, prKey, reproduce, msg)
+				prompt, _ := rule.Options["prompt"].(string)
+				if actions.RerunStep == nil {
+					e.log("%s hand-off %q watch: rerun_step unavailable here (ignored)", tag(t), stepID)
+					continue
+				}
+				e.supersedeHandoff(parent, cancel, t, stepID, agentID, prKey, msg,
+					func(c context.Context) error { return actions.RerunStep(c, prompt) })
+				return
+			case "handoff.run_workflow":
+				msg, _ := rule.Options["notify"].(string)
+				wf, _ := rule.Options["workflow"].(string)
+				with, _ := rule.Options["with"].(map[string]any)
+				if actions.RunWorkflow == nil {
+					e.log("%s hand-off %q watch: run_workflow unavailable here (ignored)", tag(t), stepID)
+					continue
+				}
+				e.supersedeHandoff(parent, cancel, t, stepID, agentID, prKey, msg,
+					func(c context.Context) error { return actions.RunWorkflow(c, wf, with) })
 				return
 			default:
 				// validateWatch keeps other verbs out of watch rules; log defensively.
@@ -466,25 +484,19 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 	}()
 }
 
-// refreshReviewHandoff supersedes a hand-off whose subject moved: it ends the
-// current review and tears down the stale agent/workspace, then REPRODUCES a
-// fresh hand-off on the current state. The user was explicit that a review can't
-// just be re-presented — the assessment must run again before handing off anew,
-// so `reproduce` re-runs the owning workflow (flow path), which re-establishes
-// the hand-off itself via its own background step. The legacy path's reproduce
-// re-dispatches the step and re-hands-off. Either way, refresh does NOT rewire
-// the hand-off directly — reproduce owns establishing the replacement.
-func (e *Engine) refreshReviewHandoff(parent context.Context, cancel context.CancelFunc, t core.Trigger, stepID, oldAgentID, prKey string, reproduce reproduceFn, msg string) {
-	if reproduce == nil {
-		e.log("%s hand-off %q refresh requested but no reproduce available — leaving as-is", tag(t), stepID)
-		return
-	}
+// supersedeHandoff replaces a hand-off whose subject moved: it ends the current
+// review and tears down the stale agent/workspace, then runs `run` — the watch
+// rule's chosen action (rerun this step, or run a named workflow), which
+// re-establishes a fresh hand-off itself. The teardown happens FIRST for every
+// supersede action (the user's call), so a stale draft never coexists with its
+// replacement.
+func (e *Engine) supersedeHandoff(parent context.Context, cancel context.CancelFunc, t core.Trigger, stepID, oldAgentID, prKey, msg string, run func(context.Context) error) {
 	if msg == "" {
-		msg = fmt.Sprintf("re-reviewing %q on the new changes", stepID)
+		msg = fmt.Sprintf("re-running %q on the new changes", stepID)
 	}
 	e.notif.Emit(parent, notify.EventNeedsInput, t, msg)
-	// Tear the current cycle down before reproducing: end the review loop, close
-	// the draft, release + archive the stale agent/workspace.
+	// Tear the current cycle down before running the replacement: end the review
+	// loop, close the draft, release + archive the stale agent/workspace.
 	cancel()
 	if e.broker != nil {
 		e.broker.Close(parent, prKey)
@@ -494,11 +506,11 @@ func (e *Engine) refreshReviewHandoff(parent context.Context, cancel context.Can
 	if oldAgentID != "" && !e.affinityOwns(oldAgentID) {
 		go func(id string) { _ = e.archiveAgent(context.Background(), id) }(oldAgentID)
 	}
-	// Reproduce on the current head — re-runs the review and lands a new hand-off.
-	if err := reproduce(parent); err != nil {
-		e.log("%s hand-off %q refresh failed to reproduce: %v", tag(t), stepID, err)
+	// Run the replacement on the current state — lands a fresh hand-off.
+	if err := run(parent); err != nil {
+		e.log("%s hand-off %q supersede failed: %v", tag(t), stepID, err)
 		e.notif.Emit(parent, notify.EventEscalate, t,
-			fmt.Sprintf("review for %q: re-review failed: %v", stepID, e.redact(err.Error())))
+			fmt.Sprintf("review for %q: re-run failed: %v", stepID, e.redact(err.Error())))
 	}
 }
 
