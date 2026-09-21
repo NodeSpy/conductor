@@ -215,15 +215,17 @@ func TestHandoffWatchRefresh(t *testing.T) {
 		},
 	}}
 	e.hold.Add("old")
-	var redispatched int32
-	redispatch := func(context.Context) (dispatch.RunRef, error) {
-		atomic.AddInt32(&redispatched, 1)
-		return dispatch.RunRef{}, fmt.Errorf("no dispatcher in test")
+	var reproduced int32
+	reproduce := func(context.Context) error {
+		atomic.AddInt32(&reproduced, 1)
+		return fmt.Errorf("reproduce failed in test")
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	e.registerLiveHandoff("old", cancel, trig.Key(), "review")
-	e.startHandoffWatch(context.Background(), runCtx, cancel, trig, "review", "rev", "old", trig.Key(), profile, nil, redispatch)
+	e.startHandoffWatch(context.Background(), runCtx, cancel, trig, "review", "rev", "old", trig.Key(), profile, nil, reproduce)
 
-	waitFor(t, func() bool { return atomic.LoadInt32(&redispatched) > 0 })
+	// The head moved → refresh fires: it tears the stale hand-off down (hold
+	// released) and calls reproduce to re-run the review.
+	waitFor(t, func() bool { return atomic.LoadInt32(&reproduced) > 0 })
 	waitFor(t, func() bool { return !e.hold.Has("old") })
 }

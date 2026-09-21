@@ -379,11 +379,11 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			}
 			return e.affinity.Followup(ctx, step, identity, model, t, prompt)
 		},
-		Background: func(ctx context.Context, t core.Trigger, stepID, identity string, p config.Step, ref dispatch.RunRef, handoffConn string, redispatch func(context.Context) (dispatch.RunRef, error)) {
+		Background: func(ctx context.Context, t core.Trigger, stepID, identity string, p config.Step, ref dispatch.RunRef, handoffConn string, reproduce func(context.Context) error) {
 			e.hold.Add(ref.AgentID)
 			ch := e.askChannelFor(handoffConn)
 			if ch != nil && e.broker != nil && ref.AgentID != "" {
-				e.startReviewHandoff(ctx, t, stepID, identity, p, ref, ch, redispatchFn(redispatch))
+				e.startReviewHandoff(ctx, t, stepID, identity, p, ref, ch, reproduceFn(reproduce))
 				return
 			}
 			e.notif.Emit(ctx, notify.EventNeedsInput, t,
