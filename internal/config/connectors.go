@@ -1874,6 +1874,10 @@ func validateWatch(where string, w *WatchSpec) error {
 		}
 		switch rule.Uses {
 		case "handoff.bail", "handoff.rerun_step":
+		case "handoff.refresh":
+			// DEPRECATED alias for handoff.rerun_step, accepted so a pack pinned
+			// to the older verb still validates during rollout. Remove once no
+			// deployed config references it.
 		case "handoff.run_workflow":
 			if wf, _ := rule.Options["workflow"].(string); strings.TrimSpace(wf) == "" {
 				return fmt.Errorf("config: %s: handoff.run_workflow needs a `workflow:` option naming the workflow to run", rw)

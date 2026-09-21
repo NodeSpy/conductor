@@ -50,6 +50,13 @@ func TestValidateWatch(t *testing.T) {
 			true,
 		},
 		{
+			// Fleet-safety: a pack pinned to the old verb must still validate on
+			// a daemon that has moved to rerun_step/run_workflow.
+			"deprecated handoff.refresh still accepted",
+			&WatchSpec{Uses: "gh.pr_get", On: []WatchRule{{If: "pr.head_sha != handoff.pr.head_sha", Uses: "handoff.refresh"}}},
+			false,
+		},
+		{
 			"done is not a watch action",
 			&WatchSpec{Uses: "gh.pr_get", On: []WatchRule{{Uses: "handoff.done"}}},
 			true,

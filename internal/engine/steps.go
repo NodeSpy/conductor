@@ -452,7 +452,10 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 				}
 				bail(reason, msg)
 				return
-			case "handoff.rerun_step":
+			case "handoff.rerun_step", "handoff.refresh":
+				if rule.Uses == "handoff.refresh" {
+					e.log("%s hand-off %q watch: handoff.refresh is deprecated — use handoff.rerun_step", tag(t), stepID)
+				}
 				msg, _ := rule.Options["notify"].(string)
 				prompt, _ := rule.Options["prompt"].(string)
 				if actions.RerunStep == nil {
