@@ -114,8 +114,6 @@ subprocesses; several — `github`, `sentry`, `pagerduty`, `ntfy`, `pushover`,
 | `discord` | — | `post`, `ask` | bot token; gateway captures ask replies |
 | `web` | — | `ask` | approve/revise/discard page on the inbound listener; [[Hand-offs]] tunnels |
 | `cron` | one per declared schedule | — | `schedules:` on the connection |
-| `fswatch` | one per declared watch | — | `watches:` on the connection: `path`/`match`/`debounce`/`recursive`/`events`; fires (debounced) when a matching file settles; context `path`/`file`/`op`/`watch`. Pair with a `cron` sweep — inotify is lossy |
-| `logwatch` | one per declared watch | — | `watches:` on the connection: `path` (followed via `tail -F`) or `command:` (e.g. `journalctl -f`, `docker logs -f`), `pattern:` (RE2), `debounce`; fires (debounced) when a line matches; context `line`/`source`/`groups` (named captures)/`watch` |
 | `webhook` | one per declared source | `post` (generic outbound HTTP) | `sources:` with signing/match/title/dedup |
 | `sentry` | `alert` | — | filter keys: projects/levels/environments |
 | `pagerduty` | `incident` | — | filter keys: event_types/services/urgencies/priorities |
