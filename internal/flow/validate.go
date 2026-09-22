@@ -109,17 +109,26 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 			where, in.Name, in.Decl.Type, spec.Event(), strings.Join(in.Decl.EventNames(), ", "))
 	}
 	if ev.Dynamic && in.Impl != nil {
-		declared := in.Impl.DeclaredEvents()
-		found := false
-		for _, d := range declared {
-			if d == spec.Event() {
-				found = true
-				break
+		// Enforce the configured name against the declared set ONLY when the impl
+		// can enumerate it. Builtin sources enumerate their config-named events
+		// (cron schedules, fswatch watches) and stay strict — a typo'd name is
+		// rejected. An EXTERNAL source plugin cannot enumerate its per-instance
+		// names at config-validate time (its connection config lives out in the
+		// plugin), so it returns none; there the Dynamic event's template already
+		// matched, and the plugin validates the name itself at StartSource, so we
+		// accept it rather than reject every out-of-process source's trigger.
+		if declared := in.Impl.DeclaredEvents(); len(declared) > 0 {
+			found := false
+			for _, d := range declared {
+				if d == spec.Event() {
+					found = true
+					break
+				}
 			}
-		}
-		if !found {
-			return fmt.Errorf("%s: connector %q declares no %s named %q (declared: %s)",
-				where, in.Name, in.Decl.Type, spec.Event(), strings.Join(declared, ", "))
+			if !found {
+				return fmt.Errorf("%s: connector %q declares no %s named %q (declared: %s)",
+					where, in.Name, in.Decl.Type, spec.Event(), strings.Join(declared, ", "))
+			}
 		}
 	}
 	if err := connector.ValidateFilter(where, in.Name, ev, spec.Filter); err != nil {

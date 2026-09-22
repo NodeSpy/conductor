@@ -255,8 +255,13 @@ type externalImpl struct {
 // Validate is a no-op: the plugin was verified and described at registration.
 func (e *externalImpl) Validate() error { return nil }
 
-// DeclaredEvents returns the plugin's static event names (dynamic source
-// streaming is a documented follow-up).
+// DeclaredEvents returns nil: an external plugin's per-instance, config-named
+// (Dynamic) event names live out in the plugin's own connection config, not
+// here, so the daemon can't enumerate them at config-validate time. Trigger
+// validation treats an empty declared set for a Dynamic event as "accept any
+// name" (the Dynamic template already matched; the plugin validates the name at
+// StartSource) — see internal/flow/validate.go. Builtin sources, which CAN
+// enumerate, return their names and stay strict.
 func (e *externalImpl) DeclaredEvents() []string { return nil }
 
 // Source returns a streaming integration when this plugin declares events AND
