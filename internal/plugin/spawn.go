@@ -12,6 +12,15 @@ import (
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
+// spawnGOOS / spawnLookPath are the platform probes buildCommand uses to pick
+// the sandbox backend and preflight the wrapper binaries — package vars so a
+// test can exercise the macOS (Seatbelt) branch from a Linux host, the same way
+// sandbox.CheckGOOS is injectable.
+var (
+	spawnGOOS     = runtime.GOOS
+	spawnLookPath = exec.LookPath
+)
+
 // masksExcludingBinaryDir drops any mask path that is the plugin binary's
 // directory or an ancestor of it. Masking such a path (a tmpfs overmount) is
 // refused by the kernel when the directory subtree holds a running executable,
@@ -109,7 +118,7 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 	// the OS sandbox can't be applied it degrades to the manifest-only path with a
 	// loud warning, so an engine that would run today keeps running rather than
 	// the daemon refusing to start it.
-	if err := spec.Check(runtime.GOOS, os.Geteuid(), exec.LookPath); err != nil {
+	if err := spec.Check(spawnGOOS, os.Geteuid(), spawnLookPath); err != nil {
 		if s.IsolationDefaulted {
 			log.Printf("plugin %s: default sandbox unavailable (%v) — running WITHOUT OS confinement; install util-linux (unshare) + enable unprivileged user namespaces to sandbox it", s.Name, err)
 			env, cleanup, cerr := confineToManifest(s, spawnBaseEnv(), sd)
@@ -139,7 +148,20 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 	}
 
 	var nf *sandbox.NetForward
-	if len(masks) > 0 || spec.EnforcedEgress() {
+	switch {
+	case spawnGOOS == "darwin" && spec.Mode == "namespace":
+		// macOS Seatbelt is an ALLOW-LIST (deny-default), the inverse of the
+		// Linux Masks deny-list — which has no Seatbelt analog. So instead of
+		// hiding the daemon's dirs, we allow-list only what a pure-compute engine
+		// needs: its own binary (read-only; interpreter/system libs come from the
+		// base profile) plus the network verdict from spec.Deny. Everything else,
+		// the daemon's state/config/secrets included, is denied by absence — a
+		// stronger jail than the Linux mask. The plugin transport is stdio
+		// (inherited fds), so no socket needs binding.
+		if s.BinPath != "" {
+			nf = &sandbox.NetForward{Binds: []sandbox.BindMount{{Path: filepath.Dir(s.BinPath), RO: true}}}
+		}
+	case len(masks) > 0 || spec.EnforcedEgress():
 		nf = &sandbox.NetForward{Self: sd.Self, Masks: masks}
 	}
 	if spec.EnforcedEgress() {
