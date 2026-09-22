@@ -191,6 +191,14 @@ func (e *Executor) Exec(ctx context.Context, spec Spec, data map[string]any) (ma
 		}
 		return e.execPluginEngine(ctx, spec, data)
 	}
+	// `code: file:<path>` loads the source from a file on the daemon (host
+	// interpreters, cli, go). Resolved here, after the plugin check, so a
+	// plugin engine still receives its code: verbatim over the wire.
+	resolved, ferr := resolveCodeFile(spec.Code)
+	if ferr != nil {
+		return nil, ferr
+	}
+	spec.Code = resolved
 	if spec.Host != nil {
 		return e.execRemote(ctx, spec, data)
 	}
