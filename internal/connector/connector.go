@@ -500,14 +500,21 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 	if err := buildStores(cfg, deps); err != nil {
 		return nil, err
 	}
-	// The kv, sql, memory, and conductor connectors (data verbs over the
-	// stores, the shared agent memory, and conductor's own lifecycle/
-	// operations) are always available — no connection block, no credentials
-	// (config.Validate reserves the names).
+	// The kv, sql, memory, conductor, blob, and handoff connectors (data verbs
+	// over the stores, the shared agent memory, conductor's own lifecycle/
+	// operations, artifacts, and a hand-off's own lifecycle) are always
+	// available — no connection block, no credentials (config.Validate reserves
+	// the names). handoff MUST be here: its `done` verb is auto-granted to every
+	// interactive hand-off (dispatch.EffectiveSkillPolicy) and the agent is told
+	// to call it (dispatch.HandoffGuidance), but the skill surface resolves and
+	// runs a verb through this registry (flow.GrantedVerbs / RunSkillVerb) — an
+	// unregistered handoff means the card never lists handoff.done and the call
+	// is refused as an unknown connector, which is exactly the "no handoff.done
+	// tool available" a hand-off agent hit when it tried to release itself.
 	for _, b := range []struct {
 		name string
 		decl *TypeDecl
-	}{{"kv", kvDecl}, {"sql", sqlDecl}, {"memory", memoryDecl}, {"workflow", workflowDecl}, {"conductor", conductorDecl}, {"blob", blobDecl}} {
+	}{{"kv", kvDecl}, {"sql", sqlDecl}, {"memory", memoryDecl}, {"workflow", workflowDecl}, {"conductor", conductorDecl}, {"blob", blobDecl}, {"handoff", handoffDecl}} {
 		if _, exists := r.byName[b.name]; exists {
 			continue
 		}
