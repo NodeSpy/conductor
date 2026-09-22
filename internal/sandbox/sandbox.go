@@ -142,8 +142,14 @@ func (s *Spec) Check(goos string, euid int, lookPath func(string) (string, error
 	case "user":
 		return need("sudo", "to switch to the sandbox user")
 	case "namespace":
+		// macOS: `namespace` is realized by Seatbelt (sandbox-exec), which
+		// ships on every Mac. No root guard needed — Seatbelt is a kernel
+		// sandbox, not a uid-mapping trick.
+		if goos == "darwin" {
+			return need("sandbox-exec", "to enter the macOS Seatbelt sandbox")
+		}
 		if goos != "linux" {
-			return fmt.Errorf("sandbox: isolation mode namespace is Linux-only (running on %s) — use mode user or container here", goos)
+			return fmt.Errorf("sandbox: isolation mode namespace needs Linux user namespaces or macOS Seatbelt (running on %s) — use mode user or container here", goos)
 		}
 		if euid == 0 && !s.AllowRoot {
 			return fmt.Errorf("sandbox: isolation mode namespace is not a privilege boundary when conductor runs as root — `unshare --user --map-current-user` maps root→root, leaving the sandboxed agent with real uid 0 and full CAP_SYS_ADMIN over the host; run the daemon as a non-root user, or use mode container. Set isolation `allow_root: true` to override (cleanup/limits only, NOT a security wall)")
@@ -193,6 +199,25 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 		}
 		return append([]string{"sudo", "-n", "-u", s.User, "--"}, argv...), nil
 	case "namespace":
+		// `namespace` is the OS-native least-privilege jail, backend chosen by
+		// GOOS: Linux user namespaces + pivot_root here, macOS Seatbelt
+		// (sandbox-exec) below. Both consume the SAME allow-list (the workdir +
+		// nf.Binds — fs: paths and the code/ctx temp dirs), so the config
+		// surface (mode/network/fs) is identical across OSes. Cgroup `limits:`
+		// have no macOS analog and are ignored there (Linux applies them via the
+		// systemd-run prefix below).
+		if CheckGOOS == "darwin" {
+			var binds []BindMount
+			if dir != "" {
+				binds = append(binds, BindMount{Path: dir})
+			}
+			if nf != nil {
+				binds = append(binds, nf.Binds...)
+			}
+			// deny+egress (enforced allowlist) is rejected on darwin at validate
+			// (no netns forwarder), so s.Deny here always means a full net cut.
+			return wrapSeatbelt(argv, binds, s.Deny), nil
+		}
 		prefix := s.systemdPrefix()
 		// A pivot_root fs-jail (Binds) needs CAP_SYS_ADMIN over the mount ns to
 		// mount/pivot; that requires mapping the daemon uid to root-IN-USERNS
