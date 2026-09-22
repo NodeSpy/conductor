@@ -112,6 +112,8 @@ func main() {
 		err = cmdPause(args, true)
 	case "resume":
 		err = cmdPause(args, false)
+	case "reload":
+		err = cmdReload(args)
 	case "update":
 		err = cmdUpdate(args)
 	case "service":
@@ -193,6 +195,7 @@ usage:
   conductor runs retry <id> [--from <step>] [--force-replay]  re-run a recorded execution (recorded inputs pinned)
   conductor watch [<run-id>] [--json]   tail the live run event stream (steps, gates, outcomes)
   conductor pause | resume              stop / resume dispatch at runtime (no restart)
+  conductor reload                      signal the running daemon to re-read its config (re-exec)
   conductor update [--force] [--tag vX]  self-update to the latest release (uses gh)
   conductor service install|sync|uninstall  manage the background service unit
   conductor connectors ls               list configured connectors: state, events, verbs
@@ -926,6 +929,25 @@ func cmdRun(args []string) error {
 	restartSoon := func() {
 		time.AfterFunc(2*time.Second, func() { applyUpdate(stop) })
 	}
+
+	// SIGHUP → reload the config by re-execing this same binary in place
+	// (config is read at boot, so a re-exec is the reload). The canonical
+	// "reread config" signal; `conductor reload` sends it. This is the same
+	// restart the conductor.reload verb triggers — a short grace lets any
+	// in-flight step checkpoint first.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				logf("reload requested (SIGHUP) — re-reading config (re-exec)")
+				restartSoon()
+			}
+		}
+	}()
 	connector.SetConductorOps(&connector.ConductorOps{
 		Update: func(context.Context) (bool, string, error) {
 			updated, tag, err := doUpdate(false, "")
@@ -1795,6 +1817,38 @@ func signalSweepNow(cfg *config.Config) error {
 		return fmt.Errorf("signal daemon (pid %d): %w", pid, err)
 	}
 	fmt.Printf("signaled conductor (pid %d) to run a sweep now\n", pid)
+	return nil
+}
+
+// cmdReload signals the running daemon to re-read its config. Config is read at
+// boot, so this is a re-exec in place (the same restart the conductor.reload
+// verb triggers) — in-flight steps checkpoint and the run resumes on the new
+// process.
+func cmdReload(args []string) error {
+	cfg, _, err := loadConfig(args)
+	if err != nil {
+		return err
+	}
+	return signalReload(cfg)
+}
+
+// signalReload sends SIGHUP to the running daemon (pid from the pidfile), the
+// canonical "reread config" signal, which the daemon handles by re-execing
+// itself so the new config loads at boot.
+func signalReload(cfg *config.Config) error {
+	p := pidPath(cfg)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return fmt.Errorf("read pidfile %s — is the daemon running? %w", p, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return fmt.Errorf("bad pidfile %s: %w", p, err)
+	}
+	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
+		return fmt.Errorf("signal daemon (pid %d): %w", pid, err)
+	}
+	fmt.Printf("signaled conductor (pid %d) to reload its config\n", pid)
 	return nil
 }
 

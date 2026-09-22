@@ -16,6 +16,7 @@ conductor runs <id>                        one run's step-by-step detail (also: 
 conductor runs retry <id> [--from <step>] [--force-replay]  re-run a recorded execution (recorded inputs pinned; succeeded steps need --force-replay)
 conductor watch [<run-id>] [--json]        tail the live run event stream (steps, gates, outcomes)
 conductor pause | resume                   stop / resume dispatch at runtime (no restart; also verbs: conductor.pause/resume)
+conductor reload                           tell the running daemon to re-read its config (SIGHUP → re-exec; also verb: conductor.reload)
 conductor update [--force] [--tag vX]      self-update to the latest release
 conductor service install|sync|uninstall   manage the background service unit
 conductor connectors ls                    each connector: resolved use:/origin, state, events, verbs, triggers
@@ -96,5 +97,9 @@ conductor version
 - **pause / resume** — the runtime kill switch (a control file, no restart);
   in config, disable one connector or trigger in place with its own
   `enabled: false` (there is no policy-level kill switch — see [[Policy]]).
+- **reload** — re-read the config without a manual restart. Sends `SIGHUP` to
+  the running daemon (pid from the pidfile), which re-execs itself in place so
+  the new config loads at boot; in-flight runs checkpoint and resume on the new
+  process. The same restart the `conductor.reload` verb triggers.
 
 Related: [[Configuration]] · [[Secrets]] · [[Migration]]
