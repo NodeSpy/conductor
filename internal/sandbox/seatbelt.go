@@ -1,6 +1,9 @@
 package sandbox
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // Seatbelt is the macOS backend for `mode: namespace` — the same
 // least-privilege intent the Linux pivot_root jail realizes, rendered as an
@@ -25,12 +28,22 @@ import "strings"
 // exec performs. Contents outside the allow-list stay denied; this is only the
 // machinery of running a program at all.
 //
-// NOTE: this allow-set is deliberately conservative and is the piece verified +
-// tightened on real macOS (a too-tight profile means the interpreter won't
-// start). file-read-metadata is allowed broadly so absolute-path resolution
-// works; file *contents* remain denied outside the allow-list, which is the
-// property that matters (a sandboxed step still cannot READ the daemon's
-// secrets, only observe that some path exists).
+// This allow-set was verified on real macOS (26.x, Apple Silicon): a shell,
+// /bin/echo, python3, and python urllib all launch and run under it, while a
+// path outside the allow-list stays unreadable. Two hard-won essentials:
+//   - `(allow file-read* (literal "/"))` — reading the ROOT inode; without it
+//     EVERY launch aborts (`Abort trap: 6`) because the loader reads "/". The
+//     literal grants only the root directory entry, not its subtree, so the
+//     jail holds.
+//   - file-read-metadata is allowed broadly so absolute-path resolution works;
+//     file *contents* stay denied outside the allow-list — the property that
+//     matters (a step cannot READ the daemon's secrets, only observe a path
+//     exists).
+//
+// Caller paths are symlink-resolved before they become subpath rules (see
+// resolveBinds): macOS temp/workdirs are `/var/…`, which the sandbox evaluates
+// as the canonical `/private/var/…`; an unresolved `/var` subpath silently
+// matches nothing.
 const seatbeltBase = `(version 1)
 (deny default)
 (allow process-fork)
@@ -39,6 +52,7 @@ const seatbeltBase = `(version 1)
 (allow sysctl-read)
 (allow mach-lookup)
 (allow file-read-metadata)
+(allow file-read* (literal "/"))
 (allow file-read*
   (subpath "/usr")
   (subpath "/bin")
@@ -46,6 +60,7 @@ const seatbeltBase = `(version 1)
   (subpath "/System")
   (subpath "/Library")
   (subpath "/private/var/db/dyld")
+  (subpath "/private/var/db/timezone")
   (subpath "/private/var/select")
   (subpath "/opt/homebrew")
   (subpath "/usr/local")
@@ -59,7 +74,8 @@ const seatbeltBase = `(version 1)
   (literal "/dev/dtracehelper")
   (literal "/dev/tty")
   (literal "/dev/stdout")
-  (literal "/dev/stderr"))
+  (literal "/dev/stderr")
+  (literal "/dev/autofs_nowait"))
 `
 
 // seatbeltProfile renders the SBPL profile for a launch: the fixed base, then
@@ -89,10 +105,31 @@ func seatbeltProfile(binds []BindMount, denyNetwork bool) string {
 
 // wrapSeatbelt builds the argv that runs argv under a generated profile:
 // `sandbox-exec -p <profile> <argv...>`. sandbox-exec takes the profile then
-// the command directly — there is no `--` separator (unlike unshare).
+// the command directly — there is no `--` separator (unlike unshare). Bind
+// paths are symlink-resolved first (see resolveBinds).
 func wrapSeatbelt(argv []string, binds []BindMount, denyNetwork bool) []string {
-	out := []string{"sandbox-exec", "-p", seatbeltProfile(binds, denyNetwork)}
+	out := []string{"sandbox-exec", "-p", seatbeltProfile(resolveBinds(binds), denyNetwork)}
 	return append(out, argv...)
+}
+
+// resolveBinds canonicalizes each bind path via EvalSymlinks so the SBPL
+// subpath rule matches the path the SANDBOX sees. On macOS a temp/workdir is
+// `/var/folders/…`, but `/var` is a symlink to `/private/var`; the sandbox
+// evaluates the resolved `/private/var/folders/…`, so an unresolved `/var`
+// subpath allows nothing. Best-effort: a path that can't be resolved (e.g.
+// doesn't exist yet) is left as-is. On Linux the bind paths are already real,
+// so this is a no-op there.
+func resolveBinds(binds []BindMount) []BindMount {
+	out := make([]BindMount, len(binds))
+	for i, b := range binds {
+		out[i] = b
+		if b.Path != "" {
+			if r, err := filepath.EvalSymlinks(b.Path); err == nil {
+				out[i].Path = r
+			}
+		}
+	}
+	return out
 }
 
 // sbplString quotes s as an SBPL string literal (Scheme-style: wrap in double

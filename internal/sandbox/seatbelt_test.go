@@ -24,6 +24,7 @@ func TestSeatbeltProfile(t *testing.T) {
 	}
 	must("(version 1)")
 	must("(deny default)")
+	must(`(allow file-read* (literal "/"))`) // root-inode read — without it every launch aborts on macOS
 	must(`(allow file-read* file-write* (subpath "/work/wt"))`)
 	must(`(allow file-read* (subpath "/tmp/code"))`) // RO → no file-write*
 	must(`(allow file-read* file-write* (subpath "/srv/media"))`)
