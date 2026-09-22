@@ -116,6 +116,27 @@ examples for every engine are in the catalog:
   private temp file and invokes it (`args:` appends extra argv); the ctx JSON
   arrives on stdin. `sh` is the portable default — never assume bash.
 
+### `code:` from a file
+
+Instead of inlining the source, a code step can load `code:` from a file on the
+daemon with a **`file:`** prefix — handy for a real script kept in its own file
+next to the config:
+
+```yaml
+steps:
+  - { id: transform, use: python3, code: "file:./scripts/transform.py" }
+  - { id: shape,     use: jq,      code: "file:./transforms/shape.jq" }
+```
+
+The file is read on the daemon (a leading `~/` is expanded), so it works the
+same for a step that runs remotely over `host:`. The `file:` prefix is
+**required** — a bare `code:` is always inline source, so a short command like
+`echo hi` or a jq expression like `keys` is never mistaken for a filename. It
+works for the host interpreters, `cli`, and `go`, and for the engine plugins
+that support it (`js`, `lua`, `risor`, `go-embed`, `starlark`, `cel`, `jq`,
+`yq`). The `wasm` engine takes a `file:` path to a `.wasm` module too — see the
+[plugin catalog](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/engines/wasm.md).
+
 ## The `cli` engine
 
 `use: cli` runs an argv you wrote, and bridges it onto the same contract
