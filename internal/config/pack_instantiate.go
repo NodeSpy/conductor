@@ -703,6 +703,24 @@ func substituteSettings(nodeDir string, settings map[string]string) (*PackManife
 	if err != nil {
 		return nil, err
 	}
+	// ${pack.dir} → the pack's own vendored directory (absolute), so a pack can
+	// invoke files it ships (e.g. `python3 ${pack.dir}/scripts/sync.py`) without
+	// the consumer supplying a path. Resolved through the same node-safe
+	// substitutor as settings; the value is a daemon-computed path, not
+	// pack/user-controlled.
+	packDir := nodeDir
+	if abs, aerr := filepath.Abs(nodeDir); aerr == nil {
+		packDir = abs
+	}
+	raw, err = SubstituteRefs(raw, packRefRE, func(ref string) (string, bool) {
+		if m := packRefRE.FindStringSubmatch(ref); len(m) == 2 && m[1] == "dir" {
+			return packDir, true
+		}
+		return "", false
+	})
+	if err != nil {
+		return nil, err
+	}
 	// The SHARED substitutor (settings.go) — the same one the main config's
 	// own `settings:` block goes through, so the syntax, the iteration bound,
 	// the leave-unknown-refs rule, and above all the node-not-text
