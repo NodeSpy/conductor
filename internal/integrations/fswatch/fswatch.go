@@ -13,13 +13,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/debounce"
 )
 
 func init() { core.Register("fswatch", newIntegration) }
@@ -91,23 +91,16 @@ func (w Watch) matches(name string, op fsnotify.Op) bool {
 	return err == nil && ok
 }
 
-// timer is the subset of *time.Timer the debouncer needs; a fake stands in for
-// deterministic tests.
-type timer interface {
-	Reset(time.Duration) bool
-	Stop() bool
+// fsEvent is the per-watch debounce payload: the last matching event.
+type fsEvent struct {
+	path string
+	op   string
 }
-
-type newTimerFn func(d time.Duration, f func()) timer
-
-func realTimer(d time.Duration, f func()) timer { return time.AfterFunc(d, f) }
 
 // Integration implements core.Integration for one fswatch instance.
 type Integration struct {
 	name string
 	cfg  Config
-	// newTimer is the debounce timer constructor; swapped in tests.
-	newTimer newTimerFn
 }
 
 func newIntegration(name string, decode func(any) error) (core.Integration, error) {
@@ -115,7 +108,7 @@ func newIntegration(name string, decode func(any) error) (core.Integration, erro
 	if err := decode(&cfg); err != nil {
 		return nil, fmt.Errorf("fswatch[%s]: decode config: %w", name, err)
 	}
-	return &Integration{name: name, cfg: cfg, newTimer: realTimer}, nil
+	return &Integration{name: name, cfg: cfg}, nil
 }
 
 // Name returns the instance name.
@@ -180,55 +173,6 @@ func (g *Integration) trigger(w Watch, path, op string) core.Trigger {
 	}
 }
 
-// watchState is the per-watch debounce state: the last matching event and the
-// timer that fires one Trigger once events go quiet.
-type watchState struct {
-	mu       sync.Mutex
-	t        timer
-	lastPath string
-	lastOp   string
-}
-
-// debouncer collapses a burst of matching events per watch into a single fire
-// once the watch has been quiet for its debounce window. It is the whole
-// event-settling logic, pulled out of Start so it can be tested with a fake
-// timer instead of real filesystem timing.
-type debouncer struct {
-	watches  []Watch
-	newTimer newTimerFn
-	fireFn   func(idx int, path, op string)
-	states   []*watchState
-}
-
-func newDebouncer(watches []Watch, nt newTimerFn, fire func(idx int, path, op string)) *debouncer {
-	states := make([]*watchState, len(watches))
-	for i := range states {
-		states[i] = &watchState{}
-	}
-	return &debouncer{watches: watches, newTimer: nt, fireFn: fire, states: states}
-}
-
-// arm records the triggering event and (re)starts the watch's debounce timer,
-// so rapid events for the same watch collapse into one fire once quiet.
-func (d *debouncer) arm(idx int, path, op string) {
-	wc := d.watches[idx]
-	st := d.states[idx]
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.lastPath, st.lastOp = path, op
-	fire := func() {
-		st.mu.Lock()
-		p, o := st.lastPath, st.lastOp
-		st.mu.Unlock()
-		d.fireFn(idx, p, o)
-	}
-	if st.t == nil {
-		st.t = d.newTimer(wc.debounce(), fire)
-	} else {
-		st.t.Reset(wc.debounce())
-	}
-}
-
 // Start builds one fsnotify watcher over every watch's tree and emits a
 // debounced Trigger per watch as matching files settle. Returns when ctx is
 // cancelled (the stop signal — there is no Stop method).
@@ -242,9 +186,11 @@ func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 	// dirWatch maps a watched directory to the index of the watch it belongs to,
 	// so an event's directory resolves back to its watch config.
 	dirWatch := map[string]int{}
-	deb := newDebouncer(g.cfg.Watches, g.newTimer, func(idx int, path, op string) {
-		emit(ctx, g.trigger(g.cfg.Watches[idx], path, op))
-	})
+	deb := debounce.New(nil,
+		func(idx int) time.Duration { return g.cfg.Watches[idx].debounce() },
+		func(idx int, ev fsEvent) { emit(ctx, g.trigger(g.cfg.Watches[idx], ev.path, ev.op)) },
+	)
+	arm := func(idx int, path, op string) { deb.Arm(idx, fsEvent{path: path, op: op}) }
 
 	add := func(dir string, idx int) {
 		if err := w.Add(dir); err != nil {
@@ -285,8 +231,6 @@ func (g *Integration) Start(ctx context.Context, emit core.EmitFunc) error {
 		addTree(wc.Path, i)
 	}
 	log.Printf("fswatch[%s]: %d watch(es), %d dir(s)", g.name, len(g.cfg.Watches), len(dirWatch))
-
-	arm := deb.arm
 
 	for {
 		select {
