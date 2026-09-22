@@ -63,6 +63,9 @@ type Spec struct {
 	// separation. Default false = Check refuses namespace mode as root
 	// (#36 iso-review round 2, item 2).
 	AllowRoot bool
+	// FS is the filesystem allow-list: extra paths bound into the sandbox
+	// (pivot_root jail under namespace, `-v path:path` under container).
+	FS []string
 }
 
 // FromConfig flattens an IsolationConfig. nil in, nil out.
@@ -70,7 +73,7 @@ func FromConfig(c *config.IsolationConfig) *Spec {
 	if c == nil {
 		return nil
 	}
-	s := &Spec{Mode: c.Mode, User: c.User, Privileged: c.Privileged, AllowRoot: c.AllowRoot}
+	s := &Spec{Mode: c.Mode, User: c.User, Privileged: c.Privileged, AllowRoot: c.AllowRoot, FS: c.FS}
 	if c.Container != nil {
 		s.Image = c.Container.Image
 		s.Engine = c.Container.Engine
@@ -191,14 +194,33 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 		return append([]string{"sudo", "-n", "-u", s.User, "--"}, argv...), nil
 	case "namespace":
 		prefix := s.systemdPrefix()
-		prefix = append(prefix, "unshare", "--user", "--map-current-user",
+		// A pivot_root fs-jail (Binds) needs CAP_SYS_ADMIN over the mount ns to
+		// mount/pivot; that requires mapping the daemon uid to root-IN-USERNS
+		// (--map-root-user). --map-current-user maps to a non-root uid, whose
+		// execve clears effective caps, so every mount EPERMs (this is what
+		// defeated the old overmount mask). The payload still runs as the real
+		// daemon uid on the host, and RunEnter drops the mount privilege before
+		// exec. No jail ⇒ keep --map-current-user (legacy mask/plugin path).
+		userMap := "--map-current-user"
+		jailed := nf != nil && len(nf.Binds) > 0
+		if jailed {
+			userMap = "--map-root-user"
+		}
+		prefix = append(prefix, "unshare", "--user", userMap,
 			"--pid", "--fork", "--mount-proc", "--kill-child")
 		if s.Deny {
 			prefix = append(prefix, "--net")
 		}
 		prefix = append(prefix, "--")
-		if nf != nil && (nf.UnixSocket != "" || len(nf.Masks) > 0) {
+		if nf != nil && (nf.UnixSocket != "" || len(nf.Masks) > 0 || jailed) {
 			prefix = append(prefix, nf.Self, "sandbox-net")
+			for _, b := range nf.Binds {
+				flag := "--bind"
+				if b.RO {
+					flag = "--bind-ro"
+				}
+				prefix = append(prefix, flag, b.Path)
+			}
 			for _, m := range nf.Masks {
 				prefix = append(prefix, "--mask", m)
 			}
@@ -215,6 +237,11 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 		out := []string{s.engine(), "run", "--rm", "-i"}
 		if dir != "" {
 			out = append(out, "-v", dir+":"+dir, "-w", dir)
+		}
+		for _, p := range s.FS {
+			if p != "" {
+				out = append(out, "-v", p+":"+p)
+			}
 		}
 		if s.Deny {
 			out = append(out, "--network=none")

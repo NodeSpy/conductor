@@ -28,21 +28,38 @@ import (
 // empty, so the port is always free there.
 const ForwardAddr = "127.0.0.1:18080"
 
-// NetForward carries the enforced-egress wiring into WrapLocal: the path of
-// this conductor binary (re-executed inside the sandbox as the forwarder)
-// and the egress proxy's unix socket.
+// BindMount is one entry of a namespace-jail ALLOW-LIST: a host path made
+// visible inside the pivot_root'd sandbox at the same path. RO entries are
+// remounted read-only. The jail contains ONLY these paths (plus the base
+// system + /proc + /dev + /tmp buildJail sets up) — the daemon's own state and
+// config are hidden by ABSENCE, never bound in, which is why the jail needs no
+// mask overmounts (and dodges the EPERM those hit under an unprivileged
+// user namespace).
+type BindMount struct {
+	Path string // host path, mounted at the same path inside the jail
+	RO   bool   // remount read-only after binding
+}
+
+// NetForward carries the in-sandbox wiring into WrapLocal: the path of this
+// conductor binary (re-executed inside the sandbox as `conductor sandbox-net`),
+// the egress proxy's unix socket (enforced egress), and either a pivot_root
+// allow-list (Binds — the fs jail) or the legacy deny-list Masks. Binds and
+// Masks are mutually exclusive; when Binds is set the launch is jailed and the
+// unshare maps the daemon uid to root-in-userns so the mounts are permitted.
 type NetForward struct {
-	Self       string   // conductor's own executable path
-	UnixSocket string   // the proxy's unix socket (daemon side); "" = no net forward
-	Masks      []string // daemon paths to hide inside the mount namespace (#36 iso-review H7)
+	Self       string      // conductor's own executable path
+	UnixSocket string      // the proxy's unix socket (daemon side); "" = no net forward
+	Masks      []string    // legacy: daemon paths to overmount away (plugin path; #36 iso-review H7)
+	Binds      []BindMount // fs-jail allow-list to pivot_root into ("" = no jail)
 }
 
 // EnterOpts is the `conductor sandbox-net` helper's configuration.
 type EnterOpts struct {
-	Listen string   // TCP address to serve inside the sandbox ("" = none)
-	Unix   string   // the egress proxy's unix socket path
-	Masks  []string // paths to overmount away before exec (#36 iso-review H7)
-	Argv   []string // the real launch to exec once the plumbing is up
+	Listen string      // TCP address to serve inside the sandbox ("" = none)
+	Unix   string      // the egress proxy's unix socket path
+	Masks  []string    // legacy: paths to overmount away before exec (#36 iso-review H7)
+	Binds  []BindMount // fs-jail allow-list; non-empty ⇒ pivot_root jail instead of masks
+	Argv   []string    // the real launch to exec once the plumbing is up
 }
 
 // RunEnter is the `conductor sandbox-net` entry point: bring the sandbox
@@ -55,13 +72,26 @@ func RunEnter(opt EnterOpts) int {
 		fmt.Fprintln(os.Stderr, "sandbox-net: nothing to run (missing -- argv)")
 		return 2
 	}
-	// Masking first: the daemon's own files disappear from this mount
-	// namespace before anything else runs. Fail closed — a mask that cannot
-	// be applied must not silently leave the files readable.
-	for _, m := range opt.Masks {
-		if err := maskPath(m); err != nil {
-			fmt.Fprintf(os.Stderr, "sandbox-net: mask %s: %v\n", m, err)
+	// Filesystem confinement first — before any forwarder or exec. Fail closed:
+	// a jail/mask that cannot be applied must NOT silently leave the host fs
+	// (and the daemon's secrets) readable.
+	//
+	// Two mechanisms: the pivot_root ALLOW-LIST jail (Binds — the strong path,
+	// hides everything not declared, used for code steps) OR the legacy
+	// deny-list Masks (overmount specific daemon dirs, used by the plugin path).
+	// They are mutually exclusive; Binds wins when both are somehow present.
+	jailed := len(opt.Binds) > 0
+	if jailed {
+		if err := buildJail(opt.Binds); err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-net: jail: %v\n", err)
 			return 1
+		}
+	} else {
+		for _, m := range opt.Masks {
+			if err := maskPath(m); err != nil {
+				fmt.Fprintf(os.Stderr, "sandbox-net: mask %s: %v\n", m, err)
+				return 1
+			}
 		}
 	}
 	if opt.Listen != "" {
@@ -83,18 +113,20 @@ func RunEnter(opt EnterOpts) int {
 		defer ln.Close()
 		go serveForward(ln, opt.Unix)
 	}
-	// Privilege drop before exec (#36 iso-review round 2, item 1): the masks
-	// above are overmounts in THIS mount namespace, whose owning user namespace
-	// (the outer `unshare --user`) still grants the process CAP_SYS_ADMIN — so a
-	// plain exec would hand the untrusted payload the power to `umount` a mask
-	// and read the daemon file underneath. When masks are in force, re-exec the
-	// payload through a SECOND, nested user namespace it does NOT own the mount
-	// namespace from: it holds caps only over that new namespace, none over the
-	// mount ns where the masks live, so umount/remount of a mask is refused by
-	// the kernel (and mounts inherited into the less-privileged ns are locked,
-	// closing the make-a-new-mount-ns-and-umount-there bypass). Fail closed —
-	// if the hop can't be set up the payload does not run unprotected.
-	cmd := execChild(opt.Argv, len(opt.Masks) > 0)
+	// Privilege drop before exec (#36 iso-review round 2, item 1): the jail /
+	// masks above were applied in THIS mount namespace, whose owning user
+	// namespace still grants the process CAP_SYS_ADMIN — so a plain exec would
+	// hand the untrusted payload the power to remount a read-only bind, umount a
+	// mask, or pivot_root back out of the jail. When any fs confinement is in
+	// force, re-exec the payload through a SECOND, nested user namespace it does
+	// NOT own the mount namespace from: it holds caps only over that new
+	// namespace, none over the mount ns the jail/masks live in, so umount /
+	// remount / pivot is refused by the kernel (and mounts inherited into the
+	// less-privileged ns are locked, closing the make-a-new-mount-ns bypass).
+	// Fail closed — if the hop can't be set up the payload does not run
+	// unprotected. (Proven end-to-end: a dropped child can read allow-listed
+	// paths but cannot remount /usr rw or bind / — see the sandbox spikes.)
+	cmd := execChild(opt.Argv, jailed || len(opt.Masks) > 0)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.Env = os.Environ()
 	if err := cmd.Run(); err != nil {

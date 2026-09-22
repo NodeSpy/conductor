@@ -44,6 +44,22 @@ authors — step `uses:`, hook `uses:`, trigger sources, `session.end_on`,
 instantiate. A pack cannot reach a connector, or a store, that its manifest
 does not name. `conductor.*` (daemon control) is refused outright.
 
+**Pack-shipped code is confined by default.** A pack can also ship *executable*
+code — a `use: cli`/`command:` or `run: <interpreter>` step that runs a program
+(often a script it vendors, referenced via `${pack.dir}`). Unless that step
+declares its own `isolation:`, conductor synthesizes the least-privilege
+namespace [[Isolation|filesystem jail]] for it: pid-isolated, network denied,
+and able to see only its workdir + interpreter essentials — the daemon's
+state/config/secrets are hidden by absence. A pack that legitimately needs the
+network or an external directory declares it (`isolation: { network: {…},
+fs: [...] }`); a pack **cannot** declare its own code trusted, so it can't
+switch its own jail off. Turning the seatbelt off is the *consumer's* call —
+`packs: { <inst>: { steps: { <role>: { trust: full } } } }`. `conductor pack
+plan` lists every code step a pack ships and how confined it is, so arming one
+is an informed decision. Enforcement is best-effort for the synthesized default
+(a box that can't build the jail runs the step with a warning); an explicit
+`isolation:` fails closed.
+
 ## NOT a boundary: an agent sharing the daemon's user
 
 **This is the important one.**

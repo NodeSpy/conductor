@@ -133,6 +133,10 @@ func (c *Config) validateSteps() error {
 				return
 			}
 		}
+		if s.Trust != "" && s.Trust != "full" {
+			fail(fmt.Errorf("config: %s: step trust: must be \"full\" or unset, got %q", where, s.Trust))
+			return
+		}
 		if err := c.validateStepIsolation(where, *s); err != nil {
 			fail(err)
 			return

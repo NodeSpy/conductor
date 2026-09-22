@@ -298,16 +298,31 @@ engines:
 #                      any Unix with the sudoers rule.
 #   mode: namespace  — Linux user/pid/mount namespaces (unshare), cgroup
 #                      limits: via systemd-run; network: {deny: true} adds
-#                      a network namespace (structurally no network). The
-#                      daemon's state/config dirs are MASKED from the mount
-#                      view by default; privileged: true is the opt-out.
-#                      As ROOT (euid 0) the user namespace maps root→root and is
-#                      NOT a privilege boundary, so conductor REFUSES namespace
-#                      mode as root — run a non-root daemon or mode: container.
-#                      allow_root: true forces it anyway (cleanup/limits only,
-#                      never a security wall).
+#                      a network namespace (structurally no network). For a
+#                      CODE step (use: cli / run: <interp>) this is a real
+#                      pivot_root filesystem JAIL: only the workdir, interpreter
+#                      essentials, and any fs: paths are visible — the daemon's
+#                      state/config/secrets are hidden by absence (no docker
+#                      needed). For a runtime launch the daemon's state/config
+#                      dirs are MASKED instead; privileged: true is the opt-out.
+#                      As ROOT (euid 0) the user namespace is NOT a privilege
+#                      boundary, so conductor REFUSES namespace mode as root —
+#                      run a non-root daemon or mode: container. allow_root: true
+#                      forces it anyway (cleanup/limits only, never a wall).
 #   mode: container  — docker/podman run with the worktree bind-mounted;
 #                      deny: true → --network=none.
+#
+# fs: [ "/path", ... ] — a filesystem ALLOW-LIST: extra host paths the sandbox
+#   may read/write, bound in at the same path. Under mode namespace it is a real
+#   boundary (the pivot_root jail); under mode container each is a -v bind.
+#   Needs a structural mode (rejected under mode: user, where it is a no-op).
+#
+# Pack-shipped CODE (use: cli / run: on a step a PACK ships) is CONFINED BY
+# DEFAULT: conductor synthesizes { mode: namespace, network: { deny: true } }
+# (best-effort) unless the step declares its own isolation:. A pack cannot
+# declare its own code trusted; the consumer opts a pack step out with
+#   packs: { <inst>: { steps: { <role>: { trust: full } } } }
+# `conductor pack plan` lists every code step a pack ships and its confinement.
 #
 # network.egress routes the runtime's HTTP(S) traffic through conductor's
 # filtering proxy (per-dispatch credential required): listed "host:port" /

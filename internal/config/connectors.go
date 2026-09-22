@@ -395,6 +395,15 @@ type IsolationConfig struct {
 	// allows only matching host:port targets. `deny: true` → structurally no
 	// network (namespace/container modes).
 	Network *IsolationNetwork `yaml:"network,omitempty"`
+	// FS is the filesystem ALLOW-LIST for the sandbox: extra host paths the
+	// launch may read/write, bound in at the same path. Under `mode: namespace`
+	// it is a REAL boundary (the pivot_root jail shows ONLY the workdir, the
+	// interpreter essentials, and these paths — everything else, the daemon's
+	// own state/config included, is hidden by absence). Under `mode: container`
+	// each entry becomes a `-v path:path` bind. Empty ⇒ just the workdir (and,
+	// for a code step, its own code/ctx temp dirs). A code step reading an
+	// external directory (e.g. a media library) declares it here.
+	FS []string `yaml:"fs,omitempty"`
 }
 
 // ContainerIsolation configures isolation mode: container.
@@ -1013,6 +1022,19 @@ type Step struct {
 	// Isolation sandboxes this step's launches (#36 §15). Wins over the
 	// runtime's own isolation:.
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// Trust, on a code step a PACK ships, opts out of the confined-by-default
+	// sandbox: "full" runs the step's code with no synthesized isolation (the
+	// deliberate footgun); "" (default) keeps the least-privilege namespace
+	// jail conductor synthesizes for pack-authored code. Ignored on an
+	// operator's own steps — those are never auto-confined, being the
+	// operator's own code.
+	Trust string `yaml:"trust,omitempty"`
+	// IsolationDefaulted marks an Isolation conductor SYNTHESIZED for a pack's
+	// code step (confined-by-default), as opposed to one the author/operator
+	// wrote. Enforcement is best-effort: a box that cannot build the namespace
+	// jail runs the step bare with a warning, whereas an explicit isolation:
+	// fails closed. Not serialized — it is a load-time derivation.
+	IsolationDefaulted bool `yaml:"-"`
 	// OutcomeFeedback opts this step into guidance tuning (#36 §18): a
 	// one-line track-record summary for this step's identity is appended to
 	// its guidance.

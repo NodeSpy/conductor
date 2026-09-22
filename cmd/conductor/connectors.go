@@ -191,7 +191,7 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		VaultVals: vaults.PreloadListable(context.Background()),
 		Store:     flowStore, Notif: flowNotif, Log: logf, DryRun: dryRun,
 		Blobs: blobs, Events: events,
-		Code: &code.Executor{Engines: engines},
+		Code: &code.Executor{Engines: engines, Sandbox: codeSandboxDeps()},
 	})
 	stackOK = true // ownership of pluginMgr passes to the returned stack
 	return &flowStack{

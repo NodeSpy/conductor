@@ -49,6 +49,36 @@ func pluginDeps(sec *secrets.Resolver, audit func(map[string]any)) plugin.Deps {
 	}
 }
 
+// codeSandboxDeps builds the sandbox.LocalWrapDeps a code step's OWN
+// `isolation:` block wraps through (internal/code's execCLILocal/
+// execHostLocal) — the same egress-proxy/mask/self-exe wiring pluginDeps
+// hands plugin subprocesses and controller.prepareLaunch applies to an agent
+// runtime's own local launch. Same fallback as pluginDeps, and for the same
+// reason: buildFlowStack (which constructs the code.Executor this feeds) runs
+// BEFORE cmdRun wires controller.EgressProxyFor/EgressProxyUnix/
+// DaemonMaskPaths, so a code step with isolation: gets its own private
+// sandbox.ProxyManager instead of a nil seam it would otherwise fail closed
+// against.
+func codeSandboxDeps() sandbox.LocalWrapDeps {
+	egressUnix, egressAddr := controller.EgressProxyUnix, controller.EgressProxyFor
+	if egressUnix == nil || egressAddr == nil {
+		pm := sandbox.NewProxyManager(func(key, hostport string) {
+			logf("code step egress denied: %s -> %s", key, hostport)
+		})
+		egressUnix, egressAddr = pm.UnixEndpoint, pm.Endpoint
+	}
+	masks := controller.DaemonMaskPaths
+	if len(masks) == 0 {
+		masks = []string{config.StateDir(), configDir()}
+	}
+	return sandbox.LocalWrapDeps{
+		SelfExe:    os.Executable,
+		MaskPaths:  masks,
+		EgressAddr: egressAddr,
+		EgressUnix: egressUnix,
+	}
+}
+
 // pluginManagerFor builds the plugin manager for a loaded config, joining the
 // config's DERIVED plugin set (non-builtin `use:` references) with local install
 // state. It touches no network: install state is read offline.

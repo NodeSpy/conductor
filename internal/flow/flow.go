@@ -1324,7 +1324,8 @@ func (r *Runner) execCode(ctx context.Context, t core.Trigger, step config.Step,
 	// rather than re-deriving it (see code.Spec.Plugin).
 	spec := code.Spec{Run: engine, Plugin: class == config.EnginePlugin,
 		Command: command, Code: step.Code, Args: args, Env: env, WorkDir: workdir,
-		DataGuard: r.planDataGuard(ctx, t)}
+		DataGuard: r.planDataGuard(ctx, t), Isolation: step.Isolation,
+		IsolationDefaulted: step.IsolationDefaulted}
 	if target, terr := r.hostTarget(step); terr != nil {
 		return nil, "", terr
 	} else if target != nil {

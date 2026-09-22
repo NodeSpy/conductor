@@ -183,6 +183,21 @@ func defaultEngineIsolation() *IsolationConfig {
 	}
 }
 
+// defaultPackCodeIsolation is the sandbox a pack-authored cli/host code step
+// gets when it declares none (confined-by-default, §15): the same
+// least-privilege namespace jail an untrusted engine gets — pid-isolated,
+// network denied, and (via the pivot_root allow-list) only the workdir and the
+// step's own code/ctx temp dirs visible, the daemon's state/config hidden by
+// absence. A pack that legitimately needs the network or an external path
+// declares its own isolation: with `network`/`fs`; one the operator fully
+// trusts opts out with `trust: full`. Best-effort (Step.IsolationDefaulted).
+func defaultPackCodeIsolation() *IsolationConfig {
+	return &IsolationConfig{
+		Mode:    "namespace",
+		Network: &IsolationNetwork{Deny: true},
+	}
+}
+
 // PluginRefsComplete reports whether PluginRefs may be treated as the COMPLETE
 // desired set — the question anything that PRUNES install state has to answer
 // before it removes a record.
