@@ -384,6 +384,16 @@ func printPackPlan(cfg *config.Config) {
 		printList("workflows", workflows)
 		printList("checks", checks)
 
+		// Executable code the pack SHIPS + its confinement posture, so arming a
+		// code-running pack is an informed decision (§15). A pack's cli/host code
+		// steps run arbitrary programs on the box; each line says how confined.
+		if code := packCodePostures(cfg, prefix); len(code) > 0 {
+			fmt.Printf("  runs code (%d step(s)):\n", len(code))
+			for _, line := range code {
+				fmt.Printf("    %s\n", line)
+			}
+		}
+
 		fmt.Println("  triggers:")
 		for _, tr := range cfg.Triggers {
 			if !strings.HasPrefix(tr.Name, prefix) {
@@ -403,6 +413,98 @@ func printPackPlan(cfg *config.Config) {
 	for _, w := range cfg.PackWarnings() {
 		fmt.Printf("warning: %s\n", w)
 	}
+}
+
+// packCodePostures returns one "step: <confinement>" line per cli/host code
+// step a pack instance (prefix "<ns>/") ships, sorted. Agent steps, helpers,
+// and plugin-engine steps (sandboxed by their own engines: block) are omitted.
+func packCodePostures(cfg *config.Config, prefix string) []string {
+	var out []string
+	add := func(label string, s config.Step) {
+		_, class := s.StepEngine()
+		if class != config.EngineCLI && class != config.EngineHost {
+			return
+		}
+		out = append(out, fmt.Sprintf("%-28s %s", label, codeConfinement(s)))
+	}
+	var walk func(label string, s config.Step)
+	walk = func(label string, s config.Step) {
+		add(label, s)
+		if s.Parallel != nil {
+			for bi := range s.Parallel.Branches {
+				for si := range s.Parallel.Branches[bi] {
+					walk(fmt.Sprintf("%s[%d.%d]", label, bi+1, si), s.Parallel.Branches[bi][si])
+				}
+			}
+		}
+		if s.Compensate != nil {
+			walk(label+"~compensate", *s.Compensate)
+		}
+	}
+	for name := range cfg.Workflows {
+		if strings.HasPrefix(name, prefix) {
+			wf := cfg.Workflows[name]
+			for i := range wf.Steps {
+				walk(name+"/"+config.StepSlot(wf.Steps[i], i), wf.Steps[i])
+			}
+		}
+	}
+	for name := range cfg.Checks {
+		if strings.HasPrefix(name, prefix) {
+			walk(name, cfg.Checks[name])
+		}
+	}
+	for _, tr := range cfg.Triggers {
+		if strings.HasPrefix(tr.Name, prefix) {
+			for i := range tr.Steps {
+				walk(tr.Name+"/"+config.StepSlot(tr.Steps[i], i), tr.Steps[i])
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// codeConfinement describes how a single code step is confined, for pack plan.
+func codeConfinement(s config.Step) string {
+	if s.Host != "" || s.SSH != nil {
+		return "UNCONFINED — remote (host:/ssh:)"
+	}
+	if s.Trust == "full" {
+		return "UNCONFINED — trust: full"
+	}
+	iso := s.Isolation
+	if iso == nil {
+		return "UNCONFINED"
+	}
+	var parts []string
+	switch iso.Mode {
+	case "namespace":
+		if s.IsolationDefaulted {
+			parts = append(parts, "namespace jail (default)")
+		} else {
+			parts = append(parts, "namespace jail")
+		}
+	case "container":
+		parts = append(parts, "container")
+	case "user":
+		parts = append(parts, "user "+iso.User)
+	default:
+		parts = append(parts, iso.Mode)
+	}
+	if n := iso.Network; n == nil {
+		parts = append(parts, "network unrestricted")
+	} else if n.Deny && len(n.Egress) > 0 {
+		parts = append(parts, "egress: "+strings.Join(n.Egress, ","))
+	} else if n.Deny {
+		parts = append(parts, "network denied")
+	} else if len(n.Egress) > 0 {
+		parts = append(parts, "egress(advisory): "+strings.Join(n.Egress, ","))
+	}
+	if len(iso.FS) > 0 {
+		parts = append(parts, "fs: "+strings.Join(iso.FS, ","))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // cmdPackLint validates a pack at a local path is well-formed (§18).

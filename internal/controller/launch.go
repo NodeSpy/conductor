@@ -3,9 +3,6 @@ package controller
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
-	"strings"
 	"sync"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -41,15 +38,6 @@ var launchSelfExe = os.Executable
 // the isolation block is the explicit opt-out. Wired once at boot by
 // cmd/conductor.
 var DaemonMaskPaths []string
-
-// launchGOOS / launchLookPath feed sandbox.Spec.Check's platform probe —
-// package vars so tests can exercise the isolation paths without the wrapper
-// binaries (sudo/unshare/docker) installed.
-var (
-	launchGOOS     = runtime.GOOS
-	launchGeteuid  = os.Geteuid
-	launchLookPath = exec.LookPath
-)
 
 // launchOpts carries the per-dispatch isolation decision to prepareLaunch.
 type launchOpts struct {
@@ -134,68 +122,40 @@ func resumeOpts(runtimeIso *config.IsolationConfig, agentAuthored bool) launchOp
 // `hosts:` isolation is the wall there).
 func prepareLaunch(host, dir string, env, argv []string, opt launchOpts) (wrappedArgv []string, localDir string, localEnv []string, remote bool, err error) {
 	spec := sandbox.FromConfig(opt.iso)
-	allow, useProxy := spec.ProxyPolicy()
-	if !useProxy && opt.agentAuthored && (spec == nil || !spec.Deny) {
-		// Deny-by-default: an agent-authored dispatch with no explicit
-		// network policy routes through the deny-all proxy (audited).
-		allow, useProxy = nil, true
-	}
 
 	if host == "" {
-		if useProxy {
-			if EgressProxyFor == nil {
-				return nil, "", nil, false, fmt.Errorf("controller: launch needs an egress proxy (isolation network policy, or agent-authored deny-by-default) but none is wired")
+		wrapSpec := spec
+		if _, useProxy := spec.ProxyPolicy(); !useProxy && opt.agentAuthored && (spec == nil || !spec.Deny) {
+			// Deny-by-default: an agent-authored dispatch with no explicit
+			// network policy routes through the deny-all proxy (audited). A
+			// synthetic spec carrying HasEgress with an empty allowlist makes
+			// WrapLocalCommand's own ProxyPolicy() call resolve to exactly
+			// that — an empty-allowlist advisory proxy — while every other
+			// field (Mode, Privileged, …) passes through unchanged so the
+			// rest of the wrap (namespace, masks, …) behaves exactly as the
+			// operator configured it.
+			derived := &sandbox.Spec{}
+			if spec != nil {
+				cp := *spec
+				derived = &cp
 			}
-			addr, cred, revoke, perr := EgressProxyFor(allow)
-			if perr != nil {
-				return nil, "", nil, false, fmt.Errorf("controller: egress proxy: %w", perr)
-			}
-			if opt.onEgressCred != nil && revoke != nil {
-				opt.onEgressCred(revoke)
-			}
-			env = append(append([]string(nil), env...), sandbox.ProxyEnv(addr, cred)...)
+			derived.HasEgress, derived.Egress = true, nil
+			wrapSpec = derived
 		}
-		var nf *sandbox.NetForward
-		needMasks := spec != nil && spec.Mode == "namespace" && !spec.Privileged && len(DaemonMaskPaths) > 0
-		if needMasks {
-			self, serr := launchSelfExe()
-			if serr != nil {
-				return nil, "", nil, false, fmt.Errorf("controller: resolve conductor binary for sandbox masking: %w", serr)
-			}
-			nf = &sandbox.NetForward{Self: self, Masks: append([]string(nil), DaemonMaskPaths...)}
+		deps := sandbox.LocalWrapDeps{
+			SelfExe:    launchSelfExe,
+			MaskPaths:  DaemonMaskPaths,
+			EgressAddr: EgressProxyFor,
+			EgressUnix: EgressProxyUnix,
 		}
-		if spec.EnforcedEgress() {
-			// The STRUCTURAL allowlist (#36 iso-review C1): the sandbox has no
-			// network; its only path out is the forwarder into conductor's
-			// proxy over a unix socket. Fails closed when unwired.
-			if EgressProxyUnix == nil {
-				return nil, "", nil, false, fmt.Errorf("controller: enforced egress (deny+allowlist) needs the proxy's unix endpoint but none is wired")
-			}
-			sock, cred, revoke, perr := EgressProxyUnix(spec.Egress)
-			if perr != nil {
-				return nil, "", nil, false, fmt.Errorf("controller: egress proxy socket: %w", perr)
-			}
-			if opt.onEgressCred != nil && revoke != nil {
-				opt.onEgressCred(revoke)
-			}
-			if nf == nil {
-				self, serr := launchSelfExe()
-				if serr != nil {
-					return nil, "", nil, false, fmt.Errorf("controller: resolve conductor binary for sandbox-net: %w", serr)
-				}
-				nf = &sandbox.NetForward{Self: self}
-			}
-			nf.UnixSocket = sock
-			env = append(append([]string(nil), env...), sandbox.ProxyEnv(sandbox.ForwardAddr, cred)...)
-		}
-		if err := spec.Check(launchGOOS, launchGeteuid(), launchLookPath); err != nil {
-			return nil, "", nil, false, err
-		}
-		wrapped, werr := spec.WrapLocal(argv, dir, envKeys(env), nf)
+		wrapped, wrappedEnv, cleanup, werr := sandbox.WrapLocalCommand(wrapSpec, argv, dir, env, deps)
 		if werr != nil {
 			return nil, "", nil, false, werr
 		}
-		return wrapped, dir, env, false, nil
+		if opt.onEgressCred != nil {
+			opt.onEgressCred(cleanup)
+		}
+		return wrapped, dir, wrappedEnv, false, nil
 	}
 
 	if HostArgvPrefix == nil {
@@ -213,16 +173,4 @@ func prepareLaunch(host, dir string, env, argv []string, opt launchOpts) (wrappe
 	wrapped = append(wrapped, prefix...)
 	wrapped = append(wrapped, remoteCmd)
 	return wrapped, "", nil, true, nil
-}
-
-// envKeys extracts the KEY halves of KEY=VALUE pairs (for the container
-// mode's `-e KEY` pass-through).
-func envKeys(env []string) []string {
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		if k, _, ok := strings.Cut(kv, "="); ok && k != "" {
-			out = append(out, k)
-		}
-	}
-	return out
 }

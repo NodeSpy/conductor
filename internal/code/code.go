@@ -33,10 +33,13 @@ package code
 
 import (
 	"context"
+	"log"
 	"os/exec"
 	"strings"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // Spec is one code step, already resolved by the caller: `host:`/inline
@@ -87,6 +90,21 @@ type Spec struct {
 	// write barrier: without it, an agent plan's code step could park secret
 	// material that `uses: kv.set` would have refused.
 	DataGuard DataGuard
+	// Isolation is the step's OWN `isolation:` block (config.Step.Isolation),
+	// carried through unresolved — nil unless the step explicitly configured
+	// one. A nil Isolation must leave a code step running exactly as it
+	// always has: BARE, no sandbox.WrapLocalCommand call at all. Only
+	// execCLILocal/execHostLocal honor it today (LOCAL cli/host-interpreter
+	// steps); a remote (Host != nil) or plugin-engine step never reaches a
+	// wrap here — see internal/config/isolation.go's validateStepIsolation
+	// for what that refuses at load time rather than silently ignoring.
+	Isolation *config.IsolationConfig
+	// IsolationDefaulted marks Isolation as one conductor SYNTHESIZED for a
+	// pack's code step (confined-by-default), not one the author wrote. When
+	// true, a sandbox that cannot be realized here degrades to a bare run with
+	// a warning (best-effort); when false (an explicit isolation:), the same
+	// failure fails the step closed.
+	IsolationDefaulted bool
 }
 
 // DataGuard vets one binding write: kind is kv|sql|memory, op the operation,
@@ -116,6 +134,30 @@ type Executor struct {
 	// build has no plugin engines, and a `use: <plugin>` step says so rather
 	// than falling through to a PATH lookup for a program nobody named.
 	Engines EngineLookup
+	// Sandbox is the daemon-side sandbox wiring a code step's `isolation:`
+	// block wraps through — sandbox.WrapLocalCommand's deps (egress proxy
+	// minters, daemon mask paths, self-exe resolver), the same wiring
+	// controller.prepareLaunch and plugin.SandboxDeps reuse for their own
+	// local launches (see cmd/conductor). The zero value is a LEGAL, if
+	// limited, executor: a spec with no Isolation runs exactly as before
+	// regardless, and a spec WITH Isolation but no Sandbox wiring fails
+	// closed through WrapLocalCommand's own nil-dep checks rather than
+	// running unconfined.
+	Sandbox sandbox.LocalWrapDeps
+	// Warn logs a non-fatal warning (the best-effort sandbox degrade: a pack's
+	// default confinement that cannot be realized on this box runs bare +
+	// warns). nil falls back to the standard logger.
+	Warn func(format string, args ...any)
+}
+
+// warnf emits a non-fatal warning through the wired hook, or the standard
+// logger when none is set.
+func (e *Executor) warnf(format string, args ...any) {
+	if e.Warn != nil {
+		e.Warn(format, args...)
+		return
+	}
+	log.Printf(format, args...)
 }
 
 func (e *Executor) lookPath() func(string) (string, error) {

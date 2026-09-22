@@ -112,6 +112,56 @@ func TestProfileIsolationNeedsConductorLaunchedRuntime(t *testing.T) {
 	}
 }
 
+// A code step (`use: cli`/`run:`) is executed directly by internal/code —
+// never handed to a runtime/controller — so isolation: there must not run
+// through the runtime-resolution rules an AGENT step needs (which, before
+// this fix, either rejected a plain `use: cli` step outright when no default
+// runtime resolves, or silently accepted-but-never-enforced it when a
+// default runtime like an acp/cli controller happened to be configured).
+func TestCodeStepIsolationValidatesIndependentlyOfRuntime(t *testing.T) {
+	iso := &IsolationConfig{Mode: "namespace"}
+
+	// No runtimes: block at all (DefaultRuntimeName() == "") must not
+	// trigger the "isolation requires a runtime..." refusal that applies to
+	// agent steps — a code step needs no runtime.
+	c := isoBase(t)
+	c.Runtimes = nil
+	setTestStep(c, "build", Step{Run: "cli", Command: Argv{"make", "test"}, Isolation: iso})
+	if err := c.Validate(); err != nil {
+		t.Fatalf("code step isolation with no runtimes: block: %v", err)
+	}
+
+	// A default runtime resolving to paseo must not reject a code step's own
+	// isolation: (the bug: validateStepIsolation used to route ANY step
+	// with isolation: through DefaultRuntimeName(), and paseo is refused
+	// there) — nor treat it as belonging to that runtime at all.
+	c = isoBase(t)
+	rt := c.Runtimes["pd"]
+	rt.Default = true
+	c.Runtimes["pd"] = rt
+	setTestStep(c, "build", Step{Run: "cli", Command: Argv{"make", "test"}, Isolation: iso})
+	if err := c.Validate(); err != nil {
+		t.Fatalf("code step isolation must not resolve through the default (paseo) runtime: %v", err)
+	}
+
+	// The isolation block's own shape is still checked — an unknown mode is
+	// still an error, exactly as for an agent step.
+	c = isoBase(t)
+	setTestStep(c, "build", Step{Run: "cli", Command: Argv{"make"}, Isolation: &IsolationConfig{Mode: "bogus"}})
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "unknown isolation mode") {
+		t.Fatalf("code step isolation shape must still validate: %v", err)
+	}
+
+	// A REMOTE code step (host:) is refused outright: internal/code's
+	// execCLIRemote has no sandbox wrap, so accepting isolation: there would
+	// be exactly the silent no-op this whole fix exists to close.
+	c = isoBase(t)
+	setTestStep(c, "build", Step{Run: "cli", Command: Argv{"make"}, Host: "sbx", Isolation: iso})
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "not enforced for a remote code step") {
+		t.Fatalf("remote code step isolation must be refused, not silently accepted: %v", err)
+	}
+}
+
 func TestRuntimeIsolationValidation(t *testing.T) {
 	iso := &IsolationConfig{Mode: "user", User: "sbx"}
 

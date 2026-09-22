@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
 	"runtime"
 )
 
@@ -71,17 +72,38 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 	if l := iso.Limits; l != nil && l.Pids < 0 {
 		return fmt.Errorf("config: %s: isolation limits.pids must be >= 0", where)
 	}
+	// fs: is a real filesystem allow-list only where there is a filesystem
+	// boundary to add to — the namespace pivot_root jail, or a container's
+	// bind mounts. Under mode user the sandbox shares the daemon's full view,
+	// so an fs: list would be a silent no-op (a footgun — reject it).
+	if len(iso.FS) > 0 && iso.Mode == "user" {
+		return fmt.Errorf("config: %s: isolation `fs:` (a filesystem allow-list) needs mode namespace or container — mode user shares the daemon's filesystem view, so it would be a silent no-op", where)
+	}
+	for _, p := range iso.FS {
+		if p == "" {
+			return fmt.Errorf("config: %s: isolation fs: empty path", where)
+		}
+		if !filepath.IsAbs(p) {
+			return fmt.Errorf("config: %s: isolation fs: %q must be an absolute path", where, p)
+		}
+	}
 	return nil
 }
 
-// validateStepIsolation checks a step's isolation against the runtime it
-// resolves to: only runtimes conductor launches itself can be wrapped. A
-// paseo runtime's agents are children of the paseo daemon — conductor never
-// holds that process, so an isolation: there would be a silent no-op; it is
-// rejected instead.
+// validateStepIsolation checks a step's isolation against what actually runs
+// it. A CODE step (`use:`/`run:` — internal/code) is not dispatched through a
+// runtime/controller at all, so it takes a path of its own; everything below
+// that is the runtime-resolution check for an AGENT step.
+//
+// A paseo runtime's agents are children of the paseo daemon — conductor
+// never holds that process, so an isolation: there would be a silent no-op;
+// it is rejected instead.
 func (c *Config) validateStepIsolation(where string, p Step) error {
 	if p.Isolation == nil {
 		return nil
+	}
+	if _, class := p.StepEngine(); class != EngineNone {
+		return validateCodeStepIsolation(where, p, class)
 	}
 	rn := p.Runtime
 	if rn == "" {
@@ -102,6 +124,37 @@ func (c *Config) validateStepIsolation(where string, p Step) error {
 		return err
 	}
 	return validateIsolationControlChannel(where, p.Isolation, cc)
+}
+
+// validateCodeStepIsolation checks an `isolation:` block on a CODE step
+// (`use:`/`run:`, StepEngine() != EngineNone). Unlike an agent step, a code
+// step is executed directly by internal/code — never handed to a
+// runtime/controller — so it needs none of the runtime-resolution machinery
+// above; it needs to know only whether internal/code can actually enforce
+// the block it wrote.
+//
+//   - EngineCLI / EngineHost (a local `use: cli`/`command:` or `run:
+//     <interpreter>` step) is the case this wraps: internal/code's
+//     execCLILocal/execHostLocal route spec.Isolation through
+//     sandbox.WrapLocalCommand, the same wrap controller.prepareLaunch
+//     applies to an agent runtime's own local launch.
+//   - A REMOTE code step (`host:`/inline `ssh:`) is refused outright: its
+//     execCLIRemote/execRemote paths are a generated ssh script with no
+//     sandbox wrap at all, so accepting isolation: there would be exactly
+//     the silent no-op this function exists to prevent. Configure the
+//     remote box's own conductor instead.
+//   - An ENGINE PLUGIN step (`use: js`, …) is refused too: it is a
+//     subprocess of the plugin manager, sandboxed (if at all) by its own
+//     `engines: <name>.isolation` block — a step-level isolation: there has
+//     nothing to attach to.
+func validateCodeStepIsolation(where string, p Step, class EngineClass) error {
+	if class == EnginePlugin {
+		return fmt.Errorf("config: %s: isolation: cannot wrap engine %q — it runs as a plugin subprocess sandboxed by its own `engines: %s: { isolation: … }` block, not a step's; set it there instead", where, p.EngineSelector(), p.EngineSelector())
+	}
+	if p.Host != "" || p.SSH != nil {
+		return fmt.Errorf("config: %s: isolation: is not enforced for a remote code step (host:/ssh:) — conductor only wraps LOCAL `use: cli`/`command:`/`run: <interpreter>` code steps today; drop isolation: here, or run this step locally", where)
+	}
+	return validateIsolation(where, p.Isolation, false)
 }
 
 // validateStepSkillIsolation refuses skill: on a step whose EFFECTIVE

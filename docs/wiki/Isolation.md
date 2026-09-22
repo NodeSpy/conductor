@@ -67,6 +67,9 @@ x-templates:
         egress: [ "api.github.com:443", "*.internal:443" ]
         deny: true    # + egress ⇒ ENFORCED allowlist (namespace/container);
                       # alone ⇒ structural no-network; absent ⇒ advisory proxy
+      fs: [ "/srv/media" ]  # filesystem allow-list: extra paths the sandbox may
+                            # see (namespace = a real pivot_root jail; container
+                            # = -v binds). Empty ⇒ just the workdir.
       # privileged: true   # namespace mode: opt back into the daemon's full
       #                    # filesystem view (state/config masked by default)
       # allow_root: true   # namespace mode: run the sandbox even when the
@@ -115,19 +118,29 @@ or `/proc/<pid>/environ` of other agents. With `limits:` set, a
 `CPUQuota`, `TasksMax`). `network: {deny: true}` adds `--net`: the agent has
 no network interface but loopback in an empty namespace — structural.
 
-**Filesystem: masked by default, `privileged: true` to opt out.** A
-namespace keeps the daemon's own uid, so file permissions alone would let
-the agent read everything the daemon can. By default conductor therefore
-re-enters the launch through its own helper inside the mount namespace and
-**masks the daemon's state and config directories** (empty read-only tmpfs
-over directories, `/dev/null` over files) — the store, audit trail, history
-records, and secrets env simply don't exist in the agent's mount view, and
-a mask that can't be applied fails the launch rather than launching
-unmasked. Be honest about the remaining scope: everything else the daemon's
-uid can read (its `$HOME`, other repos) is still visible — namespace mode
-is process/mount/net isolation, **not** full filesystem-privilege
-isolation. For that, use `mode: container` (the container sees only the
-worktree) or `mode: user` with a distinct account.
+**Filesystem — two shapes.** A namespace keeps the daemon's own uid, so file
+permissions alone would let the launch read everything the daemon can.
+Conductor closes that off in one of two ways:
+
+- **CODE steps (`use: cli`/`command:`, `run: <interpreter>`) get a real
+  filesystem JAIL.** The launch is re-entered through conductor's own helper,
+  which builds a fresh root, bind-mounts in **only** the allow-list — the
+  workdir, the interpreter essentials (`/usr`, `/etc`, `/bin`…, read-only), a
+  private `/proc` + `/dev` + `/tmp`, the step's own code/ctx sockets, and any
+  `fs:` paths you declare — and `pivot_root`s into it. Everything else on the
+  host, the daemon's state/config/secrets included, is **gone by absence** (not
+  merely masked). The privilege that lets it mount is dropped before your code
+  runs, so the code cannot pivot back out. This is a bwrap-style jail with **no
+  docker required**; declare the paths a step legitimately needs with `fs:`.
+- **Runtime/plugin launches** (an agent runtime's own process) instead **mask
+  the daemon's state and config directories** (empty read-only tmpfs over
+  directories, `/dev/null` over files); `privileged: true` opts out. Here the
+  rest of the daemon's uid view (its `$HOME`, other repos) is still visible —
+  for a full jail on a runtime launch, use `mode: container` or `mode: user`.
+
+A confinement that can't be applied fails the launch rather than running
+unconfined — except a pack's *synthesized* default (below), which degrades
+with a warning so a pack still runs on a box without namespaces.
 
 `isolation: { mode: namespace, privileged: true }` is the deliberate
 opt-in to the daemon's full filesystem view (no masking) — for a trusted

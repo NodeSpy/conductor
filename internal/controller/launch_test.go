@@ -25,17 +25,19 @@ func stubProxy(t *testing.T, addr string) *[][]string {
 }
 
 // stubPlatform pretends every wrapper binary exists on a Linux box so the
-// wrap paths run hermetically wherever the tests do.
+// wrap paths run hermetically wherever the tests do. The platform probe
+// lives in sandbox.WrapLocalCommand now (it calls spec.Check itself), so the
+// seams it reads are sandbox package vars rather than controller-local ones.
 func stubPlatform(t *testing.T) {
 	t.Helper()
-	oldOS, oldLook, oldEuid := launchGOOS, launchLookPath, launchGeteuid
-	launchGOOS = "linux"
-	launchLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
+	oldOS, oldLook, oldEuid := sandbox.CheckGOOS, sandbox.CheckLookPath, sandbox.CheckGeteuid
+	sandbox.CheckGOOS = "linux"
+	sandbox.CheckLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
 	// Pin a non-root euid so namespace-mode wrap paths run deterministically
 	// even when the tests themselves run as root (CI/Docker); the root refusal
 	// is exercised explicitly in TestPrepareLaunchNamespaceRefusesRoot.
-	launchGeteuid = func() int { return 1000 }
-	t.Cleanup(func() { launchGOOS, launchLookPath, launchGeteuid = oldOS, oldLook, oldEuid })
+	sandbox.CheckGeteuid = func() int { return 1000 }
+	t.Cleanup(func() { sandbox.CheckGOOS, sandbox.CheckLookPath, sandbox.CheckGeteuid = oldOS, oldLook, oldEuid })
 }
 
 func TestPrepareLaunchNoIsolationUnchanged(t *testing.T) {
@@ -323,8 +325,8 @@ func TestPrepareLaunchNamespaceMasksDaemonFilesByDefault(t *testing.T) {
 // opt-in. A non-root daemon (the default via stubPlatform) is unaffected, and
 // so are the other modes.
 func TestPrepareLaunchNamespaceRefusesRoot(t *testing.T) {
-	stubPlatform(t)                         // pins euid 1000 by default
-	launchGeteuid = func() int { return 0 } // now pretend the daemon is root
+	stubPlatform(t)                                // pins euid 1000 by default
+	sandbox.CheckGeteuid = func() int { return 0 } // now pretend the daemon is root
 
 	// The exact hole: namespace mode as root, no opt-in → refused, no launch.
 	ns := &config.IsolationConfig{Mode: "namespace"}

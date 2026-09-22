@@ -241,8 +241,21 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// still rejecting a pack that hardcodes infra. ----
 	var packPinErr error
 	man.WalkPackSteps(func(where string, s *Step) {
-		if packPinErr == nil && (s.Host != "" || s.Runtime != "") {
+		if packPinErr != nil {
+			return
+		}
+		if s.Host != "" || s.Runtime != "" {
 			packPinErr = fmt.Errorf("pack %q: step %s pins runtime/host — a pack defines behavior, not environment; leave it to the consumer's default runtime, or override it from your packs: block", ns, where)
+			return
+		}
+		// A pack may not declare its OWN shipped code trusted: `trust: full`
+		// opts out of the confined-by-default sandbox, so letting a pack set it
+		// would let hostile pack code turn off its own jail. Trust is the
+		// CONSUMER's call — they set it from their packs: steps: overlay if they
+		// trust this pack's code. (Checked pre-overlay, like the runtime/host
+		// ban, so the consumer's own overlay trust: still works below.)
+		if s.Trust != "" {
+			packPinErr = fmt.Errorf("pack %q: step %s sets trust: — a pack cannot declare its own code trusted (that would let it turn off its own sandbox); trust is the consumer's decision, set it from your packs: steps: overlay if you trust this pack", ns, where)
 		}
 	})
 	if packPinErr != nil {
@@ -286,6 +299,30 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	if stepErr != nil {
 		return stepErr
 	}
+
+	// ---- Confine pack-authored code by default (§15). A local cli/host code
+	// step a pack SHIPS runs arbitrary code on the box — the very thing the
+	// operator is trusting the pack about — so unless it declares its own
+	// isolation: or opts out with `trust: full`, synthesize the least-privilege
+	// namespace jail (pid-isolated, network denied, the daemon's secrets hidden
+	// by absence). Runs POST-overlay so a consumer's explicit isolation/trust
+	// wins; inherently scoped to pack steps because it only walks THIS pack's
+	// manifest — an operator's own cli steps (their own code) are never touched.
+	// Enforcement is best-effort (IsolationDefaulted): a box that cannot build
+	// the jail runs the step bare + warns, rather than breaking the pack. ----
+	man.WalkPackSteps(func(_ string, s *Step) {
+		if _, class := s.StepEngine(); class != EngineCLI && class != EngineHost {
+			return
+		}
+		if s.Host != "" || s.SSH != nil {
+			return // a remote code step has no local wrap to apply
+		}
+		if s.Isolation != nil || s.Trust == "full" {
+			return // explicit isolation, or a deliberate opt-out
+		}
+		s.Isolation = defaultPackCodeIsolation()
+		s.IsolationDefaulted = true
+	})
 
 	// ---- Fleets: the pack's named models, namespaced, with the consumer's
 	// per-fleet override applied (the top rung of the ladder, §2.3/§5.3). ----

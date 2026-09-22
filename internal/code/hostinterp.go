@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // execHostLocal runs any `run:` value that isn't `cli` or `go` by shelling
@@ -54,11 +56,37 @@ func (e *Executor) execHostLocal(ctx context.Context, spec Spec, data map[string
 	}
 
 	argv := append([]string{interpPath, codePath}, spec.Args...)
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Dir = spec.WorkDir
 	// Allowlisted base env only: the daemon's environment carries secrets a
 	// spawned code step must not inherit (see spawnBaseEnv).
-	cmd.Env = append(spawnBaseEnv(), envSlice(spec.Env)...)
+	env := append(spawnBaseEnv(), envSlice(spec.Env)...)
+
+	// isolation: is OPT-IN and per-step: a spec with no Isolation runs this
+	// exact argv bare, precisely as it always has (see cli.go's execCLILocal
+	// for the fuller account — this is the same wrap for the host-interpreter
+	// path).
+	cleanup := func() {}
+	if spec.Isolation != nil {
+		// Confine → pivot_root fs-jail; the script temp dir lives under the OS
+		// temp root the jail replaces, so bind it in read-only (host steps have
+		// no ctx socket to bind).
+		deps := e.Sandbox
+		deps.Confine = true
+		deps.ExtraBinds = append(deps.ExtraBinds, sandbox.BindMount{Path: filepath.Dir(codePath), RO: true})
+		wrapped, wrappedEnv, c, werr := sandbox.WrapLocalCommand(sandbox.FromConfig(spec.Isolation), argv, spec.WorkDir, env, deps)
+		switch {
+		case werr == nil:
+			argv, env, cleanup = wrapped, wrappedEnv, c
+		case spec.IsolationDefaulted:
+			e.warnf("code: %s: default sandbox unavailable (%v) — running WITHOUT isolation; declare isolation: explicitly to require it", spec.Run, werr)
+		default:
+			return nil, fmt.Errorf("code: %s: isolation: %w", spec.Run, werr)
+		}
+	}
+	defer cleanup()
+
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = spec.WorkDir
+	cmd.Env = env
 	cmd.Stdin = bytes.NewReader(dataJSON)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

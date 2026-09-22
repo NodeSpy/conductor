@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // The `cli` ENGINE: run an arbitrary argv as a subprocess and bridge it onto
@@ -125,14 +127,50 @@ func (e *Executor) execCLILocal(ctx context.Context, spec Spec, data map[string]
 	defer ctxSrv.Close()
 
 	argv := cliArgv(spec.Command[1:], codePath, spec.Args)
-	cmd := exec.CommandContext(ctx, prog, argv...)
-	cmd.Dir = spec.WorkDir
+	fullArgv := append([]string{prog}, argv...)
 	// Allowlisted base env only — the daemon's own environment carries
 	// secrets a spawned step must not inherit (see spawnBaseEnv). The ctx
 	// variables go LAST: os/exec lets later entries win, so a step's own
 	// `env:` cannot shadow the socket address or the token with one it chose.
-	cmd.Env = append(spawnBaseEnv(), envSlice(spec.Env)...)
-	cmd.Env = append(cmd.Env, ctxSrv.env(conductorBinary())...)
+	env := append(spawnBaseEnv(), envSlice(spec.Env)...)
+	env = append(env, ctxSrv.env(conductorBinary())...)
+
+	// isolation: is OPT-IN and per-step: a spec with no Isolation runs this
+	// exact argv bare, precisely as it always has. Only when the step
+	// configured one does it go through sandbox.WrapLocalCommand — the same
+	// wrap controller.prepareLaunch applies to an agent runtime's own local
+	// launch (egress proxy, namespace masks, spec.Check's preflight, then
+	// the mode's argv prefix).
+	cleanup := func() {}
+	if spec.Isolation != nil {
+		// Confine: a code step's namespace isolation is realized as the
+		// pivot_root fs-jail (not the legacy daemon-dir masking), so the step's
+		// own script/ctx temp dirs must be bound into the jail — they live under
+		// the OS temp root, which the jail replaces with a fresh private /tmp.
+		deps := e.Sandbox
+		deps.Confine = true
+		if codePath != "" {
+			deps.ExtraBinds = append(deps.ExtraBinds, sandbox.BindMount{Path: filepath.Dir(codePath), RO: true})
+		}
+		deps.ExtraBinds = append(deps.ExtraBinds, sandbox.BindMount{Path: ctxSrv.dir})
+		wrapped, wrappedEnv, c, werr := sandbox.WrapLocalCommand(sandbox.FromConfig(spec.Isolation), fullArgv, spec.WorkDir, env, deps)
+		switch {
+		case werr == nil:
+			fullArgv, env, cleanup = wrapped, wrappedEnv, c
+		case spec.IsolationDefaulted:
+			// A pack's confined-by-default sandbox that cannot be realized on
+			// this box degrades to a bare run + warning (best-effort), rather
+			// than breaking the pack. An EXPLICIT isolation: fails closed below.
+			e.warnf("code: cli: %s: default sandbox unavailable (%v) — running WITHOUT isolation; declare isolation: explicitly to require it", spec.Command[0], werr)
+		default:
+			return nil, fmt.Errorf("code: cli: isolation: %w", werr)
+		}
+	}
+	defer cleanup()
+
+	cmd := exec.CommandContext(ctx, fullArgv[0], fullArgv[1:]...)
+	cmd.Dir = spec.WorkDir
+	cmd.Env = env
 	cmd.Stdin = bytes.NewReader(dataJSON)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

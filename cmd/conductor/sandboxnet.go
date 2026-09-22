@@ -26,6 +26,12 @@ func runSandboxNet(args []string) int {
 		case args[i] == "--mask" && i+1 < len(args):
 			opt.Masks = append(opt.Masks, args[i+1])
 			i++
+		case args[i] == "--bind" && i+1 < len(args):
+			opt.Binds = append(opt.Binds, sandbox.BindMount{Path: args[i+1]})
+			i++
+		case args[i] == "--bind-ro" && i+1 < len(args):
+			opt.Binds = append(opt.Binds, sandbox.BindMount{Path: args[i+1], RO: true})
+			i++
 		case args[i] == "--":
 			opt.Argv = args[i+1:]
 			i = len(args)
