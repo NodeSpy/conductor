@@ -55,6 +55,32 @@ const (
 	EnginePlugin EngineClass = "plugin"
 )
 
+// EngineConfig is the OPTIONAL per-engine hardening entry (config `engines:`),
+// keyed by engine name (`js`, `lua`, …). Code-step engine plugins run arbitrary
+// code and declare no capabilities, so conductor sandboxes them by DEFAULT; this
+// block tunes or opts out of that. A step's `run:`/`use:` has no place for
+// isolation, which is why the surface lives here.
+type EngineConfig struct {
+	// Isolation replaces the synthesized default with an EXPLICIT sandbox. An
+	// explicit block fails closed (a preflight failure refuses the launch),
+	// unlike the default, which is best-effort (degrades to a warning).
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// Trust opts OUT of sandboxing: `trust: full` runs the engine unconfined (the
+	// app-extension posture) — for an engine the operator has audited. Empty is
+	// the default: sandbox it.
+	Trust string `yaml:"trust,omitempty"`
+	// Network is the engine's declared egress allowlist. Empty leaves the
+	// deny-by-default a pure-compute engine wants.
+	Network []string `yaml:"network,omitempty"`
+	// AllowSecrets optionally tightens which secret refs may cross to the engine.
+	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
+}
+
+// TrustFull reports whether the operator opted this engine out of sandboxing.
+func (e EngineConfig) TrustFull() bool {
+	return strings.EqualFold(strings.TrimSpace(e.Trust), "full")
+}
+
 // hostInterpreters are the interpreter names `use:` accepts as "a program on
 // the box" rather than as a plugin reference.
 //

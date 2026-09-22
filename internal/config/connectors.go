@@ -1704,6 +1704,20 @@ func (c *Config) validateConnectors() error {
 			return err
 		}
 	}
+	for name, ec := range c.Engines {
+		if name == "" {
+			return fmt.Errorf("config: engines: empty engine name")
+		}
+		if t := strings.TrimSpace(ec.Trust); t != "" && !strings.EqualFold(t, "full") {
+			return fmt.Errorf("config: engine %q: trust must be \"full\" (opt out of sandboxing) or empty, got %q", name, ec.Trust)
+		}
+		if ec.TrustFull() && ec.Isolation != nil {
+			return fmt.Errorf("config: engine %q: set either `trust: full` (no sandbox) or an `isolation:` block, not both", name)
+		}
+		if err := validateIsolation("engine "+name, ec.Isolation, false); err != nil {
+			return err
+		}
+	}
 	for i, t := range c.Triggers {
 		where := fmt.Sprintf("triggers[%d]", i)
 		if t.On == "" {

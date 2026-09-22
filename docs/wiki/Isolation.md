@@ -24,6 +24,33 @@ daemon — conductor never holds that process, so `conductor validate` rejects
 than silently not isolating. Use paseo's own sandboxing there, or move the
 profile to a runtime conductor launches.
 
+## Code-step engines (sandboxed by default)
+
+Connectors and runtimes follow the app-extension model: a plugin you added is
+trusted, so with no `isolation:` block it runs under its permission manifest +
+scrubbed env, not an OS jail. **Code-step ENGINES are the exception.** A `run: js`
+step executes arbitrary code and the engine declares no capabilities, so
+conductor sandboxes engine plugins **by default** — a `namespace`-mode sandbox
+with the network denied. Tune or opt out per engine with the top-level
+`engines:` block, keyed by engine name:
+
+```yaml
+engines:
+  js:   {}                                             # default: sandboxed (namespace, network denied)
+  lua:  { trust: full }                                # opt OUT — run unconfined (an engine you've audited)
+  wasm: { isolation: { mode: user, user: sandbox } }   # explicit override (fail-closed)
+```
+
+The synthesized default is **best-effort**: where the OS sandbox can't be applied
+(non-Linux, running as root, or `unshare` / unprivileged user namespaces
+unavailable) the engine runs with a loud warning rather than failing — a code
+engine that worked yesterday keeps working. An explicit `isolation:` block is
+**fail-closed**, like everywhere else. Daemon-path masking is not part of the
+default (an unprivileged `unshare` cannot reliably overmount the state/config
+dirs), so the default leans on the network + pid namespaces — enough to confine a
+pure-compute engine (no egress, no view of other processes); use an explicit
+`isolation:` (or `mode: container`) if you need filesystem masking too.
+
 ## Modes
 
 ```yaml
