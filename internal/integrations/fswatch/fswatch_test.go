@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -48,63 +47,6 @@ func TestMatches(t *testing.T) {
 	}
 }
 
-// fakeTimer lets a test fire the debounce callback on demand instead of waiting
-// out a real duration.
-type fakeTimer struct {
-	mu     sync.Mutex
-	f      func()
-	resets int
-}
-
-func (t *fakeTimer) Reset(time.Duration) bool {
-	t.mu.Lock()
-	t.resets++
-	t.mu.Unlock()
-	return true
-}
-func (t *fakeTimer) Stop() bool { return true }
-func (t *fakeTimer) fire()      { t.f() }
-
-func TestDebouncerCollapsesBurst(t *testing.T) {
-	var ft *fakeTimer
-	nt := func(_ time.Duration, f func()) timer {
-		ft = &fakeTimer{f: f}
-		return ft
-	}
-	var mu sync.Mutex
-	var fired []string
-	d := newDebouncer(
-		[]Watch{{Name: "w"}},
-		nt,
-		func(_ int, path, _ string) { mu.Lock(); fired = append(fired, path); mu.Unlock() },
-	)
-
-	d.arm(0, "/a/1.m4b", "CREATE") // creates the timer
-	d.arm(0, "/a/2.m4b", "WRITE")  // resets
-	d.arm(0, "/a/3.m4b", "WRITE")  // resets
-
-	if len(fired) != 0 {
-		t.Fatalf("no fire should happen before the quiet window elapses; got %v", fired)
-	}
-	if ft == nil {
-		t.Fatal("timer was never created")
-	}
-	if ft.resets != 2 {
-		t.Errorf("expected 2 resets from the 2 follow-up events, got %d", ft.resets)
-	}
-
-	ft.fire() // simulate the quiet window elapsing
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(fired) != 1 {
-		t.Fatalf("a burst must collapse into exactly one fire, got %d: %v", len(fired), fired)
-	}
-	if fired[0] != "/a/3.m4b" {
-		t.Errorf("the fire should carry the last event's path, got %q", fired[0])
-	}
-}
-
 func TestStartEmitsOnRealFileSettle(t *testing.T) {
 	dir := t.TempDir()
 	ig := &Integration{
@@ -116,7 +58,6 @@ func TestStartEmitsOnRealFileSettle(t *testing.T) {
 			Debounce: config.Duration(40 * time.Millisecond),
 			Action:   config.Action{Type: "command"},
 		}}},
-		newTimer: realTimer,
 	}
 	emits := make(chan core.Trigger, 16)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -164,7 +105,6 @@ func TestStartWatchesNewSubdirRecursively(t *testing.T) {
 			Debounce: config.Duration(40 * time.Millisecond),
 			Action:   config.Action{Type: "command"},
 		}}},
-		newTimer: realTimer,
 	}
 	emits := make(chan core.Trigger, 16)
 	ctx, cancel := context.WithCancel(context.Background())

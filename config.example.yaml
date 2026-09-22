@@ -153,6 +153,18 @@ connectors:
     watches:
       staged: { path: /srv/incoming, match: "*.m4b", debounce: 15s, recursive: true }
 
+  # logwatch: fire when a log line matches a regexp. `path:` follows a file
+  # through rotation (via tail -F); `command:` streams any command's stdout —
+  # e.g. journalctl -f (no cgo sdjournal needed), docker/kubectl logs -f. A
+  # trigger uses `on: logs.<watch>`; steps read {{.line}}, {{.source}}, and
+  # named captures via {{.groups.<name>}}. Matches are debounced (default 2s) so
+  # one error's multi-line burst collapses into a single trigger.
+  logs:
+    use: logwatch
+    watches:
+      app-errors: { path: /var/log/app/app.log, pattern: 'ERROR (?P<msg>.*)' }
+      unit-oom:   { command: [journalctl, -f, -u, myservice, -o, cat], pattern: 'Out of memory' }
+
   hooks:
     use: webhook
     listen: ":8099" # shared with other listeners on the same address
