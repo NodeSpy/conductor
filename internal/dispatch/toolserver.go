@@ -19,30 +19,44 @@ import (
 // because the paseo dispatcher can't import controller (controller imports
 // dispatch).
 
-// handoffSelfServiceVerb is auto-granted to every interactive hand-off so the
+// HandoffSelfServiceVerb is auto-granted to every interactive hand-off so the
 // agent can release its OWN hand-off (handoff.done) without the operator writing
 // a skill: block for it. It is minimal authority — the connector resolves the
 // target from the caller's token identity, so the agent can only release the
 // hand-off it is holding, never one it names.
-const handoffSelfServiceVerb = "handoff.done"
+const HandoffSelfServiceVerb = "handoff.done"
 
-// effectiveSkillPolicy is the grant a dispatch's tool credential carries: the
-// step's own skill: block, plus handoff.done auto-granted for an interactive
-// hand-off. It copies the verb slice so the shared config.Step is never mutated.
-func effectiveSkillPolicy(req Request) config.SkillPolicy {
+// EffectiveSkillPolicy is the grant a dispatch actually carries: the step's own
+// skill: block (nil means no block — an empty grant), plus handoff.done
+// auto-granted when the dispatch is an interactive hand-off. It copies the verb
+// slice so the shared config.Step is never mutated.
+//
+// This is the SINGLE definition of "what a hand-off agent may do". The minted
+// token (BuildToolServer / SkillEnv) and the agent-facing capability surface
+// (engine.skillGuidance's CLI card) both derive from it, so the card an agent
+// reads can never advertise less than the token enforces — the bug where a
+// hand-off was told to call handoff.done but its card never listed it because
+// the card was built from the raw skill: block instead of this effective grant.
+func EffectiveSkillPolicy(sk *config.SkillPolicy, interactive bool) config.SkillPolicy {
 	var p config.SkillPolicy
-	if req.Step.Skill != nil {
-		p = *req.Step.Skill
+	if sk != nil {
+		p = *sk
 	}
-	if req.Interactive {
+	if interactive {
 		for _, v := range p.Verbs {
-			if v == handoffSelfServiceVerb {
+			if v == HandoffSelfServiceVerb {
 				return p // already granted; nothing to add
 			}
 		}
-		p.Verbs = append(append([]string(nil), p.Verbs...), handoffSelfServiceVerb)
+		p.Verbs = append(append([]string(nil), p.Verbs...), HandoffSelfServiceVerb)
 	}
 	return p
+}
+
+// effectiveSkillPolicy is the dispatch-side spelling: the step's block plus
+// handoff.done for an interactive hand-off (req.Interactive == step.Background).
+func effectiveSkillPolicy(req Request) config.SkillPolicy {
+	return EffectiveSkillPolicy(req.Step.Skill, req.Interactive)
 }
 
 // wantsSkillCreds reports whether a dispatch should be handed CLI skill creds: a

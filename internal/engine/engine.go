@@ -394,9 +394,20 @@ func (e *Engine) agentGuidance(profile config.Step, pol config.Policy) string {
 // profiles on a runtime that cannot carry the MCP tools (#123): promising an
 // agent tools it doesn't have just makes it fail; `conductor validate` warns
 // the operator instead.
+//
+// The grant advertised here is the EFFECTIVE policy the dispatch token is
+// minted with (dispatch.EffectiveSkillPolicy): the step's own skill: block plus
+// handoff.done when the step is an interactive hand-off (Background). Deriving
+// the card from the same function as the token keeps them from drifting — a
+// background hand-off is told (HandoffGuidance) to call handoff.done, so its
+// card must list it even when the step wrote no skill: block of its own.
 func (e *Engine) skillGuidance(profile config.Step) string {
-	sk := profile.Skill
-	if sk == nil {
+	eff := dispatch.EffectiveSkillPolicy(profile.Skill, profile.Background)
+	sk := &eff
+	// Nothing to advertise: no verbs granted and no broker access. A non-hand-off
+	// step with no skill: block lands here (same "" as before); a hand-off always
+	// has at least handoff.done, so it never does.
+	if len(sk.Verbs) == 0 && sk.SecretsVia != "broker" {
 		return ""
 	}
 	_, mode := e.cfg.SkillDelivery(profile)
