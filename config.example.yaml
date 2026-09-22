@@ -142,6 +142,17 @@ connectors:
       weekly-audit: { cron: "0 5 * * 0" }
       rate-check: { every: 6h, run_on_start: true }
 
+  # fswatch: fire a trigger when a matching file settles on disk (the
+  # low-latency counterpart to a cron sweep). A trigger uses `on: files.<watch>`;
+  # its steps read {{.path}} (full path), {{.file}} (basename), {{.op}}, {{.watch}}.
+  # debounce collapses a burst of events into one fire once quiet; recursive
+  # follows new subdirectories. Keep a cron sweep too — inotify is lossy (events
+  # missed while down, dropped on overflow, uneven on some FUSE mounts).
+  files:
+    use: fswatch
+    watches:
+      staged: { path: /srv/incoming, match: "*.m4b", debounce: 15s, recursive: true }
+
   hooks:
     use: webhook
     listen: ":8099" # shared with other listeners on the same address
