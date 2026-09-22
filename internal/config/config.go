@@ -111,6 +111,12 @@ type Config struct {
 	ConnectorsMap map[string]ConnectorRef `yaml:"connectors"`
 	Runtimes      RuntimeSet              `yaml:"runtimes"`
 	Hosts         map[string]HostConfig   `yaml:"hosts"`
+	// Engines is the OPTIONAL per-engine hardening block, keyed by engine name
+	// (`js`, `lua`, …). Code-step engine plugins are UNTRUSTED by default: a
+	// step's `run: js` has no config surface of its own, so an operator tunes
+	// isolation here (or opts out with `trust: full`). Absent → the engine gets
+	// the default OS sandbox. See EngineConfig and internal/config/plugins.go.
+	Engines map[string]EngineConfig `yaml:"engines,omitempty"`
 	// Models is the OPTIONAL top-level `models:` block — named FLEETS. A fleet
 	// is a ranked list of acceptable models plus a fallback posture
 	// (`{ any: [...], required: bool }`), so a step (or a pack) can name what

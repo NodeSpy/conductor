@@ -27,6 +27,15 @@ type PluginRef struct {
 	// is the normal case: the default model is the permission manifest, not OS
 	// confinement.
 	Isolation *IsolationConfig
+	// IsolationDefaulted marks an Isolation that conductor SYNTHESIZED (an
+	// untrusted-by-default code engine), not one the operator wrote. Its
+	// enforcement is BEST-EFFORT: if the OS sandbox can't be applied the launch
+	// degrades to a warning, whereas an operator-written block fails closed.
+	IsolationDefaulted bool
+	// TrustFull marks an engine the operator opted out of sandboxing
+	// (`engines.<name>.trust: full`). Isolation is nil and the "no OS sandbox"
+	// warning is suppressed — they chose it deliberately.
+	TrustFull bool
 	// Network is the referencing connector's declared egress. Empty for a
 	// runtime (a runtime executes your agents; its egress is not narrowed).
 	Network []string
@@ -125,15 +134,12 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		out[u.InstallKey()] = p
 	}
 
-	// ENGINES have no block of their own: a step's `use:` IS the reference, so
-	// the derived set is read off the steps themselves. Everything else about
-	// them is a connector's path — same install key shape ("engines/<name>"),
-	// same trust allowlist, same spawn — which is the point of deriving them
-	// here rather than giving engines a parallel mechanism.
-	//
-	// A step carries no `isolation:`/`network:`, so an engine plugin gets the
-	// defaults: no OS hardening, and (because it declares no egress) the
-	// deny-by-default network its kind gets at spawn.
+	// ENGINES have no block of their own for the REFERENCE: a step's `use:` IS
+	// the reference, read off the steps themselves. But a code engine runs
+	// arbitrary code and declares no capabilities, so — unlike a connector the
+	// operator deliberately wired to a service — it is UNTRUSTED by default and
+	// gets a synthesized OS sandbox unless the operator tunes/opts out via the
+	// `engines:` block (keyed by engine name).
 	c.WalkSteps(func(_ IdentityScope, _ int, s *Step) {
 		sel, class := s.StepEngine()
 		if class != EnginePlugin {
@@ -143,11 +149,38 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		if err != nil || u.IsBuiltin() {
 			return // validateStepEngine reports an unparseable reference
 		}
-		if _, seen := out[u.InstallKey()]; !seen {
-			out[u.InstallKey()] = PluginRef{Name: u.Name, Instance: sel, Use: u}
+		if _, seen := out[u.InstallKey()]; seen {
+			return
 		}
+		p := PluginRef{Name: u.Name, Instance: sel, Use: u}
+		ec := c.Engines[u.Name]
+		p.Network = ec.Network
+		p.AllowSecrets = ec.AllowSecrets
+		switch {
+		case ec.TrustFull():
+			p.TrustFull = true // unconfined, deliberately — stay quiet
+		case ec.Isolation != nil:
+			p.Isolation = ec.Isolation // explicit → fail-closed
+		default:
+			p.Isolation = defaultEngineIsolation() // untrusted default → best-effort
+			p.IsolationDefaulted = true
+		}
+		out[u.InstallKey()] = p
 	})
 	return out
+}
+
+// defaultEngineIsolation is the sandbox an untrusted-by-default code engine gets
+// when the operator sets nothing: a user+pid+mount namespace with the network
+// denied. A code engine is pure computation over inputs delivered on its RPC
+// transport, so denying egress and masking the daemon's own state/config costs
+// it nothing while turning its "no declared capabilities" into a kernel-enforced
+// wall. Enforcement is best-effort (see PluginRef.IsolationDefaulted).
+func defaultEngineIsolation() *IsolationConfig {
+	return &IsolationConfig{
+		Mode:    "namespace",
+		Network: &IsolationNetwork{Deny: true},
+	}
 }
 
 // PluginRefsComplete reports whether PluginRefs may be treated as the COMPLETE

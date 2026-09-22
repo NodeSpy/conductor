@@ -296,6 +296,15 @@ hosts:
   #   user: ci
   #   isolation: { mode: user, user: agents }   # sudo -n -u agents on the box
 
+# engines: — per-engine hardening for code-step engine PLUGINS (js, lua, …).
+# Unlike connectors, code engines run arbitrary code and are UNTRUSTED by
+# default: with no entry here a `run: js` step is sandboxed (namespace, network
+# denied), best-effort. Override or opt out per engine.
+engines:
+  # js: {}                                        # default — sandboxed, nothing to write
+  # lua: { trust: full }                          # opt OUT: run unconfined (an engine you've audited)
+  # wasm: { isolation: { mode: user, user: sandbox } }   # explicit sandbox (fail-closed)
+
 # ---------------------------------------------------------------------------
 # isolation: — per-dispatch sandboxing (#36 §15) for the runtimes conductor
 # launches ITSELF (acp / cli / opencode / agent-deck — not paseo: its agents

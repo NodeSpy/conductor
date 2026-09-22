@@ -2,13 +2,35 @@ package plugin
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
+
+// masksExcludingBinaryDir drops any mask path that is the plugin binary's
+// directory or an ancestor of it. Masking such a path (a tmpfs overmount) is
+// refused by the kernel when the directory subtree holds a running executable,
+// and would only hide the plugin's own binary from itself. binPath == "" (a
+// not-installed spec) leaves the list unchanged.
+func masksExcludingBinaryDir(masks []string, binPath string) []string {
+	if binPath == "" || len(masks) == 0 {
+		return masks
+	}
+	binDir := filepath.Dir(binPath)
+	kept := make([]string, 0, len(masks))
+	for _, m := range masks {
+		if m == binDir || strings.HasPrefix(binDir+string(filepath.Separator), m+string(filepath.Separator)) {
+			continue // m == binDir, or m is an ancestor of binDir
+		}
+		kept = append(kept, m)
+	}
+	return kept
+}
 
 // spawnBaseEnv is the minimal environment a plugin subprocess inherits:
 // operational basics only. The daemon's full environment routinely carries
@@ -80,16 +102,45 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 		return c, cleanup, false, nil
 	}
 
-	// Fail-closed preflight: wrapper binaries present, namespace only on Linux
-	// non-root, etc. A misconfigured sandbox refuses to launch — never silently
-	// downgrades to no isolation.
+	// Preflight: wrapper binaries present, namespace only on Linux non-root, etc.
+	// An OPERATOR-WRITTEN isolation block fails closed — a misconfigured sandbox
+	// refuses to launch, never silently downgrades. A conductor-SYNTHESIZED
+	// default (an untrusted-by-default code engine) is best-effort instead: where
+	// the OS sandbox can't be applied it degrades to the manifest-only path with a
+	// loud warning, so an engine that would run today keeps running rather than
+	// the daemon refusing to start it.
 	if err := spec.Check(runtime.GOOS, os.Geteuid(), exec.LookPath); err != nil {
+		if s.IsolationDefaulted {
+			log.Printf("plugin %s: default sandbox unavailable (%v) — running WITHOUT OS confinement; install util-linux (unshare) + enable unprivileged user namespaces to sandbox it", s.Name, err)
+			env, cleanup, cerr := confineToManifest(s, spawnBaseEnv(), sd)
+			if cerr != nil {
+				return nil, nil, false, cerr
+			}
+			c := exec.Command(argv[0], argv[1:]...) //nolint:gosec // path is verified (verify.go); confinement is the declared manifest
+			c.Env = env
+			return c, cleanup, false, nil
+		}
 		return nil, nil, false, fmt.Errorf("plugin %s: sandbox preflight: %w", s.Name, err)
 	}
 
+	// Daemon-path masking (a tmpfs overmount of the state/config dirs) is
+	// unreliable inside an unprivileged `unshare --user` namespace: the kernel
+	// refuses to overmount a locked inherited mount (EPERM), which is why tools
+	// like bwrap pivot_root instead. So the SYNTHESIZED default sandbox skips
+	// masking entirely and relies on what a userns reliably gives — user + pid +
+	// network(deny) namespaces — which already blocks the big risks (egress and
+	// process tampering) for a pure-compute engine. An OPERATOR-WRITTEN isolation
+	// block still requests masking (and fails closed if it can't be applied — the
+	// operator chose it and should see it). A plugin's own binary dir is never
+	// maskable regardless (its running text lives there).
+	masks := masksExcludingBinaryDir(sd.MaskPaths, s.BinPath)
+	if s.IsolationDefaulted {
+		masks = nil
+	}
+
 	var nf *sandbox.NetForward
-	if len(sd.MaskPaths) > 0 || spec.EnforcedEgress() {
-		nf = &sandbox.NetForward{Self: sd.Self, Masks: sd.MaskPaths}
+	if len(masks) > 0 || spec.EnforcedEgress() {
+		nf = &sandbox.NetForward{Self: sd.Self, Masks: masks}
 	}
 	if spec.EnforcedEgress() {
 		if sd.EgressUnix == nil {

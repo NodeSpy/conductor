@@ -567,7 +567,18 @@ func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if !sandboxed {
+	switch {
+	case sandboxed:
+		// A confirmed OS jail — say so positively (this is the good path for an
+		// untrusted-by-default code engine).
+		d.Log("plugin %s: OS-sandboxed", s.Name)
+	case s.TrustFull:
+		// The operator opted this engine out of sandboxing deliberately — quiet.
+	case s.IsolationDefaulted:
+		// A synthesized default that degraded: buildCommand already logged the
+		// actionable warning at the point it knew why. Nothing to add.
+	default:
+		// The app-extension default for a connector/runtime with no isolation:.
 		d.Log("plugin %s: running WITHOUT OS sandbox (no isolation: block) — add one for filesystem/process confinement", s.Name)
 	}
 	stdin, err := cmd.StdinPipe()

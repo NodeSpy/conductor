@@ -48,14 +48,16 @@ type Manager struct {
 // It performs no I/O on the binary (verification happens at Start).
 func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool) Spec {
 	s := Spec{
-		Name:         ref.Name,
-		Kind:         Kind(ref.Kind()),
-		Provides:     ref.Name,
-		Version:      ref.Version(),
-		Isolation:    ref.Isolation,
-		Network:      ref.Network,
-		AllowSecrets: ref.AllowSecrets,
-		Use:          ref.Use,
+		Name:               ref.Name,
+		Kind:               Kind(ref.Kind()),
+		Provides:           ref.Name,
+		Version:            ref.Version(),
+		Isolation:          ref.Isolation,
+		IsolationDefaulted: ref.IsolationDefaulted,
+		TrustFull:          ref.TrustFull,
+		Network:            ref.Network,
+		AllowSecrets:       ref.AllowSecrets,
+		Use:                ref.Use,
 	}
 	if ref.Use.Origin == config.OriginLocal {
 		bin := ref.Use.Path

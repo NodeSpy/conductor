@@ -112,6 +112,14 @@ type Spec struct {
 	Network []string
 	// Isolation is OPTIONAL OS hardening. nil is the normal case.
 	Isolation *config.IsolationConfig
+	// IsolationDefaulted marks an Isolation conductor synthesized (an
+	// untrusted-by-default code engine) rather than one the operator wrote: its
+	// enforcement is best-effort (degrade to a warning if the sandbox can't be
+	// applied), where an operator-written block fails closed.
+	IsolationDefaulted bool
+	// TrustFull marks an engine the operator opted out of sandboxing — nil
+	// Isolation, and the "no OS sandbox" warning is suppressed.
+	TrustFull bool
 	// AllowSecrets optionally tightens which secret refs may cross the boundary.
 	AllowSecrets []string
 }
