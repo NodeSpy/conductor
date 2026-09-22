@@ -50,7 +50,7 @@ func TestCLIIsolationRoutesThroughWrap(t *testing.T) {
 	if err == nil {
 		t.Fatal("a code step with isolation: must fail closed when the sandbox can't be realized, not fall back to running bare")
 	}
-	if !strings.Contains(err.Error(), "code: cli: isolation:") || !strings.Contains(err.Error(), "Linux-only") {
+	if !strings.Contains(err.Error(), "code: cli: isolation:") || !strings.Contains(err.Error(), "Linux user namespaces or macOS Seatbelt") {
 		t.Fatalf("error must show the isolation wrap was engaged: %v", err)
 	}
 }
@@ -71,7 +71,7 @@ func TestHostInterpIsolationRoutesThroughWrap(t *testing.T) {
 	if err == nil {
 		t.Fatal("a code step with isolation: must fail closed when the sandbox can't be realized, not fall back to running bare")
 	}
-	if !strings.Contains(err.Error(), "code: sh: isolation:") || !strings.Contains(err.Error(), "Linux-only") {
+	if !strings.Contains(err.Error(), "code: sh: isolation:") || !strings.Contains(err.Error(), "Linux user namespaces or macOS Seatbelt") {
 		t.Fatalf("error must show the isolation wrap was engaged: %v", err)
 	}
 }

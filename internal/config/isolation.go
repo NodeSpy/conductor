@@ -25,8 +25,11 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 			return fmt.Errorf("config: %s: isolation mode user needs `user:` (the low-privilege account)", where)
 		}
 	case "namespace":
-		if !remote && isolationGOOS != "linux" {
-			return fmt.Errorf("config: %s: isolation mode namespace is Linux-only (this box is %s) — use mode user or container here", where, isolationGOOS)
+		// `namespace` is the OS-native jail: Linux user namespaces, or macOS
+		// Seatbelt (sandbox-exec) — one config surface, backend by OS. Other
+		// platforms have neither.
+		if !remote && isolationGOOS != "linux" && isolationGOOS != "darwin" {
+			return fmt.Errorf("config: %s: isolation mode namespace needs Linux user namespaces or macOS Seatbelt (this box is %s) — use mode user or container here", where, isolationGOOS)
 		}
 	case "container":
 		if remote {
@@ -59,6 +62,13 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 		// alone or with an allowlist — needs a structural mode there.
 		if n.Deny && iso.Mode == "user" {
 			return fmt.Errorf("config: %s: isolation network `deny: true` needs a structural mode (namespace or container) — mode user can only run the ADVISORY egress proxy", where)
+		}
+		// Enforced egress (deny + allowlist) under namespace needs the in-sandbox
+		// network-namespace forwarder, which is Linux-only. macOS Seatbelt can
+		// cut the network wholesale but not run the forwarder, so the allowlist
+		// can't be structurally enforced there.
+		if n.Deny && len(n.Egress) > 0 && iso.Mode == "namespace" && !remote && isolationGOOS == "darwin" {
+			return fmt.Errorf("config: %s: an enforced egress allowlist (network `deny: true` + `egress:`) under mode namespace is Linux-only on this box (macOS Seatbelt has no in-sandbox forwarder) — use mode container for an enforced allowlist on macOS, or plain `deny: true` (full network cut) / an advisory `egress:` without deny", where)
 		}
 		if len(n.Egress) > 0 && remote {
 			return fmt.Errorf("config: %s: an isolation egress allowlist needs a local launch (conductor's egress proxy lives on this box) — use plain `deny: true` with mode namespace for a remote box", where)

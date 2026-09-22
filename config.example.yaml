@@ -296,15 +296,19 @@ engines:
 #
 #   mode: user       — run as a low-privilege user (sudo -n -u <user>);
 #                      any Unix with the sudoers rule.
-#   mode: namespace  — Linux user/pid/mount namespaces (unshare), cgroup
-#                      limits: via systemd-run; network: {deny: true} adds
-#                      a network namespace (structurally no network). For a
-#                      CODE step (use: cli / run: <interp>) this is a real
-#                      pivot_root filesystem JAIL: only the workdir, interpreter
-#                      essentials, and any fs: paths are visible — the daemon's
-#                      state/config/secrets are hidden by absence (no docker
-#                      needed). For a runtime launch the daemon's state/config
-#                      dirs are MASKED instead; privileged: true is the opt-out.
+#   mode: namespace  — the OS-native least-privilege jail; backend by OS, same
+#                      YAML. LINUX: user/pid/mount namespaces (unshare), cgroup
+#                      limits: via systemd-run; network: {deny: true} adds a
+#                      network namespace (structurally no network); a CODE step
+#                      (use: cli / run: <interp>) gets a real pivot_root JAIL —
+#                      only the workdir, interpreter essentials, and fs: paths
+#                      are visible, the daemon's secrets hidden by absence (a
+#                      runtime launch masks the daemon dirs instead;
+#                      privileged: true opts out). macOS: the same is enforced
+#                      by Seatbelt (sandbox-exec) — fs:/deny map to an SBPL
+#                      allow-list; cgroup limits: are ignored, and an ENFORCED
+#                      egress allowlist (deny + egress) is Linux-only (use mode
+#                      container for that on a Mac). No root/docker either way.
 #                      As ROOT (euid 0) the user namespace is NOT a privilege
 #                      boundary, so conductor REFUSES namespace mode as root —
 #                      run a non-root daemon or mode: container. allow_root: true

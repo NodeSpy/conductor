@@ -72,17 +72,45 @@ func TestIsolationValidation(t *testing.T) {
 	}
 }
 
-func TestIsolationNamespaceRejectedOffLinux(t *testing.T) {
+func TestIsolationNamespaceAcceptedOnLinuxAndDarwin(t *testing.T) {
 	old := isolationGOOS
-	isolationGOOS = "darwin"
 	defer func() { isolationGOOS = old }()
+
+	// `namespace` is the OS-native jail on both Linux (user namespaces) and
+	// macOS (Seatbelt) — accepted on both.
+	for _, goos := range []string{"linux", "darwin"} {
+		isolationGOOS = goos
+		if err := validateIsolation("here", &IsolationConfig{Mode: "namespace"}, false); err != nil {
+			t.Fatalf("namespace on %s must be accepted: %v", goos, err)
+		}
+	}
+
+	// A platform with neither (windows) is rejected with a clear message.
+	isolationGOOS = "windows"
 	err := validateIsolation("here", &IsolationConfig{Mode: "namespace"}, false)
-	if err == nil || !strings.Contains(err.Error(), "Linux-only") {
-		t.Fatalf("namespace off linux: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "Linux user namespaces or macOS Seatbelt") {
+		t.Fatalf("namespace on windows must be rejected: %v", err)
 	}
 	// Remote skips the local GOOS check (the wrapper runs on the remote box).
 	if err := validateIsolation("here", &IsolationConfig{Mode: "namespace"}, true); err != nil {
 		t.Fatalf("remote namespace off linux: %v", err)
+	}
+}
+
+// Enforced egress (deny + allowlist) under mode namespace is Linux-only: macOS
+// Seatbelt can cut the network but not run the in-sandbox forwarder.
+func TestIsolationEnforcedEgressNamespaceRejectedOnDarwin(t *testing.T) {
+	old := isolationGOOS
+	isolationGOOS = "darwin"
+	defer func() { isolationGOOS = old }()
+	iso := &IsolationConfig{Mode: "namespace", Network: &IsolationNetwork{Deny: true, Egress: []string{"api.example.com:443"}}}
+	err := validateIsolation("here", iso, false)
+	if err == nil || !strings.Contains(err.Error(), "Linux-only") {
+		t.Fatalf("enforced egress under namespace on darwin must be rejected: %v", err)
+	}
+	// Plain deny (full cut) is fine on darwin (Seatbelt deny network*).
+	if err := validateIsolation("here", &IsolationConfig{Mode: "namespace", Network: &IsolationNetwork{Deny: true}}, false); err != nil {
+		t.Fatalf("plain deny under namespace on darwin must be accepted: %v", err)
 	}
 }
 

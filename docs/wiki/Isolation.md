@@ -108,7 +108,14 @@ the tool server's environment, and same-EUID siblings can read it from
 hijack the claim flow exists to close. Use `namespace`/`container` (separate
 `/proc` views) with `skill:`, or drop one of the two.
 
-### `mode: namespace` — Linux namespaces + cgroups
+### `mode: namespace` — the OS-native least-privilege jail
+
+`mode: namespace` is **portable**: it means "the OS's native least-privilege
+jail", and conductor picks the backend by OS — **Linux user namespaces** here,
+**macOS Seatbelt** (`sandbox-exec`) on a Mac. The config surface is identical
+(`network:` / `fs:`), so the same YAML — including the confined-by-default a
+pack gets — works on both; see [[#macos-seatbelt]] below for what differs. The
+rest of this section describes the Linux backend.
 
 The launch is wrapped in
 `unshare --user --map-current-user --pid --fork --mount-proc --kill-child`:
@@ -168,8 +175,36 @@ relying on it as a security wall against the agent. Same philosophy as
 `privileged:` and `trust: full`: strong-by-default, footgun explicit. It
 applies to namespace mode only (`validate` rejects it elsewhere as a no-op).
 
-Linux-only; `conductor validate` rejects it on other platforms (a remote
-`hosts:` entry skips the local check — the remote box's OS applies).
+The Linux backend needs user namespaces + `pivot_root`; the macOS backend
+(below) needs `sandbox-exec`. On any other platform `conductor validate`
+rejects `mode: namespace` (a remote `hosts:` entry skips the local check — the
+remote box's OS applies).
+
+#### macOS — Seatbelt {#macos-seatbelt}
+
+On a Mac the same `mode: namespace` is realized by **Seatbelt**, Apple's kernel
+sandbox, via `sandbox-exec -p <profile>` (shipped on every Mac; no root, no
+Docker). conductor generates a deny-by-default SBPL profile from the SAME
+allow-list the Linux jail uses:
+
+- `(deny default)` → the daemon's config/state/secrets are unreadable (the
+  macOS form of "hidden by absence" — deny-default denies metadata too, so
+  `stat` is refused, not just reads).
+- each `fs:` path + the workdir → `(allow file-read* file-write* (subpath …))`;
+  the step's own code/ctx temp dirs are added read-only/read-write for you.
+- `network: {deny: true}` → `(deny network*)`; open/advisory → `(allow
+  network*)` (the advisory `HTTP(S)_PROXY` still steers a well-behaved runtime).
+
+Two differences from Linux, both enforced at `validate`:
+
+- **cgroup `limits:` are ignored** on macOS (no systemd/cgroups analog).
+- **An enforced egress allowlist (`deny: true` + `egress:`) is Linux-only** —
+  Seatbelt can cut the network wholesale but not run the in-sandbox forwarder.
+  On macOS use `mode: container` for an enforced allowlist, or plain
+  `deny: true` / an advisory `egress:` without `deny`.
+
+Seatbelt is a kernel sandbox, not a uid trick, so the "not a boundary as root"
+caveat does not apply on macOS.
 
 ### `mode: container` — docker / podman
 
