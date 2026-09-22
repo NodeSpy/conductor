@@ -30,6 +30,13 @@ import (
 // the loader's own `${ENV_VAR}` expansion are untouched (both lack the dot).
 var settingsRefRE = regexp.MustCompile(`\$\{settings\.([A-Za-z0-9_.-]+)\}`)
 
+// packRefRE matches `${pack.dir}` — the pack's own vendored directory (absolute).
+// It lets a pack reference files it SHIPS (scripts, templates, data) by path,
+// without the consumer supplying a location. Resolved only inside a pack
+// manifest (substituteSettings), from a daemon-computed path, so it is never
+// pack- or user-controlled. The main config never sees it.
+var packRefRE = regexp.MustCompile(`\$\{pack\.(dir)\}`)
+
 // envRefRE matches the `${env.NAME}` form a SETTING VALUE may use to take its
 // value from the process environment (conductor.env is loaded into the
 // environment by the CLI before the config is read, so a value parked there
