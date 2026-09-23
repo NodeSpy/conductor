@@ -130,6 +130,10 @@ type Runtime struct {
 	Impl string
 	// Bin overrides the runtime binary (a paseo/agent-deck `bin:`).
 	Bin string
+	// Home is the daemon home this runtime targets (a paseo `home:`). Empty
+	// means the runtime's own default home. Discovery MUST honor it, or it
+	// answers about a different daemon than the one dispatch launches into.
+	Home string
 	// Agent is the ACP-driven agent (`use: acp`, agent: gemini).
 	Agent string
 	// Tool is the bare-CLI recipe's tool name (`use: cli`, tool: claude).

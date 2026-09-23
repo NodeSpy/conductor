@@ -38,11 +38,21 @@ type RuntimeModels struct {
 	// same wildcards as a fleet's `any:` (see MatchModelPattern). Empty = no
 	// restriction.
 	Allow []string `yaml:"allow,omitempty"`
+	// Provider is the provider to name on a BARE LAUNCH — the runtime's own
+	// default model, but on a provider conductor states explicitly.
+	//
+	// It exists because "bare" is not a launchable state on every runtime:
+	// `paseo run` with no --provider fails outright with MISSING_PROVIDER, so
+	// the degrade path conductor treats as its safe fallback was, on paseo, a
+	// guaranteed failure that then retried forever. Empty = derive one from
+	// the discovered roster; set it to pin the fallback explicitly on a box
+	// whose discovery cannot be relied on.
+	Provider string `yaml:"provider,omitempty"`
 }
 
 // IsZero reports the empty block, so `omitempty` drops it on marshal.
 func (m *RuntimeModels) IsZero() bool {
-	return m == nil || (m.Default == "" && len(m.Prefer) == 0 && len(m.Allow) == 0)
+	return m == nil || (m.Default == "" && len(m.Prefer) == 0 && len(m.Allow) == 0 && m.Provider == "")
 }
 
 // ModelSpec is the polymorphic acceptable-model value. It is used in two

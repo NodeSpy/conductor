@@ -65,11 +65,15 @@ runtimes:
       default: claude-opus-5      # OPTIONAL. Omitted → bare launch (see §4).
       prefer:  [claude-opus-5, gpt-5.6-sol]   # ranking among acceptable models
       allow:   [claude-opus-*, gpt-5.6-*]     # allowlist; roster is filtered to this
+      provider: claude                        # provider to name on a bare launch
 ```
 
 - `default:` — optional; its ABSENCE is meaningful (§4: bare launch).
 - `prefer:` — ranking used when a fleet offers a choice; consumer "disposes."
 - `allow:` — restricts what this runtime may ever run (supports wildcards, §2.1).
+- `provider:` — the provider a BARE launch names (§4). Optional; omitted, conductor
+  derives one from the discovered roster. Set it to pin the fallback on a box whose
+  discovery cannot be relied on.
 
 Omit the whole block and the runtime is fully auto: roster discovered, default =
 bare launch, no restrictions.
@@ -238,6 +242,38 @@ built-in default. This is NOT an error path:
 - omitting `models.default:` → bare launch.
 
 Contrast with `model: "*"` (§2.1), which resolves to a concrete preferred model.
+
+### 4.1 Bare means "no model", not "no provider"
+
+Some runtimes cannot launch on nothing at all: `paseo run` REQUIRES a provider and
+fails with `MISSING_PROVIDER` when given neither `--provider` nor `--model`. On
+that backend an unqualified bare launch is not a graceful degrade — it is a
+guaranteed failure, which then retries on every trigger.
+
+So a bare decision still names a provider where one can be had:
+
+1. the runtime's explicit `models.provider:`;
+2. else the first provider in its discovered roster;
+3. else genuinely bare — and the decision's notice says so, naming
+   `models.provider:` as the fix.
+
+The model choice still belongs to the runtime. Only the provider is stated.
+
+### 4.2 Discovery must answer for the daemon dispatch uses
+
+Bare launch is the fallback for "the roster could not confirm a model", so an
+empty roster silently converts every step into one. That makes roster accuracy a
+correctness concern, not a nicety:
+
+- the paseo lister passes the runtime's `home:` (`--home`, gated on paseo ≥ 0.9)
+  exactly as dispatch does. Enumerating the default home while launching into a
+  configured one reports on a daemon that is not running;
+- a discovery FAILURE is cached for `models.FailureTTL`, not forever. A permanent
+  negative cache turns one blip into a process-lifetime outage curable only by
+  restart. A successful roster is still cached for the life of the process;
+- the failure reason travels into the bare-launch notice and the `required: true`
+  error. "No configured runtime could enumerate its models" without the cause is
+  not a diagnostic.
 
 ---
 

@@ -378,37 +378,52 @@ func clearStaleGitLock(ctx context.Context, paseoBin, cwd string) {
 // missingProviderHelp is the conductor-native rewrite of paseo's
 // MISSING_PROVIDER (Fix B): it names the two conductor knobs that fix it rather
 // than paseo's provider vocabulary, which conductor doesn't expose.
-const missingProviderHelp = "paseo could not choose a model to run this agent — set `model:` on the step, or `models.default:` on the paseo runtime. Conductor passes no model on a bare launch, and paseo has no default provider configured."
+const missingProviderHelp = "paseo could not choose a model to run this agent — set `model:` on the step, `models.default:` on the paseo runtime, or `models.provider:` to pin the bare-launch provider. Conductor passes no model on a bare launch, and paseo has no default provider configured."
 
 // paseoErrDetail extracts a human-readable reason from a failed `paseo run`.
-// With --json paseo prints its error object to stdout ({"error":{code,message}});
-// non-JSON diagnostics land on stderr. Prefer whichever carries signal.
+// paseo prints its error object ({"error":{code,message}}) as JSON, but WHICH
+// stream it lands on varies by failure: run errors come back on stdout under
+// --json, while the CLI's own argument and daemon-connection errors go to
+// stderr. Parsing only stdout meant those latter ones — MISSING_PROVIDER among
+// them — fell through to the raw-text branch and were logged as a wall of
+// pretty-printed JSON with the translation never applied. Try both.
 func paseoErrDetail(stdout, stderr []byte) string {
+	for _, stream := range [][]byte{stdout, stderr} {
+		if d, ok := paseoErrEnvelope(stream); ok {
+			return d
+		}
+	}
+	if s := strings.TrimSpace(string(stderr)); s != "" {
+		return truncate(s, 500)
+	}
+	return truncate(strings.TrimSpace(string(stdout)), 500)
+}
+
+// paseoErrEnvelope decodes one stream's error object into conductor's
+// vocabulary.
+func paseoErrEnvelope(stream []byte) (string, bool) {
 	var e struct {
 		Error struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if json.Unmarshal(stdout, &e) == nil && e.Error.Message != "" {
-		// Translate paseo's provider vocabulary into conductor's (Fix B). paseo
-		// returns MISSING_PROVIDER when a run carries no model and paseo has no
-		// default provider configured — but conductor has no "providers" concept,
-		// so the raw code is a dead end for the operator. A bare (model-less)
-		// launch is deliberately valid (runtimes-models-packs.md §4), so this
-		// can't be a static config check; the boundary is here.
-		if e.Error.Code == "MISSING_PROVIDER" {
-			return missingProviderHelp
-		}
-		if e.Error.Code != "" {
-			return e.Error.Code + ": " + e.Error.Message
-		}
-		return e.Error.Message
+	if json.Unmarshal(bytes.TrimSpace(stream), &e) != nil || e.Error.Message == "" {
+		return "", false
 	}
-	if s := strings.TrimSpace(string(stderr)); s != "" {
-		return truncate(s, 500)
+	// Translate paseo's provider vocabulary into conductor's (Fix B). paseo
+	// returns MISSING_PROVIDER when a run carries no model and paseo has no
+	// default provider configured — but conductor has no "providers" concept,
+	// so the raw code is a dead end for the operator. A bare (model-less)
+	// launch is deliberately valid (runtimes-models-packs.md §4), so this
+	// can't be a static config check; the boundary is here.
+	if e.Error.Code == "MISSING_PROVIDER" {
+		return missingProviderHelp, true
 	}
-	return truncate(strings.TrimSpace(string(stdout)), 500)
+	if e.Error.Code != "" {
+		return e.Error.Code + ": " + e.Error.Message, true
+	}
+	return e.Error.Message, true
 }
 
 func truncate(s string, n int) string {

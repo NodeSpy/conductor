@@ -27,40 +27,40 @@ func TestParsePaseoSemver(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			v := parsePaseoSemver(c.out, c.err)
-			if v.known != c.wantKnown {
-				t.Fatalf("known=%v, want %v (%q)", v.known, c.wantKnown, v)
+			if v.Known != c.wantKnown {
+				t.Fatalf("known=%v, want %v (%q)", v.Known, c.wantKnown, v)
 			}
-			if c.wantKnown && (v.major != c.maj || v.minor != c.min || v.patch != c.pat) {
-				t.Fatalf("got %d.%d.%d, want %d.%d.%d", v.major, v.minor, v.patch, c.maj, c.min, c.pat)
+			if c.wantKnown && (v.Major != c.maj || v.Minor != c.min || v.Patch != c.pat) {
+				t.Fatalf("got %d.%d.%d, want %d.%d.%d", v.Major, v.Minor, v.Patch, c.maj, c.min, c.pat)
 			}
 		})
 	}
 }
 
 func TestPaseoSemverAtLeast(t *testing.T) {
-	v091 := paseoSemver{0, 9, 1, true}
-	if !v091.atLeast(0, 9, 0) {
+	v091 := paseoSemver{Major: 0, Minor: 9, Patch: 1, Known: true}
+	if !v091.AtLeast(0, 9, 0) {
 		t.Error("0.9.1 should be >= 0.9.0")
 	}
-	if !v091.atLeast(0, 9, 1) {
+	if !v091.AtLeast(0, 9, 1) {
 		t.Error("0.9.1 should be >= 0.9.1")
 	}
-	if v091.atLeast(0, 9, 2) {
+	if v091.AtLeast(0, 9, 2) {
 		t.Error("0.9.1 should NOT be >= 0.9.2")
 	}
-	v080 := paseoSemver{0, 8, 0, true}
-	if v080.atLeast(0, 9, 0) {
+	v080 := paseoSemver{Major: 0, Minor: 8, Patch: 0, Known: true}
+	if v080.AtLeast(0, 9, 0) {
 		t.Error("0.8.0 should NOT be >= 0.9.0")
 	}
-	if !v080.atLeast(0, 8, 0) {
+	if !v080.AtLeast(0, 8, 0) {
 		t.Error("0.8.0 should be >= 0.8.0")
 	}
-	v100 := paseoSemver{1, 0, 0, true}
-	if !v100.atLeast(0, 9, 0) {
+	v100 := paseoSemver{Major: 1, Minor: 0, Patch: 0, Known: true}
+	if !v100.AtLeast(0, 9, 0) {
 		t.Error("1.0.0 should be >= 0.9.0")
 	}
 	// Unknown → assume newest.
-	if !(paseoSemver{}).atLeast(0, 9, 0) {
+	if !(paseoSemver{}).AtLeast(0, 9, 0) {
 		t.Error("unknown version should be treated as newest (>= 0.9.0)")
 	}
 }
@@ -77,18 +77,18 @@ func TestHomePrefixVersionGated(t *testing.T) {
 	ctx := context.Background()
 
 	// paseo >= 0.9 with a home → emit --home.
-	got := homePrefix(ctx, "paseo", nil, "/srv/paseo", primeCache(paseoSemver{0, 9, 1, true}), nil)
+	got := homePrefix(ctx, "paseo", nil, "/srv/paseo", primeCache(paseoSemver{Major: 0, Minor: 9, Patch: 1, Known: true}), nil)
 	if !slices.Equal(got, []string{"--home", "/srv/paseo"}) {
 		t.Fatalf("0.9 with home: got %v, want [--home /srv/paseo]", got)
 	}
 
 	// pre-0.9 with a home → NO --home (the flag doesn't exist there).
-	if got := homePrefix(ctx, "paseo", nil, "/srv/paseo", primeCache(paseoSemver{0, 8, 0, true}), nil); got != nil {
+	if got := homePrefix(ctx, "paseo", nil, "/srv/paseo", primeCache(paseoSemver{Major: 0, Minor: 8, Patch: 0, Known: true}), nil); got != nil {
 		t.Fatalf("0.8 with home: got %v, want nil", got)
 	}
 
 	// No home configured → nil regardless of version.
-	if got := homePrefix(ctx, "paseo", nil, "", primeCache(paseoSemver{0, 9, 1, true}), nil); got != nil {
+	if got := homePrefix(ctx, "paseo", nil, "", primeCache(paseoSemver{Major: 0, Minor: 9, Patch: 1, Known: true}), nil); got != nil {
 		t.Fatalf("empty home: got %v, want nil", got)
 	}
 
@@ -104,19 +104,19 @@ func TestHomePrefixVersionGated(t *testing.T) {
 // >= 0.9. This is what every clone/run/ls/… actually gets.
 func TestDispatcherPaseoCmdInjectsHome(t *testing.T) {
 	d := &Dispatcher{PaseoBin: "paseo", Home: "/srv/paseo"}
-	d.verCache.once.Do(func() { d.verCache.ver = paseoSemver{0, 9, 1, true} })
+	d.verCache.once.Do(func() { d.verCache.ver = paseoSemver{Major: 0, Minor: 9, Patch: 1, Known: true} })
 	if got := d.paseoCmd(context.Background(), "clone", "acme/x").Args; !slices.Equal(got, []string{"paseo", "--home", "/srv/paseo", "clone", "acme/x"}) {
 		t.Fatalf("0.9: got %v", got)
 	}
 
 	d8 := &Dispatcher{PaseoBin: "paseo", Home: "/srv/paseo"}
-	d8.verCache.once.Do(func() { d8.verCache.ver = paseoSemver{0, 8, 0, true} })
+	d8.verCache.once.Do(func() { d8.verCache.ver = paseoSemver{Major: 0, Minor: 8, Patch: 0, Known: true} })
 	if got := d8.paseoCmd(context.Background(), "clone", "acme/x").Args; !slices.Equal(got, []string{"paseo", "clone", "acme/x"}) {
 		t.Fatalf("0.8: got %v (must NOT carry --home)", got)
 	}
 
 	dNoHome := &Dispatcher{PaseoBin: "paseo"}
-	dNoHome.verCache.once.Do(func() { dNoHome.verCache.ver = paseoSemver{0, 9, 1, true} })
+	dNoHome.verCache.once.Do(func() { dNoHome.verCache.ver = paseoSemver{Major: 0, Minor: 9, Patch: 1, Known: true} })
 	if got := dNoHome.paseoCmd(context.Background(), "ls", "--json").Args; !slices.Equal(got, []string{"paseo", "ls", "--json"}) {
 		t.Fatalf("no home: got %v", got)
 	}
