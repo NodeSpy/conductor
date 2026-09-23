@@ -18,12 +18,14 @@ import (
 )
 
 type fakeDispatcher struct {
-	reqs       []dispatch.Request
-	ref        dispatch.RunRef
-	err        error
-	liveAgent  bool                                            // HasLiveAgent return value
-	onDispatch func(dispatch.Request) (dispatch.RunRef, error) // per-call override (e.g. varying output)
-	archived   chan string                                     // agent ids passed to Archive (if set)
+	reqs           []dispatch.Request
+	ref            dispatch.RunRef
+	err            error
+	liveAgent      bool                                            // HasLiveAgent return value
+	onDispatch     func(dispatch.Request) (dispatch.RunRef, error) // per-call override (e.g. varying output)
+	archived       chan string                                     // agent ids passed to Archive (if set)
+	dispatchAgents map[string]string                               // AgentForDispatch fixture
+	inflightIDs    map[string]bool                                 // DispatchInFlight fixture
 }
 
 func (f *fakeDispatcher) Dispatch(_ context.Context, r dispatch.Request) (dispatch.RunRef, error) {
@@ -1233,3 +1235,9 @@ func TestParkAfterAttempts(t *testing.T) {
 		t.Fatalf("a new head must un-park and dispatch, got %d", len(d.reqs))
 	}
 }
+
+func (f *fakeDispatcher) AgentForDispatch(d string) string { return f.dispatchAgents[d] }
+func (f *fakeDispatcher) DispatchInFlight(d string) bool   { return f.inflightIDs[d] }
+
+func (*gateFake) AgentForDispatch(string) string { return "" }
+func (*gateFake) DispatchInFlight(string) bool   { return false }

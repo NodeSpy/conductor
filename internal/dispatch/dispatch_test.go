@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
@@ -333,43 +332,6 @@ func TestReclaimableWorkspaceMap(t *testing.T) {
 	}
 }
 
-func TestHoldMarkerPresent(t *testing.T) {
-	dir := t.TempDir()
-	if (&Reaper{}).holdMarkerPresent(dir) {
-		t.Fatal("no marker yet")
-	}
-	if err := os.WriteFile(filepath.Join(dir, HoldMarker), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if !(&Reaper{}).holdMarkerPresent(dir) {
-		t.Fatal("marker should be detected")
-	}
-	if (&Reaper{}).holdMarkerPresent("") {
-		t.Fatal("empty cwd is not held")
-	}
-}
-
-func TestReaperMarkAndSpareStaysHeld(t *testing.T) {
-	r := &Reaper{}
-	// Not holding, never held → not spared.
-	if spared, _ := r.markAndSpare("a", false); spared {
-		t.Fatal("agent that never interacted should not be spared")
-	}
-	// First time it holds → spared, firstHold=true.
-	if spared, first := r.markAndSpare("a", true); !spared || !first {
-		t.Fatalf("first hold should spare with firstHold=true, got spared=%v first=%v", spared, first)
-	}
-	// Once held, it stays spared even when the question is answered (holdingNow=false),
-	// and firstHold is false on subsequent polls.
-	if spared, first := r.markAndSpare("a", false); !spared || first {
-		t.Fatalf("held agent must stay spared after answering, got spared=%v first=%v", spared, first)
-	}
-	// A different agent is independent.
-	if spared, _ := r.markAndSpare("b", false); spared {
-		t.Fatal("unrelated agent should not be spared")
-	}
-}
-
 func TestIsGitRepoAndMainWorkTree(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -457,22 +419,5 @@ func TestBackendRouting(t *testing.T) {
 		Action:  config.Action{Type: "command", Backend: "paseo", Command: []string{"critique"}},
 	}); ref.Backend != "paseo" {
 		t.Fatalf("per-action backend override should win, got %q", ref.Backend)
-	}
-}
-
-func TestReaperMinAge(t *testing.T) {
-	if got := (&Reaper{}).minAge(); got != reaperGraceDefault {
-		t.Fatalf("default grace should be %v, got %v", reaperGraceDefault, got)
-	}
-	if got := (&Reaper{MinAge: 30 * time.Second}).minAge(); got != 30*time.Second {
-		t.Fatalf("MinAge override not honored, got %v", got)
-	}
-	// A just-created agent is inside the grace window; an old one is not.
-	r := &Reaper{}
-	if time.Since(time.Now()) >= r.minAge() {
-		t.Fatal("a fresh timestamp must be within the grace window")
-	}
-	if time.Since(time.Now().Add(-10*time.Minute)) < r.minAge() {
-		t.Fatal("a 10-min-old timestamp must be past the grace window")
 	}
 }

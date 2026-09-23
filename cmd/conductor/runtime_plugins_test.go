@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
-	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
@@ -109,20 +108,5 @@ func TestLoadRuntimePlugins_HostRefused(t *testing.T) {
 	_, err := loadOne(t, cfg)
 	if err == nil || !strings.Contains(err.Error(), "host:") {
 		t.Fatalf("host: on a Backend-RPC runtime must be refused, got %v", err)
-	}
-}
-
-// reaperFor drives a plugin-backed override through the plugin's Backend (no
-// local paseo bin), and a builtin/own-bin override through its PaseoBin.
-func TestReaperFor(t *testing.T) {
-	pd := dispatch.New("some-bin", config.Retry{}, false)
-	backends := map[string]runtimePluginBackend{"plug": {Name: "plug"}}
-	log := func(string, ...any) {}
-
-	if r := reaperFor("plug", pd, backends, log, nil); r.PaseoBin != "" {
-		t.Fatalf("plugin-backed reaper must not use a local PaseoBin, got %q", r.PaseoBin)
-	}
-	if r := reaperFor("other", pd, backends, log, nil); r.PaseoBin != "some-bin" {
-		t.Fatalf("non-plugin reaper must use the dispatcher PaseoBin, got %q", r.PaseoBin)
 	}
 }

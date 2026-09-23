@@ -26,6 +26,13 @@ import (
 // hand-off it is holding, never one it names.
 const HandoffSelfServiceVerb = "handoff.done"
 
+// StepSelfServiceVerb is the done signal EVERY conductor-launched agent may
+// call: "my task is complete — reclaim my workspace". Like handoff.done, the
+// daemon derives the target from the caller's token identity (the dispatch id
+// minted at launch), so an agent can only ever release itself. Agents conductor
+// did not launch hold no token and cannot reach the verb at all.
+const StepSelfServiceVerb = "step.done"
+
 // EffectiveSkillPolicy is the grant a dispatch actually carries: the step's own
 // skill: block (nil means no block — an empty grant), plus handoff.done
 // auto-granted when the dispatch is an interactive hand-off. It copies the verb
@@ -42,13 +49,26 @@ func EffectiveSkillPolicy(sk *config.SkillPolicy, interactive bool) config.Skill
 	if sk != nil {
 		p = *sk
 	}
+	// step.done is auto-granted to EVERY dispatch: with no background sweep,
+	// the agent's own done signal is how a workspace conductor launched gets
+	// reclaimed when conductor isn't already blocked on it. handoff.done is
+	// additionally granted to interactive hand-offs (same handler; it also
+	// tears down the hand-off state).
+	want := []string{StepSelfServiceVerb}
 	if interactive {
+		want = append(want, HandoffSelfServiceVerb)
+	}
+	for _, w := range want {
+		found := false
 		for _, v := range p.Verbs {
-			if v == HandoffSelfServiceVerb {
-				return p // already granted; nothing to add
+			if v == w {
+				found = true
+				break
 			}
 		}
-		p.Verbs = append(append([]string(nil), p.Verbs...), HandoffSelfServiceVerb)
+		if !found {
+			p.Verbs = append(append([]string(nil), p.Verbs...), w)
+		}
 	}
 	return p
 }
@@ -59,10 +79,13 @@ func effectiveSkillPolicy(req Request) config.SkillPolicy {
 	return EffectiveSkillPolicy(req.Step.Skill, req.Interactive)
 }
 
-// wantsSkillCreds reports whether a dispatch should be handed CLI skill creds: a
-// step with a skill: block, or ANY interactive hand-off (which auto-gets
-// handoff.done). Non-interactive steps without skill: get none.
-func wantsSkillCreds(req Request) bool { return req.Step.Skill != nil || req.Interactive }
+// wantsSkillCreds reports whether a dispatch should be handed CLI skill creds.
+// Every non-agent-authored dispatch gets them: with no background sweep, every
+// agent must be able to call step.done (auto-granted by EffectiveSkillPolicy)
+// to release its own workspace. Agent-authored dispatches stay excluded —
+// SkillEnv independently refuses to mint for them, and their steps are always
+// foreground, so the step-boundary archive covers reclaim.
+func wantsSkillCreds(req Request) bool { return !req.AgentAuthored }
 
 // ToolServerSpec is one dispatch's conductor tool server: the subprocess to
 // launch, its argv, and the environment to set on it.

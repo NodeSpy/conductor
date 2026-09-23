@@ -221,3 +221,6 @@ func TestEngineAffinityFollowupDoesNotBlockLoop(t *testing.T) {
 		t.Fatalf("follow-up order: %v", sent)
 	}
 }
+
+func (*sendingDispatcher) AgentForDispatch(string) string { return "" }
+func (*sendingDispatcher) DispatchInFlight(string) bool   { return false }

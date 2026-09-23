@@ -695,7 +695,7 @@ type ControllerConfig struct {
 	// Host names a `hosts:` entry; this controller's subprocess launches run
 	// there over SSH instead of locally. All controller types support it —
 	// cli/acp/agent-deck wrap their subprocess in the ssh launch, paseo runs
-	// its whole CLI (and reaper) remotely, and opencode's server is reached
+	// its whole CLI remotely, and opencode's server is reached
 	// through an ssh -W stdio forward — see checkRemoteHostSupport.
 	Host string `yaml:"host"`
 	// Isolation wraps this runtime's launches in the per-dispatch sandbox
@@ -1645,7 +1645,7 @@ func (c *Config) validateControllers() error {
 // checkRemoteHostSupport validates a runtime/controller's `host:` reference:
 // it must name a defined `hosts:` entry. Every runtime type runs remotely —
 // cli/acp/agent-deck ssh-wrap their subprocess, paseo executes its whole CLI
-// (checkouts under the remote ~/.conductor) and reaper on the host, and
+// (checkouts under the remote ~/.conductor) on the host, and
 // opencode's remotely-launched server is reached through an ssh -W stdio
 // forward. kind is "runtime" or "controller" (for the error text); the
 // typ/agent/transport fields are accepted so a future type-specific

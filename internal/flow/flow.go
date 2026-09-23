@@ -1487,6 +1487,8 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		}
 		if step.Background {
 			act.Prompt += dispatch.HandoffGuidance
+		} else {
+			act.Prompt += dispatch.DoneGuidance
 		}
 	}
 	var tokens dispatch.Tokens

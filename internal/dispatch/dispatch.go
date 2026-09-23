@@ -129,6 +129,19 @@ type Dispatcher struct {
 	PaseoBin string
 	DryRun   bool
 
+	// Owned is conductor's authoritative ledger of the agents and workspaces IT
+	// launched (owned.go). Every workspace this dispatcher creates and every
+	// agent it starts is recorded here at that moment, and Archive refuses any
+	// id not in it — so a workspace conductor never launched (the user's own)
+	// is structurally unreachable. nil fails CLOSED: recording is a no-op, the
+	// ledger stays empty, and Archive refuses everything.
+	Owned *OwnedSet
+
+	// inflight marks dispatch ids conductor is currently blocked on (foreground
+	// runs, including output_schema retries). A step.done for an in-flight
+	// dispatch defers to the step-boundary archive; see Dispatcher.Archive.
+	inflight sync.Map
+
 	// Secrets redacts tracked secret values from the error details this
 	// package builds out of paseo stderr/output before they leave the
 	// package (nil = passthrough).

@@ -215,9 +215,9 @@ group_B_fixer() {
   else
     bad "B paseo fixer pushed a fix" B paseo "no conductor commit on acme/web pr-1"
   fi
-  # Agent archived when done (reaper).
+  # Agent archived when done (inline step-boundary archive — no reaper exists).
   if wait_for 30 fake_archived conductor; then
-    ok "B agent archived when done (archive_when_done → reaper)" B archive
+    ok "B agent archived when done (archive_when_done → step-boundary archive)" B archive
   else
     bad "B agent archived when done" B archive "no archive recorded in fake paseo"
   fi

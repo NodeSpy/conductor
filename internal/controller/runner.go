@@ -256,6 +256,14 @@ func (r *controllerRunner) Archive(ctx context.Context, agentID string) error {
 	return err
 }
 
+// AgentForDispatch: controller sessions don't yet record a dispatch binding;
+// a done call for one resolves via its legacy agent identity instead.
+func (r *controllerRunner) AgentForDispatch(string) string { return "" }
+
+// DispatchInFlight: controller foreground turns block in Dispatch and their
+// sessions are closed by the runner itself, so there is no in-flight defer.
+func (r *controllerRunner) DispatchInFlight(string) bool { return false }
+
 // forget removes a session from the liveness indexes, decrementing exactly the
 // PR+kind bucket it was dispatched under.
 func (r *controllerRunner) forget(id string) {

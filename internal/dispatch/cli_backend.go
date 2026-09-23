@@ -53,14 +53,6 @@ func newDispatcherCLIBackend(d *Dispatcher) *cliBackend {
 	}
 }
 
-// newReaperCLIBackend builds the CLI backend for a Reaper: the same paseo
-// binary and remote host its paseoCmd already used, so the reaper's argv is
-// byte-identical to the pre-Backend path. No run policy — the reaper only
-// lists, inspects and archives.
-func newReaperCLIBackend(r *Reaper) *cliBackend {
-	return &cliBackend{exec: r, paseoBin: r.PaseoBin, remote: r.Remote != nil}
-}
-
 // redactText scrubs tracked secret values from stderr-derived detail text,
 // via the owner's redactor when it has one.
 func (b *cliBackend) redactText(s string) string {

@@ -112,8 +112,12 @@ func TestLegacyDispatchShedsOnBudget(t *testing.T) {
 }
 
 func TestLegacyDispatchRecordsUsage(t *testing.T) {
+	// Reported usage must stay PLAUSIBLE against the prompt-length estimate or
+	// cost.FromRun floors it to the estimate. Every agent prompt now carries the
+	// house guidance (including the step.done instruction), so the fixture
+	// reports a figure comfortably above that floor.
 	d := &fakeDispatcher{ref: dispatch.RunRef{AgentID: "a1",
-		Output: `{"usage":{"input_tokens":10,"output_tokens":5}}`}}
+		Output: `{"usage":{"input_tokens":200,"output_tokens":100}}`}}
 	n := &fakeNotifier{}
 	e, _ := newEng(t, budgetCfg(nil, nil), d, n, nil)
 
@@ -125,10 +129,10 @@ func TestLegacyDispatchRecordsUsage(t *testing.T) {
 	if len(d.reqs) != 1 {
 		t.Fatalf("dispatched: %d", len(d.reqs))
 	}
-	if tok, _ := e.meter.SpentIn("runtime:fixer", time.Hour); tok != 15 {
+	if tok, _ := e.meter.SpentIn("runtime:fixer", time.Hour); tok != 300 {
 		t.Fatalf("metered profile usage: %d", tok)
 	}
-	if tok, _ := e.meter.SpentIn("global", time.Hour); tok != 15 {
+	if tok, _ := e.meter.SpentIn("global", time.Hour); tok != 300 {
 		t.Fatalf("metered global usage: %d", tok)
 	}
 }

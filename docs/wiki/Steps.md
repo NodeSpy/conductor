@@ -44,7 +44,7 @@ x-templates:
     workspace: worktree               # local | worktree
     # workspace: { isolation: local, pin: triage }   # …or reuse a NAMED workspace
     wait_timeout: 30m
-    archive_when_done: true           # reaper archives the agent once it idles
+    archive_when_done: true           # archived inline the moment the step finishes
     labels: { team: autopilot }
     # runtime: paseo                  # pin the backend (default: the default: true runtime)
     # host: build-box                 # a [[Hosts]] SSH target its runtime launches on
@@ -307,9 +307,9 @@ to execute belongs here.
 | `workspace` | `local` or `worktree` — the existing checkout, or a fresh git worktree. |
 | `expect_push` | Mark a fixer step that must LAND a change on the target. A clean run that leaves work unlanded (a non-empty proposed diff never pushed) becomes a `no_progress` failure instead of a silent success — see [[Workflows]] hooks. Leave off for a review/judge step. |
 | `wait_timeout` | How long a foreground dispatch waits before giving up. |
-| `archive_when_done` | Whether the reaper archives the agent once it idles. Forced off for a `background:` hand-off step. |
+| `archive_when_done` | Whether the agent (and its conductor-created workspace) is archived the moment its step finishes. Forced off for a `background:` hand-off step. |
 | `watch` | Reactive hand-off: run `steps:` every `every:` (a mini-workflow — fact reads + if-guarded actions). Actions: `handoff.bail` (reason gone → tear down), `handoff.rerun` (re-run this step), or a `workflow:` step (re-run a workflow — re-review). Operator-owned. See [[Hand-offs]]. |
-| `idle_timeout` | Release an interactive hand-off still open after this long (drop the reaper hold → workspace reclaimed). The backstop for one nobody closed; the agent calling `handoff.done` is the precise signal. Off unless set. See [[Hand-offs]]. |
+| `idle_timeout` | Release an interactive hand-off still open after this long (drop the hold, archive the agent + workspace). The backstop for one nobody closed; the agent calling `handoff.done` is the precise signal. Off unless set. See [[Hand-offs]]. |
 | `labels` | Extra `key=value` labels on the dispatched agent. |
 | `host` | A [[Hosts]] SSH target this step's runtime launches on, overriding the runtime's own. |
 | `guidance` | Tone/format that **stacks on** the scoped baseline ([[Policy\|`policy.guidance`]]) rather than replacing it. A string, a list, or `{ replace: … }`. See [[Reuse]]. |
@@ -345,7 +345,7 @@ it lives on the **runtime** ([[Cost-Accounting]]).
   strategy comes from the trigger, so the pin applies to the runs with no repo
   context and is ignored on the ones that get a worktree.
 - `archive_when_done: true` steps are still protected from premature cleanup:
-  the reaper skips one paused on a permission prompt, and an agent can hold
+  reclaim skips one paused on a permission prompt, and an agent can hold
   itself alive with a `.paseo-hold` marker in its worktree.
 - Which models a runtime can actually run is DISCOVERED, per runtime — see
   [[Model-Discovery]]. `conductor validate` reports a `required:` fleet
@@ -390,7 +390,7 @@ Resolution per dispatch: the **step's** `session:` wins, else the
 - **Durable.** The binding persists in conductor's own state
   (`affinity.json`, beside audit/dedup); after a restart the session resumes
   via the runtime's native handle (paseo re-binds the agent id, ACP
-  `session/load`). While bound, the agent is held from the reaper.
+  `session/load`). While bound, the agent is never reclaimed.
 - **Eviction.** Idle past `idle_ttl`, older than `max_lifetime`, or an
   `end_on` event (matched as `<connector>.<kind>`, a bare `<kind>`, or
   `<type>.<kind>`, rendered against the event's own context). github's PR

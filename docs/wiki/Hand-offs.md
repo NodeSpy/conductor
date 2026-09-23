@@ -49,7 +49,7 @@ An agent step with `background: true` launches a live agent you drive. Its
 `handoff:` names an ask-capable **connector** to present the review loop on
 (present → approve/revise/discard → revise re-presents); with none, the
 hand-off stays runtime-native — the notification tells you to open the live
-agent (paseo's interactive surface). The agent is held from the reaper either
+agent (paseo's interactive surface). The agent is protected from reclaim either
 way.
 
 ## Reactive watch (`watch:`)
@@ -95,7 +95,7 @@ A broken condition is skipped, never fired. A fact step's read target
 The action steps:
 
 - **`uses: handoff.bail`** — the reason is gone. Tears the hand-off down (cancel
-  the agent, close the draft, release the reaper hold) and stops watching. Use
+  the agent, close the draft, release the hold) and stops watching. Use
   it for `pr.merged`, `pr.state == "closed"`, or approved-elsewhere.
 - **`uses: handoff.rerun`** — re-running *this step* is enough. **Supersedes**:
   tears down, then re-dispatches the same step on the current state (surface-
@@ -125,7 +125,7 @@ workspace rather than sit held until you archive it by hand. Two paths:
 - **`handoff.done`** — an agent skill verb, **auto-granted to every hand-off**:
   the agent calls it the moment it has nothing more for you (the guidance
   appended to every hand-off tells it to), no `skill:` block required. It ends
-  the review, closes the draft, and drops the reaper hold on the agent's own
+  the review, closes the draft, and drops the hold on the agent's own
   hand-off — the caller can only release its own, since the daemon resolves the
   target from the token identity, never a name the agent passes. (An explicit
   `skill: { verbs: [handoff.done] }` is harmless and de-duplicated.)

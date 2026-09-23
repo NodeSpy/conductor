@@ -27,7 +27,7 @@ The daemon's value is that it keeps watching. A runner's value is that it dies.
 So one-shot mode starts **none** of the daemon's background machinery:
 
 no control socket · no catch-up sweep · no webhook/smee watcher · no auto-update
-loop · no activity digest · no archive reaper · no git-worktree orphan sweep ·
+loop · no activity digest · no git-worktree orphan sweep ·
 no callable HTTP service · no memory IPC socket · no Discord gateways · no
 inbound listener · no workflow resume · not even the engine's own event loop.
 

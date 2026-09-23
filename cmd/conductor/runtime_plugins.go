@@ -79,21 +79,6 @@ func loadRuntimePlugins(mgr *plugin.Manager, cfg *config.Config, retry config.Re
 	return out, nil
 }
 
-// reaperFor builds the archive-when-done reaper for one paseo dispatch surface.
-// A Backend-RPC plugin runtime's reaper drives the SAME plugin (via its
-// rpcBackend) — ListAgents/ArchiveAgent/ArchiveWorkspace all round-trip to the
-// plugin — rather than shelling a local `paseo` binary that runtime has none of.
-// A builtin/own-bin/remote paseo runtime keeps the CLI reaper (PaseoBin/Remote).
-func reaperFor(name string, pd *dispatch.Dispatcher, backends map[string]runtimePluginBackend, log func(string, ...any), held *dispatch.HoldSet) *dispatch.Reaper {
-	r := &dispatch.Reaper{Log: log, Held: held}
-	if rb, ok := backends[name]; ok {
-		r.SetBackend(rb.Backend)
-	} else {
-		r.PaseoBin, r.Remote, r.Home = pd.PaseoBin, pd.Remote, pd.Home
-	}
-	return r
-}
-
 // runtimePluginManager returns the *plugin.Manager loadRuntimePlugins should
 // use. In the common case it reuses stack.Plugins (which already built a Client
 // for every runtimes/* ref and is Closed by the daemon's `defer stack.Close()`).
