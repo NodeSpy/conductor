@@ -105,8 +105,6 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				// asking (that surfaces as "waiting for permission" and fails the schema).
 				if s.Background {
 					s.Prompt += dispatch.HandoffGuidance
-				} else {
-					s.Prompt += dispatch.DoneGuidance
 				}
 			}
 		}

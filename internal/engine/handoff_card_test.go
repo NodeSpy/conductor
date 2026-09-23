@@ -42,14 +42,10 @@ func TestHandoffDoneInCLICapabilityCard(t *testing.T) {
 		t.Fatalf("background hand-off CLI card must list handoff.done; got: %q", bg)
 	}
 
-	// A non-hand-off step with no skill: block still advertises step.done —
-	// the auto-granted done signal every dispatch carries (the reaper's
-	// replacement) — and nothing broader.
-	plain := e.skillGuidance(config.Step{})
-	if !strings.Contains(plain, "step.done") {
-		t.Fatalf("plain step CLI card must list step.done; got: %q", plain)
-	}
-	if strings.Contains(plain, "handoff.done") {
-		t.Fatalf("plain step CLI card must not list handoff.done; got: %q", plain)
+	// A non-hand-off step with no skill: block advertises nothing — the token
+	// silently carries step.done, but the card stays empty so schema steps get
+	// no extra instructions (the HoldGuidance lesson).
+	if plain := e.skillGuidance(config.Step{}); plain != "" {
+		t.Fatalf("a step with no grant must get no skill guidance; got: %q", plain)
 	}
 }

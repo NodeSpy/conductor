@@ -68,16 +68,13 @@ const HandoffGuidance = "\n\n---\n" +
 	"release this hand-off so its workspace is reclaimed. Do that promptly once done; " +
 	"don't leave the hand-off open waiting on nothing."
 
-// DoneGuidance is appended to every NON-hand-off agent step. It is the done
-// signal's instruction: the agent runs `conductor call step.done` as its final
-// action so conductor reclaims the workspace it launched — there is no
-// background sweep to clean up after an agent that never signals. Deliberately
-// framed as a fire-and-forget final action: unlike a hand-off, an autonomous
-// agent must never pause or ask (see the retired HoldGuidance note above).
-const DoneGuidance = "\n\n---\n" +
-	"WHEN FINISHED: after you have completed your task and produced your final " +
-	"output, run `conductor call step.done` (optionally with " +
-	"`--json '{\"reason\":\"<one-line summary>\"}'`) as your very last action. " +
-	"This tells conductor you are done so it can reclaim this workspace. It is " +
-	"fire-and-forget: do not wait on it, do not ask about it, and if the command " +
-	"is unavailable or fails, just finish normally."
+	// NOTE: there is deliberately NO done-instruction for foreground steps. A
+	// "run `conductor call step.done` as your final action" line injected into a
+	// schema-carrying step makes the model end with prose about the call instead
+	// of the required JSON — the SAME failure that retired HoldGuidance (above),
+	// re-proven live on v0.50.0 (every pr-review-team reviewer failed
+	// output_schema until it was removed). Conductor is already blocked on a
+	// foreground step and archives it at the step boundary; only an agent
+	// conductor is NOT waiting on needs telling, and that is the hand-off
+	// (HandoffGuidance). The step.done VERB stays granted to every dispatch for
+	// early self-release.
