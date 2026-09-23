@@ -245,3 +245,5 @@ func TestSessionModelAndTransportValid(t *testing.T) {
 
 func (*recordRunner) AgentForDispatch(string) string { return "" }
 func (*recordRunner) DispatchInFlight(string) bool   { return false }
+
+func (*recordRunner) DeliverOutput(string, map[string]any) (bool, error) { return false, nil }

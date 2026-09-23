@@ -559,3 +559,5 @@ triggers:
 
 func (fakeFlowDispatcher) AgentForDispatch(string) string { return "" }
 func (fakeFlowDispatcher) DispatchInFlight(string) bool   { return false }
+
+func (fakeFlowDispatcher) DeliverOutput(string, map[string]any) (bool, error) { return false, nil }

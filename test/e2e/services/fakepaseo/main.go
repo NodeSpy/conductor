@@ -340,6 +340,27 @@ func cmdRun(args []string) {
 	// The canned final answer (a `[[reply {...}]]` directive). Stored on the
 	// agent for `paseo logs` (the SOFT capture path) regardless of schema mode.
 	replyRaw, hasReply := replyDirective(prompt)
+
+	// Verb-delivered output (the done+output contract): with
+	// FAKE_PASEO_VERB_OUTPUT=1 the "agent" does what a real one is instructed
+	// to — it delivers the canned payload via `conductor call step.done
+	// --json '{"output": …}'` using the run's own injected creds, and its chat
+	// reply is deliberately USELESS PROSE. The scenario can then only pass
+	// through the verb path: reply extraction has nothing to extract.
+	if p.env["FAKE_PASEO_VERB_OUTPUT"] == "1" && hasReply {
+		cmd := exec.Command("conductor", "call", "step.done", "--output", string(replyRaw))
+		cmd.Env = os.Environ()
+		for k, v := range p.env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+		if out, cerr := cmd.CombinedOutput(); cerr != nil {
+			// Surface the failure as the reply so the step fails loudly with
+			// the reason instead of timing out on a silent slot.
+			replyRaw = []byte("step.done delivery FAILED: " + cerr.Error() + ": " + string(out))
+		} else {
+			replyRaw = []byte("Result delivered via step.done; nothing further in chat.")
+		}
+	}
 	id := ""
 	withState(func(s *state) {
 		s.Seq++

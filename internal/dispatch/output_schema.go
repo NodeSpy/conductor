@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // output_schema is a CONDUCTOR-owned contract: ONE behavior, ALWAYS, ZERO
@@ -68,19 +69,30 @@ func (d *Dispatcher) markNativeUnsupported(key string) {
 // re-inject the schema directive into it instead. ref is updated in place
 // when the actually-run argv differs from nativeArgv (soft), so audit/report
 // reflects what really executed rather than the optimistic preview.
-func (d *Dispatcher) dispatchOutputSchema(ctx context.Context, req Request, nativeArgv []string, prompt, cwd string, ref *RunRef) (RunAgentResult, error) {
+func (d *Dispatcher) dispatchOutputSchema(ctx context.Context, req Request, nativeArgv []string, prompt, cwd string, ref *RunRef, verbDelivery bool) (RunAgentResult, error) {
 	schema := req.Action.OutputSchema
 	key := schemaCacheKey(req)
 
+	// Verb-delivered output (the done+output contract): when the agent holds
+	// CLI creds, its structured output arrives via `conductor call step.done
+	// --json '{"output": …}'` — validated daemon-side at the call, correlated
+	// back here by dispatch id. Register the slot for the WHOLE dispatch
+	// (native attempt included): an agent may deliver via the verb on any path,
+	// and a filled slot always wins over reply-text extraction.
+	if verbDelivery && req.DispatchID != "" {
+		d.registerOutputSlot(req.DispatchID, schema)
+		defer d.dropOutputSlot(req.DispatchID)
+	}
+
 	if !d.nativeSchemaSupported(key) {
-		return d.runSoftSchema(ctx, req, nativeArgv, prompt, cwd, schema, ref)
+		return d.runSoftSchema(ctx, req, nativeArgv, prompt, cwd, schema, ref, verbDelivery)
 	}
 
 	res, err := d.backend().RunAgent(ctx, RunAgentOptions{Args: nativeArgv, Cwd: cwd})
 	if err != nil {
 		if isNativeSchemaError(err.Error()) {
 			d.markNativeUnsupported(key)
-			return d.runSoftSchema(ctx, req, nativeArgv, prompt, cwd, schema, ref)
+			return d.runSoftSchema(ctx, req, nativeArgv, prompt, cwd, schema, ref, verbDelivery)
 		}
 		// An unrelated failure (network, run error) — propagate as an
 		// ordinary dispatch failure. Falling back here would spend a second
@@ -94,10 +106,16 @@ func (d *Dispatcher) dispatchOutputSchema(ctx context.Context, req Request, nati
 			return res, nil // native worked — ref.Output/Argv stay as-is
 		}
 	}
+	// A verb-delivered output wins even when the native reply was unusable —
+	// the agent already handed us the validated object.
+	if out, ok := d.takeDeliveredOutput(req.DispatchID); ok {
+		res.Output = marshalCanonical(out)
+		return res, nil
+	}
 	// Native ran clean (exit 0) but its output isn't valid JSON matching the
 	// schema — per the contract that counts as a native failure too.
 	d.markNativeUnsupported(key)
-	return d.runSoftSchema(ctx, req, nativeArgv, prompt, cwd, schema, ref)
+	return d.runSoftSchema(ctx, req, nativeArgv, prompt, cwd, schema, ref, verbDelivery)
 }
 
 // isNativeSchemaError reports whether a failed paseo run's error text names a
@@ -122,9 +140,18 @@ func isNativeSchemaError(errText string) bool {
 // the JSON conductor-side with one bounded corrective retry. Reuses the same
 // cwd/worktree/session the native attempt (if any) already used — only the
 // argv (prompt + absence of --output-schema) changes.
-func (d *Dispatcher) runSoftSchema(ctx context.Context, req Request, nativeArgv []string, prompt string, cwd string, schema map[string]any, ref *RunRef) (RunAgentResult, error) {
+func (d *Dispatcher) runSoftSchema(ctx context.Context, req Request, nativeArgv []string, prompt string, cwd string, schema map[string]any, ref *RunRef, verbDelivery bool) (RunAgentResult, error) {
 	softArgv := stripOutputSchemaFlag(nativeArgv)
-	augmented := prompt + schemaDirective(schema)
+	// With CLI creds in the session, the output rides the done call
+	// (verbSchemaDirective): one atomic final action delivers the result AND
+	// signals done, validated at the verb boundary — no chat-reply JSON
+	// fishing and no instruction conflict with other guidance. Without creds
+	// the classic reply-is-the-JSON directive remains.
+	directive := schemaDirective(schema)
+	if verbDelivery && req.DispatchID != "" {
+		directive = verbSchemaDirective(schema)
+	}
+	augmented := prompt + directive
 	if err := checkPromptSize(augmented); err != nil {
 		return RunAgentResult{}, fmt.Errorf("output_schema: soft fallback: %w", err)
 	}
@@ -137,6 +164,11 @@ func (d *Dispatcher) runSoftSchema(ctx context.Context, req Request, nativeArgv 
 	}
 	if res.AgentID != "" {
 		ref.AgentID = res.AgentID
+	}
+	// A verb-delivered output was already validated at the call; it wins.
+	if out, ok := d.takeDeliveredOutput(req.DispatchID); ok {
+		res.Output = marshalCanonical(out)
+		return res, nil
 	}
 	if obj, ok := d.captureSchemaAnswer(ctx, res, schema); ok {
 		res.Output = marshalCanonical(obj)
@@ -185,6 +217,10 @@ func (d *Dispatcher) correctiveRetry(ctx context.Context, req Request, prevArgv 
 	}
 	if res.AgentID != "" {
 		ref.AgentID = res.AgentID
+	}
+	if out, ok := d.takeDeliveredOutput(req.DispatchID); ok {
+		res.Output = marshalCanonical(out)
+		return res, nil
 	}
 	obj, ok := d.captureSchemaAnswer(ctx, res, schema)
 	if !ok {
@@ -554,4 +590,83 @@ func enumContains(enumRaw any, value any) bool {
 		}
 	}
 	return false
+}
+
+// ---- verb-delivered output (the done+output contract) -------------------------
+
+// outputSlot is one schema dispatch's rendezvous for a verb-delivered output:
+// registered before launch, filled by step.done (DeliverOutput), read after the
+// run returns. The slot carries the schema so the verb boundary validates with
+// a precise, retryable error instead of the corrective-prompt dance.
+type outputSlot struct {
+	mu     sync.Mutex
+	schema map[string]any
+	out    map[string]any
+	filled bool
+}
+
+func (d *Dispatcher) registerOutputSlot(dispatchID string, schema map[string]any) {
+	d.outputSlots.Store(dispatchID, &outputSlot{schema: schema})
+}
+
+func (d *Dispatcher) dropOutputSlot(dispatchID string) { d.outputSlots.Delete(dispatchID) }
+
+// DeliverOutput is step.done's output half: validate the object against the
+// waiting dispatch's schema and park it for the blocked dispatch to collect.
+// found=false means no schema dispatch is waiting under that id (a bare done on
+// a non-schema step, or the run already resolved) — not an error; the caller's
+// done semantics proceed unchanged. A validation failure IS an error, returned
+// to the agent verbatim so it can fix the object and call again.
+func (d *Dispatcher) DeliverOutput(dispatchID string, output map[string]any) (found bool, err error) {
+	if dispatchID == "" || output == nil {
+		return false, nil
+	}
+	v, ok := d.outputSlots.Load(dispatchID)
+	if !ok {
+		return false, nil
+	}
+	slot := v.(*outputSlot)
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	if verr := validateSchema(slot.schema, output); verr != nil {
+		return true, fmt.Errorf("output does not match the required schema: %w — fix the object and call step.done again", verr)
+	}
+	slot.out = output
+	slot.filled = true
+	return true, nil
+}
+
+// takeDeliveredOutput collects a verb-delivered output ("" dispatch id or no
+// slot → none). The slot stays registered until the dispatch's deferred drop,
+// so a late corrective path can still read an earlier delivery.
+func (d *Dispatcher) takeDeliveredOutput(dispatchID string) (map[string]any, bool) {
+	if dispatchID == "" {
+		return nil, false
+	}
+	v, ok := d.outputSlots.Load(dispatchID)
+	if !ok {
+		return nil, false
+	}
+	slot := v.(*outputSlot)
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	if !slot.filled {
+		return nil, false
+	}
+	return slot.out, true
+}
+
+// verbSchemaDirective is the delivery instruction when the agent holds CLI
+// creds: output and done are ONE atomic final action, validated at the verb
+// boundary. It deliberately does NOT ask for the JSON in the chat reply, so it
+// cannot conflict with any other guidance about the final message.
+func verbSchemaDirective(schema map[string]any) string {
+	b, _ := json.Marshal(schema)
+	return "\n\n---\nDELIVER YOUR RESULT VIA CONDUCTOR: when your work is complete, run\n" +
+		"  conductor call step.done --output '<result>'\n" +
+		"where <result> is a JSON object matching EXACTLY this schema:\n" + string(b) + "\n" +
+		"The call validates the object and replies with a specific error if it does not match — " +
+		"fix the object and run the call again until it is accepted. This one call both delivers " +
+		"your result and tells conductor you are finished. After it is accepted, simply end your " +
+		"turn; your chat reply itself is not the deliverable."
 }

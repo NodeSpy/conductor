@@ -1,0 +1,31 @@
+{
+  "action": "synchronize",
+  "installation": {
+    "id": 42
+  },
+  "repository": {
+    "full_name": "func/schemaverb",
+    "name": "schemaverb",
+    "default_branch": "main",
+    "owner": {
+      "login": "func"
+    }
+  },
+  "pull_request": {
+    "number": 1,
+    "state": "open",
+    "draft": false,
+    "title": "func/schemaverb PR under test",
+    "html_url": "https://forge.test/func/schemaverb/pull/1",
+    "head": {
+      "sha": "canned-head-schemaverb-1",
+      "ref": "pr-1"
+    },
+    "base": {
+      "ref": "main"
+    },
+    "user": {
+      "login": "conductor-user"
+    }
+  }
+}

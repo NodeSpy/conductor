@@ -52,6 +52,9 @@ type Dispatcher interface {
 	// DispatchInFlight reports whether conductor is still blocked on the
 	// dispatch (its done defers to the step-boundary archive).
 	DispatchInFlight(dispatchID string) bool
+	// DeliverOutput hands a step.done-carried output to the waiting schema
+	// dispatch (validated against its schema). found=false: nothing waiting.
+	DeliverOutput(dispatchID string, output map[string]any) (found bool, err error)
 }
 
 // Notifier emits notifications. *notify.Notifier satisfies it.

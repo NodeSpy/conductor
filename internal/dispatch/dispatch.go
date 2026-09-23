@@ -142,6 +142,10 @@ type Dispatcher struct {
 	// dispatch defers to the step-boundary archive; see Dispatcher.Archive.
 	inflight sync.Map
 
+	// outputSlots holds each schema dispatch's rendezvous for a verb-delivered
+	// output (step.done carrying `output`); see output_schema.go.
+	outputSlots sync.Map
+
 	// Secrets redacts tracked secret values from the error details this
 	// package builds out of paseo stderr/output before they leave the
 	// package (nil = passthrough).

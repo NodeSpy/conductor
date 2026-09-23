@@ -224,3 +224,5 @@ func TestEngineAffinityFollowupDoesNotBlockLoop(t *testing.T) {
 
 func (*sendingDispatcher) AgentForDispatch(string) string { return "" }
 func (*sendingDispatcher) DispatchInFlight(string) bool   { return false }
+
+func (*sendingDispatcher) DeliverOutput(string, map[string]any) (bool, error) { return false, nil }
