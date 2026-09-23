@@ -229,6 +229,9 @@ type Runner interface {
 	// DispatchInFlight reports whether the dispatch is still running foreground
 	// (its done defers to the step-boundary archive).
 	DispatchInFlight(dispatchID string) bool
+	// DeliverOutput hands a step.done-carried output (any JSON value) to the
+	// waiting schema dispatch. Controller runtimes have no verb-delivery path yet.
+	DeliverOutput(dispatchID string, output any) (bool, error)
 }
 
 // Sender is an optional session-follow-up surface (ACP prompt on a live session);

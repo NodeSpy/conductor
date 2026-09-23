@@ -439,6 +439,34 @@ triggers:
         uses: slack.post
         options: { channel: CSCHEMA, text: "SCHEMA-SOFT decision={{.assess.decision}}" }
 
+  # T (output_schema — VERB-DELIVERED, the done+output contract): the agent
+  # holds CLI creds, so its result arrives via `conductor call step.done
+  # --json '{"output": …}'` — one atomic final action, validated at the verb
+  # boundary. The fake (FAKE_PASEO_VERB_OUTPUT=1) replies useless PROSE and
+  # delivers the payload only through the call, so this scenario cannot pass
+  # through reply extraction: if the verb path regresses, no SCHEMA-VERB post
+  # ever appears.
+  - on: gh.merge_conflict
+    name: schemaverb
+    filter: { repo: ["func/schemaverb"] }
+    steps:
+      - id: assess
+        type: agent
+        <<: *fixer
+        checkout: none          # read-only triage reads the diff from the prompt — no clone/worktree
+        env: { FAKE_PASEO_NO_NATIVE_SCHEMA: "1", FAKE_PASEO_VERB_OUTPUT: "1" }
+        prompt: >-
+          assess {{.repo}}#{{.pr}} [[reply {"decision":"approve"}]]
+        output_schema:
+          type: object
+          required: [decision]
+          additionalProperties: false
+          properties:
+            decision: { type: string, enum: [approve, reject] }
+      - id: tell
+        uses: slack.post
+        options: { channel: CSCHEMA, text: "SCHEMA-VERB decision={{.assess.decision}}" }
+
   # T (output_schema on a CONTROLLER runtime, v0.9.3 — "AUTO in all paths"): the
   # assess step runs on the `clijudge` cli runtime (execs `claude` = fakecli),
   # which has NO native --output-schema. Conductor injects the schema directive

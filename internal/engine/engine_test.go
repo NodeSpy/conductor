@@ -1241,3 +1241,7 @@ func (f *fakeDispatcher) DispatchInFlight(d string) bool   { return f.inflightID
 
 func (*gateFake) AgentForDispatch(string) string { return "" }
 func (*gateFake) DispatchInFlight(string) bool   { return false }
+
+func (*fakeDispatcher) DeliverOutput(string, any) (bool, error) { return false, nil }
+
+func (*gateFake) DeliverOutput(string, any) (bool, error) { return false, nil }

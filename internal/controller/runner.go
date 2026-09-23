@@ -264,6 +264,10 @@ func (r *controllerRunner) AgentForDispatch(string) string { return "" }
 // sessions are closed by the runner itself, so there is no in-flight defer.
 func (r *controllerRunner) DispatchInFlight(string) bool { return false }
 
+// DeliverOutput: controller runtimes have no verb-delivery rendezvous yet; a
+// schema step on them uses the reply-text contract.
+func (r *controllerRunner) DeliverOutput(string, any) (bool, error) { return false, nil }
+
 // forget removes a session from the liveness indexes, decrementing exactly the
 // PR+kind bucket it was dispatched under.
 func (r *controllerRunner) forget(id string) {

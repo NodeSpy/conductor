@@ -113,9 +113,23 @@ func (e *Engine) HandoffOps() *connector.HandoffOps {
 // StepOps exposes step.done (wired in main via connector.SetStepOps).
 func (e *Engine) StepOps() *connector.StepOps {
 	return &connector.StepOps{
-		Done: func(ctx context.Context, dispatchID, agentID, reason string) error {
+		Done: func(ctx context.Context, dispatchID, agentID, reason string, output any, hasOutput bool) error {
 			if reason == "" {
 				reason = "agent signalled done"
+			}
+			// Output first: a schema dispatch is waiting on it, and a
+			// validation failure must reach the agent as THE error (it fixes
+			// the value and calls again — done semantics don't run yet).
+			// hasOutput, not a nil check: false/0/"" are real deliveries for
+			// boolean/number/string schemas.
+			if hasOutput {
+				found, err := e.disp.DeliverOutput(dispatchID, output)
+				if err != nil {
+					return err
+				}
+				if !found {
+					e.log("step.done: output supplied but no schema dispatch is waiting (dispatch %s) — ignored", dispatchID)
+				}
 			}
 			return e.StepDone(ctx, dispatchID, agentID, reason)
 		},

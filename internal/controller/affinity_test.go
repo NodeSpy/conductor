@@ -664,3 +664,5 @@ func TestSessionKeyDoesNotCollideAcrossTrust(t *testing.T) {
 
 func (*affRunner) AgentForDispatch(string) string { return "" }
 func (*affRunner) DispatchInFlight(string) bool   { return false }
+
+func (*affRunner) DeliverOutput(string, any) (bool, error) { return false, nil }

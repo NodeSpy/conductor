@@ -337,3 +337,5 @@ func TestTailOutput(t *testing.T) {
 
 func (*stepFake) AgentForDispatch(string) string { return "" }
 func (*stepFake) DispatchInFlight(string) bool   { return false }
+
+func (*stepFake) DeliverOutput(string, any) (bool, error) { return false, nil }

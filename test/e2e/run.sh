@@ -1408,6 +1408,16 @@ group_T_output_schema() {
     bad "T soft fallback on native schema failure" T T-soft "no SCHEMA-SOFT decision=approve capture"
   fi
 
+  # VERB-DELIVERED (done+output contract): the fake replies prose and delivers
+  # the object only via `conductor call step.done --json '{"output": …}'` —
+  # reply extraction cannot pass this; only the verb rendezvous can.
+  post_webhook_to conductor-conn pull_request func_schemaverb_conflict.json >/dev/null
+  if wait_for 30 slack_sink_has "SCHEMA-VERB decision=approve"; then
+    ok "T output delivered via step.done (verb-carried output, prose-only reply)" T T-verb
+  else
+    bad "T verb-delivered output_schema" T T-verb "no SCHEMA-VERB decision=approve capture"
+  fi
+
   # v0.9.3: the SAME contract on a CONTROLLER runtime (cli → fakecli), which has
   # no native --output-schema at all. A SCHEMA-CLI post can only appear if the
   # controllerRunner injected the directive, captured the reply, and validated

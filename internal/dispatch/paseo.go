@@ -273,6 +273,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// returns nil for a non-skill profile or when no endpoint is available.
 	// A skill: profile OR any interactive hand-off (which auto-gets handoff.done)
 	// is handed CLI creds so the agent can `conductor call`.
+	credsDelivered := false
 	if wantsSkillCreds(req) {
 		endpoint := ""
 		if d.remote() {
@@ -282,6 +283,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		}
 		for k, v := range SkillEnv(req, endpoint) {
 			argv = append(argv, "--env", k+"="+v)
+			credsDelivered = true
 		}
 	}
 
@@ -298,7 +300,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// byte-for-byte unchanged. See output_schema.go.
 	var res RunAgentResult
 	if len(req.Action.OutputSchema) > 0 && req.Wait {
-		res, err = d.dispatchOutputSchema(ctx, req, argv, prompt, cwd, &ref)
+		res, err = d.dispatchOutputSchema(ctx, req, argv, prompt, cwd, &ref, credsDelivered)
 	} else {
 		res, err = d.backend().RunAgent(ctx, RunAgentOptions{Args: argv, Cwd: cwd})
 	}
