@@ -129,6 +129,14 @@ type RuntimeConfig struct {
 	// Bin is the runtime's binary (paseo/agent-deck); replaces the global
 	// paseo_bin.
 	Bin string `yaml:"bin,omitempty"`
+	// Home is the paseo daemon home this runtime targets — the `--home` paseo
+	// 0.9+ selects a local daemon with (paseo 0.9 gained multi-home support and
+	// defaults to ~/.paseo; conductor passes this so a daemon at a non-default
+	// home is reachable). `~` is expanded. Only meaningful for `use: paseo`, and
+	// only emitted on paseo >= 0.9 (older paseo has no `--home` flag — conductor
+	// detects the version and omits it). Empty → PASEO_HOME env, else paseo's own
+	// default. See cmd/conductor's resolvePaseoHome and internal/dispatch.
+	Home string `yaml:"home,omitempty"`
 	// Tool and Command are the bare-CLI recipe for transport: cli.
 	Tool    string   `yaml:"tool,omitempty"`
 	Command []string `yaml:"command,omitempty"`

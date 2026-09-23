@@ -89,7 +89,7 @@ func reaperFor(name string, pd *dispatch.Dispatcher, backends map[string]runtime
 	if rb, ok := backends[name]; ok {
 		r.SetBackend(rb.Backend)
 	} else {
-		r.PaseoBin, r.Remote = pd.PaseoBin, pd.Remote
+		r.PaseoBin, r.Remote, r.Home = pd.PaseoBin, pd.Remote, pd.Home
 	}
 	return r
 }

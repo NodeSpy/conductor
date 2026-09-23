@@ -470,7 +470,23 @@ func cmdRun(args []string) error {
 	}
 	disp := dispatch.New(paseoBin, retry, cfg.DryRun)
 	disp.AdoptOpenWorkspaces = cfg.AdoptOpenWorkspaces
+	disp.Home = resolvePaseoHome(cfg)
 	preflightPATH(disp.PaseoBin)
+	// Detect the paseo version once at boot: it decides whether conductor may emit
+	// the 0.9+ `--home` selector (pre-0.9 paseo has no such flag), and the line is
+	// a useful diagnostic. Then a single reachability probe turns a mis-pointed
+	// home into ONE clear warning instead of every dispatch failing with
+	// DAEMON_NOT_RUNNING (which the step-retry + sweep would otherwise amplify).
+	if !cfg.DryRun {
+		homeLabel := disp.Home
+		if homeLabel == "" {
+			homeLabel = "(paseo default)"
+		}
+		logf("paseo runtime: detected v%s (bin %s, home %s)", disp.DetectPaseoVersion(context.Background()), disp.PaseoBin, homeLabel)
+		if err := disp.ProbeDaemon(context.Background()); err != nil {
+			logf("WARNING: %v", err)
+		}
+	}
 	// Controller registry (paseo is the built-in default) + the session broker that
 	// owns one live session per PR — so an interactive hand-off survives a restart
 	// and follow-ups funnel to the live session instead of a duplicate agent. Built
@@ -996,7 +1012,7 @@ func cmdRun(args []string) error {
 		// One reaper per paseo dispatch surface: the primary, plus each
 		// dedicated (own-bin / remote) runtime — their agents live where their
 		// paseo does.
-		reapers := []*dispatch.Reaper{{PaseoBin: disp.PaseoBin, Log: logf, Held: hold}}
+		reapers := []*dispatch.Reaper{{PaseoBin: disp.PaseoBin, Home: disp.Home, Log: logf, Held: hold}}
 		for name, pd := range paseoOverrides {
 			reapers = append(reapers, reaperFor(name, pd, runtimeBackends, logf, hold))
 		}

@@ -84,6 +84,7 @@ runtimes sharing a `host:`/`isolation:` — the child overrides only `command`).
 | `session_model` | `native` \| `resumable` \| `oneshot` |
 | `default` | the fleet default (at most one across runtimes + legacy controllers) |
 | `bin` | the runtime binary (paseo, agent-deck) |
+| `home` | **paseo only** — the daemon home conductor targets. paseo 0.9 gained multi-home daemons and the `--home` selector (default `~/.paseo`); conductor detects the paseo version at boot and passes `--home <home>` on 0.9+, omitting it on older paseo (which has no such flag). `~` is expanded. Empty → the `PASEO_HOME` env, else paseo's own default. Set this when your paseo daemon runs at a non-default home (e.g. `paseo daemon run --home ~/work`) so clones/launches reach it instead of failing with `DAEMON_NOT_RUNNING` |
 | `tool` / `command` | the bare-CLI recipe for `transport: cli` |
 | `session` | the OVERALL session-affinity pool for this runtime: `{ key, idle_ttl, max_lifetime, end_on }`, shared by every step without its own. See [[Steps]] |
 | `budget` | this backend's hard spend cap: `{ window, max_cost_usd, max_tokens }`. A budget caps EXECUTION COST, and the runtime is where execution happens — this is where per-agent budgets moved to. See [[Cost-Accounting]] |

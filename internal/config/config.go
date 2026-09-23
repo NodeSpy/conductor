@@ -687,6 +687,11 @@ type ControllerConfig struct {
 	// distinct Bin may be set across all paseo runtimes/controllers combined
 	// (see cmd/conductor's resolvePaseoBin).
 	Bin string `yaml:"bin"`
+	// Home is the paseo daemon home this runtime targets (the `--home` flag paseo
+	// 0.9+ uses to select a local daemon; older paseo has no such flag and
+	// conductor omits it after detecting the version). `~` is expanded. Empty →
+	// PASEO_HOME env, else paseo's default. Mirrors RuntimeConfig.Home.
+	Home string `yaml:"home"`
 	// Host names a `hosts:` entry; this controller's subprocess launches run
 	// there over SSH instead of locally. All controller types support it —
 	// cli/acp/agent-deck wrap their subprocess in the ssh launch, paseo runs

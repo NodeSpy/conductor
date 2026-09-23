@@ -138,6 +138,19 @@ type Dispatcher struct {
 	// with `host:`. nil = the local binary. See remote.go for what changes.
 	Remote *hosts.Target
 
+	// Home is the paseo daemon home this dispatcher targets — emitted as
+	// `--home <home>` on paseo >= 0.9 (which gained multi-home daemons), and
+	// omitted on older paseo (no such flag). Empty = paseo's own default
+	// (~/.paseo / ambient PASEO_HOME). Resolved from the runtime's `home:` /
+	// PASEO_HOME by cmd/conductor. See paseoversion.go.
+	Home string
+
+	// verCache lazily probes+caches `paseo --version` for this dispatcher's
+	// bin/host, so the --home gate (paseoversion.go) knows whether the flag
+	// exists. Never share across dispatchers: a remote runtime may run a
+	// different paseo than the local one.
+	verCache paseoVersionCache
+
 	// HostClient is the SSH client used for out-of-band remote checks a paseo
 	// CLI invocation can't do itself (targetIsGitRepo's remote half). nil uses
 	// a real hosts.Client (actual ssh). Injectable for tests, mirroring
@@ -232,6 +245,33 @@ func New(paseoBin string, retry config.Retry, dryRun bool) *Dispatcher {
 	return &Dispatcher{PaseoBin: paseoBin, DryRun: dryRun,
 		RetryMax: retry.Attempts(), RetryBackoff: retry.BackoffDur(),
 		repoDirs: map[string]string{}}
+}
+
+// DetectPaseoVersion probes `paseo --version` (once, cached) and returns it as a
+// display string ("0.9.1", or "unknown" when detection failed). Call it at boot
+// to log the runtime version and prime the cache the --home gate reads; a
+// remote dispatcher probes over ssh. Never errors — an undetectable version is
+// treated as newest by the gate.
+func (d *Dispatcher) DetectPaseoVersion(ctx context.Context) string {
+	return d.verCache.detect(ctx, d.PaseoBin, d.Remote, nil).String()
+}
+
+// ProbeDaemon runs one cheap `paseo [--home <home>] workspace ls` and reports a
+// DAEMON_NOT_RUNNING as an error, so the daemon can log a single clear diagnostic
+// at boot instead of every dispatch failing (and the step-retry/sweep amplifying
+// it). Any other outcome — success, or an unrelated error — returns nil: this is
+// a best-effort reachability hint, not a gate. Skipped for a remote dispatcher
+// (the probe would run over ssh against a box we don't manage) and when no home
+// is set (nothing to diagnose beyond paseo's own default).
+func (d *Dispatcher) ProbeDaemon(ctx context.Context) error {
+	if d.Remote != nil || d.Home == "" {
+		return nil
+	}
+	out, err := d.paseoCmd(ctx, "workspace", "ls", "--json").CombinedOutput()
+	if err != nil && strings.Contains(string(out), "DAEMON_NOT_RUNNING") {
+		return fmt.Errorf("paseo daemon not reachable at home %q — start it (paseo daemon start --home %q) or fix the runtime's home:/PASEO_HOME", d.Home, d.Home)
+	}
+	return nil
 }
 
 // WaitForAgent blocks until the given background agent goes idle (or ctx/timeout
