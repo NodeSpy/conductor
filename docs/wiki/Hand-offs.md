@@ -75,9 +75,9 @@ vocabulary used everywhere else.
       - id: pr                       # a fact step: read the subject → .pr
         uses: gh.pr_get
       - if: 'pr.merged || pr.state == "closed"'
-        uses: handoff.bail           # tear down, stop watching
+        uses: step.bail              # tear down, stop watching
       - if: 'pr.review_decision == "APPROVED"'
-        uses: handoff.bail
+        uses: step.bail
       - if: 'pr.head_sha != handoff.pr.head_sha'
         workflow: review-flow        # SUPERSEDE: tear down, re-run this workflow
         with: { repo: "{{.repo}}", pr: "{{.number}}" }
@@ -94,10 +94,10 @@ A broken condition is skipped, never fired. A fact step's read target
 
 The action steps:
 
-- **`uses: handoff.bail`** — the reason is gone. Tears the hand-off down (cancel
+- **`uses: step.bail`** — the reason is gone. Tears the hand-off down (cancel
   the agent, close the draft, release the hold) and stops watching. Use
   it for `pr.merged`, `pr.state == "closed"`, or approved-elsewhere.
-- **`uses: handoff.rerun`** — re-running *this step* is enough. **Supersedes**:
+- **`uses: step.rerun`** — re-running *this step* is enough. **Supersedes**:
   tears down, then re-dispatches the same step on the current state (surface-
   agnostic — agent, Slack, Discord). Optional `options.prompt` is appended to the
   step's prompt ("here's what changed"). Use when the hand-off step is itself the
@@ -111,24 +111,29 @@ The action steps:
 
 Every superseding action **tears the current hand-off down first** — no stale
 draft coexists with its replacement — and fires only on a real change of an
-in-flight hand-off, so the re-run cost is bounded. `handoff.done` is a conclusion
+in-flight hand-off, so the re-run cost is bounded. `step.done` is a conclusion
 signal, not a watch action (see below).
 
 `watch:` is subject-agnostic (the fact step names whatever read verb fits) and
 operator-owned: an agent-authored step may not set it.
 
-## Cleaning up a finished hand-off (`handoff.done` / `idle_timeout`)
+## Cleaning up a finished hand-off (`step.done` / `idle_timeout`)
+
+> The hand-off lifecycle generalized to every live step: the canonical verbs
+> are **`step.done` / `step.bail` / `step.rerun`** on the built-in `step`
+> connector. The `handoff.*` spellings keep working as deprecated aliases
+> (same handlers), so existing packs and prompts are unaffected.
 
 When the conversation is genuinely over, the hand-off should release its
 workspace rather than sit held until you archive it by hand. Two paths:
 
-- **`handoff.done`** — an agent skill verb, **auto-granted to every hand-off**:
+- **`step.done`** (alias: `handoff.done`) — an agent skill verb, **auto-granted to every dispatch**:
   the agent calls it the moment it has nothing more for you (the guidance
   appended to every hand-off tells it to), no `skill:` block required. It ends
   the review, closes the draft, and drops the hold on the agent's own
   hand-off — the caller can only release its own, since the daemon resolves the
   target from the token identity, never a name the agent passes. (An explicit
-  `skill: { verbs: [handoff.done] }` is harmless and de-duplicated.)
+  `skill: { verbs: [step.done] }` is harmless and de-duplicated.)
 - **`idle_timeout: <duration>`** on the step — the backstop for a hand-off
   nobody closed. Still open after this long → released the same way. Off unless
   set; independent of `watch:`.
@@ -138,7 +143,7 @@ workspace rather than sit held until you archive it by hand. Two paths:
   agent: reviewer
   background: true
   handoff: slack
-  idle_timeout: 12h   # handoff.done is auto-granted; the agent releases early
+  idle_timeout: 12h   # step.done is auto-granted; the agent releases early
 ```
 
 ## Legacy `handoffs:`

@@ -152,3 +152,20 @@ when discovery ran and found nothing acceptable. When discovery is unavailable
 — no network, no credentials — it has learned nothing, not that a model is
 gone, so it does not fail the load. Hard-failing there would crash-loop an
 auto-updating fleet on the first network blip.
+
+## Run-time fallback: when the provider refuses the chosen model
+
+Resolution picks the best roster match — but a provider can refuse a model at
+RUN time for reasons no roster shows: the API gates a newly released model
+behind a minimum client version ("400 … does not support this model; version X
+or newer is required"), a model is deprecated or removed, or a plan doesn't
+include it. Conductor classifies those replies as a **model refusal** (never a
+schema/output failure — the provider's own error line goes to the journal),
+marks the (model) pair unsupported, and immediately **re-resolves down the
+fleet** to the newest model that actually runs. A fleet where every candidate
+is refused fails the step with an error naming each refusal.
+
+Marks expire after ~6 hours, so the fleet re-tries the newest model on its own
+— update the client (e.g. `claude` CLI) and conductor climbs back to the top
+candidate automatically; if nothing changed, one cheap probe re-marks it.
+Nothing to configure: the fleet's order IS the fallback order.
