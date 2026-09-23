@@ -475,7 +475,7 @@ func fetchLocal(spec sourceSpec, destDir string) error {
 func resolveVersionTag(spec sourceSpec, constraint string) (string, error) {
 	out, err := runGit("", "ls-remote", "--tags", "--refs", "--", spec.gitURL)
 	if err != nil {
-		return "", fmt.Errorf("list tags for %s: %s", spec.gitURL, strings.TrimSpace(out))
+		return "", fmt.Errorf("list tags for %s: %s", spec.gitURL, gitErrDetail(out))
 	}
 	prefix := ""
 	if spec.subdir != "" {
@@ -525,10 +525,10 @@ func fetchGit(spec sourceSpec, destDir string) (string, error) {
 		// --branch fails for a raw commit sha; fall back to a full-ish fetch.
 		if spec.ref != "" {
 			if out2, err2 := gitFetchRef(spec.gitURL, spec.ref, tmp); err2 != nil {
-				return "", fmt.Errorf("%v: %s", err, strings.TrimSpace(out+out2))
+				return "", fmt.Errorf("%v: %s", err, gitErrDetail(out+out2))
 			}
 		} else {
-			return "", fmt.Errorf("%v: %s", err, strings.TrimSpace(out))
+			return "", fmt.Errorf("%v: %s", err, gitErrDetail(out))
 		}
 	}
 	sha, err := runGit(tmp, "rev-parse", "HEAD")
@@ -582,6 +582,32 @@ func runGit(dir string, args ...string) (string, error) {
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// gitErrDetail distills git's combined stdout+stderr down to the ONE line that
+// explains a failure — the first `fatal:` / `error:` line git printed — so a
+// transient fetch hiccup logs a single actionable message instead of git's whole
+// spew (progress "Cloning into…", detached-HEAD advice, and post-failure hints
+// like "Clone succeeded, but checkout failed" that only bury the real cause).
+// Falls back to the last non-empty line (capped) when git printed no fatal:/
+// error: prefix, and to "" for empty output.
+func gitErrDetail(out string) string {
+	var last string
+	for _, ln := range strings.Split(out, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		if strings.HasPrefix(ln, "fatal:") || strings.HasPrefix(ln, "error:") {
+			return ln
+		}
+		last = ln
+	}
+	const max = 200
+	if len(last) > max {
+		return last[:max] + "…"
+	}
+	return last
 }
 
 // copyTree recursively copies src into dst, skipping the .git directory.
