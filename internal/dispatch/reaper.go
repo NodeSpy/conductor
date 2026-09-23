@@ -34,6 +34,17 @@ const reaperGraceDefault = 3 * time.Minute
 // exceed how long create→launch ever takes.
 const orphanGraceDefault = 30 * time.Minute
 
+// wedgedGraceDefault is how long a conductor-owned agent may sit with NO model
+// activity (stale LastUsage) before the wedged sweep reclaims it — the backstop
+// for an agent that NEVER goes idle, so the archive=1 idle walk can never reap
+// it. The case that motivated it: a hand-off released by handoff.done but stuck
+// `running` for hours (hand-offs carry no archive=1 label, so only this sweep or
+// handoff.done's own reclaim can reach them). Long, because the signal is "no
+// model work in this window" — a healthy agent updates usage far more often, and
+// one legitimately waiting on the user is spared by the Held / needs-user /
+// pending-permission checks first.
+const wedgedGraceDefault = 60 * time.Minute
+
 type Reaper struct {
 	PaseoBin string
 	// Remote runs the reaper's paseo invocations on an SSH host — one reaper
@@ -49,6 +60,7 @@ type Reaper struct {
 	Interval     time.Duration
 	MinAge       time.Duration // don't reap agents younger than this (default reaperGraceDefault)
 	OrphanMinAge time.Duration // don't sweep an agent-less workspace younger than this (default orphanGraceDefault)
+	WedgedMinAge time.Duration // don't reap a live-but-inactive agent until usage is stale this long (default wedgedGraceDefault)
 	Log          func(string, ...any)
 
 	// Held is the conductor's explicit "never reap" set — agent ids handed off for
@@ -214,6 +226,12 @@ func (r *Reaper) reap(ctx context.Context) {
 	// agent-anchored walk above structurally cannot see (Fix C).
 	r.reapOrphanWorkspaces(ctx)
 
+	// Backstop: reclaim a conductor-owned agent that is present but WEDGED — no
+	// model activity for a long window — which neither walk above catches (it's
+	// not archive=1, and its workspace still has a live agent). This is what
+	// finally reaps a hand-off that called handoff.done but stayed `running`.
+	r.reapWedgedAgents(ctx)
+
 	// Forget held agents no longer listed (you archived them), keeping the set bounded.
 	for id := range r.held {
 		if !present[id] {
@@ -294,6 +312,81 @@ func (r *Reaper) reapOrphanWorkspaces(ctx context.Context) {
 				w.WorkspaceID, w.Name, now.Sub(fi.ModTime()).Round(time.Minute))
 		}
 	}
+}
+
+// reapWedgedAgents reclaims a conductor-owned workspace whose live agent has
+// gone WEDGED: present, not held, not waiting on the user, and with no model
+// activity for wedgedMinAge. It's the backstop for an agent that never returns
+// to idle — most importantly a hand-off released by handoff.done that stayed
+// `running` (hand-offs carry no archive=1 label, so the idle walk never lists
+// them, and the orphan sweep skips a workspace that still has a live agent).
+//
+// Safety is by STALE USAGE, not status: a healthy agent — even a legitimately
+// long-running one — updates LastUsage as it works, so only one with no model
+// call in the whole grace window is reaped. Held hand-offs (still active), agents
+// that asked for the user (r.held), and any with a pending permission are spared
+// first, so this only ever takes an abandoned/wedged agent.
+func (r *Reaper) reapWedgedAgents(ctx context.Context) {
+	// Same reclaim set the idle walk uses — worktrees + ephemeral run workspaces
+	// (a hand-off runs in a branch-off worktree, so this is what catches it). A
+	// pinned/base workspace is excluded, so the sweep can never take one down.
+	reclaimable := r.reclaimableWorkspaces(ctx)
+	if len(reclaimable) == 0 {
+		return
+	}
+	agents, err := r.backend().ListAgents(ctx, nil)
+	if err != nil {
+		return
+	}
+	grace := r.wedgedMinAge()
+	now := time.Now()
+	for _, a := range agents {
+		if a.ID == "" || a.Cwd == "" {
+			continue
+		}
+		wksID := reclaimable[normCwd(a.Cwd)]
+		if wksID == "" {
+			continue // not in a reclaimable workspace (pinned/base, or none)
+		}
+		if r.Held.Has(a.ID) || r.held[a.ID] {
+			continue // an active hand-off, or one that asked for you
+		}
+		d, err := r.backend().Inspect(ctx, a.ID)
+		if err != nil {
+			continue
+		}
+		if len(d.PendingPermissions) > 0 {
+			continue // waiting on a permission — yours to answer
+		}
+		last := lastActivity(d)
+		if last.IsZero() || now.Sub(last) < grace {
+			continue // fresh, or actively using the model
+		}
+		if err := r.backend().ArchiveWorkspace(ctx, wksID); err == nil && r.Log != nil {
+			r.Log("reaper: archived WEDGED agent %s + workspace %s — no model activity in %s, status %q",
+				a.ID, wksID, now.Sub(last).Round(time.Minute), a.Status)
+		}
+	}
+}
+
+// lastActivity is the most recent sign of life for an agent: its last model use,
+// else its creation time (a never-engaged agent isn't wedged until it's old).
+func lastActivity(d AgentDetail) time.Time {
+	var last time.Time
+	for _, s := range []string{d.LastUsage, d.CreatedAt} {
+		if t, err := time.Parse(time.RFC3339, s); err == nil && t.After(last) {
+			last = t
+		}
+	}
+	return last
+}
+
+// wedgedMinAge is the no-activity grace before a live agent is treated as wedged.
+func (r *Reaper) wedgedMinAge() time.Duration {
+	if r.WedgedMinAge > 0 {
+		return r.WedgedMinAge
+	}
+	return wedgedGraceDefault
 }
 
 // orphanMinAge is the agent-less-workspace grace, defaulting to orphanGraceDefault.

@@ -133,10 +133,12 @@ func TestHandoffWatchBails(t *testing.T) {
 }
 
 func TestHandoffDoneReleases(t *testing.T) {
+	disp := &fakeDispatcher{archived: make(chan string, 1)}
 	e := &Engine{
 		log:    func(string, ...any) {},
 		hold:   dispatch.NewHoldSet(""),
 		broker: controller.NewBroker(nil, nil, func(string, ...any) {}),
+		disp:   disp,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	e.hold.Add("a1")
@@ -144,6 +146,16 @@ func TestHandoffDoneReleases(t *testing.T) {
 
 	if err := e.handoffDone(context.Background(), "a1", "test"); err != nil {
 		t.Fatalf("handoffDone: %v", err)
+	}
+	// done must ACTIVELY reclaim the agent — a hand-off carries no archive=1
+	// label, so the reaper never would (the bug this guards against).
+	select {
+	case id := <-disp.archived:
+		if id != "a1" {
+			t.Fatalf("done archived %q, want a1", id)
+		}
+	default:
+		t.Fatal("done did not archive the agent — it would linger forever")
 	}
 	if e.hold.Has("a1") {
 		t.Fatal("done did not release the reaper hold")
