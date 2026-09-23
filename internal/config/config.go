@@ -1515,17 +1515,13 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// SkillEnabled reports whether any step carries a skill: block — the daemon
-// serves the tool socket and builds the secret broker only then.
-func (c *Config) SkillEnabled() bool {
-	found := false
-	c.WalkSteps(func(_ IdentityScope, _ int, s *Step) {
-		if s.Skill != nil {
-			found = true
-		}
-	})
-	return found
-}
+// SkillEnabled reports whether the daemon serves the tool socket and builds
+// the skill broker. Always true: the done signal (step.done) is auto-granted
+// to EVERY dispatch — with no background reaper, an agent's own done call is
+// how its workspace gets reclaimed, so every agent needs the surface (the
+// socket to reach and the broker to mint its token). A step's own skill: block
+// only widens what the grant admits beyond that.
+func (c *Config) SkillEnabled() bool { return true }
 
 // Skill delivery modes: how a dispatched agent reaches the conductor skill
 // surface on its runtime.
