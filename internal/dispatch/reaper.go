@@ -327,26 +327,35 @@ func (r *Reaper) reapOrphanWorkspaces(ctx context.Context) {
 // that asked for the user (r.held), and any with a pending permission are spared
 // first, so this only ever takes an abandoned/wedged agent.
 func (r *Reaper) reapWedgedAgents(ctx context.Context) {
-	// Same reclaim set the idle walk uses — worktrees + ephemeral run workspaces
-	// (a hand-off runs in a branch-off worktree, so this is what catches it). A
-	// pinned/base workspace is excluded, so the sweep can never take one down.
-	reclaimable := r.reclaimableWorkspaces(ctx)
-	if len(reclaimable) == 0 {
+	wl, err := r.backend().ListWorkspaces(ctx)
+	if err != nil {
 		return
 	}
 	agents, err := r.backend().ListAgents(ctx, nil)
 	if err != nil {
 		return
 	}
+	byCwd := make(map[string]AgentInfo, len(agents))
+	for _, a := range agents {
+		if a.ID != "" && a.Cwd != "" {
+			byCwd[normCwd(a.Cwd)] = a
+		}
+	}
 	grace := r.wedgedMinAge()
 	now := time.Now()
-	for _, a := range agents {
-		if a.ID == "" || a.Cwd == "" {
+	for _, w := range wl {
+		// ONLY workspaces CONDUCTOR itself created — matched by its own name
+		// prefix (conductor-run-* / conductor/*), the same ownership signal the
+		// orphan sweep uses. This gate is load-bearing: an earlier version keyed
+		// on "any worktree" (reclaimableWorkspaces) and archived a pile of the
+		// USER's own paseo worktrees whose agents had long gone idle. The reaper
+		// must never touch a workspace conductor did not launch.
+		if w.WorkspaceID == "" || w.Cwd == "" || !isConductorOwnedWorkspace(w) {
 			continue
 		}
-		wksID := reclaimable[normCwd(a.Cwd)]
-		if wksID == "" {
-			continue // not in a reclaimable workspace (pinned/base, or none)
+		a, ok := byCwd[normCwd(w.Cwd)]
+		if !ok {
+			continue // agent-less → the orphan sweep owns it
 		}
 		if r.Held.Has(a.ID) || r.held[a.ID] {
 			continue // an active hand-off, or one that asked for you
@@ -362,9 +371,9 @@ func (r *Reaper) reapWedgedAgents(ctx context.Context) {
 		if last.IsZero() || now.Sub(last) < grace {
 			continue // fresh, or actively using the model
 		}
-		if err := r.backend().ArchiveWorkspace(ctx, wksID); err == nil && r.Log != nil {
-			r.Log("reaper: archived WEDGED agent %s + workspace %s — no model activity in %s, status %q",
-				a.ID, wksID, now.Sub(last).Round(time.Minute), a.Status)
+		if err := r.backend().ArchiveWorkspace(ctx, w.WorkspaceID); err == nil && r.Log != nil {
+			r.Log("reaper: archived WEDGED agent %s + workspace %s (%s) — no model activity in %s, status %q",
+				a.ID, w.WorkspaceID, w.Name, now.Sub(last).Round(time.Minute), a.Status)
 		}
 	}
 }

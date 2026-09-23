@@ -8,30 +8,36 @@ import (
 	"time"
 )
 
-// A hand-off released by handoff.done that stays `running` for hours carries no
-// archive=1 label (so the idle walk never lists it) and still occupies its
-// workspace (so the orphan sweep skips it). The wedged sweep is the backstop:
-// it reclaims a conductor-owned agent with no model activity for the grace —
-// but ONLY that one. An agent actively using the model (fresh usage) and one
-// still held (an open hand-off) are spared.
+// The wedged sweep reclaims a stuck CONDUCTOR-owned hand-off worktree (name
+// prefix conductor/*), but MUST NOT touch a workspace conductor did not create —
+// the user's own paseo worktrees, whatever their isolation or how long their
+// agent has been idle. (Regression: an earlier version keyed on "any worktree"
+// and archived a pile of the user's real worktrees.) Held and actively-working
+// conductor agents are also spared.
 func TestReapWedgedAgent(t *testing.T) {
 	old := "2020-01-01T00:00:00Z"
 	fresh := time.Now().UTC().Format(time.RFC3339)
-	wedgedDir, healthyDir, heldDir := "/wt/wedged", "/wt/healthy", "/wt/held"
+	condDir := "/wt/conductor/pr5"     // conductor-created hand-off worktree
+	userDir := "/home/me/paseo/mine"   // the USER's own worktree — off limits
+	healthyDir := "/wt/conductor/busy" // conductor agent, actively working
+	heldDir := "/wt/conductor/open"    // conductor hand-off still open (Held)
 
 	fb := &fakeReaperBackend{
 		agents: []AgentInfo{
-			{ID: "a-wedged", Status: "running", Cwd: wedgedDir},   // done, but stuck running for hours
-			{ID: "a-healthy", Status: "running", Cwd: healthyDir}, // actively working
-			{ID: "a-held", Status: "running", Cwd: heldDir},       // an open hand-off (Held)
+			{ID: "a-wedged", Status: "running", Cwd: condDir},
+			{ID: "a-user", Status: "closed", Cwd: userDir},
+			{ID: "a-healthy", Status: "running", Cwd: healthyDir},
+			{ID: "a-held", Status: "running", Cwd: heldDir},
 		},
 		workspaces: []WorkspaceInfo{
-			{WorkspaceID: "wks_wedged", Cwd: wedgedDir, Isolation: "worktree"},
-			{WorkspaceID: "wks_healthy", Cwd: healthyDir, Isolation: "worktree"},
-			{WorkspaceID: "wks_held", Cwd: heldDir, Isolation: "worktree"},
+			{WorkspaceID: "wks_cond", Name: "conductor/fix-pr5", Cwd: condDir, Isolation: "worktree"},
+			{WorkspaceID: "wks_user", Name: "mundane-koala", Cwd: userDir, Isolation: "worktree"},
+			{WorkspaceID: "wks_healthy", Name: "conductor/busy", Cwd: healthyDir, Isolation: "worktree"},
+			{WorkspaceID: "wks_held", Name: "conductor/open", Cwd: heldDir, Isolation: "worktree"},
 		},
 		details: map[string]AgentDetail{
 			"a-wedged":  {CreatedAt: old, LastUsage: old},   // no model activity in ages
+			"a-user":    {CreatedAt: old, LastUsage: old},   // ALSO stale — but not conductor's
 			"a-healthy": {CreatedAt: old, LastUsage: fresh}, // used the model just now
 			"a-held":    {CreatedAt: old, LastUsage: old},
 		},
@@ -44,13 +50,12 @@ func TestReapWedgedAgent(t *testing.T) {
 	r.reap(context.Background())
 
 	got := strings.Join(fb.archives, " ")
-	if !strings.Contains(got, "workspace:wks_wedged") {
-		t.Errorf("a wedged (stale-usage) running agent must be reclaimed: %v", fb.archives)
+	if !strings.Contains(got, "workspace:wks_cond") {
+		t.Errorf("a wedged conductor-owned hand-off must be reclaimed: %v", fb.archives)
 	}
-	if strings.Contains(got, "wks_healthy") {
-		t.Errorf("an actively-working agent (fresh usage) must be spared: %v", fb.archives)
-	}
-	if strings.Contains(got, "wks_held") || strings.Contains(got, "a-held") {
-		t.Errorf("a held (open) hand-off must be spared even when its usage is stale: %v", fb.archives)
+	for _, never := range []string{"wks_user", "a-user", "wks_healthy", "wks_held", "a-held"} {
+		if strings.Contains(got, never) {
+			t.Errorf("must not archive %s (user-owned / actively-working / held): %v", never, fb.archives)
+		}
 	}
 }
