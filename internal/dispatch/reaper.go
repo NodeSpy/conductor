@@ -38,7 +38,14 @@ type Reaper struct {
 	PaseoBin string
 	// Remote runs the reaper's paseo invocations on an SSH host — one reaper
 	// per remote paseo runtime (its agents live on that box). nil = local.
-	Remote       *hosts.Target
+	Remote *hosts.Target
+	// Home is the paseo daemon home this reaper targets (emitted as `--home` on
+	// paseo >= 0.9; omitted on older paseo). Mirrors Dispatcher.Home — a reaper's
+	// agents live in the same daemon its dispatcher launches into.
+	Home string
+	// verCache lazily probes+caches `paseo --version` for this reaper's bin/host
+	// (see paseoversion.go), so the --home gate matches the dispatcher's.
+	verCache     paseoVersionCache
 	Interval     time.Duration
 	MinAge       time.Duration // don't reap agents younger than this (default reaperGraceDefault)
 	OrphanMinAge time.Duration // don't sweep an agent-less workspace younger than this (default orphanGraceDefault)

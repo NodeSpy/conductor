@@ -40,9 +40,14 @@ func envPairs(env map[string]string) []string {
 	return out
 }
 
-// paseoCmd is the Dispatcher's exec seam for the paseo CLI.
+// paseoCmd is the Dispatcher's exec seam for the paseo CLI. It prepends the
+// `--home` selector when this dispatcher targets a specific daemon home AND the
+// paseo it drives is new enough to accept the flag (paseo >= 0.9); see
+// paseoversion.go. Every subcommand (clone/run/ls/send/…) flows through here, so
+// the home selection is applied uniformly.
 func (d *Dispatcher) paseoCmd(ctx context.Context, args ...string) *exec.Cmd {
-	return paseoCommand(ctx, d.PaseoBin, d.Remote, args...)
+	prefix := homePrefix(ctx, d.PaseoBin, d.Remote, d.Home, &d.verCache, nil)
+	return paseoCommand(ctx, d.PaseoBin, d.Remote, append(prefix, args...)...)
 }
 
 // remoteMkdirAll creates a directory on the box a remote paseo runs on, so
@@ -77,7 +82,9 @@ func (d *Dispatcher) remoteMkdirAll(ctx context.Context, dir string) error {
 func (d *Dispatcher) remote() bool { return d.Remote != nil }
 
 // paseoCmd is the Reaper's exec seam for the paseo CLI (mirrors the
-// Dispatcher's — one reaper runs per paseo runtime, local or remote).
+// Dispatcher's — one reaper runs per paseo runtime, local or remote — including
+// the `--home` selector on paseo >= 0.9).
 func (r *Reaper) paseoCmd(ctx context.Context, args ...string) *exec.Cmd {
-	return paseoCommand(ctx, r.PaseoBin, r.Remote, args...)
+	prefix := homePrefix(ctx, r.PaseoBin, r.Remote, r.Home, &r.verCache, nil)
+	return paseoCommand(ctx, r.PaseoBin, r.Remote, append(prefix, args...)...)
 }

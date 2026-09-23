@@ -404,6 +404,7 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 	}
 	disp := dispatch.New(paseoBin, retry, false) // NOT dry-run
 	disp.AdoptOpenWorkspaces = cfg.AdoptOpenWorkspaces
+	disp.Home = resolvePaseoHome(cfg)
 	if stack.Secrets != nil {
 		disp.Secrets = stack.Secrets
 		dispatch.SetScrubber(stack.Secrets)
