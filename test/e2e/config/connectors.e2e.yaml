@@ -389,6 +389,11 @@ triggers:
   # reads {{.assess.decision}} straight out of the step's outputs, proving
   # the schema-conforming JSON landed there.
   - on: gh.merge_conflict
+    # NOTE (verb-primary): every e2e daemon delivers CLI creds, so this step now
+    # exercises the VERB-DIRECTIVE prompt with a plain JSON chat reply landing
+    # through the extraction fallback — the native --output-schema probe is
+    # deliberately skipped whenever creds exist (one uniform step.done signal).
+    # Native remains covered by unit tests for the no-creds path.
     name: schemanative
     filter: { repo: ["func/schemanative"] }
     steps:

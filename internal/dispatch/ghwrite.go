@@ -68,13 +68,19 @@ const HandoffGuidance = "\n\n---\n" +
 	"release this hand-off so its workspace is reclaimed. Do that promptly once done; " +
 	"don't leave the hand-off open waiting on nothing."
 
-	// NOTE: there is deliberately NO done-instruction for foreground steps. A
-	// "run `conductor call step.done` as your final action" line injected into a
-	// schema-carrying step makes the model end with prose about the call instead
-	// of the required JSON — the SAME failure that retired HoldGuidance (above),
-	// re-proven live on v0.50.0 (every pr-review-team reviewer failed
-	// output_schema until it was removed). Conductor is already blocked on a
-	// foreground step and archives it at the step boundary; only an agent
-	// conductor is NOT waiting on needs telling, and that is the hand-off
-	// (HandoffGuidance). The step.done VERB stays granted to every dispatch for
-	// early self-release.
+// DoneGuidance is appended to every NON-hand-off agent step that carries NO
+// output_schema: the agent's final action is `conductor call step.done`, the
+// ONE uniform completion signal conductor hears and acts on. Schema steps are
+// EXCLUDED here because their done instruction is the verb schema directive
+// (step.done --output — output and done as one act; see
+// dispatch.verbSchemaDirective). That exclusion is load-bearing: a bare done
+// line alongside a "reply with only JSON" directive is the instruction
+// conflict that broke every pr-review-team reviewer on v0.50.0 (the
+// HoldGuidance failure mode) — never inject BOTH onto one step. The step
+// boundary archive remains the backstop for an agent that dies silently.
+const DoneGuidance = "\n\n---\n" +
+	"WHEN FINISHED: after you have completed your task, run " +
+	"`conductor call step.done` (optionally with --reason \"<one-line summary>\") " +
+	"as your very last action, so conductor knows you are done and can reclaim " +
+	"this workspace. Fire-and-forget: do not wait on it or ask about it, and if " +
+	"the command is unavailable or fails, just finish normally."

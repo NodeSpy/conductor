@@ -75,13 +75,17 @@ func (d *Dispatcher) dispatchOutputSchema(ctx context.Context, req Request, nati
 
 	// Verb-delivered output (the done+output contract): when the agent holds
 	// CLI creds, its structured output arrives via `conductor call step.done
-	// --json '{"output": …}'` — validated daemon-side at the call, correlated
-	// back here by dispatch id. Register the slot for the WHOLE dispatch
-	// (native attempt included): an agent may deliver via the verb on any path,
-	// and a filled slot always wins over reply-text extraction.
+	// --output '<result>'` — validated daemon-side at the call, correlated back
+	// here by dispatch id. This IS the contract on creds-carrying runtimes:
+	// native --output-schema is skipped entirely, so every agent goes through
+	// the ONE uniform signal (step.done) conductor can hear and act on, rather
+	// than some agents finishing "silently" through a provider-native channel.
+	// Native (and its capability cache) remains only for runtimes the CLI
+	// cannot reach.
 	if verbDelivery && req.DispatchID != "" {
 		d.registerOutputSlot(req.DispatchID, schema)
 		defer d.dropOutputSlot(req.DispatchID)
+		return d.runSoftSchema(ctx, req, nativeArgv, prompt, cwd, schema, ref, true)
 	}
 
 	if !d.nativeSchemaSupported(key) {
