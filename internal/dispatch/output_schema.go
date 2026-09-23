@@ -3,12 +3,15 @@ package dispatch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/NodeSpy/conductor/internal/models"
 )
 
 // output_schema is a CONDUCTOR-owned contract: ONE behavior, ALWAYS, ZERO
@@ -178,6 +181,12 @@ func (d *Dispatcher) runSoftSchema(ctx context.Context, req Request, nativeArgv 
 		res.Output = marshalCanonical(obj)
 		return res, nil
 	}
+	// A model-refusal error is NOT a schema problem: no corrective retry will
+	// ever turn "API Error: 400 … does not support this model" into the JSON.
+	// Surface it typed so the engine can fall back through the fleet.
+	if merr := classifyModelUnsupported(res.Output); merr != nil {
+		return res, merr
+	}
 	return d.correctiveRetry(ctx, req, argv, augmented, cwd, schema, "response was not valid JSON matching the schema", ref)
 }
 
@@ -228,6 +237,9 @@ func (d *Dispatcher) correctiveRetry(ctx context.Context, req Request, prevArgv 
 	}
 	obj, ok := d.captureSchemaAnswer(ctx, res, schema)
 	if !ok {
+		if merr := classifyModelUnsupported(res.Output); merr != nil {
+			return res, merr
+		}
 		return res, fmt.Errorf("output_schema: soft fallback: response is not valid JSON matching the schema after one corrective retry")
 	}
 	res.Output = marshalCanonical(obj)
@@ -605,6 +617,30 @@ func enumContains(enumRaw any, value any) bool {
 		}
 	}
 	return false
+}
+
+// ErrModelUnsupported marks a run whose model the provider refused outright
+// ("client too old for this model", deprecated/unknown model, …) — classified
+// via models.UnsupportedSignature so the engine can walk the FLEET to the next
+// candidate instead of burning schema retries on an error message that will
+// never be valid JSON.
+var ErrModelUnsupported = errors.New("model unsupported by the runtime/provider")
+
+// classifyModelUnsupported turns a reply that is really a model-refusal error
+// into ErrModelUnsupported (nil when the text isn't one).
+func classifyModelUnsupported(text string) error {
+	if models.UnsupportedSignature(text) {
+		return fmt.Errorf("%w: %s", ErrModelUnsupported, strings.TrimSpace(firstLine(text)))
+	}
+	return nil
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i > 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // ---- verb-delivered output (the done+output contract) -------------------------

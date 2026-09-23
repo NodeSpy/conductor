@@ -701,7 +701,16 @@ func cmdRun(args []string) error {
 	// resolver owns the fleet ladder and the discovered rosters. Discovery
 	// is lazy and degrade-safe — a box that cannot enumerate simply bare
 	// launches — so wiring it costs nothing at boot.
-	eng.SetModelResolver(agentmodels.NewResolver(cfg, agentmodels.NewCatalog(config.StateDir())))
+	{
+		res := agentmodels.NewResolver(cfg, agentmodels.NewCatalog(config.StateDir()))
+		// Fleet fallback: models a provider refuses at run time are marked here
+		// and skipped on re-resolution (TTL'd, so an updated client climbs back
+		// to the newest model automatically).
+		unsup := agentmodels.NewUnsupportedCache(filepath.Join(config.StateDir(), "models_unsupported.json"))
+		res.Excluded = unsup.Has
+		eng.SetModelResolver(res)
+		eng.SetModelFallback(unsup)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

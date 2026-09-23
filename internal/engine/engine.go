@@ -5,6 +5,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -151,6 +152,9 @@ type Engine struct {
 	// modelResolver walks the fleet ladder (design §2.3) per dispatch. nil
 	// = no model layer: every dispatch bare-launches.
 	modelResolver *models.Resolver
+	// unsupported remembers models a provider refused at run time; dispatchAgent
+	// marks + re-resolves through it (the resolver's Excluded hook reads it).
+	unsupported *models.UnsupportedCache
 }
 
 // hasLiveAgentFor asks the controller that would actually RUN this work
@@ -511,6 +515,26 @@ func (e *Engine) dispatchAgent(ctx context.Context, runner Dispatcher, req dispa
 		}
 	}
 	ref, err := runner.Dispatch(ctx, req)
+	// FLEET FALLBACK. A model the provider refuses outright (client too old for
+	// a freshly released model, deprecated/unknown model — dispatch classifies
+	// these as ErrModelUnsupported) is marked in the unsupported cache and the
+	// step re-resolves: the resolver skips marked models, so the dispatch walks
+	// down the fleet to the newest model that actually runs. Marks expire
+	// (models.UnsupportedTTL), so after the operator updates the client the
+	// fleet climbs back to the newest model on its own.
+	for tries := 0; err != nil && errors.Is(err, dispatch.ErrModelUnsupported) &&
+		e.unsupported != nil && req.Model != "" && tries < 4; tries++ {
+		e.unsupported.Mark("", req.Model)
+		e.log("model %q refused by the runtime — %v; falling back through the fleet", req.Model, err)
+		e.store.Audit(map[string]any{"event": "model_unsupported", "model": req.Model,
+			"step": req.Step.Name, "error": err.Error()})
+		m2, _, p2 := e.resolveModel(ctx, req.Step)
+		if m2 == "" || m2 == req.Model {
+			break // fleet exhausted (or bare) — surface the typed error as-is
+		}
+		req.Model, req.Provider = m2, p2
+		ref, err = runner.Dispatch(ctx, req)
+	}
 	e.rememberDispatcher(ref.AgentID, runner)
 	return ref, err
 }
