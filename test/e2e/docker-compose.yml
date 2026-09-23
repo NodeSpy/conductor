@@ -39,7 +39,7 @@ services:
         a2/web2 a3/web3 a4/web4
         grpb/cliclaude grpb/clicodex grpb/acpgemini grpb/acpcodex
         grpb/ocacp grpb/ocnative grpb/deck
-        grpc/acpresume grpf/clihoff grpd/burst grpe/paseohoff grpj/acpcrash
+        grpc/acpresume grpf/clihoff grpd/burst grpd/sdone grpe/paseohoff grpj/acpcrash
         conn/cweb conn/csvc conn/rweb conn/cengine migr/mweb
         func/cost func/budget1 func/budget2 func/budget3
         func/gatepass func/gatefail func/blob func/hist func/watch
