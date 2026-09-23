@@ -66,6 +66,12 @@ type Resolver struct {
 	// fleet name (a pack instance's `models:` overlay lowers into this).
 	Overrides map[string]string
 
+	// Excluded skips a (runtime, model) candidate during ranking — wired to the
+	// UnsupportedCache so a model a provider refused at run time (e.g. "client
+	// too old for this model") falls through to the next fleet candidate on
+	// re-resolution instead of being picked again. nil = nothing excluded.
+	Excluded func(runtime, model string) bool
+
 	mu      sync.Mutex
 	rosters map[string]Roster
 	failed  map[string]error
@@ -199,6 +205,9 @@ func (r *Resolver) bestAcceptable(ctx context.Context, acceptable []string, rts 
 		prefer := r.preferOf(name)
 		expanded := config.ExpandModelPatterns(acceptable, roster.IDs())
 		for pos, m := range expanded {
+			if r.Excluded != nil && r.Excluded(name, m) {
+				continue // marked unsupported on this runtime — next candidate
+			}
 			rank := preferRank(m, prefer)
 			c, seen := best[m]
 			if !seen {

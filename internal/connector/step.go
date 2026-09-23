@@ -23,8 +23,23 @@ import (
 // refused for any agent not in the ownership ledger (dispatch.OwnedSet).
 var stepDecl = &TypeDecl{
 	Type: "step",
-	Desc: "The dispatched step's own lifecycle: step.done signals the agent's task is complete so conductor reclaims its workspace. Always available; auto-granted to every conductor-launched agent.",
+	Desc: "The dispatched step's own lifecycle: step.done signals the agent's task is complete (optionally delivering its structured output) so conductor reclaims its workspace; step.bail / step.rerun are watch-rule actions on a live step. Always available; done is auto-granted to every conductor-launched agent.",
+	Events: []EventDecl{
+		{Name: "bailed", Desc: "a live step was torn down because its reason went away", Context: stepEventContext},
+		{Name: "superseded", Desc: "a live step was replaced by a re-run on new state", Context: stepEventContext},
+		{Name: "done", Desc: "a live step's agent signalled done and it was released", Context: stepEventContext},
+	},
 	Verbs: []VerbDecl{
+		{
+			Name: "bail", Desc: "tear down this live step (cancel the agent, release it) — the reason it existed is gone. A watch-step action.",
+			Options: Schema{},
+			Outputs: Schema{"bailed": {Type: TBool}},
+		},
+		{
+			Name: "rerun", Desc: "supersede this live step by re-running the SAME step on the current state. A watch-step action. To run a DIFFERENT workflow, use a `workflow:` step instead.",
+			Options: Schema{"prompt": {Type: TString, Desc: "extra text appended to the step's prompt on the re-run"}},
+			Outputs: Schema{"superseded": {Type: TBool}},
+		},
 		{
 			Name: "done", Desc: "your task is fully complete — deliver your result (when a schema was required) and release this agent's workspace back to conductor. Call as your final action.",
 			Options: Schema{
@@ -84,8 +99,21 @@ func (stepImpl) Source(triggers []CompiledTrigger) (core.Integration, error) {
 	return nil, nil
 }
 
+// stepEventContext is the shared context for the step lifecycle events.
+var stepEventContext = Schema{
+	"ref":    {Type: TString, Desc: "repo#number"},
+	"repo":   {Type: TString},
+	"number": {Type: TInt},
+	"step":   {Type: TString, Desc: "the step id"},
+	"reason": {Type: TString, Desc: "why (e.g. \"pr merged\")"},
+}
+
 func (stepImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
 	switch verb {
+	case "bail", "rerun":
+		// Watch-step actions: the engine performs these directly (it holds the
+		// live step in scope). They are not reachable through the skill surface.
+		return nil, fmt.Errorf("step.%s runs from a watch step, not as a direct call", verb)
 	case "done":
 		ops := stepOps()
 		if ops == nil || ops.Done == nil {

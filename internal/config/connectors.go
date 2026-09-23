@@ -1127,10 +1127,12 @@ func (w *WatchSpec) normalize() {
 			if n, ok := r.Options["notify"]; ok {
 				st.Options["notify"] = n
 			}
-		case "handoff.refresh", "handoff.rerun_step":
-			st.Uses = "handoff.rerun" // old aliases → the rerun verb
+		case "handoff.refresh", "handoff.rerun_step", "handoff.rerun", "step.refresh":
+			st.Uses = "step.rerun" // aliases → the canonical rerun action
+		case "handoff.bail":
+			st.Uses = "step.bail" // deprecated alias → canonical
 		default:
-			st.Uses = r.Uses // handoff.bail / handoff.done pass through
+			st.Uses = r.Uses // step.bail / step.rerun / step.done pass through
 		}
 		steps = append(steps, st)
 	}
@@ -1952,22 +1954,37 @@ func validateWatch(where string, w *WatchSpec, c *Config) error {
 	}
 	w.normalize()
 	if len(w.Steps) == 0 {
-		return fmt.Errorf("config: %s: watch needs `steps:` — fact reads plus if-guarded handoff.bail / handoff.rerun / workflow: actions", where)
+		return fmt.Errorf("config: %s: watch needs `steps:` — fact reads plus if-guarded step.bail / step.rerun / workflow: actions", where)
 	}
 	if err := validateSteps(where+" watch", w.Steps, c); err != nil {
 		return err
 	}
-	for i, st := range w.Steps {
-		if !strings.HasPrefix(st.Uses, "handoff.") {
+	for i := range w.Steps {
+		st := &w.Steps[i]
+		// handoff.* is the DEPRECATED alias of step.* (a hand-off is a step);
+		// canonicalize here so the engine only ever sees step.*.
+		switch st.Uses {
+		case "handoff.bail":
+			st.Uses = "step.bail"
+		case "handoff.rerun":
+			st.Uses = "step.rerun"
+		case "handoff.done":
+			st.Uses = "step.done"
+		}
+		if strings.HasPrefix(st.Uses, "handoff.") {
+			// Not one of the three aliases handled above → an unknown handoff verb.
+			return fmt.Errorf("config: %s watch.steps[%d]: %q is not a watch action — use step.bail, step.rerun, or a `workflow:` step", where, i, st.Uses)
+		}
+		if !strings.HasPrefix(st.Uses, "step.") {
 			continue // a fact step (read verb) or a workflow: action
 		}
 		sw := fmt.Sprintf("%s watch.steps[%d]", where, i)
 		switch st.Uses {
-		case "handoff.bail", "handoff.rerun":
-		case "handoff.done":
-			return fmt.Errorf("config: %s: handoff.done is not a watch action — use idle_timeout: or let the agent call it", sw)
+		case "step.bail", "step.rerun":
+		case "step.done":
+			return fmt.Errorf("config: %s: step.done is not a watch action — use idle_timeout: or let the agent call it", sw)
 		default:
-			return fmt.Errorf("config: %s: %q is not a watch action — use handoff.bail, handoff.rerun, or a `workflow:` step", sw, st.Uses)
+			return fmt.Errorf("config: %s: %q is not a watch action — use step.bail, step.rerun, or a `workflow:` step", sw, st.Uses)
 		}
 	}
 	return nil

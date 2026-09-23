@@ -2,11 +2,13 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/models"
 )
 
 // Provisioner resolves the conductor-supplied worktree a controller runs an agent
@@ -159,6 +161,13 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		// can't capture leave it empty (the prior behavior).
 		if oc, ok := sess.(OutputCapturer); ok {
 			ref.Output = oc.Output()
+		}
+		// A model-refusal error ("client too old for this model", deprecated/
+		// unknown model) is not a reply at all: surface it typed so the engine
+		// walks the fleet to the next candidate instead of validating an error
+		// message against the schema (and burning a corrective turn on it).
+		if models.UnsupportedSignature(ref.Output) {
+			return ref, fmt.Errorf("%w: %s", dispatch.ErrModelUnsupported, strings.TrimSpace(ref.Output))
 		}
 		// A controller runtime has no native --output-schema; conductor enforces
 		// the contract in software (v0.9.3). The schema directive was injected

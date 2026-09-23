@@ -24,7 +24,8 @@ func TestOutputSchemaVerbDeliveredWins(t *testing.T) {
 		"properties": map[string]any{"decision": map[string]any{"type": "string"}}}
 	d := &Dispatcher{PaseoBin: "paseo"}
 	req := verbTestRequest(schema)
-	d.markNativeUnsupported(schemaCacheKey(req))
+	// NOTE: native is deliberately NOT marked unsupported — with creds the verb
+	// path must be taken FIRST, never the native probe (one uniform signal).
 
 	// The "agent": mid-run it calls step.done with the output (DeliverOutput),
 	// then its chat reply is USELESS prose — exactly the case that used to fail.
@@ -40,12 +41,17 @@ func TestOutputSchemaVerbDeliveredWins(t *testing.T) {
 	d.SetBackend(fb)
 
 	ref := RunRef{}
-	res, err := d.dispatchOutputSchema(context.Background(), req, []string{"run", "assess this pr", "--json"}, "assess this pr", "", &ref, true)
+	res, err := d.dispatchOutputSchema(context.Background(), req, []string{"run", "assess this pr", "--output-schema", "{}", "--json"}, "assess this pr", "", &ref, true)
 	if err != nil {
 		t.Fatalf("verb-delivered output must satisfy the schema step: %v", err)
 	}
 	if len(fb.calls) != 1 {
 		t.Fatalf("delivered output must need NO corrective retry; got %d runs", len(fb.calls))
+	}
+	// Native --output-schema is skipped entirely on the creds path: the single
+	// run must be the verb-directive run, not a native probe.
+	if strings.Contains(strings.Join(fb.calls[0].Args, " "), "--output-schema") {
+		t.Fatalf("with creds the native probe must be skipped: %v", fb.calls[0].Args)
 	}
 	var out map[string]any
 	if err := json.Unmarshal([]byte(res.Output), &out); err != nil || out["decision"] != "approve" {

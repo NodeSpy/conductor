@@ -1396,7 +1396,7 @@ group_T_output_schema() {
   func_reset_sink
   post_webhook_to conductor-conn pull_request func_schemanative_conflict.json >/dev/null
   if wait_for 30 slack_sink_has "SCHEMA-NATIVE decision=approve"; then
-    ok "T native --output-schema still works end to end" T T-native
+    ok "T schema step lands output (verb directive; JSON chat reply via extraction fallback)" T T-native
   else
     bad "T native --output-schema path" T T-native "no SCHEMA-NATIVE decision=approve capture"
   fi

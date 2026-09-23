@@ -102,7 +102,7 @@ ownership ledger (`owned.json` beside the state file), and an archive can only
 ever name an id in that ledger: a workspace conductor did not create is
 structurally untouchable. A foreground step's agent (and its conductor-created
 workspace) is archived the moment the step finishes; a hand-off's when it calls
-`handoff.done` (or its `idle_timeout` fires); any other agent when it calls the
+`step.done` (or its `idle_timeout` fires); any other agent when it calls the
 auto-granted `step.done` — every agent is instructed to do so as its final
 action. A dispatch that failed before the agent came up tears its own workspace
 down immediately. The trade is deliberate: a conductor-launched agent that dies

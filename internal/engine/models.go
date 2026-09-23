@@ -17,6 +17,10 @@ import (
 // daemon with no discovery wired — the runtime uses its own default).
 func (e *Engine) SetModelResolver(r *models.Resolver) { e.modelResolver = r }
 
+// SetModelFallback installs the unsupported-model cache dispatchAgent marks
+// into on a provider refusal (nil disables the fleet fallback).
+func (e *Engine) SetModelFallback(c *models.UnsupportedCache) { e.unsupported = c }
+
 // resolveModel picks the model for one step. "" is a bare launch.
 //
 // A resolution ERROR — an unsatisfiable `required: true` fleet — is

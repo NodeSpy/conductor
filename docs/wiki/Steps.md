@@ -308,8 +308,8 @@ to execute belongs here.
 | `expect_push` | Mark a fixer step that must LAND a change on the target. A clean run that leaves work unlanded (a non-empty proposed diff never pushed) becomes a `no_progress` failure instead of a silent success — see [[Workflows]] hooks. Leave off for a review/judge step. |
 | `wait_timeout` | How long a foreground dispatch waits before giving up. |
 | `archive_when_done` | Whether the agent (and its conductor-created workspace) is archived the moment its step finishes. Forced off for a `background:` hand-off step. |
-| `watch` | Reactive hand-off: run `steps:` every `every:` (a mini-workflow — fact reads + if-guarded actions). Actions: `handoff.bail` (reason gone → tear down), `handoff.rerun` (re-run this step), or a `workflow:` step (re-run a workflow — re-review). Operator-owned. See [[Hand-offs]]. |
-| `idle_timeout` | Release an interactive hand-off still open after this long (drop the hold, archive the agent + workspace). The backstop for one nobody closed; the agent calling `handoff.done` is the precise signal. Off unless set. See [[Hand-offs]]. |
+| `watch` | Reactive live step: run `steps:` every `every:` (a mini-workflow — fact reads + if-guarded actions). Actions: `step.bail` (reason gone → tear down), `step.rerun` (re-run this step on the new state), or a `workflow:` step (re-run a workflow — re-review). Works on ANY live step, not just hand-offs — e.g. a long-processing step can bail when its input disappears or rerun when new work arrives. (`handoff.bail`/`handoff.rerun` are accepted as deprecated aliases.) Operator-owned. See [[Hand-offs]]. |
+| `idle_timeout` | Release an interactive hand-off still open after this long (drop the hold, archive the agent + workspace). The backstop for one nobody closed; the agent calling `step.done` is the precise signal. Off unless set. See [[Hand-offs]]. |
 | `labels` | Extra `key=value` labels on the dispatched agent. |
 | `host` | A [[Hosts]] SSH target this step's runtime launches on, overriding the runtime's own. |
 | `guidance` | Tone/format that **stacks on** the scoped baseline ([[Policy\|`policy.guidance`]]) rather than replacing it. A string, a list, or `{ replace: … }`. See [[Reuse]]. |
@@ -480,3 +480,32 @@ names the tool directly (e.g. `gemini` over ACP), so the step's `model:` has not
 is ignored. With no `runtimes:` configured at all, every agent step runs on `paseo`, so this
 distinction is invisible until you actually introduce a second runtime. See [[Runtimes]] for the
 full resolution order and runtime kinds ([[Controllers]] is the legacy name).
+
+## The step lifecycle: `step.done`, `step.bail`, `step.rerun`
+
+Every agent conductor launches carries the built-in `step` connector's verbs
+(the `handoff.*` spellings remain as deprecated aliases):
+
+- **`step.done`** — the agent's own completion signal, auto-granted to every
+  dispatch. Calling it releases the agent and its conductor-created workspace
+  (ledger-gated: an agent can only ever release itself — the target comes from
+  its token, never an argument). On a step with an `output_schema`, the call
+  ALSO delivers the result: `conductor call step.done --output '<result>'` is
+  one atomic final action, validated against the schema at the verb boundary
+  (an invalid value gets a precise, retryable error). Any JSON value shape the
+  schema admits works — object, array, string, number, boolean, enum.
+- **`step.bail` / `step.rerun`** — `watch:` rule actions on the LIVE step (not
+  agent-callable): tear it down when its reason is gone, or supersede it with a
+  re-run on the current state.
+
+How agents learn about it: schema steps get the delivery instruction as their
+schema directive; other foreground steps get a short "run `step.done` when
+finished" footer; hand-offs get theirs in the hand-off guidance. Where the
+signal is REACHABLE: paseo agents call the `conductor` CLI (creds injected in
+env; remote hosts via the SSH tunnel); ACP and opencode runtimes get the same
+surface as native MCP tools (`step_done`). A bare `cli` one-shot runtime has no
+skill surface — there the step boundary itself is the completion signal
+(conductor is blocked on the process), schema output rides the reply, and the
+footer tells the agent to just finish normally if the command is unavailable.
+Reclaim never depends on the call alone: a foreground step is archived at its
+step boundary regardless, and hand-offs have `idle_timeout` as the backstop.

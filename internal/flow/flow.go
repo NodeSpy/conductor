@@ -1487,6 +1487,10 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		}
 		if step.Background {
 			act.Prompt += dispatch.HandoffGuidance
+		} else if len(act.OutputSchema) == 0 {
+			// Schema steps get their done instruction from the verb schema
+			// directive instead — never both (see DoneGuidance).
+			act.Prompt += dispatch.DoneGuidance
 		}
 	}
 	var tokens dispatch.Tokens
