@@ -998,8 +998,6 @@ func cmdRun(args []string) error {
 	defer connector.SetConductorOps(nil)
 	// handoff.done: the agent releasing its own live hand-off (skill surface),
 	// resolved through the engine's live-hand-off registry.
-	connector.SetHandoffOps(func() *connector.HandoffOps { return eng.HandoffOps() })
-	defer connector.SetHandoffOps(nil)
 	connector.SetStepOps(func() *connector.StepOps { return eng.StepOps() })
 	defer connector.SetStepOps(nil)
 	// gh.sweep: the same nudge the SIGUSR1 handler runs.

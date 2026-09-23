@@ -407,7 +407,7 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 	}
 	var factSteps, actionSteps []config.Step
 	for _, st := range w.Steps {
-		if st.Workflow != "" || strings.HasPrefix(st.Uses, "handoff.") {
+		if st.Workflow != "" || strings.HasPrefix(st.Uses, "step.") || strings.HasPrefix(st.Uses, "handoff.") {
 			actionSteps = append(actionSteps, st)
 		} else {
 			factSteps = append(factSteps, st)
@@ -461,14 +461,14 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 				e.supersedeHandoff(parent, cancel, t, stepID, agentID, prKey,
 					func(c context.Context) error { return actions.RunWorkflow(c, wf, with) })
 				return
-			case st.Uses == "handoff.bail":
+			case st.Uses == "step.bail" || st.Uses == "handoff.bail":
 				reason := st.If
 				if reason == "" {
 					reason = "watch condition met"
 				}
 				bail(reason)
 				return
-			case st.Uses == "handoff.rerun":
+			case st.Uses == "step.rerun" || st.Uses == "handoff.rerun":
 				if actions.RerunStep == nil {
 					e.log("%s hand-off %q watch: rerun unavailable here (ignored)", tag(t), stepID)
 					continue

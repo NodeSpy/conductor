@@ -95,21 +95,6 @@ func (e *Engine) startIdleTimer(parent, runCtx context.Context, t core.Trigger, 
 	}()
 }
 
-// HandoffOps exposes the daemon's live hand-off operations to the handoff
-// connector (wired in main via connector.SetHandoffOps). Only Done is reachable
-// from the agent skill surface; bail/refresh are driven by the watch loop
-// directly, so they are left unset (the connector reports them unavailable off a
-// watch rule). handoff.done and step.done share the StepDone handler — a
-// hand-off's done additionally tears the hand-off state down (StepDone routes
-// through handoffDone when the resolved agent holds one).
-func (e *Engine) HandoffOps() *connector.HandoffOps {
-	return &connector.HandoffOps{
-		Done: func(ctx context.Context, dispatchID, agentID, reason string, output any, hasOutput bool) error {
-			return e.doneSignal(ctx, dispatchID, agentID, reason, output, hasOutput)
-		},
-	}
-}
-
 // StepOps exposes step.done (wired in main via connector.SetStepOps).
 func (e *Engine) StepOps() *connector.StepOps {
 	return &connector.StepOps{Done: e.doneSignal}

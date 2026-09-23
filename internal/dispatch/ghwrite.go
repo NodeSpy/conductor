@@ -64,7 +64,7 @@ const HandoffGuidance = "\n\n---\n" +
 	"need me — including after each revision — so I'm always alerted. Never end your turn " +
 	"idle while you still need a decision from me. " +
 	"When we are COMPLETELY finished and you have nothing more for me — the work is posted " +
-	"or discarded, or there's nothing left to decide — call the `handoff.done` tool to " +
+	"or discarded, or there's nothing left to decide — call the `step.done` tool to " +
 	"release this hand-off so its workspace is reclaimed. Do that promptly once done; " +
 	"don't leave the hand-off open waiting on nothing."
 

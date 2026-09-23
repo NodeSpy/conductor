@@ -88,14 +88,14 @@ func TestWatchNormalizeOldShape(t *testing.T) {
 	if w.Steps[0].ID != "pr" || w.Steps[0].Uses != "gh.pr_get" {
 		t.Fatalf("fact step wrong: %+v", w.Steps[0])
 	}
-	if w.Steps[1].Uses != "handoff.bail" {
+	if w.Steps[1].Uses != "handoff.bail" && w.Steps[1].Uses != "step.bail" {
 		t.Fatalf("bail step wrong: %+v", w.Steps[1])
 	}
 	if w.Steps[2].Uses != "" || w.Steps[2].Workflow != "review-flow" {
 		t.Fatalf("run_workflow should become a workflow: step, got %+v", w.Steps[2])
 	}
-	if w.Steps[3].Uses != "handoff.rerun" {
-		t.Fatalf("refresh should become handoff.rerun, got %+v", w.Steps[3])
+	if w.Steps[3].Uses != "step.rerun" {
+		t.Fatalf("refresh should become step.rerun, got %+v", w.Steps[3])
 	}
 	// idempotent
 	w.normalize()

@@ -9,15 +9,16 @@ func TestHandoffDoneRoutesToOps(t *testing.T) {
 	var gotAgent, gotDispatch string
 	var gotOutput any
 	var gotHas bool
-	SetHandoffOps(func() *HandoffOps {
-		return &HandoffOps{
+	// handoff is a DEPRECATED ALIAS of step: its verbs forward to the step ops.
+	SetStepOps(func() *StepOps {
+		return &StepOps{
 			Done: func(_ context.Context, dispatchID, agentID, _ string, output any, hasOutput bool) error {
 				gotDispatch, gotAgent, gotOutput, gotHas = dispatchID, agentID, output, hasOutput
 				return nil
 			},
 		}
 	})
-	t.Cleanup(func() { SetHandoffOps(nil) })
+	t.Cleanup(func() { SetStepOps(nil) })
 
 	impl := handoffImpl{}
 	out, err := impl.Invoke(context.Background(), "done", map[string]any{
@@ -40,10 +41,13 @@ func TestHandoffDoneRoutesToOps(t *testing.T) {
 }
 
 func TestHandoffVerbsWithoutOps(t *testing.T) {
-	SetHandoffOps(nil)
+	SetStepOps(nil)
 	impl := handoffImpl{}
 	if _, err := impl.Invoke(context.Background(), "done", nil); err == nil {
 		t.Fatal("done with no ops wired should error (only runs inside a live daemon)")
+	}
+	if _, err := impl.Invoke(context.Background(), "bail", nil); err == nil {
+		t.Fatal("bail is a watch action — not callable directly")
 	}
 	if _, err := impl.Invoke(context.Background(), "bogus", nil); err == nil {
 		t.Fatal("unknown verb should error")
