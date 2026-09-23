@@ -109,7 +109,7 @@ func (d *Dispatcher) dispatchOutputSchema(ctx context.Context, req Request, nati
 	// A verb-delivered output wins even when the native reply was unusable —
 	// the agent already handed us the validated object.
 	if out, ok := d.takeDeliveredOutput(req.DispatchID); ok {
-		res.Output = marshalCanonical(out)
+		res.Output = marshalCanonicalValue(out)
 		return res, nil
 	}
 	// Native ran clean (exit 0) but its output isn't valid JSON matching the
@@ -167,7 +167,7 @@ func (d *Dispatcher) runSoftSchema(ctx context.Context, req Request, nativeArgv 
 	}
 	// A verb-delivered output was already validated at the call; it wins.
 	if out, ok := d.takeDeliveredOutput(req.DispatchID); ok {
-		res.Output = marshalCanonical(out)
+		res.Output = marshalCanonicalValue(out)
 		return res, nil
 	}
 	if obj, ok := d.captureSchemaAnswer(ctx, res, schema); ok {
@@ -219,7 +219,7 @@ func (d *Dispatcher) correctiveRetry(ctx context.Context, req Request, prevArgv 
 		ref.AgentID = res.AgentID
 	}
 	if out, ok := d.takeDeliveredOutput(req.DispatchID); ok {
-		res.Output = marshalCanonical(out)
+		res.Output = marshalCanonicalValue(out)
 		return res, nil
 	}
 	obj, ok := d.captureSchemaAnswer(ctx, res, schema)
@@ -368,6 +368,17 @@ func schemaDirective(schema map[string]any) string {
 // flow.extractOutputs (which only unwraps a top-level output/result/outputs
 // key when it maps to another object) hands the step's outputs the object
 // itself, matching what a clean native response would have produced.
+// marshalCanonicalValue serializes ANY schema-valid value (the verb-delivered
+// range: object/array/string/number/boolean) the same way marshalCanonical
+// serializes objects.
+func marshalCanonicalValue(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(b)
+}
+
 func marshalCanonical(obj map[string]any) string {
 	b, err := json.Marshal(obj)
 	if err != nil {
@@ -601,7 +612,7 @@ func enumContains(enumRaw any, value any) bool {
 type outputSlot struct {
 	mu     sync.Mutex
 	schema map[string]any
-	out    map[string]any
+	out    any
 	filled bool
 }
 
@@ -617,8 +628,11 @@ func (d *Dispatcher) dropOutputSlot(dispatchID string) { d.outputSlots.Delete(di
 // a non-schema step, or the run already resolved) — not an error; the caller's
 // done semantics proceed unchanged. A validation failure IS an error, returned
 // to the agent verbatim so it can fix the object and call again.
-func (d *Dispatcher) DeliverOutput(dispatchID string, output map[string]any) (found bool, err error) {
-	if dispatchID == "" || output == nil {
+// The output is ANY JSON value the schema admits — object, array, string,
+// number, boolean (validateNode's full range) — so `false`, `0`, and `""` are
+// real deliveries, not absences; presence is signalled by the caller.
+func (d *Dispatcher) DeliverOutput(dispatchID string, output any) (found bool, err error) {
+	if dispatchID == "" {
 		return false, nil
 	}
 	v, ok := d.outputSlots.Load(dispatchID)
@@ -639,7 +653,7 @@ func (d *Dispatcher) DeliverOutput(dispatchID string, output map[string]any) (fo
 // takeDeliveredOutput collects a verb-delivered output ("" dispatch id or no
 // slot → none). The slot stays registered until the dispatch's deferred drop,
 // so a late corrective path can still read an earlier delivery.
-func (d *Dispatcher) takeDeliveredOutput(dispatchID string) (map[string]any, bool) {
+func (d *Dispatcher) takeDeliveredOutput(dispatchID string) (any, bool) {
 	if dispatchID == "" {
 		return nil, false
 	}
@@ -664,7 +678,7 @@ func verbSchemaDirective(schema map[string]any) string {
 	b, _ := json.Marshal(schema)
 	return "\n\n---\nDELIVER YOUR RESULT VIA CONDUCTOR: when your work is complete, run\n" +
 		"  conductor call step.done --output '<result>'\n" +
-		"where <result> is a JSON object matching EXACTLY this schema:\n" + string(b) + "\n" +
+		"where <result> is a JSON value matching EXACTLY this schema:\n" + string(b) + "\n" +
 		"The call validates the object and replies with a specific error if it does not match — " +
 		"fix the object and run the call again until it is accepted. This one call both delivers " +
 		"your result and tells conductor you are finished. After it is accepted, simply end your " +

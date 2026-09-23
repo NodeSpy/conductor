@@ -266,7 +266,7 @@ func (r *controllerRunner) DispatchInFlight(string) bool { return false }
 
 // DeliverOutput: controller runtimes have no verb-delivery rendezvous yet; a
 // schema step on them uses the reply-text contract.
-func (r *controllerRunner) DeliverOutput(string, map[string]any) (bool, error) { return false, nil }
+func (r *controllerRunner) DeliverOutput(string, any) (bool, error) { return false, nil }
 
 // forget removes a session from the liveness indexes, decrementing exactly the
 // PR+kind bucket it was dispatched under.

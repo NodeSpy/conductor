@@ -29,7 +29,7 @@ var stepDecl = &TypeDecl{
 			Name: "done", Desc: "your task is fully complete — deliver your result (when a schema was required) and release this agent's workspace back to conductor. Call as your final action.",
 			Options: Schema{
 				"reason": {Type: TString, Desc: "optional one-line summary of what was completed"},
-				"output": {Type: TMap, Desc: "the step's structured result, matching the output schema you were given (required when the task specified one; validated by this call)"},
+				"output": {Type: TAny, Desc: "the step's structured result — any JSON value matching the output schema you were given (required when the task specified one; validated by this call)"},
 			},
 			Outputs: Schema{"released": {Type: TBool}},
 		},
@@ -41,11 +41,12 @@ func init() { RegisterType(stepDecl, newStepImpl) }
 // StepOps is the daemon-side surface step.done acts through, wired at boot.
 type StepOps struct {
 	// Done delivers the calling dispatch's structured output (when it carries
-	// one — validated against the waiting schema) and archives the agent that
-	// dispatch launched. dispatchID is the caller's token-bound dispatch id
-	// (daemon-injected, never agent-supplied); agentID is a legacy fallback
-	// identity; reason is the agent's optional summary.
-	Done func(ctx context.Context, dispatchID, agentID, reason string, output map[string]any) error
+	// one — any JSON value, validated against the waiting schema; hasOutput
+	// distinguishes an explicit false/0/"" delivery from no output at all) and
+	// archives the agent that dispatch launched. dispatchID is the caller's
+	// token-bound dispatch id (daemon-injected, never agent-supplied); agentID
+	// is a legacy fallback identity; reason is the agent's optional summary.
+	Done func(ctx context.Context, dispatchID, agentID, reason string, output any, hasOutput bool) error
 }
 
 var (
@@ -96,8 +97,8 @@ func (stepImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (m
 		dispatchID, _ := opts["__dispatch"].(string)
 		agentID, _ := opts["__handoff_agent"].(string)
 		reason, _ := opts["reason"].(string)
-		output, _ := opts["output"].(map[string]any)
-		if err := ops.Done(ctx, dispatchID, agentID, reason, output); err != nil {
+		output, hasOutput := opts["output"]
+		if err := ops.Done(ctx, dispatchID, agentID, reason, output, hasOutput); err != nil {
 			return nil, err
 		}
 		return map[string]any{"released": true}, nil

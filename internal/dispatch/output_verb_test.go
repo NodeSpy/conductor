@@ -8,7 +8,7 @@ import (
 )
 
 // The done+output contract: a schema step's agent delivers its result via
-// `conductor call step.done --json '{"output": …}'` — one atomic final action,
+// `conductor call step.done --output '<result JSON>'` — one atomic final action,
 // validated at the verb boundary — instead of the fragile reply-is-the-JSON
 // dance. These pin the dispatcher half: the rendezvous, validation, the verb
 // directive, and that a delivered output wins over whatever the chat said.
@@ -82,7 +82,7 @@ func TestDeliverOutputValidatesAtTheVerbBoundary(t *testing.T) {
 	if found, err := d.DeliverOutput("d1", map[string]any{"decision": "request_changes"}); !found || err != nil {
 		t.Fatalf("valid output refused: found=%v err=%v", found, err)
 	}
-	if out, ok := d.takeDeliveredOutput("d1"); !ok || out["decision"] != "request_changes" {
+	if out, ok := d.takeDeliveredOutput("d1"); !ok || out.(map[string]any)["decision"] != "request_changes" {
 		t.Fatalf("stored output missing: %v %v", out, ok)
 	}
 	// No schema dispatch waiting: not an error — done semantics proceed.
@@ -111,5 +111,52 @@ func TestOutputSchemaWithoutCredsKeepsReplyContract(t *testing.T) {
 	}
 	if !strings.Contains(fb.lastPrompt, "Respond with ONLY a single JSON object") {
 		t.Fatalf("without creds the classic reply directive must remain: %q", fb.lastPrompt)
+	}
+}
+
+// Every value shape conductor's validator admits must be deliverable through
+// the verb — including falsy scalars, which are real deliveries, not absences.
+func TestDeliverOutputSupportsEveryValueShape(t *testing.T) {
+	cases := []struct {
+		name   string
+		schema map[string]any
+		value  any
+		want   string // canonical serialization the step receives
+	}{
+		{"object", map[string]any{"type": "object", "required": []any{"decision"},
+			"properties": map[string]any{"decision": map[string]any{"type": "string"}}},
+			map[string]any{"decision": "approve"}, `{"decision":"approve"}`},
+		{"array", map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			[]any{"a", "b"}, `["a","b"]`},
+		{"string", map[string]any{"type": "string"}, "ship it", `"ship it"`},
+		{"empty string", map[string]any{"type": "string"}, "", `""`},
+		{"number", map[string]any{"type": "number"}, 3.5, `3.5`},
+		{"integer zero", map[string]any{"type": "integer"}, float64(0), `0`},
+		{"boolean false", map[string]any{"type": "boolean"}, false, `false`},
+		{"enum", map[string]any{"type": "string", "enum": []any{"approve", "reject"}}, "reject", `"reject"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &Dispatcher{}
+			d.registerOutputSlot("d1", tc.schema)
+			found, err := d.DeliverOutput("d1", tc.value)
+			if !found || err != nil {
+				t.Fatalf("valid %s delivery refused: found=%v err=%v", tc.name, found, err)
+			}
+			out, ok := d.takeDeliveredOutput("d1")
+			if !ok {
+				t.Fatalf("%s delivery not stored", tc.name)
+			}
+			if got := marshalCanonicalValue(out); got != tc.want {
+				t.Fatalf("%s: canonical output %q, want %q", tc.name, got, tc.want)
+			}
+		})
+	}
+
+	// And the type mismatch is still refused precisely.
+	d := &Dispatcher{}
+	d.registerOutputSlot("d1", map[string]any{"type": "array"})
+	if _, err := d.DeliverOutput("d1", "not an array"); err == nil {
+		t.Fatal("a type mismatch must be refused")
 	}
 }
