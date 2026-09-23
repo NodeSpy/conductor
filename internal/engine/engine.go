@@ -408,6 +408,16 @@ func (e *Engine) agentGuidance(profile config.Step, pol config.Policy) string {
 // background hand-off is told (HandoffGuidance) to call handoff.done, so its
 // card must list it even when the step wrote no skill: block of its own.
 func (e *Engine) skillGuidance(profile config.Step) string {
+	// The card rides the CONFIGURED grant. Every token also carries the
+	// auto-granted step.done, but a plain foreground step is NOT told about it
+	// in the prompt: conductor archives it at the step boundary anyway, and
+	// advertising a verb (or any extra instruction) to a schema-carrying step
+	// derails its structured output — the failure that retired HoldGuidance and
+	// broke every pr-review-team reviewer on v0.50.0. A hand-off's card keeps
+	// handoff.done/step.done: releasing itself is part of its contract.
+	if profile.Skill == nil && !profile.Background {
+		return ""
+	}
 	eff := dispatch.EffectiveSkillPolicy(profile.Skill, profile.Background)
 	sk := &eff
 	// Nothing to advertise: no verbs granted and no broker access. A non-hand-off
