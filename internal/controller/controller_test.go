@@ -242,3 +242,6 @@ func TestSessionModelAndTransportValid(t *testing.T) {
 		t.Error("bogus transport must be invalid")
 	}
 }
+
+func (*recordRunner) AgentForDispatch(string) string { return "" }
+func (*recordRunner) DispatchInFlight(string) bool   { return false }

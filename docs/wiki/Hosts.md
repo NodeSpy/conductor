@@ -35,7 +35,7 @@ travels as a base64 frame with the ctx JSON on stdin.
 | command steps (`type: command` + `host:`) | outputs `{stdout, stderr, exit_code}` |
 | command connectors (`connectors: x: {type: command, host: …}`) | `uses: x.run` executes the command on that box over SSH; the connection's `env:`/`cwd:` apply inside the remote shell ([[Connectors]]) |
 | cli / acp / agent-deck runtimes (`host:` on the runtime) | the runtime's subprocess launches on that box; a profile's `host:` overrides the runtime's |
-| paseo runtimes (`host:` on the runtime) | every paseo CLI call — run, clone, workspace create, ls, inspect, send, wait, archive, the reaper's polls — executes on that box over ssh; the host entry's `env:` supplies the remote runtime's environment; checkouts land under the remote user's `~/.conductor/checkouts` |
+| paseo runtimes (`host:` on the runtime) | every paseo CLI call — run, clone, workspace create, ls, inspect, send, wait, archive — executes on that box over ssh; the host entry's `env:` supplies the remote runtime's environment; checkouts land under the remote user's `~/.conductor/checkouts` |
 | opencode runtimes (`host:` on the runtime) | `opencode serve` launches remotely, still bound to the REMOTE 127.0.0.1; every HTTP request reaches it through an `ssh -W` stdio forward, so no port opens on either machine |
 
 ## What does not

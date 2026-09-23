@@ -223,6 +223,12 @@ type Runner interface {
 	WaitForAgent(ctx context.Context, id string, timeout time.Duration)
 	HasLiveAgent(ctx context.Context, prKey, kind string) bool
 	Archive(ctx context.Context, agentID string) error
+	// AgentForDispatch resolves a done call's token-bound dispatch id to the
+	// agent/session that dispatch launched ("" when unknown).
+	AgentForDispatch(dispatchID string) string
+	// DispatchInFlight reports whether the dispatch is still running foreground
+	// (its done defers to the step-boundary archive).
+	DispatchInFlight(dispatchID string) bool
 }
 
 // Sender is an optional session-follow-up surface (ACP prompt on a live session);

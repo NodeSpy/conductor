@@ -22,6 +22,15 @@ import (
 // (GH_TOKEN); commits/pushes are attributed to you (git author env + SSH); a
 // separate write token is exposed for posting as you (see ghwrite.go).
 func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
+	// Mark the dispatch in flight for its whole run. A step.done arriving while
+	// conductor is still blocked on this dispatch (an eager agent calling it as
+	// its last action) must NOT archive mid-capture — the done handler sees the
+	// in-flight mark and defers to the step-boundary archive instead, so a done
+	// call can never cut off the output conductor is waiting on.
+	if req.DispatchID != "" {
+		d.inflight.Store(req.DispatchID, true)
+		defer d.inflight.Delete(req.DispatchID)
+	}
 	data := templateData(req)
 	prompt, err := render(req.Action.Prompt, data)
 	if err != nil {
@@ -130,6 +139,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 				}
 				worktreeWS = id
 				worktreeCwd = wcwd
+				d.Owned.AddWorkspace(id) // conductor created this worktree — the reaper may reclaim ONLY what's recorded here
 			} else {
 				cwd = dir
 			}
@@ -173,6 +183,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 			// therefore renders the un-pinned argv, which is what it always did.
 			if id, err := d.runWorkspace(ctx, req); err == nil && id != "" {
 				argv = append(argv, "--workspace", id)
+				d.Owned.AddWorkspace(id) // conductor created this ephemeral run workspace
 			}
 		}
 	}
@@ -302,6 +313,12 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		return ref, err
 	}
 	ref.AgentID = res.AgentID
+	// Conductor launched this agent: record it in the ownership ledger (archive
+	// eligibility is a recorded fact, never guessed) and bind the dispatch id to
+	// it so the agent's own step.done call — whose token carries only the
+	// dispatch id — resolves to exactly this agent.
+	d.Owned.AddAgent(res.AgentID)
+	d.Owned.BindDispatch(req.DispatchID, res.AgentID)
 	if verr := d.verifyWorktree(ctx, req, &ref); verr != nil {
 		return ref, verr
 	}
@@ -1018,31 +1035,59 @@ func (d *Dispatcher) HasLiveAgent(ctx context.Context, prKey, kind string) bool 
 }
 
 // Archive soft-deletes a finished agent (paseo archive), used to clean up a
-// non-interactive workflow step's agent the instant it finishes rather than
-// leaving it for the reaper's next poll. A blank id is a no-op.
+// step's agent when it finishes (step boundary, step.done, hand-off done). A
+// blank id is a no-op.
+//
+// THE OWNERSHIP CHOKEPOINT. Every archive in the daemon funnels through here,
+// and it refuses any agent id not recorded in the ownership ledger (Owned) —
+// so an agent conductor did not launch, and by extension the user's own
+// workspaces, are structurally unreachable no matter which caller asks. A nil
+// ledger (tests that never wired one) fails CLOSED: nothing archives.
 //
 // When the agent lives in a workspace WE created for this run — an isolated
 // worktree (checkout-pr/branch-off), or the ephemeral per-run workspace of an
 // un-pinned checkout:none dispatch — it archives the whole WORKSPACE instead,
 // which reclaims the directory AND the agent it owns in one shot. Archiving
-// only the agent would strand the workspace: once the agent is archived it
-// drops out of `paseo ls`, so the reaper (which reclaims by mapping a
-// still-listed agent to its workspace) can never see it again, and the empty
-// workspace lingers forever. That is the pile-up this path exists to prevent,
-// and it is why BOTH kinds of conductor-created workspace go through it.
-//
-// A workspace we did NOT create for this run is left alone and only the agent
-// is archived: a PINNED workspace (`workspace: { pin: … }`) is meant to persist
-// and be reused by the next run, and a base checkout is yours. Best-effort: if
-// the workspace lookup fails, fall back to archiving the agent.
+// only the agent would strand the workspace forever (an archived agent drops
+// out of `paseo ls`, and nothing scans for leftovers any more). The workspace
+// must ALSO be in the ledger; one that isn't (pinned, base checkout, yours)
+// leaves only the agent archived.
 func (d *Dispatcher) Archive(ctx context.Context, agentID string) error {
 	if agentID == "" {
 		return nil
 	}
-	if wksID := d.agentOwnedWorkspace(ctx, agentID); wksID != "" {
-		return d.backend().ArchiveWorkspace(ctx, wksID)
+	if !d.Owned.HasAgent(agentID) {
+		return fmt.Errorf("refusing to archive agent %s: not launched by conductor (ownership ledger)", agentID)
 	}
-	return d.backend().ArchiveAgent(ctx, agentID)
+	if wksID := d.agentOwnedWorkspace(ctx, agentID); wksID != "" && d.Owned.HasWorkspace(wksID) {
+		if err := d.backend().ArchiveWorkspace(ctx, wksID); err != nil {
+			return err
+		}
+		d.Owned.forget(wksID, agentID)
+		return nil
+	}
+	if err := d.backend().ArchiveAgent(ctx, agentID); err != nil {
+		return err
+	}
+	d.Owned.forget("", agentID)
+	return nil
+}
+
+// AgentForDispatch resolves a dispatch id (a done call's token-bound identity)
+// to the agent that dispatch launched — "" when unknown.
+func (d *Dispatcher) AgentForDispatch(dispatchID string) string {
+	return d.Owned.AgentForDispatch(dispatchID)
+}
+
+// DispatchInFlight reports whether the dispatch is still running (conductor is
+// blocked on its output). A done call for an in-flight dispatch defers to the
+// step-boundary archive rather than interrupting the capture.
+func (d *Dispatcher) DispatchInFlight(dispatchID string) bool {
+	if dispatchID == "" {
+		return false
+	}
+	_, ok := d.inflight.Load(dispatchID)
+	return ok
 }
 
 // agentOwnedWorkspace returns the id of the conductor-created workspace the
@@ -1289,3 +1334,19 @@ func parseAgentID(out []byte) string {
 }
 
 func itoa(n int) string { return fmt.Sprintf("%d", n) }
+
+// normCwd canonicalizes a working-directory string for map keys: ~ expansion
+// plus path cleaning, so `paseo ls` cwds and workspace paths compare equal.
+func normCwd(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			if p == "~" {
+				p = home
+			} else {
+				p = filepath.Join(home, p[2:])
+			}
+		}
+	}
+	return filepath.Clean(p)
+}

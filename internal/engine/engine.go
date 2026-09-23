@@ -43,9 +43,15 @@ type Dispatcher interface {
 	// HasLiveAgent reports whether any non-archived conductor agent is already
 	// working or parked for this PR+kind (gates re-dispatch of live-gated kinds).
 	HasLiveAgent(ctx context.Context, prKey, kind string) bool
-	// Archive soft-deletes a finished agent immediately, so a non-interactive step's
-	// agent (e.g. assess) doesn't linger in paseo until the reaper's next tick.
+	// Archive soft-deletes a finished agent + its conductor-created workspace.
+	// Ledger-gated: it refuses any agent conductor did not launch.
 	Archive(ctx context.Context, agentID string) error
+	// AgentForDispatch resolves a done call's token-bound dispatch id to the
+	// agent that dispatch launched ("" when unknown).
+	AgentForDispatch(dispatchID string) string
+	// DispatchInFlight reports whether conductor is still blocked on the
+	// dispatch (its done defers to the step-boundary archive).
+	DispatchInFlight(dispatchID string) bool
 }
 
 // Notifier emits notifications. *notify.Notifier satisfies it.

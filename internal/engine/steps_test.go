@@ -334,3 +334,6 @@ func TestTailOutput(t *testing.T) {
 		t.Fatal("blank output should yield empty tail")
 	}
 }
+
+func (*stepFake) AgentForDispatch(string) string { return "" }
+func (*stepFake) DispatchInFlight(string) bool   { return false }

@@ -695,7 +695,7 @@ type ControllerConfig struct {
 	// Host names a `hosts:` entry; this controller's subprocess launches run
 	// there over SSH instead of locally. All controller types support it —
 	// cli/acp/agent-deck wrap their subprocess in the ssh launch, paseo runs
-	// its whole CLI (and reaper) remotely, and opencode's server is reached
+	// its whole CLI remotely, and opencode's server is reached
 	// through an ssh -W stdio forward — see checkRemoteHostSupport.
 	Host string `yaml:"host"`
 	// Isolation wraps this runtime's launches in the per-dispatch sandbox
@@ -1515,17 +1515,13 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// SkillEnabled reports whether any step carries a skill: block — the daemon
-// serves the tool socket and builds the secret broker only then.
-func (c *Config) SkillEnabled() bool {
-	found := false
-	c.WalkSteps(func(_ IdentityScope, _ int, s *Step) {
-		if s.Skill != nil {
-			found = true
-		}
-	})
-	return found
-}
+// SkillEnabled reports whether the daemon serves the tool socket and builds
+// the skill broker. Always true: the done signal (step.done) is auto-granted
+// to EVERY dispatch — with no background reaper, an agent's own done call is
+// how its workspace gets reclaimed, so every agent needs the surface (the
+// socket to reach and the broker to mint its token). A step's own skill: block
+// only widens what the grant admits beyond that.
+func (c *Config) SkillEnabled() bool { return true }
 
 // Skill delivery modes: how a dispatched agent reaches the conductor skill
 // surface on its runtime.
@@ -1645,7 +1641,7 @@ func (c *Config) validateControllers() error {
 // checkRemoteHostSupport validates a runtime/controller's `host:` reference:
 // it must name a defined `hosts:` entry. Every runtime type runs remotely —
 // cli/acp/agent-deck ssh-wrap their subprocess, paseo executes its whole CLI
-// (checkouts under the remote ~/.conductor) and reaper on the host, and
+// (checkouts under the remote ~/.conductor) on the host, and
 // opencode's remotely-launched server is reached through an ssh -W stdio
 // forward. kind is "runtime" or "controller" (for the error text); the
 // typ/agent/transport fields are accepted so a future type-specific

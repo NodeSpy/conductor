@@ -22,11 +22,16 @@ func TestSkillGuidance(t *testing.T) {
 		return p
 	}
 
-	// Absent by default: a step without skill: gets only the house text —
-	// the guidance RIDES THE GRANT (design §A).
+	// Every dispatch now carries at least step.done (the done signal replaced
+	// the background reaper), so even a step without a skill: block gets the
+	// verb guidance — the grant it advertises is exactly that auto-granted
+	// self-service verb, nothing broader.
 	plain := e.agentGuidance(config.Step{}, config.Policy{})
-	if strings.Contains(plain, "CONDUCTOR VERBS") || strings.Contains(plain, "Conductor tools") {
-		t.Fatalf("skill guidance leaked into a step with no grant: %q", plain)
+	if !strings.Contains(plain, "CONDUCTOR VERBS") {
+		t.Fatalf("step.done guidance missing from a step with no skill block: %q", plain)
+	}
+	if strings.Contains(plain, "secret_issue") {
+		t.Fatalf("broker guidance leaked into a step with no skill block: %q", plain)
 	}
 
 	// Present when opted in, naming the verb patterns and broker secrets.

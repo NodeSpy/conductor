@@ -60,6 +60,22 @@ func main() {
 		cmdProvider(os.Args[2:])
 	case "version":
 		fmt.Println("fakepaseo 0.0.0")
+	case "_creds":
+		// Harness-only: print the newest agent whose title contains the given
+		// substring — its id and the CONDUCTOR_* env its run was launched with —
+		// so the e2e can act AS that agent (call step.done with its token).
+		cmdCreds(os.Args[2:])
+	case "_archived":
+		// Harness-only: exit 0 iff the given agent id is archived.
+		cmdIsArchived(os.Args[2:])
+	case "_wsarchived":
+		// Harness-only: exit 0 iff the given workspace id is archived.
+		cmdWsArchived(os.Args[2:])
+	case "_seedws":
+		// Harness-only: seed a workspace record conductor did NOT create (a
+		// stand-in for the user's own worktree) — the ledger regression asserts
+		// it survives every reclaim path.
+		cmdSeedWs(os.Args[2:])
 	default:
 		// Unknown subcommands are a no-op success: conductor probes a few we don't
 		// model, and an error would spuriously fail a dispatch.
@@ -85,6 +101,9 @@ type agent struct {
 	// (schema-augmented) prompt echo and the canned reply here for `cmdLogs`.
 	Prompt string `json:"prompt"`
 	Reply  string `json:"reply"`
+	// Env records the --env pairs the run was launched with, so the harness can
+	// act AS the agent (e.g. call step.done with its CONDUCTOR_SKILL_TOKEN).
+	Env map[string]string `json:"env"`
 }
 
 type workspace struct {
@@ -329,7 +348,7 @@ func cmdRun(args []string) {
 		s.Agents[id] = &agent{
 			ID: id, Cwd: cwd, Status: "idle", Title: p.title,
 			Labels: p.labels, CreatedAt: now, LastUsage: now,
-			Prompt: prompt, Reply: string(replyRaw),
+			Prompt: prompt, Reply: string(replyRaw), Env: p.env,
 		}
 	})
 	// Conductor parses the launched agent id off stdout JSON AND reads runtime-
@@ -835,4 +854,72 @@ func must(err error) {
 func fail(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "fakepaseo: "+format+"\n", a...)
 	os.Exit(1)
+}
+
+// ---- harness-only inspection ------------------------------------------------
+
+func cmdCreds(args []string) {
+	if len(args) == 0 {
+		os.Exit(2)
+	}
+	sub := args[0]
+	var best *agent
+	withState(func(s *state) {
+		for _, a := range s.Agents {
+			if !strings.Contains(a.Title, sub) && !strings.Contains(a.Cwd, sub) {
+				continue
+			}
+			if best == nil || a.CreatedAt.After(best.CreatedAt) {
+				best = a
+			}
+		}
+	})
+	if best == nil {
+		os.Exit(1)
+	}
+	fmt.Printf("id=%s\n", best.ID)
+	for k, v := range best.Env {
+		if strings.HasPrefix(k, "CONDUCTOR_") {
+			fmt.Printf("%s=%s\n", k, v)
+		}
+	}
+}
+
+func cmdIsArchived(args []string) {
+	if len(args) == 0 {
+		os.Exit(2)
+	}
+	found := false
+	withState(func(s *state) {
+		if a, ok := s.Agents[args[0]]; ok && a.Archived {
+			found = true
+		}
+	})
+	if !found {
+		os.Exit(1)
+	}
+}
+
+func cmdWsArchived(args []string) {
+	if len(args) == 0 {
+		os.Exit(2)
+	}
+	found := false
+	withState(func(s *state) {
+		if w, ok := s.Workspaces[args[0]]; ok && w.Archived {
+			found = true
+		}
+	})
+	if !found {
+		os.Exit(1)
+	}
+}
+
+func cmdSeedWs(args []string) {
+	if len(args) < 2 {
+		os.Exit(2)
+	}
+	withState(func(s *state) {
+		s.Workspaces[args[0]] = &workspace{ID: args[0], Cwd: args[1], Isolation: "worktree"}
+	})
 }

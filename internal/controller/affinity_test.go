@@ -661,3 +661,6 @@ func TestSessionKeyDoesNotCollideAcrossTrust(t *testing.T) {
 		t.Error("untrusted keys must still discriminate per target")
 	}
 }
+
+func (*affRunner) AgentForDispatch(string) string { return "" }
+func (*affRunner) DispatchInFlight(string) bool   { return false }

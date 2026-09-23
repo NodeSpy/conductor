@@ -1,10 +1,8 @@
 package dispatch
 
 import (
-	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -79,31 +77,6 @@ func TestHoldSetPersists(t *testing.T) {
 	h3 := NewHoldSet(p)
 	if !h3.Has("agent-1") || h3.Has("agent-2") {
 		t.Fatalf("prune should persist: agent-1 kept, agent-2 dropped")
-	}
-}
-
-func TestReaperSparesHeldAgent(t *testing.T) {
-	// Both agents are idle, old (past grace), and (pretend) carry archive=1 so the
-	// reaper lists them; one is held, one is not.
-	agents := `[{"id":"held","status":"idle","cwd":"/tmp/held"},{"id":"other","status":"idle","cwd":"/tmp/other"}]`
-	bin, archiveLog := fakePaseo(t, agents)
-
-	hold := NewHoldSet("")
-	hold.Add("held")
-	r := &Reaper{PaseoBin: bin, Held: hold, Log: func(string, ...any) {}}
-	r.reap(context.Background())
-
-	data, _ := os.ReadFile(archiveLog)
-	got := string(data)
-	if strings.Contains(got, "held") {
-		t.Fatalf("held hand-off agent must NOT be archived; archive log: %q", got)
-	}
-	if !strings.Contains(got, "other") {
-		t.Fatalf("non-held archive=1 agent should be archived; archive log: %q", got)
-	}
-	// The held id survives pruning (it's present in the full list).
-	if !hold.Has("held") {
-		t.Fatal("held id should still be held after a reap tick")
 	}
 }
 

@@ -556,3 +556,6 @@ triggers:
 		t.Fatalf("per-source calls (want shared, src, work): %v", got)
 	}
 }
+
+func (fakeFlowDispatcher) AgentForDispatch(string) string { return "" }
+func (fakeFlowDispatcher) DispatchInFlight(string) bool   { return false }

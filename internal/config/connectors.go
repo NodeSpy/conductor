@@ -940,7 +940,7 @@ type Step struct {
 
 	// IdleTimeout releases an interactive hand-off that is still open after this
 	// long, so its workspace is reclaimed instead of lingering: the agent is
-	// unheld and the reaper archives it. The agent should call `handoff.done`
+	// unheld and its agent + workspace archived. The agent should call `handoff.done`
 	// the moment it has nothing more for the reviewer (that is the precise
 	// signal — see HandoffGuidance); this timeout is the backstop for a hand-off
 	// nobody closed. Off (0) unless set. Independent of `watch:`.

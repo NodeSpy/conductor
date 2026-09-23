@@ -239,3 +239,6 @@ func TestRetryRefusesTamperedHistory(t *testing.T) {
 		t.Fatalf("missing record: %v", err)
 	}
 }
+
+func (*capturingDispatcher) AgentForDispatch(string) string { return "" }
+func (*capturingDispatcher) DispatchInFlight(string) bool   { return false }

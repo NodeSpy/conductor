@@ -80,11 +80,3 @@ func (d *Dispatcher) remoteMkdirAll(ctx context.Context, dir string) error {
 // skipped when it does — those inspect paths that only exist on the remote
 // side; the paseo CLI remains the source of truth there.
 func (d *Dispatcher) remote() bool { return d.Remote != nil }
-
-// paseoCmd is the Reaper's exec seam for the paseo CLI (mirrors the
-// Dispatcher's — one reaper runs per paseo runtime, local or remote — including
-// the `--home` selector on paseo >= 0.9).
-func (r *Reaper) paseoCmd(ctx context.Context, args ...string) *exec.Cmd {
-	prefix := homePrefix(ctx, r.PaseoBin, r.Remote, r.Home, &r.verCache, nil)
-	return paseoCommand(ctx, r.PaseoBin, r.Remote, append(prefix, args...)...)
-}

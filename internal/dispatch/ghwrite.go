@@ -67,3 +67,17 @@ const HandoffGuidance = "\n\n---\n" +
 	"or discarded, or there's nothing left to decide — call the `handoff.done` tool to " +
 	"release this hand-off so its workspace is reclaimed. Do that promptly once done; " +
 	"don't leave the hand-off open waiting on nothing."
+
+// DoneGuidance is appended to every NON-hand-off agent step. It is the done
+// signal's instruction: the agent runs `conductor call step.done` as its final
+// action so conductor reclaims the workspace it launched — there is no
+// background sweep to clean up after an agent that never signals. Deliberately
+// framed as a fire-and-forget final action: unlike a hand-off, an autonomous
+// agent must never pause or ask (see the retired HoldGuidance note above).
+const DoneGuidance = "\n\n---\n" +
+	"WHEN FINISHED: after you have completed your task and produced your final " +
+	"output, run `conductor call step.done` (optionally with " +
+	"`--json '{\"reason\":\"<one-line summary>\"}'`) as your very last action. " +
+	"This tells conductor you are done so it can reclaim this workspace. It is " +
+	"fire-and-forget: do not wait on it, do not ask about it, and if the command " +
+	"is unavailable or fails, just finish normally."

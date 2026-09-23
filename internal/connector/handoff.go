@@ -70,9 +70,11 @@ var handoffContext = Schema{
 // run_workflow are watch-rule actions the engine performs directly (it holds the
 // hand-off in scope), so they are not routed through here.
 type HandoffOps struct {
-	// Done releases the hand-off owning the given AGENT (skill identity), so the
-	// reaper reclaims it. Empty agentID means "the caller's own session."
-	Done func(ctx context.Context, agentID string) error
+	// Done releases the hand-off the CALLING dispatch is holding and archives
+	// its agent + workspace. dispatchID is the caller's token-bound dispatch id
+	// (authoritative — the ownership ledger maps it to the launched agent);
+	// agentID is the legacy fallback identity.
+	Done func(ctx context.Context, dispatchID, agentID string) error
 }
 
 var (
@@ -122,9 +124,10 @@ func (handoffImpl) Invoke(ctx context.Context, verb string, opts map[string]any)
 		if ops == nil || ops.Done == nil {
 			return nil, fmt.Errorf("handoff.done: only runs inside a live daemon's hand-off")
 		}
-		// The agent target is injected by the skill path from the caller identity.
+		// The target is injected by the skill path from the caller identity.
+		dispatchID, _ := opts["__dispatch"].(string)
 		agent, _ := opts["__handoff_agent"].(string)
-		if err := ops.Done(ctx, agent); err != nil {
+		if err := ops.Done(ctx, dispatchID, agent); err != nil {
 			return nil, err
 		}
 		return map[string]any{"released": true}, nil

@@ -23,7 +23,9 @@ func TestArchiveReclaimsWorktreeWorkspace(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "workspaces.json"),
 		[]byte(`[{"workspaceId":"wks_wt","isolation":"worktree","cwd":"`+wt+`"}]`), 0o644)
 
-	d := &Dispatcher{PaseoBin: bin}
+	d := &Dispatcher{PaseoBin: bin, Owned: NewOwnedSet("")}
+	d.Owned.AddAgent("a1")
+	d.Owned.AddWorkspace("wks_wt")
 	if err := d.Archive(context.Background(), "a1"); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +47,9 @@ func TestArchiveReclaimsEphemeralRunWorkspace(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "workspaces.json"),
 		[]byte(`[{"workspaceId":"wks_run","name":"conductor-run-cron-7-a1b2c3","isolation":"local","cwd":"`+runDir+`"}]`), 0o644)
 
-	d := &Dispatcher{PaseoBin: bin}
+	d := &Dispatcher{PaseoBin: bin, Owned: NewOwnedSet("")}
+	d.Owned.AddAgent("a1")
+	d.Owned.AddWorkspace("wks_run")
 	if err := d.Archive(context.Background(), "a1"); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +75,10 @@ func TestArchivePinnedWorkspaceSurvives(t *testing.T) {
 				[]byte(`[{"id":"a1","status":"idle","cwd":"`+tc.cwd+`"}]`), 0o644)
 			os.WriteFile(filepath.Join(dir, "workspaces.json"), []byte(`[`+tc.ws+`]`), 0o644)
 
-			d := &Dispatcher{PaseoBin: bin}
+			d := &Dispatcher{PaseoBin: bin, Owned: NewOwnedSet("")}
+			d.Owned.AddAgent("a1")
+			// The pinned/base workspace is deliberately NOT in the ledger —
+			// conductor didn't create it, so only the agent may be archived.
 			if err := d.Archive(context.Background(), "a1"); err != nil {
 				t.Fatal(err)
 			}
@@ -98,7 +105,7 @@ func TestCheckoutNoneDispatchThenArchiveLeavesNothingBehind(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	d := &Dispatcher{PaseoBin: bin, repoDirs: map[string]string{}}
+	d := &Dispatcher{PaseoBin: bin, Owned: NewOwnedSet(""), repoDirs: map[string]string{}}
 	req := Request{
 		Trigger: core.Trigger{Kind: "cron", Target: core.Target{Repo: "acme/w", Number: 7}},
 		Action:  config.Action{Type: "agent", Agent: "triage", Checkout: "none", Prompt: "triage"},

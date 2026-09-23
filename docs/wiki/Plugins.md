@@ -45,7 +45,7 @@ one of two ways, chosen from what it declares at describe time (not from config)
 - a **dispatch (paseo-style) runtime** declares the agent-lifecycle verbs
   (`run`, `list_agents`, `create_worktree`, `send`, `wait`, …) — conductor drives
   it as its dispatch backend (it launches/monitors agents in *its own* daemon,
-  e.g. paseo), giving it a dedicated dispatcher + archive-when-done reaper. It
+  e.g. paseo), giving it a dedicated dispatcher. It
   coexists with the builtin `use: paseo` (they don't interfere).
 - an **ACP runtime** declares no such verbs — conductor speaks ACP to a fresh,
   re-verified subprocess per session (wrap a coding-agent CLI as a runtime).

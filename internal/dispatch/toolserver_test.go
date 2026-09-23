@@ -166,10 +166,11 @@ func TestBothToolPathsCarryTheDispatchAnchor(t *testing.T) {
 }
 
 func TestEffectiveSkillPolicyAutoGrantsHandoffDone(t *testing.T) {
-	// A non-interactive step gets exactly its own grant.
+	// A non-interactive step gets its own grant plus the auto-granted done
+	// signal (step.done replaced the background reaper).
 	base := Request{Step: config.Step{Skill: &config.SkillPolicy{Verbs: []string{"gh.pr_get"}}}}
-	if got := effectiveSkillPolicy(base).Verbs; !slices.Equal(got, []string{"gh.pr_get"}) {
-		t.Fatalf("non-interactive: got %v, want [gh.pr_get]", got)
+	if got := effectiveSkillPolicy(base).Verbs; !slices.Equal(got, []string{"gh.pr_get", "step.done"}) {
+		t.Fatalf("non-interactive: got %v, want [gh.pr_get step.done]", got)
 	}
 
 	// An interactive hand-off auto-gets handoff.done on top of its grant...
@@ -182,22 +183,27 @@ func TestEffectiveSkillPolicyAutoGrantsHandoffDone(t *testing.T) {
 		t.Fatalf("original grant mutated: %v", got)
 	}
 
-	// An interactive hand-off with NO skill: block still gets handoff.done.
+	// An interactive hand-off with NO skill: block still gets the done pair.
 	bare := Request{Interactive: true}
-	if got := effectiveSkillPolicy(bare).Verbs; !slices.Equal(got, []string{"handoff.done"}) {
-		t.Fatalf("bare interactive: got %v, want [handoff.done]", got)
+	if got := effectiveSkillPolicy(bare).Verbs; !slices.Equal(got, []string{"step.done", "handoff.done"}) {
+		t.Fatalf("bare interactive: got %v, want [step.done handoff.done]", got)
 	}
 
 	// Idempotent: an operator who already granted it doesn't get a duplicate.
-	dup := Request{Interactive: true, Step: config.Step{Skill: &config.SkillPolicy{Verbs: []string{"handoff.done"}}}}
-	if got := effectiveSkillPolicy(dup).Verbs; !slices.Equal(got, []string{"handoff.done"}) {
-		t.Fatalf("duplicate grant: got %v, want [handoff.done]", got)
+	dup := Request{Interactive: true, Step: config.Step{Skill: &config.SkillPolicy{Verbs: []string{"handoff.done", "step.done"}}}}
+	if got := effectiveSkillPolicy(dup).Verbs; !slices.Equal(got, []string{"handoff.done", "step.done"}) {
+		t.Fatalf("duplicate grant: got %v, want [handoff.done step.done]", got)
 	}
 
 	if !wantsSkillCreds(bare) {
 		t.Fatal("interactive hand-off should want skill creds even without skill:")
 	}
-	if wantsSkillCreds(Request{}) {
-		t.Fatal("a plain non-interactive step wants no skill creds")
+	// Every non-agent-authored dispatch now wants creds (the done signal), and
+	// an agent-authored one never does (SkillEnv refuses independently too).
+	if !wantsSkillCreds(Request{}) {
+		t.Fatal("a plain step now wants skill creds (step.done)")
+	}
+	if wantsSkillCreds(Request{AgentAuthored: true}) {
+		t.Fatal("an agent-authored step must never get skill creds")
 	}
 }

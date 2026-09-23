@@ -39,7 +39,7 @@ services:
         a2/web2 a3/web3 a4/web4
         grpb/cliclaude grpb/clicodex grpb/acpgemini grpb/acpcodex
         grpb/ocacp grpb/ocnative grpb/deck
-        grpc/acpresume grpf/clihoff grpd/burst grpe/paseohoff grpj/acpcrash
+        grpc/acpresume grpf/clihoff grpd/burst grpd/sdone grpe/paseohoff grpj/acpcrash
         conn/cweb conn/csvc conn/rweb conn/cengine migr/mweb
         func/cost func/budget1 func/budget2 func/budget3
         func/gatepass func/gatefail func/blob func/hist func/watch
@@ -78,8 +78,6 @@ services:
       PC_PUSHOVER_URL: "http://sink-catcher:8080/pushover"
       PC_NOTIFIARR_URL: "http://sink-catcher:8080/notifiarr"
       PC_NTFY_DEFAULT_URL: "http://sink-catcher:8080/ntfy"
-      PC_REAPER_INTERVAL: "2s"        # testability hook: fast archive-when-done (group B)
-      PC_REAPER_MIN_AGE: "1s"
     volumes:
       - ./config:/etc/conductor:ro
       - ./fixtures:/fixtures:ro
@@ -117,8 +115,6 @@ services:
       # (internal/gitwt); point it at the hermetic forge instead of github.
       CONDUCTOR_GIT_REMOTE_BASE: "git://forge/"
       FAKE_PASEO_STATE: /data/fakepaseo
-      PC_REAPER_INTERVAL: "2s"
-      PC_REAPER_MIN_AGE: "1s"
     volumes:
       - ./config:/etc/conductor:ro
       - ./fixtures:/fixtures:ro

@@ -99,11 +99,57 @@ func (e *Engine) startIdleTimer(parent, runCtx context.Context, t core.Trigger, 
 // connector (wired in main via connector.SetHandoffOps). Only Done is reachable
 // from the agent skill surface; bail/refresh are driven by the watch loop
 // directly, so they are left unset (the connector reports them unavailable off a
-// watch rule).
+// watch rule). handoff.done and step.done share the StepDone handler — a
+// hand-off's done additionally tears the hand-off state down (StepDone routes
+// through handoffDone when the resolved agent holds one).
 func (e *Engine) HandoffOps() *connector.HandoffOps {
 	return &connector.HandoffOps{
-		Done: func(ctx context.Context, agentID string) error {
-			return e.handoffDone(ctx, agentID, "agent signalled done")
+		Done: func(ctx context.Context, dispatchID, agentID string) error {
+			return e.StepDone(ctx, dispatchID, agentID, "agent signalled done")
 		},
 	}
+}
+
+// StepOps exposes step.done (wired in main via connector.SetStepOps).
+func (e *Engine) StepOps() *connector.StepOps {
+	return &connector.StepOps{
+		Done: func(ctx context.Context, dispatchID, agentID, reason string) error {
+			if reason == "" {
+				reason = "agent signalled done"
+			}
+			return e.StepDone(ctx, dispatchID, agentID, reason)
+		},
+	}
+}
+
+// StepDone is THE done signal: the calling dispatch's agent has finished its
+// task, so conductor reclaims what it launched — and only what it launched.
+//
+// The caller is identified by its token-bound dispatch id, resolved through the
+// ownership ledger to the one agent that dispatch started (agentID is a legacy
+// fallback for tokens minted before dispatch binding). Resolution order:
+//
+//   - a live hand-off → full hand-off teardown (watch loop, review channel,
+//     hold) + archive, via handoffDone;
+//   - a dispatch conductor is still blocked on (foreground, in flight) → mark
+//     only: the step-boundary archive reclaims it after the output is captured,
+//     so a done call can never cut off the output conductor is waiting on;
+//   - otherwise → archive the agent + its workspace now (ledger-gated: the
+//     dispatcher refuses anything conductor didn't launch).
+func (e *Engine) StepDone(ctx context.Context, dispatchID, agentID, reason string) error {
+	if resolved := e.disp.AgentForDispatch(dispatchID); resolved != "" {
+		agentID = resolved
+	}
+	if agentID == "" {
+		return fmt.Errorf("step.done: no conductor-launched agent for this session")
+	}
+	if lh := e.lookupLiveHandoff(agentID); lh != nil {
+		return e.handoffDone(ctx, agentID, reason)
+	}
+	if dispatchID != "" && e.disp.DispatchInFlight(dispatchID) {
+		e.log("step.done from agent %s (%s) — dispatch still in flight; reclaiming at step boundary", agentID, reason)
+		return nil
+	}
+	e.log("step.done from agent %s: %s — reclaiming", agentID, reason)
+	return e.disp.Archive(context.WithoutCancel(ctx), agentID)
 }

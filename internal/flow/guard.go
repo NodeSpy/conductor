@@ -448,7 +448,7 @@ func isIdentByte(b byte) bool {
 // builtin connectors whose verbs never leave the box.
 var internalConnectors = map[string]bool{
 	"kv": true, "sql": true, "memory": true, "workflow": true, "conductor": true,
-	"blob": true, "handoff": true,
+	"blob": true, "handoff": true, "step": true,
 }
 
 // internalWriteVerbs are the value-carrying writes into durable shared state

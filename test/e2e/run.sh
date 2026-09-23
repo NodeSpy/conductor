@@ -215,9 +215,9 @@ group_B_fixer() {
   else
     bad "B paseo fixer pushed a fix" B paseo "no conductor commit on acme/web pr-1"
   fi
-  # Agent archived when done (reaper).
+  # Agent archived when done (inline step-boundary archive — no reaper exists).
   if wait_for 30 fake_archived conductor; then
-    ok "B agent archived when done (archive_when_done → reaper)" B archive
+    ok "B agent archived when done (archive_when_done → step-boundary archive)" B archive
   else
     bad "B agent archived when done" B archive "no archive recorded in fake paseo"
   fi
@@ -1553,8 +1553,64 @@ main() {
   group_T_output_schema
   group_U_filter
   group_V_engine_plugin
+  group_W_stepdone
   print_matrix
   [ "$FAIL" -eq 0 ]
+}
+
+
+group_W_stepdone() {
+  banner "Group W — step.done: agent-signalled reclaim, gated on the ownership ledger"
+
+  # A workspace conductor did NOT create (the user's own worktree). THE incident
+  # regression: no reclaim path may ever archive it.
+  cexec conductor paseo _seedws wks_user_e2e /home/user/own-worktree
+
+  # Launch a live fixer (archive_when_done: false) — it stays open after its
+  # step, and its run env carries the done-signal creds every dispatch now gets.
+  force conductor new_comment grpd/sdone#1 /etc/conductor/conductor.yaml >/dev/null
+  wait_for 40 cexec conductor paseo _creds sdone >/dev/null || {
+    bad "W live fixer launched" W launch "no agent recorded for grpd/sdone"
+    return
+  }
+  local creds aid tok ep
+  creds="$(cexec conductor paseo _creds sdone)"
+  aid="$(printf '%s\n' "$creds" | sed -n 's/^id=//p' | head -1)"
+  tok="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_SKILL_TOKEN=//p' | head -1)"
+  ep="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_ENDPOINT=//p' | head -1)"
+  if [ -n "$aid" ] && [ -n "$tok" ] && [ -n "$ep" ]; then
+    ok "W done-signal creds injected into a plain agent dispatch" W creds
+  else
+    bad "W done-signal creds" W creds "missing id/token/endpoint in run env (aid=$aid ep=$ep)"
+    return
+  fi
+
+  # An agent conductor did not launch has no token; a made-up one is refused.
+  if cexec conductor env CONDUCTOR_ENDPOINT="$ep" CONDUCTOR_SKILL_TOKEN="bogus-token"        conductor call step.done >/dev/null 2>&1; then
+    bad "W bogus token refused" W authz "step.done with a bogus token succeeded"
+  else
+    ok "W step.done with a bogus token is refused" W authz
+  fi
+
+  # The agent's own done call: conductor resolves the caller from the token's
+  # dispatch id and archives that agent + its workspace.
+  if cexec conductor env CONDUCTOR_ENDPOINT="$ep" CONDUCTOR_SKILL_TOKEN="$tok"        conductor call step.done --reason "e2e finished" >/dev/null 2>&1; then
+    ok "W step.done accepted from the agent's own token" W call
+  else
+    bad "W step.done call" W call "the agent's own step.done was refused"
+  fi
+  if wait_for 20 cexec conductor paseo _archived "$aid"; then
+    ok "W step.done archived the caller's agent" W archived
+  else
+    bad "W step.done archived the caller" W archived "agent $aid not archived after step.done"
+  fi
+
+  # And the user's workspace is still there — untouched by every path above.
+  if cexec conductor paseo _wsarchived wks_user_e2e; then
+    bad "W user workspace untouched" W foreign "conductor archived a workspace it did not create"
+  else
+    ok "W user workspace untouched (ownership ledger)" W foreign
+  fi
 }
 
 main "$@"

@@ -156,6 +156,8 @@ func TestHasLiveAgentAndArchive(t *testing.T) {
 	if strings.Contains(callsLog(t, dir), "archive") {
 		t.Fatal("blank archive must not invoke paseo")
 	}
+	d.Owned = NewOwnedSet("")
+	d.Owned.AddAgent("a-1")
 	if err := d.Archive(context.Background(), "a-1"); err != nil {
 		t.Fatal(err)
 	}

@@ -469,6 +469,12 @@ func cmdRun(args []string) error {
 		return err
 	}
 	disp := dispatch.New(paseoBin, retry, cfg.DryRun)
+	// Ownership ledger: conductor records every agent + workspace it launches here,
+	// and the reaper archives ONLY ids in it — so it can never touch a workspace
+	// conductor didn't create (the user's own paseo worktrees). Shared across the
+	// default dispatcher, every runtime-override dispatcher, and every reaper.
+	owned := dispatch.NewOwnedSet(filepath.Join(filepath.Dir(cfg.Store.StateFile), "owned.json"))
+	disp.Owned = owned
 	disp.AdoptOpenWorkspaces = cfg.AdoptOpenWorkspaces
 	disp.Home = resolvePaseoHome(cfg)
 	preflightPATH(disp.PaseoBin)
@@ -593,6 +599,7 @@ func cmdRun(args []string) error {
 	for name, rb := range runtimeBackends {
 		d := dispatch.New(rb.Bin, retry, cfg.DryRun)
 		d.SetBackend(rb.Backend)
+		d.Owned = owned
 		paseoOverrides[name] = d
 		reg.OverridePaseo(name, d, d)
 		logf("runtime %s: dedicated paseo dispatcher (backend-rpc plugin)", name)
@@ -819,7 +826,7 @@ func cmdRun(args []string) error {
 							Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
 							Number: id.Number, Verbs: id.Policy.Verbs,
 							Scopes: id.Policy.VerbScopes, Context: id.Context,
-							TargetTrusted: id.TargetTrusted,
+							TargetTrusted: id.TargetTrusted, Dispatch: id.Dispatch,
 						}, uses, options)
 					}
 				}
@@ -993,6 +1000,8 @@ func cmdRun(args []string) error {
 	// resolved through the engine's live-hand-off registry.
 	connector.SetHandoffOps(func() *connector.HandoffOps { return eng.HandoffOps() })
 	defer connector.SetHandoffOps(nil)
+	connector.SetStepOps(func() *connector.StepOps { return eng.StepOps() })
+	defer connector.SetStepOps(nil)
 	// gh.sweep: the same nudge the SIGUSR1 handler runs.
 	connector.SetSweepHook(func(context.Context) (int, error) {
 		n := 0
@@ -1006,30 +1015,11 @@ func cmdRun(args []string) error {
 	})
 	defer connector.SetSweepHook(nil)
 
-	// Reaper for archive-when-done agents. It shares the hand-off hold-set so it
-	// never archives an agent the engine handed off for you to drive.
-	if anyArchive(cfg) {
-		// One reaper per paseo dispatch surface: the primary, plus each
-		// dedicated (own-bin / remote) runtime — their agents live where their
-		// paseo does.
-		reapers := []*dispatch.Reaper{{PaseoBin: disp.PaseoBin, Home: disp.Home, Log: logf, Held: hold}}
-		for name, pd := range paseoOverrides {
-			reapers = append(reapers, reaperFor(name, pd, runtimeBackends, logf, hold))
-		}
-		for _, r := range reapers {
-			// Testability hook (test/e2e/): shrink the reaper cadence/grace so the
-			// hermetic harness can observe archive-when-done without a multi-minute
-			// wait. Unset — the production case — leaves the reaper's own defaults (1m
-			// interval, 3m startup grace) untouched.
-			if d := envDuration("PC_REAPER_INTERVAL"); d > 0 {
-				r.Interval = d
-			}
-			if d := envDuration("PC_REAPER_MIN_AGE"); d > 0 {
-				r.MinAge = d
-			}
-			go r.Run(ctx)
-		}
-	}
+	// There is deliberately NO background reaper for paseo agents/workspaces:
+	// nothing scans paseo looking for things to archive (a sweep once archived
+	// the user's own worktrees). Reclaim is done-driven only — the step-boundary
+	// archive for foreground steps, step.done/handoff.done for everything else —
+	// and every archive is gated on the ownership ledger (owned.json).
 
 	// Orphan reaper for the cli runtime's git worktrees: a daemon killed
 	// mid-dispatch leaves a checkout no session will ever close, so sweep at
@@ -1950,16 +1940,6 @@ func envDuration(key string) time.Duration {
 		return 0
 	}
 	return d
-}
-
-func anyArchive(cfg *config.Config) bool {
-	found := false
-	cfg.WalkSteps(func(_ config.IdentityScope, _ int, s *config.Step) {
-		if s.ArchiveWhenDone {
-			found = true
-		}
-	})
-	return found
 }
 
 // logRedact scrubs tracked secret values from every journal line. logf is

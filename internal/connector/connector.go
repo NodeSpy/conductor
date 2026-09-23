@@ -514,7 +514,7 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 	for _, b := range []struct {
 		name string
 		decl *TypeDecl
-	}{{"kv", kvDecl}, {"sql", sqlDecl}, {"memory", memoryDecl}, {"workflow", workflowDecl}, {"conductor", conductorDecl}, {"blob", blobDecl}, {"handoff", handoffDecl}} {
+	}{{"kv", kvDecl}, {"sql", sqlDecl}, {"memory", memoryDecl}, {"workflow", workflowDecl}, {"conductor", conductorDecl}, {"blob", blobDecl}, {"handoff", handoffDecl}, {"step", stepDecl}} {
 		if _, exists := r.byName[b.name]; exists {
 			continue
 		}

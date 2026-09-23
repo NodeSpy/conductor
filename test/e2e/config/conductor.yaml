@@ -21,7 +21,7 @@ x-migrated:
     type: agent
     workspace: worktree
     wait_timeout: 5m
-    archive_when_done: true # reaper archives the agent when idle (group B)
+    archive_when_done: true # archived inline the moment the step finishes (group B)
   interactive: &interactive
     name: interactive
     type: agent

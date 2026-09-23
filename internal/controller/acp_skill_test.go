@@ -124,7 +124,9 @@ func TestACPSkillClaimInjection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authorize: %v", err)
 	}
-	if len(id.Policy.Verbs) != 0 || id.Policy.SecretsVia != "" {
-		t.Errorf("a credential without skill: must grant nothing, got %+v", id.Policy)
+	// A credential without skill: still carries the auto-granted done signal
+	// (step.done replaced the background reaper) — and nothing else.
+	if len(id.Policy.Verbs) != 1 || id.Policy.Verbs[0] != "step.done" || id.Policy.SecretsVia != "" {
+		t.Errorf("a credential without skill: must grant only step.done, got %+v", id.Policy)
 	}
 }
