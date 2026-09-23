@@ -60,8 +60,21 @@ func (e *Engine) handoffDone(ctx context.Context, agentID, reason string) error 
 	if e.broker != nil {
 		e.broker.Close(ctx, lh.prKey)
 	}
-	e.hold.Remove(agentID) // reaper reclaims the agent + workspace
+	e.hold.Remove(agentID)
 	e.deregisterLiveHandoff(agentID)
+	// Actively reclaim the agent — do NOT rely on the reaper. A hand-off carries
+	// no archive_when_done label (it's protected by the Held set instead), so the
+	// reaper's archive=1 walk never lists it, and its orphan sweep skips a
+	// workspace that still has a live agent; paseo's own session Close is a no-op.
+	// Without this an agent that called done but stayed `running` (a wedged turn)
+	// lingers forever. e.disp.Archive goes through the paseo backend: it interrupts
+	// a running turn and reclaims the worktree. Detached ctx — lh.cancel() above
+	// cancelled the hand-off's context, and the reclaim must still run.
+	if e.disp != nil {
+		if err := e.disp.Archive(context.WithoutCancel(ctx), agentID); err != nil {
+			e.log("hand-off %q (agent %s): reclaim on done failed: %v", lh.stepID, agentID, err)
+		}
+	}
 	return nil
 }
 
