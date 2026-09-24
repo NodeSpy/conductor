@@ -41,12 +41,12 @@ func envPairs(env map[string]string) []string {
 }
 
 // paseoCmd is the Dispatcher's exec seam for the paseo CLI. It prepends the
-// `--home` selector when this dispatcher targets a specific daemon home AND the
-// paseo it drives is new enough to accept the flag (paseo >= 0.9); see
-// paseoversion.go. Every subcommand (clone/run/ls/send/…) flows through here, so
-// the home selection is applied uniformly.
+// daemon selector — `--host <server>` or `--home <home>` — when this dispatcher
+// targets a specific daemon AND the paseo it drives is new enough to accept the
+// flags (paseo >= 0.9); see paseoversion.go. Every subcommand (clone/run/ls/
+// send/…) flows through here, so the selection is applied uniformly.
 func (d *Dispatcher) paseoCmd(ctx context.Context, args ...string) *exec.Cmd {
-	prefix := homePrefix(ctx, d.PaseoBin, d.Remote, d.Home, &d.verCache, nil)
+	prefix := endpointPrefix(ctx, d.PaseoBin, d.Remote, d.Server, d.Home, &d.verCache, nil)
 	return paseoCommand(ctx, d.PaseoBin, d.Remote, append(prefix, args...)...)
 }
 

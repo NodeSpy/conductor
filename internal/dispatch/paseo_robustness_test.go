@@ -67,3 +67,32 @@ func TestPaseoErrDetailTranslatesMissingProvider(t *testing.T) {
 		t.Fatalf("unrelated error should pass through, got %q", other)
 	}
 }
+
+// paseo does not always put its error envelope on stdout: the CLI's own
+// argument and daemon-connection errors go to STDERR. Parsing stdout alone
+// meant MISSING_PROVIDER was logged as a wall of raw pretty-printed JSON with
+// the translation never applied — which is exactly how it appeared live.
+func TestPaseoErrDetailReadsTheEnvelopeFromStderrToo(t *testing.T) {
+	stderr := []byte(`{
+  "error": {
+    "code": "MISSING_PROVIDER",
+    "message": "Provider is required",
+    "details": "Pass --provider <provider>"
+  }
+}`)
+	got := paseoErrDetail(nil, stderr)
+	if got != missingProviderHelp {
+		t.Fatalf("stderr envelope not translated:\n got: %q\nwant: %q", got, missingProviderHelp)
+	}
+	// Non-JSON stderr still passes through as text.
+	if plain := paseoErrDetail(nil, []byte("ssh: connection refused")); plain != "ssh: connection refused" {
+		t.Fatalf("plain stderr should pass through, got %q", plain)
+	}
+	// stdout wins when both carry an envelope.
+	both := paseoErrDetail(
+		[]byte(`{"error":{"code":"A","message":"from stdout"}}`),
+		[]byte(`{"error":{"code":"B","message":"from stderr"}}`))
+	if both != "A: from stdout" {
+		t.Fatalf("stdout should win, got %q", both)
+	}
+}

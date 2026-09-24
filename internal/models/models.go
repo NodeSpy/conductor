@@ -27,6 +27,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/paseover"
 )
 
 // Model is one entry in a runtime's roster. Everything past ID is best-effort
@@ -130,6 +132,18 @@ type Runtime struct {
 	Impl string
 	// Bin overrides the runtime binary (a paseo/agent-deck `bin:`).
 	Bin string
+	// Home is the daemon home this runtime targets (a paseo `home:`). Empty
+	// means the runtime's own default home. Discovery MUST honor it, or it
+	// answers about a different daemon than the one dispatch launches into.
+	Home string
+	// Server is an explicit daemon endpoint (a paseo `server:`), winning over
+	// Home. Same requirement: discovery and dispatch must resolve to the SAME
+	// daemon, so both feed these two fields through paseover.Resolve.
+	Server string
+	// Remote is true when this runtime's CLI runs on another box over SSH, so
+	// the local ladder's defaults (this box's PASEO_HOME, ~/.paseo, ports) must
+	// not be consulted.
+	Remote bool
 	// Agent is the ACP-driven agent (`use: acp`, agent: gemini).
 	Agent string
 	// Tool is the bare-CLI recipe's tool name (`use: cli`, tool: claude).
@@ -137,6 +151,15 @@ type Runtime struct {
 	// Command is the bare-CLI recipe's argv; Command[0] stands in for Tool
 	// when Tool is unset.
 	Command []string
+}
+
+// PaseoTarget projects this runtime onto the daemon-selection ladder. Both
+// discovery (here) and dispatch (cmd/conductor's paseoEndpointFor) build a
+// paseover.Target from the SAME config fields and hand it to the SAME
+// paseover.Resolve, so the two cannot disagree about which daemon they mean.
+// Before this existed they did, silently, for as long as a box kept running.
+func (r Runtime) PaseoTarget() paseover.Target {
+	return paseover.Target{Server: r.Server, Home: r.Home, Local: !r.Remote}
 }
 
 // ToolName is the concrete CLI this runtime drives: an ACP agent, an explicit

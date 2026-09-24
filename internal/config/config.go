@@ -692,6 +692,11 @@ type ControllerConfig struct {
 	// conductor omits it after detecting the version). `~` is expanded. Empty →
 	// PASEO_HOME env, else paseo's default. Mirrors RuntimeConfig.Home.
 	Home string `yaml:"home"`
+	// Server is an explicit paseo daemon ENDPOINT (paseo's `--host`), winning
+	// over Home. Distinct from Host below, which names an SSH box: `server:`
+	// picks which daemon to talk to, `host:` picks where the CLI runs.
+	// Mirrors RuntimeConfig.Server.
+	Server string `yaml:"server"`
 	// Host names a `hosts:` entry; this controller's subprocess launches run
 	// there over SSH instead of locally. All controller types support it —
 	// cli/acp/agent-deck wrap their subprocess in the ssh launch, paseo runs

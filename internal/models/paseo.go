@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+
+	"github.com/NodeSpy/conductor/internal/paseover"
 )
 
 // paseo discovery — NATIVE (docs/design/runtimes-models-packs.md §3.1).
@@ -13,16 +16,37 @@ import (
 // paseo and does nothing else: no models.dev, no credential handling, no
 // second opinion. This is the whole point of the per-runtime seam — paseo is
 // authoritative for paseo, and is NOT consulted for anything else.
+//
+// Discovery MUST target the same daemon dispatch launches into. paseo 0.9+
+// hosts several daemons at once, selected by `--home` or `--host`; a box
+// configuring `runtimes.paseo.home:` runs its agents there and NOTHING at the
+// default ~/.paseo. Asking the default what models exist therefore answers
+// about a daemon that is not running — an empty roster, every fleet matching
+// nothing, and every dispatch degrading to a bare launch that paseo then
+// rejects with MISSING_PROVIDER.
+//
+// The fix is not "remember to pass the flag here too" — that is the bug,
+// restated. Both sides call paseover.Resolve on the same config fields, so
+// there is one ladder and drifting out of agreement requires changing it.
 
 func init() {
 	Register("paseo", func(rt Runtime, _ *Catalog) Lister {
-		return &paseoLister{bin: binOr(rt.Bin, "paseo"), run: execRunner}
+		return &paseoLister{
+			bin:      binOr(rt.Bin, "paseo"),
+			endpoint: paseover.Resolve(rt.PaseoTarget()),
+			run:      execRunner,
+		}
 	})
 }
 
 type paseoLister struct {
 	bin string
-	run Runner
+	// endpoint selects the daemon, resolved by the SAME ladder dispatch uses
+	// (paseover.Resolve) from the SAME config fields. Anything less and the two
+	// sides drift — which is exactly how discovery ended up interrogating a
+	// daemon that was not running while dispatch launched into one that was.
+	endpoint paseover.Endpoint
+	run      Runner
 }
 
 // paseoProvider is one entry of `paseo provider ls --json`.
@@ -40,25 +64,66 @@ type paseoModel struct {
 	Description string `json:"description"`
 }
 
+// paseoError is paseo's error envelope, which it emits INSTEAD of the expected
+// array (and, for some failures, on a zero exit status). Parsing it is what
+// turns "cannot enumerate, no idea why" into a message naming the actual
+// problem — typically DAEMON_NOT_RUNNING against the wrong home.
+type paseoError struct {
+	Error struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// args prefixes the daemon selector when one was resolved and this paseo
+// understands it. PRE-0.9 paseo has no `--home`/`--host` flags and rejects the
+// whole command, so the version gate is load-bearing, not cosmetic.
+func (l *paseoLister) args(ctx context.Context, rest ...string) []string {
+	if len(l.endpoint.Args) == 0 || !l.version(ctx).HasHomeFlag() {
+		return rest
+	}
+	return append(append([]string{}, l.endpoint.Args...), rest...)
+}
+
+func (l *paseoLister) version(ctx context.Context) paseover.Semver {
+	out, err := l.run(ctx, l.bin, "--version")
+	return paseover.Parse(string(out), err)
+}
+
+// target names the daemon in diagnostics, so an operator reading "cannot
+// enumerate" can tell which daemon conductor actually asked, and why that one.
+func (l *paseoLister) target() string {
+	if len(l.endpoint.Args) == 0 {
+		return "paseo's own default"
+	}
+	return l.endpoint.Label() + ", via " + l.endpoint.Source
+}
+
 // List asks paseo for every AVAILABLE provider's models, in paseo's own order
 // (which is already newest-first per provider). A provider paseo reports as
 // unavailable is skipped: its models cannot actually be launched, and a
 // wildcard must never resolve to something the box cannot run.
 func (l *paseoLister) List(ctx context.Context) (Roster, error) {
-	out, err := l.run(ctx, l.bin, "provider", "ls", "--json")
+	out, err := l.run(ctx, l.bin, l.args(ctx, "provider", "ls", "--json")...)
 	if err != nil {
-		return nil, fmt.Errorf("%w: paseo provider ls: %v", ErrNoDiscovery, err)
+		return nil, fmt.Errorf("%w: paseo provider ls (%s): %v", ErrNoDiscovery, l.target(), err)
 	}
 	var provs []paseoProvider
 	if err := json.Unmarshal(out, &provs); err != nil {
-		return nil, fmt.Errorf("parse paseo provider ls: %w", err)
+		// An error envelope is paseo ANSWERING that it cannot enumerate, not a
+		// corrupt response — report it as no-discovery (retriable) and name the
+		// cause, rather than as a parse failure with the reason thrown away.
+		if detail, ok := paseoErrorEnvelope(out); ok {
+			return nil, fmt.Errorf("%w: paseo provider ls (%s): %s", ErrNoDiscovery, l.target(), detail)
+		}
+		return nil, fmt.Errorf("parse paseo provider ls (%s): %w", l.target(), err)
 	}
 	var roster Roster
 	for _, p := range provs {
 		if p.Provider == "" || p.Status != "available" {
 			continue
 		}
-		mout, err := l.run(ctx, l.bin, "provider", "models", p.Provider, "--json")
+		mout, err := l.run(ctx, l.bin, l.args(ctx, "provider", "models", p.Provider, "--json")...)
 		if err != nil {
 			// One unreachable provider must not blank the whole roster.
 			continue
@@ -75,7 +140,20 @@ func (l *paseoLister) List(ctx context.Context) (Roster, error) {
 		}
 	}
 	if len(roster) == 0 {
-		return nil, fmt.Errorf("%w: paseo reported no available provider models", ErrNoDiscovery)
+		return nil, fmt.Errorf("%w: paseo reported no available provider models (%s)", ErrNoDiscovery, l.target())
 	}
 	return roster.Dedupe(), nil
+}
+
+// paseoErrorEnvelope extracts "CODE: message" from paseo's error envelope.
+func paseoErrorEnvelope(out []byte) (string, bool) {
+	var e paseoError
+	if json.Unmarshal(out, &e) != nil || e.Error.Message == "" {
+		return "", false
+	}
+	msg := strings.TrimSpace(e.Error.Message)
+	if e.Error.Code != "" {
+		return e.Error.Code + ": " + msg, true
+	}
+	return msg, true
 }

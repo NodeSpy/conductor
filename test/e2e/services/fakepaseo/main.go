@@ -31,11 +31,37 @@ import (
 	"time"
 )
 
+// globalFlags are the daemon SELECTORS real paseo accepts before any
+// subcommand: `--home <path>` picks a local daemon home, `--host <addr>` an
+// explicit endpoint. Both take a value, and both are transparent to the
+// subcommand — `paseo --home /h run …` is the same command as `paseo run …`.
+//
+// The stub has to know them because it dispatches on the first argument. When
+// it did not, a conductor change that legitimately began emitting `--host`
+// turned every subcommand into an unknown one and failed 48 e2e checks at
+// once, reporting a conductor bug that was really a stub gap. A fake that does
+// not accept what the real CLI accepts hides regressions in both directions —
+// this is the same shape as the v0.9.0 `--provider` miss.
+var globalFlags = map[string]bool{"--home": true, "--host": true}
+
+// stripGlobals removes leading selector flags, returning them separately so
+// the original argv (selectors included) can still be logged: WHICH daemon a
+// dispatch addressed is exactly what a home/endpoint check needs to assert.
+func stripGlobals(args []string) (selectors, rest []string) {
+	for len(args) >= 2 && globalFlags[args[0]] {
+		selectors = append(selectors, args[0], args[1])
+		args = args[2:]
+	}
+	return selectors, args
+}
+
 func main() {
-	if len(os.Args) < 2 {
-		fail("usage: fakepaseo <subcommand> …")
+	_, rest := stripGlobals(os.Args[1:])
+	if len(rest) < 1 {
+		fail("usage: fakepaseo [--home <path>|--host <addr>] <subcommand> …")
 	}
 	logEvent(os.Args[1:])
+	os.Args = append(os.Args[:1], rest...)
 	switch os.Args[1] {
 	case "run":
 		cmdRun(os.Args[2:])

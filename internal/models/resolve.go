@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 )
@@ -72,13 +73,34 @@ type Resolver struct {
 	// re-resolution instead of being picked again. nil = nothing excluded.
 	Excluded func(runtime, model string) bool
 
+	// now is the clock, injectable so the failure TTL is testable without
+	// sleeping. nil means time.Now.
+	now func() time.Time
+
 	mu      sync.Mutex
 	rosters map[string]Roster
-	failed  map[string]error
+	failed  map[string]failure
 	// inflight dedups concurrent cold discovery per runtime: the second
 	// caller waits on the first's channel instead of issuing its own
 	// List. See roster.
 	inflight map[string]chan struct{}
+}
+
+// FailureTTL is how long a discovery failure is remembered before the runtime
+// is probed again.
+//
+// It exists because the negative cache used to be PERMANENT. One failed probe
+// — a daemon mid-restart, a network blip, a provider rate limit — and that
+// runtime enumerated nothing for the entire life of the process: every fleet
+// matched nothing, every dispatch degraded to a bare launch, and the only
+// cure was restarting conductor. A positive result is still cached forever
+// (the roster is stable within a process); only the failure expires.
+const FailureTTL = 10 * time.Minute
+
+// failure is a remembered discovery error and when it was recorded.
+type failure struct {
+	err error
+	at  time.Time
 }
 
 // NewResolver builds a resolver over a loaded config. cat may be nil, which
@@ -87,8 +109,16 @@ func NewResolver(cfg *config.Config, cat *Catalog) *Resolver {
 	return &Resolver{
 		cfg: cfg, cat: cat,
 		rosters: map[string]Roster{},
-		failed:  map[string]error{},
+		failed:  map[string]failure{},
 	}
+}
+
+// clock is now, defaulted.
+func (r *Resolver) clock() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
 }
 
 // ErrNoAcceptableModel is the rung-4 hard error: a `required: true` fleet with
@@ -144,19 +174,56 @@ func (r *Resolver) Resolve(ctx context.Context, spec config.ModelSpec, runtimeHi
 	}
 
 	available := r.unionRoster(ctx, rts)
+	why := r.discoveryErrors(ctx, rts)
 	// 4. required: true and nothing matched — a hard error naming both sides.
 	if resolved.Required {
 		return Decision{}, fmt.Errorf("%w for %s: acceptable %s; available %s",
-			ErrNoAcceptableModel, fleetLabel(fleetName), strings.Join(acceptable, ", "), availableLabel(available))
+			ErrNoAcceptableModel, fleetLabel(fleetName), strings.Join(acceptable, ", "), availableLabelWhy(available, why))
 	}
 	// 3. required: false — bare launch, with a notice so the fall-through is
 	// visible rather than silent.
+	prov, provWhere := r.bareProvider(ctx, rts)
 	return Decision{
-		Bare:   true,
-		Reason: "no acceptable model available; required: false",
-		Notice: fmt.Sprintf("%s matched nothing available (acceptable %s; available %s) — dispatching bare (the runtime's own default)",
-			fleetLabel(fleetName), strings.Join(acceptable, ", "), availableLabel(available)),
+		Bare:     true,
+		Provider: prov,
+		Reason:   "no acceptable model available; required: false",
+		Notice: fmt.Sprintf("%s matched nothing available (acceptable %s; available %s) — dispatching bare%s",
+			fleetLabel(fleetName), strings.Join(acceptable, ", "), availableLabelWhy(available, why), bareSuffix(prov, provWhere)),
 	}, nil
+}
+
+// bareProvider is the provider to name on a bare launch: the first provider
+// the discovered roster reports. Returns it and where it came from, for the
+// notice.
+//
+// A bare launch means "no --model, let the runtime pick" — it does NOT have
+// to mean "no --provider". paseo rejects a run that names neither, so an
+// unqualified bare launch is not a degrade on that backend, it is an outage.
+// Naming a provider keeps the fallback actually launchable while still
+// leaving the model choice to the runtime.
+//
+// It is derived, never configured. A `models.provider:` key was considered and
+// dropped: it would be permanent config surface for a path a healthy box never
+// takes, and the case it uniquely covers — discovery down AND a provider
+// pinned — is better served by fixing discovery (§4.3's ladder) than by
+// hand-maintaining a fallback that is only consulted when something is already
+// wrong.
+func (r *Resolver) bareProvider(ctx context.Context, rts []string) (provider, where string) {
+	for _, name := range rts {
+		for _, m := range r.allowedRoster(ctx, name) {
+			if m.Provider != "" {
+				return m.Provider, "first available provider on runtime " + name
+			}
+		}
+	}
+	return "", ""
+}
+
+func bareSuffix(provider, where string) string {
+	if provider == "" {
+		return " (the runtime's own default)"
+	}
+	return fmt.Sprintf(" on provider %q (%s) — the runtime picks the model", provider, where)
 }
 
 // deref applies the map-key-wins rule to the string form: a `model:` string
@@ -285,15 +352,21 @@ func (r *Resolver) runtimeDefault(ctx context.Context, rts []string) Decision {
 				Reason: "runtime " + name + " models.prefer"}
 		}
 	}
-	// Bare launch: nothing declared and no prefer: confirmed. Surface a non-fatal
-	// notice so the operator sees, proactively in run logs and `conductor
-	// validate`, that this run leans entirely on the runtime's own default — a
-	// runtime without one (paseo with no provider configured) rejects the launch
-	// with MISSING_PROVIDER. Fix B translates that error after the fact; this is
-	// the ahead-of-time hint (#12092).
+	// Bare launch: nothing declared and no prefer: confirmed. Name a provider
+	// if we can (see bareProvider) so the launch is actually valid on a
+	// runtime that requires one; only when we cannot does this stay a true
+	// bare launch, and the notice then says so — a paseo runtime reaching
+	// here with no provider WILL fail with MISSING_PROVIDER, and that
+	// ahead-of-time hint is the whole point of the notice (#12092).
+	prov, provWhere := r.bareProvider(ctx, rts)
+	if prov != "" {
+		return Decision{Bare: true, Provider: prov,
+			Reason: "no model declared — bare launch on provider " + prov,
+			Notice: fmt.Sprintf("no model declared for this runtime — dispatching bare on provider %q (%s); the runtime picks the model", prov, provWhere)}
+	}
 	return Decision{Bare: true,
 		Reason: "no model declared — bare launch (the runtime's own default)",
-		Notice: "no model declared for this runtime — dispatching bare; the runtime must supply its own default (a paseo runtime with no provider will fail with MISSING_PROVIDER — set `model:` or `models.default:`)"}
+		Notice: "no model declared for this runtime and no provider could be derived — dispatching bare; the runtime must supply its own default (a paseo runtime with no provider will fail with MISSING_PROVIDER — set `model:` or `models.default:`)"}
 }
 
 // candidateRuntimes is the ordered set of runtimes to search: the hinted one
@@ -383,9 +456,13 @@ func (r *Resolver) roster(ctx context.Context, name string) Roster {
 			r.mu.Unlock()
 			return cached
 		}
-		if _, bad := r.failed[name]; bad {
-			r.mu.Unlock()
-			return nil
+		if f, bad := r.failed[name]; bad {
+			if r.clock().Sub(f.at) < FailureTTL {
+				r.mu.Unlock()
+				return nil
+			}
+			// Expired — forget it and probe again below.
+			delete(r.failed, name)
 		}
 		if wait, inflight := r.inflight[name]; inflight {
 			// Someone else is already asking. Wait for their answer
@@ -416,7 +493,7 @@ func (r *Resolver) roster(ctx context.Context, name string) Roster {
 	lister, ok := ListerFor(runtimeOf(name, rt), r.cat)
 	if !ok {
 		r.mu.Lock()
-		r.failed[name] = ErrNoDiscovery
+		r.failed[name] = failure{err: ErrNoDiscovery, at: r.clock()}
 		r.mu.Unlock()
 		return nil
 	}
@@ -436,7 +513,7 @@ func (r *Resolver) roster(ctx context.Context, name string) Roster {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil
 		}
-		r.failed[name] = err
+		r.failed[name] = failure{err: err, at: r.clock()}
 		return nil
 	}
 	r.rosters[name] = roster
@@ -483,6 +560,7 @@ func runtimeOf(name string, rt config.RuntimeConfig) Runtime {
 	}
 	return Runtime{
 		Name: name, Impl: impl, Bin: rt.Bin,
+		Home: rt.Home, Server: rt.Server, Remote: rt.Host != "",
 		Agent: rt.Agent, Tool: rt.Tool, Command: rt.Command,
 	}
 }
@@ -523,10 +601,37 @@ func fleetLabel(fleet string) string {
 }
 
 func availableLabel(r Roster) string {
-	if len(r) == 0 {
+	return availableLabelWhy(r, nil)
+}
+
+// availableLabelWhy is availableLabel plus the discovery errors behind an
+// empty roster. "no runtime could enumerate" on its own told an operator that
+// something was wrong but never what — the reason (a daemon not running, a
+// wrong home, a rate limit) was recorded and then discarded.
+func availableLabelWhy(r Roster, why []string) string {
+	if len(r) > 0 {
+		return strings.Join(r.IDs(), ", ")
+	}
+	if len(why) == 0 {
 		return "(none — no configured runtime could enumerate its models)"
 	}
-	return strings.Join(r.IDs(), ", ")
+	return "(none — no configured runtime could enumerate its models: " + strings.Join(why, "; ") + ")"
+}
+
+// discoveryErrors reports why each candidate runtime failed to enumerate, for
+// the diagnostic half of a bare-launch notice or a rung-4 error.
+func (r *Resolver) discoveryErrors(ctx context.Context, rts []string) []string {
+	var out []string
+	for _, name := range rts {
+		r.roster(ctx, name) // ensure probed
+		r.mu.Lock()
+		f, bad := r.failed[name]
+		r.mu.Unlock()
+		if bad && f.err != nil {
+			out = append(out, name+": "+f.err.Error())
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

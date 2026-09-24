@@ -565,12 +565,31 @@ engines:
 #             the runtime uses its own built-in default).
 #   prefer:   ranking among acceptable models; the consumer disposes.
 #   allow:    what this runtime may EVER run; the roster is filtered to it.
+#
+# On a BARE LAUNCH (no model resolved) conductor also names a provider, derived
+# from the discovered roster — `paseo run` REQUIRES one, so a bare launch
+# naming none fails outright with MISSING_PROVIDER instead of degrading. There
+# is no knob: fix discovery (see the daemon ladder above) rather than pin a
+# fallback that is only consulted when something is already wrong.
 # ---------------------------------------------------------------------------
 runtimes:
   paseo:
     use: paseo
     bin: paseo
     default: true
+    # WHICH DAEMON. paseo 0.9+ hosts several daemons at once. Conductor picks
+    # one by this ladder, and uses the SAME answer for launching agents and for
+    # asking what models exist:
+    #   1. server:        an explicit endpoint  (paseo --host)
+    #   2. home:          an explicit daemon home (paseo --home)
+    #   3. $PASEO_HOME
+    #   4. ~/.paseo       if a daemon is live there (its paseo.pid names a
+    #                     running process)
+    #   5. 127.0.0.1:6767 paseo's default listen address
+    # Steps 1-3 are never probed: a named daemon that is briefly down must not
+    # silently reroute work to a different one. The boot log names the rung.
+    # server: 127.0.0.1:6767                    # endpoint; wins over home:
+    # home: ~/paseo-home                        # daemon home
     # models:
     #   default: claude-opus-5                  # omit -> bare launch
     #   prefer:  [claude-opus-5, gpt-5.6-sol]   # ranking when a fleet offers a choice

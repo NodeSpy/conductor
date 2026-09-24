@@ -162,6 +162,14 @@ type Dispatcher struct {
 	// PASEO_HOME by cmd/conductor. See paseoversion.go.
 	Home string
 
+	// Server is an explicit daemon ENDPOINT — emitted as `--host <server>`,
+	// and it WINS over Home (a home is only a pointer to the `listen` address
+	// in that home's config.json, so naming the address skips the lookup).
+	// Resolved from the runtime's `server:` by cmd/conductor, or from the
+	// 127.0.0.1:6767 fallback rung when no home has a live daemon.
+	// See internal/paseover.Resolve.
+	Server string
+
 	// verCache lazily probes+caches `paseo --version` for this dispatcher's
 	// bin/host, so the --home gate (paseoversion.go) knows whether the flag
 	// exists. Never share across dispatchers: a remote runtime may run a
@@ -281,14 +289,17 @@ func (d *Dispatcher) DetectPaseoVersion(ctx context.Context) string {
 // (the probe would run over ssh against a box we don't manage) and when no home
 // is set (nothing to diagnose beyond paseo's own default).
 func (d *Dispatcher) ProbeDaemon(ctx context.Context) error {
-	if d.Remote != nil || d.Home == "" {
+	if d.Remote != nil || (d.Home == "" && d.Server == "") {
 		return nil
 	}
 	out, err := d.paseoCmd(ctx, "workspace", "ls", "--json").CombinedOutput()
-	if err != nil && strings.Contains(string(out), "DAEMON_NOT_RUNNING") {
-		return fmt.Errorf("paseo daemon not reachable at home %q — start it (paseo daemon start --home %q) or fix the runtime's home:/PASEO_HOME", d.Home, d.Home)
+	if err == nil || !strings.Contains(string(out), "DAEMON_NOT_RUNNING") {
+		return nil
 	}
-	return nil
+	if d.Server != "" {
+		return fmt.Errorf("paseo daemon not reachable at %q — check the runtime's server:, or drop it to fall back to a home", d.Server)
+	}
+	return fmt.Errorf("paseo daemon not reachable at home %q — start it (paseo daemon start --home %q) or fix the runtime's home:/server:", d.Home, d.Home)
 }
 
 // WaitForAgent blocks until the given background agent goes idle (or ctx/timeout
