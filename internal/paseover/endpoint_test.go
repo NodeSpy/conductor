@@ -1,12 +1,14 @@
 package paseover
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // never/always are injected probers, so the ladder's default rungs are tested
@@ -34,16 +36,24 @@ func TestResolveLadder(t *testing.T) {
 		target: Target{Local: true, Live: always, Env: func(string) string { return "/env/h" }},
 		want:   []string{"--home", "/env/h"},
 	}, {
-		name:   "default home when a daemon is live there",
-		target: Target{Local: true, Live: always, Env: noEnv},
-		want:   []string{"--home", ExpandTilde(DefaultHomeDir)},
+		// Rung 4 adds NO flag: ~/.paseo is where paseo looks anyway, and a flag
+		// nobody asked for breaks wrappers that do not implement it.
+		name:   "live default home adds no flag",
+		target: Target{Local: true, Live: always, Dial: never, Env: noEnv},
+		want:   nil,
 	}, {
-		name:   "default endpoint when ~/.paseo is dead",
-		target: Target{Local: true, Live: never, Env: noEnv},
+		name:   "default endpoint when ~/.paseo is dead but 6767 answers",
+		target: Target{Local: true, Live: never, Dial: always, Env: noEnv},
 		want:   []string{"--host", DefaultServer},
 	}, {
+		// Rung 6: nothing found. This must be the OLD behavior exactly — pass
+		// nothing and let paseo decide.
+		name:   "nothing found falls through to paseo's own default",
+		target: Target{Local: true, Live: never, Dial: never, Env: noEnv},
+		want:   nil,
+	}, {
 		name:   "remote with nothing declared resolves to nothing",
-		target: Target{Local: false, Live: always, Env: func(string) string { return "/env/h" }},
+		target: Target{Local: false, Live: always, Dial: always, Env: func(string) string { return "/env/h" }},
 		want:   nil,
 	}, {
 		name:   "remote still honors an explicit home",
@@ -71,9 +81,9 @@ func TestResolveDoesNotProbeExplicitTargets(t *testing.T) {
 	probed := false
 	spy := func(string) bool { probed = true; return false }
 
-	Resolve(Target{Server: "10.0.0.1:1", Local: true, Live: spy, Env: noEnv})
-	Resolve(Target{Home: "/srv/h", Local: true, Live: spy, Env: noEnv})
-	Resolve(Target{Local: true, Live: spy, Env: func(string) string { return "/env/h" }})
+	Resolve(Target{Server: "10.0.0.1:1", Local: true, Live: spy, Dial: spy, Env: noEnv})
+	Resolve(Target{Home: "/srv/h", Local: true, Live: spy, Dial: spy, Env: noEnv})
+	Resolve(Target{Local: true, Live: spy, Dial: spy, Env: func(string) string { return "/env/h" }})
 
 	if probed {
 		t.Error("an explicitly named daemon was probed and could be silently overridden")
@@ -148,5 +158,68 @@ func TestReadPidFileCarriesTheListenAddress(t *testing.T) {
 	}
 	if p.Listen != "127.0.0.1:6767" || p.PID != 1 || p.Hostname != "devbox" {
 		t.Fatalf("parsed %+v", p)
+	}
+}
+
+// The regression CI caught: rung 5 used to emit `--host 127.0.0.1:6767`
+// unconditionally when nothing was configured, which prepended a flag to EVERY
+// paseo invocation on a box that had never asked for one. The hermetic e2e's
+// fakepaseo dispatches on os.Args[1], so `--host` became the subcommand and 48
+// checks failed — but the same breakage applies to any paseo-compatible
+// wrapper that does not implement the flag.
+//
+// The guessing rungs must be ADDITIVE: they may only introduce a selector that
+// is demonstrably better than passing nothing.
+func TestGuessingRungsNeverAddAnUnprovenFlag(t *testing.T) {
+	// Nothing anywhere: byte-for-byte the pre-ladder behavior.
+	if got := Resolve(Target{Local: true, Live: never, Dial: never, Env: noEnv}); len(got.Args) != 0 {
+		t.Fatalf("no daemon found, yet a selector was added: %v", got.Args)
+	}
+	// A live ~/.paseo is already paseo's default — evidence, but no flag.
+	if got := Resolve(Target{Local: true, Live: always, Dial: never, Env: noEnv}); len(got.Args) != 0 {
+		t.Fatalf("live default home added a redundant selector: %v", got.Args)
+	}
+	// Only a reachable non-default endpoint earns one.
+	got := Resolve(Target{Local: true, Live: never, Dial: always, Env: noEnv})
+	if !slices.Equal(got.Args, []string{"--host", DefaultServer}) {
+		t.Fatalf("a reachable fallback endpoint should be used: %v", got.Args)
+	}
+}
+
+// Rung 5 must not be taken on faith — it is the only rung that invents an
+// address, so it has to prove something answers there first.
+func TestRung5ProbesBeforeCommitting(t *testing.T) {
+	var dialed []string
+	spy := func(a string) bool { dialed = append(dialed, a); return false }
+	Resolve(Target{Local: true, Live: never, Dial: spy, Env: noEnv})
+	if !slices.Contains(dialed, DefaultServer) {
+		t.Fatalf("the fallback endpoint was never probed, dialed=%v", dialed)
+	}
+}
+
+// Answers must not hang a boot on a dead address.
+func TestAnswersIsBoundedAndHonest(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("no loopback listener")
+	}
+	defer ln.Close()
+	if !Answers(ln.Addr().String()) {
+		t.Error("a real listener was reported as unreachable")
+	}
+
+	// A port nothing is on: must answer false, fast.
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("no loopback listener")
+	}
+	addr := closed.Addr().String()
+	closed.Close()
+	start := time.Now()
+	if Answers(addr) {
+		t.Errorf("a closed port %s was reported as reachable", addr)
+	}
+	if elapsed := time.Since(start); elapsed > 5*DialTimeout {
+		t.Errorf("probe took %v, want <= %v — a dead address must not wedge boot", elapsed, 5*DialTimeout)
 	}
 }

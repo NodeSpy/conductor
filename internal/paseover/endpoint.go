@@ -2,10 +2,12 @@ package paseover
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // Reaching a paseo daemon.
@@ -61,6 +63,8 @@ type Target struct {
 	Local bool
 	// Live reports whether a home has a running daemon. nil = LiveAtHome.
 	Live func(string) bool
+	// Dial reports whether something answers at an address. nil = Answers.
+	Dial func(string) bool
 	// Env reads an environment variable. nil = os.Getenv.
 	Env func(string) string
 }
@@ -104,11 +108,26 @@ func (e Endpoint) Label() string {
 //  2. an explicit `home:` — the operator named a home, use it;
 //  3. the ambient PASEO_HOME, for a local runtime;
 //  4. the default ~/.paseo, IF a daemon is live there;
-//  5. the default endpoint 127.0.0.1:6767.
+//  5. the default endpoint 127.0.0.1:6767, IF something answers there;
+//  6. no selector at all — paseo's own default, and whatever it decides.
 //
-// Rungs 1–3 are never probed: an operator who names a target gets that target,
-// and a daemon that is briefly down must not silently reroute work to a
-// DIFFERENT one. Only the guesses at 4 and 5 are conditional.
+// Rungs 1–3 are DECLARED and never probed: an operator who names a target gets
+// that target, because a daemon that is briefly down must not silently reroute
+// work to a different one.
+//
+// Rungs 4 and 5 are GUESSES, so they are only taken on positive evidence and
+// they only ever ADD a selector that demonstrably helps:
+//
+//   - rung 4 emits NO flag. ~/.paseo is already where paseo looks when told
+//     nothing, so naming it changes nothing except the argv — and an argv that
+//     grows a flag no one asked for breaks every paseo-compatible wrapper that
+//     does not implement it. Evidence here buys a clear boot log, not a flag.
+//   - rung 5 is the only rung that invents an address, so it must prove that
+//     address answers before conductor commits every subsequent command to it.
+//
+// Rung 6 is the old behavior, unchanged: pass nothing, let paseo decide. That
+// is what a box gets when no daemon can be found — the fallback never makes a
+// working setup worse, it only rescues one that would otherwise fail.
 //
 // A remote target stops after rung 2 — this box cannot answer for that one.
 func Resolve(t Target) Endpoint {
@@ -132,14 +151,39 @@ func Resolve(t Target) Endpoint {
 	if live == nil {
 		live = LiveAtHome
 	}
-	def := ExpandTilde(DefaultHomeDir)
-	if live(def) {
-		return Endpoint{Args: []string{"--home", def},
-			Source: "default home " + DefaultHomeDir + " (daemon running)"}
+	if live(ExpandTilde(DefaultHomeDir)) {
+		return Endpoint{Source: "default home " + DefaultHomeDir + " (daemon running; paseo's own default already points there)"}
 	}
-	return Endpoint{Args: []string{"--host", DefaultServer},
-		Source: "default endpoint " + DefaultServer + " (no daemon at " + DefaultHomeDir + ")"}
+	dial := t.Dial
+	if dial == nil {
+		dial = Answers
+	}
+	if dial(DefaultServer) {
+		return Endpoint{Args: []string{"--host", DefaultServer},
+			Source: "default endpoint " + DefaultServer + " (no daemon at " + DefaultHomeDir + ", but one answers here)"}
+	}
+	return Endpoint{Source: "no daemon found at " + DefaultHomeDir + " or " + DefaultServer + " — falling through to paseo's own default"}
 }
+
+// Answers reports whether something accepts a TCP connection at addr. It is
+// the evidence rung 5 needs and nothing more: conductor is asking "is there a
+// daemon here at all", not "is it healthy" (that is ProbeDaemon's job, which
+// runs once at boot against whatever this resolves to).
+//
+// The timeout is deliberately short. This runs on a loopback address during
+// startup and during cold model discovery; a box with nothing listening must
+// pay milliseconds for the answer, not seconds.
+func Answers(addr string) bool {
+	conn, err := net.DialTimeout("tcp", addr, DialTimeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// DialTimeout bounds the rung-5 probe.
+const DialTimeout = 300 * time.Millisecond
 
 // ReadPidFile parses <home>/paseo.pid. Missing or malformed → ok false.
 func ReadPidFile(home string) (PidFile, bool) {
