@@ -565,11 +565,12 @@ engines:
 #             the runtime uses its own built-in default).
 #   prefer:   ranking among acceptable models; the consumer disposes.
 #   allow:    what this runtime may EVER run; the roster is filtered to it.
-#   provider: the provider to name on a BARE LAUNCH. Omit and conductor
-#             derives one from the discovered roster — set it only to pin the
-#             fallback on a box whose discovery cannot be relied on. `paseo
-#             run` REQUIRES a provider, so a bare launch naming none fails
-#             outright with MISSING_PROVIDER instead of degrading.
+#
+# On a BARE LAUNCH (no model resolved) conductor also names a provider, derived
+# from the discovered roster — `paseo run` REQUIRES one, so a bare launch
+# naming none fails outright with MISSING_PROVIDER instead of degrading. There
+# is no knob: fix discovery (see the daemon ladder above) rather than pin a
+# fallback that is only consulted when something is already wrong.
 # ---------------------------------------------------------------------------
 runtimes:
   paseo:
@@ -593,7 +594,6 @@ runtimes:
     #   default: claude-opus-5                  # omit -> bare launch
     #   prefer:  [claude-opus-5, gpt-5.6-sol]   # ranking when a fleet offers a choice
     #   allow:   ["claude-opus-*", "gpt-5.6-*"] # a hard ceiling on what may run
-    #   provider: claude                        # provider to name on a bare launch
   gpu-paseo: { use: paseo, bin: /usr/local/bin/paseo, host: build-box }
   # deck:   { use: agent-deck }
   # gemini: { use: acp, agent: gemini }              # ACP transport

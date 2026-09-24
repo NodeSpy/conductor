@@ -192,22 +192,23 @@ func (r *Resolver) Resolve(ctx context.Context, spec config.ModelSpec, runtimeHi
 	}, nil
 }
 
-// bareProvider is the provider to name on a bare launch: the runtime's
-// explicit `models.provider:` if set, else the first provider its discovered
-// roster reports. Returns the provider and where it came from, for the notice.
+// bareProvider is the provider to name on a bare launch: the first provider
+// the discovered roster reports. Returns it and where it came from, for the
+// notice.
 //
 // A bare launch means "no --model, let the runtime pick" — it does NOT have
 // to mean "no --provider". paseo rejects a run that names neither, so an
 // unqualified bare launch is not a degrade on that backend, it is an outage.
 // Naming a provider keeps the fallback actually launchable while still
 // leaving the model choice to the runtime.
+//
+// It is derived, never configured. A `models.provider:` key was considered and
+// dropped: it would be permanent config surface for a path a healthy box never
+// takes, and the case it uniquely covers — discovery down AND a provider
+// pinned — is better served by fixing discovery (§4.3's ladder) than by
+// hand-maintaining a fallback that is only consulted when something is already
+// wrong.
 func (r *Resolver) bareProvider(ctx context.Context, rts []string) (provider, where string) {
-	for _, name := range rts {
-		rt := r.cfg.Runtimes[name]
-		if rt.Models != nil && rt.Models.Provider != "" {
-			return rt.Models.Provider, "runtime " + name + " models.provider"
-		}
-	}
 	for _, name := range rts {
 		for _, m := range r.allowedRoster(ctx, name) {
 			if m.Provider != "" {
@@ -365,7 +366,7 @@ func (r *Resolver) runtimeDefault(ctx context.Context, rts []string) Decision {
 	}
 	return Decision{Bare: true,
 		Reason: "no model declared — bare launch (the runtime's own default)",
-		Notice: "no model declared for this runtime and no provider could be derived — dispatching bare; the runtime must supply its own default (a paseo runtime with no provider will fail with MISSING_PROVIDER — set `model:`, `models.default:`, or `models.provider:`)"}
+		Notice: "no model declared for this runtime and no provider could be derived — dispatching bare; the runtime must supply its own default (a paseo runtime with no provider will fail with MISSING_PROVIDER — set `model:` or `models.default:`)"}
 }
 
 // candidateRuntimes is the ordered set of runtimes to search: the hinted one

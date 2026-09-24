@@ -65,15 +65,11 @@ runtimes:
       default: claude-opus-5      # OPTIONAL. Omitted → bare launch (see §4).
       prefer:  [claude-opus-5, gpt-5.6-sol]   # ranking among acceptable models
       allow:   [claude-opus-*, gpt-5.6-*]     # allowlist; roster is filtered to this
-      provider: claude                        # provider to name on a bare launch
 ```
 
 - `default:` — optional; its ABSENCE is meaningful (§4: bare launch).
 - `prefer:` — ranking used when a fleet offers a choice; consumer "disposes."
 - `allow:` — restricts what this runtime may ever run (supports wildcards, §2.1).
-- `provider:` — the provider a BARE launch names (§4). Optional; omitted, conductor
-  derives one from the discovered roster. Set it to pin the fallback on a box whose
-  discovery cannot be relied on.
 
 Omit the whole block and the runtime is fully auto: roster discovered, default =
 bare launch, no restrictions.
@@ -252,10 +248,14 @@ guaranteed failure, which then retries on every trigger.
 
 So a bare decision still names a provider where one can be had:
 
-1. the runtime's explicit `models.provider:`;
-2. else the first provider in its discovered roster;
-3. else genuinely bare — and the decision's notice says so, naming
-   `models.provider:` as the fix.
+1. the first provider in the runtime's discovered roster;
+2. else genuinely bare — and the decision's notice says so.
+
+The provider is DERIVED, never configured. A `models.provider:` key was
+considered and dropped: it would be permanent config surface for a path a
+healthy box never takes, and the one case it uniquely covers — discovery down
+AND a provider pinned — is better served by fixing discovery (§4.3) than by
+hand-maintaining a fallback consulted only when something is already wrong.
 
 The model choice still belongs to the runtime. Only the provider is stated.
 

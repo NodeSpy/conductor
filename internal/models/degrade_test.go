@@ -141,38 +141,30 @@ func TestBareLaunchAfterAnUnmatchedFleetStillNamesAProvider(t *testing.T) {
 	}
 }
 
-// An explicit models.provider: pins the fallback — the knob for a box whose
-// discovery cannot be relied on. It wins over whatever the roster says.
-func TestBareLaunchProviderPinWinsOverTheRoster(t *testing.T) {
+// The provider is DERIVED, never configured — no `models.provider:` knob
+// exists. A healthy roster always yields one, and the only case a pin would
+// uniquely cover (discovery down) is better fixed by fixing discovery than by
+// hand-maintaining a fallback consulted only when something is already wrong.
+func TestBareLaunchProviderComesFromTheRosterNotConfig(t *testing.T) {
 	withFakeCLIRoster(t, map[string]Roster{
-		"box": {{ID: "claude-opus-5", Provider: "claude"}},
+		"box": {{ID: "claude-opus-5", Provider: "claude"}, {ID: "gpt-5.6-sol", Provider: "codex"}},
 	})
 	cfg := testCfg(t,
-		map[string]config.RuntimeConfig{"box": {Models: &config.RuntimeModels{Provider: "codex"}}},
+		map[string]config.RuntimeConfig{"box": {}},
 		map[string]config.FleetSpec{"light": {Any: []string{"gpt-5-mini"}}})
 
 	d := mustResolve(t, NewResolver(cfg, nil), config.ModelSpecOf("light"), "")
-	if d.Provider != "codex" {
-		t.Fatalf("provider = %q, want the pinned codex", d.Provider)
+	if d.Provider != "claude" {
+		t.Fatalf("provider = %q, want claude (first in roster order)", d.Provider)
+	}
+	if !strings.Contains(d.Notice, "claude") {
+		t.Errorf("notice should name the derived provider: %q", d.Notice)
 	}
 }
 
-// The pin also rescues the case the roster cannot: discovery is down, so
-// there is nothing to derive a provider from.
-func TestBareLaunchProviderPinAppliesWhenDiscoveryIsDown(t *testing.T) {
-	withFakeCLIRoster(t, nil) // every runtime returns ErrNoDiscovery
-	cfg := testCfg(t,
-		map[string]config.RuntimeConfig{"box": {Models: &config.RuntimeModels{Provider: "claude"}}}, nil)
-
-	// No model declared at all — the other bare path.
-	d := mustResolve(t, NewResolver(cfg, nil), config.ModelSpec{}, "")
-	if !d.Bare || d.Provider != "claude" {
-		t.Fatalf("bare=%v provider=%q, want bare with claude", d.Bare, d.Provider)
-	}
-}
-
-// With neither a roster nor a pin there is genuinely nothing to name, and the
-// notice has to say so — that is the ahead-of-time MISSING_PROVIDER warning.
+// With no roster there is genuinely nothing to derive from, and the notice has
+// to say so — that is the ahead-of-time MISSING_PROVIDER warning. It must point
+// at the real remedy (fix discovery / declare a model), not at a knob.
 func TestBareLaunchWithNoProviderSaysSo(t *testing.T) {
 	withFakeCLIRoster(t, nil)
 	cfg := testCfg(t, map[string]config.RuntimeConfig{"box": {}}, nil)
@@ -184,8 +176,11 @@ func TestBareLaunchWithNoProviderSaysSo(t *testing.T) {
 	if !strings.Contains(d.Notice, "MISSING_PROVIDER") {
 		t.Errorf("notice does not warn about MISSING_PROVIDER: %q", d.Notice)
 	}
-	if !strings.Contains(d.Notice, "models.provider") {
-		t.Errorf("notice does not name the knob that fixes it: %q", d.Notice)
+	if !strings.Contains(d.Notice, "models.default") {
+		t.Errorf("notice does not name a remedy: %q", d.Notice)
+	}
+	if strings.Contains(d.Notice, "models.provider") {
+		t.Errorf("notice names a knob that no longer exists: %q", d.Notice)
 	}
 }
 

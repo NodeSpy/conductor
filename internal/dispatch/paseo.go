@@ -378,7 +378,7 @@ func clearStaleGitLock(ctx context.Context, paseoBin, cwd string) {
 // missingProviderHelp is the conductor-native rewrite of paseo's
 // MISSING_PROVIDER (Fix B): it names the two conductor knobs that fix it rather
 // than paseo's provider vocabulary, which conductor doesn't expose.
-const missingProviderHelp = "paseo could not choose a model to run this agent — set `model:` on the step, `models.default:` on the paseo runtime, or `models.provider:` to pin the bare-launch provider. Conductor passes no model on a bare launch, and paseo has no default provider configured."
+const missingProviderHelp = "paseo could not choose a model to run this agent — set `model:` on the step, or `models.default:` on the paseo runtime. Conductor passes no model on a bare launch and derives a provider from the discovered roster, so reaching this means discovery found nothing: check the runtime's server:/home: and that its daemon is running."
 
 // paseoErrDetail extracts a human-readable reason from a failed `paseo run`.
 // paseo prints its error object ({"error":{code,message}}) as JSON, but WHICH
