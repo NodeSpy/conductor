@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/paseover"
 )
 
 // homeRunner is a paseo fixture that answers --version, provider ls and
@@ -43,7 +45,7 @@ const oneModel = `[{"model":"Sonnet 5","id":"claude-sonnet-5"}]`
 // the configured one. Every command discovery issues must carry the selector.
 func TestPaseoListerTargetsTheConfiguredHome(t *testing.T) {
 	run, calls := homeRunner("0.9.1", oneProvider, oneModel)
-	l := &paseoLister{bin: "paseo", home: "/srv/paseo", run: run}
+	l := &paseoLister{bin: "paseo", endpoint: paseover.Endpoint{Args: []string{"--home", "/srv/paseo"}}, run: run}
 	got, err := l.List(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +70,7 @@ func TestPaseoListerTargetsTheConfiguredHome(t *testing.T) {
 // is load-bearing, not cosmetic.
 func TestPaseoListerOmitsHomeOnPre09Paseo(t *testing.T) {
 	run, calls := homeRunner("0.8.4", oneProvider, oneModel)
-	l := &paseoLister{bin: "paseo", home: "/srv/paseo", run: run}
+	l := &paseoLister{bin: "paseo", endpoint: paseover.Endpoint{Args: []string{"--home", "/srv/paseo"}}, run: run}
 	if _, err := l.List(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +99,7 @@ func TestPaseoListerWithNoHomeDoesNotProbeVersion(t *testing.T) {
 // silently strips the home from a box that needs it.
 func TestPaseoListerUnknownVersionStillSendsHome(t *testing.T) {
 	run, calls := homeRunner("", oneProvider, oneModel)
-	l := &paseoLister{bin: "paseo", home: "/srv/paseo", run: run}
+	l := &paseoLister{bin: "paseo", endpoint: paseover.Endpoint{Args: []string{"--home", "/srv/paseo"}}, run: run}
 	if _, err := l.List(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +120,7 @@ func TestPaseoListerUnknownVersionStillSendsHome(t *testing.T) {
 // with the cause discarded is what made this bug invisible for a day.
 func TestPaseoListerErrorEnvelopeIsNoDiscoveryAndKeepsTheReason(t *testing.T) {
 	const envelope = `{"error":{"code":"DAEMON_NOT_RUNNING","message":"Cannot connect to daemon at home /home/u/.paseo"}}`
-	l := &paseoLister{bin: "paseo", home: "/srv/paseo", run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+	l := &paseoLister{bin: "paseo", endpoint: paseover.Endpoint{Args: []string{"--home", "/srv/paseo"}}, run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		if slices.Contains(args, "--version") {
 			return []byte("0.9.1"), nil
 		}

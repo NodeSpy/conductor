@@ -476,19 +476,20 @@ func cmdRun(args []string) error {
 	owned := dispatch.NewOwnedSet(filepath.Join(filepath.Dir(cfg.Store.StateFile), "owned.json"))
 	disp.Owned = owned
 	disp.AdoptOpenWorkspaces = cfg.AdoptOpenWorkspaces
-	disp.Home = resolvePaseoHome(cfg)
+	endpoint := resolvePaseoEndpoint(cfg)
+	disp.Home, disp.Server = endpoint.Home(), endpoint.Server()
 	preflightPATH(disp.PaseoBin)
 	// Detect the paseo version once at boot: it decides whether conductor may emit
-	// the 0.9+ `--home` selector (pre-0.9 paseo has no such flag), and the line is
-	// a useful diagnostic. Then a single reachability probe turns a mis-pointed
-	// home into ONE clear warning instead of every dispatch failing with
-	// DAEMON_NOT_RUNNING (which the step-retry + sweep would otherwise amplify).
+	// the 0.9+ `--home`/`--host` selectors (pre-0.9 paseo has neither), and the
+	// line is a useful diagnostic. Log WHICH RUNG of the ladder chose the daemon
+	// — "default endpoint 127.0.0.1:6767 (no daemon at ~/.paseo)" is the
+	// difference between a box that is configured and one that got lucky. Then a
+	// single reachability probe turns a mis-pointed daemon into ONE clear warning
+	// instead of every dispatch failing with DAEMON_NOT_RUNNING (which the
+	// step-retry + sweep would otherwise amplify).
 	if !cfg.DryRun {
-		homeLabel := disp.Home
-		if homeLabel == "" {
-			homeLabel = "(paseo default)"
-		}
-		logf("paseo runtime: detected v%s (bin %s, home %s)", disp.DetectPaseoVersion(context.Background()), disp.PaseoBin, homeLabel)
+		logf("paseo runtime: detected v%s (bin %s, %s via %s)",
+			disp.DetectPaseoVersion(context.Background()), disp.PaseoBin, endpoint.Label(), endpoint.Source)
 		if err := disp.ProbeDaemon(context.Background()); err != nil {
 			logf("WARNING: %v", err)
 		}

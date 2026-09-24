@@ -10,6 +10,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/paseover"
 )
 
 // paseoRuntimeDef is one paseo-type runtimes:/controllers: entry's launch
@@ -19,6 +20,7 @@ type paseoRuntimeDef struct {
 	Name    string
 	Bin     string
 	Home    string
+	Server  string
 	Host    string
 	Default bool
 }
@@ -29,60 +31,51 @@ func paseoRuntimeDefs(cfg *config.Config) []paseoRuntimeDef {
 	var out []paseoRuntimeDef
 	for name, rt := range cfg.Runtimes {
 		if rt.BuiltinType() == "paseo" {
-			out = append(out, paseoRuntimeDef{Name: name, Bin: rt.Bin, Home: rt.Home, Host: rt.Host, Default: rt.Default})
+			out = append(out, paseoRuntimeDef{Name: name, Bin: rt.Bin, Home: rt.Home, Server: rt.Server, Host: rt.Host, Default: rt.Default})
 		}
 	}
 	for name, cc := range cfg.Controllers {
 		if cc.Type == "paseo" {
-			out = append(out, paseoRuntimeDef{Name: name, Bin: cc.Bin, Home: cc.Home, Host: cc.Host, Default: cc.Default})
+			out = append(out, paseoRuntimeDef{Name: name, Bin: cc.Bin, Home: cc.Home, Server: cc.Server, Host: cc.Host, Default: cc.Default})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
-// paseoHomeFor resolves the daemon home conductor passes to a paseo runtime's
-// CLI: the runtime's explicit `home:` (with `~` expanded), else — for a LOCAL
-// runtime — the ambient PASEO_HOME env (the interim fix, still honored), else
-// empty (paseo's own default). A remote runtime never inherits this box's
-// PASEO_HOME: its home lives on the far box, so only an explicit `home:` applies.
-func paseoHomeFor(def paseoRuntimeDef) string {
-	if h := strings.TrimSpace(def.Home); h != "" {
-		return expandTilde(h)
-	}
-	if def.Host == "" {
-		if h := strings.TrimSpace(os.Getenv("PASEO_HOME")); h != "" {
-			return h
-		}
-	}
-	return ""
+// paseoEndpointFor resolves WHICH DAEMON a paseo runtime's CLI talks to — the
+// full ladder lives in internal/paseover so dispatch and model discovery reach
+// the same one from the same inputs (they did not, and that was the #145 bug).
+func paseoEndpointFor(def paseoRuntimeDef) paseover.Endpoint {
+	return paseover.Resolve(paseover.Target{
+		Server: def.Server,
+		Home:   def.Home,
+		Local:  def.Host == "",
+	})
 }
 
-// resolvePaseoHome picks the PRIMARY dispatcher's daemon home, mirroring
-// resolvePaseoBin: the default local paseo runtime's home, else the first local
-// one's, else the ambient PASEO_HOME. Empty means paseo's own default.
-func resolvePaseoHome(cfg *config.Config) string {
-	var first string
+// resolvePaseoEndpoint picks the PRIMARY dispatcher's daemon, mirroring
+// resolvePaseoBin: the default local paseo runtime's, else the first local
+// one's, else the ladder's own answer for a box with no paseo runtime declared.
+func resolvePaseoEndpoint(cfg *config.Config) paseover.Endpoint {
+	var first paseover.Endpoint
 	seenFirst := false
 	for _, def := range paseoRuntimeDefs(cfg) {
 		if def.Host != "" {
 			continue
 		}
 		if def.Default {
-			return paseoHomeFor(def)
+			return paseoEndpointFor(def)
 		}
 		if !seenFirst {
-			first = paseoHomeFor(def)
+			first = paseoEndpointFor(def)
 			seenFirst = true
 		}
 	}
-	if seenFirst && first != "" {
+	if seenFirst && len(first.Args) > 0 {
 		return first
 	}
-	if h := strings.TrimSpace(os.Getenv("PASEO_HOME")); h != "" {
-		return h
-	}
-	return ""
+	return paseover.Resolve(paseover.Target{Local: true})
 }
 
 // expandTilde expands a leading ~ or ~/ to the user's home dir.
@@ -139,7 +132,8 @@ func buildPaseoOverrides(cfg *config.Config, primaryBin string, retry config.Ret
 			continue // the shared primary dispatcher covers it
 		}
 		d := dispatch.New(bin, retry, dryRun)
-		d.Home = paseoHomeFor(def)
+		ep := paseoEndpointFor(def)
+		d.Home, d.Server = ep.Home(), ep.Server()
 		if def.Host != "" {
 			hc, ok := cfg.Hosts[def.Host]
 			if !ok {

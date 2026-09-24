@@ -558,7 +558,8 @@ func runtimeOf(name string, rt config.RuntimeConfig) Runtime {
 		impl = u.Name
 	}
 	return Runtime{
-		Name: name, Impl: impl, Bin: rt.Bin, Home: rt.Home,
+		Name: name, Impl: impl, Bin: rt.Bin,
+		Home: rt.Home, Server: rt.Server, Remote: rt.Host != "",
 		Agent: rt.Agent, Tool: rt.Tool, Command: rt.Command,
 	}
 }

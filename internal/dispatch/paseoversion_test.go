@@ -66,35 +66,35 @@ func TestPaseoSemverAtLeast(t *testing.T) {
 }
 
 // primeCache marks a cache as already-detected with a fixed version, so
-// homePrefix consults it without shelling out to real paseo.
+// endpointPrefix consults it without shelling out to real paseo.
 func primeCache(v paseoSemver) *paseoVersionCache {
 	c := &paseoVersionCache{}
 	c.once.Do(func() { c.ver = v })
 	return c
 }
 
-func TestHomePrefixVersionGated(t *testing.T) {
+func TestEndpointPrefixVersionGated(t *testing.T) {
 	ctx := context.Background()
 
 	// paseo >= 0.9 with a home → emit --home.
-	got := homePrefix(ctx, "paseo", nil, "/srv/paseo", primeCache(paseoSemver{Major: 0, Minor: 9, Patch: 1, Known: true}), nil)
+	got := endpointPrefix(ctx, "paseo", nil, "", "/srv/paseo", primeCache(paseoSemver{Major: 0, Minor: 9, Patch: 1, Known: true}), nil)
 	if !slices.Equal(got, []string{"--home", "/srv/paseo"}) {
 		t.Fatalf("0.9 with home: got %v, want [--home /srv/paseo]", got)
 	}
 
 	// pre-0.9 with a home → NO --home (the flag doesn't exist there).
-	if got := homePrefix(ctx, "paseo", nil, "/srv/paseo", primeCache(paseoSemver{Major: 0, Minor: 8, Patch: 0, Known: true}), nil); got != nil {
+	if got := endpointPrefix(ctx, "paseo", nil, "", "/srv/paseo", primeCache(paseoSemver{Major: 0, Minor: 8, Patch: 0, Known: true}), nil); got != nil {
 		t.Fatalf("0.8 with home: got %v, want nil", got)
 	}
 
 	// No home configured → nil regardless of version.
-	if got := homePrefix(ctx, "paseo", nil, "", primeCache(paseoSemver{Major: 0, Minor: 9, Patch: 1, Known: true}), nil); got != nil {
+	if got := endpointPrefix(ctx, "paseo", nil, "", "", primeCache(paseoSemver{Major: 0, Minor: 9, Patch: 1, Known: true}), nil); got != nil {
 		t.Fatalf("empty home: got %v, want nil", got)
 	}
 
 	// Unknown version WITH a home → assume newest, emit --home (a home is only
 	// ever configured on 0.9+, so this never regresses a real pre-0.9 box).
-	if got := homePrefix(ctx, "paseo", nil, "/srv/paseo", primeCache(paseoSemver{}), nil); !slices.Equal(got, []string{"--home", "/srv/paseo"}) {
+	if got := endpointPrefix(ctx, "paseo", nil, "", "/srv/paseo", primeCache(paseoSemver{}), nil); !slices.Equal(got, []string{"--home", "/srv/paseo"}) {
 		t.Fatalf("unknown with home: got %v, want [--home /srv/paseo]", got)
 	}
 }
@@ -119,5 +119,40 @@ func TestDispatcherPaseoCmdInjectsHome(t *testing.T) {
 	dNoHome.verCache.once.Do(func() { dNoHome.verCache.ver = paseoSemver{Major: 0, Minor: 9, Patch: 1, Known: true} })
 	if got := dNoHome.paseoCmd(context.Background(), "ls", "--json").Args; !slices.Equal(got, []string{"paseo", "ls", "--json"}) {
 		t.Fatalf("no home: got %v", got)
+	}
+}
+
+// `server:` is the DIRECT form of the same choice a home makes indirectly (a
+// home is only a pointer to the `listen` address in its config.json), so it
+// wins — and it rides the same version gate, since pre-0.9 paseo has neither
+// flag.
+func TestEndpointPrefixServerWinsOverHome(t *testing.T) {
+	ctx := context.Background()
+	v09 := func() *paseoVersionCache {
+		return primeCache(paseoSemver{Major: 0, Minor: 9, Patch: 1, Known: true})
+	}
+
+	got := endpointPrefix(ctx, "paseo", nil, "127.0.0.1:6767", "/srv/paseo", v09(), nil)
+	if !slices.Equal(got, []string{"--host", "127.0.0.1:6767"}) {
+		t.Fatalf("server should win: got %v", got)
+	}
+	// Server alone.
+	if got := endpointPrefix(ctx, "paseo", nil, "127.0.0.1:6767", "", v09(), nil); !slices.Equal(got, []string{"--host", "127.0.0.1:6767"}) {
+		t.Fatalf("server alone: got %v", got)
+	}
+	// Pre-0.9 has no --host either.
+	pre := primeCache(paseoSemver{Major: 0, Minor: 8, Patch: 0, Known: true})
+	if got := endpointPrefix(ctx, "paseo", nil, "127.0.0.1:6767", "", pre, nil); got != nil {
+		t.Fatalf("0.8 with server: got %v, want nil", got)
+	}
+}
+
+// The full argv every clone/run/ls actually gets when a server is set.
+func TestDispatcherPaseoCmdInjectsServer(t *testing.T) {
+	d := &Dispatcher{PaseoBin: "paseo", Server: "127.0.0.1:6767", Home: "/srv/paseo"}
+	d.verCache.once.Do(func() { d.verCache.ver = paseoSemver{Major: 0, Minor: 9, Patch: 1, Known: true} })
+	want := []string{"paseo", "--host", "127.0.0.1:6767", "run", "hi"}
+	if got := d.paseoCmd(context.Background(), "run", "hi").Args; !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }

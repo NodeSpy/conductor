@@ -265,15 +265,57 @@ Bare launch is the fallback for "the roster could not confirm a model", so an
 empty roster silently converts every step into one. That makes roster accuracy a
 correctness concern, not a nicety:
 
-- the paseo lister passes the runtime's `home:` (`--home`, gated on paseo ≥ 0.9)
-  exactly as dispatch does. Enumerating the default home while launching into a
-  configured one reports on a daemon that is not running;
+- discovery and dispatch resolve the daemon through ONE ladder (§4.3). They used
+  to decide independently, and drifted: config carried `home:`, dispatch passed
+  `--home`, the lister used paseo's default, and the roster described a daemon
+  that was not running;
 - a discovery FAILURE is cached for `models.FailureTTL`, not forever. A permanent
   negative cache turns one blip into a process-lifetime outage curable only by
   restart. A successful roster is still cached for the life of the process;
 - the failure reason travels into the bare-launch notice and the `required: true`
   error. "No configured runtime could enumerate its models" without the cause is
   not a diagnostic.
+
+### 4.3 Choosing a paseo daemon
+
+paseo 0.9+ hosts several daemons at once. A CLI invocation is a fresh client
+that must be told which one; it accepts `--home <path>` (read that home's
+`config.json`, connect to the `listen` it names) or `--host <addr>` (connect
+directly). So **a home is only a pointer to an address**. Told neither, the CLI
+targets `~/.paseo` and — finding nothing — suggests starting a daemon *there*,
+which is the worst answer available when a good daemon is already running
+elsewhere.
+
+`internal/paseover.Resolve` is the single ladder, used by `internal/dispatch`
+and `internal/models` alike:
+
+1. `server:` — an explicit endpoint;
+2. `home:` — an explicit daemon home;
+3. `$PASEO_HOME`;
+4. `~/.paseo`, **if** a daemon is live there;
+5. `127.0.0.1:6767`, paseo's default listen address.
+
+Rungs 1–3 are never probed. An operator who names a target gets that target: a
+daemon that is briefly down must not cause work to be silently rerouted to a
+different one. Only the guesses at 4 and 5 are conditional. A `host:` runtime
+(paseo CLI over SSH) stops after rung 2 — this box's env, `~/.paseo` and ports
+describe nothing about the far one.
+
+Liveness at rung 4 reads `<home>/paseo.pid`, which paseo writes with both the
+pid and the endpoint:
+
+```json
+{"pid":3001275,"listen":"127.0.0.1:6767","hostname":"devbox","uid":1000}
+```
+
+The file alone is not proof — a SIGKILLed daemon leaves one behind — so the
+process is checked too. That record is the closest thing paseo has to a
+discovery API, but it lives *inside* a home, so it only helps once you already
+know the home; there is no machine-wide registry. Rung 5 exists for exactly
+that gap.
+
+The boot log names the rung that won, because "conductor is pointed at a
+daemon" and "conductor guessed and got lucky" should not look the same.
 
 ---
 

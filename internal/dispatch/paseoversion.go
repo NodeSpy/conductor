@@ -48,15 +48,24 @@ func (c *paseoVersionCache) detect(ctx context.Context, bin string, remote *host
 	return c.ver
 }
 
-// homePrefix is the argv prefix that selects the daemon home: ["--home", home]
-// when home is set AND paseo is >= 0.9 (the flag exists), else nil. It triggers
-// version detection on first use.
-func homePrefix(ctx context.Context, bin string, remote *hosts.Target, home string, cache *paseoVersionCache, onFirst func(paseoSemver)) []string {
-	if home == "" {
+// endpointPrefix is the argv prefix that selects the daemon: ["--host", addr]
+// or ["--home", path], when one is set AND paseo is >= 0.9 (the flags exist),
+// else nil. It triggers version detection on first use.
+//
+// server wins over home — it is the direct form of the same choice (a home is
+// only a pointer to the `listen` address in that home's config.json).
+func endpointPrefix(ctx context.Context, bin string, remote *hosts.Target, server, home string, cache *paseoVersionCache, onFirst func(paseoSemver)) []string {
+	var sel []string
+	switch {
+	case server != "":
+		sel = []string{"--host", server}
+	case home != "":
+		sel = []string{"--home", home}
+	default:
 		return nil
 	}
 	if cache.detect(ctx, bin, remote, onFirst).HasHomeFlag() {
-		return []string{"--home", home}
+		return sel
 	}
 	return nil
 }

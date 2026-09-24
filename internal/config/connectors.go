@@ -137,6 +137,15 @@ type RuntimeConfig struct {
 	// detects the version and omits it). Empty → PASEO_HOME env, else paseo's own
 	// default. See cmd/conductor's resolvePaseoHome and internal/dispatch.
 	Home string `yaml:"home,omitempty"`
+	// Server is an explicit paseo daemon ENDPOINT ("127.0.0.1:6767", a socket
+	// path, an SSH or pairing URL) — paseo's `--host`. It is the direct form of
+	// `home:`: a home is only a pointer to the `listen` address in that home's
+	// config.json, so naming the address skips the lookup. Wins over `home:`.
+	//
+	// NOT to be confused with `host:` below, which names a `hosts:` entry and
+	// runs this runtime's subprocesses on another BOX over SSH. `server:` picks
+	// which daemon to talk to; `host:` picks where the CLI itself runs.
+	Server string `yaml:"server,omitempty"`
 	// Tool and Command are the bare-CLI recipe for transport: cli.
 	Tool    string   `yaml:"tool,omitempty"`
 	Command []string `yaml:"command,omitempty"`
