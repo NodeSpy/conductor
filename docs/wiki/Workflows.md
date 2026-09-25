@@ -88,7 +88,9 @@ A step is one of seven forms (all share `id` and `if`):
   you want to steer it. A foreground agent step with a local
   worktree also outputs its proposed `diff` and `workdir` ([[Runs]]). To
   re-request a reviewer after a fix, add a `uses: <conn>.rerequest_review`
-  step (see [[Verbs]]) rather than a field on the agent step.
+  step (see [[Verbs]]) rather than a field on the agent step. It skips — never
+  fails the flow — when nobody requestable is left: the PR author, review bots
+  (`…[bot]`), or anyone GitHub rejects as not a collaborator.
   It may also carry `model:` (a fleet, a model id, a wildcard, or an inline
   `{ any, required }`) and `runtime:` (a `runtimes:` entry to pin it to) —
   see [Model selection](Model-Selection).

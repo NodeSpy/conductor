@@ -112,6 +112,15 @@ func TestForceChangesRequestedAuthorIsReviewer(t *testing.T) {
 		{"thread reviewer", `[
 			{"id":"t1","isResolved":false,"comments":{"nodes":[{"author":{"login":"me","__typename":"User"}}]}},
 			{"id":"t2","isResolved":false,"comments":{"nodes":[{"author":{"login":"dana","__typename":"User"}}]}}]`, "dana"},
+		// A review bot can't be re-requested (GitHub 422s it as "not a
+		// collaborator"): a human reviewer wins even behind an older bot thread.
+		{"human over bot", `[
+			{"id":"t1","isResolved":false,"comments":{"nodes":[{"author":{"login":"cursor","__typename":"Bot"}}]}},
+			{"id":"t2","isResolved":false,"comments":{"nodes":[{"author":{"login":"dana","__typename":"User"}}]}}]`, "dana"},
+		// Bot-only: still named (author_is_bot tells the flow), in the REST /
+		// webhook "[bot]" form rather than GraphQL's bare slug.
+		{"bot only", `[
+			{"id":"t1","isResolved":false,"comments":{"nodes":[{"author":{"login":"cursor","__typename":"Bot"}}]}}]`, "cursor[bot]"},
 		{"no reviewer", `[]`, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,6 +154,9 @@ func TestForceChangesRequestedAuthorIsReviewer(t *testing.T) {
 			}
 			if a := got[0].Context["author"]; a != tc.want {
 				t.Fatalf("author = %v, want %v (never the PR author)", a, tc.want)
+			}
+			if isBot, _ := got[0].Context["author_is_bot"].(bool); isBot != (tc.name == "bot only") {
+				t.Fatalf("author_is_bot = %v for %s", isBot, tc.name)
 			}
 		})
 	}
