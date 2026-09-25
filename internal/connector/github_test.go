@@ -1192,3 +1192,37 @@ func TestGithubPaginateAll(t *testing.T) {
 		t.Fatalf("all should make 2 requests, made %d", n)
 	}
 }
+
+// GitHub 422s a review request naming the PR author, failing the whole flow;
+// the verb drops that login (and skips when nobody else is left).
+func TestGithubVerbRerequestReviewDropsPRAuthor(t *testing.T) {
+	var posted []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/org/repo/pulls/7" {
+			fmt.Fprint(w, `{"user":{"login":"AHaymond"}}`)
+			return
+		}
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		posted = append(posted, b)
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+
+	out, err := impl.Invoke(context.Background(), "rerequest_review", map[string]any{
+		"repo": "org/repo", "pr": 7, "reviewers": []any{"ahaymond"},
+	})
+	if err != nil || out["skipped"] == nil || len(posted) != 0 {
+		t.Fatalf("author-only reviewers must skip without a POST: out=%v err=%v posts=%d", out, err, len(posted))
+	}
+	if _, err := impl.Invoke(context.Background(), "rerequest_review", map[string]any{
+		"repo": "org/repo", "pr": 7, "reviewers": []any{"AHaymond", "alice"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rs, _ := posted[0]["reviewers"].([]any); len(posted) != 1 || len(rs) != 1 || rs[0] != "alice" {
+		t.Fatalf("want only alice requested, got %v", posted)
+	}
+}

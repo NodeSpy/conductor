@@ -66,8 +66,12 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 		if number == 0 {
 			return nil, fmt.Errorf("github.%s: options.pr is required", verb)
 		}
+		rs := reviewerLogins(opts["reviewers"])
+		if verb != "remove_reviewer" && len(rs) > 0 {
+			rs = dropPRAuthor(ctx, c, tok, base, repo, number, rs)
+		}
 		body := map[string]any{}
-		if rs := reviewerLogins(opts["reviewers"]); len(rs) > 0 {
+		if len(rs) > 0 {
 			body["reviewers"] = rs
 		}
 		if ts := reviewerLogins(opts["team_reviewers"]); len(ts) > 0 {
@@ -75,10 +79,10 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 		}
 		if len(body) == 0 {
 			if opts["reviewers"] != nil || opts["team_reviewers"] != nil {
-				// Reviewers were configured but every entry rendered empty —
-				// typically a "{{.author}}" template on an event that carries no
-				// author. There is nobody to ping: skip rather than POST a bogus
-				// login or fail the flow over it.
+				// Reviewers were configured but every entry rendered empty or
+				// was the PR author — typically a "{{.author}}" template on an
+				// event that carries no reviewer. There is nobody to ping: skip
+				// rather than POST a bogus login or fail the flow over it.
 				return map[string]any{"ok": true, "skipped": "no reviewer resolved"}, nil
 			}
 			return nil, fmt.Errorf("github.%s: set options.reviewers and/or team_reviewers", verb)
@@ -1060,6 +1064,28 @@ func (c *Client) listAll(ctx context.Context, token string, all bool, perPage in
 // not real logins: nil, blanks, and what an unresolved template renders to
 // ("<nil>", "<no value>"). Otherwise a "{{.author}}" on an event with no
 // author would be requested as a reviewer named "<nil>".
+// dropPRAuthor removes the PR's author from a reviewer request: GitHub rejects
+// the whole POST with a 422 ("Review cannot be requested from pull request
+// author"), so a "{{.author}}" that resolved to the author would otherwise fail
+// the flow. Best-effort — if the PR can't be fetched the list goes as-is.
+func dropPRAuthor(ctx context.Context, c *Client, tok, base, repo string, number int, rs []string) []string {
+	var pr struct {
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	}
+	if err := c.get(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d", base, repo, number), &pr); err != nil || pr.User.Login == "" {
+		return rs
+	}
+	kept := rs[:0:0]
+	for _, r := range rs {
+		if !strings.EqualFold(r, pr.User.Login) {
+			kept = append(kept, r)
+		}
+	}
+	return kept
+}
+
 func reviewerLogins(v any) []string {
 	var out []string
 	if xs, ok := v.([]any); ok {

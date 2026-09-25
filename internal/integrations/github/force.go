@@ -42,6 +42,18 @@ func (g *Integration) Force(ctx context.Context, kind, repo string, number int, 
 		labels = append(labels, l.Name)
 	}
 	extra := map[string]any{"author": info.User.Login, "head_ref": info.Head.Ref, "labels": labels}
+	if kind == "changes_requested" {
+		// On changes_requested `author` is the reviewer (webhook: the review's
+		// user; sweep: the unresolved threads' opener) — the login a flow's
+		// "{{.author}}" re-requests. The PR author is never it: GitHub 422s a
+		// review request to them. Resolve it the way the sweep does.
+		delete(extra, "author")
+		if threads, err := g.rest.unresolvedThreads(ctx, instID, owner, name, number); err == nil {
+			for k, v := range g.threadReviewerFacts(threads) {
+				extra[k] = v
+			}
+		}
+	}
 	// keep=nil → every enabled variant of the kind, no applicability filter.
 	trs := g.emit(repo, kind, t, fmt.Sprintf("force %s on %s#%d", kind, repo, number),
 		fmt.Sprintf("force:%s@%s", kind, info.Head.SHA), extra, nil)

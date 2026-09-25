@@ -99,3 +99,53 @@ func TestForceBypassesDraftAndExclude(t *testing.T) {
 		t.Fatalf("app token must be injected into context, got %v", tr.Context["app_token"])
 	}
 }
+
+// A forced changes_requested must not hand the flow the PR author as
+// `author`: that's the login "{{.author}}" re-requests, and GitHub 422s a
+// review request to the PR author. It resolves the reviewer from the
+// unresolved threads (as the sweep does), or carries none.
+func TestForceChangesRequestedAuthorIsReviewer(t *testing.T) {
+	for _, tc := range []struct {
+		name, threads string
+		want          any
+	}{
+		{"thread reviewer", `[
+			{"id":"t1","isResolved":false,"comments":{"nodes":[{"author":{"login":"me","__typename":"User"}}]}},
+			{"id":"t2","isResolved":false,"comments":{"nodes":[{"author":{"login":"dana","__typename":"User"}}]}}]`, "dana"},
+		{"no reviewer", `[]`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/repos/acme/w/installation", func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(w, `{"id":42}`)
+			})
+			mux.HandleFunc("/app/installations/42/access_tokens", func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprintf(w, `{"token":"inst-tok","expires_at":%q}`, time.Now().Add(time.Hour).Format(time.RFC3339))
+			})
+			mux.HandleFunc("/repos/acme/w/pulls/6", func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(w, `{"head":{"sha":"h6","ref":"feature/x"},"base":{"ref":"main"},"html_url":"http://x/6","user":{"login":"me"}}`)
+			})
+			mux.HandleFunc("/graphql", func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprintf(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":%s}}}}}`, tc.threads)
+			})
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			key, err := rsa.GenerateKey(rand.Reader, 1024)
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := newTestIntegration(t, baseConfig())
+			g.app = &appAuth{appID: 1, key: key, httpc: http.DefaultClient, apiBase: srv.URL, now: time.Now, cache: map[int64]cachedToken{}}
+			g.rest = newRESTClient(g.app)
+
+			var got []core.Trigger
+			if _, err := g.Force(context.Background(), "changes_requested", "acme/w", 6,
+				func(_ context.Context, tr core.Trigger) { got = append(got, tr) }); err != nil || len(got) != 1 {
+				t.Fatalf("force: err=%v trs=%d", err, len(got))
+			}
+			if a := got[0].Context["author"]; a != tc.want {
+				t.Fatalf("author = %v, want %v (never the PR author)", a, tc.want)
+			}
+		})
+	}
+}
