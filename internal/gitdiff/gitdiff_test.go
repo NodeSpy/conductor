@@ -100,3 +100,52 @@ func TestProposedClip(t *testing.T) {
 		t.Fatalf("clip: len=%d tail=%q", len(diff), diff[max(0, len(diff)-30):])
 	}
 }
+
+// A PR worktree checks the PR out as a local branch with no upstream and
+// pushes with an explicit refspec. Once pushed, there's nothing "committed,
+// not pushed" — it must not diff the whole PR against origin/HEAD. A later
+// local commit is reported alone, against the pushed tip.
+func TestProposedNoUpstreamPushedBranch(t *testing.T) {
+	origin := initRepo(t)
+	if _, err := git(context.Background(), origin, "config", "receive.denyCurrentBranch", "ignore"); err != nil {
+		t.Fatal(err)
+	}
+	clone := t.TempDir()
+	if out, err := exec.Command("git", "clone", "-q", origin, clone).CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v\n%s", err, out)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", clone, "-c", "user.email=t@t", "-c", "user.name=t"}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	commit := func(file, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(clone, file), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		run("add", ".")
+		run("commit", "-q", "-m", file)
+	}
+	run("switch", "-q", "-c", "pr-7") // no upstream
+	commit("pr.txt", "pr work\n")
+	run("push", "-q", "origin", "HEAD:refs/heads/feat")
+
+	diff, err := Proposed(context.Background(), clone, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff != "" {
+		t.Fatalf("pushed branch without upstream must report nothing unpushed, got:\n%s", diff)
+	}
+
+	commit("more.txt", "later\n")
+	diff, err = Proposed(context.Background(), clone, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diff, "# committed, not pushed (vs origin/feat)") || !strings.Contains(diff, "+later") || strings.Contains(diff, "+pr work") {
+		t.Fatalf("want only the unpushed commit vs origin/feat, got:\n%s", diff)
+	}
+}

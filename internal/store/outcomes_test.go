@@ -137,3 +137,21 @@ func TestOutcomeStats(t *testing.T) {
 		t.Fatal("unknown agent stats")
 	}
 }
+
+func TestLastCIFailureAt(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(Options{StatePath: filepath.Join(dir, "s.json"), AuditPath: filepath.Join(dir, "a.jsonl")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 25, 13, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	k := TargetKey("o/r", 5)
+	if !s.LastCIFailureAt(k).IsZero() {
+		t.Fatal("no failure yet: want zero")
+	}
+	s.MarkCIFailure(k, "headA")
+	if got := s.LastCIFailureAt(k); !got.Equal(now) {
+		t.Fatalf("LastCIFailureAt = %v, want %v", got, now)
+	}
+}

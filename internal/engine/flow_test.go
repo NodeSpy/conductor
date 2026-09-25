@@ -160,6 +160,8 @@ func (s *flowGateStore) PeekEngagements(key string) []store.Engagement {
 	return append([]store.Engagement(nil), s.engagements[key]...)
 }
 
+func (s *flowGateStore) LastCIFailureAt(string) time.Time { return time.Time{} }
+
 func (s *flowGateStore) MarkCIFailure(key, head string) bool {
 	if head == "" {
 		return true // fail-safe: never dedup a headless signal

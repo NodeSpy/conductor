@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
@@ -64,15 +65,39 @@ func (e *Engine) observeOutcomeSignals(ctx context.Context, t core.Trigger) {
 		// push — and this loop runs before any dedup gate. Record ci_failed on the
 		// first head only; a fresh push that fails again is a new head. Empty head
 		// falls back to per-event (MarkCIFailure's fail-safe).
+		since := e.store.LastCIFailureAt(t.Key())
 		if !e.store.MarkCIFailure(t.Key(), t.Target.HeadSHA) {
 			return
 		}
 		// Non-terminal: the PR lives on; the engagements stay for the
 		// terminal signal.
-		for _, g := range e.store.PeekEngagements(t.Key()) {
+		for _, g := range ciFailedEngagements(e.store.PeekEngagements(t.Key()), since) {
 			e.recordOutcome(ctx, t.Target.Repo, t.Target.Number, "ci_failed", g)
 		}
 	}
+}
+
+// ciFailedEngagements picks who a red head is charged to: the steps engaged
+// since CI was last seen failing (the work that produced this head, not every
+// step that ever touched the PR; all of them when it never failed before),
+// each step once — its newest engagement. A
+// fixer re-dispatched six times is one ci_failed, not six.
+func ciFailedEngagements(gs []store.Engagement, since time.Time) []store.Engagement {
+	seen := map[string]bool{}
+	var out []store.Engagement
+	for i := len(gs) - 1; i >= 0; i-- {
+		g := gs[i]
+		if (!since.IsZero() && !g.At.After(since)) || seen[g.Key] {
+			continue
+		}
+		seen[g.Key] = true
+		out = append(out, g)
+	}
+	// Oldest first, like the list it came from.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
 }
 
 // observeClosed handles the terminal `_closed` signal: the PR's own outcome,
