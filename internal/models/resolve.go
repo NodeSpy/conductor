@@ -531,7 +531,13 @@ func (r *Resolver) Candidates(ctx context.Context, spec config.ModelSpec, runtim
 			// A fleet that only native runtimes satisfy resolves, on the
 			// agent side, to a bare launch — which is still a valid last
 			// resort, so it stays in the list after the native candidates.
-			agent = append(agent, Candidate{Model: d.Model, Runtime: d.Runtime, Provider: d.Provider, Bare: d.Bare})
+			// A pinned runtime is where it runs even when no roster named it
+			// (a bare launch carries no runtime of its own).
+			rt := d.Runtime
+			if rt == "" && runtimeHint != "" {
+				rt = runtimeHint
+			}
+			agent = append(agent, Candidate{Model: d.Model, Runtime: rt, Provider: d.Provider, Bare: d.Bare})
 		}
 	}
 	return append(native, agent...), nil

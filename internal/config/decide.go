@@ -196,3 +196,23 @@ func lowerPackDecide(pd *PackDecide, s *Step) {
 		s.Decide.Escalate = nil
 	}
 }
+
+// DecisionLaunch marks the synthesized agent step a decide: step runs on an
+// AGENT runtime (the adapter path), and carries the adapter's rendering in
+// parts, so a runtime that can run a lean decision session (no tools, its
+// own system prompt, native structured output) uses them instead of
+// launching a full agent. It is never read from YAML.
+//
+// Its presence also means the prompt is LITERAL: Document already contains
+// the rendered state (a PR diff, a comment body — attacker-controllable
+// text), so it must never go through prompt templating again. A second
+// render would evaluate any {{…}} the text carries against the dispatch's
+// template data, which includes credentials.
+type DecisionLaunch struct {
+	// System is the adapter's system prompt.
+	System string
+	// Document is the questions and the escaped state — the user turn.
+	Document string
+	// Schema is the output schema the reply must match.
+	Schema map[string]any
+}

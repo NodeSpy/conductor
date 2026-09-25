@@ -129,7 +129,7 @@ func AgentEnv(req Request) ([]string, error) {
 // use it so the prompt a non-paseo runtime receives matches the paseo path
 // (guidance wrappers are already baked into Action.Prompt by the engine).
 func RenderPrompt(req Request) (string, error) {
-	p, err := render(req.Action.Prompt, templateData(req))
+	p, err := promptText(req)
 	if err != nil {
 		return "", err
 	}
@@ -187,4 +187,16 @@ func SessionKeyNamespace(req Request) string {
 		return ""
 	}
 	return req.Trigger.Key() + "\x00"
+}
+
+// promptText renders the action's prompt template — except for a decide
+// step's session, whose prompt is LITERAL: it already carries the rendered
+// state (attacker-controllable text such as a PR diff), and templating it a
+// second time would evaluate any {{…}} that text contains against the
+// dispatch's template data, credentials included. See config.DecisionLaunch.
+func promptText(req Request) (string, error) {
+	if req.Step.DecisionLaunch != nil {
+		return req.Action.Prompt, nil
+	}
+	return render(req.Action.Prompt, templateData(req))
 }

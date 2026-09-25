@@ -32,7 +32,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		defer d.inflight.Delete(req.DispatchID)
 	}
 	data := templateData(req)
-	prompt, err := render(req.Action.Prompt, data)
+	prompt, err := promptText(req)
 	if err != nil {
 		return RunRef{}, fmt.Errorf("render prompt: %w", err)
 	}

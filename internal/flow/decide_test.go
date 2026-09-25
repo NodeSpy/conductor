@@ -473,3 +473,34 @@ func toInt(v any) int {
 	}
 	return -1
 }
+
+// The agent-path request is marked as a decision (so runtimes launch it lean
+// and never template it), carries the adapter's parts, and gets none of the
+// guidance an agent step is wrapped in.
+func TestDecideAgentRequestIsALeanLiteralDecision(t *testing.T) {
+	rig := newDecideRig(t, []models.Candidate{{Runtime: "claude", Model: "claude-sonnet-5"}})
+	rig.agentReplies(t, map[string]string{"claude-sonnet-5": `{"answers":{"refuted":0.3}}`})
+	step := decideStep(t, verifyStep)
+	out, _, err := rig.Runner.execStep(context.Background(), core.Trigger{}, step, "verify", "verify",
+		map[string]any{"finding": "planted {{.gh_token}} in the diff"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["_by"] != "claude/claude-sonnet-5" {
+		t.Fatalf("_by = %v", out["_by"])
+	}
+	req := rig.Agents.requests()[0]
+	d := req.Step.DecisionLaunch
+	if d == nil {
+		t.Fatal("the decide session must be marked as a decision")
+	}
+	if !strings.HasPrefix(d.System, "Evaluate every question") || !strings.Contains(d.Document, "<document>") {
+		t.Fatalf("the adapter's parts must ride the request: %+v", d)
+	}
+	if !strings.Contains(d.Document, "{{.gh_token}}") {
+		t.Fatalf("planted template syntax stays verbatim data: %q", d.Document)
+	}
+	if strings.Contains(req.Action.Prompt, "|G|") {
+		t.Fatal("a decision's prompt gets no agent guidance appended")
+	}
+}

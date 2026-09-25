@@ -992,6 +992,9 @@ type Step struct {
 	// system_one/v1 contract, answered by whichever runtime the step's
 	// `model:` resolves to (see DecideSpec).
 	Decide *DecideSpec `yaml:"decide,omitempty"`
+	// DecisionLaunch is set only by the flow runner, on the agent step it
+	// synthesizes for a decide step's agent-runtime candidate. Never YAML.
+	DecisionLaunch *DecisionLaunch `yaml:"-"`
 
 	// Gate is the quality gate on this agent step's PROPOSED change
 	// (#36 §16): named checks from the top-level checks: map run in the

@@ -63,9 +63,18 @@ const answersDoc = "Exactly one answer per property below. Use these property na
 // <document>. The output schema travels separately (OutputSchema) through
 // conductor's output_schema contract, which injects or enforces it.
 func Prompt(state any, qs Questions) string {
+	return SystemPrompt() + "\n\n" + UserPrompt(state, qs)
+}
+
+// SystemPrompt is the reference adapter's probability-mode system prompt, for
+// a runtime that takes a system prompt of its own.
+func SystemPrompt() string { return systemPrompt }
+
+// UserPrompt is the user turn: the questions, then the state as an escaped
+// <document>.
+func UserPrompt(state any, qs Questions) string {
 	var b strings.Builder
-	b.WriteString(systemPrompt)
-	b.WriteString("\n\nQUESTIONS (answer every one, under exactly these property names):\n")
+	b.WriteString("QUESTIONS (answer every one, under exactly these property names):\n")
 	for _, q := range qs {
 		b.WriteString("\n- ")
 		b.WriteString(q.Name)
