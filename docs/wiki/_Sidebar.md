@@ -22,6 +22,7 @@ The model
 - [[Model-Selection]]
 - [[Model-Discovery]]
 - [[Steps]]
+- [[Decide-Steps]]
 - [[Grouping]]
 - [[Memory]]
 - [[Binary-Data]]

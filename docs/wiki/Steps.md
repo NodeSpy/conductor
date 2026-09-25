@@ -163,6 +163,7 @@ A step sets exactly one form — what it does:
 | Form | Spelling |
 | --- | --- |
 | dispatch an agent | `type: agent` (or a bare `prompt:` with `agent:`) |
+| ask typed questions | **`decide:`** + `state:` / `questions:` — answered with probabilities by a decision runtime or any agent runtime; see [[Decide-Steps]] |
 | call a connector verb | `uses: <connector>.<verb>` + `options:` |
 | run code | **`use: <engine>`** + `code:`, or `use: cli` + `command:` — see [[Code-Steps]] |
 | run a program | `type: command` + `command:` |

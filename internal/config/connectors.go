@@ -172,6 +172,12 @@ type RuntimeConfig struct {
 	// (docs/design/agents-removal.md §1). Checked alongside the global and
 	// workflow-scope budgets; an over-cap dispatch sheds and notifies.
 	Budget *BudgetPolicy `yaml:"budget,omitempty"`
+	// Connection is the configuration a runtime PLUGIN is handed on every
+	// call — credentials and endpoints it needs, e.g. a decision runtime's
+	// `api_key`. Values may be secret references (${ENV}, a vault ref),
+	// resolved at boot exactly as a connector's connection fields are. A
+	// builtin runtime takes none.
+	Connection map[string]any `yaml:"connection,omitempty"`
 
 	// legacy holds a pre-`use:` `type:` value. NOT part of the schema — it is
 	// accepted by the decoder only so validateConnectors can name the migration
@@ -982,6 +988,11 @@ type Step struct {
 	// step-level hooks, scoped to this step
 	Hooks []Hook `yaml:"hooks,omitempty"`
 
+	// Decide makes this a decide: step — a typed decision in the
+	// system_one/v1 contract, answered by whichever runtime the step's
+	// `model:` resolves to (see DecideSpec).
+	Decide *DecideSpec `yaml:"decide,omitempty"`
+
 	// Gate is the quality gate on this agent step's PROPOSED change
 	// (#36 §16): named checks from the top-level checks: map run in the
 	// agent's worktree after it finishes; a failure loops back to the agent
@@ -1243,6 +1254,8 @@ func (s Step) Form() string {
 		return s.HelperForm()
 	case s.Team != nil:
 		return "team"
+	case s.Decide != nil:
+		return "decide"
 	case s.Uses != "":
 		return "verb"
 	case s.Workflow != "":
@@ -1875,8 +1888,8 @@ func validateSteps(where string, steps []Step, c *Config) error {
 func validateStep(w string, s Step, c *Config) error {
 	forms := 0
 	for _, set := range []bool{
-		s.Uses != "", s.Workflow != "", s.Use != "" || s.Run != "", s.Team != nil,
-		s.Type == "agent" || (s.Type == "" && s.Agent != "" && s.Uses == "" && s.Workflow == "" && s.Team == nil),
+		s.Uses != "", s.Workflow != "", s.Use != "" || s.Run != "", s.Team != nil, s.Decide != nil,
+		s.Type == "agent" || (s.Type == "" && s.Agent != "" && s.Uses == "" && s.Workflow == "" && s.Team == nil && s.Decide == nil),
 		// A bare `command:` is the command form ONLY when no engine claimed
 		// it: with `use: cli` the same key is that engine's argv.
 		s.Type == "command" || (s.Type == "" && len(s.Command) > 0 && s.Use == "" && s.Run == ""),
@@ -1901,10 +1914,15 @@ func validateStep(w string, s Step, c *Config) error {
 		return validateHooks(w, s.Hooks)
 	}
 	if forms == 0 {
-		return fmt.Errorf("config: %s: set one of `type: agent`, `type: command`, `use:` (an engine, with `code:`/`command:`), `uses:`, `call:`, or a helper (`sleep:`/`log:`/`set:`/`assert:`/`fail:`/`wait_for:`)", w)
+		return fmt.Errorf("config: %s: set one of `type: agent`, `type: command`, `decide:`, `use:` (an engine, with `code:`/`command:`), `uses:`, `call:`, or a helper (`sleep:`/`log:`/`set:`/`assert:`/`fail:`/`wait_for:`)", w)
 	}
 	if forms > 1 {
-		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/use/uses/call or a helper: sleep/log/set/assert/fail/wait_for)", w)
+		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/decide/use/uses/call or a helper: sleep/log/set/assert/fail/wait_for)", w)
+	}
+	if s.Decide != nil {
+		if err := validateDecideStep(w, s, c); err != nil {
+			return err
+		}
 	}
 	if err := validateHelperStep(w, s); err != nil {
 		return err

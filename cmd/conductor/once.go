@@ -23,6 +23,7 @@ import (
 	agentmodels "github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/sandbox"
+	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -446,7 +447,19 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 
 	// One-shot mode doesn't wire Backend-RPC runtime plugins (no long-lived
 	// dispatcher/reaper here); ACP runtime plugins still resolve as before.
-	mergedControllers, err := mergedControllersWithPlugins(cfg, nil)
+	// Decision runtimes ARE wired: decide: steps reach them natively, and
+	// agent resolution must know to skip them.
+	rtMgr, closeRtMgr := runtimePluginManager(stack, cfg, secrets.New(), st.Audit)
+	defer closeRtMgr()
+	rtSecrets := secrets.New()
+	if stack != nil && stack.Secrets != nil {
+		rtSecrets = stack.Secrets
+	}
+	deciders, err := loadDecisionRuntimes(rtMgr, cfg, rtSecrets)
+	if err != nil {
+		return err
+	}
+	mergedControllers, err := mergedControllersWithPlugins(cfg, nil, deciders)
 	if err != nil {
 		return err
 	}
@@ -471,6 +484,7 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 		Flow: stack.Runner, Connectors: stack.Registry, Secrets: stack.Secrets,
 	})
 	eng.SetModelResolver(agentmodels.NewResolver(cfg, agentmodels.NewCatalog(config.StateDir())))
+	eng.SetDeciders(deciders)
 
 	// Find the event's trigger THROUGH the configured source, so the connector's
 	// own normalization (github's event→kind mapping, target extraction, author

@@ -20,6 +20,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/cost"
+	"github.com/NodeSpy/conductor/internal/decider"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/handoff"
@@ -154,6 +155,9 @@ type Engine struct {
 	// modelResolver walks the fleet ladder (design §2.3) per dispatch. nil
 	// = no model layer: every dispatch bare-launches.
 	modelResolver *models.Resolver
+	// deciders are the decision runtimes (runtime plugins declaring decision
+	// Protocols): decide: steps reach them natively, agent steps never.
+	deciders decider.Set
 	// unsupported remembers models a provider refused at run time; dispatchAgent
 	// marks + re-resolves through it (the resolver's Excluded hook reads it).
 	unsupported *models.UnsupportedCache

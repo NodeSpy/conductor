@@ -88,6 +88,7 @@ runtimes sharing a `host:`/`isolation:` — the child overrides only `command`).
 | `tool` / `command` | the bare-CLI recipe for `transport: cli` |
 | `session` | the OVERALL session-affinity pool for this runtime: `{ key, idle_ttl, max_lifetime, end_on }`, shared by every step without its own. See [[Steps]] |
 | `budget` | this backend's hard spend cap: `{ window, max_cost_usd, max_tokens }`. A budget caps EXECUTION COST, and the runtime is where execution happens — this is where per-agent budgets moved to. See [[Cost-Accounting]] |
+| `connection` | what a runtime **plugin** is handed on every call — credentials and endpoints, e.g. a decision runtime's `api_key`. Values may be secret references (`env:NAME`, a vault ref), resolved at boot and redacted. Builtin runtimes take none |
 | `host` | a [[Hosts]] entry — the runtime executes there over SSH: cli/acp/agent-deck wrap their launch, a paseo runtime runs its whole CLI remotely (with a dedicated dispatcher), and opencode is reached through an `ssh -W` forward (see [[Hosts]]) |
 
 Resolution order for a step: its explicit `runtime:` → the `default: true`
@@ -116,6 +117,15 @@ Everything else — session models, the session broker, capability
 degradation, interactive hand-offs — carries over from the controllers
 design unchanged; a runtime that owns an interactive surface is the default
 hand-off for background review steps ([[Hand-offs]]).
+
+## Decision runtimes
+
+A runtime plugin that declares decision protocols (`system_one/v1`) and serves
+the `decide` and `models` verbs is a **decision runtime**: it answers
+[decide steps](Decide-Steps) natively and never runs an agent. Agent resolution
+skips it, it gets no controller, and an agent step that pins it is refused.
+Its models join the roster, so a fleet reaches it by naming them
+(`light: ["jev-*", "claude-sonnet-*"]`).
 
 ## Session persistence
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	agentmodels "github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
@@ -36,7 +38,8 @@ func loadOne(t *testing.T, cfg *config.Config) (map[string]runtimePluginBackend,
 	t.Helper()
 	mgr := pluginManagerFor(cfg, secrets.New(), func(map[string]any) {})
 	t.Cleanup(func() { _ = mgr.Close() })
-	return loadRuntimePlugins(mgr, cfg, config.Retry{})
+	b, _, err := loadRuntimePlugins(mgr, cfg, config.Retry{}, secrets.New())
+	return b, err
 }
 
 // A Backend-RPC runtime plugin (acme-runtime: full verb set, no declared kind)
@@ -61,7 +64,7 @@ func TestLoadRuntimePlugins_BackendRPCAdopted(t *testing.T) {
 	// classification + wiring. (The boot-ctx dial is torn down when this func
 	// returns, exactly like the connector path — the first real dispatch/reaper
 	// tick re-dials, so an immediate call here would race that async teardown.)
-	merged, err := mergedControllersWithPlugins(cfg, backends)
+	merged, err := mergedControllersWithPlugins(cfg, backends, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +93,7 @@ func TestLoadRuntimePlugins_ACPFallsThrough(t *testing.T) {
 	if _, ok := backends["rt"]; ok {
 		t.Fatal("acme-echo (no Backend verbs) must not be adopted as Backend-RPC")
 	}
-	merged, err := mergedControllersWithPlugins(cfg, backends)
+	merged, err := mergedControllersWithPlugins(cfg, backends, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,5 +111,74 @@ func TestLoadRuntimePlugins_HostRefused(t *testing.T) {
 	_, err := loadOne(t, cfg)
 	if err == nil || !strings.Contains(err.Error(), "host:") {
 		t.Fatalf("host: on a Backend-RPC runtime must be refused, got %v", err)
+	}
+}
+
+// A decision runtime (acme-decider: declares system_one/v1 and serves
+// decide) is classified as neither a dispatcher nor an ACP session: it lands
+// in the decider set with its connection's secret references resolved, its
+// roster is registered for fleets, and it gets NO controller — nothing can
+// select it to launch an agent.
+func TestLoadRuntimePlugins_DecisionRuntime(t *testing.T) {
+	t.Setenv("ACME_DECIDER_KEY", "k-from-env")
+	logPath := filepath.Join(t.TempDir(), "calls.log")
+	cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{
+		"rt": {Use: buildTestPlugin(t, "acme-decider"), Connection: map[string]any{
+			"api_key": "env:ACME_DECIDER_KEY", "calls_log": logPath,
+		}},
+	}}
+	mgr := pluginManagerFor(cfg, secrets.New(), func(map[string]any) {})
+	t.Cleanup(func() { _ = mgr.Close() })
+	backends, deciders, err := loadRuntimePlugins(mgr, cfg, config.Retry{}, secrets.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := backends["rt"]; ok {
+		t.Fatal("a decision runtime must not be adopted as a Backend-RPC dispatcher")
+	}
+	d, ok := deciders["rt"]
+	if !ok || !d.Speaks("system_one/v1") {
+		t.Fatalf("acme-decider must be registered as a v1 decision runtime, got %v", deciders.Names())
+	}
+	merged, err := mergedControllersWithPlugins(cfg, backends, deciders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cc, ok := merged["rt"]; ok {
+		t.Fatalf("a decision runtime gets no agent controller, got %+v", cc)
+	}
+
+	// The roster is discoverable through the model resolver, so a fleet can
+	// name its models.
+	res := agentmodels.NewResolver(cfg, nil)
+	if ids := res.Rosters(context.Background())["rt"].IDs(); strings.Join(ids, ",") != "acme-2,acme-1" {
+		t.Fatalf("the decision runtime's roster must be discoverable, got %v", ids)
+	}
+	// The env: reference was resolved at boot and delivered on the call.
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "key=k-from-env") {
+		t.Fatalf("the connection's secret reference must reach the plugin resolved:\n%s", raw)
+	}
+}
+
+// One-shot mode adopts decision runtimes but leaves a Backend-RPC runtime
+// exactly as it always has: not adopted, falling through to the controller
+// path.
+func TestLoadDecisionRuntimes_OneShot(t *testing.T) {
+	cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{
+		"dec": {Use: buildTestPlugin(t, "acme-decider")},
+		"rpc": {Use: buildTestPlugin(t, "acme-runtime")},
+	}}
+	mgr := pluginManagerFor(cfg, secrets.New(), func(map[string]any) {})
+	t.Cleanup(func() { _ = mgr.Close() })
+	deciders, err := loadDecisionRuntimes(mgr, cfg, secrets.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := deciders["dec"]; !ok || len(deciders) != 1 {
+		t.Fatalf("one-shot mode must adopt exactly the decision runtime, got %v", deciders.Names())
 	}
 }

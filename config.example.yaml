@@ -540,6 +540,33 @@ engines:
 #           gate: { run: [ test ] }   # optional explicit checks per worker
 
 # ---------------------------------------------------------------------------
+# decide: — typed questions answered with probabilities, in the system_one/v1
+# contract (docs/wiki/Decide-Steps.md). model: is the tier; a decision runtime
+# that speaks the protocol natively answers first when the tier names its
+# models, then any agent runtime answers in one restricted session. A
+# successful answer is final; a failure moves to the next candidate, then
+# default:. The answers are the step's outputs, by question name, plus _by.
+# ---------------------------------------------------------------------------
+# workflows:
+#   verify:
+#     steps:
+#       - id: verify
+#         model: light
+#         decide:
+#           state: "FINDING: {{.item.body}}\nDIFF:\n{{.diff.diff}}"
+#           questions:
+#             refuted:
+#               type: noul          # noul (yes/no) | choice | score
+#               instructions: The diff POSITIVELY contradicts this finding.
+#           default: { refuted: { noul: 0 } }     # only when every candidate fails
+#           escalate:                              # optional second opinion
+#             when: "refuted.noul >= 0.5 && refuted.noul < 0.8"
+#           # observe: review_log                  # record answers to a SQL store
+#       - id: gate
+#         if: "verify.refuted.noul < 0.8"
+#         log: "kept (answered by {{.verify._by}})"
+
+# ---------------------------------------------------------------------------
 # runtimes: — where agents run (previously controllers:). The paseo runtime's
 # bin: replaces the old top-level paseo_bin. Any runtime may set host: to run
 # on a hosts: entry over SSH — a remote paseo runs its whole CLI there (put
@@ -597,6 +624,8 @@ runtimes:
   gpu-paseo: { use: paseo, bin: /usr/local/bin/paseo, host: build-box }
   # deck:   { use: agent-deck }
   # gemini: { use: acp, agent: gemini }              # ACP transport
+  # jev:                                            # a DECISION runtime plugin: answers
+  #   connection: { api_key: env:JEV_API_KEY }      # decide: steps only, never an agent
   # remote: { use: cli, tool: claude-code, host: build-box }
 
 # ---------------------------------------------------------------------------

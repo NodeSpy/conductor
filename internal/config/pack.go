@@ -112,6 +112,10 @@ type PackInstance struct {
 	// model resolution ladder (docs/design/runtimes-models-packs.md §2.3,
 	// §5.3). A string collapses the fleet to one model.
 	Models map[string]FleetSpec `yaml:"models,omitempty"`
+	// Decide applies to every decide: step the pack ships: `observe:` records
+	// its decisions to one of your SQL stores, `escalate: false` turns off the
+	// pack's second-opinion escalation. See PackDecide.
+	Decide *PackDecide `yaml:"decide,omitempty"`
 	// On overrides the pack's triggers by their qualified name, deep-merging
 	// onto what the pack ships (§5.3). It is the mirrored-section overlay:
 	// the keys are the pack's own trigger addresses.
