@@ -259,7 +259,14 @@ func (r *Runner) answerOne(ctx context.Context, t core.Trigger, step config.Step
 		Prompt:       systemone.Prompt(req.State, req.Questions),
 		Checkout:     "none",
 		OutputSchema: systemone.OutputSchema(req.Questions),
-		Timeout:      step.Timeout,
+		// The parts, for a runtime that runs a lean decision session — and
+		// the marker that keeps this prompt out of templating.
+		DecisionLaunch: &config.DecisionLaunch{
+			System:   systemone.SystemPrompt(),
+			Document: systemone.UserPrompt(req.State, req.Questions),
+			Schema:   systemone.OutputSchema(req.Questions),
+		},
+		Timeout: step.Timeout,
 		// One turn, then gone: a decision holds no session worth keeping.
 		ArchiveWhenDone: true,
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -104,17 +105,37 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 	host := resolveHost(c.host, spec.Request.Step.Host)
 	opt := launchOptsFor(c.iso, spec.Request)
 	id := c.recipe.tool + "-" + strconv.FormatInt(c.seq.Add(1), 10)
+	cwd, argv := spec.Cwd, c.recipe.argv(spec.Request.Model, prompt)
+	var dec *decisionRun
+	// A decide step's session runs LEAN when the recipe knows how and it runs
+	// on this box (the scratch dir it needs is local).
+	if d := spec.Request.Step.DecisionLaunch; d != nil && c.recipe.decide != nil && host == "" {
+		dir, derr := os.MkdirTemp("", "conductor-decide-")
+		if derr != nil {
+			return nil, fmt.Errorf("cli: decision dir: %w", derr)
+		}
+		lean, answerFile, derr := c.recipe.decide(dir, spec.Request.Model, d)
+		if derr != nil {
+			_ = os.RemoveAll(dir)
+			return nil, fmt.Errorf("cli: decision launch: %w", derr)
+		}
+		cwd, argv, dec = dir, lean, &decisionRun{dir: dir, answerFile: answerFile}
+	}
 	sctx, scancel := context.WithCancel(context.Background())
-	proc, err := c.launchOn(sctx, host, spec.Cwd, env, c.recipe.argv(spec.Request.Model, prompt), opt)
+	proc, err := c.launchOn(sctx, host, cwd, env, argv, opt)
 	if err != nil {
 		scancel()
+		if dec != nil {
+			_ = os.RemoveAll(dec.dir)
+		}
 		return nil, fmt.Errorf("cli: launch %s: %w", c.recipe.tool, err)
 	}
 
 	s := &cliSession{
 		id:     id,
 		c:      c,
-		cwd:    spec.Cwd,
+		dec:    dec,
+		cwd:    cwd,
 		env:    env,
 		host:   host,
 		opt:    opt,
@@ -294,6 +315,17 @@ type cliRecipe struct {
 	// than a reply (TurnErrorer). nil → the tool has no machine-readable error
 	// signal, and every completed turn is treated as a reply.
 	failed func(raw string) error
+	// decide, when set, is the LEAN launch for a decide step's session
+	// (config.DecisionLaunch): the tool with no tools, the adapter's own
+	// system prompt, native structured output, and nothing of the operator's
+	// environment (MCP servers, slash commands, session persistence),
+	// running in an empty directory conductor made for it. It returns the
+	// argv and, for a tool that writes its final answer to a file, that
+	// file. nil → the recipe runs a decide session like any other turn.
+	decide func(dir, model string, d *config.DecisionLaunch) (argv []string, answerFile string, err error)
+	// decideAnswer extracts the reply from a lean decision run's raw stdout
+	// (nil → answer).
+	decideAnswer func(raw string) string
 }
 
 // cliRecipeFor selects a recipe from the config. An explicit `command:` yields a
@@ -327,10 +359,12 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 			resume: func(id, prompt string) []string {
 				return []string{"claude", "-p", prompt, "--resume", id, "--output-format", "json", "--dangerously-skip-permissions"}
 			},
-			parseID: parseClaudeSessionID,
-			answer:  parseClaudeResult,
-			failed:  parseClaudeError,
-			model:   ModelResumable,
+			parseID:      parseClaudeSessionID,
+			answer:       parseClaudeResult,
+			failed:       parseClaudeError,
+			model:        ModelResumable,
+			decide:       claudeDecide,
+			decideAnswer: parseClaudeStructured,
 		}
 	case "codex":
 		return cliRecipe{
@@ -338,6 +372,7 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 			launch:    func(prompt string) []string { return []string{"codex", "exec", prompt} },
 			model:     ModelOneshot,
 			modelArgs: func(m string) []string { return []string{"--model", m} },
+			decide:    codexDecide,
 		}
 	default:
 		bin := tool
@@ -361,6 +396,72 @@ func (r cliRecipe) argv(model, prompt string) []string {
 		return base
 	}
 	return append(base, r.modelArgs(model)...)
+}
+
+// claudeDecide is the lean claude-code decision session. Deliberately NOT
+// --bare: that would also skip OAuth and demand an API key, and a decide
+// session must run on the operator's own claude login like any other.
+func claudeDecide(_ string, model string, d *config.DecisionLaunch) ([]string, string, error) {
+	schema, err := json.Marshal(d.Schema)
+	if err != nil {
+		return nil, "", fmt.Errorf("decision schema: %w", err)
+	}
+	argv := []string{"claude", "-p", d.Document,
+		"--output-format", "json",
+		"--tools", "", // no tools at all — not even read-only ones
+		"--strict-mcp-config", // …and no MCP servers from the operator's config
+		"--disable-slash-commands",
+		"--no-session-persistence",
+		"--system-prompt", d.System, // replaces Claude Code's own system prompt
+		"--json-schema", string(schema),
+	}
+	if model != "" {
+		argv = append(argv, "--model", model)
+	}
+	return argv, "", nil
+}
+
+// parseClaudeStructured reads a lean decision run's answer: the envelope's
+// `structured_output` (what --json-schema fills), falling back to the plain
+// result text.
+func parseClaudeStructured(output string) string {
+	var env struct {
+		Structured json.RawMessage `json:"structured_output"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(output)), &env) == nil &&
+		len(env.Structured) > 0 && string(env.Structured) != "null" {
+		return string(env.Structured)
+	}
+	return parseClaudeResult(output)
+}
+
+// codexDecide is the lean codex decision session: a read-only sandbox, no
+// session saved, the schema enforced by codex itself, and the final message
+// written to a file — codex logs progress on stderr, which the cli runner
+// captures alongside stdout, so the answer is read from the file instead.
+// codex takes no separate system prompt, so it leads the prompt.
+func codexDecide(dir, model string, d *config.DecisionLaunch) ([]string, string, error) {
+	schema, err := json.Marshal(d.Schema)
+	if err != nil {
+		return nil, "", fmt.Errorf("decision schema: %w", err)
+	}
+	schemaFile := filepath.Join(dir, "schema.json")
+	if err := os.WriteFile(schemaFile, schema, 0o600); err != nil {
+		return nil, "", err
+	}
+	answer := filepath.Join(dir, "answer.json")
+	argv := []string{"codex", "exec",
+		"--output-schema", schemaFile,
+		"--output-last-message", answer,
+		"--sandbox", "read-only",
+		"--skip-git-repo-check",
+		"--ephemeral",
+		"--cd", dir,
+	}
+	if model != "" {
+		argv = append(argv, "--model", model)
+	}
+	return append(argv, d.System+"\n\n"+d.Document), answer, nil
 }
 
 // parseClaudeSessionID pulls the session id out of `claude -p --output-format json`
@@ -455,6 +556,18 @@ type cliSession struct {
 	toolID string // the tool's own session id, captured for --resume
 	out    string
 	ownsWT bool // this session must release wsID on Close
+
+	// dec is a lean decision run's scratch state (nil for any other turn);
+	// decided is its answer, read before the scratch dir is removed.
+	dec     *decisionRun
+	decided string
+}
+
+// decisionRun is the scratch directory a lean decision session runs in, and
+// the file its tool writes the answer to ("" → the answer is on stdout).
+type decisionRun struct {
+	dir        string
+	answerFile string
 }
 
 func (s *cliSession) ID() string { return s.id }
@@ -472,6 +585,17 @@ func (s *cliSession) run(proc cliProc) {
 		out, _ := proc.Wait()
 		s.mu.Lock()
 		s.out = out
+		if s.dec != nil {
+			// Read the answer, then drop the scratch dir at once: nothing
+			// else needs it, and a decision must leave nothing behind even
+			// if the session is never closed.
+			if s.dec.answerFile != "" {
+				if raw, err := os.ReadFile(s.dec.answerFile); err == nil {
+					s.decided = string(raw)
+				}
+			}
+			_ = os.RemoveAll(s.dec.dir)
+		}
 		if s.c.recipe.parseID != nil {
 			if tid := s.c.recipe.parseID(out); tid != "" {
 				s.toolID = tid
@@ -544,8 +668,16 @@ func (s *cliSession) Wait(ctx context.Context, timeout time.Duration) {
 // returns whatever has been captured so far (empty for an unfinished run).
 func (s *cliSession) Output() string {
 	s.mu.Lock()
-	raw := s.out
+	raw, dec, decided := s.out, s.dec, s.decided
 	s.mu.Unlock()
+	if dec != nil {
+		if decided != "" {
+			return decided
+		}
+		if s.c != nil && s.c.recipe.decideAnswer != nil {
+			return s.c.recipe.decideAnswer(raw)
+		}
+	}
 	if s.c != nil && s.c.recipe.answer != nil {
 		return s.c.recipe.answer(raw)
 	}

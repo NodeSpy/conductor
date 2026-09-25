@@ -1482,7 +1482,10 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		// reaper must never archive it — regardless of what the step says.
 		step.ArchiveWhenDone = false
 	}
-	if act.Prompt != "" {
+	// A decide step's session is the adapter prompt and nothing else: no
+	// write-wrapper, guidance, memory, or done instructions (its reply is the
+	// schema'd JSON, delivered the output_schema way).
+	if act.Prompt != "" && step.DecisionLaunch == nil {
 		act.Prompt += dispatch.WriteWrapperGuidance
 		if r.Agents.Guidance != nil {
 			act.Prompt += r.Agents.Guidance(identity, step, policyFrom(ctx))
@@ -1610,6 +1613,17 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 			r.Agents.Background(ctx, t, id, identity, step, ref, step.Handoff, actions)
 		}
 		return map[string]any{"agent_id": ref.AgentID, "background": true}, "", nil
+	}
+	if step.DecisionLaunch != nil {
+		// A decision's reply is data for the adapter to parse — never a
+		// memory block, a plan, or a proposed change. Return before any of
+		// those contracts can read it.
+		outputs := extractOutputs(ref.Output)
+		outputs["agent_id"] = ref.AgentID
+		if step.ArchiveWhenDone && ref.AgentID != "" && r.Agents.Archive != nil {
+			r.Agents.Archive(ref.AgentID)
+		}
+		return outputs, ref.Output, nil
 	}
 	if !shadow {
 		r.harvestMemory(ctx, t, identity, step, ref.Output)

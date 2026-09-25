@@ -190,3 +190,16 @@ func TestCandidatesSkipExcludedModels(t *testing.T) {
 		t.Fatalf("candidates = %s", got)
 	}
 }
+
+// A step pinned to a runtime with nothing to resolve still names that runtime
+// — its `_by` must say where it ran, not "default".
+func TestCandidatesBarePinKeepsTheRuntime(t *testing.T) {
+	r := decisionBox(t, nil)
+	cs, err := r.Candidates(context.Background(), config.ModelSpec{}, "paseo", v1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cs) != 1 || cs[0].Runtime != "paseo" {
+		t.Fatalf("a runtime-pinned bare candidate runs on the pin: %s", labels(cs))
+	}
+}

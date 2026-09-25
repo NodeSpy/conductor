@@ -70,6 +70,21 @@ candidates rather than one winner:
    converted back into v1 answers. No model API key is involved — the runtime's
    own credentials answer.
 
+   On a local `cli` runtime the session is **lean** rather than a full agent:
+
+   | tool | launch |
+   |---|---|
+   | `claude-code` | `claude -p` with `--tools ""` (no tools), `--system-prompt` (the adapter's, replacing Claude Code's own), `--json-schema`, `--strict-mcp-config`, `--disable-slash-commands`, `--no-session-persistence` — on your normal claude login (not `--bare`, which would require an API key) |
+   | `codex` | `codex exec` with `--output-schema`, `--sandbox read-only`, `--ephemeral`, and the answer read from `--output-last-message` |
+
+   Each runs in an empty scratch directory that is removed when it exits, so
+   no CLAUDE.md, repository or session is involved. A `cli` runtime with a
+   `host:`, and every other runtime, runs the adapter prompt as an ordinary
+   session instead.
+
+   The prompt is **never templated**: `state` is rendered once, and whatever it
+   contains — a diff with `{{ … }}` in it — reaches the model as text.
+
 Each group is ranked as model selection ranks a fleet (fleet order, overlaid by
 `prefer:`). Conductor asks the first candidate; **a successful answer is
 final**, whatever its confidence. A failure — an error, a timeout, an invalid
