@@ -163,3 +163,22 @@ func TestLoadRuntimePlugins_DecisionRuntime(t *testing.T) {
 		t.Fatalf("the connection's secret reference must reach the plugin resolved:\n%s", raw)
 	}
 }
+
+// One-shot mode adopts decision runtimes but leaves a Backend-RPC runtime
+// exactly as it always has: not adopted, falling through to the controller
+// path.
+func TestLoadDecisionRuntimes_OneShot(t *testing.T) {
+	cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{
+		"dec": {Use: buildTestPlugin(t, "acme-decider")},
+		"rpc": {Use: buildTestPlugin(t, "acme-runtime")},
+	}}
+	mgr := pluginManagerFor(cfg, secrets.New(), func(map[string]any) {})
+	t.Cleanup(func() { _ = mgr.Close() })
+	deciders, err := loadDecisionRuntimes(mgr, cfg, secrets.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := deciders["dec"]; !ok || len(deciders) != 1 {
+		t.Fatalf("one-shot mode must adopt exactly the decision runtime, got %v", deciders.Names())
+	}
+}

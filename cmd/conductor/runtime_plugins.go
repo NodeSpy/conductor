@@ -35,6 +35,21 @@ type runtimePluginBackend struct {
 // describe, or kind mismatch stops boot rather than degrading (a bad plugin is
 // an operator/security condition, not a transient).
 func loadRuntimePlugins(mgr *plugin.Manager, cfg *config.Config, retry config.Retry, sec *secrets.Resolver) (map[string]runtimePluginBackend, decider.Set, error) {
+	return loadRuntimePluginsFor(mgr, cfg, retry, sec, true)
+}
+
+// loadDecisionRuntimes is loadRuntimePlugins for one-shot mode: it adopts the
+// DECISION runtimes (they need nothing long-lived — a client and its
+// connection) and leaves every other runtime plugin exactly as one-shot mode
+// always has (Backend-RPC runtimes unwired, ACP runtimes to the controller
+// path). Without it a decision runtime would fall through to the ACP path
+// and agent resolution would not know to skip it.
+func loadDecisionRuntimes(mgr *plugin.Manager, cfg *config.Config, sec *secrets.Resolver) (decider.Set, error) {
+	_, deciders, err := loadRuntimePluginsFor(mgr, cfg, config.Retry{}, sec, false)
+	return deciders, err
+}
+
+func loadRuntimePluginsFor(mgr *plugin.Manager, cfg *config.Config, retry config.Retry, sec *secrets.Resolver, adoptBackends bool) (map[string]runtimePluginBackend, decider.Set, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), pluginBootTimeout)
 	defer cancel()
 
@@ -74,7 +89,7 @@ func loadRuntimePlugins(mgr *plugin.Manager, cfg *config.Config, retry config.Re
 				spec.Ref(), spec.Name, strings.Join(decl.Protocols, ", "), spec.EffectiveManifest().Summary())
 			continue
 		}
-		if !dispatch.SpeaksBackendRPC(decl) {
+		if !adoptBackends || !dispatch.SpeaksBackendRPC(decl) {
 			// ACP-dialect runtime plugin: the real session is a fresh
 			// `conductor plugin-exec` subprocess spawned per session, NOT this
 			// probe client — close it and let pluginRuntimeControllers wrap it.
