@@ -67,13 +67,20 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 			return nil, fmt.Errorf("github.%s: options.pr is required", verb)
 		}
 		body := map[string]any{}
-		if rs := toStrings(opts["reviewers"]); len(rs) > 0 {
+		if rs := reviewerLogins(opts["reviewers"]); len(rs) > 0 {
 			body["reviewers"] = rs
 		}
-		if ts := toStrings(opts["team_reviewers"]); len(ts) > 0 {
+		if ts := reviewerLogins(opts["team_reviewers"]); len(ts) > 0 {
 			body["team_reviewers"] = ts
 		}
 		if len(body) == 0 {
+			if opts["reviewers"] != nil || opts["team_reviewers"] != nil {
+				// Reviewers were configured but every entry rendered empty —
+				// typically a "{{.author}}" template on an event that carries no
+				// author. There is nobody to ping: skip rather than POST a bogus
+				// login or fail the flow over it.
+				return map[string]any{"ok": true, "skipped": "no reviewer resolved"}, nil
+			}
 			return nil, fmt.Errorf("github.%s: set options.reviewers and/or team_reviewers", verb)
 		}
 		u := fmt.Sprintf("%s/repos/%s/pulls/%d/requested_reviewers", base, repo, number)
@@ -1049,6 +1056,33 @@ func (c *Client) listAll(ctx context.Context, token string, all bool, perPage in
 // --- shared option coercion helpers ---
 
 // toStrings coerces a YAML/JSON list (or single string) into []string.
+// reviewerLogins is toStrings for reviewer lists, dropping entries that are
+// not real logins: nil, blanks, and what an unresolved template renders to
+// ("<nil>", "<no value>"). Otherwise a "{{.author}}" on an event with no
+// author would be requested as a reviewer named "<nil>".
+func reviewerLogins(v any) []string {
+	var out []string
+	if xs, ok := v.([]any); ok {
+		for _, e := range xs {
+			if e == nil {
+				continue
+			}
+			out = append(out, toStrings([]any{e})...)
+		}
+	} else {
+		out = toStrings(v)
+	}
+	kept := make([]string, 0, len(out))
+	for _, s := range out {
+		s = strings.TrimSpace(s)
+		if s == "" || s == "<nil>" || s == "<no value>" {
+			continue
+		}
+		kept = append(kept, s)
+	}
+	return kept
+}
+
 func toStrings(v any) []string {
 	switch x := v.(type) {
 	case []string:

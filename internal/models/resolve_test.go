@@ -163,6 +163,22 @@ func TestResolveFleetDecisionCarriesProvider(t *testing.T) {
 	}
 }
 
+// A fleet pinned to a context variant ("claude-opus-5-5[1m]") resolves to that
+// exact id — the roster lists only the base model, and the variant must reach
+// --model intact — carrying the base model's provider.
+func TestResolveFleetContextVariant(t *testing.T) {
+	withFakeCLIRoster(t, map[string]Roster{
+		"main": {{ID: "claude-opus-5-5", Provider: "anthropic"}, {ID: "claude-sonnet-5", Provider: "anthropic"}},
+	})
+	cfg := testCfg(t, map[string]config.RuntimeConfig{"main": {}}, map[string]config.FleetSpec{
+		"heavy": config.FleetOf(false, "claude-opus-5-5[1m]"),
+	})
+	d := mustResolve(t, NewResolver(cfg, nil), config.ModelSpecOf("heavy"), "")
+	if d.Model != "claude-opus-5-5[1m]" || d.Provider != "anthropic" || d.Bare {
+		t.Fatalf("decision = %#v, want the [1m] variant on anthropic", d)
+	}
+}
+
 func TestResolveInlineArrayAndObjectForms(t *testing.T) {
 	withFakeCLI(t, map[string][]string{"main": {"claude-opus-5", "gpt-5.6-sol"}})
 	cfg := testCfg(t, map[string]config.RuntimeConfig{"main": {}}, nil)

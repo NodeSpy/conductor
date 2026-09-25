@@ -258,13 +258,22 @@ type mergeGate struct {
 	Labels           []string
 }
 
-// unresolvedThreadIDs returns the node ids of the PR's unresolved review threads
-// (on App creds), sorted. Used by the sweep to reconcile outstanding review
-// comments that no live webhook recovered.
-func (c *restClient) unresolvedThreadIDs(ctx context.Context, instID int64, owner, name string, number int) ([]string, error) {
+// unresolvedThread is one unresolved review thread as the sweep needs it: its
+// node id (for the dedup signature) and who opened it (the reviewer to ping
+// back once the feedback is addressed).
+type unresolvedThread struct {
+	ID          string
+	Author      string
+	AuthorIsBot bool
+}
+
+// unresolvedThreads returns the PR's unresolved review threads (on App creds),
+// sorted by node id. Used by the sweep to reconcile outstanding review comments
+// that no live webhook recovered.
+func (c *restClient) unresolvedThreads(ctx context.Context, instID int64, owner, name string, number int) ([]unresolvedThread, error) {
 	const q = `query($o:String!,$n:String!,$num:Int!){
 	  repository(owner:$o,name:$n){ pullRequest(number:$num){
-	    reviewThreads(first:100){nodes{id isResolved}}
+	    reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{author{login __typename}}}}}
 	  }}}`
 	var data struct {
 		Repository struct {
@@ -273,6 +282,14 @@ func (c *restClient) unresolvedThreadIDs(ctx context.Context, instID int64, owne
 					Nodes []struct {
 						ID         string `json:"id"`
 						IsResolved bool   `json:"isResolved"`
+						Comments   struct {
+							Nodes []struct {
+								Author *struct {
+									Login    string `json:"login"`
+									Typename string `json:"__typename"`
+								} `json:"author"`
+							} `json:"nodes"`
+						} `json:"comments"`
 					} `json:"nodes"`
 				} `json:"reviewThreads"`
 			} `json:"pullRequest"`
@@ -281,14 +298,20 @@ func (c *restClient) unresolvedThreadIDs(ctx context.Context, instID int64, owne
 	if err := c.graphql(ctx, instID, q, map[string]any{"o": owner, "n": name, "num": number}, &data); err != nil {
 		return nil, err
 	}
-	var ids []string
+	var out []unresolvedThread
 	for _, t := range data.Repository.PullRequest.ReviewThreads.Nodes {
-		if !t.IsResolved {
-			ids = append(ids, t.ID)
+		if t.IsResolved {
+			continue
 		}
+		ut := unresolvedThread{ID: t.ID}
+		if cs := t.Comments.Nodes; len(cs) > 0 && cs[0].Author != nil {
+			ut.Author = cs[0].Author.Login
+			ut.AuthorIsBot = isBotActor(cs[0].Author.Typename, cs[0].Author.Login)
+		}
+		out = append(out, ut)
 	}
-	sort.Strings(ids)
-	return ids, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
 }
 
 // prComment is a PR comment (issue-level or review-level) as the sweep needs it.

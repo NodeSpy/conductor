@@ -320,6 +320,51 @@ func TestGithubVerbRerequestReviewHTTP(t *testing.T) {
 	}
 }
 
+// A reviewers template that resolved to nothing (e.g. "{{.author}}" on a
+// sweep-recovered changes_requested, which carries no author) skips the
+// re-request — no POST of a reviewer literally named "<nil>", no flow failure.
+func TestGithubVerbRerequestReviewUnresolvedReviewerSkips(t *testing.T) {
+	posts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	for _, rs := range []any{[]any{nil}, []any{"<nil>"}, []any{"<no value>", " "}, ""} {
+		out, err := impl.Invoke(context.Background(), "rerequest_review", map[string]any{
+			"repo": "org/repo", "pr": 7, "reviewers": rs,
+		})
+		if err != nil {
+			t.Fatalf("reviewers=%#v: Invoke: %v", rs, err)
+		}
+		if out["ok"] != true || out["skipped"] == nil {
+			t.Fatalf("reviewers=%#v: want a skip, got %v", rs, out)
+		}
+	}
+	if posts != 0 {
+		t.Fatalf("an unresolved reviewer must not reach the API, got %d request(s)", posts)
+	}
+	// A mix keeps the real login and drops the unresolved one.
+	var gotBody map[string]any
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(200)
+	}))
+	defer srv2.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv2.URL)
+	impl = newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	if _, err := impl.Invoke(context.Background(), "rerequest_review", map[string]any{
+		"repo": "org/repo", "pr": 7, "reviewers": []any{nil, "alice"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rs, _ := gotBody["reviewers"].([]any); len(rs) != 1 || rs[0] != "alice" {
+		t.Fatalf("body.reviewers = %v", gotBody)
+	}
+}
+
 func TestGithubVerbSubmitReviewHTTP(t *testing.T) {
 	var gotPath string
 	var gotBody map[string]any

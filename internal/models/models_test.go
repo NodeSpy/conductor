@@ -667,4 +667,11 @@ func TestRosterHelpers(t *testing.T) {
 	if _, ok := r.Find("nope"); ok {
 		t.Error("Find should miss")
 	}
+	// A context variant resolves to its base model's entry.
+	if m, ok := r.Find("a[1m]"); !ok || m.ID != "a" {
+		t.Errorf("Find(a[1m]) = %+v, %v; want the base entry", m, ok)
+	}
+	if _, ok := r.Find("nope[1m]"); ok {
+		t.Error("Find of a variant whose base is absent should miss")
+	}
 }

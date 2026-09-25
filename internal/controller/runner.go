@@ -169,6 +169,15 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		if models.UnsupportedSignature(ref.Output) {
 			return ref, fmt.Errorf("%w: %s", dispatch.ErrModelUnsupported, strings.TrimSpace(ref.Output))
 		}
+		// A turn that ended in an error (an API error, the context running out)
+		// is not a reply either. Fail the step so the flow stops here — before
+		// it runs its next step (a review re-request with nothing pushed) and
+		// records the run "ok".
+		if te, ok := sess.(TurnErrorer); ok {
+			if terr := te.TurnErr(); terr != nil {
+				return ref, terr
+			}
+		}
 		// A controller runtime has no native --output-schema; conductor enforces
 		// the contract in software (v0.9.3). The schema directive was injected
 		// into the prompt (RenderPrompt) so the agent emitted the object; here

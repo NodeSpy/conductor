@@ -199,6 +199,21 @@ func MatchModelPattern(pattern, model string) bool {
 // being a literal model id).
 func IsModelPattern(s string) bool { return strings.ContainsAny(s, "*?") }
 
+// ModelBaseID strips a bracketed context-variant suffix from a model id —
+// claude's "[1m]" (the 1M-token context window): "claude-opus-5-5[1m]" →
+// "claude-opus-5-5". A provider's model listing carries only base ids; the
+// variant is chosen by passing the full id to the CLI's --model, so roster
+// membership is judged on the base while the full id is what gets launched.
+// An id with no such suffix is returned unchanged.
+func ModelBaseID(id string) string {
+	if strings.HasSuffix(id, "]") {
+		if i := strings.LastIndexByte(id, '['); i > 0 {
+			return id[:i]
+		}
+	}
+	return id
+}
+
 // modelGlobMatch is an iterative `*`/`?` matcher with backtracking — no regexp
 // compile per candidate, no path-separator semantics.
 func modelGlobMatch(pattern, s string) bool {
@@ -252,7 +267,9 @@ func ExpandModelPatterns(acceptable, roster []string) []string {
 			continue
 		}
 		if !IsModelPattern(entry) {
-			if inRoster[entry] && !seen[entry] {
+			// A context variant ("claude-opus-5-5[1m]") is available when its
+			// base model is, and is emitted as written so it reaches --model.
+			if (inRoster[entry] || inRoster[ModelBaseID(entry)]) && !seen[entry] {
 				seen[entry] = true
 				out = append(out, entry)
 			}

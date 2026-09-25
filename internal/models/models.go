@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/paseover"
 )
 
@@ -69,12 +70,17 @@ func (r Roster) IDs() []string {
 	return out
 }
 
-// Find returns the entry for an id (and whether it was there).
+// Find returns the entry for an id (and whether it was there). A context
+// variant ("claude-opus-5-5[1m]") resolves to its base model's entry — the
+// listing carries only base ids (config.ModelBaseID).
 func (r Roster) Find(id string) (Model, bool) {
 	for _, m := range r {
 		if m.ID == id {
 			return m, true
 		}
+	}
+	if base := config.ModelBaseID(id); base != id {
+		return r.Find(base)
 	}
 	return Model{}, false
 }
