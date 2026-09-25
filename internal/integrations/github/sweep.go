@@ -474,15 +474,27 @@ func (g *Integration) sweepUnresolvedComments(ctx context.Context, instID int64,
 
 // threadReviewerFacts names the reviewer behind a sweep-recovered
 // changes_requested — the opener of the first unresolved thread that isn't
-// you — as the same `author`/`author_is_bot` facts the webhook path carries,
-// so a flow's "{{.author}}" (the re-request step) pings a real reviewer. nil
-// when no thread names one (only self-authored threads, or ghost authors).
+// you, preferring a human over a bot — as the same `author`/`author_is_bot`
+// facts the webhook path carries, so a flow's "{{.author}}" (the re-request
+// step) pings a real reviewer. A review bot (Cursor Bugbot, Copilot, …) can't
+// be re-requested — GitHub 422s it as "not a collaborator" — so it is named
+// only when no human opened a thread, with author_is_bot telling the flow so.
+// nil when no thread names one (only self-authored threads, or ghost authors).
 func (g *Integration) threadReviewerFacts(threads []unresolvedThread) map[string]any {
-	for _, th := range threads {
+	var bot *unresolvedThread
+	for i, th := range threads {
 		if th.Author == "" || g.self[strings.ToLower(th.Author)] {
 			continue
 		}
-		return map[string]any{"author": th.Author, "author_is_bot": th.AuthorIsBot}
+		if !th.AuthorIsBot {
+			return map[string]any{"author": th.Author, "author_is_bot": false}
+		}
+		if bot == nil {
+			bot = &threads[i]
+		}
+	}
+	if bot != nil {
+		return map[string]any{"author": bot.Author, "author_is_bot": true}
 	}
 	return nil
 }

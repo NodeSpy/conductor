@@ -83,6 +83,16 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 	// restart drop the batch while dedup suppressed redelivery — silent
 	// loss. Grouped events record at flush time instead (see runBatch).
 	grouped := spec.Group != nil
+	if !shadow && !grouped && e.coalesceQueued(t) {
+		// Committed to the waiting run: consume a dedup signature so a
+		// redelivery stays suppressed, but don't count a live-gated attempt —
+		// it hasn't run.
+		if !livenessGated(t.Kind) && !t.Force {
+			_ = e.store.Record(key, dkind, t.Dedup, head)
+		}
+		e.log("%s already waiting for an agent slot — coalesced (newest event kept)", tag(t))
+		return
+	}
 	if !shadow && !grouped {
 		if livenessGated(t.Kind) || t.Force {
 			_ = e.store.RecordAttempt(key, dkind, head)
@@ -119,20 +129,71 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 	e.startFlowRun(ctx, t, spec, tidx, nil, shadow)
 }
 
-// startFlowRun takes a concurrency slot and runs one flow (or batch) in its
-// own goroutine.
+// startFlowRun runs one flow (or batch) in its own goroutine once it holds a
+// concurrency slot. The wait for the slot happens in that goroutine, never on
+// the engine loop: blocking the loop stalled EVERY trigger — gates, parking,
+// closed-PR cleanup, a fresh review request — behind whatever long fixer runs
+// held the slots, with nothing logged. Waiting runs are served by slot
+// priority (slotPriority), and a second trigger for a flow+target that is
+// already waiting coalesces into it (see coalesceQueued).
 func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.TriggerSpec, tidx int, batch *flow.Batch, shadow bool) {
-	if !shadow && !e.acquire(ctx) {
+	if shadow {
+		run := e.newFlowRun(t, spec, shadow)
+		go func() {
+			defer e.recoverDispatch(ctx, t, run, "flow dispatch")
+			e.flow.Run(ctx, run, t, spec, tidx, batch, shadow)
+		}()
 		return
 	}
-	run := e.newFlowRun(t, spec, shadow)
+	qk := queuedFlowKey(t)
+	e.queuedMu.Lock()
+	if e.queued == nil {
+		e.queued = map[string]core.Trigger{}
+	}
+	e.queued[qk] = t
+	e.queuedMu.Unlock()
+	if e.sem != nil && e.sem.full() {
+		e.log("%s waiting for an agent slot (all %d busy)", tag(t), e.cfg.AgentCap())
+	}
 	go func() {
-		defer e.recoverDispatch(ctx, t, run, "flow dispatch")
-		if !shadow {
-			defer e.release()
+		ok := e.acquireFor(ctx, t.Kind)
+		// The newest trigger that coalesced into this wait is the one that runs.
+		e.queuedMu.Lock()
+		if nt, found := e.queued[qk]; found {
+			t = nt
+			delete(e.queued, qk)
 		}
-		e.flow.Run(ctx, run, t, spec, tidx, batch, shadow)
+		e.queuedMu.Unlock()
+		if !ok {
+			return // shutdown while waiting — the sweep re-derives on restart
+		}
+		defer e.release()
+		run := e.newFlowRun(t, spec, false)
+		defer e.recoverDispatch(ctx, t, run, "flow dispatch")
+		e.flow.Run(ctx, run, t, spec, tidx, batch, false)
 	}()
+}
+
+// queuedFlowKey identifies a flow run waiting for a slot: the flow + target.
+func queuedFlowKey(t core.Trigger) string {
+	act, _ := t.Action.(config.Action)
+	return act.FlowRef + "\x00" + t.Key()
+}
+
+// coalesceQueued folds t into an identical flow+target run already waiting for
+// a slot, keeping the newest event, and reports whether it did. Without it a
+// sweep re-emitting a still-pending review_requested every pass would stack a
+// duplicate run per pass behind the cap — and record an attempt for each, so a
+// review could park before it ever ran.
+func (e *Engine) coalesceQueued(t core.Trigger) bool {
+	qk := queuedFlowKey(t)
+	e.queuedMu.Lock()
+	defer e.queuedMu.Unlock()
+	if _, ok := e.queued[qk]; !ok {
+		return false
+	}
+	e.queued[qk] = t
+	return true
 }
 
 // runBatch fires a grouped batch: the last event is the representative
@@ -292,12 +353,14 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 	e.log("%s resuming flow from step %d", tag(t), r.StepIndex)
 	e.store.Audit(map[string]any{"event": "resume", "repo": t.Target.Repo,
 		"number": t.Target.Number, "kind": t.Kind, "step_index": r.StepIndex})
-	if !e.acquire(ctx) {
-		return
-	}
 	go func() {
-		defer e.recoverDispatch(ctx, t, r, "flow resume")
+		// Wait for the slot here, not on the caller: resume runs at startup,
+		// and more persisted runs than slots must not stall it.
+		if !e.acquireFor(ctx, t.Kind) {
+			return
+		}
 		defer e.release()
+		defer e.recoverDispatch(ctx, t, r, "flow resume")
 		e.flow.Run(ctx, r, t, spec, tidx, nil, false)
 	}()
 }

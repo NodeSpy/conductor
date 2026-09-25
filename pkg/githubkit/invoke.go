@@ -67,6 +67,12 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 			return nil, fmt.Errorf("github.%s: options.pr is required", verb)
 		}
 		rs := reviewerLogins(opts["reviewers"])
+		if verb == "rerequest_review" {
+			// A re-request pings back whoever reviewed — typically "{{.author}}"
+			// — and review bots (Cursor Bugbot, …) can't be requested: GitHub
+			// 422s the WHOLE request, so one bot would also drop the humans.
+			rs = dropBots(rs)
+		}
 		if verb != "remove_reviewer" && len(rs) > 0 {
 			rs = dropPRAuthor(ctx, c, tok, base, repo, number, rs)
 		}
@@ -95,6 +101,13 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 			err = c.del(ctx, tok, u, body)
 		} else {
 			err = c.post(ctx, tok, u, body, nil)
+		}
+		if err != nil && verb == "rerequest_review" && notCollaborator(err) {
+			// The reviewer can't be re-requested (left the org, an outside
+			// reviewer, a bot we couldn't recognise by login). The ping is a
+			// courtesy after the real work (the fix) already landed: skip it
+			// rather than fail the flow. An explicit request_review still errors.
+			return map[string]any{"ok": true, "skipped": "reviewer is not a collaborator"}, nil
 		}
 		if err != nil {
 			return nil, err
@@ -1084,6 +1097,24 @@ func dropPRAuthor(ctx context.Context, c *Client, tok, base, repo string, number
 		}
 	}
 	return kept
+}
+
+// dropBots removes bot accounts ("…[bot]" logins) from a reviewer list.
+func dropBots(rs []string) []string {
+	kept := rs[:0:0]
+	for _, r := range rs {
+		if !strings.HasSuffix(strings.ToLower(r), "[bot]") {
+			kept = append(kept, r)
+		}
+	}
+	return kept
+}
+
+// notCollaborator reports GitHub's 422 for a review request naming someone who
+// can't review the repo ("Reviews may only be requested from collaborators").
+func notCollaborator(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "HTTP 422") && strings.Contains(msg, "only be requested from collaborators")
 }
 
 func reviewerLogins(v any) []string {

@@ -1226,3 +1226,62 @@ func TestGithubVerbRerequestReviewDropsPRAuthor(t *testing.T) {
 		t.Fatalf("want only alice requested, got %v", posted)
 	}
 }
+
+// A re-request can't name a review bot or a non-collaborator: GitHub 422s the
+// whole request ("Reviews may only be requested from collaborators"), failing
+// the flow after the fix already landed. rerequest_review drops [bot] logins
+// and skips on that 422; an explicit request_review still surfaces it.
+func TestGithubVerbRerequestReviewSkipsNonCollaborators(t *testing.T) {
+	var posted []map[string]any
+	reject := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/org/repo/pulls/7" {
+			fmt.Fprint(w, `{"user":{"login":"AHaymond"}}`)
+			return
+		}
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		posted = append(posted, b)
+		if reject {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			fmt.Fprint(w, `{"message":"Reviews may only be requested from collaborators. One or more of the users or teams you specified is not a collaborator of the org/repo repository."}`)
+			return
+		}
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ctx := context.Background()
+
+	// Bot alongside a human: only the human is requested.
+	if _, err := impl.Invoke(ctx, "rerequest_review", map[string]any{
+		"repo": "org/repo", "pr": 7, "reviewers": []any{"cursor[bot]", "alice"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rs, _ := posted[0]["reviewers"].([]any); len(posted) != 1 || len(rs) != 1 || rs[0] != "alice" {
+		t.Fatalf("want only alice requested, got %v", posted)
+	}
+	// Bot only: nobody to ping, no POST.
+	out, err := impl.Invoke(ctx, "rerequest_review", map[string]any{
+		"repo": "org/repo", "pr": 7, "reviewers": []any{"cursor[bot]"},
+	})
+	if err != nil || out["skipped"] == nil || len(posted) != 1 {
+		t.Fatalf("bot-only reviewers must skip without a POST: out=%v err=%v posts=%d", out, err, len(posted))
+	}
+	// A non-collaborator GitHub rejects: the re-request skips, not fails.
+	reject = true
+	out, err = impl.Invoke(ctx, "rerequest_review", map[string]any{
+		"repo": "org/repo", "pr": 7, "reviewers": []any{"gone-user"},
+	})
+	if err != nil || out["skipped"] == nil {
+		t.Fatalf("non-collaborator re-request must skip: out=%v err=%v", out, err)
+	}
+	// An explicit request_review still reports the rejection.
+	if _, err := impl.Invoke(ctx, "request_review", map[string]any{
+		"repo": "org/repo", "pr": 7, "reviewers": []any{"gone-user"},
+	}); err == nil {
+		t.Fatal("request_review must surface the 422")
+	}
+}

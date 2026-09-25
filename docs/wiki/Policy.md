@@ -35,7 +35,7 @@ triggers:
 | key | meaning | scopes |
 |---|---|---|
 | `quiet_hours` | a defer (`hold: true`, default — re-queued when the window ends) or drop (`hold: false`) window; `from`/`to` are local clock times in `tz`, windows may span midnight; overrides merge field-wise so a trigger can set just `hold: false` | any |
-| `concurrency.max_agents` | the global cap on concurrently running agents (per-target serialization is [[Grouping]], not this) | global |
+| `concurrency.max_agents` | the global cap on concurrently running agents (per-target serialization is [[Grouping]], not this). A run waiting for a slot waits on its own — it never stalls other events — and a `review_requested` run takes the next free slot ahead of queued fixers; a repeat event for a run already waiting folds into it | global |
 | `concurrency.max_agents_per_hour` | rolling-hour dispatch cap (runaway guard) | global |
 | `ignore.users` | authors whose activity never triggers work | connector (global default) |
 | `rate_limits.per_minute` | that connector's outbound verb cap | connector |

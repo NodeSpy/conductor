@@ -307,6 +307,13 @@ func (c *restClient) unresolvedThreads(ctx context.Context, instID int64, owner,
 		if cs := t.Comments.Nodes; len(cs) > 0 && cs[0].Author != nil {
 			ut.Author = cs[0].Author.Login
 			ut.AuthorIsBot = isBotActor(cs[0].Author.Typename, cs[0].Author.Login)
+			// GraphQL names a Bot actor by its bare slug ("cursor"); REST and
+			// webhooks say "cursor[bot]". Use the latter so sweep facts match
+			// the webhook's (filters, self, and the bare slug is a different —
+			// human — account to the REST API).
+			if ut.AuthorIsBot && !isBotLogin(ut.Author) {
+				ut.Author += "[bot]"
+			}
 		}
 		out = append(out, ut)
 	}

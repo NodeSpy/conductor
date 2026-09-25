@@ -131,11 +131,13 @@ type Engine struct {
 	affinity    *controller.Affinity    // keyed live sessions (session:); nil = every dispatch fresh
 	pausePath   string                  // control file; present = paused (toggled by pause/resume, no restart)
 	ch          chan core.Trigger
-	secrets     *secrets.Resolver // redacts argv/errors/output tails on audit + log surfaces
-	sem         chan struct{}     // concurrent-agent cap; nil = unlimited
-	groupWarn   sync.Map          // FlowRefs whose group key already failed once (log once, not per event)
-	runWait     sync.Map          // "key|run id" → last in-progress status logged (a fail-fast matrix emits dozens of failing_checks per run)
-	baseCtx     context.Context   // the Run loop's ctx; ties ctx-less entry points (batch flush) to shutdown
+	secrets     *secrets.Resolver       // redacts argv/errors/output tails on audit + log surfaces
+	sem         *slots                  // concurrent-agent cap; nil = unlimited
+	groupWarn   sync.Map                // FlowRefs whose group key already failed once (log once, not per event)
+	runWait     sync.Map                // "key|run id" → last in-progress status logged (a fail-fast matrix emits dozens of failing_checks per run)
+	queuedMu    sync.Mutex              // guards queued
+	queued      map[string]core.Trigger // flow runs waiting for a slot, by queuedFlowKey → newest trigger
+	baseCtx     context.Context         // the Run loop's ctx; ties ctx-less entry points (batch flush) to shutdown
 
 	// flow runs connectors-model triggers (actions carrying a FlowRef);
 	// grouper batches their grouped events. nil when the config has no
@@ -305,7 +307,7 @@ func New(o Options) *Engine {
 		meter:     cost.NewMeter(),
 	}
 	if cap := o.Config.AgentCap(); cap > 0 {
-		e.sem = make(chan struct{}, cap)
+		e.sem = newSlots(cap)
 	}
 	e.rerun = o.Rerun
 	if e.rerun == nil {
@@ -1349,12 +1351,14 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 		e.log("%s resuming workflow from step %d", tag(t), r.StepIndex)
 		e.store.Audit(map[string]any{"event": "resume", "repo": t.Target.Repo,
 			"number": t.Target.Number, "kind": t.Kind, "step_index": r.StepIndex})
-		if !e.acquire(ctx) {
-			return
-		}
 		go func() {
-			defer e.recoverDispatch(ctx, t, run, "workflow resume")
+			// Wait for the slot here so resuming more runs than slots doesn't
+			// stall startup.
+			if !e.acquireFor(ctx, t.Kind) {
+				return
+			}
 			defer e.release()
+			defer e.recoverDispatch(ctx, t, run, "workflow resume")
 			e.runSteps(ctx, run, t, act, appTok, userTok, false)
 		}()
 	}
@@ -1485,24 +1489,25 @@ func (e *Engine) controllerFor(profile config.Step) (controller.Controller, erro
 	return e.controllers.Resolve(profile.Runtime)
 }
 
-// acquire takes a concurrency slot, blocking until one is free (backpressure).
-// Returns false if the context is cancelled first. No-op (true) when uncapped.
+// acquire takes a concurrency slot at normal priority, blocking until one is
+// free (backpressure). Returns false if the context is cancelled first. No-op
+// (true) when uncapped.
 func (e *Engine) acquire(ctx context.Context) bool {
+	return e.acquireFor(ctx, "")
+}
+
+// acquireFor is acquire at the trigger kind's slot priority (slotPriority).
+func (e *Engine) acquireFor(ctx context.Context, kind string) bool {
 	if e.sem == nil {
 		return true
 	}
-	select {
-	case e.sem <- struct{}{}:
-		return true
-	case <-ctx.Done():
-		return false
-	}
+	return e.sem.acquire(ctx, slotPriority(kind))
 }
 
 // release returns a concurrency slot.
 func (e *Engine) release() {
 	if e.sem != nil {
-		<-e.sem
+		e.sem.release()
 	}
 }
 
