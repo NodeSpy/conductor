@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
@@ -217,5 +218,42 @@ func TestUncorroboratedRevertClaimIsInert(t *testing.T) {
 	}
 	if len(st.PeekEngagements(store.TargetKey("o/r", 5))) != 1 {
 		t.Fatal("uncorroborated claim must not consume engagements")
+	}
+}
+
+// Real evidence: one red head on EdnitionCode/RosterStream#5048 logged 14
+// ci_failed rows — every engagement the PR ever had, the same fixer step six
+// times over, including work from before CI last failed. A red head is charged
+// to the steps engaged since the previous failure, each step once.
+func TestCIFailedEngagementsSincePreviousFailure(t *testing.T) {
+	t0 := time.Date(2026, 9, 25, 13, 0, 0, 0, time.UTC)
+	at := func(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
+	gs := []store.Engagement{
+		{Key: "on_merge_conflict/0", At: at(1)},
+		{Key: "on_changes_requested/address", At: at(2)},
+		{Key: "on_changes_requested/address", At: at(6), Run: "newest"},
+		{Key: "on_failing_checks/0", At: at(7)},
+		{Key: "on_changes_requested/address", At: at(8), Run: "latest"},
+	}
+	keys := func(gs []store.Engagement) (out []string) {
+		for _, g := range gs {
+			out = append(out, g.Key+"@"+g.Run)
+		}
+		return out
+	}
+
+	// Never failed before: every step, once, at its newest engagement.
+	if got := strings.Join(keys(ciFailedEngagements(gs, time.Time{})), " "); got !=
+		"on_merge_conflict/0@ on_failing_checks/0@ on_changes_requested/address@latest" {
+		t.Fatalf("first failure: %s", got)
+	}
+	// CI last failed at minute 5: only the work since then.
+	if got := strings.Join(keys(ciFailedEngagements(gs, at(5))), " "); got !=
+		"on_failing_checks/0@ on_changes_requested/address@latest" {
+		t.Fatalf("since previous failure: %s", got)
+	}
+	// Nothing engaged since (a human's push went red): nobody is charged.
+	if got := ciFailedEngagements(gs, at(9)); len(got) != 0 {
+		t.Fatalf("no work since the last failure must charge no step: %v", keys(got))
 	}
 }

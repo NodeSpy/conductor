@@ -150,6 +150,15 @@ func (s *Store) pruneEngagementsLocked() {
 	}
 }
 
+// LastCIFailureAt is when the target's previous `ci_failed` was recorded (zero
+// if none is held). Work engaged after it is what the next red head is
+// attributed to — the steps that ran since CI was last seen failing.
+func (s *Store) LastCIFailureAt(key string) time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ciFailed[key].At
+}
+
 // MarkCIFailure records a CI failure of (repo, number) at head, reporting whether
 // this is the FIRST failing_checks seen for that head. The caller records a
 // `ci_failed` outcome only when it returns true, so a fail-fast matrix (one job

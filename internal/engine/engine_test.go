@@ -1039,10 +1039,25 @@ func TestFlakyRerunWaitsForRunToFinish(t *testing.T) {
 	tr := agentTrigger("failing_checks", "a/w", 8, "h", "fail@h", act)
 	tr.Context["run_id"] = int64(555)
 
+	var waits int
+	e.log = func(f string, _ ...any) {
+		if strings.Contains(f, "waiting for it to finish") {
+			waits++
+		}
+	}
+
 	e.process(context.Background(), tr)
 	e.process(context.Background(), tr) // a second cancelled leg
 	if reran != 0 || len(d.reqs) != 0 {
 		t.Fatalf("in-progress run: want no rerun/dispatch, got reran=%d dispatched=%d", reran, len(d.reqs))
+	}
+	if waits != 1 {
+		t.Fatalf("the wait is logged once per run and status, not per event: got %d", waits)
+	}
+	status = "queued" // a status change is news
+	e.process(context.Background(), tr)
+	if waits != 2 {
+		t.Fatalf("a new status should log again: got %d", waits)
 	}
 	status = "completed"
 	e.process(context.Background(), tr)
