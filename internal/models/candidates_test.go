@@ -63,11 +63,31 @@ func TestCandidatesRankNativeFirst(t *testing.T) {
 }
 
 // The central guarantee: an AGENT step never resolves to a decision runtime,
-// even when its fleet names that runtime's models first.
+// even when its fleet names that runtime's models first AND the decision
+// runtime would win every tie (no default: runtime, and "jev" sorts first).
 func TestAgentResolutionNeverPicksADecisionRuntime(t *testing.T) {
-	r := decisionBox(t, map[string]config.FleetSpec{
-		"light": config.FleetOf(false, "jev-*", "claude-sonnet-*"),
+	withFakeCLI(t, map[string][]string{
+		"paseo": {"claude-sonnet-5"},
+		"jev":   {"jev-1"},
 	})
+	r := NewResolver(testCfg(t, map[string]config.RuntimeConfig{"paseo": {}, "jev": {}},
+		map[string]config.FleetSpec{
+			"light":    config.FleetOf(false, "jev-*", "claude-sonnet-*"),
+			"jev_only": config.FleetOf(false, "jev-*"),
+		}), nil)
+	r.DecisionOnly = func(name string) bool { return name == "jev" }
+	r.NativeProtocols = func(name string) []string {
+		if name == "jev" {
+			return []string{v1}
+		}
+		return nil
+	}
+	if d, _ := r.Resolve(context.Background(), config.ModelSpecOf("jev_only"), ""); d.Runtime == "jev" || strings.HasPrefix(d.Model, "jev") {
+		t.Fatalf("a fleet naming only decision models must not land an agent on the decision runtime: %+v", d)
+	}
+	if d, _ := r.Resolve(context.Background(), config.ModelSpec{}, ""); d.Runtime == "jev" {
+		t.Fatalf("a step with no model must not default onto the decision runtime: %+v", d)
+	}
 	d, err := r.Resolve(context.Background(), config.ModelSpecOf("light"), "")
 	if err != nil {
 		t.Fatal(err)

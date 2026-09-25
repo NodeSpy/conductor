@@ -297,6 +297,32 @@ func TestDecideEscalateToTier(t *testing.T) {
 	}
 }
 
+// A pair that already answered is never asked again — even when
+// escalate.to's tier lists it too.
+func TestDecideEscalationNeverReasksAPair(t *testing.T) {
+	rig := newDecideRig(t, []models.Candidate{{Runtime: "jev", Model: "jev-1", Native: true}})
+	rig.Runner.Agents.DecideCandidates = func(ctx context.Context, spec config.ModelSpec, hint, protocol string) ([]models.Candidate, error) {
+		if spec.Ref == "heavy" {
+			return []models.Candidate{{Runtime: "jev", Model: "jev-1", Native: true}, {Runtime: "paseo", Model: "claude-opus-5"}}, nil
+		}
+		return []models.Candidate{{Runtime: "jev", Model: "jev-1", Native: true}}, nil
+	}
+	rig.native["jev"] = func(systemone.Request) (decider.Answer, error) {
+		return decider.Answer{Answers: noulAnswer(0.6), Model: "jev-1"}, nil
+	}
+	rig.agentReplies(t, map[string]string{"claude-opus-5": `{"answers":{"refuted":0.95}}`})
+	out, err := rig.run(t, decideStep(t, escalatingStep+"    to: heavy\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(rig.asked, ","); got != "jev/jev-1,paseo/claude-opus-5" {
+		t.Fatalf("the answering pair must be skipped on escalation: asked %s", got)
+	}
+	if out["_by"] != "paseo/claude-opus-5" {
+		t.Fatalf("_by = %v", out["_by"])
+	}
+}
+
 // max bounds the chain; each hop nests the one before it.
 func TestDecideEscalationChainIsBounded(t *testing.T) {
 	rig := newDecideRig(t, []models.Candidate{

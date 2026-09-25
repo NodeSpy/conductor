@@ -100,10 +100,15 @@ func TestRealDecisionRuntimeProcessSurvivesCalls(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "calls.log")
 	rt, _ := realRuntime(t, map[string]any{"calls_log": logPath})
 	for i := 0; i < 6; i++ {
-		if _, err := rt.Decide(context.Background(), systemone.ProtocolV1,
-			systemone.Request{State: "s", Questions: questions(t)}); err != nil {
+		// Every caller's context ends when its step does — exactly what a
+		// flow run hands in. The process must outlive it.
+		ctx, cancel := context.WithCancel(context.Background())
+		_, err := rt.Decide(ctx, systemone.ProtocolV1, systemone.Request{State: "s", Questions: questions(t)})
+		cancel()
+		if err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
+		time.Sleep(50 * time.Millisecond) // let a wrongly-bound process die before the next call
 	}
 	raw, err := os.ReadFile(logPath)
 	if err != nil {
