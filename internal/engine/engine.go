@@ -98,6 +98,7 @@ type Store interface {
 	TakeEngagements(key string) []store.Engagement
 	PeekEngagements(key string) []store.Engagement
 	MarkCIFailure(key, head string) bool
+	LastCIFailureAt(key string) time.Time
 	BumpOutcome(key, outcome string)
 	OutcomeStats(key string) map[string]int
 }
@@ -132,6 +133,7 @@ type Engine struct {
 	secrets     *secrets.Resolver // redacts argv/errors/output tails on audit + log surfaces
 	sem         chan struct{}     // concurrent-agent cap; nil = unlimited
 	groupWarn   sync.Map          // FlowRefs whose group key already failed once (log once, not per event)
+	runWait     sync.Map          // "key|run id" → last in-progress status logged (a fail-fast matrix emits dozens of failing_checks per run)
 	baseCtx     context.Context   // the Run loop's ctx; ties ctx-less entry points (batch flush) to shutdown
 
 	// flow runs connectors-model triggers (actions carrying a FlowRef);
@@ -831,10 +833,16 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		// the run is still finishing — GitHub refuses to rerun a run in progress, and
 		// the same holds for a stale failure event arriving after we've already kicked
 		// off the rerun. Either way: wait; the run's completion re-triggers us.
+		waitKey := fmt.Sprintf("%s|%d", key, runID)
 		if status, err := e.runStatus(ctx, t, runID); err == nil && status != "completed" {
-			e.log("%s run %d still %s — waiting for it to finish", tag(t), runID, status)
+			// Every cancelled sibling job lands here as its own event; say it
+			// once per run and status, not once per event.
+			if prev, _ := e.runWait.Swap(waitKey, status); prev != status {
+				e.log("%s run %d still %s — waiting for it to finish", tag(t), runID, status)
+			}
 			return
 		}
+		e.runWait.Delete(waitKey)
 		maxRerun := act.FlakyRerun.Max
 		if maxRerun <= 0 {
 			maxRerun = 1
