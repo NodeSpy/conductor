@@ -92,6 +92,7 @@ packs:
       handoff:  { workspace: local }           # OVERRIDE the bundled step (deep-merge)
     models:
       reviewer: claude-opus-5                  # OVERRIDE a bundled fleet
+    decide: { observe: review_log, escalate: false }  # the pack's decide: steps — see Decide-Steps
     on:
       github.pull_request: { filter: { not_label_any: [wip] } }  # add a filter to a trigger, by name
     triggers:

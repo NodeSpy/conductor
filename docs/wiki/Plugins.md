@@ -39,8 +39,8 @@ x-templates:
 That is the whole surface. There is no `plugins:` block, no `source:`, no
 `kind:`, and no `type:` — `use:` replaced all four.
 
-**Two kinds of runtime plugin, auto-detected.** A `runtimes:` plugin is driven
-one of two ways, chosen from what it declares at describe time (not from config):
+**Three kinds of runtime plugin, auto-detected.** A `runtimes:` plugin is driven
+one of three ways, chosen from what it declares at describe time (not from config):
 
 - a **dispatch (paseo-style) runtime** declares the agent-lifecycle verbs
   (`run`, `list_agents`, `create_worktree`, `send`, `wait`, …) — conductor drives
@@ -49,6 +49,10 @@ one of two ways, chosen from what it declares at describe time (not from config)
   coexists with the builtin `use: paseo` (they don't interfere).
 - an **ACP runtime** declares no such verbs — conductor speaks ACP to a fresh,
   re-verified subprocess per session (wrap a coding-agent CLI as a runtime).
+- a **decision runtime** declares decision `protocols` (`system_one/v1`) and
+  serves the `decide` and `models` verbs — it answers [decide steps](Decide-Steps)
+  and never runs an agent. Its credentials come from the runtime's `connection:`
+  block.
 
 You don't choose; the declared verbs decide. One current limit: a dispatch-style
 runtime plugin can't yet take a `host:` (it runs as a local subprocess of the
@@ -368,6 +372,19 @@ See `test/plugins/acme-echo/` for a reference connector plugin, and
 **Runtime plugin:** an ACP-speaking subprocess. conductor verifies it, then
 drives it through the existing ACP controller — session create/resume, streamed
 status/output, cancel/cleanup.
+
+**Decision runtime plugin:** a runtime whose `Decl` sets `protocols:
+["system_one/v1"]` and declares two verbs, both over `plugin.invoke`:
+
+- `decide {protocol, model, state, questions} → {answers, model, usage}` — the
+  `system_one/v1` request body plus the protocol name. `answers` is the v1
+  answers object; conductor validates every answer against the questions before
+  anything reads it. `model` is the model that answered (it may resolve an alias).
+- `models → {models: [{id, name, released}]}` — the roster fleets resolve
+  against.
+
+The `connection` map is the runtime's resolved `connection:` block. See
+`test/plugins/acme-decider/` for a reference decision runtime.
 
 **Engine plugin:**
 
