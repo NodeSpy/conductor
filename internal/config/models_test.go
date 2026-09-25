@@ -455,6 +455,31 @@ func TestExpandModelPatternsEmptyRoster(t *testing.T) {
 	}
 }
 
+// A context-variant literal ("claude-opus-5-5[1m]") is available when its base
+// model is in the roster, and is emitted as written so the variant reaches
+// --model; one whose base is absent still contributes nothing.
+func TestExpandModelPatternsContextVariant(t *testing.T) {
+	roster := []string{"claude-opus-5-5", "claude-sonnet-5"}
+	got := ExpandModelPatterns([]string{"claude-opus-5-5[1m]", "claude-haiku-9[1m]", "claude-sonnet-5"}, roster)
+	if want := []string{"claude-opus-5-5[1m]", "claude-sonnet-5"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("expanded = %v, want %v", got, want)
+	}
+	// "[" is not a glob metacharacter: the variant is a literal, not a class.
+	if IsModelPattern("claude-opus-5-5[1m]") {
+		t.Fatal("a [1m] id must be a literal, not a pattern")
+	}
+	for in, want := range map[string]string{
+		"claude-opus-5-5[1m]": "claude-opus-5-5",
+		"claude-opus-5-5":     "claude-opus-5-5",
+		"[1m]":                "[1m]",
+		"weird]":              "weird]",
+	} {
+		if got := ModelBaseID(in); got != want {
+			t.Errorf("ModelBaseID(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestFilterRoster(t *testing.T) {
 	roster := []string{"claude-opus-5", "gpt-5.6-sol", "gemini-3.0-pro"}
 	if got := FilterRoster(roster, nil); !reflect.DeepEqual(got, roster) {

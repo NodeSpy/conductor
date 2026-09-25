@@ -247,6 +247,76 @@ func TestParseClaudeResult(t *testing.T) {
 	}
 }
 
+func TestParseClaudeError(t *testing.T) {
+	cases := []struct {
+		in      string
+		wantErr bool
+	}{
+		{`{"type":"result","subtype":"success","is_error":false,"result":"done"}`, false},
+		{`{"type":"result","subtype":"success","is_error":true,"result":"Autocompact is thrashing: the context refilled"}`, true},
+		{`{"type":"result","subtype":"error_max_turns","is_error":false}`, true},
+		{"not json at all", false},
+		{`{"result":"no flags"}`, false},
+	}
+	for _, c := range cases {
+		err := parseClaudeError(c.in)
+		if (err != nil) != c.wantErr {
+			t.Errorf("parseClaudeError(%q) = %v, wantErr %v", c.in, err, c.wantErr)
+		}
+	}
+	err := parseClaudeError(`{"is_error":true,"result":"Autocompact is thrashing"}`)
+	if err == nil || !strings.Contains(err.Error(), "Autocompact is thrashing") {
+		t.Fatalf("error should carry the agent's message, got %v", err)
+	}
+	long := `{"is_error":true,"result":"` + strings.Repeat("x", 2*maxTurnErrText) + `"}`
+	if err := parseClaudeError(long); err == nil || len(err.Error()) > maxTurnErrText+64 {
+		t.Fatalf("long error text should be clipped, got %d chars", len(err.Error()))
+	}
+}
+
+// A foreground claude turn that ended in an error (is_error envelope) fails the
+// dispatch instead of handing the error text on as the step's reply — the flow
+// must not run its next step or record the run ok.
+func TestControllerRunnerFailsErroredTurn(t *testing.T) {
+	l := &fakeLauncher{out: func([]string) (string, error) {
+		return `{"type":"result","subtype":"success","is_error":true,"result":"Autocompact is thrashing: the context refilled to the limit"}`, nil
+	}}
+	c := newCLIController("cc", config.ControllerConfig{Transport: "cli", Tool: "claude-code"}, nil)
+	c.launch = l.launch
+	r := newControllerRunner(c, nil, nil)
+
+	req := makeReq("fix", "address the review")
+	req.Wait = true
+
+	ref, err := r.Dispatch(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "Autocompact is thrashing") {
+		t.Fatalf("Dispatch should fail with the turn error, got err=%v", err)
+	}
+	if !strings.Contains(ref.Output, "Autocompact") {
+		t.Fatalf("the reply should still be recorded for the run history, got %q", ref.Output)
+	}
+}
+
+// A clean turn is unaffected: no error, reply captured as before.
+func TestControllerRunnerCleanTurnSucceeds(t *testing.T) {
+	l := &fakeLauncher{out: func([]string) (string, error) {
+		return `{"type":"result","subtype":"success","is_error":false,"result":"pushed the fix"}`, nil
+	}}
+	c := newCLIController("cc", config.ControllerConfig{Transport: "cli", Tool: "claude-code"}, nil)
+	c.launch = l.launch
+	r := newControllerRunner(c, nil, nil)
+
+	req := makeReq("fix", "address the review")
+	req.Wait = true
+	ref, err := r.Dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if ref.Output != "pushed the fix" {
+		t.Fatalf("Output = %q", ref.Output)
+	}
+}
+
 // A foreground claude-code turn's reply is captured via OutputCapturer, decoded
 // out of the --output-format json envelope to the bare result text.
 func TestCLISessionOutputCapturesResult(t *testing.T) {

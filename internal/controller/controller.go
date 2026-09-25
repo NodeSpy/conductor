@@ -252,6 +252,17 @@ type OutputCapturer interface {
 	Output() string
 }
 
+// TurnErrorer is an optional Session capability: after a FOREGROUND turn
+// completes (Wait has returned), TurnErr reports that the turn ended in an
+// error rather than a reply — e.g. `claude -p --output-format json` flagging
+// `is_error: true` when the run died on an API error or context exhaustion.
+// The controllerRunner fails the step on it, so the flow stops there instead
+// of taking the error text as the agent's answer and running its next step.
+// A session that can't tell omits it (every completed turn counts as a reply).
+type TurnErrorer interface {
+	TurnErr() error
+}
+
 // CaptureSender is an optional Sender upgrade: deliver a follow-up AND wait
 // for the turn, returning its output. paseo implements it via
 // `paseo send --json`; sessions on senders without it emit follow-up turns

@@ -290,6 +290,10 @@ type cliRecipe struct {
 	// answer (a plain oneshot). Used for foreground output capture so a
 	// controller step's RunRef.Output is the reply, not the transport envelope.
 	answer func(raw string) string
+	// failed reports a turn whose raw stdout says it ended in an error rather
+	// than a reply (TurnErrorer). nil → the tool has no machine-readable error
+	// signal, and every completed turn is treated as a reply.
+	failed func(raw string) error
 }
 
 // cliRecipeFor selects a recipe from the config. An explicit `command:` yields a
@@ -325,6 +329,7 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 			},
 			parseID: parseClaudeSessionID,
 			answer:  parseClaudeResult,
+			failed:  parseClaudeError,
 			model:   ModelResumable,
 		}
 	case "codex":
@@ -386,6 +391,38 @@ func parseClaudeResult(output string) string {
 		return r
 	}
 	return output
+}
+
+// maxTurnErrText caps the agent message carried in a turn error, so a long
+// error result doesn't flood the run record and logs.
+const maxTurnErrText = 300
+
+// parseClaudeError reports a `claude -p --output-format json` run that ended in
+// an error rather than a reply. The envelope flags it with `is_error: true` (the
+// final message was an API error — e.g. "Autocompact is thrashing" when the
+// context can't fit the work) or an `error_*` subtype (max turns, an execution
+// error). A clean envelope or non-JSON output is not an error here — the raw
+// text still reaches the flow as the reply, as before.
+func parseClaudeError(output string) error {
+	var env struct {
+		Subtype string `json:"subtype"`
+		IsError bool   `json:"is_error"`
+		Result  string `json:"result"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(output)), &env) != nil {
+		return nil
+	}
+	if !env.IsError && !strings.HasPrefix(env.Subtype, "error") {
+		return nil
+	}
+	msg := strings.TrimSpace(env.Result)
+	if msg == "" {
+		msg = firstNonEmpty(env.Subtype, "is_error")
+	}
+	if len(msg) > maxTurnErrText {
+		msg = msg[:maxTurnErrText] + "…"
+	}
+	return fmt.Errorf("agent turn ended in error: %s", msg)
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -513,6 +550,18 @@ func (s *cliSession) Output() string {
 		return s.c.recipe.answer(raw)
 	}
 	return raw
+}
+
+// TurnErr reports that the completed turn ended in an error (TurnErrorer),
+// judged by the recipe's failure signal. Call after Wait.
+func (s *cliSession) TurnErr() error {
+	s.mu.Lock()
+	raw := s.out
+	s.mu.Unlock()
+	if s.c != nil && s.c.recipe.failed != nil {
+		return s.c.recipe.failed(raw)
+	}
+	return nil
 }
 
 // Cancel kills the in-flight process.

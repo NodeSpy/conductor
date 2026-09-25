@@ -112,7 +112,9 @@ func TestSweepUnresolvedComments(t *testing.T) {
 	})
 	mux.HandleFunc("/graphql", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
-			{"id":"t1","isResolved":false},{"id":"t2","isResolved":true},{"id":"t3","isResolved":false}]}}}}}`)
+			{"id":"t1","isResolved":false,"comments":{"nodes":[{"author":{"login":"me","__typename":"User"}}]}},
+			{"id":"t2","isResolved":true,"comments":{"nodes":[{"author":{"login":"carol","__typename":"User"}}]}},
+			{"id":"t3","isResolved":false,"comments":{"nodes":[{"author":{"login":"dana","__typename":"User"}}]}}]}}}}}`)
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -143,6 +145,15 @@ func TestSweepUnresolvedComments(t *testing.T) {
 	// and stops once resolved.
 	if !strings.HasPrefix(got[0].Dedup, "threads:h9:2:") {
 		t.Fatalf("unexpected dedup signature: %q", got[0].Dedup)
+	}
+	// The reviewer to ping back is the opener of the first unresolved thread
+	// that isn't you (t1 is self-authored; t2 is resolved) — so a flow's
+	// "{{.author}}" resolves on a sweep-recovered event, as on the webhook one.
+	if a := got[0].Context["author"]; a != "dana" {
+		t.Fatalf("author = %v, want dana (first unresolved non-self thread)", a)
+	}
+	if b := got[0].Context["author_is_bot"]; b != false {
+		t.Fatalf("author_is_bot = %v, want false", b)
 	}
 }
 

@@ -458,13 +458,33 @@ func (g *Integration) sweepUnresolvedComments(ctx context.Context, instID int64,
 	if !ok || !act.IsEnabled() {
 		return nil
 	}
-	ids, err := g.rest.unresolvedThreadIDs(ctx, instID, owner, name, t.Number)
-	if err != nil || len(ids) == 0 {
+	threads, err := g.rest.unresolvedThreads(ctx, instID, owner, name, t.Number)
+	if err != nil || len(threads) == 0 {
 		return nil
+	}
+	ids := make([]string, 0, len(threads))
+	for _, th := range threads {
+		ids = append(ids, th.ID)
 	}
 	sig := "threads:" + t.HeadSHA + ":" + threadSig(ids)
 	return g.single(repo, "changes_requested", t,
-		fmt.Sprintf("sweep: %d unresolved comment thread(s) on %s#%d", len(ids), repo, t.Number), sig, nil)
+		fmt.Sprintf("sweep: %d unresolved comment thread(s) on %s#%d", len(ids), repo, t.Number), sig,
+		g.threadReviewerFacts(threads))
+}
+
+// threadReviewerFacts names the reviewer behind a sweep-recovered
+// changes_requested — the opener of the first unresolved thread that isn't
+// you — as the same `author`/`author_is_bot` facts the webhook path carries,
+// so a flow's "{{.author}}" (the re-request step) pings a real reviewer. nil
+// when no thread names one (only self-authored threads, or ghost authors).
+func (g *Integration) threadReviewerFacts(threads []unresolvedThread) map[string]any {
+	for _, th := range threads {
+		if th.Author == "" || g.self[strings.ToLower(th.Author)] {
+			continue
+		}
+		return map[string]any{"author": th.Author, "author_is_bot": th.AuthorIsBot}
+	}
+	return nil
 }
 
 // commentRecoveryWindow bounds the sweep's missed-comment recovery: a comment older
