@@ -255,7 +255,33 @@ type Decl struct {
 	// however its own connection fields say — so this is back-compatible: an old
 	// plugin never emits it and an old daemon never reads it.
 	Auth *AuthSpec `json:"auth,omitempty"`
+	// Protocols, on a runtime plugin, are the DECISION protocols it answers
+	// natively (e.g. ProtocolSystemOneV1). A runtime that declares protocols
+	// and does not speak the agent-launch verb set is a DECISION-ONLY
+	// runtime: conductor sends it decide: steps and never an agent step. It
+	// serves two verbs over the ordinary plugin.invoke:
+	//
+	//   - VerbDecide: options {protocol, model, state, questions} (the
+	//     protocol's request body plus its name); outputs {answers, model,
+	//     usage}. The daemon validates every answer against the questions
+	//     before anything downstream reads it.
+	//   - VerbModels: no options; outputs {models: [{id, name, released}]} —
+	//     the roster fleets resolve against.
+	//
+	// Zero value means "no decision protocols" (every runtime before this
+	// field existed), so it is back-compatible in both directions.
+	Protocols []string `json:"protocols,omitempty"`
 }
+
+// ProtocolSystemOneV1 is the system_one/v1 decision protocol — TypeSafe's
+// published System One contract, as conductor's decide: step speaks it.
+const ProtocolSystemOneV1 = "system_one/v1"
+
+// Decision-runtime verbs (see Decl.Protocols).
+const (
+	VerbDecide = "decide"
+	VerbModels = "models"
+)
 
 // AuthSpec is a connector's baked-in OAuth2 provider description (see Decl.Auth).
 // Endpoints and default scopes live here so the operator only supplies

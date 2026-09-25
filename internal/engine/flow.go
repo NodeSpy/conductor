@@ -16,6 +16,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/systemone"
 )
 
 // processFlow handles a trigger whose lowered action carries a FlowRef — the
@@ -336,6 +337,13 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 		Dispatch: func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error) {
 			runner := Dispatcher(e.disp)
 			if req.Action.Type == "agent" {
+				if e.deciders.DecisionOnly(req.Step.Runtime) {
+					// A decision runtime answers decide: steps only; resolution
+					// never picks one for an agent, so reaching here means the
+					// step PINNED it. Refuse loudly rather than launch nothing.
+					return dispatch.RunRef{}, dispatch.Unrecoverable(fmt.Errorf(
+						"runtime %q is a decision runtime — it answers decide: steps, not agent steps", req.Step.Runtime))
+				}
 				r, err := e.runnerFor(req.Step)
 				if err != nil {
 					// Unknown/unrunnable controller — the flow runner escalates
@@ -363,8 +371,12 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 		Guidance: func(identity string, p config.Step, pol config.Policy) string {
 			return e.agentGuidance(p, pol) + e.outcomeGuidance(identity, p)
 		},
-		Memory:       e.memoryPrompt,
-		ResolveModel: e.resolveModel,
+		Memory:           e.memoryPrompt,
+		ResolveModel:     e.resolveModel,
+		DecideCandidates: e.decideCandidates,
+		Decide: func(ctx context.Context, runtime, protocol string, req systemone.Request) (flow.DecideAnswer, error) {
+			return e.decide(ctx, runtime, protocol, req)
+		},
 		// Revise is the supervise loop's round-trip (#36 §11): the failure
 		// context goes to the authoring agent's bound session (§10) and the
 		// captured reply carries the revised plan. No affinity, no session:

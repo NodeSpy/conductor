@@ -13,6 +13,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/controller"
+	"github.com/NodeSpy/conductor/internal/decider"
 	"github.com/NodeSpy/conductor/internal/plugin"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/secrets"
@@ -263,13 +264,21 @@ func pluginRuntimeControllers(cfg *config.Config, skip map[string]bool) (map[str
 // plugins. A plugin runtime's ControllerConfig REPLACES the placeholder
 // MergedControllers derived from its runtimes: entry (which carries no builtin
 // type, because the implementation is the plugin binary).
-func mergedControllersWithPlugins(cfg *config.Config, backendRPC map[string]runtimePluginBackend) (map[string]config.ControllerConfig, error) {
+func mergedControllersWithPlugins(cfg *config.Config, backendRPC map[string]runtimePluginBackend, deciders decider.Set) (map[string]config.ControllerConfig, error) {
 	merged := cfg.MergedControllers()
+	// A decision runtime is not an agent controller at all — it answers
+	// decide: steps through the engine's Decide service. Drop the placeholder
+	// its runtimes: entry produced and keep it out of the ACP path, so
+	// nothing can select it to launch an agent.
+	skip := make(map[string]bool, len(backendRPC)+len(deciders))
+	for name := range deciders {
+		delete(merged, name)
+		skip[name] = true
+	}
 	// A Backend-RPC runtime plugin is driven as a `type: paseo` runtime whose
 	// dispatcher main wiring rebinds to the plugin's rpcBackend (reg.OverridePaseo).
 	// Give it a clean paseo slot here (carrying through its runtimes: placement)
 	// and skip it in the ACP path below so it isn't double-wired.
-	skip := make(map[string]bool, len(backendRPC))
 	for name := range backendRPC {
 		cc := config.ControllerConfig{Type: "paseo"}
 		if prev, ok := merged[name]; ok {

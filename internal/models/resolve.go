@@ -73,6 +73,16 @@ type Resolver struct {
 	// re-resolution instead of being picked again. nil = nothing excluded.
 	Excluded func(runtime, model string) bool
 
+	// NativeProtocols reports the decision protocols a runtime answers
+	// natively (a decision runtime's declared Protocols). nil, or an empty
+	// answer, means the runtime speaks none — every agent runtime.
+	NativeProtocols func(runtime string) []string
+	// DecisionOnly reports a runtime that serves ONLY decide: steps. Agent
+	// resolution never considers one, so an agent step can never land on a
+	// decision runtime — not even when its fleet lists that runtime's
+	// models. nil means no runtime is decision-only.
+	DecisionOnly func(runtime string) bool
+
 	// now is the clock, injectable so the failure TTL is testable without
 	// sleeping. nil means time.Now.
 	now func() time.Time
@@ -129,7 +139,7 @@ var ErrNoAcceptableModel = errors.New("no acceptable model")
 // single `runtimes:` entry (a step's own `runtime:`); empty considers every
 // configured runtime.
 func (r *Resolver) Resolve(ctx context.Context, spec config.ModelSpec, runtimeHint string) (Decision, error) {
-	rts := r.candidateRuntimes(runtimeHint)
+	rts := r.agentRuntimes(runtimeHint)
 
 	// No `model:` at all — the runtime's own default, then its best available
 	// prefer: entry, then bare launch (§3.2).
@@ -254,13 +264,27 @@ func (r *Resolver) deref(spec config.ModelSpec) (fleet string, resolved config.M
 //     (a YAML map has no declaration order to appeal to, so name order is the
 //     deterministic stand-in).
 func (r *Resolver) bestAcceptable(ctx context.Context, acceptable []string, rts []string) (model, runtime, provider string, ok bool) {
-	type cand struct {
-		model    string
-		fleetPos int
-		rank     int
-		runtime  string
-		provider string
+	ranked := r.rankAcceptable(ctx, acceptable, rts)
+	if len(ranked) == 0 {
+		return "", "", "", false
 	}
+	return ranked[0].model, ranked[0].runtime, ranked[0].provider, true
+}
+
+// rankedModel is one acceptable model with the runtime that should run it.
+type rankedModel struct {
+	model    string
+	fleetPos int
+	rank     int
+	runtime  string
+	provider string
+}
+
+// rankAcceptable is rung 2's full ordering: every acceptable model any
+// candidate runtime offers, best first, each on its best runtime. See
+// bestAcceptable for the ranking.
+func (r *Resolver) rankAcceptable(ctx context.Context, acceptable []string, rts []string) []rankedModel {
+	type cand = rankedModel
 	best := map[string]*cand{}
 	var order []string
 
@@ -292,9 +316,6 @@ func (r *Resolver) bestAcceptable(ctx context.Context, acceptable []string, rts 
 			}
 		}
 	}
-	if len(order) == 0 {
-		return "", "", "", false
-	}
 	sort.SliceStable(order, func(i, j int) bool {
 		a, b := best[order[i]], best[order[j]]
 		if a.rank != b.rank {
@@ -302,8 +323,11 @@ func (r *Resolver) bestAcceptable(ctx context.Context, acceptable []string, rts 
 		}
 		return a.fleetPos < b.fleetPos
 	})
-	w := best[order[0]]
-	return w.model, w.runtime, w.provider, true
+	out := make([]rankedModel, len(order))
+	for i, m := range order {
+		out[i] = *best[m]
+	}
+	return out
 }
 
 // providerOf looks up model's provider in an already-discovered roster,
@@ -390,6 +414,127 @@ func (r *Resolver) candidateRuntimes(hint string) []string {
 		return r.cfg.Runtimes[names[i]].Default && !r.cfg.Runtimes[names[j]].Default
 	})
 	return names
+}
+
+// agentRuntimes is candidateRuntimes without the decision-only runtimes —
+// the set an agent step (and the agent path of a decide step) may run on.
+func (r *Resolver) agentRuntimes(hint string) []string {
+	all := r.candidateRuntimes(hint)
+	if r.DecisionOnly == nil {
+		return all
+	}
+	out := all[:0:0]
+	for _, name := range all {
+		if !r.DecisionOnly(name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// nativeRuntimes is the candidate runtimes that answer protocol natively.
+func (r *Resolver) nativeRuntimes(hint, protocol string) []string {
+	if r.NativeProtocols == nil {
+		return nil
+	}
+	var out []string
+	for _, name := range r.candidateRuntimes(hint) {
+		for _, p := range r.NativeProtocols(name) {
+			if p == protocol {
+				out = append(out, name)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// Candidate is one (runtime, model) pair that can answer a decide: step.
+type Candidate struct {
+	// Model is the model id; empty is a bare launch on an agent runtime.
+	Model string
+	// Runtime is the runtimes: entry that runs it. Empty only for an agent
+	// candidate no roster confirmed (a pass-through pin, a bare launch with
+	// no runtime pick) — the step's default runtime then runs it.
+	Runtime  string
+	Provider string
+	// Native marks a runtime that answers the protocol itself. Otherwise the
+	// candidate is an agent runtime answering through conductor's adapter.
+	Native bool
+	Bare   bool
+}
+
+// Label is "<runtime>/<model>", the `_by` a decide step records.
+func (c Candidate) Label() string {
+	m := c.Model
+	if m == "" {
+		m = "default"
+	}
+	rt := c.Runtime
+	if rt == "" {
+		rt = "default"
+	}
+	return rt + "/" + m
+}
+
+// Candidates ranks every (runtime, model) pair that can answer a decide:
+// step speaking protocol, for the step's model: spec. Native runtimes come
+// first — they answer the protocol directly — then agent runtimes, each group
+// in rung-2 order (fleet order overlaid by prefer:). The agent group falls
+// back exactly as Resolve does (runtime default, exact-pin pass-through,
+// bare launch), so a decide step always has at least one candidate unless a
+// required: true fleet matched nothing anywhere.
+//
+// A native runtime is never offered for a step with no model: at all — it
+// is reached only when a fleet (or a pin) names its models, which is the
+// consumer's opt-in.
+func (r *Resolver) Candidates(ctx context.Context, spec config.ModelSpec, runtimeHint, protocol string) ([]Candidate, error) {
+	var native []Candidate
+	if spec.Set() {
+		fleetName, resolved := r.deref(spec)
+		acceptable := resolved.Acceptable()
+		if fleetName != "" {
+			if over, ok := r.Overrides[fleetName]; ok && strings.TrimSpace(over) != "" {
+				acceptable = []string{over}
+			}
+		}
+		for _, m := range r.rankAcceptable(ctx, acceptable, r.nativeRuntimes(runtimeHint, protocol)) {
+			native = append(native, Candidate{Model: m.model, Runtime: m.runtime, Provider: m.provider, Native: true})
+		}
+	}
+
+	var agent []Candidate
+	agentRts := r.agentRuntimes(runtimeHint)
+	if spec.Set() {
+		fleetName, resolved := r.deref(spec)
+		acceptable := resolved.Acceptable()
+		overridden := false
+		if fleetName != "" {
+			if over, ok := r.Overrides[fleetName]; ok && strings.TrimSpace(over) != "" {
+				acceptable, overridden = []string{over}, true
+			}
+		}
+		if !overridden {
+			for _, m := range r.rankAcceptable(ctx, acceptable, agentRts) {
+				agent = append(agent, Candidate{Model: m.model, Runtime: m.runtime, Provider: m.provider})
+			}
+		}
+	}
+	if len(agent) == 0 && len(agentRts) > 0 {
+		// Nothing ranked on an agent runtime: take the one decision Resolve
+		// would make (override, default, pass-through pin, bare launch).
+		d, err := r.Resolve(ctx, spec, runtimeHint)
+		switch {
+		case err != nil && len(native) == 0:
+			return nil, err
+		case err == nil:
+			// A fleet that only native runtimes satisfy resolves, on the
+			// agent side, to a bare launch — which is still a valid last
+			// resort, so it stays in the list after the native candidates.
+			agent = append(agent, Candidate{Model: d.Model, Runtime: d.Runtime, Provider: d.Provider, Bare: d.Bare})
+		}
+	}
+	return append(native, agent...), nil
 }
 
 // runtimeBeats reports whether runtime a should win a tie over b.

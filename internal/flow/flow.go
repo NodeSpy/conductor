@@ -24,8 +24,10 @@ import (
 	"github.com/NodeSpy/conductor/internal/gitdiff"
 	"github.com/NodeSpy/conductor/internal/hosts"
 	"github.com/NodeSpy/conductor/internal/memory"
+	"github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/systemone"
 
 	"gopkg.in/yaml.v3"
 )
@@ -78,6 +80,15 @@ type AgentServices struct {
 	// resolved model's provider (models.Decision.Provider) — "" for a bare
 	// launch or an unconfirmed pass-through pin.
 	ResolveModel func(ctx context.Context, s config.Step) (model, runtime, provider string)
+	// DecideCandidates ranks every (runtime, model) pair that can answer a
+	// decide: step speaking protocol for spec — native decision runtimes
+	// first, then agent runtimes (models.Resolver.Candidates). nil falls back
+	// to the step's single ResolveModel pick on its agent runtime.
+	DecideCandidates func(ctx context.Context, spec config.ModelSpec, runtimeHint, protocol string) ([]models.Candidate, error)
+	// Decide asks a native decision runtime (a runtime plugin declaring
+	// Protocols). The returned answers are already validated against the
+	// questions. nil means no decision runtime is wired.
+	Decide func(ctx context.Context, runtime, protocol string, req systemone.Request) (DecideAnswer, error)
 	// Revise delivers a supervise-loop follow-up to the authoring agent's
 	// live session (§10) and returns the captured reply. ok=false when the
 	// agent has no bound session (or the runtime can't capture follow-up
@@ -936,6 +947,8 @@ func (r *Runner) execStep(ctx context.Context, t core.Trigger, step config.Step,
 		return r.execCommand(ctx, t, step, id, data, shadow)
 	case "team":
 		return r.execTeam(ctx, t, step, id, data, shadow)
+	case "decide":
+		return r.execDecide(ctx, t, step, id, slot, data, shadow)
 	}
 	return nil, "", fmt.Errorf("step %q has no recognizable form", id)
 }

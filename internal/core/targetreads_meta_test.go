@@ -68,6 +68,14 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	},
 
 	// ---- Display, logs, audit rows, notifications.
+	"internal/flow/decide.go": {
+		{"execDecide", "the decide_escalated audit row records which target the escalation ran for — forged target included, which is what an operator reading the audit needs"},
+		{"auditDecide", "an audit row per decision attempt; it records, it authorizes nothing"},
+	},
+	"internal/flow/decide_observe.go": {
+		{"observeDecisions", "the audit row for a lost observe record; it records, it authorizes nothing"},
+		{"writeDecisions", "an observe-mode telemetry row for calibration; the repo/number are recorded, never keyed on or trusted"},
+	},
 	"internal/flow/dispatchaudit.go": {
 		{"auditDispatch", "an audit row records what was DISPATCHED, forged target included — " +
 			"that is the point of an audit, and `conductor report` reads these rows"},

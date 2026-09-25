@@ -559,14 +559,21 @@ func cmdRun(args []string) error {
 	// connectorless config still references a plugin runtime).
 	rtMgr, closeRtMgr := runtimePluginManager(stack, cfg, secrets.New(), st.Audit)
 	defer closeRtMgr()
-	runtimeBackends, err := loadRuntimePlugins(rtMgr, cfg, retry)
+	// A decision runtime's connection (its API key) resolves through the
+	// stack's resolver when there is one, so the value is tracked for
+	// redaction alongside every other secret.
+	rtSecrets := secrets.New()
+	if stack != nil && stack.Secrets != nil {
+		rtSecrets = stack.Secrets
+	}
+	runtimeBackends, deciders, err := loadRuntimePlugins(rtMgr, cfg, retry, rtSecrets)
 	if err != nil {
 		return err
 	}
 	// External runtime plugins (#54) are verified (fail-closed) and merged into
 	// the controller set as sandboxed ACP subprocesses, selectable via a
 	// profile's runtime:.
-	mergedControllers, err := mergedControllersWithPlugins(cfg, runtimeBackends)
+	mergedControllers, err := mergedControllersWithPlugins(cfg, runtimeBackends, deciders)
 	if err != nil {
 		return err
 	}
@@ -711,6 +718,9 @@ func cmdRun(args []string) error {
 		res.Excluded = unsup.Has
 		eng.SetModelResolver(res)
 		eng.SetModelFallback(unsup)
+		// After the resolver: it learns which runtimes are decision-only
+		// (never an agent step's) and which protocols each speaks natively.
+		eng.SetDeciders(deciders)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

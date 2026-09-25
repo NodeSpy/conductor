@@ -33,10 +33,13 @@ type refRewriter struct {
 	fleets map[string]bool
 	// env rebinds required environment names to consumer globals.
 	env envBindings
+	// decide is the instance's `decide:` block, lowered onto every decide
+	// step the pack ships (observe store, escalation kill-switch).
+	decide *PackDecide
 }
 
 func newRefRewriter(ns string, man *PackManifest, inst PackInstance, env envBindings) *refRewriter {
-	rw := &refRewriter{ns: ns, env: env, fleets: map[string]bool{}}
+	rw := &refRewriter{ns: ns, env: env, fleets: map[string]bool{}, decide: inst.Decide}
 	if man != nil {
 		for name := range man.Models {
 			rw.fleets[name] = true
@@ -375,6 +378,20 @@ func (rw *refRewriter) rewriteStep(s *Step) {
 	rw.rebindStore(s.Options)
 	if s.Gate != nil {
 		rw.rewriteGate(s.Gate)
+	}
+	if s.Decide != nil {
+		// escalate.to names a fleet exactly as model: does, so a pack's own
+		// fleet namespaces with it; a pack-local observe store rebinds to
+		// the consumer's store like any store selector. The instance's own
+		// decide settings apply after, so its observe (a GLOBAL name) is
+		// never rebound.
+		if e := s.Decide.Escalate; e != nil && e.To.Ref != "" && rw.fleets[e.To.Ref] {
+			e.To.Ref = rw.agentName(e.To.Ref)
+		}
+		if bound, ok := rw.env.store[s.Decide.Observe]; ok && s.Decide.Observe != "" {
+			s.Decide.Observe = bound
+		}
+		lowerPackDecide(rw.decide, s)
 	}
 	if s.Team != nil {
 		s.Team.Planner = rw.resolveStepRef(s.Team.Planner)

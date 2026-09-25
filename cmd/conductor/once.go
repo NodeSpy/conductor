@@ -446,7 +446,7 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 
 	// One-shot mode doesn't wire Backend-RPC runtime plugins (no long-lived
 	// dispatcher/reaper here); ACP runtime plugins still resolve as before.
-	mergedControllers, err := mergedControllersWithPlugins(cfg, nil)
+	mergedControllers, err := mergedControllersWithPlugins(cfg, nil, nil)
 	if err != nil {
 		return err
 	}

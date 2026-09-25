@@ -413,6 +413,10 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 				return fmt.Errorf("%s: workflow %q requires input %q", w, step.Workflow, name)
 			}
 		}
+	case "decide":
+		if err := validateDecideRefs(cfg, w, step, stepScope); err != nil {
+			return err
+		}
 	case "code":
 		// `use:` and `run:` are one selection (config.Step.StepEngine); which
 		// engine it names, and whether the step brought the body that engine
@@ -736,6 +740,9 @@ func checkMapRefs(where string, m map[string]any, sc *scope) error {
 // stepOutputSchema returns the declared outputs a step's references can be
 // checked against: a verb's declared Outputs, nil (dynamic) otherwise.
 func stepOutputSchema(reg *connector.Registry, step config.Step) connector.Schema {
+	if step.Decide != nil {
+		return decideOutputSchema(step)
+	}
 	if step.Uses == "" {
 		return nil
 	}
@@ -827,4 +834,151 @@ func isUniversal(k string) bool {
 		}
 	}
 	return false
+}
+
+// validateDecideRefs checks a decide step's references: its state's
+// templates resolve in the step's scope, escalate.when names only the step's
+// own questions (it is evaluated over the answers and nothing else), and an
+// observe store is a SQL store.
+func validateDecideRefs(cfg *config.Config, w string, step config.Step, sc *scope) error {
+	d := step.Decide
+	switch st := d.State.(type) {
+	case string:
+		if err := checkRefs(w+" decide.state", st, sc); err != nil {
+			return err
+		}
+	case map[string]any:
+		if err := checkMapRefs(w+" decide.state", st, sc); err != nil {
+			return err
+		}
+	}
+	if e := d.Escalate; e != nil {
+		// when: is evaluated over the answers and NOTHING else, so every path
+		// it reads — bare (refuted.noul) or templated — must start at one of
+		// this step's questions. checkCondRefs alone sees only {{.x}} tokens,
+		// and a condition is usually written bare.
+		known := map[string]bool{}
+		for _, name := range d.Questions.Names() {
+			known[name] = true
+		}
+		roots, err := conditionRoots(e.When)
+		if err != nil {
+			return fmt.Errorf("%s decide.escalate.when: %v", w, err)
+		}
+		for _, root := range roots {
+			if !known[root] {
+				return fmt.Errorf("%s decide.escalate.when: %q is not one of this step's questions (%s) — escalate.when sees only this step's answers",
+					w, root, strings.Join(d.Questions.Names(), ", "))
+			}
+		}
+	}
+	if d.Observe != "" && cfg != nil {
+		if ref, ok := cfg.Stores[d.Observe]; ok {
+			if fam := connector.StoreFamily(ref.Type); fam != "sql" {
+				return fmt.Errorf("%s: decide.observe: store %q is type %s — observe records to a SQL store (%s)",
+					w, d.Observe, ref.Type, strings.Join(connector.StoreTypes("sql"), ", "))
+			}
+		}
+	}
+	return nil
+}
+
+// decideOutputSchema is a decide step's outputs: one entry per question,
+// plus `_by` and `_escalated_from`. A for_each decide step's outputs are the
+// for_each envelope (items/count), which is not field-checked — nil.
+func decideOutputSchema(step config.Step) connector.Schema {
+	if step.ForEach != "" {
+		return nil
+	}
+	s := connector.Schema{
+		"_by":             {Type: connector.TString, Desc: "the <runtime>/<model> that answered, or default"},
+		"_escalated_from": {Type: connector.TMap, Desc: "the answer an escalation replaced"},
+		"stubbed":         {Type: connector.TBool},
+	}
+	for _, q := range step.Decide.Questions {
+		s[q.Name] = connector.Field{Type: connector.TMap, Desc: "the v1 " + q.Type + " answer"}
+	}
+	return s
+}
+
+// conditionRoots lists the root of every data path an expression reads, in
+// both spellings: bare (`refuted.noul >= 0.5`) and templated
+// (`{{.refuted.noul}}`). Quoted strings, numbers, the literals true / false /
+// null / nil, and function names (a word followed by "(") are not paths.
+func conditionRoots(cond string) ([]string, error) {
+	refs, err := templateRefs(cond)
+	if err != nil {
+		return nil, err
+	}
+	var roots []string
+	for _, r := range refs {
+		roots = append(roots, strings.SplitN(r, ".", 2)[0])
+	}
+	bare := stripTemplateActions(cond)
+	for i := 0; i < len(bare); {
+		c := bare[i]
+		switch {
+		case c == '"' || c == '\'':
+			j := i + 1
+			for j < len(bare) && bare[j] != c {
+				if bare[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			i = j + 1
+		case isIdentStart(c):
+			j := i
+			for j < len(bare) && (isIdentStart(bare[j]) || (bare[j] >= '0' && bare[j] <= '9') || bare[j] == '.') {
+				j++
+			}
+			word := bare[i:j]
+			k := j
+			for k < len(bare) && bare[k] == ' ' {
+				k++
+			}
+			isCall := k < len(bare) && bare[k] == '('
+			switch word {
+			case "true", "false", "null", "nil":
+			default:
+				if !isCall {
+					roots = append(roots, strings.SplitN(word, ".", 2)[0])
+				}
+			}
+			i = j
+		case c >= '0' && c <= '9':
+			j := i
+			for j < len(bare) && ((bare[j] >= '0' && bare[j] <= '9') || bare[j] == '.') {
+				j++
+			}
+			i = j
+		default:
+			i++
+		}
+	}
+	return roots, nil
+}
+
+// stripTemplateActions blanks every {{…}} action, so the bare-path scan does
+// not see the templated paths twice.
+func stripTemplateActions(s string) string {
+	var b strings.Builder
+	for {
+		i := strings.Index(s, "{{")
+		if i < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		b.WriteString(s[:i])
+		j := strings.Index(s[i:], "}}")
+		if j < 0 {
+			return b.String()
+		}
+		b.WriteString(" ")
+		s = s[i+j+2:]
+	}
+}
+
+func isIdentStart(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }

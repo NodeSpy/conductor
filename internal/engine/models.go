@@ -2,9 +2,12 @@ package engine
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/decider"
 	"github.com/NodeSpy/conductor/internal/models"
+	"github.com/NodeSpy/conductor/internal/systemone"
 )
 
 // The engine's side of model selection (docs/design/runtimes-models-packs.md
@@ -15,7 +18,48 @@ import (
 // SetModelResolver installs the resolver (nil disables model selection:
 // every dispatch then BARE LAUNCHES, which is the correct behavior for a
 // daemon with no discovery wired — the runtime uses its own default).
-func (e *Engine) SetModelResolver(r *models.Resolver) { e.modelResolver = r }
+func (e *Engine) SetModelResolver(r *models.Resolver) {
+	e.modelResolver = r
+	e.wireDeciders()
+}
+
+// SetDeciders installs the decision runtimes. The resolver (when set) learns
+// which runtimes are decision-only and which protocols they speak, so agent
+// resolution skips them and decide: resolution ranks them first.
+// Either order of SetModelResolver/SetDeciders wires the same result.
+func (e *Engine) SetDeciders(s decider.Set) {
+	e.deciders = s
+	e.wireDeciders()
+}
+
+func (e *Engine) wireDeciders() {
+	if e.modelResolver != nil && len(e.deciders) > 0 {
+		e.modelResolver.DecisionOnly = e.deciders.DecisionOnly
+		e.modelResolver.NativeProtocols = e.deciders.NativeProtocols
+	}
+}
+
+// decideCandidates ranks the candidates for a decide: step. With no resolver
+// wired, the step's own resolution is the one (agent) candidate.
+func (e *Engine) decideCandidates(ctx context.Context, spec config.ModelSpec, runtimeHint, protocol string) ([]models.Candidate, error) {
+	if e.modelResolver == nil {
+		model, rt, provider := e.resolveModel(ctx, config.Step{Model: spec, Runtime: runtimeHint})
+		if rt == "" {
+			rt = runtimeHint
+		}
+		return []models.Candidate{{Model: model, Runtime: rt, Provider: provider, Bare: model == ""}}, nil
+	}
+	return e.modelResolver.Candidates(ctx, spec, runtimeHint, protocol)
+}
+
+// decide asks a native decision runtime.
+func (e *Engine) decide(ctx context.Context, runtime, protocol string, req systemone.Request) (decider.Answer, error) {
+	rt, ok := e.deciders.Get(runtime)
+	if !ok {
+		return decider.Answer{}, fmt.Errorf("runtime %q is not a decision runtime", runtime)
+	}
+	return rt.Decide(ctx, protocol, req)
+}
 
 // SetModelFallback installs the unsupported-model cache dispatchAgent marks
 // into on a provider refusal (nil disables the fleet fallback).
