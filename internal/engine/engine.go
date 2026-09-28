@@ -876,9 +876,12 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		// Forced: skip the dedup / liveness gates entirely and dispatch below.
 	} else if liveGate {
 		// A review workflow shouldn't re-run while its agent is parked for you.
+		// That holds for both workflow shapes: legacy Steps and a connectors-model
+		// flow (FlowRef, no Steps) — skipping flows here let every sweep launch
+		// another review agent on a PR whose first review was still parked.
 		// Single-action fixers instead fall through to dispatch, which queues new
 		// work to the agent already on this PR (or spawns one) — see paseo.go.
-		if len(act.Steps) > 0 && e.hasLiveAgentFor(ctx, act, key, t.Kind) {
+		if (len(act.Steps) > 0 || act.FlowRef != "") && e.hasLiveAgentFor(ctx, act, key, t.Kind) {
 			// Exception: a review re-request on a NEW head. If we've never dispatched
 			// review_requested at the current head, the parked agent is reviewing stale
 			// code — re-engage on the new head instead of being blocked indefinitely by
