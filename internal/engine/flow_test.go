@@ -24,6 +24,7 @@ type flowGateStore struct {
 	mu          sync.Mutex
 	recorded    []string
 	attempts    []string
+	perHead     map[string]int // key|kind|head → attempts (for Attempts)
 	audits      []map[string]any
 	runs        map[string]bool
 	stuck       map[string]bool
@@ -56,7 +57,11 @@ func (s *flowGateStore) LastSignature(key, kind string) string {
 	defer s.mu.Unlock()
 	return s.sigs[key+"|"+kind]
 }
-func (s *flowGateStore) Attempts(string, string, string) int { return 0 }
+func (s *flowGateStore) Attempts(key, kind, head string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.perHead[key+"|"+kind+"|"+head]
+}
 func (s *flowGateStore) RetryReady(string, string, string, int, time.Duration, int, time.Duration) (bool, time.Duration) {
 	return true, 0
 }
@@ -71,6 +76,10 @@ func (s *flowGateStore) RecordAttempt(key, kind, head string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.attempts = append(s.attempts, key+"|"+kind)
+	if s.perHead == nil {
+		s.perHead = map[string]int{}
+	}
+	s.perHead[key+"|"+kind+"|"+head]++
 	return nil
 }
 
@@ -201,13 +210,14 @@ func (s *flowGateStore) OutcomeStats(agent string) map[string]int {
 }
 
 // fakeFlowDispatcher satisfies the engine Dispatcher (unused by verb-only flows).
-type fakeFlowDispatcher struct{}
+// live is what HasLiveAgent reports.
+type fakeFlowDispatcher struct{ live bool }
 
 func (fakeFlowDispatcher) Dispatch(context.Context, dispatch.Request) (dispatch.RunRef, error) {
 	return dispatch.RunRef{}, nil
 }
 func (fakeFlowDispatcher) WaitForAgent(context.Context, string, time.Duration) {}
-func (fakeFlowDispatcher) HasLiveAgent(context.Context, string, string) bool   { return false }
+func (f fakeFlowDispatcher) HasLiveAgent(context.Context, string, string) bool { return f.live }
 func (fakeFlowDispatcher) Archive(context.Context, string) error               { return nil }
 
 type fakeNotif struct {
@@ -269,6 +279,11 @@ func gateCalls() int {
 // buildFlowEngine wires an engine + real flow runner over the test connector.
 func buildFlowEngine(t *testing.T, cfgYAML string) (*Engine, *flowGateStore, *fakeNotif, *config.Config) {
 	t.Helper()
+	return buildFlowEngineWith(t, cfgYAML, fakeFlowDispatcher{})
+}
+
+func buildFlowEngineWith(t *testing.T, cfgYAML string, d fakeFlowDispatcher) (*Engine, *flowGateStore, *fakeNotif, *config.Config) {
+	t.Helper()
 	registerGateConn()
 	var cfg config.Config
 	if err := yaml.Unmarshal([]byte(cfgYAML), &cfg); err != nil {
@@ -289,7 +304,7 @@ func buildFlowEngine(t *testing.T, cfgYAML string) (*Engine, *flowGateStore, *fa
 		Store: st, Notif: notif,
 	})
 	eng := New(Options{
-		Config: &cfg, Store: st, Dispatch: fakeFlowDispatcher{},
+		Config: &cfg, Store: st, Dispatch: d,
 		Notifier: notif, Flow: runner, Connectors: reg,
 	})
 	return eng, st, notif, &cfg
@@ -345,6 +360,29 @@ func TestFlowBranchRunsAndConsumesDedup(t *testing.T) {
 	if gateCalls() != calls {
 		t.Fatal("duplicate delivery re-ran the flow")
 	}
+}
+
+func TestFlowReviewSkippedWhileAgentLive(t *testing.T) {
+	// A flow-model review (FlowRef, no Steps) must honor the liveness gate like a
+	// Steps workflow: while its agent is live on the same head, a sweep's
+	// re-emitted review_requested must not launch a second review.
+	eng, st, _, _ := buildFlowEngineWith(t, gateCfg, fakeFlowDispatcher{live: true})
+	tr := flowTrigger("reviewreq@h")
+	tr.Kind = "review_requested"
+	tr.Target.HeadSHA = "h"
+	key := tr.Key()
+	_ = st.RecordAttempt(key, "review_requested", "h") // the parked review's dispatch
+	before := gateCalls()
+	eng.process(context.Background(), tr)
+	time.Sleep(50 * time.Millisecond)
+	if gateCalls() != before {
+		t.Fatal("flow review re-ran while its agent was still live on the same head")
+	}
+
+	// A new head still re-engages despite the live agent.
+	tr.Target.HeadSHA, tr.Dedup = "h2", "reviewreq@h2"
+	eng.process(context.Background(), tr)
+	waitCond(t, "re-engage on new head", func() bool { return gateCalls() > before })
 }
 
 func TestFlowPolicyIgnoreUsers(t *testing.T) {
