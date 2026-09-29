@@ -212,3 +212,5 @@ func shortArgs(tool string, args []string) string {
 	}
 	return s
 }
+
+var jsonUnmarshal = json.Unmarshal

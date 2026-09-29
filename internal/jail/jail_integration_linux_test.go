@@ -190,7 +190,18 @@ func (f *fixture) runJailed(t *testing.T, m *Manager, script string) (string, er
 	}
 	defer l.Close()
 	spec := sandbox.FromConfig(&config.IsolationConfig{Mode: "namespace"})
-	deps := sandbox.LocalWrapDeps{SelfExe: m.SelfExe, Confine: true, ExtraBinds: l.Binds}
+	binds := l.Binds
+	// A read-only bind from a nosuid,nodev mount (/dev/shm everywhere; a
+	// container's tmpfs state dir in practice): its locked flags must be
+	// repeated on the remount or the whole jail fails with EPERM.
+	if f, err := os.CreateTemp("/dev/shm", "conductor-jailtest-"); err == nil {
+		f.WriteString("shm-ok\n")
+		f.Close()
+		t.Cleanup(func() { os.Remove(f.Name()) })
+		binds = append(binds, sandbox.BindMount{Path: f.Name(), RO: true})
+		script = "cat " + f.Name() + "\n" + script
+	}
+	deps := sandbox.LocalWrapDeps{SelfExe: m.SelfExe, Confine: true, ExtraBinds: binds}
 	env := append(sandbox.MinimalEnv(), l.Env...)
 	env = append(env, "GH_TOKEN=must-not-reach-the-jail")
 	env = stripCreds(env)
@@ -251,7 +262,7 @@ echo "cfg-write:$(sh -c 'echo "[core]" >> "$(git rev-parse --git-common-dir)/con
 		"token:0",
 		"fake-gh args=pr view 42 repo=acme/app", "gh-view-exit=0",
 		"gh-create-exit=126", "gh-logout-exit=126",
-		"committed", "push-own-exit=0",
+		"committed", "push-own-exit=0", "shm-ok",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
