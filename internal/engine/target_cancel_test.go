@@ -12,6 +12,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/secrets"
@@ -19,16 +20,15 @@ import (
 	"github.com/NodeSpy/conductor/internal/targets"
 )
 
-// fakeCancelDispatcher is the engine Dispatcher AND the paseo-shaped
-// ListAgents/Archive fallback controller.Registry.CancelTarget reaches when a
-// Runner carries no controller-side liveness table of its own (see
-// internal/controller's paseoCanceller) — the built-in paseo default in these
-// tests IS this dispatcher (Options.Controllers is left nil, so engine.New
-// builds a registry with it as the paseo runner).
+// fakeCancelDispatcher is the engine Dispatcher, and so the built-in paseo
+// runner of the registry engine.New builds (Options.Controllers is nil). It
+// implements StopTarget the way *dispatch.Dispatcher does — archive the
+// target's PR-fixer agents — so the test drives the one stop path end to end:
+// process(_closed) → stopFixers → every runner's StopTarget.
 type fakeCancelDispatcher struct {
-	mu       sync.Mutex
-	agents   map[string][]dispatch.AgentInfo // "pr" label value -> its agents
-	archived []string
+	mu      sync.Mutex
+	agents  map[string]map[string][]string // pr key -> kind -> agent ids
+	stopped []string
 }
 
 func (d *fakeCancelDispatcher) Dispatch(context.Context, dispatch.Request) (dispatch.RunRef, error) {
@@ -36,24 +36,26 @@ func (d *fakeCancelDispatcher) Dispatch(context.Context, dispatch.Request) (disp
 }
 func (d *fakeCancelDispatcher) WaitForAgent(context.Context, string, time.Duration) {}
 func (d *fakeCancelDispatcher) HasLiveAgent(context.Context, string, string) bool   { return false }
-func (d *fakeCancelDispatcher) Archive(_ context.Context, id string) error {
+func (d *fakeCancelDispatcher) Archive(context.Context, string) error               { return nil }
+func (d *fakeCancelDispatcher) AgentForDispatch(string) string                      { return "" }
+func (d *fakeCancelDispatcher) DispatchInFlight(string) bool                        { return false }
+func (d *fakeCancelDispatcher) DeliverOutput(string, any) (bool, error)             { return false, nil }
+func (d *fakeCancelDispatcher) StopTarget(_ context.Context, key string) int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.archived = append(d.archived, id)
-	return nil
+	n := 0
+	for kind, ids := range d.agents[key] {
+		if core.BranchFixKind(kind) {
+			d.stopped = append(d.stopped, ids...)
+			n += len(ids)
+		}
+	}
+	return n
 }
-func (d *fakeCancelDispatcher) AgentForDispatch(string) string          { return "" }
-func (d *fakeCancelDispatcher) DispatchInFlight(string) bool            { return false }
-func (d *fakeCancelDispatcher) DeliverOutput(string, any) (bool, error) { return false, nil }
-func (d *fakeCancelDispatcher) ListAgents(_ context.Context, labels map[string]string) ([]dispatch.AgentInfo, error) {
+func (d *fakeCancelDispatcher) stoppedIDs() []string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.agents[labels["pr"]], nil
-}
-func (d *fakeCancelDispatcher) archivedIDs() []string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return append([]string(nil), d.archived...)
+	return append([]string(nil), d.stopped...)
 }
 
 // buildCancelEngine wires an engine exactly like buildFlowEngine (flow_test.go),
@@ -82,10 +84,11 @@ func buildCancelEngine(t *testing.T, cfgYAML string, d Dispatcher) (*Engine, *fl
 }
 
 // TestClosedTriggerCancelsLiveAgentsAndRefusesFurtherWrites drives the whole
-// incident end to end: a trusted `_closed` trigger (merged and closed-unmerged)
-// must cancel the target's live agent, leave a "cancelled" audit row and
-// notify event, and — because it also marks the target closed in
-// internal/targets — refuse a subsequent write check against it.
+// incident end to end through the single stop path: a trusted `_closed`
+// trigger (merged and closed-unmerged) must stop the target's running fixer
+// — and only its fixer, not a review agent on the same PR — leave a
+// fixers_stopped audit row carrying the reason, notify, and (because it also
+// marks the target closed in internal/targets) refuse a later write to it.
 func TestClosedTriggerCancelsLiveAgentsAndRefusesFurtherWrites(t *testing.T) {
 	for _, merged := range []bool{true, false} {
 		name, wantReason, wantOutcome := "merged", "target merged", "merged"
@@ -96,34 +99,35 @@ func TestClosedTriggerCancelsLiveAgentsAndRefusesFurtherWrites(t *testing.T) {
 			repo := "acme/cancel-" + name
 			number := 100
 			prKey := repo + "#" + strconv.Itoa(number)
-			d := &fakeCancelDispatcher{agents: map[string][]dispatch.AgentInfo{
-				prKey: {{ID: "agent-1"}},
+			d := &fakeCancelDispatcher{agents: map[string]map[string][]string{
+				prKey:            {"merge_conflict": {"fixer-1"}, "review_requested": {"review-1"}},
+				"acme/other#100": {"merge_conflict": {"elsewhere"}},
 			}}
 			eng, st, notif := buildCancelEngine(t, gateCfg2(), d)
 			st.RecordEngagement(prKey, store.Engagement{Key: "fixer"})
 
 			eng.process(context.Background(), closedTrigger(repo, number, merged, nil))
 
-			if got := d.archivedIDs(); len(got) != 1 || got[0] != "agent-1" {
-				t.Fatalf("archived agents = %v, want [agent-1]", got)
+			if got := d.stoppedIDs(); len(got) != 1 || got[0] != "fixer-1" {
+				t.Fatalf("stopped = %v, want only [fixer-1] (not the reviewer, not another PR's fixer)", got)
 			}
 
 			st.mu.Lock()
-			var cancelledRow map[string]any
+			var row map[string]any
 			for _, a := range st.audits {
-				if a["event"] == "cancelled" {
-					cancelledRow = a
+				if a["event"] == "fixers_stopped" {
+					row = a
 				}
 			}
 			st.mu.Unlock()
-			if cancelledRow == nil {
-				t.Fatalf("expected a \"cancelled\" audit row, got: %+v", st.audits)
+			if row == nil {
+				t.Fatalf("expected a fixers_stopped audit row, got: %+v", st.audits)
 			}
-			if cancelledRow["reason"] != wantReason {
-				t.Fatalf("cancelled row reason = %v, want %q", cancelledRow["reason"], wantReason)
+			if row["reason"] != wantReason || row["count"] != 1 {
+				t.Fatalf("fixers_stopped reason/count = %v/%v, want %q/1", row["reason"], row["count"], wantReason)
 			}
-			if cancelledRow["repo"] != repo || cancelledRow["number"] != number {
-				t.Fatalf("cancelled row repo/number = %v/%v, want %s/%d", cancelledRow["repo"], cancelledRow["number"], repo, number)
+			if row["repo"] != repo || row["number"] != number {
+				t.Fatalf("fixers_stopped repo/number = %v/%v, want %s/%d", row["repo"], row["number"], repo, number)
 			}
 
 			notif.mu.Lock()

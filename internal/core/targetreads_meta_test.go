@@ -170,6 +170,7 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"newFlowRun", "run record display fields"},
 		{"resumeFlowRun", "as above"},
 		{"flowAgentServices", "passes the trigger through to the flow runner, which does its own checks"},
+		{"stopFixers", "the fixers_stopped audit row; which sessions stop is decided by Trigger.Key()"},
 	},
 	"internal/engine/steps.go": {
 		{"runSteps", "audit rows and step template data"},
@@ -261,13 +262,6 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	// shelling out — same target reads, same reasoning.
 	"internal/gitwt/gogit.go": {
 		{"addPRGoGit", "the PR ref to fetch for that checkout — go-git's addPR"},
-	},
-
-	// Target lifecycle (#154 §5): only reached for a TRUSTED target
-	// (observeClosed returns early otherwise); the raw fields feed the audit
-	// row and the log line — nothing is decided with them.
-	"internal/engine/target_cancel.go": {
-		{"cancelTargetAgents", "the audit row of a close the engine handles only for a trusted target"},
 	},
 
 	// ---- CLI display.

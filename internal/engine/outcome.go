@@ -111,12 +111,11 @@ func (e *Engine) observeClosed(ctx context.Context, t core.Trigger) {
 	}
 	// Target lifecycle (this function only runs for a TRUSTED target — see
 	// observeOutcomeSignals): record the terminal fact so a stray write from an
-	// agent still limping along on this target is refused (targets.Registry.
-	// CheckWrite/CheckPush), then cancel whatever is actually still running or
-	// queued for it. MarkClosed always runs; the cancel work below is a no-op
-	// when nothing was live.
+	// agent still limping along on this target is refused
+	// (targets.Registry.CheckWrite/CheckPush — the broker's and the skill
+	// verbs' binding). Stopping the running fixers is stopFixers (flow.go),
+	// called from process()'s `_closed` branch.
 	targets.Default.MarkClosed(t.Target.Repo, t.Target.Number, merged)
-	e.cancelTargetAgents(ctx, t, outcome)
 	for _, g := range e.store.TakeEngagements(t.Key()) {
 		e.recordOutcome(ctx, t.Target.Repo, t.Target.Number, outcome, g)
 	}

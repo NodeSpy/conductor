@@ -1070,12 +1070,32 @@ func (d *Dispatcher) HasLiveAgent(ctx context.Context, prKey, kind string) bool 
 // must ALSO be in the ledger; one that isn't (pinned, base checkout, yours)
 // leaves only the agent archived.
 // ListAgents exposes the backend's label-filtered agent listing to callers
-// outside this package — e.g. controller.Registry.CancelTarget, which looks up
-// every agent labeled for a merged/closed target (`pr=<key>`) so it can archive
-// them. Read-only; Archive below still gates the actual reclaim on the
-// ownership ledger.
+// outside this package. Read-only; Archive below still gates the actual
+// reclaim on the ownership ledger.
 func (d *Dispatcher) ListAgents(ctx context.Context, labels map[string]string) ([]AgentInfo, error) {
 	return d.backend().ListAgents(ctx, labels)
+}
+
+// StopTarget is the paseo runtime's side of the engine's stopFixers: when a
+// PR merges or closes, archive every PR-fixer agent (core.BranchFixKind)
+// conductor launched for it — found by its `pr=<key>` and `kind=` labels, and
+// archived only through Archive's ownership-ledger gate. Review and other
+// agents are untouched, as on the controller runners. Returns how many it
+// stopped.
+func (d *Dispatcher) StopTarget(ctx context.Context, key string) int {
+	n := 0
+	for _, kind := range core.BranchFixKinds() {
+		agents, err := d.ListAgents(ctx, map[string]string{"conductor": "1", "pr": key, "kind": kind})
+		if err != nil {
+			continue
+		}
+		for _, a := range agents {
+			if a.ID != "" && d.Archive(ctx, a.ID) == nil {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 func (d *Dispatcher) Archive(ctx context.Context, agentID string) error {

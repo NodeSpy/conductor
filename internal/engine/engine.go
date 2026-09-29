@@ -780,6 +780,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		_ = e.store.Delete(key)
 		e.markClosed(key)
 		e.log("%s closed; dropped state", tag(t))
+		e.stopFixers(ctx, t)
 		return
 	}
 
@@ -1155,7 +1156,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 		return
 	}
-	targetClosed := errors.Is(err, controller.ErrTargetClosed)
+	targetClosed := errors.Is(err, dispatch.ErrTargetClosed)
 	if !shadow {
 		switch {
 		case liveGate:
@@ -1177,9 +1178,9 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 
 	if targetClosed {
-		// cancelTargetAgents (outcome.go) already cancelled this dispatch,
-		// audited "cancelled", and notified — terminal, and not this
-		// dispatch's failure to escalate.
+		// stopFixers (flow.go) already stopped this dispatch, audited
+		// fixers_stopped, and notified — terminal, and not this dispatch's
+		// failure to escalate.
 		e.log("%s dispatch stopped: %s", tag(t), e.redact(err.Error()))
 		if gated {
 			e.release()
@@ -1556,11 +1557,11 @@ func (e *Engine) redactArgv(argv []string) []string {
 func (e *Engine) auditDispatch(t core.Trigger, ref dispatch.RunRef, err error) {
 	outcome := "ok"
 	switch {
-	case errors.Is(err, controller.ErrTargetClosed):
-		// The dispatch's own target died mid-flight and cancelTargetAgents
-		// (outcome.go) already cancelled it, audited "cancelled", and
-		// notified — this is that cancellation's EXPECTED result, not an
-		// ordinary dispatch failure to escalate.
+	case errors.Is(err, dispatch.ErrTargetClosed):
+		// The dispatch's own target died mid-flight and stopFixers (flow.go)
+		// already stopped it, audited fixers_stopped, and notified — this is
+		// that stop's EXPECTED result, not an ordinary dispatch failure to
+		// escalate.
 		outcome = "target_closed"
 	case err != nil:
 		outcome = "failed"

@@ -3,10 +3,17 @@ package engine
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
-
-	"github.com/NodeSpy/conductor/internal/core"
 	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/flow"
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 // acquireAsync starts an acquire and reports its result on the returned channel.
@@ -185,4 +192,49 @@ func TestFlowWaitingFixerDroppedWhenPRCloses(t *testing.T) {
 	again.Kind = "new_comment"
 	eng.process(context.Background(), again)
 	waitCond(t, "fixer queued after the close", func() bool { return gateCalls() > before })
+}
+
+// stopRecDispatcher is a runtime that records StopTarget calls.
+type stopRecDispatcher struct {
+	fakeFlowDispatcher
+	mu      sync.Mutex
+	stopped []string
+}
+
+func (d *stopRecDispatcher) StopTarget(_ context.Context, key string) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.stopped = append(d.stopped, key)
+	return 1
+}
+
+// When a PR's _closed arrives, the engine asks every runtime to stop the
+// fixers still running on it.
+func TestClosedPRStopsRunningFixers(t *testing.T) {
+	registerGateConn()
+	var cfg config.Config
+	if err := yaml.Unmarshal([]byte(gateCfg), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.NormalizeTriggers(); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := connector.Build(&cfg, connector.Deps{Secrets: secrets.New(), Config: &cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := newFlowGateStore()
+	d := &stopRecDispatcher{}
+	eng := New(Options{Config: &cfg, Store: st, Dispatch: d, Notifier: &fakeNotif{},
+		Flow: flow.New(flow.Runner{Cfg: &cfg, Conns: reg, Secrets: secrets.New(), Store: st}), Connectors: reg})
+
+	closed := flowTrigger("")
+	closed.Kind = core.KindClosed
+	eng.process(context.Background(), closed)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.stopped) != 1 || d.stopped[0] != closed.Key() {
+		t.Fatalf("StopTarget calls = %v, want one for %s", d.stopped, closed.Key())
+	}
 }

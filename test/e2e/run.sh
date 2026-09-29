@@ -1737,20 +1737,21 @@ group_X_jail() {
     ok "X2 nothing landed on the merged PR's branch" X X2-forge
   fi
 
-  # X3: an in-flight agent is cancelled when its PR merges.
+  # X3: an in-flight fixer is stopped when its PR merges (engine stopFixers →
+  # the runner's StopTarget; the run ends workflow_stopped, not failed).
   r=grpx/jailcancel
   force conductor-jail merge_conflict "$r#1" "$JAIL_CFG" >/dev/null
   wait_for 60 jail_audit_match '"event":"tool_call"' "\"repo\":\"$r\"" 'sleep 45' || true
   cexec conductor-jail bash -c 'curl -s -o /dev/null -X POST http://localhost:8789/webhook -H "X-GitHub-Event: pull_request" -H "X-GitHub-Delivery: x3-$RANDOM" -H "Content-Type: application/json" --data-binary @/fixtures/jail_cancel_closed.json' >/dev/null
-  if wait_for 30 jail_audit_match '"event":"cancelled"' "\"repo\":\"$r\"" 'target merged'; then
-    ok "X3 the in-flight agent is cancelled when its PR merges (audited)" X X3-cancel
+  if wait_for 30 jail_audit_match '"event":"fixers_stopped"' "\"repo\":\"$r\"" '"reason":"target merged"'; then
+    ok "X3 the in-flight fixer is stopped when its PR merges (audited, with the reason)" X X3-cancel
   else
-    bad "X3 cancel" X X3-cancel "no cancelled row for $r"
+    bad "X3 cancel" X X3-cancel "no fixers_stopped row for $r"
   fi
-  if wait_for 20 jail_audit_match '"event":"dispatch"' "\"repo\":\"$r\"" 'target closed'; then
-    ok "X3 the dispatch ends as target-closed (the flow stops)" X X3-outcome
+  if wait_for 20 jail_audit_match '"event":"workflow_stopped"' "\"repo\":\"$r\"" 'target closed'; then
+    ok "X3 the run ends as stopped, not failed (the flow stops)" X X3-outcome
   else
-    bad "X3 outcome" X X3-outcome "dispatch did not end target-closed"
+    bad "X3 outcome" X X3-outcome "no workflow_stopped row for $r"
   fi
   if forge_branch_commits "$r" pr-1 | grep -qx 2; then
     ok "X3 the cancelled agent's late push never landed" X X3-forge

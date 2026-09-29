@@ -10,8 +10,8 @@
 //
 //   - lifecycle state (MarkClosed/Closed/Reopen): the engine's `_closed`
 //     handling (a trusted target only — see the trigger's trusted-target bit) records
-//     the terminal fact here, and cancels the target's live agents (see
-//     internal/engine and internal/controller's CancelTarget);
+//     the terminal fact here (the engine's stopFixers separately stops the
+//     PR's running fixers through each runtime's StopTarget);
 //   - the write-refusal policy (WritePolicy/CheckWrite/CheckPush): every skill
 //     verb write checks itself against the dispatch's own target here before
 //     it runs, closed-target or not — see internal/flow's RunSkillVerb.

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/models"
 )
@@ -64,22 +65,24 @@ type controllerRunner struct {
 	prov Provisioner
 	h    Handler // permission/input handler; nil → controllers apply their auto policy
 
-	mu        sync.Mutex
-	live      map[string]Session // agent id → live session
-	byPR      map[string]int     // "prKey\x00kind" → live count (HasLiveAgent gate)
-	bucket    map[string]string  // agent id → its PR+kind bucket (for exact decrement)
-	cancelled map[string]string  // agent id → cancel reason, set by CancelTarget
+	mu     sync.Mutex
+	live   map[string]Session // agent id → live session
+	byPR   map[string]int     // "prKey\x00kind" → live count (HasLiveAgent gate)
+	bucket map[string]string  // agent id → its PR+kind bucket (for exact decrement)
+	// stopped marks sessions StopTarget killed because their PR closed; their
+	// Dispatch returns dispatch.ErrTargetClosed instead of the partial turn.
+	stopped map[string]bool
 }
 
 func newControllerRunner(c Controller, prov Provisioner, h Handler) *controllerRunner {
 	return &controllerRunner{
-		c:         c,
-		prov:      prov,
-		h:         h,
-		live:      map[string]Session{},
-		byPR:      map[string]int{},
-		bucket:    map[string]string{},
-		cancelled: map[string]string{},
+		c:       c,
+		prov:    prov,
+		h:       h,
+		live:    map[string]Session{},
+		byPR:    map[string]int{},
+		bucket:  map[string]string{},
+		stopped: map[string]bool{},
 	}
 }
 
@@ -157,26 +160,17 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		if w, ok := sess.(waiter); ok {
 			w.Wait(ctx, timeout)
 		}
-		// A concurrent CancelTarget interrupted this very session (its own
-		// target was observed merged/closed while the turn was still running)
-		// — Wait returned because Cancel ended the turn, not because the agent
-		// produced a reply. Report the typed error instead of walking into the
-		// output-capture/schema logic below, which would otherwise treat
-		// whatever partial output survived as a normal (or normally-failed)
-		// turn.
-		r.mu.Lock()
-		reason, wasCancelled := r.cancelled[id]
-		delete(r.cancelled, id)
-		r.mu.Unlock()
-		if wasCancelled {
-			return ref, fmt.Errorf("%w: %s", ErrTargetClosed, reason)
-		}
 		// Capture the foreground turn's reply into RunRef.Output so the flow's
 		// output extraction and output_schema contract see it — the same
 		// RunRef.Output the paseo dispatcher populates directly. Sessions that
 		// can't capture leave it empty (the prior behavior).
 		if oc, ok := sess.(OutputCapturer); ok {
 			ref.Output = oc.Output()
+		}
+		// Killed because the PR merged or closed mid-turn (StopTarget): not a
+		// reply and not a failure — the flow records the run as stopped.
+		if r.wasStopped(id) {
+			return ref, dispatch.ErrTargetClosed
 		}
 		// A model-refusal error ("client too old for this model", deprecated/
 		// unknown model) is not a reply at all: surface it typed so the engine
@@ -266,49 +260,43 @@ func (r *controllerRunner) WaitForAgent(ctx context.Context, id string, timeout 
 	r.forget(id)
 }
 
-// CancelTarget interrupts every live session dispatched for prKey (any kind —
-// the bucket prefix match below spans fixer/reviewer/etc. alike), called when
-// the engine observes prKey's target (PR/issue) merged or closed while an
-// agent it dispatched for that target is still running. It marks each id
-// cancelled BEFORE cancelling it, so a foreground Dispatch whose Wait unblocks
-// because of the Cancel below is guaranteed to see the mark and return
-// ErrTargetClosed rather than racing to read whatever partial reply survived.
-// Returns the ids it cancelled.
-func (r *controllerRunner) CancelTarget(ctx context.Context, prKey, reason string) []string {
-	prefix := prKey + "\x00"
-	r.mu.Lock()
-	var ids []string
-	for id, bucket := range r.bucket {
-		if strings.HasPrefix(bucket, prefix) {
-			ids = append(ids, id)
-		}
-	}
-	sessions := make([]Session, 0, len(ids))
-	for _, id := range ids {
-		r.cancelled[id] = reason
-		if s := r.live[id]; s != nil {
-			sessions = append(sessions, s)
-		}
-	}
-	r.mu.Unlock()
-	for _, s := range sessions {
-		_ = s.Cancel(ctx)
-	}
-	for _, s := range sessions {
-		_ = s.Close(ctx)
-	}
-	for _, id := range ids {
-		r.forget(id)
-	}
-	return ids
-}
-
 // HasLiveAgent reports whether a session for this PR+kind is still open — the
 // engine's re-dispatch dedup gate for live-gated kinds (reviews).
 func (r *controllerRunner) HasLiveAgent(_ context.Context, prKeyStr, kind string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.byPR[prKeyStr+"\x00"+kind] > 0
+}
+
+// StopTarget kills the running turn of every PR-fixer session (core.BranchFixKind)
+// working on the target keyed key — its PR merged or closed, so the work is moot
+// and any push it makes from here lands on a dead or wrong branch. Sessions are
+// cancelled, not closed: the dispatch returns and the normal archive releases
+// the worktree. Returns how many sessions it stopped.
+func (r *controllerRunner) StopTarget(ctx context.Context, key string) int {
+	r.mu.Lock()
+	var hit []Session
+	for id, b := range r.bucket {
+		k, kind, _ := strings.Cut(b, "\x00")
+		if k != key || !core.BranchFixKind(kind) || r.stopped[id] {
+			continue
+		}
+		if sess := r.live[id]; sess != nil {
+			r.stopped[id] = true
+			hit = append(hit, sess)
+		}
+	}
+	r.mu.Unlock()
+	for _, sess := range hit {
+		_ = sess.Cancel(ctx)
+	}
+	return len(hit)
+}
+
+func (r *controllerRunner) wasStopped(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stopped[id]
 }
 
 // Archive closes a finished session and drops it from the liveness table.
@@ -348,6 +336,7 @@ func (r *controllerRunner) forget(id string) {
 		return
 	}
 	delete(r.live, id)
+	delete(r.stopped, id)
 	bucket := r.bucket[id]
 	delete(r.bucket, id)
 	if n := r.byPR[bucket]; n <= 1 {

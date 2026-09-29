@@ -11,7 +11,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/cost"
 
 	"github.com/NodeSpy/conductor/internal/config"
-	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/expr"
@@ -195,10 +194,10 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			"kind": t.Kind, "step": id, "backend": ref.Backend, "shadow": ref.Shadowed}
 		if err != nil {
 			entry["error"] = e.redact(err.Error())
-			if errors.Is(err, controller.ErrTargetClosed) {
+			if errors.Is(err, dispatch.ErrTargetClosed) {
 				// The target this step was working died out from under it
-				// (cancelTargetAgents already cancelled the agent, audited
-				// "cancelled", and notified) — this is the EXPECTED result of
+				// (stopFixers already stopped the agent, audited
+				// fixers_stopped, and notified) — this is the EXPECTED result of
 				// that cancellation, not a step bug to escalate. Audit it as its
 				// own outcome and stop the workflow: no later step has a live
 				// target to act on either.

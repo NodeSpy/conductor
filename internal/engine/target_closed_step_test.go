@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
-	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/store"
@@ -39,15 +38,14 @@ func (d *perStepErrDispatcher) DispatchInFlight(string) bool                    
 func (d *perStepErrDispatcher) DeliverOutput(string, any) (bool, error)             { return false, nil }
 
 // TestRunStepsStopsOnErrTargetClosed proves a step whose dispatch fails with
-// controller.ErrTargetClosed (the target died mid-flight and CancelTarget
-// interrupted the in-flight turn — see internal/controller.controllerRunner)
-// stops the workflow before its next step, and does NOT escalate: that
-// notification/audit already happened when the target was cancelled
-// (cancelTargetAgents, outcome.go), so a second "step failed" escalate would
-// be a duplicate, misleading alarm for an expected outcome.
+// dispatch.ErrTargetClosed (the PR closed mid-flight and stopFixers had the
+// runner's StopTarget kill the turn) stops the workflow before its next step,
+// and does NOT escalate: stopFixers already audited and notified, so a second
+// "step failed" escalate would be a duplicate, misleading alarm for an
+// expected outcome — the engine-path counterpart of flow's workflow_stopped.
 func TestRunStepsStopsOnErrTargetClosed(t *testing.T) {
 	d := &perStepErrDispatcher{errs: map[string]error{
-		"first": fmt.Errorf("%w: target merged", controller.ErrTargetClosed),
+		"first": fmt.Errorf("step first: %w", dispatch.ErrTargetClosed),
 	}}
 	n := &fakeNotifier{}
 	e := New(Options{

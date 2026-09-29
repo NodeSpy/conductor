@@ -113,10 +113,13 @@ A step may widen this explicitly (a workflow whose job is to open PRs); a
 allows.
 
 **Work stops when its target goes away.** When a dispatch's PR merges or
-closes, conductor cancels the agents running for it, records
-`cancelled: target merged|closed`, and notifies. Independently, the broker
-refuses every write for a closed target (it checks the PR's live state before
-a write), so a session that is mid-command when the event lands still cannot
+closes, conductor stops the fixers running for it (see
+[[Policy#fixers-stop-when-their-pr-closes]]): their runs end `stopped`,
+audited as `fixers_stopped` with `reason: target merged|closed`, and a
+`cancelled` notification goes out. Independently — for every agent, fixer or
+not — the broker and the conductor verbs refuse every write for a closed
+target (they check the PR's live state before a write), so a session that is
+mid-command when the event lands, or one that was never stopped, still cannot
 act. Agents are also told the rule, so a well-behaved one reports instead of
 trying — but the policy is what holds.
 
@@ -469,4 +472,4 @@ events, attributed to the dispatch (`label: "fix acme/app#43"`):
 | `sign` | a commit signed for the dispatch, or `refused` |
 | `tool_call` / `tool_result` | claude-code's tool calls (hooks), `refused` by an intent rule |
 | `egress` | a destination reached (each once) or refused, attributed to the dispatch |
-| `cancelled` | agents cancelled because their target merged or closed |
+| `fixers_stopped` / `workflow_stopped` | fixers stopped because their PR merged or closed (with the reason), and the runs that ended so |

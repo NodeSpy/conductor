@@ -73,10 +73,9 @@ const (
 	// fires instead of self-applying under `update: { apply: workflow }`.
 	EventUpdated         = "updated"
 	EventUpdateAvailable = "update_available"
-	// EventCancelled fires when the engine cancels a target's live/queued
-	// agents because the target itself was observed merged or closed while
-	// they were still running (internal/targets, internal/controller's
-	// CancelTarget) — "cancelled: target merged" / "cancelled: target closed".
+	// EventCancelled fires when the engine stops a PR's running fixers
+	// because the PR merged or closed while they worked (engine stopFixers →
+	// each runtime's StopTarget) — "stopped N running fixer(s): target merged".
 	EventCancelled = "cancelled"
 )
 
