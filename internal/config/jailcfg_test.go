@@ -113,8 +113,8 @@ func TestHostCommandValidation(t *testing.T) {
 
 func TestWritesPolicyForms(t *testing.T) {
 	for in, want := range map[string]WritesPolicy{
-		"writes: read_only":                            {ReadOnly: true},
-		"writes: target":                               {Target: true},
+		"writes: read_only": {ReadOnly: true},
+		"writes: target":    {Target: true},
 		"writes: {create_pr: true, branches: [rel/*]}": {CreatePR: true, Branches: []string{"rel/*"}},
 	} {
 		var v struct {
