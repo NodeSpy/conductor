@@ -73,6 +73,10 @@ func buildConfined(hr hostRun) (string, error) {
 			binds = append(binds, sandbox.BindMount{Path: p, RO: true, Optional: true})
 		}
 	}
+	// The binary's own path when it is a symlink (~/bin/terraform →
+	// ~/.terraform.versions/…): BinRoots holds the resolved install, so
+	// recreate each hop, exec'ing it as named (argv[0] intact).
+	binds = append(binds, symlinkHops(hr.Bin)...)
 	for _, s := range hr.Sockets {
 		binds = append(binds, sandbox.BindMount{Path: s, RO: true, Optional: true})
 	}
@@ -80,4 +84,29 @@ func buildConfined(hr hostRun) (string, error) {
 		return "", err
 	}
 	return fdPath(efd, filepath.Base(hr.EgressSock)), nil
+}
+
+// symlinkHops are the symlinks on the way from bin to its real file, as
+// jail entries that recreate them (outside the base system).
+func symlinkHops(bin string) []sandbox.BindMount {
+	var out []sandbox.BindMount
+	p := bin
+	for hop := 0; hop < 8; hop++ {
+		fi, err := os.Lstat(p)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			break
+		}
+		t, err := os.Readlink(p)
+		if err != nil {
+			break
+		}
+		if !visibleInBase(p) {
+			out = append(out, sandbox.BindMount{Path: p, Link: t})
+		}
+		if !filepath.IsAbs(t) {
+			t = filepath.Join(filepath.Dir(p), t)
+		}
+		p = filepath.Clean(t)
+	}
+	return out
 }

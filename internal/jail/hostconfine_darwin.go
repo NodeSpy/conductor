@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -168,8 +169,11 @@ func confinedSeatbelt(hr hostRun, scratch string, entries []string, port string)
 	for _, p := range hr.BinRoots {
 		b.WriteString("(allow file-read-data (subpath " + q(p) + "))\n")
 	}
+	// Contents, not metadata: a tool lstat()s each component of a path it
+	// resolves (terraform its temp files, which sit under the dispatch dir
+	// inside conductor's state), as the agent jail allows everywhere.
 	for _, s := range hr.Sensitive {
-		b.WriteString("(deny file-read* file-write* (subpath " + q(s) + "))\n")
+		b.WriteString("(deny file-read-data file-read-xattr file-write* (subpath " + q(s) + "))\n")
 	}
 	// The scratch dir (the home clones, the workspace clone) and the
 	// dispatch's TMPDIR are the only writable places (last rule wins; name
@@ -183,6 +187,13 @@ func confinedSeatbelt(hr hostRun, scratch string, entries []string, port string)
 	// Network: the egress proxy's loopback port only (and the Docker daemon).
 	b.WriteString("(deny network*)\n")
 	b.WriteString("(allow network-outbound (remote ip \"localhost:" + port + "\"))\n")
+	// A tool's own processes talk over unix sockets in its temp dir
+	// (terraform and its provider plugins: go-plugin's handshake socket).
+	for _, p := range []string{hr.TmpDir, scratch} {
+		re := "#\"^" + regexp.QuoteMeta(realPath(p)) + "/\""
+		b.WriteString("(allow network-bind network-inbound (local unix-socket (path-regex " + re + ")))\n")
+		b.WriteString("(allow network-outbound (remote unix-socket (path-regex " + re + ")))\n")
+	}
 	for _, s := range hr.Sockets {
 		b.WriteString("(allow network-outbound (remote unix-socket (path-literal " + strconvQuote(s) + ")))\n")
 		if r, err := filepath.EvalSymlinks(s); err == nil && r != s {
@@ -190,4 +201,11 @@ func confinedSeatbelt(hr hostRun, scratch string, entries []string, port string)
 		}
 	}
 	return b.String()
+}
+
+func realPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
 }

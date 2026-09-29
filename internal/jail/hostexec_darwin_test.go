@@ -5,11 +5,15 @@ package jail
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/NodeSpy/conductor/internal/hostcmd"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
@@ -168,6 +172,88 @@ if read -r l; then echo "STDIN=$l"; else echo no-stdin; fi`
 		}
 	}
 	for _, f := range []string{"rel.txt", "direct.txt"} {
+		if _, err := os.Stat(filepath.Join(ws, f)); err == nil {
+			t.Errorf("%s reached the real workspace", f)
+		}
+	}
+}
+
+// TestHostRunDarwinLiveTerraform (CONDUCTOR_LIVE_TERRAFORM=1): the real
+// terraform in the macOS host-side jail, with the real egress proxy and
+// network: init downloads the external provider (the tool's endpoints), and
+// the plan runs an external data source whose program tries to read ~/.ssh
+// and reach an outside host — both fail while the plan runs.
+func TestHostRunDarwinLiveTerraform(t *testing.T) {
+	if os.Getenv("CONDUCTOR_LIVE_TERRAFORM") == "" {
+		t.Skip("live: CONDUCTOR_LIVE_TERRAFORM=1")
+	}
+	tf, err := exec.LookPath("terraform")
+	if err != nil {
+		t.Skip("terraform missing")
+	}
+	home, _ := os.UserHomeDir()
+	root, err := os.MkdirTemp(filepath.Join(home, "cjl"), "tflive-")
+	if err != nil {
+		t.Skip("needs ~/cjl")
+	}
+	defer os.RemoveAll(root)
+	fake := filepath.Join(root, "home")
+	state := filepath.Join(fake, "state")
+	os.MkdirAll(filepath.Join(fake, ".ssh"), 0o700)
+	os.WriteFile(filepath.Join(fake, ".ssh", "id_secret"), []byte("NOT-A-REAL-KEY\n"), 0o600)
+	os.MkdirAll(filepath.Join(fake, ".terraform.d"), 0o700)
+	ws := filepath.Join(state, "worktrees", "w")
+	os.MkdirAll(ws, 0o700)
+	for _, n := range []string{"main.tf", "probe.sh"} {
+		b, _ := os.ReadFile(filepath.Join("testdata", "tfprobe", n))
+		os.WriteFile(filepath.Join(ws, n), b, 0o755)
+	}
+	tmp := filepath.Join(state, "jails", "tmp")
+	upper := filepath.Join(state, "jails", "d", "cow-ws", "terraform", "up")
+	os.MkdirAll(tmp, 0o700)
+	os.MkdirAll(upper, 0o700)
+	pm := sandbox.NewProxyManager(nil)
+	defer pm.Close()
+	addr, cred, revoke, err := pm.EndpointLabeled(hostcmd.ServiceEndpoints("terraform"), "d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer revoke()
+	_, port, _ := strings.Cut(addr, ":")
+	m := &Manager{Root: filepath.Join(state, "jails")}
+	paths, persist, penv, _ := hostcmd.HomeView("terraform", nil)
+	env := append([]string{"PATH=/opt/homebrew/bin:/usr/bin:/bin"}, sandbox.ProxyEnv(addr, cred)...)
+	for k, v := range penv {
+		env = append(env, k+"="+v)
+	}
+	var all bytes.Buffer
+	for _, args := range [][]string{{"init", "-input=false", "-no-color"}, {"plan", "-input=false", "-no-color"}} {
+		hr := hostRun{Tool: "terraform", Bin: tf, Args: args, Cwd: ws, Home: fake, HomePaths: paths, Persist: persist,
+			Workspace: ws, TmpDir: tmp, Sensitive: []string{state}, Env: env, Confine: true, EgressSock: "port:" + port,
+			WsUpper: upper, BinRoots: binaryRoots(tf, exec.LookPath)}
+		var out bytes.Buffer
+		res, err := runHost(context.Background(), m, hr, &out, &out)
+		fmt.Fprintf(&all, "$ terraform %s → exit %d\n%s", strings.Join(args, " "), res.Exit, out.String())
+		if err != nil || res.Exit != 0 {
+			t.Fatalf("terraform %v: exit %d err %v\n%s", args, res.Exit, err, out.String())
+		}
+	}
+	s := all.String()
+	t.Logf("\n%s", s)
+	val := func(k string) string {
+		m := regexp.MustCompile(`"?` + k + `"?\s*=\s*"([^"]*)"`).FindStringSubmatch(s)
+		if m == nil {
+			return ""
+		}
+		return m[1]
+	}
+	if val("ssh") != "blocked" || val("via_proxy") != "403" || val("workspace") != "written-copy-on-write" {
+		t.Errorf("probe: ssh=%q via_proxy=%q workspace=%q", val("ssh"), val("via_proxy"), val("workspace"))
+	}
+	if rc := val("direct_rc"); rc == "" || rc == "0" {
+		t.Errorf("the external program reached the network directly (rc %q)", rc)
+	}
+	for _, f := range []string{"written-by-probe.txt", ".terraform"} {
 		if _, err := os.Stat(filepath.Join(ws, f)); err == nil {
 			t.Errorf("%s reached the real workspace", f)
 		}

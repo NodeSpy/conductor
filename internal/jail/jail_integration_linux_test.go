@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -529,7 +530,13 @@ func TestJailContentExecutingHostCommandRunsConfined(t *testing.T) {
 		"curl -s -m 5 -o /dev/null -w 'proxy-code=%{http_connect}\\n' https://example.com; echo \"proxy-rc=$?\"\n" +
 		"curl -s -m 5 --noproxy '*' -o /dev/null https://example.com; echo \"direct-rc=$?\"\n" +
 		"if read -r line; then echo \"STDIN=$line\"; else echo no-stdin; fi\n"
-	os.WriteFile(f.bin+"/terraform", []byte(tf), 0o755)
+	// Installed the way version managers do: a symlink on PATH into a
+	// versions dir (only the resolved install is a BinRoot; the confined
+	// root must recreate the hop).
+	versions := filepath.Join(f.root, "tf-versions")
+	os.MkdirAll(versions, 0o755)
+	os.WriteFile(filepath.Join(versions, "terraform_9.9.9"), []byte(tf), 0o755)
+	os.Symlink(filepath.Join(versions, "terraform_9.9.9"), f.bin+"/terraform")
 	look := m.LookPath
 	m.LookPath = func(n string) (string, error) {
 		if n == "terraform" {
@@ -575,7 +582,7 @@ func TestJailContentExecutingHostCommandRunsConfined(t *testing.T) {
 	// Allowed by the operator: runs confined, twice (the second sees the
 	// first's write — the dispatch's layer — while the workspace never does).
 	allow := []*config.IsolationConfig{{Host: map[string]*config.HostCommand{"terraform": {Allow: []string{"plan *"}}}}}
-	out = run(allow, `echo from-the-agent | terraform plan -out=x; echo "exit1=$?"
+	out = run(allow, `echo from-the-agent | terraform plan -out=x -; echo "exit1=$?"
 test -e earlier.txt && echo WS-CHANGED || echo ws-untouched
 terraform -chdir=. plan; echo "exit2=$?"`)
 	t.Logf("allowed:\n%s", out)
@@ -606,5 +613,89 @@ terraform -chdir=. plan; echo "exit2=$?"`)
 	}
 	if !sawConfined {
 		t.Error("the confined run must be audited as confined")
+	}
+}
+
+// TestJailLiveTerraformExternalDataSource (CONDUCTOR_LIVE_TERRAFORM=1): the
+// real terraform, run by a jailed agent shell through the shim, broker and
+// host-side jail, with the real egress proxy and network: init downloads the
+// external provider from the registry (the tool's endpoints), and the plan
+// runs an external data source whose program tries to read ~/.ssh and reach
+// an outside host — both fail while the plan runs.
+func TestJailLiveTerraformExternalDataSource(t *testing.T) {
+	if os.Getenv("CONDUCTOR_LIVE_TERRAFORM") == "" {
+		t.Skip("live: CONDUCTOR_LIVE_TERRAFORM=1")
+	}
+	needJailKernel(t)
+	tfBin, err := exec.LookPath("terraform")
+	if err != nil {
+		t.Skip("terraform missing")
+	}
+	f := newFixture(t)
+	m := f.manager(t)
+	for _, n := range []string{"main.tf", "probe.sh"} {
+		b, _ := os.ReadFile(filepath.Join("testdata", "tfprobe", n))
+		os.WriteFile(filepath.Join(f.ws, n), b, 0o755)
+	}
+	look := m.LookPath
+	m.LookPath = func(n string) (string, error) {
+		if n == "terraform" {
+			return tfBin, nil
+		}
+		return look(n)
+	}
+	pm := sandbox.NewProxyManager(nil)
+	defer pm.Close()
+	m.HostEgress = pm.UnixEndpointLabeled
+	allow := []*config.IsolationConfig{{Host: map[string]*config.HostCommand{"terraform": {Allow: []string{"init *", "plan *"}}}}}
+	l, err := m.Prepare(context.Background(), LaunchSpec{
+		DispatchID: "d1", Tool: "claude-code", Workspace: f.ws, Repo: "acme/app", Number: 42, IsPR: true,
+		HeadBranch: "fix/42", Label: "fix acme/app#42", Layers: allow,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	spec := sandbox.FromConfig(&config.IsolationConfig{Mode: "namespace"})
+	deps := sandbox.LocalWrapDeps{SelfExe: m.SelfExe, Confine: true, ExtraBinds: l.Binds}
+	script := `terraform apply -auto-approve -no-color >/dev/null 2>&1; echo "apply-exit=$?"
+terraform init -input=false -no-color | tail -3; echo "init-exit=$?"
+terraform plan -input=false -no-color; echo "plan-exit=$?"
+test -e written-by-probe.txt && echo WS-CHANGED || echo ws-untouched
+test -e .terraform && echo WS-HAS-DOT-TERRAFORM || echo ws-has-no-dot-terraform`
+	argv, env, cleanup, err := sandbox.WrapLocalCommand(spec, []string{"/bin/sh", "-c", script}, f.ws, append(sandbox.MinimalEnv(), l.Env...), deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Dir, cmd.Env = f.ws, env
+	out, _ := cmd.CombinedOutput()
+	t.Logf("jailed agent shell:\n%s", out)
+	s := string(out)
+	for _, want := range []string{"apply-exit=126", "init-exit=0", "plan-exit=0", "ws-untouched", "ws-has-no-dot-terraform"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	out1 := func(k string) string { // a plan output value: + "k" = "v"
+		m := regexp.MustCompile(`"?` + k + `"?\s*=\s*"([^"]*)"`).FindStringSubmatch(s)
+		if m == nil {
+			return ""
+		}
+		return m[1]
+	}
+	if out1("ssh") != "blocked" || out1("via_proxy") != "403" || out1("workspace") != "written-copy-on-write" {
+		t.Errorf("probe: ssh=%q via_proxy=%q workspace=%q", out1("ssh"), out1("via_proxy"), out1("workspace"))
+	}
+	if rc := out1("direct_rc"); rc == "" || rc == "0" {
+		t.Errorf("the external program reached the network directly (rc %q)", rc)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, e := range f.events {
+		if e.Type == "host_command" || e.Type == "egress" {
+			t.Logf("event: %s %s %s %q %v", e.Type, e.Status, e.Detail, e.Reason, e.Fields)
+		}
 	}
 }
