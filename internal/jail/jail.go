@@ -167,7 +167,9 @@ type Launch struct {
 	// ClaudeSettings is the --settings JSON wiring claude-code's tool-call
 	// hooks to the broker ("" for other tools).
 	ClaudeSettings string
-	Dispatch       *Dispatch
+	// Seatbelt is the macOS profile extras (nil on Linux).
+	Seatbelt *sandbox.AgentProfile
+	Dispatch *Dispatch
 	// Close tears the broker down; idempotent.
 	Close func()
 }

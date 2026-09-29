@@ -45,6 +45,10 @@ type LocalWrapDeps struct {
 	// jail beyond the workdir + spec.FS — e.g. a code step's own code temp dir
 	// (read-only) and ctx-socket dir (read-write). Ignored unless Confine.
 	ExtraBinds []BindMount
+	// Agent carries the macOS agent-jail extras (scratch home, shim dir,
+	// exec denials, narrowed Mach services, the proxy port); ignored on Linux,
+	// where the same intent is expressed as ExtraBinds.
+	Agent *AgentProfile
 	// EgressAddr mints a LOOPBACK egress-proxy endpoint for an allowlist —
 	// the ADVISORY path (HTTP(S)_PROXY env only).
 	EgressAddr func(allow []string) (addr, cred string, revoke func(), err error)
