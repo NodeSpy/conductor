@@ -65,6 +65,18 @@ func main() {
 		// exactly as claude-code runs its tools, and its output lands in the
 		// reply for the harness to assert on.
 		shOut := runShellDirectives(prompt, hookCommand(args))
+		if strings.Contains(prompt, "[[identity]]") {
+			// Which identity guidance reached the agent: the jailed text, or
+			// the unjailed token/SSH text (#154).
+			id := "identity=none"
+			switch {
+			case strings.Contains(prompt, "GH_TOKEN/GITHUB_TOKEN are MY token"):
+				id = "identity=token-ssh"
+			case strings.Contains(prompt, "conductor signs each commit"):
+				id = "identity=jailed"
+			}
+			shOut += id + "\n"
+		}
 		if !strings.Contains(prompt, "[[nofix]]") {
 			_ = fixer.Apply(cwd, runtime, prompt)
 		}

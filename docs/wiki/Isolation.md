@@ -14,8 +14,8 @@ with no `isolation:` block gets a synthesized jail (#154). The agent sees:
 
 | | |
 |---|---|
-| read-write | the workspace; the git common dir behind a worktree — with its `config`, `hooks/` and `objects/info` read-only and other dispatches' worktree metadata hidden; the tool's own state (`~/.claude`, `~/.claude.json`, `~/.codex`, …) |
-| read-only | `/usr`, `/etc`, `/opt`, `~/.gitconfig`, the agent CLI's own install (e.g. `~/.local/share/claude`), the conductor binary, the dispatch's broker socket |
+| read-write | the workspace — the dispatch's own git clone, `.git` included (see [Git: one clone per dispatch](#git-one-clone-per-dispatch)); the tool's own state (`~/.claude`, `~/.claude.json`, `~/.codex`, …) |
+| read-only | `/usr`, `/etc`, `/opt`, `~/.gitconfig`, the agent CLI's own install (e.g. `~/.local/share/claude`), the conductor binary, the base clone's object store (what the dispatch's clone borrows — nothing else of the base), the dispatch's broker socket and conductor's tool socket |
 | scratch | a private `$HOME` (tmpfs on Linux, a per-dispatch dir on macOS) and a per-dispatch `/tmp` |
 | absent | everything else: `~/.ssh`, cloud and tool configs, the daemon's config and state, other repositories |
 
@@ -23,7 +23,17 @@ with no `isolation:` block gets a synthesized jail (#154). The agent sees:
   the `PC_GH_*` tokens, `SSH_AUTH_SOCK`, cloud credentials, and anything named
   like a token/secret/password are removed; the agent's own model credential
   (`ANTHROPIC_API_KEY` for claude-code, `OPENAI_API_KEY` for codex, …) is
-  kept. The daemon's own environment is never inherited wholesale.
+  kept. The daemon's own environment is never inherited wholesale. The
+  dispatch's own conductor skill session (`CONDUCTOR_ENDPOINT`,
+  `CONDUCTOR_SKILL_TOKEN`) is kept, so `conductor call step.done` and the
+  step's granted verbs work from inside the jail: it is not a credential —
+  the daemon authorizes each call by the caller's uid and the dispatch the
+  token was minted for, and it grants only that dispatch's own skill policy.
+- **The agent is told the truth about its identity.** A jailed launch's prompt
+  says commits and pushes are made as you through conductor and that `gh` and
+  the other host commands run on the host through conductor — never the
+  unjailed text about `GH_TOKEN` and pushing over SSH, which would send it
+  looking for credentials that are not there.
 - **Credentialed work goes through conductor**: [host commands](Host-Commands)
   (`gh`, `aws`, `kubectl`, …) run on your machine with your setup after
   guardrails and your rules; git's network and signing side is brokered
@@ -87,6 +97,43 @@ addresses. `audit` is how an allowlist gets built: run with it, read the
 `egress:`. The default stays `open` because the enforced modes break tools
 that do not honor `HTTPS_PROXY`; `audit` shows exactly which.
 
+### Git: one clone per dispatch {#git-one-clone-per-dispatch}
+
+Each dispatch gets its **own clone** of the repository (`<state>/worktrees/<id>`),
+not a `git worktree` of a shared one. It borrows the per-repo base clone's
+objects through `objects/info/alternates` — nothing is copied — while its
+refs, config, hooks, index and any object it creates are its own. So two
+dispatches on the same repository cannot touch each other: one cannot see the
+other's clone, move or delete its branch (locally or — the push policy — on
+the remote), rewrite a shared `packed-refs`, or prune an object the other
+needs. In the jail the base clone shows only its object store, read-only;
+the rest of its `.git` is an empty read-only directory.
+
+- **conductor's own git never trusts the clone.** Pushes, fetches, the signing
+  check and the signing configuration run in the base clone (conductor's
+  repository), with the operator's identity and the hardening every
+  conductor git call gets (no hooks, no fsmonitor, `core.sshCommand` from
+  your global config only). The dispatch's commits are added to that run as a
+  conductor-owned **copy** of the clone's own objects — every path opened
+  without following symlinks, `objects/info` never read — so an alternates
+  line or a symlink the agent plants in its clone cannot point conductor's
+  git at another repository on your machine.
+- **A partial base still works.** The base clone is `--filter=blob:none`;
+  the checkout is made through it (a missing blob is fetched once, into the
+  shared store) and the dispatch clone is a partial clone of the same origin,
+  so a blob neither has is fetched lazily later — from inside the jail
+  through conductor's remote helper, into the base's store the clone
+  borrows from.
+- **conductor's fetches into the base never disturb a running dispatch.**
+  They only add objects; a keep-alive ref per live clone
+  (`refs/conductor/live/<id>`) keeps the objects it started from reachable,
+  and goes when the clone does (the reaper drops those of clones a killed
+  daemon left behind).
+
+This replaces the read-only binds of a shared worktree's `.git/config`,
+`hooks/` and `objects/info`: the clone's config and hooks are the agent's own
+to break, and nothing of conductor's reads them.
+
 ### Writes are bound to the dispatch's own target {#writes-are-bound-to-the-dispatchs-own-target}
 
 Every write conductor performs on an agent's behalf — a host command, a
@@ -130,7 +177,7 @@ scratch `$HOME` with the tool-state paths linked in (the real home unreadable
 except those paths), a per-dispatch `TMPDIR` (claude-code's scratch included,
 via `CLAUDE_CODE_TMPDIR`), a shim dir first on `PATH` with every host-set
 binary's real path exec-denied, Mach services narrowed to an explicit list,
-and git's `config`/`hooks`/`objects/info` write-denied.
+and of the base clone only its object store readable.
 
 **The Keychain is closed by default.** Allowing the Security framework's
 services (what a Keychain-held claude-code login needs) also lets the agent

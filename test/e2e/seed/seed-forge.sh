@@ -25,6 +25,16 @@ seed_repo() {
     cd "$tmp"
     git init -q
     git checkout -q -b main
+    if [ "$repo" = grpx/jailpair ]; then
+      # Per-dispatch clones (#154 B): a partial (blob:none) base clone, and
+      # an old blob only the forge has — a dispatch clone fetches it lazily.
+      git -C "$bare" config uploadpack.allowFilter true
+      git -C "$bare" config uploadpack.allowAnySHA1InWant true
+      echo "ancient history" > OLD.txt
+      git add OLD.txt
+      git commit -qm "old"
+      git rm -q OLD.txt
+    fi
     echo "# $repo" > README.md
     printf 'line 1\nline 2\nline 3\n' > app.txt
     git add -A
@@ -39,6 +49,13 @@ seed_repo() {
     git push -q origin pr-1
     # Mirror it at the GitHub-style PR head ref.
     git push -q origin pr-1:refs/pull/1/head
+    if [ "$repo" = grpx/jailpair ]; then
+      git checkout -q -b pr-2 main
+      echo two > two.txt
+      git add two.txt
+      git commit -qm "pr-2"
+      git push -q origin pr-2 pr-2:refs/pull/2/head
+    fi
   )
   rm -rf "$tmp"
   echo "seeded $bare (main, pr-1, refs/pull/1/head)"

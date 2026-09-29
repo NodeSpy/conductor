@@ -34,8 +34,10 @@ RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh util-l
 # with a "secret" ssh key and a gh login the jail must hide from the agent
 # while the host-side gh still sees its own login.
 COPY test/e2e/services/fakegh/gh /usr/local/bin/gh
-RUN chmod 0755 /usr/local/bin/gh \
- && mkdir -p /home/conductor/.ssh /home/conductor/.config/gh \
+COPY test/e2e/services/faketf/terraform /usr/local/bin/terraform
+RUN chmod 0755 /usr/local/bin/gh /usr/local/bin/terraform \
+ && mkdir -p /home/conductor/.ssh /home/conductor/.config/gh /home/conductor/.terraform.d \
+ && echo '{"credentials":{}}' > /home/conductor/.terraform.d/credentials.tfrc.json \
  && echo "NOT-A-REAL-KEY-e2e-secret" > /home/conductor/.ssh/id_fake \
  && printf 'github.com:\n  user: conductor-user\n' > /home/conductor/.config/gh/hosts.yml \
  && chmod 700 /home/conductor/.ssh && chmod 600 /home/conductor/.ssh/id_fake \

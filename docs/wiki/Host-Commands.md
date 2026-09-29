@@ -88,7 +88,8 @@ isolation:
       deny: ["delete *", "rollout undo *"]
       env:  { KUBECONFIG: ~/.kube/staging }  # fix-up for when the machine's default isn't right for agents
     terraform:
-      allow: ["plan *", "show *"]
+      allow: ["plan *", "init *", "fmt *"]   # plan/init execute workspace content: named here, they run confined
+      # network: { egress: [registry.terraform.io, s3.amazonaws.com] }   # replaces the default endpoints of its confined runs
     mytool:                                  # any binary, by name
       allow: ["status *"]
     docker: false                            # keep it out of reach entirely
@@ -126,6 +127,67 @@ without a profile matches its raw argv.
 4. **Defaults** — installed built-ins are host commands; anything else is
    native.
 
+## Commands that execute workspace content {#content-executing}
+
+Some host commands run what the agent wrote: `terraform plan` runs the
+configuration's providers and data sources — an `external` data source is
+any program — and `docker build` the Dockerfile's steps. On the host they
+would run outside the jail, as you, with your credentials. So they are
+**refused unless your own config names them** in the binary's `allow` list —
+a global or runtime block (a step can only narrow), and a pattern whose first
+word is literal (`plan *`; a blanket `*` does not count). The refusal says
+why and names the knob:
+
+```
+host_command ✗ refused  terraform plan — denied (terraform plan executes workspace content on the host: it runs the
+  workspace configuration's provider plugins and data sources — an `external` data source is any program. Allow it in
+  your config — isolation.host.terraform.allow: ["plan *"] — and it runs in a host-side jail)
+```
+
+| tool | content-executing (refused unless allowed) | stays available |
+|---|---|---|
+| terraform | `init`, `get`, `plan`, `apply`, `destroy`, `refresh`, `import`, `console`, `test`; and `show`, `validate`, `providers schema`, `state show` (they load the provider binaries under `.terraform`, which the agent can write) | `fmt`, `version`, `output`, `workspace …`, `state list`, … |
+| docker | `build`, `image build`, `buildx build`, `buildx bake`; `run`/`create` of an image built on this machine (no registry digest) | `ps`, `images`, `run` of a pulled image, … (`compose` beyond its read-only verbs stays refused outright) |
+| kubectl | `apply`, `create`, `replace` with `-f`/`-k`; `kustomize` (`plugin` stays refused outright) | `get`, `describe`, `logs`, … |
+| aws | `cloudformation deploy`, `package`, `create-stack`, `update-stack`, `create-change-set`, `create-stack-set`, `update-stack-set`; `lambda create-function`, `update-function-code`, `publish-layer-version` | everything else |
+| gcloud | `builds submit`, `functions deploy`, `run deploy`, `app deploy` | everything else |
+| az | `deployment …`, `functionapp deployment …`, `webapp deploy`, `webapp up` | everything else |
+| npm, pnpm | `publish` | `whoami`, …; `install`, `ci`, `run`, `exec`, `test`, `start` run natively **in the agent's jail** (no registry token, the jail's network) — never on the host |
+| gh | extensions (refused outright) | — |
+
+**An allowed one runs in a host-side jail**, never unconfined:
+
+- **Only what it needs is there.** Linux: an allow-list root (the same
+  pivot_root construction as the agent's jail) — the base system read-only,
+  the tool's install, the copy-on-write view of **the tool's own** config and
+  credential paths, the workspace, the dispatch's `/tmp`. Your session's
+  sockets (`/run/user/<uid>`: ssh-agent, gpg-agent, D-Bus), other daemons'
+  sockets (the Docker socket is there only for `docker`), the rest of your
+  home and conductor's state do not exist. macOS: a Seatbelt profile that
+  denies every write but the scratch dir and the dispatch's `TMPDIR`, every
+  read of your home but the tool's cloned config, and the Keychain services.
+- **The workspace is read-only.** Its writes land in the dispatch's
+  copy-on-write layer for that tool (Linux: an overlay's upper dir; macOS: an
+  APFS clone the command runs in, what it changed kept for the next run) —
+  so `terraform init` then `terraform plan` works within a dispatch, and
+  nothing reaches the workspace itself.
+- **No stdin and no terminal.**
+- **The network is the tool's service endpoints only**, through conductor's
+  egress proxy with no other route (Linux: an empty network namespace;
+  macOS: Seatbelt allows only the proxy's port): terraform the registry,
+  HashiCorp releases and GitHub release downloads, and the AWS, Google Cloud
+  and Azure APIs; docker the common registries; aws `*.amazonaws.com`; npm
+  the npm registry; and so on. The binary's own `network:` block replaces the
+  default (`open` still goes through the proxy, recorded).
+- The event says so: `host_command → exit 0 terraform plan` with
+  `confined: true` and the egress allowlist in the audit row.
+
+What stays true of a confined run: it acts with that tool's credentials
+against that tool's services — a `terraform apply` you allow will change
+infrastructure. The jail keeps the agent's code from reaching anything
+*else*. `docker build` steps run inside your Docker daemon's own isolation,
+which conductor does not control.
+
 ## Guardrails
 
 Three layers, so safety does not depend on recognizing every subcommand:
@@ -139,7 +201,7 @@ Three layers, so safety does not depend on recognizing every subcommand:
    get-access-token`; `kubectl config set-*|use-context|delete-*|view --raw`,
    `kubectl create token`, `kubectl proxy|port-forward`; `docker
    login|logout|context *`; `npm|pnpm login|logout|adduser|token *|config
-   set`; `terraform login|logout|console`. Containers that reach the host:
+   set`; `terraform login|logout`. Containers that reach the host:
    `docker run -v /:…` (any bind outside the workspace), `--privileged`,
    `--cap-add`, `--device`, `--pid|--net|--ipc|--userns=host`, `docker build
    --ssh`, and `docker compose` beyond its read-only verbs. `ssh`/`scp`: no
@@ -172,15 +234,18 @@ thread to its PR first); `pr create`, `issue create`, `api` POST
 - Network: GitHub remotes (and the base clone's own origin) are rewritten —
   through `GIT_CONFIG_*`, no file touched — to `conductor::owner/repo`. Every
   fetch, push, lazy blob fetch, alias or script that needs the network runs
-  `git-remote-conductor`; conductor performs it from the shared base clone
-  with your identity after policy: the dispatch's repository only; pushes only
+  `git-remote-conductor`; conductor performs it from the base clone (never
+  the dispatch's own clone, whose config is the agent's — see
+  [[Isolation#git-one-clone-per-dispatch]]) with your identity after policy:
+  the dispatch's repository only; pushes only
   to the dispatch's own branch — never the default branch, no force push, no
   deletion; review steps no push at all. Every push records the ref and
   old→new SHAs.
 - Signing: `gpg.ssh.program` / `gpg.program` is conductor's signing shim. It
   sends the payload; conductor checks it is a commit object whose tree and
   parents exist in the dispatch's repository and signs it outside the jail
-  with your configured `user.signingkey` (ssh-keygen / gpg reads the key, as
+  with your configured `user.signingkey`, read from your global config and
+  conductor's base clone — never the dispatch clone's (ssh-keygen / gpg reads the key, as
   for your own commits; a box without ssh-keygen signs natively in the SSHSIG
   format). Commits show **Verified**; the key never enters the jail. The limit
   is deliberate: an agent can get content *it wrote* signed as you — that is
@@ -189,7 +254,9 @@ thread to its PR first); `pr create`, `issue create`, `api` POST
   `core.hooksPath=/dev/null`, `core.fsmonitor=false`, a `core.sshCommand`
   read from your global/system config only, `protocol.ext.allow=never`, no
   external diff, replace refs ignored, and the git dir named explicitly — a
-  worktree's `.git` pointer is agent-writable and never trusted.
+  checkout's `.git` is agent-writable and never trusted; the dispatch's
+  objects reach conductor's git only as a conductor-owned copy, made without
+  following symlinks.
 
 ## Tool-call hooks
 
@@ -216,14 +283,8 @@ with `approval_policy="never"` and a `read-only` (review) or
 
 ## Limits
 
-- **Host commands run workspace content on your machine.** `terraform plan`
-  with an agent-written `external` data source, `docker build` of an
-  agent-written Dockerfile, a `kubectl apply` of agent-written manifests: the
-  copy-on-write home and the per-tool home view bound what that code can
-  read, but it runs as you, with that tool's credentials. Set such tools to
-  `false`, or narrow them with `allow`, where that matters.
-- `npm publish` runs with `--ignore-scripts` on the host (lifecycle scripts
-  are agent-written code).
+- `npm publish` (once allowed) runs with `--ignore-scripts` too (lifecycle
+  scripts are agent-written code).
 - A tool that ignores `$HOME` and writes via its own absolute paths outside
   your home is not contained by the copy-on-write home (Linux still hides
   conductor's state; macOS denies writes to the real home).
