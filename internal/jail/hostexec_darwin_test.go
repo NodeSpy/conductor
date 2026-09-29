@@ -38,7 +38,7 @@ func TestHostRunDarwinCOW(t *testing.T) {
 	m := &Manager{Root: filepath.Join(state, "jails")}
 	hr := hostRun{
 		Tool: "sh", Bin: "/bin/sh", Cwd: ws, Home: fake,
-		Args: []string{"-c", `cat "$HOME/.config/tool/cfg"; echo changed >> "$HOME/.config/tool/cfg"; cat ` + fake + `/.ssh/id 2>&1 | head -1; cat ` + state + `/audit.jsonl 2>&1 | head -1; echo out > ` + ws + `/o; echo ws=$?`},
+		Args:      []string{"-c", `cat "$HOME/.config/tool/cfg"; echo changed >> "$HOME/.config/tool/cfg"; cat ` + fake + `/.ssh/id 2>&1 | head -1; cat ` + state + `/audit.jsonl 2>&1 | head -1; echo out > ` + ws + `/o; echo ws=$?`},
 		HomePaths: []string{".config/tool"}, Workspace: ws, TmpDir: tmp, Sensitive: []string{state},
 		Env: []string{"PATH=/usr/bin:/bin"},
 	}
