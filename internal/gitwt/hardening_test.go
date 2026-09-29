@@ -42,6 +42,10 @@ func TestHardenedGitIgnoresTamperedLocalConfig(t *testing.T) {
 	hooksDir := filepath.Join(scratch, "hooks")
 	writeExecutable(t, filepath.Join(hooksDir, "post-checkout"), "#!/bin/sh\ntouch "+shq(hookMarker)+"\n")
 
+	// A hook dropped straight into the clone's default hooks dir too — what a
+	// process that can write the shared .git would plant, with no config
+	// change at all.
+	writeExecutable(t, filepath.Join(base, ".git", "hooks", "post-checkout"), "#!/bin/sh\ntouch "+shq(hookMarker)+"\n")
 	run(t, base, "git", "config", "core.fsmonitor", fsScript)
 	run(t, base, "git", "config", "core.hooksPath", hooksDir)
 	run(t, base, "git", "config", "core.sshCommand", "/bin/false") // must never actually be invoked

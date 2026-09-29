@@ -91,6 +91,14 @@ func TestPushOnePolicy(t *testing.T) {
 			t.Errorf("%+v must be refused, got %q", p, r)
 		}
 	}
+	// Only branches are brokered at all — even with a binding that would allow
+	// anything, a tag (or any non-branch ref) is refused by the helper itself.
+	open := &Manager{CheckPush: func(*Dispatch, string, bool, bool) string { return "" }}
+	for _, ref := range []string{"refs/tags/v1", "refs/notes/commits", "refs/pull/1/head", "HEAD"} {
+		if r := open.pushOne(t.Context(), d, GitPush{SHA: "0123456789abcdef0123456789abcdef01234567", Dst: ref}, false); !strings.Contains(r, "only branch pushes") {
+			t.Errorf("%s must be refused as a non-branch ref: %q", ref, r)
+		}
+	}
 	d.ReadOnly = true
 	if r := m.pushOne(t.Context(), d, GitPush{SHA: "0123456789abcdef0123456789abcdef01234567", Dst: "refs/heads/fix/42"}, false); !strings.Contains(r, "review step") {
 		t.Fatalf("a reviewer never pushes: %q", r)
@@ -134,6 +142,14 @@ func TestIntentRules(t *testing.T) {
 	// No rules → nothing refused.
 	if intentCheck(nil, ws, "Edit", in(map[string]any{"file_path": "/etc/passwd"})) != "" {
 		t.Fatal("no intent rules, no refusal")
+	}
+	// deny_paths on its own (no allow list in front of it).
+	deny := &config.IntentRules{DenyPaths: []string{"**/migrations/**"}}
+	if got := intentCheck(deny, ws, "Edit", in(map[string]any{"file_path": filepath.Join(ws, "db/migrations/001.sql")})); !strings.Contains(got, "must not edit") {
+		t.Fatalf("deny_paths: %q", got)
+	}
+	if got := intentCheck(deny, ws, "Edit", in(map[string]any{"file_path": filepath.Join(ws, "src/a.go")})); got != "" {
+		t.Fatalf("deny_paths only: %q", got)
 	}
 	r2 := &config.IntentRules{DenyPaths: []string{"migrations/**"}}
 	if intentCheck(r2, ws, "Bash", in(map[string]any{"command": "rm -rf migrations/002.sql"})) == "" {
