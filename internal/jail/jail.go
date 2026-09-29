@@ -250,6 +250,27 @@ var toolState = map[string][]string{
 // readOnlyHome are home-relative paths every jail sees read-only.
 var readOnlyHome = []string{".gitconfig", ".config/git"}
 
+// gitGlobalConfig is the operator's global git config when it lives where
+// GIT_CONFIG_GLOBAL says rather than in ~/.gitconfig: the jail passes that
+// variable through, so it must see the file too (read-only) — else the
+// agent's git runs with no identity and no commit.gpgsign. "" when unset,
+// missing, or inside conductor's own state/config.
+func (m *Manager) gitGlobalConfig() string {
+	p := os.Getenv("GIT_CONFIG_GLOBAL")
+	if p == "" || !filepath.IsAbs(p) || p == os.DevNull {
+		return ""
+	}
+	if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() {
+		return ""
+	}
+	for _, s := range m.Sensitive {
+		if within(p, s) {
+			return ""
+		}
+	}
+	return p
+}
+
 // Prepare lays out a jailed launch and starts its broker. The caller wraps
 // the launch with the returned binds (sandbox.LocalWrapDeps{Confine: true,
 // ExtraBinds: …}) and appends Env.
@@ -367,6 +388,9 @@ func (m *Manager) layout(d *Dispatch, self string) ([]sandbox.BindMount, error) 
 		for _, rel := range readOnlyHome {
 			add(sandbox.BindMount{Path: filepath.Join(home, rel), RO: true, Optional: true})
 		}
+	}
+	if p := m.gitGlobalConfig(); p != "" {
+		add(sandbox.BindMount{Path: p, RO: true, Optional: true})
 	}
 	// The agent CLI's own install when it lives outside /usr, /opt (e.g. the
 	// native installer's ~/.local/bin/claude → ~/.local/share/claude/…).

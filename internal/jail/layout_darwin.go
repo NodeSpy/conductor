@@ -45,6 +45,9 @@ func (m *Manager) layoutDarwin(d *Dispatch, self string) ([]sandbox.BindMount, *
 			prof.ReadOnly = append(prof.ReadOnly, real)
 		}
 	}
+	if p := m.gitGlobalConfig(); p != "" {
+		prof.ReadOnly = append(prof.ReadOnly, p)
+	}
 	prof.ReadWrite = append(prof.ReadWrite, home, d.TmpDir, filepath.Join(d.Dir, "broker"))
 	prof.ReadOnly = append(prof.ReadOnly, bin, self)
 	if raw, err := m.SelfExe(); err == nil {

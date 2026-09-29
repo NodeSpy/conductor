@@ -412,12 +412,17 @@ git rev-parse --verify -q refs/heads/fix/43 >/dev/null && echo b-branch-intact
 	}
 
 	outA, err := f.runJailed(t, m, `
-# Steer conductor's git through the clone's own config: a signing program
-# and a push URL (a bare repo whose hook runs as whoever pushes to it).
+# Steer conductor's git through the clone's own config: keys only a git
+# run on the host with this config would honor (the in-jail git's own
+# signing and transport are fixed by conductor's GIT_CONFIG_* env and its
+# remote helper) — a signing program, and the receive/upload-pack command a
+# push or fetch to the file:// origin runs.
 printf '#!/bin/sh\ntouch "`+f.ws+`/PWNED-sign"\nexit 1\n' > evil-sign.sh && chmod +x evil-sign.sh
 git config gpg.ssh.program "`+f.ws+`/evil-sign.sh"
-git init -q --bare evil.git && printf '#!/bin/sh\ntouch "`+f.ws+`/PWNED-hook"\n' > evil.git/hooks/pre-receive && chmod +x evil.git/hooks/pre-receive
-git config remote.origin.pushurl "`+f.ws+`/evil.git"
+printf '#!/bin/sh\ntouch "`+f.ws+`/PWNED-pack"\nexec git-receive-pack "$@"\n' > evil-rp.sh && chmod +x evil-rp.sh
+printf '#!/bin/sh\ntouch "`+f.ws+`/PWNED-pack"\nexec git-upload-pack "$@"\n' > evil-up.sh && chmod +x evil-up.sh
+git config remote.origin.receivepack "`+f.ws+`/evil-rp.sh"
+git config remote.origin.uploadpack "`+f.ws+`/evil-up.sh"
 echo a > a.txt && git add a.txt && git commit -q -m "a work" && echo a-committed
 git push -q origin HEAD:refs/heads/fix/42; echo "a-own-push-exit=$?"
 test -e "`+wsB+`" && echo A-SEES-B
@@ -460,13 +465,10 @@ git push -q origin "$c:refs/heads/fix/42"; echo "a-leak-push-exit=$?"
 			t.Errorf("A: %s", bad)
 		}
 	}
-	for _, p := range []string{"PWNED-sign", "PWNED-hook"} {
+	for _, p := range []string{"PWNED-sign", "PWNED-pack"} {
 		if _, err := os.Stat(filepath.Join(f.ws, p)); err == nil {
 			t.Errorf("conductor ran a program the agent named in its clone's config (%s)", p)
 		}
-	}
-	if out, _ := exec.Command("git", "--git-dir="+filepath.Join(f.ws, "evil.git"), "for-each-ref").Output(); len(out) > 0 {
-		t.Errorf("conductor pushed to the agent's pushurl: %s", out)
 	}
 	if head := run(t, f.remote, nil, "git", "log", "-1", "--format=%s", "refs/heads/fix/42"); head != "a work" {
 		t.Errorf("A's own push must land on the real remote, signed with the operator's key: head %q", head)
