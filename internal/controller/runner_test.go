@@ -3,8 +3,11 @@ package controller
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // stubSession is a minimal Session that records Close and can signal Wait.
@@ -295,3 +298,91 @@ func TestResolvePermissionDelegatesToHandler(t *testing.T) {
 		t.Fatalf("handler denial must be honored, got %+v", out)
 	}
 }
+
+// cancelSession's turn runs until Cancel kills it, like a cli agent process.
+type cancelSession struct {
+	stubSession
+	once      sync.Once
+	cancelled chan struct{}
+}
+
+func newCancelSession(id string) *cancelSession {
+	return &cancelSession{stubSession: stubSession{id: id}, cancelled: make(chan struct{})}
+}
+func (s *cancelSession) Cancel(context.Context) error {
+	s.once.Do(func() { close(s.cancelled) })
+	return nil
+}
+func (s *cancelSession) Wait(ctx context.Context, _ time.Duration) {
+	select {
+	case <-s.cancelled:
+	case <-ctx.Done():
+	}
+}
+
+// When a PR merges or closes, StopTarget kills its running fixers: the turn
+// ends, Dispatch reports ErrTargetClosed (a stop, not a failure), and the
+// session is left for the normal archive to close.
+// Other PRs' fixers, and non-fixer sessions on the same PR, are untouched.
+func TestStopTargetKillsTheClosedPRsFixers(t *testing.T) {
+	sess := newCancelSession("fix-1")
+	r := newControllerRunner(&cancelCtl{sess: sess}, &fakeProv{}, nil)
+	req := makeReq("new_comment", "address it")
+	req.Wait = true
+	errc := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(context.Background(), req)
+		errc <- err
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for !r.HasLiveAgent(context.Background(), req.Trigger.Key(), req.Trigger.Kind) {
+		if time.Now().After(deadline) {
+			t.Fatal("fixer never went live")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := r.StopTarget(context.Background(), "o/other#9"); n != 0 {
+		t.Fatalf("stopped %d fixers on another PR", n)
+	}
+	if n := r.StopTarget(context.Background(), req.Trigger.Key()); n != 1 {
+		t.Fatalf("StopTarget = %d, want 1", n)
+	}
+	select {
+	case err := <-errc:
+		if !errors.Is(err, dispatch.ErrTargetClosed) {
+			t.Fatalf("Dispatch err = %v, want ErrTargetClosed", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Dispatch still waiting after the stop")
+	}
+	if sess.closed {
+		t.Fatal("StopTarget must cancel the turn, not close the session (archive does that)")
+	}
+
+	// A review on the same PR is not a fixer: left running.
+	rev := newCancelSession("rev-1")
+	r2 := newControllerRunner(&cancelCtl{sess: rev}, &fakeProv{}, nil)
+	rreq := makeReq("review_requested", "review it")
+	go func() { _, _ = r2.Dispatch(context.Background(), rreq) }()
+	for !r2.HasLiveAgent(context.Background(), rreq.Trigger.Key(), rreq.Trigger.Kind) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := r2.StopTarget(context.Background(), rreq.Trigger.Key()); n != 0 {
+		t.Fatalf("stopped %d non-fixer sessions", n)
+	}
+	_ = rev.Cancel(context.Background())
+}
+
+type cancelCtl struct{ sess *cancelSession }
+
+func (c *cancelCtl) Name() string         { return "cancel" }
+func (c *cancelCtl) Model() SessionModel  { return ModelResumable }
+func (c *cancelCtl) Transport() Transport { return TransportCLI }
+func (c *cancelCtl) Initialize(context.Context) (Capabilities, error) {
+	return Capabilities{Transport: TransportCLI}, nil
+}
+func (c *cancelCtl) NewSession(context.Context, Spec, Handler) (Session, error) { return c.sess, nil }
+func (c *cancelCtl) ResumeSession(context.Context, string, bool, Handler) (Session, error) {
+	return c.sess, nil
+}
+func (c *cancelCtl) Runner() (Runner, error) { return nil, nil }

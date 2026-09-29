@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/models"
 )
@@ -68,16 +69,20 @@ type controllerRunner struct {
 	live   map[string]Session // agent id → live session
 	byPR   map[string]int     // "prKey\x00kind" → live count (HasLiveAgent gate)
 	bucket map[string]string  // agent id → its PR+kind bucket (for exact decrement)
+	// stopped marks sessions StopTarget killed because their PR closed; their
+	// Dispatch returns dispatch.ErrTargetClosed instead of the partial turn.
+	stopped map[string]bool
 }
 
 func newControllerRunner(c Controller, prov Provisioner, h Handler) *controllerRunner {
 	return &controllerRunner{
-		c:      c,
-		prov:   prov,
-		h:      h,
-		live:   map[string]Session{},
-		byPR:   map[string]int{},
-		bucket: map[string]string{},
+		c:       c,
+		prov:    prov,
+		h:       h,
+		live:    map[string]Session{},
+		byPR:    map[string]int{},
+		bucket:  map[string]string{},
+		stopped: map[string]bool{},
 	}
 }
 
@@ -161,6 +166,11 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		// can't capture leave it empty (the prior behavior).
 		if oc, ok := sess.(OutputCapturer); ok {
 			ref.Output = oc.Output()
+		}
+		// Killed because the PR merged or closed mid-turn (StopTarget): not a
+		// reply and not a failure — the flow records the run as stopped.
+		if r.wasStopped(id) {
+			return ref, dispatch.ErrTargetClosed
 		}
 		// A model-refusal error ("client too old for this model", deprecated/
 		// unknown model) is not a reply at all: surface it typed so the engine
@@ -258,6 +268,37 @@ func (r *controllerRunner) HasLiveAgent(_ context.Context, prKeyStr, kind string
 	return r.byPR[prKeyStr+"\x00"+kind] > 0
 }
 
+// StopTarget kills the running turn of every PR-fixer session (core.BranchFixKind)
+// working on the target keyed key — its PR merged or closed, so the work is moot
+// and any push it makes from here lands on a dead or wrong branch. Sessions are
+// cancelled, not closed: the dispatch returns and the normal archive releases
+// the worktree. Returns how many sessions it stopped.
+func (r *controllerRunner) StopTarget(ctx context.Context, key string) int {
+	r.mu.Lock()
+	var hit []Session
+	for id, b := range r.bucket {
+		k, kind, _ := strings.Cut(b, "\x00")
+		if k != key || !core.BranchFixKind(kind) || r.stopped[id] {
+			continue
+		}
+		if sess := r.live[id]; sess != nil {
+			r.stopped[id] = true
+			hit = append(hit, sess)
+		}
+	}
+	r.mu.Unlock()
+	for _, sess := range hit {
+		_ = sess.Cancel(ctx)
+	}
+	return len(hit)
+}
+
+func (r *controllerRunner) wasStopped(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stopped[id]
+}
+
 // Archive closes a finished session and drops it from the liveness table.
 func (r *controllerRunner) Archive(ctx context.Context, agentID string) error {
 	if agentID == "" {
@@ -295,6 +336,7 @@ func (r *controllerRunner) forget(id string) {
 		return
 	}
 	delete(r.live, id)
+	delete(r.stopped, id)
 	bucket := r.bucket[id]
 	delete(r.bucket, id)
 	if n := r.byPR[bucket]; n <= 1 {

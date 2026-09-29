@@ -419,6 +419,18 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	r.fireHooks(ctx, t, spec.Hooks, "start", "running", run.ID, "", data, nil, "workflow")
 
 	err := r.runSteps(ctx, &run, t, spec.Steps, data, shadow, true)
+	if errors.Is(err, dispatch.ErrTargetClosed) {
+		// The PR merged or closed while a fixer was on it, and conductor
+		// stopped it: the work is moot, not failed — no failure hooks, no
+		// failed/escalate notification, and nothing left for a retry.
+		r.Log("%s workflow stopped — the PR closed while step %s was running", flowTag(t), failedStepID(err))
+		r.audit(map[string]any{"event": "workflow_stopped", "repo": t.Target.Repo,
+			"number": t.Target.Number, "kind": t.Kind, "step": failedStepID(err), "reason": "target closed"})
+		r.auditRunCost(t, run.ID, runCost)
+		hist.finish("stopped", "target PR closed", failedStepID(err), runCost)
+		r.finishRun(ctx, run)
+		return
+	}
 	if err != nil {
 		r.Log("%s workflow failed: %v", flowTag(t), err)
 		r.fireHooks(ctx, t, spec.Hooks, "fail", "failed", run.ID, "",
@@ -877,7 +889,7 @@ func (r *Runner) execWithRetry(ctx context.Context, t core.Trigger, step config.
 	var err error
 	for attempt := 0; ; attempt++ {
 		out, raw, err = r.execStep(ctx, t, step, id, slot, data, shadow)
-		if err == nil || attempt >= max || ctx.Err() != nil {
+		if err == nil || attempt >= max || ctx.Err() != nil || errors.Is(err, dispatch.ErrTargetClosed) {
 			break
 		}
 		r.Log("%s step %s attempt %d failed: %v — retrying in %s", flowTag(t), id, attempt+1, err, backoff)

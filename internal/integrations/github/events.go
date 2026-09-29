@@ -1057,13 +1057,7 @@ func prClosedInPayload(p ghPayload) bool {
 
 // branchKind reports whether a kind's fixer works on (and pushes to) the PR's own
 // head branch, so its trigger must carry head_ref.
-func branchKind(k string) bool {
-	switch k {
-	case "failing_checks", "merge_conflict", "pr_behind":
-		return true
-	}
-	return feedbackKind(k)
-}
+func branchKind(k string) bool { return core.BranchFixKind(k) }
 
 // emptyStr reports whether a Context value is absent or an empty string.
 func emptyStr(v any) bool { s, _ := v.(string); return s == "" }

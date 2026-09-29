@@ -626,6 +626,11 @@ func enumContains(enumRaw any, value any) bool {
 // never be valid JSON.
 var ErrModelUnsupported = errors.New("model unsupported by the runtime/provider")
 
+// ErrTargetClosed marks an agent turn conductor stopped because its target PR
+// merged or closed mid-run. It is not a failure: the work is moot, so it is
+// never retried, escalated, or reported as a failed run.
+var ErrTargetClosed = errors.New("stopped: target PR closed")
+
 // classifyModelUnsupported turns a reply that is really a model-refusal error
 // into ErrModelUnsupported (nil when the text isn't one).
 func classifyModelUnsupported(text string) error {

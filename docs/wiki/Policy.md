@@ -46,6 +46,16 @@ triggers:
 | `shadow` | preview instead of dispatching | any |
 | `max_attempts_per_head` | soft attempt threshold before backoff; at **2×** this a struggling `(pr, kind, head)` is PARKED — retries stop entirely until a new commit (a fresh head auto-resumes it) — so a stuck fixer isn't re-attempted hourly forever | any |
 
+## Fixers stop when their PR closes
+
+A fixer (`new_comment`, `changes_requested`, `failing_checks`,
+`merge_conflict`, `pr_behind`) works on one PR. When that PR merges or
+closes, conductor kills the fixers still running on it, and a fixer still
+waiting for a slot doesn't start. The run ends `stopped`, not failed: no
+retry, no failure hooks, no `failed` notification. This covers controller
+runtimes whose sessions can be cancelled (`cli`, `acp`, `opencode`); a fixer
+on the paseo runtime runs to completion.
+
 ## Agent-authored plans (`agent_authored`)
 
 Governs the steps an agent emits at runtime (a `plan:` output block, the

@@ -230,3 +230,14 @@ func itoa(n int) string {
 	}
 	return string(b[i:])
 }
+
+// BranchFixKind reports whether a trigger kind's fixer works on, and pushes to,
+// its PR's own head branch — work that stops mattering once the PR closes, and
+// whose pushes belong on that one branch.
+func BranchFixKind(kind string) bool {
+	switch kind {
+	case "new_comment", "changes_requested", "failing_checks", "merge_conflict", "pr_behind":
+		return true
+	}
+	return false
+}
