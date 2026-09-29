@@ -1083,6 +1083,12 @@ func (d *Dispatcher) ListAgents(ctx context.Context, labels map[string]string) (
 // agents are untouched, as on the controller runners. Returns how many it
 // stopped.
 func (d *Dispatcher) StopTarget(ctx context.Context, key string) int {
+	// One listing by the PR label first: almost every close has no paseo
+	// agent on it, and this runs on every close event — don't pay a paseo
+	// call per fixer kind for nothing.
+	if all, err := d.ListAgents(ctx, map[string]string{"conductor": "1", "pr": key}); err != nil || len(all) == 0 {
+		return 0
+	}
 	n := 0
 	for _, kind := range core.BranchFixKinds() {
 		agents, err := d.ListAgents(ctx, map[string]string{"conductor": "1", "pr": key, "kind": kind})

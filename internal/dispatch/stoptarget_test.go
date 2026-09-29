@@ -15,11 +15,22 @@ type stopBackend struct {
 	Backend
 	agents   map[string][]AgentInfo // "pr|kind" -> agents
 	archived []string
+	lists    int
 }
 
 func (b *stopBackend) ListAgents(_ context.Context, labels map[string]string) ([]AgentInfo, error) {
+	b.lists++
 	if labels["conductor"] != "1" {
 		return nil, nil
+	}
+	if _, ok := labels["kind"]; !ok {
+		var all []AgentInfo
+		for k, v := range b.agents {
+			if strings.HasPrefix(k, labels["pr"]+"|") {
+				all = append(all, v...)
+			}
+		}
+		return all, nil
 	}
 	return b.agents[labels["pr"]+"|"+labels["kind"]], nil
 }
@@ -54,5 +65,15 @@ func TestDispatcherStopTargetArchivesOnlyOwnedFixers(t *testing.T) {
 	sort.Strings(be.archived)
 	if got := strings.Join(be.archived, ","); got != "fix-1,fix-2" {
 		t.Fatalf("archived %q, want only the owned fixers of #42", got)
+	}
+}
+
+// A close with no paseo agent on it costs one listing, not one per kind.
+func TestDispatcherStopTargetNoAgentsIsOneCall(t *testing.T) {
+	be := &stopBackend{agents: map[string][]AgentInfo{}}
+	d := &Dispatcher{Owned: NewOwnedSet(filepath.Join(t.TempDir(), "owned.json"))}
+	d.SetBackend(be)
+	if n := d.StopTarget(context.Background(), "acme/app#1"); n != 0 || be.lists != 1 {
+		t.Fatalf("stopped %d with %d listings, want 0 with 1", n, be.lists)
 	}
 }
