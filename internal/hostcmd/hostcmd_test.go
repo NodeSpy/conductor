@@ -430,3 +430,15 @@ func contains(xs []string, x string) bool {
 	}
 	return false
 }
+
+func TestPathGuardKernelInterfaces(t *testing.T) {
+	for _, p := range []string{"/proc/1/environ", "/proc/self/environ", "/sys/kernel/x", "/run/user/1000/bus", "/dev/tcp/x"} {
+		d := decide("gh", Rule{}, "pr", "comment", "42", "--body-file", p)
+		if d.Allow || !strings.Contains(d.Reason, "kernel/session") {
+			t.Errorf("%s: want refused, got %q", p, d.Reason)
+		}
+	}
+	if d := decide("gh", Rule{}, "pr", "comment", "42", "--body-file", "/dev/stdin"); !d.Allow {
+		t.Fatalf("/dev/stdin: %q", d.Reason)
+	}
+}

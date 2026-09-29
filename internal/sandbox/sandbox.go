@@ -32,6 +32,7 @@
 package sandbox
 
 import (
+	"encoding/json"
 	"fmt"
 	"path"
 	"strconv"
@@ -239,12 +240,29 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 		prefix = append(prefix, "--")
 		if nf != nil && (nf.UnixSocket != "" || len(nf.Masks) > 0 || jailed) {
 			prefix = append(prefix, nf.Self, "sandbox-net")
+			simple := true
 			for _, b := range nf.Binds {
-				flag := "--bind"
-				if b.RO {
-					flag = "--bind-ro"
+				simple = simple && b.simple()
+			}
+			if simple {
+				for _, b := range nf.Binds {
+					flag := "--bind"
+					if b.RO {
+						flag = "--bind-ro"
+					}
+					prefix = append(prefix, flag, b.Path)
 				}
-				prefix = append(prefix, flag, b.Path)
+			} else {
+				// The agent jail's richer allow-list (tmpfs $HOME, shims bound
+				// over tool paths, symlinks) travels as one JSON argument.
+				js, err := json.Marshal(nf.Binds)
+				if err != nil {
+					return nil, fmt.Errorf("sandbox: encode jail: %w", err)
+				}
+				prefix = append(prefix, "--jail", string(js))
+			}
+			if jailed && nf.Chdir != "" {
+				prefix = append(prefix, "--chdir", nf.Chdir)
 			}
 			for _, m := range nf.Masks {
 				prefix = append(prefix, "--mask", m)

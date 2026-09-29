@@ -426,6 +426,18 @@ func forbiddenPath(abs string, ctx Context) string {
 	if strings.HasPrefix(abs, "/~") {
 		return "is another user's home"
 	}
+	switch abs {
+	case "/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/zero", "/dev/urandom", "/dev/random":
+		return ""
+	}
+	// Kernel and session interfaces: a host command must not be pointed at
+	// another process's environment (/proc/<pid>/environ — the daemon's own
+	// secrets) or the session's sockets (/run/user/<uid>: agents, keyrings).
+	for _, k := range []string{"/proc", "/sys", "/dev", "/run/user", "/var/run/user"} {
+		if within(k) {
+			return "is a kernel/session interface"
+		}
+	}
 	if within(ctx.Workspace) || within(ctx.TmpDir) {
 		return ""
 	}

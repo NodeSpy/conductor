@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -31,6 +32,17 @@ func runSandboxNet(args []string) int {
 			i++
 		case args[i] == "--bind-ro" && i+1 < len(args):
 			opt.Binds = append(opt.Binds, sandbox.BindMount{Path: args[i+1], RO: true})
+			i++
+		case args[i] == "--jail" && i+1 < len(args):
+			var bs []sandbox.BindMount
+			if err := json.Unmarshal([]byte(args[i+1]), &bs); err != nil {
+				fmt.Fprintf(os.Stderr, "sandbox-net: --jail: %v\n", err)
+				return 2
+			}
+			opt.Binds = append(opt.Binds, bs...)
+			i++
+		case args[i] == "--chdir" && i+1 < len(args):
+			opt.Chdir = args[i+1]
 			i++
 		case args[i] == "--":
 			opt.Argv = args[i+1:]

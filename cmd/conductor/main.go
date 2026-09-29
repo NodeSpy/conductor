@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/NodeSpy/conductor/internal/jail"
 	"net"
 	"os"
 	"os/exec"
@@ -60,6 +61,12 @@ import (
 var version = "dev"
 
 func main() {
+	// Inside an agent jail conductor's binary also runs as the jail's shims
+	// (gh, git-remote-conductor, the signing and hook shims), chosen by the
+	// name it was invoked under (#154).
+	if handled, code := jail.ShimMain(os.Args); handled {
+		os.Exit(code)
+	}
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
@@ -74,6 +81,13 @@ func main() {
 	args := os.Args[2:]
 	var err error
 	switch cmd {
+	case "host-exec":
+		// Internal: builds a host command's copy-on-write home inside the
+		// namespaces conductor made for it, then runs the real binary (#154).
+		if len(args) != 1 {
+			os.Exit(2)
+		}
+		os.Exit(jail.RunHostExec(args[0]))
 	case "sandbox-net":
 		// Internal: the in-sandbox forwarder for enforced egress (#36 §15).
 		// Launched by conductor itself inside a namespace/container; not a

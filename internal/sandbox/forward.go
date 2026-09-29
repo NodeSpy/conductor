@@ -36,8 +36,30 @@ const ForwardAddr = "127.0.0.1:18080"
 // mask overmounts (and dodges the EPERM those hit under an unprivileged
 // user namespace).
 type BindMount struct {
-	Path string // host path, mounted at the same path inside the jail
-	RO   bool   // remount read-only after binding
+	Path string `json:"path"`           // path inside the jail (and the host source, unless Src is set)
+	RO   bool   `json:"ro,omitempty"`   // remount read-only after binding
+	Src  string `json:"src,omitempty"`  // host source when it differs from Path (a shim over /usr/bin/gh, a per-dispatch /tmp)
+	// Tmpfs mounts an empty, private tmpfs at Path instead of a bind (the
+	// agent jail's scratch $HOME).
+	Tmpfs bool `json:"tmpfs,omitempty"`
+	// Link creates a symlink at Path pointing to Link instead of a mount.
+	Link string `json:"link,omitempty"`
+	// Optional skips an entry whose source does not exist (a tool's state
+	// dir the operator has not created yet) instead of failing the launch.
+	Optional bool `json:"optional,omitempty"`
+}
+
+// source is the host path a bind mounts.
+func (b BindMount) source() string {
+	if b.Src != "" {
+		return b.Src
+	}
+	return b.Path
+}
+
+// simple reports an entry the legacy --bind/--bind-ro flags can carry.
+func (b BindMount) simple() bool {
+	return b.Src == "" && !b.Tmpfs && b.Link == "" && !b.Optional
 }
 
 // NetForward carries the in-sandbox wiring into WrapLocal: the path of this
@@ -51,6 +73,7 @@ type NetForward struct {
 	UnixSocket string      // the proxy's unix socket (daemon side); "" = no net forward
 	Masks      []string    // legacy: daemon paths to overmount away (plugin path; #36 iso-review H7)
 	Binds      []BindMount // fs-jail allow-list to pivot_root into ("" = no jail)
+	Chdir      string      // working directory inside the jail (the launch's own dir)
 }
 
 // EnterOpts is the `conductor sandbox-net` helper's configuration.
@@ -59,6 +82,7 @@ type EnterOpts struct {
 	Unix   string      // the egress proxy's unix socket path
 	Masks  []string    // legacy: paths to overmount away before exec (#36 iso-review H7)
 	Binds  []BindMount // fs-jail allow-list; non-empty ⇒ pivot_root jail instead of masks
+	Chdir  string      // working directory to re-enter after the pivot ("" = stay)
 	Argv   []string    // the real launch to exec once the plumbing is up
 }
 
@@ -92,6 +116,14 @@ func RunEnter(opt EnterOpts) int {
 				fmt.Fprintf(os.Stderr, "sandbox-net: mask %s: %v\n", m, err)
 				return 1
 			}
+		}
+	}
+	if opt.Chdir != "" {
+		// pivot_root left us at "/": re-enter the working directory the
+		// launch was given (it is inside the allow-list).
+		if err := os.Chdir(opt.Chdir); err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-net: chdir %s: %v\n", opt.Chdir, err)
+			return 1
 		}
 	}
 	if opt.Listen != "" {

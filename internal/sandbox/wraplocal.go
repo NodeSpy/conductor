@@ -96,7 +96,7 @@ func WrapLocalCommand(spec *Spec, argv []string, dir string, env []string, deps 
 	jail := deps.Confine && spec.Mode == "namespace" && !spec.Privileged
 	needMasks := !jail && spec.Mode == "namespace" && !spec.Privileged && len(deps.MaskPaths) > 0
 	if jail {
-		nf = &NetForward{Binds: jailBinds(dir, spec.FS, deps.ExtraBinds)}
+		nf = &NetForward{Binds: jailBinds(dir, spec.FS, deps.ExtraBinds), Chdir: dir}
 		// The Linux jail re-enters through `conductor sandbox-net`; macOS
 		// Seatbelt (sandbox-exec) is a system binary and needs no self-exe.
 		if CheckGOOS != "darwin" {
