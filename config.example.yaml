@@ -289,6 +289,39 @@ engines:
   # wasm: { isolation: { mode: user, user: sandbox } }   # explicit sandbox (fail-closed)
 
 # ---------------------------------------------------------------------------
+# THE AGENT WORKSPACE JAIL (#154) — ON BY DEFAULT, nothing to configure.
+# Every agent a cli or acp runtime launches on this box runs jailed to its
+# workspace: it sees the worktree, the git common dir behind it (config/hooks
+# read-only), its own tool state (~/.claude, ~/.codex, …), /usr /etc /opt —
+# and NOT ~/.ssh, cloud configs, the daemon's state, or other repos. No
+# GH_TOKEN or other credential is in its environment. gh / aws / kubectl /
+# docker / terraform / gcloud / az / ssh / npm publish still work: they are
+# HOST COMMANDS conductor runs on your machine with your own login, after
+# built-in guardrails and your rules, with a copy-on-write home. git pushes
+# go through conductor (the dispatch's own branch only); commits are signed
+# with your key outside the jail. Writes are bound to the dispatch's own PR.
+# Every crossing shows in `conductor watch`. A box that cannot build the jail
+# (root daemon, no user namespaces) runs agents as before, LOUDLY; an explicit
+# isolation: block fails closed. See docs/wiki/Isolation.md, Host-Commands.md.
+#
+# isolation:                         # top-level: the fleet-wide base (optional)
+#   network: open                    # open (default) | audit | deny | { egress: [...] } — enforced in the jail
+#   host:
+#     gh: { deny: ["pr merge *"] }
+#     aws: { allow: ["s3 ls *", "s3 cp * s3://build-artifacts/*"] }   # an allow list ⇒ ONLY these
+#     kubectl: { deny: ["delete *"], env: { KUBECONFIG: ~/.kube/staging } }
+#     docker: false                  # out of reach entirely
+# runtimes:
+#   claude:
+#     use: cli
+#     tool: claude-code
+#     isolation:
+#       fs: [~/go, ~/.cache/go-build]       # extra read-write paths in the jail
+#       writes: { create_pr: true }          # widen the target binding (steps may too; packs only up to this)
+#       intent: { deny_paths: ["**/migrations/**"], max_delete_lines: 200 }   # claude-code tool-call rules
+#       # mode: none                         # opt OUT: the old unconfined launch
+#       # macos_keychain: true               # macOS: let the agent reach the Keychain (read other items too!)
+#
 # isolation: — per-dispatch sandboxing (#36 §15) for the runtimes conductor
 # launches ITSELF (acp / cli / opencode / agent-deck — not paseo: its agents
 # are the paseo daemon's children, and validate rejects the combination).
@@ -302,8 +335,9 @@ engines:
 #                      network namespace (structurally no network); a CODE step
 #                      (use: cli / run: <interp>) gets a real pivot_root JAIL —
 #                      only the workdir, interpreter essentials, and fs: paths
-#                      are visible, the daemon's secrets hidden by absence (a
-#                      runtime launch masks the daemon dirs instead;
+#                      are visible, the daemon's secrets hidden by absence; a
+#                      cli/acp agent launch gets the workspace jail above (other
+#                      runtime launches mask the daemon dirs instead;
 #                      privileged: true opts out). macOS: the same is enforced
 #                      by Seatbelt (sandbox-exec) — fs:/deny map to an SBPL
 #                      allow-list; cgroup limits: are ignored, and an ENFORCED

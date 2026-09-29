@@ -6,6 +6,139 @@ The `isolation:` block closes that: per-dispatch isolation for the runtimes
 conductor launches itself, plus a conductor-enforced network egress
 allowlist. (#36 §15.)
 
+## The agent workspace jail {#the-agent-workspace-jail}
+
+**Every agent conductor launches itself — a `cli` or `acp` runtime on this
+box — runs jailed to its workspace by default.** No configuration: a launch
+with no `isolation:` block gets a synthesized jail (#154). The agent sees:
+
+| | |
+|---|---|
+| read-write | the workspace; the git common dir behind a worktree — with its `config`, `hooks/` and `objects/info` read-only and other dispatches' worktree metadata hidden; the tool's own state (`~/.claude`, `~/.claude.json`, `~/.codex`, …) |
+| read-only | `/usr`, `/etc`, `/opt`, `~/.gitconfig`, the agent CLI's own install (e.g. `~/.local/share/claude`), the conductor binary, the dispatch's broker socket |
+| scratch | a private `$HOME` (tmpfs on Linux, a per-dispatch dir on macOS) and a per-dispatch `/tmp` |
+| absent | everything else: `~/.ssh`, cloud and tool configs, the daemon's config and state, other repositories |
+
+- **No credentials in the agent's environment.** `GH_TOKEN`, `GITHUB_TOKEN`,
+  the `PC_GH_*` tokens, `SSH_AUTH_SOCK`, cloud credentials, and anything named
+  like a token/secret/password are removed; the agent's own model credential
+  (`ANTHROPIC_API_KEY` for claude-code, `OPENAI_API_KEY` for codex, …) is
+  kept. The daemon's own environment is never inherited wholesale.
+- **Credentialed work goes through conductor**: [host commands](Host-Commands)
+  (`gh`, `aws`, `kubectl`, …) run on your machine with your setup after
+  guardrails and your rules; git's network and signing side is brokered
+  (pushes only to the dispatch's own branch; commits signed with your key,
+  which never enters the jail). Every crossing is an audit row and a
+  `conductor watch` event.
+- The agent runs as your real uid (claude-code refuses
+  `--dangerously-skip-permissions` as root; the jail is built as
+  root-in-userns and dropped before exec).
+
+Knobs — every loosening is explicit:
+
+```yaml
+runtimes:
+  claude:
+    use: cli
+    tool: claude-code
+    isolation:
+      fs: [~/go, ~/.cache/go-build]     # add paths (read-write) to the jail
+      network: audit                    # see "Network" below
+      host: { docker: false }           # see Host-Commands
+      writes: { create_pr: true }       # see "Writes" below
+      # mode: none                      # opt out: today's unconfined launch
+      # mode: namespace, privileged: true   # the older full-view namespace
+```
+
+A top-level `isolation:` block is the fleet-wide base (runtime blocks, then a
+step's, refine it). **The synthesized default degrades loudly** where the OS
+cannot build it (conductor running as root, no unprivileged user namespaces,
+no `unshare`): a warning, a `jail degraded` audit row and watch event, and the
+launch runs as before. **An explicit `isolation:` block fails closed.**
+`conductor validate` and boot report which runtimes are jailed, the host set,
+and whether this box can build the jail.
+
+Out of scope, by construction (validate notes them): **paseo** and
+**agent-deck** runtimes (another daemon owns the agent process), **opencode**
+(an HTTP control channel), external **runtime plugins** (explicit `isolation:`
+only), and **`host:`** runtimes (the remote box's isolation applies).
+
+### Network {#network}
+
+```yaml
+isolation:
+  network: open            # default: the host network (today's behavior)
+  # network: audit         # everything through conductor's proxy — allowed, and every destination recorded
+  # network: { egress: [proxy.golang.org, registry.npmjs.org] }   # ENFORCED allowlist
+  # network: deny          # nothing but the agent's own model endpoint
+```
+
+In `audit`, allowlist, and `deny` modes the jail has **no route out** except
+conductor's filtering proxy — a tool that ignores `HTTPS_PROXY` reaches
+nothing rather than bypassing the list. Linux: an empty network namespace, the
+in-jail forwarder, the proxy over a unix socket, no DNS inside. macOS: Seatbelt
+denies all outbound traffic except to the proxy's loopback port, and denies the
+resolver's Mach service. **The agent's own model endpoint is always allowed**:
+the tool's API hosts, plus an `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` override
+(env or `~/.claude/settings.json`) — a loopback router (`http://127.0.0.1:3456`)
+is relayed into the jail, a private-network host is allowlisted by its
+addresses. `audit` is how an allowlist gets built: run with it, read the
+`egress` events in `conductor watch` / the audit trail, then switch to
+`egress:`. The default stays `open` because the enforced modes break tools
+that do not honor `HTTPS_PROXY`; `audit` shows exactly which.
+
+### Writes are bound to the dispatch's own target {#writes-are-bound-to-the-dispatchs-own-target}
+
+Every write conductor performs on an agent's behalf — a host command, a
+brokered push, a conductor verb — must target the dispatch's own PR or issue:
+its number, its head branch, its repository. A fixer may push its PR's head
+branch, comment on the PR, and reply to and resolve its review threads.
+Refused by default for every step: opening a PR or issue, writing to any other
+PR/issue, pushing any other branch (or the default branch, or a force push, or
+a deletion), merging, closing, reopening. Review steps — a `decide:` step, a
+step with an `output_schema`, a `checkout: none` step, or a
+review-requested/self-review trigger, unless `expect_push:` — write nothing.
+A refusal is audited with the rule that fired
+(`target: write to acme/app#43 but dispatch target is #42`) and fails for the
+agent like any failed command, with the reason on stderr.
+
+```yaml
+isolation:
+  writes: read_only          # or: target (the fixer default, e.g. to opt a review-shaped step in)
+  # writes: { create_pr: true, create_issue: true, other_targets: true, branches: ["release/*"], merge: true }
+```
+
+A step may widen this explicitly (a workflow whose job is to open PRs); a
+**pack's** step cannot widen past what your runtime or top-level `writes:`
+allows.
+
+**Work stops when its target goes away.** When a dispatch's PR merges or
+closes, conductor cancels the agents running for it, records
+`cancelled: target merged|closed`, and notifies. Independently, the broker
+refuses every write for a closed target (it checks the PR's live state before
+a write), so a session that is mid-command when the event lands still cannot
+act. Agents are also told the rule, so a well-behaved one reports instead of
+trying — but the policy is what holds.
+
+### macOS {#macos-jail}
+
+The same jail on the Seatbelt backend (verified on macOS 26): a per-dispatch
+scratch `$HOME` with the tool-state paths linked in (the real home unreadable
+except those paths), a per-dispatch `TMPDIR` (claude-code's scratch included,
+via `CLAUDE_CODE_TMPDIR`), a shim dir first on `PATH` with every host-set
+binary's real path exec-denied, Mach services narrowed to an explicit list,
+and git's `config`/`hooks`/`objects/info` write-denied.
+
+**The Keychain is closed by default.** Allowing the Security framework's
+services (what a Keychain-held claude-code login needs) also lets the agent
+read other Keychain items whose access list trusts `/usr/bin/security` —
+verified: with them allowed, a jailed `security find-generic-password` read
+gh's `gh:github.com` token; without them it read nothing. Authenticate
+claude-code with an API key (`ANTHROPIC_API_KEY`, or in
+`~/.claude/settings.json`) or a `claude setup-token`
+(`CLAUDE_CODE_OAUTH_TOKEN`), which need no Keychain. The explicit loosening is
+`isolation: { macos_keychain: true }` (runtime/top-level only).
+
 ## Where it applies
 
 `isolation:` can be set at three scopes:
@@ -18,7 +151,8 @@ allowlist. (#36 §15.)
 
 It only applies to launches conductor performs itself: **acp**, **cli**,
 **opencode**, and **agent-deck** runtimes, and `hosts:` scripts (code steps,
-remote commands). A **paseo** runtime's agents are children of the paseo
+remote commands). (cli and acp runtimes on this box are jailed even with no
+block — see [the agent workspace jail](#the-agent-workspace-jail).) A **paseo** runtime's agents are children of the paseo
 daemon — conductor never holds that process, so `conductor validate` rejects
 `isolation:` on paseo runtimes and on profiles that resolve to one, rather
 than silently not isolating. Use paseo's own sandboxing there, or move the
@@ -139,11 +273,13 @@ Conductor closes that off in one of two ways:
   merely masked). The privilege that lets it mount is dropped before your code
   runs, so the code cannot pivot back out. This is a bwrap-style jail with **no
   docker required**; declare the paths a step legitimately needs with `fs:`.
-- **Runtime/plugin launches** (an agent runtime's own process) instead **mask
-  the daemon's state and config directories** (empty read-only tmpfs over
-  directories, `/dev/null` over files); `privileged: true` opts out. Here the
+- **Agent launches on a cli or acp runtime get the workspace jail** above —
+  with or without a `mode: namespace` block. Other runtime and plugin launches
+  (opencode, agent-deck, engine and connector plugins) instead **mask the
+  daemon's state and config directories** (empty read-only tmpfs over
+  directories, `/dev/null` over files); `privileged: true` opts out. There the
   rest of the daemon's uid view (its `$HOME`, other repos) is still visible —
-  for a full jail on a runtime launch, use `mode: container` or `mode: user`.
+  for a full jail on such a launch, use `mode: container` or `mode: user`.
 
 A confinement that can't be applied fails the launch rather than running
 unconfined — except a pack's *synthesized* default (below), which degrades
@@ -198,10 +334,11 @@ allow-list the Linux jail uses:
 Two differences from Linux, both enforced at `validate`:
 
 - **cgroup `limits:` are ignored** on macOS (no systemd/cgroups analog).
-- **An enforced egress allowlist (`deny: true` + `egress:`) is Linux-only** —
-  Seatbelt can cut the network wholesale but not run the in-sandbox forwarder.
-  On macOS use `mode: container` for an enforced allowlist, or plain
-  `deny: true` / an advisory `egress:` without `deny`.
+- **For code steps, an enforced egress allowlist (`deny: true` + `egress:`)
+  is Linux-only** — the code-step profile has no forwarder. On macOS use
+  `mode: container` there, or plain `deny: true` / an advisory `egress:`
+  without `deny`. The **agent** jail enforces allowlists on macOS too
+  (outbound confined to the proxy's loopback port; see above).
 
 Seatbelt is a kernel sandbox, not a uid trick, so the "not a boundary as root"
 caveat does not apply on macOS.
@@ -311,9 +448,25 @@ that lifts the allow/approve/host gates lifts this requirement.
 | isolation on a paseo runtime | rejected by `validate` |
 | `skill:` + `mode: user` isolation | rejected by `validate` (claim theft under a shared uid) |
 | `agent_authored.host` without `isolation:` | rejected by `validate` (`trust: full` opts out) |
+| the default agent jail can't be built (root, no user namespaces, no `unshare`) | the agent runs unconfined, with a warning, a `jail degraded` audit row, and a watch event |
+| an explicit `isolation:` block on a cli/acp runtime the box can't jail | launch fails closed (`validate`: error) |
+| the jail's setup fails at launch | the turn fails with the sandbox's error (never reported as the agent's reply) |
 
 ## Audit
 
 Every denied egress attempt is logged and audited as
 `{event: egress_denied, target: host:port}`, so a sandboxed agent probing
 the network is visible in `conductor report`'s audit trail.
+
+A jailed agent's boundary crossings are audit rows and live `conductor watch`
+events, attributed to the dispatch (`label: "fix acme/app#43"`):
+
+| event | what |
+|---|---|
+| `jail` | the jail came up (with its host set), or `degraded` |
+| `host_command` | a host command: `exit N` (with any discarded writes), or `refused` with the rule |
+| `git_push` / `git_fetch` | brokered git: refs and old→new SHAs, or `refused` with the rule |
+| `sign` | a commit signed for the dispatch, or `refused` |
+| `tool_call` / `tool_result` | claude-code's tool calls (hooks), `refused` by an intent rule |
+| `egress` | a destination reached (each once) or refused, attributed to the dispatch |
+| `cancelled` | agents cancelled because their target merged or closed |

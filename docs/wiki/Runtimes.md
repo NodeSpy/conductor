@@ -137,10 +137,22 @@ the agent id) and **acp** (follow-ups via `session/prompt`; resume via
 don't participate — a `session:` on them silently stays fresh-per-event and
 leans on [[Memory]] for continuity.
 
-A runtime conductor launches itself (acp / cli / opencode / agent-deck) may
-carry an `isolation:` block — per-dispatch sandboxing and the network egress
-allowlist for every launch it performs; a step's own `isolation:` wins.
-Not applicable to paseo runtimes (their agents are the paseo daemon's
-children) — `conductor validate` rejects that combination. See [[Isolation]].
+**cli and acp runtimes on this box are jailed by default.** Every agent they
+launch runs in the [agent workspace jail](Isolation#the-agent-workspace-jail):
+it sees its workspace, the git common dir behind it, and its own tool state —
+not your `~/.ssh`, cloud configs, the daemon's state, or other repositories —
+with no credential in its environment. `gh`, `aws`, `kubectl`, … still work,
+as [[Host-Commands]] conductor runs on your machine with your setup; pushes and
+commit signing are brokered. claude-code additionally reports every tool call
+(hooks) and streams its transcript. `isolation: { mode: none }` opts a runtime
+out; `conductor validate` says which runtimes are jailed on this box.
 
-Related: [[Steps]] · [[Hosts]] · [[Hand-offs]] · [[Configuration]] · [[Isolation]] · [[Plugins]]
+A runtime conductor launches itself (acp / cli / opencode / agent-deck) may
+carry an `isolation:` block — the jail's knobs (`fs:`, `network:`, `host:`,
+`writes:`), or another mode, for every launch it performs; a step's own
+`isolation:` wins (host rules and writes can only narrow). Not applicable to
+paseo runtimes (their agents are the paseo daemon's children) — `conductor
+validate` rejects that combination. agent-deck, opencode, external runtime
+plugins, and `host:` runtimes are outside the default jail. See [[Isolation]].
+
+Related: [[Steps]] · [[Hosts]] · [[Hand-offs]] · [[Configuration]] · [[Isolation]] · [[Host-Commands]] · [[Plugins]]

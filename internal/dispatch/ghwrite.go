@@ -23,7 +23,10 @@ const WriteWrapperGuidance = "\n\n---\n" +
 	"review, reply, and `gh`/API write is attributed to me — and commits and `git push` " +
 	"go over SSH as me. NEVER post, submit, approve, or otherwise write anything with the " +
 	"App/bot token. If a large read would burn my rate limit you MAY read (only) with the " +
-	"App token via `GH_TOKEN=$" + envGHAppToken + " gh ...`, but never write with it."
+	"App token via `GH_TOKEN=$" + envGHAppToken + " gh ...`, but never write with it.\n" +
+	"SCOPE: your writes are bound to THIS target — its PR or issue, and its branch. " +
+	"If the PR is merged or closed, stop and report that; do not push a new branch, " +
+	"open a new PR or issue, or write to any other PR. conductor refuses such writes."
 
 // BotReplyGuidance is appended to an agent prompt when the triggering
 // comment/review was authored by a bot and the resolved reply_to_bots policy

@@ -35,6 +35,7 @@ The model
 - [[Secrets]]
 - [[Hosts]]
 - [[Isolation]]
+- [[Host-Commands]]
 - [[Trust-and-Isolation]]
 
 Connectors
