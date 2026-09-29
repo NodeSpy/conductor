@@ -452,6 +452,7 @@ that lifts the allow/approve/host gates lifts this requirement.
 | `skill:` + `mode: user` isolation | rejected by `validate` (claim theft under a shared uid) |
 | `agent_authored.host` without `isolation:` | rejected by `validate` (`trust: full` opts out) |
 | the default agent jail can't be built (root, no user namespaces, no `unshare`) | the agent runs unconfined, with a warning, a `jail degraded` audit row, and a watch event |
+| Ubuntu 23.10+ with `kernel.apparmor_restrict_unprivileged_userns=1` (the default there) | the same: user namespaces are refused, so the default jail degrades (preflight names the cause). Set the sysctl to `0`, or give conductor an AppArmor profile with `userns,` |
 | an explicit `isolation:` block on a cli/acp runtime the box can't jail | launch fails closed (`validate`: error) |
 | the jail's setup fails at launch | the turn fails with the sandbox's error (never reported as the agent's reply) |
 

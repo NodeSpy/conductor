@@ -91,6 +91,17 @@ banner() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 
 setup() {
   banner "build & up ($MODE mode, project $PROJECT)"
+  # Group X runs the agent workspace jail, which needs unprivileged user
+  # namespaces. GitHub's Ubuntu 23.10+ runners restrict them through AppArmor
+  # (kernel.apparmor_restrict_unprivileged_userns=1) — even inside a
+  # privileged container — so on CI ONLY the harness lifts that for the run.
+  # It never touches a developer's host sysctls: there, group X reports the
+  # degraded jail and its reason instead.
+  if [ -n "${GITHUB_ACTIONS:-}" ] && [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
+    sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 \
+      && echo "CI: allowed unprivileged user namespaces for the agent-jail group" \
+      || echo "CI: could not lift the AppArmor user-namespace restriction; group X will report the degraded jail"
+  fi
   dc down -v --remove-orphans >/dev/null 2>&1 || true
   dc build || { echo "build failed"; exit 1; }
 
@@ -1671,6 +1682,14 @@ group_X_jail() {
   else
     bad "X1 jailed dispatch" X X1-dispatch "no dispatch outcome for $r"; return
   fi
+  # The jail must actually have come up: a host that cannot build it runs the
+  # agent unconfined (loudly), and every check below would fail for that one
+  # reason — say so once, with the reason, instead.
+  if jail_audit_match '"event":"jail"' '"status":"degraded"'; then
+    bad "X1 the jail came up" X X1-jail "the default jail DEGRADED on this host: $(jail_audit | grep '"status":"degraded"' | head -1 | sed 's/.*"reason":"\([^"]*\)".*/\1/')"
+    return
+  fi
+  ok "X1 the jail came up (not degraded)" X X1-jail
   local reply; reply="$(jail_reply "$r")"
   assert_contains "$reply" "uid=1000" X X1-uid "X1 the agent runs as the operator's real uid (1000), not root-in-userns"
   assert_contains "$reply" "NO-SSH" X X1-ssh "X1 ~/.ssh is absent in the jail"

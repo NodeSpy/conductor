@@ -77,7 +77,11 @@ func probeJailNow() string {
 			return "unshare (util-linux) is not installed"
 		}
 		if out, err := exec.Command("unshare", "--user", "--map-root-user", "--mount", "--pid", "--fork", "true").CombinedOutput(); err != nil {
-			return fmt.Sprintf("unprivileged user namespaces are unavailable (%v: %s)", err, strings.TrimSpace(string(out)))
+			why := fmt.Sprintf("unprivileged user namespaces are unavailable (%v: %s)", err, strings.TrimSpace(string(out)))
+			if b, rerr := os.ReadFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns"); rerr == nil && strings.TrimSpace(string(b)) == "1" {
+				why += " — AppArmor restricts them (Ubuntu 23.10+): set kernel.apparmor_restrict_unprivileged_userns=0, or load an AppArmor profile that allows userns for conductor"
+			}
+			return why
 		}
 		return ""
 	case "darwin":
