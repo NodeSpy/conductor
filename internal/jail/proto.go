@@ -18,9 +18,9 @@ import (
 
 // Env names the jail sets for its shims.
 const (
-	EnvSock  = "CONDUCTOR_JAIL_SOCK"  // the broker socket, as seen inside the jail
-	EnvToken = "CONDUCTOR_JAIL_ID" // the dispatch's broker credential (its identity at the socket)
-	EnvReal  = "CONDUCTOR_JAIL_REAL"  // PATH-style list of dirs holding the real binaries (native runs)
+	EnvSock  = "CONDUCTOR_JAIL_SOCK" // the broker socket, as seen inside the jail
+	EnvToken = "CONDUCTOR_JAIL_ID"   // the dispatch's broker credential (its identity at the socket)
+	EnvReal  = "CONDUCTOR_JAIL_REAL" // PATH-style list of dirs holding the real binaries (native runs)
 )
 
 // Request is one shim → broker call.

@@ -36,9 +36,9 @@ const ForwardAddr = "127.0.0.1:18080"
 // mask overmounts (and dodges the EPERM those hit under an unprivileged
 // user namespace).
 type BindMount struct {
-	Path string `json:"path"`           // path inside the jail (and the host source, unless Src is set)
-	RO   bool   `json:"ro,omitempty"`   // remount read-only after binding
-	Src  string `json:"src,omitempty"`  // host source when it differs from Path (a shim over /usr/bin/gh, a per-dispatch /tmp)
+	Path string `json:"path"`          // path inside the jail (and the host source, unless Src is set)
+	RO   bool   `json:"ro,omitempty"`  // remount read-only after binding
+	Src  string `json:"src,omitempty"` // host source when it differs from Path (a shim over /usr/bin/gh, a per-dispatch /tmp)
 	// Tmpfs mounts an empty, private tmpfs at Path instead of a bind (the
 	// agent jail's scratch $HOME).
 	Tmpfs bool `json:"tmpfs,omitempty"`
