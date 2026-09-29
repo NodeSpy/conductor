@@ -143,8 +143,8 @@ func TestCLISessionLifecycle(t *testing.T) {
 		t.Fatal("no output captured")
 	}
 	argv := strings.Join(l.call(0).argv, " ")
-	if !strings.Contains(argv, "--resume tool-7") || !strings.Contains(argv, "follow up") {
-		t.Fatalf("resume argv: %s", argv)
+	if !strings.Contains(argv, "--resume tool-7") || l.call(0).stdin != "follow up" {
+		t.Fatalf("resume argv: %s, stdin: %q", argv, l.call(0).stdin)
 	}
 	if cs, ok := s.(*cliSession); ok {
 		cs.Wait(context.Background(), 10*time.Millisecond) // no first turn: returns immediately
@@ -178,7 +178,7 @@ func TestCLIAccessorsAndRealProc(t *testing.T) {
 	}
 
 	// startCLIProc runs a real subprocess and captures combined output.
-	proc, err := startCLIProc(context.Background(), t.TempDir(), []string{"X=1"}, []string{"sh", "-c", "echo out-$X; echo err 1>&2"})
+	proc, err := startCLIProc(context.Background(), t.TempDir(), []string{"X=1"}, []string{"sh", "-c", "echo out-$X; echo err 1>&2"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,11 +186,11 @@ func TestCLIAccessorsAndRealProc(t *testing.T) {
 	if err != nil || !strings.Contains(out, "out-1") || !strings.Contains(out, "err") {
 		t.Fatalf("proc: %q %v", out, err)
 	}
-	if _, err := startCLIProc(context.Background(), "", nil, nil); err == nil {
+	if _, err := startCLIProc(context.Background(), "", nil, nil, ""); err == nil {
 		t.Fatal("empty argv must error")
 	}
 	// Kill a long-running process.
-	proc, err = startCLIProc(context.Background(), "", nil, []string{"sleep", "5"})
+	proc, err = startCLIProc(context.Background(), "", nil, []string{"sleep", "5"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

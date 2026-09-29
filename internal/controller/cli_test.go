@@ -12,9 +12,10 @@ import (
 
 // launchCall records one cli launch.
 type launchCall struct {
-	dir  string
-	env  []string
-	argv []string
+	dir   string
+	env   []string
+	argv  []string
+	stdin string
 }
 
 // fakeLauncher scripts cli process launches.
@@ -24,9 +25,9 @@ type fakeLauncher struct {
 	out   func(argv []string) (string, error)
 }
 
-func (l *fakeLauncher) launch(_ context.Context, dir string, env []string, argv []string) (cliProc, error) {
+func (l *fakeLauncher) launch(_ context.Context, dir string, env []string, argv []string, stdin string) (cliProc, error) {
 	l.mu.Lock()
-	l.calls = append(l.calls, launchCall{dir: dir, env: env, argv: argv})
+	l.calls = append(l.calls, launchCall{dir: dir, env: env, argv: argv, stdin: stdin})
 	l.mu.Unlock()
 	out, err := "", error(nil)
 	if l.out != nil {
@@ -119,7 +120,7 @@ func TestStartCLIProcTruncatesFloodingOutput(t *testing.T) {
 	}
 	// ~3 MiB of a single byte, well past the 1 MiB cap.
 	argv := []string{"sh", "-c", "head -c 3145728 /dev/zero | tr '\\0' a"}
-	proc, err := startCLIProc(context.Background(), "", nil, argv)
+	proc, err := startCLIProc(context.Background(), "", nil, argv, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,9 +156,13 @@ func TestCLIOneshotRunInWorktree(t *testing.T) {
 		t.Fatalf("cli cwd = %q, want the worktree", call.dir)
 	}
 	// The RESOLVED model rides the argv — a `use: cli` runtime used to
-	// drop it, so an exact pin silently launched the tool's default.
-	if joinArgs(call.argv) != "codex exec fix the bug --model anthropic/claude" {
+	// drop it, so an exact pin silently launched the tool's default. The
+	// prompt rides stdin (`-`), never the argv.
+	if joinArgs(call.argv) != "codex exec - --model anthropic/claude" {
 		t.Fatalf("codex argv = %v", call.argv)
+	}
+	if call.stdin != "fix the bug" {
+		t.Fatalf("codex stdin = %q, want the prompt", call.stdin)
 	}
 	if !envHas(call.env, "GH_TOKEN", "utok") {
 		t.Fatalf("cli env missing the user token: %v", call.env)
@@ -195,8 +200,8 @@ func TestCLIResumableClaudeCode(t *testing.T) {
 	waitSession(t, sess)
 
 	first := l.call(0)
-	if argIndex(first.argv, "-p") < 0 || argIndex(first.argv, "start") < 0 {
-		t.Fatalf("first claude argv = %v", first.argv)
+	if argIndex(first.argv, "-p") < 0 || argIndex(first.argv, "start") >= 0 || first.stdin != "start" {
+		t.Fatalf("first claude launch: argv = %v, stdin = %q (the prompt belongs on stdin)", first.argv, first.stdin)
 	}
 
 	// The follow-up resumes the captured tool session id.
@@ -215,6 +220,9 @@ func TestCLIResumableClaudeCode(t *testing.T) {
 	ri := argIndex(resume.argv, "--resume")
 	if ri < 0 || resume.argv[ri+1] != "claude-abc" {
 		t.Fatalf("follow-up should --resume the captured session id, got %v", resume.argv)
+	}
+	if resume.stdin != "more" {
+		t.Fatalf("follow-up prompt belongs on stdin, got %q", resume.stdin)
 	}
 }
 
@@ -348,11 +356,6 @@ func TestControllerRunnerAppliesOutputSchema(t *testing.T) {
 	schema := map[string]any{"type": "object", "required": []any{"decision"},
 		"properties": map[string]any{"decision": map[string]any{"type": "string"}}}
 	l := &fakeLauncher{out: func(argv []string) (string, error) {
-		// The prompt must carry the injected schema directive.
-		pi := argIndex(argv, "-p")
-		if pi < 0 || !strings.Contains(argv[pi+1], "JSON") {
-			t.Errorf("prompt should carry the schema directive: %v", argv)
-		}
 		return `{"result":"my call is {\"decision\":\"approve\"}"}`, nil
 	}}
 	c := newCLIController("cc", config.ControllerConfig{Transport: "cli", Tool: "claude-code"}, nil)
@@ -367,6 +370,10 @@ func TestControllerRunnerAppliesOutputSchema(t *testing.T) {
 	ref, err := r.Dispatch(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
+	}
+	// The prompt (on stdin) must carry the injected schema directive.
+	if in := l.call(0).stdin; !strings.Contains(in, "judge this") || !strings.Contains(in, "JSON") {
+		t.Errorf("prompt should carry the schema directive: %q", in)
 	}
 	if !strings.Contains(ref.Output, `"decision"`) || !strings.Contains(ref.Output, "approve") {
 		t.Fatalf("RunRef.Output should be the canonical validated object, got %q", ref.Output)

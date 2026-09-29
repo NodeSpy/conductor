@@ -17,7 +17,7 @@ func TestCLILaunchCarriesTheResolvedModel(t *testing.T) {
 		t.Run(tool, func(t *testing.T) {
 			c := newCLIController("r", config.ControllerConfig{Tool: tool}, nil)
 			var got []string
-			c.launch = func(_ context.Context, _ string, _ []string, argv []string) (cliProc, error) {
+			c.launch = func(_ context.Context, _ string, _ []string, argv []string, _ string) (cliProc, error) {
 				got = argv
 				return &fakeProc{}, nil
 			}
@@ -39,7 +39,7 @@ func TestCLILaunchCarriesTheResolvedModel(t *testing.T) {
 func TestCLIBareLaunchPassesNoModelFlag(t *testing.T) {
 	c := newCLIController("r", config.ControllerConfig{Tool: "claude"}, nil)
 	var got []string
-	c.launch = func(_ context.Context, _ string, _ []string, argv []string) (cliProc, error) {
+	c.launch = func(_ context.Context, _ string, _ []string, argv []string, _ string) (cliProc, error) {
 		got = argv
 		return &fakeProc{}, nil
 	}
@@ -56,7 +56,7 @@ func TestCLIBareLaunchPassesNoModelFlag(t *testing.T) {
 func TestCLICustomCommandGetsNoInventedFlag(t *testing.T) {
 	c := newCLIController("r", config.ControllerConfig{Command: []string{"/bin/mytool", "run"}}, nil)
 	var got []string
-	c.launch = func(_ context.Context, _ string, _ []string, argv []string) (cliProc, error) {
+	c.launch = func(_ context.Context, _ string, _ []string, argv []string, _ string) (cliProc, error) {
 		got = argv
 		return &fakeProc{}, nil
 	}
