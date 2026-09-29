@@ -8,13 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/gitsafe"
 	"github.com/NodeSpy/conductor/internal/hosts"
 )
 
@@ -353,7 +353,7 @@ func clearStaleGitLock(ctx context.Context, paseoBin, cwd string) {
 	if cwd == "" {
 		return
 	}
-	c := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--git-common-dir")
+	c := gitsafe.Command(ctx, cwd, "rev-parse", "--git-common-dir")
 	outb, err := c.Output()
 	if err != nil {
 		return
@@ -724,7 +724,7 @@ func isGitRepo(ctx context.Context, dir string) bool {
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return false
 	}
-	return exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--git-dir").Run() == nil
+	return gitsafe.Command(ctx, dir, "rev-parse", "--git-dir").Run() == nil
 }
 
 // targetIsGitRepo reports whether dir is a git working tree on the box this
@@ -764,7 +764,7 @@ func (d *Dispatcher) remoteIsGitRepo(ctx context.Context, dir string) bool {
 // Linked worktrees are ephemeral (the reaper archives them); the main checkout
 // is stable. Falls back to dir if it can't be derived or isn't a working tree.
 func mainWorkTree(ctx context.Context, dir string) string {
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse",
+	out, err := gitsafe.Command(ctx, dir, "rev-parse",
 		"--path-format=absolute", "--git-common-dir").Output()
 	if err != nil {
 		return dir
@@ -1284,7 +1284,7 @@ func (d *Dispatcher) listAgents(ctx context.Context) []AgentInfo {
 
 // gitBranch returns the current branch of a checkout (empty on detached/err).
 func (d *Dispatcher) gitBranch(ctx context.Context, dir string) string {
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	out, err := gitsafe.Command(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
 	if err != nil {
 		return ""
 	}
@@ -1297,7 +1297,7 @@ func gitRepoMatches(ctx context.Context, dir, repo string) bool {
 	if repo == "" {
 		return false
 	}
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "config", "--get", "remote.origin.url").Output()
+	out, err := gitsafe.Command(ctx, dir, "config", "--get", "remote.origin.url").Output()
 	if err != nil {
 		return false
 	}

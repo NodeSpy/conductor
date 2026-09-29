@@ -256,6 +256,12 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"addPR", "the PR ref to fetch for that checkout"},
 		{"prBranch", "a branch name for the work (safeBranch validates it first)"},
 	},
+	// The go-git fallback (used when the `git` binary is absent) does exactly
+	// the same job as addPR/addBranch above, with go-git's API instead of
+	// shelling out — same target reads, same reasoning.
+	"internal/gitwt/gogit.go": {
+		{"addPRGoGit", "the PR ref to fetch for that checkout — go-git's addPR"},
+	},
 
 	// ---- CLI display.
 	"cmd/conductor/main.go": {

@@ -1,8 +1,12 @@
 // Package gitdiff reads an agent's PROPOSED change out of its worktree
 // (#36 §17): what would land if the work were applied — the uncommitted
 // delta against HEAD plus anything committed locally but not pushed. It
-// shells out to the system git (the worktrees it reads were created by git;
-// no library re-implementation) and never mutates the repo.
+// shells out to the system git, hardened through internal/gitsafe (the
+// worktrees it reads may have been provisioned against an untrusted remote —
+// a fork, a PR branch — so their local git config is not trusted input
+// either). When no `git` binary is present it falls back to a go-git
+// implementation (fallback.go) with the same two-section shape, on a
+// best-effort basis — see that file's doc comment for what differs.
 package gitdiff
 
 import (
@@ -11,7 +15,18 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/NodeSpy/conductor/internal/gitsafe"
 )
+
+// LookPath resolves the `git` binary. A package var so a test can force the
+// no-git fallback path without touching the real PATH.
+var LookPath = exec.LookPath
+
+func hasGit() bool {
+	_, err := LookPath("git")
+	return err == nil
+}
 
 // MaxBytes is the default clip for a captured diff: big enough for review,
 // small enough for scope/checkpoint/hand-off bodies.
@@ -25,6 +40,9 @@ const MaxBytes = 64 << 10
 func Proposed(ctx context.Context, dir string, maxBytes int) (string, error) {
 	if maxBytes <= 0 {
 		maxBytes = MaxBytes
+	}
+	if !hasGit() {
+		return proposedFallback(dir, maxBytes)
 	}
 	if _, err := git(ctx, dir, "rev-parse", "--git-dir"); err != nil {
 		return "", fmt.Errorf("gitdiff: %s is not a git worktree: %w", dir, err)
@@ -89,9 +107,10 @@ func upstreamBase(ctx context.Context, dir string) string {
 	return ""
 }
 
-// git runs one git command in dir and returns its stdout.
+// git runs one HARDENED git command in dir and returns its stdout — see
+// internal/gitsafe for what "hardened" neutralizes.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd := gitsafe.Command(ctx, dir, args...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {

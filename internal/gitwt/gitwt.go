@@ -35,7 +35,19 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/gitsafe"
 )
+
+// LookPath resolves the `git` binary. A package var so a test can force the
+// "no git installed" path (gitwt then falls back to go-git — see gogit.go)
+// without touching the real PATH.
+var LookPath = exec.LookPath
+
+// hasGit reports whether the `git` binary is available at all.
+func hasGit() bool {
+	_, err := LookPath("git")
+	return err == nil
+}
 
 const (
 	// DefaultMinAge is how long an unreferenced worktree dir must have sat
@@ -135,11 +147,15 @@ func (p *Provisioner) ProvisionWorktree(ctx context.Context, req dispatch.Reques
 		return "", "", dispatch.Unrecoverable(err)
 	}
 
-	switch strategy {
-	case "checkout-pr":
+	switch {
+	case strategy == "checkout-pr" && hasGit():
 		err = p.addPR(ctx, base, wt, req)
-	case "branch-off":
+	case strategy == "checkout-pr":
+		err = p.addPRGoGit(ctx, base, wt, req)
+	case strategy == "branch-off" && hasGit():
 		err = p.addBranch(ctx, base, wt, req)
+	case strategy == "branch-off":
+		err = p.addBranchGoGit(ctx, base, wt, req)
 	}
 	if err != nil {
 		// Leave nothing half-made behind for the reaper to puzzle over.
@@ -312,13 +328,19 @@ func (p *Provisioner) startPoint(ctx context.Context, base, ref string) string {
 
 // baseClone returns the repo's base clone, cloning it on first use and fetching
 // it otherwise. Concurrent dispatches on one repo serialize here (a per-repo
-// mutex), so two fixers on the same repo never race a clone or a fetch.
+// mutex), so two fixers on the same repo never race a clone or a fetch. When
+// no `git` binary is on PATH this delegates to baseCloneGoGit (gogit.go),
+// which does the same job with go-git — always a FULL clone, since go-git has
+// no `--filter=blob:none` equivalent.
 func (p *Provisioner) baseClone(ctx context.Context, repo string) (string, error) {
 	dir := filepath.Join(p.CheckoutsDir(), repoSlug(repo))
 	mu := p.repoLock(repo)
 	mu.Lock()
 	defer mu.Unlock()
 
+	if !hasGit() {
+		return p.baseCloneGoGit(ctx, repo, dir)
+	}
 	if isGitDir(dir) {
 		if _, err := p.git(ctx, dir, "fetch", "--prune", "origin"); err != nil {
 			return "", fmt.Errorf("fetch: %w", err)
@@ -484,16 +506,12 @@ func safeBranch(ref string) bool {
 
 // ---- git -----------------------------------------------------------------
 
-// git runs one git command (in dir, or wherever when dir is "") and returns its
-// stdout. Terminal prompting is disabled so a missing credential fails fast
-// instead of hanging the daemon on a password prompt.
+// git runs one HARDENED git command (in dir, or wherever when dir is "") and
+// returns its stdout — see internal/gitsafe for what "hardened" neutralizes
+// (a base clone or worktree's local config is not fully trusted input: it
+// came off a remote conductor does not control the far side of).
 func (p *Provisioner) git(ctx context.Context, dir string, args ...string) (string, error) {
-	full := args
-	if dir != "" {
-		full = append([]string{"-C", dir}, args...)
-	}
-	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd := gitsafe.Command(ctx, dir, args...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
