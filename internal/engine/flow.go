@@ -146,6 +146,7 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 		return
 	}
 	qk := queuedFlowKey(t)
+	queuedAt := time.Now()
 	e.queuedMu.Lock()
 	if e.queued == nil {
 		e.queued = map[string]core.Trigger{}
@@ -168,10 +169,54 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 			return // shutdown while waiting — the sweep re-derives on restart
 		}
 		defer e.release()
+		if branchFixKind(t.Kind) && e.closedSince(t.Key(), queuedAt) {
+			// The PR merged or closed while this fixer waited for a slot:
+			// there's no branch left to push to.
+			e.log("%s dropped — PR closed while waiting for an agent slot", tag(t))
+			return
+		}
 		run := e.newFlowRun(t, spec, false)
 		defer e.recoverDispatch(ctx, t, run, "flow dispatch")
 		e.flow.Run(ctx, run, t, spec, tidx, batch, false)
 	}()
+}
+
+// closedRetention bounds how long a PR's close is remembered for closedSince —
+// far longer than any wait for an agent slot.
+const closedRetention = 24 * time.Hour
+
+// markClosed records that key's PR just closed (merged or not).
+func (e *Engine) markClosed(key string) {
+	now := time.Now()
+	e.queuedMu.Lock()
+	defer e.queuedMu.Unlock()
+	if e.closedAt == nil {
+		e.closedAt = map[string]time.Time{}
+	}
+	for k, at := range e.closedAt {
+		if now.Sub(at) > closedRetention {
+			delete(e.closedAt, k)
+		}
+	}
+	e.closedAt[key] = now
+}
+
+// closedSince reports whether key's PR closed at or after since.
+func (e *Engine) closedSince(key string, since time.Time) bool {
+	e.queuedMu.Lock()
+	defer e.queuedMu.Unlock()
+	at, ok := e.closedAt[key]
+	return ok && !at.Before(since)
+}
+
+// branchFixKind reports whether a kind's fixer pushes to the PR's head branch —
+// work that is moot once the PR is closed.
+func branchFixKind(k string) bool {
+	switch k {
+	case "new_comment", "changes_requested", "failing_checks", "merge_conflict", "pr_behind":
+		return true
+	}
+	return false
 }
 
 // queuedFlowKey identifies a flow run waiting for a slot: the flow + target.

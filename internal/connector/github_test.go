@@ -303,7 +303,7 @@ func TestGithubVerbRerequestReviewHTTP(t *testing.T) {
 	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
 	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
 	out, err := impl.Invoke(context.Background(), "rerequest_review", map[string]any{
-		"repo": "org/repo", "pr": 7, "reviewers": []any{"alice"},
+		"only_outstanding": false, "repo": "org/repo", "pr": 7, "reviewers": []any{"alice"},
 	})
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
@@ -334,7 +334,7 @@ func TestGithubVerbRerequestReviewUnresolvedReviewerSkips(t *testing.T) {
 	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
 	for _, rs := range []any{[]any{nil}, []any{"<nil>"}, []any{"<no value>", " "}, ""} {
 		out, err := impl.Invoke(context.Background(), "rerequest_review", map[string]any{
-			"repo": "org/repo", "pr": 7, "reviewers": rs,
+			"only_outstanding": false, "repo": "org/repo", "pr": 7, "reviewers": rs,
 		})
 		if err != nil {
 			t.Fatalf("reviewers=%#v: Invoke: %v", rs, err)
@@ -356,7 +356,7 @@ func TestGithubVerbRerequestReviewUnresolvedReviewerSkips(t *testing.T) {
 	t.Setenv("PC_GITHUB_API_BASE", srv2.URL)
 	impl = newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
 	if _, err := impl.Invoke(context.Background(), "rerequest_review", map[string]any{
-		"repo": "org/repo", "pr": 7, "reviewers": []any{nil, "alice"},
+		"only_outstanding": false, "repo": "org/repo", "pr": 7, "reviewers": []any{nil, "alice"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -979,7 +979,7 @@ func TestGithubReviewRequestVerbs(t *testing.T) {
 		t.Fatalf("request_review body: %+v", last.body)
 	}
 	// rerequest_review is the same endpoint (back-compat alias).
-	if _, err := impl.Invoke(ctx, "rerequest_review", map[string]any{"repo": "o/r", "pr": 7, "reviewers": []any{"bob"}}); err != nil {
+	if _, err := impl.Invoke(ctx, "rerequest_review", map[string]any{"only_outstanding": false, "repo": "o/r", "pr": 7, "reviewers": []any{"bob"}}); err != nil {
 		t.Fatal(err)
 	}
 	if last.method != "POST" || last.path != "/repos/o/r/pulls/7/requested_reviewers" {
@@ -1199,7 +1199,7 @@ func TestGithubVerbRerequestReviewDropsPRAuthor(t *testing.T) {
 	var posted []map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/repos/org/repo/pulls/7" {
-			fmt.Fprint(w, `{"user":{"login":"AHaymond"}}`)
+			fmt.Fprint(w, `{"user":{"login":"Rev"}}`)
 			return
 		}
 		var b map[string]any
@@ -1212,13 +1212,13 @@ func TestGithubVerbRerequestReviewDropsPRAuthor(t *testing.T) {
 	impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
 
 	out, err := impl.Invoke(context.Background(), "rerequest_review", map[string]any{
-		"repo": "org/repo", "pr": 7, "reviewers": []any{"ahaymond"},
+		"only_outstanding": false, "repo": "org/repo", "pr": 7, "reviewers": []any{"rev"},
 	})
 	if err != nil || out["skipped"] == nil || len(posted) != 0 {
 		t.Fatalf("author-only reviewers must skip without a POST: out=%v err=%v posts=%d", out, err, len(posted))
 	}
 	if _, err := impl.Invoke(context.Background(), "rerequest_review", map[string]any{
-		"repo": "org/repo", "pr": 7, "reviewers": []any{"AHaymond", "alice"},
+		"only_outstanding": false, "repo": "org/repo", "pr": 7, "reviewers": []any{"Rev", "alice"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1236,7 +1236,7 @@ func TestGithubVerbRerequestReviewSkipsNonCollaborators(t *testing.T) {
 	reject := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/repos/org/repo/pulls/7" {
-			fmt.Fprint(w, `{"user":{"login":"AHaymond"}}`)
+			fmt.Fprint(w, `{"user":{"login":"Rev"}}`)
 			return
 		}
 		var b map[string]any
@@ -1256,7 +1256,7 @@ func TestGithubVerbRerequestReviewSkipsNonCollaborators(t *testing.T) {
 
 	// Bot alongside a human: only the human is requested.
 	if _, err := impl.Invoke(ctx, "rerequest_review", map[string]any{
-		"repo": "org/repo", "pr": 7, "reviewers": []any{"cursor[bot]", "alice"},
+		"only_outstanding": false, "repo": "org/repo", "pr": 7, "reviewers": []any{"cursor[bot]", "alice"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1265,7 +1265,7 @@ func TestGithubVerbRerequestReviewSkipsNonCollaborators(t *testing.T) {
 	}
 	// Bot only: nobody to ping, no POST.
 	out, err := impl.Invoke(ctx, "rerequest_review", map[string]any{
-		"repo": "org/repo", "pr": 7, "reviewers": []any{"cursor[bot]"},
+		"only_outstanding": false, "repo": "org/repo", "pr": 7, "reviewers": []any{"cursor[bot]"},
 	})
 	if err != nil || out["skipped"] == nil || len(posted) != 1 {
 		t.Fatalf("bot-only reviewers must skip without a POST: out=%v err=%v posts=%d", out, err, len(posted))
@@ -1273,7 +1273,7 @@ func TestGithubVerbRerequestReviewSkipsNonCollaborators(t *testing.T) {
 	// A non-collaborator GitHub rejects: the re-request skips, not fails.
 	reject = true
 	out, err = impl.Invoke(ctx, "rerequest_review", map[string]any{
-		"repo": "org/repo", "pr": 7, "reviewers": []any{"gone-user"},
+		"only_outstanding": false, "repo": "org/repo", "pr": 7, "reviewers": []any{"gone-user"},
 	})
 	if err != nil || out["skipped"] == nil {
 		t.Fatalf("non-collaborator re-request must skip: out=%v err=%v", out, err)
@@ -1284,4 +1284,117 @@ func TestGithubVerbRerequestReviewSkipsNonCollaborators(t *testing.T) {
 	}); err == nil {
 		t.Fatal("request_review must surface the 422")
 	}
+}
+
+// rerequest_review's default guard pings only reviewers still waiting on
+// changes. The first case is the real incident: a reviewer requested changes,
+// then approved, then more commits landed — the re-request that followed put
+// the approved PR back in their queue.
+func TestGithubVerbRerequestReviewOnlyOutstanding(t *testing.T) {
+	type rv struct{ user, state, commit string }
+	cases := []struct {
+		name    string
+		state   string // PR state
+		head    string
+		pending []string
+		reviews []rv
+		ask     []any
+		opts    map[string]any
+		failGET bool
+		want    []string // reviewers POSTed; nil = no POST
+	}{
+		{name: "approved after changes requested", state: "open", head: "c3",
+			reviews: []rv{{"Rev", "CHANGES_REQUESTED", "a1"}, {"Rev", "APPROVED", "b2"}},
+			ask:     []any{"Rev"}},
+		{name: "changes requested on an older commit", state: "open", head: "c3",
+			reviews: []rv{{"Rev", "CHANGES_REQUESTED", "a1"}},
+			ask:     []any{"Rev"}, want: []string{"Rev"}},
+		{name: "a later comment-only review doesn't clear it", state: "open", head: "c3",
+			reviews: []rv{{"Rev", "CHANGES_REQUESTED", "a1"}, {"Rev", "COMMENTED", "b2"}},
+			ask:     []any{"rev"}, want: []string{"rev"}},
+		{name: "no new commits since the review", state: "open", head: "a1",
+			reviews: []rv{{"Rev", "CHANGES_REQUESTED", "a1"}},
+			ask:     []any{"Rev"}},
+		{name: "already a pending reviewer", state: "open", head: "c3", pending: []string{"Rev"},
+			reviews: []rv{{"Rev", "CHANGES_REQUESTED", "a1"}},
+			ask:     []any{"Rev"}},
+		{name: "never requested changes", state: "open", head: "c3",
+			reviews: []rv{{"Rev", "COMMENTED", "a1"}},
+			ask:     []any{"Rev"}},
+		{name: "closed PR", state: "closed", head: "c3",
+			reviews: []rv{{"Rev", "CHANGES_REQUESTED", "a1"}},
+			ask:     []any{"Rev"}},
+		{name: "state unreadable fails closed", state: "open", head: "c3", failGET: true,
+			reviews: []rv{{"Rev", "CHANGES_REQUESTED", "a1"}},
+			ask:     []any{"Rev"}},
+		{name: "mixed keeps only the outstanding one", state: "open", head: "c3",
+			reviews: []rv{{"alice", "APPROVED", "b2"}, {"bob", "CHANGES_REQUESTED", "a1"}},
+			ask:     []any{"alice", "bob"}, want: []string{"bob"}},
+		{name: "opt-out re-requests an approver", state: "open", head: "c3",
+			reviews: []rv{{"Rev", "APPROVED", "b2"}},
+			ask:     []any{"Rev"}, opts: map[string]any{"only_outstanding": "false"},
+			want: []string{"Rev"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var posted [][]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && tc.failGET:
+					w.WriteHeader(500)
+				case r.Method == http.MethodGet && r.URL.Path == "/repos/org/repo/pulls/7":
+					var pend []map[string]string
+					for _, p := range tc.pending {
+						pend = append(pend, map[string]string{"login": p})
+					}
+					json.NewEncoder(w).Encode(map[string]any{"state": tc.state,
+						"user": map[string]string{"login": "danielcbaldwin"},
+						"head": map[string]string{"sha": tc.head}, "requested_reviewers": pend})
+				case r.Method == http.MethodGet && r.URL.Path == "/repos/org/repo/pulls/7/reviews":
+					var out []map[string]any
+					for _, v := range tc.reviews {
+						out = append(out, map[string]any{"state": v.state, "commit_id": v.commit,
+							"user": map[string]string{"login": v.user}})
+					}
+					json.NewEncoder(w).Encode(out)
+				case r.Method == http.MethodPost:
+					var b map[string]any
+					json.NewDecoder(r.Body).Decode(&b)
+					rs, _ := b["reviewers"].([]any)
+					posted = append(posted, rs)
+					w.WriteHeader(201)
+				default:
+					w.WriteHeader(404)
+				}
+			}))
+			defer srv.Close()
+			t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+			impl := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+			opts := map[string]any{"repo": "org/repo", "pr": 7, "reviewers": tc.ask}
+			for k, v := range tc.opts {
+				opts[k] = v
+			}
+			out, err := impl.Invoke(context.Background(), "rerequest_review", opts)
+			if err != nil {
+				t.Fatalf("Invoke: %v", err)
+			}
+			if tc.want == nil {
+				if len(posted) != 0 || out["skipped"] == nil {
+					t.Fatalf("want a skip with no POST, got out=%v posts=%v", out, posted)
+				}
+				return
+			}
+			if len(posted) != 1 || fmt.Sprint(posted[0]) != fmt.Sprint(toAnySlice(tc.want)) {
+				t.Fatalf("want POST of %v, got %v (out=%v)", tc.want, posted, out)
+			}
+		})
+	}
+}
+
+func toAnySlice(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
 }

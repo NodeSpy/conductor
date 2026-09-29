@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/core"
 	"time"
 )
 
@@ -153,4 +155,34 @@ func TestFlowWaitingRunCoalescesNewestEvent(t *testing.T) {
 	if got, _ := gateConnCalls[0]["text"].(string); !strings.Contains(got, "newer") {
 		t.Fatalf("ran with %q, want the newest event", got)
 	}
+}
+
+// A fixer that was waiting for a slot when its PR merged must not run: there
+// is no branch left to push to (it would re-create the deleted branch, or open
+// a follow-up PR nobody asked for). A trigger queued after the close — a
+// reopened PR — still runs.
+func TestFlowWaitingFixerDroppedWhenPRCloses(t *testing.T) {
+	cfg := "control: { max_concurrent_agents: 1 }\n" + gateCfg
+	eng, _, _, _ := buildFlowEngine(t, cfg)
+	eng.acquire(context.Background())
+	before := gateCalls()
+
+	fix := flowTrigger("fix1")
+	fix.Kind = "new_comment"
+	eng.process(context.Background(), fix)
+	closed := flowTrigger("")
+	closed.Kind = core.KindClosed
+	eng.process(context.Background(), closed)
+	eng.release()
+
+	time.Sleep(100 * time.Millisecond)
+	if gateCalls() != before {
+		t.Fatal("a fixer queued before the PR closed still ran")
+	}
+
+	// Queued after the close (the PR was reopened): runs normally.
+	again := flowTrigger("fix2")
+	again.Kind = "new_comment"
+	eng.process(context.Background(), again)
+	waitCond(t, "fixer queued after the close", func() bool { return gateCalls() > before })
 }

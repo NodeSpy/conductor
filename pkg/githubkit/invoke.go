@@ -76,6 +76,14 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 		if verb != "remove_reviewer" && len(rs) > 0 {
 			rs = dropPRAuthor(ctx, c, tok, base, repo, number, rs)
 		}
+		if verb == "rerequest_review" && len(rs) > 0 && optBool(opts, "only_outstanding", true) {
+			var why string
+			if rs, why = outstandingReviewers(ctx, c, tok, base, repo, number, rs); len(rs) == 0 {
+				if len(reviewerLogins(opts["team_reviewers"])) == 0 {
+					return map[string]any{"ok": true, "skipped": why}, nil
+				}
+			}
+		}
 		body := map[string]any{}
 		if len(rs) > 0 {
 			body["reviewers"] = rs
@@ -1105,6 +1113,80 @@ func dropPRAuthor(ctx context.Context, c *Client, tok, base, repo string, number
 	return kept
 }
 
+// outstandingReviewers narrows a re-request to the reviewers still waiting on
+// changes: each one's latest APPROVED/CHANGES_REQUESTED/DISMISSED review must be
+// CHANGES_REQUESTED, submitted on an older commit than the current head (so there
+// is something new to look at), and they must not already be a pending requested
+// reviewer. Anyone who has since approved is dropped — re-requesting an approver
+// puts the PR back in their queue as if the approval didn't count. A closed PR
+// keeps nobody. State is read fresh (not from the GET cache): the approval this
+// guards against can land seconds before the call. A failed read keeps nobody —
+// the ping is a courtesy, never worth sending on a guess. The reason string says
+// why the list came back empty.
+func outstandingReviewers(ctx context.Context, c *Client, tok, base, repo string, number int, rs []string) ([]string, string) {
+	var pr struct {
+		State string `json:"state"`
+		Head  struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
+		RequestedReviewers []struct {
+			Login string `json:"login"`
+		} `json:"requested_reviewers"`
+	}
+	if err := c.getFresh(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d", base, repo, number), &pr); err != nil {
+		return nil, "couldn't read PR state: " + err.Error()
+	}
+	if pr.State != "open" {
+		return nil, "PR is " + pr.State
+	}
+	var reviews []struct {
+		State    string `json:"state"`
+		CommitID string `json:"commit_id"`
+		User     struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	}
+	// Reviews list oldest-first; the last page holds the latest. 100 per page
+	// covers any PR a human reviews; beyond that the newest may be missed and
+	// the reviewer is (safely) skipped.
+	if err := c.getFresh(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d/reviews?per_page=100", base, repo, number), &reviews); err != nil {
+		return nil, "couldn't read reviews: " + err.Error()
+	}
+	type verdict struct{ state, commit string }
+	latest := map[string]verdict{}
+	for _, r := range reviews {
+		switch r.State {
+		case "APPROVED", "CHANGES_REQUESTED", "DISMISSED":
+			latest[strings.ToLower(r.User.Login)] = verdict{r.State, r.CommitID}
+		}
+	}
+	pending := map[string]bool{}
+	for _, u := range pr.RequestedReviewers {
+		pending[strings.ToLower(u.Login)] = true
+	}
+	kept := rs[:0:0]
+	var why []string
+	for _, r := range rs {
+		l := strings.ToLower(r)
+		v := latest[l]
+		switch {
+		case pending[l]:
+			why = append(why, r+" already requested")
+		case v.state != "CHANGES_REQUESTED":
+			st := strings.ToLower(v.state)
+			if st == "" {
+				st = "not requested changes"
+			}
+			why = append(why, r+" "+st)
+		case v.commit != "" && v.commit == pr.Head.SHA:
+			why = append(why, r+" has no new commits to review")
+		default:
+			kept = append(kept, r)
+		}
+	}
+	return kept, strings.Join(why, "; ")
+}
+
 // dropBots removes bot accounts ("…[bot]" logins) from a reviewer list.
 func dropBots(rs []string) []string {
 	kept := rs[:0:0]
@@ -1121,6 +1203,20 @@ func dropBots(rs []string) []string {
 func notCollaborator(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "HTTP 422") && strings.Contains(msg, "only be requested from collaborators")
+}
+
+// optBool reads a boolean option, accepting a rendered-template string
+// ("true"/"false") as well as a bool; def when unset or unparseable.
+func optBool(opts map[string]any, key string, def bool) bool {
+	switch v := opts[key].(type) {
+	case bool:
+		return v
+	case string:
+		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			return b
+		}
+	}
+	return def
 }
 
 func reviewerLogins(v any) []string {

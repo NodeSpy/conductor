@@ -137,6 +137,7 @@ type Engine struct {
 	runWait     sync.Map                // "key|run id" → last in-progress status logged (a fail-fast matrix emits dozens of failing_checks per run)
 	queuedMu    sync.Mutex              // guards queued
 	queued      map[string]core.Trigger // flow runs waiting for a slot, by queuedFlowKey → newest trigger
+	closedAt    map[string]time.Time    // PR key → when its _closed arrived (guarded by queuedMu); see closedSince
 	baseCtx     context.Context         // the Run loop's ctx; ties ctx-less entry points (batch flush) to shutdown
 
 	// flow runs connectors-model triggers (actions carrying a FlowRef);
@@ -777,6 +778,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// Terminal state: drop dedup record, no dispatch.
 	if t.Kind == core.KindClosed {
 		_ = e.store.Delete(key)
+		e.markClosed(key)
 		e.log("%s closed; dropped state", tag(t))
 		return
 	}

@@ -36,6 +36,7 @@ type ghPayload struct {
 	PullRequest *prPayload `json:"pull_request"`
 	Issue       *struct {
 		Number      int         `json:"number"`
+		State       string      `json:"state"` // open|closed
 		Title       string      `json:"title"`
 		HTMLURL     string      `json:"html_url"`
 		PullRequest interface{} `json:"pull_request"` // non-nil => the issue is a PR
@@ -203,6 +204,23 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 		trs = g.secretScanningAlertTriggers(repo, p)
 	}
 
+	// A closed (or merged) PR has no branch left to fix: drop the kinds whose fixer
+	// would push to it. Reviews and comments keep arriving after a merge — an
+	// approval landing minutes later, a reply on a thread — and each one used to
+	// launch a fixer against the dead branch (re-creating it on push, or opening a
+	// follow-up PR nobody asked for).
+	if prClosedInPayload(p) {
+		kept := trs[:0]
+		for _, tr := range trs {
+			if branchKind(tr.Kind) {
+				log.Printf("github[%s]: %s#%d %s dropped — PR is closed", g.name, repo, tr.Target.Number, tr.Kind)
+				continue
+			}
+			kept = append(kept, tr)
+		}
+		trs = kept
+	}
+
 	// Stamp the object's current labels so the engine can honor control.pause_label
 	// (a per-PR/issue opt-out). Available on pull_request / issues events; a comment
 	// or review event carries none, which is fine — pause_label just won't catch it.
@@ -242,12 +260,15 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 			if err == nil {
 				trs[i].Context["app_token"] = tok
 			}
-			// Feedback kinds (comment / review events) carry neither the PR head branch
-			// nor its labels in the payload. Fetch both once: head_ref lets dispatch
-			// adopt an open workspace already on it, and labels let the engine honor
-			// control.pause_label on comment/review triggers (otherwise a `conductor:off`
-			// label can't park a PR's comment autopilot — it isn't in the payload).
-			if feedbackKind(trs[i].Kind) && g.rest != nil && trs[i].Target.Number > 0 {
+			// Branch kinds (comment / review / check / merge-state events) don't all
+			// carry the PR head branch or its labels in the payload. Fetch both once:
+			// head_ref is the branch the fixer's worktree checks out and pushes to
+			// (without it the worktree lands on a local pr-<n> branch, and the push
+			// publishes that as a stray new branch), and lets dispatch adopt an open
+			// workspace already on it; labels let the engine honor control.pause_label
+			// (otherwise a `conductor:off` label can't park a PR's comment autopilot —
+			// it isn't in the payload).
+			if branchKind(trs[i].Kind) && g.rest != nil && trs[i].Target.Number > 0 {
 				if !fetched {
 					owner, name := splitRepo(repo)
 					if hr, lbls, herr := g.rest.pullHeadRefAndLabels(ctx, p.Installation.ID, owner, name, trs[i].Target.Number); herr == nil {
@@ -306,7 +327,8 @@ func (g *Integration) ownPR(login string) bool {
 }
 
 // checkOwnPR resolves the PR author for a check event (whose payload omits it) via a
-// single REST read on App creds, and reports whether you authored it. Fails closed:
+// single REST read on App creds, and reports whether you authored it and it is still
+// open (a check finishing after the merge has no branch left to fix). Fails closed:
 // if the author can't be determined, don't act.
 func (g *Integration) checkOwnPR(ctx context.Context, p ghPayload, num int) bool {
 	if g.rest == nil || p.Installation.ID == 0 {
@@ -316,7 +338,7 @@ func (g *Integration) checkOwnPR(ctx context.Context, p ghPayload, num int) bool
 	if err != nil {
 		return false
 	}
-	return g.ownPR(info.User.Login)
+	return g.ownPR(info.User.Login) && info.State != "closed"
 }
 
 // corroborateRevert checks a merged revert-titled PR's commit messages for
@@ -733,8 +755,8 @@ func (g *Integration) mergeStateTriggers(ctx context.Context, repo string, p ghP
 	if err != nil {
 		return nil
 	}
-	if !g.ownPR(info.User.Login) {
-		return nil // conflict/behind autopilot is for PRs you authored
+	if !g.ownPR(info.User.Login) || info.State == "closed" {
+		return nil // conflict/behind autopilot is for open PRs you authored
 	}
 	t := g.target(repo, pr.Number, info.Head.SHA, info.Base.Ref, info.HTMLURL)
 	switch info.MergeableState {
@@ -1031,6 +1053,28 @@ func payloadLabels(p ghPayload) []string {
 // feedbackKind reports whether a kind is PR feedback that dispatch may route to an
 // agent already checked out on the PR's head branch (see AdoptOpenWorkspaces).
 func feedbackKind(k string) bool { return k == "new_comment" || k == "changes_requested" }
+
+// prClosedInPayload reports whether the event's PR is closed, per the payload's
+// own pull_request (review / review-comment events) or issue (issue_comment).
+func prClosedInPayload(p ghPayload) bool {
+	switch {
+	case p.PullRequest != nil:
+		return p.PullRequest.State == "closed"
+	case p.Issue != nil && p.Issue.PullRequest != nil:
+		return p.Issue.State == "closed"
+	}
+	return false
+}
+
+// branchKind reports whether a kind's fixer works on (and pushes to) the PR's own
+// head branch, so its trigger must carry head_ref.
+func branchKind(k string) bool {
+	switch k {
+	case "failing_checks", "merge_conflict", "pr_behind":
+		return true
+	}
+	return feedbackKind(k)
+}
 
 // emptyStr reports whether a Context value is absent or an empty string.
 func emptyStr(v any) bool { s, _ := v.(string); return s == "" }

@@ -155,6 +155,72 @@ func TestSweepUnresolvedComments(t *testing.T) {
 	if b := got[0].Context["author_is_bot"]; b != false {
 		t.Fatalf("author_is_bot = %v, want false", b)
 	}
+	// The PR's head branch rides along, so a worktree dispatch lands on the PR
+	// branch rather than a local pr-<n> branch the agent would push as new.
+	if hr := got[0].Context["head_ref"]; hr != "feat" {
+		t.Fatalf("head_ref = %v, want feat", hr)
+	}
+}
+
+// Threads left open by a reviewer who has since approved are not outstanding
+// feedback: once every unresolved thread's opener approved, the sweep emits no
+// changes_requested (it used to, on every head move, re-running the fixer on
+// an approved PR). A thread from someone who hasn't approved still counts.
+func TestSweepUnresolvedCommentsSkipsApprovers(t *testing.T) {
+	for _, tc := range []struct {
+		name, reviews string
+		want          int
+	}{
+		{"opener approved", `[{"state":"APPROVED","author":{"login":"dana"}}]`, 0},
+		{"opener still requesting changes", `[{"state":"CHANGES_REQUESTED","author":{"login":"dana"}}]`, 1},
+		{"someone else approved", `[{"state":"APPROVED","author":{"login":"erin"}}]`, 1},
+		{"approval matched case-insensitively", `[{"state":"APPROVED","author":{"login":"Dana"}}]`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/app/installations/77/access_tokens", func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprintf(w, `{"token":"t","expires_at":%q}`, time.Now().Add(time.Hour).Format(time.RFC3339))
+			})
+			mux.HandleFunc("/repos/acme/widget/installation", func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(w, `{"id":77}`)
+			})
+			mux.HandleFunc("/repos/acme/widget/pulls", func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(w, `[{"number":9,"user":{"login":"me"},"head":{"sha":"h9","ref":"feat"},"base":{"ref":"main"},"html_url":"u"}]`)
+			})
+			mux.HandleFunc("/repos/acme/widget/pulls/9", func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(w, `{"mergeable_state":"clean","head":{"sha":"h9"},"base":{"ref":"main"},"html_url":"u"}`)
+			})
+			mux.HandleFunc("/graphql", func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprintf(w, `{"data":{"repository":{"pullRequest":{
+					"latestOpinionatedReviews":{"nodes":%s},
+					"reviewThreads":{"nodes":[
+					{"id":"t3","isResolved":false,"comments":{"nodes":[{"author":{"login":"dana","__typename":"User"}}]}}]}}}}}`, tc.reviews)
+			})
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			key, _ := rsa.GenerateKey(rand.Reader, 1024)
+			cfg := Config{
+				App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
+				Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
+				Sweep:   SweepConfig{Enabled: boolp(true), Repos: []string{"acme/widget"}},
+				Rules: []Rule{{
+					Match:   Match{Repos: []string{"acme/widget"}},
+					Me:      config.Actors{Logins: []string{"me"}},
+					Actions: as1(map[string]config.Action{"changes_requested": {Type: "agent", Agent: "fixer"}}),
+				}},
+			}
+			g := newTestIntegration(t, cfg)
+			g.app = &appAuth{appID: 1, key: key, httpc: http.DefaultClient, apiBase: srv.URL, now: time.Now, cache: map[int64]cachedToken{}}
+			g.rest = newRESTClient(g.app)
+			var got []core.Trigger
+			if err := g.sweep(context.Background(), func(_ context.Context, tr core.Trigger) { got = append(got, tr) }); err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != tc.want {
+				t.Fatalf("want %d changes_requested, got %+v", tc.want, got)
+			}
+		})
+	}
 }
 
 // The sweep's missed-comment recovery tags each comment with the endpoint it came
