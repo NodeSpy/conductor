@@ -41,19 +41,19 @@ func TestCLIClaudeDecisionRunsLean(t *testing.T) {
 		return `{"type":"result","result":"","structured_output":{"answers":{"refuted":0.9}},"is_error":false}`, nil
 	}}
 	c := newCLIController("cc", config.ControllerConfig{Transport: "cli", Tool: "claude-code"}, nil)
-	c.launch = func(ctx context.Context, d string, env []string, argv []string) (cliProc, error) {
+	c.launch = func(ctx context.Context, d string, env []string, argv []string, stdin string) (cliProc, error) {
 		dir = d
 		if _, err := os.Stat(d); err != nil {
 			t.Errorf("the scratch dir must exist while the tool runs: %v", err)
 		}
-		return l.launch(ctx, d, env, argv)
+		return l.launch(ctx, d, env, argv, stdin)
 	}
 	sess, err := c.NewSession(context.Background(), decisionReq(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitSession(t, sess)
-	argv := l.call(0).argv
+	argv, stdin := l.call(0).argv, l.call(0).stdin
 	if tools, ok := argAfter(argv, "--tools"); !ok || tools != "" {
 		t.Fatalf("--tools must be passed empty (no tools at all): %v", argv)
 	}
@@ -73,8 +73,11 @@ func TestCLIClaudeDecisionRunsLean(t *testing.T) {
 	if sch, _ := argAfter(argv, "--json-schema"); !json.Valid([]byte(sch)) {
 		t.Errorf("--json-schema must carry the schema as JSON: %q", sch)
 	}
-	if p, _ := argAfter(argv, "-p"); p != "QUESTIONS…<document>{{.gh_token}}</document>" {
-		t.Errorf("the user turn is the Document, verbatim: %q", p)
+	if stdin != "QUESTIONS…<document>{{.gh_token}}</document>" {
+		t.Errorf("the user turn is the Document, verbatim, on stdin: %q", stdin)
+	}
+	if strings.Contains(strings.Join(argv, " "), "<document>") {
+		t.Errorf("the Document must not ride the argv: %v", argv)
 	}
 	if m, _ := argAfter(argv, "--model"); m != "anthropic/claude" {
 		t.Errorf("the resolved model rides the argv: %v", argv)
@@ -95,9 +98,9 @@ func TestCLIClaudeDecisionRunsLean(t *testing.T) {
 func TestCLICodexDecisionReadsTheAnswerFile(t *testing.T) {
 	c := newCLIController("cx", config.ControllerConfig{Transport: "cli", Tool: "codex"}, nil)
 	var argv []string
-	var dir string
-	c.launch = func(_ context.Context, d string, _ []string, a []string) (cliProc, error) {
-		argv, dir = a, d
+	var dir, stdin string
+	c.launch = func(_ context.Context, d string, _ []string, a []string, in string) (cliProc, error) {
+		argv, dir, stdin = a, d, in
 		schema, _ := argAfter(a, "--output-schema")
 		if raw, err := os.ReadFile(schema); err != nil || !json.Valid(raw) {
 			t.Errorf("the schema file must exist and hold the schema: %v", err)
@@ -124,8 +127,11 @@ func TestCLICodexDecisionReadsTheAnswerFile(t *testing.T) {
 	if cd, _ := argAfter(argv, "--cd"); cd != dir {
 		t.Errorf("--cd must be the scratch dir: %q vs %q", cd, dir)
 	}
-	if last := argv[len(argv)-1]; !strings.HasPrefix(last, "Evaluate every question") || !strings.Contains(last, "<document>") {
-		t.Errorf("codex has no system-prompt flag, so the system prompt leads the prompt: %q", last)
+	if last := argv[len(argv)-1]; last != "-" {
+		t.Errorf("codex reads the prompt from stdin (`-`), got last arg %q", last)
+	}
+	if !strings.HasPrefix(stdin, "Evaluate every question") || !strings.Contains(stdin, "<document>") {
+		t.Errorf("codex has no system-prompt flag, so the system prompt leads the prompt: %q", stdin)
 	}
 	if out := sess.(OutputCapturer).Output(); out != `{"answers":{"refuted":0.99}}` {
 		t.Fatalf("the answer comes from the file, not the log-mixed stream: %q", out)

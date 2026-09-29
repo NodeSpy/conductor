@@ -48,9 +48,41 @@ type cliProc interface {
 	Kill() error
 }
 
-// cliLauncher starts argv in dir with env applied and returns a handle to the
-// running process. Injected in tests to fake the tool.
-type cliLauncher func(ctx context.Context, dir string, env []string, argv []string) (cliProc, error)
+// cliLauncher starts argv in dir with env applied, feeding stdin to the process
+// ("" → no stdin), and returns a handle to the running process. Injected in
+// tests to fake the tool.
+type cliLauncher func(ctx context.Context, dir string, env []string, argv []string, stdin string) (cliProc, error)
+
+// cliCmd is one tool invocation: its argv and the text fed to its stdin.
+//
+// The built-in recipes put the prompt on stdin, never in argv. Linux caps a
+// single argv element at MAX_ARG_STRLEN (32 pages = 128 KiB), and a large PR's
+// review prompt — diff, repo standards, existing comments — overflows that, so
+// fork/exec dies with "argument list too long" before the tool ever runs.
+// stdin has no such limit, and it rides an ssh launch and the sandbox wrappers
+// unchanged. Only an operator-written `command:` (and the bare fallback) still
+// carries the prompt as an argument, bounded by checkArgSizes.
+type cliCmd struct {
+	argv  []string
+	stdin string
+}
+
+// maxCLIArgBytes bounds one argv element of a cli launch: MAX_ARG_STRLEN less
+// a margin. See checkArgSizes.
+const maxCLIArgBytes = 120000
+
+// checkArgSizes rejects a launch whose argv carries an element the kernel
+// would refuse, turning fork/exec's cryptic E2BIG into an actionable error.
+// It checks the WRAPPED argv, so a remote launch — the whole remote command
+// is one ssh argument — is bounded too.
+func checkArgSizes(argv []string) error {
+	for _, a := range argv {
+		if len(a) > maxCLIArgBytes {
+			return fmt.Errorf("a %d-byte launch argument is over the ~%d-byte limit the kernel allows one argument (MAX_ARG_STRLEN) — a `command:` recipe carries the prompt as an argument; use a built-in tool recipe (claude-code, codex), which sends it on stdin, or cap large inlined fields such as a PR diff", len(a), maxCLIArgBytes)
+		}
+	}
+	return nil
+}
 
 // newCLIController builds a cli fallback controller from its config. The recipe is
 // chosen from the tool/agent name (claude-code, codex), or a generic recipe over an
@@ -105,7 +137,7 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 	host := resolveHost(c.host, spec.Request.Step.Host)
 	opt := launchOptsFor(c.iso, spec.Request)
 	id := c.recipe.tool + "-" + strconv.FormatInt(c.seq.Add(1), 10)
-	cwd, argv := spec.Cwd, c.recipe.argv(spec.Request.Model, prompt)
+	cwd, cmd := spec.Cwd, c.recipe.cmd(spec.Request.Model, prompt)
 	var dec *decisionRun
 	// A decide step's session runs LEAN when the recipe knows how and it runs
 	// on this box (the scratch dir it needs is local).
@@ -119,10 +151,10 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 			_ = os.RemoveAll(dir)
 			return nil, fmt.Errorf("cli: decision launch: %w", derr)
 		}
-		cwd, argv, dec = dir, lean, &decisionRun{dir: dir, answerFile: answerFile}
+		cwd, cmd, dec = dir, lean, &decisionRun{dir: dir, answerFile: answerFile}
 	}
 	sctx, scancel := context.WithCancel(context.Background())
-	proc, err := c.launchOn(sctx, host, cwd, env, argv, opt)
+	proc, err := c.launchOn(sctx, host, cwd, env, cmd, opt)
 	if err != nil {
 		scancel()
 		if dec != nil {
@@ -166,26 +198,31 @@ func (c *cliController) ResumeSession(_ context.Context, id string, agentAuthore
 	return &cliSession{id: id, c: c, toolID: id, host: c.host, opt: resumeOpts(c.iso, agentAuthored), cancel: scancel, ctx: sctx}, nil
 }
 
-func (c *cliController) start(ctx context.Context, dir string, env, argv []string) (cliProc, error) {
+func (c *cliController) start(ctx context.Context, dir string, env, argv []string, stdin string) (cliProc, error) {
 	if c.launch != nil {
-		return c.launch(ctx, dir, env, argv)
+		return c.launch(ctx, dir, env, argv, stdin)
 	}
-	return startCLIProc(ctx, dir, env, argv)
+	return startCLIProc(ctx, dir, env, argv, stdin)
 }
 
-// launchOn runs argv either locally in dir with env applied (host == "") or,
+// launchOn runs cmd either locally in dir with env applied (host == "") or,
 // when host != "", wraps it via prepareLaunch and runs the resulting ssh
 // command instead — see prepareLaunch's doc for what changes locally (no
 // dir, no env — both travel inside the wrapped remote command) in that case.
+// cmd's stdin is fed to whichever process runs: ssh forwards it to the remote
+// command, and the sandbox wrappers pass it through to the tool.
 // opt carries the dispatch's isolation policy (sandbox wrapper + egress).
-func (c *cliController) launchOn(ctx context.Context, host, dir string, env, argv []string, opt launchOpts) (cliProc, error) {
+func (c *cliController) launchOn(ctx context.Context, host, dir string, env []string, cmd cliCmd, opt launchOpts) (cliProc, error) {
 	opt, revoke := withEgressRevoke(opt)
-	wrapped, localDir, localEnv, _, err := prepareLaunch(host, dir, env, argv, opt)
+	wrapped, localDir, localEnv, _, err := prepareLaunch(host, dir, env, cmd.argv, opt)
+	if err == nil {
+		err = checkArgSizes(wrapped)
+	}
 	if err != nil {
 		revoke()
 		return nil, err
 	}
-	proc, err := c.start(ctx, localDir, localEnv, wrapped)
+	proc, err := c.start(ctx, localDir, localEnv, wrapped, cmd.stdin)
 	if err != nil {
 		revoke()
 		return nil, err
@@ -251,10 +288,11 @@ func (b *boundedBuffer) String() string {
 	return s
 }
 
-// startCLIProc starts argv as a subprocess capturing its combined output. The
-// process is session-scoped (ctx cancels it), matching the other controllers'
+// startCLIProc starts argv as a subprocess capturing its combined output, with
+// stdin fed to it ("" → no stdin, i.e. /dev/null). The process is
+// session-scoped (ctx cancels it), matching the other controllers'
 // background-agent lifetime.
-func startCLIProc(ctx context.Context, dir string, env, argv []string) (cliProc, error) {
+func startCLIProc(ctx context.Context, dir string, env, argv []string, stdin string) (cliProc, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("empty command")
 	}
@@ -263,6 +301,9 @@ func startCLIProc(ctx context.Context, dir string, env, argv []string) (cliProc,
 		cmd.Dir = dir
 	}
 	cmd.Env = append(os.Environ(), env...)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	buf := &boundedBuffer{max: cliOutputCap}
 	cmd.Stdout = buf
 	cmd.Stderr = buf
@@ -296,8 +337,8 @@ func (p *execProc) Kill() error {
 // output (for resume), and the session model to report.
 type cliRecipe struct {
 	tool    string
-	launch  func(prompt string) []string
-	resume  func(toolSessionID, prompt string) []string
+	launch  func(prompt string) cliCmd
+	resume  func(toolSessionID, prompt string) cliCmd
 	parseID func(output string) string
 	model   SessionModel
 	// modelArgs renders the RESOLVED model as this tool's own flag. nil
@@ -320,17 +361,18 @@ type cliRecipe struct {
 	// system prompt, native structured output, and nothing of the operator's
 	// environment (MCP servers, slash commands, session persistence),
 	// running in an empty directory conductor made for it. It returns the
-	// argv and, for a tool that writes its final answer to a file, that
+	// command and, for a tool that writes its final answer to a file, that
 	// file. nil → the recipe runs a decide session like any other turn.
-	decide func(dir, model string, d *config.DecisionLaunch) (argv []string, answerFile string, err error)
+	decide func(dir, model string, d *config.DecisionLaunch) (cmd cliCmd, answerFile string, err error)
 	// decideAnswer extracts the reply from a lean decision run's raw stdout
 	// (nil → answer).
 	decideAnswer func(raw string) string
 }
 
 // cliRecipeFor selects a recipe from the config. An explicit `command:` yields a
-// generic oneshot recipe (the prompt is appended as the final argument); otherwise
-// the tool/agent name selects a built-in recipe, defaulting to a bare oneshot run
+// generic oneshot recipe (the prompt is appended as the final argument — the
+// operator owns that argv, so conductor can't move it to stdin); otherwise the
+// tool/agent name selects a built-in recipe, defaulting to a bare oneshot run
 // of the named binary.
 func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 	tool := cc.Tool
@@ -341,7 +383,7 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 		base := append([]string(nil), cc.Command...)
 		return cliRecipe{
 			tool:   firstNonEmpty(tool, base[0]),
-			launch: func(prompt string) []string { return append(append([]string(nil), base...), prompt) },
+			launch: func(prompt string) cliCmd { return cliCmd{argv: append(append([]string(nil), base...), prompt)} },
 			model:  ModelOneshot,
 		}
 	}
@@ -352,12 +394,13 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 			// A fixer runs headless (`-p`), so there is no interactive prompt to
 			// approve tool use — without --dangerously-skip-permissions claude denies
 			// its own Edit/Bash calls and can never modify or commit the checkout.
-			launch: func(prompt string) []string {
-				return []string{"claude", "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"}
+			// With no prompt argument, `claude -p` reads the prompt from stdin.
+			launch: func(prompt string) cliCmd {
+				return cliCmd{argv: []string{"claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"}, stdin: prompt}
 			},
 			modelArgs: func(m string) []string { return []string{"--model", m} },
-			resume: func(id, prompt string) []string {
-				return []string{"claude", "-p", prompt, "--resume", id, "--output-format", "json", "--dangerously-skip-permissions"}
+			resume: func(id, prompt string) cliCmd {
+				return cliCmd{argv: []string{"claude", "-p", "--resume", id, "--output-format", "json", "--dangerously-skip-permissions"}, stdin: prompt}
 			},
 			parseID:      parseClaudeSessionID,
 			answer:       parseClaudeResult,
@@ -367,9 +410,10 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 			decideAnswer: parseClaudeStructured,
 		}
 	case "codex":
+		// `-` as the prompt tells `codex exec` to read it from stdin.
 		return cliRecipe{
 			tool:      "codex",
-			launch:    func(prompt string) []string { return []string{"codex", "exec", prompt} },
+			launch:    func(prompt string) cliCmd { return cliCmd{argv: []string{"codex", "exec", "-"}, stdin: prompt} },
 			model:     ModelOneshot,
 			modelArgs: func(m string) []string { return []string{"--model", m} },
 			decide:    codexDecide,
@@ -381,32 +425,34 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 		}
 		return cliRecipe{
 			tool:   firstNonEmpty(tool, bin),
-			launch: func(prompt string) []string { return []string{bin, prompt} },
+			launch: func(prompt string) cliCmd { return cliCmd{argv: []string{bin, prompt}} },
 			model:  ModelOneshot,
 		}
 	}
 }
 
-// argv is the launch command with the RESOLVED model applied. An empty
+// cmd is the launch command with the RESOLVED model applied. An empty
 // model is a bare launch (pass nothing, let the tool default); a recipe
 // with no model flag leaves the argv alone rather than inventing one.
-func (r cliRecipe) argv(model, prompt string) []string {
-	base := r.launch(prompt)
+func (r cliRecipe) cmd(model, prompt string) cliCmd {
+	c := r.launch(prompt)
 	if model == "" || r.modelArgs == nil {
-		return base
+		return c
 	}
-	return append(base, r.modelArgs(model)...)
+	c.argv = append(c.argv, r.modelArgs(model)...)
+	return c
 }
 
 // claudeDecide is the lean claude-code decision session. Deliberately NOT
 // --bare: that would also skip OAuth and demand an API key, and a decide
-// session must run on the operator's own claude login like any other.
-func claudeDecide(_ string, model string, d *config.DecisionLaunch) ([]string, string, error) {
+// session must run on the operator's own claude login like any other. The
+// document (which carries the PR diff) goes on stdin, like every turn.
+func claudeDecide(_ string, model string, d *config.DecisionLaunch) (cliCmd, string, error) {
 	schema, err := json.Marshal(d.Schema)
 	if err != nil {
-		return nil, "", fmt.Errorf("decision schema: %w", err)
+		return cliCmd{}, "", fmt.Errorf("decision schema: %w", err)
 	}
-	argv := []string{"claude", "-p", d.Document,
+	argv := []string{"claude", "-p",
 		"--output-format", "json",
 		"--tools", "", // no tools at all — not even read-only ones
 		"--strict-mcp-config", // …and no MCP servers from the operator's config
@@ -418,7 +464,7 @@ func claudeDecide(_ string, model string, d *config.DecisionLaunch) ([]string, s
 	if model != "" {
 		argv = append(argv, "--model", model)
 	}
-	return argv, "", nil
+	return cliCmd{argv: argv, stdin: d.Document}, "", nil
 }
 
 // parseClaudeStructured reads a lean decision run's answer: the envelope's
@@ -439,15 +485,16 @@ func parseClaudeStructured(output string) string {
 // session saved, the schema enforced by codex itself, and the final message
 // written to a file — codex logs progress on stderr, which the cli runner
 // captures alongside stdout, so the answer is read from the file instead.
-// codex takes no separate system prompt, so it leads the prompt.
-func codexDecide(dir, model string, d *config.DecisionLaunch) ([]string, string, error) {
+// codex takes no separate system prompt, so it leads the prompt, which goes
+// on stdin (`-`).
+func codexDecide(dir, model string, d *config.DecisionLaunch) (cliCmd, string, error) {
 	schema, err := json.Marshal(d.Schema)
 	if err != nil {
-		return nil, "", fmt.Errorf("decision schema: %w", err)
+		return cliCmd{}, "", fmt.Errorf("decision schema: %w", err)
 	}
 	schemaFile := filepath.Join(dir, "schema.json")
 	if err := os.WriteFile(schemaFile, schema, 0o600); err != nil {
-		return nil, "", err
+		return cliCmd{}, "", err
 	}
 	answer := filepath.Join(dir, "answer.json")
 	argv := []string{"codex", "exec",
@@ -461,7 +508,7 @@ func codexDecide(dir, model string, d *config.DecisionLaunch) ([]string, string,
 	if model != "" {
 		argv = append(argv, "--model", model)
 	}
-	return append(argv, d.System+"\n\n"+d.Document), answer, nil
+	return cliCmd{argv: append(argv, "-"), stdin: d.System + "\n\n" + d.Document}, answer, nil
 }
 
 // parseClaudeSessionID pulls the session id out of `claude -p --output-format json`
