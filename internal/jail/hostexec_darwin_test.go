@@ -138,6 +138,7 @@ test -e main.tf && echo sees-workspace
 test -e rel.txt && echo sees-earlier-write
 echo x > ` + ws + `/direct.txt 2>/dev/null && echo WS-WRITABLE
 echo x > rel.txt && echo clone-write-ok
+echo x > /private/tmp/conductor-confined-probe 2>/dev/null && echo SYS-WRITABLE
 curl -s -m 5 -o /dev/null -w 'proxy-code=%{http_connect}\n' https://example.com
 curl -s -m 5 --noproxy '*' -o /dev/null https://example.com; echo "direct-rc=$?"
 if read -r l; then echo "STDIN=$l"; else echo no-stdin; fi`
@@ -149,6 +150,7 @@ if read -r l; then echo "STDIN=$l"; else echo no-stdin; fi`
 		WsUpper: filepath.Join(state, "jails", "d", "cow-ws", "sh", "up"),
 	}
 	hr.Stdin = nil // the broker drops stdin for a confined run
+	defer os.Remove("/private/tmp/conductor-confined-probe")
 	for i := 0; i < 2; i++ {
 		var out bytes.Buffer
 		res, err := runHost(context.Background(), m, hr, &out, &out)
@@ -162,7 +164,7 @@ if read -r l; then echo "STDIN=$l"; else echo no-stdin; fi`
 				t.Errorf("run %d: missing %q", i+1, want)
 			}
 		}
-		for _, bad := range []string{"LEAK-", "WS-WRITABLE", "direct-rc=0", "STDIN="} {
+		for _, bad := range []string{"LEAK-", "WS-WRITABLE", "SYS-WRITABLE", "direct-rc=0", "STDIN="} {
 			if strings.Contains(s, bad) {
 				t.Errorf("run %d: unexpected %q", i+1, bad)
 			}
