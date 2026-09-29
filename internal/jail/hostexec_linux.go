@@ -238,7 +238,7 @@ func buildCOW(hr hostRun) (string, error) {
 				if berr := unix.Mount(real, merged, "", unix.MS_BIND|unix.MS_REC, ""); berr != nil {
 					return "", fmt.Errorf("overlay %s: %v; bind: %w", rel, err, berr)
 				}
-				_ = unix.Mount("", merged, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, "")
+				_ = unix.Mount("", merged, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY|lockedFlags(real), "")
 			}
 			layers = append(layers, layer{rel: rel, merged: filepath.Join("merged", n)})
 		case fi.Mode().IsRegular():
@@ -309,9 +309,29 @@ func bindAt(src, p string, ro bool) error {
 		return err
 	}
 	if ro {
-		return unix.Mount("", p, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, "")
+		return unix.Mount("", p, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY|lockedFlags(p), "")
 	}
 	return nil
+}
+
+// lockedFlags: see sandbox's — an inherited mount's nosuid/nodev/noexec are
+// locked in a user namespace and must be repeated on a remount.
+func lockedFlags(p string) uintptr {
+	var st unix.Statfs_t
+	if unix.Statfs(p, &st) != nil {
+		return 0
+	}
+	var f uintptr
+	if int64(st.Flags)&unix.ST_NOSUID != 0 {
+		f |= unix.MS_NOSUID
+	}
+	if int64(st.Flags)&unix.ST_NODEV != 0 {
+		f |= unix.MS_NODEV
+	}
+	if int64(st.Flags)&unix.ST_NOEXEC != 0 {
+		f |= unix.MS_NOEXEC
+	}
+	return f
 }
 
 // ovlEscape escapes the characters overlayfs treats specially in a layer

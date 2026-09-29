@@ -303,8 +303,15 @@ func credentialEnv(k string, keep map[string]bool) bool {
 		}
 	}
 	u := strings.ToUpper(k)
-	for _, frag := range []string{"TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "PRIVATE_KEY", "API_KEY", "APIKEY", "ACCESS_KEY", "SESSION_KEY", "AUTH"} {
+	for _, frag := range []string{"TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "PRIVATE_KEY", "API_KEY", "APIKEY", "ACCESS_KEY", "SESSION_KEY"} {
 		if strings.Contains(u, frag) {
+			return true
+		}
+	}
+	// AUTH as a whole word only (SSH_AUTH_SOCK, NPM_AUTH, AUTH_HEADER) — not
+	// GIT_AUTHOR_NAME, the acts-as-the-user identity the commit needs.
+	for _, part := range strings.Split(u, "_") {
+		if part == "AUTH" {
 			return true
 		}
 	}

@@ -43,6 +43,7 @@ services:
         conn/cweb conn/csvc conn/rweb conn/cengine migr/mweb
         func/cost func/budget1 func/budget2 func/budget3
         func/gatepass func/gatefail func/blob func/hist func/watch
+        grpx/jail grpx/jailclosed grpx/jailcancel grpx/jailnet
     volumes:
       - ./seed:/seed:ro
     # git daemon (started by the seed script) serves git://forge:9418/<owner>/<repo>.git
@@ -99,6 +100,28 @@ services:
     volumes:
       - ./config:/etc/conductor:ro
     command: ["bash", "/etc/conductor/entrypoint.sh", "/etc/conductor/controllers.yaml"]
+
+  # The agent-jail daemon (group X, #154): the ONLY non-root stub daemon —
+  # the workspace jail refuses to run as root (a user namespace is no
+  # privilege boundary there) — in a privileged container so unprivileged
+  # user namespaces work inside it. Its state is a tmpfs: a host command's
+  # copy-on-write home puts overlay upper layers there, and an overlay upper
+  # dir cannot live on the container's own overlayfs root.
+  conductor-jail:
+    <<: *image
+    depends_on: [forge, mock-github, sink-catcher]
+    privileged: true
+    user: "1000:1000"
+    tmpfs:
+      - /home/conductor/data:uid=1000,gid=1000,mode=0700
+    environment:
+      HOME: /home/conductor
+      PC_GITHUB_API_BASE: "http://mock-github:8080"
+      CONDUCTOR_GIT_REMOTE_BASE: "git://forge/"
+    volumes:
+      - ./config:/etc/conductor:ro
+      - ./fixtures:/fixtures:ro
+    command: ["bash", "/etc/conductor/entrypoint-jail.sh", "/etc/conductor/jail.yaml"]
 
   # The connectors-model daemon (group K): new-schema config, slack verbs
   # against the sink-catcher's slack-shaped endpoint, and a loopback sshd for

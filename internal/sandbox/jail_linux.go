@@ -127,11 +127,35 @@ func bindInto(root string, b BindMount, skipMissing bool) error {
 		return fmt.Errorf("jail bind %s: %w", src, err)
 	}
 	if b.RO {
-		if err := unix.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_REC, ""); err != nil {
+		if err := unix.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_REC|lockedFlags(src), ""); err != nil {
 			return fmt.Errorf("jail bind-ro %s: %w", b.Path, err)
 		}
 	}
 	return nil
+}
+
+// lockedFlags are the source mount's nosuid/nodev/noexec/relatime flags. In
+// a user namespace they are LOCKED on an inherited mount: a read-only
+// remount that does not repeat them is refused with EPERM (a container's
+// tmpfs is typically nosuid,nodev,noexec).
+func lockedFlags(p string) uintptr {
+	var st unix.Statfs_t
+	if unix.Statfs(p, &st) != nil {
+		return 0
+	}
+	var f uintptr
+	for _, m := range []struct {
+		st int64
+		ms uintptr
+	}{
+		{unix.ST_NOSUID, unix.MS_NOSUID}, {unix.ST_NODEV, unix.MS_NODEV}, {unix.ST_NOEXEC, unix.MS_NOEXEC},
+		{unix.ST_NOATIME, unix.MS_NOATIME}, {unix.ST_NODIRATIME, unix.MS_NODIRATIME}, {unix.ST_RELATIME, unix.MS_RELATIME},
+	} {
+		if int64(st.Flags)&m.st != 0 {
+			f |= m.ms
+		}
+	}
+	return f
 }
 
 // baseLink recreates a merged-usr symlink (or binds a real split-usr dir

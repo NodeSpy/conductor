@@ -1,0 +1,21 @@
+{
+  "action": "closed",
+  "installation": { "id": 42 },
+  "repository": {
+    "full_name": "grpx/jailcancel",
+    "name": "jailcancel",
+    "default_branch": "main",
+    "owner": { "login": "grpx" }
+  },
+  "pull_request": {
+    "number": 1,
+    "state": "closed",
+    "merged": true,
+    "draft": false,
+    "title": "merged while the agent worked",
+    "html_url": "https://forge.test/grpx/jailcancel/pull/1",
+    "head": { "sha": "x", "ref": "pr-1" },
+    "base": { "ref": "main" },
+    "user": { "login": "conductor-user" }
+  }
+}

@@ -858,6 +858,13 @@ func (s *cliSession) TurnErr() error {
 	s.mu.Lock()
 	raw := s.out
 	s.mu.Unlock()
+	// A workspace jail that failed to come up never ran the agent: its
+	// setup error is the whole output. Surface it as the turn's failure
+	// rather than handing it on as the agent's reply.
+	if strings.HasPrefix(strings.TrimSpace(raw), "sandbox-net: ") {
+		line, _, _ := strings.Cut(strings.TrimSpace(raw), "\n")
+		return fmt.Errorf("the agent's sandbox could not start: %s", line)
+	}
 	if s.c != nil && s.c.recipe.failed != nil {
 		return s.c.recipe.failed(raw)
 	}

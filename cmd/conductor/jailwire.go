@@ -89,19 +89,20 @@ func wireJail(w jailWiring) *jail.Manager {
 			if d.Repo == "" {
 				return "target: this launch has no dispatch target — writes are refused"
 			}
-			if r := targets.Default.CheckWrite(target(d), policy(d), wr.Kind, wr.Repo, wr.Number); r != "" {
+			// A dead target trumps everything else: say so, whatever the write.
+			if r := liveClosed(d); r != "" {
 				return r
 			}
-			return liveClosed(d)
+			return targets.Default.CheckWrite(target(d), policy(d), wr.Kind, wr.Repo, wr.Number)
 		},
 		CheckPush: func(d *jail.Dispatch, branch string, force, del bool) string {
 			if d.Repo == "" {
 				return "target: this launch has no dispatch target — pushes are refused"
 			}
-			if r := targets.Default.CheckPush(target(d), policy(d), d.Repo, branch, force, del); r != "" {
+			if r := liveClosed(d); r != "" {
 				return r
 			}
-			return liveClosed(d)
+			return targets.Default.CheckPush(target(d), policy(d), d.Repo, branch, force, del)
 		},
 		ThreadTarget:  threadTarget,
 		HostEgress:    w.egress.UnixEndpointLabeled,

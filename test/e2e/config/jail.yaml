@@ -1,0 +1,87 @@
+# The agent-jail daemon (group X, #154). A cli claude-code runtime (fakecli)
+# with NO isolation: block gets the synthesized workspace jail; the scripted
+# agent's `[[sh …]]` lines are what it tries from inside.
+connectors:
+  github:
+    use: github
+    app:
+      app_id: 123456
+      private_key_path: /etc/conductor/github-app.pem
+    identity:
+      commit_author: self
+      read_token: app
+      write_token: e2e-user-write-token
+    me:
+      logins:
+        - conductor-user
+    webhook:
+      listen: 0.0.0.0:8789
+      secret: e2e-webhook-secret
+      verify_signature: false
+runtimes:
+  cli_claude:
+    use: cli
+    tool: claude-code
+    default: true
+  cli_claude_deny:
+    use: cli
+    tool: claude-code
+    isolation:
+      network: deny
+triggers:
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jail]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude
+        prompt: |
+          Jail probe {{.repo}}#{{.pr}}.
+          [[sh echo "uid=$(id -u)"]]
+          [[sh ls -A "$HOME" | tr '\n' ' '; echo]]
+          [[sh cat /home/conductor/.ssh/id_fake 2>&1 || echo NO-SSH]]
+          [[sh head -c 40 /home/conductor/data/audit.jsonl 2>&1 || echo NO-STATE]]
+          [[sh echo "tokens=$(env | grep -c TOKEN=)"]]
+          [[sh gh pr view 1]]
+          [[sh gh pr create -t stray -b "from the agent"]]
+          [[sh gh auth logout]]
+          [[sh git commit --allow-empty -qm "jailed stray" && git push origin HEAD:refs/heads/stray-branch]]
+          [[sh git push --force origin HEAD:refs/heads/main]]
+          [[sh echo "[core]" >> "$(git rev-parse --git-common-dir)/config"]]
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jailclosed]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude
+        prompt: "Fix after the PR merged."
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jailcancel]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude
+        prompt: |
+          [[nofix]]
+          [[sh sleep 45]]
+          [[sh git commit --allow-empty -qm late && git push origin HEAD]]
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jailnet]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude_deny
+        prompt: |
+          [[nofix]]
+          [[sh curl -s -m 5 -o /dev/null -w "code=%{http_code}" http://sink-catcher:8080/_health; echo " rc=$?"]]
+          [[sh curl -s -m 5 --noproxy '*' -o /dev/null -w "code=%{http_code}" http://sink-catcher:8080/_health; echo " direct-rc=$?"]]
+policy:
+  concurrency:
+    max_agents: 8
+store:
+  state_file: /home/conductor/data/state.json
+  audit_log: /home/conductor/data/audit.jsonl

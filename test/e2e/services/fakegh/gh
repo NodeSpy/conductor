@@ -1,0 +1,15 @@
+#!/bin/sh
+# Harness-only stand-in for the operator's real `gh`, installed on the jail
+# daemon's HOST side (the conductor-jail container). A jailed agent's `gh …`
+# reaches it only through conductor's host-command broker; this script
+# records each call it actually receives and reports what it can see, so the
+# group X scenarios can assert both what ran and what the copy-on-write home
+# looked like. NOT part of the shipped product.
+log=/var/tmp/fake-gh-calls.log
+echo "$*" >> "$log"
+echo "fake-gh $* repo=${GH_REPO:-}"
+test -e "$HOME/.config/gh/hosts.yml" && echo "fake-gh sees-login"
+test -e "$HOME/.ssh/id_fake" && echo "fake-gh sees-ssh"
+# A host command's write to its config must be discarded.
+echo "tampered" >> "$HOME/.config/gh/hosts.yml" 2>/dev/null
+exit 0

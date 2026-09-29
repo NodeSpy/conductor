@@ -1,0 +1,13 @@
+{
+  "number": 1,
+  "state": "closed",
+  "merged": true,
+  "draft": false,
+  "mergeable_state": "clean",
+  "title": "already merged under the agent",
+  "html_url": "https://forge.test/grpx/jailclosed/pull/1",
+  "user": { "login": "conductor-user" },
+  "head": { "sha": "canned-head-jailclosed1", "ref": "pr-1" },
+  "base": { "ref": "main" },
+  "labels": []
+}
