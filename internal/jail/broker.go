@@ -199,18 +199,36 @@ func (m *Manager) handleExec(ctx context.Context, d *Dispatch, req Request, fw *
 	hr.Env = m.hostEnv(d, tool, req.Env, penv, rule, full)
 	if rule.Network != nil && rule.Network.Mode != config.NetOpen {
 		allow := networkAllow(rule.Network, nil)
-		if m.HostEgress == nil {
-			refuse("host command network policy set but no egress proxy is wired")
-			return
+		if isDarwin {
+			// macOS: Seatbelt confines the command to the proxy's loopback
+			// port (no network namespace to forward into).
+			if m.HostEgressTCP == nil {
+				refuse("host command network policy set but no egress proxy is wired")
+				return
+			}
+			addr, cred, revoke, err := m.HostEgressTCP(allow, d.DispatchID)
+			if err != nil {
+				refuse("egress proxy: " + err.Error())
+				return
+			}
+			defer revoke()
+			_, port, _ := strings.Cut(addr, ":")
+			hr.EgressSock = "port:" + port
+			hr.Env = append(hr.Env, sandbox.ProxyEnv(addr, cred)...)
+		} else {
+			if m.HostEgress == nil {
+				refuse("host command network policy set but no egress proxy is wired")
+				return
+			}
+			sock, cred, revoke, err := m.HostEgress(allow, d.DispatchID)
+			if err != nil {
+				refuse("egress proxy: " + err.Error())
+				return
+			}
+			defer revoke()
+			hr.EgressSock = sock
+			hr.Env = append(hr.Env, sandbox.ProxyEnv(sandbox.ForwardAddr, cred)...)
 		}
-		sock, cred, revoke, err := m.HostEgress(allow, d.DispatchID)
-		if err != nil {
-			refuse("egress proxy: " + err.Error())
-			return
-		}
-		defer revoke()
-		hr.EgressSock = sock
-		hr.Env = append(hr.Env, sandbox.ProxyEnv(sandbox.ForwardAddr, cred)...)
 	}
 	res, err := runHost(ctx, m, hr, streamWriter{fw: fw}, streamWriter{fw: fw, err: true})
 	if err != nil {

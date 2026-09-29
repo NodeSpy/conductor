@@ -28,7 +28,7 @@ func validateIsolationFor(where string, iso *IsolationConfig, remote, agent bool
 	if iso == nil {
 		return nil
 	}
-	if !agent && (len(iso.Host) > 0 || iso.Writes != nil || iso.Intent != nil) {
+	if !agent && (len(iso.Host) > 0 || iso.Writes != nil || iso.Intent != nil || iso.MacOSKeychain) {
 		return fmt.Errorf("config: %s: isolation `host:`/`writes:`/`intent:` apply to agent launches (a cli or acp runtime on this box, or a step on one) — here they would be a silent no-op", where)
 	}
 	if n := iso.Network; n != nil {

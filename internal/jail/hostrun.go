@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/NodeSpy/conductor/internal/hostcmd"
 )
 
 // hostRun is one approved host command, ready to run on the operator's
@@ -246,4 +248,14 @@ func itoa(i int) string {
 		return digits[i : i+1]
 	}
 	return itoa(i/10) + digits[i%10:i%10+1]
+}
+
+// homeViewFor is hostcmd.HomeView with its env as a list (tests).
+func homeViewFor(tool string) ([]string, []string, []string, bool) {
+	p, per, env, full := hostcmd.HomeView(tool, nil)
+	var e []string
+	for k, v := range env {
+		e = append(e, k+"="+v)
+	}
+	return p, per, e, full
 }

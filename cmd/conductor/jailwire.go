@@ -103,8 +103,9 @@ func wireJail(w jailWiring) *jail.Manager {
 			}
 			return liveClosed(d)
 		},
-		ThreadTarget: threadTarget,
-		HostEgress:   w.egress.UnixEndpointLabeled,
+		ThreadTarget:  threadTarget,
+		HostEgress:    w.egress.UnixEndpointLabeled,
+		HostEgressTCP: w.egress.EndpointLabeled,
 	}
 	// A stale jail dir from a crashed daemon holds nothing anyone needs.
 	if ents, err := os.ReadDir(m.Root); err == nil {

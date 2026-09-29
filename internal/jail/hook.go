@@ -38,8 +38,6 @@ func HookSettings(binDir string) string {
 	return string(b)
 }
 
-func claudeHookSettings() string { return HookSettings(BinDir) }
-
 // hookInput is the part of claude-code's hook payload conductor reads.
 type hookInput struct {
 	Event     string          `json:"hook_event_name"`

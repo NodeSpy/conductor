@@ -138,7 +138,7 @@ func findReal(tool string) string {
 	self, _ := os.Executable()
 	selfFI, _ := os.Stat(self)
 	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		if dir == "" || dir == BinDir || strings.HasSuffix(dir, "/conductor-shims") {
+		if dir == "" || dir == BinDir || (os.Getenv(EnvSock) != "" && filepath.Dir(os.Getenv(EnvSock)) == filepath.Join(filepath.Dir(dir), "broker")) {
 			continue
 		}
 		p := filepath.Join(dir, tool)

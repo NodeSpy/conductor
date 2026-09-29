@@ -32,10 +32,10 @@ func gitEnv(d *Dispatch) []string {
 		{"url.conductor::.insteadOf", "ssh://git@github.com/"},
 		{"url.conductor::.insteadOf", "https://github.com/"},
 		{"url.conductor::.insteadOf", "git://github.com/"},
-		{"gpg.ssh.program", BinDir + "/" + ShimSSHSign},
-		{"gpg.program", BinDir + "/" + ShimGPGSign},
-		{"gpg.openpgp.program", BinDir + "/" + ShimGPGSign},
-		{"gpg.x509.program", BinDir + "/" + ShimGPGSign},
+		{"gpg.ssh.program", d.binDir() + "/" + ShimSSHSign},
+		{"gpg.program", d.binDir() + "/" + ShimGPGSign},
+		{"gpg.openpgp.program", d.binDir() + "/" + ShimGPGSign},
+		{"gpg.x509.program", d.binDir() + "/" + ShimGPGSign},
 		// No credential helper in the jail (the operator's `gh auth
 		// git-credential` would only reach the gh shim and be refused).
 		{"credential.helper", ""},

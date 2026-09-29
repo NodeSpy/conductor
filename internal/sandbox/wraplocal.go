@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -120,6 +121,35 @@ func WrapLocalCommand(spec *Spec, argv []string, dir string, env []string, deps 
 			return nil, nil, cleanup, fmt.Errorf("sandbox: resolve conductor binary for sandbox masking: %w", serr)
 		}
 		nf = &NetForward{Self: self, Masks: append([]string(nil), deps.MaskPaths...)}
+	}
+	if jail && CheckGOOS == "darwin" && deps.Agent != nil {
+		// The macOS agent jail: Seatbelt restricts outbound to conductor's
+		// LOOPBACK proxy port (there is no network namespace to forward
+		// into), so the enforced path uses the TCP endpoint.
+		nf.Agent = deps.Agent
+		if spec.Deny && spec.HasEgress {
+			if deps.EgressAddr == nil {
+				return nil, nil, cleanup, fmt.Errorf("sandbox: enforced egress needs the proxy's loopback endpoint but none is wired")
+			}
+			addr, cred, revoke, perr := deps.EgressAddr(spec.Egress)
+			if perr != nil {
+				return nil, nil, cleanup, fmt.Errorf("sandbox: egress proxy: %w", perr)
+			}
+			if revoke != nil {
+				cleanup = revoke
+			}
+			_, port := splitHostPort(addr)
+			nf.ProxyPort, _ = strconv.Atoi(port)
+			outEnv = append(outEnv, ProxyEnv(addr, cred)...)
+		}
+		if err := spec.Check(CheckGOOS, CheckGeteuid(), CheckLookPath); err != nil {
+			return nil, nil, cleanup, err
+		}
+		wrapped, werr := spec.WrapLocal(argv, dir, wrapEnvKeys(outEnv), nf)
+		if werr != nil {
+			return nil, nil, cleanup, werr
+		}
+		return wrapped, outEnv, cleanup, nil
 	}
 	if spec.EnforcedEgress() {
 		// The STRUCTURAL allowlist (#36 iso-review C1): the sandbox has no

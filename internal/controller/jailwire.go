@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -161,6 +162,15 @@ func modelRoute(tool, home string) (hosts, loopback []string) {
 				loopback = append(loopback, net.JoinHostPort(h, port))
 			} else {
 				hosts = append(hosts, h+":"+port)
+				// The operator configured this endpoint explicitly: if it is
+				// a private-network host (a router on a tailnet), list its
+				// addresses literally — the proxy's SSRF guard lets an
+				// internal address through only when it is named as an IP.
+				if ips, err := net.LookupIP(h); err == nil {
+					for _, ip := range ips {
+						hosts = append(hosts, net.JoinHostPort(ip.String(), port))
+					}
+				}
 			}
 		}
 	}
@@ -232,9 +242,18 @@ func jailSpec(tool string, runtimeIso *config.IsolationConfig, req dispatch.Requ
 	layers := []*config.IsolationConfig{GlobalIsolation, runtimeIso, step.Isolation}
 	readOnly, writes := dispatch.EffectiveWrites(req, runtimeIso)
 	var intent *config.IntentRules
-	for _, l := range layers {
-		if l != nil && l.Intent != nil {
+	keychain := false
+	for i, l := range layers {
+		if l == nil {
+			continue
+		}
+		if l.Intent != nil {
 			intent = l.Intent
+		}
+		// Keychain access is an operator-level loosening (global/runtime);
+		// a step cannot grant it.
+		if i < 2 && l.MacOSKeychain {
+			keychain = true
 		}
 	}
 	role := "fix"
@@ -255,7 +274,7 @@ func jailSpec(tool string, runtimeIso *config.IsolationConfig, req dispatch.Requ
 		DispatchID: req.DispatchID, Tool: tool, Repo: repo, Number: num, IsPR: isPR,
 		HeadBranch: head, BaseRef: t.BaseRef, Step: firstNonEmpty(step.ID, step.Name), Label: label,
 		ReadOnly: readOnly, Writes: writes, Layers: layers, StepLayer: step.Isolation != nil,
-		Intent: intent, UserToken: req.Tokens.User,
+		Intent: intent, UserToken: req.Tokens.User, Keychain: keychain,
 	}
 }
 
@@ -418,7 +437,17 @@ func prepareJail(dir string, env, argv []string, opt launchOpts) (wrapped []stri
 		ExtraBinds: l.Binds,
 		Agent:      l.Seatbelt,
 	}
-	if ss.EnforcedEgress() {
+	if ss.Deny && ss.HasEgress && runtime.GOOS == "darwin" && l.Seatbelt != nil {
+		// macOS has no network namespace: the host loopback model endpoint is
+		// reached directly, the profile allowing exactly its port.
+		for _, lb := range modelLoopback {
+			if _, p, err := net.SplitHostPort(lb); err == nil {
+				if n, err := strconv.Atoi(p); err == nil {
+					l.Seatbelt.LoopbackPorts = append(l.Seatbelt.LoopbackPorts, n)
+				}
+			}
+		}
+	} else if ss.EnforcedEgress() {
 		for _, lb := range modelLoopback {
 			sock, rerr := JailManager.Relay(l.Dispatch, lb)
 			if rerr != nil {

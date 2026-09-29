@@ -103,6 +103,8 @@ type Manager struct {
 	// HostEgress mints an enforced egress endpoint for a host command whose
 	// rule carries a network block (unix socket + credential).
 	HostEgress func(allow []string, label string) (sock, cred string, revoke func(), err error)
+	// HostEgressTCP is the loopback (TCP) endpoint, macOS's route.
+	HostEgressTCP func(allow []string, label string) (addr, cred string, revoke func(), err error)
 	// Signer overrides how a commit payload is signed (tests); nil → the
 	// operator's configured git signing (see sign.go).
 	Signer func(ctx context.Context, d *Dispatch, format string, payload []byte) (sig, status []byte, err error)
@@ -132,9 +134,12 @@ type LaunchSpec struct {
 	Layers    []*config.IsolationConfig
 	StepLayer bool
 	Intent    *config.IntentRules
-	// UserToken is the operator's GitHub token for the host-side gh process
-	// (never the jail's).
+	// UserToken is the operator's GitHub token, for conductor's own lookups
+	// on the dispatch's behalf (PR state, review threads) — never the jail's,
+	// never a host command's.
 	UserToken string
+	// Keychain (macOS) opts the jail into the Keychain's Security services.
+	Keychain bool
 	// Git is the worktree's git layout resolved on a previous turn (resume
 	// turns must not re-read the agent-writable .git pointer).
 	Git *GitLayout
@@ -233,7 +238,7 @@ func (m *Manager) Prepare(ctx context.Context, spec LaunchSpec) (*Launch, error)
 	}
 	d.HostSet, d.Denied = hostcmd.HostSet(spec.Layers, spec.StepLayer, m.LookPath)
 
-	binds, err := m.layout(d, self)
+	binds, prof, homeEnv, err := m.platformLayout(d, self)
 	if err != nil {
 		d.cleanup()
 		return nil, err
@@ -248,20 +253,50 @@ func (m *Manager) Prepare(ctx context.Context, spec LaunchSpec) (*Launch, error)
 	d.addCleanup(func() { m.unregister(d) })
 
 	env := []string{
-		"HOME=" + m.Home,
-		"TMPDIR=/tmp",
-		EnvSock + "=" + SockPath,
+		"HOME=" + homeEnv,
+		"TMPDIR=" + d.jailTmp(),
+		EnvSock + "=" + d.sockPath(),
 		EnvToken + "=" + d.Token,
-		"PATH=" + BinDir + ":" + os.Getenv("PATH"),
+		"PATH=" + d.binDir() + ":" + os.Getenv("PATH"),
 		"CONDUCTOR_JAILED=1",
 	}
 	env = append(env, gitEnv(d)...)
-	l := &Launch{Binds: binds, Env: env, Dispatch: d, Close: d.Close}
+	l := &Launch{Binds: binds, Seatbelt: prof, Env: env, Dispatch: d, Close: d.Close}
 	if spec.Tool == "claude-code" || spec.Tool == "claude" {
-		l.ClaudeSettings = claudeHookSettings()
+		l.ClaudeSettings = HookSettings(d.binDir())
+		// claude-code writes its scratch under /tmp/claude-<uid> unless told
+		// otherwise; keep it in the dispatch's own temp dir.
+		l.Env = append(l.Env, "CLAUDE_CODE_TMPDIR="+d.jailTmp())
 	}
 	m.emit(d, Event{Type: "jail", Status: "ok", Detail: fmt.Sprintf("jail up: host commands %s", strings.Join(d.HostSet, ","))})
 	return l, nil
+}
+
+// binDir is where the jail's shims live, as the jail sees it: a fixed path
+// on Linux (a tmpfs in the jail), the dispatch's own dir on macOS.
+func (d *Dispatch) binDir() string {
+	if isDarwin {
+		return filepath.Join(d.Dir, "bin")
+	}
+	return BinDir
+}
+
+// sockPath is the broker socket as the jail sees it.
+func (d *Dispatch) sockPath() string {
+	if isDarwin {
+		return filepath.Join(d.Dir, "broker", "broker.sock")
+	}
+	return SockPath
+}
+
+// platformLayout is the OS's jail layout: Linux mounts (layout); macOS a
+// Seatbelt profile plus a per-dispatch scratch home and shim dir.
+func (m *Manager) platformLayout(d *Dispatch, self string) ([]sandbox.BindMount, *sandbox.AgentProfile, string, error) {
+	if isDarwin {
+		return m.layoutDarwin(d, self)
+	}
+	b, err := m.layout(d, self)
+	return b, nil, m.Home, err
 }
 
 // layout builds the allow-list for d beyond the workspace itself (which the
@@ -313,6 +348,8 @@ func (m *Manager) layout(d *Dispatch, self string) ([]sandbox.BindMount, error) 
 	for _, s := range shims {
 		add(sandbox.BindMount{Path: filepath.Join(BinDir, s), Link: "../conductor"})
 	}
+	// conductor itself (`conductor call step.done`, the skill CLI).
+	add(sandbox.BindMount{Path: filepath.Join(BinDir, "conductor"), Link: "../conductor"})
 	// Bind conductor over every credentialed host-set tool's real path, so an
 	// absolute path (`/usr/bin/gh`) reaches the broker too. Native-capable
 	// tools (npm, pnpm) keep their real binary: without credentials in the

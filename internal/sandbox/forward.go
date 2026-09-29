@@ -75,6 +75,10 @@ type NetForward struct {
 	Binds      []BindMount // fs-jail allow-list to pivot_root into ("" = no jail)
 	Chdir      string      // working directory inside the jail (the launch's own dir)
 	Relays     []Relay     // extra in-sandbox loopback ports piped to host-side unix sockets
+	// Agent (macOS) is the agent jail's Seatbelt extras; ProxyPort the
+	// loopback egress proxy port its restricted network may reach.
+	Agent     *AgentProfile
+	ProxyPort int
 }
 
 // Relay is one in-sandbox loopback port piped to a unix socket — how an

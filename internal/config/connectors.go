@@ -443,6 +443,13 @@ type IsolationConfig struct {
 	// Intent are optional tool-call rules checked before each of the agent's
 	// own tool calls (#154 §11) — guidance and visibility, not a wall.
 	Intent *IntentRules `yaml:"intent,omitempty"`
+	// MacOSKeychain (macOS only) lets a jailed agent reach the Keychain's
+	// Security services — what a Keychain-held claude-code login needs. It is
+	// an explicit loosening: with it, the agent can also read any other item
+	// whose access list trusts /usr/bin/security (gh's token, for one —
+	// verified on macOS 26). Prefer an API key or a `claude setup-token`
+	// (CLAUDE_CODE_OAUTH_TOKEN), which need no Keychain.
+	MacOSKeychain bool `yaml:"macos_keychain,omitempty"`
 
 	// Defaulted marks a jail conductor synthesized for a launch with no
 	// isolation: block. It degrades loudly where the OS cannot build it; an

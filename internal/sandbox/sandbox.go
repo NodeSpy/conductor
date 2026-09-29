@@ -215,6 +215,12 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 			if nf != nil {
 				binds = append(binds, nf.Binds...)
 			}
+			if nf != nil && nf.Agent != nil {
+				// The agent jail: narrowed exec/Mach rules, scratch home, and
+				// a network that is open or reaches only conductor's proxy.
+				n := AgentNet{Open: !s.Deny, ProxyPort: nf.ProxyPort, LoopbackPorts: nf.Agent.LoopbackPorts}
+				return wrapSeatbeltAgent(argv, binds, nf.Agent, n), nil
+			}
 			// deny+egress (enforced allowlist) is rejected on darwin at validate
 			// (no netns forwarder), so s.Deny here always means a full net cut.
 			return wrapSeatbelt(argv, binds, s.Deny), nil
