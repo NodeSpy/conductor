@@ -474,7 +474,7 @@ func parseClaudeStructured(output string) string {
 	var env struct {
 		Structured json.RawMessage `json:"structured_output"`
 	}
-	if json.Unmarshal([]byte(strings.TrimSpace(output)), &env) == nil &&
+	if json.Unmarshal(claudeEnvelope(output), &env) == nil &&
 		len(env.Structured) > 0 && string(env.Structured) != "null" {
 		return string(env.Structured)
 	}
@@ -511,11 +511,38 @@ func codexDecide(dir, model string, d *config.DecisionLaunch) (cliCmd, string, e
 	return cliCmd{argv: append(argv, "-"), stdin: d.System + "\n\n" + d.Document}, answer, nil
 }
 
+// claudeEnvelope isolates the `claude -p --output-format json` envelope from a
+// turn's captured output. The cli runner captures stderr alongside stdout, and
+// claude-code writes diagnostics there — e.g.
+// `[claude-code:unrecognized_model] {"model":…}` when a model is newer than the
+// client — which would otherwise sit in front of the envelope and make every
+// parser below fall back to raw text. Output that is one JSON document is
+// returned as is; otherwise the last line that is a `"type":"result"` object
+// wins. No such line → the trimmed output, so callers keep their raw-text
+// fallback.
+func claudeEnvelope(output string) []byte {
+	trimmed := strings.TrimSpace(output)
+	if json.Valid([]byte(trimmed)) {
+		return []byte(trimmed)
+	}
+	lines := strings.Split(trimmed, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		var probe struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(line), &probe) == nil && probe.Type == "result" {
+			return []byte(line)
+		}
+	}
+	return []byte(trimmed)
+}
+
 // parseClaudeSessionID pulls the session id out of `claude -p --output-format json`
 // output, so a follow-up can `--resume` it.
 func parseClaudeSessionID(output string) string {
 	var obj map[string]any
-	if json.Unmarshal([]byte(strings.TrimSpace(output)), &obj) != nil {
+	if json.Unmarshal(claudeEnvelope(output), &obj) != nil {
 		return ""
 	}
 	for _, k := range []string{"session_id", "sessionId", "sessionID"} {
@@ -532,7 +559,7 @@ func parseClaudeSessionID(output string) string {
 // carries no result, so a non-JSON or errored run still yields something.
 func parseClaudeResult(output string) string {
 	var obj map[string]any
-	if json.Unmarshal([]byte(strings.TrimSpace(output)), &obj) != nil {
+	if json.Unmarshal(claudeEnvelope(output), &obj) != nil {
 		return output
 	}
 	if r, ok := obj["result"].(string); ok && r != "" {
@@ -557,7 +584,7 @@ func parseClaudeError(output string) error {
 		IsError bool   `json:"is_error"`
 		Result  string `json:"result"`
 	}
-	if json.Unmarshal([]byte(strings.TrimSpace(output)), &env) != nil {
+	if json.Unmarshal(claudeEnvelope(output), &env) != nil {
 		return nil
 	}
 	if !env.IsError && !strings.HasPrefix(env.Subtype, "error") {

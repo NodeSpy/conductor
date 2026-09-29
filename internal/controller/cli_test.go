@@ -247,11 +247,27 @@ func TestParseClaudeResult(t *testing.T) {
 		{`{"result":"{\"decision\":\"approve\"}"}`, `{"decision":"approve"}`},
 		{"not json at all", "not json at all"},     // non-envelope → raw
 		{`{"type":"result"}`, `{"type":"result"}`}, // no result field → raw
+		// stderr diagnostics captured ahead of the envelope don't hide it
+		{"[claude-code:unrecognized_model] {\"model\":\"claude-sonnet-5-5\"}\n" +
+			`{"type":"result","result":"the answer","session_id":"x"}`, "the answer"},
 	}
 	for _, c := range cases {
 		if got := parseClaudeResult(c.in); got != c.want {
 			t.Errorf("parseClaudeResult(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// A lean decide run whose stderr warning (a model newer than the client)
+// precedes the envelope still yields the structured answer and session id.
+func TestParseClaudeStructuredIgnoresStderrNoise(t *testing.T) {
+	out := "[claude-code:unrecognized_model] {\"model\":\"claude-sonnet-5-5\",\"query_source\":\"sdk\"}\n" +
+		`{"type":"result","subtype":"success","is_error":false,"result":"","session_id":"s1","structured_output":{"refuted":false}}` + "\n"
+	if got := parseClaudeStructured(out); got != `{"refuted":false}` {
+		t.Fatalf("parseClaudeStructured = %q", got)
+	}
+	if got := parseClaudeSessionID(out); got != "s1" {
+		t.Fatalf("parseClaudeSessionID = %q", got)
 	}
 }
 
@@ -265,6 +281,8 @@ func TestParseClaudeError(t *testing.T) {
 		{`{"type":"result","subtype":"error_max_turns","is_error":false}`, true},
 		{"not json at all", false},
 		{`{"result":"no flags"}`, false},
+		{"[claude-code:unrecognized_model] {\"model\":\"m\"}\n" +
+			`{"type":"result","subtype":"success","is_error":true,"result":"boom"}`, true},
 	}
 	for _, c := range cases {
 		err := parseClaudeError(c.in)
