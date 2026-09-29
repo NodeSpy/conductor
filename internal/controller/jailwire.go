@@ -303,7 +303,7 @@ func credentialEnv(k string, keep map[string]bool) bool {
 		"PC_GH_WRITE_TOKEN", "PC_GH_APP_TOKEN",
 		"SSH_AUTH_SOCK", "SSH_AGENT_PID", "GPG_AGENT_INFO", "KUBECONFIG", "GOOGLE_APPLICATION_CREDENTIALS",
 		"NODE_AUTH_TOKEN", "NPM_TOKEN", "DOCKER_AUTH_CONFIG", "DOCKER_HOST", "DOCKER_CONFIG",
-		"GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND", "CONDUCTOR_SKILL_TOKEN", "CONDUCTOR_SKILL_CLAIM",
+		"GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND", "CONDUCTOR_SKILL_TOKEN", "CONDUCTOR_SKILL_CLAIM", "CONDUCTOR_ENDPOINT",
 		"CONDUCTOR_VAULT_KEY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS":
 		return true
 	}
@@ -336,10 +336,23 @@ var modelCredentials = map[string][]string{
 	"gemini":      {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
 }
 
-// scrubJailEnv drops credential variables from an environment.
-func scrubJailEnv(env []string, tool string) []string {
+// dispatchSkillEnv are the conductor skill variables minted for THIS
+// dispatch (dispatch.SkillEnv) — kept in the jail. They are not credentials
+// to strip: the daemon authorizes the session token server-side by the
+// caller's uid and dispatch, and it grants only that dispatch's own skill
+// policy (step.done, its granted verbs). Only the dispatch's own copies are
+// kept; the daemon's inherited ones (a daemon started under an agent) are
+// dropped by JailBaseEnv.
+var dispatchSkillEnv = []string{"CONDUCTOR_ENDPOINT", "CONDUCTOR_SKILL_TOKEN"}
+
+// scrubJailEnv drops credential variables from an environment; keepExtra
+// names variables to keep regardless.
+func scrubJailEnv(env []string, tool string, keepExtra ...string) []string {
 	keep := map[string]bool{}
 	for _, k := range modelCredentials[tool] {
+		keep[k] = true
+	}
+	for _, k := range keepExtra {
 		keep[k] = true
 	}
 	// claude-code on Bedrock/Vertex authenticates with cloud credentials:
@@ -487,8 +500,14 @@ func prepareJail(dir string, env, argv []string, opt launchOpts) (wrapped []stri
 	} else {
 		deps.EgressAddr = EgressProxyFor
 	}
-	base := append(scrubJailEnv(env, spec.Tool), l.Env...)
-	w, wenv, wclean, werr := sandbox.WrapLocalCommand(ss, argv, dir, base, deps)
+	base := append(scrubJailEnv(env, spec.Tool, dispatchSkillEnv...), l.Env...)
+	// The jail is up: the prompt's identity guidance describes it, not the
+	// unjailed token/SSH setup (a copy — a degraded launch keeps argv as is).
+	jargv := make([]string, len(argv))
+	for i, a := range argv {
+		jargv[i] = dispatch.ForJail(a)
+	}
+	w, wenv, wclean, werr := sandbox.WrapLocalCommand(ss, jargv, dir, base, deps)
 	if werr != nil {
 		l.Close()
 		if opt.jailDefault {

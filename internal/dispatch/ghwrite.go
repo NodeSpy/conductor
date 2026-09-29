@@ -1,5 +1,7 @@
 package dispatch
 
+import "strings"
+
 // Token identity model for dispatched work:
 //
 //	GH_TOKEN / GITHUB_TOKEN = YOUR token → the default for everything an agent or
@@ -24,9 +26,31 @@ const WriteWrapperGuidance = "\n\n---\n" +
 	"go over SSH as me. NEVER post, submit, approve, or otherwise write anything with the " +
 	"App/bot token. If a large read would burn my rate limit you MAY read (only) with the " +
 	"App token via `GH_TOKEN=$" + envGHAppToken + " gh ...`, but never write with it.\n" +
-	"SCOPE: your writes are bound to THIS target — its PR or issue, and its branch. " +
+	scopeGuidance
+
+// JailedIdentityGuidance replaces WriteWrapperGuidance in a launch that runs
+// in the workspace jail (#154): there the agent holds no token and no key —
+// commits are signed and pushed, and gh and the other host commands run, by
+// conductor on the host — so the unjailed text's token variables and SSH
+// would only send it looking for credentials that are not there.
+const JailedIdentityGuidance = "\n\n---\n" +
+	"IDENTITY: you act as ME. Commit and `git push` as usual: conductor signs each commit " +
+	"and makes the push as me. `gh` and the other host commands on your PATH work as usual " +
+	"too — each runs on the host through conductor, as me, and conductor refuses (with the " +
+	"reason) anything my policy does not allow. You need no credentials of your own and " +
+	"there are none in your environment, so don't look for any.\n" +
+	scopeGuidance
+
+const scopeGuidance = "SCOPE: your writes are bound to THIS target — its PR or issue, and its branch. " +
 	"If the PR is merged or closed, stop and report that; do not push a new branch, " +
 	"open a new PR or issue, or write to any other PR. conductor refuses such writes."
+
+// ForJail rewrites a prompt for a jailed launch: the identity guidance the
+// engine appended (WriteWrapperGuidance) becomes JailedIdentityGuidance.
+// Anything else is unchanged.
+func ForJail(prompt string) string {
+	return strings.Replace(prompt, WriteWrapperGuidance, JailedIdentityGuidance, 1)
+}
 
 // BotReplyGuidance is appended to an agent prompt when the triggering
 // comment/review was authored by a bot and the resolved reply_to_bots policy

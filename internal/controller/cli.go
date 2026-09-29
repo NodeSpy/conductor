@@ -139,6 +139,14 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 	}
 
 	host := resolveHost(c.host, spec.Request.Step.Host)
+	if host == "" {
+		// The conductor skill surface (`conductor call step.done`, the
+		// granted verbs) over the daemon's local socket — the same env the
+		// paseo path hands a local agent.
+		for k, v := range dispatch.SkillEnv(spec.Request, dispatch.LocalSkillEndpoint()) {
+			env = append(env, k+"="+v)
+		}
+	}
 	opt := agentLaunchOpts(c.jailOK && host == "", c.recipe.tool, c.iso, spec.Request)
 	id := c.recipe.tool + "-" + strconv.FormatInt(c.seq.Add(1), 10)
 	cwd, cmd := spec.Cwd, c.recipe.cmd(spec.Request.Model, prompt)
@@ -244,6 +252,11 @@ func (c *cliController) launchOn(ctx context.Context, host, dir string, env []st
 	if err != nil {
 		revoke()
 		return nil, err
+	}
+	if opt.res.jailed {
+		// The argv's prompt was rewritten inside prepareJail; a prompt fed on
+		// stdin is rewritten here.
+		cmd.stdin = dispatch.ForJail(cmd.stdin)
 	}
 	proc, err := c.start(ctx, localDir, localEnv, wrapped, cmd.stdin, opt.res)
 	if err != nil {

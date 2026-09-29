@@ -28,16 +28,19 @@ import (
 // session_model is negotiated: an agent that advertises loadSession is resumable
 // (a session survives by id), otherwise native. Transport is always acp.
 type acpController struct {
-	runner   runnerMemo
-	name     string
-	command  []string // launch argv for the agent subprocess (best-effort default; overridable via `command:`)
-	prov     Provisioner
-	dial     acpDialer // injectable connection factory; nil → spawn the subprocess
-	host     string    // configured `host:`; "" = local (see resolveHost/prepareLaunch)
-	iso      *config.IsolationConfig
-	scrubEnv bool // inherit only a minimal env allowlist (external runtime plugins, #54)
-	jailOK   bool // launches get the default workspace jail (#154)
-	tool     string
+	runner  runnerMemo
+	name    string
+	command []string // launch argv for the agent subprocess (best-effort default; overridable via `command:`)
+	prov    Provisioner
+	dial    acpDialer // injectable connection factory; nil → spawn the subprocess
+	// dialJailed (tests): a dialed launch reports as jailed, the way a
+	// spawned one that prepareLaunch jailed does.
+	dialJailed bool
+	host       string // configured `host:`; "" = local (see resolveHost/prepareLaunch)
+	iso        *config.IsolationConfig
+	scrubEnv   bool // inherit only a minimal env allowlist (external runtime plugins, #54)
+	jailOK     bool // launches get the default workspace jail (#154)
+	tool       string
 
 	mu    sync.Mutex
 	model SessionModel // cached negotiated model (native until an Initialize proves loadSession)
@@ -174,10 +177,14 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	if resolveHost(c.host, spec.Request.Step.Host) == "" {
 		opt = agentLaunchOpts(c.jailOK, c.tool, c.iso, spec.Request)
 	}
+	opt.res = &launchResult{}
 	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Step.Host, opt)
 	if err != nil {
 		scancel()
 		return nil, err
+	}
+	if opt.res.jailed {
+		prompt = dispatch.ForJail(prompt)
 	}
 
 	if _, err := client.Initialize(sctx, acp.DefaultInitializeParams(acp.Implementation{
@@ -286,6 +293,9 @@ func (c *acpController) ResumeSession(ctx context.Context, id string, agentAutho
 // in reach (Initialize/ResumeSession).
 func (c *acpController) connect(ctx context.Context, cwd string, env []string, del acp.ClientDelegate, profileHost string, opt launchOpts) (*acp.Client, func() error, error) {
 	if c.dial != nil {
+		if c.dialJailed && opt.res != nil {
+			opt.res.jailed = true
+		}
 		return c.dial(ctx, cwd, env, del)
 	}
 	return spawnACP(ctx, c.command, cwd, env, del, resolveHost(c.host, profileHost), opt, c.scrubEnv)
@@ -302,7 +312,9 @@ func spawnACP(_ context.Context, command []string, cwd string, env []string, del
 		return nil, nil, errors.New("acp: no launch command configured")
 	}
 	opt, revoke := withEgressRevoke(opt)
-	opt.res = &launchResult{}
+	if opt.res == nil {
+		opt.res = &launchResult{}
+	}
 	argv, dir, localEnv, _, err := prepareLaunch(host, cwd, env, command, opt)
 	if err != nil {
 		revoke()
