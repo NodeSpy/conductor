@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 )
@@ -452,5 +454,75 @@ func TestFailingCheckIgnoredByName(t *testing.T) {
 		"check_run":{"conclusion":"failure","name":"tests","head_sha":"h2","id":2,"pull_requests":[{"number":4}]}}`
 	if k := do(t, g, "check_run", real); len(k) != 1 || k[0] != "failing_checks" {
 		t.Fatalf("a non-ignored failing check should still trigger failing_checks, got %v", k)
+	}
+}
+
+// A failing-check fixer pushes to the PR branch, but a check payload carries no
+// head branch: it must be enriched from the PR like comment/review triggers,
+// or the worktree lands on pr-<n> and the fix is pushed as a stray new branch.
+func TestFailingChecksHeadRefEnriched(t *testing.T) {
+	g := richWithREST(t) // stub PR head ref "feature/x"
+	body := `{"action":"completed","installation":{"id":42},"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"check_run":{"conclusion":"failure","name":"build","head_sha":"h9","id":321,
+		"details_url":"https://github.com/acme/w/actions/runs/777/job/321","pull_requests":[{"number":4}]}}`
+	trs := g.triggersFor(context.Background(), "check_run", []byte(body))
+	if len(trs) != 1 || trs[0].Kind != "failing_checks" {
+		t.Fatalf("want failing_checks, got %+v", trs)
+	}
+	if trs[0].Context["head_ref"] != "feature/x" {
+		t.Fatalf("head_ref should be enriched via REST, got %v", trs[0].Context["head_ref"])
+	}
+}
+
+// A check finishing after the PR merged has no branch left to fix.
+func TestCheckRunOnClosedPRDropped(t *testing.T) {
+	_, app := stubAPI(t, "clean")
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/42/access_tokens", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"token":"inst-tok","expires_at":%q}`, time.Now().Add(time.Hour).Format(time.RFC3339))
+	})
+	mux.HandleFunc("/repos/acme/w/pulls/{num}", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"state":"closed","mergeable_state":"clean","head":{"sha":"h6","ref":"feature/x"},"base":{"ref":"main"},"user":{"login":"me"}}`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	app.apiBase = srv.URL
+	g := newTestIntegration(t, richConfig())
+	g.app = app
+	g.rest = newRESTClient(app)
+	body := `{"action":"completed","installation":{"id":42},"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"check_run":{"conclusion":"failure","name":"build","head_sha":"h9","id":321,
+		"details_url":"https://github.com/acme/w/actions/runs/777/job/321","pull_requests":[{"number":4}]}}`
+	for _, k := range do(t, g, "check_run", body) {
+		if k == "failing_checks" {
+			t.Fatalf("failing check on a closed PR must not trigger a fixer")
+		}
+	}
+}
+
+// Merge-state detection re-reads the PR; if it has closed by then (the event
+// raced the merge), no conflict/behind fixer is emitted for the dead branch.
+func TestMergeStateOnClosedPRDropped(t *testing.T) {
+	_, app := stubAPI(t, "dirty")
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/42/access_tokens", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"token":"inst-tok","expires_at":%q}`, time.Now().Add(time.Hour).Format(time.RFC3339))
+	})
+	mux.HandleFunc("/repos/acme/w/pulls/{num}", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"state":"closed","mergeable_state":"dirty","head":{"sha":"h6","ref":"feature/x"},"base":{"ref":"main"},"user":{"login":"me"}}`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	app.apiBase = srv.URL
+	g := newTestIntegration(t, richConfig())
+	g.app = app
+	g.rest = newRESTClient(app)
+	body := `{"action":"synchronize","installation":{"id":42},
+		"repository":{"full_name":"acme/w","name":"w","owner":{"login":"acme"}},
+		"pull_request":{"number":6,"state":"open","head":{"sha":"h6"},"base":{"ref":"main"}}}`
+	for _, k := range do(t, g, "pull_request", body) {
+		if k == "merge_conflict" || k == "pr_behind" {
+			t.Fatalf("merge-state fixer emitted for a closed PR: %s", k)
+		}
 	}
 }

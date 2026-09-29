@@ -88,9 +88,13 @@ A step is one of seven forms (all share `id` and `if`):
   you want to steer it. A foreground agent step with a local
   worktree also outputs its proposed `diff` and `workdir` ([[Runs]]). To
   re-request a reviewer after a fix, add a `uses: <conn>.rerequest_review`
-  step (see [[Verbs]]) rather than a field on the agent step. It skips — never
-  fails the flow — when nobody requestable is left: the PR author, review bots
-  (`…[bot]`), or anyone GitHub rejects as not a collaborator.
+  step (see [[Verbs]]) rather than a field on the agent step. By default it
+  pings only reviewers whose latest review is CHANGES_REQUESTED on an older
+  commit than the PR head and who aren't already requested, on an open PR —
+  never someone who has since approved (`only_outstanding: false` re-requests
+  unconditionally). It skips — never fails the flow — when nobody requestable
+  is left: the PR author, review bots (`…[bot]`), anyone GitHub rejects as not
+  a collaborator, or nobody with changes still outstanding.
   It may also carry `model:` (a fleet, a model id, a wildcard, or an inline
   `{ any, required }`) and `runtime:` (a `runtimes:` entry to pin it to) —
   see [Model selection](Model-Selection).

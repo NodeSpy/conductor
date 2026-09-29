@@ -158,6 +158,22 @@ func (c *Client) get(ctx context.Context, token, url string, out any) error {
 	return nil
 }
 
+// getFresh issues an authenticated GET that bypasses the read cache — for a
+// decision that must see state as of now (review state before a re-request),
+// where a cached body up to CacheTTL old could be the wrong answer.
+func (c *Client) getFresh(ctx context.Context, token, url string, out any) error {
+	resp, err := c.getRaw(ctx, token, url, "application/vnd.github+json", "")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	c.noteRateLimit(resp)
+	if resp.StatusCode/100 != 2 {
+		return ghHTTPError("GET", url, resp)
+	}
+	return json.NewDecoder(io.LimitReader(resp.Body, maxReadBytes)).Decode(out)
+}
+
 // getText issues an authenticated GET (cached) with a caller-supplied Accept
 // (the diff or raw media type) and returns the body as a string.
 func (c *Client) getText(ctx context.Context, token, url, accept string) (string, error) {

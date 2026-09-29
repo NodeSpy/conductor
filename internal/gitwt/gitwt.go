@@ -254,8 +254,12 @@ func (p *Provisioner) Reap(ctx context.Context) {
 // ---- checkout strategies -------------------------------------------------
 
 // addPR lands the PR head in a fresh worktree. The branch is named after the
-// PR's own head ref (falling back to pr-<n>) rather than left detached, so an
-// agent's `git push` targets the PR branch the way it does on the paseo path.
+// PR's own head ref rather than left detached, so an agent's `git push` targets
+// the PR branch the way it does on the paseo path. With no head ref on the
+// trigger it's resolved from the remote by the head commit; failing that the
+// head is taken detached. It used to fall back to a local pr-<n> branch, which
+// looked pushable — and a push published it as a stray new branch on the
+// remote while the PR itself never moved.
 func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.Request) error {
 	pr := req.Trigger.Target.PR
 	if pr <= 0 {
@@ -266,6 +270,14 @@ func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.R
 		return err
 	}
 	branch := prBranch(req)
+	if branch == "" {
+		branch = p.remoteBranchAt(ctx, base, "FETCH_HEAD")
+	}
+	if branch == "" {
+		p.logf("gitwt: %s#%d: PR head branch unknown — checking out detached", req.Trigger.Target.Repo, pr)
+		_, err := p.git(ctx, base, "worktree", "add", "--detach", wt, "FETCH_HEAD")
+		return err
+	}
 	_, err := p.git(ctx, base, "worktree", "add", "-B", branch, wt, "FETCH_HEAD")
 	if err == nil {
 		return nil
@@ -456,13 +468,43 @@ func pathSlug(s string) string {
 }
 
 // prBranch is the local branch a checkout-pr worktree lands on: the PR's own
-// head ref when the trigger carried it (so `git push origin HEAD` targets the
-// PR branch), else a deterministic pr-<n>.
+// head ref when the trigger carried a usable one (so `git push origin HEAD`
+// targets the PR branch), else "".
 func prBranch(req dispatch.Request) string {
 	if ref, _ := req.Trigger.Context["head_ref"].(string); safeBranch(ref) {
 		return ref
 	}
-	return "pr-" + strconv.Itoa(req.Trigger.Target.PR)
+	return ""
+}
+
+// remoteBranchAt names the one origin branch whose tip is rev — how a PR head
+// is found when the trigger didn't carry its branch name. "" when no branch or
+// more than one points there (the PR can't be told apart from the others).
+func (p *Provisioner) remoteBranchAt(ctx context.Context, base, rev string) string {
+	sha, err := p.git(ctx, base, "rev-parse", rev)
+	if err != nil {
+		return ""
+	}
+	sha = strings.TrimSpace(sha)
+	heads, err := p.git(ctx, base, "ls-remote", "--heads", "origin")
+	if err != nil {
+		return ""
+	}
+	var match string
+	for _, line := range strings.Split(heads, "\n") {
+		h, ref, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if !ok || h != sha {
+			continue
+		}
+		if match != "" {
+			return ""
+		}
+		match = strings.TrimPrefix(ref, "refs/heads/")
+	}
+	if !safeBranch(match) {
+		return ""
+	}
+	return match
 }
 
 // safeBranch reports whether ref is usable verbatim as a local branch name —

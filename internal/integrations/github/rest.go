@@ -26,6 +26,7 @@ func newRESTClient(app *appAuth) *restClient {
 }
 
 type pullInfo struct {
+	State          string `json:"state"`           // open|closed
 	MergeableState string `json:"mergeable_state"` // clean|dirty|behind|blocked|unstable|draft|unknown
 	Mergeable      *bool  `json:"mergeable"`
 	Draft          bool   `json:"draft"`
@@ -265,6 +266,10 @@ type unresolvedThread struct {
 	ID          string
 	Author      string
 	AuthorIsBot bool
+	// AuthorApproved: the opener's latest opinionated review (APPROVED or
+	// CHANGES_REQUESTED) is APPROVED — they've signed off since leaving the
+	// thread, so it's not outstanding change-requested feedback.
+	AuthorApproved bool
 }
 
 // unresolvedThreads returns the PR's unresolved review threads (on App creds),
@@ -274,10 +279,19 @@ func (c *restClient) unresolvedThreads(ctx context.Context, instID int64, owner,
 	const q = `query($o:String!,$n:String!,$num:Int!){
 	  repository(owner:$o,name:$n){ pullRequest(number:$num){
 	    reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{author{login __typename}}}}}
+	    latestOpinionatedReviews(first:50){nodes{state author{login}}}
 	  }}}`
 	var data struct {
 		Repository struct {
 			PullRequest struct {
+				LatestOpinionatedReviews struct {
+					Nodes []struct {
+						State  string `json:"state"`
+						Author *struct {
+							Login string `json:"login"`
+						} `json:"author"`
+					} `json:"nodes"`
+				} `json:"latestOpinionatedReviews"`
 				ReviewThreads struct {
 					Nodes []struct {
 						ID         string `json:"id"`
@@ -298,6 +312,12 @@ func (c *restClient) unresolvedThreads(ctx context.Context, instID int64, owner,
 	if err := c.graphql(ctx, instID, q, map[string]any{"o": owner, "n": name, "num": number}, &data); err != nil {
 		return nil, err
 	}
+	approved := map[string]bool{}
+	for _, r := range data.Repository.PullRequest.LatestOpinionatedReviews.Nodes {
+		if r.Author != nil && r.State == "APPROVED" {
+			approved[strings.ToLower(r.Author.Login)] = true
+		}
+	}
 	var out []unresolvedThread
 	for _, t := range data.Repository.PullRequest.ReviewThreads.Nodes {
 		if t.IsResolved {
@@ -314,6 +334,7 @@ func (c *restClient) unresolvedThreads(ctx context.Context, instID int64, owner,
 			if ut.AuthorIsBot && !isBotLogin(ut.Author) {
 				ut.Author += "[bot]"
 			}
+			ut.AuthorApproved = approved[strings.ToLower(cs[0].Author.Login)]
 		}
 		out = append(out, ut)
 	}

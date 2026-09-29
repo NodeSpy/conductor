@@ -130,9 +130,10 @@ func TestCheckoutPRLandsThePRHeadOnItsBranch(t *testing.T) {
 	}
 }
 
-// A trigger with no head_ref still lands on a named branch, so the push target
-// is deterministic rather than a detached HEAD.
-func TestCheckoutPRWithoutHeadRefUsesPRNumberBranch(t *testing.T) {
+// A trigger with no head_ref resolves the PR's branch from the remote by its
+// head commit, so a push still updates the PR. It must never land on a local
+// pr-<n> branch: pushing that publishes a stray branch and leaves the PR as-is.
+func TestCheckoutPRWithoutHeadRefResolvesTheBranch(t *testing.T) {
 	p := newProv(t, originRepo(t))
 	req := prReq()
 	req.Trigger.Context = nil
@@ -141,8 +142,35 @@ func TestCheckoutPRWithoutHeadRefUsesPRNumberBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProvisionWorktree: %v", err)
 	}
-	if got := strings.TrimSpace(out(t, cwd, "git", "rev-parse", "--abbrev-ref", "HEAD")); got != "pr-7" {
-		t.Fatalf("worktree branch = %q, want %q", got, "pr-7")
+	if got := strings.TrimSpace(out(t, cwd, "git", "rev-parse", "--abbrev-ref", "HEAD")); got != "feature" {
+		t.Fatalf("worktree branch = %q, want the PR's branch %q", got, "feature")
+	}
+}
+
+// When the head commit can't be pinned to exactly one remote branch, the head
+// is checked out detached: a bare push then fails loudly instead of creating a
+// new branch.
+func TestCheckoutPRWithAmbiguousHeadIsDetached(t *testing.T) {
+	origin := originRepo(t)
+	// A second branch at the same commit makes the lookup ambiguous.
+	run(t, origin, "git", "branch", "feature-copy", "feature")
+	p := newProv(t, origin)
+	req := prReq()
+	req.Trigger.Context = nil
+
+	_, cwd, err := p.ProvisionWorktree(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ProvisionWorktree: %v", err)
+	}
+	if got := strings.TrimSpace(out(t, cwd, "git", "rev-parse", "--abbrev-ref", "HEAD")); got != "HEAD" {
+		t.Fatalf("worktree branch = %q, want a detached HEAD", got)
+	}
+	wantSHA := strings.TrimSpace(out(t, origin, "git", "rev-parse", "refs/pull/7/head"))
+	if got := strings.TrimSpace(out(t, cwd, "git", "rev-parse", "HEAD")); got != wantSHA {
+		t.Fatalf("worktree HEAD = %s, want the PR head %s", got, wantSHA)
+	}
+	if b := out(t, cwd, "git", "branch", "--list", "pr-7"); strings.TrimSpace(b) != "" {
+		t.Fatalf("a local pr-7 branch was created: %q", b)
 	}
 }
 
@@ -458,8 +486,8 @@ func TestPRBranchRejectsAnUnsafeHeadRef(t *testing.T) {
 	for _, ref := range []string{"--upload-pack=touch /tmp/x", "../evil", "a b", "", "-x", "feat.lock", "x/"} {
 		req := prReq()
 		req.Trigger.Context = map[string]any{"head_ref": ref}
-		if got := prBranch(req); got != "pr-7" {
-			t.Fatalf("prBranch with head_ref %q = %q, want the pr-7 fallback", ref, got)
+		if got := prBranch(req); got != "" {
+			t.Fatalf("prBranch with head_ref %q = %q, want it rejected", ref, got)
 		}
 	}
 	req := prReq()
