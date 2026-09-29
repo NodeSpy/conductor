@@ -38,7 +38,9 @@ func TestValidateReportsMissingGitForAFixerConfig(t *testing.T) {
 		if name == "git" {
 			return "", errors.New("forced for test: no git")
 		}
-		return prevLookPath(name)
+		// Everything else resolves, so git is the ONLY missing binary
+		// whatever this machine has installed.
+		return "/usr/bin/" + name, nil
 	}
 	t.Cleanup(func() { preflightLookPath = prevLookPath })
 
@@ -57,8 +59,14 @@ func TestValidateReportsMissingGitForAFixerConfig(t *testing.T) {
 
 // TestValidatePassesWhenGitIsPresent is the control: the SAME config with git
 // resolvable must not fail preflight (the earlier test isn't vacuously
-// failing for an unrelated reason).
+// failing for an unrelated reason). The lookup is stubbed so the result does
+// not depend on this machine: git and the runtime's tool binary (claude) both
+// resolve — a CI runner without claude installed would otherwise fail the
+// cli-tool check, which is a different finding.
 func TestValidatePassesWhenGitIsPresent(t *testing.T) {
+	prevLookPath := preflightLookPath
+	preflightLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
+	t.Cleanup(func() { preflightLookPath = prevLookPath })
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(fixerConfig), 0o600); err != nil {
 		t.Fatal(err)
