@@ -95,8 +95,9 @@ func TestGuardrailsByName(t *testing.T) {
 		{"kubectl", "get", "pods"}, {"kubectl", "config", "view"}, {"kubectl", "config", "current-context"},
 		{"docker", "ps"}, {"docker", "run", "--rm", "-v", "/state/worktrees/d1:/src", "alpine", "ls"},
 		{"docker", "run", "-v", "cache:/c", "alpine"}, {"docker", "compose", "ps"},
-		{"terraform", "plan"}, {"ssh", "host", "uptime"}, {"scp", "./out.txt", "host:~/x"},
-		{"npm", "whoami"}, {"pnpm", "publish"},
+		{"terraform", "fmt"}, {"terraform", "version"}, {"terraform", "output"},
+		{"ssh", "host", "uptime"}, {"scp", "./out.txt", "host:~/x"},
+		{"npm", "whoami"},
 	}
 	for _, c := range allowed {
 		d := decide(c[0], Rule{}, c[1:]...)
@@ -113,9 +114,14 @@ func TestNpmNativeVsHost(t *testing.T) {
 	if d := decide("npm", Rule{}, "run", "test"); !d.Native {
 		t.Fatalf("npm run is native")
 	}
-	d := decide("npm", Rule{}, "publish")
-	if !d.Allow || d.Native {
-		t.Fatalf("npm publish is a host command: %+v", d)
+	// publish is a host command that executes workspace content: refused
+	// until the operator allows it, then confined.
+	if d := decide("npm", Rule{}, "publish"); d.Allow || !strings.Contains(d.Reason, `isolation.host.npm.allow: ["publish *"]`) {
+		t.Fatalf("npm publish is refused by default: %+v", d)
+	}
+	d := decide("npm", operatorAllows("npm", "publish *"), "publish")
+	if !d.Allow || d.Native || !d.Confine {
+		t.Fatalf("an allowed npm publish is a confined host command: %+v", d)
 	}
 	if strings.Join(d.Parsed.ExtraArgs, " ") != "--ignore-scripts" {
 		t.Fatalf("npm publish on the host must skip lifecycle scripts: %v", d.Parsed.ExtraArgs)
@@ -292,7 +298,11 @@ func TestPathGuard(t *testing.T) {
 		{"mytool", "--config=/etc/mytool.conf"},
 	}
 	for _, c := range allowed {
-		if d := decide(c[0], Rule{}, c[1:]...); !d.Allow {
+		rule := Rule{}
+		if c[0] == "kubectl" {
+			rule = operatorAllows("kubectl", "apply *") // content-executing: the operator allows it
+		}
+		if d := decide(c[0], rule, c[1:]...); !d.Allow {
 			t.Errorf("%v: want allowed, got %q", c, d.Reason)
 		}
 	}

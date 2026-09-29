@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // On a real Mac: a host command reads its cloned config (copy-on-write
@@ -89,4 +91,85 @@ func TestHostRunDarwinRealGH(t *testing.T) {
 	var out bytes.Buffer
 	res, err := runHost(context.Background(), m, hr, &out, &out)
 	t.Logf("exit=%d err=%v discarded=%v\n%s\nprofile:\n%s", res.Exit, err, res.Discarded, out.String(), hostSeatbelt(hr, filepath.Join(m.Root, "cow-X"), homeEntries(hr)))
+}
+
+// On a real Mac: a confined (content-executing) run reads its own config,
+// cannot read the rest of the home or conductor's state, cannot write the
+// real workspace (its writes land in the clone and are kept for the next
+// confined run), gets no stdin, and reaches nothing but the egress proxy,
+// which refuses a destination outside the allowlist.
+func TestHostRunDarwinConfined(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	root, err := os.MkdirTemp(filepath.Join(home, "cjl"), "confined-")
+	if err != nil {
+		t.Skip("needs ~/cjl")
+	}
+	defer os.RemoveAll(root)
+	fake := filepath.Join(root, "home")
+	state := filepath.Join(fake, "state")
+	os.MkdirAll(filepath.Join(fake, ".config", "tool"), 0o700)
+	os.MkdirAll(filepath.Join(fake, ".ssh"), 0o700)
+	os.WriteFile(filepath.Join(fake, ".config", "tool", "cfg"), []byte("login\n"), 0o600)
+	os.WriteFile(filepath.Join(fake, ".ssh", "id"), []byte("secret\n"), 0o600)
+	os.MkdirAll(filepath.Join(state, "jails", "d", "cow-ws", "sh", "up"), 0o700)
+	os.WriteFile(filepath.Join(state, "audit.jsonl"), []byte("audit\n"), 0o600)
+	ws := filepath.Join(state, "worktrees", "w")
+	os.MkdirAll(ws, 0o700)
+	os.WriteFile(filepath.Join(ws, "main.tf"), []byte("# config\n"), 0o644)
+	tmp := filepath.Join(state, "jails", "tmp")
+	os.MkdirAll(tmp, 0o700)
+	pm := sandbox.NewProxyManager(nil)
+	defer pm.Close()
+	addr, cred, revoke, err := pm.EndpointLabeled([]string{"registry.terraform.io"}, "d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer revoke()
+	_, port, _ := strings.Cut(addr, ":")
+	m := &Manager{Root: filepath.Join(state, "jails")}
+	script := `cat "$HOME/.config/tool/cfg"
+cat ` + fake + `/.ssh/id >/dev/null 2>&1 && echo LEAK-ssh
+cat ` + state + `/audit.jsonl >/dev/null 2>&1 && echo LEAK-state
+test -e main.tf && echo sees-workspace
+test -e rel.txt && echo sees-earlier-write
+echo x > ` + ws + `/direct.txt 2>/dev/null && echo WS-WRITABLE
+echo x > rel.txt && echo clone-write-ok
+curl -s -m 5 -o /dev/null -w 'proxy-code=%{http_connect}\n' https://example.com
+curl -s -m 5 --noproxy '*' -o /dev/null https://example.com; echo "direct-rc=$?"
+if read -r l; then echo "STDIN=$l"; else echo no-stdin; fi`
+	hr := hostRun{
+		Tool: "sh", Bin: "/bin/sh", Cwd: ws, Home: fake, Args: []string{"-c", script},
+		HomePaths: []string{".config/tool"}, Workspace: ws, TmpDir: tmp, Sensitive: []string{state},
+		Env:     append([]string{"PATH=/usr/bin:/bin"}, sandbox.ProxyEnv(addr, cred)...),
+		Confine: true, EgressSock: "port:" + port, Stdin: []byte("from-the-agent\n"),
+		WsUpper: filepath.Join(state, "jails", "d", "cow-ws", "sh", "up"),
+	}
+	hr.Stdin = nil // the broker drops stdin for a confined run
+	for i := 0; i < 2; i++ {
+		var out bytes.Buffer
+		res, err := runHost(context.Background(), m, hr, &out, &out)
+		s := out.String()
+		t.Logf("run %d exit=%d\n%s", i+1, res.Exit, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"login", "sees-workspace", "clone-write-ok", "proxy-code=403", "no-stdin"} {
+			if !strings.Contains(s, want) {
+				t.Errorf("run %d: missing %q", i+1, want)
+			}
+		}
+		for _, bad := range []string{"LEAK-", "WS-WRITABLE", "direct-rc=0", "STDIN="} {
+			if strings.Contains(s, bad) {
+				t.Errorf("run %d: unexpected %q", i+1, bad)
+			}
+		}
+		if i == 1 && !strings.Contains(s, "sees-earlier-write") {
+			t.Error("the second confined run must see the first's write (the dispatch's layer)")
+		}
+	}
+	for _, f := range []string{"rel.txt", "direct.txt"} {
+		if _, err := os.Stat(filepath.Join(ws, f)); err == nil {
+			t.Errorf("%s reached the real workspace", f)
+		}
+	}
 }

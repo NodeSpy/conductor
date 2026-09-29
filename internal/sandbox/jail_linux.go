@@ -264,3 +264,9 @@ func touchFile(p string) error {
 	}
 	return f.Close()
 }
+
+// BuildJail is buildJail for a caller that has its own namespaces set up —
+// conductor's host-side jail for a content-executing host command
+// (internal/jail): root of a fresh user + mount + pid namespace, it builds
+// the allow-list root from binds and pivots into it.
+func BuildJail(binds []BindMount) error { return buildJail(binds) }

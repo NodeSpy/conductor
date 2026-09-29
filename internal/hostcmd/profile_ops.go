@@ -284,8 +284,6 @@ func (terraformProfile) parse(args []string, _ Context) Parsed {
 	switch p.word(0) {
 	case "login", "logout":
 		p.Refuse = "built-in: terraform " + p.word(0)
-	case "console":
-		p.Refuse = "built-in: terraform console (interactive)"
 	}
 	return p
 }

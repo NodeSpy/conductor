@@ -96,6 +96,10 @@ type Context struct {
 	// ThreadTarget resolves a review-thread node id to the PR it belongs to
 	// (for gh api graphql resolveReviewThread); nil → unresolvable.
 	ThreadTarget func(nodeID string) (repo string, number int, err error)
+	// LocalImage reports a docker image that was built on this machine
+	// rather than pulled (docker run of it executes local content); nil →
+	// treated as pulled.
+	LocalImage func(ref string) bool
 }
 
 // Rule is one binary's effective configured rule, after Resolve.
@@ -104,11 +108,15 @@ type Rule struct {
 	Disabled bool
 	// Allow holds one allow list per configuring layer; a command must match
 	// every non-empty layer (a step's list can only narrow the runtime's).
-	Allow   [][]string
-	Deny    []string
-	Env     map[string]string
-	Persist []string
-	Network *config.IsolationNetwork
+	Allow [][]string
+	// OperatorAllow are the allow patterns of the global and runtime layers
+	// only: what may explicitly permit a content-executing command (a step
+	// cannot widen).
+	OperatorAllow []string
+	Deny          []string
+	Env           map[string]string
+	Persist       []string
+	Network       *config.IsolationNetwork
 	// Profiled reports a built-in profile (parsed matching) vs argv matching.
 	Profiled bool
 }
@@ -120,6 +128,9 @@ type Decision struct {
 	Parsed Parsed
 	// Native: run in the jail, not on the host.
 	Native bool
+	// Confine: the command executes workspace content and the operator's
+	// config allows it — it runs in a host-side jail (see content.go).
+	Confine bool
 }
 
 // WriteCheck binds a write to the dispatch's target; "" allows, otherwise the
@@ -162,6 +173,14 @@ func Decide(req Request, rule Rule, ctx Context, check WriteCheck) Decision {
 	if r := pathGuard(req, p, ctx); r != "" {
 		d.Reason = r
 		return d
+	}
+	if why, knob := contentExec(req.Tool, p, ctx); why != "" {
+		if !explicitlyAllowed(rule, p) {
+			d.Reason = fmt.Sprintf("denied (%s %s executes workspace content on the host: %s. Allow it in your config — isolation.host.%s.allow: [%q] — and it runs in a host-side jail)",
+				req.Tool, strings.TrimSuffix(knob, " *"), why, req.Tool, knob)
+			return d
+		}
+		d.Confine = true
 	}
 	if r := matchRules(rule, p, req.Args); r != "" {
 		d.Reason = r
@@ -293,6 +312,11 @@ func flagPresent(spec string, flags map[string][]string) bool {
 	name, val, hasVal := strings.Cut(spec, "=")
 	name = normFlag(name)
 	vals, ok := flags[name]
+	if !ok && len(name) > 2 && name[0] == '-' && name[1] != '-' {
+		// A single-dash long flag (terraform's -destroy, -auto-approve):
+		// profiles that accept either spelling record it as --name.
+		vals, ok = flags["-"+name]
+	}
 	if !ok {
 		return false
 	}
@@ -470,6 +494,9 @@ func Resolve(tool string, layers []*config.IsolationConfig, step bool) Rule {
 		}
 		if len(h.Allow) > 0 {
 			r.Allow = append(r.Allow, append([]string(nil), h.Allow...))
+			if !isStep {
+				r.OperatorAllow = append(r.OperatorAllow, h.Allow...)
+			}
 		}
 		r.Deny = append(r.Deny, h.Deny...)
 		if !isStep {

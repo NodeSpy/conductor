@@ -501,3 +501,110 @@ git push -q origin "$c:refs/heads/fix/42"; echo "a-leak-push-exit=$?"
 	}
 	run(t, f.remote, nil, "git", "-c", "gpg.ssh.allowedSignersFile="+f.allowed, "verify-commit", "refs/heads/fix/43")
 }
+
+// A content-executing host command (a terraform plan runs the workspace's
+// providers and data sources): refused by default; allowed by the operator's
+// config, it runs in the host-side jail — its own config readable, the rest
+// of the home and the operator's session absent, the workspace read-only
+// (its writes kept for the dispatch's next run, never in the workspace), no
+// stdin, and no network but the tool's endpoints through the egress proxy.
+func TestJailContentExecutingHostCommandRunsConfined(t *testing.T) {
+	needJailKernel(t)
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl missing")
+	}
+	f := newFixture(t)
+	m := f.manager(t)
+	os.MkdirAll(f.home+"/.terraform.d", 0o700)
+	os.WriteFile(f.home+"/.terraform.d/credentials.tfrc.json", []byte("{}\n"), 0o600)
+	// What an `external` data source would do, as the "provider" runs it.
+	tf := "#!/bin/sh\necho \"tf-args=$*\"\n" +
+		"[ -r \"$HOME/.terraform.d/credentials.tfrc.json\" ] && echo tf-sees-own-config\n" +
+		"cat \"$HOME/.ssh/id_secret\" 2>/dev/null && echo LEAK-home-ssh\n" +
+		"cat \"$HOME/.config/gh/hosts.yml\" 2>/dev/null && echo LEAK-other-tool-config\n" +
+		"ls /run/user/$(id -u) >/dev/null 2>&1 && echo LEAK-session\n" +
+		"test -e \"" + f.root + "/state/checkouts\" && echo LEAK-state\n" +
+		"test -e ./earlier.txt && echo sees-earlier-write\n" +
+		"echo planted > ./earlier.txt && echo ws-write-ok\n" +
+		"curl -s -m 5 -o /dev/null -w 'proxy-code=%{http_connect}\\n' https://example.com; echo \"proxy-rc=$?\"\n" +
+		"curl -s -m 5 --noproxy '*' -o /dev/null https://example.com; echo \"direct-rc=$?\"\n" +
+		"if read -r line; then echo \"STDIN=$line\"; else echo no-stdin; fi\n"
+	os.WriteFile(f.bin+"/terraform", []byte(tf), 0o755)
+	look := m.LookPath
+	m.LookPath = func(n string) (string, error) {
+		if n == "terraform" {
+			return f.bin + "/terraform", nil
+		}
+		return look(n)
+	}
+	var denied []string
+	pm := sandbox.NewProxyManager(func(_, hostport string) { denied = append(denied, hostport) })
+	defer pm.Close()
+	m.HostEgress = pm.UnixEndpointLabeled
+
+	run := func(layers []*config.IsolationConfig, script string) string {
+		l, err := m.Prepare(context.Background(), LaunchSpec{
+			DispatchID: "d1", Tool: "claude-code", Workspace: f.ws, Repo: "acme/app", Number: 42, IsPR: true,
+			HeadBranch: "fix/42", Label: "fix acme/app#42", Layers: layers,
+		})
+		if err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+		defer l.Close()
+		spec := sandbox.FromConfig(&config.IsolationConfig{Mode: "namespace"})
+		deps := sandbox.LocalWrapDeps{SelfExe: m.SelfExe, Confine: true, ExtraBinds: l.Binds}
+		argv, env, cleanup, err := sandbox.WrapLocalCommand(spec, []string{"/bin/sh", "-c", script}, f.ws, append(sandbox.MinimalEnv(), l.Env...), deps)
+		if err != nil {
+			t.Fatalf("wrap: %v", err)
+		}
+		defer cleanup()
+		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd.Dir, cmd.Env = f.ws, env
+		out, _ := cmd.CombinedOutput()
+		return string(out)
+	}
+	// Refused by default, with the reason and the knob.
+	out := run(nil, `terraform plan; echo "exit=$?"`)
+	t.Logf("default:\n%s", out)
+	if !strings.Contains(out, "exit=126") || !strings.Contains(out, `isolation.host.terraform.allow: ["plan *"]`) {
+		t.Fatalf("terraform plan must be refused by default, naming the knob:\n%s", out)
+	}
+	if strings.Contains(out, "tf-args=") {
+		t.Fatal("the refused command ran")
+	}
+	// Allowed by the operator: runs confined, twice (the second sees the
+	// first's write — the dispatch's layer — while the workspace never does).
+	allow := []*config.IsolationConfig{{Host: map[string]*config.HostCommand{"terraform": {Allow: []string{"plan *"}}}}}
+	out = run(allow, `echo from-the-agent | terraform plan -out=x; echo "exit1=$?"
+test -e earlier.txt && echo WS-CHANGED || echo ws-untouched
+terraform -chdir=. plan; echo "exit2=$?"`)
+	t.Logf("allowed:\n%s", out)
+	for _, want := range []string{"tf-args=plan -out=x", "tf-sees-own-config", "ws-write-ok", "ws-untouched",
+		"sees-earlier-write", "no-stdin", "proxy-code=403", "exit1=0", "exit2=0"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	for _, bad := range []string{"LEAK-", "WS-CHANGED", "STDIN=", "direct-rc=0", "proxy-rc=0"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("unexpected %q", bad)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.ws, "earlier.txt")); err == nil {
+		t.Error("the confined run wrote into the real workspace")
+	}
+	if len(denied) == 0 || !strings.Contains(strings.Join(denied, " "), "example.com") {
+		t.Errorf("the proxy must have refused example.com: %v", denied)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var sawConfined bool
+	for _, e := range f.events {
+		if e.Type == "host_command" && e.Fields != nil && e.Fields["confined"] == true {
+			sawConfined = true
+		}
+	}
+	if !sawConfined {
+		t.Error("the confined run must be audited as confined")
+	}
+}

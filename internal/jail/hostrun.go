@@ -41,6 +41,19 @@ type hostRun struct {
 	// proxy (the command gets an empty network namespace + forwarder).
 	EgressSock string `json:"egress_sock,omitempty"`
 
+	// Confine runs a content-executing command in the host-side jail (see
+	// hostcmd/content.go): an allow-list root (Linux) or a write-deny
+	// profile (macOS), the workspace read-only with its writes landing in
+	// WsUpper — kept for the dispatch's later confined runs of the same
+	// tool (terraform init, then plan), never in the real workspace — no
+	// stdin, and the network always restricted.
+	Confine bool   `json:"confine,omitempty"`
+	WsUpper string `json:"ws_upper,omitempty"`
+	WsWork  string `json:"ws_work,omitempty"`
+	// Sockets are host unix sockets a confined run may reach (the Docker
+	// daemon's, for docker).
+	Sockets []string `json:"sockets,omitempty"`
+
 	// Scratch is the per-command copy-on-write dir (set by runHost).
 	Scratch string `json:"scratch"`
 	UID     int    `json:"uid"`

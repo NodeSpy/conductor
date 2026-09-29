@@ -187,6 +187,39 @@ type Dispatch struct {
 	closed   bool
 	cleanups []func()
 	seenNet  map[string]bool
+	confined map[string]*sync.Mutex // per tool: its confined runs share a copy-on-write layer
+}
+
+// lockConfined serializes one tool's confined runs within the dispatch.
+func (d *Dispatch) lockConfined(tool string) func() {
+	d.mu.Lock()
+	if d.confined == nil {
+		d.confined = map[string]*sync.Mutex{}
+	}
+	mu := d.confined[tool]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		d.confined[tool] = mu
+	}
+	d.mu.Unlock()
+	mu.Lock()
+	return mu.Unlock
+}
+
+// confinedLayer is the dispatch's copy-on-write layer over the workspace for
+// tool's confined runs (an overlay's upper and work dirs on Linux; the upper
+// alone on macOS): what `terraform init` writes (.terraform) is there for
+// the dispatch's next `terraform plan`, and never in the workspace. It goes
+// with the dispatch dir.
+func (d *Dispatch) confinedLayer(tool string) (upper, work string, err error) {
+	base := filepath.Join(d.Dir, "cow-ws", tool)
+	upper, work = filepath.Join(base, "up"), filepath.Join(base, "wk")
+	for _, p := range []string{upper, work} {
+		if err := os.MkdirAll(p, 0o700); err != nil {
+			return "", "", err
+		}
+	}
+	return upper, work, nil
 }
 
 // Launch is what Prepare hands the launcher.

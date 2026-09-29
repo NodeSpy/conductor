@@ -101,7 +101,11 @@ func RunHostExec(specPath string) int {
 		fmt.Fprintf(os.Stderr, "conductor host-exec: %v\n", err)
 		return cowSetupFailed
 	}
-	fwd, err := buildCOW(hr)
+	build := buildCOW
+	if hr.Confine {
+		build = buildConfined
+	}
+	fwd, err := build(hr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "conductor host-exec: copy-on-write home: %v\n", err)
 		return cowSetupFailed
@@ -201,51 +205,9 @@ func buildCOW(hr hostRun) (string, error) {
 		binRoots = append(binRoots, p)
 	}
 
-	shome := filepath.Join(hr.Scratch, "home")
-	if err := os.MkdirAll(shome, 0o700); err != nil {
+	shome, layers, err := buildHomeLayers(hr)
+	if err != nil {
 		return "", err
-	}
-	entries := homeEntries(hr)
-	type layer struct{ rel, merged string }
-	var layers []layer
-	for i, rel := range entries {
-		real := filepath.Join(hr.Home, rel)
-		fi, err := os.Lstat(real)
-		if err != nil {
-			continue
-		}
-		dst := filepath.Join(shome, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-			return "", err
-		}
-		switch {
-		case fi.Mode()&os.ModeSymlink != 0:
-			t, _ := os.Readlink(real)
-			_ = os.Symlink(t, dst)
-		case fi.IsDir():
-			n := itoa(i)
-			up, wk, merged := filepath.Join(hr.Scratch, "up", n), filepath.Join(hr.Scratch, "wk", n), filepath.Join(hr.Scratch, "merged", n)
-			for _, d := range []string{up, wk, merged, dst} {
-				if err := os.MkdirAll(d, 0o700); err != nil {
-					return "", err
-				}
-			}
-			opts := "lowerdir=" + ovlEscape(real) + ",upperdir=" + ovlEscape(up) + ",workdir=" + ovlEscape(wk)
-			if err := unix.Mount("overlay", merged, "overlay", 0, opts); err != nil {
-				// A directory with a mount underneath it (an NFS share, a
-				// FUSE mount) cannot be an overlay lower layer inside a user
-				// namespace: show it read-only instead.
-				if berr := unix.Mount(real, merged, "", unix.MS_BIND|unix.MS_REC, ""); berr != nil {
-					return "", fmt.Errorf("overlay %s: %v; bind: %w", rel, err, berr)
-				}
-				_ = unix.Mount("", merged, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY|lockedFlags(real), "")
-			}
-			layers = append(layers, layer{rel: rel, merged: filepath.Join("merged", n)})
-		case fi.Mode().IsRegular():
-			if err := copyFile(real, dst, fi.Mode().Perm()); err != nil {
-				return "", err
-			}
-		}
 	}
 	// Swap the view in. From here on hr.Home shows the scratch home, and the
 	// scratch dir is reached only through its descriptor.
@@ -257,6 +219,67 @@ func buildCOW(hr hostRun) (string, error) {
 			return "", fmt.Errorf("bind %s: %w", l.rel, err)
 		}
 	}
+	return finishCOW(hr, tfd, wsfd, efd, binFDs, binRoots)
+}
+
+type homeLayer struct{ rel, merged string }
+
+// buildHomeLayers builds the copy-on-write home in the scratch dir: copies of
+// the view's top-level files and, for each directory, an overlay whose lower
+// layer is the real directory (merged under scratch/merged/<n>).
+func buildHomeLayers(hr hostRun) (string, []homeLayer, error) {
+	shome := filepath.Join(hr.Scratch, "home")
+	if err := os.MkdirAll(shome, 0o700); err != nil {
+		return "", nil, err
+	}
+	entries := homeEntries(hr)
+	type layer = homeLayer
+	var layers []layer
+	for i, rel := range entries {
+		real := filepath.Join(hr.Home, rel)
+		fi, err := os.Lstat(real)
+		if err != nil {
+			continue
+		}
+		dst := filepath.Join(shome, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return "", nil, err
+		}
+		switch {
+		case fi.Mode()&os.ModeSymlink != 0:
+			t, _ := os.Readlink(real)
+			_ = os.Symlink(t, dst)
+		case fi.IsDir():
+			n := itoa(i)
+			up, wk, merged := filepath.Join(hr.Scratch, "up", n), filepath.Join(hr.Scratch, "wk", n), filepath.Join(hr.Scratch, "merged", n)
+			for _, d := range []string{up, wk, merged, dst} {
+				if err := os.MkdirAll(d, 0o700); err != nil {
+					return "", nil, err
+				}
+			}
+			opts := "lowerdir=" + ovlEscape(real) + ",upperdir=" + ovlEscape(up) + ",workdir=" + ovlEscape(wk)
+			if err := unix.Mount("overlay", merged, "overlay", 0, opts); err != nil {
+				// A directory with a mount underneath it (an NFS share, a
+				// FUSE mount) cannot be an overlay lower layer inside a user
+				// namespace: show it read-only instead.
+				if berr := unix.Mount(real, merged, "", unix.MS_BIND|unix.MS_REC, ""); berr != nil {
+					return "", nil, fmt.Errorf("overlay %s: %v; bind: %w", rel, err, berr)
+				}
+				_ = unix.Mount("", merged, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY|lockedFlags(real), "")
+			}
+			layers = append(layers, layer{rel: rel, merged: filepath.Join("merged", n)})
+		case fi.Mode().IsRegular():
+			if err := copyFile(real, dst, fi.Mode().Perm()); err != nil {
+				return "", nil, err
+			}
+		}
+	}
+	return shome, layers, nil
+}
+
+// finishCOW completes the unconfined host-command view once the home is in
+// place: the daemon's dirs hidden, /tmp, the binary, the workspace, /proc.
+func finishCOW(hr hostRun, tfd, wsfd, efd int, binFDs []int, binRoots []string) (string, error) {
 	for _, s := range hr.Sensitive {
 		if fi, err := os.Stat(s); err == nil && fi.IsDir() {
 			if err := unix.Mount("tmpfs", s, "tmpfs", 0, "size=64k,mode=0700"); err != nil {

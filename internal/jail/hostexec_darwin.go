@@ -28,6 +28,9 @@ import (
 // limited to the profile's own paths; conductor's state and config are
 // unreadable either way.
 func runHost(ctx context.Context, m *Manager, hr hostRun, stdout, stderr io.Writer) (hostResult, error) {
+	if hr.Confine {
+		return runConfined(ctx, m, hr, stdout, stderr)
+	}
 	scratch, err := os.MkdirTemp(m.Root, "cow-")
 	if err != nil {
 		return hostResult{}, err

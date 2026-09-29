@@ -9,10 +9,12 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/hostcmd"
@@ -138,7 +140,57 @@ func (m *Manager) hostContext(ctx context.Context, d *Dispatch, cwd string) host
 	if m.ThreadTarget != nil {
 		hc.ThreadTarget = func(id string) (string, int, error) { return m.ThreadTarget(ctx, d, id) }
 	}
+	hc.LocalImage = func(ref string) bool { return m.localImage(ctx, ref) }
 	return hc
+}
+
+// localImage reports whether a docker image exists on this machine with no
+// registry digest — built here (perhaps from workspace content), never
+// pulled. An unreadable answer counts as local: the safe side.
+func (m *Manager) localImage(ctx context.Context, ref string) bool {
+	if strings.HasPrefix(ref, "-") {
+		return true
+	}
+	bin, err := m.LookPath("docker")
+	if err != nil {
+		return false
+	}
+	ictx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ictx, bin, "image", "inspect", "--format", "{{len .RepoDigests}}", ref)
+	cmd.Env = sandbox.MinimalEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		return false // not on this machine: it would be pulled
+	}
+	return strings.TrimSpace(string(out)) == "0"
+}
+
+// dockerSockets are the Docker daemon's sockets a confined docker command
+// reaches (the only daemon socket in its view).
+func dockerSockets() []string {
+	var out []string
+	for _, p := range []string{"/var/run/docker.sock", "/run/docker.sock"} {
+		if _, err := os.Stat(p); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// dropSessionEnv removes the operator's session plumbing from a confined
+// run's environment: agent and bus sockets, the runtime dir.
+func dropSessionEnv(env []string) []string {
+	out := env[:0]
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		switch k {
+		case "XDG_RUNTIME_DIR", "SSH_AUTH_SOCK", "GPG_AGENT_INFO", "DBUS_SESSION_BUS_ADDRESS", "DOCKER_HOST":
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // writeCheck binds one write: review steps write nothing; everything else
@@ -197,8 +249,33 @@ func (m *Manager) handleExec(ctx context.Context, d *Dispatch, req Request, fw *
 		BinRoots: binaryRoots(bin, m.LookPath),
 	}
 	hr.Env = m.hostEnv(d, tool, req.Env, penv, rule, full)
-	if rule.Network != nil && rule.Network.Mode != config.NetOpen {
-		allow := networkAllow(rule.Network, nil)
+	restrict, allow := rule.Network != nil && rule.Network.Mode != config.NetOpen, networkAllow(rule.Network, nil)
+	if dec.Confine {
+		// A content-executing command (hostcmd/content.go): the host-side
+		// jail, one confined run of this tool at a time per dispatch (they
+		// share the workspace's copy-on-write layer).
+		unlock := d.lockConfined(tool)
+		defer unlock()
+		hr.Confine, hr.Stdin = true, nil
+		if hr.WsUpper, hr.WsWork, err = d.confinedLayer(tool); err != nil {
+			refuse("confined run: " + err.Error())
+			return
+		}
+		if tool == "docker" {
+			hr.Sockets = dockerSockets()
+		}
+		// Its network is always restricted: the tool's service endpoints,
+		// or the binary's own network block (open → audited, not open).
+		restrict, allow = true, hostcmd.ServiceEndpoints(tool)
+		if n := rule.Network; n != nil {
+			allow = networkAllow(n, nil)
+			if n.Mode == config.NetOpen {
+				allow = []string{"*"}
+			}
+		}
+		hr.Env = dropSessionEnv(hr.Env)
+	}
+	if restrict {
 		if isDarwin {
 			// macOS: Seatbelt confines the command to the proxy's loopback
 			// port (no network namespace to forward into).
@@ -238,8 +315,15 @@ func (m *Manager) handleExec(ctx context.Context, d *Dispatch, req Request, fw *
 	}
 	status := fmt.Sprintf("exit %d", res.Exit)
 	ev := Event{Type: "host_command", Status: status, Detail: cmdline}
-	if len(res.Discarded) > 0 {
-		ev.Fields = map[string]any{"discarded": res.Discarded}
+	if len(res.Discarded) > 0 || hr.Confine {
+		ev.Fields = map[string]any{}
+		if len(res.Discarded) > 0 {
+			ev.Fields["discarded"] = res.Discarded
+		}
+		if hr.Confine {
+			ev.Fields["confined"] = true
+			ev.Fields["egress"] = allow
+		}
 	}
 	m.emit(d, ev)
 	_ = fw.send(Reply{Done: true, Exit: res.Exit})
