@@ -69,6 +69,7 @@ type launchResult struct {
 	// it from JailBaseEnv, never the daemon's full environment.
 	jailed bool
 	tool   string
+	stream bool // capture a stream-json transcript
 }
 
 // withEgressRevoke installs an onEgressCred sink on opt and returns it

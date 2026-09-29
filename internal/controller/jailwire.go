@@ -168,7 +168,7 @@ func jailSpec(tool string, runtimeIso *config.IsolationConfig, req dispatch.Requ
 	}
 	step := req.Step
 	layers := []*config.IsolationConfig{GlobalIsolation, runtimeIso, step.Isolation}
-	readOnly, writes := effectiveWrites(req, GlobalIsolation, runtimeIso, step.Isolation)
+	readOnly, writes := dispatch.EffectiveWrites(req, runtimeIso)
 	var intent *config.IntentRules
 	for _, l := range layers {
 		if l != nil && l.Intent != nil {
@@ -195,61 +195,6 @@ func jailSpec(tool string, runtimeIso *config.IsolationConfig, req dispatch.Requ
 		ReadOnly: readOnly, Writes: writes, Layers: layers, StepLayer: step.Isolation != nil,
 		Intent: intent, UserToken: req.Tokens.User,
 	}
-}
-
-// reviewKinds are trigger kinds whose agents review rather than fix.
-var reviewKinds = map[string]bool{"review_requested": true, "self_review": true}
-
-// effectiveWrites decides a dispatch's write policy (#154 §5): review steps
-// write nothing by default — a decide step, a step with an output schema, a
-// checkout-less step, or a review trigger — unless `expect_push:` or an
-// explicit `writes:` says otherwise. A pack step's widening is capped by the
-// operator's own runtime/global writes block.
-func effectiveWrites(req dispatch.Request, global, runtimeIso, stepIso *config.IsolationConfig) (bool, *config.WritesPolicy) {
-	var op *config.WritesPolicy
-	for _, l := range []*config.IsolationConfig{global, runtimeIso} {
-		if l != nil && l.Writes != nil {
-			op = l.Writes
-		}
-	}
-	var st *config.WritesPolicy
-	if stepIso != nil {
-		st = stepIso.Writes
-	}
-	eff := op
-	if st != nil {
-		eff = st
-		if req.Step.FromPack && st.Widens() {
-			capped := *st
-			capped.CreatePR = st.CreatePR && op != nil && op.CreatePR
-			capped.CreateIssue = st.CreateIssue && op != nil && op.CreateIssue
-			capped.OtherTargets = st.OtherTargets && op != nil && op.OtherTargets
-			capped.Merge = st.Merge && op != nil && op.Merge
-			if op == nil {
-				capped.Branches = nil
-			} else {
-				var keep []string
-				for _, b := range st.Branches {
-					for _, o := range op.Branches {
-						if b == o {
-							keep = append(keep, b)
-						}
-					}
-				}
-				capped.Branches = keep
-			}
-			eff = &capped
-		}
-	}
-	if eff != nil && eff.ReadOnly {
-		return true, eff
-	}
-	if eff != nil && (eff.Target || eff.Widens()) {
-		return false, eff
-	}
-	s := req.Step
-	review := s.DecisionLaunch != nil || len(s.OutputSchema) > 0 || s.Checkout == "none" || reviewKinds[req.Trigger.Kind]
-	return review && !s.ExpectPush, eff
 }
 
 // credentialEnv reports an environment variable that is (or carries) a

@@ -613,6 +613,12 @@ func cmdRun(args []string) error {
 		return fmt.Errorf("state dir %s perms: %w", stateDir, err)
 	}
 	controller.DaemonMaskPaths = []string{stateDir, filepath.Dir(cfgFile)}
+	var jailEvents *flow.EventHub
+	if stack != nil {
+		jailEvents = stack.Events
+	}
+	wireJail(jailWiring{cfg: cfg, stateDir: stateDir, cfgDir: filepath.Dir(cfgFile), audit: st.Audit,
+		events: jailEvents, egress: egress, logf: logf})
 	// HostDial is the ssh -W stdio forward remote opencode servers are reached
 	// through (they bind the remote 127.0.0.1; no port opens anywhere).
 	controller.HostDial = func(ctx context.Context, name, addr string) (net.Conn, error) {

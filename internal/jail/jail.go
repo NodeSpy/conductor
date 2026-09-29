@@ -87,6 +87,10 @@ type Manager struct {
 	// Sensitive are the daemon's own state/config dirs — never visible to a
 	// jail or a host command, never a valid host-command argument.
 	Sensitive []string
+	// Sockets are daemon sockets a jailed agent may connect to (the memory
+	// tool socket its MCP server dials), bound in read-only at their own
+	// paths — the one exception to "nothing of the state dir".
+	Sockets []string
 	// Emit records an Event (audit + watch). nil → dropped.
 	Emit func(Event)
 	// CheckWrite binds a host command's write to the dispatch's target ("" =
@@ -291,6 +295,17 @@ func (m *Manager) layout(d *Dispatch, self string) ([]sandbox.BindMount, error) 
 	// conductor's own surface: the binary, the shims, the broker socket.
 	add(sandbox.BindMount{Path: RunDir, Tmpfs: true})
 	add(sandbox.BindMount{Path: SelfPath, Src: self, RO: true})
+	// …and at its own host path, which tool-server commands name.
+	if raw, err := m.SelfExe(); err == nil {
+		for _, p := range []string{raw, self} {
+			if !visibleInBase(p) {
+				add(sandbox.BindMount{Path: p, Src: self, RO: true})
+			}
+		}
+	}
+	for _, sock := range m.Sockets {
+		add(sandbox.BindMount{Path: sock, RO: true, Optional: true})
+	}
 	add(sandbox.BindMount{Path: BrokerDir, Src: filepath.Join(d.Dir, "broker")})
 	shims := []string{ShimRemoteHelper, ShimSSHSign, ShimGPGSign, ShimHook}
 	shims = append(shims, d.HostSet...)
@@ -344,7 +359,10 @@ func (m *Manager) layout(d *Dispatch, self string) ([]sandbox.BindMount, error) 
 	}
 	for _, s := range m.Sensitive {
 		for _, bm := range b {
-			if !bm.Tmpfs && bm.Link == "" && within(bm.Path, s) && !within(bm.Path, d.Workspace) && (d.Git == nil || !within(bm.Path, d.Git.CommonDir)) {
+			if bm.Tmpfs || bm.Link != "" || bm.Src != "" || contains(m.Sockets, bm.Path) {
+				continue
+			}
+			if within(bm.Path, s) && !within(bm.Path, d.Workspace) && (d.Git == nil || !within(bm.Path, d.Git.CommonDir)) {
 				return nil, fmt.Errorf("jail: %s would expose conductor's own state/config (%s)", bm.Path, s)
 			}
 		}

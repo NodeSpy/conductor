@@ -36,6 +36,8 @@ type acpController struct {
 	host     string    // configured `host:`; "" = local (see resolveHost/prepareLaunch)
 	iso      *config.IsolationConfig
 	scrubEnv bool // inherit only a minimal env allowlist (external runtime plugins, #54)
+	jailOK   bool // launches get the default workspace jail (#154)
+	tool     string
 
 	mu    sync.Mutex
 	model SessionModel // cached negotiated model (native until an Initialize proves loadSession)
@@ -85,6 +87,8 @@ func newACPController(name string, cc config.ControllerConfig, prov Provisioner)
 		host:     cc.Host,
 		iso:      cc.Isolation,
 		scrubEnv: cc.ScrubEnv,
+		jailOK:   config.AgentJailEligible(cc),
+		tool:     firstNonEmpty(cc.Tool, cc.Agent),
 		model:    model,
 	}
 }
@@ -166,7 +170,11 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	// its own context, cancelled only by Close — not by the request ctx returning.
 	sctx, scancel := context.WithCancel(context.Background())
 	del := &acpDelegate{handler: h}
-	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Step.Host, launchOptsFor(c.iso, spec.Request))
+	opt := launchOptsFor(c.iso, spec.Request)
+	if resolveHost(c.host, spec.Request.Step.Host) == "" {
+		opt = agentLaunchOpts(c.jailOK, c.tool, c.iso, spec.Request)
+	}
+	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Step.Host, opt)
 	if err != nil {
 		scancel()
 		return nil, err
@@ -232,7 +240,11 @@ func (c *acpController) memoryServers(spec Spec) []acp.McpServer {
 func (c *acpController) ResumeSession(ctx context.Context, id string, agentAuthored bool, h Handler) (Session, error) {
 	sctx, scancel := context.WithCancel(context.Background())
 	del := &acpDelegate{handler: h}
-	client, cleanup, err := c.connect(sctx, "", nil, del, "", resumeOpts(c.iso, agentAuthored))
+	ropt := resumeOpts(c.iso, agentAuthored)
+	if c.host == "" {
+		ropt = agentResumeOpts(c.jailOK, c.tool, c.iso, agentAuthored)
+	}
+	client, cleanup, err := c.connect(sctx, c.cwdFor(id), nil, del, "", ropt)
 	if err != nil {
 		scancel()
 		return nil, err
@@ -290,6 +302,7 @@ func spawnACP(_ context.Context, command []string, cwd string, env []string, del
 		return nil, nil, errors.New("acp: no launch command configured")
 	}
 	opt, revoke := withEgressRevoke(opt)
+	opt.res = &launchResult{}
 	argv, dir, localEnv, _, err := prepareLaunch(host, cwd, env, command, opt)
 	if err != nil {
 		revoke()
@@ -305,6 +318,9 @@ func spawnACP(_ context.Context, command []string, cwd string, env []string, del
 	base := os.Environ()
 	if scrubEnv {
 		base = sandbox.MinimalEnv()
+	}
+	if opt.res.jailed {
+		base = JailBaseEnv(opt.res.tool)
 	}
 	cmd.Env = append(base, localEnv...)
 	stdin, err := cmd.StdinPipe()

@@ -137,6 +137,15 @@ func formatRunEvent(ev flow.RunEvent) string {
 		tail = fmt.Sprintf("%s → %s", ev.Step, ev.Status)
 	case "run_done":
 		tail = ev.Status
+	case "host_command", "git_push", "git_fetch", "sign", "tool_call", "tool_result", "egress", "jail", "cancelled":
+		// A jail boundary crossing (#154): the dispatch, what ran, and how it
+		// ended — a refusal marked ✗ with the rule that fired.
+		mark := "→ " + ev.Status
+		if ev.Status == "refused" || ev.Status == "rejected" || ev.Status == "degraded" {
+			mark = "✗ " + ev.Status
+		}
+		head = fmt.Sprintf("%s  [%s]", ev.TS.Format("15:04:05"), firstNonEmpty(ev.RunID, target))
+		tail = ev.Type + " " + mark
 	default:
 		tail = ev.Step + " " + ev.Status
 	}
