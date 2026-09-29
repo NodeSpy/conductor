@@ -226,7 +226,10 @@ func jailMode(iso *config.IsolationConfig) bool {
 // jailSpec fills the per-dispatch jail description from the request.
 func jailSpec(tool string, runtimeIso *config.IsolationConfig, req dispatch.Request) jail.LaunchSpec {
 	t := req.Trigger.Target
-	repo := t.CheckoutRepo()
+	// The write binding uses the TRUSTED repo: a target the event's sender
+	// chose (a templated webhook repo) binds nothing, so the broker refuses
+	// every write for it.
+	repo := req.Trigger.OwnRepo()
 	num, isPR := t.PR, t.PR > 0
 	if !isPR {
 		num = t.Issue

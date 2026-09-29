@@ -9,7 +9,7 @@
 // The package has two halves that share one Registry:
 //
 //   - lifecycle state (MarkClosed/Closed/Reopen): the engine's `_closed`
-//     handling (a trusted target only — see core.Trigger.TargetTrusted) records
+//     handling (a trusted target only — see the trigger's trusted-target bit) records
 //     the terminal fact here, and cancels the target's live agents (see
 //     internal/engine and internal/controller's CancelTarget);
 //   - the write-refusal policy (WritePolicy/CheckWrite/CheckPush): every skill
@@ -58,7 +58,7 @@ func key(repo string, number int) string {
 
 // MarkClosed records repo#number as terminal — "merged" or "closed"
 // (unmerged) — timestamped now. Call this ONLY for a trusted target (the
-// platform's own signature-verified fact, core.Trigger.TargetTrusted): an
+// platform's own signature-verified fact — the trigger's trusted-target bit): an
 // untrusted event choosing its own target must never be able to mark someone
 // else's PR closed and have that ride into their write-refusal policy.
 func (r *Registry) MarkClosed(repo string, number int, merged bool) {

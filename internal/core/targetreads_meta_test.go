@@ -263,6 +263,13 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"addPRGoGit", "the PR ref to fetch for that checkout — go-git's addPR"},
 	},
 
+	// Target lifecycle (#154 §5): only reached for a TRUSTED target
+	// (observeClosed returns early otherwise); the raw fields feed the audit
+	// row and the log line — nothing is decided with them.
+	"internal/engine/target_cancel.go": {
+		{"cancelTargetAgents", "the audit row of a close the engine handles only for a trusted target"},
+	},
+
 	// ---- CLI display.
 	"cmd/conductor/main.go": {
 		{"cmdReplay", "prints a stored trigger for the operator"},

@@ -142,6 +142,9 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 	opt := agentLaunchOpts(c.jailOK && host == "", c.recipe.tool, c.iso, spec.Request)
 	id := c.recipe.tool + "-" + strconv.FormatInt(c.seq.Add(1), 10)
 	cwd, cmd := spec.Cwd, c.recipe.cmd(spec.Request.Model, prompt)
+	if opt.jail != nil && c.recipe.jailArgs != nil && spec.Request.Step.DecisionLaunch == nil && len(cmd.argv) > 1 {
+		cmd.argv = insertAfter(cmd.argv, 1, c.recipe.jailArgs(opt.jail.ReadOnly))
+	}
 	if opt.jail != nil && c.recipe.stream != nil && spec.Request.Step.DecisionLaunch == nil {
 		// In the jail, claude-code reports every tool call to conductor
 		// (PreToolUse/PostToolUse hooks) and streams its transcript.
@@ -405,6 +408,11 @@ type cliRecipe struct {
 	// decideAnswer extracts the reply from a lean decision run's raw stdout
 	// (nil → answer).
 	decideAnswer func(raw string) string
+	// jailArgs are the tool's own approval/sandbox flags for a jailed turn
+	// (codex: its approval policy and sandbox mode, mapped from the step's
+	// write policy — the jail is the wall, these keep the tool from asking).
+	// nil → none.
+	jailArgs func(readOnly bool) []string
 	// stream rewrites a launch/resume argv to stream its transcript as JSON
 	// lines (claude-code: --output-format stream-json --verbose) — used in
 	// the workspace jail, where the tool-call hooks are wired too. nil → the
@@ -461,6 +469,7 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 			model:     ModelOneshot,
 			modelArgs: func(m string) []string { return []string{"--model", m} },
 			decide:    codexDecide,
+			jailArgs:  codexJailArgs,
 		}
 	default:
 		bin := tool
@@ -485,6 +494,27 @@ func (r cliRecipe) cmd(model, prompt string) cliCmd {
 	}
 	c.argv = append(c.argv, r.modelArgs(model)...)
 	return c
+}
+
+// codexJailArgs maps a jailed codex turn's write policy onto codex's own
+// controls (#154 §11): never ask for approval (headless), and a read-only
+// sandbox for a review step, workspace-write for a fixer. conductor's jail
+// and broker remain the boundary; codex's approval policy is the harness
+// layer's counterpart to claude-code's hooks.
+func codexJailArgs(readOnly bool) []string {
+	mode := "workspace-write"
+	if readOnly {
+		mode = "read-only"
+	}
+	return []string{"-c", `approval_policy="never"`, "--sandbox", mode}
+}
+
+// insertAfter puts extra after argv[i] (codex's flags belong after `exec`,
+// before the trailing `-` stdin marker).
+func insertAfter(argv []string, i int, extra []string) []string {
+	out := append([]string(nil), argv[:i+1]...)
+	out = append(out, extra...)
+	return append(out, argv[i+1:]...)
 }
 
 // claudeStream switches a claude -p argv from one JSON envelope to the
