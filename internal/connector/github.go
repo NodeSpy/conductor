@@ -242,7 +242,7 @@ var githubDecl = &TypeDecl{
 			},
 		},
 		{
-			Name: "pr_files", Desc: "changed files: [{path, status, additions, deletions, changes}] (100/page; pass page for more)",
+			Name: "pr_files", Desc: "changed files: [{path, status, additions, deletions, changes, patch}] (100/page; pass page for more; patch is \"\" for a binary/huge file GitHub omits it for)",
 			Options: Schema{
 				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
 				"all": {Type: TBool, Desc: "fetch every page (default: first 100)"},

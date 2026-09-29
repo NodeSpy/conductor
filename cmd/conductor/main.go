@@ -920,6 +920,7 @@ func cmdRun(args []string) error {
 							Number: id.Number, Verbs: id.Policy.Verbs,
 							Scopes: id.Policy.VerbScopes, Context: id.Context,
 							TargetTrusted: id.TargetTrusted, Dispatch: id.Dispatch,
+							Writes: id.Writes,
 						}, uses, options)
 					}
 				}

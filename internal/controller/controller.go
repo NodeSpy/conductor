@@ -73,6 +73,15 @@ var ErrNotRunnable = errors.New("controller transport not supported in this buil
 // can't accept one on a live session.
 var ErrNoFollowup = errors.New("controller does not support session follow-up")
 
+// ErrTargetClosed is returned by Dispatch (in place of the turn's ordinary
+// result) when the foreground session it was waiting on was cancelled because
+// the dispatch's own target (PR/issue) was observed merged or closed while the
+// agent was still running — see controllerRunner.CancelTarget. It is wrapped
+// with the reason ("target merged" / "target closed") via fmt.Errorf("%w: %s",
+// ErrTargetClosed, reason), so errors.Is still matches. The flow treats it as
+// terminal, not a step failure to retry: the target it was working is gone.
+var ErrTargetClosed = errors.New("target closed")
+
 // Capabilities is the negotiated feature set of a controller/agent (ACP
 // `initialize`). Conductor supplies the user-facing capabilities a runtime lacks
 // natively (notifications, interactive hand-off); these flags describe what the

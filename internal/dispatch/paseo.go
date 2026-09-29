@@ -1069,6 +1069,15 @@ func (d *Dispatcher) HasLiveAgent(ctx context.Context, prKey, kind string) bool 
 // out of `paseo ls`, and nothing scans for leftovers any more). The workspace
 // must ALSO be in the ledger; one that isn't (pinned, base checkout, yours)
 // leaves only the agent archived.
+// ListAgents exposes the backend's label-filtered agent listing to callers
+// outside this package — e.g. controller.Registry.CancelTarget, which looks up
+// every agent labeled for a merged/closed target (`pr=<key>`) so it can archive
+// them. Read-only; Archive below still gates the actual reclaim on the
+// ownership ledger.
+func (d *Dispatcher) ListAgents(ctx context.Context, labels map[string]string) ([]AgentInfo, error) {
+	return d.backend().ListAgents(ctx, labels)
+}
+
 func (d *Dispatcher) Archive(ctx context.Context, agentID string) error {
 	if agentID == "" {
 		return nil

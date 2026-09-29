@@ -64,20 +64,22 @@ type controllerRunner struct {
 	prov Provisioner
 	h    Handler // permission/input handler; nil → controllers apply their auto policy
 
-	mu     sync.Mutex
-	live   map[string]Session // agent id → live session
-	byPR   map[string]int     // "prKey\x00kind" → live count (HasLiveAgent gate)
-	bucket map[string]string  // agent id → its PR+kind bucket (for exact decrement)
+	mu        sync.Mutex
+	live      map[string]Session // agent id → live session
+	byPR      map[string]int     // "prKey\x00kind" → live count (HasLiveAgent gate)
+	bucket    map[string]string  // agent id → its PR+kind bucket (for exact decrement)
+	cancelled map[string]string  // agent id → cancel reason, set by CancelTarget
 }
 
 func newControllerRunner(c Controller, prov Provisioner, h Handler) *controllerRunner {
 	return &controllerRunner{
-		c:      c,
-		prov:   prov,
-		h:      h,
-		live:   map[string]Session{},
-		byPR:   map[string]int{},
-		bucket: map[string]string{},
+		c:         c,
+		prov:      prov,
+		h:         h,
+		live:      map[string]Session{},
+		byPR:      map[string]int{},
+		bucket:    map[string]string{},
+		cancelled: map[string]string{},
 	}
 }
 
@@ -154,6 +156,20 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	if req.Wait && !req.Interactive {
 		if w, ok := sess.(waiter); ok {
 			w.Wait(ctx, timeout)
+		}
+		// A concurrent CancelTarget interrupted this very session (its own
+		// target was observed merged/closed while the turn was still running)
+		// — Wait returned because Cancel ended the turn, not because the agent
+		// produced a reply. Report the typed error instead of walking into the
+		// output-capture/schema logic below, which would otherwise treat
+		// whatever partial output survived as a normal (or normally-failed)
+		// turn.
+		r.mu.Lock()
+		reason, wasCancelled := r.cancelled[id]
+		delete(r.cancelled, id)
+		r.mu.Unlock()
+		if wasCancelled {
+			return ref, fmt.Errorf("%w: %s", ErrTargetClosed, reason)
 		}
 		// Capture the foreground turn's reply into RunRef.Output so the flow's
 		// output extraction and output_schema contract see it — the same
@@ -248,6 +264,43 @@ func (r *controllerRunner) WaitForAgent(ctx context.Context, id string, timeout 
 		w.Wait(ctx, timeout)
 	}
 	r.forget(id)
+}
+
+// CancelTarget interrupts every live session dispatched for prKey (any kind —
+// the bucket prefix match below spans fixer/reviewer/etc. alike), called when
+// the engine observes prKey's target (PR/issue) merged or closed while an
+// agent it dispatched for that target is still running. It marks each id
+// cancelled BEFORE cancelling it, so a foreground Dispatch whose Wait unblocks
+// because of the Cancel below is guaranteed to see the mark and return
+// ErrTargetClosed rather than racing to read whatever partial reply survived.
+// Returns the ids it cancelled.
+func (r *controllerRunner) CancelTarget(ctx context.Context, prKey, reason string) []string {
+	prefix := prKey + "\x00"
+	r.mu.Lock()
+	var ids []string
+	for id, bucket := range r.bucket {
+		if strings.HasPrefix(bucket, prefix) {
+			ids = append(ids, id)
+		}
+	}
+	sessions := make([]Session, 0, len(ids))
+	for _, id := range ids {
+		r.cancelled[id] = reason
+		if s := r.live[id]; s != nil {
+			sessions = append(sessions, s)
+		}
+	}
+	r.mu.Unlock()
+	for _, s := range sessions {
+		_ = s.Cancel(ctx)
+	}
+	for _, s := range sessions {
+		_ = s.Close(ctx)
+	}
+	for _, id := range ids {
+		r.forget(id)
+	}
+	return ids
 }
 
 // HasLiveAgent reports whether a session for this PR+kind is still open — the

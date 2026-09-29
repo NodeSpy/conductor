@@ -10,6 +10,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/targets"
 )
 
 // failureConclusions are check conclusions we treat as "failing".
@@ -561,6 +562,16 @@ func (g *Integration) pullRequestTriggers(ctx context.Context, repo string, p gh
 						lowerReviewRequested(act))
 			})
 	case "opened", "reopened", "synchronize", "ready_for_review":
+		if p.Action == "reopened" {
+			// GitHub surfaces a reopen as a plain pull_request event (no
+			// dedicated `_closed`-shaped signal), but a merged/closed mark left
+			// by the earlier close must not keep refusing this PR's writes once
+			// it's live again. The delivery is signature-verified — the repo and
+			// number are the platform's, not a sender's claim — so it's safe to
+			// clear the mark directly here, same trust basis as the `_closed`
+			// trigger's TargetTrusted: true.
+			targets.Default.Reopen(repo, pr.Number)
+		}
 		trs := g.mergeStateTriggers(ctx, repo, p, pr)
 		trs = append(trs, g.selfReviewTriggers(repo, pr)...)
 		trs = append(trs, g.mergeReadyTriggers(ctx, repo, pr.Number, p)...)
