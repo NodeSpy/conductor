@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,6 +46,7 @@ import (
 	agentmodels "github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/plugin"
+	"github.com/NodeSpy/conductor/internal/preflight"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/skill"
@@ -392,6 +394,12 @@ func cmdValidate(args []string) error {
 			fmt.Printf("warning: %s\n", w)
 		}
 	}
+	// Actual-box checks (git, cli runtime tools, command: binaries): findings
+	// the YAML alone can't reveal. An error here fails validate — the same
+	// bar a schema error clears — but never blocks the daemon at boot (see
+	// runPreflight's other call site in cmdRun).
+	preflightErr := reportPreflight(cfg)
+
 	if stack != nil {
 		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s)",
 			len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows))
@@ -399,11 +407,56 @@ func cmdValidate(args []string) error {
 			fmt.Printf(" — plus %d legacy integration(s)", len(cfg.Integrations))
 		}
 		fmt.Println()
-		return nil
+		return preflightErr
 	}
 	fmt.Printf("ok: %d integration(s) configured (%d enabled)\n",
 		len(cfg.Integrations), len(igs))
+	return preflightErr
+}
+
+// preflightLookPath resolves a binary for preflight checks. A package var —
+// like gitwt.LookPath and gitdiff.LookPath — so a test can force "not
+// installed" without touching the real PATH.
+var preflightLookPath = exec.LookPath
+
+// preflightEnv builds the Env preflight.Check runs against: the real PATH,
+// OS, and effective uid of THIS process.
+func preflightEnv() preflight.Env {
+	return preflight.Env{LookPath: preflightLookPath, GOOS: runtime.GOOS, Euid: os.Geteuid()}
+}
+
+// reportPreflight runs preflight.Check and prints every finding, returning a
+// non-nil error when any of them is level "error" — cmdValidate's exit
+// status. Call site for the daemon boot path is logPreflight, which never
+// fails the daemon over the same findings.
+func reportPreflight(cfg *config.Config) error {
+	findings := preflight.Check(cfg, preflightEnv())
+	var failed []string
+	for _, f := range findings {
+		fmt.Printf("%s: %s — %s\n", f.Level, f.What, f.Why)
+		if f.Level == "error" {
+			failed = append(failed, f.What)
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("preflight: %s", strings.Join(failed, "; "))
+	}
 	return nil
+}
+
+// logPreflight is the daemon-boot counterpart of reportPreflight: every
+// finding is LOGGED (errors loudly), but none of them stop the daemon — a
+// transient PATH problem or a missing optional tool must not crash-loop an
+// otherwise-working fleet. An operator who wants a hard gate runs `conductor
+// validate` in CI, where the same findings do fail the build.
+func logPreflight(cfg *config.Config) {
+	for _, f := range preflight.Check(cfg, preflightEnv()) {
+		if f.Level == "error" {
+			logf("PREFLIGHT ERROR: %s — %s", f.What, f.Why)
+		} else {
+			logf("preflight %s: %s — %s", f.Level, f.What, f.Why)
+		}
+	}
 }
 
 func cmdRun(args []string) error {
@@ -427,6 +480,12 @@ func cmdRun(args []string) error {
 	if err := validateAll(cfg, igs); err != nil {
 		return err
 	}
+	// Log every actual-box finding (git, cli runtime tools, command:
+	// binaries) at boot, loudly for an error — but never refuse to start:
+	// an auto-updating fleet must not crash-loop over a transient PATH
+	// problem. `conductor validate` is where the same findings gate a
+	// deploy (see reportPreflight).
+	logPreflight(cfg)
 
 	st, err := store.Open(store.Options{
 		StatePath:      cfg.Store.StateFile,
