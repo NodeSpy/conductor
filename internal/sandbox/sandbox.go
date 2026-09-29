@@ -270,6 +270,9 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 			if nf.UnixSocket != "" {
 				prefix = append(prefix, "--listen", ForwardAddr, "--unix", nf.UnixSocket)
 			}
+			for _, r := range nf.Relays {
+				prefix = append(prefix, "--relay", r.Listen+"="+r.Unix)
+			}
 			prefix = append(prefix, "--")
 		}
 		return append(prefix, argv...), nil

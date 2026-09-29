@@ -2,10 +2,14 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -103,6 +107,64 @@ var modelEndpoints = map[string][]string{
 	"claude-code": {"api.anthropic.com", "statsig.anthropic.com", "console.anthropic.com", "claude.ai", "mcp-proxy.anthropic.com", "platform.claude.com"},
 	"codex":       {"api.openai.com", "chatgpt.com", "auth.openai.com", "ab.chatgpt.com"},
 	"gemini":      {"generativelanguage.googleapis.com", "oauth2.googleapis.com", "cloudcode-pa.googleapis.com"},
+}
+
+// modelBaseEnv names each tool's model-endpoint override variable.
+var modelBaseEnv = map[string][]string{
+	"claude-code": {"ANTHROPIC_BASE_URL"},
+	"codex":       {"OPENAI_BASE_URL"},
+	"gemini":      {"GOOGLE_GEMINI_BASE_URL"},
+}
+
+// modelOverride finds the tool's configured model endpoint override: the
+// daemon's environment, then (claude-code) the `env` of ~/.claude/settings.json
+// — where an operator routes claude-code through a local router.
+func modelOverride(tool, home string) string {
+	for _, k := range modelBaseEnv[tool] {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
+	}
+	if tool == "claude-code" && home != "" {
+		b, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+		if err == nil {
+			var st struct {
+				Env map[string]string `json:"env"`
+			}
+			if json.Unmarshal(b, &st) == nil {
+				if v := st.Env["ANTHROPIC_BASE_URL"]; v != "" {
+					return v
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// modelRoute splits a tool's model endpoints into allowlist hosts and host
+// loopback addresses that need a relay into the jail.
+func modelRoute(tool, home string) (hosts, loopback []string) {
+	hosts = append(hosts, modelEndpoints[tool]...)
+	if o := modelOverride(tool, home); o != "" {
+		if u, err := url.Parse(o); err == nil && u.Hostname() != "" {
+			h, port := u.Hostname(), u.Port()
+			if port == "" {
+				port = "443"
+				if u.Scheme == "http" {
+					port = "80"
+				}
+			}
+			if h == "127.0.0.1" || h == "localhost" || h == "::1" {
+				if h == "localhost" {
+					h = "127.0.0.1"
+				}
+				loopback = append(loopback, net.JoinHostPort(h, port))
+			} else {
+				hosts = append(hosts, h+":"+port)
+			}
+		}
+	}
+	return hosts, loopback
 }
 
 // agentLaunchOpts resolves one agent dispatch's isolation, jail included,
@@ -275,7 +337,7 @@ func scrubJailEnv(env []string, tool string) []string {
 // through the proxy, recorded; deny → the model endpoints only; an egress
 // list → it plus the model endpoints; the older `{deny: true}` alone → a
 // full cut. An agent-authored dispatch with no network block is `deny`.
-func jailNetwork(s *sandbox.Spec, n *config.IsolationNetwork, tool string, agentAuthored bool) {
+func jailNetwork(s *sandbox.Spec, n *config.IsolationNetwork, model []string, agentAuthored bool) {
 	s.Deny, s.Egress, s.HasEgress = false, nil, false
 	if n == nil && agentAuthored {
 		n = &config.IsolationNetwork{Mode: config.NetDeny}
@@ -283,7 +345,6 @@ func jailNetwork(s *sandbox.Spec, n *config.IsolationNetwork, tool string, agent
 	if n == nil || n.Mode == config.NetOpen {
 		return
 	}
-	model := modelEndpoints[tool]
 	switch {
 	case n.Mode == config.NetAudit:
 		s.Deny, s.Egress, s.HasEgress = true, []string{"*"}, true
@@ -348,13 +409,24 @@ func prepareJail(dir string, env, argv []string, opt launchOpts) (wrapped []stri
 	if opt.iso != nil {
 		n = opt.iso.Network
 	}
-	jailNetwork(ss, n, spec.Tool, opt.agentAuthored)
+	modelHosts, modelLoopback := modelRoute(spec.Tool, JailManager.Home)
+	jailNetwork(ss, n, modelHosts, opt.agentAuthored)
 	label := spec.DispatchID
 	deps := sandbox.LocalWrapDeps{
 		SelfExe:    launchSelfExe,
 		Confine:    true,
 		ExtraBinds: l.Binds,
 		Agent:      l.Seatbelt,
+	}
+	if ss.EnforcedEgress() {
+		for _, lb := range modelLoopback {
+			sock, rerr := JailManager.Relay(l.Dispatch, lb)
+			if rerr != nil {
+				l.Close()
+				return nil, nil, noop, false, fmt.Errorf("isolation: model endpoint relay %s: %w", lb, rerr)
+			}
+			deps.Relays = append(deps.Relays, sandbox.Relay{Listen: lb, Unix: sock})
+		}
 	}
 	if EgressProxyUnixLabeled != nil {
 		deps.EgressUnix = func(allow []string) (string, string, func(), error) { return EgressProxyUnixLabeled(allow, label) }

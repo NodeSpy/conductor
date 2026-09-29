@@ -74,6 +74,15 @@ type NetForward struct {
 	Masks      []string    // legacy: daemon paths to overmount away (plugin path; #36 iso-review H7)
 	Binds      []BindMount // fs-jail allow-list to pivot_root into ("" = no jail)
 	Chdir      string      // working directory inside the jail (the launch's own dir)
+	Relays     []Relay     // extra in-sandbox loopback ports piped to host-side unix sockets
+}
+
+// Relay is one in-sandbox loopback port piped to a unix socket — how an
+// agent whose model endpoint is a HOST loopback service (a local model
+// router at 127.0.0.1:3456) reaches it from an empty network namespace.
+type Relay struct {
+	Listen string `json:"listen"` // in-sandbox TCP address (127.0.0.1:PORT)
+	Unix   string `json:"unix"`   // the socket to pipe to, as seen inside the sandbox
 }
 
 // EnterOpts is the `conductor sandbox-net` helper's configuration.
@@ -83,6 +92,7 @@ type EnterOpts struct {
 	Masks  []string    // legacy: paths to overmount away before exec (#36 iso-review H7)
 	Binds  []BindMount // fs-jail allow-list; non-empty ⇒ pivot_root jail instead of masks
 	Chdir  string      // working directory to re-enter after the pivot ("" = stay)
+	Relays []Relay     // extra loopback ports to pipe to unix sockets
 	Argv   []string    // the real launch to exec once the plumbing is up
 }
 
@@ -144,6 +154,19 @@ func RunEnter(opt EnterOpts) int {
 		}
 		defer ln.Close()
 		go serveForward(ln, opt.Unix)
+	}
+	for _, r := range opt.Relays {
+		if err := loopbackUp(); err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-net: loopback up: %v\n", err)
+			return 1
+		}
+		ln, err := net.Listen("tcp", r.Listen)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-net: relay listen %s: %v\n", r.Listen, err)
+			return 1
+		}
+		defer ln.Close()
+		go serveForward(ln, r.Unix)
 	}
 	// Privilege drop before exec (#36 iso-review round 2, item 1): the jail /
 	// masks above were applied in THIS mount namespace, whose owning user

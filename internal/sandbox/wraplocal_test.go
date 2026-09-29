@@ -184,7 +184,7 @@ func TestWrapLocalCommandJailBinds(t *testing.T) {
 	defer cleanup()
 	got := strings.Join(wrapped, " ")
 	want := "unshare --user --map-root-user --pid --fork --mount-proc --kill-child -- " +
-		"/opt/conductor sandbox-net --bind /wt --bind /data/books --bind-ro /tmp/conductor-code-x --bind /tmp/conductor-ctx-y -- python3 sync.py"
+		"/opt/conductor sandbox-net --bind /wt --bind /data/books --bind-ro /tmp/conductor-code-x --bind /tmp/conductor-ctx-y --chdir /wt -- python3 sync.py"
 	if got != want {
 		t.Fatalf("jail wrap:\n got %q\nwant %q", got, want)
 	}

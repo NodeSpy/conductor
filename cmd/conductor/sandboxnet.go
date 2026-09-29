@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
@@ -40,6 +41,14 @@ func runSandboxNet(args []string) int {
 				return 2
 			}
 			opt.Binds = append(opt.Binds, bs...)
+			i++
+		case args[i] == "--relay" && i+1 < len(args):
+			l, u, ok := strings.Cut(args[i+1], "=")
+			if !ok {
+				fmt.Fprintf(os.Stderr, "sandbox-net: --relay wants LISTEN=SOCKET\n")
+				return 2
+			}
+			opt.Relays = append(opt.Relays, sandbox.Relay{Listen: l, Unix: u})
 			i++
 		case args[i] == "--chdir" && i+1 < len(args):
 			opt.Chdir = args[i+1]

@@ -294,10 +294,9 @@ func (m *Manager) hostEnv(d *Dispatch, tool string, agent map[string]string, pro
 		env[k] = config.ExpandHome(v)
 	}
 	if tool == "gh" {
+		// The dispatch's repository for commands that infer one. No token:
+		// the host gh uses the machine's own login, in place (#154 §2).
 		env["GH_REPO"] = d.Repo
-		if d.UserToken != "" {
-			env["GH_TOKEN"] = d.UserToken
-		}
 	}
 	out := make([]string, 0, len(env))
 	for k, v := range env {

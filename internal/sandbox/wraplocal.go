@@ -45,6 +45,10 @@ type LocalWrapDeps struct {
 	// jail beyond the workdir + spec.FS — e.g. a code step's own code temp dir
 	// (read-only) and ctx-socket dir (read-write). Ignored unless Confine.
 	ExtraBinds []BindMount
+	// Relays pipe in-sandbox loopback ports to host-side unix sockets (an
+	// agent's model endpoint on the host's loopback) when the sandbox has no
+	// network of its own.
+	Relays []Relay
 	// Agent carries the macOS agent-jail extras (scratch home, shim dir,
 	// exec denials, narrowed Mach services, the proxy port); ignored on Linux,
 	// where the same intent is expressed as ExtraBinds.
@@ -139,6 +143,7 @@ func WrapLocalCommand(spec *Spec, argv []string, dir string, env []string, deps 
 			nf = &NetForward{Self: self}
 		}
 		nf.UnixSocket = sock
+		nf.Relays = deps.Relays
 		if jail {
 			// The forwarder dials this unix socket AFTER pivot_root, so its dir
 			// must be inside the jail (bound read-write at its own path).
