@@ -76,7 +76,12 @@ func (m *Manager) layoutDarwin(d *Dispatch, self string) ([]sandbox.BindMount, *
 		prof.ReadOnly = append(prof.ReadOnly, s)
 	}
 	var binds []sandbox.BindMount
-	if g := d.Git; g != nil && g.CommonDir != "" {
+	if g := d.Git; g != nil && g.Base != "" {
+		// A per-dispatch clone (see layout): the base's object store
+		// readable, nothing else of it (the profile allows no other path
+		// of the base at all).
+		prof.ReadOnly = append(prof.ReadOnly, filepath.Join(g.Base, "objects"))
+	} else if g := d.Git; g != nil && g.CommonDir != "" {
 		for _, sub := range []string{"hooks", filepath.Join("objects", "info")} {
 			_ = os.MkdirAll(filepath.Join(g.CommonDir, sub), 0o755)
 		}

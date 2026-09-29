@@ -12,6 +12,9 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/gitwt"
 	"github.com/NodeSpy/conductor/internal/hostcmd"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
@@ -79,13 +82,31 @@ func run(t *testing.T, dir string, env []string, name string, args ...string) st
 
 type fixture struct {
 	root, home, remote, base, ws, bin, allowed string
+	prov                                       *gitwt.Provisioner
 	events                                     []Event
 	mu                                         sync.Mutex
 }
 
+// provision makes a dispatch's checkout the way the daemon does: its own
+// clone (gitwt), borrowing the shared base clone's objects.
+func (f *fixture) provision(t *testing.T, id string, pr int, branch string) string {
+	t.Helper()
+	_, ws, err := f.prov.ProvisionWorktree(context.Background(), dispatch.Request{
+		DispatchID: id,
+		Trigger: core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "acme/app", PR: pr, Number: pr, BaseRef: "main"},
+			Context: map[string]any{"head_ref": branch}},
+	})
+	if err != nil {
+		t.Fatalf("provision %s: %v", id, err)
+	}
+	return ws
+}
+
 // newFixture builds: a fake operator home (with a "secret" ~/.ssh, a signing
-// key, ~/.config/gh/hosts.yml, ~/.claude), a bare remote with main + fix/42,
-// a base clone and a worktree on fix/42, and a fake `gh` on a host PATH dir.
+// key, ~/.config/gh/hosts.yml, ~/.claude), a bare remote (filtering on, so
+// the base clone is a blob:none partial clone) with main, fix/42 and fix/43
+// whose history holds a blob only the remote has (OLD.txt), the dispatch
+// checkout for #42 provisioned by gitwt, and a fake `gh` on a host PATH dir.
 func newFixture(t *testing.T) *fixture {
 	// Outside /tmp: a host command's view replaces /tmp with the dispatch's
 	// own, and a real operator home is never under it.
@@ -119,14 +140,24 @@ func newFixture(t *testing.T) *fixture {
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 
 	run(t, root, nil, "git", "init", "-q", "--bare", f.remote)
+	run(t, f.remote, nil, "git", "config", "uploadpack.allowFilter", "true")
+	run(t, f.remote, nil, "git", "config", "uploadpack.allowAnySHA1InWant", "true")
 	seed := filepath.Join(root, "seed")
 	run(t, root, nil, "git", "init", "-q", seed)
-	os.WriteFile(seed+"/README", []byte("hello\n"), 0o644)
+	os.WriteFile(seed+"/OLD.txt", []byte("ancient history\n"), 0o644)
 	run(t, seed, nil, "git", "add", ".")
+	run(t, seed, nil, "git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "old")
+	os.Remove(seed + "/OLD.txt")
+	os.WriteFile(seed+"/README", []byte("hello\n"), 0o644)
+	run(t, seed, nil, "git", "add", "-A", ".")
 	run(t, seed, nil, "git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "init")
-	run(t, seed, nil, "git", "push", "-q", f.remote, "HEAD:refs/heads/main", "HEAD:refs/heads/fix/42")
-	run(t, root, nil, "git", "clone", "-q", f.remote, f.base)
-	run(t, f.base, nil, "git", "worktree", "add", "-q", "-B", "fix/42", f.ws, "origin/fix/42")
+	run(t, seed, nil, "git", "push", "-q", f.remote, "HEAD:refs/heads/main", "HEAD:refs/heads/fix/42",
+		"HEAD:refs/pull/42/head", "HEAD:refs/heads/fix/43", "HEAD:refs/pull/43/head")
+	f.prov = gitwt.New(filepath.Join(root, "state"))
+	f.prov.RemoteURL = func(string) string { return "file://" + f.remote }
+	if ws := f.provision(t, "d1", 42, "fix/42"); ws != f.ws {
+		t.Fatalf("checkout at %s, want %s", ws, f.ws)
+	}
 
 	// The fake gh records its view of the world, and tries to write its
 	// config (the copy-on-write home must throw that away).
@@ -181,14 +212,23 @@ func (f *fixture) manager(t *testing.T) *Manager {
 }
 
 func (f *fixture) runJailed(t *testing.T, m *Manager, script string) (string, error) {
+	cmd, done := f.startJailed(t, m, "d1", f.ws, 42, "fix/42", script)
+	defer done()
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// startJailed prepares a jailed launch of script for one dispatch and
+// returns the (unstarted) command and its teardown.
+func (f *fixture) startJailed(t *testing.T, m *Manager, id, ws string, pr int, branch, script string) (*exec.Cmd, func()) {
+	t.Helper()
 	l, err := m.Prepare(context.Background(), LaunchSpec{
-		DispatchID: "d1", Tool: "claude-code", Workspace: f.ws, Repo: "acme/app", Number: 42, IsPR: true,
-		HeadBranch: "fix/42", Label: "fix acme/app#42",
+		DispatchID: id, Tool: "claude-code", Workspace: ws, Repo: "acme/app", Number: pr, IsPR: true,
+		HeadBranch: branch, Label: "fix acme/app#" + itoa(pr),
 	})
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	defer l.Close()
 	spec := sandbox.FromConfig(&config.IsolationConfig{Mode: "namespace"})
 	binds := l.Binds
 	// A read-only bind from a nosuid,nodev mount (/dev/shm everywhere; a
@@ -205,16 +245,15 @@ func (f *fixture) runJailed(t *testing.T, m *Manager, script string) (string, er
 	env := append(sandbox.MinimalEnv(), l.Env...)
 	env = append(env, "GH_TOKEN=must-not-reach-the-jail")
 	env = stripCreds(env)
-	argv, outEnv, cleanup, err := sandbox.WrapLocalCommand(spec, []string{"/bin/sh", "-c", script}, f.ws, env, deps)
+	argv, outEnv, cleanup, err := sandbox.WrapLocalCommand(spec, []string{"/bin/sh", "-c", script}, ws, env, deps)
 	if err != nil {
+		l.Close()
 		t.Fatalf("wrap: %v", err)
 	}
-	defer cleanup()
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Dir = f.ws
+	cmd.Dir = ws
 	cmd.Env = outEnv
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	return cmd, func() { cleanup(); l.Close() }
 }
 
 func stripCreds(env []string) []string {
@@ -250,7 +289,7 @@ git push -q origin HEAD:refs/heads/new-branch; echo "push-new-exit=$?"
 git push -q --force origin HEAD:refs/heads/main; echo "push-force-exit=$?"
 git push -q origin :refs/heads/fix/42; echo "push-delete-exit=$?"
 echo x > .git/../x2 && git -C . status --short | head -3
-echo "cfg-write:$(sh -c 'echo "[core]" >> "$(git rev-parse --git-common-dir)/config"' 2>&1 | head -1)"
+git show origin/main~1:OLD.txt; echo "lazy-exit=$?"
 `
 	out, err := f.runJailed(t, m, script)
 	t.Logf("jailed output:\n%s", out)
@@ -276,8 +315,10 @@ echo "cfg-write:$(sh -c 'echo "[core]" >> "$(git rev-parse --git-common-dir)/con
 	if !strings.Contains(out, "gh-sees-login") {
 		t.Error("host gh must see its own login (used in place)")
 	}
-	if !strings.Contains(out, "cfg-write:") || strings.Contains(out, "cfg-write:\n") {
-		// the write must fail with an error message
+	// A lazy blob fetch (the base is blob:none) is brokered into the base's
+	// store and read through the clone's alternates.
+	if !strings.Contains(out, "ancient history") || !strings.Contains(out, "lazy-exit=0") {
+		t.Error("a lazy blob fetch must work from inside the jail")
 	}
 	// The home listing shows the scratch home: only the tool state and git
 	// config, never .ssh.
@@ -297,10 +338,6 @@ echo "cfg-write:$(sh -c 'echo "[core]" >> "$(git rev-parse --git-common-dir)/con
 	}
 	if _, err := exec.Command("git", "-C", f.remote, "rev-parse", "--verify", "-q", "refs/heads/new-branch").Output(); err == nil {
 		t.Fatal("new-branch must not exist on the remote")
-	}
-	cfg, _ := os.ReadFile(filepath.Join(f.base, ".git", "config"))
-	if strings.Count(string(cfg), "[core]") > 1 {
-		t.Fatal("the jail must not be able to write the common dir's config")
 	}
 	// Audit: every boundary crossing recorded, refusals with a reason.
 	f.mu.Lock()
@@ -326,4 +363,141 @@ echo "cfg-write:$(sh -c 'echo "[core]" >> "$(git rev-parse --git-common-dir)/con
 	if !sawCreate || !sawLogout || !sawPush || !sawRefusedPush || !sawSign || !sawDiscard {
 		t.Fatalf("audit trail incomplete: create=%v logout=%v push=%v refusedPush=%v sign=%v discard=%v", sawCreate, sawLogout, sawPush, sawRefusedPush, sawSign, sawDiscard)
 	}
+}
+
+// Two jailed dispatches on the same repository, both live at once: A attacks
+// everything B depends on — B's branch (by path and through the remote), the
+// base clone's packed-refs and object store, and a gc of what it can reach —
+// and every attempt fails or stays inside A's own clone. B then pushes and
+// lazily fetches a blob the partial base never had.
+func TestJailConcurrentDispatchesCannotTouchEachOther(t *testing.T) {
+	needJailKernel(t)
+	f := newFixture(t)
+	m := f.manager(t)
+	wsB := f.provision(t, "d2", 43, "fix/43")
+	baseGit := filepath.Join(f.base, ".git")
+	packedBefore, _ := os.ReadFile(filepath.Join(baseGit, "packed-refs"))
+	objsBefore := run(t, f.base, nil, "git", "count-objects", "-v")
+	// A private repository elsewhere on the machine (never visible in a
+	// jail), with a blob whose id the attacker knows.
+	private := filepath.Join(f.home, "private")
+	run(t, "", nil, "git", "init", "-q", private)
+	os.WriteFile(filepath.Join(private, "packed.txt"), []byte("TOP-SECRET-PACKED\n"), 0o600)
+	run(t, private, nil, "git", "add", "packed.txt")
+	run(t, private, nil, "git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "private")
+	run(t, private, nil, "git", "gc", "-q")
+	packed := run(t, private, nil, "git", "rev-parse", "HEAD:packed.txt")
+	os.WriteFile(filepath.Join(private, "loose.txt"), []byte("TOP-SECRET-LOOSE\n"), 0o600)
+	loose := run(t, private, nil, "git", "hash-object", "-w", "loose.txt")
+	privObjs := filepath.Join(private, ".git", "objects")
+	privPack := strings.TrimSuffix(run(t, filepath.Join(privObjs, "pack"), nil, "sh", "-c", "ls pack-*.pack"), ".pack")
+
+	// B's jail comes up first and waits, live, until A is done.
+	cmdB, doneB := f.startJailed(t, m, "d2", wsB, 43, "fix/43", `read go
+echo b > b.txt && git add b.txt && git commit -q -m "b work" && echo b-committed
+git push -q origin HEAD:refs/heads/fix/43; echo "b-push-exit=$?"
+git show origin/main~1:OLD.txt; echo "b-lazy-exit=$?"
+git rev-parse --verify -q refs/heads/fix/43 >/dev/null && echo b-branch-intact
+`)
+	defer doneB()
+	stdinB, err := cmdB.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var outB strings.Builder
+	cmdB.Stdout, cmdB.Stderr = &outB, &outB
+	if err := cmdB.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	outA, err := f.runJailed(t, m, `
+# Steer conductor's git through the clone's own config: a signing program
+# and a push URL (a bare repo whose hook runs as whoever pushes to it).
+printf '#!/bin/sh\ntouch "`+f.ws+`/PWNED-sign"\nexit 1\n' > evil-sign.sh && chmod +x evil-sign.sh
+git config gpg.ssh.program "`+f.ws+`/evil-sign.sh"
+git init -q --bare evil.git && printf '#!/bin/sh\ntouch "`+f.ws+`/PWNED-hook"\n' > evil.git/hooks/pre-receive && chmod +x evil.git/hooks/pre-receive
+git config remote.origin.pushurl "`+f.ws+`/evil.git"
+echo a > a.txt && git add a.txt && git commit -q -m "a work" && echo a-committed
+git push -q origin HEAD:refs/heads/fix/42; echo "a-own-push-exit=$?"
+test -e "`+wsB+`" && echo A-SEES-B
+git -C "`+wsB+`" branch -D fix/43 >/dev/null 2>&1; echo "a-branch-other-exit=$?"
+git push -q origin :refs/heads/fix/43; echo "a-delete-b-exit=$?"
+git push -q origin HEAD:refs/heads/fix/43; echo "a-move-b-exit=$?"
+echo junk > "`+baseGit+`/packed-refs"; echo "a-packed-refs-exit=$?"
+test -e "`+baseGit+`/config" && echo A-SEES-BASE-CONFIG
+touch "`+baseGit+`/objects/planted"; echo "a-objects-exit=$?"
+p=$(ls "`+baseGit+`"/objects/pack/*.pack | head -1); rm -f "$p"; echo "a-rm-pack-exit=$?"
+git update-ref -d refs/remotes/origin/fix/43; git branch -D fix/42 >/dev/null 2>&1
+git gc -q --prune=now; echo "a-gc-exit=$?"
+# Point conductor's git at the private repo — through the clone's
+# alternates, a symlinked loose object and a symlinked pack (all resolve on
+# the host, not in the jail) — then push a commit whose tree names both
+# private blobs.
+echo "`+privObjs+`" >> .git/objects/info/alternates; echo "a-alt-write-exit=$?"
+mkdir -p .git/objects/`+loose[:2]+` && ln -s "`+privObjs+`/`+loose[:2]+`/`+loose[2:]+`" .git/objects/`+loose[:2]+`/`+loose[2:]+`
+ln -s "`+privObjs+`/pack/`+privPack+`.pack" .git/objects/pack/`+privPack+`.pack
+ln -s "`+privObjs+`/pack/`+privPack+`.idx" .git/objects/pack/`+privPack+`.idx
+t=$(printf '100644 blob %s\tpacked.txt\n100644 blob %s\tloose.txt\n' `+packed+` `+loose+` | git mktree --missing)
+c=$(git commit-tree "$t" -p HEAD -m leak) && echo a-leak-commit
+git push -q origin "$c:refs/heads/fix/42"; echo "a-leak-push-exit=$?"
+`)
+	t.Logf("A:\n%s", outA)
+	if err != nil {
+		t.Fatalf("A: %v", err)
+	}
+	stdinB.Write([]byte("go\n"))
+	stdinB.Close()
+	errB := cmdB.Wait()
+	t.Logf("B:\n%s", outB.String())
+	if errB != nil {
+		t.Fatalf("B: %v", errB)
+	}
+
+	for _, bad := range []string{"A-SEES-B", "A-SEES-BASE-CONFIG", "a-branch-other-exit=0", "a-delete-b-exit=0",
+		"a-move-b-exit=0", "a-packed-refs-exit=0", "a-objects-exit=0", "a-rm-pack-exit=0", "a-leak-push-exit=0"} {
+		if strings.Contains(outA, bad) {
+			t.Errorf("A: %s", bad)
+		}
+	}
+	for _, p := range []string{"PWNED-sign", "PWNED-hook"} {
+		if _, err := os.Stat(filepath.Join(f.ws, p)); err == nil {
+			t.Errorf("conductor ran a program the agent named in its clone's config (%s)", p)
+		}
+	}
+	if out, _ := exec.Command("git", "--git-dir="+filepath.Join(f.ws, "evil.git"), "for-each-ref").Output(); len(out) > 0 {
+		t.Errorf("conductor pushed to the agent's pushurl: %s", out)
+	}
+	if head := run(t, f.remote, nil, "git", "log", "-1", "--format=%s", "refs/heads/fix/42"); head != "a work" {
+		t.Errorf("A's own push must land on the real remote, signed with the operator's key: head %q", head)
+	}
+	for _, want := range []string{"a-committed", "a-own-push-exit=0", "a-gc-exit=0", "a-alt-write-exit=0", "a-leak-commit"} {
+		if !strings.Contains(outA, want) {
+			t.Errorf("A: missing %q (the attack did not get as far as the push)", want)
+		}
+	}
+	for _, secret := range []string{packed, loose} {
+		if err := exec.Command("git", "--git-dir="+f.remote, "cat-file", "-e", secret).Run(); err == nil {
+			t.Fatalf("private blob %s reached the remote: conductor's git followed the agent's alternates/symlinks", secret)
+		}
+	}
+	for _, want := range []string{"b-committed", "b-push-exit=0", "ancient history", "b-lazy-exit=0", "b-branch-intact"} {
+		if !strings.Contains(outB.String(), want) {
+			t.Errorf("B: missing %q", want)
+		}
+	}
+	// On the host: the base is exactly as it was (bar the lazily fetched
+	// blob), B's clone is whole, and B's push landed.
+	if after, _ := os.ReadFile(filepath.Join(baseGit, "packed-refs")); string(after) != string(packedBefore) {
+		t.Error("the base clone's packed-refs changed")
+	}
+	if _, err := os.Stat(filepath.Join(baseGit, "objects", "planted")); err == nil {
+		t.Error("A wrote into the base's object store")
+	}
+	t.Logf("base objects before:\n%s\nafter:\n%s", objsBefore, run(t, f.base, nil, "git", "count-objects", "-v"))
+	run(t, f.base, nil, "git", "fsck", "--connectivity-only", "--no-dangling")
+	run(t, wsB, nil, "git", "fsck", "--connectivity-only", "--no-dangling")
+	if head := run(t, f.remote, nil, "git", "log", "-1", "--format=%s", "refs/heads/fix/43"); head != "b work" {
+		t.Fatalf("remote fix/43 head: %q", head)
+	}
+	run(t, f.remote, nil, "git", "-c", "gpg.ssh.allowedSignersFile="+f.allowed, "verify-commit", "refs/heads/fix/43")
 }

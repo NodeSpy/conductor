@@ -17,11 +17,12 @@ import (
 // `conductor::owner/repo`, so every fetch, push, lazy blob fetch, alias or
 // script that needs the network invokes git-remote-conductor (conductor's
 // binary), which asks the broker. conductor then runs the fetch/push itself
-// from the shared base clone, with the operator's identity, after policy:
-// the dispatch's repository only; pushes only to the dispatch's own branch —
-// never the default branch, no force, no deletion unless allowed; review
-// steps no push at all. The objects are already in the shared object store,
-// so the daemon needs no pack from the jail.
+// from the base clone — its own repository, with the operator's identity —
+// after policy: the dispatch's repository only; pushes only to the
+// dispatch's own branch — never the default branch, no force, no deletion
+// unless allowed; review steps no push at all. A push borrows the dispatch
+// clone's objects (an alternate) so the daemon needs no pack from the jail;
+// a fetch lands in the base's store, which the clone borrows from.
 
 // gitEnv is the jail's git configuration, as GIT_CONFIG_* variables (the
 // highest-precedence source short of `-c`, and invisible on disk).
@@ -54,12 +55,36 @@ func gitEnv(d *Dispatch) []string {
 	return append(out, "GIT_TERMINAL_PROMPT=0")
 }
 
+// dgit runs hostGit for d in its trusted git dir (see GitLayout.Base). With
+// borrow, a dispatch clone's own objects are added — as a conductor-owned
+// copy (snapshotObjects), never the clone's store itself.
+func dgit(ctx context.Context, d *Dispatch, borrow bool, args ...string) (string, string, error) {
+	var alt string
+	if borrow && d.Git.Base != "" {
+		snap, err := os.MkdirTemp(d.Dir, "objects-")
+		if err != nil {
+			return "", "", err
+		}
+		defer os.RemoveAll(snap)
+		if err := snapshotObjects(d.Workspace, snap); err != nil {
+			return "", err.Error(), err
+		}
+		alt = snap
+	}
+	return hostGitAlt(ctx, d.Git.trustedGitDir(), alt, nil, args...)
+}
+
 // hostGit runs git on the host against the dispatch's common dir, hardened:
 // the git dir is named explicitly (the worktree's .git pointer and gitdir
 // files are agent-writable, never trusted), hooks and fsmonitor are off, the
 // ext:: transport is refused, and replace refs are ignored — so even a
 // tampered clone cannot make the daemon execute anything.
 func hostGit(ctx context.Context, commonDir string, stdin []byte, args ...string) (string, string, error) {
+	return hostGitAlt(ctx, commonDir, "", stdin, args...)
+}
+
+// hostGitAlt is hostGit with alt added as an alternate object directory.
+func hostGitAlt(ctx context.Context, commonDir, alt string, stdin []byte, args ...string) (string, string, error) {
 	full := append([]string{"--git-dir=" + commonDir,
 		"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
 		"-c", "protocol.ext.allow=never", "-c", "diff.external=",
@@ -68,6 +93,9 @@ func hostGit(ctx context.Context, commonDir string, stdin []byte, args ...string
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_NO_REPLACE_OBJECTS=1",
 		"GIT_CONFIG_NOSYSTEM=", "GIT_DIR=", "GIT_WORK_TREE=")
 	cmd.Env = scrubGitEnv(cmd.Env)
+	if alt != "" {
+		cmd.Env = append(cmd.Env, "GIT_ALTERNATE_OBJECT_DIRECTORIES="+alt)
+	}
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
@@ -140,7 +168,7 @@ func (m *Manager) gitList(ctx context.Context, d *Dispatch, req Request, fw *fra
 		_ = fw.send(Reply{Done: true, Refused: r, Exit: 1})
 		return
 	}
-	out, stderr, err := hostGit(ctx, d.Git.CommonDir, nil, "ls-remote", "--symref", "origin")
+	out, stderr, err := dgit(ctx, d, false, "ls-remote", "--symref", "origin")
 	if err != nil {
 		_ = fw.send(Reply{Done: true, Exit: 1, Error: "git ls-remote: " + firstLine(stderr, err)})
 		return
@@ -184,7 +212,7 @@ func (m *Manager) gitFetch(ctx context.Context, d *Dispatch, req Request, fw *fr
 			names = append(names, w.SHA[:min(len(w.SHA), 12)])
 		}
 	}
-	_, stderr, err := hostGit(ctx, d.Git.CommonDir, nil, args...)
+	_, stderr, err := dgit(ctx, d, false, args...)
 	detail := "git fetch origin " + strings.Join(names, " ")
 	if len(detail) > 300 {
 		detail = detail[:300] + "…"
@@ -240,7 +268,7 @@ func (m *Manager) pushOne(ctx context.Context, d *Dispatch, p GitPush, dry bool)
 		return refuse("git: bad source object")
 	}
 	if !del {
-		if _, _, err := hostGit(ctx, d.Git.CommonDir, nil, "cat-file", "-e", p.SHA+"^{commit}"); err != nil {
+		if _, _, err := dgit(ctx, d, true, "cat-file", "-e", p.SHA+"^{commit}"); err != nil {
 			return refuse("git: " + p.SHA + " is not a commit in the dispatch's repository")
 		}
 	}
@@ -255,7 +283,7 @@ func (m *Manager) pushOne(ctx context.Context, d *Dispatch, p GitPush, dry bool)
 		args = append(args, "--dry-run")
 	}
 	args = append(args, "origin", spec)
-	out, stderr, err := hostGit(ctx, d.Git.CommonDir, nil, args...)
+	out, stderr, err := dgit(ctx, d, true, args...)
 	summary := porcelainSummary(out, p.Dst)
 	if err != nil {
 		why := firstLine(stderr, err)

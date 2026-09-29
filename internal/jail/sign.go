@@ -106,7 +106,7 @@ func (m *Manager) handleSign(ctx context.Context, d *Dispatch, req Request, fw *
 		return
 	}
 	for _, oid := range append([]string{h.Tree}, h.Parents...) {
-		if _, _, err := hostGit(ctx, d.Git.CommonDir, nil, "cat-file", "-e", oid); err != nil {
+		if _, _, err := dgit(ctx, d, true, "cat-file", "-e", oid); err != nil {
 			refuse("sign: " + oid[:min(12, len(oid))] + " is not in the dispatch's repository — only this dispatch's commits are signed")
 			return
 		}
@@ -133,11 +133,13 @@ func shortSubject(s string) string {
 }
 
 // operatorSign signs payload the way the operator's own git would: the
-// configured gpg.format, program, and user.signingkey, read from the
-// dispatch repository's trusted config (global + the conductor-written
-// clone config, which the jail can only read).
+// configured gpg.format, program, and user.signingkey, read from TRUSTED
+// config only — global plus conductor's own base clone (or, for another
+// checkout shape, the common dir the jail can only read). Never the
+// dispatch clone's own config: the agent writes that, and gpg.ssh.program
+// names a program conductor would run.
 func operatorSign(ctx context.Context, d *Dispatch, _ string, payload []byte) ([]byte, []byte, error) {
-	cd := d.Git.CommonDir
+	cd := d.Git.trustedGitDir()
 	format := gitConfigGet(cd, "gpg.format")
 	key := gitConfigGet(cd, "user.signingkey")
 	switch format {

@@ -5,12 +5,13 @@
 //
 // What a jailed agent sees (the allow-list; everything else is absent):
 //
-//	read-write  the workspace; the git common dir behind a worktree, with its
-//	            config, hooks/ and objects/info bound read-only and sibling
-//	            worktrees' metadata hidden; the tool's own state (~/.claude,
-//	            ~/.claude.json, ~/.codex, …)
+//	read-write  the workspace — the dispatch's own clone, .git included (its
+//	            refs, config, hooks, index, new objects); the tool's own state
+//	            (~/.claude, ~/.claude.json, ~/.codex, …)
 //	read-only   /usr /etc /opt, ~/.gitconfig, the agent CLI's own install
-//	            (e.g. ~/.local/share/claude), the conductor binary
+//	            (e.g. ~/.local/share/claude), the conductor binary, the base
+//	            clone's object store (what the clone borrows; the rest of the
+//	            base's .git is an empty read-only dir)
 //	scratch     a tmpfs $HOME; a per-dispatch /tmp (host commands see it too)
 //	shims       /run/conductor/bin first on PATH, and conductor's binary bound
 //	            over every host-set tool's real path, so `gh`, `/usr/bin/gh`
@@ -145,12 +146,31 @@ type LaunchSpec struct {
 	Git *GitLayout
 }
 
-// GitLayout is a worktree's git layout, resolved on the host when the
-// worktree is still conductor's own.
+// GitLayout is a checkout's git layout, resolved on the host when the
+// checkout is still conductor's own.
 type GitLayout struct {
-	GitDir    string // the worktree's own gitdir (<common>/worktrees/<name>, or <ws>/.git)
-	CommonDir string // the shared .git
-	OriginURL string // remote.origin.url of the common dir
+	GitDir    string // the checkout's own gitdir (<ws>/.git, or <common>/worktrees/<name>)
+	CommonDir string // its .git (the dispatch clone's own; a linked worktree's shared one)
+	OriginURL string // remote.origin.url
+	// Base is the base clone's .git when the checkout is a per-dispatch
+	// clone borrowing its objects (alternates): conductor's own repository,
+	// never writable from the jail. conductor's git on the dispatch's
+	// behalf — push, fetch, the signing check and signing config — runs
+	// there, with a conductor-owned copy of the clone's own objects added
+	// (snapshotObjects), so nothing the agent can write (the clone's config,
+	// hooks, alternates, symlinks in its object store) steers it. "" = a
+	// checkout of another shape (a linked worktree, a go-git clone), handled
+	// as before.
+	Base string
+}
+
+// trustedGitDir is where conductor runs git for the dispatch: the base clone
+// when there is one, else the checkout's common dir.
+func (g *GitLayout) trustedGitDir() string {
+	if g.Base != "" {
+		return g.Base
+	}
+	return g.CommonDir
 }
 
 // Dispatch is one jailed dispatch's broker-side record.
@@ -367,10 +387,23 @@ func (m *Manager) layout(d *Dispatch, self string) ([]sandbox.BindMount, error) 
 			add(sandbox.BindMount{Path: p, Src: self, RO: true})
 		}
 	}
-	// Git: the common dir read-write (objects, refs), its code-execution
-	// surface read-only, sibling worktrees hidden, this worktree's own gitdir
-	// read-write.
-	if g := d.Git; g != nil && g.CommonDir != "" {
+	// Git, a per-dispatch clone: the clone is the workspace, .git included,
+	// all of it read-write — its config, hooks and alternates are the
+	// agent's own, and conductor never runs git on them (see
+	// GitLayout.Base). What it borrows — the base clone's object store — is
+	// read-only; the rest of the base's .git is an empty read-only dir, so
+	// a write there fails rather than landing in the scratch home.
+	if g := d.Git; g != nil && g.Base != "" {
+		shadow := filepath.Join(d.Dir, "base-git")
+		if err := os.MkdirAll(filepath.Join(shadow, "objects"), 0o755); err != nil {
+			return nil, err
+		}
+		add(sandbox.BindMount{Path: g.Base, Src: shadow, RO: true})
+		add(sandbox.BindMount{Path: filepath.Join(g.Base, "objects"), RO: true})
+	} else if g := d.Git; g != nil && g.CommonDir != "" {
+		// Another shape (a linked worktree, a go-git clone): the common dir
+		// read-write (objects, refs), its code-execution surface read-only,
+		// sibling worktrees hidden, this worktree's own gitdir read-write.
 		for _, sub := range []string{"hooks", filepath.Join("objects", "info")} {
 			_ = os.MkdirAll(filepath.Join(g.CommonDir, sub), 0o755)
 		}
@@ -399,7 +432,8 @@ func (m *Manager) layout(d *Dispatch, self string) ([]sandbox.BindMount, error) 
 			if bm.Tmpfs || bm.Link != "" || bm.Src != "" || contains(m.Sockets, bm.Path) {
 				continue
 			}
-			if within(bm.Path, s) && !within(bm.Path, d.Workspace) && (d.Git == nil || !within(bm.Path, d.Git.CommonDir)) {
+			if within(bm.Path, s) && !within(bm.Path, d.Workspace) && (d.Git == nil || !within(bm.Path, d.Git.CommonDir)) &&
+				(d.Git == nil || d.Git.Base == "" || bm.Path != filepath.Join(d.Git.Base, "objects")) {
 				return nil, fmt.Errorf("jail: %s would expose conductor's own state/config (%s)", bm.Path, s)
 			}
 		}
@@ -601,7 +635,30 @@ func ResolveGit(ws string) *GitLayout {
 		}
 	}
 	g.OriginURL = gitConfigGet(g.CommonDir, "remote.origin.url")
+	g.Base = borrowedBase(g)
 	return g
+}
+
+// borrowedBase is the base clone a per-dispatch clone borrows its objects
+// from — the one alternate conductor wrote at provisioning ("<base>/.git/
+// objects") — or "" when the checkout is not such a clone.
+func borrowedBase(g *GitLayout) string {
+	if g.GitDir != g.CommonDir {
+		return "" // a linked worktree
+	}
+	b, err := os.ReadFile(filepath.Join(g.CommonDir, "objects", "info", "alternates"))
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 1 || !filepath.IsAbs(lines[0]) || filepath.Base(lines[0]) != "objects" {
+		return ""
+	}
+	base := filepath.Dir(filepath.Clean(lines[0]))
+	if _, err := os.Stat(filepath.Join(base, "HEAD")); err != nil {
+		return ""
+	}
+	return base
 }
 
 func (m *Manager) register(d *Dispatch) {
