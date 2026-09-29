@@ -389,3 +389,46 @@ func TestIssueMatchedOnAssign(t *testing.T) {
 		t.Fatalf("assignment to another user should not trigger, got %d", len(trs))
 	}
 }
+
+// A merged/closed PR has no branch left to fix: review and comment events that
+// keep arriving after the merge (a late approval, a reply) must not launch a
+// fixer. The same events on an open PR still do.
+func TestClosedPRDropsBranchKinds(t *testing.T) {
+	g := newTestIntegration(t, baseConfig())
+	for _, tc := range []struct {
+		name, event, body string
+		want              int
+	}{
+		{"review on closed PR", "pull_request_review", `{
+			"action":"submitted",
+			"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+			"pull_request":{"number":7,"state":"closed","merged":true,"head":{"sha":"abc"},"base":{"ref":"main"},"user":{"login":"me"}},
+			"review":{"state":"changes_requested","id":99,"user":{"login":"reviewer"}}}`, 0},
+		{"review comment on closed PR", "pull_request_review_comment", `{
+			"action":"created",
+			"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+			"pull_request":{"number":7,"state":"closed","head":{"sha":"abc","ref":"feat"},"base":{"ref":"main"},"user":{"login":"me"}},
+			"comment":{"id":21,"user":{"login":"reviewer"},"body":"one more thing"}}`, 0},
+		{"conversation comment on closed PR", "issue_comment", `{
+			"action":"created",
+			"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+			"issue":{"number":3,"state":"closed","pull_request":{},"user":{"login":"me"}},
+			"comment":{"id":22,"user":{"login":"reviewer"},"body":"please fix"}}`, 0},
+		{"review on open PR", "pull_request_review", `{
+			"action":"submitted",
+			"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+			"pull_request":{"number":7,"state":"open","head":{"sha":"abc"},"base":{"ref":"main"},"user":{"login":"me"}},
+			"review":{"state":"changes_requested","id":99,"user":{"login":"reviewer"}}}`, 1},
+		{"conversation comment on open PR", "issue_comment", `{
+			"action":"created",
+			"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+			"issue":{"number":3,"state":"open","pull_request":{},"user":{"login":"me"}},
+			"comment":{"id":23,"user":{"login":"reviewer"},"body":"please fix"}}`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if trs := g.triggersFor(context.Background(), tc.event, []byte(tc.body)); len(trs) != tc.want {
+				t.Fatalf("want %d trigger(s), got %+v", tc.want, trs)
+			}
+		})
+	}
+}

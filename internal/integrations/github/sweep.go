@@ -420,6 +420,10 @@ func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID 
 			continue
 		}
 		t := g.target(repo, pr.Number, info.Head.SHA, info.Base.Ref, info.HTMLURL)
+		headRef := info.Head.Ref
+		if headRef == "" {
+			headRef = pr.Head.Ref
+		}
 		var trs []core.Trigger
 		switch info.MergeableState {
 		case "dirty":
@@ -442,6 +446,17 @@ func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID 
 		// be hours away.
 		for _, tr := range trs {
 			tr.CatchUp = true
+			// Every sweep trigger here is about this PR: carry its head branch,
+			// as the webhook path does. Without it a worktree dispatch can't
+			// land on the PR branch — it falls back to a local pr-<n> branch,
+			// and the agent's push publishes that as a new branch instead of
+			// updating the PR.
+			if headRef != "" && emptyStr(tr.Context["head_ref"]) {
+				if tr.Context == nil {
+					tr.Context = map[string]any{}
+				}
+				tr.Context["head_ref"] = headRef
+			}
 			emit(ctx, tr)
 		}
 	}
@@ -453,13 +468,28 @@ func (g *Integration) sweepRepo(ctx context.Context, emit core.EmitFunc, instID 
 // thread ids, so it re-fires when new threads appear and stops once they're
 // resolved (acted per state). Only runs when changes_requested is configured, to
 // avoid the extra GraphQL call otherwise.
+//
+// A thread whose opener has since APPROVED is not outstanding: the reviewer
+// signed off, and threads are often left open after an approval. Counting them
+// launched a fresh changes_requested fixer on an approved PR every time the head
+// moved (the signature includes the head) — which then re-requested the
+// approver's review. Their comments still reach the new_comment autopilot.
 func (g *Integration) sweepUnresolvedComments(ctx context.Context, instID int64, owner, name, repo string, t core.Target) []core.Trigger {
 	act, ok := g.actionFor(repo, "changes_requested")
 	if !ok || !act.IsEnabled() {
 		return nil
 	}
-	threads, err := g.rest.unresolvedThreads(ctx, instID, owner, name, t.Number)
-	if err != nil || len(threads) == 0 {
+	all, err := g.rest.unresolvedThreads(ctx, instID, owner, name, t.Number)
+	if err != nil {
+		return nil
+	}
+	var threads []unresolvedThread
+	for _, th := range all {
+		if !th.AuthorApproved {
+			threads = append(threads, th)
+		}
+	}
+	if len(threads) == 0 {
 		return nil
 	}
 	ids := make([]string, 0, len(threads))
