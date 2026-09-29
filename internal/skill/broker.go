@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/targets"
 )
 
 const (
@@ -104,6 +105,14 @@ type Identity struct {
 	// agent and never leaves the daemon — the agent's own context comes from
 	// the prompt, not from here.
 	Context map[string]any
+	// Writes is the target-write policy this dispatch's github verb calls are
+	// bound by (see internal/targets.WritePolicy, and flow.SkillIdentity.Writes
+	// which this round-trips into on every RunVerb call). The zero value is the
+	// default fixer policy.
+	//
+	// TODO(jail): today every dispatch gets the zero value; a later change
+	// populates this from the step's own config (the "jail" work).
+	Writes targets.WritePolicy
 }
 
 type session struct {

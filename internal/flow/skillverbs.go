@@ -10,6 +10,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/memory"
+	"github.com/NodeSpy/conductor/internal/targets"
 )
 
 // The skill verb surface (#36 §12): conductor's own verbs served to a
@@ -52,6 +53,16 @@ type SkillIdentity struct {
 	// not reply in its own channel without an explicit grant. Daemon-side
 	// only; it never crosses back to the agent.
 	Context map[string]any
+	// Writes is the target-write policy this dispatch's github verb calls are
+	// bound by (see internal/targets.WritePolicy and CheckWrite/CheckPush,
+	// called from RunSkillVerb). The zero value is the default fixer policy —
+	// its own target, its own head branch, no new PRs/issues, no merge/close/
+	// reopen.
+	//
+	// TODO(jail): today every dispatch gets the zero value; a later change
+	// populates this from the step's own config (the "jail" work) so an
+	// operator can widen or narrow what a step's agent may write.
+	Writes targets.WritePolicy
 }
 
 // OwnRepo is the repo this grant's dispatch may treat as its own — the same
@@ -633,6 +644,19 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	// the operator wrote onto a named verb here.
 	if err := r.checkSkillVerbResources(r.planPolicy(), t, uses, options, id.ScopesFor(uses)); err != nil {
 		return deny(r.redactErr(err))
+	}
+	// Target lifecycle (see internal/targets): a github write is bound to the
+	// dispatch's OWN target (its PR/issue, its head branch) unless id.Writes
+	// says otherwise, and is refused outright once that target is observed
+	// merged/closed — regardless of how generous the grant above was. This is
+	// deliberately independent of checkSkillVerbResources: a `repo:` scope
+	// grant says WHICH repo a verb may touch, not whether the write itself
+	// (comment on a different PR, open a new one, push past its own branch) is
+	// something a fixer should be doing unsupervised.
+	if in.Decl != nil && in.Decl.Type == "github" {
+		if reason := checkGithubTargetWrite(id, verb, options); reason != "" {
+			return deny(reason)
+		}
 	}
 	// handoff.* / step.* act on the CALLER's own dispatch: inject the
 	// token-bound identity so `done` releases the agent this token was minted

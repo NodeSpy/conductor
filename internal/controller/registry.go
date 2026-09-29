@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/dispatch"
 )
 
 // BuiltinPaseo is the reserved name of the built-in default controller.
@@ -163,6 +164,67 @@ func (r *Registry) ByName(name string) (Controller, error) {
 		return r.builtin, nil
 	}
 	return nil, fmt.Errorf("unknown controller %q", name)
+}
+
+// targetCanceller is the optional Runner capability controllerRunner provides:
+// interrupt every live session for one target across every kind it dispatched.
+type targetCanceller interface {
+	CancelTarget(ctx context.Context, prKey, reason string) []string
+}
+
+// paseoCanceller is the shape the paseo dispatcher's Runner satisfies instead
+// (it has no controller-side liveness table to walk — its sessions are the
+// paseo daemon's own agents, found and archived by label). Registry.CancelTarget
+// falls back to this when a Runner isn't a targetCanceller.
+type paseoCanceller interface {
+	ListAgents(ctx context.Context, labels map[string]string) ([]dispatch.AgentInfo, error)
+	Archive(ctx context.Context, agentID string) error
+}
+
+// CancelTarget interrupts every live agent dispatched for prKey, walking EVERY
+// registered controller (including the built-in paseo default) — called when
+// the engine observes prKey's target (PR/issue) merged or closed. A
+// controllerRunner-backed controller is reached via CancelTarget directly; the
+// paseo dispatcher (which tracks no controller-side liveness table) is reached
+// by listing its agents labeled for this target and archiving each. Best-effort
+// per controller — one controller's failure does not stop the walk. Returns
+// every id it cancelled/archived.
+func (r *Registry) CancelTarget(ctx context.Context, prKey, reason string) []string {
+	all := make([]Controller, 0, len(r.controllers)+1)
+	for _, c := range r.controllers {
+		all = append(all, c)
+	}
+	all = append(all, r.builtin)
+	seen := map[Runner]bool{}
+	var ids []string
+	for _, c := range all {
+		run, err := c.Runner()
+		if err != nil || run == nil || seen[run] {
+			continue
+		}
+		seen[run] = true
+		if tc, ok := run.(targetCanceller); ok {
+			ids = append(ids, tc.CancelTarget(ctx, prKey, reason)...)
+			continue
+		}
+		pc, ok := run.(paseoCanceller)
+		if !ok {
+			continue
+		}
+		agents, err := pc.ListAgents(ctx, map[string]string{"conductor": "1", "pr": prKey})
+		if err != nil {
+			continue
+		}
+		for _, a := range agents {
+			if a.ID == "" {
+				continue
+			}
+			if aerr := pc.Archive(ctx, a.ID); aerr == nil {
+				ids = append(ids, a.ID)
+			}
+		}
+	}
+	return ids
 }
 
 // RunnerFor resolves the controller for an agent and returns its dispatch runner,
