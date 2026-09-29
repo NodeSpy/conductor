@@ -267,3 +267,18 @@ func (c *Config) GlobalIsolation() *IsolationConfig {
 	}
 	return c.Isolation
 }
+
+// PolicyOnly reports a block that sets only write/tool-call/host-command
+// POLICY (`writes:`, `intent:`, `host:`) and nothing about the sandbox
+// itself. Such a block narrows what a jailed agent may do without replacing
+// the sandbox the layers above chose, and without turning the synthesized
+// jail into an explicit (fail-closed) one — a pack that only says its
+// reviewers are read-only must not change how the jail degrades.
+func (iso *IsolationConfig) PolicyOnly() bool {
+	if iso == nil {
+		return false
+	}
+	return iso.Mode == "" && iso.User == "" && iso.Container == nil && iso.Limits == nil &&
+		!iso.Privileged && !iso.AllowRoot && iso.Network == nil && len(iso.FS) == 0 && !iso.MacOSKeychain &&
+		(len(iso.Host) > 0 || iso.Writes != nil || iso.Intent != nil)
+}

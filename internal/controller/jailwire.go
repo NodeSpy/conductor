@@ -186,11 +186,17 @@ func agentLaunchOpts(eligible bool, tool string, runtimeIso *config.IsolationCon
 		return opt
 	}
 	iso := opt.iso
-	if iso == nil {
-		iso = GlobalIsolation
+	if iso == nil || iso.PolicyOnly() {
+		if g := GlobalIsolation; g != nil && !g.PolicyOnly() {
+			iso = g
+		} else {
+			iso = nil
+		}
 	}
 	defaulted := false
 	if iso == nil {
+		// No block shapes the sandbox (none at all, or only policy blocks):
+		// the synthesized jail, which degrades loudly rather than failing.
 		iso = &config.IsolationConfig{Defaulted: true}
 		defaulted = true
 	}

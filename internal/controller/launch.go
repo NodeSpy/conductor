@@ -106,7 +106,9 @@ func withEgressRevoke(opt launchOpts) (launchOpts, func()) {
 // isolation: wins over the runtime's (most-specific wins, like `host:`).
 func launchOptsFor(runtimeIso *config.IsolationConfig, req dispatch.Request) launchOpts {
 	iso := runtimeIso
-	if req.Step.Isolation != nil {
+	// A policy-only step block (writes/intent/host rules) narrows policy; it
+	// never replaces the runtime's sandbox settings.
+	if req.Step.Isolation != nil && !req.Step.Isolation.PolicyOnly() {
 		iso = req.Step.Isolation
 	}
 	return launchOpts{iso: iso, agentAuthored: req.AgentAuthored}

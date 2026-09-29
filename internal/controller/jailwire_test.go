@@ -201,3 +201,28 @@ func TestModelRouteLoopbackRelay(t *testing.T) {
 		t.Fatalf("a remote endpoint joins the allowlist: %v %v", hosts, loop)
 	}
 }
+
+func TestPolicyOnlyBlocksDoNotShapeTheSandbox(t *testing.T) {
+	old := JailManager
+	JailManager = &jail.Manager{}
+	defer func() { JailManager = old }()
+	ro := &config.IsolationConfig{Writes: &config.WritesPolicy{ReadOnly: true}}
+	req := dispatch.Request{Step: config.Step{Isolation: ro}, Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "acme/app", PR: 1}}}
+	// On a default runtime: still the synthesized (degradable) jail, read-only.
+	opt := agentLaunchOpts(true, "claude-code", nil, req)
+	if opt.jail == nil || !opt.jailDefault || !opt.jail.ReadOnly {
+		t.Fatalf("policy-only step on a default runtime: %+v", opt)
+	}
+	// Under a runtime that opted out, a policy-only step does not re-jail it.
+	if opt = agentLaunchOpts(true, "claude-code", &config.IsolationConfig{Mode: "none"}, req); opt.jail != nil {
+		t.Fatal("a policy-only step must not override the runtime's mode: none")
+	}
+	// Under an explicit runtime block, that block still governs (fail closed).
+	if opt = agentLaunchOpts(true, "claude-code", &config.IsolationConfig{FS: []string{"/x"}}, req); opt.jail == nil || opt.jailDefault {
+		t.Fatalf("explicit runtime block governs: %+v", opt)
+	}
+	// A non-jail runtime (opencode/agent-deck) is not wrapped by a policy-only step.
+	if o := launchOptsFor(nil, req); o.iso != nil {
+		t.Fatalf("policy-only step must not wrap a non-jail runtime: %+v", o.iso)
+	}
+}

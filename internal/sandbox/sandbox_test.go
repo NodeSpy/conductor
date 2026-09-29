@@ -359,3 +359,12 @@ func TestWrapLocalEnforcedEgress(t *testing.T) {
 		t.Fatal("user-mode egress is advisory, never enforced")
 	}
 }
+
+func TestFromConfigEmptyModeIsNamespace(t *testing.T) {
+	if s := FromConfig(&config.IsolationConfig{FS: []string{"/data"}}); s == nil || s.Mode != "namespace" {
+		t.Fatalf("an isolation block with no mode must confine (namespace), got %+v", s)
+	}
+	if s := FromConfig(&config.IsolationConfig{Mode: "none"}); s != nil {
+		t.Fatalf("mode none is no wrapper: %+v", s)
+	}
+}

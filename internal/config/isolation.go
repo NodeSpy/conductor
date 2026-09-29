@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // isolationGOOS is runtime.GOOS, a var so tests can validate the Linux-only
@@ -143,8 +144,8 @@ func validateIsolationFor(where string, iso *IsolationConfig, remote, agent bool
 		if p == "" {
 			return fmt.Errorf("config: %s: isolation fs: empty path", where)
 		}
-		if !filepath.IsAbs(p) {
-			return fmt.Errorf("config: %s: isolation fs: %q must be an absolute path", where, p)
+		if !filepath.IsAbs(p) && !strings.HasPrefix(p, "~/") {
+			return fmt.Errorf("config: %s: isolation fs: %q must be an absolute path (or ~/…)", where, p)
 		}
 	}
 	return nil
@@ -168,6 +169,21 @@ func (c *Config) validateStepIsolation(where string, p Step) error {
 	rn := p.Runtime
 	if rn == "" {
 		rn = c.DefaultRuntimeName()
+	}
+	// A policy-only block (`writes:` / `intent:` / `host:`) shapes no
+	// sandbox. `writes:` binds conductor verbs on ANY runtime, paseo
+	// included; host rules and intent need a jailed (cli/acp) runtime.
+	if p.Isolation.PolicyOnly() {
+		if err := validateAgentJail(where, p.Isolation, true); err != nil {
+			return err
+		}
+		if len(p.Isolation.Host) > 0 || p.Isolation.Intent != nil {
+			cc, ok := c.MergedControllers()[rn]
+			if rn == "" || (ok && (!AgentJailEligible(cc) || p.Host != "")) {
+				return fmt.Errorf("config: %s: isolation `host:`/`intent:` apply to a jailed agent (a cli or acp runtime on this box) — this step's runtime has no workspace jail", where)
+			}
+		}
+		return nil
 	}
 	if rn == "" {
 		return fmt.Errorf("config: %s: isolation requires a runtime conductor launches itself (acp/cli/opencode/agent-deck) — the built-in paseo runtime's agents are the paseo daemon's children and cannot be wrapped", where)

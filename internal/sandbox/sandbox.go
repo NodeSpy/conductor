@@ -71,10 +71,21 @@ type Spec struct {
 
 // FromConfig flattens an IsolationConfig. nil in, nil out.
 func FromConfig(c *config.IsolationConfig) *Spec {
-	if c == nil {
+	if c == nil || c.Mode == "none" {
 		return nil
 	}
-	s := &Spec{Mode: c.Mode, User: c.User, Privileged: c.Privileged, AllowRoot: c.AllowRoot, FS: c.FS}
+	mode := c.Mode
+	if mode == "" {
+		// An isolation block with no mode is the namespace jail (#154) —
+		// never "no wrapper": that would run a block that validated as
+		// confined without any confinement.
+		mode = "namespace"
+	}
+	fs := make([]string, 0, len(c.FS))
+	for _, p := range c.FS {
+		fs = append(fs, config.ExpandHome(p))
+	}
+	s := &Spec{Mode: mode, User: c.User, Privileged: c.Privileged, AllowRoot: c.AllowRoot, FS: fs}
 	if c.Container != nil {
 		s.Image = c.Container.Image
 		s.Engine = c.Container.Engine

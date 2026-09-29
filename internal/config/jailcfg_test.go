@@ -154,3 +154,31 @@ func TestAgentJailEligible(t *testing.T) {
 		}
 	}
 }
+
+func TestPolicyOnlyStepIsolationOnPaseo(t *testing.T) {
+	c := &Config{Controllers: map[string]ControllerConfig{"p": {Type: "paseo", Default: true}, "cli": {Type: "cli", Tool: "claude-code"}}}
+	ro := Step{Type: "agent", Runtime: "p", Isolation: &IsolationConfig{Writes: &WritesPolicy{ReadOnly: true}}}
+	if err := c.validateStepIsolation("s", ro); err != nil {
+		t.Fatalf("writes: on a paseo step binds its verbs — accepted: %v", err)
+	}
+	host := Step{Type: "agent", Runtime: "p", Isolation: &IsolationConfig{Host: map[string]*HostCommand{"gh": {Deny: []string{"pr merge *"}}}}}
+	if err := c.validateStepIsolation("s", host); err == nil {
+		t.Fatal("host: rules on a paseo step have no jail to apply to")
+	}
+	host.Runtime = "cli"
+	if err := c.validateStepIsolation("s", host); err != nil {
+		t.Fatalf("host: on a cli step: %v", err)
+	}
+	if !(&IsolationConfig{Writes: &WritesPolicy{}}).PolicyOnly() || (&IsolationConfig{Writes: &WritesPolicy{}, FS: []string{"/x"}}).PolicyOnly() {
+		t.Fatal("PolicyOnly")
+	}
+}
+
+func TestIsolationFSAcceptsHomeRelative(t *testing.T) {
+	if err := validateIsolation("r", &IsolationConfig{FS: []string{"~/go", "~/.cache/go-build"}}, false); err != nil {
+		t.Fatalf("fs: [~/go] is the issue's own example: %v", err)
+	}
+	if err := validateIsolation("r", &IsolationConfig{FS: []string{"go"}}, false); err == nil {
+		t.Fatal("a relative fs: path is still refused")
+	}
+}
