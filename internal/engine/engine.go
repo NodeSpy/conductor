@@ -780,6 +780,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		_ = e.store.Delete(key)
 		e.markClosed(key)
 		e.log("%s closed; dropped state", tag(t))
+		e.stopFixers(ctx, t)
 		return
 	}
 

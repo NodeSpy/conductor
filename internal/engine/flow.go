@@ -169,7 +169,7 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 			return // shutdown while waiting — the sweep re-derives on restart
 		}
 		defer e.release()
-		if branchFixKind(t.Kind) && e.closedSince(t.Key(), queuedAt) {
+		if core.BranchFixKind(t.Kind) && e.closedSince(t.Key(), queuedAt) {
 			// The PR merged or closed while this fixer waited for a slot:
 			// there's no branch left to push to.
 			e.log("%s dropped — PR closed while waiting for an agent slot", tag(t))
@@ -201,22 +201,35 @@ func (e *Engine) markClosed(key string) {
 	e.closedAt[key] = now
 }
 
+// stopFixers kills every fixer still running on t's PR, across all runtimes —
+// the PR merged or closed, so its work is moot and any push it makes from here
+// lands on a dead branch (or, as happened, re-creates it and opens a follow-up
+// PR). Each stopped run ends as "stopped", not failed.
+func (e *Engine) stopFixers(ctx context.Context, t core.Trigger) {
+	if e.controllers == nil {
+		return
+	}
+	n := 0
+	for _, r := range e.controllers.Runners() {
+		if s, ok := r.(interface {
+			StopTarget(context.Context, string) int
+		}); ok {
+			n += s.StopTarget(ctx, t.Key())
+		}
+	}
+	if n > 0 {
+		e.log("%s closed; stopped %d running fixer(s)", tag(t), n)
+		e.store.Audit(map[string]any{"event": "fixers_stopped", "repo": t.Target.Repo,
+			"number": t.Target.Number, "count": n})
+	}
+}
+
 // closedSince reports whether key's PR closed at or after since.
 func (e *Engine) closedSince(key string, since time.Time) bool {
 	e.queuedMu.Lock()
 	defer e.queuedMu.Unlock()
 	at, ok := e.closedAt[key]
 	return ok && !at.Before(since)
-}
-
-// branchFixKind reports whether a kind's fixer pushes to the PR's head branch —
-// work that is moot once the PR is closed.
-func branchFixKind(k string) bool {
-	switch k {
-	case "new_comment", "changes_requested", "failing_checks", "merge_conflict", "pr_behind":
-		return true
-	}
-	return false
 }
 
 // queuedFlowKey identifies a flow run waiting for a slot: the flow + target.

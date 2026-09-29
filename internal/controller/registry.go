@@ -165,6 +165,29 @@ func (r *Registry) ByName(name string) (Controller, error) {
 	return nil, fmt.Errorf("unknown controller %q", name)
 }
 
+// Runners returns the dispatch runner of every runnable controller (each once),
+// for operations that span all of them — stopping a closed PR's fixers.
+func (r *Registry) Runners() []Runner {
+	var out []Runner
+	seen := map[Runner]bool{}
+	add := func(c Controller) {
+		if c == nil {
+			return
+		}
+		run, err := c.Runner()
+		if err != nil || run == nil || seen[run] {
+			return
+		}
+		seen[run] = true
+		out = append(out, run)
+	}
+	for _, c := range r.controllers {
+		add(c)
+	}
+	add(r.builtin)
+	return out
+}
+
 // RunnerFor resolves the controller for an agent and returns its dispatch runner,
 // or an error if the controller is unknown or its transport isn't runnable in
 // this build.
