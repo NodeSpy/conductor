@@ -56,6 +56,10 @@ func TestGHBindingDefaultsAndTheAllowList(t *testing.T) {
 	if d := ghDecide(ghRule(hostLayer("gh", &config.HostCommand{Allow: []string{"*", "pr comment *"}})), ctx, "pr", "comment", "43", "-b", "x"); !d.Allow {
 		t.Fatalf("named, a comment on another PR is allowed: %q", d.Reason)
 	}
+	// A thread on another repository's PR #42 is not the dispatch's own #42.
+	if d := ghDecide(ghRule(), ctx, "api", "graphql", "-f", `query=mutation { resolveReviewThread(input: {threadId: "PRRT_otherrepo"}) { thread { id } } }`); d.Allow {
+		t.Fatal("resolving a thread on another repository's same-numbered PR must be refused")
+	}
 	if d := ghDecide(ghRule(), ctx, "-R", "other/repo", "pr", "view", "1"); d.Allow || !strings.Contains(d.Reason, "other/repo") {
 		t.Fatalf("another repository is refused by default: %+v", d)
 	}

@@ -20,6 +20,8 @@ func testCtx() Context {
 				return "acme/app", 42, nil
 			case "PRRT_other":
 				return "acme/app", 43, nil
+			case "PRRT_otherrepo": // PR #42 of ANOTHER repository
+				return "other/repo", 42, nil
 			}
 			return "", 0, errors.New("unknown thread")
 		},
