@@ -33,8 +33,9 @@ func TestSpawnACPScrubEnv(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer cleanup()
-		// Wait for the child to dump its env and exit.
-		deadline := time.Now().Add(3 * time.Second)
+		// Wait for the child to dump its env and exit (returns as soon as it
+		// has; the bound only covers a heavily loaded machine starting a shell).
+		deadline := time.Now().Add(15 * time.Second)
 		for time.Now().Before(deadline) {
 			if b, err := os.ReadFile(out); err == nil && len(b) > 0 {
 				return string(b)

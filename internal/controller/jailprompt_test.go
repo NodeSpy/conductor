@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -21,8 +22,16 @@ func withTestJail(t *testing.T, up bool) {
 	t.Helper()
 	oldM, oldP := JailManager, jailProbe
 	t.Cleanup(func() { JailManager, jailProbe = oldM, oldP })
+	// A short root: the broker socket lives under it, and a unix socket path
+	// is capped at 104 bytes on macOS (t.TempDir() there is a long
+	// /var/folders/… path, and the bind fails).
+	root, err := os.MkdirTemp("/tmp", "cj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
 	JailManager = &jail.Manager{
-		Root:     t.TempDir(),
+		Root:     root,
 		Home:     t.TempDir(),
 		SelfExe:  func() (string, error) { return "/bin/true", nil },
 		LookPath: func(string) (string, error) { return "", errors.New("not installed") },

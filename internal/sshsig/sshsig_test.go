@@ -582,10 +582,17 @@ func roundTripWithSigner(t *testing.T, signer ssh.Signer) error {
 }
 
 // startTestAgent serves an in-process agent.Keyring holding key over a unix
-// socket in t.TempDir(), returning the socket path and a cleanup func.
+// socket in a short temp dir (a unix socket path is capped at 104 bytes on
+// macOS, and t.TempDir() there is a long /var/folders/… path), returning the
+// socket path and a cleanup func.
 func startTestAgent(t *testing.T, key ed25519.PrivateKey) (string, func()) {
 	t.Helper()
-	sockPath := filepath.Join(t.TempDir(), "agent.sock")
+	sockDir, err := os.MkdirTemp("/tmp", "ssa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	sockPath := filepath.Join(sockDir, "agent.sock")
 	l, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
