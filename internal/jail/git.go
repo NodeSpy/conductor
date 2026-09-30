@@ -91,7 +91,7 @@ func hostGitAlt(ctx context.Context, commonDir, alt string, stdin []byte, args .
 		"-c", "core.sshCommand=" + trustedSSHCommand()}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_NO_REPLACE_OBJECTS=1",
-		"GIT_CONFIG_NOSYSTEM=", "GIT_DIR=", "GIT_WORK_TREE=")
+		"GIT_DIR=", "GIT_WORK_TREE=")
 	cmd.Env = scrubGitEnv(cmd.Env)
 	if alt != "" {
 		cmd.Env = append(cmd.Env, "GIT_ALTERNATE_OBJECT_DIRECTORIES="+alt)
@@ -106,11 +106,19 @@ func hostGitAlt(ctx context.Context, commonDir, alt string, stdin []byte, args .
 }
 
 // scrubGitEnv drops inherited git-steering variables (a daemon started from
-// a git hook would carry GIT_DIR; GIT_CONFIG_* would inject config).
+// a git hook would carry GIT_DIR; GIT_CONFIG_COUNT/KEY/VALUE/PARAMETERS would
+// inject config). It keeps where the operator's OWN config lives —
+// GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_CONFIG_NOSYSTEM — so conductor's
+// git reads the same identity and signing settings their git does: dropping
+// GIT_CONFIG_GLOBAL made it fall back to ~/.gitconfig, a different key.
 func scrubGitEnv(env []string) []string {
 	out := env[:0]
 	for _, kv := range env {
 		k, _, _ := strings.Cut(kv, "=")
+		if k == "GIT_CONFIG_GLOBAL" || k == "GIT_CONFIG_SYSTEM" || k == "GIT_CONFIG_NOSYSTEM" {
+			out = append(out, kv)
+			continue
+		}
 		if k == "GIT_DIR" || k == "GIT_WORK_TREE" || k == "GIT_INDEX_FILE" || k == "GIT_COMMON_DIR" ||
 			k == "GIT_OBJECT_DIRECTORY" || k == "GIT_ALTERNATE_OBJECT_DIRECTORIES" ||
 			strings.HasPrefix(k, "GIT_CONFIG_") || k == "GIT_CONFIG" || k == "GIT_EXEC_PATH" || k == "GIT_SSH" || k == "GIT_SSH_COMMAND" {
