@@ -1,0 +1,197 @@
+# The agent-jail daemon (group X, #154). A cli claude-code runtime (fakecli)
+# with NO isolation: block gets the synthesized workspace jail; the scripted
+# agent's `[[sh …]]` lines are what it tries from inside.
+connectors:
+  github:
+    use: github
+    app:
+      app_id: 123456
+      private_key_path: /etc/conductor/github-app.pem
+    identity:
+      commit_author: self
+      read_token: app
+      write_token: e2e-user-write-token
+    me:
+      logins:
+        - conductor-user
+    webhook:
+      listen: 0.0.0.0:8789
+      secret: e2e-webhook-secret
+      verify_signature: false
+runtimes:
+  cli_claude:
+    use: cli
+    tool: claude-code
+    default: true
+  cli_claude_deny:
+    use: cli
+    tool: claude-code
+    isolation:
+      network: deny
+  # The operator allows exactly one content-executing terraform command.
+  cli_claude_tf:
+    use: cli
+    tool: claude-code
+    isolation:
+      host:
+        terraform:
+          allow: ["plan *"]
+  # The gh BINARY may open PRs here (its profile, named in host.gh.allow);
+  # nothing about conductor's own verbs changes.
+  cli_claude_ghpr:
+    use: cli
+    tool: claude-code
+    isolation:
+      host:
+        gh:
+          allow: ["*", "pr create *"]
+triggers:
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jail]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude
+        prompt: |
+          Jail probe {{.repo}}#{{.pr}}.
+          [[sh echo "uid=$(id -u)"]]
+          [[sh ls -A "$HOME" | tr '\n' ' '; echo]]
+          [[sh cat /home/conductor/.ssh/id_fake 2>&1 || echo NO-SSH]]
+          [[sh head -c 40 /home/conductor/data/audit.jsonl 2>&1 || echo NO-STATE]]
+          [[identity]]
+          [[sh echo "tokens=$(env | grep TOKEN= | grep -vc '^CONDUCTOR_SKILL_TOKEN=')"]]
+          [[sh gh pr view 1]]
+          [[sh gh pr create -t stray -b "from the agent"]]
+          [[sh gh auth logout]]
+          [[sh git commit --allow-empty -qm "jailed stray" && git push origin HEAD:refs/heads/stray-branch]]
+          [[sh git push --force origin HEAD:refs/heads/main]]
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jailclosed]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude
+        prompt: "Fix after the PR merged."
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jailcancel]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude
+        prompt: |
+          [[nofix]]
+          [[sh sleep 45]]
+          [[sh git commit --allow-empty -qm late && git push origin HEAD]]
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jailnet]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude_deny
+        prompt: |
+          [[nofix]]
+          [[sh curl -s -m 5 -o /dev/null -w "code=%{http_code}" http://sink-catcher:8080/_health; echo " rc=$?"]]
+          [[sh curl -s -m 5 --noproxy '*' -o /dev/null -w "code=%{http_code}" http://sink-catcher:8080/_health; echo " direct-rc=$?"]]
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jaildone]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude
+        prompt: |
+          [[nofix]]
+          [[sh echo "skill-endpoint=${CONDUCTOR_ENDPOINT:+set} skill-token=${CONDUCTOR_SKILL_TOKEN:+set}"]]
+          [[sh conductor discover step >/dev/null && echo DISCOVER-OK || echo DISCOVER-FAIL]]
+          [[sh conductor call step.done --reason "jailed fixer finished" && echo STEP-DONE-OK || echo STEP-DONE-FAIL]]
+  # Two dispatches on one repository at once (#154 B): PR 1 (the victim)
+  # waits while PR 2 (the attacker) goes after everything PR 1 depends on.
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jailpair]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude
+        prompt: |
+          [[nofix]]
+          {{if eq (printf "%v" .pr) "1"}}
+          [[sh sleep 25]]
+          [[sh echo b > b.txt && git add b.txt && git commit -qm "b work" && echo b-committed]]
+          [[sh git push -q origin HEAD; echo "b-push-exit=$?"]]
+          [[sh git show origin/main~1:OLD.txt; echo "b-lazy-exit=$?"]]
+          [[sh git fsck --connectivity-only --no-dangling >/dev/null 2>&1; echo "b-fsck-exit=$?"]]
+          {{else}}
+          [[sh echo a > a.txt && git add a.txt && git commit -qm "a work" && echo a-committed]]
+          [[sh ls /home/conductor/data/worktrees 2>&1 | tr '\n' ' '; echo " a-ls-exit=$?"]]
+          [[sh for d in /home/conductor/data/worktrees/*; do if [ "$d" != "$PWD" ] && git -C "$d" branch -D pr-1 >/dev/null 2>&1; then echo "A-TOU""CHED $d"; fi; done; echo a-scan-done]]
+          [[sh git push -q origin :refs/heads/pr-1; echo "a-delete-b-exit=$?"]]
+          [[sh git push -q origin HEAD:refs/heads/pr-1; echo "a-move-b-exit=$?"]]
+          [[sh echo junk > /home/conductor/data/checkouts/grpx__jailpair/.git/packed-refs; echo "a-packed-refs-exit=$?"]]
+          [[sh touch /home/conductor/data/checkouts/grpx__jailpair/.git/objects/planted; echo "a-objects-exit=$?"]]
+          [[sh git gc -q --prune=now; echo "a-gc-exit=$?"]]
+          {{end}}
+  # A content-executing host command (#154): terraform plan runs the
+  # agent-written external program — in the host-side jail.
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jailtf]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude_tf
+        prompt: |
+          [[nofix]]
+          [[sh terraform apply -auto-approve; echo "tf-apply-exit=$?"]]
+          [[sh printf '#!/bin/sh\ncat /home/conductor/.ssh/id_fake >/dev/null 2>&1 && echo LEAK""-ssh || echo ext-no-ssh\ncurl -s -m 5 -o /dev/null -w "ext-proxy=%%{http_connect}\\n" https://example.com\ncurl -s -m 5 --noproxy "*" -o /dev/null https://example.com; echo "ext-direct-rc=$?"\necho planted > ext-wrote.txt && echo ext-ws-write-ok\n' > external.sh && chmod +x external.sh && echo external-written]]
+          [[sh terraform plan -out=tf.plan; echo "tf-plan-exit=$?"]]
+          [[sh test -e ext-wrote.txt && echo WS-CHANGED || echo ws-untouched]]
+  # The incident (#154): an agent opening a PR, on BOTH write surfaces — the
+  # gh binary and conductor's own github verb. Each is refused by default by
+  # its own policy, and allowing one never allows the other.
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jailboth]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude
+        prompt: |
+          [[nofix]]
+          [[sh gh pr create -t "from the agent" -b "x"; echo "bin-exit=$?"]]
+          [[sh conductor call github.create_pr --repo grpx/jailboth --title "from the agent" --head pr-1 --base main; echo "verb-exit=$?"]]
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jailbin]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude_ghpr
+        prompt: |
+          [[nofix]]
+          [[sh gh pr create -t "from the agent" -b "x"; echo "bin-exit=$?"]]
+          [[sh conductor call github.create_pr --repo grpx/jailbin --title "from the agent" --head pr-1 --base main; echo "verb-exit=$?"]]
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jailverb]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude
+        skill:
+          verbs:
+            github.create_pr: {}
+        prompt: |
+          [[nofix]]
+          [[sh gh pr create -t "from the agent" -b "x"; echo "bin-exit=$?"]]
+          [[sh conductor call github.create_pr --repo grpx/jailverb --title "from the agent" --head pr-1 --base main; echo "verb-exit=$?"]]
+policy:
+  concurrency:
+    max_agents: 8
+store:
+  state_file: /home/conductor/data/state.json
+  audit_log: /home/conductor/data/audit.jsonl

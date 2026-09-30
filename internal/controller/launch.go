@@ -8,6 +8,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/hosts"
+	"github.com/NodeSpy/conductor/internal/jail"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
@@ -49,6 +50,26 @@ type launchOpts struct {
 	// outlive the dispatch on the host-wide loopback proxy (#36 iso-review
 	// round 2, item 4). nil = no revocation collected (tests / no-egress paths).
 	onEgressCred func(revoke func())
+
+	// jail, non-nil, runs this launch in the agent workspace jail (#154);
+	// jailDefault marks the synthesized default (degrades loudly instead of
+	// failing closed). jailState is shared by one session's turns.
+	jail        *jail.LaunchSpec
+	jailDefault bool
+	jailState   *jailState
+	// claudeHooks appends claude-code's tool-call hook settings.
+	claudeHooks bool
+	// res receives what prepareLaunch decided (nil = not collected).
+	res *launchResult
+}
+
+// launchResult reports how prepareLaunch built a launch.
+type launchResult struct {
+	// jailed: the launch runs in the workspace jail, so the caller must start
+	// it from JailBaseEnv, never the daemon's full environment.
+	jailed bool
+	tool   string
+	stream bool // capture a stream-json transcript
 }
 
 // withEgressRevoke installs an onEgressCred sink on opt and returns it
@@ -85,7 +106,9 @@ func withEgressRevoke(opt launchOpts) (launchOpts, func()) {
 // isolation: wins over the runtime's (most-specific wins, like `host:`).
 func launchOptsFor(runtimeIso *config.IsolationConfig, req dispatch.Request) launchOpts {
 	iso := runtimeIso
-	if req.Step.Isolation != nil {
+	// A policy-only step block (writes/intent/host rules) narrows policy; it
+	// never replaces the runtime's sandbox settings.
+	if req.Step.Isolation != nil && !req.Step.Isolation.PolicyOnly() {
 		iso = req.Step.Isolation
 	}
 	return launchOpts{iso: iso, agentAuthored: req.AgentAuthored}
@@ -123,6 +146,24 @@ func resumeOpts(runtimeIso *config.IsolationConfig, agentAuthored bool) launchOp
 func prepareLaunch(host, dir string, env, argv []string, opt launchOpts) (wrappedArgv []string, localDir string, localEnv []string, remote bool, err error) {
 	spec := sandbox.FromConfig(opt.iso)
 
+	if host == "" && opt.jail != nil && JailManager != nil {
+		w, wenv, cleanup, handled, jerr := prepareJail(dir, env, argv, opt)
+		if jerr != nil {
+			return nil, "", nil, false, jerr
+		}
+		if handled {
+			if opt.onEgressCred != nil {
+				opt.onEgressCred(cleanup)
+			}
+			if opt.res != nil {
+				opt.res.jailed, opt.res.tool = true, opt.jail.Tool
+			}
+			return w, dir, wenv, false, nil
+		}
+		// Degraded: the synthesized default could not be built; launch as
+		// before (prepareJail warned and audited).
+		spec = nil
+	}
 	if host == "" {
 		wrapSpec := spec
 		if _, useProxy := spec.ProxyPolicy(); !useProxy && opt.agentAuthored && (spec == nil || !spec.Deny) {

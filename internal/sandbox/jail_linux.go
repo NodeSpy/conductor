@@ -37,8 +37,10 @@ func buildJail(binds []BindMount) error {
 	}
 
 	// Base system: read-only interpreter/shell essentials. Missing entries are
-	// skipped so the jail works across distro layouts.
-	for _, d := range []string{"/usr", "/etc"} {
+	// skipped so the jail works across distro layouts. /opt carries vendor
+	// installs a /usr/bin wrapper execs (claude-code's /usr/bin/claude →
+	// /opt/claude-code/bin/claude).
+	for _, d := range []string{"/usr", "/etc", "/opt"} {
 		if err := bindInto(root, BindMount{Path: d, RO: true}, true); err != nil {
 			return err
 		}
@@ -65,10 +67,26 @@ func buildJail(binds []BindMount) error {
 	}
 
 	// The caller's allow-list: workdir, the code/ctx/egress temp dirs, and any
-	// declared fs: paths. These MUST exist (fail closed, skipMissing=false).
-	for _, b := range binds {
-		if err := bindInto(root, b, false); err != nil {
-			return err
+	// declared fs: paths. These MUST exist (fail closed, skipMissing=false)
+	// unless marked Optional. Applied parent-first, so a tmpfs $HOME is in
+	// place before the tool-state dirs inside it are bound, and a read-only
+	// .git/config lands on top of the read-write common dir.
+	for _, b := range orderBinds(binds) {
+		var err error
+		switch {
+		case b.Tmpfs:
+			err = mountTmpfs(root+b.Path, "mode=0700")
+		case b.Link != "":
+			if err = os.MkdirAll(filepath.Dir(root+b.Path), 0o755); err == nil {
+				if err = os.Symlink(b.Link, root+b.Path); os.IsExist(err) {
+					err = nil
+				}
+			}
+		default:
+			err = bindInto(root, b, b.Optional)
+		}
+		if err != nil {
+			return fmt.Errorf("jail %s: %w", b.Path, err)
 		}
 	}
 
@@ -79,14 +97,20 @@ func buildJail(binds []BindMount) error {
 // non-existent source (base-system entries that a given distro lacks); for the
 // caller's declared allow-list it is false, so a missing path fails the launch.
 func bindInto(root string, b BindMount, skipMissing bool) error {
-	fi, err := os.Stat(b.Path) // Stat: follow symlinks to learn dir-vs-file.
+	src := b.source()
+	fi, err := os.Stat(src) // Stat: follow symlinks to learn dir-vs-file.
 	if err != nil {
 		if os.IsNotExist(err) && skipMissing {
 			return nil
 		}
-		return fmt.Errorf("jail bind %s: %w", b.Path, err)
+		return fmt.Errorf("jail bind %s: %w", src, err)
 	}
 	target := root + b.Path
+	if lfi, lerr := os.Lstat(target); lerr == nil && lfi.Mode()&os.ModeSymlink != 0 {
+		// Never mount through a symlink already in the jail tree (a merged-usr
+		// /bin link): the bind would land wherever it points.
+		return fmt.Errorf("jail bind %s: target is a symlink", b.Path)
+	}
 	if fi.IsDir() {
 		if err := os.MkdirAll(target, 0o755); err != nil {
 			return fmt.Errorf("jail mkdir %s: %w", target, err)
@@ -99,15 +123,39 @@ func bindInto(root string, b BindMount, skipMissing bool) error {
 			return fmt.Errorf("jail touch %s: %w", target, err)
 		}
 	}
-	if err := unix.Mount(b.Path, target, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
-		return fmt.Errorf("jail bind %s: %w", b.Path, err)
+	if err := unix.Mount(src, target, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		return fmt.Errorf("jail bind %s: %w", src, err)
 	}
 	if b.RO {
-		if err := unix.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_REC, ""); err != nil {
+		if err := unix.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_REC|lockedFlags(src), ""); err != nil {
 			return fmt.Errorf("jail bind-ro %s: %w", b.Path, err)
 		}
 	}
 	return nil
+}
+
+// lockedFlags are the source mount's nosuid/nodev/noexec/relatime flags. In
+// a user namespace they are LOCKED on an inherited mount: a read-only
+// remount that does not repeat them is refused with EPERM (a container's
+// tmpfs is typically nosuid,nodev,noexec).
+func lockedFlags(p string) uintptr {
+	var st unix.Statfs_t
+	if unix.Statfs(p, &st) != nil {
+		return 0
+	}
+	var f uintptr
+	for _, m := range []struct {
+		st int64
+		ms uintptr
+	}{
+		{unix.ST_NOSUID, unix.MS_NOSUID}, {unix.ST_NODEV, unix.MS_NODEV}, {unix.ST_NOEXEC, unix.MS_NOEXEC},
+		{unix.ST_NOATIME, unix.MS_NOATIME}, {unix.ST_NODIRATIME, unix.MS_NODIRATIME}, {unix.ST_RELATIME, unix.MS_RELATIME},
+	} {
+		if int64(st.Flags)&m.st != 0 {
+			f |= m.ms
+		}
+	}
+	return f
 }
 
 // baseLink recreates a merged-usr symlink (or binds a real split-usr dir
@@ -216,3 +264,9 @@ func touchFile(p string) error {
 	}
 	return f.Close()
 }
+
+// BuildJail is buildJail for a caller that has its own namespaces set up —
+// conductor's host-side jail for a content-executing host command
+// (internal/jail): root of a fresh user + mount + pid namespace, it builds
+// the allow-list root from binds and pivots into it.
+func BuildJail(binds []BindMount) error { return buildJail(binds) }

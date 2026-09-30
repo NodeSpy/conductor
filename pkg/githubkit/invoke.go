@@ -268,6 +268,11 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 				Additions int    `json:"additions"`
 				Deletions int    `json:"deletions"`
 				Changes   int    `json:"changes"`
+				// Patch is the file's unified diff hunk. GitHub omits this field
+				// entirely for a binary file or one past its diff size cap, so the
+				// zero value (empty string) is the correct "no patch available"
+				// answer, not an error.
+				Patch string `json:"patch"`
 			}
 			if err := json.Unmarshal(b, &raw); err != nil {
 				return 0, err
@@ -276,6 +281,7 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 				files = append(files, map[string]any{
 					"path": f.Filename, "status": f.Status,
 					"additions": f.Additions, "deletions": f.Deletions, "changes": f.Changes,
+					"patch": f.Patch,
 				})
 			}
 			return len(raw), nil

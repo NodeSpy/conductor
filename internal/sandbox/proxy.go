@@ -38,6 +38,10 @@ type Proxy struct {
 	Allow []string // EgressAllowed patterns; empty = deny everything
 	// OnDeny is called (if non-nil) with the denied host:port — the audit hook.
 	OnDeny func(hostport string)
+	// OnVerdict, if non-nil, is called for every decided target with the
+	// credential's label (the dispatch it was minted for; "" when minted
+	// unlabeled) — the per-dispatch record `network: audit` is built from.
+	OnVerdict func(label string, allowed bool, hostport string)
 
 	ln   net.Listener
 	srv  *http.Server
@@ -50,7 +54,7 @@ type Proxy struct {
 	resolveIP func(ctx context.Context, host string) ([]net.IPAddr, error)
 
 	credMu sync.Mutex
-	creds  map[string]bool // valid per-dispatch credentials (the basic-auth password)
+	creds  map[string]string // valid per-dispatch credentials (the basic-auth password) → label
 }
 
 // errEgressBlockedIP is returned by dialAllowed when every resolved address is
@@ -145,7 +149,10 @@ func (p *Proxy) dialAllowed(ctx context.Context, hostport string, timeout time.D
 const proxyUser = "conductor"
 
 // MintCred registers and returns a fresh per-dispatch client credential.
-func (p *Proxy) MintCred() (string, error) {
+func (p *Proxy) MintCred() (string, error) { return p.MintLabeled("") }
+
+// MintLabeled is MintCred with a label reported to OnVerdict.
+func (p *Proxy) MintLabeled(label string) (string, error) {
 	buf := make([]byte, 24)
 	if _, err := rand.Read(buf); err != nil {
 		return "", fmt.Errorf("sandbox: mint proxy credential: %w", err)
@@ -153,9 +160,9 @@ func (p *Proxy) MintCred() (string, error) {
 	cred := hex.EncodeToString(buf)
 	p.credMu.Lock()
 	if p.creds == nil {
-		p.creds = map[string]bool{}
+		p.creds = map[string]string{}
 	}
-	p.creds[cred] = true
+	p.creds[cred] = label
 	p.credMu.Unlock()
 	return cred, nil
 }
@@ -176,38 +183,46 @@ func (p *Proxy) Revoke(cred string) {
 // authorized checks the request's Proxy-Authorization against the registered
 // per-dispatch credentials. No registered credentials ⇒ nothing authorizes
 // (fail closed).
-func (p *Proxy) authorized(r *http.Request) bool {
+func (p *Proxy) authorized(r *http.Request) (string, bool) {
 	h := r.Header.Get("Proxy-Authorization")
 	scheme, b64, ok := strings.Cut(h, " ")
 	if !ok || !strings.EqualFold(scheme, "Basic") {
-		return false
+		return "", false
 	}
 	dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
 	if err != nil {
-		return false
+		return "", false
 	}
 	user, pass, ok := strings.Cut(string(dec), ":")
 	if !ok || user != proxyUser {
-		return false
+		return "", false
 	}
 	p.credMu.Lock()
 	defer p.credMu.Unlock()
-	for c := range p.creds {
+	for c, label := range p.creds {
 		if subtle.ConstantTimeCompare([]byte(c), []byte(pass)) == 1 {
-			return true
+			return label, true
 		}
 	}
-	return false
+	return "", false
 }
 
-// requireAuth answers 407 when the request carries no valid credential.
-func (p *Proxy) requireAuth(w http.ResponseWriter, r *http.Request) bool {
-	if p.authorized(r) {
-		return true
+// requireAuth answers 407 when the request carries no valid credential; it
+// returns the credential's label.
+func (p *Proxy) requireAuth(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if label, ok := p.authorized(r); ok {
+		return label, true
 	}
 	w.Header().Set("Proxy-Authenticate", `Basic realm="conductor egress"`)
 	http.Error(w, "sandbox egress proxy: proxy authentication required", http.StatusProxyAuthRequired)
-	return false
+	return "", false
+}
+
+// verdict reports one decision to OnVerdict.
+func (p *Proxy) verdict(label string, allowed bool, target string) {
+	if p.OnVerdict != nil {
+		p.OnVerdict(label, allowed, target)
+	}
 }
 
 // Start listens on a fresh loopback port and serves until Close. It returns
@@ -277,11 +292,12 @@ func (p *Proxy) Close() {
 // ServeHTTP filters one proxied request: CONNECT opens a raw tunnel to an
 // allowed target; an absolute-URI request (plain-HTTP proxying) is forwarded.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !p.requireAuth(w, r) {
+	label, ok := p.requireAuth(w, r)
+	if !ok {
 		return
 	}
 	if r.Method == http.MethodConnect {
-		p.connect(w, r)
+		p.connect(w, r, label)
 		return
 	}
 	// A plain-HTTP proxy request carries an absolute URI; anything else is a
@@ -295,7 +311,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		target += ":80"
 	}
 	if !EgressAllowed(p.Allow, target) {
-		p.deny(w, target)
+		p.deny(w, target, label)
 		return
 	}
 	out := r.Clone(r.Context())
@@ -304,12 +320,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	resp, err := p.tr.RoundTrip(out)
 	if err != nil {
 		if errors.Is(err, errEgressBlockedIP) {
-			p.deny(w, target) // resolved into a special range → 403 + audit
+			p.deny(w, target, label) // resolved into a special range → 403 + audit
 			return
 		}
 		http.Error(w, "sandbox egress proxy: "+err.Error(), http.StatusBadGateway)
 		return
 	}
+	p.verdict(label, true, target)
 	defer resp.Body.Close()
 	for k, vs := range resp.Header {
 		for _, v := range vs {
@@ -321,19 +338,19 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // connect handles a CONNECT tunnel (the HTTPS path).
-func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) connect(w http.ResponseWriter, r *http.Request, label string) {
 	target := r.Host
 	if !strings.Contains(target, ":") {
 		target += ":443"
 	}
 	if !EgressAllowed(p.Allow, target) {
-		p.deny(w, target)
+		p.deny(w, target, label)
 		return
 	}
 	upstream, err := p.dialAllowed(r.Context(), target, 30*time.Second)
 	if err != nil {
 		if errors.Is(err, errEgressBlockedIP) {
-			p.deny(w, target) // resolved into a special range → 403 + audit
+			p.deny(w, target, label) // resolved into a special range → 403 + audit
 			return
 		}
 		http.Error(w, "sandbox egress proxy: "+err.Error(), http.StatusBadGateway)
@@ -350,6 +367,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		upstream.Close()
 		return
 	}
+	p.verdict(label, true, target)
 	_, _ = buf.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n")
 	_ = buf.Flush()
 	go func() {
@@ -364,10 +382,11 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-func (p *Proxy) deny(w http.ResponseWriter, target string) {
+func (p *Proxy) deny(w http.ResponseWriter, target, label string) {
 	if p.OnDeny != nil {
 		p.OnDeny(target)
 	}
+	p.verdict(label, false, target)
 	http.Error(w, fmt.Sprintf("sandbox egress proxy: %s is not in this profile's egress allowlist", target), http.StatusForbidden)
 }
 
@@ -396,6 +415,10 @@ type ProxyManager struct {
 	// OnDeny is the audit hook, called with the allowlist key and the denied
 	// host:port.
 	OnDeny func(key, hostport string)
+	// OnVerdict receives every decision made for a LABELED credential (see
+	// EndpointLabeled) — the per-dispatch hook the agent jail's audit mode
+	// and `conductor watch` use. Set before the first endpoint is minted.
+	OnVerdict func(label string, allowed bool, hostport string)
 
 	mu      sync.Mutex
 	byKey   map[string]*Proxy
@@ -416,11 +439,16 @@ func NewProxyManager(onDeny func(key, hostport string)) *ProxyManager {
 // credential when the dispatch/session ends so it cannot outlive its launch
 // (#36 iso-review round 2, item 4).
 func (m *ProxyManager) Endpoint(allow []string) (addr, cred string, revoke func(), err error) {
+	return m.EndpointLabeled(allow, "")
+}
+
+// EndpointLabeled is Endpoint with the credential labeled for OnVerdict.
+func (m *ProxyManager) EndpointLabeled(allow []string, label string) (addr, cred string, revoke func(), err error) {
 	p, addr, err := m.proxyFor(allow)
 	if err != nil {
 		return "", "", nil, err
 	}
-	cred, err = p.MintCred()
+	cred, err = p.MintLabeled(label)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -433,6 +461,12 @@ func (m *ProxyManager) Endpoint(allow []string) (addr, cred string, revoke func(
 // pipes into (#36 iso-review C1). The returned revoke func retires the
 // credential at dispatch/session end (#36 iso-review round 2, item 4).
 func (m *ProxyManager) UnixEndpoint(allow []string) (sock, cred string, revoke func(), err error) {
+	return m.UnixEndpointLabeled(allow, "")
+}
+
+// UnixEndpointLabeled is UnixEndpoint with the credential labeled for
+// OnVerdict.
+func (m *ProxyManager) UnixEndpointLabeled(allow []string, label string) (sock, cred string, revoke func(), err error) {
 	p, _, err := m.proxyFor(allow)
 	if err != nil {
 		return "", "", nil, err
@@ -459,7 +493,7 @@ func (m *ProxyManager) UnixEndpoint(allow []string) (sock, cred string, revoke f
 		m.socks[key] = sock
 	}
 	m.mu.Unlock()
-	cred, err = p.MintCred()
+	cred, err = p.MintLabeled(label)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -477,6 +511,13 @@ func (m *ProxyManager) proxyFor(allow []string) (*Proxy, string, error) {
 	p := &Proxy{Allow: allow}
 	if m.OnDeny != nil {
 		p.OnDeny = func(hostport string) { m.OnDeny(key, hostport) }
+	}
+	if m.OnVerdict != nil {
+		p.OnVerdict = func(label string, allowed bool, hostport string) {
+			if label != "" {
+				m.OnVerdict(label, allowed, hostport)
+			}
+		}
 	}
 	addr, err := p.Start()
 	if err != nil {

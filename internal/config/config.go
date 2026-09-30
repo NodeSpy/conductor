@@ -149,6 +149,11 @@ type Config struct {
 	// reference. Each check is one ordinary step (command / code / verb /
 	// critic agent) evaluated to pass/fail against the agent's worktree.
 	Checks map[string]Step `yaml:"checks"`
+	// Isolation is the fleet-wide default for agent launches (#154): the base
+	// every eligible runtime's own isolation: block (and then a step's)
+	// refines. Typically only `host:` rules and `network:` live here. Unset →
+	// the synthesized workspace jail.
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
 	// Pricing overrides the built-in model→$ table cost estimation uses
 	// (#36 §14). Model prices drift; the built-ins are coarse defaults and
 	// every estimated figure is marked approximate.
@@ -1464,6 +1469,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validatePluginRefs(); err != nil {
+		return err
+	}
+	if err := c.validateGlobalIsolation(); err != nil {
 		return err
 	}
 	if err := c.validateModels(); err != nil {

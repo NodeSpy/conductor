@@ -386,8 +386,11 @@ type HostConfig struct {
 // runtime's agents are children of the paseo daemon, which conductor cannot
 // wrap (validate rejects the combination).
 type IsolationConfig struct {
-	// Mode selects the wrapper: user | namespace | container.
-	Mode string `yaml:"mode"`
+	// Mode selects the wrapper: user | namespace | container | none. Empty is
+	// namespace — on an agent runtime that is the workspace jail (#154), so a
+	// block that only adds `fs:` or sets `network:` keeps the jail. `none` is
+	// the explicit opt-out: the launch runs unconfined, exactly as before.
+	Mode string `yaml:"mode,omitempty"`
 	// User is the low-privilege account for mode: user (sudo -n -u <user>).
 	User string `yaml:"user,omitempty"`
 	// Container configures mode: container.
@@ -427,6 +430,27 @@ type IsolationConfig struct {
 	// for a code step, its own code/ctx temp dirs). A code step reading an
 	// external directory (e.g. a media library) declares it here.
 	FS []string `yaml:"fs,omitempty"`
+	// Host configures the host commands of an agent jail (#154 §2): which
+	// binaries run on the operator's machine through conductor rather than in
+	// the jail, and the optional per-binary allow/deny/env rules. Keyed by
+	// binary name; `false` keeps a binary out of reach entirely. A step's
+	// block may only narrow the runtime's (see HostCommand).
+	Host map[string]*HostCommand `yaml:"host,omitempty"`
+	// Intent are optional tool-call rules checked before each of the agent's
+	// own tool calls (#154 §11) — guidance and visibility, not a wall.
+	Intent *IntentRules `yaml:"intent,omitempty"`
+	// MacOSKeychain (macOS only) lets a jailed agent reach the Keychain's
+	// Security services — what a Keychain-held claude-code login needs. It is
+	// an explicit loosening: with it, the agent can also read any other item
+	// whose access list trusts /usr/bin/security (gh's token, for one —
+	// verified on macOS 26). Prefer an API key or a `claude setup-token`
+	// (CLAUDE_CODE_OAUTH_TOKEN), which need no Keychain.
+	MacOSKeychain bool `yaml:"macos_keychain,omitempty"`
+
+	// Defaulted marks a jail conductor synthesized for a launch with no
+	// isolation: block. It degrades loudly where the OS cannot build it; an
+	// explicit block fails closed instead. Never decoded.
+	Defaulted bool `yaml:"-"`
 }
 
 // ContainerIsolation configures isolation mode: container.
@@ -445,14 +469,59 @@ type IsolationLimits struct {
 	Pids   int    `yaml:"pids,omitempty"`   // TasksMax / --pids-limit
 }
 
-// IsolationNetwork is the egress policy for one isolation scope.
+// IsolationNetwork is the egress policy for one isolation scope. It decodes
+// from a scalar mode (`open`, `audit`, `deny`) or a mapping (`{egress: […]}`,
+// and the older `{deny: true}` / `{deny: true, egress: […]}` forms).
 type IsolationNetwork struct {
+	// Mode is the scalar form: open | audit | deny ("" for the mapping forms).
+	//   open  — host network, today's behavior.
+	//   audit — every connection through conductor's proxy; all allowed, each
+	//           destination recorded. Enforced: the jail has no other route.
+	//   deny  — nothing but the agent's own model endpoint. Enforced.
+	Mode string `yaml:"-"`
 	// Egress allowlists "host", "host:port", or "*.glob:port" targets through
-	// conductor's egress proxy. Empty (with the block present) denies all.
+	// conductor's egress proxy. Empty (with the block present) denies all. In
+	// an agent jail the list is ENFORCED (the jail has no network of its own)
+	// and the runtime's model endpoint is always added.
 	Egress []string `yaml:"egress,omitempty"`
 	// Deny cuts the network structurally (namespace --net / --network=none).
-	// Mutually exclusive with Egress.
+	// With Egress it is the enforced allowlist; alone, a full cut.
 	Deny bool `yaml:"deny,omitempty"`
+}
+
+// Network modes (IsolationNetwork.Mode).
+const (
+	NetOpen  = "open"
+	NetAudit = "audit"
+	NetDeny  = "deny"
+)
+
+// UnmarshalYAML accepts the scalar modes as well as the mapping forms.
+func (n *IsolationNetwork) UnmarshalYAML(v *yaml.Node) error {
+	if v.Kind == yaml.ScalarNode {
+		switch v.Value {
+		case NetOpen, NetAudit, NetDeny:
+			*n = IsolationNetwork{Mode: v.Value}
+			return nil
+		}
+		return fmt.Errorf("line %d: isolation network must be open | audit | deny | {egress: [...]}, got %q", v.Line, v.Value)
+	}
+	type plain IsolationNetwork
+	var p plain
+	if err := strictNodeDecode(v, &p); err != nil {
+		return err
+	}
+	*n = IsolationNetwork(p)
+	return nil
+}
+
+// MarshalYAML renders the scalar modes back as scalars.
+func (n IsolationNetwork) MarshalYAML() (any, error) {
+	if n.Mode != "" {
+		return n.Mode, nil
+	}
+	type plain IsolationNetwork
+	return plain(n), nil
 }
 
 // WorkflowDef is one entry in the `workflows:` map — a named, parameterized
@@ -1736,7 +1805,7 @@ func (c *Config) validateConnectors() error {
 			if rt.BuiltinType() == "paseo" {
 				return fmt.Errorf("config: runtime %q: isolation cannot apply to a paseo runtime (its agents are the paseo daemon's children) — use an acp/cli/opencode/agent-deck runtime, or paseo's own sandboxing", name)
 			}
-			if err := validateIsolation("runtime "+name, rt.Isolation, rt.Host != ""); err != nil {
+			if err := validateIsolationFor("runtime "+name, rt.Isolation, rt.Host != "", AgentJailEligible(rt.Controller())); err != nil {
 				return err
 			}
 			if err := validateIsolationControlChannel("runtime "+name, rt.Isolation, rt.Controller()); err != nil {

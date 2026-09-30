@@ -2,6 +2,15 @@
 
 Status: design / phase 1. Implementation contract.
 
+> **Superseded in part (#154).** A dispatch's checkout is no longer a `git
+> worktree` of the base clone: it is the dispatch's **own clone**, borrowing
+> the base clone's objects through `objects/info/alternates` (nothing copied),
+> with its own refs, config, hooks and new objects, checked out through the
+> base (`read-tree -u`). The base keeps a `refs/conductor/live/<id>` ref per
+> live clone. Removal is `rm -rf` plus dropping that ref; the reaper also drops
+> the refs of clones a killed daemon left. The base-clone, strategy and reaper
+> parts below still hold. See docs/wiki/Isolation.md#git-one-clone-per-dispatch.
+
 ## Why
 
 A `workspace: worktree` dispatch provisions its checkout via **paseo**

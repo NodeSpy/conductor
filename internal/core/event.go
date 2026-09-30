@@ -235,9 +235,16 @@ func itoa(n int) string {
 // its PR's own head branch — work that stops mattering once the PR closes, and
 // whose pushes belong on that one branch.
 func BranchFixKind(kind string) bool {
-	switch kind {
-	case "new_comment", "changes_requested", "failing_checks", "merge_conflict", "pr_behind":
-		return true
+	for _, k := range branchFixKinds {
+		if k == kind {
+			return true
+		}
 	}
 	return false
 }
+
+var branchFixKinds = []string{"new_comment", "changes_requested", "failing_checks", "merge_conflict", "pr_behind"}
+
+// BranchFixKinds lists the kinds BranchFixKind accepts (for a runtime that can
+// only find its sessions by label, one kind at a time).
+func BranchFixKinds() []string { return append([]string(nil), branchFixKinds...) }

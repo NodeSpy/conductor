@@ -218,9 +218,14 @@ func (e *Engine) stopFixers(ctx context.Context, t core.Trigger) {
 		}
 	}
 	if n > 0 {
-		e.log("%s closed; stopped %d running fixer(s)", tag(t), n)
+		reason := "target closed"
+		if merged, _ := t.Context["merged"].(bool); merged {
+			reason = "target merged"
+		}
+		e.log("%s closed; stopped %d running fixer(s) — %s", tag(t), n, reason)
 		e.store.Audit(map[string]any{"event": "fixers_stopped", "repo": t.Target.Repo,
-			"number": t.Target.Number, "count": n})
+			"number": t.Target.Number, "count": n, "reason": reason})
+		e.notif.Emit(ctx, notify.EventCancelled, t, fmt.Sprintf("stopped %d running fixer(s): %s", n, reason))
 	}
 }
 

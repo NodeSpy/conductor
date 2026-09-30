@@ -351,7 +351,11 @@ executes your agents, which is exactly the privilege you already granted
 conductor. It *is* env-scrubbed (`sandbox.MinimalEnv`, so it does not inherit
 `env:`-resolved secrets) and re-verified on every spawn, but it relies on ACP's
 own supervision rather than `internal/plugin`'s crash-loop cap and size cap.
-**Only run runtime plugins you fully trust.**
+**Only run runtime plugins you fully trust.** An external runtime plugin is
+also outside the default [agent workspace jail](Isolation#the-agent-workspace-jail)
+the built-in cli/acp runtimes get (it is its own binary, under the daemon's
+state dir, with its own lifecycle): give it an explicit `isolation:` block to
+jail it.
 
 ## The protocol
 

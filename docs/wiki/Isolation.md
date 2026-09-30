@@ -6,6 +6,233 @@ The `isolation:` block closes that: per-dispatch isolation for the runtimes
 conductor launches itself, plus a conductor-enforced network egress
 allowlist. (#36 §15.)
 
+## The agent workspace jail {#the-agent-workspace-jail}
+
+**Every agent conductor launches itself — a `cli` or `acp` runtime on this
+box — runs jailed to its workspace by default.** No configuration: a launch
+with no `isolation:` block gets a synthesized jail (#154). The agent sees:
+
+| | |
+|---|---|
+| read-write | the workspace — the dispatch's own git clone, `.git` included (see [Git: one clone per dispatch](#git-one-clone-per-dispatch)); the tool's own state (`~/.claude`, `~/.claude.json`, `~/.codex`, …) |
+| read-only | `/usr`, `/etc`, `/opt`, `~/.gitconfig`, the agent CLI's own install (e.g. `~/.local/share/claude`), the conductor binary, the base clone's object store (what the dispatch's clone borrows — nothing else of the base), the dispatch's broker socket and conductor's tool socket |
+| scratch | a private `$HOME` (tmpfs on Linux, a per-dispatch dir on macOS) and a per-dispatch `/tmp` |
+| absent | everything else: `~/.ssh`, cloud and tool configs, the daemon's config and state, other repositories |
+
+- **No credentials in the agent's environment.** `GH_TOKEN`, `GITHUB_TOKEN`,
+  the `PC_GH_*` tokens, `SSH_AUTH_SOCK`, cloud credentials, and anything named
+  like a token/secret/password are removed; the agent's own model credential
+  (`ANTHROPIC_API_KEY` for claude-code, `OPENAI_API_KEY` for codex, …) is
+  kept. The daemon's own environment is never inherited wholesale. The
+  dispatch's own conductor skill session (`CONDUCTOR_ENDPOINT`,
+  `CONDUCTOR_SKILL_TOKEN`) is kept, so `conductor call step.done` and the
+  step's granted verbs work from inside the jail: it is not a credential —
+  the daemon authorizes each call by the caller's uid and the dispatch the
+  token was minted for, and it grants only that dispatch's own skill policy.
+- **The agent is told the truth about its identity.** A jailed launch's prompt
+  says commits and pushes are made as you through conductor and that `gh` and
+  the other host commands run on the host through conductor — never the
+  unjailed text about `GH_TOKEN` and pushing over SSH, which would send it
+  looking for credentials that are not there.
+- **Credentialed work goes through conductor**: [host commands](Host-Commands)
+  (`gh`, `aws`, `kubectl`, …) run on your machine with your setup after
+  guardrails and your rules; git's network and signing side is brokered
+  (pushes only to the dispatch's own branch; commits signed with your key,
+  which never enters the jail). Every crossing is an audit row and a
+  `conductor watch` event.
+- The agent runs as your real uid (claude-code refuses
+  `--dangerously-skip-permissions` as root; the jail is built as
+  root-in-userns and dropped before exec).
+
+Knobs — every loosening is explicit:
+
+```yaml
+runtimes:
+  claude:
+    use: cli
+    tool: claude-code
+    isolation:
+      fs: [~/go, ~/.cache/go-build]     # add paths (read-write) to the jail
+      network: audit                    # see "Network" below
+      host: { docker: false }           # see Host-Commands
+      # mode: none                      # opt out: today's unconfined launch
+      # mode: namespace, privileged: true   # the older full-view namespace
+```
+
+A top-level `isolation:` block is the fleet-wide base (runtime blocks, then a
+step's, refine it). **The synthesized default degrades loudly** where the OS
+cannot build it (conductor running as root, no unprivileged user namespaces,
+no `unshare`): a warning, a `jail degraded` audit row and watch event, and the
+launch runs as before. **An explicit `isolation:` block fails closed.**
+`conductor validate` and boot report which runtimes are jailed, the host set,
+and whether this box can build the jail.
+
+Out of scope, by construction (validate notes them): **paseo** and
+**agent-deck** runtimes (another daemon owns the agent process), **opencode**
+(an HTTP control channel), external **runtime plugins** (explicit `isolation:`
+only), and **`host:`** runtimes (the remote box's isolation applies).
+
+### Network {#network}
+
+```yaml
+isolation:
+  network: open            # default: the host network (today's behavior)
+  # network: audit         # everything through conductor's proxy — allowed, and every destination recorded
+  # network: { egress: [proxy.golang.org, registry.npmjs.org] }   # ENFORCED allowlist
+  # network: deny          # nothing but the agent's own model endpoint
+```
+
+In `audit`, allowlist, and `deny` modes the jail has **no route out** except
+conductor's filtering proxy — a tool that ignores `HTTPS_PROXY` reaches
+nothing rather than bypassing the list. Linux: an empty network namespace, the
+in-jail forwarder, the proxy over a unix socket, no DNS inside. macOS: Seatbelt
+denies all outbound traffic except to the proxy's loopback port, and denies the
+resolver's Mach service. **The agent's own model endpoint is always allowed**:
+the tool's API hosts, plus an `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` override
+(env or `~/.claude/settings.json`) — a loopback router (`http://127.0.0.1:3456`)
+is relayed into the jail, a private-network host is allowlisted by its
+addresses. `audit` is how an allowlist gets built: run with it, read the
+`egress` events in `conductor watch` / the audit trail, then switch to
+`egress:`. The default stays `open` because the enforced modes break tools
+that do not honor `HTTPS_PROXY`; `audit` shows exactly which.
+
+### Git: one clone per dispatch {#git-one-clone-per-dispatch}
+
+Each dispatch gets its **own clone** of the repository (`<state>/worktrees/<id>`),
+not a `git worktree` of a shared one. It borrows the per-repo base clone's
+objects through `objects/info/alternates` — nothing is copied — while its
+refs, config, hooks, index and any object it creates are its own. So two
+dispatches on the same repository cannot touch each other: one cannot see the
+other's clone, move or delete its branch (locally or — the push policy — on
+the remote), rewrite a shared `packed-refs`, or prune an object the other
+needs. In the jail the base clone shows only its object store, read-only;
+the rest of its `.git` is an empty read-only directory.
+
+- **conductor's own git never trusts the clone.** Pushes, fetches, the signing
+  check and the signing configuration run in the base clone (conductor's
+  repository), with the operator's identity and the hardening every
+  conductor git call gets (no hooks, no fsmonitor, `core.sshCommand` from
+  your global config only). The dispatch's commits are added to that run as a
+  conductor-owned **copy** of the clone's own objects — every path opened
+  without following symlinks, `objects/info` never read — so an alternates
+  line or a symlink the agent plants in its clone cannot point conductor's
+  git at another repository on your machine.
+- **A partial base still works.** The base clone is `--filter=blob:none`;
+  the checkout is made through it (a missing blob is fetched once, into the
+  shared store) and the dispatch clone is a partial clone of the same origin,
+  so a blob neither has is fetched lazily later — from inside the jail
+  through conductor's remote helper, into the base's store the clone
+  borrows from.
+- **conductor's fetches into the base never disturb a running dispatch.**
+  They only add objects; a keep-alive ref per live clone
+  (`refs/conductor/live/<id>`) keeps the objects it started from reachable,
+  and goes when the clone does (the reaper drops those of clones a killed
+  daemon left behind).
+
+This replaces the read-only binds of a shared worktree's `.git/config`,
+`hooks/` and `objects/info`: the clone's config and hooks are the agent's own
+to break, and nothing of conductor's reads them.
+
+### Writes are bound to the dispatch's own target — on two independent surfaces {#writes-are-bound-to-the-dispatchs-own-target}
+
+An agent can write to GitHub in two ways, and each has its own model. They
+never consult each other: refusing a binary command does not touch the verb,
+and granting a verb does not unlock the binary.
+
+| | **Binaries** — `gh`, `git`, `aws`, `kubectl`, `terraform`, `docker`, … | **Conductor verbs** — `conductor call <connector>.<verb>` |
+|---|---|---|
+| what it is | the real tool, run on your machine through conductor with *your* setup (your gh login, your git identity) | something conductor itself does, with the connector's own credentials |
+| governed by | the binary's profile + `isolation.host.<bin>` (`allow`/`deny`/`env`/`persist`/`network`) | the verb grant (`skill.verbs`) + the connector's declared scopes |
+| target binding | the **gh profile**: writes on the dispatch's own PR/issue; the **git profile**: pushes to the dispatch's own branch | the **github connector's** scope dimensions: `repo`, `number` (the PR/issue), `branch` — the dispatch's own values are in context |
+| opening a PR | refused, unless `isolation.host.gh.allow` names `pr create` | refused, unless the grant lists the verb |
+| review steps | gh and git write nothing | whatever the step's `skill:` lists (by default, no write verbs) |
+| closed target | the gh and git profiles refuse every write | the github connector drops the target from context, so every write to it is refused |
+
+**Binaries.** With no configuration, a fixer's `gh` may comment on, review,
+edit and reply on its own PR, and resolve its threads; `git push` reaches its
+own head branch. Refused: opening a PR or issue, merging/closing/reopening,
+a repository-level write, a write to another PR/issue or to another
+repository, a push to any other branch, and — always — a force push or a
+branch delete. The operator opens more by *naming* the command in the
+binary's allow list:
+
+```yaml
+isolation:
+  host:
+    gh:
+      allow: ["*", "pr create *"]          # "*": every gh command as before; "pr create *": gh may open PRs
+    git:
+      allow: ["*", "push release/*"]       # pushes may also reach release/* branches
+```
+
+An allow entry opens a write only when its leading words are literal — two
+for gh (`pr create`, `pr merge`, `api repos/*/pulls`), `push` plus a branch
+pattern for git — so a blanket `*` or `pr *` never does. Only your own
+blocks (top-level or runtime) count: a step, a pack's included, can narrow
+but never widen. `deny` narrows as always (`git: { deny: ["push main"] }`).
+See [[Host-Commands#gh]] and [[Host-Commands#git]].
+
+**Conductor verbs.** A step's agent may call only the verbs its `skill:`
+block grants. The github connector's write verbs then act only on the
+dispatch's own repository, PR/issue and head branch unless the grant names
+more:
+
+```yaml
+connectors:
+  gh:                                   # a github connector INSTANCE named "gh" —
+    use: github                         # unrelated to the gh binary above
+triggers:
+  - on: gh.merge_conflict               # events and verbs are both addressed by the instance name
+    steps:
+      - type: agent
+        skill:
+          verbs:
+            gh.comment: {}              # comment on its own PR
+            gh.create_pr: {}            # open a PR in its own repository
+            gh.put_file: { branch: ["release/*"] }   # commit to its head branch or release/*
+```
+
+A connector instance's name is only its name: `connectors: { gh: … }` makes
+`conductor call gh.comment`, and has nothing to do with the `gh` binary's
+profile or `isolation.host.gh`. A refusal names the scope that fired and the
+grant entry that would allow it.
+
+A refusal on either surface is audited with its reason (`gh: opening a PR is
+refused …`, `git: push to stray is refused …`, `gh.comment names pr "43" —
+not this dispatch's own number …`) and fails for the agent like any failed
+command, with the reason on stderr.
+
+**Work stops when its target goes away.** When a dispatch's PR merges or
+closes, conductor stops the fixers running for it (see
+[[Policy#fixers-stop-when-their-pr-closes]]): their runs end `stopped`,
+audited as `fixers_stopped` with `reason: target merged|closed`, and a
+`cancelled` notification goes out. Independently — for every agent, fixer or
+not — both surfaces refuse every write for a closed target (the gh and git
+profiles also check the PR's live state before a write; the github connector
+drops the target from its scope context), so a session that is
+mid-command when the event lands, or one that was never stopped, still cannot
+act. Agents are also told the rule, so a well-behaved one reports instead of
+trying — but the policy is what holds.
+
+### macOS {#macos-jail}
+
+The same jail on the Seatbelt backend (verified on macOS 26): a per-dispatch
+scratch `$HOME` with the tool-state paths linked in (the real home unreadable
+except those paths), a per-dispatch `TMPDIR` (claude-code's scratch included,
+via `CLAUDE_CODE_TMPDIR`), a shim dir first on `PATH` with every host-set
+binary's real path exec-denied, Mach services narrowed to an explicit list,
+and of the base clone only its object store readable.
+
+**The Keychain is closed by default.** Allowing the Security framework's
+services (what a Keychain-held claude-code login needs) also lets the agent
+read other Keychain items whose access list trusts `/usr/bin/security` —
+verified: with them allowed, a jailed `security find-generic-password` read
+gh's `gh:github.com` token; without them it read nothing. Authenticate
+claude-code with an API key (`ANTHROPIC_API_KEY`, or in
+`~/.claude/settings.json`) or a `claude setup-token`
+(`CLAUDE_CODE_OAUTH_TOKEN`), which need no Keychain. The explicit loosening is
+`isolation: { macos_keychain: true }` (runtime/top-level only).
+
 ## Where it applies
 
 `isolation:` can be set at three scopes:
@@ -18,7 +245,8 @@ allowlist. (#36 §15.)
 
 It only applies to launches conductor performs itself: **acp**, **cli**,
 **opencode**, and **agent-deck** runtimes, and `hosts:` scripts (code steps,
-remote commands). A **paseo** runtime's agents are children of the paseo
+remote commands). (cli and acp runtimes on this box are jailed even with no
+block — see [the agent workspace jail](#the-agent-workspace-jail).) A **paseo** runtime's agents are children of the paseo
 daemon — conductor never holds that process, so `conductor validate` rejects
 `isolation:` on paseo runtimes and on profiles that resolve to one, rather
 than silently not isolating. Use paseo's own sandboxing there, or move the
@@ -139,11 +367,13 @@ Conductor closes that off in one of two ways:
   merely masked). The privilege that lets it mount is dropped before your code
   runs, so the code cannot pivot back out. This is a bwrap-style jail with **no
   docker required**; declare the paths a step legitimately needs with `fs:`.
-- **Runtime/plugin launches** (an agent runtime's own process) instead **mask
-  the daemon's state and config directories** (empty read-only tmpfs over
-  directories, `/dev/null` over files); `privileged: true` opts out. Here the
+- **Agent launches on a cli or acp runtime get the workspace jail** above —
+  with or without a `mode: namespace` block. Other runtime and plugin launches
+  (opencode, agent-deck, engine and connector plugins) instead **mask the
+  daemon's state and config directories** (empty read-only tmpfs over
+  directories, `/dev/null` over files); `privileged: true` opts out. There the
   rest of the daemon's uid view (its `$HOME`, other repos) is still visible —
-  for a full jail on a runtime launch, use `mode: container` or `mode: user`.
+  for a full jail on such a launch, use `mode: container` or `mode: user`.
 
 A confinement that can't be applied fails the launch rather than running
 unconfined — except a pack's *synthesized* default (below), which degrades
@@ -198,10 +428,11 @@ allow-list the Linux jail uses:
 Two differences from Linux, both enforced at `validate`:
 
 - **cgroup `limits:` are ignored** on macOS (no systemd/cgroups analog).
-- **An enforced egress allowlist (`deny: true` + `egress:`) is Linux-only** —
-  Seatbelt can cut the network wholesale but not run the in-sandbox forwarder.
-  On macOS use `mode: container` for an enforced allowlist, or plain
-  `deny: true` / an advisory `egress:` without `deny`.
+- **For code steps, an enforced egress allowlist (`deny: true` + `egress:`)
+  is Linux-only** — the code-step profile has no forwarder. On macOS use
+  `mode: container` there, or plain `deny: true` / an advisory `egress:`
+  without `deny`. The **agent** jail enforces allowlists on macOS too
+  (outbound confined to the proxy's loopback port; see above).
 
 Seatbelt is a kernel sandbox, not a uid trick, so the "not a boundary as root"
 caveat does not apply on macOS.
@@ -311,9 +542,26 @@ that lifts the allow/approve/host gates lifts this requirement.
 | isolation on a paseo runtime | rejected by `validate` |
 | `skill:` + `mode: user` isolation | rejected by `validate` (claim theft under a shared uid) |
 | `agent_authored.host` without `isolation:` | rejected by `validate` (`trust: full` opts out) |
+| the default agent jail can't be built (root, no user namespaces, no `unshare`) | the agent runs unconfined, with a warning, a `jail degraded` audit row, and a watch event |
+| Ubuntu 23.10+ with `kernel.apparmor_restrict_unprivileged_userns=1` (the default there) | the same: user namespaces are refused, so the default jail degrades (preflight names the cause). Set the sysctl to `0`, or give conductor an AppArmor profile with `userns,` |
+| an explicit `isolation:` block on a cli/acp runtime the box can't jail | launch fails closed (`validate`: error) |
+| the jail's setup fails at launch | the turn fails with the sandbox's error (never reported as the agent's reply) |
 
 ## Audit
 
 Every denied egress attempt is logged and audited as
 `{event: egress_denied, target: host:port}`, so a sandboxed agent probing
 the network is visible in `conductor report`'s audit trail.
+
+A jailed agent's boundary crossings are audit rows and live `conductor watch`
+events, attributed to the dispatch (`label: "fix acme/app#43"`):
+
+| event | what |
+|---|---|
+| `jail` | the jail came up (with its host set), or `degraded` |
+| `host_command` | a host command: `exit N` (with any discarded writes), or `refused` with the rule |
+| `git_push` / `git_fetch` | brokered git: refs and old→new SHAs, or `refused` with the rule |
+| `sign` | a commit signed for the dispatch, or `refused` |
+| `tool_call` / `tool_result` | claude-code's tool calls (hooks), `refused` by an intent rule |
+| `egress` | a destination reached (each once) or refused, attributed to the dispatch |
+| `fixers_stopped` / `workflow_stopped` | fixers stopped because their PR merged or closed (with the reason), and the runs that ended so |

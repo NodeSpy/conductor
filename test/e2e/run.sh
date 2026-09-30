@@ -91,6 +91,17 @@ banner() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 
 setup() {
   banner "build & up ($MODE mode, project $PROJECT)"
+  # Group X runs the agent workspace jail, which needs unprivileged user
+  # namespaces. GitHub's Ubuntu 23.10+ runners restrict them through AppArmor
+  # (kernel.apparmor_restrict_unprivileged_userns=1) — even inside a
+  # privileged container — so on CI ONLY the harness lifts that for the run.
+  # It never touches a developer's host sysctls: there, group X reports the
+  # degraded jail and its reason instead.
+  if [ -n "${GITHUB_ACTIONS:-}" ] && [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
+    sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 \
+      && echo "CI: allowed unprivileged user namespaces for the agent-jail group" \
+      || echo "CI: could not lift the AppArmor user-namespace restriction; group X will report the degraded jail"
+  fi
   dc down -v --remove-orphans >/dev/null 2>&1 || true
   dc build || { echo "build failed"; exit 1; }
 
@@ -122,6 +133,7 @@ setup() {
   for c in conductor conductor-ctrl conductor-fail conductor-conn conductor-migrate; do
     wait_for 60 cexec "$c" test -S /data/control.sock || fatal "$c daemon not ready (control socket)"
   done
+  wait_for 60 cexec conductor-jail test -S /home/conductor/data/control.sock || fatal "conductor-jail daemon not ready (control socket)"
   echo "stack ready"
 }
 
@@ -1531,6 +1543,13 @@ group_V_engine_plugin() {
 main() {
   trap teardown EXIT
   setup
+  if [ -n "${ONLY:-}" ]; then
+    # ONLY=group_X_jail runs just that group against the full stack (debugging).
+    "$ONLY"
+    print_matrix
+    [ "$FAIL" -eq 0 ]
+    return
+  fi
   if [ "$MODE" = "live" ]; then
     # Live mode drives the REAL agent CLIs (docker-compose.live.yml) and asserts each
     # installed controller runs an end-to-end fixer against the local forge. The
@@ -1564,6 +1583,7 @@ main() {
   group_U_filter
   group_V_engine_plugin
   group_W_stepdone
+  group_X_jail
   print_matrix
   [ "$FAIL" -eq 0 ]
 }
@@ -1620,6 +1640,278 @@ group_W_stepdone() {
     bad "W user workspace untouched" W foreign "conductor archived a workspace it did not create"
   else
     ok "W user workspace untouched (ownership ledger)" W foreign
+  fi
+}
+
+
+# ---- group X: the agent workspace jail (#154) ---------------------------------
+
+JAIL_CFG=/etc/conductor/jail.yaml
+JAIL_AUDIT=/home/conductor/data/audit.jsonl
+
+jail_audit() { cexec conductor-jail cat "$JAIL_AUDIT" 2>/dev/null; }
+
+# jail_audit_match <pat...> — any single jail-daemon audit line carries ALL patterns.
+jail_audit_match() {
+  local line all p
+  while IFS= read -r line; do
+    all=1
+    for p in "$@"; do case "$line" in *"$p"*) ;; *) all=0 ;; esac; done
+    [ "$all" = 1 ] && return 0
+  done <<<"$(jail_audit)"
+  return 1
+}
+
+# jail_reply <repo> — the scripted agent's reply (its [[sh]] transcript) for repo.
+jail_reply() {
+  jail_audit | grep "\"repo\":\"$1\"" | grep '"text"' | tail -1
+}
+
+forge_branch_exists() { # repo branch
+  cexec forge git --git-dir="/srv/git/$1.git" rev-parse --verify -q "refs/heads/$2" >/dev/null 2>&1
+}
+
+group_X_jail() {
+  banner "Group X — the agent workspace jail (#154): default jail, host commands, brokered git, target binding, lifecycle, network"
+
+  # X1: a cli fixer with NO isolation: block runs in the synthesized jail.
+  local r=grpx/jail
+  force conductor-jail merge_conflict "$r#1" "$JAIL_CFG" >/dev/null
+  if wait_for 90 jail_audit_match "\"repo\":\"$r\"" '"event":"dispatch"' '"outcome"'; then
+    ok "X1 jailed dispatch completed" X X1-dispatch
+  else
+    bad "X1 jailed dispatch" X X1-dispatch "no dispatch outcome for $r"; return
+  fi
+  # The jail must actually have come up: a host that cannot build it runs the
+  # agent unconfined (loudly), and every check below would fail for that one
+  # reason — say so once, with the reason, instead.
+  if jail_audit_match '"event":"jail"' '"status":"degraded"'; then
+    bad "X1 the jail came up" X X1-jail "the default jail DEGRADED on this host: $(jail_audit | grep '"status":"degraded"' | head -1 | sed 's/.*"reason":"\([^"]*\)".*/\1/')"
+    return
+  fi
+  ok "X1 the jail came up (not degraded)" X X1-jail
+  local reply; reply="$(jail_reply "$r")"
+  assert_contains "$reply" "uid=1000" X X1-uid "X1 the agent runs as the operator's real uid (1000), not root-in-userns"
+  assert_contains "$reply" "NO-SSH" X X1-ssh "X1 ~/.ssh is absent in the jail"
+  assert_not_contains "$reply" "NOT-A-REAL-KEY" X X1-ssh-leak "X1 the operator's key never reaches the agent"
+  assert_contains "$reply" "NO-STATE" X X1-state "X1 the daemon's state dir is absent in the jail"
+  assert_contains "$reply" "tokens=0" X X1-env "X1 no *TOKEN= credential variable in the jailed env (GH_TOKEN removed; only the dispatch's own conductor skill token)"
+  assert_contains "$reply" "identity=jailed" X X1-identity "X1 the jailed prompt's identity guidance describes the jail (no token or SSH instructions)"
+  assert_contains "$reply" "fake-gh pr view 1 repo=$r" X X1-host "X1 gh runs as a host command, bound to the dispatch's repo"
+  assert_contains "$reply" "fake-gh sees-login" X X1-host-login "X1 the host-side gh uses the machine's own login in place"
+  assert_not_contains "$reply" "fake-gh sees-ssh" X X1-host-view "X1 a profiled host command sees only its own config (no ~/.ssh)"
+  assert_contains "$reply" "opening a PR is refused" X X1-prcreate "X1 gh pr create is refused (writes bound to the dispatch's target)"
+  assert_contains "$reply" "built-in: gh auth" X X1-logout "X1 gh auth logout is refused by the built-in guardrail"
+  if forge_has_conductor_commit "$r" pr-1; then
+    ok "X1 the fixer's push to the dispatch branch landed (brokered through git-remote-conductor)" X X1-push
+  else
+    bad "X1 push to pr-1" X X1-push "no conductor: commit on $r pr-1"
+  fi
+  local sha; sha="$(cexec forge git --git-dir="/srv/git/$r.git" rev-parse pr-1 2>/dev/null | tr -d '\r')"
+  # The commit was made in the dispatch's own clone (gone now): fetch it
+  # into a scratch repo to check its signature.
+  if cexec conductor-jail bash -c "rm -rf /tmp/x1v && git init -q /tmp/x1v && git -C /tmp/x1v fetch -q git://forge/$r.git pr-1 && \
+      git -C /tmp/x1v -c gpg.ssh.allowedSignersFile=/home/conductor/data/keys/allowed_signers verify-commit $sha" >/dev/null 2>&1; then
+    ok "X1 the pushed commit verifies against the operator's (throwaway) key — signed by the shim, the key never in the jail" X X1-signed
+  else
+    bad "X1 signed commit" X X1-signed "pr-1 head does not verify against allowed_signers"
+  fi
+  local author; author="$(cexec forge git --git-dir="/srv/git/$r.git" log pr-1 -1 --format='%an' 2>/dev/null | tr -d '\r')"
+  assert_contains "$author" "Conductor User" X X1-author "X1 the commit is made as the operator (acts-as-the-user identity reaches the jail)"
+  if forge_branch_exists "$r" stray-branch; then
+    bad "X1 stray branch" X X1-stray "stray-branch exists on the forge"
+  else
+    ok "X1 a push of a new branch is refused (never reaches the forge)" X X1-stray
+  fi
+  assert_contains "$reply" "force push is refused" X X1-force "X1 a force push to the default branch is refused"
+  if jail_audit_match '"event":"host_command"' '"status":"refused"' 'pr create' 'opening a PR'; then
+    ok "X1 the refusal is audited with the rule that fired" X X1-audit
+  else
+    bad "X1 audit" X X1-audit "no refused host_command row for pr create"
+  fi
+  if jail_audit_match '"event":"git_push"' '"status":"ok"' "$r"; then
+    ok "X1 the brokered push is audited" X X1-push-audit
+  else
+    bad "X1 push audit" X X1-push-audit "no git_push ok row"
+  fi
+  if jail_audit_match '"event":"tool_call"' "$r"; then
+    ok "X1 the agent's tool calls reach conductor through the PreToolUse hook" X X1-hooks
+  else
+    bad "X1 hooks" X X1-hooks "no tool_call audit rows"
+  fi
+  local calls; calls="$(cexec conductor-jail cat /var/tmp/fake-gh-calls.log 2>/dev/null)"
+  assert_not_contains "$calls" "pr create" X X1-host-never "X1 the refused gh never ran on the host"
+  local hosts; hosts="$(cexec conductor-jail cat /home/conductor/.config/gh/hosts.yml 2>/dev/null)"
+  assert_not_contains "$hosts" "tampered" X X1-cow "X1 the host gh's write to its config was discarded (copy-on-write home)"
+
+  # X2: a write for a target that is already merged is refused.
+  r=grpx/jailclosed
+  force conductor-jail merge_conflict "$r#1" "$JAIL_CFG" >/dev/null
+  if wait_for 90 jail_audit_match '"event":"git_push"' '"status":"refused"' "\"repo\":\"$r\"" 'is merged'; then
+    ok "X2 a push for a merged target is refused (live PR state)" X X2-closed
+  else
+    bad "X2 closed target" X X2-closed "no refused git_push for $r"
+  fi
+  if forge_has_conductor_commit "$r" pr-1; then
+    bad "X2 forge" X X2-forge "a commit landed on $r pr-1"
+  else
+    ok "X2 nothing landed on the merged PR's branch" X X2-forge
+  fi
+
+  # X3: an in-flight fixer is stopped when its PR merges (engine stopFixers →
+  # the runner's StopTarget; the run ends workflow_stopped, not failed).
+  r=grpx/jailcancel
+  force conductor-jail merge_conflict "$r#1" "$JAIL_CFG" >/dev/null
+  wait_for 60 jail_audit_match '"event":"tool_call"' "\"repo\":\"$r\"" 'sleep 45' || true
+  cexec conductor-jail bash -c 'curl -s -o /dev/null -X POST http://localhost:8789/webhook -H "X-GitHub-Event: pull_request" -H "X-GitHub-Delivery: x3-$RANDOM" -H "Content-Type: application/json" --data-binary @/fixtures/jail_cancel_closed.json' >/dev/null
+  if wait_for 30 jail_audit_match '"event":"fixers_stopped"' "\"repo\":\"$r\"" '"reason":"target merged"'; then
+    ok "X3 the in-flight fixer is stopped when its PR merges (audited, with the reason)" X X3-cancel
+  else
+    bad "X3 cancel" X X3-cancel "no fixers_stopped row for $r"
+  fi
+  if wait_for 20 jail_audit_match '"event":"workflow_stopped"' "\"repo\":\"$r\"" 'target closed'; then
+    ok "X3 the run ends as stopped, not failed (the flow stops)" X X3-outcome
+  else
+    bad "X3 outcome" X X3-outcome "no workflow_stopped row for $r"
+  fi
+  if forge_branch_commits "$r" pr-1 | grep -qx 2; then
+    ok "X3 the cancelled agent's late push never landed" X X3-forge
+  else
+    bad "X3 forge" X X3-forge "pr-1 moved"
+  fi
+
+  # X5: the conductor skill surface from inside the jail — a PR-targeted
+  # jailed dispatch keeps its own CONDUCTOR_ENDPOINT + session token (bound
+  # daemon-side to the uid and dispatch; not a credential to strip).
+  r=grpx/jaildone
+  force conductor-jail merge_conflict "$r#1" "$JAIL_CFG" >/dev/null
+  if wait_for 90 jail_audit_match "\"repo\":\"$r\"" '"event":"dispatch"' '"outcome"'; then
+    reply="$(jail_reply "$r")"
+    assert_contains "$reply" "skill-endpoint=set skill-token=set" X X5-env "X5 a jailed PR dispatch carries its own CONDUCTOR_ENDPOINT and skill token"
+    assert_contains "$reply" "DISCOVER-OK" X X5-call "X5 conductor discover (a conductor call) works from inside the jail"
+    assert_contains "$reply" "STEP-DONE-OK" X X5-done "X5 conductor call step.done succeeds from inside the jail"
+  else
+    bad "X5 dispatch" X X5-env "no dispatch outcome for $r"
+  fi
+
+  # X6: two jailed dispatches on ONE repository at once, each in its own
+  # clone borrowing the base's objects. PR 1 waits; PR 2 attacks it.
+  r=grpx/jailpair
+  force conductor-jail merge_conflict "$r#1" "$JAIL_CFG" >/dev/null
+  wait_for 30 jail_audit_match '"event":"tool_call"' "\"repo\":\"$r\"" 'sleep 25' || true
+  force conductor-jail merge_conflict "$r#2" "$JAIL_CFG" >/dev/null
+  if wait_for 120 jail_audit_match "\"repo\":\"$r\"" '"number":1' '"event":"dispatch"' '"outcome"' && \
+     wait_for 30 jail_audit_match "\"repo\":\"$r\"" '"number":2' '"event":"dispatch"' '"outcome"'; then
+    local ra rb
+    ra="$(jail_audit | grep "\"repo\":\"$r\"" | grep '"number":2' | grep '"text"' | tail -1)"
+    rb="$(jail_audit | grep "\"repo\":\"$r\"" | grep '"number":1' | grep '"text"' | tail -1)"
+    assert_contains "$ra" "a-committed" X X6-a-ran "X6 the attacking dispatch ran"
+    assert_not_contains "$ra" "A-TOUCHED" X X6-sibling "X6 a dispatch cannot see or touch a sibling's clone"
+    assert_not_contains "$ra" "a-delete-b-exit=0" X X6-delete "X6 deleting the sibling's branch through the remote is refused"
+    assert_not_contains "$ra" "a-move-b-exit=0" X X6-move "X6 moving the sibling's branch through the remote is refused"
+    assert_not_contains "$ra" "a-packed-refs-exit=0" X X6-packed "X6 the base clone's packed-refs cannot be written"
+    assert_not_contains "$ra" "a-objects-exit=0" X X6-objects "X6 the base clone's object store is read-only"
+    assert_contains "$ra" "a-gc-exit=0" X X6-gc "X6 git gc --prune=now runs, on the attacker's own clone only"
+    assert_contains "$rb" "b-push-exit=0" X X6-b-push "X6 the victim's push still works afterwards"
+    assert_contains "$rb" "ancient history" X X6-lazy "X6 a lazy blob fetch (blob:none base) works in a dispatch clone"
+    assert_contains "$rb" "b-fsck-exit=0" X X6-b-fsck "X6 the victim's clone is intact (fsck) after the attack"
+    if cexec conductor-jail test -e /home/conductor/data/checkouts/grpx__jailpair/.git/objects/planted; then
+      bad "X6 base objects" X X6-host "a file was planted in the base's object store"
+    else
+      ok "X6 nothing reached the base clone on the host" X X6-host
+    fi
+    if forge_branch_commits "$r" pr-1 | grep -qx 4; then
+      ok "X6 the victim's commit landed on its own branch, nothing else did" X X6-forge
+    else
+      bad "X6 forge" X X6-forge "pr-1 has $(forge_branch_commits "$r" pr-1) commits, want 4"
+    fi
+  else
+    bad "X6 dispatches" X X6-a-ran "the pair did not both finish for $r"
+  fi
+
+  # X7: a content-executing host command. terraform apply is not in the
+  # operator's allow list: refused, naming the knob. terraform plan is: it
+  # runs the agent-written external program in the host-side jail.
+  r=grpx/jailtf
+  force conductor-jail merge_conflict "$r#1" "$JAIL_CFG" >/dev/null
+  if wait_for 90 jail_audit_match "\"repo\":\"$r\"" '"event":"dispatch"' '"outcome"'; then
+    reply="$(jail_reply "$r")"
+    assert_contains "$reply" "tf-apply-exit=126" X X7-refused "X7 a content-executing command the operator did not allow is refused (terraform apply)"
+    assert_contains "$reply" 'isolation.host.terraform.allow: [\"apply *\"]' X X7-knob "X7 the refusal names the knob that allows it"
+    assert_contains "$reply" "external-written" X X7-agent "X7 the agent wrote the program the plan runs"
+    assert_contains "$reply" "tf-plan-exit=0" X X7-plan "X7 the allowed terraform plan runs"
+    assert_contains "$reply" "tf-sees-own-config" X X7-config "X7 the confined run reads the tool's own config"
+    assert_contains "$reply" "ext-no-ssh" X X7-ssh "X7 the agent's program cannot read ~/.ssh"
+    assert_not_contains "$reply" "LEAK-ssh" X X7-ssh-leak "X7 no key reached the program"
+    assert_contains "$reply" "ext-proxy=403" X X7-proxy "X7 the proxy refuses a host outside the tool's endpoints"
+    assert_not_contains "$reply" "ext-direct-rc=0" X X7-direct "X7 no direct route out of the host-side jail"
+    assert_contains "$reply" "ext-ws-write-ok" X X7-cow "X7 the program's workspace write lands copy-on-write"
+    assert_contains "$reply" "ws-untouched" X X7-ws "X7 the real workspace is unchanged"
+  else
+    bad "X7 dispatch" X X7-refused "no dispatch outcome for $r"
+  fi
+  if jail_audit_match '"event":"host_command"' "\"repo\":\"$r\"" '"confined":true'; then
+    ok "X7 the confined run is audited as confined, with its egress" X X7-audit
+  else
+    bad "X7 audit" X X7-audit "no confined host_command row for $r"
+  fi
+
+  # X8–X10: the incident — an agent opening a PR — on both write surfaces.
+  # The gh binary is governed by its profile (isolation.host.gh), conductor's
+  # github verb by the verb grant (skill.verbs); neither consults the other.
+  local caps0; caps0="$(netcurl http://mock-github:8080/_captured)"
+  r=grpx/jailboth
+  force conductor-jail merge_conflict "$r#1" "$JAIL_CFG" >/dev/null
+  if wait_for 90 jail_audit_match "\"repo\":\"$r\"" '"event":"dispatch"' '"outcome"'; then
+    reply="$(jail_reply "$r")"
+    assert_contains "$reply" "opening a PR is refused" X X8-bin "X8 default: gh pr create is refused by the gh profile"
+    assert_contains "$reply" "bin-exit=126" X X8-bin-exit "X8 default: …and never ran on the host"
+    assert_contains "$reply" "not allowed by this profile's skill.verbs" X X8-verb "X8 default: conductor call github.create_pr is refused by the verb grant"
+    assert_not_contains "$reply" "verb-exit=0" X X8-verb-exit "X8 default: …and opened nothing"
+  else
+    bad "X8 dispatch" X X8-bin "no dispatch outcome for $r"
+  fi
+  r=grpx/jailbin
+  force conductor-jail merge_conflict "$r#1" "$JAIL_CFG" >/dev/null
+  if wait_for 90 jail_audit_match "\"repo\":\"$r\"" '"event":"dispatch"' '"outcome"'; then
+    reply="$(jail_reply "$r")"
+    assert_contains "$reply" "fake-gh pr create" X X9-bin "X9 host.gh.allow names pr create: the gh binary opens the PR"
+    assert_contains "$reply" "bin-exit=0" X X9-bin-exit "X9 …exit 0"
+    assert_contains "$reply" "not allowed by this profile's skill.verbs" X X9-verb "X9 …and conductor's github.create_pr verb is STILL refused"
+  else
+    bad "X9 dispatch" X X9-bin "no dispatch outcome for $r"
+  fi
+  r=grpx/jailverb
+  force conductor-jail merge_conflict "$r#1" "$JAIL_CFG" >/dev/null
+  if wait_for 90 jail_audit_match "\"repo\":\"$r\"" '"event":"dispatch"' '"outcome"'; then
+    reply="$(jail_reply "$r")"
+    assert_contains "$reply" "verb-exit=0" X X10-verb "X10 skill.verbs grants github.create_pr: conductor's verb opens the PR"
+    local caps; caps="$(netcurl http://mock-github:8080/_captured)"
+    if printf '%s' "$caps" | grep -q '"/repos/grpx/jailverb/pulls"' && ! printf '%s' "$caps0" | grep -q '"/repos/grpx/jailverb/pulls"'; then
+      ok "X10 …the create reached GitHub (captured POST /repos/grpx/jailverb/pulls)" X X10-captured
+    else
+      bad "X10 captured" X X10-captured "no captured POST /repos/grpx/jailverb/pulls"
+    fi
+    assert_contains "$reply" "opening a PR is refused" X X10-bin "X10 …and the gh binary is STILL refused by its profile"
+  else
+    bad "X10 dispatch" X X10-verb "no dispatch outcome for $r"
+  fi
+
+  # X4: network: deny — the jail has no route out but the proxy, which
+  # refuses everything but the model endpoint; the refusal is audited.
+  r=grpx/jailnet
+  force conductor-jail merge_conflict "$r#1" "$JAIL_CFG" >/dev/null
+  if wait_for 90 jail_audit_match "\"repo\":\"$r\"" '"event":"dispatch"' '"outcome"'; then
+    reply="$(jail_reply "$r")"
+    assert_contains "$reply" "code=403" X X4-proxy "X4 network deny: the proxy refuses a non-model destination (403)"
+    assert_not_contains "$reply" "code=200" X X4-no-route "X4 network deny: no direct route out of the jail"
+  else
+    bad "X4 net dispatch" X X4-proxy "no dispatch for $r"
+  fi
+  if jail_audit_match '"event":"egress"' '"status":"refused"' 'sink-catcher'; then
+    ok "X4 the denied connection is audited (egress refused)" X X4-audit
+  else
+    bad "X4 egress audit" X X4-audit "no egress refused row"
   fi
 }
 

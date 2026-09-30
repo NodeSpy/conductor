@@ -32,6 +32,7 @@
 package sandbox
 
 import (
+	"encoding/json"
 	"fmt"
 	"path"
 	"strconv"
@@ -70,10 +71,21 @@ type Spec struct {
 
 // FromConfig flattens an IsolationConfig. nil in, nil out.
 func FromConfig(c *config.IsolationConfig) *Spec {
-	if c == nil {
+	if c == nil || c.Mode == "none" {
 		return nil
 	}
-	s := &Spec{Mode: c.Mode, User: c.User, Privileged: c.Privileged, AllowRoot: c.AllowRoot, FS: c.FS}
+	mode := c.Mode
+	if mode == "" {
+		// An isolation block with no mode is the namespace jail (#154) —
+		// never "no wrapper": that would run a block that validated as
+		// confined without any confinement.
+		mode = "namespace"
+	}
+	fs := make([]string, 0, len(c.FS))
+	for _, p := range c.FS {
+		fs = append(fs, config.ExpandHome(p))
+	}
+	s := &Spec{Mode: mode, User: c.User, Privileged: c.Privileged, AllowRoot: c.AllowRoot, FS: fs}
 	if c.Container != nil {
 		s.Image = c.Container.Image
 		s.Engine = c.Container.Engine
@@ -214,6 +226,12 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 			if nf != nil {
 				binds = append(binds, nf.Binds...)
 			}
+			if nf != nil && nf.Agent != nil {
+				// The agent jail: narrowed exec/Mach rules, scratch home, and
+				// a network that is open or reaches only conductor's proxy.
+				n := AgentNet{Open: !s.Deny, ProxyPort: nf.ProxyPort, LoopbackPorts: nf.Agent.LoopbackPorts}
+				return wrapSeatbeltAgent(argv, binds, nf.Agent, n), nil
+			}
 			// deny+egress (enforced allowlist) is rejected on darwin at validate
 			// (no netns forwarder), so s.Deny here always means a full net cut.
 			return wrapSeatbelt(argv, binds, s.Deny), nil
@@ -239,18 +257,38 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 		prefix = append(prefix, "--")
 		if nf != nil && (nf.UnixSocket != "" || len(nf.Masks) > 0 || jailed) {
 			prefix = append(prefix, nf.Self, "sandbox-net")
+			simple := true
 			for _, b := range nf.Binds {
-				flag := "--bind"
-				if b.RO {
-					flag = "--bind-ro"
+				simple = simple && b.simple()
+			}
+			if simple {
+				for _, b := range nf.Binds {
+					flag := "--bind"
+					if b.RO {
+						flag = "--bind-ro"
+					}
+					prefix = append(prefix, flag, b.Path)
 				}
-				prefix = append(prefix, flag, b.Path)
+			} else {
+				// The agent jail's richer allow-list (tmpfs $HOME, shims bound
+				// over tool paths, symlinks) travels as one JSON argument.
+				js, err := json.Marshal(nf.Binds)
+				if err != nil {
+					return nil, fmt.Errorf("sandbox: encode jail: %w", err)
+				}
+				prefix = append(prefix, "--jail", string(js))
+			}
+			if jailed && nf.Chdir != "" {
+				prefix = append(prefix, "--chdir", nf.Chdir)
 			}
 			for _, m := range nf.Masks {
 				prefix = append(prefix, "--mask", m)
 			}
 			if nf.UnixSocket != "" {
 				prefix = append(prefix, "--listen", ForwardAddr, "--unix", nf.UnixSocket)
+			}
+			for _, r := range nf.Relays {
+				prefix = append(prefix, "--relay", r.Listen+"="+r.Unix)
 			}
 			prefix = append(prefix, "--")
 		}

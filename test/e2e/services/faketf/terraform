@@ -1,0 +1,12 @@
+#!/bin/sh
+# A stand-in for terraform (group X, #154): a plan runs the configuration's
+# `external` data source programs — here ./external.sh, which the agent
+# wrote — the way the real terraform runs a provider's data source.
+echo "fake-terraform $*"
+[ -r "$HOME/.terraform.d/credentials.tfrc.json" ] && echo "tf-sees-own-config"
+for a in "$@"; do
+  case "$a" in
+    plan) [ -x ./external.sh ] && ./external.sh ;;
+  esac
+done
+exit 0

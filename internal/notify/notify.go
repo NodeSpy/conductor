@@ -73,6 +73,10 @@ const (
 	// fires instead of self-applying under `update: { apply: workflow }`.
 	EventUpdated         = "updated"
 	EventUpdateAvailable = "update_available"
+	// EventCancelled fires when the engine stops a PR's running fixers
+	// because the PR merged or closed while they worked (engine stopFixers →
+	// each runtime's StopTarget) — "stopped N running fixer(s): target merged".
+	EventCancelled = "cancelled"
 )
 
 // Notifier emits notifications per the configured policy.

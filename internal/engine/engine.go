@@ -1156,12 +1156,18 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 		return
 	}
+	targetClosed := errors.Is(err, dispatch.ErrTargetClosed)
 	if !shadow {
 		switch {
 		case liveGate:
 			// Never mark "done" on dispatch — the sweep re-derives completion. Just
 			// count the attempt; backoff bounds retries of an unfixable state.
 			_ = e.store.RecordAttempt(key, dkind, head)
+		case targetClosed:
+			// The target died mid-dispatch: there is nothing left to retry
+			// against it, so consume the dedup signature like an ordinary
+			// completion rather than leaving it to fire again on the next event.
+			_ = e.store.Record(key, dkind, t.Dedup, head)
 		case err != nil:
 			// A failed dispatch: count the try but don't consume the dedup signature,
 			// so it retries next time instead of being suppressed forever.
@@ -1171,6 +1177,16 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		}
 	}
 
+	if targetClosed {
+		// stopFixers (flow.go) already stopped this dispatch, audited
+		// fixers_stopped, and notified — terminal, and not this dispatch's
+		// failure to escalate.
+		e.log("%s dispatch stopped: %s", tag(t), e.redact(err.Error()))
+		if gated {
+			e.release()
+		}
+		return
+	}
 	if err != nil {
 		if tl := tailOutput(ref.Output); tl != "" {
 			e.log("%s command output (tail):\n%s", tag(t), e.redact(tl))
@@ -1541,6 +1557,12 @@ func (e *Engine) redactArgv(argv []string) []string {
 func (e *Engine) auditDispatch(t core.Trigger, ref dispatch.RunRef, err error) {
 	outcome := "ok"
 	switch {
+	case errors.Is(err, dispatch.ErrTargetClosed):
+		// The dispatch's own target died mid-flight and stopFixers (flow.go)
+		// already stopped it, audited fixers_stopped, and notified — this is
+		// that stop's EXPECTED result, not an ordinary dispatch failure to
+		// escalate.
+		outcome = "target_closed"
 	case err != nil:
 		outcome = "failed"
 	case ref.Skipped:

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -193,6 +194,19 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			"kind": t.Kind, "step": id, "backend": ref.Backend, "shadow": ref.Shadowed}
 		if err != nil {
 			entry["error"] = e.redact(err.Error())
+			if errors.Is(err, dispatch.ErrTargetClosed) {
+				// The target this step was working died out from under it
+				// (stopFixers already stopped the agent, audited
+				// fixers_stopped, and notified) — this is the EXPECTED result of
+				// that cancellation, not a step bug to escalate. Audit it as its
+				// own outcome and stop the workflow: no later step has a live
+				// target to act on either.
+				entry["outcome"] = "target_closed"
+				e.store.Audit(entry)
+				e.log("%s step %s stopped: %s", tag(t), id, e.redact(err.Error()))
+				e.finishRun(run)
+				return // terminal, not retried
+			}
 			e.store.Audit(entry)
 			failMsg := ""
 			if tail := tailOutput(ref.Output); tail != "" {

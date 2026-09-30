@@ -35,7 +35,19 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/gitsafe"
 )
+
+// LookPath resolves the `git` binary. A package var so a test can force the
+// "no git installed" path (gitwt then falls back to go-git — see gogit.go)
+// without touching the real PATH.
+var LookPath = exec.LookPath
+
+// hasGit reports whether the `git` binary is available at all.
+func hasGit() bool {
+	_, err := LookPath("git")
+	return err == nil
+}
 
 const (
 	// DefaultMinAge is how long an unreferenced worktree dir must have sat
@@ -135,15 +147,20 @@ func (p *Provisioner) ProvisionWorktree(ctx context.Context, req dispatch.Reques
 		return "", "", dispatch.Unrecoverable(err)
 	}
 
-	switch strategy {
-	case "checkout-pr":
+	switch {
+	case strategy == "checkout-pr" && hasGit():
 		err = p.addPR(ctx, base, wt, req)
-	case "branch-off":
+	case strategy == "checkout-pr":
+		err = p.addPRGoGit(ctx, base, wt, req)
+	case strategy == "branch-off" && hasGit():
 		err = p.addBranch(ctx, base, wt, req)
+	case strategy == "branch-off":
+		err = p.addBranchGoGit(ctx, base, wt, req)
 	}
 	if err != nil {
 		// Leave nothing half-made behind for the reaper to puzzle over.
 		_ = os.RemoveAll(wt)
+		_, _ = p.git(ctx, base, "update-ref", "-d", liveRef(wt))
 		_, _ = p.git(ctx, base, "worktree", "prune")
 		return "", "", dispatch.Unrecoverable(fmt.Errorf("gitwt: %s worktree for %s: %w", strategy, repo, err))
 	}
@@ -180,19 +197,32 @@ func (p *Provisioner) RemoveWorktree(ctx context.Context, id string) error {
 
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), removeTimeout)
 	defer cancel()
-	if base != "" {
-		// Best-effort: `worktree remove` fails when the dir is already gone,
-		// or when git considers the tree dirty. The RemoveAll + prune below is
-		// what makes this idempotent either way.
+	legacy := isLinkedWorktree(wt)
+	if base != "" && legacy {
+		// A linked worktree from before per-dispatch clones. Best-effort:
+		// `worktree remove` fails when the dir is already gone, or when git
+		// considers the tree dirty. The RemoveAll + prune below is what makes
+		// this idempotent either way.
 		_, _ = p.git(rctx, base, "worktree", "remove", "--force", wt)
 	}
 	if err := os.RemoveAll(wt); err != nil {
 		return fmt.Errorf("gitwt: remove worktree %s: %w", wt, err)
 	}
 	if base != "" {
-		_, _ = p.git(rctx, base, "worktree", "prune")
+		// The clone's keep-alive ref: its borrowed objects may go now.
+		_, _ = p.git(rctx, base, "update-ref", "-d", liveRef(wt))
+		if legacy {
+			_, _ = p.git(rctx, base, "worktree", "prune")
+		}
 	}
 	return nil
+}
+
+// isLinkedWorktree reports a `git worktree` checkout (a .git FILE), as
+// opposed to a per-dispatch clone (a .git dir).
+func isLinkedWorktree(wt string) bool {
+	fi, err := os.Lstat(filepath.Join(wt, ".git"))
+	return err == nil && fi.Mode().IsRegular()
 }
 
 // Run reaps orphans once at startup and on every tick until ctx ends. Startup
@@ -219,7 +249,9 @@ func (p *Provisioner) Reap(ctx context.Context) {
 	if ents, err := os.ReadDir(p.CheckoutsDir()); err == nil {
 		for _, e := range ents {
 			if e.IsDir() {
-				_, _ = p.git(ctx, filepath.Join(p.CheckoutsDir(), e.Name()), "worktree", "prune")
+				base := filepath.Join(p.CheckoutsDir(), e.Name())
+				_, _ = p.git(ctx, base, "worktree", "prune")
+				p.pruneLiveRefs(ctx, base)
 			}
 		}
 	}
@@ -253,13 +285,13 @@ func (p *Provisioner) Reap(ctx context.Context) {
 
 // ---- checkout strategies -------------------------------------------------
 
-// addPR lands the PR head in a fresh worktree. The branch is named after the
-// PR's own head ref rather than left detached, so an agent's `git push` targets
-// the PR branch the way it does on the paseo path. With no head ref on the
-// trigger it's resolved from the remote by the head commit; failing that the
-// head is taken detached. It used to fall back to a local pr-<n> branch, which
-// looked pushable — and a push published it as a stray new branch on the
-// remote while the PR itself never moved.
+// addPR lands the PR head in the dispatch's own clone. The branch is named
+// after the PR's own head ref rather than left detached, so an agent's `git
+// push` targets the PR branch the way it does on the paseo path. With no head
+// ref on the trigger it's resolved from the remote by the head commit;
+// failing that the head is taken detached. It used to fall back to a local
+// pr-<n> branch, which looked pushable — and a push published it as a stray
+// new branch on the remote while the PR itself never moved.
 func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.Request) error {
 	pr := req.Trigger.Target.PR
 	if pr <= 0 {
@@ -275,33 +307,137 @@ func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.R
 	}
 	if branch == "" {
 		p.logf("gitwt: %s#%d: PR head branch unknown — checking out detached", req.Trigger.Target.Repo, pr)
-		_, err := p.git(ctx, base, "worktree", "add", "--detach", wt, "FETCH_HEAD")
-		return err
 	}
-	_, err := p.git(ctx, base, "worktree", "add", "-B", branch, wt, "FETCH_HEAD")
-	if err == nil {
-		return nil
-	}
-	// The branch is already checked out in another live worktree (a second
-	// dispatch on the same PR). Take the head detached rather than force the
-	// other checkout's branch pointer out from under it.
-	_ = os.RemoveAll(wt)
-	if _, derr := p.git(ctx, base, "worktree", "add", "--detach", wt, "FETCH_HEAD"); derr != nil {
-		return errors.Join(err, derr)
-	}
-	return nil
+	// Each dispatch owns its clone, so a second dispatch on the same PR gets
+	// its own copy of the branch — nothing to take detached any more.
+	return p.newClone(ctx, base, wt, branch, "FETCH_HEAD", true)
 }
 
 // addBranch cuts a fresh conductor branch off the trigger's base ref.
 func (p *Provisioner) addBranch(ctx context.Context, base, wt string, req dispatch.Request) error {
-	branch := dispatch.BranchSlug(ctx, req.Trigger)
-	args := []string{"worktree", "add", "-B", branch, wt}
-	if start := p.startPoint(ctx, base, req.Trigger.Target.BaseRef); start != "" {
-		args = append(args, start)
+	start := p.startPoint(ctx, base, req.Trigger.Target.BaseRef)
+	if start == "" {
+		start = "HEAD"
 	}
-	_, err := p.git(ctx, base, args...)
-	return err
+	return p.newClone(ctx, base, wt, dispatch.BranchSlug(ctx, req.Trigger), start, false)
 }
+
+// newClone makes wt the dispatch's OWN clone of base: its git objects are
+// borrowed through objects/info/alternates (nothing is copied), while its
+// refs, config, hooks, index and any object it creates are its own. One
+// dispatch can therefore never move or delete another's branch, rewrite its
+// packed-refs, or prune an object it depends on — the base clone is
+// conductor's alone (the jail shows only its objects, read-only).
+//
+// The files are checked out THROUGH the base clone (read-tree -u with the
+// index written into wt), so a blob a partial (blob:none) base lacks is
+// fetched once into the shared store, not once per dispatch. The clone is a
+// partial clone of the same origin, so a blob neither has is fetched lazily
+// later, from inside the jail too (through conductor's remote helper). A
+// keep-alive ref in the base (refs/conductor/live/<wt>) holds the start
+// commit reachable for as long as the clone lives, so conductor's own
+// fetch --prune and gc in the base never drop an object it borrows.
+//
+// branch "" → a detached HEAD. track: set the branch's upstream to its
+// origin branch when the base has one (a PR head).
+func (p *Provisioner) newClone(ctx context.Context, base, wt, branch, start string, track bool) error {
+	sha, err := p.git(ctx, base, "rev-parse", "--verify", start+"^{commit}")
+	if err != nil {
+		return err
+	}
+	sha = strings.TrimSpace(sha)
+	baseGit := filepath.Join(base, ".git")
+	// --template= : no hooks or anything else from a system template.
+	if _, err := p.git(ctx, "", "init", "-q", "--template=", wt); err != nil {
+		return err
+	}
+	gd := filepath.Join(wt, ".git")
+	if err := os.MkdirAll(filepath.Join(gd, "objects", "info"), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(gd, "objects", "info", "alternates"),
+		[]byte(filepath.Join(baseGit, "objects")+"\n"), 0o644); err != nil {
+		return err
+	}
+	url, _ := p.git(ctx, base, "config", "--get", "remote.origin.url")
+	sets := [][2]string{
+		{"remote.origin.url", strings.TrimSpace(url)},
+		{"remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"},
+	}
+	if pr, _ := p.git(ctx, base, "config", "--get", "remote.origin.promisor"); strings.TrimSpace(pr) == "true" {
+		filter, _ := p.git(ctx, base, "config", "--get", "remote.origin.partialclonefilter")
+		sets = append(sets,
+			[2]string{"core.repositoryformatversion", "1"},
+			[2]string{"extensions.partialclone", "origin"},
+			[2]string{"remote.origin.promisor", "true"},
+			[2]string{"remote.origin.partialclonefilter", strings.TrimSpace(filter)})
+	}
+	for _, kv := range sets {
+		if kv[1] == "" {
+			continue
+		}
+		if _, err := p.git(ctx, wt, "config", kv[0], kv[1]); err != nil {
+			return err
+		}
+	}
+	// The origin's branches as the base last fetched them (so `origin/main`
+	// resolves), and origin/HEAD.
+	refs, err := p.git(ctx, base, "for-each-ref", "--format=%(objectname) %(refname) %(symref)", "refs/remotes/origin/")
+	if err != nil {
+		return err
+	}
+	var upd strings.Builder
+	originHead := ""
+	for _, line := range strings.Split(strings.TrimSpace(refs), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		if len(f) == 3 {
+			originHead = f[2] // a symref: origin/HEAD → origin/<default>
+			continue
+		}
+		fmt.Fprintf(&upd, "create %s %s\n", f[1], f[0])
+	}
+	if upd.Len() > 0 {
+		if _, err := p.gitIn(ctx, wt, upd.String(), "update-ref", "--stdin"); err != nil {
+			return err
+		}
+	}
+	if originHead != "" {
+		_, _ = p.git(ctx, wt, "symbolic-ref", "refs/remotes/origin/HEAD", originHead)
+	}
+	if branch != "" {
+		if _, err := p.git(ctx, wt, "update-ref", "refs/heads/"+branch, sha); err != nil {
+			return err
+		}
+		if _, err := p.git(ctx, wt, "symbolic-ref", "HEAD", "refs/heads/"+branch); err != nil {
+			return err
+		}
+		if track {
+			if _, err := p.git(ctx, wt, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch); err == nil {
+				_, _ = p.git(ctx, wt, "config", "branch."+branch+".remote", "origin")
+				_, _ = p.git(ctx, wt, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+			}
+		}
+	} else if _, err := p.git(ctx, wt, "update-ref", "--no-deref", "HEAD", sha); err != nil {
+		return err
+	}
+	if _, err := p.git(ctx, base, "update-ref", liveRef(wt), sha); err != nil {
+		return err
+	}
+	co := gitsafe.Command(ctx, "", "--git-dir="+baseGit, "--work-tree="+wt, "read-tree", "--reset", "-u", sha)
+	co.Env = append(co.Env, "GIT_INDEX_FILE="+filepath.Join(gd, "index"))
+	var errb bytes.Buffer
+	co.Stderr = &errb
+	if err := co.Run(); err != nil {
+		return fmt.Errorf("git read-tree -u %s: %w: %s", sha, err, truncate(strings.TrimSpace(errb.String()), 400))
+	}
+	return nil
+}
+
+// liveRef is the base clone's keep-alive ref for the dispatch clone at wt.
+func liveRef(wt string) string { return "refs/conductor/live/" + filepath.Base(wt) }
 
 // startPoint resolves what a branch-off branches FROM: the remote-tracking ref
 // for the trigger's base (freshly fetched), then the plain ref, then the
@@ -324,13 +460,19 @@ func (p *Provisioner) startPoint(ctx context.Context, base, ref string) string {
 
 // baseClone returns the repo's base clone, cloning it on first use and fetching
 // it otherwise. Concurrent dispatches on one repo serialize here (a per-repo
-// mutex), so two fixers on the same repo never race a clone or a fetch.
+// mutex), so two fixers on the same repo never race a clone or a fetch. When
+// no `git` binary is on PATH this delegates to baseCloneGoGit (gogit.go),
+// which does the same job with go-git — always a FULL clone, since go-git has
+// no `--filter=blob:none` equivalent.
 func (p *Provisioner) baseClone(ctx context.Context, repo string) (string, error) {
 	dir := filepath.Join(p.CheckoutsDir(), repoSlug(repo))
 	mu := p.repoLock(repo)
 	mu.Lock()
 	defer mu.Unlock()
 
+	if !hasGit() {
+		return p.baseCloneGoGit(ctx, repo, dir)
+	}
 	if isGitDir(dir) {
 		if _, err := p.git(ctx, dir, "fetch", "--prune", "origin"); err != nil {
 			return "", fmt.Errorf("fetch: %w", err)
@@ -421,10 +563,33 @@ func (p *Provisioner) owns(path string) bool {
 		filepath.Base(path) != "." && filepath.Base(path) != ".."
 }
 
-// baseOf recovers a worktree's base clone from its .git pointer file
-// ("gitdir: <base>/.git/worktrees/<name>"), so a worktree left by a previous
-// daemon can still be removed through git rather than just unlinked.
+// pruneLiveRefs drops a base clone's keep-alive refs whose dispatch clone is
+// gone (a daemon killed before RemoveWorktree ran).
+func (p *Provisioner) pruneLiveRefs(ctx context.Context, base string) {
+	out, err := p.git(ctx, base, "for-each-ref", "--format=%(refname)", "refs/conductor/live/")
+	if err != nil {
+		return
+	}
+	for _, ref := range strings.Fields(out) {
+		name := strings.TrimPrefix(ref, "refs/conductor/live/")
+		if _, err := os.Lstat(filepath.Join(p.WorktreesDir(), name)); err != nil {
+			_, _ = p.git(ctx, base, "update-ref", "-d", ref)
+		}
+	}
+}
+
+// baseOf recovers a checkout's base clone, so one left by a previous daemon
+// can still be released through git rather than just unlinked: a dispatch
+// clone names it in its alternates ("<base>/.git/objects"), a legacy linked
+// worktree in its .git pointer file ("gitdir: <base>/.git/worktrees/<name>").
 func baseOf(wt string) string {
+	if b, err := os.ReadFile(filepath.Join(wt, ".git", "objects", "info", "alternates")); err == nil {
+		objs := strings.TrimSpace(strings.SplitN(string(b), "\n", 2)[0])
+		if strings.HasSuffix(objs, "/.git/objects") {
+			return strings.TrimSuffix(objs, "/.git/objects")
+		}
+		return ""
+	}
 	b, err := os.ReadFile(filepath.Join(wt, ".git"))
 	if err != nil {
 		return ""
@@ -526,16 +691,25 @@ func safeBranch(ref string) bool {
 
 // ---- git -----------------------------------------------------------------
 
-// git runs one git command (in dir, or wherever when dir is "") and returns its
-// stdout. Terminal prompting is disabled so a missing credential fails fast
-// instead of hanging the daemon on a password prompt.
+// git runs one HARDENED git command (in dir, or wherever when dir is "") and
+// returns its stdout — see internal/gitsafe for what "hardened" neutralizes
+// (a base clone or worktree's local config is not fully trusted input: it
+// came off a remote conductor does not control the far side of).
 func (p *Provisioner) git(ctx context.Context, dir string, args ...string) (string, error) {
-	full := args
-	if dir != "" {
-		full = append([]string{"-C", dir}, args...)
+	cmd := gitsafe.Command(ctx, dir, args...)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err,
+			truncate(strings.TrimSpace(errb.String()), 400))
 	}
-	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	return out.String(), nil
+}
+
+// gitIn is git with stdin.
+func (p *Provisioner) gitIn(ctx context.Context, dir, stdin string, args ...string) (string, error) {
+	cmd := gitsafe.Command(ctx, dir, args...)
+	cmd.Stdin = strings.NewReader(stdin)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {

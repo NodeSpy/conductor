@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // isolationGOOS is runtime.GOOS, a var so tests can validate the Linux-only
@@ -16,10 +17,59 @@ var isolationGOOS = runtime.GOOS
 // and the container/proxy modes — which need conductor's own filesystem or
 // loopback — are rejected.
 func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
+	return validateIsolationFor(where, iso, remote, false)
+}
+
+// validateIsolationFor is validateIsolation with the launch kind known: agent
+// reports a block that governs an agent runtime's own launch (cli/acp on this
+// box — the workspace jail, #154), where the host-command, intent, and
+// enforced-network knobs apply. Everywhere else (code steps, engines,
+// connectors, hosts) those knobs would be silent no-ops and are refused.
+func validateIsolationFor(where string, iso *IsolationConfig, remote, agent bool) error {
 	if iso == nil {
 		return nil
 	}
+	if !agent && (len(iso.Host) > 0 || iso.Intent != nil || iso.MacOSKeychain) {
+		return fmt.Errorf("config: %s: isolation `host:`/`intent:` apply to agent launches (a cli or acp runtime on this box, or a step on one) — here they would be a silent no-op", where)
+	}
+	if n := iso.Network; n != nil {
+		if err := validateNetworkShape(where, n); err != nil {
+			return err
+		}
+		if n.Mode == NetAudit || n.Mode == NetDeny {
+			if iso.Mode != "" && iso.Mode != "namespace" {
+				return fmt.Errorf("config: %s: isolation network %s is enforced by the workspace jail — it needs mode namespace (or no mode), not %s", where, n.Mode, iso.Mode)
+			}
+			if remote {
+				return fmt.Errorf("config: %s: isolation network %s needs a local launch (conductor's egress proxy lives on this box)", where, n.Mode)
+			}
+			if !agent && n.Mode == NetAudit {
+				return fmt.Errorf("config: %s: isolation network audit applies to agent launches only", where)
+			}
+		}
+	}
+	if err := validateAgentJail(where, iso, false); err != nil {
+		return err
+	}
 	switch iso.Mode {
+	case "none":
+		if iso.User != "" || iso.Container != nil || iso.Limits != nil || iso.Privileged || iso.AllowRoot ||
+			iso.Network != nil || len(iso.FS) > 0 || len(iso.Host) > 0 || iso.Intent != nil {
+			return fmt.Errorf("config: %s: isolation mode none is the opt-out — it takes no other fields", where)
+		}
+		return nil
+	case "":
+		// Empty mode is namespace: the jail, with whatever else the block
+		// adds (`fs:`, `network:`, `host:`).
+		if !remote && isolationGOOS != "linux" && isolationGOOS != "darwin" {
+			return fmt.Errorf("config: %s: isolation (the namespace jail) needs Linux user namespaces or macOS Seatbelt (this box is %s) — use mode user, container, or none here", where, isolationGOOS)
+		}
+		if iso.User != "" || iso.Container != nil {
+			return fmt.Errorf("config: %s: isolation `user:`/`container:` need an explicit mode", where)
+		}
+	}
+	switch iso.Mode {
+	case "":
 	case "user":
 		if iso.User == "" {
 			return fmt.Errorf("config: %s: isolation mode user needs `user:` (the low-privilege account)", where)
@@ -43,15 +93,14 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 		default:
 			return fmt.Errorf("config: %s: isolation container.engine must be docker|podman, got %q", where, iso.Container.Engine)
 		}
-	case "":
-		return fmt.Errorf("config: %s: isolation needs `mode: user|namespace|container`", where)
 	default:
-		return fmt.Errorf("config: %s: unknown isolation mode %q (want user|namespace|container)", where, iso.Mode)
+		return fmt.Errorf("config: %s: unknown isolation mode %q (want user|namespace|container|none)", where, iso.Mode)
 	}
-	if iso.Privileged && iso.Mode != "namespace" {
+	ns := iso.Mode == "namespace" || iso.Mode == ""
+	if iso.Privileged && !ns {
 		return fmt.Errorf("config: %s: isolation `privileged: true` only applies to mode namespace (it opts out of the default filesystem masking there) — on %s it would be a silent no-op", where, iso.Mode)
 	}
-	if iso.AllowRoot && iso.Mode != "namespace" {
+	if iso.AllowRoot && !ns {
 		return fmt.Errorf("config: %s: isolation `allow_root: true` only applies to mode namespace (it opts into running the user-namespace sandbox as root) — on %s it would be a silent no-op", where, iso.Mode)
 	}
 	if n := iso.Network; n != nil {
@@ -67,7 +116,9 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 		// network-namespace forwarder, which is Linux-only. macOS Seatbelt can
 		// cut the network wholesale but not run the forwarder, so the allowlist
 		// can't be structurally enforced there.
-		if n.Deny && len(n.Egress) > 0 && iso.Mode == "namespace" && !remote && isolationGOOS == "darwin" {
+		// An agent jail enforces it on macOS too (Seatbelt allows outbound
+		// only to conductor's loopback proxy port).
+		if n.Deny && len(n.Egress) > 0 && ns && !remote && !agent && isolationGOOS == "darwin" {
 			return fmt.Errorf("config: %s: an enforced egress allowlist (network `deny: true` + `egress:`) under mode namespace is Linux-only on this box (macOS Seatbelt has no in-sandbox forwarder) — use mode container for an enforced allowlist on macOS, or plain `deny: true` (full network cut) / an advisory `egress:` without deny", where)
 		}
 		if len(n.Egress) > 0 && remote {
@@ -93,8 +144,8 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 		if p == "" {
 			return fmt.Errorf("config: %s: isolation fs: empty path", where)
 		}
-		if !filepath.IsAbs(p) {
-			return fmt.Errorf("config: %s: isolation fs: %q must be an absolute path", where, p)
+		if !filepath.IsAbs(p) && !strings.HasPrefix(p, "~/") {
+			return fmt.Errorf("config: %s: isolation fs: %q must be an absolute path (or ~/…)", where, p)
 		}
 	}
 	return nil
@@ -119,6 +170,18 @@ func (c *Config) validateStepIsolation(where string, p Step) error {
 	if rn == "" {
 		rn = c.DefaultRuntimeName()
 	}
+	// A policy-only block (`intent:` / `host:`) shapes no sandbox; it needs a
+	// jailed (cli/acp) runtime to mean anything.
+	if p.Isolation.PolicyOnly() {
+		if err := validateAgentJail(where, p.Isolation, true); err != nil {
+			return err
+		}
+		cc, ok := c.MergedControllers()[rn]
+		if rn == "" || (ok && (!AgentJailEligible(cc) || p.Host != "")) {
+			return fmt.Errorf("config: %s: isolation `host:`/`intent:` apply to a jailed agent (a cli or acp runtime on this box) — this step's runtime has no workspace jail", where)
+		}
+		return nil
+	}
 	if rn == "" {
 		return fmt.Errorf("config: %s: isolation requires a runtime conductor launches itself (acp/cli/opencode/agent-deck) — the built-in paseo runtime's agents are the paseo daemon's children and cannot be wrapped", where)
 	}
@@ -130,7 +193,11 @@ func (c *Config) validateStepIsolation(where string, p Step) error {
 		return fmt.Errorf("config: %s: isolation cannot apply to paseo runtime %q (its agents are the paseo daemon's children) — use an acp/cli/opencode/agent-deck runtime, or paseo's own sandboxing", where, rn)
 	}
 	remote := p.Host != "" || cc.Host != ""
-	if err := validateIsolation(where, p.Isolation, remote); err != nil {
+	agent := !remote && AgentJailEligible(cc)
+	if err := validateIsolationFor(where, p.Isolation, remote, agent); err != nil {
+		return err
+	}
+	if err := validateAgentJail(where, p.Isolation, true); err != nil {
 		return err
 	}
 	return validateIsolationControlChannel(where, p.Isolation, cc)
@@ -212,4 +279,13 @@ func validateIsolationControlChannel(where string, iso *IsolationConfig, cc Cont
 		return fmt.Errorf("config: %s: isolation network `deny: true` would sever conductor's HTTP control channel to the opencode server — use an `egress: []` proxy deny instead", where)
 	}
 	return nil
+}
+
+// validateGlobalIsolation checks the top-level `isolation:` block: the
+// fleet-wide default for agent launches (#154).
+func (c *Config) validateGlobalIsolation() error {
+	if c.Isolation == nil {
+		return nil
+	}
+	return validateIsolationFor("isolation", c.Isolation, false, true)
 }

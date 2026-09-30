@@ -44,7 +44,20 @@ func TestWrapLocalUser(t *testing.T) {
 	}
 }
 
+// withBackend pins the namespace backend WrapLocal renders for (CheckGOOS):
+// the wrapper is computed, never run, so each backend's shape is asserted on
+// every host. seatbelt_wrap_test.go holds the darwin counterparts.
+func withBackend(t *testing.T, goos string) {
+	t.Helper()
+	old := CheckGOOS
+	CheckGOOS = goos
+	t.Cleanup(func() { CheckGOOS = old })
+}
+
+// The Linux backend: user namespaces (+ a network namespace for deny, a
+// systemd-run scope for limits).
 func TestWrapLocalNamespace(t *testing.T) {
+	withBackend(t, "linux")
 	s := FromConfig(&config.IsolationConfig{Mode: "namespace"})
 	argv, err := s.WrapLocal([]string{"tool"}, "/wt", nil, nil)
 	if err != nil {
@@ -303,6 +316,7 @@ func TestEgressBareHostIsHTTPSOnly(t *testing.T) {
 // re-enters through the sandbox-net forwarder, whose unix socket is the only
 // path out.
 func TestWrapLocalEnforcedEgress(t *testing.T) {
+	withBackend(t, "linux") // the namespace half; the container half is OS-independent
 	nf := &NetForward{Self: "/usr/bin/conductor", UnixSocket: "/tmp/egress.sock"}
 
 	ns := FromConfig(&config.IsolationConfig{Mode: "namespace",
@@ -357,5 +371,14 @@ func TestWrapLocalEnforcedEgress(t *testing.T) {
 		Network: &config.IsolationNetwork{Egress: []string{"x:443"}}})
 	if adv.EnforcedEgress() {
 		t.Fatal("user-mode egress is advisory, never enforced")
+	}
+}
+
+func TestFromConfigEmptyModeIsNamespace(t *testing.T) {
+	if s := FromConfig(&config.IsolationConfig{FS: []string{"/data"}}); s == nil || s.Mode != "namespace" {
+		t.Fatalf("an isolation block with no mode must confine (namespace), got %+v", s)
+	}
+	if s := FromConfig(&config.IsolationConfig{Mode: "none"}); s != nil {
+		t.Fatalf("mode none is no wrapper: %+v", s)
 	}
 }

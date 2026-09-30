@@ -93,6 +93,30 @@ func eachScopedOption(t *testing.T, r *Runner, fn func(uses string, so connector
 	}
 }
 
+// probeOpts is the options of one probe: the probed option set to value,
+// and every OTHER scoped option of the verb that still names a resource when
+// absent (github put_file's branch — the default branch) set to the
+// dispatch's own value for its dimension, so a probe of one option is judged
+// on that option alone.
+func probeOpts(r *Runner, t core.Trigger, uses string, so connector.ScopedOption, value string) map[string]any {
+	opts := map[string]any{so.Name: value}
+	in, scoped, ok := verbScopedOptions(r.Conns, uses)
+	if !ok {
+		return opts
+	}
+	for _, o := range scoped {
+		if o.Name != so.Name && o.Absent != "" {
+			if v := in.ContextScope(o.Dim, t); v != "" {
+				opts[o.Name] = v
+			}
+		}
+	}
+	return opts
+}
+
+// metaHead is the probe dispatch's own PR head branch.
+const metaHead = "meta-head"
+
 // scopeRefused reports a refusal BY THE RESOURCE CHECK, not by something
 // downstream (a disabled connector, a missing required option).
 // scopeRefused recognizes a resource-scope denial. It keys on the config path
@@ -152,8 +176,8 @@ func TestEveryScopedOptionIsEnforcedOnBothSurfaces(t *testing.T) {
 	trig := core.Trigger{
 		TargetTrusted: true, // a platform-assigned target
 		Source:        "github", Instance: "gh", Kind: "review_requested",
-		Target:  core.Target{Repo: "trigger/repo", Number: 7},
-		Context: map[string]any{"slack": map[string]any{"channel": "#trigger-channel", "user": "U-trigger"}},
+		Target:  core.Target{Repo: "trigger/repo", Number: 7, PR: 7},
+		Context: map[string]any{"slack": map[string]any{"channel": "#trigger-channel", "user": "U-trigger"}, "head_ref": metaHead},
 	}
 	pol := cfg.Policy.AgentAuthored
 
@@ -188,7 +212,7 @@ func TestEveryScopedOptionIsEnforcedOnBothSurfaces(t *testing.T) {
 					{"out of context and not listed", outOfScope, true},
 					{"allow-listed", allowed, false},
 				} {
-					opts := map[string]any{so.Name: tc.value}
+					opts := probeOpts(r, trig, uses, so, tc.value)
 					where := fmt.Sprintf("%s option %q (dimension %q), %s", uses, so.Name, so.Dim, tc.name)
 
 					planErr := r.checkVerbResources(pol, trig, uses, opts, nil)
@@ -269,7 +293,8 @@ func TestSkillGrantScopesUnderEveryPolicyShape(t *testing.T) {
 			cfg := loadConfig(t, everyConnectorYAML(t)+pol)
 			r := newTestRunner(t, cfg, buildRegistry(t, cfg)).Runner
 			r.DryRun = true
-			trigCtx := map[string]any{"slack": map[string]any{"channel": "#trigger-channel", "user": "U-trigger"}}
+			trigCtx := map[string]any{"slack": map[string]any{"channel": "#trigger-channel", "user": "U-trigger"}, "head_ref": metaHead}
+			trig := core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "trigger/repo", Number: 7, PR: 7}, Context: trigCtx}
 
 			eachScopedOption(t, r, func(uses string, so connector.ScopedOption) {
 				connName, _, _ := strings.Cut(uses, ".")
@@ -281,7 +306,7 @@ func TestSkillGrantScopesUnderEveryPolicyShape(t *testing.T) {
 				call := func(value string, grant map[string]map[string][]string) error {
 					id := id
 					id.Scopes = grant
-					_, err := r.RunSkillVerb(context.Background(), id, uses, map[string]any{so.Name: value})
+					_, err := r.RunSkillVerb(context.Background(), id, uses, probeOpts(r, trig, uses, so, value))
 					return err
 				}
 
@@ -342,7 +367,8 @@ func TestScopeAllowlistsSupportSettingsAndTemplates(t *testing.T) {
 	trig := core.Trigger{
 		TargetTrusted: true, // a platform-assigned target
 		Source:        "github", Kind: "review_requested",
-		Target: core.Target{Repo: "trigger/repo", Number: 7},
+		Target:  core.Target{Repo: "trigger/repo", Number: 7, PR: 7},
+		Context: map[string]any{"head_ref": metaHead},
 	}
 	pol := cfg.Policy.AgentAuthored
 
@@ -351,7 +377,7 @@ func TestScopeAllowlistsSupportSettingsAndTemplates(t *testing.T) {
 		id := SkillIdentity{
 			TargetTrusted: true,
 			Agent:         "probe", Verbs: []string{connName + ".*"},
-			Repo: trig.Target.Repo, Number: 7,
+			Repo: trig.Target.Repo, Number: 7, Context: trig.Context,
 		}
 		for _, tc := range []struct {
 			name    string
@@ -363,7 +389,7 @@ func TestScopeAllowlistsSupportSettingsAndTemplates(t *testing.T) {
 			{"the same entry rendered for another dispatch", "rendered-999", true},
 			{"neither", metaOutOfScope, true},
 		} {
-			opts := map[string]any{so.Name: tc.value}
+			opts := probeOpts(r, trig, uses, so, tc.value)
 			where := fmt.Sprintf("%s option %q (dimension %q), %s", uses, so.Name, so.Dim, tc.name)
 
 			planErr := r.checkVerbResources(pol, trig, uses, opts, nil)

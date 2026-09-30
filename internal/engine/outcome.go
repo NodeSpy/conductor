@@ -11,6 +11,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/store"
+	"github.com/NodeSpy/conductor/internal/targets"
 )
 
 // The outcome-learning loop (#36 §18). Every agent dispatch on a PR/issue
@@ -108,6 +109,13 @@ func (e *Engine) observeClosed(ctx context.Context, t core.Trigger) {
 	if merged {
 		outcome = "merged"
 	}
+	// Target lifecycle (this function only runs for a TRUSTED target — see
+	// observeOutcomeSignals): record the terminal fact so a stray write from an
+	// agent still limping along on this target is refused
+	// (targets.Registry.CheckWrite/CheckPush — the broker's and the skill
+	// verbs' binding). Stopping the running fixers is stopFixers (flow.go),
+	// called from process()'s `_closed` branch.
+	targets.Default.MarkClosed(t.Target.Repo, t.Target.Number, merged)
 	for _, g := range e.store.TakeEngagements(t.Key()) {
 		e.recordOutcome(ctx, t.Target.Repo, t.Target.Number, outcome, g)
 	}

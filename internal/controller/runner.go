@@ -72,6 +72,11 @@ type controllerRunner struct {
 	// stopped marks sessions StopTarget killed because their PR closed; their
 	// Dispatch returns dispatch.ErrTargetClosed instead of the partial turn.
 	stopped map[string]bool
+	// byDispatch binds a dispatch id to the session it opened, and inflight
+	// marks a dispatch whose Dispatch call is still running: a step.done
+	// (token-bound to the dispatch id) resolves through them.
+	byDispatch map[string]string
+	inflight   map[string]bool
 }
 
 func newControllerRunner(c Controller, prov Provisioner, h Handler) *controllerRunner {
@@ -83,6 +88,9 @@ func newControllerRunner(c Controller, prov Provisioner, h Handler) *controllerR
 		byPR:    map[string]int{},
 		bucket:  map[string]string{},
 		stopped: map[string]bool{},
+
+		byDispatch: map[string]string{},
+		inflight:   map[string]bool{},
 	}
 }
 
@@ -100,6 +108,18 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 		return ref, nil
 	}
 
+	if req.DispatchID != "" {
+		// In flight from before the session opens: an agent can call
+		// step.done during its first turn, before NewSession returns.
+		r.mu.Lock()
+		r.inflight[req.DispatchID] = true
+		r.mu.Unlock()
+		defer func() {
+			r.mu.Lock()
+			delete(r.inflight, req.DispatchID)
+			r.mu.Unlock()
+		}()
+	}
 	var (
 		wsID, cwd string
 		err       error
@@ -139,6 +159,9 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	r.live[id] = sess
 	r.bucket[id] = bucket
 	r.byPR[bucket]++
+	if req.DispatchID != "" {
+		r.byDispatch[req.DispatchID] = id
+	}
 	r.mu.Unlock()
 
 	ref.AgentID = id
@@ -315,13 +338,28 @@ func (r *controllerRunner) Archive(ctx context.Context, agentID string) error {
 	return err
 }
 
-// AgentForDispatch: controller sessions don't yet record a dispatch binding;
-// a done call for one resolves via its legacy agent identity instead.
-func (r *controllerRunner) AgentForDispatch(string) string { return "" }
+// AgentForDispatch resolves a done call's token-bound dispatch id to the
+// session that dispatch opened ("" when it is not this runner's, or gone).
+func (r *controllerRunner) AgentForDispatch(dispatchID string) string {
+	if dispatchID == "" {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.byDispatch[dispatchID]
+}
 
-// DispatchInFlight: controller foreground turns block in Dispatch and their
-// sessions are closed by the runner itself, so there is no in-flight defer.
-func (r *controllerRunner) DispatchInFlight(string) bool { return false }
+// DispatchInFlight reports a dispatch whose Dispatch call is still running
+// (a foreground turn conductor is blocked on): its done defers to the step
+// boundary, where the runner's own archive reclaims the session.
+func (r *controllerRunner) DispatchInFlight(dispatchID string) bool {
+	if dispatchID == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.inflight[dispatchID]
+}
 
 // DeliverOutput: controller runtimes have no verb-delivery rendezvous yet; a
 // schema step on them uses the reply-text contract.
@@ -337,6 +375,11 @@ func (r *controllerRunner) forget(id string) {
 	}
 	delete(r.live, id)
 	delete(r.stopped, id)
+	for d, sid := range r.byDispatch {
+		if sid == id {
+			delete(r.byDispatch, d)
+		}
+	}
 	bucket := r.bucket[id]
 	delete(r.bucket, id)
 	if n := r.byPR[bucket]; n <= 1 {

@@ -8,13 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/gitsafe"
 	"github.com/NodeSpy/conductor/internal/hosts"
 )
 
@@ -353,7 +353,7 @@ func clearStaleGitLock(ctx context.Context, paseoBin, cwd string) {
 	if cwd == "" {
 		return
 	}
-	c := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--git-common-dir")
+	c := gitsafe.Command(ctx, cwd, "rev-parse", "--git-common-dir")
 	outb, err := c.Output()
 	if err != nil {
 		return
@@ -724,7 +724,7 @@ func isGitRepo(ctx context.Context, dir string) bool {
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return false
 	}
-	return exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--git-dir").Run() == nil
+	return gitsafe.Command(ctx, dir, "rev-parse", "--git-dir").Run() == nil
 }
 
 // targetIsGitRepo reports whether dir is a git working tree on the box this
@@ -764,7 +764,7 @@ func (d *Dispatcher) remoteIsGitRepo(ctx context.Context, dir string) bool {
 // Linked worktrees are ephemeral (the reaper archives them); the main checkout
 // is stable. Falls back to dir if it can't be derived or isn't a working tree.
 func mainWorkTree(ctx context.Context, dir string) string {
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse",
+	out, err := gitsafe.Command(ctx, dir, "rev-parse",
 		"--path-format=absolute", "--git-common-dir").Output()
 	if err != nil {
 		return dir
@@ -1069,6 +1069,41 @@ func (d *Dispatcher) HasLiveAgent(ctx context.Context, prKey, kind string) bool 
 // out of `paseo ls`, and nothing scans for leftovers any more). The workspace
 // must ALSO be in the ledger; one that isn't (pinned, base checkout, yours)
 // leaves only the agent archived.
+// ListAgents exposes the backend's label-filtered agent listing to callers
+// outside this package. Read-only; Archive below still gates the actual
+// reclaim on the ownership ledger.
+func (d *Dispatcher) ListAgents(ctx context.Context, labels map[string]string) ([]AgentInfo, error) {
+	return d.backend().ListAgents(ctx, labels)
+}
+
+// StopTarget is the paseo runtime's side of the engine's stopFixers: when a
+// PR merges or closes, archive every PR-fixer agent (core.BranchFixKind)
+// conductor launched for it — found by its `pr=<key>` and `kind=` labels, and
+// archived only through Archive's ownership-ledger gate. Review and other
+// agents are untouched, as on the controller runners. Returns how many it
+// stopped.
+func (d *Dispatcher) StopTarget(ctx context.Context, key string) int {
+	// One listing by the PR label first: almost every close has no paseo
+	// agent on it, and this runs on every close event — don't pay a paseo
+	// call per fixer kind for nothing.
+	if all, err := d.ListAgents(ctx, map[string]string{"conductor": "1", "pr": key}); err != nil || len(all) == 0 {
+		return 0
+	}
+	n := 0
+	for _, kind := range core.BranchFixKinds() {
+		agents, err := d.ListAgents(ctx, map[string]string{"conductor": "1", "pr": key, "kind": kind})
+		if err != nil {
+			continue
+		}
+		for _, a := range agents {
+			if a.ID != "" && d.Archive(ctx, a.ID) == nil {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 func (d *Dispatcher) Archive(ctx context.Context, agentID string) error {
 	if agentID == "" {
 		return nil
@@ -1284,7 +1319,7 @@ func (d *Dispatcher) listAgents(ctx context.Context) []AgentInfo {
 
 // gitBranch returns the current branch of a checkout (empty on detached/err).
 func (d *Dispatcher) gitBranch(ctx context.Context, dir string) string {
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	out, err := gitsafe.Command(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
 	if err != nil {
 		return ""
 	}
@@ -1297,7 +1332,7 @@ func gitRepoMatches(ctx context.Context, dir, repo string) bool {
 	if repo == "" {
 		return false
 	}
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "config", "--get", "remote.origin.url").Output()
+	out, err := gitsafe.Command(ctx, dir, "config", "--get", "remote.origin.url").Output()
 	if err != nil {
 		return false
 	}

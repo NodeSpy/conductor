@@ -444,6 +444,12 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 	}
 	cfgFile, _ := configPath(nil)
 	controller.DaemonMaskPaths = []string{stateDir, filepath.Dir(cfgFile)}
+	var jailEvents *flow.EventHub
+	if stack != nil {
+		jailEvents = stack.Events
+	}
+	wireJail(jailWiring{cfg: cfg, stateDir: stateDir, cfgDir: filepath.Dir(cfgFile), audit: st.Audit,
+		events: jailEvents, egress: egress, logf: logf})
 
 	// One-shot mode doesn't wire Backend-RPC runtime plugins (no long-lived
 	// dispatcher/reaper here); ACP runtime plugins still resolve as before.

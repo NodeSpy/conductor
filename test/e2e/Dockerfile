@@ -28,8 +28,20 @@ RUN go build -o /out/conductor ./cmd/conductor \
 
 # ---- runtime stage ----
 FROM alpine:3.20
-RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh \
+RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh util-linux \
  && adduser -D -h /home/conductor conductor
+# The agent-jail scenarios (group X): a fake host `gh`, and an operator home
+# with a "secret" ssh key and a gh login the jail must hide from the agent
+# while the host-side gh still sees its own login.
+COPY test/e2e/services/fakegh/gh /usr/local/bin/gh
+COPY test/e2e/services/faketf/terraform /usr/local/bin/terraform
+RUN chmod 0755 /usr/local/bin/gh /usr/local/bin/terraform \
+ && mkdir -p /home/conductor/.ssh /home/conductor/.config/gh /home/conductor/.terraform.d \
+ && echo '{"credentials":{}}' > /home/conductor/.terraform.d/credentials.tfrc.json \
+ && echo "NOT-A-REAL-KEY-e2e-secret" > /home/conductor/.ssh/id_fake \
+ && printf 'github.com:\n  user: conductor-user\n' > /home/conductor/.config/gh/hosts.yml \
+ && chmod 700 /home/conductor/.ssh && chmod 600 /home/conductor/.ssh/id_fake \
+ && chown -R conductor:conductor /home/conductor
 COPY --from=build /out/ /usr/local/bin/
 # The reference ENGINE plugin (test/plugins/acme-engine) is a real out-of-process
 # plugin, not a harness fake: group V points a step's `use:` straight at this

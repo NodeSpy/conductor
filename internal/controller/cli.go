@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,8 @@ type cliController struct {
 	launch cliLauncher // injectable; nil → real subprocess
 	host   string      // configured `host:`; "" = local (see resolveHost/prepareLaunch)
 	iso    *config.IsolationConfig
+	// jailOK: this runtime's launches get the default workspace jail (#154).
+	jailOK bool
 
 	seq  atomic.Int64
 	mu   sync.Mutex
@@ -94,6 +97,7 @@ func newCLIController(name string, cc config.ControllerConfig, prov Provisioner)
 		prov:   prov,
 		host:   cc.Host,
 		iso:    cc.Isolation,
+		jailOK: config.AgentJailEligible(cc),
 		live:   map[string]*cliSession{},
 	}
 }
@@ -135,9 +139,26 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 	}
 
 	host := resolveHost(c.host, spec.Request.Step.Host)
-	opt := launchOptsFor(c.iso, spec.Request)
+	if host == "" {
+		// The conductor skill surface (`conductor call step.done`, the
+		// granted verbs) over the daemon's local socket — the same env the
+		// paseo path hands a local agent.
+		for k, v := range dispatch.SkillEnv(spec.Request, dispatch.LocalSkillEndpoint()) {
+			env = append(env, k+"="+v)
+		}
+	}
+	opt := agentLaunchOpts(c.jailOK && host == "", c.recipe.tool, c.iso, spec.Request)
 	id := c.recipe.tool + "-" + strconv.FormatInt(c.seq.Add(1), 10)
 	cwd, cmd := spec.Cwd, c.recipe.cmd(spec.Request.Model, prompt)
+	if opt.jail != nil && c.recipe.jailArgs != nil && spec.Request.Step.DecisionLaunch == nil && len(cmd.argv) > 1 {
+		cmd.argv = insertAfter(cmd.argv, 1, c.recipe.jailArgs(opt.jail.ReadOnly))
+	}
+	if opt.jail != nil && c.recipe.stream != nil && spec.Request.Step.DecisionLaunch == nil {
+		// In the jail, claude-code reports every tool call to conductor
+		// (PreToolUse/PostToolUse hooks) and streams its transcript.
+		opt.claudeHooks = true
+		cmd.argv = c.recipe.stream(cmd.argv)
+	}
 	var dec *decisionRun
 	// A decide step's session runs LEAN when the recipe knows how and it runs
 	// on this box (the scratch dir it needs is local).
@@ -195,12 +216,21 @@ func (c *cliController) ResumeSession(_ context.Context, id string, agentAuthore
 		return nil, ErrNoFollowup
 	}
 	sctx, scancel := context.WithCancel(context.Background())
-	return &cliSession{id: id, c: c, toolID: id, host: c.host, opt: resumeOpts(c.iso, agentAuthored), cancel: scancel, ctx: sctx}, nil
+	opt := resumeOpts(c.iso, agentAuthored)
+	if c.host == "" {
+		opt = agentResumeOpts(c.jailOK, c.recipe.tool, c.iso, agentAuthored)
+	}
+	return &cliSession{id: id, c: c, toolID: id, host: c.host, opt: opt, cancel: scancel, ctx: sctx}, nil
 }
 
-func (c *cliController) start(ctx context.Context, dir string, env, argv []string, stdin string) (cliProc, error) {
+func (c *cliController) start(ctx context.Context, dir string, env, argv []string, stdin string, res *launchResult) (cliProc, error) {
 	if c.launch != nil {
 		return c.launch(ctx, dir, env, argv, stdin)
+	}
+	if res != nil && res.jailed {
+		// A jailed launch never inherits the daemon's environment: it starts
+		// from JailBaseEnv (credentials removed) plus what prepareLaunch built.
+		return startCLIProcEnv(ctx, dir, append(JailBaseEnv(res.tool), env...), argv, stdin, res.stream)
 	}
 	return startCLIProc(ctx, dir, env, argv, stdin)
 }
@@ -214,6 +244,7 @@ func (c *cliController) start(ctx context.Context, dir string, env, argv []strin
 // opt carries the dispatch's isolation policy (sandbox wrapper + egress).
 func (c *cliController) launchOn(ctx context.Context, host, dir string, env []string, cmd cliCmd, opt launchOpts) (cliProc, error) {
 	opt, revoke := withEgressRevoke(opt)
+	opt.res = &launchResult{stream: opt.claudeHooks}
 	wrapped, localDir, localEnv, _, err := prepareLaunch(host, dir, env, cmd.argv, opt)
 	if err == nil {
 		err = checkArgSizes(wrapped)
@@ -222,7 +253,12 @@ func (c *cliController) launchOn(ctx context.Context, host, dir string, env []st
 		revoke()
 		return nil, err
 	}
-	proc, err := c.start(ctx, localDir, localEnv, wrapped, cmd.stdin)
+	if opt.res.jailed {
+		// The argv's prompt was rewritten inside prepareJail; a prompt fed on
+		// stdin is rewritten here.
+		cmd.stdin = dispatch.ForJail(cmd.stdin)
+	}
+	proc, err := c.start(ctx, localDir, localEnv, wrapped, cmd.stdin, opt.res)
 	if err != nil {
 		revoke()
 		return nil, err
@@ -293,6 +329,15 @@ func (b *boundedBuffer) String() string {
 // session-scoped (ctx cancels it), matching the other controllers'
 // background-agent lifetime.
 func startCLIProc(ctx context.Context, dir string, env, argv []string, stdin string) (cliProc, error) {
+	return startCLIProcEnv(ctx, dir, append(os.Environ(), env...), argv, stdin, false)
+}
+
+// startCLIProcEnv is startCLIProc with the process's COMPLETE environment
+// given (nothing inherited). stream captures a JSON-lines transcript (claude
+// -p --output-format stream-json): only the final result line and any
+// non-JSON diagnostics are kept as the turn's output, so a long session's
+// transcript cannot push the answer out of the capture cap.
+func startCLIProcEnv(ctx context.Context, dir string, env, argv []string, stdin string, stream bool) (cliProc, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("empty command")
 	}
@@ -300,22 +345,31 @@ func startCLIProc(ctx context.Context, dir string, env, argv []string, stdin str
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = env
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
-	buf := &boundedBuffer{max: cliOutputCap}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
+	var out capture = &boundedBuffer{max: cliOutputCap}
+	if stream {
+		out = &streamCapture{noise: boundedBuffer{max: cliOutputCap}}
+	}
+	cmd.Stdout = out
+	cmd.Stderr = out
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	return &execProc{cmd: cmd, buf: buf}, nil
+	return &execProc{cmd: cmd, buf: out}, nil
+}
+
+// capture is a turn's output sink.
+type capture interface {
+	io.Writer
+	String() string
 }
 
 type execProc struct {
 	cmd *exec.Cmd
-	buf *boundedBuffer
+	buf capture
 }
 
 func (p *execProc) Wait() (string, error) {
@@ -367,6 +421,16 @@ type cliRecipe struct {
 	// decideAnswer extracts the reply from a lean decision run's raw stdout
 	// (nil → answer).
 	decideAnswer func(raw string) string
+	// jailArgs are the tool's own approval/sandbox flags for a jailed turn
+	// (codex: its approval policy and sandbox mode, mapped from the step's
+	// write policy — the jail is the wall, these keep the tool from asking).
+	// nil → none.
+	jailArgs func(readOnly bool) []string
+	// stream rewrites a launch/resume argv to stream its transcript as JSON
+	// lines (claude-code: --output-format stream-json --verbose) — used in
+	// the workspace jail, where the tool-call hooks are wired too. nil → the
+	// tool has no such mode.
+	stream func(argv []string) []string
 }
 
 // cliRecipeFor selects a recipe from the config. An explicit `command:` yields a
@@ -408,6 +472,7 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 			model:        ModelResumable,
 			decide:       claudeDecide,
 			decideAnswer: parseClaudeStructured,
+			stream:       claudeStream,
 		}
 	case "codex":
 		// `-` as the prompt tells `codex exec` to read it from stdin.
@@ -417,6 +482,7 @@ func cliRecipeFor(cc config.ControllerConfig) cliRecipe {
 			model:     ModelOneshot,
 			modelArgs: func(m string) []string { return []string{"--model", m} },
 			decide:    codexDecide,
+			jailArgs:  codexJailArgs,
 		}
 	default:
 		bin := tool
@@ -441,6 +507,43 @@ func (r cliRecipe) cmd(model, prompt string) cliCmd {
 	}
 	c.argv = append(c.argv, r.modelArgs(model)...)
 	return c
+}
+
+// codexJailArgs maps a jailed codex turn's write policy onto codex's own
+// controls (#154 §11): never ask for approval (headless), and a read-only
+// sandbox for a review step, workspace-write for a fixer. conductor's jail
+// and broker remain the boundary; codex's approval policy is the harness
+// layer's counterpart to claude-code's hooks.
+func codexJailArgs(readOnly bool) []string {
+	mode := "workspace-write"
+	if readOnly {
+		mode = "read-only"
+	}
+	return []string{"-c", `approval_policy="never"`, "--sandbox", mode}
+}
+
+// insertAfter puts extra after argv[i] (codex's flags belong after `exec`,
+// before the trailing `-` stdin marker).
+func insertAfter(argv []string, i int, extra []string) []string {
+	out := append([]string(nil), argv[:i+1]...)
+	out = append(out, extra...)
+	return append(out, argv[i+1:]...)
+}
+
+// claudeStream switches a claude -p argv from one JSON envelope to the
+// stream-json transcript (the final line is the same `type: result`
+// envelope the parsers read).
+func claudeStream(argv []string) []string {
+	out := make([]string, 0, len(argv)+1)
+	for i := 0; i < len(argv); i++ {
+		if argv[i] == "--output-format" && i+1 < len(argv) {
+			out = append(out, "--output-format", "stream-json")
+			i++
+			continue
+		}
+		out = append(out, argv[i])
+	}
+	return append(out, "--verbose")
 }
 
 // claudeDecide is the lean claude-code decision session. Deliberately NOT
@@ -696,7 +799,11 @@ func (s *cliSession) Prompt(_ context.Context, msg Message) (<-chan Update, erro
 	}
 
 	ch := make(chan Update, 4)
-	proc, err := s.c.launchOn(s.ctx, s.host, s.cwd, s.env, s.c.recipe.resume(tid, msg.Text), s.opt)
+	rc := s.c.recipe.resume(tid, msg.Text)
+	if s.opt.claudeHooks && s.c.recipe.stream != nil {
+		rc.argv = s.c.recipe.stream(rc.argv)
+	}
+	proc, err := s.c.launchOn(s.ctx, s.host, s.cwd, s.env, rc, s.opt)
 	if err != nil {
 		ch <- Update{Kind: UpdateDone, AgentID: s.id, Err: err}
 		close(ch)
@@ -764,6 +871,13 @@ func (s *cliSession) TurnErr() error {
 	s.mu.Lock()
 	raw := s.out
 	s.mu.Unlock()
+	// A workspace jail that failed to come up never ran the agent: its
+	// setup error is the whole output. Surface it as the turn's failure
+	// rather than handing it on as the agent's reply.
+	if strings.HasPrefix(strings.TrimSpace(raw), "sandbox-net: ") {
+		line, _, _ := strings.Cut(strings.TrimSpace(raw), "\n")
+		return fmt.Errorf("the agent's sandbox could not start: %s", line)
+	}
 	if s.c != nil && s.c.recipe.failed != nil {
 		return s.c.recipe.failed(raw)
 	}

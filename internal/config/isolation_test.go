@@ -35,7 +35,10 @@ func TestIsolationValidation(t *testing.T) {
 		wantErr string
 	}{
 		{"nil ok", nil, false, ""},
-		{"missing mode", &IsolationConfig{}, false, "mode: user|namespace|container"},
+		{"missing mode is the namespace jail", &IsolationConfig{}, false, ""},
+		{"mode none", &IsolationConfig{Mode: "none"}, false, ""},
+		{"mode none takes nothing else", &IsolationConfig{Mode: "none", FS: []string{"/x"}}, false, "takes no other fields"},
+		{"empty mode with user", &IsolationConfig{User: "s"}, false, "explicit mode"},
 		{"unknown mode", &IsolationConfig{Mode: "jail"}, false, "unknown isolation mode"},
 		{"user without user", &IsolationConfig{Mode: "user"}, false, "needs `user:`"},
 		{"user ok", &IsolationConfig{Mode: "user", User: "sbx"}, false, ""},
