@@ -43,7 +43,7 @@ func TestContentExecutingSubcommandsAreRefusedByDefault(t *testing.T) {
 	}
 	for _, c := range refused {
 		d := Decide(Request{Tool: c.argv[0], Args: c.argv[1:], Cwd: "/state/worktrees/d1"},
-			Rule{Tool: c.argv[0], Profiled: true}, ctx, ownTarget)
+			Rule{Tool: c.argv[0], Profiled: true}, ctx)
 		if d.Allow || d.Confine {
 			t.Errorf("%v: want refused by default, got allowed", c.argv)
 			continue
@@ -62,7 +62,7 @@ func TestContentExecutingSubcommandsAreRefusedByDefault(t *testing.T) {
 	}
 	for _, argv := range safe {
 		d := Decide(Request{Tool: argv[0], Args: argv[1:], Cwd: "/state/worktrees/d1"},
-			Rule{Tool: argv[0], Profiled: true}, ctx, ownTarget)
+			Rule{Tool: argv[0], Profiled: true}, ctx)
 		if !d.Allow || d.Confine {
 			t.Errorf("%v: a safe subcommand stays available unconfined, got allow=%v confine=%v %q", argv, d.Allow, d.Confine, d.Reason)
 		}
@@ -78,22 +78,22 @@ func TestContentExecutingAllowIsExplicitAndParsed(t *testing.T) {
 		{"plan"}, {"plan", "-out=x"}, {"-chdir=infra", "plan"}, {"plan", "-var", "a=b", "-lock=false"},
 		{"-chdir=infra", "init", "-upgrade"},
 	} {
-		d := Decide(Request{Tool: "terraform", Args: argv, Cwd: "/state/worktrees/d1"}, allowed, testCtx(), ownTarget)
+		d := Decide(Request{Tool: "terraform", Args: argv, Cwd: "/state/worktrees/d1"}, allowed, testCtx())
 		if !d.Allow || !d.Confine {
 			t.Errorf("terraform %v with plan/init allowed: want a confined run, got allow=%v confine=%v %q", argv, d.Allow, d.Confine, d.Reason)
 		}
 	}
 	// apply is not in the operator's list: refused (by the content rule).
-	if d := Decide(Request{Tool: "terraform", Args: []string{"apply"}}, allowed, testCtx(), ownTarget); d.Allow {
+	if d := Decide(Request{Tool: "terraform", Args: []string{"apply"}}, allowed, testCtx()); d.Allow {
 		t.Error("terraform apply was not allowed explicitly")
 	}
 	// A blanket `*` does not name a content-executing command.
-	if d := Decide(Request{Tool: "terraform", Args: []string{"plan"}}, operatorAllows("terraform", "*"), testCtx(), ownTarget); d.Allow {
+	if d := Decide(Request{Tool: "terraform", Args: []string{"plan"}}, operatorAllows("terraform", "*"), testCtx()); d.Allow {
 		t.Error("allow: [\"*\"] must not permit terraform plan")
 	}
 	// Only a step allows it: a step can narrow, never widen.
 	step := Resolve("terraform", []*config.IsolationConfig{nil, nil, {Host: map[string]*config.HostCommand{"terraform": {Allow: []string{"plan *"}}}}}, true)
-	if d := Decide(Request{Tool: "terraform", Args: []string{"plan"}}, step, testCtx(), ownTarget); d.Allow {
+	if d := Decide(Request{Tool: "terraform", Args: []string{"plan"}}, step, testCtx()); d.Allow {
 		t.Error("a step's own allow list must not permit a content-executing command")
 	}
 	// The operator allows it and the step narrows to the same: confined.
@@ -101,19 +101,19 @@ func TestContentExecutingAllowIsExplicitAndParsed(t *testing.T) {
 		{Host: map[string]*config.HostCommand{"terraform": {Allow: []string{"plan *", "fmt *"}}}},
 		{Host: map[string]*config.HostCommand{"terraform": {Allow: []string{"plan *"}}}},
 	}, true)
-	if d := Decide(Request{Tool: "terraform", Args: []string{"plan"}}, both, testCtx(), ownTarget); !d.Allow || !d.Confine {
+	if d := Decide(Request{Tool: "terraform", Args: []string{"plan"}}, both, testCtx()); !d.Allow || !d.Confine {
 		t.Errorf("operator allow + step narrowing: %+v", d)
 	}
 	// A deny still wins.
 	deny := operatorAllows("terraform", "plan *")
 	deny.Deny = []string{"plan -destroy"}
-	if d := Decide(Request{Tool: "terraform", Args: []string{"plan", "-destroy"}}, deny, testCtx(), ownTarget); d.Allow {
+	if d := Decide(Request{Tool: "terraform", Args: []string{"plan", "-destroy"}}, deny, testCtx()); d.Allow {
 		t.Error("a deny rule still applies to an allowed content-executing command")
 	}
 	// Pulled images run unconfined; only a locally built one is content.
 	ctx := testCtx()
 	ctx.LocalImage = func(ref string) bool { return false }
-	if d := Decide(Request{Tool: "docker", Args: []string{"run", "--rm", "alpine:3"}}, Rule{Tool: "docker", Profiled: true}, ctx, ownTarget); !d.Allow || d.Confine {
+	if d := Decide(Request{Tool: "docker", Args: []string{"run", "--rm", "alpine:3"}}, Rule{Tool: "docker", Profiled: true}, ctx); !d.Allow || d.Confine {
 		t.Errorf("a pulled image: %+v", d)
 	}
 }

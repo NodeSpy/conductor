@@ -149,8 +149,8 @@ out; `conductor validate` says which runtimes are jailed on this box.
 
 A runtime conductor launches itself (acp / cli / opencode / agent-deck) may
 carry an `isolation:` block — the jail's knobs (`fs:`, `network:`, `host:`,
-`writes:`), or another mode, for every launch it performs; a step's own
-`isolation:` wins (host rules and writes can only narrow). Not applicable to
+`intent:`), or another mode, for every launch it performs; a step's own
+`isolation:` wins (host rules can only narrow). Not applicable to
 paseo runtimes (their agents are the paseo daemon's children) — `conductor
 validate` rejects that combination. agent-deck, opencode, external runtime
 plugins, and `host:` runtimes are outside the default jail. See [[Isolation]].

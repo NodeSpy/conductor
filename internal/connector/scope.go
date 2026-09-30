@@ -32,6 +32,9 @@ const DimRepo = "repo"
 type ScopedOption struct {
 	Name string
 	Dim  string
+	// Absent is the value checked when the option is not supplied (see
+	// Field.ScopeAbsent); "" = an absent option names nothing.
+	Absent string
 }
 
 // ScopedOptions lists a verb's scope-tagged options, ordered by option name so
@@ -43,7 +46,7 @@ func (v VerbDecl) ScopedOptions() []ScopedOption {
 		if f.Scope == "" {
 			continue
 		}
-		out = append(out, ScopedOption{Name: name, Dim: f.Scope})
+		out = append(out, ScopedOption{Name: name, Dim: f.Scope, Absent: f.ScopeAbsent})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out

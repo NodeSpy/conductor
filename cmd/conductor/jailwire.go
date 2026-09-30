@@ -15,9 +15,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/controller"
-	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/flow"
-	"github.com/NodeSpy/conductor/internal/hostcmd"
 	"github.com/NodeSpy/conductor/internal/jail"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 	"github.com/NodeSpy/conductor/internal/targets"
@@ -67,16 +65,6 @@ func wireJail(w jailWiring) *jail.Manager {
 				Step: e.Step, Status: e.Status, Detail: detail})
 		}
 	}
-	target := func(d *jail.Dispatch) targets.Target {
-		return targets.Target{Repo: d.Repo, Number: d.Number, IsPR: d.IsPR, HeadBranch: d.HeadBranch}
-	}
-	policy := func(d *jail.Dispatch) targets.WritePolicy {
-		p := targets.WritePolicy{ReadOnly: d.ReadOnly}
-		if wp := d.Writes; wp != nil {
-			p.CreatePR, p.CreateIssue, p.OtherTargets, p.Branches, p.Merge = wp.CreatePR, wp.CreateIssue, wp.OtherTargets, wp.Branches, wp.Merge
-		}
-		return p
-	}
 	m := &jail.Manager{
 		Root:      filepath.Join(w.stateDir, "jails"),
 		SelfExe:   os.Executable,
@@ -85,24 +73,18 @@ func wireJail(w jailWiring) *jail.Manager {
 		Sensitive: []string{w.stateDir, w.cfgDir},
 		Sockets:   []string{filepath.Join(w.stateDir, "memory.sock")},
 		Emit:      emit,
-		CheckWrite: func(d *jail.Dispatch, wr hostcmd.Write) string {
-			if d.Repo == "" {
-				return "target: this launch has no dispatch target — writes are refused"
-			}
-			// A dead target trumps everything else: say so, whatever the write.
+		// The dispatch's target is closed: the close registry (fed by the
+		// close event), and — for a close conductor has not heard about yet —
+		// the PR's live state. The gh and git profiles refuse every write
+		// then.
+		TargetClosed: func(d *jail.Dispatch) string {
 			if r := liveClosed(d); r != "" {
 				return r
 			}
-			return targets.Default.CheckWrite(target(d), policy(d), wr.Kind, wr.Repo, wr.Number)
-		},
-		CheckPush: func(d *jail.Dispatch, branch string, force, del bool) string {
-			if d.Repo == "" {
-				return "target: this launch has no dispatch target — pushes are refused"
+			if outcome, ok := targets.Default.Closed(d.Repo, d.Number); ok && d.Repo != "" {
+				return fmt.Sprintf("target: %s#%d is %s — writes refused", d.Repo, d.Number, outcome)
 			}
-			if r := liveClosed(d); r != "" {
-				return r
-			}
-			return targets.Default.CheckPush(target(d), policy(d), d.Repo, branch, force, del)
+			return ""
 		},
 		ThreadTarget:  threadTarget,
 		HostEgress:    w.egress.UnixEndpointLabeled,
@@ -117,7 +99,6 @@ func wireJail(w jailWiring) *jail.Manager {
 	w.egress.OnVerdict = m.NetVerdict
 	controller.JailManager = m
 	controller.GlobalIsolation = w.cfg.Isolation
-	dispatch.GlobalIsolation = w.cfg.Isolation
 	controller.EgressProxyUnixLabeled = w.egress.UnixEndpointLabeled
 	controller.EgressProxyForLabeled = w.egress.EndpointLabeled
 	controller.JailDegraded = func(dispatchID, label, reason string) {

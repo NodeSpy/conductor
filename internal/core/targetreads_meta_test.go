@@ -104,6 +104,9 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"auditSkillVerb", "an audit row"},
 		{"RunSkillVerb", "rebuilds the trigger it then passes to the checks, which call OwnRepo themselves; the Caller it builds goes through NewAgentCaller"},
 	},
+	"internal/connector/github.go": {
+		{"ContextScope", "returns nothing unless OwnRepo() does (a trusted, platform-assigned target): the PR/issue number read after it is the dispatch's own, never a sender's"},
+	},
 	"internal/flow/group.go": {
 		{"groupKeyFor", "delegates to Trigger.Key, which is trust-aware"},
 	},

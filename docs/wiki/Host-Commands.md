@@ -77,7 +77,8 @@ Optional, per binary; it can only restrict (or fix up):
 ```yaml
 isolation:
   host:
-    git: {}                                  # nothing to say — guardrails + your identity/signing
+    git:                                     # the push binding (git is never a shim)
+      allow: ["*", "push release/*"]         # pushes may also reach release/* branches
     gh:
       deny: ["pr merge *", "repo delete *"]
     aws:
@@ -219,14 +220,31 @@ Three layers, so safety does not depend on recognizing every subcommand:
 ## gh {#gh}
 
 Reads (`pr view|diff|checks|list`, `issue view|list`, `api` GET, GraphQL
-queries) are bound to the dispatch's repository. Writes are bound to the
-dispatch's **own target** (see [Isolation → writes](Isolation#writes-are-bound-to-the-dispatchs-own-target)):
-a fixer may comment on its PR, review it, reply to and resolve its review
-threads (`gh api graphql` `resolveReviewThread` — conductor resolves the
-thread to its PR first); `pr create`, `issue create`, `api` POST
-`/pulls|/issues`, writes to any other PR, merging and closing are refused.
-`gh` never approves. `pr checkout` is refused (use git in the jail). The host
-`gh` runs with `GH_REPO` set to the dispatch's repository.
+queries) run on the dispatch's repository. The **gh profile binds writes to
+the dispatch's own PR/issue**: a fixer may comment on it, review it, edit it,
+update its branch, reply to and resolve its review threads (`gh api graphql`
+`resolveReviewThread` — conductor resolves the thread to its PR first).
+Refused unless `isolation.host.gh.allow` names the command: `pr create`,
+`issue create`, `api` POST `/pulls|/issues`, `pr merge|close|reopen`, a
+repository-level write (`release create`, `label create`, …), a write to any
+other PR or issue, and anything on another repository (`-R other/repo`).
+A review step's gh writes nothing unless named the same way; a closed target
+takes no gh write at all.
+
+```yaml
+isolation:
+  host:
+    gh:
+      allow: ["*", "pr create *", "pr comment * --repo=acme/docs"]
+      deny:  ["pr merge *"]
+```
+
+`"*"` keeps every gh command available (an allow list is otherwise *only*
+what it names); `"pr create *"` names opening a PR; the third entry names
+comments on `acme/docs`. `gh` never approves. `pr checkout` is refused (use
+git in the jail). The host `gh` runs with `GH_REPO` set to the dispatch's
+repository. This is the binary's own policy: conductor's `github` verbs are
+granted separately (see [[Isolation#writes-are-bound-to-the-dispatchs-own-target]]).
 
 ## git {#git}
 
@@ -237,10 +255,12 @@ thread to its PR first); `pr create`, `issue create`, `api` POST
   `git-remote-conductor`; conductor performs it from the base clone (never
   the dispatch's own clone, whose config is the agent's — see
   [[Isolation#git-one-clone-per-dispatch]]) with your identity after policy:
-  the dispatch's repository only; pushes only
-  to the dispatch's own branch — never the default branch, no force push, no
-  deletion; review steps no push at all. Every push records the ref and
-  old→new SHAs.
+  the dispatch's repository only; then the **git profile's push binding**:
+  the dispatch's own branch by default; any other branch only when
+  `isolation.host.git.allow` names it (`["*", "push release/*"]`); never a
+  force push or a deletion; nothing from a review step or to a closed target.
+  `isolation.host.git` configures only this binding — git is never a shim.
+  Every push records the ref and old→new SHAs.
 - Signing: `gpg.ssh.program` / `gpg.program` is conductor's signing shim. It
   sends the payload; conductor checks it is a commit object whose tree and
   parents exist in the dispatch's repository and signs it outside the jail

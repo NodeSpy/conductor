@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -12,6 +13,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	gh "github.com/NodeSpy/conductor/internal/integrations/github"
+	"github.com/NodeSpy/conductor/internal/targets"
 	"github.com/NodeSpy/conductor/pkg/githubkit"
 )
 
@@ -583,7 +585,104 @@ var githubDecl = &TypeDecl{
 	},
 }
 
-func init() { RegisterType(githubDecl, newGithubImpl) }
+func init() {
+	scopeGithubTargets(githubDecl)
+	RegisterType(githubDecl, newGithubImpl)
+}
+
+// Target scoping of the github verbs (docs/design/skill-verb-scope.md): a
+// verb grant (`skill.verbs: [github.comment]`) says the agent may comment,
+// not WHERE. The repo dimension says which repository; these two say which
+// PR or issue, and which branch, a WRITE verb may act on:
+//
+//	number  the PR/issue a write names (its pr/number option)
+//	branch  the branch a content write commits to or creates
+//
+// ContextScope answers both with the dispatch's own target — its PR/issue,
+// and its head branch — so a grant acts there without naming it, and
+// anything else needs the grant to list it (`github.comment: {pr: ["*"]}`).
+// Reads are untagged: reading another PR was never bound to the target.
+// put_file/delete_file without a branch write the default branch, so an
+// absent branch is checked as defaultBranchScope, which no dispatch owns.
+const (
+	DimNumber = "number"
+	DimBranch = "branch"
+	// defaultBranchScope is what an absent branch names on a content write.
+	defaultBranchScope = "@default-branch"
+)
+
+// githubTargetWrites are the write verbs whose pr/number options name the
+// PR or issue they act on.
+var githubTargetWrites = map[string]bool{
+	"comment": true, "reply": true, "request_review": true, "rerequest_review": true,
+	"remove_reviewer": true, "submit_review": true, "merge_pr": true, "update_pr": true,
+	"update_issue": true, "assign": true, "remove_label": true, "add_labels": true,
+	"ready_for_review": true, "convert_to_draft": true,
+}
+
+// githubBranchWrites are the verbs that commit to or create a branch, and
+// what an absent branch means on each.
+var githubBranchWrites = map[string]string{
+	"put_file": defaultBranchScope, "delete_file": defaultBranchScope, "create_branch": "",
+}
+
+func scopeGithubTargets(d *TypeDecl) {
+	for i := range d.Verbs {
+		v := &d.Verbs[i]
+		if githubTargetWrites[v.Name] {
+			for _, opt := range []string{"pr", "number"} {
+				if f, ok := v.Options[opt]; ok {
+					f.Scope = DimNumber
+					v.Options[opt] = f
+				}
+			}
+		}
+		if absent, ok := githubBranchWrites[v.Name]; ok {
+			if f, ok := v.Options["branch"]; ok {
+				f.Scope, f.ScopeAbsent = DimBranch, absent
+				v.Options["branch"] = f
+			}
+		}
+	}
+}
+
+// ContextScope is the github connector's resource-scoping hook (scope.go):
+// the dispatch's own PR/issue number, and a PR's head branch — the values a
+// grant may name without listing them. A target conductor has seen merged or
+// closed (the core close signal, targets.Default) has neither, so every
+// write to it is refused whatever the grant. The repo dimension falls
+// through to the dispatch's own repo (Instance.ContextScope), closed or not:
+// reads stay allowed.
+func (g *githubImpl) ContextScope(dim string, t core.Trigger) string {
+	if dim != DimNumber && dim != DimBranch {
+		return ""
+	}
+	repo := t.OwnRepo() // "" for a target the event's sender chose: nothing is its own
+	if repo == "" {
+		return ""
+	}
+	num := t.Target.PR
+	if num == 0 {
+		num = t.Target.Issue
+	}
+	if num == 0 {
+		num = t.Target.Number
+	}
+	if num == 0 {
+		return ""
+	}
+	if _, closed := targets.Default.Closed(repo, num); closed {
+		return ""
+	}
+	if dim == DimNumber {
+		return strconv.Itoa(num)
+	}
+	if t.Target.PR == 0 {
+		return ""
+	}
+	head, _ := t.Context["head_ref"].(string)
+	return head
+}
 
 // githubConn is a github connector's connection config (the type-specific
 // fields of its `connectors:` entry).

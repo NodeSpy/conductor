@@ -18,8 +18,12 @@
 //     so it must not be handed ~/.ssh/id_rsa as a `--body-file`.
 //  2. The configured rules (Resolve): step ∧ runtime ∧ global. A step can
 //     narrow, never widen.
-//  3. Target binding: a write (a comment, a PR, a push) is reported to the
-//     caller's WriteCheck, which binds it to the dispatch's own target.
+//  3. The profile's own write binding (binding.go): gh's writes are bound to
+//     the dispatch's own PR, git's pushes (GitPush) to its own branch —
+//     binary knowledge, configured only through isolation.host.gh / .git.
+//     conductor's own verbs (`conductor call github.*`) are a separate
+//     surface, governed by the verb grant and the connector's scopes; neither
+//     surface consults the other.
 //
 // Shims are policy fronts, never pass-throughs: every host command is checked
 // here and recorded by the caller.
@@ -42,10 +46,11 @@ type Request struct {
 	Cwd  string   // the agent's working directory (a path inside the workspace)
 }
 
-// Write is a write a command performs on the agent's behalf, for target
-// binding. Kind is the small vocabulary of targets.CheckWrite: comment,
-// review, reply, resolve_thread, push, create_pr, create_issue, merge,
-// close, reopen, edit, other. Number 0 = not target-scoped (or unknown).
+// Write is a write a command performs on the agent's behalf, for the
+// profile's write binding. Kind is a small vocabulary: comment, review,
+// reply, resolve_thread, push, create_pr, create_issue, merge, close,
+// reopen, edit, other (a repository-level write), other_repo (anything on
+// another repository). Number 0 = not target-scoped (or unknown).
 type Write struct {
 	Kind   string
 	Repo   string
@@ -100,6 +105,13 @@ type Context struct {
 	// rather than pulled (docker run of it executes local content); nil →
 	// treated as pulled.
 	LocalImage func(ref string) bool
+	// ReadOnly: a review step — the gh and git profiles refuse its writes
+	// unless the operator's allow list names them.
+	ReadOnly bool
+	// TargetClosed reports why the dispatch's own target takes no more
+	// writes ("" = it's open; nil = unknown): the gh and git profiles refuse
+	// every write for a closed target.
+	TargetClosed func() string
 }
 
 // Rule is one binary's effective configured rule, after Resolve.
@@ -133,12 +145,9 @@ type Decision struct {
 	Confine bool
 }
 
-// WriteCheck binds a write to the dispatch's target; "" allows, otherwise the
-// refusal reason (targets.Registry.CheckWrite / CheckPush).
-type WriteCheck func(w Write) string
-
-// Decide applies the guardrails, the rule, and target binding to req.
-func Decide(req Request, rule Rule, ctx Context, check WriteCheck) Decision {
+// Decide applies the guardrails, the rule, and the profile's write binding
+// to req.
+func Decide(req Request, rule Rule, ctx Context) Decision {
 	if rule.Disabled {
 		return Decision{Reason: fmt.Sprintf("%s is disabled for this dispatch (isolation.host.%s: false)", req.Tool, req.Tool)}
 	}
@@ -186,12 +195,8 @@ func Decide(req Request, rule Rule, ctx Context, check WriteCheck) Decision {
 		d.Reason = r
 		return d
 	}
-	for _, w := range p.Writes {
-		if check == nil {
-			d.Reason = "target: writes are not permitted here (no dispatch target)"
-			return d
-		}
-		if r := check(w); r != "" {
+	if b, ok := prof.(binder); ok {
+		if r := b.bind(p, rule, ctx); r != "" {
 			d.Reason = r
 			return d
 		}
@@ -580,7 +585,9 @@ func HostSet(layers []*config.IsolationConfig, step bool, lookPath func(string) 
 		}
 		isStep := step && i == len(layers)-1
 		for n, h := range l.Host {
-			if seen[n] || h == nil || h.Disabled {
+			if seen[n] || h == nil || h.Disabled || n == "git" {
+				// git is never a shim: its network and signing side are
+				// brokered, and host.git configures its push binding.
 				continue
 			}
 			if isStep {

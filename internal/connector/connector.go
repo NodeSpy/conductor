@@ -59,6 +59,11 @@ type Field struct {
 	// against what the dispatch may address; content options leave it empty
 	// and are never gated. See scope.go.
 	Scope string
+	// ScopeAbsent, on a scoped option, is the value an ABSENT option means
+	// for scoping — when leaving it out still names a resource (github's
+	// put_file without a branch writes the repo's default branch). Empty =
+	// absent names nothing.
+	ScopeAbsent string
 }
 
 // Schema is a set of named fields (option/filter/context/output schemas).

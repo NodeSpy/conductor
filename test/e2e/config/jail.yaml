@@ -36,6 +36,15 @@ runtimes:
       host:
         terraform:
           allow: ["plan *"]
+  # The gh BINARY may open PRs here (its profile, named in host.gh.allow);
+  # nothing about conductor's own verbs changes.
+  cli_claude_ghpr:
+    use: cli
+    tool: claude-code
+    isolation:
+      host:
+        gh:
+          allow: ["*", "pr create *"]
 triggers:
   - "on": github.merge_conflict
     filter:
@@ -141,6 +150,45 @@ triggers:
           [[sh printf '#!/bin/sh\ncat /home/conductor/.ssh/id_fake >/dev/null 2>&1 && echo LEAK""-ssh || echo ext-no-ssh\ncurl -s -m 5 -o /dev/null -w "ext-proxy=%%{http_connect}\\n" https://example.com\ncurl -s -m 5 --noproxy "*" -o /dev/null https://example.com; echo "ext-direct-rc=$?"\necho planted > ext-wrote.txt && echo ext-ws-write-ok\n' > external.sh && chmod +x external.sh && echo external-written]]
           [[sh terraform plan -out=tf.plan; echo "tf-plan-exit=$?"]]
           [[sh test -e ext-wrote.txt && echo WS-CHANGED || echo ws-untouched]]
+  # The incident (#154): an agent opening a PR, on BOTH write surfaces — the
+  # gh binary and conductor's own github verb. Each is refused by default by
+  # its own policy, and allowing one never allows the other.
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jailboth]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude
+        prompt: |
+          [[nofix]]
+          [[sh gh pr create -t "from the agent" -b "x"; echo "bin-exit=$?"]]
+          [[sh conductor call github.create_pr --repo grpx/jailboth --title "from the agent" --head pr-1 --base main; echo "verb-exit=$?"]]
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jailbin]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude_ghpr
+        prompt: |
+          [[nofix]]
+          [[sh gh pr create -t "from the agent" -b "x"; echo "bin-exit=$?"]]
+          [[sh conductor call github.create_pr --repo grpx/jailbin --title "from the agent" --head pr-1 --base main; echo "verb-exit=$?"]]
+  - "on": github.merge_conflict
+    filter:
+      repo: [grpx/jailverb]
+    steps:
+      - type: agent
+        workspace: worktree
+        runtime: cli_claude
+        skill:
+          verbs:
+            github.create_pr: {}
+        prompt: |
+          [[nofix]]
+          [[sh gh pr create -t "from the agent" -b "x"; echo "bin-exit=$?"]]
+          [[sh conductor call github.create_pr --repo grpx/jailverb --title "from the agent" --head pr-1 --base main; echo "verb-exit=$?"]]
 policy:
   concurrency:
     max_agents: 8

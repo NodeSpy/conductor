@@ -518,6 +518,9 @@ func (r *Runner) checkVerbScopes(rp *resourcePolicy, uses string, opts map[strin
 	polScopes := policyScopesFor(rp.pol, uses)
 	for _, so := range scoped {
 		val := scopedOptionValue(opts, so.Name)
+		if val == "" {
+			val = so.Absent // an absent option that still names a resource
+		}
 		if rp.scopeOK(in, so.Dim, val, scopeListFor(polScopes, so.Name, so.Dim), grant[so.Name]) {
 			continue
 		}

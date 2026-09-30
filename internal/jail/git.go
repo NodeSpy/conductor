@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/NodeSpy/conductor/internal/hostcmd"
 )
 
 // Brokered git (#154 §4). Inside the jail, local git runs natively; its
@@ -263,13 +265,10 @@ func (m *Manager) pushOne(ctx context.Context, d *Dispatch, p GitPush, dry bool)
 	if !isBranch {
 		return refuse("git: only branch pushes are brokered (" + p.Dst + ")")
 	}
-	if d.ReadOnly {
-		return refuse("target: this is a review step — pushes are refused")
-	}
-	if m.CheckPush == nil {
-		return refuse("target: pushes are not permitted (no target binding wired)")
-	}
-	if r := m.CheckPush(d, branch, p.Force, del); r != "" {
+	// The git profile's push binding (hostcmd.GitPush): the dispatch's own
+	// branch by default, more only as isolation.host.git names it; never a
+	// force push or a delete; nothing from a review step or to a dead target.
+	if r := hostcmd.GitPush(hostcmd.Resolve("git", d.Layers, d.StepLayer), m.hostContext(ctx, d, d.Workspace), branch, p.Force, del); r != "" {
 		return refuse(r)
 	}
 	if !del && !isHex(p.SHA) {

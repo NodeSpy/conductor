@@ -8,7 +8,6 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/controller"
-	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/hostcmd"
 	"github.com/NodeSpy/conductor/internal/jail"
 	"github.com/NodeSpy/conductor/internal/sandbox"
@@ -31,10 +30,8 @@ func TestJailBindingRefusesWritesForAClosedTarget(t *testing.T) {
 	}))
 	defer srv.Close()
 	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
-	oldM, oldG, oldD := controller.JailManager, controller.GlobalIsolation, dispatch.GlobalIsolation
-	defer func() {
-		controller.JailManager, controller.GlobalIsolation, dispatch.GlobalIsolation = oldM, oldG, oldD
-	}()
+	oldM, oldG := controller.JailManager, controller.GlobalIsolation
+	defer func() { controller.JailManager, controller.GlobalIsolation = oldM, oldG }()
 
 	egress := sandbox.NewProxyManager(nil)
 	defer egress.Close()
@@ -44,30 +41,39 @@ func TestJailBindingRefusesWritesForAClosedTarget(t *testing.T) {
 	open := &jail.Dispatch{LaunchSpec: jail.LaunchSpec{Repo: "acme/app", Number: 42, IsPR: true, HeadBranch: "fix/42", UserToken: "t"}}
 	merged := &jail.Dispatch{LaunchSpec: jail.LaunchSpec{Repo: "acme/app", Number: 43, IsPR: true, HeadBranch: "fix/43", UserToken: "t"}}
 
-	if r := m.CheckPush(open, "fix/42", false, false); r != "" {
+	// The wired TargetClosed signal, read by the gh and git profiles.
+	ctx := func(d *jail.Dispatch) hostcmd.Context {
+		return hostcmd.Context{Repo: d.Repo, Number: d.Number, IsPR: d.IsPR, HeadBranch: d.HeadBranch,
+			TargetClosed: func() string { return m.TargetClosed(d) }}
+	}
+	git := hostcmd.Resolve("git", nil, false)
+	gh := func(d *jail.Dispatch, args ...string) hostcmd.Decision {
+		return hostcmd.Decide(hostcmd.Request{Tool: "gh", Args: args}, hostcmd.Resolve("gh", nil, false), ctx(d))
+	}
+	if r := hostcmd.GitPush(git, ctx(open), "fix/42", false, false); r != "" {
 		t.Fatalf("a push to an open PR's own branch is allowed: %q", r)
 	}
-	if r := m.CheckWrite(open, hostcmd.Write{Kind: "comment", Repo: "acme/app", Number: 42}); r != "" {
-		t.Fatalf("a comment on the open PR is allowed: %q", r)
+	if d := gh(open, "pr", "comment", "42", "-b", "x"); !d.Allow {
+		t.Fatalf("a comment on the open PR is allowed: %q", d.Reason)
 	}
-	// The live state says #43 merged: refused, and before any branch rule.
-	if r := m.CheckPush(merged, "some-other-branch", false, false); !strings.Contains(r, "acme/app#43 is merged — writes refused") {
+	// The live state says #43 merged: refused as merged, before any branch rule.
+	if r := hostcmd.GitPush(git, ctx(merged), "some-other-branch", false, false); !strings.Contains(r, "acme/app#43 is merged — writes refused") {
 		t.Fatalf("a push for a merged PR must be refused as merged: %q", r)
 	}
-	if r := m.CheckWrite(merged, hostcmd.Write{Kind: "comment", Repo: "acme/app", Number: 43}); !strings.Contains(r, "is merged") {
-		t.Fatalf("a comment on a merged PR must be refused: %q", r)
+	if d := gh(merged, "pr", "comment", "43", "-b", "x"); d.Allow || !strings.Contains(d.Reason, "is merged") {
+		t.Fatalf("a comment on a merged PR must be refused: %+v", d)
 	}
 	// …and the live read recorded it, so the registry refuses even with the
 	// API unreachable.
 	defer targets.Default.Reopen("acme/app", 43)
 	srv.Close()
-	if r := m.CheckPush(merged, "fix/43", false, false); !strings.Contains(r, "is merged") {
+	if r := hostcmd.GitPush(git, ctx(merged), "fix/43", false, false); !strings.Contains(r, "is merged") {
 		t.Fatalf("the close registry refuses without the API: %q", r)
 	}
 	// A registry-marked close (the webhook path) refuses too.
 	targets.Default.MarkClosed("acme/app", 42, false)
 	defer targets.Default.Reopen("acme/app", 42)
-	if r := m.CheckPush(open, "fix/42", false, false); !strings.Contains(r, "acme/app#42 is closed") {
+	if r := hostcmd.GitPush(git, ctx(open), "fix/42", false, false); !strings.Contains(r, "acme/app#42 is closed") {
 		t.Fatalf("a webhook-closed PR refuses its own branch: %q", r)
 	}
 }

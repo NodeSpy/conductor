@@ -100,7 +100,6 @@ func TestHostCommandValidation(t *testing.T) {
 		{"persist dotdot", IsolationConfig{Host: map[string]*HostCommand{"aws": {Persist: []string{"~/../x"}}}}, ".."},
 		{"scalar net with egress", IsolationConfig{Network: &IsolationNetwork{Mode: NetAudit, Egress: []string{"x"}}}, "scalar mode"},
 		{"audit under user", IsolationConfig{Mode: "user", User: "u", Network: &IsolationNetwork{Mode: NetAudit}}, "needs mode namespace"},
-		{"read_only widened", IsolationConfig{Writes: &WritesPolicy{ReadOnly: true, CreatePR: true}}, "read_only"},
 		{"neg intent", IsolationConfig{Intent: &IntentRules{MaxDeleteLines: -1}}, "max_delete_lines"},
 	}
 	for _, tc := range cases {
@@ -111,27 +110,14 @@ func TestHostCommandValidation(t *testing.T) {
 	}
 }
 
-func TestWritesPolicyForms(t *testing.T) {
-	for in, want := range map[string]WritesPolicy{
-		"writes: read_only": {ReadOnly: true},
-		"writes: target":    {Target: true},
-		"writes: {create_pr: true, branches: [rel/*]}": {CreatePR: true, Branches: []string{"rel/*"}},
-	} {
-		var v struct {
-			Writes *WritesPolicy `yaml:"writes"`
-		}
-		if err := yaml.Unmarshal([]byte(in), &v); err != nil {
-			t.Fatalf("%s: %v", in, err)
-		}
-		if v.Writes.ReadOnly != want.ReadOnly || v.Writes.Target != want.Target || v.Writes.CreatePR != want.CreatePR || len(v.Writes.Branches) != len(want.Branches) {
-			t.Errorf("%s: got %+v want %+v", in, *v.Writes, want)
-		}
-	}
-	if (&WritesPolicy{Target: true}).Widens() {
-		t.Fatal("target is the default, not a widening")
-	}
-	if !(&WritesPolicy{Merge: true}).Widens() {
-		t.Fatal("merge widens")
+// isolation.writes is gone (#154): write authorization lives with the
+// surface that performs it — the gh/git profiles under isolation.host for
+// the binaries, the verb grant and the connector's scopes for conductor's
+// own verbs. The key is an unknown field now.
+func TestIsolationWritesIsNotAKey(t *testing.T) {
+	var v IsolationConfig
+	if err := strictUnmarshal([]byte("writes: read_only\n"), &v); err == nil {
+		t.Fatal("isolation.writes must not decode")
 	}
 }
 
@@ -157,10 +143,6 @@ func TestAgentJailEligible(t *testing.T) {
 
 func TestPolicyOnlyStepIsolationOnPaseo(t *testing.T) {
 	c := &Config{Controllers: map[string]ControllerConfig{"p": {Type: "paseo", Default: true}, "cli": {Type: "cli", Tool: "claude-code"}}}
-	ro := Step{Type: "agent", Runtime: "p", Isolation: &IsolationConfig{Writes: &WritesPolicy{ReadOnly: true}}}
-	if err := c.validateStepIsolation("s", ro); err != nil {
-		t.Fatalf("writes: on a paseo step binds its verbs — accepted: %v", err)
-	}
 	host := Step{Type: "agent", Runtime: "p", Isolation: &IsolationConfig{Host: map[string]*HostCommand{"gh": {Deny: []string{"pr merge *"}}}}}
 	if err := c.validateStepIsolation("s", host); err == nil {
 		t.Fatal("host: rules on a paseo step have no jail to apply to")
@@ -169,7 +151,7 @@ func TestPolicyOnlyStepIsolationOnPaseo(t *testing.T) {
 	if err := c.validateStepIsolation("s", host); err != nil {
 		t.Fatalf("host: on a cli step: %v", err)
 	}
-	if !(&IsolationConfig{Writes: &WritesPolicy{}}).PolicyOnly() || (&IsolationConfig{Writes: &WritesPolicy{}, FS: []string{"/x"}}).PolicyOnly() {
+	if !(&IsolationConfig{Intent: &IntentRules{}}).PolicyOnly() || (&IsolationConfig{Intent: &IntentRules{}, FS: []string{"/x"}}).PolicyOnly() {
 		t.Fatal("PolicyOnly")
 	}
 }

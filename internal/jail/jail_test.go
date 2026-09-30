@@ -72,15 +72,13 @@ func TestPorcelainSummary(t *testing.T) {
 }
 
 func TestPushOnePolicy(t *testing.T) {
-	m := &Manager{CheckPush: func(d *Dispatch, branch string, force, del bool) string {
-		if force || del || branch != d.HeadBranch {
-			return "target: refused"
-		}
-		return ""
-	}}
+	// The git profile's push binding (hostcmd.GitPush) decides; the broker
+	// refuses before it runs any git.
+	m := &Manager{}
 	var events []Event
 	m.Emit = func(e Event) { events = append(events, e) }
-	d := &Dispatch{LaunchSpec: LaunchSpec{Repo: "acme/app", HeadBranch: "fix/42", Git: &GitLayout{CommonDir: t.TempDir()}}}
+	d := &Dispatch{LaunchSpec: LaunchSpec{Repo: "acme/app", Number: 42, IsPR: true, HeadBranch: "fix/42", Workspace: t.TempDir()}}
+	d.Git = &GitLayout{CommonDir: t.TempDir()}
 	for _, p := range []GitPush{
 		{SHA: "0123456789abcdef0123456789abcdef01234567", Dst: "refs/tags/v1"},
 		{SHA: "0123456789abcdef0123456789abcdef01234567", Dst: "refs/heads/main"},
@@ -93,9 +91,10 @@ func TestPushOnePolicy(t *testing.T) {
 	}
 	// Only branches are brokered at all — even with a binding that would allow
 	// anything, a tag (or any non-branch ref) is refused by the helper itself.
-	open := &Manager{CheckPush: func(*Dispatch, string, bool, bool) string { return "" }}
+	open := &Dispatch{LaunchSpec: d.LaunchSpec}
+	open.Layers = []*config.IsolationConfig{{Host: map[string]*config.HostCommand{"git": {Allow: []string{"push *"}}}}}
 	for _, ref := range []string{"refs/tags/v1", "refs/notes/commits", "refs/pull/1/head", "HEAD"} {
-		if r := open.pushOne(t.Context(), d, GitPush{SHA: "0123456789abcdef0123456789abcdef01234567", Dst: ref}, false); !strings.Contains(r, "only branch pushes") {
+		if r := m.pushOne(t.Context(), open, GitPush{SHA: "0123456789abcdef0123456789abcdef01234567", Dst: ref}, false); !strings.Contains(r, "only branch pushes") {
 			t.Errorf("%s must be refused as a non-branch ref: %q", ref, r)
 		}
 	}
@@ -103,7 +102,7 @@ func TestPushOnePolicy(t *testing.T) {
 	if r := m.pushOne(t.Context(), d, GitPush{SHA: "0123456789abcdef0123456789abcdef01234567", Dst: "refs/heads/fix/42"}, false); !strings.Contains(r, "review step") {
 		t.Fatalf("a reviewer never pushes: %q", r)
 	}
-	if len(events) != 5 {
+	if len(events) != 9 { // 4 policy refusals, 4 non-branch refs, 1 review step
 		t.Fatalf("every refusal is audited: %d events", len(events))
 	}
 	// Another repository's remote is refused before any policy.
@@ -271,13 +270,31 @@ func TestRemoteHelperProtocolCapabilities(t *testing.T) {
 
 // hostcmd is exercised end to end by the integration test; here the broker's
 // write binding refuses everything for a review step whatever the rule says.
-func TestWriteCheckReadOnly(t *testing.T) {
-	m := &Manager{CheckWrite: func(*Dispatch, hostcmd.Write) string { return "" }}
-	d := &Dispatch{LaunchSpec: LaunchSpec{ReadOnly: true}}
-	if r := m.writeCheck(d)(hostcmd.Write{Kind: "comment"}); !strings.Contains(r, "review step") {
-		t.Fatalf("read-only: %q", r)
+// The broker hands the gh profile what binds its writes: the dispatch's
+// target, whether it is a review step, and the closed-target signal.
+func TestHostContextCarriesTheWriteBinding(t *testing.T) {
+	m := &Manager{TargetClosed: func(d *Dispatch) string {
+		if d.Number == 43 {
+			return "target: acme/app#43 is merged — writes refused"
+		}
+		return ""
+	}}
+	gh := func(d *Dispatch, args ...string) hostcmd.Decision {
+		return hostcmd.Decide(hostcmd.Request{Tool: "gh", Args: args}, hostcmd.Resolve("gh", d.Layers, d.StepLayer), m.hostContext(t.Context(), d, d.Workspace))
 	}
-	if r := (&Manager{}).writeCheck(&Dispatch{})(hostcmd.Write{Kind: "comment"}); r == "" {
-		t.Fatal("no binding wired → refuse")
+	fix := &Dispatch{LaunchSpec: LaunchSpec{Repo: "acme/app", Number: 42, IsPR: true, HeadBranch: "fix/42"}}
+	if d := gh(fix, "pr", "comment", "42", "-b", "x"); !d.Allow {
+		t.Fatalf("a fixer comments on its own PR: %q", d.Reason)
+	}
+	review := &Dispatch{LaunchSpec: LaunchSpec{Repo: "acme/app", Number: 42, IsPR: true, ReadOnly: true}}
+	if d := gh(review, "pr", "comment", "42", "-b", "x"); d.Allow || !strings.Contains(d.Reason, "review step") {
+		t.Fatalf("a review step's gh writes nothing: %+v", d)
+	}
+	merged := &Dispatch{LaunchSpec: LaunchSpec{Repo: "acme/app", Number: 43, IsPR: true, HeadBranch: "fix/43"}}
+	if d := gh(merged, "pr", "comment", "43", "-b", "x"); d.Allow || !strings.Contains(d.Reason, "is merged") {
+		t.Fatalf("a merged target takes no gh write: %+v", d)
+	}
+	if d := gh(&Dispatch{}, "pr", "comment", "1", "-b", "x"); d.Allow {
+		t.Fatal("no dispatch target: no gh write")
 	}
 }

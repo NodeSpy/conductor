@@ -94,11 +94,10 @@ type Manager struct {
 	Sockets []string
 	// Emit records an Event (audit + watch). nil → dropped.
 	Emit func(Event)
-	// CheckWrite binds a host command's write to the dispatch's target ("" =
-	// allowed). nil → every write is refused.
-	CheckWrite func(d *Dispatch, w hostcmd.Write) string
-	// CheckPush binds a push. nil → every push is refused.
-	CheckPush func(d *Dispatch, branch string, force, del bool) string
+	// TargetClosed reports why the dispatch's own target takes no more
+	// writes ("" = open): the gh and git profiles refuse every write for a
+	// closed target. nil → never closed.
+	TargetClosed func(d *Dispatch) string
 	// ThreadTarget resolves a review-thread node id to its PR.
 	ThreadTarget func(ctx context.Context, d *Dispatch, nodeID string) (repo string, number int, err error)
 	// HostEgress mints an enforced egress endpoint for a host command whose
@@ -127,9 +126,9 @@ type LaunchSpec struct {
 	BaseRef    string
 	Step       string
 	Label      string
-	// ReadOnly: a review step — no pushes, no gh writes.
+	// ReadOnly: a review step — its gh and git write nothing unless the
+	// operator's allow list names the write (hostcmd's gh/git binding).
 	ReadOnly bool
-	Writes   *config.WritesPolicy
 	// Layers are the isolation blocks in resolution order: global, runtime,
 	// step (nil entries skipped). StepLayer reports the last is a step's.
 	Layers    []*config.IsolationConfig

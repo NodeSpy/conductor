@@ -142,17 +142,15 @@ func TestClosedTriggerCancelsLiveAgentsAndRefusesFurtherWrites(t *testing.T) {
 				t.Fatalf("expected a cancelled notify event, got %v", notif.events)
 			}
 
-			// A subsequent write check against the now-closed target is refused.
+			// The close is recorded as the connector-neutral "target closed"
+			// signal the gh/git profiles and the github connector's scopes
+			// refuse writes on (tested there).
 			outcome, ok := targets.Default.Closed(repo, number)
 			if !ok {
 				t.Fatal("targets.Default should record the target as closed")
 			}
 			if outcome != wantOutcome {
 				t.Fatalf("Closed outcome = %q, want %q", outcome, wantOutcome)
-			}
-			target := targets.Target{Repo: repo, Number: number}
-			if reason := targets.Default.CheckWrite(target, targets.WritePolicy{}, "comment", repo, number); reason == "" {
-				t.Fatal("a write to the now-closed target should be refused")
 			}
 			t.Cleanup(func() { targets.Default.Reopen(repo, number) })
 		})

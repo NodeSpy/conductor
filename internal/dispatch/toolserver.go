@@ -184,8 +184,6 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 			// cross-dispatch confinement run_step relies on and falls back to
 			// the shared literal namespace (round-12 #4).
 			Dispatch: req.DispatchID,
-			// Writes are bound to the dispatch's own target (#154 §5).
-			Writes: WritePolicyFor(req, nil),
 		})
 		if err == nil {
 			out.Env = map[string]string{"CONDUCTOR_SKILL_CLAIM": claim}
@@ -240,7 +238,6 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 		Context:       req.Trigger.Context,
 		TargetTrusted: req.Trigger.TargetTrusted,
 		Dispatch:      req.DispatchID, // as above: both paths carry the anchor
-		Writes:        WritePolicyFor(req, nil),
 	}, uint32(os.Getuid()), sessTTL)
 	if err != nil {
 		return nil

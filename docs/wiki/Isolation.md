@@ -55,7 +55,6 @@ runtimes:
       fs: [~/go, ~/.cache/go-build]     # add paths (read-write) to the jail
       network: audit                    # see "Network" below
       host: { docker: false }           # see Host-Commands
-      writes: { create_pr: true }       # see "Writes" below
       # mode: none                      # opt out: today's unconfined launch
       # mode: namespace, privileged: true   # the older full-view namespace
 ```
@@ -134,38 +133,83 @@ This replaces the read-only binds of a shared worktree's `.git/config`,
 `hooks/` and `objects/info`: the clone's config and hooks are the agent's own
 to break, and nothing of conductor's reads them.
 
-### Writes are bound to the dispatch's own target {#writes-are-bound-to-the-dispatchs-own-target}
+### Writes are bound to the dispatch's own target — on two independent surfaces {#writes-are-bound-to-the-dispatchs-own-target}
 
-Every write conductor performs on an agent's behalf — a host command, a
-brokered push, a conductor verb — must target the dispatch's own PR or issue:
-its number, its head branch, its repository. A fixer may push its PR's head
-branch, comment on the PR, and reply to and resolve its review threads.
-Refused by default for every step: opening a PR or issue, writing to any other
-PR/issue, pushing any other branch (or the default branch, or a force push, or
-a deletion), merging, closing, reopening. Review steps — a `decide:` step, a
-step with an `output_schema`, a `checkout: none` step, or a
-review-requested/self-review trigger, unless `expect_push:` — write nothing.
-A refusal is audited with the rule that fired
-(`target: write to acme/app#43 but dispatch target is #42`) and fails for the
-agent like any failed command, with the reason on stderr.
+An agent can write to GitHub in two ways, and each has its own model. They
+never consult each other: refusing a binary command does not touch the verb,
+and granting a verb does not unlock the binary.
+
+| | **Binaries** — `gh`, `git`, `aws`, `kubectl`, `terraform`, `docker`, … | **Conductor verbs** — `conductor call <connector>.<verb>` |
+|---|---|---|
+| what it is | the real tool, run on your machine through conductor with *your* setup (your gh login, your git identity) | something conductor itself does, with the connector's own credentials |
+| governed by | the binary's profile + `isolation.host.<bin>` (`allow`/`deny`/`env`/`persist`/`network`) | the verb grant (`skill.verbs`) + the connector's declared scopes |
+| target binding | the **gh profile**: writes on the dispatch's own PR/issue; the **git profile**: pushes to the dispatch's own branch | the **github connector's** scope dimensions: `repo`, `number` (the PR/issue), `branch` — the dispatch's own values are in context |
+| opening a PR | refused, unless `isolation.host.gh.allow` names `pr create` | refused, unless the grant lists the verb |
+| review steps | gh and git write nothing | whatever the step's `skill:` lists (by default, no write verbs) |
+| closed target | the gh and git profiles refuse every write | the github connector drops the target from context, so every write to it is refused |
+
+**Binaries.** With no configuration, a fixer's `gh` may comment on, review,
+edit and reply on its own PR, and resolve its threads; `git push` reaches its
+own head branch. Refused: opening a PR or issue, merging/closing/reopening,
+a repository-level write, a write to another PR/issue or to another
+repository, a push to any other branch, and — always — a force push or a
+branch delete. The operator opens more by *naming* the command in the
+binary's allow list:
 
 ```yaml
 isolation:
-  writes: read_only          # or: target (the fixer default, e.g. to opt a review-shaped step in)
-  # writes: { create_pr: true, create_issue: true, other_targets: true, branches: ["release/*"], merge: true }
+  host:
+    gh:
+      allow: ["*", "pr create *"]          # "*": every gh command as before; "pr create *": gh may open PRs
+    git:
+      allow: ["*", "push release/*"]       # pushes may also reach release/* branches
 ```
 
-A step may widen this explicitly (a workflow whose job is to open PRs); a
-**pack's** step cannot widen past what your runtime or top-level `writes:`
-allows.
+An allow entry opens a write only when its leading words are literal — two
+for gh (`pr create`, `pr merge`, `api repos/*/pulls`), `push` plus a branch
+pattern for git — so a blanket `*` or `pr *` never does. Only your own
+blocks (top-level or runtime) count: a step, a pack's included, can narrow
+but never widen. `deny` narrows as always (`git: { deny: ["push main"] }`).
+See [[Host-Commands#gh]] and [[Host-Commands#git]].
+
+**Conductor verbs.** A step's agent may call only the verbs its `skill:`
+block grants. The github connector's write verbs then act only on the
+dispatch's own repository, PR/issue and head branch unless the grant names
+more:
+
+```yaml
+connectors:
+  gh:                                   # a github connector INSTANCE named "gh" —
+    use: github                         # unrelated to the gh binary above
+triggers:
+  - on: gh.merge_conflict               # events and verbs are both addressed by the instance name
+    steps:
+      - type: agent
+        skill:
+          verbs:
+            gh.comment: {}              # comment on its own PR
+            gh.create_pr: {}            # open a PR in its own repository
+            gh.put_file: { branch: ["release/*"] }   # commit to its head branch or release/*
+```
+
+A connector instance's name is only its name: `connectors: { gh: … }` makes
+`conductor call gh.comment`, and has nothing to do with the `gh` binary's
+profile or `isolation.host.gh`. A refusal names the scope that fired and the
+grant entry that would allow it.
+
+A refusal on either surface is audited with its reason (`gh: opening a PR is
+refused …`, `git: push to stray is refused …`, `gh.comment names pr "43" —
+not this dispatch's own number …`) and fails for the agent like any failed
+command, with the reason on stderr.
 
 **Work stops when its target goes away.** When a dispatch's PR merges or
 closes, conductor stops the fixers running for it (see
 [[Policy#fixers-stop-when-their-pr-closes]]): their runs end `stopped`,
 audited as `fixers_stopped` with `reason: target merged|closed`, and a
 `cancelled` notification goes out. Independently — for every agent, fixer or
-not — the broker and the conductor verbs refuse every write for a closed
-target (they check the PR's live state before a write), so a session that is
+not — both surfaces refuse every write for a closed target (the gh and git
+profiles also check the PR's live state before a write; the github connector
+drops the target from its scope context), so a session that is
 mid-command when the event lands, or one that was never stopped, still cannot
 act. Agents are also told the rule, so a well-behaved one reports instead of
 trying — but the policy is what holds.

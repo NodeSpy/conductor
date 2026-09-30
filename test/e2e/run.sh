@@ -1856,6 +1856,47 @@ group_X_jail() {
     bad "X7 audit" X X7-audit "no confined host_command row for $r"
   fi
 
+  # X8–X10: the incident — an agent opening a PR — on both write surfaces.
+  # The gh binary is governed by its profile (isolation.host.gh), conductor's
+  # github verb by the verb grant (skill.verbs); neither consults the other.
+  local caps0; caps0="$(netcurl http://mock-github:8080/_captured)"
+  r=grpx/jailboth
+  force conductor-jail merge_conflict "$r#1" "$JAIL_CFG" >/dev/null
+  if wait_for 90 jail_audit_match "\"repo\":\"$r\"" '"event":"dispatch"' '"outcome"'; then
+    reply="$(jail_reply "$r")"
+    assert_contains "$reply" "opening a PR is refused" X X8-bin "X8 default: gh pr create is refused by the gh profile"
+    assert_contains "$reply" "bin-exit=126" X X8-bin-exit "X8 default: …and never ran on the host"
+    assert_contains "$reply" "not allowed by this profile's skill.verbs" X X8-verb "X8 default: conductor call github.create_pr is refused by the verb grant"
+    assert_not_contains "$reply" "verb-exit=0" X X8-verb-exit "X8 default: …and opened nothing"
+  else
+    bad "X8 dispatch" X X8-bin "no dispatch outcome for $r"
+  fi
+  r=grpx/jailbin
+  force conductor-jail merge_conflict "$r#1" "$JAIL_CFG" >/dev/null
+  if wait_for 90 jail_audit_match "\"repo\":\"$r\"" '"event":"dispatch"' '"outcome"'; then
+    reply="$(jail_reply "$r")"
+    assert_contains "$reply" "fake-gh pr create" X X9-bin "X9 host.gh.allow names pr create: the gh binary opens the PR"
+    assert_contains "$reply" "bin-exit=0" X X9-bin-exit "X9 …exit 0"
+    assert_contains "$reply" "not allowed by this profile's skill.verbs" X X9-verb "X9 …and conductor's github.create_pr verb is STILL refused"
+  else
+    bad "X9 dispatch" X X9-bin "no dispatch outcome for $r"
+  fi
+  r=grpx/jailverb
+  force conductor-jail merge_conflict "$r#1" "$JAIL_CFG" >/dev/null
+  if wait_for 90 jail_audit_match "\"repo\":\"$r\"" '"event":"dispatch"' '"outcome"'; then
+    reply="$(jail_reply "$r")"
+    assert_contains "$reply" "verb-exit=0" X X10-verb "X10 skill.verbs grants github.create_pr: conductor's verb opens the PR"
+    local caps; caps="$(netcurl http://mock-github:8080/_captured)"
+    if printf '%s' "$caps" | grep -q '"/repos/grpx/jailverb/pulls"' && ! printf '%s' "$caps0" | grep -q '"/repos/grpx/jailverb/pulls"'; then
+      ok "X10 …the create reached GitHub (captured POST /repos/grpx/jailverb/pulls)" X X10-captured
+    else
+      bad "X10 captured" X X10-captured "no captured POST /repos/grpx/jailverb/pulls"
+    fi
+    assert_contains "$reply" "opening a PR is refused" X X10-bin "X10 …and the gh binary is STILL refused by its profile"
+  else
+    bad "X10 dispatch" X X10-verb "no dispatch outcome for $r"
+  fi
+
   # X4: network: deny — the jail has no route out but the proxy, which
   # refuses everything but the model endpoint; the refusal is audited.
   r=grpx/jailnet

@@ -43,7 +43,7 @@ services:
         conn/cweb conn/csvc conn/rweb conn/cengine migr/mweb
         func/cost func/budget1 func/budget2 func/budget3
         func/gatepass func/gatefail func/blob func/hist func/watch
-        grpx/jail grpx/jailclosed grpx/jailcancel grpx/jailnet grpx/jaildone grpx/jailpair grpx/jailtf
+        grpx/jail grpx/jailclosed grpx/jailcancel grpx/jailnet grpx/jaildone grpx/jailpair grpx/jailtf grpx/jailboth grpx/jailbin grpx/jailverb
     volumes:
       - ./seed:/seed:ro
     # git daemon (started by the seed script) serves git://forge:9418/<owner>/<repo>.git

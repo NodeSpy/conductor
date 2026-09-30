@@ -1,20 +1,14 @@
-// Package targets is the process-wide record of target (PR/issue) lifecycle
-// state: which targets are known merged/closed, so a still-running agent's
-// write lands against a live answer instead of a stale one it dispatched
-// against. It exists because a dispatch is long-lived (an agent can keep
-// working — and keep calling skill verbs — long after the PR it was launched
-// for is merged or closed out from under it), and nothing before this package
-// re-checked that fact on every write.
-//
-// The package has two halves that share one Registry:
-//
-//   - lifecycle state (MarkClosed/Closed/Reopen): the engine's `_closed`
-//     handling (a trusted target only — see the trigger's trusted-target bit) records
-//     the terminal fact here (the engine's stopFixers separately stops the
-//     PR's running fixers through each runtime's StopTarget);
-//   - the write-refusal policy (WritePolicy/CheckWrite/CheckPush): every skill
-//     verb write checks itself against the dispatch's own target here before
-//     it runs, closed-target or not — see internal/flow's RunSkillVerb.
+// Package targets is the process-wide, connector-neutral record of target
+// (PR/issue) lifecycle state: which dispatch targets are known merged or
+// closed, so a still-running agent's write lands against a live answer
+// instead of the stale one it was dispatched against. The engine's `_closed`
+// handling records the fact (a trusted target only — see the trigger's
+// trusted-target bit; the engine's stopFixers separately stops the PR's
+// running fixers). The surfaces that write read it: the gh and git profiles
+// (internal/hostcmd, through the jail's TargetClosed) and the github
+// connector's scope context (a closed target is no longer the dispatch's
+// own). What a write may do is theirs to decide; this package only says
+// whether the target is still alive.
 package targets
 
 import (

@@ -16,7 +16,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/gitwt"
-	"github.com/NodeSpy/conductor/internal/hostcmd"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
@@ -188,26 +187,6 @@ func (f *fixture) manager(t *testing.T) *Manager {
 			f.mu.Lock()
 			f.events = append(f.events, e)
 			f.mu.Unlock()
-		},
-		CheckWrite: func(d *Dispatch, w hostcmd.Write) string {
-			if w.Kind == "create_pr" {
-				return "target: opening a PR is refused (writes are bound to the dispatch's own target)"
-			}
-			if w.Number != d.Number {
-				return "target: write to another target"
-			}
-			return ""
-		},
-		CheckPush: func(d *Dispatch, branch string, force, del bool) string {
-			switch {
-			case force:
-				return "target: force-push refused"
-			case del:
-				return "target: branch deletion refused"
-			case branch != d.HeadBranch:
-				return "target: push to " + branch + " but the dispatch's branch is " + d.HeadBranch
-			}
-			return ""
 		},
 	}
 }

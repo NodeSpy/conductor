@@ -2,7 +2,6 @@ package hostcmd
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -27,28 +26,11 @@ func testCtx() Context {
 	}
 }
 
-// ownTarget is a WriteCheck binding writes to acme/app#42 (the shape
-// targets.CheckWrite has; exercised for real in the jail package).
-func ownTarget(w Write) string {
-	switch w.Kind {
-	case "create_pr":
-		return "target: opening a PR is refused (writes are bound to the dispatch's own target)"
-	case "create_issue":
-		return "target: opening an issue is refused"
-	case "merge", "close", "reopen", "edit", "other":
-		return "target: " + w.Kind + " is refused"
-	}
-	if !strings.EqualFold(w.Repo, "acme/app") || w.Number != 42 {
-		return fmt.Sprintf("target: write to %s#%d but dispatch target is #42", w.Repo, w.Number)
-	}
-	return ""
-}
-
 func decide(tool string, rule Rule, args ...string) Decision {
 	if rule.Tool == "" {
 		rule = Rule{Tool: tool, Profiled: profileFor(tool) != nil}
 	}
-	return Decide(Request{Tool: tool, Args: args, Cwd: "/state/worktrees/d1"}, rule, testCtx(), ownTarget)
+	return Decide(Request{Tool: tool, Args: args, Cwd: "/state/worktrees/d1"}, rule, testCtx())
 }
 
 func TestGuardrailsByName(t *testing.T) {
@@ -219,19 +201,20 @@ func TestGHTargetBinding(t *testing.T) {
 		{[]string{"pr", "comment", "--body", "done"}, true, ""}, // current branch = own PR
 		{[]string{"pr", "comment", "fix/42", "-b", "x"}, true, ""},
 		{[]string{"pr", "comment", "https://github.com/acme/app/pull/42", "-b", "x"}, true, ""},
-		{[]string{"pr", "comment", "43", "-b", "x"}, false, "write to acme/app#43 but dispatch target is #42"},
+		{[]string{"pr", "comment", "43", "-b", "x"}, false, "write to acme/app#43 but the dispatch's target is #42"},
 		{[]string{"issue", "comment", "7", "-b", "x"}, false, "#7"},
 		{[]string{"pr", "create", "--title", "t", "--body", "b"}, false, "opening a PR is refused"},
 		{[]string{"pr", "create", "-H", "new-branch", "-B", "main", "-t", "x", "-b", "y"}, false, "opening a PR"},
 		{[]string{"issue", "create", "-t", "x"}, false, "opening an issue"},
 		{[]string{"pr", "merge", "42"}, false, "merge"},
 		{[]string{"pr", "close", "42"}, false, "close"},
-		{[]string{"pr", "edit", "42", "--title", "x"}, false, "edit"},
+		{[]string{"pr", "edit", "42", "--title", "x"}, true, ""}, // an edit of its own PR
+		{[]string{"pr", "edit", "43", "--title", "x"}, false, "#43"},
 		{[]string{"pr", "review", "42", "--comment", "-b", "x"}, true, ""},
 		{[]string{"pr", "review", "42", "--approve"}, false, "approve"},
 		{[]string{"-R", "other/repo", "pr", "view", "1"}, false, "dispatch's repository is acme/app"},
 		{[]string{"pr", "view", "1", "--repo", "other/repo"}, false, "other/repo"},
-		{[]string{"repo", "delete", "acme/app", "--yes"}, false, "other"},
+		{[]string{"repo", "delete", "acme/app", "--yes"}, false, "repository-level write"},
 		{[]string{"api", "repos/acme/app/issues/42/comments", "-f", "body=x"}, true, ""},
 		{[]string{"api", "-X", "POST", "repos/acme/app/issues/43/comments", "-f", "body=x"}, false, "#43"},
 		{[]string{"api", "repos/acme/app/pulls", "-f", "title=x", "-f", "head=b", "-f", "base=main"}, false, "opening a PR"},
@@ -251,7 +234,7 @@ func TestGHTargetBinding(t *testing.T) {
 		{[]string{"api", "graphql", "-f", `query=query { repository(owner:"a", name:"b") { id } }`}, true, ""},
 		{[]string{"api", "graphql", "-f", "query=query { a } mutation { b }"}, false, "mixes"},
 		{[]string{"api", "--hostname", "evil.example", "user"}, false, "hostname"},
-		{[]string{"api", "gists", "-f", "x=y"}, false, "other"},
+		{[]string{"api", "gists", "-f", "x=y"}, false, "repository-level write"},
 	}
 	for _, tc := range cases {
 		d := decide("gh", Rule{}, tc.args...)
@@ -330,13 +313,13 @@ func TestResolveNarrowsNeverWidens(t *testing.T) {
 		t.Fatalf("aws allow layers: %v", aws.Allow)
 	}
 	// Both allow lists must match: ec2 is in the step's but not the runtime's.
-	if d := Decide(Request{Tool: "aws", Args: []string{"ec2", "describe-instances"}}, aws, testCtx(), ownTarget); d.Allow {
+	if d := Decide(Request{Tool: "aws", Args: []string{"ec2", "describe-instances"}}, aws, testCtx()); d.Allow {
 		t.Fatal("a step's allow list cannot widen past the runtime's")
 	}
-	if d := Decide(Request{Tool: "aws", Args: []string{"s3", "ls"}}, aws, testCtx(), ownTarget); !d.Allow {
+	if d := Decide(Request{Tool: "aws", Args: []string{"s3", "ls"}}, aws, testCtx()); !d.Allow {
 		t.Fatalf("s3 ls is in both: %q", d.Reason)
 	}
-	if d := Decide(Request{Tool: "aws", Args: []string{"s3", "rm", "x"}}, aws, testCtx(), ownTarget); d.Allow {
+	if d := Decide(Request{Tool: "aws", Args: []string{"s3", "rm", "x"}}, aws, testCtx()); d.Allow {
 		t.Fatal("s3 rm is only in the runtime's list")
 	}
 

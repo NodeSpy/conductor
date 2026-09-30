@@ -310,11 +310,6 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	// manifest — an operator's own cli steps (their own code) are never touched.
 	// Enforcement is best-effort (IsolationDefaulted): a box that cannot build
 	// the jail runs the step bare + warns, rather than breaking the pack. ----
-	// Every step a pack ships is marked as such: its `isolation.writes`
-	// widening is capped by what the operator's own runtime/global block
-	// allows (#154 §5) — a pack cannot open PRs on the operator's behalf just
-	// by asking.
-	man.WalkPackSteps(func(_ string, s *Step) { s.FromPack = true })
 	man.WalkPackSteps(func(_ string, s *Step) {
 		if _, class := s.StepEngine(); class != EngineCLI && class != EngineHost {
 			return

@@ -307,7 +307,8 @@ engines:
 # isolation:                         # top-level: the fleet-wide base (optional)
 #   network: open                    # open (default) | audit | deny | { egress: [...] } — enforced in the jail
 #   host:
-#     gh: { deny: ["pr merge *"] }
+#     gh: { allow: ["*", "pr create *"], deny: ["pr merge *"] }   # the gh BINARY: "*" = as before, plus opening PRs
+#     git: { allow: ["*", "push release/*"] }                    # git's push binding: also release/* branches
 #     aws: { allow: ["s3 ls *", "s3 cp * s3://build-artifacts/*"] }   # an allow list ⇒ ONLY these
 #     kubectl: { deny: ["delete *"], env: { KUBECONFIG: ~/.kube/staging } }
 #     docker: false                  # out of reach entirely
@@ -317,7 +318,6 @@ engines:
 #     tool: claude-code
 #     isolation:
 #       fs: [~/go, ~/.cache/go-build]       # extra read-write paths in the jail
-#       writes: { create_pr: true }          # widen the target binding (steps may too; packs only up to this)
 #       intent: { deny_paths: ["**/migrations/**"], max_delete_lines: 200 }   # claude-code tool-call rules
 #       # mode: none                         # opt OUT: the old unconfined launch
 #       # macos_keychain: true               # macOS: let the agent reach the Keychain (read other items too!)

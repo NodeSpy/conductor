@@ -141,6 +141,10 @@ func (m *Manager) hostContext(ctx context.Context, d *Dispatch, cwd string) host
 		hc.ThreadTarget = func(id string) (string, int, error) { return m.ThreadTarget(ctx, d, id) }
 	}
 	hc.LocalImage = func(ref string) bool { return m.localImage(ctx, ref) }
+	hc.ReadOnly = d.ReadOnly
+	if m.TargetClosed != nil {
+		hc.TargetClosed = func() string { return m.TargetClosed(d) }
+	}
 	return hc
 }
 
@@ -193,20 +197,6 @@ func dropSessionEnv(env []string) []string {
 	return out
 }
 
-// writeCheck binds one write: review steps write nothing; everything else
-// goes through the target binding.
-func (m *Manager) writeCheck(d *Dispatch) hostcmd.WriteCheck {
-	return func(w hostcmd.Write) string {
-		if d.ReadOnly {
-			return "target: this is a review step — writes are refused (isolation.writes to change)"
-		}
-		if m.CheckWrite == nil {
-			return "target: writes are not permitted (no target binding wired)"
-		}
-		return m.CheckWrite(d, w)
-	}
-}
-
 func (m *Manager) handleExec(ctx context.Context, d *Dispatch, req Request, fw *frameWriter) {
 	tool := filepath.Base(req.Tool)
 	cmdline := shortArgs(tool, req.Args)
@@ -223,7 +213,7 @@ func (m *Manager) handleExec(ctx context.Context, d *Dispatch, req Request, fw *
 		cwd = d.Workspace
 	}
 	rule := hostcmd.Resolve(tool, d.Layers, d.StepLayer)
-	dec := hostcmd.Decide(hostcmd.Request{Tool: tool, Args: req.Args, Cwd: cwd}, rule, m.hostContext(ctx, d, cwd), m.writeCheck(d))
+	dec := hostcmd.Decide(hostcmd.Request{Tool: tool, Args: req.Args, Cwd: cwd}, rule, m.hostContext(ctx, d, cwd))
 	if dec.Native {
 		if !dec.Allow {
 			refuse(dec.Reason)

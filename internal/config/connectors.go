@@ -436,10 +436,6 @@ type IsolationConfig struct {
 	// binary name; `false` keeps a binary out of reach entirely. A step's
 	// block may only narrow the runtime's (see HostCommand).
 	Host map[string]*HostCommand `yaml:"host,omitempty"`
-	// Writes widens or narrows what an agent may write outside its jail —
-	// by default a fixer may push its own branch and comment on its own
-	// target, a reviewer nothing (#154 §5). See WritesPolicy.
-	Writes *WritesPolicy `yaml:"writes,omitempty"`
 	// Intent are optional tool-call rules checked before each of the agent's
 	// own tool calls (#154 §11) — guidance and visibility, not a wall.
 	Intent *IntentRules `yaml:"intent,omitempty"`
@@ -1139,10 +1135,6 @@ type Step struct {
 	// jail runs the step bare with a warning, whereas an explicit isolation:
 	// fails closed. Not serialized — it is a load-time derivation.
 	IsolationDefaulted bool `yaml:"-"`
-	// FromPack marks a step a pack shipped (set at instantiate). Its
-	// isolation.writes widening only takes effect as far as the operator's
-	// runtime or top-level isolation.writes also allows it. Never decoded.
-	FromPack bool `yaml:"-"`
 	// OutcomeFeedback opts this step into guidance tuning (#36 §18): a
 	// one-line track-record summary for this step's identity is appended to
 	// its guidance.

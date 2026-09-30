@@ -76,56 +76,6 @@ func (h HostCommand) MarshalYAML() (any, error) {
 	return plain(h), nil
 }
 
-// WritesPolicy is what an agent may write outside plain reads (#154 §5).
-// Writes are bound to the dispatch's own target by default: a fixer may push
-// its target's head branch, comment on it, and reply to and resolve its
-// review threads; a reviewer may write nothing. Everything else — opening a
-// PR or issue, writing to another PR, pushing another branch, merging or
-// closing — is refused unless a field here opens it.
-//
-// YAML: `writes: read_only`, `writes: target` (the fixer default), or a
-// mapping of the fields below. A pack step's widening is capped by what the
-// operator's own runtime/global block allows.
-type WritesPolicy struct {
-	ReadOnly     bool     `yaml:"read_only,omitempty"`
-	CreatePR     bool     `yaml:"create_pr,omitempty"`
-	CreateIssue  bool     `yaml:"create_issue,omitempty"`
-	OtherTargets bool     `yaml:"other_targets,omitempty"`
-	Branches     []string `yaml:"branches,omitempty"`
-	Merge        bool     `yaml:"merge,omitempty"`
-	// Target is the explicit `writes: target` form — the default fixer
-	// policy, stated so a step that would default read-only can opt in.
-	Target bool `yaml:"-"`
-}
-
-// UnmarshalYAML accepts the scalar forms as well as the mapping.
-func (w *WritesPolicy) UnmarshalYAML(v *yaml.Node) error {
-	if v.Kind == yaml.ScalarNode {
-		switch v.Value {
-		case "read_only", "readonly", "none":
-			*w = WritesPolicy{ReadOnly: true}
-			return nil
-		case "target":
-			*w = WritesPolicy{Target: true}
-			return nil
-		}
-		return fmt.Errorf("line %d: isolation writes must be read_only | target | {create_pr, create_issue, other_targets, branches, merge}, got %q", v.Line, v.Value)
-	}
-	type plain WritesPolicy
-	var p plain
-	if err := strictNodeDecode(v, &p); err != nil {
-		return err
-	}
-	*w = WritesPolicy(p)
-	return nil
-}
-
-// Widens reports whether the policy opens anything beyond the default
-// target-bound fixer policy.
-func (w *WritesPolicy) Widens() bool {
-	return w != nil && (w.CreatePR || w.CreateIssue || w.OtherTargets || len(w.Branches) > 0 || w.Merge)
-}
-
 // IntentRules are optional tool-call rules (#154 §11), evaluated when the
 // agent's harness reports a tool call before running it (claude-code
 // PreToolUse). They explain a refusal to the model early; they are not the
@@ -205,9 +155,6 @@ func validateAgentJail(where string, iso *IsolationConfig, step bool) error {
 	if in := iso.Intent; in != nil && in.MaxDeleteLines < 0 {
 		return fmt.Errorf("config: %s: isolation.intent.max_delete_lines must be >= 0", where)
 	}
-	if w := iso.Writes; w != nil && w.ReadOnly && w.Widens() {
-		return fmt.Errorf("config: %s: isolation.writes: read_only cannot be combined with widening fields", where)
-	}
 	return nil
 }
 
@@ -268,9 +215,8 @@ func (c *Config) GlobalIsolation() *IsolationConfig {
 	return c.Isolation
 }
 
-// PolicyOnly reports a block that sets only write/tool-call/host-command
-// POLICY (`writes:`, `intent:`, `host:`) and nothing about the sandbox
-// itself. Such a block narrows what a jailed agent may do without replacing
+// PolicyOnly reports a block that sets only tool-call/host-command POLICY
+// (`intent:`, `host:`) and nothing about the sandbox itself. Such a block narrows what a jailed agent may do without replacing
 // the sandbox the layers above chose, and without turning the synthesized
 // jail into an explicit (fail-closed) one — a pack that only says its
 // reviewers are read-only must not change how the jail degrades.
@@ -280,5 +226,5 @@ func (iso *IsolationConfig) PolicyOnly() bool {
 	}
 	return iso.Mode == "" && iso.User == "" && iso.Container == nil && iso.Limits == nil &&
 		!iso.Privileged && !iso.AllowRoot && iso.Network == nil && len(iso.FS) == 0 && !iso.MacOSKeychain &&
-		(len(iso.Host) > 0 || iso.Writes != nil || iso.Intent != nil)
+		(len(iso.Host) > 0 || iso.Intent != nil)
 }

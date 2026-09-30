@@ -114,9 +114,14 @@ func TestAgentLaunchOptsSynthesizesTheJail(t *testing.T) {
 	}
 }
 
-func TestEffectiveWritesRoles(t *testing.T) {
+// The review role decides a jailed step's gh/git default (read-only) — it is
+// derived from what the step is, never a config switch.
+func TestReviewRole(t *testing.T) {
+	old := JailManager
+	JailManager = &jail.Manager{}
+	defer func() { JailManager = old }()
 	fix := dispatch.Request{Trigger: core.Trigger{Kind: "merge_conflict"}}
-	if ro, _ := dispatch.EffectiveWrites(fix, nil); ro {
+	if dispatch.ReviewRole(fix) {
 		t.Fatal("a fixer writes its own target by default")
 	}
 	for name, req := range map[string]dispatch.Request{
@@ -125,34 +130,17 @@ func TestEffectiveWritesRoles(t *testing.T) {
 		"review trigger": {Trigger: core.Trigger{Kind: "review_requested"}},
 		"decide":         {Step: config.Step{DecisionLaunch: &config.DecisionLaunch{}}},
 	} {
-		if ro, _ := dispatch.EffectiveWrites(req, nil); !ro {
-			t.Errorf("%s: a review step is read-only by default", name)
+		if !dispatch.ReviewRole(req) {
+			t.Errorf("%s: a review step", name)
+		}
+		opt := agentLaunchOpts(true, "claude-code", nil, req)
+		if opt.jail == nil || !opt.jail.ReadOnly {
+			t.Errorf("%s: its jail's gh/git are read-only", name)
 		}
 	}
 	// expect_push flips a review-shaped step to a writer.
-	if ro, _ := dispatch.EffectiveWrites(dispatch.Request{Step: config.Step{Checkout: "none", ExpectPush: true}}, nil); ro {
+	if dispatch.ReviewRole(dispatch.Request{Step: config.Step{Checkout: "none", ExpectPush: true}}) {
 		t.Fatal("expect_push is a writer")
-	}
-	// writes: target opts a review-shaped step in; writes: read_only a fixer out.
-	st := dispatch.Request{Step: config.Step{OutputSchema: map[string]any{}, Isolation: &config.IsolationConfig{Writes: &config.WritesPolicy{Target: true}}}}
-	if ro, _ := dispatch.EffectiveWrites(st, nil); ro {
-		t.Fatal("writes: target")
-	}
-	st = dispatch.Request{Step: config.Step{Isolation: &config.IsolationConfig{Writes: &config.WritesPolicy{ReadOnly: true}}}}
-	if ro, _ := dispatch.EffectiveWrites(st, nil); !ro {
-		t.Fatal("writes: read_only")
-	}
-	// A pack step cannot widen past the operator's own block.
-	pack := dispatch.Request{Step: config.Step{FromPack: true, Isolation: &config.IsolationConfig{Writes: &config.WritesPolicy{CreatePR: true}}}}
-	if p := dispatch.WritePolicyFor(pack, nil); p.CreatePR {
-		t.Fatal("a pack cannot open PRs unless the operator allows it")
-	}
-	if p := dispatch.WritePolicyFor(pack, &config.IsolationConfig{Writes: &config.WritesPolicy{CreatePR: true}}); !p.CreatePR {
-		t.Fatal("…but can when the operator's runtime block allows it")
-	}
-	own := dispatch.Request{Step: config.Step{Isolation: &config.IsolationConfig{Writes: &config.WritesPolicy{CreatePR: true}}}}
-	if p := dispatch.WritePolicyFor(own, nil); !p.CreatePR {
-		t.Fatal("an operator's own step may widen")
 	}
 }
 
@@ -206,8 +194,8 @@ func TestPolicyOnlyBlocksDoNotShapeTheSandbox(t *testing.T) {
 	old := JailManager
 	JailManager = &jail.Manager{}
 	defer func() { JailManager = old }()
-	ro := &config.IsolationConfig{Writes: &config.WritesPolicy{ReadOnly: true}}
-	req := dispatch.Request{Step: config.Step{Isolation: ro}, Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "acme/app", PR: 1}}}
+	ro := &config.IsolationConfig{Host: map[string]*config.HostCommand{"gh": {Deny: []string{"pr merge *"}}}}
+	req := dispatch.Request{Step: config.Step{Isolation: ro, OutputSchema: map[string]any{"type": "object"}}, Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "acme/app", PR: 1}}}
 	// On a default runtime: still the synthesized (degradable) jail, read-only.
 	opt := agentLaunchOpts(true, "claude-code", nil, req)
 	if opt.jail == nil || !opt.jailDefault || !opt.jail.ReadOnly {

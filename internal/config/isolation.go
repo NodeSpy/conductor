@@ -22,15 +22,15 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 
 // validateIsolationFor is validateIsolation with the launch kind known: agent
 // reports a block that governs an agent runtime's own launch (cli/acp on this
-// box — the workspace jail, #154), where the host-command, writes, intent,
-// and enforced-network knobs apply. Everywhere else (code steps, engines,
+// box — the workspace jail, #154), where the host-command, intent, and
+// enforced-network knobs apply. Everywhere else (code steps, engines,
 // connectors, hosts) those knobs would be silent no-ops and are refused.
 func validateIsolationFor(where string, iso *IsolationConfig, remote, agent bool) error {
 	if iso == nil {
 		return nil
 	}
-	if !agent && (len(iso.Host) > 0 || iso.Writes != nil || iso.Intent != nil || iso.MacOSKeychain) {
-		return fmt.Errorf("config: %s: isolation `host:`/`writes:`/`intent:` apply to agent launches (a cli or acp runtime on this box, or a step on one) — here they would be a silent no-op", where)
+	if !agent && (len(iso.Host) > 0 || iso.Intent != nil || iso.MacOSKeychain) {
+		return fmt.Errorf("config: %s: isolation `host:`/`intent:` apply to agent launches (a cli or acp runtime on this box, or a step on one) — here they would be a silent no-op", where)
 	}
 	if n := iso.Network; n != nil {
 		if err := validateNetworkShape(where, n); err != nil {
@@ -54,7 +54,7 @@ func validateIsolationFor(where string, iso *IsolationConfig, remote, agent bool
 	switch iso.Mode {
 	case "none":
 		if iso.User != "" || iso.Container != nil || iso.Limits != nil || iso.Privileged || iso.AllowRoot ||
-			iso.Network != nil || len(iso.FS) > 0 || len(iso.Host) > 0 || iso.Writes != nil || iso.Intent != nil {
+			iso.Network != nil || len(iso.FS) > 0 || len(iso.Host) > 0 || iso.Intent != nil {
 			return fmt.Errorf("config: %s: isolation mode none is the opt-out — it takes no other fields", where)
 		}
 		return nil
@@ -170,18 +170,15 @@ func (c *Config) validateStepIsolation(where string, p Step) error {
 	if rn == "" {
 		rn = c.DefaultRuntimeName()
 	}
-	// A policy-only block (`writes:` / `intent:` / `host:`) shapes no
-	// sandbox. `writes:` binds conductor verbs on ANY runtime, paseo
-	// included; host rules and intent need a jailed (cli/acp) runtime.
+	// A policy-only block (`intent:` / `host:`) shapes no sandbox; it needs a
+	// jailed (cli/acp) runtime to mean anything.
 	if p.Isolation.PolicyOnly() {
 		if err := validateAgentJail(where, p.Isolation, true); err != nil {
 			return err
 		}
-		if len(p.Isolation.Host) > 0 || p.Isolation.Intent != nil {
-			cc, ok := c.MergedControllers()[rn]
-			if rn == "" || (ok && (!AgentJailEligible(cc) || p.Host != "")) {
-				return fmt.Errorf("config: %s: isolation `host:`/`intent:` apply to a jailed agent (a cli or acp runtime on this box) — this step's runtime has no workspace jail", where)
-			}
+		cc, ok := c.MergedControllers()[rn]
+		if rn == "" || (ok && (!AgentJailEligible(cc) || p.Host != "")) {
+			return fmt.Errorf("config: %s: isolation `host:`/`intent:` apply to a jailed agent (a cli or acp runtime on this box) — this step's runtime has no workspace jail", where)
 		}
 		return nil
 	}

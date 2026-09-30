@@ -236,9 +236,9 @@ func jailMode(iso *config.IsolationConfig) bool {
 // jailSpec fills the per-dispatch jail description from the request.
 func jailSpec(tool string, runtimeIso *config.IsolationConfig, req dispatch.Request) jail.LaunchSpec {
 	t := req.Trigger.Target
-	// The write binding uses the TRUSTED repo: a target the event's sender
-	// chose (a templated webhook repo) binds nothing, so the broker refuses
-	// every write for it.
+	// The gh/git write binding uses the TRUSTED repo: a target the event's
+	// sender chose (a templated webhook repo) binds nothing, so the broker
+	// refuses every gh write and push for it.
 	repo := req.Trigger.OwnRepo()
 	num, isPR := t.PR, t.PR > 0
 	if !isPR {
@@ -253,7 +253,7 @@ func jailSpec(tool string, runtimeIso *config.IsolationConfig, req dispatch.Requ
 	}
 	step := req.Step
 	layers := []*config.IsolationConfig{GlobalIsolation, runtimeIso, step.Isolation}
-	readOnly, writes := dispatch.EffectiveWrites(req, runtimeIso)
+	readOnly := dispatch.ReviewRole(req)
 	var intent *config.IntentRules
 	keychain := false
 	for i, l := range layers {
@@ -286,7 +286,7 @@ func jailSpec(tool string, runtimeIso *config.IsolationConfig, req dispatch.Requ
 	return jail.LaunchSpec{
 		DispatchID: req.DispatchID, Tool: tool, Repo: repo, Number: num, IsPR: isPR,
 		HeadBranch: head, BaseRef: t.BaseRef, Step: firstNonEmpty(step.ID, step.Name), Label: label,
-		ReadOnly: readOnly, Writes: writes, Layers: layers, StepLayer: step.Isolation != nil,
+		ReadOnly: readOnly, Layers: layers, StepLayer: step.Isolation != nil,
 		Intent: intent, UserToken: req.Tokens.User, Keychain: keychain,
 	}
 }

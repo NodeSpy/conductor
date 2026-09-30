@@ -165,8 +165,9 @@ func (ghProfile) parse(args []string, ctx Context) Parsed {
 	if group != "search" && group != "status" && group != "api" && group != "completion" &&
 		group != "version" && group != "help" && group != "org" && group != "ssh-key" && group != "gpg-key" {
 		if !strings.EqualFold(repo, ctx.Repo) {
-			p.Writes = append(p.Writes, Write{Kind: "other", Repo: repo})
-			p.Refuse = "target: gh on " + repo + " but the dispatch's repository is " + ctx.Repo
+			// Another repository, read or write: the gh binding refuses it
+			// unless the operator's gh allow list names the command.
+			p.Writes = append(p.Writes, Write{Kind: "other_repo", Repo: repo})
 			return p
 		}
 	}
@@ -315,7 +316,7 @@ func ghAPI(p *Parsed, ctx Context, repo string) {
 		return
 	}
 	if m := reRepoPath.FindStringSubmatch(ep); m != nil && !strings.EqualFold(m[1], ctx.Repo) {
-		p.Refuse = "target: gh api on " + m[1] + " but the dispatch's repository is " + ctx.Repo
+		p.Writes = append(p.Writes, Write{Kind: "other_repo", Repo: m[1]})
 		return
 	}
 	if method == "GET" || method == "HEAD" {
