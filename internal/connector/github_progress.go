@@ -210,7 +210,12 @@ func (g *githubImpl) StartProgress(ctx context.Context, run ProgressRun) Progres
 			p.statusCtx = c
 		}
 	}
-	p.id = g.progress.begin(p.key, p.startSHA)
+	if status {
+		// Only a run that posts statuses takes part in row ownership: one
+		// with its status switched off must not make an older run yield the
+		// row to a run that will never write it.
+		p.id = g.progress.begin(p.key, p.startSHA)
+	}
 	return p
 }
 
@@ -222,7 +227,10 @@ func (p *ghProgress) Finish(ctx context.Context, o RunOutcome) {
 func (p *ghProgress) finish(ctx context.Context, o RunOutcome) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), progressFinishTimeout)
 	defer cancel()
-	owner, newerSHA := p.g.progress.finish(p.key, p.id)
+	owner, newerSHA := true, ""
+	if p.status {
+		owner, newerSHA = p.g.progress.finish(p.key, p.id)
+	}
 	if o.Result == OutcomeStopped {
 		// The PR closed under the run: no verdict to give, but don't leave
 		// its last commit pending forever.

@@ -387,6 +387,20 @@ func TestProgressNewerRunOwnsTheRow(t *testing.T) {
 	wantCalls(t, f.take())
 }
 
+// A run with its status switched off doesn't take the row: an older
+// status-posting run on the same PR still writes its verdict on the head.
+func TestProgressStatuslessRunDoesNotTakeTheRow(t *testing.T) {
+	f, _ := newFakeGH(t)
+	g, _ := progImplWith(t, "")
+	a := g.StartProgress(context.Background(), ProgressRun{Trigger: ghTrig("merge_conflict", nil)})
+	b := g.StartProgress(context.Background(), ProgressRun{Trigger: ghTrig("new_comment",
+		map[string]any{"reaction_subjects": subj("issue_comment", 5)}), Options: map[string]any{"status": false}})
+	f.take()
+	b.Finish(context.Background(), outcomeOK)
+	a.Finish(context.Background(), outcomeOK)
+	wantCalls(t, f.take(), "react issue_comment 5 +1", "status aaaaaaa1111 success octo-me done — no changes pushed")
+}
+
 // The resolved status context joins the source's own-status guard, so a
 // status conductor posted never comes back as CI.
 func TestProgressContextFeedsOwnStatusGuard(t *testing.T) {
