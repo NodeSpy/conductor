@@ -319,7 +319,16 @@ func (r *Runner) FilterMatch(t core.Trigger, spec config.TriggerSpec) (bool, err
 type Batch struct {
 	Key    string
 	Events []core.Trigger
+	// Implicit marks a batch the event's declared default batching formed
+	// (the trigger sets no group:). Its steps were written per event, so a
+	// prompted agent step that never reads {{.group}} is handed the rest of
+	// the burst explicitly (see execAgent) rather than only the newest
+	// event's fields.
+	Implicit bool
 }
+
+// implicitBatchKey marks a run fired from an implicit Batch.
+type implicitBatchKey struct{}
 
 // Run executes one fired trigger (or one grouped batch) through its steps and
 // hooks. It owns the full lifecycle: at-start hooks, steps with per-step
@@ -406,6 +415,9 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	addVaultData(data, r.VaultVals)
 	if batch != nil {
 		data["group"] = groupData(batch, r.SecretVals)
+		if batch.Implicit {
+			ctx = context.WithValue(ctx, implicitBatchKey{}, true)
+		}
 	}
 	stepsOut := map[string]any{}
 	data["steps"] = stepsOut
@@ -1487,6 +1499,12 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	if act.Prompt == "" {
 		group, _ := data["group"].(map[string]any)
 		act.Prompt = dispatch.EventPrompt(t, group)
+	} else if implicit, _ := ctx.Value(implicitBatchKey{}).(bool); implicit && !strings.Contains(step.Prompt, ".group") {
+		// A per-event prompt on a run the event's default batching formed:
+		// its fields are the newest event's, so hand over the whole burst
+		// too — batching must not silently drop the earlier events.
+		group, _ := data["group"].(map[string]any)
+		act.Prompt += dispatch.BatchAddendum(group)
 	}
 	if step.Background {
 		// A background step hands off a live agent for you to drive and close

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
@@ -52,6 +53,7 @@ type ghPayload struct {
 	Review *struct {
 		State string `json:"state"`
 		ID    int64  `json:"id"`
+		Body  string `json:"body"`
 		User  struct {
 			Login string `json:"login"`
 			Type  string `json:"type"` // "Bot" for app-authored reviews
@@ -64,6 +66,9 @@ type ghPayload struct {
 			Type  string `json:"type"` // "Bot" for app-authored comments
 		} `json:"user"`
 		Body string `json:"body"`
+		// PullRequestReviewID is the submitted review an inline comment
+		// belongs to (pull_request_review_comment only; 0 otherwise).
+		PullRequestReviewID int64 `json:"pull_request_review_id"`
 	} `json:"comment"`
 	Assignee *struct {
 		Login string `json:"login"`
@@ -184,7 +189,7 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 	case "pull_request_review_thread":
 		trs = g.mergeReadyTriggers(ctx, repo, threadPR(p), p) // resolved threads may unblock merge
 	case "issue_comment", "pull_request_review_comment":
-		trs = g.commentTriggers(repo, eventType, p)
+		trs = g.commentTriggers(ctx, repo, eventType, p)
 	case "check_run", "check_suite", "workflow_run":
 		trs = g.checkTriggers(ctx, repo, p)
 	case "pull_request":
@@ -292,23 +297,27 @@ func (g *Integration) reviewTriggers(ctx context.Context, repo string, p ghPaylo
 	if p.Action != "submitted" || p.Review == nil || p.PullRequest == nil {
 		return nil
 	}
+	// Remember the state: this review's inline comments arrive as their own
+	// events and are folded into it when it requested changes (see
+	// foldedIntoReview).
+	g.reviewStates.put(p.Review.ID, p.Review.State, time.Now())
 	var trs []core.Trigger
 	if p.Review.State == "changes_requested" && g.ownPR(p.PullRequest.User.Login) {
 		t := g.prTarget(repo, p.PullRequest)
 		reviewerIsBot := isBotActor(p.Review.User.Type, p.Review.User.Login)
-		trs = append(trs, g.emit(repo, "changes_requested", t,
+		cr := g.emit(repo, "changes_requested", t,
 			fmt.Sprintf("changes requested on %s#%d", repo, p.PullRequest.Number),
 			fmt.Sprintf("review:%d@%s", p.Review.ID, p.PullRequest.Head.SHA),
 			map[string]any{"head_ref": p.PullRequest.Head.Ref,
-				"author": p.Review.User.Login, "author_is_bot": reviewerIsBot},
-			func(act config.Action) bool {
-				facts := prFilterFacts(p.PullRequest.Head.Ref, p.PullRequest.Base.Ref,
-					p.PullRequest.Title, p.PullRequest.User.Login,
-					prLabelNames(p.PullRequest), p.PullRequest.Draft)
-				facts["reviewer"] = p.Review.User.Login
-				facts["author_is_bot"] = reviewerIsBot
-				return g.filterPasses(act, "changes_requested", repo, facts, lowerChangesRequested(act))
-			})...)
+				"author": p.Review.User.Login, "author_is_bot": reviewerIsBot,
+				"review_id": p.Review.ID, "review_body": p.Review.Body},
+			g.changesRequestedKeep(repo, p.PullRequest, p.Review.User.Login, reviewerIsBot))
+		if len(cr) > 0 {
+			// The review's inline comments ride this run rather than a
+			// new_comment run each, so the run must carry them.
+			g.attachReviewComments(ctx, cr, p, repo)
+		}
+		trs = append(trs, cr...)
 	}
 	// Any submitted review may have made the PR merge-ready.
 	trs = append(trs, g.mergeReadyTriggers(ctx, repo, p.PullRequest.Number, p)...)
@@ -355,7 +364,7 @@ func (g *Integration) corroborateRevert(ctx context.Context, p ghPayload, num in
 	return corroboratesRevert(msgs)
 }
 
-func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []core.Trigger {
+func (g *Integration) commentTriggers(ctx context.Context, repo, eventType string, p ghPayload) []core.Trigger {
 	if p.Action != "created" || p.Comment == nil {
 		return nil
 	}
@@ -380,6 +389,11 @@ func (g *Integration) commentTriggers(repo, eventType string, p ghPayload) []cor
 	author := strings.ToLower(p.Comment.User.Login)
 	if g.self[author] {
 		return nil // ignore our own comments
+	}
+	if eventType == "pull_request_review_comment" && g.foldedIntoReview(ctx, repo, p) {
+		log.Printf("github[%s]: %s#%d comment %d folded into changes-requested review %d — its changes_requested run addresses it",
+			g.name, repo, num, p.Comment.ID, p.Comment.PullRequestReviewID)
+		return nil
 	}
 	t := g.target(repo, num, head, base, url)
 	// comment_kind picks the engine's per-kind high-water mark: inline review
@@ -981,19 +995,7 @@ func allFold(have, want []string) bool {
 func (g *Integration) emit(repo, kind string, t core.Target, title, dedup string, extra map[string]any, keep func(config.Action) bool) []core.Trigger {
 	var out []core.Trigger
 	for _, act := range g.actionsFor(repo, kind) {
-		if !act.IsEnabled() {
-			continue
-		}
-		// Per-variant repo gates, used by the connectors-model lowering where
-		// every trigger on a kind is a variant carrying its own `repos:` filter
-		// (legacy configs never set these fields, so behavior is unchanged).
-		if len(act.Repos) > 0 && !matchRepo(act.Repos, repo) {
-			continue
-		}
-		if len(act.ExcludeRepos) > 0 && matchRepo(act.ExcludeRepos, repo) {
-			continue
-		}
-		if keep != nil && !keep(act) {
+		if !variantApplies(act, repo, keep) {
 			continue
 		}
 		ctxMap := map[string]any{}
@@ -1009,6 +1011,35 @@ func (g *Integration) emit(repo, kind string, t core.Target, title, dedup string
 		})
 	}
 	return out
+}
+
+// variantApplies is emit's per-variant gate: enabled, inside the variant's
+// repo scope, and passing keep (nil ⇒ always).
+func variantApplies(act config.Action, repo string, keep func(config.Action) bool) bool {
+	if !act.IsEnabled() {
+		return false
+	}
+	// Per-variant repo gates, used by the connectors-model lowering where
+	// every trigger on a kind is a variant carrying its own `repos:` filter
+	// (legacy configs never set these fields, so behavior is unchanged).
+	if len(act.Repos) > 0 && !matchRepo(act.Repos, repo) {
+		return false
+	}
+	if len(act.ExcludeRepos) > 0 && matchRepo(act.ExcludeRepos, repo) {
+		return false
+	}
+	return keep == nil || keep(act)
+}
+
+// wouldEmit reports whether emit would produce at least one trigger for the
+// kind — the same gate, without building anything.
+func (g *Integration) wouldEmit(repo, kind string, keep func(config.Action) bool) bool {
+	for _, act := range g.actionsFor(repo, kind) {
+		if variantApplies(act, repo, keep) {
+			return true
+		}
+	}
+	return false
 }
 
 // single emits every enabled variant of the kind (no per-variant applicability

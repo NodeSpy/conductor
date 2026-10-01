@@ -822,6 +822,10 @@ func (c *Config) NormalizeTriggers() error {
 
 // GroupSpec batches events: key groups them, window debounces.
 type GroupSpec struct {
+	// Enabled false opts the trigger out of batching altogether — including
+	// the default batching an event may declare for triggers with no group:
+	// (github's new_comment coalesces a comment burst per PR). Unset = on.
+	Enabled *bool `yaml:"enabled,omitempty"`
 	// Key is the grouping expression (templated). Default: the event's own
 	// dedup id — every event is its own run.
 	Key string `yaml:"key,omitempty"`
@@ -831,6 +835,9 @@ type GroupSpec struct {
 	// MaxWait caps how long a busy group can defer firing (default 4×window).
 	MaxWait Duration `yaml:"max_wait,omitempty"`
 }
+
+// IsEnabled reports whether the group batches (nil spec = no group).
+func (g *GroupSpec) IsEnabled() bool { return g != nil && (g.Enabled == nil || *g.Enabled) }
 
 // Step is one entry in a `steps:` list (and the body of hooks' action units).
 // Exactly one of the step forms must be set: `type: agent`, `type: command`,

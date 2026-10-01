@@ -140,7 +140,10 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 		}
 	}
 
-	sc := newScope(ev, cfg, spec.Group != nil)
+	// {{.group.*}} is in scope when the trigger batches: its own group:, or
+	// the event's declared default batching (EventDecl.Coalesce) when it sets
+	// none.
+	sc := newScope(ev, cfg, spec.Group.IsEnabled() || (spec.Group == nil && ev.Coalesce > 0))
 	// A fan-in trigger's steps are shared across every listed source, so
 	// their references check against the UNION of the sources' contexts
 	// (heterogeneous fields are read defensively — {{.x | default ""}}).
@@ -159,7 +162,7 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 			}
 		}
 	}
-	if spec.Group != nil && spec.Group.Key != "" {
+	if spec.Group.IsEnabled() && spec.Group.Key != "" {
 		if err := checkRefs(where+" group.key", spec.Group.Key, sc); err != nil {
 			return err
 		}
@@ -242,7 +245,7 @@ func validateManualTrigger(cfg *config.Config, reg *connector.Registry, where st
 	}
 	sc := openScope(cfg)
 	sc.add("inputs")
-	if spec.Group != nil {
+	if spec.Group.IsEnabled() {
 		sc.top["group"] = true
 		if spec.Group.Key != "" {
 			if err := checkRefs(where+" group.key", spec.Group.Key, sc); err != nil {

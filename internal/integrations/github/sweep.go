@@ -11,6 +11,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 // sweepLoop runs the optional catch-up sweep on an ADAPTIVE cadence. It's off
@@ -497,9 +498,20 @@ func (g *Integration) sweepUnresolvedComments(ctx context.Context, instID int64,
 		ids = append(ids, th.ID)
 	}
 	sig := "threads:" + t.HeadSHA + ":" + threadSig(ids)
+	extra := g.threadReviewerFacts(threads)
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	// The threads' opening comments are the feedback this run addresses —
+	// the same review_comments the webhook path carries for a review.
+	cs := make([]reviewComment, 0, len(threads))
+	for _, th := range threads {
+		cs = append(cs, reviewComment{Author: th.Author, Path: th.Path, Line: th.Line, Body: th.Body, URL: th.URL})
+	}
+	extra["review_comments"] = reviewCommentsFact(cs)
 	return g.single(repo, "changes_requested", t,
 		fmt.Sprintf("sweep: %d unresolved comment thread(s) on %s#%d", len(ids), repo, t.Number), sig,
-		g.threadReviewerFacts(threads))
+		extra)
 }
 
 // threadReviewerFacts names the reviewer behind a sweep-recovered
@@ -555,6 +567,14 @@ func (g *Integration) sweepMissedComments(ctx context.Context, instID int64, own
 		return nil
 	}
 	cutoff := time.Now().Add(-commentRecoveryWindow)
+	// An inline comment of a CHANGES_REQUESTED review is the review's to
+	// address, exactly as on the webhook path (foldedIntoReview): the sweep's
+	// changes_requested (sweepUnresolvedComments) carries its thread, so
+	// recovering it as a new_comment too would re-fan the review out into one
+	// fixer per comment. Its comment mark never advances (no new_comment ever
+	// dispatched for it), so without this every sweep in the recovery window
+	// would re-emit it.
+	foldReviews := g.wouldEmit(repo, "changes_requested", nil)
 	var out []core.Trigger
 	for _, c := range comments {
 		author := strings.ToLower(c.User.Login)
@@ -563,6 +583,10 @@ func (g *Integration) sweepMissedComments(ctx context.Context, instID int64, own
 		}
 		if !c.CreatedAt.IsZero() && c.CreatedAt.Before(cutoff) {
 			continue // too old to be a "missed while offline" comment
+		}
+		if foldReviews && c.Kind == store.CommentKindReview && c.ReviewID != 0 &&
+			g.reviewState(ctx, instID, repo, t.Number, c.ReviewID) == "changes_requested" {
+			continue
 		}
 		extra := map[string]any{"author": c.User.Login, "comment_body": c.Body, "head_ref": headRef,
 			"comment_id": c.ID, "comment_kind": c.Kind}

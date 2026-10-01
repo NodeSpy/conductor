@@ -2,6 +2,8 @@ package dispatch
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	"github.com/NodeSpy/conductor/internal/core"
 )
@@ -45,7 +47,35 @@ func EventPrompt(t core.Trigger, group map[string]any) string {
 		// still beats dispatching an empty prompt.
 		return "Act on this event."
 	}
-	return "Act on this event:\n\n" + string(body)
+	return "Act on this event:\n\n" + literal(string(body))
+}
+
+// BatchAddendum is appended to a step's OWN prompt when a run batches several
+// events the prompt was written to handle one at a time (an event's default
+// batching — see flow.Batch.Implicit): the prompt's fields are the newest
+// event's, so the whole burst follows, credential-stripped. "" when the run
+// holds a single event.
+func BatchAddendum(group map[string]any) string {
+	g := groupEvents(group)
+	if g == nil {
+		return ""
+	}
+	body, err := json.MarshalIndent(g, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("\n\nThis run batches %d events on the same target that arrived together; the details above are the most recent one's. Handle all of them:\n\n%s\n",
+		g["count"], literal(string(body)))
+}
+
+// literal makes event-derived text safe to embed in a prompt TEMPLATE. The
+// prompt is rendered as a Go template at dispatch (promptText), and event
+// fields are other people's text — a comment quoting Helm/Jinja/Go template
+// code would otherwise fail the render (and fail the dispatch) or be
+// evaluated against the dispatch's data. Each "{{" becomes an action that
+// renders back to a literal "{{".
+func literal(s string) string {
+	return strings.ReplaceAll(s, "{{", `{{"{{"}}`)
 }
 
 // eventObject is the connector-neutral view of one trigger.

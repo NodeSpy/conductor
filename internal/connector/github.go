@@ -52,6 +52,18 @@ func githubEvent(name, desc string, contextExtra, options Schema) EventDecl {
 	}
 }
 
+// commentCoalesceWindow is new_comment's default debounce: a reviewer posting
+// several comments in a row gets ONE fixer (one commit, one push) per burst
+// rather than one per comment racing the same branch. Same as an explicit
+// `group:`'s default window.
+const commentCoalesceWindow = 15 * time.Second
+
+// coalesced sets an event's default batching window (EventDecl.Coalesce).
+func coalesced(e EventDecl, window time.Duration) EventDecl {
+	e.Coalesce = window
+	return e
+}
+
 // filterSchema converts the github integration's filter surface (the one place
 // facts and match keys are defined, next to the code that computes and
 // evaluates them) into this package's Schema, so a fact cannot be declared
@@ -99,13 +111,16 @@ var githubDecl = &TypeDecl{
 			Schema{
 				"head_ref": {Type: TString},
 				"author":   {Type: TString}, "author_is_bot": {Type: TBool, Desc: "the reviewer is an automated bot (account type Bot, or a [bot] login)"},
+				"review_id":       {Type: TInt, Desc: "the submitted review's id (webhook path; absent for a sweep-recovered run)"},
+				"review_body":     {Type: TString, Desc: "the review's summary comment"},
+				"review_comments": {Type: TList, Desc: "the feedback to address: the review's inline comments (or, sweep-recovered, each unresolved thread's opening comment) as {author, path, line, body, url}. Inline comments of a changes-requested review are folded in here and do NOT also fire new_comment"},
 			}, nil),
-		githubEvent("new_comment", "a new comment on your PR",
+		coalesced(githubEvent("new_comment", "a new comment on your PR",
 			Schema{
 				"author": {Type: TString}, "author_is_bot": {Type: TBool, Desc: "the commenter is an automated bot (account type Bot, or a [bot] login)"},
 				"comment_body": {Type: TString}, "head_ref": {Type: TString},
 				"comment_id": {Type: TInt}, "comment_kind": {Type: TString},
-			}, nil),
+			}, nil), commentCoalesceWindow),
 		githubEvent("merge_conflict", "your PR became unmergeable", nil, nil),
 		githubEvent("pr_behind", "your PR fell behind its base", nil, nil),
 		githubEvent("failing_checks", "CI concluded failing on your PR",
