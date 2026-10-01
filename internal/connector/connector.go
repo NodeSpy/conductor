@@ -169,6 +169,12 @@ type TypeDecl struct {
 	// integration filters for itself (github's live-API gates,
 	// sentry/pagerduty's rule matching) and the runner skips re-evaluation.
 	Filter func(event string, filters, trigCtx map[string]any) (bool, error)
+
+	// ValidateTrigger, when non-nil, checks a trigger on one of this type's
+	// events beyond the generic filter/options schema — rules that span
+	// fields (an option that requires a filter key). Called at config load
+	// after the schema checks pass.
+	ValidateTrigger func(event string, spec config.TriggerSpec) error
 }
 
 // Event looks up an event declaration by name; for Dynamic events the

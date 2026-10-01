@@ -69,13 +69,29 @@ func (f *Feedback) inThread() bool { return f == nil || f.InThread == nil || *f.
 
 // Rule routes one kind of Slack event to action(s), with optional feedback.
 type Rule struct {
-	On       string           `yaml:"on"`       // app_mention | reaction_added | slash_command
+	On       string           `yaml:"on"`       // app_mention | reaction_added | slash_command | message_shortcut
 	Reaction string           `yaml:"reaction"` // reaction_added: which emoji (e.g. "eyes"); "" = any
 	Command  string           `yaml:"command"`  // slash_command: which command (e.g. "/conductor"); "" = any
 	Ack      *Feedback        `yaml:"ack"`      // fired when the rule matches and dispatches
 	OnDone   *Feedback        `yaml:"on_done"`  // fired when the dispatched work finishes successfully
 	OnFail   *Feedback        `yaml:"on_fail"`  // fired when the dispatched work fails
 	Actions  config.ActionSet `yaml:"actions"`
+
+	// Form, on a message_shortcut or app_mention rule, is collected in a
+	// modal before the rule fires (see interactive.go). A shortcut opens it
+	// directly; a mention gets an ephemeral "open form" button first.
+	Form *Form `yaml:"form,omitempty"`
+	// CallbackID selects a message_shortcut by its callback id ("" = any).
+	CallbackID string `yaml:"callback_id,omitempty"`
+	// Users restricts a form/shortcut rule to these Slack user ids. A form or
+	// message_shortcut rule needs it unless AnyUser opts out explicitly.
+	Users   []string `yaml:"users,omitempty"`
+	AnyUser bool     `yaml:"any_user,omitempty"`
+	// Key is the rule's stable identity across a form round-trip (set by the
+	// connectors lowering to the trigger's ref); Filter is the trigger's own
+	// filter, pre-evaluated before a form opens. Both lowering-only.
+	Key    string         `yaml:"key,omitempty"`
+	Filter *config.Filter `yaml:"filter,omitempty"`
 }
 
 // pendingFeedback is stashed per originating Slack event (keyed by the
@@ -99,6 +115,8 @@ type Integration struct {
 	pendingMu   sync.Mutex
 	pending     map[string]*pendingFeedback
 	pendingRing []string
+
+	forms formState
 }
 
 func newIntegration(name string, decode func(any) error) (core.Integration, error) {
@@ -118,10 +136,19 @@ func (g *Integration) Validate() error {
 	if len(g.cfg.Rules) == 0 {
 		return fmt.Errorf("slack[%s]: no triggers", g.name)
 	}
-	valid := map[string]bool{"app_mention": true, "reaction_added": true, "slash_command": true}
+	valid := map[string]bool{"app_mention": true, "reaction_added": true, "slash_command": true, "message_shortcut": true}
 	for i, r := range g.cfg.Rules {
 		if !valid[r.On] {
-			return fmt.Errorf("slack[%s]: triggers[%d]: `on` must be app_mention|reaction_added|slash_command", g.name, i)
+			return fmt.Errorf("slack[%s]: triggers[%d]: `on` must be app_mention|reaction_added|slash_command|message_shortcut", g.name, i)
+		}
+		if r.Form != nil && r.On != "app_mention" && r.On != "message_shortcut" {
+			return fmt.Errorf("slack[%s]: triggers[%d]: form applies to app_mention and message_shortcut only", g.name, i)
+		}
+		if err := r.Form.Validate(); err != nil {
+			return fmt.Errorf("slack[%s]: triggers[%d]: %w", g.name, i, err)
+		}
+		if (r.Form != nil || r.On == "message_shortcut") && len(r.Users) == 0 && !r.AnyUser {
+			return fmt.Errorf("slack[%s]: triggers[%d]: a form or message_shortcut trigger needs users: (or any_user: true to let anyone in the workspace use it)", g.name, i)
 		}
 		if len(r.Actions) == 0 {
 			return fmt.Errorf("slack[%s]: triggers[%d]: no actions", g.name, i)
@@ -206,10 +233,25 @@ func (g *Integration) runOnce(ctx context.Context, emit core.EmitFunc) error {
 		if json.Unmarshal(data, &env) != nil {
 			continue
 		}
+		// An interactive envelope is decided BEFORE its ACK: a modal
+		// submission's validation errors travel in the ACK payload, and the
+		// rest (views.open on a 3s trigger_id, emit) runs right after it.
+		var ackPayload any
+		var after func()
+		if env.Type == "interactive" {
+			ackPayload, after = g.handleInteractive(ctx, emit, env.Payload)
+		}
 		// ACK first (Slack requires it within 3s), then process.
 		if env.EnvelopeID != "" {
-			ack, _ := json.Marshal(map[string]string{"envelope_id": env.EnvelopeID})
+			frame := map[string]any{"envelope_id": env.EnvelopeID}
+			if ackPayload != nil {
+				frame["payload"] = ackPayload
+			}
+			ack, _ := json.Marshal(frame)
 			_ = c.Write(ctx, websocket.MessageText, ack)
+		}
+		if after != nil {
+			after()
 		}
 		switch env.Type {
 		case "hello":

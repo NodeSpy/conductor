@@ -24,7 +24,13 @@ func slackCtxSchema() Schema {
 		"slack.text": {Type: TString}, "slack.ts": {Type: TString},
 		"slack.thread_ts": {Type: TString}, "slack.reaction": {Type: TString},
 		"slack.command": {Type: TString},
-		"repo":          {Type: TString}, "number": {Type: TInt},
+		// Interactive (form/shortcut) additions; present on every event so a
+		// template never trips on a missing key.
+		"slack.form":        {Type: TMap, Desc: "submitted form values by field name"},
+		"slack.via":         {Type: TString, Desc: "shortcut | mention (how a form trigger fired)"},
+		"slack.callback_id": {Type: TString, Desc: "message_shortcut: the shortcut's callback id"},
+		"slack.files":       {Type: TList, Desc: "files on the triggering message: {id, name, mimetype}"},
+		"repo":              {Type: TString}, "number": {Type: TInt},
 		"kind": {Type: TString}, "title": {Type: TString},
 	}
 }
@@ -39,11 +45,22 @@ var slackDecl = &TypeDecl{
 	},
 	Events: []EventDecl{
 		{
-			Name: "app_mention", Desc: "the bot was @-mentioned",
+			Name: "app_mention", Desc: "the bot was @-mentioned (with options.form: the mentioning user gets a private button that opens the form; the trigger fires on submission)",
 			Filters: Schema{
 				"channel": {Type: TString, Desc: "only this channel id"},
 				"users":   {Type: TList, Desc: "only these user ids"},
 			},
+			Options: slackFormOptions(),
+			Context: slackCtxSchema(),
+		},
+		{
+			Name: "message_shortcut", Desc: "a message shortcut was used on a message (with options.form: opens the form first; the trigger fires on submission)",
+			Filters: Schema{
+				"callback_id": {Type: TString, Desc: "only this shortcut callback id"},
+				"channel":     {Type: TString, Desc: "only this channel id"},
+				"users":       {Type: TList, Desc: "only these user ids (required unless options.any_user)"},
+			},
+			Options: slackFormOptions(),
 			Context: slackCtxSchema(),
 		},
 		{
@@ -99,9 +116,76 @@ var slackDecl = &TypeDecl{
 	},
 }
 
+// slackFormOptions are the per-trigger options of the form-capable events.
+func slackFormOptions() Schema {
+	return Schema{
+		"form":     {Type: TMap, Desc: "a modal to collect before firing: {title, submit, fields: [{name, label, type: select|text|textarea, options, default, optional}]}"},
+		"any_user": {Type: TBool, Desc: "allow a form/shortcut trigger with no users: filter (anyone in the workspace)"},
+	}
+}
+
 func init() {
-	slackDecl.Filter = slackFilter
+	slackDecl.Filter = slackint.FilterMatch
+	slackDecl.ValidateTrigger = validateSlackTrigger
+	slackDecl.Verbs = append(slackDecl.Verbs, slackFileVerbs()...)
 	RegisterType(slackDecl, newSlackImpl)
+}
+
+// validateSlackTrigger enforces the form/shortcut rules at load: the form
+// itself must be valid, and a trigger that opens a form or answers a message
+// shortcut must name who may use it — a non-empty `users:` filter every
+// match path requires — unless `options.any_user: true` opts out.
+func validateSlackTrigger(event string, spec config.TriggerSpec) error {
+	form, err := slackint.ParseForm(spec.Options["form"])
+	if err != nil {
+		return err
+	}
+	if form != nil && event != "app_mention" && event != "message_shortcut" {
+		return fmt.Errorf("options.form applies to app_mention and message_shortcut only")
+	}
+	if form == nil && event != "message_shortcut" {
+		return nil
+	}
+	if truthy(spec.Options["any_user"]) {
+		return nil
+	}
+	if len(requiredMatchValues(spec.Filter, "users")) == 0 {
+		return fmt.Errorf("a %s trigger needs a non-empty `users:` filter (Slack user ids allowed to use it), or options.any_user: true to allow anyone in the workspace", map[bool]string{true: "form", false: "message_shortcut"}[form != nil])
+	}
+	return nil
+}
+
+// requiredMatchValues returns the string values of match key `key` that
+// EVERY path through filter f requires: a non-negated match under ANDs, or
+// one on each branch of an OR (their union). nil when some path to a match
+// does not require the key.
+func requiredMatchValues(f *config.Filter, key string) []string {
+	if f == nil {
+		return nil
+	}
+	switch f.Op {
+	case config.FilterOpMatch:
+		if f.Key == key {
+			return toStrings(f.Val)
+		}
+	case config.FilterOpAnd:
+		for _, k := range f.Kids {
+			if v := requiredMatchValues(k, key); len(v) > 0 {
+				return v
+			}
+		}
+	case config.FilterOpOr:
+		var out []string
+		for _, k := range f.Kids {
+			v := requiredMatchValues(k, key)
+			if len(v) == 0 {
+				return nil
+			}
+			out = append(out, v...)
+		}
+		return out
+	}
+	return nil
 }
 
 // mergeSchema overlays b onto a copy of a.
@@ -134,6 +218,8 @@ type slackImpl struct {
 	// inbox captures thread/DM replies for ask verbs; the Socket Mode source
 	// (the slack integration) delivers them via the reply hook wired in main.
 	inbox *handoff.Inbox
+	// names caches users.info display names for the thread verb.
+	names userNames
 }
 
 func newSlackImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
@@ -217,8 +303,29 @@ func (s *slackImpl) Source(triggers []CompiledTrigger) (core.Integration, error)
 	}
 	byEvent := map[string]config.ActionSet{}
 	order := []string{}
+	var interactive []slackint.Rule
 	for _, t := range triggers {
 		ev := t.Spec.Event()
+		form, err := slackint.ParseForm(t.Spec.Options["form"])
+		if err != nil {
+			return nil, fmt.Errorf("connector %q: trigger on %s: %w", s.name, t.Spec.On, err)
+		}
+		if form != nil || ev == "message_shortcut" {
+			// A form/shortcut trigger is its own rule: the integration
+			// pre-matches it (users + the trigger's filter) synchronously,
+			// opens ITS form, and fires exactly it on submission.
+			cb := requiredMatchValues(t.Spec.Filter, "callback_id")
+			r := slackint.Rule{
+				On: ev, Form: form, Key: t.Ref(), Filter: t.Spec.Filter,
+				Users: requiredMatchValues(t.Spec.Filter, "users"), AnyUser: truthy(t.Spec.Options["any_user"]),
+				Actions: config.ActionSet{{Name: t.Spec.Name, Enabled: t.Spec.Enabled, Shadow: t.Spec.Shadow, FlowRef: t.Ref()}},
+			}
+			if len(cb) == 1 {
+				r.CallbackID = cb[0]
+			}
+			interactive = append(interactive, r)
+			continue
+		}
 		if _, ok := byEvent[ev]; !ok {
 			order = append(order, ev)
 		}
@@ -233,46 +340,8 @@ func (s *slackImpl) Source(triggers []CompiledTrigger) (core.Integration, error)
 	for _, ev := range order {
 		cfg.Rules = append(cfg.Rules, slackint.Rule{On: ev, Actions: byEvent[ev]})
 	}
+	cfg.Rules = append(cfg.Rules, interactive...)
 	return buildIntegration("slack", s.name, cfg)
-}
-
-// FilterEvent evaluates a slack trigger's filters against the event context —
-// the flow runner calls this before running the trigger's steps.
-func slackFilter(event string, filters map[string]any, trigCtx map[string]any) (bool, error) {
-	sc, _ := trigCtx["slack"].(map[string]any)
-	get := func(k string) string {
-		if sc == nil {
-			return ""
-		}
-		v, _ := sc[k].(string)
-		return v
-	}
-	if want, _ := filters["channel"].(string); want != "" && want != get("channel") {
-		return false, nil
-	}
-	if users := toStrings(filters["users"]); len(users) > 0 {
-		ok := false
-		for _, u := range users {
-			if strings.EqualFold(u, get("user")) {
-				ok = true
-				break
-			}
-		}
-		if !ok {
-			return false, nil
-		}
-	}
-	switch event {
-	case "reaction_added":
-		if want, _ := filters["reaction"].(string); want != "" && want != get("reaction") {
-			return false, nil
-		}
-	case "slash_command":
-		if want, _ := filters["command"].(string); want != "" && want != get("command") {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 func (s *slackImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
@@ -331,6 +400,14 @@ func (s *slackImpl) Invoke(ctx context.Context, verb string, opts map[string]any
 			return nil, err
 		}
 		return map[string]any{"ok": true}, nil
+	case "thread", "download":
+		if s.conn.BotToken == "" {
+			return nil, fmt.Errorf("slack.%s needs a bot_token (the webhook_url connection is post-only)", verb)
+		}
+		if verb == "thread" {
+			return s.threadVerb(ctx, opts)
+		}
+		return s.downloadVerb(ctx, opts)
 	case "ask":
 		if s.conn.BotToken == "" {
 			return nil, fmt.Errorf("slack.ask needs a bot_token and app_token (the webhook_url connection is post-only)")

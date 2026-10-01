@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/handoff"
+	slackint "github.com/NodeSpy/conductor/internal/integrations/slack"
 )
 
 func newSlackTestImpl(t *testing.T, apiBase string) *slackImpl {
@@ -211,7 +212,7 @@ func TestSlackFilterTable(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := slackFilter(c.event, c.filters, c.ctx)
+			got, err := slackint.FilterMatch(c.event, c.filters, c.ctx)
 			if err != nil {
 				t.Fatalf("slackFilter: %v", err)
 			}

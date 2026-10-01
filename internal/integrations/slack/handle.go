@@ -21,6 +21,7 @@ var httpc = &http.Client{Timeout: 15 * time.Second}
 var (
 	chatPostMessageURL   = "https://slack.com/api/chat.postMessage"
 	chatPostEphemeralURL = "https://slack.com/api/chat.postEphemeral"
+	viewsOpenURL         = "https://slack.com/api/views.open"
 	reactionsAddURL      = "https://slack.com/api/reactions.add"
 	connectionsOpenURL   = "https://slack.com/api/apps.connections.open"
 )
@@ -28,15 +29,16 @@ var (
 // eventCallback is the Events API payload delivered inside an events_api envelope.
 type eventCallback struct {
 	Event struct {
-		Type        string `json:"type"`
-		Text        string `json:"text"`
-		User        string `json:"user"`
-		Channel     string `json:"channel"`
-		ChannelType string `json:"channel_type"` // "im" for a DM; only present on message events
-		TS          string `json:"ts"`
-		ThreadTS    string `json:"thread_ts"`
-		Reaction    string `json:"reaction"`
-		BotID       string `json:"bot_id"` // set on messages the bot itself posted (skip those)
+		Type        string      `json:"type"`
+		Text        string      `json:"text"`
+		User        string      `json:"user"`
+		Channel     string      `json:"channel"`
+		ChannelType string      `json:"channel_type"` // "im" for a DM; only present on message events
+		TS          string      `json:"ts"`
+		ThreadTS    string      `json:"thread_ts"`
+		Reaction    string      `json:"reaction"`
+		BotID       string      `json:"bot_id"` // set on messages the bot itself posted (skip those)
+		Files       []slackFile `json:"files"`
 		Item        struct {
 			Channel string `json:"channel"`
 			TS      string `json:"ts"`
@@ -72,9 +74,12 @@ func (g *Integration) handleEvent(ctx context.Context, emit core.EmitFunc, raw j
 	}
 	switch e.Type {
 	case "app_mention":
-		g.fire(ctx, emit, "app_mention", ruleMatchMention, evt{
+		ev := evt{
 			text: e.Text, user: e.User, channel: e.Channel, ts: e.TS, threadTS: firstNonEmpty(e.ThreadTS, e.TS),
-		})
+			via: "mention", files: e.Files,
+		}
+		g.fire(ctx, emit, "app_mention", ruleMatchMention, ev)
+		g.offerForms(ctx, ev)
 	case "reaction_added":
 		g.fire(ctx, emit, "reaction_added", func(r Rule, ev evt) bool {
 			return r.Reaction == "" || r.Reaction == ev.reaction
@@ -99,6 +104,24 @@ func (g *Integration) handleSlash(ctx context.Context, emit core.EmitFunc, raw j
 // evt is the normalized Slack event we route + template on.
 type evt struct {
 	text, user, channel, ts, threadTS, reaction, command string
+	via, callbackID                                      string
+	files                                                []slackFile
+	form                                                 map[string]any
+}
+
+// context is the event's published `.slack` context. form is always a map
+// (empty without one) so {{.slack.form.x}} renders empty rather than failing
+// on a nil.
+func (ev evt) context() map[string]any {
+	form := ev.form
+	if form == nil {
+		form = map[string]any{}
+	}
+	return map[string]any{
+		"channel": ev.channel, "user": ev.user, "text": ev.text, "ts": ev.ts,
+		"thread_ts": ev.threadTS, "reaction": ev.reaction, "command": ev.command,
+		"via": ev.via, "callback_id": ev.callbackID, "files": filesCtx(ev.files), "form": form,
+	}
 }
 
 func ruleMatchMention(Rule, evt) bool { return true }
@@ -115,19 +138,29 @@ func ruleMatchMention(Rule, evt) bool { return true }
 func (g *Integration) fire(ctx context.Context, emit core.EmitFunc, on string, match func(Rule, evt) bool, ev evt) {
 	// Dedup on channel+ts+on so a redelivered envelope doesn't double-fire.
 	dedupKey := on + ":" + ev.channel + ":" + firstNonEmpty(ev.ts, ev.reaction+ev.text)
+	var rules []Rule
+	for _, r := range g.cfg.Rules {
+		// A form rule fires on its form's submission, never on the bare event.
+		if r.On == on && r.Form == nil && match(r, ev) {
+			rules = append(rules, r)
+		}
+	}
+	if len(rules) == 0 {
+		return
+	}
+	g.fireRules(ctx, emit, on, dedupKey, ev, rules)
+}
+
+// fireRules emits a trigger per enabled action variant of each given rule,
+// under one Dedup, firing ack and stashing on_done/on_fail as fire describes.
+func (g *Integration) fireRules(ctx context.Context, emit core.EmitFunc, on, dedupKey string, ev evt, rules []Rule) {
 	if !g.seen.Add(dedupKey) {
 		return
 	}
-	sctx := map[string]any{
-		"channel": ev.channel, "user": ev.user, "text": ev.text, "ts": ev.ts,
-		"thread_ts": ev.threadTS, "reaction": ev.reaction, "command": ev.command,
-	}
+	sctx := ev.context()
 	variants := 0
 	var ack, onDone, onFail *Feedback
-	for _, r := range g.cfg.Rules {
-		if r.On != on || !match(r, ev) {
-			continue
-		}
+	for _, r := range rules {
 		title := firstLine(firstNonEmpty(ev.text, ev.command+" reaction:"+ev.reaction, "slack "+on))
 		target := inbound.SyntheticTarget("slack:"+ev.channel, dedupKey)
 		for _, act := range r.Actions {
@@ -363,4 +396,15 @@ func firstNonEmpty(vs ...string) string {
 		}
 	}
 	return ""
+}
+
+// newJSONRequest builds a bot-authenticated JSON POST to a Web API method.
+func newJSONRequest(ctx context.Context, url string, body []byte, token string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	return req, nil
 }

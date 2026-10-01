@@ -139,6 +139,11 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 			return err
 		}
 	}
+	if in.Decl.ValidateTrigger != nil {
+		if err := in.Decl.ValidateTrigger(spec.Event(), spec); err != nil {
+			return fmt.Errorf("%s: %w", where, err)
+		}
+	}
 
 	sc := newScope(ev, cfg, spec.Group != nil)
 	// A fan-in trigger's steps are shared across every listed source, so
