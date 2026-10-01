@@ -102,6 +102,10 @@ like) can call conductor's authenticated `/invoke` API for the agent work it doe
 - Pluggable runtimes and agent profiles; request-response **asks** and interactive
   **hand-offs** to Slack / Discord / a web link (ephemeral, delivered over your
   own notify channel) — [Runtimes](https://github.com/NodeSpy/conductor/wiki/Runtimes) · [Agents](https://github.com/NodeSpy/conductor/wiki/Agents) · [Hand-offs](https://github.com/NodeSpy/conductor/wiki/Hand-offs)
+- **Slack → your workspace**: a message shortcut or @-mention opens a form, and
+  conductor launches a detached agent (`detach: true`) on the thread and its
+  screenshots in a fresh worktree that is yours, not conductor's — then DMs you
+  the branch — [Slack Handover](https://github.com/NodeSpy/conductor/wiki/Slack-Handover)
 - **Quality gates** on agent output — run tests, lint, or a critic agent before a
   proposed change promotes, looping a revise on failure — [Gates](https://github.com/NodeSpy/conductor/wiki/Gates)
 - **Cost & token budgets** with spend reporting; **agent isolation / sandboxing**

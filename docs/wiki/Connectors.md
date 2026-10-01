@@ -110,7 +110,7 @@ subprocesses; several — `github`, `sentry`, `pagerduty`, `ntfy`, `pushover`,
 | type | events | verbs | notes |
 |---|---|---|---|
 | `github` | `merge_conflict`, `pr_behind`, `failing_checks`, `changes_requested`, `new_comment`, `review_requested`, `self_review`, `merge_ready`, `issue_matched`, `release`, `deployment_status`, `dependabot_alert`, `secret_scanning_alert`, `stuck_checks` | `comment`, `reply`, `request_review`, `rerequest_review`, `remove_reviewer`, `submit_review`, `add_labels`, `sweep`, `pr_diff`, `pr_get`, `pr_files`, `review_comments`, `file`, `create_pr`, `merge_pr`, `update_pr`, `create_issue`, `update_issue`, `assign`, `remove_label`, `get_issue`, `put_file`, `delete_file`, `get_ref`, `create_branch`, `dispatch_workflow`, `rerun_run`, `cancel_run`, `list_runs`, `checks`, `create_release`, `upload_asset`, `list_issues`, `search_issues`, `ready_for_review`, `convert_to_draft`, `create_gist`, `get_gist`, `update_gist`, `delete_gist`, `list_gists` | creds: app → token → gh ([setup](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github.md#setup)) |
-| `slack` | `app_mention`, `reaction_added`, `slash_command` | `post`, `react`, `ask` | Socket Mode in, Web API out |
+| `slack` | `app_mention`, `reaction_added`, `slash_command`, `message_shortcut` | `post`, `react`, `ask`, `thread`, `download` | Socket Mode in, Web API out; `app_mention`/`message_shortcut` take `options.form` (a modal) — see [[Slack-Handover]] |
 | `discord` | — | `post`, `ask` | bot token; gateway captures ask replies |
 | `web` | — | `ask` | approve/revise/discard page on the inbound listener; [[Hand-offs]] tunnels |
 | `cron` | one per declared schedule | — | `schedules:` on the connection |

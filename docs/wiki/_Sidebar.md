@@ -41,6 +41,7 @@ Connectors
 - [[Connectors]]
 - [Plugin catalog ↗](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md)
 - [[Authoring-Connectors]]
+- [[Slack-Handover]]
 
 Operations
 - [[One-Shot]]
