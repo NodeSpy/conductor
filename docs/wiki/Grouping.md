@@ -1,8 +1,7 @@
 # Grouping (event batching)
 
-By default every event is its own run, dispatched immediately — except an
-event that declares default batching (github's `new_comment`, below). A trigger
-may set `group:` to batch a burst of related events into one run:
+By default every event is its own run, dispatched immediately. A trigger may
+set `group:` to batch a burst of related events into one run:
 
 ```yaml
 - on: gh.new_comment
@@ -47,42 +46,6 @@ may set `group:` to batch a burst of related events into one run:
   a hot key under a stuck run keeps the freshest context instead of growing
   without bound. A panicking batch run is recovered and logged — the key
   keeps batching afterwards.
-
-## Default batching (github `new_comment`)
-
-A reviewer who leaves five comments in a row means one round of feedback, not
-five jobs. So `new_comment` batches **by default**: a `gh.new_comment` trigger
-with no `group:` of its own behaves as if it had
-`group: { window: 15s }` keyed on the PR. A burst of comments on one PR is ONE
-run — one agent, one commit, one push — instead of one fixer per comment racing
-the same branch. Comments on different PRs are still separate runs.
-
-- **Nothing is dropped.** A step with no `prompt:` is handed the whole burst
-  (the event prompt includes it). A step with its own per-comment prompt that
-  never reads `{{.group}}` still sees the newest comment in its fields, and the
-  rest of the burst is appended to its prompt.
-- **Tune or opt out** with the trigger's own `group:` — it always wins:
-  `group: { window: 2m }` to wait longer, `group: { key: "{{.author}}" }` to
-  batch differently, `group: { enabled: false }` for one run per comment,
-  dispatched immediately (the old behavior).
-- A **forced** trigger (`conductor run --force`) and a **shadow** trigger are
-  never batched by default.
-- `{{.group.*}}` is in scope for a `new_comment` trigger with no `group:`, as
-  for any grouped trigger.
-
-The window is the event's declaration (connector authors: `EventDecl.Coalesce`,
-see [[Authoring-Connectors]]); other events keep "every event is its own run".
-
-**Inline comments of a changes-requested review are not `new_comment` events
-at all.** A submitted review that requests changes fires `changes_requested`,
-and that one run addresses every inline comment in it (they ride in its
-`review_comments` context) and can re-request the reviewer afterwards. Firing
-`new_comment` for each of those comments as well would put a fixer per comment
-on the branch next to it, so the github connector folds them into the review —
-provided a `changes_requested` trigger actually takes that review. If none does
-(no such trigger, or its filter rejects that reviewer), or the review's state
-can't be read, the comments stay `new_comment` events. Comments on a review that
-only commented or approved are `new_comment` events as usual.
 
 ## The batch in templates
 

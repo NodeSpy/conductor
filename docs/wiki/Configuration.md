@@ -237,21 +237,44 @@ Full semantics (chains, cycles, the merge rules, and layered guidance) are in [[
 
 ## Review feedback (github)
 
-`changes_requested` carries the feedback it was fired for, so a prompt-less
-fixer (or `{{range .review_comments}}`) sees all of it:
+**One review submission is one event; a standalone comment is its own event.**
+A submitted review reaches conductor as a review webhook plus one webhook per
+inline comment, in no fixed order. However they arrive, the review becomes
+exactly ONE trigger:
+
+| the review | its one event |
+|---|---|
+| requested changes, and a `changes_requested` trigger takes it | `changes_requested` |
+| anything else with inline comments — commented, approved with comments, or a changes-request no `changes_requested` trigger takes | `new_comment` |
+
+None of a review's inline comments fires a `new_comment` of its own. A
+conversation comment, or a review comment that names no review, is one
+`new_comment` each, as always. If a review or its comments can't be read
+(a GitHub API error), its comments fall back to one `new_comment` each, so
+nothing is lost. A review with no inline comments fires `changes_requested`
+when it requests changes, and otherwise nothing, as before.
+
+The first delivery handled for a review emits its event, and the review id is
+claimed, so later deliveries emit nothing. The sweep's missed-comment
+recovery follows the same rule and skips a review already emitted (past a
+restart, the engine's comment high-water mark drops it). A changes-requested
+review is recovered through the unresolved-threads `changes_requested`.
+
+Both events carry the review:
 
 | field | value |
 |---|---|
-| `review_id`, `review_body` | the submitted review and its summary comment (webhook path) |
-| `review_comments` | each inline comment as `{author, path, line, body, url}` — the review's own comments (webhook path), or each unresolved thread's opening comment (sweep path); bodies capped at 2000 bytes, the list at 100 comments / 48KB |
+| `review_id`, `review_body` | the submitted review and its summary comment |
+| `review_comments` | each inline comment as `{author, path, line, body, url}` — the review's own comments, or (a sweep-recovered `changes_requested`) each unresolved thread's opening comment; bodies capped at 2000 bytes, the list at 100 comments / 48KB |
 | `review_comments_omitted` | how many the cap left out (absent when none) — the agent reads those on the PR |
+| `review_state` | (`new_comment`) `commented`, `approved`, or `changes_requested` |
 
-The inline comments of a changes-requested review do **not** also fire
-`new_comment`. The connector folds them into the review's `changes_requested`
-run, on both the webhook path and the sweep's missed-comment recovery. That
-holds only when a `changes_requested` trigger takes the review; otherwise they
-stay `new_comment` events. Bursts of ordinary comments are batched per PR by
-default. Details for both are in [[Grouping]].
+A review's `new_comment` keeps the single-comment fields, so existing triggers
+read it sensibly. `author` and `comment_author` are the reviewer, so
+`not_comment_author` still filters bots. `comment_body` is the review body
+followed by each inline comment as `path:line: body`, capped at 8KB.
+`comment_id` is the review's highest inline comment id, and `comment_kind` is
+`review`.
 
 ## Bot-authored comments (github)
 

@@ -89,14 +89,6 @@ type EventDecl struct {
 	// Dynamic marks event names that come from connection config (cron
 	// schedules, webhook sources, rss feeds) rather than a fixed set.
 	Dynamic bool
-	// Coalesce is the event's default debounce window for a trigger that sets
-	// no `group:` of its own: events against one target that arrive within
-	// it (the window resets per event) become ONE run, the whole burst under
-	// {{.group.*}}, instead of one run each. For events that arrive in bursts
-	// a person means as one thing (a flurry of PR comments). 0 = no default
-	// batching. A trigger's `group:` overrides it; `group: { enabled: false }`
-	// opts out.
-	Coalesce time.Duration
 }
 
 // FilterKeys returns the match keys legal as an object key in this event's

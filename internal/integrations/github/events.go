@@ -297,27 +297,22 @@ func (g *Integration) reviewTriggers(ctx context.Context, repo string, p ghPaylo
 	if p.Action != "submitted" || p.Review == nil || p.PullRequest == nil {
 		return nil
 	}
-	// Remember the state: this review's inline comments arrive as their own
-	// events and are folded into it when it requested changes (see
-	// foldedIntoReview).
-	g.reviewStates.put(p.Review.ID, p.Review.State, time.Now())
+	// Remember the review: its inline comments arrive as their own events
+	// and resolve to it (reviewCommentDelivery) without a REST read.
+	ri := reviewInfo{State: strings.ToLower(p.Review.State), Body: p.Review.Body,
+		Author: p.Review.User.Login, AuthorIsBot: isBotActor(p.Review.User.Type, p.Review.User.Login)}
+	g.reviews.put(p.Review.ID, ri, time.Now())
 	var trs []core.Trigger
-	if p.Review.State == "changes_requested" && g.ownPR(p.PullRequest.User.Login) {
-		t := g.prTarget(repo, p.PullRequest)
-		reviewerIsBot := isBotActor(p.Review.User.Type, p.Review.User.Login)
-		cr := g.emit(repo, "changes_requested", t,
-			fmt.Sprintf("changes requested on %s#%d", repo, p.PullRequest.Number),
-			fmt.Sprintf("review:%d@%s", p.Review.ID, p.PullRequest.Head.SHA),
-			map[string]any{"head_ref": p.PullRequest.Head.Ref,
-				"author": p.Review.User.Login, "author_is_bot": reviewerIsBot,
-				"review_id": p.Review.ID, "review_body": p.Review.Body},
-			g.changesRequestedKeep(repo, p.PullRequest, p.Review.User.Login, reviewerIsBot))
-		if len(cr) > 0 {
-			// The review's inline comments ride this run rather than a
-			// new_comment run each, so the run must carry them.
-			g.attachReviewComments(ctx, cr, p, repo)
-		}
-		trs = append(trs, cr...)
+	// A closed PR's review is dropped below (no branch to fix) — it must not
+	// claim the review either, or a redelivery after a reopen would find it
+	// already emitted.
+	if g.ownPR(p.PullRequest.User.Login) && !g.self[strings.ToLower(ri.Author)] && !prClosedInPayload(p) {
+		// The review's ONE event, unless one of its comment deliveries
+		// already emitted it. A review with no inline comments emits nothing
+		// here unless it requested changes (its body alone never did); an
+		// unreadable one is left to its comments, which then stand alone.
+		rt, _ := g.reviewEvent(ctx, repo, p.Installation.ID, p.PullRequest, p.Review.ID, ri)
+		trs = append(trs, rt...)
 	}
 	// Any submitted review may have made the PR merge-ready.
 	trs = append(trs, g.mergeReadyTriggers(ctx, repo, p.PullRequest.Number, p)...)
@@ -390,10 +385,13 @@ func (g *Integration) commentTriggers(ctx context.Context, repo, eventType strin
 	if g.self[author] {
 		return nil // ignore our own comments
 	}
-	if eventType == "pull_request_review_comment" && g.foldedIntoReview(ctx, repo, p) {
-		log.Printf("github[%s]: %s#%d comment %d folded into changes-requested review %d — its changes_requested run addresses it",
-			g.name, repo, num, p.Comment.ID, p.Comment.PullRequestReviewID)
-		return nil
+	// An inline comment of a submitted review is part of that review's ONE
+	// event (reviewfold.go); only a comment with no readable review stands
+	// alone.
+	if eventType == "pull_request_review_comment" && p.Comment.PullRequestReviewID != 0 && p.PullRequest != nil && !prClosedInPayload(p) {
+		if trs, handled := g.reviewCommentDelivery(ctx, repo, p); handled {
+			return trs
+		}
 	}
 	t := g.target(repo, num, head, base, url)
 	// comment_kind picks the engine's per-kind high-water mark: inline review

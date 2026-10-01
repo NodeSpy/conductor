@@ -121,12 +121,8 @@ triggers:
   # is the one BUILTIN engine — the scripting engines (js, lua, …) are plugins
   # now and this stack fetches nothing, so the engine-plugin path is proven by
   # group V against the seeded acme-engine instead.
-  #
-  # new_comment batches a comment burst per PR by default; K2/K9 are about one
-  # code-step run PER comment, so they opt out (K3 below covers batching).
   - on: gh.new_comment
     filter: { repo: ["conn/csvc"] }
-    group: { enabled: false }
     steps:
       - id: shape
         use: cli
@@ -145,7 +141,6 @@ triggers:
   - on: gh.new_comment
     name: cli-engine
     filter: { repo: ["conn/csvc"] }
-    group: { enabled: false } # per comment, like K2
     steps:
       - id: echoed
         use: cli

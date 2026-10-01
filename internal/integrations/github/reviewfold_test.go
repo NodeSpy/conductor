@@ -14,14 +14,16 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
-// reviewStub serves what the fold needs from REST: the installation token, a
-// review's state, and its inline comments. stateCalls counts state reads.
+// reviewStub serves what review folding needs from REST: the installation
+// token, review 99 itself, and its inline comments.
 type reviewStub struct {
 	state      string // what GET /pulls/7/reviews/99 reports ("" → 404)
 	comments   int    // how many inline comments review 99 carries
-	stateCalls atomic.Int32
+	listFails  bool   // GET .../reviews/99/comments → 500
+	reviewGets atomic.Int32
 }
 
 func (s *reviewStub) attach(t *testing.T, g *Integration) {
@@ -31,17 +33,21 @@ func (s *reviewStub) attach(t *testing.T, g *Integration) {
 		fmt.Fprintf(w, `{"token":"t","expires_at":%q}`, time.Now().Add(time.Hour).Format(time.RFC3339))
 	})
 	mux.HandleFunc("/repos/acme/widget/pulls/7/reviews/99", func(w http.ResponseWriter, _ *http.Request) {
-		s.stateCalls.Add(1)
+		s.reviewGets.Add(1)
 		if s.state == "" {
 			http.NotFound(w, nil)
 			return
 		}
-		fmt.Fprintf(w, `{"id":99,"state":%q}`, s.state)
+		fmt.Fprintf(w, `{"id":99,"state":%q,"body":"see inline","user":{"login":"reviewer","type":"User"}}`, s.state)
 	})
 	mux.HandleFunc("/repos/acme/widget/pulls/7/reviews/99/comments", func(w http.ResponseWriter, _ *http.Request) {
+		if s.listFails {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
 		var items []string
 		for i := 0; i < s.comments; i++ {
-			items = append(items, fmt.Sprintf(`{"id":%d,"path":"f%d.go","line":%d,"body":"fix %d {{.gh_token}}","html_url":"u%d","user":{"login":"reviewer"}}`, 500+i, i, 10+i, i, i))
+			items = append(items, fmt.Sprintf(`{"id":%d,"path":"f%d.go","line":%d,"body":"fix %d {{.gh_token}}","html_url":"u%d","user":{"login":"reviewer"}}`, 1000+i, i, 10+i, i, i))
 		}
 		fmt.Fprintf(w, "[%s]", strings.Join(items, ","))
 	})
@@ -66,23 +72,45 @@ func reviewCommentEvent(id int64, reviewID int64) []byte {
 		"action":"created","installation":{"id":77},
 		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
 		"pull_request":{"number":7,"html_url":"u","head":{"sha":"abc123","ref":"feat"},"base":{"ref":"main"},"user":{"login":"me"}},
-		"comment":{"id":%d,"pull_request_review_id":%d,"user":{"login":"reviewer","type":"User"},"body":"fix this"}
-	}`, id, reviewID))
+		"comment":{"id":%d,"pull_request_review_id":%d,"user":{"login":"reviewer","type":"User"},"body":"fix %d"}
+	}`, id, reviewID, id))
 }
 
-// deliver runs a review and its n inline comments through the webhook path in
-// the given order and returns every trigger they produced.
-func deliver(g *Integration, state string, n int, reviewFirst bool) []core.Trigger {
+func issueCommentEvent(id int64) []byte {
+	return []byte(fmt.Sprintf(`{
+		"action":"created","installation":{"id":77},
+		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+		"issue":{"number":7,"html_url":"u","pull_request":{},"user":{"login":"me"}},
+		"comment":{"id":%d,"user":{"login":"teammate","type":"User"},"body":"question %d?"}
+	}`, id, id))
+}
+
+// The orders a review's deliveries can land in. GitHub doesn't order them, and
+// a webhook can be lost — the review is one event whichever way it arrives.
+var deliveryOrders = []string{"review-first", "comments-first", "review-only", "comments-only"}
+
+// deliver runs review 99 and its n inline comments through the webhook path
+// in the given order and returns every trigger they produced.
+func deliver(g *Integration, state string, n int, order string) []core.Trigger {
 	ctx := context.Background()
 	var out []core.Trigger
-	if reviewFirst {
-		out = append(out, g.triggersFor(ctx, "pull_request_review", reviewEvent(state))...)
+	review := func() { out = append(out, g.triggersFor(ctx, "pull_request_review", reviewEvent(state))...) }
+	comments := func() {
+		for i := 0; i < n; i++ {
+			out = append(out, g.triggersFor(ctx, "pull_request_review_comment", reviewCommentEvent(int64(1000+i), 99))...)
+		}
 	}
-	for i := 0; i < n; i++ {
-		out = append(out, g.triggersFor(ctx, "pull_request_review_comment", reviewCommentEvent(int64(1000+i), 99))...)
-	}
-	if !reviewFirst {
-		out = append(out, g.triggersFor(ctx, "pull_request_review", reviewEvent(state))...)
+	switch order {
+	case "review-first":
+		review()
+		comments()
+	case "comments-first":
+		comments()
+		review()
+	case "review-only":
+		review()
+	case "comments-only":
+		comments()
 	}
 	return out
 }
@@ -95,68 +123,77 @@ func kindsOf(trs []core.Trigger) map[string]int {
 	return out
 }
 
-// THE incident: a changes-requested review with N inline comments must become
-// exactly ONE run — the changes_requested flow, which re-requests the reviewer
-// after — not that plus one new_comment fixer per comment. Both delivery
-// orders: GitHub does not order a review's events.
-func TestChangesRequestedReviewFoldsItsInlineComments(t *testing.T) {
+// One review submission is ONE event, whatever its state, however its
+// deliveries arrive: a changes-request a changes_requested trigger takes is
+// that run (the incident: not that plus one fixer per comment), and any other
+// review with inline comments is a single new_comment. Either way the event
+// carries the review body and every inline comment.
+func TestReviewIsExactlyOneEvent(t *testing.T) {
 	const n = 4
-	for _, reviewFirst := range []bool{true, false} {
-		t.Run(fmt.Sprintf("reviewFirst=%v", reviewFirst), func(t *testing.T) {
-			g := newTestIntegration(t, baseConfig())
-			stub := &reviewStub{state: "CHANGES_REQUESTED", comments: n}
-			stub.attach(t, g)
+	for _, tc := range []struct{ restState, hookState, wantKind string }{
+		{"CHANGES_REQUESTED", "changes_requested", "changes_requested"},
+		{"COMMENTED", "commented", "new_comment"},
+		{"APPROVED", "approved", "new_comment"},
+	} {
+		for _, order := range deliveryOrders {
+			t.Run(tc.hookState+"/"+order, func(t *testing.T) {
+				g := newTestIntegration(t, baseConfig())
+				stub := &reviewStub{state: tc.restState, comments: n}
+				stub.attach(t, g)
 
-			trs := deliver(g, "changes_requested", n, reviewFirst)
-			if k := kindsOf(trs); len(trs) != 1 || k["changes_requested"] != 1 {
-				t.Fatalf("a changes-requested review with %d inline comments produced %v, want exactly one changes_requested", n, k)
-			}
-			cr := trs[0]
-			list, _ := cr.Context["review_comments"].([]any)
-			if len(list) != n {
-				t.Fatalf("changes_requested carries %d review_comments, want all %d", len(list), n)
-			}
-			first, _ := list[0].(map[string]any)
-			if first["path"] != "f0.go" || first["line"] != 10 || first["author"] != "reviewer" || !strings.HasPrefix(first["body"].(string), "fix 0") {
-				t.Fatalf("review comment not carried faithfully: %v", first)
-			}
-			if cr.Context["review_id"] != int64(99) || cr.Context["review_body"] != "see inline" {
-				t.Fatalf("review identity not carried: id=%v body=%v", cr.Context["review_id"], cr.Context["review_body"])
-			}
-			// The N comments cost at most one state read between them (none
-			// when the review event arrived first and seeded the cache).
-			want := int32(1)
-			if reviewFirst {
-				want = 0
-			}
-			if got := stub.stateCalls.Load(); got != want {
-				t.Fatalf("review state read %d times for %d comments, want %d", got, n, want)
-			}
-		})
+				trs := deliver(g, tc.hookState, n, order)
+				if k := kindsOf(trs); len(trs) != 1 || k[tc.wantKind] != 1 {
+					t.Fatalf("a %s review with %d inline comments produced %v, want exactly one %s", tc.hookState, n, k, tc.wantKind)
+				}
+				ev := trs[0]
+				list, _ := ev.Context["review_comments"].([]any)
+				if len(list) != n {
+					t.Fatalf("%s carries %d review_comments, want all %d", ev.Kind, len(list), n)
+				}
+				first, _ := list[0].(map[string]any)
+				if first["path"] != "f0.go" || first["line"] != 10 || first["author"] != "reviewer" || !strings.HasPrefix(first["body"].(string), "fix 0") {
+					t.Fatalf("review comment not carried faithfully: %v", first)
+				}
+				if ev.Context["review_id"] != int64(99) || ev.Context["review_body"] != "see inline" || ev.Context["author"] != "reviewer" {
+					t.Fatalf("review identity not carried: %v", ev.Context)
+				}
+				// The review's facts cost at most one REST read across all of
+				// its deliveries (none when the review event came first).
+				if got := stub.reviewGets.Load(); got > 1 {
+					t.Fatalf("review read %d times for one review, want at most 1", got)
+				}
+				if tc.wantKind != "new_comment" {
+					return
+				}
+				// A single-comment trigger's fields still read sensibly: the
+				// reviewer is the commenter, comment_body is the whole review,
+				// comment_id is the review's highest (the engine's high-water
+				// mark then drops any later recovery of it).
+				body, _ := ev.Context["comment_body"].(string)
+				if !strings.HasPrefix(body, "see inline") || !strings.Contains(body, "f3.go:13: fix 3") {
+					t.Fatalf("comment_body should be the review body plus every inline comment, got %q", body)
+				}
+				if ev.Context["comment_id"] != int64(1000+n-1) || ev.Context["comment_kind"] != store.CommentKindReview {
+					t.Fatalf("comment_id/kind = %v/%v, want the review's highest id %d / review", ev.Context["comment_id"], ev.Context["comment_kind"], 1000+n-1)
+				}
+				if ev.Dedup != "review:99" || ev.Context["review_state"] != tc.hookState {
+					t.Fatalf("dedup %q / review_state %v", ev.Dedup, ev.Context["review_state"])
+				}
+			})
+		}
 	}
 }
 
-// Inline comments of a review that did NOT request changes have no run that
-// addresses them as a whole: each is still a new_comment.
-func TestCommentedReviewInlineCommentsStillFireNewComment(t *testing.T) {
-	g := newTestIntegration(t, baseConfig())
-	(&reviewStub{state: "COMMENTED"}).attach(t, g)
-	trs := deliver(g, "commented", 3, false)
-	if k := kindsOf(trs); k["new_comment"] != 3 || k["changes_requested"] != 0 {
-		t.Fatalf("commented review: got %v, want 3 new_comment", k)
-	}
-}
-
-// Folding must never DROP feedback: if no changes_requested trigger would take
-// the review, or its state can't be read, the comments stay new_comment events.
-func TestReviewCommentsAreNotFoldedWhenNothingAddressesTheReview(t *testing.T) {
+// A changes-request no changes_requested trigger takes is still one review —
+// so ONE new_comment, never one per inline comment.
+func TestUntakenChangesRequestIsOneNewComment(t *testing.T) {
 	t.Run("no changes_requested trigger", func(t *testing.T) {
 		cfg := baseConfig()
 		cfg.Rules[0].Actions = as1(map[string]config.Action{"new_comment": {Type: "agent", Agent: "fixer"}})
 		g := newTestIntegration(t, cfg)
-		(&reviewStub{state: "CHANGES_REQUESTED"}).attach(t, g)
-		if k := kindsOf(deliver(g, "changes_requested", 3, true)); k["new_comment"] != 3 {
-			t.Fatalf("got %v, want the 3 comments as new_comment", k)
+		(&reviewStub{state: "CHANGES_REQUESTED", comments: 3}).attach(t, g)
+		if k := kindsOf(deliver(g, "changes_requested", 3, "comments-first")); k["new_comment"] != 1 || len(k) != 1 {
+			t.Fatalf("got %v, want one new_comment", k)
 		}
 	})
 	t.Run("changes_requested filter rejects the reviewer", func(t *testing.T) {
@@ -164,31 +201,58 @@ func TestReviewCommentsAreNotFoldedWhenNothingAddressesTheReview(t *testing.T) {
 		cfg.Rules[0].Actions["changes_requested"] = config.ActionSet{{Type: "agent", Agent: "fixer",
 			Filter: config.FilterExpr("reviewer != 'reviewer'")}}
 		g := newTestIntegration(t, cfg)
-		(&reviewStub{state: "CHANGES_REQUESTED"}).attach(t, g)
-		if k := kindsOf(deliver(g, "changes_requested", 3, true)); k["new_comment"] != 3 || k["changes_requested"] != 0 {
-			t.Fatalf("got %v, want the 3 comments as new_comment and no changes_requested", k)
-		}
-	})
-	t.Run("review state unreadable", func(t *testing.T) {
-		g := newTestIntegration(t, baseConfig())
-		(&reviewStub{state: ""}).attach(t, g) // 404
-		var trs []core.Trigger
-		for i := 0; i < 3; i++ {
-			trs = append(trs, g.triggersFor(context.Background(), "pull_request_review_comment", reviewCommentEvent(int64(1000+i), 99))...)
-		}
-		if k := kindsOf(trs); k["new_comment"] != 3 {
-			t.Fatalf("got %v, want the 3 comments as new_comment", k)
+		(&reviewStub{state: "CHANGES_REQUESTED", comments: 3}).attach(t, g)
+		if k := kindsOf(deliver(g, "changes_requested", 3, "review-first")); k["new_comment"] != 1 || len(k) != 1 {
+			t.Fatalf("got %v, want one new_comment and no changes_requested", k)
 		}
 	})
 }
 
-// The sweep's missed-comment recovery must not re-fan a changes-requested
-// review out into one new_comment per inline comment either: those comments'
-// marks never advance (no new_comment ever ran for them), so without the fold
-// every sweep in the recovery window would re-emit them. Conversation comments
-// and comments on other reviews are still recovered.
-func TestSweepDoesNotRefanAChangesRequestedReview(t *testing.T) {
-	var stateCalls atomic.Int32
+// Folding must never DROP feedback: when a review can't be read, its comments
+// stand alone — one new_comment each, as before.
+func TestUnreadableReviewCommentsStandAlone(t *testing.T) {
+	for name, stub := range map[string]*reviewStub{
+		"review unreadable":   {state: ""},
+		"comments unreadable": {state: "COMMENTED", listFails: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newTestIntegration(t, baseConfig())
+			stub.attach(t, g)
+			if k := kindsOf(deliver(g, "commented", 3, "comments-only")); k["new_comment"] != 3 {
+				t.Fatalf("got %v, want the 3 comments as a new_comment each", k)
+			}
+		})
+	}
+}
+
+// A standalone comment — a conversation comment, or a review comment that
+// names no review — is its own event: N of them are N events, never merged.
+func TestStandaloneCommentsAreOneEventEach(t *testing.T) {
+	g := newTestIntegration(t, baseConfig())
+	(&reviewStub{state: "COMMENTED", comments: 3}).attach(t, g)
+	ctx := context.Background()
+	var trs []core.Trigger
+	for i := 0; i < 3; i++ {
+		trs = append(trs, g.triggersFor(ctx, "issue_comment", issueCommentEvent(int64(2000+i)))...)
+		trs = append(trs, g.triggersFor(ctx, "pull_request_review_comment", reviewCommentEvent(int64(3000+i), 0))...)
+	}
+	if k := kindsOf(trs); len(trs) != 6 || k["new_comment"] != 6 {
+		t.Fatalf("6 standalone comments produced %v, want 6 new_comment", k)
+	}
+	seen := map[string]bool{}
+	for _, tr := range trs {
+		if !strings.HasPrefix(tr.Dedup, "comment:") || seen[tr.Dedup] {
+			t.Fatalf("standalone comment dedup %q: want a distinct comment:<id> each", tr.Dedup)
+		}
+		seen[tr.Dedup] = true
+	}
+}
+
+// sweepStubFor serves an `acme/widget` sweep over PR 9 whose recent comments
+// are: one conversation comment, three inline comments of changes-requested
+// review 41, and two of commented review 42.
+func sweepStubFor(t *testing.T, reviewGets *atomic.Int32) *appAuth {
+	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/app/installations/77/access_tokens", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, `{"token":"t","expires_at":%q}`, time.Now().Add(time.Hour).Format(time.RFC3339))
@@ -206,22 +270,26 @@ func TestSweepDoesNotRefanAChangesRequestedReview(t *testing.T) {
 	mux.HandleFunc("/repos/acme/widget/issues/9/comments", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, `[{"id":5515854542,"user":{"login":"teammate"},"body":"question?","created_at":%q}]`, fresh)
 	})
-	// Three inline comments of changes-requested review 41, one of commented
-	// review 42.
 	mux.HandleFunc("/repos/acme/widget/pulls/9/comments", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, `[
-			{"id":3918412103,"pull_request_review_id":42,"user":{"login":"carol"},"body":"fyi","created_at":%[1]q},
+			{"id":3918412105,"pull_request_review_id":42,"path":"y.go","line":2,"user":{"login":"carol"},"body":"nit 2","created_at":%[1]q},
+			{"id":3918412104,"pull_request_review_id":42,"path":"x.go","line":1,"user":{"login":"carol"},"body":"nit 1","created_at":%[1]q},
 			{"id":3918412102,"pull_request_review_id":41,"user":{"login":"reviewer"},"body":"c","created_at":%[1]q},
 			{"id":3918412101,"pull_request_review_id":41,"user":{"login":"reviewer"},"body":"b","created_at":%[1]q},
 			{"id":3918412100,"pull_request_review_id":41,"user":{"login":"reviewer"},"body":"a","created_at":%[1]q}]`, fresh)
 	})
 	mux.HandleFunc("/repos/acme/widget/pulls/9/reviews/41", func(w http.ResponseWriter, _ *http.Request) {
-		stateCalls.Add(1)
-		fmt.Fprint(w, `{"id":41,"state":"CHANGES_REQUESTED"}`)
+		reviewGets.Add(1)
+		fmt.Fprint(w, `{"id":41,"state":"CHANGES_REQUESTED","user":{"login":"reviewer","type":"User"}}`)
 	})
 	mux.HandleFunc("/repos/acme/widget/pulls/9/reviews/42", func(w http.ResponseWriter, _ *http.Request) {
-		stateCalls.Add(1)
-		fmt.Fprint(w, `{"id":42,"state":"COMMENTED"}`)
+		reviewGets.Add(1)
+		fmt.Fprint(w, `{"id":42,"state":"COMMENTED","body":"two nits","user":{"login":"carol","type":"User"}}`)
+	})
+	mux.HandleFunc("/repos/acme/widget/pulls/9/reviews/42/comments", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `[
+			{"id":3918412104,"path":"x.go","line":1,"body":"nit 1","user":{"login":"carol"}},
+			{"id":3918412105,"path":"y.go","line":2,"body":"nit 2","user":{"login":"carol"}}]`)
 	})
 	mux.HandleFunc("/graphql", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
@@ -232,8 +300,11 @@ func TestSweepDoesNotRefanAChangesRequestedReview(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	key, _ := rsa.GenerateKey(rand.Reader, 1024)
+	return &appAuth{appID: 1, key: key, httpc: http.DefaultClient, apiBase: srv.URL, now: time.Now, cache: map[int64]cachedToken{}}
+}
 
-	cfg := Config{
+func sweepConfig() Config {
+	return Config{
 		App:     AppConfig{AppID: 1, PrivateKeyPath: "x"},
 		Webhook: WebhookConfig{SmeeURL: "https://smee.io/x", Secret: "s"},
 		Sweep:   SweepConfig{Enabled: boolp(true), Repos: []string{"acme/widget"}},
@@ -246,8 +317,17 @@ func TestSweepDoesNotRefanAChangesRequestedReview(t *testing.T) {
 			}),
 		}},
 	}
-	g := newTestIntegration(t, cfg)
-	g.app = &appAuth{appID: 1, key: key, httpc: http.DefaultClient, apiBase: srv.URL, now: time.Now, cache: map[int64]cachedToken{}}
+}
+
+// The sweep's missed-comment recovery follows the same rule: a review is
+// recovered as its one event (the commented review → one new_comment; the
+// changes-requested review → the unresolved-threads changes_requested, no
+// new_comment), a standalone comment as its own, and a review already emitted
+// is not recovered again.
+func TestSweepRecoversAReviewAsOneEvent(t *testing.T) {
+	var reviewGets atomic.Int32
+	g := newTestIntegration(t, sweepConfig())
+	g.app = sweepStubFor(t, &reviewGets)
 	g.rest = newRESTClient(g.app)
 
 	sweepOnce := func() []core.Trigger {
@@ -257,20 +337,27 @@ func TestSweepDoesNotRefanAChangesRequestedReview(t *testing.T) {
 		}
 		return got
 	}
-	got := sweepOnce()
-	newComments := map[int64]bool{}
-	var cr []core.Trigger
-	for _, tr := range got {
-		switch tr.Kind {
-		case "new_comment":
-			id, _ := tr.Context["comment_id"].(int64)
-			newComments[id] = true
-		case "changes_requested":
+	var standalone, reviews, cr []core.Trigger
+	for _, tr := range sweepOnce() {
+		switch {
+		case tr.Kind == "changes_requested":
 			cr = append(cr, tr)
+		case tr.Kind == "new_comment" && strings.HasPrefix(tr.Dedup, "review:"):
+			reviews = append(reviews, tr)
+		case tr.Kind == "new_comment":
+			standalone = append(standalone, tr)
 		}
 	}
-	if len(newComments) != 2 || !newComments[5515854542] || !newComments[3918412103] {
-		t.Fatalf("sweep recovered new_comment for %v, want only the conversation comment and the commented review's comment", newComments)
+	if len(standalone) != 1 || standalone[0].Context["comment_id"] != int64(5515854542) {
+		t.Fatalf("standalone recovered: %v, want just the conversation comment", standalone)
+	}
+	if len(reviews) != 1 || reviews[0].Dedup != "review:42" {
+		t.Fatalf("reviews recovered as new_comment: %v, want ONE for commented review 42 (and none for changes-requested 41)", reviews)
+	}
+	rv := reviews[0]
+	if list, _ := rv.Context["review_comments"].([]any); len(list) != 2 || rv.Context["review_body"] != "two nits" ||
+		rv.Context["comment_id"] != int64(3918412105) || rv.Context["author"] != "carol" {
+		t.Fatalf("recovered review lost its content: %v", rv.Context)
 	}
 	if len(cr) != 1 {
 		t.Fatalf("sweep emitted %d changes_requested, want 1 for the unresolved threads", len(cr))
@@ -282,10 +369,43 @@ func TestSweepDoesNotRefanAChangesRequestedReview(t *testing.T) {
 	if second, _ := list[1].(map[string]any); second["path"] != "b.go" || second["line"] != 8 || second["body"] != "b" {
 		t.Fatalf("outdated thread comment not carried (want b.go:8 from originalLine): %v", second)
 	}
-	// One state read per distinct review, cached across comments and sweeps.
-	_ = sweepOnce()
-	if n := stateCalls.Load(); n != 2 {
-		t.Fatalf("review state read %d times over two sweeps, want 2 (once per review)", n)
+
+	// A second sweep must not recover review 42 again, and costs no further
+	// review reads (one per review, cached).
+	for _, tr := range sweepOnce() {
+		if tr.Dedup == "review:42" {
+			t.Fatal("second sweep re-emitted review 42")
+		}
+	}
+	if n := reviewGets.Load(); n != 2 {
+		t.Fatalf("review read %d times over two sweeps, want 2 (once per review)", n)
+	}
+}
+
+// A review the webhook already turned into its event is not recovered by the
+// sweep as another one.
+func TestSweepSkipsAReviewTheWebhookEmitted(t *testing.T) {
+	var reviewGets atomic.Int32
+	g := newTestIntegration(t, sweepConfig())
+	g.app = sweepStubFor(t, &reviewGets)
+	g.rest = newRESTClient(g.app)
+	hook := []byte(`{
+		"action":"submitted","installation":{"id":77},
+		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+		"pull_request":{"number":9,"head":{"sha":"h9","ref":"feat"},"base":{"ref":"main"},"user":{"login":"me"}},
+		"review":{"state":"commented","id":42,"body":"two nits","user":{"login":"carol","type":"User"}}
+	}`)
+	if k := kindsOf(g.triggersFor(context.Background(), "pull_request_review", hook)); k["new_comment"] != 1 {
+		t.Fatalf("webhook review: %v, want one new_comment", k)
+	}
+	var got []core.Trigger
+	if err := g.sweep(context.Background(), func(_ context.Context, tr core.Trigger) { got = append(got, tr) }); err != nil {
+		t.Fatal(err)
+	}
+	for _, tr := range got {
+		if tr.Dedup == "review:42" {
+			t.Fatal("sweep re-emitted a review the webhook already emitted")
+		}
 	}
 }
 
@@ -323,5 +443,8 @@ func TestReviewCommentsAreCapped(t *testing.T) {
 	}
 	if got := ctx["review_comments_omitted"]; got != len(many)-kept {
 		t.Fatalf("review_comments_omitted = %v, want %d", got, len(many)-kept)
+	}
+	if s := reviewSummary("", many); len(s) > maxReviewSummaryBytes+len("…") {
+		t.Fatalf("folded comment_body not capped: %d bytes", len(s))
 	}
 }

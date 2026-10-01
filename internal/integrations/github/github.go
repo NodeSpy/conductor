@@ -200,9 +200,10 @@ type Integration struct {
 	// a smee reconnect (dropped-webhook window) and by SweepNow() (a manual `sweep`).
 	// Buffered+coalescing (a full buffer means a catch-up is already pending).
 	renew chan struct{}
-	// reviewStates caches submitted reviews' states by id, so a review's
-	// inline comments can be folded into it (see foldedIntoReview).
-	reviewStates reviewStateCache
+	// reviews caches submitted reviews' facts by id and which have been
+	// turned into their one event, so a review's many deliveries become
+	// exactly one trigger (see reviewfold.go).
+	reviews reviewCache
 }
 
 // SweepNow triggers an immediate catch-up sweep (and resets the adaptive cadence)

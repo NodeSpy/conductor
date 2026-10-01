@@ -567,15 +567,12 @@ func (g *Integration) sweepMissedComments(ctx context.Context, instID int64, own
 		return nil
 	}
 	cutoff := time.Now().Add(-commentRecoveryWindow)
-	// An inline comment of a CHANGES_REQUESTED review is the review's to
-	// address, exactly as on the webhook path (foldedIntoReview): the sweep's
-	// changes_requested (sweepUnresolvedComments) carries its thread, so
-	// recovering it as a new_comment too would re-fan the review out into one
-	// fixer per comment. Its comment mark never advances (no new_comment ever
-	// dispatched for it), so without this every sweep in the recovery window
-	// would re-emit it.
-	foldReviews := g.wouldEmit(repo, "changes_requested", nil)
+	// Standalone comments recover one event each, as on the webhook path. An
+	// inline comment that names its review is part of that review's ONE event
+	// (reviewfold.go), so they are recovered per review instead.
 	var out []core.Trigger
+	byReview := map[int64][]prComment{}
+	var reviews []int64
 	for _, c := range comments {
 		author := strings.ToLower(c.User.Login)
 		if g.self[author] {
@@ -584,27 +581,78 @@ func (g *Integration) sweepMissedComments(ctx context.Context, instID int64, own
 		if !c.CreatedAt.IsZero() && c.CreatedAt.Before(cutoff) {
 			continue // too old to be a "missed while offline" comment
 		}
-		if foldReviews && c.Kind == store.CommentKindReview && c.ReviewID != 0 &&
-			g.reviewState(ctx, instID, repo, t.Number, c.ReviewID) == "changes_requested" {
+		if c.Kind == store.CommentKindReview && c.ReviewID != 0 {
+			if _, seen := byReview[c.ReviewID]; !seen {
+				reviews = append(reviews, c.ReviewID)
+			}
+			byReview[c.ReviewID] = append(byReview[c.ReviewID], c)
 			continue
 		}
-		extra := map[string]any{"author": c.User.Login, "comment_body": c.Body, "head_ref": headRef,
-			"comment_id": c.ID, "comment_kind": c.Kind}
-		trs := g.emit(repo, "new_comment", t,
-			fmt.Sprintf("sweep: comment by %s on %s#%d", c.User.Login, repo, t.Number),
-			fmt.Sprintf("comment:%d", c.ID), extra, func(act config.Action) bool {
-				// The comment LISTING carries no account type, so bot-ness is
-				// the login convention alone — which is why the legacy
-				// lowering here omits author_bot (see lowerComment). A
-				// hand-written `filter:` may still read author_is_bot; it
-				// just sees the weaker signal on this path.
-				return g.filterPasses(act, "sweep new_comment", repo,
-					commentFilterFacts(c.User.Login, c.Body, isBotLogin(c.User.Login)),
-					lowerComment(act, false))
-			})
-		out = append(out, trs...)
+		out = append(out, g.sweepComment(repo, t, headRef, c)...)
+	}
+	for _, id := range reviews {
+		out = append(out, g.sweepReview(ctx, instID, repo, t, headRef, id, byReview[id])...)
 	}
 	return out
+}
+
+// sweepReview recovers one submitted review whose deliveries the daemon missed
+// as the review's one event — the same one the webhook path emits, and
+// deduped against it: a review already emitted (claimed) is skipped, and past
+// a restart the engine's comment high-water mark drops it (its comment_id is
+// the review's highest). A CHANGES_REQUESTED review is skipped when a
+// changes_requested trigger is configured — sweepUnresolvedComments carries
+// its threads. An unreadable review recovers its comments one by one.
+func (g *Integration) sweepReview(ctx context.Context, instID int64, repo string, t core.Target, headRef string, reviewID int64, group []prComment) []core.Trigger {
+	if g.reviews.claimed(reviewID, time.Now()) {
+		return nil
+	}
+	ri, ok := g.reviewFacts(ctx, instID, repo, t.Number, reviewID)
+	if !ok {
+		var out []core.Trigger
+		for _, c := range group {
+			out = append(out, g.sweepComment(repo, t, headRef, c)...)
+		}
+		return out
+	}
+	if ri.State == "changes_requested" && g.wouldEmit(repo, "changes_requested", nil) {
+		return nil
+	}
+	if ri.Author == "" {
+		ri.Author, ri.AuthorIsBot = group[0].User.Login, isBotLogin(group[0].User.Login)
+	}
+	cs, err := g.listReviewComments(ctx, instID, repo, t.Number, reviewID)
+	if err != nil || len(cs) == 0 {
+		// The listing already holds this review's recent comments.
+		cs = cs[:0]
+		for _, c := range group {
+			cs = append(cs, reviewComment{ID: c.ID, Author: c.User.Login, Path: c.Path,
+				Line: lineOf(c.Line, c.OriginalLine), Body: c.Body, URL: c.HTMLURL})
+		}
+	}
+	trs := g.reviewNewComment(repo, t, headRef, reviewID, ri, cs)
+	for i := range trs {
+		trs[i].Title = "sweep: " + trs[i].Title
+	}
+	return trs
+}
+
+// sweepComment recovers one standalone comment as its own new_comment.
+func (g *Integration) sweepComment(repo string, t core.Target, headRef string, c prComment) []core.Trigger {
+	extra := map[string]any{"author": c.User.Login, "comment_body": c.Body, "head_ref": headRef,
+		"comment_id": c.ID, "comment_kind": c.Kind}
+	return g.emit(repo, "new_comment", t,
+		fmt.Sprintf("sweep: comment by %s on %s#%d", c.User.Login, repo, t.Number),
+		fmt.Sprintf("comment:%d", c.ID), extra, func(act config.Action) bool {
+			// The comment LISTING carries no account type, so bot-ness is
+			// the login convention alone — which is why the legacy
+			// lowering here omits author_bot (see lowerComment). A
+			// hand-written `filter:` may still read author_is_bot; it
+			// just sees the weaker signal on this path.
+			return g.filterPasses(act, "sweep new_comment", repo,
+				commentFilterFacts(c.User.Login, c.Body, isBotLogin(c.User.Login)),
+				lowerComment(act, false))
+		})
 }
 
 // sweepStuckChecks fires stuck_checks for CI runs on your PR that are still

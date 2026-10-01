@@ -148,7 +148,7 @@ func TestEventPromptKeepsEventTextLiteral(t *testing.T) {
 
 	for name, prompt := range map[string]string{
 		"event prompt": EventPrompt(tr, nil),
-		"batch addendum": "Fix it." + BatchAddendum(map[string]any{"events": []any{
+		"grouped event prompt": EventPrompt(tr, map[string]any{"events": []any{
 			map[string]any{"comment_body": body}, map[string]any{"comment_body": "second"}}}),
 	} {
 		req.Action.Prompt = prompt
@@ -162,22 +162,5 @@ func TestEventPromptKeepsEventTextLiteral(t *testing.T) {
 		if strings.Contains(got, "SECRET-USER") {
 			t.Fatalf("%s: event text was evaluated as a template — the token leaked into the prompt", name)
 		}
-	}
-}
-
-func TestBatchAddendumOnlyForARealBatch(t *testing.T) {
-	if got := BatchAddendum(nil); got != "" {
-		t.Fatalf("no batch: %q, want empty", got)
-	}
-	if got := BatchAddendum(map[string]any{"events": []any{map[string]any{"comment_body": "only"}}}); got != "" {
-		t.Fatalf("a batch of one: %q, want empty (the prompt's own fields already are it)", got)
-	}
-	got := BatchAddendum(map[string]any{"events": []any{
-		map[string]any{"comment_body": "a", "app_token": "SECRET-APP"}, map[string]any{"comment_body": "b"}}})
-	if !strings.Contains(got, "batches 2 events") || !strings.Contains(got, `"a"`) || !strings.Contains(got, `"b"`) {
-		t.Fatalf("addendum missing the burst: %q", got)
-	}
-	if strings.Contains(got, "SECRET-APP") {
-		t.Fatal("addendum leaked a credential")
 	}
 }

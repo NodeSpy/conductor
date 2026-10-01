@@ -59,9 +59,6 @@ one you declare but ignore is a bug report. Special declaration flags:
 
 - `EventDecl.Dynamic` — event names come from connection config (cron
   schedules, rss feeds); implement `DeclaredEvents()` to list them.
-- `EventDecl.Coalesce` — a default debounce window for an event that arrives
-  in bursts a person means as one thing (github's `new_comment`: 15s). A
-  trigger with no `group:` batches it per target; see [[Grouping]].
 - `VerbDecl.Ask` — a request-response verb that presents to a human and
   blocks for the answer (see [[Hand-offs]]).
 - `VerbDecl.Open` — user-defined option keys (the rest/graphql pattern);

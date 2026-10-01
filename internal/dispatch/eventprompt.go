@@ -2,7 +2,6 @@ package dispatch
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/core"
@@ -48,24 +47,6 @@ func EventPrompt(t core.Trigger, group map[string]any) string {
 		return "Act on this event."
 	}
 	return "Act on this event:\n\n" + literal(string(body))
-}
-
-// BatchAddendum is appended to a step's OWN prompt when a run batches several
-// events the prompt was written to handle one at a time (an event's default
-// batching — see flow.Batch.Implicit): the prompt's fields are the newest
-// event's, so the whole burst follows, credential-stripped. "" when the run
-// holds a single event.
-func BatchAddendum(group map[string]any) string {
-	g := groupEvents(group)
-	if g == nil {
-		return ""
-	}
-	body, err := json.MarshalIndent(g, "", "  ")
-	if err != nil {
-		return ""
-	}
-	return fmt.Sprintf("\n\nThis run batches %d events on the same target that arrived together; the details above are the most recent one's. Handle all of them:\n\n%s\n",
-		g["count"], literal(string(body)))
 }
 
 // literal makes event-derived text safe to embed in a prompt TEMPLATE. The

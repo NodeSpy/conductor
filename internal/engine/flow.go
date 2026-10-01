@@ -82,8 +82,7 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 	// buffer in the in-memory Grouper, so recording here would make a
 	// restart drop the batch while dedup suppressed redelivery — silent
 	// loss. Grouped events record at flush time instead (see runBatch).
-	group, implicit := e.flowGroup(spec, t, shadow)
-	grouped := group != nil
+	grouped := spec.Group != nil
 	if !shadow && !grouped && e.coalesceQueued(t) {
 		// Committed to the waiting run: consume a dedup signature so a
 		// redelivery stays suppressed, but don't count a live-gated attempt —
@@ -110,13 +109,7 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 	}
 
 	if grouped {
-		var gkey string
-		var err error
-		if implicit {
-			gkey = t.Key() // the event's default batching is per target
-		} else {
-			gkey, err = flow.GroupKey(group.Key, t, e.flowBaseData(t))
-		}
+		gkey, err := flow.GroupKey(spec.Group.Key, t, e.flowBaseData(t))
 		if err != nil {
 			// A key that doesn't render (bad template, or one that renders
 			// empty — a typo'd path under missingkey=zero) must NOT share a
@@ -129,40 +122,11 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 			gkey = flow.EventIdentity(t)
 		}
 		full := act.FlowRef + "\x00" + gkey
-		e.grouper.Add(full, t, group.Window.D(), group.MaxWait.D())
+		e.grouper.Add(full, t, spec.Group.Window.D(), spec.Group.MaxWait.D())
 		return
 	}
 	e.notif.Emit(ctx, notify.EventDispatch, t, "workflow")
 	e.startFlowRun(ctx, t, spec, tidx, nil, shadow)
-}
-
-// flowGroup resolves how a flow trigger's events batch: the trigger's own
-// group: (`enabled: false` opts out of batching entirely), else the source
-// event's declared default (connector.EventDecl.Coalesce — a burst of events
-// against one target becomes one run), else not at all. implicit marks the
-// declared default, whose key is the target itself.
-//
-// The default never applies to a forced trigger (an explicit `conductor run
-// --force` means now) or a shadow one (a batch fires outside the shadow
-// decision taken here, so it would dispatch for real).
-func (e *Engine) flowGroup(spec config.TriggerSpec, t core.Trigger, shadow bool) (g *config.GroupSpec, implicit bool) {
-	if spec.Group != nil {
-		if !spec.Group.IsEnabled() {
-			return nil, false
-		}
-		return spec.Group, false
-	}
-	if t.Force || shadow || e.connectors == nil {
-		return nil, false
-	}
-	in, ok := e.connectors.Get(spec.Connector())
-	if !ok || in.Decl == nil {
-		return nil, false
-	}
-	if ev, ok := in.Decl.Event(spec.Event()); ok && ev.Coalesce > 0 {
-		return &config.GroupSpec{Window: config.Duration(ev.Coalesce)}, true
-	}
-	return nil, false
 }
 
 // startFlowRun runs one flow (or batch) in its own goroutine once it holds a
@@ -331,11 +295,7 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 	}
 	defer e.release()
 	run := e.newFlowRun(t, spec, false)
-	// No group: of its own reaching here means the event's default batching
-	// (flowGroup): the steps were written per event, so the runner makes sure
-	// the rest of the burst still reaches an agent (see flow.Batch.Implicit).
-	batch := &flow.Batch{Key: gkey, Events: events, Implicit: spec.Group == nil}
-	e.flow.Run(ctx, run, t, spec, tidx, batch, false)
+	e.flow.Run(ctx, run, t, spec, tidx, &flow.Batch{Key: gkey, Events: events}, false)
 }
 
 // recordBatch writes each grouped event's dedup/attempt/comment-mark state
