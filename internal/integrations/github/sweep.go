@@ -508,7 +508,7 @@ func (g *Integration) sweepUnresolvedComments(ctx context.Context, instID int64,
 	for _, th := range threads {
 		cs = append(cs, reviewComment{Author: th.Author, Path: th.Path, Line: th.Line, Body: th.Body, URL: th.URL})
 	}
-	extra["review_comments"] = reviewCommentsFact(cs)
+	addReviewComments(extra, cs)
 	return g.single(repo, "changes_requested", t,
 		fmt.Sprintf("sweep: %d unresolved comment thread(s) on %s#%d", len(ids), repo, t.Number), sig,
 		extra)

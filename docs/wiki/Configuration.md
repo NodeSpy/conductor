@@ -235,6 +235,24 @@ triggers:
 
 Full semantics (chains, cycles, the merge rules, and layered guidance) are in [[Reuse]].
 
+## Review feedback (github)
+
+`changes_requested` carries the feedback it was fired for, so a prompt-less
+fixer (or `{{range .review_comments}}`) sees all of it:
+
+| field | value |
+|---|---|
+| `review_id`, `review_body` | the submitted review and its summary comment (webhook path) |
+| `review_comments` | each inline comment as `{author, path, line, body, url}` — the review's own comments (webhook path), or each unresolved thread's opening comment (sweep path); bodies capped at 2000 bytes, the list at 100 comments / 48KB |
+| `review_comments_omitted` | how many the cap left out (absent when none) — the agent reads those on the PR |
+
+The inline comments of a changes-requested review do **not** also fire
+`new_comment`. The connector folds them into the review's `changes_requested`
+run, on both the webhook path and the sweep's missed-comment recovery. That
+holds only when a `changes_requested` trigger takes the review; otherwise they
+stay `new_comment` events. Bursts of ordinary comments are batched per PR by
+default. Details for both are in [[Grouping]].
+
 ## Bot-authored comments (github)
 
 The github comment/review events (`new_comment`, `changes_requested`)

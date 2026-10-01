@@ -34,10 +34,15 @@ const (
 	reviewStateTTL = time.Hour
 	// reviewStateMax caps the cache; past it, expired entries are dropped.
 	reviewStateMax = 512
-	// maxReviewComments / maxReviewCommentBody cap what a changes_requested
-	// run carries, so one enormous review can't blow the prompt size limit.
-	maxReviewComments    = 100
-	maxReviewCommentBody = 4000
+	// maxReviewComments / maxReviewCommentBody / maxReviewCommentsBytes cap
+	// what a changes_requested run carries, so one enormous review can't push
+	// the rendered prompt past what a runtime accepts (paseo's single prompt
+	// argument tops out near 120KB) and fail the dispatch. Past the budget the
+	// rest are counted in review_comments_omitted; the agent reads them on
+	// the PR.
+	maxReviewComments      = 100
+	maxReviewCommentBody   = 2000
+	maxReviewCommentsBytes = 48 << 10
 )
 
 // reviewStateCache remembers submitted reviews' states (lowercased, as the
@@ -157,21 +162,24 @@ func (g *Integration) attachReviewComments(ctx context.Context, trs []core.Trigg
 	if len(cs) == 0 {
 		return
 	}
-	list := reviewCommentsFact(cs)
 	for i := range trs {
-		trs[i].Context["review_comments"] = list
+		addReviewComments(trs[i].Context, cs)
 	}
 }
 
-// reviewCommentsFact renders review comments as the review_comments context
-// list: one {author, path, line, body, url} object per comment, capped.
-func reviewCommentsFact(cs []reviewComment) []any {
-	if len(cs) > maxReviewComments {
-		cs = cs[:maxReviewComments]
-	}
+// addReviewComments stamps review_comments — one {author, path, line, body,
+// url} object per comment, within the size caps — and, when the caps cut any,
+// review_comments_omitted with how many.
+func addReviewComments(ctx map[string]any, cs []reviewComment) {
 	out := make([]any, 0, len(cs))
+	budget := maxReviewCommentsBytes
 	for _, c := range cs {
-		m := map[string]any{"author": c.Author, "path": c.Path, "body": clipBody(c.Body)}
+		body := clipBody(c.Body)
+		if len(out) == maxReviewComments || len(body) > budget {
+			break
+		}
+		budget -= len(body)
+		m := map[string]any{"author": c.Author, "path": c.Path, "body": body}
 		if c.Line > 0 {
 			m["line"] = c.Line
 		}
@@ -180,7 +188,10 @@ func reviewCommentsFact(cs []reviewComment) []any {
 		}
 		out = append(out, m)
 	}
-	return out
+	ctx["review_comments"] = out
+	if n := len(cs) - len(out); n > 0 {
+		ctx["review_comments_omitted"] = n
+	}
 }
 
 // clipBody caps a comment body at maxReviewCommentBody bytes, on a rune

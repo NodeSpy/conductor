@@ -111,9 +111,10 @@ var githubDecl = &TypeDecl{
 			Schema{
 				"head_ref": {Type: TString},
 				"author":   {Type: TString}, "author_is_bot": {Type: TBool, Desc: "the reviewer is an automated bot (account type Bot, or a [bot] login)"},
-				"review_id":       {Type: TInt, Desc: "the submitted review's id (webhook path; absent for a sweep-recovered run)"},
-				"review_body":     {Type: TString, Desc: "the review's summary comment"},
-				"review_comments": {Type: TList, Desc: "the feedback to address: the review's inline comments (or, sweep-recovered, each unresolved thread's opening comment) as {author, path, line, body, url}. Inline comments of a changes-requested review are folded in here and do NOT also fire new_comment"},
+				"review_id":               {Type: TInt, Desc: "the submitted review's id (webhook path; absent for a sweep-recovered run)"},
+				"review_body":             {Type: TString, Desc: "the review's summary comment"},
+				"review_comments":         {Type: TList, Desc: "the feedback to address: the review's inline comments (or, sweep-recovered, each unresolved thread's opening comment) as {author, path, line, body, url}. Inline comments of a changes-requested review are folded in here and do NOT also fire new_comment"},
+				"review_comments_omitted": {Type: TInt, Desc: "how many comments the size cap left out of review_comments (absent when none) — read them on the PR"},
 			}, nil),
 		coalesced(githubEvent("new_comment", "a new comment on your PR",
 			Schema{

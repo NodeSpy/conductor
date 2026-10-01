@@ -56,9 +56,17 @@ store uses; default `~/.local/state/conductor`):
 
 | strategy | steps |
 |---|---|
-| `checkout-pr` | `git -C <base> fetch origin pull/<PR>/head`; `git -C <base> worktree add <wt> FETCH_HEAD` |
+| `checkout-pr` | `git -C <base> fetch origin +refs/pull/<PR>/head:refs/conductor/pr-fetch/<wt-name>`; resolve it to a commit; `git -C <base> worktree add -B <head-ref> <wt> <sha>`; delete the temp ref |
 | `branch-off` | `git -C <base> worktree add -b <branchSlug> <wt> <BaseRef>` (fetch base first) |
 | `none` | return `("", "", nil)` — the read-only judges; NO worktree |
+
+The base-clone refresh and the worktree add run under the per-repo lock as one
+unit: everything they touch is shared by every dispatch on that repo (refs,
+`FETCH_HEAD`, `.git/config` — a `-B` off a remote-tracking ref writes the
+upstream there). An earlier cut added the worktree from `FETCH_HEAD` outside the
+lock, and two dispatches on one repo raced: a sibling's fetch rewrote
+`FETCH_HEAD` in between, so the add failed with `invalid reference: FETCH_HEAD`
+or checked out another PR's head.
 
 Return `(wt, wt, nil)` (id == cwd == the worktree path). On any git failure wrap
 with `dispatch.Unrecoverable(err)` so the engine escalates + retries exactly like

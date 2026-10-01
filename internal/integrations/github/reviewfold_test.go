@@ -289,14 +289,39 @@ func TestSweepDoesNotRefanAChangesRequestedReview(t *testing.T) {
 	}
 }
 
-func TestReviewCommentsFactCapsBodies(t *testing.T) {
+// review_comments stays inside a prompt a runtime will accept: each body is
+// capped (on a rune boundary) and the list stops at a byte budget, counting
+// what it left out so the agent knows to read the rest on the PR.
+func TestReviewCommentsAreCapped(t *testing.T) {
 	long := strings.Repeat("é", maxReviewCommentBody) // 2 bytes per rune
-	got := reviewCommentsFact([]reviewComment{{Author: "a", Path: "p", Body: long}})
-	body := got[0].(map[string]any)["body"].(string)
+	ctx := map[string]any{}
+	addReviewComments(ctx, []reviewComment{{Author: "a", Path: "p", Body: long}})
+	body := ctx["review_comments"].([]any)[0].(map[string]any)["body"].(string)
 	if len(body) > maxReviewCommentBody+len("…") || !strings.HasSuffix(body, "…") {
 		t.Fatalf("body not capped: %d bytes", len(body))
 	}
 	if !strings.HasPrefix(long, strings.TrimSuffix(body, "…")) {
 		t.Fatal("cap split a rune")
+	}
+	if _, ok := ctx["review_comments_omitted"]; ok {
+		t.Fatal("nothing was omitted, but review_comments_omitted is set")
+	}
+
+	many := make([]reviewComment, 200)
+	for i := range many {
+		many[i] = reviewComment{Author: "a", Path: "p", Body: strings.Repeat("x", maxReviewCommentBody)}
+	}
+	ctx = map[string]any{}
+	addReviewComments(ctx, many)
+	kept := len(ctx["review_comments"].([]any))
+	total := 0
+	for _, c := range ctx["review_comments"].([]any) {
+		total += len(c.(map[string]any)["body"].(string))
+	}
+	if total > maxReviewCommentsBytes || kept == 0 {
+		t.Fatalf("kept %d comments / %d body bytes, want within the %d-byte budget", kept, total, maxReviewCommentsBytes)
+	}
+	if got := ctx["review_comments_omitted"]; got != len(many)-kept {
+		t.Fatalf("review_comments_omitted = %v, want %d", got, len(many)-kept)
 	}
 }

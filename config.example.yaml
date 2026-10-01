@@ -1044,6 +1044,10 @@ triggers:
 
   # A poster's comment burst becomes ONE run (debounce; window resets per
   # event, fires when quiet; at most one run per key is in flight).
+  # new_comment does this per PR by default even with no group: (15s window);
+  # set group: to tune it, or `group: { enabled: false }` for one run per
+  # comment. Inline comments of a changes-requested review ride the
+  # changes_requested run (its review_comments) and never fire new_comment.
   - on: gh.new_comment
     filter: { not_comment_author: ["ci-bot"] }
     group: { key: "{{.repo}}#{{.pr}}", window: 15s }
