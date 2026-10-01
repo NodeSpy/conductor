@@ -1559,17 +1559,21 @@ func renderLaunchFields(step *config.Step, data map[string]any) error {
 	}
 	var images []string
 	for _, item := range step.Images {
-		if _, ok := soleFieldRef(item); ok {
-			vals, err := resolveList(item, data)
-			if err != nil {
-				return fmt.Errorf("images: %w", err)
-			}
-			for _, v := range vals {
-				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-					images = append(images, strings.TrimSpace(s))
+		if path, ok := soleFieldRef(item); ok {
+			if v, found := lookupPath(data, path); found {
+				if _, isStr := v.(string); !isStr {
+					vals, err := resolveList(item, data)
+					if err != nil {
+						return fmt.Errorf("images: %w", err)
+					}
+					for _, v := range vals {
+						if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+							images = append(images, strings.TrimSpace(s))
+						}
+					}
+					continue
 				}
 			}
-			continue
 		}
 		out, err := render(item, data)
 		if err != nil {

@@ -88,6 +88,19 @@ func TestLaunchFieldsRenderedOnce(t *testing.T) {
 	}
 }
 
+// TestImagesAcceptStringAndListRefs: an images: item referencing a single
+// path string attaches that path; one referencing a list attaches each.
+func TestImagesAcceptStringAndListRefs(t *testing.T) {
+	step := config.Step{Images: []string{"{{.one}}", "{{.many}}", "{{.missing}}", "/lit.png"}}
+	data := map[string]any{"one": "/a.png", "many": []any{"/b.png", "/c.png"}}
+	if err := renderLaunchFields(&step, data); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(step.Images, ","); got != "/a.png,/b.png,/c.png,/lit.png" {
+		t.Fatalf("images = %s", got)
+	}
+}
+
 // TestDetachRefusedWhenAgentAuthored: a detach: merged into an agent-authored
 // step after plan admission is refused at execution, never launched.
 func TestDetachRefusedWhenAgentAuthored(t *testing.T) {
