@@ -828,9 +828,10 @@ group_K_connectors() {
     bad "K6 done hook" K K6-done "no K6-done capture"
   fi
 
-  # K2 + K3 ride a comment burst on conn/csvc: the ungrouped trigger fires per
-  # comment (js code step reshapes each), the grouped trigger batches the
-  # burst into ONE run seeing {{.group.count}} == 2.
+  # K2 + K3 ride a comment burst on conn/csvc: the opted-out trigger
+  # (group: { enabled: false }) fires per comment (code step reshapes each),
+  # the grouped trigger batches the burst into ONE run seeing
+  # {{.group.count}} == 2.
   post_webhook_to conductor-conn issue_comment conn_comment_1.json >/dev/null
   sleep 0.5
   post_webhook_to conductor-conn issue_comment conn_comment_2.json >/dev/null
