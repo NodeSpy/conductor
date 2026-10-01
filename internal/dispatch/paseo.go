@@ -27,6 +27,13 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// its last action) must NOT archive mid-capture — the done handler sees the
 	// in-flight mark and defers to the step-boundary archive instead, so a done
 	// call can never cut off the output conductor is waiting on.
+	// detach: true is a COMPLETE, self-contained launch mode (Step.Detach) —
+	// it bypasses queueing, the ownership ledger, skill creds, and every
+	// guidance/hold/watch mechanism below, so it is handled by its own
+	// function rather than threaded through this one as one more branch.
+	if req.Step.Detach {
+		return d.paseoDetached(ctx, req)
+	}
 	if req.DispatchID != "" {
 		d.inflight.Store(req.DispatchID, true)
 		defer d.inflight.Delete(req.DispatchID)
@@ -63,8 +70,19 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	if p.Thinking != "" {
 		argv = append(argv, "--thinking", p.Thinking)
 	}
-	if p.Mode != "" {
-		argv = append(argv, "--mode", p.Mode)
+	if mode, err := renderedMode(p.Mode, data); err != nil {
+		return RunRef{}, err
+	} else if mode != "" {
+		argv = append(argv, "--mode", mode)
+	}
+	for _, img := range p.Images {
+		rv, err := render(img, data)
+		if err != nil {
+			return RunRef{}, err
+		}
+		if rv = expandTilde(strings.TrimSpace(rv)); rv != "" {
+			argv = append(argv, "--image", rv)
+		}
 	}
 	strat := effectiveStrategy(req)
 
@@ -577,6 +595,208 @@ func workspaceMode(req Request) string {
 // is entirely the runtime's decision (Backend.CreateWorktree) — conductor asks
 // for a worktree and gets a working one back, blind to which. A runtime that
 // knows paseo can reuse; one that can't just creates.
+// renderedMode templates a step's `mode:` (a form submission, a prior step's
+// output, …) so it is not a bare static value — ensuring it, the raw string,
+// when it carries no template, is returned unchanged.
+func renderedMode(mode string, data map[string]any) (string, error) {
+	if mode == "" {
+		return "", nil
+	}
+	rv, err := render(mode, data)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(rv), nil
+}
+
+// repoRefRe matches a plain "owner/name" repo reference.
+var repoRefRe = regexp.MustCompile(`^[\w.-]+/[\w.-]+$`)
+
+// validateRepoRef checks a (already-rendered) repo reference is either
+// "owner/name" or a git URL/SSH form a checkout can clone from.
+func validateRepoRef(s string) error {
+	if repoRefRe.MatchString(s) {
+		return nil
+	}
+	if strings.Contains(s, "://") || strings.HasPrefix(s, "git@") {
+		return nil
+	}
+	return fmt.Errorf("%q is not owner/name or a git URL", s)
+}
+
+// detachRepo resolves the checkout repo for a `detach:` step: its own
+// templated `repo:` when set, else the trigger's own target. Rejects a blank
+// or malformed result (after templating) rather than letting dispatch fail
+// opaquely downstream.
+func detachRepo(req Request, data map[string]any) (string, error) {
+	repo := req.Trigger.Target.CheckoutRepo()
+	if req.Step.Repo != "" {
+		rendered, err := render(req.Step.Repo, data)
+		if err != nil {
+			return "", err
+		}
+		repo = strings.TrimSpace(rendered)
+	}
+	if repo == "" {
+		return "", fmt.Errorf("detach: no repo to check out — set step `repo:` (this trigger carries none of its own)")
+	}
+	if err := validateRepoRef(repo); err != nil {
+		return "", fmt.Errorf("detach: repo: %w", err)
+	}
+	return repo, nil
+}
+
+// detachBaseRef is the base branch a detach worktree forks from: the
+// trigger's own BaseRef only when the step kept the trigger's own repo — an
+// override to a DIFFERENT repo has no meaningful relationship to the
+// trigger's branch, so it gets paseo's own default-branch behavior instead.
+func detachBaseRef(req Request) string {
+	if req.Step.Repo != "" {
+		return ""
+	}
+	return req.Trigger.Target.BaseRef
+}
+
+// detachTitle is the templated paseo agent title for a detach launch: the
+// step's own `agent:` label when set (so a form field can name it), else a
+// generic one — never conductor's own "conductor: <repo>#<n> <kind>" shape,
+// which would mislabel what is now the user's own workspace.
+func detachTitle(req Request, data map[string]any) (string, error) {
+	if req.Step.Agent != "" {
+		return render(req.Step.Agent, data)
+	}
+	return "handover", nil
+}
+
+// detachBranch is the new worktree's branch name: the step's templated
+// `branch:` when set, else a slug of the (already-templated) title.
+func detachBranch(req Request, data map[string]any, title string) (string, error) {
+	if req.Step.Branch != "" {
+		b, err := render(req.Step.Branch, data)
+		if err != nil {
+			return "", err
+		}
+		b = strings.TrimSpace(b)
+		if b == "" {
+			return "", fmt.Errorf("detach: branch: rendered empty")
+		}
+		return b, nil
+	}
+	slug := SanitizeBranchSuffix(title)
+	if slug == "" {
+		slug = "handover"
+	}
+	return "handover/" + slug, nil
+}
+
+// paseoDetached launches a `detach: true` step: the step IS the whole launch
+// (Step.Detach's doc) — a fresh branch-off worktree, `paseo run -d`
+// (background, no wait), and then forgotten. Unlike paseo(), it:
+//
+//   - never calls queueOrAdopt (nothing to queue onto — this is always a
+//     brand new workspace);
+//   - never records the agent or workspace in d.Owned, so Archive (the
+//     ownership chokepoint, paseo.go's Archive) refuses this id forever;
+//   - never calls SkillEnv / injects CONDUCTOR_* env — no skill creds;
+//   - appends no guidance — the prompt it receives (req.Action.Prompt) is
+//     already the bare templated prompt, because flow.go's execAgent skips
+//     the whole guidance/memory/handoff-wrapper block for a detach step
+//     before building the dispatch request.
+func (d *Dispatcher) paseoDetached(ctx context.Context, req Request) (RunRef, error) {
+	data := templateData(req)
+	prompt, err := promptText(req)
+	if err != nil {
+		return RunRef{}, fmt.Errorf("render prompt: %w", err)
+	}
+	if err := checkPromptSize(prompt); err != nil {
+		return RunRef{}, err
+	}
+	repo, err := detachRepo(req, data)
+	if err != nil {
+		return RunRef{}, Unrecoverable(err)
+	}
+	title, err := detachTitle(req, data)
+	if err != nil {
+		return RunRef{}, err
+	}
+	branch, err := detachBranch(req, data, title)
+	if err != nil {
+		return RunRef{}, err
+	}
+
+	argv := []string{"run", prompt, "--title", title}
+	if req.Provider != "" {
+		argv = append(argv, "--provider", req.Provider)
+	}
+	if req.Model != "" {
+		argv = append(argv, "--model", req.Model)
+	}
+	if req.Step.Thinking != "" {
+		argv = append(argv, "--thinking", req.Step.Thinking)
+	}
+	mode, err := renderedMode(req.Step.Mode, data)
+	if err != nil {
+		return RunRef{}, err
+	}
+	if mode != "" {
+		argv = append(argv, "--mode", mode)
+	}
+	for _, img := range req.Step.Images {
+		rv, err := render(img, data)
+		if err != nil {
+			return RunRef{}, err
+		}
+		if rv = expandTilde(strings.TrimSpace(rv)); rv != "" {
+			argv = append(argv, "--image", rv)
+		}
+	}
+
+	ref := RunRef{Backend: "paseo", Kind: req.Trigger.Kind, Branch: branch, Detached: true}
+	baseRef := detachBaseRef(req)
+
+	if d.DryRun || req.Shadow {
+		// Preview: render the argv a real launch would use without touching
+		// the daemon (no checkout resolution, no worktree creation).
+		argv = append(argv, "--new-workspace", "worktree", "--new-branch", branch)
+		if baseRef != "" {
+			argv = append(argv, "--base", baseRef)
+		}
+		argv = append(argv, "-d", "--json")
+		ref.Argv = append([]string{d.PaseoBin}, argv...)
+		ref.Shadowed = true
+		return ref, nil
+	}
+
+	dir, err := d.resolveCheckoutDir(ctx, repo)
+	if err != nil {
+		return RunRef{}, Unrecoverable(fmt.Errorf("detach: resolve checkout dir for %s: %w", repo, err))
+	}
+	res, err := d.backend().CreateWorktree(ctx, CreateWorktreeOptions{
+		Isolation: "worktree", Path: dir, Strategy: "branch-off",
+		NewBranch: branch, BaseRef: baseRef,
+	})
+	if err != nil {
+		return RunRef{}, Unrecoverable(fmt.Errorf("detach: create worktree for %s: %w", repo, err))
+	}
+	ref.WorkspaceID = res.WorkspaceID
+	if !d.remote() {
+		ref.Workdir = res.Cwd
+	}
+	argv = append(argv, "--workspace", res.WorkspaceID, "-d", "--json")
+	ref.Argv = append([]string{d.PaseoBin}, argv...)
+
+	result, err := d.backend().RunAgent(ctx, RunAgentOptions{Args: argv})
+	ref.Output = result.Output
+	if err != nil {
+		return ref, err
+	}
+	ref.AgentID = result.AgentID
+	// Deliberately NO d.Owned.AddAgent / AddWorkspace / BindDispatch: the
+	// whole point of detach is that conductor forgets this workspace the
+	// instant it launches it. See Dispatcher.Archive.
+	return ref, nil
+}
+
 func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir string) (id, cwd string, err error) {
 	if d.WorktreeCreator != nil {
 		return d.WorktreeCreator(ctx, req, baseDir)

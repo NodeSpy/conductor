@@ -872,6 +872,41 @@ type Step struct {
 	OutputSchema map[string]any `yaml:"output_schema,omitempty"`
 	Background   bool           `yaml:"background,omitempty"`
 	Handoff      string         `yaml:"handoff,omitempty"` // ask-capable connector for a background review
+	// Repo overrides this agent step's checkout target (templated; "owner/name"
+	// or a git URL), independent of whatever repo the trigger itself carries —
+	// a generic, service-agnostic escape hatch for a step that needs to work in
+	// a DIFFERENT codebase than the one the event came from (e.g. a Slack
+	// trigger choosing which repo to hand off into). Validated (after
+	// templating) at dispatch time. Unset keeps today's behavior: the
+	// trigger's own target.
+	Repo string `yaml:"repo,omitempty"`
+	// Images is a templated list of local file paths attached to this agent
+	// launch, one `--image <path>` per item. Only a runtime backed by the
+	// built-in paseo controller supports it; any other runtime fails the
+	// dispatch (or validation, when the runtime is a static pin) rather than
+	// silently dropping the attachments.
+	Images []string `yaml:"images,omitempty"`
+	// Branch names the worktree branch a `detach:` step creates (templated).
+	// Unset derives a slug of the step's (templated) title/agent label
+	// instead. Meaningless without `detach:`.
+	Branch string `yaml:"branch,omitempty"`
+	// Detach launches this agent step as an UNOWNED, FORGOTTEN workspace: a
+	// fresh branch-off worktree (from `repo:`, or the trigger's own target),
+	// launched with `paseo run -d` (background, no wait) and never recorded
+	// in conductor's ownership ledger — neither the agent nor the workspace.
+	// It gets no skill creds/env, no CONDUCTOR_* env, no appended guidance
+	// (the prompt runs exactly as templated), no hold/handoff/watch/
+	// idle_timeout, and no isolation shim: from the moment it starts it is
+	// the USER's workspace, not conductor's. Conductor cannot archive or
+	// reach it again — see dispatch.Dispatcher.Archive, gated on the
+	// ownership ledger a detach step is deliberately never added to.
+	//
+	// Mutually exclusive with background/handoff/output_schema/watch/
+	// idle_timeout/archive_when_done/session/skill/team/gate (see
+	// validateStep), and refused on an agent-authored step (see
+	// internal/flow/agentauthored_fields.go) — detach is a capability the
+	// operator grants, never one an agent can take for itself.
+	Detach bool `yaml:"detach,omitempty"`
 
 	// command form (also carries workdir/env for agent/code forms), and the
 	// argv the `cli` engine runs. A list of words, or one string (see Argv).
@@ -1922,6 +1957,13 @@ func validateStep(w string, s Step, c *Config) error {
 	if forms > 1 {
 		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/decide/use/uses/call or a helper: sleep/log/set/assert/fail/wait_for)", w)
 	}
+	// Checked early, before any other field's own validation (gate name
+	// lookups, team role resolution, …) can fail first and mask the simpler,
+	// structural "these two fields don't mix" error a detach misconfiguration
+	// actually is.
+	if err := validateDetach(w, s); err != nil {
+		return err
+	}
 	if s.Decide != nil {
 		if err := validateDecideStep(w, s, c); err != nil {
 			return err
@@ -1936,6 +1978,11 @@ func validateStep(w string, s Step, c *Config) error {
 		}
 		if err := c.validateTeam(w, s.Team); err != nil {
 			return err
+		}
+	}
+	if len(s.Images) > 0 {
+		if ok, known := c.runtimeSupportsImages(s); known && !ok {
+			return fmt.Errorf("config: %s: `images:` needs the builtin paseo runtime (runtime %q does not support --image attachments)", w, s.Runtime)
 		}
 	}
 	if s.Uses != "" {
@@ -1970,6 +2017,41 @@ func validateStep(w string, s Step, c *Config) error {
 		return err
 	}
 	return validateHooks(w, s.Hooks)
+}
+
+// validateDetach enforces detach:'s isolation from every other hand-off/
+// lifecycle/capability mechanism a step can carry. detach is a complete,
+// self-contained launch mode (see Step.Detach) — combining it with any of
+// these would either contradict it (background/handoff/watch/idle_timeout all
+// assume conductor keeps driving or watching the agent it just forgot) or
+// hand it a capability grant a forgotten workspace can never use safely
+// (session/skill/team/gate, output_schema's capture contract,
+// archive_when_done's ledger-gated reclaim).
+func validateDetach(w string, s Step) error {
+	if !s.Detach {
+		return nil
+	}
+	type conflict struct {
+		name string
+		set  bool
+	}
+	for _, c := range []conflict{
+		{"background:", s.Background},
+		{"handoff:", s.Handoff != ""},
+		{"output_schema:", len(s.OutputSchema) > 0},
+		{"watch:", s.Watch != nil},
+		{"idle_timeout:", s.IdleTimeout > 0},
+		{"archive_when_done:", s.ArchiveWhenDone},
+		{"session:", s.Session != nil},
+		{"skill:", s.Skill != nil},
+		{"team:", s.Team != nil},
+		{"gate:", s.Gate != nil},
+	} {
+		if c.set {
+			return fmt.Errorf("config: %s: `detach: true` cannot be combined with %s — a detached step is a complete, forgotten launch (see docs)", w, c.name)
+		}
+	}
+	return nil
 }
 
 // validateWatch checks a reactive hand-off's watch block. The old shape is

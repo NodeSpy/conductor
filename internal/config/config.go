@@ -1590,6 +1590,30 @@ func (c *Config) SkillToolsSupported(p Step) (runtime string, ok bool) {
 	return rn, mode != SkillModeNone
 }
 
+// runtimeSupportsImages reports whether a step's resolved runtime is the
+// builtin paseo controller — the only one `paseo run --image` attachments
+// (Step.Images) work on. known is false when the runtime can't be resolved
+// statically (an unconfigured Config, or a named runtime this Config doesn't
+// define — a different validator already rejects that), in which case the
+// caller should not fail the step on this check alone.
+func (c *Config) runtimeSupportsImages(s Step) (supported, known bool) {
+	if c == nil {
+		return true, false
+	}
+	rn := s.Runtime
+	if rn == "" {
+		rn = c.DefaultRuntimeName()
+	}
+	if rn == "" || rn == BuiltinPaseoRuntime {
+		return true, true
+	}
+	cc, found := c.MergedControllers()[rn]
+	if !found {
+		return true, false
+	}
+	return cc.Type == "paseo" || (cc.Type == "" && cc.Agent == ""), true
+}
+
 // BuiltinPaseoRuntime is the implicit default runtime's name (mirrors
 // controller.BuiltinPaseo without the import).
 const BuiltinPaseoRuntime = "paseo"

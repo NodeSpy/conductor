@@ -101,6 +101,7 @@ func TestBothPlanGuardsRejectEveryOperatorOwnedField(t *testing.T) {
 		"background:": {Type: "agent", Prompt: "p", Background: true},
 		"handoff:":    {Type: "agent", Prompt: "p", Handoff: "slack"},
 		"skill:":      {Type: "agent", Prompt: "p", Skill: &config.SkillPolicy{Verbs: []string{"gh.submit_review"}}},
+		"detach:":     {Type: "agent", Prompt: "p", Detach: true},
 	}
 	for field, step := range cases {
 		t.Run(field, func(t *testing.T) {

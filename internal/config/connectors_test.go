@@ -426,6 +426,139 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			},
 			wantErr: "parallel branches cannot be combined with another step form",
 		},
+		{
+			name: "detach combined with background",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Background: true},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with background:",
+		},
+		{
+			name: "detach combined with handoff",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Handoff: "slack"},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with handoff:",
+		},
+		{
+			name: "detach combined with output_schema",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, OutputSchema: map[string]any{"x": "string"}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with output_schema:",
+		},
+		{
+			name: "detach combined with watch",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Watch: &WatchSpec{Steps: []Step{{Uses: "gh.verb"}}}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with watch:",
+		},
+		{
+			name: "detach combined with idle_timeout",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, IdleTimeout: Duration(time.Minute)},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with idle_timeout:",
+		},
+		{
+			name: "detach combined with archive_when_done",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, ArchiveWhenDone: true},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with archive_when_done:",
+		},
+		{
+			name: "detach combined with session",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Session: &SessionSpec{Key: "x"}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with session:",
+		},
+		{
+			name: "detach combined with skill",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Skill: &SkillPolicy{Verbs: []string{"gh.comment"}}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with skill:",
+		},
+		{
+			name: "detach combined with team",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Prompt: "p", Detach: true, Team: &TeamSpec{}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with team:",
+		},
+		{
+			name: "detach combined with gate",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Gate: &GateSpec{Run: []string{"x"}}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with gate:",
+		},
+		{
+			name: "images: on a non-paseo named runtime",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Controllers:   map[string]ControllerConfig{"gem": {Agent: "gemini"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Runtime: "gem", Images: []string{"/tmp/x.png"}},
+					}, nil)},
+				}
+			},
+			wantErr: "needs the builtin paseo runtime",
+		},
 	}
 
 	for _, tc := range cases {
@@ -439,6 +572,21 @@ func TestValidateConnectorsStructural(t *testing.T) {
 				t.Fatalf("error = %q, want substring %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestDetachStepValid confirms a `detach: true` step with none of the
+// conflicting fields set, and `images:` on the implicit builtin paseo
+// runtime, both validate clean.
+func TestDetachStepValid(t *testing.T) {
+	cfg := &Config{
+		ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+		Triggers: []TriggerSpec{{On: "gh.event", Steps: []Step{
+			{ID: "s1", Type: "agent", Agent: "a", Detach: true, Repo: "acme/w", Branch: "handover/x", Images: []string{"/tmp/x.png"}},
+		}}},
+	}
+	if err := cfg.validateConnectors(); err != nil {
+		t.Fatalf("expected a valid detach step to validate clean, got: %v", err)
 	}
 }
 
