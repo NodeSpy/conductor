@@ -177,6 +177,9 @@ func detachBranch(req Request, title string) (string, error) {
 //     already the bare templated prompt, because flow's execAgent skips the
 //     whole guidance/memory/handoff-wrapper block for a detach step.
 func (d *Dispatcher) paseoDetached(ctx context.Context, req Request) (RunRef, error) {
+	// No conductor credential reaches a detached launch in any form — not
+	// as env, and not through a {{.gh_token}}/{{.app_token}} in its prompt.
+	req.Tokens = Tokens{}
 	prompt, err := promptText(req)
 	if err != nil {
 		return RunRef{}, fmt.Errorf("render prompt: %w", err)
