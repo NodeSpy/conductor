@@ -818,7 +818,14 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// one not), and the first to advance a shared mark would starve its
 	// siblings of the very same comment. Legacy state is untouched (legacy
 	// actions keep the bare kind key, honoring existing state.json).
-	if !t.Force && t.Kind == "new_comment" {
+	//
+	// A changes_requested that carries a comment_id (a review's highest
+	// inline comment, or the highest of the unresolved threads a sweep found)
+	// is gated the same way, on a mark of its own: that is what dispatches a
+	// review ONCE — a later sweep still seeing its threads unresolved (or a
+	// reviewer editing the review) re-derives the same comments, at or below
+	// the mark, while a new review's comments are above it.
+	if !t.Force && commentMarked(t.Kind) {
 		if id := commentID(t); id > 0 && id <= e.store.LastCommentID(key, commentMarkKind(t)) {
 			return
 		}
@@ -1183,7 +1190,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 	// A comment was handled (fresh agent, queued, or adopted) — raise the high-water
 	// mark so the sweep's re-listing of recent comments won't re-dispatch this one.
-	if t.Kind == "new_comment" {
+	if commentMarked(t.Kind) {
 		if id := commentID(t); id > 0 {
 			_ = e.store.AdvanceCommentID(key, commentKind(t), id)
 		}
@@ -1657,13 +1664,28 @@ func commentMarkKind(t core.Trigger) string {
 // commentKind reads a new_comment trigger's comment kind (store.CommentKindIssue /
 // store.CommentKindReview) from Context, selecting which high-water mark applies.
 // Absent (an older trigger) → issue, matching the pre-per-kind single mark.
+//
+// changes_requested keeps marks of its own ("changes_requested:review"), apart
+// from new_comment's: the two kinds are dispatched for different comments, and a
+// shared mark would let one starve the other.
 func commentKind(t core.Trigger) string {
+	k := store.CommentKindIssue
 	if t.Context != nil {
-		if k, _ := t.Context["comment_kind"].(string); k != "" {
-			return k
+		if ck, _ := t.Context["comment_kind"].(string); ck != "" {
+			k = ck
 		}
 	}
-	return store.CommentKindIssue
+	if t.Kind == "changes_requested" {
+		return "changes_requested:" + k
+	}
+	return k
+}
+
+// commentMarked reports whether a kind is gated by (and advances) the comment
+// high-water mark: new_comment, and changes_requested when it carries a
+// comment_id.
+func commentMarked(kind string) bool {
+	return kind == "new_comment" || kind == "changes_requested"
 }
 
 func shadowNote(shadow bool) string {

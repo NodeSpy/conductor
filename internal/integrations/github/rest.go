@@ -272,10 +272,11 @@ type unresolvedThread struct {
 	AuthorApproved bool
 	// The thread's opening comment, so a sweep-recovered changes_requested
 	// run carries the feedback it is asked to address.
-	Path string
-	Line int
-	Body string
-	URL  string
+	CommentID int64
+	Path      string
+	Line      int
+	Body      string
+	URL       string
 }
 
 // unresolvedThreads returns the PR's unresolved review threads (on App creds),
@@ -284,7 +285,7 @@ type unresolvedThread struct {
 func (c *restClient) unresolvedThreads(ctx context.Context, instID int64, owner, name string, number int) ([]unresolvedThread, error) {
 	const q = `query($o:String!,$n:String!,$num:Int!){
 	  repository(owner:$o,name:$n){ pullRequest(number:$num){
-	    reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{author{login __typename} path line originalLine body url}}}}
+	    reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{databaseId author{login __typename} path line originalLine body url}}}}
 	    latestOpinionatedReviews(first:50){nodes{state author{login}}}
 	  }}}`
 	var data struct {
@@ -308,6 +309,7 @@ func (c *restClient) unresolvedThreads(ctx context.Context, instID int64, owner,
 									Login    string `json:"login"`
 									Typename string `json:"__typename"`
 								} `json:"author"`
+								DatabaseID   int64  `json:"databaseId"`
 								Path         string `json:"path"`
 								Line         *int   `json:"line"`
 								OriginalLine *int   `json:"originalLine"`
@@ -336,13 +338,8 @@ func (c *restClient) unresolvedThreads(ctx context.Context, instID int64, owner,
 		}
 		ut := unresolvedThread{ID: t.ID}
 		if cs := t.Comments.Nodes; len(cs) > 0 {
-			ut.Path, ut.Body, ut.URL = cs[0].Path, cs[0].Body, cs[0].URL
-			switch {
-			case cs[0].Line != nil:
-				ut.Line = *cs[0].Line
-			case cs[0].OriginalLine != nil:
-				ut.Line = *cs[0].OriginalLine
-			}
+			ut.CommentID, ut.Path, ut.Body, ut.URL = cs[0].DatabaseID, cs[0].Path, cs[0].Body, cs[0].URL
+			ut.Line = lineOf(cs[0].Line, cs[0].OriginalLine)
 		}
 		if cs := t.Comments.Nodes; len(cs) > 0 && cs[0].Author != nil {
 			ut.Author = cs[0].Author.Login

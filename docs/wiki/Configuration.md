@@ -240,12 +240,19 @@ Full semantics (chains, cycles, the merge rules, and layered guidance) are in [[
 **One review submission is one event; a standalone comment is its own event.**
 A submitted review reaches conductor as a review webhook plus one webhook per
 inline comment, in no fixed order. However they arrive, the review becomes
-exactly ONE trigger:
+exactly ONE trigger. Which trigger depends on the review and on which triggers
+take it, never on its state alone:
 
 | the review | its one event |
 |---|---|
-| requested changes, and a `changes_requested` trigger takes it | `changes_requested` |
-| anything else with inline comments — commented, approved with comments, or a changes-request no `changes_requested` trigger takes | `new_comment` |
+| requested changes, **or** left inline comments without approving (how a review bot like Cursor Bugbot reviews: COMMENTED with inline findings), **and** a `changes_requested` trigger takes it (its `filter:` / repo scope) | `changes_requested` |
+| an approval with inline comments ("optional suggestions; nothing blocks"), or any review no `changes_requested` trigger takes | `new_comment` |
+
+An approval is never a `changes_requested`, so an approver is never
+re-requested; the re-request step's `only_outstanding` guard also skips
+anyone whose latest review isn't an outstanding changes-request. To keep, for
+example, bot reviews out of `changes_requested`, filter its trigger:
+`filter: "!author_is_bot"` sends them to `new_comment` instead.
 
 None of a review's inline comments fires a `new_comment` of its own. A
 conversation comment, or a review comment that names no review, is one
@@ -254,27 +261,36 @@ conversation comment, or a review comment that names no review, is one
 nothing is lost. A review with no inline comments fires `changes_requested`
 when it requests changes, and otherwise nothing, as before.
 
-The first delivery handled for a review emits its event, and the review id is
-claimed, so later deliveries emit nothing. The sweep's missed-comment
-recovery follows the same rule and skips a review already emitted (past a
-restart, the engine's comment high-water mark drops it). A changes-requested
-review is recovered through the unresolved-threads `changes_requested`.
+**A review is dispatched once, on submission.**
+- The first delivery handled for a review emits its event and claims the
+  review id, so later deliveries emit nothing.
+- An `edited` review or comment is not an event. That includes a review bot
+  rewriting an old review as stale ("Stale Bugbot comment from a previous
+  run.").
+- Both events carry `comment_id`: the review's highest inline comment id. The
+  engine's comment high-water mark (kept separately for `changes_requested`
+  and `new_comment`) drops any later re-derivation of the same review. That
+  covers a webhook redelivery, the sweep finding the review's threads still
+  unresolved after a push, or the sweep's missed-comment recovery, and it
+  holds across restarts.
+- A new review's comments have higher ids, so it dispatches.
+- Consequence: a run that fails after it was accepted isn't retried by the
+  sweep for the same review. The failure escalates, and a new review or
+  thread re-engages.
 
 Both events carry the review:
 
 | field | value |
 |---|---|
-| `review_id`, `review_body` | the submitted review and its summary comment |
-| `review_comments` | each inline comment as `{author, path, line, body, url}` — the review's own comments, or (a sweep-recovered `changes_requested`) each unresolved thread's opening comment; bodies capped at 2000 bytes, the list at 100 comments / 48KB |
+| `review_id`, `review_body`, `review_state` | the submitted review, its summary comment, and its state |
+| `review_comments` | each inline comment as `{author, path, line, body, url}` — the review's own comments, or (a sweep-recovered `changes_requested`) each unresolved thread's opening comment, approvers' threads excluded; bodies capped at 2000 bytes, the list at 100 comments / 48KB |
 | `review_comments_omitted` | how many the cap left out (absent when none) — the agent reads those on the PR |
-| `review_state` | (`new_comment`) `commented`, `approved`, or `changes_requested` |
+| `comment_id`, `comment_kind` | the highest inline comment id covered, and `review` |
 
 A review's `new_comment` keeps the single-comment fields, so existing triggers
 read it sensibly. `author` and `comment_author` are the reviewer, so
 `not_comment_author` still filters bots. `comment_body` is the review body
 followed by each inline comment as `path:line: body`, capped at 8KB.
-`comment_id` is the review's highest inline comment id, and `comment_kind` is
-`review`.
 
 ## Bot-authored comments (github)
 

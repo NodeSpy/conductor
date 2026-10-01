@@ -95,7 +95,7 @@ var githubDecl = &TypeDecl{
 			Schema{
 				"reviewer": {Type: TMap, Desc: "whose requested review triggers: { logins: [...], teams: [...] } (default: the connector's me:) — an identity gate, not a fact predicate"},
 			}),
-		githubEvent("changes_requested", "a review requested changes on your PR (or threads went unresolved)",
+		githubEvent("changes_requested", "a review requested changes, or left inline comments without approving, on your PR (or threads went unresolved) — one event per review",
 			Schema{
 				"head_ref": {Type: TString},
 				"author":   {Type: TString}, "author_is_bot": {Type: TBool, Desc: "the reviewer is an automated bot (account type Bot, or a [bot] login)"},
@@ -103,8 +103,11 @@ var githubDecl = &TypeDecl{
 				"review_body":             {Type: TString, Desc: "the review's summary comment"},
 				"review_comments":         {Type: TList, Desc: "the feedback to address: the review's inline comments (or, sweep-recovered, each unresolved thread's opening comment) as {author, path, line, body, url}. A review is ONE event — its inline comments never also fire new_comment"},
 				"review_comments_omitted": {Type: TInt, Desc: "how many comments the size cap left out of review_comments (absent when none) — read them on the PR"},
+				"review_state":            {Type: TString, Desc: "the review's state: changes_requested or commented (absent for a sweep-recovered run)"},
+				"comment_id":              {Type: TInt, Desc: "the highest inline comment id the run covers; the engine dispatches a review once on it"},
+				"comment_kind":            {Type: TString},
 			}, nil),
-		githubEvent("new_comment", "a new comment on your PR — a standalone comment, or ONE submitted review (other than a changes-request a changes_requested trigger takes) with all its inline comments",
+		githubEvent("new_comment", "a new comment on your PR — a standalone comment, or ONE submitted review no changes_requested trigger takes (always so for an approval) with all its inline comments",
 			Schema{
 				"author": {Type: TString}, "author_is_bot": {Type: TBool, Desc: "the commenter (or reviewer) is an automated bot (account type Bot, or a [bot] login)"},
 				"comment_body": {Type: TString, Desc: "the comment; for a review, its body then each inline comment as \"path:line: body\""},

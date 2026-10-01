@@ -20,19 +20,26 @@ import (
 // pull_request_review_comment event per inline comment it carries, delivered
 // together and in no fixed order (and the sweep may later find the same
 // comments again). Every one of those deliveries resolves to the same review
-// id, and the review becomes exactly one trigger:
+// id, and the review becomes exactly one trigger. Which one is decided by the
+// review and the triggers that would take it, never by its state alone:
 //
-//   - a CHANGES_REQUESTED review a changes_requested trigger takes is ONE
-//     changes_requested run; its inline comments ride in its context
-//     (review_comments).
-//   - any other review with inline comments (COMMENTED, APPROVED with
-//     comments, or a changes-request no changes_requested trigger takes) is
-//     ONE new_comment carrying the review body and all its inline comments.
+//   - changes_requested, when a changes_requested trigger takes the review
+//     (its filter/repo gate) and the review is a changes-request or leaves
+//     inline comments without approving. That is how a review bot (Cursor
+//     Bugbot) reviews: COMMENTED, with inline findings — exactly the
+//     unresolved threads the sweep's changes_requested has always covered.
+//   - otherwise ONE new_comment — an approval with inline suggestions (an
+//     approver has signed off: never a changes-request, never re-requested),
+//     or a review no changes_requested trigger takes.
 //
-// Whichever delivery for the review is handled first emits that trigger and
-// claims the review id; every later delivery for it emits nothing. So the
-// order the events land in doesn't matter, and neither does losing the review
-// event itself.
+// Either way the event carries the review body and every inline comment.
+// Whichever delivery is handled first emits it and claims the review id; every
+// later delivery emits nothing. It carries comment_id = the review's highest
+// inline comment id, so the engine's comment high-water mark dispatches it
+// once durably: a webhook redelivery, a later sweep still seeing its threads
+// unresolved, or the reviewer editing the review (Bugbot rewrites old reviews
+// as "stale") all re-derive comments at or below the mark. Only a submission
+// is an event — an "edited" review or comment is not.
 //
 // A comment with no review (a conversation comment, or a review comment that
 // carries no review id) is its own new_comment, as it always was. So is a
@@ -194,42 +201,52 @@ func (g *Integration) changesRequestedKeep(repo string, pr *prPayload, reviewer 
 	}
 }
 
-// takenAsChangesRequested reports whether the review is a changes-request a
-// changes_requested trigger takes — its run, not a new_comment, is the event.
-func (g *Integration) takenAsChangesRequested(repo string, pr *prPayload, ri reviewInfo) bool {
-	return ri.State == "changes_requested" &&
-		g.wouldEmit(repo, "changes_requested", g.changesRequestedKeep(repo, pr, ri.Author, ri.AuthorIsBot))
+// takenAsChangesRequested reports whether a review is a changes_requested
+// event: a changes_requested trigger takes it, and it either requested changes
+// or left inline comments without approving (see the package note).
+func (g *Integration) takenAsChangesRequested(repo string, pr *prPayload, ri reviewInfo, hasComments bool) bool {
+	switch {
+	case ri.State == "changes_requested":
+	case hasComments && ri.State != "approved":
+	default:
+		return false
+	}
+	return g.wouldEmit(repo, "changes_requested", g.changesRequestedKeep(repo, pr, ri.Author, ri.AuthorIsBot))
 }
 
 // reviewEvent turns a submitted review into its ONE trigger (see the package
-// note), unless a delivery for it already did. handled=false means its inline
-// comments can't be read (or it has none): the caller decides what that means
-// — a comment then stands alone, a review event emits nothing.
+// note), unless a delivery for it already did. handled=false means it is not
+// an event on its own — no inline comments (or they can't be read) and no
+// changes-request taken: a comment delivery then stands alone, a review
+// delivery emits nothing.
 func (g *Integration) reviewEvent(ctx context.Context, repo string, instID int64, pr *prPayload, reviewID int64, ri reviewInfo) (trs []core.Trigger, handled bool) {
 	if g.reviews.claimed(reviewID, time.Now()) {
 		return nil, true
 	}
+	cs, err := g.listReviewComments(ctx, instID, repo, pr.Number, reviewID)
+	if err != nil {
+		log.Printf("github[%s]: %s#%d review %d comments: %v", g.name, repo, pr.Number, reviewID, err)
+	}
 	t := g.prTarget(repo, pr)
-	if g.takenAsChangesRequested(repo, pr, ri) {
+	if g.takenAsChangesRequested(repo, pr, ri, len(cs) > 0) {
 		if !g.reviews.claim(reviewID, time.Now()) {
 			return nil, true
 		}
-		cr := g.emit(repo, "changes_requested", t,
-			fmt.Sprintf("changes requested on %s#%d", repo, pr.Number),
-			fmt.Sprintf("review:%d@%s", reviewID, pr.Head.SHA),
-			map[string]any{"head_ref": pr.Head.Ref,
-				"author": ri.Author, "author_is_bot": ri.AuthorIsBot,
-				"review_id": reviewID, "review_body": ri.Body},
-			g.changesRequestedKeep(repo, pr, ri.Author, ri.AuthorIsBot))
-		// The review's inline comments ride this run, so it must carry them.
-		g.attachReviewComments(ctx, cr, repo, instID, pr.Number, reviewID)
-		return cr, true
-	}
-	cs, err := g.listReviewComments(ctx, instID, repo, pr.Number, reviewID)
-	if err != nil || len(cs) == 0 {
-		if err != nil {
-			log.Printf("github[%s]: %s#%d review %d comments: %v", g.name, repo, pr.Number, reviewID, err)
+		extra := map[string]any{"head_ref": pr.Head.Ref,
+			"author": ri.Author, "author_is_bot": ri.AuthorIsBot,
+			"review_id": reviewID, "review_body": ri.Body, "review_state": ri.State}
+		if len(cs) > 0 {
+			// The review's inline comments ride this run; its highest id
+			// dispatches it once (the engine's comment high-water mark).
+			addReviewComments(extra, cs)
+			extra["comment_id"], extra["comment_kind"] = maxCommentID(cs), store.CommentKindReview
 		}
+		return g.emit(repo, "changes_requested", t,
+			fmt.Sprintf("changes requested on %s#%d", repo, pr.Number),
+			fmt.Sprintf("review:%d@%s", reviewID, pr.Head.SHA), extra,
+			g.changesRequestedKeep(repo, pr, ri.Author, ri.AuthorIsBot)), true
+	}
+	if len(cs) == 0 {
 		return nil, false
 	}
 	return g.reviewNewComment(repo, t, pr.Head.Ref, reviewID, ri, cs), true
@@ -268,12 +285,7 @@ func (g *Integration) reviewNewComment(repo string, t core.Target, headRef strin
 	if !g.reviews.claim(reviewID, time.Now()) {
 		return nil
 	}
-	var maxID int64
-	for _, c := range cs {
-		if c.ID > maxID {
-			maxID = c.ID
-		}
-	}
+	maxID := maxCommentID(cs)
 	body := reviewSummary(ri.Body, cs)
 	extra := map[string]any{"author": ri.Author, "author_is_bot": ri.AuthorIsBot,
 		"comment_body": body, "head_ref": headRef,
@@ -309,26 +321,15 @@ func reviewSummary(body string, cs []reviewComment) string {
 	return clip(b.String(), maxReviewSummaryBytes)
 }
 
-// attachReviewComments stamps a changes_requested run with the review's inline
-// comments (review_comments), one REST read per review. A failed read leaves
-// the run without them — it still names the review (review_id) and the agent
-// can read the PR itself — rather than dropping the run.
-func (g *Integration) attachReviewComments(ctx context.Context, trs []core.Trigger, repo string, instID int64, pr int, reviewID int64) {
-	if len(trs) == 0 {
-		return
+// maxCommentID is the highest id among a review's comments.
+func maxCommentID(cs []reviewComment) int64 {
+	var m int64
+	for _, c := range cs {
+		if c.ID > m {
+			m = c.ID
+		}
 	}
-	cs, err := g.listReviewComments(ctx, instID, repo, pr, reviewID)
-	if err != nil {
-		log.Printf("github[%s]: %s#%d review %d comments: %v — dispatching without them",
-			g.name, repo, pr, reviewID, err)
-		return
-	}
-	if len(cs) == 0 {
-		return
-	}
-	for i := range trs {
-		addReviewComments(trs[i].Context, cs)
-	}
+	return m
 }
 
 // addReviewComments stamps review_comments — one {author, path, line, body,

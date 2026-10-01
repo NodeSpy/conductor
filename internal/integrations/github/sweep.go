@@ -506,9 +506,17 @@ func (g *Integration) sweepUnresolvedComments(ctx context.Context, instID int64,
 	// the same review_comments the webhook path carries for a review.
 	cs := make([]reviewComment, 0, len(threads))
 	for _, th := range threads {
-		cs = append(cs, reviewComment{Author: th.Author, Path: th.Path, Line: th.Line, Body: th.Body, URL: th.URL})
+		cs = append(cs, reviewComment{ID: th.CommentID, Author: th.Author, Path: th.Path, Line: th.Line, Body: th.Body, URL: th.URL})
 	}
 	addReviewComments(extra, cs)
+	// The threads' highest comment id gates this on the engine's comment
+	// high-water mark, the same mark the webhook's changes_requested for a
+	// review advances: a review already dispatched is not re-dispatched by a
+	// sweep still finding its threads unresolved (nor after the reviewer
+	// edits it), while a new review's threads are above the mark.
+	if id := maxCommentID(cs); id > 0 {
+		extra["comment_id"], extra["comment_kind"] = id, store.CommentKindReview
+	}
 	return g.single(repo, "changes_requested", t,
 		fmt.Sprintf("sweep: %d unresolved comment thread(s) on %s#%d", len(ids), repo, t.Number), sig,
 		extra)
@@ -600,9 +608,10 @@ func (g *Integration) sweepMissedComments(ctx context.Context, instID int64, own
 // as the review's one event — the same one the webhook path emits, and
 // deduped against it: a review already emitted (claimed) is skipped, and past
 // a restart the engine's comment high-water mark drops it (its comment_id is
-// the review's highest). A CHANGES_REQUESTED review is skipped when a
-// changes_requested trigger is configured — sweepUnresolvedComments carries
-// its threads. An unreadable review recovers its comments one by one.
+// the review's highest). A review that isn't an approval is skipped when a
+// changes_requested trigger is configured — it is a changes_requested event
+// (reviewfold.go), and sweepUnresolvedComments carries its threads. An
+// unreadable review recovers its comments one by one.
 func (g *Integration) sweepReview(ctx context.Context, instID int64, repo string, t core.Target, headRef string, reviewID int64, group []prComment) []core.Trigger {
 	if g.reviews.claimed(reviewID, time.Now()) {
 		return nil
@@ -615,7 +624,7 @@ func (g *Integration) sweepReview(ctx context.Context, instID int64, repo string
 		}
 		return out
 	}
-	if ri.State == "changes_requested" && g.wouldEmit(repo, "changes_requested", nil) {
+	if ri.State != "approved" && g.wouldEmit(repo, "changes_requested", nil) {
 		return nil
 	}
 	if ri.Author == "" {
