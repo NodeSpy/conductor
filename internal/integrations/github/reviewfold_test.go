@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -196,6 +197,10 @@ func TestReviewIsExactlyOneEvent(t *testing.T) {
 				}
 				if ev.Context["review_id"] != int64(99) || ev.Context["review_body"] != "see inline" || ev.Context["author"] != "reviewer" {
 					t.Fatalf("review identity not carried: %v", ev.Context)
+				}
+				// Run progress reacts on the review itself, not its comments.
+				if got, want := ev.Context["reaction_subjects"], reactionSubjects("review", 99); !reflect.DeepEqual(got, want) {
+					t.Fatalf("reaction_subjects = %v, want %v (the review)", got, want)
 				}
 				// The review's facts cost at most one REST read across all of
 				// its deliveries (none when the review event came first).

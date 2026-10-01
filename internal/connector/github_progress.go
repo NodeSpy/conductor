@@ -156,6 +156,8 @@ func (g *githubImpl) progressFlags(t core.Trigger, opts map[string]any) (reactio
 type ghProgress struct {
 	g          *githubImpl
 	t          core.Trigger
+	repo       string // the trusted repo (core.Trigger.OwnRepo)
+	number     int
 	key        string
 	subjects   []any
 	reactions  bool
@@ -169,14 +171,18 @@ type ghProgress struct {
 // StartProgress implements ProgressReporter.
 func (g *githubImpl) StartProgress(ctx context.Context, run ProgressRun) Progress {
 	t := run.Trigger
-	if t.Source != "github" || t.Target.Repo == "" || t.Target.Number == 0 {
+	// Only a target the source assigned itself: progress WRITES to the
+	// repo, so a target the event's sender chose gets none (see
+	// core.OwnRepo) — the rule every own-repo write follows.
+	repo, number := t.OwnRepo(), t.Target.Number
+	if t.Source != "github" || repo == "" || number == 0 {
 		return nil
 	}
 	reactions, status := g.progressFlags(t, run.Options)
 	if !reactions && !status {
 		return nil
 	}
-	p := &ghProgress{g: g, t: t, key: strings.ToLower(t.Target.Repo) + "#" + fmt.Sprint(t.Target.Number),
+	p := &ghProgress{g: g, t: t, repo: repo, number: number, key: strings.ToLower(t.Key()),
 		reactions: reactions, status: status}
 	if reactions {
 		p.subjects = progressSubjects(append([]core.Trigger{t}, run.Batch...))
@@ -186,7 +192,7 @@ func (g *githubImpl) StartProgress(ctx context.Context, run ProgressRun) Progres
 	// The head as it is now, not as the event saw it: a comment event carries
 	// no head, and a run that waited for a slot may be on a newer commit.
 	// It is also the baseline "did the run push?" compares against.
-	sha, state, err := g.kit.PRHead(ctx, "me", t.Target.Repo, t.Target.Number)
+	sha, state, err := g.kit.PRHead(ctx, "me", repo, number)
 	if err != nil {
 		g.progressFailed(t, "read_head", err)
 		sha = t.Target.HeadSHA
@@ -198,7 +204,7 @@ func (g *githubImpl) StartProgress(ctx context.Context, run ProgressRun) Progres
 		p.react(ctx, "eyes")
 	}
 	if status && sha != "" {
-		if c, err := g.statusContext(ctx, t.Target.Repo); err != nil {
+		if c, err := g.statusContext(ctx, repo); err != nil {
 			g.progressFailed(t, "status_context", err)
 		} else if p.setStatus(ctx, c, sha, "pending", progressWorking(t)) {
 			p.statusCtx = c
@@ -226,7 +232,7 @@ func (p *ghProgress) finish(ctx context.Context, o RunOutcome) {
 		return
 	}
 	head := ""
-	if h, _, err := p.g.kit.PRHead(ctx, "me", p.t.Target.Repo, p.t.Target.Number); err != nil {
+	if h, _, err := p.g.kit.PRHead(ctx, "me", p.repo, p.number); err != nil {
 		p.g.progressFailed(p.t, "read_head", err)
 	} else {
 		head = h
@@ -249,7 +255,7 @@ func (p *ghProgress) finish(ctx context.Context, o RunOutcome) {
 	if statusCtx == "" {
 		// The pending never went out (the head or the login couldn't be
 		// read then); the verdict still should.
-		c, err := p.g.statusContext(ctx, p.t.Target.Repo)
+		c, err := p.g.statusContext(ctx, p.repo)
 		if err != nil {
 			p.g.progressFailed(p.t, "status_context", err)
 			return
@@ -283,7 +289,7 @@ func (p *ghProgress) finish(ctx context.Context, o RunOutcome) {
 
 func (p *ghProgress) react(ctx context.Context, content string) {
 	_, err := p.g.kit.Invoke(ctx, "react", map[string]any{
-		"repo": p.t.Target.Repo, "pr": p.t.Target.Number, "subjects": p.subjects, "content": content,
+		"repo": p.repo, "pr": p.number, "subjects": p.subjects, "content": content,
 	})
 	if err != nil {
 		p.g.progressFailed(p.t, "react:"+content, err)
@@ -292,7 +298,7 @@ func (p *ghProgress) react(ctx context.Context, content string) {
 
 func (p *ghProgress) setStatus(ctx context.Context, statusCtx, sha, state, desc string) bool {
 	_, err := p.g.kit.Invoke(ctx, "set_status", map[string]any{
-		"repo": p.t.Target.Repo, "sha": sha, "state": state, "description": desc, "context": statusCtx,
+		"repo": p.repo, "sha": sha, "state": state, "description": desc, "context": statusCtx,
 	})
 	if err != nil {
 		p.g.progressFailed(p.t, "status:"+state, err)

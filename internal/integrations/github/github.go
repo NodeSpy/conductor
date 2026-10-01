@@ -234,6 +234,10 @@ func (g *Integration) NoteOwnStatusContext(c string) {
 	g.ownStatus[strings.ToLower(c)] = true
 }
 
+// OwnStatus reports whether a commit-status context is one conductor posts
+// (see isOwnStatus).
+func (g *Integration) OwnStatus(c string) bool { return g.isOwnStatus(c) }
+
 // isOwnStatus reports whether a commit status's context is one conductor
 // posts: a configured/noted progress context, or one of your logins — the
 // default progress context. A status conductor wrote must never come back as
