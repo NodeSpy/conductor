@@ -181,6 +181,24 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 	}()
 }
 
+// reportParked shows a parked (PR, kind, head) on its event's subject — the
+// same failed outcome a run that gave up shows, so a review conductor will
+// not retry until new commits arrive doesn't look like one still being
+// worked. Off the engine loop: it makes API calls.
+func (e *Engine) reportParked(ctx context.Context, t core.Trigger, act config.Action) {
+	if act.FlowRef == "" || e.flow == nil {
+		return
+	}
+	spec, _, ok := e.flow.SpecFor(act.FlowRef)
+	if !ok {
+		return
+	}
+	pol := e.policyFor(spec)
+	shadow := e.cfg.Control.Shadow || (pol.Shadow != nil && *pol.Shadow) || (act.Shadow != nil && *act.Shadow)
+	go e.flow.ReportOutcome(context.WithoutCancel(ctx), t, act.FlowRef, shadow,
+		connector.RunOutcome{Result: connector.OutcomeFailed, Reason: "parked after repeated tries — needs a human or new commits"})
+}
+
 // closedRetention bounds how long a PR's close is remembered for closedSince —
 // far longer than any wait for an agent slot.
 const closedRetention = 24 * time.Hour

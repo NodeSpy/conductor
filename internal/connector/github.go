@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -41,6 +42,7 @@ func githubEvent(name, desc string, contextExtra, options Schema) EventDecl {
 	}
 	o := Schema{
 		"max_attempts_per_head": {Type: TInt, Desc: "soft attempt threshold before backoff"},
+		"progress":              {Type: TMap, Desc: progressOptionDesc},
 	}
 	for k, v := range options {
 		o[k] = v
@@ -88,6 +90,7 @@ var githubDecl = &TypeDecl{
 		"retry":           {Type: TMap, Desc: "transient dispatch retry: max, backoff"},
 		"project_map":     {Type: TMap, Desc: "repo -> paseo project checkout remap"},
 		"project_rewrite": {Type: TMap, Desc: "blanket owner/org rewrite for checkouts"},
+		"progress":        {Type: TMap, Desc: "run progress on the PR, connector-wide: { reactions: bool, status: bool, status_context: string } — see the trigger option of the same name"},
 	},
 	Events: []EventDecl{
 		githubEvent("review_requested", "your review was requested on a PR",
@@ -106,6 +109,7 @@ var githubDecl = &TypeDecl{
 				"review_state":            {Type: TString, Desc: "the review's state: changes_requested or commented (absent for a sweep-recovered run)"},
 				"comment_id":              {Type: TInt, Desc: "the highest inline comment id the run covers; the engine dispatches a review once on it"},
 				"comment_kind":            {Type: TString},
+				"reaction_subjects":       {Type: TList, Desc: reactionSubjectsDesc},
 			}, nil),
 		githubEvent("new_comment", "a new comment on your PR — a standalone comment, or ONE submitted review no changes_requested trigger takes (always so for an approval) with all its inline comments",
 			Schema{
@@ -118,6 +122,7 @@ var githubDecl = &TypeDecl{
 				"review_state":            {Type: TString, Desc: "the review's state: commented, approved, changes_requested (review events)"},
 				"review_comments":         {Type: TList, Desc: "the review's inline comments as {author, path, line, body, url} (review events)"},
 				"review_comments_omitted": {Type: TInt, Desc: "how many comments the size cap left out of review_comments (absent when none)"},
+				"reaction_subjects":       {Type: TList, Desc: reactionSubjectsDesc},
 			}, nil),
 		githubEvent("merge_conflict", "your PR became unmergeable", nil, nil),
 		githubEvent("pr_behind", "your PR fell behind its base", nil, nil),
@@ -589,6 +594,32 @@ var githubDecl = &TypeDecl{
 			Outputs: Schema{"ok": {Type: TBool}},
 		},
 		{
+			Name: "react", Desc: "add a reaction to comments/reviews (idempotent: an existing reaction is kept, not duplicated)",
+			Options: Schema{
+				"repo":     {Type: TString, Required: true, Scope: "repo"},
+				"pr":       {Type: TInt, Desc: "the PR (required for a review subject)"},
+				"subjects": {Type: TList, Desc: "[{kind, id}] — kind is issue_comment | review_comment | review; an event's reaction_subjects is this shape"},
+				"kind":     {Type: TString, Enum: []string{githubkit.SubjectIssueComment, githubkit.SubjectReviewComment, githubkit.SubjectReview}, Desc: "single-subject shorthand (with id)"},
+				"id":       {Type: TInt, Desc: "single-subject shorthand (with kind)"},
+				"content":  {Type: TString, Required: true, Enum: githubkit.ReactionContents()},
+				"as":       {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"ok": {Type: TBool}, "reacted": {Type: TInt, Desc: "subjects reacted to"}},
+		},
+		{
+			Name: "set_status", Desc: "post a commit status on a sha (shown on any PR whose head it is)",
+			Options: Schema{
+				"repo":        {Type: TString, Required: true, Scope: "repo"},
+				"sha":         {Type: TString, Required: true},
+				"state":       {Type: TString, Required: true, Enum: githubkit.StatusStates()},
+				"description": {Type: TString, Desc: "clipped to GitHub's 140 characters"},
+				"context":     {Type: TString, Desc: "the status's name on the PR (default: the login the call acts as)"},
+				"target_url":  {Type: TString},
+				"as":          {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"ok": {Type: TBool}, "context": {Type: TString}},
+		},
+		{
 			Name: "sweep", Desc: "run the catch-up sweep now (daemon-global; same as `conductor sweep --now`)",
 			Options: Schema{},
 			Outputs: Schema{"nudged": {Type: TInt, Desc: "integrations whose sweep was nudged"}},
@@ -611,6 +642,7 @@ type githubConn struct {
 	Retry          config.Retry      `yaml:"retry"`
 	ProjectMap     map[string]string `yaml:"project_map"`
 	ProjectRewrite gh.ProjectRewrite `yaml:"project_rewrite"`
+	Progress       progressConf      `yaml:"progress"`
 }
 
 // githubWebhook mirrors gh.WebhookConfig: transport (smee_url/listen/path) and
@@ -634,6 +666,13 @@ type githubImpl struct {
 	// call delegates to — credentials, HTTP mechanics, caching, rate-limit
 	// handling, and the verb switch all live there now.
 	kit *githubkit.Client
+
+	// progress tracks which run owns each PR's status row (github_progress.go).
+	progress progressTracker
+	// src is the event source Source built, so the status context progress
+	// resolves joins its own-status guard. Set once at build; read under srcMu.
+	srcMu sync.Mutex
+	src   *gh.Integration
 }
 
 func newGithubImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
@@ -646,6 +685,16 @@ func newGithubImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error
 	// in silence — taking the operator's secret with them. Name the new home.
 	if conn.App.LegacyWebhookKeys() {
 		return nil, ConfigErr(fmt.Errorf("connector %q: %w", name, gh.ErrAppWebhookMoved))
+	}
+	// The connection decodes non-strictly, so a misspelled progress key would
+	// otherwise vanish — and with it the off switch someone thought they set.
+	var raw struct {
+		Progress map[string]any `yaml:"progress"`
+	}
+	if err := ref.Decode(&raw); err == nil && raw.Progress != nil {
+		if err := checkProgressKeys(raw.Progress, true); err != nil {
+			return nil, ConfigErr(fmt.Errorf("connector %q: progress: %w", name, err))
+		}
 	}
 	// Resolve secret references in credential fields. An unresolvable secret
 	// disables the connector (the registry handles that) rather than failing
@@ -728,7 +777,16 @@ func (g *githubImpl) Source(triggers []CompiledTrigger) (core.Integration, error
 			Actions: actions,
 		}},
 	}
-	return buildIntegration("github", g.name, cfg)
+	if c := g.conn.Progress.StatusContext; c != "" {
+		cfg.OwnStatusContexts = []string{c}
+	}
+	src, err := buildIntegration("github", g.name, cfg)
+	if gi, ok := src.(*gh.Integration); ok {
+		g.srcMu.Lock()
+		g.src = gi
+		g.srcMu.Unlock()
+	}
+	return src, err
 }
 
 // lowerTrigger maps one trigger spec's filter/options onto the Action fields
@@ -775,6 +833,11 @@ func (g *githubImpl) lowerTrigger(t CompiledTrigger) (config.Action, error) {
 	act.IncludePrereleases, _ = o["include_prereleases"].(bool)
 	if n := toInt(o["max_attempts_per_head"]); n > 0 {
 		act.MaxAttemptsPerHead = n
+	}
+	if p, ok := o["progress"].(map[string]any); ok {
+		if err := checkProgressKeys(p, false); err != nil {
+			return act, fmt.Errorf("trigger on %s: options.progress: %w", t.Spec.On, err)
+		}
 	}
 	if m, ok := o["flaky_rerun"].(map[string]any); ok {
 		act.FlakyRerun = config.FlakyRerun{Enabled: truthy(m["enabled"]), Max: toInt(m["max"])}

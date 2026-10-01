@@ -85,7 +85,8 @@ type Client struct {
 
 	mu          sync.Mutex
 	getCache    map[string]*cacheEntry
-	rlRemaining int // X-RateLimit-Remaining from the last response (-1 = unknown)
+	logins      map[string]string // token key -> GET /user login (see Login)
+	rlRemaining int               // X-RateLimit-Remaining from the last response (-1 = unknown)
 	rlReset     time.Time
 }
 
@@ -114,7 +115,7 @@ func NewClient(cfg Config) (*Client, error) {
 	c := &Client{
 		token: cfg.Token, writeToken: cfg.WriteToken, ghToken: ghToken,
 		httpc: httpc, CacheTTL: ttl, apiBase: cfg.APIBase,
-		getCache: map[string]*cacheEntry{}, rlRemaining: -1,
+		getCache: map[string]*cacheEntry{}, logins: map[string]string{}, rlRemaining: -1,
 	}
 	if cfg.App != nil && cfg.App.AppID > 0 {
 		app, err := NewAppAuth(cfg.App.AppID, cfg.App.PrivateKeyPath)

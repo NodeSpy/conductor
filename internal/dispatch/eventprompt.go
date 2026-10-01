@@ -16,8 +16,11 @@ var eventPromptExcludedContext = map[string]bool{
 	"app_token":       true,
 	"gh_token":        true,
 	"installation_id": true,
-	"secrets":         true,
-	"vaults":          true,
+	// reaction_subjects is the run-progress plumbing (which comment/review
+	// the run reacts on) — ids, not something for the agent to act on.
+	"reaction_subjects": true,
+	"secrets":           true,
+	"vaults":            true,
 }
 
 // EventPrompt is the task handed to a `type: agent` step that sets no prompt of

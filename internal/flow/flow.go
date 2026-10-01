@@ -416,6 +416,11 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	}
 
 	shadow = shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow)
+	// Progress first: before the start hooks and before any step provisions
+	// a worktree or launches an agent, so a run that dies there has still
+	// visibly been picked up. A panic below still records a failure.
+	prog := r.startProgress(ctx, t, spec, batch, shadow)
+	defer prog.finish(ctx, connector.RunOutcome{Result: connector.OutcomeFailed, Reason: "internal error"})
 	r.fireHooks(ctx, t, spec.Hooks, "start", "running", run.ID, "", data, nil, "workflow")
 
 	err := r.runSteps(ctx, &run, t, spec.Steps, data, shadow, true)
@@ -428,6 +433,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 			"number": t.Target.Number, "kind": t.Kind, "step": failedStepID(err), "reason": "target closed"})
 		r.auditRunCost(t, run.ID, runCost)
 		hist.finish("stopped", "target PR closed", failedStepID(err), runCost)
+		prog.finish(ctx, connector.RunOutcome{Result: connector.OutcomeStopped})
 		r.finishRun(ctx, run)
 		return
 	}
@@ -461,6 +467,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 		}
 		r.auditRunCost(t, run.ID, runCost)
 		hist.finish("failed", r.redactErr(err), failedStepID(err), runCost)
+		prog.finish(ctx, failedOutcome(err))
 		r.finishRun(ctx, run)
 		return
 	}
@@ -470,6 +477,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	}
 	r.auditRunCost(t, run.ID, runCost)
 	hist.finish("ok", "", "", runCost)
+	prog.finish(ctx, connector.RunOutcome{Result: connector.OutcomeOK})
 	r.finishRun(ctx, run)
 }
 

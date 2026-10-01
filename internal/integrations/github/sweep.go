@@ -12,6 +12,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/store"
+	"github.com/NodeSpy/conductor/pkg/githubkit"
 )
 
 // sweepLoop runs the optional catch-up sweep on an ADAPTIVE cadence. It's off
@@ -509,6 +510,16 @@ func (g *Integration) sweepUnresolvedComments(ctx context.Context, instID int64,
 		cs = append(cs, reviewComment{ID: th.CommentID, Author: th.Author, Path: th.Path, Line: th.Line, Body: th.Body, URL: th.URL})
 	}
 	addReviewComments(extra, cs)
+	// What the run reacts on: each thread's opening comment, capped — a PR
+	// with dozens of open threads shouldn't fan out dozens of reactions twice.
+	openers := make([]int64, 0, len(cs))
+	for _, c := range cs {
+		if len(openers) == maxThreadReactions {
+			break
+		}
+		openers = append(openers, c.ID)
+	}
+	extra["reaction_subjects"] = reactionSubjects(githubkit.SubjectReviewComment, openers...)
 	// The threads' highest comment id gates this on the engine's comment
 	// high-water mark, the same mark the webhook's changes_requested for a
 	// review advances: a review already dispatched is not re-dispatched by a
@@ -521,6 +532,9 @@ func (g *Integration) sweepUnresolvedComments(ctx context.Context, instID int64,
 		fmt.Sprintf("sweep: %d unresolved comment thread(s) on %s#%d", len(ids), repo, t.Number), sig,
 		extra)
 }
+
+// maxThreadReactions caps the thread openers a sweep-recovered run reacts on.
+const maxThreadReactions = 10
 
 // threadReviewerFacts names the reviewer behind a sweep-recovered
 // changes_requested — the opener of the first unresolved thread that isn't
@@ -649,7 +663,8 @@ func (g *Integration) sweepReview(ctx context.Context, instID int64, repo string
 // sweepComment recovers one standalone comment as its own new_comment.
 func (g *Integration) sweepComment(repo string, t core.Target, headRef string, c prComment) []core.Trigger {
 	extra := map[string]any{"author": c.User.Login, "comment_body": c.Body, "head_ref": headRef,
-		"comment_id": c.ID, "comment_kind": c.Kind}
+		"comment_id": c.ID, "comment_kind": c.Kind,
+		"reaction_subjects": reactionSubjects(commentSubjectKind(c.Kind), c.ID)}
 	return g.emit(repo, "new_comment", t,
 		fmt.Sprintf("sweep: comment by %s on %s#%d", c.User.Login, repo, t.Number),
 		fmt.Sprintf("comment:%d", c.ID), extra, func(act config.Action) bool {
