@@ -485,6 +485,44 @@ group_H_webhook() {
   post_webhook issue_comment new_comment.json >/dev/null
   after_wait_dispatch conductor '"repo":"acme/svc"' '"kind":"new_comment"' "$before" \
     H H3 "H3 new_comment dispatched from the webhook path"
+
+  # H4: run progress on the H3 comment, as the user. 👀 on the comment and a
+  # pending commit status (context = the user's login) at dispatch; then an
+  # outcome reaction beside the 👀 and a final status on the PR's head. One
+  # captured write per line, so each pattern matches within a single write.
+  local caps i
+  local react='"path":"/repos/acme/svc/issues/comments/9001/reactions"'
+  local status='"path":"/repos/acme/svc/statuses/canned-head-svc1"'
+  for i in $(seq 1 60); do
+    caps="$(netcurl http://mock-github:8080/_captured | sed 's/},{"method"/}\n{"method"/g')"
+    if printf '%s\n' "$caps" | grep "$react" | grep -Eq 'content\\":\\"(\+1|rocket|confused)' \
+       && printf '%s\n' "$caps" | grep "$status" | grep -Eq 'state\\":\\"(success|failure)'; then
+      break
+    fi
+    sleep 1
+  done
+  if printf '%s\n' "$caps" | grep "$react" | grep -q 'content\\":\\"eyes'; then
+    ok "H4 👀 on the handled comment" H H4-eyes
+  else
+    bad "H4 👀 on the handled comment" H H4-eyes "no eyes reaction captured on comment 9001"
+  fi
+  if printf '%s\n' "$caps" | grep "$status" | grep 'context\\":\\"conductor-user\\"' | grep -q 'state\\":\\"pending'; then
+    ok "H4 pending status on the PR head, under the user's login" H H4-pending
+  else
+    bad "H4 pending status under the user's login" H H4-pending "no pending status by conductor-user on canned-head-svc1"
+  fi
+  if printf '%s\n' "$caps" | grep "$react" | grep -Eq 'content\\":\\"(\+1|rocket|confused)' \
+     && printf '%s\n' "$caps" | grep "$status" | grep -Eq 'state\\":\\"(success|failure)'; then
+    ok "H4 outcome reaction + final status when the run ends" H H4-outcome
+  else
+    bad "H4 outcome reaction + final status" H H4-outcome "no outcome reaction / final status within 60s"
+  fi
+  if printf '%s\n' "$caps" | grep -E "$react|$status" | grep -q 'e2e-user-write-token' \
+     && ! printf '%s\n' "$caps" | grep -E "$react|$status" | grep -q 'fake-installation-token'; then
+    ok "H4 progress writes go out as the user, not the App" H H4-identity
+  else
+    bad "H4 progress writes as the user" H H4-identity "a progress write lacked the user token or used the App's"
+  fi
 }
 
 # nonfailed_dispatch <container> <pat> <pat> — count of successful (non-failed)
