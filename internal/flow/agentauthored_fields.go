@@ -45,6 +45,12 @@ func forbiddenAgentAuthoredField(s *config.Step) (field, why string) {
 		// watch: drives a hand-off's reactive lifecycle (bail/refresh/done). An
 		// agent-authored watch could tear down or refresh its own review.
 		return "watch:", "a hand-off's reactive watch is the operator's to configure"
+	case s.Detach:
+		// detach: launches an UNOWNED, forgotten workspace with no hold, no
+		// guidance, and no creds — an agent that could set it for itself
+		// would be handing itself a workspace conductor can never reclaim or
+		// even see again.
+		return "detach:", "a detached, unowned workspace is the operator's to grant, never the agent's to take"
 	case s.Skill != nil:
 		// The one that motivated this file. `skill:` is a CAPABILITY GRANT:
 		// it mints a broker claim/session token naming the verbs the agent
@@ -92,4 +98,5 @@ func checkAgentAuthoredFields(where string, s *config.Step) error {
 func sanitizeAgentAuthoredStep(s *config.Step) {
 	s.Skill = nil
 	s.Isolation = nil
+	s.Detach = false
 }

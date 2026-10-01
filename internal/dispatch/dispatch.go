@@ -126,6 +126,16 @@ type RunRef struct {
 	// checkout-less runs, and queued/adopted dispatches.
 	Workdir string `json:"workdir,omitempty"`
 	Output  string `json:"-"`
+	// Detached marks a `detach: true` step's launch: a fresh workspace this
+	// dispatcher deliberately never recorded in the ownership ledger. See
+	// Step.Detach and Dispatcher.paseoDetached.
+	Detached bool `json:"detached,omitempty"`
+	// WorkspaceID is the new worktree workspace a detach launch created
+	// ("" for every other dispatch kind — their workspace id, when they have
+	// one, is tracked only in the ownership ledger).
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	// Branch is the branch a detach launch's worktree was created on.
+	Branch string `json:"branch,omitempty"`
 }
 
 // HandoffActions are the generalized "supersede this hand-off" operations a

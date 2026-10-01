@@ -1498,6 +1498,37 @@ func (r *Runner) runtimeOf(step config.Step) string {
 
 // execAgent dispatches a type: agent step through the engine-provided
 // services (runtime resolution, tokens, guidance, background hand-off).
+// execDetached dispatches a `detach: true` agent step: launch once, forget
+// it. It calls the SAME Agents.Dispatch seam every other agent step uses
+// (dispatch.Dispatcher routes it to paseoDetached because req.Step.Detach is
+// set), but skips every bit of bookkeeping that assumes conductor keeps a
+// relationship with the agent afterward: no budget reservation, no memory
+// harvest, no gate, no ArchiveWhenDone, no hand-off. act.Prompt here is
+// already the bare templated prompt — execAgent returns before the
+// guidance/memory/wrapper block for a detach step, so nothing is appended to
+// it.
+func (r *Runner) execDetached(ctx context.Context, t core.Trigger, step config.Step, act config.Action, id string, data map[string]any, shadow bool) (map[string]any, string, error) {
+	req := dispatch.Request{
+		Trigger: t, Action: act, Step: step, Shadow: shadow,
+		Wait: true, Data: data,
+	}
+	ref, err := r.Agents.Dispatch(ctx, req)
+	r.auditDispatch(t, id, ref, err)
+	if err != nil {
+		return nil, ref.Output, err
+	}
+	outputs := map[string]any{
+		"agent_id":     ref.AgentID,
+		"workspace_id": ref.WorkspaceID,
+		"branch":       ref.Branch,
+		"detached":     true,
+	}
+	if ref.Workdir != "" {
+		outputs["workdir"] = ref.Workdir
+	}
+	return outputs, ref.Output, nil
+}
+
 func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step, id, slot string, data map[string]any, shadow bool) (map[string]any, string, error) {
 	// `agent:` is retained as a free-form ATTRIBUTION label on the dispatch
 	// (it used to name a profile; profiles are gone — design §6). It may be
@@ -1541,12 +1572,28 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 			return outputs, "", nil
 		}
 	}
+	// A step's own `checkout:` always wins; absent one, fall back to the
+	// TRIGGER's action checkout. This is what makes a source's
+	// ForceNoCheckout (every synthetic-target integration forces its
+	// trigger-level action to Checkout: "none" — there is no real repo to
+	// clone for e.g. "slack:C123") actually reach dispatch: without this
+	// fallback, a trigger-level ForceNoCheckout had no effect on an agent
+	// step at all, because this Action is built fresh from the STEP, never
+	// reading t.Action.Checkout — so an agent step with no explicit
+	// `checkout:` under a Slack/RSS/webhook trigger silently defaulted to
+	// branch-off against the synthetic target instead of staying checkout-less.
+	checkout := step.Checkout
+	if checkout == "" {
+		if ta, ok := t.Action.(config.Action); ok {
+			checkout = ta.Checkout
+		}
+	}
 	act := config.Action{
 		// Agent is the human ATTRIBUTION LABEL the operator wrote (it selects
 		// nothing — design §6). The stable key everything else uses travels
 		// as Request.Identity.
 		Type: "agent", ID: id, Agent: step.Agent,
-		Prompt: step.Prompt, Checkout: step.Checkout, WorkDir: step.WorkDir,
+		Prompt: step.Prompt, Checkout: checkout, WorkDir: step.WorkDir,
 		Env: step.Env, OutputSchema: step.OutputSchema, Background: step.Background,
 		Backend: step.Backend,
 	}
@@ -1565,6 +1612,15 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		// yourself; it sits idle *because* it is waiting for you, so the
 		// reaper must never archive it — regardless of what the step says.
 		step.ArchiveWhenDone = false
+	}
+	// detach: true is a complete, self-contained launch (config.validateDetach
+	// already rejected it alongside background/handoff/output_schema/watch/
+	// idle_timeout/archive_when_done/session/skill/team/gate at config load,
+	// and agentauthored_fields.go refuses it on an agent-authored step) — it
+	// runs the prompt EXACTLY as templated, with none of the guidance/memory/
+	// budget/background machinery below, and returns before any of it runs.
+	if step.Detach {
+		return r.execDetached(ctx, t, step, act, id, data, shadow)
 	}
 	// A decide step's session is the adapter prompt and nothing else: no
 	// write-wrapper, guidance, memory, or done instructions (its reply is the
