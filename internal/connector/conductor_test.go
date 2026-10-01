@@ -152,6 +152,15 @@ func TestEmitLifecycleRoutesToTriggers(t *testing.T) {
 	if got[2].Target.Repo == "" {
 		t.Fatalf("synthetic target: %+v", got[2].Target)
 	}
+
+	// Checkout: an event about a real repo leaves checkout to normal
+	// derivation; only a synthetic target is forced to "none".
+	if a, _ := got[0].Action.(config.Action); a.Checkout != "" {
+		t.Fatalf("real-target lifecycle checkout = %q, want empty (derived)", a.Checkout)
+	}
+	if a, _ := got[2].Action.(config.Action); a.Checkout != "none" {
+		t.Fatalf("synthetic-target lifecycle checkout = %q, want none", a.Checkout)
+	}
 }
 
 // TestEmitLifecycleLoopGuard: events originating from a conductor.* run are
