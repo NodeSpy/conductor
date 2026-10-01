@@ -45,3 +45,37 @@ func TestLaunchFieldsNeedHonoringRunner(t *testing.T) {
 		}
 	}
 }
+
+// TestDetachBypassesSessionAffinity: a detach launch never joins a session
+// pool — not even one its step or runtime would otherwise bind — so two
+// launches are two fresh dispatches and neither id is held by affinity.
+func TestDetachBypassesSessionAffinity(t *testing.T) {
+	cfg := affinityCfg()
+	d := &sendingDispatcher{fakeDispatcher: fakeDispatcher{ref: dispatch.RunRef{AgentID: "agent-1"}}}
+	e := affinityEngine(t, cfg, d)
+	req := dispatch.Request{
+		Trigger: agentTrigger("new_comment", "a/w", 1, "h", "s", config.Action{}),
+		Action:  config.Action{Type: "agent", Prompt: "x"},
+		Step:    config.Step{Detach: true, Session: &config.SessionSpec{Key: "{{.repo}}"}},
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := e.dispatchAgent(context.Background(), d, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(d.reqs) != 2 || len(d.sends()) != 0 {
+		t.Fatalf("want two fresh dispatches and no follow-ups, got %d dispatches, %d sends", len(d.reqs), len(d.sends()))
+	}
+	if e.affinityOwns("agent-1") {
+		t.Fatal("a detached agent must not be bound to a session")
+	}
+	// Sanity: the same request without detach IS routed through affinity.
+	req.Step.Detach = false
+	d.reqs = nil
+	for i := 0; i < 2; i++ {
+		_, _ = e.dispatchAgent(context.Background(), d, req)
+	}
+	if len(d.reqs) != 1 {
+		t.Fatalf("control: a session step should spawn once, got %d", len(d.reqs))
+	}
+}
