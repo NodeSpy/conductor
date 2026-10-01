@@ -252,6 +252,12 @@ func TestStandaloneCommentsAreOneEventEach(t *testing.T) {
 // are: one conversation comment, three inline comments of changes-requested
 // review 41, and two of commented review 42.
 func sweepStubFor(t *testing.T, reviewGets *atomic.Int32) *appAuth {
+	return sweepStubCounting(t, reviewGets, new(atomic.Int32))
+}
+
+// sweepStubCounting is sweepStubFor that also counts reads of review 42's
+// inline comments.
+func sweepStubCounting(t *testing.T, reviewGets, listGets *atomic.Int32) *appAuth {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/app/installations/77/access_tokens", func(w http.ResponseWriter, _ *http.Request) {
@@ -287,6 +293,7 @@ func sweepStubFor(t *testing.T, reviewGets *atomic.Int32) *appAuth {
 		fmt.Fprint(w, `{"id":42,"state":"COMMENTED","body":"two nits","user":{"login":"carol","type":"User"}}`)
 	})
 	mux.HandleFunc("/repos/acme/widget/pulls/9/reviews/42/comments", func(w http.ResponseWriter, _ *http.Request) {
+		listGets.Add(1)
 		fmt.Fprint(w, `[
 			{"id":3918412104,"path":"x.go","line":1,"body":"nit 1","user":{"login":"carol"}},
 			{"id":3918412105,"path":"y.go","line":2,"body":"nit 2","user":{"login":"carol"}}]`)
@@ -383,11 +390,11 @@ func TestSweepRecoversAReviewAsOneEvent(t *testing.T) {
 }
 
 // A review the webhook already turned into its event is not recovered by the
-// sweep as another one.
+// sweep as another one — nor read again.
 func TestSweepSkipsAReviewTheWebhookEmitted(t *testing.T) {
-	var reviewGets atomic.Int32
+	var reviewGets, listGets atomic.Int32
 	g := newTestIntegration(t, sweepConfig())
-	g.app = sweepStubFor(t, &reviewGets)
+	g.app = sweepStubCounting(t, &reviewGets, &listGets)
 	g.rest = newRESTClient(g.app)
 	hook := []byte(`{
 		"action":"submitted","installation":{"id":77},
@@ -406,6 +413,9 @@ func TestSweepSkipsAReviewTheWebhookEmitted(t *testing.T) {
 		if tr.Dedup == "review:42" {
 			t.Fatal("sweep re-emitted a review the webhook already emitted")
 		}
+	}
+	if n := listGets.Load(); n != 1 {
+		t.Fatalf("review 42's comments read %d times, want 1 (the webhook's; the sweep skips a claimed review)", n)
 	}
 }
 
