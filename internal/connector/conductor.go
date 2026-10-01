@@ -275,9 +275,11 @@ func EmitLifecycle(ctx context.Context, event string, t core.Trigger, line strin
 			trigCtx[k] = v
 		}
 		act := config.Action{Name: ct.Spec.Name, Enabled: ct.Spec.Enabled, Shadow: ct.Spec.Shadow, FlowRef: ct.Ref()}
-		act = inbound.ForceNoCheckout(act)
 		target := t.Target
 		if target.Repo == "" {
+			// Only a synthetic target has nothing to clone; a lifecycle event
+			// about a real repo keeps the normal checkout derivation.
+			act = inbound.ForceNoCheckout(act)
 			target = inbound.SyntheticTarget("conductor:"+event, fmt.Sprintf("%d", time.Now().UnixNano()))
 		}
 		emit(ctx, core.Trigger{
