@@ -1496,21 +1496,27 @@ func (r *Runner) runtimeOf(step config.Step) string {
 	return config.BuiltinPaseoRuntime
 }
 
-// execAgent dispatches a type: agent step through the engine-provided
-// services (runtime resolution, tokens, guidance, background hand-off).
 // execDetached dispatches a `detach: true` agent step: launch once, forget
 // it. It calls the SAME Agents.Dispatch seam every other agent step uses
 // (dispatch.Dispatcher routes it to paseoDetached because req.Step.Detach is
 // set), but skips every bit of bookkeeping that assumes conductor keeps a
 // relationship with the agent afterward: no budget reservation, no memory
-// harvest, no gate, no ArchiveWhenDone, no hand-off. act.Prompt here is
-// already the bare templated prompt — execAgent returns before the
+// harvest, no gate, no ArchiveWhenDone, no hand-off. The agents/hour rate cap
+// still applies — it is flood protection, not a relationship. act.Prompt here
+// is the bare templated prompt — execAgent returns before the
 // guidance/memory/wrapper block for a detach step, so nothing is appended to
 // it.
-func (r *Runner) execDetached(ctx context.Context, t core.Trigger, step config.Step, act config.Action, id string, data map[string]any, shadow bool) (map[string]any, string, error) {
+func (r *Runner) execDetached(ctx context.Context, t core.Trigger, step config.Step, act config.Action, id, identity, model, provider string, data map[string]any, shadow bool) (map[string]any, string, error) {
+	if !shadow && r.Agents.CheckRate != nil {
+		if err := r.Agents.CheckRate(); err != nil {
+			r.auditDispatchDeferred(t, id, "rate", err)
+			return nil, "", err
+		}
+	}
 	req := dispatch.Request{
-		Trigger: t, Action: act, Step: step, Shadow: shadow,
-		Wait: true, Data: data,
+		Trigger: t, Action: act, Step: step, Identity: identity,
+		Model: model, Provider: provider, Shadow: shadow, Wait: true, Data: data,
+		DispatchID: r.dispatchID(ctx, id),
 	}
 	ref, err := r.Agents.Dispatch(ctx, req)
 	r.auditDispatch(t, id, ref, err)
@@ -1521,14 +1527,64 @@ func (r *Runner) execDetached(ctx context.Context, t core.Trigger, step config.S
 		"agent_id":     ref.AgentID,
 		"workspace_id": ref.WorkspaceID,
 		"branch":       ref.Branch,
+		"path":         ref.Workdir,
 		"detached":     true,
-	}
-	if ref.Workdir != "" {
-		outputs["workdir"] = ref.Workdir
 	}
 	return outputs, ref.Output, nil
 }
 
+// renderLaunchFields resolves an agent step's launch-shaping fields —
+// repo:, branch:, mode:, images: — ONCE, here, with the flow template
+// engine, so dispatch receives literal values. Dispatch must not render them
+// again: a rendered value can carry event-supplied text (a form field, a
+// file name), and a second render would evaluate any {{…}} inside it.
+// images: items that are a sole field reference to a list (a prior step's
+// `images` output) are flattened in place.
+func renderLaunchFields(step *config.Step, data map[string]any) error {
+	for _, f := range []struct {
+		name string
+		v    *string
+	}{{"repo", &step.Repo}, {"branch", &step.Branch}, {"mode", &step.Mode}} {
+		if !strings.Contains(*f.v, "{{") {
+			continue
+		}
+		out, err := render(*f.v, data)
+		if err != nil {
+			return fmt.Errorf("%s: %w", f.name, err)
+		}
+		*f.v = strings.TrimSpace(out)
+	}
+	if len(step.Images) == 0 {
+		return nil
+	}
+	var images []string
+	for _, item := range step.Images {
+		if _, ok := soleFieldRef(item); ok {
+			vals, err := resolveList(item, data)
+			if err != nil {
+				return fmt.Errorf("images: %w", err)
+			}
+			for _, v := range vals {
+				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+					images = append(images, strings.TrimSpace(s))
+				}
+			}
+			continue
+		}
+		out, err := render(item, data)
+		if err != nil {
+			return fmt.Errorf("images: %w", err)
+		}
+		if out = strings.TrimSpace(out); out != "" {
+			images = append(images, out)
+		}
+	}
+	step.Images = images
+	return nil
+}
+
+// execAgent dispatches a type: agent step through the engine-provided
+// services (runtime resolution, tokens, guidance, background hand-off).
 func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step, id, slot string, data map[string]any, shadow bool) (map[string]any, string, error) {
 	// `agent:` is retained as a free-form ATTRIBUTION label on the dispatch
 	// (it used to name a profile; profiles are gone — design §6). It may be
@@ -1572,6 +1628,9 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 			return outputs, "", nil
 		}
 	}
+	if err := renderLaunchFields(&step, data); err != nil {
+		return nil, "", err
+	}
 	// A step's own `checkout:` always wins; absent one, fall back to the
 	// TRIGGER's action checkout. This is what makes a source's
 	// ForceNoCheckout (every synthetic-target integration forces its
@@ -1582,8 +1641,12 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// reading t.Action.Checkout — so an agent step with no explicit
 	// `checkout:` under a Slack/RSS/webhook trigger silently defaulted to
 	// branch-off against the synthetic target instead of staying checkout-less.
+	//
+	// A step `repo:` names a real checkout of its own, so the trigger's
+	// forced "none" (which only says the TRIGGER's target is not clonable)
+	// does not apply to it; dispatch defaults such a step to branch-off.
 	checkout := step.Checkout
-	if checkout == "" {
+	if checkout == "" && step.Repo == "" {
 		if ta, ok := t.Action.(config.Action); ok {
 			checkout = ta.Checkout
 		}
@@ -1620,7 +1683,13 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// runs the prompt EXACTLY as templated, with none of the guidance/memory/
 	// budget/background machinery below, and returns before any of it runs.
 	if step.Detach {
-		return r.execDetached(ctx, t, step, act, id, data, shadow)
+		if agentAuthored(ctx) {
+			// Plan admission already refuses detach: on an agent-authored
+			// step; this catches one merged in afterwards (a team role
+			// reference) before it can launch anything.
+			return nil, "", fmt.Errorf("detach: refused on an agent-authored step")
+		}
+		return r.execDetached(ctx, t, step, act, id, identity, model, provider, data, shadow)
 	}
 	// A decide step's session is the adapter prompt and nothing else: no
 	// write-wrapper, guidance, memory, or done instructions (its reply is the

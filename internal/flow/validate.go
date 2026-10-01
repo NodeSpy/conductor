@@ -370,11 +370,17 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 	}
 	for _, tf := range []struct{ label, s string }{
 		{"prompt", step.Prompt}, {"workdir", step.WorkDir},
+		{"repo", step.Repo}, {"branch", step.Branch}, {"mode", step.Mode},
 	} {
 		if tf.s == "" {
 			continue
 		}
 		if err := checkRefs(w+" "+tf.label, tf.s, stepScope); err != nil {
+			return err
+		}
+	}
+	for _, s := range step.Images {
+		if err := checkRefs(w+" images", s, stepScope); err != nil {
 			return err
 		}
 	}

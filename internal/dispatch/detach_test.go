@@ -90,7 +90,8 @@ func detachRequest(owned *OwnedSet) (Request, *fakeDetachBackend) {
 		Action: config.Action{Type: "agent", Prompt: "help the user with their thing", Checkout: "none"},
 		Step: config.Step{
 			Detach: true, Repo: "acme/widgets", Branch: "handover/ticket-9",
-			Mode: "{{.slack.form.mode}}", Images: []string{"/tmp/screenshot.png"},
+			// mode:/images: arrive ALREADY RENDERED (flow.renderLaunchFields).
+			Mode: "plan", Images: []string{"/tmp/screenshot.png"},
 		},
 		Data:     map[string]any{"slack": map[string]any{"form": map[string]any{"mode": "plan"}}},
 		Provider: "anthropic", Model: "claude-x",
@@ -264,5 +265,111 @@ func TestDetachDispatchCreateWorktreeFailureIsUnrecoverable(t *testing.T) {
 	var uerr *UnrecoverableError
 	if !errors.As(err, &uerr) {
 		t.Fatalf("expected an Unrecoverable error, got %T: %v", err, err)
+	}
+}
+
+// TestDetachAsksForFreshWorktree: a detach launch never adopts a workspace
+// already on its branch — CreateWorktreeOptions.Fresh is set, and the cli
+// backend's adopt-existing path is skipped for it.
+func TestDetachAsksForFreshWorktree(t *testing.T) {
+	owned := NewOwnedSet("")
+	req, backend := detachRequest(owned)
+	d := newDetachDispatcher(backend, owned)
+	if _, err := d.Dispatch(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if !backend.createCalls[0].Fresh {
+		t.Fatal("detach must request a fresh worktree (Fresh: true)")
+	}
+}
+
+// TestDetachRefusesOwnedWorkspace: if the backend nonetheless hands back a
+// workspace the ownership ledger records, the detached agent is not launched
+// into it.
+func TestDetachRefusesOwnedWorkspace(t *testing.T) {
+	owned := NewOwnedSet("")
+	owned.AddWorkspace("wks_conductor")
+	req, backend := detachRequest(owned)
+	backend.workspaceID = "wks_conductor"
+	d := newDetachDispatcher(backend, owned)
+	if _, err := d.Dispatch(context.Background(), req); err == nil {
+		t.Fatal("expected a refusal for a conductor-owned workspace")
+	}
+	if len(backend.runCalls) != 0 {
+		t.Fatal("no agent may be launched into a conductor-owned workspace")
+	}
+}
+
+// TestDetachDerivedBranchIsUniqueAndValidated: with no branch:, the derived
+// branch is a slug of the title plus a random suffix (two launches never
+// collide); an explicit branch: that is not a sane ref is refused.
+func TestDetachDerivedBranchIsUniqueAndValidated(t *testing.T) {
+	req := Request{Step: config.Step{Agent: "Fix the Login Page!"}}
+	a, err := detachBranch(req, detachTitle(req))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := detachBranch(req, detachTitle(req))
+	if !strings.HasPrefix(a, "handover/fix-the-login-page-") || a == b {
+		t.Fatalf("derived branches: %q %q", a, b)
+	}
+	for _, bad := range []string{"-x", "a..b", "a b", "a/", "x.lock", "--force", "a//b", "../x"} {
+		req.Step.Branch = bad
+		if _, err := detachBranch(req, "t"); err == nil {
+			t.Errorf("branch %q should be refused", bad)
+		}
+	}
+}
+
+// TestValidateRepoRef covers the accepted and refused repo: shapes.
+func TestValidateRepoRef(t *testing.T) {
+	for _, ok := range []string{"acme/widgets", "a.b/c-d_e", "https://github.com/a/b.git", "git@github.com:a/b.git", "ssh://git@host/a/b"} {
+		if err := ValidateRepoRef(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "nope", "a/b/c", "-a/b", "../a", "a/..", "file:///etc", "https://x y/a", "slack:C1"} {
+		if err := ValidateRepoRef(bad); err == nil {
+			t.Errorf("%q should be refused", bad)
+		}
+	}
+}
+
+// TestStepRepoOverridesCheckout: a NON-detach agent step's repo: changes
+// only the checkout — resolveCheckoutDir sees the step's repo, the strategy
+// defaults to branch-off, the trigger's PR/base are not carried into the
+// other repo — and the agent stays owned as usual.
+func TestStepRepoOverridesCheckout(t *testing.T) {
+	d := newDispatcher()
+	var gotRepo string
+	d.CheckoutDir = func(_ context.Context, repo string) (string, error) {
+		gotRepo = repo
+		return "/checkouts/api", nil
+	}
+	var gotStrat string
+	var gotPR int
+	d.WorktreeCreator = func(_ context.Context, req Request, _ string) (string, string, error) {
+		gotStrat, gotPR = effectiveStrategy(req), req.Trigger.Target.PR
+		return "wks_api", "/wt/api", nil
+	}
+	req := Request{
+		Trigger: core.Trigger{Kind: "review_requested", TargetTrusted: true,
+			Target: core.Target{Repo: "acme/web", PR: 5, Number: 5, BaseRef: "main"}},
+		Action: config.Action{Type: "agent", Prompt: "go"},
+		Step:   config.Step{Repo: "acme/api"},
+	}
+	ref, err := d.Dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRepo != "acme/api" || gotStrat != "branch-off" || gotPR != 0 {
+		t.Fatalf("checkout repo=%q strat=%q pr=%d", gotRepo, gotStrat, gotPR)
+	}
+	if !strings.Contains(strings.Join(ref.Argv, " "), "--workspace wks_api") {
+		t.Fatalf("argv: %v", ref.Argv)
+	}
+	req.Step.Repo = "not a repo"
+	if _, err := d.Dispatch(context.Background(), req); err == nil {
+		t.Fatal("a malformed repo: must be refused after templating")
 	}
 }

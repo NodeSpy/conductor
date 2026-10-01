@@ -888,40 +888,48 @@ type Step struct {
 	OutputSchema map[string]any `yaml:"output_schema,omitempty"`
 	Background   bool           `yaml:"background,omitempty"`
 	Handoff      string         `yaml:"handoff,omitempty"` // ask-capable connector for a background review
-	// Repo overrides this agent step's checkout target (templated; "owner/name"
-	// or a git URL), independent of whatever repo the trigger itself carries —
-	// a generic, service-agnostic escape hatch for a step that needs to work in
-	// a DIFFERENT codebase than the one the event came from (e.g. a Slack
-	// trigger choosing which repo to hand off into). Validated (after
-	// templating) at dispatch time. Unset keeps today's behavior: the
-	// trigger's own target.
+	// Repo overrides this agent step's CHECKOUT repo (templated; "owner/name"
+	// or a git URL), independent of the repo the trigger itself carries — a
+	// generic way for a step to work in a different codebase than the one
+	// the event came from (e.g. a chat trigger choosing which repo to work
+	// in). It selects the working copy only: forge authority (skill creds,
+	// own-repo scope) stays on the trigger's own target. With no `checkout:`
+	// of its own the step defaults to branch-off, and a trigger's forced
+	// checkout-less mode does not apply. Validated after templating, at
+	// dispatch. Unset keeps today's behavior: the trigger's own target.
 	Repo string `yaml:"repo,omitempty"`
 	// Images is a templated list of local file paths attached to this agent
-	// launch, one `--image <path>` per item. Only a runtime backed by the
-	// built-in paseo controller supports it; any other runtime fails the
-	// dispatch (or validation, when the runtime is a static pin) rather than
-	// silently dropping the attachments.
+	// launch, one `paseo run --image <path>` per item. An item that is a sole
+	// reference to a list ("{{.dl.images}}") expands to every element. Only
+	// a paseo runtime carries it; any other runtime fails the dispatch (or
+	// validation, when the runtime is a static pin) rather than silently
+	// dropping the attachments.
 	Images []string `yaml:"images,omitempty"`
-	// Branch names the worktree branch a `detach:` step creates (templated).
-	// Unset derives a slug of the step's (templated) title/agent label
-	// instead. Meaningless without `detach:`.
+	// Branch names the worktree branch a `detach:` step creates (templated,
+	// then validated as a plain branch name). Unset derives
+	// "handover/<slug of the agent label or trigger title>-<random>". Only
+	// valid with `detach:`.
 	Branch string `yaml:"branch,omitempty"`
 	// Detach launches this agent step as an UNOWNED, FORGOTTEN workspace: a
-	// fresh branch-off worktree (from `repo:`, or the trigger's own target),
-	// launched with `paseo run -d` (background, no wait) and never recorded
-	// in conductor's ownership ledger — neither the agent nor the workspace.
-	// It gets no skill creds/env, no CONDUCTOR_* env, no appended guidance
-	// (the prompt runs exactly as templated), no hold/handoff/watch/
-	// idle_timeout, and no isolation shim: from the moment it starts it is
-	// the USER's workspace, not conductor's. Conductor cannot archive or
-	// reach it again — see dispatch.Dispatcher.Archive, gated on the
-	// ownership ledger a detach step is deliberately never added to.
+	// fresh branch-off worktree (from `repo:`, or the trigger's own target —
+	// never an existing workspace on the branch), launched with `paseo run -d`
+	// and never recorded in conductor's ownership ledger — neither the agent
+	// nor the workspace. It gets no skill creds, no CONDUCTOR_*/token/git
+	// identity env, no appended guidance (the prompt runs exactly as
+	// templated), no hold/handoff/watch/idle_timeout, and no isolation shim:
+	// from the moment it starts it is the USER's workspace, not conductor's.
+	// Conductor cannot archive or reach it again — see
+	// dispatch.Dispatcher.Archive, gated on the ownership ledger a detach
+	// step is deliberately never added to. Outputs: agent_id, workspace_id,
+	// branch, path.
 	//
 	// Mutually exclusive with background/handoff/output_schema/watch/
-	// idle_timeout/archive_when_done/session/skill/team/gate (see
-	// validateStep), and refused on an agent-authored step (see
-	// internal/flow/agentauthored_fields.go) — detach is a capability the
-	// operator grants, never one an agent can take for itself.
+	// idle_timeout/archive_when_done/session/skill/team/gate and with the
+	// fields a detach launch would otherwise silently ignore (isolation/env/
+	// workdir/checkout/workspace/memory/guidance) — see validateDetach — and
+	// refused on an agent-authored step (internal/flow/agentauthored_fields.go):
+	// detach is a capability the operator grants, never one an agent can take
+	// for itself. Needs a paseo runtime.
 	Detach bool `yaml:"detach,omitempty"`
 
 	// command form (also carries workdir/env for agent/code forms), and the
@@ -1978,9 +1986,9 @@ func validateStep(w string, s Step, c *Config) error {
 			return err
 		}
 	}
-	if len(s.Images) > 0 {
-		if ok, known := c.runtimeSupportsImages(s); known && !ok {
-			return fmt.Errorf("config: %s: `images:` needs the builtin paseo runtime (runtime %q does not support --image attachments)", w, s.Runtime)
+	if s.Detach || s.Repo != "" || len(s.Images) > 0 {
+		if ok, known := c.runtimeSupportsLaunchFields(s); known && !ok {
+			return fmt.Errorf("config: %s: `detach:`/`repo:`/`images:` need the builtin paseo runtime (runtime %q cannot carry them)", w, s.Runtime)
 		}
 	}
 	if s.Uses != "" {
@@ -2026,6 +2034,20 @@ func validateStep(w string, s Step, c *Config) error {
 // (session/skill/team/gate, output_schema's capture contract,
 // archive_when_done's ledger-gated reclaim).
 func validateDetach(w string, s Step) error {
+	agent := s.Form() == "agent"
+	for _, f := range []struct {
+		name string
+		set  bool
+	}{
+		{"detach:", s.Detach}, {"repo:", s.Repo != ""}, {"images:", len(s.Images) > 0}, {"branch:", s.Branch != ""},
+	} {
+		if f.set && !agent {
+			return fmt.Errorf("config: %s: `%s` applies to agent steps only", w, f.name)
+		}
+	}
+	if s.Branch != "" && !s.Detach {
+		return fmt.Errorf("config: %s: `branch:` names a detach step's new worktree branch — it needs `detach: true`", w)
+	}
 	if !s.Detach {
 		return nil
 	}
@@ -2044,6 +2066,16 @@ func validateDetach(w string, s Step) error {
 		{"skill:", s.Skill != nil},
 		{"team:", s.Team != nil},
 		{"gate:", s.Gate != nil},
+		// Everything below would be silently ignored by a detach launch
+		// (no isolation shim, no env, a fresh branch-off worktree of its
+		// own, no guidance/memory appended), so it is refused instead.
+		{"isolation:", s.Isolation != nil},
+		{"env:", len(s.Env) > 0},
+		{"workdir:", s.WorkDir != ""},
+		{"checkout:", s.Checkout != ""},
+		{"workspace:", !s.Workspace.IsZero()},
+		{"memory:", s.Memory != nil},
+		{"guidance:", s.Guidance != nil},
 	} {
 		if c.set {
 			return fmt.Errorf("config: %s: `detach: true` cannot be combined with %s — a detached step is a complete, forgotten launch (see docs)", w, c.name)

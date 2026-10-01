@@ -181,7 +181,7 @@ func (b *cliBackend) CreateWorktree(ctx context.Context, opts CreateWorktreeOpti
 	// paseo-specific knowledge that belongs in this backend: the orchestration
 	// just asks for a worktree on this branch, and gets the existing one when
 	// there is one (launching another agent into it), or a fresh one otherwise.
-	if opts.Strategy == "branch-off" {
+	if opts.Strategy == "branch-off" && !opts.Fresh {
 		if w, ok := b.worktreeOnBranch(ctx, opts.NewBranch); ok {
 			return CreateWorktreeResult{WorkspaceID: w.WorkspaceID, Cwd: w.Cwd}, nil
 		}

@@ -258,6 +258,9 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"labelArgs", "display labels; the PR label goes through Trigger.Key()"},
 		{"adoptAgentForBranch", "matches the branch label written above"},
 	},
+	"internal/dispatch/detach.go": {
+		{"withStepRepo", "clears the trigger's PR number for a step repo: override's checkout; it only narrows which checkout the agent gets, and authority stays on Target.Repo"},
+	},
 	// The git-native checkout path, doing exactly what paseo.go's entries above
 	// do for the paseo one: a sender-chosen repo/PR only decides WHICH checkout
 	// the agent gets, inside conductor's own state dir. Nothing authorizes off
