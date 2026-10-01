@@ -116,12 +116,16 @@ like) can call conductor's authenticated `/invoke` API for the agent work it doe
   [Secrets](https://github.com/NodeSpy/conductor/wiki/Secrets) · [Agent Skill](https://github.com/NodeSpy/conductor/wiki/Agent-Skill)
 - Scoped, opt-in agent **memory** and binary / **blob** data handling — [Memory](https://github.com/NodeSpy/conductor/wiki/Memory) · [Binary Data](https://github.com/NodeSpy/conductor/wiki/Binary-Data)
 
+
 **Interop & operations**
 - A **callable service** — an authenticated `POST /invoke/<name>` API plus an MCP
   tool face — so another orchestrator (n8n and the like) can call conductor for the
   agent work it does — [Callable Service](https://github.com/NodeSpy/conductor/wiki/Callable-Service)
 - Execution **history**, live **watch**, **retry-from-step**, and an
   **outcome-learning** loop — [Runs](https://github.com/NodeSpy/conductor/wiki/Runs) · [Outcomes](https://github.com/NodeSpy/conductor/wiki/Outcomes)
+- **Run progress on the PR**, as you: 👀 on the review or comment the moment a
+  run takes it, then 🚀 / 👍 / 😕 for how it ended, plus a pending → success /
+  failure commit status under your login — [Configuration](https://github.com/NodeSpy/conductor/wiki/Configuration#run-progress-on-the-pr-github)
 - Introspection and dry-run; self-update; and a config that **auto-migrates**
   itself across schema changes (backup + validate-before-commit, never a restart
   loop) — [Migration](https://github.com/NodeSpy/conductor/wiki/Migration)
