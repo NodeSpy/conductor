@@ -135,3 +135,32 @@ func TestEventPromptSingleEventNoGroup(t *testing.T) {
 		t.Error("a single-event batch must not add a group object")
 	}
 }
+
+// Event text is other people's: a review comment quoting template code must
+// reach the agent verbatim. The event prompt is rendered as a template at
+// dispatch, so unescaped it either failed the render (failing the dispatch) or
+// was evaluated against the dispatch's data — credentials included.
+func TestEventPromptKeepsEventTextLiteral(t *testing.T) {
+	body := "use {{ .gh_token }} in the chart, and {{ this is not a template"
+	tr := core.Trigger{Kind: "changes_requested", Target: core.Target{Repo: "o/r", PR: 7, Number: 7},
+		Context: map[string]any{"review_comments": []any{map[string]any{"path": "a.yaml", "body": body}}}}
+	req := Request{Trigger: tr, Tokens: Tokens{User: "SECRET-USER", App: "SECRET-APP"}}
+
+	for name, prompt := range map[string]string{
+		"event prompt": EventPrompt(tr, nil),
+		"grouped event prompt": EventPrompt(tr, map[string]any{"events": []any{
+			map[string]any{"comment_body": body}, map[string]any{"comment_body": "second"}}}),
+	} {
+		req.Action.Prompt = prompt
+		got, err := RenderPrompt(req)
+		if err != nil {
+			t.Fatalf("%s: render failed on template-looking event text: %v", name, err)
+		}
+		if !strings.Contains(got, "use {{ .gh_token }} in the chart, and {{ this is not a template") {
+			t.Fatalf("%s: event text not delivered verbatim:\n%s", name, got)
+		}
+		if strings.Contains(got, "SECRET-USER") {
+			t.Fatalf("%s: event text was evaluated as a template — the token leaked into the prompt", name)
+		}
+	}
+}

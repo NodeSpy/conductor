@@ -1044,6 +1044,9 @@ triggers:
 
   # A poster's comment burst becomes ONE run (debounce; window resets per
   # event, fires when quiet; at most one run per key is in flight).
+  # (A submitted review is already ONE new_comment — its body plus every
+  # inline comment in review_comments — or one changes_requested; this groups
+  # separate comments.)
   - on: gh.new_comment
     filter: { not_comment_author: ["ci-bot"] }
     group: { key: "{{.repo}}#{{.pr}}", window: 15s }

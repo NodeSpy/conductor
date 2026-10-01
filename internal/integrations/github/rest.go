@@ -270,6 +270,13 @@ type unresolvedThread struct {
 	// CHANGES_REQUESTED) is APPROVED — they've signed off since leaving the
 	// thread, so it's not outstanding change-requested feedback.
 	AuthorApproved bool
+	// The thread's opening comment, so a sweep-recovered changes_requested
+	// run carries the feedback it is asked to address.
+	CommentID int64
+	Path      string
+	Line      int
+	Body      string
+	URL       string
 }
 
 // unresolvedThreads returns the PR's unresolved review threads (on App creds),
@@ -278,7 +285,7 @@ type unresolvedThread struct {
 func (c *restClient) unresolvedThreads(ctx context.Context, instID int64, owner, name string, number int) ([]unresolvedThread, error) {
 	const q = `query($o:String!,$n:String!,$num:Int!){
 	  repository(owner:$o,name:$n){ pullRequest(number:$num){
-	    reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{author{login __typename}}}}}
+	    reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{databaseId author{login __typename} path line originalLine body url}}}}
 	    latestOpinionatedReviews(first:50){nodes{state author{login}}}
 	  }}}`
 	var data struct {
@@ -302,6 +309,12 @@ func (c *restClient) unresolvedThreads(ctx context.Context, instID int64, owner,
 									Login    string `json:"login"`
 									Typename string `json:"__typename"`
 								} `json:"author"`
+								DatabaseID   int64  `json:"databaseId"`
+								Path         string `json:"path"`
+								Line         *int   `json:"line"`
+								OriginalLine *int   `json:"originalLine"`
+								Body         string `json:"body"`
+								URL          string `json:"url"`
 							} `json:"nodes"`
 						} `json:"comments"`
 					} `json:"nodes"`
@@ -324,6 +337,10 @@ func (c *restClient) unresolvedThreads(ctx context.Context, instID int64, owner,
 			continue
 		}
 		ut := unresolvedThread{ID: t.ID}
+		if cs := t.Comments.Nodes; len(cs) > 0 {
+			ut.CommentID, ut.Path, ut.Body, ut.URL = cs[0].DatabaseID, cs[0].Path, cs[0].Body, cs[0].URL
+			ut.Line = lineOf(cs[0].Line, cs[0].OriginalLine)
+		}
 		if cs := t.Comments.Nodes; len(cs) > 0 && cs[0].Author != nil {
 			ut.Author = cs[0].Author.Login
 			ut.AuthorIsBot = isBotActor(cs[0].Author.Typename, cs[0].Author.Login)
@@ -351,6 +368,13 @@ type prComment struct {
 	} `json:"user"`
 	HTMLURL   string    `json:"html_url"`
 	CreatedAt time.Time `json:"created_at"`
+	// ReviewID is the submitted review an inline comment belongs to (review
+	// comments only; 0 for conversation comments), with the comment's place
+	// in the diff.
+	ReviewID     int64  `json:"pull_request_review_id"`
+	Path         string `json:"path"`
+	Line         *int   `json:"line"`
+	OriginalLine *int   `json:"original_line"`
 	// Kind is store.CommentKindIssue or store.CommentKindReview — set by
 	// recentComments from the endpoint the comment came from, not by GitHub.
 	Kind string `json:"-"`
@@ -380,6 +404,62 @@ func (c *restClient) recentComments(ctx context.Context, instID int64, owner, na
 		review[i].Kind = store.CommentKindReview
 	}
 	return append(issue, review...), nil
+}
+
+// review returns a submitted review: its state (lowercased, as webhooks spell
+// it — "changes_requested", "commented", "approved"), summary body, and author.
+func (c *restClient) review(ctx context.Context, instID int64, owner, name string, number int, reviewID int64) (reviewInfo, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/reviews/%d", c.app.apiBase, owner, name, number, reviewID)
+	var r struct {
+		State string `json:"state"`
+		Body  string `json:"body"`
+		User  struct {
+			Login string `json:"login"`
+			Type  string `json:"type"`
+		} `json:"user"`
+	}
+	if err := c.get(ctx, instID, url, &r); err != nil {
+		return reviewInfo{}, err
+	}
+	return reviewInfo{State: strings.ToLower(r.State), Body: r.Body,
+		Author: r.User.Login, AuthorIsBot: isBotActor(r.User.Type, r.User.Login)}, nil
+}
+
+// reviewComment is one inline comment of a submitted review.
+type reviewComment struct {
+	ID     int64
+	Author string
+	Path   string
+	Line   int
+	Body   string
+	URL    string
+}
+
+// reviewComments returns a submitted review's inline comments (first page of
+// 100 — a review with more is capped by the caller anyway).
+func (c *restClient) reviewComments(ctx context.Context, instID int64, owner, name string, number int, reviewID int64) ([]reviewComment, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/reviews/%d/comments?per_page=100", c.app.apiBase, owner, name, number, reviewID)
+	var items []struct {
+		ID           int64  `json:"id"`
+		Body         string `json:"body"`
+		Path         string `json:"path"`
+		Line         *int   `json:"line"`
+		OriginalLine *int   `json:"original_line"`
+		HTMLURL      string `json:"html_url"`
+		User         struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	}
+	if err := c.get(ctx, instID, url, &items); err != nil {
+		return nil, err
+	}
+	out := make([]reviewComment, 0, len(items))
+	for _, it := range items {
+		rc := reviewComment{ID: it.ID, Author: it.User.Login, Path: it.Path, Body: it.Body,
+			URL: it.HTMLURL, Line: lineOf(it.Line, it.OriginalLine)}
+		out = append(out, rc)
+	}
+	return out, nil
 }
 
 // requestedReviewers returns the PR's currently-pending requested reviewer logins
@@ -745,4 +825,16 @@ func rateLimitWait(resp *http.Response) time.Duration {
 		}
 	}
 	return 5 * time.Second
+}
+
+// lineOf is a review comment's line: where it sits now, else (outdated) the
+// line it was left on. 0 when it has neither (a file-level comment).
+func lineOf(line, original *int) int {
+	switch {
+	case line != nil:
+		return *line
+	case original != nil:
+		return *original
+	}
+	return 0
 }

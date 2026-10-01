@@ -67,7 +67,7 @@ type Provisioner struct {
 	Now func() time.Time
 
 	mu     sync.Mutex
-	repoMu map[string]*sync.Mutex // per-repo base-clone fetch lock
+	repoMu map[string]*sync.Mutex // per-repo lock over the base clone's shared state
 	live   map[string]string      // worktree path → its base clone dir
 }
 
@@ -126,15 +126,39 @@ func (p *Provisioner) ProvisionWorktree(ctx context.Context, req dispatch.Reques
 	if repo == "" {
 		return "", "", dispatch.Unrecoverable(fmt.Errorf("gitwt: no repo in trigger; cannot create a %s worktree", strategy))
 	}
-	base, err := p.baseClone(ctx, repo)
-	if err != nil {
-		return "", "", dispatch.Unrecoverable(fmt.Errorf("gitwt: base checkout for %s: %w", repo, err))
-	}
-	wt, err := p.newWorktreePath(req)
+	wt, base, err := p.provision(ctx, repo, strategy, req)
 	if err != nil {
 		return "", "", dispatch.Unrecoverable(err)
 	}
 
+	p.mu.Lock()
+	p.live[wt] = base
+	p.mu.Unlock()
+	return wt, wt, nil
+}
+
+// provision refreshes the repo's base clone and adds the dispatch's worktree
+// to it, all under the per-repo lock. Everything here mutates state the base
+// clone SHARES across dispatches — its refs, FETCH_HEAD, .git/config (a
+// branch-off's tracking setup), the worktree list — so a concurrent dispatch
+// on the same repo must never interleave with it. Two fixers on one PR used
+// to race exactly that way (a sibling's fetch rewrote FETCH_HEAD between this
+// dispatch's fetch and its `worktree add`). Holding the lock across the
+// checkout serializes same-repo provisioning; it is the price of a checkout
+// that is always the commit it was asked for.
+func (p *Provisioner) provision(ctx context.Context, repo, strategy string, req dispatch.Request) (wt, base string, err error) {
+	mu := p.repoLock(repo)
+	mu.Lock()
+	defer mu.Unlock()
+
+	base, err = p.baseCloneLocked(ctx, repo)
+	if err != nil {
+		return "", "", fmt.Errorf("gitwt: base checkout for %s: %w", repo, err)
+	}
+	wt, err = p.newWorktreePath(req)
+	if err != nil {
+		return "", "", err
+	}
 	switch strategy {
 	case "checkout-pr":
 		err = p.addPR(ctx, base, wt, req)
@@ -145,13 +169,9 @@ func (p *Provisioner) ProvisionWorktree(ctx context.Context, req dispatch.Reques
 		// Leave nothing half-made behind for the reaper to puzzle over.
 		_ = os.RemoveAll(wt)
 		_, _ = p.git(ctx, base, "worktree", "prune")
-		return "", "", dispatch.Unrecoverable(fmt.Errorf("gitwt: %s worktree for %s: %w", strategy, repo, err))
+		return "", "", fmt.Errorf("gitwt: %s worktree for %s: %w", strategy, repo, err)
 	}
-
-	p.mu.Lock()
-	p.live[wt] = base
-	p.mu.Unlock()
-	return wt, wt, nil
+	return wt, base, nil
 }
 
 // RemoveWorktree tears down a worktree this provisioner created: `git worktree
@@ -260,25 +280,42 @@ func (p *Provisioner) Reap(ctx context.Context) {
 // head is taken detached. It used to fall back to a local pr-<n> branch, which
 // looked pushable — and a push published it as a stray new branch on the
 // remote while the PR itself never moved.
+//
+// The head is fetched into a ref private to this dispatch and the worktree is
+// added from the commit that ref resolved to — never from FETCH_HEAD, which
+// every fetch in the base clone rewrites. The private ref is deleted once the
+// worktree holds the commit. Called with the repo lock held (see provision).
 func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.Request) error {
 	pr := req.Trigger.Target.PR
 	if pr <= 0 {
 		return fmt.Errorf("checkout-pr with no PR number")
 	}
+	tmp := prFetchRefPrefix + filepath.Base(wt)
 	if _, err := p.git(ctx, base, "fetch", "--no-tags", "--force", "origin",
-		"refs/pull/"+strconv.Itoa(pr)+"/head"); err != nil {
+		"+refs/pull/"+strconv.Itoa(pr)+"/head:"+tmp); err != nil {
 		return err
 	}
+	defer func() {
+		// Scaffolding only: the worktree's branch (or detached HEAD) now keeps
+		// the commit reachable. WithoutCancel so a cancelled dispatch still
+		// cleans up after itself.
+		_, _ = p.git(context.WithoutCancel(ctx), base, "update-ref", "-d", tmp)
+	}()
+	sha, err := p.git(ctx, base, "rev-parse", "--verify", "--quiet", tmp+"^{commit}")
+	if err != nil {
+		return fmt.Errorf("resolve fetched PR head: %w", err)
+	}
+	sha = strings.TrimSpace(sha)
 	branch := prBranch(req)
 	if branch == "" {
-		branch = p.remoteBranchAt(ctx, base, "FETCH_HEAD")
+		branch = p.remoteBranchAt(ctx, base, sha)
 	}
 	if branch == "" {
 		p.logf("gitwt: %s#%d: PR head branch unknown — checking out detached", req.Trigger.Target.Repo, pr)
-		_, err := p.git(ctx, base, "worktree", "add", "--detach", wt, "FETCH_HEAD")
+		_, err := p.git(ctx, base, "worktree", "add", "--detach", wt, sha)
 		return err
 	}
-	_, err := p.git(ctx, base, "worktree", "add", "-B", branch, wt, "FETCH_HEAD")
+	_, err = p.git(ctx, base, "worktree", "add", "-B", branch, wt, sha)
 	if err == nil {
 		return nil
 	}
@@ -286,13 +323,19 @@ func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.R
 	// dispatch on the same PR). Take the head detached rather than force the
 	// other checkout's branch pointer out from under it.
 	_ = os.RemoveAll(wt)
-	if _, derr := p.git(ctx, base, "worktree", "add", "--detach", wt, "FETCH_HEAD"); derr != nil {
+	if _, derr := p.git(ctx, base, "worktree", "add", "--detach", wt, sha); derr != nil {
 		return errors.Join(err, derr)
 	}
 	return nil
 }
 
-// addBranch cuts a fresh conductor branch off the trigger's base ref.
+// prFetchRefPrefix namespaces addPR's per-dispatch fetch refs, out of the way
+// of refs/heads and refs/remotes (so `fetch --prune` never touches them).
+const prFetchRefPrefix = "refs/conductor/pr-fetch/"
+
+// addBranch cuts a fresh conductor branch off the trigger's base ref. Called
+// with the repo lock held: `-B` off a remote-tracking ref also writes the
+// branch's upstream into the base clone's shared .git/config.
 func (p *Provisioner) addBranch(ctx context.Context, base, wt string, req dispatch.Request) error {
 	branch := dispatch.BranchSlug(ctx, req.Trigger)
 	args := []string{"worktree", "add", "-B", branch, wt}
@@ -323,14 +366,19 @@ func (p *Provisioner) startPoint(ctx context.Context, base, ref string) string {
 // ---- base clones ---------------------------------------------------------
 
 // baseClone returns the repo's base clone, cloning it on first use and fetching
-// it otherwise. Concurrent dispatches on one repo serialize here (a per-repo
-// mutex), so two fixers on the same repo never race a clone or a fetch.
+// it otherwise, under the per-repo lock — so two fixers on the same repo never
+// race a clone or a fetch. ProvisionWorktree holds that lock across the whole
+// checkout instead (see provision) and calls baseCloneLocked.
 func (p *Provisioner) baseClone(ctx context.Context, repo string) (string, error) {
-	dir := filepath.Join(p.CheckoutsDir(), repoSlug(repo))
 	mu := p.repoLock(repo)
 	mu.Lock()
 	defer mu.Unlock()
+	return p.baseCloneLocked(ctx, repo)
+}
 
+// baseCloneLocked is baseClone for a caller already holding the repo lock.
+func (p *Provisioner) baseCloneLocked(ctx context.Context, repo string) (string, error) {
+	dir := filepath.Join(p.CheckoutsDir(), repoSlug(repo))
 	if isGitDir(dir) {
 		if _, err := p.git(ctx, dir, "fetch", "--prune", "origin"); err != nil {
 			return "", fmt.Errorf("fetch: %w", err)

@@ -2,6 +2,7 @@ package gitwt
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -455,6 +456,77 @@ func TestWorktreePathsAreUniquePerDispatch(t *testing.T) {
 	}
 	if a == b {
 		t.Fatalf("both dispatches got %s", a)
+	}
+}
+
+// Concurrent dispatches on one repo share its base clone. A checkout-pr used
+// to fetch the PR head into the shared FETCH_HEAD and then `worktree add` from
+// it outside the repo lock, so a sibling dispatch's fetch (its own PR's, or the
+// base clone refresh) rewrote FETCH_HEAD in between: the add failed with
+// "invalid reference: FETCH_HEAD", or quietly checked out ANOTHER PR's head.
+// Every dispatch here must succeed and land on its own PR's head.
+func TestConcurrentCheckoutPRsOnOneRepoEachLandTheirOwnHead(t *testing.T) {
+	origin := originRepo(t)
+	// A second PR on the same repo with a different head, so a clobbered
+	// FETCH_HEAD shows up as the wrong commit, not just as an error.
+	tmp := filepath.Join(t.TempDir(), "pr8")
+	run(t, "", "git", "clone", "-b", "main", origin, tmp)
+	gitIdentity(t, tmp)
+	writeFile(t, filepath.Join(tmp, "OTHER.md"), "other pr\n")
+	run(t, tmp, "git", "add", "-A")
+	run(t, tmp, "git", "commit", "-m", "other pr")
+	run(t, tmp, "git", "push", "origin", "HEAD:refs/heads/other")
+	run(t, tmp, "git", "push", "origin", "HEAD:refs/pull/8/head")
+	want := map[int]string{
+		7: strings.TrimSpace(out(t, origin, "git", "rev-parse", "refs/pull/7/head")),
+		8: strings.TrimSpace(out(t, origin, "git", "rev-parse", "refs/pull/8/head")),
+	}
+
+	p := newProv(t, origin)
+	ctx := context.Background()
+	// Seed the base clone so every dispatch takes the fetch-an-existing-clone
+	// path (the one the incident hit), not N racing first clones.
+	if _, err := p.baseClone(ctx, "acme/web"); err != nil {
+		t.Fatalf("seed base clone: %v", err)
+	}
+
+	const n = 12
+	type result struct {
+		pr  int
+		wt  string
+		err error
+	}
+	results := make(chan result, n)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		pr := 7 + i%2
+		req := prReq()
+		req.DispatchID = fmt.Sprintf("disp-%d", i)
+		req.Trigger.Target.PR, req.Trigger.Target.Number = pr, pr
+		if pr == 8 {
+			req.Trigger.Context = map[string]any{"head_ref": "other"}
+		}
+		go func() {
+			<-start
+			wt, _, err := p.ProvisionWorktree(ctx, req)
+			results <- result{pr, wt, err}
+		}()
+	}
+	close(start)
+	for i := 0; i < n; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Errorf("PR %d: ProvisionWorktree: %v", r.pr, r.err)
+			continue
+		}
+		if got := strings.TrimSpace(out(t, r.wt, "git", "rev-parse", "HEAD")); got != want[r.pr] {
+			t.Errorf("PR %d worktree %s is at %s, want its own head %s", r.pr, r.wt, got, want[r.pr])
+		}
+	}
+	// The per-dispatch fetch refs are scaffolding: none may outlive the add.
+	base := filepath.Join(p.CheckoutsDir(), "acme__web")
+	if left := strings.TrimSpace(out(t, base, "git", "for-each-ref", "refs/conductor/")); left != "" {
+		t.Errorf("temporary fetch refs left behind:\n%s", left)
 	}
 }
 

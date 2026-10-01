@@ -102,7 +102,7 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 	}
 	// A comment was accepted for handling — raise the high-water mark
 	// (grouped comments raise it at flush, with the same reasoning).
-	if t.Kind == "new_comment" && !grouped {
+	if commentMarked(t.Kind) && !grouped {
 		if id := commentID(t); id > 0 {
 			_ = e.store.AdvanceCommentID(key, commentMarkKind(t), id)
 		}
@@ -317,7 +317,7 @@ func (e *Engine) recordBatch(events []core.Trigger) []core.Trigger {
 		} else {
 			_ = e.store.Record(key, dkind, ev.Dedup, head)
 		}
-		if ev.Kind == "new_comment" {
+		if commentMarked(ev.Kind) {
 			if cid := commentID(ev); cid > 0 {
 				_ = e.store.AdvanceCommentID(key, commentMarkKind(ev), cid)
 			}

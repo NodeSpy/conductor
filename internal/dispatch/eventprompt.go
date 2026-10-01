@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/NodeSpy/conductor/internal/core"
 )
@@ -45,7 +46,17 @@ func EventPrompt(t core.Trigger, group map[string]any) string {
 		// still beats dispatching an empty prompt.
 		return "Act on this event."
 	}
-	return "Act on this event:\n\n" + string(body)
+	return "Act on this event:\n\n" + literal(string(body))
+}
+
+// literal makes event-derived text safe to embed in a prompt TEMPLATE. The
+// prompt is rendered as a Go template at dispatch (promptText), and event
+// fields are other people's text — a comment quoting Helm/Jinja/Go template
+// code would otherwise fail the render (and fail the dispatch) or be
+// evaluated against the dispatch's data. Each "{{" becomes an action that
+// renders back to a literal "{{".
+func literal(s string) string {
+	return strings.ReplaceAll(s, "{{", `{{"{{"}}`)
 }
 
 // eventObject is the connector-neutral view of one trigger.
