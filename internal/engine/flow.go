@@ -472,6 +472,16 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 					return dispatch.RunRef{}, dispatch.Unrecoverable(err)
 				}
 				runner = r
+				if dispatch.UsesLaunchFields(req) {
+					// detach:/repo:/images: are carried out by the paseo
+					// dispatcher only. A runner that would silently ignore
+					// them is refused: an ignored detach: would launch an
+					// owned, credentialed agent instead of a forgotten one.
+					if lf, ok := runner.(interface{ HonorsLaunchFields() bool }); !ok || !lf.HonorsLaunchFields() {
+						return dispatch.RunRef{}, dispatch.Unrecoverable(fmt.Errorf(
+							"runtime %q cannot carry detach:/repo:/images: — they need the builtin paseo runtime", req.Step.Runtime))
+					}
+				}
 			}
 			req.Author = e.author
 			return e.dispatchAgent(ctx, runner, req)

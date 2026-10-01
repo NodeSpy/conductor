@@ -532,7 +532,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 					}, nil)},
 				}
 			},
-			wantErr: "cannot be combined with team:",
+			wantErr: "applies to agent steps only",
 		},
 		{
 			name: "detach combined with gate",
@@ -557,7 +557,92 @@ func TestValidateConnectorsStructural(t *testing.T) {
 					}, nil)},
 				}
 			},
-			wantErr: "needs the builtin paseo runtime",
+			wantErr: "need the builtin paseo runtime",
+		},
+		{
+			name: "detach on a non-paseo named runtime",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Controllers:   map[string]ControllerConfig{"gem": {Agent: "gemini"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Runtime: "gem", Detach: true},
+					}, nil)},
+				}
+			},
+			wantErr: "need the builtin paseo runtime",
+		},
+		{
+			name: "detach combined with isolation",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Isolation: &IsolationConfig{}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with isolation:",
+		},
+		{
+			name: "detach combined with env",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Env: map[string]string{"A": "b"}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with env:",
+		},
+		{
+			name: "detach combined with checkout",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Checkout: "none"},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with checkout:",
+		},
+		{
+			name: "detach on a verb step",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Uses: "gh.verb", Detach: true},
+					}, nil)},
+				}
+			},
+			wantErr: "applies to agent steps only",
+		},
+		{
+			name: "repo on a verb step",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Uses: "gh.verb", Repo: "a/b"},
+					}, nil)},
+				}
+			},
+			wantErr: "applies to agent steps only",
+		},
+		{
+			name: "branch without detach",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Branch: "x"},
+					}, nil)},
+				}
+			},
+			wantErr: "needs `detach: true`",
 		},
 	}
 
