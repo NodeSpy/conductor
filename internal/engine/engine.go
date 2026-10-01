@@ -520,7 +520,10 @@ func (e *Engine) capabilityCard(sk *config.SkillPolicy) string {
 // including for session: profiles on runtimes without session persistence
 // (one-shot/cli), which stay fresh-per-event and lean on shared memory.
 func (e *Engine) dispatchAgent(ctx context.Context, runner Dispatcher, req dispatch.Request) (dispatch.RunRef, error) {
-	if e.affinity != nil {
+	// A detach launch is always a fresh, unbound agent: it never joins a
+	// runtime's session pool (that would deliver its prompt to a live
+	// conductor-held session, or bind the new agent to one).
+	if e.affinity != nil && !req.Step.Detach {
 		if ref, handled, err := e.affinity.Dispatch(ctx, runner, req); handled {
 			e.rememberDispatcher(ref.AgentID, runner)
 			return ref, err
