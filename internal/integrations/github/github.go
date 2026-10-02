@@ -56,12 +56,6 @@ type Config struct {
 	// under a sweep fan-out). Dispatch-level, but declared here since it's this
 	// integration's agents that contend.
 	Retry config.Retry `yaml:"retry"`
-
-	// OwnStatusContexts are commit-status contexts conductor itself posts
-	// (run progress, the connector's progress.status_context). A status under
-	// one of them, or under one of your own logins (the default progress
-	// context), is never a CI signal: see ownStatus.
-	OwnStatusContexts []string `yaml:"own_status_contexts,omitempty"`
 }
 
 // Identity controls which credential reads vs writes, and commit authorship.
@@ -218,6 +212,21 @@ type Integration struct {
 	// goroutines, read on the webhook path.
 	ownMu     sync.Mutex
 	ownStatus map[string]bool
+	// acting is the login your writes act as — published to every event as
+	// {{.me.login}}: the one discovered from the write identity, else the
+	// first `me:` login configured. Guarded by ownMu.
+	acting string
+}
+
+// meFact is the `me` event fact: { login } — you, as your writes act. nil
+// while no login is known.
+func (g *Integration) meFact() map[string]any {
+	g.ownMu.Lock()
+	defer g.ownMu.Unlock()
+	if g.acting == "" {
+		return nil
+	}
+	return map[string]any{"login": g.acting}
 }
 
 // NoteOwnStatusContext records a commit-status context conductor posts
@@ -287,9 +296,6 @@ func newIntegration(name string, decode func(any) error) (core.Integration, erro
 	}
 	g := &Integration{name: name, cfg: cfg, self: map[string]bool{},
 		projectMap: map[string]string{}, renew: make(chan struct{}, 1)}
-	for _, c := range cfg.OwnStatusContexts {
-		g.NoteOwnStatusContext(c)
-	}
 	for k, v := range cfg.ProjectMap {
 		g.projectMap[strings.ToLower(k)] = v
 	}
@@ -299,6 +305,9 @@ func newIntegration(name string, decode func(any) error) (core.Integration, erro
 	for _, r := range rules {
 		for _, l := range r.Me.Logins {
 			g.self[strings.ToLower(l)] = true
+			if g.acting == "" {
+				g.acting = l // the first one you named; discovery overrides it
+			}
 		}
 	}
 	if len(g.self) == 0 {
@@ -393,6 +402,9 @@ func (g *Integration) discoverSelf(ctx context.Context) {
 		return
 	}
 	if login != "" {
+		g.ownMu.Lock()
+		g.acting = login
+		g.ownMu.Unlock()
 		g.self[strings.ToLower(login)] = true
 		log.Printf("github[%s]: me: auto-discovered as %q from the write identity — set me.logins to override", g.name, login)
 	}

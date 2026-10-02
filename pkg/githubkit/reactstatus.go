@@ -139,13 +139,25 @@ func reactionSubjects(opts map[string]any) []ReactionSubject {
 	return out
 }
 
-// setStatus posts a commit status on sha. The context defaults to the login
-// of the identity the call acts as — a status is shown on the PR under its
-// context, so by default it reads as yours rather than any tool's.
-func (c *Client) setStatus(ctx context.Context, tok, base, repo string, opts map[string]any) (map[string]any, error) {
+// setStatus posts a commit status on `sha`, or — given `pr` instead — on the
+// PR's head as it is at call time (read fresh, so a status posted after a
+// push lands on the new commit). The context is the caller's; only when it is
+// unset does it default to the login of the identity the call acts as.
+func (c *Client) setStatus(ctx context.Context, tok, base, repo string, number int, opts map[string]any) (map[string]any, error) {
 	sha, _ := opts["sha"].(string)
+	if sha == "" && number > 0 {
+		var pr struct {
+			Head struct {
+				SHA string `json:"sha"`
+			} `json:"head"`
+		}
+		if err := c.getFresh(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d", base, repo, number), &pr); err != nil {
+			return nil, fmt.Errorf("github.set_status: read PR head: %w", err)
+		}
+		sha = pr.Head.SHA
+	}
 	if sha == "" {
-		return nil, fmt.Errorf("github.set_status: options.sha is required")
+		return nil, fmt.Errorf("github.set_status: options.sha or options.pr is required")
 	}
 	state, _ := opts["state"].(string)
 	if !contains(StatusStates(), state) {
@@ -170,7 +182,7 @@ func (c *Client) setStatus(ctx context.Context, tok, base, repo string, opts map
 	if err := c.post(ctx, tok, fmt.Sprintf("%s/repos/%s/statuses/%s", base, repo, url.PathEscape(sha)), body, nil); err != nil {
 		return nil, err
 	}
-	return map[string]any{"ok": true, "context": sctx}, nil
+	return map[string]any{"ok": true, "context": sctx, "sha": sha}, nil
 }
 
 // ClipStatusDescription fits a description into GitHub's 140-character

@@ -1046,6 +1046,9 @@ func (g *Integration) emit(repo, kind string, t core.Target, title, dedup string
 		for k, v := range extra {
 			ctxMap[k] = v
 		}
+		if me := g.meFact(); me != nil {
+			ctxMap["me"] = me
+		}
 		out = append(out, core.Trigger{
 			// As above: a signature-verified payload's repo/number are
 			// GitHub's to assign.

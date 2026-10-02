@@ -18,8 +18,8 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 )
 
-// Run progress reads `reaction_subjects` off the event: what the run reacts
-// on. These pin it per event path.
+// `reaction_subjects` is what a run handling the event reacts on (github.react's
+// `subjects`). These pin it per event path.
 
 func subjects(kind string, ids ...int64) []any { return reactionSubjects(kind, ids...) }
 
@@ -151,28 +151,28 @@ func statusDelivery(c, st string) []byte {
 		"branches":[{"name":"feat"}]}`, c, st))
 }
 
-// THE self-trigger guard. conductor posts commit statuses as you (run
-// progress); a `failure` one read back as a failing check would dispatch the
-// next fixer, whose verdict dispatches the next. Every status under one of
-// your logins (the default progress context), a configured
-// progress.status_context, or a context the reporter noted at run time is
-// recognised as conductor's own and dropped at the router — before any
-// handler, so nothing a status ever grows can see it.
+// THE self-trigger guard. Hooks post commit statuses as you (github.set_status);
+// a `failure` one read back as a failing check would dispatch the next fixer,
+// whose verdict dispatches the next. Every status under one of your logins
+// (set_status's default context) or under ANY context a set_status call posted
+// (noted at call time — custom ones like "me / ci" included) is recognised as
+// conductor's own and dropped at the router, before any handler, so nothing a
+// status ever grows can see it.
 func TestOwnStatusNeverTriggers(t *testing.T) {
 	cfg := baseConfig()
-	cfg.OwnStatusContexts = []string{"my-autopilot"}
 	cfg.Rules[0].Actions = as1(map[string]config.Action{
 		"failing_checks": {Type: "agent", Agent: "fixer"},
 		"merge_ready":    {Type: "agent", Agent: "merger"},
 	})
 	g := newTestIntegration(t, cfg)
-	g.NoteOwnStatusContext("noted-ctx")
+	g.NoteOwnStatusContext("me / ci")
+	g.NoteOwnStatusContext("Release Gate")
 
 	var buf bytes.Buffer
 	prev := log.Writer()
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(prev) })
-	for _, c := range []string{"me", "ME", "my-autopilot", "noted-ctx"} {
+	for _, c := range []string{"me", "ME", "me / ci", "release gate"} {
 		for _, st := range []string{"failure", "error", "pending", "success"} {
 			buf.Reset()
 			if trs := g.triggersFor(context.Background(), "status", statusDelivery(c, st)); len(trs) != 0 {

@@ -416,12 +416,37 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	}
 
 	shadow = shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow)
-	// Progress first: before the start hooks and before any step provisions
-	// a worktree or launches an agent, so a run that dies there has still
-	// visibly been picked up. A panic below still records a failure.
-	prog := r.startProgress(ctx, t, spec, batch, shadow)
-	defer prog.finish(ctx, connector.RunOutcome{Result: connector.OutcomeFailed, Reason: "internal error"})
-	r.fireHooks(ctx, t, spec.Hooks, "start", "running", run.ID, "", data, nil, "workflow")
+	// Run facts ({{.run.*}}, runfacts.go): the head the run starts on, read
+	// now — after any wait for an agent slot — and only when a hook will
+	// see it. The start hooks fire HERE, before any step provisions a
+	// worktree or launches an agent, so a run that dies there has still run
+	// its start hooks.
+	var facts runFacts
+	if len(spec.Hooks) > 0 {
+		facts.startSHA = r.readHead(ctx, t)
+		facts.headSHA = facts.startSHA
+	}
+	endFacts := func(phase, reason string) runFacts {
+		f := facts
+		f.headSHA, f.reason = "", reason
+		if hasPhase(spec.Hooks, phase) {
+			f.headSHA = r.readHead(ctx, t)
+		}
+		return f
+	}
+	// A panic mid-run is a failure too: its fail hooks fire before the
+	// panic carries on to the engine's recovery.
+	defer func() {
+		if rec := recover(); rec != nil {
+			r.fireHooks(ctx, t, spec.Hooks, "fail", "failed", run.ID, "",
+				withRun(data, endFacts("fail", "internal error")),
+				map[string]any{"kind": "internal", "error": "internal error", "step": "", "gave_up": false}, "workflow")
+			panic(rec)
+		}
+	}()
+	if hasPhase(spec.Hooks, "start") {
+		r.fireHooks(ctx, t, spec.Hooks, "start", "running", run.ID, "", withRun(data, facts), nil, "workflow")
+	}
 
 	err := r.runSteps(ctx, &run, t, spec.Steps, data, shadow, true)
 	if errors.Is(err, dispatch.ErrTargetClosed) {
@@ -433,14 +458,19 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 			"number": t.Target.Number, "kind": t.Kind, "step": failedStepID(err), "reason": "target closed"})
 		r.auditRunCost(t, run.ID, runCost)
 		hist.finish("stopped", "target PR closed", failedStepID(err), runCost)
-		prog.finish(ctx, connector.RunOutcome{Result: connector.OutcomeStopped})
 		r.finishRun(ctx, run)
 		return
 	}
 	if err != nil {
 		r.Log("%s workflow failed: %v", flowTag(t), err)
-		r.fireHooks(ctx, t, spec.Hooks, "fail", "failed", run.ID, "",
-			data, failureCtx(err, err.Error(), failedStepID(err)), "workflow")
+		// Every failure lands here — a dispatch/provisioning error (a worktree
+		// that never came up), a failed step, an escalation, no_progress, a
+		// timeout — and fires the fail hooks with the public-safe run.reason.
+		if hasPhase(spec.Hooks, "fail") {
+			r.fireHooks(ctx, t, spec.Hooks, "fail", "failed", run.ID, "",
+				withRun(data, endFacts("fail", publicReason(err))),
+				failureCtx(err, r.redactErr(err), failedStepID(err)), "workflow")
+		}
 		if dispatch.IsUnrecoverable(err) {
 			// The step's dispatch never reached a working runtime (an
 			// unknown/unrunnable controller, a worktree/workspace that never
@@ -467,17 +497,17 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 		}
 		r.auditRunCost(t, run.ID, runCost)
 		hist.finish("failed", r.redactErr(err), failedStepID(err), runCost)
-		prog.finish(ctx, failedOutcome(err))
 		r.finishRun(ctx, run)
 		return
 	}
-	r.fireHooks(ctx, t, spec.Hooks, "done", "ok", run.ID, "", data, nil, "workflow")
+	if hasPhase(spec.Hooks, "done") {
+		r.fireHooks(ctx, t, spec.Hooks, "done", "ok", run.ID, "", withRun(data, endFacts("done", "")), nil, "workflow")
+	}
 	if r.Notif != nil {
 		r.Notif.Emit(ctx, "complete", t, "workflow")
 	}
 	r.auditRunCost(t, run.ID, runCost)
 	hist.finish("ok", "", "", runCost)
-	prog.finish(ctx, connector.RunOutcome{Result: connector.OutcomeOK})
 	r.finishRun(ctx, run)
 }
 

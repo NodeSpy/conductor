@@ -181,22 +181,17 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 	}()
 }
 
-// reportParked shows a parked (PR, kind, head) on its event's subject — the
-// same failed outcome a run that gave up shows, so a review conductor will
-// not retry until new commits arrive doesn't look like one still being
-// worked. Off the engine loop: it makes API calls.
-func (e *Engine) reportParked(ctx context.Context, t core.Trigger, act config.Action) {
+// fireParkedHooks fires the trigger's workflow-level `at: fail` hooks for a
+// (PR, kind, head) the engine just PARKED: it kept failing and won't be
+// retried until new commits, so it never reaches a run whose own fail hooks
+// would say so (flow.FireParkedHooks: hook.failure.kind "parked", run.reason
+// flow.ParkedReason). Off the engine loop: hooks make API calls. Fired once,
+// on the pass that parks — later passes over a parked tuple stay silent.
+func (e *Engine) fireParkedHooks(ctx context.Context, t core.Trigger, act config.Action, head string, attempts int) {
 	if act.FlowRef == "" || e.flow == nil {
 		return
 	}
-	spec, _, ok := e.flow.SpecFor(act.FlowRef)
-	if !ok {
-		return
-	}
-	pol := e.policyFor(spec)
-	shadow := e.cfg.Control.Shadow || (pol.Shadow != nil && *pol.Shadow) || (act.Shadow != nil && *act.Shadow)
-	go e.flow.ReportOutcome(context.WithoutCancel(ctx), t, act.FlowRef, shadow,
-		connector.RunOutcome{Result: connector.OutcomeFailed, Reason: "parked after repeated tries — needs a human or new commits"})
+	go e.flow.FireParkedHooks(context.WithoutCancel(ctx), t, act.FlowRef, head, attempts)
 }
 
 // closedRetention bounds how long a PR's close is remembered for closedSince —

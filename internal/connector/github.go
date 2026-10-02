@@ -23,8 +23,12 @@ func baseGithubContext() Schema {
 		"pr": {Type: TInt}, "issue": {Type: TInt}, "number": {Type: TInt},
 		"head": {Type: TString}, "base": {Type: TString}, "url": {Type: TString},
 		"kind": {Type: TString}, "title": {Type: TString}, "labels": {Type: TList},
+		"me": {Type: TMap, Desc: "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""},
 	}
 }
+
+// reactionSubjectsDesc documents the comment/review events' reaction_subjects.
+const reactionSubjectsDesc = "what a run handling this event reacts on, as [{kind, id}] for github.react: the review (kind review), the standalone comment (issue_comment | review_comment), or — sweep-recovered — each unresolved thread's opening comment (capped)"
 
 // githubEvent builds one event declaration on the shared base.
 //
@@ -42,7 +46,6 @@ func githubEvent(name, desc string, contextExtra, options Schema) EventDecl {
 	}
 	o := Schema{
 		"max_attempts_per_head": {Type: TInt, Desc: "soft attempt threshold before backoff"},
-		"progress":              {Type: TMap, Desc: progressOptionDesc},
 	}
 	for k, v := range options {
 		o[k] = v
@@ -90,7 +93,6 @@ var githubDecl = &TypeDecl{
 		"retry":           {Type: TMap, Desc: "transient dispatch retry: max, backoff"},
 		"project_map":     {Type: TMap, Desc: "repo -> paseo project checkout remap"},
 		"project_rewrite": {Type: TMap, Desc: "blanket owner/org rewrite for checkouts"},
-		"progress":        {Type: TMap, Desc: "run progress on the PR, connector-wide: { reactions: bool, status: bool, status_context: string } — see the trigger option of the same name"},
 	},
 	Events: []EventDecl{
 		githubEvent("review_requested", "your review was requested on a PR",
@@ -607,17 +609,18 @@ var githubDecl = &TypeDecl{
 			Outputs: Schema{"ok": {Type: TBool}, "reacted": {Type: TInt, Desc: "subjects reacted to"}},
 		},
 		{
-			Name: "set_status", Desc: "post a commit status on a sha (shown on any PR whose head it is)",
+			Name: "set_status", Desc: "post a commit status on a sha, or on a PR's head as it is at call time (shown on any PR whose head it is)",
 			Options: Schema{
 				"repo":        {Type: TString, Required: true, Scope: "repo"},
-				"sha":         {Type: TString, Required: true},
+				"sha":         {Type: TString, Desc: "the commit (one of sha / pr)"},
+				"pr":          {Type: TInt, Desc: "a PR whose CURRENT head gets the status, read at call time (one of sha / pr; sha wins when both are set)"},
 				"state":       {Type: TString, Required: true, Enum: githubkit.StatusStates()},
 				"description": {Type: TString, Desc: "clipped to GitHub's 140 characters"},
-				"context":     {Type: TString, Desc: "the status's name on the PR (default: the login the call acts as)"},
+				"context":     {Type: TString, Desc: "the status's name on the PR, entirely yours (templates allowed); default only when unset: the login the call acts as"},
 				"target_url":  {Type: TString},
 				"as":          {Type: TString, Enum: []string{"me", "bot"}},
 			},
-			Outputs: Schema{"ok": {Type: TBool}, "context": {Type: TString}},
+			Outputs: Schema{"ok": {Type: TBool}, "context": {Type: TString}, "sha": {Type: TString, Desc: "the commit the status went on"}},
 		},
 		{
 			Name: "sweep", Desc: "run the catch-up sweep now (daemon-global; same as `conductor sweep --now`)",
@@ -642,7 +645,6 @@ type githubConn struct {
 	Retry          config.Retry      `yaml:"retry"`
 	ProjectMap     map[string]string `yaml:"project_map"`
 	ProjectRewrite gh.ProjectRewrite `yaml:"project_rewrite"`
-	Progress       progressConf      `yaml:"progress"`
 }
 
 // githubWebhook mirrors gh.WebhookConfig: transport (smee_url/listen/path) and
@@ -667,10 +669,9 @@ type githubImpl struct {
 	// handling, and the verb switch all live there now.
 	kit *githubkit.Client
 
-	// progress tracks which run owns each PR's status row (github_progress.go).
-	progress progressTracker
-	// src is the event source Source built, so the status context progress
-	// resolves joins its own-status guard. Set once at build; read under srcMu.
+	// src is the event source Source built, so every context set_status
+	// posts under joins its own-status guard. Set once at build; read under
+	// srcMu.
 	srcMu sync.Mutex
 	src   *gh.Integration
 }
@@ -686,16 +687,7 @@ func newGithubImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error
 	if conn.App.LegacyWebhookKeys() {
 		return nil, ConfigErr(fmt.Errorf("connector %q: %w", name, gh.ErrAppWebhookMoved))
 	}
-	// The connection decodes non-strictly, so a misspelled progress key would
-	// otherwise vanish — and with it the off switch someone thought they set.
-	var raw struct {
-		Progress map[string]any `yaml:"progress"`
-	}
-	if err := ref.Decode(&raw); err == nil && raw.Progress != nil {
-		if err := checkProgressKeys(raw.Progress, true); err != nil {
-			return nil, ConfigErr(fmt.Errorf("connector %q: progress: %w", name, err))
-		}
-	}
+
 	// Resolve secret references in credential fields. An unresolvable secret
 	// disables the connector (the registry handles that) rather than failing
 	// the boot.
@@ -777,9 +769,6 @@ func (g *githubImpl) Source(triggers []CompiledTrigger) (core.Integration, error
 			Actions: actions,
 		}},
 	}
-	if c := g.conn.Progress.StatusContext; c != "" {
-		cfg.OwnStatusContexts = []string{c}
-	}
 	src, err := buildIntegration("github", g.name, cfg)
 	if gi, ok := src.(*gh.Integration); ok {
 		g.srcMu.Lock()
@@ -834,11 +823,6 @@ func (g *githubImpl) lowerTrigger(t CompiledTrigger) (config.Action, error) {
 	if n := toInt(o["max_attempts_per_head"]); n > 0 {
 		act.MaxAttemptsPerHead = n
 	}
-	if p, ok := o["progress"].(map[string]any); ok {
-		if err := checkProgressKeys(p, false); err != nil {
-			return act, fmt.Errorf("trigger on %s: options.progress: %w", t.Spec.On, err)
-		}
-	}
 	if m, ok := o["flaky_rerun"].(map[string]any); ok {
 		act.FlakyRerun = config.FlakyRerun{Enabled: truthy(m["enabled"]), Max: toInt(m["max"])}
 	}
@@ -867,7 +851,32 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 		}
 		return map[string]any{"nudged": nudged}, nil
 	}
-	return g.kit.Invoke(ctx, verb, opts)
+	out, err := g.kit.Invoke(ctx, verb, opts)
+	if err == nil && verb == "set_status" {
+		// Whatever context a status went out under is conductor's own from
+		// now on: the source never reads it back as a CI signal, or a
+		// `failure` a hook posted could dispatch the next fixer.
+		if c, _ := out["context"].(string); c != "" {
+			g.srcMu.Lock()
+			src := g.src
+			g.srcMu.Unlock()
+			if src != nil {
+				src.NoteOwnStatusContext(c)
+			}
+		}
+	}
+	return out, err
+}
+
+// TargetHead implements HeadReader: a PR's head commit, read fresh. Only a
+// target the source assigned itself (core.OwnRepo) is read.
+func (g *githubImpl) TargetHead(ctx context.Context, t core.Trigger) (string, error) {
+	repo, number := t.OwnRepo(), t.Target.Number
+	if t.Source != "github" || repo == "" || number == 0 {
+		return "", nil
+	}
+	sha, _, err := g.kit.PRHead(ctx, "me", repo, number)
+	return sha, err
 }
 
 // post/patch/put/del are the write verbs' authenticated JSON requests.
