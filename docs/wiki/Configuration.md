@@ -324,6 +324,12 @@ triggers:
       - { at: fail, uses: gh.set_status,
           options: { repo: "{{.repo}}", pr: "{{.pr}}", state: failure,
                      context: "{{.me.login}} / comment", description: "gave up: {{.run.reason}}" } }
+      # the PR merged/closed under the run: take down what start put up
+      - { at: stop, if: reaction_subjects, uses: gh.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}", content: eyes, remove: true } }
+      - { at: stop, uses: gh.set_status,
+          options: { repo: "{{.repo}}", sha: "{{.run.start_sha}}", state: success,
+                     context: "{{.me.login}} / comment", description: "stopped — {{.run.reason}}" } }
     steps: [ … ]
 ```
 
@@ -331,11 +337,11 @@ The pieces:
 
 | | what |
 |---|---|
-| `github.react` | `{repo, pr, subjects: [{kind, id}] \| kind + id, content}` adds a reaction, as you. `kind` is `issue_comment`, `review_comment`, or `review` (reacted to over GraphQL, since REST has none for a review, so it needs `pr`). `content` is `+1` `-1` `laugh` `confused` `heart` `hooray` `rocket` `eyes`. Idempotent: GitHub keeps one reaction per person and content. → `ok`, `reacted` |
+| `github.react` | `{repo, pr, subjects: [{kind, id}] \| kind + id, content, remove}` adds a reaction, as you. With `remove: true` it takes yours of that content away instead; other people's are never touched. `kind` is `issue_comment`, `review_comment`, or `review` (over GraphQL, since REST has none for a review, so it needs `pr`). `content` is `+1` `-1` `laugh` `confused` `heart` `hooray` `rocket` `eyes`. Idempotent both ways: GitHub keeps one reaction per person and content, and removing one that isn't there (or is already gone) is a no-op. → `ok`, `reacted` / `removed` |
 | `github.set_status` | `{repo, sha \| pr, state, context, description, target_url}` posts a commit status, as you. `pr:` puts it on the PR's head **as it is at call time** (read fresh); `sha:` wins when both are set. `state` is `pending` \| `success` \| `failure` \| `error`. `context` (the row's name on the PR) is entirely yours, templates included; only when unset does it default to the login the call acts as. `description` is clipped to GitHub's 140 characters. → `ok`, `context`, `sha` |
 | `reaction_subjects` | on `changes_requested` / `new_comment`: what the run handles, in `react`'s `subjects` shape. That's the review for a review event, the comment for a standalone comment, and for a sweep-recovered run over unresolved threads, each thread's opening comment (at most 10). Absent when there's nothing to react to, so `if: reaction_subjects` skips the hook. |
 | `me` | on every github event: `{login}`, the login your writes act as (discovered from the write identity, else your first `me:` login). Name rows after yourself without hardcoding a username: `"{{.me.login}} / review"`. |
-| `run.*` | [run facts](Workflows#run-facts) in workflow-level hooks: `start_sha` (the head the run started on, read as it starts, not the event's), `head_sha` / `head_short` (the head now), `pushed`, and at fail a public-safe `reason`. |
+| `run.*` | [run facts](Workflows#run-facts) in workflow-level hooks: `start_sha` (the head the run started on, read as it starts, not the event's), `head_sha` / `head_short` (the head now), `pushed`, and at `fail` / `stop` a public-safe `reason`. |
 
 **Statuses are GitHub's, unmodified.** A status is one row per (commit,
 context), and the last write wins. Conductor adds no ownership or ordering of

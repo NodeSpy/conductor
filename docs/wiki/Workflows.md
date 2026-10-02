@@ -189,9 +189,10 @@ values) and work bare or as a comparison's left side:
 
 `hooks:` entries are verb action units `{at, uses, options, if, id}` at
 `start` (on match, before steps, synchronous — before any worktree is
-provisioned or agent launched), `done` (steps succeeded), or `fail` (the run
-failed, however it failed — see [Failure paths](#failure-paths)); multiple per
-phase run in order. **Hooks nest on steps
+provisioned or agent launched), `done` (steps succeeded), `fail` (the run
+failed, however it failed — see [Failure paths](#failure-paths)), or `stop`
+(the run's target went away under it — see [Stops and
+shutdowns](#stops-and-shutdowns)); multiple per phase run in order. **Hooks nest on steps
 too** — the same unit under a step's own `hooks:` fires around that step, so
 a step can announce itself, post its result the moment it finishes, or handle
 its own failure. A failing step fires its own `at: fail` hooks, then (unless
@@ -209,8 +210,8 @@ lifecycle moment, so a handler parses the same shape regardless of phase:
 
 | field | when | meaning |
 | --- | --- | --- |
-| `hook.phase` | all | `start` \| `done` \| `fail` |
-| `hook.status` | all | `running` \| `ok` \| `failed` |
+| `hook.phase` | all | `start` \| `done` \| `fail` \| `stop` |
+| `hook.status` | all | `running` \| `ok` \| `failed` \| `stopped` |
 | `hook.run_id` | all | the workflow run id |
 | `hook.step` | step-level | the step the hook is scoped to |
 | `hook.failure` | `fail` | the failure sub-object (below) |
@@ -247,7 +248,7 @@ what the run did to its target:
 | `run.head_sha` | the target's head when the hook fires, read fresh (at `start`, the same as `start_sha`) |
 | `run.head_short` | `head_sha`'s first 7 characters |
 | `run.pushed` | the head moved during the run (both ends known and different) |
-| `run.reason` | at `fail`: a short, public-safe phrase. It is `the agent couldn't be started`, `the change was never pushed`, `timed out`, `step "<id>" failed`, `parked after repeated tries — needs a human or new commits`, `internal error`, or `the run failed`, and never the error text. `""` otherwise |
+| `run.reason` | at `fail`: a short, public-safe phrase. It is `the agent couldn't be started`, `the change was never pushed`, `timed out`, `step "<id>" failed`, `parked after repeated tries — needs a human or new commits`, `internal error`, or `the run failed`, and never the error text. At `stop`: `the PR merged` or `the PR closed`. `""` otherwise |
 
 A head is the target's current revision as its connector knows it (a pull
 request's head commit on github). It's read only when the trigger declares a
@@ -277,7 +278,39 @@ Every way a run fails fires its workflow-level `at: fail` hooks:
   parked tuple stay silent.
 
 The one exception is a PR closing under its fixer. That run is stopped, not
-failed, so no fail hooks fire.
+failed, so its `stop` hooks fire instead (below).
+
+### Stops and shutdowns
+
+Two endings are not failures:
+
+- **Stop: the target went away.** The PR merged or closed while a fixer was
+  on it, so conductor stopped the agent; any push from there would land on a
+  dead branch. The run is recorded `stopped`. Its `at: stop` hooks fire
+  (step-level for the step that was running, then workflow-level) with the run
+  facts and `run.reason` = `the PR merged` / `the PR closed`. No `done` or
+  `fail` hooks fire, and nothing is notified. This is the one moot ending a run
+  can have: a trigger whose PR closed while it was still waiting for an agent
+  slot never starts at all, so it has nothing to clean up. Use it to take
+  down what `start` put up:
+
+  ```yaml
+  - { at: stop, uses: gh.set_status,
+      options: { repo: "{{.repo}}", sha: "{{.run.start_sha}}", state: success,
+                 context: "{{.me.login}} / comment", description: "stopped — {{.run.reason}}" } }
+  - { at: stop, if: reaction_subjects, uses: gh.react,
+      options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}", content: eyes, remove: true } }
+  ```
+
+- **Shutdown: the daemon went away.** The run is interrupted, not ended: its
+  record is kept and it resumes on restart, ending there with whichever
+  terminal hooks apply. So **no** terminal hook fires (`done`, `fail`, or
+  `stop`, at either level), nothing is notified, and the run is recorded
+  `interrupted` (audit `workflow_interrupted`). Only a cancellation of the
+  run's context counts as a shutdown. A run whose own deadline runs out (a
+  step `timeout:`, a timed one-shot run) timed out, and that's a failure.
+
+`stop` hooks are best-effort, like every hook.
 
 ## Control flow
 
