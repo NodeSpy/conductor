@@ -34,6 +34,7 @@ for bin in "$dir/${prefix}"_*; do
   asset="$(basename "$bin")"
   [ "$asset" = checksums.txt ] && continue
   plat="${asset#"${prefix}"_}"
+  plat="${plat%.exe}" # windows_amd64.exe is published (and fetched) as windows_amd64
   case "$plat" in *_*) ;; *) echo "skip $asset (no <os>_<arch> suffix)" >&2; continue ;; esac
   grep -q "  ${asset}\$" "$sums" || { echo "error: checksums.txt does not list $asset" >&2; exit 1; }
   bin_blob="$(git hash-object -w "$bin")"
