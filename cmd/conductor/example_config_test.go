@@ -43,13 +43,6 @@ func TestExampleConfigValidates(t *testing.T) {
 	if !cfg.HasConnectors() {
 		t.Fatal("example config should be on the connectors schema")
 	}
-	igs, err := buildIntegrations(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validateAll(cfg, igs); err != nil {
-		t.Fatal(err)
-	}
 	stack, err := buildFlowStack(cfg, nil, nil, true)
 	if err != nil {
 		t.Fatalf("the example config must pass semantic validation: %v", err)

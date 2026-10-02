@@ -322,14 +322,6 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 		return err
 	}
 
-	igs, err := buildIntegrations(cfg)
-	if err != nil {
-		return err
-	}
-	if err := validateAll(cfg, igs); err != nil {
-		return err
-	}
-
 	// Ephemeral state (design O4). A runner is thrown away, so dedup /
 	// attempts / backoff / history live in a temp directory that goes with it
 	// — unless the operator pointed state somewhere durable on purpose. ctx
@@ -371,7 +363,7 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 	// reaches a human from CI. NOT SetPublisher: the lifecycle→conductor.*
 	// source feeds triggers through an engine loop that one-shot mode never
 	// runs, so publishing would queue events nothing drains.
-	notifier := notify.New(cfg.Notify, logf, st.Audit)
+	notifier := notify.New(logf, st.Audit)
 
 	// The real stack: DryRun false. Steps — agents, engines, verbs, commands —
 	// actually execute.
@@ -398,7 +390,7 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 		return err
 	}
 
-	igs, retry, writeTok, readTok := resolveDispatchIdentity(igs, stack)
+	igs, retry, writeTok, readTok := resolveDispatchIdentity(stack)
 	paseoBin, err := resolvePaseoBin(cfg)
 	if err != nil {
 		return err

@@ -9,6 +9,9 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 )
 
+// legacyMini is a config still on the top-level `integrations:` block removed
+// with the legacy config schema (plugin-contract.md decision Q4) — `validate`
+// must name it rather than silently accepting it.
 const legacyMini = `
 integrations:
   - type: cron
@@ -22,8 +25,9 @@ integrations:
 func TestCmdValidate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	os.WriteFile(path, []byte(legacyMini), 0o600)
-	if err := cmdValidate([]string{"--config", path}); err != nil {
-		t.Fatalf("valid legacy config: %v", err)
+	err := cmdValidate([]string{"--config", path})
+	if err == nil || !strings.Contains(err.Error(), "`integrations:` was removed with the legacy config schema") {
+		t.Fatalf("a config still using integrations: should name it as removed, got %v", err)
 	}
 	// A connectors config validates through the flow stack too.
 	os.WriteFile(path, []byte(`
@@ -67,14 +71,6 @@ func TestSmallCmdHelpers(t *testing.T) {
 	cfg.Store.StateFile = "/data/state.json"
 	if pidPath(cfg) != "/data/conductor.pid" || controlSockPath(cfg) != "/data/control.sock" {
 		t.Fatal("sibling paths")
-	}
-	on := true
-	if anySlackIntegration(&config.Config{}) {
-		t.Fatal("no integrations")
-	}
-	slackCfg := &config.Config{Integrations: []config.IntegrationRef{{Type: "slack", Enabled: &on}}}
-	if !anySlackIntegration(slackCfg) {
-		t.Fatal("enabled slack detected")
 	}
 	preflightPATH("definitely-not-a-binary") // warns, never fails
 }

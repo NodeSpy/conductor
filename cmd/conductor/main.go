@@ -37,10 +37,8 @@ import (
 	"github.com/NodeSpy/conductor/internal/engine"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/gitwt"
-	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/hosts"
 	"github.com/NodeSpy/conductor/internal/inbound"
-	"github.com/NodeSpy/conductor/internal/integrations/slack" // registers "slack"; also feeds hand-off replies (see wireSlackHandoffInbox)
 	"github.com/NodeSpy/conductor/internal/memory"
 	agentmodels "github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
@@ -50,10 +48,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/skill"
 	"github.com/NodeSpy/conductor/internal/store"
 	"github.com/NodeSpy/conductor/internal/vaults"
-
-	_ "github.com/NodeSpy/conductor/internal/integrations/cron"    // register "cron"
-	_ "github.com/NodeSpy/conductor/internal/integrations/rss"     // register "rss"
-	_ "github.com/NodeSpy/conductor/internal/integrations/webhook" // register "webhook"
 )
 
 var version = "dev"
@@ -282,46 +276,6 @@ func resolveBootConfig(args []string) (*config.Config, string, error) {
 	return cfg, warning, err
 }
 
-// buildIntegrations instantiates every configured integration via the registry.
-func buildIntegrations(cfg *config.Config) ([]core.Integration, error) {
-	var out []core.Integration
-	for _, ref := range cfg.Integrations {
-		if !ref.IsEnabled() {
-			continue
-		}
-		ig, err := core.Build(ref.Type, ref.Name, ref.Decode)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, ig)
-	}
-	return out, nil
-}
-
-// actionLister is implemented by an integration that can enumerate its configured
-// actions, so checks spanning the integration's sub-config and the top-level
-// config (agent profile references) can run up front rather than at dispatch.
-type actionLister interface {
-	Actions() []config.ActionRef
-}
-
-// validateAll runs each integration's own Validate, then the cross-config
-// checks: every `agent:` an action or workflow step names must be a profile
-// defined under `agents:` — otherwise the engine dispatches an empty profile and
-// paseo fails with MISSING_PROVIDER only once a live trigger reaches that step.
-func validateAll(cfg *config.Config, igs []core.Integration) error {
-	var refs []config.ActionRef
-	for _, ig := range igs {
-		if err := ig.Validate(); err != nil {
-			return err
-		}
-		if l, ok := ig.(actionLister); ok {
-			refs = append(refs, l.Actions()...)
-		}
-	}
-	return cfg.CheckAgentRefs(refs)
-}
-
 func cmdValidate(args []string) error {
 	// `conductor validate <path>` validates THAT file. A bare positional path
 	// used to be silently dropped (configPath only consumed --config), so the
@@ -345,15 +299,8 @@ func cmdValidate(args []string) error {
 	if err != nil {
 		return err
 	}
-	igs, err := buildIntegrations(cfg)
-	if err != nil {
-		return err
-	}
-	if err := validateAll(cfg, igs); err != nil {
-		return err
-	}
 	// The connectors-model semantic pass: schemas, verbs, position-scoped
-	// references, workflow inputs/outputs. No-op for legacy-only configs.
+	// references, workflow inputs/outputs.
 	stack, err := buildFlowStack(cfg, nil, nil, true)
 	if err != nil {
 		return err
@@ -386,17 +333,8 @@ func cmdValidate(args []string) error {
 			fmt.Printf("warning: %s\n", w)
 		}
 	}
-	if stack != nil {
-		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s)",
-			len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows))
-		if len(cfg.Integrations) > 0 {
-			fmt.Printf(" — plus %d legacy integration(s)", len(cfg.Integrations))
-		}
-		fmt.Println()
-		return nil
-	}
-	fmt.Printf("ok: %d integration(s) configured (%d enabled)\n",
-		len(cfg.Integrations), len(igs))
+	fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s)\n",
+		len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows))
 	return nil
 }
 
@@ -406,19 +344,8 @@ func cmdRun(args []string) error {
 	if hasPositional(args) {
 		return cmdRunTrigger(args)
 	}
-	// Automatic in-place migration: a legacy config is transformed to the
-	// connectors schema (backed up, validated, swapped) BEFORE the strict
-	// runtime load; on any failure the daemon keeps running on the legacy
-	// config and notifies.
 	cfg, bootWarning, err := resolveBootConfig(args)
 	if err != nil {
-		return err
-	}
-	igs, err := buildIntegrations(cfg)
-	if err != nil {
-		return err
-	}
-	if err := validateAll(cfg, igs); err != nil {
 		return err
 	}
 
@@ -436,7 +363,7 @@ func cmdRun(args []string) error {
 	}
 	defer st.Close()
 
-	notifier := notify.New(cfg.Notify, logf, st.Audit)
+	notifier := notify.New(logf, st.Audit)
 	// Every lifecycle event feeds the conductor.* source (ordinary triggers
 	// alert on them); the source's loop guard keeps a notification
 	// workflow's own events from re-feeding.
@@ -461,7 +388,7 @@ func cmdRun(args []string) error {
 	}
 	defer stack.Close() // stop plugin subprocesses on daemon shutdown (#54)
 
-	igs, retry, writeTok, readTok := resolveDispatchIdentity(igs, stack)
+	igs, retry, writeTok, readTok := resolveDispatchIdentity(stack)
 	paseoBin, err := resolvePaseoBin(cfg)
 	if err != nil {
 		return err
@@ -611,11 +538,6 @@ func cmdRun(args []string) error {
 		logf("runtime %s: dedicated paseo dispatcher (backend-rpc plugin)", name)
 	}
 	broker := controller.NewBroker(reg, st, logf)
-	// Hand-off registry: resolves the named `handoffs:` map (config.Load already
-	// folded a legacy singular `handoff:` block into Handoffs["default"], so this
-	// is the only path needed here). Empty map → Resolve always yields nil → the
-	// review hand-off keeps today's paseo-native behavior.
-	handoffs := handoff.NewRegistry(cfg.Handoffs, cfg.DefaultHandoffName(), logf)
 
 	// The connectors-model stack (secret resolution, connector registry, flow
 	// runner, lowered source integrations) was already built above, before
@@ -628,8 +550,7 @@ func cmdRun(args []string) error {
 		}
 	}
 	// Redaction reaches every outbound surface once the resolver exists: the
-	// notifier's webhooks/via routes, the shared logf choke point, and the
-	// audit writer's value backstop.
+	// shared logf choke point and the audit writer's value backstop.
 	if stack != nil {
 		notifier.SetSecrets(stack.Secrets)
 		setLogRedactor(stack.Secrets)
@@ -638,24 +559,6 @@ func cmdRun(args []string) error {
 	notifyStackFailures(stack, notifier)
 	if bootWarning != "" {
 		notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "config", Kind: "boot"}, bootWarning)
-	}
-	// notify.via routes deliver through connector verbs — wire the router when
-	// a connectors: block exists (via with no connectors logs a warning).
-	if stack != nil {
-		notifier.SetRouter(func(ctx context.Context, r config.NotifyRoute, data map[string]any) error {
-			connName, verb, _ := strings.Cut(r.Uses, ".")
-			in, ok := stack.Registry.Get(connName)
-			if !ok {
-				return fmt.Errorf("unknown connector %q", connName)
-			}
-			merged := connector.MergeOptions(in.DefaultOptions, r.Options)
-			rendered, err := flow.RenderOptions(merged, data)
-			if err != nil {
-				return err
-			}
-			_, err = in.InvokeFinal(ctx, verb, rendered)
-			return err
-		})
 	}
 	// Wire the engine's dispatch-completion seam to every configured slack
 	// instance's on_done/on_fail handling (see core.SetCompletionHook and
@@ -676,7 +579,7 @@ func cmdRun(args []string) error {
 	// affinity.json, resumed after restart, held from the reaper while bound.
 	affinity := controller.NewAffinity(reg, st, cfg, hold.Add, hold.Remove, logf)
 	engOpts := engine.Options{
-		Config: cfg, Store: st, Dispatch: disp, Controllers: reg, Broker: broker, Handoffs: handoffs,
+		Config: cfg, Store: st, Dispatch: disp, Controllers: reg, Broker: broker,
 		Notifier: notifier, Author: gitAuthor(), UserToken: writeTok, ReadToken: readTok, Log: logf,
 		RefreshAppToken: refreshAppToken(igs), Hold: hold, Affinity: affinity, PausePath: pausePath(cfg),
 	}
@@ -865,27 +768,8 @@ func cmdRun(args []string) error {
 	}
 
 	// Mount connector ask surfaces (web pages, discord gateways) and fan
-	// Socket Mode replies into every slack inbox — legacy handoffs included.
-	wireConnectorSurfaces(ctx, stack, handoffs, cfg)
-
-	// Serve each configured web hand-off's draft pages on the shared inbound
-	// listener (once ctx exists to govern its shutdown). No-op when no web
-	// hand-off is configured.
-	for _, we := range handoffs.WebEntries() {
-		inbound.Register(ctx, we.Listen, "/handoff", we.Chan, logf)
-		logf("handoff %s: web draft pages on %s/handoff", we.Name, we.Listen)
-	}
-
-	// Start one Discord gateway per distinct bot token configured across
-	// `discord:` hand-off entries. No-op when none are configured
-	// (DiscordBotTokens is empty).
-	for _, tok := range handoffs.DiscordBotTokens() {
-		tok := tok
-		go handoff.RunDiscordGateway(ctx, tok, handoffs.DiscordInbox(), logf)
-	}
-	if n := len(handoffs.DiscordBotTokens()); n > 0 {
-		logf("handoff: %d discord bot gateway(s) starting", n)
-	}
+	// Socket Mode replies into every slack inbox.
+	wireConnectorSurfaces(ctx, stack)
 
 	// Write a pidfile so the `sweep` CLI can signal us; clean it up on exit.
 	pidFile := pidPath(cfg)
@@ -1068,11 +952,6 @@ func cmdRun(args []string) error {
 	go emitUpdatedOnBoot(cfg, notifier)
 	go pendingPluginRetry(ctx, cfg, stop)
 
-	// Periodic activity digest (opt-in via notify.digest).
-	if cfg.Notify.Digest.D() > 0 {
-		go digestLoop(ctx, cfg, notifier)
-	}
-
 	// Start integrations.
 	for _, ig := range igs {
 		ig := ig
@@ -1146,56 +1025,17 @@ func wireSlackCompletion(igs []core.Integration) {
 	})
 }
 
-// wireSlackHandoffInbox connects any configured `slack:` hand-off entries'
-// shared Inbox to the slack integration's reply hook, so a Socket Mode
-// "message" event (thread reply or DM) resolves the pending Await instead of
-// being treated as ordinary chatter. A no-op when no slack hand-off is
-// configured. If one is configured but no enabled `slack` integration exists
-// in `integrations:`, nothing will ever call the hook — warn loudly at
-// startup rather than leaving the hand-off silently stuck waiting for a
-// reply that can never arrive.
-func wireSlackHandoffInbox(cfg *config.Config, handoffs *handoff.Registry) {
-	inbox := handoffs.SlackInbox()
-	if inbox == nil {
-		return
-	}
-	slack.SetReplyHook(func(channel, threadTS, user, text string) bool {
-		return inbox.DeliverFrom(channel, threadTS, user, text)
-	})
-	if !anySlackIntegration(cfg) {
-		logf("handoff: a slack hand-off is configured but no enabled `slack` integration is present in integrations: — replies will never be captured (add one, see README Hand-offs)")
-	}
-}
-
-// anySlackIntegration reports whether integrations: configures at least one
-// enabled slack instance (the Socket Mode connection that must be running for
-// slack hand-off replies to be captured).
-func anySlackIntegration(cfg *config.Config) bool {
-	for _, ig := range cfg.Integrations {
-		if ig.Type == "slack" && ig.IsEnabled() {
-			return true
-		}
-	}
-	return false
-}
-
-// resolveDispatchIdentity assembles the FULL integration set — the legacy
-// `integrations:` block plus the connectors-model stack's lowered source
-// integrations — and derives the dispatch retry/write/read token resolvers
-// from it. The connectors-model integrations MUST be folded in before
-// dispatchTuning runs: dispatchTuning only inspects dispatchTuner integrations
-// already present in the slice it's given, and a pure connectors-model config
-// (no legacy integrations: block — every test/e2e config and most real ones)
-// has NONE until stack.Integrations is appended. Call this exactly once, right
-// after building both `igs` and `stack`, rather than calling dispatchTuning
-// directly: getting the order backwards is how a connectors-model github
-// connector's identity.write_token/read_token silently stopped being seen at
-// all, and every acts-as-the-user write fell back to a bare `gh auth token`
-// (#60) — a security-relevant identity regression with no error, no log line,
-// just the wrong token on the wire.
-func resolveDispatchIdentity(igs []core.Integration, stack *flowStack) (all []core.Integration, retry config.Retry, write, read func() (string, error)) {
+// resolveDispatchIdentity takes the connectors-model stack's lowered source
+// integrations and derives the dispatch retry/write/read token resolvers from
+// them. Call this exactly once, right after building `stack`, rather than
+// calling dispatchTuning directly: getting the order backwards is how a
+// connectors-model github connector's identity.write_token/read_token
+// silently stopped being seen at all, and every acts-as-the-user write fell
+// back to a bare `gh auth token` (#60) — a security-relevant identity
+// regression with no error, no log line, just the wrong token on the wire.
+func resolveDispatchIdentity(stack *flowStack) (igs []core.Integration, retry config.Retry, write, read func() (string, error)) {
 	if stack != nil {
-		igs = append(igs, stack.Integrations...)
+		igs = stack.Integrations
 	}
 	retry, write, read = dispatchTuning(igs)
 	return igs, retry, write, read
@@ -1286,25 +1126,15 @@ func cmdReplay(args []string) error {
 	if err := json.Unmarshal(raw, &fx); err != nil {
 		return fmt.Errorf("fixture must be {\"event\":..., \"body\":{...}}: %w", err)
 	}
-	igs, err := buildIntegrations(cfg)
-	if err != nil {
-		return err
-	}
 	type translator interface {
 		Translate(context.Context, string, []byte) []core.Trigger
 	}
-	disp := dispatch.New(cfg.PaseoBin, config.Retry{}, true) // dry-run
-	found := 0
-	for _, ig := range igs {
-		tr, ok := ig.(translator)
-		if !ok {
-			continue
-		}
-		for _, t := range tr.Translate(context.Background(), fx.Event, fx.Body) {
-			found++
-			printTrigger(cfg, disp, t)
-		}
+	paseoBin, err := resolvePaseoBin(cfg)
+	if err != nil {
+		return err
 	}
+	disp := dispatch.New(paseoBin, config.Retry{}, true) // dry-run
+	found := 0
 
 	// Connectors-model triggers: translate through the lowered sources, then
 	// run each matching trigger through the flow runner with DryRun stubbing
@@ -1365,16 +1195,21 @@ func cmdSweep(args []string) error {
 			return signalSweepNow(cfg)
 		}
 	}
-	igs, err := buildIntegrations(cfg)
+	stack, err := buildFlowStack(cfg, nil, nil, true) // dry-run
 	if err != nil {
 		return err
 	}
+	defer stack.Close()
 	type sweeper interface {
 		SweepOnce(context.Context, core.EmitFunc) error
 	}
-	disp := dispatch.New(cfg.PaseoBin, config.Retry{}, true) // dry-run print
+	paseoBin, err := resolvePaseoBin(cfg)
+	if err != nil {
+		return err
+	}
+	disp := dispatch.New(paseoBin, config.Retry{}, true) // dry-run print
 	ctx := context.Background()
-	for _, ig := range igs {
+	for _, ig := range stack.Integrations {
 		sw, ok := ig.(sweeper)
 		if !ok {
 			continue

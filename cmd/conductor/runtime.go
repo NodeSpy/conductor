@@ -25,18 +25,13 @@ type paseoRuntimeDef struct {
 	Default bool
 }
 
-// paseoRuntimeDefs lists every paseo-type entry across runtimes: and legacy
-// controllers:, sorted by name for determinism.
+// paseoRuntimeDefs lists every paseo-type `runtimes:` entry, sorted by name
+// for determinism.
 func paseoRuntimeDefs(cfg *config.Config) []paseoRuntimeDef {
 	var out []paseoRuntimeDef
 	for name, rt := range cfg.Runtimes {
 		if rt.BuiltinType() == "paseo" {
 			out = append(out, paseoRuntimeDef{Name: name, Bin: rt.Bin, Home: rt.Home, Server: rt.Server, Host: rt.Host, Default: rt.Default})
-		}
-	}
-	for name, cc := range cfg.Controllers {
-		if cc.Type == "paseo" {
-			out = append(out, paseoRuntimeDef{Name: name, Bin: cc.Bin, Home: cc.Home, Server: cc.Server, Host: cc.Host, Default: cc.Default})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -94,9 +89,9 @@ func expandTilde(p string) string {
 // resolvePaseoBin picks the PRIMARY dispatcher's binary — the one shared by
 // command steps, provisioning for non-paseo controllers, and the built-in
 // paseo fallback. It must be local: the default local paseo runtime's bin,
-// else the first local one's, else the top-level paseo_bin. Runtimes with a
-// different bin or a host: get their OWN dispatchers (see
-// buildPaseoOverrides), so nothing errors on plurality anymore.
+// else the first local one's, else the built-in default ("paseo", found on
+// PATH). Runtimes with a different bin or a host: get their OWN dispatchers
+// (see buildPaseoOverrides), so nothing errors on plurality anymore.
 func resolvePaseoBin(cfg *config.Config) (string, error) {
 	var first string
 	for _, def := range paseoRuntimeDefs(cfg) {
@@ -113,7 +108,7 @@ func resolvePaseoBin(cfg *config.Config) (string, error) {
 	if first != "" {
 		return first, nil
 	}
-	return cfg.PaseoBin, nil
+	return config.BuiltinPaseoRuntime, nil
 }
 
 // buildPaseoOverrides builds a dedicated dispatcher for every paseo runtime

@@ -17,7 +17,7 @@ import (
 func capturePublisher() (*notify.Notifier, func() []string) {
 	var mu sync.Mutex
 	var events []string
-	n := notify.New(config.Notify{}, func(string, ...any) {}, nil)
+	n := notify.New(func(string, ...any) {}, nil)
 	n.SetPublisher(func(_ context.Context, event string, _ core.Trigger, line string, extra map[string]any) {
 		mu.Lock()
 		v, _ := extra["version"].(string)

@@ -113,20 +113,11 @@ triggers:
   - on: github.merge_conflict
     steps: [{ id: fix, type: agent, prompt: "fix" }]
 `)
-	igs, err := buildIntegrations(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(igs) != 0 {
-		t.Fatalf("a config with no legacy integrations: block must build zero legacy "+
-			"integrations, got %d — this test's premise (the connectors-model stack is "+
-			"the ONLY source of the write token) doesn't hold", len(igs))
-	}
 	stack, err := buildFlowStack(cfg, nil, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	all, _, write, _ := resolveDispatchIdentity(igs, stack)
+	all, _, write, _ := resolveDispatchIdentity(stack)
 	if len(all) == 0 {
 		t.Fatal("resolveDispatchIdentity must fold the connectors-model stack's lowered " +
 			"integrations into the returned set")

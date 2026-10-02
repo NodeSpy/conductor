@@ -366,15 +366,11 @@ func serviceConfigValid() error {
 	if err != nil {
 		return err
 	}
-	igs, err := buildIntegrations(cfg)
+	stack, err := buildFlowStack(cfg, nil, nil, true)
 	if err != nil {
 		return err
 	}
-	for _, ig := range igs {
-		if err := ig.Validate(); err != nil {
-			return err
-		}
-	}
+	stack.Close()
 	return nil
 }
 

@@ -498,8 +498,8 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 // to say it at load than to let them discover it as a refusal.
 func untrustedTargetWarnings(cfg *config.Config) []string {
 	var warns []string
-	for _, ref := range cfg.Integrations {
-		if ref.Type != "webhook" || !ref.IsEnabled() {
+	for name, ref := range cfg.ConnectorsMap {
+		if ref.TypeName() != "webhook" || !ref.IsEnabled() {
 			continue
 		}
 		var conn struct {
@@ -521,7 +521,7 @@ func untrustedTargetWarnings(cfg *config.Config) []string {
 					"agent-authored step or skill grant must name the repos it may touch in "+
 					"policy.agent_authored.verbs.<verb>.repo, and a `{{ }}` allowlist entry built "+
 					"from .repo/.owner/.name/.number renders empty for it",
-				ref.Name, src.Name))
+				name, src.Name))
 		}
 	}
 	sort.Strings(warns)

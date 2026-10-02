@@ -23,9 +23,8 @@ func cmdConfig(args []string) error {
 	return fmt.Errorf("usage: conductor config <subcommand> (none remain; `migrate` was removed with the legacy config schema)")
 }
 
-// validateAt runs the full load+validate pipeline (legacy integrations,
-// agent refs, and the connectors-model semantic pass) against the current
-// on-disk config.
+// validateAt runs the full load+validate pipeline (the connectors-model
+// semantic pass) against the current on-disk config.
 func validateAt(args []string) error {
 	path, _ := configPath(args)
 	return validateConfigFile(path)
@@ -38,13 +37,6 @@ func validateConfigFile(path string) error {
 	loadEnvFile(filepath.Join(filepath.Dir(path), "conductor.env"))
 	cfg, err := config.Load(path)
 	if err != nil {
-		return err
-	}
-	igs, err := buildIntegrations(cfg)
-	if err != nil {
-		return err
-	}
-	if err := validateAll(cfg, igs); err != nil {
 		return err
 	}
 	stack, err := buildFlowStack(cfg, nil, nil, true)

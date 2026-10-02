@@ -302,16 +302,12 @@ type slackInboxer interface {
 
 // wireConnectorSurfaces mounts web connectors' draft pages on the inbound
 // listener, starts discord connectors' gateways, and fans Socket Mode replies
-// into every slack inbox (legacy handoffs + slack connectors).
-func wireConnectorSurfaces(ctx context.Context, stack *flowStack, handoffs *handoff.Registry, cfg *config.Config) {
+// into every slack connector's inbox.
+func wireConnectorSurfaces(ctx context.Context, stack *flowStack) {
 	if stack == nil {
-		wireSlackHandoffInbox(cfg, handoffs)
 		return
 	}
 	var slackInboxes []*handoff.Inbox
-	if legacy := handoffs.SlackInbox(); legacy != nil {
-		slackInboxes = append(slackInboxes, legacy)
-	}
 	seenGateway := map[string]bool{}
 	for _, name := range stack.Registry.Names() {
 		in, _ := stack.Registry.Get(name)
