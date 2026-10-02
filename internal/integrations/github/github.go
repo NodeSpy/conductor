@@ -214,7 +214,8 @@ type Integration struct {
 	ownStatus map[string]bool
 	// acting is the login your writes act as — published to every event as
 	// {{.me.login}}: the one discovered from the write identity, else the
-	// first `me:` login configured. Guarded by ownMu.
+	// first login `self` was built from (me:, or the reviewer/assignee
+	// fallback). Guarded by ownMu.
 	acting string
 }
 
@@ -314,6 +315,9 @@ func newIntegration(name string, decode func(any) error) (core.Integration, erro
 		add := func(a config.Actors) {
 			for _, l := range a.Logins {
 				g.self[strings.ToLower(l)] = true
+				if g.acting == "" {
+					g.acting = l
+				}
 			}
 		}
 		for _, r := range rules {

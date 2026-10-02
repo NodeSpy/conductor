@@ -217,3 +217,37 @@ func TestSweepIgnoresOwnFailureStatus(t *testing.T) {
 		t.Fatalf("the sweep read commit statuses %d time(s)", *statusReads)
 	}
 }
+
+// Every event carries `me: {login}` — you, as your writes act — so a hook can
+// name a status context after you ("{{.me.login}} / review") without
+// hardcoding a username: the login discovered from the write identity, else
+// the first login you are identified by. Absent while unknown.
+func TestMeFactOnEvents(t *testing.T) {
+	comment := []byte(`{"action":"created",
+		"repository":{"full_name":"acme/widget","name":"widget","owner":{"login":"acme"}},
+		"issue":{"number":3,"pull_request":{},"user":{"login":"me"}},
+		"comment":{"id":12,"user":{"login":"bob"},"body":"please fix"}}`)
+	g := newTestIntegration(t, baseConfig()) // me: { logins: [me] }
+	trs := g.triggersFor(context.Background(), "issue_comment", comment)
+	if len(trs) != 1 || !reflect.DeepEqual(trs[0].Context["me"], map[string]any{"login": "me"}) {
+		t.Fatalf("me = %v, want the configured login", trs[0].Context["me"])
+	}
+	// Discovery from the write identity names the acting login.
+	d := newTestIntegration(t, Config{
+		App:      AppConfig{AppID: 1, PrivateKeyPath: "x"},
+		Identity: Identity{WriteToken: "literal-write-tok"},
+		Rules:    baseConfig().Rules,
+	})
+	d.self = map[string]bool{}
+	d.acting = ""
+	d.app = userStub(t, "Octocat")
+	d.discoverSelf(context.Background())
+	if got := d.meFact(); !reflect.DeepEqual(got, map[string]any{"login": "Octocat"}) {
+		t.Fatalf("me after discovery = %v, want Octocat (as GitHub spells it)", got)
+	}
+	// Unknown: no fact at all.
+	u := newTestIntegration(t, Config{App: AppConfig{AppID: 1, PrivateKeyPath: "x"}})
+	if u.meFact() != nil {
+		t.Fatalf("me with no known login = %v, want nil", u.meFact())
+	}
+}

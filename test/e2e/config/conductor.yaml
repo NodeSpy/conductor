@@ -109,6 +109,22 @@ triggers:
       repo:
         - acme/*
         - grpe/*
+    # Progress as plain hooks (the pr-autopilot pack's shape): 👀 + pending on
+    # the commit the run starts on; 🚀/👍 + success on that same commit; 😕 +
+    # failure on the PR's current head. Group H4 asserts what they post.
+    hooks:
+      - { at: start, if: reaction_subjects, uses: github.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}", content: eyes } }
+      - { at: start, uses: github.set_status,
+          options: { repo: "{{.repo}}", sha: "{{.run.start_sha}}", state: pending, context: "{{.me.login}} / comment", description: "replying to {{.author}}'s comment" } }
+      - { at: done, if: reaction_subjects, uses: github.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}", content: "{{if .run.pushed}}rocket{{else}}+1{{end}}" } }
+      - { at: done, uses: github.set_status,
+          options: { repo: "{{.repo}}", sha: "{{.run.start_sha}}", state: success, context: "{{.me.login}} / comment", description: "{{if .run.pushed}}pushed {{.run.head_short}}{{else}}done — no changes pushed{{end}}" } }
+      - { at: fail, if: reaction_subjects, uses: github.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}", content: confused } }
+      - { at: fail, uses: github.set_status,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", state: failure, context: "{{.me.login}} / comment", description: "gave up: {{.run.reason}}" } }
     steps:
       - !!merge <<: *fixer
         type: agent

@@ -478,7 +478,7 @@ func loginMatch(logins []string, author string) bool {
 // handling it reacts on (the connector's run progress; github.react's
 // `subjects` shape). One subject per call; ids that aren't real are dropped.
 func reactionSubjects(kind string, ids ...int64) []any {
-	out := make([]any, 0, len(ids))
+	var out []any // nil, not empty, when there is no subject: `if: reaction_subjects` reads it false
 	for _, id := range ids {
 		if id > 0 {
 			out = append(out, map[string]any{"kind": kind, "id": id})
