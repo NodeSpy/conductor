@@ -275,4 +275,3 @@ func TestIsOfficialSource(t *testing.T) {
 		}
 	}
 }
-

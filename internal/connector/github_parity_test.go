@@ -92,7 +92,6 @@ func officialGithubSpec(t *testing.T, bin string) plugin.Spec {
 		BinPath: bin, Sha256: hex.EncodeToString(sum[:]), ReleaseVerified: true}
 }
 
-
 // githubPluginBin builds the reference conductor-github plugin once.
 func githubPluginBin(t *testing.T) string {
 	t.Helper()

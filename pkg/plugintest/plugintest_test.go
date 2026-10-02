@@ -22,7 +22,9 @@ type acme struct{ upstream string }
 func (a *acme) Describe() plugin.Decl {
 	return plugin.Decl{Type: "acme", Events: []plugin.Event{{Name: "alert"}, {Name: "stale"}}}
 }
-func (a *acme) Invoke(plugin.InvokeRequest) (plugin.InvokeResult, error) { return plugin.InvokeResult{}, nil }
+func (a *acme) Invoke(plugin.InvokeRequest) (plugin.InvokeResult, error) {
+	return plugin.InvokeResult{}, nil
+}
 func (a *acme) StartSource(ctx context.Context, req plugin.StartSourceRequest, emit func(any) error) error {
 	a.upstream, _ = req.Config["upstream"].(string)
 	ln := sourcekit.Listener{Addr: req.Config["listen"].(string), Path: "/webhook", Secret: "s", SigHeader: "X-Sig"}

@@ -69,7 +69,6 @@ type pluginSourceIntegration struct {
 	// event fires (the engine reads them, never the event's name).
 	sem map[string]*sdk.EventSemantics
 
-
 	mu   sync.Mutex
 	emit core.EmitFunc // the running stream's emit, for events a poll returns
 	ctx  context.Context

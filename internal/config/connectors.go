@@ -55,7 +55,7 @@ type ConnectorRef struct {
 	// globs). Empty = no extra restriction beyond the structural guarantee that
 	// an implementation only ever receives its own instances' credentials.
 	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
-	raw           yaml.Node
+	raw          yaml.Node
 	// legacyType holds a pre-`use:` `type:` value. It is NOT part of the schema
 	// — it exists only so validateConnectors can emit a migration-specific error
 	// instead of the silent "missing use:" a dropped field would produce.
@@ -71,9 +71,9 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 		Options map[string]any `yaml:"options,omitempty"`
 		Policy  *Policy        `yaml:"policy,omitempty"`
 		// Type is the retired field, read for diagnostics only (see legacyType).
-		Type          string           `yaml:"type,omitempty"`
-		Isolation     *IsolationConfig `yaml:"isolation,omitempty"`
-		AllowSecrets  []string         `yaml:"allow_secrets,omitempty"`
+		Type         string           `yaml:"type,omitempty"`
+		Isolation    *IsolationConfig `yaml:"isolation,omitempty"`
+		AllowSecrets []string         `yaml:"allow_secrets,omitempty"`
 	}
 	var h hdr
 	if err := n.Decode(&h); err != nil {
