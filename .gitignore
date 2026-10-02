@@ -14,3 +14,5 @@ audit.jsonl
 # never committed. A bare `go build ./test/plugins/acme-echo` drops one here.
 /acme-echo
 /test/plugins/acme-echo/acme-echo
+/conductor-github
+/test/plugins/conductor-github/conductor-github
