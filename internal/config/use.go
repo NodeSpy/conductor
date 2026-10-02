@@ -679,8 +679,8 @@ var (
 	builtinMu         sync.RWMutex
 	builtinConnectors = map[string]bool{
 		"blob": true, "command": true, "conductor": true, "cron": true,
-		"discord": true, "graphql": true, "kv": true,
-		"memory": true, "rest": true, "rss": true, "slack": true,
+		"graphql": true, "kv": true,
+		"memory": true, "rest": true, "rss": true,
 		"sql": true, "web": true, "webhook": true, "workflow": true,
 	}
 )

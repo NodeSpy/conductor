@@ -195,7 +195,7 @@ func TestAgentFollowUpRoutes(t *testing.T) {
 	// Build the engine ON the capture-capable dispatcher: runnerFor resolves
 	// the default profile to the built-in paseo runner, which is exactly it.
 	e := New(Options{Config: baseCfg(), Store: tempStore(t), Dispatch: d,
-		Notifier: &fakeNotifier{}, UserToken: func() (string, error) { return "u", nil }})
+		Notifier: &fakeNotifier{}})
 
 	tr := agentTrigger("fix", "o/r", 1, "h", "s", config.Action{Type: "agent", Agent: "fixer"})
 	out, ok, err := e.agentFollowUp(context.Background(), "agent-9", "fixer", tr, "please fix the tests")

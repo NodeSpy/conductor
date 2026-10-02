@@ -103,11 +103,11 @@ func newEng(t *testing.T, cfg *config.Config, d *fakeDispatcher, n *fakeNotifier
 	st := tempStore(t)
 	e := New(Options{
 		Config: cfg, Store: st, Dispatch: d, Notifier: n,
-		Author:    dispatch.Author{Name: "Me"},
-		UserToken: func() (string, error) { return "utok", nil },
+		Author: dispatch.Author{Name: "Me"},
 		// The declared remediation's verbs: the status read reports runs
 		// finished, and the remedy goes to the test's spy.
 		InvokeVerb: remediationVerbs(rerun, func() string { return "completed" }),
+		Connectors: forgeRegistry(t),
 	})
 	return e, st
 }
@@ -131,8 +131,7 @@ func TestRuntimePauseSkips(t *testing.T) {
 		t.Fatal(err)
 	}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
-	e := New(Options{Config: baseCfg(), Store: tempStore(t), Dispatch: d, Notifier: n,
-		UserToken: func() (string, error) { return "u", nil }, PausePath: pauseFile})
+	e := New(Options{Config: baseCfg(), Store: tempStore(t), Dispatch: d, Notifier: n, PausePath: pauseFile})
 	tr := agentTrigger("merge_conflict", "a/w", 1, "h", "sig", config.Action{Type: "agent", Agent: "w/fixer"})
 
 	e.process(context.Background(), tr)
@@ -350,7 +349,7 @@ func TestBackoffThenRetry(t *testing.T) {
 	clock := time.Unix(1_700_000_000, 0)
 	st.SetNow(func() time.Time { return clock })
 	e := New(Options{Config: baseCfg(), Store: st, Dispatch: d, Notifier: n,
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 
 	act := config.Action{Type: "agent", Agent: "w/fixer", MaxAttemptsPerHead: 1}
 	// 1st: below soft → dispatches, records an attempt (attemptAt = clock).
@@ -393,7 +392,7 @@ func TestPolicyBackoffOverridesCadence(t *testing.T) {
 		MaxAttemptsPerHead: &one, // soft threshold from policy, not the action
 	}
 	e := New(Options{Config: cfg, Store: st, Dispatch: d, Notifier: n,
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 
 	act := config.Action{Type: "agent", Agent: "w/fixer"} // no per-action threshold
 	// 1st: below the policy's soft threshold → dispatches, records the attempt.
@@ -513,39 +512,6 @@ func TestFailedDispatchRetriesUntilCap(t *testing.T) {
 	}
 	if !n.has("escalate") {
 		t.Fatal("should escalate at the cap")
-	}
-}
-
-// TestCompletionHookInvokedAfterOutcome proves the engine calls
-// core.CompletionHook exactly once per dispatch, right after it stamps the
-// dispatch's outcome, with that outcome — the seam an integration (e.g. slack)
-// uses to correlate a completed dispatch back to the trigger it emitted.
-func TestCompletionHookInvokedAfterOutcome(t *testing.T) {
-	type call struct {
-		dedup, outcome string
-	}
-	var calls []call
-	core.SetCompletionHook(func(tr core.Trigger, outcome string) {
-		calls = append(calls, call{tr.Dedup, outcome})
-	})
-	t.Cleanup(func() { core.SetCompletionHook(nil) })
-
-	d, n := &fakeDispatcher{}, &fakeNotifier{}
-	e, _ := newEng(t, baseCfg(), d, n, nil)
-	act := config.Action{Type: "agent", Agent: "w/fixer"}
-	e.process(context.Background(), agentTrigger("new_comment", "a/w", 50, "h", "sig-ok", act))
-
-	fd, _ := newEng(t, baseCfg(), &fakeDispatcher{err: fmt.Errorf("boom")}, &fakeNotifier{}, nil)
-	fd.process(context.Background(), agentTrigger("new_comment", "a/w", 51, "h", "sig-fail", act))
-
-	if len(calls) != 2 {
-		t.Fatalf("want 2 completion calls, got %d: %+v", len(calls), calls)
-	}
-	if calls[0].dedup != "sig-ok" || calls[0].outcome != "ok" {
-		t.Fatalf("want (sig-ok, ok), got %+v", calls[0])
-	}
-	if calls[1].dedup != "sig-fail" || calls[1].outcome != "failed" {
-		t.Fatalf("want (sig-fail, failed), got %+v", calls[1])
 	}
 }
 
@@ -908,7 +874,7 @@ func TestConcurrencyCapBlocksSecondAgent(t *testing.T) {
 	cfg.Policy = &config.Policy{Concurrency: &config.Concurrency{MaxAgents: &one}} // only one agent at a time
 	g := &gateFake{waitCh: make(chan struct{})}
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: g, Notifier: &fakeNotifier{},
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 	act := config.Action{Type: "agent", Agent: "w/fixer", Prompt: "fix"}
 
 	// First agent takes the only slot; its WaitForAgent blocks, holding it.
@@ -944,7 +910,7 @@ func TestPolicyConcurrencyCapsAgents(t *testing.T) {
 	cfg.Policy = &config.Policy{Concurrency: &config.Concurrency{MaxAgents: &one}}
 	g := &gateFake{waitCh: make(chan struct{})}
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: g, Notifier: &fakeNotifier{},
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 	act := config.Action{Type: "agent", Agent: "w/fixer", Prompt: "fix"}
 
 	// First agent takes the only slot; its WaitForAgent blocks, holding it.
@@ -1074,7 +1040,10 @@ func TestFlakyRerunSkippedWithoutRunID(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	var reran int
 	e, _ := newEng(t, baseCfg(), d, n, func(context.Context, core.Trigger, int64) error { reran++; return nil })
-	e.invokeVerb = func(context.Context, string, string, map[string]any) (map[string]any, error) {
+	e.invokeVerb = func(_ context.Context, _, verb string, _ map[string]any) (map[string]any, error) {
+		if isMintVerb(verb) {
+			return map[string]any{"token": "t"}, nil // the dispatch's declared credentials
+		}
 		t.Fatal("no remediation verb should run without a run id")
 		return nil, nil
 	}
@@ -1220,7 +1189,7 @@ func TestParkAfterAttempts(t *testing.T) {
 	clock := time.Unix(1_700_000_000, 0)
 	st.SetNow(func() time.Time { return clock })
 	e := New(Options{Config: baseCfg(), Store: st, Dispatch: d, Notifier: n,
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 	act := config.Action{Type: "agent", Agent: "w/fixer", MaxAttemptsPerHead: 1} // soft=1 → parkAfter=2
 	adv := func() { clock = clock.Add(2 * time.Hour) }                           // clear any backoff cooldown
 
@@ -1269,6 +1238,10 @@ func (*gateFake) DeliverOutput(string, any) (bool, error) { return false, nil }
 func remediationVerbs(rerun func(context.Context, core.Trigger, int64) error, status func() string) func(context.Context, string, string, map[string]any) (map[string]any, error) {
 	return func(ctx context.Context, instance, verb string, opts map[string]any) (map[string]any, error) {
 		switch verb {
+		case "read_token":
+			return map[string]any{"token": "atok"}, nil
+		case "write_token":
+			return map[string]any{"token": "utok"}, nil
 		case "get_run":
 			return map[string]any{"status": status()}, nil
 		case "rerun_run":
@@ -1280,3 +1253,7 @@ func remediationVerbs(rerun func(context.Context, core.Trigger, int64) error, st
 		return nil, fmt.Errorf("unexpected verb %s", verb)
 	}
 }
+
+// isMintVerb is one of the fixture forge's credential mint verbs, which every
+// dispatch for its targets calls.
+func isMintVerb(verb string) bool { return verb == "read_token" || verb == "write_token" }

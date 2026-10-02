@@ -390,7 +390,7 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 		return err
 	}
 
-	igs, retry, writeTok, readTok := resolveDispatchIdentity(stack)
+	retry := cfg.DispatchRetry()
 	paseoBin, err := resolvePaseoBin(cfg)
 	if err != nil {
 		return err
@@ -471,8 +471,8 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 	// the daemon's dispatch semantics without becoming a daemon.
 	eng := engine.New(engine.Options{
 		Config: cfg, Store: st, Dispatch: disp, Controllers: reg,
-		Notifier: notifier, Author: gitAuthor(), UserToken: writeTok, ReadToken: readTok,
-		Log: logf, RefreshAppToken: refreshAppToken(igs), PausePath: pausePath(cfg),
+		Notifier: notifier, Author: gitAuthor(),
+		Log: logf, PausePath: pausePath(cfg),
 		Flow: stack.Runner, Connectors: stack.Registry, Secrets: stack.Secrets,
 	})
 	eng.SetModelResolver(agentmodels.NewResolver(cfg, agentmodels.NewCatalog(config.StateDir())))

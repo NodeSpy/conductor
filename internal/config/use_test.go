@@ -11,7 +11,6 @@ func TestParseUseBuiltin(t *testing.T) {
 		ref  string
 	}{
 		{UseKindConnector, "webhook"},
-		{UseKindConnector, "slack"},
 		{UseKindConnector, "kv"},
 		{UseKindRuntime, "paseo"},
 		{UseKindRuntime, "acp"},
@@ -82,14 +81,17 @@ func TestParseUseBuiltinBeatsOfficial(t *testing.T) {
 	}
 }
 
-// A vendor connector is never builtin: `use: github` is the official plugin.
+// A vendor connector is never builtin: `use: github` (or slack, …) is the
+// official plugin.
 func TestParseUseVendorConnectorIsThePlugin(t *testing.T) {
-	u, err := ParseUse(UseKindConnector, "github")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if u.Origin != OriginOfficial || u.Component != "connectors/github" {
-		t.Fatalf("github resolved to %s %q, want the official plugin", u.Origin, u.Component)
+	for _, name := range []string{"github", "slack", "discord", "ntfy", "pushover", "notifiarr"} {
+		u, err := ParseUse(UseKindConnector, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.Origin != OriginOfficial || u.Component != "connectors/"+name {
+			t.Errorf("%s resolved to %s %q, want the official plugin", name, u.Origin, u.Component)
+		}
 	}
 }
 

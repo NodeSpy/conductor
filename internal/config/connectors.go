@@ -1699,6 +1699,28 @@ func MergePolicy(scopes ...*Policy) Policy {
 	return out
 }
 
+// DispatchRetry is the retry policy for a transient dispatch failure: the
+// `retry:` block of the first connector (by name) that carries one — a
+// host-owned connection key any connector may set, like policy: — else the
+// defaults (Retry's zero value).
+func (c *Config) DispatchRetry() Retry {
+	names := make([]string, 0, len(c.ConnectorsMap))
+	for n := range c.ConnectorsMap {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		var raw struct {
+			Retry *Retry `yaml:"retry"`
+		}
+		ref := c.ConnectorsMap[n]
+		if err := ref.Decode(&raw); err == nil && raw.Retry != nil {
+			return *raw.Retry
+		}
+	}
+	return Retry{}
+}
+
 // HasConnectors reports whether the config is (at least partly) on the new
 // schema.
 func (c *Config) HasConnectors() bool {

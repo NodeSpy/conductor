@@ -164,6 +164,10 @@ type Field struct {
 	// option is the whole opt-in — there is no other wiring to do, and an
 	// untagged option (text, body) is never gated.
 	Scope string `json:"scope,omitempty"`
+	// Secret, on a CONNECTION field, says its value is a credential even
+	// when written literally (an incoming-webhook URL with a token in its
+	// path): the host keeps it out of logs and audit records.
+	Secret bool `json:"secret,omitempty"`
 }
 
 // Schema is a set of named fields.

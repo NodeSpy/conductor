@@ -12,7 +12,8 @@ connectors:
     repos: ["func/badfilter"]
 
   slack:
-    use: slack
+    use: /usr/local/bin/conductor-slack
+    api_base: http://sink-catcher:8080/slackapi
     bot_token: xoxb-e2e-dummy
 
 triggers:

@@ -10,6 +10,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/memory"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // The skill verb surface (#36 §12): conductor's own verbs served to a
@@ -47,11 +48,14 @@ type SkillIdentity struct {
 	// render facts. See core.Trigger.TargetTrusted.
 	TargetTrusted bool
 	// Context is the ORIGINATING trigger's context, captured at dispatch. It
-	// is what a connector's ContextScope hook reads to answer "which channel
+	// is what the declared target scope reads to answer "which channel
 	// did this dispatch come from" — without it a chat-triggered agent could
 	// not reply in its own channel without an explicit grant. Daemon-side
 	// only; it never crosses back to the agent.
 	Context map[string]any
+	// Sem is the originating trigger's declared semantics (daemon-side, like
+	// Context): its target scope answers ContextScope.
+	Sem *sdk.EventSemantics
 }
 
 // OwnRepo is the repo this grant's dispatch may treat as its own — the same
@@ -557,6 +561,7 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 		Source: "skill", Instance: "skill", Kind: id.Trigger,
 		Target:        core.Target{Repo: id.Repo, Number: id.Number, PR: id.Number},
 		Context:       id.Context,
+		Sem:           id.Sem,
 		TargetTrusted: id.TargetTrusted,
 	}
 	// EVERY call on this surface is agent-facing, and the dispatch it belongs

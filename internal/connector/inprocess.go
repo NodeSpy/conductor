@@ -72,6 +72,7 @@ func RegisterInProcessConnector(h sdk.Handler) {
 		if err != nil {
 			return nil, err
 		}
+		trackDeclaredSecrets(conn, td.Connection, deps.Secrets)
 		log := deps.Log
 		if log == nil {
 			log = func(string, ...any) {}

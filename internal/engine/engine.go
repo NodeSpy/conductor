@@ -118,10 +118,7 @@ type Engine struct {
 	broker      *controller.Broker   // owns one live session per PR (interactive hand-off); nil = disabled
 	notif       Notifier
 	author      dispatch.Author
-	userTok     func() (string, error)
-	readTok     func() (string, error) // read-token override (nil = use the per-trigger App token)
 	invokeVerb  func(ctx context.Context, instance, verb string, opts map[string]any) (map[string]any, error)
-	refreshTok  func(core.Trigger) (string, error) // re-mint the App token on resume
 	log         func(string, ...any)
 	hold        *dispatch.HoldSet       // agent ids handed off to the user; the reaper never touches these
 	liveHOMu    sync.Mutex              // guards liveHO
@@ -229,22 +226,14 @@ type Options struct {
 	// a conductor restart and follow-ups funnel to the live session instead of a
 	// duplicate agent. nil disables it — the interactive hand-off then stays
 	// paseo-native (you drive the agent in paseo, as before).
-	Broker    *controller.Broker
-	Notifier  Notifier
-	Author    dispatch.Author
-	UserToken func() (string, error)
-	// ReadToken, if set, overrides the token used for API reads (GH_TOKEN) instead
-	// of the per-trigger App installation token — for identity.read_token != "app".
-	ReadToken func() (string, error)
+	Broker   *controller.Broker
+	Notifier Notifier
+	Author   dispatch.Author
 	// InvokeVerb invokes a verb on a configured connector instance with that
 	// instance's credentials: how the engine carries out what an event's
 	// semantics DECLARE (a remediation's status check and action). nil: no
 	// declared remediation runs, and the fixer is dispatched straight away.
 	InvokeVerb func(ctx context.Context, instance, verb string, opts map[string]any) (map[string]any, error)
-	// RefreshAppToken re-mints the App installation token for a persisted trigger
-	// on resume (the persisted one is expired). Given the trigger's instance +
-	// installation_id. nil disables workflow resume.
-	RefreshAppToken func(core.Trigger) (string, error)
 	// Hold is the shared "never reap" set for interactive hand-off agents; the
 	// engine registers a background step's agent id here at launch and the reaper
 	// skips it. nil disables the explicit hold (falls back to label/marker signals).
@@ -290,7 +279,7 @@ func New(o Options) *Engine {
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,
 		owner:  map[string]Dispatcher{},
 		broker: o.Broker,
-		author: o.Author, userTok: o.UserToken, readTok: o.ReadToken, log: log,
+		author: o.Author, log: log,
 		hold:      o.Hold,
 		affinity:  o.Affinity,
 		pausePath: o.PausePath,
@@ -313,7 +302,6 @@ func New(o Options) *Engine {
 			return in.Invoke(ctx, verb, opts)
 		}
 	}
-	e.refreshTok = o.RefreshAppToken
 	e.connectors = o.Connectors
 	if o.Flow != nil {
 		e.flow = o.Flow
@@ -1268,11 +1256,9 @@ func sanitizeContext(t core.Trigger) map[string]any {
 
 // ResumeWorkflows re-runs any workflow that was in-flight when the conductor last
 // stopped. Prior steps' outputs are restored; the interrupted step re-runs
-// (at-least-once). Tokens are re-minted. Disabled if RefreshAppToken is unset.
+// (at-least-once). Declared credentials are minted afresh (they were never
+// persisted).
 func (e *Engine) ResumeWorkflows(ctx context.Context) {
-	if e.refreshTok == nil {
-		return
-	}
 	for _, r := range e.store.PendingRuns() {
 		var t core.Trigger
 		var act config.Action
@@ -1493,9 +1479,6 @@ func (e *Engine) auditDispatch(t core.Trigger, ref dispatch.RunRef, err error) {
 		e.log("%s dispatched (backend=%s shadow=%v)", tag(t), ref.Backend, ref.Shadowed)
 	}
 	e.store.Audit(entry)
-	if core.CompletionHook != nil {
-		core.CompletionHook(t, outcome)
-	}
 }
 
 // agentWaitTimeout bounds how long a slot is held waiting for an agent to idle,
@@ -1549,15 +1532,6 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 		"number": t.Target.Number, "run": run})
 	e.log("%s remediation %s requested (run %v)", tag(t), rem.Action.Verb, run)
 	return true
-}
-
-// userToken returns your GitHub token ("" when unavailable).
-func (e *Engine) userToken() string {
-	if e.userTok == nil {
-		return ""
-	}
-	tok, _ := e.userTok()
-	return tok
 }
 
 func toInt64(v any) int64 {

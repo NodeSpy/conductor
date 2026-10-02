@@ -72,7 +72,7 @@ func TestCmdConnectorsLs(t *testing.T) {
 	for _, want := range []string{
 		"box", "command", "enabled",
 		"timer", "disabled (enabled: false)",
-		"broken", "disabled: app_token",
+		"broken", `disabled: resolve "app_token"`,
 		"verbs:  run",
 	} {
 		if !strings.Contains(out, want) {

@@ -17,16 +17,29 @@ import (
 // guidance. Minting happens at every dispatch, resume and retry included, so
 // a resumed run never carries a stale credential (secret facts are never
 // persisted).
+//
+// A conductor.* lifecycle event about another trigger's target carries that
+// trigger's connector instance (origin_instance): its work gets that
+// connector's credentials, minted for the same target. Work on an instance
+// the registry does not know gets none.
 func (e *Engine) credentialsFor(ctx context.Context, t core.Trigger) dispatch.Credentials {
-	if e.connectors != nil {
-		if in, ok := e.connectors.Get(t.Instance); ok {
-			return e.declaredCredentials(ctx, t, in.Decl.Semantics)
+	if e.connectors == nil {
+		return dispatch.Credentials{}
+	}
+	instance := t.Instance
+	if t.Source == "conductor" {
+		if o, _ := t.Context["origin_instance"].(string); o != "" {
+			instance = o
 		}
 	}
-	return e.legacyCredentials(t)
+	in, ok := e.connectors.Get(instance)
+	if !ok {
+		return dispatch.Credentials{}
+	}
+	return e.declaredCredentials(ctx, t, instance, in.Decl.Semantics)
 }
 
-func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, sem *sdk.ConnSemantics) dispatch.Credentials {
+func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, instance string, sem *sdk.ConnSemantics) dispatch.Credentials {
 	var c dispatch.Credentials
 	if sem == nil {
 		return c
@@ -34,7 +47,7 @@ func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, sem *s
 	for _, cr := range sem.Credentials {
 		val := ""
 		if t.TargetTrusted {
-			v, err := e.mint(ctx, t, cr)
+			v, err := e.mint(ctx, t, instance, cr)
 			if err != nil {
 				e.log("%s credential %s: %v", tag(t), cr.Name, err)
 			}
@@ -61,11 +74,11 @@ func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, sem *s
 }
 
 // mint resolves one declared credential through its mint verb.
-func (e *Engine) mint(ctx context.Context, t core.Trigger, cr sdk.Credential) (string, error) {
+func (e *Engine) mint(ctx context.Context, t core.Trigger, instance string, cr sdk.Credential) (string, error) {
 	if e.invokeVerb == nil {
 		return "", fmt.Errorf("no connector registry to mint through")
 	}
-	out, err := e.invokeVerb(ctx, t.Instance, cr.Mint.Verb, core.DeclaredArgs(cr.Mint.Args, t.Facts()))
+	out, err := e.invokeVerb(ctx, instance, cr.Mint.Verb, core.DeclaredArgs(cr.Mint.Args, t.Facts()))
 	if err != nil {
 		return "", err
 	}

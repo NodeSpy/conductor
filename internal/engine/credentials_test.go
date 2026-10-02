@@ -27,7 +27,7 @@ func TestDeclaredCredentials(t *testing.T) {
 			Value: "secret", Env: []string{"ACME_READ"}, Template: "acme_read"},
 	}}
 	tr := core.Trigger{Instance: "acme1", TargetTrusted: true, Context: map[string]any{"project": "p1"}}
-	c := e.declaredCredentials(context.Background(), tr, sem)
+	c := e.declaredCredentials(context.Background(), tr, "acme1", sem)
 	if c.Env["ACME_TOKEN"] != "tok-mint_w" || c.Env["ACME_TOKEN_ALIAS"] != "tok-mint_w" || c.Env["ACME_READ"] != "tok-mint_r" {
 		t.Fatalf("env = %v", c.Env)
 	}
@@ -40,8 +40,33 @@ func TestDeclaredCredentials(t *testing.T) {
 	// An unassigned target mints nothing; a fact the source stamped is used.
 	minted = nil
 	forged := core.Trigger{Instance: "acme1", Context: map[string]any{"project": "p1", "acme_read": "from-the-event"}}
-	c = e.declaredCredentials(context.Background(), forged, sem)
+	c = e.declaredCredentials(context.Background(), forged, "acme1", sem)
 	if len(minted) != 0 || c.Env["ACME_TOKEN"] != "" || c.Env["ACME_READ"] != "from-the-event" {
 		t.Fatalf("forged target: minted=%v env=%v", minted, c.Env)
+	}
+}
+
+// A conductor.* lifecycle event's work gets the credentials of the connector
+// its originating trigger came from (origin_instance), minted for the same
+// target only when the platform assigned it; an unknown instance gets none —
+// there is no daemon-wide identity to fall back to.
+func TestLifecycleWorkGetsTheOriginConnectorsCredentials(t *testing.T) {
+	e, _ := newEng(t, baseCfg(), &fakeDispatcher{}, &fakeNotifier{}, nil)
+	life := func(origin string, trusted bool) core.Trigger {
+		return core.Trigger{Source: "conductor", Instance: "conductor", Kind: "escalate", TargetTrusted: trusted,
+			Target:  core.Target{Repo: "a/w", Number: 1},
+			Context: map[string]any{"repo": "a/w", "origin_instance": origin}}
+	}
+	if c := e.credentialsFor(context.Background(), life("i", true)); c.Env["GH_TOKEN"] != "utok" || c.Env["PC_GH_APP_TOKEN"] != "atok" {
+		t.Fatalf("lifecycle work for the forge's target: env = %v", c.Env)
+	}
+	if c := e.credentialsFor(context.Background(), life("i", false)); c.Env["GH_TOKEN"] != "" {
+		t.Fatalf("an unassigned origin target mints nothing: env = %v", c.Env)
+	}
+	if c := e.credentialsFor(context.Background(), life("nope", true)); len(c.Env) != 0 {
+		t.Fatalf("an unknown origin instance gets no credentials: env = %v", c.Env)
+	}
+	if c := e.credentialsFor(context.Background(), core.Trigger{Source: "conductor", Instance: "conductor", Kind: "boot", TargetTrusted: true}); len(c.Env) != 0 {
+		t.Fatalf("a lifecycle event with no origin gets no credentials: env = %v", c.Env)
 	}
 }

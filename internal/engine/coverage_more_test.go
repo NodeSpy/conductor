@@ -17,7 +17,7 @@ func TestEmitRunLoop(t *testing.T) {
 	g := &gateFake{waitCh: make(chan struct{})}
 	close(g.waitCh) // agents complete instantly
 	e := New(Options{Config: baseCfg(), Store: tempStore(t), Dispatch: g, Notifier: &fakeNotifier{},
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- e.Run(ctx) }()
@@ -81,6 +81,9 @@ func TestRemediationInvokesTheDeclaredVerbs(t *testing.T) {
 	var calls []string
 	var rerunOpts map[string]any
 	e.invokeVerb = func(_ context.Context, inst, verb string, opts map[string]any) (map[string]any, error) {
+		if isMintVerb(verb) {
+			return map[string]any{"token": "t"}, nil // the dispatch's declared credentials
+		}
 		calls = append(calls, inst+"."+verb)
 		if verb == "rerun_run" {
 			rerunOpts = opts

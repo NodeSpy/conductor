@@ -223,7 +223,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			e.hold.Add(ref.AgentID)
 			e.log("%s step %s launched in background after %s (agent %s)", tag(t), id, took, ref.AgentID)
 			// Resolve the step's hand-off channel: `handoff:` names an
-			// ask-capable connector (slack/discord/web). A step naming an
+			// ask-capable connector (web, or a chat plugin). A step naming an
 			// unknown or non-ask-capable connector is caught by config
 			// validation before a live trigger ever reaches here, but
 			// escalate rather than silently falling back if it somehow does.

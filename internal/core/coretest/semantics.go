@@ -13,44 +13,56 @@ import (
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
-// forgeDecl is a snapshot of a forge connector plugin's describe (the
-// official github plugin's, type "github"). Conductor's tests drive the
-// engine, flow and config layers with the declarations a production plugin
-// really sends; nothing here is consulted at runtime, where every trigger
+// forgeDecl and chatDecl are snapshots of two connector plugins' describe:
+// a forge (the official github plugin's, type "github") and a chat service
+// (the official slack plugin's, type "slack"). Conductor's tests drive the
+// engine, flow and config layers with the declarations production plugins
+// really send; nothing here is consulted at runtime, where every trigger
 // carries its own connector's declaration.
 //
 //go:embed testdata/forge-decl.json
 var forgeDecl []byte
 
+//go:embed testdata/chat-decl.json
+var chatDecl []byte
+
 var (
 	once     sync.Once
-	decl     sdk.Decl
 	declared map[string]*sdk.EventSemantics
 )
 
 func load() {
 	once.Do(func() {
-		if err := json.Unmarshal(forgeDecl, &decl); err != nil {
-			panic("coretest: forge-decl.json: " + err.Error())
-		}
 		declared = map[string]*sdk.EventSemantics{}
-		for _, ev := range decl.Events {
-			declared[ev.Name] = ev.Semantics
+		for _, raw := range [][]byte{chatDecl, forgeDecl} { // the forge's wins a shared name
+			var d sdk.Decl
+			if err := json.Unmarshal(raw, &d); err != nil {
+				panic("coretest: fixture declaration: " + err.Error())
+			}
+			for _, ev := range d.Events {
+				declared[ev.Name] = ev.Semantics
+			}
 		}
 	})
 }
 
 // ForgeDecl is the fixture forge connector's declaration (a fresh copy).
-func ForgeDecl() sdk.Decl {
-	load()
+func ForgeDecl() sdk.Decl { return decode(forgeDecl) }
+
+// ChatDecl is the fixture chat connector's declaration (a fresh copy).
+func ChatDecl() sdk.Decl { return decode(chatDecl) }
+
+func decode(raw []byte) sdk.Decl {
 	var d sdk.Decl
-	_ = json.Unmarshal(forgeDecl, &d)
+	if err := json.Unmarshal(raw, &d); err != nil {
+		panic("coretest: fixture declaration: " + err.Error())
+	}
 	return d
 }
 
-// DeclaredSemantics is the semantics the fixture forge connector declares for
-// t's kind (nil for a kind it does not declare) — what the source adapter
-// attaches to a trigger of that kind in production.
+// DeclaredSemantics is the semantics a fixture connector declares for t's
+// kind (nil for a kind neither declares) — what the source adapter attaches
+// to a trigger of that kind in production.
 func DeclaredSemantics(t core.Trigger) *sdk.EventSemantics {
 	load()
 	return declared[t.Kind]
@@ -60,23 +72,27 @@ func DeclaredSemantics(t core.Trigger) *sdk.EventSemantics {
 // triggers a test builds without semantics.
 func UseDeclaredSemantics() { core.SemanticsFallback = DeclaredSemantics }
 
-// Forge serves the fixture declaration over the plugin contract, as an
-// in-process connector (connector.RegisterInProcessConnector(coretest.Forge)
+// Forge and Chat serve the fixture declarations over the plugin contract, as
+// in-process connectors (connector.RegisterInProcessConnector(coretest.Forge)
 // in a test package's init). Verbs answer through Respond (default: an empty
 // result) and are recorded; the source emits nothing; a delivery's body is
 // the decoded event itself (one sdk.SourceEvent, or a list) — decoding a
 // forge's own payloads is the plugin's job, tested where the plugin lives.
-var Forge = &ForgeHandler{}
+var (
+	Forge = &ForgeHandler{raw: forgeDecl}
+	Chat  = &ForgeHandler{raw: chatDecl}
+)
 
-// ForgeHandler is the Forge connector's sdk.Handler.
+// ForgeHandler is a fixture connector's sdk.Handler.
 type ForgeHandler struct {
+	raw     []byte
 	mu      sync.Mutex
 	calls   []sdk.InvokeRequest
 	respond func(sdk.InvokeRequest) (sdk.InvokeResult, error)
 }
 
 // Describe returns the fixture declaration.
-func (f *ForgeHandler) Describe() sdk.Decl { return ForgeDecl() }
+func (f *ForgeHandler) Describe() sdk.Decl { return decode(f.raw) }
 
 // Invoke records the call and answers it.
 func (f *ForgeHandler) Invoke(req sdk.InvokeRequest) (sdk.InvokeResult, error) {

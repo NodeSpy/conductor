@@ -27,24 +27,27 @@ RUN go build -o /out/conductor ./cmd/conductor \
  && go build -o /out/fakecli       ./test/e2e/services/fakecli \
  && go build -o /out/conductor-acme-engine ./test/plugins/acme-engine
 
-# ---- github connector plugin ----
-# GitHub is a connector plugin (conductor-plugins, connectors/github): every
-# daemon's github connector names this binary. GITHUB_PLUGIN_VERSION pins the
-# build (a tag or commit of the plugins module); a locally built plugin staged
-# into test/e2e/plugin-bin/ (GITHUB_PLUGIN_BIN, run.sh) replaces it below.
+# ---- vendor connector plugins ----
+# Every vendor connector is a plugin (conductor-plugins, connectors/<name>):
+# each daemon's github, slack, discord, ntfy, pushover and notifiarr
+# connectors name these binaries. GITHUB_PLUGIN_VERSION pins the build (a tag
+# or commit of the plugins module); a locally built github plugin staged into
+# test/e2e/plugin-bin/ (GITHUB_PLUGIN_BIN, run.sh) replaces that one below.
 FROM golang:1.26-alpine AS github-plugin
-ARG GITHUB_PLUGIN_VERSION=cb90a92a5bda444f4e0ce1e0d08166d819df44f6
+ARG GITHUB_PLUGIN_VERSION=61a8cc5
 RUN apk add --no-cache git
 ENV CGO_ENABLED=0 GOBIN=/out
-RUN go install github.com/NodeSpy/conductor-plugins/connectors/github@${GITHUB_PLUGIN_VERSION} \
- && mv /out/github /out/conductor-github
+RUN set -e; for p in github slack discord ntfy pushover notifiarr; do \
+      go install "github.com/NodeSpy/conductor-plugins/connectors/$p@${GITHUB_PLUGIN_VERSION}"; \
+      mv "/out/$p" "/out/conductor-$p"; \
+    done
 
 # ---- runtime stage ----
 FROM alpine:3.20
 RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh \
  && adduser -D -h /home/conductor conductor
 COPY --from=build /out/ /usr/local/bin/
-COPY --from=github-plugin /out/conductor-github /usr/local/bin/conductor-github
+COPY --from=github-plugin /out/ /usr/local/bin/
 # The reference ENGINE plugin (test/plugins/acme-engine) is a real out-of-process
 # plugin, not a harness fake: group V points a step's `use:` straight at this
 # path. verify-before-execute refuses a group/world-writable binary or parent, so

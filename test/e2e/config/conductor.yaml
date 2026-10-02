@@ -53,22 +53,25 @@ connectors:
       secret: e2e-webhook-secret
       verify_signature: true
   notify-discord:
-    use: discord
+    use: /usr/local/bin/conductor-discord
     webhook_url: http://sink-catcher:8080/discord
   notify-notifiarr:
-    use: notifiarr
+    use: /usr/local/bin/conductor-notifiarr
+    api_base: http://sink-catcher:8080/notifiarr/api/v1
     api_key: e2e-notifiarr-key
     channel_id: "42"
   notify-ntfy:
-    use: ntfy
+    use: /usr/local/bin/conductor-ntfy
     server: http://sink-catcher:8080/ntfy
     topic: conductor
   notify-pushover:
-    use: pushover
+    use: /usr/local/bin/conductor-pushover
+    api_base: http://sink-catcher:8080/pushover
     token: e2e-pushover-token
     user: e2e-pushover-user
   notify-slack:
-    use: slack
+    use: /usr/local/bin/conductor-slack
+    api_base: http://sink-catcher:8080/slackapi
     webhook_url: http://sink-catcher:8080/slack
 runtimes:
   paseo:

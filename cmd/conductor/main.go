@@ -22,7 +22,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -372,12 +371,7 @@ func cmdRun(args []string) error {
 	// The connectors-model stack: secret resolution, the connector registry,
 	// the flow runner, and the lowered source integrations. nil when the
 	// config has no connectors: block — everything below then behaves exactly
-	// as before. Built BEFORE dispatchTuning so a connectors-model github
-	// connector's identity.write_token/read_token is discoverable: dispatchTuning
-	// only sees dispatchTuner integrations that are already in `igs`, and a
-	// pure connectors-model config (no legacy integrations: block) has none
-	// until this stack's lowered integrations are appended (#60 — otherwise the
-	// acts-as-the-user write silently fell back to a bare `gh auth token`).
+	// as before.
 	// Plugins first: fetch any referenced plugin that is not installed yet
 	// (bounded; never fatal — a connector whose plugin is still missing runs
 	// disabled and pendingPluginRetry restarts into it once it lands).
@@ -388,7 +382,8 @@ func cmdRun(args []string) error {
 	}
 	defer stack.Close() // stop plugin subprocesses on daemon shutdown (#54)
 
-	igs, retry, writeTok, readTok := resolveDispatchIdentity(stack)
+	igs := stackIntegrations(stack)
+	retry := cfg.DispatchRetry()
 	paseoBin, err := resolvePaseoBin(cfg)
 	if err != nil {
 		return err
@@ -540,8 +535,7 @@ func cmdRun(args []string) error {
 	broker := controller.NewBroker(reg, st, logf)
 
 	// The connectors-model stack (secret resolution, connector registry, flow
-	// runner, lowered source integrations) was already built above, before
-	// dispatchTuning, so its identity tokens are discoverable.
+	// runner, lowered source integrations) was already built above.
 	// A legacy config (no connectors: block) can still carry a memory:
 	// section — buildFlowStack didn't run, so wire it here.
 	if stack == nil {
@@ -560,17 +554,6 @@ func cmdRun(args []string) error {
 	if bootWarning != "" {
 		notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "config", Kind: "boot"}, bootWarning)
 	}
-	// Wire the engine's dispatch-completion seam to every configured slack
-	// instance's on_done/on_fail handling (see core.SetCompletionHook and
-	// slack.Integration.HandleCompletion). A no-op when no slack integration is
-	// configured. Sibling seam to slack.SetReplyHook (hand-off thread replies).
-	wireSlackCompletion(igs)
-	// Discord hand-off gateway(s): unlike Slack this needs no separate
-	// `integrations:` entry — conductor runs the bot gateway itself, one
-	// goroutine per distinct configured bot_token (entries sharing a token
-	// share a connection). A no-op when no `discord:` hand-off is configured.
-	// Governed by ctx below so it shuts down with the daemon; started after ctx
-	// exists, alongside the web hand-off listeners.
 	// Shared "never reap" set for interactive hand-off agents: the engine registers
 	// a background step's agent at launch; the reaper skips anything in it.
 	hold := dispatch.NewHoldSet(filepath.Join(filepath.Dir(cfg.Store.StateFile), "holds.json"))
@@ -580,8 +563,8 @@ func cmdRun(args []string) error {
 	affinity := controller.NewAffinity(reg, st, cfg, hold.Add, hold.Remove, logf)
 	engOpts := engine.Options{
 		Config: cfg, Store: st, Dispatch: disp, Controllers: reg, Broker: broker,
-		Notifier: notifier, Author: gitAuthor(), UserToken: writeTok, ReadToken: readTok, Log: logf,
-		RefreshAppToken: refreshAppToken(igs), Hold: hold, Affinity: affinity, PausePath: pausePath(cfg),
+		Notifier: notifier, Author: gitAuthor(), Log: logf,
+		Hold: hold, Affinity: affinity, PausePath: pausePath(cfg),
 	}
 	if stack != nil {
 		engOpts.Flow = stack.Runner
@@ -746,7 +729,7 @@ func cmdRun(args []string) error {
 						return runner.RunSkillVerb(vctx, flow.SkillIdentity{
 							Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
 							Number: id.Number, Verbs: id.Policy.Verbs,
-							Scopes: id.Policy.VerbScopes, Context: id.Context,
+							Scopes: id.Policy.VerbScopes, Context: id.Context, Sem: id.Sem,
 							TargetTrusted: id.TargetTrusted, Dispatch: id.Dispatch,
 						}, uses, options)
 					}
@@ -972,120 +955,20 @@ func cmdRun(args []string) error {
 	return nil
 }
 
-// appTokener is implemented by integrations that can mint an App installation
-// token (the github integration), used to re-mint on workflow resume.
-type appTokener interface {
-	AppToken(context.Context, int64) (string, error)
-}
-
-// refreshAppToken builds the engine's token-refresh provider: given a persisted
-// trigger, find its integration and re-mint the App token from installation_id.
-func refreshAppToken(igs []core.Integration) func(core.Trigger) (string, error) {
-	return func(t core.Trigger) (string, error) {
-		for _, ig := range igs {
-			if ig.Name() != t.Instance {
-				continue
-			}
-			at, ok := ig.(appTokener)
-			if !ok {
-				return "", fmt.Errorf("integration %q cannot mint app tokens", t.Instance)
-			}
-			instID := toInt64Any(t.Context["installation_id"])
-			if instID == 0 {
-				return "", fmt.Errorf("resume %s: no installation_id", t.Key())
-			}
-			return at.AppToken(context.Background(), instID)
-		}
-		return "", fmt.Errorf("no integration named %q", t.Instance)
+// stackIntegrations is the connectors-model stack's lowered source
+// integrations (none without a stack).
+func stackIntegrations(stack *flowStack) []core.Integration {
+	if stack == nil {
+		return nil
 	}
-}
-
-// completionHandler is implemented by an integration that wants to hear a
-// dispatch's final outcome for triggers it emitted (the slack integration, for
-// on_done/on_fail feedback).
-type completionHandler interface {
-	HandleCompletion(t core.Trigger, outcome string)
-}
-
-// wireSlackCompletion installs the single global core.CompletionHook, routing
-// each call to whichever configured integration instance emitted the trigger
-// (matched by name). A no-op when no configured integration implements
-// completionHandler.
-func wireSlackCompletion(igs []core.Integration) {
-	core.SetCompletionHook(func(t core.Trigger, outcome string) {
-		for _, ig := range igs {
-			if ig.Name() != t.Instance {
-				continue
-			}
-			if ch, ok := ig.(completionHandler); ok {
-				ch.HandleCompletion(t, outcome)
-			}
-			return
-		}
-	})
-}
-
-// resolveDispatchIdentity takes the connectors-model stack's lowered source
-// integrations and derives the dispatch retry/write/read token resolvers from
-// them. Call this exactly once, right after building `stack`, rather than
-// calling dispatchTuning directly: getting the order backwards is how a
-// connectors-model github connector's identity.write_token/read_token
-// silently stopped being seen at all, and every acts-as-the-user write fell
-// back to a bare `gh auth token` (#60) — a security-relevant identity
-// regression with no error, no log line, just the wrong token on the wire.
-func resolveDispatchIdentity(stack *flowStack) (igs []core.Integration, retry config.Retry, write, read func() (string, error)) {
-	if stack != nil {
-		igs = stack.Integrations
-	}
-	retry, write, read = dispatchTuning(igs)
-	return igs, retry, write, read
-}
-
-// dispatchTuner is implemented by an integration that carries dispatch-level
-// credential + retry policy (the github integration). The first one found tunes
-// the shared Dispatcher and the engine's read/write token resolvers.
-type dispatchTuner interface {
-	RetryPolicy() config.Retry
-	IdentityTokens() (read, write, commitAuthor string)
-}
-
-// dispatchTuning derives the shared dispatch settings from the first integration
-// that provides them. Token keyword resolution (values are already ${ENV}-expanded):
-// write "gh_auth" (default) → `gh auth token`, else a literal token (a PAT); read
-// "app" (default) → nil so reads use the per-trigger App token, "gh_auth" → `gh
-// auth token`, else a literal token.
-func dispatchTuning(igs []core.Integration) (retry config.Retry, write, read func() (string, error)) {
-	write = userToken // default: `gh auth token`
-	for _, ig := range igs {
-		t, ok := ig.(dispatchTuner)
-		if !ok {
-			continue
-		}
-		retry = t.RetryPolicy()
-		rd, wr, _ := t.IdentityTokens()
-		if wr != "" && wr != "gh_auth" {
-			lit := wr
-			write = func() (string, error) { return lit, nil }
-		}
-		switch {
-		case rd == "" || rd == "app":
-			read = nil
-		case rd == "gh_auth":
-			read = userToken
-		default:
-			lit := rd
-			read = func() (string, error) { return lit, nil }
-		}
-		break
-	}
-	return
+	return stack.Integrations
 }
 
 // preflightPATH warns loudly if the tools dispatch needs aren't on PATH — a
-// missing `paseo`/`gh` otherwise fails every dispatch silently (the common
+// missing `paseo` otherwise fails every dispatch silently (the common
 // systemd --user "minimal PATH" trap). Non-fatal: the daemon still runs.
 func preflightPATH(paseoBin string) {
-	for _, bin := range []string{paseoBin, "gh"} {
+	for _, bin := range []string{paseoBin} {
 		if _, err := exec.LookPath(bin); err != nil {
 			logf("WARNING: %q not found on PATH — dispatches will fail until it's resolvable "+
 				"(PATH=%s). If running as a service, reinstall/update the unit so PATH includes "+
@@ -1748,25 +1631,6 @@ func printOneDispatch(cfg *config.Config, disp *dispatch.Dispatcher, t core.Trig
 		return
 	}
 	fmt.Printf("%s%s\n", indent, strings.Join(ref.Argv, " "))
-}
-
-// userToken returns your `gh auth token`, memoized.
-var (
-	tokOnce sync.Once
-	tokVal  string
-	tokErr  error
-)
-
-func userToken() (string, error) {
-	tokOnce.Do(func() {
-		out, err := exec.Command("gh", "auth", "token").Output()
-		if err != nil {
-			tokErr = fmt.Errorf("gh auth token: %w", err)
-			return
-		}
-		tokVal = strings.TrimSpace(string(out))
-	})
-	return tokVal, tokErr
 }
 
 // gitAuthor reads your git identity for commit attribution.

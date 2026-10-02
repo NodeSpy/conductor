@@ -12,7 +12,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/plugin"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
-	"gopkg.in/yaml.v3"
 )
 
 // externalTypes tracks which registered connector types came from an EXTERNAL
@@ -76,6 +75,7 @@ func RegisterExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin
 		if err != nil {
 			return nil, err
 		}
+		trackDeclaredSecrets(conn, td.Connection, deps.Secrets)
 		log := deps.Log
 		if log == nil {
 			log = func(string, ...any) {}
@@ -148,7 +148,7 @@ func mapSchema(s plugin.Schema) Schema {
 		// scoped option exactly like a bundled connector, and gets the same
 		// enforcement on both surfaces without conductor knowing the
 		// dimension's name.
-		out[k] = Field{Type: FieldType(f.Type), Required: f.Required, Enum: f.Enum, Desc: f.Desc, Scope: f.Scope}
+		out[k] = Field{Type: FieldType(f.Type), Required: f.Required, Enum: f.Enum, Desc: f.Desc, Scope: f.Scope, Secret: f.Secret}
 	}
 	return out
 }
@@ -188,6 +188,19 @@ func resolveConnection(ref config.ConnectorRef, sec *secrets.Resolver, allow map
 	}
 	sort.Strings(refs)
 	return conn, refs, nil
+}
+
+// trackDeclaredSecrets keeps the values of the connection fields the type
+// declares secret out of logs and audit records, however they were written.
+func trackDeclaredSecrets(conn map[string]any, declared Schema, sec *secrets.Resolver) {
+	if sec == nil {
+		return
+	}
+	for k, f := range declared {
+		if s, ok := conn[k].(string); ok && f.Secret && s != "" {
+			sec.Track(s)
+		}
+	}
 }
 
 // resolveSecrets resolves every secret reference in a connection value, at
@@ -350,65 +363,7 @@ func (e *externalImpl) Source(triggers []CompiledTrigger) (core.Integration, err
 		sem:      sem,
 		dynamic:  dynamic,
 	}
-	if e.declaresConn("identity") {
-		// The connection carries the dispatch credential policy the bundled
-		// github connector does: expose it the same way (dispatchTuner).
-		return &identitySource{pluginSourceIntegration: base}, nil
-	}
 	return base, nil
-}
-
-// declaresConn reports whether the plugin declares a connection field.
-func (e *externalImpl) declaresConn(field string) bool {
-	_, ok := e.decl.Connection[field]
-	return ok
-}
-
-// identitySource is a source whose connection declares the
-// dispatch credential policy — `identity: {read_token, write_token,
-// commit_author}` and `retry: {max, backoff}` — with the meaning the bundled
-// github connector gives them: which token an agent this source dispatches
-// reads and writes with, and how a transient dispatch failure retries. They
-// are read from the daemon's OWN copy of the instance config (secrets already
-// resolved); nothing about them crosses back from the plugin.
-type identitySource struct {
-	*pluginSourceIntegration
-}
-
-// IdentityTokens implements cmd/conductor's dispatchTuner.
-func (s *identitySource) IdentityTokens() (read, write, commitAuthor string) {
-	id, _ := s.config["identity"].(map[string]any)
-	read, _ = id["read_token"].(string)
-	write, _ = id["write_token"].(string)
-	commitAuthor, _ = id["commit_author"].(string)
-	if read == "" {
-		read = "app"
-	}
-	if write == "" {
-		write = "gh_auth"
-	}
-	if commitAuthor == "" {
-		commitAuthor = "self"
-	}
-	return read, write, commitAuthor
-}
-
-// RetryPolicy implements cmd/conductor's dispatchTuner.
-func (s *identitySource) RetryPolicy() config.Retry {
-	var r config.Retry
-	m, ok := s.config["retry"].(map[string]any)
-	if !ok {
-		return r
-	}
-	b, err := yaml.Marshal(m)
-	if err != nil {
-		return r
-	}
-	if err := yaml.Unmarshal(b, &r); err != nil {
-		s.log("plugin source %s: retry: %v — using the default", s.instance, err)
-		return config.Retry{}
-	}
-	return r
 }
 
 // Invoke forwards the verb to the plugin with this instance's credentials and

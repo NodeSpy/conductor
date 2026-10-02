@@ -74,8 +74,8 @@ type resourcePolicy struct {
 	// trigger is the implicitly-allowed triggering repo ("" when the trigger
 	// has no repo context). Memory scopes derive from it.
 	trigger string
-	// t is the dispatch the policy is being applied to — what a connector's
-	// ContextScope hook maps to its implicitly-allowed value per dimension.
+	// t is the dispatch the policy is being applied to — what its declared
+	// target scope maps to an implicitly-allowed value per dimension.
 	t core.Trigger
 	// render is the data a TEMPLATED allowlist entry renders against: this
 	// dispatch's trusted facts, secret-free, with no agent-supplied value in

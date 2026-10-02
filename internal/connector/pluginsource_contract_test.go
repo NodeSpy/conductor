@@ -252,26 +252,6 @@ func TestSourcePollTranslateAndAppToken(t *testing.T) {
 	}
 }
 
-// The dispatch credential policy a github-shaped connection declares is read
-// from the daemon's own copy of the config, with the bundled defaults.
-func TestIdentitySourceReadsTheConnection(t *testing.T) {
-	s := &identitySource{&pluginSourceIntegration{log: t.Logf, config: map[string]any{
-		"identity": map[string]any{"write_token": "w-lit"},
-		"retry":    map[string]any{"max": 2, "backoff": "5s"},
-	}}}
-	r, w, c := s.IdentityTokens()
-	if r != "app" || w != "w-lit" || c != "self" {
-		t.Fatalf("identity: %q %q %q", r, w, c)
-	}
-	if rp := s.RetryPolicy(); rp.Max != 2 || rp.Backoff.D().Seconds() != 5 {
-		t.Fatalf("retry: %+v", rp)
-	}
-	empty := &identitySource{&pluginSourceIntegration{log: t.Logf, config: map[string]any{}}}
-	if r, w, _ := empty.IdentityTokens(); r != "app" || w != "gh_auth" {
-		t.Fatalf("defaults: %q %q", r, w)
-	}
-}
-
 // A connector declaring the poll semantic gets the engine's poll verb under
 // the name it declares, answered by the daemon for THIS instance and never
 // forwarded — any plugin, there is no tier; one declaring none has no such

@@ -1110,3 +1110,31 @@ triggers:
 		}
 	}
 }
+
+// `retry:` is a host-owned connection key any connector may carry: the
+// dispatch retry policy is the first one (by connector name), else defaults.
+func TestDispatchRetryFromAConnector(t *testing.T) {
+	cfg, err := loadDoc(t, `
+connectors:
+  zz: { use: command, retry: { max: 7, backoff: 1s } }
+  aa: { use: command, retry: { max: 2, backoff: 5s } }
+  mm: { use: command }
+triggers:
+  - on: manual
+    name: go
+    steps: [{ id: t, uses: aa.run, options: { command: "true" } }]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := cfg.DispatchRetry(); r.Max != 2 || r.Backoff.D().Seconds() != 5 {
+		t.Fatalf("retry = %+v, want the first connector's (aa)", r)
+	}
+	none, err := loadDoc(t, "connectors:\n  mm: { use: command }\ntriggers:\n  - on: manual\n    name: go\n    steps: [{ id: t, uses: mm.run, options: { command: \"true\" } }]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := none.DispatchRetry(); r.Max != 0 || r.Attempts() != 3 {
+		t.Fatalf("no retry: block must give the defaults, got %+v", r)
+	}
+}

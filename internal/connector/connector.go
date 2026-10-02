@@ -60,6 +60,9 @@ type Field struct {
 	// against what the dispatch may address; content options leave it empty
 	// and are never gated. See scope.go.
 	Scope string
+	// Secret, on a connection field, marks its value a credential even when
+	// written literally: it is tracked for redaction.
+	Secret bool
 }
 
 // Schema is a set of named fields (option/filter/context/output schemas).
@@ -386,9 +389,6 @@ type Deps struct {
 	// Lookup finds another configured instance by name, at use time (set by
 	// Build). nil outside a built registry.
 	Lookup func(name string) (*Instance, bool)
-	// UserToken returns the acts-as-you GitHub token (`gh auth token` or the
-	// configured write token). nil in contexts with no github wiring.
-	UserToken func() (string, error)
 	// Config is the loaded config (identity defaults, hosts for the command
 	// connector, …).
 	Config *config.Config

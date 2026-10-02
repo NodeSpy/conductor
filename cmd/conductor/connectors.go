@@ -17,7 +17,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/inbound"
-	"github.com/NodeSpy/conductor/internal/integrations/slack"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/plugin"
@@ -284,31 +283,20 @@ func inertNote(n int) string {
 	return fmt.Sprintf(" — %d trigger(s) inert", n)
 }
 
-// webConnector / discordConnector / slackConnector are the duck-typed wiring
-// surfaces connector Impls expose for main (see internal/connector).
+// webConnector is the duck-typed wiring surface a web connector Impl exposes
+// for main (see internal/connector).
 type webConnector interface {
 	Channel() *handoff.WebChannel
 	Listen() string
 }
 
-type discordConnector interface {
-	BotToken() string
-	Inbox() *handoff.Inbox
-}
-
-type slackInboxer interface {
-	Inbox() *handoff.Inbox
-}
-
 // wireConnectorSurfaces mounts web connectors' draft pages on the inbound
-// listener, starts discord connectors' gateways, and fans Socket Mode replies
-// into every slack connector's inbox.
+// listener. (A chat plugin's replies arrive as its own conversation_reply
+// events; nothing is wired for them here.)
 func wireConnectorSurfaces(ctx context.Context, stack *flowStack) {
 	if stack == nil {
 		return
 	}
-	var slackInboxes []*handoff.Inbox
-	seenGateway := map[string]bool{}
 	for _, name := range stack.Registry.Names() {
 		in, _ := stack.Registry.Get(name)
 		if in.Impl == nil || !in.Enabled || in.DisabledReason != "" {
@@ -320,29 +308,6 @@ func wireConnectorSurfaces(ctx context.Context, stack *flowStack) {
 				logf("connector %s: web ask pages on %s/handoff", name, wc.Listen())
 			}
 		}
-		if dc, ok := in.Impl.(discordConnector); ok {
-			if tok := dc.BotToken(); tok != "" && !seenGateway[tok] {
-				seenGateway[tok] = true
-				go handoff.RunDiscordGateway(ctx, tok, dc.Inbox(), logf)
-				logf("connector %s: discord gateway starting", name)
-			}
-		}
-		if si, ok := in.Impl.(slackInboxer); ok {
-			if ib := si.Inbox(); ib != nil {
-				slackInboxes = append(slackInboxes, ib)
-			}
-		}
-	}
-	if len(slackInboxes) > 0 {
-		inboxes := slackInboxes
-		slack.SetReplyHook(func(channel, threadTS, user, text string) bool {
-			for _, ib := range inboxes {
-				if ib.DeliverFrom(channel, threadTS, user, text) {
-					return true
-				}
-			}
-			return false
-		})
 	}
 }
 
@@ -358,7 +323,7 @@ func cmdConnectors(args []string) error {
 		return fmt.Errorf("usage: conductor connectors ls")
 	}
 	if !cfg.HasConnectors() {
-		fmt.Println("no connectors: block configured (legacy integrations: config)")
+		fmt.Println("no connectors: block configured")
 		return nil
 	}
 	stack, err := buildFlowStack(cfg, nil, nil, true)

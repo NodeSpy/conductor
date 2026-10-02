@@ -293,13 +293,17 @@ func EmitLifecycle(ctx context.Context, event string, t core.Trigger, line strin
 			"ref":  fmt.Sprintf("%s#%d", t.Target.Repo, t.Target.Number),
 			"repo": t.Target.Repo, "number": t.Target.Number,
 			"origin_kind": t.Kind, "title": t.Title,
+			// The connector the originating trigger came from: work for this
+			// event gets that connector's declared credentials.
+			"origin_instance": t.Instance,
 		}
 		for k, v := range extra {
 			trigCtx[k] = v
 		}
 		act := config.Action{Name: ct.Spec.Name, Enabled: ct.Spec.Enabled, Shadow: ct.Spec.Shadow, FlowRef: ct.Ref()}
-		target := t.Target
+		target, trusted := t.Target, t.TargetTrusted
 		if target.Repo == "" {
+			trusted = false
 			// Only a synthetic target has nothing to clone; a lifecycle event
 			// about a real repo keeps the normal checkout derivation.
 			act = inbound.ForceNoCheckout(act)
@@ -315,6 +319,8 @@ func EmitLifecycle(ctx context.Context, event string, t core.Trigger, line strin
 			Context:  trigCtx,
 			Force:    true, // lifecycle notifications always fire (no dedup gate)
 			Action:   act,
+			// The origin's target, as the platform assigned it (or not).
+			TargetTrusted: trusted,
 		})
 	}
 }

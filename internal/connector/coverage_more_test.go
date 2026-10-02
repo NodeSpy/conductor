@@ -104,12 +104,9 @@ func TestVerbOnlyDeclaredEventsAndSources(t *testing.T) {
 	reg := buildSinkRegistry(t, `
 connectors:
   box: { use: command }
-  alerts: { use: ntfy, topic: t }
-  pager: { use: pushover, token: x, user: u }
-  relay: { use: notifiarr, api_key: k }
-  disc: { use: discord, bot_token: b }
+  kv: { use: kv }
 `)
-	for _, name := range []string{"box", "alerts", "pager", "relay", "disc"} {
+	for _, name := range []string{"box", "kv"} {
 		in, ok := reg.Get(name)
 		if !ok || in.DisabledReason != "" {
 			t.Fatalf("%s: %+v", name, in)
@@ -121,11 +118,6 @@ connectors:
 		if err != nil || src != nil {
 			t.Fatalf("%s source: %v %v", name, src, err)
 		}
-	}
-	// Discord duck-typed wiring surfaces.
-	in, _ := reg.Get("disc")
-	if dc, ok := in.Impl.(interface{ BotToken() string }); !ok || dc.BotToken() != "b" {
-		t.Fatal("discord BotToken surface")
 	}
 }
 

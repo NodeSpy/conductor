@@ -67,8 +67,7 @@ func affinityEngine(t *testing.T, cfg *config.Config, d *sendingDispatcher) *Eng
 	aff := controller.NewAffinity(reg, nil, cfg, nil, nil, nil)
 	e := New(Options{
 		Config: cfg, Store: tempStore(t), Dispatch: d, Controllers: reg, Affinity: aff,
-		Notifier:  &fakeNotifier{},
-		UserToken: func() (string, error) { return "utok", nil },
+		Notifier: &fakeNotifier{},
 	})
 	return e
 }

@@ -23,7 +23,8 @@ connectors:
       write_token: e2e-user-write-token # literal token; no gh binary in the image
 
   slack:
-    use: slack
+    use: /usr/local/bin/conductor-slack
+    api_base: http://sink-catcher:8080/slackapi
     # Verbs only (no slack triggers), so no Socket Mode connection is opened;
     # bot_token is all the verb face needs. The API base comes from
     # PC_SLACK_API_URL (the sink-catcher's slack-shaped endpoint).

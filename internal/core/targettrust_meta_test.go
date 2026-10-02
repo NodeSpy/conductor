@@ -31,12 +31,10 @@ func TestOnlyAuditedSourcesClaimTargetTrust(t *testing.T) {
 	audited := map[string]string{
 		"internal/connector/pluginsource.go": "carries a connector plugin's target.assigned CLAIM: the plugin was " +
 			"trusted once, at install, and the platform it reads assigned the target (plugin-contract.md, the `target` semantic)",
-		"internal/integrations/slack/handle.go": "a synthetic target built from the channel id Slack assigned",
-		"internal/integrations/rss/rss.go":      "the feed's CONFIGURED repo, or a synthetic target named after the feed",
-		"internal/integrations/cron/cron.go":    "a synthetic target named after the operator's own schedule",
+		"internal/integrations/rss/rss.go": "the feed's CONFIGURED repo, or a synthetic target named after the feed",
 		"internal/integrations/webhook/webhook.go": "a STATIC `repo:` (the operator's word) or a synthetic target; " +
 			"a body-templated repo: is left untrusted",
-		"internal/connector/conductor.go": "conductor's own lifecycle event",
+		"internal/connector/conductor.go": "a lifecycle event carries its ORIGINATING trigger's bit for the same target (false for a synthetic one)",
 		"internal/connector/httpapi.go":   "a synthetic target named after the source and event, from config",
 		"cmd/conductor/main.go":           "an operator-invoked manual trigger",
 		"cmd/conductor/mcp.go": "the memory MCP subprocess parses --target-trusted, which the daemon " +

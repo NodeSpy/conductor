@@ -5,5 +5,9 @@ import (
 	"github.com/NodeSpy/conductor/internal/core/coretest"
 )
 
-// The fixture forge connector stands in for a forge plugin under `use: github`.
-func init() { connector.RegisterInProcessConnector(coretest.Forge) }
+// The fixture connectors stand in for the forge and chat plugins under
+// `use: github` and `use: slack`.
+func init() {
+	connector.RegisterInProcessConnector(coretest.Forge)
+	connector.RegisterInProcessConnector(coretest.Chat)
+}

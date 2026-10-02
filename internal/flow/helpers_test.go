@@ -72,6 +72,14 @@ var fakeDecl = &connector.TypeDecl{
 			},
 		},
 		{
+			// An option whose NAME differs from its scope dimension.
+			Name: "notify", Desc: "records an invocation",
+			Options: connector.Schema{
+				"text":       {Type: connector.TString},
+				"channel_id": {Type: connector.TString, Scope: "channel"},
+			},
+		},
+		{
 			Name:    "fail",
 			Desc:    "always errors",
 			Options: connector.Schema{},

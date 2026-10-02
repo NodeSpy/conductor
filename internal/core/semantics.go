@@ -300,6 +300,35 @@ func (t Trigger) Facts() map[string]any {
 	return out
 }
 
+// TargetScope is the value the event's declared target scope gives
+// dimension dim (target.scope: [{dimension, fact}]) — "" when it declares
+// none for dim, and always "" for a target the platform did not assign: a
+// sender-chosen target implies no scope.
+func (t Trigger) TargetScope(dim string) string {
+	ts := t.Semantics().Target
+	if ts == nil || !t.TargetTrusted {
+		return ""
+	}
+	for _, sc := range ts.Scope {
+		if sc.Dimension != dim {
+			continue
+		}
+		if v, ok := LookupFact(t.Facts(), sc.Fact); ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// DeclaresTargetScope reports whether the event declares its target's scope
+// at all (an event declaring none keeps the legacy repo-from-target rule).
+func (t Trigger) DeclaresTargetScope() bool {
+	ts := t.Semantics().Target
+	return ts != nil && len(ts.Scope) > 0
+}
+
 // LookupFact reads a fact by name, walking a dotted path through nested maps
 // ("chat.user" → facts["chat"]["user"]); a flat key of that exact name
 // wins.

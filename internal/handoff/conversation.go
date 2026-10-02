@@ -18,7 +18,7 @@ var Conversations = NewInbox()
 type conversationPresentation struct {
 	inbox            *Inbox
 	instance, id, at string
-	p                *slackPending
+	p                *pending
 	once             sync.Once
 }
 
@@ -49,4 +49,68 @@ func (c *conversationPresentation) Close() {
 // conversation (the event is consumed, not a fresh trigger).
 func (i *Inbox) DeliverReply(instance, id, author, text string) bool {
 	return i.DeliverFrom(instance, id, author, text)
+}
+
+// Inbox routes a conversation reply to the Presentation waiting on it, keyed
+// by (instance, conversation id). A reply is parsed into a Decision; delivery
+// reports whether it was consumed, so the caller can tell a reply from
+// ordinary chatter. Safe for concurrent use.
+type Inbox struct {
+	mu      sync.Mutex
+	pending map[string]*pending
+}
+
+type pending struct {
+	done      chan Decision
+	once      sync.Once
+	approvers []string // empty = anyone may resolve
+}
+
+// NewInbox builds an empty Inbox.
+func NewInbox() *Inbox { return &Inbox{pending: map[string]*pending{}} }
+
+func inboxKey(instance, id string) string { return instance + ":" + id }
+
+func (i *Inbox) register(instance, id string, approvers []string) *pending {
+	p := &pending{done: make(chan Decision, 1), approvers: approvers}
+	i.mu.Lock()
+	i.pending[inboxKey(instance, id)] = p
+	i.mu.Unlock()
+	return p
+}
+
+func (i *Inbox) unregister(instance, id string) {
+	i.mu.Lock()
+	delete(i.pending, inboxKey(instance, id))
+	i.mu.Unlock()
+}
+
+// DeliverFrom routes a reply to a pending conversation, if one is waiting on
+// (instance, id) AND the author may resolve it (a conversation with an
+// approvers list ignores every other author, an unknown one included).
+func (i *Inbox) DeliverFrom(instance, id, author, text string) bool {
+	i.mu.Lock()
+	p := i.pending[inboxKey(instance, id)]
+	i.mu.Unlock()
+	if p == nil {
+		return false
+	}
+	if len(p.approvers) > 0 {
+		allowed := false
+		for _, a := range p.approvers {
+			if a != "" && a == author {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+	delivered := false
+	p.once.Do(func() {
+		p.done <- parseReply(text)
+		delivered = true
+	})
+	return delivered
 }

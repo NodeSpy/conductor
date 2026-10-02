@@ -96,7 +96,7 @@ func stepEngine(t *testing.T, d *stepFake) *Engine {
 		{ID: "worker", Model: config.ModelSpecOf("claude-opus")},   // strong model to do the work
 	}}}}
 	return New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: &fakeNotifier{},
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 }
 
 func issueTrigger() core.Trigger {
@@ -147,7 +147,7 @@ func TestWorkflowBackgroundStepHandsOff(t *testing.T) {
 		{ID: "interactive"},
 	}}}}
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n,
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 
 	act := config.Action{Steps: []config.Action{
 		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true,
@@ -184,7 +184,7 @@ func TestWorkflowBackgroundStepNotReapable(t *testing.T) {
 		{ID: "interactive", ArchiveWhenDone: true},
 	}}}}
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: &fakeNotifier{},
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 
 	act := config.Action{Steps: []config.Action{
 		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true, Prompt: "hand off {{.issue}}"},
@@ -210,7 +210,7 @@ func TestWorkflowBackgroundStepUnknownHandoffEscalates(t *testing.T) {
 	// No connectors: block at all — e.connectors is nil, so any handoff: name
 	// fails to resolve.
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n,
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 
 	act := config.Action{Steps: []config.Action{
 		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true,
@@ -248,7 +248,7 @@ func TestWorkflowBackgroundStepHandoffResolvesButNoBrokerFallsBack(t *testing.T)
 		t.Fatal(err)
 	}
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n, Connectors: reg,
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 
 	act := config.Action{Steps: []config.Action{
 		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true,
@@ -280,8 +280,7 @@ func TestWorkflowResumesFromCheckpoint(t *testing.T) {
 	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
 		{ID: "planner"}, {ID: "worker"}}}}}
 	e := New(Options{Config: cfg, Store: st, Dispatch: d, Notifier: &fakeNotifier{},
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil },
-		RefreshAppToken: func(core.Trigger) (string, error) { return "app", nil }})
+		Author: dispatch.Author{}})
 
 	// Persist a run checkpointed AFTER step 0 (evaluate) with has_context=true.
 	tr := issueTrigger()
