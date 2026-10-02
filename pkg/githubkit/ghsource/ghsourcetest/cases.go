@@ -98,6 +98,7 @@ func prEvent(action string, n int, author string) string {
 // Cases returns the conformance table.
 func Cases() []Case {
 	recent := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	stale := time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339)
 	return []Case{
 		{
 			Name:       "new_comment on your PR, not on others or by you",
@@ -331,6 +332,33 @@ func Cases() []Case {
 					Context: map[string]any{"comment_id": 3001, "author": "rev"}, Absent: []string{"review_id"}},
 				{Kind: "new_comment", Trigger: "nc", Repo: repo, Number: 7, CatchUp: true, Context: map[string]any{"comment_id": 4001}},
 			},
+		},
+		{
+			// The stuck-check poller runs on its own cadence, independent of
+			// the sweep (off here), over the repos its trigger is scoped to.
+			// Its 2s interval fires once inside the runner's wait window.
+			Name: "stuck_checks from the poller, on your PR only",
+			Connection: func(env Env) map[string]any {
+				c := base(env)
+				c["repos"] = []any{repo}
+				return c
+			},
+			Triggers: []Trigger{{On: "stuck_checks", Name: "st", Options: map[string]any{"stuck_after": "30m", "poll_interval": "2s"}}},
+			Routes: []Route{
+				{Method: "GET", Path: "/repos/" + repo + "/pulls", Body: []any{
+					map[string]any{"number": 7, "title": "PR 7", "user": map[string]any{"login": "me"},
+						"head": map[string]any{"sha": "h7", "ref": "feat-7"}, "base": map[string]any{"ref": "main"}},
+					map[string]any{"number": 8, "title": "PR 8", "user": map[string]any{"login": "someone"},
+						"head": map[string]any{"sha": "h8", "ref": "feat-8"}, "base": map[string]any{"ref": "main"}},
+				}},
+				{Method: "GET", Path: "/repos/" + repo + "/actions/runs", Body: map[string]any{"workflow_runs": []any{
+					map[string]any{"id": 91, "name": "ci", "status": "in_progress", "created_at": stale},
+					map[string]any{"id": 92, "name": "lint", "status": "in_progress", "created_at": time.Now().UTC().Format(time.RFC3339)},
+					map[string]any{"id": 93, "name": "old-done", "status": "completed", "created_at": stale},
+				}}},
+			},
+			Want: []Want{{Kind: "stuck_checks", Trigger: "st", Repo: repo, Number: 7, CatchUp: true,
+				Context: map[string]any{"run_id": 91, "run_name": "ci", "run_status": "in_progress"}}},
 		},
 		{
 			Name:       "a nudge runs the sweep again",
