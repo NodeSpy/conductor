@@ -29,10 +29,12 @@ func TestOnlyAuditedSourcesClaimTargetTrust(t *testing.T) {
 	// Each entry is a file that constructs a trusted Target, with WHY. The
 	// list is the audit.
 	audited := map[string]string{
-		"internal/integrations/github/events.go": "a signature-verified GitHub payload; the repo and number are GitHub's",
-		"internal/integrations/slack/handle.go":  "a synthetic target built from the channel id Slack assigned",
-		"internal/integrations/rss/rss.go":       "the feed's CONFIGURED repo, or a synthetic target named after the feed",
-		"internal/integrations/cron/cron.go":     "a synthetic target named after the operator's own schedule",
+		"pkg/githubkit/ghsource/events.go": "a signature-verified GitHub payload (or a read the source made with " +
+			"its own credentials); the repo and number are GitHub's",
+		"pkg/githubkit/ghsource/types.go":       "ghsource.Trigger declares the field it carries for its hosts",
+		"internal/integrations/slack/handle.go": "a synthetic target built from the channel id Slack assigned",
+		"internal/integrations/rss/rss.go":      "the feed's CONFIGURED repo, or a synthetic target named after the feed",
+		"internal/integrations/cron/cron.go":    "a synthetic target named after the operator's own schedule",
 		"internal/integrations/webhook/webhook.go": "a STATIC `repo:` (the operator's word) or a synthetic target; " +
 			"a body-templated repo: is left untrusted",
 		"internal/connector/conductor.go": "conductor's own lifecycle event",
@@ -41,10 +43,11 @@ func TestOnlyAuditedSourcesClaimTargetTrust(t *testing.T) {
 		"cmd/conductor/mcp.go": "the memory MCP subprocess parses --target-trusted, which the daemon " +
 			"emits from the dispatch it launched; absent means untrusted",
 		// Carriers, not claimants: they propagate a bit decided upstream.
-		"internal/flow/plan.go":       "run_step carries the launching dispatch's provenance",
-		"internal/flow/skillverbs.go": "the skill surface carries the dispatch's provenance",
-		"internal/flow/flow.go":       "the runner carries the trigger's provenance into memory.Source",
-		"internal/engine/engine.go":   "the engine carries the trigger's provenance into memory.Source",
+		"internal/integrations/github/github.go": "the bundled adapter copies the kit's bit onto core.Trigger",
+		"internal/flow/plan.go":                  "run_step carries the launching dispatch's provenance",
+		"internal/flow/skillverbs.go":            "the skill surface carries the dispatch's provenance",
+		"internal/flow/flow.go":                  "the runner carries the trigger's provenance into memory.Source",
+		"internal/engine/engine.go":              "the engine carries the trigger's provenance into memory.Source",
 		"internal/engine/steps.go": "readVerb CONSUMES the bit as a guard — it defaults a watch " +
 			"fact step's target only when trusted; it never sets the bit",
 		"internal/dispatch/toolserver.go": "the tool server carries the dispatch's provenance into the skill " +

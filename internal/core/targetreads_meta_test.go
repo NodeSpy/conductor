@@ -240,7 +240,7 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	"internal/controller/opencode.go": {
 		{"opencodeTitle", "a session title"},
 	},
-	"internal/integrations/github/events.go": {
+	"pkg/githubkit/ghsource/events.go": { // the github source kit (the bundled integration and the plugin share it)
 		{"triggersFor", "CONSTRUCTS the trigger from the verified payload"},
 	},
 
