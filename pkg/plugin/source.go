@@ -21,6 +21,7 @@ import "encoding/json"
 //	daemon → plugin   plugin.nudge         run the catch-up sweep now
 //	daemon → plugin   plugin.force         build the events for one target, now
 //	daemon → plugin   plugin.app_token     re-mint an App installation token
+//	daemon → plugin   plugin.target_head   a target's head commit + state, now
 
 // ConnectorABI is the connector-kind ABI revision this SDK speaks. A connector
 // plugin reports it in Decl.ABI to receive the source extension.
@@ -28,9 +29,10 @@ const ConnectorABI = 1
 
 // Source-extension methods (daemon → plugin requests).
 const (
-	MethodNudge    = "plugin.nudge"
-	MethodForce    = "plugin.force"
-	MethodAppToken = "plugin.app_token"
+	MethodNudge      = "plugin.nudge"
+	MethodForce      = "plugin.force"
+	MethodAppToken   = "plugin.app_token"
+	MethodTargetHead = "plugin.target_head"
 )
 
 // VerbSweep is a CONDUCTOR-DEFINED verb name. A connector plugin speaking
@@ -163,6 +165,21 @@ type AppTokenResult struct {
 	Token string `json:"token"`
 }
 
+// TargetHeadRequest asks for the CURRENT head commit and state of a target
+// this instance's source emitted — what a run's hooks read as
+// {{.run.start_sha}} / {{.run.head_sha}} and what names a stop's reason.
+type TargetHeadRequest struct {
+	Instance string `json:"instance"`
+	Target   Target `json:"target"`
+}
+
+// TargetHeadResult is the head commit and the target's state: open | closed |
+// merged, or "" when unknown.
+type TargetHeadResult struct {
+	SHA   string `json:"sha"`
+	State string `json:"state,omitempty"`
+}
+
 // NudgeHandler is implemented by a ConnectorABI source with a catch-up sweep.
 type NudgeHandler interface {
 	Nudge(NudgeRequest) (NudgeResult, error)
@@ -178,4 +195,10 @@ type ForceHandler interface {
 // installation tokens.
 type AppTokenHandler interface {
 	AppToken(AppTokenRequest) (AppTokenResult, error)
+}
+
+// TargetHeadHandler is implemented by a ConnectorABI source whose targets have
+// a head (a PR's head commit).
+type TargetHeadHandler interface {
+	TargetHead(TargetHeadRequest) (TargetHeadResult, error)
 }

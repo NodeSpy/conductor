@@ -55,7 +55,19 @@ type ConnectorRef struct {
 	// globs). Empty = no extra restriction beyond the structural guarantee that
 	// an implementation only ever receives its own instances' credentials.
 	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
-	raw          yaml.Node
+	// TrustedSource is the operator's grant that a PLUGIN-backed connector's
+	// source events are authoritative for the platform they describe — that it
+	// built them from deliveries it verified, or from reads made with this
+	// connector's own credentials. With it, and only with it, the daemon
+	// believes the plugin's target-trust claim (own-repo scope) and lets it
+	// emit the engine-interpreted kinds it DECLARES (new_comment,
+	// review_requested, merge_conflict, failing_checks) and the `_closed`
+	// lifecycle kind. Without it a plugin source is untrusted third-party
+	// input, exactly as before. Meaningless on a builtin connector (it is
+	// conductor's own code), and refused there. See
+	// docs/design/plugin-source-abi.md §Trust.
+	TrustedSource bool `yaml:"trusted_source,omitempty"`
+	raw           yaml.Node
 	// legacyType holds a pre-`use:` `type:` value. It is NOT part of the schema
 	// — it exists only so validateConnectors can emit a migration-specific error
 	// instead of the silent "missing use:" a dropped field would produce.
@@ -71,9 +83,10 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 		Options map[string]any `yaml:"options,omitempty"`
 		Policy  *Policy        `yaml:"policy,omitempty"`
 		// Type is the retired field, read for diagnostics only (see legacyType).
-		Type         string           `yaml:"type,omitempty"`
-		Isolation    *IsolationConfig `yaml:"isolation,omitempty"`
-		AllowSecrets []string         `yaml:"allow_secrets,omitempty"`
+		Type          string           `yaml:"type,omitempty"`
+		Isolation     *IsolationConfig `yaml:"isolation,omitempty"`
+		AllowSecrets  []string         `yaml:"allow_secrets,omitempty"`
+		TrustedSource bool             `yaml:"trusted_source,omitempty"`
 	}
 	var h hdr
 	if err := n.Decode(&h); err != nil {
@@ -81,6 +94,7 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 	}
 	r.Use, r.Network, r.Enabled, r.Options, r.Policy = h.Use, h.Network, h.Enabled, h.Options, h.Policy
 	r.Isolation, r.AllowSecrets, r.legacyType, r.raw = h.Isolation, h.AllowSecrets, h.Type, *n
+	r.TrustedSource = h.TrustedSource
 	return nil
 }
 
@@ -1693,6 +1707,11 @@ func (c *Config) validateConnectors() error {
 		if ref.Isolation != nil {
 			if err := validateIsolation("connector "+name, ref.Isolation, false); err != nil {
 				return err
+			}
+		}
+		if ref.TrustedSource {
+			if u, err := ParseUse(UseKindConnector, ref.Use); err == nil && u.Origin == OriginBuiltin {
+				return fmt.Errorf("config: connector %q: trusted_source applies to a plugin-backed connector — %q is builtin, conductor's own code, and already trusted for what it emits", name, ref.Use)
 			}
 		}
 		for _, s := range ref.AllowSecrets {

@@ -11,6 +11,8 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/plugin"
 	"github.com/NodeSpy/conductor/internal/secrets"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
+	"gopkg.in/yaml.v3"
 )
 
 // externalTypes tracks which registered connector types came from an EXTERNAL
@@ -24,6 +26,30 @@ var externalTypes = map[string]bool{}
 // (external-overrides-bundled is disallowed — §7 open Q4). Safe to call at
 // daemon boot after config load, before connector.Build.
 func RegisterExternalType(decl *TypeDecl, b Builder) error {
+	return registerExternalType(decl, b, false)
+}
+
+// RegisterExternalTypeInPlaceOfBundled is RegisterExternalType for a plugin
+// that stands in for a BUNDLED type of the same name — the conductor-github
+// plugin for the builtin github, which the plugin exists to be able to
+// replace. The caller must have established that NO configured connector
+// resolves to the builtin of that type (cmd/conductor's loadConnectorPlugins
+// checks the config): with none, nothing is redirected — the operator named
+// the plugin and only the plugin — so the refusal's reason does not apply.
+// The bundled registration is kept and restored by UnregisterExternalType.
+// Two plugins claiming one type still collide.
+func RegisterExternalTypeInPlaceOfBundled(decl *TypeDecl, b Builder) error {
+	return registerExternalType(decl, b, true)
+}
+
+// replacedBundled holds a bundled type's registration while a plugin stands
+// in for it (RegisterExternalTypeInPlaceOfBundled), for restoration.
+var replacedBundled = map[string]struct {
+	decl *TypeDecl
+	b    Builder
+}{}
+
+func registerExternalType(decl *TypeDecl, b Builder, inPlaceOfBundled bool) error {
 	regMu.Lock()
 	defer regMu.Unlock()
 	if _, dup := typeReg[decl.Type]; dup {
@@ -32,7 +58,13 @@ func RegisterExternalType(decl *TypeDecl, b Builder) error {
 			// credentials to whichever registered last — refuse the collision.
 			return fmt.Errorf("connector type %q is already provided by another plugin — two plugins cannot provide the same type", decl.Type)
 		}
-		return fmt.Errorf("connector type %q is bundled and cannot be replaced by a plugin", decl.Type)
+		if !inPlaceOfBundled {
+			return fmt.Errorf("connector type %q is bundled and cannot be replaced by a plugin", decl.Type)
+		}
+		replacedBundled[decl.Type] = struct {
+			decl *TypeDecl
+			b    Builder
+		}{typeReg[decl.Type], buildReg[decl.Type]}
 	}
 	typeReg[decl.Type] = decl
 	buildReg[decl.Type] = b
@@ -41,7 +73,7 @@ func RegisterExternalType(decl *TypeDecl, b Builder) error {
 }
 
 // UnregisterExternalType removes an external type (config reload, test cleanup).
-// It never touches a bundled type.
+// It never removes a bundled type: one a plugin stood in for is restored.
 func UnregisterExternalType(typ string) {
 	regMu.Lock()
 	defer regMu.Unlock()
@@ -49,6 +81,10 @@ func UnregisterExternalType(typ string) {
 		delete(typeReg, typ)
 		delete(buildReg, typ)
 		delete(externalTypes, typ)
+		if r, ok := replacedBundled[typ]; ok {
+			typeReg[typ], buildReg[typ] = r.decl, r.b
+			delete(replacedBundled, typ)
+		}
 	}
 }
 
@@ -64,6 +100,17 @@ func IsExternalType(typ string) bool {
 // that, per configured instance, resolves that instance's credentials and hands
 // them to the plugin subprocess per-call (least privilege, own-type-only).
 func RegisterExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin.Decl) (*TypeDecl, error) {
+	return registerExternalConnector(cl, spec, decl, false)
+}
+
+// RegisterExternalConnectorInPlaceOfBundled is RegisterExternalConnector for
+// a plugin standing in for a bundled type (see
+// RegisterExternalTypeInPlaceOfBundled for the precondition the caller owns).
+func RegisterExternalConnectorInPlaceOfBundled(cl *plugin.Client, spec plugin.Spec, decl *plugin.Decl) (*TypeDecl, error) {
+	return registerExternalConnector(cl, spec, decl, true)
+}
+
+func registerExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin.Decl, inPlaceOfBundled bool) (*TypeDecl, error) {
 	td := mapDecl(decl)
 	allow := map[string]bool{}
 	for _, s := range spec.AllowSecrets {
@@ -98,12 +145,23 @@ func RegisterExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin
 			pluginType: spec.Provides,
 			audit:      deps.Audit,
 			log:        log,
+			abi:        connectorABI(decl),
+			trusted:    ref.TrustedSource,
 		}, nil
 	}
-	if err := RegisterExternalType(td, builder); err != nil {
+	if err := registerExternalType(td, builder, inPlaceOfBundled); err != nil {
 		return nil, err
 	}
 	return td, nil
+}
+
+// connectorABI is a connector plugin's source-extension ABI (0 = none). The
+// field is kind-specific: only a connector's ABI means this.
+func connectorABI(d *plugin.Decl) int {
+	if d.Kind != "" && d.Kind != plugin.KindConnector {
+		return 0
+	}
+	return d.ABI
 }
 
 // mapDecl converts the plugin wire Decl into a connector.TypeDecl.
@@ -147,7 +205,7 @@ func mapSchema(s plugin.Schema) Schema {
 // plugin's connection config. `auth` is the daemon-managed OAuth2 block (see
 // buildManagedAuth): conductor runs the token exchange and injects the bearer,
 // so the block never crosses to the plugin as a connection field.
-var reservedConnKeys = map[string]bool{"type": true, "enabled": true, "options": true, "policy": true, "auth": true}
+var reservedConnKeys = map[string]bool{"type": true, "enabled": true, "options": true, "policy": true, "auth": true, "trusted_source": true}
 
 // resolveConnection decodes an instance's connection block, resolves every
 // secret reference (env:/vault), and returns the connection map to hand the
@@ -254,6 +312,11 @@ type externalImpl struct {
 	audit      func(map[string]any)
 	auditOnce  sync.Once
 	log        func(string, ...any)
+	// abi is the plugin's connector ABI; >= sdk.ConnectorABI speaks the
+	// source extension (pluginsource.go).
+	abi int
+	// trusted is the instance's trusted_source grant.
+	trusted bool
 }
 
 // Validate is a no-op: the plugin was verified and described at registration.
@@ -285,19 +348,96 @@ func (e *externalImpl) Source(triggers []CompiledTrigger) (core.Integration, err
 	if len(mine) == 0 {
 		return nil, nil
 	}
-	return &pluginSourceIntegration{
+	declared := map[string]bool{}
+	for _, ev := range e.decl.Events {
+		declared[ev.Name] = true
+	}
+	base := &pluginSourceIntegration{
 		source:   e.source,
 		instance: e.instance,
 		typ:      e.pluginType,
 		config:   e.conn,
 		triggers: mine,
 		log:      e.log,
-	}, nil
+		abi:      e.abi,
+		trusted:  e.trusted,
+		declared: declared,
+	}
+	if e.abi >= sdk.ConnectorABI && e.declaresConn("identity") {
+		// The connection carries the dispatch credential policy the bundled
+		// github connector does: expose it the same way (dispatchTuner).
+		return &identitySource{pluginSourceIntegration: base}, nil
+	}
+	return base, nil
+}
+
+// declaresConn reports whether the plugin declares a connection field.
+func (e *externalImpl) declaresConn(field string) bool {
+	_, ok := e.decl.Connection[field]
+	return ok
+}
+
+// identitySource is a ConnectorABI source whose connection declares the
+// dispatch credential policy — `identity: {read_token, write_token,
+// commit_author}` and `retry: {max, backoff}` — with the meaning the bundled
+// github connector gives them: which token an agent this source dispatches
+// reads and writes with, and how a transient dispatch failure retries. They
+// are read from the daemon's OWN copy of the instance config (secrets already
+// resolved); nothing about them crosses back from the plugin.
+type identitySource struct {
+	*pluginSourceIntegration
+}
+
+// IdentityTokens implements cmd/conductor's dispatchTuner.
+func (s *identitySource) IdentityTokens() (read, write, commitAuthor string) {
+	id, _ := s.config["identity"].(map[string]any)
+	read, _ = id["read_token"].(string)
+	write, _ = id["write_token"].(string)
+	commitAuthor, _ = id["commit_author"].(string)
+	if read == "" {
+		read = "app"
+	}
+	if write == "" {
+		write = "gh_auth"
+	}
+	if commitAuthor == "" {
+		commitAuthor = "self"
+	}
+	return read, write, commitAuthor
+}
+
+// RetryPolicy implements cmd/conductor's dispatchTuner.
+func (s *identitySource) RetryPolicy() config.Retry {
+	var r config.Retry
+	m, ok := s.config["retry"].(map[string]any)
+	if !ok {
+		return r
+	}
+	b, err := yaml.Marshal(m)
+	if err != nil {
+		return r
+	}
+	if err := yaml.Unmarshal(b, &r); err != nil {
+		s.log("plugin source %s: retry: %v — using the default", s.instance, err)
+		return config.Retry{}
+	}
+	return r
 }
 
 // Invoke forwards the verb to the plugin with this instance's credentials and
 // schema-validates the untrusted response.
 func (e *externalImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
+	if verb == sdk.VerbSweep && e.abi >= sdk.ConnectorABI {
+		if _, declared := e.decl.Verb(verb); declared {
+			// Conductor-defined: the daemon answers it, for every source with
+			// a sweep, exactly as the bundled connector's sweep verb does.
+			nudged, err := runSweepHook(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"nudged": nudged}, nil
+		}
+	}
 	// Audit the credential hand-off once per instance (name, never value).
 	if len(e.secretRefs) > 0 {
 		e.auditOnce.Do(func() {
@@ -338,4 +478,20 @@ func (e *externalImpl) Invoke(ctx context.Context, verb string, opts map[string]
 		}
 	}
 	return out, nil
+}
+
+// TargetHead implements HeadReader for a ConnectorABI source: the plugin reads
+// the target's current head with the instance's own credentials. Only a target
+// this instance emitted, and only a trusted one — the same "a target the
+// source assigned itself" rule the bundled github connector applies.
+func (e *externalImpl) TargetHead(ctx context.Context, t core.Trigger) (TargetHead, error) {
+	ext, ok := e.source.(pluginSourceExt)
+	if !ok || e.abi < sdk.ConnectorABI || t.Instance != e.instance || t.OwnRepo() == "" || t.Target.Number == 0 {
+		return TargetHead{}, nil
+	}
+	res, err := ext.TargetHead(ctx, e.instance, sdk.Target(t.Target))
+	if err == plugin.ErrNotSupported {
+		return TargetHead{}, nil
+	}
+	return TargetHead{SHA: res.SHA, State: res.State}, err
 }

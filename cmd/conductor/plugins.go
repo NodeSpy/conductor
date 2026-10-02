@@ -132,7 +132,20 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			}
 		}
 		cl, _ := mgr.Client(spec.Key())
-		if _, err := connector.RegisterExternalConnector(cl, spec, decl); err != nil {
+		register := connector.RegisterExternalConnector
+		if config.BuiltinConnector(spec.Provides) {
+			// A plugin standing in for a bundled type (the conductor-github
+			// plugin for github): allowed only when no connector in this
+			// config resolves to the builtin, so nothing is silently
+			// redirected to the plugin.
+			if users := builtinUsers(cfg, spec.Provides); len(users) > 0 {
+				rollback()
+				return nil, fmt.Errorf("plugin %s provides connector type %q, which connector(s) %s use as the builtin — a config cannot use the builtin and a plugin of the same type; point every %q connector at one of them",
+					spec.Name, spec.Provides, strings.Join(users, ", "), spec.Provides)
+			}
+			register = connector.RegisterExternalConnectorInPlaceOfBundled
+		}
+		if _, err := register(cl, spec, decl); err != nil {
 			rollback()
 			return nil, fmt.Errorf("plugin %s: %w", spec.Name, err)
 		}
@@ -188,6 +201,19 @@ func loadEnginePlugins(mgr *plugin.Manager) (code.EngineLookup, error) {
 		}
 		return c, true
 	}, nil
+}
+
+// builtinUsers lists the connectors that resolve to the BUILTIN of typ, sorted.
+func builtinUsers(cfg *config.Config, typ string) []string {
+	var out []string
+	for name, ref := range cfg.ConnectorsMap {
+		u, err := ref.Resolved()
+		if err == nil && u.Origin == config.OriginBuiltin && u.Name == typ {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // pluginBootTimeout bounds a single connector plugin's verify+spawn+describe at

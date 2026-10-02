@@ -157,6 +157,10 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	"internal/connector/github.go": {
 		{"TargetHead", "reads Target.Number beside OwnRepo(), and reads nothing when OwnRepo() is empty"},
 	},
+	"internal/connector/external.go": {
+		{"TargetHead", "a ConnectorABI plugin's head read: reads Target.Number beside OwnRepo(), only for a target " +
+			"this instance emitted, and reads nothing when OwnRepo() is empty"},
+	},
 	"internal/flow/runfacts.go": {
 		{"readHead", "a log line + an audit row for a head read that failed; it records, it authorizes nothing"},
 	},

@@ -84,6 +84,11 @@ type Client struct {
 	downUntil   time.Time
 	closed      bool
 	onEvent     func(json.RawMessage) // current source-event sink (set by StartSource)
+	// sinks are the per-instance source-event sinks: an event that names its
+	// instance (plugin.SourceEvent.Instance) goes to that instance's sink, so
+	// one plugin process can serve several instances. An event naming none
+	// goes to onEvent — the last instance started — as it always did.
+	sinks map[string]func(json.RawMessage)
 
 	// reloading is set for the brief window of a Reload (drain → teardown →
 	// swap spec). New bounded calls park on reloadCond until it clears, then
@@ -147,8 +152,15 @@ func (c *Client) handleNotify(method string, params json.RawMessage) {
 	if method != MethodEvent {
 		return
 	}
+	var hdr struct {
+		Instance string `json:"instance"`
+	}
+	_ = json.Unmarshal(params, &hdr)
 	c.mu.Lock()
 	emit := c.onEvent
+	if s, ok := c.sinks[hdr.Instance]; ok && hdr.Instance != "" {
+		emit = s
+	}
 	c.mu.Unlock()
 	if emit != nil {
 		emit(params)
@@ -160,19 +172,112 @@ func (c *Client) handleNotify(method string, params json.RawMessage) {
 // cancelled or the plugin exits — cancelling ctx tears down the subprocess,
 // which ends the stream. It returns once streaming is acknowledged.
 func (c *Client) StartSource(ctx context.Context, req StartSourceRequest, emit func(json.RawMessage)) error {
+	_, err := c.startSource(ctx, req, emit)
+	return err
+}
+
+// startSource is StartSource returning the transport the stream rides, whose
+// Done channel closes when that plugin process goes away.
+func (c *Client) startSource(ctx context.Context, req StartSourceRequest, emit func(json.RawMessage)) (transport, error) {
 	c.mu.Lock()
 	c.onEvent = emit
+	if c.sinks == nil {
+		c.sinks = map[string]func(json.RawMessage){}
+	}
+	c.sinks[req.Instance] = emit
 	c.mu.Unlock()
 	// No per-call timeout: start_source is long-lived; the plugin acks quickly but
 	// the stream lives for the daemon's lifetime, bounded by ctx.
 	c.mu.Lock()
 	if err := c.ensureLocked(ctx); err != nil {
 		c.mu.Unlock()
-		return err
+		return nil, err
 	}
 	conn := c.conn
 	c.mu.Unlock()
-	return conn.Call(ctx, MethodStartSource, req, &struct{}{})
+	return conn, conn.Call(ctx, MethodStartSource, req, &struct{}{})
+}
+
+// streamRestartDelay is how long StreamSource waits before re-opening a
+// stream whose plugin process went away. The client's own crash-loop guard
+// (restartBurst / restartWindow) bounds how often that can succeed. A var so
+// tests can shrink it.
+var streamRestartDelay = 2 * time.Second
+
+// StreamSource is StartSource SUPERVISED: it opens the stream and, whenever
+// the plugin process behind it goes away — a crash, a hung call torn down, an
+// in-place restart — opens it again on the restarted process, until ctx ends.
+// A source plugin's events must not stop for the rest of the daemon's life
+// because one verb call timed out. Blocks until ctx is cancelled.
+func (c *Client) StreamSource(ctx context.Context, req StartSourceRequest, emit func(json.RawMessage)) error {
+	for {
+		conn, err := c.startSource(ctx, req, emit)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		var answered *acp.RPCError
+		if errors.As(err, &answered) {
+			// The plugin refused the stream (not a source, bad config): it
+			// will refuse it again. That is not a restart to supervise.
+			return err
+		}
+		if err != nil {
+			c.deps.Log("plugin %s: source %s: %v — retrying in %s", c.spec.Name, req.Instance, err, streamRestartDelay)
+		} else {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-conn.Done():
+				c.deps.Log("plugin %s: source %s: the plugin process went away — re-opening the stream", c.spec.Name, req.Instance)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(streamRestartDelay):
+		}
+	}
+}
+
+// ErrNotSupported is what a source-extension call returns when the plugin
+// answered method-not-found: it does not implement that part of the ABI.
+var ErrNotSupported = errors.New("plugin: not supported")
+
+func notSupported(err error) error {
+	var re *acp.RPCError
+	if errors.As(err, &re) && re.Code == acp.CodeMethodNotFound {
+		return ErrNotSupported
+	}
+	return err
+}
+
+// Nudge asks a ConnectorABI source to run its catch-up sweep now.
+func (c *Client) Nudge(ctx context.Context, instance string) (bool, error) {
+	var res sdk.NudgeResult
+	if err := c.call(ctx, sdk.MethodNudge, sdk.NudgeRequest{Instance: instance}, &res); err != nil {
+		return false, notSupported(err)
+	}
+	return res.Nudged, nil
+}
+
+// Force asks a ConnectorABI source for the events kind would fire for one
+// target, now (`conductor force`).
+func (c *Client) Force(ctx context.Context, req sdk.ForceRequest) ([]sdk.SourceEvent, error) {
+	var res sdk.ForceResult
+	if err := c.call(ctx, sdk.MethodForce, req, &res); err != nil {
+		return nil, notSupported(err)
+	}
+	return res.Events, nil
+}
+
+// AppToken asks a ConnectorABI source for a fresh App installation token.
+func (c *Client) AppToken(ctx context.Context, instance string, installationID int64) (string, error) {
+	var res sdk.AppTokenResult
+	req := sdk.AppTokenRequest{Instance: instance, InstallationID: installationID}
+	if err := c.call(ctx, sdk.MethodAppToken, req, &res); err != nil {
+		return "", notSupported(err)
+	}
+	return res.Token, nil
 }
 
 // runIDBytes is the run token's entropy, matching the ctx socket's token
@@ -456,9 +561,14 @@ func (c *Client) callFor(ctx context.Context, timeout time.Duration, method stri
 		defer cancel()
 	}
 	err := conn.Call(cctx, method, params, result)
-	if err != nil {
+	var answered *acp.RPCError
+	if err != nil && !errors.As(err, &answered) {
 		// transport/timeout failure: drop the connection so the plugin is
-		// restarted on the next call (never takes the daemon down).
+		// restarted on the next call (never takes the daemon down). A
+		// JSON-RPC ERROR RESPONSE is not one: the plugin answered, the
+		// transport is healthy, and tearing the process down for it would
+		// also end every source stream it serves — a verb that failed on the
+		// platform's side (a 422, a missing repo) would silence the source.
 		c.mu.Lock()
 		if c.conn == conn {
 			c.teardownLocked()
@@ -662,4 +772,13 @@ func (h pluginHandler) HandleNotification(_ context.Context, method string, para
 	if h.onNotify != nil {
 		h.onNotify(method, params)
 	}
+}
+
+// TargetHead asks a ConnectorABI source for a target's current head and state.
+func (c *Client) TargetHead(ctx context.Context, instance string, t sdk.Target) (sdk.TargetHeadResult, error) {
+	var res sdk.TargetHeadResult
+	if err := c.call(ctx, sdk.MethodTargetHead, sdk.TargetHeadRequest{Instance: instance, Target: t}, &res); err != nil {
+		return sdk.TargetHeadResult{}, notSupported(err)
+	}
+	return res, nil
 }
