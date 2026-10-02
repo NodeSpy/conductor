@@ -62,6 +62,9 @@ type rawTargetException struct {
 // cloned/templated" is the only acceptable answer.
 var rawTargetExceptions = map[string][]rawTargetException{
 	// ---- core itself: the accessors and the key are where the rule LIVES.
+	"internal/core/semantics.go": {
+		{"Facts", "the template view a declaration renders over — what dispatch templateData has always exposed; the reads it feeds that spend credentials (mint, remediate, reads_revision) are gated on an assigned target"},
+	},
 	"internal/core/event.go": {
 		{"OwnRepo", "the accessor that IS the rule"},
 		{"Key", "builds the key; consults OwnRepo first and namespaces an untrusted target"},
@@ -259,6 +262,7 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	// check out; a forged target clones the attacker's own repo into the
 	// agent's sandbox, which is the sandbox doing its job.
 	"internal/dispatch/paseo.go": {
+		{"prHints", "the legacy target-shaped checkout hint for an event declaring no semantics: it checks out, as repoStrategy's legacy rule does"},
 		{"repoStrategy", "checkout strategy for the clone"},
 		{"checkoutArgs", "the clone/checkout arguments"},
 		{"createWorktree", "the worktree path for that checkout"},
@@ -271,6 +275,7 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	// the agent gets, inside conductor's own state dir. Nothing authorizes off
 	// it, and the branch name it derives is validated before it reaches git.
 	"internal/gitwt/gitwt.go": {
+		{"fetchRef", "the legacy pull ref for an event declaring no semantics: it checks out"},
 		{"addPR", "the PR ref to fetch for that checkout"},
 		{"prBranch", "a branch name for the work (safeBranch validates it first)"},
 	},

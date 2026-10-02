@@ -286,13 +286,13 @@ func (p *Provisioner) Reap(ctx context.Context) {
 // every fetch in the base clone rewrites. The private ref is deleted once the
 // worktree holds the commit. Called with the repo lock held (see provision).
 func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.Request) error {
-	pr := req.Trigger.Target.PR
-	if pr <= 0 {
-		return fmt.Errorf("checkout-pr with no PR number")
+	ref := fetchRef(req)
+	if ref == "" {
+		return fmt.Errorf("checkout of the target's code with no ref to fetch")
 	}
 	tmp := prFetchRefPrefix + filepath.Base(wt)
 	if _, err := p.git(ctx, base, "fetch", "--no-tags", "--force", "origin",
-		"+refs/pull/"+strconv.Itoa(pr)+"/head:"+tmp); err != nil {
+		"+"+ref+":"+tmp); err != nil {
 		return err
 	}
 	defer func() {
@@ -311,7 +311,7 @@ func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.R
 		branch = p.remoteBranchAt(ctx, base, sha)
 	}
 	if branch == "" {
-		p.logf("gitwt: %s#%d: PR head branch unknown — checking out detached", req.Trigger.Target.Repo, pr)
+		p.logf("gitwt: %s: the target's branch is unknown — checking out detached", req.Trigger.Key())
 		_, err := p.git(ctx, base, "worktree", "add", "--detach", wt, sha)
 		return err
 	}
@@ -519,8 +519,31 @@ func pathSlug(s string) string {
 // head ref when the trigger carried a usable one (so `git push origin HEAD`
 // targets the PR branch), else "".
 func prBranch(req dispatch.Request) string {
-	if ref, _ := req.Trigger.Context["head_ref"].(string); safeBranch(ref) {
+	ref := ""
+	if req.Trigger.HasSemantics() {
+		co, _ := req.Trigger.Checkout()
+		ref = co.PushBranch
+	} else {
+		ref, _ = req.Trigger.Context["head_ref"].(string) // legacy shape
+	}
+	if safeBranch(ref) {
 		return ref
+	}
+	return ""
+}
+
+// fetchRef is the ref holding the target's code: the declared checkout's
+// fetch_ref; an event declaring no semantics keeps the legacy pull ref.
+func fetchRef(req dispatch.Request) string {
+	if req.Trigger.HasSemantics() {
+		co, _ := req.Trigger.Checkout()
+		if co.FetchRef == "" || strings.HasPrefix(co.FetchRef, "-") || strings.ContainsAny(co.FetchRef, " :~^") {
+			return ""
+		}
+		return co.FetchRef
+	}
+	if pr := req.Trigger.Target.PR; pr > 0 {
+		return "refs/pull/" + strconv.Itoa(pr) + "/head"
 	}
 	return ""
 }

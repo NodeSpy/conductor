@@ -241,3 +241,61 @@ func DeclaredArgs(args map[string]string, facts map[string]any) map[string]any {
 	}
 	return out
 }
+
+// HasSemantics reports whether the trigger's event declares any semantics.
+// An event from a plugin that declares none keeps the target-shaped
+// behavior older plugins were built against.
+func (t Trigger) HasSemantics() bool { return t.Semantics() != noSemantics }
+
+// CheckoutSpec is a target's declared checkout, rendered over its facts.
+type CheckoutSpec struct {
+	Remote     string            // the repository's git URL
+	FetchRef   string            // the ref holding the target's code ("" = the base branch)
+	PushBranch string            // where the work is pushed ("" = a fresh branch)
+	Hints      map[string]string // passed to the agent runtime unread
+}
+
+// Checkout is the trigger's declared checkout; ok=false when its event
+// declares none (no workspace checkout: a synthetic target).
+func (t Trigger) Checkout() (CheckoutSpec, bool) {
+	c := t.Semantics().Checkout
+	if c == nil {
+		return CheckoutSpec{}, false
+	}
+	facts := t.Facts()
+	spec := CheckoutSpec{
+		Remote:   renderFacts(c.Remote, facts),
+		FetchRef: renderFacts(c.FetchRef, facts),
+	}
+	if c.PushBranch != "" {
+		spec.PushBranch, _ = facts[c.PushBranch].(string)
+	}
+	if len(c.RuntimeHints) > 0 {
+		spec.Hints = map[string]string{}
+		for k, v := range c.RuntimeHints {
+			spec.Hints[k] = renderFacts(v, facts)
+		}
+	}
+	return spec, true
+}
+
+// Facts is the view a declaration's templates render over: the base facts
+// every target carries (what templates have always seen — repo, owner,
+// name, pr, issue, number, head, base, url), with the event's own facts on
+// top.
+func (t Trigger) Facts() map[string]any {
+	out := map[string]any{
+		"repo": t.Target.Repo, "owner": t.Target.Owner, "name": t.Target.Name,
+		"pr": t.Target.PR, "issue": t.Target.Issue, "number": t.Target.Number,
+		"head": t.Target.HeadSHA, "base": t.Target.BaseRef, "url": t.Target.HTMLURL,
+	}
+	for k, v := range out {
+		if v == "" || v == 0 {
+			delete(out, k)
+		}
+	}
+	for k, v := range t.Context {
+		out[k] = v
+	}
+	return out
+}

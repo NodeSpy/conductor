@@ -65,7 +65,7 @@ func (e *Engine) mint(ctx context.Context, t core.Trigger, cr sdk.Credential) (s
 	if e.invokeVerb == nil {
 		return "", fmt.Errorf("no connector registry to mint through")
 	}
-	out, err := e.invokeVerb(ctx, t.Instance, cr.Mint.Verb, core.DeclaredArgs(cr.Mint.Args, t.Context))
+	out, err := e.invokeVerb(ctx, t.Instance, cr.Mint.Verb, core.DeclaredArgs(cr.Mint.Args, t.Facts()))
 	if err != nil {
 		return "", err
 	}

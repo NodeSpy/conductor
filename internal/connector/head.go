@@ -42,7 +42,7 @@ func (in *Instance) TargetHead(ctx context.Context, t core.Trigger) (TargetHead,
 			continue
 		}
 		rr := v.Semantics.ReadsRevision
-		out, err := in.InvokeFinal(ctx, v.Name, core.DeclaredArgs(rr.Args, t.Context))
+		out, err := in.InvokeFinal(ctx, v.Name, core.DeclaredArgs(rr.Args, t.Facts()))
 		if err != nil {
 			return TargetHead{}, err
 		}

@@ -21,10 +21,16 @@ func prTarget() plugin.EventSemantics {
 			Scope:    []plugin.ScopeFact{{Dimension: "repo", Fact: "repo"}},
 		},
 		Revision: &plugin.RevisionSemantics{Fact: "head", Branch: "head_ref", Base: "base"},
-		Author:   &plugin.AuthorSemantics{Login: "author", Automated: "author_is_bot"},
-		Labels:   "labels",
-		Private:  []string{"installation_id", "reaction_subjects"},
-		Secret:   []string{"app_token", "gh_token"},
+		// A PR's code is its pull ref; work is pushed back to its head
+		// branch. paseo's PR-aware workspace reads the hints.
+		Checkout: &plugin.CheckoutSemantics{
+			Remote: "git@github.com:{{.repo}}.git", FetchRef: "refs/pull/{{.number}}/head", PushBranch: "head_ref",
+			RuntimeHints: map[string]string{"forge": "github", "pr_number": "{{.number}}"},
+		},
+		Author:  &plugin.AuthorSemantics{Login: "author", Automated: "author_is_bot"},
+		Labels:  "labels",
+		Private: []string{"installation_id", "reaction_subjects"},
+		Secret:  []string{"app_token", "gh_token"},
 	}
 }
 
@@ -82,12 +88,14 @@ func eventSemantics(name string) *plugin.EventSemantics {
 	case "issue_matched":
 		s.Target.Label = "issue"
 		s.Revision = nil
+		s.Checkout = repoCheckout()
 	default:
 		// release, deployment_status, alerts: repo-level events whose target
 		// the source assigns, with no revision of their own.
 		s.Target.Key = "{{.repo}}"
 		s.Target.Label = "repository"
 		s.Revision = nil
+		s.Checkout = repoCheckout()
 	}
 	return &s
 }
@@ -123,3 +131,9 @@ const identityGuidance = "\n\n---\n" +
 	"go over SSH as me. NEVER post, submit, approve, or otherwise write anything with the " +
 	"App/bot token. If a large read would burn my rate limit you MAY read (only) with the " +
 	"App token via `GH_TOKEN=$PC_GH_APP_TOKEN gh ...`, but never write with it."
+
+// repoCheckout is a checkout of the repository itself (branch off its base),
+// for an event about the repo rather than a PR.
+func repoCheckout() *plugin.CheckoutSemantics {
+	return &plugin.CheckoutSemantics{Remote: "git@github.com:{{.repo}}.git"}
+}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/hosts"
+	"strconv"
 )
 
 // paseo runs an agent action via `paseo run`. Reads use the App token
@@ -445,8 +446,24 @@ func effectiveStrategy(req Request) string {
 	return repoStrategy(req)
 }
 
-// repoStrategy picks the worktree strategy from the trigger's repo/PR context.
+// repoStrategy picks the worktree strategy from the trigger's DECLARED
+// checkout (plugin-contract.md §2.2): a fetch ref (or a runtime PR hint)
+// checks the target's own code out, a bare remote branches off the base, and
+// no checkout runs in the base workspace (a synthetic target). An event that
+// declares no semantics at all keeps the target-shaped rule older plugins
+// were built against.
 func repoStrategy(req Request) string {
+	if req.Trigger.HasSemantics() {
+		co, ok := req.Trigger.Checkout()
+		switch {
+		case !ok:
+			return "none"
+		case co.FetchRef != "" || co.Hints["pr_number"] != "":
+			return "checkout-pr"
+		default:
+			return "branch-off"
+		}
+	}
 	switch {
 	case req.Trigger.Target.PR > 0:
 		return "checkout-pr"
@@ -539,8 +556,14 @@ func agentTitle(req Request) string {
 func checkoutArgs(ctx context.Context, req Request) []string {
 	switch effectiveStrategy(req) {
 	case "checkout-pr":
-		return []string{"--new-workspace", workspaceMode(req), "--worktree-mode", "checkout-pr",
-			"--pr-number", itoa(req.Trigger.Target.PR), "--forge", "github"}
+		args := []string{"--new-workspace", workspaceMode(req), "--worktree-mode", "checkout-pr"}
+		if n, forge := prHints(req); n != "" {
+			args = append(args, "--pr-number", n)
+			if forge != "" {
+				args = append(args, "--forge", forge)
+			}
+		}
+		return args
 	case "branch-off":
 		args := []string{"--new-workspace", workspaceMode(req), "--worktree-mode", "branch-off",
 			"--new-branch", branchSlug(ctx, req.Trigger)}
@@ -580,8 +603,9 @@ func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir st
 	opts := CreateWorktreeOptions{Isolation: workspaceMode(req), Path: baseDir, Strategy: strat}
 	switch strat {
 	case "checkout-pr":
-		opts.PRNumber = req.Trigger.Target.PR
-		opts.Forge = "github"
+		n, forge := prHints(req)
+		opts.PRNumber, _ = strconv.Atoi(n)
+		opts.Forge = forge
 	case "branch-off":
 		opts.NewBranch = branchSlug(ctx, req.Trigger)
 		opts.BaseRef = req.Trigger.Target.BaseRef
@@ -1357,4 +1381,18 @@ func normCwd(p string) string {
 		}
 	}
 	return filepath.Clean(p)
+}
+
+// prHints are the PR number and forge the runtime's PR-aware workspace takes:
+// the declared checkout's runtime hints, passed through unread; an event
+// declaring no semantics keeps the legacy target-shaped values.
+func prHints(req Request) (number, forge string) {
+	if req.Trigger.HasSemantics() {
+		co, _ := req.Trigger.Checkout()
+		return co.Hints["pr_number"], co.Hints["forge"]
+	}
+	if req.Trigger.Target.PR > 0 {
+		return itoa(req.Trigger.Target.PR), "github"
+	}
+	return "", ""
 }

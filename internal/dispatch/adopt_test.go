@@ -89,3 +89,27 @@ func TestGitBranchAndRepoMatch(t *testing.T) {
 		t.Fatal("a different repo must not match")
 	}
 }
+
+// Checkout is the event's declaration: a fetch ref checks the target's code
+// out (with the runtime hints passed through unread), a bare remote branches
+// off, and no checkout runs in the base workspace — whatever forge it is.
+func TestCheckoutIsDeclared(t *testing.T) {
+	mk := func(co *sdk.CheckoutSemantics) Request {
+		return Request{Trigger: core.Trigger{Kind: "mr_opened", Context: map[string]any{"project": "grp/app", "iid": 12},
+			Sem: &sdk.EventSemantics{Checkout: co, Labels: "labels"}}}
+	}
+	pr := mk(&sdk.CheckoutSemantics{Remote: "git@forge.example:{{.project}}.git", FetchRef: "refs/merge-requests/{{.iid}}/head",
+		RuntimeHints: map[string]string{"forge": "forgeworks", "pr_number": "{{.iid}}"}})
+	if s := repoStrategy(pr); s != "checkout-pr" {
+		t.Fatalf("strategy = %s", s)
+	}
+	if n, forge := prHints(pr); n != "12" || forge != "forgeworks" {
+		t.Fatalf("hints = %q %q", n, forge)
+	}
+	if s := repoStrategy(mk(&sdk.CheckoutSemantics{Remote: "git@forge.example:grp/app.git"})); s != "branch-off" {
+		t.Fatalf("bare remote: %s", s)
+	}
+	if s := repoStrategy(mk(nil)); s != "none" {
+		t.Fatalf("no checkout declared: %s", s)
+	}
+}

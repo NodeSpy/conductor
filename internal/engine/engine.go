@@ -1519,7 +1519,7 @@ func agentWaitTimeout(p config.Step) time.Duration {
 // false falls through to dispatching the fixer.
 func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.RemediateSemantics, act config.Action, key, head string, run any) bool {
 	waitKey := fmt.Sprintf("%s|%v", key, run)
-	out, err := e.invokeVerb(ctx, t.Instance, rem.Status.Verb, core.DeclaredArgs(rem.Status.Args, t.Context))
+	out, err := e.invokeVerb(ctx, t.Instance, rem.Status.Verb, core.DeclaredArgs(rem.Status.Args, t.Facts()))
 	if err == nil {
 		done, eerr := expr.Eval(rem.Status.DoneWhen, out)
 		if eerr == nil && !done {
@@ -1544,7 +1544,7 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 	if e.store.Attempts(key, rkey, head) >= budget {
 		return false
 	}
-	if _, err := e.invokeVerb(ctx, t.Instance, rem.Action.Verb, core.DeclaredArgs(rem.Action.Args, t.Context)); err != nil {
+	if _, err := e.invokeVerb(ctx, t.Instance, rem.Action.Verb, core.DeclaredArgs(rem.Action.Args, t.Facts())); err != nil {
 		// Not requested, so the attempt is not counted; dispatch the fixer.
 		e.log("%s remediation %s for run %v: %v — dispatching the fixer instead", tag(t), rem.Action.Verb, run, err)
 		return false
