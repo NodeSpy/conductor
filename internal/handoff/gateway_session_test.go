@@ -123,7 +123,6 @@ func TestRunDiscordGatewayLoop(t *testing.T) {
 	}
 }
 
-
 func TestNotWiredChannelPresent(t *testing.T) {
 	_, err := notWiredChannel{name: "x"}.Present(context.Background(), Draft{})
 	if err == nil || !strings.Contains(err.Error(), "not wired") {

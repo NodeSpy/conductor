@@ -598,12 +598,6 @@ func TestHandoffsDiscordValidDMAndThread(t *testing.T) {
 	}
 }
 
-
-
-
-
-
-
 func TestCheckAgentRefsUnknownHandoffRejected(t *testing.T) {
 	c := ctrlBaseCfg()
 	c.Handoffs = map[string]HandoffConfig{"page": {Web: &HandoffWeb{BaseURL: "https://a.test"}}}

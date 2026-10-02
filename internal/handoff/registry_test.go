@@ -383,7 +383,6 @@ func fakeSlackServer(t *testing.T) string {
 	return srv.URL
 }
 
-
 func TestRegistryWebEntriesDefaultListen(t *testing.T) {
 	cfgs := map[string]config.HandoffConfig{
 		"a": {Web: &config.HandoffWeb{BaseURL: "http://a.test"}},                  // no listen: → loopback default
