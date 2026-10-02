@@ -198,13 +198,18 @@ func (p *Plugin) StartSource(ctx context.Context, req plugin.StartSourceRequest,
 	return err
 }
 
+func wireTarget(t ghsource.Target) plugin.Target {
+	return plugin.Target{Repo: t.Repo, Owner: t.Owner, Name: t.Name, PR: t.PR, Issue: t.Issue, Number: t.Number,
+		HeadSHA: t.HeadSHA, BaseRef: t.BaseRef, HTMLURL: t.HTMLURL, Project: t.Project}
+}
+
 // Event is the wire form of one source trigger: the kind, the trigger it was
 // evaluated for (its SourceTrigger.ID, carried in the Action's Ext), and the
 // target and context exactly as the bundled source hands the engine.
 func Event(instance string, t ghsource.Trigger) plugin.SourceEvent {
 	ev := plugin.SourceEvent{
 		Event: t.Kind, Kind: t.Kind, Title: t.Title,
-		Target:  plugin.Target(t.Target),
+		Target:  wireTarget(t.Target),
 		Context: t.Context, Dedup: t.Dedup, Labels: t.Labels,
 		Instance: instance, CatchUp: t.CatchUp, TargetTrusted: t.TargetTrusted,
 	}

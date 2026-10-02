@@ -71,10 +71,17 @@ type SourceTrigger struct {
 	Filter json.RawMessage `json:"filter,omitempty"`
 }
 
-// Target is the object an event concerns. Its JSON is the daemon's own target
-// encoding (Go field names, no tags) — the shape source plugins have always
-// emitted under "target".
+// Target is the object an event concerns. The legacy fields encode under Go
+// field names (no tags) — the shape source plugins have always emitted under
+// "target"; the daemon derives a key from them when Key is empty. Key, URL
+// and Assigned are the generic form (plugin-contract.md §1.5): a target is
+// identified by its key within an instance, and an event's
+// semantics.target can build Key from its facts instead.
 type Target struct {
+	Key      string `json:"key,omitempty"`
+	URL      string `json:"url,omitempty"`
+	Assigned bool   `json:"assigned,omitempty"`
+
 	Repo    string
 	Owner   string
 	Name    string
@@ -92,10 +99,7 @@ type Target struct {
 type SourceEvent struct {
 	// Event is the declared event name this is (the `on:` suffix).
 	Event string `json:"event"`
-	// Kind is the trigger kind the engine sees; empty means Event. A kind the
-	// engine interprets (see the daemon's reserved kinds) is honored only from
-	// a source the operator marked trusted_source, and only for an event the
-	// plugin declares.
+	// Kind is the trigger kind the engine sees; empty means Event.
 	Kind    string            `json:"kind,omitempty"`
 	Title   string            `json:"title,omitempty"`
 	Target  Target            `json:"target,omitempty"`
@@ -118,10 +122,9 @@ type SourceEvent struct {
 	// fresh delivery: when an agent already works the target, the engine
 	// skips it instead of queueing it.
 	CatchUp bool `json:"catch_up,omitempty"`
-	// TargetTrusted CLAIMS the platform assigned Target (a signature-verified
-	// delivery, or a read with the plugin's own credentials). The daemon
-	// believes it only for a trusted_source instance; otherwise every plugin
-	// target is untrusted, claim or no claim.
+	// TargetTrusted is the older spelling of Target.Assigned: the platform
+	// assigned Target (a signature-verified delivery, or a read with the
+	// plugin's own credentials). Either one makes the claim.
 	TargetTrusted bool `json:"target_trusted,omitempty"`
 }
 

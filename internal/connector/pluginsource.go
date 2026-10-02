@@ -147,7 +147,7 @@ func (p *pluginSourceIntegration) triggersFor(ev pluginEvent, force bool) []core
 		// does. Only a trusted source reaches here (kindFor).
 		return []core.Trigger{{
 			Source: p.typ, Instance: p.instance, Kind: kind,
-			Target: core.Target(ev.Target), Title: ev.Title, Context: ev.Context,
+			Target: coreTarget(ev.Target), Title: ev.Title, Context: ev.Context,
 			TargetTrusted: trusted,
 		}}
 	}
@@ -256,7 +256,7 @@ func (p *pluginSourceIntegration) trigger(t CompiledTrigger, kind string, ev plu
 		Instance:      p.instance,
 		Kind:          kind,
 		Variant:       t.Spec.Name,
-		Target:        core.Target(ev.Target),
+		Target:        coreTarget(ev.Target),
 		Title:         ev.Title,
 		Context:       ev.Context,
 		Dedup:         ev.Dedup,
@@ -401,4 +401,17 @@ func eqFold(a, b string) bool {
 		}
 	}
 	return true
+}
+
+// coreTarget is the engine's target for a wire target (the legacy fields;
+// the generic key/assigned form is read by the source adapter).
+func coreTarget(t sdk.Target) core.Target {
+	return core.Target{Repo: t.Repo, Owner: t.Owner, Name: t.Name, PR: t.PR, Issue: t.Issue, Number: t.Number,
+		HeadSHA: t.HeadSHA, BaseRef: t.BaseRef, HTMLURL: t.HTMLURL, Project: t.Project}
+}
+
+// wireTarget is coreTarget's inverse.
+func wireTarget(t core.Target) sdk.Target {
+	return sdk.Target{Repo: t.Repo, Owner: t.Owner, Name: t.Name, PR: t.PR, Issue: t.Issue, Number: t.Number,
+		HeadSHA: t.HeadSHA, BaseRef: t.BaseRef, HTMLURL: t.HTMLURL, Project: t.Project}
 }

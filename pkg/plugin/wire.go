@@ -37,15 +37,17 @@ package plugin
 //
 // IT DOES NOT MOVE FOR AN ADDITION. The daemon compares it for EXACT equality
 // (internal/plugin/client.go, Describe), so bumping it would refuse every
-// plugin already in the field — including ones a new daemon understands
-// perfectly. New surface is therefore negotiated by Decl.ABI, which is absent
-// on every existing plugin and read only where it means something.
+// plugin already in the field. The contract grows additively instead
+// (docs/design/plugin-contract.md §1.2): optional fields are ignored by
+// whoever does not know them, an optional method answers CodeMethodNotFound
+// when unimplemented, and declarations (semantics.go) are must-understand.
+// There are no tiers: every plugin speaks the same contract.
 const ProtocolVersion = 1
 
-// EngineABI is the STEP-ENGINE ABI revision this SDK speaks, reported in
-// Decl.ABI by an engine plugin (see Decl.ABI). It is INDEPENDENT of
-// ProtocolVersion: the envelope, the framing and the describe/invoke surface
-// are unchanged, so only a plugin that serves plugin.run has an ABI at all.
+// EngineABI is the value step-engine plugins historically reported in
+// Decl.ABI. Deprecated: Decl.ABI is accepted and ignored; a plugin is a step
+// engine because its Decl has StepEngine (or, for older plugins, Kind ==
+// KindStep).
 const EngineABI = 1
 
 // Wire method names.
@@ -125,9 +127,9 @@ func HostKindFor(method string) string {
 type StartSourceRequest struct {
 	Instance string         `json:"instance"`
 	Config   map[string]any `json:"config,omitempty"`
-	// Triggers are the instance's configured triggers, sent only to a plugin
-	// speaking ConnectorABI (see source.go). Empty for every other plugin —
-	// it never asked, and the daemon matches its events itself.
+	// Triggers are the instance's configured triggers, sent to every source.
+	// A plugin may route its events to them (SourceEvent.Trigger) or ignore
+	// them and let the daemon match its events itself.
 	Triggers []SourceTrigger `json:"triggers,omitempty"`
 }
 
@@ -181,6 +183,10 @@ type Verb struct {
 	Options Schema `json:"options,omitempty"`
 	Outputs Schema `json:"outputs,omitempty"`
 	Ask     bool   `json:"ask,omitempty"`
+	// Semantics are what the ENGINE may use this verb for (semantics.go):
+	// reading a target's revision, minting a credential, opening a
+	// conversation, exposing a local address. Absent: a plain verb.
+	Semantics *VerbSemantics `json:"semantics,omitempty"`
 }
 
 // Event is one source event the plugin exposes. Declaring events is supported;
@@ -200,9 +206,13 @@ type Event struct {
 	// surface, and Filters is not consulted. Both empty (every plugin before
 	// this field) keeps the generic surface: Filters as match keys, Context as
 	// facts. The daemon validates a trigger's filter against them at load; a
-	// ConnectorABI plugin evaluates the filter itself (SourceEvent.Trigger).
+	// plugin that routes its events (SourceEvent.Trigger) evaluates it itself.
 	Facts     Schema `json:"facts,omitempty"`
 	MatchKeys Schema `json:"match_keys,omitempty"`
+	// Semantics are what the ENGINE does with this event (semantics.go):
+	// its target and revision, dedupe cursor, lifecycle effects. Absent: a
+	// plain trigger (dedupe on the event's dedup key, fire, done).
+	Semantics *EventSemantics `json:"semantics,omitempty"`
 }
 
 // Capabilities is the plugin's DECLARED PERMISSION MANIFEST: what it says it
@@ -236,23 +246,10 @@ type Decl struct {
 	// disagree, so a connector can never be wired as a runtime. Empty (an older
 	// plugin) is treated as unspecified and trusted to its block.
 	Kind Kind `json:"kind,omitempty"`
-	// ABI is the KIND-SPECIFIC ABI revision this plugin speaks, and is how
-	// surface gets added to the protocol WITHOUT touching ProtocolVersion.
-	//
-	// Absent/zero means "a plugin from before this field existed" — every
-	// runtime, and every connector before the source extension — and is read
-	// by nobody: the daemon accepts any ProtocolVersion==1 plugin exactly as it
-	// always did. It is consulted per kind: for KindStep it selects which
-	// plugin.run / host.* shape both sides speak (EngineABI); for
-	// KindConnector, ABI >= ConnectorABI opts the plugin into the source
-	// extension (source.go) — triggers on start_source, routed events, nudge,
-	// force, app_token. A runtime that sets it is describing something no one
-	// asks about.
-	//
-	// This is the whole negotiation, and it is deliberately boring: a new
-	// field with a zero value that means "the old thing" cannot break an old
-	// plugin, because an old plugin never emits it and a new daemon never
-	// requires it.
+	// ABI is accepted and IGNORED (deprecated). It once switched behavior per
+	// plugin (a step-engine ABI, a connector "source extension"); the one
+	// contract has no tiers, so nothing reads it. Older plugins keep sending
+	// it and keep loading.
 	ABI          int          `json:"abi,omitempty"`
 	Type         string       `json:"type"`
 	Desc         string       `json:"desc,omitempty"`
@@ -260,6 +257,16 @@ type Decl struct {
 	Verbs        []Verb       `json:"verbs,omitempty"`
 	Events       []Event      `json:"events,omitempty"`
 	Capabilities Capabilities `json:"capabilities,omitempty"`
+	// Semantics are the connection-level declarations (semantics.go):
+	// credentials agents receive, the operator-chosen scope, poll, translate,
+	// listeners, preflight.
+	Semantics *ConnSemantics `json:"semantics,omitempty"`
+	// StepEngine, when set, declares that the plugin serves plugin.run.
+	StepEngine *StepEngineDecl `json:"step_engine,omitempty"`
+	// Runtime, when set, declares the agent-runtime role the plugin fills
+	// (RuntimeRoleAgentBackend, RuntimeRoleDecision). Absent on an older
+	// runtime: its role is inferred from its verb set.
+	Runtime *RuntimeDecl `json:"runtime,omitempty"`
 	// Auth, when set, declares that this connector authenticates via conductor's
 	// MANAGED OAuth2: the plugin bakes in the provider's endpoints + default
 	// scopes here, the operator supplies client_id/client_secret + grant +
@@ -290,6 +297,27 @@ type Decl struct {
 	// field existed), so it is back-compatible in both directions.
 	Protocols []string `json:"protocols,omitempty"`
 }
+
+// StepEngineDecl declares a step engine.
+type StepEngineDecl struct {
+	Languages []string `json:"languages,omitempty"`
+}
+
+// RuntimeDecl declares an agent runtime's role.
+type RuntimeDecl struct {
+	Role string `json:"role"`
+}
+
+// Agent-runtime roles: conductor-defined interfaces, the same for any plugin
+// that implements them.
+const (
+	RuntimeRoleAgentBackend = "agent_backend"
+	RuntimeRoleDecision     = "decision"
+)
+
+// IsStepEngine reports whether d declares a step engine (StepEngine, or the
+// older Kind == KindStep).
+func (d Decl) IsStepEngine() bool { return d.StepEngine != nil || d.Kind == KindStep }
 
 // ProtocolSystemOneV1 is the system_one/v1 decision protocol — TypeSafe's
 // published System One contract, as conductor's decide: step speaks it.
@@ -339,6 +367,16 @@ type InvokeRequest struct {
 	Verb       string         `json:"verb"`
 	Options    map[string]any `json:"options,omitempty"`
 	Connection map[string]any `json:"connection,omitempty"`
+	// Target is set when the ENGINE calls a verb for a target through a
+	// semantic (reads_revision, mints_credential, remediate): the target's
+	// key and its facts.
+	Target *InvokeTarget `json:"target,omitempty"`
+}
+
+// InvokeTarget is the target an engine-initiated verb call is for.
+type InvokeTarget struct {
+	Key   string         `json:"key"`
+	Facts map[string]any `json:"facts,omitempty"`
 }
 
 // InvokeResult is the plugin→daemon verb response.

@@ -24,8 +24,9 @@ const (
 // response instead of a result. Any other (plain) error a handler returns is
 // wrapped as CodeInternalError.
 type Error struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int            `json:"code"`
+	Message string         `json:"message"`
+	Data    map[string]any `json:"data,omitempty"`
 }
 
 func (e *Error) Error() string { return e.Message }
@@ -145,6 +146,9 @@ func serve(in io.Reader, out io.Writer, h Handler) error {
 	// connector and runtime plugin.
 	calls := newCallTable(write)
 	defer calls.shutdown()
+	if ha, ok := h.(HostAware); ok {
+		ha.SetHost(&HostConn{calls: calls})
+	}
 	// ctx bounds any background source stream: cancelled when the loop exits (the
 	// daemon closed stdin), so a StartSource goroutine unwinds.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -385,11 +389,61 @@ func dispatch(ctx context.Context, h Handler, method string, params json.RawMess
 	}()
 	switch method {
 	case MethodDescribe:
+		var req DescribeRequest
+		if err := decodeParams(params, &req); err != nil {
+			return nil, err
+		}
 		d := h.Describe()
 		if d.ProtocolVersion == 0 {
 			d.ProtocolVersion = ProtocolVersion
 		}
+		if req.Host != nil {
+			StripUnknownOptional(&d, req.Host.Semantics)
+		}
 		return d, nil
+	case MethodPoll:
+		ph, ok := h.(PollHandler)
+		if !ok {
+			return nil, Errorf(CodeMethodNotFound, "this plugin does not poll")
+		}
+		var req PollRequest
+		if err := decodeParams(params, &req); err != nil {
+			return nil, err
+		}
+		return wrapResult(ph.Poll(ctx, req))
+	case MethodTranslate:
+		th, ok := h.(TranslateHandler)
+		if !ok {
+			return nil, Errorf(CodeMethodNotFound, "this plugin does not translate deliveries")
+		}
+		var req TranslateRequest
+		if err := decodeParams(params, &req); err != nil {
+			return nil, err
+		}
+		return wrapResult(th.Translate(ctx, req))
+	case MethodValidate:
+		vh, ok := h.(ValidateHandler)
+		if !ok {
+			return nil, Errorf(CodeMethodNotFound, "this plugin has no validation of its own")
+		}
+		var req ValidateRequest
+		if err := decodeParams(params, &req); err != nil {
+			return nil, err
+		}
+		return wrapResult(vh.Validate(ctx, req))
+	case MethodStop:
+		sh, ok := h.(StopHandler)
+		if !ok {
+			return nil, Errorf(CodeMethodNotFound, "this plugin has nothing to stop per instance")
+		}
+		var req StopRequest
+		if err := decodeParams(params, &req); err != nil {
+			return nil, err
+		}
+		if err := sh.Stop(ctx, req); err != nil {
+			return wrapResult(struct{}{}, err)
+		}
+		return struct{}{}, nil
 	case MethodInvoke:
 		var req InvokeRequest
 		if len(params) > 0 {

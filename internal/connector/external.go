@@ -516,7 +516,7 @@ func (e *externalImpl) TargetHead(ctx context.Context, t core.Trigger) (TargetHe
 	if !ok || e.abi < sdk.ConnectorABI || t.Instance != e.instance || t.OwnRepo() == "" || t.Target.Number == 0 {
 		return TargetHead{}, nil
 	}
-	res, err := ext.TargetHead(ctx, e.instance, sdk.Target(t.Target))
+	res, err := ext.TargetHead(ctx, e.instance, wireTarget(t.Target))
 	if err == plugin.ErrNotSupported {
 		return TargetHead{}, nil
 	}
