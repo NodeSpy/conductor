@@ -123,7 +123,7 @@ type Engine struct {
 	userTok     func() (string, error)
 	readTok     func() (string, error) // read-token override (nil = use the per-trigger App token)
 	invokeVerb  func(ctx context.Context, instance, verb string, opts map[string]any) (map[string]any, error)
-	refreshTok  func(core.Trigger) (string, error)                         // re-mint the App token on resume
+	refreshTok  func(core.Trigger) (string, error) // re-mint the App token on resume
 	log         func(string, ...any)
 	hold        *dispatch.HoldSet       // agent ids handed off to the user; the reaper never touches these
 	liveHOMu    sync.Mutex              // guards liveHO
