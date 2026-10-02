@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/NodeSpy/conductor/pkg/sourcekit"
 	"gopkg.in/yaml.v3"
 )
 
@@ -471,5 +472,34 @@ func TestFilterKitRoundTrip(t *testing.T) {
 	}
 	if (*Filter)(nil).Kit() != nil || FilterFromKit(nil) != nil {
 		t.Fatal("nil must stay nil in both directions")
+	}
+}
+
+// The daemon decodes `filter:` from YAML nodes (for its error messages);
+// sourcekit.ParseFilter decodes the same grammar from a value, for a source
+// plugin's own config and for the kit's tests. They must build the same tree.
+func TestFilterGrammarAgreesWithSourcekitParse(t *testing.T) {
+	for _, src := range []string{
+		`"!is_draft"`,
+		`{not_draft: true, author: [dependabot]}`,
+		`[ {label_any: [urgent]}, "!is_draft" ]`,
+		`{expr: "a && b", not_expr: "c", not_branch: [wip/*]}`,
+		`[ [ {repo: [a/b]} ], {not_repo: c/d, title: [x]} ]`,
+	} {
+		var f Filter
+		if err := yaml.Unmarshal([]byte(src), &f); err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		var v any
+		if err := yaml.Unmarshal([]byte(src), &v); err != nil {
+			t.Fatal(err)
+		}
+		k, err := sourcekit.ParseFilter(v)
+		if err != nil {
+			t.Fatalf("%s: sourcekit: %v", src, err)
+		}
+		if k.String() != f.String() {
+			t.Errorf("%s:\n config    %s\n sourcekit %s", src, f.String(), k.String())
+		}
 	}
 }

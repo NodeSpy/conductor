@@ -15,9 +15,9 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
-	"github.com/NodeSpy/conductor/pkg/expr"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/store"
+	"github.com/NodeSpy/conductor/pkg/expr"
 )
 
 // Agent-driven workflows (#36 §11): an agent programs conductor. Its final

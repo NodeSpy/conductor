@@ -10,6 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/pkg/githubkit/ghsource"
 )
 
 // decodeConfig builds an integration the way the loader does — from YAML —
@@ -40,10 +41,10 @@ webhook:
 	}
 	// The secret that arrives under webhook: is the one HMAC verification uses.
 	body := []byte(`{"action":"opened"}`)
-	if !verifySignature(g.cfg.Webhook.Secret, body, sign("s3cr3t", body)) {
+	if !ghsource.VerifySignature(g.cfg.Webhook.Secret, body, sign("s3cr3t", body)) {
 		t.Fatal("a delivery signed with webhook.secret was rejected")
 	}
-	if verifySignature(g.cfg.Webhook.Secret, body, sign("wrong", body)) {
+	if ghsource.VerifySignature(g.cfg.Webhook.Secret, body, sign("wrong", body)) {
 		t.Fatal("a delivery signed with the wrong secret was accepted")
 	}
 }

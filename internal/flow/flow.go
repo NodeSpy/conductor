@@ -20,7 +20,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/dispatch"
-	"github.com/NodeSpy/conductor/pkg/expr"
 	"github.com/NodeSpy/conductor/internal/gitdiff"
 	"github.com/NodeSpy/conductor/internal/hosts"
 	"github.com/NodeSpy/conductor/internal/memory"
@@ -28,6 +27,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
 	"github.com/NodeSpy/conductor/internal/systemone"
+	"github.com/NodeSpy/conductor/pkg/expr"
 
 	"gopkg.in/yaml.v3"
 )

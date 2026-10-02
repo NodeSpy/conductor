@@ -385,3 +385,103 @@ func (f *Filter) validate(depth int) error {
 	}
 	return nil
 }
+
+// FilterExprKey is the one reserved object key of the surface grammar: an
+// `expr` condition string, AND-ed with its sibling match keys.
+const FilterExprKey = "expr"
+
+// FilterNotPrefix negates any object key of the surface grammar: `not_expr:`
+// negates a condition, `not_<key>:` negates that match key. It produces a Not
+// around exactly what the bare key would have, so a Matcher only ever sees
+// BASE keys.
+const FilterNotPrefix = "not_"
+
+// ParseFilter builds a Filter from the SURFACE grammar an operator writes, as
+// an already-decoded value (YAML or JSON):
+//
+//	"!is_draft && contains(title, 'x')"   string → Expr
+//	{not_draft: true, author: [bot]}      map    → And of its keys (sorted)
+//	[ {label_any: [urgent]}, "!is_draft" ] list   → Or of its entries
+//
+// It is the same grammar conductor's config decodes (the daemon keeps its own
+// YAML-node decoder for line-accurate errors; a test pins the two together).
+// A source plugin needs it only for filters in its OWN configuration —
+// triggers' filters arrive already parsed, in the structural form.
+func ParseFilter(v any) (*Filter, error) { return parseFilter(v, 0) }
+
+func parseFilter(v any, depth int) (*Filter, error) {
+	if depth > MaxFilterDepth {
+		return nil, fmt.Errorf("filter: nests more than %d deep", MaxFilterDepth)
+	}
+	switch x := v.(type) {
+	case nil:
+		return nil, fmt.Errorf("filter: is empty — give it a condition string, a list, or a map of match keys")
+	case string:
+		return FilterExpr(x), nil
+	case []any:
+		if len(x) == 0 {
+			return nil, fmt.Errorf("filter: an empty list matches nothing — remove it, or list the alternatives to OR")
+		}
+		kids := make([]*Filter, 0, len(x))
+		for i, item := range x {
+			k, err := parseFilter(item, depth+1)
+			if err != nil {
+				return nil, fmt.Errorf("filter[%d]: %s", i, strings.TrimPrefix(err.Error(), "filter: "))
+			}
+			kids = append(kids, k)
+		}
+		return &Filter{Op: FilterOpOr, Kids: kids}, nil
+	case map[string]any:
+		if len(x) == 0 {
+			return nil, fmt.Errorf("filter: an empty map constrains nothing — remove it")
+		}
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sortStrings(keys)
+		kids := make([]*Filter, 0, len(keys))
+		for _, raw := range keys {
+			key, negate := raw, false
+			if base, ok := strings.CutPrefix(raw, FilterNotPrefix); ok && base != "" {
+				key, negate = base, true
+			}
+			var kid *Filter
+			if key == FilterExprKey {
+				cond, ok := x[raw].(string)
+				if !ok {
+					return nil, fmt.Errorf("filter: %s: must be a condition string", raw)
+				}
+				kid = FilterExpr(cond)
+			} else {
+				kid = FilterMatch(key, x[raw])
+			}
+			if negate {
+				kid = FilterNot(kid)
+			}
+			kids = append(kids, kid)
+		}
+		return &Filter{Op: FilterOpAnd, Kids: kids}, nil
+	case map[any]any:
+		m := make(map[string]any, len(x))
+		for k, val := range x {
+			ks, ok := k.(string)
+			if !ok {
+				return nil, fmt.Errorf("filter: map key %v is not a string", k)
+			}
+			m[ks] = val
+		}
+		return parseFilter(m, depth)
+	}
+	return nil, fmt.Errorf("filter: must be a condition string, a list (OR), or a map of match keys (AND)")
+}
+
+// sortStrings is an insertion sort — filters have a handful of keys, and it
+// keeps this file free of a sort import for one call.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+}
