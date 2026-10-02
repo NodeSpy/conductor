@@ -221,33 +221,61 @@ func resolveConnection(ref config.ConnectorRef, sec *secrets.Resolver, allow map
 	}
 	conn := make(map[string]any, len(raw))
 	var refs []string
-	ctx := context.Background()
 	for k, v := range raw {
 		if reservedConnKeys[k] {
 			continue
 		}
-		s, ok := v.(string)
-		if !ok {
-			conn[k] = v
-			continue
+		rv, err := resolveSecrets(k, v, sec, allow, &refs)
+		if err != nil {
+			return nil, nil, err
 		}
-		if sec != nil && secrets.IsRef(s) {
-			if len(allow) > 0 && !allow[s] {
-				return nil, nil, fmt.Errorf("connection field %q references secret %q which is not in allow_secrets", k, s)
-			}
-			resolved, err := sec.Resolve(ctx, s)
-			if err != nil {
-				return nil, nil, fmt.Errorf("resolve %q: %w", k, err)
-			}
-			sec.Track(resolved)
-			conn[k] = resolved
-			refs = append(refs, s)
-			continue
-		}
-		conn[k] = s
+		conn[k] = rv
 	}
 	sort.Strings(refs)
 	return conn, refs, nil
+}
+
+// resolveSecrets resolves every secret reference in a connection value, at
+// any depth (a webhook source's sign.secret, a nested auth block): each is
+// checked against allow_secrets, resolved, and tracked for redaction.
+func resolveSecrets(path string, v any, sec *secrets.Resolver, allow map[string]bool, refs *[]string) (any, error) {
+	switch x := v.(type) {
+	case string:
+		if sec == nil || !secrets.IsRef(x) {
+			return x, nil
+		}
+		if len(allow) > 0 && !allow[x] {
+			return nil, fmt.Errorf("connection field %q references secret %q which is not in allow_secrets", path, x)
+		}
+		resolved, err := sec.Resolve(context.Background(), x)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %q: %w", path, err)
+		}
+		sec.Track(resolved)
+		*refs = append(*refs, x)
+		return resolved, nil
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			r, err := resolveSecrets(path+"."+k, e, sec, allow, refs)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = r
+		}
+		return out, nil
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			r, err := resolveSecrets(fmt.Sprintf("%s[%d]", path, i), e, sec, allow, refs)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = r
+		}
+		return out, nil
+	}
+	return v, nil
 }
 
 // buildManagedAuth wires conductor's OAuth2 authenticator for a plugin

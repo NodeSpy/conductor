@@ -203,3 +203,27 @@ func TestResolveConnectionStripsHostOwnedKeys(t *testing.T) {
 		t.Fatalf("host-owned keys leaked to the plugin: %+v", conn)
 	}
 }
+
+// Secret references resolve at any depth in a connection — tracked for
+// redaction and checked against allow_secrets like a top-level one.
+func TestResolveConnectionResolvesNestedSecrets(t *testing.T) {
+	sec := secrets.New()
+	sec.LookupEnv = func(k string) (string, bool) { return "secret-value-" + k, true }
+	conn, refs, err := resolveConnection(refWith(t, map[string]any{
+		"sources": map[string]any{"a": map[string]any{"sign": map[string]any{"secret": "env:A"}}},
+		"keys":    []any{"env:B", "plain"},
+	}), sec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign := conn["sources"].(map[string]any)["a"].(map[string]any)["sign"].(map[string]any)
+	if sign["secret"] != "secret-value-A" || conn["keys"].([]any)[0] != "secret-value-B" || conn["keys"].([]any)[1] != "plain" || len(refs) != 2 {
+		t.Fatalf("conn=%v refs=%v", conn, refs)
+	}
+	if got := sec.Redact("leak secret-value-A"); strings.Contains(got, "secret-value-A") {
+		t.Fatal("a nested secret was not tracked for redaction")
+	}
+	if _, _, err := resolveConnection(refWith(t, map[string]any{"x": map[string]any{"y": "env:C"}}), sec, map[string]bool{"env:A": true}); err == nil {
+		t.Fatal("a nested secret outside allow_secrets must be refused")
+	}
+}
