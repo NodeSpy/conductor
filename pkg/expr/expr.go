@@ -16,6 +16,11 @@
 //     side: default(sev, "low") == "high"
 //
 // Precedence: ! / comparison > && > ||; parentheses override it.
+//
+// It is PUBLIC (pkg/, not internal/) because the unified `filter:` grammar's
+// `expr:` strings are evaluated by it, and an external source plugin that
+// evaluates its own triggers' filters (see pkg/sourcekit's Filter) has to
+// evaluate them with the same grammar the daemon does. Standard library only.
 package expr
 
 import (

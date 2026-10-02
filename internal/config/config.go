@@ -887,7 +887,7 @@ type Action struct {
 	// an ordered workflow; each step is itself an Action plus ID/If/OutputSchema.
 	Steps        []Action       `yaml:"steps"`
 	ID           string         `yaml:"id"`            // step id (for steps.<id>.outputs.*)
-	If           string         `yaml:"if"`            // step condition (see internal/expr)
+	If           string         `yaml:"if"`            // step condition (see pkg/expr)
 	OutputSchema map[string]any `yaml:"output_schema"` // agent step: JSON schema for structured output
 	Background   bool           `yaml:"background"`    // workflow step: dispatch `paseo run --background` and don't
 	//                                                    wait/capture — launch a live agent to drive interactively

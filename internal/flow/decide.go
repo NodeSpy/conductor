@@ -9,7 +9,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/decider"
-	"github.com/NodeSpy/conductor/internal/expr"
+	"github.com/NodeSpy/conductor/pkg/expr"
 	"github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/systemone"
 )

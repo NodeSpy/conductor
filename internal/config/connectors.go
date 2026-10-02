@@ -934,7 +934,7 @@ type Step struct {
 	// value is templated with types preserved. `set: { url: "…{{.pr}}" }`.
 	Set map[string]any `yaml:"set,omitempty"`
 	// Assert fails the step (and the run) unless the expr is truthy — the
-	// same expression grammar and truthiness as `if:` (internal/expr).
+	// same expression grammar and truthiness as `if:` (pkg/expr).
 	// `assert: "checks_passed && !draft"`. Pairs with nothing; it IS the guard.
 	Assert string `yaml:"assert,omitempty"`
 	// Fail stops the run with a rendered message, unconditionally. Guard it

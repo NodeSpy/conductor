@@ -7,7 +7,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/NodeSpy/conductor/internal/expr"
+	"github.com/NodeSpy/conductor/pkg/expr"
 )
 
 // Filter is one composable trigger filter — the IR the polymorphic `filter:`
@@ -34,7 +34,7 @@ type Filter struct {
 	Op FilterOp
 	// Kids are the operands of And/Or (any number) and Not (exactly one).
 	Kids []*Filter
-	// Expr is the condition source of an Expr node (internal/expr syntax).
+	// Expr is the condition source of an Expr node (pkg/expr syntax).
 	Expr string
 	// Key/Val are one structured match key and its configured value.
 	Key string
