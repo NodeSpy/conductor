@@ -71,6 +71,10 @@ type Schema map[string]Field
 type EventDecl struct {
 	Name string
 	Desc string
+	// Unchecked marks the stand-in for an event of an Unavailable type: its
+	// filter, options and context cannot be checked until the plugin that
+	// declares them is installed, so they are accepted as written.
+	Unchecked bool
 	// Filters are the match keys a GENERIC source's `filter:` object accepts —
 	// the keys TypeDecl.Filter evaluates against the emitted event's context
 	// (slack's channel/users, rss's match, a plugin source's own keys). A
@@ -200,7 +204,7 @@ type TypeDecl struct {
 // declared entry with Dynamic=true is the template all names share.
 func (d *TypeDecl) Event(name string) (EventDecl, bool) {
 	if d.Unavailable != "" {
-		return EventDecl{Name: name, Dynamic: true}, true
+		return EventDecl{Name: name, Dynamic: true, Unchecked: true}, true
 	}
 	var dyn *EventDecl
 	for i := range d.Events {

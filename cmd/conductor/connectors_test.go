@@ -123,6 +123,12 @@ connectors:
 triggers:
   - on: forge.new_comment
     steps: [{ id: hi, uses: forge.comment, options: { body: "{{.comment_id}}" } }]
+  # A filter and options on the missing plugin's event cannot be checked
+  # until it describes itself — they must not fail the boot either.
+  - on: forge.failing_checks
+    filter: { author: [someone], not_draft: true }
+    options: { max_attempts_per_head: 2 }
+    steps: [{ id: fix, uses: forge.comment, options: { body: "x" } }]
   - on: manual
     name: still-works
     steps: [{ id: ok, uses: box.run, options: { command: "true" } }]
