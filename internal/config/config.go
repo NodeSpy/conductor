@@ -1840,6 +1840,11 @@ func expandHome(p string) string {
 // built in memory rather than loaded from disk).
 func (c *Config) BaseDir() string { return c.baseDir }
 
+// PluginStagingDir is the root under which each plugin instance gets the
+// staging directory its file-returning verbs write to (plugin-contract.md Q7).
+// A templated path a step hands to a launch (`images:`) must resolve under it.
+func PluginStagingDir() string { return filepath.Join(StateDir(), "plugins", "staging") }
+
 // stateDirOverride is set by --state-dir, for a CLI invocation or a test
 // that must not touch the real install state.
 var stateDirOverride string

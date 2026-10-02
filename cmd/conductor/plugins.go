@@ -46,10 +46,12 @@ func pluginDeps(sec *secrets.Resolver, audit func(map[string]any)) plugin.Deps {
 		State:       pluginStateStore(),
 		HostVersion: acp.ClientVersion,
 		Sandbox: plugin.SandboxDeps{
-			Self:       exe,
-			MaskPaths:  masks,
-			EgressUnix: egressUnix,
-			EgressAddr: egressAddr,
+			Self:      exe,
+			MaskPaths: masks,
+			// Each plugin instance's staging directory (plugin-contract.md Q7).
+			StagingRoot: config.PluginStagingDir(),
+			EgressUnix:  egressUnix,
+			EgressAddr:  egressAddr,
 		},
 	}
 }

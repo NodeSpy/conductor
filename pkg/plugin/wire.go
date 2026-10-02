@@ -371,6 +371,13 @@ type InvokeRequest struct {
 	// semantic (reads_revision, mints_credential, remediate): the target's
 	// key and its facts.
 	Target *InvokeTarget `json:"target,omitempty"`
+	// Staging is a directory the host made for this instance, inside what
+	// the plugin may write. A verb that returns FILES (a download, a
+	// rendered image) writes them under it and returns their paths; the
+	// engine accepts a connector-supplied path only from here. The plugin
+	// owns its contents (prune what it no longer needs). Empty when the host
+	// gives none.
+	Staging string `json:"staging,omitempty"`
 }
 
 // InvokeTarget is the target an engine-initiated verb call is for.

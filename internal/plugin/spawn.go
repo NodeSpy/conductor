@@ -75,10 +75,13 @@ type EgressAddrFunc func(allow []string) (addr, cred string, revoke func(), err 
 // isolation: block still gets process/mount/pid isolation and structural
 // no-network (network.deny), just not the allowlist egress proxy.
 type SandboxDeps struct {
-	Self       string         // conductor's own executable (os.Executable()) — the in-sandbox forwarder
-	MaskPaths  []string       // daemon paths hidden inside the plugin's mount namespace
-	EgressUnix EgressUnixFunc // enforced-egress endpoint minter (namespaced launch)
-	EgressAddr EgressAddrFunc // enforced-egress endpoint minter (default launch)
+	Self      string   // conductor's own executable (os.Executable()) — the in-sandbox forwarder
+	MaskPaths []string // daemon paths hidden inside the plugin's mount namespace
+	// StagingRoot holds each plugin's staging directories (StagingDir); the
+	// plugin's own subtree is writable inside its sandbox. "" gives none.
+	StagingRoot string
+	EgressUnix  EgressUnixFunc // enforced-egress endpoint minter (namespaced launch)
+	EgressAddr  EgressAddrFunc // enforced-egress endpoint minter (default launch)
 }
 
 // buildCommand prepares the (possibly sandbox-wrapped) *exec.Cmd for a plugin,
@@ -118,6 +121,16 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 	// the OS sandbox can't be applied it degrades to the manifest-only path with a
 	// loud warning, so an engine that would run today keeps running rather than
 	// the daemon refusing to start it.
+	stage := ""
+	if sd.StagingRoot != "" {
+		// The plugin's staging subtree must exist to be bound, and is the one
+		// path under the daemon's state it may write.
+		stage = filepath.Join(sd.StagingRoot, s.Name)
+		if err := os.MkdirAll(stage, 0o700); err != nil {
+			return nil, nil, false, fmt.Errorf("plugin %s: staging dir: %w", s.Name, err)
+		}
+		spec.FS = append(spec.FS, stage)
+	}
 	if err := spec.Check(spawnGOOS, os.Geteuid(), spawnLookPath); err != nil {
 		if s.IsolationDefaulted {
 			log.Printf("plugin %s: default sandbox unavailable (%v) — running WITHOUT OS confinement; install util-linux (unshare) + enable unprivileged user namespaces to sandbox it", s.Name, err)
@@ -160,6 +173,12 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 		// (inherited fds), so no socket needs binding.
 		if s.BinPath != "" {
 			nf = &sandbox.NetForward{Binds: []sandbox.BindMount{{Path: filepath.Dir(s.BinPath), RO: true}}}
+		}
+		if stage != "" {
+			if nf == nil {
+				nf = &sandbox.NetForward{}
+			}
+			nf.Binds = append(nf.Binds, sandbox.BindMount{Path: stage})
 		}
 	case len(masks) > 0 || spec.EnforcedEgress():
 		nf = &sandbox.NetForward{Self: sd.Self, Masks: masks}

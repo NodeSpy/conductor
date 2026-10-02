@@ -455,8 +455,16 @@ func (e *externalImpl) invokePlugin(ctx context.Context, verb string, opts map[s
 		}
 		conn[plugin.AccessTokenKey] = tok
 	}
+	staging := ""
+	if st, ok := e.client.(interface{ StagingDir(string) (string, error) }); ok {
+		dir, err := st.StagingDir(e.instance)
+		if err != nil {
+			return nil, fmt.Errorf("connector %q: staging dir: %w", e.instance, err)
+		}
+		staging = dir
+	}
 	out, err := e.client.Invoke(ctx, plugin.InvokeRequest{
-		Instance: e.instance, Verb: verb, Options: opts, Connection: conn,
+		Instance: e.instance, Verb: verb, Options: opts, Connection: conn, Staging: staging,
 	})
 	if err != nil {
 		return nil, err

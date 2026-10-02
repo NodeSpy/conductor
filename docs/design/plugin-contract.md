@@ -110,7 +110,7 @@ spawn (verify-before-execute, manifest confinement — unchanged)
   │           … plugin.event notifications stream back …
   │
   ├─ at any time, for any instance:
-  │     plugin.invoke    {instance, verb, options, connection, target?} → {outputs}
+  │     plugin.invoke    {instance, verb, options, connection, target?, staging?} → {outputs}
   │     plugin.poll      {instance, mode, target?}                       → {events[]}
   │     plugin.translate {instance, delivery}                            → {events[]}
   │     plugin.run       {instance, run_id, code, args, env, inputs}     → {outputs}
@@ -237,10 +237,15 @@ plugin's checks.
 
 ### 1.6 Verbs
 
-`plugin.invoke {instance, verb, options, connection, target?}` → `{outputs}`.
-This is unchanged except for the optional `target` (`{key, …facts}`), which the
-host sends when the engine calls a verb *for* a target through a semantic
-(§2). Output schemas stay strict.
+`plugin.invoke {instance, verb, options, connection, target?, staging?}` →
+`{outputs}`. This is unchanged except for two optional fields. `target`
+(`{key, …facts}`) is sent when the engine calls a verb *for* a target through
+a semantic (§2). `staging` is the instance's staging directory (Q7): the host
+makes it under its state directory, private to the daemon's user and writable
+inside the plugin's sandbox, and a verb that returns files writes them there
+and returns their paths. A path the engine takes from an output or the event
+(a step's templated `images:`) is accepted only under a staging directory,
+symlinks resolved. Output schemas stay strict.
 
 Every engine-initiated call goes through `invoke` to a verb the plugin
 **declared** for that purpose:
@@ -904,7 +909,7 @@ All resolved on review: Q5 as discussed, the rest as recommended.
 | Q4 | Legacy `integrations:` / `handoffs:` / `notify:` blocks and `internal/migrate` | **Decided:** removed in the release. Run `conductor migrate` with the current release first; the new binary's `conductor validate` names any legacy block still present |
 | ~~Q5~~ | **Decided:** tunnels and relays are connectors declaring `exposes` (V4–V4c). `lan` and `tunnel` (any tunnelling command) are the vendor-neutral builtins, and a fixed origin stays the web connector's `base_url`; a plugin may always reach the local address it is handed; straight cutover with no compatibility shim. The web approve/revise page stays a core surface with no tunnel code | — |
 | Q6 | rest/graphql `InstanceDecler` (instance-specific verbs) | **Decided:** `plugin.describe {instance}` (optional) |
-| Q7 | Binary verb outputs (Slack `download` → agent `images:`): the wire cannot carry `BinaryOut` today | **Decided:** the host gives each instance a staging directory inside its fs capability; outputs return paths under it, and the engine accepts only those |
+| Q7 | Binary verb outputs (Slack `download` → agent `images:`): the wire cannot carry `BinaryOut` today | **Decided and built:** the host gives each instance a staging directory inside its fs capability (`invoke.staging`, §1.6); outputs return paths under it, and the engine accepts only those |
 | Q8 | The GitHub write credential via `gh auth token` inside a confined plugin (needs `commands: [gh]` and read access to gh's config) | **Decided:** declare it in the github plugin's capabilities; the `pat` / `token:` paths need neither |
 | Q9 | `host.state` limits and lifetime | **Decided:** per-instance quota, entries survive restarts, dropped when the instance is removed |
 | Q10 | In conductor-plugins, `internal/` or `pkg/` for githubkit and the fake? | **Decided:** `internal/` until a third party asks. Conductor's own e2e runs the fake and the github plugin as built binaries or containers, never as a Go import, so conductor never depends on conductor-plugins' code (that repo already depends on conductor's SDK) |

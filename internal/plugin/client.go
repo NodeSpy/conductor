@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -896,4 +898,19 @@ func inProcessDial(h sdk.Handler, d Deps) (transport, func()) {
 		_ = toDaemon.Close()
 	}
 	return conn, kill
+}
+
+// StagingDir is instance's staging directory (plugin-contract.md Q7), made
+// on first use: <StagingRoot>/<plugin>/<instance>, private to the daemon's
+// user. "" when the host gives none.
+func (c *Client) StagingDir(instance string) (string, error) {
+	root := c.deps.Sandbox.StagingRoot
+	if root == "" || instance == "" || strings.ContainsAny(instance, `/\`) || strings.HasPrefix(instance, ".") {
+		return "", nil
+	}
+	dir := filepath.Join(root, c.spec.Name, instance)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
 }

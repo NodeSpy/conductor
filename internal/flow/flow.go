@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -1558,6 +1559,22 @@ func renderLaunchFields(step *config.Step, data map[string]any) error {
 		return nil
 	}
 	var images []string
+	add := func(item, path string) error {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return nil
+		}
+		if strings.Contains(item, "{{") {
+			// A templated path came from a step's output or the event: only a
+			// file a connector staged (plugin-contract.md Q7) is accepted, so
+			// event text cannot attach an arbitrary file from this machine.
+			if err := stagedFile(path); err != nil {
+				return fmt.Errorf("images: %w", err)
+			}
+		}
+		images = append(images, path)
+		return nil
+	}
 	for _, item := range step.Images {
 		if path, ok := soleFieldRef(item); ok {
 			if v, found := lookupPath(data, path); found {
@@ -1567,8 +1584,10 @@ func renderLaunchFields(step *config.Step, data map[string]any) error {
 						return fmt.Errorf("images: %w", err)
 					}
 					for _, v := range vals {
-						if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-							images = append(images, strings.TrimSpace(s))
+						if s, ok := v.(string); ok {
+							if err := add(item, s); err != nil {
+								return err
+							}
 						}
 					}
 					continue
@@ -1579,11 +1598,28 @@ func renderLaunchFields(step *config.Step, data map[string]any) error {
 		if err != nil {
 			return fmt.Errorf("images: %w", err)
 		}
-		if out = strings.TrimSpace(out); out != "" {
-			images = append(images, out)
+		if err := add(item, out); err != nil {
+			return err
 		}
 	}
 	step.Images = images
+	return nil
+}
+
+// stagedFile reports whether path is a file under a connector's staging
+// directory (config.PluginStagingDir), symlinks resolved on both sides.
+func stagedFile(path string) error {
+	root, err := filepath.EvalSymlinks(config.PluginStagingDir())
+	if err != nil {
+		return fmt.Errorf("%q is not a file a connector staged (no staging directory)", path)
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("%q is not a file a connector staged: %v", path, err)
+	}
+	if !strings.HasPrefix(real, root+string(filepath.Separator)) {
+		return fmt.Errorf("%q is not a file a connector staged (outside %s)", path, root)
+	}
 	return nil
 }
 

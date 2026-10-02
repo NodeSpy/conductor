@@ -2,6 +2,8 @@ package flow
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -45,9 +47,10 @@ steps:
     uses: svc.post
     options: { text: "{{.launch.agent_id}} {{.launch.workspace_id}} {{.launch.branch}} {{.launch.path}}" }
 `)
+	stage := stagedFiles(t, "a.png", "b.png")
 	trig := newTrigger("ping", map[string]any{
 		"form":  map[string]any{"repo": "acme/widgets"},
-		"shots": []any{"/s/a.png", "/s/b.png"},
+		"shots": []any{stage["a.png"], stage["b.png"]},
 	})
 	runTrigger(rig, trig, spec)
 	if failed, e := rig.workflowFailed(); failed {
@@ -56,7 +59,7 @@ steps:
 	if !got.Step.Detach || got.Step.Repo != "acme/widgets" || got.Step.Mode != "plan" {
 		t.Fatalf("launch fields not rendered: repo=%q mode=%q", got.Step.Repo, got.Step.Mode)
 	}
-	if strings.Join(got.Step.Images, ",") != "/s/a.png,/s/b.png,/tmp/extra.png" {
+	if strings.Join(got.Step.Images, ",") != stage["a.png"]+","+stage["b.png"]+",/tmp/extra.png" {
 		t.Fatalf("images = %v", got.Step.Images)
 	}
 	if got.Model != "m1" || got.Provider != "prov1" {
@@ -91,14 +94,66 @@ func TestLaunchFieldsRenderedOnce(t *testing.T) {
 // TestImagesAcceptStringAndListRefs: an images: item referencing a single
 // path string attaches that path; one referencing a list attaches each.
 func TestImagesAcceptStringAndListRefs(t *testing.T) {
+	stage := stagedFiles(t, "a.png", "b.png", "c.png")
 	step := config.Step{Images: []string{"{{.one}}", "{{.many}}", "{{.missing}}", "/lit.png"}}
-	data := map[string]any{"one": "/a.png", "many": []any{"/b.png", "/c.png"}}
+	data := map[string]any{"one": stage["a.png"], "many": []any{stage["b.png"], stage["c.png"]}}
 	if err := renderLaunchFields(&step, data); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(step.Images, ","); got != "/a.png,/b.png,/c.png,/lit.png" {
-		t.Fatalf("images = %s", got)
+	if got, want := strings.Join(step.Images, ","), stage["a.png"]+","+stage["b.png"]+","+stage["c.png"]+",/lit.png"; got != want {
+		t.Fatalf("images = %s, want %s", got, want)
 	}
+}
+
+// A templated images: path is accepted only from a connector's staging
+// directory (plugin-contract.md Q7): event text or a verb output naming any
+// other file on the box — directly, by `..`, or through a symlink — is
+// refused before anything launches. A path the operator wrote literally is
+// theirs to choose.
+func TestImagesRefuseUnstagedPaths(t *testing.T) {
+	stage := stagedFiles(t, "ok.png")
+	outside := filepath.Join(t.TempDir(), "secret.png")
+	if err := os.WriteFile(outside, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(filepath.Dir(stage["ok.png"]), "link.png")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{outside, filepath.Dir(stage["ok.png"]) + "/../../../../" + filepath.Base(outside), link, "/etc/passwd"} {
+		step := config.Step{Images: []string{"{{.p}}"}}
+		if err := renderLaunchFields(&step, map[string]any{"p": bad}); err == nil {
+			t.Errorf("%s: an unstaged templated path was accepted", bad)
+		}
+		step = config.Step{Images: []string{"{{.ps}}"}}
+		if err := renderLaunchFields(&step, map[string]any{"ps": []any{stage["ok.png"], bad}}); err == nil {
+			t.Errorf("%s: an unstaged path in a list was accepted", bad)
+		}
+	}
+	step := config.Step{Images: []string{outside}}
+	if err := renderLaunchFields(&step, nil); err != nil {
+		t.Fatalf("a literal operator path must stay accepted: %v", err)
+	}
+}
+
+// stagedFiles writes names into a connector staging directory under a fresh
+// state dir and returns each one's path.
+func stagedFiles(t *testing.T, names ...string) map[string]string {
+	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir := filepath.Join(config.PluginStagingDir(), "chat", "inst")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, n := range names {
+		p := filepath.Join(dir, n)
+		if err := os.WriteFile(p, []byte("png"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out[n] = p
+	}
+	return out
 }
 
 // TestDetachRefusedWhenAgentAuthored: a detach: merged into an agent-authored
