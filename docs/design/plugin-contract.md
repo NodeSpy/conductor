@@ -1,13 +1,21 @@
 # The plugin contract
 
-**Status:** approved; being built on #164 in the §5 order. **Step A is in**:
-the contract types and must-understand declarations (`pkg/plugin`), the host
-side with no tiers (`plugin.poll` replacing nudge/force, `translate`,
-`validate`, `stop`, `host.state`), host-owned keys stripped and one
-reserved-namespace list, git-only distribution (`refs/dist`), tunnels as
-exposure connectors (`lan`, `tunnel` builtins in process), the vendor-neutral
-`pkg/` (relay client out, boundary test), `pkg/plugintest` and
-`sourcekit.Poller`. Steps B, P and C follow. Supersedes the
+**Status:** approved; being built on #164 in the §5 order. **Steps A and B
+are in**: the contract types and must-understand declarations
+(`pkg/plugin`), the host side with no tiers (`plugin.poll` replacing
+nudge/force, `translate`, `validate`, `stop`, `host.state`), host-owned keys
+stripped and one reserved-namespace list, git-only distribution
+(`refs/dist`), tunnels as exposure connectors (`lan`, `tunnel` builtins in
+process), the vendor-neutral `pkg/` (relay client out, boundary test),
+`pkg/plugintest`, `sourcekit.Poller`, and the engine reading declared
+semantics (cron and rss in process; webhook, rest and graphql wait on a
+per-instance describe, Q6). **Step C is under way**: plugins-first
+boot, then github removed from the binary (`use: github` is the official
+plugin; `pkg/githubkit` lives in conductor-plugins; `internal/migrate` and
+`config migrate` gone with the legacy schema, Q4), and #161's vendor-neutral
+half carried over. Still to land in C: slack, discord, ntfy, pushover and
+notifiarr out of the binary once their plugins (P) are in, and the legacy
+blocks. Supersedes the
 direction of `plugin-source-abi.md` (the "connector ABI 1" extension and
 `trusted_source`), which stays in the tree only as a record of what is being
 replaced.
