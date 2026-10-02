@@ -68,6 +68,9 @@ type pluginSourceIntegration struct {
 	// sem are the declared events' semantics, attached to every trigger the
 	// event fires (the engine reads them, never the event's name).
 	sem map[string]*sdk.EventSemantics
+	// dynamic is the plugin's dynamic event (names from its config, e.g. a
+	// cron schedule): any name is one of its events, with its semantics.
+	dynamic *EventDecl
 
 	mu   sync.Mutex
 	emit core.EmitFunc // the running stream's emit, for events a poll returns
@@ -163,7 +166,7 @@ func (p *pluginSourceIntegration) triggersFor(ev pluginEvent, force bool) []core
 	if !ok {
 		return nil
 	}
-	if r := p.sem[kind]; r != nil && r.ConversationReply != nil {
+	if r := p.semFor(kind); r != nil && r.ConversationReply != nil {
 		// A reply in a conversation the plugin opened: delivered to the
 		// engine's inbox first; one nobody is waiting on is an ordinary event.
 		facts := core.Trigger{Context: ev.Context, Target: coreTarget(ev.Target)}.Facts()
@@ -180,7 +183,7 @@ func (p *pluginSourceIntegration) triggersFor(ev pluginEvent, force bool) []core
 	// plugin was decided once, at install (plugin_trust); after that its
 	// word is taken like any installed plugin's.
 	assigned := ev.Target.Assigned || ev.TargetTrusted
-	sem := p.sem[kind]
+	sem := p.semFor(kind)
 	if sem != nil && sem.ClosesTarget != nil && ev.Trigger == "" {
 		// A terminal event: the lifecycle fact about a target. It fires no
 		// trigger of its own (the engine settles the target on it) — a
@@ -233,6 +236,9 @@ func (p *pluginSourceIntegration) kindFor(ev pluginEvent) (string, bool) {
 	if len(p.declared) == 0 || p.declared[kind] {
 		return kind, true
 	}
+	if p.dynamic != nil && (ev.Kind == "" || ev.Kind == ev.Event) {
+		return kind, true // a config-named event; the plugin validated its names
+	}
 	if ev.Kind != "" && ev.Kind != ev.Event && p.declared[ev.Event] {
 		p.log("plugin source %s: event kind %q is not one the plugin declares; using its declared event %q", p.instance, ev.Kind, ev.Event)
 		return ev.Event, true
@@ -277,8 +283,8 @@ func (p *pluginSourceIntegration) trigger(t CompiledTrigger, kind string, ev plu
 		Labels:        ev.Labels,
 		CatchUp:       ev.CatchUp,
 		Force:         force,
-		Action:        pluginAction(t, p.sem[kind]),
-		Sem:           p.sem[kind],
+		Action:        pluginAction(t, p.semFor(kind)),
+		Sem:           p.semFor(kind),
 	}
 }
 
@@ -508,4 +514,16 @@ func coreTarget(t sdk.Target) core.Target {
 func wireTarget(t core.Target) sdk.Target {
 	return sdk.Target{Repo: t.Repo, Owner: t.Owner, Name: t.Name, PR: t.PR, Issue: t.Issue, Number: t.Number,
 		HeadSHA: t.HeadSHA, BaseRef: t.BaseRef, HTMLURL: t.HTMLURL, Project: t.Project}
+}
+
+// semFor is the declared semantics of event kind: its own declaration, else
+// the dynamic event's for a config-named one.
+func (p *pluginSourceIntegration) semFor(kind string) *sdk.EventSemantics {
+	if s, ok := p.sem[kind]; ok {
+		return s
+	}
+	if p.dynamic != nil {
+		return p.dynamic.Semantics
+	}
+	return nil
 }

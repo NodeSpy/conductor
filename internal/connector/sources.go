@@ -15,7 +15,6 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
-	cronint "github.com/NodeSpy/conductor/internal/integrations/cron"
 	rssint "github.com/NodeSpy/conductor/internal/integrations/rss"
 	webhookint "github.com/NodeSpy/conductor/internal/integrations/webhook"
 	"github.com/NodeSpy/conductor/internal/netguard"
@@ -40,96 +39,6 @@ func lowerAction(t CompiledTrigger) config.Action {
 // ---------------------------------------------------------------------------
 // cron
 // ---------------------------------------------------------------------------
-
-var cronDecl = &TypeDecl{
-	Type: "cron",
-	Desc: "Cron: fires on a schedule (cron spec or fixed interval); no verbs.",
-	Connection: Schema{
-		"schedules": {Type: TMap, Required: true, Desc: "name -> { cron, every, run_on_start }"},
-	},
-	Events: []EventDecl{
-		{
-			Name: "<schedule>", Dynamic: true, Desc: "a configured schedule fired",
-			Context: Schema{
-				"schedule": {Type: TString},
-				"kind":     {Type: TString},
-				"title":    {Type: TString},
-			},
-		},
-	},
-}
-
-func init() { RegisterType(cronDecl, newCronImpl) }
-
-type cronSchedule struct {
-	Cron       string          `yaml:"cron"`
-	Every      config.Duration `yaml:"every"`
-	RunOnStart bool            `yaml:"run_on_start"`
-}
-
-type cronConn struct {
-	Schedules map[string]cronSchedule `yaml:"schedules"`
-}
-
-type cronImpl struct {
-	name string
-	conn cronConn
-	deps Deps
-}
-
-func newCronImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
-	var conn cronConn
-	if err := ref.Decode(&conn); err != nil {
-		return nil, fmt.Errorf("connector %q: decode cron connection: %w", name, err)
-	}
-	return &cronImpl{name: name, conn: conn, deps: deps}, nil
-}
-
-func (c *cronImpl) Validate() error { return nil }
-
-func (c *cronImpl) DeclaredEvents() []string {
-	out := make([]string, 0, len(c.conn.Schedules))
-	for k := range c.conn.Schedules {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// Source lowers each trigger into its schedule's cronint.Schedule. Exactly
-// one trigger may target a given schedule name — cron.Schedule carries a
-// single config.Action, so a second trigger on the same schedule has nowhere
-// to go.
-func (c *cronImpl) Source(triggers []CompiledTrigger) (core.Integration, error) {
-	if len(triggers) == 0 {
-		return nil, nil
-	}
-	seen := map[string]bool{}
-	schedules := make([]cronint.Schedule, 0, len(triggers))
-	for _, t := range triggers {
-		name := t.Spec.Event()
-		sched, ok := c.conn.Schedules[name]
-		if !ok {
-			return nil, fmt.Errorf("trigger on %s: unknown cron schedule %q (declared: %s)", t.Spec.On, name, strings.Join(c.DeclaredEvents(), ", "))
-		}
-		if seen[name] {
-			return nil, fmt.Errorf("trigger on %s: one trigger per cron schedule — define a second schedule", t.Spec.On)
-		}
-		seen[name] = true
-		schedules = append(schedules, cronint.Schedule{
-			Name:       name,
-			Cron:       sched.Cron,
-			Every:      sched.Every,
-			RunOnStart: sched.RunOnStart,
-			Action:     lowerAction(t),
-		})
-	}
-	return buildIntegration("cron", c.name, cronint.Config{Schedules: schedules})
-}
-
-func (c *cronImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
-	return nil, fmt.Errorf("cron: no verbs")
-}
 
 // ---------------------------------------------------------------------------
 // webhook

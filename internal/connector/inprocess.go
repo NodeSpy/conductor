@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/builtins/cron"
 	"github.com/NodeSpy/conductor/internal/builtins/exposure"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/plugin"
@@ -26,6 +27,7 @@ var InProcessState *plugin.StateStore
 var inprocessTunnel = exposure.NewTunnel()
 
 func init() {
+	RegisterInProcessConnector(cron.Cron{})
 	RegisterInProcessConnector(exposure.LAN{})
 	RegisterInProcessConnector(inprocessTunnel)
 }

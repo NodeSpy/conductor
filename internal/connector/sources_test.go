@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 	"gopkg.in/yaml.v3"
+	"time"
 )
 
 // specOn builds a minimal TriggerSpec for `on: <conn>.<event>`.
@@ -39,8 +41,10 @@ connectors:
 	if err := in.Impl.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if got := in.Impl.DeclaredEvents(); len(got) != 2 || got[0] != "nightly" || got[1] != "tick" {
-		t.Fatalf("DeclaredEvents = %v, want [nightly tick]", got)
+	// cron speaks the contract in process: its schedule names are dynamic
+	// events it validates itself (plugin.validate), like any plugin's.
+	if got := in.Impl.DeclaredEvents(); got != nil {
+		t.Fatalf("DeclaredEvents = %v, want nil (validated by the plugin)", got)
 	}
 
 	// Source: one trigger per schedule lowers cleanly.
@@ -59,16 +63,16 @@ connectors:
 	if src, err := in.Impl.Source(nil); err != nil || src != nil {
 		t.Fatalf("empty Source should be nil, got %v, %v", src, err)
 	}
-	// Unknown schedule names the declared set.
-	_, err = in.Impl.Source([]CompiledTrigger{{Spec: specOn(t, "on: timer.hourly")}})
-	if err == nil || !strings.Contains(err.Error(), `unknown cron schedule "hourly"`) || !strings.Contains(err.Error(), "nightly, tick") {
+	// Unknown schedule names the declared set (the plugin's own checks).
+	bad, _ := in.Impl.Source([]CompiledTrigger{{Spec: specOn(t, "on: timer.hourly")}})
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), `unknown cron schedule "hourly"`) || !strings.Contains(err.Error(), "nightly, tick") {
 		t.Fatalf("unknown schedule: %v", err)
 	}
 	// A second trigger on one schedule is rejected.
-	_, err = in.Impl.Source([]CompiledTrigger{
-		{Spec: specOn(t, "on: timer.tick")}, {Spec: specOn(t, "on: timer.tick")},
+	dup, _ := in.Impl.Source([]CompiledTrigger{
+		{Spec: specOn(t, "on: timer.tick")}, {Index: 1, Spec: specOn(t, "on: timer.tick")},
 	})
-	if err == nil || !strings.Contains(err.Error(), "one trigger per cron schedule") {
+	if err := dup.Validate(); err == nil || !strings.Contains(err.Error(), "one trigger per cron schedule") {
 		t.Fatalf("duplicate schedule: %v", err)
 	}
 	// No verbs.
@@ -149,5 +153,35 @@ func TestRSSFilter(t *testing.T) {
 		if err != nil || got != c.want {
 			t.Errorf("%s: got %v, %v; want %v", c.name, got, err, c.want)
 		}
+	}
+}
+
+// cron fires through the contract like any plugin source: run_on_start emits
+// at once, routed to its trigger, with the facts and title it always had.
+func TestCronFiresOverTheContract(t *testing.T) {
+	reg := buildSinkRegistry(t, `
+connectors:
+  timer:
+    use: cron
+    schedules:
+      nightly: { cron: "0 4 * * *", run_on_start: true }
+`)
+	in, _ := reg.Get("timer")
+	src, err := in.Impl.Source([]CompiledTrigger{{Index: 0, Spec: specOn(t, "on: timer.nightly\nname: n\nsteps: [{id: s, type: command, command: [x]}]")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan core.Trigger, 1)
+	go func() { _ = src.Start(ctx, func(_ context.Context, tr core.Trigger) { got <- tr }) }()
+	select {
+	case tr := <-got:
+		if tr.Source != "cron" || tr.Instance != "timer" || tr.Kind != "nightly" || tr.Title != "cron: timer/nightly" ||
+			tr.Context["schedule"] != "nightly" || tr.Variant != "n" || tr.TargetTrusted {
+			t.Fatalf("cron trigger = %+v", tr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run_on_start never fired")
 	}
 }

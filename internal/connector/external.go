@@ -348,9 +348,13 @@ func (e *externalImpl) Source(triggers []CompiledTrigger) (core.Integration, err
 	}
 	declared := map[string]bool{}
 	sem := map[string]*sdk.EventSemantics{}
-	for _, ev := range e.decl.Events {
+	var dynamic *EventDecl
+	for i, ev := range e.decl.Events {
 		declared[ev.Name] = true
 		sem[ev.Name] = ev.Semantics
+		if ev.Dynamic {
+			dynamic = &e.decl.Events[i]
+		}
 	}
 	base := &pluginSourceIntegration{
 		source:   e.source,
@@ -361,6 +365,7 @@ func (e *externalImpl) Source(triggers []CompiledTrigger) (core.Integration, err
 		log:      e.log,
 		declared: declared,
 		sem:      sem,
+		dynamic:  dynamic,
 	}
 	if e.declaresConn("identity") {
 		// The connection carries the dispatch credential policy the bundled
